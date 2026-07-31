@@ -10,20 +10,20 @@ use std::error::Error;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
+mod support;
+
 type TestResult = Result<(), Box<dyn Error>>;
 
 /// Absolute path to a fixture under this crate's `tests/fixtures/check`.
 fn fixture(name: &str) -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR"))
+    support::manifest_dir()
         .join("tests/fixtures/check")
         .join(name)
 }
 
 /// Run the built `ipe` binary and capture `(success, stdout, stderr)`.
 fn run_ipe(args: &[&str]) -> Result<(bool, String, String), Box<dyn Error>> {
-    let out = Command::new(env!("CARGO_BIN_EXE_ipe"))
-        .args(args)
-        .output()?;
+    let out = Command::new(support::ipe_bin()).args(args).output()?;
     Ok((
         out.status.success(),
         String::from_utf8_lossy(&out.stdout).into_owned(),
@@ -121,7 +121,7 @@ fn location_and_caret(report: &str) -> Option<(String, String)> {
 /// as far as the compiler.
 fn build_stderr(entry: &Path) -> Option<String> {
     let runtime = ipe::resolve_runtime().ok()?;
-    let out = Command::new(env!("CARGO_BIN_EXE_ipe"))
+    let out = Command::new(support::ipe_bin())
         .args(["build", &entry.to_string_lossy()])
         .arg("--out")
         .arg(std::env::temp_dir().join(format!("ipe_caret_build_{}", std::process::id())))
@@ -248,7 +248,7 @@ fn closed_union_catch_all_build_emits_no_crate() -> TestResult {
     std::fs::copy(fixture("closed_union_catch_all.ipe"), &src)?;
     let out_dir = dir.join("out");
 
-    let output = Command::new(env!("CARGO_BIN_EXE_ipe"))
+    let output = Command::new(support::ipe_bin())
         .args(["build", &src.to_string_lossy()])
         .arg("--out")
         .arg(&out_dir)

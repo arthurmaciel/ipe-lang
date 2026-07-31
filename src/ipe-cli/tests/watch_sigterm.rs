@@ -20,6 +20,8 @@ use std::net::TcpStream;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
+mod support;
+
 type BoxError = Box<dyn std::error::Error + Send + Sync + 'static>;
 
 /// The same minimal `Ipe.Http.Server` fixture `watch_integration.rs` uses:
@@ -143,7 +145,7 @@ fn spawn_ipe_watch(
 ) -> Result<std::process::Child, BoxError> {
     let runtime_dir = ipe::resolve_runtime()
         .map_err(|e| -> BoxError { format!("runtime dir must resolve: {e}").into() })?;
-    std::process::Command::new(env!("CARGO_BIN_EXE_ipe"))
+    std::process::Command::new(support::ipe_bin())
         .arg("watch")
         .arg(entry)
         .arg("--out")

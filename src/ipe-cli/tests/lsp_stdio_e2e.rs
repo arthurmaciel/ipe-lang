@@ -10,6 +10,8 @@ use std::process::{Child, Command, Stdio};
 use std::sync::mpsc;
 use std::time::Duration;
 
+mod support;
+
 const CLEAN: &str = "module Main exposing (main)\n\n\
     import Ipe.Io as Io\n\n\
     main = Io.println \"hi\"\n";
@@ -117,7 +119,7 @@ fn stdio_server_serves_live_diagnostics_for_a_real_project() {
     let uri = format!("file://{}", main_path.display());
 
     let mut child = ChildGuard(
-        Command::new(env!("CARGO_BIN_EXE_ipe"))
+        Command::new(support::ipe_bin())
             .arg("lsp")
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())

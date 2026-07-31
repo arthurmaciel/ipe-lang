@@ -14,6 +14,8 @@
 use std::path::PathBuf;
 use std::process::Command;
 
+mod support;
+
 /// One `ipe` run's observable result.
 struct Run {
     ok: bool,
@@ -24,7 +26,7 @@ struct Run {
 /// Run `ipe <args>` with `NO_COLOR=1`. A spawn failure folds into a non-`ok`
 /// result carrying the error on stderr, surfaced through an ordinary assertion.
 fn run(args: &[&str]) -> Run {
-    match Command::new(env!("CARGO_BIN_EXE_ipe"))
+    match Command::new(support::ipe_bin())
         .args(args)
         .env("NO_COLOR", "1")
         .output()
@@ -45,8 +47,7 @@ fn run(args: &[&str]) -> Run {
 /// A source file whose inferred capability set is a known, non-empty pair
 /// (`network`, `clock`), for the capabilities-form assertions.
 fn sample_entry() -> String {
-    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("tests/fixtures/capabilities/uses_http_and_clock.ipe");
+    let path = support::manifest_dir().join("tests/fixtures/capabilities/uses_http_and_clock.ipe");
     path.to_string_lossy().into_owned()
 }
 
@@ -147,13 +148,12 @@ fn capabilities_in_a_project_dir_resolves_the_entry() {
     // A known-valid example project (an `ipe.toml` + `src/Main.ipe`). Run
     // `capabilities` with NO positional and the project dir as the working
     // directory, exactly as the bug report did.
-    let proj =
-        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../examples/sky/ipe/01-hello-world");
+    let proj = support::manifest_dir().join("../../examples/sky/ipe/01-hello-world");
     // Only run when the example exists (CI always has it; a sparse checkout may not).
     if !proj.join("ipe.toml").is_file() {
         return;
     }
-    let r = match Command::new(env!("CARGO_BIN_EXE_ipe"))
+    let r = match Command::new(support::ipe_bin())
         .arg("capabilities")
         .current_dir(&proj)
         .env("NO_COLOR", "1")
@@ -197,12 +197,11 @@ fn capabilities_in_a_project_dir_resolves_the_entry() {
 /// the directory itself and failing with a raw "Is a directory" io error.
 #[test]
 fn emit_ir_in_a_project_dir_resolves_the_entry() {
-    let proj =
-        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../examples/sky/ipe/01-hello-world");
+    let proj = support::manifest_dir().join("../../examples/sky/ipe/01-hello-world");
     if !proj.join("ipe.toml").is_file() {
         return;
     }
-    let r = match Command::new(env!("CARGO_BIN_EXE_ipe"))
+    let r = match Command::new(support::ipe_bin())
         .args(["build", "--emit-ir"])
         .current_dir(&proj)
         .env("NO_COLOR", "1")
@@ -509,8 +508,7 @@ fn upgrade_bad_flag_shows_help() {
 #[test]
 fn check_success_output_is_guttered_and_framed() {
     // Use the examples tree as a known well-typed source so no fixture is needed.
-    let entry = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("../../examples/sky/ipe/01-hello-world/src/Main.ipe");
+    let entry = support::manifest_dir().join("../../examples/sky/ipe/01-hello-world/src/Main.ipe");
     // Only run when the example exists (CI always has it; a sparse checkout may not).
     if !entry.is_file() {
         return;
@@ -550,7 +548,7 @@ fn login_status_not_logged_in_is_guttered() {
             .map_or(0, |d| d.as_nanos())
     ));
     std::fs::create_dir_all(&tmp).expect("create temp HOME");
-    let r = match std::process::Command::new(env!("CARGO_BIN_EXE_ipe"))
+    let r = match std::process::Command::new(support::ipe_bin())
         .args(["login", "--status"])
         .env("NO_COLOR", "1")
         .env("HOME", &tmp)

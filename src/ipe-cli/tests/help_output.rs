@@ -8,6 +8,8 @@
 
 use std::process::Command;
 
+mod support;
+
 /// One `ipe` run's observable result: exit success plus decoded streams.
 struct Run {
     /// Whether the process exited zero.
@@ -22,7 +24,7 @@ struct Run {
 /// failure is folded into a non-`ok` result carrying the error on stderr, so
 /// callers surface it through an ordinary assertion rather than a panic.
 fn run(args: &[&str]) -> Run {
-    match Command::new(env!("CARGO_BIN_EXE_ipe"))
+    match Command::new(support::ipe_bin())
         .args(args)
         .env("NO_COLOR", "1")
         .output()
