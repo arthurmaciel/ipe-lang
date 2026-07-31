@@ -1,0 +1,371 @@
+-- | Ipe.Url.Parser — typed routing patterns over a parsed `Url`.
+--
+-- Match a typed `Url` into typed route captures through composable, pure-data
+-- patterns, rather than stringly key lookups over path segments and query keys.
+-- The path/segment vocabulary mirrors `elm/url`'s `Url.Parser` so an author who
+-- knows Elm reads it without translation.
+--
+-- A pattern consumes the ALREADY-PARSED `Url` (the seal's guarantee): `parse`
+-- splits the `Url`'s path and query components ONCE, over the typed value, and
+-- never re-parses a raw string.  `parse` is TOTAL — a matched pattern yields
+-- `Just` its ordered captures, an unmatched `Url` yields `Nothing`, never a
+-- partial or ambiguous match.
+--
+-- Divergence from `elm/url` (recorded in `docs/divergences-from-elm.md`): Elm
+-- threads a continuation FUNCTION through the parser to build the route value
+-- INSIDE the parser (`</>` / `<?>` / `map` / `oneOf` over a function-carrying
+-- `Parser a b`).  The Rust backend stores a function value only in a union
+-- payload — never a record field (IPE-L0107), never forwarded through a closure
+-- capture (IPE-L0126), and never in a list walked by value (a non-`Clone`
+-- element forces a clone) — so a router that carries builders through a
+-- `oneOf` LIST cannot lower.  A `Pattern` here is therefore PURE DATA: it is
+-- fully composable and matches to ordered `Captures`, and the caller applies its
+-- route constructors in ordinary code (a `case` chain over `parse` results),
+-- where a constructor is only ever CALLED, never stored.  `s` / `int` / `string`
+-- / `slash` (`</>`) / `top` / `withQuery` (`<?>`) / `query` keep their meaning.
+--
+-- Example — match `/blog/42`, `/user/alice`, `/`, and `/search?q=…` into a
+-- typed `Route`:
+--
+--     import Ipe.Url as Url
+--     import Ipe.Url.Parser as Parser
+--
+--     type Route
+--         = Home
+--         | BlogPost Int
+--         | UserProfile String
+--         | Search (Maybe String)
+--
+--     router : Url -> Maybe Route
+--     router url =
+--         case Parser.parse Parser.top url of
+--             Just _ ->
+--                 Just Home
+--
+--             Nothing ->
+--                 case Parser.parse (Parser.slash (Parser.s "blog") Parser.int) url of
+--                     Just caps ->
+--                         Ipe.Maybe.map BlogPost (Parser.firstInt caps)
+--
+--                     Nothing ->
+--                         case Parser.parse (Parser.slash (Parser.s "user") Parser.string) url of
+--                             Just caps ->
+--                                 Ipe.Maybe.map UserProfile (Parser.firstString caps)
+--
+--                             Nothing ->
+--                                 case Parser.parse (Parser.withQuery (Parser.s "search") (Parser.query "q")) url of
+--                                     Just caps ->
+--                                         Just (Search (Parser.firstQuery caps))
+--
+--                                     Nothing ->
+--                                         Nothing
+--
+-- The parser is the syntactic router; it never fetches, so it has no security
+-- boundary of its own beyond totality — a mismatched route surfaces as
+-- `Nothing`, and no path by which route-matching reaches the network exists.
+
+
+module Ipe.Url.Parser exposing
+    ( Pattern, Query, Captures
+    , string, int, s
+    , slash, top
+    , withQuery, query
+    , parse
+    , firstString, firstInt, firstQuery
+    )
+
+import Ipe.List as List
+import Ipe.Maybe as Maybe
+import Ipe.String as String
+import Ipe.Url as Url
+
+
+-- | One path-segment matcher — pure data.  `Static` must equal a literal
+-- segment and captures nothing; `CaptureString` captures any one segment as a
+-- `String`; `CaptureInt` captures one segment as an `Int` and only matches an
+-- integer segment.
+type Segment
+    = Static String
+    | CaptureString
+    | CaptureInt
+
+
+-- | A route pattern: the ordered path matchers plus the query keys to read.
+-- Pure data — an author composes patterns through the combinators below, never
+-- by constructing a `Pattern` by hand.  Being pure data, patterns compose and
+-- list freely (no function-value storage anywhere).
+type alias Pattern =
+    { segments : List Segment
+    , queryKeys : List String
+    }
+
+
+-- | The captures a matched pattern yields, positionally: every `CaptureString`
+-- / `CaptureInt` appends to `strings` / `ints` in order, and each queried key
+-- appends its `Maybe String` to `queries`.  Read them with `firstString` /
+-- `firstInt` / `firstQuery`, or by destructuring the lists directly for routes
+-- with several captures.
+type alias Captures =
+    { strings : List String
+    , ints : List Int
+    , queries : List (Maybe String)
+    }
+
+
+-- | A query matcher: the key to read.  `query` names it; `withQuery` attaches
+-- it.  Consumes the parsed query component, never a raw string.
+type alias Query =
+    String
+
+
+-- ─── Path primitives (build a Pattern) ─────────────────────────────
+-- | `s segment` — match one exact static path segment, contributing nothing.
+s : String -> Pattern
+s expected =
+    { segments = [ Static expected ], queryKeys = [] }
+
+
+-- | `string` — capture one path segment as a `String`.
+string : Pattern
+string =
+    { segments = [ CaptureString ], queryKeys = [] }
+
+
+-- | `int` — capture one path segment as an `Int`.  A non-integer segment does
+-- not match (fails closed).
+int : Pattern
+int =
+    { segments = [ CaptureInt ], queryKeys = [] }
+
+
+-- | `top` — match the root: contribute nothing and consume no segment.  The
+-- identity of `slash`.
+top : Pattern
+top =
+    { segments = [], queryKeys = [] }
+
+
+-- | `slash before after` — sequence two path patterns (`elm/url`'s `</>`):
+-- concatenate their segments and query keys in order.
+slash : Pattern -> Pattern -> Pattern
+slash before after =
+    { segments = List.append before.segments after.segments
+    , queryKeys = List.append before.queryKeys after.queryKeys
+    }
+
+
+-- ─── Query ─────────────────────────────────────────────────────────
+-- | `query key` — name a query key to read; its value threads into `queries` as
+-- the next `Maybe String` capture (`Nothing` when absent).
+query : String -> Query
+query key =
+    key
+
+
+-- | `withQuery pattern queryKey` — attach a query matcher (`elm/url`'s `<?>`) to
+-- a path pattern: the key's value is captured after the path captures.
+withQuery : Pattern -> Query -> Pattern
+withQuery pattern queryKey =
+    { segments = pattern.segments
+    , queryKeys = List.append pattern.queryKeys [ queryKey ]
+    }
+
+
+-- ─── Run ───────────────────────────────────────────────────────────
+-- | `parse pattern url` — match a pattern against a typed `Url`, yielding its
+-- ordered `Captures` on a TOTAL match (every path segment consumed), `Nothing`
+-- otherwise.
+--
+-- The `Url`'s path is split into segments and its query into pairs exactly once,
+-- over the already-parsed value; the parser never sees a raw string.
+parse : Pattern -> Url -> Maybe Captures
+parse pattern url =
+    let
+        segments =
+            preparePath (Url.path url)
+
+        params =
+            prepareQuery (Url.query url)
+    in
+    case matchSegments pattern.segments segments emptyCaptures of
+        Just captures ->
+            Just (readQueries pattern.queryKeys params captures)
+
+        Nothing ->
+            Nothing
+
+
+-- ─── Capture readers ───────────────────────────────────────────────
+-- | The first `String` capture of a match, or `Nothing` when the pattern
+-- captured no string.
+firstString : Captures -> Maybe String
+firstString captures =
+    List.head captures.strings
+
+
+-- | The first `Int` capture of a match, or `Nothing` when the pattern captured
+-- no int.
+firstInt : Captures -> Maybe Int
+firstInt captures =
+    List.head captures.ints
+
+
+-- | The first query capture of a match: `Just Nothing` is not distinguished
+-- from an absent capture — a queried-but-missing key reads as `Nothing`, as does
+-- a pattern with no query key.
+firstQuery : Captures -> Maybe String
+firstQuery captures =
+    case captures.queries of
+        first :: _ ->
+            first
+
+        [] ->
+            Nothing
+
+
+-- ─── Matching (pure data throughout) ───────────────────────────────
+-- | Match the pattern's segments against the path.  Succeeds only when BOTH run
+-- out together (a total match, never a prefix), accumulating captures in order.
+matchSegments : List Segment -> List String -> Captures -> Maybe Captures
+matchSegments matchers path captures =
+    case matchers of
+        [] ->
+            case path of
+                [] ->
+                    Just captures
+
+                _ ->
+                    Nothing
+
+        matcher :: restMatchers ->
+            case path of
+                [] ->
+                    Nothing
+
+                seg :: restPath ->
+                    case captureSegment matcher seg captures of
+                        Just next ->
+                            matchSegments restMatchers restPath next
+
+                        Nothing ->
+                            Nothing
+
+
+-- | Apply one matcher to one path segment, appending any capture.
+captureSegment : Segment -> String -> Captures -> Maybe Captures
+captureSegment matcher seg captures =
+    case matcher of
+        Static expected ->
+            if seg == expected then
+                Just captures
+
+            else
+                Nothing
+
+        CaptureString ->
+            Just
+                { strings = List.append captures.strings [ seg ]
+                , ints = captures.ints
+                , queries = captures.queries
+                }
+
+        CaptureInt ->
+            case String.toInt seg of
+                Just n ->
+                    Just
+                        { strings = captures.strings
+                        , ints = List.append captures.ints [ n ]
+                        , queries = captures.queries
+                        }
+
+                Nothing ->
+                    Nothing
+
+
+-- | Read each queried key's value from the decoded query pairs, appending a
+-- `Maybe String` per key (in order) to the captures.
+readQueries : List String -> List ( String, String ) -> Captures -> Captures
+readQueries keys params captures =
+    case keys of
+        [] ->
+            captures
+
+        key :: restKeys ->
+            readQueries restKeys
+                params
+                { strings = captures.strings
+                , ints = captures.ints
+                , queries = List.append captures.queries [ lookupQuery key params ]
+                }
+
+
+-- | The first value bound to `key`, or `Nothing`.
+lookupQuery : String -> List ( String, String ) -> Maybe String
+lookupQuery key params =
+    Maybe.map takeSecond (List.find (matchesKey key) params)
+
+
+-- | Whether a query pair's key equals `key`.
+matchesKey : String -> ( String, String ) -> Bool
+matchesKey key pair =
+    case pair of
+        ( k, _ ) ->
+            k == key
+
+
+-- | The value component of a query pair.
+takeSecond : ( String, String ) -> String
+takeSecond pair =
+    case pair of
+        ( _, v ) ->
+            v
+
+
+-- | The empty capture accumulator.
+emptyCaptures : Captures
+emptyCaptures =
+    { strings = [], ints = [], queries = [] }
+
+
+-- ─── Path/query splitting (over the already-parsed Url) ─────────────
+-- | Split a raw path into non-empty segments.  Leading / trailing slashes yield
+-- empty segments that carry no route information, so they are dropped.
+preparePath : String -> List String
+preparePath path =
+    List.filter nonEmpty (String.split "/" path)
+
+
+-- | Whether a segment is non-empty.
+nonEmpty : String -> Bool
+nonEmpty segment =
+    not (String.isEmpty segment)
+
+
+-- | Split the `Url`'s raw query component (`key=value&key=value`, or `Nothing`)
+-- into decoded pairs.  A pair without `=` binds the key to the empty string.
+prepareQuery : Maybe String -> List ( String, String )
+prepareQuery raw =
+    case raw of
+        Nothing ->
+            []
+
+        Just text ->
+            if String.isEmpty text then
+                []
+
+            else
+                List.map splitPair (String.split "&" text)
+
+
+-- | Split one `key=value` pair; a bare key binds to the empty string.
+splitPair : String -> ( String, String )
+splitPair pair =
+    case String.split "=" pair of
+        key :: value :: _ ->
+            ( key, value )
+
+        key :: [] ->
+            ( key, "" )
+
+        [] ->
+            ( "", "" )

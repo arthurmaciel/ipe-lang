@@ -1,0 +1,139 @@
+module Main exposing (main)
+
+-- Url.Parser routing SEAL fixture.
+--
+-- Exercises the pattern surface — `s`, `int`, `string`, `slash`, `top`,
+-- `withQuery`, `query`, `parse`, `firstInt`/`firstString`/`firstQuery` —
+-- matching a typed `Url` into a typed `AppRoute`, then rendering it. Proves the
+-- pure-data patterns lower over the shipped `Ipe.Url` accessors, the emitted
+-- crate builds, and the program runs: `Terminal.appLines` renders once at stdin
+-- EOF and exits 0.
+
+import Ipe.Maybe as Maybe
+import Ipe.String
+import Ipe.Tea.Terminal as Terminal
+import Ipe.Tea.Terminal.Cmd
+import Ipe.Tea.Terminal.Sub
+import Ipe.Url as Url
+import Ipe.Url.Parser as Parser
+
+
+type Msg
+    = GotLine String
+
+
+type AppRoute
+    = Home
+    | BlogPost Int
+    | UserProfile String
+    | Search (Maybe String)
+
+
+type alias Model =
+    { rendered : String }
+
+
+-- Try each route pattern in order; the first total match wins. Each alternative
+-- applies its route constructor in ordinary code (the constructor is CALLED,
+-- never stored), so nothing carries a function value.
+router : Url.Url -> Maybe AppRoute
+router url =
+    case Parser.parse Parser.top url of
+        Just _caps ->
+            Just Home
+
+        Nothing ->
+            case Parser.parse (Parser.slash (Parser.s "blog") Parser.int) url of
+                Just caps ->
+                    Maybe.map BlogPost (Parser.firstInt caps)
+
+                Nothing ->
+                    case Parser.parse (Parser.slash (Parser.s "user") Parser.string) url of
+                        Just caps ->
+                            Maybe.map UserProfile (Parser.firstString caps)
+
+                        Nothing ->
+                            case Parser.parse (Parser.withQuery (Parser.s "search") (Parser.query "q")) url of
+                                Just caps ->
+                                    Just (Search (Parser.firstQuery caps))
+
+                                Nothing ->
+                                    Nothing
+
+
+-- Match a raw URL string through the seal, then run the router over the typed
+-- `Url`. A parse failure or an unmatched route both render a stable sentinel.
+routeOf : String -> String
+routeOf raw =
+    case Url.fromString raw of
+        Ok url ->
+            case router url of
+                Just Home ->
+                    "home"
+
+                Just (BlogPost n) ->
+                    "blog:" ++ String.fromInt n
+
+                Just (UserProfile name) ->
+                    "user:" ++ name
+
+                Just (Search (Just q)) ->
+                    "search:" ++ q
+
+                Just (Search Nothing) ->
+                    "search:none"
+
+                Nothing ->
+                    "nomatch"
+
+        Err _ ->
+            "badurl"
+
+
+render : Model
+render =
+    { rendered = routeOf "https://example.com/blog/42"
+        ++ " "
+        ++ routeOf "https://example.com/user/alice"
+        ++ " "
+        ++ routeOf "https://example.com/"
+        ++ " "
+        ++ routeOf "https://example.com/search?q=rust"
+        ++ " "
+        ++ routeOf "https://example.com/nowhere"
+    }
+
+
+init : () -> ( Model, Cmd Msg )
+init _unit =
+    ( render, Cmd.none )
+
+
+update : Msg -> Model -> ( Model, Cmd Msg )
+update _msg model =
+    ( model, Cmd.none )
+
+
+view : Model -> String
+view model =
+    "routes: " ++ model.rendered
+
+
+subscriptions : Model -> Sub Msg
+subscriptions _model =
+    Sub.none
+
+
+onLine : String -> Msg
+onLine line =
+    GotLine line
+
+
+main =
+    Terminal.appLines
+        { init = init
+        , update = update
+        , view = view
+        , subscriptions = subscriptions
+        , onLine = onLine
+        }

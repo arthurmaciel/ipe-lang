@@ -94,6 +94,18 @@ const REGEX: &str = include_str!("../Ipe/Regex.ipe");
 /// `STDLIB_MODULE_QUALIFIERS`, so the disjointness invariant holds.
 const URL: &str = include_str!("../Ipe/Url.ipe");
 
+/// `Ipe.Url.Parser` — typed routing patterns over a parsed `Url`,
+/// compiled-source Layer-3.
+///
+/// Pure Ipê source; no `Ffi.kernel` calls and no stored function values. A
+/// `Pattern` is pure data (segment matchers plus query keys); `parse` matches it
+/// against the shipped `Ipe.Url` accessors (`path`/`query`) — splitting path
+/// segments and query pairs once over the already-parsed `Url`, no re-parse — and
+/// yields the ordered `Captures`. Registered in [`COMPILED_STD_MODULES`] (NOT
+/// `MODULES`); NOT in `STDLIB_MODULE_QUALIFIERS`, so the disjointness invariant
+/// holds.
+const URL_PARSER: &str = include_str!("../Ipe/Url/Parser.ipe");
+
 /// `Ipe.Markdown` — markdown → `Ipe.Ui` Element renderer, compiled-source
 /// Layer-3.
 ///
@@ -627,6 +639,12 @@ pub const COMPILED_STD_MODULES: &[CompiledStdModule] = &[
     CompiledStdModule {
         dotted: "Ipe.Url",
         source: URL,
+    },
+    // Ipe.Url.Parser — pure-Ipê routing combinators over the shipped `Ipe.Url`
+    // accessors; no kernel calls.
+    CompiledStdModule {
+        dotted: "Ipe.Url.Parser",
+        source: URL_PARSER,
     },
     // Ipe.Locale — opaque BCP-47 locale handle + locale-aware case mapping.
     // `Locale.fromTag`/`Locale.toTag` resolve via `Ffi.kernel "Locale_*"`;
