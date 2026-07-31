@@ -183,16 +183,12 @@ fn peel_result_layer(s: &str) -> &str {
 }
 
 /// The Ipê builtin heads that never need an opaque-type declaration.
-const IPE_BUILTIN_HEADS: &[&str] = &[
-    "String", "Int", "Float", "Bool", "Char", "List", "Dict", "Set", "Maybe", "Result", "Task",
-    "Error",
-];
-
-/// The Ipê builtin heads (shared with the interface emitter's
-/// shadow-detection gate).
+///
+/// Shared with the interface emitter's shadow-detection gate and the
+/// transparency classification's shadow gate; defined leaf-side in `naming`.
 #[must_use]
 pub const fn ipe_builtin_heads() -> &'static [&'static str] {
-    IPE_BUILTIN_HEADS
+    crate::naming::IPE_BUILTIN_HEADS
 }
 
 /// Every opaque foreign type name referenced by a signature: capitalised
@@ -200,7 +196,7 @@ pub const fn ipe_builtin_heads() -> &'static [&'static str] {
 pub fn opaque_names_in(sig: &str, out: &mut BTreeSet<String>) {
     for token in sig.split(|c: char| !c.is_alphanumeric() && c != '_') {
         let starts_upper = token.chars().next().is_some_and(char::is_uppercase);
-        if starts_upper && !IPE_BUILTIN_HEADS.contains(&token) {
+        if starts_upper && !crate::naming::IPE_BUILTIN_HEADS.contains(&token) {
             out.insert(token.to_owned());
         }
     }
