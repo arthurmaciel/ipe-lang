@@ -14,11 +14,9 @@ use ipe_backend_rust::static_build::{
     CARGO_CONFIG_MARKER, StaticAllocator, StaticPlan, StaticTriple,
 };
 
-/// The `ipe-lang` workspace root (two levels up from this crate's manifest).
-fn repo_root() -> PathBuf {
-    let joined = Path::new(env!("CARGO_MANIFEST_DIR")).join("..").join("..");
-    std::fs::canonicalize(&joined).unwrap_or(joined)
-}
+mod support;
+
+use support::repo_root;
 
 fn write_hello(dir: &Path) -> std::io::Result<PathBuf> {
     std::fs::create_dir_all(dir)?;
@@ -504,7 +502,7 @@ fn ipe_run_static_builds_and_executes_a_static_binary() {
     let target_dir =
         std::env::var_os("CARGO_TARGET_DIR").map_or_else(|| out.join("target"), PathBuf::from);
 
-    let run = std::process::Command::new(env!("CARGO_BIN_EXE_ipe"))
+    let run = std::process::Command::new(support::ipe_bin())
         .args(["run"])
         .arg(&entry)
         .args(["--static", "--out"])

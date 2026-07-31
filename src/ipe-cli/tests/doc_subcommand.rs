@@ -16,9 +16,11 @@ use std::io;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
+mod support;
+
 /// Run `ipe <args>` with `NO_COLOR=1` and return `(exit_success, stdout, stderr)`.
 fn run(args: &[&str]) -> (bool, String, String) {
-    match Command::new(env!("CARGO_BIN_EXE_ipe"))
+    match Command::new(support::ipe_bin())
         .args(args)
         .env("NO_COLOR", "1")
         .output()
@@ -167,7 +169,7 @@ fn serve_binds_a_free_port_and_serves_the_index() -> io::Result<()> {
 
     let pkg = documented_package("serve")?;
     // Spawn `ipe doc serve` with an auto-selected port and read the URL it prints.
-    let mut child = Command::new(env!("CARGO_BIN_EXE_ipe"))
+    let mut child = Command::new(support::ipe_bin())
         .args(["doc", "serve", as_str(&pkg)])
         .env("NO_COLOR", "1")
         // Never let the preview pop (or spawn) a browser opener under test.

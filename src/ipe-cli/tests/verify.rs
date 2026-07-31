@@ -10,23 +10,23 @@
 //! `cargo nextest` stays fast and offline).
 
 use std::error::Error;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::process::Command;
+
+mod support;
 
 type TestResult = Result<(), Box<dyn Error>>;
 
 /// Absolute path to a fixture under this crate's `tests/fixtures/verify`.
 fn fixture(name: &str) -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR"))
+    support::manifest_dir()
         .join("tests/fixtures/verify")
         .join(name)
 }
 
 /// Run the built `ipe` binary and capture `(success, stdout, stderr)`.
 fn run_ipe(args: &[&str]) -> Result<(bool, String, String), Box<dyn Error>> {
-    let out = Command::new(env!("CARGO_BIN_EXE_ipe"))
-        .args(args)
-        .output()?;
+    let out = Command::new(support::ipe_bin()).args(args).output()?;
     Ok((
         out.status.success(),
         String::from_utf8_lossy(&out.stdout).into_owned(),
