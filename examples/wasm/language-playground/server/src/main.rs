@@ -38,9 +38,11 @@
 #![allow(clippy::module_name_repetitions)] // AppState, CompileRequest etc. are clear
 #![allow(clippy::missing_errors_doc)] // internal helpers, not public API
 
+use ipe_playground::run_jailed;
+
 use std::io::Write as _;
 use std::path::{Path, PathBuf};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use axum::Router;
 use axum::extract::State;
@@ -70,8 +72,22 @@ struct AppState {
     runtime_dir: PathBuf,
     /// Absolute path to the shared warm `CARGO_TARGET_DIR`.
     cargo_target_dir: PathBuf,
-    /// Per-compile subprocess timeout.
+    /// Per-compile subprocess timeout (the trusted `ipe build` step).
     compile_timeout: Duration,
+    /// The pre-warmed dependency cache seeding each jailed offline build
+    /// (`Some` once startup pre-warm succeeds; `None` disables `/run`, which then
+    /// fails closed with a clear message).
+    warm: Option<WarmCache>,
+}
+
+/// The pre-warmed offline build inputs: a `CARGO_HOME` registry (crate sources)
+/// and a target dir holding the FIXED dependency closure's compiled artifacts.
+/// Every per-request jailed build seeds both, so it builds fully offline AND only
+/// compiles the user's own crate rather than the whole closure.
+#[derive(Clone)]
+struct WarmCache {
+    cargo_home: PathBuf,
+    target: PathBuf,
 }
 
 // ── Request / response shapes ─────────────────────────────────────────────────
@@ -283,6 +299,226 @@ fn base64_encode(bytes: &[u8]) -> String {
     out
 }
 
+// ── /run handler — sandboxed native build + execute ───────────────────────────
+
+#[derive(Deserialize)]
+struct RunRequest {
+    source: String,
+}
+
+/// The result of a `POST /run`. A single tagged enum so the client can branch on
+/// exactly one of the five terminal states (`parse, don't validate` at the wire).
+#[derive(Serialize)]
+#[serde(rename_all = "snake_case", tag = "status")]
+enum RunResponse {
+    /// The trusted compiler rejected the source (before any jail).
+    CompileError { diagnostics: String },
+    /// The emitted crate failed to `cargo build` inside the jail.
+    BuildError { diagnostics: String },
+    /// The program ran to completion inside the jail.
+    Ran {
+        /// The program's captured stdout (bounded).
+        stdout: String,
+        /// The program's captured stderr (bounded).
+        stderr: String,
+        /// The process exit code (`null` if it was killed).
+        exit_code: Option<i32>,
+        /// Wall-clock milliseconds for the build+run inside the jail.
+        elapsed_ms: u64,
+    },
+    /// The wall-clock (or a resource cap) killed the build or the run.
+    Timeout { phase: String, limit_secs: u64 },
+    /// The jail could not be established — the endpoint refuses to run user code
+    /// unconfined (fail-closed).
+    SandboxRefused { reason: String },
+}
+
+async fn run(
+    State(state): State<AppState>,
+    axum::Json(req): axum::Json<RunRequest>,
+) -> Result<axum::Json<RunResponse>, AppError> {
+    // Guard: same source-size ceiling as /compile — reject an oversized payload
+    // before doing any work.
+    if req.source.len() > MAX_SOURCE_BYTES {
+        return Ok(axum::Json(RunResponse::CompileError {
+            diagnostics: format!(
+                "source too large ({} bytes, limit {} bytes)",
+                req.source.len(),
+                MAX_SOURCE_BYTES
+            ),
+        }));
+    }
+
+    // The whole build+run is CPU-and-fork heavy and calls blocking sandbox code;
+    // run it on a blocking thread so the async runtime keeps serving.
+    let resp = tokio::task::spawn_blocking(move || run_sandboxed(&state, &req.source))
+        .await
+        .map_err(|e| AppError(format!("run task panicked: {e}")))?;
+    Ok(axum::Json(resp))
+}
+
+/// The synchronous build+run pipeline, entirely off the async runtime.
+///
+/// Steps: emit (trusted compiler) → seed offline deps → jailed build → jailed
+/// run. Every step that touches user-derived code is inside the jail; a jail that
+/// cannot be established is a fail-closed refusal, never an unsandboxed run.
+fn run_sandboxed(state: &AppState, source: &str) -> RunResponse {
+    // Fail-closed FIRST: no jail primitives ⇒ refuse before writing anything.
+    let caps = match run_jailed::probe_or_refuse() {
+        Ok(c) => c,
+        Err(refusal) => {
+            return RunResponse::SandboxRefused {
+                reason: refusal.reason,
+            };
+        }
+    };
+    // The pre-warm must have populated the offline build inputs.
+    let Some(warm) = state.warm.as_ref() else {
+        return RunResponse::SandboxRefused {
+            reason: "sandbox refused: the offline dependency cache was not pre-warmed at startup; \
+                     /run is disabled (see server logs)"
+                .to_owned(),
+        };
+    };
+
+    // One scratch dir per request: the jail's ONLY writable mount. Removed at the
+    // end however this function returns (the guard drops on every path).
+    let scratch = match tempfile::TempDir::new() {
+        Ok(t) => t,
+        Err(e) => {
+            return RunResponse::SandboxRefused {
+                reason: format!("sandbox refused: could not create a scratch dir: {e}"),
+            };
+        }
+    };
+    let scoped_tmp = scratch.path();
+
+    // 1. Emit the native crate with the TRUSTED compiler (no user code runs).
+    let crate_dir = scoped_tmp.join("crate");
+    if let Err(diag) = emit_native_crate(state, source, &crate_dir) {
+        return diag;
+    }
+
+    // 2. Seed the offline dependency cache (registry + prebuilt dep artifacts)
+    //    into the jail-visible scratch. The build then compiles ONLY the user's
+    //    crate, fully offline.
+    if let Err(e) = run_jailed::seed_cargo_home(scoped_tmp, &warm.cargo_home) {
+        return RunResponse::SandboxRefused {
+            reason: format!("sandbox refused: could not seed the offline dependency cache: {e}"),
+        };
+    }
+    if let Err(e) = run_jailed::seed_target_dir(scoped_tmp, &warm.target) {
+        return RunResponse::SandboxRefused {
+            reason: format!("sandbox refused: could not seed the prebuilt dependency target: {e}"),
+        };
+    }
+
+    let started = Instant::now();
+
+    // 3. Jailed build (offline, no network, resource-capped).
+    let build = match run_jailed::jailed_build(&caps, scoped_tmp) {
+        Ok(o) => o,
+        Err(defect) => {
+            return RunResponse::SandboxRefused {
+                reason: format!("sandbox refused: {defect}"),
+            };
+        }
+    };
+    if build.killed {
+        return RunResponse::Timeout {
+            phase: "build".to_owned(),
+            limit_secs: run_jailed::RunCaps::build_defaults().wall_secs,
+        };
+    }
+    if build.status != Some(0) {
+        // A cargo build failure — distinct from a compile (ipe) error.
+        return RunResponse::BuildError {
+            diagnostics: truncate_diag(&format!("{}{}", build.stdout, build.stderr)),
+        };
+    }
+
+    // 4. Jailed run of the freshly-built binary.
+    let app = run_jailed::app_binary_path(scoped_tmp);
+    if !app.is_file() {
+        return RunResponse::BuildError {
+            diagnostics: "build reported success but produced no `ipe-app` binary".to_owned(),
+        };
+    }
+    let run = match run_jailed::jailed_run(&caps, scoped_tmp, &app) {
+        Ok(o) => o,
+        Err(defect) => {
+            return RunResponse::SandboxRefused {
+                reason: format!("sandbox refused: {defect}"),
+            };
+        }
+    };
+    if run.killed {
+        return RunResponse::Timeout {
+            phase: "run".to_owned(),
+            limit_secs: run_jailed::RunCaps::run_defaults().wall_secs,
+        };
+    }
+    let elapsed_ms = u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX);
+    RunResponse::Ran {
+        stdout: run.stdout,
+        stderr: run.stderr,
+        exit_code: run.status,
+        elapsed_ms,
+    }
+}
+
+/// Emit the native crate from `source` with the trusted `ipe` compiler.
+///
+/// Returns `Ok(())` on a clean emit; a [`RunResponse::CompileError`] (as the
+/// `Err` variant) when `ipe build` rejects the program.
+fn emit_native_crate(state: &AppState, source: &str, crate_dir: &Path) -> Result<(), RunResponse> {
+    let compile_err = |d: String| RunResponse::CompileError { diagnostics: d };
+
+    let src_dir = crate_dir.join("src-ipe");
+    let entry = src_dir.join("Main.ipe");
+    std::fs::create_dir_all(&src_dir)
+        .and_then(|()| std::fs::write(&entry, source))
+        .map_err(|e| compile_err(format!("could not stage source: {e}")))?;
+
+    // `ipe build <src>` with NO `--target wasm` ⇒ the native crate. The source is
+    // the positional argument. Trusted compiler, deterministic codegen; a plain
+    // timeout-bounded subprocess (not the jail — it does not run the user's
+    // program, it emits it).
+    let output = std::process::Command::new(&state.ipe_bin)
+        .arg("build")
+        .arg(&entry)
+        .arg("--out")
+        .arg(crate_dir)
+        .arg("--runtime")
+        .arg(&state.runtime_dir)
+        .env("CARGO_TERM_PROGRESS_WHEN", "never")
+        .stdin(std::process::Stdio::null())
+        .output()
+        .map_err(|e| compile_err(format!("could not launch the ipe compiler: {e}")))?;
+
+    if output.status.success() {
+        Ok(())
+    } else {
+        let diag = String::from_utf8_lossy(&output.stderr).into_owned();
+        Err(compile_err(truncate_diag(&diag)))
+    }
+}
+
+/// Bound a diagnostics string so a pathological compiler/cargo error cannot blow
+/// the response size.
+fn truncate_diag(s: &str) -> String {
+    const MAX: usize = 64 * 1024;
+    if s.len() <= MAX {
+        return s.to_owned();
+    }
+    // Truncate on a char boundary at or below MAX.
+    let mut end = MAX;
+    while end > 0 && !s.is_char_boundary(end) {
+        end -= 1;
+    }
+    format!("{}\n… (truncated)", &s[..end])
+}
+
 // ── Startup ───────────────────────────────────────────────────────────────────
 
 /// Resolve the `ipe` binary path: `IPE_BIN` env var, or search `PATH`.
@@ -317,6 +553,109 @@ fn resolve_runtime_dir() -> Result<PathBuf, String> {
     Err("runtime directory not found; set IPE_RUNTIME_DIR to the \
          ipe_runtime source directory (src/runtime/rust/src)"
         .to_owned())
+}
+
+/// Pre-warm the FIXED dependency closure so every per-request jailed build runs
+/// fully offline AND compiles only the user's own crate.
+///
+/// The dependency set is identical for every native program (the runtime fixes
+/// the manifest), so this runs once at startup. It:
+///   1. emits a trivial native crate (trusted compiler),
+///   2. `cargo build`s it into a persistent warm `CARGO_HOME` + target dir —
+///      compiling the whole dependency closure ONCE, running only our own
+///      trusted dependencies' build scripts (never user code; the untrusted
+///      per-request build runs offline in the jail).
+///
+/// Each per-request jail then seeds both the registry and the prebuilt target, so
+/// its offline build reuses every dependency `.rlib` and compiles only the user
+/// crate. Returns the warm cache, or `None` (disabling `/run`) on any failure.
+async fn prewarm_offline_deps(
+    ipe_bin: &Path,
+    runtime_dir: &Path,
+    cargo_target_dir: &Path,
+) -> Option<WarmCache> {
+    let warm_home = cargo_target_dir.join("playground-cargo-home");
+    let warm_target = cargo_target_dir.join("playground-warm-target");
+    let scratch = match tempfile::TempDir::new() {
+        Ok(t) => t,
+        Err(e) => {
+            error!("pre-warm: could not create scratch dir: {e}");
+            return None;
+        }
+    };
+    let src_dir = scratch.path().join("src-ipe");
+    let entry = src_dir.join("Main.ipe");
+    let crate_dir = scratch.path().join("crate");
+    let hello =
+        "module Main exposing (main)\n\nimport Ipe.Io as Io\n\nmain =\n    Io.println \"warm\"\n";
+    if let Err(e) = std::fs::create_dir_all(&src_dir).and_then(|()| std::fs::write(&entry, hello)) {
+        error!("pre-warm: could not stage source: {e}");
+        return None;
+    }
+
+    // Emit the native crate (trusted compiler). The source is the positional arg.
+    let emit = Command::new(ipe_bin)
+        .arg("build")
+        .arg(&entry)
+        .arg("--out")
+        .arg(&crate_dir)
+        .arg("--runtime")
+        .arg(runtime_dir)
+        .env("CARGO_TERM_PROGRESS_WHEN", "never")
+        .output()
+        .await;
+    match emit {
+        Ok(o) if o.status.success() => {}
+        Ok(o) => {
+            error!(
+                "pre-warm: ipe build failed:\n{}",
+                String::from_utf8_lossy(&o.stderr)
+            );
+            return None;
+        }
+        Err(e) => {
+            error!("pre-warm: could not launch ipe: {e}");
+            return None;
+        }
+    }
+
+    if let Err(e) =
+        std::fs::create_dir_all(&warm_home).and_then(|()| std::fs::create_dir_all(&warm_target))
+    {
+        error!("pre-warm: could not create warm dirs: {e}");
+        return None;
+    }
+    info!("pre-warm: building the fixed dependency closure once (first run is slow)…");
+    // A full build compiles + caches every dependency `.rlib` into the warm
+    // target, and populates the warm CARGO_HOME registry. Only our own trusted
+    // dependencies run build scripts here — never user code.
+    let build = Command::new("cargo")
+        .arg("build")
+        .arg("--manifest-path")
+        .arg(crate_dir.join("Cargo.toml"))
+        .arg("--target-dir")
+        .arg(&warm_target)
+        .env("CARGO_HOME", &warm_home)
+        .env("CARGO_TERM_PROGRESS_WHEN", "never")
+        .output()
+        .await;
+    match build {
+        Ok(o) if o.status.success() => Some(WarmCache {
+            cargo_home: warm_home,
+            target: warm_target,
+        }),
+        Ok(o) => {
+            error!(
+                "pre-warm: cargo build of the dependency closure failed:\n{}",
+                String::from_utf8_lossy(&o.stderr)
+            );
+            None
+        }
+        Err(e) => {
+            error!("pre-warm: could not launch cargo: {e}");
+            None
+        }
+    }
 }
 
 #[tokio::main]
@@ -370,15 +709,30 @@ async fn main() {
         cargo_target_dir, compile_timeout
     );
 
+    // Pre-warm the offline dependency cache so `/run`'s jailed builds never need
+    // the network. Failure disables `/run` (it then fails closed) but leaves
+    // `/compile` fully usable.
+    let warm = prewarm_offline_deps(&ipe_bin, &runtime_dir, &cargo_target_dir).await;
+    if let Some(w) = &warm {
+        info!(
+            "/run enabled — offline deps warmed (cargo_home={:?}, target={:?})",
+            w.cargo_home, w.target
+        );
+    } else {
+        warn!("/run DISABLED — offline dependency pre-warm failed (see errors above)");
+    }
+
     let state = AppState {
         ipe_bin,
         runtime_dir,
         cargo_target_dir,
         compile_timeout,
+        warm,
     };
 
     let mut app = Router::new()
         .route("/compile", post(compile))
+        .route("/run", post(run))
         .with_state(state)
         .layer(
             tower_http::cors::CorsLayer::new()

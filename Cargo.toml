@@ -27,7 +27,7 @@ members = [
     "src/runtime/rust",
     "tools/ipe-ffi-inspector",
     "tools/regen-goldens",
-    "src/playground",
+    "examples/wasm/language-playground/server",
 ]
 # `tools/panic-scan` carries its own `[workspace]` so it builds standalone as a
 # pre-commit/CI hook without pulling the compiler crates. Excluding it here lets

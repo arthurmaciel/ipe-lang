@@ -161,7 +161,7 @@
       Theme
       <select id="theme-select" aria-label="Editor and interface theme"></select>
     </label>
-    <button id="run-btn" title="Compile and show the emitted Rust (Ctrl/Cmd+Enter)">
+    <button id="run-btn" title="Build and run on the server, sandboxed (Ctrl/Cmd+Enter)">
       <svg width="13" height="13" viewBox="0 0 16 16" aria-hidden="true"><polygon points="3,2 13,8 3,14"/></svg>
       Run
     </button>
@@ -330,11 +330,110 @@ main = greeting
     }
     editor.session.on('change', scheduleCompile);
 
-    // ---- Run button: compile now and show the emitted Rust ----
-    // Cancels any pending debounced compile so the click result is what shows.
-    function runNow() {
+    // ---- Run button: sandboxed server build + run ----
+    // The client-side WASM `compile()` shows the emitted Rust live as you type.
+    // Turning that Rust into a running binary needs cargo, which cannot run in
+    // the browser — so Run POSTs the source to the playground server, which
+    // builds AND executes the emitted crate inside a hardened sandbox (no
+    // network, jailed filesystem, memory/CPU/fork/time caps) and returns the
+    // real stdout/stderr/exit/timing.
+    //
+    // The run server is separate from this static site. Point RUN_SERVER at it
+    // (default: same origin — set when the static UI is served BY the run
+    // server). When it is unreachable, Run degrades gracefully to the live emit.
+    const RUN_SERVER =
+      (new URLSearchParams(location.search).get('server')) || location.origin;
+    const RUN_URL = RUN_SERVER.replace(/\/$/, '') + '/run';
+
+    let running = false;
+
+    function showRunResult(data) {
+      // Distinguish EACH terminal state (parse-don't-validate on the wire).
+      switch (data.status) {
+        case 'compile_error':
+          output.className = 'err';
+          outputTitle.textContent = 'Compile error';
+          output.textContent = data.diagnostics || '(no diagnostics)';
+          statusBar.className = 'error';
+          statusBar.textContent = 'Compile error — the program did not type-check.';
+          break;
+        case 'build_error':
+          output.className = 'err';
+          outputTitle.textContent = 'Build error';
+          output.textContent = data.diagnostics || '(no diagnostics)';
+          statusBar.className = 'error';
+          statusBar.textContent = 'Build error — the emitted crate failed to compile.';
+          break;
+        case 'ran': {
+          output.className = '';
+          outputTitle.textContent = 'Program output';
+          const parts = [];
+          if (data.stdout) parts.push(data.stdout);
+          if (data.stderr) parts.push('── stderr ──\n' + data.stderr);
+          output.textContent = parts.join('\n') || '(no output)';
+          const ok = data.exit_code === 0;
+          statusBar.className = ok ? 'ok' : 'error';
+          statusBar.textContent =
+            (ok ? 'Ran successfully' : 'Program exited with code ' + data.exit_code)
+            + ' — sandboxed, ' + data.elapsed_ms + ' ms.';
+          break;
+        }
+        case 'timeout':
+          output.className = 'err';
+          outputTitle.textContent = 'Timed out';
+          output.textContent =
+            'The ' + data.phase + ' phase exceeded its ' + data.limit_secs
+            + ' s sandbox limit and was killed.';
+          statusBar.className = 'error';
+          statusBar.textContent = 'Killed by the sandbox time limit (' + data.phase + ').';
+          break;
+        case 'sandbox_refused':
+          output.className = 'err';
+          outputTitle.textContent = 'Sandbox refused';
+          output.textContent =
+            (data.reason || 'the server refused to run without a jail')
+            + '\n\nThe playground fails closed: it never builds or runs your program '
+            + 'without an isolation sandbox. The emitted Rust (left→right preview) is '
+            + 'still shown as you type.';
+          statusBar.className = 'error';
+          statusBar.textContent = 'Sandbox unavailable — run refused (fail-closed).';
+          break;
+        default:
+          output.className = 'err';
+          outputTitle.textContent = 'Unexpected response';
+          output.textContent = JSON.stringify(data, null, 2);
+          statusBar.className = 'error';
+          statusBar.textContent = 'Unexpected server response.';
+      }
+    }
+
+    async function runNow() {
+      if (running) return;
       if (timer) { clearTimeout(timer); timer = null; }
-      runCompile();
+      running = true;
+      runBtn.disabled = true;
+      statusBar.className = 'compiling';
+      statusBar.textContent = 'Building and running (sandboxed)…';
+      try {
+        const resp = await fetch(RUN_URL, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ source: editor.getValue() }),
+        });
+        if (!resp.ok) throw new Error('HTTP ' + resp.status);
+        const data = await resp.json();
+        showRunResult(data);
+      } catch (e) {
+        // No run server reachable: keep the client-side emitted-Rust preview and
+        // explain that running needs the server.
+        statusBar.className = 'error';
+        statusBar.textContent =
+          'Run server unreachable (' + e.message + ') — showing the emitted Rust preview only.';
+        runCompile();
+      } finally {
+        running = false;
+        runBtn.disabled = false;
+      }
     }
     runBtn.addEventListener('click', runNow);
     // Ctrl/Cmd+Enter runs from the editor, matching the original playground.
@@ -352,7 +451,8 @@ main = greeting
         wasmReady = true;
         runBtn.disabled = false;
         statusBar.className = 'ok';
-        statusBar.textContent = 'In-browser compiler ready. Press Run to compile.';
+        statusBar.textContent =
+          'Ready — emitted Rust shown live; press Run to build & run it (sandboxed) on the server.';
         runCompile();
       } catch (e) {
         statusBar.className = 'error';
