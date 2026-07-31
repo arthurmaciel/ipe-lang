@@ -10,6 +10,32 @@ Entries below the header are maintained by
 section is generated from Conventional Commit messages and prepended when the
 standing release pull request is merged.
 
+## [0.1.29](https://github.com/arthurmaciel/ipe-lang/compare/ipe-v0.1.28...ipe-v0.1.29) (2026-07-31)
+
+
+### Features
+
+* **backend:** monomorphize direct-position Fn params to impl Fn ([#431](https://github.com/arthurmaciel/ipe-lang/issues/431)) ([#455](https://github.com/arthurmaciel/ipe-lang/issues/455)) ([7ec1040](https://github.com/arthurmaciel/ipe-lang/commit/7ec1040d598d841ef540dbc1c72f00de56f69289))
+* **canon,diagnostics:** CustomElement JS-boundary reserved-type seal ([#333](https://github.com/arthurmaciel/ipe-lang/issues/333)) ([#443](https://github.com/arthurmaciel/ipe-lang/issues/443)) ([0007618](https://github.com/arthurmaciel/ipe-lang/commit/00076184ab3798c528b31d4e299c37e167ad8438))
+* **ffi:** Rust.Ffi.call asserted-call — exact-carrier shims, ffi-raw capability, panic boundary ([#396](https://github.com/arthurmaciel/ipe-lang/issues/396)) ([#448](https://github.com/arthurmaciel/ipe-lang/issues/448)) ([745fbec](https://github.com/arthurmaciel/ipe-lang/commit/745fbec20051219c91c5fa87be44a4b4a36c898f))
+* **http:** typed Url request target + fail-closed API-layer scheme narrowing ([#399](https://github.com/arthurmaciel/ipe-lang/issues/399)) ([#441](https://github.com/arthurmaciel/ipe-lang/issues/441)) ([83e21d5](https://github.com/arthurmaciel/ipe-lang/commit/83e21d5eac1e6bda821beb55de55f800a9aa6ac2))
+* **index:** curated-index-repository side — schema, validator, admission CI ([#291](https://github.com/arthurmaciel/ipe-lang/issues/291)) ([#440](https://github.com/arthurmaciel/ipe-lang/issues/440)) ([7cfc21f](https://github.com/arthurmaciel/ipe-lang/commit/7cfc21f7bd76c24b8a41b8f2823f839b6e0dd77a))
+* **io,runtime:** echo-suppressed password line read (Io.readSecret) ([#402](https://github.com/arthurmaciel/ipe-lang/issues/402)) ([#436](https://github.com/arthurmaciel/ipe-lang/issues/436)) ([b289601](https://github.com/arthurmaciel/ipe-lang/commit/b2896013e4cd51fc844714feb65937da434ef5db))
+* **lower,backend,types:** first-class functions in enum variant payloads — Phase 2 carrier normalization ([#445](https://github.com/arthurmaciel/ipe-lang/issues/445)) ([103ece2](https://github.com/arthurmaciel/ipe-lang/commit/103ece2cdd70bc5081c0986479988c63a76a0d44))
+* **lower:** first-class functions in record fields — Phase 1 carrier normalization ([#438](https://github.com/arthurmaciel/ipe-lang/issues/438)) ([ae1904d](https://github.com/arthurmaciel/ipe-lang/commit/ae1904d98bddd10844a0e9dec65861f41bfdd649))
+* **runtime:** async FFI join-error funnel — no silently dropped panic payloads ([#396](https://github.com/arthurmaciel/ipe-lang/issues/396) async-breadth) ([#437](https://github.com/arthurmaciel/ipe-lang/issues/437)) ([01e23ab](https://github.com/arthurmaciel/ipe-lang/commit/01e23ab346965a5d807c74cd3f94bfc2d665d147))
+
+
+### Bug Fixes
+
+* **backend:** dedup libc dependency in emitted manifest for live/webview + readSecret shapes ([#446](https://github.com/arthurmaciel/ipe-lang/issues/446)) ([#449](https://github.com/arthurmaciel/ipe-lang/issues/449)) ([e5b93ac](https://github.com/arthurmaciel/ipe-lang/commit/e5b93ac519f325070e844e79a7591e22a646f962))
+* **http:** resolve HttpMethod ADT surface as values, patterns, and methodToString ([#432](https://github.com/arthurmaciel/ipe-lang/issues/432)) ([#447](https://github.com/arthurmaciel/ipe-lang/issues/447)) ([d1f4549](https://github.com/arthurmaciel/ipe-lang/commit/d1f454980b6f2d5ff89b156c3cdb42712dec4cbb))
+* **lower,backend:** erase Ipe.PubSub.Topic phantom uniformly across decl and CAF emit ([#457](https://github.com/arthurmaciel/ipe-lang/issues/457)) ([#458](https://github.com/arthurmaciel/ipe-lang/issues/458)) ([f480b42](https://github.com/arthurmaciel/ipe-lang/commit/f480b426aea0b41bb25ba3237f6097a924834074))
+* **runtime:** disambiguate url crate from local Url newtype in ws_client ([#433](https://github.com/arthurmaciel/ipe-lang/issues/433)) ([#444](https://github.com/arthurmaciel/ipe-lang/issues/444)) ([d800c56](https://github.com/arthurmaciel/ipe-lang/commit/d800c5628eb8a0138a6ba9862698a53361347e00))
+* **test:** add missing Ipe.Ui import to five onsubmit live_e2e fixtures ([#456](https://github.com/arthurmaciel/ipe-lang/issues/456)) ([f840ee7](https://github.com/arthurmaciel/ipe-lang/commit/f840ee7a2b2707ce42bea357aa0434d2595b2328))
+* **test:** isolate g_http_live cargo-build tests from concurrent emit-dir wipes ([#454](https://github.com/arthurmaciel/ipe-lang/issues/454)) ([15fc3dc](https://github.com/arthurmaciel/ipe-lang/commit/15fc3dc733c92eb0caa54d4166ca27e005ce2faf))
+* **test:** web routed-view golden returns Element per framework contract, not Html via Ui.layout ([#450](https://github.com/arthurmaciel/ipe-lang/issues/450)) ([#451](https://github.com/arthurmaciel/ipe-lang/issues/451)) ([d9308fa](https://github.com/arthurmaciel/ipe-lang/commit/d9308fa26879f2f8d084b3d90d9dc6ff16a0d274))
+
 ## [0.1.28](https://github.com/arthurmaciel/ipe-lang/compare/ipe-v0.1.27...ipe-v0.1.28) (2026-07-31)
 
 
