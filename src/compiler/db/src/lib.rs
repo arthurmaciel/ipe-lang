@@ -1020,14 +1020,16 @@ pub type LowerResult = Result<Arc<ipe_ir::Program>, (Diagnostic, Vec<Symbol>)>;
 /// repeat demand or a no-op re-save executes nothing.
 ///
 /// Why not genuinely per-module: beyond inheriting `typecheck`'s coupling
-/// (lowering reads [`ipe_types::SolvedTypes`], itself whole-program),
-/// `ipe_lower::lower` mints its fresh-symbol pools (`eta_`, `cap_`, `arg_`,
-/// …) sized from whole-program facts — `lower::max_def_arity(m)` and
-/// `lower::count_destructure_param_sites(m)` walk every def in the merged
-/// module. A per-module lowering pass would need those pools either resized
-/// per module (which would perturb the exact fresh-name numbering the
-/// golden-oracle SEAL pins) or restructured into a composable/incremental
-/// allocation scheme — a recorded follow-up, not done here.
+/// (lowering reads [`ipe_types::SolvedTypes`], itself whole-program), the
+/// monotonic-cursor fresh-symbol pools (`arg_`, `anyp_`, `destr_thunk_`,
+/// `ncons_`, `nstrlit_`) number each site from `lower::count_*_sites(m)` over
+/// every def in the merged module, so a site's name depends on how many sites
+/// precede it program-wide. A per-module lowering pass needs those pools
+/// restructured into a per-module allocation scheme (module-base offset + local
+/// index) that reproduces the whole-program numbering the golden-oracle SEAL
+/// pins — not yet wired. The position-indexed
+/// `eta_` / `cap_` pools are already per-module-decoupled
+/// (`lower::max_def_arity_per_module`).
 #[salsa::tracked]
 pub fn lower_program(db: &dyn Db, root: SourceRoot, entry: SourceFile) -> LowerResult {
     let linked = linked_program(db, root, entry).map_err(|d| (d, Vec::new()))?;
