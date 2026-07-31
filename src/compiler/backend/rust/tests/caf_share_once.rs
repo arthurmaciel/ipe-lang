@@ -25,6 +25,7 @@ const fn empty_module(name: ModPath, funcs: Vec<Func>, entry: Option<FuncId>) ->
         uses_tea: false,
         uses_server: false,
         uses_http: false,
+        uses_config: false,
         uses_ui: false,
         uses_web: false,
         uses_tui: false,

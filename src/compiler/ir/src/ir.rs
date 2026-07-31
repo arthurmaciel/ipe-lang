@@ -93,6 +93,19 @@ pub struct Module {
     /// unconditional (it backs the always-present `Ipe.Url` and `ssrf`
     /// surfaces), so only the reqwest HTTP stack is gated here.
     pub uses_http: bool,
+    /// `true` when the lowerer detected at least one `Ipe.Config` decoder that
+    /// emits into the `config_decode` runtime module — `Config.decodeToml` /
+    /// `decodeYaml` / `decodeJson` / `loadFromFile`, or the `config_decode`-own
+    /// `nullable` / `maybe` / `dict` combinators.
+    ///
+    /// Set by `ipe_lower` when any call site resolves to a
+    /// `KernelFn::is_config()` variant. The backend reads this flag to decide
+    /// whether to declare `pub mod config_decode; pub use config_decode::*;` in
+    /// the emitted `ipe_runtime/mod.rs` and add the `toml` + `serde_yaml`
+    /// dependencies. The JSON-backed `Config.*` combinators (`string` / `field`
+    /// / `map` / …) emit into the always-on `json` module and do NOT set this
+    /// flag, so a JSON-only program pulls neither crate.
+    pub uses_config: bool,
     /// `true` when the lowerer detected at least one `Ipe.Ui` / `Ipe.Html`
     /// kernel call (`Ui.layout`, `Ui.layoutWith`, `Html.render`, etc.) in the
     /// module's function bodies.
@@ -3663,6 +3676,7 @@ mod tests {
                 uses_tea: false,
                 uses_server: false,
                 uses_http: false,
+                uses_config: false,
                 uses_ui: false,
                 uses_web: false,
                 uses_tui: false,
@@ -4160,6 +4174,7 @@ mod serde_persistence_tests {
                 uses_tea: false,
                 uses_server: false,
                 uses_http: false,
+                uses_config: false,
                 uses_ui: false,
                 uses_web: false,
                 uses_tui: false,
@@ -4229,6 +4244,7 @@ mod serde_persistence_tests {
                 uses_tea: false,
                 uses_server: false,
                 uses_http: false,
+                uses_config: false,
                 uses_ui: false,
                 uses_web: false,
                 uses_tui: false,
