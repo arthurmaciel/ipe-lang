@@ -7,15 +7,18 @@ fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
     match ipe::run_cli(&args) {
         Ok(()) => ExitCode::SUCCESS,
-        // An unknown command, or a per-command misuse, shows a full help page on
-        // its own; the `ipe: ` prefix belongs to short diagnostics, not a help
-        // screen. A command misuse leads with its own reason line before the page.
+        // These variants render their own complete screen — a full help page, a
+        // gate report, or a self-guttered environment message — so the `ipe: `
+        // prefix (which belongs to short one-line diagnostics) and the extra
+        // gutter are not applied; they print as-is. A command misuse leads with
+        // its own reason line before its help page.
         Err(
             err @ (ipe::CliError::UnknownCommand { .. }
             | ipe::CliError::CommandUsage { .. }
             | ipe::CliError::DocCoverage(_)
             | ipe::CliError::VerifyFailed { .. }
-            | ipe::CliError::UpgradeNoPrebuilt { .. }),
+            | ipe::CliError::UpgradeNoPrebuilt { .. }
+            | ipe::CliError::ToolchainMissing(_)),
         ) => {
             eprintln!("{err}");
             ExitCode::FAILURE
