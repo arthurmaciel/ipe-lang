@@ -5885,6 +5885,27 @@ impl StdlibKernel {
         )
     }
 
+    /// `true` when this variant belongs to the `Ipe.Compression` kernel family
+    /// (`Compression.gzip` / `gunzip` / `zstdCompress` / `zstdDecompress`).
+    ///
+    /// The `compression` runtime module is the sole consumer of the `flate2` and
+    /// `zstd` crates (`gzip` / `gunzip` go through `flate2`, `zstdCompress` /
+    /// `zstdDecompress` through `zstd`). Used by `ipe_lower` to detect
+    /// `uses_compression` and by the backend to declare `compression` in the
+    /// emitted `ipe_runtime/mod.rs` and add `flate2` + `zstd` to the emitted
+    /// manifest. It is a leaf module — no other runtime surface calls into it —
+    /// so the flag alone gates it, never forced on transitively.
+    #[must_use]
+    pub const fn is_compression(self) -> bool {
+        matches!(
+            self,
+            Self::CompressionGzip
+                | Self::CompressionGunzip
+                | Self::CompressionZstdCompress
+                | Self::CompressionZstdDecompress
+        )
+    }
+
     /// `true` when this variant belongs to the `Ipe.Auth` kernel family
     /// (`Ipe.Auth.hashPassword` / `verifyPassword` / `signToken` / `verifyToken` /
     /// `register` / `login` / `setRole` and companions).
@@ -7001,6 +7022,28 @@ mod tests {
                 decl.emit,
                 k.is_config(),
                 lives_in_config_decode,
+            );
+        }
+    }
+
+    /// Every `Ipe.Compression` kernel emits a symbol into the `compression`
+    /// runtime module (the sole consumer of `flate2` + `zstd`), so `qualifier ==
+    /// "Compression"` MUST imply `is_compression()`, and no other qualifier may
+    /// report `is_compression()`. Both directions are asserted, so a new
+    /// `Compression.*` kernel that the predicate forgets — or an unrelated kernel
+    /// wrongly claimed — fails this test the instant the two disagree.
+    #[test]
+    fn compression_predicate_tracks_compression_qualifier() {
+        for k in StdlibKernel::ALL {
+            let is_compression_qualifier = k.decl().qualifier == "Compression";
+            assert_eq!(
+                k.is_compression(),
+                is_compression_qualifier,
+                "{k:?}: is_compression()={} but qualifier==\"Compression\" is {} — \
+                 the emitted crate would either fail to declare the compression module \
+                 (E0433) or pull flate2/zstd into a program that never compresses",
+                k.is_compression(),
+                is_compression_qualifier,
             );
         }
     }

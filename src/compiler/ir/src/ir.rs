@@ -106,6 +106,16 @@ pub struct Module {
     /// / `map` / …) emit into the always-on `json` module and do NOT set this
     /// flag, so a JSON-only program pulls neither crate.
     pub uses_config: bool,
+    /// `true` when the lowerer detected at least one `Ipe.Compression` kernel
+    /// call (`Compression.gzip` / `gunzip` / `zstdCompress` / `zstdDecompress`).
+    ///
+    /// Set by `ipe_lower` when any call site resolves to a
+    /// `KernelFn::is_compression()` variant. The backend reads this flag to
+    /// decide whether to declare `pub mod compression; pub use compression::*;`
+    /// in the emitted `ipe_runtime/mod.rs` and add the `flate2` + `zstd`
+    /// dependencies. `compression` is a leaf module — no other runtime surface
+    /// reaches it — so no other `uses_*` flag forces it on.
+    pub uses_compression: bool,
     /// `true` when the lowerer detected at least one `Ipe.Ui` / `Ipe.Html`
     /// kernel call (`Ui.layout`, `Ui.layoutWith`, `Html.render`, etc.) in the
     /// module's function bodies.
@@ -3677,6 +3687,7 @@ mod tests {
                 uses_server: false,
                 uses_http: false,
                 uses_config: false,
+                uses_compression: false,
                 uses_ui: false,
                 uses_web: false,
                 uses_tui: false,
@@ -4175,6 +4186,7 @@ mod serde_persistence_tests {
                 uses_server: false,
                 uses_http: false,
                 uses_config: false,
+                uses_compression: false,
                 uses_ui: false,
                 uses_web: false,
                 uses_tui: false,
@@ -4245,6 +4257,7 @@ mod serde_persistence_tests {
                 uses_server: false,
                 uses_http: false,
                 uses_config: false,
+                uses_compression: false,
                 uses_ui: false,
                 uses_web: false,
                 uses_tui: false,

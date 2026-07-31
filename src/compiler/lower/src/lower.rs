@@ -5937,6 +5937,10 @@ struct KernelUsage {
     /// `dict`) — gates the `config_decode` runtime module and the `toml` +
     /// `serde_yaml` dependencies.
     config: bool,
+    /// Any `Ipe.Compression` kernel (`gzip` / `gunzip` / `zstdCompress` /
+    /// `zstdDecompress`) — gates the `compression` runtime module and the
+    /// `flate2` + `zstd` dependencies.
+    compression: bool,
     /// Any Ipe.Ui render kernel.
     ui: bool,
     /// Any Ipe.Css (Ipe.CssSafety) leaf kernel — independent of
@@ -5992,6 +5996,7 @@ impl KernelUsage {
             && self.server
             && self.http
             && self.config
+            && self.compression
             && self.ui
             && self.css
             && self.auth
@@ -6018,6 +6023,7 @@ impl KernelUsage {
         self.server |= k.is_server();
         self.http |= k.is_http_client();
         self.config |= k.is_config();
+        self.compression |= k.is_compression();
         self.ui |= k.is_ui();
         self.css |= k.is_css();
         self.auth |= k.is_auth();
@@ -7964,6 +7970,15 @@ impl<'a> Lowerer<'a> {
         // to reach `config_decode`.
         let uses_config = kernel_usage.config;
 
+        // detect `Ipe.Compression` usage — any `Compression.gzip` / `gunzip` /
+        // `zstdCompress` / `zstdDecompress` kernel. The backend uses this flag to
+        // declare `compression` in the emitted `ipe_runtime/mod.rs` and add the
+        // `flate2` + `zstd` dependencies. No type-mention guard is needed:
+        // Compression operates on plain `Bytes`, carrying no runtime-owned opaque
+        // type across signatures, so a call site is the only way to reach the
+        // `compression` module.
+        let uses_compression = kernel_usage.compression;
+
         // detect Ipe.Ui / Ipe.Html / Ipe.Web / Ipe.Tui / Ipe.WebView usage.
         // TUI runtime files (tui/app.rs, tui/layout.rs, tui/focus.rs) import
         // `super::super::ui` and `super::super::html` unconditionally, so
@@ -8017,6 +8032,7 @@ impl<'a> Lowerer<'a> {
             uses_server,
             uses_http,
             uses_config,
+            uses_compression,
             uses_ui,
             uses_web,
             uses_tui,

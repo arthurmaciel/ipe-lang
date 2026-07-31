@@ -36,6 +36,7 @@ const fn empty_module(name: ModPath) -> Module {
         uses_server: false,
         uses_http: false,
         uses_config: false,
+        uses_compression: false,
         uses_ui: false,
         uses_web: false,
         uses_tui: false,
