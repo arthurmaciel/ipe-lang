@@ -781,10 +781,12 @@ mod tests {
         assert_ne!(base, with_extra, "adding a module must change the key");
 
         let mut removed = sources;
-        removed.remove(&vec!["Std".to_owned(), "Prelude".to_owned()]);
-        let without_prelude = compute_project_key(
+        removed.remove(&vec!["Ipe".to_owned(), "Basics".to_owned()]);
+        let mut injected_without = injected;
+        injected_without.remove(&vec!["Ipe".to_owned(), "Basics".to_owned()]);
+        let without_basics = compute_project_key(
             &removed,
-            &injected,
+            &injected_without,
             &entry(),
             DbDriver::Sqlite,
             ipe_ir::Target::Native,
@@ -792,7 +794,7 @@ mod tests {
             false,
         );
         assert_ne!(
-            base, without_prelude,
+            base, without_basics,
             "removing a module must change the key"
         );
     }
