@@ -5928,6 +5928,10 @@ struct KernelUsage {
     /// Any foreign-crate FFI wrapper call ([`Callee::Ffi`]) — gates the
     /// emitted `mod ffi;` declaration + bound-crate `Cargo.toml` deps.
     ffi: bool,
+    /// Any ASSERTED foreign call ([`Callee::Ffi`] with `asserted`) — adds
+    /// [`Capability::FfiRaw`] beside [`Capability::NativeFfi`] in the
+    /// whole-program capability set.
+    ffi_asserted: bool,
     /// The security capabilities of every kernel visited so far, for whole-
     /// program capability inference ([`crate::capabilities::program_capabilities`]).
     /// Populated from [`KernelFn::capability`] on the SAME kernel-callee visit
@@ -5996,6 +6000,19 @@ impl KernelUsage {
     }
 }
 
+/// Record one callee into `usage`: a kernel by its family record, a foreign
+/// wrapper by the `ffi` flag (plus `ffi_asserted` for an asserted shim).
+fn record_callee_usage(callee: &Callee, usage: &mut KernelUsage) {
+    match callee {
+        Callee::Kernel(k) => usage.record(*k),
+        Callee::Ffi { asserted, .. } => {
+            usage.ffi = true;
+            usage.ffi_asserted |= *asserted;
+        }
+        Callee::Func(_) => {}
+    }
+}
+
 /// Record every kernel callee reachable from `expr` into `usage`.
 ///
 /// Traversal shape mirrors the former per-family walkers exactly: `Call` /
@@ -6011,20 +6028,12 @@ fn scan_kernel_usage(expr: &Expr, usage: &mut KernelUsage) {
     }
     match expr {
         Expr::Call { callee, args, .. } => {
-            match callee {
-                Callee::Kernel(k) => usage.record(*k),
-                Callee::Ffi { .. } => usage.ffi = true,
-                Callee::Func(_) => {}
-            }
+            record_callee_usage(callee, usage);
             for a in args {
                 scan_kernel_usage(a, usage);
             }
         }
-        Expr::FuncValue { callee, .. } => match callee {
-            Callee::Kernel(k) => usage.record(*k),
-            Callee::Ffi { .. } => usage.ffi = true,
-            Callee::Func(_) => {}
-        },
+        Expr::FuncValue { callee, .. } => record_callee_usage(callee, usage),
         Expr::Apply { func, args } => {
             scan_kernel_usage(func, usage);
             for a in args {
@@ -6116,7 +6125,9 @@ fn scan_kernel_usage(expr: &Expr, usage: &mut KernelUsage) {
 
 /// The whole-program security-capability set: the union of every reachable
 /// kernel's [`KernelFn::capability`] plus [`Capability::NativeFfi`] when the
-/// program crosses into `Rust.` (any [`Callee::Ffi`]).
+/// program crosses into `Rust.` (any [`Callee::Ffi`]), plus
+/// [`Capability::FfiRaw`] when any crossing is an author-asserted
+/// `Rust.Ffi.call` shim.
 ///
 /// Reuses the SAME [`scan_kernel_usage`] traversal the lowerer runs for the
 /// `uses_*` runtime-module flags — the capability set is collected on the same
@@ -6135,6 +6146,9 @@ pub fn program_capabilities_scan(program: &Program) -> BTreeSet<Capability> {
     }
     if usage.ffi {
         usage.caps.insert(Capability::NativeFfi);
+    }
+    if usage.ffi_asserted {
+        usage.caps.insert(Capability::FfiRaw);
     }
     usage.caps
 }
@@ -11308,13 +11322,20 @@ impl<'a> Lowerer<'a> {
             // body. Always saturated by construction — the driver-generated
             // forwarder applies exactly its own parameters — so this lowers to
             // a direct call with no partial-application machinery.
-            canon::Expr_::ForeignCall { ident, args } => {
+            canon::Expr_::ForeignCall {
+                ident,
+                args,
+                asserted,
+            } => {
                 let mut lowered = Vec::with_capacity(args.len());
                 for a in args {
                     lowered.push(self.lower_expr(a)?);
                 }
                 Ok(Expr::Call {
-                    callee: Callee::Ffi { ident: *ident },
+                    callee: Callee::Ffi {
+                        ident: *ident,
+                        asserted: *asserted,
+                    },
                     args: lowered,
                     pin: CallPin::None,
                     on_form: OnFormKind::NotForm,

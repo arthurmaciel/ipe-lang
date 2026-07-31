@@ -2056,8 +2056,14 @@ pub enum Callee {
     /// through a driver-generated FFI interface module's forwarder body.
     /// `ident` is the emitted `_bindings.rs` wrapper `pub fn` identifier,
     /// validated as a Rust identifier at canonicalisation.
+    ///
+    /// `asserted` marks a shim whose signature was author-asserted
+    /// (`Rust.Ffi.call`) rather than derived from crate inspection; it flips
+    /// the `ffi-raw` capability in the whole-program scan.
     Ffi {
         ident: Symbol,
+        #[serde(default)]
+        asserted: bool,
     },
 }
 

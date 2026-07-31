@@ -8,7 +8,7 @@
 
 use std::fmt;
 
-use ipe_diagnostics::{Code, IPE_F4400, IPE_F4401, IPE_F4402, IPE_F4411, IPE_F4412};
+use ipe_diagnostics::{Code, IPE_F4400, IPE_F4401, IPE_F4402, IPE_F4411, IPE_F4412, IPE_F4414};
 
 /// One FFI-generator diagnostic: the failure class plus enough context to
 /// name the offending binding.
@@ -67,6 +67,14 @@ pub enum Diagnostic {
         /// The rendered OS error.
         detail: String,
     },
+    /// `IPE-F4414` — an author-asserted foreign call (`Rust.Ffi.call`) was
+    /// refused at validation, before any shim was generated.
+    AssertedRefused {
+        /// The asserted Rust path, verbatim.
+        path: String,
+        /// Which rule refused it.
+        defect: AssertedDefect,
+    },
 }
 
 impl Diagnostic {
@@ -79,6 +87,7 @@ impl Diagnostic {
             Self::ShapeContradiction { .. } => IPE_F4402,
             Self::SourceRejected { .. } => IPE_F4411,
             Self::ArtifactIo { .. } => IPE_F4412,
+            Self::AssertedRefused { .. } => IPE_F4414,
         }
     }
 }
@@ -121,11 +130,125 @@ impl fmt::Display for Diagnostic {
                     self.code().as_str()
                 )
             }
+            Self::AssertedRefused { path, defect } => {
+                write!(
+                    f,
+                    "{}: asserted call `{path}` refused: {defect}",
+                    self.code().as_str()
+                )
+            }
         }
     }
 }
 
 impl std::error::Error for Diagnostic {}
+
+/// The closed set of asserted-call validation refusals (`IPE-F4414`). Every
+/// rule runs at build preparation, before any shim or interface entry is
+/// generated.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum AssertedDefect {
+    /// The path's crate segment names no installed FFI crate — the escape
+    /// hatch can never bypass the `ipe rust add` admission pipeline.
+    TargetCrateNotInstalled {
+        /// The crate segment of the asserted path.
+        crate_ident: String,
+    },
+    /// The asserted signature is not a function arrow.
+    NotAFunction,
+    /// A signature component falls outside the closed carrier set.
+    CarrierOutsideClosedSet {
+        /// The offending type, as written.
+        ty: String,
+    },
+    /// An opaque nominal in the signature is not declared by the target
+    /// crate's interface — an assertion cannot conjure a type mapping or
+    /// forge another crate's handle.
+    OpaqueNotDeclared {
+        /// The nominal, as written.
+        name: String,
+    },
+    /// The result is not exactly `Result Error <T>` — the one shape whose
+    /// error channel the panic boundary folds into.
+    ResultShape {
+        /// The result type, as written.
+        ty: String,
+    },
+    /// A `()` parameter beside other parameters (it is legal only as the sole
+    /// parameter of a zero-argument target).
+    UnitParamNotSole,
+    /// The target is inspected and its signature cannot carry an asserted
+    /// call (non-pure effect, no return value, or a receiver).
+    InspectedShapeUnsupported {
+        /// The unsupported aspect.
+        reason: String,
+    },
+    /// The target is inspected and the assertion does not match it under the
+    /// exact-carrier rule (identity, never a clamp or widening).
+    InspectedMismatch {
+        /// The exact Rust signature the inspection records.
+        expected: String,
+    },
+    /// Two definitions assert different signatures for one path.
+    ConflictingAssertions {
+        /// The two rendered signatures.
+        first: String,
+        second: String,
+    },
+}
+
+impl fmt::Display for AssertedDefect {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::TargetCrateNotInstalled { crate_ident } => write!(
+                f,
+                "crate `{crate_ident}` is not an installed FFI dependency — run \
+                 `ipe rust add {crate_ident}` first"
+            ),
+            Self::NotAFunction => write!(
+                f,
+                "the asserted signature must be a function type ending in \
+                 `Result Error <T>`"
+            ),
+            Self::CarrierOutsideClosedSet { ty } => write!(
+                f,
+                "`{ty}` is outside the asserted-call carrier set (Int, Float, Bool, \
+                 Char, String, Bytes, or an opaque type the target crate declares)"
+            ),
+            Self::OpaqueNotDeclared { name } => write!(
+                f,
+                "`{name}` is not a type the target crate's interface declares — an \
+                 assertion cannot introduce a new foreign type"
+            ),
+            Self::ResultShape { ty } => write!(
+                f,
+                "the result must be exactly `Result Error <T>` (got `{ty}`) — the \
+                 error channel is where a foreign panic or failure lands"
+            ),
+            Self::UnitParamNotSole => write!(
+                f,
+                "`()` is legal only as the single parameter of a zero-argument target"
+            ),
+            Self::InspectedShapeUnsupported { reason } => write!(
+                f,
+                "the inspected target cannot carry an asserted call ({reason}) — use \
+                 the inspected import (`import Rust.<Crate>`) instead"
+            ),
+            Self::InspectedMismatch { expected } => write!(
+                f,
+                "the assertion does not match the inspected signature `{expected}` \
+                 under the exact-carrier rule (no clamp, no widening) — fix the \
+                 assertion or use the inspected import"
+            ),
+            Self::ConflictingAssertions { first, second } => write!(
+                f,
+                "two definitions assert different signatures for this path \
+                 (`{first}` vs `{second}`) — make them identical or share one \
+                 asserted definition"
+            ),
+        }
+    }
+}
 
 /// The closed set of crate-source gate rejections (`IPE-F4411`). Every rule
 /// runs BEFORE the input can reach a command line or the network.

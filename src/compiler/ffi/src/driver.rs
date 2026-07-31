@@ -662,6 +662,23 @@ pub struct InstalledCrate {
     /// refuses to collapse two nominals whose defining crate resolved to
     /// different versions across members. Empty for a legacy cache.
     pub dep_versions: std::collections::BTreeMap<String, String>,
+    /// Inspected crate-top-level free-function facts, keyed by fn name — the
+    /// asserted-call compile-time cross-check (`Rust.Ffi.call`, design §5.2
+    /// rule 1). Empty for a legacy cache, which then cross-checks nothing;
+    /// the emitted shim's `rustc` check still holds.
+    pub inspected_free_fns: std::collections::BTreeMap<String, InspectedFnFact>,
+}
+
+/// One inspected free function's declared Rust surface, for the asserted-call
+/// exact-carrier cross-check.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct InspectedFnFact {
+    /// Parameter Rust types, verbatim from the inspection.
+    pub params: Vec<String>,
+    /// The result Rust type, or `None` for a unit return.
+    pub result: Option<String>,
+    /// The inspector's effect classification.
+    pub effect: crate::pkginfo::Effect,
 }
 
 /// Load every installed crate from a project's FFI artifact cache.
@@ -742,36 +759,7 @@ fn load_installed_crate(cache_root: &Path, slug: String) -> Result<InstalledCrat
         if paths.pkg_json.is_file() {
             let pkg_text = read(&paths.pkg_json)?;
             let pkg = PkgInfo::decode_json(&pkg_text)?;
-            let mut dep_versions: std::collections::BTreeMap<String, String> =
-                std::collections::BTreeMap::new();
-            for dep in pkg.transitive_deps() {
-                dep_versions.insert(
-                    dep.ident.as_str().to_owned(),
-                    dep.version.as_str().to_owned(),
-                );
-            }
-            let iface = crate::interface::crate_interface(&pkg);
-            let bindings_source = crate::bindings::emit_bindings(&pkg);
-            let wrapper_idents: BTreeSet<String> = iface
-                .bindings
-                .iter()
-                .map(|b| b.wrapper_ident.clone())
-                .collect();
-            return Ok(InstalledCrate {
-                slug,
-                module_name: iface.module_name,
-                kernel_name: iface.kernel_name,
-                interface_source: iface.source,
-                bindings_source,
-                opaque_types: iface.opaque_types,
-                opaque_type_ids: iface.opaque_type_ids,
-                define_types: iface.define_types,
-                transparent_types: iface.transparent_types,
-                cargo_deps: cargo_dep_lines(&pkg)?,
-                bindings: iface.bindings,
-                wrapper_idents,
-                dep_versions,
-            });
+            return installed_crate_from_pkg(slug, &pkg);
         }
         let consumer_text = read(&paths.consumer)?;
         let interface_source = read(&paths.interface)?;
@@ -925,8 +913,70 @@ fn load_installed_crate(cache_root: &Path, slug: String) -> Result<InstalledCrat
             bindings,
             wrapper_idents,
             dep_versions,
+            inspected_free_fns: std::collections::BTreeMap::new(),
         })
     }
+}
+
+/// Re-derive one installed crate's whole consumer-side view from its
+/// validated inspection document — the single constructor both the catalog
+/// loader and the asserted-call tests build from.
+///
+/// # Errors
+/// A wire-defect diagnostic when a dependency line cannot be rendered.
+pub fn installed_crate_from_pkg(slug: String, pkg: &PkgInfo) -> Result<InstalledCrate, Diagnostic> {
+    let mut dep_versions: std::collections::BTreeMap<String, String> =
+        std::collections::BTreeMap::new();
+    for dep in pkg.transitive_deps() {
+        dep_versions.insert(
+            dep.ident.as_str().to_owned(),
+            dep.version.as_str().to_owned(),
+        );
+    }
+    // The asserted-call cross-check facts: crate-top-level FREE functions
+    // only (no receiver, no accessor shape, no generics) — the one shape an
+    // asserted path can name that inspection also records.
+    let mut inspected_free_fns: std::collections::BTreeMap<String, InspectedFnFact> =
+        std::collections::BTreeMap::new();
+    for f in pkg.fns() {
+        let is_free_fn = f.recv_type().is_empty()
+            && f.method_name().is_empty()
+            && f.generic().is_none()
+            && matches!(f.shape(), crate::pkginfo::FnShape::Plain);
+        if is_free_fn {
+            inspected_free_fns.insert(
+                f.name().to_owned(),
+                InspectedFnFact {
+                    params: f.params().iter().map(|p| p.foreign_ty.clone()).collect(),
+                    result: f.results().first().map(|r| r.foreign_ty.clone()),
+                    effect: f.effect(),
+                },
+            );
+        }
+    }
+    let iface = crate::interface::crate_interface(pkg);
+    let bindings_source = crate::bindings::emit_bindings(pkg);
+    let wrapper_idents: BTreeSet<String> = iface
+        .bindings
+        .iter()
+        .map(|b| b.wrapper_ident.clone())
+        .collect();
+    Ok(InstalledCrate {
+        slug,
+        module_name: iface.module_name,
+        kernel_name: iface.kernel_name,
+        interface_source: iface.source,
+        bindings_source,
+        opaque_types: iface.opaque_types,
+        opaque_type_ids: iface.opaque_type_ids,
+        define_types: iface.define_types,
+        transparent_types: iface.transparent_types,
+        cargo_deps: cargo_dep_lines(pkg)?,
+        bindings: iface.bindings,
+        wrapper_idents,
+        dep_versions,
+        inspected_free_fns,
+    })
 }
 
 // ── coverage report (the over-drop keystone made visible) ───────────────────

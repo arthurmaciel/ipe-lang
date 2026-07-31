@@ -527,8 +527,10 @@ pub fn profile_from_capabilities(
             Capability::Clock | Capability::Random => {}
             // `native-ffi` widens nothing by itself — its role is epistemic (it
             // means inference is blind, so the declared set is the ceiling). It
-            // opens no control here; an explicit no-op arm.
-            Capability::NativeFfi => {}
+            // opens no control here; an explicit no-op arm. `ffi-raw` is the
+            // same crossing under an author-asserted signature: pure
+            // disclosure, no control of its own.
+            Capability::NativeFfi | Capability::FfiRaw => {}
         }
     }
 

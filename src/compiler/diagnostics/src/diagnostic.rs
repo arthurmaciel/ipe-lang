@@ -19,11 +19,11 @@ use crate::code::{
     IPE_N0004, IPE_N0005, IPE_N0010, IPE_N0011, IPE_N0012, IPE_N0013, IPE_N0020, IPE_N0021,
     IPE_N0022, IPE_N0023, IPE_N0024, IPE_N0025, IPE_N0026, IPE_N0027, IPE_N0028, IPE_N0029,
     IPE_N0030, IPE_N0031, IPE_N0032, IPE_N0033, IPE_N0034, IPE_N0035, IPE_N0036, IPE_N0037,
-    IPE_P0001, IPE_P0002, IPE_P0003, IPE_P0010, IPE_P0011, IPE_P0012, IPE_P0013, IPE_P0014,
-    IPE_P0015, IPE_P0016, IPE_P0017, IPE_P0018, IPE_P0020, IPE_P0021, IPE_P0030, IPE_P0031,
-    IPE_P0040, IPE_P0041, IPE_P0050, IPE_P0060, IPE_P0061, IPE_P0062, IPE_P0063, IPE_T0001,
-    IPE_T0002, IPE_T0003, IPE_T0004, IPE_T0010, IPE_T0011, IPE_T0012, IPE_T0013, IPE_T0014,
-    IPE_T0015, IPE_T0016, IPE_T0017, IPE_T0018, IPE_T0019, Severity,
+    IPE_N0038, IPE_P0001, IPE_P0002, IPE_P0003, IPE_P0010, IPE_P0011, IPE_P0012, IPE_P0013,
+    IPE_P0014, IPE_P0015, IPE_P0016, IPE_P0017, IPE_P0018, IPE_P0020, IPE_P0021, IPE_P0030,
+    IPE_P0031, IPE_P0040, IPE_P0041, IPE_P0050, IPE_P0060, IPE_P0061, IPE_P0062, IPE_P0063,
+    IPE_T0001, IPE_T0002, IPE_T0003, IPE_T0004, IPE_T0010, IPE_T0011, IPE_T0012, IPE_T0013,
+    IPE_T0014, IPE_T0015, IPE_T0016, IPE_T0017, IPE_T0018, IPE_T0019, Severity,
 };
 use crate::span::Span;
 
@@ -542,6 +542,12 @@ pub enum NameError {
     /// until its glue is emittable the boundary is simply closed. `name` is the
     /// reserved boundary type (e.g. `CustomElement`). [IPE-N0037]
     UnsupportedBoundaryType { name: Box<str> },
+    /// An asserted foreign call (`Rust.Ffi.call`) is malformed at its use
+    /// site: applied to a non-literal path, referenced without application,
+    /// carrying an invalid Rust path, or placed anywhere other than the whole
+    /// body of an annotated top-level definition. `detail` names the specific
+    /// rule broken. [IPE-N0038]
+    AssertedCallMalformed { detail: Box<str> },
 }
 
 /// The four names IPE-N0035 reports.
@@ -1232,6 +1238,7 @@ const fn name_code(msg: &NameError) -> Code {
         NameError::WrongShapeCmdSub(..) => IPE_N0035,
         NameError::RemovedSurface { .. } => IPE_N0036,
         NameError::UnsupportedBoundaryType { .. } => IPE_N0037,
+        NameError::AssertedCallMalformed { .. } => IPE_N0038,
     }
 }
 
@@ -1396,7 +1403,8 @@ fn name_help(msg: &NameError, span: Span) -> Vec<HelpLine> {
         | NameError::ProgramImportsTeaShape { .. }
         | NameError::StdlibImportRequired { .. }
         | NameError::RemovedSurface { .. }
-        | NameError::UnsupportedBoundaryType { .. } => Vec::new(), // no span-based help
+        | NameError::UnsupportedBoundaryType { .. }
+        | NameError::AssertedCallMalformed { .. } => Vec::new(), // no span-based help
     }
 }
 

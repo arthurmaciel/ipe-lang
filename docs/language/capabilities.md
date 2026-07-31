@@ -9,7 +9,7 @@ The idea is *verify behaviour, not reputation*: rather than trusting that a
 dependency is well-behaved, you can see the precise set of things it is even
 *able* to do before you run it.
 
-## The eight capabilities
+## The nine capabilities
 
 | Capability | What it covers |
 |---|---|
@@ -21,6 +21,7 @@ dependency is well-behaved, you can see the precise set of things it is even
 | `clock` | Reading wall-clock or monotonic time, sleeping, or firing on a timer. |
 | `random` | Drawing non-determinism — RNG, random tokens, UUIDs. |
 | `native-ffi` | Crossing into native `Rust.` code, which is opaque to inference (see below). |
+| `ffi-raw` | A native crossing whose signature the author asserted via `Rust.Ffi.call`, rather than derived from crate inspection. Always accompanies `native-ffi`; its presence discloses the assertion. |
 
 The vocabulary is closed and coarse for now: `network` means *any* network, not
 per-host; `filesystem` means *any* file, not per-path. Finer, per-resource

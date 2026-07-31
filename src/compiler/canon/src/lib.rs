@@ -9,6 +9,7 @@
 //! or data constructor — by porting the supported subset of the Haskell compiler's
 //! `Ipe.Canonicalise.{Module,Expression,Pattern,Type,Environment}`.
 
+pub mod asserted;
 pub mod ast;
 pub mod builtins;
 mod env;

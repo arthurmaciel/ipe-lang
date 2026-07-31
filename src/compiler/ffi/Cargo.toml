@@ -8,7 +8,11 @@ description = "Shim-free Rust-crate FFI binding generator: typed decode of inspe
 [dependencies]
 ipe_diagnostics = { path = "../diagnostics" }
 ipe_canon = { path = "../canon" }
+ipe_intern = { path = "../intern" }
 ipe_kernels = { path = "../kernels" }
+# The asserted-call surface (`Rust.Ffi.call`) parses the author's annotation
+# straight from the source AST — never from re-rendered text.
+ipe_syntax = { path = "../syntax" }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 # The Tier-2 wrapper capability scan lexes wrapper Rust with the SAME

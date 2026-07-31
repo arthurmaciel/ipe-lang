@@ -466,19 +466,116 @@ pub fn prepare_ffi(
     blame_path: &Path,
 ) -> Result<FfiPrep, CliError> {
     let mut catalog = load_catalog_for(blame_path)?;
+    // The asserted-call classifications lean on two unforgeable names: the
+    // `Rust.Ffi` module and the `ipe_asserted_` wrapper prefix. No installed
+    // crate may claim either — refused at load, before anything is injected.
+    for c in &catalog {
+        if c.module_name == ipe_canon::asserted::ASSERTED_MODULE {
+            return Err(CliError::UsageOwned(format!(
+                "installed FFI crate `{}` claims the module `{}`, which is reserved \
+                 for the asserted-call surface (`Rust.Ffi.call`); remove or rename \
+                 the crate",
+                c.slug,
+                ipe_canon::asserted::ASSERTED_MODULE
+            )));
+        }
+        if let Some(ident) = c
+            .wrapper_idents
+            .iter()
+            .find(|w| w.starts_with(ipe_canon::asserted::ASSERTED_WRAPPER_PREFIX))
+        {
+            return Err(CliError::UsageOwned(format!(
+                "installed FFI crate `{}` declares wrapper `{ident}`, which uses the \
+                 reserved asserted-shim prefix `{}` — refusing to load the cache",
+                c.slug,
+                ipe_canon::asserted::ASSERTED_WRAPPER_PREFIX
+            )));
+        }
+    }
     // One Ipê home per foreign type: collapse same-defining-path nominals
     // across the catalog BEFORE injection, so every injected signature and
     // the assembled `foreign_types` map agree on one nominal per type.
     let unify = ipe_ffi::unify::unify_foreign_nominals(&mut catalog);
+    // Scan for asserted calls BEFORE interface injection, while `sources`
+    // holds only project (and stdlib) modules.
+    let asserted = scan_asserted(sources, &catalog)?;
     let cache_hint = find_cache_root(blame_path)?.unwrap_or_default();
-    let injected = inject_interfaces(sources, &catalog, &cache_hint)?;
-    let emit = assemble_emit(&catalog)?;
+    let mut injected = inject_interfaces(sources, &catalog, &cache_hint)?;
+    let mut emit = assemble_emit(&catalog)?;
+    if !asserted.is_empty() {
+        let mod_path: Vec<String> = ipe_canon::asserted::ASSERTED_MODULE
+            .split('.')
+            .map(str::to_owned)
+            .collect();
+        if sources.contains_key(&mod_path) {
+            return Err(CliError::UsageOwned(format!(
+                "module `{}` already exists — it is reserved for the asserted-call \
+                 surface (`Rust.Ffi.call`)",
+                ipe_canon::asserted::ASSERTED_MODULE
+            )));
+        }
+        let iface = ipe_ffi::asserted::render_asserted_interface(&asserted);
+        sources.insert(mod_path.clone(), (cache_hint.join("Rust.Ffi.ipe"), iface));
+        injected.insert(mod_path);
+        // `validate` proved every target crate is installed, so the catalog —
+        // and therefore the assembled emit — is non-empty here.
+        let Some(e) = emit.as_mut() else {
+            return Err(CliError::UsageOwned(
+                "internal: asserted calls validated against an empty FFI catalog".to_owned(),
+            ));
+        };
+        e.bindings_source.push('\n');
+        e.bindings_source
+            .push_str(&ipe_ffi::asserted::emit_asserted_shims(&asserted));
+        e.interface_modules
+            .push(ipe_canon::asserted::ASSERTED_MODULE.to_owned());
+    }
     Ok(FfiPrep {
         catalog,
         unify,
         injected,
         emit,
     })
+}
+
+/// Scan every project source module for asserted-call sites
+/// (`Rust.Ffi.call "<path>"`) and validate each against the installed-crate
+/// catalog, deduplicating identical assertions.
+///
+/// A module that fails to parse is skipped here: it cannot carry a working
+/// asserted call, and the compile pipeline reports the parse error with full
+/// context moments later.
+///
+/// # Errors
+/// [`CliError::Pipeline`] (IPE-N0038, span-attributed) for a malformed site;
+/// [`CliError::UsageOwned`] (IPE-F4414) for a refused assertion.
+fn scan_asserted(
+    sources: &BTreeMap<Vec<String>, (PathBuf, String)>,
+    catalog: &[InstalledCrate],
+) -> Result<Vec<ipe_ffi::asserted::AssertedSpec>, CliError> {
+    let mut specs = Vec::new();
+    for (file, text) in sources.values() {
+        if !text.contains("Rust.Ffi.call") {
+            continue;
+        }
+        let mut interner = ipe_intern::Interner::new();
+        let Ok(module) = ipe_parse::parse_module(text, &mut interner) else {
+            continue;
+        };
+        let uses = ipe_canon::asserted::scan_module(&module, &interner).map_err(|diag| {
+            CliError::Pipeline {
+                file: file.clone(),
+                src: text.clone(),
+                diag: Box::new(diag),
+            }
+        })?;
+        for u in uses {
+            let spec = ipe_ffi::asserted::validate(u.path, &u.annotation, &interner, catalog)
+                .map_err(|d| CliError::UsageOwned(d.to_string()))?;
+            specs.push(spec);
+        }
+    }
+    ipe_ffi::asserted::dedupe(specs).map_err(|d| CliError::UsageOwned(d.to_string()))
 }
 
 /// Locate the `ipe-ffi-inspector` binary: beside the running `ipe`
@@ -3014,6 +3111,7 @@ version = \"1\"
             transparent_types: BTreeMap::new(),
             bindings: Vec::new(),
             dep_versions: BTreeMap::new(),
+            inspected_free_fns: BTreeMap::new(),
             cargo_deps: vec![line.to_owned()],
             wrapper_idents: BTreeSet::new(),
         };
@@ -3047,6 +3145,7 @@ version = \"1\"
             transparent_types: BTreeMap::new(),
             bindings: Vec::new(),
             dep_versions: BTreeMap::new(),
+            inspected_free_fns: BTreeMap::new(),
             cargo_deps: vec![line.to_owned()],
             wrapper_idents: BTreeSet::new(),
         };
@@ -3087,6 +3186,7 @@ version = \"1\"
             transparent_types: BTreeMap::new(),
             bindings: Vec::new(),
             dep_versions: BTreeMap::new(),
+            inspected_free_fns: BTreeMap::new(),
             cargo_deps: lines.into_iter().map(str::to_owned).collect(),
             wrapper_idents: BTreeSet::new(),
         };
@@ -3361,6 +3461,7 @@ version = \"1\"
             transparent_types: BTreeMap::new(),
             bindings: Vec::new(),
             dep_versions: BTreeMap::new(),
+            inspected_free_fns: BTreeMap::new(),
             cargo_deps: Vec::new(),
             wrapper_idents: BTreeSet::new(),
         }
