@@ -460,7 +460,7 @@ generator, sandbox, capability scan).
 
 ```
 panic-boundary  ──────────────┬──►  asserted-call (Rust.Ffi.call)
-   (ready)                    │        needs: ffi-raw capability plumbing,
+   (shipped)                  │        needs: ffi-raw capability plumbing,
                               │        assertion-vs-PkgInfo check,
 async-breadth   (ready)       │        attributed shim-error mapping
                               │
@@ -470,11 +470,17 @@ tier2-axis-reopen (per-axis, ─┘
    gated on run-jail arms)          ──►  crate-coverage roadmap (consumes all)
 ```
 
-1. **panic-boundary** — retrofit `catch_unwind` + funnel routing into every
-   sync wrapper body and the fence audit across all emitters. First because
-   every existing binding is exposed until it lands and every later surface
-   must be born inside it. Gates: the asserted-call surface; honesty of the
-   "no abrupt failure" claim.
+1. **panic-boundary** (shipped) — the plain sync wrapper bodies already
+   executed the foreign call under `catch_unwind`; the real gaps this package
+   closed were downstream of the catch: caught payloads route through the
+   redacting funnel (never a raw `Debug` riding an error value), async
+   join-error folds route through the same funnel, and the opaque-field
+   getter — the one accessor whose `.clone()` runs foreign code — executes
+   under the boundary with the disclosed funnel-log-then-abort response
+   (§6). With it shipped, the §6 "every foreign failure routes through the
+   funnel" rule is a property of the emitters, and every later surface is
+   born inside it. Gates: the asserted-call surface; honesty of the "no
+   abrupt failure" claim.
 2. **async-breadth** — widen the async admission set until the storefront
    acceptance example is shim-free with used-set DCE. Independent of
    everything else; pure inspector/generator work.

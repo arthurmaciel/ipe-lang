@@ -7,6 +7,16 @@
 
 use crate::diag::WireDefect;
 
+/// The Ipê builtin type heads a foreign nominal never re-declares or shadows.
+///
+/// The `.ipei` emitter skips a declaration for them, the interface emitter's
+/// shadow gate refuses a foreign type claiming one, and the transparency
+/// classification keeps such a claim opaque.
+pub const IPE_BUILTIN_HEADS: &[&str] = &[
+    "String", "Int", "Float", "Bool", "Char", "List", "Dict", "Set", "Maybe", "Result", "Task",
+    "Error",
+];
+
 /// A validated Rust identifier (`^[A-Za-z_][A-Za-z0-9_]*$`).
 ///
 /// The constructor is the only way in, so a crate that names a symbol
