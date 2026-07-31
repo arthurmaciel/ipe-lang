@@ -16,6 +16,9 @@
 **/tmp-parity/
 **/node_modules/
 **/__pycache__/
+# proptest writes a per-source-file seed cache next to co-located `proptest!`
+# blocks; the seeds are a local run artifact, not source.
+**/*.proptest-regressions
 /misc
 .claude
 skills-lock.json
