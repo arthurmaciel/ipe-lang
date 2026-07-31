@@ -416,10 +416,16 @@ fn tls_stays_rustls_with_bundled_roots_in_every_manifest_source() {
     // The reqwest dep line itself: rustls backend, default features off (the
     // default feature set would pull no TLS at all — `rustls-tls` bundles
     // webpki-roots, keeping cert verification host-independent).
-    for path in [
-        root.join("tests/golden/basics/Cargo.toml"),
-        root.join("src/runtime/rust/Cargo.toml"),
-    ] {
+    //
+    // `reqwest` is only linked when a program reaches the outbound HTTP surface,
+    // so it is NOT in the base `tests/golden/basics/Cargo.toml` (a pure
+    // hello-world). The canonical `reqwest` dep line lives in
+    // `src/runtime/rust/Cargo.toml` (the vendored source); the emitter's
+    // `http_client_cargo_toml` reproduces the same rustls feature set (its
+    // `"rustls-tls"` literal is covered by the forbidden-backend scan above,
+    // which includes `project.rs`).
+    {
+        let path = root.join("src/runtime/rust/Cargo.toml");
         let text = read(&path);
         let reqwest = dep_line(&text, "reqwest", &path);
         assert!(

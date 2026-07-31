@@ -123,6 +123,7 @@ fn emit_count_main_rs(tco: bool) -> DResult<String> {
             records: vec![],
             uses_tea: false,
             uses_server: false,
+            uses_http: false,
             uses_ui: false,
             uses_web: false,
             uses_tui: false,

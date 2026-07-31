@@ -1271,6 +1271,34 @@ fn ir_type_mentions_server(ty: &IrType) -> bool {
     }
 }
 
+/// `true` when `ty` mentions an `Ipe.Http`-client opaque type — `HttpRequest`
+/// or `HttpMethod`, both defined in the `http_client` runtime module. A
+/// function that merely passes such a value through (without itself calling a
+/// client kernel) still references the type in emitted code, so the module and
+/// its `reqwest` dependency must be present. Mirrors [`ir_type_mentions_server`]
+/// for the client surface.
+fn ir_type_mentions_http(ty: &IrType) -> bool {
+    match ty {
+        IrType::HttpRequest | IrType::HttpMethod => true,
+        IrType::Task(inner)
+        | IrType::Cmd(inner)
+        | IrType::Sub(inner)
+        | IrType::Decoder(inner)
+        | IrType::Maybe(inner)
+        | IrType::List(inner) => ir_type_mentions_http(inner),
+        IrType::Result(a, b) | IrType::Dict(a, b) => {
+            ir_type_mentions_http(a) || ir_type_mentions_http(b)
+        }
+        IrType::Fun(params, ret) | IrType::FnOnceChain(params, ret) => {
+            params.iter().any(ir_type_mentions_http) || ir_type_mentions_http(ret)
+        }
+        IrType::Tuple(elems) => elems.iter().any(ir_type_mentions_http),
+        IrType::Record(fields) => fields.values().any(ir_type_mentions_http),
+        IrType::Enum { args, .. } => args.iter().any(ir_type_mentions_http),
+        _ => false,
+    }
+}
+
 fn ir_contains_fun(ty: &IrType) -> bool {
     match ty {
         // A curried `FnOnce` chain is the same boxed-closure family as `Fun`; the
@@ -5900,6 +5928,10 @@ struct KernelUsage {
     tea: bool,
     /// Any Ipe.Http.Server kernel.
     server: bool,
+    /// Any outbound `Ipe.Http` client kernel (`Http.get` / `post` / `request`
+    /// and the pure request/method builders) — gates the `http_client` runtime
+    /// module and the `reqwest` dependency.
+    http: bool,
     /// Any Ipe.Ui render kernel.
     ui: bool,
     /// Any Ipe.Css (Ipe.CssSafety) leaf kernel — independent of
@@ -5953,6 +5985,7 @@ impl KernelUsage {
             && self.db
             && self.tea
             && self.server
+            && self.http
             && self.ui
             && self.css
             && self.auth
@@ -5977,6 +6010,7 @@ impl KernelUsage {
         self.db |= k.is_db();
         self.tea |= k.is_tea();
         self.server |= k.is_server();
+        self.http |= k.is_http_client();
         self.ui |= k.is_ui();
         self.css |= k.is_css();
         self.auth |= k.is_auth();
@@ -7901,6 +7935,17 @@ impl<'a> Lowerer<'a> {
                     || f.params.iter().any(|(_, t)| ir_type_mentions_server(t))
             });
 
+        // detect outbound `Ipe.Http` client usage — any client kernel, or a
+        // function signature that mentions an `HttpRequest` / `HttpMethod`
+        // (both live in the `http_client` runtime module). The backend uses
+        // this flag to declare `http_client` in the emitted `ipe_runtime/mod.rs`
+        // and add the `reqwest` dependency.
+        let uses_http = kernel_usage.http
+            || funcs.iter().any(|f| {
+                ir_type_mentions_http(&f.ret)
+                    || f.params.iter().any(|(_, t)| ir_type_mentions_http(t))
+            });
+
         // detect Ipe.Ui / Ipe.Html / Ipe.Web / Ipe.Tui / Ipe.WebView usage.
         // TUI runtime files (tui/app.rs, tui/layout.rs, tui/focus.rs) import
         // `super::super::ui` and `super::super::html` unconditionally, so
@@ -7952,6 +7997,7 @@ impl<'a> Lowerer<'a> {
             records,
             uses_tea,
             uses_server,
+            uses_http,
             uses_ui,
             uses_web,
             uses_tui,
