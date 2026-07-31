@@ -6964,19 +6964,39 @@ pub struct BuiltinCtors {
     pub hm_options: Symbol,
 }
 
-/// The widest parameter-pattern count across the module's top-level bindings —
-/// the most parameters any single eta-expanded partial application can need.
-/// Drives the eta-parameter pool sizing in [`crate::lower`].
-pub fn max_def_arity(m: &canon::Module) -> usize {
-    m.defs
-        .iter()
-        .map(|d| match d {
-            canon::Def::Typed { patterns, .. } | canon::Def::Untyped { patterns, .. } => {
-                patterns.len()
-            }
-        })
-        .max()
-        .unwrap_or(0)
+/// The parameter-pattern count of a single top-level binding — the number of
+/// eta parameters a partial application of it can introduce.
+const fn def_arity(d: &canon::Def) -> usize {
+    match d {
+        canon::Def::Typed { patterns, .. } | canon::Def::Untyped { patterns, .. } => patterns.len(),
+    }
+}
+
+/// The widest def arity computed **one home module at a time**, then maximised
+/// across modules — the most parameters any single eta-expanded partial
+/// application can need, expressed as a per-module quantity. Drives the
+/// position-indexed `eta_` / `cap_` pool sizing in [`crate::lower`] under the
+/// per-module lowering scheme.
+///
+/// This is numerically equal to the widest arity across the whole module (the
+/// max over the whole set is the max of the per-module maxima), so sizing the
+/// pools this way is byte-identical: those pools name a symbol by its
+/// scope-LOCAL position, so pool *size* never reaches the emitted bytes, only
+/// the local index does. Structuring the bound per module removes the last
+/// whole-program input from the position-indexed pools, so a module lowered in
+/// isolation sizes its pool from its own defs alone.
+///
+/// `link::link` lays `m.defs` out as contiguous, home-grouped runs (it extends
+/// `defs` module by module), so grouping on [`canon::Def::home`] recovers those
+/// runs; this fold needs no separate grouping pass.
+#[must_use]
+pub fn max_def_arity_per_module(m: &canon::Module) -> usize {
+    let mut per_module: BTreeMap<&[Symbol], usize> = BTreeMap::new();
+    for d in &m.defs {
+        let slot = per_module.entry(d.home()).or_insert(0);
+        *slot = (*slot).max(def_arity(d));
+    }
+    per_module.into_values().max().unwrap_or(0)
 }
 
 /// Count every **non-variable** parameter pattern across the whole module — both
@@ -19070,5 +19090,46 @@ mod tests {
         // Linear (single) use: accepted.
         let linear = Expr::Var(sym);
         assert!(reject_foreign_handle_reuse(env, sym, &world_ty, &linear, span).is_ok());
+    }
+
+    /// The per-module eta/cap pool sizing must equal the whole-program
+    /// sizing exactly, even when the widest def lives in a NON-first module —
+    /// the `link`-order shape a per-module lowering must reproduce byte-for-byte.
+    #[test]
+    fn max_def_arity_per_module_equals_whole_program() {
+        use ipe_diagnostics::Located;
+
+        let mut interner = Interner::new();
+        let main = interner.intern("Main").expect("intern");
+        let lib = interner.intern("Lib").expect("intern");
+        let f = interner.intern("f").expect("intern");
+        let g = interner.intern("g").expect("intern");
+        let a = interner.intern("a").expect("intern");
+
+        let var_pat = |s| Located::new(Span::DUMMY, canon::Pattern_::PVar(s));
+        let unit_body = || Located::new(Span::DUMMY, canon::Expr_::Unit);
+        let untyped = |home: Vec<_>, name, patterns| canon::Def::Untyped {
+            home,
+            name: Located::new(Span::DUMMY, name),
+            patterns,
+            body: unit_body(),
+        };
+
+        // `Main.f` has arity 1; the widest def (`Lib.g`, arity 3) is in the
+        // SECOND module — exactly the case a whole-program `max` would catch but
+        // a first-module-only shortcut would miss.
+        let m = canon::Module {
+            name: vec![main],
+            unions: vec![],
+            defs: vec![
+                untyped(vec![main], f, vec![var_pat(a)]),
+                untyped(vec![lib], g, vec![var_pat(a), var_pat(a), var_pat(a)]),
+            ],
+        };
+
+        // Whole-program widest arity is 3 (`Lib.g`), and the per-module fold
+        // reproduces it exactly despite the widest def sitting in the second
+        // module — the equality the byte-identical eta/cap sizing rests on.
+        assert_eq!(super::max_def_arity_per_module(&m), 3);
     }
 }
