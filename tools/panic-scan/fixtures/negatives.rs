@@ -37,3 +37,27 @@ mod tests {
     fn t02() { let _ = o.unwrap(); }
     fn t03() { assert_eq!(a, b); }
 }
+
+// A bare `#[test]` fn body is test code — ignored.
+#[test]
+fn direct_test_fn() { assert!(cond); }
+
+// `all(test, …)` gates the item to test-only compilation, so its body is test
+// code even when the attribute is not the bare `cfg(test)` form.
+#[cfg(all(test, unix))]
+mod platform_tests {
+    fn u01() { assert_eq!(a, b); }
+    fn u02() { panic!("test-only on unix — ignored"); }
+}
+
+#[cfg(all(unix, test))]
+mod platform_tests_reordered {
+    fn r01() { let _ = o.unwrap(); }
+}
+
+#[cfg(all(test, feature = "tokio"))]
+mod feature_gated_tests {
+    // `feature = "tokio"` is a string value; the top-level split still finds the
+    // `test` conjunct, so this body is test-only and ignored.
+    fn g01() { assert!(ready); }
+}

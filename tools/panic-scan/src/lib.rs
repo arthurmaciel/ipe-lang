@@ -71,9 +71,11 @@ pub struct Hit {
 /// is not sanctioned by an [`AUDIT_MARKER`] comment, or an error string if the
 /// input does not lex as Rust tokens.
 ///
-/// `#[cfg(test)]` / `#[test]` item bodies are skipped: this scanner attests the
-/// *production* surface. (A `--tests` mode with the inverted rule — allow the
-/// assert family, forbid the rest — is a separate entry point.)
+/// Test-only item bodies are skipped: this scanner attests the *production*
+/// surface. An item is test-only when carried by `#[test]` or a `#[cfg(…)]`
+/// whose predicate is guaranteed active only under the `test` cfg (see
+/// [`attr_gates_test_only`]). (A `--tests` mode with the inverted rule — allow
+/// the assert family, forbid the rest — is a separate entry point.)
 pub fn scan_str(src: &str) -> Result<Vec<Hit>, String> {
     let ts = TokenStream::from_str(src).map_err(|e| e.to_string())?;
     let mut hits = Vec::new();
@@ -105,29 +107,110 @@ fn is_sanctioned(lines: &[&str], line: usize) -> bool {
     false
 }
 
+/// True when an attribute's bracket body (the tokens inside `#[ … ]`) gates its
+/// item to test-only compilation, so the item body is test code the production
+/// scan must not recurse into. Two cases are honoured:
+///
+/// * `#[test]` — the body is exactly the `test` identifier.
+/// * `#[cfg(P)]` where the predicate `P` *implies* `test` — the item is present
+///   only when the `test` cfg is active. To keep this a sound production gate,
+///   only predicates that are *guaranteed* test-only qualify: a bare `test`, or
+///   an `all(…)` (possibly nested) with `test` as a direct positive conjunct
+///   (`cfg(all(test, unix))`, `cfg(all(test, feature = "x"))`, …). `any(…)`,
+///   `not(…)`, and `test` appearing only inside a string literal or as a
+///   substring of another identifier are deliberately *not* treated as
+///   test-only — those items can compile in a production configuration, so
+///   skipping them would let a production panic hide behind a fake cfg.
+fn attr_gates_test_only(inner: &TokenStream) -> bool {
+    let toks: Vec<TokenTree> = inner.clone().into_iter().collect();
+    // Bare `#[test]`.
+    if let [TokenTree::Ident(id)] = toks.as_slice() {
+        return id == "test";
+    }
+    // `#[cfg( … )]`: recurse into the predicate.
+    if let [TokenTree::Ident(id), TokenTree::Group(g)] = toks.as_slice() {
+        if id == "cfg" && g.delimiter() == Delimiter::Parenthesis {
+            return cfg_pred_is_test_only(&g.stream());
+        }
+    }
+    false
+}
+
+/// True when a `cfg` predicate is guaranteed active only under the `test` cfg.
+///
+/// Structural, not string-based: it inspects the predicate's own tokens so
+/// `test` inside a string literal (`feature = "testing"`) or as a substring of
+/// another identifier (`contest`) never matches. A bare `test` identifier is
+/// test-only. An `all( … )` is test-only when any of its comma-separated
+/// operands is itself test-only (so `all(test, unix)` and `all(unix, test)`
+/// qualify, as does a nested `all(all(test), …)`). `any( … )` and `not( … )`
+/// never qualify: `any(test, X)` also compiles when `X` holds without `test`,
+/// and `not(test)` is production-only.
+fn cfg_pred_is_test_only(pred: &TokenStream) -> bool {
+    let toks: Vec<TokenTree> = pred.clone().into_iter().collect();
+    // Bare `test`.
+    if let [TokenTree::Ident(id)] = toks.as_slice() {
+        return id == "test";
+    }
+    // `all( … )` — test-only if any operand is test-only. Only `all` combines;
+    // `any`/`not` (or anything else) are treated as possibly-production.
+    if let [TokenTree::Ident(id), TokenTree::Group(g)] = toks.as_slice() {
+        if id == "all" && g.delimiter() == Delimiter::Parenthesis {
+            return split_top_level_commas(&g.stream())
+                .iter()
+                .any(cfg_pred_is_test_only);
+        }
+    }
+    false
+}
+
+/// Split a `cfg` operand list on top-level commas, returning each operand as its
+/// own token stream. Commas nested inside a delimiter group (an inner
+/// `all(a, b)`, `any(…)`, or a `feature = "…"` value) are not split points.
+fn split_top_level_commas(ts: &TokenStream) -> Vec<TokenStream> {
+    let mut operands = Vec::new();
+    let mut current: Vec<TokenTree> = Vec::new();
+    for tt in ts.clone() {
+        match &tt {
+            TokenTree::Punct(p) if p.as_char() == ',' => {
+                operands.push(current.drain(..).collect::<TokenStream>());
+            }
+            _ => current.push(tt),
+        }
+    }
+    if !current.is_empty() {
+        operands.push(current.into_iter().collect());
+    }
+    operands
+}
+
 fn scan_stream(ts: TokenStream, hits: &mut Vec<Hit>) {
     let toks: Vec<TokenTree> = ts.into_iter().collect();
-    // When we pass a `#[cfg(test)]` / `#[test]` attribute, the next brace group
-    // (the item body) is test code and is not recursed into.
+    // When we pass a test-only attribute (`#[test]` or a `#[cfg(…)]` implying
+    // `test`), the brace body of the item it decorates is test code and is not
+    // recursed into. The flag is armed by the attribute and disarmed by the
+    // item's brace body — or by a top-level `;` that ends a *braceless* item
+    // (`#[cfg(test)] const N: u32 = 1;`, `#[cfg(test)] use x;`) before any
+    // brace, so the flag can never swallow the body of a following *sibling*
+    // production item.
     let mut skip_next_brace = false;
 
     for i in 0..toks.len() {
         match &toks[i] {
-            // Attribute: `#` then a `[ … ]` group naming cfg(test) or test.
+            // Attribute: `#` then a `[ … ]` group that gates its item to
+            // test-only compilation (`#[test]` or a `#[cfg(…)]` implying `test`).
             TokenTree::Punct(p) if p.as_char() == '#' => {
                 if let Some(TokenTree::Group(g)) = toks.get(i + 1) {
-                    if g.delimiter() == Delimiter::Bracket {
-                        let inner: String = g
-                            .stream()
-                            .to_string()
-                            .chars()
-                            .filter(|c| !c.is_whitespace())
-                            .collect();
-                        if inner == "test" || inner.contains("cfg(test") {
-                            skip_next_brace = true;
-                        }
+                    if g.delimiter() == Delimiter::Bracket && attr_gates_test_only(&g.stream()) {
+                        skip_next_brace = true;
                     }
                 }
+            }
+
+            // A top-level `;` ends a braceless item: disarm so the skip flag
+            // never reaches a later sibling's brace body.
+            TokenTree::Punct(p) if p.as_char() == ';' => {
+                skip_next_brace = false;
             }
 
             // Macro invocation: Ident(name) immediately followed by `!`.
