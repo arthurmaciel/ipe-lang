@@ -4799,6 +4799,8 @@ impl<'a> Builder<'a> {
             K::FileRemove | K::FileMkdirAll | K::FileDelete => fun(path(), task_unit()),
             // () -> Task String
             K::IoReadLine | K::SystemCwd => fun(Ty::Unit, task(string())),
+            // prompt String -> Task String (echo-suppressed line read)
+            K::IoReadSecret => fun(string(), task(string())),
             // ── Debug (dev-only) ──
             // `Debug.log : String -> a -> a`. BASE scheme only; the argument /
             // result share `var(0)`, which carries the STRINGIFY obligation
@@ -8484,6 +8486,8 @@ mod registry_phase_c_tests {
             // Io line-printers (Ipê-new — no legacy oracle).
             K::IoPrintln,
             K::IoEprintln,
+            // Io echo-suppressed line read (Ipê-new — no legacy oracle).
+            K::IoReadSecret,
             // Debug.log (Ipê-new — dev-only; Stringify obligation on `a`).
             K::DebugLog,
             // `Basics.clamp` — first-schemed hole; carries the `Comparable a`

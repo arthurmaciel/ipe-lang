@@ -1,6 +1,6 @@
 -- | Ipe.Io — standard-I/O effect kernels (Layer 3 Ipe source, M5a).
 module Ipe.Io exposing
-    ( readLine, writeStdout, writeStderr, println, eprintln
+    ( readLine, readSecret, writeStdout, writeStderr, println, eprintln
     )
 
 
@@ -9,6 +9,13 @@ import Ipe.Ffi as Ffi
 
 readLine : () -> Task Error String
 readLine = Ffi.kernel "Io_readLine"
+
+{-| Write a prompt to stdout, then read one line from stdin with terminal echo
+suppressed — a password read. The prior terminal mode is always restored, even
+if the read fails. On a non-tty stdin this behaves as a plain line read.
+-}
+readSecret : String -> Task Error String
+readSecret = Ffi.kernel "Io_readSecret"
 
 writeStdout : String -> Task Error ()
 writeStdout = Ffi.kernel "Io_writeStdout"

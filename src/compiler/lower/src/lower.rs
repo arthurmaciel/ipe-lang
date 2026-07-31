@@ -13907,6 +13907,7 @@ impl<'a> Lowerer<'a> {
                 | KernelFn::TaskWithJitter
                 // ── Io arity-1 ──────────────────────────────────────────
                 | KernelFn::IoReadLine
+                | KernelFn::IoReadSecret
                 | KernelFn::IoWriteStdout
                 | KernelFn::IoWriteStderr
                 | KernelFn::IoPrintln
@@ -15874,6 +15875,7 @@ impl<'a> Lowerer<'a> {
                     ("Task", "withKind") => Ok(Callee::Kernel(KernelFn::TaskWithKind)),
                     // ── Io kernels ──────────────────────────────────────
                     ("Io", "readLine") => Ok(Callee::Kernel(KernelFn::IoReadLine)),
+                    ("Io", "readSecret") => Ok(Callee::Kernel(KernelFn::IoReadSecret)),
                     ("Io", "writeStdout") => Ok(Callee::Kernel(KernelFn::IoWriteStdout)),
                     ("Io", "writeStderr") => Ok(Callee::Kernel(KernelFn::IoWriteStderr)),
                     ("Io", "println") => Ok(Callee::Kernel(KernelFn::IoPrintln)),
