@@ -250,8 +250,12 @@ pub fn main_identity<T1: Clone>(x: T1) -> T1 {
 pub fn main_const<T1: Clone, T2: Clone>(x: T1, y: T2) -> T1 {
     x
 }
-pub fn main_apply<T1: Clone + Send + 'static, T2: Clone + Send + 'static>(
-    f: Box<dyn Fn(T1) -> T2 + Send + Sync + 'static>,
+pub fn main_apply<
+    T1: Clone + Send + 'static,
+    T2: Clone + Send + 'static,
+    FN0: Fn(T1) -> T2 + Send + Sync + 'static,
+>(
+    f: FN0,
     x: T1,
 ) -> T2 {
     (f)(x)
@@ -265,11 +269,7 @@ pub fn ipe_main() -> IpeTask<()> {
                 let c = crate::main_const(2, (5 == 5));
                 ({
                     let r = crate::main_apply(
-                        {
-                            let __ipe_fn: Box<dyn Fn(i64) -> i64 + Send + Sync + 'static> =
-                                Box::new(move |k: i64| -> i64 { (k + 0) });
-                            __ipe_fn
-                        },
+                        move |k: i64| -> i64 { (k + 0) },
                         (if flag { (n + c) } else { n }),
                     );
                     io_println(string_from_int(r))

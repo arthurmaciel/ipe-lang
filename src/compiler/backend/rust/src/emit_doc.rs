@@ -1028,7 +1028,7 @@ fn build_generic_call(
     } else {
         pin_turbofish
     };
-    let mut docs = build_args(ctx, args, indent, child, generics)?;
+    let mut docs = build_call_args_with_impl_fn(ctx, callee, args, indent, child, generics)?;
     // Container-first kernels take their two arguments in the opposite order to
     // the Ipê call; the string emitter reverses the rendered `parts`, so the Doc
     // builder reverses the built arg docs to carry the identical token sequence.
@@ -1040,6 +1040,41 @@ fn build_generic_call(
         docs,
         Doc::text(")"),
     ))
+}
+
+/// Build a positional argument list, passing a lambda-literal argument UNBOXED
+/// into any parameter the callee monomorphized to an `impl Fn` generic
+/// (`EmitCtx::call_arg_is_impl_fn`), so the boxed `{ let __ipe_fn = Box::new(..) }`
+/// wrapper is skipped and rustc inlines the closure. Every other argument — and
+/// every non-`Callee::Func` call — routes through the ordinary [`build_args`] path
+/// unchanged: a non-lambda value already implements `Fn`, so it fills the generic
+/// slot with no rewrite. Mirrors the same gate in
+/// [`crate::emit_expr::emit_expr_at`]'s `Expr::Call` arm so the native and string
+/// emitters stay byte-identical.
+fn build_call_args_with_impl_fn(
+    ctx: &EmitCtx,
+    callee: &Callee,
+    args: &[Expr],
+    indent: usize,
+    child: u16,
+    generics: GenericScope,
+) -> DResult<Vec<Doc>> {
+    let Callee::Func(id) = callee else {
+        return build_args(ctx, args, indent, child, generics);
+    };
+    let mut docs = Vec::with_capacity(args.len());
+    for (i, arg) in args.iter().enumerate() {
+        let doc = if ctx.call_arg_is_impl_fn(*id, i)
+            && let Expr::Lambda { params, ret, body } | Expr::SharedLambda { params, ret, body } =
+                arg
+        {
+            build_closure(ctx, params, ret, body, indent, child, generics)?
+        } else {
+            build_doc(ctx, arg, indent, child, generics)?
+        };
+        docs.push(doc);
+    }
+    Ok(docs)
 }
 
 /// Build the `Doc` for a saturated payload constructor. Mirrors
