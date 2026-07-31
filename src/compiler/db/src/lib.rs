@@ -385,11 +385,12 @@ pub fn canonicalize(db: &dyn Db, root: SourceRoot, file: SourceFile) -> CanonRes
 /// path can never drift from what canonicalisation actually injects
 /// (correctness > efficiency).
 ///
-/// Sound over-approximation note: [`ModuleExports`] carries exported alias
-/// *bodies* (with source spans), so an edit that shifts an exported alias's
-/// spans re-canonicalises importers even when nothing semantic changed —
-/// over-invalidation, never under-invalidation. Span-erased interfaces are a
-/// recorded follow-up.
+/// Minimal-invalidation note: [`ModuleExports`] is span-free — every field is
+/// keyed by `Symbol`, and exported alias bodies are span-free `TypeAnnotation`s
+/// — so a span-only edit (reformatting, a comment) leaves the interface value
+/// unchanged and does not re-canonicalise importers. Dependency tracking at
+/// this seam is already minimal in both directions: no under-invalidation, and
+/// no span-shift over-invalidation to erase.
 #[salsa::tracked]
 pub fn module_interface(
     db: &dyn Db,
