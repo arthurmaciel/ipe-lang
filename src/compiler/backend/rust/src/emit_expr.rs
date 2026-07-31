@@ -14,8 +14,10 @@ use ipe_ir::{
 };
 
 use crate::EmitCtx;
+use crate::doc::Doc;
 use crate::emit_types::{GenericScope, render_type};
 use crate::naming::kernel_name;
+use crate::render::{RenderConfig, render_seeded};
 
 /// The deepest expression nesting the backend will descend before failing fast.
 ///
@@ -8195,6 +8197,28 @@ fn emit_update(
     ))
 }
 
+/// Lay a match-arm rebind `prelude` out one statement per line at `indent`.
+///
+/// The prelude is a run of `let …; ` binder-rebind statements the clone-split
+/// helpers build joined by `"; "`; `rustfmt` puts each on its own line. Split on
+/// the separator, re-indent each, and return the block (with its trailing
+/// newline) — a trailing empty segment is skipped.
+fn tail_arm_prelude_lines(prelude: &str, indent: usize) -> DResult<String> {
+    let pad = indent_of(indent);
+    let mut out = String::new();
+    for stmt in prelude.split_inclusive("; ") {
+        let stmt = stmt.trim_end();
+        if stmt.is_empty() {
+            continue;
+        }
+        writeln!(out, "{pad}{stmt}").map_err(|e| Diagnostic::CompilerBug {
+            where_: "ipe_backend_rust::tail_arm_prelude_lines",
+            detail: format!("writing TCO arm prelude failed: {e}"),
+        })?;
+    }
+    Ok(out)
+}
+
 /// Emit an `Expr` in TAIL/STATEMENT context — the interior of a `TailLoop`'s
 /// `loop { … }`. Every path ends in either a `return <expr>;` (a leaf
 /// tail position) or a `continue;` (a `TailRecur` jump), so the `loop` types as
@@ -8242,7 +8266,7 @@ fn emit_expr_tail(
                 let inner = if prelude.is_empty() {
                     body
                 } else {
-                    format!("{}{prelude}\n{body}", indent_of(indent + 2))
+                    format!("{}{body}", tail_arm_prelude_lines(&prelude, indent + 2)?)
                 };
                 // Same `if <guard>` fall-through as the value-context emitter: the
                 // list-length arm guard and the synthesized `as_str()` string-
@@ -8836,6 +8860,17 @@ fn ipe_main_wrap_decision(
 /// `: <bounds>` clause at its position. The body is an expression rendered
 /// at indentation level 1; the closing brace sits at column 0.
 pub fn emit_func(ctx: &EmitCtx, func: &Func) -> DResult<String> {
+    emit_func_vis(ctx, func, "pub fn ")
+}
+
+/// Emit a whole function item with the given visibility prefix (`"pub fn "` for
+/// the single-file layout, `"pub(crate) fn "` for a split `IpeModule` file where
+/// the item lives inside a `mod` block). The prefix is threaded through to
+/// [`render_fn_signature`] so the signature's flat-vs-broken width decision
+/// measures against the prefix the emitted line actually carries — the
+/// `pub(crate)` form is seven columns wider than `pub`, so a borderline signature
+/// breaks under one and not the other.
+pub fn emit_func_vis(ctx: &EmitCtx, func: &Func, vis_prefix: &str) -> DResult<String> {
     let name = ctx.func_name(func.id)?.to_owned();
 
     // ── Entry-point Task.run elision ──────────────────────────────────────────
@@ -8980,15 +9015,16 @@ pub fn emit_func(ctx: &EmitCtx, func: &Func) -> DResult<String> {
         && name != "ipe_main"
         && is_share_once_safe(ret_ty);
     let body = if is_caf {
+        let call_line = emit_caf_get_or_init(ctx, body_expr, generics)?;
         format!(
             "static CELL: std::sync::OnceLock<{ret}> = std::sync::OnceLock::new();\n    \
-             CELL.get_or_init(|| {{ {body} }}).clone()"
+             {call_line}"
         )
     } else {
         body
     };
 
-    let signature = render_fn_signature(&name, &generic_clause, &params, &ret);
+    let signature = render_fn_signature(vis_prefix, &name, &generic_clause, &params, &ret);
     Ok(format!("{signature} {{\n    {body}\n}}\n"))
 }
 
@@ -9057,21 +9093,47 @@ fn is_share_once_safe(ty: &IrType) -> bool {
 /// The ` {` the caller appends is included in every fit test (rustfmt measures the
 /// opening brace as part of the line), so the flat/broken decision matches the
 /// formatter's own boundary — verified flat at width 100, broken at 101.
-fn render_fn_signature(name: &str, generic_clause: &str, params: &[String], ret: &str) -> String {
+fn render_fn_signature(
+    vis_prefix: &str,
+    name: &str,
+    generic_clause: &str,
+    params: &[String],
+    ret: &str,
+) -> String {
     // `rustfmt` `max_width`; `BRACE` is the trailing ` {` the caller appends after
     // the return type, which rustfmt counts as part of the signature line.
+    //
+    // `vis_prefix` is the leading `pub fn ` / `pub(crate) fn ` the signature carries
+    // BEFORE the name. It is threaded here — rather than prepended by the caller — so
+    // the flat-vs-broken width decision measures against the SAME prefix the emitted
+    // line carries: a split-module `pub(crate) fn ` is seven columns wider than the
+    // single-file `pub fn `, so a signature that fits flat under `pub fn ` may still
+    // overflow under `pub(crate) fn ` and must break.
     const MAX_WIDTH: usize = 100;
     const BRACE: usize = 2;
     let flat = format!(
-        "pub fn {name}{generic_clause}({}) -> {ret}",
+        "{vis_prefix}{name}{generic_clause}({}) -> {ret}",
         params.join(", ")
     );
     if flat.len() + BRACE <= MAX_WIDTH {
         return flat;
     }
 
+    // A zero-parameter signature never breaks its empty `()` — `rustfmt` keeps
+    // `NAME() -> ` glued and instead wraps the RETURN TYPE at its outermost angle
+    // brackets: `NAME() -> Ptr<\n    Inner,\n>`. Only a return type that is itself a
+    // single angle-bracketed generic can wrap; anything else (or a return type whose
+    // opening line still overflows) stays on the one line `rustfmt` cannot shorten.
+    if params.is_empty() {
+        let open = format!("{vis_prefix}{name}{generic_clause}() -> ");
+        if let Some(wrapped) = wrap_return_type(&open, ret) {
+            return wrapped;
+        }
+        return format!("{open}{ret}");
+    }
+
     // The `pub fn NAME<GEN>(` opening line, with generics still flat.
-    let params_open = format!("pub fn {name}{generic_clause}(");
+    let params_open = format!("{vis_prefix}{name}{generic_clause}(");
     let broken_params = || {
         let mut out = String::new();
         for p in params {
@@ -9094,7 +9156,7 @@ fn render_fn_signature(name: &str, generic_clause: &str, params: &[String], ret:
         .strip_prefix('<')
         .and_then(|s| s.strip_suffix('>'))
         .unwrap_or(generic_clause);
-    let mut out = format!("pub fn {name}<");
+    let mut out = format!("{vis_prefix}{name}<");
     for g in inner.split(", ") {
         out.push_str("\n    ");
         out.push_str(g);
@@ -9103,6 +9165,77 @@ fn render_fn_signature(name: &str, generic_clause: &str, params: &[String], ret:
     out.push_str("\n>(");
     out.push_str(&broken_params());
     out
+}
+
+/// Wrap a zero-parameter signature's RETURN TYPE at its outermost angle brackets when
+/// the flat `open` + `ret` line overflows, matching `rustfmt`: `NAME() -> Ptr<\n
+/// Inner,\n>`. Returns `None` when the return type is not a single top-level
+/// angle-bracketed generic (`Ptr<…>` with the `<` after a path and the matching `>`
+/// at the end) — `rustfmt` has no shorter layout for such a type, so the caller keeps
+/// the flat line. The `Inner` is placed at one indent step with a trailing comma and
+/// the `>` dedented to column 0, the same one-per-line break the params path uses.
+fn wrap_return_type(open: &str, ret: &str) -> Option<String> {
+    const MAX_WIDTH: usize = 100;
+    const BRACE: usize = 2;
+    if open.len() + ret.len() + BRACE <= MAX_WIDTH {
+        return None;
+    }
+    // A single top-level generic: `Head<Inner>` where the first `<` opens the sole
+    // bracket group and the matching `>` is the final character. A leading `Box<` /
+    // `Decoder<` head with the whole remainder as one `Inner` argument.
+    let lt = ret.find('<')?;
+    if !ret.ends_with('>') {
+        return None;
+    }
+    let head = &ret[..lt];
+    let inner = &ret[lt + 1..ret.len() - 1];
+    // The head must be a plain path (no earlier bracket / comma), and the wrapped
+    // opening line `NAME() -> Head<` must itself fit; otherwise no shortening applies.
+    if head.contains([',', '<', '>', '(', ')']) || open.len() + head.len() + 1 + BRACE > MAX_WIDTH {
+        return None;
+    }
+    Some(format!("{open}{head}<\n    {inner},\n>"))
+}
+
+/// Render the CAF `CELL.get_or_init(|| body).clone()` line with the native Doc
+/// path, so the closure body's braces are elided when the line fits the width —
+/// matching `rustfmt`'s closure-body rule (`move |_| expr` when it fits, `move |_|
+/// { … }` when it breaks). The returned string has no leading whitespace; it is
+/// spliced after the `\n    ` the caller writes.
+///
+/// [`Doc::BraceBody`] carries the closure body's braces as SEAL-visible leaves
+/// (the string emitter always writes `|| { body }`) but omits them from the render
+/// when the body fits flat — matching the golden's `|| expr` form exactly. The
+/// outer [`Doc::CallArgs`] tests the full `CELL.get_or_init(|| body).clone()` line
+/// against `max_width` (100) and `fn_call_width` (60) before choosing flat.
+fn emit_caf_get_or_init(
+    ctx: &EmitCtx,
+    body_expr: &Expr,
+    generics: GenericScope,
+) -> DResult<String> {
+    let body_doc = crate::emit_doc::build_doc(ctx, body_expr, 1, 0, generics)?;
+    // `|| BraceBody(body)` — the single closure argument. `BraceBody` renders
+    // the body WITHOUT braces when it fits flat, and WITH braces on a new line
+    // when it does not, matching `rustfmt`'s closure body layout.
+    let closure_arg = Doc::concat(vec![Doc::text("|| "), Doc::brace_body(body_doc)]);
+    // `CELL.get_or_init(closure)` — a single-argument function call whose sole
+    // closure argument `rustfmt` combines onto the call head: `get_or_init(|| {`
+    // on one line, the body broken inside, `})` at the call's indent, no trailing
+    // comma.
+    let receiver = Doc::call_args(
+        Doc::text("CELL.get_or_init("),
+        vec![closure_arg],
+        Doc::text(")"),
+        // A function-call argument list keeps a trailing comma when it breaks.
+        true,
+    );
+    // `.clone()` glued when the receiver stays single-line, dropped onto its own
+    // line at the call's indent when the receiver's closure body broke — `rustfmt`'s
+    // method-chain layout after a multiline receiver.
+    let call = Doc::method_chain(receiver, Doc::text(".clone()"));
+    // Seeded at column 4 (fn-body indent) so the fit test measures from the
+    // position where the line starts in the emitted file.
+    Ok(render_seeded(&call, RenderConfig::default(), 4, 4))
 }
 
 /// Render a value body expression to the exact bytes a `rustfmt`-formatted
@@ -9120,12 +9253,7 @@ fn render_fn_signature(name: &str, generic_clause: &str, params: &[String], ret:
 /// indent 1, IR depth 0.
 fn emit_body_native(ctx: &EmitCtx, body_expr: &Expr, generics: GenericScope) -> DResult<String> {
     let doc = crate::emit_doc::build_doc(ctx, body_expr, 1, 0, generics)?;
-    Ok(crate::render::render_seeded(
-        &doc,
-        crate::render::RenderConfig::default(),
-        4,
-        4,
-    ))
+    Ok(render_seeded(&doc, RenderConfig::default(), 4, 4))
 }
 
 /// Render a function's generic clause `<T1, T2: <bounds>, ..>` — one entry per

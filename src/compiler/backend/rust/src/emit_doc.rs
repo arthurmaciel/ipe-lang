@@ -91,6 +91,7 @@ const fn chain_op_str(op: BinOp) -> Option<&'static str> {
 /// threads them, so a leaf that delegates to `emit_expr_at` sees the same
 /// context. `depth` is the IR-nesting level of `expr` (0 at a function body),
 /// matching `emit_expr_at`'s own `depth` argument.
+#[allow(clippy::too_many_lines)] // One arm per expr shape, mirroring `emit_expr_at`.
 pub fn build_doc(
     ctx: &EmitCtx,
     expr: &Expr,
@@ -164,6 +165,42 @@ pub fn build_doc(
             args,
         } if !args.is_empty() => {
             build_ctor(ctx, home, *ty, *variant, args, indent, child, generics)
+        }
+
+        // `Db.withTransaction conn body`: the transaction wrapper. Its emitted
+        // form `db_with_transaction({conn}.clone(), {body})` is a two-argument
+        // delimited call whose body argument is a boxed closure value; routing it
+        // through the Doc algebra (rather than the flat leaf `emit_db_call`
+        // returns) lets that closure and its continuation chain break per
+        // `rustfmt`.
+        Expr::Call {
+            callee: Callee::Kernel(KernelFn::DbWithTransaction),
+            args,
+            ..
+        } if matches!(args.as_slice(), [_conn, _body]) => {
+            let [conn, body] = args.as_slice() else {
+                // The guard proves the two-element shape; fail closed rather than
+                // panic if it ever drifts.
+                return leaf(ctx, expr, indent, depth, generics);
+            };
+            build_db_with_transaction(ctx, conn, body, indent, child, generics)
+        }
+
+        // The param-projecting Task-returning Db kernels `db_exec_raw` /
+        // `db_exec_params` / `db_query_params`. Structured so their argument list
+        // (and `DbExec` / `DbQuery`'s `List SqlValue` → `Vec<SqlParam>` projection
+        // method chain) breaks per `rustfmt` when the call is wide — the flat
+        // string leaf `emit_db_call` returns could never reach that layout inside a
+        // routed `db_with_transaction` continuation. Every OTHER Db kernel keeps its
+        // custom projection and stays a byte-carried leaf.
+        Expr::Call {
+            callee: Callee::Kernel(k @ (KernelFn::DbExecRaw | KernelFn::DbExec | KernelFn::DbQuery)),
+            args,
+            ..
+        } if (matches!(k, KernelFn::DbExecRaw) && args.len() == 2)
+            || (!matches!(k, KernelFn::DbExecRaw) && args.len() == 3) =>
+        {
+            build_db_param_call(ctx, *k, args, indent, child, generics)
         }
 
         // A function call whose emitted form is the generic fall-through tail
@@ -335,6 +372,20 @@ pub fn build_doc(
         // brace/comma rule (see [`build_match`]). Threaded with the match's own
         // `depth` (not `child`), matching `emit_match`'s own `child = depth + 1`.
         Expr::Match(m) => build_match(ctx, m, indent, depth, generics),
+
+        // A string literal `"…".to_string()`, mirroring
+        // [`crate::emit_expr::emit_expr_at`]'s `Expr::Str` arm. Structured as a
+        // trailing-`.to_string()` method chain over the string-literal receiver so
+        // `rustfmt` drops the `.to_string()` onto its own line at one indent step
+        // when the glued `"…".to_string()` overflows the width — the layout a flat
+        // leaf could never reach at a deep indent (a wide SQL string inside a broken
+        // Db call). Both the receiver and the `.to_string()` are single-line leaves;
+        // the SEAL carries `"…".to_string()` adjacently, identical to the string
+        // emitter's bytes.
+        Expr::Str(s) => Ok(Doc::method_chain(
+            Doc::owned(format!("{s:?}")),
+            Doc::text(".to_string()"),
+        )),
 
         // Every remaining arm carries the string emitter's exact bytes as one
         // leaf. Its layout is whatever single-line pre-`rustfmt` form the string
@@ -1343,6 +1394,131 @@ fn build_task_seq(
     ))
 }
 
+/// Build the `Doc` for a `Db.withTransaction` call, mirroring the
+/// `KernelFn::DbWithTransaction` arm of [`crate::emit_expr::emit_db_call`]
+/// token-for-token: `db_with_transaction({conn}.clone(), {body})`. The connection
+/// argument is cloned (the pool handle stays usable for calls after the
+/// transaction in the same continuation chain); the body is a boxed closure value
+/// (`Box<dyn Fn(Db) -> Task e a>`). Both arguments are built recursively and laid
+/// out as a two-argument delimited group, so `rustfmt` glues the `{` of the boxed-
+/// closure block onto the call's first line and breaks the block in place when the
+/// call is wide — the combining rule [`Doc::CallArgs`] already renders. Routing
+/// this through the Doc algebra (rather than the flat string leaf `emit_db_call`
+/// returns) is what lets the boxed closure's inner `let __ipe_fn = Box::new(…)`
+/// and its continuation chain break per `rustfmt`.
+fn build_db_with_transaction(
+    ctx: &EmitCtx,
+    conn: &Expr,
+    body: &Expr,
+    indent: usize,
+    child: u16,
+    generics: GenericScope,
+) -> DResult<Doc> {
+    let conn_doc = build_doc(ctx, conn, indent, child, generics)?;
+    // The string emitter appends `.clone()` to the emitted connection expression.
+    let conn_clone = Doc::concat(vec![conn_doc, Doc::text(".clone()")]);
+    let body_doc = build_doc(ctx, body, indent, child, generics)?;
+    Ok(delimited(
+        Doc::text("db_with_transaction("),
+        vec![conn_clone, body_doc],
+        Doc::text(")"),
+    ))
+}
+
+/// Build the projected `List SqlValue` → `Vec<SqlParam>` params argument document,
+/// mirroring `emit_db_call`'s `project_params` token-for-token. The bare empty-list
+/// fast path (`Vec::new()`, whose element type Rust cannot infer) becomes the leaf
+/// `Vec::<ipe_runtime::db::SqlParam>::new()`; every other params expression is
+/// wrapped in a paren pair and followed by the `.into_iter().map(…).collect::<…>()`
+/// projection chain. The gate is the params expression's OWN emitted form, exactly
+/// as the string emitter's `if s == "Vec::new()"` gate keys off the emitted string.
+fn build_db_params_arg(
+    ctx: &EmitCtx,
+    params: &Expr,
+    indent: usize,
+    child: u16,
+    generics: GenericScope,
+) -> DResult<Doc> {
+    let params_doc = build_doc(ctx, params, indent, child, generics)?;
+    // The string emitter's empty-list fast path: a bare `Vec::new()` gets an explicit
+    // element type and skips the projection chain entirely.
+    let mut flat = String::new();
+    params_doc.collect_leaves(&mut flat);
+    if crate::doc::whitespace_normalize(&flat) == "Vec::new()" {
+        return Ok(Doc::text("Vec::<ipe_runtime::db::SqlParam>::new()"));
+    }
+    Ok(build_db_project_params(params_doc))
+}
+
+/// The projected-params document `({params}).into_iter().map(::core::convert::Into::into)
+/// .collect::<Vec<ipe_runtime::db::SqlParam>>()`, mirroring `emit_db_call`'s
+/// `project_params` token-for-token. The params document is wrapped in a paren pair
+/// and followed by the three-method projection chain; `rustfmt` breaks the chain one
+/// method per line at the receiver's begin-line indent when the whole projection is
+/// wide (each method's receiver — the parenthesized params and each preceding
+/// `.method()` — renders multiline, so the next method drops to its own line).
+fn build_db_project_params(params_doc: Doc) -> Doc {
+    let base = Doc::concat(vec![Doc::text("("), params_doc, Doc::text(")")]);
+    let iter = Doc::method_chain(base, Doc::text(".into_iter()"));
+    let mapped = Doc::method_chain(iter, Doc::text(".map(::core::convert::Into::into)"));
+    Doc::method_chain(
+        mapped,
+        Doc::text(".collect::<Vec<ipe_runtime::db::SqlParam>>()"),
+    )
+}
+
+/// Build the `Doc` for a param-projecting Task-returning Db kernel call
+/// (`DbExecRaw` / `DbExec` / `DbQuery`), mirroring the matching arm of
+/// [`crate::emit_expr::emit_db_call`] token-for-token. Each connection argument is
+/// cloned; `DbExec` / `DbQuery` project their `List SqlValue` params argument
+/// through [`build_db_project_params`]. The whole call is a delimited group so a
+/// wide call breaks one argument per line, matching `rustfmt` — the layout the
+/// flat string leaf `emit_db_call` returns could never reach. The params argument's
+/// projection (or its empty-list fast path) is built by [`build_db_params_arg`].
+fn build_db_param_call(
+    ctx: &EmitCtx,
+    kernel: KernelFn,
+    args: &[Expr],
+    indent: usize,
+    child: u16,
+    generics: GenericScope,
+) -> DResult<Doc> {
+    let name = crate::naming::kernel_name(kernel);
+    let mut docs: Vec<Doc> = Vec::with_capacity(args.len());
+    match (kernel, args) {
+        // `db_exec_raw(conn.clone(), sql)` — no params projection.
+        (KernelFn::DbExecRaw, [conn, sql]) => {
+            let conn_doc = build_doc(ctx, conn, indent, child, generics)?;
+            docs.push(Doc::concat(vec![conn_doc, Doc::text(".clone()")]));
+            docs.push(build_doc(ctx, sql, indent, child, generics)?);
+        }
+        // `db_exec_params` / `db_query_params`: `(conn.clone(), sql, <projected params>)`.
+        (KernelFn::DbExec | KernelFn::DbQuery, [conn, sql, params]) => {
+            let conn_doc = build_doc(ctx, conn, indent, child, generics)?;
+            docs.push(Doc::concat(vec![conn_doc, Doc::text(".clone()")]));
+            docs.push(build_doc(ctx, sql, indent, child, generics)?);
+            docs.push(build_db_params_arg(ctx, params, indent, child, generics)?);
+        }
+        // Unreachable: the caller gates on exactly these three kernels with the
+        // matching arity, so any other shape is a wiring bug — fail closed rather
+        // than mis-emit.
+        _ => {
+            return Err(Diagnostic::CompilerBug {
+                where_: "ipe_backend_rust::build_db_param_call",
+                detail: format!(
+                    "build_db_param_call reached with unexpected Db kernel {kernel:?} / arity {}",
+                    args.len()
+                ),
+            });
+        }
+    }
+    Ok(delimited(
+        Doc::owned(format!("{name}(")),
+        docs,
+        Doc::text(")"),
+    ))
+}
+
 /// A braces-always block whose body lays out flat (`{ body }`, a space hugging
 /// each brace) when it fits and breaks to a block (`{`, the body at one indent
 /// step, `}` dedented) when it does not. This is `rustfmt`'s closure-body block
@@ -1554,6 +1730,53 @@ const fn arm_body_is_control(body: &Expr) -> bool {
     }
 }
 
+/// Split a rendered arm pattern into its top-level or-alternatives — the
+/// segments the pattern renderer joined with ` | ` outside any bracket pair and
+/// outside any string literal. A pattern with no top-level alternation comes
+/// back as a single segment. A nested alternation stays inside its segment
+/// (`(A | B, x)` is one alternative), matching the alternation `rustfmt`'s
+/// or-pattern list rule applies to: only the arm's outermost one.
+fn split_or_alternatives(pat: &str) -> Vec<String> {
+    let mut alts = Vec::new();
+    let mut seg = String::new();
+    let mut depth = 0usize;
+    let mut in_str = false;
+    let mut escaped = false;
+    let mut prev = '\0';
+    let mut chars = pat.chars().peekable();
+    while let Some(c) = chars.next() {
+        if in_str {
+            if escaped {
+                escaped = false;
+            } else if c == '\\' {
+                escaped = true;
+            } else if c == '"' {
+                in_str = false;
+            }
+        } else {
+            match c {
+                '"' => in_str = true,
+                '(' | '[' | '{' => depth += 1,
+                ')' | ']' | '}' => depth = depth.saturating_sub(1),
+                '|' if depth == 0 && prev == ' ' && chars.peek() == Some(&' ') => {
+                    // The ` | ` separator: drop its leading space from the
+                    // finished segment and consume its trailing space.
+                    seg.pop();
+                    chars.next();
+                    alts.push(std::mem::take(&mut seg));
+                    prev = ' ';
+                    continue;
+                }
+                _ => {}
+            }
+        }
+        seg.push(c);
+        prev = c;
+    }
+    alts.push(seg);
+    alts
+}
+
 /// Build the `Doc` for a `match` expression, mirroring
 /// [`crate::emit_expr::emit_match`] token-for-token.
 ///
@@ -1588,10 +1811,21 @@ fn build_match(
             Some(g) => Some(emit_expr_at(ctx, g, indent + 1, child, generics)?),
             None => None,
         };
-        let head = combine_guards(synth_guard, ir_guard).map_or_else(
-            || Doc::owned(format!("{pat} => ")),
-            |guard| Doc::owned(format!("{pat} if {guard} => ")),
+        // A multi-alternative or-pattern head gets `rustfmt`'s flat-vs-vertical
+        // or-pattern layout ([`Doc::OrPattern`]); any other head is a single-line
+        // byte leaf. The ` => ` (with any guard) stays a separate leaf glued to
+        // the pattern's last line in either layout.
+        let alts = split_or_alternatives(&pat);
+        let pat_doc = if alts.len() > 1 {
+            Doc::or_pattern(alts.into_iter().map(Cow::Owned).collect())
+        } else {
+            Doc::owned(pat)
+        };
+        let arrow = combine_guards(synth_guard, ir_guard).map_or_else(
+            || Doc::text(" => "),
+            |guard| Doc::owned(format!(" if {guard} => ")),
         );
+        let head = Doc::concat(vec![pat_doc, arrow]);
         let tail = if prelude.is_empty() {
             // Plain body: the arm-tail token applies the brace/comma rule by the
             // body's head kind.
@@ -1623,8 +1857,19 @@ fn build_match(
         };
         arm_docs.push(Doc::concat(vec![Doc::HardLine, head, tail]));
     }
+    // The `match <scrut> {` head keeps the opening brace glued when the whole line
+    // fits `max_width`; when `match <scrut> {` overflows, `rustfmt` drops the `{`
+    // onto its own line at the `match` keyword's indent (`match <scrut>\n{`) — the
+    // scrutinee itself is never broken. A `Group` over `match <scrut>` + a `Line` +
+    // `{` reproduces exactly that: the `Line` is a space when the head fits flat and
+    // a newline-plus-indent when it does not.
+    let head = Doc::group(Doc::concat(vec![
+        Doc::owned(format!("match {scrut}")),
+        Doc::Line,
+        Doc::text("{"),
+    ]));
     Ok(Doc::concat(vec![
-        Doc::owned(format!("match {scrut} {{")),
+        head,
         Doc::nest(4, Doc::concat(arm_docs)),
         Doc::HardLine,
         Doc::text("}"),
