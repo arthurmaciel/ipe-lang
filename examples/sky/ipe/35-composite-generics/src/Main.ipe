@@ -13,7 +13,7 @@ import Ipe.List as List
 import Ipe.Maybe as Maybe
 import Ipe.Result as Result
 import Ipe.Task as Task
-import Ipe.Pure as Pure
+import Ipe.Time as Time
 import Ipe.Error as Error exposing (Error)
 import Ipe.Io as Io
 import Ipe.System
@@ -33,14 +33,14 @@ main =
 
 runPipeline : () -> Task Error ()
 runPipeline _ =
-    Pure.systemArgs ()
+    System.args ()
         |> Task.andThen
                (\argv ->
                    let
                        args = List.drop 1 argv
                        useJson = List.member "--json" args
                    in
-                       Pure.timeUnixMillis ()
+                       Time.unixMillis ()
                            |> Task.andThen
                                   (\nowMs ->
                                       let

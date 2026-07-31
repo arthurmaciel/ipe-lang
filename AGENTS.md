@@ -345,7 +345,6 @@ app code.
 | `Csv` | `Ipe.Csv` | `parse`/`parseWithDelimiter` (returns `Csv = { header, rows }`), `encode`/`encodeWithDelimiter` (RFC 4180 quoting), `parseStreamFromFile`. |
 | `Config` | `Ipe.Config` | Typed TOML/YAML/JSON decoders mirroring `Ipe.Json.Decode`'s shape — `string`/`int`/`float`/`bool`/`nullable`/`field`/`at`/`list`/`succeed`/`fail`/`map`/`andThen`. `decodeToml`/`decodeYaml`/`decodeJson` + `loadFromFile`. |
 | `ToString` | `Ipe.ToString` | `fromInt`/`fromFloat`/`fromBool`/`fromTime` route to canonical kernels — default to `ToString.fromInt n` over memorising per-type kernels. |
-| `Pure` | `Ipe.Pure` | Uniform `() -> Task Error a` companions for arity-0 stdlib bindings (`uuidV4`/`uuidV7`/`timeNow`/`timeUnixMillis`/`systemArgs`/`systemCwd`/`systemLoadEnv`/`ioReadLine`/`dbConnect`). |
 
 ### Diverging
 
@@ -1001,43 +1000,41 @@ config is a distinct, narrower surface, not a `getenv` backdoor.
 
 ## Active limitations
 
-Current compiler limitations to work around when writing code.
+Genuine compiler gaps to work around when writing code.
 
-1. **No higher-kinded types.** HM only.
-2. **No `where` clauses.** Use `let…in`.
-3. **No custom operators.**
-4. **Negative literal args need parens.** `f -1` parses as subtraction.
-   Use `f (-1)`.
-5. **`Dict.toList` typed-key inference is inline-only.** `Dict.toList
-   (Dict.fromList [(1, "a")])` chained in one expression returns real `Int`
-   keys. For let-bound intermediates — `let d = Dict.fromList […] in
-   Dict.toList d` — routing falls back to String-key path. Workaround:
-   inline the chain, or pipe (`d |> Dict.toList`).
-6. **`ipe check` does not fully model FFI interface satisfaction.** Opaque
-   FFI types unify w/ each other; concrete-satisfies-interface checks fall
+1. **`ipe check` does not fully model FFI interface satisfaction.** Opaque
+   FFI types unify with each other; concrete-satisfies-interface checks fall
    through.
-7. **Zero-arg calls follow binding's declared type.** Bare `Uuid.v4` works
-   because sig is `v4 : String`. `Time.now ()`/`Time.unixMillis
-   ()` needed because sigs are `() -> Task Error a`. Calling `:
-   String` binding w/ `()` triggers codegen bug for arity-0 kernels
-   (`Uuid.v4 ()` mis-applies unit); stick to declared shape.
-   Dict/Set/Maybe/Result stay bare for `empty`/`none` etc. For uniform
-   `() -> Task Error a` shape, import `Ipe.Pure as Pure` and call additive
-   companions — `Pure.uuidV4 ()`/`Pure.uuidV7 ()`/`Pure.timeNow
-   ()`/`Pure.timeUnixMillis ()`/`Pure.systemArgs ()`/`Pure.systemCwd ()`/
-   `Pure.systemLoadEnv ()`/`Pure.ioReadLine ()`/`Pure.dbConnect ()`.
-8. **Non-tail-recursive list ops are O(N) on call stack.** `map`, `filter`,
+2. **Non-tail-recursive list ops are O(N) on call stack.** `map`, `filter`,
    `foldr`, `length`, `concat`, `take`, `append`, `range`, `zip`,
-   `concatMap`, `indexedMap`, `Maybe.combine`, `Result.combine` recurse.
-   Tail-recursive ops (`foldl`, `find`, `any`, `all`, `member`, `drop`)
-   constant-stack. For very large lists (200k+ elements) prefer
+   `concatMap`, `indexedMap` recurse. Tail-recursive ops (`foldl`, `find`,
+   `any`, `all`, `member`, `drop`, `Maybe.combine`, `Result.combine`) run in
+   constant stack. For very large lists (200k+ elements) prefer a
    tail-recursive accumulator pattern.
-9. **`Css.*` keyword constants are bare values** — `margin Css.zero`,
-   `top Css.auto`, `border Css.none`, `fontFamily Css.systemFont` (matching
-   v0.17 Ipe). Only `Css.monoFont ()` keeps its unit argument.
-10. **Multi-line function signatures.** `name\n    : T` (`:` on
-    continuation line) parses cleanly. Continuation INSIDE type body
-    (`T1\n    -> T2`) unsupported — extract `type alias` for whole arrow type.
+
+## By-design behaviour
+
+Not limitations — the language is meant to work this way.
+
+- **HM types only** — no higher-kinded types.
+- **No `where` clauses** — use `let … in`.
+- **No custom operators.**
+- **`Css.*` keyword constants are bare values** — `margin Css.zero`,
+  `top Css.auto`, `border Css.none`, `fontFamily Css.systemFont`. Only
+  `Css.monoFont ()` keeps its unit argument.
+- **Arity-0 effect kernels take an explicit `()`.** `Uuid.v4`, `Uuid.v7`,
+  `Time.now`, `Time.unixMillis`, `System.args`, `System.cwd`,
+  `System.loadEnv`, `Io.readLine`, `Db.connect` are registered at
+  `() -> Task Error a` (entropy/clock/env/I/O are effects), so the call form
+  is `Uuid.v4 ()`. Pure nullary values (`Dict.empty`, `Set.empty`,
+  `Maybe.Nothing`) stay bare.
+
+## Non-goals
+
+Deliberate omissions, not gaps to close.
+
+- **Negative literal arguments require parens.** `f -1` parses as subtraction;
+  write `f (-1)`. The infix-minus reading is the intended grammar.
 
 ## Rust workspace gate
 

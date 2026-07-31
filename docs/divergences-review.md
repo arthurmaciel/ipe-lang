@@ -54,7 +54,7 @@ diverged, the row records it and gives the reconciled call.
 | U4 | FEATURE | No `data-ipe-eval`/eval sink, HTML-escape-everything, CSP-strict. | Lead (security) |
 | R1 | NEUTRAL | Haystack-first `*In` companions; both forms ship. | Omit |
 | R2 | NEUTRAL | `ToString.*` discoverability namespace. | Omit |
-| R3 | INTERIM `[with arity-0 fix]` | `Ipe.Pure` arity-0 companions — an admitted workaround for Limitation #7. Couples to B7. | Converging |
+| R3 | RESOLVED | Arity-0 entropy kernels registered at `() -> Task Error a`; the `Ipe.Pure` companion module is removed. | Omit |
 | R4 | FEATURE | Task error slot fixed to `Error` (no `Never`-task) — mandate at the type level. Caveat: loses Elm's `Task Never a` infallible expressiveness. | Support |
 | R5 | NEUTRAL (mostly) | Browser/ports/`Debug`/`Tuple` omission is sound; **`Array`/`Bitwise` absence is a capability gap, not a clean omission** — see §6. | Support w/ caveat |
 | STR1 | FEATURE | Code-point String semantics; no UTF-16 surrogate splitting. Caveat: code points ≠ graphemes — say "rune-correct," not "grapheme-correct." | Lead (w/ caveat) |
@@ -70,8 +70,8 @@ diverged, the row records it and gives the reconciled call.
 | B4 | FEATURE | `Money.allocate` shares sum to input on negative totals — strictly more correct. | Support |
 | B5 | FEATURE | Full-Unicode `SpecialCasing` (`ß→SS`); mainstream-aligned (Rust/Python/Swift). | Support |
 | B6 | FEATURE | Stricter `toFloat` grammar (rejects hex-float/underscore) — parse-don't-validate + Elm-conformant. | Support |
-| **B7** | **RECONSIDER / INTERIM** `[with arity-0 fix]` | Bare `Uuid.v4 : String` evaluates — but typing entropy as the **pure** tier contradicts E2 (entropy lives in `Task`). **Disagreement:** R1 filed it INTERIM-as-feature; R2/R3 flag it as a soundness inconsistency. **Reconciled:** present once, consistently, as interim — never as a strength. See §5. | Converging (not a strength) |
-| B8 | FEATURE (verify) | `Uuid.parse` `Just` on a canonical UUID. **R3 caveat:** confirm this is genuine parse semantics, not the same arity-0 codegen artifact as B7. See §5. | Support (pending verify) |
+| **B7** | RESOLVED | `Uuid.v4` / `Uuid.v7` are registered at `() -> Task Error String` — entropy carries the effect tier consistently with E2; the canonical call form is `Uuid.v4 ()`. See §5. | Omit |
+| B8 | FEATURE | `Uuid.parse` `Just` on a canonical UUID — a pure parser (`String -> Maybe Uuid`), independent of the entropy kernels. See §5. | Support |
 | B9 | INTERIM `[pre-push]` | Jwt flat-kernel; builder-API programs don't compile yet, though token bytes are byte-identical to Go. | Converging |
 | B10 | NEUTRAL | `Ipe.Db` on sqlx vs cgo/SQLite — substrate. | Omit |
 | B11 | INTERIM `[post-DONE, low]` | `Ipe.Ui` HTML skeleton; semantically correct now, byte-parity later. | Converging |
@@ -134,7 +134,6 @@ they are filed and sequenced, not hidden.
 | Item | What differs today | Target milestone |
 |---|---|---|
 | B3 — `Encoding.*` text path | Latin-1 char-as-byte over `String`; differs from Go for code points ≥ 0x80. | **Pre-push.** `Encoding.* → Bytes` primitive migration (unblocked — B2 exists). See §5. |
-| B7 + R3 — arity-0 entropy/kernel | Bare `Uuid.v4 : String`; entropy typed pure; `Ipe.Pure` workaround. | **Pre-push.** Arity-0 kernel codegen fix (Limitation #7) — one fix closes R3 + B7 (+ possibly B8). See §5. |
 | B9 — Jwt builder API | Flat kernels; builder-API programs don't compile (token bytes already identical to Go). | Pre-push. `Algorithm`/`Claims` ADT + record-alias emit. |
 | A13 + §4 — nested-ctor / refutable-arg / `.field` accessor | Rejected fail-closed; blocks idiomatic Elm patterns. | **Pre-push.** Shared front-end desugar workstream (closes A12 + A13 + accessor + S4). |
 | S4 — continuation-in-type-body | Parser rejects continuation inside the type body; extract a `type alias`. | Pre-push (folds into the front-end workstream). |
@@ -200,37 +199,22 @@ verify/fix action — candidates to file as tasks.
 - **README:** keep out until fixed, or scope any mention strictly to the binary
   pipeline. Leading with it invites the `café` counter-example.
 
-### WD-2 — B7 / R3 / Limitation #7: entropy typed as pure
+### WD-2 — B7 / R3: entropy typed as an effect (resolved)
 
-- **Symptom.** `Uuid.v4 : String` — a non-deterministic, entropy-backed value
-  carries the **pure** tier, directly contradicting E2's own taxonomy (which
-  places `Crypto.randomBytes` / `randomToken` in `Task`). Internal
-  inconsistency: `Crypto.randomToken` is `Task` while `Uuid.v4` is pure.
-- **Soundness risk.** An effect masquerading as pure is unsound under any
-  optimization that assumes referential transparency (CSE, memoization,
-  reordering) — such passes could dedupe or reorder UUID generation.
-- **Root cause.** This is a symptom of the arity-0 kernel codegen limitation
-  (#7), surfaced across two ledgers with **opposite valence**: the Elm ledger
-  (R3) calls it an honest workaround; the Ipê ledger (B7) frames the same
-  limitation as Ipê being "more useful." **Reconciled call:** present it once,
-  consistently, as an interim codegen limitation converging — never as a
-  strength.
-- **Verify/fix actions.**
-  1. Fix arity-0 kernel codegen (Limitation #7) — the single highest-leverage
-     item; one fix closes R3 + B7.
-  2. Until then, either reclassify UUID generation to the effect tier or
-     document that the binding is effectful despite its surface type.
+- **Resolution.** `Uuid.v4` / `Uuid.v7` are registered at `() -> Task Error
+  String`, so entropy carries the **effect** tier consistently with E2's
+  taxonomy (`Crypto.randomBytes` / `randomToken` are also `Task`). The canonical
+  call form is `Uuid.v4 ()`; there is no `Uuid.v4 : String` pure surface and no
+  referential-transparency hazard. The `Ipe.Pure` companion module (an interim
+  uniform `() -> Task Error a` mirror) is removed — the canonical kernel form is
+  the single surface.
 
-### WD-3 — B8: verify it is genuine parse semantics, not the arity-0 artifact
+### WD-3 — B8: `Uuid.parse` is genuine parse semantics
 
-- **Symptom.** B8 is filed as a correctness *strength* (`Uuid.parse` returns
-  `Just` on a canonical UUID where the reference returns `Nothing`). R3 notes
-  this "reference returns Nothing on this shape" smells like the **same**
-  arity-0 codegen artifact as B7, not a genuine reference semantics difference.
-- **Verify/fix action.** Confirm B8 is real parse behavior. If it is the
-  identical arity-0 leakage, B7 + B8 collapse into "fix arity-0 codegen" and B8
-  stops being a divergence at all — do not ship it as a standalone strength
-  until confirmed.
+- **Confirmed.** `Uuid.parse` is a pure parser (`String -> Maybe Uuid`),
+  independent of the entropy kernels; its `Just`-on-canonical / `Nothing`-on-junk
+  behavior is real parse semantics, not an entropy-codegen artifact. It ships as
+  a standalone correctness property.
 
 ### WD-watch — A7: exact-key record resolution
 

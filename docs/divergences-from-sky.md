@@ -139,14 +139,14 @@ recorded reference.
 - **Rationale:** parse-don't-validate at the numeric boundary.
 - **Sanctioned:** yes (`sanctioned:`, stricter).
 
-### B7 — Bare arity-0 `Uuid.v4` / `Uuid.v7` evaluate
-- **Differs:** the import-less bare reference `Uuid.v4` / `Uuid.v7` evaluates to a
-  fresh `String` on Ipê (the documented bare-reference form). The Go reference
-  leaves the bare reference as a kernel function value (AGENTS.md Limitation #7 —
-  arity-0 kernel codegen), so its length/version-nibble checks differ.
+### B7 — `Uuid.v4 ()` / `Uuid.v7 ()` are effectful entropy reads
+- **Differs:** `Uuid.v4` / `Uuid.v7` are registered at `() -> Task Error String`,
+  so `Uuid.v4 ()` yields a fresh `String` inside a `Task` (entropy is an effect).
+  The shared-`Main` Go oracle cannot run the entropy kernel, so its
+  length/version-nibble checks differ.
 - **Go-oracle relationship:** Go succeeds; checks differ on this shape.
-- **Rationale:** arity-0 kernel codegen. **Sanctioned:** yes (`sanctioned:`).
-  Golden `uuid_format`.
+- **Rationale:** entropy typed as a `Task` effect. **Sanctioned:** yes
+  (`sanctioned:`). Golden `uuid_format`.
 
 ### B8 — `Uuid.parse` accepts a canonical UUID
 - **Differs:** Ipê's `Uuid.parse` returns `Just` for a canonical hyphenated UUID
@@ -1609,12 +1609,6 @@ API-shape review):
     emits `pubsub_publish::<_, SkyError>(topic, payload)` with scheme
     `String -> a -> Task Error Int`; ipe-0 AND cargo-0 guaranteed.  The payload
     `a` is a genuine monomorphized type var, never erased.)*
-  - **Arity-blocked (IPE-T0001):** `Ipe.Pure`'s internal `uuidV4Kernel` /
-    `uuidV7Kernel` helpers annotate an arity-0 `Task Error String` value over the
-    arity-1 `Uuid_v4`/`Uuid_v7` kernels (`() -> Task Error String`). Go's
-    `func() any` runtime boundary absorbs the arity difference; Rust's
-    monomorphized `Box<dyn Fn(()) -> …>` cannot, so the shape is rejected until an
-    arity-0-alias-of-nullary-effect-kernel lowering is built.
   These are documented completeness gaps (PRINCIPLES §5), not silent workarounds.
 - **Sanctioned:** yes, tagged `sanctioned` — Ipê is deliberately more sound: the
   closed registry turns a Go-runtime-panic-class (unknown kernel routed to a
