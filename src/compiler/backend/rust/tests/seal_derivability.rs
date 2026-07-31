@@ -46,6 +46,7 @@ fn program_with_web(
             records: vec![],
             uses_tea: false,
             uses_server: false,
+            uses_http: false,
             uses_ui: uses_web,
             uses_web,
             uses_tui: false,

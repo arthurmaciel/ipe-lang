@@ -472,13 +472,36 @@ const RUNTIME_MOD_RS_SERVER_APPEND: &str = "pub mod server;\npub use server::*;\
     pub mod server_stream;\npub use server_stream::*;\n\
     pub mod http_stream;\npub use http_stream::*;\n";
 
+// ── Ipe.Http — outbound HTTP client ─────────────────────────────────────────
+
+/// Lines appended to `ipe_runtime/mod.rs` when the program reaches the outbound
+/// `Ipe.Http` client surface.
+///
+/// `http_client.rs` (the reqwest-backed sender plus the pure request/method
+/// builders and `http_parse_query`) is vendored into every emitted crate but
+/// declared only on demand — it is the sole consumer of the `reqwest` crate,
+/// which [`http_client_cargo_toml`] adds under the same condition. The module
+/// is pulled in whenever the program calls a client kernel (`uses_http`) or
+/// uses a surface whose own runtime module calls into `http_client`: the server
+/// (`http_stream.rs`), the web/live telemetry exporters, and `email.rs`.
+const RUNTIME_MOD_RS_HTTP_CLIENT_APPEND: &str = "pub mod http_client;\npub use http_client::*;\n";
+
+/// Lines appended to `ipe_runtime/mod.rs` for the SSRF deny-private validators.
+///
+/// `ssrf.rs` parses URLs with the `url` crate (unconditional base dep) and is
+/// reqwest-free. Its `pub(crate)` validators are consumed only by the
+/// `http_client` and `ws_client` modules, so it is declared exactly when either
+/// of those is — keeping a pure-CLI program free of an otherwise-unreferenced
+/// module (`dead_code`).
+const RUNTIME_MOD_RS_SSRF_APPEND: &str = "mod ssrf;\n";
+
 // ── Shared transitive dep: http_header ──────────────────────────────────────
 //
 // `http_header.rs` (a dependency-free leaf exposing `canonical_header`) is part
-// of the base `mod.rs` (`tests/golden/basics/ipe_runtime/mod.rs`), because the
-// outbound `http_client.rs` response path always calls it. It must NOT be
-// conditionally appended here — a conditional `pub mod http_header;` would
-// duplicate the base declaration (E0428) for server/live programs.
+// of the base `mod.rs` (`tests/golden/basics/ipe_runtime/mod.rs`); it is
+// reqwest-free and pulls no gated dependency, so it stays unconditional. A
+// conditional `pub mod http_header;` would duplicate the base declaration
+// (E0428) for server/live programs.
 
 // ── Ipe.Auth ──────────────────────────────────────────────────────────
 
@@ -502,11 +525,11 @@ const RUNTIME_MOD_RS_AUTH_APPEND: &str = "pub mod auth;\npub use auth::*;\n";
 /// generated `main.rs` can call `web_socket_connect` / `web_socket_send` / … and
 /// the `sub_subscribe_ws_*` subscription fns via `pub use ipe_runtime::*`.
 ///
-/// `ssrf.rs` (`ws_client`'s SSRF validators) is already part of the base
-/// `mod.rs` (the always-present `http_client` module also needs it), so no
-/// `ssrf` append is required here. `tea.rs` (whose `IpeSub<M>` the
-/// `sub_subscribe_ws_*` fns return) is force-appended alongside this in
-/// [`assemble_project_files`], mirroring the `uses_server` rule.
+/// `ssrf.rs` (`ws_client`'s SSRF validators) is declared by
+/// [`RUNTIME_MOD_RS_SSRF_APPEND`], force-appended alongside this in
+/// [`assemble_project_files`] (the SSRF module is shared with `http_client`).
+/// `tea.rs` (whose `IpeSub<M>` the `sub_subscribe_ws_*` fns return) is
+/// force-appended alongside this too, mirroring the `uses_server` rule.
 const RUNTIME_MOD_RS_WEBSOCKET_APPEND: &str = "pub mod ws_client;\npub use ws_client::*;\n";
 // ── Ipe.Email ───────────────────────────────────────────────────────────
 
@@ -514,12 +537,15 @@ const RUNTIME_MOD_RS_WEBSOCKET_APPEND: &str = "pub mod ws_client;\npub use ws_cl
 /// `Email.send` kernel.
 ///
 /// `email.rs` is in the runtime source tree (vendored into every emitted crate)
-/// but declared only on demand. It depends on `http_client` (in the base
-/// `mod.rs`) plus the `base64` / `hmac` / `sha2` / `serde_json` / `reqwest` /
-/// `url` crates (all unconditional deps in the base manifest) and `lettre` (the
-/// one extra dep added by [`email_cargo_toml`] when `uses_email` is set). No
-/// runtime feature flag is involved — the emitted crate vendors the source
-/// directly, so declaring the module + adding `lettre` is sufficient.
+/// but declared only on demand. It calls into `http_client` (for the shared
+/// `ssrf_apply` request hardening), so `uses_email` also pulls the
+/// `http_client` module and the `reqwest` dep via the shared HTTP-client
+/// predicate in [`assemble_project_files`]. Its other crates (`base64` /
+/// `hmac` / `sha2` / `serde_json` / `url`) are unconditional base deps; `lettre`
+/// (the SMTP transport) is the one extra dep added by [`email_cargo_toml`] when
+/// `uses_email` is set. No runtime feature flag is involved — the emitted crate
+/// vendors the source directly, so declaring the module + adding `lettre` is
+/// sufficient.
 const RUNTIME_MOD_RS_EMAIL_APPEND: &str = "pub mod email;\npub use email::*;\n";
 
 // ── Ipe.Env ────────────────────────────────────────────────────────────
@@ -860,6 +886,49 @@ fn runtime_bindings() -> DResult<&'static str> {
     GOLDEN.get(start..end).ok_or_else(|| anchor_missing(END))
 }
 
+/// The native-target kernel-wrapper prelude: [`runtime_bindings`] with the
+/// outbound-HTTP section dropped when the program does not reach the
+/// `http_client` runtime module (`uses_http_client == false`).
+///
+/// The always-emitted prelude ends with the `Http` section — a comment header
+/// plus the monomorphic `http_parse_query` wrapper, which hard-references
+/// `ipe_runtime::http_client::http_parse_query`. When `http_client` is not
+/// declared (a pure-CLI program that never touches the outbound HTTP surface),
+/// keeping that wrapper would fail to resolve (E0433). The `Http` section is the
+/// final block of the prelude (`http_parse_query` is its `END` anchor — see
+/// [`runtime_bindings`]), so everything from its comment header onward is cut in
+/// one slice, and a trailing newline is preserved so the following kernel-family
+/// bindings (`AUTH_WRAPPERS`, the TEA aliases, …) are not glued onto the last
+/// kept line. The `HTTP_SECTION` anchor is content-addressed, so a prelude drift
+/// that renamed it fails loud (a `CompilerBug`) rather than mis-slicing.
+fn native_runtime_bindings(uses_http_client: bool) -> DResult<String> {
+    // The comment header that opens the outbound-`Http` prelude section. The
+    // section runs from here to the end of `runtime_bindings()` (its `END`
+    // anchor is the `http_parse_query` wrapper, the section's sole binding).
+    const HTTP_SECTION: &str = "// ── Http kernels";
+    let full = runtime_bindings()?;
+    if uses_http_client {
+        return Ok(full.to_owned());
+    }
+    let cut = full
+        .find(HTTP_SECTION)
+        .ok_or_else(|| Diagnostic::CompilerBug {
+            where_: "ipe_backend_rust::project::native_runtime_bindings",
+            detail: format!(
+                "kernel-wrapper prelude anchor {HTTP_SECTION:?} not found — golden drifted; \
+             cannot drop the http_client wrappers for a non-HTTP program"
+            ),
+        })?;
+    let mut out = full.get(..cut).unwrap_or("").to_owned();
+    // The slice ends immediately before the `Http` comment (the byte before it
+    // is the newline that terminated the previous wrapper's `}`), so `out`
+    // already ends in `\n` — the following bindings start on their own line.
+    if !out.ends_with('\n') {
+        out.push('\n');
+    }
+    Ok(out)
+}
+
 /// Emit the complete project for `program`.
 #[allow(clippy::too_many_lines)]
 pub fn emit_program(ctx: &EmitCtx, program: &Program) -> DResult<EmittedProject> {
@@ -1045,7 +1114,9 @@ pub fn emit_program(ctx: &EmitCtx, program: &Program) -> DResult<EmittedProject>
         // Fixed kernel-wrapper prelude (IpeError, IpeTask<A>, Decoder<T>, …);
         // the wasm target takes the floor-filtered subset.
         match ctx.target {
-            ipe_ir::Target::Native => out.push_str(runtime_bindings()?),
+            ipe_ir::Target::Native => {
+                out.push_str(&native_runtime_bindings(ctx.reaches_http_client())?);
+            }
             ipe_ir::Target::WasmClient => out.push_str(&wasm_runtime_bindings()?),
         }
 
@@ -1272,11 +1343,43 @@ fn assemble_project_files(
         cargo_toml
     };
     // Ipe.Email: `email.rs` needs the `lettre` crate for the SMTP transport
-    // (every other crate it uses — `base64` / `hmac` / `sha2` / `serde_json` /
-    // `reqwest` / `url` — is already an unconditional base-manifest dep). Add
-    // `lettre` only when the program uses `Email.send`.
+    // (`reqwest`, reached through `http_client`, is added by the HTTP-client
+    // step below; every other crate it uses — `base64` / `hmac` / `sha2` /
+    // `serde_json` / `url` — is already an unconditional base-manifest dep).
+    // Add `lettre` only when the program uses `Email.send`.
     let cargo_toml = if ctx.uses_email {
         email_cargo_toml(&cargo_toml)?
+    } else {
+        cargo_toml
+    };
+    // Outbound HTTP client (`reqwest`): pulled in whenever the program reaches
+    // the `http_client` runtime module — a client kernel (`uses_http`), or a
+    // surface whose own runtime module calls into `http_client`: the server
+    // (`http_stream.rs`), the web/live telemetry exporters, and `email.rs`. The
+    // `url` crate stays unconditional (backs `Ipe.Url` + `ssrf`), so only the
+    // reqwest HTTP stack (~60 transitive crates) is gated here.
+    let uses_http_client = ctx.reaches_http_client();
+    let cargo_toml = if uses_http_client {
+        http_client_cargo_toml(&cargo_toml)?
+    } else {
+        cargo_toml
+    };
+    // TEA runtime: `tea.rs` drives its event loop over a `tokio::sync::mpsc`
+    // channel, so any program that pulls the `tea` module needs tokio's `"sync"`
+    // feature. The union mirrors the `tea` mod.rs append below (a `Cmd`/`Sub`
+    // kernel, or a surface whose runtime module imports `IpeCmd`/`IpeSub`).
+    // Runs AFTER the server/web/tui/webview steps, which perform their own tokio
+    // feature surgery against the base line — `tea_cargo_toml` is idempotent
+    // (short-circuits when `"sync"` is already present), so it only extends the
+    // pure-TEA base that no other step touched.
+    let cargo_toml = if ctx.uses_tea
+        || ctx.uses_server
+        || ctx.uses_websocket
+        || ctx.uses_web
+        || ctx.uses_tui
+        || ctx.uses_webview
+    {
+        tea_cargo_toml(&cargo_toml)?
     } else {
         cargo_toml
     };
@@ -1293,6 +1396,19 @@ fn assemble_project_files(
         let mut mod_rs = RUNTIME_MOD_RS.to_owned();
         if ctx.uses_db {
             mod_rs.push_str(RUNTIME_MOD_RS_DB_APPEND);
+        }
+        // Outbound HTTP client + its SSRF validators. `http_client` (the reqwest
+        // consumer) is declared when the program reaches it — directly
+        // (`uses_http`) or through a surface whose runtime module calls into it
+        // (server `http_stream`, web/live exporters, `email`). `ssrf.rs` (the
+        // reqwest-free URL validators) is declared alongside either `http_client`
+        // OR the WebSocket client, its only consumers — a pure-CLI program keeps
+        // both absent, dropping the whole reqwest dependency tree.
+        if uses_http_client {
+            mod_rs.push_str(RUNTIME_MOD_RS_HTTP_CLIENT_APPEND);
+        }
+        if uses_http_client || ctx.uses_websocket {
+            mod_rs.push_str(RUNTIME_MOD_RS_SSRF_APPEND);
         }
         // `tea` must be declared whenever any included module's `use crate::tea`
         // closure references it — NOT only when user code names a TEA kernel
@@ -1321,7 +1437,8 @@ fn assemble_project_files(
             mod_rs.push_str(RUNTIME_MOD_RS_SERVER_APPEND);
         }
         // Ipe.WebSocket client — declare `ws_client` (its `ssrf` dep is
-        // already in the base, its `tea` dep forced above).
+        // force-declared by the shared HTTP-client/SSRF guard above, its `tea`
+        // dep forced above).
         if ctx.uses_websocket {
             mod_rs.push_str(RUNTIME_MOD_RS_WEBSOCKET_APPEND);
         }
@@ -1657,7 +1774,9 @@ pub fn emit_spine(ctx: &EmitCtx, program: &Program) -> DResult<String> {
     }
 
     match ctx.target {
-        ipe_ir::Target::Native => out.push_str(runtime_bindings()?),
+        ipe_ir::Target::Native => {
+            out.push_str(&native_runtime_bindings(ctx.reaches_http_client())?);
+        }
         ipe_ir::Target::WasmClient => out.push_str(&wasm_runtime_bindings()?),
     }
     if ctx.uses_tea {
@@ -2481,13 +2600,102 @@ fn websocket_cargo_toml(base: &str) -> DResult<String> {
     Ok(result)
 }
 
+/// Add the tokio `"sync"` feature for a program that uses TEA kernels.
+///
+/// `tea.rs` (the vendored `Cmd` / `Sub` / console-app runtime, always compiled
+/// on native when the program uses TEA) drives its event loop over a
+/// `tokio::sync::mpsc` channel, so it needs tokio's `"sync"` feature. The base
+/// manifest's tokio line does not list it (the async floor is `rt` + `time`),
+/// so it is added here. Idempotent: server / web / tui / websocket manifests
+/// already carry `"sync"`, and the `contains` check short-circuits so composing
+/// this with any of them makes no second change.
+///
+/// # Errors
+///
+/// Returns [`Diagnostic::CompilerBug`] if `"sync"` is absent AND the base tokio
+/// feature-line anchor drifted — a fail-loud golden-drift signal.
+fn tea_cargo_toml(base: &str) -> DResult<String> {
+    if base.contains(r#""sync""#) {
+        return Ok(base.to_owned());
+    }
+    let tokio_time_only = format!(
+        "{} = {{ version = \"{}\", features = [\"rt\", \"rt-multi-thread\", \"macros\", \"time\"] }}",
+        crate_specs::TOKIO.name,
+        crate_specs::TOKIO.version,
+    );
+    let tokio_time_sync = format!(
+        "{} = {{ version = \"{}\", features = [\"rt\", \"rt-multi-thread\", \"macros\", \"time\", \"sync\"] }}",
+        crate_specs::TOKIO.name,
+        crate_specs::TOKIO.version,
+    );
+    let replaced = base.replacen(&tokio_time_only, &tokio_time_sync, 1);
+    if replaced == base {
+        return Err(Diagnostic::CompilerBug {
+            where_: "ipe_backend_rust::project::tea_cargo_toml",
+            detail: format!(
+                "tokio anchor {tokio_time_only:?} not found and no \"sync\" present — \
+                 golden drifted; the TEA runtime requires tokio sync"
+            ),
+        });
+    }
+    Ok(replaced)
+}
+
+/// Build the HTTP-client-enabled `Cargo.toml` by adding the `reqwest`
+/// dependency to the main `[dependencies]` table.
+///
+/// `reqwest` is the sole owner of the outbound HTTP stack (~60 transitive
+/// crates). It is pulled in only when the program reaches the `http_client`
+/// runtime module — a client kernel, or a surface (server / web / webview /
+/// email) whose own runtime module calls into `http_client`. The `url` crate
+/// stays unconditional (it backs the always-present `Ipe.Url` and `ssrf`
+/// surfaces), so only reqwest is gated here.
+///
+/// The dependency line is inserted before the
+/// `[target.'cfg(unix)'.dependencies]` header so it lands in the cross-platform
+/// `[dependencies]` table — `reqwest` must compile on every target, not only
+/// unix. Its feature list + `default-features = false` mirror
+/// `runtime/Cargo.toml` (the vendored source was tested against exactly that
+/// shape); the version comes from the [`crate_specs`] SSOT (drift-guarded
+/// against `runtime/Cargo.toml`).
+///
+/// # Errors
+///
+/// Returns [`Diagnostic::CompilerBug`] if the `[dependencies]`-table boundary
+/// anchor is absent — a golden-drift invariant violation (fail-loud).
+fn http_client_cargo_toml(base: &str) -> DResult<String> {
+    // Insert before the unix-only dependency table (and its leading comment) so
+    // `reqwest` joins the main, cross-platform `[dependencies]` table — never
+    // the `cfg(unix)` one — and the unix comment stays attached to its header.
+    const DEPS_END_ANCHOR: &str = "\n\n# Unix-only:";
+    let reqwest_dep = format!(
+        "\n{} = {{ version = \"{}\", default-features = false, \
+         features = [\"rustls-tls\", \"gzip\", \"stream\"] }}",
+        crate_specs::REQWEST.name,
+        crate_specs::REQWEST.version,
+    );
+    let anchor_pos = base
+        .find(DEPS_END_ANCHOR)
+        .ok_or_else(|| Diagnostic::CompilerBug {
+            where_: "ipe_backend_rust::project::http_client_cargo_toml",
+            detail: format!("Cargo.toml anchor {DEPS_END_ANCHOR:?} not found — golden drifted"),
+        })?;
+    let mut result = String::with_capacity(base.len() + reqwest_dep.len());
+    result.push_str(base.get(..anchor_pos).unwrap_or(""));
+    result.push_str(&reqwest_dep);
+    result.push_str(base.get(anchor_pos..).unwrap_or(""));
+    Ok(result)
+}
+
 /// Build the email-enabled `Cargo.toml` by appending the `lettre` dependency
 /// before `[profile.dev]`.
 ///
 /// `email.rs` (the vendored `Ipe.Email` runtime module) needs `lettre` for the
-/// SMTP transport; every other crate it uses (`base64` / `hmac` / `sha2` /
-/// `serde_json` / `reqwest` / `url`) is already an unconditional base-manifest
-/// dependency. No feature promotion is required — the emitted crate declares the
+/// SMTP transport; `reqwest` (which it reaches through `http_client`) is added
+/// by [`http_client_cargo_toml`] under the shared HTTP-client predicate, and
+/// every other crate it uses (`base64` / `hmac` / `sha2` / `serde_json` /
+/// `url`) is already an unconditional base-manifest dependency. No feature
+/// promotion is required — the emitted crate declares the
 /// `email` module unconditionally (via the `mod.rs` append), so the module is
 /// always compiled once its one extra dep is present. `lettre`'s feature list +
 /// `default-features = false` mirror `runtime/Cargo.toml` (the vendored source

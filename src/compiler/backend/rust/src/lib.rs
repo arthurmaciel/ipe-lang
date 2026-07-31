@@ -501,6 +501,22 @@ pub(crate) struct EmitCtx<'a> {
     /// * appends `pub mod server; pub use server::*; pub mod server_stream;
     ///   pub use server_stream::*;` to the emitted `ipe_runtime/mod.rs`.
     pub(crate) uses_server: bool,
+    /// `true` when the program uses at least one outbound `Ipe.Http` client
+    /// kernel (`Http.get` / `post` / `request`, the pure request/method
+    /// builders, `Http.parseQuery`) or mentions an `HttpRequest` / `HttpMethod`
+    /// in a signature. When set, [`crate::project::assemble_project_files`]:
+    ///
+    /// * declares `pub mod http_client; pub use http_client::*;` in the emitted
+    ///   `ipe_runtime/mod.rs`;
+    /// * adds the `reqwest` dependency to the emitted `Cargo.toml`;
+    /// * keeps the `http_client` kernel-wrapper bindings in the emitted prelude.
+    ///
+    /// The `url` crate stays unconditional (it backs the always-present
+    /// `Ipe.Url` and `ssrf` surfaces), so only the reqwest HTTP stack is gated.
+    /// `uses_server` / `uses_web` / `uses_webview` / `uses_email` force this on
+    /// too: their runtime modules (`http_stream`, the `web` telemetry exporters,
+    /// `email`) call into `http_client`.
+    pub(crate) uses_http: bool,
     /// `true` when the program uses at least one `Ipe.Ui` / `Ipe.Html` kernel.
     /// When set, [`crate::project::emit_program`] appends
     /// `pub mod ui;` to the emitted `ipe_runtime/mod.rs`.
@@ -1100,6 +1116,9 @@ impl<'a> EmitCtx<'a> {
         // detect whether any Ipe.Http.Server kernel is used.
         let uses_server = program.modules.iter().any(|m| m.uses_server);
 
+        // detect outbound Ipe.Http client usage (gates `http_client` + reqwest).
+        let uses_http = program.modules.iter().any(|m| m.uses_http);
+
         // detect Ipe.Ui / Ipe.Html / Ipe.Web / Ipe.Tui / Ipe.WebView usage.
         let (uses_ui, uses_web, uses_tui, uses_webview) = (
             program.modules.iter().any(|m| m.uses_ui),
@@ -1131,6 +1150,7 @@ impl<'a> EmitCtx<'a> {
             target,
             uses_tea,
             uses_server,
+            uses_http,
             uses_ui,
             uses_web,
             uses_tui,
@@ -1206,6 +1226,19 @@ impl<'a> EmitCtx<'a> {
             .first()
             .and_then(|s| self.interner.resolve(*s))
             .is_some_and(|s| s == "Rust")
+    }
+
+    /// `true` when the emitted crate reaches the `http_client` runtime module —
+    /// so `project::assemble_project_files` declares it, adds the `reqwest`
+    /// dependency, and keeps the `http_client` prelude bindings.
+    ///
+    /// The module is reached directly by a client kernel ([`Self::uses_http`]),
+    /// or transitively by a surface whose own runtime module calls into it: the
+    /// server (`http_stream`), the web/live telemetry exporters, and `email`.
+    /// This is the single source of truth shared by the manifest augmenter, the
+    /// `mod.rs` append, and the prelude filter — they can never disagree.
+    pub(crate) const fn reaches_http_client(&self) -> bool {
+        self.uses_http || self.uses_server || self.uses_web || self.uses_webview || self.uses_email
     }
 
     /// The absolute Rust path for a foreign opaque type declared by an FFI
@@ -2847,6 +2880,7 @@ mod record_struct_namespace_tests {
                 ]))],
                 uses_tea: false,
                 uses_server: false,
+                uses_http: false,
                 uses_ui: false,
                 uses_web: false,
                 uses_tui: false,
@@ -2925,6 +2959,7 @@ mod record_struct_namespace_tests {
                 ]))],
                 uses_tea: false,
                 uses_server: false,
+                uses_http: false,
                 uses_ui: false,
                 uses_web: false,
                 uses_tui: false,

@@ -345,10 +345,6 @@ pub fn crypto_random_bytes(n: i64) -> IpeTask<String> {
 pub fn crypto_random_token(n: i64) -> IpeTask<String> {
     ipe_runtime::crypto::crypto_random_token(n)
 }
-// ── Http kernels (M5b) ─────────────────────────────────────────────────────
-pub fn http_parse_query(raw: String) -> HashMap<String, String> {
-    ipe_runtime::http_client::http_parse_query(raw)
-}
 
 // Ffi.kernel polyfill — should be unreachable in Rust target;
 // the codegen routes Ffi.kernel calls directly, but some construction

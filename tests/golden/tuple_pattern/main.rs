@@ -239,10 +239,6 @@ pub fn crypto_random_bytes(n: i64) -> IpeTask<String> {
 pub fn crypto_random_token(n: i64) -> IpeTask<String> {
     ipe_runtime::crypto::crypto_random_token(n)
 }
-// ── Http kernels (M5b) ─────────────────────────────────────────────────────
-pub fn http_parse_query(raw: String) -> HashMap<String, String> {
-    ipe_runtime::http_client::http_parse_query(raw)
-}
 
 pub fn main_fst<T1: Clone, T2: Clone>(arg_0: (T1, T2)) -> T1 {
     ({

@@ -5814,6 +5814,46 @@ impl StdlibKernel {
         )
     }
 
+    /// `true` when this variant belongs to the outbound `Ipe.Http` client
+    /// family — the `Http.get` / `Http.post` / `Http.request` senders plus the
+    /// pure request/method builders (`Http.defaultRequest`, `Http.with*`,
+    /// `Http.methodFromString` / `methodToString`) and the `Http.parseQuery`
+    /// query splitter.
+    ///
+    /// Every variant here emits a symbol that lives in the `http_client`
+    /// runtime module, so any of them requires that module to be declared and
+    /// the `reqwest` crate to be linked. Used by `ipe_lower` to detect
+    /// `uses_http` and by the backend to declare `http_client` in the emitted
+    /// `ipe_runtime/mod.rs` and add `reqwest` to the emitted manifest — unlike
+    /// `Ipe.Url` (whose `url`-crate surface stays unconditional), the reqwest
+    /// HTTP stack is pulled in only on demand.
+    ///
+    /// The `Ipe.Http.Stream` relay kernels (`HttpStream*`) are NOT here: they
+    /// are `is_server` (or force the `server` runtime module), so they pull
+    /// `http_client` transitively through the server surface's `http_stream`
+    /// module, which itself calls into `http_client`.
+    #[must_use]
+    pub const fn is_http_client(self) -> bool {
+        matches!(
+            self,
+            Self::HttpGet
+                | Self::HttpPost
+                | Self::HttpRequest
+                | Self::HttpParseQuery
+                | Self::HttpDefaultRequest
+                | Self::HttpDefaultRequestFromString
+                | Self::HttpWithMethod
+                | Self::HttpWithTimeout
+                | Self::HttpWithBody
+                | Self::HttpWithHeader
+                | Self::HttpWithUrl
+                | Self::HttpWithFollowRedirects
+                | Self::HttpWithMaxRedirects
+                | Self::HttpMethodFromString
+                | Self::HttpMethodToString
+        )
+    }
+
     /// `true` when this variant belongs to the `Ipe.Auth` kernel family
     /// (`Ipe.Auth.hashPassword` / `verifyPassword` / `signToken` / `verifyToken` /
     /// `register` / `login` / `setRole` and companions).
@@ -6876,6 +6916,29 @@ mod tests {
         assert_eq!(StdlibKernel::DebugLog.capability(), None);
         // `Env.public` reads a build-time constant, not the live environment.
         assert_eq!(StdlibKernel::EnvPublic.capability(), None);
+    }
+
+    /// Every `Ipe.Http` kernel (qualifier `"Http"`) emits a symbol that lives in
+    /// the `http_client` runtime module, so it MUST be reported by
+    /// `is_http_client()` — that predicate is what gates declaring `http_client`
+    /// and linking `reqwest` in the emitted crate. A new `Http.*` kernel that
+    /// forgets the predicate would emit `ipe_runtime::http_client::…` into a
+    /// crate that declares neither the module nor the dependency (E0433 at
+    /// `cargo build`); this test fails the instant that happens. The
+    /// `Ipe.Http.Stream` relay kernels use the distinct `"HttpStream"` qualifier
+    /// and are intentionally NOT covered (they ride the server surface).
+    #[test]
+    fn every_http_kernel_is_reported_as_http_client() {
+        for k in StdlibKernel::ALL {
+            if k.decl().qualifier == "Http" {
+                assert!(
+                    k.is_http_client(),
+                    "{k:?} is an `Ipe.Http` kernel (emits `{}` in http_client) but \
+                     is_http_client() is false — the emitted crate would fail to link reqwest",
+                    k.decl().emit
+                );
+            }
+        }
     }
 
     /// The `WasmClient` allowlist is default-deny: every server-effect family
