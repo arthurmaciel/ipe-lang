@@ -1,0 +1,97 @@
+//! Recursion-soundness gate: MUTUALLY-recursive ADTs whose size
+//! cycle is closed only through enum-payload edges (`Even -> Odd -> Even`).
+//! `ipe` must emit `main.rs` byte-identical to the checked-in golden, and
+//! (behind `IPE_E2E=1`) the emitted project must build and print `5`.
+//!
+//! ```text
+//! type Even = EZero | ESucc Odd
+//! type Odd  = OSucc Even
+//! ```
+//!
+//! Neither enum is *directly* self-recursive — `Even` carries an `Odd` and
+//! `Odd` carries an `Even` — so boxing only a direct self-edge would emit two
+//! enums that are each infinite-sized in Rust (E0072): `ipe` exits 0 and the
+//! emitted crate then fails `cargo build`. So the backend boxes at least one
+//! enum-payload edge of every type-size cycle, so each enum
+//! stays finite-sized, balanced by `Box::new` at construction and a deref at
+//! pattern binding.
+//!
+//! Behavioural-parity oracle: the Go reference compiler at
+//! `/home/arthur/Documentos/comp/ipe/out/ipe` compiles + runs the SAME
+//! `Main.ipe` to stdout `5\n`, exit 0 — hand-verified in a temp dir. This is
+//! the soundness-floor regression for a value laundered through a boxed
+//! mutually-recursive payload, pinning the indirect-cycle gap so it can never
+//! regress to the silent exit-0-then-cargo-fail mode.
+use std::path::{Path, PathBuf};
+
+use crate::support::repo_root;
+
+fn example_entry(root: &Path) -> PathBuf {
+    root.join("tests")
+        .join("golden")
+        .join("mutual_recursion")
+        .join("Main.ipe")
+}
+
+#[test]
+fn emits_byte_identical_main_rs() {
+    let root = repo_root();
+    let entry = example_entry(&root);
+    let golden = root
+        .join("tests")
+        .join("golden")
+        .join("mutual_recursion")
+        .join("main.rs");
+    let out = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("m3a_mutual_recursion_emit");
+    let _ = std::fs::remove_dir_all(&out);
+
+    let runtime = ipe::resolve_runtime();
+    assert!(runtime.is_ok(), "runtime must resolve: {:?}", runtime.err());
+    let Ok(runtime) = runtime else { return };
+
+    let built = ipe::build(&entry, &out, &runtime);
+    assert!(built.is_ok(), "build failed: {:?}", built.err());
+
+    // Directory-diff the emitted project against the golden dir (byte-compares
+    // the emitted `src/main.rs` against the golden `main.rs`). Replaces the
+    // former hand-rolled `read_to_string` + `assert_eq!` pair with the shared
+    // harness helper.
+    crate::support::assert_emitted_project_matches_golden_dir(
+        &out,
+        crate::support::golden_dir_of(&golden),
+    );
+}
+
+/// Full spine: compile, build the emitted Cargo project, run it, and assert the
+/// mutually-recursive ADT program prints `5` — the value the Go backend
+/// produces. Gated on `IPE_E2E=1` so the default `cargo test` stays fast. This
+/// is the soundness-floor regression for an indirect (mutual) recursion cycle:
+/// without boxing a cycle edge the crate does not build at all.
+#[test]
+fn end_to_end_builds_and_prints_five() {
+    if std::env::var("IPE_E2E").is_err() {
+        return;
+    }
+
+    let root = repo_root();
+    let entry = example_entry(&root);
+    let out = std::env::temp_dir().join("ipec_m3a_mutual_recursion_e2e");
+    let _ = std::fs::remove_dir_all(&out);
+
+    let runtime = ipe::resolve_runtime();
+    assert!(runtime.is_ok(), "runtime must resolve for E2E");
+    let Ok(runtime) = runtime else { return };
+    let built = ipe::build(&entry, &out, &runtime);
+    assert!(built.is_ok(), "build failed: {:?}", built.err());
+
+    let outcome = crate::support::build_and_run_emitted("mutual_recursion", &out);
+    crate::support::assert_go_parity(
+        "mutual_recursion",
+        &repo_root()
+            .join("tests")
+            .join("golden")
+            .join("mutual_recursion"),
+        &outcome.stdout,
+    );
+    assert_eq!(outcome.exit_code, Some(0), "exit 0, matching the Go oracle");
+}

@@ -1,0 +1,184 @@
+//! `Ipe.Http` gate —
+//! `Http.parseQuery` (pure), `defaultRequest` + `with*` builder chain (pure),
+//! and `HttpResponse` record literal / field access (pure struct path).
+//!
+//! Every test compiles a Ipê program through `ipe`, builds the emitted Rust
+//! project with the shared cargo target, runs the binary, and checks its stdout
+//! against the cached oracle (`tests/golden/m5b_http_*/oracle.meta` +
+//! `expected_go.txt`). All tests are gated on `IPE_E2E=1`; without it they
+//! return early.
+//!
+//! ## Oracle provenance
+//!
+//! All three goldens are TRUE Go-parity goldens (`oracle_divergence = false`):
+//! the Go reference compiler compiled the identical `Main.ipe` and produced the
+//! captured `expected_go.txt`.  The test asserts byte-identity of stdout with
+//! the Go output.
+//!
+//! ## Golden catalogue
+//!
+//! * `http_parse_query` — `Http.parseQuery "a=1&b=two%20words&a=ignored&c"`
+//!   first-key-wins, percent-decodes, empty-value for key-only, sorted via
+//!   `Dict.toList`. Output: three `key=value` lines.
+//!
+//! * `http_builders` — `defaultRequest |> withMethod "POST" |> withTimeout
+//!   5000 |> withHeader "A" "1" |> withHeader "B" "2" |> withBody "hello"`.
+//!   Prints `.method`, `.url`, `.timeout`, `.body`, and `.headers` (comma-joined).
+//!   Confirms pure builder chain, record-update syntax, and that `withHeader`
+//!   prepends (latest-added first) matching the Go reference.
+//!
+//! * `http_response_fields` — constructs an `HttpResponse` literal
+//!   `{ status = 200, body = "ok", headers = Dict.fromList […] }`, reads back
+//!   `.status`, `.body`, and `Dict.get "X-Test"`. Proves the
+//!   `{body, headers, status}` fieldset synthesises correctly.
+//!
+//! Run:
+//!
+//! ```text
+//! IPE_E2E=1 cargo test golden_m5b_http
+//! ```
+
+use std::path::{Path, PathBuf};
+
+fn repo_root() -> PathBuf {
+    let joined = Path::new(env!("CARGO_MANIFEST_DIR")).join("..").join("..");
+    std::fs::canonicalize(&joined).unwrap_or(joined)
+}
+
+fn golden_dir(root: &Path, name: &str) -> PathBuf {
+    root.join("tests").join("golden").join(name)
+}
+
+/// Compile `tests/golden/<name>/Main.ipe` through ipe, build the emitted Rust
+/// project with the shared cargo target, run the binary, and return the golden
+/// directory plus the run outcome. Gated on `IPE_E2E=1`.
+fn build_run(name: &str) -> (PathBuf, crate::support::RunOutcome) {
+    let root = repo_root();
+    let dir = golden_dir(&root, name);
+    let entry = dir.join("Main.ipe");
+    let out = std::env::temp_dir().join(format!("ipec_{name}_e2e"));
+    let _ = std::fs::remove_dir_all(&out);
+
+    let runtime = ipe::resolve_runtime();
+    assert!(runtime.is_ok(), "runtime must resolve for E2E");
+    let Ok(runtime) = runtime else {
+        return (
+            dir,
+            crate::support::RunOutcome {
+                stdout: String::new(),
+                exit_code: None,
+            },
+        );
+    };
+    let built = ipe::build(&entry, &out, &runtime);
+    assert!(built.is_ok(), "build failed for {name}: {:?}", built.err());
+
+    let outcome = crate::support::build_and_run_emitted(name, &out);
+    (dir, outcome)
+}
+
+/// Compile/build/run the golden and assert its stdout matches the cached Go
+/// oracle. Gated on `IPE_E2E=1`.
+fn assert_runs_and_matches_oracle(name: &str) {
+    if std::env::var("IPE_E2E").is_err() {
+        return;
+    }
+    let (dir, outcome) = build_run(name);
+    crate::support::assert_go_parity(name, &dir, &outcome.stdout);
+    assert_eq!(outcome.exit_code, Some(0), "{name}: must exit 0");
+}
+
+// ── Http.parseQuery ───────────────────────────────────────────────────────────
+
+/// `Http.parseQuery "a=1&b=two%20words&a=ignored&c"` — first-key-wins,
+/// percent-decodes spaces, empty-value for bare key.  Output: 3 `key=value`
+/// lines (sorted by `Dict.toList`).  Go-parity oracle.
+#[test]
+fn http_parse_query() {
+    assert_runs_and_matches_oracle("http_parse_query");
+}
+
+// ── Http builder chain ────────────────────────────────────────────────────────
+
+/// `defaultRequest |> withMethod |> withTimeout |> withHeader "A" |> withHeader
+/// "B" |> withBody` chain prints 5 lines.  `withHeader` prepends (B before A).
+/// Go-parity oracle.
+#[test]
+fn http_builders() {
+    assert_runs_and_matches_oracle("http_builders");
+}
+
+// ── HttpResponse record literal + field access ────────────────────────────────
+
+/// Construct `{ status = 200, body = "ok", headers = Dict.fromList […] }`
+/// and read back fields.  Proves the `{body, headers, status}` fieldset
+/// synthesises and that `Dict.get` inside `.headers` resolves.  Go-parity
+/// oracle.
+#[test]
+fn http_response_fields() {
+    assert_runs_and_matches_oracle("http_response_fields");
+}
+
+// ── `HttpRequest` opaque-type regression (no signature ever spells the
+// ── fieldset out) ─────────────────────────────────────────────────────────
+
+/// IPE-I0001 regression: `Http.defaultRequest url` builds an `HttpRequest`
+/// whose ONLY consumer is a field read (`req.url`) — no `Http.request` call,
+/// and no OTHER function signature in the program spells out the
+/// `{body, followRedirects, headers, maxRedirects, method, timeout, url}`
+/// fieldset as an explicit annotation.
+///
+/// Root cause: `ipe_lower::lower::ir_type_from_ty` folds any solved record
+/// matching that exact 7-field shape into the opaque `IrType::HttpRequest`
+/// (so `Http.request` / `HttpStream.open` call sites see the runtime type),
+/// regardless of what the value's OTHER consumers do. But
+/// `emit_http_builder_call`'s `HttpDefaultRequest` arm must NOT look up a
+/// backend-SYNTHESISED struct via `record_struct_by_key` to build the struct
+/// literal — such a struct is only registered when some signature
+/// independently carries the same fieldset as a plain (non-opaque) record
+/// (e.g. `http_builders`'s explicitly-annotated `printReq` parameter).
+/// With no such signature anywhere in the program, no struct is
+/// registered and the lookup raises IPE-I0001, even though the value's
+/// runtime type is correctly known throughout. So the arm emits
+/// `ipe_runtime::HttpRequest { ... }` directly — the fixed, canonical name —
+/// instead of resolving a name through the record-shape registry.
+///
+/// This is the default-gate (emit-only, no `IPE_E2E`) companion to
+/// `http_response_fields` above: it needs only `ipe::build` to succeed and
+/// inspects the emitted Rust text, so it runs without a cargo build and
+/// cannot be silently reintroduced without failing `cargo nextest` (unlike
+/// the `IPE_E2E`-gated golden, which is invisible to the default gate).
+#[test]
+fn http_default_request_emits_without_signature_consumer() {
+    let root = repo_root();
+    let entry = golden_dir(&root, "http_response_fields").join("Main.ipe");
+    let out = std::env::temp_dir().join("ipec_m5b_http_default_request_no_sig_emit");
+    let _ = std::fs::remove_dir_all(&out);
+
+    let Ok(runtime) = ipe::resolve_runtime() else {
+        // Mirrors the byte goldens' resolve dependency — skip rather than
+        // false-fail when the runtime dir can't be resolved in this
+        // environment.
+        return;
+    };
+
+    let built = ipe::build(&entry, &out, &runtime);
+    assert!(
+        built.is_ok(),
+        "ipe build must succeed for a HttpRequest built via \
+         Http.defaultRequest whose only consumer is a field read (no \
+         Http.request call, no signature spelling out the fieldset); \
+         got: {:?}",
+        built.err()
+    );
+
+    let main_rs = std::fs::read_to_string(out.join("src").join("main.rs"))
+        .expect("emitted src/main.rs must exist");
+    assert!(
+        main_rs.contains("ipe_runtime::HttpRequest {"),
+        "Http.defaultRequest must construct the canonical \
+         `ipe_runtime::HttpRequest` struct directly, not a backend-\
+         synthesised record struct resolved through `record_struct_by_key`.\n\
+         --- src/main.rs ---\n{main_rs}"
+    );
+}
