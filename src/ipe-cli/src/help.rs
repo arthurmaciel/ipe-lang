@@ -244,10 +244,12 @@ const COMMANDS: &[Command] = &[
     },
     Command {
         name: "package",
-        summary: "Audit a package against the Tier-1 quality gate, or publish it to the index.",
-        args: "<audit|publish> [<path>]",
-        args_desc: "The subcommand (audit or publish) and the project directory or ipe.toml \
-                    (defaults to the current project).",
+        summary: "Audit a package against the Tier-1 quality gate, publish it to the index, or \
+                  validate an index entry file.",
+        args: "<audit|publish|validate-entry> [<path>]",
+        args_desc: "The subcommand and its path: audit/publish take the project directory or \
+                    ipe.toml (defaults to the current project); validate-entry takes a \
+                    packages/<name>.toml index entry file.",
         options: &[
             Opt {
                 flag: "[--index <dir|repo>]",
