@@ -21,6 +21,8 @@
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
+mod support;
+
 // ===========================================================================
 // CLI-level: pure-Ipê skip (Tier-1 still gates) + native-bearing fail-closed
 // ===========================================================================
@@ -46,19 +48,14 @@ fn empty_index(tag: &str) -> PathBuf {
     dir
 }
 
-fn repo_root() -> PathBuf {
-    let joined = Path::new(env!("CARGO_MANIFEST_DIR")).join("..").join("..");
-    std::fs::canonicalize(&joined).unwrap_or(joined)
-}
-
 fn run_audit(pkg: &Path, index: &Path) -> (bool, String, String) {
-    let out = Command::new(env!("CARGO_BIN_EXE_ipe"))
+    let out = Command::new(support::ipe_bin())
         .arg("package")
         .arg("audit")
         .arg(pkg)
         .arg("--index")
         .arg(index)
-        .current_dir(repo_root())
+        .current_dir(support::repo_root())
         .output()
         .expect("run ipe package audit");
     (
@@ -180,7 +177,7 @@ mod real_jail {
     static JAIL_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
     fn fixture_path() -> PathBuf {
-        let base = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../tests/fixtures/admission");
+        let base = super::support::manifest_dir().join("../../tests/fixtures/admission");
         // The wrapper is platform-native: `.ps1` on Windows (the jail runs it via
         // `powershell.exe -File`, no shell), `.sh` elsewhere.
         #[cfg(target_os = "windows")]

@@ -14,6 +14,8 @@
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
+mod support;
+
 /// A fresh, unique temp package directory with a `src/` subdir.
 fn temp_pkg(tag: &str) -> PathBuf {
     let dir = std::env::temp_dir().join(format!(
@@ -35,23 +37,16 @@ fn write_package(pkg: &Path, manifest: &str, main: &str) {
     std::fs::write(pkg.join("src").join("Main.ipe"), main).expect("write Main.ipe");
 }
 
-/// The workspace root (two levels up from this crate's manifest) — the CWD the
-/// audit runs from so `resolve_runtime` finds the in-repo runtime tree.
-fn repo_root() -> PathBuf {
-    let joined = Path::new(env!("CARGO_MANIFEST_DIR")).join("..").join("..");
-    std::fs::canonicalize(&joined).unwrap_or(joined)
-}
-
 /// Run `ipe package audit <pkg>` with an isolated (empty) index directory unless
 /// `index` overrides it, returning `(success, stdout, stderr)`.
 fn run_audit(pkg: &Path, index: &Path) -> (bool, String, String) {
-    let out = Command::new(env!("CARGO_BIN_EXE_ipe"))
+    let out = Command::new(support::ipe_bin())
         .arg("package")
         .arg("audit")
         .arg(pkg)
         .arg("--index")
         .arg(index)
-        .current_dir(repo_root())
+        .current_dir(support::repo_root())
         .output()
         .expect("run ipe package audit");
     (

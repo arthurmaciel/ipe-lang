@@ -29,19 +29,51 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
+/// This crate's manifest directory, resolved so it stays correct when a test
+/// binary runs from a `nextest archive` on a different machine than the one that
+/// compiled it.
+///
+/// `env!("CARGO_MANIFEST_DIR")` bakes the BUILD machine's absolute path at
+/// compile time; under `cargo nextest run --archive-file … --workspace-remap .`
+/// the run happens on a separate runner where that baked path does not exist.
+/// Nextest re-exports `CARGO_MANIFEST_DIR` in the runtime environment, re-rooted
+/// to the remapped checkout, so read it at runtime and fall back to the baked
+/// value for a plain (non-archive) `cargo test`/`nextest` run, which sets no such
+/// runtime variable.
+#[must_use]
+#[allow(dead_code)] // adopted file-by-file as tests migrate to the shared helper
+pub fn manifest_dir() -> PathBuf {
+    std::env::var_os("CARGO_MANIFEST_DIR")
+        .map_or_else(|| PathBuf::from(env!("CARGO_MANIFEST_DIR")), PathBuf::from)
+}
+
+/// Absolute path to the built `ipe` binary, archive-safe for the same reason as
+/// [`manifest_dir`].
+///
+/// `env!("CARGO_BIN_EXE_ipe")` points at the build machine's `target/`, which a
+/// separate `nextest archive` runner does not have. Nextest re-exports
+/// `CARGO_BIN_EXE_ipe` at runtime pointing at the extracted binary; read that,
+/// falling back to the baked path for a plain (non-archive) run.
+#[must_use]
+#[allow(dead_code)] // adopted file-by-file as tests migrate to the shared helper
+pub fn ipe_bin() -> PathBuf {
+    std::env::var_os("CARGO_BIN_EXE_ipe")
+        .map_or_else(|| PathBuf::from(env!("CARGO_BIN_EXE_ipe")), PathBuf::from)
+}
+
 /// The `ipe-lang` workspace root (two levels up from this crate's manifest).
 ///
 /// Shared so every golden test resolves the golden tree the same way, rather
-/// than each file carrying its own hand-rolled duplicate. Canonicalises the
-/// `../..` join so downstream path comparisons see a normalised absolute path;
-/// if canonicalisation fails (e.g. a component does not exist), the
-/// un-normalised join is returned unchanged — the directory the tests read
-/// always exists in a checked-out tree, so the fallback is never the green
-/// path.
+/// than each file carrying its own hand-rolled duplicate. Derived from
+/// [`manifest_dir`] so it is archive-safe. Canonicalises the `../..` join so
+/// downstream path comparisons see a normalised absolute path; if
+/// canonicalisation fails (e.g. a component does not exist), the un-normalised
+/// join is returned unchanged — the directory the tests read always exists in a
+/// checked-out tree, so the fallback is never the green path.
 #[must_use]
 #[allow(dead_code)] // adopted file-by-file as goldens migrate to the shared helper
 pub fn repo_root() -> PathBuf {
-    let joined = Path::new(env!("CARGO_MANIFEST_DIR")).join("..").join("..");
+    let joined = manifest_dir().join("..").join("..");
     std::fs::canonicalize(&joined).unwrap_or(joined)
 }
 
