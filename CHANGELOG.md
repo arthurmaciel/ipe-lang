@@ -10,6 +10,24 @@ Entries below the header are maintained by
 section is generated from Conventional Commit messages and prepended when the
 standing release pull request is merged.
 
+## [0.1.30](https://github.com/arthurmaciel/ipe-lang/compare/ipe-v0.1.29...ipe-v0.1.30) (2026-07-31)
+
+
+### Features
+
+* **backend:** gate reqwest + http_client behind actual HTTP-client usage ([#466](https://github.com/arthurmaciel/ipe-lang/issues/466)) ([#474](https://github.com/arthurmaciel/ipe-lang/issues/474)) ([544566c](https://github.com/arthurmaciel/ipe-lang/commit/544566c30ad1bbded0dec71977025daef882fe4a))
+* **cli:** human-friendly error when the Rust toolchain is missing ([#467](https://github.com/arthurmaciel/ipe-lang/issues/467)) ([#469](https://github.com/arthurmaciel/ipe-lang/issues/469)) ([c99aa0a](https://github.com/arthurmaciel/ipe-lang/commit/c99aa0a365bc2881f7e1ddf247dcb7e1d4f64ffe))
+* **lower:** per-module fresh-name allocation seeding (byte-identical) ([#279](https://github.com/arthurmaciel/ipe-lang/issues/279)) ([#468](https://github.com/arthurmaciel/ipe-lang/issues/468)) ([a973a94](https://github.com/arthurmaciel/ipe-lang/commit/a973a940657bebce2cbb825086855282d60caed8))
+* **playground:** replace build.sh with an Ipê build script and add an Ipê static server ([#477](https://github.com/arthurmaciel/ipe-lang/issues/477)) ([6639749](https://github.com/arthurmaciel/ipe-lang/commit/663974912b60d26e64f2dacf1b70ad5c97bb5a63))
+* **playground:** sandboxed server build+run, relocated into examples/ ([#317](https://github.com/arthurmaciel/ipe-lang/issues/317), closes [#465](https://github.com/arthurmaciel/ipe-lang/issues/465)) ([#472](https://github.com/arthurmaciel/ipe-lang/issues/472)) ([a6a8a7c](https://github.com/arthurmaciel/ipe-lang/commit/a6a8a7cdbdbaa3e3e6dc0365655c582b74c990ed))
+* **static:** aarch64 triple-aware C-compiler preflight + C-free CProfile axis ([#270](https://github.com/arthurmaciel/ipe-lang/issues/270)) ([#463](https://github.com/arthurmaciel/ipe-lang/issues/463)) ([8b4f81f](https://github.com/arthurmaciel/ipe-lang/commit/8b4f81f4a7c202dd2a94aada2d3a7a13bec8d841))
+
+
+### Bug Fixes
+
+* **sandbox:** gate the FreeBSD shell-quote helper off Windows so the Tier-2 build-jail crate compiles there ([#292](https://github.com/arthurmaciel/ipe-lang/issues/292)) ([#460](https://github.com/arthurmaciel/ipe-lang/issues/460)) ([ae52c01](https://github.com/arthurmaciel/ipe-lang/commit/ae52c0169f27a09f83a81b41b600e5046dd77558))
+* serve .wasm browser-noise files as application/wasm ([#476](https://github.com/arthurmaciel/ipe-lang/issues/476)) ([5fde088](https://github.com/arthurmaciel/ipe-lang/commit/5fde088e213331eed8e2ca177208142ae859a786))
+
 ## [0.1.29](https://github.com/arthurmaciel/ipe-lang/compare/ipe-v0.1.28...ipe-v0.1.29) (2026-07-31)
 
 
