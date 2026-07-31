@@ -608,6 +608,111 @@ pub fn emit_enum(ctx: &EmitCtx, def: &EnumDef) -> DResult<String> {
     // position. Empty for a non-generic enum.
     let scope = GenericScope::new(&def.type_params);
 
+    let (variants, arms) = emit_enum_variant_lines_and_arms(ctx, def, &name, scope)?;
+
+    let self_clone = ctx.enum_is_clone(&def.home, def.name);
+    // seal: an enum storing a function payload carries it on the `Arc<dyn Fn(..)
+    // -> Tn + Send + Sync + 'static>` (`SharedFun`) carrier; a trait object with
+    // a type-parameter in its param/return positions requires that parameter to
+    // outlive `'static`. Add `T: 'static` to every type parameter of such an
+    // enum (its decl clause AND the emitted impls' `for`-type clause) so the
+    // generic form type-checks; a monomorphic use (`Handler Int`, `T = i64`)
+    // satisfies it trivially. An enum with NO stored function (fully derivable)
+    // is unaffected — no `'static` bound, byte-identical to before.
+    let params_need_static = enum_stores_shared_fun(ctx, def);
+
+    // Generic clauses: `<T1, T2>` on the enum, `<T1: IpeStringify + Debug, …>` on
+    // the impl, `<T1, T2>` on the impl's `for` type. All empty when the enum is
+    // non-generic, so that path emits no generic clause.
+    let params: Vec<String> = (1..=def.type_params.len())
+        .map(|i| format!("T{i}"))
+        .collect();
+    // `: 'static` closes a BARE type parameter (`T1: 'static`); `+ 'static`
+    // extends an existing trait-bound list (`T1: IpeStringify + … + 'static`).
+    let decl_static = if params_need_static { ": 'static" } else { "" };
+    let bound_static = if params_need_static { " + 'static" } else { "" };
+    let (decl_clause, impl_bounds, use_clause) = if params.is_empty() {
+        (String::new(), String::new(), String::new())
+    } else {
+        let bounds: Vec<String> = params
+            .iter()
+            .map(|p| format!("{p}: IpeStringify + std::fmt::Debug{bound_static}"))
+            .collect();
+        let decl_params: Vec<String> = params.iter().map(|p| format!("{p}{decl_static}")).collect();
+        (
+            format!("<{}>", decl_params.join(", ")),
+            format!("<{}>", bounds.join(", ")),
+            format!("<{}>", params.join(", ")),
+        )
+    };
+
+    // seal: only a fully-derivable enum takes the unconditional
+    // `#[derive(Clone, Debug, PartialEq)]`. An enum whose payload reaches a
+    // first-class function / opaque wrapper (directly or through a carrier /
+    // another non-derivable enum) cannot derive those traits — emit no auto
+    // derives (the hand-written `IpeStringify` impl below still gives it a total
+    // string form).
+    let self_derivable = ctx.enum_is_derivable(&def.home, def.name);
+    // seal: the serde derive is gated on the SERDE predicate, not the CDPeq
+    // one. serde-support ⊊ CDPeq-support: a `Clone + Debug + PartialEq` enum whose
+    // payload reaches a `Html` / `Element` / `Color` / `UiPlain` value (serde-less
+    // but derivable) must NOT be forced to `serde::Serialize` / `Deserialize` —
+    // doing so under `uses_web` is an exit-0-then-cargo-fail (E0277). Such an enum
+    // still gets its `#[derive(Clone, Debug, PartialEq)]` (self_derivable), just
+    // without serde, so it stays cargo-buildable. `enum_is_serde ⇒ enum_is_derivable`
+    // (the serde fixpoint is a demotion of the derivable one), so serde is never
+    // added without CDPeq. The app-entry Model gate independently rejects a
+    // NON-serde type used AS a Web/Tui/WebView Model; this gate covers every OTHER
+    // (non-Model) emitted type in a Web program.
+    let self_serde = ctx.enum_is_serde(&def.home, def.name);
+    // When the program uses Ipe.Web, model types must implement serde traits
+    // so the session store can serialise/deserialise them. The live runtime
+    // requires `Model: serde::Serialize + serde::de::DeserializeOwned`.
+    let serde_derives = if self_serde && ctx.uses_web {
+        ", serde::Serialize, serde::Deserialize"
+    } else {
+        ""
+    };
+    let derive_prefix = if self_derivable {
+        format!("#[derive(Clone, Debug, PartialEq{serde_derives})]\n")
+    } else {
+        String::new()
+    };
+    let clone_impl = if self_clone && !self_derivable {
+        emit_enum_clone_impl(ctx, def, &name, &params, bound_static, &use_clause)?
+    } else {
+        String::new()
+    };
+    let ipe_impl_head = impl_header(&impl_bounds, "IpeStringify", &format!("{name}{use_clause}"));
+    Ok(format!(
+        "{derive_prefix}pub enum {name}{decl_clause} {{
+{variants}
+}}
+{clone_impl}{ipe_impl_head}
+    fn ipe_show(&self) -> String {{
+        match self {{
+{arms}
+        }}
+    }}
+}}
+"
+    ))
+}
+
+/// Emit an enum's variant declaration lines and its `ipe_show` match arms.
+///
+/// A nullary variant renders a bare ident and a `Name::V => "V".to_string()`
+/// arm; a payload variant renders `V(field types…)` (boxing a direct self-edge)
+/// and a `format!`-based arm binding `p0..pN`. A derivable field is stringified
+/// through the runtime autoref `Wrap(..).dispatch()`; a non-derivable payload (a
+/// function / opaque wrapper) is bound `_` and rendered as the `<fn>` placeholder
+/// (its `.dispatch()` would not resolve).
+fn emit_enum_variant_lines_and_arms(
+    ctx: &EmitCtx,
+    def: &EnumDef,
+    name: &str,
+    scope: GenericScope,
+) -> DResult<(String, String)> {
     let mut variant_lines = Vec::with_capacity(def.variants.len());
     let mut show_arms = Vec::with_capacity(def.variants.len());
     for variant in &def.variants {
@@ -672,75 +777,78 @@ pub fn emit_enum(ctx: &EmitCtx, def: &EnumDef) -> DResult<String> {
             ));
         }
     }
-    let variants = variant_lines.join("\n");
-    let arms = show_arms.join("\n");
+    Ok((variant_lines.join("\n"), show_arms.join("\n")))
+}
 
-    // Generic clauses: `<T1, T2>` on the enum, `<T1: IpeStringify + Debug, …>` on
-    // the impl, `<T1, T2>` on the impl's `for` type. All empty when the enum is
-    // non-generic, so that path emits no generic clause.
-    let params: Vec<String> = (1..=def.type_params.len())
-        .map(|i| format!("T{i}"))
-        .collect();
-    let (decl_clause, impl_bounds, use_clause) = if params.is_empty() {
-        (String::new(), String::new(), String::new())
+/// Emit the HAND-WRITTEN `impl Clone` for an enum that is `Clone` but NOT fully
+/// `CDPeq`-derivable — a payload on the `Arc<dyn Fn>` (`SharedFun`) carrier,
+/// which is `Clone` yet neither `Debug` nor `PartialEq`. The Phase-2 companion of
+/// the record `is_clone` tier.
+///
+/// Each arm reconstructs the variant, `.clone()`-ing every bound field (a nullary
+/// variant clones with no binders; a payload variant binds `p0..pN` and clones
+/// each — an `Arc::clone` refcount bump on every fn slot, a value clone on the
+/// rest). Without it, a function-carrying enum used in ANY `.clone()` position (a
+/// `Msg`, a duplicated binding) would be an `ipe`-0-then-cargo-fail `E0599`. A
+/// fully-derivable enum takes the auto derive instead, so the two Clone paths
+/// never both emit.
+fn emit_enum_clone_impl(
+    ctx: &EmitCtx,
+    def: &EnumDef,
+    name: &str,
+    params: &[String],
+    bound_static: &str,
+    use_clause: &str,
+) -> DResult<String> {
+    let clone_bounds = if params.is_empty() {
+        String::new()
     } else {
         let bounds: Vec<String> = params
             .iter()
-            .map(|p| format!("{p}: IpeStringify + std::fmt::Debug"))
+            .map(|p| format!("{p}: Clone{bound_static}"))
             .collect();
-        (
-            format!("<{}>", params.join(", ")),
-            format!("<{}>", bounds.join(", ")),
-            format!("<{}>", params.join(", ")),
-        )
+        format!("<{}>", bounds.join(", "))
     };
-
-    // seal: only a fully-derivable enum takes the unconditional
-    // `#[derive(Clone, Debug, PartialEq)]`. An enum whose payload reaches a
-    // first-class function / opaque wrapper (directly or through a carrier /
-    // another non-derivable enum) cannot derive those traits — emit no auto
-    // derives (the hand-written `IpeStringify` impl below still gives it a total
-    // string form).
-    let self_derivable = ctx.enum_is_derivable(&def.home, def.name);
-    // seal: the serde derive is gated on the SERDE predicate, not the CDPeq
-    // one. serde-support ⊊ CDPeq-support: a `Clone + Debug + PartialEq` enum whose
-    // payload reaches a `Html` / `Element` / `Color` / `UiPlain` value (serde-less
-    // but derivable) must NOT be forced to `serde::Serialize` / `Deserialize` —
-    // doing so under `uses_web` is an exit-0-then-cargo-fail (E0277). Such an enum
-    // still gets its `#[derive(Clone, Debug, PartialEq)]` (self_derivable), just
-    // without serde, so it stays cargo-buildable. `enum_is_serde ⇒ enum_is_derivable`
-    // (the serde fixpoint is a demotion of the derivable one), so serde is never
-    // added without CDPeq. The app-entry Model gate independently rejects a
-    // NON-serde type used AS a Web/Tui/WebView Model; this gate covers every OTHER
-    // (non-Model) emitted type in a Web program.
-    let self_serde = ctx.enum_is_serde(&def.home, def.name);
-    // When the program uses Ipe.Web, model types must implement serde traits
-    // so the session store can serialise/deserialise them. The live runtime
-    // requires `Model: serde::Serialize + serde::de::DeserializeOwned`.
-    let serde_derives = if self_serde && ctx.uses_web {
-        ", serde::Serialize, serde::Deserialize"
-    } else {
-        ""
-    };
-    let derive_prefix = if self_derivable {
-        format!("#[derive(Clone, Debug, PartialEq{serde_derives})]\n")
-    } else {
-        String::new()
-    };
-    let ipe_impl_head = impl_header(&impl_bounds, "IpeStringify", &format!("{name}{use_clause}"));
+    let mut clone_arms = Vec::with_capacity(def.variants.len());
+    for variant in &def.variants {
+        let vn = ctx.emit_ident(variant.name)?;
+        if variant.fields.is_empty() {
+            clone_arms.push(format!("            {name}::{vn} => {name}::{vn},"));
+        } else {
+            let binders: Vec<String> = (0..variant.fields.len()).map(|i| format!("p{i}")).collect();
+            let clones: Vec<String> = binders.iter().map(|b| format!("{b}.clone()")).collect();
+            clone_arms.push(format!(
+                "            {name}::{vn}({}) => {name}::{vn}({}),",
+                binders.join(", "),
+                clones.join(", ")
+            ));
+        }
+    }
+    let clone_head = impl_header(&clone_bounds, "Clone", &format!("{name}{use_clause}"));
     Ok(format!(
-        "{derive_prefix}pub enum {name}{decl_clause} {{
-{variants}
-}}
-{ipe_impl_head}
-    fn ipe_show(&self) -> String {{
+        "{clone_head}
+    fn clone(&self) -> Self {{
         match self {{
-{arms}
+{}
         }}
     }}
 }}
-"
+",
+        clone_arms.join("\n")
     ))
+}
+
+/// Does this enum store a function on the `Arc<dyn Fn(..) -> Tn + … + 'static>`
+/// (`SharedFun`) carrier — the one tier whose type parameters need a `'static`
+/// bound (a trait object with a type parameter in its param/return positions
+/// requires it)?
+///
+/// Recognised as "`Clone` but not derivable": a fully-derivable enum has no
+/// function payload, and a non-`Clone` enum stores a `Box<dyn Fn>` / opaque
+/// handle (still gated). Every enum outside that tier returns `false`, so its
+/// emitted decl clause is byte-identical to before.
+fn enum_stores_shared_fun(ctx: &EmitCtx, def: &EnumDef) -> bool {
+    ctx.enum_is_clone(&def.home, def.name) && !ctx.enum_is_derivable(&def.home, def.name)
 }
 
 /// A trait-impl header wrapped exactly as `rustfmt` would.
