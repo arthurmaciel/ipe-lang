@@ -10,6 +10,26 @@ Entries below the header are maintained by
 section is generated from Conventional Commit messages and prepended when the
 standing release pull request is merged.
 
+## [0.1.26](https://github.com/arthurmaciel/ipe-lang/compare/ipe-v0.1.25...ipe-v0.1.26) (2026-07-31)
+
+
+### Features
+
+* **canon:** move renderStatic to shape-neutral Ipe.Html ([#323](https://github.com/arthurmaciel/ipe-lang/issues/323)) ([#404](https://github.com/arthurmaciel/ipe-lang/issues/404)) ([6e9fbca](https://github.com/arthurmaciel/ipe-lang/commit/6e9fbca1fab61531acd189ba4fcfecccc54bdd6e))
+* **db:** typed SQL part 2 — mark the stringly row-read surface unsafe* ([#376](https://github.com/arthurmaciel/ipe-lang/issues/376)) ([#405](https://github.com/arthurmaciel/ipe-lang/issues/405)) ([9e8ef8f](https://github.com/arthurmaciel/ipe-lang/commit/9e8ef8fbdf329561a2ee6f9329f939c18bb44e78))
+* **ffi:** panic-boundary + fail-closed getter classification ([#396](https://github.com/arthurmaciel/ipe-lang/issues/396) pkg 1) ([#407](https://github.com/arthurmaciel/ipe-lang/issues/407)) ([7cb01fc](https://github.com/arthurmaciel/ipe-lang/commit/7cb01fcc53e88ff3e26a189c4b41ba5b723b16b6))
+* **ffi:** transparent-import decode side — inspector schema + classification + .ipei vocab ([#396](https://github.com/arthurmaciel/ipe-lang/issues/396)) ([#408](https://github.com/arthurmaciel/ipe-lang/issues/408)) ([d9d2bb3](https://github.com/arthurmaciel/ipe-lang/commit/d9d2bb37f8a042f4254aba8359ff372e3c36cb44))
+* **ffi:** transparent-import write-side cutover — record/union surface + conversion glue ([#396](https://github.com/arthurmaciel/ipe-lang/issues/396)) ([#414](https://github.com/arthurmaciel/ipe-lang/issues/414)) ([2c11ec5](https://github.com/arthurmaciel/ipe-lang/commit/2c11ec5710adcedbec1c6fea0d74d79d51c4fdc3))
+* **stdlib:** additive Elm coverage — Bitwise, Tuple, Random Generator ([#274](https://github.com/arthurmaciel/ipe-lang/issues/274)) ([#409](https://github.com/arthurmaciel/ipe-lang/issues/409)) ([795ee6f](https://github.com/arthurmaciel/ipe-lang/commit/795ee6fa942dd0406e2284feddb2559786b77d69))
+* **stdlib:** route hand-written String/Basics through their kernels ([#271](https://github.com/arthurmaciel/ipe-lang/issues/271)) ([#401](https://github.com/arthurmaciel/ipe-lang/issues/401)) ([437df51](https://github.com/arthurmaciel/ipe-lang/commit/437df5166e5f89dbed68fe0db6cdf371f899bc96))
+* **web:** onNavigate cfg field — URL navigation flows through update ([#393](https://github.com/arthurmaciel/ipe-lang/issues/393)) ([cefea5f](https://github.com/arthurmaciel/ipe-lang/commit/cefea5f8f65a9001cbebefe0d6cffdccab4af0b5))
+
+
+### Bug Fixes
+
+* **cli:** resolve project-root entry for capabilities and --emit-ir; friendlier check/explain defaults ([#411](https://github.com/arthurmaciel/ipe-lang/issues/411)) ([df699b1](https://github.com/arthurmaciel/ipe-lang/commit/df699b1bf48bc3b63dc33c47816157d16a6f24eb))
+* **ssrf:** correct stale module doc — guard is production-gated, not opt-in ([#403](https://github.com/arthurmaciel/ipe-lang/issues/403)) ([65e2258](https://github.com/arthurmaciel/ipe-lang/commit/65e22588058e0ed8b182c36a484b4e44ef0f872a))
+
 ## [0.1.25](https://github.com/arthurmaciel/ipe-lang/compare/ipe-v0.1.24...ipe-v0.1.25) (2026-07-30)
 
 
