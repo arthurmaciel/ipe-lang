@@ -727,11 +727,12 @@ pub fn emit_enum(ctx: &EmitCtx, def: &EnumDef) -> DResult<String> {
     } else {
         String::new()
     };
+    let ipe_impl_head = impl_header(&impl_bounds, "IpeStringify", &format!("{name}{use_clause}"));
     Ok(format!(
         "{derive_prefix}pub enum {name}{decl_clause} {{
 {variants}
 }}
-impl{impl_bounds} IpeStringify for {name}{use_clause} {{
+{ipe_impl_head}
     fn ipe_show(&self) -> String {{
         match self {{
 {arms}
@@ -740,6 +741,22 @@ impl{impl_bounds} IpeStringify for {name}{use_clause} {{
 }}
 "
     ))
+}
+
+/// A trait-impl header wrapped exactly as `rustfmt` would.
+///
+/// `impl<..> Trait for Type {` stays on one line while it fits the 100-column
+/// max width. When it overflows, the trait stays on the first line, `for Type`
+/// drops to a continuation line indented four columns, and the opening brace
+/// moves to its own line. These impls are emitted at module scope (column
+/// zero), so the width test needs no indent offset.
+fn impl_header(bounds: &str, trait_name: &str, ty: &str) -> String {
+    let one_line = format!("impl{bounds} {trait_name} for {ty} {{");
+    if one_line.len() <= 100 {
+        one_line
+    } else {
+        format!("impl{bounds} {trait_name}\n    for {ty}\n{{")
+    }
 }
 
 /// Emit a synthesised record struct and its derived `IpeStringify` impl,
@@ -883,8 +900,14 @@ pub fn emit_record_struct(ctx: &EmitCtx, rec: &RecordStruct) -> DResult<String> 
                 format!("            {ident}: self.{ident}.clone(),")
             })
             .collect();
+        let impl_clone_bounds = if params.is_empty() {
+            String::new()
+        } else {
+            format!("<{}>", params.join(", "))
+        };
+        let clone_head = impl_header(&impl_clone_bounds, "Clone", &format!("{name}{use_clause}"));
         format!(
-            "impl{impl_clone_bounds} Clone for {name}{use_clause} {{
+            "{clone_head}
     fn clone(&self) -> Self {{
         Self {{
 {}
@@ -893,20 +916,16 @@ pub fn emit_record_struct(ctx: &EmitCtx, rec: &RecordStruct) -> DResult<String> 
 }}
 ",
             field_clones.join("\n"),
-            impl_clone_bounds = if params.is_empty() {
-                String::new()
-            } else {
-                format!("<{}>", params.join(", "))
-            },
         )
     } else {
         String::new()
     };
+    let ipe_impl_head = impl_header(&impl_bounds, "IpeStringify", &format!("{name}{use_clause}"));
     Ok(format!(
         "{derive_prefix}pub struct {name}{decl_clause} {{
 {fields_block}
 }}
-{clone_impl}impl{impl_bounds} IpeStringify for {name}{use_clause} {{
+{clone_impl}{ipe_impl_head}
     fn ipe_show(&self) -> String {{
         {body}
     }}
