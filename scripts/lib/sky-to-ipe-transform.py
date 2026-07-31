@@ -281,6 +281,27 @@ def rehome_cmd_sub(text: str, shape: str) -> str:
 # Each entry: source module -> (target module path, target import alias, moved
 # member names). Longest-prefix concerns don't apply — a member move keys off the
 # whole module qualifier, not a dotted prefix.
+# `Sky.Core.Pure` has no Ipê counterpart: its members are point-free companions
+# of arity-0 effect kernels, and Ipê registers those kernels directly at
+# `() -> Task Error a`, so `Pure.foo ()` desugars to the canonical kernel form
+# `<Module>.<name> ()` — a different destination module AND a different member
+# name per companion. That is neither a prefix rename (rename-map.tsv) nor a
+# single-destination member move (MEMBER_MOVES), so it gets its own pass.
+#
+# member -> (canonical module path, import alias, canonical member name)
+PURE_DESUGAR: dict[str, tuple[str, str, str]] = {
+    "uuidV4": ("Ipe.Uuid", "Uuid", "v4"),
+    "uuidV7": ("Ipe.Uuid", "Uuid", "v7"),
+    "timeNow": ("Ipe.Time", "Time", "now"),
+    "timeUnixMillis": ("Ipe.Time", "Time", "unixMillis"),
+    "systemArgs": ("Ipe.System", "System", "args"),
+    "systemCwd": ("Ipe.System", "System", "cwd"),
+    "systemLoadEnv": ("Ipe.System", "System", "loadEnv"),
+    "ioReadLine": ("Ipe.Io", "Io", "readLine"),
+    "dbConnect": ("Ipe.Db", "Db", "connect"),
+}
+
+
 MEMBER_MOVES: dict[str, tuple[str, str, frozenset[str]]] = {
     "Std.Log": ("Ipe.Io", "Io", frozenset({"println", "eprintln"})),
 }
@@ -372,6 +393,95 @@ def apply_member_moves(text: str) -> str:
                 text = _retarget_alias_import(text, src_mod, dst_mod, dst_alias)
                 text = _rewrite_calls(text, alias_name, dst_alias, members)
     return text
+
+
+def desugar_pure(text: str) -> str:
+    """Rewrite `Sky.Core.Pure` companions to their canonical kernel form.
+
+    `import Sky.Core.Pure as <A>` + `<A>.<member> …` become the canonical
+    `<Module>.<name> …` per `PURE_DESUGAR`: the `Pure` import is replaced by the
+    (deduplicated) canonical-module imports actually used, and every call site is
+    requalified and renamed. Runs while the qualifier is still `Sky.Core.Pure`,
+    before the prefix rename. A file that imports `Pure` under a plain (aliasless)
+    `import Sky.Core.Pure exposing (…)` is handled the same way, with the exposed
+    members reached bare.
+    """
+    src_mod = "Sky.Core.Pure"
+    alias: str | None = None
+    exposing: frozenset[str] | None = None
+    import_indent = ""
+    has_import = False
+    for line in text.split("\n"):
+        stripped = line.lstrip()
+        if stripped.startswith("import ") and _import_module(stripped) == src_mod:
+            rest = stripped[len("import ") :]
+            alias = _import_alias(rest)
+            exposing = _exposing_names(rest)
+            import_indent = line[: len(line) - len(stripped)]
+            has_import = True
+            break
+    if not has_import:
+        return text
+
+    # Reach members via the alias (`Pure.foo`), or bare when `exposing (...)`.
+    src_alias = alias if alias is not None else ""
+    used_modules: list[tuple[str, str]] = []
+
+    def on_code(seg: str) -> str:
+        out: list[str] = []
+        i = 0
+        n = len(seg)
+        while i < n:
+            left_ok = i == 0 or not (seg[i - 1].isalnum() or seg[i - 1] == "_")
+            matched = False
+            if left_ok:
+                for member, (mod, dst_alias, name) in PURE_DESUGAR.items():
+                    tok = f"{src_alias}.{member}" if src_alias else member
+                    end = i + len(tok)
+                    right = seg[end] if end < n else ""
+                    if seg.startswith(tok, i) and not (right.isalnum() or right in ("_", ".")):
+                        out.append(f"{dst_alias}.{name}")
+                        if (mod, dst_alias) not in used_modules:
+                            used_modules.append((mod, dst_alias))
+                        i = end
+                        matched = True
+                        break
+            if not matched:
+                out.append(seg[i])
+                i += 1
+        return "".join(out)
+
+    text = walk_code(text, on_code)
+
+    # Replace the `Pure` import line with the canonical imports it now needs,
+    # skipping any whose qualifier the file already provides. An import's
+    # qualifier is its `as` alias, else the module path's last segment — so a
+    # bare `import System` (later prefixed to `Ipe.System`) already covers the
+    # `System.*` call sites and no duplicate is added.
+    def qualifier_of(import_line: str) -> str:
+        stripped = import_line.lstrip()
+        rest = stripped[len("import ") :]
+        alias_of = _import_alias(rest)
+        if alias_of is not None:
+            return alias_of
+        return _import_module(stripped).rsplit(".", 1)[-1]
+
+    provided = {
+        qualifier_of(l) for l in text.split("\n") if l.lstrip().startswith("import ")
+    }
+    new_imports = [
+        f"{import_indent}import {mod} as {dst_alias}"
+        for (mod, dst_alias) in used_modules
+        if dst_alias not in provided
+    ]
+    out_lines: list[str] = []
+    for line in text.split("\n"):
+        stripped = line.lstrip()
+        if stripped.startswith("import ") and _import_module(stripped) == src_mod:
+            out_lines.extend(new_imports)
+        else:
+            out_lines.append(line)
+    return "\n".join(out_lines)
 
 
 def _import_module(stripped_import: str) -> str:
@@ -545,7 +655,8 @@ def main(argv: list[str]) -> int:
             text = fh.read()
         originals[path] = text
         transformed[path] = prefix_bare_imports(
-            drop_removed_imports(transform(apply_member_moves(text), pairs)), bare
+            drop_removed_imports(transform(apply_member_moves(desugar_pure(text)), pairs)),
+            bare,
         )
 
     # Phase 2 — shape-scoped Cmd/Sub re-home across the whole example. The shape

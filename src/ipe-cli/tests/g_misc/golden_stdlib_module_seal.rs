@@ -231,33 +231,32 @@ fn process_builds_and_runs() {
     seal_module("process", PROCESS_MAIN, "SEALED");
 }
 
-// ── Ipe.Pure — point-free Uuid kernel aliases ─────
-// The whole module failed to type-check because `uuidV4Kernel : Task Error
-// String` mis-annotated the `Uuid_v4` kernel (real scheme `() -> Task Error
-// String`). We only need it to RESOLVE + EMIT — a runtime UUID is nondeterministic
-// so we do not assert a concrete E2E stdout; we assert the program builds+runs
-// (exit 0) via a fixed printed marker.
+// ── Arity-0 effect kernel applied to unit ──────────────────────────────
+// An arity-0 kernel whose scheme is `() -> Task Error a` (e.g. `Uuid.v4`) is
+// called with an explicit `()`. We only need it to RESOLVE + EMIT — a runtime
+// UUID is nondeterministic so we do not assert a concrete E2E stdout; we assert
+// the program builds+runs (exit 0) via a fixed printed marker.
 
-const PURE_MAIN: &str = "module Main exposing (main)\n\
+const NULLARY_KERNEL_MAIN: &str = "module Main exposing (main)\n\
     import Ipe.Task as Task\n\
     import Ipe.Io as Io\n\
-    import Ipe.Pure as Pure\n\n\
+    import Ipe.Uuid as Uuid\n\n\
     genId : Task Error String\n\
-    genId = Pure.uuidV4 ()\n\n\
+    genId = Uuid.v4 ()\n\n\
     main =\n\
     \x20   let\n\
     \x20       _ = genId\n\
     \x20   in\n\
-    \x20   Io.println \"PURE_OK\"\n";
+    \x20   Io.println \"NULLARY_OK\"\n";
 
 #[test]
-fn pure_resolves_and_emits() {
-    let _ = compile_module_probe("pure", PURE_MAIN);
+fn nullary_kernel_resolves_and_emits() {
+    let _ = compile_module_probe("nullary_kernel", NULLARY_KERNEL_MAIN);
 }
 
 #[test]
-fn pure_builds_and_runs() {
-    seal_module("pure", PURE_MAIN, "PURE_OK");
+fn nullary_kernel_builds_and_runs() {
+    seal_module("nullary_kernel", NULLARY_KERNEL_MAIN, "NULLARY_OK");
 }
 
 // ── Ipe.Trace ──────────────────────────────────────────────────────────

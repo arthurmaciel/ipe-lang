@@ -13,6 +13,8 @@
 -- let-gen).
 module Ipe.ToString exposing (fromInt, fromFloat, fromBool)
 
+import Ipe.String as String
+
 
 fromInt : Int -> String
 fromInt n =
