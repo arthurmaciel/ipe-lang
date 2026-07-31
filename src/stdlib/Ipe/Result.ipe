@@ -110,16 +110,32 @@ andMap ra rfn =
         Err e -> Err e
 
 
+-- | `combine results` — collect a list of Results into a Result of list,
+-- preserving order and short-circuiting on the first `Err`.
+--
+-- `combineHelp` walks the input tail-recursively, prepending each `Ok`
+-- payload onto `acc` (reverse order) and returning the first `Err`
+-- immediately.  At the empty base it flips `acc` via `reverseHelp` for
+-- the final left-to-right output.  The helper is a tail call, so
+-- `Ipe.Build.TailCallOpt` lowers it to a loop and a very long input runs
+-- in constant native stack.
 combine results =
+    combineHelp results []
+
+
+combineHelp results acc =
     case results of
-        [] -> Ok []
+        [] -> Ok (reverseHelp acc [])
         (r :: rest) ->
             case r of
-                Ok x ->
-                    case combine rest of
-                        Ok xs -> Ok (x :: xs)
-                        Err e -> Err e
+                Ok x -> combineHelp rest (x :: acc)
                 Err e -> Err e
+
+
+reverseHelp list acc =
+    case list of
+        [] -> acc
+        (x :: rest) -> reverseHelp rest (x :: acc)
 
 
 toMaybe r =
