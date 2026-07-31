@@ -149,7 +149,7 @@ static WS_CLIENT_NEXT_ID: AtomicI64 = AtomicI64::new(1);
 /// still never echoes credentials. Total — no unwrap/index/panic.
 #[cfg(not(target_arch = "wasm32"))]
 fn redact_ws_url(url: &str) -> String {
-    if let Ok(mut u) = url::Url::parse(url) {
+    if let Ok(mut u) = ::url::Url::parse(url) {
         if !u.username().is_empty() || u.password().is_some() {
             // set_username/set_password return Err only for cannot-be-a-base URLs,
             // which can't reach here (they have no userinfo); ignore either way.

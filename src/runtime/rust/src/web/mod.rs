@@ -2685,6 +2685,9 @@ mod sse_reconnect_reconcile_tests {
 
     /// Build a `SessionEntry` seeded with `page`, plus the three boxed
     /// closures that the reconciliation block in `sse_handler` calls.
+    // The tuple names the exact set of collaborators the test drives; extracting
+    // a `type` alias for a single test helper would hide, not clarify, them.
+    #[allow(clippy::type_complexity)]
     fn make_session(
         page: TestPage,
     ) -> (
