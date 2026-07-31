@@ -10,6 +10,20 @@ Entries below the header are maintained by
 section is generated from Conventional Commit messages and prepended when the
 standing release pull request is merged.
 
+## [0.1.28](https://github.com/arthurmaciel/ipe-lang/compare/ipe-v0.1.27...ipe-v0.1.28) (2026-07-31)
+
+
+### Features
+
+* **ffi:** define-transparency unification — all-identity-carrier define types surface as records/unions through the transparent-import glue ([#427](https://github.com/arthurmaciel/ipe-lang/issues/427)) ([55933a6](https://github.com/arthurmaciel/ipe-lang/commit/55933a69d38d68bfd08fb1334aef5300e9b3d2a3))
+* **stdlib:** Ipe.Url.Parser routing patterns over the typed Url ([#399](https://github.com/arthurmaciel/ipe-lang/issues/399)) ([#425](https://github.com/arthurmaciel/ipe-lang/issues/425)) ([bcb132c](https://github.com/arthurmaciel/ipe-lang/commit/bcb132c558586ddcf1bd96110011cf1170382142))
+
+
+### Bug Fixes
+
+* **runtime,ui:** flow paragraph el children inline on the web backend ([#434](https://github.com/arthurmaciel/ipe-lang/issues/434)) ([3e724d3](https://github.com/arthurmaciel/ipe-lang/commit/3e724d3f7092bd297431d61c9bab8698690fbc6d))
+* **stdlib:** drop the Ipe.Pure band-aid; arity-0 effect kernels take () directly ([#429](https://github.com/arthurmaciel/ipe-lang/issues/429)) ([54fbc88](https://github.com/arthurmaciel/ipe-lang/commit/54fbc88297c44932787e59a3babf24b3dd4f7cfa))
+
 ## [0.1.27](https://github.com/arthurmaciel/ipe-lang/compare/ipe-v0.1.26...ipe-v0.1.27) (2026-07-31)
 
 
