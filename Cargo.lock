@@ -2191,7 +2191,9 @@ version = "0.1.28"
 dependencies = [
  "ipe_canon",
  "ipe_diagnostics",
+ "ipe_intern",
  "ipe_kernels",
+ "ipe_syntax",
  "proc-macro2",
  "serde",
  "serde_json",

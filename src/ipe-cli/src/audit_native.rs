@@ -152,13 +152,16 @@ impl TightenableAxis {
 
 /// Whether a package carries native code Tier-2 must confine.
 ///
-/// A package is native-bearing when it declares the `native-ffi` axis OR binds
-/// any `[rust.dependencies]` crate — either crosses into code whose true effect
-/// set inference cannot prove. A pure Ipê package (neither) is structurally
-/// bounded by inference and Tier-1 already proved it exactly; Tier-2 skips it.
+/// A package is native-bearing when it declares the `native-ffi` or `ffi-raw`
+/// axis OR binds any `[rust.dependencies]` crate — each crosses into code whose
+/// true effect set inference cannot prove. A pure Ipê package (none of these)
+/// is structurally bounded by inference and Tier-1 already proved it exactly;
+/// Tier-2 skips it.
 #[must_use]
 pub fn is_native_bearing(declared: &BTreeSet<Capability>, has_rust_deps: bool) -> bool {
-    has_rust_deps || declared.contains(&Capability::NativeFfi)
+    has_rust_deps
+        || declared.contains(&Capability::NativeFfi)
+        || declared.contains(&Capability::FfiRaw)
 }
 
 /// The wrapper-owned payload for one jailed probe run.

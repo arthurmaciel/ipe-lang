@@ -3128,6 +3128,8 @@ fn canonicalise_expr(e: &src::Expr, env: &Env, interner: &mut Interner) -> DResu
         src::Expr_::Call(f, args) => {
             if let Some(node) = canonicalise_foreign_call(f, args, span, env, interner)? {
                 node
+            } else if let Some(node) = canonicalise_asserted_call(f, args, span, env, interner)? {
+                node
             } else {
                 let callee = canonicalise_expr(f, env, interner)?;
                 let mut can_args = Vec::with_capacity(args.len());
@@ -3405,6 +3407,24 @@ fn resolve_qual_var(
     env: &Env,
     interner: &Interner,
 ) -> DResult<canon::Expr_> {
+    // A BARE `Rust.Ffi.call` (passed as a value, aliased, or partially built)
+    // reaches here because the applied form is rewritten before its callee
+    // resolves. There is no value for it to denote — the construct exists only
+    // fully applied to a literal path — so refuse it with the teachable
+    // IPE-N0038 instead of a no-such-member miss on `call`.
+    if env.origin == ModuleOrigin::User
+        && interner.resolve(qualifier) == Some(crate::asserted::ASSERTED_MODULE)
+        && interner.resolve(name) == Some("call")
+    {
+        return Err(Diagnostic::Name {
+            span,
+            msg: NameError::AssertedCallMalformed {
+                detail: "`Rust.Ffi.call` is not a value — it must be applied directly \
+                         to a string-literal Rust path"
+                    .into(),
+            },
+        });
+    }
     // Removed-surface gate (IPE-N0036): bindings intentionally dropped from
     // the Ipê surface are intercepted here before any catalog lookup, so the
     // user gets a clear migration diagnostic rather than "no such member".
@@ -4259,8 +4279,15 @@ fn canonicalise_foreign_call(
         return Ok(None);
     };
     let ffi_sym = interner.intern("Ffi")?;
+    // The `asserted` spelling is matched by RESOLVE, not intern: interning a
+    // symbol the module never spells would shift the deterministic interning
+    // sequence (and with it, golden byte identity) for every pre-existing
+    // FFI program. A module that does spell `Ffi.asserted` interned the word
+    // at parse, so resolve finds it.
     let binding_sym = interner.intern("binding")?;
-    if *qualifier != ffi_sym || *member != binding_sym {
+    let member_is_binding = *member == binding_sym;
+    let asserted = interner.resolve(*member) == Some("asserted");
+    if *qualifier != ffi_sym || (!member_is_binding && !asserted) {
         return Ok(None);
     }
     let malformed = |detail: String| Diagnostic::CompilerBug {
@@ -4292,7 +4319,94 @@ fn canonicalise_foreign_call(
     Ok(Some(canon::Expr_::ForeignCall {
         ident: interner.intern(ident)?,
         args: can_args,
+        asserted,
     }))
+}
+
+/// Recognise a USER-module `Rust.Ffi.call "<crate>::<fn>"` application and
+/// rewrite it to a reference to the driver-generated definition in the
+/// `Rust.Ffi` interface module (see [`crate::asserted`]).
+///
+/// The rewrite never mints a [`canon::Expr_::ForeignCall`] — that stays
+/// exclusive to [`ModuleOrigin::FfiInterface`] bodies. It only re-points the
+/// call at the generated forwarder, which ordinary qualified-name resolution
+/// (import gate included) then resolves; the forwarder's annotation is the
+/// author's asserted signature, so type checking proceeds normally.
+///
+/// Returns `Ok(None)` when the callee is not `Rust.Ffi.call` in a
+/// [`ModuleOrigin::User`] module.
+///
+/// # Errors
+/// [`NameError::AssertedCallMalformed`] (IPE-N0038) for a non-literal path
+/// argument, an invalid path, or a path the build driver generated no
+/// forwarder for (the site the driver's scan refused, or a compile path with
+/// no FFI preparation).
+fn canonicalise_asserted_call(
+    callee: &src::Expr,
+    args: &[src::Expr],
+    span: Span,
+    env: &Env,
+    interner: &mut Interner,
+) -> DResult<Option<canon::Expr_>> {
+    if env.origin != ModuleOrigin::User {
+        return Ok(None);
+    }
+    let src::Expr_::VarQual(qualifier, member) = &callee.value else {
+        return Ok(None);
+    };
+    // Matched by RESOLVE, never intern: this runs for every call expression
+    // in every user module, and interning a symbol the module never spells
+    // would shift the deterministic interning sequence (golden byte
+    // identity). A module that does spell `Rust.Ffi.call` interned both
+    // symbols at parse.
+    if interner.resolve(*qualifier) != Some(crate::asserted::ASSERTED_MODULE)
+        || interner.resolve(*member) != Some("call")
+    {
+        return Ok(None);
+    }
+    let malformed = |detail: String| Diagnostic::Name {
+        span,
+        msg: NameError::AssertedCallMalformed {
+            detail: detail.into_boxed_str(),
+        },
+    };
+    let Some((path_expr, value_args)) = args.split_first() else {
+        return Err(malformed(
+            "it is applied to no arguments — the first argument must be the \
+             string-literal Rust path"
+                .to_owned(),
+        ));
+    };
+    let src::Expr_::Str(raw_path) = &path_expr.value else {
+        return Err(malformed(
+            "the path must be a string literal, never a computed value".to_owned(),
+        ));
+    };
+    let path = crate::asserted::AssertedPath::parse(raw_path).map_err(&malformed)?;
+    let def_sym = interner.intern(&path.def_name())?;
+    // The generated module is imported as `import Rust.Ffi` (unaliased), which
+    // registers it under its LAST path segment like every dep import — so the
+    // rewritten reference resolves through the `Ffi` qualifier even though the
+    // surface spelling is the full `Rust.Ffi.call`.
+    let ffi_qualifier = interner.intern("Ffi")?;
+    let target = resolve_qual_var(ffi_qualifier, def_sym, span, env, interner).map_err(|_| {
+        malformed(format!(
+            "no asserted binding exists for `{raw_path}` — an asserted call needs \
+             `import Rust.Ffi` (unaliased), the target crate installed via `ipe rust \
+             add`, and a top-level annotated definition whose whole body is this call"
+        ))
+    })?;
+    if value_args.is_empty() {
+        return Ok(Some(target));
+    }
+    let mut can_args = Vec::with_capacity(value_args.len());
+    for a in value_args {
+        can_args.push(canonicalise_expr(a, env, interner)?);
+    }
+    Ok(Some(canon::Expr_::Call(
+        Box::new(ipe_diagnostics::Located::new(callee.span, target)),
+        can_args,
+    )))
 }
 
 /// Recognise a Stage-4 kernel-alias binding and resolve it against the kernel

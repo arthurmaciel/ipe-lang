@@ -2874,7 +2874,11 @@ fn build_source_graph(entry: &Path) -> Result<SourceGraph, CliError> {
     let mut collected = collect_entry_and_siblings(entry)?;
     let injected =
         project::inject_compiled_std_closure(&mut collected.sources, &mut collected.discovered);
-    let ffi_injected = std::collections::BTreeSet::new();
+    // The SAME FFI seam the build runs: without it, a project with installed
+    // crates (or asserted `Rust.Ffi.call` definitions) has no `Rust.*`
+    // interface modules here, so `ipe check` / `ipe capabilities` /
+    // `--emit-ir` would refuse a program the build accepts.
+    let ffi_injected = ffi::prepare_ffi(&mut collected.sources, entry)?.injected;
 
     let db = ipe_db::IpeDatabase::new();
     let source_root = create_source_root(&db, &collected.sources, &injected, &ffi_injected);
@@ -3515,7 +3519,11 @@ pub fn infer_package_capabilities(
     // lowers standalone here instead of failing name resolution (which, since a
     // failing entry surfaces its real diagnostic, would otherwise abort build).
     let injected = project::inject_compiled_std_closure(&mut sources, &mut discovered);
-    let ffi_injected = std::collections::BTreeSet::new();
+    // Inject the FFI interface modules (installed crates + the asserted-call
+    // `Rust.Ffi` module) exactly as the build does, so an FFI-using module
+    // lowers here and its `native-ffi`/`ffi-raw` capabilities are inferred
+    // rather than the whole module being skipped on a resolve failure.
+    let ffi_injected = ffi::prepare_ffi(&mut sources, manifest_path)?.injected;
     let mut inferred: std::collections::BTreeSet<ipe_ir::Capability> =
         std::collections::BTreeSet::new();
     let mut any_lowered = false;
@@ -3972,7 +3980,7 @@ mod tests {
         let index = code_index();
         let lines = index.lines().count();
         assert_eq!(lines, ALL_CODES.len(), "one line per code");
-        assert_eq!(ALL_CODES.len(), 114, "taxonomy is 114 codes");
+        assert_eq!(ALL_CODES.len(), 116, "taxonomy is 116 codes");
         assert!(
             index.contains("IPE-T0001  type mismatch"),
             "index pairs code with title"
