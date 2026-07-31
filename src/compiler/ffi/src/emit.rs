@@ -10,6 +10,7 @@
 use std::collections::BTreeSet;
 
 use crate::pkginfo::{Effect, Fallibility, FeatureName, FnInfo, Param, PkgInfo};
+use crate::transparency::{ForeignVariantPayload, TransparentType};
 
 /// Map a foreign Rust type string to its Ipê type, used only when the
 /// inspector supplied no `ipeType` override.
@@ -198,6 +199,54 @@ pub fn opaque_names_in(sig: &str, out: &mut BTreeSet<String>) {
         let starts_upper = token.chars().next().is_some_and(char::is_uppercase);
         if starts_upper && !crate::naming::IPE_BUILTIN_HEADS.contains(&token) {
             out.insert(token.to_owned());
+        }
+    }
+}
+
+/// Render one transparent foreign type's Ipê declaration — the record /
+/// closed-union vocabulary of the representation axis.
+///
+/// A transparent struct declares a record alias over its members' carrier
+/// surfaces; a transparent enum declares a closed union whose constructors
+/// take their payload carriers positionally (a struct-variant's member NAMES
+/// stay in the catalog for the conversion glue — the Ipê constructor surface
+/// is positional, mirroring how Ipê union constructors apply).
+///
+/// Not yet consumed by [`emit_ipei`] or the interface emitter: the interface
+/// artifacts and the wrapper glue cut over to the transparent representation
+/// TOGETHER, so no artifact ever declares a record the wrappers still treat
+/// as an opaque handle.
+#[must_use]
+pub fn transparent_type_decl(t: &TransparentType) -> String {
+    match t {
+        TransparentType::Struct { name, fields, .. } => {
+            let parts: Vec<String> = fields
+                .iter()
+                .map(|f| format!("{} : {}", f.name, f.carrier.ipe_surface()))
+                .collect();
+            format!("type alias {name} = {{ {} }}", parts.join(", "))
+        }
+        TransparentType::Enum { name, variants, .. } => {
+            let arms: Vec<String> = variants
+                .iter()
+                .map(|v| {
+                    let args: Vec<&str> = match &v.payload {
+                        ForeignVariantPayload::Unit => Vec::new(),
+                        ForeignVariantPayload::Tuple(carriers) => {
+                            carriers.iter().map(|c| c.ipe_surface()).collect()
+                        }
+                        ForeignVariantPayload::Struct(members) => {
+                            members.iter().map(|m| m.carrier.ipe_surface()).collect()
+                        }
+                    };
+                    if args.is_empty() {
+                        v.name.as_str().to_owned()
+                    } else {
+                        format!("{} {}", v.name, args.join(" "))
+                    }
+                })
+                .collect();
+            format!("type {name} = {}", arms.join(" | "))
         }
     }
 }
@@ -436,6 +485,55 @@ mod tests {
         assert_eq!(
             wrapper_ipe_signature(f),
             "Widget -> Result Error (Int, Widget)"
+        );
+    }
+
+    #[test]
+    fn transparent_type_decls_render_the_record_and_union_vocabulary() {
+        let pkg = PkgInfo::decode_json(
+            &serde_json::json!({
+                "pkg": "tm",
+                "name": "tm",
+                "version": "0.1.0",
+                "functions": [],
+                "errors": [],
+                "types": [
+                    {"name": "Point", "rustPath": "tm::Point", "kind": "struct",
+                     "fields": [
+                        {"name": "x", "type": "Int", "rustType": "i64"},
+                        {"name": "y", "type": "Float", "rustType": "f64"}
+                     ]},
+                    {"name": "Shade", "rustPath": "tm::Shade", "kind": "enum",
+                     "variants": [
+                        {"name": "On", "kind": "unit"},
+                        {"name": "Level", "kind": "tuple",
+                         "members": [{"name": "0", "type": "Int", "rustType": "i64"}]},
+                        {"name": "Mix", "kind": "struct",
+                         "members": [
+                            {"name": "amount", "type": "Int", "rustType": "i64"},
+                            {"name": "label", "type": "String", "rustType": "String"}
+                         ]}
+                     ]}
+                ]
+            })
+            .to_string(),
+        )
+        .expect("decodes");
+        let decls: Vec<String> = pkg
+            .foreign_types()
+            .transparent()
+            .values()
+            .map(transparent_type_decl)
+            .collect();
+        assert_eq!(
+            decls,
+            vec![
+                "type alias Point = { x : Int, y : Float }".to_owned(),
+                // A struct-variant's payload surfaces positionally, in
+                // declaration order; the member names stay in the catalog for
+                // the conversion glue.
+                "type Shade = On | Level Int | Mix Int String".to_owned(),
+            ]
         );
     }
 
