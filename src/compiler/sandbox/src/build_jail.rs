@@ -747,7 +747,15 @@ pub(crate) fn find_in_path(bin: &str) -> Option<PathBuf> {
 /// metacharacters — is literal, so the recovered word is byte-for-byte the
 /// original. Operates on raw bytes so a non-UTF-8 path token round-trips losslessly.
 /// Compiled under `test` on any Unix host so the round-trip is provable off FreeBSD.
-#[cfg(any(target_os = "freebsd", test))]
+///
+/// The gate is `all(unix, test)`, not a bare `test`: the body uses the Unix-only
+/// `std::os::unix::ffi` byte views (`OsStrExt::as_bytes` / `OsStringExt::from_vec`),
+/// which do not exist on Windows. Its only real caller is the FreeBSD `jail(8)`
+/// `command=` builder, so it is never needed off Unix; compiling it under `test` on
+/// a Windows host (where the sandbox crate's own build-jail test harness is built,
+/// for the Windows Tier-2 proof) would fail to compile — the gate keeps the FreeBSD
+/// shell helper off the one platform that can neither use nor build it.
+#[cfg(any(target_os = "freebsd", all(unix, test)))]
 fn shell_quote_token(tok: &std::ffi::OsStr) -> std::ffi::OsString {
     use std::os::unix::ffi::{OsStrExt as _, OsStringExt as _};
 
@@ -1456,6 +1464,13 @@ mod tests {
         }
     }
 
+    // Gated `unix`: it exercises `shell_quote_token` (only compiled on Unix under
+    // test) via the Unix-only `std::os::unix::ffi` byte views, so it compiles and
+    // runs on Linux/macOS/FreeBSD (proving the FreeBSD `command=` round-trip off
+    // FreeBSD) but is absent on Windows, where neither the helper nor the byte APIs
+    // exist. Windows Tier-2 confinement is proven by the Windows-specific tests
+    // above, not by this FreeBSD-shell round-trip.
+    #[cfg(unix)]
     #[test]
     fn shell_quoting_survives_jail_command_resplit_intact() {
         use std::ffi::OsString;
