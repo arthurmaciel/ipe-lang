@@ -338,6 +338,7 @@ impl std::error::Error for CliError {}
 // bounded by the three-`String` variants such as `HashMismatch`); this
 // assertion fails the build if a future variant reintroduces the bloat rather
 // than boxing its payload.
+// IPE-RUST-AUDIT:ACCEPTED (Arthur Maciel) — compile-time `const` assertion (not a runtime panic); it fails the build if a future `CliError` variant exceeds the size bound rather than boxing its payload [ledger #boundary]
 const _: () = assert!(std::mem::size_of::<CliError>() <= 96);
 
 /// Options modifying a build beyond plain source compilation — some (the

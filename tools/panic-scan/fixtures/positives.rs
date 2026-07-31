@@ -32,3 +32,26 @@ fn f26() {
     o.
     unwrap(); //@HIT
 }
+
+// A cfg whose predicate does NOT guarantee test-only compilation is production
+// code and MUST still be flagged — the test exemption is precise, not a hole.
+
+// `any(test, …)` also compiles when the other operand holds without `test`.
+#[cfg(any(test, feature = "x"))]
+fn f27() { panic!("compiles in prod under feature x"); } //@HIT
+
+// `not(test)` is production-only.
+#[cfg(not(test))]
+fn f28() { let _ = o.unwrap(); } //@HIT
+
+// `feature = "testing"` merely contains the substring `test`; it is not the
+// `test` cfg.
+#[cfg(feature = "testing")]
+fn f29() { assert_eq!(a, b); } //@HIT
+
+// A test-only attribute on a BRACELESS item (a `const`/`use` with no body brace)
+// must not let the skip flag reach the next sibling's brace body: the production
+// `panic!` below the braceless test const MUST still be flagged.
+#[cfg(test)]
+const TEST_ONLY_K: u32 = 1;
+fn f30() { panic!("sibling of a braceless test item — still production"); } //@HIT
