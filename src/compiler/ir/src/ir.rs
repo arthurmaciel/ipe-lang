@@ -79,6 +79,20 @@ pub struct Module {
     /// append `pub mod server; pub use server::*; pub mod server_stream; pub use
     /// server_stream::*;` to the emitted `ipe_runtime/mod.rs`.
     pub uses_server: bool,
+    /// `true` when the lowerer detected at least one outbound `Ipe.Http` client
+    /// kernel call (`Http.get` / `post` / `request`, the pure request/method
+    /// builders, `Http.parseQuery`) — or a function signature mentioning
+    /// `HttpRequest` / `HttpMethod` — in the module.
+    ///
+    /// Set by `ipe_lower` when any call site resolves to a
+    /// `KernelFn::is_http_client()` variant (or a signature mentions an
+    /// `http_client`-owned opaque type). The backend reads this flag to decide
+    /// whether to declare `pub mod http_client; pub use http_client::*;` in the
+    /// emitted `ipe_runtime/mod.rs`, add the `reqwest` dependency, and keep the
+    /// `http_client` kernel-wrapper prelude bindings. The `url` crate stays
+    /// unconditional (it backs the always-present `Ipe.Url` and `ssrf`
+    /// surfaces), so only the reqwest HTTP stack is gated here.
+    pub uses_http: bool,
     /// `true` when the lowerer detected at least one `Ipe.Ui` / `Ipe.Html`
     /// kernel call (`Ui.layout`, `Ui.layoutWith`, `Html.render`, etc.) in the
     /// module's function bodies.
@@ -3648,6 +3662,7 @@ mod tests {
                 records: vec![],
                 uses_tea: false,
                 uses_server: false,
+                uses_http: false,
                 uses_ui: false,
                 uses_web: false,
                 uses_tui: false,
@@ -4144,6 +4159,7 @@ mod serde_persistence_tests {
                 records: vec![],
                 uses_tea: false,
                 uses_server: false,
+                uses_http: false,
                 uses_ui: false,
                 uses_web: false,
                 uses_tui: false,
@@ -4212,6 +4228,7 @@ mod serde_persistence_tests {
                 records: vec![],
                 uses_tea: false,
                 uses_server: false,
+                uses_http: false,
                 uses_ui: false,
                 uses_web: false,
                 uses_tui: false,
