@@ -17,7 +17,6 @@ import Ipe.List as List
 import Ipe.String as String
 import Ipe.Task as Task
 import Ipe.Time as Time
-import Ipe.Pure as Pure
 import Ipe.Error as Error exposing (Error)
 import Ipe.System
 import Ipe.Io as Io
@@ -38,7 +37,7 @@ main =
 
 entry : () -> Task Error ()
 entry _ =
-    Pure.systemArgs ()
+    System.args ()
         |> Task.andThen
                (\args ->
                    let

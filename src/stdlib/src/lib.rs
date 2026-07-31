@@ -369,19 +369,6 @@ const STD_UI_ANIMATION: &str = include_str!("../Ipe/Ui/Animation.ipe");
 /// Unblocks `00-standard-libs` (N0004: Ipe.Money).
 const STD_MONEY: &str = include_str!("../Ipe/Money.ipe");
 
-/// `Ipe.Pure` — uniform `() -> Task Error a` companion surface.
-///
-/// The point-free helpers `uuidV4`/`uuidV7` route through internal
-/// `Ffi.kernel "Uuid_v4"`/`"Uuid_v7"` aliases (resolved by the kernel-alias
-/// mechanism, `ipe_canon::resolve::detect_kernel_alias`).  ARITY-BLOCKED: the
-/// `uuidV4Kernel`/`uuidV7Kernel` helpers annotate an arity-0 `Task Error String`
-/// value over the arity-1 `Uuid_v4`/`Uuid_v7` kernels (`() -> Task Error String`),
-/// so they are rejected with IPE-T0001 at type-check until an
-/// arity-0-alias-of-nullary-effect-kernel lowering exists.  See
-/// `docs/divergences-from-sky.md` §B-FfiKernelAliasSealed.
-/// Not in `STDLIB_MODULE_QUALIFIERS` so disjointness invariant holds.
-const IPE_CORE_PURE: &str = include_str!("../Ipe/Pure.ipe");
-
 /// `Ipe.WebSocket` — outbound WebSocket client (compiled source).
 ///
 /// Defines 3 ADTs (`WebSocket`, `WebSocketMessage`, `CloseCode`) and routes its
@@ -568,10 +555,6 @@ pub const COMPILED_STD_MODULES: &[CompiledStdModule] = &[
     CompiledStdModule {
         dotted: "Ipe.Money",
         source: STD_MONEY,
-    },
-    CompiledStdModule {
-        dotted: "Ipe.Pure",
-        source: IPE_CORE_PURE,
     },
     CompiledStdModule {
         dotted: "Ipe.WebSocket",
