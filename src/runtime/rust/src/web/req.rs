@@ -11,7 +11,7 @@ use crate::dict::IpeDict;
 pub use crate::dom::req::WebReq;
 
 /// Build a `WebReq` from the incoming request parts + the matched route params.
-pub fn live_req(
+pub fn web_req(
     method: &axum::http::Method,
     uri: &axum::http::Uri,
     headers: &axum::http::HeaderMap,
@@ -53,7 +53,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn live_req_parses_headers_and_cookies() {
+    fn web_req_parses_headers_and_cookies() {
         let mut h = axum::http::HeaderMap::new();
         h.insert(
             axum::http::header::COOKIE,
@@ -61,7 +61,7 @@ mod tests {
         );
         h.insert("x-custom", "v".parse().unwrap());
         let uri: axum::http::Uri = "/apps/ipe?q=1".parse().unwrap();
-        let req = live_req(
+        let req = web_req(
             &axum::http::Method::GET,
             &uri,
             &h,

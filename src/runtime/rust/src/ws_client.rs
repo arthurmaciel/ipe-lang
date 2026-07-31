@@ -40,7 +40,7 @@ use tokio_tungstenite::tungstenite::Message;
 ///
 /// The backend emits this type AS the Ipê `WebSocketMessage` ADT (the enum decl
 /// is bridged, not user-emitted), so it must carry the same derives a real Ipê
-/// enum gets — `serde::{Serialize, Deserialize}` in particular, since a Live
+/// enum gets — `serde::{Serialize, Deserialize}` in particular, since a Web
 /// `Msg` variant like `GotFrame WebSocketMessage` is serialized to/from the
 /// session store and the wire.
 #[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]

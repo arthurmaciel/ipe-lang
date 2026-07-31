@@ -26,7 +26,7 @@ the *query* string, delegating to the shared `has_dangerous_css_pattern` +
 `css_unescape` re-scan pair `SafeCssValue` uses (same policy, new boundary). Fail
 mode is fail-closed drop: a poisoned query silently omits both markers, leaving
 the child intact, so the DOM shape stays stable (always a wrapper `<div>`) and
-the Live diff never sees a gate-dependent structural change.
+the Web diff never sees a gate-dependent structural change.
 
 Rejected alternatives:
 

@@ -2,12 +2,12 @@
 //!
 //! Go stores request header names in canonical MIME case
 //! (`textproto.CanonicalMIMEHeaderKey`: `content-type` -> `Content-Type`,
-//! `x-ipe-live` -> `X-Ipê-Live`) and `r.Header.Get` canonicalises the lookup
+//! `x-ipe-web` -> `X-Ipê-Web`) and `r.Header.Get` canonicalises the lookup
 //! key, so a handler asking for either `"content-type"` or `"Content-Type"`
 //! resolves. hyper/axum expose request header names lower-cased, so the Rust
 //! runtime must re-derive the canonical form at the request boundary and use it
 //! for both storage and lookup. This module is the single source of truth for
-//! that transformation so the Live request builder and the Server request
+//! that transformation so the Web request builder and the Server request
 //! builder + `Server.header` lookup can never drift to two divergent casings.
 
 /// Canonicalise a `-`-separated header name (`content-type` -> `Content-Type`).
@@ -92,7 +92,7 @@ mod tests {
             ("CONTENT-TYPE", "Content-Type"),
             ("Content-Type", "Content-Type"),
             ("x-forwarded-for", "X-Forwarded-For"),
-            ("x-ipe-live", "X-Ipe-Live"),
+            ("x-ipe-web", "X-Ipe-Web"),
             ("etag", "Etag"),
             ("www-authenticate", "Www-Authenticate"),
             ("host", "Host"),

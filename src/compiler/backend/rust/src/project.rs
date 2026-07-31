@@ -689,7 +689,7 @@ const RUNTIME_MOD_RS_TUI_APPEND: &str = "#[cfg(feature = \"tui\")]\npub mod tui;
 /// The `web` module must also be loaded (webview's real backend imports
 /// `ipe_runtime::web::dispatch::build_index` and `ipe_runtime::html::*`)
 /// — but `uses_web` is forced true when `uses_webview` is true
-/// (see `emit_program`), so `RUNTIME_MOD_RS_LIVE_APPEND` is already appended
+/// (see `emit_program`), so `RUNTIME_MOD_RS_WEB_APPEND` is already appended
 /// by the time this addition fires.
 const RUNTIME_MOD_RS_WEBVIEW_APPEND: &str = "#[cfg(feature = \"webview\")]\npub mod webview;\n\
      #[cfg(feature = \"webview\")]\npub use webview::{webview_app, WebViewWindowCfg};\n";
@@ -720,7 +720,7 @@ const RUNTIME_MOD_RS_WEBVIEW_APPEND: &str = "#[cfg(feature = \"webview\")]\npub 
 /// The `route` sub-module is referenced by path (`ipe_runtime::web::route::Route`)
 /// not via `pub use web::*;` (to avoid surfacing the internal `store` / `req`
 /// internals in the top-level namespace).
-const RUNTIME_MOD_RS_LIVE_APPEND: &str = "#[cfg(feature = \"web\")]\npub mod web;\n\
+const RUNTIME_MOD_RS_WEB_APPEND: &str = "#[cfg(feature = \"web\")]\npub mod web;\n\
      #[cfg(feature = \"web\")]\npub use web::{web_app, web_app_routed, web_render_static, sub_subscribe_topic, cmd_publish, cmd_publish_no_echo, pubsub_publish, pubsub_publish_no_echo, WebReq};\n";
 
 /// The `IpeCmd<M>` and `IpeSub<M>` project-level type aliases emitted when the
@@ -1224,7 +1224,7 @@ fn assemble_project_files(
         (CARGO_TOML.to_owned(), RUNTIME_CONFIG_RS.to_owned())
     };
     // Apply server manifest extension on top of whichever base was chosen above.
-    // Live also needs axum + tower-http (the live runtime uses axum
+    // Web also needs axum + tower-http (the web runtime uses axum
     // internally).  Apply server_cargo_toml for both `uses_server`, `uses_web`,
     // and `uses_webview` (Webview's real backend imports from the web module,
     // which uses axum; the function is idempotent when multiple flags are set).
@@ -1241,7 +1241,7 @@ fn assemble_project_files(
     // (for `build_index`) and `ipe_runtime::html::render_html` — both gated
     // behind the `web` feature. Force-promote `web` for Webview as well.
     let cargo_toml = if ctx.uses_web || ctx.uses_webview {
-        live_cargo_toml(&cargo_toml)?
+        web_cargo_toml(&cargo_toml)?
     } else {
         cargo_toml
     };
@@ -1362,7 +1362,7 @@ fn assemble_project_files(
         if ctx.uses_ui || ctx.uses_css || ctx.uses_tui || ctx.uses_web || ctx.uses_webview {
             mod_rs.push_str(RUNTIME_MOD_RS_CSS_APPEND);
         }
-        // Ipe.Ui / Ipe.Html render kernels (+ Tui + Live transitive dep).
+        // Ipe.Ui / Ipe.Html render kernels (+ Tui + Web transitive dep).
         // `live/mod.rs` unconditionally re-exports `crate::ipe_runtime::html::*`;
         // `live/style_inject.rs` imports `super::html` — so `html` must be
         // declared whenever live is enabled, even without explicit Ipe.Ui use.
@@ -1371,7 +1371,7 @@ fn assemble_project_files(
         }
         // Ipe.Web / Ipe.Web app-entry kernels.
         if ctx.uses_web || ctx.uses_webview {
-            mod_rs.push_str(RUNTIME_MOD_RS_LIVE_APPEND);
+            mod_rs.push_str(RUNTIME_MOD_RS_WEB_APPEND);
         }
         // Ipe.Tui / Ipe.Tui app-entry kernels.
         if ctx.uses_tui {
@@ -2088,7 +2088,7 @@ fn server_cargo_toml(base: &str) -> DResult<String> {
 ///
 /// Returns [`Diagnostic::CompilerBug`] if any anchor is absent — a
 /// golden-drift invariant violation.
-fn live_cargo_toml(base: &str) -> DResult<String> {
+fn web_cargo_toml(base: &str) -> DResult<String> {
     // All consts must precede the first `let` — `items_after_statements` (pedantic).
     const DEFAULT_PREFIX: &str = "default = [";
     const PROFILE_ANCHOR: &str = "[profile.dev]";
@@ -2107,7 +2107,7 @@ fn live_cargo_toml(base: &str) -> DResult<String> {
     // Transitive-closure invariant: the runtime's `live/store.rs` defines
     // `PostgresStore` gated on `#[cfg(feature = "db")]`, which uses `sqlx::PgPool`.
     // `sqlx::PgPool` requires the `postgres` sqlx feature.  When a program uses
-    // BOTH Db and Live, `db_cargo_toml` has already injected the sqlx dep with
+    // BOTH Db and Web, `db_cargo_toml` has already injected the sqlx dep with
     // `["runtime-tokio-rustls", "sqlite"]`; this step extends it with `"postgres"`
     // so that the `PostgresStore` code compiles.
     //
@@ -2115,7 +2115,7 @@ fn live_cargo_toml(base: &str) -> DResult<String> {
     // `db_cargo_toml` — `runtime-tokio-rustls` is a sqlx-specific feature, so
     // this pattern never collides with another dep's feature list.
     //
-    // Fail-open (no CompilerBug guard): when the program uses Live but NOT Db, the
+    // Fail-open (no CompilerBug guard): when the program uses Web but NOT Db, the
     // sqlx dep is absent from the manifest and the `replacen` is a no-op, which is
     // correct — a Web-only program does not need the `postgres` feature.
     const SQLX_SQLITE_FEATURES: &str = "features = [\"runtime-tokio-rustls\", \"sqlite\"]";
@@ -2125,7 +2125,7 @@ fn live_cargo_toml(base: &str) -> DResult<String> {
     // `serde_urlencoded` is NOT appended here: it is an unconditional base
     // manifest dep now (`dom/form.rs` is always vendored). `libc` is NOT
     // appended either — see the note above.
-    let live_deps = format!(
+    let web_deps = format!(
         "{} = \"{}\"\n\n",
         crate_specs::ASYNC_TRAIT.name,
         crate_specs::ASYNC_TRAIT.version,
@@ -2135,7 +2135,7 @@ fn live_cargo_toml(base: &str) -> DResult<String> {
     let pfx = base
         .find(DEFAULT_PREFIX)
         .ok_or_else(|| Diagnostic::CompilerBug {
-            where_: "ipe_backend_rust::project::live_cargo_toml",
+            where_: "ipe_backend_rust::project::web_cargo_toml",
             detail: format!("Cargo.toml anchor {DEFAULT_PREFIX:?} not found — golden drifted"),
         })?;
     let search_from = pfx + DEFAULT_PREFIX.len();
@@ -2143,7 +2143,7 @@ fn live_cargo_toml(base: &str) -> DResult<String> {
         .get(search_from..)
         .and_then(|s| s.find(']'))
         .ok_or_else(|| Diagnostic::CompilerBug {
-            where_: "ipe_backend_rust::project::live_cargo_toml",
+            where_: "ipe_backend_rust::project::web_cargo_toml",
             detail: "default feature list has no closing ']' — golden drifted".to_owned(),
         })?;
     let close = search_from + rel;
@@ -2159,7 +2159,7 @@ fn live_cargo_toml(base: &str) -> DResult<String> {
     let step1_tokio = step1.replace(TOKIO_NET_SYNC_FEATURES, TOKIO_LIVE_FEATURES);
     if step1_tokio == step1 {
         return Err(Diagnostic::CompilerBug {
-            where_: "ipe_backend_rust::project::live_cargo_toml",
+            where_: "ipe_backend_rust::project::web_cargo_toml",
             detail: format!(
                 "tokio features anchor {TOKIO_NET_SYNC_FEATURES:?} not found — golden drifted; \
                  the live runtime requires the tokio signal + process features"
@@ -2172,16 +2172,16 @@ fn live_cargo_toml(base: &str) -> DResult<String> {
     let anchor_pos = step1
         .find(PROFILE_ANCHOR)
         .ok_or_else(|| Diagnostic::CompilerBug {
-            where_: "ipe_backend_rust::project::live_cargo_toml",
+            where_: "ipe_backend_rust::project::web_cargo_toml",
             detail: format!("Cargo.toml anchor {PROFILE_ANCHOR:?} not found — golden drifted"),
         })?;
-    let mut result = String::with_capacity(step1.len() + live_deps.len());
+    let mut result = String::with_capacity(step1.len() + web_deps.len());
     result.push_str(step1.get(..anchor_pos).unwrap_or(""));
-    result.push_str(&live_deps);
+    result.push_str(&web_deps);
     result.push_str(step1.get(anchor_pos..).unwrap_or(""));
 
     // Step 3 — extend the sqlx dep with the `postgres` feature when the
-    // program also uses Db (db_cargo_toml ran before live_cargo_toml and
+    // program also uses Db (db_cargo_toml ran before web_cargo_toml and
     // injected the sqlite-only sqlx dep; we promote it here so the live
     // session-store's `PostgresStore` — which references `sqlx::PgPool` — can
     // compile).  No-op when sqlx is absent (Web-only, no Db).
@@ -2217,7 +2217,7 @@ fn tui_cargo_toml(base: &str) -> DResult<String> {
     //
     // The tui runtime uses `tokio::sync::mpsc`; add `"sync"` when it is not
     // yet present.  The base golden has only `"time"` in the tokio feature list;
-    // server_cargo_toml adds `"net", "sync"`; live_cargo_toml extends to include
+    // server_cargo_toml adds `"net", "sync"`; web_cargo_toml extends to include
     // `"signal", "process"`.  We gate on the SMALLEST known form that lacks
     // `"sync"` and replace it with the tui-extended form.  If `"sync"` is
     // already present (because server_cargo_toml ran first) the replacen is a
@@ -2244,7 +2244,7 @@ fn tui_cargo_toml(base: &str) -> DResult<String> {
     );
 
     // Step 1 — promote the `tui` feature (generic closing-`]` anchor, same
-    // strategy as server_cargo_toml / live_cargo_toml).
+    // strategy as server_cargo_toml / web_cargo_toml).
     let pfx = base
         .find(DEFAULT_PREFIX)
         .ok_or_else(|| Diagnostic::CompilerBug {
@@ -2267,7 +2267,7 @@ fn tui_cargo_toml(base: &str) -> DResult<String> {
 
     // Step 2 — add `"sync"` to tokio if not already present.
     // If the manifest already has `"sync"` (from server_cargo_toml or
-    // live_cargo_toml) the `contains` check short-circuits and no change is
+    // web_cargo_toml) the `contains` check short-circuits and no change is
     // made.  Only when the base tokio line lacks `"sync"` do we replace the
     // known-anchor form (non-server base) with the sync-extended form.
     let step2 = if step1.contains(r#""sync""#) {
@@ -2310,7 +2310,7 @@ fn tui_cargo_toml(base: &str) -> DResult<String> {
 ///    `tao` (changes it to `webview = ["dep:wry", "dep:tao"]`).
 /// 3. Appending `wry` and `tao` as optional dependencies before `[profile.dev]`.
 ///
-/// Called AFTER `server_cargo_toml` and `live_cargo_toml` so the live feature
+/// Called AFTER `server_cargo_toml` and `web_cargo_toml` so the live feature
 /// (which the webview backend imports from) is already promoted.
 ///
 /// # Errors
@@ -2817,8 +2817,8 @@ impl {sf} {{
 mod tests {
     use super::{
         CARGO_TOML, RUNTIME_CONFIG_RS_DB_POSTGRES, RUNTIME_CONFIG_RS_DB_SQLITE,
-        RUNTIME_MOD_RS_LIVE_APPEND, db_cargo_toml, live_cargo_toml, server_cargo_toml,
-        shake_ffi_by_fn_ident,
+        RUNTIME_MOD_RS_WEB_APPEND, db_cargo_toml, server_cargo_toml, shake_ffi_by_fn_ident,
+        web_cargo_toml,
     };
     use crate::DbDriver;
     use crate::crate_specs;
@@ -2923,9 +2923,9 @@ mod tests {
         );
     }
 
-    // ── seal tests: Db+Live closure ─────────────────────────────────────
+    // ── seal tests: Db+Web closure ─────────────────────────────────────
 
-    /// `live_cargo_toml` on a DB+Server base manifest must extend the sqlx dep
+    /// `web_cargo_toml` on a DB+Server base manifest must extend the sqlx dep
     /// with the `"postgres"` feature.
     ///
     /// Root cause: `live/store.rs`'s `PostgresStore` references `sqlx::PgPool`
@@ -2936,20 +2936,20 @@ mod tests {
     /// `PgPool::connect`).
     ///
     /// Note: in `emit_program` the call chain is always
-    /// `db_cargo_toml → server_cargo_toml → live_cargo_toml` when a program
-    /// uses Db AND Live. `live_cargo_toml` expects the tokio `"net"/"sync"`
+    /// `db_cargo_toml → server_cargo_toml → web_cargo_toml` when a program
+    /// uses Db AND Web. `web_cargo_toml` expects the tokio `"net"/"sync"`
     /// features already present from `server_cargo_toml`, so the test must mirror
     /// that composition order.
     #[test]
-    fn live_db_toml_includes_postgres() {
+    fn web_db_toml_includes_postgres() {
         let db_base = db_cargo_toml(crate::DbDriver::Sqlite).expect("db_cargo_toml must succeed");
-        // server_cargo_toml always runs before live_cargo_toml when uses_web is
+        // server_cargo_toml always runs before web_cargo_toml when uses_web is
         // true (see emit_program).  It adds the tokio net+sync features that
-        // live_cargo_toml's anchor requires.
+        // web_cargo_toml's anchor requires.
         let server_base =
             server_cargo_toml(&db_base).expect("server_cargo_toml on db base must succeed");
         let out =
-            live_cargo_toml(&server_base).expect("live_cargo_toml on db+server base must succeed");
+            web_cargo_toml(&server_base).expect("web_cargo_toml on db+server base must succeed");
         // The sqlx line must carry the postgres feature.
         let sqlx_line = out
             .lines()
@@ -2975,13 +2975,12 @@ mod tests {
         );
     }
 
-    /// `live_cargo_toml` on a WEB-ONLY (non-db) base manifest must NOT add a
+    /// `web_cargo_toml` on a WEB-ONLY (non-db) base manifest must NOT add a
     /// postgres dep (no sqlx line exists, no-op replace).
     #[test]
-    fn live_only_toml_no_postgres() {
+    fn web_only_toml_no_postgres() {
         let server_base = server_cargo_toml(CARGO_TOML).expect("server_cargo_toml must succeed");
-        let out =
-            live_cargo_toml(&server_base).expect("live_cargo_toml on non-db base must succeed");
+        let out = web_cargo_toml(&server_base).expect("web_cargo_toml on non-db base must succeed");
         assert!(
             !out.contains("\"postgres\""),
             "a Web-only (no Db) manifest must NOT contain the postgres feature: {out}"
@@ -2990,15 +2989,14 @@ mod tests {
 
     /// A live/web manifest must declare `libc` exactly once. The base template
     /// already declares it under `[target.'cfg(unix)'.dependencies]` (the
-    /// `Io.readSecret` termios path); `live_cargo_toml` must not add a second
+    /// `Io.readSecret` termios path); `web_cargo_toml` must not add a second
     /// `libc` line, which would be a duplicate-key TOML error that fails
     /// `cargo build` for any program that is both a live/web shape and pulls the
     /// readSecret prelude.
     #[test]
-    fn live_toml_declares_libc_once() {
+    fn web_toml_declares_libc_once() {
         let server_base = server_cargo_toml(CARGO_TOML).expect("server_cargo_toml must succeed");
-        let out =
-            live_cargo_toml(&server_base).expect("live_cargo_toml on non-db base must succeed");
+        let out = web_cargo_toml(&server_base).expect("web_cargo_toml on non-db base must succeed");
         let libc_lines = out
             .lines()
             .filter(|l| {
@@ -3009,7 +3007,7 @@ mod tests {
         assert_eq!(
             libc_lines, 1,
             "a live/web manifest must declare `libc` exactly once (base template \
-             cfg(unix) dep + no duplicate from live_cargo_toml):\n{out}"
+             cfg(unix) dep + no duplicate from web_cargo_toml):\n{out}"
         );
     }
 
@@ -3076,7 +3074,7 @@ mod tests {
         assert!(RUNTIME_CONFIG_RS_DB_POSTGRES.contains("id BIGSERIAL PRIMARY KEY"));
     }
 
-    /// `RUNTIME_MOD_RS_LIVE_APPEND` must re-export `WebReq` from the `web`
+    /// `RUNTIME_MOD_RS_WEB_APPEND` must re-export `WebReq` from the `web`
     /// module.
     ///
     /// Root cause: `db.rs` has `#[cfg(feature = "web")] impl IpeRow for
@@ -3085,39 +3083,39 @@ mod tests {
     /// (via `web/mod.rs`'s `pub use req::*;`).  The emitted project uses a
     /// selective export list; without `WebReq` a Db+Web program fails with E0412.
     #[test]
-    fn live_mod_rs_exports_live_req() {
+    fn web_mod_rs_exports_web_req() {
         assert!(
-            RUNTIME_MOD_RS_LIVE_APPEND.contains("WebReq"),
-            "RUNTIME_MOD_RS_LIVE_APPEND must re-export WebReq from the web module (E0412 fix): \
-             {RUNTIME_MOD_RS_LIVE_APPEND}"
+            RUNTIME_MOD_RS_WEB_APPEND.contains("WebReq"),
+            "RUNTIME_MOD_RS_WEB_APPEND must re-export WebReq from the web module (E0412 fix): \
+             {RUNTIME_MOD_RS_WEB_APPEND}"
         );
     }
 
-    /// `RUNTIME_MOD_RS_LIVE_APPEND` must re-export `cmd_publish`,
+    /// `RUNTIME_MOD_RS_WEB_APPEND` must re-export `cmd_publish`,
     /// `cmd_publish_no_echo`, `pubsub_publish`, and `pubsub_publish_no_echo` so
     /// that emitted call sites resolve.  Without this the emitted project fails
     /// with E0425 — a seal violation.
     #[test]
-    fn live_mod_rs_exports_cmd_publish_fns() {
+    fn web_mod_rs_exports_cmd_publish_fns() {
         assert!(
-            RUNTIME_MOD_RS_LIVE_APPEND.contains("cmd_publish"),
-            "RUNTIME_MOD_RS_LIVE_APPEND must re-export cmd_publish (E0425 fix): \
-             {RUNTIME_MOD_RS_LIVE_APPEND}"
+            RUNTIME_MOD_RS_WEB_APPEND.contains("cmd_publish"),
+            "RUNTIME_MOD_RS_WEB_APPEND must re-export cmd_publish (E0425 fix): \
+             {RUNTIME_MOD_RS_WEB_APPEND}"
         );
         assert!(
-            RUNTIME_MOD_RS_LIVE_APPEND.contains("cmd_publish_no_echo"),
-            "RUNTIME_MOD_RS_LIVE_APPEND must re-export cmd_publish_no_echo (E0425 fix): \
-             {RUNTIME_MOD_RS_LIVE_APPEND}"
+            RUNTIME_MOD_RS_WEB_APPEND.contains("cmd_publish_no_echo"),
+            "RUNTIME_MOD_RS_WEB_APPEND must re-export cmd_publish_no_echo (E0425 fix): \
+             {RUNTIME_MOD_RS_WEB_APPEND}"
         );
         assert!(
-            RUNTIME_MOD_RS_LIVE_APPEND.contains("pubsub_publish"),
-            "RUNTIME_MOD_RS_LIVE_APPEND must re-export pubsub_publish (E0425 fix, #215): \
-             {RUNTIME_MOD_RS_LIVE_APPEND}"
+            RUNTIME_MOD_RS_WEB_APPEND.contains("pubsub_publish"),
+            "RUNTIME_MOD_RS_WEB_APPEND must re-export pubsub_publish (E0425 fix, #215): \
+             {RUNTIME_MOD_RS_WEB_APPEND}"
         );
         assert!(
-            RUNTIME_MOD_RS_LIVE_APPEND.contains("pubsub_publish_no_echo"),
-            "RUNTIME_MOD_RS_LIVE_APPEND must re-export pubsub_publish_no_echo (E0425 fix, #215): \
-             {RUNTIME_MOD_RS_LIVE_APPEND}"
+            RUNTIME_MOD_RS_WEB_APPEND.contains("pubsub_publish_no_echo"),
+            "RUNTIME_MOD_RS_WEB_APPEND must re-export pubsub_publish_no_echo (E0425 fix, #215): \
+             {RUNTIME_MOD_RS_WEB_APPEND}"
         );
     }
 

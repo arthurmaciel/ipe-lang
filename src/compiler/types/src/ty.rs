@@ -8,7 +8,7 @@
 //!   narrowed to the supported lattice: functions, type-constructor
 //!   applications, and unit; no records / tuples / aliases / super-types yet).
 //!
-//! # Open records (`RoutedLiveApp` / row-poly)
+//! # Open records (`RoutedWebApp` / row-poly)
 //!
 //! Row-polymorphic records mirror `../ipe`'s `TRecord (Map …) (Maybe var)` /
 //! `Record1 map var` / `EmptyRecord1`.

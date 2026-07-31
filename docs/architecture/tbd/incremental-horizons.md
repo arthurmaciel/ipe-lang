@@ -238,7 +238,7 @@ loop in the project (sweep latency). Recommended for the phased plan.
    only then. This is what "hot reload" in the Elm lineage actually means,
    and no dynamic-code hole opens: the new binary passed the full pipeline
    and the strict-CSP / no-`eval` posture is untouched.
-2. **Instance swap on the wasm target.** The playground / `Ipe.Live` path
+2. **Instance swap on the wasm target.** The playground / `Ipe.Web` path
    already replaces whole artifacts; a wasm module instance swap with state
    handoff is the same restart pattern with faster process mechanics.
 3. **Native function patching** (dylib-per-decl, jump-table indirection,

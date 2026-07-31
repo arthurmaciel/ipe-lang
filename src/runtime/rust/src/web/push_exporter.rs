@@ -62,7 +62,7 @@ static SENDER: OnceLock<mpsc::Sender<Entry>> = OnceLock::new();
 
 /// Enable the push exporter from env. No-op unless `IPE_PARENT_URL` is set
 /// (i.e. this process runs as a sub-app pushing UP to its parent's ingest —
-/// federation). Idempotent. Call once at Live boot.
+/// federation). Idempotent. Call once at Web boot.
 ///
 /// Secrets-in-transit: `enable` (below) sends `IPE_INGEST_TOKEN` as a header
 /// on every push. A misconfigured `http://` parent URL would leak that token

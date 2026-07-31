@@ -43,7 +43,7 @@ use sha2::{Digest, Sha256};
 use crate::EmitCtx;
 
 /// Wire-format epoch. Must equal the runtime's
-/// `ipe_runtime::live::store::LIVE_MODEL_SCHEMA_WIRE_VERSION`; bumped ONLY
+/// `ipe_runtime::web::store::WEB_MODEL_SCHEMA_WIRE_VERSION`; bumped ONLY
 /// when the tag framing / blob encoding itself changes shape (the
 /// `KEY_TAG`-style domain-separation convention), never for a Model change —
 /// the Model's own shape is covered by the structural hash.
@@ -668,7 +668,7 @@ mod tests {
     }
 
     /// Epoch drift tripwire (the `crate_specs_match_manifests` convention):
-    /// the runtime's `LIVE_MODEL_SCHEMA_WIRE_VERSION` declaration must carry
+    /// the runtime's `WEB_MODEL_SCHEMA_WIRE_VERSION` declaration must carry
     /// the SAME epoch string as this module's `WIRE_EPOCH` — the two crates
     /// share no dependency edge, so this source-level check is what keeps
     /// the pairing honest.
@@ -679,12 +679,12 @@ mod tests {
         let text = std::fs::read_to_string(&path)
             .expect("wire-epoch drift guard: cannot read runtime web/store.rs");
         let needle = format!(
-            "pub const LIVE_MODEL_SCHEMA_WIRE_VERSION: &str = \"{}\";",
+            "pub const WEB_MODEL_SCHEMA_WIRE_VERSION: &str = \"{}\";",
             super::WIRE_EPOCH
         );
         assert!(
             text.contains(&needle),
-            "runtime LIVE_MODEL_SCHEMA_WIRE_VERSION must equal the backend's \
+            "runtime WEB_MODEL_SCHEMA_WIRE_VERSION must equal the backend's \
              WIRE_EPOCH ({:?}) — bump BOTH or neither",
             super::WIRE_EPOCH
         );

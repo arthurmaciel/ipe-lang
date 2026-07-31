@@ -356,7 +356,7 @@ impl<'a> SafeCssSelector<'a> {
 
 /// A validated CSS media-query condition string (`Ui.mediaQuery` /
 /// `Ui.breakpoint` — the text spliced into `@media <query> {` inside a raw
-/// `<style>` body by `live::style_inject::build_mq`).
+/// `<style>` body by `web::style_inject::build_mq`).
 ///
 /// Deliberately a DISTINCT boundary type from [`SafeCssSelector`]: the
 /// selector allowlist blocks `<` outright, but Media Queries Level 4 range

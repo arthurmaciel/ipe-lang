@@ -9,7 +9,7 @@
 //! silently choose the single-page `web_app` — `routes` and `notFound`
 //! DISCARDED with no diagnostic (ipe-0, cargo-0, wrong runtime behaviour: a
 //! silent wrong-accept, worse than a cargo failure). Meanwhile the type tier's
-//! `RoutedLiveCheck` reads the SOLVER's Model and classifies the
+//! `RoutedWebCheck` reads the SOLVER's Model and classifies the
 //! same app as routed — the two tiers would disagree exactly on the lambda-view
 //! shape.
 //!

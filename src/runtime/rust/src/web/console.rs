@@ -5,7 +5,7 @@
 //! folds a sub-app's batched logs into the same rings.
 //!
 //! Unlike Go (which spawns the console as a child Ipe.Web process and reverse-
-//! proxies it), the Rust console is served in-process directly off the Live
+//! proxies it), the Rust console is served in-process directly off the Web
 //! router — no extra process, same data. No panic vectors.
 
 use crate::telemetry;
@@ -91,7 +91,7 @@ pub async fn api_traces() -> impl IntoResponse {
 /// dashboard renders (mirror of Go's parsed Prometheus summary).
 pub async fn api_metrics_summary() -> impl IntoResponse {
     let body = format!(
-        r#"{{"ipe_live_requests_total":{},"ipe_live_errors_total":{}}}"#,
+        r#"{{"ipe_web_requests_total":{},"ipe_web_errors_total":{}}}"#,
         telemetry::requests_total(),
         telemetry::errors_total()
     );

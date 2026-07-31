@@ -362,7 +362,7 @@ fn collect_html_attrs<M: Clone>(attrs: &[Attribute<M>]) -> Vec<HtmlAttribute<M>>
     // `focusColor` / `activeColor` / `disabledColor` sub-module helpers that
     // build on it) are collected into ONE `data-ipe-pc-rules` marker attr,
     // wire-format `"<tag>|<css>||<tag2>|<css2>"` — consumed by
-    // `ipe_runtime::live::style_inject::build_pc` (called post-`assign_ipe_ids`
+    // `ipe_runtime::web::style_inject::build_pc` (called post-`assign_ipe_ids`
     // from the Ipe.Web / Ipe.WebView render pipelines), which expands it into
     // a ipe-id-scoped `<style>` block. Multiple entries with the SAME tag are
     // NOT merged (each keeps its own `tag|css` segment) — matches the `../ipe`
@@ -1055,7 +1055,7 @@ mod tests {
     fn ui_on_pseudo_emits_data_ipe_pc_rules_marker() {
         // `Ui.onPseudo Ui.hover [Background.color red]` must attach a
         // `data-ipe-pc-rules="h|background-color:rgba(255,0,0,1)"` marker —
-        // the wire format `ipe_runtime::live::style_inject::build_pc` decodes
+        // the wire format `ipe_runtime::web::style_inject::build_pc` decodes
         // into a ipe-id-scoped `<style>` block post-`assign_ipe_ids`.
         let inner = vec![Attribute::AttrBgColor(Color::Rgba(255, 0, 0, 1.0))];
         let pseudo_attr =
@@ -1076,7 +1076,7 @@ mod tests {
         // wrap the child in a <div> carrying data-ipe-mq-q (the verbatim
         // query) + data-ipe-mq-rules (the attrs folded through
         // build_style_string) — the wire pair
-        // `ipe_runtime::live::style_inject::build_mq` decodes into a
+        // `ipe_runtime::web::style_inject::build_mq` decodes into a
         // ipe-id-scoped <style> block post-`assign_ipe_ids`.
         let elem = super::super::helpers::ui_media_query_::<TestMsg>(
             "(min-width: 768px)".to_owned(),
@@ -1264,7 +1264,7 @@ mod tests {
     #[test]
     fn ui_on_pseudo_all_five_constants_produce_distinct_wire_tags() {
         // hover→h, focus→f, focusVisible→v, active→a, disabled→d — MUST match
-        // `ipe_runtime::live::style_inject::pseudo_selector_for_tag` and the
+        // `ipe_runtime::web::style_inject::pseudo_selector_for_tag` and the
         // `../ipe` reference's `pseudoClassTag`.
         let cases: [(super::super::element::PseudoClass, &str); 5] = [
             (super::super::helpers::ui_hover_(), "h"),

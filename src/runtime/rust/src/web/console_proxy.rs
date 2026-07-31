@@ -194,7 +194,7 @@ pub fn shutdown_console() {
 }
 
 // NOTE (shutdown ownership): the console child's teardown on parent shutdown is
-// owned by the ONE coherent graceful-shutdown path in `live::live_shutdown_signal`
+// owned by the ONE coherent graceful-shutdown path in `web::web_shutdown_signal`
 // — it calls `shutdown_console()` then returns so axum drains and the process
 // exits 0. A previous `install_shutdown_hook` here installed a SECOND tokio
 // signal handler that `std::process::exit(130)`'d; two handlers raced and the
@@ -491,7 +491,7 @@ pub async fn ensure_console_proxy() -> bool {
         eprintln!("[ipe.console] proxy already initialised; keeping the first mount");
     }
     // NOTE: child teardown on shutdown is now owned by the ONE coherent
-    // graceful-shutdown path in `live::live_shutdown_signal` (it calls
+    // graceful-shutdown path in `web::web_shutdown_signal` (it calls
     // `shutdown_console()` then lets axum drain → exit 0). We deliberately do
     // NOT install the old `install_shutdown_hook` here — two signal handlers
     // would race, and that hook's `std::process::exit(130)` would defeat the

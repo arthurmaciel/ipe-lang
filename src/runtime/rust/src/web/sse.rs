@@ -24,7 +24,7 @@ fn buffer_capacity() -> usize {
 /// Bounded buffer (Go default 16, configurable via `IPE_LIVE_SSE_BUFFER`). The
 /// current caller in mod.rs `.await`s on send, so this channel BLOCKS (applies
 /// TCP backpressure) when full rather than dropping — it does not implement the
-/// drop-oldest + `ipe_live_sse_drops_total` behaviour. hello/heartbeat framing
+/// drop-oldest + `ipe_web_sse_drops_total` behaviour. hello/heartbeat framing
 /// is done in mod.rs when wiring axum.
 pub fn channel() -> (SseTx, SseRx) {
     mpsc::channel(buffer_capacity())

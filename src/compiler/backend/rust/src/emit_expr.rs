@@ -2938,7 +2938,7 @@ fn emit_ui_call(
     let Callee::Kernel(k) = callee else {
         return Ok(None);
     };
-    // Only handle Ui / Live / Tui / Webview / Cli kernels.
+    // Only handle Ui / Web / Tui / Webview / Cli kernels.
     if !k.is_ui() && !k.is_web() && !k.is_tui() && !k.is_webview() && !k.is_console() {
         return Ok(None);
     }
@@ -4274,7 +4274,7 @@ fn emit_ui_call(
         // `Ui.mediaQuery : String -> List (Attribute msg) -> Element msg -> Element msg`
         // Raw-CSS-media-query escape hatch: wraps the child in a
         // marker-carrying `<div>` (`data-ipe-mq-q` / `data-ipe-mq-rules`)
-        // consumed by `live::style_inject::build_mq` into a ipe-id-scoped
+        // consumed by `web::style_inject::build_mq` into a ipe-id-scoped
         // `<style data-ipe-mq=…>` block. The query string is gated through
         // `SafeCssMediaQuery` inside the runtime helper (fail-closed drop).
         // See docs/adr/0019-ui-mediaquery-safe-boundary.md.
@@ -6075,9 +6075,9 @@ fn emit_ui_call(
         // so anchor it to IpeError with `<_, IpeError>` (T first, E second).
         // Mirror of the CsvParse `::<IpeError>` anchor; two generic slots because T
         // precedes E.  `pubsub_publish` is re-exported at ipe_runtime root via
-        // `pub use live::*`, so no full path needed in the emitted crate. These are
+        // `pub use web::*`, so no full path needed in the emitted crate. These are
         // `class = Web` (Task-shaped), not TEA-loop kernels — the runtime bus lives
-        // in the `web` module's `live::pubsub`, hence their home here.
+        // in the `web` module's `web::pubsub`, hence their home here.
         KernelFn::PubSubPublish | KernelFn::PubSubPublishNoEcho => {
             let [topic_e, payload_e] = args else {
                 return Err(Diagnostic::CompilerBug {
@@ -6236,7 +6236,7 @@ fn emit_json_decoder_call(
 /// of `expr` (0 at the function body); it gates the bounded-emit guard and is
 /// independent of `indent` (the textual indentation of `match` arms).
 ///
-/// `pub(crate)` so that `emit_web` can call it directly (Live kernel bodies
+/// `pub(crate)` so that `emit_web` can call it directly (Web kernel bodies
 /// emit sub-expressions at the same depth level as their enclosing expression).
 #[allow(clippy::too_many_lines)]
 pub fn emit_expr_at(
@@ -9328,7 +9328,7 @@ fn render_fn_generics(func: &Func, ret_is_task: bool) -> String {
             // `Box<dyn Fn(..) -> R + Send + Sync + 'static>` (see
             // `emit_types::render_type`), which pins EVERY type it mentions to
             // `'static`; without a `T{n}: 'static` bound the boxed param — or an
-            // `Arc`-wrap of it into a UI/Live event slot (`arc_callback_wrap`) —
+            // `Arc`-wrap of it into a UI/Web event slot (`arc_callback_wrap`) —
             // is an E0310 (`T{n} may not live long enough`), the deeper layer of
             // the `26-ui-showcase` seal break (a generic-over-Msg helper taking
             // an `onEdit : String -> msg` callback and forwarding it into

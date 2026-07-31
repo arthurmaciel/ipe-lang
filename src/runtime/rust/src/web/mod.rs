@@ -1,7 +1,7 @@
 //! Ipe.Web on the Rust backend — HTTP-first render + SSE patch loop.
 //! Generic over the app's (Model, Msg); no `any`, static dispatch only.
 // Re-exported from the target-neutral `dom` module (shared with the
-// browser-WASM sink); module aliases keep `live::diff::Patch`-style paths valid.
+// browser-WASM sink); module aliases keep `web::diff::Patch`-style paths valid.
 pub use crate::dom::diff;
 pub use crate::dom::dispatch;
 pub use diff::*;
@@ -58,7 +58,7 @@ use super::*;
 ///
 /// LOAD-BEARING CONTRACT — `client.js` `__ipeProbeSessionLost` only triggers
 /// `window.location.reload()` (the SSE-reconnect recovery path) when a probe
-/// POST gets a 404 + `X-Ipê-Live: 1` AND the body CONTAINS the substring
+/// POST gets a 404 + `X-Ipê-Web: 1` AND the body CONTAINS the substring
 /// `"session not found"` (client.js l1481/l1530/l1536). Go's backend returns
 /// the same string; diverging it (the old `"no session"` body) silently broke
 /// recovery after a server restart — the browser shows "Reconnecting…" forever.
@@ -294,7 +294,7 @@ mod island_escape_tests {
 /// client ignored every `IPE_LIVE_RETRY_*` / `QUEUE_MAX` / `HELLO_TIMEOUT_MS` /
 /// `HEARTBEAT_TTL_MS` / `BANNER` override. Totally parsed: a malformed value
 /// falls back to Go's default; never panics.
-fn live_client_config_js() -> String {
+fn web_client_config_js() -> String {
     fn num(var: &str, default: u64) -> u64 {
         crate::system::read_env_var(var)
             .ok()
@@ -341,7 +341,7 @@ pub fn render_page_full(sid: &str, base: &str, body: &str, csrf_token: &str) -> 
     // the parent proxy (same as /_ipe/sse, /_ipe/event, /_ipe/console).
     let client_src = format!("{base}/_ipe/client.{hex16}.js");
     let integrity = format!("sha256-{b64}");
-    let config_js = live_client_config_js();
+    let config_js = web_client_config_js();
     format!(
         "<!DOCTYPE html><html><head>\
          <meta charset=\"utf-8\">\
@@ -359,7 +359,7 @@ pub fn render_page_full(sid: &str, base: &str, body: &str, csrf_token: &str) -> 
 /// Floating "🔍 Console" link injected into every dev-mode page. The
 /// implementation lives in the always-compiled `telemetry` module so the
 /// Ipe.Http.Server path (`server.rs`) shares the identical byte-exact banner;
-/// this is a thin re-export for the Live page renderer.
+/// this is a thin re-export for the Web page renderer.
 fn dev_console_banner(base: &str) -> String {
     crate::telemetry::dev_console_banner(base)
 }
@@ -469,7 +469,7 @@ struct WebState<Model, Msg, FInit, FUpdate, FView, FSubs> {
     /// page the browser is showing, silently killing every subsequent event
     /// (form submits included).
     route_matched: RouteMatched,
-    /// Live driver count for admission control. Each spawned `drive_session`
+    /// Web driver count for admission control. Each spawned `drive_session`
     /// holds a `SessionSlot` that decrements this on exit; a cookieless GET that
     /// would push it past `max_sessions()` is rejected (503) instead of minting
     /// an unbounded number of sessions. Decremented ONLY via `SessionSlot::drop`,
@@ -630,7 +630,7 @@ async fn drive_session<Model, Msg, FUpdate, FView, FSubs>(
     // equality. Generated Model structs always derive PartialEq.
     Model: Clone + PartialEq + Send + 'static,
     // `Debug` is required to derive the BOUNDED Msg variant-name label for the
-    // `ipe_live_msg_seconds` histogram (telemetry::variant_name). Generated Msg
+    // `ipe_web_msg_seconds` histogram (telemetry::variant_name). Generated Msg
     // enums always derive Debug, so this internal bound is always satisfiable.
     Msg: Clone + Send + std::fmt::Debug + 'static,
     FUpdate: Fn(Msg, Model) -> (Model, IpeCmd<Msg>) + Send + Sync + 'static,
@@ -695,7 +695,7 @@ async fn drive_session<Model, Msg, FUpdate, FView, FSubs>(
                 .model
                 .clone()
         };
-        // Msg-handling latency histogram (Go parity: ipe_live_msg_seconds{name},
+        // Msg-handling latency histogram (Go parity: ipe_web_msg_seconds{name},
         // msg_logging.go). The `name` label is the BOUNDED Msg variant name
         // (finite cardinality), never a payload — see telemetry::variant_name.
         // Extracted BEFORE `update` consumes `msg`.
@@ -703,7 +703,7 @@ async fn drive_session<Model, Msg, FUpdate, FView, FSubs>(
         let msg_started = std::time::Instant::now();
         let (next, cmd) = update(msg, model);
         crate::telemetry::metric_observe(
-            "ipe_live_msg_seconds",
+            "ipe_web_msg_seconds",
             &[("name", &msg_name)],
             msg_started.elapsed().as_secs_f64(),
         );
@@ -732,12 +732,12 @@ async fn drive_session<Model, Msg, FUpdate, FView, FSubs>(
             e.seq += 1;
             (patches, e.seq, e.sse_tx.clone(), noop)
         };
-        // Msg counter (Go parity: ipe_live_msg_total{name,outcome,noop}). All
+        // Msg counter (Go parity: ipe_web_msg_total{name,outcome,noop}). All
         // labels bounded: name = finite variant set, outcome = "ok" (this path
         // has no error channel), noop ∈ {true,false}. Emitted OUTSIDE the entry
         // lock (no registry-lock-under-entry-lock nesting).
         crate::telemetry::metric_inc(
-            "ipe_live_msg_total",
+            "ipe_web_msg_total",
             &[
                 ("name", &msg_name),
                 ("outcome", "ok"),
@@ -864,19 +864,19 @@ fn cookie_path_for(base: &str) -> String {
 /// so the client JS prefixes `/_ipe/event` + `/_ipe/sse` with it. The browser
 /// reaches this child only through the parent proxy, which strips the prefix
 /// before forwarding — so the child's own router stays root-relative.
-fn live_base_path() -> String {
+fn web_base_path() -> String {
     normalise_base_path(&crate::system::read_env_var("IPE_LIVE_BASE_PATH").unwrap_or_default())
 }
 
 /// The active session cookie name (read AND write must agree, so both
 /// `page_response` and `sid_from_cookie` route through this).
 fn session_cookie_name() -> String {
-    cookie_name_for(&live_base_path())
+    cookie_name_for(&web_base_path())
 }
 
 /// The active session cookie `Path`.
 fn cookie_path() -> String {
-    cookie_path_for(&live_base_path())
+    cookie_path_for(&web_base_path())
 }
 
 /// Whether to trust `X-Forwarded-Proto` for TLS-termination detection. Mirrors
@@ -931,7 +931,7 @@ fn page_response(
     headers: &axum::http::HeaderMap,
 ) -> axum::response::Response {
     use axum::response::IntoResponse;
-    let html = render_page_full(sid, &live_base_path(), body, csrf_token);
+    let html = render_page_full(sid, &web_base_path(), body, csrf_token);
     // Session cookie carries `Secure` in production / frame-ancestors mode, OR
     // when this specific request arrived over TLS at a trusted proxy
     // (`request_is_https`, opt-in via `IPE_TRUSTED_PROXY` — closes the gap where
@@ -970,7 +970,7 @@ fn page_response(
     // Max-Age (Go parity, live.go ~5641): persist the cookie for the store TTL so a
     // tab-close doesn't drop a still-live server session. Without it the cookie is
     // session-scoped and the user loses state on tab close.
-    let max_age = live_ttl().as_secs();
+    let max_age = web_ttl().as_secs();
     let session_cookie = format!(
         "{}={sid}; Path={}; HttpOnly; SameSite={same_site}{secure}; Max-Age={max_age}",
         session_cookie_name(),
@@ -1007,7 +1007,7 @@ fn page_response(
 /// default 5 MiB (5 << 20 = 5 242 880). Mirrors Go's `handleEvent` body cap
 /// (runtime-go/rt/live.go ~l3911). The default covers `Event.onFile` /
 /// `Event.onImage` data-URL payloads; override for larger file uploads.
-fn live_max_body_bytes() -> usize {
+fn web_max_body_bytes() -> usize {
     crate::system::read_env_var("IPE_LIVE_MAX_BODY_BYTES")
         .ok()
         .and_then(|s| s.trim().parse::<usize>().ok())
@@ -1016,7 +1016,7 @@ fn live_max_body_bytes() -> usize {
 }
 
 #[cfg(test)]
-mod live_max_body_bytes_tests {
+mod web_max_body_bytes_tests {
     // IPE_LIVE_MAX_BODY_BYTES=0 must floor at the default, not disable the
     // body (matching server::max_body's `.filter(|&n| n > 0)`). Without the
     // floor a 0 value would 413 every /_ipe/event POST.
@@ -1035,7 +1035,7 @@ mod live_max_body_bytes_tests {
     }
 
     #[test]
-    fn live_max_body_bytes_floors_at_default_on_zero() {
+    fn web_max_body_bytes_floors_at_default_on_zero() {
         assert_eq!(parse(None), 5 << 20);
         assert_eq!(parse(Some("1024")), 1024);
         assert_eq!(parse(Some("0")), 5 << 20); // invalid → default, not "reject everything"
@@ -1044,7 +1044,7 @@ mod live_max_body_bytes_tests {
 
 /// Session idle-TTL: `IPE_LIVE_TTL` seconds, default 1800 (30 min) — matches the
 /// Go `[live] ttl` default.
-fn live_ttl() -> std::time::Duration {
+fn web_ttl() -> std::time::Duration {
     let secs = crate::system::read_env_var("IPE_LIVE_TTL")
         .ok()
         .and_then(|s| parse_duration_secs(&s))
@@ -1133,20 +1133,20 @@ async fn flush_exporters() {
 /// reconnect-wait and refetches immediately instead of waiting out the
 /// retry backoff ladder. Dev-mode only — see H23 ("dev-only reload channel
 /// ABSENT, not disabled, in production"): the production gate lives at the
-/// ONE call site chain ([`maybe_push_reload_to_live_sessions`], called from
-/// `live_shutdown_signal`), never inside this helper — a caller that
+/// ONE call site chain ([`maybe_push_reload_to_web_sessions`], called from
+/// `web_shutdown_signal`), never inside this helper — a caller that
 /// reaches this function has already decided dev-mode applies. Delivery is
 /// best-effort, at-most-once, never retried: a full/closed channel just
 /// drops that one session's frame (the browser's own reconnect logic
 /// already covers the restart-detection floor; this only shaves latency),
 /// and a session that disconnects between the enumerate and the push
 /// misses a frame it can't act on anyway.
-async fn push_reload_to_live_sessions<Model, Msg>(store: &Arc<dyn store::SessionStore<Model, Msg>>)
+async fn push_reload_to_web_sessions<Model, Msg>(store: &Arc<dyn store::SessionStore<Model, Msg>>)
 where
     Model: Send + 'static,
     Msg: Send + 'static,
 {
-    for handle in store.live_sessions().await {
+    for handle in store.web_sessions().await {
         let tx = handle
             .lock()
             .unwrap_or_else(|e| e.into_inner())
@@ -1158,20 +1158,20 @@ where
     }
 }
 
-/// The H23 production gate over [`push_reload_to_live_sessions`]: in
+/// The H23 production gate over [`push_reload_to_web_sessions`]: in
 /// production (`ENV`/`IPE_ENV` set to a non-dev marker) the push path is
 /// UNREACHABLE — same one-`if` shape every other production gate in this
 /// module uses (dev-console mount, metrics auth). Split from
-/// `live_shutdown_signal` so the gate itself is unit-testable without
+/// `web_shutdown_signal` so the gate itself is unit-testable without
 /// delivering a real signal.
-async fn maybe_push_reload_to_live_sessions<Model, Msg>(
+async fn maybe_push_reload_to_web_sessions<Model, Msg>(
     store: &Arc<dyn store::SessionStore<Model, Msg>>,
 ) where
     Model: Send + 'static,
     Msg: Send + 'static,
 {
     if !crate::telemetry::production_from_env() {
-        push_reload_to_live_sessions(store).await;
+        push_reload_to_web_sessions(store).await;
     }
 }
 
@@ -1190,7 +1190,7 @@ async fn maybe_push_reload_to_live_sessions<Model, Msg>(
 ///
 /// Robustness: a failed SIGTERM registration must NOT crash — it degrades to
 /// SIGINT-only (`ctrl_c`). On non-unix only `ctrl_c` is available.
-async fn live_shutdown_signal<Model, Msg>(store: Arc<dyn store::SessionStore<Model, Msg>>)
+async fn web_shutdown_signal<Model, Msg>(store: Arc<dyn store::SessionStore<Model, Msg>>)
 where
     Model: Send + 'static,
     Msg: Send + 'static,
@@ -1210,7 +1210,7 @@ where
     // session, fired once the shutdown is committed and BEFORE the bounded
     // grace-timer drain begins — a connected browser refetches immediately
     // instead of waiting out its reconnect backoff. Production-gated (H23).
-    maybe_push_reload_to_live_sessions(&store).await;
+    maybe_push_reload_to_web_sessions(&store).await;
 
     // Tear down the console child (Go: `ShutdownSubApps`; here the pre-built
     // console child, if one was spawned). Idempotent no-op when none exists.
@@ -1312,8 +1312,8 @@ where
     E: From<String> + Send + 'static,
     Model:
         serde::Serialize + serde::de::DeserializeOwned + Clone + PartialEq + Send + Sync + 'static,
-    // Debug: forwarded through serve_live → drive_session for the
-    // ipe_live_msg_seconds{name} label. Generated Msg enums always derive Debug.
+    // Debug: forwarded through serve_web → drive_session for the
+    // ipe_web_msg_seconds{name} label. Generated Msg enums always derive Debug.
     Msg: Clone + Send + Sync + std::fmt::Debug + 'static,
     FInit: Fn(req::WebReq) -> (Model, IpeCmd<Msg>) + Send + Sync + 'static,
     FUpdate: Fn(Msg, Model) -> (Model, IpeCmd<Msg>) + Send + Sync + 'static,
@@ -1322,7 +1322,7 @@ where
 {
     Box::pin(async move {
         let store =
-            store::choose_store::<Model, Msg>(&store_kind, &store_path, live_ttl(), schema_tag)
+            store::choose_store::<Model, Msg>(&store_kind, &store_path, web_ttl(), schema_tag)
                 .await;
         let state = WebState {
             store,
@@ -1338,7 +1338,7 @@ where
             route_matched: Arc::new(|path| path == "/"),
             session_count: Arc::new(AtomicUsize::new(0)),
         };
-        serve_live(state).await
+        serve_web(state).await
     })
 }
 
@@ -1348,7 +1348,7 @@ where
 /// table + page-setter: on each GET it matches the path to a `Page` value
 /// (param strings applied via the route closures) and writes it into the
 /// freshly-`init`'d model's `page` field via `set_page`. `Page`/`FSetPage`
-/// are erased into the boxed resolver, so `serve_live`/`WebState` keep the
+/// are erased into the boxed resolver, so `serve_web`/`WebState` keep the
 /// original 6 type params.
 #[allow(clippy::too_many_arguments)]
 pub fn web_app_routed<E, Model, Msg, Page, FInit, FUpdate, FView, FSubs, FSetPage>(
@@ -1367,8 +1367,8 @@ where
     E: From<String> + Send + 'static,
     Model:
         serde::Serialize + serde::de::DeserializeOwned + Clone + PartialEq + Send + Sync + 'static,
-    // Debug: forwarded through serve_live → drive_session for the
-    // ipe_live_msg_seconds{name} label. Generated Msg enums always derive Debug.
+    // Debug: forwarded through serve_web → drive_session for the
+    // ipe_web_msg_seconds{name} label. Generated Msg enums always derive Debug.
     Msg: Clone + Send + Sync + std::fmt::Debug + 'static,
     Page: Clone + Send + Sync + 'static,
     FInit: Fn(req::WebReq) -> (Model, IpeCmd<Msg>) + Send + Sync + 'static,
@@ -1390,7 +1390,7 @@ where
         let route_matched: RouteMatched =
             Arc::new(move |path| route::matches_any(&routes_for_match, path));
         let store =
-            store::choose_store::<Model, Msg>(&store_kind, &store_path, live_ttl(), schema_tag)
+            store::choose_store::<Model, Msg>(&store_kind, &store_path, web_ttl(), schema_tag)
                 .await;
         let state = WebState {
             store,
@@ -1403,7 +1403,7 @@ where
             route_matched,
             session_count: Arc::new(AtomicUsize::new(0)),
         };
-        serve_live(state).await
+        serve_web(state).await
     })
 }
 
@@ -1496,13 +1496,13 @@ async fn serve_noise_from_static_root(path: &str) -> Option<axum::response::Resp
 /// Shared server setup for `web_app` / `web_app_routed`: nested HTTP
 /// handlers (`page` / `sse_handler` / `event_handler`), router + bind/serve.
 /// The only per-entry difference (the `route_resolver`) lives on `state`.
-async fn serve_live<E, Model, Msg, FInit, FUpdate, FView, FSubs>(
+async fn serve_web<E, Model, Msg, FInit, FUpdate, FView, FSubs>(
     state: WebState<Model, Msg, FInit, FUpdate, FView, FSubs>,
 ) -> IpeResult<E, ()>
 where
     E: From<String> + Send + 'static,
     Model: Clone + PartialEq + Send + 'static,
-    // Debug: forwarded to drive_session for the ipe_live_msg_seconds{name} label.
+    // Debug: forwarded to drive_session for the ipe_web_msg_seconds{name} label.
     Msg: Clone + Send + std::fmt::Debug + 'static,
     FInit: Fn(req::WebReq) -> (Model, IpeCmd<Msg>) + Send + Sync + 'static,
     FUpdate: Fn(Msg, Model) -> (Model, IpeCmd<Msg>) + Send + Sync + 'static,
@@ -1526,7 +1526,7 @@ where
         where
             Model: Clone + PartialEq + Send + 'static,
             // Debug: the GET handler creates a session and spawns drive_session,
-            // which needs the bound for the ipe_live_msg_seconds{name} label.
+            // which needs the bound for the ipe_web_msg_seconds{name} label.
             Msg: Clone + Send + std::fmt::Debug + 'static,
             FInit: Fn(req::WebReq) -> (Model, IpeCmd<Msg>) + Send + Sync + 'static,
             FUpdate: Fn(Msg, Model) -> (Model, IpeCmd<Msg>) + Send + Sync + 'static,
@@ -1576,7 +1576,7 @@ where
             }
 
             let (sid, model, cmd0) = match hit {
-                Some((sid, store::StoreHit::Live(handle))) => {
+                Some((sid, store::StoreHit::Web(handle))) => {
                     // sid is carried from the cookie lookup; the "hit but no sid"
                     // state is unrepresentable.
                     let body = {
@@ -1621,7 +1621,7 @@ where
                     // unrouted) and init a fresh model. The param_resolver is
                     // model-independent, breaking the init↔routing cycle.
                     let params = (st.param_resolver)(uri.path());
-                    let req = req::live_req(&method, &uri, &headers, params);
+                    let req = req::web_req(&method, &uri, &headers, params);
                     let (m, c) = (st.init)(req);
                     // Session fixation guard: a store MISS means this sid is NOT a
                     // known session, so NEVER adopt the client-supplied cookie value
@@ -1700,20 +1700,20 @@ where
             let sid = sid_from_cookie(&headers);
             let entry = match &sid {
                 Some(s) => match st.store.get(s).await {
-                    Some(store::StoreHit::Live(h)) => Some(h),
+                    Some(store::StoreHit::Web(h)) => Some(h),
                     _ => None,
                 },
                 None => None,
             };
             let entry = match entry {
                 Some(e) => e,
-                // X-Ipê-Live: 1 lets the client distinguish a genuine session-lost
+                // X-Ipê-Web: 1 lets the client distinguish a genuine session-lost
                 // 404 (reload to recover) from a wedged proxy (client.js probes for
                 // exactly this header — l1481/l1530).
                 None => {
                     return (
                         StatusCode::NOT_FOUND,
-                        [(axum::http::HeaderName::from_static("x-ipe-live"), "1")],
+                        [(axum::http::HeaderName::from_static("x-ipe-web"), "1")],
                         SESSION_LOST_BODY,
                     )
                         .into_response();
@@ -1749,7 +1749,7 @@ where
                     && !client_path.contains('?')
                     && !client_path.contains('#');
                 if is_valid_path {
-                    let base = live_base_path();
+                    let base = web_base_path();
                     // Strip the sub-app base prefix so the remaining path is
                     // root-relative within this app's own route table.
                     let route_path = if base.is_empty() {
@@ -1774,12 +1774,12 @@ where
                 entry.lock().unwrap_or_else(|e| e.into_inner()).sse_tx = Some(tx.clone());
             }
 
-            // Metrics (Go parity: ipe_live_sse_connections_total /
-            // ipe_live_sessions_active). Count the connection and mark the session
+            // Metrics (Go parity: ipe_web_sse_connections_total /
+            // ipe_web_sessions_active). Count the connection and mark the session
             // active; the gauge is decremented when the response body stream is
             // dropped on disconnect (the SessionGauge guard below).
-            crate::telemetry::metric_inc("ipe_live_sse_connections_total", &[], 1);
-            crate::telemetry::metric_add_gauge("ipe_live_sessions_active", &[], 1);
+            crate::telemetry::metric_inc("ipe_web_sse_connections_total", &[], 1);
+            crate::telemetry::metric_add_gauge("ipe_web_sessions_active", &[], 1);
 
             // Immediate hello + ~2KB proxy-buffer padding comment, then a 15s
             // heartbeat keepalive (Go parity: live.go SSE handshake).
@@ -1844,7 +1844,7 @@ where
             struct SessionGauge;
             impl Drop for SessionGauge {
                 fn drop(&mut self) {
-                    crate::telemetry::metric_add_gauge("ipe_live_sessions_active", &[], -1);
+                    crate::telemetry::metric_add_gauge("ipe_web_sessions_active", &[], -1);
                 }
             }
             // Pin the STRONG entry Arc into the stream state for the connection's
@@ -1911,25 +1911,25 @@ where
                 None => {
                     return (
                         StatusCode::NOT_FOUND,
-                        [(axum::http::HeaderName::from_static("x-ipe-live"), "1")],
+                        [(axum::http::HeaderName::from_static("x-ipe-web"), "1")],
                         SESSION_LOST_BODY,
                     )
                         .into_response();
                 }
             };
             let entry = match st.store.get(&sid).await {
-                Some(store::StoreHit::Live(h)) => Some(h),
+                Some(store::StoreHit::Web(h)) => Some(h),
                 _ => None,
             };
             let entry = match entry {
                 Some(e) => e,
-                // X-Ipê-Live: 1 lets the client distinguish a genuine session-lost
+                // X-Ipê-Web: 1 lets the client distinguish a genuine session-lost
                 // 404 (reload to recover) from a wedged proxy (client.js probes for
                 // exactly this header — l1481/l1530).
                 None => {
                     return (
                         StatusCode::NOT_FOUND,
-                        [(axum::http::HeaderName::from_static("x-ipe-live"), "1")],
+                        [(axum::http::HeaderName::from_static("x-ipe-web"), "1")],
                         SESSION_LOST_BODY,
                     )
                         .into_response();
@@ -1993,13 +1993,13 @@ where
                 }
             }
             // Real patches flow over SSE from the driver; ack with an empty list.
-            // X-Ipê-Live: 1 marks this as a genuine Ipe.Web response (the client
+            // X-Ipê-Web: 1 marks this as a genuine Ipe.Web response (the client
             // treats a 200 WITHOUT it as a wedged-proxy signal).
             (
                 StatusCode::OK,
                 [
                     (axum::http::header::CONTENT_TYPE, "application/json"),
-                    (axum::http::HeaderName::from_static("x-ipe-live"), "1"),
+                    (axum::http::HeaderName::from_static("x-ipe-web"), "1"),
                 ],
                 format!("{{\"seq\":{seq},\"patches\":[]}}"),
             )
@@ -2047,7 +2047,7 @@ where
         // before the handler sees the bytes, so an over-sized payload is
         // rejected at the extract layer with 413 Payload Too Large.
         let event_route = post(event_handler::<Model, Msg, FInit, FUpdate, FView, FSubs>)
-            .layer(axum::extract::DefaultBodyLimit::max(live_max_body_bytes()));
+            .layer(axum::extract::DefaultBodyLimit::max(web_max_body_bytes()));
 
         // Content-addressed client JS asset route. The URL is computed once at
         // startup from SHA-256(CLIENT_JS) so the path changes when the file
@@ -2093,7 +2093,7 @@ where
             .route(
                 "/_ipe/observability/ingest",
                 post(console::ingest)
-                    .layer(axum::extract::DefaultBodyLimit::max(live_max_body_bytes())),
+                    .layer(axum::extract::DefaultBodyLimit::max(web_max_body_bytes())),
             );
 
         router = if use_console_proxy {
@@ -2112,7 +2112,7 @@ where
             // mounts (gate open: not a sub-app, not `IPE_CONSOLE_AUTH=off`, not
             // production-without-admin-token), mirroring Go's mount skip.
             if console_proxy::gate_allows() {
-                eprintln!("{}", store::memory_store_log_line(live_ttl()));
+                eprintln!("{}", store::memory_store_log_line(web_ttl()));
                 eprintln!(
                     "[ipe.console] inline console mounted as Ipe.Web sub-app at /_ipe/console mode={}",
                     console::console_auth_mode_label()
@@ -2188,7 +2188,7 @@ where
             .layer(axum::middleware::from_fn(observability::track))
             .with_state(state);
 
-        pubsub::mark_live_running();
+        pubsub::mark_web_running();
 
         let port: i64 = crate::system::read_env_var("IPE_LIVE_PORT")
             .ok()
@@ -2207,9 +2207,9 @@ where
         // Graceful shutdown (Go parity — live.go:3503): trap SIGINT/SIGTERM,
         // print the shutdown line, drain in-flight requests, and return cleanly so
         // the IpeTask resolves Ok → the generated entry exits 0 (NOT 130). A
-        // SECOND signal force-exits 130 via the watchdog inside live_shutdown_signal.
+        // SECOND signal force-exits 130 via the watchdog inside web_shutdown_signal.
         match axum::serve(listener, app)
-            .with_graceful_shutdown(live_shutdown_signal(shutdown_store))
+            .with_graceful_shutdown(web_shutdown_signal(shutdown_store))
             .await
         {
             Ok(()) => ok_res(()),
@@ -2265,14 +2265,14 @@ mod reload_push_tests {
     /// Every SSE-attached live session receives exactly ONE `event: reload`
     /// frame; a session with no SSE connection is skipped without panicking.
     #[tokio::test]
-    async fn push_reload_to_live_sessions_sends_one_frame_per_live_session() {
+    async fn push_reload_to_web_sessions_sends_one_frame_per_web_session() {
         let store_impl: MemoryStore<(), ()> = MemoryStore::new(Duration::from_secs(60));
         let (sse_tx, mut sse_rx) = sse::channel();
         store_impl.set("with_sse", handle_with(Some(sse_tx))).await;
         store_impl.set("without_sse", handle_with(None)).await;
         let store: Arc<dyn SessionStore<(), ()>> = Arc::new(store_impl);
 
-        push_reload_to_live_sessions(&store).await;
+        push_reload_to_web_sessions(&store).await;
 
         let frame = sse_rx
             .try_recv()
@@ -2286,11 +2286,11 @@ mod reload_push_tests {
 
     /// H23: with `ENV=production` the reload push is UNREACHABLE — the
     /// gated path pushes nothing; in dev it pushes. (The gate is tested via
-    /// `maybe_push_reload_to_live_sessions`, the exact call
-    /// `live_shutdown_signal` makes right after `mark_draining` — split out
+    /// `maybe_push_reload_to_web_sessions`, the exact call
+    /// `web_shutdown_signal` makes right after `mark_draining` — split out
     /// so no real OS signal is needed here.)
     #[tokio::test]
-    async fn live_shutdown_signal_skips_the_reload_push_in_production() {
+    async fn web_shutdown_signal_skips_the_reload_push_in_production() {
         use crate::system::{locked_remove_var, locked_set_var};
         let prior_env = std::env::var("ENV").ok();
         let prior_ipe_env = std::env::var("IPE_ENV").ok();
@@ -2301,14 +2301,14 @@ mod reload_push_tests {
         let store: Arc<dyn SessionStore<(), ()>> = Arc::new(store_impl);
 
         locked_set_var("ENV", "production");
-        maybe_push_reload_to_live_sessions(&store).await;
+        maybe_push_reload_to_web_sessions(&store).await;
         assert!(
             sse_rx.try_recv().is_err(),
             "production must have NO reachable path that pushes the reload frame"
         );
 
         locked_set_var("ENV", "dev");
-        maybe_push_reload_to_live_sessions(&store).await;
+        maybe_push_reload_to_web_sessions(&store).await;
         assert!(
             sse_rx.try_recv().is_ok(),
             "dev mode must push the reload frame"
@@ -2518,7 +2518,7 @@ mod session_lost_body_tests {
     //!
     //! After a server restart, the browser recovers ONLY because
     //! `client.js` `__ipeProbeSessionLost` reloads the page when its probe
-    //! POST to `/_ipe/event` gets a 404 + `X-Ipe-Live: 1` whose body CONTAINS
+    //! POST to `/_ipe/event` gets a 404 + `X-Ipe-Web: 1` whose body CONTAINS
     //! the substring `"session not found"` (client.js l1481/l1530/l1536). A
     //! refactor that flips the body back to the old `"no session"` would
     //! silently strand every client on a permanent "Reconnecting…" banner —
@@ -2538,7 +2538,7 @@ mod session_lost_body_tests {
     async fn no_session_event_handler() -> Response {
         (
             StatusCode::NOT_FOUND,
-            [(HeaderName::from_static("x-ipe-live"), "1")],
+            [(HeaderName::from_static("x-ipe-web"), "1")],
             SESSION_LOST_BODY,
         )
             .into_response()
@@ -2574,12 +2574,12 @@ mod session_lost_body_tests {
         assert_eq!(resp.status(), StatusCode::NOT_FOUND, "must be a 404");
         assert_eq!(
             resp.headers()
-                .get("x-ipe-live")
-                .expect("x-ipe-live header present")
+                .get("x-ipe-web")
+                .expect("x-ipe-web header present")
                 .to_str()
                 .expect("ascii header value"),
             "1",
-            "X-Ipe-Live marker distinguishes session-lost from a wedged proxy"
+            "X-Ipe-Web marker distinguishes session-lost from a wedged proxy"
         );
 
         let bytes = axum::body::to_bytes(resp.into_body(), 64 * 1024)

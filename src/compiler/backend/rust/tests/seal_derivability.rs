@@ -26,12 +26,12 @@ use ipe_ir::{
 };
 
 fn program(name: Symbol, types: Vec<TypeDef>, funcs: Vec<Func>) -> Program {
-    program_with_live(name, types, funcs, false)
+    program_with_web(name, types, funcs, false)
 }
 
 /// Like [`program`] but lets the test set `uses_web`, so the emitter takes the
 /// Ipe.Web serde-derive path (SEAL gate exercise).
-fn program_with_live(
+fn program_with_web(
     name: Symbol,
     types: Vec<TypeDef>,
     funcs: Vec<Func>,
@@ -259,9 +259,9 @@ fn enum_with_function_payload_has_no_derive() -> DResult<()> {
 /// while a sibling all-primitive record still gets the serde derive.
 ///
 /// This is the emit-text half of the seal (fast, no cargo). The cargo-buildable
-/// half is proven end-to-end by `ipe`'s `live_e2e::live_html_helper_record_build_only`.
+/// half is proven end-to-end by `ipe`'s `web_e2e::web_html_helper_record_build_only`.
 #[test]
-fn live_html_helper_record_gets_cdpeq_without_serde() -> DResult<()> {
+fn web_html_helper_record_gets_cdpeq_without_serde() -> DResult<()> {
     let mut interner = Interner::new();
     let main_mod = interner.intern("Main")?;
     // Field symbols. The synthesised struct name is field-name-sorted PascalCase,
@@ -320,7 +320,7 @@ fn live_html_helper_record_gets_cdpeq_without_serde() -> DResult<()> {
         },
     };
 
-    let prog = program_with_live(main_mod, vec![], vec![helper_func, model_func], true);
+    let prog = program_with_web(main_mod, vec![], vec![helper_func, model_func], true);
     let src = emit(&interner, &prog)?;
 
     // The helper renders its Html field type — sanity that the shape survived.
@@ -340,7 +340,7 @@ fn live_html_helper_record_gets_cdpeq_without_serde() -> DResult<()> {
         "view-helper record holding `Html` must NOT be forced to serde (E0277):\n{src}"
     );
 
-    // Regression: a sibling all-primitive record in the same Live program still
+    // Regression: a sibling all-primitive record in the same Web program still
     // gets the serde derive (the fix only demotes non-serde records).
     let (_model_cdpeq, model_serde) = derive_flavours(&src, "RecCount");
     assert!(

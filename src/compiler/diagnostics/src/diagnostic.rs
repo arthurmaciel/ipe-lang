@@ -801,7 +801,7 @@ pub enum Feature {
     /// is not yet wired on the Rust backend. Use the non-routed `Web.app` with
     /// `init`/`update`/`view`/`subscriptions` until routing support lands.
     /// [IPE-L0118]
-    RoutedLiveApp,
+    RoutedWebApp,
     /// The cfg record for an app entry point (`Web.app` / `Terminal.appScreen`
     /// / `Terminal.appLines` / `WebView.app`) — or, for `WebView.app`, its nested
     /// `window` record and `window.size` tuple — was written as a let-bound
@@ -896,8 +896,8 @@ pub enum ModelLeaf {
 pub enum LowerError {
     /// A feature the lowerer does not implement. [IPE-L01##]
     Unsupported(Feature),
-    /// A `Live`/`Terminal`/`WebView` app-entry Model type whose Rust rendering
-    /// does not satisfy the runtime bound the entry requires (`Live` needs
+    /// A `Web`/`Terminal`/`WebView` app-entry Model type whose Rust rendering
+    /// does not satisfy the runtime bound the entry requires (`Web` needs
     /// `serde::Serialize + serde::de::DeserializeOwned + Clone + PartialEq`;
     /// `Terminal`/`WebView` need `Clone`). `app` drives the wording, `field` names the
     /// offending Model field (empty when the Model is not a record), and `leaf`
@@ -908,9 +908,9 @@ pub enum LowerError {
         field: Box<str>,
         leaf: ModelLeaf,
     },
-    /// A `Live`/`Terminal`/`WebView` app-entry Msg type whose Rust rendering does
-    /// not satisfy the runtime bound the entry requires (`Live`/`Terminal`/`WebView`
-    /// all need `Clone + Send + 'static`; `Live` additionally needs `Sync +
+    /// A `Web`/`Terminal`/`WebView` app-entry Msg type whose Rust rendering does
+    /// not satisfy the runtime bound the entry requires (`Web`/`Terminal`/`WebView`
+    /// all need `Clone + Send + 'static`; `Web` additionally needs `Sync +
     /// Debug`). The predicate used is `ir_type_is_derivable` (NOT serde), so
     /// `Html`/`Element`/`Color`-carrying Msg variants are accepted (they derive
     /// `Clone + Debug + PartialEq`). Converts a would-be `cargo` trait-bound
@@ -1299,7 +1299,7 @@ const fn feature_code(f: Feature) -> Code {
         Feature::TuplePatternMatch => IPE_L0115,
         Feature::NestedCtorDiscrimination => IPE_L0116,
         Feature::FloatKeyedCollection => IPE_L0117,
-        Feature::RoutedLiveApp => IPE_L0118,
+        Feature::RoutedWebApp => IPE_L0118,
         Feature::LetBoundAppCfg => IPE_L0119,
         Feature::NonCloneCapture => IPE_L0126,
         Feature::FunctionValueReuse => IPE_L0127,

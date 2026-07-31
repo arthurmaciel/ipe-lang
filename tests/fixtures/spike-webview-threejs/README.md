@@ -11,7 +11,7 @@ server when `ipe.toml`'s `[live].static` is set), the whole
 two-process dance collapses into a single Ipê source file.
 
 > **What this proves**: the same Ipê source you'd write for a
-> Ipe.Live page works for a desktop Ipe.Webview app — relative
+> Ipe.Web page works for a desktop Ipe.Webview app — relative
 > paths (`/static/three.min.js`) resolve correctly because the
 > webview is pointed at a real `http://127.0.0.1:<free>` origin
 > instead of `about:blank`.

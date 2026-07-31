@@ -1,7 +1,7 @@
 //! `WebReq` — the typed request context passed to a TEA `init`.
 //!
 //! Target-neutral: the server builds it from the incoming HTTP parts
-//! (`live::req::live_req`), the browser-WASM client synthesises it from
+//! (`web::req::web_req`), the browser-WASM client synthesises it from
 //! `location` + `document.cookie`. Fields mirror the Go `req` record.
 
 use crate::dict::IpeDict;
