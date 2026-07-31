@@ -1502,6 +1502,21 @@ fn libc_fcntl_setfd(fd: i32, flags: i32) -> std::io::Result<()> {
     Ok(())
 }
 
+/// Clear the close-on-exec flag on `fd` so an inherited fd (the seccomp memfd)
+/// survives an exec. Async-signal-safe — safe to call from a `pre_exec` hook.
+///
+/// Shared by the run jail's own launcher and the captured-child build jail's
+/// subprocess-denied variant, so the fd-inheritance handling is defined once.
+///
+/// # Errors
+///
+/// [`std::io::Error`] when either `fcntl` fails.
+#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+pub(crate) fn clear_cloexec(fd: i32) -> std::io::Result<()> {
+    let flags = libc_fcntl_getfd(fd)?;
+    libc_fcntl_setfd(fd, flags & !FD_CLOEXEC)
+}
+
 /// Write the compiled seccomp program to an anonymous in-memory file and return
 /// its file descriptor, rewound to offset 0, ready for `bwrap --seccomp <fd>`.
 ///
