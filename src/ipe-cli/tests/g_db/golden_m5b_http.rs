@@ -21,11 +21,13 @@
 //!   first-key-wins, percent-decodes, empty-value for key-only, sorted via
 //!   `Dict.toList`. Output: three `key=value` lines.
 //!
-//! * `http_builders` — `defaultRequest |> withMethod "POST" |> withTimeout
-//!   5000 |> withHeader "A" "1" |> withHeader "B" "2" |> withBody "hello"`.
-//!   Prints `.method`, `.url`, `.timeout`, `.body`, and `.headers` (comma-joined).
-//!   Confirms pure builder chain, record-update syntax, and that `withHeader`
-//!   prepends (latest-added first) matching the Go reference.
+//! * `http_builders` — `defaultRequestFromString "http://example.com"` (the
+//!   marked parse-at-the-boundary helper) then, on the `Ok` branch,
+//!   `withMethod Post |> withTimeout 5000 |> withHeader "A" "1" |>
+//!   withHeader "B" "2" |> withBody "hello"`. Prints `.url`, `.timeout`,
+//!   `.body`, and `.headers` (comma-joined). Confirms the builder chain,
+//!   record-update syntax, and that `withHeader` prepends (latest-added
+//!   first). Byte-identical stdout to the cached oracle.
 //!
 //! * `http_response_fields` — constructs an `HttpResponse` literal
 //!   `{ status = 200, body = "ok", headers = Dict.fromList […] }`, reads back
@@ -100,9 +102,9 @@ fn http_parse_query() {
 
 // ── Http builder chain ────────────────────────────────────────────────────────
 
-/// `defaultRequest |> withMethod |> withTimeout |> withHeader "A" |> withHeader
-/// "B" |> withBody` chain prints 5 lines.  `withHeader` prepends (B before A).
-/// Go-parity oracle.
+/// `defaultRequestFromString |> withMethod |> withTimeout |> withHeader "A" |>
+/// withHeader "B" |> withBody` chain prints 4 lines.  `withHeader` prepends
+/// (B before A).
 #[test]
 fn http_builders() {
     assert_runs_and_matches_oracle("http_builders");
@@ -122,26 +124,22 @@ fn http_response_fields() {
 // ── `HttpRequest` opaque-type regression (no signature ever spells the
 // ── fieldset out) ─────────────────────────────────────────────────────────
 
-/// IPE-I0001 regression: `Http.defaultRequest url` builds an `HttpRequest`
-/// whose ONLY consumer is a field read (`req.url`) — no `Http.request` call,
-/// and no OTHER function signature in the program spells out the
+/// IPE-I0001 regression: an `HttpRequest` built via
+/// `Http.defaultRequestFromString url` whose ONLY consumer is a field read
+/// (`req.url`) — no `Http.request` call, and no OTHER function signature in the
+/// program spells out the
 /// `{body, followRedirects, headers, maxRedirects, method, timeout, url}`
-/// fieldset as an explicit annotation.
+/// fieldset as an explicit annotation — must still emit and build.
 ///
-/// Root cause: `ipe_lower::lower::ir_type_from_ty` folds any solved record
-/// matching that exact 7-field shape into the opaque `IrType::HttpRequest`
-/// (so `Http.request` / `HttpStream.open` call sites see the runtime type),
-/// regardless of what the value's OTHER consumers do. But
-/// `emit_http_builder_call`'s `HttpDefaultRequest` arm must NOT look up a
-/// backend-SYNTHESISED struct via `record_struct_by_key` to build the struct
-/// literal — such a struct is only registered when some signature
-/// independently carries the same fieldset as a plain (non-opaque) record
-/// (e.g. `http_builders`'s explicitly-annotated `printReq` parameter).
-/// With no such signature anywhere in the program, no struct is
-/// registered and the lookup raises IPE-I0001, even though the value's
-/// runtime type is correctly known throughout. So the arm emits
-/// `ipe_runtime::HttpRequest { ... }` directly — the fixed, canonical name —
-/// instead of resolving a name through the record-shape registry.
+/// `ipe_lower::lower::ir_type_from_ty` folds any solved record matching that
+/// exact 7-field shape into the opaque `IrType::HttpRequest` (so
+/// `Http.request` / `HttpStream.open` call sites see the runtime type),
+/// regardless of the value's OTHER consumers. The typed-target builder is now
+/// backed by the runtime fn `http_default_request_from_string`, which
+/// constructs the canonical `ipe_runtime::HttpRequest` internally and returns
+/// `Result Error HttpRequest` — so the emitter never needs to synthesise a
+/// record struct for the fieldset, and the IPE-I0001 lookup that the old
+/// inline struct-literal emission risked cannot arise.
 ///
 /// This is the default-gate (emit-only, no `IPE_E2E`) companion to
 /// `http_response_fields` above: it needs only `ipe::build` to succeed and
@@ -166,7 +164,7 @@ fn http_default_request_emits_without_signature_consumer() {
     assert!(
         built.is_ok(),
         "ipe build must succeed for a HttpRequest built via \
-         Http.defaultRequest whose only consumer is a field read (no \
+         Http.defaultRequestFromString whose only consumer is a field read (no \
          Http.request call, no signature spelling out the fieldset); \
          got: {:?}",
         built.err()
@@ -175,10 +173,10 @@ fn http_default_request_emits_without_signature_consumer() {
     let main_rs = std::fs::read_to_string(out.join("src").join("main.rs"))
         .expect("emitted src/main.rs must exist");
     assert!(
-        main_rs.contains("ipe_runtime::HttpRequest {"),
-        "Http.defaultRequest must construct the canonical \
-         `ipe_runtime::HttpRequest` struct directly, not a backend-\
-         synthesised record struct resolved through `record_struct_by_key`.\n\
-         --- src/main.rs ---\n{main_rs}"
+        main_rs.contains("http_default_request_from_string"),
+        "the typed-target builder must lower to a call to the runtime fn \
+         `http_default_request_from_string` (which performs the fail-closed \
+         scheme narrowing and constructs the canonical HttpRequest), not an \
+         inline struct literal.\n--- src/main.rs ---\n{main_rs}"
     );
 }

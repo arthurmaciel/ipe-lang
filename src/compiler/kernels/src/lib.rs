@@ -686,13 +686,20 @@ pub enum StdlibKernel {
     HttpPost,
     HttpRequest,
     HttpParseQuery,
+    /// `Http.defaultRequest : Url -> Result Error HttpRequest` — primary
+    /// request constructor over a typed `Url`; narrows the scheme to
+    /// http/https at the API layer (fail-closed).
     HttpDefaultRequest,
+    /// `Http.defaultRequestFromString : String -> Result Error HttpRequest` —
+    /// the MARKED parse-at-the-boundary helper: one `Url.fromString` parse of a
+    /// raw string, then the same fail-closed scheme narrowing.
+    HttpDefaultRequestFromString,
     HttpWithMethod,
     HttpWithTimeout,
     HttpWithBody,
     HttpWithHeader,
-    /// `Http.withUrl : String -> HttpRequest -> HttpRequest` — pure builder
-    /// (Go parity).
+    /// `Http.withUrl : Url -> HttpRequest -> Result Error HttpRequest` —
+    /// retarget to a typed `Url`, re-narrowing the scheme (fail-closed).
     HttpWithUrl,
     /// `Http.withFollowRedirects : Bool -> HttpRequest -> HttpRequest` —
     /// pure builder (Go parity).
@@ -2395,6 +2402,13 @@ impl StdlibKernel {
             Self::HttpDefaultRequest => {
                 d("Http", "defaultRequest", 1, Pure, "http_default_request")
             }
+            Self::HttpDefaultRequestFromString => d(
+                "Http",
+                "defaultRequestFromString",
+                1,
+                Pure,
+                "http_default_request_from_string",
+            ),
             Self::HttpWithMethod => d("Http", "withMethod", 2, Pure, "http_with_method"),
             Self::HttpWithTimeout => d("Http", "withTimeout", 2, Pure, "http_with_timeout"),
             Self::HttpWithBody => d("Http", "withBody", 2, Pure, "http_with_body"),
@@ -3852,6 +3866,7 @@ impl StdlibKernel {
         Self::HttpRequest,
         Self::HttpParseQuery,
         Self::HttpDefaultRequest,
+        Self::HttpDefaultRequestFromString,
         Self::HttpWithMethod,
         Self::HttpWithTimeout,
         Self::HttpWithBody,
@@ -5165,6 +5180,7 @@ impl StdlibKernel {
             | Self::SystemExit
             | Self::HttpParseQuery
             | Self::HttpDefaultRequest
+            | Self::HttpDefaultRequestFromString
             | Self::HttpWithMethod
             | Self::HttpWithTimeout
             | Self::HttpWithBody

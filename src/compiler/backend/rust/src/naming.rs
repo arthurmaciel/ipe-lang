@@ -818,14 +818,19 @@ pub const fn kernel_name(k: KernelFn) -> &'static str {
         // (not the standard callee_name path) because they need a `task_map`
         // conversion closure; these names are still registered here so
         // `kernel_name` is total over all KernelFn variants (no _ catch-all).
-        // The eight builder kernels (`HttpDefaultRequest` / `HttpWith*`) likewise
+        // The record-update builder kernels (`HttpWithMethod` / `HttpWith*`)
         // emit through `emit_http_builder_call` rather than the standard
-        // `callee_name` path; their entries here keep the function total.
+        // `callee_name` path; their entries here keep the function total. The
+        // typed-target builders (`HttpDefaultRequest` /
+        // `HttpDefaultRequestFromString` / `HttpWithUrl`) instead go through the
+        // standard call path to their runtime fns, which perform the fail-closed
+        // scheme narrowing.
         KernelFn::HttpGet => "http_get",
         KernelFn::HttpPost => "http_post",
         KernelFn::HttpRequest => "http_request",
         KernelFn::HttpParseQuery => "http_parse_query",
         KernelFn::HttpDefaultRequest => "http_default_request",
+        KernelFn::HttpDefaultRequestFromString => "http_default_request_from_string",
         KernelFn::HttpWithMethod => "http_with_method",
         KernelFn::HttpWithTimeout => "http_with_timeout",
         KernelFn::HttpWithBody => "http_with_body",
