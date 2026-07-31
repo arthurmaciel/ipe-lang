@@ -17,6 +17,7 @@
 //! `transparency` / `pkginfo` / `typeref` → `call` → `emit` / `bindings` →
 //! `instance` → `driver` → `unify`.
 
+pub mod asserted;
 pub mod bindings;
 pub mod call;
 pub mod capability_scan;

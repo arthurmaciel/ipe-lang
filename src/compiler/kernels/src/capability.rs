@@ -10,9 +10,11 @@
 
 /// What a program is permitted to do, on the security-relevant axis.
 ///
-/// The eight axes a sandbox can isolate independently. A kernel maps to at most
+/// The axes a sandbox can isolate independently. A kernel maps to at most
 /// one; a program's set is the union over its reachable kernels plus
-/// [`Capability::NativeFfi`] when it crosses into `Rust.` code.
+/// [`Capability::NativeFfi`] when it crosses into `Rust.` code (and
+/// additionally [`Capability::FfiRaw`] when a crossing rides an
+/// author-asserted `Rust.Ffi.call` signature).
 #[derive(
     Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Debug, Hash, serde::Serialize, serde::Deserialize,
 )]
@@ -39,6 +41,12 @@ pub enum Capability {
     /// inference. Its presence is the signal that a program's true capability
     /// set cannot be inferred from Ipê alone.
     NativeFfi,
+    /// Crossing into native `Rust.` code through an author-asserted signature
+    /// (`Rust.Ffi.call`) rather than an inspected binding. Always accompanied
+    /// by [`Self::NativeFfi`] (every asserted call is a native crossing); its
+    /// own presence discloses that the foreign signature was vouched by the
+    /// author, not derived from crate introspection.
+    FfiRaw,
 }
 
 impl Capability {
@@ -54,6 +62,7 @@ impl Capability {
         Self::Clock,
         Self::Random,
         Self::NativeFfi,
+        Self::FfiRaw,
     ];
 
     /// The stable lowercase wire name, used in the `ipe capabilities` report and
@@ -69,6 +78,7 @@ impl Capability {
             Self::Clock => "clock",
             Self::Random => "random",
             Self::NativeFfi => "native-ffi",
+            Self::FfiRaw => "ffi-raw",
         }
     }
 }
@@ -90,6 +100,7 @@ impl std::str::FromStr for Capability {
             "clock" => Ok(Self::Clock),
             "random" => Ok(Self::Random),
             "native-ffi" => Ok(Self::NativeFfi),
+            "ffi-raw" => Ok(Self::FfiRaw),
             other => Err(UnknownCapability(other.to_owned())),
         }
     }
@@ -106,7 +117,7 @@ impl std::fmt::Display for UnknownCapability {
         write!(
             f,
             "unknown capability {:?} (expected one of: network, filesystem, \
-             database, env, subprocess, clock, random, native-ffi)",
+             database, env, subprocess, clock, random, native-ffi, ffi-raw)",
             self.0
         )
     }
@@ -121,9 +132,9 @@ mod tests {
     #[test]
     fn all_lists_every_variant_once() {
         // A guard against `ALL` drifting from the enum: each name is distinct,
-        // and the count matches the eight declared axes.
+        // and the count matches the declared axes.
         let names: Vec<&str> = Capability::ALL.iter().map(|c| c.as_str()).collect();
-        assert_eq!(names.len(), 8);
+        assert_eq!(names.len(), 9);
         let mut sorted = names.clone();
         sorted.sort_unstable();
         sorted.dedup();
@@ -140,6 +151,7 @@ mod tests {
         assert_eq!(Capability::Clock.as_str(), "clock");
         assert_eq!(Capability::Random.as_str(), "random");
         assert_eq!(Capability::NativeFfi.as_str(), "native-ffi");
+        assert_eq!(Capability::FfiRaw.as_str(), "ffi-raw");
     }
 
     #[test]

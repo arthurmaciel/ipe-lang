@@ -351,6 +351,36 @@ The two surfaces relate as a ladder, not alternatives: prototype with
 when the binding is shared. A diagnostic should suggest the graduation when
 an asserted call targets a symbol the inspector *can* bind.
 
+**Shipped shape (v1) — the fail-closed readings.** The shipped surface
+resolves each ambiguity above in the most fail-closed direction:
+
+- The construct is accepted in exactly one form: a top-level annotated
+  zero-parameter definition whose whole body is `Rust.Ffi.call "<path>"`,
+  with `import Rust.Ffi` (unaliased). Any other placement is an IPE-N0038
+  refusal; a refused assertion is IPE-F4414.
+- The asserted result must be `Result Error T` — that channel is where the
+  panic boundary folds a foreign panic, so a total assertion (the sketch
+  above elides this) is refused rather than given an abort path.
+- Targets are plain sync functions returning a bare carrier. A
+  `Result`/`Option`-returning, async, generic, or receiver-carrying target
+  is refused: pre-checked when inspected, rustc-refused (attributed) when
+  not. Parameters cross owned-exact — no borrow adaptation, so a
+  `&str`-taking target is an attributed refusal, not a hidden re-borrow.
+- The compile-time check against an inspected signature is identity-only
+  (no lossless-widening allowance yet).
+- `Rust.Ffi.unsafe` is not yet shipped; an `unsafe` target is refused by
+  rustc's safe-context check, attributed to the assertion.
+- Conflicting assertions for one path (or a derived-name collision between
+  two distinct paths) refuse the build.
+- The `Rust.Ffi` module name and the `ipe_asserted_` shim prefix are
+  reserved: an installed crate claiming either is refused at catalog load,
+  which is what keeps the asserted classification (and its `ffi-raw`
+  attribution) unforgeable.
+- Attribution of a rustc-caught wrong assertion is by the shim's comment
+  header (the Ipê definition, the asserted signature, and the path appear
+  directly above the failing line); span-mapped remapping of cargo output
+  is a tracked follow-up.
+
 ## 6. Safety — one fail-closed failure story
 
 The principle at stake: well-typed Ipê never observes an abrupt failure. At
@@ -502,10 +532,12 @@ tier2-axis-reopen (per-axis, ─┘
    its crate-local `crate::ffi::<slug>::<Name>` definition. Residual breadth:
    glue for a transparent define in a closure signature or another define's
    member (those defines stay opaque today, reason recorded).
-5. **asserted-call** — `Rust.Ffi.call` + `Rust.Ffi.unsafe` + `ffi-raw`
-   capability + the two-checker discipline of §5.2; requires panic-boundary
-   (shims born wrapped) and the capability plumbing. A language-boundary
-   change: mandatory security-soundness review before merge.
+5. **asserted-call** (shipped, v1 shape per §5.2) — `Rust.Ffi.call` + the
+   `ffi-raw` capability + the two-checker discipline of §5.2, with every
+   shim born inside the panic boundary. Residuals: the `Rust.Ffi.unsafe`
+   spelling, lossless-widening in the inspected check, `Result`-returning
+   and borrow-taking targets, and span-mapped attribution of rustc-caught
+   assertion errors.
 6. **tier2-axis-reopen** — per capability axis, re-admit wrapper crates on
    that axis as its run-jail arm proves fail-closed containment on the
    target platform. Ongoing, orthogonal, each axis its own reviewed slice.

@@ -1400,7 +1400,10 @@ fn callee_name(callee: &Callee) -> String {
     match callee {
         Callee::Func(id) => format!("fn#{}", id.as_raw()),
         Callee::Kernel(kernel) => format!("kernel {}", kernel_name(*kernel)),
-        Callee::Ffi { ident } => format!("ffi #{}", ident.as_raw()),
+        Callee::Ffi { ident, asserted } => {
+            let tag = if *asserted { "ffi(asserted)" } else { "ffi" };
+            format!("{tag} #{}", ident.as_raw())
+        }
     }
 }
 

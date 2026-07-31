@@ -977,7 +977,7 @@ pub fn callee_name(ctx: &EmitCtx, callee: &Callee) -> DResult<String> {
         // A foreign wrapper lives in the emitted `src/ffi.rs` module; the
         // absolute `crate::ffi::` path keeps it unambiguous from every
         // emitted file. The identifier was validated at canonicalisation.
-        Callee::Ffi { ident } => Ok(format!("crate::ffi::{}", ctx.resolve_ident(*ident)?)),
+        Callee::Ffi { ident, .. } => Ok(format!("crate::ffi::{}", ctx.resolve_ident(*ident)?)),
     }
 }
 
@@ -985,7 +985,7 @@ pub fn callee_name(ctx: &EmitCtx, callee: &Callee) -> DResult<String> {
 /// The doc builder keeps such calls as byte-carried leaves so the string
 /// emitter's glued rendering is the single source of the emitted text.
 pub fn ffi_call_has_glue(ctx: &EmitCtx, callee: &Callee) -> DResult<bool> {
-    if let Callee::Ffi { ident } = callee {
+    if let Callee::Ffi { ident, .. } = callee {
         Ok(ctx.ffi_wrapper_glue(*ident)?.is_some())
     } else {
         Ok(false)
@@ -6485,7 +6485,7 @@ pub fn emit_expr_at(
             // constructions, and a glued result converts back to the
             // app-side record/union. Wrappers without glue fall through to
             // the generic tail unchanged.
-            if let Callee::Ffi { ident } = callee
+            if let Callee::Ffi { ident, .. } = callee
                 && let Some(glue) = ctx.ffi_wrapper_glue(*ident)?
             {
                 return emit_ffi_glued_call(ctx, *ident, glue, args, indent, child, generics);

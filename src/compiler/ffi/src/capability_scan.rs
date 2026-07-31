@@ -197,7 +197,12 @@ impl CapabilitySet {
             Capability::Database => Some(2),
             Capability::Env => Some(3),
             Capability::Subprocess => Some(4),
-            Capability::NativeFfi => Some(5),
+            // `ffi-raw` shares the native-ffi bit: an asserted call is a native
+            // crossing, and the one mechanism that contains native code — the
+            // whole-process jail — contains it identically. A jail can never
+            // confine one without the other, so a separate bit would be a
+            // second list that could silently disagree.
+            Capability::NativeFfi | Capability::FfiRaw => Some(5),
             Capability::Clock | Capability::Random => None,
         }
     }
@@ -320,7 +325,8 @@ pub const fn is_runtime_unenforceable_for(cap: Capability, jail: JailForTarget) 
         | Capability::Database
         | Capability::Env
         | Capability::Subprocess
-        | Capability::NativeFfi => !jail.confined().confines(cap),
+        | Capability::NativeFfi
+        | Capability::FfiRaw => !jail.confined().confines(cap),
     }
 }
 

@@ -45,12 +45,15 @@ pub const OVERRIDE_ENV: &str = "IPE_ALLOW_UNSANDBOXED";
 ///
 /// This reads the same [`Capability::NativeFfi`] the lowerer inserts on any
 /// `Rust.` crossing — a compile-time fact of the inference pass, never a source
-/// heuristic. A pure Ipê program (no `NativeFfi`, whatever else it infers) is
-/// structurally bounded to its inferred capabilities and needs no runtime jail,
-/// so callers run it directly (ADR 0040).
+/// heuristic. [`Capability::FfiRaw`] (an author-asserted `Rust.Ffi.call`
+/// crossing) is read too, fail-closed: the lowerer always pairs it with
+/// `NativeFfi`, but a set carrying only the disclosure axis must still jail. A
+/// pure Ipê program (neither, whatever else it infers) is structurally bounded
+/// to its inferred capabilities and needs no runtime jail, so callers run it
+/// directly (ADR 0040).
 #[must_use]
 pub fn is_native_bearing(union: &BTreeSet<Capability>) -> bool {
-    union.contains(&Capability::NativeFfi)
+    union.contains(&Capability::NativeFfi) || union.contains(&Capability::FfiRaw)
 }
 
 /// The resolved capability sets for a program about to run.

@@ -532,6 +532,11 @@ fn name_label(msg: &NameError) -> Option<String> {
              — the sealed down-state and up-event that cross the seam once the \
              widget transport ships; there is no untyped fallback"
         )),
+        NameError::AssertedCallMalformed { detail } => Some(format!(
+            "this `Rust.Ffi.call` is malformed: {detail}. The one accepted shape is a \
+             top-level annotated definition whose whole body is `Rust.Ffi.call \
+             \"<crate>::<function>\"`"
+        )),
         NameError::Unknown => None,
     }
 }

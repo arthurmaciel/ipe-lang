@@ -179,7 +179,17 @@ pub enum Expr_ {
     /// only; unrepresentable from user source). `ident` is the emitted
     /// `_bindings.rs` wrapper `pub fn` identifier; the enclosing binding's
     /// annotation is the trusted HM signature.
-    ForeignCall { ident: Symbol, args: Vec<Expr> },
+    ///
+    /// `asserted` marks the `Ffi.asserted "<ident>" arg0 …` spelling — a shim
+    /// whose signature was author-asserted via `Rust.Ffi.call` rather than
+    /// derived from crate inspection. Decided at the same origin-gated mint,
+    /// so a user module can no more forge the flag than the node; it flows to
+    /// the lowered call and flips the `ffi-raw` capability.
+    ForeignCall {
+        ident: Symbol,
+        args: Vec<Expr>,
+        asserted: bool,
+    },
     /// `case scrutinee of` with resolved arms.
     Case(Box<Expr>, Vec<CaseBranch>),
     /// An anonymous function `\p0 p1 ... -> body`. The parameter patterns are

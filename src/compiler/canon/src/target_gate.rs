@@ -212,6 +212,7 @@ mod tests {
         let body = Expr_::ForeignCall {
             ident,
             args: vec![],
+            asserted: false,
         };
         let module = single_def_module(&mut interner, body);
         let err = check_wasm_client(&module, &interner)
