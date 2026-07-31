@@ -1,6 +1,5 @@
 module View.Product exposing (productView)
 
-import Ipe.Prelude exposing (..)
 import Ipe.ToString as ToString
 import Ipe.Ui as Ui
 import Ipe.Ui exposing (Element)

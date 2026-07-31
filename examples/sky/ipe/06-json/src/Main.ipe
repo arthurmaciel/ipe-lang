@@ -4,7 +4,6 @@ import Ipe.Json.Decode as Decode
 import Ipe.Json.Decode.Pipeline as Pipeline
 import Ipe.Json.Encode as Encode
 import Ipe.List as List
-import Ipe.Prelude exposing (..)
 import Ipe.Result as Result
 import Ipe.String as String
 import Ipe.Error as Error exposing (Error)

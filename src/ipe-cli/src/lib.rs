@@ -4211,7 +4211,6 @@ mod tests {
     fn panything_wildcard_lambda_compiles_without_polymorphism_error() {
         const SRC: &str = "\
 module Main exposing (main)
-import Ipe.Prelude exposing (..)
 import Ipe.Task as Task
 import Ipe.Error as Error exposing (Error)
 import Ipe.Io as Io
@@ -4257,7 +4256,6 @@ main =
     fn task_run_main_emits_ipetask_not_iperesult() {
         const SRC: &str = "\
 module Main exposing (main)
-import Ipe.Prelude exposing (..)
 import Ipe.Io as Io
 
 main =

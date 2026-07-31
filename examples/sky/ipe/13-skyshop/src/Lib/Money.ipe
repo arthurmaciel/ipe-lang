@@ -1,6 +1,5 @@
 module Lib.Money exposing (formatPrice, formatPriceFromRow, currencySymbol, Price)
 
-import Ipe.Prelude exposing (..)
 import Ipe.String as String
 import Ipe.Maybe as Maybe
 import Lib.Db as Db

@@ -26,7 +26,6 @@ module Lib.Db exposing
 -- needs a `FirestoreValue` constructor that is not on the bound surface —
 -- recorded over-restriction, equivalent behavior).
 
-import Ipe.Prelude exposing (..)
 import Ipe.Maybe as Maybe
 import Ipe.Dict as Dict
 import Ipe.List as List

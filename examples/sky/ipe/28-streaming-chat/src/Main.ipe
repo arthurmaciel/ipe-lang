@@ -27,7 +27,6 @@ module Main exposing (main)
 -- a tiny Go binary that streams 20 chunks @ 100 ms each. The
 -- verification probe (scripts/verify-streaming-chat.sh) boots both.
 
-import Ipe.Prelude exposing (..)
 import Ipe.String as String
 import Ipe.List as List
 import Ipe.Task as Task

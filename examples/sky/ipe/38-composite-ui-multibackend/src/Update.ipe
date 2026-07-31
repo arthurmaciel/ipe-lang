@@ -1,6 +1,5 @@
 module Update exposing (update)
 
-import Ipe.Prelude exposing (..)
 import Ipe.List as List
 import Ipe.System as System
 import Ipe.Tea.WebView.Cmd as Cmd

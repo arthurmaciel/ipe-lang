@@ -25,7 +25,11 @@
 # A trailing dot means "prefix of a dotted module path"; a bare token (Sky.Ffi)
 # matches the whole qualifier.
 
-# ── Sky.Core.* -> Ipe.*  (the core language surface: Prelude, String, List, ...)
+# ── Sky.Core.* -> Ipe.*  (the core language surface: String, List, Maybe, ...)
+# Sky's `Sky.Core.Prelude` maps to `Ipe.Prelude` under this prefix, but Ipê has
+# no Prelude module — its Tier-A `Ipe.Basics` surface is auto-imported (ADR 0047),
+# so the sky-to-ipe transform's removed-module pass DELETES the open
+# `import Ipe.Prelude exposing (..)` line rather than emitting it.
 Sky.Core.	Ipe.
 
 # ── Sky.Http.* -> Ipe.Http.*  (Server, Server.Stream, Server.WebSocket, RateLimit)

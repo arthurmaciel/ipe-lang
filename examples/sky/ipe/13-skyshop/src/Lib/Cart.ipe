@@ -20,7 +20,6 @@ module Lib.Cart exposing
     , getOrderWithItems
     )
 
-import Ipe.Prelude exposing (..)
 import Ipe.Maybe exposing (..)
 import Ipe.Result as Result
 import Ipe.List as List

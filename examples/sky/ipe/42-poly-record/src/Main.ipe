@@ -8,7 +8,6 @@ module Main exposing (main)
 -- (`struct{ Tag any; Val any }`) mismatches the declared return and `go build`
 -- rejects it. See lower_record's mixed-struct case.
 
-import Ipe.Prelude exposing (..)
 import Ipe.Io as Io
 
 

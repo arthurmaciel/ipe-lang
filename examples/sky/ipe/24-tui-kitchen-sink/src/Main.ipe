@@ -24,7 +24,6 @@ Sky.Live too — typed Std.Ui primitives are the only thing the view
 uses. Run under both to compare.
 -}
 
-import Ipe.Prelude exposing (..)
 import Ipe.List as List
 import Ipe.String as String
 import Ipe.System as System

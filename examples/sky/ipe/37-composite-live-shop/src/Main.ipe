@@ -8,7 +8,6 @@ module Main exposing (main)
 -- Cmd.publish + Sub.subscribeTopic in a single fixture. Multi-module
 -- mandatory per CLAUDE.md Limitation #17.
 
-import Ipe.Prelude exposing (..)
 import Ipe.Tea.Web.Cmd as Cmd
 import Ipe.Web exposing (app, route)
 import Ipe.Tea.Web.Sub as Sub

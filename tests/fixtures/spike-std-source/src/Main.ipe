@@ -1,6 +1,6 @@
 module Main exposing (main)
 
--- Mixed import set: a KERNEL module (Ipe.Prelude, qualifier-resolved) and a
+-- Mixed import set: a KERNEL module (Ipe.String, qualifier-resolved) and a
 -- COMPILED-SOURCE module (Ipe.Palette, injected + canonicalised as ordinary Ipe
 -- source). Both must resolve — the resolve.rs `!deps.contains_key` conjunct keeps
 -- the genuine kernel on the continue path while routing Ipe.Palette through the

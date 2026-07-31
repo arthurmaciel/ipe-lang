@@ -1,6 +1,5 @@
 module Lib.Db exposing (exec, query, getField)
 
-import Ipe.Prelude exposing (..)
 import Ipe.Maybe as Maybe
 import Ipe.Dict as Dict
 import Ipe.Task as Task

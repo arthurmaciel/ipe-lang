@@ -21,7 +21,6 @@ module Main exposing (main)
 -- in docs/rust-rewrite/known-divergences.md, and witnessed by the real
 -- sky-lang.org and skydeploy control-plane builds.
 
-import Ipe.Prelude exposing (..)
 import Ipe.List as List
 import Ipe.Io as Io
 

@@ -1,6 +1,5 @@
 module Lib.OAuth exposing (firebaseAuthScript, handleAuthCallback)
 
-import Ipe.Prelude exposing (..)
 import Lib.Auth as Auth
 
 

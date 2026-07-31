@@ -6,7 +6,6 @@ module View exposing (view, viewElement)
 -- HTML-shaped backends (Live + Webview). Tui consumes
 -- `viewElement` directly.
 
-import Ipe.Prelude exposing (..)
 import Ipe.List as List
 import Ipe.String as String
 import Ipe.ToString as ToString

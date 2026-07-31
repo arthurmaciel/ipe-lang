@@ -8,7 +8,6 @@ module Main exposing (main)
 -- composite covers — see State/Decode/Compute/Report modules for the
 -- per-domain breakdown.
 
-import Ipe.Prelude exposing (..)
 import Ipe.String as String
 import Ipe.List as List
 import Ipe.Maybe as Maybe

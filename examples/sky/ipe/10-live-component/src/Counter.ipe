@@ -1,6 +1,5 @@
 module Counter exposing (..)
 
-import Ipe.Prelude exposing (..)
 import Ipe.String as String
 import Ipe.Html exposing (..)
 import Ipe.Html.Attributes exposing (..)

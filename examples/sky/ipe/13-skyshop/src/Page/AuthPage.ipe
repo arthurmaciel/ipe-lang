@@ -1,6 +1,5 @@
 module Page.AuthPage exposing (viewSignIn)
 
-import Ipe.Prelude exposing (..)
 import Ipe.Html as Html
 import Ipe.Ui as Ui
 import Ipe.Ui exposing (Element)

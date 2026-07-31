@@ -9,7 +9,6 @@ module ChessPrimitivesTest exposing (tests)
 -- negamax scoring, or Sky.Live dispatch). If any fails, we've
 -- caught the regression at its source.
 
-import Ipe.Prelude exposing (..)
 import Ipe.Dict as Dict
 import Ipe.Test as Test exposing (Test)
 import Chess.Piece exposing (..)

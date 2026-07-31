@@ -929,7 +929,7 @@ pub fn inject_compiled_std_closure(
         }
         let Some(embedded) = crate::stdlib::compiled_std_source_segments(&path) else {
             // Not a compiled-source module (kernel import inside an embedded
-            // source, e.g. `Ipe.Prelude`): leave it kernel-resolved.
+            // source, e.g. `Ipe.String`): leave it kernel-resolved.
             continue;
         };
 
@@ -1170,8 +1170,7 @@ import String
             vec!["Main".to_owned()],
             (
                 PathBuf::from("src/Main.ipe"),
-                "module Main exposing (main)\nimport Ipe.Prelude exposing (..)\nmain = 0\n"
-                    .to_owned(),
+                "module Main exposing (main)\nmain = 0\n".to_owned(),
             ),
         );
         let mut discovered = vec![DiscoveredModule {

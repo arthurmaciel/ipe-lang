@@ -1,6 +1,5 @@
 module Chess.Board exposing (..)
 
-import Ipe.Prelude exposing (..)
 import Ipe.Dict as Dict
 import Ipe.Maybe as Maybe
 import Ipe.List as List

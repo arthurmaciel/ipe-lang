@@ -155,8 +155,8 @@ mod tests {
         ));
 
         // Two imports: `Ipe.Io as Io` and `Ipe.String`. (Basics/Tier-B are
-        // ambient, so no explicit `import Ipe.Prelude exposing (..)`; but the
-        // Tier-C `String.fromInt` in `main` requires its `import Ipe.String`.)
+        // ambient, so no open prelude import is needed; but the Tier-C
+        // `String.fromInt` in `main` requires its `import Ipe.String`.)
         assert_eq!(m.imports.len(), 2);
         let seg_names = |imp: &ipe_syntax::Import| -> Vec<&str> {
             imp.name

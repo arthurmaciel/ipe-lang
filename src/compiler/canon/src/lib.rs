@@ -651,8 +651,8 @@ mod tests {
     /// ambient: a module reaches for `identity` / `always` / `not`, the type
     /// names `Maybe` / `Result` / `List`, and the constructors `Just` /
     /// `Nothing` / `Ok` / `Err` / `True` / `False` with NO import line. This is
-    /// what makes the retired `import Ipe.Prelude exposing (..)` value-flood
-    /// redundant.
+    /// what makes the removed `Ipe.Prelude` value-flood redundant — Tiers A and B
+    /// are ambient, so no open prelude import is needed.
     #[test]
     fn tier_a_and_b_resolve_ambiently_without_import() {
         let src = "module Main exposing (main)\n\
@@ -1041,6 +1041,36 @@ mod tests {
                 })
             ),
             "unknown stdlib alias must fail closed with UnknownModule, got {err:?}"
+        );
+    }
+
+    #[test]
+    fn prelude_module_alias_is_removed() {
+        // ADR 0047: `Ipe.Prelude` is REMOVED — not a retained alias for
+        // `Ipe.Basics`. It names no kernel qualifier and no embedded source, so a
+        // reference through it fails closed with UnknownModule at the use site,
+        // exactly like any other nonexistent `Ipe.*` module. This proves the old
+        // value-flood alias no longer resolves.
+        let src = "module Main exposing (main)\n\
+                   import Ipe.Prelude as P\n\n\
+                   main = P.identity\n";
+        let mut i = Interner::new();
+        let Ok(parsed) = ipe_parse::parse_module(src, &mut i) else {
+            assert!(false_marker(), "parse");
+            return;
+        };
+        let deps: BTreeMap<Vec<Symbol>, ModuleExports> = BTreeMap::new();
+        let expected = parsed.name.value.clone();
+        let err = canonicalise_module(&parsed, &expected, &deps, &mut i).err();
+        assert!(
+            matches!(
+                err,
+                Some(Diagnostic::Name {
+                    msg: NameError::UnknownModule { .. },
+                    ..
+                })
+            ),
+            "removed `Ipe.Prelude` must fail closed with UnknownModule, got {err:?}"
         );
     }
 
@@ -2853,7 +2883,6 @@ mod tests {
         // it must canonicalise cleanly — never rejected as a Program-importing-
         // a-shape contradiction (IPE-N0033).
         let src = "module Main exposing (main)\n\
-                   import Ipe.Prelude exposing (..)\n\
                    import Ipe.Html as Html\n\
                    viewStatic model =\n    \
                        Html.node \"div\" [] [ Html.text model.title ]\n\
@@ -2944,9 +2973,9 @@ mod tests {
         // `exposing (..)` on a stdlib module floods the LOW-PRIORITY
         // wildcard tier. A local `map` must NOT collide (no `DuplicateValue`) and
         // a bare `map` use must resolve to the LOCAL binding, silently shadowing
-        // the wildcard member.
+        // the wildcard member (`Ipe.List` exports `map`).
         let src = "module Main exposing (main)\n\
-                   import Ipe.Prelude exposing (..)\n\
+                   import Ipe.List exposing (..)\n\
                    map = 1\n\
                    main = map\n";
         let Some((m, i)) = canon_src(src) else {

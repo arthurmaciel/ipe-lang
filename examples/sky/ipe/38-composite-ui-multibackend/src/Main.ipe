@@ -16,7 +16,6 @@ module Main exposing (main)
 -- `rt.Webview_app` in the emitted Go — so this app builds with
 -- cgo on macOS and falls back to the stub on other platforms.
 
-import Ipe.Prelude exposing (..)
 import Ipe.List as List
 import Ipe.System as System
 import Ipe.Task as Task

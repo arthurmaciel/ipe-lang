@@ -20,7 +20,6 @@ module View.Login exposing (..)
 -- LoginForm record via case-insensitive json.Unmarshal. Field
 -- names in LoginForm MUST match the input `name` attrs.
 
-import Ipe.Prelude exposing (..)
 import Ipe.Ui as Ui
 import Ipe.Ui exposing (Element)
 import Ipe.Ui.Background as Background

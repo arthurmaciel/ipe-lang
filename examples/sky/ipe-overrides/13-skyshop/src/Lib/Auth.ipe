@@ -1,6 +1,5 @@
 module Lib.Auth exposing (verifyToken, signOut, getUserById, isAdmin, getSessionUser)
 
-import Ipe.Prelude exposing (..)
 import Ipe.Maybe exposing (..)
 import Ipe.Result as Result
 import Ipe.Task as Task

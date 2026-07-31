@@ -170,7 +170,7 @@ fn assert_accepted_project(name: &str, files: &[(&str, &str)], expected_stdout: 
     }
 }
 
-const HEAD: &str = "module Main exposing (main)\nimport Ipe.Prelude exposing (..)\n";
+const HEAD: &str = "module Main exposing (main)\n";
 
 // ===========================================================================
 // CO-BACKEND-001 — a local must never shadow a bare-emitted top-level fn.
@@ -261,7 +261,6 @@ fn multi_module_distinct_mod_idents_compile() {
         (
             "Main.ipe",
             "module Main exposing (main)\n\
-             import Ipe.Prelude exposing (..)\n\
              import Ipe.Io as Io\n\
              import Lib.Util exposing (greeting)\n\
              import Helper exposing (shout)\n\
@@ -270,14 +269,12 @@ fn multi_module_distinct_mod_idents_compile() {
         (
             "Lib/Util.ipe",
             "module Lib.Util exposing (greeting)\n\
-             import Ipe.Prelude exposing (..)\n\
              greeting : String\n\
              greeting = \"hi\"\n",
         ),
         (
             "Helper.ipe",
             "module Helper exposing (shout)\n\
-             import Ipe.Prelude exposing (..)\n\
              import Ipe.String\n\
              shout : String -> String\n\
              shout s = String.toUpper s\n",
@@ -298,7 +295,6 @@ fn qualified_dep_alias_expands_without_exposing() {
         (
             "Main.ipe",
             "module Main exposing (main)\n\
-             import Ipe.Prelude exposing (..)\n\
              import Ipe.Io as Io\n\
              import Lib.Money as Money\n\
              view : Money.Price -> String\n\
@@ -308,7 +304,6 @@ fn qualified_dep_alias_expands_without_exposing() {
         (
             "Lib/Money.ipe",
             "module Lib.Money exposing (Price, mk)\n\
-             import Ipe.Prelude exposing (..)\n\
              type alias Price =\n\
              \x20   { original : String\n\
              \x20   , discounted : String\n\

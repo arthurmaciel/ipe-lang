@@ -4,7 +4,6 @@ module CompositeLiveShopTest exposing (main, tests)
 -- module participates so a regression anywhere in State / Catalogue
 -- surfaces here without spinning the runtime.
 
-import Ipe.Prelude exposing (..)
 import Ipe.List as List
 import Ipe.Test as Test exposing (Test)
 import State exposing (..)

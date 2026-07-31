@@ -9,7 +9,6 @@ module Main exposing (main)
 -- back through the in-process bridge — no HTTP, no SSE, no extra
 -- processes.
 
-import Ipe.Prelude exposing (..)
 import Ipe.String as String
 import Ipe.Task as Task
 import Ipe.WebView as Webview

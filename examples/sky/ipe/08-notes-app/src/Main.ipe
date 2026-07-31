@@ -1,6 +1,5 @@
 module Main exposing (main)
 
-import Ipe.Prelude exposing (..)
 import Ipe.Maybe as Maybe exposing (..)
 import Ipe.Task as Task
 import Ipe.List as List

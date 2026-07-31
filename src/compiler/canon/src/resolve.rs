@@ -716,7 +716,7 @@ pub fn canonicalise_module_in_project(
         // A `Ipê.*` / `Ipe.*` import is EITHER a kernel module whose qualifiers
         // are pre-installed by `Env::initial` (absent from the user `deps` map —
         // a `deps.get` on it would spuriously IPE-N0020 every importer of
-        // `Ipe.Prelude`) OR a compiled-source stdlib module the build driver
+        // `Ipe.String`) OR a compiled-source stdlib module the build driver
         // injected into `deps` (e.g. `Ipe.Palette` / `Ipe.Css`). The former stays
         // on the qualifier-only `continue` path; the latter falls through to the
         // ordinary `deps.get` + `inject_dep_exports`, resolving byte-identically

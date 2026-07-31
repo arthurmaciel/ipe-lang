@@ -17,7 +17,6 @@ module Main exposing (main)
 -- lines (request_id / customer_id / amount) so the bundled console
 -- screenshots look like a real billing surface.
 
-import Ipe.Prelude exposing (..)
 import Ipe.Random as Random
 import Ipe.Task as Task
 import Ipe.Tea.Web.Cmd as Cmd

@@ -31,7 +31,6 @@ module Main exposing (main)
 --      the initial HTML lands in the document — same hardening
 --      Sky.Live uses).
 
-import Ipe.Prelude exposing (..)
 import Ipe.Task as Task
 import Ipe.WebView as Webview
 import Ipe.Tea.WebView.Cmd as Cmd

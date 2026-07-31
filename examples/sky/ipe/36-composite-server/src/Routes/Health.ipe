@@ -8,7 +8,6 @@ module Routes.Health exposing (handleHealth, handleExport, uptimeBody)
 --   * Sky.Core.Time.{unixMillis, format} for uptime computation
 --   * Sky.Core.Encoding.base64Encode for the build-info opaque hash
 
-import Ipe.Prelude exposing (..)
 import Ipe.Dict as Dict
 import Ipe.List as List
 import Ipe.Maybe as Maybe

@@ -24,7 +24,6 @@ module MapStackTest exposing (tests)
 -- `List.head` (O(1) — pattern-matches the first cons cell) plus
 -- a tail-recursive `nthHelp` to probe interior elements.
 
-import Ipe.Prelude exposing (..)
 import Ipe.List as List
 import Ipe.Test as Test exposing (Test)
 

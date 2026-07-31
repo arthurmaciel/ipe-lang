@@ -1,6 +1,5 @@
 module Lib.Auth exposing (hashPassword, verifyPassword, createUser, authenticateUser, getUserById)
 
-import Ipe.Prelude exposing (..)
 import Ipe.Maybe exposing (..)
 import Ipe.List as List
 import Ipe.Result as Result

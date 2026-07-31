@@ -4,7 +4,6 @@ module State exposing (..)
 -- here — keeps the HM type-checker's heap footprint bounded
 -- (CLAUDE.md Limitation #17).
 
-import Ipe.Prelude exposing (..)
 
 -- One row out of the input CSV.
 type alias Transaction =

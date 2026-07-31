@@ -1,6 +1,5 @@
 module View.Home exposing (homeView)
 
-import Ipe.Prelude exposing (..)
 import Ipe.List as List
 import Ipe.ToString as ToString
 import Ipe.Ui as Ui

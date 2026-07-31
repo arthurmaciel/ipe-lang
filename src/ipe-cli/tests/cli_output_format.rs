@@ -352,9 +352,9 @@ fn compatible_pkg_pair(tag: &str) -> (PathBuf, PathBuf) {
     for dir in [&old, &new] {
         std::fs::create_dir_all(dir.join("src")).expect("create temp src dir");
     }
-    let v1 = "module Lib exposing (double)\n\nimport Ipe.Prelude exposing (..)\n\n\n\
+    let v1 = "module Lib exposing (double)\n\n\n\n\
               double : Int -> Int\ndouble n =\n    n + n\n";
-    let v2 = "module Lib exposing (double, triple)\n\nimport Ipe.Prelude exposing (..)\n\n\n\
+    let v2 = "module Lib exposing (double, triple)\n\n\n\n\
               double : Int -> Int\ndouble n =\n    n + n\n\n\n\
               triple : Int -> Int\ntriple n =\n    n + n + n\n";
     std::fs::write(old.join("src").join("Lib.ipe"), v1).expect("write old Lib");

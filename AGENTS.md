@@ -83,10 +83,9 @@ Two tiers are ambient — in scope with no `import`; a third requires an explici
   used qualified, so the import list is a complete inventory of a module's
   capabilities.
 
-Do NOT open a value-flooding prelude: `import Ipe.Prelude exposing (..)` is
-retired (`Ipe.Prelude` survives only as a backward-compatible alias of
-`Ipe.Basics` — first-party sources no longer name it). Tiers A and B are
-ambient, so nothing is lost by dropping the line.
+Do NOT open a value-flooding prelude. There is no `Ipe.Prelude` module — it was
+removed, not kept as an alias, so `import Ipe.Prelude` does not resolve. Tiers A
+and B are ambient, so nothing is lost: write no prelude import at all.
 
 ## When users ask for an app — the architecture decision matrix
 
@@ -118,15 +117,15 @@ Ask one focused question per ambiguity; no guess heroically.
 | User wants…                              | Use                | Entry point shape                  | Notes |
 |------------------------------------------|--------------------|------------------------------------|-------|
 | Web app (forms, real-time, UI state)     | **Ipe.Tea.Web**        | `Web.app cfg`                      | HTTP-first; SSE patches; sessions + cookies + routing built in. |
-| HTTP / JSON API (no browser UI)          | **Ipe.Http.Server**| `Server.listen 8000 [...]`         | Routes + middleware (CORS / rate-limit / logging / basic-auth). |
 | Multi-tenant SaaS / dashboard            | **Ipe.Tea.Web + auth-app gate** | `Web.app { consoleAuth = … }` | Tenant scope enforced at SQL layer. |
-| Background job / cron worker             | **Program** (plain `main`) | `main = scheduledWork`             | No UI loop; `Task.parallel` for fan-out. |
+| Desktop app                              | **Ipe.Tea.WebView**    | `WebView.app cfg`                  | macOS today; Linux / Windows later. |
 | Line-oriented interactive tool           | **Ipe.Tea.Terminal**   | `Terminal.appLines cfg`            | Managed stdin-driven TEA loop (init/update/view/onLine). |
 | Terminal UI (TUI)                        | **Ipe.Tea.Terminal**   | `Terminal.appScreen cfg`           | Same `Element` view as Ipe.Tea.Web. |
-| One-shot CLI tool                        | **Program** (plain `main`) | `main = cliCmd`                    | Argparse via `System.args`. |
-| Desktop app                              | **Ipe.Tea.WebView**    | `WebView.app cfg`                  | macOS today; Linux / Windows later. |
+| HTTP / JSON API (no browser UI)          | **Ipe.Http.Server**| `Server.listen 8000 [...]`         | Routes + middleware (CORS / rate-limit / logging / basic-auth). |
 | WebSocket-driven feed                    | **Ipe.Http.Server.WebSocket** | `Server.upgrade req` | Bidirectional. |
 | Server-sent stream (LLM tokens, SSE)     | **Ipe.Http.Server.Stream** | `Server.Stream.emit` | Mirror of `Ipe.Http.Stream`. |
+| One-shot CLI tool                        | **Program** (plain `main`) | `main = cliCmd`                    | Argparse via `System.args`. |
+| Background job / cron worker             | **Program** (plain `main`) | `main = scheduledWork`             | No UI loop; `Task.parallel` for fan-out. |
 
 ### Pinned defaults (always apply unless user overrules)
 

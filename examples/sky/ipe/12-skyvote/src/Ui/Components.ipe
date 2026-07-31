@@ -4,7 +4,6 @@ module Ui.Components exposing (badge, statusBadge, ideaCard, statCard, emptyStat
 -- BADGES
 -- ======================================================
 
-import Ipe.Prelude exposing (..)
 import Ipe.Html exposing (..)
 import Ipe.Html.Attributes exposing (..)
 import Ipe.Html.Events exposing (onClick)

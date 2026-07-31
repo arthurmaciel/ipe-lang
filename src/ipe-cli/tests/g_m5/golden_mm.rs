@@ -6,7 +6,7 @@
 //! and the emitted `main.rs` is byte-identical to the checked-in golden.
 //! They also verify that `ipe build_project` handles three
 //! multi-module blockers:
-//!   * Defect 1 — kernel imports (`Ipe.Prelude`) accepted without
+//!   * Defect 1 — kernel imports (`Ipe.Io`) accepted without
 //!     IPE-N0020.
 //!   * Defect 2 — same-named functions in different modules emit distinct
 //!     Rust names (no E0428 from `cargo build`).
@@ -44,7 +44,7 @@ fn runtime() -> PathBuf {
 // ---------------------------------------------------------------------------
 // Positive: mm_local_pkg
 // Local module (Lib) exposes a value + ADT + ctors; Main imports both Lib
-// and Ipe.Prelude. Exercises Defect-1 fix (kernel skip) and ensures the
+// and Ipe.Io. Exercises Defect-1 fix (kernel skip) and ensures the
 // emitted Rust compiles with distinct names.
 // ---------------------------------------------------------------------------
 

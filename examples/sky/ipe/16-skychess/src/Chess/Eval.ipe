@@ -3,7 +3,6 @@ module Chess.Eval exposing (evaluate)
 -- Evaluate position from white's perspective
 -- Positive = white advantage, negative = black advantage
 
-import Ipe.Prelude exposing (..)
 import Ipe.Dict as Dict
 import Ipe.List as List
 import Ipe.Maybe as Maybe

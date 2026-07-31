@@ -1,6 +1,5 @@
 module Lib.Games exposing (..)
 
-import Ipe.Prelude exposing (..)
 import Ipe.Result as Result
 import Ipe.Maybe as Maybe
 import Ipe.List as List

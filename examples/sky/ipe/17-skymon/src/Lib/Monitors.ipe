@@ -1,6 +1,5 @@
 module Lib.Monitors exposing (..)
 
-import Ipe.Prelude exposing (..)
 import Ipe.List as List
 import Ipe.Dict as Dict
 import Ipe.String as String

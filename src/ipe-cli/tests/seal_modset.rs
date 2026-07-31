@@ -66,7 +66,6 @@ fn skip() -> bool {
 
 /// Baseline: a bare `Io.println` program. Emits only the base module set.
 const BARE: &str = "module Main exposing (main)\n\
-    import Ipe.Prelude exposing (..)\n\
     import Ipe.Io as Io\n\
     main = Io.println \"bare\"\n";
 
@@ -74,7 +73,6 @@ const BARE: &str = "module Main exposing (main)\n\
 /// `live::pubsub`; the shape must pull in the `live` module (and, transitively,
 /// `tea`). Was E0425 `cmd_publish` before the fix.
 const CMD_PUBLISH: &str = "module Main exposing (main)\n\
-    import Ipe.Prelude exposing (..)\n\
     import Ipe.Cmd as Cmd\n\
     import Ipe.Io as Io\n\
     import Ipe.PubSub as PubSub\n\
@@ -85,7 +83,6 @@ const CMD_PUBLISH: &str = "module Main exposing (main)\n\
 /// `Sub.subscribeTopic` with no Web kernel. `sub_subscribe_topic` lives in
 /// `live::pubsub`. Was E0425 `sub_subscribe_topic` before the fix.
 const SUB_SUBSCRIBE: &str = "module Main exposing (main)\n\
-    import Ipe.Prelude exposing (..)\n\
     import Ipe.Sub as Sub\n\
     import Ipe.Io as Io\n\
     import Ipe.PubSub as PubSub\n\
@@ -102,7 +99,6 @@ const SUB_SUBSCRIBE: &str = "module Main exposing (main)\n\
 /// `renderStatic` lives under the shape-neutral `Ipe.Html`, so this Program
 /// imports NO `Ipe.Tea.*` shape and is not misclassified as a TEA app (ADR 0048).
 const LIVE_RENDER_STATIC: &str = "module Main exposing (main)\n\
-    import Ipe.Prelude exposing (..)\n\
     import Ipe.Html as Html\n\
     type alias Model = { title : String }\n\
     viewStatic : Model -> Html msg\n\
@@ -116,7 +112,6 @@ const LIVE_RENDER_STATIC: &str = "module Main exposing (main)\n\
 /// `http_stream`, declared by the server append. Was E0412 `IpeStreamId` +
 /// E0425 `sub_subscribe_stream` before the fix.
 const HTTP_STREAM_CHUNKS: &str = "module Main exposing (main)\n\
-    import Ipe.Prelude exposing (..)\n\
     import Ipe.Http.Stream as HttpStream exposing (StreamId, ChunkEvent(..))\n\
     import Ipe.Io as Io\n\
     type Msg = Chunked ChunkEvent\n\

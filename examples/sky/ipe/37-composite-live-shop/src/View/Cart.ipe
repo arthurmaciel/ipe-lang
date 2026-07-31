@@ -1,6 +1,5 @@
 module View.Cart exposing (cartView)
 
-import Ipe.Prelude exposing (..)
 import Ipe.List as List
 import Ipe.ToString as ToString
 import Ipe.Ui as Ui

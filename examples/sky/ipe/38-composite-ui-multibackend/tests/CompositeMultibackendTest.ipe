@@ -5,7 +5,6 @@ module CompositeMultibackendTest exposing (main, tests)
 -- State.sky so a regression anywhere in date / completion math /
 -- habit toggling surfaces here without booting any UI.
 
-import Ipe.Prelude exposing (..)
 import Ipe.Test as Test exposing (Test)
 import State exposing (..)
 

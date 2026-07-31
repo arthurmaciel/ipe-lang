@@ -18,7 +18,6 @@ module Main exposing (main)
 -- discard pattern — every effect either runs to completion via the
 -- chain or surfaces its error through the reporter.
 
-import Ipe.Prelude exposing (..)
 import Ipe.List as List
 import Ipe.Maybe as Maybe
 import Ipe.Task as Task

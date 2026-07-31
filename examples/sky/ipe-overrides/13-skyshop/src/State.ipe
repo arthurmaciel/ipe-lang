@@ -1,6 +1,5 @@
 module State exposing (..)
 
-import Ipe.Prelude exposing (..)
 import Ipe.Maybe exposing (..)
 import Ipe.Dict as Dict
 
