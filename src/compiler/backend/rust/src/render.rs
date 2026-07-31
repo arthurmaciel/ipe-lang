@@ -267,9 +267,57 @@ fn render_at(
             render_type_bound(ptr_open, head, traits, close, cfg, indent, col, flat, out);
         }
         Doc::ElidableParen { inner } => render_elidable_paren(inner, cfg, indent, col, flat, out),
+        Doc::OrPattern { alts } => render_or_pattern(alts, cfg, col, flat, out),
         Doc::MethodChain { receiver, method } => {
             render_method_chain(receiver, method, cfg, indent, col, flat, out);
         }
+    }
+}
+
+/// The columns `rustfmt` reserves out of an arm's width before rewriting its
+/// pattern — the ` => {` that may follow the pattern on its line.
+const ARM_PATTERN_RESERVE: usize = 5;
+
+/// Render a [`Doc::OrPattern`]: the alternatives joined ` | ` when the flat run
+/// fits the arm-pattern width, else one alternative per line at the pattern's
+/// begin column, each subsequent line led by `| `.
+///
+/// The fit test is `rustfmt`'s own arm-pattern shape — `max_width` less
+/// [`ARM_PATTERN_RESERVE`] — measured against `cfg.max_width` directly rather
+/// than `cfg.margin()`: `rustfmt` builds the pattern's shape fresh from the
+/// arm's indent, so the reservation REPLACES the enclosing trailing-sibling
+/// reserve (the ` => ` text the arm concat carries) instead of stacking on it.
+fn render_or_pattern(
+    alts: &[std::borrow::Cow<'static, str>],
+    cfg: RenderConfig,
+    col: usize,
+    flat: bool,
+    out: &mut String,
+) {
+    let start_col = eff_col(out, col);
+    // Each ` | ` between two flat alternatives is 3 columns.
+    let flat_w: usize =
+        alts.iter().map(|a| a.len()).sum::<usize>() + 3 * alts.len().saturating_sub(1);
+    if flat || start_col + flat_w + ARM_PATTERN_RESERVE <= cfg.max_width {
+        for (i, alt) in alts.iter().enumerate() {
+            if i > 0 {
+                out.push_str(" | ");
+            }
+            out.push_str(alt);
+        }
+        return;
+    }
+    // Vertical: the pattern begins its arm's fresh line, so the begin-line
+    // indent is its start column — every subsequent alternative lands there
+    // behind a front-placed `| `.
+    let begin = current_line_indent(out).unwrap_or(start_col);
+    for (i, alt) in alts.iter().enumerate() {
+        if i > 0 {
+            out.push('\n');
+            push_indent(begin, out);
+            out.push_str("| ");
+        }
+        out.push_str(alt);
     }
 }
 
@@ -1084,7 +1132,10 @@ fn has_hard_break(doc: &Doc) -> bool {
         // A `MethodChain` decides its own layout independently (its receiver breaks
         // its own delimiters, the method drops to its own line), so it hides its
         // breaks like `CallArgs`.
-        | Doc::MethodChain { .. } => false,
+        | Doc::MethodChain { .. }
+        // An `OrPattern` decides its own flat-vs-vertical layout independently
+        // and carries only text alternatives — never a hard break.
+        | Doc::OrPattern { .. } => false,
         Doc::Concat(docs) => docs.iter().any(has_hard_break),
         // `Nest` is pure indentation and `ElidableParen` pure wrapping: each forwards
         // its break behavior to its inner (a paren-block carries the statement

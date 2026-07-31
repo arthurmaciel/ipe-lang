@@ -52,7 +52,10 @@ pub enum Doc {
     // expectation is scoped to `not(test)` where it genuinely never appears.
     #[cfg_attr(
         not(test),
-        expect(dead_code, reason = "reserved for zero-width break sites not yet emitted")
+        expect(
+            dead_code,
+            reason = "reserved for zero-width break sites not yet emitted"
+        )
     )]
     Softline,
     /// An unconditional break: always a newline plus the current indent, whether
@@ -286,6 +289,35 @@ pub enum Doc {
         /// The inner document whose leading `(` makes the wrapping parens redundant.
         inner: Box<Self>,
     },
+    /// A match-arm OR-PATTERN `P0 | P1 | … | Pn`, laid out with `rustfmt`'s
+    /// or-pattern list rule. The alternatives stay on one line joined ` | ` when
+    /// the flat run fits the width `rustfmt` gives an arm pattern — `max_width`
+    /// less the pattern's start column less the 5 columns it reserves for
+    /// ` => {` before rewriting the pattern. Otherwise EVERY alternative goes on
+    /// its own line at the pattern's start column, the first bare and each
+    /// subsequent one led by `| ` (`rustfmt`'s front-placed vertical-bar
+    /// separator):
+    ///
+    /// ```text
+    /// Currency::USD
+    /// | Currency::EUR
+    /// | Currency::GBP => true,
+    /// ```
+    ///
+    /// Not modeled: `rustfmt`'s mixed FILL layout, taken only when every
+    /// alternative is "short" (≤ 20 columns AND literal/binding-shaped). The
+    /// emitter's or-pattern alternatives are constructor paths
+    /// (`Type::Variant(…)`), which `rustfmt` never classifies short, so the
+    /// horizontal/vertical rule here is exact for every emitted shape.
+    ///
+    /// SEAL accounting: the alternatives joined by ` | ` are leaves — exactly
+    /// the bytes the string emitter writes — in both layouts (the vertical
+    /// form's newlines are pure whitespace, and its line-leading `| `
+    /// separators normalize to the flat form's ` | `).
+    OrPattern {
+        /// The alternatives, in source order, each a single-line pattern.
+        alts: Vec<Cow<'static, str>>,
+    },
     /// A trailing `.method(…)` applied to a receiver, laid out with `rustfmt`'s
     /// method-chain rule keyed off whether the receiver is BLOCK-SHAPED. When the
     /// `receiver` renders as a plain single-line non-brace expression, the method
@@ -421,6 +453,12 @@ impl Doc {
         }
     }
 
+    /// A match-arm or-pattern `P0 | P1 | …` that breaks one alternative per line
+    /// when the flat run overflows the arm-pattern width. See [`Doc::OrPattern`].
+    pub const fn or_pattern(alts: Vec<Cow<'static, str>>) -> Self {
+        Self::OrPattern { alts }
+    }
+
     /// A trailing `.method(…)` on `receiver`, dropped to its own line when the
     /// receiver renders multiline. See [`Doc::MethodChain`].
     pub fn method_chain(receiver: Self, method: Self) -> Self {
@@ -543,6 +581,17 @@ impl Doc {
                 out.push('(');
                 inner.collect_leaves(out);
                 out.push(')');
+            }
+            // The alternatives joined ` | ` — the string emitter's exact bytes.
+            // The vertical layout's newlines are pure whitespace and its `| `
+            // line leads normalize to the same ` | ` separators.
+            Self::OrPattern { alts } => {
+                for (i, alt) in alts.iter().enumerate() {
+                    if i > 0 {
+                        out.push_str(" | ");
+                    }
+                    out.push_str(alt);
+                }
             }
             // `receiver.method(…)` with no break — the string emitter writes them
             // adjacent, and the method-on-its-own-line layout is pure whitespace

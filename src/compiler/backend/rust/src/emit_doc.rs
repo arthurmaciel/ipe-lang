@@ -1730,6 +1730,53 @@ const fn arm_body_is_control(body: &Expr) -> bool {
     }
 }
 
+/// Split a rendered arm pattern into its top-level or-alternatives — the
+/// segments the pattern renderer joined with ` | ` outside any bracket pair and
+/// outside any string literal. A pattern with no top-level alternation comes
+/// back as a single segment. A nested alternation stays inside its segment
+/// (`(A | B, x)` is one alternative), matching the alternation `rustfmt`'s
+/// or-pattern list rule applies to: only the arm's outermost one.
+fn split_or_alternatives(pat: &str) -> Vec<String> {
+    let mut alts = Vec::new();
+    let mut seg = String::new();
+    let mut depth = 0usize;
+    let mut in_str = false;
+    let mut escaped = false;
+    let mut prev = '\0';
+    let mut chars = pat.chars().peekable();
+    while let Some(c) = chars.next() {
+        if in_str {
+            if escaped {
+                escaped = false;
+            } else if c == '\\' {
+                escaped = true;
+            } else if c == '"' {
+                in_str = false;
+            }
+        } else {
+            match c {
+                '"' => in_str = true,
+                '(' | '[' | '{' => depth += 1,
+                ')' | ']' | '}' => depth = depth.saturating_sub(1),
+                '|' if depth == 0 && prev == ' ' && chars.peek() == Some(&' ') => {
+                    // The ` | ` separator: drop its leading space from the
+                    // finished segment and consume its trailing space.
+                    seg.pop();
+                    chars.next();
+                    alts.push(std::mem::take(&mut seg));
+                    prev = ' ';
+                    continue;
+                }
+                _ => {}
+            }
+        }
+        seg.push(c);
+        prev = c;
+    }
+    alts.push(seg);
+    alts
+}
+
 /// Build the `Doc` for a `match` expression, mirroring
 /// [`crate::emit_expr::emit_match`] token-for-token.
 ///
@@ -1764,10 +1811,21 @@ fn build_match(
             Some(g) => Some(emit_expr_at(ctx, g, indent + 1, child, generics)?),
             None => None,
         };
-        let head = combine_guards(synth_guard, ir_guard).map_or_else(
-            || Doc::owned(format!("{pat} => ")),
-            |guard| Doc::owned(format!("{pat} if {guard} => ")),
+        // A multi-alternative or-pattern head gets `rustfmt`'s flat-vs-vertical
+        // or-pattern layout ([`Doc::OrPattern`]); any other head is a single-line
+        // byte leaf. The ` => ` (with any guard) stays a separate leaf glued to
+        // the pattern's last line in either layout.
+        let alts = split_or_alternatives(&pat);
+        let pat_doc = if alts.len() > 1 {
+            Doc::or_pattern(alts.into_iter().map(Cow::Owned).collect())
+        } else {
+            Doc::owned(pat)
+        };
+        let arrow = combine_guards(synth_guard, ir_guard).map_or_else(
+            || Doc::text(" => "),
+            |guard| Doc::owned(format!(" if {guard} => ")),
         );
+        let head = Doc::concat(vec![pat_doc, arrow]);
         let tail = if prelude.is_empty() {
             // Plain body: the arm-tail token applies the brace/comma rule by the
             // body's head kind.
