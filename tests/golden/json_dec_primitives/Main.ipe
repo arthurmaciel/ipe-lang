@@ -1,26 +1,40 @@
 module Main exposing (main)
 import Ipe.Io as Io
 import Ipe.Json.Decode
-import Ipe.Result
 import Ipe.String
 
--- JsonDec.int matches Go's lenient `int(f)`: every JSON number unmarshals to a
--- float, then truncates toward zero — it does NOT reject non-integral numbers.
---   "3.0" -> 3
---   "3.5" -> 3      (truncation, not rounding)
---   "1e2" -> 100    (exponent literal accepted)
+-- JsonDec.int decodes an integer or yields a typed rejection — it never
+-- silently truncates a non-integral number (parse, don't validate).
+--   "3.0" -> Ok 3        (integral float still decodes)
+--   "3.5" -> Err _       (non-integral is rejected, shown here as "reject")
+--   "1e2" -> Ok 100      (exponent literal, integral magnitude)
 -- JsonDec.string rides along to keep the primitive-decoder coverage.
+intOrReject : String -> String
+intOrReject json =
+    case JsonDec.decodeString JsonDec.int json of
+        Ok n ->
+            String.fromInt n
+
+        Err _ ->
+            "reject"
+
+
+stringOrQ : String -> String
+stringOrQ json =
+    case JsonDec.decodeString JsonDec.string json of
+        Ok s ->
+            s
+
+        Err _ ->
+            "?"
+
+
 main =
-    let
-        a = Result.withDefault 0 (JsonDec.decodeString JsonDec.int "3.0")
-
-        b = Result.withDefault 0 (JsonDec.decodeString JsonDec.int "3.5")
-
-        c = Result.withDefault 0 (JsonDec.decodeString JsonDec.int "1e2")
-
-        s = Result.withDefault "?" (JsonDec.decodeString JsonDec.string "\"hello\"")
-    in
     Io.println
         (String.join " "
-            [ String.fromInt a, String.fromInt b, String.fromInt c, s ]
+            [ intOrReject "3.0"
+            , intOrReject "3.5"
+            , intOrReject "1e2"
+            , stringOrQ "\"hello\""
+            ]
         )

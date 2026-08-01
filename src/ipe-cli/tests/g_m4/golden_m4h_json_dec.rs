@@ -4,9 +4,10 @@
 //! Tests exercise the `JsonDec` and `JsonDecP` kernel families end-to-end:
 //!
 //! * `JsonDec.int` + `JsonDec.string` via `JsonDec.decodeString` — primitive
-//!   decoders on bare JSON values.  `JsonDec.int` mirrors Go's lenient `int(f)`
-//!   truncation, so `"3.0"`/`"3.5"`/`"1e2"` decode to `3`/`3`/`100` rather than
-//!   rejecting the non-integral / exponent forms.
+//!   decoders on bare JSON values.  `JsonDec.int` yields an integer or a typed
+//!   rejection (parse, don't validate): `"3.0"`/`"1e2"` decode to `3`/`100`
+//!   (integral magnitudes), while `"3.5"` is rejected as non-integral rather
+//!   than silently truncated.
 //!   (`json_dec_primitives`)
 //!
 //! * `JsonDec.list JsonDec.int` on `"[1,2,3]"` — the list combinator wraps its
@@ -75,8 +76,9 @@ fn assert_runs_and_matches_oracle(name: &str) {
 
 // ── primitives ───────────────────────────────────────────────────────────────
 
-/// `JsonDec.int` on `"3.0"`/`"3.5"`/`"1e2"` → `3`/`3`/`100` (Go's `int(f)`
-/// truncation); `JsonDec.string "\"hello\""` → "hello".  Output: `"3 3 100 hello"`.
+/// `JsonDec.int` on `"3.0"`/`"3.5"`/`"1e2"` → `Ok 3`/`Err _`/`Ok 100` — the
+/// non-integral `"3.5"` is rejected (shown as `"reject"`), not truncated;
+/// `JsonDec.string "\"hello\""` → "hello".  Output: `"3 reject 100 hello"`.
 #[test]
 fn json_dec_primitives() {
     assert_runs_and_matches_oracle("json_dec_primitives");
