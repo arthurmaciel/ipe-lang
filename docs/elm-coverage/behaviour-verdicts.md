@@ -46,9 +46,11 @@ That truncation violates **parse, don't validate**: an `Int` decoder must yield
 an integer or a typed rejection, never a quietly mangled value. The fix rejects
 non-integral and out-of-`i64`-range numbers with a typed `Err`, while still
 accepting an integral value written in float form (`1.0`). This simultaneously
-matches Elm and satisfies the fundamental rule, so it is unconditional. No
-example or golden feeds a fractional number to `int`, so no observable sweep
-output changes. The rejection is a typed `Err`, never a panic (Soundness).
+matches Elm and satisfies the fundamental rule, so it is unconditional. The
+`json_dec_primitives` golden feeds `"3.5"` to `int`; its fixture and expected
+output show the rejection explicitly (`"3.5" -> Err _`, printed as `reject`)
+rather than a truncated value. The rejection is a typed `Err`, never a panic
+(Soundness).
 
 ### 2. JSON object key order — keep-ours (divergence)
 

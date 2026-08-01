@@ -1,1 +1,1 @@
-3 3 100 hello
+3 reject 100 hello
