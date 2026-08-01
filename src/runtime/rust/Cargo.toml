@@ -206,12 +206,12 @@ email = ["tokio", "reqwest", "lettre", "serde_json", "sha2", "http_client"]
 # (Was `http_client` in batch-19; option B factored the validators into the
 # reqwest-free `ssrf` module.)
 websocket_client = ["tokio", "tokio-tungstenite", "futures-util"]
-# `aes-gcm` (CSRF cookie AEAD — web/csrf.rs) + `sha2` (client-JS SRI integrity
-# hash — web/mod.rs) are used by always-compiled-under-web code. Generated Web
-# projects get them via the always-on `crypto` default; the standalone `web`
-# feature must pull them directly. (`subtle` for the constant-time compare is a
-# non-optional dep; `OsRng` rides in with `aes-gcm`.) serde is non-optional now.
-web = ["server", "http_client", "serde_json", "async-trait", "aes-gcm", "sha2"]
+# `sha2` (client-JS SRI integrity hash — web/mod.rs) is used by
+# always-compiled-under-web code; the standalone `web` feature pulls it
+# directly. The session-id / CSRF-token RNG draws from the OS CSPRNG via
+# `uuid` (a non-optional base dep), so `web` needs no `aes-gcm`. (`subtle` for
+# the constant-time compare is a non-optional dep.) serde is non-optional now.
+web = ["server", "http_client", "serde_json", "async-trait", "sha2"]
 full = ["async", "json", "db", "redis_store", "crypto", "compression", "csv_kernel", "cache_kernel", "tui", "config", "server", "http_client", "email", "websocket_client", "web"]
 # Browser-WASM TEA sink (`src/wasm/`): mount + patch-apply + delegated events.
 # Compiles only on wasm32 (the module is target-cfg'd); NOT in `full` — native

@@ -19,7 +19,7 @@
 //! not by the base append (matches the runtime's db-gated telemetry refs, which
 //! are correctly NOT a SEAL requirement).
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeSet, HashMap};
 use std::path::{Path, PathBuf};
 
 use ipe_backend::Backend;
@@ -243,6 +243,11 @@ fn emitted_modset_is_closed_over_every_flag_combo() {
     let mut interner = Interner::new();
     let main = interner.intern("Main").expect("intern Main");
 
+    // A module's unconditional crate-dep set is a function of its source alone,
+    // not the flag mask; scan each module from disk once and reuse the result
+    // across every combination.
+    let mut dep_cache: HashMap<String, BTreeSet<String>> = HashMap::new();
+
     for mask in 0u16..(1u16 << FLAG_COUNT) {
         let module = module_for_mask(main, mask);
         let prog = Program {
@@ -259,15 +264,72 @@ fn emitted_modset_is_closed_over_every_flag_combo() {
         let declared = declared_modules(mod_rs);
 
         for m in &declared {
-            for dep in unconditional_crate_deps(&runtime_root, m) {
+            let deps = dep_cache
+                .entry(m.clone())
+                .or_insert_with(|| unconditional_crate_deps(&runtime_root, m));
+            for dep in deps.iter() {
                 assert!(
-                    declared.contains(&dep),
+                    declared.contains(dep),
                     "module-set SEAL breach: emitted `mod.rs` declares `{m}` \
                      (which does `use crate::{dep}`) but does NOT declare `{dep}` \
                      — flag mask {mask:#012b}. The emitted crate would fail `cargo build`. \
                      Declared modules: {declared:?}"
                 );
             }
+        }
+    }
+}
+
+/// The always-on-core rule: a runtime module in the always-compiled BASE floor
+/// (the module set emitted for a program that uses no `uses_*` feature — mask 0)
+/// must NOT unconditionally `use crate::<gated_module>`. A base→gated
+/// unconditional edge would force the gated module always-on (re-coupling the
+/// two), defeating the point of gating and pulling the gated module's crates
+/// into every program. The base floor must be closed under its OWN unconditional
+/// deps: every such dep is itself a base module.
+///
+/// This is the STRUCTURAL guard that keeps a future module on the correct side
+/// of the base/gated boundary — a PR that adds a base→gated edge (e.g. an
+/// always-on module reaching into a newly-gated `crypto`/`jwt`/`compression`
+/// surface) fails HERE, statically, instead of silently re-coupling the deps or
+/// breaking the emitted `cargo build` only under a specific feature combo.
+///
+/// The base floor is derived, not hardcoded: it is exactly the module set the
+/// backend emits for the featureless program, so it tracks the template
+/// automatically.
+#[test]
+fn base_modules_do_not_reach_gated_modules() {
+    let runtime_root =
+        resolve_runtime().expect("runtime source tree (src/runtime/rust/src) must resolve");
+
+    let mut interner = Interner::new();
+    let main = interner.intern("Main").expect("intern Main");
+
+    // The always-compiled BASE floor: the module set emitted with every `uses_*`
+    // flag off.
+    let base_prog = Program {
+        modules: vec![module_for_mask(main, 0)],
+    };
+    let emitted = RustBackend::new(&interner)
+        .emit(&base_prog)
+        .expect("emit must succeed for the featureless base program");
+    let base_mod_rs = emitted
+        .files
+        .get("src/ipe_runtime/mod.rs")
+        .expect("emitted project must contain ipe_runtime/mod.rs");
+    let base = declared_modules(base_mod_rs);
+
+    for m in &base {
+        for dep in unconditional_crate_deps(&runtime_root, m) {
+            assert!(
+                base.contains(&dep),
+                "always-on-core rule violation: base module `{m}` does \
+                 `use crate::{dep}` unconditionally, but `{dep}` is NOT in the \
+                 always-compiled base floor — it is a gated feature module. A \
+                 base module must reach only other base modules (outside \
+                 `#[cfg(...)]` / `#[cfg(test)]`); move the reach behind a cfg, or \
+                 promote `{dep}` to the base floor. Base floor: {base:?}"
+            );
         }
     }
 }

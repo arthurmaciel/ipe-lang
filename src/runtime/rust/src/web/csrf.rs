@@ -73,18 +73,17 @@ pub fn cookies_secure() -> bool {
     *SECURE.get_or_init(|| telemetry::production_from_env() || frame_ancestors().is_some())
 }
 
-/// 32 cryptographically-random bytes, hex-encoded (64 chars) — Go parity
-/// (`crypto/rand` → hex). Uses the OS CSPRNG already used by `crypto.rs`
-/// (no new dependency). Never panics.
+/// ~244 random bits (two concatenated UUIDv4s) as 64 lowercase-hex chars —
+/// comfortably above the 128-bit CSRF-token floor, same shape as the prior
+/// 32-byte scheme. `uuid::Uuid::new_v4` draws from the OS CSPRNG (the approved
+/// security-randomness source per `random.rs`, mirroring `server.rs`'s
+/// `csrf_gen_token`), so the token needs no `aes-gcm` dependency. Never panics.
 pub fn gen_token() -> String {
-    use aes_gcm::aead::{OsRng, rand_core::RngCore};
-    let mut buf = [0u8; 32];
-    OsRng.fill_bytes(&mut buf);
-    let mut s = String::with_capacity(64);
-    for b in buf {
-        s.push_str(&format!("{b:02x}"));
-    }
-    s
+    format!(
+        "{}{}",
+        uuid::Uuid::new_v4().simple(),
+        uuid::Uuid::new_v4().simple()
+    )
 }
 
 /// A token "looks valid" if it's the expected 64 lowercase-hex shape — used to
