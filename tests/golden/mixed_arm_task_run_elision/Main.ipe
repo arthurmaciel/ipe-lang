@@ -1,16 +1,17 @@
 module Main exposing (main)
 
 import Ipe.Error as Error
-import Ipe.String
 
--- Adversarial-review sibling gap: a `case`-dispatched `ipe_main` where every
--- arm produces a `Result`-typed expression — the realistic validate-then-run
--- idiom where `main` returns `Result Error a`.
+-- A `case`-dispatched `ipe_main` where every arm produces a `Result`-typed
+-- expression — the validate-then-return idiom where `main` returns
+-- `Result Error a`.
 --
 -- `emit_func`'s `ipe_main_wrap` fallback covers `func.ret == Result(_, A)`:
 -- the body evaluates synchronously to a uniform `Result e a` and is wrapped
 -- in `task_from_result({ <original body> })` — an ALREADY-RESOLVED
 -- `IpeTask<a>` carrying the body's actual computed value, not a discarded one.
+-- The program performs no effect, so a successful run prints nothing and the
+-- `Ok(_)` epilogue exits 0.
 validate : Int -> Result Error Int
 validate n =
     if n < 0 then

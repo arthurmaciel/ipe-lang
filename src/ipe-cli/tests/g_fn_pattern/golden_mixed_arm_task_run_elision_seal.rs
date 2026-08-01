@@ -1,6 +1,6 @@
 //! Regression for adversarial-review Finding B: a `case`-dispatched `ipe_main`
-//! where every arm produces a `Result`-typed expression (the validate-then-run
-//! idiom, `Err e -> Err e; Ok cfg -> Ok cfg`).
+//! where every arm produces a `Result`-typed expression (the validate-then-
+//! return idiom, `Err e -> Err e; Ok cfg -> Ok cfg`).
 //!
 //! `emit_func`'s `ipe_main_wrap` fallback covers `func.ret == Result(_, A)`:
 //! the body evaluates synchronously to a uniform `Result e a` and wraps in
@@ -113,8 +113,9 @@ fn mixed_arm_entry_point_wraps_via_task_from_result() {
 }
 
 /// The load-bearing SEAL proof: under `IPE_E2E=1`, actually `cargo build` the
-/// emitted crate and run it, confirming the Ok-branch (Task.run arm) result
-/// propagates correctly through the wrap.
+/// emitted crate and run it, confirming the `task_from_result` wrap round-trips
+/// the body's `Ok`/`Err` through `block_on` back to `fn main`'s epilogue. The
+/// body performs no effect, so the `Ok(_)` epilogue exits 0 with empty stdout.
 #[test]
 fn mixed_arm_task_run_elision_builds_and_runs() {
     let root = repo_root();
@@ -140,5 +141,9 @@ fn mixed_arm_task_run_elision_builds_and_runs() {
         "mixed_arm_task_run_elision: emitted crate must build and exit 0; stdout:\n{}",
         outcome.stdout
     );
-    assert_eq!(outcome.stdout.trim(), "validated 5", "wrong runtime output");
+    assert!(
+        outcome.stdout.trim().is_empty(),
+        "the effect-free Result body must produce no output; got: {:?}",
+        outcome.stdout
+    );
 }
