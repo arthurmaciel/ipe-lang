@@ -91,6 +91,10 @@ pub const ZSTD: CrateSpec = CrateSpec {
     name: "zstd",
     version: "0.13",
 };
+pub const CSV: CrateSpec = CrateSpec {
+    name: "csv",
+    version: "1",
+};
 
 /// Every spec emitted by the surgery functions, for drift-test iteration.
 ///
@@ -116,6 +120,7 @@ pub const ALL: &[CrateSpec] = &[
     SERDE_YAML,
     FLATE2,
     ZSTD,
+    CSV,
 ];
 
 #[cfg(test)]
@@ -132,7 +137,7 @@ mod tests {
             assert!(!spec.name.is_empty(), "empty crate name in ALL");
             assert!(!spec.version.is_empty(), "empty version for {}", spec.name);
         }
-        assert_eq!(ALL.len(), 18, "expected 18 surgery-emitted crate specs");
+        assert_eq!(ALL.len(), 19, "expected 19 surgery-emitted crate specs");
     }
 
     /// Extract the version from a Cargo dependency value: `"0.4"` or

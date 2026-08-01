@@ -149,6 +149,7 @@ fn build_identity_program(interner: &mut Interner) -> DResult<Program> {
             uses_http: false,
             uses_config: false,
             uses_compression: false,
+            uses_csv: false,
             uses_ui: false,
             uses_web: false,
             uses_tui: false,
@@ -212,6 +213,7 @@ fn emits_generic_function_signature() -> DResult<()> {
 /// max a b = if a > b then a else b  -- Comparable → T1: PartialOrd + Copy
 /// main = Io.println (String.fromInt (double (max 20 21)))
 /// ```
+#[allow(clippy::too_many_lines)] // fixture builder — length is the enumerated IR it constructs
 fn build_bounded_program(interner: &mut Interner) -> DResult<Program> {
     let main_mod = interner.intern("Main")?;
     let double = interner.intern("double")?;
@@ -310,6 +312,7 @@ fn build_bounded_program(interner: &mut Interner) -> DResult<Program> {
             uses_http: false,
             uses_config: false,
             uses_compression: false,
+            uses_csv: false,
             uses_ui: false,
             uses_web: false,
             uses_tui: false,

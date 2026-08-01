@@ -116,6 +116,19 @@ pub struct Module {
     /// dependencies. `compression` is a leaf module — no other runtime surface
     /// reaches it — so no other `uses_*` flag forces it on.
     pub uses_compression: bool,
+    /// `true` when the lowerer detected at least one `Ipe.Csv` kernel call
+    /// (`Csv.parse` / `parseWithDelimiter` / `encode` / `encodeWithDelimiter` /
+    /// `parseStreamFromFile`), OR a function signature mentioning the `CsvDoc`
+    /// opaque type.
+    ///
+    /// Set by `ipe_lower` when any call site resolves to a `KernelFn::is_csv()`
+    /// variant, or a signature mentions `CsvDoc` (a bare `{ header, rows }`
+    /// record shape folds to it). The backend reads this flag to decide whether
+    /// to declare `pub mod csv; pub use csv::*;` in the emitted
+    /// `ipe_runtime/mod.rs` and add the `csv` dependency. `csv` is a leaf module
+    /// — no other runtime surface reaches it — so no other `uses_*` flag forces
+    /// it on.
+    pub uses_csv: bool,
     /// `true` when the lowerer detected at least one `Ipe.Ui` / `Ipe.Html`
     /// kernel call (`Ui.layout`, `Ui.layoutWith`, `Html.render`, etc.) in the
     /// module's function bodies.
@@ -3688,6 +3701,7 @@ mod tests {
                 uses_http: false,
                 uses_config: false,
                 uses_compression: false,
+                uses_csv: false,
                 uses_ui: false,
                 uses_web: false,
                 uses_tui: false,
@@ -4187,6 +4201,7 @@ mod serde_persistence_tests {
                 uses_http: false,
                 uses_config: false,
                 uses_compression: false,
+                uses_csv: false,
                 uses_ui: false,
                 uses_web: false,
                 uses_tui: false,
@@ -4258,6 +4273,7 @@ mod serde_persistence_tests {
                 uses_http: false,
                 uses_config: false,
                 uses_compression: false,
+                uses_csv: false,
                 uses_ui: false,
                 uses_web: false,
                 uses_tui: false,

@@ -54,6 +54,7 @@ fn program(name: Symbol, funcs: Vec<Func>, records: Vec<IrType>, entry: Option<F
             uses_http: false,
             uses_config: false,
             uses_compression: false,
+            uses_csv: false,
             uses_ui: false,
             uses_web: false,
             uses_tui: false,

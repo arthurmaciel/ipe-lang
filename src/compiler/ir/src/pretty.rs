@@ -2187,6 +2187,7 @@ mod tests {
                 uses_http: false,
                 uses_config: false,
                 uses_compression: false,
+                uses_csv: false,
                 uses_ui: false,
                 uses_web: false,
                 uses_tui: false,
@@ -2296,6 +2297,7 @@ program
                 uses_http: false,
                 uses_config: false,
                 uses_compression: false,
+                uses_csv: false,
                 uses_ui: false,
                 uses_web: false,
                 uses_tui: false,
@@ -2367,6 +2369,7 @@ program
                 uses_http: false,
                 uses_config: false,
                 uses_compression: false,
+                uses_csv: false,
                 uses_ui: false,
                 uses_web: false,
                 uses_tui: false,
@@ -2441,6 +2444,7 @@ program
                 uses_http: false,
                 uses_config: false,
                 uses_compression: false,
+                uses_csv: false,
                 uses_ui: false,
                 uses_web: false,
                 uses_tui: false,
@@ -2500,6 +2504,7 @@ program
                 uses_http: false,
                 uses_config: false,
                 uses_compression: false,
+                uses_csv: false,
                 uses_ui: false,
                 uses_web: false,
                 uses_tui: false,
@@ -2568,6 +2573,7 @@ program
                 uses_http: false,
                 uses_config: false,
                 uses_compression: false,
+                uses_csv: false,
                 uses_ui: false,
                 uses_web: false,
                 uses_tui: false,
@@ -2628,6 +2634,7 @@ program
                 uses_http: false,
                 uses_config: false,
                 uses_compression: false,
+                uses_csv: false,
                 uses_ui: false,
                 uses_web: false,
                 uses_tui: false,
@@ -2653,6 +2660,7 @@ program
     }
 
     #[test]
+    #[allow(clippy::too_many_lines)] // fixture builder — length is the enumerated IR it constructs
     fn pretty_renders_generic_adt_decl_ctor_and_pattern() -> DResult<()> {
         let mut i = Interner::new();
         let main_mod = i.intern("Main")?;
@@ -2730,6 +2738,7 @@ program
                 uses_http: false,
                 uses_config: false,
                 uses_compression: false,
+                uses_csv: false,
                 uses_ui: false,
                 uses_web: false,
                 uses_tui: false,
@@ -2832,6 +2841,7 @@ program
                 uses_http: false,
                 uses_config: false,
                 uses_compression: false,
+                uses_csv: false,
                 uses_ui: false,
                 uses_web: false,
                 uses_tui: false,
@@ -2879,6 +2889,7 @@ program
                 uses_http: false,
                 uses_config: false,
                 uses_compression: false,
+                uses_csv: false,
                 uses_ui: false,
                 uses_web: false,
                 uses_tui: false,
@@ -2929,6 +2940,7 @@ program
                 uses_http: false,
                 uses_config: false,
                 uses_compression: false,
+                uses_csv: false,
                 uses_ui: false,
                 uses_web: false,
                 uses_tui: false,
