@@ -19,7 +19,7 @@
 //! not by the base append (matches the runtime's db-gated telemetry refs, which
 //! are correctly NOT a SEAL requirement).
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeSet, HashMap};
 use std::path::{Path, PathBuf};
 
 use ipe_backend::Backend;
@@ -243,6 +243,11 @@ fn emitted_modset_is_closed_over_every_flag_combo() {
     let mut interner = Interner::new();
     let main = interner.intern("Main").expect("intern Main");
 
+    // A module's unconditional crate-dep set is a function of its source alone,
+    // not the flag mask; scan each module from disk once and reuse the result
+    // across every combination.
+    let mut dep_cache: HashMap<String, BTreeSet<String>> = HashMap::new();
+
     for mask in 0u16..(1u16 << FLAG_COUNT) {
         let module = module_for_mask(main, mask);
         let prog = Program {
@@ -259,9 +264,12 @@ fn emitted_modset_is_closed_over_every_flag_combo() {
         let declared = declared_modules(mod_rs);
 
         for m in &declared {
-            for dep in unconditional_crate_deps(&runtime_root, m) {
+            let deps = dep_cache
+                .entry(m.clone())
+                .or_insert_with(|| unconditional_crate_deps(&runtime_root, m));
+            for dep in deps.iter() {
                 assert!(
-                    declared.contains(&dep),
+                    declared.contains(dep),
                     "module-set SEAL breach: emitted `mod.rs` declares `{m}` \
                      (which does `use crate::{dep}`) but does NOT declare `{dep}` \
                      — flag mask {mask:#012b}. The emitted crate would fail `cargo build`. \
