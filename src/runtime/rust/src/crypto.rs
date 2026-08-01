@@ -409,15 +409,6 @@ pub fn ipe_chacha20_decrypt_key(
     crypto_chacha20_decrypt_key(key, encoded)
 }
 
-/// Generated-code alias for `crypto_rsa_sha256_sign` with `E = String`.
-#[cfg(feature = "crypto")]
-pub fn ipe_crypto_rsa_sha256_sign(
-    key_pem: String,
-    msg: String,
-) -> IpeResult<crate::error::IpeError, String> {
-    crypto_rsa_sha256_sign(key_pem, msg)
-}
-
 #[cfg(all(test, not(target_arch = "wasm32")))]
 mod tests_heavy_hashes {
     use super::*;

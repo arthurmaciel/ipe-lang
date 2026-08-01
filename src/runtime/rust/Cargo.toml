@@ -57,6 +57,12 @@ serde = { version = "1", features = ["derive"] }
 # the browser-WASM sink) decodes typed form records through it. Pure serde.
 serde_urlencoded = "0.7"
 subtle = "2"
+# OS CSPRNG for the always-on `crypto_core` entropy pair
+# (`Crypto.randomBytes` / `randomToken`) on native targets. The wasm32 target
+# block below adds the `js` feature (backing `getrandom` with
+# `crypto.getRandomValues`); cargo unions the two, so native uses the OS source
+# and the browser uses its substitute — neither pulls `aes-gcm` for entropy.
+getrandom = "0.2"
 # `Ipe.Core.Secret` (backlog #44): zeroizes the backing buffer on `Drop` so a
 # revealed/discarded secret does not linger in freed heap memory. NON-optional
 # (like `subtle`) — `secret.rs` is always compiled, no feature gate.

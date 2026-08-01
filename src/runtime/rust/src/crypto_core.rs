@@ -115,7 +115,6 @@ pub(crate) fn crypto_key_reveal(key: Key) -> String {
 // site treating the result as a String/Bytes mismatched at codegen.)
 #[cfg(not(target_arch = "wasm32"))]
 pub fn crypto_random_bytes<E: From<String> + Send + 'static>(n: i64) -> IpeTask<E, String> {
-    use aes_gcm::aead::{OsRng, rand_core::RngCore};
     Box::pin(async move {
         // SECURITY: Mirror Go oracle exactly: reject size <= 0 || size > 1024
         // (rt.go ~l6536: `if size <= 0 || size > 1024 { return ErrInvalidInput }`)
@@ -129,7 +128,13 @@ pub fn crypto_random_bytes<E: From<String> + Send + 'static>(n: i64) -> IpeTask<
         }
         let count = n as usize;
         let mut buf = vec![0u8; count];
-        OsRng.fill_bytes(&mut buf);
+        if getrandom::getrandom(&mut buf).is_err() {
+            return IpeResult::Err(
+                "Crypto.randomBytes: OS entropy source unavailable"
+                    .to_string()
+                    .into(),
+            );
+        }
         ok_res(hex_lower(&buf))
     })
 }
@@ -182,7 +187,6 @@ fn hex_lower(buf: &[u8]) -> String {
 // longer (ceil(n*4/3) chars). (A prior hex encoding diverged from Go's base64.)
 #[cfg(not(target_arch = "wasm32"))]
 pub fn crypto_random_token<E: From<String> + Send + 'static>(n: i64) -> IpeTask<E, String> {
-    use aes_gcm::aead::{OsRng, rand_core::RngCore};
     use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
     Box::pin(async move {
         // SECURITY: Mirror Go oracle exactly: reject size <= 0 || size > 1024
@@ -197,7 +201,13 @@ pub fn crypto_random_token<E: From<String> + Send + 'static>(n: i64) -> IpeTask<
         }
         let count = n as usize;
         let mut buf = vec![0u8; count];
-        OsRng.fill_bytes(&mut buf);
+        if getrandom::getrandom(&mut buf).is_err() {
+            return IpeResult::Err(
+                "Crypto.randomToken: OS entropy source unavailable"
+                    .to_string()
+                    .into(),
+            );
+        }
         ok_res(URL_SAFE_NO_PAD.encode(&buf))
     })
 }
@@ -434,6 +444,14 @@ pub fn crypto_constant_time_equal(a: String, b: String) -> bool {
         return false;
     }
     bool::from(ab.ct_eq(bb))
+}
+
+/// Generated-code alias for `crypto_rsa_sha256_sign` with `E = String`.
+pub fn ipe_crypto_rsa_sha256_sign(
+    key_pem: String,
+    msg: String,
+) -> IpeResult<crate::error::IpeError, String> {
+    crypto_rsa_sha256_sign(key_pem, msg)
 }
 
 #[cfg(test)]

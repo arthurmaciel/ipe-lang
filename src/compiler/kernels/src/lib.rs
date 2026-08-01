@@ -5952,6 +5952,77 @@ impl StdlibKernel {
         )
     }
 
+    /// `true` when this variant belongs to the HEAVY `Ipe.Crypto` kernel family
+    /// — the ones whose emitted symbol lives in the gated `crypto` runtime module
+    /// (legacy SHA-1/MD5 checksums, AES-256-GCM + ChaCha20-Poly1305 AEAD, PBKDF2
+    /// password-key derivation, and the typed-key AEAD variants).
+    ///
+    /// The `crypto` module is the sole consumer of `sha1`, `md-5`, `aes-gcm`,
+    /// `chacha20poly1305`, and `pbkdf2`. Used by `ipe_lower` to detect
+    /// `uses_crypto` and by the backend to declare `crypto` in the emitted
+    /// `ipe_runtime/mod.rs` and add those five crates to the emitted manifest.
+    ///
+    /// The always-on `crypto_core` floor (SHA-2 hash/HMAC, RSA sign/verify,
+    /// constant-time compare, the entropy pair, the `Key`/`Mac` newtypes) is
+    /// EXCLUDED here — those kernels emit into `crypto_core`, which stays in the
+    /// base module set, so their presence never forces the heavy `crypto` module
+    /// or its crates.
+    #[must_use]
+    pub const fn is_crypto(self) -> bool {
+        matches!(
+            self,
+            Self::CryptoSha1
+                | Self::CryptoMd5
+                | Self::CryptoAesGcmEncrypt
+                | Self::CryptoAesGcmDecrypt
+                | Self::CryptoAesGcmEncryptKey
+                | Self::CryptoAesGcmDecryptKey
+                | Self::CryptoChacha20Encrypt
+                | Self::CryptoChacha20Decrypt
+                | Self::CryptoChacha20EncryptKey
+                | Self::CryptoChacha20DecryptKey
+                | Self::CryptoAesKeyFromPassword
+                | Self::CryptoChachaKeyFromPassword
+                | Self::CryptoAesKeyFromPasswordKey
+                | Self::CryptoChachaKeyFromPasswordKey
+        )
+    }
+
+    /// `true` when this variant belongs to the `Ipe.Jwt` kernel family
+    /// (`Jwt.encodeHs256` / `decodeHs256` / `encodeRs256` / `decodeRs256` and the
+    /// builder API — `claims` / `hs256` / `rs256` / `subject` / `issuer` /
+    /// `audience` / `expiresAt` / `notBefore` / `issuedAt` / `jwtId` /
+    /// `withClaim` / `encode` / `decode`).
+    ///
+    /// The `jwt` runtime module is the sole direct consumer of the
+    /// `jsonwebtoken` crate. Used by `ipe_lower` to detect `uses_jwt` and by the
+    /// backend to declare `jwt` in the emitted `ipe_runtime/mod.rs` and add
+    /// `jsonwebtoken` to the emitted manifest. `auth.rs` also reaches `jwt`, so
+    /// the backend force-declares `jwt` under `uses_jwt || uses_auth`.
+    #[must_use]
+    pub const fn is_jwt(self) -> bool {
+        matches!(
+            self,
+            Self::JwtEncodeHs256
+                | Self::JwtDecodeHs256
+                | Self::JwtEncodeRs256
+                | Self::JwtDecodeRs256
+                | Self::JwtClaims
+                | Self::JwtHs256
+                | Self::JwtRs256
+                | Self::JwtSubject
+                | Self::JwtIssuer
+                | Self::JwtAudience
+                | Self::JwtExpiresAt
+                | Self::JwtNotBefore
+                | Self::JwtIssuedAt
+                | Self::JwtJwtId
+                | Self::JwtWithClaim
+                | Self::JwtEncode
+                | Self::JwtDecode
+        )
+    }
+
     /// `true` when this variant belongs to the `Ipe.Ui` / `Ipe.Html`
     /// subsystem.
     #[must_use]
@@ -7090,6 +7161,63 @@ mod tests {
                  (E0433) or pull the csv crate into a program that never parses CSV",
                 k.is_csv(),
                 is_csv_qualifier,
+            );
+        }
+    }
+
+    /// Every HEAVY `Ipe.Crypto` kernel emits a symbol into the gated `crypto`
+    /// runtime module (the sole consumer of `sha1` / `md-5` / `aes-gcm` /
+    /// `chacha20poly1305` / `pbkdf2`), so `is_crypto()` MUST report exactly those
+    /// kernels — and NONE of the always-on `crypto_core` floor kernels (SHA-2
+    /// hash/HMAC, RSA sign/verify, constant-time compare, the entropy pair, the
+    /// `Key`/`Mac` newtypes). The residency is content-addressed off the emit
+    /// symbol: a `crypto` (heavy) symbol is exactly one that names a legacy
+    /// checksum (`crypto_sha1` / `crypto_md5`), an AEAD op (`aes_gcm` /
+    /// `chacha20` in the name), or a PBKDF2 key derivation
+    /// (`_key_from_password`). Both directions are asserted, so a new `Crypto.*`
+    /// kernel added on either side of the split fails the instant its emit symbol
+    /// and predicate disagree — mis-gating a floor kernel (E0433 for a program
+    /// using only `Crypto.sha256`) or pulling the heavy AEAD crates into a
+    /// hash-only program.
+    #[test]
+    fn crypto_predicate_tracks_heavy_module_residency() {
+        for k in StdlibKernel::ALL {
+            let emit = k.decl().emit;
+            let lives_in_heavy_crypto = emit == "crypto_sha1"
+                || emit == "crypto_md5"
+                || emit.contains("aes_gcm")
+                || emit.contains("chacha20")
+                || emit.contains("_key_from_password");
+            assert_eq!(
+                k.is_crypto(),
+                lives_in_heavy_crypto,
+                "{k:?} emits `{emit}`: is_crypto()={} but heavy-crypto residency={} — \
+                 the emitted crate would either fail to declare the crypto module (E0433) \
+                 or pull sha1/md-5/aes-gcm/chacha20poly1305/pbkdf2 into a program that \
+                 uses only the always-on crypto_core floor",
+                k.is_crypto(),
+                lives_in_heavy_crypto,
+            );
+        }
+    }
+
+    /// Every `Ipe.Jwt` kernel emits a symbol into the `jwt` runtime module (the
+    /// sole direct consumer of `jsonwebtoken`), so `qualifier == "Jwt"` MUST
+    /// imply `is_jwt()`, and no other qualifier may report `is_jwt()`. Both
+    /// directions are asserted, so a new `Jwt.*` kernel the predicate forgets — or
+    /// an unrelated kernel wrongly claimed — fails the instant the two disagree.
+    #[test]
+    fn jwt_predicate_tracks_jwt_qualifier() {
+        for k in StdlibKernel::ALL {
+            let is_jwt_qualifier = k.decl().qualifier == "Jwt";
+            assert_eq!(
+                k.is_jwt(),
+                is_jwt_qualifier,
+                "{k:?}: is_jwt()={} but qualifier==\"Jwt\" is {} — \
+                 the emitted crate would either fail to declare the jwt module \
+                 (E0433) or pull jsonwebtoken into a program that never uses JWT",
+                k.is_jwt(),
+                is_jwt_qualifier,
             );
         }
     }

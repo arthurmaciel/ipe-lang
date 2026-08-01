@@ -129,6 +129,29 @@ pub struct Module {
     /// — no other runtime surface reaches it — so no other `uses_*` flag forces
     /// it on.
     pub uses_csv: bool,
+    /// `true` when the lowerer detected at least one HEAVY `Ipe.Crypto` kernel
+    /// call (legacy SHA-1/MD5, AES-GCM / ChaCha20-Poly1305 AEAD, or PBKDF2
+    /// key derivation).
+    ///
+    /// Set by `ipe_lower` when any call site resolves to a
+    /// `KernelFn::is_crypto()` variant. The backend reads this flag to decide
+    /// whether to declare `pub mod crypto; pub use crypto::*;` in the emitted
+    /// `ipe_runtime/mod.rs` and add the `sha1` + `md-5` + `aes-gcm` +
+    /// `chacha20poly1305` + `pbkdf2` dependencies. The always-on `crypto_core`
+    /// floor (SHA-2, HMAC, RSA, constant-time compare, the entropy pair, the
+    /// `Key`/`Mac` newtypes) stays in the base module set, so no other `uses_*`
+    /// flag forces `crypto` on.
+    pub uses_crypto: bool,
+    /// `true` when the lowerer detected at least one `Ipe.Jwt` kernel call
+    /// (`Jwt.encodeHs256` / `decodeHs256` / … or a builder-API kernel).
+    ///
+    /// Set by `ipe_lower` when any call site resolves to a
+    /// `KernelFn::is_jwt()` variant. The backend reads this flag to decide
+    /// whether to declare `pub mod jwt; pub use jwt::*;` in the emitted
+    /// `ipe_runtime/mod.rs` and add the `jsonwebtoken` dependency. `auth.rs`
+    /// also reaches `crate::jwt`, so the backend force-declares `jwt` under
+    /// `uses_jwt || uses_auth`.
+    pub uses_jwt: bool,
     /// `true` when the lowerer detected at least one `Ipe.Ui` / `Ipe.Html`
     /// kernel call (`Ui.layout`, `Ui.layoutWith`, `Html.render`, etc.) in the
     /// module's function bodies.
@@ -3702,6 +3725,8 @@ mod tests {
                 uses_config: false,
                 uses_compression: false,
                 uses_csv: false,
+                uses_crypto: false,
+                uses_jwt: false,
                 uses_ui: false,
                 uses_web: false,
                 uses_tui: false,
@@ -4202,6 +4227,8 @@ mod serde_persistence_tests {
                 uses_config: false,
                 uses_compression: false,
                 uses_csv: false,
+                uses_crypto: false,
+                uses_jwt: false,
                 uses_ui: false,
                 uses_web: false,
                 uses_tui: false,
@@ -4274,6 +4301,8 @@ mod serde_persistence_tests {
                 uses_config: false,
                 uses_compression: false,
                 uses_csv: false,
+                uses_crypto: false,
+                uses_jwt: false,
                 uses_ui: false,
                 uses_web: false,
                 uses_tui: false,

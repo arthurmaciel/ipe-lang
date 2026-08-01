@@ -342,8 +342,8 @@ pub fn render_type(ctx: &EmitCtx, ty: &IrType, generics: GenericScope) -> DResul
         IrType::EmailProvider => "EmailProvider".to_owned(),
         // Typed-key newtypes — fully-qualified to avoid ambiguity with any
         // user-defined `Key`/`Mac`/`EmailAddress` types.
-        IrType::CryptoKey => "ipe_runtime::crypto::Key".to_owned(),
-        IrType::CryptoMac => "ipe_runtime::crypto::Mac".to_owned(),
+        IrType::CryptoKey => "ipe_runtime::crypto_core::Key".to_owned(),
+        IrType::CryptoMac => "ipe_runtime::crypto_core::Mac".to_owned(),
         IrType::EmailAddress => "ipe_runtime::email::EmailAddress".to_owned(),
         // `Ipe.Url`'s opaque validated URL — fully-qualified to avoid ambiguity
         // with any user-defined `Url` type.
