@@ -160,7 +160,7 @@ pub fn jwt_encode_hs256<E: From<String>>(
     // Mirror Go's pipeline exactly: hmacSha256 returns lowercase hex, hexDecode
     // back to the raw MAC bytes, then base64url. `crypto_hmac_sha256` is the same
     // Go-parity primitive `Crypto.hmacSha256` lowers to.
-    let mac_hex = super::crypto::crypto_hmac_sha256(secret, signing_input.clone());
+    let mac_hex = super::crypto_core::crypto_hmac_sha256(secret, signing_input.clone());
     let mac_bytes = match hex::decode(&mac_hex) {
         Ok(b) => b,
         // Unreachable: crypto_hmac_sha256 always returns valid lowercase hex.
@@ -259,14 +259,16 @@ pub fn jwt_encode_rs256<E: From<String>>(
     // `crypto_rsa_sha256_sign` is the same Go-parity primitive `Crypto.rsaSha256Sign`
     // lowers to and returns standard (padded) base64; convert to base64url.
     // Its Err message already suppresses key-structure detail (no key leak).
-    let std_b64: String =
-        match super::crypto::crypto_rsa_sha256_sign::<String>(key_pem, signing_input.clone()) {
-            IpeResult::Ok(s) => s,
-            // Keep the message generic so no structural hint about the key leaks.
-            IpeResult::Err(_) => {
-                return IpeResult::Err("jwt-encode-rs: invalid RSA key".to_string().into());
-            }
-        };
+    let std_b64: String = match super::crypto_core::crypto_rsa_sha256_sign::<String>(
+        key_pem,
+        signing_input.clone(),
+    ) {
+        IpeResult::Ok(s) => s,
+        // Keep the message generic so no structural hint about the key leaks.
+        IpeResult::Err(_) => {
+            return IpeResult::Err("jwt-encode-rs: invalid RSA key".to_string().into());
+        }
+    };
     let sig = standard_to_url(&std_b64);
     IpeResult::Ok(format!("{}.{}", signing_input, sig))
 }

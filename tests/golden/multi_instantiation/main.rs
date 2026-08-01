@@ -247,10 +247,10 @@ pub fn file_rename(src: ipe_runtime::path::Path, dst: ipe_runtime::path::Path) -
     ipe_runtime::file::file_rename(src, dst)
 }
 pub fn crypto_random_bytes(n: i64) -> IpeTask<String> {
-    ipe_runtime::crypto::crypto_random_bytes(n)
+    ipe_runtime::crypto_core::crypto_random_bytes(n)
 }
 pub fn crypto_random_token(n: i64) -> IpeTask<String> {
-    ipe_runtime::crypto::crypto_random_token(n)
+    ipe_runtime::crypto_core::crypto_random_token(n)
 }
 
 pub fn main_wrap<T1: Clone>(x: T1) -> RecValue<T1> {
