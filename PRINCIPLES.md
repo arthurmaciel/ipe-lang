@@ -27,6 +27,9 @@ Ipê is meant to be:
 
 ## The six technical principles (strict order)
 
+Ipê users must find a language that embraces all the below principles and
+rules during development and use.
+
 1. **Security** — generated code and runtime give an attacker no foothold: no
    injection (SQL, shell, path, header, log), no secret leakage into logs or
    errors, no auth/CSRF bypass, no timing oracle on a secret comparison, no
