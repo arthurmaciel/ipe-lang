@@ -10,6 +10,22 @@ Entries below the header are maintained by
 section is generated from Conventional Commit messages and prepended when the
 standing release pull request is merged.
 
+## [0.1.31](https://github.com/arthurmaciel/ipe-lang/compare/ipe-v0.1.30...ipe-v0.1.31) (2026-08-01)
+
+
+### Features
+
+* **backend:** gate csv crate behind Ipe.Csv usage ([#481](https://github.com/arthurmaciel/ipe-lang/issues/481)) ([9c6816f](https://github.com/arthurmaciel/ipe-lang/commit/9c6816f9b60213176dfca4e510d5d36f6cc6eab2))
+* **backend:** gate flate2 + zstd behind Ipe.Compression usage ([#480](https://github.com/arthurmaciel/ipe-lang/issues/480)) ([89d8d59](https://github.com/arthurmaciel/ipe-lang/commit/89d8d593918e8ffb63e442f8a1e0f50aaa5e0e87))
+* **backend:** gate heavy crypto on uses_crypto + jwt on uses_jwt||uses_auth ([#475](https://github.com/arthurmaciel/ipe-lang/issues/475) D-E) ([#489](https://github.com/arthurmaciel/ipe-lang/issues/489)) ([9377cbf](https://github.com/arthurmaciel/ipe-lang/commit/9377cbf3aa441dff66fc88aa73bc30789e67f969))
+* **backend:** gate toml + serde_yaml behind Ipe.Config TOML/YAML decoder usage ([#478](https://github.com/arthurmaciel/ipe-lang/issues/478)) ([325f452](https://github.com/arthurmaciel/ipe-lang/commit/325f452f4c4b4070f159514b536052cdfd56c4d1))
+
+
+### Bug Fixes
+
+* **goldens:** align two stale run-oracles with sanctioned surface/semantics ([#487](https://github.com/arthurmaciel/ipe-lang/issues/487)) ([a83e3af](https://github.com/arthurmaciel/ipe-lang/commit/a83e3af7b543931440653d297861c38732aafc0b))
+* **lower:** Arc-carrier a non-literal fn value into a user-enum payload ctor ([#486](https://github.com/arthurmaciel/ipe-lang/issues/486)) ([5f0c617](https://github.com/arthurmaciel/ipe-lang/commit/5f0c6177fc9de00b055e078d78f49be2ad97e919))
+
 ## [0.1.30](https://github.com/arthurmaciel/ipe-lang/compare/ipe-v0.1.29...ipe-v0.1.30) (2026-07-31)
 
 
