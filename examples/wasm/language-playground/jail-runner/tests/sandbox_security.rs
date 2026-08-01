@@ -35,8 +35,8 @@ fn e2e_enabled() -> bool {
     std::env::var("IPE_PLAYGROUND_E2E").is_ok()
 }
 
-/// Repo root: `examples/wasm/language-playground/server` → `language-playground`
-/// → `wasm` → `examples` → repo.
+/// Repo root: `examples/wasm/language-playground/jail-runner` →
+/// `language-playground` → `wasm` → `examples` → repo.
 fn repo_root() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR"))
         .ancestors()

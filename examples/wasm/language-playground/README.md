@@ -1,72 +1,79 @@
-# Ipê language playground (in-browser Ipê → Rust)
+# Ipê language playground (in-browser Ipê → Rust, sandboxed run)
 
-A static web page that runs the Ipê compiler **frontend** in your browser and
-shows the Rust it emits. You type Ipê on the left; the parse → resolve →
-typecheck → lower → emit pipeline runs as a WebAssembly module and, near
-instantly, the right pane shows either the emitted Rust or the compiler
-diagnostics. Everything happens client-side — there is no server.
+A split-pane playground: you type Ipê on the left; the parse → resolve →
+typecheck → lower → emit pipeline runs **in your browser** as a WebAssembly
+module (the `ipe-wasm` crate) and the right pane shows the emitted Rust or the
+compiler diagnostics, near-instantly. **Run** ships the emitted Rust to a local
+Ipê server, which builds and executes it inside a bubblewrap jail and streams
+the real program output back.
 
-This is the `ipe-wasm` crate (`src/wasm`) — the compiler frontend compiled to
-`wasm32-unknown-unknown` — driven by a small ACE-editor page. It is not an
-`ipe build --target wasm` runtime example; it builds through its own
-`build.sh`.
+## Layout
 
-## What it demonstrates
+| Path | What it is |
+|---|---|
+| `index.html` | the three-pane UI (Ipê source \| emitted Rust \| program output) |
+| `pkg/` | git-ignored wasm-bindgen output the page loads |
+| `build/` | an Ipê program that builds `ipe-wasm` and regenerates `pkg/` |
+| `server/` | an `Ipe.Http.Server` app (static files + `POST /run`) |
+| `jail-runner/` | a Rust workspace member: the sandboxed build+run harness |
 
-- The exposed `ipe-wasm` `compile(source)` surface, which returns a plain JS
-  object `{ ok, diagnostics, emitted_rust }`:
-  - `ok === true` → `emitted_rust` holds the emitted Rust project (each file
-    under a `// ==== path ====` banner, then the emitted `Cargo.toml`).
-  - `ok === false` → `diagnostics` holds the rendered compiler diagnostic.
-- A live, debounced compile on every edit, plus a **Run** button and
-  `Ctrl`/`Cmd`+`Enter` that compile immediately and show the emitted Rust.
-- A theme selector that restyles both the ACE editor and the surrounding UI:
-  the interface CSS variables are derived from the chosen ACE theme's editor
-  colours, so light and dark themes both stay readable.
+## Prerequisites
 
-The compile is a pure function of the editor text. The module depends only on
-the frontend crate graph — no `std::process`, no filesystem, no network — so
-"compile in the browser" is a genuine result, not a stub. Turning the emitted
-Rust into a running binary needs `cargo`/`rustc`, which cannot run in a
-browser; that step is out of scope here (see "Not included" below).
+- The `ipe` compiler binary (build from this repo: `cargo build -p ipe`).
+- For `POST /run`: `bwrap`, `timeout`, `prlimit` (the jail primitives).
+- Only when rebuilding the browser bundle: the `wasm32-unknown-unknown`
+  rustup target and a matching `wasm-bindgen` CLI.
 
-## Build
-
-Requires the `wasm32-unknown-unknown` rustup target and a `wasm-bindgen` CLI
-matching the crate's `wasm-bindgen` version (`cargo install wasm-bindgen-cli`).
+## Build the browser bundle
 
 ```sh
-cd examples/wasm/language-playground
-./build.sh
+cd examples/wasm/language-playground/build
+ipe run
 ```
 
-`build.sh` compiles `ipe-wasm` for `wasm32-unknown-unknown` (release) and runs
-`wasm-bindgen` to generate the JS glue into `./pkg/` (a git-ignored build
-artifact that `index.html` loads directly).
+`build/src/Main.ipe` probes for `git`/`cargo`/`rustup`/`wasm-bindgen` (styled
+install hints, non-zero exit on a missing tool), adds the wasm target, builds
+`ipe-wasm` for `wasm32-unknown-unknown` (release), runs `wasm-bindgen` into
+`../pkg/`, and prints the server run hint.
 
 ## Run
 
-Serve this directory over HTTP with any static file server (the WASM module and
-its JS glue must be fetched over `http://`, not `file://`) and open the URL it
-prints:
-
 ```sh
-npx serve .
-# or
-miniserve .
+cd examples/wasm/language-playground/server
+ipe run
 ```
 
-The ACE editor library itself is loaded from a CDN (`ace-builds` on jsDelivr),
-so an internet connection is needed for the editor to appear; the compiler runs
-entirely locally in your browser.
+This starts the Ipê server (`Ipe.Http.Server`, port 8000), which serves the
+playground root and `/pkg` statically and answers `POST /run`. Open
+http://localhost:8000.
 
-## Not included: server build + run
+The first `POST /run` needs the warm cargo cache. Provision it once with:
 
-The tracking issue also envisions a **Run** affordance that ships the emitted
-Rust to a server which builds and runs it, returning its output. Building and
-running submitted Rust is remote code execution and must go through a hardened,
-cross-platform sandbox (network off, filesystem jail, memory/CPU/time limits).
-That server is **not** part of this example: it is deferred to a separate,
-security-reviewed change so nothing here can execute submitted code. This
-example is the safe, purely client-side compile preview; its **Run** button
-compiles and shows the emitted Rust, and never runs it.
+```sh
+cargo build -p playground-jail-runner
+# warm cache defaults to $IPE_PLAYGROUND_WARM_DIR or ~/.cache/ipe/playground-warm
+$(cargo metadata --format-version 1 --no-deps | jq -r '.target_directory')/debug/jail-runner prewarm
+```
+
+(`prewarm` builds the fixed crate-template dependency closure with network on;
+every jailed build after that is fully offline.)
+
+## How `POST /run` works
+
+1. The in-browser compiler emits a Rust project (each file under a
+   `// ==== path ====` banner, then the emitted `Cargo.toml`).
+2. `server/src/Runner.ipe` stages the split files under
+   `~/.cache/ipe/playground-runs/<token>/` and execs
+   `jail-runner run <project-dir> --wall 300 --warm <warm>` — a direct argv
+   vector, no shell.
+3. `jail-runner` builds the crate (`cargo build --offline`) **and** runs the
+   resulting `ipe-app` binary inside a bubblewrap jail: network denied
+   (`--unshare-net`), host filesystem read-only, `prlimit` caps, wall-clock
+   kill, and — for the run phase — a seccomp filter that denies subprocess
+   creation. The jail is the `ipe_sandbox` crate the compiler SEAL uses.
+4. The server streams a `── Build ──` / `── Run ──` / `── Error ──`
+   transcript back to the page.
+
+The security model and the load-bearing tests live in
+[docs/playground.md](../../../docs/playground.md) and
+`jail-runner/tests/sandbox_security.rs`.
