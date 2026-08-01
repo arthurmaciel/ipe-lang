@@ -85,12 +85,10 @@ Everything is client-side; the only network use is loading ACE from a CDN.
 
 ### Building it
 
-`examples/wasm/language-playground/build.sh` builds `ipe-wasm` for
-`wasm32-unknown-unknown` and runs `wasm-bindgen` (target `web`) into `pkg/`
-(a gitignored build artifact). The `.github/workflows/playground.yml` workflow
-rebuilds and headless-verifies the playground on any compiler change, and
-publishes it to GitHub Pages from the default branch — so the wasm always tracks
-the current compiler.
+The playground is built by an Ipê program, `examples/wasm/language-playground/build/src/Main.ipe`
+(`cd build && ipe run`): it probes `git`/`cargo`/`rustup`/`wasm-bindgen`,
+builds `ipe-wasm` for `wasm32-unknown-unknown` and runs `wasm-bindgen`
+(target `web`) into `../pkg/` (a gitignored build artifact).
 
 Because a native host config can set a system linker (`-fuse-ld=mold`) that the
 wasm linker (`rust-lld`) rejects, the repo `.cargo/config.toml` overrides
