@@ -1,0 +1,313 @@
+module Runner exposing (RunResult, runEmittedRust)
+
+import Ipe.Crypto as Crypto
+import Ipe.Error as Error
+import Ipe.File as File
+import Ipe.Json.Decode as Json
+import Ipe.List as List
+import Ipe.Path as Path
+import Ipe.Process as Process
+import Ipe.String as String
+import Ipe.System as System
+import Ipe.Task as Task
+
+
+type alias RunResult =
+    { ok : Bool
+    , unsandboxed : Bool
+    , output : String
+    }
+
+
+type alias Project =
+    { home : String
+    , baseDir : String
+    }
+
+
+type alias Phase =
+    { status : Maybe Int
+    , stdout : String
+    , stderr : String
+    , killed : Bool
+    }
+
+
+type alias RawOutcome =
+    { ok : Bool
+    , unsandboxed : Bool
+    , build : Maybe Phase
+    , run : Maybe Phase
+    , exit : Maybe Int
+    , error : Maybe String
+    }
+
+
+type alias SplitState =
+    { current : Maybe String
+    , files : List ( String, String )
+    , content : List String
+    }
+
+
+runEmittedRust : String -> Task Error RunResult
+runEmittedRust emittedRust =
+    stageProject emittedRust
+        |> Task.andThen runJail
+        |> Task.map formatOutcome
+
+
+stageProject : String -> Task Error Project
+stageProject emittedRust =
+    let
+        home =
+            System.getenvOr "HOME" "."
+    in
+    Crypto.randomToken 8
+        |> Task.andThen
+            (\token ->
+                let
+                    baseDir =
+                        home ++ "/.cache/ipe/playground-runs/" ++ token
+                in
+                case Path.fromString baseDir of
+                    Err _ ->
+                        Task.fail (Error.unexpected ("invalid cache path: " ++ baseDir))
+
+                    Ok basePath ->
+                        File.mkdirAll basePath
+                            |> Task.andThen (\_ -> writeAll baseDir (bannerFiles emittedRust))
+                            |> Task.map (\_ -> { home = home, baseDir = baseDir })
+            )
+
+
+runJail : Project -> Task Error RawOutcome
+runJail project =
+    let
+        runner =
+            System.getenvOr "IPE_PLAYGROUND_JAIL_RUNNER" "jail-runner"
+
+        warmDir =
+            System.getenvOr "IPE_PLAYGROUND_WARM_DIR" (project.home ++ "/.cache/ipe/playground-warm")
+    in
+    Process.run runner [ "run", project.baseDir, "--wall", "300", "--warm", warmDir ]
+        |> Task.andThenResult decodeOutcome
+
+
+decodeOutcome : String -> Result Error RawOutcome
+decodeOutcome raw =
+    Json.decodeString outcomeDecoder raw
+
+
+bannerFiles : String -> List ( String, String )
+bannerFiles emittedRust =
+    let
+        final =
+            List.foldl splitLine { current = Nothing, files = [], content = [] } (String.lines emittedRust)
+
+        currentFiles =
+            case final.current of
+                Just name ->
+                    ( name, String.join "\n" (List.reverse final.content) ) :: final.files
+
+                Nothing ->
+                    final.files
+    in
+    List.reverse currentFiles
+
+
+splitLine : String -> SplitState -> SplitState
+splitLine line state =
+    if isBanner line then
+        let
+            name =
+                String.slice 8 (String.length line - 5) line
+
+            finished =
+                case state.current of
+                    Just prev ->
+                        ( prev, String.join "\n" (List.reverse state.content) ) :: state.files
+
+                    Nothing ->
+                        state.files
+        in
+        { state | current = Just name, files = finished, content = [] }
+
+    else
+        { state | content = line :: state.content }
+
+
+isBanner : String -> Bool
+isBanner line =
+    String.left 8 line
+        == "// ==== "
+        && String.right 5 line
+        == " ===="
+        && String.length line
+        > 13
+
+
+writeAll : String -> List ( String, String ) -> Task Error ()
+writeAll base files =
+    case files of
+        [] ->
+            Task.succeed ()
+
+        ( name, content ) :: rest ->
+            writeOne base name content
+                |> Task.andThen (\_ -> writeAll base rest)
+
+
+writeOne : String -> String -> String -> Task Error ()
+writeOne base name content =
+    let
+        fullPath =
+            base ++ "/" ++ name
+    in
+    case Path.fromString fullPath of
+        Err _ ->
+            Task.fail (Error.unexpected ("invalid staged path: " ++ fullPath))
+
+        Ok target ->
+            case Path.fromString (Path.dir target) of
+                Err _ ->
+                    Task.fail (Error.unexpected "invalid staged parent path")
+
+                Ok parent ->
+                    File.mkdirAll parent
+                        |> Task.andThen (\_ -> File.writeFile target content)
+
+
+outcomeDecoder : Json.Decoder RawOutcome
+outcomeDecoder =
+    Json.map2 groupAll
+        (Json.map3 groupBody
+            (Json.map2 groupHead
+                (Json.field "ok" Json.bool)
+                (Json.field "unsandboxed" Json.bool)
+            )
+            (Json.oneOf
+                [ Json.map Just (Json.field "build" phaseDecoder)
+                , Json.succeed Nothing
+                ]
+            )
+            (Json.oneOf
+                [ Json.map Just (Json.field "run" phaseDecoder)
+                , Json.succeed Nothing
+                ]
+            )
+        )
+        (Json.map2 groupTail
+            (Json.oneOf
+                [ Json.map Just (Json.field "exit" Json.int)
+                , Json.succeed Nothing
+                ]
+            )
+            (Json.oneOf
+                [ Json.map Just (Json.field "error" Json.string)
+                , Json.succeed Nothing
+                ]
+            )
+        )
+
+
+groupHead : Bool -> Bool -> ( Bool, Bool )
+groupHead ok unsandboxed =
+    ( ok, unsandboxed )
+
+
+groupBody : ( Bool, Bool ) -> Maybe Phase -> Maybe Phase -> ( ( Bool, Bool ), Maybe Phase, Maybe Phase )
+groupBody head build run =
+    ( head, build, run )
+
+
+groupTail : Maybe Int -> Maybe String -> ( Maybe Int, Maybe String )
+groupTail exit error =
+    ( exit, error )
+
+
+groupAll : ( ( Bool, Bool ), Maybe Phase, Maybe Phase ) -> ( Maybe Int, Maybe String ) -> RawOutcome
+groupAll ( head, build, run ) ( exit, error ) =
+    { ok = fst head
+    , unsandboxed = snd head
+    , build = build
+    , run = run
+    , exit = exit
+    , error = error
+    }
+
+
+phaseDecoder : Json.Decoder Phase
+phaseDecoder =
+    Json.map4 phaseGroup
+        (Json.oneOf
+            [ Json.map Just (Json.field "status" Json.int)
+            , Json.succeed Nothing
+            ]
+        )
+        (Json.field "stdout" Json.string)
+        (Json.field "stderr" Json.string)
+        (Json.field "killed" Json.bool)
+
+
+phaseGroup : Maybe Int -> String -> String -> Bool -> Phase
+phaseGroup status stdout stderr killed =
+    { status = status
+    , stdout = stdout
+    , stderr = stderr
+    , killed = killed
+    }
+
+
+formatOutcome : RawOutcome -> RunResult
+formatOutcome raw =
+    if raw.ok then
+        case raw.run of
+            Just run ->
+                { ok = True
+                , unsandboxed = raw.unsandboxed
+                , output = ensureNewline (section "Run" run.stdout run.stderr)
+                }
+
+            Nothing ->
+                { ok = True
+                , unsandboxed = raw.unsandboxed
+                , output = "── Run ──\n(no run output)\n"
+                }
+
+    else
+        let
+            buildPart =
+                case raw.build of
+                    Just b ->
+                        section "Build" b.stdout b.stderr
+
+                    Nothing ->
+                        ""
+
+            errorPart =
+                case raw.error of
+                    Just e ->
+                        "── Error ──\n" ++ e ++ "\n"
+
+                    Nothing ->
+                        ""
+        in
+        { ok = False
+        , unsandboxed = raw.unsandboxed
+        , output = ensureNewline (buildPart ++ errorPart)
+        }
+
+
+section : String -> String -> String -> String
+section name stdout stderr =
+    "── " ++ name ++ " ──\n" ++ stdout ++ stderr
+
+
+ensureNewline : String -> String
+ensureNewline s =
+    if String.endsWith "\n" s then
+        s
+
+    else
+        s ++ "\n"

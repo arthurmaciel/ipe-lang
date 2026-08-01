@@ -1,20 +1,24 @@
 module Main exposing (main)
 
+import Ipe.Error as Error
 import Ipe.Http.Server as Server
 import Ipe.Http.Server exposing (Handler)
+import Ipe.Json.Decode as Json
+import Ipe.Json.Encode as Encode
+import Ipe.String as String
 import Ipe.Task as Task
+import Runner
 
 
 -- Serves the playground as an Ipê-native server (start from this directory:
 -- `cd server && ipe run`). The static roots are relative to the process cwd:
 -- ".." is the playground root (index.html) and "../pkg" the wasm bundle.
 -- POST /run accepts the EMITTED RUST (not Ipê source); the client-side WASM
--- compiler produced it. Until the sandboxed jail-runner lands, /run returns
--- ok:false with an explanatory transcript.
-
+-- compiler produced it. The server stages it into a fresh project dir under
+-- ~/.cache/ipe/playground-runs and hands it to the sandboxed jail-runner
+-- binary (see examples/wasm/language-playground/jail-runner).
 main =
-    Server.listen
-        8000
+    Server.listen 8000
         [ Server.static "/" ".."
         , Server.static "/pkg" "../pkg"
         , Server.post "/run" handleRun
@@ -23,6 +27,31 @@ main =
 
 handleRun : Handler
 handleRun req =
-    Task.succeed
-        (Server.json
-            "{\"ok\":false,\"output\":\"Server-side running is not enabled yet: this build ships the in-browser compiler and the static server. Running programs lands with the sandboxed jail-runner.\"}")
+    case Json.decodeString (Json.field "rust" Json.string) (Server.body req) of
+        Err _ ->
+            Task.succeed
+                (Server.json (runResponse False False "Malformed request: expected {\"rust\": String}."))
+
+        Ok rust ->
+            if String.length rust > 16777216 then
+                Task.succeed
+                    (Server.json (runResponse False False "Program too large (over 16 MiB)."))
+
+            else
+                Runner.runEmittedRust rust
+                    |> Task.map (\r -> Server.json (runResponse r.ok r.unsandboxed r.output))
+                    |> Task.onError (\e -> Task.succeed (Server.json (runResponse False False ("Server error: " ++ Error.message e))))
+
+
+-- The wire carries the EMITTED Rust, which includes the whole
+-- stdlib closure (src/ipe_runtime/*): a typical program ships
+-- ~2.6 MiB. 16 MiB matches the runtime's output ceiling.
+runResponse : Bool -> Bool -> String -> String
+runResponse ok unsandboxed output =
+    Encode.encode 0
+        (Encode.object
+            [ ( "ok", Encode.bool ok )
+            , ( "unsandboxed", Encode.bool unsandboxed )
+            , ( "output", Encode.string output )
+            ]
+        )

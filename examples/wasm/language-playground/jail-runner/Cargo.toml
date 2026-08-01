@@ -1,0 +1,26 @@
+[package]
+name = "playground-jail-runner"
+description = "Jailed build+run harness for the Ipê language playground /run endpoint"
+edition.workspace = true
+version.workspace = true
+license.workspace = true
+
+[lib]
+name = "playground_jail_runner"
+path = "src/lib.rs"
+
+[[bin]]
+name = "jail-runner"
+path = "src/main.rs"
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tempfile = "3"
+ipe_sandbox = { path = "../../../../src/compiler/sandbox" }
+
+[dev-dependencies]
+ipe_sandbox = { path = "../../../../src/compiler/sandbox" }
+
+[lints]
+workspace = true
