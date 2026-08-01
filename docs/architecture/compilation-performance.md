@@ -80,6 +80,28 @@ roots:
 (sccache, mold/lld, cranelift). They shave constants; they do not change the
 structure that makes hello world pay for `rsa`.
 
+### Measured floor
+
+The budget is reachable and the gap is structural, not incidental. On a warm
+developer machine, `examples/sky/ipe/01-hello-world` (`Io.println` only), built
+as the current emit versus hand-trimmed to the floor its single kernel needs — a
+synchronous `fn main` printing to stdout with no dependencies:
+
+| Metric | Current emit | Floor (`Io.println`) | Ratio |
+|---|---|---|---|
+| Crates compiled | 105 | 1 | ~100× |
+| Cold build | ~62 s | ~0.6 s | ~100× |
+| Warm rebuild (edit `main`) | ~2.4 s | ~0.5 s | ~5× |
+| Binary | 1.06 MB | 0.36 MB | ~3× |
+
+The two-order-of-magnitude cold gap is the 105-crate closure — the target of S1.
+The ~5× warm gap is recompiling the vendored 2.6 MB runtime *inside* the user
+crate on every edit — the target of S3. Neither is required by the program's
+semantics: the emit ships all 105 floor crates and all 60 runtime modules for
+every program, because the emitted `main.rs` prelude references `log`, `json`,
+`core`, `task`, and `tokio` (via `block_on`) even when the user calls none of
+them.
+
 ## Strategies
 
 Scored against the strict precedence Security > Correctness > Soundness >
