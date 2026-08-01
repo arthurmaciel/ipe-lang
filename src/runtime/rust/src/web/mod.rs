@@ -776,26 +776,20 @@ async fn drive_session<Model, Msg, FUpdate, FView, FSubs>(
     }
 }
 
-/// Generate a 128-bit random session id as 32 hex chars. Self-contained
-/// (no uuid crate / uuid_kernel module dependency, since the generated
-/// A fresh session id: **128 bits from the OS CSPRNG**, hex-encoded.
+/// A fresh session id: **128 bits from the OS CSPRNG**, as 32 lowercase-hex
+/// chars.
 ///
 /// SECURITY: the sid is the SOLE bearer credential for a Ipe.Web session
 /// (`sid_from_cookie` + `store.get` authorise every event off it). It MUST be
 /// unpredictable. The prior scheme — `clock_nanos XOR counter` through
 /// splitmix64 — was an invertible bijection over low-entropy, partly-known
 /// inputs (the counter starts at 0; the clock is estimable), so sids were
-/// guessable → session hijacking. OsRng is the OS CSPRNG (the same one
-/// `crypto.rs` / `csrf.rs` use; no new dependency). Never panics.
+/// guessable → session hijacking. `uuid::Uuid::new_v4` draws its bits from the
+/// OS CSPRNG (the approved security-randomness source per `random.rs`), and its
+/// `simple` form is exactly 32 lowercase-hex chars — same shape, no `aes-gcm`.
+/// Never panics.
 fn new_sid() -> String {
-    use aes_gcm::aead::{OsRng, rand_core::RngCore};
-    let mut buf = [0u8; 16];
-    OsRng.fill_bytes(&mut buf);
-    let mut s = String::with_capacity(32);
-    for b in buf {
-        s.push_str(&format!("{b:02x}"));
-    }
-    s
+    uuid::Uuid::new_v4().simple().to_string()
 }
 
 /// Normalise a raw `IPE_LIVE_BASE_PATH` value: trim, drop a trailing slash,

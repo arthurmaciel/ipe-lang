@@ -6,6 +6,7 @@ pub mod char_kernel;
 pub mod config;
 pub mod core;
 pub mod crypto;
+pub mod crypto_core;
 pub mod debug;
 pub mod decimal;
 pub mod dict;
