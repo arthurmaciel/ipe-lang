@@ -47,7 +47,6 @@ rsa = { version = "0.9", features = ["sha2"] }
 aes-gcm = "0.10"
 chacha20poly1305 = "0.10"
 pbkdf2 = "0.12"
-csv = "1"
 jsonwebtoken = "9"
 uuid = { version = "1", features = ["v4", "v7"] }
 bcrypt = "0.17"

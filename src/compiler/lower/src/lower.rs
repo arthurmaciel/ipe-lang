@@ -1299,6 +1299,35 @@ fn ir_type_mentions_http(ty: &IrType) -> bool {
     }
 }
 
+/// `true` when `ty` mentions the `Ipe.Csv` opaque type `CsvDoc`, defined in the
+/// `csv` runtime module. A bare `{ header : List String, rows : List (List
+/// String) }` record shape folds to `IrType::CsvDoc` and emits a bare `CsvDoc`
+/// reference resolved through the module's `pub use csv::*` glob, so a function
+/// that merely names such a value — WITHOUT itself calling a `Csv` kernel —
+/// still references the type in emitted code, and the module (and its `csv`
+/// dependency) must be present. Mirrors [`ir_type_mentions_http`].
+fn ir_type_mentions_csv(ty: &IrType) -> bool {
+    match ty {
+        IrType::CsvDoc => true,
+        IrType::Task(inner)
+        | IrType::Cmd(inner)
+        | IrType::Sub(inner)
+        | IrType::Decoder(inner)
+        | IrType::Maybe(inner)
+        | IrType::List(inner) => ir_type_mentions_csv(inner),
+        IrType::Result(a, b) | IrType::Dict(a, b) => {
+            ir_type_mentions_csv(a) || ir_type_mentions_csv(b)
+        }
+        IrType::Fun(params, ret) | IrType::FnOnceChain(params, ret) => {
+            params.iter().any(ir_type_mentions_csv) || ir_type_mentions_csv(ret)
+        }
+        IrType::Tuple(elems) => elems.iter().any(ir_type_mentions_csv),
+        IrType::Record(fields) => fields.values().any(ir_type_mentions_csv),
+        IrType::Enum { args, .. } => args.iter().any(ir_type_mentions_csv),
+        _ => false,
+    }
+}
+
 fn ir_contains_fun(ty: &IrType) -> bool {
     match ty {
         // A curried `FnOnce` chain is the same boxed-closure family as `Fun`; the
@@ -5941,6 +5970,11 @@ struct KernelUsage {
     /// `zstdDecompress`) — gates the `compression` runtime module and the
     /// `flate2` + `zstd` dependencies.
     compression: bool,
+    /// Any `Ipe.Csv` kernel (`parse` / `parseWithDelimiter` / `encode` /
+    /// `encodeWithDelimiter` / `parseStreamFromFile`) — gates the `csv` runtime
+    /// module and the `csv` dependency. Unioned with a `CsvDoc` type-mention
+    /// guard at the assembly site.
+    csv: bool,
     /// Any Ipe.Ui render kernel.
     ui: bool,
     /// Any Ipe.Css (Ipe.CssSafety) leaf kernel — independent of
@@ -5997,6 +6031,7 @@ impl KernelUsage {
             && self.http
             && self.config
             && self.compression
+            && self.csv
             && self.ui
             && self.css
             && self.auth
@@ -6024,6 +6059,7 @@ impl KernelUsage {
         self.http |= k.is_http_client();
         self.config |= k.is_config();
         self.compression |= k.is_compression();
+        self.csv |= k.is_csv();
         self.ui |= k.is_ui();
         self.css |= k.is_css();
         self.auth |= k.is_auth();
@@ -7979,6 +8015,22 @@ impl<'a> Lowerer<'a> {
         // `compression` module.
         let uses_compression = kernel_usage.compression;
 
+        // detect `Ipe.Csv` usage — any `Csv.parse` / `parseWithDelimiter` /
+        // `encode` / `encodeWithDelimiter` / `parseStreamFromFile` kernel, OR a
+        // function signature that mentions the `CsvDoc` opaque type. The backend
+        // uses this flag to declare `csv` in the emitted `ipe_runtime/mod.rs` and
+        // add the `csv` dependency. The type-mention guard is required: a bare
+        // `{ header, rows }` record shape folds to `IrType::CsvDoc`, which emits a
+        // bare `CsvDoc` reference resolved through the module's `pub use csv::*`
+        // glob — a function that only names such a value (never calling a `Csv`
+        // kernel) still references the type, so omitting the guard would emit
+        // `CsvDoc` with no definition in scope (E0433 — a SEAL breach).
+        let uses_csv = kernel_usage.csv
+            || funcs.iter().any(|f| {
+                ir_type_mentions_csv(&f.ret)
+                    || f.params.iter().any(|(_, t)| ir_type_mentions_csv(t))
+            });
+
         // detect Ipe.Ui / Ipe.Html / Ipe.Web / Ipe.Tui / Ipe.WebView usage.
         // TUI runtime files (tui/app.rs, tui/layout.rs, tui/focus.rs) import
         // `super::super::ui` and `super::super::html` unconditionally, so
@@ -8033,6 +8085,7 @@ impl<'a> Lowerer<'a> {
             uses_http,
             uses_config,
             uses_compression,
+            uses_csv,
             uses_ui,
             uses_web,
             uses_tui,
