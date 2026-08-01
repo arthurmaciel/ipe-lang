@@ -12736,8 +12736,11 @@ impl<'a> Lowerer<'a> {
                     } else {
                         lowered_args
                             .into_iter()
-                            .map(promote_fn_field_value_carrier)
-                            .collect()
+                            .zip(args.iter())
+                            .map(|(value, canon_arg)| {
+                                self.promote_ctor_arg_fn_carrier(canon_arg, value)
+                            })
+                            .collect::<DResult<Vec<_>>>()?
                     };
                     Ok(Expr::Ctor {
                         home: ctor_home,
@@ -12909,6 +12912,90 @@ impl<'a> Lowerer<'a> {
             OnFormKind::Decoder
         } else {
             OnFormKind::FixedValue
+        })
+    }
+
+    /// Re-carrier a USER-enum constructor argument whose solved type is a direct
+    /// function arrow to the `Arc<dyn Fn>` carrier, matching the payload field's
+    /// type-side flip ([`normalize_enum_payload_fun_carrier`], which promotes a
+    /// direct-`Fun` payload to [`IrType::SharedFun`]). Without this the two ends
+    /// disagree — the field is `Arc<dyn Fn>` but a non-literal argument value (a
+    /// bare `Var` of a function-typed parameter, an `Access`/`Apply`/`Call`
+    /// producing a function value) stays on the `Box` carrier — and the emitted
+    /// constructor call is an `Arc`-vs-`Box` `E0308`.
+    ///
+    /// An inline lambda / top-level-function reference already re-stamps to the
+    /// `Arc` carrier through [`promote_fn_field_value_carrier`]; every other
+    /// function-value leaf is eta-expanded to an `Expr::SharedLambda` over the
+    /// arrow's own params/ret via [`eta_expand_leaf_to_shared`] (constructed with
+    /// `Arc::new`), so a stored-under-a-constructor function is `Arc` on both the
+    /// field type and the construction expression by construction — the class the
+    /// literal-only promotion left open. A non-function argument, or one whose
+    /// solved type is not a direct arrow (a generic `a`, a collection/tuple of
+    /// functions — those stay on the `Box` carrier upstream), is left unchanged.
+    fn promote_ctor_arg_fn_carrier(&self, canon_arg: &canon::Expr, value: Expr) -> DResult<Expr> {
+        // The literal fast paths (inline lambda, top-level-function reference)
+        // already carry the `Arc` decision; take them first so the eta wrapper is
+        // reserved for the non-literal leaves that would otherwise stay `Box`.
+        let value = promote_fn_field_value_carrier(value);
+        if matches!(
+            value,
+            Expr::SharedLambda { .. }
+                | Expr::FuncValue {
+                    ty: IrType::SharedFun(_, _),
+                    ..
+                }
+        ) {
+            return Ok(value);
+        }
+        // Only a DIRECT function arrow was flipped to `SharedFun` on the type
+        // side; consult the argument's solved type so a non-function (or a
+        // generic / collection-carried function the type side did NOT flip) is
+        // left on its own carrier. A still-generic slot (`region_ty` absent or
+        // not an arrow) is not a direct-`Fun` payload, so it is left unchanged.
+        if !matches!(self.region_ty(canon_arg.span), Some(Ty::Fun(_, _))) {
+            return Ok(value);
+        }
+        let solved = self.region_ty(canon_arg.span).ok_or_else(|| {
+            bug(
+                "ipe_lower::promote_ctor_arg_fn_carrier",
+                "solved arrow type vanished between checks",
+            )
+        })?;
+        let IrType::Fun(params, ret) = self.ir_type_from_ty(solved, canon_arg.span)? else {
+            return Ok(value);
+        };
+        // Eta-expand the leaf into `Arc::new(move |eta_0, …| (leaf)(eta_0, …))`
+        // over fresh binders drawn positionally from `eta_params`. Unlike the
+        // sync-capture-kernel eta ([`eta_expand_leaf_to_shared`]), this wrapper is
+        // constructed ONCE at ctor time with no enclosing `Fn` closure, so a
+        // `Var`/`CloneVar` leaf is MOVED into the `Arc` (not cloned): the moved
+        // `Box<dyn Fn>` binding is called by shared reference inside the `Fn`
+        // wrapper, and `Box<dyn Fn>` is not `Clone`, so a clone-forward would be
+        // an E0599. Every other leaf shape is a fresh value, forwarded as-is.
+        let callee = match value {
+            Expr::Var(s) | Expr::CloneVar(s) => Expr::Var(s),
+            other => other,
+        };
+        let mut fresh_params: Vec<(Symbol, IrType)> = Vec::with_capacity(params.len());
+        let mut call_args: Vec<Expr> = Vec::with_capacity(params.len());
+        for (offset, pty) in params.iter().enumerate() {
+            let sym = self.eta_params.get(offset).copied().ok_or_else(|| {
+                bug(
+                    "ipe_lower::promote_ctor_arg_fn_carrier",
+                    "eta-parameter pool smaller than the payload arrow's arity",
+                )
+            })?;
+            fresh_params.push((sym, pty.clone()));
+            call_args.push(Expr::Var(sym));
+        }
+        Ok(Expr::SharedLambda {
+            params: fresh_params,
+            ret: *ret,
+            body: Box::new(Expr::Apply {
+                func: Box::new(callee),
+                args: call_args,
+            }),
         })
     }
 
