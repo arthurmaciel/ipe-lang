@@ -27,7 +27,6 @@ members = [
     "src/runtime/rust",
     "tools/ipe-ffi-inspector",
     "tools/regen-goldens",
-    "examples/wasm/language-playground/server",
     "examples/wasm/language-playground/jail-runner",
 ]
 # `tools/panic-scan` carries its own `[workspace]` so it builds standalone as a
