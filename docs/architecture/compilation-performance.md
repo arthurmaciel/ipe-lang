@@ -41,7 +41,7 @@ Optional heavy surfaces are already usage-gated by manifest surgery
 lettre, wry/tao, crossterm, flate2/zstd, csv, jsonwebtoken, aes-gcm, … appear
 only when a reachable kernel needs them.
 
-### Why hello world still compiles 110 crates
+### Why hello world still compiles 105 crates
 
 Gating stops at the optional surfaces. The **floor is fixed** — the base
 template ships the same `[dependencies]` for every program:
@@ -51,7 +51,7 @@ template ships the same `[dependencies]` for every program:
 > rust_decimal, hmac, sha2, subtle, zeroize, rsa, getrandom, uuid, bcrypt,
 > url, futures-util (+ libc on unix)
 
-`cargo tree` over that manifest resolves **110 crates**. The heavy transitive
+`cargo tree` over a freshly emitted hello world resolves **105 crates**. The heavy transitive
 roots:
 
 | Root | Subtree | Pulled in by |
@@ -69,7 +69,7 @@ roots:
 
 ### Where the time goes
 
-1. **rustc over ~109 dependency crates** — dominant. Minutes cold on a user
+1. **rustc over ~104 dependency crates** — dominant. Minutes cold on a user
    machine; 16 s even on a warm sccache + mold dev box (measured: base
    manifest + trivial main).
 2. **rustc over the one emitted crate** — user code plus the entire vendored
@@ -122,7 +122,7 @@ a cargo failure. No security-bearing parser is replaced by a hand-rolled
 "tiny" one — `serde_json`/`url` stay wherever `Json`/`Url` is actually used;
 gating removes them where they are not.
 
-**Buys.** 110 → ~0–10 crates for common programs; cold builds minutes →
+**Buys.** 105 → ~0–10 crates for common programs; cold builds minutes →
 seconds; smaller binaries.
 
 **Risks.** Attribution table maintenance (mitigated by the existing drift
@@ -241,7 +241,7 @@ Nightly-only component → cannot be the default floor; stays opt-in.
 
 | Rank | Strategy | Budget impact | Principle balance |
 |---|---|---|---|
-| 1 | S1 usage-driven floor | 110 → ~0–10 crates; minutes → seconds cold | improves Security *and* Efficiency; nothing traded |
+| 1 | S1 usage-driven floor | 105 → ~0–10 crates; minutes → seconds cold | improves Security *and* Efficiency; nothing traded |
 | 2 | S2 shared build-once target | repeat builds → ~1 s | pure Efficiency, all else neutral |
 | 3 | S3 precompiled runtime crate | removes 3.4 MB/project recompile | Efficiency + emit Readability |
 | 4 | S6 IR interpreter for `ipe run` | seconds → milliseconds | Efficiency transformative; Correctness gated by mandatory differential oracle |
