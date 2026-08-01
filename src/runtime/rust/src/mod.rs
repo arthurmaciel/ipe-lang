@@ -63,10 +63,21 @@ pub mod config;
 pub mod config_decode;
 pub mod core;
 
+// The always-on cryptographic floor: the entropy pair, the SHA-2 hash/HMAC
+// family, the RSA sign/verify pair, the typed `Key`/`Mac` newtypes and the
+// constant-time compare. wasm32 compiles only the entropy pair + pure hash
+// family (the RSA arms are `cfg(feature = "crypto")`). Gated the same as
+// `crypto` so the standalone crate's floor mirrors the emitted crate's.
+#[cfg(any(
+    feature = "crypto",
+    all(target_arch = "wasm32", feature = "wasm-client")
+))]
+pub mod crypto_core;
 // wasm32: `crypto_random_bytes`/`crypto_random_token` (the browser entropy
 // substitute) plus the pure hash family compile without the native-only AEAD
 // deps — those functions are individually `cfg(not(target_arch = "wasm32"))`
-// inside `crypto.rs` (see its module doc).
+// inside `crypto.rs` (see its module doc). The `crypto` module re-exports the
+// `crypto_core` floor so every `crypto::…` path resolves.
 #[cfg(any(
     feature = "crypto",
     all(target_arch = "wasm32", feature = "wasm-client")
