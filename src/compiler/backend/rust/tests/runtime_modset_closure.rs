@@ -55,10 +55,10 @@ fn resolve_runtime() -> Option<PathBuf> {
 /// `uses_ffi` is excluded: it appends `mod ffi;` to `main.rs` (not to
 /// `ipe_runtime/mod.rs`) and requires FFI emission inputs the body-free emit
 /// here cannot supply — it is orthogonal to the runtime-module closure.
-const FLAG_COUNT: usize = 15;
+const FLAG_COUNT: usize = 17;
 
 #[allow(clippy::similar_names)] // `uses_ui` / `uses_tui` are intentionally alike
-fn module_for_mask(name: ipe_intern::Symbol, mask: u16) -> Module {
+fn module_for_mask(name: ipe_intern::Symbol, mask: u32) -> Module {
     let f = |i: usize| mask & (1 << i) != 0;
     // `uses_ui` is forced true whenever `uses_tui` is true at the lowerer; mirror
     // that invariant here so the emitted set matches a real program (a Tui shape
@@ -86,6 +86,8 @@ fn module_for_mask(name: ipe_intern::Symbol, mask: u16) -> Module {
         uses_config: f(12),
         uses_compression: f(13),
         uses_csv: f(14),
+        uses_crypto: f(15),
+        uses_jwt: f(16),
         uses_debug: false,
         uses_ffi: false,
     }
@@ -248,7 +250,7 @@ fn emitted_modset_is_closed_over_every_flag_combo() {
     // across every combination.
     let mut dep_cache: HashMap<String, BTreeSet<String>> = HashMap::new();
 
-    for mask in 0u16..(1u16 << FLAG_COUNT) {
+    for mask in 0u32..(1u32 << FLAG_COUNT) {
         let module = module_for_mask(main, mask);
         let prog = Program {
             modules: vec![module],
@@ -272,7 +274,7 @@ fn emitted_modset_is_closed_over_every_flag_combo() {
                     declared.contains(dep),
                     "module-set SEAL breach: emitted `mod.rs` declares `{m}` \
                      (which does `use crate::{dep}`) but does NOT declare `{dep}` \
-                     — flag mask {mask:#012b}. The emitted crate would fail `cargo build`. \
+                     — flag mask {mask:#019b}. The emitted crate would fail `cargo build`. \
                      Declared modules: {declared:?}"
                 );
             }

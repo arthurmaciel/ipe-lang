@@ -272,8 +272,8 @@ const WASM_ABSENT_MODULE_PATHS: &[&str] = &[
 /// per-module one, so an un-substituted sibling kernel in the same file can
 /// never silently become wasm-reachable.
 const WASM_PRESENT_OVERRIDES: &[&str] = &[
-    "ipe_runtime::crypto::crypto_random_bytes",
-    "ipe_runtime::crypto::crypto_random_token",
+    "ipe_runtime::crypto_core::crypto_random_bytes",
+    "ipe_runtime::crypto_core::crypto_random_token",
     "ipe_runtime::http_client::http_get",
     "ipe_runtime::http_client::http_post",
     "ipe_runtime::http_client::http_request",
@@ -540,6 +540,34 @@ const RUNTIME_MOD_RS_COMPRESS_APPEND: &str = "pub mod compression;\npub use comp
 /// on transitively.
 const RUNTIME_MOD_RS_CSV_APPEND: &str = "pub mod csv;\npub use csv::*;\n";
 
+// ── Ipe.Crypto — heavy cryptography (SHA-1/MD5, AEAD, PBKDF2) ────────────────
+
+/// Lines appended to `ipe_runtime/mod.rs` when the program uses a HEAVY
+/// `Ipe.Crypto` kernel (legacy SHA-1/MD5, AES-GCM / ChaCha20-Poly1305 AEAD, or
+/// PBKDF2 key derivation).
+///
+/// `crypto.rs` (the heavy AEAD/checksum kernels) is vendored into every emitted
+/// crate but declared only on demand — it is the sole consumer of the `sha1`,
+/// `md-5`, `aes-gcm`, `chacha20poly1305`, and `pbkdf2` crates, which
+/// [`crypto_cargo_toml`] adds under the same condition. The always-on
+/// `crypto_core` floor (SHA-2, HMAC, RSA, constant-time compare, the entropy
+/// pair, the `Key`/`Mac` newtypes) stays in the base module set — `crypto.rs`
+/// re-exports it, but nothing else reaches the heavy module, so the flag alone
+/// gates it, never forced on transitively.
+const RUNTIME_MOD_RS_CRYPTO_APPEND: &str = "pub mod crypto;\npub use crypto::*;\n";
+
+// ── Ipe.Jwt — JSON Web Token encode/decode ──────────────────────────────────
+
+/// Lines appended to `ipe_runtime/mod.rs` when the program reaches the `jwt`
+/// runtime module (a `Ipe.Jwt` kernel, or the `Ipe.Auth` surface — `auth.rs`
+/// calls `crate::jwt::…`).
+///
+/// `jwt.rs` is the sole direct consumer of the `jsonwebtoken` crate, which
+/// [`jwt_cargo_toml`] adds under the same condition. It reaches only the
+/// always-on `crypto_core` floor (`super::crypto_core::…`), so declaring it
+/// pulls no other gated module.
+const RUNTIME_MOD_RS_JWT_APPEND: &str = "pub mod jwt;\npub use jwt::*;\n";
+
 // ── Shared transitive dep: http_header ──────────────────────────────────────
 //
 // `http_header.rs` (a dependency-free leaf exposing `canonical_header`) is part
@@ -554,10 +582,12 @@ const RUNTIME_MOD_RS_CSV_APPEND: &str = "pub mod csv;\npub use csv::*;\n";
 /// kernels (`Auth.hashPassword` / `verifyPassword` / `signToken` /
 /// `verifyToken` / `register` / `login` / `setRole` etc.).
 ///
-/// `auth.rs` requires `bcrypt` (password hashing) and `jsonwebtoken` (JWT
-/// signing/verification); both are unconditional deps in the generated
-/// project's `Cargo.toml` (included in the `crypto` and `json` default
-/// features), so no manifest surgery is needed — only a `mod.rs` declaration.
+/// `auth.rs` requires `bcrypt` (password hashing, an unconditional base dep) and
+/// reaches `crate::jwt` for JWT signing/verification. The `jwt` module and its
+/// `jsonwebtoken` dependency are gated (see [`RUNTIME_MOD_RS_JWT_APPEND`] /
+/// [`jwt_cargo_toml`]), so the backend force-declares `jwt` alongside `auth`
+/// via [`EmitCtx::reaches_jwt`]; this append handles only the `auth` module
+/// declaration itself.
 const RUNTIME_MOD_RS_AUTH_APPEND: &str = "pub mod auth;\npub use auth::*;\n";
 
 // ── Ipe.WebSocket — outbound WebSocket client ──────────────────────────
@@ -1440,6 +1470,26 @@ fn assemble_project_files(
     } else {
         cargo_toml
     };
+    // Heavy Ipe.Crypto (`sha1` + `md-5` + `aes-gcm` + `chacha20poly1305` +
+    // `pbkdf2`): pulled in only when the program uses a heavy `Ipe.Crypto` kernel
+    // (legacy SHA-1/MD5, AEAD, or PBKDF2). All five are leaves consumed solely by
+    // `crypto.rs`. The always-on `crypto_core` floor keeps `rsa` / `sha2` /
+    // `hmac` / `subtle` unconditional in the base manifest, so a program using
+    // only SHA-2/HMAC/RSA/entropy pulls none of the heavy crates.
+    let cargo_toml = if ctx.uses_crypto {
+        crypto_cargo_toml(&cargo_toml)?
+    } else {
+        cargo_toml
+    };
+    // Ipe.Jwt (`jsonwebtoken`): pulled in when the program reaches the `jwt`
+    // runtime module — a `Ipe.Jwt` kernel (`uses_jwt`) or the `Ipe.Auth` surface
+    // (`auth.rs` calls `crate::jwt`). The crate is a leaf — a program that never
+    // uses JWT or Auth pulls it not.
+    let cargo_toml = if ctx.reaches_jwt() {
+        jwt_cargo_toml(&cargo_toml)?
+    } else {
+        cargo_toml
+    };
     // TEA runtime: `tea.rs` drives its event loop over a `tokio::sync::mpsc`
     // channel, so any program that pulls the `tea` module needs tokio's `"sync"`
     // feature. The union mirrors the `tea` mod.rs append below (a `Cmd`/`Sub`
@@ -1507,6 +1557,23 @@ fn assemble_project_files(
         // the crate.
         if ctx.uses_csv {
             mod_rs.push_str(RUNTIME_MOD_RS_CSV_APPEND);
+        }
+        // Heavy Ipe.Crypto. `crypto` (the sole consumer of `sha1` + `md-5` +
+        // `aes-gcm` + `chacha20poly1305` + `pbkdf2`) is declared when the program
+        // uses a heavy `Ipe.Crypto` kernel. The always-on `crypto_core` floor is
+        // in the base module set; nothing else reaches the heavy module, so the
+        // flag alone gates it. A program using only SHA-2/HMAC/RSA/entropy keeps
+        // it absent, dropping the five crates and their trees.
+        if ctx.uses_crypto {
+            mod_rs.push_str(RUNTIME_MOD_RS_CRYPTO_APPEND);
+        }
+        // Ipe.Jwt. `jwt` (the sole consumer of `jsonwebtoken`) is declared when
+        // the program reaches it — directly (`uses_jwt`) or through the `Ipe.Auth`
+        // surface (`auth.rs` calls `crate::jwt`). It reaches only the always-on
+        // `crypto_core` floor, so declaring it pulls no other gated module. A
+        // program using neither JWT nor Auth keeps it absent, dropping the crate.
+        if ctx.reaches_jwt() {
+            mod_rs.push_str(RUNTIME_MOD_RS_JWT_APPEND);
         }
         // `tea` must be declared whenever any included module's `use crate::tea`
         // closure references it — NOT only when user code names a TEA kernel
@@ -2929,6 +2996,85 @@ fn csv_cargo_toml(base: &str) -> DResult<String> {
         .find(PROFILE_ANCHOR)
         .ok_or_else(|| Diagnostic::CompilerBug {
             where_: "ipe_backend_rust::project::csv_cargo_toml",
+            detail: format!("Cargo.toml anchor {PROFILE_ANCHOR:?} not found — golden drifted"),
+        })?;
+    let mut result = String::with_capacity(base.len() + deps.len());
+    result.push_str(base.get(..anchor_pos).unwrap_or(""));
+    result.push_str(&deps);
+    result.push_str(base.get(anchor_pos..).unwrap_or(""));
+    Ok(result)
+}
+
+/// Build the heavy-crypto-enabled `Cargo.toml` by appending the five
+/// crypto-exclusive dependencies before `[profile.dev]`.
+///
+/// `crypto.rs` (the gated heavy `Ipe.Crypto` kernels) is the sole consumer of
+/// `sha1`, `md-5`, `aes-gcm`, `chacha20poly1305`, and `pbkdf2`. These are leaves
+/// — a program using only the always-on `crypto_core` floor (SHA-2 / HMAC / RSA
+/// / the entropy pair) pulls none of them. `rsa` / `sha2` / `hmac` / `subtle`
+/// stay unconditional in the base manifest because `crypto_core` (and other
+/// always-on surfaces) need them.
+///
+/// The versions come from the [`crate_specs`] SSOT (drift-guarded against
+/// `runtime/Cargo.toml`).
+///
+/// # Errors
+///
+/// Returns [`Diagnostic::CompilerBug`] if the `[profile.dev]` anchor is absent —
+/// a golden-drift invariant violation (fail-loud, never a silent no-op).
+fn crypto_cargo_toml(base: &str) -> DResult<String> {
+    const PROFILE_ANCHOR: &str = "[profile.dev]";
+    let deps = format!(
+        "{} = \"{}\"\n{} = \"{}\"\n{} = \"{}\"\n{} = \"{}\"\n{} = \"{}\"\n\n",
+        crate_specs::SHA1.name,
+        crate_specs::SHA1.version,
+        crate_specs::MD5.name,
+        crate_specs::MD5.version,
+        crate_specs::AES_GCM.name,
+        crate_specs::AES_GCM.version,
+        crate_specs::CHACHA20POLY1305.name,
+        crate_specs::CHACHA20POLY1305.version,
+        crate_specs::PBKDF2.name,
+        crate_specs::PBKDF2.version,
+    );
+    let anchor_pos = base
+        .find(PROFILE_ANCHOR)
+        .ok_or_else(|| Diagnostic::CompilerBug {
+            where_: "ipe_backend_rust::project::crypto_cargo_toml",
+            detail: format!("Cargo.toml anchor {PROFILE_ANCHOR:?} not found — golden drifted"),
+        })?;
+    let mut result = String::with_capacity(base.len() + deps.len());
+    result.push_str(base.get(..anchor_pos).unwrap_or(""));
+    result.push_str(&deps);
+    result.push_str(base.get(anchor_pos..).unwrap_or(""));
+    Ok(result)
+}
+
+/// Build the JWT-enabled `Cargo.toml` by appending the `jsonwebtoken`
+/// dependency before `[profile.dev]`.
+///
+/// `jwt.rs` (and `auth.rs`, which reaches `crate::jwt`) is the sole consumer of
+/// `jsonwebtoken`. It is a leaf dependency — a program that never encodes or
+/// verifies a JWT (and uses no `Ipe.Auth` kernel) pulls it not.
+///
+/// The version comes from the [`crate_specs`] SSOT (drift-guarded against
+/// `runtime/Cargo.toml`).
+///
+/// # Errors
+///
+/// Returns [`Diagnostic::CompilerBug`] if the `[profile.dev]` anchor is absent —
+/// a golden-drift invariant violation (fail-loud, never a silent no-op).
+fn jwt_cargo_toml(base: &str) -> DResult<String> {
+    const PROFILE_ANCHOR: &str = "[profile.dev]";
+    let deps = format!(
+        "{} = \"{}\"\n\n",
+        crate_specs::JSONWEBTOKEN.name,
+        crate_specs::JSONWEBTOKEN.version,
+    );
+    let anchor_pos = base
+        .find(PROFILE_ANCHOR)
+        .ok_or_else(|| Diagnostic::CompilerBug {
+            where_: "ipe_backend_rust::project::jwt_cargo_toml",
             detail: format!("Cargo.toml anchor {PROFILE_ANCHOR:?} not found — golden drifted"),
         })?;
     let mut result = String::with_capacity(base.len() + deps.len());

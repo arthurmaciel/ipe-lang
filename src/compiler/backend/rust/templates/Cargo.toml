@@ -39,15 +39,10 @@ chrono = "0.4"
 chrono-tz = "0.10"
 rust_decimal = { version = "1", features = ["serde"] }
 hmac = "0.12"
-sha1 = "0.10"
-md-5 = "0.10"
 subtle = "2"
 zeroize = "1"
 rsa = { version = "0.9", features = ["sha2"] }
-aes-gcm = "0.10"
-chacha20poly1305 = "0.10"
-pbkdf2 = "0.12"
-jsonwebtoken = "9"
+getrandom = "0.2"
 uuid = { version = "1", features = ["v4", "v7"] }
 bcrypt = "0.17"
 url = "2"

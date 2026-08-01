@@ -5975,6 +5975,15 @@ struct KernelUsage {
     /// module and the `csv` dependency. Unioned with a `CsvDoc` type-mention
     /// guard at the assembly site.
     csv: bool,
+    /// Any HEAVY `Ipe.Crypto` kernel (legacy SHA-1/MD5, AES-GCM /
+    /// ChaCha20-Poly1305 AEAD, PBKDF2 key derivation) — gates the `crypto`
+    /// runtime module and the `sha1` + `md-5` + `aes-gcm` + `chacha20poly1305` +
+    /// `pbkdf2` dependencies. The always-on `crypto_core` floor is unaffected.
+    crypto: bool,
+    /// Any `Ipe.Jwt` kernel — gates the `jwt` runtime module and the
+    /// `jsonwebtoken` dependency. Also force-declared alongside `auth` (which
+    /// reaches `crate::jwt`), so the assembly site gates on `jwt || auth`.
+    jwt: bool,
     /// Any Ipe.Ui render kernel.
     ui: bool,
     /// Any Ipe.Css (Ipe.CssSafety) leaf kernel — independent of
@@ -6032,6 +6041,8 @@ impl KernelUsage {
             && self.config
             && self.compression
             && self.csv
+            && self.crypto
+            && self.jwt
             && self.ui
             && self.css
             && self.auth
@@ -6060,6 +6071,8 @@ impl KernelUsage {
         self.config |= k.is_config();
         self.compression |= k.is_compression();
         self.csv |= k.is_csv();
+        self.crypto |= k.is_crypto();
+        self.jwt |= k.is_jwt();
         self.ui |= k.is_ui();
         self.css |= k.is_css();
         self.auth |= k.is_auth();
@@ -8031,6 +8044,23 @@ impl<'a> Lowerer<'a> {
                     || f.params.iter().any(|(_, t)| ir_type_mentions_csv(t))
             });
 
+        // detect HEAVY `Ipe.Crypto` usage — any legacy SHA-1/MD5, AEAD, or PBKDF2
+        // kernel. The backend uses this flag to declare `crypto` in the emitted
+        // `ipe_runtime/mod.rs` and add the `sha1` + `md-5` + `aes-gcm` +
+        // `chacha20poly1305` + `pbkdf2` dependencies. No type-mention guard is
+        // needed: the `Key`/`Mac` opaque newtypes live in the always-on
+        // `crypto_core` floor (their emitted paths qualify through `crypto_core`),
+        // so a signature naming a `Key`/`Mac` never reaches the heavy `crypto`
+        // module — only a heavy kernel call site does.
+        let uses_crypto = kernel_usage.crypto;
+
+        // detect `Ipe.Jwt` usage — any JWT encode/decode or builder kernel. The
+        // backend uses this flag to declare `jwt` in the emitted
+        // `ipe_runtime/mod.rs` and add the `jsonwebtoken` dependency. `auth.rs`
+        // also reaches `crate::jwt`, so the backend force-declares `jwt` under
+        // `uses_jwt || uses_auth`.
+        let uses_jwt = kernel_usage.jwt;
+
         // detect Ipe.Ui / Ipe.Html / Ipe.Web / Ipe.Tui / Ipe.WebView usage.
         // TUI runtime files (tui/app.rs, tui/layout.rs, tui/focus.rs) import
         // `super::super::ui` and `super::super::html` unconditionally, so
@@ -8086,6 +8116,8 @@ impl<'a> Lowerer<'a> {
             uses_config,
             uses_compression,
             uses_csv,
+            uses_crypto,
+            uses_jwt,
             uses_ui,
             uses_web,
             uses_tui,

@@ -556,6 +556,28 @@ pub(crate) struct EmitCtx<'a> {
     /// `csv` is a leaf module — no other runtime surface reaches it — so no other
     /// `uses_*` flag forces it on.
     pub(crate) uses_csv: bool,
+    /// `true` when the program uses at least one HEAVY `Ipe.Crypto` kernel
+    /// (legacy SHA-1/MD5, AES-GCM / ChaCha20-Poly1305 AEAD, or PBKDF2 key
+    /// derivation). When set, [`crate::project::assemble_project_files`]:
+    ///
+    /// * declares `pub mod crypto; pub use crypto::*;` in the emitted
+    ///   `ipe_runtime/mod.rs`;
+    /// * adds the `sha1` + `md-5` + `aes-gcm` + `chacha20poly1305` + `pbkdf2`
+    ///   dependencies to the emitted `Cargo.toml`.
+    ///
+    /// The always-on `crypto_core` floor stays in the base module set, so no
+    /// other `uses_*` flag forces the heavy `crypto` module on.
+    pub(crate) uses_crypto: bool,
+    /// `true` when the program uses at least one `Ipe.Jwt` kernel. When set,
+    /// [`crate::project::assemble_project_files`]:
+    ///
+    /// * declares `pub mod jwt; pub use jwt::*;` in the emitted
+    ///   `ipe_runtime/mod.rs`;
+    /// * adds the `jsonwebtoken` dependency to the emitted `Cargo.toml`.
+    ///
+    /// `auth.rs` also reaches `crate::jwt`, so the backend force-declares `jwt`
+    /// under `uses_jwt || uses_auth` (see [`Self::reaches_jwt`]).
+    pub(crate) uses_jwt: bool,
     /// `true` when the program uses at least one `Ipe.Ui` / `Ipe.Html` kernel.
     /// When set, [`crate::project::emit_program`] appends
     /// `pub mod ui;` to the emitted `ipe_runtime/mod.rs`.
@@ -1168,6 +1190,14 @@ impl<'a> EmitCtx<'a> {
         // detect Ipe.Csv usage (gates `csv` module + `csv` crate).
         let uses_csv = program.modules.iter().any(|m| m.uses_csv);
 
+        // detect HEAVY Ipe.Crypto usage (gates `crypto` module + sha1 + md-5 +
+        // aes-gcm + chacha20poly1305 + pbkdf2). The `crypto_core` floor is
+        // always-on and unaffected.
+        let uses_crypto = program.modules.iter().any(|m| m.uses_crypto);
+
+        // detect Ipe.Jwt usage (gates `jwt` module + `jsonwebtoken` crate).
+        let uses_jwt = program.modules.iter().any(|m| m.uses_jwt);
+
         // detect Ipe.Ui / Ipe.Html / Ipe.Web / Ipe.Tui / Ipe.WebView usage.
         let (uses_ui, uses_web, uses_tui, uses_webview) = (
             program.modules.iter().any(|m| m.uses_ui),
@@ -1203,6 +1233,8 @@ impl<'a> EmitCtx<'a> {
             uses_config,
             uses_compression,
             uses_csv,
+            uses_crypto,
+            uses_jwt,
             uses_ui,
             uses_web,
             uses_tui,
@@ -1291,6 +1323,19 @@ impl<'a> EmitCtx<'a> {
     /// `mod.rs` append, and the prelude filter — they can never disagree.
     pub(crate) const fn reaches_http_client(&self) -> bool {
         self.uses_http || self.uses_server || self.uses_web || self.uses_webview || self.uses_email
+    }
+
+    /// `true` when the emitted crate reaches the `jwt` runtime module — so
+    /// `project::assemble_project_files` declares it and adds the `jsonwebtoken`
+    /// dependency.
+    ///
+    /// Reached directly by a JWT kernel ([`Self::uses_jwt`]), or transitively by
+    /// the `Ipe.Auth` surface: `auth.rs` calls `crate::jwt::…` unconditionally, so
+    /// an auth program with no direct `Jwt.*` kernel still needs the `jwt`
+    /// module. This is the single source of truth shared by the manifest
+    /// augmenter and the `mod.rs` append — they can never disagree.
+    pub(crate) const fn reaches_jwt(&self) -> bool {
+        self.uses_jwt || self.uses_auth
     }
 
     /// The absolute Rust path for a foreign opaque type declared by an FFI
@@ -2936,6 +2981,8 @@ mod record_struct_namespace_tests {
                 uses_config: false,
                 uses_compression: false,
                 uses_csv: false,
+                uses_crypto: false,
+                uses_jwt: false,
                 uses_ui: false,
                 uses_web: false,
                 uses_tui: false,
@@ -3018,6 +3065,8 @@ mod record_struct_namespace_tests {
                 uses_config: false,
                 uses_compression: false,
                 uses_csv: false,
+                uses_crypto: false,
+                uses_jwt: false,
                 uses_ui: false,
                 uses_web: false,
                 uses_tui: false,

@@ -82,6 +82,7 @@ fn maybe_def(i: &mut Interner) -> DResult<(EnumDef, Symbol, Symbol, Symbol, Symb
 }
 
 /// The `Maybe Int` program: `unwrap (Just 5)` → 5.
+#[allow(clippy::too_many_lines)] // exhaustive `Module { … }` test literal
 fn maybe_program(i: &mut Interner) -> DResult<Program> {
     let main_mod = i.intern("Main")?;
     let (def, maybe, just, nothing, _a) = maybe_def(i)?;
@@ -173,6 +174,8 @@ fn maybe_program(i: &mut Interner) -> DResult<Program> {
             uses_config: false,
             uses_compression: false,
             uses_csv: false,
+            uses_crypto: false,
+            uses_jwt: false,
             uses_ui: false,
             uses_web: false,
             uses_tui: false,
@@ -356,6 +359,8 @@ fn tree_program(interner: &mut Interner) -> DResult<Program> {
             uses_config: false,
             uses_compression: false,
             uses_csv: false,
+            uses_crypto: false,
+            uses_jwt: false,
             uses_ui: false,
             uses_web: false,
             uses_tui: false,
@@ -505,6 +510,8 @@ fn concrete_multi_field_enum_emits() -> DResult<()> {
             uses_config: false,
             uses_compression: false,
             uses_csv: false,
+            uses_crypto: false,
+            uses_jwt: false,
             uses_ui: false,
             uses_web: false,
             uses_tui: false,
