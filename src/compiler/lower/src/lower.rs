@@ -6143,6 +6143,139 @@ fn record_callee_usage(callee: &Callee, usage: &mut KernelUsage) {
     }
 }
 
+/// Collect every [`FuncId`] a `Callee::Func` or first-class [`Expr::FuncValue`]
+/// in `expr` names into `out`. A reified function value (stored in a carrier,
+/// passed as an argument, matched into an app record) is a reachability edge —
+/// no escape analysis; the conservative edge is the sound one.
+fn collect_func_edges(expr: &Expr, out: &mut BTreeSet<FuncId>) {
+    match expr {
+        Expr::Call { callee, args, .. } => {
+            if let Callee::Func(id) = callee {
+                out.insert(*id);
+            }
+            for a in args {
+                collect_func_edges(a, out);
+            }
+        }
+        Expr::FuncValue { callee, .. } => {
+            if let Callee::Func(id) = callee {
+                out.insert(*id);
+            }
+        }
+        Expr::Apply { func, args } => {
+            collect_func_edges(func, out);
+            for a in args {
+                collect_func_edges(a, out);
+            }
+        }
+        Expr::Let { value, body, .. } | Expr::Destructure { value, body, .. } => {
+            collect_func_edges(value, out);
+            collect_func_edges(body, out);
+        }
+        Expr::If { cond, then_, else_ } => {
+            collect_func_edges(cond, out);
+            collect_func_edges(then_, out);
+            collect_func_edges(else_, out);
+        }
+        Expr::Match(m) => {
+            collect_func_edges(m.scrutinee(), out);
+            for arm in m.arms() {
+                if let Some(guard) = &arm.guard {
+                    collect_func_edges(guard, out);
+                }
+                collect_func_edges(&arm.body, out);
+            }
+        }
+        Expr::Lambda { body, .. }
+        | Expr::SharedLambda { body, .. }
+        | Expr::TailLoop { body, .. } => collect_func_edges(body, out),
+        Expr::Cons { head, tail } => {
+            collect_func_edges(head, out);
+            collect_func_edges(tail, out);
+        }
+        Expr::ListIndexClone { list, .. } | Expr::ListLenCheck { list, .. } => {
+            collect_func_edges(list, out);
+        }
+        Expr::Tuple(elems) => {
+            for e in elems {
+                collect_func_edges(e, out);
+            }
+        }
+        Expr::List { items, .. } => {
+            for e in items {
+                collect_func_edges(e, out);
+            }
+        }
+        Expr::Record(fields) => {
+            for (_, v) in fields {
+                collect_func_edges(v, out);
+            }
+        }
+        Expr::Access { record, .. } => collect_func_edges(record, out),
+        Expr::Update { record, fields } => {
+            collect_func_edges(record, out);
+            for (_, v) in fields {
+                collect_func_edges(v, out);
+            }
+        }
+        Expr::BinOp { lhs, rhs, .. } => {
+            collect_func_edges(lhs, out);
+            collect_func_edges(rhs, out);
+        }
+        Expr::TaskSeq { effect, rest } | Expr::TaskSeqSync { effect, rest } => {
+            collect_func_edges(effect, out);
+            collect_func_edges(rest, out);
+        }
+        Expr::Ctor { args, .. } | Expr::TailRecur { args } => {
+            for a in args {
+                collect_func_edges(a, out);
+            }
+        }
+        Expr::Int(_)
+        | Expr::Bool(_)
+        | Expr::Float(_)
+        | Expr::Str(_)
+        | Expr::PathLit(_)
+        | Expr::Char(_)
+        | Expr::Unit
+        | Expr::CloneVar(_)
+        | Expr::Var(_) => {}
+    }
+}
+
+/// The set of [`FuncId`]s transitively reachable from `entry` over the
+/// `Callee::Func`/[`Expr::FuncValue`] call graph of `funcs`.
+///
+/// Fail-closed: a program with no `entry` (a hand-built IR, or a future
+/// non-`main` entry shape) has no seed to fix-point from — every function is
+/// treated as reachable, so a dependency the program needs is never dropped.
+/// This is the same conservative fallback the salsa `program_metadata` seam
+/// uses, kept identical here on purpose.
+fn reachable_func_ids(funcs: &[Func], entry: Option<FuncId>) -> BTreeSet<FuncId> {
+    let Some(entry) = entry else {
+        return funcs.iter().map(|f| f.id).collect();
+    };
+    let by_id: BTreeMap<FuncId, &Func> = funcs.iter().map(|f| (f.id, f)).collect();
+    let mut reachable: BTreeSet<FuncId> = BTreeSet::new();
+    let mut worklist = vec![entry];
+    while let Some(id) = worklist.pop() {
+        if !reachable.insert(id) {
+            continue;
+        }
+        let Some(func) = by_id.get(&id) else {
+            continue;
+        };
+        let mut edges = BTreeSet::new();
+        collect_func_edges(&func.body, &mut edges);
+        for callee in edges {
+            if !reachable.contains(&callee) {
+                worklist.push(callee);
+            }
+        }
+    }
+    reachable
+}
+
 /// Record every kernel callee reachable from `expr` into `usage`.
 ///
 /// Traversal shape mirrors the former per-family walkers exactly: `Call` /
@@ -6269,6 +6402,14 @@ pub fn program_capabilities_scan(program: &Program) -> BTreeSet<Capability> {
         collect_caps: true,
         ..KernelUsage::default()
     };
+    // Capabilities are inferred over EVERY function in the program, not the
+    // entry-reachable subset: this is the honest superset a package audit
+    // reports for a library, where an exposed-but-locally-uncalled function is a
+    // real effect a downstream consumer can invoke. The emitted binary's own
+    // dependency set is trimmed separately (the lowerer prunes dead functions
+    // for the emitted-binary case before this scan ever sees them), so the two
+    // consumers do not conflict: emission gets the reachable set, the audit gets
+    // the honest whole-API set.
     for module in &program.modules {
         for func in &module.funcs {
             scan_kernel_usage(&func.body, &mut usage);
@@ -7996,6 +8137,42 @@ impl<'a> Lowerer<'a> {
         // All nine kernel-family flags are collected in ONE pass over the
         // function bodies (see [`KernelUsage`]) instead of nine independent
         // full-AST walks.
+        // Dead-function elimination: keep only the functions REACHABLE from the
+        // program entry over the `Callee::Func`/`FuncValue` call graph, dropping
+        // the rest before anything downstream (usage-flag scan, type-mention
+        // guards, and the backend's item emission) observes the function list. A
+        // dead helper that mentions a kernel would otherwise pull that kernel's
+        // runtime module and crate subtree into the binary — attack surface the
+        // program never invokes — AND be emitted as a Rust `fn` referencing a
+        // runtime symbol whose module was not selected (an exit-0 emit that
+        // fails `cargo build`: the SEAL breach class). Pruning here makes the
+        // reachable set the SINGLE source the flags and the emitted code both
+        // derive from, so they cannot disagree. Positional `FuncId`s were
+        // assigned before this prune, so every surviving callee reference stays
+        // valid (a reference INTO a pruned function can only come from another
+        // pruned — unreachable — function).
+        //
+        // Pruning is the EMITTED-BINARY model: it is applied only for a program
+        // whose entry is the demanded entry module itself (a real `main` whose
+        // home is the module being lowered). When several root modules are merged
+        // and lowered with a DIFFERENT demanded entry — the package-capability
+        // audit lowers every sibling this way, and the merged `main` is not the
+        // demanded module — pruning from that unrelated `main` would drop a
+        // sibling's exposed effect (a `Db`/`Http`/… capability reachable only
+        // from an exposed-but-locally-uncalled function). The audit's honest
+        // root set is the whole merged API, so in that case every function is
+        // kept — the fail-closed direction (never under-report a capability).
+        let prune_dead = entry.is_some_and(|e| {
+            funcs
+                .iter()
+                .find(|f| f.id == e)
+                .is_some_and(|main_fn| main_fn.home == ModPath(self.m.name.clone()))
+        });
+        if prune_dead {
+            let reachable = reachable_func_ids(&funcs, entry);
+            funcs.retain(|f| reachable.contains(&f.id));
+        }
+
         let mut kernel_usage = KernelUsage::default();
         for f in &funcs {
             if kernel_usage.all_set() {

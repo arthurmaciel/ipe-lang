@@ -242,9 +242,6 @@ pub fn crypto_random_token(n: i64) -> IpeTask<String> {
 pub fn main_double<T1: ::core::ops::Add<Output = T1> + Copy + Clone>(x: T1) -> T1 {
     (x.clone() + x)
 }
-pub fn main_double_float(x: f64) -> f64 {
-    crate::main_double(x)
-}
 pub fn ipe_main() -> IpeTask<()> {
     io_println(string_from_int(crate::main_double(21)))
 }
