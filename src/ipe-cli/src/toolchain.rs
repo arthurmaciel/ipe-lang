@@ -149,6 +149,34 @@ pub fn require_cargo(intent: ToolIntent) -> Result<CargoBin, ToolchainMissing> {
     }
 }
 
+/// The outcome of a diagnostic probe for `cargo`: the resolved path, or why it
+/// is absent.
+///
+/// This is the read-only sibling of [`require_cargo`]: `ipe doctor` reports the
+/// toolchain's presence without an intent (it is not about to invoke `cargo`),
+/// so it needs the resolution outcome, not a fail-closed [`CargoBin`] token.
+#[derive(Debug, Clone)]
+pub enum Probe {
+    /// `cargo` was found on the `PATH` at this path.
+    Found(PathBuf),
+    /// `cargo` was not on the `PATH`; this is why.
+    Missing(Disposition),
+}
+
+/// Probe for `cargo` without an [`ToolIntent`], for a diagnostic report.
+///
+/// Shares the exact search [`require_cargo`] uses (the `PATH`, then the known
+/// install directories), so `doctor`'s verdict and a real build's verdict can
+/// never disagree.
+#[must_use]
+pub fn probe_cargo() -> Probe {
+    let path_var = std::env::var_os("PATH").unwrap_or_default();
+    match resolve(&path_var, &known_install_dirs()) {
+        Resolution::Found(path) => Probe::Found(path),
+        Resolution::Missing(disposition) => Probe::Missing(disposition),
+    }
+}
+
 /// The outcome of searching for `cargo`: the resolved path, or why it is absent.
 /// A pure value over its inputs so the resolution logic is testable without
 /// mutating the process environment.

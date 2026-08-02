@@ -576,6 +576,56 @@ pub fn parse_fix(rest: &[String]) -> Result<FixArgs, CliError> {
     Ok(FixArgs { entry, auto })
 }
 
+/// Fully-parsed `ipe doctor` arguments.
+///
+/// `--yes` is consent-by-flag: apply every fixable item non-interactively. It is
+/// meaningless with `--plain` / `--json`, which are pure data forms that NEVER
+/// mutate — pairing them is a usage error rather than a silently ignored flag, so
+/// a machine consumer can never accidentally ask a data form to change the
+/// system.
+pub struct DoctorArgs {
+    /// How to render the report.
+    pub format: OutputFormat,
+    /// `--yes`/`-y` — apply every fixable item without prompting.
+    pub assume_yes: bool,
+}
+
+/// Parse `ipe doctor`'s argument tail: the shared `--plain` / `--json` forms,
+/// plus `--yes`/`-y`. Takes no positional argument.
+///
+/// # Errors
+/// [`CliError::UsageOwned`] on an unknown flag, a positional argument, or
+/// `--yes` combined with `--plain` / `--json` (a data form never mutates).
+pub fn parse_doctor(rest: &[String]) -> Result<DoctorArgs, CliError> {
+    let mut format: Option<OutputFormat> = None;
+    let mut assume_yes = false;
+    for arg in rest {
+        if consume_format(&mut format, arg, "doctor")? {
+            continue;
+        }
+        match arg.as_str() {
+            "--yes" | "-y" => assume_yes = true,
+            flag if flag.starts_with('-') => {
+                return Err(CliError::UsageOwned(format!(
+                    "ipe doctor: unknown flag `{flag}`"
+                )));
+            }
+            other => {
+                return Err(CliError::UsageOwned(format!(
+                    "ipe doctor: unexpected argument `{other}`"
+                )));
+            }
+        }
+    }
+    let format = format.unwrap_or_default();
+    if assume_yes && format != OutputFormat::Human {
+        return Err(CliError::Usage(
+            "ipe doctor: --yes does not compose with --plain / --json (a data form never mutates)",
+        ));
+    }
+    Ok(DoctorArgs { format, assume_yes })
+}
+
 /// Fully-parsed `ipe fmt` mode — three dispatch paths, no ambiguous states.
 ///
 /// Constructed exclusively by [`parse_fmt`], which rejects invalid combinations
@@ -953,6 +1003,46 @@ mod tests {
     #[test]
     fn fmt_unknown_flag_rejected() {
         assert!(parse_fmt(&s(&["--bogus"])).is_err());
+    }
+
+    // ---- doctor -------------------------------------------------------------
+
+    #[test]
+    fn doctor_empty_is_human_no_yes() {
+        let a = parse_doctor(&[]).expect("empty doctor");
+        assert_eq!(a.format, OutputFormat::Human);
+        assert!(!a.assume_yes);
+    }
+
+    #[test]
+    fn doctor_yes_and_short_yes() {
+        assert!(parse_doctor(&s(&["--yes"])).expect("yes").assume_yes);
+        assert!(parse_doctor(&s(&["-y"])).expect("short yes").assume_yes);
+    }
+
+    #[test]
+    fn doctor_plain_and_json_recognised() {
+        assert_eq!(
+            parse_doctor(&s(&["--plain"])).expect("plain").format,
+            OutputFormat::Plain
+        );
+        assert_eq!(
+            parse_doctor(&s(&["--json"])).expect("json").format,
+            OutputFormat::Json
+        );
+    }
+
+    #[test]
+    fn doctor_yes_with_data_form_rejected() {
+        // A data form never mutates, so --yes with it is a usage error.
+        assert!(parse_doctor(&s(&["--yes", "--plain"])).is_err());
+        assert!(parse_doctor(&s(&["--json", "-y"])).is_err());
+    }
+
+    #[test]
+    fn doctor_positional_and_unknown_flag_rejected() {
+        assert!(parse_doctor(&s(&["somefile"])).is_err());
+        assert!(parse_doctor(&s(&["--bogus"])).is_err());
     }
 
     // ---- output format ------------------------------------------------------
