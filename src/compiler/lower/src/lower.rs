@@ -9881,7 +9881,20 @@ impl<'a> Lowerer<'a> {
                     } else {
                         let mut v = Vec::with_capacity(args.len());
                         for a in args {
-                            v.push(self.ir_type_from_canon(a, generics)?);
+                            // A type argument filling a generic payload slot that
+                            // instantiates to a function takes the same `Arc<dyn Fn>`
+                            // carrier the decl-side flip
+                            // ([`normalize_enum_payload_fun_carrier`]) stamps on a
+                            // direct-function payload and the value-side flip
+                            // ([`promote_ctor_arg_fn_carrier`]) constructs with
+                            // `Arc::new`. Without it the type application spells the
+                            // slot `Box<dyn Fn>` while the construction fills it with
+                            // an `Arc`, an `Arc`-vs-`Box` E0308 (and the composite's
+                            // derived `Clone` fails on the non-`Clone` `Box`). The
+                            // flip is a no-op for every non-function argument.
+                            v.push(normalize_enum_payload_fun_carrier(
+                                self.ir_type_from_canon(a, generics)?,
+                            ));
                         }
                         v
                     };
@@ -10943,7 +10956,17 @@ impl<'a> Lowerer<'a> {
                     } else {
                         let mut v = Vec::with_capacity(args.len());
                         for a in args {
-                            v.push(self.ir_type_from_ty(a, span)?);
+                            // A generic payload slot instantiated to a function takes
+                            // the `Arc<dyn Fn>` carrier, matching the decl-side flip
+                            // ([`normalize_enum_payload_fun_carrier`]) and the
+                            // value-side construction ([`promote_ctor_arg_fn_carrier`]).
+                            // Twin of the annotation-path flip in
+                            // [`Self::ir_type_from_canon`]; both spellings of the enum
+                            // type argument must agree or the emitted slot is an
+                            // `Arc`-vs-`Box` E0308. A no-op for a non-function argument.
+                            v.push(normalize_enum_payload_fun_carrier(
+                                self.ir_type_from_ty(a, span)?,
+                            ));
                         }
                         v
                     };
