@@ -119,6 +119,49 @@ pub fn normalize_rustfmt_whitespace(s: &str) -> String {
     out
 }
 
+/// The placeholder a blessed golden `Cargo.toml` stores in place of the
+/// dependency-model runtime `path`. The real emit writes the absolute,
+/// machine-specific runtime crate root there — a value that cannot live in a
+/// byte-compared golden — so the golden checks in this stable token instead and
+/// the comparison rewrites the emitted path down to it before diffing. The
+/// emitted manifest keeps the real resolvable path, so the SEAL stays honest:
+/// what ships to `cargo build` is a live path, only the *golden text* is
+/// normalized.
+pub const RUNTIME_PATH_PLACEHOLDER: &str = "__IPE_RUNTIME_PATH__";
+
+/// Rewrite the dependency-model runtime `path = "<absolute root>"` in an emitted
+/// `Cargo.toml` to [`RUNTIME_PATH_PLACEHOLDER`], leaving every other byte
+/// untouched. Only the `ipe_runtime = { … path = "…" … }` dependency line
+/// carries a machine-specific value; the rewrite is scoped to the `path = "…"`
+/// key on that one line, so a manifest with no such line (the vendored/wasm
+/// shape) passes through unchanged and a real manifest drift still surfaces.
+#[must_use]
+#[allow(dead_code)] // used by the Cargo.toml arm of the directory-diff helper
+pub fn normalize_runtime_dep_path(manifest: &str) -> String {
+    manifest
+        .lines()
+        .map(|line| {
+            if line.contains("package = \"ipe-runtime-rust\"")
+                && let Some(start) = line.find("path = \"")
+            {
+                let val_start = start + "path = \"".len();
+                if let Some(rel_end) = line[val_start..].find('"') {
+                    let end = val_start + rel_end;
+                    return format!(
+                        "{}{}{}",
+                        &line[..val_start],
+                        RUNTIME_PATH_PLACEHOLDER,
+                        &line[end..]
+                    );
+                }
+            }
+            line.to_owned()
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+        + if manifest.ends_with('\n') { "\n" } else { "" }
+}
+
 /// Assert every byte-comparable golden output under `golden_dir` matches its
 /// counterpart in the emitted project rooted at `emitted_out`, byte-for-byte.
 ///
@@ -200,9 +243,20 @@ pub fn assert_emitted_project_matches_golden_dir(emitted_out: &Path, golden_dir:
     let mut mismatches = Vec::new();
     for (rel, emitted_path) in &pairs {
         let want_path = golden_dir.join(rel);
+        // The dependency-model `Cargo.toml` carries a machine-specific absolute
+        // runtime path; normalize it to the golden's placeholder before the
+        // byte-compare so the blessed manifest stays portable. Every other
+        // emitted file (and the vendored/wasm manifest) is compared verbatim.
+        let normalize = |text: String| -> String {
+            if rel == "Cargo.toml" {
+                normalize_runtime_dep_path(&text)
+            } else {
+                text
+            }
+        };
         match (
             std::fs::read_to_string(&want_path),
-            std::fs::read_to_string(emitted_path),
+            std::fs::read_to_string(emitted_path).map(normalize),
         ) {
             (Ok(want_text), Ok(got_text)) if want_text == got_text => {}
             (Ok(want_text), Ok(got_text)) => mismatches.push(format!(

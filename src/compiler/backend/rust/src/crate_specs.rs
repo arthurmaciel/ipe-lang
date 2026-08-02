@@ -1,11 +1,19 @@
-//! Single source of truth for the crate VERSIONS the Rust codegen emits into a
-//! generated project's `Cargo.toml`. Edit a version HERE; `project.rs`'s
-//! manifest-surgery functions read it, so a version can never drift between the
-//! emitter, `runtime/Cargo.toml`, and `tests/golden/basics/Cargo.toml`.
+//! Single source of truth for the crate VERSIONS the Rust codegen emits.
+//!
+//! The default native emit is the dependency model: third-party versions live
+//! in the runtime crate's own `runtime/rust/Cargo.toml`, and the emitted native
+//! `Cargo.toml` names only the `ipe_runtime` path dependency — it carries no
+//! third-party versions. These specs still drive the versions the vendored
+//! fallback and the WASM template surgeries emit, so they must not drift from
+//! the runtime crate's manifest.
 //!
 //! Feature lists + `optional` flags stay inline in `project.rs` (they depend on
 //! usage). Only the version SPEC lives here. The `crate_specs_match_manifests`
-//! test below is the drift tripwire.
+//! test below is the drift tripwire: it pins every spec against
+//! `runtime/rust/Cargo.toml` and, for any crate the golden base manifest still
+//! declares, against `tests/golden/basics/Cargo.toml` (empty under the
+//! dependency model, so that arm is inert until the vendored/WASM surface
+//! reintroduces one).
 
 /// One authoritative crate version. Feature lists + `optional` flags stay in the
 /// emitter (`project.rs`); only the version SPEC lives here.

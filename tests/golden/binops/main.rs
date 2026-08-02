@@ -9,7 +9,6 @@ static IPE_GLOBAL_ALLOC: dlmalloc::GlobalDlmalloc = dlmalloc::GlobalDlmalloc;
 #[global_allocator]
 static IPE_GLOBAL_ALLOC: mimalloc::MiMalloc = mimalloc::MiMalloc;
 
-pub mod ipe_runtime;
 pub use ipe_runtime::*;
 
 use std::collections::BTreeSet;

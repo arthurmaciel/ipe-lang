@@ -5,8 +5,10 @@
 //! [`RustBackend::emit`] reproduces the golden `main.rs` and `Cargo.toml`
 //! byte-for-byte. The golden is the correctness contract.
 
+use std::path::{Path, PathBuf};
+
 use ipe_backend::Backend;
-use ipe_backend_rust::RustBackend;
+use ipe_backend_rust::{RuntimeDep, RustBackend};
 use ipe_diagnostics::{DResult, Diagnostic};
 use ipe_intern::Interner;
 use ipe_ir::{
@@ -16,6 +18,67 @@ use ipe_ir::{
 
 const GOLDEN_MAIN: &str = include_str!("../../../../../tests/golden/basics/main.rs");
 const GOLDEN_CARGO: &str = include_str!("../../../../../tests/golden/basics/Cargo.toml");
+
+/// The placeholder the blessed golden `Cargo.toml` stores in place of the
+/// machine-specific dependency-model runtime path. Kept in sync with the CLI
+/// test support's `RUNTIME_PATH_PLACEHOLDER`.
+const RUNTIME_PATH_PLACEHOLDER: &str = "__IPE_RUNTIME_PATH__";
+
+/// Locate the runtime crate root (`src/runtime/rust`) by walking up from the
+/// crate manifest dir — the same in-repo resolution the driver performs. Used
+/// to build the [`RuntimeDep`] the dependency-model emit needs.
+#[allow(clippy::expect_used)]
+fn runtime_crate_root() -> PathBuf {
+    let mut here: Option<&Path> = Some(Path::new(env!("CARGO_MANIFEST_DIR")));
+    let found = std::iter::from_fn(|| {
+        let dir = here?;
+        here = dir.parent();
+        Some(dir.join("src").join("runtime").join("rust"))
+    })
+    .find(|candidate| candidate.join("Cargo.toml").is_file())
+    .expect("the ipe-runtime-rust crate root (src/runtime/rust) must resolve for the golden test");
+    found
+        .canonicalize()
+        .expect("runtime crate root canonicalizes")
+}
+
+/// Rewrite the dependency-model runtime `path = "<absolute root>"` in an emitted
+/// manifest to [`RUNTIME_PATH_PLACEHOLDER`] so the byte-compare against the
+/// portable blessed golden is machine-independent. The emit itself keeps the
+/// real resolvable path — only the golden text is normalized (SEAL stays
+/// honest).
+fn normalize_runtime_dep_path(manifest: &str) -> String {
+    manifest
+        .lines()
+        .map(|line| {
+            if line.contains("package = \"ipe-runtime-rust\"")
+                && let Some(start) = line.find("path = \"")
+            {
+                let val_start = start + "path = \"".len();
+                if let Some(rel_end) = line[val_start..].find('"') {
+                    let end = val_start + rel_end;
+                    return format!(
+                        "{}{}{}",
+                        &line[..val_start],
+                        RUNTIME_PATH_PLACEHOLDER,
+                        &line[end..]
+                    );
+                }
+            }
+            line.to_owned()
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+        + if manifest.ends_with('\n') { "\n" } else { "" }
+}
+
+/// The dependency-model backend the golden emit now exercises (the default
+/// native emit shape).
+fn dep_backend(interner: &Interner) -> RustBackend<'_> {
+    RustBackend::new(interner).with_runtime_dep(Some(RuntimeDep {
+        root: runtime_crate_root(),
+    }))
+}
 
 /// Build the golden program:
 /// ```ipe
@@ -184,7 +247,7 @@ fn m0_emits_byte_identical_main_rs() -> DResult<()> {
     let mut interner = Interner::new();
     let program = build_m0(&mut interner)?;
 
-    let backend = RustBackend::new(&interner);
+    let backend = dep_backend(&interner);
     let emitted = backend.emit(&program)?;
 
     let main_rs = emitted
@@ -204,13 +267,13 @@ fn m0_emits_byte_identical_cargo_toml() -> DResult<()> {
     let mut interner = Interner::new();
     let program = build_m0(&mut interner)?;
 
-    let backend = RustBackend::new(&interner);
+    let backend = dep_backend(&interner);
     let emitted = backend.emit(&program)?;
 
     assert_eq!(
-        emitted.cargo_toml.as_str(),
+        normalize_runtime_dep_path(&emitted.cargo_toml),
         GOLDEN_CARGO,
-        "Cargo.toml must match the golden"
+        "Cargo.toml must match the golden (runtime path normalized to the placeholder)"
     );
     Ok(())
 }
