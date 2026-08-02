@@ -10,6 +10,23 @@ Entries below the header are maintained by
 section is generated from Conventional Commit messages and prepended when the
 standing release pull request is merged.
 
+## [0.1.32](https://github.com/arthurmaciel/ipe-lang/compare/ipe-v0.1.31...ipe-v0.1.32) (2026-08-02)
+
+
+### Features
+
+* **backend,runtime:** gate chrono-tz on uses_time (drop IANA zone DB from non-Time programs) ([#502](https://github.com/arthurmaciel/ipe-lang/issues/502)) ([58b2621](https://github.com/arthurmaciel/ipe-lang/commit/58b2621946427a4cf42ddc3de2c783e8ec6d1b7d))
+* **backend,runtime:** synchronous fn main for pure programs — hello-world 53 crates ([#498](https://github.com/arthurmaciel/ipe-lang/issues/498)) ([9f8d4e6](https://github.com/arthurmaciel/ipe-lang/commit/9f8d4e6ada4e9781630bc8d783b8b22c7cfa596b))
+* **backend:** gate the rsa crate off the always-on crypto_core floor ([#497](https://github.com/arthurmaciel/ipe-lang/issues/497)) ([b2fa817](https://github.com/arthurmaciel/ipe-lang/commit/b2fa81748fe79892c03184498f44cebe33b8bf79))
+* **backend:** gate the url crate on uses_url so pure programs shed its idna/ICU4X subtree ([#495](https://github.com/arthurmaciel/ipe-lang/issues/495)) ([4d81da3](https://github.com/arthurmaciel/ipe-lang/commit/4d81da34b240cbe207430e5a78e885ab3331cb41))
+* **playground:** add sandboxed jail-runner and wire /run to it ([#490](https://github.com/arthurmaciel/ipe-lang/issues/490)) ([ba9ebdc](https://github.com/arthurmaciel/ipe-lang/commit/ba9ebdcf4999d64878b5b005403d9835e2ab7ee1))
+* **runtime:** crate feature-parity with emitted trimming (S3 precondition) ([#504](https://github.com/arthurmaciel/ipe-lang/issues/504)) ([1a0ceab](https://github.com/arthurmaciel/ipe-lang/commit/1a0ceabc37e6a97edd997587d20696f4d0165477))
+
+
+### Bug Fixes
+
+* **lower:** give a generic enum-payload type argument the Arc fn carrier ([#484](https://github.com/arthurmaciel/ipe-lang/issues/484)) ([#506](https://github.com/arthurmaciel/ipe-lang/issues/506)) ([59c6147](https://github.com/arthurmaciel/ipe-lang/commit/59c61473affaa63a02f691f4e0dc848d7612eca2))
+
 ## [0.1.31](https://github.com/arthurmaciel/ipe-lang/compare/ipe-v0.1.30...ipe-v0.1.31) (2026-08-01)
 
 
