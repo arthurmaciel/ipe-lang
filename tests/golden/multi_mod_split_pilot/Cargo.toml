@@ -45,7 +45,6 @@ rsa = { version = "0.9", features = ["sha2"] }
 getrandom = "0.2"
 uuid = { version = "1", features = ["v4", "v7"] }
 bcrypt = "0.17"
-url = "2"
 futures-util = "0.3"
 
 # Unix-only: `Io.readSecret` toggles terminal echo via termios (tcgetattr /

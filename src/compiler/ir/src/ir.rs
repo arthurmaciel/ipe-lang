@@ -152,6 +152,18 @@ pub struct Module {
     /// also reaches `crate::jwt`, so the backend force-declares `jwt` under
     /// `uses_jwt || uses_auth`.
     pub uses_jwt: bool,
+    /// `true` when the lowerer detected at least one `Ipe.Url` kernel call
+    /// (`Url.fromString` / `toString` / `scheme` / `host` / `port` / `path` /
+    /// `query` / `fragment` / `buildQuery`) in the module's function bodies.
+    ///
+    /// Set by `ipe_lower` when any call site resolves to a
+    /// `KernelFn::is_url()` variant. The backend reads this flag to decide
+    /// whether to declare `pub mod url; pub use url::*;` in the emitted
+    /// `ipe_runtime/mod.rs` and add the `url` crate (with its `idna` → ICU4X
+    /// subtree). The `http_client` / `ws_client` modules (and the shared `ssrf`
+    /// validators) also reach the `url` crate, so the backend force-declares
+    /// `url` under `uses_url || reaches_http_client || uses_websocket`.
+    pub uses_url: bool,
     /// `true` when the lowerer detected at least one `Ipe.Ui` / `Ipe.Html`
     /// kernel call (`Ui.layout`, `Ui.layoutWith`, `Html.render`, etc.) in the
     /// module's function bodies.
@@ -3727,6 +3739,7 @@ mod tests {
                 uses_csv: false,
                 uses_crypto: false,
                 uses_jwt: false,
+                uses_url: false,
                 uses_ui: false,
                 uses_web: false,
                 uses_tui: false,
@@ -4229,6 +4242,7 @@ mod serde_persistence_tests {
                 uses_csv: false,
                 uses_crypto: false,
                 uses_jwt: false,
+                uses_url: false,
                 uses_ui: false,
                 uses_web: false,
                 uses_tui: false,
@@ -4303,6 +4317,7 @@ mod serde_persistence_tests {
                 uses_csv: false,
                 uses_crypto: false,
                 uses_jwt: false,
+                uses_url: false,
                 uses_ui: false,
                 uses_web: false,
                 uses_tui: false,
