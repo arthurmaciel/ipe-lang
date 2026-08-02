@@ -190,6 +190,7 @@ fn emit_spine_file_memoized_coarse_floor() {
         Vec::new(),
         false,
         false,
+        None,
     );
 
     let spine = ipe_db::emit_spine_file(&db, root, main, config).expect("spine must render");
@@ -247,6 +248,7 @@ fn emit_rust_file_memoized_per_file() {
         Vec::new(),
         false,
         false,
+        None,
     );
 
     // Interned ids carry `db`'s borrow, so they cannot be held across a
@@ -355,6 +357,7 @@ fn emit_manifest_matches_emit_project_for_single_module() {
         Vec::new(),
         false,
         false,
+        None,
     );
 
     let via_project =
@@ -392,6 +395,7 @@ fn emit_manifest_matches_emit_project_for_two_modules() {
         Vec::new(),
         false,
         false,
+        None,
     );
 
     // Precondition: this program genuinely splits (2 distinct homes), so

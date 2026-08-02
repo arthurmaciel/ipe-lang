@@ -39,6 +39,17 @@ const GOLDEN: &str = include_str!("../templates/main.rs");
 /// the runtime).
 const CARGO_TOML: &str = include_str!("../templates/Cargo.toml");
 
+/// The dependency-model project `Cargo.toml`
+/// ([`crate::RustBackend::with_runtime_dep`]): the user-crate manifest that
+/// declares the runtime as a single path dependency instead of vendoring its
+/// source. Two placeholders are substituted by [`dep_model_cargo_toml`]:
+/// `__IPE_RUNTIME_PATH__` (the TOML-escaped resolved crate root) and
+/// `__IPE_RUNTIME_FEATURES__` (the [`crate::runtime_features`] selection). The
+/// third-party dependency set the vendored template carries is gone — the
+/// runtime crate's own manifest is the single place declaring those versions,
+/// pulled transitively by the selected features.
+const CARGO_DEP_TOML: &str = include_str!("../templates/Cargo.dep.toml");
+
 /// The generated `ipe_runtime/mod.rs` — the curated set of runtime modules whose
 /// dependencies are satisfied by [`CARGO_TOML`]. The vendored runtime source
 /// ships a fuller `mod.rs` (declaring `uuid` / `web` / `db` / … modules that
@@ -1297,6 +1308,90 @@ pub fn emit_program(ctx: &EmitCtx, program: &Program) -> DResult<EmittedProject>
 ///
 /// Propagates any [`Diagnostic`] from the `Cargo.toml`/runtime-module
 /// construction (e.g. a drifted server/db/tui/webview manifest anchor).
+/// Escape `s` as the body of a TOML basic (double-quoted) string. The runtime
+/// crate root is a filesystem path the driver resolved and canonicalised; the
+/// only bytes a real path can carry that TOML would misread are the backslash
+/// (Windows separators) and the double-quote, so both are escaped. Forward
+/// slashes need no escaping and are valid on every platform cargo targets, so
+/// the driver hands over a forward-slash path (design §"the path is emitted
+/// absolute, canonicalized, and TOML-escaped").
+fn toml_escape_basic(s: &str) -> String {
+    s.replace('\\', "\\\\").replace('"', "\\\"")
+}
+
+/// Render the dependency-model project `Cargo.toml` for `ctx`: the
+/// [`CARGO_DEP_TOML`] user-crate template with the runtime crate root and the
+/// [`crate::runtime_features`] feature selection substituted in.
+///
+/// The feature list is the SSOT image — the ONLY authority for which runtime
+/// features a program selects — rendered as a quoted, comma-separated list in
+/// the crate's canonical order. An empty selection is impossible (`json` is the
+/// floor), but the join is still correct for one (no trailing comma).
+///
+/// # Errors
+///
+/// Returns [`Diagnostic::CompilerBug`] if either template placeholder is absent
+/// — a drifted dep-model manifest template, surfaced loudly rather than emitting
+/// a manifest that names no runtime.
+fn dep_model_cargo_toml(ctx: &EmitCtx, dep: &crate::RuntimeDep) -> DResult<String> {
+    const PATH_ANCHOR: &str = "__IPE_RUNTIME_PATH__";
+    const FEATURES_ANCHOR: &str = "__IPE_RUNTIME_FEATURES__";
+
+    let features = crate::runtime_features::runtime_features(ctx);
+    let feature_list = features
+        .as_feature_names()
+        .iter()
+        .map(|f| format!("\"{f}\""))
+        .collect::<Vec<_>>()
+        .join(", ");
+
+    // The path is emitted with forward slashes so the same manifest text is
+    // valid on every platform cargo targets; the driver already canonicalised
+    // it, and `toml_escape_basic` guards the double-quote / residual backslash.
+    let path_forward = dep.root.to_string_lossy().replace('\\', "/");
+    let path_escaped = toml_escape_basic(&path_forward);
+
+    if !CARGO_DEP_TOML.contains(PATH_ANCHOR) {
+        return Err(Diagnostic::CompilerBug {
+            where_: "ipe_backend_rust::project::dep_model_cargo_toml",
+            detail: format!("dep-model manifest template lost the {PATH_ANCHOR:?} anchor"),
+        });
+    }
+    if !CARGO_DEP_TOML.contains(FEATURES_ANCHOR) {
+        return Err(Diagnostic::CompilerBug {
+            where_: "ipe_backend_rust::project::dep_model_cargo_toml",
+            detail: format!("dep-model manifest template lost the {FEATURES_ANCHOR:?} anchor"),
+        });
+    }
+    Ok(CARGO_DEP_TOML
+        .replace(PATH_ANCHOR, &path_escaped)
+        .replace(FEATURES_ANCHOR, &feature_list))
+}
+
+/// Render the per-project `env_public` module for the dependency model as a
+/// USER-crate module (`src/ipe_env_public.rs`), declared + re-exported from
+/// `main.rs`. Byte-identical to [`render_env_public_rs`] except the one runtime
+/// import: `use super::core::IpeMaybe` (a submodule of the vendored
+/// `ipe_runtime`) becomes `use ipe_runtime::core::IpeMaybe` (the extern crate),
+/// since the module no longer lives inside the runtime tree.
+fn render_env_public_user_rs(allowlist: &[String]) -> String {
+    render_env_public_rs(allowlist).replacen(
+        "use super::core::IpeMaybe;",
+        "use ipe_runtime::core::IpeMaybe;",
+        1,
+    )
+}
+
+/// Rewrite the one emitted `crate::ipe_runtime::…` reference (the `IpeStringify`
+/// trait bound in generic where-clauses, [`crate::emit_expr::render_bounds`])
+/// into the extern-crate path `ipe_runtime::…` for the dependency model, where
+/// `ipe_runtime` is a real dependency reached through the extern prelude, not a
+/// crate-root `mod`. Applied only under the dep model; the vendored path keeps
+/// the byte-identical `crate::ipe_runtime::…` form.
+fn rewrite_runtime_paths_for_dep(src: &str) -> String {
+    src.replace("crate::ipe_runtime::", "ipe_runtime::")
+}
+
 #[allow(clippy::too_many_lines)] // one linear manifest/runtime assembly pass
 fn assemble_project_files(
     ctx: &EmitCtx,
@@ -1374,6 +1469,103 @@ fn assemble_project_files(
             files,
             cargo_toml: wasm_cargo_toml,
         });
+    }
+
+    // ── Native dependency-model branch ───────────────────────────────────────
+    // The runtime is a real path dependency, not vendored source: the manifest
+    // declares `ipe_runtime` with the SSOT-selected features (which pull the
+    // gated third-party crates transitively — the per-surface manifest
+    // augmenters below are REPLACED by that feature list), and no
+    // `src/ipe_runtime/` tree is emitted. The generated code reaches the runtime
+    // through the extern prelude (`ipe_runtime::…`), so the one emitted
+    // `crate::ipe_runtime::…` reference is rewritten to that form; `env_public`
+    // moves to a user-crate module. Wasm never reaches here (its closed template
+    // returned above).
+    if let Some(dep) = ctx.runtime_dep.clone() {
+        let cargo_toml = dep_model_cargo_toml(ctx, &dep)?;
+        let mut files = BTreeMap::new();
+        for (path, text) in rust_sources {
+            files.insert(path, rewrite_runtime_paths_for_dep(&text));
+        }
+        // `main.rs` reaches the runtime through the extern prelude, so the
+        // crate-root `pub mod ipe_runtime;` (vendored-source declaration) is
+        // dropped; the following `pub use ipe_runtime::*;` line — and every
+        // `ipe_runtime::…` path in generated code — resolves against the extern
+        // crate unchanged.
+        {
+            let main = files
+                .get_mut("src/main.rs")
+                .ok_or_else(|| Diagnostic::CompilerBug {
+                    where_: "ipe_backend_rust::project::assemble_project_files",
+                    detail: "no src/main.rs in the assembled file set".to_owned(),
+                })?;
+            let dropped = main.replacen("pub mod ipe_runtime;\n", "", 1);
+            if dropped == *main {
+                return Err(Diagnostic::CompilerBug {
+                    where_: "ipe_backend_rust::project::assemble_project_files",
+                    detail: "dep-model emit expected `pub mod ipe_runtime;` in the preamble to \
+                             drop, but it was absent — the emit template drifted"
+                        .to_owned(),
+                });
+            }
+            *main = dropped;
+        }
+        // `env_public` is per-project code, so under the dep model it belongs in
+        // the user crate (`src/ipe_env_public.rs`), declared + re-exported from
+        // `main.rs`. Its one runtime import is retargeted to the extern crate.
+        if ctx.uses_env_public {
+            files.insert(
+                RelPath::new("src/ipe_env_public.rs")?,
+                render_env_public_user_rs(&ctx.wasm_public_env),
+            );
+            let main = files
+                .get_mut("src/main.rs")
+                .ok_or_else(|| Diagnostic::CompilerBug {
+                    where_: "ipe_backend_rust::project::assemble_project_files",
+                    detail: "no src/main.rs in the assembled file set".to_owned(),
+                })?;
+            // Declared + glob-re-exported at the crate root right after the
+            // runtime re-export, so `env_public(key)` (an unqualified call in
+            // generated code, resolved via `pub use ipe_runtime::*` in the
+            // vendored model) stays in scope on both the single-file and split
+            // paths (the latter's module files see it via `use crate::*`).
+            let anchor = "pub use ipe_runtime::*;\n";
+            let barrel =
+                "pub use ipe_runtime::*;\nmod ipe_env_public;\npub use ipe_env_public::*;\n";
+            let injected = main.replacen(anchor, barrel, 1);
+            if injected == *main {
+                return Err(Diagnostic::CompilerBug {
+                    where_: "ipe_backend_rust::project::assemble_project_files",
+                    detail: "dep-model env_public relocation expected the \
+                             `pub use ipe_runtime::*;` anchor in main.rs — the emit template \
+                             drifted"
+                        .to_owned(),
+                });
+            }
+            *main = injected;
+        }
+        // FFI wrappers are user-project code in BOTH models — the wrapper module
+        // + its `mod ffi;` declaration ride the emitted crate unchanged.
+        if ctx.uses_ffi {
+            let ffi = ctx.ffi.as_ref().ok_or_else(|| Diagnostic::CompilerBug {
+                where_: "ipe_backend_rust::project::assemble_project_files",
+                detail: "program lowers foreign-wrapper calls but the driver supplied no FFI \
+                         emission inputs (RustBackend::with_ffi)"
+                    .to_owned(),
+            })?;
+            shake_interface_forwarder_files(&mut files, &ffi.interface_modules);
+            let reached = reached_ffi_idents(&files);
+            let shaken = shake_ffi_by_fn_ident(&ffi.bindings_source, &reached);
+            files.insert(RelPath::new("src/ffi.rs")?, shaken);
+            let main = files
+                .get_mut("src/main.rs")
+                .ok_or_else(|| Diagnostic::CompilerBug {
+                    where_: "ipe_backend_rust::project::assemble_project_files",
+                    detail: "no src/main.rs in the assembled file set".to_owned(),
+                })?;
+            main.push_str("\nmod ffi;\n");
+        }
+        return Ok(EmittedProject { files, cargo_toml });
     }
 
     // ── Manifest + runtime module files ──────────────────────────────────────

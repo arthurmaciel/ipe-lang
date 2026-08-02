@@ -108,6 +108,7 @@ fn emit_project_memoized_coarse_floor() {
         Vec::new(),
         false,
         false,
+        None,
     );
 
     let emitted =
@@ -166,6 +167,7 @@ fn emit_project_config_change_does_not_retrigger_lower() {
         Vec::new(),
         false,
         false,
+        None,
     );
 
     assert!(ipe_db::emit_project(&db, root, b, config).is_ok());
@@ -225,6 +227,7 @@ fn emit_project_source_edit_retriggers_lower_and_emit() {
         Vec::new(),
         false,
         false,
+        None,
     );
 
     assert!(ipe_db::emit_project(&db, root, b, config).is_ok());
@@ -256,6 +259,7 @@ fn emit_project_short_circuits_on_lower_error() {
         Vec::new(),
         false,
         false,
+        None,
     );
 
     let lower_err =

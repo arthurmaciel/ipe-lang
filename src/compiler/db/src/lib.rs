@@ -1133,6 +1133,13 @@ pub struct BuildConfig {
     /// (not `SourceRoot`) so toggling it re-runs only [`emit_project`], never
     /// [`lower_program`] / [`typecheck`].
     pub production: bool,
+    /// The dependency-model emit selector (opt-in `IPE_RUNTIME_DEP`). `Some` —
+    /// the emitted native project declares the runtime as the resolved path
+    /// dependency with a `runtime_features`-selected feature list and vendors no
+    /// runtime source; `None` (the default) emits the byte-identical vendored
+    /// project. Threaded to [`ipe_backend_rust::RustBackend::with_runtime_dep`].
+    #[returns(ref)]
+    pub runtime_dep: Option<ipe_backend_rust::RuntimeDep>,
 }
 
 /// The memoized result of emitting the linked, lowered program to Rust
@@ -1196,6 +1203,7 @@ pub fn emit_project(
     let target = config.target(db);
     let wasm_public_env = config.wasm_public_env(db).clone();
     let wasm_hydrate_mode = config.wasm_hydrate_mode(db);
+    let runtime_dep = config.runtime_dep(db).clone();
     let interner = db.interner().lock();
     ipe_backend_rust::RustBackend::new(&interner)
         .with_db_driver(driver)
@@ -1203,6 +1211,7 @@ pub fn emit_project(
         .with_target(target)
         .with_wasm_public_env(wasm_public_env)
         .with_wasm_hydrate_mode(wasm_hydrate_mode)
+        .with_runtime_dep(runtime_dep)
         .emit(&program)
         .map(Arc::new)
         .map_err(|d| (d, Vec::new()))
@@ -1285,6 +1294,7 @@ pub fn emit_spine_file(
     let target = config.target(db);
     let wasm_public_env = config.wasm_public_env(db).clone();
     let wasm_hydrate_mode = config.wasm_hydrate_mode(db);
+    let runtime_dep = config.runtime_dep(db).clone();
     let interner = db.interner().lock();
     ipe_backend_rust::RustBackend::new(&interner)
         .with_db_driver(driver)
@@ -1292,6 +1302,7 @@ pub fn emit_spine_file(
         .with_target(target)
         .with_wasm_public_env(wasm_public_env)
         .with_wasm_hydrate_mode(wasm_hydrate_mode)
+        .with_runtime_dep(runtime_dep)
         .emit_spine(&program)
         .map(Arc::new)
         .map_err(|d| (d, Vec::new()))
@@ -1322,12 +1333,14 @@ pub fn emit_rust_file<'db>(
     let driver = config.db_driver(db);
     let ffi = config.ffi(db).clone();
     let target = config.target(db);
+    let runtime_dep = config.runtime_dep(db).clone();
     let home = file.home(db);
     let interner = db.interner().lock();
     ipe_backend_rust::RustBackend::new(&interner)
         .with_db_driver(driver)
         .with_ffi(ffi)
         .with_target(target)
+        .with_runtime_dep(runtime_dep)
         .emit_module_file(&program, &home)
         .map(Arc::new)
         .map_err(|d| (d, Vec::new()))
@@ -1385,6 +1398,7 @@ pub fn emit_manifest(
     let target = config.target(db);
     let wasm_public_env = config.wasm_public_env(db).clone();
     let wasm_hydrate_mode = config.wasm_hydrate_mode(db);
+    let runtime_dep = config.runtime_dep(db).clone();
     let interner = db.interner().lock();
     ipe_backend_rust::RustBackend::new(&interner)
         .with_db_driver(driver)
@@ -1392,6 +1406,7 @@ pub fn emit_manifest(
         .with_target(target)
         .with_wasm_public_env(wasm_public_env)
         .with_wasm_hydrate_mode(wasm_hydrate_mode)
+        .with_runtime_dep(runtime_dep)
         .assemble_split_manifest(&program, &spine, &module_texts)
         .map(Arc::new)
         .map_err(|d| (d, Vec::new()))
