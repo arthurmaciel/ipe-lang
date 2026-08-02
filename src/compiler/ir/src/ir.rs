@@ -236,6 +236,19 @@ pub struct Module {
     /// `lettre` dependency (the only extra crate `email.rs` needs beyond the
     /// base manifest) to the emitted `Cargo.toml`.
     pub uses_email: bool,
+    /// `true` when the lowerer detected at least one non-TEA `Ipe.Time` kernel
+    /// call (`Time.now` / `unixMillis` / `sleep` / `timeString` / `isLeapYear` /
+    /// `daysInMonth`) in the module's function bodies.
+    ///
+    /// Set by `ipe_lower` when any call site resolves to a `KernelFn::is_time()`
+    /// variant. The backend reads this flag to enable the `time` Cargo feature
+    /// and add the `chrono-tz` dependency — the IANA-zone calendar surface of the
+    /// always-declared `time` runtime module, gated behind that feature. A
+    /// program that reaches no `Ipe.Time` kernel drops the crate. The `chrono`
+    /// core crate (the always-on `log`/`db`/`web`/`telemetry` timestamp floor)
+    /// stays unconditional and is unaffected by this flag. `Time.every` is TEA,
+    /// tracked by `uses_tea`.
+    pub uses_time: bool,
     /// `true` when the lowerer detected the `Ipe.Env` `Env.public` kernel
     /// call in the module's function bodies.
     ///
@@ -3758,6 +3771,7 @@ mod tests {
                 uses_auth: false,
                 uses_websocket: false,
                 uses_email: false,
+                uses_time: false,
                 uses_env_public: false,
                 uses_debug: false,
                 uses_ffi: false,
@@ -4262,6 +4276,7 @@ mod serde_persistence_tests {
                 uses_auth: false,
                 uses_websocket: false,
                 uses_email: false,
+                uses_time: false,
                 uses_env_public: false,
                 uses_debug: false,
                 uses_ffi: false,
@@ -4338,6 +4353,7 @@ mod serde_persistence_tests {
                 uses_auth: false,
                 uses_websocket: false,
                 uses_email: false,
+                uses_time: false,
                 uses_env_public: false,
                 uses_debug: false,
                 uses_ffi: false,

@@ -86,7 +86,11 @@ uuid = { version = "1", features = ["v4", "v7"] }
 hex = "0.4"
 percent-encoding = "2"
 chrono = "0.4"
-chrono-tz = "0.10"
+# `chrono-tz` (the embedded IANA zone DB) is optional: only the `time` runtime
+# module's IANA-zone helpers use it, and they are gated behind the `time`
+# feature. A program that reaches no `Ipe.Time` kernel drops the crate. `chrono`
+# core (log/db/web/telemetry timestamps) stays unconditional.
+chrono-tz = { version = "0.10", optional = true }
 rust_decimal = { version = "1", features = ["serde"] }
 bcrypt = { version = "0.17", optional = true }
 # `icu_casemap`: locale-aware case mapping (`String.toUpperIn`/`toLowerIn`).
@@ -175,6 +179,9 @@ async = ["tokio"]
 # Programs that never import `Ipe.Locale` pay nothing — the ICU4X casemap +
 # locale-core deps are entirely absent from the default feature graph.
 locale = ["dep:icu_casemap", "dep:icu_locale_core"]
+# Ipe.Time IANA-zone calendar surface (`time.rs`'s zone helpers). Gated so a
+# program that reaches no `Ipe.Time` kernel drops the embedded IANA zone DB.
+time = ["dep:chrono-tz"]
 json = ["serde_json", "jsonwebtoken"]
 # `sha2` is required by `db_migrate_apply` (the `_ipe_migrations` ledger stores a
 # sha256-hex checksum per migration — a cross-backend DB contract that must match
@@ -218,7 +225,7 @@ websocket_client = ["tokio", "tokio-tungstenite", "futures-util"]
 # `uuid` (a non-optional base dep), so `web` needs no `aes-gcm`. (`subtle` for
 # the constant-time compare is a non-optional dep.) serde is non-optional now.
 web = ["server", "http_client", "serde_json", "async-trait", "sha2"]
-full = ["async", "json", "db", "redis_store", "crypto", "compression", "csv_kernel", "cache_kernel", "tui", "config", "server", "http_client", "email", "websocket_client", "web"]
+full = ["async", "json", "db", "redis_store", "crypto", "compression", "csv_kernel", "cache_kernel", "tui", "config", "server", "http_client", "email", "websocket_client", "web", "time"]
 # Browser-WASM TEA sink (`src/wasm/`): mount + patch-apply + delegated events.
 # Compiles only on wasm32 (the module is target-cfg'd); NOT in `full` — native
 # builds never link the wasm glue.
