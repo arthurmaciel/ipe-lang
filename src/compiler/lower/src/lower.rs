@@ -6007,6 +6007,11 @@ struct KernelUsage {
     /// Any outbound `Ipe.WebSocket` client kernel — gates the
     /// `websocket_client` Cargo feature + `ws_client` runtime module.
     websocket: bool,
+    /// Any non-TEA `Ipe.Time` kernel (`Time.now` / `unixMillis` / `sleep` /
+    /// `timeString` / `isLeapYear` / `daysInMonth`) — gates the `time` Cargo
+    /// feature and the `chrono-tz` dependency (the IANA-zone calendar surface).
+    /// `chrono` core stays unconditional. `Time.every` is TEA, tracked by `tea`.
+    time: bool,
     /// The `Ipe.Email` `Email.send` kernel.
     email: bool,
     /// The `Ipe.Env` `Env.public` kernel — gates emitting the per-project
@@ -6071,6 +6076,7 @@ impl KernelUsage {
             && self.webview
             && self.websocket
             && self.email
+            && self.time
             && self.env_public
             && self.debug
             && self.ffi
@@ -6104,6 +6110,7 @@ impl KernelUsage {
         self.webview |= k.is_webview();
         self.websocket |= k.is_websocket_client();
         self.email |= matches!(k, KernelFn::EmailSend);
+        self.time |= k.is_time();
         self.env_public |= matches!(k, KernelFn::EnvPublic);
         self.debug |= k.is_dev_only();
         // A kernel whose emitted symbol lives in a feature-module its emit-class
@@ -8126,6 +8133,11 @@ impl<'a> Lowerer<'a> {
         // append `pub mod email; pub use email::*;` to the emitted
         // `ipe_runtime/mod.rs` and to add the `lettre` dependency.
         let uses_email = kernel_usage.email;
+        // detect non-TEA `Ipe.Time` kernel usage — the backend enables the
+        // `time` Cargo feature and adds the `chrono-tz` dependency (the IANA-zone
+        // calendar surface); a program that reaches no Time kernel drops the
+        // crate. `chrono` core stays unconditional.
+        let uses_time = kernel_usage.time;
         // detect `Ipe.Env` `Env.public` usage — the backend uses this flag to
         // emit the per-project `env_public.rs` and append `pub mod
         // env_public; pub use env_public::*;` to the emitted
@@ -8176,6 +8188,7 @@ impl<'a> Lowerer<'a> {
             uses_auth,
             uses_websocket,
             uses_email,
+            uses_time,
             uses_env_public,
             uses_debug,
             uses_ffi,

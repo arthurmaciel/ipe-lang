@@ -638,6 +638,15 @@ pub(crate) struct EmitCtx<'a> {
     /// email::*;` to the emitted `ipe_runtime/mod.rs` and adds the `lettre`
     /// dependency to the emitted `Cargo.toml`.
     pub(crate) uses_email: bool,
+    /// `true` when the program uses at least one non-TEA `Ipe.Time` kernel
+    /// (`Time.now` / `unixMillis` / `sleep` / `timeString` / `isLeapYear` /
+    /// `daysInMonth`). When set, [`crate::project::assemble_project_files`]
+    /// enables the `time` Cargo feature in the emitted manifest (promoting it
+    /// into the `default` list) and adds the `chrono-tz` dependency — the
+    /// IANA-zone calendar surface of the always-declared `time` runtime module,
+    /// gated behind that feature. A program that reaches no `Ipe.Time` kernel
+    /// drops the crate. The `chrono` core crate stays unconditional.
+    pub(crate) uses_time: bool,
     /// `true` when the program lowers at least one [`ipe_ir::Callee::Ffi`]
     /// foreign-wrapper call. When set,
     /// [`crate::project::assemble_project_files`] writes `src/ffi.rs` (from
@@ -1254,6 +1263,9 @@ impl<'a> EmitCtx<'a> {
         let uses_auth = program.modules.iter().any(|m| m.uses_auth);
         // detect Ipe.Email kernel usage.
         let uses_email = program.modules.iter().any(|m| m.uses_email);
+        // detect non-TEA Ipe.Time kernel usage — gates the `time` Cargo feature
+        // and the `chrono-tz` dependency.
+        let uses_time = program.modules.iter().any(|m| m.uses_time);
         // detect Ipe.Env `Env.public` kernel usage.
         let uses_env_public = program.modules.iter().any(|m| m.uses_env_public);
 
@@ -1313,6 +1325,7 @@ impl<'a> EmitCtx<'a> {
             uses_auth,
             uses_websocket,
             uses_email,
+            uses_time,
             uses_ffi,
             ffi,
             uses_env_public,
@@ -3100,6 +3113,7 @@ mod record_struct_namespace_tests {
                 uses_auth: false,
                 uses_websocket: false,
                 uses_email: false,
+                uses_time: false,
                 uses_env_public: false,
                 uses_debug: false,
                 uses_ffi: false,
@@ -3186,6 +3200,7 @@ mod record_struct_namespace_tests {
                 uses_auth: false,
                 uses_websocket: false,
                 uses_email: false,
+                uses_time: false,
                 uses_env_public: false,
                 uses_debug: false,
                 uses_ffi: false,

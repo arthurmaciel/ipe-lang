@@ -131,6 +131,10 @@ pub const FUTURES_UTIL: CrateSpec = CrateSpec {
     name: "futures-util",
     version: "0.3",
 };
+pub const CHRONO_TZ: CrateSpec = CrateSpec {
+    name: "chrono-tz",
+    version: "0.10",
+};
 
 /// Every spec emitted by the surgery functions, for drift-test iteration.
 ///
@@ -166,6 +170,7 @@ pub const ALL: &[CrateSpec] = &[
     URL,
     RSA,
     FUTURES_UTIL,
+    CHRONO_TZ,
 ];
 
 #[cfg(test)]
@@ -182,7 +187,7 @@ mod tests {
             assert!(!spec.name.is_empty(), "empty crate name in ALL");
             assert!(!spec.version.is_empty(), "empty version for {}", spec.name);
         }
-        assert_eq!(ALL.len(), 28, "expected 28 surgery-emitted crate specs");
+        assert_eq!(ALL.len(), 29, "expected 29 surgery-emitted crate specs");
     }
 
     /// Extract the version from a Cargo dependency value: `"0.4"` or
