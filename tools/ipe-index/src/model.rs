@@ -13,6 +13,31 @@ pub enum Role {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Stage { Parse, Canonicalise, Type, Build, Generate }
 
+/// Unit kinds stored in `units.kind` — a closed set mirrored by the DB CHECK
+/// constraint, so an invalid kind is unrepresentable at both layers.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Kind { Module, File, Fn, Struct, Enum, Impl, Const, Binding, Block, Trait }
+
+/// `units.facing` — closed set mirrored by the DB CHECK constraint.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Facing { User, Internal, Test }
+
+/// A reviewable source unit: a content-stable id (`uid` = blake3 of
+/// `path|kind|qualified`), a span, classification, and a body hash binding
+/// the row to the exact source bytes it describes.
+pub struct Unit {
+    pub path: String,
+    pub kind: Kind,
+    pub name: String,
+    pub qualified: String,
+    pub line_start: i64,
+    pub line_end: i64,
+    pub facing: Facing,
+    pub purpose: Option<String>,
+    pub body_hash: String,
+    pub updated_sha: String,
+}
+
 /// Split a repo-tagged path (`"ipe:crates/foo.rs"`) into `(tag, relpath)`.
 /// Untagged paths (no `:` before the first `/`) return `("", path)`.
 pub fn split_tag(path: &str) -> (&str, &str) {
@@ -69,6 +94,8 @@ pub fn stage_of(path: &str) -> Option<Stage> {
 impl Lang { pub fn as_str(&self) -> &'static str { use Lang::*; match self { Rust=>"rs",Bash=>"sh",Ts=>"ts",Ipe=>"ipe",Other=>"other" } } }
 impl Role { pub fn as_str(&self) -> &'static str { use Role::*; match self { CompilerRs=>"compiler-rs",RuntimeRs=>"runtime-rs",StdlibIpe=>"stdlib-ipe",ToolRs=>"tool-rs",ScriptSh=>"script-sh",ConsoleTs=>"console-ts",Example=>"example",Fixture=>"fixture",Other=>"other" } } }
 impl Stage { pub fn as_str(&self) -> &'static str { use Stage::*; match self { Parse=>"parse",Canonicalise=>"canonicalise",Type=>"type",Build=>"build",Generate=>"generate" } } }
+impl Kind { pub fn as_str(&self) -> &'static str { use Kind::*; match self { Module=>"module",File=>"file",Fn=>"fn",Struct=>"struct",Enum=>"enum",Impl=>"impl",Const=>"const",Binding=>"binding",Block=>"block",Trait=>"trait" } } }
+impl Facing { pub fn as_str(&self) -> &'static str { use Facing::*; match self { User=>"user",Internal=>"internal",Test=>"test" } } }
 
 #[cfg(test)]
 mod tests {

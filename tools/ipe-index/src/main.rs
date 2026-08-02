@@ -136,6 +136,13 @@ fn cmd_index(repo_specs: &[String], db: &str) -> Result<()> {
 
     for (tag, root) in &repos {
         let files = walk::tracked(root)?;
+        let sha = match walk::head_sha(root) {
+            Ok(s) => s,
+            Err(e) => {
+                eprintln!("ipe-index: no HEAD sha for {root}: {e}");
+                String::new()
+            }
+        };
         for f in &files {
             let Some(src) = read_capped(root, &f.path) else {
                 continue;
@@ -154,14 +161,14 @@ fn cmd_index(repo_specs: &[String], db: &str) -> Result<()> {
                 src.len() as i64,
                 "",
             )?;
-            extract::extract_file(&store, &tagged, f.lang, &src)?;
+            extract::extract_file(&store, &tagged, f.lang, &src, &sha)?;
             pipeline::record_stage(&store, &tagged)?;
             if role == model::Role::Fixture || role == model::Role::Example {
                 coverage::record_coverage(&store, &tagged, &src)?;
             }
         }
         // Per-repo HEAD sha so an incremental `update` can diff each.
-        if let Ok(sha) = walk::head_sha(root) {
+        if !sha.is_empty() {
             store.set_meta(&format!("last_sha:{tag}"), &sha)?;
         }
         total_files += files.len();
@@ -202,6 +209,13 @@ fn cmd_update(repo_specs: &[String], db: &str) -> Result<()> {
         let since = store
             .get_meta(&format!("last_sha:{tag}"))?
             .unwrap_or_default();
+        let sha = match walk::head_sha(root) {
+            Ok(s) => s,
+            Err(e) => {
+                eprintln!("ipe-index: no HEAD sha for {root}: {e}");
+                String::new()
+            }
+        };
         let (ups, dels) = walk::changed(root, &since)?;
         for d in &dels {
             store.drop_file(&format!("{tag}:{d}"))?;
@@ -220,13 +234,13 @@ fn cmd_update(repo_specs: &[String], db: &str) -> Result<()> {
                 src.len() as i64,
                 "",
             )?;
-            extract::extract_file(&store, &tagged, f.lang, &src)?;
+            extract::extract_file(&store, &tagged, f.lang, &src, &sha)?;
             pipeline::record_stage(&store, &tagged)?;
             if role == model::Role::Fixture || role == model::Role::Example {
                 coverage::record_coverage(&store, &tagged, &src)?;
             }
         }
-        if let Ok(sha) = walk::head_sha(root) {
+        if !sha.is_empty() {
             store.set_meta(&format!("last_sha:{tag}"), &sha)?;
         }
         changed_count += ups.len() + dels.len();

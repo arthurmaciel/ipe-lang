@@ -6,6 +6,7 @@ edition = "2024"
 
 [dependencies]
 anyhow = "1"
+blake3 = "1"
 clap = { version = "4", features = ["derive"] }
 regex = "1"
 rusqlite = { version = "0.31", features = ["bundled"] }

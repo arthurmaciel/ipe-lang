@@ -1,7 +1,9 @@
-use crate::model::Lang;
+use super::{blake3_hex, emit_unit, module_path};
+use crate::model::{Kind, Lang};
 use crate::store::Store;
 use anyhow::Result;
-use tree_sitter::{Parser, Query, QueryCursor};
+use std::collections::HashMap;
+use tree_sitter::{Node, Parser, Query, QueryCursor};
 
 fn lang_grammar(path: &str, lang: Lang) -> Option<(tree_sitter::Language, &'static str)> {
     // (grammar, query) — query captures @def (a defined symbol) and @imp (an import target)
@@ -105,7 +107,46 @@ fn expand_rust_use(text: &str) -> Vec<String> {
     if results.is_empty() { vec![text.to_string()] } else { results }
 }
 
-pub fn extract(store: &Store, path: &str, lang: Lang, src: &str) -> Result<()> {
+/// Node kinds that form an item boundary — the unit span is the whole item.
+fn is_item_kind(kind: &str) -> bool {
+    kind.ends_with("_item") || matches!(kind, "impl_item" | "const_item" | "static_item" | "macro_definition")
+}
+
+/// Walk up from a captured name node to the enclosing item node (the name's
+/// parent for most items; through `generic_type` for `impl Foo<T>` targets).
+fn enclosing_item(node: Node) -> Node {
+    let mut cur = node;
+    while let Some(p) = cur.parent() {
+        if is_item_kind(p.kind()) { return p; }
+        cur = p;
+    }
+    node
+}
+
+/// Map a tree-sitter item kind to the `units.kind` vocabulary.
+fn unit_kind(item_kind: &str) -> Kind {
+    match item_kind {
+        "function_item" | "function_declaration" | "variable_declarator" => Kind::Fn,
+        "struct_item" => Kind::Struct,
+        "enum_item" => Kind::Enum,
+        "trait_item" => Kind::Trait,
+        "const_item" | "static_item" => Kind::Const,
+        "impl_item" => Kind::Impl,
+        "mod_item" => Kind::Module,
+        // Type aliases + macros are named bindings, not first-class items.
+        "type_item" | "macro_definition" => Kind::Binding,
+        _ => Kind::Block,
+    }
+}
+
+pub fn extract(
+    store: &Store,
+    path: &str,
+    lang: Lang,
+    src: &str,
+    updated_sha: &str,
+    ord: &mut HashMap<(String, String), i64>,
+) -> Result<()> {
     let Some((grammar, query_src)) = lang_grammar(path, lang) else { return Ok(()) };
     let mut parser = Parser::new();
     parser.set_language(&grammar)?;
@@ -114,6 +155,7 @@ pub fn extract(store: &Store, path: &str, lang: Lang, src: &str) -> Result<()> {
     let def_idx = query.capture_index_for_name("def");
     let imp_idx = query.capture_index_for_name("imp");
     let impl_idx = query.capture_index_for_name("impldef");
+    let base_qual = module_path(path, lang);
     let mut cur = QueryCursor::new();
     for m in cur.matches(&query, tree.root_node(), src.as_bytes()) {
         for cap in m.captures {
@@ -122,10 +164,34 @@ pub fn extract(store: &Store, path: &str, lang: Lang, src: &str) -> Result<()> {
             let col  = cap.node.start_position().column as i64 + 1;
             if Some(cap.index) == def_idx {
                 store.put_symbol(path, text, "def", line, col)?;
+                let item = enclosing_item(cap.node);
+                let span = &src[item.byte_range()];
+                let (lstart, lend) = (
+                    item.start_position().row as i64 + 1,
+                    item.end_position().row as i64 + 1,
+                );
+                emit_unit(
+                    store, path, unit_kind(item.kind()), text,
+                    &format!("{base_qual}::{text}"),
+                    lstart, lend, None,
+                    &blake3_hex(span.as_bytes()), updated_sha, ord,
+                )?;
             } else if Some(cap.index) == impl_idx {
                 // The type an `impl` block is FOR — stored as kind `impl` so
                 // `locate <Type>` surfaces its impl sites alongside its def.
                 store.put_symbol(path, text, "impl", line, col)?;
+                let item = enclosing_item(cap.node);
+                let span = &src[item.byte_range()];
+                let (lstart, lend) = (
+                    item.start_position().row as i64 + 1,
+                    item.end_position().row as i64 + 1,
+                );
+                emit_unit(
+                    store, path, Kind::Impl, text,
+                    &format!("{base_qual}::{text}"),
+                    lstart, lend, None,
+                    &blake3_hex(span.as_bytes()), updated_sha, ord,
+                )?;
             } else if Some(cap.index) == imp_idx {
                 let target = text.trim_matches(|c| c == '"' || c == '\'');
                 // For Rust, expand grouped use paths: `a::{b, c}` → `a::b`, `a::c`.
@@ -146,12 +212,18 @@ pub fn extract(store: &Store, path: &str, lang: Lang, src: &str) -> Result<()> {
 mod tests {
     use super::*;
     use crate::store::Store; use crate::model::Lang;
+    use std::collections::HashMap;
+
+    fn do_extract(s: &Store, path: &str, lang: Lang, src: &str) {
+        let mut ord: HashMap<(String, String), i64> = HashMap::new();
+        extract(s, path, lang, src, "sha", &mut ord).unwrap();
+    }
 
     #[test]
     fn extracts_rust_fn_and_use() {
         let s = Store::open(":memory:").unwrap();
         let src = "use crate::model::Lang;\npub fn list_head(xs: Vec<i64>) -> i64 { 0 }\n";
-        extract(&s, "a.rs", Lang::Rust, src).unwrap();
+        do_extract(&s, "a.rs", Lang::Rust, src);
         assert_eq!(s.symbols_named("list_head").unwrap().len(), 1);
         // a `use` edge was recorded
         assert!(s.count("edges").unwrap() >= 1);
@@ -161,7 +233,7 @@ mod tests {
         // JS/MJS go through the tsx grammar variant; ESM import + arrow-const def.
         let s = Store::open(":memory:").unwrap();
         let src = "import { foo } from './bar.mjs';\nexport const handler = (x) => x + 1;\n";
-        extract(&s, "x.mjs", Lang::Ts, src).unwrap();
+        do_extract(&s, "x.mjs", Lang::Ts, src);
         assert_eq!(s.symbols_named("handler").unwrap().len(), 1);
         assert!(s.count("edges").unwrap() >= 1);
     }
@@ -171,7 +243,7 @@ mod tests {
         // `use std::{collections, io}` should emit ≥2 edges.
         let s = Store::open(":memory:").unwrap();
         let src = "use std::{collections, io};\npub fn foo() {}\n";
-        extract(&s, "x.rs", Lang::Rust, src).unwrap();
+        do_extract(&s, "x.rs", Lang::Rust, src);
         let n = s.count("edges").unwrap();
         assert!(n >= 2, "expected >=2 edges for grouped use, got {n}");
     }
@@ -181,9 +253,49 @@ mod tests {
         // `export { foo } from './bar'` should emit an import edge for './bar'.
         let s = Store::open(":memory:").unwrap();
         let src = "export { foo } from './bar';\n";
-        extract(&s, "x.ts", Lang::Ts, src).unwrap();
+        do_extract(&s, "x.ts", Lang::Ts, src);
         let n = s.count("edges").unwrap();
         assert!(n >= 1, "expected >=1 edge for re-export, got {n}");
+    }
+
+    #[test]
+    fn rust_units_record_spans_and_hashes() {
+        // `pub` fn + struct + const in one crate-root file → qualified as crate::Name.
+        let s = Store::open(":memory:").unwrap();
+        let src = "pub fn f() {}\npub struct S;\nimpl S { fn g(&self) {} }\n";
+        do_extract(&s, "src/lib.rs", Lang::Rust, src);
+        let rows: Vec<(String, String, i64, i64)> = s.conn
+            .prepare("SELECT name,kind,line_start,line_end FROM units WHERE kind != 'file' ORDER BY line_start")
+            .unwrap()
+            .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)))
+            .unwrap()
+            .collect::<std::result::Result<_, _>>()
+            .unwrap();
+        assert_eq!(rows, vec![
+            ("f".to_string(), "fn".to_string(), 1, 1),
+            ("S".to_string(), "struct".to_string(), 2, 2),
+            ("S".to_string(), "impl".to_string(), 3, 3),
+            // Methods are function items too — captured as fn units.
+            ("g".to_string(), "fn".to_string(), 3, 3),
+        ]);
+        let q: String = s.conn.query_row(
+            "SELECT qualified FROM units WHERE kind='struct'", [], |r| r.get(0),
+        ).unwrap();
+        assert_eq!(q, "crate::S");
+    }
+
+    #[test]
+    fn duplicate_impls_get_ordinal_uids() {
+        // Two impls of the same type in one file → distinct qualified names,
+        // hence distinct uids, hence two units.
+        let s = Store::open(":memory:").unwrap();
+        let src = "struct S;\nimpl S { fn a(&self) {} }\nimpl S { fn b(&self) {} }\n";
+        do_extract(&s, "src/lib.rs", Lang::Rust, src);
+        let mut st = s.conn
+            .prepare("SELECT qualified FROM units WHERE kind='impl' ORDER BY line_start")
+            .unwrap();
+        let qs: Vec<String> = st.query_map([], |r| r.get(0)).unwrap().collect::<std::result::Result<_, _>>().unwrap();
+        assert_eq!(qs, vec!["crate::S".to_string(), "crate::S#2".to_string()]);
     }
 
     #[test]
