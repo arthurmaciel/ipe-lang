@@ -24,13 +24,12 @@ Green from deleting red = FAILURE.
 Rule (port, don't invent) = `PRINCIPLES.md` §Agent-lane operational rules.
 Tooling:
 
-- **`ipe-index` FIRST for our own code** (`crates/` `runtime/` `tools/`) —
-  pre-built structural index, not fresh search:
-  - `ipe-index locate <Module.function>` — symbol location + kernel-parity
-    route (Ipe → Haskell → Go → Rust impl paths).
-  - `ipe-index def <sym>` / `refs <sym>` / `kind <fn|struct|enum|trait|type|impl>`.
-  - `ipe-index parity --gaps` — Go-vs-Rust kernel parity gaps.
-  Reserve `rg` for free-text hunts index can't answer.
+- **`ipe-index` FIRST for our own code** (`src/compiler/` `src/runtime/`
+  `tools/`) — pre-built structural index, not fresh search:
+  - `ipe-index locate <Name>` — every def/impl site of a symbol.
+  - `ipe-index rdeps <module>` — who imports a module (exact; `--subtree`).
+  - `ipe-index update` — incremental re-index after commits.
+  Reserve `rg` for free-text hunts the index can't answer.
 - **Learn how reference handles THIS task before designing fix.**
   `../ipe` = READ-ONLY source of truth. For construct you're fixing,
   read each layer: **Ipe compiler** (Haskell, `../ipe/src/Ipe/` —

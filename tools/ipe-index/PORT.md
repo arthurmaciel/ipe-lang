@@ -17,7 +17,7 @@ multi-repo setup without a schema change:
 
 | Tag  | Repo            | Roles indexed |
 |------|-----------------|---------------|
-| `ipe`| `.` (this repo) | `compiler-rs` (crates/), `runtime-rs` (runtime/), `tool-rs` (tools/), `stdlib-ipe` (*.ipe), `example`, `fixture`, `console-ts`, `script-sh` |
+| `ipe`| `.` (this repo) | `compiler-rs` (src/compiler/), `runtime-rs` (src/runtime/), `tool-rs` (tools/), `stdlib-ipe` (*.ipe), `example`, `fixture`, `console-ts`, `script-sh` |
 
 ### Languages
 

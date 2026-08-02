@@ -222,9 +222,7 @@ Every dispatched lane (autopilot or hand-dispatched):
 - **No sub-agent dispatch.** A dispatched lane never spawns its own
   sub-agents; the orchestrator is the only dispatcher.
 - **Understand before changing — port, don't invent.** Query the indexes
-  BEFORE `rg`: `scripts/ipe-index` for our Rust (`def`/`refs`/`kind`/
-  `locate`/`parity`), `ipedex` for the `../ipe` reference (`locate`/`rdeps`/
-  `covers`/`parity`). Learn how the reference handles the construct across
+  BEFORE `rg`: `scripts/ipe-index` for our Rust (`locate`/`rdeps`/`covers`). Learn how the reference handles the construct across
   compiler + backend + runtime before designing the fix.
 
 ### Documentation & code standards

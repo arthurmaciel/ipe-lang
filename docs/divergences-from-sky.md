@@ -1552,8 +1552,8 @@ API-shape review):
   bundled into this mechanical kernel-registration fix. Before this fix,
   `db_decode_money` was fully implemented and unit-tested in the runtime
   (`test_db_decode_money_roundtrip`) but had NO `StdlibKernel` variant, NO
-  constrain scheme, and NO lower/emit arm — unreachable from Ipê source
-  (`ipe-index parity --gaps` flagged `DbDec.money go=1 rust=0`). Reference:
+  constrain scheme,   and NO lower/emit arm — unreachable from Ipê source (a kernel-parity gap
+  check flagged `DbDec.money go=1 rust=0`). Reference:
   `crates/sky_canon/src/env.rs` (`Db.Decode` allowlist), `crates/sky_kernels/
   src/lib.rs` (`DbDecMoney` decl + `is_db()` classification),
   `crates/sky_types/src/constrain.rs` (`K::DbDecMoney` scheme +

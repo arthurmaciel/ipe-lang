@@ -4,6 +4,7 @@
 *.db-wal
 *.pyc
 **/.ipe
+**/.ipe-index/
 **/.ipe-cache/
 **/.ipecache/
 **/.ipe/cache/

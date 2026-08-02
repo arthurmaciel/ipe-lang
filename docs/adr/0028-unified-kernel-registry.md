@@ -47,4 +47,5 @@ green and behavioral parity is golden-pinned at every commit.
 - The `KernelClass` field on each entry replaces the old `is_db()/is_ui()` boolean
   predicates and their `+wildcard` routing.
 - Downstream: `parity-matrix` tool uses `StdlibKernel::ALL` as its authoritative
-  kernel list; the `ipe-index parity` sub-command surfaces coverage gaps.
+  kernel list; coverage gaps surface via `ipe-index covers <kernel>` (which
+  examples/fixtures exercise a kernel) and `ipe-index rdeps <kernel>`.

@@ -36,7 +36,7 @@ and so a future multi-repo setup never collides:
 
 | Tag   | Repo | What lives there |
 |-------|------|------------------|
-| `ipe:`| `.`  | Rust compiler (`crates/`), runtime (`runtime/`), tooling (`tools/`), stdlib/examples (`*.ipe`) |
+| `ipe:`| `.`  | Rust compiler (`src/compiler/`), runtime (`src/runtime/`), tooling (`tools/`), stdlib/examples (`*.ipe`) |
 
 So a result reads `ipe:crates/ipe_lower/src/lower.rs:2518` — the prefix is the
 repo.
