@@ -105,7 +105,13 @@ pub fn crypto_mac_to_hex(m: Mac) -> String {
 /// Crate-internal `Key` unwrap — the sibling `crypto` module's typed AEAD
 /// wrappers (`aesGcmEncryptKey` / `chacha20EncryptKey` / …) recover the raw key
 /// blob to forward to the `String`-keyed AEAD primitives. `pub(crate)` so the
-/// opaque key material still cannot escape the runtime crate.
+/// opaque key material still cannot escape the runtime crate. Gated to its sole
+/// (feature-gated) consumer now that the `crypto_core` floor compiles without
+/// the heavy `crypto` feature.
+#[cfg(any(
+    feature = "crypto",
+    all(target_arch = "wasm32", feature = "wasm-client")
+))]
 #[must_use]
 pub(crate) fn crypto_key_reveal(key: Key) -> String {
     key.0
