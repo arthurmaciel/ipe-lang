@@ -6023,6 +6023,34 @@ impl StdlibKernel {
         )
     }
 
+    /// `true` when this variant belongs to the `Ipe.Url` kernel family
+    /// (`Url.fromString` / `toString` / `scheme` / `host` / `port` / `path` /
+    /// `query` / `fragment` / `buildQuery`).
+    ///
+    /// The `url` runtime module (backing the opaque, validated `Url` type) is a
+    /// direct consumer of the `url` crate, whose transitive `idna` → ICU4X
+    /// subtree is the single largest gateable dependency root. Used by
+    /// `ipe_lower` to detect `uses_url` and by the backend to declare `url` in
+    /// the emitted `ipe_runtime/mod.rs` and add the `url` crate to the emitted
+    /// manifest. The `http_client` and `ws_client` modules (and the shared
+    /// `ssrf` validators) also parse with the `url` crate, so the backend
+    /// force-declares `url` under `uses_url || reaches_http_client || websocket`.
+    #[must_use]
+    pub const fn is_url(self) -> bool {
+        matches!(
+            self,
+            Self::UrlFromString
+                | Self::UrlToString
+                | Self::UrlScheme
+                | Self::UrlHost
+                | Self::UrlPort
+                | Self::UrlPath
+                | Self::UrlQuery
+                | Self::UrlFragment
+                | Self::UrlBuildQuery
+        )
+    }
+
     /// `true` when this variant belongs to the `Ipe.Ui` / `Ipe.Html`
     /// subsystem.
     #[must_use]
@@ -7085,6 +7113,31 @@ mod tests {
                     k.decl().emit
                 );
             }
+        }
+    }
+
+    /// Every `Ipe.Url` kernel emits a symbol into the `url` runtime module (a
+    /// consumer of the `url` crate and its large `idna` → ICU4X subtree), so
+    /// `qualifier == "Url"` MUST imply `is_url()`, and no other qualifier may
+    /// report `is_url()`. The lookalike `String.isUrl` (qualifier `"String"`,
+    /// structural parse, no `url` crate) and `Encoding.urlEncode` / `urlDecode`
+    /// (qualifier `"Encoding"`, `percent-encoding`) are deliberately excluded.
+    /// Both directions are asserted, so a new `Url.*` kernel the predicate
+    /// forgets — or an unrelated kernel wrongly claimed — fails the instant the
+    /// two disagree.
+    #[test]
+    fn url_predicate_tracks_url_qualifier() {
+        for k in StdlibKernel::ALL {
+            let is_url_qualifier = k.decl().qualifier == "Url";
+            assert_eq!(
+                k.is_url(),
+                is_url_qualifier,
+                "{k:?}: is_url()={} but qualifier==\"Url\" is {} — the emitted crate \
+                 would either fail to declare the url module (E0433) or pull the url \
+                 crate into a program that never parses a URL",
+                k.is_url(),
+                is_url_qualifier,
+            );
         }
     }
 

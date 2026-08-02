@@ -53,6 +53,7 @@ fn emit(interner: &Interner, prog: &Program) -> DResult<String> {
 /// The `Wrap` program: a single-variant enum whose payload is a `(Int, Int)`
 /// tuple, a `fstOf` that destructures it with a tuple pattern, and a `main` that
 /// prints `fstOf (MkWrap (3, 4))`.
+#[allow(clippy::too_many_lines)] // straight-line IR fixture builder
 fn wrap_program(i: &mut Interner) -> DResult<Program> {
     let main_mod = i.intern("Main")?;
     let wrap = i.intern("Wrap")?;
@@ -147,6 +148,7 @@ fn wrap_program(i: &mut Interner) -> DResult<Program> {
             uses_csv: false,
             uses_crypto: false,
             uses_jwt: false,
+            uses_url: false,
             uses_ui: false,
             uses_web: false,
             uses_tui: false,
@@ -216,6 +218,7 @@ fn unit_value_and_type_render() -> DResult<()> {
             uses_csv: false,
             uses_crypto: false,
             uses_jwt: false,
+            uses_url: false,
             uses_ui: false,
             uses_web: false,
             uses_tui: false,

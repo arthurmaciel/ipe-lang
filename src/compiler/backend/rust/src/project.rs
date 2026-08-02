@@ -496,6 +496,23 @@ const RUNTIME_MOD_RS_HTTP_CLIENT_APPEND: &str = "pub mod http_client;\npub use h
 /// module (`dead_code`).
 const RUNTIME_MOD_RS_SSRF_APPEND: &str = "mod ssrf;\n";
 
+// ── Ipe.Url — typed, validated URLs ──────────────────────────────────────────
+
+/// Lines appended to `ipe_runtime/mod.rs` when the emitted crate reaches the
+/// `url` runtime module.
+///
+/// `url.rs` (the opaque, validated `Ipe.Url` type + its accessors) is a
+/// consumer of the `url` crate, whose transitive `idna` → ICU4X subtree is the
+/// single largest gateable dependency root. It is declared when the program
+/// reaches it — directly (`uses_url`) or through a surface whose own runtime
+/// module parses with the `url` crate: the outbound HTTP client
+/// (`http_client.rs` targets a typed `crate::url::Url`) and the WebSocket
+/// client (`ws_client.rs` calls `::url::Url::parse`). The shared `ssrf`
+/// validators (`use url::Url`) are declared exactly when either of those two is,
+/// so the same predicate ([`EmitCtx::reaches_url`]) covers them. A pure-CLI
+/// program keeps `url` absent, dropping the whole `idna`/ICU4X tree.
+const RUNTIME_MOD_RS_URL_APPEND: &str = "pub mod url;\npub use url::*;\n";
+
 // ── Ipe.Config — TOML/YAML decoders ─────────────────────────────────────────
 
 /// Lines appended to `ipe_runtime/mod.rs` when the program uses an `Ipe.Config`
@@ -1439,6 +1456,19 @@ fn assemble_project_files(
     } else {
         cargo_toml
     };
+    // Ipe.Url (`url` crate + its `idna` → ICU4X subtree, the single largest
+    // gateable dependency root): pulled in when the emitted crate reaches the
+    // `url` runtime module — an `Ipe.Url` kernel (`uses_url`), or a surface whose
+    // own runtime module parses with the `url` crate (the HTTP client, whose
+    // `http_client.rs` targets a typed `crate::url::Url`; the WebSocket client,
+    // whose `ws_client.rs` calls `::url::Url::parse`; and the shared `ssrf`
+    // validators those two pull, `use url::Url`). A pure-CLI program pulls
+    // neither the crate nor its subtree.
+    let cargo_toml = if ctx.reaches_url() {
+        url_cargo_toml(&cargo_toml)?
+    } else {
+        cargo_toml
+    };
     // Ipe.Config TOML/YAML decoders (`toml` + `serde_yaml`): pulled in only when
     // the program reaches the `config_decode` runtime module (`Config.decodeToml`
     // / `decodeYaml` / `decodeJson` / `loadFromFile`, or `nullable` / `maybe` /
@@ -1530,6 +1560,17 @@ fn assemble_project_files(
         // reqwest-free URL validators) is declared alongside either `http_client`
         // OR the WebSocket client, its only consumers — a pure-CLI program keeps
         // both absent, dropping the whole reqwest dependency tree.
+        // Ipe.Url typed-URL module (the `url` crate + its idna → ICU4X subtree).
+        // Declared when the program reaches it — directly (`uses_url`) or through
+        // a surface whose runtime module parses with the `url` crate
+        // (`http_client` targets a typed `crate::url::Url`; `ws_client` calls
+        // `::url::Url::parse`). Pushed BEFORE `http_client`/`ssrf` (both of which
+        // do `use crate::url::…` / `use url::Url`) so the module they reference is
+        // already declared. A pure-CLI program keeps it absent, dropping the whole
+        // idna/ICU4X tree.
+        if ctx.reaches_url() {
+            mod_rs.push_str(RUNTIME_MOD_RS_URL_APPEND);
+        }
         if uses_http_client {
             mod_rs.push_str(RUNTIME_MOD_RS_HTTP_CLIENT_APPEND);
         }
@@ -2888,6 +2929,42 @@ fn email_cargo_toml(base: &str) -> DResult<String> {
     let mut result = String::with_capacity(base.len() + lettre_dep.len());
     result.push_str(base.get(..anchor_pos).unwrap_or(""));
     result.push_str(&lettre_dep);
+    result.push_str(base.get(anchor_pos..).unwrap_or(""));
+    Ok(result)
+}
+
+/// Build the URL-enabled `Cargo.toml` by appending the `url` dependency before
+/// `[profile.dev]`.
+///
+/// `url.rs` (the vendored `Ipe.Url` runtime module) parses with the `url` crate,
+/// whose transitive `idna` → ICU4X subtree is the single largest gateable
+/// dependency root. The crate is added only when the emitted crate reaches the
+/// `url` module — an `Ipe.Url` kernel, or a surface (HTTP client / WebSocket
+/// client, and the shared `ssrf` validators they pull) whose own runtime module
+/// parses with `url` (see [`EmitCtx::reaches_url`]). A pure-CLI program pulls
+/// neither the crate nor its subtree. The version comes from the [`crate_specs`]
+/// SSOT (drift-guarded against `runtime/Cargo.toml`).
+///
+/// # Errors
+///
+/// Returns [`Diagnostic::CompilerBug`] if the `[profile.dev]` anchor is absent —
+/// a golden-drift invariant violation (fail-loud, never a silent no-op).
+fn url_cargo_toml(base: &str) -> DResult<String> {
+    const PROFILE_ANCHOR: &str = "[profile.dev]";
+    let url_dep = format!(
+        "{} = \"{}\"\n\n",
+        crate_specs::URL.name,
+        crate_specs::URL.version,
+    );
+    let anchor_pos = base
+        .find(PROFILE_ANCHOR)
+        .ok_or_else(|| Diagnostic::CompilerBug {
+            where_: "ipe_backend_rust::project::url_cargo_toml",
+            detail: format!("Cargo.toml anchor {PROFILE_ANCHOR:?} not found — golden drifted"),
+        })?;
+    let mut result = String::with_capacity(base.len() + url_dep.len());
+    result.push_str(base.get(..anchor_pos).unwrap_or(""));
+    result.push_str(&url_dep);
     result.push_str(base.get(anchor_pos..).unwrap_or(""));
     Ok(result)
 }

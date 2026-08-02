@@ -40,6 +40,7 @@ const fn empty_module(name: ModPath) -> Module {
         uses_csv: false,
         uses_crypto: false,
         uses_jwt: false,
+        uses_url: false,
         uses_ui: false,
         uses_web: false,
         uses_tui: false,
