@@ -4,7 +4,7 @@ version = "0.1.0"
 edition = "2024"
 
 [features]
-default = ["tokio", "crypto", "json", "db"]
+default = ["tokio", "json", "db"]
 tokio = []
 crypto = []
 json = []
@@ -41,7 +41,6 @@ rust_decimal = { version = "1", features = ["serde"] }
 hmac = "0.12"
 subtle = "2"
 zeroize = "1"
-rsa = { version = "0.9", features = ["sha2"] }
 getrandom = "0.2"
 uuid = { version = "1", features = ["v4", "v7"] }
 bcrypt = "0.17"

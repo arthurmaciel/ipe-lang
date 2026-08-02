@@ -1503,9 +1503,9 @@ fn assemble_project_files(
     // Heavy Ipe.Crypto (`sha1` + `md-5` + `aes-gcm` + `chacha20poly1305` +
     // `pbkdf2`): pulled in only when the program uses a heavy `Ipe.Crypto` kernel
     // (legacy SHA-1/MD5, AEAD, or PBKDF2). All five are leaves consumed solely by
-    // `crypto.rs`. The always-on `crypto_core` floor keeps `rsa` / `sha2` /
-    // `hmac` / `subtle` unconditional in the base manifest, so a program using
-    // only SHA-2/HMAC/RSA/entropy pulls none of the heavy crates.
+    // `crypto.rs`. The `crypto_core` floor keeps `sha2` / `hmac` / `subtle`
+    // unconditional in the base manifest (always-on surfaces need them), so a
+    // program using only SHA-2/HMAC/entropy pulls none of the heavy crates.
     let cargo_toml = if ctx.uses_crypto {
         crypto_cargo_toml(&cargo_toml)?
     } else {
@@ -1517,6 +1517,18 @@ fn assemble_project_files(
     // uses JWT or Auth pulls it not.
     let cargo_toml = if ctx.reaches_jwt() {
         jwt_cargo_toml(&cargo_toml)?
+    } else {
+        cargo_toml
+    };
+    // Heavy `crypto_core` floor (`rsa`, a ~34-crate subtree): pulled in only when
+    // the emitted crate reaches the RSA sign/verify pair — a heavy `Ipe.Crypto`
+    // kernel (`uses_crypto`) or the JWT / Auth surface (`reaches_jwt`, whose
+    // RS256 path signs with `crypto_core`'s RSA). The floor's other primitives —
+    // the entropy pair, SHA-2 / HMAC, the constant-time compare, the `Key`/`Mac`
+    // newtypes — are not `cfg`-gated and stay unconditional. A program touching
+    // none of crypto / jwt / auth pulls no `rsa`.
+    let cargo_toml = if ctx.reaches_crypto_core_heavy() {
+        crypto_core_heavy_cargo_toml(&cargo_toml)?
     } else {
         cargo_toml
     };
@@ -2236,8 +2248,8 @@ fn pub_crate_item(rendered: &str) -> String {
 /// String surgery rather than a second static file: the manifest content is
 /// small and the two edits are unambiguous anchors.
 fn db_cargo_toml(driver: crate::DbDriver) -> DResult<String> {
-    const DEFAULT_LINE: &str = r#"default = ["tokio", "crypto", "json"]"#;
-    const DEFAULT_LINE_DB: &str = r#"default = ["tokio", "crypto", "json", "db"]"#;
+    const DEFAULT_LINE: &str = r#"default = ["tokio", "json"]"#;
+    const DEFAULT_LINE_DB: &str = r#"default = ["tokio", "json", "db"]"#;
     // The sqlx line is appended right before the dev/release profile sections.
     // Anchoring on `[profile.dev]` is stable (always present in the template).
     const PROFILE_ANCHOR: &str = "[profile.dev]";
@@ -3082,15 +3094,89 @@ fn csv_cargo_toml(base: &str) -> DResult<String> {
     Ok(result)
 }
 
-/// Build the heavy-crypto-enabled `Cargo.toml` by appending the five
+/// Build the heavy-`crypto_core`-enabled `Cargo.toml` by enabling the `crypto`
+/// feature and declaring the `rsa` dependency (a ~34-crate subtree).
+///
+/// The RSA SHA-256 sign/verify pair in `crypto_core.rs` is
+/// `cfg(feature = "crypto")`; `jwt.rs`'s RS256 path calls it, and `auth.rs`
+/// reaches `jwt`. A program that reaches none of those (a `Crypto` kernel, a
+/// `Jwt` kernel, or the `Auth` surface — see [`EmitCtx::reaches_crypto_core_heavy`])
+/// keeps the `crypto` feature off, so the RSA arm never compiles and `rsa` never
+/// links. The floor primitives that a non-crypto program still needs — the
+/// entropy pair, the SHA-2 / HMAC family, the constant-time compare, the
+/// `Key`/`Mac` newtypes — are not `cfg`-gated and stay unconditional.
+///
+/// Two edits, both fail-closed on a missing anchor:
+/// 1. insert `"crypto"` into the `default = [...]` feature list immediately
+///    after `"tokio"` (the `crypto = []` flag is already declared in the base
+///    `[features]` table). This position keeps the list byte-identical to the
+///    pre-gating `["tokio", "crypto", "json", …]` order, so a crypto-using
+///    program's manifest is unchanged and later per-surface surgery
+///    (`server`/`web`/`db`, which append after `"json"`) composes as before.
+/// 2. restore the `rsa` dependency in its original slot (immediately after the
+///    `zeroize` base dep), so a crypto-using program's manifest is byte-for-byte
+///    what it was before `rsa` became conditional.
+///
+/// The version comes from the [`crate_specs`] SSOT (drift-guarded against
+/// `runtime/Cargo.toml`).
+///
+/// # Errors
+///
+/// Returns [`Diagnostic::CompilerBug`] if the `default = ["tokio"` anchor or the
+/// `zeroize` dependency anchor is absent — a golden-drift invariant violation
+/// (fail-loud, never a silent no-op).
+fn crypto_core_heavy_cargo_toml(base: &str) -> DResult<String> {
+    // Anchor on the first default element so `"crypto"` lands in its original
+    // slot (`["tokio", "crypto", "json"]`), keeping crypto-program manifests
+    // byte-identical.
+    const TOKIO_ANCHOR: &str = r#"default = ["tokio""#;
+    // Anchor the `rsa` line to the `zeroize` base dep it originally followed, so
+    // its slot in `[dependencies]` is unchanged for a crypto-using program.
+    const ZEROIZE_ANCHOR: &str = "zeroize = \"1\"\n";
+    let rsa_dep = format!(
+        "{} = {{ version = \"{}\", features = [\"sha2\"] }}\n",
+        crate_specs::RSA.name,
+        crate_specs::RSA.version,
+    );
+
+    // Step 1 — insert `, "crypto"` immediately after the `"tokio"` element.
+    let anchor_end = base
+        .find(TOKIO_ANCHOR)
+        .map(|p| p + TOKIO_ANCHOR.len())
+        .ok_or_else(|| Diagnostic::CompilerBug {
+            where_: "ipe_backend_rust::project::crypto_core_heavy_cargo_toml",
+            detail: format!("Cargo.toml anchor {TOKIO_ANCHOR:?} not found — golden drifted"),
+        })?;
+    let mut step1 = String::with_capacity(base.len() + rsa_dep.len() + 12);
+    step1.push_str(base.get(..anchor_end).unwrap_or(""));
+    step1.push_str(r#", "crypto""#);
+    step1.push_str(base.get(anchor_end..).unwrap_or(""));
+
+    // Step 2 — restore the `rsa` line immediately after `zeroize = "1"`.
+    let insert_at = step1
+        .find(ZEROIZE_ANCHOR)
+        .map(|p| p + ZEROIZE_ANCHOR.len())
+        .ok_or_else(|| Diagnostic::CompilerBug {
+            where_: "ipe_backend_rust::project::crypto_core_heavy_cargo_toml",
+            detail: format!("Cargo.toml anchor {ZEROIZE_ANCHOR:?} not found — golden drifted"),
+        })?;
+    let mut result = String::with_capacity(step1.len() + rsa_dep.len());
+    result.push_str(step1.get(..insert_at).unwrap_or(""));
+    result.push_str(&rsa_dep);
+    result.push_str(step1.get(insert_at..).unwrap_or(""));
+    Ok(result)
+}
+
+/// Build the heavy-`Ipe.Crypto`-enabled `Cargo.toml` by appending the five
 /// crypto-exclusive dependencies before `[profile.dev]`.
 ///
 /// `crypto.rs` (the gated heavy `Ipe.Crypto` kernels) is the sole consumer of
 /// `sha1`, `md-5`, `aes-gcm`, `chacha20poly1305`, and `pbkdf2`. These are leaves
-/// — a program using only the always-on `crypto_core` floor (SHA-2 / HMAC / RSA
-/// / the entropy pair) pulls none of them. `rsa` / `sha2` / `hmac` / `subtle`
-/// stay unconditional in the base manifest because `crypto_core` (and other
-/// always-on surfaces) need them.
+/// — a program using only the `crypto_core` floor (SHA-2 / HMAC / entropy pair)
+/// pulls none of them. `sha2` / `hmac` / `subtle` stay unconditional in the base
+/// manifest because always-on surfaces (`secret.rs`, `db.rs`, `web`, `email`)
+/// need them; `rsa` is added separately by [`crypto_core_heavy_cargo_toml`] under
+/// the union of crypto / jwt / auth.
 ///
 /// The versions come from the [`crate_specs`] SSOT (drift-guarded against
 /// `runtime/Cargo.toml`).
@@ -3459,8 +3545,8 @@ impl {sf} {{
 mod tests {
     use super::{
         CARGO_TOML, RUNTIME_CONFIG_RS_DB_POSTGRES, RUNTIME_CONFIG_RS_DB_SQLITE,
-        RUNTIME_MOD_RS_WEB_APPEND, db_cargo_toml, server_cargo_toml, shake_ffi_by_fn_ident,
-        web_cargo_toml,
+        RUNTIME_MOD_RS_WEB_APPEND, crypto_core_heavy_cargo_toml, db_cargo_toml, server_cargo_toml,
+        shake_ffi_by_fn_ident, web_cargo_toml,
     };
     use crate::DbDriver;
     use crate::crate_specs;
@@ -3513,18 +3599,18 @@ mod tests {
         let db_base = db_cargo_toml(crate::DbDriver::Sqlite).expect("db_cargo_toml must succeed");
         let out = server_cargo_toml(&db_base).expect("server_cargo_toml on db base must succeed");
         let def = default_line(&out);
-        for feat in &[
-            r#""tokio""#,
-            r#""crypto""#,
-            r#""json""#,
-            r#""db""#,
-            r#""server""#,
-        ] {
+        // `"crypto"` is NOT expected: it is gated by `crypto_core_heavy_cargo_toml`
+        // (crypto / jwt / auth), which this db+server composition does not reach.
+        for feat in &[r#""tokio""#, r#""json""#, r#""db""#, r#""server""#] {
             assert!(
                 def.contains(feat),
                 "default line must contain {feat}: {def}"
             );
         }
+        assert!(
+            !def.contains(r#""crypto""#),
+            "db+server without crypto/jwt/auth must not pull the crypto feature: {def}"
+        );
         // Both feature declarations must be present.
         assert!(
             out.contains("db = []"),
@@ -3563,6 +3649,53 @@ mod tests {
             )),
             "server manifest must emit SSOT axum version:\n{srv}"
         );
+        let heavy = crypto_core_heavy_cargo_toml(CARGO_TOML).expect("crypto_core_heavy_cargo_toml");
+        assert!(
+            heavy.contains(&format!(
+                "{} = {{ version = \"{}\", features = [\"sha2\"] }}",
+                crate_specs::RSA.name,
+                crate_specs::RSA.version
+            )),
+            "heavy-crypto manifest must emit the SSOT rsa version:\n{heavy}"
+        );
+    }
+
+    /// The heavy-`crypto_core` augmenter enables the `crypto` feature in its
+    /// original slot (`["tokio", "crypto", "json"]`) and restores the `rsa`
+    /// dependency right after the `zeroize` base dep — so a crypto-using
+    /// program's manifest is byte-identical to the pre-gating output.
+    #[test]
+    fn crypto_core_heavy_toml_restores_crypto_and_rsa_in_place() {
+        let out = crypto_core_heavy_cargo_toml(CARGO_TOML).expect("crypto_core_heavy_cargo_toml");
+        assert!(
+            default_line(&out).contains(r#"default = ["tokio", "crypto", "json"]"#),
+            "crypto must land in its original slot after tokio: {}",
+            default_line(&out)
+        );
+        assert!(
+            out.contains("zeroize = \"1\"\nrsa = { version = \"0.9\", features = [\"sha2\"] }\n"),
+            "rsa must be restored immediately after the zeroize base dep:\n{out}"
+        );
+    }
+
+    /// The augmenter composes with a db base: a db + crypto program still gets
+    /// `crypto` in its original slot (`["tokio", "crypto", "json", "db"]`).
+    #[test]
+    fn crypto_core_heavy_toml_composes_with_db() {
+        let db = db_cargo_toml(crate::DbDriver::Sqlite).expect("db_cargo_toml");
+        let out = crypto_core_heavy_cargo_toml(&db).expect("crypto_core_heavy on db base");
+        assert!(
+            default_line(&out).contains(r#"default = ["tokio", "crypto", "json", "db"]"#),
+            "db+crypto default must be byte-identical to the pre-gating order: {}",
+            default_line(&out)
+        );
+    }
+
+    /// Fail-closed: an augmenter run against a manifest whose `default` list is
+    /// gone is a `CompilerBug`, never a silent no-op.
+    #[test]
+    fn crypto_core_heavy_toml_anchor_miss_is_a_compiler_bug() {
+        assert!(crypto_core_heavy_cargo_toml("[package]\nname = \"x\"\n").is_err());
     }
 
     // ── seal tests: Db+Web closure ─────────────────────────────────────

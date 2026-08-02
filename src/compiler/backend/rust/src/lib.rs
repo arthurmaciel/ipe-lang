@@ -1359,6 +1359,25 @@ impl<'a> EmitCtx<'a> {
         self.uses_jwt || self.uses_auth
     }
 
+    /// `true` when the emitted crate reaches the heavy `crypto_core` floor — the
+    /// RSA SHA-256 sign/verify pair and its `rsa` dependency (a ~34-crate
+    /// subtree). The RSA arm is `cfg(feature = "crypto")` in `crypto_core.rs`, so
+    /// this predicate is the single source of truth for both enabling the
+    /// `crypto` feature and declaring the `rsa` dependency; they can never
+    /// disagree.
+    ///
+    /// Reached directly by a heavy `Ipe.Crypto` kernel ([`Self::uses_crypto`]),
+    /// or transitively through the JWT / Auth surface ([`Self::reaches_jwt`]):
+    /// `jwt.rs`'s RS256 path calls `crate::crypto_core`'s RSA signer, and
+    /// `auth.rs` reaches `jwt`. The floor primitives that a non-crypto program
+    /// still needs — the entropy pair, the SHA-2 / HMAC family, the constant-time
+    /// compare, the `Key`/`Mac` newtypes — are not `cfg`-gated and stay
+    /// unconditional. A program that touches none of crypto / jwt / auth pulls no
+    /// `rsa`.
+    pub(crate) const fn reaches_crypto_core_heavy(&self) -> bool {
+        self.uses_crypto || self.reaches_jwt()
+    }
+
     /// `true` when the emitted crate reaches the `url` runtime module — so
     /// `project::assemble_project_files` declares it and adds the `url` crate
     /// (with its `idna` → ICU4X subtree, the single largest gateable dependency
