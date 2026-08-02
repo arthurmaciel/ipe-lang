@@ -62,9 +62,16 @@ fn rfc3339_nano_now() -> String {
 /// does not carry. `Date.now()` (via `js_sys`) gives millisecond, not
 /// nanosecond, precision — an accepted divergence: this line feeds
 /// `console.*`, never the Go-oracle byte-diff the native format is pinned to.
-#[cfg(target_arch = "wasm32")]
+#[cfg(all(target_arch = "wasm32", feature = "wasm-client"))]
 fn rfc3339_nano_now() -> String {
     js_sys::Date::new_0().to_iso_string().into()
+}
+
+/// Without the browser glue (`wasm-client`) there is no `js_sys` time binding;
+/// the value only feeds `console.*`, which is itself a no-op in that build.
+#[cfg(all(target_arch = "wasm32", not(feature = "wasm-client")))]
+fn rfc3339_nano_now() -> String {
+    String::new()
 }
 
 /// Minimal JSON string escaping for the hand-built plain/JSON records, matching
@@ -98,15 +105,23 @@ fn write_stderr_line(line: &str) {
 /// `console.{debug,info,warn,error}`"). `write_stdout_line`/`write_stderr_line`
 /// keep the SAME two-way (out/err) split `log_emit` already computes, so no
 /// caller above this line needs to change per target.
-#[cfg(target_arch = "wasm32")]
+#[cfg(all(target_arch = "wasm32", feature = "wasm-client"))]
 fn write_stdout_line(line: &str) {
     web_sys::console::log_1(&wasm_bindgen::JsValue::from_str(line));
 }
 
-#[cfg(target_arch = "wasm32")]
+#[cfg(all(target_arch = "wasm32", feature = "wasm-client"))]
 fn write_stderr_line(line: &str) {
     web_sys::console::error_1(&wasm_bindgen::JsValue::from_str(line));
 }
+
+// Without the browser glue (`wasm-client`) there is no `console` binding; a
+// wasm build that does not use the browser client drops `Log.*` lines.
+#[cfg(all(target_arch = "wasm32", not(feature = "wasm-client")))]
+fn write_stdout_line(_line: &str) {}
+
+#[cfg(all(target_arch = "wasm32", not(feature = "wasm-client")))]
+fn write_stderr_line(_line: &str) {}
 
 /// Strip ASCII control characters from a log message for the plain-text path,
 /// matching the safety guarantee the JSON path already gets via `json_escape`.
