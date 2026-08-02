@@ -120,13 +120,33 @@ trimming and must be extended before the switch:
 |---|---|---|
 | `url` crate gated on `uses_url` (`url_cargo_toml`); `url`/`ssrf` modules appended | `url = { version = "2" }` **non-optional**; `pub mod url;` ungated | new `url` feature; dep becomes optional. Without this, S3 silently reintroduces the idna/ICU4X subtree the usage-driven floor removed |
 | `crypto_core` (sha2 floor) always emitted; `rsa` gated off the floor; heavy crypto appended on use | `crypto_core` is `cfg(feature = "crypto")` — the *heavy* feature | split: `crypto_core` (sha2/hmac floor) vs `crypto` (rsa, bcrypt, AEAD, pbkdf2); `crypto` implies `crypto_core` |
-| DB driver chosen per project (`db_cargo_toml(base, driver)` → sqlx feature + the generated `config.rs` aliases) | one `db` feature, sqlite+postgres both in the sqlx dep | `db-sqlite` / `db-postgres` selecting the alias set and the sqlx driver feature; `compile_error!` if both are enabled (only the emitter ever selects one — SEAL-checked — so the error is a fail-closed guard, not a user surface) |
-| sync `fn main` programs shed tokio/bcrypt (`async_runtime_cargo_toml`) | `tokio` optional, `async` feature exists | already expressible; the emitter selects `async` iff the program is async |
+| DB driver chosen per project (`db_cargo_toml(base, driver)` → sqlx feature + the generated `config.rs` aliases) | one `db` feature, sqlite+postgres both in the sqlx dep | `db-sqlite` / `db-postgres` selecting the alias set and the sqlx driver feature — noting `db_cargo_toml` keeps `"sqlite"` even under the postgres driver (the live session store), so `db-postgres` implies `sqlx/sqlite` too; `compile_error!` if both alias sets are enabled (only the emitter ever selects one — SEAL-checked — so the error is a fail-closed guard, not a user surface) |
+| sync `fn main` programs shed tokio/bcrypt (`async_runtime_cargo_toml`) | `tokio` optional, `async` feature exists — but the crate's dep is `tokio = { features = ["full"] }` while the emitted restore is the narrow `["rt", "rt-multi-thread", "macros", "time"]` (+`net`/`sync` added only by the server/web surgeries) | narrow the crate's tokio dep to the emitted floor set; `server`/`web` features add `tokio/net`, `tokio/sync`. Without this, every async program under the dep model compiles all of tokio — a cold-build regression the usage-driven floor already paid to remove |
+| `futures-util` restored for every async program (`async_runtime_cargo_toml` step 3) | optional, pulled only by `server`/`http_client`/`websocket_client`/`email`/`web`; its only source consumers are those gated modules (`http_stream.rs`, `ws_client.rs`, `email.rs`, `server_stream.rs`, `http_client.rs`, `web/mod.rs`) | the emitted always-restore is floor residue — the crate side is already right; align by *not* adding `futures-util` to `async`, and let the surface features carry it |
 | base template ships `sha2`, `bcrypt`, `chrono-tz` unconditionally (pre-gating floor residue) | `sha1`/`md-5` non-optional, `bcrypt` optional, `chrono-tz` non-optional | align during the parity work: whatever the emit floor gates, the crate gates identically. Any future floor gating (e.g. `chrono-tz`) lands as a feature on the crate first |
-| `jsonwebtoken` appended with `jwt` module | folded into `json = ["serde_json", "jsonwebtoken"]` | acceptable initially (coarse); an optional later `jwt` split is an Efficiency refinement, not a correctness issue |
+| `jsonwebtoken` appended with `jwt` module | folded into `json = ["serde_json", "jsonwebtoken"]` | **required split**, not a refinement: `json` is a floor module (`templates/ipe_runtime/mod.rs` declares `pub mod json;` unconditionally; the base template ships `serde_json` non-optional and `default = ["json"]`), so the mapped feature set selects `json` for every program — under the crate's current graph that drags `jsonwebtoken` (and its ring closure) into hello-world, regressing the floor. New `jwt` feature = `dep:jsonwebtoken`, selected only with the `jwt` module (whose gate is `all(json, crypto)`); `json` shrinks to `["serde_json"]` |
 | pure std modules trimmed by mod.rs omission (`html`, `dom`, `css`, `ui`, `tea` types, `telemetry`, …) | always compiled | **deliberately not featured.** They cost one-time runtime-crate compile, never the warm loop; the linker GCs unused code. Feature count stays proportional to *dependency-bearing* surfaces, not modules |
 | `alloc_dlmalloc` / `alloc_mimalloc` (global allocator in `main.rs`) | n/a | stay user-crate features, unchanged |
 | `uses_ffi` — `mod ffi;` in `main.rs` + project-specific crate deps (`ffi_cargo_toml`) | n/a | unchanged: FFI wrappers and their deps are user-project code and remain in the emitted crate |
+
+**Floor-module granularity.** Beyond individual deps, the crate's `mod.rs`
+gates several modules at *module* granularity that the emitted floor declares
+*unconditionally* with tokio-bound halves item-gated inside the file:
+`json` (crate: `feature = "json"`), `log` and `tea`'s `trace` sibling
+(crate: `tokio`), `cache` (crate: `cache_kernel`), `http_header` (crate:
+`server | http_client`), `crypto_core` (crate: `crypto`), plus the
+`pub use system::*` / `pub use task::*` glob re-exports (crate: `tokio`;
+emitted floor: unconditional). Under the dep model the crate's `mod.rs` is
+the authority, so a sync program whose generated code names any of these
+(directly or through the root glob) hits E0433. The parity work adopts the
+*emitted* granularity in the crate: floor modules always declared, their
+dependency-bearing halves `cfg`-gated inside the file (the shape the
+vendored copies already have) — never the inverse of always-selecting the
+gating features, which would drag tokio into sync programs. Confirmed
+empirically: a real emitted hello-world converted to the dependency shape
+failed on exactly this class (`ipe_runtime::http_client::http_parse_query`
+in the generated prelude vs. the crate's `http_client` gate) and built and
+ran correctly once the reference was removed.
 
 The authority for the mapping is a new single source of truth in the
 backend: `runtime_features(&ir::Module) -> BTreeSet<&'static str>`, replacing
@@ -142,14 +162,23 @@ a **path** into the same toolchain installation that ran the compiler, so an
 make skew fail-closed anyway:
 
 - a SEAL test asserting `src/runtime/rust/Cargo.toml`'s `version` equals the
-  compiler's `CARGO_PKG_VERSION`;
+  compiler's `CARGO_PKG_VERSION`. This SEAL fails **today**: the runtime
+  crate pins a static `version = "0.1.0"` while the workspace releases move
+  independently, and it carries a second, stale
+  `[package.metadata.ipe] runtime_version` field. Parity work switches the
+  crate to `version.workspace = true` and deletes the metadata field (one
+  version, one source) — a precondition for the pin, not an afterthought;
 - resolution returns a typed `RuntimeCrate` (parse, don't validate): the
   resolver reads the candidate's `Cargo.toml` and verifies package name
   `ipe-runtime-rust` and the exact expected version, refusing with a clear
-  diagnostic otherwise.
+  diagnostic otherwise. This is a strict hardening: today's
+  `resolve_runtime` accepts any `IPE_RUNTIME_DIR` that `is_dir()` — no
+  content validation at all.
 
 `resolve_runtime` today only finds an in-repo/env source tree — an installed
-`ipe` binary has no runtime. S3 closes that gap. The toolchain ships the
+`ipe` binary has no runtime (reproduced: an installed `ipe` invoked outside
+the repo fails with "could not locate the Ipe runtime"). S3 closes that
+gap. The toolchain ships the
 runtime **as a source crate** (Cargo.toml + src/), and resolution order
 becomes:
 
@@ -158,6 +187,11 @@ becomes:
    expectation — fail closed, no guessing.
 2. Binary-relative: `<dir of current_exe>/../lib/ipe/runtime/` — the
    installed layout every packaging target (tarball, installer) provides.
+   `current_exe` is canonicalized first so a symlinked `ipe` (e.g. from
+   `~/.local/bin`) resolves against the real install tree, and the typed
+   `RuntimeCrate` check applies here too — a half-installed layout is a
+   loud refusal naming the expected path, never a silent walk-on to a
+   wrong runtime.
 3. Upward walk to `src/runtime/rust/` — the in-repo development case.
 4. The legacy sibling paths, retired once nothing uses them.
 
@@ -173,15 +207,42 @@ module whose `use crate::…` closure is missing from the emitted `mod.rs`"
 to "selected feature set under which the runtime crate does not compile or
 does not export a referenced kernel".
 
-- `src/compiler/backend/rust/tests/runtime_modset_closure.rs` (the fast
-  static SEAL over all reachable `uses_*` masks, `FLAG_COUNT = 18`) becomes
-  `runtime_featureset_closure`: for every reachable mask it computes
+- `src/compiler/backend/rust/tests/runtime_modset_closure.rs` (the static
+  SEAL that runs the **real emitter over every one of the 2^18 `uses_*`
+  masks**, `FLAG_COUNT = 18` — exhaustive over the flag space, not a
+  reachable sample) becomes `runtime_featureset_closure`, keeping the
+  exhaustive-mask × real-emitter shape: for every mask it computes
   `runtime_features(...)` and statically checks (i) every selected feature
   is declared in the runtime crate's `[features]` universe, (ii) every
   module the emitted code can reference under that mask is `cfg`-satisfied
   by the selected set (walking the crate's own `src/mod.rs` cfg attributes —
   the same source-parse discipline the modset test uses today), and (iii)
   the intra-crate `use crate::<dep>` closure holds under that cfg valuation.
+- **New closure obligation the modset test never had**: the generated
+  prelude hard-references runtime kernels by module-qualified path
+  (`ipe_runtime::http_client::http_parse_query` is the strip-section anchor
+  in `project.rs`), and the emitter strips those blocks by usage. The
+  modset closure only checked `mod.rs` self-consistency — a prelude
+  reference to a stripped-or-gated module was covered solely by the E2E
+  gate. Under the dep model every runtime reference in emitted output is a
+  visible `ipe_runtime::<module>::…` extern path, so the featureset closure
+  additionally scans the emitted user files per mask and asserts every
+  referenced module is cfg-satisfied. This makes the static SEAL
+  *stronger* than today's, not merely equivalent.
+- Honest residual, unchanged in class from today: the static closure is
+  module-granular. An item-level gate inside a satisfied module (the RSA
+  arms inside `crypto_core` under `crypto`) can still only be caught by the
+  E2E gate; the kernel→feature attribution in `runtime_features` is the
+  guard, and the E2E matrix must include one program per item-gated kernel
+  family.
+- The 2^n worry does not materialize: the selected-feature space is the
+  image of `runtime_features` over the exhaustively enumerated mask space,
+  and no other selector exists (emit-time guard below). Cargo feature
+  unification cannot widen it — each project is an independent `cargo`
+  invocation with its own resolve graph; the shared target directory stores
+  per-fingerprint artifacts and performs no cross-project unification. The
+  driver `compile_error!` can therefore only ever fire on third-party
+  direct use of the crate, which is exactly when it should.
 - Emit-time guard: selecting a feature outside the declared universe is an
   internal error that refuses the build — never a cargo failure downstream.
 - The ground-truth E2E gate (`src/ipe-cli/tests/seal_modset.rs`, real
@@ -205,8 +266,13 @@ the user's generated code and one small `Cargo.toml`.
 The trade: the emitted project is no longer self-contained — `cargo build`
 inside `out/rust` works only where the toolchain (or repo) provides the
 path target. That is acceptable for a build artifact; it is not a source
-distribution. No `--vendor-runtime` escape hatch ships unless a concrete
-need appears (and per policy it would not be advertised before it works).
+distribution. The failure a user hits when copying `out/rust` elsewhere is
+cargo's own missing-path-dependency error, so the emitted `Cargo.toml`
+carries a one-line comment above the dependency naming what it is and that
+the Ipê toolchain provides it — the diagnostic a stranded reader needs,
+at zero runtime cost. No `--vendor-runtime` escape hatch ships unless a
+concrete need appears (and per policy it would not be advertised before it
+works).
 
 ### Out of scope: the WASM target
 
@@ -287,7 +353,17 @@ own cache namespace.
 
 Nothing changes about *what* is compiled — same sources, same lockfile-
 resolved versions, same rustc, compiled locally. The only change is *where*
-artifacts live. Deciding whether a cached artifact is reusable is cargo's
+artifacts live. Cross-project isolation is structural: each `ipe-app` is a
+path package, and cargo folds the package's path into its `-C metadata`
+hash, so two projects' final crates (and any units whose resolved features
+differ) occupy distinct artifact slots — a project can never link another's
+compiled variant. The known cargo caveat carries over unchanged from any
+shared workspace: path-dep freshness is mtime-based, so clock-skewed or
+backup-restored source trees can force spurious rebuilds (never wrong
+reuse of *changed* content plus a changed fingerprint input — the failure
+mode is recompilation, not contamination). The cache root lives under the
+per-user `$XDG_CACHE_HOME`; nothing is shared across users and the
+directory is created with default user permissions, never world-writable. Deciding whether a cached artifact is reusable is cargo's
 fingerprint (toolchain, profile, flags, features, dependency graph, source
 hashes) — the identical mechanism that makes a cargo workspace's shared
 target, or any user-set global `CARGO_TARGET_DIR`, sound today. No new
@@ -350,6 +426,24 @@ S3 emit model itself.
   confirmed the package-rename/extern-prelude mechanics and, incidentally,
   the `url` gap: the non-optional `url` dep compiled even under the minimal
   feature set.
+- **Independently reproduced** (isolated `CARGO_TARGET_DIR`, so no
+  workspace artifacts leak in; the first build compiles the full closure
+  from source, then `touch src/main.rs` rebuilds measure exactly the
+  user-crate-compile + link the dep model leaves in the warm loop):
+  - trivial main, `features = ["json"]`, emitted dev profile
+    (`debug = 0`): 0.28–0.30 s over five runs — confirms the 0.33–0.38 s
+    figure (the original carried debuginfo, which can only be slower);
+  - a **real emitted hello-world** `main.rs` (284 lines) converted to the
+    dependency shape (`pub mod ipe_runtime;` deleted, runtime dep with
+    `async`/`crypto`/`json`, 174-crate closure): 0.56–0.62 s, and the
+    binary runs correctly — the first end-to-end run of the actual emit
+    model, not just a scratch crate;
+  - a 1600-line synthetic main in the same shape: ~1.1 s — scaling is
+    roughly linear in generated-code size, which supports the
+    complex-app rows below.
+  The reproduction also re-confirmed the `url` gap (url/idna/ICU4X compile
+  under the minimal feature set) and surfaced the floor-granularity E0433
+  class recorded in the trimming section.
 - After S3, an edit recompiles only the generated `main.rs` and links
   against the prebuilt runtime rlib plus its dep closure. A real generated
   `main.rs` is larger than the prototype's, and heavier feature sets link
@@ -403,10 +497,16 @@ re-blessing is mechanical and automated; its size is noted, not weighed.
    (every planned feature declared; `db-sqlite`/`db-postgres` mutual-
    exclusion `compile_error!`), plus a representative standalone
    `cargo check` feature matrix in CI. Then: make `url` optional behind a
-   `url` feature; split `crypto_core` from `crypto`; add the driver
-   features (absorbing the generated `config.rs` aliases as cfg'd code);
-   align the floor optionals (`sha1`/`md-5`/`bcrypt`/`chrono-tz`) with
-   whatever the emit floor gates.
+   `url` feature; split `crypto_core` from `crypto`; split `jwt` out of
+   `json`; narrow the crate's tokio dep to the emitted floor set (surface
+   features add `tokio/net` / `tokio/sync`); add the driver features
+   (absorbing the generated `config.rs` aliases as cfg'd code); adopt the
+   emitted floor-module granularity in the crate's `mod.rs` (floor modules
+   always declared, dependency-bearing halves item-gated — see the
+   trimming section); switch the crate to `version.workspace = true` and
+   drop the stale metadata version field; align the floor optionals
+   (`sha1`/`md-5`/`bcrypt`/`chrono-tz`) with whatever the emit floor
+   gates.
 2. **Feature-map single source of truth in the backend.** Test first:
    `runtime_featureset_closure` (all reachable `uses_*` masks → declared
    universe + cfg-satisfaction + `use crate::` closure, as specified above)
@@ -427,8 +527,13 @@ re-blessing is mechanical and automated; its size is noted, not weighed.
    the WASM/vendored surface; re-bless goldens (~512 cases: a one-line
    region in every `main.rs`, the four golden `Cargo.toml`s become
    dep+features, the blessed `ipe_runtime/` overlay dirs retire);
-   `build_emit_manifest` drops `collect_dir_text`. Binary-size and
-   behavior checks ride the existing example sweep.
+   `build_emit_manifest` drops `collect_dir_text`. One part of the golden
+   churn is *not* purely mechanical and is designed here: the emitted
+   dependency path is absolute and machine-specific, so golden
+   `Cargo.toml` comparison substitutes a stable placeholder for the
+   resolved runtime root (normalize-on-compare, blessed files stay
+   byte-stable across machines). Binary-size and behavior checks ride the
+   existing example sweep.
 5. **Install resolution.** Tests first against a fake installed layout
    (binary-relative `../lib/ipe/runtime/`): resolution order, version-skew
    refusal, `IPE_RUNTIME_DIR`-as-crate-root including the fail-closed
@@ -488,3 +593,68 @@ re-blessing is mechanical and automated; its size is noted, not weighed.
 - **Binary size / always-compiled pure modules.** Dropping below-feature-
   granularity trimming leans on linker GC; the default-flip step measures
   the emitted binary against the current table to confirm no regression.
+
+## Guardian review
+
+Independent adversarial review of this design; every load-bearing claim was
+checked against the code, and the measurements were reproduced from scratch.
+
+Verified:
+
+- **Warm figure** — reproduced in an isolated target dir: 0.28–0.30 s
+  (trivial main, `json`), 0.56–0.62 s (real emitted hello-world converted
+  to the dep shape, 174-crate closure, binary runs), ~1.1 s (1600-line
+  synthetic main). The methodology is genuinely the dep model: first build
+  compiles the whole closure from source; the timed rebuilds recompile only
+  the user crate and link. The 0.35–0.7 s hello-world band and the
+  link-dominated complex-app rows stand.
+- **`url` non-optional** — `src/runtime/rust/Cargo.toml` (`url = { version
+  = "2" }`, deliberately non-optional per its own comment) and
+  `src/mod.rs` (`pub mod url;` ungated); the minimal-feature build compiles
+  url/idna/ICU4X. Real S1 regression under the dep model; the `url` feature
+  in the trimming table is required.
+- **`crypto_core` gating** — `src/runtime/rust/src/mod.rs` gates
+  `pub mod crypto_core;` on `feature = "crypto"` while
+  `templates/ipe_runtime/mod.rs` declares it unconditionally (the floor).
+  Confirmed; the split is required.
+- **Citations** — `resolve_runtime` (`src/ipe-cli/src/lib.rs:1653`),
+  `build_emit_manifest`/`collect_dir_text` (`lib.rs:1415`/`1420`),
+  `derive_epoch` (`src/ipe-cli/src/cache.rs:375`), `FLAG_COUNT = 18` and
+  the exhaustive 2^18 loop (`runtime_modset_closure.rs:58`/`279`),
+  `pub mod ipe_runtime;` (`templates/main.rs:12`), the
+  `crate::ipe_runtime` sites (`project.rs:1716`/`1723`,
+  `emit_expr.rs:8922`), `seal_modset.rs`, `crate_specs_match_manifests` —
+  all accurate.
+
+Corrected or strengthened by this review:
+
+- The crate-parity precondition list was incomplete. Added as required (not
+  refinements): the `jwt`-out-of-`json` split (`json` is floor; the fold
+  would drag jsonwebtoken/ring into hello-world), the tokio
+  `["full"]`→floor-set narrowing, the floor-module granularity adoption
+  (`json`/`log`/`trace`/`cache`/`http_header`/`crypto_core` modules +
+  `system`/`task` glob re-exports — demonstrated as a live E0433 on a
+  converted real emit), the `db-postgres`-implies-`sqlx/sqlite` detail, and
+  the runtime-crate version sync (the version SEAL fails against today's
+  static `0.1.0` + stale metadata field). `futures-util` needs no `async`
+  entry — the always-restore in the emitted model is the residue.
+- The SEAL adaptation now carries a new obligation the modset closure never
+  had: per-mask scanning of emitted `ipe_runtime::<module>::…` references
+  (the prelude hard-references kernels and strips by usage — previously
+  E2E-only coverage). Item-level gates remain E2E territory, same class as
+  today.
+- The default-flip step's golden churn has one designed (not mechanical)
+  element: the machine-specific absolute dependency path requires
+  placeholder normalization in golden comparison.
+
+Independent judgment: S3's ordering (before S2), the source-crate install
+story, and the fail-closed resolution are sound under the precedence order —
+S3 is Efficiency-only *provided* the runtime-parity step lands first;
+without it the switch silently regresses the S1 floor (Correctness of the
+build story, not just Efficiency). S2 default-on is defensible: the
+Elm-precedent shared cache, three override layers honored before it, no
+user-config writes, per-user namespace, and a one-function retreat to
+opt-in; the coexistence and concurrency smoke tests must precede the flip,
+as the plan already orders. The warm number is real and slightly
+conservative; the S6 conclusion (usable ~0.5 s loop, interpreter still the
+only route to milliseconds) follows from the reproduced measurements.
