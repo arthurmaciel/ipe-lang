@@ -69,15 +69,21 @@ fn i186_ipec_accepts_and_bounds_fn_display() {
     // bound so its `basics_to_string(x)` body type-checks (the E0277 half).
     // `IpeStringify` (not `Display`) is the correct bound — satisfiable by every
     // scalar AND every composite, so no caller can exit-0-then-cargo-fail.
+    //
+    // Under the default dependency-model emit the runtime is reached through the
+    // extern prelude (`ipe_runtime::…`); the vendored fallback spells the same
+    // path crate-locally (`crate::ipe_runtime::…`). Accept either so the bound
+    // is asserted independent of the emit model.
     assert!(
-        emitted.contains("crate::ipe_runtime::stringify::IpeStringify"),
+        emitted.contains("ipe_runtime::stringify::IpeStringify"),
         "the wildcard-`any` renderer function must carry the `IpeStringify` \
          bound so its `basics_to_string` body type-checks; got main.rs:\n{emitted}"
     );
     assert!(
-        emitted.contains(
-            "pub fn main_render<T1: crate::ipe_runtime::stringify::IpeStringify + Clone>"
-        ),
+        emitted.contains("pub fn main_render<T1: ipe_runtime::stringify::IpeStringify + Clone>")
+            || emitted.contains(
+                "pub fn main_render<T1: crate::ipe_runtime::stringify::IpeStringify + Clone>"
+            ),
         "the bound belongs on the renderer FUNCTION's generic param; got \
          main.rs:\n{emitted}"
     );

@@ -77,34 +77,30 @@ fn postgres_driver_selects_postgres_config_template() {
         built.err()
     );
 
-    let config_rs = fs::read_to_string(out.join("src").join("ipe_runtime").join("config.rs"))
-        .expect("emitted config.rs must exist");
-    assert!(
-        config_rs.contains("sqlx::postgres::PgPool"),
-        "driver = \"postgres\" must emit the Postgres config.rs template:\n{config_rs}"
-    );
-    assert!(
-        config_rs.contains("sqlx::postgres::PgRow"),
-        "driver = \"postgres\" must declare PgRow:\n{config_rs}"
-    );
-    assert!(
-        config_rs.contains("DB_USES_RETURNING_ID: bool = true"),
-        "driver = \"postgres\" must set DB_USES_RETURNING_ID = true \
-         (Postgres has no LastInsertId — db_insert_row/db_insert_fields key \
-         their RETURNING-id branch on this):\n{config_rs}"
-    );
-
+    // Under the default dependency model the DB driver aliases (`PgPool`/`PgRow`
+    // vs `SqlitePool`/`SqliteRow`, and the `DB_USES_RETURNING_ID` constant) live
+    // inside the runtime crate, selected by the `db-postgres` / `db-sqlite`
+    // feature — no `config.rs` is vendored into the user crate. The structural
+    // wiring this test guards is therefore the FEATURE the emitted manifest
+    // selects: `driver = "postgres"` must put `db-postgres` in the runtime
+    // dependency's feature list.
     let cargo_toml =
         fs::read_to_string(out.join("Cargo.toml")).expect("emitted Cargo.toml must exist");
     assert!(
-        cargo_toml.contains(r#"features = ["runtime-tokio-rustls", "sqlite", "postgres"]"#),
-        "driver = \"postgres\" must enable the postgres sqlx feature in Cargo.toml \
-         IN ADDITION TO sqlite (the always-emitted telemetry_spill/web::hub/ \
-         web::store runtime modules hardcode SqlitePool independently of the \
-         app's [database] driver choice — dropping sqlite here was the \
-         compile-time gap that made Postgres structurally unreachable, closed \
-         2026-07-10 after an independent review caught a cargo-build failure \
-         it produced):\n{cargo_toml}"
+        cargo_toml.contains("package = \"ipe-runtime-rust\""),
+        "the emitted manifest must declare the runtime as a path dependency:\n{cargo_toml}"
+    );
+    assert!(
+        cargo_toml.contains("\"db-postgres\""),
+        "driver = \"postgres\" must select the runtime `db-postgres` feature (which \
+         pulls both the postgres AND sqlite sqlx drivers — the always-emitted \
+         telemetry_spill / web::hub / web::store runtime modules hardcode \
+         SqlitePool independently of the app's driver choice):\n{cargo_toml}"
+    );
+    assert!(
+        !cargo_toml.contains("\"db-sqlite\""),
+        "driver = \"postgres\" must NOT also select db-sqlite (the driver features \
+         are mutually exclusive; db-postgres already implies sqlx/sqlite):\n{cargo_toml}"
     );
 
     let _ = fs::remove_dir_all(&dir);
@@ -179,15 +175,17 @@ fn no_database_section_still_selects_sqlite_config_template() {
         built.err()
     );
 
-    let config_rs = fs::read_to_string(out.join("src").join("ipe_runtime").join("config.rs"))
-        .expect("emitted config.rs must exist");
+    // Dep-model expression of the default: no vendored config.rs; the sqlite
+    // driver is selected via the runtime `db-sqlite` feature.
+    let cargo_toml =
+        fs::read_to_string(out.join("Cargo.toml")).expect("emitted Cargo.toml must exist");
     assert!(
-        config_rs.contains("sqlx::sqlite::SqlitePool"),
-        "no [database] section must still default to the sqlite config.rs template:\n{config_rs}"
+        cargo_toml.contains("\"db-sqlite\""),
+        "no [database] section must default to the runtime `db-sqlite` feature:\n{cargo_toml}"
     );
     assert!(
-        config_rs.contains("DB_USES_RETURNING_ID: bool = false"),
-        "sqlite driver must keep DB_USES_RETURNING_ID = false:\n{config_rs}"
+        !cargo_toml.contains("\"db-postgres\""),
+        "the sqlite default must NOT select db-postgres:\n{cargo_toml}"
     );
 
     let _ = fs::remove_dir_all(&dir);

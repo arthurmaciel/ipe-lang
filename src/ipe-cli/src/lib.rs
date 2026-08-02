@@ -380,21 +380,45 @@ pub struct BuildOptions {
     /// development-only `Debug.*` escape hatch (IPE-L0140). Default `false`
     /// (a development build).
     pub production: bool,
-    /// `true` for the opt-in dependency-model emit (env `IPE_RUNTIME_DEP=1`, or
-    /// set directly by a test): the emitted native project declares the runtime
-    /// as a path dependency with a `runtime_features`-selected feature list and
-    /// vendors no runtime source. Default `false` (the byte-identical
-    /// vendored-source emit). No effect on the wasm target (its manifest is a
-    /// closed vendoring template for now).
+    /// `true` (the DEFAULT for a native build) selects the dependency-model
+    /// emit: the emitted native project declares the runtime as a path
+    /// dependency with a `runtime_features`-selected feature list and vendors no
+    /// runtime source. `false` opts back into the byte-identical vendored-source
+    /// emit — the fallback for debugging / a machine without an installed
+    /// runtime crate — set via `IPE_RUNTIME_VENDORED=1` (or directly by a test).
+    /// No effect on the wasm target (its manifest is a closed vendoring template
+    /// for now — its emit returns before the dependency-model branch).
     pub runtime_dep: bool,
 }
 
-/// Read the opt-in dependency-model flag from the environment
-/// (`IPE_RUNTIME_DEP=1`). A [`BuildOptions::runtime_dep`] already set by a
-/// caller (a test) takes precedence and is returned unchanged.
+/// Select the emit model from the environment.
+///
+/// The dependency model is the DEFAULT; `IPE_RUNTIME_VENDORED=1` opts back into
+/// the vendored-source emit (debugging / a machine that cannot resolve the
+/// runtime crate). The legacy `IPE_RUNTIME_DEP=1` remains an explicit no-op
+/// affirmation of the default. A [`BuildOptions::runtime_dep`] already set by a
+/// caller (a test) is what is threaded; this function only computes the
+/// env-derived default.
 #[must_use]
 pub fn runtime_dep_from_env() -> bool {
-    std::env::var("IPE_RUNTIME_DEP").is_ok_and(|v| v == "1")
+    !std::env::var("IPE_RUNTIME_VENDORED").is_ok_and(|v| v == "1")
+}
+
+impl BuildOptions {
+    /// The default build options with the emit model resolved from the
+    /// environment (dependency-model by default; vendored under
+    /// `IPE_RUNTIME_VENDORED=1`). The zero-configuration entrypoints
+    /// ([`build`], [`build_with_sibling_discovery`], [`build_project`]) seed
+    /// this so a library caller gets the same default emit model a `ipe build`
+    /// invocation does, rather than the raw `Default` (which is vendored — the
+    /// fallback shape).
+    #[must_use]
+    pub fn from_env() -> Self {
+        Self {
+            runtime_dep: runtime_dep_from_env(),
+            ..Self::default()
+        }
+    }
 }
 
 /// Build `entry` into a Rust Cargo project under `out_dir`, vendoring the
@@ -404,7 +428,7 @@ pub fn runtime_dep_from_env() -> bool {
 /// Returns [`CliError::Pipeline`] when the compiler rejects the program,
 /// [`CliError::Io`] on any filesystem failure.
 pub fn build(entry: &Path, out_dir: &Path, runtime_dir: &Path) -> Result<(), CliError> {
-    build_with_options(entry, out_dir, runtime_dir, BuildOptions::default())
+    build_with_options(entry, out_dir, runtime_dir, BuildOptions::from_env())
 }
 
 /// [`build`] with explicit [`BuildOptions`] (the static-plan-aware variant).
@@ -490,7 +514,7 @@ pub fn build_with_sibling_discovery(
     out_dir: &Path,
     runtime_dir: &Path,
 ) -> Result<(), CliError> {
-    build_with_sibling_discovery_with_options(entry, out_dir, runtime_dir, BuildOptions::default())
+    build_with_sibling_discovery_with_options(entry, out_dir, runtime_dir, BuildOptions::from_env())
 }
 
 /// [`build_with_sibling_discovery`] with explicit [`BuildOptions`] (the
@@ -1625,7 +1649,12 @@ pub fn build_project(
     out_dir: &Path,
     runtime_dir: &Path,
 ) -> Result<(), CliError> {
-    build_project_with_options(manifest_path, out_dir, runtime_dir, BuildOptions::default())
+    build_project_with_options(
+        manifest_path,
+        out_dir,
+        runtime_dir,
+        BuildOptions::from_env(),
+    )
 }
 
 /// [`build_project`] with explicit [`BuildOptions`] (the static-plan-aware
