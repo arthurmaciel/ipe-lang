@@ -963,6 +963,7 @@ mod schema_tag_tests {
                 uses_env_public: false,
                 uses_debug: false,
                 uses_ffi: false,
+                uses_async_runtime: false,
             }],
         };
         let ctx = EmitCtx::build(

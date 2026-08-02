@@ -51,6 +51,7 @@ fn minimal_wasm_program() -> (Program, Interner) {
             uses_env_public: false,
             uses_debug: false,
             uses_ffi: false,
+            uses_async_runtime: false,
         }],
     };
     (program, interner)

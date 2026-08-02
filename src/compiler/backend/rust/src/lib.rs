@@ -653,6 +653,27 @@ pub(crate) struct EmitCtx<'a> {
     /// appends `pub mod env_public; pub use env_public::*;` to the emitted
     /// `ipe_runtime/mod.rs`, on EITHER target.
     pub(crate) uses_env_public: bool,
+    /// `true` when the program reaches at least one reactor-requiring kernel
+    /// (async IO, timer, spawn, network, database, or any FFI call). Selects
+    /// the emitted entry point and manifest floor:
+    ///
+    /// * `false` — [`crate::project::emit_program`] emits a synchronous
+    ///   `fn main` that drives `ipe_main()` on a std-only executor
+    ///   (`ipe_runtime::task::block_on`'s `#[cfg(not(feature = "tokio"))]`
+    ///   park/unpark variant), and [`crate::project::assemble_project_files`]
+    ///   drops `tokio` + `futures-util` from the emitted `Cargo.toml` and the
+    ///   `"tokio"` default feature. A pure program (only `Io.println`, string /
+    ///   list / math / json computation, the pure `Task` monad ops) sheds the
+    ///   whole tokio subtree.
+    /// * `true` — the tokio `block_on` entry and the full base manifest are
+    ///   emitted unchanged; every existing async surface composes on top as
+    ///   before.
+    ///
+    /// FAIL-CLOSED: the lowerer marks every unknown kernel (and every FFI call)
+    /// reactor-requiring, so the synchronous entry is emitted only for a program
+    /// proven to need no reactor. Wasm targets ignore this (their entry is
+    /// `#[wasm_bindgen(start)]`, their runtime already tokio-free).
+    pub(crate) uses_async_runtime: bool,
     /// The `[wasm] publicEnv` allowlist (`ipe.toml`, threaded in via
     /// [`RustBackend::with_wasm_public_env`]) — already validated against the
     /// secret-name denylist at `ipe.toml` parse time. Meaningless / ignored
@@ -1242,6 +1263,34 @@ impl<'a> EmitCtx<'a> {
         // detect foreign-crate FFI wrapper usage.
         let uses_ffi = program.modules.iter().any(|m| m.uses_ffi);
 
+        // detect whether the program needs the tokio reactor. Two independent
+        // triggers must BOTH force it on, because the manifest augmenter chain
+        // and the entry-point selection share this one flag:
+        //   1. a reactor-requiring KERNEL in any module (the per-module flag,
+        //      unioned — one async module makes the whole program async); and
+        //   2. any reactor SURFACE flag, even when reached by a reserved-type
+        //      mention alone (e.g. a `Request`-typed handler sets `uses_server`
+        //      without calling a server kernel). Every surface OR'd in here has
+        //      an augmenter that inserts, extends, or depends on the base `tokio`
+        //      dependency line, and a runtime module that parks on the reactor —
+        //      so it MUST link tokio and enter through its runtime. Folding them
+        //      in makes this flag a true superset of the surface set, so the
+        //      `async_runtime_cargo_toml` restore always precedes the per-surface
+        //      tokio-line surgery, and a reactor program never gets a synchronous
+        //      `fn main`. Pure surfaces (crypto/url/config/csv/compression) are
+        //      excluded — their runtime resolves without the reactor, so forcing
+        //      tokio would relink a subtree they shed.
+        let uses_async_runtime = program.modules.iter().any(|m| m.uses_async_runtime)
+            || uses_db
+            || uses_server
+            || uses_web
+            || uses_webview
+            || uses_websocket
+            || uses_http
+            || uses_tui
+            || uses_tea
+            || uses_email;
+
         let mut ctx = Self {
             interner,
             uses_db,
@@ -1267,6 +1316,7 @@ impl<'a> EmitCtx<'a> {
             uses_ffi,
             ffi,
             uses_env_public,
+            uses_async_runtime,
             wasm_public_env,
             wasm_hydrate_mode,
             sqlvalue_rust_name,
@@ -3053,6 +3103,7 @@ mod record_struct_namespace_tests {
                 uses_env_public: false,
                 uses_debug: false,
                 uses_ffi: false,
+                uses_async_runtime: false,
             }],
         };
 
@@ -3138,6 +3189,7 @@ mod record_struct_namespace_tests {
                 uses_env_public: false,
                 uses_debug: false,
                 uses_ffi: false,
+                uses_async_runtime: false,
             }],
         };
 

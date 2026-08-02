@@ -399,7 +399,7 @@ mod tests {
         // A db+server-shaped default list still gets exactly one allocator,
         // appended last.
         let base = CARGO_TOML.replacen(
-            r#"default = ["tokio", "json"]"#,
+            r#"default = ["json"]"#,
             r#"default = ["tokio", "crypto", "json", "db", "server"]"#,
             1,
         );
@@ -502,7 +502,7 @@ mod tests {
     fn webview_shape_is_read_from_the_default_list() -> DResult<()> {
         assert!(!manifest_is_webview(CARGO_TOML)?);
         let webview = CARGO_TOML.replacen(
-            r#"default = ["tokio", "json"]"#,
+            r#"default = ["json"]"#,
             r#"default = ["tokio", "crypto", "json", "live", "webview"]"#,
             1,
         );

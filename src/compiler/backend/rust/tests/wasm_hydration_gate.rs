@@ -73,6 +73,7 @@ fn hydrate_program(interner: &mut Interner, fields: Vec<IrType>) -> DResult<Prog
             uses_env_public: false,
             uses_debug: false,
             uses_ffi: false,
+            uses_async_runtime: false,
         }],
     })
 }
@@ -160,6 +161,7 @@ fn no_hydration_state_type_passes_gate() -> DResult<()> {
             uses_env_public: false,
             uses_debug: false,
             uses_ffi: false,
+            uses_async_runtime: false,
         }],
     };
     hydrate_backend(&interner).emit_spine(&prog).map(|_| ())
@@ -224,6 +226,7 @@ fn hydrate_program_with_record_projection(interner: &mut Interner) -> DResult<Pr
             uses_env_public: false,
             uses_debug: false,
             uses_ffi: false,
+            uses_async_runtime: false,
         }],
     })
 }
@@ -303,6 +306,7 @@ fn no_projection_emits_no_hydrate_glue() -> DResult<()> {
             uses_env_public: false,
             uses_debug: false,
             uses_ffi: false,
+            uses_async_runtime: false,
         }],
     };
     let spine = hydrate_backend(&interner).emit_spine(&prog)?;

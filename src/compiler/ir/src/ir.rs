@@ -258,6 +258,16 @@ pub struct Module {
     /// in the emitted crate root and to append the bound crates'
     /// `[dependencies]` lines to the emitted `Cargo.toml`.
     pub uses_ffi: bool,
+    /// `true` when the program reaches at least one reactor-requiring kernel —
+    /// async IO, a timer, a spawn, network, database, or any foreign FFI call
+    /// ([`KernelFn::requires_async_runtime`]). The backend reads this flag to
+    /// select the entry point: `false` emits a synchronous `fn main` driven by
+    /// a std-only executor and drops `tokio` + `futures-util` from the emitted
+    /// `Cargo.toml`; `true` keeps the tokio `block_on` entry unchanged.
+    /// FAIL-CLOSED — the lowerer defaults every unknown kernel (and every FFI
+    /// call) to reactor-requiring, so the synchronous entry is emitted only for
+    /// a program proven to need no reactor.
+    pub uses_async_runtime: bool,
 }
 
 /// A user-declared type. The IR models user types as enums (Ipê's `type`
@@ -3751,6 +3761,7 @@ mod tests {
                 uses_env_public: false,
                 uses_debug: false,
                 uses_ffi: false,
+                uses_async_runtime: false,
             }],
         };
         let clone = program.clone();
@@ -4254,6 +4265,7 @@ mod serde_persistence_tests {
                 uses_env_public: false,
                 uses_debug: false,
                 uses_ffi: false,
+                uses_async_runtime: false,
             }],
         })
     }
@@ -4329,6 +4341,7 @@ mod serde_persistence_tests {
                 uses_env_public: false,
                 uses_debug: false,
                 uses_ffi: false,
+                uses_async_runtime: false,
             }],
         };
         let json = {

@@ -166,6 +166,7 @@ fn build_m0(interner: &mut Interner) -> DResult<Program> {
             uses_env_public: false,
             uses_debug: false,
             uses_ffi: false,
+            uses_async_runtime: false,
         }],
     })
 }
@@ -273,6 +274,7 @@ fn build_no_user_items(interner: &mut Interner) -> DResult<Program> {
             uses_env_public: false,
             uses_debug: false,
             uses_ffi: false,
+            uses_async_runtime: false,
         }],
     })
 }

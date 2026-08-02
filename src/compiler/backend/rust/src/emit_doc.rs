@@ -2060,6 +2060,7 @@ mod tests {
                 uses_env_public: false,
                 uses_debug: false,
                 uses_ffi: false,
+                uses_async_runtime: false,
             }],
         };
         Fixture {
@@ -2621,6 +2622,7 @@ mod tests {
                 uses_env_public: false,
                 uses_debug: false,
                 uses_ffi: false,
+                uses_async_runtime: false,
             }],
         };
         let ctx = EmitCtx::build(
@@ -3223,6 +3225,7 @@ mod tests {
                 uses_env_public: false,
                 uses_debug: false,
                 uses_ffi: false,
+                uses_async_runtime: false,
             }],
         };
         let ctx = EmitCtx::build(
@@ -3615,6 +3618,7 @@ mod tests {
                 uses_env_public: false,
                 uses_debug: false,
                 uses_ffi: false,
+                uses_async_runtime: false,
             }],
         };
         let ctx = EmitCtx::build(
