@@ -65,14 +65,17 @@ pub mod core;
 
 // The always-on cryptographic floor: the entropy pair, the SHA-2 hash/HMAC
 // family, the RSA sign/verify pair, the typed `Key`/`Mac` newtypes and the
-// constant-time compare. wasm32 compiles only the entropy pair + pure hash
-// family (the RSA arms are `cfg(feature = "crypto")`). Gated the same as
-// `crypto` so the standalone crate's floor mirrors the emitted crate's.
-#[cfg(any(
-    feature = "crypto",
-    all(target_arch = "wasm32", feature = "wasm-client")
-))]
+// constant-time compare. Declared unconditionally, mirroring the emitted floor
+// (`templates/ipe_runtime/mod.rs` declares `pub mod crypto_core;` for every
+// program): jwt/auth/db/web/email rely on this floor at `--no-default-features`.
+// The heavy RSA arms inside the module stay `cfg(feature = "crypto")`; wasm32
+// compiles the entropy pair + pure hash family.
 pub mod crypto_core;
+// Floor re-export, mirroring the emitted `pub use crypto_core::*` — the SHA-2 /
+// HMAC family, entropy pair, and typed Key/Mac are reachable at the crate root
+// with `--no-default-features`. When `crypto` is on, `crypto.rs` re-exports the
+// same items again; a glob of identical items is not ambiguous.
+pub use crypto_core::*;
 // wasm32: `crypto_random_bytes`/`crypto_random_token` (the browser entropy
 // substitute) plus the pure hash family compile without the native-only AEAD
 // deps — those functions are individually `cfg(not(target_arch = "wasm32"))`
@@ -126,7 +129,12 @@ pub mod path_core;
 pub mod path;
 pub use path::*;
 
+// `url`: behind the `url` feature (the `::url::` crate is now optional). A
+// program that reaches no URL/SSRF/HTTP/WebSocket surface drops it, matching the
+// emitted floor where `url` is appended only under `uses_url`.
+#[cfg(feature = "url")]
 pub mod url;
+#[cfg(feature = "url")]
 pub use url::*;
 
 #[cfg(feature = "db")]
@@ -174,13 +182,14 @@ pub use bytes::*;
 pub mod regex_kernel;
 pub use regex_kernel::*;
 
-// JWT needs BOTH json (jsonwebtoken decode + the Go-parity JSON encoder for the
-// token payload) AND crypto (the HMAC / RSA signing primitives the encode path
-// reuses for byte-identical-to-Go tokens). Gating on both keeps a hypothetical
-// json-only build sound; generated projects always enable both.
-#[cfg(all(feature = "json", feature = "crypto"))]
+// JWT needs `jsonwebtoken` (decode) plus json (the Go-parity JSON encoder for
+// the token payload) and crypto (the HMAC / RSA signing primitives the encode
+// path reuses for byte-identical-to-Go tokens). Gated on the `jwt` feature,
+// which implies both `json` and `crypto`; keeping `jsonwebtoken` out of the
+// floor `json` feature so a plain JSON program does not link it.
+#[cfg(feature = "jwt")]
 pub mod jwt;
-#[cfg(all(feature = "json", feature = "crypto"))]
+#[cfg(feature = "jwt")]
 pub use jwt::*;
 
 pub mod decimal;
@@ -408,12 +417,13 @@ pub use io::*;
 pub mod debug;
 pub use debug::*;
 
-// auth.rs's external deps are `bcrypt` (crypto), `jsonwebtoken`/`serde_json`
-// (json), AND `sqlx`/`Db` (db — register/login/setRole write the user table).
-// Gate on ALL THREE: the old `all(db, json)` gate omitted `crypto`, so a
-// `--features db` build (crypto off) compiled auth and failed on unresolved
-// `bcrypt`. With `crypto` required, that build excludes auth instead.
-#[cfg(all(feature = "crypto", feature = "db", feature = "json"))]
+// auth.rs's external deps are `bcrypt` (crypto), `jsonwebtoken` (jwt),
+// `serde_json` (json), AND `sqlx`/`Db` (db — register/login/setRole write the
+// user table). Gate on `jwt` (which implies crypto + json) plus `db`: `jwt`
+// carries the `jsonwebtoken` dep the register/login token path needs, and the
+// old crypto/json/db gate omitted it. A `--features db` build (no jwt) excludes
+// auth instead of failing on unresolved `jsonwebtoken`/`bcrypt`.
+#[cfg(all(feature = "jwt", feature = "db"))]
 pub mod auth;
-#[cfg(all(feature = "crypto", feature = "db", feature = "json"))]
+#[cfg(all(feature = "jwt", feature = "db"))]
 pub use auth::*;

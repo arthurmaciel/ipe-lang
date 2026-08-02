@@ -2029,7 +2029,7 @@ dependencies = [
 
 [[package]]
 name = "ipe-runtime-rust"
-version = "0.1.0"
+version = "0.1.31"
 dependencies = [
  "aes-gcm",
  "async-trait",
