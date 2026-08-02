@@ -116,7 +116,12 @@ pub mod system;
 // in the emitted crate's runtime template.
 pub mod task;
 pub mod time;
-#[cfg(feature = "tokio")]
+// Always declared, matching the emitted floor (`templates/ipe_runtime/mod.rs`
+// declares `pub mod trace;` for every program). `trace.rs` builds a std
+// `IpeTask` future (`async move`/`.await` on the boxed future, no `tokio::`
+// item), so it compiles under `--no-default-features`; the always-on glob
+// re-export below then keeps `trace_span`/`trace_event`/`trace_attr` reachable
+// at the crate root for a sync dependency-model program that names them.
 pub mod trace;
 pub use file::*;
 
@@ -155,21 +160,20 @@ pub use config_decode::*;
 pub use core::*;
 #[cfg(feature = "json")]
 pub use json::*;
-#[cfg(any(
-    feature = "tokio",
-    all(target_arch = "wasm32", feature = "wasm-client")
-))]
+// Floor-module glob re-exports: unconditional, matching the emitted floor
+// (`templates/ipe_runtime/mod.rs` re-exports these for EVERY program). The
+// modules are always declared and their tokio-bound items are item-gated
+// inside each file (`block_on`, `system_load_env`, … carry both a
+// `feature = "tokio"` and a `not(feature = "tokio")` arm), so a sync program's
+// generated prelude — which names `block_on` / `system_*` / `log_*` unqualified
+// at the crate root — resolves under `--no-default-features`. Gating the glob
+// on `tokio` instead would drop those std-available items from the crate root
+// and break every non-async dependency-model program (E0425).
 pub use log::*;
 pub use random::*;
-#[cfg(feature = "tokio")]
 pub use system::*;
-#[cfg(any(
-    feature = "tokio",
-    all(target_arch = "wasm32", feature = "wasm-client")
-))]
 pub use task::*;
 pub use time::*;
-#[cfg(feature = "tokio")]
 pub use trace::*;
 
 pub mod encoding;

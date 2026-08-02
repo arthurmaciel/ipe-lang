@@ -833,6 +833,8 @@ fn run_inner(
                         false,
                         // `ipe watch` is a development loop — Debug.* is allowed.
                         false,
+                        // `ipe watch` keeps the vendored runtime for now.
+                        None,
                     );
                     config = Some(cfg);
                     cfg

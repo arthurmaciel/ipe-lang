@@ -76,6 +76,7 @@ fn cold_compile(user: &UserSources) -> CompileOutcome {
         Vec::new(),
         false,
         false,
+        None,
     );
     ipe::compile_prepared(
         &db,
@@ -169,6 +170,7 @@ impl WarmSession {
                 Vec::new(),
                 false,
                 false,
+                None,
             ));
         }
         self.demand(user)

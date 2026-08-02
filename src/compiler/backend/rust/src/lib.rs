@@ -185,6 +185,26 @@ pub struct RustBackend<'a> {
     target: ipe_ir::Target,
     wasm_public_env: Vec<String>,
     wasm_hydrate_mode: bool,
+    runtime_dep: Option<RuntimeDep>,
+}
+
+/// The dependency-model emit selector.
+///
+/// When present, the emitted native project declares the runtime as a real cargo
+/// dependency (`ipe_runtime = { package = "ipe-runtime-rust", path = <root>, ... }`)
+/// with a [`runtime_features`]-selected feature list, and vendors NO runtime
+/// source. Absent (the default) emits the byte-identical vendored-source project.
+///
+/// The `root` is the resolved runtime crate root the emitted manifest names as
+/// the dependency `path`. It is resolved by the driver (fail-closed — a missing
+/// or wrong-package root is a loud refusal, never a silent walk-on) and passed
+/// verbatim; the emitter TOML-escapes it but never derives or validates a path
+/// from program-controlled input.
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub struct RuntimeDep {
+    /// The absolute, canonical runtime crate root (the directory holding the
+    /// runtime `Cargo.toml`) the emitted dependency `path` points at.
+    pub root: std::path::PathBuf,
 }
 
 impl<'a> RustBackend<'a> {
@@ -200,7 +220,22 @@ impl<'a> RustBackend<'a> {
             target: ipe_ir::Target::Native,
             wasm_public_env: Vec::new(),
             wasm_hydrate_mode: false,
+            runtime_dep: None,
         }
+    }
+
+    /// Select the dependency-model emit (opt-in `IPE_RUNTIME_DEP` /
+    /// [`ipe_cli::BuildOptions::runtime_dep`]): the emitted native project
+    /// declares the runtime as a path dependency with a
+    /// [`runtime_features`]-selected feature list and vendors no runtime source.
+    /// `None` (the default) keeps the byte-identical vendored-source emit.
+    ///
+    /// No-op on the wasm target — its manifest is a closed template that keeps
+    /// vendoring for now (design §"Out of scope: the WASM target").
+    #[must_use]
+    pub fn with_runtime_dep(mut self, runtime_dep: Option<RuntimeDep>) -> Self {
+        self.runtime_dep = runtime_dep;
+        self
     }
 
     /// Select the compilation target the emitted project is built for
@@ -272,6 +307,7 @@ impl<'a> RustBackend<'a> {
             self.target,
             self.wasm_public_env.clone(),
             self.wasm_hydrate_mode,
+            self.runtime_dep.clone(),
         )?;
         project::emit_spine(&ctx, program)
     }
@@ -294,6 +330,7 @@ impl<'a> RustBackend<'a> {
             self.target,
             self.wasm_public_env.clone(),
             self.wasm_hydrate_mode,
+            self.runtime_dep.clone(),
         )
     }
 
@@ -316,6 +353,7 @@ impl<'a> RustBackend<'a> {
             self.target,
             self.wasm_public_env.clone(),
             self.wasm_hydrate_mode,
+            self.runtime_dep.clone(),
         )?;
         Ok(runtime_features::runtime_features(&ctx).as_feature_names())
     }
@@ -338,6 +376,7 @@ impl<'a> RustBackend<'a> {
             self.target,
             self.wasm_public_env.clone(),
             self.wasm_hydrate_mode,
+            self.runtime_dep.clone(),
         )?;
         project::emit_module_file(
             &ctx,
@@ -375,6 +414,7 @@ impl<'a> RustBackend<'a> {
             self.target,
             self.wasm_public_env.clone(),
             self.wasm_hydrate_mode,
+            self.runtime_dep.clone(),
         )?;
         project::assemble_split_manifest(&ctx, program, spine_text, module_texts)
     }
@@ -419,6 +459,7 @@ impl Backend for RustBackend<'_> {
             self.target,
             self.wasm_public_env.clone(),
             self.wasm_hydrate_mode,
+            self.runtime_dep.clone(),
         )?;
         project::emit_program(&ctx, program)
     }
@@ -738,6 +779,13 @@ pub(crate) struct EmitCtx<'a> {
     /// export in addition to the `#[wasm_bindgen(start)] ipe_start` entry —
     /// the fault-tolerant island parse + `wasm_adopt_app` fallback path (M7).
     pub(crate) wasm_hydrate_mode: bool,
+    /// The dependency-model emit selector ([`RustBackend::with_runtime_dep`]).
+    /// `Some` — [`crate::project::assemble_project_files`] emits the native
+    /// project with the runtime as a path dependency (features from
+    /// [`crate::runtime_features::runtime_features`]) and no vendored runtime
+    /// source; `None` (the default) emits the byte-identical vendored project.
+    /// Ignored on the wasm target (which keeps its closed vendoring template).
+    pub(crate) runtime_dep: Option<RuntimeDep>,
     /// The Rust type name for the emitted `SqlValue` enum (e.g. `MainSqlValue`).
     /// `None` when `uses_db` is `false`.
     pub(crate) sqlvalue_rust_name: Option<String>,
@@ -863,6 +911,7 @@ fn enum_field_is_clone(ty: &IrType, enum_clone: &BTreeMap<(ModPath, Symbol), boo
 impl<'a> EmitCtx<'a> {
     #[allow(clippy::too_many_lines)]
     #[allow(clippy::similar_names)] // `uses_ui` / `uses_tui` are intentionally similar
+    #[allow(clippy::too_many_arguments)] // the backend-config thread-through (driver, ffi, target, wasm, runtime-dep)
     fn build(
         interner: &'a Interner,
         program: &Program,
@@ -871,6 +920,7 @@ impl<'a> EmitCtx<'a> {
         target: ipe_ir::Target,
         wasm_public_env: Vec<String>,
         wasm_hydrate_mode: bool,
+        runtime_dep: Option<RuntimeDep>,
     ) -> DResult<Self> {
         let mut enum_names: BTreeMap<(ModPath, Symbol), String> = BTreeMap::new();
         let mut variant_fields: BTreeMap<(ModPath, Symbol, Symbol), Vec<IrType>> = BTreeMap::new();
@@ -1377,6 +1427,7 @@ impl<'a> EmitCtx<'a> {
             uses_async_runtime,
             wasm_public_env,
             wasm_hydrate_mode,
+            runtime_dep,
             sqlvalue_rust_name,
             sqlfield_rust_name,
             hydration_state_rust_name: None,
@@ -3177,6 +3228,7 @@ mod record_struct_namespace_tests {
             ipe_ir::Target::Native,
             Vec::new(),
             false,
+            None,
         )?;
         assert_eq!(ctx.record_structs().len(), 1);
         assert_eq!(
@@ -3261,6 +3313,7 @@ mod record_struct_namespace_tests {
             ipe_ir::Target::Native,
             Vec::new(),
             false,
+            None,
         )?;
         ctx.assert_record_structs_disjoint_from_type_namespace(&BTreeSet::new())
     }

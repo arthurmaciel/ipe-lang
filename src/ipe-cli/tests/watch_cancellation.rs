@@ -65,6 +65,7 @@ fn compile_worker_is_cancelled_by_a_concurrent_input_edit() {
         Vec::new(),
         false,
         false,
+        None,
     );
 
     let mut sources: BTreeMap<Vec<String>, (PathBuf, String)> = BTreeMap::new();
@@ -138,6 +139,7 @@ fn the_same_fixture_compiles_cleanly_without_a_concurrent_edit() {
         Vec::new(),
         false,
         false,
+        None,
     );
 
     let mut sources: BTreeMap<Vec<String>, (PathBuf, String)> = BTreeMap::new();

@@ -461,6 +461,7 @@ pub fn native_vs_legacy_sweep(
         ipe_ir::Target::Native,
         Vec::new(),
         false,
+        None,
     )?;
     let mut divergences = Vec::new();
     let mut compared = 0usize;
@@ -2087,6 +2088,7 @@ mod tests {
             ipe_ir::Target::Native,
             Vec::new(),
             false,
+            None,
         )
         .expect("EmitCtx::build");
         f(&ctx)
@@ -2635,6 +2637,7 @@ mod tests {
             ipe_ir::Target::Native,
             Vec::new(),
             false,
+            None,
         )
         .expect("EmitCtx::build");
         let scope = GenericScope::new(&[]);
@@ -3239,6 +3242,7 @@ mod tests {
             ipe_ir::Target::Native,
             Vec::new(),
             false,
+            None,
         )
         .expect("EmitCtx::build");
         let expr = Expr::Lambda {
@@ -3633,6 +3637,7 @@ mod tests {
             ipe_ir::Target::Native,
             Vec::new(),
             false,
+            None,
         )
         .expect("EmitCtx::build");
         let scope = GenericScope::new(&[]);
