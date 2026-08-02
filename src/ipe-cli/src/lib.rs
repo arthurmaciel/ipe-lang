@@ -23,6 +23,7 @@ mod cache;
 pub mod cli_args;
 pub mod diff;
 pub mod doc;
+pub mod doctor;
 pub mod ffi;
 pub mod fmt;
 pub mod help;
@@ -229,6 +230,13 @@ pub enum CliError {
     /// the typed [`toolchain::ToolchainMissing`] naming what the command was
     /// doing and whether the toolchain is uninstalled or merely off the `PATH`.
     ToolchainMissing(toolchain::ToolchainMissing),
+    /// `ipe doctor` found a critical prerequisite missing (no `rustc`/`cargo`,
+    /// or an unresolvable runtime). This is a legitimate diagnostic verdict —
+    /// the command ran correctly and reported the environment fully to stdout —
+    /// not a command-line misuse, so it exits non-zero after the report and
+    /// never shows the `doctor` command's `--help` page. Carries nothing: the
+    /// report is the message; this variant is only the exit-code signal.
+    DoctorCritical,
 }
 
 impl From<toolchain::ToolchainMissing> for CliError {
@@ -354,6 +362,14 @@ impl std::fmt::Display for CliError {
             // The toolchain-missing message gutters and frames itself; it owns
             // its rendering (see `toolchain::ToolchainMissing`'s `Display`).
             Self::ToolchainMissing(missing) => write!(f, "{missing}"),
+            // The full diagnostic report already went to stdout; this stderr
+            // line is only the one-line verdict that pairs with the non-zero
+            // exit, self-guttered so the caller prints it as-is.
+            Self::DoctorCritical => write!(
+                f,
+                "{}doctor: a required prerequisite is missing (see the report above)",
+                style::GUTTER
+            ),
         }
     }
 }
@@ -1947,6 +1963,9 @@ pub fn run_cli(args: &[String]) -> Result<(), CliError> {
         Some((cmd, rest)) if cmd == "fmt" => with_help_on_misuse("fmt", fmt::run_fmt(rest)),
         Some((cmd, rest)) if cmd == "lsp" => with_help_on_misuse("lsp", lsp::run_lsp(rest)),
         Some((cmd, rest)) if cmd == "upgrade" => with_help_on_misuse("upgrade", run_upgrade(rest)),
+        Some((cmd, rest)) if cmd == "doctor" => {
+            with_help_on_misuse("doctor", doctor::run_doctor(rest))
+        }
         Some((cmd, rest)) if cmd == "version" || cmd == "--version" || cmd == "-V" => {
             with_help_on_misuse("version", run_version(rest))
         }
@@ -4039,7 +4058,7 @@ pub(crate) fn read_yes_no() -> bool {
 /// Retries ONCE, recreating `target`'s parent directory, when the write or
 /// rename fails with `NotFound`. This closes a real race surfaced by the
 /// emit→cargo bridge (`reconcile_emitted_project`, this function's
-/// other caller besides `ipe doctor --fix`): several `crates/ipe/tests/
+/// other caller besides `ipe fix`): several `crates/ipe/tests/
 /// golden_*` integration-test files share ONE `CARGO_TARGET_TMPDIR`-rooted
 /// output directory across sibling `#[test]` functions, and `cargo-nextest`
 /// runs each test as its own process — so one test's `remove_dir_all` +

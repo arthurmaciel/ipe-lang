@@ -393,6 +393,26 @@ const COMMANDS: &[Command] = &[
         }],
     },
     Command {
+        name: "doctor",
+        summary: "Diagnose the build environment and offer consent-gated setup.",
+        args: "",
+        args_desc: "",
+        options: &[
+            Opt {
+                flag: "[--yes|-y]",
+                desc: "apply every suggested fix without prompting (for CI / provisioning)",
+            },
+            Opt {
+                flag: "[--plain]",
+                desc: "print one status record per line, flush-left (never mutates)",
+            },
+            Opt {
+                flag: "[--json]",
+                desc: "print the report as JSON for jq (never mutates)",
+            },
+        ],
+    },
+    Command {
         name: "version",
         summary: "Print the ipe version.",
         args: "",
@@ -450,6 +470,7 @@ const SECTIONS: &[Section] = &[
             "capabilities",
             "diff",
             "doc",
+            "doctor",
             "lsp",
             "upgrade",
             "version",
