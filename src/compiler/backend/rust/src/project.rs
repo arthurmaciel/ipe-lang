@@ -1378,16 +1378,22 @@ fn assemble_project_files(
     // any combination. The order: db first, then server; both modify the same
     // base manifest so we chain the transformations.
     // The async spine (`tokio` + `futures-util` + the `"tokio"` default feature)
-    // is off the base template and restored here whenever the program reaches a
-    // reactor-requiring kernel. This runs FIRST, before every per-surface
-    // surgery, so their anchors (`default = ["tokio", "json"]`, the `tokio`
-    // dependency line) see the restored spine and compose byte-identically to
-    // the pre-gating output. A pure program keeps the tokio-free base and enters
-    // through the std-only `block_on` selected in the epilogue below. Every
-    // per-surface flag (db / server / web / tui / webview / websocket / email /
-    // http / crypto / jwt / auth / url / config / compression / csv / tea)
-    // reaches a reactor kernel, so `uses_async_runtime` is a superset of them
-    // all — the restore is always present when a downstream anchor needs it.
+    // is off the base template and restored here whenever the program needs the
+    // reactor. This runs FIRST, before every per-surface surgery, so their
+    // anchors (`default = ["tokio", "json"]`, the `tokio` dependency line) see
+    // the restored spine and compose byte-identically to the pre-gating output.
+    // A pure program keeps the tokio-free base and enters through the std-only
+    // `block_on` selected in the epilogue below.
+    //
+    // Every reactor surface whose augmenter inserts, extends, or depends on the
+    // `tokio` line (db / server / web / webview / websocket / http / tui / tea /
+    // email) is folded into `uses_async_runtime` at its computation site, so this
+    // flag is a superset of that set BY CONSTRUCTION — not by assumption. The
+    // restore is therefore always present when a downstream anchor needs it, even
+    // for a surface reached by a reserved-type mention alone (no async kernel).
+    // The pure surfaces (crypto / jwt / auth / url / config / compression / csv)
+    // anchor on `[profile.dev]`, never the tokio line, so they are correctly
+    // absent from that superset and keep the tokio-free base.
     let async_base = if ctx.uses_async_runtime {
         async_runtime_cargo_toml(CARGO_TOML)?
     } else {
@@ -3148,6 +3154,11 @@ fn crypto_core_heavy_cargo_toml(base: &str) -> DResult<String> {
     // slot (`["tokio", "crypto", "json"]`), keeping crypto-program manifests
     // byte-identical.
     const TOKIO_ANCHOR: &str = r#"default = ["tokio""#;
+    // The synchronous default-list anchors: a crypto-using program that reaches
+    // no async reactor kernel is emitted with no `"tokio"` in the default list,
+    // so `"crypto"` is inserted into the `["json"]` form instead.
+    const SYNC_DEFAULT: &str = r#"default = ["json"]"#;
+    const SYNC_DEFAULT_CRYPTO: &str = r#"default = ["crypto", "json"]"#;
     // Anchor the `rsa` line to the `zeroize` base dep it originally followed, so
     // its slot in `[dependencies]` is unchanged for a crypto-using program.
     const ZEROIZE_ANCHOR: &str = "zeroize = \"1\"\n";
@@ -3157,13 +3168,10 @@ fn crypto_core_heavy_cargo_toml(base: &str) -> DResult<String> {
         crate_specs::RSA.version,
     );
 
-    // Step 1 — insert `"crypto"` into the default feature list. A crypto-using
-    // program that reaches no async reactor kernel is emitted synchronously, so
-    // `"tokio"` is absent from the list. Anchor on `"tokio"` when present (keeping
-    // the `["tokio", "crypto", "json"]` order byte-identical for async programs)
-    // and fall back to the synchronous `["json"]` list otherwise.
-    const SYNC_DEFAULT: &str = r#"default = ["json"]"#;
-    const SYNC_DEFAULT_CRYPTO: &str = r#"default = ["crypto", "json"]"#;
+    // Step 1 — insert `"crypto"` into the default feature list. Anchor on
+    // `"tokio"` when present (keeping the `["tokio", "crypto", "json"]` order
+    // byte-identical for async programs) and fall back to the synchronous
+    // `["json"]` list otherwise.
     let step1 = if let Some(p) = base.find(TOKIO_ANCHOR) {
         let anchor_end = p + TOKIO_ANCHOR.len();
         let mut s = String::with_capacity(base.len() + rsa_dep.len() + 12);

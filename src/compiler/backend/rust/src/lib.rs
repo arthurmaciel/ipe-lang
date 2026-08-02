@@ -1263,10 +1263,33 @@ impl<'a> EmitCtx<'a> {
         // detect foreign-crate FFI wrapper usage.
         let uses_ffi = program.modules.iter().any(|m| m.uses_ffi);
 
-        // detect whether ANY module reaches a reactor-requiring kernel — the
-        // union across modules, since one async module makes the whole program
-        // async. Selects the synchronous vs tokio entry point + manifest floor.
-        let uses_async_runtime = program.modules.iter().any(|m| m.uses_async_runtime);
+        // detect whether the program needs the tokio reactor. Two independent
+        // triggers must BOTH force it on, because the manifest augmenter chain
+        // and the entry-point selection share this one flag:
+        //   1. a reactor-requiring KERNEL in any module (the per-module flag,
+        //      unioned — one async module makes the whole program async); and
+        //   2. any reactor SURFACE flag, even when reached by a reserved-type
+        //      mention alone (e.g. a `Request`-typed handler sets `uses_server`
+        //      without calling a server kernel). Every surface OR'd in here has
+        //      an augmenter that inserts, extends, or depends on the base `tokio`
+        //      dependency line, and a runtime module that parks on the reactor —
+        //      so it MUST link tokio and enter through its runtime. Folding them
+        //      in makes this flag a true superset of the surface set, so the
+        //      `async_runtime_cargo_toml` restore always precedes the per-surface
+        //      tokio-line surgery, and a reactor program never gets a synchronous
+        //      `fn main`. Pure surfaces (crypto/url/config/csv/compression) are
+        //      excluded — their runtime resolves without the reactor, so forcing
+        //      tokio would relink a subtree they shed.
+        let uses_async_runtime = program.modules.iter().any(|m| m.uses_async_runtime)
+            || uses_db
+            || uses_server
+            || uses_web
+            || uses_webview
+            || uses_websocket
+            || uses_http
+            || uses_tui
+            || uses_tea
+            || uses_email;
 
         let mut ctx = Self {
             interner,
