@@ -15,7 +15,11 @@ use std::sync::OnceLock;
 /// A fixed, valid cost-12 bcrypt hash used ONLY to make the unknown-email login
 /// path do the same KDF work as the known-email path (anti-enumeration timing
 /// defence). Computed once; the verify result is always discarded. Cost 12
-/// matches the register default so both paths cost the same.
+/// matches the register default so both paths cost the same. Only the db
+/// `auth_login` flow consumes it, so it is `db`-gated alongside its sole caller
+/// — a `jwt`-without-`db` auth build (hash/verify/sign kernels only) needs
+/// neither.
+#[cfg(feature = "db")]
 fn dummy_bcrypt_hash() -> &'static str {
     static HASH: OnceLock<String> = OnceLock::new();
     HASH.get_or_init(|| {
