@@ -11,7 +11,7 @@ fn repo_root() -> PathBuf {
 }
 
 #[test]
-fn emits_byte_identical_main_rs_and_vendors_runtime() {
+fn emits_byte_identical_main_rs_as_runtime_dependency() {
     let root = repo_root();
     let entry = root
         .join("tests")
@@ -43,12 +43,19 @@ fn emits_byte_identical_main_rs_and_vendors_runtime() {
         crate::support::golden_dir_of(&golden),
     );
 
+    // The default native emit is the dependency model: no runtime source is
+    // vendored into the user crate, and the manifest declares the runtime as a
+    // path dependency instead. Assert both — the absence of the vendored tree
+    // and the presence of the dependency line.
     assert!(
-        out.join("src")
-            .join("ipe_runtime")
-            .join("core.rs")
-            .is_file(),
-        "runtime module tree must be vendored",
+        !out.join("src").join("ipe_runtime").exists(),
+        "the dependency-model emit must NOT vendor a runtime tree into the user crate",
+    );
+    let manifest =
+        std::fs::read_to_string(out.join("Cargo.toml")).expect("emitted Cargo.toml must exist");
+    assert!(
+        manifest.contains("package = \"ipe-runtime-rust\""),
+        "the manifest must declare the runtime as a path dependency; got:\n{manifest}",
     );
 }
 

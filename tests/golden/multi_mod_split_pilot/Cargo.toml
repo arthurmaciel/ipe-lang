@@ -4,59 +4,18 @@ version = "0.1.0"
 edition = "2024"
 
 [features]
-default = ["tokio", "json", "db"]
-tokio = []
-crypto = []
-json = []
-db = []
-web = []
-redis_store = []
-webview = []
-tui = []
-websocket_client = []
-# Gates the IANA-zone calendar surface of the always-declared `time` runtime
-# module (the `chrono-tz`-backed helpers). Promoted into `default` and paired
-# with the `chrono-tz` dependency only for a program that reaches an `Ipe.Time`
-# kernel; a program that uses no Time kernel keeps it off and drops the crate.
-time = []
-# Declared but inert on native targets: the vendored runtime gates its browser
-# sink on `cfg(all(target_arch = "wasm32", feature = "wasm-client"))`. Declaring
-# the feature keeps rustc's check-cfg quiet without pulling any wasm glue (only
-# a wasm32 build ever activates it, via the WASM manifest template).
-wasm-client = []
+default = []
 alloc_dlmalloc = ["dep:dlmalloc"]
 alloc_mimalloc = ["dep:mimalloc"]
 
 [dependencies]
-tokio = { version = "1", features = ["rt", "rt-multi-thread", "macros", "time"] }
 dlmalloc = { version = "0.2", features = ["global"], optional = true }
 mimalloc = { version = "0.1", optional = true, default-features = false }
-serde_json = "1"
-sha2 = "0.10"
-serde = { version = "1", features = ["derive"] }
-serde_urlencoded = "0.7"
-regex = "1"
-unicode-general-category = "1"
-base64 = "0.22"
-hex = "0.4"
-percent-encoding = "2"
-chrono = "0.4"
-rust_decimal = { version = "1", features = ["serde"] }
-hmac = "0.12"
-subtle = "2"
-zeroize = "1"
-getrandom = "0.2"
-uuid = { version = "1", features = ["v4", "v7"] }
-bcrypt = "0.17"
-futures-util = "0.3"
-
-# Unix-only: `Io.readSecret` toggles terminal echo via termios (tcgetattr /
-# tcsetattr / isatty) in the vendored runtime's `io` module.
-[target.'cfg(unix)'.dependencies]
-libc = "0.2"
-
-sqlx = { version = "0.8", features = ["runtime-tokio-rustls", "sqlite"] }
-bincode = "1"
+# The Ipê runtime, provided by the Ipê toolchain at the resolved path below.
+# This crate is NOT relocatable: `cargo build` outside a machine whose Ipê
+# toolchain provides that path fails with cargo's own missing-path-dependency
+# error. It is a build artifact, not a source distribution.
+ipe_runtime = { package = "ipe-runtime-rust", path = "__IPE_RUNTIME_PATH__", default-features = false, features = ["json", "async", "db-sqlite"] }
 
 [profile.dev]
 debug = 0
