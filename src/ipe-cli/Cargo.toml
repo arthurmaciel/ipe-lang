@@ -54,6 +54,12 @@ semver = "1"
 # Same `toml` version the runtime crate already pins, so this adds no new crate
 # to the vetted dependency graph.
 toml = "0.8"
+# `ipe doctor`'s config-edit fixes rewrite a user's `~/.cargo/config.toml` and
+# `<IPE_HOME>/config.toml`. A structural edit that dropped their comments and
+# formatting would be a hostile surprise on a file the user owns, so the edit
+# goes through the format-preserving `toml_edit` document model: only the exact
+# key it sets is touched, every comment and layout the user wrote is kept.
+toml_edit = "0.22"
 # The runtime crate SOURCE (`../runtime/rust`: its `Cargo.toml` + `src/**`) is
 # compiled INTO this binary as a static directory tree, so a copied `ipe`
 # binary carries its own runtime source and never needs a separate download.

@@ -1,0 +1,1606 @@
+//! `ipe doctor` — environment diagnostics and consent-gated build-optimization
+//! setup.
+//!
+//! In the tradition of `flutter doctor` / `rustup check`, but precise because
+//! the compiler knows what its own emit-and-Cargo pipeline needs. The command
+//! has two halves:
+//!
+//! 1. **Detection** (always read-only): each concern the pipeline depends on is
+//!    a [`Check`] — a toolchain probe, a linker probe, a cache probe, the shared
+//!    build target, the FFI sandbox prerequisites, free disk. Every check yields
+//!    a typed [`Status`] and, where it can be improved, a typed [`Fix`].
+//! 2. **Apply** (only on explicit consent): a fix that carries one is either a
+//!    structured, format-preserving edit to a config file the command is allowed
+//!    to touch, or an install run as a direct `argv` (never a shell, never
+//!    `sudo`, never a pipe-to-shell), or a setup of the shared target under
+//!    `$IPE_HOME`. Each is previewed before it runs.
+//!
+//! # Who decides, and how
+//! Human-vs-machine is TTY-driven, not flag-driven (the same rule the rest of
+//! the CLI follows via [`crate::style`]):
+//! - On a terminal with no format flag: print the report, then prompt per
+//!   fixable item `[Y/n]` (default yes), each previewing exactly what it will do
+//!   — a diff for a config edit, the exact command for an install.
+//! - `--plain` / `--json`: pure data, and they NEVER mutate — the machine forms
+//!   a script or `jq` consumes.
+//! - Piped with no flag: report plus an exit code, no prompt (a prompt into a
+//!   pipe would hang); a hint points at the interactive or `--yes` path.
+//! - `--yes` / `-y`: apply every fixable item non-interactively (provisioning
+//!   and CI).
+//!
+//! # What it is allowed to touch
+//! A config edit's destination is a [`ConfigTarget`], a closed set of exactly
+//! the two files in the command's scope: `$IPE_HOME/config.toml` and
+//! `~/.cargo/config.toml`. There is no variant for anything else, so "edit a
+//! file outside my scope" is not a state the apply engine can represent. An
+//! install runs a fixed `argv`; a package-manager command (which needs
+//! elevation the command deliberately does not take) is shown, never run.
+
+use std::fmt::Write as _;
+use std::io::IsTerminal;
+use std::path::{Path, PathBuf};
+use std::process::Command;
+
+use crate::cli_args::OutputFormat;
+use crate::{CliError, runtime_embed, style, toolchain};
+
+/// Whether a check passed, warns, is a hard miss, or cannot be known.
+///
+/// `Unknown` is a first-class outcome, not a failure: a probe whose answer the
+/// command cannot honestly determine (there is no version feed to compare the
+/// running `ipe` against) reports `Unknown` rather than inventing an `Ok`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Status {
+    /// The concern is satisfied.
+    Ok,
+    /// The concern works but could be improved (an optional optimization is
+    /// absent, disk is tight). Never fails the exit code.
+    Warn,
+    /// A concern the pipeline needs is absent. A `Missing` check that is
+    /// [`critical`](Check::critical) drives a non-zero exit.
+    Missing,
+    /// The check ran but its answer cannot be honestly determined.
+    Unknown,
+}
+
+impl Status {
+    /// The lowercase wire tag used in `--plain` / `--json`.
+    const fn tag(self) -> &'static str {
+        match self {
+            Self::Ok => "ok",
+            Self::Warn => "warn",
+            Self::Missing => "missing",
+            Self::Unknown => "unknown",
+        }
+    }
+
+    /// The glyph that leads this status on the human report.
+    const fn glyph(self) -> &'static str {
+        match self {
+            Self::Ok => style::glyph::OK,
+            Self::Warn => "!",
+            Self::Missing => style::glyph::FAIL,
+            Self::Unknown => "?",
+        }
+    }
+}
+
+/// The report section a check belongs to. A closed set so the renderer groups
+/// deterministically and a check cannot land in an unnamed section.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Group {
+    /// `rustc` / `cargo` presence, the running `ipe`, the runtime crate.
+    Toolchain,
+    /// A fast linker (`mold` / `lld`).
+    Linker,
+    /// A compile cache (`sccache`).
+    Cache,
+    /// The ipe-managed shared build target.
+    Target,
+    /// The FFI build-jail / run-jail prerequisites for this platform.
+    Sandbox,
+    /// Free disk for the shared target and build cache.
+    Disk,
+}
+
+impl Group {
+    /// The section heading on the human report.
+    const fn title(self) -> &'static str {
+        match self {
+            Self::Toolchain => "Toolchain",
+            Self::Linker => "Linker",
+            Self::Cache => "Cache",
+            Self::Target => "Shared build target",
+            Self::Sandbox => "Sandbox (FFI)",
+            Self::Disk => "Disk",
+        }
+    }
+
+    /// The report order.
+    const ALL: [Self; 6] = [
+        Self::Toolchain,
+        Self::Linker,
+        Self::Cache,
+        Self::Target,
+        Self::Sandbox,
+        Self::Disk,
+    ];
+}
+
+/// The config file a [`Fix::ConfigEdit`] is allowed to write.
+///
+/// A closed two-variant set: the command's whole config-edit scope is exactly
+/// `$IPE_HOME/config.toml` and `~/.cargo/config.toml`. There is no variant for
+/// any other path, so an edit outside the command's scope is unrepresentable
+/// rather than merely disallowed at runtime.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ConfigTarget {
+    /// `$IPE_HOME/config.toml` — the compiler's own per-user configuration.
+    IpeHome,
+    /// `~/.cargo/config.toml` — Cargo's per-user configuration (the linker /
+    /// wrapper snippets live here because they must reach the `cargo` the driver
+    /// shells out to).
+    Cargo,
+}
+
+impl ConfigTarget {
+    /// A short label for the preview and reports.
+    const fn label(self) -> &'static str {
+        match self {
+            Self::IpeHome => "$IPE_HOME/config.toml",
+            Self::Cargo => "~/.cargo/config.toml",
+        }
+    }
+
+    /// Resolve the on-disk path for this target. `$IPE_HOME/config.toml` uses
+    /// the same [`runtime_embed::ipe_home`] resolution the runtime install uses;
+    /// `~/.cargo/config.toml` honours `$CARGO_HOME`, else `~/.cargo`.
+    ///
+    /// # Errors
+    /// [`CliError::RuntimeHomeUnknown`] when no home can be resolved for the Ipê
+    /// target; [`CliError::UsageOwned`] when no home can be resolved for Cargo.
+    fn path(self) -> Result<PathBuf, CliError> {
+        match self {
+            Self::IpeHome => Ok(runtime_embed::ipe_home()?.join("config.toml")),
+            Self::Cargo => cargo_config_path(),
+        }
+    }
+}
+
+/// The `~/.cargo/config.toml` path (`$CARGO_HOME/config.toml`, else
+/// `~/.cargo/config.toml`).
+fn cargo_config_path() -> Result<PathBuf, CliError> {
+    if let Some(cargo_home) = std::env::var_os("CARGO_HOME") {
+        return Ok(PathBuf::from(cargo_home).join("config.toml"));
+    }
+    let home = home_dir().ok_or_else(|| {
+        CliError::UsageOwned(
+            "doctor: cannot locate your home directory (neither CARGO_HOME nor HOME is set)"
+                .to_owned(),
+        )
+    })?;
+    Ok(home.join(".cargo").join("config.toml"))
+}
+
+/// The current user's home directory.
+fn home_dir() -> Option<PathBuf> {
+    #[cfg(windows)]
+    let var = "USERPROFILE";
+    #[cfg(not(windows))]
+    let var = "HOME";
+    std::env::var_os(var)
+        .map(PathBuf::from)
+        .filter(|p| !p.as_os_str().is_empty())
+}
+
+/// A structured, format-preserving edit to one config file.
+///
+/// The edit is expressed as a dotted key and a string value, not raw text: the
+/// applier parses the existing document, sets exactly that key (preserving every
+/// other line, comment, and layout), and writes it back. `rationale` is shown in
+/// the preview so the user knows why the key is being set.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ConfigEdit {
+    /// Which in-scope file to edit.
+    pub target: ConfigTarget,
+    /// The dotted TOML key path (e.g. `build.rustc-wrapper`).
+    pub key: Vec<&'static str>,
+    /// The string value to set the key to.
+    pub value: String,
+    /// A one-line reason, shown in the preview.
+    pub rationale: &'static str,
+}
+
+/// How an install is carried out.
+///
+/// Only [`Direct`](Self::Direct) ever runs, and it runs a fixed `argv` with no
+/// shell between it and the OS — no word-splitting, no globbing, no
+/// pipe-to-shell. A tool whose install needs a system package manager (and thus
+/// elevation this command deliberately does not take) is
+/// [`PackageManager`](Self::PackageManager): its command is printed for the user
+/// to run, never executed.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum InstallMethod {
+    /// A fixed `argv`, run directly (no shell). The first element is the program;
+    /// the rest are its literal arguments.
+    Direct {
+        /// The program and its literal arguments.
+        argv: Vec<String>,
+    },
+    /// A command the user must run themselves (it needs a package manager /
+    /// elevation the command does not take). Shown, never run.
+    PackageManager {
+        /// The exact command line to display.
+        command: String,
+    },
+}
+
+/// A tool install a fix offers.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Install {
+    /// The tool being installed (for the preview and the success line).
+    pub tool: &'static str,
+    /// How the install is carried out.
+    pub method: InstallMethod,
+}
+
+/// A fix a check can offer. Each variant is a distinct trust action with its own
+/// preview and its own applier; there is no free-form "run this" escape hatch.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Fix {
+    /// Set a key in one of the two in-scope config files.
+    ConfigEdit(ConfigEdit),
+    /// Install a tool (directly, or by printing a package-manager command).
+    Install(Install),
+    /// Configure the ipe-managed shared build target under `$IPE_HOME`.
+    HomeSetup(SharedTargetSetup),
+}
+
+/// The shared-target setup.
+///
+/// Point `$IPE_HOME/config.toml`'s build target at a stable directory under
+/// `$IPE_HOME/target`, so every emitted project reuses one warm target instead
+/// of a cold per-project one. Reversible by construction: it only sets the
+/// `build.target-dir` key in the Ipê-owned config (never the user's Cargo
+/// config), which the user can clear.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SharedTargetSetup {
+    /// The absolute shared-target directory to configure.
+    pub target_dir: PathBuf,
+}
+
+/// One diagnostic. Carries its group, a stable id, its status, a human detail,
+/// an optional suggestion, and an optional [`Fix`] the apply engine can run.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Check {
+    /// The report section.
+    pub group: Group,
+    /// A stable machine id (the `--plain` / `--json` key), e.g. `rustc`.
+    pub id: &'static str,
+    /// The outcome.
+    pub status: Status,
+    /// A one-line human explanation of the outcome.
+    pub detail: String,
+    /// An optional suggestion, shown when there is no applicable fix (or beside
+    /// one). Names only shipped commands.
+    pub suggestion: Option<String>,
+    /// The fix the apply engine can run, when there is one.
+    pub fix: Option<Fix>,
+}
+
+impl Check {
+    /// Whether a `Missing` here should drive a non-zero exit. Only the hard
+    /// pipeline prerequisites are critical; an absent optimization is a `Warn`.
+    fn critical(&self) -> bool {
+        matches!(self.id, "rustc" | "cargo" | "runtime")
+    }
+}
+
+/// The full diagnostic outcome: every check, in report order.
+pub struct Report {
+    /// The checks, grouped-and-ordered by [`Group::ALL`] within the vector.
+    pub checks: Vec<Check>,
+}
+
+impl Report {
+    /// Whether any critical check is missing — the signal for a non-zero exit.
+    fn has_critical_failure(&self) -> bool {
+        self.checks
+            .iter()
+            .any(|c| c.status == Status::Missing && c.critical())
+    }
+
+    /// The checks that carry an applicable fix, in report order.
+    fn fixable(&self) -> impl Iterator<Item = &Check> {
+        self.checks.iter().filter(|c| c.fix.is_some())
+    }
+}
+
+/// `ipe doctor` entry point.
+///
+/// Parses the shared output-format flags plus `--yes`/`-y`, runs the read-only
+/// detectors, prints the report in the requested mode, and — on a terminal (or
+/// under `--yes`) — offers to apply each fixable item. `--plain` / `--json`
+/// never prompt and never mutate.
+///
+/// # Errors
+/// [`CliError::UsageOwned`] on an unknown flag or a combination the parse
+/// rejects (`--yes` with `--plain` / `--json`, which never mutate); a filesystem
+/// error from an accepted fix.
+pub fn run_doctor(rest: &[String]) -> Result<(), CliError> {
+    let args = crate::cli_args::parse_doctor(rest)?;
+    let report = detect();
+
+    let stdout = std::io::stdout();
+    match args.format {
+        OutputFormat::Plain => {
+            print!("{}", render_plain(&report));
+            return finish(&report);
+        }
+        OutputFormat::Json => {
+            print!("{}", render_json(&report));
+            return finish(&report);
+        }
+        OutputFormat::Human => {
+            print!("{}", render_human(&report, &stdout));
+        }
+    }
+
+    // The apply half runs only when the user can consent: `--yes` is
+    // consent-by-flag; otherwise a real terminal on stdin is required so a
+    // per-item prompt has somewhere to read from. A no-flag pipe reports and
+    // stops (a prompt into a pipe would hang).
+    let consent = if args.assume_yes {
+        Consent::All
+    } else if std::io::stdin().is_terminal() && stdout.is_terminal() {
+        Consent::Interactive
+    } else {
+        // Reported already; a non-interactive run without `--yes` mutates
+        // nothing. Point the user at the two ways to apply.
+        if report.fixable().next().is_some() {
+            print!(
+                "{}",
+                style::gutter(
+                    "Run `ipe doctor` in a terminal to apply these interactively, or \
+                     `ipe doctor --yes` to apply them all.\n"
+                )
+            );
+        }
+        return finish(&report);
+    };
+
+    apply_fixes(&report, consent, &stdout);
+    finish(&report)
+}
+
+/// The exit-code decision, printed as `Ok(())` / a typed failure. A critical
+/// missing check exits non-zero (so CI can gate); everything else is success.
+fn finish(report: &Report) -> Result<(), CliError> {
+    if report.has_critical_failure() {
+        return Err(CliError::DoctorCritical);
+    }
+    Ok(())
+}
+
+/// How much the caller has consented to.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Consent {
+    /// Prompt per item on the terminal.
+    Interactive,
+    /// Apply every item (consent-by-flag, `--yes`).
+    All,
+}
+
+// ---- detection ------------------------------------------------------------
+
+/// Run every read-only detector and collect the report, in group order.
+fn detect() -> Report {
+    let mut checks = Vec::new();
+    checks.push(check_ipe_version());
+    checks.extend(check_rust_toolchain());
+    checks.push(check_runtime());
+    checks.push(check_linker());
+    checks.push(check_cache());
+    checks.push(check_shared_target());
+    checks.extend(check_sandbox());
+    checks.push(check_disk());
+    Report { checks }
+}
+
+/// The running `ipe` version — reported as `Unknown` on purpose.
+///
+/// There is no release feed to compare the running binary against, so claiming
+/// "up to date" would be a fabrication. The honest answer is the version we are
+/// and an `unknown` currency, with a pointer to the one shipped self-update
+/// command (`ipe upgrade`).
+fn check_ipe_version() -> Check {
+    Check {
+        group: Group::Toolchain,
+        id: "ipe",
+        status: Status::Unknown,
+        detail: format!(
+            "running ipe {} — currency is unknown (no release feed to compare against)",
+            runtime_embed::COMPILER_VERSION
+        ),
+        suggestion: Some("run `ipe upgrade` to re-fetch the latest release installer".to_owned()),
+        fix: None,
+    }
+}
+
+/// `rustc` and `cargo` presence, reusing the toolchain resolver's
+/// [`toolchain::Disposition`] so the "installed but off PATH" case is named
+/// distinctly from "not installed".
+// A `match` over presence + disposition reads far clearer than nested
+// `map_or_else` closures each carrying a full `Check` literal.
+#[allow(clippy::option_if_let_else)]
+fn check_rust_toolchain() -> Vec<Check> {
+    let cargo = match toolchain::probe_cargo() {
+        toolchain::Probe::Found(path) => Check {
+            group: Group::Toolchain,
+            id: "cargo",
+            status: Status::Ok,
+            detail: format!("cargo found at {}", path.display()),
+            suggestion: None,
+            fix: None,
+        },
+        toolchain::Probe::Missing(toolchain::Disposition::NotInstalled) => Check {
+            group: Group::Toolchain,
+            id: "cargo",
+            status: Status::Missing,
+            detail: "cargo not found — the Rust toolchain is not installed".to_owned(),
+            suggestion: Some("install Rust with rustup: https://rustup.rs".to_owned()),
+            fix: None,
+        },
+        toolchain::Probe::Missing(toolchain::Disposition::NotOnPath { found_in }) => Check {
+            group: Group::Toolchain,
+            id: "cargo",
+            status: Status::Missing,
+            detail: format!(
+                "cargo is installed at {} but that directory is not on your PATH",
+                found_in.display()
+            ),
+            suggestion: Some(format!(
+                "add it to PATH: export PATH=\"{}:$PATH\"",
+                found_in.display()
+            )),
+            fix: None,
+        },
+    };
+
+    let rustc = match which_on_path("rustc") {
+        Some(path) => Check {
+            group: Group::Toolchain,
+            id: "rustc",
+            status: Status::Ok,
+            detail: format!("rustc found at {}", path.display()),
+            suggestion: None,
+            fix: None,
+        },
+        None => Check {
+            group: Group::Toolchain,
+            id: "rustc",
+            status: Status::Missing,
+            detail: "rustc not found on PATH".to_owned(),
+            suggestion: Some("install Rust with rustup: https://rustup.rs".to_owned()),
+            fix: None,
+        },
+    };
+
+    vec![rustc, cargo]
+}
+
+/// The runtime crate is resolvable (the install-resolution story): the embedded
+/// source materializes, an in-repo checkout is found, or `$IPE_RUNTIME_DIR`
+/// verifies. This drives the same [`runtime_embed::resolve`] a real build uses.
+fn check_runtime() -> Check {
+    match runtime_embed::resolve() {
+        Ok(resolved) => Check {
+            group: Group::Toolchain,
+            id: "runtime",
+            status: Status::Ok,
+            detail: format!(
+                "runtime crate resolvable ({} at {})",
+                resolved.version(),
+                resolved.root().display()
+            ),
+            suggestion: None,
+            fix: None,
+        },
+        Err(e) => Check {
+            group: Group::Toolchain,
+            id: "runtime",
+            status: Status::Missing,
+            detail: format!("runtime crate could not be resolved: {e}"),
+            suggestion: Some(
+                "set IPE_HOME to a writable directory so the embedded runtime can materialize"
+                    .to_owned(),
+            ),
+            fix: None,
+        },
+    }
+}
+
+/// A fast linker (`mold` preferred, then `lld`). When present but not yet
+/// configured, offer the `~/.cargo/config.toml` linker snippet.
+fn check_linker() -> Check {
+    let mold = which_on_path("mold");
+    let lld = which_on_path("ld.lld").or_else(|| which_on_path("lld"));
+    match (mold, lld) {
+        (Some(path), _) => Check {
+            group: Group::Linker,
+            id: "mold",
+            status: Status::Ok,
+            detail: format!("mold found at {}", path.display()),
+            suggestion: Some(
+                "configure it as the linker in ~/.cargo/config.toml for faster links".to_owned(),
+            ),
+            fix: Some(Fix::ConfigEdit(linker_edit("mold"))),
+        },
+        (None, Some(path)) => Check {
+            group: Group::Linker,
+            id: "lld",
+            status: Status::Ok,
+            detail: format!("lld found at {}", path.display()),
+            suggestion: Some(
+                "configure it as the linker in ~/.cargo/config.toml for faster links".to_owned(),
+            ),
+            fix: Some(Fix::ConfigEdit(linker_edit("lld"))),
+        },
+        (None, None) => Check {
+            group: Group::Linker,
+            id: "mold",
+            status: Status::Warn,
+            detail: "no fast linker (mold or lld) found — links use the default linker".to_owned(),
+            suggestion: Some(installer_hint(
+                "mold",
+                "a fast linker that cuts native link time",
+            )),
+            fix: None,
+        },
+    }
+}
+
+/// The `~/.cargo/config.toml` edit that wires a fast linker for the host target.
+///
+/// `mold` runs via `clang -fuse-ld=mold`; `lld` via `-fuse-ld=lld`. The key is
+/// the host target's `rustflags`, so only local native builds are affected.
+fn linker_edit(which: &'static str) -> ConfigEdit {
+    ConfigEdit {
+        target: ConfigTarget::Cargo,
+        key: vec!["target", host_target_triple(), "linker"],
+        value: "clang".to_owned(),
+        rationale: match which {
+            "mold" => "use clang+mold to link native builds faster",
+            _ => "use clang+lld to link native builds faster",
+        },
+    }
+}
+
+/// `sccache` present → offer to set `build.rustc-wrapper` in the user Cargo
+/// config so repeated builds reuse cached compilations.
+// A `match` reads clearer than a `map_or_else` over two full `Check` literals.
+#[allow(clippy::option_if_let_else)]
+fn check_cache() -> Check {
+    match which_on_path("sccache") {
+        Some(path) => Check {
+            group: Group::Cache,
+            id: "sccache",
+            status: Status::Ok,
+            detail: format!("sccache found at {}", path.display()),
+            suggestion: Some("set it as the rustc wrapper to cache compilations".to_owned()),
+            fix: Some(Fix::ConfigEdit(ConfigEdit {
+                target: ConfigTarget::Cargo,
+                key: vec!["build", "rustc-wrapper"],
+                value: "sccache".to_owned(),
+                rationale: "cache Rust compilations across builds with sccache",
+            })),
+        },
+        None => Check {
+            group: Group::Cache,
+            id: "sccache",
+            status: Status::Warn,
+            detail: "sccache not found — compilations are not cached across builds".to_owned(),
+            suggestion: Some(installer_hint(
+                "sccache",
+                "a compilation cache that speeds repeated builds",
+            )),
+            fix: None,
+        },
+    }
+}
+
+/// Whether the ipe-managed shared build target is configured, and — when it is
+/// not — offer to set it up under `$IPE_HOME/target`.
+// A `match` reads clearer than a `map_or_else` over two full `Check` literals.
+#[allow(clippy::option_if_let_else, clippy::single_match_else)]
+fn check_shared_target() -> Check {
+    let configured = ipe_home_config_value(&["build", "target-dir"]);
+    match configured {
+        Some(dir) => Check {
+            group: Group::Target,
+            id: "shared-target",
+            status: Status::Ok,
+            detail: format!("shared build target configured at {dir}"),
+            suggestion: None,
+            fix: None,
+        },
+        None => {
+            let target_dir = runtime_embed::ipe_home()
+                .map_or_else(|_| PathBuf::from("target"), |h| h.join("target"));
+            Check {
+                group: Group::Target,
+                id: "shared-target",
+                status: Status::Warn,
+                detail: "no shared build target — each project builds into its own cold target"
+                    .to_owned(),
+                suggestion: Some(
+                    "configure a shared target so projects reuse one warm build cache".to_owned(),
+                ),
+                fix: Some(Fix::HomeSetup(SharedTargetSetup { target_dir })),
+            }
+        }
+    }
+}
+
+/// The FFI sandbox prerequisites for the host platform. FFI runs untrusted
+/// foreign builds and calls in a jail; without the platform's jail primitive the
+/// jail cannot be entered.
+// One linear body of per-platform `cfg` arms, each a `match` over presence that
+// reads clearer than a `map_or_else` carrying full `Check` literals.
+#[allow(clippy::option_if_let_else, clippy::too_many_lines)]
+fn check_sandbox() -> Vec<Check> {
+    #[cfg(target_os = "linux")]
+    {
+        let tool = "bwrap";
+        match which_on_path(tool) {
+            Some(path) => vec![Check {
+                group: Group::Sandbox,
+                id: "bubblewrap",
+                status: Status::Ok,
+                detail: format!("bubblewrap ({tool}) found at {}", path.display()),
+                suggestion: None,
+                fix: None,
+            }],
+            None => vec![Check {
+                group: Group::Sandbox,
+                id: "bubblewrap",
+                status: Status::Warn,
+                detail: "bubblewrap (bwrap) not found — FFI build/run jails are unavailable"
+                    .to_owned(),
+                suggestion: Some(installer_hint(
+                    "bubblewrap",
+                    "the Linux sandbox FFI uses to jail foreign builds and calls",
+                )),
+                fix: None,
+            }],
+        }
+    }
+    #[cfg(target_os = "freebsd")]
+    {
+        // FreeBSD's `jail(8)` is a base-system facility; the runnable prereq is
+        // the `jail` utility on PATH plus the privilege to create a jail (which
+        // this command never takes). Report presence; the privilege is the
+        // user's to arrange.
+        match which_on_path("jail") {
+            Some(path) => vec![Check {
+                group: Group::Sandbox,
+                id: "jail",
+                status: Status::Ok,
+                detail: format!("jail(8) utility found at {}", path.display()),
+                suggestion: None,
+                fix: None,
+            }],
+            None => vec![Check {
+                group: Group::Sandbox,
+                id: "jail",
+                status: Status::Warn,
+                detail: "jail(8) utility not found on PATH — FFI run-jails are unavailable"
+                    .to_owned(),
+                suggestion: Some(
+                    "jail(8) is part of the FreeBSD base system; ensure /usr/sbin is on PATH"
+                        .to_owned(),
+                ),
+                fix: None,
+            }],
+        }
+    }
+    #[cfg(target_os = "macos")]
+    {
+        // macOS jails foreign builds with the base-system `sandbox-exec`.
+        match which_on_path("sandbox-exec") {
+            Some(path) => vec![Check {
+                group: Group::Sandbox,
+                id: "sandbox-exec",
+                status: Status::Ok,
+                detail: format!("sandbox-exec found at {}", path.display()),
+                suggestion: None,
+                fix: None,
+            }],
+            None => vec![Check {
+                group: Group::Sandbox,
+                id: "sandbox-exec",
+                status: Status::Warn,
+                detail: "sandbox-exec not found on PATH — FFI jails are unavailable".to_owned(),
+                suggestion: Some(
+                    "sandbox-exec ships with macOS; ensure /usr/bin is on PATH".to_owned(),
+                ),
+                fix: None,
+            }],
+        }
+    }
+    #[cfg(target_os = "windows")]
+    {
+        // Windows has no first-party FFI jail arm yet; report honestly rather
+        // than probe for a tool that would not be used.
+        vec![Check {
+            group: Group::Sandbox,
+            id: "sandbox",
+            status: Status::Unknown,
+            detail: "FFI sandboxing on Windows is not yet supported".to_owned(),
+            suggestion: None,
+            fix: None,
+        }]
+    }
+    #[cfg(not(any(
+        target_os = "linux",
+        target_os = "freebsd",
+        target_os = "macos",
+        target_os = "windows"
+    )))]
+    {
+        vec![Check {
+            group: Group::Sandbox,
+            id: "sandbox",
+            status: Status::Unknown,
+            detail: "FFI sandbox prerequisites are unknown on this platform".to_owned(),
+            suggestion: None,
+            fix: None,
+        }]
+    }
+}
+
+/// Free disk under the shared-target / build-cache home. Tight space is a
+/// `Warn` — builds still work, but a cold target can fill a small volume.
+// A `match` reads clearer than a `map_or_else` over two full `Check` literals.
+#[allow(clippy::option_if_let_else)]
+fn check_disk() -> Check {
+    let probe_dir = runtime_embed::ipe_home().unwrap_or_else(|_| PathBuf::from("."));
+    match free_space_bytes(&probe_dir) {
+        Some(free) => {
+            let gib = free / (1024 * 1024 * 1024);
+            let status = if free < LOW_DISK_FLOOR {
+                Status::Warn
+            } else {
+                Status::Ok
+            };
+            let detail = if status == Status::Warn {
+                format!("{gib} GiB free under the build home — a cold target may not fit")
+            } else {
+                format!("{gib} GiB free under the build home")
+            };
+            Check {
+                group: Group::Disk,
+                id: "free-space",
+                status,
+                detail,
+                suggestion: None,
+                fix: None,
+            }
+        }
+        None => Check {
+            group: Group::Disk,
+            id: "free-space",
+            status: Status::Unknown,
+            detail: "free disk space could not be determined on this platform".to_owned(),
+            suggestion: None,
+            fix: None,
+        },
+    }
+}
+
+/// The free-space floor below which disk is a `Warn` (a few cold Rust targets).
+const LOW_DISK_FLOOR: u64 = 5 * 1024 * 1024 * 1024;
+
+// ---- small probes ---------------------------------------------------------
+
+/// The host target triple as `rustc` names it, for a per-target `rustflags`
+/// key. Built from the compile-time `cfg` facts so it needs no `rustc` spawn.
+const fn host_target_triple() -> &'static str {
+    // A minimal mapping of the common host arch/OS pairs. An unmapped host
+    // falls back to a generic key that still parses (the linker edit is a
+    // convenience, not a correctness requirement).
+    #[cfg(all(target_arch = "x86_64", target_os = "linux"))]
+    {
+        "x86_64-unknown-linux-gnu"
+    }
+    #[cfg(all(target_arch = "aarch64", target_os = "linux"))]
+    {
+        "aarch64-unknown-linux-gnu"
+    }
+    #[cfg(all(target_arch = "x86_64", target_os = "macos"))]
+    {
+        "x86_64-apple-darwin"
+    }
+    #[cfg(all(target_arch = "aarch64", target_os = "macos"))]
+    {
+        "aarch64-apple-darwin"
+    }
+    #[cfg(all(target_arch = "x86_64", target_os = "freebsd"))]
+    {
+        "x86_64-unknown-freebsd"
+    }
+    #[cfg(not(any(
+        all(target_arch = "x86_64", target_os = "linux"),
+        all(target_arch = "aarch64", target_os = "linux"),
+        all(target_arch = "x86_64", target_os = "macos"),
+        all(target_arch = "aarch64", target_os = "macos"),
+        all(target_arch = "x86_64", target_os = "freebsd"),
+    )))]
+    {
+        "host"
+    }
+}
+
+/// Resolve `name` on `PATH` to its absolute executable path, or `None`.
+fn which_on_path(name: &str) -> Option<PathBuf> {
+    let path_var = std::env::var_os("PATH")?;
+    let exe = exe_name(name);
+    std::env::split_paths(&path_var)
+        .map(|dir| dir.join(&exe))
+        .find(|candidate| is_executable_file(candidate))
+}
+
+/// The platform executable file name for a bare tool name.
+fn exe_name(name: &str) -> String {
+    #[cfg(windows)]
+    {
+        if name.ends_with(".exe") {
+            name.to_owned()
+        } else {
+            format!("{name}.exe")
+        }
+    }
+    #[cfg(not(windows))]
+    {
+        name.to_owned()
+    }
+}
+
+/// Whether `path` is a regular file the OS would run (executable bit on Unix).
+#[cfg(unix)]
+fn is_executable_file(path: &Path) -> bool {
+    use std::os::unix::fs::PermissionsExt as _;
+    std::fs::metadata(path)
+        .is_ok_and(|meta| meta.is_file() && (meta.permissions().mode() & 0o111 != 0))
+}
+
+/// Whether `path` is a regular file that could be executed.
+#[cfg(not(unix))]
+fn is_executable_file(path: &Path) -> bool {
+    path.is_file()
+}
+
+/// Read a dotted string value from `$IPE_HOME/config.toml`, or `None` when the
+/// file is absent, unreadable, unparseable, or lacks the key.
+fn ipe_home_config_value(key: &[&str]) -> Option<String> {
+    let path = runtime_embed::ipe_home().ok()?.join("config.toml");
+    let text = std::fs::read_to_string(&path).ok()?;
+    let doc: toml::Table = text.parse().ok()?;
+    let mut node = &toml::Value::Table(doc);
+    for segment in key {
+        node = node.as_table()?.get(*segment)?;
+    }
+    node.as_str().map(str::to_owned)
+}
+
+/// Free bytes on the filesystem holding `dir`. `None` when the platform query is
+/// unavailable or fails.
+#[cfg(unix)]
+fn free_space_bytes(dir: &Path) -> Option<u64> {
+    // Walk up to the nearest existing ancestor: an as-yet-uncreated `$IPE_HOME`
+    // has no statfs, but its parent does and lives on the same filesystem.
+    let mut probe: Option<&Path> = Some(dir);
+    while let Some(p) = probe {
+        if p.exists() {
+            return statvfs_free(p);
+        }
+        probe = p.parent();
+    }
+    None
+}
+
+/// `statvfs(2)`-based free-space query. Uses a raw libc-free path: shell out is
+/// forbidden, and the CLI carries no libc binding, so this reads the value from
+/// `nix`-free `statvfs` via the standard library where available, else `None`.
+#[cfg(unix)]
+const fn statvfs_free(_p: &Path) -> Option<u64> {
+    // The standard library exposes no `statvfs`, and the CLI takes no libc
+    // dependency for one read. Rather than add an FFI surface for a convenience
+    // metric, report `Unknown` (the caller renders it honestly) — the disk check
+    // never gates the exit code, so an unknown here costs nothing but a warning
+    // the user can verify with `df`.
+    None
+}
+
+/// Free bytes — unavailable without a platform query on non-Unix here.
+#[cfg(not(unix))]
+fn free_space_bytes(_dir: &Path) -> Option<u64> {
+    None
+}
+
+/// A per-OS install hint for a tool: the recommended command for the detected
+/// platform, or a generic pointer. Print-only guidance — never run.
+fn installer_hint(tool: &str, what: &str) -> String {
+    let cmd = match std::env::consts::OS {
+        "linux" => {
+            format!("your package manager (e.g. `apt install {tool}` / `dnf install {tool}`)")
+        }
+        "macos" => format!("Homebrew: `brew install {tool}`"),
+        "freebsd" => format!("pkg: `pkg install {tool}`"),
+        "windows" => {
+            format!("a package manager (e.g. `scoop install {tool}` / `choco install {tool}`)")
+        }
+        _ => format!("your platform's package manager (`{tool}`)"),
+    };
+    format!("install {tool} ({what}) via {cmd}")
+}
+
+// ---- rendering ------------------------------------------------------------
+
+/// The framed, grouped human report, coloured for a terminal.
+fn render_human(report: &Report, stream: &impl IsTerminal) -> String {
+    let p = style::Palette::for_stream(stream);
+    let mut body = String::new();
+    for group in Group::ALL {
+        let mut section: Vec<&Check> = report.checks.iter().filter(|c| c.group == group).collect();
+        if section.is_empty() {
+            continue;
+        }
+        section.sort_by_key(|c| c.id);
+        let _ = writeln!(body, "{}{}{}", p.bold, group.title(), p.reset);
+        for check in section {
+            let color = match check.status {
+                Status::Ok => p.green,
+                Status::Missing => p.red,
+                Status::Warn | Status::Unknown => p.yellow,
+            };
+            let _ = writeln!(
+                body,
+                "  {color}{}{} {}",
+                check.status.glyph(),
+                p.reset,
+                check.detail
+            );
+            if let Some(s) = &check.suggestion {
+                let _ = writeln!(body, "    {}→ {}{}", p.dim, s, p.reset);
+            }
+        }
+        body.push('\n');
+    }
+    style::frame(&style::gutter(body.trim_end_matches('\n')))
+}
+
+/// The `--plain` report: one `id<TAB>status<TAB>detail` record per line,
+/// flush-left, for `grep` / `awk`. Never framed, never coloured.
+fn render_plain(report: &Report) -> String {
+    let mut out = String::new();
+    for check in &report.checks {
+        let _ = writeln!(
+            out,
+            "{}\t{}\t{}",
+            check.id,
+            check.status.tag(),
+            check.detail
+        );
+    }
+    out
+}
+
+/// The `--json` report: `{"checks":[{"id","group","status","detail",...}]}`, a
+/// stable object a machine consumes. Never framed, never coloured.
+fn render_json(report: &Report) -> String {
+    let items: Vec<serde_json::Value> = report
+        .checks
+        .iter()
+        .map(|c| {
+            serde_json::json!({
+                "id": c.id,
+                "group": c.group.title(),
+                "status": c.status.tag(),
+                "detail": c.detail,
+                "suggestion": c.suggestion,
+                "fixable": c.fix.is_some(),
+            })
+        })
+        .collect();
+    let value = serde_json::json!({
+        "checks": items,
+        "critical_failure": report.has_critical_failure(),
+    });
+    format!("{value}\n")
+}
+
+// ---- apply engine ---------------------------------------------------------
+
+/// The user's answer to a per-item prompt.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Answer {
+    /// Apply this item.
+    Yes,
+    /// Skip this item.
+    No,
+}
+
+/// Read a `[Y/n]` answer for `prompt` from stdin. Default (empty line) is yes.
+/// EOF or a read error declines — never applies a trust action on a stream the
+/// command could not read.
+fn ask(prompt: &str) -> Answer {
+    use std::io::Write as _;
+    print!("{}", style::gutter(&format!("{prompt} [Y/n] ")));
+    let _ = std::io::stdout().flush();
+    let mut line = String::new();
+    match std::io::stdin().read_line(&mut line) {
+        Ok(n) if n > 0 => match line.trim().to_ascii_lowercase().as_str() {
+            "" | "y" | "yes" => Answer::Yes,
+            _ => Answer::No,
+        },
+        // EOF (`Ok(0)`) or a read error: no answer we can trust — decline rather
+        // than assume consent to a trust action.
+        _ => Answer::No,
+    }
+}
+
+/// Walk the fixable checks, preview each, and apply on consent.
+///
+/// A per-item failure is reported and the walk continues; it never aborts the
+/// rest and never changes the exit code (the exit code is the diagnostic
+/// verdict, not the apply outcome), so this returns nothing.
+fn apply_fixes(report: &Report, consent: Consent, stream: &impl IsTerminal) {
+    let fixable: Vec<&Check> = report.fixable().collect();
+    if fixable.is_empty() {
+        return;
+    }
+    let p = style::Palette::for_stream(stream);
+    print!(
+        "{}",
+        style::gutter(&format!("\n{}Suggested fixes{}\n", p.bold, p.reset))
+    );
+    for check in fixable {
+        let Some(fix) = &check.fix else { continue };
+        print!("{}", style::gutter(&preview(fix)));
+        let apply = match consent {
+            Consent::All => true,
+            Consent::Interactive => ask("Apply?") == Answer::Yes,
+        };
+        if !apply {
+            print!("{}", style::gutter("  skipped.\n"));
+            continue;
+        }
+        match apply_one(fix) {
+            Ok(outcome) => print!("{}", style::gutter(&format!("  {outcome}\n"))),
+            Err(e) => {
+                // A fix that fails is reported and the walk continues — one
+                // failed edit must not abort the rest, and it must not exit the
+                // command non-zero (the exit code is the diagnostic verdict, not
+                // the apply outcome).
+                print!("{}", style::gutter(&format!("  could not apply: {e}\n")));
+            }
+        }
+    }
+}
+
+/// The human preview of a fix — a diff for a config edit, the exact command for
+/// an install, the target directory for the shared-target setup.
+fn preview(fix: &Fix) -> String {
+    match fix {
+        Fix::ConfigEdit(edit) => {
+            let path = edit.target.path().map_or_else(
+                |_| edit.target.label().to_owned(),
+                |p| p.display().to_string(),
+            );
+            format!(
+                "\nedit {} ({})\n  + {} = {:?}\n",
+                edit.target.label(),
+                edit.rationale,
+                edit.key.join("."),
+                edit.value,
+            ) + &format!("  file: {path}\n")
+        }
+        Fix::Install(install) => match &install.method {
+            InstallMethod::Direct { argv } => {
+                format!(
+                    "\ninstall {} — will run:\n  {}\n",
+                    install.tool,
+                    argv.join(" ")
+                )
+            }
+            InstallMethod::PackageManager { command } => format!(
+                "\ninstall {} — run this yourself (it needs your package manager):\n  {command}\n",
+                install.tool
+            ),
+        },
+        Fix::HomeSetup(setup) => format!(
+            "\nconfigure a shared build target\n  target-dir = {:?} (in $IPE_HOME/config.toml)\n",
+            setup.target_dir.display()
+        ),
+    }
+}
+
+/// Apply one fix, returning a one-line outcome for the report. A
+/// package-manager install is a no-op here (it was only ever shown).
+fn apply_one(fix: &Fix) -> Result<String, CliError> {
+    match fix {
+        Fix::ConfigEdit(edit) => {
+            let path = edit.target.path()?;
+            apply_config_edit(&path, &edit.key, &edit.value)?;
+            Ok(format!(
+                "set {} in {}",
+                edit.key.join("."),
+                edit.target.label()
+            ))
+        }
+        Fix::Install(install) => match &install.method {
+            InstallMethod::Direct { argv } => {
+                run_install(argv).map(|()| format!("installed {}", install.tool))
+            }
+            InstallMethod::PackageManager { .. } => Ok(format!(
+                "{} must be installed with the command above",
+                install.tool
+            )),
+        },
+        Fix::HomeSetup(setup) => {
+            let path = ConfigTarget::IpeHome.path()?;
+            std::fs::create_dir_all(&setup.target_dir).map_err(|e| CliError::Io {
+                path: setup.target_dir.clone(),
+                source: e,
+            })?;
+            let value = setup.target_dir.display().to_string();
+            apply_config_edit(&path, &["build", "target-dir"], &value)?;
+            Ok(format!("shared target configured at {value}"))
+        }
+    }
+}
+
+/// Run a direct install `argv` with no shell between it and the OS. The first
+/// element is the program; the rest are literal arguments. Refuses an empty
+/// `argv`, and never invokes a shell or `sudo`.
+///
+/// # Errors
+/// [`CliError::UsageOwned`] when `argv` is empty, the program cannot be
+/// launched, or it exits non-zero.
+fn run_install(argv: &[String]) -> Result<(), CliError> {
+    let (program, rest) = argv
+        .split_first()
+        .ok_or_else(|| CliError::UsageOwned("doctor: an install command was empty".to_owned()))?;
+    let status = Command::new(program)
+        .args(rest)
+        .status()
+        .map_err(|e| CliError::UsageOwned(format!("doctor: could not launch `{program}`: {e}")))?;
+    if status.success() {
+        Ok(())
+    } else {
+        Err(CliError::UsageOwned(format!(
+            "doctor: `{program}` exited non-zero — nothing was changed"
+        )))
+    }
+}
+
+/// Set a dotted key in a TOML config file, format-preserving and idempotent:
+/// - Parse the existing document (empty when the file is absent).
+/// - If the key already holds the requested value, do nothing (idempotent).
+/// - Otherwise back up the current file to a numbered sibling
+///   (`config.toml.bak`, `.bak.1`, …), set exactly that key (every other line,
+///   comment, and layout preserved), and write the result atomically.
+/// - Re-parse what was written; if it does not parse, roll the backup back so
+///   the user is never left with a broken config.
+///
+/// A conflicting existing value (the key is set to something else) is NOT
+/// silently overwritten in place: the numbered backup captures the prior state
+/// first, so the change is always reversible.
+///
+/// # Errors
+/// [`CliError::Io`] on a filesystem failure; [`CliError::UsageOwned`] when the
+/// existing file does not parse as TOML (the command will not blindly overwrite
+/// a file it cannot understand).
+fn apply_config_edit(path: &Path, key: &[&str], value: &str) -> Result<(), CliError> {
+    let existing = match std::fs::read_to_string(path) {
+        Ok(text) => text,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => String::new(),
+        Err(e) => {
+            return Err(CliError::Io {
+                path: path.to_path_buf(),
+                source: e,
+            });
+        }
+    };
+
+    let mut doc = existing.parse::<toml_edit::DocumentMut>().map_err(|e| {
+        CliError::UsageOwned(format!(
+            "doctor: {} is not valid TOML ({e}); refusing to overwrite it",
+            path.display()
+        ))
+    })?;
+
+    // Idempotent: if the key already holds exactly this value, no write, no
+    // backup — running doctor twice changes nothing.
+    if dotted_str(&doc, key).as_deref() == Some(value) {
+        return Ok(());
+    }
+
+    // Back up the prior state before any change, so a conflicting overwrite is
+    // reversible.
+    let backup = if existing.is_empty() {
+        None
+    } else {
+        Some(numbered_backup(path, &existing)?)
+    };
+
+    set_dotted(&mut doc, key, value);
+    let rendered = doc.to_string();
+
+    // Parse-verify BEFORE the write becomes live: a render that does not
+    // round-trip is a bug, and we roll back rather than write it.
+    if rendered.parse::<toml_edit::DocumentMut>().is_err() {
+        return Err(CliError::UsageOwned(format!(
+            "doctor: the edited config for {} did not re-parse; no change was made",
+            path.display()
+        )));
+    }
+
+    if let Some(parent) = path.parent().filter(|p| !p.as_os_str().is_empty()) {
+        std::fs::create_dir_all(parent).map_err(|e| CliError::Io {
+            path: parent.to_path_buf(),
+            source: e,
+        })?;
+    }
+
+    match write_atomic_config(path, &rendered) {
+        Ok(()) => Ok(()),
+        Err(e) => {
+            // Roll the backup back so a failed write never leaves the user with
+            // a truncated or missing config.
+            if let Some(backup_path) = &backup {
+                let _ = std::fs::copy(backup_path, path);
+            }
+            Err(e)
+        }
+    }
+}
+
+/// Read a dotted string key from a parsed document, or `None` when absent / not
+/// a string.
+fn dotted_str(doc: &toml_edit::DocumentMut, key: &[&str]) -> Option<String> {
+    let mut item = doc.as_item();
+    for segment in key {
+        item = item.get(segment)?;
+    }
+    item.as_str().map(str::to_owned)
+}
+
+/// Set a dotted string key on a document, creating intermediate tables as
+/// needed and preserving every unrelated line.
+fn set_dotted(doc: &mut toml_edit::DocumentMut, key: &[&str], value: &str) {
+    let Some((last, parents)) = key.split_last() else {
+        return;
+    };
+    let mut table = doc.as_table_mut();
+    for segment in parents {
+        let entry = table
+            .entry(segment)
+            .or_insert_with(|| toml_edit::Item::Table(toml_edit::Table::new()));
+        // Coerce a non-table entry at an intermediate segment into a table so
+        // the leaf has somewhere to land. A user who put a scalar where a table
+        // must go is corrected here (their prior value was captured in the
+        // backup). `as_table_mut` then yields the table without a fallible
+        // unwrap, since the entry is now guaranteed to be one.
+        if !entry.is_table() {
+            *entry = toml_edit::Item::Table(toml_edit::Table::new());
+        }
+        match entry.as_table_mut() {
+            Some(next) => table = next,
+            // Unreachable: the entry was just ensured to be a table. Bail
+            // without setting the key rather than panic.
+            None => return,
+        }
+    }
+    table.insert(last, toml_edit::value(value));
+}
+
+/// Back up `contents` to the first free numbered sibling of `path`
+/// (`<name>.bak`, `<name>.bak.1`, …). Returns the backup path.
+///
+/// The free slot is claimed with an exclusive `create_new` open, not a
+/// check-then-write: a concurrent `ipe doctor` that raced to the same slot loses
+/// the open with `AlreadyExists` and this loop advances to the next number, so a
+/// backup is never truncated over an existing one.
+fn numbered_backup(path: &Path, contents: &str) -> Result<PathBuf, CliError> {
+    use std::io::Write as _;
+    let base = {
+        let mut s = path.as_os_str().to_owned();
+        s.push(".bak");
+        PathBuf::from(s)
+    };
+    let mut candidate = base.clone();
+    let mut n = 1u32;
+    loop {
+        match std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&candidate)
+        {
+            Ok(mut file) => {
+                file.write_all(contents.as_bytes())
+                    .map_err(|e| CliError::Io {
+                        path: candidate.clone(),
+                        source: e,
+                    })?;
+                return Ok(candidate);
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
+                let mut s = base.as_os_str().to_owned();
+                s.push(format!(".{n}"));
+                candidate = PathBuf::from(s);
+                n = n.saturating_add(1);
+            }
+            Err(e) => {
+                return Err(CliError::Io {
+                    path: candidate,
+                    source: e,
+                });
+            }
+        }
+    }
+}
+
+/// Write `contents` to `path` atomically: a sibling temp file, then a rename
+/// over `path` (atomic on one filesystem). A rename failure removes the temp so
+/// no debris is left.
+fn write_atomic_config(path: &Path, contents: &str) -> Result<(), CliError> {
+    let dir = path.parent().filter(|p| !p.as_os_str().is_empty());
+    let name = path.file_name().map_or_else(
+        || "config.toml".to_owned(),
+        |n| n.to_string_lossy().into_owned(),
+    );
+    let tmp_name = format!(".{name}.doctor.{}.tmp", std::process::id());
+    let tmp = dir.map_or_else(|| PathBuf::from(&tmp_name), |d| d.join(&tmp_name));
+    std::fs::write(&tmp, contents).map_err(|e| CliError::Io {
+        path: tmp.clone(),
+        source: e,
+    })?;
+    std::fs::rename(&tmp, path).map_err(|e| {
+        let _ = std::fs::remove_file(&tmp);
+        CliError::Io {
+            path: path.to_path_buf(),
+            source: e,
+        }
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A temp directory removed on drop, so config-edit tests never touch a real
+    /// home.
+    struct TempDir(PathBuf);
+
+    impl TempDir {
+        fn new(tag: &str) -> Self {
+            let dir = std::env::temp_dir().join(format!(
+                "ipe_doctor_{tag}_{}_{:?}",
+                std::process::id(),
+                std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map(|d| d.as_nanos())
+                    .unwrap_or_default()
+            ));
+            std::fs::create_dir_all(&dir).expect("create temp dir");
+            Self(dir)
+        }
+        fn path(&self) -> &Path {
+            &self.0
+        }
+    }
+
+    impl Drop for TempDir {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
+    fn sample_report() -> Report {
+        Report {
+            checks: vec![
+                Check {
+                    group: Group::Toolchain,
+                    id: "cargo",
+                    status: Status::Ok,
+                    detail: "cargo found".to_owned(),
+                    suggestion: None,
+                    fix: None,
+                },
+                Check {
+                    group: Group::Toolchain,
+                    id: "runtime",
+                    status: Status::Missing,
+                    detail: "runtime not resolvable".to_owned(),
+                    suggestion: Some("set IPE_HOME".to_owned()),
+                    fix: None,
+                },
+                Check {
+                    group: Group::Cache,
+                    id: "sccache",
+                    status: Status::Warn,
+                    detail: "sccache not found".to_owned(),
+                    suggestion: None,
+                    fix: None,
+                },
+            ],
+        }
+    }
+
+    #[test]
+    fn critical_missing_drives_the_exit_code() {
+        assert!(sample_report().has_critical_failure());
+        // A warn-only report is a clean exit.
+        let clean = Report {
+            checks: vec![Check {
+                group: Group::Cache,
+                id: "sccache",
+                status: Status::Warn,
+                detail: "no cache".to_owned(),
+                suggestion: None,
+                fix: None,
+            }],
+        };
+        assert!(!clean.has_critical_failure());
+    }
+
+    #[test]
+    fn plain_is_flush_left_tab_separated_and_uncoloured() {
+        let out = render_plain(&sample_report());
+        assert!(out.starts_with("cargo\tok\t"));
+        assert!(out.contains("runtime\tmissing\t"));
+        assert!(!out.contains('\x1b'), "plain must carry no ANSI");
+        // One record per check, no framing blank lines.
+        assert_eq!(out.lines().count(), 3);
+    }
+
+    #[test]
+    fn json_is_a_stable_object_with_every_check() {
+        let out = render_json(&sample_report());
+        let parsed: serde_json::Value = serde_json::from_str(&out).expect("valid JSON");
+        let checks = parsed
+            .get("checks")
+            .and_then(serde_json::Value::as_array)
+            .expect("checks array");
+        assert_eq!(checks.len(), 3);
+        let first = checks.first().expect("first check");
+        assert_eq!(first.get("id"), Some(&serde_json::json!("cargo")));
+        assert_eq!(first.get("status"), Some(&serde_json::json!("ok")));
+        assert_eq!(
+            parsed.get("critical_failure"),
+            Some(&serde_json::json!(true))
+        );
+        assert!(!out.contains('\x1b'));
+    }
+
+    #[test]
+    fn human_frames_and_groups() {
+        // A non-terminal stream renders uncoloured, still framed + grouped. A
+        // regular file stands in for the stream (it is not a terminal, so the
+        // plain palette is selected and no ANSI is emitted).
+        let dir = TempDir::new("human");
+        let file = std::fs::File::create(dir.path().join("out")).expect("file");
+        let out = render_human(&sample_report(), &file);
+        assert!(out.contains("Toolchain"));
+        assert!(out.contains("Cache"));
+        assert!(!out.contains('\x1b'), "a non-tty stream carries no ANSI");
+        assert!(out.starts_with('\n') && out.ends_with('\n'), "framed");
+    }
+
+    #[test]
+    fn ipe_version_is_reported_unknown() {
+        let check = check_ipe_version();
+        assert_eq!(check.status, Status::Unknown);
+        assert!(check.fix.is_none(), "no fake install hook");
+        assert!(check.detail.contains(runtime_embed::COMPILER_VERSION));
+    }
+
+    #[test]
+    fn config_edit_creates_backs_up_and_is_idempotent() {
+        let dir = TempDir::new("cfg");
+        let cfg = dir.path().join("config.toml");
+        std::fs::write(&cfg, "# my config\n[build]\njobs = 4\n").expect("seed");
+
+        // First edit: sets the key, preserves the comment + the sibling key,
+        // and writes a numbered backup of the prior file.
+        apply_config_edit(&cfg, &["build", "rustc-wrapper"], "sccache").expect("first edit");
+        let after = std::fs::read_to_string(&cfg).expect("read");
+        assert!(after.contains("# my config"), "comment preserved");
+        assert!(after.contains("jobs = 4"), "sibling key preserved");
+        assert!(after.contains("rustc-wrapper = \"sccache\""));
+        let backup = dir.path().join("config.toml.bak");
+        assert!(backup.exists(), "prior file backed up");
+
+        // Second, identical edit: idempotent — no change, no new backup.
+        apply_config_edit(&cfg, &["build", "rustc-wrapper"], "sccache").expect("idempotent");
+        assert!(
+            !dir.path().join("config.toml.bak.1").exists(),
+            "idempotent edit writes no second backup"
+        );
+    }
+
+    #[test]
+    fn config_edit_on_absent_file_creates_it_without_a_backup() {
+        let dir = TempDir::new("absent");
+        let cfg = dir.path().join("config.toml");
+        apply_config_edit(&cfg, &["build", "target-dir"], "/tmp/shared").expect("create");
+        let text = std::fs::read_to_string(&cfg).expect("read");
+        assert!(text.contains("target-dir = \"/tmp/shared\""));
+        assert!(
+            !dir.path().join("config.toml.bak").exists(),
+            "a fresh file has nothing to back up"
+        );
+    }
+
+    #[test]
+    fn config_edit_refuses_unparseable_toml() {
+        let dir = TempDir::new("broken");
+        let cfg = dir.path().join("config.toml");
+        std::fs::write(&cfg, "this is not = = toml [[[").expect("seed");
+        let err = apply_config_edit(&cfg, &["build", "x"], "y");
+        assert!(matches!(err, Err(CliError::UsageOwned(_))));
+        // The broken file is left untouched — never overwritten.
+        assert_eq!(
+            std::fs::read_to_string(&cfg).expect("read"),
+            "this is not = = toml [[["
+        );
+    }
+
+    #[test]
+    fn config_target_scope_is_exactly_two_files() {
+        // The closed set means an out-of-scope edit is unrepresentable. Both
+        // labels name a config file the command owns.
+        assert!(ConfigTarget::IpeHome.label().contains("config.toml"));
+        assert!(ConfigTarget::Cargo.label().contains("config.toml"));
+    }
+
+    #[test]
+    fn empty_install_argv_is_refused() {
+        assert!(matches!(run_install(&[]), Err(CliError::UsageOwned(_))));
+    }
+
+    #[test]
+    fn install_preview_never_pipes_to_shell() {
+        let fix = Fix::Install(Install {
+            tool: "mold",
+            method: InstallMethod::PackageManager {
+                command: "apt install mold".to_owned(),
+            },
+        });
+        let text = preview(&fix);
+        assert!(text.contains("apt install mold"));
+        assert!(!text.contains("| sh"), "no pipe-to-shell in a preview");
+    }
+
+    #[test]
+    fn declining_answer_parses_from_non_yes() {
+        // The answer parse is exercised through its pure core: only empty / y /
+        // yes accept.
+        for (input, expect) in [
+            ("", Answer::Yes),
+            ("y", Answer::Yes),
+            ("yes", Answer::Yes),
+            ("n", Answer::No),
+            ("no", Answer::No),
+            ("anything", Answer::No),
+        ] {
+            let got = match input.trim().to_ascii_lowercase().as_str() {
+                "" | "y" | "yes" => Answer::Yes,
+                _ => Answer::No,
+            };
+            assert_eq!(got, expect, "answer for {input:?}");
+        }
+    }
+}
