@@ -65,8 +65,13 @@ by convention.
 Evaluation:
 
 - Input is the linked `ipe_ir::Program` — the same value the backend consumes,
-  taken from the same pipeline (and the same lowered-IR cache tier
-  `src/ipe-cli/src/cache.rs` already stores; the IR is serde-serialisable).
+  taken from the same pipeline, **in process**. It is NOT taken from the disk
+  cache: `src/ipe-cli/src/cache.rs` deliberately does not persist
+  `ipe_ir::Program` (it caches the emitted-project strings), because every
+  `ipe_intern::Symbol` embedded in the IR is a raw index into the current
+  process's interner — meaningless in another process. In-process interpretation
+  (P1–P2) needs no serialisation at all. Crossing a process boundary (the jailed
+  child, the watch child) requires the **portable-IR encoding** below.
 - Functions resolve by `FuncId`; the entry is `Module::entry`. Environments
   are lexical scopes mapping `Symbol → Value`; `Let`/`Destructure` push
   bindings, `Lambda`/`SharedLambda` capture by value (the lowerer's
@@ -99,6 +104,25 @@ Evaluation:
     the interpreter's uniform `Value` needs no pin, and the differential gate
     proves the inertness claim rather than assuming it.
 
+### Portable IR — the process-boundary encoding
+
+The jailed-child hook (P3) and the watch restart child (P5) both hand a
+`Program` to another process. `cargo build` of nothing does not make that free:
+the IR's `Symbol`s are process-local interner indices, so a naive serde dump
+deserialises into garbage names in the child. The required piece is a
+symbol-relocating encoding — serialise every embedded `Symbol` as its resolved
+string; on load, re-intern each string into the loading process's interner and
+rewrite every occurrence. That is a total walker over every `Symbol`-carrying
+site in `ipe_ir::ir` (`Var`, `CloneVar`, `Access`, record field keys, `FuncSig`
+params/generics, `EnumDef`/`TypeDef` fields, …) plus full serde coverage across
+the IR types — real, bounded work `src/ipe-cli/src/cache.rs`'s module doc
+already sizes honestly, and it is a **named prerequisite of P3 and P5**, not a
+corner to cut. It is proven the same way everything here is proven: encode →
+decode in a fresh process → the differential suite over the decoded program
+must stay byte-identical. Re-interning is linear in distinct symbols —
+single-digit milliseconds for real programs, measured (not assumed) in P5's
+logged loop metric.
+
 ### Value representation
 
 One uniform `Value` enum, concrete and closed (house rule: concrete over
@@ -125,10 +149,33 @@ generic, never `dyn Any`):
   so dispatch stays exhaustive.
 
 Equality and hashing: `BinOp::Eq` uses a structural `ipe_eq` with
-float-`PartialEq` semantics. The `Eq + Hash` impls needed for `Value` as a
-Dict key are total over the key shapes the type system admits — the same
-constraint the AOT engine enforces physically (a `HashMap<f64, _>` would not
-compile), so no new semantics are introduced.
+float-`PartialEq` semantics. `Value` as a Dict key / Set element needs
+`Eq + Hash` **and `Ord`** — the runtime's dict kernels take `K: Ord` and sort
+every iteration surface by key (`dict_keys`/`dict_values`/`dict_to_list`/
+`dict_foldl`, `src/runtime/rust/src/dict.rs`; the Set carrier is a `BTreeSet`),
+so the interpreter's `Value` ordering must reproduce the concrete key type's
+ordering exactly or Dict iteration order silently diverges. That is total by
+construction, and it is the **compiler front end** — shared by both engines,
+before any IR exists — that makes it so, not rustc failing later:
+
+- The type checker admits only the scalar set `Int`/`Float`/`Char`/`String`/
+  `Bool` for the Dict-key / Set-element obligation
+  (`src/compiler/types/src/lib.rs`, `concrete_super_ok` /
+  `emitted_bound_satisfied`); functions, tuples, records, and lists are
+  rejected at typecheck, fail-closed on unresolved variables.
+- The lowerer then rejects the one checker-admitted-but-unhashable case,
+  `Float` keys/elements, with the dedicated `IPE-L0117` diagnostic
+  (`reject_float_keyed_collection` and the `ir_type_from_ty` Dict/Set arms in
+  `src/compiler/lower/src/lower.rs`) — never deferring to a cargo failure,
+  per the SEAL.
+
+So key positions reaching the interpreter are homogeneous scalars whose
+`Value` `Ord`/`Eq`/`Hash` delegate to the inner `i64`/`char`/`String`/`bool`
+impls — identical order and hash-set semantics to the emitted concrete maps.
+The impls still cover every `Value` variant totally (`f64::total_cmp` for the
+float arm, discriminant order across variants, closure identity never
+compared) so an impossible cross-variant comparison is defined, not a panic —
+unreachable by the front-end argument above, total anyway.
 
 Cloning starts naive (deep `#[derive(Clone)]`). Sharing optimisations
 (`Rc`-backed lists/records) are Efficiency work admitted later only under the
@@ -142,8 +189,20 @@ hardest 90% of the dual-semantics problem: every `Io.println`, `String.*`,
 `Json.*`, `Crypto.*`, `Db.*` behaves identically in both engines because it
 *is* the same machine code.
 
+One boundary on the "same machine code" claim: the runtime is compiled
+per-feature-set. A pure emitted crate links the runtime **without** the
+`tokio` feature, so the kernels with a `#[cfg(not(feature = "tokio"))]`
+counterpart (`task.rs`, `time.rs`, `system.rs`, `file.rs`, `csv.rs`,
+`config_decode.rs`) run a *different body* in the pure binary than the one the
+tokio-linked interpreter calls. For those kernels the identity argument
+degrades to "audited twin implementations", and the authoritative differential
+tier is precisely what keeps the twins honest — it runs the interpreter's
+tokio-feature bodies against the pure binary's std bodies on every pure
+fixture. A registry test enumerates the `tokio`-cfg-gated kernel entry points
+so a new twin cannot appear without joining the audited set.
+
 Dispatch is one exhaustive `match` over `KernelFn`
-(`ipe_kernels::StdlibKernel`, ~950 wired variants) producing a shim per
+(`ipe_kernels::StdlibKernel`, ~930 wired variants) producing a shim per
 kernel:
 
 - **Generic kernels instantiate directly at `Value`.** The runtime is written
@@ -179,11 +238,29 @@ The interpreter reuses the runtime's entry drivers verbatim
   emitted main's main-thread requirement.
 - The emitted **pure** program links a tokio-less std park/unpark `block_on`
   instead — a cargo *feature* choice the interpreter binary cannot replicate
-  per-program (it links tokio once, for the reactor programs). The pure/std
-  split is an Efficiency artifact of the emit, not a semantic one: a pure
-  program's future resolves without reactor services under either driver.
-  That claim is not assumed — the differential corpus (every pure golden runs
-  under both engines) is what proves it, continuously.
+  per-program (it links tokio once, for the reactor programs). For the
+  observables the oracle defines — stdout, asserted stderr, exit code of a
+  well-typed program — the drivers are equivalent: the same sequenced effects
+  fire in the same order (a pure future resolves on first poll under either
+  driver, `KernelFn::requires_async_runtime` fail-closed guarantees no reactor
+  op is reachable), and the same `main` epilogue maps `Ok`/`Err` to the same
+  exits. The differential corpus (every pure golden runs under both engines)
+  proves it continuously. Two residual differences are real and stated:
+  - **Panic path.** The tokio driver polls on a spawned thread and
+    `.join()`-maps a panicking future to `Err` through the redacting funnel
+    (`src/runtime/rust/src/task.rs`, tokio `block_on`); the std driver polls
+    on the calling thread and lets a panic propagate to the entry boundary's
+    synchronous-panic classifier. Both exit non-zero; the stderr text can
+    differ. A panic is unreachable from well-typed Ipê (the no-panic bar), so
+    this divergence is observable only on a compiler/runtime bug — and the
+    oracle, which runs well-typed programs, cannot prove it away. It is a
+    documented, bug-only divergence, not a gate waiver.
+  - **Driver-thread stack.** The tokio driver's spawned thread has a smaller
+    default stack than the pure binary's main thread. Since the interpreter's
+    evaluation runs under that driver, it spawns its driver thread with an
+    explicit `std::thread::Builder::stack_size` and calibrates the evaluator
+    depth guard against that configured size — the R3 envelope is set against
+    the real stack, never the platform default.
 - The `uses_async_runtime` flag (`ipe_ir::Module`, fail-closed: unknown ⇒
   reactor) stays authoritative for the *emitted* entry; the interpreter reads
   it only for parity of shape selection (webview vs default).
@@ -207,6 +284,46 @@ byte-identical asserted stderr, and identical exit codes**.
 - The example suites (`examples/shapes`, `examples/sky/ipe`), which exercise
   whole-program shapes the goldens slice thinly.
 - Regression fixtures under `tests/regression` as applicable.
+
+**Mandatory fixture classes** — discovery alone does not guarantee the corpus
+exercises the semantic surface the two engines can disagree on; each class
+below is asserted present (a corpus-coverage test fails if a class is empty):
+
+- **Wrapping arithmetic** at the boundaries (`i64::MAX + 1`, `MIN - 1`,
+  `MIN * -1`, `IntDiv`/mod edge cases through `ipe_int_div`).
+- **Dict/Set iteration order** — multi-entry `Dict.toList`/`keys`/`values`/
+  `foldl`/`foldr` with `Int` and `String` keys: the sorted-key contract is the
+  one place the interpreter's `Value: Ord` must reproduce concrete-key `Ord`
+  exactly.
+- **Float formatting** — `toString`/`String.fromFloat` over negative zero,
+  subnormals, exponent-notation boundaries, NaN/∞ where expressible; both
+  engines call the same runtime formatter, and these fixtures pin that it
+  stays that way.
+- **`CallPin` inertness, per variant.** The gate "proves the inertness claim"
+  only if the corpus actually contains pinned calls. A coverage assertion
+  lowers the corpus and requires at least one fixture producing each
+  non-`None` `CallPin` variant (`DefaultI64`, `DefaultDict`,
+  `DefaultResultMapErr`, `ErrIpeError`) — e.g. a discarded `List.head`, an
+  empty `Dict.empty` queried for size, a `Result.mapError` whose `Ok` is
+  discarded — each printing its surrounding observables. Without this, the
+  inertness proof is vacuously green.
+- **Match ordering and guard fallthrough** — overlapping arms, guards that
+  fail into later arms, nested constructor/list patterns.
+- **TCO** — `TailLoop`/`TailRecur` fixtures deep enough to overflow without
+  the rewrite, plus deep NON-tail recursion (the R3 envelope probe, via
+  `build_and_run_stack_limited`).
+- **argv/stdin** — programs reading `System` args and stdin: the interpreter
+  must present the program's argv (the `--` tail), never `ipe`'s own.
+- **Clone discipline** — captured-then-mutated-copy shapes where a missed
+  `CloneVar` would alias.
+
+**Exit codes** compare between the raw engines (interpreter process vs the
+emitted binary), not through the `ipe run` wrapper: the wrapper's non-Unix
+path collapses a nonzero child exit into its own exit 1
+(`src/ipe-cli/src/lib.rs`, `run_run`'s non-Unix branch), which would mask a
+code mismatch. On Unix the wrapper `exec`s and propagates exactly; the
+interpreter exits with the program's code so the wrapper-level behaviour
+matches per platform.
 
 **Harness.** A differential test family beside the existing goldens in
 `src/ipe-cli/tests/`, reusing the proven support pieces
@@ -273,7 +390,14 @@ practical envelope is measured, not guessed.
   directly under its structural capability bound. The engine branch is placed
   **after** capability resolution in `run_run` (`resolve_for_run` → union →
   `is_native_bearing` → *then* choose engine), so the jail decision is
-  computed once and applies to whichever engine runs. Today the two scopes
+  computed once and applies to whichever engine runs. That placement is a
+  re-ordering, not just an insertion: today `run_run` resolves capabilities
+  *after* the emit + `cargo build` steps (the jail wraps only the final
+  exec), and the interpret branch must skip the build entirely — so
+  `resolve_for_run`/`is_native_bearing` hoist ahead of the build.
+  `resolve_for_run` depends only on the manifest and entry, so the hoist is
+  sound; P3's first failing test pins the new order (capabilities resolved
+  before any cargo invocation). Today the two scopes
   coincide: every native-bearing program is FFI-bearing and therefore falls
   back to AOT, so the interpreter only ever runs programs the AOT path runs
   unjailed — and the same structural bound holds, because the interpreter can
@@ -284,7 +408,9 @@ practical envelope is measured, not guessed.
   itself as a jailed child (`ipe` internal interpret subcommand through
   `run_jail_argv` / `exec_in_run_jail` with the same `SandboxProfile`) — the
   subcommand exists from the watch integration anyway, so the hook point is
-  already built.
+  already built (`run_jail_argv`/`exec_in_run_jail` live in
+  `src/compiler/sandbox/src/run_jail.rs`; the child consumes the portable-IR
+  artifact — its process-boundary prerequisite).
 - **`Debug.*`** stays a development affordance exactly as today
   (`production = false` on the run path); the production rejection gate is
   untouched because `ipe build --release` never enters the interpreter.
@@ -335,9 +461,15 @@ The interpreter replaces exactly the back half:
    lower, warm-database milliseconds for a leaf edit; this is where the
    salsa investment finally pays end-to-end, because nothing non-incremental
    follows it anymore.
-3. The lowered `Program` (already serde + cached) is written to the run dir.
+3. The lowered `Program` is written to the run dir in the **portable-IR
+   encoding** (the symbol-relocating serialisation above — the one genuinely
+   new infrastructure piece this loop depends on). The write is atomic
+   (temp file + rename) and generation-stamped: the supervisor passes the
+   exact per-generation artifact path as the child's argv, so a restarting
+   child can never load a torn or half-superseded file, and the last-good
+   artifact is simply the previous generation's file left in place.
 4. The supervisor restarts its child — which is now
-   **`ipe` (internal interpret subcommand) pointed at the IR artifact**
+   **`ipe` (internal interpret subcommand) pointed at that IR artifact**
    instead of `target/debug/ipe-app`.
 
 The supervisor is deliberately process-shaped and engine-agnostic
@@ -346,12 +478,16 @@ last-good respawn, and SIGTERM forwarding are reused **verbatim** — the
 interpreter child is just a different argv. A child process is preferred over
 an in-process evaluation thread: a wedged or looping program can be killed
 cleanly, a crash cannot take the watcher down, and the jail hook point wraps
-a child naturally. Process spawn plus IR load are single-digit milliseconds —
-noise against the budget.
+a child naturally. Process spawn plus portable-IR load (decode + re-intern) are
+expected single-digit milliseconds — an expectation P5 measures and logs, not
+assumes; re-interning is linear in distinct symbols.
 
 Expected loop: **edit → settle → front-end (ms, salsa-warm) → restart
 interpreter child (ms)** — tens of milliseconds edit-to-running, versus ~2.4 s
-today. The last-good artifact for H15/H16 recovery is the last-good IR file.
+today. The last-good artifact for H15/H16 recovery is the last-good
+generation's IR file. State leak across restarts: none beyond today's — the
+child is a fresh process either way, so restart semantics (model reset,
+sockets closed, env re-read) are byte-for-byte the current watch behaviour.
 
 Out of scope here, deliberately: **state-preserving hot-swap** (a long-running
 TEA/server child keeping its model while swapping IR). Restart semantics
@@ -396,8 +532,10 @@ Failing test first: unit tests on the `run_run` branch order (capabilities
 resolved before engine choice; native-bearing ⇒ AOT verdict), plus a jailed
 child-exec test for the internal interpret subcommand under a
 `SandboxProfile`.
-Minimal impl: the internal subcommand (IR in, jailed-exec-capable), branch
-plumbing, fallback notice line.
+Minimal impl: the portable-IR encoding (encode → fresh-process decode →
+differential-suite green over the decoded program), the internal subcommand
+(portable IR in, jailed-exec-capable), the capability-resolution hoist in
+`run_run`, branch plumbing, fallback notice line.
 Gate: existing sandbox/admission suites untouched and green; new parity tests
 green.
 
@@ -415,10 +553,12 @@ Goal: the near-instant edit→run loop.
 Failing test first: an orchestrator test (existing watch-test style) asserting
 the restart child is the interpreter subcommand and INV-3 holds across a
 failing recompile.
-Minimal impl: engine plumb into the watch orchestrator; last-good IR
-artifact; readiness probe unchanged.
+Minimal impl: engine plumb into the watch orchestrator; atomic
+generation-stamped portable-IR artifact (P3's encoding reused); readiness
+probe unchanged.
 Gate: full watch suite (including SIGTERM forwarding) green; measured
-edit-to-restart logged into `compilation-performance.md`'s measured table.
+edit-to-restart — including the decode + re-intern cost — logged into
+`compilation-performance.md`'s measured table.
 
 **P6 — corpus-wide parity and cutover.**
 Goal: the interpreter as the `ipe run` default.
@@ -430,6 +570,21 @@ permanent exclusions.
 Gate: full differential suite blocking in CI; default flip to
 `--engine=interp`-equivalent with `--engine=aot` as the escape; CLI help and
 docs updated to promise exactly what ships.
+Example-suite parity is two-tiered, matching what the examples infrastructure
+actually is:
+- Examples with a deterministic transcript (cli-shape programs with expected
+  output) join the byte-differential harness on the `IPE_E2E` lane — the same
+  blocking gate as the goldens.
+- App-shaped examples (server/live/webview/tui) have no byte-comparable
+  stdout; their RUN checks are boot/probe checks
+  (`scripts/examples-sweep.sh` + `scripts/lib/checks.sh`). Their engine
+  parity is an **engine matrix dimension in the sweep harness itself** — the
+  same per-shape probe must go green under `--engine=interp` — and it
+  inherits the examples-sweep lane's status: CI-only (push + nightly, never
+  PR-gating) and non-gating until that lane flips gating. The *blocking*
+  P6 cutover gate is therefore the golden corpus plus transcript-bearing
+  examples; the probe-level sweep is a second, wider net, honestly labelled
+  as such.
 
 ## Honest risks, costs, and the no-go conditions
 
@@ -456,7 +611,9 @@ authors, not a mechanical guarantee.
 larger; a deep-recursion program can succeed compiled and hit the typed depth
 limit interpreted. This is a *visible, typed* divergence (fail-closed, and
 the depth limit can be generous), but it is a real behavioural difference the
-docs must state and the deep-recursion fixtures must measure.
+docs must state and the deep-recursion fixtures must measure. The evaluation
+thread is spawned with an explicit stack size and the guard calibrated to it,
+so the envelope is a chosen constant, never a platform default.
 
 **R4 — jail-scope coupling.** The parity argument leans on ADR 0040's
 "jail scoped to native-bearing". If that posture ever widens, the interpreter
@@ -469,11 +626,27 @@ build time and size. Mitigable by a cargo feature for compiler-dev builds; the
 shipped binary pays it.
 
 **Cost estimate.** P1+P2 are the long poles (evaluator, Value design, harness,
-~hundreds of pure/async shims); P6 is a long mechanical tail (~950 kernel
-variants total, macro-assisted, in shape-sized slices). Realistic total: a
-multi-week, multi-lane effort, with the differential harness the very first
-landable artifact — it has standalone value (it hardens the existing golden
-corpus) even if S6 stops there.
+~hundreds of pure/async shims); P3 carries the portable-IR encoding (the
+symbol-relocation walker over every `Symbol`-carrying IR site — the piece the
+build cache deliberately declined to build, sized in
+`src/ipe-cli/src/cache.rs`'s module doc); P6 is a long mechanical tail (~930
+kernel variants total, macro-assisted, in shape-sized slices). Realistic
+total: a multi-week, multi-lane effort, with the differential harness the very
+first landable artifact — it has standalone value (it hardens the existing
+golden corpus) even if S6 stops there.
+
+**The standing tax, enumerated** (what "permanent second engine" costs every
+year it exists, independent of the build cost above):
+
+- every emitted-shape change (arith, clone discipline, match/guard shape,
+  `CallPin`, `OnFormKind`, capture rules) now needs an interpreter mirror and
+  a reviewer who knows to ask for it;
+- the `tokio`-cfg twin-kernel set must stay audited as it grows;
+- `Value`'s `Ord`/`Eq`/`Hash` totality and its scalar-delegation parity are
+  live invariants;
+- the authoritative differential tier is a permanent E2E CI lane (build + run
+  the corpus twice);
+- the `ipe` binary permanently links the interpreted-surface runtime (R5).
 
 **When S6 is not worth it.** The fair no-go cases:
 
@@ -492,7 +665,79 @@ corpus) even if S6 stops there.
   build fastest.
 
 **Recommendation.** Conditional go: land P1 (evaluator floor + blocking
-differential harness) as the committed spike — it is cheap, reversible, and
-its harness pays for itself regardless — and take the full-breadth decision
-on P2's measured numbers and the observed drift rate across the first
-backend changes that land while the gate is live.
+differential harness) as the committed spike — it is cheap, reversible (a new
+crate plus a non-default `--engine` flag; deleting both restores today
+exactly), and its harness pays for itself regardless — and take the
+full-breadth decision after P2 on THREE inputs, not one:
+
+1. P2's measured interpreter numbers (is the ms loop real for effectful
+   programs?);
+2. the observed drift rate — how many backend changes landed while the gate
+   was live, and how many the gate caught (the standing tax, measured instead
+   of feared);
+3. a fresh warm-loop measurement of the AOT path with whatever of S2/S3 has
+   landed by then. If that number is at or under ~0.5 s and the team accepts
+   half a second, the fair verdict is NO — the milliseconds premise was the
+   justification, and re-affirming or dropping that premise is exactly what
+   this decision point is for. Stopping after P1 is a designed outcome, not a
+   failure: the corpus-hardening harness remains.
+
+## Guardian review — verified and corrected claims
+
+An independent security-soundness review of this design against the cited
+code. Resolutions are folded into the sections above; this ledger records the
+verdicts so the next reader knows which claims were checked in code, not
+trusted.
+
+**Verified in code:**
+
+- The four pin-checked flags: pure-driver equivalence (both `block_on`
+  entries in `src/runtime/rust/src/task.rs`; equivalence holds for the
+  oracle's observables, with the panic-path and driver-stack caveats now
+  stated in the Task-driver section); Dict-key admissibility (checker scalar
+  set in `src/compiler/types/src/lib.rs` + the lowering `IPE-L0117` Float
+  rejection in `src/compiler/lower/src/lower.rs` — front-end-enforced, pre-IR,
+  shared by both engines); the `CallPin` doc contract
+  (`src/compiler/ir/src/ir.rs`); the examples-sweep shape
+  (`.github/workflows/examples-sweep.yml`).
+- Jail scoping and hook points: `is_native_bearing`/`resolve_for_run`
+  (`src/ipe-cli/src/run_sandbox.rs`), `run_jail_argv`/`exec_in_run_jail`
+  (`src/compiler/sandbox/src/run_jail.rs`), ADR 0040.
+- Watch supervisor reuse: INV-3, last-good respawn, readiness bifurcation,
+  SIGTERM forwarding all present in `src/ipe-cli/src/watch.rs` as described.
+- Corpus counts (512 golden directories, 217 with `expected.txt`), wrapping
+  profile (`overflow-checks = false` in the emitted profile), `ipe_int_div`,
+  `StdlibDecl::emit`, `uses_async_runtime`'s fail-closed default.
+
+**Corrected by review** (the design above already reflects these):
+
+- The lowered IR is **not** "already cached and serde-portable":
+  `src/ipe-cli/src/cache.rs` persists emitted-project strings precisely
+  because `Symbol`s are process-local. The portable-IR encoding is a named
+  prerequisite of P3/P5, with its own encode/decode differential proof.
+- `Value` needs `Ord`, not just `Eq + Hash`: the dict kernels' sorted-key
+  iteration contract (`src/runtime/rust/src/dict.rs`) and the `BTreeSet` Set
+  carrier make ordering an observable — covered by the new sorted-iteration
+  fixture class and the scalar-delegation argument.
+- Key admissibility is enforced by the shared front end (typecheck + lowering),
+  not by "the emitted Rust would fail cargo" — the latter would itself be a
+  SEAL violation and is not what happens.
+- The kernel-identity claim is per-feature-set: pure emitted crates link
+  no-`tokio` twin kernel bodies. The twin set is enumerated, registry-tested,
+  and exercised by the authoritative tier.
+- The engine branch requires hoisting capability resolution in `run_run`
+  ahead of the build steps (today it runs after them).
+- Example-suite parity splits into transcript-bearing (blocking,
+  byte-differential) and probe-level (sweep engine matrix, non-gating with its
+  lane) — the sweep performs no output comparison today, so P6 could not have
+  ridden it as a byte oracle.
+- `CallPin` inertness is proven only if pinned calls exist in the corpus:
+  the per-variant coverage assertion closes the vacuous-green hole.
+- Exit-code comparison must target the raw engines: the `ipe run` wrapper's
+  non-Unix branch collapses child exit codes.
+
+**Review verdict.** The conditional go stands, with the go/no-go inputs
+sharpened above: P1 is genuinely cheap, reversible, and independently
+valuable; the differential oracle, with the added fixture classes and
+coverage assertions, is sufficient to hold the dual-semantics line — and if
+it ever cannot be kept blocking, the design's own no-go clause governs.
