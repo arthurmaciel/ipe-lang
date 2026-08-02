@@ -1,0 +1,30 @@
+[package]
+name = "ipe-app"
+version = "0.1.0"
+edition = "2024"
+
+[features]
+default = []
+alloc_dlmalloc = ["dep:dlmalloc"]
+alloc_mimalloc = ["dep:mimalloc"]
+
+[dependencies]
+dlmalloc = { version = "0.2", features = ["global"], optional = true }
+mimalloc = { version = "0.1", optional = true, default-features = false }
+# The Ipê runtime, provided by the Ipê toolchain at the resolved path below.
+# This crate is NOT relocatable: `cargo build` outside a machine whose Ipê
+# toolchain provides that path fails with cargo's own missing-path-dependency
+# error. It is a build artifact, not a source distribution.
+ipe_runtime = { package = "ipe-runtime-rust", path = "__IPE_RUNTIME_PATH__", default-features = false, features = [__IPE_RUNTIME_FEATURES__] }
+
+[profile.dev]
+debug = 0
+incremental = true
+overflow-checks = false
+
+[profile.release]
+strip = true
+
+# Detach this generated crate from any ancestor cargo workspace so it builds
+# hermetically even when emitted inside another workspace tree.
+[workspace]

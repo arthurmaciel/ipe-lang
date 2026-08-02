@@ -125,6 +125,8 @@ fn compile_inner(source: &str) -> Result<ipe_backend::EmittedProject, String> {
         false,
         // The browser playground is a development surface — Debug.* is allowed.
         false,
+        // Wasm always vendors its runtime (closed template); dep model is a no-op.
+        None,
     );
 
     // Per-module canonicalisation in dep-first order — purely for BLAME

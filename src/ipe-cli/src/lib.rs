@@ -380,6 +380,21 @@ pub struct BuildOptions {
     /// development-only `Debug.*` escape hatch (IPE-L0140). Default `false`
     /// (a development build).
     pub production: bool,
+    /// `true` for the opt-in dependency-model emit (env `IPE_RUNTIME_DEP=1`, or
+    /// set directly by a test): the emitted native project declares the runtime
+    /// as a path dependency with a `runtime_features`-selected feature list and
+    /// vendors no runtime source. Default `false` (the byte-identical
+    /// vendored-source emit). No effect on the wasm target (its manifest is a
+    /// closed vendoring template for now).
+    pub runtime_dep: bool,
+}
+
+/// Read the opt-in dependency-model flag from the environment
+/// (`IPE_RUNTIME_DEP=1`). A [`BuildOptions::runtime_dep`] already set by a
+/// caller (a test) takes precedence and is returned unchanged.
+#[must_use]
+pub fn runtime_dep_from_env() -> bool {
+    std::env::var("IPE_RUNTIME_DEP").is_ok_and(|v| v == "1")
 }
 
 /// Build `entry` into a Rust Cargo project under `out_dir`, vendoring the
@@ -723,11 +738,32 @@ fn compile_modules_observed(
     };
     let ffi_injected = ffi_prep.injected;
     let ffi_emit = ffi_prep.emit;
+
+    // Resolve the dependency-model runtime crate ONCE, fail-closed: if the
+    // opt-in is set but no verified `ipe-runtime-rust` crate root is found, the
+    // build refuses loudly here rather than falling back to a vendored — or
+    // worse, a wrong — runtime. Native only (wasm keeps its vendored template).
+    let runtime_dep = if options.runtime_dep && options.target == ipe_ir::Target::Native {
+        match resolve_runtime_crate_root() {
+            Ok(root) => Some(ipe_backend_rust::RuntimeDep { root }),
+            Err(e) => return (Err(e), CacheOutcome::Miss),
+        }
+    } else {
+        None
+    };
+
     // The on-disk build caches key only the Ipê sources — the FFI bindings
     // text and opaque map live OUTSIDE that key, so a cache hit could serve a
     // stale emitted project after `ipe add`/`ipe remove`. Disable both cache
     // tiers for FFI-using builds (correctness over warm-start speed).
-    let cache_dir = if ffi_emit.is_some() { None } else { cache_dir };
+    // The dependency-model flag also changes emit shape without changing the
+    // Ipê sources, so a cache keyed only on sources must not serve a
+    // cross-model artifact: disable the caches when the dep model is active.
+    let cache_dir = if ffi_emit.is_some() || runtime_dep.is_some() {
+        None
+    } else {
+        cache_dir
+    };
 
     // The on-disk build cache. `epoch` folds in BOTH the running
     // `ipe` binary's own content hash and the active `rustc`'s fingerprint
@@ -797,6 +833,7 @@ fn compile_modules_observed(
                     .with_target(options.target)
                     .with_wasm_public_env(options.wasm_public_env.clone())
                     .with_wasm_hydrate_mode(options.wasm_hydrate_mode)
+                    .with_runtime_dep(runtime_dep.clone())
                     .emit(&program)
             };
             if let Ok(emitted) = emit_result {
@@ -846,6 +883,7 @@ fn compile_modules_observed(
         options.wasm_public_env.clone(),
         options.wasm_hydrate_mode,
         options.production,
+        runtime_dep,
     );
 
     let emitted = match compile_prepared(&db, source_root, &sources, entry_path, blame_path, config)
@@ -1417,7 +1455,17 @@ fn build_emit_manifest(
     runtime_dir: &Path,
 ) -> Result<BTreeMap<PathBuf, String>, CliError> {
     let mut manifest = BTreeMap::new();
-    collect_dir_text(runtime_dir, Path::new("src/ipe_runtime"), &mut manifest)?;
+    // Vendoring is skipped for a dependency-model emit — it declares the runtime
+    // as a path dependency and carries NO `src/ipe_runtime/` files, so there is
+    // no vendored tree to overlay. The emit shape is self-describing: a vendored
+    // emit always writes `src/ipe_runtime/mod.rs`; the dep-model emit never does.
+    let is_dep_model = !emitted
+        .files
+        .keys()
+        .any(|rel| rel.as_str() == "src/ipe_runtime/mod.rs");
+    if !is_dep_model {
+        collect_dir_text(runtime_dir, Path::new("src/ipe_runtime"), &mut manifest)?;
+    }
     manifest.insert(PathBuf::from("Cargo.toml"), emitted.cargo_toml.clone());
     for (rel, contents) in &emitted.files {
         manifest.insert(PathBuf::from(rel.as_str()), contents.clone());
@@ -1635,6 +1683,40 @@ pub fn build_project_with_options(
         manifest.driver,
         options,
     )
+}
+
+/// Resolve the runtime CRATE ROOT for the dependency-model emit — the directory
+/// holding the runtime `Cargo.toml` (`package = "ipe-runtime-rust"`) the emitted
+/// project names as its `path` dependency.
+///
+/// Minimal in-repo resolver (full install resolution is a later phase): the
+/// upward walk finds `src/runtime/rust/` from anywhere inside the workspace, the
+/// candidate is verified to hold a runtime `Cargo.toml` declaring the expected
+/// package (parse, don't validate — a wrong or half-present crate is a loud
+/// refusal, never a silent walk-on to a wrong runtime), and the verified root is
+/// canonicalised so the emitted `path` is absolute and stable.
+///
+/// # Errors
+/// [`CliError::RuntimeNotFound`] when no verified runtime crate root is found.
+pub fn resolve_runtime_crate_root() -> Result<PathBuf, CliError> {
+    fn is_runtime_crate(root: &Path) -> bool {
+        let manifest = root.join("Cargo.toml");
+        std::fs::read_to_string(&manifest).is_ok_and(|text| {
+            text.lines()
+                .any(|l| l.trim() == "name = \"ipe-runtime-rust\"")
+        })
+    }
+
+    let cwd = std::env::current_dir().map_err(|e| io_err(Path::new("."), e))?;
+    let mut here: Option<&Path> = Some(cwd.as_path());
+    while let Some(dir) = here {
+        let candidate = dir.join("src").join("runtime").join("rust");
+        if is_runtime_crate(&candidate) {
+            return candidate.canonicalize().map_err(|e| io_err(&candidate, e));
+        }
+        here = dir.parent();
+    }
+    Err(CliError::RuntimeNotFound)
 }
 
 /// Locate the Ipê runtime module tree (`src/runtime/rust/src/`).
@@ -2005,6 +2087,7 @@ fn run_build(rest: &[String]) -> Result<(), CliError> {
         wasm_public_env: Vec::new(),
         wasm_hydrate_mode: false,
         production: args.production,
+        runtime_dep: runtime_dep_from_env(),
     };
 
     // Human-friendly progress: the compile+emit below is otherwise silent, so
@@ -2264,6 +2347,7 @@ fn run_run(rest: &[String]) -> Result<(), CliError> {
         wasm_public_env: Vec::new(),
         wasm_hydrate_mode: false,
         production: false,
+        runtime_dep: runtime_dep_from_env(),
     };
 
     manifest.as_ref().map_or_else(
