@@ -41,7 +41,7 @@ Optional heavy surfaces are already usage-gated by manifest surgery
 lettre, wry/tao, crossterm, flate2/zstd, csv, jsonwebtoken, aes-gcm, … appear
 only when a reachable kernel needs them.
 
-### Why hello world still compiles 110 crates
+### Why hello world still compiles 105 crates
 
 Gating stops at the optional surfaces. The **floor is fixed** — the base
 template ships the same `[dependencies]` for every program:
@@ -51,7 +51,7 @@ template ships the same `[dependencies]` for every program:
 > rust_decimal, hmac, sha2, subtle, zeroize, rsa, getrandom, uuid, bcrypt,
 > url, futures-util (+ libc on unix)
 
-`cargo tree` over that manifest resolves **110 crates**. The heavy transitive
+`cargo tree` over a freshly emitted hello world resolves **105 crates**. The heavy transitive
 roots:
 
 | Root | Subtree | Pulled in by |
@@ -122,7 +122,7 @@ a cargo failure. No security-bearing parser is replaced by a hand-rolled
 "tiny" one — `serde_json`/`url` stay wherever `Json`/`Url` is actually used;
 gating removes them where they are not.
 
-**Buys.** 110 → ~0–10 crates for common programs; cold builds minutes →
+**Buys.** 105 → ~0–10 crates for common programs; cold builds minutes →
 seconds; smaller binaries.
 
 **Risks.** Attribution table maintenance (mitigated by the existing drift
@@ -241,7 +241,7 @@ Nightly-only component → cannot be the default floor; stays opt-in.
 
 | Rank | Strategy | Budget impact | Principle balance |
 |---|---|---|---|
-| 1 | S1 usage-driven floor | 110 → ~0–10 crates; minutes → seconds cold | improves Security *and* Efficiency; nothing traded |
+| 1 | S1 usage-driven floor | 105 → ~0–10 crates; minutes → seconds cold | improves Security *and* Efficiency; nothing traded |
 | 2 | S2 shared build-once target | repeat builds → ~1 s | pure Efficiency, all else neutral |
 | 3 | S3 precompiled runtime crate | removes 3.4 MB/project recompile | Efficiency + emit Readability |
 | 4 | S6 IR interpreter for `ipe run` | seconds → milliseconds | Efficiency transformative; Correctness gated by mandatory differential oracle |
@@ -274,7 +274,36 @@ revisiting as a signed, reproducible artifact channel.
 **Next investigation.** Validate the top of the ranking empirically: take
 `examples/sky/ipe/01-hello-world`, hand-trim the emitted manifest and runtime
 module set to the true floor its kernels need, and measure cold and warm
-build+run times against the current 110-crate emit — that single measurement
+build+run times against the current 105-crate emit — that single measurement
 proves (or refutes) the S1+S2 budget claim before any emitter work. The
 follow-on spike is a tree-walking evaluator over `ipe_ir` for the pure kernel
 floor, differential-tested against the AOT output of the same goldens.
+
+## Implementation surface
+
+What each strategy changes, by file and subsystem — the blast radius that ranks
+the strategies as much as their budget impact does.
+
+| Strategy | What changes in the code |
+|---|---|
+| **S1** usage-driven floor | Emitter-only; no runtime-logic change. `kernels/src/lib.rs`: `is_X` predicates + exhaustiveness tests. `KernelUsage → ir::Module → EmitCtx`: thread `uses_X` flags. `backend/rust/src/project.rs`: `X_cargo_toml` augmenters and `RUNTIME_MOD_RS_X_APPEND`; base `templates/Cargo.toml` and `templates/ipe_runtime/mod.rs` shed the gated crate/module. `templates/main.rs` + `native/wasm_runtime_bindings()`: prelude filters so a wrapper never hard-references an absent module. `crate_specs.rs`: the crate SSOT (const + list + count). SEAL `runtime_modset_closure.rs`: `FLAG_COUNT` grows. Goldens re-blessed. |
+| **S2** shared build-once target | CLI driver only. `src/ipe-cli/src/lib.rs` (`run_run`/`build`): point `CARGO_TARGET_DIR` at a shared `~/.cache/ipe/<key>` instead of `out/rust/target`, plus a small module to derive the key `(ipe version, toolchain, resolved feature set)` and reclaim the cache. No compiler, backend, or runtime change. |
+| **S3** precompiled runtime crate | Emit model + runtime crate. `src/ipe-cli/src/lib.rs` (`resolve_runtime` + the module copy into `out/rust/src/ipe_runtime/`) and `project.rs` change from copying source files to emitting a dependency line + selecting features. `src/runtime/rust/` (`lib.rs`/`Cargo.toml`): `[features]` mirroring today's per-module trimming, `#[cfg(feature=…)]` on modules. SEAL adapts module-set → feature-set; `crate_specs.rs` collapses the runtime to one crate + feature list. |
+| **S6** IR interpreter for `ipe run` | Large new component; the AOT path is untouched. A new interpreter/VM over `ipe_ir` (its own crate) binding to the same `ipe_runtime` kernels for semantics. `src/ipe-cli/src/lib.rs` `run_run`: branch — no `Rust.` FFI and dev ⇒ execute IR directly, else emit + cargo. A new differential harness runs every golden and example under both engines, byte-comparing output. Runs under the existing `ipe_sandbox` jail. |
+| **S8** linker + profile defaults | Tiny. `src/ipe-cli` / emitted `.cargo/config` or rustflags: detect `mold`/`lld` and set the linker. The emitted `[profile.dev]` in `templates/Cargo.toml` already sets `debug = 0`, `incremental = true`. |
+| **S7** cranelift | CLI flag only. `src/ipe-cli` detects `rustc_codegen_cranelift` and sets `-Zcodegen-backend=cranelift` on the emitted dev build. No structural change; documented in `docs/rust-perf-improvement.md`. |
+| **S5** `ipe-std` dylib | Runtime build shape + emit profile. `src/runtime/rust/Cargo.toml`: build a `dylib` for dev. Emitted dev profile / rustflags add `-C prefer-dynamic` and link it; release stays static. CLI ships the dylib and pins an ABI version. Runtime logic unchanged. |
+| **S4** shipped prebuilt binaries | New distribution subsystem; no compiler or runtime logic change. A fetcher in `src/ipe-cli` downloads the rlib bundle keyed by `(platform × rustc version)`, verifies a signature against a key pinned in the `ipe` binary, and places artifacts into the cargo cache; the driver points cargo at them. The release pipeline (out of tree) builds, signs, and hosts the platform × toolchain matrix with a reproducible-build attestation. The added trusted base — artifact host, signing key, and redistributed third-party object code — is the security cost that ranks it last. |
+
+Two properties fall out of this column:
+
+- The top of the ranking is cheap and localized. S1 is emitter-only (no runtime
+  semantics move — only which modules and crates ship), S2 is one CLI target-dir
+  change, and S7/S8 are build flags. Large wins, small surface, principle-safe —
+  which is why they lead the adoption order.
+- S3 is the one change to the emit *model* (depend-on-crate versus vendor-source),
+  its blast radius confined to the CLI emit path plus the runtime crate's feature
+  wiring. S6 is the only strategy that adds a whole execution engine — and its
+  mandatory differential oracle — which is why it lands last despite being the
+  sole route to true milliseconds. S4 and S5 touch distribution and link
+  plumbing, not the language.
