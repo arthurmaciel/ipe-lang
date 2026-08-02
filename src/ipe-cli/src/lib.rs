@@ -36,6 +36,7 @@ pub mod project;
 pub mod publish;
 pub mod resolve;
 pub mod run_sandbox;
+pub mod runtime_embed;
 pub mod style;
 pub mod toolchain;
 /// The embedded Ipê standard-library source now lives in the dependency-free
@@ -97,6 +98,30 @@ pub enum CliError {
     },
     /// The Ipê runtime module tree could not be located.
     RuntimeNotFound,
+    /// `$IPE_RUNTIME_DIR` was set but does not name a runtime crate root (a
+    /// directory whose `Cargo.toml` declares the `ipe-runtime-rust` package).
+    /// The override is a trust decision — an unverified directory is a hard,
+    /// typed refusal, never a silent fall-through to a different runtime.
+    RuntimeDirInvalid {
+        /// The path the override named.
+        path: PathBuf,
+        /// The named path is the inner runtime module directory
+        /// (`…/src/ipe_runtime` or `…/rust/src`) rather than the crate root — a
+        /// common misconfiguration worth calling out explicitly.
+        points_at_inner: bool,
+    },
+    /// No directory could be resolved to materialize the embedded runtime into
+    /// (no `IPE_HOME`, `XDG_DATA_HOME`, or `HOME`). Without a home there is
+    /// nowhere to write the runtime the emitted project links against.
+    RuntimeHomeUnknown,
+    /// Writing the embedded runtime source to `<IPE_HOME>/runtime/<version>/rust`
+    /// failed (disk full, permission denied, or a drifted embed). This is a
+    /// fail-closed refusal — the build stops rather than link a wrong or empty
+    /// runtime. Carries a specific detail.
+    RuntimeMaterializeFailed {
+        /// What specifically failed.
+        detail: String,
+    },
     /// `ipe explain <CODE>` was given a string that is not a taxonomy code.
     /// Carries the (trimmed) input and a deterministic did-you-mean list over
     /// the known codes, ranked by `(Levenshtein, code)`.
@@ -249,6 +274,9 @@ impl std::fmt::Display for CliError {
                 "could not locate the Ipe runtime; \
                  set IPE_RUNTIME_DIR to an explicit path or pass --runtime <dir>"
             ),
+            Self::RuntimeDirInvalid { .. }
+            | Self::RuntimeHomeUnknown
+            | Self::RuntimeMaterializeFailed { .. } => fmt_runtime_install_error(self, f),
             Self::StaticRefusal(refusal) => write!(f, "static build refused: {refusal}"),
             Self::CapabilityMismatch { missing, extra } => {
                 f.write_str("declared capabilities do not match the program's inferred set")?;
@@ -330,6 +358,46 @@ impl std::fmt::Display for CliError {
     }
 }
 
+/// Render the runtime-install error family (`RuntimeDirInvalid`,
+/// `RuntimeHomeUnknown`, `RuntimeMaterializeFailed`) for [`CliError`]'s `Display`.
+/// Split out so the main `Display` match stays within one screen.
+fn fmt_runtime_install_error(err: &CliError, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    match err {
+        CliError::RuntimeDirInvalid {
+            path,
+            points_at_inner,
+        } => {
+            write!(
+                f,
+                "IPE_RUNTIME_DIR points at {}, which is not an Ipe runtime crate root \
+                 (its Cargo.toml must declare `name = \"ipe-runtime-rust\"`)",
+                path.display()
+            )?;
+            if *points_at_inner {
+                write!(
+                    f,
+                    "\n  = help: this looks like the inner runtime module directory; \
+                     point IPE_RUNTIME_DIR at the crate root that holds Cargo.toml \
+                     (e.g. `src/runtime/rust`), not the `src/ipe_runtime` inside it"
+                )?;
+            }
+            Ok(())
+        }
+        CliError::RuntimeHomeUnknown => write!(
+            f,
+            "could not determine where to install the Ipe runtime: none of IPE_HOME, \
+             XDG_DATA_HOME, or HOME is set; set IPE_HOME to a writable directory"
+        ),
+        CliError::RuntimeMaterializeFailed { detail } => write!(
+            f,
+            "could not install the Ipe runtime: {detail}\n  \
+             the build was stopped rather than link an incomplete runtime"
+        ),
+        // The caller only dispatches the three runtime-install variants here.
+        _ => Ok(()),
+    }
+}
+
 impl std::error::Error for CliError {}
 
 // `CliError` is the `Err` type of every driver `Result`, so its size is paid
@@ -380,21 +448,45 @@ pub struct BuildOptions {
     /// development-only `Debug.*` escape hatch (IPE-L0140). Default `false`
     /// (a development build).
     pub production: bool,
-    /// `true` for the opt-in dependency-model emit (env `IPE_RUNTIME_DEP=1`, or
-    /// set directly by a test): the emitted native project declares the runtime
-    /// as a path dependency with a `runtime_features`-selected feature list and
-    /// vendors no runtime source. Default `false` (the byte-identical
-    /// vendored-source emit). No effect on the wasm target (its manifest is a
-    /// closed vendoring template for now).
+    /// `true` (the DEFAULT for a native build) selects the dependency-model
+    /// emit: the emitted native project declares the runtime as a path
+    /// dependency with a `runtime_features`-selected feature list and vendors no
+    /// runtime source. `false` opts back into the byte-identical vendored-source
+    /// emit — the fallback for debugging / a machine without an installed
+    /// runtime crate — set via `IPE_RUNTIME_VENDORED=1` (or directly by a test).
+    /// No effect on the wasm target (its manifest is a closed vendoring template
+    /// for now — its emit returns before the dependency-model branch).
     pub runtime_dep: bool,
 }
 
-/// Read the opt-in dependency-model flag from the environment
-/// (`IPE_RUNTIME_DEP=1`). A [`BuildOptions::runtime_dep`] already set by a
-/// caller (a test) takes precedence and is returned unchanged.
+/// Select the emit model from the environment.
+///
+/// The dependency model is the DEFAULT; `IPE_RUNTIME_VENDORED=1` opts back into
+/// the vendored-source emit (debugging / a machine that cannot resolve the
+/// runtime crate). The legacy `IPE_RUNTIME_DEP=1` remains an explicit no-op
+/// affirmation of the default. A [`BuildOptions::runtime_dep`] already set by a
+/// caller (a test) is what is threaded; this function only computes the
+/// env-derived default.
 #[must_use]
 pub fn runtime_dep_from_env() -> bool {
-    std::env::var("IPE_RUNTIME_DEP").is_ok_and(|v| v == "1")
+    !std::env::var("IPE_RUNTIME_VENDORED").is_ok_and(|v| v == "1")
+}
+
+impl BuildOptions {
+    /// The default build options with the emit model resolved from the
+    /// environment (dependency-model by default; vendored under
+    /// `IPE_RUNTIME_VENDORED=1`). The zero-configuration entrypoints
+    /// ([`build`], [`build_with_sibling_discovery`], [`build_project`]) seed
+    /// this so a library caller gets the same default emit model a `ipe build`
+    /// invocation does, rather than the raw `Default` (which is vendored — the
+    /// fallback shape).
+    #[must_use]
+    pub fn from_env() -> Self {
+        Self {
+            runtime_dep: runtime_dep_from_env(),
+            ..Self::default()
+        }
+    }
 }
 
 /// Build `entry` into a Rust Cargo project under `out_dir`, vendoring the
@@ -404,7 +496,7 @@ pub fn runtime_dep_from_env() -> bool {
 /// Returns [`CliError::Pipeline`] when the compiler rejects the program,
 /// [`CliError::Io`] on any filesystem failure.
 pub fn build(entry: &Path, out_dir: &Path, runtime_dir: &Path) -> Result<(), CliError> {
-    build_with_options(entry, out_dir, runtime_dir, BuildOptions::default())
+    build_with_options(entry, out_dir, runtime_dir, BuildOptions::from_env())
 }
 
 /// [`build`] with explicit [`BuildOptions`] (the static-plan-aware variant).
@@ -490,7 +582,7 @@ pub fn build_with_sibling_discovery(
     out_dir: &Path,
     runtime_dir: &Path,
 ) -> Result<(), CliError> {
-    build_with_sibling_discovery_with_options(entry, out_dir, runtime_dir, BuildOptions::default())
+    build_with_sibling_discovery_with_options(entry, out_dir, runtime_dir, BuildOptions::from_env())
 }
 
 /// [`build_with_sibling_discovery`] with explicit [`BuildOptions`] (the
@@ -744,8 +836,10 @@ fn compile_modules_observed(
     // build refuses loudly here rather than falling back to a vendored — or
     // worse, a wrong — runtime. Native only (wasm keeps its vendored template).
     let runtime_dep = if options.runtime_dep && options.target == ipe_ir::Target::Native {
-        match resolve_runtime_crate_root() {
-            Ok(root) => Some(ipe_backend_rust::RuntimeDep { root }),
+        match runtime_embed::resolve() {
+            Ok(resolved) => Some(ipe_backend_rust::RuntimeDep {
+                root: resolved.root().to_path_buf(),
+            }),
             Err(e) => return (Err(e), CacheOutcome::Miss),
         }
     } else {
@@ -1625,7 +1719,12 @@ pub fn build_project(
     out_dir: &Path,
     runtime_dir: &Path,
 ) -> Result<(), CliError> {
-    build_project_with_options(manifest_path, out_dir, runtime_dir, BuildOptions::default())
+    build_project_with_options(
+        manifest_path,
+        out_dir,
+        runtime_dir,
+        BuildOptions::from_env(),
+    )
 }
 
 /// [`build_project`] with explicit [`BuildOptions`] (the static-plan-aware
@@ -1685,40 +1784,6 @@ pub fn build_project_with_options(
     )
 }
 
-/// Resolve the runtime CRATE ROOT for the dependency-model emit — the directory
-/// holding the runtime `Cargo.toml` (`package = "ipe-runtime-rust"`) the emitted
-/// project names as its `path` dependency.
-///
-/// Minimal in-repo resolver (full install resolution is a later phase): the
-/// upward walk finds `src/runtime/rust/` from anywhere inside the workspace, the
-/// candidate is verified to hold a runtime `Cargo.toml` declaring the expected
-/// package (parse, don't validate — a wrong or half-present crate is a loud
-/// refusal, never a silent walk-on to a wrong runtime), and the verified root is
-/// canonicalised so the emitted `path` is absolute and stable.
-///
-/// # Errors
-/// [`CliError::RuntimeNotFound`] when no verified runtime crate root is found.
-pub fn resolve_runtime_crate_root() -> Result<PathBuf, CliError> {
-    fn is_runtime_crate(root: &Path) -> bool {
-        let manifest = root.join("Cargo.toml");
-        std::fs::read_to_string(&manifest).is_ok_and(|text| {
-            text.lines()
-                .any(|l| l.trim() == "name = \"ipe-runtime-rust\"")
-        })
-    }
-
-    let cwd = std::env::current_dir().map_err(|e| io_err(Path::new("."), e))?;
-    let mut here: Option<&Path> = Some(cwd.as_path());
-    while let Some(dir) = here {
-        let candidate = dir.join("src").join("runtime").join("rust");
-        if is_runtime_crate(&candidate) {
-            return candidate.canonicalize().map_err(|e| io_err(&candidate, e));
-        }
-        here = dir.parent();
-    }
-    Err(CliError::RuntimeNotFound)
-}
-
 /// Locate the Ipê runtime module tree (`src/runtime/rust/src/`).
 ///
 /// Resolution order:
@@ -1762,6 +1827,34 @@ pub fn resolve_runtime() -> Result<PathBuf, CliError> {
         here = dir.parent();
     }
     Err(CliError::RuntimeNotFound)
+}
+
+/// Resolve the vendored runtime MODULE tree the emit copies into the project,
+/// but only when that emit shape actually needs it.
+///
+/// The dependency-model native emit (the default) carries no vendored
+/// `src/ipe_runtime/` tree — it names the runtime as a path dependency, resolved
+/// separately by [`runtime_embed::resolve`] — so requiring a vendored tree up
+/// front would fail a perfectly valid build run outside a repo checkout. The
+/// vendored tree is needed only when the vendored shape is emitted: the wasm
+/// target (which still vendors) or a build with the dependency model turned off.
+///
+/// `cli_override` is the explicit `--runtime <dir>` value, honoured verbatim when
+/// present. When the vendored tree is not needed, an empty sentinel path is
+/// returned; the dep-model native emit never reads it.
+///
+/// # Errors
+/// [`CliError::RuntimeNotFound`] / [`CliError::Io`] from [`resolve_runtime`] when
+/// a vendored tree is required but cannot be located.
+fn resolve_vendored_runtime_dir(
+    cli_override: Option<String>,
+    needs_vendored: bool,
+) -> Result<PathBuf, CliError> {
+    match cli_override {
+        Some(r) => Ok(PathBuf::from(r)),
+        None if needs_vendored => resolve_runtime(),
+        None => Ok(PathBuf::new()),
+    }
 }
 
 /// The misuse reason shown when `build` / `run` / `watch` are invoked with no
@@ -2049,10 +2142,6 @@ fn run_build(rest: &[String]) -> Result<(), CliError> {
     };
 
     let out_dir = out.map_or_else(|| PathBuf::from("out").join("rust"), PathBuf::from);
-    let runtime_dir = match args.runtime {
-        Some(r) => PathBuf::from(r),
-        None => resolve_runtime()?,
-    };
 
     // Route the build:
     //   1. Directory → expect ipe.toml inside it.
@@ -2076,6 +2165,10 @@ fn run_build(rest: &[String]) -> Result<(), CliError> {
     // Precedence: CLI --target wasm > IPE_TARGET=wasm > [wasm].mode != "off".
     let wasm_target = resolve_wasm_target(wasm_target, manifest_wasm.as_ref());
 
+    // The dep-model native emit needs no vendored tree; wasm and dep-off do.
+    let runtime_dep = runtime_dep_from_env();
+    let runtime_dir = resolve_vendored_runtime_dir(args.runtime, wasm_target || !runtime_dep)?;
+
     let static_plan = resolve_static_plan(cli_layer, manifest.as_deref())?;
     let options = BuildOptions {
         static_plan,
@@ -2087,7 +2180,7 @@ fn run_build(rest: &[String]) -> Result<(), CliError> {
         wasm_public_env: Vec::new(),
         wasm_hydrate_mode: false,
         production: args.production,
-        runtime_dep: runtime_dep_from_env(),
+        runtime_dep,
     };
 
     // Human-friendly progress: the compile+emit below is otherwise silent, so
@@ -2303,10 +2396,6 @@ fn run_run(rest: &[String]) -> Result<(), CliError> {
     let out_dir = args
         .out
         .map_or_else(|| PathBuf::from("out").join("rust"), PathBuf::from);
-    let runtime_dir = match args.runtime {
-        Some(r) => PathBuf::from(r),
-        None => resolve_runtime()?,
-    };
 
     // --- Step 1: ipe compile → emit the Rust project ---
     let manifest = discover_manifest(&entry_path)?;
@@ -2322,6 +2411,10 @@ fn run_run(rest: &[String]) -> Result<(), CliError> {
     // set, treat `ipe run` as a wasm build-and-bundle (no native binary to
     // exec). A plain `ipe run` in a non-wasm project stays native.
     let wasm_target = resolve_wasm_target(false, manifest_wasm.as_ref());
+
+    // The dep-model native emit needs no vendored tree; wasm and dep-off do.
+    let runtime_dep = runtime_dep_from_env();
+    let runtime_dir = resolve_vendored_runtime_dir(args.runtime, wasm_target || !runtime_dep)?;
 
     // Fail closed before emitting: `ipe run` shells out to cargo to build the
     // emitted project, so a missing toolchain is a clear root-cause error now,
@@ -2347,7 +2440,7 @@ fn run_run(rest: &[String]) -> Result<(), CliError> {
         wasm_public_env: Vec::new(),
         wasm_hydrate_mode: false,
         production: false,
-        runtime_dep: runtime_dep_from_env(),
+        runtime_dep,
     };
 
     manifest.as_ref().map_or_else(

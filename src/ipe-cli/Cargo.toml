@@ -54,6 +54,14 @@ semver = "1"
 # Same `toml` version the runtime crate already pins, so this adds no new crate
 # to the vetted dependency graph.
 toml = "0.8"
+# The runtime crate SOURCE (`../runtime/rust`: its `Cargo.toml` + `src/**`) is
+# compiled INTO this binary as a static directory tree, so a copied `ipe`
+# binary carries its own runtime source and never needs a separate download.
+# `include_dir` walks the tree at build time and embeds each file as a byte
+# slice — source only, no object code (the rejected prebuilt-rlib route). The
+# tree is written to `<IPE_HOME>/runtime/<version>/rust` on demand and built
+# locally.
+include_dir = "0.7"
 # The `ipe package audit` provenance panic-scan reuses the SAME token scanner the
 # repo's abrupt-failure attestation hook runs (`tools/panic-scan`), so the gate
 # and the hook can never diverge on what counts as an authored abrupt-failure
