@@ -5930,6 +5930,30 @@ impl StdlibKernel {
         )
     }
 
+    /// `true` when this variant belongs to the non-TEA `Ipe.Time` kernel family
+    /// (`Time.now` / `unixMillis` / `sleep` / `timeString` / `isLeapYear` /
+    /// `daysInMonth`). Excludes `Time.every`, which is TEA (`is_tea()`).
+    ///
+    /// The `time` runtime module is always declared, but its IANA-zone helpers
+    /// (the `chrono-tz`-backed calendar surface) are gated behind the `time`
+    /// Cargo feature. Used by `ipe_lower` to detect `uses_time` and by the
+    /// backend to enable the `time` feature and add the `chrono-tz` dependency to
+    /// the emitted manifest; a program that reaches no `Ipe.Time` kernel drops
+    /// the crate. `chrono` core (the always-on log/db/web timestamp floor) stays
+    /// unconditional regardless of this flag.
+    #[must_use]
+    pub const fn is_time(self) -> bool {
+        matches!(
+            self,
+            Self::TimeNow
+                | Self::TimeSleep
+                | Self::TimeUnixMillis
+                | Self::TimeTimeString
+                | Self::TimeIsLeapYear
+                | Self::TimeDaysInMonth
+        )
+    }
+
     /// `true` when this variant belongs to the `Ipe.Auth` kernel family
     /// (`Ipe.Auth.hashPassword` / `verifyPassword` / `signToken` / `verifyToken` /
     /// `register` / `login` / `setRole` and companions).
@@ -7402,6 +7426,29 @@ mod tests {
                  (E0433) or pull the csv crate into a program that never parses CSV",
                 k.is_csv(),
                 is_csv_qualifier,
+            );
+        }
+    }
+
+    /// Every non-TEA `Ipe.Time` kernel keys the `uses_time` gate that enables
+    /// the `time` Cargo feature (and the `chrono-tz` dependency). So `qualifier
+    /// == "Time" && !is_tea()` MUST imply `is_time()`, and no other kernel may
+    /// report `is_time()`. `Time.every` is TEA, excluded on both sides. Both
+    /// directions are asserted, so a new `Time.*` kernel the predicate forgets —
+    /// or an unrelated kernel wrongly claimed — fails the instant the two
+    /// disagree.
+    #[test]
+    fn time_predicate_tracks_non_tea_time_qualifier() {
+        for k in StdlibKernel::ALL {
+            let is_time_qualifier = k.decl().qualifier == "Time" && !k.is_tea();
+            assert_eq!(
+                k.is_time(),
+                is_time_qualifier,
+                "{k:?}: is_time()={} but (qualifier==\"Time\" && !is_tea()) is {} — \
+                 a Time-using program would either drop chrono-tz it needs or a \
+                 non-Time program would pull it",
+                k.is_time(),
+                is_time_qualifier,
             );
         }
     }

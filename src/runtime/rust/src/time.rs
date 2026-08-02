@@ -1,5 +1,8 @@
 // Time kernel — basic helpers (tokio-gated on native, wasm-client-gated in the
 // browser) + Ipe.Time advanced (always available).
+// `IpeResult` backs only the IANA-zone helpers (the `Result`-returning zone
+// surface), all gated behind the `time` feature — so its import is gated too.
+#[cfg(feature = "time")]
 use super::IpeResult;
 // `IpeTask`/`ok_res` back every native time kernel (the reactor-free clock reads
 // AND the `Time.sleep` timer), so they are available on any native build,
@@ -173,10 +176,22 @@ pub fn time_format_rfc3339(ms: i64) -> String {
     }
 }
 
+#[cfg(feature = "time")]
+use chrono::{DateTime, Duration, Weekday};
 /// === Ipe.Time advanced — IANA zones + calendar math ===
-use chrono::{DateTime, Datelike, Duration, NaiveDate, TimeZone, Timelike, Utc, Weekday};
+// Core calendar math (add/diff/isLeapYear/daysInMonth) uses only these,
+// unconditionally. `DateTime` / `Duration` / `Weekday` appear only in the
+// `time`-gated zone helpers, so they are imported under that feature.
+use chrono::{Datelike, NaiveDate, TimeZone, Timelike, Utc};
+// `chrono-tz` (the embedded IANA zone DB) backs the zone helpers below; it is
+// gated behind the `time` Cargo feature, promoted only for a program that
+// reaches an `Ipe.Time` kernel. A no-Time program compiles this module without
+// the crate — every `Tz`-using fn is `#[cfg(feature = "time")]`. The chrono-core
+// calendar math (add/diff/isLeapYear/daysInMonth) stays unconditional.
+#[cfg(feature = "time")]
 use chrono_tz::Tz;
 
+#[cfg(feature = "time")]
 fn parse_zone<E: From<String>>(z: &str) -> IpeResult<E, Tz> {
     match z.parse::<Tz>() {
         Ok(t) => IpeResult::Ok(t),
@@ -184,6 +199,7 @@ fn parse_zone<E: From<String>>(z: &str) -> IpeResult<E, Tz> {
     }
 }
 
+#[cfg(feature = "time")]
 fn millis_to_zoned<E: From<String>>(zone: &str, ms: i64) -> IpeResult<E, DateTime<Tz>> {
     let tz = match parse_zone::<E>(zone) {
         IpeResult::Ok(t) => t,
@@ -195,6 +211,7 @@ fn millis_to_zoned<E: From<String>>(zone: &str, ms: i64) -> IpeResult<E, DateTim
     }
 }
 
+#[cfg(feature = "time")]
 #[must_use]
 pub fn time_in_zone<E: From<String>>(zone: String, ms: i64) -> IpeResult<E, String> {
     let dt = match millis_to_zoned::<E>(&zone, ms) {
@@ -277,6 +294,7 @@ pub fn time_add_years(years: i64, ms: i64) -> i64 {
     time_add_months(years.saturating_mul(12), ms)
 }
 
+#[cfg(feature = "time")]
 fn zoned_field<E: From<String>, F>(zone: String, ms: i64, f: F) -> IpeResult<E, i64>
 where
     F: FnOnce(DateTime<Tz>) -> i64,
@@ -288,18 +306,22 @@ where
     IpeResult::Ok(f(dt))
 }
 
+#[cfg(feature = "time")]
 #[must_use]
 pub fn time_year<E: From<String>>(z: String, ms: i64) -> IpeResult<E, i64> {
     zoned_field(z, ms, |dt| i64::from(dt.year()))
 }
+#[cfg(feature = "time")]
 #[must_use]
 pub fn time_month<E: From<String>>(z: String, ms: i64) -> IpeResult<E, i64> {
     zoned_field(z, ms, |dt| i64::from(dt.month()))
 }
+#[cfg(feature = "time")]
 #[must_use]
 pub fn time_day<E: From<String>>(z: String, ms: i64) -> IpeResult<E, i64> {
     zoned_field(z, ms, |dt| i64::from(dt.day()))
 }
+#[cfg(feature = "time")]
 #[must_use]
 pub fn time_day_of_week<E: From<String>>(z: String, ms: i64) -> IpeResult<E, i64> {
     zoned_field(z, ms, |dt| match dt.weekday() {
@@ -312,14 +334,17 @@ pub fn time_day_of_week<E: From<String>>(z: String, ms: i64) -> IpeResult<E, i64
         Weekday::Sun => 7,
     })
 }
+#[cfg(feature = "time")]
 #[must_use]
 pub fn time_day_of_year<E: From<String>>(z: String, ms: i64) -> IpeResult<E, i64> {
     zoned_field(z, ms, |dt| i64::from(dt.ordinal()))
 }
+#[cfg(feature = "time")]
 #[must_use]
 pub fn time_week_of_year<E: From<String>>(z: String, ms: i64) -> IpeResult<E, i64> {
     zoned_field(z, ms, |dt| i64::from(dt.iso_week().week()))
 }
+#[cfg(feature = "time")]
 #[must_use]
 pub fn time_is_weekend<E: From<String>>(z: String, ms: i64) -> IpeResult<E, bool> {
     let dt = match millis_to_zoned::<E>(&z, ms) {
@@ -368,6 +393,7 @@ pub fn time_days_in_month(year: i64, month: i64) -> i64 {
     }
 }
 
+#[cfg(feature = "time")]
 fn local_midnight_in_zone<E: From<String>>(
     zone: String,
     ms: i64,
@@ -391,10 +417,12 @@ fn local_midnight_in_zone<E: From<String>>(
     }
 }
 
+#[cfg(feature = "time")]
 #[must_use]
 pub fn time_start_of_day<E: From<String>>(zone: String, ms: i64) -> IpeResult<E, i64> {
     local_midnight_in_zone(zone, ms, 0, 0, 0, 0, |dt| dt.date_naive())
 }
+#[cfg(feature = "time")]
 #[must_use]
 pub fn time_end_of_day<E: From<String>>(zone: String, ms: i64) -> IpeResult<E, i64> {
     match time_start_of_day::<E>(zone, ms) {
@@ -402,6 +430,7 @@ pub fn time_end_of_day<E: From<String>>(zone: String, ms: i64) -> IpeResult<E, i
         IpeResult::Err(e) => IpeResult::Err(e),
     }
 }
+#[cfg(feature = "time")]
 #[must_use]
 pub fn time_start_of_week<E: From<String>>(zone: String, ms: i64) -> IpeResult<E, i64> {
     local_midnight_in_zone(zone, ms, 0, 0, 0, 0, |dt| {
@@ -409,12 +438,14 @@ pub fn time_start_of_week<E: From<String>>(zone: String, ms: i64) -> IpeResult<E
         dt.date_naive() - Duration::days(i64::from(wd))
     })
 }
+#[cfg(feature = "time")]
 #[must_use]
 pub fn time_start_of_month<E: From<String>>(zone: String, ms: i64) -> IpeResult<E, i64> {
     local_midnight_in_zone(zone, ms, 0, 0, 0, 0, |dt| {
         NaiveDate::from_ymd_opt(dt.year(), dt.month(), 1).unwrap_or(dt.date_naive())
     })
 }
+#[cfg(feature = "time")]
 #[must_use]
 pub fn time_end_of_month<E: From<String>>(zone: String, ms: i64) -> IpeResult<E, i64> {
     let dt = match millis_to_zoned::<E>(&zone, ms) {
@@ -426,12 +457,14 @@ pub fn time_end_of_month<E: From<String>>(zone: String, ms: i64) -> IpeResult<E,
     let target_date = target.unwrap_or(dt.date_naive());
     local_midnight_in_zone::<E>(zone, ms, 23, 59, 59, 999, move |_| target_date)
 }
+#[cfg(feature = "time")]
 #[must_use]
 pub fn time_start_of_year<E: From<String>>(zone: String, ms: i64) -> IpeResult<E, i64> {
     local_midnight_in_zone(zone, ms, 0, 0, 0, 0, |dt| {
         NaiveDate::from_ymd_opt(dt.year(), 1, 1).unwrap_or(dt.date_naive())
     })
 }
+#[cfg(feature = "time")]
 #[must_use]
 pub fn time_end_of_year<E: From<String>>(zone: String, ms: i64) -> IpeResult<E, i64> {
     local_midnight_in_zone(zone, ms, 23, 59, 59, 999, |dt| {
@@ -439,6 +472,7 @@ pub fn time_end_of_year<E: From<String>>(zone: String, ms: i64) -> IpeResult<E, 
     })
 }
 
+#[cfg(feature = "time")]
 #[must_use]
 pub fn time_format_in_zone<E: From<String>>(
     pattern: String,
@@ -495,6 +529,7 @@ pub fn time_diff_days(later_ms: i64, earlier_ms: i64) -> i64 {
 /// Ipê source: `fromParts zone y m d h mins s -> Result Error Int`.
 /// Computes the UTC epoch-ms for the given local date/time in the given IANA
 /// zone. Invalid parts return Err. Unknown timezone returns Err.
+#[cfg(feature = "time")]
 #[must_use]
 pub fn time_from_parts<E: From<String>>(
     zone: String,
@@ -533,6 +568,7 @@ pub fn time_from_parts<E: From<String>>(
 
 /// `zoneOffset zone ms -> Result Error Int` — UTC offset in seconds for the
 /// instant in the given zone. Unknown zones return Err.
+#[cfg(feature = "time")]
 #[must_use]
 pub fn time_zone_offset<E: From<String>>(zone_name: String, ms: i64) -> IpeResult<E, i64> {
     use chrono::Offset;
@@ -553,6 +589,7 @@ pub fn time_zone_offset<E: From<String>>(zone_name: String, ms: i64) -> IpeResul
 
 /// `zoneName zone ms -> Result Error String` — short timezone abbreviation
 /// (e.g. "EST", "PDT"). Unknown zones return Err.
+#[cfg(feature = "time")]
 #[must_use]
 pub fn time_zone_name<E: From<String>>(zone_name: String, ms: i64) -> IpeResult<E, String> {
     let utc: DateTime<Utc> = match Utc.timestamp_millis_opt(ms).single() {
@@ -569,7 +606,11 @@ pub fn time_zone_name<E: From<String>>(zone_name: String, ms: i64) -> IpeResult<
     }
 }
 
-#[cfg(test)]
+// Exercises the IANA-zone helpers, so it needs the `chrono-tz`-backed surface
+// the `time` feature gates. The chrono-core calendar math (add/diff/isLeapYear)
+// is covered here too; running the whole module under `--features time` keeps a
+// single fixture set rather than splitting core from zone tests.
+#[cfg(all(test, feature = "time"))]
 mod time_advanced_tests {
     use super::*;
 

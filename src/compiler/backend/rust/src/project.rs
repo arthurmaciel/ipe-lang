@@ -72,6 +72,11 @@ autobins = false
 # vendored runtime (`cfg(any(feature = "web", feature = "wasm-client"))`).
 default = ["wasm-client"]
 wasm-client = []
+# Gates the IANA-zone calendar surface of the always-declared `time` runtime
+# module (the `chrono-tz`-backed helpers). Promoted into `default` and paired
+# with the `chrono-tz` dependency only for a program that reaches an `Ipe.Time`
+# kernel; a program that uses no Time kernel keeps it off and drops the crate.
+time = []
 
 [lib]
 # Browser WASM module. Same source layout as the binary targets; the crate
@@ -91,7 +96,6 @@ uuid = { version = "1", features = ["v4", "v7", "js"] }
 hex = "0.4"
 percent-encoding = "2"
 chrono = "0.4"
-chrono-tz = "0.10"
 rust_decimal = { version = "1", features = ["serde"] }
 hmac = "0.12"
 sha1 = "0.10"
@@ -1357,9 +1361,18 @@ fn assemble_project_files(
             RelPath::new("www/boot.js")?,
             "import init from \"./pkg/ipe_app.js\";\ninit();\n".to_owned(),
         );
+        // Ipe.Time IANA-zone surface: same gate as the native path — the wasm
+        // `time` module is always present, its zone helpers behind the `time`
+        // feature. Promote the feature + re-inject `chrono-tz` only for a Time
+        // program; a no-Time wasm program drops the crate.
+        let wasm_cargo_toml = if ctx.uses_time {
+            chrono_tz_cargo_toml(WASM_CARGO_TOML)?
+        } else {
+            WASM_CARGO_TOML.to_owned()
+        };
         return Ok(EmittedProject {
             files,
-            cargo_toml: WASM_CARGO_TOML.to_owned(),
+            cargo_toml: wasm_cargo_toml,
         });
     }
 
@@ -1519,6 +1532,19 @@ fn assemble_project_files(
     // not reached by any other surface, so the flag alone gates it.
     let cargo_toml = if ctx.uses_csv {
         csv_cargo_toml(&cargo_toml)?
+    } else {
+        cargo_toml
+    };
+    // Ipe.Time IANA-zone calendar surface (`chrono-tz`): pulled in only when the
+    // program reaches a non-TEA `Ipe.Time` kernel. The `time` runtime module is
+    // always declared, but its zone helpers are gated behind the `time` Cargo
+    // feature; this step promotes the feature and re-injects `chrono-tz`. A
+    // program that uses no Time kernel keeps the base manifest and drops the
+    // crate. `chrono` core stays unconditional (the always-on log/db/web
+    // timestamp floor), so it is never touched here. Anchors on `default = [` /
+    // `chrono = "0.4"`, not the tokio line, so it composes with the sync base.
+    let cargo_toml = if ctx.uses_time {
+        chrono_tz_cargo_toml(&cargo_toml)?
     } else {
         cargo_toml
     };
@@ -2924,6 +2950,77 @@ fn http_client_cargo_toml(base: &str) -> DResult<String> {
     result.push_str(base.get(..anchor_pos).unwrap_or(""));
     result.push_str(&reqwest_dep);
     result.push_str(base.get(anchor_pos..).unwrap_or(""));
+    Ok(result)
+}
+
+/// Build the time-enabled `Cargo.toml` by promoting the `time` feature into the
+/// `default` list and re-injecting the `chrono-tz` dependency in its original
+/// slot (immediately after the base `chrono` line).
+///
+/// The `time` runtime module is ALWAYS declared, but its IANA-zone calendar
+/// helpers (the sole consumers of `chrono-tz`) are gated behind the `time` Cargo
+/// feature. A program that reaches an `Ipe.Time` kernel promotes the feature and
+/// gets the crate back; a program that uses no `Ipe.Time` kernel keeps the base
+/// manifest — no `time` in `default`, no `chrono-tz` line — so the helpers
+/// compile out and the crate is dropped. `chrono` core (the always-on
+/// `log`/`db`/`web`/`telemetry` timestamp floor) stays unconditional and is
+/// untouched here.
+///
+/// The dep is re-inserted exactly where the base template declared it (after
+/// `chrono = "0.4"`) so a Time-using manifest is byte-identical to the
+/// pre-gating output. Composes with any prior default-list surgery (`["json"]`,
+/// `["tokio", "json"]`, or the wasm `["wasm-client"]`): the `"time"` element is
+/// appended before the closing `]` regardless of the list's contents. The
+/// version comes from the [`crate_specs`] SSOT (drift-guarded against
+/// `runtime/Cargo.toml`).
+///
+/// # Errors
+///
+/// Returns [`Diagnostic::CompilerBug`] if the `default = [` / `chrono = "0.4"`
+/// anchors are absent — a golden-drift invariant violation (fail-loud, never a
+/// silent no-op).
+fn chrono_tz_cargo_toml(base: &str) -> DResult<String> {
+    const DEFAULT_PREFIX: &str = "default = [";
+    const CHRONO_ANCHOR: &str = "chrono = \"0.4\"\n";
+
+    // Step 1 — promote `time` into the default feature list.
+    let pfx = base
+        .find(DEFAULT_PREFIX)
+        .ok_or_else(|| Diagnostic::CompilerBug {
+            where_: "ipe_backend_rust::project::chrono_tz_cargo_toml",
+            detail: format!("Cargo.toml anchor {DEFAULT_PREFIX:?} not found — golden drifted"),
+        })?;
+    let search_from = pfx + DEFAULT_PREFIX.len();
+    let rel = base
+        .get(search_from..)
+        .and_then(|s| s.find(']'))
+        .ok_or_else(|| Diagnostic::CompilerBug {
+            where_: "ipe_backend_rust::project::chrono_tz_cargo_toml",
+            detail: "default feature list has no closing ']' — golden drifted".to_owned(),
+        })?;
+    let close = search_from + rel;
+    let mut step1 = String::with_capacity(base.len() + 40);
+    step1.push_str(base.get(..close).unwrap_or(""));
+    step1.push_str(r#", "time""#);
+    step1.push_str(base.get(close..).unwrap_or(""));
+
+    // Step 2 — re-inject `chrono-tz` in its original slot (after `chrono`).
+    let chrono_tz_dep = format!(
+        "{} = \"{}\"\n",
+        crate_specs::CHRONO_TZ.name,
+        crate_specs::CHRONO_TZ.version,
+    );
+    let anchor_pos = step1
+        .find(CHRONO_ANCHOR)
+        .ok_or_else(|| Diagnostic::CompilerBug {
+            where_: "ipe_backend_rust::project::chrono_tz_cargo_toml",
+            detail: format!("Cargo.toml anchor {CHRONO_ANCHOR:?} not found — golden drifted"),
+        })?;
+    let insert_at = anchor_pos + CHRONO_ANCHOR.len();
+    let mut result = String::with_capacity(step1.len() + chrono_tz_dep.len());
+    result.push_str(step1.get(..insert_at).unwrap_or(""));
+    result.push_str(&chrono_tz_dep);
+    result.push_str(step1.get(insert_at..).unwrap_or(""));
     Ok(result)
 }
 
