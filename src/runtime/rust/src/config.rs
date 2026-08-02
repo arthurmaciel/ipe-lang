@@ -3,6 +3,15 @@
 // `IpeError` is the real ADT from `error.rs`, re-exported at the crate root
 // via `pub use error::*` — no `String` alias needed.
 
+// Fail-closed driver guard: `db-sqlite` and `db-postgres` are mutually
+// exclusive sqlx driver selectors. Only the emitter ever enables one (each
+// generated project picks exactly one driver); this is a compile-time guard
+// against a hand-written union, not a user surface.
+#[cfg(all(feature = "db-sqlite", feature = "db-postgres"))]
+compile_error!(
+    "db-sqlite and db-postgres are mutually exclusive: a project selects exactly one sqlx driver"
+);
+
 #[cfg(feature = "db")]
 pub type DbPool = sqlx::sqlite::SqlitePool;
 #[cfg(feature = "db")]

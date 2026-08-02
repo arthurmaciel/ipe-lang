@@ -1,6 +1,6 @@
 [package]
 name = "ipe-runtime-rust"
-version = "0.1.0"
+version.workspace = true
 edition = "2024"
 license = "Apache-2.0"
 description = "Ipe language runtime for Rust — primitives, collections, FFI"
@@ -17,10 +17,22 @@ path = "src/mod.rs"
 # compiler's `path "…"` gate shares the SAME file via the `ipe_path_core` crate,
 # which `include!`s `src/path_core.rs`, so the runtime seal and the compile-time
 # gate cannot drift.
-tokio = { version = "1", features = ["full"], optional = true }
+# Narrow feature set matching the emitted floor async runtime (project.rs
+# `async_runtime_cargo_toml`): `rt`/`rt-multi-thread`/`macros`/`time`, plus
+# `sync` (the shared Cli/Tui event loop `tea.rs` — compiled under the `tokio`
+# feature — uses `tokio::sync::mpsc`). The `net` arm is added only by the
+# `server`/`web`/`websocket_client` surface features. `full` is deliberately
+# NOT used here so depending on the crate does not pull all of tokio.
+tokio = { version = "1", features = ["rt", "rt-multi-thread", "macros", "time", "sync"], optional = true }
 serde_json = { version = "1", optional = true }
 jsonwebtoken = { version = "9", optional = true }
-sha2 = { version = "0.10", optional = true }
+# NON-optional: `crypto_core` (the always-on cryptographic floor: SHA-2 hash /
+# HMAC family + typed Key/Mac) is declared unconditionally, mirroring the
+# emitted floor (`templates/ipe_runtime/mod.rs` declares `pub mod crypto_core;`
+# and the base template ships `sha2` non-optional). jwt/auth/db/web/email all
+# rely on this floor being present at `--no-default-features`. The heavy RSA
+# arms inside `crypto_core.rs` stay `cfg(feature = "crypto")`.
+sha2 = { version = "0.10" }
 rsa = { version = "0.9", features = ["sha2"], optional = true }
 aes-gcm = { version = "0.10", optional = true }
 chacha20poly1305 = { version = "0.10", optional = true }
@@ -33,12 +45,14 @@ serde_yaml = { version = "0.9", optional = true }
 axum = { version = "0.7", features = ["ws"], optional = true }
 tower-http = { version = "0.5", features = ["fs", "catch-panic"], optional = true }
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "gzip", "stream"], optional = true }
-# `url`: NON-optional. Backs the always-compiled `Ipe.Url` typed-URL module
-# (`url.rs`, the parse-don't-validate seal + `form_urlencoded` query builder),
-# same posture as the always-present `path.rs`. Also the reqwest-free `ssrf`
-# module's parser (reqwest re-exports this exact crate as `reqwest::Url`), so it
-# resolves to the same lockfile node as reqwest's — no extra dependency.
-url = { version = "2" }
+# `url`: optional, behind the `url` feature. Backs the `Ipe.Url` typed-URL
+# module (`url.rs`, the parse-don't-validate seal + `form_urlencoded` query
+# builder) and the reqwest-free `ssrf` module's parser (reqwest re-exports this
+# exact crate as `reqwest::Url`, so it resolves to the same lockfile node — no
+# extra dependency). Gated so a program that reaches no URL/SSRF/HTTP/WebSocket
+# surface drops the idna/ICU4X subtree, matching the emitted floor (`url` is
+# appended only under `uses_url`, never in the base manifest).
+url = { version = "2", optional = true }
 lettre = { version = "0.11", default-features = false, features = ["builder", "hostname", "smtp-transport", "pool", "tokio1", "tokio1-rustls-tls"], optional = true }
 # `rustls-tls-webpki-roots`: enables `MaybeTlsStream::Rustls` so `wss://`
 # connections use the same rustls backend as reqwest/sqlx/lettre — no native
@@ -70,7 +84,11 @@ zeroize = "1"
 hmac = "0.12"
 sha1 = "0.10"
 md-5 = "0.10"
-sqlx = { version = "0.8", features = ["runtime-tokio-rustls", "sqlite", "postgres"], optional = true }
+# The driver features (`sqlite`/`postgres`) are activated by the `db-sqlite` /
+# `db-postgres` selectors, not enabled here — a program pulls only the driver
+# it emits. `db-postgres` also activates `sqlite` (the Live session store keeps
+# a sqlite side table even under the postgres driver — see `db_cargo_toml`).
+sqlx = { version = "0.8", features = ["runtime-tokio-rustls"], optional = true }
 # Ipe.Live session-checkpoint body encoding (H24 wire format: base64(tag ++ bincode)).
 bincode = { version = "1", optional = true }
 redis = { version = "0.27", features = ["tokio-comp"], optional = true }
@@ -175,6 +193,11 @@ console_error_panic_hook = { version = "0.1", optional = true }
 [features]
 default = []
 async = ["tokio"]
+# The `Ipe.Url` typed-URL module + the reqwest-free `ssrf` validators. Pulled
+# by every surface that parses URLs (http_client / websocket_client / email /
+# web) and selectable standalone. A program that reaches no URL surface drops
+# the `url` crate (and its idna/ICU4X closure) entirely.
+url = ["dep:url"]
 # Locale-aware case mapping (`String.toUpperIn`/`toLowerIn`/`Locale.fromTag`).
 # Programs that never import `Ipe.Locale` pay nothing — the ICU4X casemap +
 # locale-core deps are entirely absent from the default feature graph.
@@ -182,16 +205,34 @@ locale = ["dep:icu_casemap", "dep:icu_locale_core"]
 # Ipe.Time IANA-zone calendar surface (`time.rs`'s zone helpers). Gated so a
 # program that reaches no `Ipe.Time` kernel drops the embedded IANA zone DB.
 time = ["dep:chrono-tz"]
-json = ["serde_json", "jsonwebtoken"]
-# `sha2` is required by `db_migrate_apply` (the `_ipe_migrations` ledger stores a
-# sha256-hex checksum per migration — a cross-backend DB contract that must match
-# the Go backend byte-for-byte). Generated projects always enable `crypto`
-# (which also pulls sha2); listing it here fixes the standalone `--features db`
-# build, which has no crypto. (serde is now a non-optional dep — see [dependencies] —
-# so it is NOT listed here.)
-db = ["sqlx", "tokio", "serde_json", "json", "sha2", "bincode"]
-redis_store = ["redis", "tokio", "serde_json", "async-trait", "bincode"]
-crypto = ["sha2", "rsa", "bcrypt", "aes-gcm", "chacha20poly1305", "pbkdf2"]
+# `json` is the emitted FLOOR feature (`default = ["json"]`); it must NOT drag
+# `jsonwebtoken` (+ ring) into a plain JSON program. The JWT surface moved to
+# the `jwt` feature.
+json = ["serde_json"]
+# `sha2` (the `_ipe_migrations` ledger checksum, a cross-backend byte-exact DB
+# contract) is now a non-optional base dep, so it is NOT listed. `tokio/sync`:
+# `db.rs`, `telemetry_spill.rs`, and the `tea` loop use `tokio::sync`. BOTH the
+# `sqlite` and `postgres` sqlx drivers link with `db`: the vendored Live session
+# store (`web/store.rs`) references `SqlitePool` AND `PgPool` under `db`, and the
+# emitted `db_cargo_toml` likewise always keeps `sqlite` and adds `postgres` for
+# a postgres project (the session store keeps a sqlite side table on every
+# driver). Which driver a program actually *uses* is chosen by `config.rs` — the
+# emitter's `config_postgres.rs` overlay for postgres — not by dropping a sqlx
+# driver feature.
+db = ["sqlx", "sqlx?/sqlite", "sqlx?/postgres", "tokio", "tokio/sync", "serde_json", "json", "bincode"]
+# `db-sqlite` / `db-postgres`: config.rs alias selectors. Only the emitter ever
+# enables one, and it selects exactly one (SEAL-checked) — the standalone crate
+# links both sqlx drivers regardless (see `db`). The `compile_error!` in
+# `config.rs` guards the union as a fail-closed guard, not a user surface.
+db-sqlite = ["db"]
+db-postgres = ["db"]
+redis_store = ["redis", "tokio", "tokio/sync", "serde_json", "async-trait", "bincode"]
+crypto = ["rsa", "bcrypt", "aes-gcm", "chacha20poly1305", "pbkdf2"]
+# `jwt`: the JWT encode/decode surface (`jwt.rs`, `all(json, crypto)`-gated).
+# Splits `jsonwebtoken` (+ its ring closure) out of the floor `json` feature so
+# a plain JSON program does not link it. `auth.rs` (register/login) also needs
+# this surface. Implies both `json` and `crypto`, matching the module gate.
+jwt = ["json", "crypto", "dep:jsonwebtoken"]
 compression = ["flate2", "zstd", "tokio"]
 csv_kernel = ["csv", "tokio"]
 cache_kernel = ["tokio"]
@@ -205,27 +246,33 @@ tui = ["unicode-width", "crossterm", "tokio"]
 # in-process IPC bridge.
 webview = ["wry", "tao", "web"]
 config = ["json", "toml", "serde_yaml"]
-server = ["tokio", "axum", "tower-http", "futures-util"]
+# `tokio/net`+`tokio/sync`: axum binds a listener (`tokio::net`) and the
+# server/live loop uses `tokio::sync`.
+server = ["tokio", "tokio/net", "tokio/sync", "axum", "tower-http", "futures-util"]
 # The reqwest-free `ssrf` module parses URLs via the `url` crate (which reqwest
-# re-exports as `reqwest::Url`); `url` is now a NON-optional base dependency (see
-# its `[dependencies]` entry), so it needs no feature entry here.
-http_client = ["tokio", "reqwest", "futures-util"]
+# re-exports as `reqwest::Url`); `url` is behind the `url` feature.
+http_client = ["tokio", "reqwest", "futures-util", "url"]
 # `http_client`: email.rs reuses `http_client::ssrf_apply` for outbound-request
 # SSRF hardening; ws_client.rs reuses `http_client::ssrf_validate_url` +
-# `ssrf_pinned_ws_addr`. Both need the http_client module present.
-email = ["tokio", "reqwest", "lettre", "serde_json", "sha2", "http_client"]
-# ws needs ONLY the reqwest-free ssrf validators (which use `url`, a NON-optional
-# base dep), NOT the reqwest HTTP client — so it does not pull `http_client`.
-# (Was `http_client` in batch-19; option B factored the validators into the
-# reqwest-free `ssrf` module.)
-websocket_client = ["tokio", "tokio-tungstenite", "futures-util"]
-# `sha2` (client-JS SRI integrity hash — web/mod.rs) is used by
-# always-compiled-under-web code; the standalone `web` feature pulls it
-# directly. The session-id / CSRF-token RNG draws from the OS CSPRNG via
-# `uuid` (a non-optional base dep), so `web` needs no `aes-gcm`. (`subtle` for
-# the constant-time compare is a non-optional dep.) serde is non-optional now.
-web = ["server", "http_client", "serde_json", "async-trait", "sha2"]
-full = ["async", "json", "db", "redis_store", "crypto", "compression", "csv_kernel", "cache_kernel", "tui", "config", "server", "http_client", "email", "websocket_client", "web", "time"]
+# `ssrf_pinned_ws_addr`. Both need the http_client module present. (`sha2` is a
+# non-optional base dep now.)
+email = ["tokio", "reqwest", "lettre", "serde_json", "http_client"]
+# ws needs ONLY the reqwest-free ssrf validators (which use `url`, behind the
+# `url` feature), NOT the reqwest HTTP client — so it does not pull
+# `http_client`. `tokio/net`: `ws_client.rs` opens the pinned TCP socket.
+websocket_client = ["tokio", "tokio/net", "tokio/sync", "tokio-tungstenite", "futures-util", "url"]
+# The session-id / CSRF-token RNG draws from the OS CSPRNG via `uuid` (a
+# non-optional base dep), so `web` needs no `aes-gcm`; `subtle` (constant-time
+# compare), `sha2` (client-JS SRI integrity hash) and `serde` are non-optional
+# base deps now. `tokio/signal`+`tokio/process`: the Live console reverse-proxy
+# (`web/console_proxy.rs`, `web/mod.rs`) spawns a child (`tokio::process`) and
+# handles signals (`tokio::signal`) — matching the emitted `web_cargo_toml`
+# live-runtime tokio feature set.
+web = ["server", "http_client", "serde_json", "async-trait", "tokio/signal", "tokio/process"]
+# `db-postgres` (not bare `db`) selects a concrete sqlx driver — it also pulls
+# `sqlite`, so both driver code paths compile. `jwt` + `url` cover the
+# JWT/auth and URL/SSRF surfaces that `db`/`web`/`http_client` reach.
+full = ["async", "json", "jwt", "url", "db", "db-postgres", "redis_store", "crypto", "compression", "csv_kernel", "cache_kernel", "tui", "config", "server", "http_client", "email", "websocket_client", "web", "time"]
 # Browser-WASM TEA sink (`src/wasm/`): mount + patch-apply + delegated events.
 # Compiles only on wasm32 (the module is target-cfg'd); NOT in `full` — native
 # builds never link the wasm glue.
@@ -236,12 +283,11 @@ wasm-client = [
     "dep:web-sys",
     "dep:console_error_panic_hook",
     "dep:gloo-timers",
-    # `crypto.rs`'s wasm32 arm (`crypto_random_bytes`/`crypto_random_token`)
-    # plus the pure hash family (`crypto_sha256`/`crypto_hmac_sha256`/…) need
-    # `sha2` regardless of the (native-only) `crypto` feature; the emitted
-    # WASM project's own Cargo.toml already lists `sha2` unconditionally —
-    # this mirrors that for the source crate's own wasm-client build/tests.
-    "sha2",
+    # `sha2` (the wasm32 `crypto.rs`/`crypto_core.rs` hash family) is a
+    # non-optional base dep now, so no feature entry is needed here.
+    # `url`: the wasm32 `http_client.rs` fetch arm parses/narrows URLs via
+    # `crate::url` (now behind the `url` feature).
+    "url",
 ]
 
 [dev-dependencies]
@@ -301,6 +347,3 @@ wasm-bindgen-test = "0.3"
 # The only permitted exceptions are the 3 INFALLIBLE-tagged HMAC #[allow] sites.
 unwrap_used = "deny"
 expect_used = "deny"
-
-[package.metadata.ipe]
-runtime_version = "0.16.29"
