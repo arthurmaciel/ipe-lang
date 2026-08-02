@@ -52,6 +52,7 @@ const fn empty_module(name: ModPath) -> Module {
         uses_env_public: false,
         uses_debug: false,
         uses_ffi: false,
+        uses_async_runtime: false,
     }
 }
 

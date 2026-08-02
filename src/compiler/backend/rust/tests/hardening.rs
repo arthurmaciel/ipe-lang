@@ -51,6 +51,7 @@ fn program(name: Symbol, types: Vec<TypeDef>, funcs: Vec<Func>) -> Program {
             uses_env_public: false,
             uses_debug: false,
             uses_ffi: false,
+            uses_async_runtime: false,
         }],
     }
 }
@@ -270,6 +271,7 @@ fn cross_module_type_name_collision_is_rejected() -> DResult<()> {
                 uses_env_public: false,
                 uses_debug: false,
                 uses_ffi: false,
+                uses_async_runtime: false,
             },
             Module {
                 name: ModPath(vec![other_mod]),
@@ -297,6 +299,7 @@ fn cross_module_type_name_collision_is_rejected() -> DResult<()> {
                 uses_env_public: false,
                 uses_debug: false,
                 uses_ffi: false,
+                uses_async_runtime: false,
             },
         ],
     };

@@ -64,6 +64,9 @@ fn program_with_web(
             uses_env_public: false,
             uses_debug: false,
             uses_ffi: false,
+            // A web/server shape reaches the reactor, so the emitted crate keeps
+            // the tokio spine the `server_cargo_toml` surgery anchors on.
+            uses_async_runtime: uses_web,
         }],
     }
 }

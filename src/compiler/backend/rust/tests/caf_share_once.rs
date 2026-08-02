@@ -42,6 +42,7 @@ const fn empty_module(name: ModPath, funcs: Vec<Func>, entry: Option<FuncId>) ->
         uses_env_public: false,
         uses_debug: false,
         uses_ffi: false,
+        uses_async_runtime: false,
     }
 }
 

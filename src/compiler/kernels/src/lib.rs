@@ -6051,6 +6051,97 @@ impl StdlibKernel {
         )
     }
 
+    /// `true` when this kernel's runtime implementation drives the future to
+    /// completion only through the tokio reactor — a spawned task, a timer, a
+    /// socket, an async filesystem offload, or a `.await` on any such primitive.
+    /// A program that reaches such a kernel MUST link tokio and enter through
+    /// its runtime; a program that reaches none of them runs on the std-only
+    /// executor with a plain synchronous `fn main`, shedding the whole tokio
+    /// subtree.
+    ///
+    /// FAIL-CLOSED. The default arm is `true`: a kernel counts as
+    /// reactor-requiring UNLESS it is on the proven-pure whitelist below. A
+    /// kernel added later, or one whose implementation is uncertain, is
+    /// reactor-requiring by construction — so the worst a misjudgement can do is
+    /// keep tokio for a program that did not need it (a lost optimisation),
+    /// never emit a synchronous entry for a program whose future parks on a
+    /// reactor op that will never fire (a hang). Every whitelisted family below
+    /// is one whose runtime module drives its futures to `Ready` on the first
+    /// poll — no `.await` on a reactor primitive, no `tokio::spawn`, no timer —
+    /// verified against the runtime source.
+    ///
+    /// The whitelist is keyed on the kernel's canonical qualifier for the
+    /// families that are pure in whole, with per-kernel carve-outs for the
+    /// mixed ones (`Time.sleep`, `System.loadEnv`, and the reactor-driven
+    /// `Task` combinators are reactor-requiring; the rest of those families are
+    /// not).
+    ///
+    /// Not `const`: the whole-family arms compare the kernel's canonical
+    /// qualifier (`&str`), which stable Rust cannot match in a `const fn`.
+    #[must_use]
+    pub fn requires_async_runtime(self) -> bool {
+        // The reactor-driven members of otherwise-pure families. `Task.run` /
+        // `Task.perform` block on an inner task whose purity is not knowable
+        // here; `Task.parallel` spawns; `Task.retryWith` sleeps; `Task.attempt`
+        // bridges into the TEA command loop. `Time.sleep` / `Time.every` and
+        // `System.loadEnv` (a `spawn_blocking` offload) likewise touch the
+        // reactor. All are fail-closed to reactor-requiring by NAME so a future
+        // rename cannot silently demote them.
+        if matches!(
+            self,
+            Self::TaskRun
+                | Self::TaskPerform
+                | Self::TaskParallel
+                | Self::TaskRetryWith
+                | Self::TaskAttempt
+                | Self::TimeSleep
+                | Self::TimeEvery
+                | Self::SystemLoadEnv
+        ) {
+            return true;
+        }
+        // Whole-family pure qualifiers: every kernel under these qualifiers
+        // resolves without the reactor (synchronous computation, or a
+        // synchronous `std` effect wrapped in an already-`Ready` future).
+        // Verified reactor-free in the runtime module for each. The reactor
+        // members of the mixed `Time` / `System` / `Task` families were already
+        // returned above, so reaching this arm under `Time` / `System` means a
+        // pure member. A qualifier not listed here is reactor-requiring.
+        !matches!(
+            self.decl().qualifier,
+            "Log"
+                | "String"
+                | "Char"
+                | "List"
+                | "Basics"
+                | "Maybe"
+                | "Result"
+                | "Math"
+                | "Bitwise"
+                | "Dict"
+                | "Set"
+                | "Bytes"
+                | "Encoding"
+                | "JsonEnc"
+                | "JsonDec"
+                | "JsonDecP"
+                | "Uuid"
+                | "Decimal"
+                | "Money"
+                | "Secret"
+                | "Regex"
+                | "Path"
+                | "Locale"
+                | "Error"
+                | "CssSafety"
+                | "Random"
+                | "Io"
+                | "Sql"
+                | "Time"
+                | "System"
+        )
+    }
+
     /// `true` when this variant belongs to the `Ipe.Ui` / `Ipe.Html`
     /// subsystem.
     #[must_use]
@@ -7138,6 +7229,103 @@ mod tests {
                 k.is_url(),
                 is_url_qualifier,
             );
+        }
+    }
+
+    /// The async-runtime classification is FAIL-CLOSED: a kernel counts as
+    /// reactor-requiring unless its whole qualifier is on the proven-pure
+    /// whitelist (or it is a pure member of a mixed family). This test pins the
+    /// classification against a hand-audited ground truth for every wired
+    /// kernel, so a new kernel — or a rename that moves one across the boundary
+    /// — cannot silently flip a program onto the wrong executor. The invariant
+    /// the whole increment rests on: a kernel that `requires_async_runtime()`
+    /// reports `false` for MUST resolve its future without the tokio reactor
+    /// (else a synchronous `fn main` would park forever on an op that never
+    /// fires).
+    #[test]
+    fn async_runtime_classification_is_fail_closed() {
+        // The whole-family pure qualifiers (every kernel under them is
+        // reactor-free) plus the reactor members of the mixed families that are
+        // carved out by name.
+        const PURE_QUALIFIERS: &[&str] = &[
+            "Log",
+            "String",
+            "Char",
+            "List",
+            "Basics",
+            "Maybe",
+            "Result",
+            "Math",
+            "Bitwise",
+            "Dict",
+            "Set",
+            "Bytes",
+            "Encoding",
+            "JsonEnc",
+            "JsonDec",
+            "JsonDecP",
+            "Uuid",
+            "Decimal",
+            "Money",
+            "Secret",
+            "Regex",
+            "Path",
+            "Locale",
+            "Error",
+            "CssSafety",
+            "Random",
+            "Io",
+            "Sql",
+            "Time",
+            "System",
+        ];
+        // Reactor-driven carve-outs inside the otherwise-pure `Time` / `System`
+        // / `Task` families.
+        let reactor_carveouts = |k: StdlibKernel| {
+            matches!(
+                k,
+                StdlibKernel::TaskRun
+                    | StdlibKernel::TaskPerform
+                    | StdlibKernel::TaskParallel
+                    | StdlibKernel::TaskRetryWith
+                    | StdlibKernel::TaskAttempt
+                    | StdlibKernel::TimeSleep
+                    | StdlibKernel::TimeEvery
+                    | StdlibKernel::SystemLoadEnv
+            )
+        };
+        for k in StdlibKernel::ALL {
+            let q = k.decl().qualifier;
+            let expected_async = reactor_carveouts(*k) || !PURE_QUALIFIERS.contains(&q);
+            assert_eq!(
+                k.requires_async_runtime(),
+                expected_async,
+                "{k:?} (qualifier {q:?}): requires_async_runtime()={} but the audited \
+                 ground truth is {expected_async}. A pure kernel wrongly marked async only \
+                 keeps tokio (safe); a reactor kernel wrongly marked pure would emit a \
+                 synchronous `fn main` that HANGS on a reactor op — re-audit the runtime impl \
+                 before changing the whitelist.",
+                k.requires_async_runtime(),
+            );
+        }
+    }
+
+    /// The fail-closed default itself: a synthetic qualifier that is not on the
+    /// whitelist must classify as reactor-requiring. Guards against a future
+    /// refactor that inverts the default arm.
+    #[test]
+    fn unknown_qualifier_defaults_to_async() {
+        for k in StdlibKernel::ALL {
+            let q = k.decl().qualifier;
+            // Every Db/Http/Server/Web kernel is a known reactor surface; assert
+            // the default arm keeps them async (they are never on the pure list).
+            if matches!(q, "Db" | "Http" | "Server" | "Web" | "File" | "Cmd" | "Sub") {
+                assert!(
+                    k.requires_async_runtime(),
+                    "{k:?} (qualifier {q:?}) is a reactor surface but was classified pure — \
+                     the fail-closed default arm has regressed"
+                );
+            }
         }
     }
 

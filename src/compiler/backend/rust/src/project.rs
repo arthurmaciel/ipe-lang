@@ -1377,14 +1377,30 @@ fn assemble_project_files(
     // are used. Db, TEA, and Server are independent features; a program may use
     // any combination. The order: db first, then server; both modify the same
     // base manifest so we chain the transformations.
+    // The async spine (`tokio` + `futures-util` + the `"tokio"` default feature)
+    // is off the base template and restored here whenever the program reaches a
+    // reactor-requiring kernel. This runs FIRST, before every per-surface
+    // surgery, so their anchors (`default = ["tokio", "json"]`, the `tokio`
+    // dependency line) see the restored spine and compose byte-identically to
+    // the pre-gating output. A pure program keeps the tokio-free base and enters
+    // through the std-only `block_on` selected in the epilogue below. Every
+    // per-surface flag (db / server / web / tui / webview / websocket / email /
+    // http / crypto / jwt / auth / url / config / compression / csv / tea)
+    // reaches a reactor kernel, so `uses_async_runtime` is a superset of them
+    // all — the restore is always present when a downstream anchor needs it.
+    let async_base = if ctx.uses_async_runtime {
+        async_runtime_cargo_toml(CARGO_TOML)?
+    } else {
+        CARGO_TOML.to_owned()
+    };
     let (cargo_toml, runtime_config_rs) = if ctx.uses_db {
         let cfg = match ctx.db_driver {
             crate::DbDriver::Sqlite => RUNTIME_CONFIG_RS_DB_SQLITE,
             crate::DbDriver::Postgres => RUNTIME_CONFIG_RS_DB_POSTGRES,
         };
-        (db_cargo_toml(ctx.db_driver)?, cfg.to_owned())
+        (db_cargo_toml(&async_base, ctx.db_driver)?, cfg.to_owned())
     } else {
-        (CARGO_TOML.to_owned(), RUNTIME_CONFIG_RS.to_owned())
+        (async_base, RUNTIME_CONFIG_RS.to_owned())
     };
     // Apply server manifest extension on top of whichever base was chosen above.
     // Web also needs axum + tower-http (the web runtime uses axum
@@ -2247,7 +2263,7 @@ fn pub_crate_item(rendered: &str) -> String {
 ///
 /// String surgery rather than a second static file: the manifest content is
 /// small and the two edits are unambiguous anchors.
-fn db_cargo_toml(driver: crate::DbDriver) -> DResult<String> {
+fn db_cargo_toml(base: &str, driver: crate::DbDriver) -> DResult<String> {
     const DEFAULT_LINE: &str = r#"default = ["tokio", "json"]"#;
     const DEFAULT_LINE_DB: &str = r#"default = ["tokio", "json", "db"]"#;
     // The sqlx line is appended right before the dev/release profile sections.
@@ -2270,8 +2286,8 @@ fn db_cargo_toml(driver: crate::DbDriver) -> DResult<String> {
         crate_specs::BINCODE.version,
     );
 
-    let step1 = CARGO_TOML.replacen(DEFAULT_LINE, DEFAULT_LINE_DB, 1);
-    if step1 == CARGO_TOML {
+    let step1 = base.replacen(DEFAULT_LINE, DEFAULT_LINE_DB, 1);
+    if step1 == base {
         return Err(Diagnostic::CompilerBug {
             where_: "ipe_backend_rust::project::db_cargo_toml",
             detail: format!("Cargo.toml anchor {DEFAULT_LINE:?} not found — golden drifted"),
@@ -3167,6 +3183,85 @@ fn crypto_core_heavy_cargo_toml(base: &str) -> DResult<String> {
     Ok(result)
 }
 
+/// Restore the tokio async spine into a program that reaches the reactor.
+///
+/// The base template ships NO async runtime: a pure program (only `Io.println`,
+/// string / list / math / json computation, the pure `Task` monad ops) enters
+/// through the std-only `block_on` and links neither `tokio` nor `futures-util`.
+/// A program that reaches ANY reactor-requiring kernel
+/// ([`EmitCtx::uses_async_runtime`]) restores exactly what the base template
+/// once carried, so an async program's manifest is byte-for-byte what it was
+/// before the async floor became conditional:
+///
+/// 1. re-add `"tokio"` as the FIRST default feature (`["json"]` →
+///    `["tokio", "json"]`), the slot the per-surface surgeries
+///    (`db`/`server`/`web`/`crypto_core_heavy`) anchor on. This augmenter runs
+///    FIRST in the chain, so those downstream anchors see the restored line.
+/// 2. re-add the `tokio` dependency as the first `[dependencies]` line (before
+///    `dlmalloc`), with its original feature set. The `server`/`web` surgeries
+///    extend this exact line with `"net"` / `"sync"`.
+/// 3. re-add `futures-util` in its original slot (after the `bcrypt` base dep).
+///
+/// The `tokio` / `futures-util` versions come from the [`crate_specs`] SSOT
+/// (drift-guarded against `runtime/Cargo.toml`).
+///
+/// # Errors
+///
+/// Returns [`Diagnostic::CompilerBug`] if the `default = ["json"]`, `dlmalloc`,
+/// or `bcrypt` anchor is absent — a golden-drift invariant violation (fail-loud,
+/// never a silent no-op that would emit an async program without a runtime).
+fn async_runtime_cargo_toml(base: &str) -> DResult<String> {
+    const DEFAULT_ANCHOR: &str = r#"default = ["json"]"#;
+    const DEFAULT_RESTORED: &str = r#"default = ["tokio", "json"]"#;
+    // `tokio` was the first `[dependencies]` line, above the `dlmalloc`
+    // dependency. Anchor on the full `dlmalloc` dep spelling (not a bare
+    // `dlmalloc = `, which also occurs inside the `alloc_dlmalloc` FEATURE line).
+    const DLMALLOC_ANCHOR: &str = r#"dlmalloc = { version = "0.2""#;
+    // `futures-util` followed the `bcrypt` base dep.
+    const BCRYPT_ANCHOR: &str = "bcrypt = \"0.17\"\n";
+    let tokio_dep = format!(
+        "{} = {{ version = \"{}\", features = [\"rt\", \"rt-multi-thread\", \"macros\", \"time\"] }}\n",
+        crate_specs::TOKIO.name,
+        crate_specs::TOKIO.version,
+    );
+    let futures_dep = format!(
+        "{} = \"{}\"\n",
+        crate_specs::FUTURES_UTIL.name,
+        crate_specs::FUTURES_UTIL.version,
+    );
+
+    let bug = |anchor: &str| Diagnostic::CompilerBug {
+        where_: "ipe_backend_rust::project::async_runtime_cargo_toml",
+        detail: format!("Cargo.toml anchor {anchor:?} not found — golden drifted"),
+    };
+
+    // Step 1 — restore `"tokio"` in the default feature list.
+    if !base.contains(DEFAULT_ANCHOR) {
+        return Err(bug(DEFAULT_ANCHOR));
+    }
+    let step1 = base.replacen(DEFAULT_ANCHOR, DEFAULT_RESTORED, 1);
+
+    // Step 2 — insert the `tokio` dependency immediately before `dlmalloc`.
+    let dl_at = step1
+        .find(DLMALLOC_ANCHOR)
+        .ok_or_else(|| bug(DLMALLOC_ANCHOR))?;
+    let mut step2 = String::with_capacity(step1.len() + tokio_dep.len() + futures_dep.len());
+    step2.push_str(step1.get(..dl_at).unwrap_or(""));
+    step2.push_str(&tokio_dep);
+    step2.push_str(step1.get(dl_at..).unwrap_or(""));
+
+    // Step 3 — restore the `futures-util` line after the `bcrypt` base dep.
+    let bc_at = step2
+        .find(BCRYPT_ANCHOR)
+        .map(|p| p + BCRYPT_ANCHOR.len())
+        .ok_or_else(|| bug(BCRYPT_ANCHOR))?;
+    let mut result = String::with_capacity(step2.len() + futures_dep.len());
+    result.push_str(step2.get(..bc_at).unwrap_or(""));
+    result.push_str(&futures_dep);
+    result.push_str(step2.get(bc_at..).unwrap_or(""));
+    Ok(result)
+}
+
 /// Build the heavy-`Ipe.Crypto`-enabled `Cargo.toml` by appending the five
 /// crypto-exclusive dependencies before `[profile.dev]`.
 ///
@@ -3545,8 +3640,8 @@ impl {sf} {{
 mod tests {
     use super::{
         CARGO_TOML, RUNTIME_CONFIG_RS_DB_POSTGRES, RUNTIME_CONFIG_RS_DB_SQLITE,
-        RUNTIME_MOD_RS_WEB_APPEND, crypto_core_heavy_cargo_toml, db_cargo_toml, server_cargo_toml,
-        shake_ffi_by_fn_ident, web_cargo_toml,
+        RUNTIME_MOD_RS_WEB_APPEND, async_runtime_cargo_toml, crypto_core_heavy_cargo_toml,
+        db_cargo_toml, server_cargo_toml, shake_ffi_by_fn_ident, web_cargo_toml,
     };
     use crate::DbDriver;
     use crate::crate_specs;
@@ -3563,7 +3658,8 @@ mod tests {
     /// not insert "db" into the default list.
     #[test]
     fn server_toml_non_db_inserts_server() {
-        let out = server_cargo_toml(CARGO_TOML).expect("server_cargo_toml must succeed");
+        let out = server_cargo_toml(&async_runtime_cargo_toml(CARGO_TOML).expect("async base"))
+            .expect("server_cargo_toml must succeed");
         let def = default_line(&out);
         assert!(
             def.contains(r#""server""#),
@@ -3596,7 +3692,11 @@ mod tests {
     /// the default list, and neither overwrites the other.
     #[test]
     fn server_toml_db_compose_inserts_both() {
-        let db_base = db_cargo_toml(crate::DbDriver::Sqlite).expect("db_cargo_toml must succeed");
+        let db_base = db_cargo_toml(
+            &async_runtime_cargo_toml(CARGO_TOML).expect("async base"),
+            crate::DbDriver::Sqlite,
+        )
+        .expect("db_cargo_toml must succeed");
         let out = server_cargo_toml(&db_base).expect("server_cargo_toml on db base must succeed");
         let def = default_line(&out);
         // `"crypto"` is NOT expected: it is gated by `crypto_core_heavy_cargo_toml`
@@ -3631,7 +3731,11 @@ mod tests {
     /// leaves open (SSOT ↔ manifests): this is SSOT ↔ emitted output.
     #[test]
     fn emitted_manifests_use_ssot_versions() {
-        let db = db_cargo_toml(crate::DbDriver::Sqlite).expect("db_cargo_toml");
+        let db = db_cargo_toml(
+            &async_runtime_cargo_toml(CARGO_TOML).expect("async base"),
+            crate::DbDriver::Sqlite,
+        )
+        .expect("db_cargo_toml");
         assert!(
             db.contains(&format!(
                 "{} = {{ version = \"{}\"",
@@ -3640,7 +3744,8 @@ mod tests {
             )),
             "db manifest must emit SSOT sqlx version:\n{db}"
         );
-        let srv = server_cargo_toml(CARGO_TOML).expect("server_cargo_toml");
+        let srv = server_cargo_toml(&async_runtime_cargo_toml(CARGO_TOML).expect("async base"))
+            .expect("server_cargo_toml");
         assert!(
             srv.contains(&format!(
                 "{} = {{ version = \"{}\", features = [\"ws\"]",
@@ -3649,7 +3754,10 @@ mod tests {
             )),
             "server manifest must emit SSOT axum version:\n{srv}"
         );
-        let heavy = crypto_core_heavy_cargo_toml(CARGO_TOML).expect("crypto_core_heavy_cargo_toml");
+        let heavy = crypto_core_heavy_cargo_toml(
+            &async_runtime_cargo_toml(CARGO_TOML).expect("async base"),
+        )
+        .expect("crypto_core_heavy_cargo_toml");
         assert!(
             heavy.contains(&format!(
                 "{} = {{ version = \"{}\", features = [\"sha2\"] }}",
@@ -3666,7 +3774,10 @@ mod tests {
     /// program's manifest is byte-identical to the pre-gating output.
     #[test]
     fn crypto_core_heavy_toml_restores_crypto_and_rsa_in_place() {
-        let out = crypto_core_heavy_cargo_toml(CARGO_TOML).expect("crypto_core_heavy_cargo_toml");
+        let out = crypto_core_heavy_cargo_toml(
+            &async_runtime_cargo_toml(CARGO_TOML).expect("async base"),
+        )
+        .expect("crypto_core_heavy_cargo_toml");
         assert!(
             default_line(&out).contains(r#"default = ["tokio", "crypto", "json"]"#),
             "crypto must land in its original slot after tokio: {}",
@@ -3682,7 +3793,11 @@ mod tests {
     /// `crypto` in its original slot (`["tokio", "crypto", "json", "db"]`).
     #[test]
     fn crypto_core_heavy_toml_composes_with_db() {
-        let db = db_cargo_toml(crate::DbDriver::Sqlite).expect("db_cargo_toml");
+        let db = db_cargo_toml(
+            &async_runtime_cargo_toml(CARGO_TOML).expect("async base"),
+            crate::DbDriver::Sqlite,
+        )
+        .expect("db_cargo_toml");
         let out = crypto_core_heavy_cargo_toml(&db).expect("crypto_core_heavy on db base");
         assert!(
             default_line(&out).contains(r#"default = ["tokio", "crypto", "json", "db"]"#),
@@ -3717,7 +3832,11 @@ mod tests {
     /// that composition order.
     #[test]
     fn web_db_toml_includes_postgres() {
-        let db_base = db_cargo_toml(crate::DbDriver::Sqlite).expect("db_cargo_toml must succeed");
+        let db_base = db_cargo_toml(
+            &async_runtime_cargo_toml(CARGO_TOML).expect("async base"),
+            crate::DbDriver::Sqlite,
+        )
+        .expect("db_cargo_toml must succeed");
         // server_cargo_toml always runs before web_cargo_toml when uses_web is
         // true (see emit_program).  It adds the tokio net+sync features that
         // web_cargo_toml's anchor requires.
@@ -3754,7 +3873,9 @@ mod tests {
     /// postgres dep (no sqlx line exists, no-op replace).
     #[test]
     fn web_only_toml_no_postgres() {
-        let server_base = server_cargo_toml(CARGO_TOML).expect("server_cargo_toml must succeed");
+        let server_base =
+            server_cargo_toml(&async_runtime_cargo_toml(CARGO_TOML).expect("async base"))
+                .expect("server_cargo_toml must succeed");
         let out = web_cargo_toml(&server_base).expect("web_cargo_toml on non-db base must succeed");
         assert!(
             !out.contains("\"postgres\""),
@@ -3770,7 +3891,9 @@ mod tests {
     /// readSecret prelude.
     #[test]
     fn web_toml_declares_libc_once() {
-        let server_base = server_cargo_toml(CARGO_TOML).expect("server_cargo_toml must succeed");
+        let server_base =
+            server_cargo_toml(&async_runtime_cargo_toml(CARGO_TOML).expect("async base"))
+                .expect("server_cargo_toml must succeed");
         let out = web_cargo_toml(&server_base).expect("web_cargo_toml on non-db base must succeed");
         let libc_lines = out
             .lines()
@@ -3788,12 +3911,16 @@ mod tests {
 
     // ── Class 7 §3: Postgres driver structural reachability ─────────────────
 
-    /// `db_cargo_toml(DbDriver::Sqlite)` must be byte-identical to the
+    /// `db_cargo_toml(&async_runtime_cargo_toml(CARGO_TOML).expect("async base"), DbDriver::Sqlite)` must be byte-identical to the
     /// pre-driver-selection output (non-regression: every existing db-enabled
     /// sqlite project's Cargo.toml is unaffected by the driver plumbing).
     #[test]
     fn db_cargo_toml_sqlite_driver_unchanged_sqlx_feature() {
-        let out = db_cargo_toml(DbDriver::Sqlite).expect("db_cargo_toml(Sqlite) must succeed");
+        let out = db_cargo_toml(
+            &async_runtime_cargo_toml(CARGO_TOML).expect("async base"),
+            DbDriver::Sqlite,
+        )
+        .expect("db_cargo_toml(Sqlite) must succeed");
         assert!(
             out.contains(r#"features = ["runtime-tokio-rustls", "sqlite"]"#),
             "sqlite driver must keep the sqlite sqlx feature, not add postgres: {out}"
@@ -3819,7 +3946,11 @@ mod tests {
     /// of the app's `[database]` driver choice.
     #[test]
     fn db_cargo_toml_postgres_driver_enables_postgres_sqlx_feature() {
-        let out = db_cargo_toml(DbDriver::Postgres).expect("db_cargo_toml(Postgres) must succeed");
+        let out = db_cargo_toml(
+            &async_runtime_cargo_toml(CARGO_TOML).expect("async base"),
+            DbDriver::Postgres,
+        )
+        .expect("db_cargo_toml(Postgres) must succeed");
         assert!(
             out.contains(r#"features = ["runtime-tokio-rustls", "sqlite", "postgres"]"#),
             "postgres driver must enable both the sqlite sqlx feature (always \

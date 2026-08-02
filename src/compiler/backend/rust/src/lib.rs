@@ -653,6 +653,27 @@ pub(crate) struct EmitCtx<'a> {
     /// appends `pub mod env_public; pub use env_public::*;` to the emitted
     /// `ipe_runtime/mod.rs`, on EITHER target.
     pub(crate) uses_env_public: bool,
+    /// `true` when the program reaches at least one reactor-requiring kernel
+    /// (async IO, timer, spawn, network, database, or any FFI call). Selects
+    /// the emitted entry point and manifest floor:
+    ///
+    /// * `false` — [`crate::project::emit_program`] emits a synchronous
+    ///   `fn main` that drives `ipe_main()` on a std-only executor
+    ///   (`ipe_runtime::task::block_on`'s `#[cfg(not(feature = "tokio"))]`
+    ///   park/unpark variant), and [`crate::project::assemble_project_files`]
+    ///   drops `tokio` + `futures-util` from the emitted `Cargo.toml` and the
+    ///   `"tokio"` default feature. A pure program (only `Io.println`, string /
+    ///   list / math / json computation, the pure `Task` monad ops) sheds the
+    ///   whole tokio subtree.
+    /// * `true` — the tokio `block_on` entry and the full base manifest are
+    ///   emitted unchanged; every existing async surface composes on top as
+    ///   before.
+    ///
+    /// FAIL-CLOSED: the lowerer marks every unknown kernel (and every FFI call)
+    /// reactor-requiring, so the synchronous entry is emitted only for a program
+    /// proven to need no reactor. Wasm targets ignore this (their entry is
+    /// `#[wasm_bindgen(start)]`, their runtime already tokio-free).
+    pub(crate) uses_async_runtime: bool,
     /// The `[wasm] publicEnv` allowlist (`ipe.toml`, threaded in via
     /// [`RustBackend::with_wasm_public_env`]) — already validated against the
     /// secret-name denylist at `ipe.toml` parse time. Meaningless / ignored
@@ -1242,6 +1263,11 @@ impl<'a> EmitCtx<'a> {
         // detect foreign-crate FFI wrapper usage.
         let uses_ffi = program.modules.iter().any(|m| m.uses_ffi);
 
+        // detect whether ANY module reaches a reactor-requiring kernel — the
+        // union across modules, since one async module makes the whole program
+        // async. Selects the synchronous vs tokio entry point + manifest floor.
+        let uses_async_runtime = program.modules.iter().any(|m| m.uses_async_runtime);
+
         let mut ctx = Self {
             interner,
             uses_db,
@@ -1267,6 +1293,7 @@ impl<'a> EmitCtx<'a> {
             uses_ffi,
             ffi,
             uses_env_public,
+            uses_async_runtime,
             wasm_public_env,
             wasm_hydrate_mode,
             sqlvalue_rust_name,
@@ -3053,6 +3080,7 @@ mod record_struct_namespace_tests {
                 uses_env_public: false,
                 uses_debug: false,
                 uses_ffi: false,
+                uses_async_runtime: false,
             }],
         };
 
@@ -3138,6 +3166,7 @@ mod record_struct_namespace_tests {
                 uses_env_public: false,
                 uses_debug: false,
                 uses_ffi: false,
+                uses_async_runtime: false,
             }],
         };
 

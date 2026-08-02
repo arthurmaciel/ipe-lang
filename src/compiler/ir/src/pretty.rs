@@ -2202,6 +2202,7 @@ mod tests {
                 uses_env_public: false,
                 uses_debug: false,
                 uses_ffi: false,
+                uses_async_runtime: false,
             }],
         })
     }
@@ -2315,6 +2316,7 @@ program
                 uses_env_public: false,
                 uses_debug: false,
                 uses_ffi: false,
+                uses_async_runtime: false,
             }],
         };
 
@@ -2390,6 +2392,7 @@ program
                 uses_env_public: false,
                 uses_debug: false,
                 uses_ffi: false,
+                uses_async_runtime: false,
             }],
         };
 
@@ -2468,6 +2471,7 @@ program
                 uses_env_public: false,
                 uses_debug: false,
                 uses_ffi: false,
+                uses_async_runtime: false,
             }],
         };
 
@@ -2531,6 +2535,7 @@ program
                 uses_env_public: false,
                 uses_debug: false,
                 uses_ffi: false,
+                uses_async_runtime: false,
             }],
         };
 
@@ -2603,6 +2608,7 @@ program
                 uses_env_public: false,
                 uses_debug: false,
                 uses_ffi: false,
+                uses_async_runtime: false,
             }],
         };
 
@@ -2667,6 +2673,7 @@ program
                 uses_env_public: false,
                 uses_debug: false,
                 uses_ffi: false,
+                uses_async_runtime: false,
             }],
         };
 
@@ -2774,6 +2781,7 @@ program
                 uses_env_public: false,
                 uses_debug: false,
                 uses_ffi: false,
+                uses_async_runtime: false,
             }],
         };
 
@@ -2880,6 +2888,7 @@ program
                 uses_env_public: false,
                 uses_debug: false,
                 uses_ffi: false,
+                uses_async_runtime: false,
             }],
         };
 
@@ -2931,6 +2940,7 @@ program
                 uses_env_public: false,
                 uses_debug: false,
                 uses_ffi: false,
+                uses_async_runtime: false,
             }],
         };
         let rendered = pretty(&program, &i);
@@ -2983,6 +2993,7 @@ program
                 uses_websocket: false,
                 uses_email: false,
                 uses_ffi: false,
+                uses_async_runtime: false,
                 uses_env_public: false,
                 uses_debug: false,
             }],

@@ -105,10 +105,11 @@ pub mod system;
 // `sequence`) compiles + runs unchanged — no tokio dependency. The
 // tokio-bound half (`block_on`/`Task.run`/`Task.parallel`/`Task.retryWith`)
 // stays `cfg(not(target_arch = "wasm32"))` inside the file (see its doc).
-#[cfg(any(
-    feature = "tokio",
-    all(target_arch = "wasm32", feature = "wasm-client")
-))]
+// `task` is always compiled: its reactor spine (`block_on`, `task_parallel`,
+// `task_retry_with`, the shared runtime) is `#[cfg(feature = "tokio")]`, and its
+// pure combinators plus the std-only `block_on` compile without tokio — so the
+// module is available in every config, mirroring the always-on `pub mod task;`
+// in the emitted crate's runtime template.
 pub mod task;
 pub mod time;
 #[cfg(feature = "tokio")]

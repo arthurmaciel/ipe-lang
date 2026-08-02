@@ -165,6 +165,7 @@ fn build_identity_program(interner: &mut Interner) -> DResult<Program> {
             uses_env_public: false,
             uses_debug: false,
             uses_ffi: false,
+            uses_async_runtime: false,
         }],
     })
 }
@@ -331,6 +332,7 @@ fn build_bounded_program(interner: &mut Interner) -> DResult<Program> {
             uses_env_public: false,
             uses_debug: false,
             uses_ffi: false,
+            uses_async_runtime: false,
         }],
     })
 }
