@@ -6023,6 +6023,18 @@ struct KernelUsage {
     /// [`Capability::FfiRaw`] beside [`Capability::NativeFfi`] in the
     /// whole-program capability set.
     ffi_asserted: bool,
+    /// Any reachable kernel whose runtime implementation drives its future
+    /// through the tokio reactor ([`KernelFn::requires_async_runtime`]) — a
+    /// spawned task, a timer, a socket, an async filesystem offload. Gates the
+    /// emitted entry point: a program that reaches NONE of these gets a
+    /// synchronous `fn main` on a std-only executor and drops `tokio` +
+    /// `futures-util` from its manifest; a program that reaches ANY keeps the
+    /// tokio entry unchanged. FAIL-CLOSED — the predicate defaults every unknown
+    /// kernel to reactor-requiring, and a foreign FFI call
+    /// ([`Callee::Ffi`]) forces it on unconditionally (a foreign crate may
+    /// itself `.await` real IO), so the sync entry is emitted only for a
+    /// program proven to need no reactor.
+    async_runtime: bool,
     /// The security capabilities of every kernel visited so far, for whole-
     /// program capability inference ([`crate::capabilities::program_capabilities`]).
     /// Populated from [`KernelFn::capability`] on the SAME kernel-callee visit
@@ -6062,6 +6074,7 @@ impl KernelUsage {
             && self.env_public
             && self.debug
             && self.ffi
+            && self.async_runtime
     }
 
     /// OR in the family flags for one kernel callee, and record its capability
@@ -6082,6 +6095,7 @@ impl KernelUsage {
         self.crypto |= k.is_crypto();
         self.jwt |= k.is_jwt();
         self.url |= k.is_url();
+        self.async_runtime |= k.requires_async_runtime();
         self.ui |= k.is_ui();
         self.css |= k.is_css();
         self.auth |= k.is_auth();
@@ -6113,6 +6127,10 @@ fn record_callee_usage(callee: &Callee, usage: &mut KernelUsage) {
         Callee::Ffi { asserted, .. } => {
             usage.ffi = true;
             usage.ffi_asserted |= *asserted;
+            // A foreign crate may itself `.await` real IO on the tokio reactor;
+            // its purity is not knowable here. Fail-closed: any FFI call keeps
+            // the tokio entry point.
+            usage.async_runtime = true;
         }
         Callee::Func(_) => {}
     }
@@ -8126,6 +8144,15 @@ impl<'a> Lowerer<'a> {
         // build rejects it (IPE-L0140); recorded unconditionally here.
         let uses_debug = kernel_usage.debug;
 
+        // detect whether the program reaches ANY reactor-requiring kernel (async
+        // IO, timer, spawn, network, db, an FFI call). When it does NOT, the
+        // backend emits a synchronous `fn main` on a std-only executor and drops
+        // `tokio` + `futures-util` from the manifest. FAIL-CLOSED: the kernel
+        // predicate defaults unknown kernels to reactor-requiring, and any FFI
+        // call already forced the flag on, so the synchronous entry is emitted
+        // only for a program proven to need no reactor.
+        let uses_async_runtime = kernel_usage.async_runtime || uses_ffi;
+
         let module = Module {
             name: ModPath(self.m.name.clone()),
             types: types_ir,
@@ -8152,6 +8179,7 @@ impl<'a> Lowerer<'a> {
             uses_env_public,
             uses_debug,
             uses_ffi,
+            uses_async_runtime,
         };
         Ok(Program {
             modules: vec![module],

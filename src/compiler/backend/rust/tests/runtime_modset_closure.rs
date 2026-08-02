@@ -65,6 +65,30 @@ fn module_for_mask(name: ipe_intern::Symbol, mask: u32) -> Module {
     // always references Ui element kernels).
     let uses_tui = f(4);
     let uses_ui = f(2) || uses_tui;
+    // Every gated surface below (db/tea/server/web/tui/webview/websocket/email/
+    // http/config/compression/csv/crypto/jwt/auth/url) reaches a
+    // reactor-requiring kernel, so a REAL program that sets any of them also
+    // sets `uses_async_runtime` — which restores the tokio spine the per-surface
+    // manifest augmenters (`tea_cargo_toml`, `server_cargo_toml`, …) anchor on.
+    // Mirror that invariant here: any masked surface flag forces the async spine
+    // on, so the SEAL emit sees the same manifest a real program would.
+    // `uses_css` is the one whitelisted-pure surface (CssSafety kernels), so it
+    // alone does NOT force it.
+    let uses_async_runtime = f(0)
+        || f(1)
+        || f(3)
+        || uses_tui
+        || f(5)
+        || f(7)
+        || f(8)
+        || f(9)
+        || f(11)
+        || f(12)
+        || f(13)
+        || f(14)
+        || f(15)
+        || f(16)
+        || f(17);
     Module {
         name: ModPath(vec![name]),
         types: vec![],
@@ -91,6 +115,7 @@ fn module_for_mask(name: ipe_intern::Symbol, mask: u32) -> Module {
         uses_url: f(17),
         uses_debug: false,
         uses_ffi: false,
+        uses_async_runtime,
     }
 }
 

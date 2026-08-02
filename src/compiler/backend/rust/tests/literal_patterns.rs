@@ -186,6 +186,7 @@ fn tag_program(interner: &mut Interner, payload: Pat) -> DResult<Program> {
             uses_env_public: false,
             uses_debug: false,
             uses_ffi: false,
+            uses_async_runtime: false,
         }],
     })
 }
@@ -368,6 +369,7 @@ fn alias_program(interner: &mut Interner) -> DResult<(Program, Symbol, Symbol)> 
                 uses_env_public: false,
                 uses_debug: false,
                 uses_ffi: false,
+                uses_async_runtime: false,
             }],
         },
         x,

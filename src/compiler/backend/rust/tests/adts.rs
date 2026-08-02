@@ -188,6 +188,7 @@ fn maybe_program(i: &mut Interner) -> DResult<Program> {
             uses_env_public: false,
             uses_debug: false,
             uses_ffi: false,
+            uses_async_runtime: false,
         }],
     })
 }
@@ -374,6 +375,7 @@ fn tree_program(interner: &mut Interner) -> DResult<Program> {
             uses_env_public: false,
             uses_debug: false,
             uses_ffi: false,
+            uses_async_runtime: false,
         }],
     })
 }
@@ -526,6 +528,7 @@ fn concrete_multi_field_enum_emits() -> DResult<()> {
             uses_env_public: false,
             uses_debug: false,
             uses_ffi: false,
+            uses_async_runtime: false,
         }],
     };
     let out = emit(&interner, &prog)?;

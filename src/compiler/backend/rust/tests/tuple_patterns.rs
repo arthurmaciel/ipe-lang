@@ -160,6 +160,7 @@ fn wrap_program(i: &mut Interner) -> DResult<Program> {
             uses_env_public: false,
             uses_debug: false,
             uses_ffi: false,
+            uses_async_runtime: false,
         }],
     })
 }
@@ -230,6 +231,7 @@ fn unit_value_and_type_render() -> DResult<()> {
             uses_env_public: false,
             uses_debug: false,
             uses_ffi: false,
+            uses_async_runtime: false,
         }],
     };
     let src = emit(&i, &prog)?;

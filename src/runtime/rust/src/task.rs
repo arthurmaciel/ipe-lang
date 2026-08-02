@@ -1,7 +1,7 @@
 // Task combinators — generic over error type E.
 use super::*;
 use std::future::ready;
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(all(feature = "tokio", not(target_arch = "wasm32")))]
 use std::sync::OnceLock;
 
 // The tokio-backed async spine (`block_on`, the shared reactor, foreign-task
@@ -9,6 +9,20 @@ use std::sync::OnceLock;
 // client runs on a single event loop with no OS threads for `tokio::spawn`,
 // and `tokio` is not a wasm dependency. The whole spine is gated off for wasm;
 // the wasm client drives its TEA loop through `web_sys`/`wasm-bindgen` instead.
+//
+// The reactor spine is ALSO gated off the native `tokio`-less build: a program
+// whose reachable kernels never touch the reactor (pure computation + `Io`,
+// `String`, `List`, `Math`, `Json`, the pure `Task` monad ops) drops the
+// `tokio` crate entirely and enters through the std-only `block_on` below. The
+// reactor-driven entries (`task_parallel`, `task_retry_with`,
+// `block_on_current_thread`, the shared runtime, the abort guard) are
+// `#[cfg(feature = "tokio")]`; the entries a pure program's prelude still names
+// unconditionally (`block_on`, `task_run`, `task_parallel`) each have a
+// `#[cfg(not(feature = "tokio"))]` std counterpart, so the emitted crate
+// compiles either way. The gating kernel classification
+// (`KernelFn::requires_async_runtime`) is fail-closed: a pure program never
+// CALLS a reactor entry, so its std counterpart is dead code, present only to
+// resolve the prelude wrapper.
 
 /// Process-global tokio runtime shared by every `block_on` entry.
 ///
@@ -18,10 +32,10 @@ use std::sync::OnceLock;
 /// between entries, so a handle crossing two entries hits a dead reactor. One
 /// shared runtime keeps every reactor-registered handle live for the process
 /// lifetime; a shared reactor is strictly more available than a fresh one.
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(all(feature = "tokio", not(target_arch = "wasm32")))]
 static GLOBAL_RUNTIME: OnceLock<tokio::runtime::Runtime> = OnceLock::new();
 
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(all(feature = "tokio", not(target_arch = "wasm32")))]
 fn global_runtime() -> Result<&'static tokio::runtime::Runtime, String> {
     if let Some(rt) = GLOBAL_RUNTIME.get() {
         return Ok(rt);
@@ -36,10 +50,10 @@ fn global_runtime() -> Result<&'static tokio::runtime::Runtime, String> {
 /// completion (`Task.parallel` early-cancel drops the losing wrapper future),
 /// so a cancelled FFI call cannot keep producing side effects. `defuse`
 /// disarms after a normal join.
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(all(feature = "tokio", not(target_arch = "wasm32")))]
 pub struct AbortOnDrop(Option<tokio::task::AbortHandle>);
 
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(all(feature = "tokio", not(target_arch = "wasm32")))]
 impl AbortOnDrop {
     #[must_use]
     pub fn new(handle: tokio::task::AbortHandle) -> Self {
@@ -51,7 +65,7 @@ impl AbortOnDrop {
     }
 }
 
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(all(feature = "tokio", not(target_arch = "wasm32")))]
 impl Drop for AbortOnDrop {
     fn drop(&mut self) {
         if let Some(h) = self.0.take() {
@@ -60,7 +74,7 @@ impl Drop for AbortOnDrop {
     }
 }
 
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(all(feature = "tokio", not(target_arch = "wasm32")))]
 pub fn block_on<E, A>(future: IpeTask<E, A>) -> IpeResult<E, A>
 where
     E: From<String> + Send + 'static,
@@ -79,6 +93,84 @@ where
     match std::thread::spawn(move || rt.block_on(future)).join() {
         Ok(r) => r,
         Err(payload) => IpeResult::Err(ipe_error_from_panic("async task panicked", payload)),
+    }
+}
+
+// Std-only entry for a program that reaches NO reactor-requiring kernel: its
+// `ipe_main()` future resolves without a timer, a spawn, or a socket, so it
+// needs no tokio reactor. This driver polls the future to completion on the
+// current thread with a real park/unpark `Waker` — no busy-spin, no external
+// crate. It is the `block_on` a `tokio`-less emitted crate links.
+//
+// CORRECTNESS. The future is pinned on the stack and polled. On `Poll::Ready`
+// the result returns. On `Poll::Pending` the thread PARKS until the waker
+// unparks it, then re-polls — the standard park/unpark loop. A pure Ipê
+// future never actually yields `Pending` (every whitelisted kernel resolves on
+// first poll), but the loop is written for the general case so it can never
+// busy-spin: a spurious wake re-polls, a real wake re-polls, and absent a wake
+// the thread sleeps. `thread::park` may return spuriously, which is harmless —
+// it just re-polls.
+//
+// SOUNDNESS (no missed wakeup). The waker sets an `Arc<AtomicBool>` "notified"
+// flag BEFORE unparking the target thread, and the loop CHECKS-AND-CLEARS that
+// flag before parking. So a wake that lands between the `poll` returning
+// `Pending` and the `park` call is not lost: the flag is already set, the
+// pre-park check sees it, clears it, and re-polls instead of parking. This is
+// the canonical race-free park/unpark handshake.
+//
+// TOTALITY: no unwrap/expect/panic/indexing. A panic inside the future
+// propagates to the entry boundary's synchronous-panic classifier (the same
+// place the tokio path's non-spawned webview driver relies on) — there is no
+// spawn here to `.join()`, matching `block_on_current_thread`'s contract.
+#[cfg(all(not(feature = "tokio"), not(target_arch = "wasm32")))]
+pub fn block_on<E, A>(future: IpeTask<E, A>) -> IpeResult<E, A>
+where
+    E: From<String> + Send + 'static,
+    A: Send + 'static,
+{
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::task::{Context, Poll, Wake, Waker};
+
+    // A `Waker` that records a notification and unparks the blocked driver
+    // thread. Recording BEFORE unparking closes the wake-before-park race.
+    struct ThreadWaker {
+        thread: std::thread::Thread,
+        notified: Arc<AtomicBool>,
+    }
+    impl Wake for ThreadWaker {
+        fn wake(self: Arc<Self>) {
+            self.wake_by_ref();
+        }
+        fn wake_by_ref(self: &Arc<Self>) {
+            self.notified.store(true, Ordering::Release);
+            self.thread.unpark();
+        }
+    }
+
+    let notified = Arc::new(AtomicBool::new(false));
+    let waker: Waker = Arc::new(ThreadWaker {
+        thread: std::thread::current(),
+        notified: Arc::clone(&notified),
+    })
+    .into();
+    let mut cx = Context::from_waker(&waker);
+
+    let mut future = future;
+    let mut pinned = std::pin::Pin::new(&mut future);
+    loop {
+        match pinned.as_mut().poll(&mut cx) {
+            Poll::Ready(r) => return r,
+            Poll::Pending => {
+                // Park until woken. The pre-park check consumes a notification
+                // that arrived while polling, so a wake is never lost; absent
+                // one, `park` sleeps until the waker unparks. A spurious wake
+                // simply re-polls.
+                while !notified.swap(false, Ordering::Acquire) {
+                    std::thread::park();
+                }
+            }
+        }
     }
 }
 
@@ -109,7 +201,7 @@ where
 // webview path itself is total (window/webview construction failure returns
 // `IpeResult::Err`), so a panic would be a genuine compiler/runtime bug, not a
 // well-typed-Ipê-reachable abort.
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(all(feature = "tokio", not(target_arch = "wasm32")))]
 pub fn block_on_current_thread<E, A>(future: IpeTask<E, A>) -> IpeResult<E, A>
 where
     E: From<String> + Send + 'static,
@@ -438,7 +530,7 @@ pub fn task_run<E: From<String> + Send + 'static, A: Send + 'static>(
 // routes through the redacting foreign-panic funnel — detail server-side under
 // a correlation id, a generic typed `Err` to Ipê. The cancelled arm stays
 // total via the foreign-error funnel rather than an unreachable assumption.
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(all(feature = "tokio", not(target_arch = "wasm32")))]
 pub fn task_parallel<E: From<String> + Send + 'static, A: Send + 'static>(
     tasks: Vec<IpeTask<E, A>>,
 ) -> IpeTask<E, Vec<A>> {
@@ -478,6 +570,36 @@ pub fn task_parallel<E: From<String> + Send + 'static, A: Send + 'static>(
     })
 }
 
+// Std-only `Task.parallel` for the `tokio`-less emitted crate. `Task.parallel`
+// is reactor-classified (`KernelFn::requires_async_runtime` reports it async),
+// so a program that CALLS it always links tokio and gets the concurrent
+// spawn-based version above; this counterpart exists ONLY so the always-emitted
+// prelude wrapper resolves in a pure crate that never calls it (dead code,
+// stripped from the release binary).
+//
+// Semantics if ever reached: runs the tasks SEQUENTIALLY in input order,
+// collecting `Ok` values and short-circuiting on the first `Err` (input order)
+// — observably the SAME result value the concurrent version yields (that
+// version deliberately observes results in input order and reports the
+// input-order-first failure), only without concurrency. So a hypothetical
+// misclassification degrades to sequential execution, never a hang or a wrong
+// result. TOTALITY: no unwrap/expect/panic/indexing.
+#[cfg(all(not(feature = "tokio"), not(target_arch = "wasm32")))]
+pub fn task_parallel<E: From<String> + Send + 'static, A: Send + 'static>(
+    tasks: Vec<IpeTask<E, A>>,
+) -> IpeTask<E, Vec<A>> {
+    Box::pin(async move {
+        let mut out = Vec::with_capacity(tasks.len());
+        for t in tasks {
+            match t.await {
+                IpeResult::Ok(a) => out.push(a),
+                IpeResult::Err(e) => return IpeResult::Err(e),
+            }
+        }
+        ok_res(out)
+    })
+}
+
 // Task.retryWith : RetryPolicy e -> Task e a -> Task e a
 //
 // A real retry loop, faithful to runtime-go/rt/task_retry.go. The two things
@@ -505,7 +627,12 @@ pub fn task_parallel<E: From<String> + Send + 'static, A: Send + 'static>(
 // TOTALITY: no unwrap / expect / panic / indexing. Jitter randomness comes from
 // the runtime's existing total `lcg_next()` LCG (same source as Random.*),
 // never `thread_rng` (which could panic on a poisoned global).
-#[cfg(not(target_arch = "wasm32"))]
+//
+// `Task.retryWith` sleeps between attempts (`tokio::time::sleep`), so it is
+// reactor-classified: a program that reaches it always links tokio. Gated off
+// the `tokio`-less build (no prelude wrapper names it, so no std counterpart is
+// needed).
+#[cfg(all(feature = "tokio", not(target_arch = "wasm32")))]
 pub fn task_retry_with<E, A>(
     max_attempts: i64,
     base_ms: i64,
@@ -545,15 +672,20 @@ where
 
 // Backoff cap (ms). Mirrors Go's `retryDelayCapMs` — exponential growth and the
 // post-jitter delay are both clamped here so a huge attempt count or base can't
-// produce an unbounded sleep.
+// produce an unbounded sleep. Used only by the reactor-gated `task_retry_with`,
+// so gated with it.
+#[cfg(all(feature = "tokio", not(target_arch = "wasm32")))]
 const RETRY_DELAY_CAP_MS: i64 = 30_000;
+#[cfg(all(feature = "tokio", not(target_arch = "wasm32")))]
 const RETRY_KIND_EXPONENTIAL: i64 = 1;
 
 // Port of Go's `computeDelay`. Wait before attempt n+1 (1-indexed: attempt 1
 // runs, then sleep compute_delay(1), then attempt 2, ...). Linear → `base`
 // every time; exponential → `base * 2^(attempt-1)` capped at 30 s. Jitter
 // multiplies by a uniform factor in [0.5, 1.5). Total: saturating arithmetic,
-// no overflow panic, result clamped to [0, RETRY_DELAY_CAP_MS].
+// no overflow panic, result clamped to [0, RETRY_DELAY_CAP_MS]. Called only by
+// the reactor-gated `task_retry_with`, so gated with it.
+#[cfg(all(feature = "tokio", not(target_arch = "wasm32")))]
 fn retry_compute_delay(kind: i64, base_ms: i64, attempt: i64, jitter: bool) -> i64 {
     let mut d = base_ms;
     if kind == RETRY_KIND_EXPONENTIAL {
@@ -587,7 +719,9 @@ fn retry_compute_delay(kind: i64, base_ms: i64, attempt: i64, jitter: bool) -> i
     d
 }
 
-#[cfg(not(target_arch = "wasm32"))]
+// Exercises the reactor-gated `task_retry_with` (a `tokio::time::sleep` loop),
+// so it compiles only when the `tokio` feature is on.
+#[cfg(all(feature = "tokio", not(target_arch = "wasm32")))]
 #[cfg(test)]
 mod retry_tests {
     use super::*;
@@ -865,7 +999,10 @@ mod retry_tests {
 //      non-vacuous.)
 //   2. An all-`Ok` run returns the results in INPUT order regardless of the
 //      order in which the tasks actually complete.
-#[cfg(not(target_arch = "wasm32"))]
+//
+// Exercises the concurrent spawn-based `task_parallel` (`tokio::spawn` + abort),
+// so it compiles only when the `tokio` feature is on.
+#[cfg(all(feature = "tokio", not(target_arch = "wasm32")))]
 #[cfg(test)]
 mod parallel_abort_tests {
     use super::*;
@@ -992,6 +1129,80 @@ mod parallel_abort_tests {
             counter.load(Ordering::SeqCst),
             1,
             "only the index-0 Ok task fired; the index-2 survivor was aborted"
+        );
+    }
+}
+
+// Proves the std-only `block_on` (the `tokio`-less entry) drives a future to
+// completion correctly: a ready future returns immediately, and a future that
+// yields `Pending` once — then is woken from another thread — is re-polled and
+// completes without busy-spinning (the park/unpark handshake). Runs only in the
+// `tokio`-less config, which is the one that links that `block_on`.
+#[cfg(all(not(feature = "tokio"), not(target_arch = "wasm32")))]
+#[cfg(test)]
+mod std_block_on_tests {
+    use super::*;
+
+    #[test]
+    fn ready_future_completes_immediately() {
+        let got = block_on::<IpeError, i64>(Box::pin(ready(ok_res(7))));
+        assert!(matches!(got, IpeResult::Ok(7)));
+    }
+
+    #[test]
+    fn pure_task_chain_completes() {
+        // A `succeed |> map` chain — the exact pure-`Task` shape a synchronous
+        // program emits — resolves under the std executor.
+        let t = task_map(|n: i64| n + 1, task_succeed::<IpeError, i64>(41));
+        assert!(matches!(block_on(t), IpeResult::Ok(42)));
+    }
+
+    #[test]
+    fn pending_then_woken_completes_without_busy_spin() {
+        use std::future::Future;
+        use std::pin::Pin;
+        use std::sync::Arc;
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        use std::task::{Context, Poll};
+
+        // A future that returns `Pending` on the first poll (arming a background
+        // thread to wake it after a short delay) and `Ready` on the second. The
+        // poll counter proves the driver parks between the two polls rather than
+        // spinning: exactly two polls occur for a single wake.
+        struct WakeOnce {
+            polls: Arc<AtomicUsize>,
+            armed: bool,
+        }
+        impl Future for WakeOnce {
+            type Output = IpeResult<IpeError, i64>;
+            fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+                self.polls.fetch_add(1, Ordering::SeqCst);
+                if self.armed {
+                    return Poll::Ready(ok_res(99));
+                }
+                self.armed = true;
+                let waker = cx.waker().clone();
+                std::thread::spawn(move || {
+                    std::thread::sleep(std::time::Duration::from_millis(20));
+                    waker.wake();
+                });
+                Poll::Pending
+            }
+        }
+
+        let polls = Arc::new(AtomicUsize::new(0));
+        let fut = WakeOnce {
+            polls: Arc::clone(&polls),
+            armed: false,
+        };
+        let got = block_on::<IpeError, i64>(Box::pin(fut));
+        assert!(matches!(got, IpeResult::Ok(99)));
+        // Exactly two polls: the initial `Pending` and the post-wake `Ready`.
+        // A busy-spin would show many more.
+        assert_eq!(
+            polls.load(Ordering::SeqCst),
+            2,
+            "driver must park, not spin"
         );
     }
 }

@@ -4,7 +4,7 @@ version = "0.1.0"
 edition = "2024"
 
 [features]
-default = ["tokio", "json"]
+default = ["json"]
 tokio = []
 crypto = []
 json = []
@@ -23,7 +23,6 @@ alloc_dlmalloc = ["dep:dlmalloc"]
 alloc_mimalloc = ["dep:mimalloc"]
 
 [dependencies]
-tokio = { version = "1", features = ["rt", "rt-multi-thread", "macros", "time"] }
 dlmalloc = { version = "0.2", features = ["global"], optional = true }
 mimalloc = { version = "0.1", optional = true, default-features = false }
 serde_json = "1"
@@ -44,7 +43,6 @@ zeroize = "1"
 getrandom = "0.2"
 uuid = { version = "1", features = ["v4", "v7"] }
 bcrypt = "0.17"
-futures-util = "0.3"
 
 # Unix-only: `Io.readSecret` toggles terminal echo via termios (tcgetattr /
 # tcsetattr / isatty) in the vendored runtime's `io` module.
