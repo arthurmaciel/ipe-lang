@@ -30,6 +30,7 @@ mod naming;
 mod preamble;
 mod project;
 mod render;
+mod runtime_features;
 mod rust_file;
 pub mod static_build;
 
@@ -273,6 +274,50 @@ impl<'a> RustBackend<'a> {
             self.wasm_hydrate_mode,
         )?;
         project::emit_spine(&ctx, program)
+    }
+
+    /// Build the [`EmitCtx`] for `program` exactly as [`Backend::emit`] does,
+    /// exposed for the `runtime_features` unit tests so they can exercise the
+    /// SSOT through the real ctx (with its `uses_*` derivation, `db_driver`
+    /// selection, and async-spine folding) rather than a hand-built stand-in.
+    ///
+    /// # Errors
+    ///
+    /// Propagates any [`Diagnostic`] from [`EmitCtx::build`].
+    #[cfg(test)]
+    pub(crate) fn emit_ctx_for_tests(&self, program: &Program) -> DResult<EmitCtx<'a>> {
+        EmitCtx::build(
+            self.interner,
+            program,
+            self.db_driver,
+            self.ffi.clone(),
+            self.target,
+            self.wasm_public_env.clone(),
+            self.wasm_hydrate_mode,
+        )
+    }
+
+    /// The runtime-crate cargo features `program` selects — the SSOT
+    /// ([`runtime_features::runtime_features`]) image for this program, as the
+    /// canonical `features = [...]` name list. NOT yet wired into emit; exposed
+    /// so the featureset-closure SEAL can validate the SSOT against the runtime
+    /// crate's `[features]` universe and the emitted `ipe_runtime::<mod>::`
+    /// references, without leaking the crate-private [`EmitCtx`].
+    ///
+    /// # Errors
+    ///
+    /// Propagates any [`Diagnostic`] from [`EmitCtx::build`].
+    pub fn runtime_feature_names(&self, program: &Program) -> DResult<Vec<&'static str>> {
+        let ctx = EmitCtx::build(
+            self.interner,
+            program,
+            self.db_driver,
+            self.ffi.clone(),
+            self.target,
+            self.wasm_public_env.clone(),
+            self.wasm_hydrate_mode,
+        )?;
+        Ok(runtime_features::runtime_features(&ctx).as_feature_names())
     }
 
     /// Render one `IpeModule(home)` file's Rust text for `program` (see

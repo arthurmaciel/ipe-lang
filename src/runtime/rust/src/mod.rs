@@ -87,12 +87,13 @@ pub use crypto_core::*;
 ))]
 pub mod crypto;
 pub mod file;
-// wasm32: `Log.*` routes to `console.{debug,info,warn,error}` (see `log.rs`'s
-// `cfg(target_arch = "wasm32")` sink split).
-#[cfg(any(
-    feature = "tokio",
-    all(target_arch = "wasm32", feature = "wasm-client")
-))]
+// `log` is always compiled, mirroring the emitted floor
+// (`templates/ipe_runtime/mod.rs` declares `pub mod log;` for every program).
+// Its Ipê-facing kernels return `IpeTask`/`IpeResult` (from `core`, no tokio
+// dependency) and its bodies split only on the wasm32 console sink — so the
+// module compiles at `--no-default-features`. wasm32: `Log.*` routes to
+// `console.{debug,info,warn,error}` (see `log.rs`'s `cfg(target_arch =
+// "wasm32")` sink split).
 pub mod log;
 pub mod random;
 // `system` is always compiled (not tokio-gated): it owns the process-global
@@ -417,13 +418,15 @@ pub use io::*;
 pub mod debug;
 pub use debug::*;
 
-// auth.rs's external deps are `bcrypt` (crypto), `jsonwebtoken` (jwt),
-// `serde_json` (json), AND `sqlx`/`Db` (db — register/login/setRole write the
-// user table). Gate on `jwt` (which implies crypto + json) plus `db`: `jwt`
-// carries the `jsonwebtoken` dep the register/login token path needs, and the
-// old crypto/json/db gate omitted it. A `--features db` build (no jwt) excludes
-// auth instead of failing on unresolved `jsonwebtoken`/`bcrypt`.
-#[cfg(all(feature = "jwt", feature = "db"))]
+// auth.rs's module-level deps are `bcrypt` (crypto) + `jsonwebtoken` (jwt) +
+// `serde_json` (json), all carried by `jwt` (which implies crypto + json). Its
+// DB flows (register/login/setRole, which reach `sqlx`/`Db`) are individually
+// `#[cfg(feature = "db")]` INSIDE the file, so the module compiles under `jwt`
+// alone — a no-DB auth program (hashPassword/verify/signToken) needs `auth`
+// without pulling `db`. Gating the module on `jwt` alone (db surface item-gated
+// within) mirrors the emitted floor, which declares `pub mod auth;` for any
+// auth program and gates the db wrappers per-item.
+#[cfg(feature = "jwt")]
 pub mod auth;
-#[cfg(all(feature = "jwt", feature = "db"))]
+#[cfg(feature = "jwt")]
 pub use auth::*;
