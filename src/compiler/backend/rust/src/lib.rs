@@ -578,6 +578,20 @@ pub(crate) struct EmitCtx<'a> {
     /// `auth.rs` also reaches `crate::jwt`, so the backend force-declares `jwt`
     /// under `uses_jwt || uses_auth` (see [`Self::reaches_jwt`]).
     pub(crate) uses_jwt: bool,
+    /// `true` when the program uses at least one `Ipe.Url` kernel. When set,
+    /// [`crate::project::assemble_project_files`]:
+    ///
+    /// * declares `pub mod url; pub use url::*;` in the emitted
+    ///   `ipe_runtime/mod.rs`;
+    /// * adds the `url` crate (with its `idna` → ICU4X subtree) to the emitted
+    ///   `Cargo.toml`.
+    ///
+    /// The `http_client` and `ws_client` modules (and the shared `ssrf`
+    /// validators) also parse with the `url` crate, so the backend
+    /// force-declares `url` under
+    /// `uses_url || reaches_http_client || uses_websocket` (see
+    /// [`Self::reaches_url`]).
+    pub(crate) uses_url: bool,
     /// `true` when the program uses at least one `Ipe.Ui` / `Ipe.Html` kernel.
     /// When set, [`crate::project::emit_program`] appends
     /// `pub mod ui;` to the emitted `ipe_runtime/mod.rs`.
@@ -1198,6 +1212,12 @@ impl<'a> EmitCtx<'a> {
         // detect Ipe.Jwt usage (gates `jwt` module + `jsonwebtoken` crate).
         let uses_jwt = program.modules.iter().any(|m| m.uses_jwt);
 
+        // detect Ipe.Url usage (gates `url` module + the `url` crate's idna →
+        // ICU4X subtree). The http_client / ws_client surfaces also parse with
+        // the `url` crate — that transitive reach is folded in by
+        // [`Self::reaches_url`], not here.
+        let uses_url = program.modules.iter().any(|m| m.uses_url);
+
         // detect Ipe.Ui / Ipe.Html / Ipe.Web / Ipe.Tui / Ipe.WebView usage.
         let (uses_ui, uses_web, uses_tui, uses_webview) = (
             program.modules.iter().any(|m| m.uses_ui),
@@ -1235,6 +1255,7 @@ impl<'a> EmitCtx<'a> {
             uses_csv,
             uses_crypto,
             uses_jwt,
+            uses_url,
             uses_ui,
             uses_web,
             uses_tui,
@@ -1336,6 +1357,24 @@ impl<'a> EmitCtx<'a> {
     /// augmenter and the `mod.rs` append — they can never disagree.
     pub(crate) const fn reaches_jwt(&self) -> bool {
         self.uses_jwt || self.uses_auth
+    }
+
+    /// `true` when the emitted crate reaches the `url` runtime module — so
+    /// `project::assemble_project_files` declares it and adds the `url` crate
+    /// (with its `idna` → ICU4X subtree, the single largest gateable dependency
+    /// root).
+    ///
+    /// Reached directly by an `Ipe.Url` kernel ([`Self::uses_url`]), or
+    /// transitively by a surface whose runtime module parses with the `url`
+    /// crate: the outbound HTTP client ([`Self::reaches_http_client`], whose
+    /// `http_client.rs` targets a typed `crate::url::Url`) and the WebSocket
+    /// client ([`Self::uses_websocket`], whose `ws_client.rs` calls
+    /// `::url::Url::parse`). The shared `ssrf` validators (`use url::Url`) are
+    /// declared exactly when either of those two is, so this union covers them
+    /// too. This is the single source of truth shared by the manifest augmenter
+    /// and the `mod.rs` append — they can never disagree.
+    pub(crate) const fn reaches_url(&self) -> bool {
+        self.uses_url || self.reaches_http_client() || self.uses_websocket
     }
 
     /// The absolute Rust path for a foreign opaque type declared by an FFI
@@ -2983,6 +3022,7 @@ mod record_struct_namespace_tests {
                 uses_csv: false,
                 uses_crypto: false,
                 uses_jwt: false,
+                uses_url: false,
                 uses_ui: false,
                 uses_web: false,
                 uses_tui: false,
@@ -3067,6 +3107,7 @@ mod record_struct_namespace_tests {
                 uses_csv: false,
                 uses_crypto: false,
                 uses_jwt: false,
+                uses_url: false,
                 uses_ui: false,
                 uses_web: false,
                 uses_tui: false,

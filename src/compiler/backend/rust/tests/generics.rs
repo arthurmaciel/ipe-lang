@@ -54,6 +54,7 @@ use ipe_ir::{
 /// pass-through), so it lowers to a generic `Func` (`type_params = [a]`). `main`
 /// uses it at `Int` and `Bool` in the same module — the ONE generic function,
 /// monomorphised by Rust at each call.
+#[allow(clippy::too_many_lines)] // straight-line IR fixture builder
 fn build_identity_program(interner: &mut Interner) -> DResult<Program> {
     let main_mod = interner.intern("Main")?;
     let identity = interner.intern("identity")?;
@@ -152,6 +153,7 @@ fn build_identity_program(interner: &mut Interner) -> DResult<Program> {
             uses_csv: false,
             uses_crypto: false,
             uses_jwt: false,
+            uses_url: false,
             uses_ui: false,
             uses_web: false,
             uses_tui: false,
@@ -317,6 +319,7 @@ fn build_bounded_program(interner: &mut Interner) -> DResult<Program> {
             uses_csv: false,
             uses_crypto: false,
             uses_jwt: false,
+            uses_url: false,
             uses_ui: false,
             uses_web: false,
             uses_tui: false,

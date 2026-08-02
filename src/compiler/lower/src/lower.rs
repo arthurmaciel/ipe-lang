@@ -5984,6 +5984,13 @@ struct KernelUsage {
     /// `jsonwebtoken` dependency. Also force-declared alongside `auth` (which
     /// reaches `crate::jwt`), so the assembly site gates on `jwt || auth`.
     jwt: bool,
+    /// Any `Ipe.Url` kernel (`Url.fromString` / `toString` / `scheme` / `host` /
+    /// `port` / `path` / `query` / `fragment` / `buildQuery`) — gates the `url`
+    /// runtime module and the `url` crate (with its `idna` → ICU4X subtree). The
+    /// `http_client` / `ws_client` surfaces (and the shared `ssrf` validators)
+    /// also reach the `url` crate, so the backend gates on
+    /// `url || reaches_http_client || websocket`.
+    url: bool,
     /// Any Ipe.Ui render kernel.
     ui: bool,
     /// Any Ipe.Css (Ipe.CssSafety) leaf kernel — independent of
@@ -6043,6 +6050,7 @@ impl KernelUsage {
             && self.csv
             && self.crypto
             && self.jwt
+            && self.url
             && self.ui
             && self.css
             && self.auth
@@ -6073,6 +6081,7 @@ impl KernelUsage {
         self.csv |= k.is_csv();
         self.crypto |= k.is_crypto();
         self.jwt |= k.is_jwt();
+        self.url |= k.is_url();
         self.ui |= k.is_ui();
         self.css |= k.is_css();
         self.auth |= k.is_auth();
@@ -8061,6 +8070,19 @@ impl<'a> Lowerer<'a> {
         // `uses_jwt || uses_auth`.
         let uses_jwt = kernel_usage.jwt;
 
+        // detect `Ipe.Url` usage — any `Url.fromString` / `toString` / `scheme` /
+        // `host` / `port` / `path` / `query` / `fragment` / `buildQuery` kernel.
+        // The backend uses this flag to declare `url` in the emitted
+        // `ipe_runtime/mod.rs` and add the `url` crate (with its `idna` → ICU4X
+        // subtree). No type-mention guard is needed: the opaque `Url` type has a
+        // single constructor (`Url.fromString`), itself a `Url` kernel, so a
+        // program holding a `Url` value has necessarily called one — a signature
+        // can never mention `Url` without a call site setting this flag. The
+        // `http_client` / `ws_client` surfaces also parse with the `url` crate, so
+        // the backend force-declares `url` under
+        // `uses_url || reaches_http_client || uses_websocket`.
+        let uses_url = kernel_usage.url;
+
         // detect Ipe.Ui / Ipe.Html / Ipe.Web / Ipe.Tui / Ipe.WebView usage.
         // TUI runtime files (tui/app.rs, tui/layout.rs, tui/focus.rs) import
         // `super::super::ui` and `super::super::html` unconditionally, so
@@ -8118,6 +8140,7 @@ impl<'a> Lowerer<'a> {
             uses_csv,
             uses_crypto,
             uses_jwt,
+            uses_url,
             uses_ui,
             uses_web,
             uses_tui,

@@ -951,6 +951,7 @@ mod schema_tag_tests {
                 uses_csv: false,
                 uses_crypto: false,
                 uses_jwt: false,
+                uses_url: false,
                 uses_ui: false,
                 uses_web: true,
                 uses_tui: false,
