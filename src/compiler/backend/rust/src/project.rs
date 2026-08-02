@@ -3123,12 +3123,13 @@ fn csv_cargo_toml(base: &str) -> DResult<String> {
 /// `Key`/`Mac` newtypes — are not `cfg`-gated and stay unconditional.
 ///
 /// Two edits, both fail-closed on a missing anchor:
-/// 1. insert `"crypto"` into the `default = [...]` feature list immediately
-///    after `"tokio"` (the `crypto = []` flag is already declared in the base
-///    `[features]` table). This position keeps the list byte-identical to the
-///    pre-gating `["tokio", "crypto", "json", …]` order, so a crypto-using
-///    program's manifest is unchanged and later per-surface surgery
-///    (`server`/`web`/`db`, which append after `"json"`) composes as before.
+/// 1. insert `"crypto"` into the `default = [...]` feature list (the `crypto = []`
+///    flag is already declared in the base `[features]` table). When the program
+///    also reaches the async runtime the list opens with `"tokio"`, and `"crypto"`
+///    lands right after it to keep the pre-gating `["tokio", "crypto", "json", …]`
+///    order byte-identical; a crypto-using program with no reactor kernel is
+///    emitted synchronously (no `"tokio"`), so `"crypto"` is inserted at the head
+///    of the `["json"]` list instead.
 /// 2. restore the `rsa` dependency in its original slot (immediately after the
 ///    `zeroize` base dep), so a crypto-using program's manifest is byte-for-byte
 ///    what it was before `rsa` became conditional.
@@ -3138,8 +3139,9 @@ fn csv_cargo_toml(base: &str) -> DResult<String> {
 ///
 /// # Errors
 ///
-/// Returns [`Diagnostic::CompilerBug`] if the `default = ["tokio"` anchor or the
-/// `zeroize` dependency anchor is absent — a golden-drift invariant violation
+/// Returns [`Diagnostic::CompilerBug`] if neither the async (`default = ["tokio"`)
+/// nor the synchronous (`default = ["json"]`) default-list anchor is present, or
+/// the `zeroize` dependency anchor is absent — a golden-drift invariant violation
 /// (fail-loud, never a silent no-op).
 fn crypto_core_heavy_cargo_toml(base: &str) -> DResult<String> {
     // Anchor on the first default element so `"crypto"` lands in its original
@@ -3155,18 +3157,30 @@ fn crypto_core_heavy_cargo_toml(base: &str) -> DResult<String> {
         crate_specs::RSA.version,
     );
 
-    // Step 1 — insert `, "crypto"` immediately after the `"tokio"` element.
-    let anchor_end = base
-        .find(TOKIO_ANCHOR)
-        .map(|p| p + TOKIO_ANCHOR.len())
-        .ok_or_else(|| Diagnostic::CompilerBug {
+    // Step 1 — insert `"crypto"` into the default feature list. A crypto-using
+    // program that reaches no async reactor kernel is emitted synchronously, so
+    // `"tokio"` is absent from the list. Anchor on `"tokio"` when present (keeping
+    // the `["tokio", "crypto", "json"]` order byte-identical for async programs)
+    // and fall back to the synchronous `["json"]` list otherwise.
+    const SYNC_DEFAULT: &str = r#"default = ["json"]"#;
+    const SYNC_DEFAULT_CRYPTO: &str = r#"default = ["crypto", "json"]"#;
+    let step1 = if let Some(p) = base.find(TOKIO_ANCHOR) {
+        let anchor_end = p + TOKIO_ANCHOR.len();
+        let mut s = String::with_capacity(base.len() + rsa_dep.len() + 12);
+        s.push_str(base.get(..anchor_end).unwrap_or(""));
+        s.push_str(r#", "crypto""#);
+        s.push_str(base.get(anchor_end..).unwrap_or(""));
+        s
+    } else if base.contains(SYNC_DEFAULT) {
+        base.replacen(SYNC_DEFAULT, SYNC_DEFAULT_CRYPTO, 1)
+    } else {
+        return Err(Diagnostic::CompilerBug {
             where_: "ipe_backend_rust::project::crypto_core_heavy_cargo_toml",
-            detail: format!("Cargo.toml anchor {TOKIO_ANCHOR:?} not found — golden drifted"),
-        })?;
-    let mut step1 = String::with_capacity(base.len() + rsa_dep.len() + 12);
-    step1.push_str(base.get(..anchor_end).unwrap_or(""));
-    step1.push_str(r#", "crypto""#);
-    step1.push_str(base.get(anchor_end..).unwrap_or(""));
+            detail: format!(
+                "Cargo.toml anchor {TOKIO_ANCHOR:?} or {SYNC_DEFAULT:?} not found — golden drifted"
+            ),
+        });
+    };
 
     // Step 2 — restore the `rsa` line immediately after `zeroize = "1"`.
     let insert_at = step1
