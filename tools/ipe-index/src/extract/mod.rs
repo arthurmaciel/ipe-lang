@@ -1,7 +1,7 @@
 pub mod ipe;
 pub mod treesitter;
 
-use crate::model::{Kind, Lang};
+use crate::model::{facing_of, Kind, Lang};
 use crate::store::{unit_uid, Store};
 use anyhow::Result;
 use regex::Regex;
@@ -71,6 +71,7 @@ pub fn emit_unit(
     qualified: &str,
     line_start: i64,
     line_end: i64,
+    facing: crate::model::Facing,
     purpose: Option<String>,
     body_hash: &str,
     updated_sha: &str,
@@ -91,13 +92,31 @@ pub fn emit_unit(
         qualified: q.clone(),
         line_start,
         line_end,
-        facing: crate::model::Facing::Internal,
+        facing,
         purpose,
         body_hash: body_hash.to_string(),
         updated_sha: updated_sha.to_string(),
     };
     store.put_unit(&unit)?;
     Ok(unit_uid(path, kind, &q))
+}
+
+/// First line of the leading `#` comment block directly above `line` in `src`
+/// (walked upward; stops at the first non-comment line), with the `#` stripped.
+/// No comment block → `None` (never fabricates).
+fn bash_doc_purpose(src: &str, line: i64) -> Option<String> {
+    let lines: Vec<&str> = src.lines().collect();
+    let mut top: Option<String> = None;
+    for l in lines[..(line - 1).max(0) as usize].iter().rev() {
+        let t = l.trim_start();
+        if let Some(rest) = t.strip_prefix('#') {
+            // The FIRST line of the block is the topmost (last visited).
+            top = Some(rest.trim_start().to_string());
+        } else {
+            break;
+        }
+    }
+    top.filter(|s| !s.is_empty())
 }
 
 /// Extract symbols + import edges + units for one file's contents. Bounded:
@@ -117,7 +136,9 @@ pub fn extract_file(store: &Store, path: &str, lang: Lang, src: &str, updated_sh
                 emit_unit(
                     store, path, Kind::Binding, &b.name,
                     &format!("{base}.{}", b.name),
-                    b.line, b.line_end, None,
+                    b.line, b.line_end,
+                    facing_of(path, ipe::is_pub(&r.exposing, &b.name)),
+                    ipe::doc_purpose(src, b.line),
                     &blake3_hex(body.as_bytes()), updated_sha, &mut ord,
                 )?;
             }
@@ -138,7 +159,9 @@ pub fn extract_file(store: &Store, path: &str, lang: Lang, src: &str, updated_sh
                 emit_unit(
                     store, path, Kind::Fn, name,
                     &format!("{}::{name}", module_path(path, lang)),
-                    *line, end, None,
+                    *line, end,
+                    facing_of(path, false),
+                    bash_doc_purpose(src, *line),
                     &blake3_hex(body.as_bytes()), updated_sha, &mut ord,
                 )?;
             }
@@ -157,7 +180,9 @@ pub fn extract_file(store: &Store, path: &str, lang: Lang, src: &str, updated_sh
     emit_unit(
         store, path, Kind::File, &name,
         &format!("{base}::FILE"),
-        1, line_count, None,
+        1, line_count,
+        facing_of(path, false),
+        None,
         &blake3_hex(src.as_bytes()), updated_sha, &mut ord,
     )?;
     Ok(())

@@ -1,5 +1,5 @@
 use super::{blake3_hex, emit_unit, module_path};
-use crate::model::{Kind, Lang};
+use crate::model::{facing_of, Facing, Kind, Lang};
 use crate::store::Store;
 use anyhow::Result;
 use std::collections::HashMap;
@@ -139,6 +139,76 @@ fn unit_kind(item_kind: &str) -> Kind {
     }
 }
 
+/// Rust `pub` (incl. `pub(crate)`/`pub(super)`/`pub(in …)`) → visibility
+/// modifier on the item; TS exports via an `export_statement` ancestor.
+fn is_pub(item: Node, lang: Lang, src: &str) -> bool {
+    if lang == Lang::Rust {
+        let mut c = item.child(0);
+        while let Some(ch) = c {
+            if ch.kind() == "visibility_modifier" { return true; }
+            c = ch.next_sibling();
+        }
+        return false;
+    }
+    let mut cur = item;
+    while let Some(p) = cur.parent() {
+        if p.kind() == "export_statement" { return true; }
+        let text = &src[p.byte_range()];
+        if text.starts_with("export ") { return true; }
+        cur = p;
+    }
+    false
+}
+
+/// `#[cfg(test)]`-annotated item → test-facing even outside a test path.
+fn is_cfg_test(item: Node, src: &str) -> bool {
+    let mut prev = item.prev_sibling();
+    while let Some(p) = prev {
+        match p.kind() {
+            "attribute_item" => {
+                if src[p.byte_range()].contains("cfg(test)") {
+                    return true;
+                }
+                prev = p.prev_sibling();
+            }
+            "line_comment" | "block_comment" => { prev = p.prev_sibling(); }
+            _ => break,
+        }
+    }
+    false
+}
+
+/// First line of the leading doc comment directly above the item (walked upward
+/// through adjacent comments/attributes; stops at the first gap). `///` and
+/// `/** */` markers are stripped; no doc comment → `None`.
+fn doc_purpose(item: Node, src: &str) -> Option<String> {
+    let mut top: Option<String> = None;
+    let mut next_byte = item.start_byte();
+    let mut prev = item.prev_sibling();
+    while let Some(p) = prev {
+        match p.kind() {
+            "line_comment" | "block_comment" => {
+                if next_byte - p.end_byte() > 1 { break; } // blank-line gap
+                let t = src[p.byte_range()].trim_start();
+                let body = if t.starts_with("///") {
+                    Some(t[3..].trim().to_string())
+                } else if t.starts_with("/**") {
+                    Some(t.trim_start_matches('/').trim().trim_start_matches('*').trim().to_string())
+                } else {
+                    None
+                };
+                // The FIRST line of the block (topmost = last visited).
+                if let Some(b) = body { top = Some(b); }
+                next_byte = p.start_byte();
+                prev = p.prev_sibling();
+            }
+            "attribute_item" => { next_byte = p.start_byte(); prev = p.prev_sibling(); } // doc attaches via attributes
+            _ => break,
+        }
+    }
+    top.filter(|s| !s.is_empty())
+}
+
 pub fn extract(
     store: &Store,
     path: &str,
@@ -170,10 +240,12 @@ pub fn extract(
                     item.start_position().row as i64 + 1,
                     item.end_position().row as i64 + 1,
                 );
+                let facing = if is_cfg_test(item, src) { Facing::Test } else { facing_of(path, is_pub(item, lang, src)) };
                 emit_unit(
                     store, path, unit_kind(item.kind()), text,
                     &format!("{base_qual}::{text}"),
-                    lstart, lend, None,
+                    lstart, lend, facing,
+                    doc_purpose(item, src),
                     &blake3_hex(span.as_bytes()), updated_sha, ord,
                 )?;
             } else if Some(cap.index) == impl_idx {
@@ -186,10 +258,12 @@ pub fn extract(
                     item.start_position().row as i64 + 1,
                     item.end_position().row as i64 + 1,
                 );
+                let facing = if is_cfg_test(item, src) { Facing::Test } else { facing_of(path, is_pub(item, lang, src)) };
                 emit_unit(
                     store, path, Kind::Impl, text,
                     &format!("{base_qual}::{text}"),
-                    lstart, lend, None,
+                    lstart, lend, facing,
+                    doc_purpose(item, src),
                     &blake3_hex(span.as_bytes()), updated_sha, ord,
                 )?;
             } else if Some(cap.index) == imp_idx {

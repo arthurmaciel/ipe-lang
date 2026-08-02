@@ -73,8 +73,8 @@ pub fn role_of(path: &str) -> Role {
     // edges attribute back to the example that exercises a module.
     if rel.starts_with("examples/") { Role::Example }
     else if rel.ends_with(".ipe") { Role::StdlibIpe }
-    else if rel.starts_with("crates/") && rel.ends_with(".rs") { Role::CompilerRs }
-    else if rel.starts_with("runtime/") && rel.ends_with(".rs") { Role::RuntimeRs }
+    else if rel.starts_with("src/compiler/") && rel.ends_with(".rs") { Role::CompilerRs }
+    else if rel.starts_with("src/runtime/") && rel.ends_with(".rs") { Role::RuntimeRs }
     else if rel.starts_with("tools/") && rel.ends_with(".rs") { Role::ToolRs }
     else if rel.ends_with(".sh") { Role::ScriptSh }
     else if matches!(lang_of(rel), Lang::Ts) { Role::ConsoleTs }
@@ -83,12 +83,33 @@ pub fn role_of(path: &str) -> Role {
 
 pub fn stage_of(path: &str) -> Option<Stage> {
     let (_tag, rel) = split_tag(path);
-    if rel.starts_with("crates/ipe_parse/") { Some(Stage::Parse) }
-    else if rel.starts_with("crates/ipe_canon/") { Some(Stage::Canonicalise) }
-    else if rel.starts_with("crates/ipe_types/") { Some(Stage::Type) }
-    else if rel.starts_with("crates/ipe_lower/") { Some(Stage::Build) }
-    else if rel.starts_with("crates/ipe_ir/") || rel.starts_with("crates/ipe_backend") { Some(Stage::Generate) }
+    if rel.starts_with("src/compiler/parse/") { Some(Stage::Parse) }
+    else if rel.starts_with("src/compiler/canon/") { Some(Stage::Canonicalise) }
+    else if rel.starts_with("src/compiler/types/") { Some(Stage::Type) }
+    else if rel.starts_with("src/compiler/lower/") { Some(Stage::Build) }
+    else if rel.starts_with("src/compiler/ir/") || rel.starts_with("src/compiler/backend") { Some(Stage::Generate) }
     else { None }
+}
+
+/// Classify a unit's facing: `test` for anything under a test path, `user`
+/// for a public binding in a public (stdlib/example) surface, else `internal`.
+pub fn facing_of(path: &str, is_pub: bool) -> Facing {
+    let (_tag, rel) = split_tag(path);
+    if rel.contains("/tests/")
+        || rel.contains("/test/")
+        || rel.ends_with("_test.rs")
+        || rel.ends_with("_test.ipe")
+        || rel.ends_with(".test.ts")
+    {
+        return Facing::Test;
+    }
+    if is_pub {
+        let role = role_of(path);
+        if role == Role::StdlibIpe || role == Role::Example {
+            return Facing::User;
+        }
+    }
+    Facing::Internal
 }
 
 impl Lang { pub fn as_str(&self) -> &'static str { use Lang::*; match self { Rust=>"rs",Bash=>"sh",Ts=>"ts",Ipe=>"ipe",Other=>"other" } } }
@@ -102,15 +123,30 @@ mod tests {
     use super::*;
     #[test]
     fn classifies_paths() {
-        assert_eq!(lang_of("crates/ipe_lower/src/compile.rs"), Lang::Rust);
+        assert_eq!(lang_of("src/compiler/lower/src/compile.rs"), Lang::Rust);
         assert_eq!(lang_of("a.ipe"), Lang::Ipe);
         assert_eq!(role_of("examples/wasm/counter/src/Main.ipe"), Role::Example);
-        assert_eq!(role_of("crates/ipe_parse/src/lexer.rs"), Role::CompilerRs);
-        assert_eq!(role_of("runtime/src/list.rs"), Role::RuntimeRs);
+        assert_eq!(role_of("src/compiler/parse/src/lexer.rs"), Role::CompilerRs);
+        assert_eq!(role_of("src/runtime/rust/src/list.rs"), Role::RuntimeRs);
         assert_eq!(role_of("tools/ipe-index/src/main.rs"), Role::ToolRs);
         assert_eq!(role_of("scripts/lib/wasm-verify.mjs"), Role::ConsoleTs); // JS/TS/MJS not Other
         assert_eq!(lang_of("scripts/x.mjs"), Lang::Ts);
-        assert_eq!(stage_of("crates/ipe_canon/src/module.rs"), Some(Stage::Canonicalise));
-        assert_eq!(stage_of("crates/ipe_backend_rust/src/builder.rs"), Some(Stage::Generate));
+        assert_eq!(stage_of("src/compiler/canon/src/module.rs"), Some(Stage::Canonicalise));
+        assert_eq!(stage_of("src/compiler/backend/rust/src/builder.rs"), Some(Stage::Generate));
+    }
+
+    #[test]
+    fn facing_classifies_pub_test_internal() {
+        // Public binding under the stdlib surface → user-facing.
+        assert_eq!(facing_of("ipe:src/stdlib/Ipe/List.ipe", true), Facing::User);
+        // Public binding in an example → user-facing.
+        assert_eq!(facing_of("ipe:examples/wasm/counter/src/Main.ipe", true), Facing::User);
+        // Public but internal surface (compiler) → internal.
+        assert_eq!(facing_of("ipe:src/compiler/parse/src/lexer.rs", true), Facing::Internal);
+        // Non-public anywhere → internal.
+        assert_eq!(facing_of("ipe:src/stdlib/Ipe/List.ipe", false), Facing::Internal);
+        // Test paths win regardless of visibility.
+        assert_eq!(facing_of("ipe:src/compiler/parse/tests/lex.rs", true), Facing::Test);
+        assert_eq!(facing_of("ipe:src/stdlib/Ipe/parser_test.ipe", false), Facing::Test);
     }
 }
