@@ -84,23 +84,24 @@ structure that makes hello world pay for `rsa`.
 
 The budget is reachable and the gap is structural, not incidental. On a warm
 developer machine, `examples/sky/ipe/01-hello-world` (`Io.println` only), built
-as the current emit versus hand-trimmed to the floor its single kernel needs — a
-synchronous `fn main` printing to stdout with no dependencies:
+before the usage-driven floor, after it, and hand-trimmed to the floor its single
+kernel needs — a synchronous `fn main` printing to stdout with no dependencies:
 
-| Metric | Current emit | Floor (`Io.println`) | Ratio |
+| Metric | Before S1 | After S1 | Floor (`Io.println`) |
 |---|---|---|---|
-| Crates compiled | 105 | 1 | ~100× |
-| Cold build | ~62 s | ~0.6 s | ~100× |
-| Warm rebuild (edit `main`) | ~2.4 s | ~0.5 s | ~5× |
-| Binary | 1.06 MB | 0.36 MB | ~3× |
+| Crates compiled | 105 | 51 | 1 |
+| Cold build | ~62 s | ~40 s | ~0.6 s |
+| Warm rebuild (edit `main`) | ~2.4 s | ~2.4 s | ~0.5 s |
+| Binary | 1.06 MB | 0.44 MB | 0.36 MB |
 
-The two-order-of-magnitude cold gap is the 105-crate closure — the target of S1.
-The ~5× warm gap is recompiling the vendored 2.6 MB runtime *inside* the user
-crate on every edit — the target of S3. Neither is required by the program's
-semantics: the emit ships all 105 floor crates and all 60 runtime modules for
-every program, because the emitted `main.rs` prelude references `log`, `json`,
-`core`, `task`, and `tokio` (via `block_on`) even when the user calls none of
-them.
+S1 gates the heavy roots — `url`/idna, `rsa`, and `tokio` for pure programs
+(synchronous `fn main`) — cutting the cold closure and the binary by roughly a
+third to a half. The **warm rebuild is unchanged**, because it recompiles the
+vendored 2.6 MB runtime *inside* the user crate on every edit — a cost S1 cannot
+touch. That gap is S3's target (the runtime as a precompiled crate). Neither cost
+is required by the program's semantics: the emit ships the whole runtime and its
+dependency floor for every program, because the emitted `main.rs` prelude
+references modules the user never calls.
 
 ## Strategies
 
