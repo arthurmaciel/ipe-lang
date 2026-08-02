@@ -298,10 +298,11 @@ pub fn materialize() -> Result<ResolvedRuntime, CliError> {
 /// Resolve the runtime crate root for the dependency-model emit. The resolution
 /// chain, in order:
 ///
-/// 1. `$IPE_RUNTIME_DIR` — an explicit override (dev / advanced). It MUST name a
-///    runtime crate root (`Cargo.toml` declaring [`RUNTIME_PACKAGE`]); anything
-///    else is a loud error, including a targeted hint when it points at the inner
-///    `src/ipe_runtime` module directory instead of the crate root.
+/// 1. `$IPE_RUNTIME_DIR` — an explicit override (dev / advanced). It may name the
+///    runtime crate root (`Cargo.toml` declaring [`RUNTIME_PACKAGE`]) or any path
+///    inside it (e.g. the historical `…/rust/src` source-tree location); the crate
+///    root is found by walking up. A path with no runtime crate root at or above
+///    it is a loud error.
 /// 2. In-repo `src/runtime/rust` — an upward walk from the current directory, so
 ///    a repository checkout builds against the live source (dev workflow and
 ///    goldens unchanged).
@@ -309,8 +310,8 @@ pub fn materialize() -> Result<ResolvedRuntime, CliError> {
 ///    and use that (the normal installed path).
 ///
 /// # Errors
-/// - [`CliError::RuntimeDirInvalid`] when `$IPE_RUNTIME_DIR` is set but is not a
-///   runtime crate root.
+/// - [`CliError::RuntimeDirInvalid`] when `$IPE_RUNTIME_DIR` is set but has no
+///   runtime crate root at or above it.
 /// - Any error from [`materialize`] when the embedded fallback is taken.
 pub fn resolve() -> Result<ResolvedRuntime, CliError> {
     if let Some(dir) = std::env::var_os("IPE_RUNTIME_DIR") {
@@ -328,12 +329,19 @@ pub fn resolve() -> Result<ResolvedRuntime, CliError> {
 /// else a loud, typed refusal (with a targeted hint when it points at the inner
 /// module directory).
 fn resolve_override(path: &Path) -> Result<ResolvedRuntime, CliError> {
-    if let Some(resolved) = verify(path)? {
-        return Ok(resolved);
+    // Accept the crate root directly, or any path inside the crate — the
+    // historical source-tree locations (`…/rust/src`, `…/src/ipe_runtime`) — by
+    // walking up to the crate root that holds `Cargo.toml`. This keeps every
+    // existing `IPE_RUNTIME_DIR` setting working across the meaning change from
+    // "source tree" to "crate root".
+    let mut here: Option<&Path> = Some(path);
+    while let Some(dir) = here {
+        if let Some(resolved) = verify(dir)? {
+            return Ok(resolved);
+        }
+        here = dir.parent();
     }
-    // A common mistake: pointing at the inner module directory
-    // (`…/src/ipe_runtime` or `…/rust/src`) rather than the crate root — detect
-    // it so the error can say exactly what to fix.
+    // Nothing at or above the given path names a runtime crate root.
     let points_at_inner = path.file_name() == Some(std::ffi::OsStr::new("ipe_runtime"))
         || path.ends_with("rust/src")
         || path.ends_with("runtime/rust/src");
