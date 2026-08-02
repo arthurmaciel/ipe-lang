@@ -162,8 +162,11 @@ fn program_metadata_short_circuits_on_lower_error() {
 // ---------------------------------------------------------------------------
 
 /// A genuine dead-code exclusion: `main` calls `live`, which never mentions
-/// `dead`. `dead`'s `FuncId` must be absent from `reachable_funcs` even
-/// though it is a well-typed, successfully-lowered top-level def.
+/// `dead`. Since [`ipe_db::lower_program`] now PRUNES functions unreachable
+/// from the entry, `dead` is absent from the lowered module entirely (a
+/// stronger guarantee than merely being excluded from `reachable_funcs`), and
+/// `program_metadata`'s reachable set — computed over that already-pruned IR —
+/// contains exactly the surviving `main` and `live`.
 #[test]
 fn program_metadata_excludes_unreached_function() {
     const ENTRY_WITH_DEAD_CODE: &str = "module Entry exposing (main)\n\n\
@@ -187,8 +190,12 @@ fn program_metadata_excludes_unreached_function() {
     );
     let main_id = find_func_id(&db, module, "main");
     let live_id = find_func_id(&db, module, "live");
-    let dead_id = find_func_id(&db, module, "dead");
 
+    assert!(
+        find_func_id_opt(&db, module, "dead").is_none(),
+        "a function nothing reachable calls must be PRUNED from the lowered \
+         module — dead code is eliminated, not merely marked unreachable"
+    );
     assert!(
         meta.reachable_funcs.contains(&main_id),
         "the entry function itself must be reachable"
@@ -196,11 +203,6 @@ fn program_metadata_excludes_unreached_function() {
     assert!(
         meta.reachable_funcs.contains(&live_id),
         "a function the entry calls must be reachable"
-    );
-    assert!(
-        !meta.reachable_funcs.contains(&dead_id),
-        "a function nothing reachable calls must NOT be reported reachable \
-         (this is the whole point of a DCE-reachability seam)"
     );
 }
 
@@ -238,9 +240,69 @@ fn program_metadata_reachability_is_transitive() {
         "reachability must transit through an intermediate call, not just direct callees"
     );
     assert!(
-        !meta
-            .reachable_funcs
-            .contains(&find_func_id(&db, module, "dead"))
+        find_func_id_opt(&db, module, "dead").is_none(),
+        "the dead function must be pruned from the lowered module"
+    );
+}
+
+/// Function-level dependency emission: a kernel a program only reaches from a
+/// DEAD helper must not set the module's `uses_*` flag, so its runtime module
+/// and crate subtree are never linked. Here a dead `slow` function calls
+/// `Time.now` (which would set `uses_time` and pull the `chrono-tz` IANA-zone
+/// subtree); `main` never reaches it, so `uses_time` must stay `false`.
+#[test]
+fn unreached_kernel_call_does_not_set_module_flag() {
+    const DEAD_TIME_CALL: &str = "module Entry exposing (main)\n\n\
+        import Ipe.Time as Time\n\
+        import Ipe.Io as Io\n\n\
+        slow = Time.isLeapYear 2024\n\n\
+        main = Io.println \"hi\"\n";
+    let (db, _log) = logged_db();
+    let entry = file(&db, &["Entry"], DEAD_TIME_CALL);
+    let root = root_of(&db, &[(&["Entry"], entry)]);
+
+    let program = ipe_db::lower_program(&db, root, entry).expect("must lower");
+    let module = program
+        .modules
+        .first()
+        .expect("lower_program must produce one module");
+
+    assert!(
+        find_func_id_opt(&db, module, "slow").is_none(),
+        "the Time-calling helper is dead — it must be pruned from the module"
+    );
+    assert!(
+        !module.uses_time,
+        "a Time kernel reached only from a DEAD function must NOT set `uses_time` \
+         (else the emitted program links `chrono-tz` it never invokes)"
+    );
+}
+
+/// The dual of the previous test: when the SAME `Time.isLeapYear` call is
+/// reachable from `main`, `uses_time` must be set — reachability restriction
+/// must never drop a dependency the program actually exercises.
+#[test]
+fn reached_kernel_call_sets_module_flag() {
+    const LIVE_TIME_CALL: &str = "module Entry exposing (main)\n\n\
+        import Ipe.Time as Time\n\
+        import Ipe.Io as Io\n\n\
+        main =\n\
+        \x20   let\n\
+        \x20       leap = Time.isLeapYear 2024\n\
+        \x20   in\n\
+        \x20   Io.println (if leap then \"leap\" else \"not\")\n";
+    let (db, _log) = logged_db();
+    let entry = file(&db, &["Entry"], LIVE_TIME_CALL);
+    let root = root_of(&db, &[(&["Entry"], entry)]);
+
+    let program = ipe_db::lower_program(&db, root, entry).expect("must lower");
+    let module = program
+        .modules
+        .first()
+        .expect("lower_program must produce one module");
+    assert!(
+        module.uses_time,
+        "a Time kernel reachable from main MUST set `uses_time`"
     );
 }
 
@@ -252,14 +314,23 @@ fn program_metadata_reachability_is_transitive() {
 /// allow.
 #[allow(clippy::expect_used)]
 fn find_func_id(db: &ipe_db::IpeDatabase, module: &ipe_ir::Module, name: &str) -> ipe_ir::FuncId {
-    let interner = ipe_db::Db::interner(db).lock();
     let msg = format!("no func named {name:?} in the lowered module");
+    find_func_id_opt(db, module, name).expect(&msg)
+}
+
+/// Like [`find_func_id`] but returns `None` when the function is absent —
+/// used to assert a dead function was PRUNED from the lowered module.
+fn find_func_id_opt(
+    db: &ipe_db::IpeDatabase,
+    module: &ipe_ir::Module,
+    name: &str,
+) -> Option<ipe_ir::FuncId> {
+    let interner = ipe_db::Db::interner(db).lock();
     module
         .funcs
         .iter()
         .find(|f| interner.resolve(f.name) == Some(name))
         .map(|f| f.id)
-        .expect(&msg)
 }
 
 /// A program with no `main` binding has no entry to seed a fixpoint from —

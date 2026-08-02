@@ -59,6 +59,23 @@ mod tests {
         );
     }
 
+    /// An EXPOSED library module with no `main`: its exposed functions are the
+    /// reachability roots a downstream consumer can call, so their capabilities
+    /// must be inferred even though nothing local calls them. The dead-function
+    /// prune must never drop an exposed API's effect (fail-closed: no `main` ⇒
+    /// every function is a root). This is the honesty invariant the package
+    /// audit's sibling-capability check relies on.
+    #[test]
+    fn exposed_library_module_without_main_infers_network() {
+        let caps = caps_of(
+            "module Extra exposing (fetch)\nimport Ipe.Http\nimport Ipe.Io\nimport Ipe.Task\nfetch : Task ()\nfetch =\n    Task.andThen (\\_ -> Io.println \"done\") (Http.get \"http://example.com\")\n",
+        );
+        assert_eq!(
+            caps,
+            Some(std::collections::BTreeSet::from([Capability::Network]))
+        );
+    }
+
     #[test]
     fn file_and_env_program_infers_both() {
         // `File.writeFile` now takes a validated `Path`. This minimal

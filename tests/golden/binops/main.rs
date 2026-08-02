@@ -239,15 +239,6 @@ pub fn crypto_random_token(n: i64) -> IpeTask<String> {
     ipe_runtime::crypto_core::crypto_random_token(n)
 }
 
-pub fn main_is_large(n: i64) -> bool {
-    ((n > 10) && (n < 100))
-}
-pub fn main_in_range(lo: i64, hi: i64) -> bool {
-    ((lo <= hi) || (lo >= hi))
-}
-pub fn main_same_or_differs(a: i64, b: i64) -> bool {
-    ((a == b) || (a != b))
-}
 pub fn ipe_main() -> IpeTask<()> {
     io_println(string_from_int(((2 + (3 * 4)) - 1)))
 }
