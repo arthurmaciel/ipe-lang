@@ -123,6 +123,10 @@ pub const URL: CrateSpec = CrateSpec {
     name: "url",
     version: "2",
 };
+pub const RSA: CrateSpec = CrateSpec {
+    name: "rsa",
+    version: "0.9",
+};
 
 /// Every spec emitted by the surgery functions, for drift-test iteration.
 ///
@@ -156,6 +160,7 @@ pub const ALL: &[CrateSpec] = &[
     PBKDF2,
     JSONWEBTOKEN,
     URL,
+    RSA,
 ];
 
 #[cfg(test)]
@@ -172,7 +177,7 @@ mod tests {
             assert!(!spec.name.is_empty(), "empty crate name in ALL");
             assert!(!spec.version.is_empty(), "empty version for {}", spec.name);
         }
-        assert_eq!(ALL.len(), 26, "expected 26 surgery-emitted crate specs");
+        assert_eq!(ALL.len(), 27, "expected 27 surgery-emitted crate specs");
     }
 
     /// Extract the version from a Cargo dependency value: `"0.4"` or

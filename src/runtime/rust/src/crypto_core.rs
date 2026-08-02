@@ -1,12 +1,15 @@
-// Crypto core — the always-on cryptographic floor.
+// Crypto core — the cryptographic floor.
 //
-// This module holds the primitives that always-on callers reach: the entropy
-// pair (`crypto_random_bytes`/`crypto_random_token`, emitted into every program
-// via the kernel-wrapper prelude), the SHA-2 hash + HMAC family and the RSA
-// SHA-256 sign/verify pair that `jwt` uses, the typed `Key`/`Mac` role
-// newtypes, and the constant-time compare. The heavier, rarely-used primitives
-// (legacy SHA-1/MD5, AES-GCM + ChaCha20-Poly1305 AEAD, PBKDF2 key derivation)
-// live in the sibling `crypto` module and pull their own crates.
+// This module holds the entropy pair (`crypto_random_bytes`/
+// `crypto_random_token`, emitted into every program via the kernel-wrapper
+// prelude), the SHA-2 hash + HMAC family, the typed `Key`/`Mac` role newtypes,
+// and the constant-time compare — the primitives an always-on floor keeps. The
+// RSA SHA-256 sign/verify pair is `cfg(feature = "crypto")`: it compiles (and
+// pulls the `rsa` crate) only when the program reaches the heavy crypto floor
+// (a `Crypto` kernel, a `Jwt` kernel, or the `Auth` surface). The heavier,
+// rarely-used primitives (legacy SHA-1/MD5, AES-GCM + ChaCha20-Poly1305 AEAD,
+// PBKDF2 key derivation) live in the sibling `crypto` module and pull their own
+// crates.
 //
 // wasm32: only `crypto_random_bytes`/`crypto_random_token` (this file's entropy
 // pair) and the pure hash/HMAC family compile for the browser target — the RSA
@@ -447,6 +450,13 @@ pub fn crypto_constant_time_equal(a: String, b: String) -> bool {
 }
 
 /// Generated-code alias for `crypto_rsa_sha256_sign` with `E = String`.
+///
+/// Gated the same as [`crypto_rsa_sha256_sign`] (its callee): the RSA arm
+/// compiles only when the `crypto` feature is on, which a generated crate
+/// enables exactly when it reaches the heavy crypto floor (a `Crypto` kernel,
+/// a `Jwt` kernel, or the `Auth` surface). A program that touches none pulls no
+/// `rsa` dependency, so this alias must not reference the absent primitive.
+#[cfg(feature = "crypto")]
 pub fn ipe_crypto_rsa_sha256_sign(
     key_pem: String,
     msg: String,
