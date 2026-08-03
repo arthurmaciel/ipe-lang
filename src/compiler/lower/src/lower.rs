@@ -1358,6 +1358,41 @@ fn ir_type_mentions_secret(ty: &IrType) -> bool {
     }
 }
 
+/// `true` when `ty` mentions `Json` (`IrType::Json`, rendered `JsonVal`) or a
+/// `Decoder<T>` (`IrType::Decoder`, rendered `Decoder<…>`) anywhere in its
+/// structure — the two types the fixed prelude aliases against the `json` runtime
+/// module. Recurses through every carrier; a `Decoder` node is itself a mention
+/// (the `Decoder<T>` alias must exist) AND its inner type is scanned. Used at the
+/// module-assembly site to keep the two prelude aliases + the `json` feature for a
+/// program that NAMES either type in a signature, record field, or enum payload
+/// even when it calls no `Json.*` kernel (a decoder forwarded as a parameter) —
+/// the type-mention guard the fail-closed `uses_json` requires.
+fn ir_type_mentions_json(ty: &IrType) -> bool {
+    match ty {
+        // Either type is itself a mention: `Json` renders `JsonVal`, and a
+        // `Decoder<T>` node names the `Decoder` alias regardless of its payload.
+        IrType::Json | IrType::Decoder(_) => true,
+        IrType::Task(inner)
+        | IrType::Cmd(inner)
+        | IrType::Sub(inner)
+        | IrType::Maybe(inner)
+        | IrType::Set(inner)
+        | IrType::List(inner) => ir_type_mentions_json(inner),
+        IrType::Result(a, b) | IrType::Dict(a, b) => {
+            ir_type_mentions_json(a) || ir_type_mentions_json(b)
+        }
+        IrType::Fun(params, ret)
+        | IrType::SharedFun(params, ret)
+        | IrType::FnOnceChain(params, ret) => {
+            params.iter().any(ir_type_mentions_json) || ir_type_mentions_json(ret)
+        }
+        IrType::Tuple(elems) => elems.iter().any(ir_type_mentions_json),
+        IrType::Record(fields) => fields.values().any(ir_type_mentions_json),
+        IrType::Enum { args, .. } => args.iter().any(ir_type_mentions_json),
+        _ => false,
+    }
+}
+
 fn ir_contains_fun(ty: &IrType) -> bool {
     match ty {
         // A curried `FnOnce` chain is the same boxed-closure family as `Fun`; the
@@ -6054,6 +6089,14 @@ struct KernelUsage {
     /// dependency. Unioned with a `Secret` type-mention guard at the assembly site
     /// (a signature naming `Secret` must keep the module even with no call site).
     secret: bool,
+    /// Any kernel that builds a `Value` (`JsonVal`) or a `Decoder<T>` in its
+    /// emitted body (`KernelFn::is_json()`: the `JsonEnc`/`JsonDec`/`JsonDecP`
+    /// families, the `Ipe.Config` decoder surface, `Db.Decode.*`/`Db.queryDecode`,
+    /// and `Server.json`) — one signal for `uses_json`. Unioned with a
+    /// `Json`/`Decoder` type-mention guard at the assembly site (a signature,
+    /// record field, or enum payload naming either type must keep the two prelude
+    /// aliases + the `json` feature even with no call site).
+    json: bool,
     /// Any HEAVY `Ipe.Crypto` kernel (legacy SHA-1/MD5, AES-GCM /
     /// ChaCha20-Poly1305 AEAD, PBKDF2 key derivation) — gates the `crypto`
     /// runtime module and the `sha1` + `md-5` + `aes-gcm` + `chacha20poly1305` +
@@ -6154,6 +6197,7 @@ impl KernelUsage {
             && self.char_category
             && self.crypto_core
             && self.secret
+            && self.json
             && self.crypto
             && self.jwt
             && self.url
@@ -6196,6 +6240,7 @@ impl KernelUsage {
         self.char_category |= k.is_char_category();
         self.crypto_core |= k.is_crypto_core();
         self.secret |= k.is_secret();
+        self.json |= k.is_json();
         self.crypto |= k.is_crypto();
         self.jwt |= k.is_jwt();
         self.url |= k.is_url();
@@ -8386,6 +8431,29 @@ impl<'a> Lowerer<'a> {
                     || f.params.iter().any(|(_, t)| ir_type_mentions_secret(t))
             });
 
+        // detect `json` reach — a `Value`/`Decoder`-building kernel OR a `Json` /
+        // `Decoder` TYPE mentioned in ANY reachable type position. The two prelude
+        // aliases (`type Value = JsonVal;`, `pub type Decoder<T> = …`) and the
+        // `json` feature ride on this. The type-mention guard is REQUIRED and
+        // scans every position that renders a type: function signatures (params +
+        // return), record field types, and enum-variant payload types — a
+        // signature naming `Value`/`Decoder` (a forwarded decoder) with no
+        // `Json.*`/`Config`/`Db.Decode` call site would otherwise drop an alias
+        // the emitted code still spells (E0412/E0433). FAIL-CLOSED: any of the
+        // three signals keeps `json` on.
+        let uses_json = kernel_usage.json
+            || funcs.iter().any(|f| {
+                ir_type_mentions_json(&f.ret)
+                    || f.params.iter().any(|(_, t)| ir_type_mentions_json(t))
+            })
+            || records.iter().any(ir_type_mentions_json)
+            || types_ir.iter().any(|td| match td {
+                TypeDef::Enum(e) => e
+                    .variants
+                    .iter()
+                    .any(|v| v.fields.iter().any(ir_type_mentions_json)),
+            });
+
         // detect `Ipe.Encoding` / `Ipe.Bytes` usage. The backend uses this flag to
         // declare `encoding` + `bytes` in the emitted `ipe_runtime/mod.rs` and add
         // the `base64` + `hex` + `percent-encoding` dependencies. No type-mention
@@ -8525,6 +8593,7 @@ impl<'a> Lowerer<'a> {
             uses_char_category,
             uses_crypto_core,
             uses_secret,
+            uses_json,
             uses_crypto,
             uses_jwt,
             uses_url,

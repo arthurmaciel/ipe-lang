@@ -25,7 +25,6 @@ type IpeInt = i64;
 type IpeFloat = f64;
 type IpeBool = bool;
 type IpeString = String;
-type Value = JsonVal;
 
 // ===========================================
 // USER TYPES
@@ -66,7 +65,6 @@ pub fn str_err(s: &str) -> IpeError {
 }
 
 pub type IpeTask<A> = ipe_runtime::IpeTask<IpeError, A>;
-pub type Decoder<T> = ipe_runtime::json::Decoder<IpeError, T>;
 
 pub fn ok_res<A>(a: A) -> IpeResult<IpeError, A> {
     ipe_runtime::core::ok_res(a)

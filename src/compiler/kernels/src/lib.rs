@@ -5885,6 +5885,110 @@ impl StdlibKernel {
         )
     }
 
+    /// `true` when this variant produces or consumes a `Value` (`JsonVal`) or a
+    /// `Decoder<T>` in the emitted body — the two types the fixed prelude aliases
+    /// as `type Value = JsonVal;` and `pub type Decoder<T> =
+    /// ipe_runtime::json::Decoder<IpeError, T>`.
+    ///
+    /// Both aliases hard-reference the `json` runtime module (`serde_json`), so a
+    /// program that emits either type must select the `json` feature. Used by
+    /// `ipe_lower` (unioned with a `Json`/`Decoder` type-mention scan over the
+    /// program's signatures, records, and enum payloads) to set `uses_json` — the
+    /// selector the backend reads (`reaches_json`) to keep the two prelude aliases
+    /// and the `json` feature. A program that calls no such kernel AND names
+    /// neither type drops the aliases, `serde_json`, and the whole serde stack.
+    ///
+    /// The family: every `JsonEnc.*` encoder (builds a `Value`), every `JsonDec.*`
+    /// / `JsonDecP.*` decoder combinator (builds a `Decoder<T>`), the whole
+    /// `Ipe.Config` decoder surface (its combinators share the `json` module's
+    /// `Decoder<E, T>` carrier and `decode_*` runtime fns), the `Db.Decode.*`
+    /// column decoders and `Db.queryDecode` (same `Decoder<E, T>` carrier), and
+    /// `Server.json` (takes a `Value`). FAIL-CLOSED: a kernel whose result flows
+    /// into a `let`-bound `Value`/`Decoder` local — spelling the alias with no
+    /// signature to catch it — is kept by this call-site predicate.
+    #[must_use]
+    pub const fn is_json(self) -> bool {
+        matches!(
+            self,
+            Self::JsonEncString
+                | Self::JsonEncInt
+                | Self::JsonEncFloat
+                | Self::JsonEncBool
+                | Self::JsonEncNull
+                | Self::JsonEncList
+                | Self::JsonEncObject
+                | Self::JsonEncEncode
+                | Self::JsonDecString
+                | Self::JsonDecInt
+                | Self::JsonDecFloat
+                | Self::JsonDecBool
+                | Self::JsonDecDecodeString
+                | Self::JsonDecField
+                | Self::JsonDecAt
+                | Self::JsonDecIndex
+                | Self::JsonDecList
+                | Self::JsonDecMap
+                | Self::JsonDecAndThen
+                | Self::JsonDecSucceed
+                | Self::JsonDecFail
+                | Self::JsonDecOneOf
+                | Self::JsonDecMap2
+                | Self::JsonDecMap3
+                | Self::JsonDecMap4
+                | Self::JsonDecPRequired
+                | Self::JsonDecPOptional
+                | Self::JsonDecPCustom
+                | Self::JsonDecPRequiredAt
+                | Self::ConfigString
+                | Self::ConfigInt
+                | Self::ConfigFloat
+                | Self::ConfigBool
+                | Self::ConfigNullable
+                | Self::ConfigField
+                | Self::ConfigAt
+                | Self::ConfigList
+                | Self::ConfigSucceed
+                | Self::ConfigFail
+                | Self::ConfigMap
+                | Self::ConfigAndThen
+                | Self::ConfigMap2
+                | Self::ConfigMap3
+                | Self::ConfigMap4
+                | Self::ConfigMap5
+                | Self::ConfigMap6
+                | Self::ConfigMap7
+                | Self::ConfigMap8
+                | Self::ConfigOneOf
+                | Self::ConfigIndex
+                | Self::ConfigKeyValuePairs
+                | Self::ConfigMaybe
+                | Self::ConfigDict
+                | Self::ConfigDecodeToml
+                | Self::ConfigDecodeYaml
+                | Self::ConfigDecodeJson
+                | Self::ConfigLoadFromFile
+                | Self::DbQueryDecode
+                | Self::DbDecString
+                | Self::DbDecInt
+                | Self::DbDecFloat
+                | Self::DbDecBool
+                | Self::DbDecNullable
+                | Self::DbDecMap
+                | Self::DbDecAndThen
+                | Self::DbDecSucceed
+                | Self::DbDecFail
+                | Self::DbDecMap2
+                | Self::DbDecMap3
+                | Self::DbDecMap4
+                | Self::DbDecRequired
+                | Self::DbDecOptional
+                | Self::DbDecMoney
+                | Self::DbDecBytes
+                | Self::ServerJson
+                | Self::JwtWithClaim
+        )
+    }
+
     /// `true` when this variant belongs to the `Ipe.Compression` kernel family
     /// (`Compression.gzip` / `gunzip` / `zstdCompress` / `zstdDecompress`).
     ///
