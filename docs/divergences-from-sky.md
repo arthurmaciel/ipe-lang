@@ -741,6 +741,24 @@ only to pre-empt mis-listing (see AGENTS.md "Agent learnings").
 
 ---
 
+### B28 — `Time.timeString` formats in UTC, not host-local time
+- **Ipê:** `Time.timeString : Int -> String` renders the epoch-millis instant as
+  `HH:MM:SS` in UTC, so a fixed input always yields the same string. The
+  reference formats via `time.Unix(ms/1000, 0).Format("15:04:05")`, which uses
+  the host's local timezone — the same instant renders differently per deploy
+  host.
+- **Rationale:** `timeString` is documented as pure formatting (`Int -> String`);
+  a pure function whose output depends on ambient host state is not
+  deterministic. Every sibling formatter in the module (`format`, `formatHTTP`,
+  `formatRFC3339`, `formatISO8601`) already pins UTC, so UTC also makes the
+  surface internally consistent. Zone-aware rendering remains available through
+  the `Ipe.Time` zone helpers (`inZone`, `formatInZone`). Reference:
+  `time_time_string` in `src/runtime/rust/src/time.rs`.
+- **Divergence:** `divergence:` — Ipê pins a deterministic UTC render where the
+  reference used host-local time.
+
+---
+
 ## 3. Architectural divergences (compiler + runtime structure)
 
 These are structural consequences of porting a Haskell compiler that emits

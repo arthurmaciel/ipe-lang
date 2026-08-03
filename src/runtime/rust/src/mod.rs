@@ -447,6 +447,17 @@ pub mod web;
 #[cfg(feature = "web")]
 pub use web::*;
 
+// Browser-WASM without the full `web` feature: the wasm TEA sink
+// (`wasm/mod.rs`) routes URLs through `web::route`, the pure URL-pattern matcher
+// (no server/tokio deps — it compiles on wasm32). Expose that one submodule
+// through a lean `web` shell so `crate::web::route` resolves, without pulling
+// the heavy `web` surface (axum, SSE, session store). Mirrors the emitted
+// browser-WASM module set (`ipe_backend_rust`'s `WASM_RUNTIME_MOD_RS`).
+#[cfg(all(target_arch = "wasm32", feature = "wasm-client", not(feature = "web")))]
+pub mod web {
+    pub mod route;
+}
+
 pub mod ffi_polyfills;
 pub use ffi_polyfills::*;
 
