@@ -62,16 +62,20 @@ lettre = { version = "0.11", default-features = false, features = ["builder", "h
 # see `docs/divergences-from-sky.md §B-WS-TLS` for the rationale.
 tokio-tungstenite = { version = "0.24", features = ["rustls-tls-webpki-roots"], optional = true }
 futures-util = { version = "0.3", optional = true }
-# NON-optional: the always-compiled `core.rs` derives `serde::Serialize`/`Deserialize`
-# on `IpeMaybe`/`IpeResult` unconditionally, so serde is needed by EVERY feature subset
-# (the `optional = true` was a lie — it left ~12 narrow `--features X` subsets failing
-# with E0433). Matches crate-specs.toml + the generated-project Cargo.toml, which both
-# declare serde non-optional. Generic-bound (`impl<T: Serialize>`) so a non-serde inner
-# type is unaffected.
-serde = { version = "1", features = ["derive"] }
-# NON-optional: `dom/form.rs` (always compiled — shared by the Live wire and
-# the browser-WASM sink) decodes typed form records through it. Pure serde.
-serde_urlencoded = "0.7"
+# The floor types (`IpeMaybe`/`IpeResult` in `core.rs`, the `IpeError` family in
+# `error.rs`, `IpeOrder` in `basics.rs`, `Decimal`, the `dom::diff::Patch` wire)
+# derive `serde::Serialize`/`Deserialize` — but each derive is gated on the
+# `serde` feature (`#[cfg_attr(feature = "serde", derive(…))]`). The derives are
+# generic-BOUND (`impl<T: Serialize> …`), so a non-serde inner type is unaffected;
+# the ONLY coupling is that the `serde` crate must be in the graph. Every
+# serializing surface (json/web/db/config/email/http/ws/…) implies `serde`, so a
+# floor type crossing a wire always has its impls present; a program that reaches
+# no serializing surface drops `serde` and the whole 7-crate proc-macro stack.
+serde = { version = "1", features = ["derive"], optional = true }
+# Typed form-record decode (`dom/form.rs`, gated on `web`/`wasm-client`). Optional,
+# listed by `web` and `wasm-client` (its only consumers); a non-web program drops
+# it and its `form_urlencoded` subtree.
+serde_urlencoded = { version = "0.7", optional = true }
 # Constant-time compare: the `crypto_core` floor's `constantTimeEqual`, the
 # `secret.rs` `Secret` compare, and the `web`/`server` CSRF/session-id compares.
 # Optional, behind `crypto-core` (and `secret`, which implies `crypto-core`): a
@@ -143,9 +147,13 @@ chrono-tz = { version = "0.10", optional = true }
 # `decimal` feature. Backs `decimal.rs` (the `Ipe.Decimal` surface) and `money.rs`
 # (`Ipe.Money`, built on `Decimal`); the `db` surface also decodes numeric columns
 # through it, so `db` implies `decimal`. A program that reaches no Decimal/Money
-# kernel and no Db surface drops the crate. `serde` stays enabled (the always-on
-# serialization floor); its own gating is a separate concern.
-rust_decimal = { version = "1", features = ["serde"], optional = true }
+# kernel and no Db surface drops the crate. `rust_decimal`'s own `serde` half is
+# NOT enabled here — it activates weakly via the `serde` feature
+# (`serde = [… "rust_decimal?/serde"]`), so `Decimal`'s inner `RD` gains serde
+# impls only when both `decimal` and `serde` are selected. `rust_decimal`'s own
+# default features still link the `serde` crate, so a decimal-only program keeps
+# it; adding `default-features = false` here would drop it — a separate dep-shrink.
+rust_decimal = { version = "1", optional = true }
 bcrypt = { version = "0.17", optional = true }
 # `icu_casemap`: locale-aware case mapping (`String.toUpperIn`/`toLowerIn`).
 # Feature-gated so programs that never use locale-aware case pay nothing.
@@ -304,10 +312,20 @@ decimal = ["dep:rust_decimal"]
 # module. A standalone leaf — no surface implies it. A program that reaches only
 # the std-only `Ipe.Char` kernels (or none) drops the crate.
 char-category = ["dep:unicode-general-category"]
-# `json` is the emitted FLOOR feature (`default = ["json"]`); it must NOT drag
-# `jsonwebtoken` (+ ring) into a plain JSON program. The JWT surface moved to
-# the `jwt` feature.
-json = ["serde_json"]
+# The serde crate itself — the derive/impl floor. Optional and gated: a program
+# that reaches no serializing surface drops it (and the ~7-crate serde_derive →
+# syn/quote/proc-macro2 proc-macro stack). The floor derives are
+# `#[cfg_attr(feature = "serde", derive(…))]`, so `IpeMaybe`/`IpeResult`/
+# `IpeError`/`IpeOrder`/`Decimal`/`Patch` compile impl-free without it. Every
+# serializing surface below lists `serde`, so a floor type crossing a wire always
+# has its impls. The weak `rust_decimal?/serde` activates the inner decimal serde
+# half ONLY when `decimal` is also selected — `serde` alone introduces no dep.
+serde = ["dep:serde", "rust_decimal?/serde"]
+# `json` is the JSON codec surface (`serde_json`); it implies `serde` (the
+# `serde_json::Value` stringify + every `IpeMaybe`/record round-trip need the
+# derives). It must NOT drag `jsonwebtoken` (+ ring) into a plain JSON program —
+# the JWT surface is the separate `jwt` feature.
+json = ["dep:serde_json", "serde"]
 # `sha2` (the `_ipe_migrations` ledger checksum, a cross-backend byte-exact DB
 # contract) rides the `crypto-core` feature `db` lists below. `tokio/sync`:
 # `db.rs`, `telemetry_spill.rs`, and the `tea` loop use `tokio::sync`. BOTH the
@@ -324,14 +342,14 @@ json = ["serde_json"]
 # the `Decimal` newtype.
 # `crypto-core`: `db.rs` SHA-256s the `_ipe_migrations` ledger checksum (a
 # cross-backend byte-exact contract).
-db = ["sqlx", "sqlx?/sqlite", "sqlx?/postgres", "tokio", "tokio/sync", "serde_json", "json", "bincode", "encoding", "random", "time-core", "decimal", "crypto-core"]
+db = ["sqlx", "sqlx?/sqlite", "sqlx?/postgres", "tokio", "tokio/sync", "dep:serde_json", "json", "serde", "bincode", "encoding", "random", "time-core", "decimal", "crypto-core"]
 # `db-sqlite` / `db-postgres`: config.rs alias selectors. Only the emitter ever
 # enables one, and it selects exactly one (SEAL-checked) — the standalone crate
 # links both sqlx drivers regardless (see `db`). The `compile_error!` in
 # `config.rs` guards the union as a fail-closed guard, not a user surface.
 db-sqlite = ["db"]
 db-postgres = ["db"]
-redis_store = ["redis", "tokio", "tokio/sync", "serde_json", "async-trait", "bincode", "random"]
+redis_store = ["redis", "tokio", "tokio/sync", "dep:serde_json", "json", "serde", "async-trait", "bincode", "random"]
 # Heavy crypto surface (`crypto.rs`): legacy SHA-1/MD5 checksums, AEAD, PBKDF2,
 # RSA. Owns `sha1` + `md-5` (crypto.rs-only) and implies `crypto-core` (the RSA
 # arm, the `Key` reveal, and the re-exported floor all live there).
@@ -363,21 +381,26 @@ config = ["json", "toml", "serde_yaml"]
 server = ["tokio", "tokio/net", "tokio/sync", "axum", "tower-http", "futures-util", "encoding", "uuid", "random", "crypto-core"]
 # The reqwest-free `ssrf` module parses URLs via the `url` crate (which reqwest
 # re-exports as `reqwest::Url`); `url` is behind the `url` feature.
-http_client = ["tokio", "reqwest", "futures-util", "url", "random"]
+# `serde`: `http_stream.rs` derives Serialize/Deserialize on its SSE event
+# wire types.
+http_client = ["tokio", "reqwest", "futures-util", "url", "random", "serde"]
 # `http_client`: email.rs reuses `http_client::ssrf_apply` for outbound-request
 # SSRF hardening; ws_client.rs reuses `http_client::ssrf_validate_url` +
 # `ssrf_pinned_ws_addr`. Both need the http_client module present. (`sha2` is a
 # non-optional base dep now.)
 # `crypto-core`: `email.rs` HMAC-SHA-256s the SMTP auth.
-email = ["tokio", "reqwest", "lettre", "serde_json", "http_client", "encoding", "crypto-core"]
+email = ["tokio", "reqwest", "lettre", "dep:serde_json", "json", "serde", "http_client", "encoding", "crypto-core"]
 # ws needs ONLY the reqwest-free ssrf validators (which use `url`, behind the
 # `url` feature), NOT the reqwest HTTP client — so it does not pull
 # `http_client`. `tokio/net`: `ws_client.rs` opens the pinned TCP socket.
-websocket_client = ["tokio", "tokio/net", "tokio/sync", "tokio-tungstenite", "futures-util", "url", "random"]
+# `serde`: `ws_client.rs` derives Serialize/Deserialize on its frame wire types.
+websocket_client = ["tokio", "tokio/net", "tokio/sync", "tokio-tungstenite", "futures-util", "url", "random", "serde"]
 # The session-id / CSRF-token RNG draws from the OS CSPRNG via `uuid`, so `web`
 # needs no `aes-gcm`; `subtle` (constant-time compare) and `sha2` (client-JS SRI
-# integrity hash) ride the `crypto-core` feature `web` lists below, and `serde` is
-# a non-optional base dep. `tokio/signal`+`tokio/process`: the Live console reverse-proxy
+# integrity hash) ride the `crypto-core` feature `web` lists below. `serde` (the
+# floor-type wire derives) + `serde_urlencoded` (typed form-record decode, whose
+# `dom/form.rs` module is web/wasm-gated) are listed here — the Live wire is the
+# consumer of both. `tokio/signal`+`tokio/process`: the Live console reverse-proxy
 # (`web/console_proxy.rs`, `web/mod.rs`) spawns a child (`tokio::process`) and
 # handles signals (`tokio::signal`) — matching the emitted `web_cargo_toml`
 # live-runtime tokio feature set.
@@ -386,7 +409,7 @@ websocket_client = ["tokio", "tokio/net", "tokio/sync", "tokio-tungstenite", "fu
 # `web`, so the native-window backend carries it transitively.
 # `crypto-core`: `web/mod.rs` SHA-256s the client-JS SRI integrity hash and
 # `web/csrf.rs` constant-time compares CSRF tokens via `subtle`.
-web = ["server", "http_client", "serde_json", "async-trait", "tokio/signal", "tokio/process", "encoding", "uuid", "time-core", "crypto-core"]
+web = ["server", "http_client", "dep:serde_json", "json", "serde", "dep:serde_urlencoded", "async-trait", "tokio/signal", "tokio/process", "encoding", "uuid", "time-core", "crypto-core"]
 # `db-postgres` (not bare `db`) selects a concrete sqlx driver — it also pulls
 # `sqlite`, so both driver code paths compile. `jwt` + `url` cover the
 # JWT/auth and URL/SSRF surfaces that `db`/`web`/`http_client` reach.
@@ -401,6 +424,15 @@ wasm-client = [
     "dep:web-sys",
     "dep:console_error_panic_hook",
     "dep:gloo-timers",
+    # The static wasm module set declares `json`, the floor serde derives, and
+    # `dom/form.rs` unconditionally, so `wasm-client` implies `json` (which pulls
+    # `serde`) and `serde_urlencoded` (the browser form-decode sink). The closed
+    # WASM app template (`WASM_CARGO_TOML`) declares `serde`/`serde_json`/
+    # `serde_urlencoded` non-optional regardless, so the emitted-app dep graph is
+    # unchanged.
+    "json",
+    "serde",
+    "dep:serde_urlencoded",
     # The static wasm module set (`WASM_RUNTIME_MOD_RS`) declares `crypto_core`
     # and `secret` unconditionally, so `wasm-client` implies both features to
     # satisfy the source `#[cfg]` gates and pull `sha2`/`hmac`/`subtle`/`getrandom`

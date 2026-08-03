@@ -268,19 +268,22 @@ pub fn to_array<E: From<String>, T: Clone, const N: usize>(xs: &[T]) -> IpeResul
 // ===========================================
 // Maybe
 // ===========================================
-// The serde derive is UNCONDITIONAL but its impls are generic-BOUND (the macro
-// emits `impl<T: Serialize> … for IpeMaybe<T>`), so a `IpeMaybe<NonSerde>` is
-// unaffected — yet a Ipe.Web model carrying a `Maybe X` field (X serde-able)
-// serialises for the session store. Without this, any model with a `Maybe`/
-// `Result` field failed E0277. NOTE: `serde` is therefore a NON-OPTIONAL dep in
-// the runtime crate (core.rs is always compiled) — do NOT re-add `optional = true`.
+// The serde derive is generic-BOUND (the macro emits `impl<T: Serialize> … for
+// IpeMaybe<T>`), so a `IpeMaybe<NonSerde>` is unaffected — yet a Ipe.Web model
+// carrying a `Maybe X` field (X serde-able) serialises for the session store.
+// Without this, any model with a `Maybe`/`Result` field failed E0277. The derive
+// is gated on the `serde` feature: a program that reaches no serializing surface
+// (no Json/Web/Db/config) drops `serde` entirely, and `IpeMaybe` still compiles —
+// it simply carries no serde impls. Every serializing surface implies `serde`, so
+// the derive is always present where a floor type actually crosses a wire.
 //
 // `Deserialize` is NOT derived — we use a manual impl (see below) that accepts
 // BOTH the externally-tagged repr (session-store round-trip) AND a bare value
 // (form data: `note=hello` → `Just("hello")`). `Serialize` stays derived (tagged)
 // so the session store writes `{"Just":"x"}` / `"Nothing"` and the manual
 // `Deserialize` reads those back correctly.
-#[derive(Clone, Debug, PartialEq, serde::Serialize)]
+#[derive(Clone, Debug, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize))]
 pub enum IpeMaybe<T> {
     Nothing,
     Just(T),
@@ -306,14 +309,20 @@ pub enum IpeMaybe<T> {
 // `Nothing`, not `Just("Nothing")`. This is the same trade-off as the tagged
 // derive and is acceptable — form fields named `note` with the literal value
 // "Nothing" are pathological; real user notes should not hit this.
+//
+// Gated on `serde`: the whole hand-written deserializer disappears when no
+// serializing surface is reached, mirroring the derived `Serialize` above.
+#[cfg(feature = "serde")]
 impl<'de, T: serde::de::Deserialize<'de>> serde::de::Deserialize<'de> for IpeMaybe<T> {
     fn deserialize<D: serde::de::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
         d.deserialize_any(IpeMaybeVisitor(std::marker::PhantomData))
     }
 }
 
+#[cfg(feature = "serde")]
 struct IpeMaybeVisitor<T>(std::marker::PhantomData<T>);
 
+#[cfg(feature = "serde")]
 impl<'de, T: serde::de::Deserialize<'de>> serde::de::Visitor<'de> for IpeMaybeVisitor<T> {
     type Value = IpeMaybe<T>;
 
@@ -452,7 +461,8 @@ pub fn ipe_maybe_to_option<T>(m: IpeMaybe<T>) -> Option<T> {
 // ===========================================
 // Result (generic over error type E)
 // ===========================================
-#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+#[derive(Clone, Debug, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum IpeResult<E, A> {
     Ok(A),
     Err(E),
@@ -959,7 +969,11 @@ pub fn install_panic_classifier() {
     }));
 }
 
-#[cfg(test)]
+// The whole test module exercises the `IpeMaybe` serde round-trip (its
+// `Serialize` derive + hand-written `Deserialize` visitor), so it compiles only
+// when the `serde` feature is on. `cargo test --features serde` (or `json`) runs
+// them; a `--no-default-features` test build has no serde impls to exercise.
+#[cfg(all(test, feature = "serde"))]
 mod tests {
     use super::*;
 
