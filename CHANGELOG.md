@@ -10,6 +10,23 @@ Entries below the header are maintained by
 section is generated from Conventional Commit messages and prepended when the
 standing release pull request is merged.
 
+## [0.1.33](https://github.com/arthurmaciel/ipe-lang/compare/ipe-v0.1.32...ipe-v0.1.33) (2026-08-03)
+
+
+### Features
+
+* **backend:** runtime feature-map SSOT + feature-set closure SEAL (S3 P2) ([#508](https://github.com/arthurmaciel/ipe-lang/issues/508)) ([8634a60](https://github.com/arthurmaciel/ipe-lang/commit/8634a60d09d41288b35af675e95b50e601943314))
+* **cli:** ipe doctor — environment diagnostics + consent-gated setup ([#512](https://github.com/arthurmaciel/ipe-lang/issues/512)) ([#519](https://github.com/arthurmaciel/ipe-lang/issues/519)) ([f73ee80](https://github.com/arthurmaciel/ipe-lang/commit/f73ee80a818c495f4e3c3b0c0ecab47d7d12f91c))
+* **cli:** S3 P4+P5 — dep-model default emit, embed+materialize runtime, walk-up IPE_RUNTIME_DIR ([#517](https://github.com/arthurmaciel/ipe-lang/issues/517)) ([684d602](https://github.com/arthurmaciel/ipe-lang/commit/684d60274122b0d62c11337821c867c593e02611))
+* **emit,runtime:** dependency-model native emit behind IPE_RUNTIME_DEP (S3 P3) ([#511](https://github.com/arthurmaciel/ipe-lang/issues/511)) ([9ed0c39](https://github.com/arthurmaciel/ipe-lang/commit/9ed0c395cfd66d7443b79cc6d92c7eb618f56f8a))
+* goldens are byte-identical. ([4d3dc8b](https://github.com/arthurmaciel/ipe-lang/commit/4d3dc8b98f1716e22813496356d20524aff08b1f))
+* **lower:** function-level dependency emission via IR reachability ([#509](https://github.com/arthurmaciel/ipe-lang/issues/509)) ([#520](https://github.com/arthurmaciel/ipe-lang/issues/520)) ([9c79f0e](https://github.com/arthurmaciel/ipe-lang/commit/9c79f0e527d446f37705c8216560e93e11e04986))
+
+
+### Bug Fixes
+
+* **runtime:** gate log's wasm browser-console path on the wasm-client feature ([#518](https://github.com/arthurmaciel/ipe-lang/issues/518)) ([1341f58](https://github.com/arthurmaciel/ipe-lang/commit/1341f58bed263d2d94207238a7c6249c061c8e39))
+
 ## [0.1.32](https://github.com/arthurmaciel/ipe-lang/compare/ipe-v0.1.31...ipe-v0.1.32) (2026-08-02)
 
 
