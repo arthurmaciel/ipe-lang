@@ -320,6 +320,33 @@ pub fn record_struct_name(field_names: &[String]) -> String {
     mangle_reserved(to_camel_case(&format!("Rec_{joined}")))
 }
 
+/// The field-witness trait name for a record field — field `name` →
+/// `IpeHasName`. One trait per field name; the `IpeHas` prefix keeps the
+/// namespace disjoint from the `Rec…` struct namespace and from every runtime
+/// type. A row generic bounded by this trait can read the field through the
+/// trait's getter, so rustc monomorphises the call per concrete record shape.
+#[must_use]
+pub fn field_witness_trait_name(field_name: &str) -> String {
+    to_camel_case(&format!("Ipe_has_{field_name}"))
+}
+
+/// The field-witness getter method name — field `name` → `ipe_name`. The
+/// `ipe_` prefix cannot collide with a Rust struct field or an inherent method
+/// on a registry struct, so an impl of the witness trait can always name it.
+#[must_use]
+pub fn field_witness_getter_name(field_name: &str) -> String {
+    format!("ipe_{}", mangle_reserved(field_name.to_owned()))
+}
+
+/// The field-witness associated-type name — field `name` → `Name`. Baking the
+/// field type into an associated type (rather than the trait's type parameters)
+/// lets one trait serve every field type: the impls stay type-agnostic and the
+/// row bound `R: IpeHasName<Name = String>` does the type checking.
+#[must_use]
+pub fn field_witness_assoc_type_name(field_name: &str) -> String {
+    to_camel_case(field_name)
+}
+
 /// The Rust runtime function name for a kernel built-in. Mirrors
 /// `Kernel.kernelToRust`.
 #[must_use]
@@ -1506,8 +1533,35 @@ pub const fn kernel_name(k: KernelFn) -> &'static str {
 
 #[cfg(test)]
 mod tests {
-    use super::{enum_name, kernel_name, module_value, to_camel_case, to_snake_case};
+    use super::{
+        enum_name, field_witness_assoc_type_name, field_witness_getter_name,
+        field_witness_trait_name, kernel_name, module_value, to_camel_case, to_snake_case,
+    };
     use ipe_ir::KernelFn;
+
+    #[test]
+    fn field_witness_names_derive_from_field() {
+        assert_eq!(field_witness_trait_name("name"), "IpeHasName");
+        assert_eq!(field_witness_getter_name("name"), "ipe_name");
+        assert_eq!(field_witness_assoc_type_name("name"), "Name");
+    }
+
+    #[test]
+    fn field_witness_names_camel_case_multiword_fields() {
+        // A snake_case Ipê field folds to one CamelCase token in the trait and
+        // associated-type names, and stays snake in the prefixed getter.
+        assert_eq!(field_witness_trait_name("first_name"), "IpeHasFirstName");
+        assert_eq!(field_witness_assoc_type_name("first_name"), "FirstName");
+        assert_eq!(field_witness_getter_name("first_name"), "ipe_first_name");
+    }
+
+    #[test]
+    fn field_witness_getter_mangles_reserved_field() {
+        // A field whose name is a Rust keyword is keyword-mangled inside the
+        // getter suffix, so the emitted method identifier is always valid — and
+        // the `ipe_` prefix already keeps it clear of the reserved namespace.
+        assert_eq!(field_witness_getter_name("type"), "ipe_type_");
+    }
 
     /// A runtime `false` the optimiser cannot fold, so `assert!(false_marker(),
     /// …)` reads as a deliberate unconditional failure rather than a suspicious

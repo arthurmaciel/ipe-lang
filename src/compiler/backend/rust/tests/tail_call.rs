@@ -83,6 +83,7 @@ fn emit_count_main_rs(tco: bool) -> DResult<String> {
         name: count,
         home: ModPath(vec![]),
         type_params: vec![],
+        row_params: vec![],
         params,
         ret: IrType::Int,
         body: count_body,
@@ -94,6 +95,7 @@ fn emit_count_main_rs(tco: bool) -> DResult<String> {
         name: main,
         home: ModPath(vec![]),
         type_params: vec![],
+        row_params: vec![],
         params: vec![],
         ret: IrType::Task(Box::new(IrType::Unit)),
         body: Expr::Call {

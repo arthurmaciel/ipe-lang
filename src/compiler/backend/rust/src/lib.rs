@@ -2357,7 +2357,7 @@ impl<'a> EmitCtx<'a> {
     /// failure here is an internal invariant violation (IPE-I0201) — surfaced as
     /// a [`Diagnostic::CompilerBug`] rather than silently emitting an empty (and
     /// uncompilable) Rust identifier.
-    fn resolve_ident(&self, sym: Symbol) -> DResult<&str> {
+    pub(crate) fn resolve_ident(&self, sym: Symbol) -> DResult<&str> {
         match self.interner.resolve(sym) {
             Some(s) if !s.is_empty() => Ok(s),
             _ => Err(Diagnostic::CompilerBug {
@@ -2670,6 +2670,9 @@ fn collect_record_shapes(
         | IrType::WebSocketServerCfg
         // A generic type variable carries no concrete record shape of its own.
         | IrType::Generic(_)
+        // A row variable is erased to a witness-bounded generic; its concrete
+        // record shapes are collected from the actual argument structs, not here.
+        | IrType::RowGeneric(_)
         // nullary plain types (`Length`, `Color`, …) and the opaque live
         // request handle carry no record shapes of their own.
         | IrType::UiPlain(_)
@@ -2824,6 +2827,9 @@ fn type_reaches_enum(
         // `Fun` — pointer-sized, no size-cycle risk.
         | IrType::FnOnceChain(_, _)
         | IrType::Generic(_)
+        // A row variable is erased to a witness-bounded generic; it reaches no
+        // enum of its own (the concrete struct at the call site is finite).
+        | IrType::RowGeneric(_)
         // nullary plain types and the opaque live request handle are
         // pointer-sized — they cannot form an infinite-size cycle.
         | IrType::UiPlain(_)
@@ -2966,7 +2972,11 @@ fn contains_generic(ty: &IrType) -> bool {
         | IrType::CryptoMac
         | IrType::EmailAddress
         // `Locale` is monomorphic — no generic parameters.
-        | IrType::Locale => false,
+        | IrType::Locale
+        // A row variable is a SEPARATE row generic (`R{n}`), never an ordinary
+        // `T{n}` record-struct parameter, and never appears inside a record-
+        // struct field. It contributes no `<T>` clause here.
+        | IrType::RowGeneric(_) => false,
         // `WebRoute page` is parametric on `page`; check if it carries a
         // generic.
         IrType::WebRoute(page) => contains_generic(page),
@@ -3087,7 +3097,10 @@ fn collect_generics(ty: &IrType, out: &mut Vec<Symbol>) {
         | IrType::CryptoMac
         | IrType::EmailAddress
         // `Locale` is monomorphic — no generics to collect.
-        | IrType::Locale => {}
+        | IrType::Locale
+        // A row variable is a separate row generic (`R{n}`), tracked in
+        // `Func::row_params`, never in the ordinary `T{n}` scope collected here.
+        | IrType::RowGeneric(_) => {}
         // `WebRoute page` may carry generic parameters through `page`.
         IrType::WebRoute(page) => collect_generics(page, out),
         // `Ui { ctor, msg }` may carry generic parameters through `msg`.
@@ -3441,6 +3454,15 @@ fn match_template(
             IrType::Ui { ctor: cc, msg: cm } if tc == cc => match_template(tm, cm, subst),
             _ => Err(mismatch()),
         },
+        // A row variable never enters the struct registry — it is erased to a
+        // witness-bounded generic in a function signature, never a record-struct
+        // template field. Reaching this arm is an invariant violation.
+        IrType::RowGeneric(_) => Err(Diagnostic::CompilerBug {
+            where_: "ipe_backend_rust::match_template",
+            detail: "row-generic type reached record-struct template reconciliation; \
+                     an open row must never enter the struct registry"
+                .to_owned(),
+        }),
     }
 }
 

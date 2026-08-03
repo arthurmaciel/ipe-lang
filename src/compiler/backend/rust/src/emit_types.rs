@@ -9,8 +9,16 @@ use ipe_diagnostics::{DResult, Diagnostic};
 use ipe_intern::Symbol;
 use ipe_ir::{EnumDef, IrType, UiCtor, UiPlain, ir_type_is_derivable};
 
+use std::collections::BTreeSet;
+use std::fmt::Write as _;
+
+use ipe_ir::Program;
+
 use crate::doc::Doc;
-use crate::naming::mangle_reserved;
+use crate::naming::{
+    field_witness_assoc_type_name, field_witness_getter_name, field_witness_trait_name,
+    mangle_reserved,
+};
 use crate::render::{RenderConfig, render_seeded};
 use crate::{EmitCtx, RecordStruct};
 
@@ -131,13 +139,82 @@ fn render_stringify_enum_arm(arm_head: &str, fmt_literal: &str, args: &[String])
 #[derive(Clone, Copy)]
 pub struct GenericScope<'a> {
     params: &'a [Symbol],
+    /// The row variables quantified by the enclosing function, in order
+    /// (`rows[i]` → `R{i+1}`). Empty for every scope that is not a
+    /// row-polymorphic function signature (structs, enums, monomorphic funcs).
+    /// Kept disjoint from [`Self::params`]: `T`-prefixed vs `R`-prefixed names
+    /// can never collide.
+    rows: &'a [Symbol],
+    /// The PARAMETER BINDER symbols whose type is an [`ipe_ir::IrType::RowGeneric`]
+    /// — the names a body field read must route through a witness getter. A row
+    /// variable (`rows`) names the open tail in type position; a row binder
+    /// (`row_binders`) is the value-level parameter carrying that type (e.g.
+    /// `rec` in `greet rec = rec.name`). Access emission keys on the binder.
+    row_binders: &'a [Symbol],
 }
 
 impl<'a> GenericScope<'a> {
-    /// A scope quantifying `params`, in order (`params[i]` → `T{i+1}`).
+    /// A scope quantifying `params`, in order (`params[i]` → `T{i+1}`), with no
+    /// row variables. Used by every non-row emission site (structs, enums,
+    /// monomorphic and ordinary-generic functions).
     #[must_use]
     pub const fn new(params: &'a [Symbol]) -> Self {
-        Self { params }
+        Self {
+            params,
+            rows: &[],
+            row_binders: &[],
+        }
+    }
+
+    /// A scope quantifying `params` (`T{i+1}`) and `rows` (`R{i+1}`). Used by a
+    /// row-polymorphic function signature so an [`IrType::RowGeneric`] renders
+    /// to its positional `R{n}` name. `row_binders` lists the value-level
+    /// parameter names carrying a row-generic type, so a body field read on one
+    /// routes through the witness getter.
+    #[must_use]
+    pub const fn with_rows(
+        params: &'a [Symbol],
+        rows: &'a [Symbol],
+        row_binders: &'a [Symbol],
+    ) -> Self {
+        Self {
+            params,
+            rows,
+            row_binders,
+        }
+    }
+
+    /// The deterministic Rust generic name for a row variable `sym` (`R1`,
+    /// `R2`, … by position in the enclosing function's row params).
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Diagnostic::CompilerBug`] when `sym` is not in this scope's row
+    /// list — the lowerer is contracted to list every row variable it erased to
+    /// an [`IrType::RowGeneric`] in [`ipe_ir::Func::row_params`], so a row
+    /// generic outside the row scope is an internal invariant violation.
+    fn row_name(&self, sym: Symbol) -> DResult<String> {
+        self.rows.iter().position(|p| *p == sym).map_or_else(
+            || {
+                Err(Diagnostic::CompilerBug {
+                    where_: "ipe_backend_rust::GenericScope::row_name",
+                    detail: format!(
+                        "row variable symbol {} is not in the enclosing function's row scope; \
+                         the lowerer must list every row variable in Func::row_params",
+                        sym.as_raw()
+                    ),
+                })
+            },
+            |i| Ok(format!("R{}", i.saturating_add(1))),
+        )
+    }
+
+    /// `true` iff `sym` is a parameter binder whose type is a row generic — the
+    /// predicate the Access emitter uses to decide whether a field read routes
+    /// through a witness getter rather than a struct field.
+    #[must_use]
+    pub fn is_row(&self, sym: Symbol) -> bool {
+        self.row_binders.contains(&sym)
     }
 
     /// The deterministic Rust generic name for `sym` (`T1`, `T2`, … by position).
@@ -502,6 +579,11 @@ pub fn render_type(ctx: &EmitCtx, ty: &IrType, generics: GenericScope) -> DResul
         // scope. No trait bound is emitted — only parametric pass-through is
         // supported here; constrained variables are rejected upstream.
         IrType::Generic(sym) => generics.rust_name(*sym)?,
+        // A row variable renders as the function's corresponding row generic
+        // (`R1`, `R2`, …), resolved by position in the row scope. Its field
+        // obligations are carried as witness bounds in the generic clause; the
+        // type name itself is the bare `R{n}`.
+        IrType::RowGeneric(sym) => generics.row_name(*sym)?,
     })
 }
 
@@ -1040,4 +1122,90 @@ pub fn emit_record_struct(ctx: &EmitCtx, rec: &RecordStruct) -> DResult<String> 
 }}
 "
     ))
+}
+
+/// Every distinct field name required by any row-polymorphic function's
+/// [`ipe_ir::Func::row_params`] across the whole program, in sorted order.
+///
+/// One field-witness trait is synthesised per such name; the empty set (a
+/// program with no row-polymorphic annotation) emits no witness substrate at
+/// all, so the common case is untouched.
+fn row_witness_field_names(program: &Program) -> BTreeSet<Symbol> {
+    let mut names = BTreeSet::new();
+    for module in &program.modules {
+        for func in &module.funcs {
+            for row in &func.row_params {
+                names.extend(row.fields.keys().copied());
+            }
+        }
+    }
+    names
+}
+
+/// Synthesise the per-field witness traits and their per-struct impls that let a
+/// row-polymorphic function read a field off a rustc-generic record parameter.
+///
+/// For each field name `f` required by any row bound in the program, one trait
+/// `IpeHasF { type F; fn ipe_f(&self) -> &Self::F; }` is emitted, plus one impl
+/// for EVERY registry struct that carries `f`. The impl's associated type is the
+/// struct's own field type (rendered in the struct's generic scope), so the row
+/// bound `R: IpeHasF<F = T>` type-checks against exactly the shapes the solver
+/// already proved carry `f : T`. Static dispatch only — rustc monomorphises each
+/// getter call to the concrete struct; no `dyn`, no reflection.
+///
+/// Returns the empty string when the program has no row-polymorphic annotation.
+pub fn emit_row_witnesses(ctx: &EmitCtx, program: &Program) -> DResult<String> {
+    let field_names = row_witness_field_names(program);
+    if field_names.is_empty() {
+        return Ok(String::new());
+    }
+    let mut out = String::new();
+    for field_sym in &field_names {
+        let field_name = ctx.resolve_ident(*field_sym)?.to_owned();
+        let trait_name = field_witness_trait_name(&field_name);
+        let assoc = field_witness_assoc_type_name(&field_name);
+        let getter = field_witness_getter_name(&field_name);
+        // The trait: one associated type (the field's type) and one borrowing
+        // getter. The associated type keeps the trait type-agnostic so a single
+        // trait serves the field at every type it occurs at across structs.
+        let _ = write!(
+            out,
+            "pub trait {trait_name} {{\n    type {assoc};\n    fn {getter}(&self) -> &Self::{assoc};\n}}\n"
+        );
+        // One impl per registry struct carrying this field — total over the
+        // struct namespace, no reachability analysis (correctness needs none).
+        for rec in ctx.record_structs() {
+            let Some((field_ipe_name, field_ty)) =
+                rec.fields.iter().find(|(fname, _)| *fname == field_name)
+            else {
+                continue;
+            };
+            let ident = mangle_reserved(field_ipe_name.clone());
+            // The struct's own generic scope: a generic struct's field type may
+            // be a `T{n}`, resolved by position exactly as in `emit_record_struct`.
+            let scope = GenericScope::new(&rec.type_params);
+            let assoc_ty = render_type(ctx, field_ty, scope)?;
+            let params: Vec<String> = (1..=rec.type_params.len())
+                .map(|i| format!("T{i}"))
+                .collect();
+            let (decl_clause, use_clause) = if params.is_empty() {
+                (String::new(), String::new())
+            } else {
+                (
+                    format!("<{}>", params.join(", ")),
+                    format!("<{}>", params.join(", ")),
+                )
+            };
+            let head = impl_header(
+                &decl_clause,
+                &trait_name,
+                &format!("{}{use_clause}", rec.name),
+            );
+            let _ = write!(
+                out,
+                "{head}\n    type {assoc} = {assoc_ty};\n    fn {getter}(&self) -> &{assoc_ty} {{ &self.{ident} }}\n}}\n"
+            );
+        }
+    }
+    Ok(out)
 }

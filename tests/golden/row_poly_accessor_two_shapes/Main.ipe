@@ -1,0 +1,28 @@
+module Main exposing (main)
+
+import Ipe.Io as Io
+import Ipe.List
+import Ipe.String
+
+
+-- The first-class accessor `.name` used polymorphically over TWO different
+-- record shapes. Each `List.map .name …` occurrence desugars to its own getter
+-- lambda and pins to that list's element shape (D2: an accessor occurrence is
+-- typed independently), so both a `{ name, age }` list and a `{ name, id }`
+-- list read their `name` field — each through a concrete monomorphic getter.
+people : List { name : String, age : Int }
+people =
+    [ { name = "Ada", age = 36 }, { name = "Bo", age = 20 } ]
+
+
+accounts : List { name : String, id : Int }
+accounts =
+    [ { name = "Cy", id = 1 }, { name = "Di", id = 2 } ]
+
+
+main =
+    Io.println
+        (String.join ", " (List.map .name people)
+            ++ " | "
+            ++ String.join ", " (List.map .name accounts)
+        )

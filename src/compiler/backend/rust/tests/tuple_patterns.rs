@@ -90,6 +90,7 @@ fn wrap_program(i: &mut Interner) -> DResult<Program> {
         name: fst_of,
         home: ModPath(vec![]),
         type_params: vec![],
+        row_params: vec![],
         params: vec![(
             w,
             IrType::Enum {
@@ -108,6 +109,7 @@ fn wrap_program(i: &mut Interner) -> DResult<Program> {
         name: main,
         home: ModPath(vec![]),
         type_params: vec![],
+        row_params: vec![],
         params: vec![],
         ret: IrType::Task(Box::new(IrType::Unit)),
         body: Expr::Call {
@@ -216,6 +218,7 @@ fn unit_value_and_type_render() -> DResult<()> {
                 name: nop,
                 home: ModPath(vec![]),
                 type_params: vec![],
+                row_params: vec![],
                 params: vec![],
                 ret: IrType::Unit,
                 body: Expr::Unit,

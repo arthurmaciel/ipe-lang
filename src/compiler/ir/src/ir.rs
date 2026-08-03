@@ -778,9 +778,38 @@ pub struct Func {
     /// [`Symbol`] participates in naming; the [`BoundSet`] adds the `: <bounds>`
     /// clause at that position.
     pub type_params: Vec<(Symbol, BoundSet)>,
+    /// The row variables this function quantifies, in quantification order,
+    /// after [`Self::type_params`]. A row variable names the open tail of a
+    /// row-polymorphic record annotation `{ r | f : T }` and appears as an
+    /// [`IrType::RowGeneric`] in the parameters / return / body; its
+    /// [`RowParam`] carries the fields the annotation guarantees. A function
+    /// with no row-polymorphic annotation has an empty list.
+    ///
+    /// The order is load-bearing exactly as for [`Self::type_params`]: the
+    /// backend derives each row variable's Rust generic name (`R1`, `R2`, …)
+    /// from its *position* here, so the synthesised generic clause, the
+    /// witness bounds, and every use-site agree. `R`-prefixed names cannot
+    /// collide with the `T`-prefixed ordinary type generics.
+    pub row_params: Vec<RowParam>,
     pub params: Vec<(Symbol, IrType)>,
     pub ret: IrType,
     pub body: Expr,
+}
+
+/// A row variable's required-field contract — the single source of truth for
+/// what a row-polymorphic function's row parameter guarantees.
+///
+/// `var` is the source row variable [`Symbol`] (matching the
+/// [`IrType::RowGeneric`] carried in the signature); `fields` maps each
+/// annotated field name to its lowered type, in field-name order (the
+/// [`BTreeMap`] iteration order is fixed). The backend emits one witness-trait
+/// bound per field on this variable's Rust generic, so a body field read
+/// resolves through the field's getter and rustc monomorphises the call to the
+/// concrete record struct.
+#[derive(Clone, PartialEq, Eq, Debug, serde::Serialize, serde::Deserialize)]
+pub struct RowParam {
+    pub var: Symbol,
+    pub fields: BTreeMap<Symbol, IrType>,
 }
 
 /// The type lattice.
@@ -935,6 +964,28 @@ pub enum IrType {
     /// well-formed `Def::Typed` post-solve) — it is not the steady-state
     /// representation the way it is for a genuine type parameter.
     Generic(Symbol),
+    /// A row variable in type position — the open tail of a row-polymorphic
+    /// record annotation `{ r | f : T }`. The carried [`Symbol`] is the source
+    /// row variable's name (e.g. interned `"r"`).
+    ///
+    /// A row-polymorphic function erases its open row into an ordinary rustc
+    /// generic bounded by synthesised per-field witness traits (one trait per
+    /// required field name). The backend renders this as the function's
+    /// corresponding row generic (`R1`, `R2`, …), resolved by the variable's
+    /// position in the enclosing [`Func::row_params`] — never by the symbol's
+    /// spelling — so emission is deterministic regardless of source naming. The
+    /// required fields and their types live in the matching [`RowParam`]; a
+    /// field read on a value of this type routes through the field's witness
+    /// getter rather than a struct field.
+    ///
+    /// This variant is DISTINCT from [`IrType::Generic`] on purpose: a plain
+    /// generic is unbounded structural pass-through, whereas a row generic
+    /// carries field obligations discharged through witness bounds. Keeping them
+    /// separate forces every consumer to decide the row case explicitly and
+    /// keeps `Generic`'s existing meaning intact. It is representable here, but
+    /// — unlike an open row — never as an [`IrType::Record`]: every `Record` the
+    /// backend sees stays closed.
+    RowGeneric(Symbol),
     /// The built-in `Dict k v` associative map type, carrying its key type then
     /// its value type. Renders as the runtime's `HashMap<K, V>` (backed by
     /// `std::collections::HashMap`). Distinct from a user [`IrType::Enum`] so
@@ -1532,6 +1583,10 @@ pub fn ir_type_is_derivable(
         // `Locale` derives Clone+PartialEq+Debug — fully derivable.
         | IrType::Locale
         | IrType::Generic(_)
+        // A row generic monomorphises to a concrete record struct, which is
+        // derivable by construction; its `Clone` (and any whole-record bound)
+        // is guaranteed by the witness bound set the backend emits.
+        | IrType::RowGeneric(_)
         | IrType::UiPlain(_) => true,
         // The fully-derivable Ipe.Ui / Ipe.Html carriers vs the two Clone-only
         // ones (`html::Attribute` / `html::Event`, which hold `Arc<dyn Fn>`).
@@ -1656,6 +1711,10 @@ pub fn ir_type_is_serde(ty: &IrType, enum_serde: &impl Fn(&ModPath, Symbol) -> b
         | IrType::Bytes
         | IrType::Json
         | IrType::Generic(_)
+        // A row generic resolves to a concrete struct at each call site; serde
+        // over the whole record, if the body needs it, is carried by the
+        // witness bound set exactly as for a plain generic.
+        | IrType::RowGeneric(_)
         // `Order` (LT/EQ/GT) is a plain no-payload enum; IpeOrder derives serde.
         // `Decimal` is a Copy newtype; rust_decimal supports serde via feature.
         // `IpeErrorKind`/`IpeError`/`IpeErrorDetails` derive serde — `Error`
@@ -1879,7 +1938,11 @@ pub fn carrier_is_clone(ty: &IrType) -> bool {
         | IrType::Cmd(_)
         | IrType::Sub(_)
         | IrType::Decoder(_)
-        | IrType::Generic(_) => false,
+        | IrType::Generic(_)
+        // A row generic's `Clone`-ness rides its emitted `R: Clone` witness
+        // bound, exactly as a plain generic's rides `T: Clone` — the carrier
+        // itself makes no promise here.
+        | IrType::RowGeneric(_) => false,
         // Transparent carriers: `Clone` iff every carried element is.
         IrType::Maybe(e) | IrType::List(e) | IrType::Set(e) => carrier_is_clone(e),
         IrType::Result(a, b) | IrType::Dict(a, b) => carrier_is_clone(a) && carrier_is_clone(b),
@@ -3785,6 +3848,7 @@ mod tests {
             name: id,
             home: ModPath(vec![]),
             type_params: vec![(a, BoundSet::UNBOUNDED)],
+            row_params: vec![],
             params: vec![(x, IrType::Generic(a))],
             ret: IrType::Generic(a),
             body: Expr::Var(x),
@@ -3800,6 +3864,7 @@ mod tests {
             name: id,
             home: ModPath(vec![]),
             type_params: vec![(a, BoundSet::UNBOUNDED), (b, BoundSet::UNBOUNDED)],
+            row_params: vec![],
             params: vec![(x, IrType::Generic(a))],
             ret: IrType::Generic(b),
             body: Expr::Var(x),
@@ -3820,6 +3885,7 @@ mod tests {
             name: id,
             home: ModPath(vec![]),
             type_params: vec![(a, bounds)],
+            row_params: vec![],
             params: vec![(x, IrType::Generic(a))],
             ret: IrType::Generic(a),
             body: Expr::Var(x),
@@ -3840,6 +3906,7 @@ mod tests {
             name: main_sym,
             home: ModPath(vec![]),
             type_params: vec![],
+            row_params: vec![],
             params: vec![],
             ret: IrType::Task(Box::new(IrType::Unit)),
             body: Expr::Call {
@@ -4371,6 +4438,7 @@ mod serde_persistence_tests {
             name: main_sym,
             home: ModPath(vec![]),
             type_params: vec![],
+            row_params: vec![],
             params: vec![(msg_param, IrType::Generic(msg_param))],
             ret: IrType::Unit,
             body,
@@ -4472,6 +4540,7 @@ mod serde_persistence_tests {
                     name: f,
                     home: ModPath(vec![]),
                     type_params: vec![],
+                    row_params: vec![],
                     params: vec![],
                     ret: IrType::Unit,
                     body: Expr::Call {

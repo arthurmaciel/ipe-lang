@@ -21,15 +21,19 @@
 //! | `row_poly_subset_pattern` | P5, P7 | accept | subset `case` pattern AND subset lambda pattern (through `List.map`) over a superset scrutinee; emitted pattern completes to the superset struct (`RecAgeName { age: _, name, .. }`); `IPE_E2E=1` prints `Iri: Ada, Bo` |
 //! | `row_poly_closed_superset_neg` | P4 | reject | CLOSED record annotation called with a superset arg → IPE-T0001 |
 //! | `row_poly_two_supersets_neg` | P6 (class-1 tripwire) | reject | unannotated let-bound getter called with two DIFFERENT superset shapes → IPE-T0001 |
-//! | `row_poly_annotation_gap` | P1 (gap canary) | reject | row-var record annotation `{ r \| f : T }` parses + type-checks, rejected at lowering → IPE-L0131 (backend monomorphisation deferred) |
+//! | `row_poly_annotation_gap` | P1 | accept | single-field arg-position row `{ r \| name : String }` erases to a witness-bounded rustc generic (`R1: IpeHasName<Name = String>`); the field read routes through `ipe_name()` |
+//! | `row_poly_greet` | P1 | accept | one row-poly fn called at TWO shapes (`{name,age}`, `{name,id}`); both concrete structs + a witness impl each; `IPE_E2E=1` prints `Ada, Bo` |
 //! | `row_poly_accessor` | P8 | accept | first-class accessor `.name` (desugars to `\r -> r.name`) through `List.map` over a superset list; emits a concrete getter closure over the superset struct; `IPE_E2E=1` prints `Ada, Bo` |
+//! | `row_poly_accessor_two_shapes` | P8 | accept | `.name` through `List.map` over two DIFFERENT record shapes; each occurrence a concrete getter; `IPE_E2E=1` prints `Ada, Bo | Cy, Di` |
 //!
 //! Run the E2E accept-path bodies (real `cargo build` + run) with:
 //! ```text
 //! IPE_E2E=1 cargo test -p ipe --test golden_row_poly_records
 //! ```
-//! The three reject fixtures run unconditionally (compile-time only, no
-//! `cargo`, so no gate needed).
+//! The two reject fixtures (`row_poly_closed_superset_neg`,
+//! `row_poly_two_supersets_neg`) run unconditionally (compile-time only, no
+//! `cargo`, so no gate needed) — they are the pinned-records ADR tripwires and
+//! must keep rejecting.
 
 use std::path::{Path, PathBuf};
 
@@ -301,29 +305,21 @@ fn two_different_supersets_is_ipe_t0001() {
 }
 
 // ---------------------------------------------------------------------------
-// row_poly_annotation_gap — P1, the completeness-gap canary. Now parses and
-// TYPE-CHECKS (the type layer models the open row); rejected at LOWERING,
-// IPE-L0131, because the backend cannot yet monomorphise the callee per
-// record shape. Compile-time only, no gate.
+// row_poly_annotation_gap — P1. A single-field argument-position row-polymorphic
+// annotation lowers to per-field witness traits + rustc generics and builds.
+// Its emission shape is asserted below.
 // ---------------------------------------------------------------------------
 
-/// The row-var record annotation syntax `{ r | name : String }` parses and
-/// type-checks — the type layer models the open row and accepts the program.
-/// It is rejected at LOWERING with IPE-L0131, because the Rust backend emits
-/// one struct per exact field set and cannot yet emit a callee once per
-/// record shape at its call sites (per-record-shape callee monomorphisation).
-/// The reference parses this, types the row var, and monomorphises the callee
-/// per record-shape instantiation in its backend; Ipê fails closed at the
-/// lowering boundary — exactly the layer that cannot yet emit — rather than
-/// at parse. This test is the canary named in
-/// docs/adr/0018-row-poly-records-pinned-before-lowering.md "Gap filed": the
-/// front half of the chain (parser + AST + canon + `from_canon` + type layer)
-/// is now in place; the deferred backend monomorphisation is what IPE-L0131
-/// still gates. It MUST start failing (and force a re-read of that section)
-/// the moment the backend gains per-record-shape monomorphisation and the
-/// program begins to BUILD.
+/// The row-var record annotation `{ r | name : String }` parses, type-checks,
+/// lowers, and emits: `greet` erases its open row to a rustc generic `R1`
+/// bounded by the synthesised `IpeHasName<Name = String>` witness trait, and
+/// the body field read routes through the `ipe_name()` getter. rustc
+/// monomorphises the call to the concrete argument struct — no dynamic field
+/// lookup, no `dyn Any`. This is the per-record-shape monomorphisation the
+/// pinned-records ADR (docs/adr/0018) reserves for the supported
+/// (single-field argument-position) row form.
 #[test]
-fn row_var_annotation_is_ipe_l0131() {
+fn row_var_annotation_lowers_to_witness_generic() {
     let name = "row_poly_annotation_gap";
     let entry = golden_dir(name).join("Main.ipe");
     let out = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join(format!("{name}_out"));
@@ -333,19 +329,33 @@ fn row_var_annotation_is_ipe_l0131() {
         eprintln!("SKIP {name}: runtime not available");
         return;
     };
-    let res = ipe::build(&entry, &out, &runtime);
-    assert!(res.is_err(), "{name} must fail to compile");
-    let Err(err) = res else { return };
-    assert_eq!(
-        diag_code(&err),
-        Some(ipe_diagnostics::IPE_L0131),
-        "row-var record annotation `{{ r | f : T }}` must fail closed at \
-         lowering with IPE-L0131 (parses + type-checks; backend cannot yet \
-         monomorphise the callee per record shape); err = {err}"
+    let built = ipe::build(&entry, &out, &runtime);
+    assert!(
+        built.is_ok(),
+        "{name} must now BUILD: a single-field argument-position row annotation \
+         lowers to a witness-bounded generic (ADR-0018 canary); err = {:?}",
+        built.err()
+    );
+
+    let emitted = std::fs::read_to_string(out.join("src").join("main.rs"))
+        .expect("emitted main.rs must exist");
+    assert!(
+        emitted.contains("pub trait IpeHasName"),
+        "the per-field witness trait must be synthesised; got main.rs:\n{emitted}"
     );
     assert!(
-        !out.join("src").join("main.rs").exists(),
-        "{name}: no Rust must be emitted on a rejection"
+        emitted.contains("fn ipe_name(&self) -> &Self::Name"),
+        "the witness getter must be declared on the trait; got main.rs:\n{emitted}"
+    );
+    assert!(
+        emitted.contains("R1: IpeHasName<Name = String>"),
+        "greet's row parameter must be a witness-bounded rustc generic; got \
+         main.rs:\n{emitted}"
+    );
+    assert!(
+        emitted.contains(".ipe_name()"),
+        "the row-typed field read must route through the witness getter; got \
+         main.rs:\n{emitted}"
     );
 }
 
@@ -428,5 +438,147 @@ fn accessor_cargo_builds_and_prints_names() {
     assert_eq!(
         outcome.stdout, "Ada, Bo\n",
         "must print the `name` fields read through the first-class accessor"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// row_poly_greet — the increment-1 vertical slice: ONE row-polymorphic
+// annotated function called with TWO different concrete shapes. No single
+// closed struct can serve both, so this is the shape ADR-0018's two-superset
+// tripwire forbade for the UNANNOTATED path — here it is accepted because the
+// annotation opts into witness-trait monomorphisation. Accept end-to-end.
+// ---------------------------------------------------------------------------
+
+/// ipe-0: `greet : { r | name : String } -> String` called at `{ name, age }`
+/// and `{ name, id }` must build. The backend emits `greet` as a rustc-generic
+/// bounded by `IpeHasName<Name = String>`, one `IpeHasName` impl per struct
+/// carrying `name`, and rustc monomorphises one machine copy per shape. Both
+/// concrete structs must appear; the row parameter must be the witness-bounded
+/// generic, never a concrete struct or a `dyn`.
+#[test]
+fn row_poly_greet_lowers_and_monomorphises_two_shapes() {
+    let entry = golden_dir("row_poly_greet").join("Main.ipe");
+    let out = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("row_poly_greet_ipec_out");
+    let _ = std::fs::remove_dir_all(&out);
+
+    let Ok(runtime) = ipe::resolve_runtime() else {
+        eprintln!("SKIP row_poly_greet: runtime not available");
+        return;
+    };
+
+    let built = ipe::build(&entry, &out, &runtime);
+    assert!(
+        built.is_ok(),
+        "ipe build must accept row_poly_greet (one row-poly fn at two shapes): \
+         {:?}",
+        built.err()
+    );
+
+    let emitted = std::fs::read_to_string(out.join("src").join("main.rs"))
+        .expect("emitted main.rs must exist");
+    // Both concrete argument shapes reach the struct registry unchanged — the
+    // pinned-records ADR survives: the open row never becomes a Record here.
+    assert!(
+        emitted.contains("struct RecAgeName") && emitted.contains("struct RecIdName"),
+        "both concrete argument structs must be emitted; got main.rs:\n{emitted}"
+    );
+    assert!(
+        emitted.contains("R1: IpeHasName<Name = String>"),
+        "greet's row parameter must be the witness-bounded generic, not a \
+         concrete struct; got main.rs:\n{emitted}"
+    );
+    // One IpeHasName impl per struct carrying `name`.
+    assert!(
+        emitted.contains("IpeHasName for RecAgeName")
+            && emitted.contains("IpeHasName for RecIdName"),
+        "a witness impl must exist for every struct carrying `name`; got \
+         main.rs:\n{emitted}"
+    );
+    assert!(
+        !emitted.contains("dyn Any"),
+        "row monomorphisation must be static — no dynamic field lookup; got \
+         main.rs:\n{emitted}"
+    );
+}
+
+/// cargo-0 ∧ run-0: the emitted project compiles (the SEAL: exit-0 ⇒
+/// cargo-green) and prints both greetings. Gated on `IPE_E2E=1`. rustc
+/// monomorphises `greet` to `RecAgeName` and `RecIdName` from the two call
+/// sites.
+#[test]
+fn row_poly_greet_cargo_builds_and_prints_both() {
+    if std::env::var("IPE_E2E").is_err() {
+        return;
+    }
+
+    let entry = golden_dir("row_poly_greet").join("Main.ipe");
+    let out = std::env::temp_dir().join("ipec_row_poly_greet_e2e");
+    let _ = std::fs::remove_dir_all(&out);
+
+    let Ok(runtime) = ipe::resolve_runtime() else {
+        return;
+    };
+    let built = ipe::build(&entry, &out, &runtime);
+    assert!(
+        built.is_ok(),
+        "ipe build must succeed for row_poly_greet: {:?}",
+        built.err()
+    );
+
+    let outcome = crate::support::build_and_run_emitted("row_poly_greet", &out);
+    assert_eq!(
+        outcome.exit_code,
+        Some(0),
+        "row_poly_greet binary must exit 0 (SEAL); got {:?}",
+        outcome.exit_code
+    );
+    assert_eq!(
+        outcome.stdout, "Ada, Bo\n",
+        "must print both greetings — one machine copy of greet per record shape"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// row_poly_accessor_two_shapes — the first-class accessor `.name` used
+// polymorphically over TWO different record shapes through `List.map`. Each
+// occurrence pins independently (D2), so both shapes read their `name`.
+// Accept end-to-end.
+// ---------------------------------------------------------------------------
+
+/// cargo-0 ∧ run-0: `List.map .name` over a `{ name, age }` list AND a
+/// `{ name, id }` list both compile and print their names. Each accessor
+/// occurrence is its own monomorphic getter, so no witness trait is needed —
+/// this exercises the shipped accessor path at two distinct shapes, the
+/// companion to the annotated `greet` slice. Gated on `IPE_E2E=1`.
+#[test]
+fn accessor_two_shapes_cargo_builds_and_prints_both() {
+    if std::env::var("IPE_E2E").is_err() {
+        return;
+    }
+
+    let entry = golden_dir("row_poly_accessor_two_shapes").join("Main.ipe");
+    let out = std::env::temp_dir().join("ipec_row_poly_accessor_two_shapes_e2e");
+    let _ = std::fs::remove_dir_all(&out);
+
+    let Ok(runtime) = ipe::resolve_runtime() else {
+        return;
+    };
+    let built = ipe::build(&entry, &out, &runtime);
+    assert!(
+        built.is_ok(),
+        "ipe build must succeed for row_poly_accessor_two_shapes: {:?}",
+        built.err()
+    );
+
+    let outcome = crate::support::build_and_run_emitted("row_poly_accessor_two_shapes", &out);
+    assert_eq!(
+        outcome.exit_code,
+        Some(0),
+        "row_poly_accessor_two_shapes binary must exit 0; got {:?}",
+        outcome.exit_code
+    );
+    assert_eq!(
+        outcome.stdout, "Ada, Bo | Cy, Di\n",
+        "must print names read through the accessor over two distinct shapes"
     );
 }

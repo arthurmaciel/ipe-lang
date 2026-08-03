@@ -215,6 +215,7 @@ fn hydrate_program_with_record_projection(interner: &mut Interner) -> DResult<Pr
         name: from_hs,
         home: ModPath(vec![main]),
         type_params: vec![],
+        row_params: vec![],
         params: vec![(hs, rec())],
         ret: rec(),
         // Body is irrelevant to the glue↔type-name contract this test proves;
