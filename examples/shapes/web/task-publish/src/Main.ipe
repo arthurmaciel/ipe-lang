@@ -2,10 +2,13 @@ module Main exposing (main)
 
 -- | task-publish — the top-level, Task-shaped `Ipe.PubSub.publish`.
 --
--- `Ipe.PubSub.publish : String -> any -> Task Error Int` broadcasts a payload
--- on a topic and resolves to the number of subscribers that received it. It is
--- a `Task`, not a `Cmd`, so it is usable from any context that produces a
--- `Task` — here it is bridged into the TEA loop with `Cmd.perform`.
+-- `Ipe.PubSub.publish : Topic a -> a -> Task Error Int` broadcasts a payload
+-- on a typed topic and resolves to the number of subscribers that received it.
+-- The topic is a `Topic a` handle built with `PubSub.topic`; sharing one value
+-- between publisher and subscriber makes the compiler enforce that both agree
+-- on the payload type `a`. It is a `Task`, not a `Cmd`, so it is usable from any
+-- context that produces a `Task` — here it is bridged into the TEA loop with
+-- `Cmd.perform`.
 --
 -- The broadcast bus lives in the running Web/live runtime, so `publish`
 -- succeeds while an `Ipe.Tea.Web` app is serving in this process and resolves
@@ -39,6 +42,13 @@ type alias Model =
     { lastCount : Int }
 
 
+-- The shared topic handle. Its `String` payload type is what `publish` (and any
+-- `Sub.subscribeTopic` on the same value) must agree on.
+roomTopic : PubSub.Topic String
+roomTopic =
+    PubSub.topic "room"
+
+
 init : a -> ( Model, Cmd Msg )
 init _req =
     ( { lastCount = 0 }, Cmd.none )
@@ -51,7 +61,7 @@ update msg model =
             -- `PubSub.publish` is a Task; `Cmd.perform` runs it and routes its
             -- result back as `Published`.
             ( model
-            , Cmd.perform (PubSub.publish "room" "hello") Published
+            , Cmd.perform (PubSub.publish roomTopic "hello") Published
             )
 
         Published result ->
