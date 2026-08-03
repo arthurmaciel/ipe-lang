@@ -114,9 +114,9 @@ pub mod file;
 pub mod log;
 // `Ipe.Random` non-cryptographic PRNG. Behind the `random` feature: a program
 // that reaches no `Ipe.Random` kernel drops the module. The feature gates only
-// this module — `getrandom` (the entropy source of the always-on `crypto_core`
-// floor, and of this module's wasm seed arm) stays a non-optional base dep until
-// the crypto-core demotion phase, so gating `random` never removes `getrandom`.
+// this module. `getrandom` (the entropy source shared with `crypto_core` and
+// with this module's wasm seed arm) is enabled by `random || crypto-core`, so
+// gating `random` alone never removes `getrandom`.
 #[cfg(feature = "random")]
 pub mod random;
 // `system` is always compiled (not tokio-gated): it owns the process-global

@@ -488,7 +488,7 @@ fn sampled_full_masks_are_closed() {
 ///
 /// This is the STRUCTURAL guard that keeps a future module on the correct side
 /// of the base/gated boundary — a PR that adds a base→gated edge (e.g. an
-/// always-on module reaching into a newly-gated `crypto`/`jwt`/`compression`
+/// base-floor module reaching into a gated `crypto`/`jwt`/`compression`
 /// surface) fails HERE, statically, instead of silently re-coupling the deps or
 /// breaking the emitted `cargo build` only under a specific feature combo.
 ///
