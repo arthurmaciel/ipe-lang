@@ -2,6 +2,7 @@
 pub mod basics;
 pub mod cache;
 pub mod char_kernel;
+pub mod char_category;
 pub mod config;
 pub mod core;
 pub mod crypto_core;
@@ -36,6 +37,7 @@ pub mod uuid_kernel;
 pub use basics::*;
 pub use cache::*;
 pub use char_kernel::*;
+pub use char_category::*;
 pub use config::*;
 pub use core::*;
 pub use crypto_core::*;

@@ -151,6 +151,20 @@ pub const CHRONO_TZ: CrateSpec = CrateSpec {
     name: "chrono-tz",
     version: "0.10",
 };
+// Like `CHRONO`, these are not surgery-emitted: the dependency-model manifest
+// names only the `ipe_runtime` path dep, and their versions live in the runtime
+// crate (behind the `decimal` / `char-category` features). Consulted only by the
+// drift guard, which walks `ALL` under `cfg(test)`.
+#[cfg(test)]
+pub const RUST_DECIMAL: CrateSpec = CrateSpec {
+    name: "rust_decimal",
+    version: "1",
+};
+#[cfg(test)]
+pub const UNICODE_GENERAL_CATEGORY: CrateSpec = CrateSpec {
+    name: "unicode-general-category",
+    version: "1",
+};
 
 /// Every spec emitted by the surgery functions, for drift-test iteration.
 ///
@@ -188,6 +202,8 @@ pub const ALL: &[CrateSpec] = &[
     FUTURES_UTIL,
     CHRONO,
     CHRONO_TZ,
+    RUST_DECIMAL,
+    UNICODE_GENERAL_CATEGORY,
 ];
 
 #[cfg(test)]
@@ -204,7 +220,7 @@ mod tests {
             assert!(!spec.name.is_empty(), "empty crate name in ALL");
             assert!(!spec.version.is_empty(), "empty version for {}", spec.name);
         }
-        assert_eq!(ALL.len(), 30, "expected 30 surgery-emitted crate specs");
+        assert_eq!(ALL.len(), 32, "expected 32 surgery-emitted crate specs");
     }
 
     /// Extract the version from a Cargo dependency value: `"0.4"` or

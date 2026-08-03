@@ -13,6 +13,9 @@
 //! fractions (1/3, 2/3, 1/7, 10/3, …) match Go exactly.  Exact fractions with
 //! ≤16 dp are unaffected by the cap.  All money-scale cases stay bit-identical.
 
+// `decimal.rs` is behind the `decimal` feature, so this whole fixture is too.
+#![cfg(feature = "decimal")]
+
 use ipe_runtime_rust::*;
 
 // ── helpers ──────────────────────────────────────────────────────────────────

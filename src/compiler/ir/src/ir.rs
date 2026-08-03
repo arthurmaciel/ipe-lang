@@ -175,6 +175,23 @@ pub struct Module {
     /// `chrono`. `Debug.log` does NOT set this flag (`debug.rs` is a pure,
     /// always-compiled `IpeStringify` passthrough with no `chrono`).
     pub uses_log: bool,
+    /// `true` when the lowerer detected an `Ipe.Decimal` or `Ipe.Money` kernel
+    /// (`KernelFn::is_decimal()`). The backend reads this to declare the
+    /// `decimal.rs` / `money.rs` modules behind the `decimal` feature and add the
+    /// `rust_decimal` crate (with its `arrayvec` subtree). `money.rs` builds on
+    /// `decimal.rs`'s `Decimal` newtype, so both modules gate together. The `Db`
+    /// surface decodes numeric SQL columns through `rust_decimal`, so the backend
+    /// keeps `decimal` under `uses_decimal || uses_db`; a program that reaches
+    /// neither a `Decimal.*`/`Money.*` kernel nor a `Db` surface drops the crate.
+    pub uses_decimal: bool,
+    /// `true` when the lowerer detected an `Ipe.Char` `General_Category` predicate
+    /// (`isAlpha`/`isDigit`/`isLower`/`isUpper`/`isAlphaNum`,
+    /// `KernelFn::is_char_category()`). The backend reads this to declare the
+    /// `char_category.rs` module behind the `char-category` feature and add the
+    /// `unicode-general-category` crate. A standalone leaf — no surface implies it.
+    /// A program that reaches only the std-only `Ipe.Char` kernels (or none) drops
+    /// the crate; those std kernels stay in the always-compiled `char_kernel.rs`.
+    pub uses_char_category: bool,
     /// `true` when the lowerer detected at least one HEAVY `Ipe.Crypto` kernel
     /// call (legacy SHA-1/MD5, AES-GCM / ChaCha20-Poly1305 AEAD, or PBKDF2
     /// key derivation).
@@ -3811,6 +3828,8 @@ mod tests {
                 uses_uuid: false,
                 uses_random: false,
                 uses_log: false,
+                uses_decimal: false,
+                uses_char_category: false,
                 uses_crypto: false,
                 uses_jwt: false,
                 uses_url: false,
@@ -4321,6 +4340,8 @@ mod serde_persistence_tests {
                 uses_uuid: false,
                 uses_random: false,
                 uses_log: false,
+                uses_decimal: false,
+                uses_char_category: false,
                 uses_crypto: false,
                 uses_jwt: false,
                 uses_url: false,
@@ -4403,6 +4424,8 @@ mod serde_persistence_tests {
                 uses_uuid: false,
                 uses_random: false,
                 uses_log: false,
+                uses_decimal: false,
+                uses_char_category: false,
                 uses_crypto: false,
                 uses_jwt: false,
                 uses_url: false,

@@ -99,12 +99,14 @@ redis = { version = "0.27", features = ["tokio-comp"], optional = true }
 # program that reaches neither drops `regex` and its aho-corasick / regex-automata
 # / regex-syntax subtree.
 regex = { version = "1", optional = true }
-# Exact Unicode General_Category lookup. NON-optional: char_kernel.rs (always
-# compiled) needs it to match Go's `unicode.Is{Digit,Letter,Lower,Upper}` —
-# which key off precise GCs (Nd / L* / Ll / Lu), narrower than Rust std's
+# Exact Unicode General_Category lookup. Optional, behind the `char-category`
+# feature: the `char_category.rs` module (the `Ipe.Char` `isAlpha`/`isDigit`/
+# `isLower`/`isUpper`/`isAlphaNum` predicates) is its sole consumer. Those
+# predicates key off precise GCs (Nd / L* / Ll / Lu), narrower than Rust std's
 # `char::is_numeric`/`is_lowercase`/`is_uppercase` (which fold in No/Nl,
-# Other_Lowercase, Other_Uppercase). See char_kernel.rs.
-unicode-general-category = "1"
+# Other_Lowercase, Other_Uppercase). A program that reaches none of them drops
+# the crate; the std-only `Ipe.Char` kernels (`char_kernel.rs`) stay compiled.
+unicode-general-category = { version = "1", optional = true }
 # base64 / hex / percent-encoding: the `Ipe.Encoding` codecs + `Ipe.Bytes`
 # buffer kernels, behind the `encoding` feature. Also used by the raw crates in
 # the crypto/db/server/email/jwt/web surfaces — those features each imply
@@ -127,7 +129,13 @@ chrono = { version = "0.4", optional = true }
 # feature (which implies `time-core`, since the zones build on base `chrono`). A
 # program that reaches no `Ipe.Time` kernel drops the crate.
 chrono-tz = { version = "0.10", optional = true }
-rust_decimal = { version = "1", features = ["serde"] }
+# `rust_decimal` (with its `arrayvec` mantissa buffer): optional, behind the
+# `decimal` feature. Backs `decimal.rs` (the `Ipe.Decimal` surface) and `money.rs`
+# (`Ipe.Money`, built on `Decimal`); the `db` surface also decodes numeric columns
+# through it, so `db` implies `decimal`. A program that reaches no Decimal/Money
+# kernel and no Db surface drops the crate. `serde` stays enabled (the always-on
+# serialization floor); its own gating is a separate concern.
+rust_decimal = { version = "1", features = ["serde"], optional = true }
 bcrypt = { version = "0.17", optional = true }
 # `icu_casemap`: locale-aware case mapping (`String.toUpperIn`/`toLowerIn`).
 # Feature-gated so programs that never use locale-aware case pay nothing.
@@ -263,6 +271,17 @@ uuid = ["dep:uuid"]
 # `getrandom` but drops `random.rs`. Dropping `getrandom` for a bare Program lands
 # with the crypto-core demotion, not this feature.
 random = []
+# `Ipe.Decimal` + `Ipe.Money`: the `rust_decimal` crate (and its `arrayvec`
+# subtree) plus the `decimal.rs` / `money.rs` modules. `money.rs` builds on
+# `decimal.rs`'s `Decimal`, so one feature gates both. The `db` surface decodes
+# numeric SQL columns through `rust_decimal`, so `db` implies this. A program
+# that reaches no `Decimal.*`/`Money.*` kernel and no `Db` surface drops the crate.
+decimal = ["dep:rust_decimal"]
+# `Ipe.Char` General_Category predicates (`isAlpha`/`isDigit`/`isLower`/`isUpper`/
+# `isAlphaNum`): the `unicode-general-category` crate + the `char_category.rs`
+# module. A standalone leaf — no surface implies it. A program that reaches only
+# the std-only `Ipe.Char` kernels (or none) drops the crate.
+char-category = ["dep:unicode-general-category"]
 # `json` is the emitted FLOOR feature (`default = ["json"]`); it must NOT drag
 # `jsonwebtoken` (+ ring) into a plain JSON program. The JWT surface moved to
 # the `jwt` feature.
@@ -278,8 +297,10 @@ json = ["serde_json"]
 # emitter's `config_postgres.rs` overlay for postgres — not by dropping a sqlx
 # driver feature.
 # `time-core`: `db.rs`'s migration-ledger `applied_at` and `telemetry_spill.rs`'s
-# retention cutoff stamp `chrono::Utc::now()` timestamps.
-db = ["sqlx", "sqlx?/sqlite", "sqlx?/postgres", "tokio", "tokio/sync", "serde_json", "json", "bincode", "encoding", "random", "time-core"]
+# retention cutoff stamp `chrono::Utc::now()` timestamps. `decimal`: `db.rs`
+# decodes numeric SQL columns (and `Db.Decode.money`) through `rust_decimal` +
+# the `Decimal` newtype.
+db = ["sqlx", "sqlx?/sqlite", "sqlx?/postgres", "tokio", "tokio/sync", "serde_json", "json", "bincode", "encoding", "random", "time-core", "decimal"]
 # `db-sqlite` / `db-postgres`: config.rs alias selectors. Only the emitter ever
 # enables one, and it selects exactly one (SEAL-checked) — the standalone crate
 # links both sqlx drivers regardless (see `db`). The `compile_error!` in
@@ -335,7 +356,7 @@ web = ["server", "http_client", "serde_json", "async-trait", "tokio/signal", "to
 # `db-postgres` (not bare `db`) selects a concrete sqlx driver — it also pulls
 # `sqlite`, so both driver code paths compile. `jwt` + `url` cover the
 # JWT/auth and URL/SSRF surfaces that `db`/`web`/`http_client` reach.
-full = ["async", "json", "jwt", "url", "db", "db-postgres", "redis_store", "crypto", "compression", "csv_kernel", "cache_kernel", "tui", "config", "server", "http_client", "email", "websocket_client", "web", "time", "log", "regex", "uuid", "random"]
+full = ["async", "json", "jwt", "url", "db", "db-postgres", "redis_store", "crypto", "compression", "csv_kernel", "cache_kernel", "tui", "config", "server", "http_client", "email", "websocket_client", "web", "time", "log", "regex", "uuid", "random", "decimal", "char-category"]
 # Browser-WASM TEA sink (`src/wasm/`): mount + patch-apply + delegated events.
 # Compiles only on wasm32 (the module is target-cfg'd); NOT in `full` — native
 # builds never link the wasm glue.
@@ -369,6 +390,13 @@ wasm-client = [
     # non-optional regardless, so this changes no emitted-app dep graph.
     "log",
     "time",
+    # The static wasm module set declares `char_category`, `decimal`, and `money`
+    # unconditionally, so `wasm-client` implies `decimal` + `char-category` to
+    # satisfy their source `#[cfg]` gates. The closed WASM app template
+    # (`WASM_CARGO_TOML`) declares `rust_decimal` / `unicode-general-category`
+    # non-optional regardless, so this changes no emitted-app dep graph.
+    "decimal",
+    "char-category",
 ]
 
 [dev-dependencies]

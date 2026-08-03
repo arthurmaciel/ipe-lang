@@ -6000,6 +6000,17 @@ struct KernelUsage {
     /// `log.rs` is the sole always-emittable `chrono` consumer. `Debug.log` does
     /// NOT set this (its `debug.rs` body has no `chrono`).
     log: bool,
+    /// Any `Ipe.Decimal` or `Ipe.Money` kernel — gates the `decimal.rs`/`money.rs`
+    /// runtime modules (the `decimal` feature) and the `rust_decimal` crate.
+    /// `money.rs` builds on `decimal.rs`'s `Decimal`, so both gate together. The
+    /// `Db` surface also decodes numeric columns through `rust_decimal`, so the
+    /// assembly site keeps `decimal` under `uses_decimal || uses_db`.
+    decimal: bool,
+    /// Any `Ipe.Char` `General_Category` predicate (`isAlpha`/`isDigit`/`isLower`/
+    /// `isUpper`/`isAlphaNum`) — gates the `char_category.rs` runtime module (the
+    /// `char-category` feature) and the `unicode-general-category` crate. A
+    /// standalone leaf. The std-only `Ipe.Char` kernels stay in `char_kernel.rs`.
+    char_category: bool,
     /// Any HEAVY `Ipe.Crypto` kernel (legacy SHA-1/MD5, AES-GCM /
     /// ChaCha20-Poly1305 AEAD, PBKDF2 key derivation) — gates the `crypto`
     /// runtime module and the `sha1` + `md-5` + `aes-gcm` + `chacha20poly1305` +
@@ -6095,6 +6106,8 @@ impl KernelUsage {
             && self.uuid
             && self.random
             && self.log
+            && self.decimal
+            && self.char_category
             && self.crypto
             && self.jwt
             && self.url
@@ -6133,6 +6146,8 @@ impl KernelUsage {
         self.uuid |= k.is_uuid();
         self.random |= k.is_random();
         self.log |= k.is_log();
+        self.decimal |= k.is_decimal();
+        self.char_category |= k.is_char_category();
         self.crypto |= k.is_crypto();
         self.jwt |= k.is_jwt();
         self.url |= k.is_url();
@@ -8331,6 +8346,16 @@ impl<'a> Lowerer<'a> {
         // `Debug.log` is excluded (its `debug.rs` body has no `chrono`).
         let uses_log = kernel_usage.log;
 
+        // detect `Ipe.Decimal`/`Ipe.Money` usage. The backend declares the
+        // `decimal.rs`/`money.rs` modules (the `decimal` feature) and adds
+        // `rust_decimal`. The Db surface implies it (`reaches_decimal`).
+        let uses_decimal = kernel_usage.decimal;
+
+        // detect `Ipe.Char` General_Category-predicate usage. The backend declares
+        // the `char_category.rs` module (the `char-category` feature) and adds
+        // `unicode-general-category`. Std-only `Char` kernels do NOT set this.
+        let uses_char_category = kernel_usage.char_category;
+
         // detect `Ipe.Jwt` usage — any JWT encode/decode or builder kernel. The
         // backend uses this flag to declare `jwt` in the emitted
         // `ipe_runtime/mod.rs` and add the `jsonwebtoken` dependency. `auth.rs`
@@ -8425,6 +8450,8 @@ impl<'a> Lowerer<'a> {
             uses_uuid,
             uses_random,
             uses_log,
+            uses_decimal,
+            uses_char_category,
             uses_crypto,
             uses_jwt,
             uses_url,
