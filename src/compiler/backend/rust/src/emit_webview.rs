@@ -71,7 +71,7 @@ pub fn emit_webview_call(
             // Unreachable for well-typed source: a non-literal cfg is rejected
             // at lower with IPE-L0119 (Feature::LetBoundAppCfg); this guard is a
             // defensive invariant, mirroring the `WebAppRouted` precedent.
-            let Expr::Record(fields) = cfg_e else {
+            let Expr::Record { fields, .. } = cfg_e else {
                 return Err(Diagnostic::CompilerBug {
                     where_: "ipe_backend_rust::emit_webview_call::WebviewApp",
                     detail: "Webview.app cfg must be an inline record literal; \
@@ -147,7 +147,10 @@ fn emit_webview_app_inner(
     // ── G4 gate 1: `window` must be an inline record literal ─────────────────
     // Unreachable for well-typed source: a let-bound `window` is rejected at lower
     // with IPE-L0119 (Feature::LetBoundAppCfg); this guard is a defensive invariant.
-    let Expr::Record(win_fields) = window_e else {
+    let Expr::Record {
+        fields: win_fields, ..
+    } = window_e
+    else {
         return Err(Diagnostic::CompilerBug {
             where_: "ipe_backend_rust::emit_webview_app_inner::G4_window",
             detail: "Webview.app `window` field must be an inline record literal \

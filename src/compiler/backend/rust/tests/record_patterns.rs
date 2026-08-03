@@ -155,7 +155,10 @@ fn getx_program(interner: &mut Interner) -> DResult<Program> {
                 callee: Callee::Kernel(KernelFn::StringFromInt),
                 args: vec![Expr::Call {
                     callee: Callee::Func(FuncId::from_raw(0)),
-                    args: vec![Expr::Record(vec![(x, Expr::Int(7)), (y, Expr::Int(2))])],
+                    args: vec![Expr::Record {
+                        fields: vec![(x, Expr::Int(7)), (y, Expr::Int(2))],
+                        ty: None,
+                    }],
                     pin: CallPin::None,
                     on_form: OnFormKind::NotForm,
                 }],

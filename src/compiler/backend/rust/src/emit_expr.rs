@@ -70,7 +70,7 @@ pub fn expr_value_is_non_clone(expr: &Expr) -> bool {
         // is move-only.
         Expr::List { elem, .. } => ir_type_contains_task(elem),
         Expr::Tuple(items) => items.iter().any(expr_value_is_non_clone),
-        Expr::Record(fields) => fields.iter().any(|(_, e)| expr_value_is_non_clone(e)),
+        Expr::Record { fields, .. } => fields.iter().any(|(_, e)| expr_value_is_non_clone(e)),
         _ => false,
     }
 }
@@ -249,7 +249,7 @@ fn collect_free_vars(expr: &Expr, out: &mut std::collections::BTreeSet<Symbol>) 
         Expr::ListIndexClone { list, .. } | Expr::ListLenCheck { list, .. } => {
             collect_free_vars(list, out);
         }
-        Expr::Record(fields) => {
+        Expr::Record { fields, .. } => {
             for (_, e) in fields {
                 collect_free_vars(e, out);
             }
@@ -411,12 +411,13 @@ fn clone_free_target(expr: Expr, target: Symbol) -> Expr {
             len,
             exact,
         },
-        Expr::Record(fields) => Expr::Record(
-            fields
+        Expr::Record { fields, ty } => Expr::Record {
+            fields: fields
                 .into_iter()
                 .map(|(s, e)| (s, clone_free_target(e, target)))
                 .collect(),
-        ),
+            ty,
+        },
         Expr::Access {
             record,
             field,
@@ -608,7 +609,7 @@ fn fn_binder_used_as_value(sym: Symbol, body: &Expr) -> bool {
         Expr::ListIndexClone { list, .. } | Expr::ListLenCheck { list, .. } => {
             fn_binder_used_as_value(sym, list)
         }
-        Expr::Record(fields) | Expr::Update { fields, .. } => {
+        Expr::Record { fields, .. } | Expr::Update { fields, .. } => {
             fields.iter().any(|(_, e)| fn_binder_used_as_value(sym, e))
         }
         Expr::TaskSeq { effect, rest } | Expr::TaskSeqSync { effect, rest } => {
@@ -674,7 +675,7 @@ fn expr_refs_symbol(sym: Symbol, expr: &Expr) -> bool {
         Expr::ListIndexClone { list, .. } | Expr::ListLenCheck { list, .. } => {
             expr_refs_symbol(sym, list)
         }
-        Expr::Record(fields) | Expr::Update { fields, .. } => {
+        Expr::Record { fields, .. } | Expr::Update { fields, .. } => {
             fields.iter().any(|(_, e)| expr_refs_symbol(sym, e))
         }
         Expr::TaskSeq { effect, rest } | Expr::TaskSeqSync { effect, rest } => {
@@ -816,7 +817,7 @@ fn scan_free_target_into(expr: &Expr, target: Symbol, count: &mut usize, has_clo
         Expr::ListIndexClone { list, .. } | Expr::ListLenCheck { list, .. } => {
             scan_free_target_into(list, target, count, has_clonevar);
         }
-        Expr::Record(fields) => {
+        Expr::Record { fields, .. } => {
             for (_, e) in fields {
                 scan_free_target_into(e, target, count, has_clonevar);
             }
@@ -972,12 +973,13 @@ pub fn substitute_var(expr: Expr, target: Symbol, replacement: &Expr) -> Expr {
             len,
             exact,
         },
-        Expr::Record(fields) => Expr::Record(
-            fields
+        Expr::Record { fields, ty } => Expr::Record {
+            fields: fields
                 .into_iter()
                 .map(|(s, e)| (s, substitute_var(e, target, replacement)))
                 .collect(),
-        ),
+            ty,
+        },
         Expr::Access {
             record,
             field,
@@ -1252,7 +1254,9 @@ fn ffi_to_foreign(ctx: &EmitCtx, ty: &crate::FfiGlueType, value: &str) -> DResul
 fn ffi_from_foreign(ctx: &EmitCtx, ty: &crate::FfiGlueType, value: &str) -> DResult<String> {
     match ty {
         crate::FfiGlueType::Record { fields, .. } => {
-            let rec = ctx.record_name_for_literal(fields)?;
+            // An FFI glue record has a foreign-type-unique field-name set, so
+            // field-name resolution is unambiguous — no shape is threaded.
+            let rec = ctx.record_name_for_literal(fields, None)?;
             let moves: Vec<String> = fields.iter().map(|f| format!("{f}: {value}.{f}")).collect();
             Ok(format!("{rec} {{ {} }}", moves.join(", ")))
         }
@@ -1523,14 +1527,14 @@ fn emit_http_call(
     // {body, headers, status}. The field set is sorted alphabetically;
     // these three names are already in alphabetical order.
     let resp_key: Vec<String> = vec!["body".to_owned(), "headers".to_owned(), "status".to_owned()];
-    let resp_struct = ctx
-        .record_struct_by_key(&resp_key)
-        .map_err(|_| Diagnostic::CompilerBug {
-            where_: "ipe_backend_rust::emit_http_call",
-            detail: "no synthesised struct for HttpResponse fieldset {body, headers, status}; \
+    let resp_struct =
+        ctx.record_struct_by_key(&resp_key, None)
+            .map_err(|_| Diagnostic::CompilerBug {
+                where_: "ipe_backend_rust::emit_http_call",
+                detail: "no synthesised struct for HttpResponse fieldset {body, headers, status}; \
                      the lowerer must surface the HttpResponse record type before emission"
-                .to_owned(),
-        })?;
+                    .to_owned(),
+            })?;
     let resp_name = &resp_struct.name;
 
     // Build the task_map conversion closure shared by all three variants.
@@ -1866,7 +1870,7 @@ fn emit_task_retry_call(
     // For the pure move-update builders (TaskWithJitter etc.) we look it up too
     // so the pattern is consistent; a missing struct signals a lowering bug.
     let rp_name = ctx
-        .record_struct_by_key(&rp_key)
+        .record_struct_by_key(&rp_key, None)
         .map_err(|_| Diagnostic::CompilerBug {
             where_: "ipe_backend_rust::emit_task_retry_call",
             detail: "no synthesised struct for RetryPolicy fieldset \
@@ -2299,7 +2303,7 @@ fn emit_db_call(
             let name_e = arg!(0, "name")?;
             let name_s = emit_expr_at(ctx, name_e, indent, child, generics)?;
             let key = vec!["name".to_owned(), "sql".to_owned()];
-            let struct_name = ctx.record_name_for_literal(&key)?.to_owned();
+            let struct_name = ctx.record_name_for_literal(&key, None)?.to_owned();
             Ok(Some(format!(
                 "{struct_name} {{ name: {name_s}, sql: String::new() }}"
             )))
@@ -3189,7 +3193,7 @@ fn emit_ui_call(
             // Extract fields from the IR literal rather than materialising a
             // synthesised Rust struct (which would ICE with IPE-I0001 because
             // no struct for the {wrapperAttrs, rootAttrs} shape is registered).
-            let Expr::Record(fields) = cfg_e else {
+            let Expr::Record { fields, .. } = cfg_e else {
                 return Err(Diagnostic::CompilerBug {
                     where_: "ipe_backend_rust::emit_ui_call::UiLayoutWith",
                     detail: "Ui.layoutWith cfg must be an inline record literal \
@@ -3565,7 +3569,7 @@ fn emit_ui_call(
                     detail: format!("Ui.button requires 2 arguments, got {}", args.len()),
                 });
             };
-            let Expr::Record(fields) = cfg_e else {
+            let Expr::Record { fields, .. } = cfg_e else {
                 return Err(Diagnostic::CompilerBug {
                     where_: "ipe_backend_rust::emit_ui_call::UiButton",
                     detail: "Ui.button cfg must be an inline record literal \
@@ -3595,7 +3599,7 @@ fn emit_ui_call(
                     detail: format!("Ui.link requires 2 arguments, got {}", args.len()),
                 });
             };
-            let Expr::Record(fields) = cfg_e else {
+            let Expr::Record { fields, .. } = cfg_e else {
                 return Err(Diagnostic::CompilerBug {
                     where_: "ipe_backend_rust::emit_ui_call::UiLink",
                     detail: "Ui.link cfg must be an inline record literal \
@@ -3625,7 +3629,7 @@ fn emit_ui_call(
                     detail: format!("Ui.image requires 2 arguments, got {}", args.len()),
                 });
             };
-            let Expr::Record(fields) = cfg_e else {
+            let Expr::Record { fields, .. } = cfg_e else {
                 return Err(Diagnostic::CompilerBug {
                     where_: "ipe_backend_rust::emit_ui_call::UiImage",
                     detail: "Ui.image cfg must be an inline record literal \
@@ -3696,7 +3700,7 @@ fn emit_ui_call(
                     detail: format!("Ui.paddingEach requires 1 argument, got {}", args.len()),
                 });
             };
-            let Expr::Record(fields) = rec_e else {
+            let Expr::Record { fields, .. } = rec_e else {
                 return Err(Diagnostic::CompilerBug {
                     where_: "ipe_backend_rust::emit_ui_call::UiPaddingEach",
                     detail: "Ui.paddingEach arg must be an inline record literal".into(),
@@ -4058,7 +4062,7 @@ fn emit_ui_call(
                     detail: format!("Border.widthEach requires 1 argument, got {}", args.len()),
                 });
             };
-            let Expr::Record(fields) = rec_e else {
+            let Expr::Record { fields, .. } = rec_e else {
                 return Err(Diagnostic::CompilerBug {
                     where_: "ipe_backend_rust::emit_ui_call::BorderWidthEach",
                     detail: "Border.widthEach arg must be an inline record literal".into(),
@@ -4105,7 +4109,7 @@ fn emit_ui_call(
                     detail: format!("Border.shadow requires 1 argument, got {}", args.len()),
                 });
             };
-            let Expr::Record(fields) = rec_e else {
+            let Expr::Record { fields, .. } = rec_e else {
                 return Err(Diagnostic::CompilerBug {
                     where_: "ipe_backend_rust::emit_ui_call::BorderShadow",
                     detail: "Border.shadow arg must be an inline record literal".into(),
@@ -4180,7 +4184,7 @@ fn emit_ui_call(
                     detail: format!("Border.innerShadow requires 1 argument, got {}", args.len()),
                 });
             };
-            let Expr::Record(fields) = rec_e else {
+            let Expr::Record { fields, .. } = rec_e else {
                 return Err(Diagnostic::CompilerBug {
                     where_: "ipe_backend_rust::emit_ui_call::BorderInnerShadow",
                     detail: "Border.innerShadow arg must be an inline record literal".into(),
@@ -5047,7 +5051,7 @@ fn emit_ui_call(
                     ),
                 });
             };
-            let Expr::Record(fields) = cfg_e else {
+            let Expr::Record { fields, .. } = cfg_e else {
                 return Err(Diagnostic::CompilerBug {
                     where_: "ipe_backend_rust::emit_ui_call::InputText",
                     detail: "Input.text cfg must be an inline record literal in Phase 0; \
@@ -5104,7 +5108,7 @@ fn emit_ui_call(
                     detail: format!("Input.multiline requires 2 arguments, got {}", args.len()),
                 });
             };
-            let Expr::Record(fields) = cfg_e else {
+            let Expr::Record { fields, .. } = cfg_e else {
                 return Err(Diagnostic::CompilerBug {
                     where_: "ipe_backend_rust::emit_ui_call::InputMultiline",
                     detail: "Input.multiline cfg must be an inline record literal in Phase 0"
@@ -5159,7 +5163,7 @@ fn emit_ui_call(
                     detail: format!("Input.checkbox requires 2 arguments, got {}", args.len()),
                 });
             };
-            let Expr::Record(fields) = cfg_e else {
+            let Expr::Record { fields, .. } = cfg_e else {
                 return Err(Diagnostic::CompilerBug {
                     where_: "ipe_backend_rust::emit_ui_call::InputCheckbox",
                     detail: "Input.checkbox cfg must be an inline record literal in Phase 0".into(),
@@ -5207,7 +5211,7 @@ fn emit_ui_call(
                     detail: format!("Input.slider requires 2 arguments, got {}", args.len()),
                 });
             };
-            let Expr::Record(fields) = cfg_e else {
+            let Expr::Record { fields, .. } = cfg_e else {
                 return Err(Diagnostic::CompilerBug {
                     where_: "ipe_backend_rust::emit_ui_call::InputSlider",
                     detail: "Input.slider cfg must be an inline record literal in Phase 0".into(),
@@ -5284,7 +5288,7 @@ fn emit_ui_call(
                     detail: format!("Input.radio requires 2 arguments, got {}", args.len()),
                 });
             };
-            let Expr::Record(fields) = cfg_e else {
+            let Expr::Record { fields, .. } = cfg_e else {
                 return Err(Diagnostic::CompilerBug {
                     where_: "ipe_backend_rust::emit_ui_call::InputRadio",
                     detail: "Input.radio cfg must be an inline record literal in Phase 0".into(),
@@ -5332,7 +5336,7 @@ fn emit_ui_call(
                     detail: format!("Input.radioRow requires 2 arguments, got {}", args.len()),
                 });
             };
-            let Expr::Record(fields) = cfg_e else {
+            let Expr::Record { fields, .. } = cfg_e else {
                 return Err(Diagnostic::CompilerBug {
                     where_: "ipe_backend_rust::emit_ui_call::InputRadioRow",
                     detail: "Input.radioRow cfg must be an inline record literal in Phase 0".into(),
@@ -6780,7 +6784,9 @@ pub fn emit_expr_at(
         // bodies in dedicated functions (not inlined into this match) holds
         // `emit_expr_at`'s own stack frame small, so the depth guard — not a
         // native overflow — is what bounds a deep `BinOp`/`Call` spine.
-        Expr::Record(fields) => emit_record(ctx, fields, indent, depth, generics),
+        Expr::Record { fields, ty } => {
+            emit_record(ctx, fields, ty.as_ref(), indent, depth, generics)
+        }
         Expr::Access {
             record,
             field,
@@ -7974,7 +7980,7 @@ fn render_arm_pat_alias_safe(
             for (sym, _) in fields {
                 key.push(ctx.resolve_ident(*sym)?.to_owned());
             }
-            let struct_name = ctx.record_name_for_literal(&key)?.to_owned();
+            let struct_name = ctx.record_name_for_literal(&key, None)?.to_owned();
             let mut parts = Vec::with_capacity(fields.len());
             for (sym, sub) in fields {
                 let field_ident = ctx.emit_ident(*sym)?;
@@ -8165,7 +8171,10 @@ fn render_record_pat(ctx: &EmitCtx, fields: &[(Symbol, Pat)]) -> DResult<String>
     for (sym, _) in fields {
         key.push(ctx.resolve_ident(*sym)?.to_owned());
     }
-    let struct_name = ctx.record_name_for_literal(&key)?.to_owned();
+    // A record pattern carries no field types to disambiguate a shared field-name
+    // set; the unambiguous case resolves, and a genuinely-ambiguous one surfaces
+    // a clear internal error rather than silently binding the wrong struct.
+    let struct_name = ctx.record_name_for_literal(&key, None)?.to_owned();
 
     let mut parts = Vec::with_capacity(fields.len());
     for (sym, sub) in fields {
@@ -8278,12 +8287,13 @@ const EMAIL_SMTP_FIELDS: &[&str] = &["host", "pass", "port", "user"];
 fn emit_record(
     ctx: &EmitCtx,
     fields: &[(Symbol, Expr)],
+    ty: Option<&IrType>,
     indent: usize,
     depth: u16,
     generics: GenericScope,
 ) -> DResult<String> {
     let child = depth + 1;
-    let (struct_name, is_server_response) = record_struct_name(ctx, fields)?;
+    let (struct_name, is_server_response) = record_struct_name(ctx, fields, ty)?;
     let mut parts = Vec::with_capacity(fields.len() + usize::from(is_server_response));
     for (sym, value) in fields {
         let field_ident = ctx.emit_ident(*sym)?;
@@ -8298,14 +8308,20 @@ fn emit_record(
     Ok(format!("{struct_name} {{ {} }}", parts.join(", ")))
 }
 
-/// Resolve the Rust struct name a record literal constructs, from its field-name
-/// SET (Rust names struct-literal fields, so field write order is free). Returns
-/// the struct name and whether it folds to the runtime `ServerResponse` struct
-/// (which carries an extra `cookies: Vec<String>` field the Ipê record alias
-/// omits, so the caller appends a `cookies: Vec::new()` field). Shared by
-/// [`emit_record`] and the native Doc emitter so the two agree on the struct name
-/// exactly.
-pub fn record_struct_name(ctx: &EmitCtx, fields: &[(Symbol, Expr)]) -> DResult<(String, bool)> {
+/// Resolve the Rust struct name a record literal constructs. The literal's
+/// field-name set (Rust names struct-literal fields, so field write order is
+/// free) picks the candidate struct(s); when the set is shared by two distinct
+/// shapes, the literal's solved `ty` (an [`IrType::Record`], threaded from the
+/// lowerer) disambiguates to the exact one. Returns the struct name and whether
+/// it folds to the runtime `ServerResponse` struct (which carries an extra
+/// `cookies: Vec<String>` field the Ipê record alias omits, so the caller
+/// appends a `cookies: Vec::new()` field). Shared by [`emit_record`] and the
+/// native Doc emitter so the two agree on the struct name exactly.
+pub fn record_struct_name(
+    ctx: &EmitCtx,
+    fields: &[(Symbol, Expr)],
+    ty: Option<&IrType>,
+) -> DResult<(String, bool)> {
     // The struct is resolved by the literal's field-name set (Rust names
     // struct-literal fields, so write order is free); the field idents are
     // keyword-mangled to match the struct definition.
@@ -8331,7 +8347,7 @@ pub fn record_struct_name(ctx: &EmitCtx, fields: &[(Symbol, Expr)]) -> DResult<(
         // even after `ipe_lower` had already registered a correctly-typed
         // struct for it — a two-path divergence the registry check avoids.
         if ctx.has_record_struct_for(&key) {
-            ctx.record_name_for_literal(&key)?.to_owned()
+            ctx.record_name_for_literal(&key, ty)?.to_owned()
         } else {
             let mut sorted = key.clone();
             sorted.sort();
@@ -8405,7 +8421,7 @@ pub fn record_struct_name(ctx: &EmitCtx, fields: &[(Symbol, Expr)]) -> DResult<(
             } else if name_set_is(EMAIL_SMTP_FIELDS) {
                 "SmtpConfig".to_owned()
             } else {
-                ctx.record_name_for_literal(&key)?.to_owned()
+                ctx.record_name_for_literal(&key, ty)?.to_owned()
             }
         }
     };
