@@ -219,8 +219,38 @@ fn build_mq<M>(ipe_id: &str, attrs: &[Attribute<M>]) -> String {
         (Some(q), Some(r)) => (q.as_str().to_owned(), strip_style_close(r)),
         _ => return String::new(),
     };
+    // The layout renderer writes `display:flex` and its siblings as INLINE
+    // `style=""` declarations, which outrank a normal stylesheet rule. A
+    // breakpoint that re-lays-out an element (`display:none`, `align-items`, …)
+    // must therefore mark its declarations `!important` to beat that inline
+    // layout. This does not defeat a caller's own inline `!important`: an inline
+    // important declaration still wins over a stylesheet important one, so an
+    // author who deliberately pins a property inline keeps precedence.
+    let important_rules = mark_declarations_important(&safe_rules);
     let selector = format!("[ipe-id=\"{ipe_id}\"]");
-    format!("@media {safe_query} {{ {selector} {{ {safe_rules} }} }}")
+    format!("@media {safe_query} {{ {selector} {{ {important_rules} }} }}")
+}
+
+/// Append `!important` to each `;`-separated declaration in an already-safe
+/// declaration list. A declaration that already carries `!important` (a caller
+/// wrote it explicitly) is left untouched, so the output is idempotent. Empty
+/// segments are dropped. Input MUST have passed `sink_safe_declaration_list`.
+fn mark_declarations_important(rules: &str) -> String {
+    let mut out = String::new();
+    for decl in rules.split(';') {
+        let d = decl.trim();
+        if d.is_empty() {
+            continue;
+        }
+        if !out.is_empty() {
+            out.push(';');
+        }
+        out.push_str(d);
+        if !d.to_ascii_lowercase().contains("!important") {
+            out.push_str(" !important");
+        }
+    }
+    out
 }
 
 fn build_pc<M>(ipe_id: &str, attrs: &[Attribute<M>]) -> String {
@@ -829,9 +859,10 @@ mod tests {
         assert!(
             s.contains(
                 "<style data-ipe-mq=\"mq0\">@media (min-width: 768px) { \
-                 [ipe-id=\"mq0\"] { background-color:rgba(18,18,24,1) } }</style>"
+                 [ipe-id=\"mq0\"] { background-color:rgba(18,18,24,1) !important } }</style>"
             ),
-            "exact <style data-ipe-mq=…> block must render: {s}"
+            "exact <style data-ipe-mq=…> block must render (with !important so the \
+             breakpoint beats inline layout): {s}"
         );
         assert!(
             !s.contains("data-ipe-mq-q") && !s.contains("data-ipe-mq-rules"),
@@ -874,8 +905,80 @@ mod tests {
             "@media rule must be ipe-id-scoped: {s}"
         );
         assert!(
-            s.contains("background-color:rgba(18,18,24,1) } }"),
-            "collector rules must land inside the scoped block: {s}"
+            s.contains("background-color:rgba(18,18,24,1) !important } }"),
+            "collector rules must land inside the scoped block, marked !important \
+             so the breakpoint beats inline layout: {s}"
+        );
+    }
+
+    /// Render-proof for the fillPortion + mediaQuery layout fixes: the exact
+    /// repros through the full producer -> assign_ipe_ids ->
+    /// apply_style_injections -> render_html pipeline. Emits the whole page
+    /// HTML (printed under `--nocapture` for a live browser computed-style
+    /// check) and asserts the load-bearing CSS: each `fillPortion` column
+    /// carries `flex-grow:<n>` + `flex-basis:0` so the portion, not the
+    /// content, drives its width inside the `flex-wrap:wrap` row; and the
+    /// `display:none` media rule lands on the styled node's own selector AND
+    /// carries `!important`, so it beats the element's inline `display:flex`.
+    #[test]
+    fn render_proof_fill_portion_and_media_query() {
+        use crate::html::{assign_ipe_ids, render_html};
+        use crate::ui::element::{Attribute, Element, Length};
+        use crate::ui::helpers::{ui_column_, ui_el_, ui_media_query_, ui_row_, ui_wrapped_row_};
+        use crate::ui::render::ui_layout;
+
+        // Two fillPortion columns (7 / 3) inside a wrappedRow.
+        let row: Element<()> = ui_wrapped_row_(
+            vec![],
+            vec![
+                ui_el_(
+                    vec![Attribute::AttrWidth(Length::Fill(7))],
+                    Element::Text("left".to_owned()),
+                ),
+                ui_el_(
+                    vec![Attribute::AttrWidth(Length::Fill(3))],
+                    Element::Text("right".to_owned()),
+                ),
+            ],
+        );
+        // A nav hidden below 999px — its inline display:flex (from the row
+        // marker) must lose to the media rule.
+        let nav: Element<()> = ui_media_query_(
+            "(max-width: 999px)".to_owned(),
+            vec![Attribute::AttrStyle(
+                "display".to_owned(),
+                "none".to_owned(),
+            )],
+            ui_row_(vec![], vec![Element::Text("nav".to_owned())]),
+        );
+
+        let page = ui_column_(vec![], vec![row, nav]);
+        let mut html = ui_layout(vec![], page);
+        assign_ipe_ids(&mut html, "r");
+        apply_style_injections(&mut html);
+        let s = render_html(&html);
+        println!("RENDER_PROOF_HTML_START\n{s}\nRENDER_PROOF_HTML_END");
+
+        // Both portions drive width via flex-grow + flex-basis:0.
+        assert!(
+            s.contains("flex-grow:7") && s.contains("flex-grow:3"),
+            "both fillPortion columns must emit their flex-grow: {s}"
+        );
+        assert!(
+            s.matches("flex-basis:0").count() >= 2,
+            "each fillPortion column must emit flex-basis:0 so the portion (not \
+             content) drives width: {s}"
+        );
+        // The media rule targets a real node selector, is !important, and the
+        // nav still carries its inline display:flex to be overridden.
+        assert!(
+            s.contains("@media (max-width: 999px) { [ipe-id=")
+                && s.contains("display:none !important"),
+            "breakpoint rule must be ipe-id-scoped and !important: {s}"
+        );
+        assert!(
+            s.contains("display:flex"),
+            "nav keeps its inline layout for the media rule to override: {s}"
         );
     }
 
@@ -962,8 +1065,28 @@ mod tests {
             "legit query + selector must survive: {out}"
         );
         assert!(
-            out.contains("background-color:rgba(18,18,24,1)"),
-            "legit rules must survive byte-identical: {out}"
+            out.contains("background-color:rgba(18,18,24,1) !important"),
+            "legit rules must survive, marked !important to beat inline layout: {out}"
+        );
+    }
+
+    #[test]
+    fn build_mq_marks_declarations_important_and_respects_explicit_important() {
+        // Every emitted declaration gets `!important` so the breakpoint beats
+        // the inline layout props the renderer writes on `style=""`; a caller's
+        // own `!important` is not doubled.
+        let attrs = vec![
+            attr("data-ipe-mq-q", "(max-width: 999px)"),
+            attr("data-ipe-mq-rules", "display:none;color:red !important"),
+        ];
+        let out = build_mq("r.0", &attrs);
+        assert!(
+            out.contains("display:none !important;color:red !important"),
+            "each declaration marked !important, existing !important not doubled: {out}"
+        );
+        assert!(
+            !out.contains("!important !important"),
+            "must never double an existing !important: {out}"
         );
     }
 
