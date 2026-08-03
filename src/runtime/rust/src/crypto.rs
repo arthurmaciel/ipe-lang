@@ -35,6 +35,7 @@ pub use crate::crypto_core::*;
 /// parity; the hardening is this contract note. (Audit finding: low/weak-crypto.)
 ///
 /// Ipê `sha1 : String -> String` — hex-encoded SHA-1 digest.
+#[cfg(not(target_arch = "wasm32"))]
 pub fn crypto_sha1(s: String) -> String {
     use sha1::{Digest, Sha1};
     let mut h = Sha1::new();
@@ -43,6 +44,7 @@ pub fn crypto_sha1(s: String) -> String {
 }
 
 /// Ipê `md5 : String -> String` — hex-encoded MD5 digest.
+#[cfg(not(target_arch = "wasm32"))]
 pub fn crypto_md5(s: String) -> String {
     use md5::{Digest, Md5};
     let mut h = Md5::new();
