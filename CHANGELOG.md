@@ -10,6 +10,25 @@ Entries below the header are maintained by
 section is generated from Conventional Commit messages and prepended when the
 standing release pull request is merged.
 
+## [0.1.34](https://github.com/arthurmaciel/ipe-lang/compare/ipe-v0.1.33...ipe-v0.1.34) (2026-08-03)
+
+
+### Features
+
+* **feature-split:** P7b — demote json off the emitted floor ([#540](https://github.com/arthurmaciel/ipe-lang/issues/540)) ([2459993](https://github.com/arthurmaciel/ipe-lang/commit/2459993c3fd055dfc0442296af2987f655be381e))
+* **runtime,backend:** gate chrono behind time-core/log so a bare Program drops it (feature-split P4) ([#531](https://github.com/arthurmaciel/ipe-lang/issues/531)) ([03e1179](https://github.com/arthurmaciel/ipe-lang/commit/03e1179cec15029c34ccd114a143a61e4718b86f))
+* **runtime,backend:** gate encoding codecs behind a feature (feature-split P2) + fix static allocator splice ([#524](https://github.com/arthurmaciel/ipe-lang/issues/524)) ([e4d1b95](https://github.com/arthurmaciel/ipe-lang/commit/e4d1b95c0633b9329aeeb49b4a7426fb937b3e4a))
+* **runtime,backend:** gate regex/uuid/random behind features (feature-split P3) + fix http-only encoding under-inclusion ([#526](https://github.com/arthurmaciel/ipe-lang/issues/526)) ([f934987](https://github.com/arthurmaciel/ipe-lang/commit/f934987f989a0bd8dc62bc84e3ac2dcf2ac7ee5a))
+* **runtime,backend:** gate rust_decimal + unicode-general-category so a bare Program drops them (feature-split P5) ([#536](https://github.com/arthurmaciel/ipe-lang/issues/536)) ([a35b0e6](https://github.com/arthurmaciel/ipe-lang/commit/a35b0e66d2cd72cfeff073120ff4a3d9fee19e9a))
+* **runtime:** gate crypto_core behind crypto-core feature, secret behind secret (phase 6) ([#538](https://github.com/arthurmaciel/ipe-lang/issues/538)) ([59468bd](https://github.com/arthurmaciel/ipe-lang/commit/59468bd84fd094d717a4b14d1620b21410f4280f))
+* **runtime:** String.toInt trims surrounding Unicode whitespace ([#530](https://github.com/arthurmaciel/ipe-lang/issues/530)) ([9ba9cdb](https://github.com/arthurmaciel/ipe-lang/commit/9ba9cdb5d20e009444d259b73efd9fe8e9706c1c))
+
+
+### Bug Fixes
+
+* **backend:** reorder Db.Decode.andThen args to the runtime's decoder-first shape ([#535](https://github.com/arthurmaciel/ipe-lang/issues/535)) ([432243a](https://github.com/arthurmaciel/ipe-lang/commit/432243adf26b7cd02162bb1d07666df31c7bf174))
+* **parse:** distinct sub-spans per access-chain node to stop type-region collision ([#537](https://github.com/arthurmaciel/ipe-lang/issues/537)) ([f0392f7](https://github.com/arthurmaciel/ipe-lang/commit/f0392f7e7c0d5612d61c209b28c3f0c44e6e80d7))
+
 ## [0.1.33](https://github.com/arthurmaciel/ipe-lang/compare/ipe-v0.1.32...ipe-v0.1.33) (2026-08-03)
 
 
