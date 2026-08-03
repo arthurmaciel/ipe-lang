@@ -176,12 +176,22 @@ pub use task::*;
 pub use time::*;
 pub use trace::*;
 
+// `Ipe.Encoding` codecs (base64 / url-percent / hex). Behind the `encoding`
+// feature (the `base64` / `hex` / `percent-encoding` crates are optional): a
+// program that reaches no encoding/bytes kernel — and no crypto/db/server/email/
+// jwt/web surface that implies `encoding` — drops all three crates.
+#[cfg(feature = "encoding")]
 pub mod encoding;
+#[cfg(feature = "encoding")]
 pub use encoding::*;
 
-// `Ipe.Bytes` — distinct `Vec<u8>` byte buffer.
+// `Ipe.Bytes` — distinct `Vec<u8>` byte buffer. Behind `encoding` (its hex /
+// base64 kernels use those crates; the std-only half moves with it — module-
+// granular gating, matched by the emitted `mod.rs` append).
 // Divergence from Ipê: Ipê aliases Bytes = String; Rust maps Bytes to Vec<u8>.
+#[cfg(feature = "encoding")]
 pub mod bytes;
+#[cfg(feature = "encoding")]
 pub use bytes::*;
 
 pub mod regex_kernel;

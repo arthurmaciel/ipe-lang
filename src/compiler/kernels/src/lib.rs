@@ -5930,6 +5930,45 @@ impl StdlibKernel {
         )
     }
 
+    /// `true` when this variant reaches the `encoding.rs` / `bytes.rs` runtime
+    /// modules — the `Ipe.Encoding` codecs (base64 / url-percent / hex) and the
+    /// `Ipe.Bytes` buffer kernels.
+    ///
+    /// The whole `bytes.rs` module (including its std-only `empty`/`length`/… half)
+    /// moves behind the `encoding` feature, so ANY `Bytes.*` kernel selects it —
+    /// module-granular over-inclusion, accepted so the SEAL's module-level
+    /// cfg-satisfaction proof covers it. Used by `ipe_lower` to detect
+    /// `uses_encoding` and by the backend to declare `encoding` and add the
+    /// `base64` + `hex` + `percent-encoding` deps to the emitted manifest; a
+    /// program that reaches none of these — and no crypto/db/server/email/jwt/web
+    /// surface implying `encoding` — drops all three crates. `Crypto.randomToken`
+    /// is NOT here: its `crypto_random_token` floor body uses an inline base64url
+    /// encoder (no `base64` crate), so it stays available at
+    /// `--no-default-features` for the always-emitted prelude wrapper.
+    #[must_use]
+    pub const fn is_encoding(self) -> bool {
+        matches!(
+            self,
+            Self::BytesEmpty
+                | Self::BytesLength
+                | Self::BytesIsEmpty
+                | Self::BytesFromString
+                | Self::BytesToString
+                | Self::BytesFromHex
+                | Self::BytesToHex
+                | Self::BytesFromBase64
+                | Self::BytesToBase64
+                | Self::BytesAppend
+                | Self::BytesSlice
+                | Self::EncodingBase64Encode
+                | Self::EncodingBase64Decode
+                | Self::EncodingUrlEncode
+                | Self::EncodingUrlDecode
+                | Self::EncodingHexEncode
+                | Self::EncodingHexDecode
+        )
+    }
+
     /// `true` when this variant belongs to the non-TEA `Ipe.Time` kernel family
     /// (`Time.now` / `unixMillis` / `sleep` / `timeString` / `isLeapYear` /
     /// `daysInMonth`). Excludes `Time.every`, which is TEA (`is_tea()`).

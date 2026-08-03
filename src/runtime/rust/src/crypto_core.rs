@@ -190,13 +190,54 @@ fn hex_lower(buf: &[u8]) -> String {
     out
 }
 
+/// URL-safe base64 WITHOUT padding, byte-identical to Go's
+/// `base64.RawURLEncoding.EncodeToString` — the `-_` alphabet, no `=` pad. Inline
+/// (not the `base64` crate) so the always-on `crypto_core` floor carries no
+/// unconditional codec-crate reference: `crypto_random_token` is emitted in every
+/// program's FIXED prelude wrapper block, so it must stay available at
+/// `--no-default-features` for `base64` to be optional. A pure translation of the
+/// standard 6-bit → alphabet mapping; the `& 0x3f` / final-index math keeps every
+/// table lookup in range so `.get` never falls back.
+fn base64url_no_pad(buf: &[u8]) -> String {
+    const ALPHABET: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
+    let sym = |v: u8| ALPHABET.get((v & 0x3f) as usize).copied().unwrap_or(b'A') as char;
+    let mut out = String::with_capacity(buf.len().div_ceil(3) * 4);
+    let mut chunks = buf.chunks_exact(3);
+    for c in chunks.by_ref() {
+        // Three input bytes → four 6-bit groups. `chunks_exact(3)` yields only
+        // length-3 slices, so the `[b0, b1, b2]` pattern binds every element; the
+        // `else` arm is unreachable (kept because slice patterns are not
+        // statically exhaustive) and index-free — no `indexing_slicing`.
+        let [b0, b1, b2] = *c else {
+            continue;
+        };
+        out.push(sym(b0 >> 2));
+        out.push(sym((b0 << 4) | (b1 >> 4)));
+        out.push(sym((b1 << 2) | (b2 >> 6)));
+        out.push(sym(b2));
+    }
+    // Raw (no-pad) tail: 1 leftover byte → 2 chars, 2 leftover bytes → 3 chars.
+    match chunks.remainder() {
+        [b0] => {
+            out.push(sym(b0 >> 2));
+            out.push(sym(b0 << 4));
+        }
+        [b0, b1] => {
+            out.push(sym(b0 >> 2));
+            out.push(sym((b0 << 4) | (b1 >> 4)));
+            out.push(sym(b1 << 2));
+        }
+        _ => {}
+    }
+    out
+}
+
 // `Crypto.randomToken : Int -> Task Error String`. Go returns URL-safe base64
 // WITHOUT padding (rt.go ~l6560: `base64.RawURLEncoding.EncodeToString(b)`) — the
 // `-_` alphabet, no `=` pad. Width `n` is bytes of ENTROPY; the returned string is
 // longer (ceil(n*4/3) chars). (A prior hex encoding diverged from Go's base64.)
 #[cfg(not(target_arch = "wasm32"))]
 pub fn crypto_random_token<E: From<String> + Send + 'static>(n: i64) -> IpeTask<E, String> {
-    use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
     Box::pin(async move {
         // SECURITY: Mirror Go oracle exactly: reject size <= 0 || size > 1024
         // (rt.go ~l6553: `if size <= 0 || size > 1024 { return ErrInvalidInput }`)
@@ -217,7 +258,7 @@ pub fn crypto_random_token<E: From<String> + Send + 'static>(n: i64) -> IpeTask<
                     .into(),
             );
         }
-        ok_res(URL_SAFE_NO_PAD.encode(&buf))
+        ok_res(base64url_no_pad(&buf))
     })
 }
 
@@ -225,7 +266,6 @@ pub fn crypto_random_token<E: From<String> + Send + 'static>(n: i64) -> IpeTask<
 /// `crypto_random_bytes`, URL-safe-no-pad base64 encoded.
 #[cfg(target_arch = "wasm32")]
 pub fn crypto_random_token<E: From<String> + 'static>(n: i64) -> IpeTask<E, String> {
-    use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
     Box::pin(async move {
         if n <= 0 || n > 1024 {
             return IpeResult::Err(
@@ -243,7 +283,7 @@ pub fn crypto_random_token<E: From<String> + 'static>(n: i64) -> IpeTask<E, Stri
                     .into(),
             );
         }
-        ok_res(URL_SAFE_NO_PAD.encode(&buf))
+        ok_res(base64url_no_pad(&buf))
     })
 }
 

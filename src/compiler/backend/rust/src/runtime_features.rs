@@ -73,6 +73,13 @@ pub enum RuntimeFeature {
     CsvKernel,
     /// `time` — the IANA-zone calendar surface, `chrono-tz` (`uses_time`).
     Time,
+    /// `encoding` — the `base64` + `hex` + `percent-encoding` codec crates and
+    /// the `encoding.rs` / `bytes.rs` runtime modules (`reaches_encoding()`: an
+    /// `Ipe.Encoding` / `Ipe.Bytes` kernel, OR a crypto/db/server/email/jwt/web
+    /// surface whose runtime module uses the raw codec crates). A program that
+    /// reaches none of these drops `base64` + `hex` (`percent-encoding` also
+    /// enters via the always-on `serde_urlencoded` floor dep, untouched here).
+    Encoding,
     /// `crypto` — the heavy crypto surface: rsa + bcrypt + AEAD + pbkdf2
     /// (`uses_crypto`). Implies the always-on `crypto_core` floor.
     Crypto,
@@ -101,6 +108,7 @@ impl RuntimeFeature {
             Self::Compression => "compression",
             Self::CsvKernel => "csv_kernel",
             Self::Time => "time",
+            Self::Encoding => "encoding",
             Self::Crypto => "crypto",
             Self::Jwt => "jwt",
         }
@@ -197,6 +205,16 @@ pub fn runtime_features(ctx: &EmitCtx) -> RuntimeFeatureSet {
         set.insert(RuntimeFeature::Time);
     }
 
+    // Encoding codecs (base64/hex/percent-encoding) + the `encoding`/`bytes`
+    // modules. `reaches_encoding()` folds the direct encoding/bytes kernels with
+    // every surface whose runtime module uses the raw codec crates — crypto/db/
+    // server/email/jwt/web. The crate-side feature implications (crypto/db/server/
+    // email/jwt/web each list `encoding`) carry the same closure, so this insertion
+    // and the graph agree even at `--no-default-features`.
+    if ctx.reaches_encoding() {
+        set.insert(RuntimeFeature::Encoding);
+    }
+
     // Heavy crypto (rsa/bcrypt/AEAD/pbkdf2). The `crypto_core` floor
     // (sha2/hmac/entropy) stays unconditional in the base manifest; only the
     // heavy surface is a feature. `reaches_crypto_core_heavy()` (crypto ∪ jwt)
@@ -246,6 +264,7 @@ mod tests {
             uses_config: false,
             uses_compression: false,
             uses_csv: false,
+            uses_encoding: false,
             uses_crypto: false,
             uses_jwt: false,
             uses_url: false,
