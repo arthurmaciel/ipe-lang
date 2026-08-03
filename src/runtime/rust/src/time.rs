@@ -83,13 +83,12 @@ pub fn time_unix_millis<E: 'static>(_: ()) -> IpeTask<E, i64> {
     time_now(())
 }
 
-/// `Time.timeString : Int -> String` — Go oracle: `time.Unix(ms/1000, 0).Format("15:04:05")`.
-/// Formats the Unix-millis timestamp as local-time `HH:MM:SS`.
+/// `Time.timeString : Int -> String` — formats the Unix-millis instant as
+/// `HH:MM:SS`. Pins UTC so a pure formatter is host-independent, matching every
+/// sibling formatter in this module.
 #[must_use]
 pub fn time_time_string(ms: i64) -> String {
-    use chrono::{Local, TimeZone};
-    Local
-        .timestamp_opt(ms / 1000, 0)
+    Utc.timestamp_opt(ms / 1000, 0)
         .single()
         .map(|dt| dt.format("%H:%M:%S").to_string())
         .unwrap_or_default()
@@ -603,6 +602,27 @@ pub fn time_zone_name<E: From<String>>(zone_name: String, ms: i64) -> IpeResult<
                 .to_string(),
         ),
         Err(_) => IpeResult::Err(format!("Time.zoneName: unknown timezone {zone_name:?}").into()),
+    }
+}
+
+// `time_time_string` is unconditional (no `time` feature), so its regression
+// test lives in an always-compiled module. It asserts a fixed instant formats
+// to a constant UTC `HH:MM:SS` regardless of the process `TZ`.
+#[cfg(test)]
+mod time_string_tests {
+    use super::time_time_string;
+
+    #[test]
+    fn time_string_is_utc_regardless_of_tz() {
+        // A fixed instant whose UTC wall-clock time is 15:30:45.
+        let ms: i64 = 1_615_735_845_000;
+        // SAFETY: single-threaded test; set a non-UTC zone to prove the output
+        // does not follow host-local time.
+        unsafe { std::env::set_var("TZ", "America/New_York") };
+        assert_eq!(time_time_string(ms), "15:30:45");
+        unsafe { std::env::set_var("TZ", "Asia/Tokyo") };
+        assert_eq!(time_time_string(ms), "15:30:45");
+        unsafe { std::env::remove_var("TZ") };
     }
 }
 
