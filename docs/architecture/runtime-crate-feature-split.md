@@ -288,6 +288,35 @@ emitted project; the number must only go down).
    and a form-decode fixture stay green. Deliverable: `cfg_attr` derives,
    gated visitor impls, `serde`/`json` feature rewiring, `serde_urlencoded` →
    web/wasm, `Json` demotion in `runtime_features` keyed on `uses_json`.
+
+   **Status — crate-level decoupling landed; emitted-app `json` demotion
+   pending.** Done: `serde` + `serde_urlencoded` are optional; a new `serde`
+   feature (`["dep:serde", "rust_decimal?/serde"]`) gates every floor derive
+   (`IpeMaybe`/`IpeResult` in `core.rs`, the `IpeError` family, `IpeOrder`,
+   `Decimal`, `dom::diff::Patch`) via `#[cfg_attr]` and the hand-written
+   `IpeMaybe` visitor via `#[cfg]`; `dom/form.rs` is gated
+   `cfg(any(feature = "web", feature = "wasm-client"))`; `json`, `db`, `web`,
+   `email`, `http_client`, `websocket_client`, `redis_store`, and `wasm-client`
+   each imply `serde`. Proof: `cargo build -p ipe-runtime-rust
+   --no-default-features` resolves **2 crates** (`ipe-runtime-rust` + `libc`),
+   down from 14 — every `serde*`/`syn`/`quote`/`proc-macro2`/`itoa`/`ryu`/
+   `form_urlencoded` node dropped. All feature builds, both closure SEALs, the
+   1413-test golden suite (byte-stable, no re-bless), and the Json / Maybe /
+   server behaviour fixtures stay green.
+
+   Not yet done — the emitted-app floor: the SSOT still inserts
+   `RuntimeFeature::Json` unconditionally, so a bare app selects `json` and
+   therefore still links `serde` + `serde_json`. Demoting it needs a
+   `reaches_json` flag (fail-closed: set on any reachable `IrType::Json` type
+   mention — a `Value`/`Decoder`/wildcard-`any` — not just a `Json.*` kernel)
+   and gating the two unconditional prelude typedefs a non-Json app emits —
+   `type Value = JsonVal;` and
+   `pub type Decoder<T> = ipe_runtime::json::Decoder<IpeError, T>;` — on it
+   (a new `PreludeReach.json` section, mirroring `log`/`time`/`crypto_core`).
+   This is the sectioned-prelude prerequisite of §3 step 0 and carries the
+   `["json"]`-shrinks-to-`[]` golden re-bless of §6; kept fail-closed (forcing
+   `json` off the floor before those typedefs are conditional would be an
+   E0433 under-inclusion on every bare app).
 8. **Remeasure + record**. Re-run the measured-floor table of
    `compilation-performance.md` (bare / log-only / regex tool / db / web) and
    record the numbers there. Target: bare Program ≤ 3 crates.

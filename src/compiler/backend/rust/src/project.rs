@@ -81,8 +81,16 @@ autobins = false
 [features]
 # Selects the browser-target impls of the shared form-submit helpers in the
 # vendored runtime (`cfg(any(feature = "web", feature = "wasm-client"))`).
-default = ["wasm-client", "encoding"]
+default = ["wasm-client", "encoding", "serde", "json"]
 wasm-client = []
+# The floor serde derives (`IpeMaybe`/`IpeResult`/`IpeError`/`Decimal`/`Patch`)
+# and `json.rs` are `#[cfg(feature = "serde")]` / `#[cfg(feature = "json")]` in
+# the vendored source. `serde` / `serde_json` / `serde_urlencoded` stay
+# non-optional below (byte-identical output), so these two features only satisfy
+# the source `#[cfg]` gates and keep check-cfg quiet — defaulted on so the wasm
+# app's Model wire + form decode still carry their serde impls.
+serde = []
+json = []
 # Gates the vendored `encoding.rs` / `bytes.rs` modules. The `base64` / `hex` /
 # `percent-encoding` deps below stay non-optional in this closed wasm template
 # (byte-identical output), so this only satisfies the source `#[cfg]` gates —
