@@ -6085,6 +6085,100 @@ impl StdlibKernel {
         )
     }
 
+    /// `true` when this variant reaches the `decimal.rs` / `money.rs` runtime
+    /// modules — the `Ipe.Decimal` arbitrary-precision surface and the `Ipe.Money`
+    /// surface built on it. They are the sole consumers of the `rust_decimal`
+    /// crate (and its `arrayvec` subtree), so both modules — and the crate — are
+    /// behind the `decimal` feature. `money.rs` builds on `decimal.rs`'s `Decimal`
+    /// newtype, so the two gate together. Used by `ipe_lower` to detect
+    /// `uses_decimal` and by the backend to declare the modules and add
+    /// `rust_decimal`. The `Db` surface decodes numeric SQL columns (and
+    /// `Db.Decode.money`) through `rust_decimal` too, so the backend keeps
+    /// `decimal` under `uses_decimal || uses_db`; a program that reaches neither a
+    /// `Decimal.*`/`Money.*` kernel nor a `Db` surface drops the crate.
+    #[must_use]
+    pub const fn is_decimal(self) -> bool {
+        matches!(
+            self,
+            Self::DecZero
+                | Self::DecOne
+                | Self::DecOneHundred
+                | Self::DecFromString
+                | Self::DecFromInt
+                | Self::DecFromFloat
+                | Self::DecFromMinor
+                | Self::DecToString
+                | Self::DecToStringFixed
+                | Self::DecToFloat
+                | Self::DecToInt
+                | Self::DecToMinor
+                | Self::DecAdd
+                | Self::DecSub
+                | Self::DecMul
+                | Self::DecDiv
+                | Self::DecMod
+                | Self::DecNeg
+                | Self::DecAbs
+                | Self::DecFloor
+                | Self::DecCeil
+                | Self::DecRound
+                | Self::DecRoundHalfUp
+                | Self::DecTruncate
+                | Self::DecCompare
+                | Self::DecEq
+                | Self::DecNeq
+                | Self::DecLt
+                | Self::DecLte
+                | Self::DecGt
+                | Self::DecGte
+                | Self::DecMin
+                | Self::DecMax
+                | Self::DecIsZero
+                | Self::DecIsPositive
+                | Self::DecIsNegative
+                | Self::DecPercentOf
+                | Self::DecAddPercent
+                | Self::DecSubPercent
+                | Self::DecFormatWith
+                | Self::MoneyMinorUnits
+                | Self::MoneySymbol
+                | Self::MoneyCurrencyName
+                | Self::MoneyIsKnownCurrency
+                | Self::MoneyFormat
+                | Self::MoneyFormatWithCode
+                | Self::MoneyAllocate
+                | Self::MoneySetRate
+                | Self::MoneyGetRate
+                | Self::MoneyHasRate
+                | Self::MoneyClearRates
+        )
+    }
+
+    /// `true` when this variant reaches the `char_category.rs` runtime module —
+    /// the `Ipe.Char` predicates keyed off the Unicode `General_Category`
+    /// (`isAlpha` / `isDigit` / `isLower` / `isUpper` / `isAlphaNum`). That module
+    /// is the sole consumer of the `unicode-general-category` table, so it — and
+    /// the crate — is behind the `char-category` feature. Used by `ipe_lower` to
+    /// detect `uses_char_category` and by the backend to declare the module and
+    /// add the crate. A standalone leaf: no surface implies it.
+    ///
+    /// The std-only `Ipe.Char` kernels (`isHexDigit` / `isOctDigit` / `toLower` /
+    /// `toUpper` / `toCode` / `fromCode`) are deliberately NOT here: their
+    /// `char_kernel.rs` bodies resolve through Rust std alone (ASCII ranges +
+    /// `char::to_lowercase`/`to_uppercase`/`from_u32`), so that module is always
+    /// compiled and a program using only them drops `unicode-general-category`.
+    #[must_use]
+    pub const fn is_char_category(self) -> bool {
+        matches!(
+            self,
+            Self::CharIsAlpha
+                | Self::CharIsDigit
+                | Self::CharIsLower
+                | Self::CharIsUpper
+                | Self::CharIsAlphaNum
+        )
+    }
+
     /// `true` when this variant belongs to the `Ipe.Auth` kernel family
     /// (`Ipe.Auth.hashPassword` / `verifyPassword` / `signToken` / `verifyToken` /
     /// `register` / `login` / `setRole` and companions).
@@ -7605,6 +7699,65 @@ mod tests {
                  or a non-Log program (e.g. one calling Debug.log) would pull it",
                 k.is_log(),
                 is_log_qualifier,
+            );
+        }
+    }
+
+    /// Every `Ipe.Decimal` and `Ipe.Money` kernel reaches the `decimal.rs` /
+    /// `money.rs` runtime modules — the sole consumers of the `rust_decimal` crate,
+    /// gated behind the `decimal` feature. So `is_decimal()` MUST report exactly
+    /// `qualifier ∈ {"Decimal", "Money"}`, and no other qualifier may. Both
+    /// directions asserted, so a new `Decimal.*`/`Money.*` kernel the predicate
+    /// forgets drops `rust_decimal` a program needs (E0433), or an unrelated kernel
+    /// wrongly claimed pulls it into a program that does not.
+    #[test]
+    fn decimal_predicate_tracks_decimal_money_qualifiers() {
+        for k in StdlibKernel::ALL {
+            let is_decimal_qualifier =
+                k.decl().qualifier == "Decimal" || k.decl().qualifier == "Money";
+            assert_eq!(
+                k.is_decimal(),
+                is_decimal_qualifier,
+                "{k:?}: is_decimal()={} but qualifier∈{{Decimal,Money}} is {} — \
+                 a Decimal/Money-using program would drop the `rust_decimal` surface \
+                 it needs or a non-Decimal program would pull it",
+                k.is_decimal(),
+                is_decimal_qualifier,
+            );
+        }
+    }
+
+    /// Exactly the five `Ipe.Char` `General_Category` predicates
+    /// (`isAlpha`/`isDigit`/`isLower`/`isUpper`/`isAlphaNum`) reach the
+    /// `char_category.rs` runtime module — the sole consumer of the
+    /// `unicode-general-category` table, gated behind the `char-category` feature.
+    /// So `is_char_category()` MUST report exactly those five and NO other kernel —
+    /// in particular NOT the std-only `Char` kernels (`isHexDigit`/`isOctDigit`/
+    /// `toLower`/`toUpper`/`toCode`/`fromCode`), whose `char_kernel.rs` bodies use
+    /// Rust std alone. Both directions asserted, so a category predicate the
+    /// method forgets drops `unicode-general-category` a program needs (E0433), or
+    /// a std-only `Char` kernel wrongly claimed pulls the crate into a program that
+    /// (correctly) reaches only `char_kernel.rs`.
+    #[test]
+    fn char_category_predicate_tracks_category_kernels() {
+        for k in StdlibKernel::ALL {
+            let is_category = matches!(
+                k,
+                StdlibKernel::CharIsAlpha
+                    | StdlibKernel::CharIsDigit
+                    | StdlibKernel::CharIsLower
+                    | StdlibKernel::CharIsUpper
+                    | StdlibKernel::CharIsAlphaNum
+            );
+            assert_eq!(
+                k.is_char_category(),
+                is_category,
+                "{k:?}: is_char_category()={} but the category-kernel set membership \
+                 is {} — a General_Category-using program would drop the \
+                 `unicode-general-category` surface it needs or a std-only Char \
+                 program would pull it",
+                k.is_char_category(),
+                is_category,
             );
         }
     }

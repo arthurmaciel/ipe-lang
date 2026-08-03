@@ -290,6 +290,10 @@ impl<E: IpeStringify, A: IpeStringify> IpeStringify for IpeResult<E, A> {
 // `Money(Decimal, …)`, `Claims(Vec<(String, JsonVal)>)`); the codegen's enum
 // `ipe_show` calls `.ipe_show()` on the payload, so the type must impl it.
 
+// `decimal.rs` is behind the `decimal` feature, so this impl — the only
+// `stringify.rs` reference to `crate::decimal::Decimal` — carries the same gate.
+// A program without the feature has no `Decimal` type to render.
+#[cfg(feature = "decimal")]
 impl IpeStringify for crate::decimal::Decimal {
     // Reuse the canonical Decimal renderer (normalized, no trailing zeros) —
     // matches `Decimal.toString`. Total (no panic).

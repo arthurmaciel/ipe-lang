@@ -106,6 +106,15 @@ pub enum RuntimeFeature {
     /// zone DB (`chrono-tz`) is the separate `Time` feature, which implies this.
     /// The single selector for whether the emitted crate keeps `chrono`.
     TimeCore,
+    /// `decimal` — the `decimal.rs`/`money.rs` modules + `rust_decimal`
+    /// (`reaches_decimal()`: a `Decimal.*`/`Money.*` kernel OR the `Db` surface,
+    /// which decodes numeric columns through `rust_decimal`). `money.rs` builds on
+    /// `decimal.rs`'s `Decimal`, so one feature gates both.
+    Decimal,
+    /// `char-category` — the `char_category.rs` module + `unicode-general-category`
+    /// (`reaches_char_category()`: an `Ipe.Char` `General_Category` predicate). A
+    /// standalone leaf. The std-only `Ipe.Char` kernels stay in `char_kernel.rs`.
+    CharCategory,
     /// `crypto` — the heavy crypto surface: rsa + bcrypt + AEAD + pbkdf2
     /// (`uses_crypto`). Implies the always-on `crypto_core` floor.
     Crypto,
@@ -140,6 +149,8 @@ impl RuntimeFeature {
             Self::Random => "random",
             Self::Log => "log",
             Self::TimeCore => "time-core",
+            Self::Decimal => "decimal",
+            Self::CharCategory => "char-category",
             Self::Crypto => "crypto",
             Self::Jwt => "jwt",
         }
@@ -293,6 +304,25 @@ pub fn runtime_features(ctx: &EmitCtx) -> RuntimeFeatureSet {
         set.insert(RuntimeFeature::TimeCore);
     }
 
+    // Decimal (`decimal.rs`/`money.rs` modules + `rust_decimal`).
+    // `reaches_decimal()` folds a `Decimal.*`/`Money.*` kernel with the `Db`
+    // surface, which decodes numeric SQL columns through `rust_decimal`. The
+    // crate-side `db` feature lists `decimal`, carrying the same closure at
+    // `--no-default-features`. FAIL-CLOSED: any uncertain `rust_decimal` consumer
+    // keeps it on.
+    if ctx.reaches_decimal() {
+        set.insert(RuntimeFeature::Decimal);
+    }
+
+    // Char-category (`char_category.rs` module + `unicode-general-category`). A
+    // standalone leaf: `reaches_char_category()` is exactly `uses_char_category`
+    // (an `Ipe.Char` General_Category predicate). The std-only `Ipe.Char` kernels
+    // stay in the always-compiled `char_kernel.rs`, so a program using only them
+    // drops the crate.
+    if ctx.reaches_char_category() {
+        set.insert(RuntimeFeature::CharCategory);
+    }
+
     // Heavy crypto (rsa/bcrypt/AEAD/pbkdf2). The `crypto_core` floor
     // (sha2/hmac/entropy) stays unconditional in the base manifest; only the
     // heavy surface is a feature. `reaches_crypto_core_heavy()` (crypto ∪ jwt)
@@ -347,6 +377,8 @@ mod tests {
             uses_uuid: false,
             uses_random: false,
             uses_log: false,
+            uses_decimal: false,
+            uses_char_category: false,
             uses_crypto: false,
             uses_jwt: false,
             uses_url: false,
@@ -530,6 +562,8 @@ mod tests {
             RuntimeFeature::Compression,
             RuntimeFeature::CsvKernel,
             RuntimeFeature::Time,
+            RuntimeFeature::Decimal,
+            RuntimeFeature::CharCategory,
             RuntimeFeature::Crypto,
             RuntimeFeature::Jwt,
         ];

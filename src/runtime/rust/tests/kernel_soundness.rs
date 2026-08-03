@@ -4,6 +4,11 @@
 //! never a Rust panic) plus the expected value, and the seeded-random kernels
 //! assert determinism (same seed ⇒ same output).
 
+// The crate-root glob supplies the unqualified `IpeMaybe` / `IpeError` /
+// `with_default` names the `random`- and `decimal`-gated tests use; the other
+// tests fully qualify their kernel paths, so the glob is dead without either
+// feature.
+#[cfg(any(feature = "random", feature = "decimal"))]
 use ipe_runtime_rust::*;
 use proptest::prelude::*;
 
@@ -150,7 +155,9 @@ proptest! {
 }
 
 // ── decimal — divide/modulo by zero returns Err, never panics ──────────────
+// `decimal.rs` is behind the `decimal` feature, so these tests are too.
 
+#[cfg(feature = "decimal")]
 #[test]
 fn decimal_div_by_zero_is_err() {
     let a = ipe_runtime_rust::decimal::decimal_from_int(10);
@@ -159,6 +166,7 @@ fn decimal_div_by_zero_is_err() {
     assert!(r.is_err());
 }
 
+#[cfg(feature = "decimal")]
 #[test]
 fn decimal_mod_by_zero_is_err() {
     let a = ipe_runtime_rust::decimal::decimal_from_int(10);
@@ -167,6 +175,7 @@ fn decimal_mod_by_zero_is_err() {
     assert!(r.is_err());
 }
 
+#[cfg(feature = "decimal")]
 #[test]
 fn decimal_div_normal_is_ok() {
     let a = ipe_runtime_rust::decimal::decimal_from_int(10);

@@ -237,7 +237,16 @@ pub mod jwt;
 #[cfg(feature = "jwt")]
 pub use jwt::*;
 
+// `Ipe.Decimal` arbitrary-precision decimal + `Ipe.Money`. Behind the `decimal`
+// feature (the `rust_decimal` crate, with its `arrayvec` subtree): `money.rs`
+// builds on `decimal.rs`'s `Decimal` newtype, so the two modules gate together.
+// A program that reaches no `Decimal.*`/`Money.*` kernel and no `Db` surface
+// (whose `SqlValue` numeric columns decode through `rust_decimal`) drops the
+// crate. The `stringify.rs` `IpeStringify for Decimal` impl carries the same
+// gate, so a program without the feature still compiles.
+#[cfg(feature = "decimal")]
 pub mod decimal;
+#[cfg(feature = "decimal")]
 pub use decimal::*;
 
 #[cfg(feature = "compression")]
@@ -422,7 +431,11 @@ pub use web::*;
 pub mod ffi_polyfills;
 pub use ffi_polyfills::*;
 
+// `Ipe.Money` — built on `decimal.rs`'s `Decimal`, so it rides the same
+// `decimal` feature (see the `decimal` module above).
+#[cfg(feature = "decimal")]
 pub mod money;
+#[cfg(feature = "decimal")]
 pub use money::*;
 
 pub mod math;
@@ -458,6 +471,16 @@ pub use stringify::*;
 
 pub mod char_kernel;
 pub use char_kernel::*;
+
+// `Ipe.Char` General_Category predicates (`isAlpha`/`isDigit`/`isLower`/
+// `isUpper`/`isAlphaNum`). Behind the `char-category` feature (the sole consumer
+// of the `unicode-general-category` table): a program that reaches none of these
+// predicates drops the crate. The std-only `Ipe.Char` kernels stay in the
+// always-compiled `char_kernel` sibling above.
+#[cfg(feature = "char-category")]
+pub mod char_category;
+#[cfg(feature = "char-category")]
+pub use char_category::*;
 
 pub mod list;
 pub use list::*;

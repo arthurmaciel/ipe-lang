@@ -77,7 +77,7 @@ use ipe_ir::{ModPath, Module, Program};
 /// closure covers exactly the programs the module closure does. The proof is
 /// per-flag + monotone + composed (see the module docs), NOT a `2^FLAG_COUNT`
 /// enumeration — it scales to a far larger flag count in linear time.
-const FLAG_COUNT: usize = 23;
+const FLAG_COUNT: usize = 25;
 
 /// How many random full masks the backstop [`sampled_full_masks_are_closed`]
 /// exercises, on top of the deterministic corners. Bounded so the sample cost
@@ -178,13 +178,18 @@ fn module_for_mask(name: ipe_intern::Symbol, mask: u32) -> Module {
         uses_csv: f(14),
         // `uses_encoding` is a pure surface (no reactor) — NOT in the async union.
         uses_encoding: f(18),
-        // `uses_regex` / `uses_uuid` / `uses_random` / `uses_log` are pure
-        // surfaces (no reactor) — NOT in the async union. `uses_log` drives
-        // `reaches_time_core` (chrono) alongside web / webview (bits 3 / 5).
+        // `uses_regex` / `uses_uuid` / `uses_random` / `uses_log` /
+        // `uses_decimal` / `uses_char_category` are pure surfaces (no reactor) —
+        // NOT in the async union. `uses_log` drives `reaches_time_core` (chrono)
+        // alongside web / webview (bits 3 / 5); `uses_decimal` drives
+        // `reaches_decimal` (rust_decimal) alongside the `db` surface;
+        // `uses_char_category` is a standalone leaf.
         uses_regex: f(19),
         uses_uuid: f(20),
         uses_random: f(21),
         uses_log: f(22),
+        uses_decimal: f(23),
+        uses_char_category: f(24),
         uses_crypto: f(15),
         uses_jwt: f(16),
         uses_url: f(17),
