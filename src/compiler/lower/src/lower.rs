@@ -6058,7 +6058,7 @@ struct KernelUsage {
     uuid: bool,
     /// Any `Ipe.Random` kernel — gates the `random.rs` runtime module (the
     /// `random` feature). A standalone leaf; no other surface reaches it. Does NOT
-    /// gate `getrandom` (kept by the always-on `crypto_core` floor).
+    /// gate `getrandom` (kept by the `crypto_core` floor).
     random: bool,
     /// Any `Ipe.Log` kernel — gates the `log.rs` runtime module (the `log`
     /// feature) and the base `chrono` crate (via `log = ["dep:chrono"]`).
@@ -6133,7 +6133,7 @@ struct KernelUsage {
     /// Any non-TEA `Ipe.Time` kernel (`Time.now` / `unixMillis` / `sleep` /
     /// `timeString` / `isLeapYear` / `daysInMonth`) — gates the `time` Cargo
     /// feature and the `chrono-tz` dependency (the IANA-zone calendar surface).
-    /// `chrono` core stays unconditional. `Time.every` is TEA, tracked by `tea`.
+    /// `chrono` core is gated by `time-core`/`log`. `Time.every` is TEA, tracked by `tea`.
     time: bool,
     /// The `Ipe.Email` `Email.send` kernel.
     email: bool,
@@ -8543,7 +8543,7 @@ impl<'a> Lowerer<'a> {
         // detect non-TEA `Ipe.Time` kernel usage — the backend enables the
         // `time` Cargo feature and adds the `chrono-tz` dependency (the IANA-zone
         // calendar surface); a program that reaches no Time kernel drops the
-        // crate. `chrono` core stays unconditional.
+        // crate. `chrono` core is gated by `time-core`/`log`.
         let uses_time = kernel_usage.time;
         // detect `Ipe.Env` `Env.public` usage — the backend uses this flag to
         // emit the per-project `env_public.rs` and append `pub mod

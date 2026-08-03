@@ -3,7 +3,7 @@
 // This module holds the legacy checksum hashes (SHA-1/MD5), the symmetric AEAD
 // ciphers (AES-256-GCM + ChaCha20-Poly1305) and the PBKDF2 password-key
 // derivation — each pulling a crate used nowhere else (`sha1`, `md-5`,
-// `aes-gcm`, `chacha20poly1305`, `pbkdf2`). The always-on floor — the entropy
+// `aes-gcm`, `chacha20poly1305`, `pbkdf2`). The crypto floor — the entropy
 // pair, the SHA-2 hash/HMAC family, the RSA sign/verify pair, the typed
 // `Key`/`Mac` newtypes and the constant-time compare — lives in the sibling
 // `crypto_core` module and is re-exported here, so every `crypto::…` path
@@ -20,7 +20,7 @@
 // merely unreachable.
 use super::*;
 
-// The always-on cryptographic floor (`crypto_core`) is re-exported through this
+// The cryptographic floor (`crypto_core`) is re-exported through this
 // module so every `crypto::…` path — the kernel-wrapper prelude's
 // `crypto_random_bytes`/`crypto_random_token`, `jwt`'s
 // `crypto_hmac_sha256`/`crypto_rsa_sha256_sign` reaches, and generated user

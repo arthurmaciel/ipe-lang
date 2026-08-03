@@ -614,7 +614,7 @@ pub(crate) struct EmitCtx<'a> {
     /// * adds the `toml` + `serde_yaml` dependencies to the emitted `Cargo.toml`.
     ///
     /// The JSON-backed `Config.*` combinators (`string` / `field` / `map` / …)
-    /// emit into the always-on `json` module, so a program that only decodes
+    /// emit into the `json` module, so a program that only decodes
     /// JSON never sets this and pulls neither crate. `config_decode` is a leaf
     /// module — no other runtime surface reaches it — so no other `uses_*` flag
     /// forces it on.
@@ -663,8 +663,8 @@ pub(crate) struct EmitCtx<'a> {
     /// `true` when the program reaches an `Ipe.Random` kernel. The `random`
     /// runtime feature gates the `random.rs` module declaration; this flag alone
     /// selects it (`random` is a standalone leaf). It does NOT gate the
-    /// `getrandom` crate — that stays with the always-on `crypto_core` floor until
-    /// the crypto-core demotion phase.
+    /// `getrandom` crate alone — `getrandom` is enabled by `random || crypto-core`,
+    /// shared with the crypto floor.
     pub(crate) uses_random: bool,
     /// `true` when the program reaches an `Ipe.Log` kernel. The `log` runtime
     /// feature gates the `log.rs` module and — via `log = ["dep:chrono"]` — the
@@ -797,7 +797,7 @@ pub(crate) struct EmitCtx<'a> {
     /// into the `default` list) and adds the `chrono-tz` dependency — the
     /// IANA-zone calendar surface of the always-declared `time` runtime module,
     /// gated behind that feature. A program that reaches no `Ipe.Time` kernel
-    /// drops the crate. The `chrono` core crate stays unconditional.
+    /// drops the crate. The `chrono` core crate is gated by `time-core`/`log`.
     pub(crate) uses_time: bool,
     /// `true` when the program lowers at least one [`ipe_ir::Callee::Ffi`]
     /// foreign-wrapper call. When set,
