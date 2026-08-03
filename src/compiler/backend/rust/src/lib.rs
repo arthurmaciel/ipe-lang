@@ -614,7 +614,7 @@ pub(crate) struct EmitCtx<'a> {
     /// * adds the `toml` + `serde_yaml` dependencies to the emitted `Cargo.toml`.
     ///
     /// The JSON-backed `Config.*` combinators (`string` / `field` / `map` / …)
-    /// emit into the always-on `json` module, so a program that only decodes
+    /// emit into the `json` module, so a program that only decodes
     /// JSON never sets this and pulls neither crate. `config_decode` is a leaf
     /// module — no other runtime surface reaches it — so no other `uses_*` flag
     /// forces it on.

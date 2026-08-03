@@ -6058,7 +6058,7 @@ struct KernelUsage {
     uuid: bool,
     /// Any `Ipe.Random` kernel — gates the `random.rs` runtime module (the
     /// `random` feature). A standalone leaf; no other surface reaches it. Does NOT
-    /// gate `getrandom` (kept by the always-on `crypto_core` floor).
+    /// gate `getrandom` (kept by the `crypto_core` floor).
     random: bool,
     /// Any `Ipe.Log` kernel — gates the `log.rs` runtime module (the `log`
     /// feature) and the base `chrono` crate (via `log = ["dep:chrono"]`).

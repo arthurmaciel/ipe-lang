@@ -666,7 +666,7 @@ const RUNTIME_MOD_RS_RANDOM_APPEND: &str = "pub mod random;\npub use random::*;\
 /// `crypto.rs` (the heavy AEAD/checksum kernels) is vendored into every emitted
 /// crate but declared only on demand — it is the sole consumer of the `sha1`,
 /// `md-5`, `aes-gcm`, `chacha20poly1305`, and `pbkdf2` crates, which
-/// [`crypto_cargo_toml`] adds under the same condition. The always-on
+/// [`crypto_cargo_toml`] adds under the same condition. The
 /// `crypto_core` floor (SHA-2, HMAC, RSA, constant-time compare, the entropy
 /// pair, the `Key`/`Mac` newtypes) stays in the base module set — `crypto.rs`
 /// re-exports it, but nothing else reaches the heavy module, so the flag alone
@@ -681,7 +681,7 @@ const RUNTIME_MOD_RS_CRYPTO_APPEND: &str = "pub mod crypto;\npub use crypto::*;\
 ///
 /// `jwt.rs` is the sole direct consumer of the `jsonwebtoken` crate, which
 /// [`jwt_cargo_toml`] adds under the same condition. It reaches only the
-/// always-on `crypto_core` floor (`super::crypto_core::…`), so declaring it
+/// `crypto_core` floor (`super::crypto_core::…`), so declaring it
 /// pulls no other gated module.
 const RUNTIME_MOD_RS_JWT_APPEND: &str = "pub mod jwt;\npub use jwt::*;\n";
 
@@ -1952,8 +1952,9 @@ fn assemble_project_files(
     // always declared, but its zone helpers are gated behind the `time` Cargo
     // feature; this step promotes the feature and re-injects `chrono-tz`. A
     // program that uses no Time kernel keeps the base manifest and drops the
-    // crate. `chrono` core stays unconditional (the always-on log/db/web
-    // timestamp floor), so it is never touched here. Anchors on `default = [` /
+    // crate. `chrono` core is gated separately by `time-core`/`log` (the
+    // log/db/web timestamp surfaces reach it), so it is never touched here.
+    // Anchors on `default = [` /
     // `chrono = "0.4"`, not the tokio line, so it composes with the sync base.
     let cargo_toml = if ctx.uses_time {
         chrono_tz_cargo_toml(&cargo_toml)?
@@ -2050,7 +2051,7 @@ fn assemble_project_files(
         // program reaches an `Ipe.Random` kernel OR the async runtime (`task.rs`'s
         // tokio retry-with-jitter path draws from `random`'s LCG). A bare (sync)
         // program that never draws random keeps it absent. `getrandom` is
-        // unaffected (the always-on crypto_core floor keeps it).
+        // unaffected here — `getrandom` is enabled by `random || crypto-core`.
         if ctx.reaches_random() {
             mod_rs.push_str(RUNTIME_MOD_RS_RANDOM_APPEND);
         }
@@ -2105,7 +2106,7 @@ fn assemble_project_files(
         }
         // Heavy Ipe.Crypto. `crypto` (the sole consumer of `sha1` + `md-5` +
         // `aes-gcm` + `chacha20poly1305` + `pbkdf2`) is declared when the program
-        // uses a heavy `Ipe.Crypto` kernel. The always-on `crypto_core` floor is
+        // uses a heavy `Ipe.Crypto` kernel. The `crypto_core` floor is
         // in the base module set; nothing else reaches the heavy module, so the
         // flag alone gates it. A program using only SHA-2/HMAC/RSA/entropy keeps
         // it absent, dropping the five crates and their trees.
@@ -3413,9 +3414,9 @@ fn http_client_cargo_toml(base: &str) -> DResult<String> {
 /// feature. A program that reaches an `Ipe.Time` kernel promotes the feature and
 /// gets the crate back; a program that uses no `Ipe.Time` kernel keeps the base
 /// manifest — no `time` in `default`, no `chrono-tz` line — so the helpers
-/// compile out and the crate is dropped. `chrono` core (the always-on
-/// `log`/`db`/`web`/`telemetry` timestamp floor) stays unconditional and is
-/// untouched here.
+/// compile out and the crate is dropped. `chrono` core (the base crate the
+/// `log`/`db`/`web`/`telemetry` timestamp surfaces reach) is gated separately
+/// by `time-core`/`log` and untouched here.
 ///
 /// The dep is re-inserted exactly where the base template declared it (after
 /// `chrono = "0.4"`) so a Time-using manifest is byte-identical to the
@@ -3560,7 +3561,7 @@ fn url_cargo_toml(base: &str) -> DResult<String> {
 /// to either by file extension. Both are leaf dependencies (nothing else in the
 /// base manifest pulls them), so gating them here keeps a program that never
 /// touches the TOML/YAML surface — including a JSON-only `Config` program, whose
-/// combinators emit into the always-on `json` module — free of both crates.
+/// combinators emit into the `json` module — free of both crates.
 ///
 /// The versions come from the [`crate_specs`] SSOT (drift-guarded against
 /// `runtime/Cargo.toml`).

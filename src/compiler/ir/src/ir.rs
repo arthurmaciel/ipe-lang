@@ -103,7 +103,7 @@ pub struct Module {
     /// whether to declare `pub mod config_decode; pub use config_decode::*;` in
     /// the emitted `ipe_runtime/mod.rs` and add the `toml` + `serde_yaml`
     /// dependencies. The JSON-backed `Config.*` combinators (`string` / `field`
-    /// / `map` / …) emit into the always-on `json` module and do NOT set this
+    /// / `map` / …) emit into the `json` module and do NOT set this
     /// flag, so a JSON-only program pulls neither crate.
     pub uses_config: bool,
     /// `true` when the lowerer detected at least one `Ipe.Compression` kernel
@@ -163,7 +163,7 @@ pub struct Module {
     /// `pub mod random;` in the emitted `ipe_runtime/mod.rs`. `random` is a
     /// standalone leaf — no other surface reaches it — so this flag alone gates
     /// the module. The `random` feature gates only the module declaration, NOT the
-    /// `getrandom` crate (which the always-on `crypto_core` floor keeps present);
+    /// `getrandom` crate (which the `crypto_core` floor keeps present);
     /// a program that reaches no `Ipe.Random` kernel drops the `random.rs` module.
     pub uses_random: bool,
     /// `true` when the lowerer detected an `Ipe.Log` kernel
@@ -347,8 +347,9 @@ pub struct Module {
     /// and add the `chrono-tz` dependency — the IANA-zone calendar surface of the
     /// always-declared `time` runtime module, gated behind that feature. A
     /// program that reaches no `Ipe.Time` kernel drops the crate. The `chrono`
-    /// core crate (the always-on `log`/`db`/`web`/`telemetry` timestamp floor)
-    /// stays unconditional and is unaffected by this flag. `Time.every` is TEA,
+    /// core crate (reached by the `log`/`db`/`web`/`telemetry` timestamp
+    /// surfaces) is gated separately by `time-core`/`log`, not by this flag.
+    /// `Time.every` is TEA,
     /// tracked by `uses_tea`.
     pub uses_time: bool,
     /// `true` when the lowerer detected the `Ipe.Env` `Env.public` kernel

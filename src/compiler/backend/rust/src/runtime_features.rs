@@ -81,7 +81,7 @@ pub enum RuntimeFeature {
     /// `Ipe.Encoding` / `Ipe.Bytes` kernel, OR a crypto/db/server/email/jwt/web
     /// surface whose runtime module uses the raw codec crates). A program that
     /// reaches none of these drops `base64` + `hex` (`percent-encoding` also
-    /// enters via the always-on `serde_urlencoded` floor dep, untouched here).
+    /// enters via the `serde_urlencoded` floor dep, untouched here).
     Encoding,
     /// `regex` — the `regex` crate (+ its `aho-corasick` / `regex-automata` /
     /// `regex-syntax` subtree) and the `regex_kernel.rs` module (`reaches_regex()`:

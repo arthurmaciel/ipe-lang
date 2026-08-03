@@ -5868,7 +5868,7 @@ impl StdlibKernel {
     ///
     /// The rest of the `Ipe.Config` surface (`string` / `int` / `field` / `map`
     /// / `oneOf` / …) is NOT here: those combinators emit the shared
-    /// `json_decode_*` / `decode_*` symbols that live in the always-on `json`
+    /// `json_decode_*` / `decode_*` symbols that live in the `json`
     /// module, so a program using only them pulls neither `config_decode` nor
     /// the `toml` / `serde_yaml` crates.
     #[must_use]
@@ -6314,7 +6314,7 @@ impl StdlibKernel {
     /// `uses_crypto` and by the backend to declare `crypto` in the emitted
     /// `ipe_runtime/mod.rs` and add those five crates to the emitted manifest.
     ///
-    /// The always-on `crypto_core` floor (SHA-2 hash/HMAC, RSA sign/verify,
+    /// The `crypto_core` floor (SHA-2 hash/HMAC, RSA sign/verify,
     /// constant-time compare, the entropy pair, the `Key`/`Mac` newtypes) is
     /// EXCLUDED here — those kernels emit into `crypto_core`, which stays in the
     /// base module set, so their presence never forces the heavy `crypto` module
@@ -7752,7 +7752,7 @@ mod tests {
     /// symbol is exactly one whose emit name starts with `config_`
     /// (`config_nullable` / `config_maybe` / `config_dict` / `config_decode_*` /
     /// `config_load_from_file`). The remaining `Config.*` combinators emit the
-    /// shared `json_decode_*` / `decode_*` symbols in the always-on `json`
+    /// shared `json_decode_*` / `decode_*` symbols in the `json`
     /// module and must NOT be `is_config()` — gating on them would pull `toml` /
     /// `serde_yaml` into a program that only decodes JSON. Both directions are
     /// asserted, so a new `Config.*` kernel added on either side of the split
@@ -7999,7 +7999,7 @@ mod tests {
     /// Every HEAVY `Ipe.Crypto` kernel emits a symbol into the gated `crypto`
     /// runtime module (the sole consumer of `sha1` / `md-5` / `aes-gcm` /
     /// `chacha20poly1305` / `pbkdf2`), so `is_crypto()` MUST report exactly those
-    /// kernels — and NONE of the always-on `crypto_core` floor kernels (SHA-2
+    /// kernels — and NONE of the `crypto_core` floor kernels (SHA-2
     /// hash/HMAC, RSA sign/verify, constant-time compare, the entropy pair, the
     /// `Key`/`Mac` newtypes). The residency is content-addressed off the emit
     /// symbol: a `crypto` (heavy) symbol is exactly one that names a legacy

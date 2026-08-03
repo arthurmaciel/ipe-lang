@@ -3,7 +3,7 @@
 // This module holds the entropy pair (`crypto_random_bytes`/
 // `crypto_random_token`, emitted into every program via the kernel-wrapper
 // prelude), the SHA-2 hash + HMAC family, the typed `Key`/`Mac` role newtypes,
-// and the constant-time compare — the primitives an always-on floor keeps. The
+// and the constant-time compare — the primitives the crypto floor keeps. The
 // RSA SHA-256 sign/verify pair is `cfg(feature = "crypto")`: it compiles (and
 // pulls the `rsa` crate) only when the program reaches the heavy crypto floor
 // (a `Crypto` kernel, a `Jwt` kernel, or the `Auth` surface). The heavier,
@@ -192,7 +192,7 @@ fn hex_lower(buf: &[u8]) -> String {
 
 /// URL-safe base64 WITHOUT padding, byte-identical to Go's
 /// `base64.RawURLEncoding.EncodeToString` — the `-_` alphabet, no `=` pad. Inline
-/// (not the `base64` crate) so the always-on `crypto_core` floor carries no
+/// (not the `base64` crate) so the `crypto_core` floor carries no
 /// unconditional codec-crate reference: `crypto_random_token` is emitted in every
 /// program's FIXED prelude wrapper block, so it must stay available at
 /// `--no-default-features` for `base64` to be optional. A pure translation of the
