@@ -95,6 +95,13 @@ fn fixtures() -> Vec<(&'static str, String)> {
             "open_record_signature",
             "module M exposing (getName)\n\n\ngetName : { r | name : String } -> String\ngetName rec =\n    rec.name\n".to_owned(),
         ),
+        // Section comments written BETWEEN union constructors stay inside the
+        // type, each on its own line just above the constructor it annotates —
+        // they are not pushed out to the next top-level declaration.
+        (
+            "union_interior_comments",
+            "module M exposing (Msg)\n\n\ntype Msg\n    = NoOp\n    -- navigation\n    | ToggleMenu\n    -- blog\n    | GotPosts\n".to_owned(),
+        ),
     ]
 }
 
@@ -162,6 +169,40 @@ fn comments_survive() {
     assert!(
         out.contains("{- block before g -}"),
         "block comment lost:\n{out}"
+    );
+}
+
+/// Comments interleaved between union constructors stay attached to the
+/// constructor they precede — inside the type, in source order — rather than
+/// being detached to the next top-level declaration or the module tail. The
+/// canonical form is an exact fixed point.
+#[test]
+fn union_interior_comments_stay_inside_the_type() {
+    let src = fixtures()
+        .into_iter()
+        .find(|(n, _)| *n == "union_interior_comments")
+        .map(|(_, s)| s)
+        .unwrap();
+    let out = format_source(&src).unwrap();
+    // Both section comments survive, each on its own line directly above its
+    // constructor and before the closing of the union (no `main`/next decl).
+    let nav = out.find("-- navigation").expect("navigation comment lost");
+    let toggle = out.find("| ToggleMenu").expect("ToggleMenu ctor lost");
+    let blog = out.find("-- blog").expect("blog comment lost");
+    let posts = out.find("| GotPosts").expect("GotPosts ctor lost");
+    assert!(
+        nav < toggle && toggle < blog && blog < posts,
+        "interior comments must precede their constructors, in order:\n{out}"
+    );
+    // Exact fixed point: the canonical layout is stable across a second pass.
+    assert_eq!(
+        out, src,
+        "union interior comments are not an exact fixed point\n--- got:\n{out}"
+    );
+    assert_eq!(
+        format_source(&out).unwrap(),
+        out,
+        "second pass changed the interior-comment layout\n--- got:\n{out}"
     );
 }
 

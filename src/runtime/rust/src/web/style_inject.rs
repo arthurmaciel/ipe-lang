@@ -32,6 +32,16 @@
 
 use crate::html::{Attribute, Html, is_void};
 
+/// True for elements a scoped `<style>` must NOT be prepended into as a child.
+/// Covers void tags (they render no children) AND value-bearing tags whose
+/// children ARE their content: a `<textarea>`'s children are its text value and
+/// a `<select>`'s are its `<option>`s, so a child `<style>` would leak raw CSS
+/// into the field value / option list. For all of these the injection pass
+/// hoists the `<style>` to a sibling slot instead.
+fn takes_no_style_child(tag: &str) -> bool {
+    is_void(tag) || tag == "textarea" || tag == "select"
+}
+
 /// Every style marker attr this module consumes, across all four passes. Used to
 /// strip a void TREE-ROOT's markers (see `apply_style_injections`). MUST stay in
 /// sync with the per-pass marker lists below.
@@ -84,15 +94,16 @@ pub fn apply_style_injections<M>(node: &mut Html<M>) {
         &|id, a| build_anim(id, a),
         0,
     );
-    // A void element at the TREE ROOT is never self-handled (inject_pass skips
-    // void self-build, since a void tag can take no child <style>) and has no
-    // parent to hoist a sibling <style> after it. Its markers would
-    // therefore survive every pass and leak as inert data-* attrs, breaking the
-    // post-condition. Strip them here. The CSS is necessarily dropped — a void
-    // root has nowhere to carry a <style> node. (A void node WITH a parent is
-    // unaffected: the parent's loop still finds its markers intact and hoists.)
+    // An element that takes no style child (void, or value-bearing
+    // textarea/select) at the TREE ROOT is never self-handled (inject_pass skips
+    // its self-build) and has no parent to hoist a sibling <style> after it. Its
+    // markers would therefore survive every pass and leak as inert data-* attrs,
+    // breaking the post-condition. Strip them here. The CSS is necessarily
+    // dropped — such a root has nowhere to carry a <style> node. (The same node
+    // WITH a parent is unaffected: the parent's loop still finds its markers
+    // intact and hoists.)
     if let Html::HElement(t, attrs, _) = node
-        && is_void(t)
+        && takes_no_style_child(t)
     {
         strip_markers(attrs, ALL_MARKERS);
     }
@@ -117,20 +128,22 @@ fn inject_pass<M>(
         Html::HElement(t, a, k) => (t, a, k),
         _ => return,
     };
-    // Non-void self: build + prepend the style child (build_style_node strips
-    // the markers regardless of outcome).
-    if !is_void(tag)
+    // Style-child-bearing self: build + prepend the style child (build_style_node
+    // strips the markers regardless of outcome). Elements that take no style child
+    // (void, or value-bearing textarea/select) are hoisted by the parent below.
+    if !takes_no_style_child(tag)
         && let Some(style) = build_style_node(attrs, markers, style_attr, build)
     {
         kids.insert(0, style);
     }
     // Walk children, recursing into each and hoisting a sibling style block
-    // after any void child that still carries a marker.
+    // after any child that can't take a style child of its own but still
+    // carries a marker.
     let mut out: Vec<Html<M>> = Vec::with_capacity(kids.len());
     for mut child in std::mem::take(kids) {
         inject_pass(&mut child, markers, style_attr, build, depth + 1);
         let hoist = match &mut child {
-            Html::HElement(ct, ca, _) if is_void(ct) => {
+            Html::HElement(ct, ca, _) if takes_no_style_child(ct) => {
                 build_style_node(ca, markers, style_attr, build)
             }
             _ => None,
@@ -718,6 +731,59 @@ mod tests {
         } else {
             panic!("expected element");
         }
+    }
+
+    #[test]
+    fn textarea_pseudo_class_hoists_style_to_sibling_not_into_value() {
+        use crate::html::render_html;
+        // A <textarea>'s children ARE its text value, so a scoped <style> must be
+        // hoisted to a sibling slot after it — never prepended as a child, which
+        // would render raw CSS as the field's content. The user's typed value
+        // (splice-as-content) must survive untouched.
+        let mut tree: Html<()> = Html::HElement(
+            "div".to_string(),
+            vec![attr("ipe-id", "r")],
+            vec![Html::HElement(
+                "textarea".to_string(),
+                vec![
+                    attr("ipe-id", "r_0_textarea"),
+                    attr("value", "user body"),
+                    attr("data-ipe-pc-rules", "f|border-color: blue"),
+                ],
+                vec![],
+            )],
+        );
+        apply_style_injections(&mut tree);
+        if let Html::HElement(_, _, kids) = &tree {
+            assert_eq!(kids.len(), 2, "textarea + hoisted style sibling");
+            match &kids[0] {
+                Html::HElement(t, _, ta_kids) => {
+                    assert_eq!(t, "textarea");
+                    assert!(
+                        ta_kids.is_empty(),
+                        "no <style> child may nest inside the textarea"
+                    );
+                }
+                _ => panic!("expected textarea"),
+            }
+            assert!(matches!(&kids[1], Html::HElement(t, _, _) if t == "style"));
+        } else {
+            panic!("expected element");
+        }
+        // End-to-end HTML: the textarea's body is the user's value, NOT CSS.
+        let s = render_html(&tree);
+        assert!(
+            s.contains(">user body</textarea>"),
+            "textarea body must be the user's value: {s}"
+        );
+        assert!(
+            !s.contains("<style") || s.find("<style").unwrap() > s.find("</textarea>").unwrap(),
+            "the <style> must sit after (outside) the textarea, never in its value: {s}"
+        );
+        assert!(
+            !s.contains("data-ipe-pc-rules"),
+            "pseudo-class marker must be consumed into a style rule: {s}"
+        );
     }
 
     #[test]
