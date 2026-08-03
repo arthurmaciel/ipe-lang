@@ -1315,6 +1315,14 @@ pub fn emit_program(ctx: &EmitCtx, program: &Program) -> DResult<EmittedProject>
         BTreeSet::new()
     };
     ctx.assert_record_structs_disjoint_from_type_namespace(&mod_idents)?;
+    // The row-poly witness substrate shares Rust's TYPE namespace with the
+    // record structs and enums above: the synthesised `IpeHas<Field>` traits
+    // must be pairwise distinct AND disjoint from user types / mods, or two
+    // field names that camel-case to one trait (E0428) reach rustc.
+    ctx.assert_row_witness_names_disjoint(
+        &crate::emit_types::row_witness_field_names(program),
+        &mod_idents,
+    )?;
 
     // The emitted Rust source files (`src/main.rs` plus, in the real split,
     // one `src/ipe_mods/<ident>.rs` per module). The manifest + runtime-module
@@ -2711,6 +2719,10 @@ pub fn assemble_split_manifest(
         })
         .collect::<DResult<BTreeSet<String>>>()?;
     ctx.assert_record_structs_disjoint_from_type_namespace(&mod_idents)?;
+    ctx.assert_row_witness_names_disjoint(
+        &crate::emit_types::row_witness_field_names(program),
+        &mod_idents,
+    )?;
 
     let mut rust_sources: Vec<(RelPath, String)> = Vec::new();
 

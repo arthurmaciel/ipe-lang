@@ -25,6 +25,9 @@
 //! | `row_poly_greet` | P1 | accept | one row-poly fn called at TWO shapes (`{name,age}`, `{name,id}`); both concrete structs + a witness impl each; `IPE_E2E=1` prints `Ada, Bo` |
 //! | `row_poly_accessor` | P8 | accept | first-class accessor `.name` (desugars to `\r -> r.name`) through `List.map` over a superset list; emits a concrete getter closure over the superset struct; `IPE_E2E=1` prints `Ada, Bo` |
 //! | `row_poly_accessor_two_shapes` | P8 | accept | `.name` through `List.map` over two DIFFERENT record shapes; each occurrence a concrete getter; `IPE_E2E=1` prints `Ada, Bo | Cy, Di` |
+//! | `row_poly_let_rebind_neg` | row containment | reject | a row-typed param re-bound (`let n = rec in n.name`) escapes the direct-access form → IPE-L0131 (else the emitted `n.name` is E0609) |
+//! | `row_poly_subset_pattern_param_neg` | row containment | reject | a row param bound with a subset pattern (`getName {name} = name`) → IPE-L0131 (else the destructure of `R1` is E0308) |
+//! | `row_poly_non_first_arg_neg` | row containment | reject | a single-field row in a non-first arg reached via a body lambda → clean IPE-L0131 (else the IPE-I0001 ICE backstop) |
 //!
 //! Run the E2E accept-path bodies (real `cargo build` + run) with:
 //! ```text
@@ -535,6 +538,113 @@ fn row_poly_greet_cargo_builds_and_prints_both() {
     assert_eq!(
         outcome.stdout, "Ada, Bo\n",
         "must print both greetings — one machine copy of greet per record shape"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Row-containment tripwires — a row-typed value is emittable ONLY as the direct
+// receiver of a field read (`rec.name`). Each fixture below is a non-routable
+// position that would otherwise reach the backend as a bare `R{n}` generic and
+// emit Rust that cannot compile (or ICE at the type-lowering backstop). All
+// must reject with IPE-L0131 and emit NO Rust. Compile-time only (no `cargo`),
+// so no `IPE_E2E` gate.
+// ---------------------------------------------------------------------------
+
+/// A row-typed parameter re-bound to a fresh local (`let n = rec in n.name`)
+/// lets the row value escape the direct-access form: `n` carries the bare `R1`
+/// generic, so `n.name` would emit a struct read against an unknown struct
+/// (E0609). The lowering containment check fails it closed with IPE-L0131.
+#[test]
+fn let_rebind_of_row_is_ipe_l0131() {
+    let name = "row_poly_let_rebind_neg";
+    let entry = golden_dir(name).join("Main.ipe");
+    let out = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join(format!("{name}_out"));
+    let _ = std::fs::remove_dir_all(&out);
+
+    let Ok(runtime) = ipe::resolve_runtime() else {
+        eprintln!("SKIP {name}: runtime not available");
+        return;
+    };
+    let res = ipe::build(&entry, &out, &runtime);
+    assert!(
+        res.is_err(),
+        "{name} must fail to compile (row value escapes)"
+    );
+    let Err(err) = res else { return };
+    assert_eq!(
+        diag_code(&err),
+        Some(ipe_diagnostics::IPE_L0131),
+        "a let-rebound row value must be IPE-L0131 (else the emitted `n.name` \
+         is E0609); err = {err}"
+    );
+    assert!(
+        !out.join("src").join("main.rs").exists(),
+        "{name}: no Rust must be emitted on a rejection"
+    );
+}
+
+/// A row-typed parameter bound with a SUBSET record pattern (`getName {name} =
+/// name`) would have the lowerer destructure the bare `R1` generic with a
+/// concrete struct pattern (E0308). Only a plain-variable binder over a row is
+/// routable, so a subset-pattern binder must reject with IPE-L0131.
+#[test]
+fn subset_pattern_param_of_row_is_ipe_l0131() {
+    let name = "row_poly_subset_pattern_param_neg";
+    let entry = golden_dir(name).join("Main.ipe");
+    let out = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join(format!("{name}_out"));
+    let _ = std::fs::remove_dir_all(&out);
+
+    let Ok(runtime) = ipe::resolve_runtime() else {
+        eprintln!("SKIP {name}: runtime not available");
+        return;
+    };
+    let res = ipe::build(&entry, &out, &runtime);
+    assert!(
+        res.is_err(),
+        "{name} must fail to compile (subset pattern over a row)"
+    );
+    let Err(err) = res else { return };
+    assert_eq!(
+        diag_code(&err),
+        Some(ipe_diagnostics::IPE_L0131),
+        "a subset-pattern param over a row must be IPE-L0131 (was \
+         exit-0-then-cargo-fail E0308); err = {err}"
+    );
+    assert!(
+        !out.join("src").join("main.rs").exists(),
+        "{name}: no Rust must be emitted on a rejection"
+    );
+}
+
+/// A single-field row in a NON-FIRST argument position reached through an inner
+/// body lambda (`getName n = \rec -> rec.name`) passes the signature gate but
+/// leaves the row arrow in the trailing type the body never binds as a
+/// parameter. Such a row must surface a clean IPE-L0131, never the IPE-I0001
+/// ICE backstop the span-less type-lowering path would otherwise raise — a
+/// well-typed program must not reach a compiler-internal invariant violation.
+#[test]
+fn non_first_arg_row_is_ipe_l0131_not_ice() {
+    let name = "row_poly_non_first_arg_neg";
+    let entry = golden_dir(name).join("Main.ipe");
+    let out = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join(format!("{name}_out"));
+    let _ = std::fs::remove_dir_all(&out);
+
+    let Ok(runtime) = ipe::resolve_runtime() else {
+        eprintln!("SKIP {name}: runtime not available");
+        return;
+    };
+    let res = ipe::build(&entry, &out, &runtime);
+    assert!(res.is_err(), "{name} must fail to compile");
+    let Err(err) = res else { return };
+    assert_eq!(
+        diag_code(&err),
+        Some(ipe_diagnostics::IPE_L0131),
+        "a non-first-arg row reached via a body lambda must be a clean \
+         IPE-L0131, never the IPE-I0001 ICE backstop; err = {err}"
+    );
+    assert!(
+        !out.join("src").join("main.rs").exists(),
+        "{name}: no Rust must be emitted on a rejection"
     );
 }
 
