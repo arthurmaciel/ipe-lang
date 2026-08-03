@@ -8,6 +8,10 @@
 //! projection. Backed by `list_sort_by` (decorate-sort-undecorate, NaN-safe,
 //! stable via `Vec::sort_by`).
 //!
+//! `unique : List a -> List a` — removes duplicates, keeping the first
+//! occurrence of each element in first-seen order. Backed by `list_unique`
+//! (equality-only, `PartialEq`; no `Ord`/`Hash` obligation).
+//!
 //! Without a `StdlibKernel` variant for each, any call
 //! emits `error[IPE-L0108]: kernel function not available yet`.
 //!
@@ -81,6 +85,28 @@ fn sort_by_stable_by_age() {
     assert!(
         out.stdout.contains("Alice,Bob,Charlie"),
         "sortBy must produce stable ascending sort by age; got: {:?}",
+        out.stdout,
+    );
+}
+
+/// `List.unique` — duplicates dropped, first occurrence kept in first-seen order.
+/// `[3,1,3,2,1,3,2]` yields `[3,1,2]`; `["a","b","a","c","b"]` yields `["a","b","c"]`.
+#[test]
+fn unique_keeps_first_occurrence_order() {
+    if std::env::var("IPE_E2E").is_err() {
+        return;
+    }
+    let dir = compile_golden("unique_seal");
+    let out = crate::support::build_and_run_emitted("unique_seal", &dir);
+    assert_eq!(
+        out.exit_code,
+        Some(0),
+        "must exit 0; got {:?}",
+        out.exit_code
+    );
+    assert!(
+        out.stdout.contains("3,1,2 a,b,c"),
+        "unique must drop duplicates keeping first-seen order; got: {:?}",
         out.stdout,
     );
 }

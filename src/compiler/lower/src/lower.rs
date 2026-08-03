@@ -14461,6 +14461,7 @@ impl<'a> Lowerer<'a> {
                 | KernelFn::ListProduct
                 | KernelFn::ListMaximum
                 | KernelFn::ListMinimum
+                | KernelFn::ListUnique
                 | KernelFn::ListUnzip
                 | KernelFn::BasicsNot
                 | KernelFn::BasicsToString
@@ -16206,6 +16207,7 @@ impl<'a> Lowerer<'a> {
                     ("List", "product") => Ok(Callee::Kernel(KernelFn::ListProduct)),
                     ("List", "maximum") => Ok(Callee::Kernel(KernelFn::ListMaximum)),
                     ("List", "minimum") => Ok(Callee::Kernel(KernelFn::ListMinimum)),
+                    ("List", "unique") => Ok(Callee::Kernel(KernelFn::ListUnique)),
                     ("List", "intersperse") => Ok(Callee::Kernel(KernelFn::ListIntersperse)),
                     ("List", "partition") => Ok(Callee::Kernel(KernelFn::ListPartition)),
                     ("List", "unzip") => Ok(Callee::Kernel(KernelFn::ListUnzip)),

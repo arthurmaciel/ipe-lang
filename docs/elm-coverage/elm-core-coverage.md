@@ -275,15 +275,15 @@ Operations on ordered, homogeneous linked lists.
 | `foldl` | `(a -> b -> b) -> b -> List a -> b` | ✓ |
 | `foldr` | `(a -> b -> b) -> b -> List a -> b` | ✓ |
 | `filter` | `(a -> Bool) -> List a -> List a` | ✓ |
-| `filterMap` | `(a -> Maybe b) -> List a -> List b` | ✗ |
+| `filterMap` | `(a -> Maybe b) -> List a -> List b` | ✓ (`Ipe.List.filterMap`) |
 | `length` | `List a -> Int` | ✓ |
 | `reverse` | `List a -> List a` | ✓ |
 | `member` | `a -> List a -> Bool` | ✓ |
 | `all` | `(a -> Bool) -> List a -> Bool` | ✓ |
 | `any` | `(a -> Bool) -> List a -> Bool` | ✓ |
-| `maximum` | `List comparable -> Maybe comparable` | ✗ |
-| `minimum` | `List comparable -> Maybe comparable` | ✗ |
-| `sum` | `List number -> number` | ✗ |
+| `maximum` | `List comparable -> Maybe comparable` | ✓ (`Ipe.List.maximum`; `Nothing` on `[]`) |
+| `minimum` | `List comparable -> Maybe comparable` | ✓ (`Ipe.List.minimum`; `Nothing` on `[]`) |
+| `sum` | `List number -> number` | ✓ (`Ipe.List.sum`; `0` on `[]`) |
 | `product` | `List number -> number` | ✗ |
 | `append` | `List a -> List a -> List a` | ✓ |
 | `concat` | `List (List a) -> List a` | ✓ |
@@ -294,8 +294,9 @@ Operations on ordered, homogeneous linked lists.
 | `map4` | `(a -> b -> c -> d -> result) -> List a -> List b -> List c -> List d -> List result` | ✗ |
 | `map5` | `(a -> b -> c -> d -> e -> result) -> List a -> List b -> List c -> List d -> List e -> List result` | ✗ |
 | `sort` | `List comparable -> List comparable` | ✗ |
-| `sortBy` | `(a -> comparable) -> List a -> List a` | ✗ |
-| `sortWith` | `(a -> a -> Order) -> List a -> List a` | ✗ |
+| `sortBy` | `(a -> comparable) -> List a -> List a` | ✓ (`Ipe.List.sortBy`; stable) |
+| `sortWith` | `(a -> a -> Order) -> List a -> List a` | ✓ (`Ipe.List.sortWith`; stable) |
+| `unique` | `List a -> List a` | ✓ (Ipê extra beyond Elm core; keeps first occurrence, equality-only) |
 | `isEmpty` | `List a -> Bool` | ✓ |
 | `head` | `List a -> Maybe a` | ✓ |
 | `tail` | `List a -> Maybe (List a)` | ✓ |

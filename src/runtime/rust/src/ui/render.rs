@@ -45,7 +45,9 @@ fn length_css(len: &Length) -> String {
     match len {
         Length::Px(n) => format!("{n}px"),
         Length::Content => "auto".to_owned(),
-        // Fill(1) = "100%", Fill(n) = "100%" with flex-grow:n handled separately
+        // Fill(n) = "100%"; the flex sizing (flex-grow:n, flex-basis:0) that
+        // makes the portion divide free space is emitted at the AttrWidth /
+        // AttrHeight arms, not here.
         Length::Fill(_) => "100%".to_owned(),
         Length::Min(n, inner) => format!("min({}px,{})", n, length_css(inner)),
         Length::Max(n, inner) => format!("max({}px,{})", n, length_css(inner)),
@@ -96,14 +98,26 @@ pub(crate) fn build_style_string<M>(attrs: &[Attribute<M>]) -> String {
             Attribute::AttrWidth(len) => {
                 decl!("width:{}", length_css(len));
                 if let Length::Fill(n) = len {
+                    // elm-ui portion model: `fillPortion n` divides the row's
+                    // free space, so the flex base size must be 0 and growth is
+                    // the portion. An explicit `flex-basis:0` overrides `width`
+                    // as the flex base inside a flex row (without it, `width:100%`
+                    // becomes the base size and every portioned column wants the
+                    // full row, wrapping under `flex-wrap:wrap`). Outside a flex
+                    // container `flex-basis` is inert and `width:100%` still fills.
                     decl!("flex-grow:{n}");
+                    decl!("flex-basis:0");
                     decl!("min-width:0");
                 }
             }
             Attribute::AttrHeight(len) => {
                 decl!("height:{}", length_css(len));
                 if let Length::Fill(n) = len {
+                    // Column main-axis analogue of the width portion model above:
+                    // `flex-basis:0` makes a portioned height divide the column's
+                    // free space instead of taking its content height as the base.
                     decl!("flex-grow:{n}");
+                    decl!("flex-basis:0");
                     decl!("min-height:0");
                 }
             }
@@ -1071,10 +1085,10 @@ mod tests {
     }
 
     #[test]
-    fn ui_media_query_emits_wrapper_with_mq_markers() {
-        // `Ui.mediaQuery "(min-width: 768px)" [Background.color …] child` must
-        // wrap the child in a <div> carrying data-ipe-mq-q (the verbatim
-        // query) + data-ipe-mq-rules (the attrs folded through
+    fn ui_media_query_emits_mq_markers_on_leaf_wrapper() {
+        // A non-attributed leaf child (Text) has no attribute slot, so the
+        // markers fall back onto a wrapper node carrying data-ipe-mq-q (the
+        // verbatim query) + data-ipe-mq-rules (the attrs folded through
         // build_style_string) — the wire pair
         // `ipe_runtime::web::style_inject::build_mq` decodes into a
         // ipe-id-scoped <style> block post-`assign_ipe_ids`.
@@ -1094,6 +1108,47 @@ mod tests {
             "mediaQuery rules marker missing/malformed: {s}"
         );
         assert!(s.contains("responsive"), "child must render: {s}");
+    }
+
+    #[test]
+    fn ui_media_query_attaches_markers_to_attributed_child_no_wrapper() {
+        // An attributed child (a Ui.column here) must carry the media-query
+        // markers on its OWN attribute list — no extra wrapper node — so the
+        // breakpoint rule targets the styled node and can re-lay-out its own
+        // contents (e.g. align-items on the column itself).
+        let child: Element<TestMsg> = super::super::helpers::ui_column_(
+            vec![Attribute::AttrBgColor(Color::Rgba(9, 9, 9, 1.0))],
+            vec![Element::Text("col".to_owned())],
+        );
+        let elem = super::super::helpers::ui_media_query_::<TestMsg>(
+            "(max-width: 999px)".to_owned(),
+            vec![Attribute::AttrStyle(
+                "align-items".to_owned(),
+                "center".to_owned(),
+            )],
+            child,
+        );
+        // The returned element is the column itself (a Node), carrying the
+        // markers directly — its children are the column's own contents
+        // (the "col" text), NOT a re-wrapped column node.
+        match &elem {
+            Element::Node(_, attrs, kids) => {
+                let has_marker = attrs.iter().any(|a| {
+                    matches!(
+                        a,
+                        Attribute::AttrAttribute(k, _) if k == "data-ipe-mq-q"
+                    )
+                });
+                assert!(has_marker, "markers must land on the child's own attrs");
+                assert_eq!(kids.len(), 1, "column's own single child, no wrapper");
+                assert!(
+                    matches!(&kids[0], Element::Text(t) if t == "col"),
+                    "returned node's child is the column's content, not a wrapped column: {:?}",
+                    kids[0]
+                );
+            }
+            other => panic!("expected the attributed child Node back, got {other:?}"),
+        }
     }
 
     #[test]

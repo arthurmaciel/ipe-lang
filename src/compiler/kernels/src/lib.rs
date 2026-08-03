@@ -244,6 +244,7 @@ pub enum StdlibKernel {
     ListProduct,
     ListMaximum,
     ListMinimum,
+    ListUnique,
     ListIntersperse,
     ListPartition,
     ListUnzip,
@@ -1940,6 +1941,7 @@ impl StdlibKernel {
             Self::ListProduct => d("List", "product", 1, Pure, "list_product"),
             Self::ListMaximum => d("List", "maximum", 1, Pure, "list_maximum"),
             Self::ListMinimum => d("List", "minimum", 1, Pure, "list_minimum"),
+            Self::ListUnique => d("List", "unique", 1, Pure, "list_unique"),
             Self::ListIntersperse => d("List", "intersperse", 2, Pure, "list_intersperse"),
             Self::ListPartition => d("List", "partition", 2, Pure, "list_partition"),
             Self::ListUnzip => d("List", "unzip", 1, Pure, "list_unzip"),
@@ -3529,6 +3531,7 @@ impl StdlibKernel {
         Self::ListProduct,
         Self::ListMaximum,
         Self::ListMinimum,
+        Self::ListUnique,
         Self::ListIntersperse,
         Self::ListPartition,
         Self::ListUnzip,
@@ -4910,6 +4913,7 @@ impl StdlibKernel {
             | Self::ListProduct
             | Self::ListMaximum
             | Self::ListMinimum
+            | Self::ListUnique
             | Self::ListIntersperse
             | Self::ListPartition
             | Self::ListUnzip

@@ -398,6 +398,7 @@ const fn kernel_name(kernel: KernelFn) -> &'static str {
         KernelFn::ListProduct => "List.product",
         KernelFn::ListMaximum => "List.maximum",
         KernelFn::ListMinimum => "List.minimum",
+        KernelFn::ListUnique => "List.unique",
         KernelFn::ListIntersperse => "List.intersperse",
         KernelFn::ListPartition => "List.partition",
         KernelFn::ListUnzip => "List.unzip",
