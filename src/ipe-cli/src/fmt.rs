@@ -787,7 +787,7 @@ impl Printer<'_> {
 
     fn decl(&self, d: &Decl<'_>) -> String {
         match d {
-            Decl::Union(u) => self.union(&u.value),
+            Decl::Union(u) => self.union(u),
             Decl::Alias(a) => self.alias(&a.value),
             Decl::Value(v) => self.value(&v.value),
         }
@@ -807,17 +807,32 @@ impl Printer<'_> {
     /// `type Name vars = A | B c | …` — leading-pipe multiline when it does not
     /// fit, matching elm-format (each constructor on its own line, four-space
     /// indented, aligned `= …` / `| …`).
-    fn union(&self, u: &Union) -> String {
-        let vars = self.type_vars(&u.vars);
+    fn union(&self, u: &Located<Union>) -> String {
+        let uv = &u.value;
+        let vars = self.type_vars(&uv.vars);
         // elm-format ALWAYS breaks a union declaration onto multiple lines —
         // the `= Ctor` sits on its own four-space-indented line, and every
         // subsequent constructor is a leading-`|` continuation line — even when
         // there is a single constructor. There is no single-line union form.
-        let ctor_strs: Vec<String> = u.ctors.iter().map(|c| self.ctor(&c.value)).collect();
-        let mut s = format!("type {}{}", self.sym(u.name.value), vars);
-        for (idx, c) in ctor_strs.iter().enumerate() {
+        let mut s = format!("type {}{}", self.sym(uv.name.value), vars);
+        // A section comment written between two constructors annotates the
+        // constructor it precedes: re-emit it on its own four-space-indented
+        // line just before that constructor's `| Ctor` line, keeping the
+        // author's grouping inside the type. The gap before the FIRST
+        // constructor runs from the type name's end; each later gap runs from
+        // the previous constructor's end; a comment after the last constructor
+        // (still inside the union span) trails on its own line.
+        let mut gap_lo = uv.name.span.hi as usize;
+        for (idx, c) in uv.ctors.iter().enumerate() {
             let lead = if idx == 0 { "=" } else { "|" };
-            let _ = write!(s, "\n    {lead} {c}");
+            for cm in self.comments_before(gap_lo, c.span.lo as usize) {
+                let _ = write!(s, "\n    {}", cm.text);
+            }
+            let _ = write!(s, "\n    {lead} {}", self.ctor(&c.value));
+            gap_lo = c.span.hi as usize;
+        }
+        for cm in self.comments_before(gap_lo, u.span.hi as usize) {
+            let _ = write!(s, "\n    {}", cm.text);
         }
         s
     }
