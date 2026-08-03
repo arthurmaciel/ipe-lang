@@ -19,6 +19,7 @@ fn main() -> ExitCode {
             | ipe::CliError::VerifyFailed { .. }
             | ipe::CliError::UpgradeNoPrebuilt { .. }
             | ipe::CliError::ToolchainMissing(_)
+            | ipe::CliError::EmittedBuildFailed { .. }
             | ipe::CliError::DoctorCritical),
         ) => {
             eprintln!("{err}");

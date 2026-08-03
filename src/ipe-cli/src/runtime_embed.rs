@@ -309,20 +309,45 @@ pub fn materialize() -> Result<ResolvedRuntime, CliError> {
 /// 3. Otherwise materialize the embedded source to `<IPE_HOME>/runtime/<version>/rust`
 ///    and use that (the normal installed path).
 ///
+/// Whichever branch resolves, the result must declare the compiler's own
+/// version: emitting against a differently-versioned runtime is unrepresentable,
+/// so a stale override or drifted in-repo crate is refused here rather than
+/// linked into a `cargo` build that fails opaquely.
+///
 /// # Errors
 /// - [`CliError::RuntimeDirInvalid`] when `$IPE_RUNTIME_DIR` is set but has no
 ///   runtime crate root at or above it.
+/// - [`CliError::RuntimeVersionMismatch`] when the resolved runtime's declared
+///   version is not the compiler's.
 /// - Any error from [`materialize`] when the embedded fallback is taken.
 pub fn resolve() -> Result<ResolvedRuntime, CliError> {
-    if let Some(dir) = std::env::var_os("IPE_RUNTIME_DIR") {
-        return resolve_override(&PathBuf::from(dir));
-    }
+    let resolved = if let Some(dir) = std::env::var_os("IPE_RUNTIME_DIR") {
+        resolve_override(&PathBuf::from(dir))?
+    } else if let Some(in_repo) = resolve_in_repo()? {
+        in_repo
+    } else {
+        materialize()?
+    };
+    check_version(resolved)
+}
 
-    if let Some(resolved) = resolve_in_repo()? {
-        return Ok(resolved);
+/// Refuse a resolved runtime whose declared version is not the compiler's own.
+/// The emitted project pins features against the compiler's runtime, so linking
+/// a differently-versioned crate fails deep inside `cargo`; this catches the
+/// drift at resolution time and refuses loudly instead. A [`materialize`]d
+/// runtime declares [`COMPILER_VERSION`] by construction and always passes; the
+/// guard bites a stale `IPE_RUNTIME_DIR` override or an in-repo crate whose
+/// manifest has drifted.
+fn check_version(resolved: ResolvedRuntime) -> Result<ResolvedRuntime, CliError> {
+    if resolved.version() == COMPILER_VERSION {
+        Ok(resolved)
+    } else {
+        Err(CliError::RuntimeVersionMismatch {
+            path: resolved.root().to_path_buf(),
+            found: resolved.version().to_owned(),
+            expected: COMPILER_VERSION.to_owned(),
+        })
     }
-
-    materialize()
 }
 
 /// Resolve the `$IPE_RUNTIME_DIR` override: verify it names a runtime crate root,
@@ -415,6 +440,68 @@ mod tests {
             text.lines()
                 .any(|l| l.trim() == format!("name = \"{RUNTIME_PACKAGE}\""))
         );
+    }
+
+    /// A resolved runtime whose manifest declares a version other than the
+    /// compiler's is refused by [`check_version`] with the typed
+    /// [`CliError::RuntimeVersionMismatch`], naming the resolved path and both
+    /// versions. This is the guard that keeps a stale runtime from being emitted
+    /// against.
+    #[test]
+    fn mismatched_runtime_version_is_rejected() {
+        let dir = std::env::temp_dir().join(format!(
+            "ipe_runtime_version_test_{}_{}",
+            std::process::id(),
+            COMPILER_VERSION
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("create temp runtime dir");
+        let bogus = "0.0.0-stale";
+        assert_ne!(bogus, COMPILER_VERSION, "the test version must differ");
+        std::fs::write(
+            dir.join(MANIFEST),
+            format!("[package]\nname = \"{RUNTIME_PACKAGE}\"\nversion = \"{bogus}\"\n"),
+        )
+        .expect("write bogus manifest");
+
+        let resolved = verify(&dir)
+            .expect("verify does not error on a well-formed manifest")
+            .expect("a manifest declaring the package verifies");
+        assert_eq!(resolved.version(), bogus);
+
+        let err = check_version(resolved).expect_err("a mismatched version must be rejected");
+        let _ = std::fs::remove_dir_all(&dir);
+        assert!(
+            matches!(
+                &err,
+                CliError::RuntimeVersionMismatch { found, expected, path }
+                    if found == bogus
+                        && expected == COMPILER_VERSION
+                        && path.ends_with(dir.file_name().expect("temp dir has a name"))
+            ),
+            "expected a RuntimeVersionMismatch naming {bogus} vs {COMPILER_VERSION}, got {err:?}"
+        );
+    }
+
+    /// A resolved runtime declaring the compiler's own version passes
+    /// [`check_version`] unchanged — the materialized path is exactly this case.
+    #[test]
+    fn matching_runtime_version_is_accepted() {
+        let dir = std::env::temp_dir().join(format!(
+            "ipe_runtime_version_ok_{}_{}",
+            std::process::id(),
+            COMPILER_VERSION
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("create temp runtime dir");
+        std::fs::write(
+            dir.join(MANIFEST),
+            format!("[package]\nname = \"{RUNTIME_PACKAGE}\"\nversion = \"{COMPILER_VERSION}\"\n"),
+        )
+        .expect("write matching manifest");
+        let resolved = verify(&dir).expect("verify ok").expect("verifies");
+        assert!(check_version(resolved).is_ok());
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     /// `concretize_manifest` touches only the version line and preserves the rest
