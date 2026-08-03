@@ -1061,69 +1061,110 @@ fn apply_fixes(report: &Report, consent: Consent, stream: &impl IsTerminal) {
         return;
     }
     let p = style::Palette::for_stream(stream);
+    // The header sits at the report's base indent; the fix bullets below it are
+    // indented one level deeper so the actionable list reads as nested under it.
     print!(
         "{}",
         style::gutter(&format!("\n{}Suggested fixes{}\n", p.bold, p.reset))
     );
     for check in fixable {
         let Some(fix) = &check.fix else { continue };
-        print!("{}", style::gutter(&preview(fix)));
+        print!("{}", style::gutter(&fix_bullet(check, fix, p)));
         let apply = match consent {
             Consent::All => true,
-            Consent::Interactive => ask("Apply?") == Answer::Yes,
+            Consent::Interactive => ask(&format!("{FIX_INDENT}Apply?")) == Answer::Yes,
         };
         if !apply {
-            print!("{}", style::gutter("  skipped.\n"));
+            print!("{}", style::gutter(&format!("{FIX_BODY_INDENT}skipped.\n")));
             continue;
         }
         match apply_one(fix) {
-            Ok(outcome) => print!("{}", style::gutter(&format!("  {outcome}\n"))),
+            Ok(outcome) => {
+                print!(
+                    "{}",
+                    style::gutter(&format!("{FIX_BODY_INDENT}{outcome}\n"))
+                );
+            }
             Err(e) => {
                 // A fix that fails is reported and the walk continues — one
                 // failed edit must not abort the rest, and it must not exit the
                 // command non-zero (the exit code is the diagnostic verdict, not
                 // the apply outcome).
-                print!("{}", style::gutter(&format!("  could not apply: {e}\n")));
+                print!(
+                    "{}",
+                    style::gutter(&format!("{FIX_BODY_INDENT}could not apply: {e}\n"))
+                );
             }
         }
     }
 }
 
-/// The human preview of a fix — a diff for a config edit, the exact command for
-/// an install, the target directory for the shared-target setup.
-fn preview(fix: &Fix) -> String {
-    match fix {
-        Fix::ConfigEdit(edit) => {
-            let path = edit.target.path().map_or_else(
-                |_| edit.target.label().to_owned(),
-                |p| p.display().to_string(),
-            );
-            format!(
-                "\nedit {} ({})\n  + {} = {:?}\n",
-                edit.target.label(),
-                edit.rationale,
-                edit.key.join("."),
-                edit.value,
-            ) + &format!("  file: {path}\n")
-        }
-        Fix::Install(install) => match &install.method {
-            InstallMethod::Direct { argv } => {
-                format!(
-                    "\ninstall {} — will run:\n  {}\n",
-                    install.tool,
-                    argv.join(" ")
-                )
-            }
-            InstallMethod::PackageManager { command } => format!(
-                "\ninstall {} — run this yourself (it needs your package manager):\n  {command}\n",
-                install.tool
-            ),
-        },
-        Fix::HomeSetup(setup) => format!(
-            "\nconfigure a shared build target\n  target-dir = {:?} (in $IPE_HOME/config.toml)\n",
-            setup.target_dir.display()
-        ),
+/// The indent of a fix bullet, one level deeper than the "Suggested fixes"
+/// header (the header sits at the gutter's base column).
+const FIX_INDENT: &str = "  ";
+/// The indent of a bullet's body lines (problem / `+` / file), one level deeper
+/// again so they hang under the bullet.
+const FIX_BODY_INDENT: &str = "    ";
+
+/// Render one suggested-fix bullet: a bright-yellow bullet leading the detected
+/// problem, then the change as a `+` diff-add line, then the file it touches.
+///
+/// Presented in the order a reader reasons about a fix: what is wrong, what will
+/// change, and where — the `[Y/n]` question the caller prints last completes it.
+/// Colour and indent are the interactive-TTY dressing only; `--plain` / `--json`
+/// never reach here.
+fn fix_bullet(check: &Check, fix: &Fix, p: &style::Palette) -> String {
+    let FixChange { change, file } = fix_change(fix);
+    let mut out = format!(
+        "\n{FIX_INDENT}{}• {}{}\n",
+        p.bright_yellow, check.detail, p.reset
+    );
+    let _ = writeln!(out, "{FIX_BODY_INDENT}+ {change}");
+    if let Some(file) = file {
+        let _ = writeln!(out, "{FIX_BODY_INDENT}{file}");
     }
+    out
+}
+
+/// The change a fix makes (the `+` diff-add text) and the file it touches, if
+/// any. An install changes no file, so its `file` is `None`.
+struct FixChange {
+    /// The one-line diff-add description shown after the `+`.
+    change: String,
+    /// The file the fix writes, when it writes one.
+    file: Option<String>,
+}
+
+/// The `+`-line change text and target file for a fix.
+fn fix_change(fix: &Fix) -> FixChange {
+    match fix {
+        Fix::ConfigEdit(edit) => FixChange {
+            change: format!("{} = {:?}", edit.key.join("."), edit.value),
+            file: Some(config_path_label(edit.target)),
+        },
+        Fix::Install(install) => match &install.method {
+            InstallMethod::Direct { argv } => FixChange {
+                change: format!("install {} ({})", install.tool, argv.join(" ")),
+                file: None,
+            },
+            InstallMethod::PackageManager { command } => FixChange {
+                change: format!("install {} — run yourself: {command}", install.tool),
+                file: None,
+            },
+        },
+        Fix::HomeSetup(setup) => FixChange {
+            change: format!("build.target-dir = {:?}", setup.target_dir.display()),
+            file: Some(config_path_label(ConfigTarget::IpeHome)),
+        },
+    }
+}
+
+/// The resolved on-disk path for a config target, falling back to its short
+/// label when no path can be resolved.
+fn config_path_label(target: ConfigTarget) -> String {
+    target
+        .path()
+        .map_or_else(|_| target.label().to_owned(), |p| p.display().to_string())
 }
 
 /// Apply one fix, returning a one-line outcome for the report. A
@@ -1573,15 +1614,73 @@ mod tests {
 
     #[test]
     fn install_preview_never_pipes_to_shell() {
+        let check = Check {
+            group: Group::Cache,
+            id: "sccache",
+            status: Status::Warn,
+            detail: "sccache not found".to_owned(),
+            suggestion: None,
+            fix: None,
+        };
         let fix = Fix::Install(Install {
             tool: "mold",
             method: InstallMethod::PackageManager {
                 command: "apt install mold".to_owned(),
             },
         });
-        let text = preview(&fix);
+        let text = fix_bullet(&check, &fix, style::Palette::select(false));
         assert!(text.contains("apt install mold"));
-        assert!(!text.contains("| sh"), "no pipe-to-shell in a preview");
+        assert!(!text.contains("| sh"), "no pipe-to-shell in a bullet");
+    }
+
+    #[test]
+    fn fix_bullet_orders_problem_then_change_then_file() {
+        // A config-edit bullet reads: the detected problem, then the `+` change,
+        // then the file it touches — in that order, each on its own line.
+        let check = Check {
+            group: Group::Cache,
+            id: "sccache",
+            status: Status::Ok,
+            detail: "sccache found — not yet wired as the rustc wrapper".to_owned(),
+            suggestion: None,
+            fix: Some(Fix::ConfigEdit(ConfigEdit {
+                target: ConfigTarget::Cargo,
+                key: vec!["build", "rustc-wrapper"],
+                value: "sccache".to_owned(),
+                rationale: "cache builds",
+            })),
+        };
+        let fix = check.fix.clone().expect("fix");
+        let text = fix_bullet(&check, &fix, style::Palette::select(false));
+        let problem = text.find("sccache found").expect("problem line");
+        let change = text.find("+ build.rustc-wrapper").expect("change line");
+        let file = text.find("config.toml").expect("file line");
+        assert!(problem < change, "problem precedes the + change");
+        assert!(change < file, "the + change precedes the file");
+        // The bullet glyph leads, and the plain palette emits no ANSI.
+        assert!(text.contains("• sccache found"));
+        assert!(!text.contains('\x1b'), "plain palette carries no colour");
+    }
+
+    #[test]
+    fn fix_bullet_is_bright_yellow_under_colour() {
+        let check = Check {
+            group: Group::Target,
+            id: "shared-target",
+            status: Status::Warn,
+            detail: "no shared build target".to_owned(),
+            suggestion: None,
+            fix: Some(Fix::HomeSetup(SharedTargetSetup {
+                target_dir: PathBuf::from("/tmp/t"),
+            })),
+        };
+        let fix = check.fix.clone().expect("fix");
+        let text = fix_bullet(&check, &fix, style::Palette::select(true));
+        assert!(
+            text.contains(style::Palette::COLOR.bright_yellow),
+            "the bullet is bright-yellow on a colour terminal"
+        );
+        assert!(text.contains("+ build.target-dir"), "a + change line");
     }
 
     #[test]
