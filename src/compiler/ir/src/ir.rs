@@ -214,6 +214,25 @@ pub struct Module {
     /// via the shared `subtle`, `crypto-core`). A program that reaches no `Secret`
     /// kernel and holds no `Secret` value drops the module and `zeroize`.
     pub uses_secret: bool,
+    /// `true` when the emitted crate names the `Value` (`JsonVal`) or `Decoder<T>`
+    /// type — the two the fixed prelude aliases as `type Value = JsonVal;` and
+    /// `pub type Decoder<T> = ipe_runtime::json::Decoder<IpeError, T>`, both
+    /// hard-referencing the `json` runtime module (`serde_json`).
+    ///
+    /// Set by `ipe_lower` as the union of a call-site signal (any
+    /// `KernelFn::is_json()` variant — a `JsonEnc`/`JsonDec`/`Config`-decoder/
+    /// `Db.Decode`/`Server.json` kernel that builds a `Value`/`Decoder` value in a
+    /// body) and a TYPE-MENTION scan: any `Json` or `Decoder` type in a function
+    /// signature, a record field, or an enum-variant payload. The type-mention
+    /// guard is REQUIRED — a signature can name `Value`/`Decoder` (e.g. a decoder
+    /// forwarded as a parameter) with no `Json.*` call site, so dropping the
+    /// aliases on the call-site flag alone would emit a signature referencing an
+    /// absent `JsonVal` / `ipe_runtime::json::Decoder` (E0412 / E0433). The
+    /// backend reads this flag (`reaches_json`) to keep both prelude aliases and
+    /// select the `json` feature; a program that reaches neither drops the
+    /// aliases, `serde_json`, and the whole serde stack. FAIL-CLOSED: any
+    /// uncertain `json` consumer keeps the feature on.
+    pub uses_json: bool,
     /// `true` when the lowerer detected at least one HEAVY `Ipe.Crypto` kernel
     /// call (legacy SHA-1/MD5, AES-GCM / ChaCha20-Poly1305 AEAD, or PBKDF2
     /// key derivation).
@@ -3853,6 +3872,7 @@ mod tests {
                 uses_char_category: false,
                 uses_crypto_core: false,
                 uses_secret: false,
+                uses_json: false,
                 uses_crypto: false,
                 uses_jwt: false,
                 uses_url: false,
@@ -4367,6 +4387,7 @@ mod serde_persistence_tests {
                 uses_char_category: false,
                 uses_crypto_core: false,
                 uses_secret: false,
+                uses_json: false,
                 uses_crypto: false,
                 uses_jwt: false,
                 uses_url: false,
@@ -4453,6 +4474,7 @@ mod serde_persistence_tests {
                 uses_char_category: false,
                 uses_crypto_core: false,
                 uses_secret: false,
+                uses_json: false,
                 uses_crypto: false,
                 uses_jwt: false,
                 uses_url: false,

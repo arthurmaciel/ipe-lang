@@ -1106,6 +1106,13 @@ struct PreludeReach {
     /// emitted prelude no longer names the gated `crypto_core` module (which would
     /// otherwise be an unresolved-path E0433 once the module is dropped).
     crypto_core: bool,
+    /// The program names the `Value` (`JsonVal`) or `Decoder<T>` type — keep the
+    /// `pub type Decoder<T> = ipe_runtime::json::Decoder<IpeError, T>;` alias. When
+    /// false, the alias is cut (a program naming neither would otherwise emit an
+    /// alias hard-referencing the dropped `json` module — E0433). The companion
+    /// `type Value = JsonVal;` alias, which lives in the fixed preamble, is cut on
+    /// the SAME flag by [`crate::preamble::preamble`].
+    json: bool,
 }
 
 /// Drop a mid-prelude section — the wrappers between its own `header` and the
@@ -1158,7 +1165,29 @@ fn native_runtime_bindings(reach: PreludeReach) -> DResult<String> {
     // section runs from here to the end of `runtime_bindings()` (its `END`
     // anchor is the `http_parse_query` wrapper, the section's sole binding).
     const HTTP_SECTION: &str = "// ── Http kernels";
+    // The `Decoder<T>` alias — the sole always-emitted prelude reference to
+    // `ipe_runtime::json::`. Content-addressed on the whole line so a golden drift
+    // that renamed it fails loud rather than silently emitting a dangling alias.
+    const DECODER_ALIAS: &str = "pub type Decoder<T> = ipe_runtime::json::Decoder<IpeError, T>;\n";
     let mut filtered = runtime_bindings()?.to_owned();
+
+    // `Decoder<T>` alias — cut for a program that names neither `Value` nor
+    // `Decoder` (`!reach.json`): keeping it would hard-reference the dropped `json`
+    // module (E0433). The companion `type Value = JsonVal;` alias is cut on the
+    // same flag in the fixed preamble (`crate::preamble::preamble`).
+    if !reach.json {
+        if !filtered.contains(DECODER_ALIAS) {
+            return Err(Diagnostic::CompilerBug {
+                where_: "ipe_backend_rust::project::native_runtime_bindings",
+                detail: format!(
+                    "kernel-wrapper prelude alias {DECODER_ALIAS:?} not found — golden \
+                     drifted; cannot drop the `Decoder` alias for a program that names \
+                     neither `Value` nor `Decoder`"
+                ),
+            });
+        }
+        filtered = filtered.replace(DECODER_ALIAS, "");
+    }
 
     // `Log` — the eight `log_*` wrappers (the only static-prelude references to
     // `ipe_runtime::log`), cut between the `Log` header and the following
@@ -1358,7 +1387,7 @@ pub fn emit_program(ctx: &EmitCtx, program: &Program) -> DResult<EmittedProject>
         // sound floor for the fixed sections; user code grows beyond it via the
         // usual doubling.
         let mut out = String::with_capacity(GOLDEN.len() + 4096);
-        out.push_str(&preamble()?);
+        out.push_str(&preamble(ctx.reaches_json())?);
         // The preamble ends with the USER-TYPES banner and its single closing
         // blank line. Anything emitted below (types, record structs, Db
         // projections) is that section's body; the runtime bindings that follow
@@ -1413,6 +1442,7 @@ pub fn emit_program(ctx: &EmitCtx, program: &Program) -> DResult<EmittedProject>
                     log: ctx.reaches_log(),
                     time_core: ctx.reaches_time_core(),
                     crypto_core: ctx.reaches_crypto_core(),
+                    json: ctx.reaches_json(),
                 })?);
             }
             ipe_ir::Target::WasmClient => out.push_str(&wasm_runtime_bindings()?),
@@ -2426,7 +2456,7 @@ pub fn emit_spine(ctx: &EmitCtx, program: &Program) -> DResult<String> {
     check_hydration_state_fields(ctx, program)?;
 
     let mut out = String::with_capacity(GOLDEN.len() + 4096);
-    out.push_str(&preamble()?);
+    out.push_str(&preamble(ctx.reaches_json())?);
     // See the single-file emit path: the banner's closing blank already
     // separates an EMPTY user-types section from the runtime bindings, so the
     // second blank is pushed only when this section emitted content.
@@ -2462,6 +2492,7 @@ pub fn emit_spine(ctx: &EmitCtx, program: &Program) -> DResult<String> {
                 log: ctx.reaches_log(),
                 time_core: ctx.reaches_time_core(),
                 crypto_core: ctx.reaches_crypto_core(),
+                json: ctx.reaches_json(),
             })?);
         }
         ipe_ir::Target::WasmClient => out.push_str(&wasm_runtime_bindings()?),

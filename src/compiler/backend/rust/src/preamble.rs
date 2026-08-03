@@ -42,16 +42,26 @@ fn anchor_missing(anchor: &str) -> Diagnostic {
 /// basic type aliases, and the `// USER TYPES` section banner — everything up to
 /// (and not including) the first user type definition.
 ///
+/// `keep_json` keeps the `type Value = JsonVal;` basic-type alias; when `false`
+/// (a program that names neither `Value` nor `Decoder`, i.e. `!reaches_json`) the
+/// alias is cut, so the preamble never spells `JsonVal` — a type re-exported from
+/// the `json` runtime module only when the `json` feature is on. The companion
+/// `pub type Decoder<T> = …` alias, which lives in the kernel-wrapper prelude, is
+/// cut on the SAME flag by [`crate::project`]'s `native_runtime_bindings`.
+///
 /// # Errors
 ///
 /// Returns [`Diagnostic::CompilerBug`] (IPE-I0203) if the USER TYPES banner
-/// anchor is absent from the embedded golden.
-pub fn preamble() -> DResult<String> {
+/// anchor — or, when cutting it, the `type Value` alias — is absent from the
+/// embedded golden.
+pub fn preamble(keep_json: bool) -> DResult<String> {
     // The user type definitions begin immediately after the USER TYPES banner
     // block, which is `// USER TYPES` followed by the banner's closing `// ===`
     // rule and a single blank line. Cut at the blank line that terminates the
     // banner so the preamble owns the whole banner and the user types follow.
     const BANNER_TITLE: &str = "// USER TYPES\n";
+    // The `Value` basic-type alias, cut for a `!keep_json` program (see below).
+    const VALUE_ALIAS: &str = "type Value = JsonVal;\n";
     let title_idx = GOLDEN
         .find(BANNER_TITLE)
         .ok_or_else(|| anchor_missing(BANNER_TITLE))?;
@@ -63,10 +73,21 @@ pub fn preamble() -> DResult<String> {
         .find("\n\n")
         .ok_or_else(|| anchor_missing(BANNER_TITLE))?;
     let end = title_idx + blank + "\n\n".len();
-    GOLDEN
+    let text = GOLDEN
         .get(..end)
         .map(str::to_owned)
-        .ok_or_else(|| anchor_missing(BANNER_TITLE))
+        .ok_or_else(|| anchor_missing(BANNER_TITLE))?;
+    if keep_json {
+        return Ok(text);
+    }
+    // Cut the `Value` alias for a program that reaches no `json`. Content-addressed
+    // on the whole line so a golden drift that renamed it fails loud rather than
+    // silently leaving a `JsonVal` reference the dropped `json` feature can't
+    // resolve (E0412).
+    if !text.contains(VALUE_ALIAS) {
+        return Err(anchor_missing(VALUE_ALIAS));
+    }
+    Ok(text.replace(VALUE_ALIAS, ""))
 }
 
 /// The fixed epilogue emitted after the user's function definitions.
@@ -102,9 +123,33 @@ mod tests {
     fn preamble_matches_golden_lines_1_to_34() -> DResult<()> {
         // Lines 1..=34: header (incl. the cfg-gated allocator arms) through the
         // blank line closing the USER TYPES banner (the next line, 35, is the
-        // first user type definition).
+        // first user type definition). The golden template is a JSON-using program,
+        // so `keep_json` reproduces it verbatim (the `type Value` alias present).
         let expected: String = GOLDEN.split_inclusive('\n').take(34).collect();
-        assert_eq!(preamble()?, expected);
+        assert_eq!(preamble(true)?, expected);
+        Ok(())
+    }
+
+    #[test]
+    fn preamble_drops_value_alias_when_no_json() -> DResult<()> {
+        // A program that reaches no `json` cuts the `type Value = JsonVal;` alias
+        // so the preamble never spells `JsonVal` (unresolved once `json` is
+        // dropped). Every other preamble line is preserved.
+        let kept = preamble(true)?;
+        let dropped = preamble(false)?;
+        assert!(
+            kept.contains("type Value = JsonVal;\n"),
+            "the json-keeping preamble carries the `Value` alias"
+        );
+        assert!(
+            !dropped.contains("JsonVal"),
+            "the json-dropping preamble names no JsonVal: {dropped:?}"
+        );
+        assert_eq!(
+            dropped,
+            kept.replace("type Value = JsonVal;\n", ""),
+            "dropping json removes ONLY the `Value` alias line"
+        );
         Ok(())
     }
 
@@ -120,7 +165,7 @@ mod tests {
 
     #[test]
     fn preamble_is_a_prefix_of_golden() -> DResult<()> {
-        assert!(GOLDEN.starts_with(&preamble()?));
+        assert!(GOLDEN.starts_with(&preamble(true)?));
         Ok(())
     }
 
@@ -133,7 +178,7 @@ mod tests {
     #[test]
     fn preamble_ends_with_user_types_banner() -> DResult<()> {
         assert!(
-            preamble()?
+            preamble(true)?
                 .ends_with("// USER TYPES\n// ===========================================\n\n")
         );
         Ok(())

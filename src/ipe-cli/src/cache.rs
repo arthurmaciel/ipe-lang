@@ -1048,6 +1048,7 @@ mod tests {
                 uses_char_category: false,
                 uses_crypto_core: false,
                 uses_secret: false,
+                uses_json: false,
                 uses_crypto: false,
                 uses_jwt: false,
                 uses_url: false,

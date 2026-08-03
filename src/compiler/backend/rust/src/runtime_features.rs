@@ -31,8 +31,11 @@ use crate::{DbDriver, EmitCtx};
 /// SEAL catches against the crate manifest.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub enum RuntimeFeature {
-    /// `json` — the emitted floor feature (`serde_json`); every program selects
-    /// it (the `json` runtime module is declared unconditionally).
+    /// `json` — the JSON codec (`serde_json`, and via `json = […, "serde"]` the
+    /// serde stack). Selected by `reaches_json()`: a program that NAMES the
+    /// `Value`/`Decoder` type (a `Json`-building kernel, a `Json`/`Decoder`
+    /// type-mention, or a db/config/jwt/web surface whose crate feature lists
+    /// `json`). No longer a floor — a program that reaches none drops it.
     Json,
     /// `async` — the tokio reactor spine, selected for any reactor-requiring
     /// program (mirrors [`EmitCtx::uses_async_runtime`]).
@@ -196,10 +199,16 @@ impl RuntimeFeatureSet {
 pub fn runtime_features(ctx: &EmitCtx) -> RuntimeFeatureSet {
     let mut set = BTreeSet::new();
 
-    // Floor: the `json` module is always declared (the emitted default feature
-    // is `["json"]`); every program selects it. The `jwt` split keeps
-    // `jsonwebtoken` off this floor.
-    set.insert(RuntimeFeature::Json);
+    // JSON codec (`serde_json`, and via `json = […, "serde"]` the serde stack).
+    // No longer a floor: selected only when the program NAMES the `Value`/`Decoder`
+    // type (`reaches_json`: a `Json`-building kernel, a `Json`/`Decoder`
+    // type-mention, or a db/config/jwt surface whose decoders spell `Decoder` and
+    // whose crate feature implies `json`). A program that reaches none drops the
+    // two prelude aliases + `serde_json` + the whole serde proc-macro stack. The
+    // `jwt` split keeps `jsonwebtoken` off this feature.
+    if ctx.reaches_json() {
+        set.insert(RuntimeFeature::Json);
+    }
 
     // Reactor spine — the tokio-bound halves of the floor + every async surface.
     if ctx.uses_async_runtime {
@@ -418,6 +427,7 @@ mod tests {
             uses_char_category: false,
             uses_crypto_core: false,
             uses_secret: false,
+            uses_json: false,
             uses_crypto: false,
             uses_jwt: false,
             uses_url: false,
@@ -444,9 +454,30 @@ mod tests {
     }
 
     #[test]
-    fn hello_world_selects_only_json() {
-        // A pure program (no surface, no reactor) selects the floor alone.
-        assert_eq!(features_for(|_| {}), vec!["json"]);
+    fn hello_world_selects_no_features() {
+        // A pure program (no surface, no reactor, no Json type) selects NOTHING —
+        // `json` is no longer a floor. The emitted crate drops `serde_json` and
+        // the whole serde stack, leaving `app + ipe_runtime + libc`.
+        assert!(
+            features_for(|_| {}).is_empty(),
+            "a bare program selects no runtime feature: {:?}",
+            features_for(|_| {})
+        );
+    }
+
+    #[test]
+    fn json_type_mention_selects_json() {
+        // A program that NAMES the `Value`/`Decoder` type (here via the
+        // `uses_json` flag the lowerer sets from a type-mention or Json kernel)
+        // keeps `json` — the fail-closed case the two prelude aliases need.
+        let f = features_for(|m| {
+            m.uses_json = true;
+        });
+        assert_eq!(
+            f,
+            vec!["json"],
+            "a Json-naming program selects `json`: {f:?}"
+        );
     }
 
     #[test]
@@ -458,7 +489,12 @@ mod tests {
         });
         assert!(f.contains(&"tui"), "tui program selects `tui`: {f:?}");
         assert!(f.contains(&"async"), "tui program selects `async`: {f:?}");
-        assert!(f.contains(&"json"), "floor always present: {f:?}");
+        // `tui` does NOT list `json` in the crate graph, and this program names no
+        // `Value`/`Decoder` type — so `json` (demoted from the floor) is dropped.
+        assert!(
+            !f.contains(&"json"),
+            "a bare tui program drops `json`: {f:?}"
+        );
     }
 
     #[test]
