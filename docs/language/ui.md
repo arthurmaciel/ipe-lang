@@ -177,7 +177,11 @@ Markdown.renderInline : String -> Element msg
 `render` handles multi-block documents (headings, paragraphs, fenced code
 blocks, bullet and ordered lists, tables, horizontal rules, inline bold /
 italic / code / links). `renderInline` handles a single line of inline
-markup and is useful inside an existing paragraph context.
+markup and is useful inside an existing paragraph context. The chrome the
+renderers draw — code-block and inline-code surfaces, table borders,
+horizontal rules, list markers — is derived from the surrounding theme
+foreground (`currentColor`), so it tracks a light or dark page with no fixed
+palette.
 
 ```ipe
 import Ipe.Markdown as Markdown

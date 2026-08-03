@@ -198,8 +198,8 @@ pub fn main_const<T1: Clone, T2: Clone>(x: T1, y: T2) -> T1 {
     x
 }
 pub fn main_apply<
-    T1: Clone + Send + 'static,
-    T2: Clone + Send + 'static,
+    T1: 'static + Send + Clone,
+    T2: 'static + Send + Clone,
     FN0: Fn(T1) -> T2 + Send + Sync + 'static,
 >(
     f: FN0,

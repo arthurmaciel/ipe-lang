@@ -552,16 +552,20 @@ fn config_builds_and_runs() {
 }
 
 // ── Ipe.Markdown ───────────────────────────────────────────────────────────
-// Exercises both exported functions:
-//   * `Markdown.render` — multi-block document (heading + bold span in a para).
+// Exercises the whole public surface:
+//   * `Markdown.render` — a document touching every block renderer (heading,
+//     paragraph with a bold span, fenced code block, horizontal rule, table,
+//     bullet list, link) so the `msg`-generic UI-carrier `'static` bound and
+//     the theme-token chrome are both under seal.
 //   * `Markdown.renderInline` — single inline line with a code span.
 //
-// The output is `Element msg`, not a `String`, so we pipe through
+// The render output is `Element msg`, not a `String`, so we pipe through
 // `Html.htmlRender (Ui.layout [] …)` and `Io.println` — the same pattern the
 // `golden_stdui_grid_seal` uses.  The `_resolves_and_emits` test asserts ipe
 // exit 0 (no IPE-N0004 / N0028 regression).  The `_builds_and_runs` seal
-// asserts cargo exit 0 AND that the rendered HTML carries the expected
-// structural markers (heading text, bold styling, code-span styling).
+// asserts cargo exit 0 (no E0310 on a boxed leaf renderer) AND that the
+// rendered HTML carries theme-token chrome (`color-mix(... currentColor ...)`)
+// and NONE of the old fixed dark palette.
 
 const MARKDOWN_MAIN: &str = "module Main exposing (main)\n\
     import Ipe.Io as Io\n\
@@ -569,7 +573,7 @@ const MARKDOWN_MAIN: &str = "module Main exposing (main)\n\
     import Ipe.Ui as Ui\n\
     import Ipe.Markdown as Markdown\n\n\
     doc : String\n\
-    doc = \"# Hello\\n\\nThis is **bold** text.\"\n\n\
+    doc = \"# Hello\\n\\nThis is **bold** text.\\n\\n```\\ncode\\n```\\n\\n---\\n\\n| a | b |\\n|---|---|\\n| 1 | 2 |\\n\\n- one\\n- two\\n\\nA [link](https://x.dev) here.\"\n\n\
     inline : String\n\
     inline = \"Use `render` for blocks\"\n\n\
     main =\n\
@@ -611,4 +615,18 @@ fn markdown_builds_and_runs() {
         "rendered HTML must carry bold styling (font-weight) for **bold**:\n{}",
         out.stdout
     );
+    // Chrome (code block, rule, table, bullet marker, inline code) draws from
+    // the theme foreground via `color-mix(... currentColor ...)` — no fixed hex.
+    assert!(
+        out.stdout.contains("color-mix(in srgb, currentColor"),
+        "rendered HTML must carry theme-token chrome (currentColor color-mix):\n{}",
+        out.stdout
+    );
+    for dark_hex in ["#101116", "#2A2A33", "#2a2a33", "#1c1c23", "#1f1f27"] {
+        assert!(
+            !out.stdout.contains(dark_hex),
+            "rendered HTML must NOT carry the old fixed dark hex `{dark_hex}`:\n{}",
+            out.stdout
+        );
+    }
 }
