@@ -91,7 +91,7 @@ pageBody model =
 subscriptions : Model -> Sub.Sub Msg
 subscriptions _ =
     Sub.batch
-        [ Sub.every 5000 Tick, Sub.subscribeTopic "cart" CartTopicReceived ]
+        [ Sub.every 5000 Tick, Sub.subscribeTopic cartTopic CartTopicReceived ]
 
 
 main =
