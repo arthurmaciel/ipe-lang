@@ -956,6 +956,8 @@ mod schema_tag_tests {
                 uses_log: false,
                 uses_decimal: false,
                 uses_char_category: false,
+                uses_crypto_core: false,
+                uses_secret: false,
                 uses_crypto: false,
                 uses_jwt: false,
                 uses_url: false,

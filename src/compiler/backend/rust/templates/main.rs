@@ -252,6 +252,7 @@ pub fn file_copy(src: ipe_runtime::path::Path, dst: ipe_runtime::path::Path) -> 
 pub fn file_rename(src: ipe_runtime::path::Path, dst: ipe_runtime::path::Path) -> IpeTask<()> {
     ipe_runtime::file::file_rename(src, dst)
 }
+// ── Crypto (entropy) kernels ───────────────────────────────────────────────
 pub fn crypto_random_bytes(n: i64) -> IpeTask<String> {
     ipe_runtime::crypto_core::crypto_random_bytes(n)
 }

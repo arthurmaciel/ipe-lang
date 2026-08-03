@@ -44,6 +44,8 @@ fn program(name: Symbol, types: Vec<TypeDef>, funcs: Vec<Func>) -> Program {
             uses_log: false,
             uses_decimal: false,
             uses_char_category: false,
+            uses_crypto_core: false,
+            uses_secret: false,
             uses_crypto: false,
             uses_jwt: false,
             uses_url: false,
@@ -232,6 +234,7 @@ fn empty_intended_symbol_is_rejected() -> DResult<()> {
 /// backend cannot tell them apart from the bare key, so it must fail fast with
 /// IPE-I0202 rather than silently overwrite one mapping.
 #[test]
+#[allow(clippy::too_many_lines)] // two full body-free Module literals inline
 fn cross_module_type_name_collision_is_rejected() -> DResult<()> {
     let mut interner = Interner::new();
     let main_mod = interner.intern("Main")?;
@@ -272,6 +275,8 @@ fn cross_module_type_name_collision_is_rejected() -> DResult<()> {
                 uses_log: false,
                 uses_decimal: false,
                 uses_char_category: false,
+                uses_crypto_core: false,
+                uses_secret: false,
                 uses_crypto: false,
                 uses_jwt: false,
                 uses_url: false,
@@ -308,6 +313,8 @@ fn cross_module_type_name_collision_is_rejected() -> DResult<()> {
                 uses_log: false,
                 uses_decimal: false,
                 uses_char_category: false,
+                uses_crypto_core: false,
+                uses_secret: false,
                 uses_crypto: false,
                 uses_jwt: false,
                 uses_url: false,

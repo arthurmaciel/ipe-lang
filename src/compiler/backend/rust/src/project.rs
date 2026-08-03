@@ -1091,6 +1091,13 @@ struct PreludeReach {
     log: bool,
     /// The program reaches `time.rs` (`time-core`) — keep the `Time` section.
     time_core: bool,
+    /// The program reaches `crypto_core.rs` — keep the `Crypto (entropy)`
+    /// section (the `crypto_random_bytes`/`crypto_random_token` wrappers, the only
+    /// always-emitted prelude references to `ipe_runtime::crypto_core::`). A bare
+    /// synchronous Program reaches no crypto floor, so the section is cut and the
+    /// emitted prelude no longer names the gated `crypto_core` module (which would
+    /// otherwise be an unresolved-path E0433 once the module is dropped).
+    crypto_core: bool,
 }
 
 /// Drop a mid-prelude section — the wrappers between its own `header` and the
@@ -1167,6 +1174,21 @@ fn native_runtime_bindings(reach: PreludeReach) -> DResult<String> {
     // (a non-Random synchronous program).
     if !reach.random {
         filtered = drop_prelude_section(&filtered, "// ── Random kernels", "// ── File kernels")?;
+    }
+
+    // `Crypto (entropy)` — the two `crypto_random_*` wrappers, the ONLY
+    // always-emitted prelude references to `ipe_runtime::crypto_core::`. Cut
+    // between the `Crypto (entropy)` header and the following `Http` header when
+    // the program reaches no crypto floor (`reaches_crypto_core`), so the emitted
+    // prelude does not name the `crypto_core` module once it is dropped from the
+    // runtime feature set — the removal that lets a bare Program drop
+    // `sha2`/`hmac`/`subtle`/`getrandom`.
+    if !reach.crypto_core {
+        filtered = drop_prelude_section(
+            &filtered,
+            "// ── Crypto (entropy) kernels",
+            "// ── Http kernels",
+        )?;
     }
 
     if reach.http_client {
@@ -1382,6 +1404,7 @@ pub fn emit_program(ctx: &EmitCtx, program: &Program) -> DResult<EmittedProject>
                     random: ctx.reaches_random(),
                     log: ctx.reaches_log(),
                     time_core: ctx.reaches_time_core(),
+                    crypto_core: ctx.reaches_crypto_core(),
                 })?);
             }
             ipe_ir::Target::WasmClient => out.push_str(&wasm_runtime_bindings()?),
@@ -2430,6 +2453,7 @@ pub fn emit_spine(ctx: &EmitCtx, program: &Program) -> DResult<String> {
                 random: ctx.reaches_random(),
                 log: ctx.reaches_log(),
                 time_core: ctx.reaches_time_core(),
+                crypto_core: ctx.reaches_crypto_core(),
             })?);
         }
         ipe_ir::Target::WasmClient => out.push_str(&wasm_runtime_bindings()?),

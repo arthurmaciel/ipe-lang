@@ -1328,6 +1328,36 @@ fn ir_type_mentions_csv(ty: &IrType) -> bool {
     }
 }
 
+/// `true` when `ty` mentions the `Ipe.Secret` opaque type `Secret`, defined in
+/// the `secret` runtime module (backed by `ipe_runtime::secret::Secret`). A
+/// function that only forwards a `Secret` parameter — e.g. an `Ipe.Auth` token
+/// wrapper whose signature names `Secret` but calls no `Secret.*` kernel — still
+/// emits a `Secret` reference resolved through the module's `pub use secret::*`
+/// glob, so the module (and its `zeroize` dependency) must be present.
+/// `Algorithm` also folds to `IrType::Secret` (see the JWT `Algorithm` alias),
+/// so this guard covers it too. Mirrors [`ir_type_mentions_csv`].
+fn ir_type_mentions_secret(ty: &IrType) -> bool {
+    match ty {
+        IrType::Secret => true,
+        IrType::Task(inner)
+        | IrType::Cmd(inner)
+        | IrType::Sub(inner)
+        | IrType::Decoder(inner)
+        | IrType::Maybe(inner)
+        | IrType::List(inner) => ir_type_mentions_secret(inner),
+        IrType::Result(a, b) | IrType::Dict(a, b) => {
+            ir_type_mentions_secret(a) || ir_type_mentions_secret(b)
+        }
+        IrType::Fun(params, ret) | IrType::FnOnceChain(params, ret) => {
+            params.iter().any(ir_type_mentions_secret) || ir_type_mentions_secret(ret)
+        }
+        IrType::Tuple(elems) => elems.iter().any(ir_type_mentions_secret),
+        IrType::Record(fields) => fields.values().any(ir_type_mentions_secret),
+        IrType::Enum { args, .. } => args.iter().any(ir_type_mentions_secret),
+        _ => false,
+    }
+}
+
 fn ir_contains_fun(ty: &IrType) -> bool {
     match ty {
         // A curried `FnOnce` chain is the same boxed-closure family as `Fun`; the
@@ -6011,10 +6041,24 @@ struct KernelUsage {
     /// `char-category` feature) and the `unicode-general-category` crate. A
     /// standalone leaf. The std-only `Ipe.Char` kernels stay in `char_kernel.rs`.
     char_category: bool,
+    /// Any crypto-FLOOR kernel (SHA-2 hash, the HMAC family, RSA sign/verify,
+    /// constant-time compare, the entropy pair, the `Key`/`Mac` newtypes) — gates
+    /// the `crypto_core.rs` runtime module (the `crypto-core` feature) and its
+    /// `sha2` + `hmac` + `subtle` + `getrandom` dependencies. The heavy `crypto`
+    /// surface and the `jwt`/`db`/`web`/`webview`/`email`/`server` surfaces reach
+    /// the floor transitively (folded in by the backend's `reaches_crypto_core`),
+    /// so this flag alone gates only the direct crypto-floor reach.
+    crypto_core: bool,
+    /// Any `Ipe.Secret` kernel (`Secret.fromString`/`reveal`/`redacted`) — gates
+    /// the `secret.rs` runtime module (the `secret` feature) and its `zeroize`
+    /// dependency. Unioned with a `Secret` type-mention guard at the assembly site
+    /// (a signature naming `Secret` must keep the module even with no call site).
+    secret: bool,
     /// Any HEAVY `Ipe.Crypto` kernel (legacy SHA-1/MD5, AES-GCM /
     /// ChaCha20-Poly1305 AEAD, PBKDF2 key derivation) — gates the `crypto`
     /// runtime module and the `sha1` + `md-5` + `aes-gcm` + `chacha20poly1305` +
-    /// `pbkdf2` dependencies. The always-on `crypto_core` floor is unaffected.
+    /// `pbkdf2` dependencies. The `crypto_core` floor is pulled transitively (the
+    /// `crypto` feature implies `crypto-core`).
     crypto: bool,
     /// Any `Ipe.Jwt` kernel — gates the `jwt` runtime module and the
     /// `jsonwebtoken` dependency. Also force-declared alongside `auth` (which
@@ -6108,6 +6152,8 @@ impl KernelUsage {
             && self.log
             && self.decimal
             && self.char_category
+            && self.crypto_core
+            && self.secret
             && self.crypto
             && self.jwt
             && self.url
@@ -6148,6 +6194,8 @@ impl KernelUsage {
         self.log |= k.is_log();
         self.decimal |= k.is_decimal();
         self.char_category |= k.is_char_category();
+        self.crypto_core |= k.is_crypto_core();
+        self.secret |= k.is_secret();
         self.crypto |= k.is_crypto();
         self.jwt |= k.is_jwt();
         self.url |= k.is_url();
@@ -8315,6 +8363,29 @@ impl<'a> Lowerer<'a> {
         // module — only a heavy kernel call site does.
         let uses_crypto = kernel_usage.crypto;
 
+        // detect crypto-FLOOR usage — any SHA-2 / HMAC / RSA / constant-time /
+        // entropy / `Key`/`Mac` kernel. The backend uses this flag (folded with the
+        // crypto/jwt/db/web/webview/email/server surfaces in `reaches_crypto_core`)
+        // to select the `crypto-core` feature (`sha2` + `hmac` + `subtle` +
+        // `getrandom`). The `Key`/`Mac` opaque newtypes each have a crypto-floor
+        // constructor kernel (`Key.fromString`/`fromBytes`, and a `Mac` is produced
+        // by an HMAC-with-key kernel), so a signature naming a `Key`/`Mac` never
+        // reaches the floor without a call site setting this flag — no type-mention
+        // guard is needed.
+        let uses_crypto_core = kernel_usage.crypto_core;
+
+        // detect `Ipe.Secret` usage — any `Secret.*` kernel OR a `Secret`-typed
+        // value in a function signature. The type-mention guard is REQUIRED: a
+        // function that only forwards a `Secret` parameter (e.g. an `Ipe.Auth`
+        // wrapper) names the type in its signature without calling a `Secret.*`
+        // kernel, so dropping `secret.rs` on the call-site flag alone would emit a
+        // signature referencing an absent `ipe_runtime::secret::Secret` (E0433).
+        let uses_secret = kernel_usage.secret
+            || funcs.iter().any(|f| {
+                ir_type_mentions_secret(&f.ret)
+                    || f.params.iter().any(|(_, t)| ir_type_mentions_secret(t))
+            });
+
         // detect `Ipe.Encoding` / `Ipe.Bytes` usage. The backend uses this flag to
         // declare `encoding` + `bytes` in the emitted `ipe_runtime/mod.rs` and add
         // the `base64` + `hex` + `percent-encoding` dependencies. No type-mention
@@ -8452,6 +8523,8 @@ impl<'a> Lowerer<'a> {
             uses_log,
             uses_decimal,
             uses_char_category,
+            uses_crypto_core,
+            uses_secret,
             uses_crypto,
             uses_jwt,
             uses_url,
