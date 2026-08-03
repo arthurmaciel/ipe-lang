@@ -1,0 +1,22 @@
+module Main exposing (main)
+
+import Ipe.Io as Io
+
+
+-- A row-typed parameter re-bound to a fresh local (`let n = rec`) before its
+-- field is read. The rebind lets the row value escape the one emittable form —
+-- a DIRECT field read on the parameter (`rec.name`). `n` carries the bare `R1`
+-- generic, so `n.name` would emit a struct-field read against an unknown struct
+-- (E0609). Lowering fails this closed with IPE-L0131 — only the direct field
+-- read on the parameter itself is emittable.
+getName : { r | name : String } -> String
+getName rec =
+    let
+        n =
+            rec
+    in
+    n.name
+
+
+main =
+    Io.println (getName { name = "Ada", age = 36 })

@@ -1130,7 +1130,7 @@ pub fn emit_record_struct(ctx: &EmitCtx, rec: &RecordStruct) -> DResult<String> 
 /// One field-witness trait is synthesised per such name; the empty set (a
 /// program with no row-polymorphic annotation) emits no witness substrate at
 /// all, so the common case is untouched.
-fn row_witness_field_names(program: &Program) -> BTreeSet<Symbol> {
+pub fn row_witness_field_names(program: &Program) -> BTreeSet<Symbol> {
     let mut names = BTreeSet::new();
     for module in &program.modules {
         for func in &module.funcs {

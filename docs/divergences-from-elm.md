@@ -97,6 +97,10 @@ so `List.map .name people` works, but reusing one unannotated binding at two
 different record shapes stays a type error — polymorphic reuse of a single
 binding requires the row annotation. Row polymorphism is therefore opt-in via an
 annotation; unannotated bindings still pin on first concrete use, preserving the
-pinned-records invariant. The remaining row-polymorphic forms (multi-field rows,
-return position, nested rows, rows under containers) are staged later increments
-of the same witness-trait design and are gated with `IPE-L0131` until each lands.
+pinned-records invariant. The one emittable use of a row-typed parameter is as
+the direct receiver of a field read (`rec.name`); a row value that flows
+anywhere else — re-bound, destructured by a subset pattern, passed as an
+argument, stored, returned, or matched — has no witness-getter route and is
+gated with `IPE-L0131`, as are multi-field rows, return-position rows, nested
+rows, and rows under containers. These are extensions of the same witness-trait
+design, gated until each lands.

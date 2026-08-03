@@ -1555,6 +1555,23 @@ mod tests {
         assert_eq!(field_witness_getter_name("first_name"), "ipe_first_name");
     }
 
+    /// The hazard the row-witness disjointness gate exists to catch: two DISTINCT
+    /// surface field names that camel-case to the SAME witness-trait name. Both
+    /// spellings are valid lowercase-initial identifiers the parser admits, and
+    /// `to_camel_case` erases the distinction, so `field_witness_trait_name` is
+    /// NOT injective — the backend must not assume witness names are unique per
+    /// field. `EmitCtx::assert_row_witness_names_disjoint` fails such a program
+    /// closed rather than emit two `IpeHasFirstName` traits (E0428).
+    #[test]
+    fn witness_trait_name_is_not_injective_over_field_names() {
+        assert_eq!(
+            field_witness_trait_name("first_name"),
+            field_witness_trait_name("firstName"),
+            "snake and camel spellings of the same field collide to one \
+             witness-trait name — the gate must reject their coexistence"
+        );
+    }
+
     #[test]
     fn field_witness_getter_mangles_reserved_field() {
         // A field whose name is a Rust keyword is keyword-mangled inside the
