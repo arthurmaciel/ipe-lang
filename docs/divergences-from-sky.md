@@ -139,6 +139,19 @@ recorded reference.
 - **Rationale:** parse-don't-validate at the numeric boundary.
 - **Sanctioned:** yes (`sanctioned:`, stricter).
 
+### B27 — `String.toInt` trims surrounding Unicode whitespace
+- **Differs:** `String.toInt` trims leading and trailing Unicode whitespace
+  (`str::trim`, the `White_Space` property) before parsing, so
+  `String.toInt " 42 " == Just 42`. The Go reference's emitted path is
+  `strconv.Atoi(s)` with no trim, yielding `Nothing` for the same input.
+  Interior whitespace still fails (`String.toInt "4 2" == Nothing`).
+- **Go-oracle relationship:** the reference returns `Nothing`; Ipê returns
+  `Just`. Sanctioned divergence — the reference has since corrected this.
+- **Rationale:** consistency with `String.toFloat` (which already trims) and
+  cleaner input hygiene at the numeric boundary.
+- **Sanctioned:** yes (`sanctioned:`). Goldens `string_to_int_trim`,
+  `string_to_int_trailing`.
+
 ### B7 — `Uuid.v4 ()` / `Uuid.v7 ()` are effectful entropy reads
 - **Differs:** `Uuid.v4` / `Uuid.v7` are registered at `() -> Task Error String`,
   so `Uuid.v4 ()` yields a fresh `String` inside a `Task` (entropy is an effect).
