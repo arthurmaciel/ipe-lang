@@ -35,7 +35,7 @@ pub enum RuntimeFeature {
     /// serde stack). Selected by `reaches_json()`: a program that NAMES the
     /// `Value`/`Decoder` type (a `Json`-building kernel, a `Json`/`Decoder`
     /// type-mention, or a db/config/jwt/web surface whose crate feature lists
-    /// `json`). No longer a floor — a program that reaches none drops it.
+    /// `json`). A program that names none of these drops the crate.
     Json,
     /// `async` — the tokio reactor spine, selected for any reactor-requiring
     /// program (mirrors [`EmitCtx::uses_async_runtime`]).
@@ -200,7 +200,7 @@ pub fn runtime_features(ctx: &EmitCtx) -> RuntimeFeatureSet {
     let mut set = BTreeSet::new();
 
     // JSON codec (`serde_json`, and via `json = […, "serde"]` the serde stack).
-    // No longer a floor: selected only when the program NAMES the `Value`/`Decoder`
+    // Selected only when the program NAMES the `Value`/`Decoder`
     // type (`reaches_json`: a `Json`-building kernel, a `Json`/`Decoder`
     // type-mention, or a db/config/jwt surface whose decoders spell `Decoder` and
     // whose crate feature implies `json`). A program that reaches none drops the
@@ -455,9 +455,9 @@ mod tests {
 
     #[test]
     fn hello_world_selects_no_features() {
-        // A pure program (no surface, no reactor, no Json type) selects NOTHING —
-        // `json` is no longer a floor. The emitted crate drops `serde_json` and
-        // the whole serde stack, leaving `app + ipe_runtime + libc`.
+        // A pure program (no surface, no reactor, no Json type) selects NOTHING;
+        // the emitted crate carries no `serde_json` and no serde stack, leaving
+        // `app + ipe_runtime + libc`.
         assert!(
             features_for(|_| {}).is_empty(),
             "a bare program selects no runtime feature: {:?}",

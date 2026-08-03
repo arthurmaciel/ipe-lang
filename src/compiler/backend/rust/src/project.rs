@@ -1103,8 +1103,8 @@ struct PreludeReach {
     /// section (the `crypto_random_bytes`/`crypto_random_token` wrappers, the only
     /// always-emitted prelude references to `ipe_runtime::crypto_core::`). A bare
     /// synchronous Program reaches no crypto floor, so the section is cut and the
-    /// emitted prelude no longer names the gated `crypto_core` module (which would
-    /// otherwise be an unresolved-path E0433 once the module is dropped).
+    /// emitted prelude does not name the gated `crypto_core` module — naming a
+    /// module absent from the manifest would be an unresolved-path E0433.
     crypto_core: bool,
     /// The program names the `Value` (`JsonVal`) or `Decoder<T>` type — keep the
     /// `pub type Decoder<T> = ipe_runtime::json::Decoder<IpeError, T>;` alias. When
