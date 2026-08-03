@@ -558,6 +558,8 @@ fn config_builds_and_runs() {
 //     bullet list, link) so the `msg`-generic UI-carrier `'static` bound and
 //     the theme-token chrome are both under seal.
 //   * `Markdown.renderInline` — single inline line with a code span.
+//   * `Markdown.parseBlocks` / `parseSpans` with `Block(..)` / `Span(..)` — the
+//     public parser (a caller walking the parse tree itself).
 //
 // The render output is `Element msg`, not a `String`, so we pipe through
 // `Html.htmlRender (Ui.layout [] …)` and `Io.println` — the same pattern the
@@ -584,9 +586,48 @@ const MARKDOWN_MAIN: &str = "module Main exposing (main)\n\
     \x20   in\n\
     \x20   Io.println (Html.htmlRender (Ui.layout [] page))\n";
 
+// The public parser: extract fenced code bodies via `parseBlocks` + `Block(..)`
+// and count code spans via `parseSpans` + `Span(..)`.  A closed union forbids a
+// catch-all arm, so every constructor is matched explicitly.
+const MARKDOWN_PARSER_MAIN: &str = "module Main exposing (main)\n\
+    import Ipe.Io as Io\n\
+    import Ipe.List as List\n\
+    import Ipe.String as String\n\
+    import Ipe.Markdown as Markdown exposing (Block(..), Span(..))\n\n\
+    keepCode : Block -> Maybe String\n\
+    keepCode block =\n\
+    \x20   case block of\n\
+    \x20       CodeBlock body -> Just body\n\
+    \x20       HeaderBlock _ _ -> Nothing\n\
+    \x20       ParaBlock _ -> Nothing\n\
+    \x20       BulletBlock _ -> Nothing\n\
+    \x20       NumberedBlock _ -> Nothing\n\
+    \x20       TableBlock _ _ -> Nothing\n\
+    \x20       RuleBlock -> Nothing\n\n\
+    isCode : Span -> Bool\n\
+    isCode span =\n\
+    \x20   case span of\n\
+    \x20       CodeSpan _ -> True\n\
+    \x20       PlainSpan _ -> False\n\
+    \x20       BoldSpan _ -> False\n\
+    \x20       ItalicSpan _ -> False\n\
+    \x20       LinkSpan _ _ -> False\n\n\
+    main =\n\
+    \x20   let\n\
+    \x20       blocks = Markdown.parseBlocks \"# H\\n\\ntext\\n\\n```\\nbody\\n```\"\n\
+    \x20       bodies = List.filterMap keepCode blocks\n\
+    \x20       spans  = List.filter isCode (Markdown.parseSpans \"a `x` b `y`\")\n\
+    \x20   in\n\
+    \x20   Io.println (String.join \",\" bodies ++ \"|\" ++ String.fromInt (List.length spans))\n";
+
 #[test]
 fn markdown_resolves_and_emits() {
     let _ = compile_module_probe("markdown", MARKDOWN_MAIN);
+}
+
+#[test]
+fn markdown_parser_resolves_and_emits() {
+    let _ = compile_module_probe("markdown_parser", MARKDOWN_PARSER_MAIN);
 }
 
 #[test]
@@ -629,4 +670,28 @@ fn markdown_builds_and_runs() {
             out.stdout
         );
     }
+}
+
+#[test]
+fn markdown_parser_builds_and_runs() {
+    if !e2e_enabled() {
+        return;
+    }
+    let Some(dir) = compile_module_probe("markdown_parser_e2e", MARKDOWN_PARSER_MAIN) else {
+        return;
+    };
+    let out = crate::support::build_and_run_emitted("markdown_parser", &dir);
+    assert_eq!(
+        out.exit_code,
+        Some(0),
+        "emitted `markdown_parser` crate must build + run cleanly, got exit {:?}",
+        out.exit_code
+    );
+    // `parseBlocks` yields one code block body `body`; `parseSpans` finds 2 code
+    // spans — the public parser walks the tree the caller reached itself.
+    assert!(
+        out.stdout.trim() == "body|2",
+        "parser output must be `body|2`, got:\n{}",
+        out.stdout
+    );
 }

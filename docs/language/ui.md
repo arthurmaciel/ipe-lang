@@ -172,6 +172,8 @@ handlers into the DOM.
 ```ipe
 Markdown.render       : String -> Element msg
 Markdown.renderInline : String -> Element msg
+Markdown.parseBlocks  : String -> List Block
+Markdown.parseSpans   : String -> List Span
 ```
 
 `render` handles multi-block documents (headings, paragraphs, fenced code
@@ -182,6 +184,48 @@ renderers draw — code-block and inline-code surfaces, table borders,
 horizontal rules, list markers — is derived from the surrounding theme
 foreground (`currentColor`), so it tracks a light or dark page with no fixed
 palette.
+
+`parseBlocks` and `parseSpans` expose the parser itself, returning the
+block-level (`Block`) and inline (`Span`) parse trees. Reach for them when you
+want Markdown's parse but your own typography and palette, rather than the
+built-in renderers:
+
+```ipe
+import Ipe.List as List
+import Ipe.Markdown as Markdown exposing (Block(..))
+
+-- Collect just the fenced code blocks from a document.
+codeBlocks : String -> List String
+codeBlocks src =
+    List.filterMap keepCode (Markdown.parseBlocks src)
+
+keepCode : Block -> Maybe String
+keepCode block =
+    case block of
+        CodeBlock body ->
+            Just body
+
+        HeaderBlock _ _ ->
+            Nothing
+
+        ParaBlock _ ->
+            Nothing
+
+        BulletBlock _ ->
+            Nothing
+
+        NumberedBlock _ ->
+            Nothing
+
+        TableBlock _ _ ->
+            Nothing
+
+        RuleBlock ->
+            Nothing
+```
+
+(`Block` is a closed union, so Ipê requires every constructor to be handled —
+no catch-all `_` arm — which is why each block variant appears explicitly.)
 
 ```ipe
 import Ipe.Markdown as Markdown

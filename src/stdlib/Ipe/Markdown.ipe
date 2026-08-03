@@ -27,7 +27,15 @@
 -- Chrome colours (code surfaces, dividers, list markers) derive from the
 -- inherited theme foreground via `currentColor`, so the render tracks a light
 -- or dark surrounding page with no fixed palette.
-module Ipe.Markdown exposing (render, renderInline)
+--
+-- The parser is public: `parseBlocks` / `parseSpans` return the `Block` /
+-- `Span` trees, so a caller wanting the parse but its own typography and
+-- palette can walk them directly instead of reimplementing the parser.
+module Ipe.Markdown exposing
+    ( render, renderInline
+    , parseBlocks, parseSpans
+    , Block(..), Span(..)
+    )
 
 
 import Ipe.List as List
@@ -69,7 +77,8 @@ type Block
 
 -- ─── Block parsing ──────────────────────────────────────────────────────────
 
--- Split a markdown document into a list of Blocks.
+-- Split a markdown document into its list of `Block`s — the block-level parse
+-- tree, for callers that render with their own typography and palette.
 parseBlocks : String -> List Block
 parseBlocks src =
     blocksFromLines (String.lines src)
@@ -612,6 +621,8 @@ type Span
 
 -- ─── Inline parsing ─────────────────────────────────────────────────────────
 
+-- Parse one line of inline markup into its list of `Span`s — the inline parse
+-- tree, for callers rendering inline runs with their own styling.
 parseSpans : String -> List Span
 parseSpans s =
     spanLoop s [] ""
