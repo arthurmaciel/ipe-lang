@@ -1806,7 +1806,7 @@ fn write_expr_at(out: &mut String, expr: &Expr, interner: &Interner, level: usiz
             line(out, level, &format!("ListLenCheck len {op} {len}"));
             write_expr_at(out, list, interner, level + 1, depth);
         }
-        Expr::Record(fields) => write_record(out, fields, interner, level, depth),
+        Expr::Record { fields, .. } => write_record(out, fields, interner, level, depth),
         Expr::Access {
             record,
             field,
@@ -2545,7 +2545,10 @@ program
         let y = i.intern("y")?;
 
         // origin() -> ... = { x = 1, y = 2 }
-        let body = Expr::Record(vec![(x, Expr::Int(1)), (y, Expr::Int(2))]);
+        let body = Expr::Record {
+            fields: vec![(x, Expr::Int(1)), (y, Expr::Int(2))],
+            ty: None,
+        };
         let program = Program {
             modules: vec![Module {
                 name: ModPath(vec![main_mod]),

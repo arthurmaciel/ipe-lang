@@ -327,8 +327,8 @@ pub fn build_doc(
         // [`crate::emit_expr::record_struct_name`] (shared with the string
         // emitter). An empty record stays a leaf — rustfmt renders `StructName {}`
         // with no inner break, which the delimited builder is not shaped for.
-        Expr::Record(fields) if !fields.is_empty() => {
-            build_record(ctx, fields, indent, child, generics)
+        Expr::Record { fields, ty } if !fields.is_empty() => {
+            build_record(ctx, fields, ty.as_ref(), indent, child, generics)
         }
 
         // A functional record update `{ let mut __ipe_rec = (record).clone();
@@ -1273,11 +1273,12 @@ fn build_destructure(
 fn build_record(
     ctx: &EmitCtx,
     fields: &[(Symbol, Expr)],
+    ty: Option<&IrType>,
     indent: usize,
     child: u16,
     generics: GenericScope,
 ) -> DResult<Doc> {
-    let (struct_name, is_server_response) = record_struct_name(ctx, fields)?;
+    let (struct_name, is_server_response) = record_struct_name(ctx, fields, ty)?;
     let mut field_docs = Vec::with_capacity(fields.len() + usize::from(is_server_response));
     for (sym, value) in fields {
         let field_ident = ctx.emit_ident(*sym)?;
@@ -2389,9 +2390,15 @@ mod tests {
             },
             // Record literal (structured, inline): `RecXY { a: 1, b: 2 }` over the
             // fixture's registered two-field struct.
-            Expr::Record(vec![(sym(fx, 0), Expr::Int(1)), (sym(fx, 1), Expr::Int(2))]),
+            Expr::Record {
+                fields: vec![(sym(fx, 0), Expr::Int(1)), (sym(fx, 1), Expr::Int(2))],
+                ty: None,
+            },
             // Record literal (structured, wide → breaks fields one per line).
-            Expr::Record(vec![(sym(fx, 0), var(fx, 7)), (sym(fx, 1), var(fx, 8))]),
+            Expr::Record {
+                fields: vec![(sym(fx, 0), var(fx, 7)), (sym(fx, 1), var(fx, 8))],
+                ty: None,
+            },
             // Record update (structured statement block): clone the base, reassign
             // one field, return the temp. Always breaks (holds statements).
             Expr::Update {
@@ -3477,10 +3484,10 @@ mod tests {
         let fx = fixture();
         with_ctx(&fx, |ctx| {
             let scope = GenericScope::new(&[]);
-            let expr = Expr::Record(vec![
-                (sym(&fx, 0), Expr::Int(1)),
-                (sym(&fx, 1), Expr::Int(2)),
-            ]);
+            let expr = Expr::Record {
+                fields: vec![(sym(&fx, 0), Expr::Int(1)), (sym(&fx, 1), Expr::Int(2))],
+                ty: None,
+            };
             let doc = build_doc(ctx, &expr, 0, 0, scope).expect("build_doc");
             let string = emit_expr_at(ctx, &expr, 0, 0, scope).expect("emit_expr_at");
             // The string emitter's flat form is already the rustfmt-canonical
@@ -3499,7 +3506,10 @@ mod tests {
         let fx = fixture();
         with_ctx(&fx, |ctx| {
             let scope = GenericScope::new(&[]);
-            let expr = Expr::Record(vec![(sym(&fx, 0), var(&fx, 7)), (sym(&fx, 1), var(&fx, 8))]);
+            let expr = Expr::Record {
+                fields: vec![(sym(&fx, 0), var(&fx, 7)), (sym(&fx, 1), var(&fx, 8))],
+                ty: None,
+            };
             // Recover the emitter's chosen struct name from the flat form
             // (everything up to the first ` {`).
             let flat = emit_expr_at(ctx, &expr, 0, 0, scope).expect("emit_expr_at");

@@ -8,9 +8,11 @@
 //! * record literal → struct literal, access → `.field`, update → a
 //!   clone-and-reassign block,
 //! * nested records,
-//! * the upstream-contract guards (a literal whose shape was never declared, and
-//!   two record types that share a field set but differ in field types) fail
-//!   fast as a `CompilerBug`, never a silent mis-emit.
+//! * two record types that share a field-name set but differ in field types
+//!   synthesise two distinct structs (disambiguated by the literal's solved
+//!   shape), never a silent collision,
+//! * the upstream-contract guard (a literal whose shape was never declared)
+//!   fails fast as a `CompilerBug`, never a silent mis-emit.
 //!
 //! Behavioural-parity oracle: the Go reference compiler at
 //! `/home/arthur/Documentos/comp/ipe/out/ipe` compiles + runs the
@@ -128,7 +130,10 @@ fn record_trio(interner: &mut Interner) -> DResult<Program> {
         type_params: vec![],
         params: vec![(arg, IrType::Int)],
         ret: rec.clone(),
-        body: Expr::Record(vec![(x, Expr::Var(arg)), (y, Expr::Int(2))]),
+        body: Expr::Record {
+            fields: vec![(x, Expr::Var(arg)), (y, Expr::Int(2))],
+            ty: Some(rec.clone()),
+        },
     };
     // bumpX p = { p | x = 5 }
     let bump_fn = Func {
@@ -334,7 +339,10 @@ fn literal_with_unknown_shape_fails_fast() -> DResult<()> {
         params: vec![],
         ret: IrType::Int, // NOT a record type → the literal's shape is uncollected
         body: Expr::Access {
-            record: Box::new(Expr::Record(vec![(x, Expr::Int(1))])),
+            record: Box::new(Expr::Record {
+                fields: vec![(x, Expr::Int(1))],
+                ty: None,
+            }),
             field: x,
             field_ty: IrType::Int,
         },
@@ -349,10 +357,11 @@ fn literal_with_unknown_shape_fails_fast() -> DResult<()> {
 }
 
 #[test]
-fn conflicting_field_set_types_fail_fast() -> DResult<()> {
-    // Two record types share the field set `{ x }` but differ in field type
-    // (`Int` vs `Bool`). Closed records assume one type per field set; this
-    // is an upstream-contract violation surfaced as a `CompilerBug`.
+fn distinct_shapes_sharing_a_field_set_emit_two_structs() -> DResult<()> {
+    // Two record types share the field-name set `{ x }` but differ in field
+    // type (`Int` vs `String`). Both type-check, so each synthesises its own
+    // struct rather than colliding onto one; the literals resolve to the
+    // matching struct by their solved shape (no internal error, no `E0308`).
     let mut interner = Interner::new();
     let main_mod = interner.intern("Main")?;
     let x = interner.intern("x")?;
@@ -363,34 +372,202 @@ fn conflicting_field_set_types_fail_fast() -> DResult<()> {
 
     let mut int_rec = BTreeMap::new();
     int_rec.insert(x, IrType::Int);
-    let mut bool_rec = BTreeMap::new();
-    bool_rec.insert(x, IrType::Bool);
+    let int_ty = IrType::Record(int_rec);
+    let mut str_rec = BTreeMap::new();
+    str_rec.insert(x, IrType::Str);
+    let str_ty = IrType::Record(str_rec);
+
+    // f p = { x = 1 }   with p : { x : Int }, result : { x : Int }
+    let f_fn = Func {
+        id: FuncId::from_raw(0),
+        name: fsym,
+        home: ModPath(vec![]),
+        type_params: vec![],
+        params: vec![(par, int_ty.clone())],
+        ret: int_ty.clone(),
+        body: Expr::Record {
+            fields: vec![(x, Expr::Int(1))],
+            ty: Some(int_ty),
+        },
+    };
+    // g q = { x = "hi" }   with q : { x : String }, result : { x : String }
+    let g_fn = Func {
+        id: FuncId::from_raw(1),
+        name: gsym,
+        home: ModPath(vec![]),
+        type_params: vec![],
+        params: vec![(qar, str_ty.clone())],
+        ret: str_ty.clone(),
+        body: Expr::Record {
+            fields: vec![(x, Expr::Str("hi".to_owned()))],
+            ty: Some(str_ty),
+        },
+    };
+    let prog = program(main_mod, vec![f_fn, g_fn], None);
+    let out = emit(&interner, &prog)?;
+
+    // Two distinct structs are synthesised for the shared `{ x }` field set.
+    let struct_defs = out.matches("pub struct RecX").count();
+    assert_eq!(
+        struct_defs, 2,
+        "two distinct field-type shapes must synthesise two structs:\n{out}"
+    );
+    // Each field type is present exactly once, on its own struct.
+    assert!(
+        out.contains("x: i64,"),
+        "the Int-typed struct must have an i64 field:\n{out}"
+    );
+    assert!(
+        out.contains("x: String,"),
+        "the String-typed struct must have a String field:\n{out}"
+    );
+    // The two literals resolve to their two distinct structs (no collision onto
+    // one name), so both a `1` and a `"hi"` field construction appear.
+    assert!(
+        out.contains("{ x: 1 }"),
+        "the Int literal must construct the Int struct:\n{out}"
+    );
+    assert!(
+        out.contains(r#"x: "hi""#),
+        "the String literal must construct the String struct:\n{out}"
+    );
+    Ok(())
+}
+
+/// Emit a program with two records that share the field-name set `{ x }` but
+/// differ in field type (`Int` vs `String`) into a real crate and `cargo check`
+/// it: the two distinct structs must both type-check (no `E0308`), proving the
+/// disambiguated emit is sound Rust. Gated on `IPE_E2E=1` (offline by default).
+#[test]
+fn end_to_end_distinct_shapes_cargo_check() -> DResult<()> {
+    if std::env::var("IPE_E2E").is_err() {
+        return Ok(());
+    }
+
+    let mut interner = Interner::new();
+    let main_mod = interner.intern("Main")?;
+    let x = interner.intern("x")?;
+    let fsym = interner.intern("f")?;
+    let gsym = interner.intern("g")?;
+    let par = interner.intern("p")?;
+    let qar = interner.intern("q")?;
+
+    let mut int_rec = BTreeMap::new();
+    int_rec.insert(x, IrType::Int);
+    let int_ty = IrType::Record(int_rec);
+    let mut str_rec = BTreeMap::new();
+    str_rec.insert(x, IrType::Str);
+    let str_ty = IrType::Record(str_rec);
 
     let f_fn = Func {
         id: FuncId::from_raw(0),
         name: fsym,
         home: ModPath(vec![]),
         type_params: vec![],
-        params: vec![(par, IrType::Record(int_rec))],
-        ret: IrType::Int,
-        body: Expr::Int(0),
+        params: vec![(par, int_ty.clone())],
+        ret: int_ty.clone(),
+        body: Expr::Record {
+            fields: vec![(x, Expr::Int(1))],
+            ty: Some(int_ty),
+        },
     };
     let g_fn = Func {
         id: FuncId::from_raw(1),
         name: gsym,
         home: ModPath(vec![]),
         type_params: vec![],
-        params: vec![(qar, IrType::Record(bool_rec))],
-        ret: IrType::Bool,
-        body: Expr::Int(0),
+        params: vec![(qar, str_ty.clone())],
+        ret: str_ty.clone(),
+        body: Expr::Record {
+            fields: vec![(x, Expr::Str("hi".to_owned()))],
+            ty: Some(str_ty),
+        },
     };
-    let prog = program(main_mod, vec![f_fn, g_fn], None);
-    let res = emit(&interner, &prog);
+    // main = Io.println ((g { x = "" }).x)  — forces BOTH structs into use so the
+    // crate is self-contained and the entry function exists.
+    let main = interner.intern("main")?;
+    let main_fn = Func {
+        id: FuncId::from_raw(2),
+        name: main,
+        home: ModPath(vec![]),
+        type_params: vec![],
+        params: vec![],
+        ret: IrType::Task(Box::new(IrType::Unit)),
+        body: Expr::Call {
+            callee: Callee::Kernel(KernelFn::IoPrintln),
+            args: vec![Expr::Access {
+                record: Box::new(Expr::Call {
+                    callee: Callee::Func(FuncId::from_raw(1)),
+                    args: vec![Expr::Record {
+                        fields: vec![(x, Expr::Str(String::new()))],
+                        ty: Some(IrType::Record({
+                            let mut m = BTreeMap::new();
+                            m.insert(x, IrType::Str);
+                            m
+                        })),
+                    }],
+                    pin: CallPin::None,
+                    on_form: OnFormKind::NotForm,
+                }),
+                field: x,
+                field_ty: IrType::Str,
+            }],
+            pin: CallPin::None,
+            on_form: OnFormKind::NotForm,
+        },
+    };
+    let prog = program(
+        main_mod,
+        vec![f_fn, g_fn, main_fn],
+        Some(FuncId::from_raw(2)),
+    );
+    let emitted = RustBackend::new(&interner).emit(&prog)?;
+
+    let status = vendor_and_run(&emitted, "ipe_backend_distinct_shapes_e2e", "check")?;
     assert!(
-        matches!(res, Err(Diagnostic::CompilerBug { .. })),
-        "conflicting field-set types must be a CompilerBug, got {res:?}"
+        matches!(&status, Ok(s) if s.success()),
+        "emitted two-shape project must type-check (no CompilerBug, no E0308): {status:?}"
     );
     Ok(())
+}
+
+/// Write an emitted Cargo project into a fresh temp dir, vendor the runtime
+/// beside it, and run `cargo <subcmd>`; returns the process status. Shared by the
+/// `IPE_E2E`-gated end-to-end tests so the emit-then-compile boilerplate lives
+/// once.
+fn vendor_and_run(
+    emitted: &ipe_backend::EmittedProject,
+    dir_name: &str,
+    subcmd: &str,
+) -> DResult<std::io::Result<std::process::ExitStatus>> {
+    let out = std::env::temp_dir().join(dir_name);
+    let _ = std::fs::remove_dir_all(&out);
+    let src = out.join("src");
+    std::fs::create_dir_all(&src).map_err(|e| io_bug(&src, &e))?;
+
+    let runtime = resolve_runtime().ok_or_else(|| Diagnostic::CompilerBug {
+        where_: "vendor_and_run",
+        detail: "could not locate the ipe_runtime tree".to_owned(),
+    })?;
+    copy_dir(&runtime, &src.join("ipe_runtime"))?;
+
+    let cargo_toml = out.join("Cargo.toml");
+    std::fs::write(&cargo_toml, &emitted.cargo_toml).map_err(|e| io_bug(&cargo_toml, &e))?;
+    for (rel, contents) in &emitted.files {
+        let path = out.join(rel.as_str());
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent).map_err(|e| io_bug(parent, &e))?;
+        }
+        std::fs::write(&path, contents).map_err(|e| io_bug(&path, &e))?;
+    }
+
+    let status = Command::new("cargo")
+        .arg(subcmd)
+        .current_dir(&out)
+        .env("CARGO_TARGET_DIR", out.join("target"))
+        .status();
+    let _ = std::fs::remove_dir_all(out.join("target"));
+    Ok(status)
 }
 
 /// Full spine: build the canonical record IR, emit the Cargo project, vendor the

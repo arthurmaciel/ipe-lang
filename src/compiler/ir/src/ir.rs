@@ -2110,9 +2110,24 @@ pub enum Expr {
     ///
     /// The fields are carried as `(field name, value)` pairs sorted by field
     /// name, so the construction is deterministic. The backend resolves the
-    /// literal's synthesised Rust struct from its field-name set; Rust names its
-    /// struct-literal fields, so the emitted construction is order-independent.
-    Record(Vec<(Symbol, Self)>),
+    /// literal's synthesised Rust struct from its full structural shape (field
+    /// names AND field types), so two records that share a field-name set but
+    /// differ in a field's type resolve to their two distinct structs; Rust
+    /// names its struct-literal fields, so the emitted construction is
+    /// order-independent.
+    ///
+    /// `ty` is the literal's solved [`IrType::Record`] shape, threaded from the
+    /// lowerer (the sole site with the solved region type). It disambiguates a
+    /// field-name collision at the resolution site; when the lowerer cannot
+    /// resolve a concrete shape (a still-generic record inside a polymorphic
+    /// body) it is `None`, and the backend falls back to field-name resolution
+    /// (sound because a name-set that is genuinely ambiguous only arises from
+    /// two DISTINCT concrete shapes, and a generic body's literal shares its
+    /// one struct with every instantiation).
+    Record {
+        fields: Vec<(Symbol, Self)>,
+        ty: Option<IrType>,
+    },
     /// A record field access `record.field`. `field_ty` is the field's own
     /// solved type — carried so the Rust backend can decide, WITHOUT any
     /// textual heuristic, whether the read needs a `.clone()` (a heap-backed
@@ -3656,7 +3671,10 @@ mod tests {
         let p = i.intern("p")?;
 
         // { x = 1, y = 2 } — fields sorted by name (x before y).
-        let lit = Expr::Record(vec![(x, Expr::Int(1)), (y, Expr::Int(2))]);
+        let lit = Expr::Record {
+            fields: vec![(x, Expr::Int(1)), (y, Expr::Int(2))],
+            ty: None,
+        };
         assert_eq!(lit, lit.clone());
         assert!(format!("{lit:?}").contains("Record"));
 
@@ -4328,7 +4346,10 @@ mod serde_persistence_tests {
                 },
                 // A record literal `{ count = 1 }` — exercises
                 // `Vec<(Symbol, Expr)>`.
-                Expr::Record(vec![(count_field, Expr::Int(1))]),
+                Expr::Record {
+                    fields: vec![(count_field, Expr::Int(1))],
+                    ty: None,
+                },
             ),
             Arm::new(
                 Pat::Ctor {
@@ -4337,7 +4358,10 @@ mod serde_persistence_tests {
                     variant: dec,
                     args: vec![],
                 },
-                Expr::Record(vec![(count_field, Expr::Int(0))]),
+                Expr::Record {
+                    fields: vec![(count_field, Expr::Int(0))],
+                    ty: None,
+                },
             ),
         ];
         let body = Expr::Match(Match::new(scrutinee, arms, &[inc, dec])?);

@@ -961,9 +961,10 @@ fn clear_let_bound_task_fail_pins(expr: Expr) -> Expr {
             elem,
             items: items.into_iter().map(recur).collect(),
         },
-        Expr::Record(fields) => {
-            Expr::Record(fields.into_iter().map(|(k, v)| (k, recur(v))).collect())
-        }
+        Expr::Record { fields, ty } => Expr::Record {
+            fields: fields.into_iter().map(|(k, v)| (k, recur(v))).collect(),
+            ty,
+        },
         Expr::Access {
             record,
             field,
@@ -2303,15 +2304,16 @@ fn rewrite_captured_clones(
             len,
             exact,
         }),
-        Expr::Record(fields) => Ok(Expr::Record(
-            fields
+        Expr::Record { fields, ty } => Ok(Expr::Record {
+            fields: fields
                 .into_iter()
                 .map(|(sym, e)| {
                     rewrite_captured_clones(clone_set, noncl_set, lambda_span, e, depth)
                         .map(|e| (sym, e))
                 })
                 .collect::<DResult<Vec<_>>>()?,
-        )),
+            ty,
+        }),
         Expr::Access {
             record,
             field,
@@ -2530,7 +2532,7 @@ fn lambda_body_refs_sym(sym: Symbol, expr: &Expr) -> bool {
         Expr::ListIndexClone { list, .. } | Expr::ListLenCheck { list, .. } => {
             lambda_body_refs_sym(sym, list)
         }
-        Expr::Record(fields) => fields.iter().any(|(_, e)| lambda_body_refs_sym(sym, e)),
+        Expr::Record { fields, .. } => fields.iter().any(|(_, e)| lambda_body_refs_sym(sym, e)),
         // Update.record is wrapped in `.clone()` by emit_update (borrow, not move).
         // Only the field value expressions are consuming captures.
         Expr::Update { fields, .. } => fields.iter().any(|(_, e)| lambda_body_refs_sym(sym, e)),
@@ -2671,7 +2673,7 @@ fn collect_lambda_capture_depths(sym: Symbol, expr: &Expr, cur_depth: u32, depth
         Expr::ListIndexClone { list, .. } | Expr::ListLenCheck { list, .. } => {
             collect_lambda_capture_depths(sym, list, cur_depth, depths);
         }
-        Expr::Record(fields) => {
+        Expr::Record { fields, .. } => {
             for (_, e) in fields {
                 collect_lambda_capture_depths(sym, e, cur_depth, depths);
             }
@@ -2837,7 +2839,7 @@ fn flows_into_sync_kernel_call(sym: Symbol, expr: &Expr) -> bool {
         Expr::ListIndexClone { list, .. } | Expr::ListLenCheck { list, .. } => {
             flows_into_sync_kernel_call(sym, list)
         }
-        Expr::Record(fields) => fields
+        Expr::Record { fields, .. } => fields
             .iter()
             .any(|(_, e)| flows_into_sync_kernel_call(sym, e)),
         Expr::Update { record, fields } => {
@@ -2950,7 +2952,7 @@ fn branch_value_leaf_reads_sym(name: Symbol, branch: &Expr) -> bool {
         | Expr::Cons { .. }
         | Expr::ListIndexClone { .. }
         | Expr::ListLenCheck { .. }
-        | Expr::Record(_)
+        | Expr::Record { .. }
         | Expr::Access { .. }
         | Expr::Update { .. }
         | Expr::Ctor { .. }
@@ -3151,7 +3153,7 @@ fn unify_group_value_leaves(
         | Expr::Cons { .. }
         | Expr::ListIndexClone { .. }
         | Expr::ListLenCheck { .. }
-        | Expr::Record(_)
+        | Expr::Record { .. }
         | Expr::Update { .. }
         | Expr::Ctor { .. }
         | Expr::TaskSeq { .. }
@@ -3377,12 +3379,13 @@ fn promote_unification_sibling_lambdas(
             len,
             exact,
         }),
-        Expr::Record(fields) => Ok(Expr::Record(
-            fields
+        Expr::Record { fields, ty } => Ok(Expr::Record {
+            fields: fields
                 .into_iter()
                 .map(|(f, e)| Ok((f, recur(e)?)))
                 .collect::<DResult<Vec<_>>>()?,
-        )),
+            ty,
+        }),
         Expr::Access {
             record,
             field,
@@ -3489,7 +3492,7 @@ fn sym_referenced_directly(sym: Symbol, expr: &Expr) -> bool {
         Expr::ListIndexClone { list, .. } | Expr::ListLenCheck { list, .. } => {
             sym_referenced_directly(sym, list)
         }
-        Expr::Record(fields) => fields.iter().any(|(_, e)| sym_referenced_directly(sym, e)),
+        Expr::Record { fields, .. } => fields.iter().any(|(_, e)| sym_referenced_directly(sym, e)),
         Expr::Update { record, fields } => {
             sym_referenced_directly(sym, record)
                 || fields.iter().any(|(_, e)| sym_referenced_directly(sym, e))
@@ -3621,7 +3624,10 @@ fn force_shared_capture_clones(sym: Symbol, expr: Expr) -> Expr {
             len,
             exact,
         },
-        Expr::Record(fields) => Expr::Record(force_shared_capture_clones_fields(sym, fields)),
+        Expr::Record { fields, ty } => Expr::Record {
+            fields: force_shared_capture_clones_fields(sym, fields),
+            ty,
+        },
         Expr::Access {
             record,
             field,
@@ -4063,7 +4069,7 @@ fn count_var_uses(sym: Symbol, expr: &Expr) -> usize {
         Expr::ListIndexClone { list, .. } | Expr::ListLenCheck { list, .. } => {
             count_var_uses(sym, list)
         }
-        Expr::Record(fields) => fields.iter().map(|(_, e)| count_var_uses(sym, e)).sum(),
+        Expr::Record { fields, .. } => fields.iter().map(|(_, e)| count_var_uses(sym, e)).sum(),
         // `Update.record` — `emit_update` wraps it as `(record).clone()`, which
         // BORROWS the record (`.clone()` takes `&self`).  `sym` is NOT moved by
         // the base position, but the base IS a textual OCCURRENCE of `sym` that
@@ -4254,7 +4260,7 @@ fn body_calls_kernel_on_param(
         Expr::ListIndexClone { list, .. } | Expr::ListLenCheck { list, .. } => {
             body_calls_kernel_on_param(param, list, matcher)
         }
-        Expr::Record(fields) | Expr::Update { fields, .. } => fields
+        Expr::Record { fields, .. } | Expr::Update { fields, .. } => fields
             .iter()
             .any(|(_, e)| body_calls_kernel_on_param(param, e, matcher)),
         Expr::Ctor { args, .. } => args
@@ -4455,7 +4461,7 @@ fn body_boxes_generic_callback(tv: Symbol, expr: &Expr) -> bool {
         Expr::ListIndexClone { list, .. } | Expr::ListLenCheck { list, .. } => {
             body_boxes_generic_callback(tv, list)
         }
-        Expr::Record(fields) | Expr::Update { fields, .. } => fields
+        Expr::Record { fields, .. } | Expr::Update { fields, .. } => fields
             .iter()
             .any(|(_, e)| body_boxes_generic_callback(tv, e)),
         Expr::TaskSeq { effect, rest } | Expr::TaskSeqSync { effect, rest } => {
@@ -4666,7 +4672,7 @@ fn count_fn_value_uses(sym: Symbol, expr: &Expr) -> usize {
         Expr::ListIndexClone { list, .. } | Expr::ListLenCheck { list, .. } => {
             count_fn_value_uses(sym, list)
         }
-        Expr::Record(fields) => fields
+        Expr::Record { fields, .. } => fields
             .iter()
             .map(|(_, e)| count_fn_value_uses(sym, e))
             .sum(),
@@ -4997,7 +5003,7 @@ fn fn_value_read_flags_walk(sym: Symbol, expr: &Expr, depth: u32, flags: &mut Fn
         Expr::ListIndexClone { list, .. } | Expr::ListLenCheck { list, .. } => {
             fn_value_read_flags_walk(sym, list, depth, flags);
         }
-        Expr::Record(fields) => {
+        Expr::Record { fields, .. } => {
             for (_, e) in fields {
                 fn_value_read_flags_walk(sym, e, depth, flags);
             }
@@ -5289,12 +5295,13 @@ fn shim_fn_value_reads(
             len,
             exact,
         }),
-        Expr::Record(fields) => Ok(Expr::Record(
-            fields
+        Expr::Record { fields, ty } => Ok(Expr::Record {
+            fields: fields
                 .into_iter()
                 .map(|(name, e)| recurse(e).map(|e| (name, e)))
                 .collect::<DResult<Vec<_>>>()?,
-        )),
+            ty,
+        }),
         Expr::Update { record, fields } => Ok(Expr::Update {
             record: Box::new(recurse(*record)?),
             fields: fields
@@ -5603,12 +5610,13 @@ fn rewrite_multiuse_clones(sym: Symbol, remaining: &mut usize, expr: Expr) -> Ex
             len,
             exact,
         },
-        Expr::Record(fields) => Expr::Record(
-            fields
+        Expr::Record { fields, ty } => Expr::Record {
+            fields: fields
                 .into_iter()
                 .map(|(k, v)| (k, rewrite_multiuse_clones(sym, remaining, v)))
                 .collect(),
-        ),
+            ty,
+        },
         // `Access.record` emits as `(record).field.clone()` — the record is
         // BORROWED by the method call, not moved.  We still recurse so that
         // the `remaining` counter advances correctly (count_var_uses counts
@@ -5863,7 +5871,7 @@ fn count_self_calls(
                 count_self_calls(self_id, arity, x, false, tail, non_tail);
             }
         }
-        Expr::Record(fs) => {
+        Expr::Record { fields: fs, .. } => {
             for (_, v) in fs {
                 count_self_calls(self_id, arity, v, false, tail, non_tail);
             }
@@ -6349,7 +6357,7 @@ fn collect_func_edges(expr: &Expr, out: &mut BTreeSet<FuncId>) {
                 collect_func_edges(e, out);
             }
         }
-        Expr::Record(fields) => {
+        Expr::Record { fields, .. } => {
             for (_, v) in fields {
                 collect_func_edges(v, out);
             }
@@ -6491,7 +6499,7 @@ fn scan_kernel_usage(expr: &Expr, usage: &mut KernelUsage) {
                 scan_kernel_usage(e, usage);
             }
         }
-        Expr::Record(fields) => {
+        Expr::Record { fields, .. } => {
             for (_, v) in fields {
                 scan_kernel_usage(v, usage);
             }
@@ -6745,12 +6753,13 @@ fn rewrite_var_free_occurrences(
             len,
             exact,
         },
-        Expr::Record(fields) => Expr::Record(
-            fields
+        Expr::Record { fields, ty } => Expr::Record {
+            fields: fields
                 .into_iter()
                 .map(|(sym, e)| (sym, rewrite_var_free_occurrences(target, e, on_hit)))
                 .collect(),
-        ),
+            ty,
+        },
         Expr::Access {
             record,
             field,
@@ -12231,7 +12240,24 @@ impl<'a> Lowerer<'a> {
                         .unwrap_or("")
                         .cmp(self.resolve(b.0).unwrap_or(""))
                 });
-                Ok(Expr::Record(lowered))
+                // Thread the literal's solved record shape (field names AND
+                // types) so the backend disambiguates a field-name collision —
+                // two records with the same names but different field types
+                // resolve to their two distinct synthesised structs. Kept only
+                // when it solves to a concrete `IrType::Record`; a still-generic
+                // shape inside a polymorphic body is `None`, and the backend
+                // falls back to field-name resolution (which is unambiguous
+                // there, since a generic body shares one struct with every
+                // instantiation). Same tolerance as the `Access` field-type
+                // thread below: a missing region type is never fail-closed.
+                let ty = self
+                    .region_ty(e.span)
+                    .and_then(|ty| self.ir_type_from_ty(ty, e.span).ok())
+                    .filter(|ty| matches!(ty, IrType::Record(_)));
+                Ok(Expr::Record {
+                    fields: lowered,
+                    ty,
+                })
             }
             canon::Expr_::Access(record, field) => {
                 //AUD-09 type-directed Copy elision: thread the field's
@@ -12600,7 +12626,13 @@ impl<'a> Lowerer<'a> {
                 .unwrap_or("")
                 .cmp(self.resolve(b.0).unwrap_or(""))
         });
-        Ok(Expr::Record(lowered))
+        // The app cfg record is a distinctive named shape whose field-name set
+        // does not collide with an unrelated record, so field-name resolution
+        // is unambiguous — no solved shape is threaded.
+        Ok(Expr::Record {
+            fields: lowered,
+            ty: None,
+        })
     }
 
     /// Lower the single cfg argument of an app-entry kernel, fail-closed on any
