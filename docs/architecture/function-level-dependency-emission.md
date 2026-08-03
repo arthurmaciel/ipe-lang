@@ -4,7 +4,7 @@ Design: push the emitted-project dependency gating from module/kernel-family
 granularity down to **function reachability**, so an emitted program compiles a
 runtime module's crates only when a function of that module is actually
 reachable from the program's entry. Companion to
-`compilation-performance.md` (this is the completion of S1 and the
+ADR 0054 (this is the completion of S1 and the
 finer-grained feature model S3 consumes) and to
 `precompiled-runtime-and-shared-target.md`.
 
@@ -250,7 +250,7 @@ obstacle to a zero-external-dep floor).
 
 Baseline: hello world measured at ~51 crates after the current usage-driven
 floor; hand-trimmed true floor measured at 1 crate / ~0.6 s cold
-(`compilation-performance.md`, "Measured floor"). Projections below are
+(ADR 0054, "Measured floor"). Projections below are
 estimates from the subtree sizes in that doc; only the bare row is measured.
 
 | Program | Today | Projected |
@@ -341,7 +341,7 @@ artifact.
    --features <floor>` for each new floor feature alone.
    Deliverable: `cfg(feature)` gates on §5.1 modules, `core`/`error` serde
    decoupling; re-measure §5.3 and record the numbers in
-   `compilation-performance.md`.
+   ADR 0054.
 
 ## 9. Risks and cost
 

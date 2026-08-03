@@ -13,7 +13,7 @@ phases that remain, and a test-first implementation plan. Companion documents:
 - ADR 0032 (the salsa foundation + the under-invalidation bar), ADR 0034 (the
   language server as a second consumer, no-second-analyzer invariant), ADR 0035
   (per-module typecheck behind closed typed interfaces).
-- [`compilation-performance.md`](compilation-performance.md) — the `ipe run`
+- ADR 0054 (`docs/adr/0054-compilation-performance-usage-gated-from-source.md`) — the `ipe run`
   latency budget and the S-strategies (S6, the IR interpreter, interacts with
   the watch loop below).
 
@@ -202,7 +202,7 @@ Target: compiler-side recompute for a body-only edit in **single-digit
 milliseconds independent of project size** (memo-hit assertions make this
 structural, not aspirational — the unrelated work provably does not run).
 End-to-end latency is then dominated by `cargo build` + link (~1 s with mold
-per `compilation-performance.md`), which is exactly the boundary the S-track
+per ADR 0054), which is exactly the boundary the S-track
 attacks (S1/S2/S3 shrink the crate graph; S8 the linker).
 
 **Interaction with the S6 IR interpreter.** S6 executes `ipe_ir` directly for
