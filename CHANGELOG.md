@@ -10,6 +10,30 @@ Entries below the header are maintained by
 section is generated from Conventional Commit messages and prepended when the
 standing release pull request is merged.
 
+## [0.1.35](https://github.com/arthurmaciel/ipe-lang/compare/ipe-v0.1.34...ipe-v0.1.35) (2026-08-03)
+
+
+### Features
+
+* **stdlib:** Ipe.Markdown follows the surrounding theme ([#548](https://github.com/arthurmaciel/ipe-lang/issues/548)) + exposes its parser ([#549](https://github.com/arthurmaciel/ipe-lang/issues/549)) ([#585](https://github.com/arthurmaciel/ipe-lang/issues/585)) ([1baa831](https://github.com/arthurmaciel/ipe-lang/commit/1baa83156406a02fe8f782277472610cd12bdc87))
+
+
+### Bug Fixes
+
+* **backend:** key record structs by full structural shape, not field-name set ([#553](https://github.com/arthurmaciel/ipe-lang/issues/553)) ([#576](https://github.com/arthurmaciel/ipe-lang/issues/576)) ([1ddd164](https://github.com/arthurmaciel/ipe-lang/commit/1ddd164ff19a3bb8cb8f8dfbd6be3048aca48dcd))
+* **backend:** Web programs emit compilable crates — app serde dep ([#566](https://github.com/arthurmaciel/ipe-lang/issues/566)) + no duplicate runtime mod ([#567](https://github.com/arthurmaciel/ipe-lang/issues/567)) ([#570](https://github.com/arthurmaciel/ipe-lang/issues/570)) ([f1a818d](https://github.com/arthurmaciel/ipe-lang/commit/f1a818d9c03629142fdddb34cf9b4482768c2165))
+* **cli:** fail early on a version-mismatched runtime; drop help page on build failure ([#571](https://github.com/arthurmaciel/ipe-lang/issues/571)) ([56e3bd8](https://github.com/arthurmaciel/ipe-lang/commit/56e3bd8ad224f154aaeeb7d2a5589e39c60204e2))
+* **doctor:** reformat suggested-fixes as indented bright-yellow bullets ([#562](https://github.com/arthurmaciel/ipe-lang/issues/562)) ([3e32d83](https://github.com/arthurmaciel/ipe-lang/commit/3e32d83e5c02c473d3ad10b65cbcc788b36e3647))
+* **examples:** task-publish uses a typed Topic, not a bare String ([#556](https://github.com/arthurmaciel/ipe-lang/issues/556)) ([#557](https://github.com/arthurmaciel/ipe-lang/issues/557)) ([7ad335f](https://github.com/arthurmaciel/ipe-lang/commit/7ad335f50bfdd1b00dea9408d7d0a2ea520dabbd))
+* **examples:** typed Topic handles for pub/sub sites (IPE-T0001) ([#581](https://github.com/arthurmaciel/ipe-lang/issues/581)) ([3e82264](https://github.com/arthurmaciel/ipe-lang/commit/3e8226495eefde84cc1cbd348ca473738772423e))
+* **lower:** fail-closed gate for a function instantiating a generic slot ([#579](https://github.com/arthurmaciel/ipe-lang/issues/579)) ([1d28a9b](https://github.com/arthurmaciel/ipe-lang/commit/1d28a9b8833e2cf930485cbb366c24d85630cd24))
+* **lower:** scan function bodies for feature-gated types so uses_json is a superset of emission ([#578](https://github.com/arthurmaciel/ipe-lang/issues/578)) ([efb82bb](https://github.com/arthurmaciel/ipe-lang/commit/efb82bb12d8e5799d74629befb0f0a2acc0bdb12))
+* **runtime:** textarea/select pseudo-class CSS no longer leaks into value ([#545](https://github.com/arthurmaciel/ipe-lang/issues/545)); fix(fmt): keep inter-constructor comments inside a type ([#554](https://github.com/arthurmaciel/ipe-lang/issues/554)) ([#582](https://github.com/arthurmaciel/ipe-lang/issues/582)) ([1e15016](https://github.com/arthurmaciel/ipe-lang/commit/1e15016b48e1a2177f76ea7bec08e079794a39b1))
+* **runtime:** Time.timeString UTC ([#529](https://github.com/arthurmaciel/ipe-lang/issues/529)) + wasm-client build resolves crate::web + weak-hash crates ([#527](https://github.com/arthurmaciel/ipe-lang/issues/527)) ([#568](https://github.com/arthurmaciel/ipe-lang/issues/568)) ([d57b403](https://github.com/arthurmaciel/ipe-lang/commit/d57b4030f74de9ace55b5cb13bc93c3098f67184))
+* **ui:** fillPortion flex-basis ([#543](https://github.com/arthurmaciel/ipe-lang/issues/543)) + mediaQuery cascade/target ([#544](https://github.com/arthurmaciel/ipe-lang/issues/544)); feat(stdlib): Ipe.List combinators ([#555](https://github.com/arthurmaciel/ipe-lang/issues/555)) ([#575](https://github.com/arthurmaciel/ipe-lang/issues/575)) ([081eb8d](https://github.com/arthurmaciel/ipe-lang/commit/081eb8d9b2e206f1d306f0c263cc084689002e0a))
+* **verify:** resolve project src/ modules from the test stage ([#565](https://github.com/arthurmaciel/ipe-lang/issues/565)) ([#569](https://github.com/arthurmaciel/ipe-lang/issues/569)) ([a3186d4](https://github.com/arthurmaciel/ipe-lang/commit/a3186d4b2ae68d45915797a6416595882218bf10))
+* **web:** client-JS event dispatch + navigation/scroll ([#546](https://github.com/arthurmaciel/ipe-lang/issues/546) [#547](https://github.com/arthurmaciel/ipe-lang/issues/547) [#550](https://github.com/arthurmaciel/ipe-lang/issues/550) [#551](https://github.com/arthurmaciel/ipe-lang/issues/551) [#552](https://github.com/arthurmaciel/ipe-lang/issues/552)) ([#583](https://github.com/arthurmaciel/ipe-lang/issues/583)) ([69c4fc4](https://github.com/arthurmaciel/ipe-lang/commit/69c4fc419ed837b32e9d0553297e35118dac42a4))
+
 ## [0.1.34](https://github.com/arthurmaciel/ipe-lang/compare/ipe-v0.1.33...ipe-v0.1.34) (2026-08-03)
 
 
