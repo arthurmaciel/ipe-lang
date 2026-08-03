@@ -50,33 +50,26 @@ pub fn string_trim(s: String) -> String {
 pub fn string_contains(sub: String, s: String) -> bool {
     s.contains(&sub)
 }
-/// `String.toInt : String -> Maybe Int`. Parity with the Go reference's
-/// OBSERVABLE behaviour (`String_toInt` = `strconv.Atoi(s)`, NO trim): the Go
-/// compiler routes `String.toInt` through this any-typed path, so surrounding
-/// whitespace makes the parse fail — `String.toInt " 42 " == Nothing`. (Go's
-/// unused `String_toIntT` companion happens to `TrimSpace` first, but the
-/// emitted code never reaches it; the golden oracle confirms `Nothing`.) This
-/// also matches Elm-family `String.toInt`, which does not trim. So no `.trim()`
-/// here — a leading/trailing space yields `Nothing`, exactly like the oracle.
+/// `String.toInt : String -> Maybe Int`. Leading and trailing Unicode
+/// whitespace is trimmed before parsing (`str::trim` = the Unicode
+/// `White_Space` property), so `String.toInt " 42 " == Just 42`, consistent
+/// with `String.toFloat`. Interior whitespace or any non-digit content still
+/// fails: `String.toInt "4 2" == Nothing`.
 #[must_use]
 pub fn string_to_int(s: String) -> IpeMaybe<i64> {
-    match s.parse::<i64>() {
+    match s.trim().parse::<i64>() {
         Ok(v) => IpeMaybe::Just(v),
         Err(_) => IpeMaybe::Nothing,
     }
 }
-/// `String.toFloat : String -> Maybe Float`. Go parity (`String_toFloat`):
-/// `strconv.ParseFloat(strings.TrimSpace(s), 64)` — UNLIKE `toInt`, Go's float
-/// path DOES trim Unicode whitespace before parsing (the oracle confirms
-/// `String.toFloat " 1.5 " == Just 1.5`), so we trim here too via `str::trim`
-/// (`char::is_whitespace` = the Unicode `White_Space` property, matching Go's
-/// `unicode.IsSpace`). The toInt/toFloat trim asymmetry mirrors the Go runtime.
+/// `String.toFloat : String -> Maybe Float`. Leading and trailing Unicode
+/// whitespace is trimmed before parsing (`str::trim` = the Unicode
+/// `White_Space` property), so `String.toFloat " 1.5 " == Just 1.5`, consistent
+/// with `String.toInt`.
 ///
-///
-/// SANCTIONED-STRICTER vs Go: Rust's `f64::from_str` accepts only the standard
-/// decimal / scientific grammar, rejecting Go's hex-float (`0x1p-2`) and
-/// underscore-digit-separator forms. This is a deliberate tightening — those
-/// forms never round-trip from `String.fromFloat` — so no golden is needed.
+/// `f64::from_str` accepts only the standard decimal / scientific grammar,
+/// rejecting hex-float (`0x1p-2`) and underscore-digit-separator forms — these
+/// never round-trip from `String.fromFloat`, so they are deliberately refused.
 #[must_use]
 pub fn string_to_float(s: String) -> IpeMaybe<f64> {
     match s.trim().parse::<f64>() {
@@ -1144,9 +1137,8 @@ mod tests {
         assert_eq!(string_split(",".into(), "a,".into()), vec!["a", ""]);
     }
 
-    // string_to_int — NO trim: parity with Go's observable `String_toInt`
-    // (`strconv.Atoi(s)`, the path the emitted code uses) and Elm's `String.toInt`.
-    // Surrounding whitespace ⇒ Nothing; only a clean numeric string parses.
+    // string_to_int — leading/trailing Unicode whitespace is trimmed before
+    // parsing; interior whitespace or any non-digit content still fails.
     #[test]
     fn test_to_int_plain() {
         assert!(matches!(string_to_int("42".into()), IpeMaybe::Just(42)));
@@ -1156,16 +1148,20 @@ mod tests {
         assert!(matches!(string_to_int("-5".into()), IpeMaybe::Just(-5)));
     }
     #[test]
-    fn test_to_int_no_trim_leading() {
-        assert!(matches!(string_to_int(" 42".into()), IpeMaybe::Nothing));
+    fn test_to_int_trims_leading() {
+        assert!(matches!(string_to_int(" 42".into()), IpeMaybe::Just(42)));
     }
     #[test]
-    fn test_to_int_no_trim_trailing() {
-        assert!(matches!(string_to_int("42 ".into()), IpeMaybe::Nothing));
+    fn test_to_int_trims_trailing() {
+        assert!(matches!(string_to_int("42 ".into()), IpeMaybe::Just(42)));
     }
     #[test]
-    fn test_to_int_no_trim_both() {
-        assert!(matches!(string_to_int(" 42 ".into()), IpeMaybe::Nothing));
+    fn test_to_int_trims_both() {
+        assert!(matches!(string_to_int(" 42 ".into()), IpeMaybe::Just(42)));
+    }
+    #[test]
+    fn test_to_int_interior_whitespace() {
+        assert!(matches!(string_to_int("4 2".into()), IpeMaybe::Nothing));
     }
     #[test]
     fn test_to_int_garbage() {
