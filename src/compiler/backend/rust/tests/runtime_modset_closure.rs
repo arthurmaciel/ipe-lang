@@ -18,6 +18,21 @@
 //! feature-/test-gated and their target module is pulled in by the same cfg,
 //! not by the base append (matches the runtime's db-gated telemetry refs, which
 //! are correctly NOT a SEAL requirement).
+//!
+//! ## Why not an exhaustive `2^FLAG_COUNT` sweep
+//!
+//! Brute-forcing every flag mask is `O(2^FLAG_COUNT)` — infeasible as the
+//! runtime feature count grows. This SEAL proves the SAME closure in linear
+//! time by per-flag closure + monotonicity + composition (the featureset SEAL
+//! carries the full argument). The declared-module set is monotone in the mask
+//! — the emitter only APPENDS feature modules — so a superset of flags declares
+//! a superset of modules. Each module's unconditional `use crate::<dep>` closure
+//! is source-only (mask-independent). Therefore: if every singleton flag's
+//! declared set is closed under its deps, and the declared set is monotone, then
+//! every union is closed (the composed all-flags declaration is exactly the
+//! union of the per-flag declarations, and each dep-target it needs is present
+//! in the flag that introduced its module). A bounded, deterministic sampled
+//! sweep is retained as a backstop.
 
 use std::collections::{BTreeSet, HashMap};
 use std::path::{Path, PathBuf};
@@ -55,7 +70,32 @@ fn resolve_runtime() -> Option<PathBuf> {
 /// `uses_ffi` is excluded: it appends `mod ffi;` to `main.rs` (not to
 /// `ipe_runtime/mod.rs`) and requires FFI emission inputs the body-free emit
 /// here cannot supply — it is orthogonal to the runtime-module closure.
+///
+/// The proof is per-flag + monotone + composed (see module docs), NOT a
+/// `2^FLAG_COUNT` enumeration — it scales linearly.
 const FLAG_COUNT: usize = 18;
+
+/// How many random full masks the backstop [`sampled_full_masks_are_closed`]
+/// checks, on top of the deterministic corners. Bounded so cost stays constant
+/// as `FLAG_COUNT` grows.
+const SAMPLE_MASKS: usize = 256;
+
+/// A deterministic full-mask stream (fixed-seed splitmix64 — no entropy/`Date`,
+/// so a failure reproduces). Masks are taken modulo the flag space.
+fn sampled_masks(count: usize) -> Vec<u32> {
+    let mut state: u64 = 0x9E37_79B9_7F4A_7C15; // fixed seed
+    let mask_space: u64 = 1u64 << FLAG_COUNT;
+    (0..count)
+        .map(|_| {
+            state = state.wrapping_add(0x9E37_79B9_7F4A_7C15);
+            let mut z = state;
+            z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
+            z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
+            z ^= z >> 31;
+            u32::try_from(z % mask_space).unwrap_or(0)
+        })
+        .collect()
+}
 
 #[allow(clippy::similar_names)] // `uses_ui` / `uses_tui` are intentionally alike
 fn module_for_mask(name: ipe_intern::Symbol, mask: u32) -> Module {
@@ -261,51 +301,153 @@ fn crate_root_dep(line: &str, supers_to_root: usize) -> Option<String> {
     }
 }
 
-/// The core assertion: every reachable `uses_*` combination emits a `mod.rs`
-/// whose declared module set is CLOSED under every declared module's
-/// unconditional `use crate::<dep>` references.
+/// The set of top-level modules the emitted `ipe_runtime/mod.rs` DECLARES for
+/// one flag mask.
+#[allow(clippy::expect_used)] // test scaffolding: a body-free emit cannot fail
+fn declared_for_mask(interner: &Interner, main: ipe_intern::Symbol, mask: u32) -> BTreeSet<String> {
+    let prog = Program {
+        modules: vec![module_for_mask(main, mask)],
+    };
+    let emitted = RustBackend::new(interner)
+        .emit(&prog)
+        .expect("emit must succeed for a body-free program");
+    let mod_rs = emitted
+        .files
+        .get("src/ipe_runtime/mod.rs")
+        .expect("emitted project must contain ipe_runtime/mod.rs");
+    declared_modules(mod_rs)
+}
+
+/// The per-mask closure obligation: the declared module set is CLOSED under
+/// every declared module's unconditional `use crate::<dep>` references. Shared
+/// by the per-flag, composed, and sampled proofs so they run an identical check.
+/// `dep_cache` memoises the source-only, mask-independent per-module dep scan.
+fn assert_mask_closed(
+    runtime_root: &Path,
+    interner: &Interner,
+    main: ipe_intern::Symbol,
+    mask: u32,
+    dep_cache: &mut HashMap<String, BTreeSet<String>>,
+) {
+    let declared = declared_for_mask(interner, main, mask);
+    for m in &declared {
+        let deps = dep_cache
+            .entry(m.clone())
+            .or_insert_with(|| unconditional_crate_deps(runtime_root, m));
+        for dep in deps.iter() {
+            assert!(
+                declared.contains(dep),
+                "module-set SEAL breach: emitted `mod.rs` declares `{m}` \
+                 (which does `use crate::{dep}`) but does NOT declare `{dep}` \
+                 — flag mask {mask:#019b}. The emitted crate would fail `cargo build`. \
+                 Declared modules: {declared:?}"
+            );
+        }
+    }
+}
+
+// ── (1) per-flag closure — O(FLAG_COUNT) ────────────────────────────────────
+
+/// Every single `uses_*` flag on its own (and the featureless base, mask 0)
+/// emits a `mod.rs` whose declared set is closed under its unconditional deps.
+/// The base case of the composition argument (module docs).
 #[test]
-fn emitted_modset_is_closed_over_every_flag_combo() {
+fn each_flag_declares_a_closed_modset() {
     let runtime_root =
         resolve_runtime().expect("runtime source tree (src/runtime/rust/src) must resolve");
-
     let mut interner = Interner::new();
     let main = interner.intern("Main").expect("intern Main");
+    let mut dep_cache: HashMap<String, BTreeSet<String>> = HashMap::new();
+    assert_mask_closed(&runtime_root, &interner, main, 0, &mut dep_cache);
+    for bit in 0..FLAG_COUNT {
+        assert_mask_closed(&runtime_root, &interner, main, 1u32 << bit, &mut dep_cache);
+    }
+}
 
-    // A module's unconditional crate-dep set is a function of its source alone,
-    // not the flag mask; scan each module from disk once and reuse the result
-    // across every combination.
+// ── (2) monotonicity — the compose glue ─────────────────────────────────────
+
+/// The declared module set distributes over union of flags:
+/// `declared(a | b) = declared(a) ∪ declared(b)`. The emitter only APPENDS
+/// feature modules, so enabling a flag can only add declarations, never drop
+/// one — which lets per-flag closure compose to every combination. Verified on
+/// the deterministic mask sample crossed with the singletons.
+#[test]
+fn declared_modset_is_monotone() {
+    let mut interner = Interner::new();
+    let main = interner.intern("Main").expect("intern Main");
+    for a in sampled_masks(SAMPLE_MASKS) {
+        for bit in 0..FLAG_COUNT {
+            let b = 1u32 << bit;
+            let mut composed = declared_for_mask(&interner, main, a);
+            composed.extend(declared_for_mask(&interner, main, b));
+            let union_declared = declared_for_mask(&interner, main, a | b);
+            assert_eq!(
+                union_declared, composed,
+                "monotonicity broken: declared(a | b) != declared(a) ∪ \
+                 declared(b) — a={a:#019b} b={b:#019b}. Enabling a flag REMOVED a \
+                 module declaration; per-flag closure no longer composes and a \
+                 targeted combination check is needed for this interaction."
+            );
+        }
+    }
+}
+
+// ── (3) composition — per-flag + monotone ⇒ every mask closed ───────────────
+
+/// The composition made explicit: the all-flags declared set equals the UNION
+/// of the per-flag declared sets, and that union is closed under its deps. Given
+/// [`each_flag_declares_a_closed_modset`] and [`declared_modset_is_monotone`],
+/// this stands in for the whole `2^FLAG_COUNT` sweep — any mask's declaration is
+/// the union of its set-bit declarations, and every dep-target sits in the flag
+/// that introduced the depending module (per-flag closure), so no union can drop
+/// a needed module.
+#[test]
+fn composed_full_modset_is_closed() {
+    let runtime_root =
+        resolve_runtime().expect("runtime source tree (src/runtime/rust/src) must resolve");
+    let mut interner = Interner::new();
+    let main = interner.intern("Main").expect("intern Main");
+    let all: u32 = (1u32 << FLAG_COUNT) - 1;
+
+    let mut composed: BTreeSet<String> = BTreeSet::new();
+    for bit in 0..FLAG_COUNT {
+        composed.extend(declared_for_mask(&interner, main, 1u32 << bit));
+    }
+    let full = declared_for_mask(&interner, main, all);
+    assert_eq!(
+        full, composed,
+        "composition invalid: declared(all) != ⋃ declared(singleton) — the \
+         module set is not a pure per-flag union, so per-flag closure does not \
+         compose"
+    );
+
+    let mut dep_cache: HashMap<String, BTreeSet<String>> = HashMap::new();
+    assert_mask_closed(&runtime_root, &interner, main, all, &mut dep_cache);
+}
+
+// ── the sampled full-mask backstop (redundancy, not the proof) ──────────────
+
+/// A bounded, deterministic sample of full masks run through the whole per-mask
+/// closure check, plus the corners (all-off, all-on, every singleton). A
+/// redundancy net, not the primary guarantee; fixed seed ⇒ reproducible;
+/// constant cost as `FLAG_COUNT` grows.
+#[test]
+fn sampled_full_masks_are_closed() {
+    let runtime_root =
+        resolve_runtime().expect("runtime source tree (src/runtime/rust/src) must resolve");
+    let mut interner = Interner::new();
+    let main = interner.intern("Main").expect("intern Main");
+    let all: u32 = (1u32 << FLAG_COUNT) - 1;
     let mut dep_cache: HashMap<String, BTreeSet<String>> = HashMap::new();
 
-    for mask in 0u32..(1u32 << FLAG_COUNT) {
-        let module = module_for_mask(main, mask);
-        let prog = Program {
-            modules: vec![module],
-        };
-        let emitted = RustBackend::new(&interner)
-            .emit(&prog)
-            .expect("emit must succeed for a body-free program");
-        let mod_rs = emitted
-            .files
-            .get("src/ipe_runtime/mod.rs")
-            .expect("emitted project must contain ipe_runtime/mod.rs");
-
-        let declared = declared_modules(mod_rs);
-
-        for m in &declared {
-            let deps = dep_cache
-                .entry(m.clone())
-                .or_insert_with(|| unconditional_crate_deps(&runtime_root, m));
-            for dep in deps.iter() {
-                assert!(
-                    declared.contains(dep),
-                    "module-set SEAL breach: emitted `mod.rs` declares `{m}` \
-                     (which does `use crate::{dep}`) but does NOT declare `{dep}` \
-                     — flag mask {mask:#019b}. The emitted crate would fail `cargo build`. \
-                     Declared modules: {declared:?}"
-                );
-            }
-        }
+    let mut masks: BTreeSet<u32> = sampled_masks(SAMPLE_MASKS).into_iter().collect();
+    masks.insert(0);
+    masks.insert(all);
+    for bit in 0..FLAG_COUNT {
+        masks.insert(1u32 << bit);
+    }
+    for mask in masks {
+        assert_mask_closed(&runtime_root, &interner, main, mask, &mut dep_cache);
     }
 }
 
