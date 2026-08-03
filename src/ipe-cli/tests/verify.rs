@@ -171,6 +171,58 @@ fn project_with_passing_tests_clears_the_test_stage() -> TestResult {
     Ok(())
 }
 
+/// A `tests/Main.ipe` that imports a module living under `src/Lib/` resolves
+/// the code under test: the test stage roots discovery at the project's `src/`
+/// tree, not the `tests/` directory, so the standard `src/` + `tests/` layout
+/// compiles and runs its tests without an IPE-N0020 module-resolution error.
+/// Gated on `IPE_E2E=1` — the test stage invokes `cargo` and needs the runtime.
+#[test]
+fn test_stage_resolves_src_modules_from_a_sibling_tests_dir() -> TestResult {
+    if std::env::var("IPE_E2E").is_err() {
+        eprintln!("skipping: set IPE_E2E=1 to run the cross-directory test-stage E2E");
+        return Ok(());
+    }
+    let dir = std::env::temp_dir().join(format!("ipe_verify_src_tests_{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(dir.join("src").join("Lib"))?;
+    std::fs::create_dir_all(dir.join("tests"))?;
+
+    // Code under test: src/Lib/Foo.ipe.
+    std::fs::write(
+        dir.join("src").join("Lib").join("Foo.ipe"),
+        "module Lib.Foo exposing (answer)\n\n\nanswer =\n    42\n",
+    )?;
+    // The project entry uses the library too, so the build stage is realistic.
+    std::fs::write(
+        dir.join("src").join("Main.ipe"),
+        "module Main exposing (main)\n\nimport Ipe.Io as Io\nimport Ipe.String as String\nimport Lib.Foo as Foo\n\n\nmain =\n    Io.println (String.fromInt Foo.answer)\n",
+    )?;
+    // The test entry, in the sibling tests/ directory, imports the src/ module.
+    std::fs::write(
+        dir.join("tests").join("Main.ipe"),
+        "module Main exposing (main)\n\nimport Ipe.Test as Test exposing (Test)\nimport Lib.Foo as Foo\n\n\ntests : List Test\ntests =\n    [ Test.test \"library answer\" (\\_ -> Test.equal 42 Foo.answer)\n    ]\n\n\nmain =\n    Test.runMain tests\n",
+    )?;
+
+    let (ok, stdout, stderr) = run_ipe(&[
+        "verify",
+        &dir.join("src").join("Main.ipe").to_string_lossy(),
+    ])?;
+    let _ = std::fs::remove_dir_all(&dir);
+    assert!(
+        !stderr.contains("IPE-N0020"),
+        "the test stage must resolve src/Lib/Foo.ipe (no IPE-N0020), got stderr:\n{stderr}"
+    );
+    assert!(
+        ok,
+        "a src/+tests/ project whose test imports the code under test must exit 0, got stderr:\n{stderr}"
+    );
+    assert!(
+        stdout.contains("build passed") && stdout.contains("test passed"),
+        "build and test stages must pass, got stdout:\n{stdout}"
+    );
+    Ok(())
+}
+
 /// A project with a failing `tests/Main.ipe` test suite fails the test stage
 /// and exits non-zero, after the build stage has already passed.
 /// Gated on `IPE_E2E=1` — the test stage invokes `cargo` and needs the runtime.
