@@ -1121,8 +1121,12 @@ function __ipeExtractArgs(ev) {
 document.addEventListener("change", function(ev) {
   var el = ev.target;
   if (!el || el.tagName !== "INPUT" || el.type !== "file") return;
-  var fileId  = el.getAttribute("data-ipe-ev-ipe-file");
-  var imageId = el.getAttribute("data-ipe-ev-ipe-image");
+  // The data-attr value is the EVENT NAME (ipe-file / ipe-image); the
+  // handler is resolved server-side by (handlerId, event), so the id
+  // travels in data-ipe-hid — the same wire shape click/submit use.
+  var fileEv  = el.getAttribute("data-ipe-ev-ipe-file");
+  var imageEv = el.getAttribute("data-ipe-ev-ipe-image");
+  var hid     = el.getAttribute("data-ipe-hid");
   var f = el.files && el.files[0];
   if (!f) return;
   // Client-side size guard via fileMaxSize. Saves the round-trip when
@@ -1141,21 +1145,21 @@ document.addEventListener("change", function(ev) {
     el.value = "";  // clear the input so the user can pick another
     return;
   }
-  if (fileId) {
+  if (fileEv) {
     var r = new FileReader();
     // __ipeSend's args param is List a on the wire (server expects
     // []json.RawMessage); a bare string would unmarshal-fail. Wrap
     // the data URL in a single-element array — the Ipe-side Msg
     // constructor declared as 'String -> Msg' reads args[0].
-    r.onload = function(e) { __ipeSend(fileId, [e.target.result]); };
+    r.onload = function(e) { __ipeSend(fileEv, [e.target.result], hid); };
     r.readAsDataURL(f);
   }
-  if (imageId) {
+  if (imageEv) {
     var maxW = parseInt(el.getAttribute("data-ipe-ev-ipe-file-max-width")  || "1200");
     var maxH = parseInt(el.getAttribute("data-ipe-ev-ipe-file-max-height") || "1200");
     __ipeResizeImage(f, maxW, maxH, function(dataUrl) {
       // Same wire-format reason as the onFile branch — wrap in array.
-      __ipeSend(imageId, [dataUrl]);
+      __ipeSend(imageEv, [dataUrl], hid);
     });
   }
 });
@@ -1177,8 +1181,11 @@ function __ipeResizeImage(file, maxW, maxH, cb) {
 }
 
 // Expose programmatic dispatch for custom JS integrations (e.g. Firebase
-// auth callbacks that need to send a Msg after the SDK resolves).
-window.__ipe_send = function(id, value, opts) { __ipeSend(id, value, opts); };
+// auth callbacks that need to send a Msg after the SDK resolves). The
+// contract is (handlerId, value, options): a caller targets a specific
+// registered handler by id, so the id maps to __ipeSend's handlerId slot
+// (not msgName) and value maps to args.
+window.__ipe_send = function(id, value, opts) { __ipeSend("", value, id, opts); };
 // ipe-nav: intercept clicks on <a ipe-nav ...> links so navigation is a
 // client-side fetch + innerHTML swap instead of a full page reload.
 // Falls back to normal navigation on modifier keys (cmd/ctrl/shift/alt),
