@@ -1,0 +1,79 @@
+module Main exposing (main)
+
+import Ipe.Io as Io
+import Ipe.String
+
+
+-- A captured record whose FIRST use inside a lambda is a field access, and
+-- which is then ALSO used whole. The lambda must clone the record, not move it.
+--
+-- Pre-fix, `ipe build` exits 0 but the emitted Rust fails `cargo build` with
+-- E0507 (`cannot move out of \`row\`, a captured variable in an \`Fn\` closure`).
+--
+-- Root cause: the dotted access `row.lineStart` was parsed as a chain of nodes
+-- (`VarLocal row`, `Access .. lineStart`) that all shared ONE span — the whole
+-- dotted-token span. The type-region map is keyed by `(module, span)`, so the
+-- field's (scalar `Int`) result type overwrote the record type at that key. The
+-- lowerer's capture classification looks up a captured var's type by the span of
+-- its first use; reading the overwritten `Int` type, it classified `row` as a
+-- copy leaf and inserted no clone, so the emitted `Fn` closure bare-moved the
+-- whole record on `withSource (..) row`.
+--
+-- Fix: each node of a dotted access chain gets a DISTINCT sub-span, so the base
+-- var's region entry keeps the record type. The captured `row` is then seen as a
+-- clonable record and `.clone()`d into the closure.
+--
+-- The record has 12 fields (several `Int`) so the first use is unambiguously a
+-- field access into a non-copy aggregate.
+
+
+sliceLines : Int -> Int -> String -> String
+sliceLines start end text =
+    String.slice start end text
+
+
+withSource : String -> Source -> String
+withSource slice row =
+    String.append row.name slice
+
+
+type alias Source =
+    { name : String
+    , path : String
+    , lineStart : Int
+    , lineEnd : Int
+    , colStart : Int
+    , colEnd : Int
+    , byteOffset : Int
+    , byteLength : Int
+    , tabWidth : Int
+    , generation : Int
+    , kind : String
+    , label : String
+    }
+
+
+loadSource : Source -> (String -> String)
+loadSource row =
+    \text -> withSource (sliceLines row.lineStart row.lineEnd text) row
+
+
+main : Task Error ()
+main =
+    let
+        row =
+            { name = "src:"
+            , path = "src/main.ipe"
+            , lineStart = 0
+            , lineEnd = 5
+            , colStart = 1
+            , colEnd = 9
+            , byteOffset = 0
+            , byteLength = 20
+            , tabWidth = 4
+            , generation = 1
+            , kind = "module"
+            , label = "Main"
+            }
+    in
+    Io.println (loadSource row "hello world")
