@@ -114,6 +114,10 @@ pub struct Palette {
     /// A soft Ipê-amarelo (256-colour 222), for the product name and command
     /// names.
     pub yellow: &'static str,
+    /// A bright/light yellow (ANSI bright yellow), for the `ipe doctor`
+    /// suggested-fix bullets — a stronger amber than [`yellow`](Self::yellow) so
+    /// each actionable item stands out from the report above it.
+    pub bright_yellow: &'static str,
     /// A mid grey (256-colour 244), for descriptions and the footer.
     pub dim: &'static str,
     /// A soft green (256-colour 114), for success emphasis.
@@ -132,6 +136,7 @@ impl Palette {
     /// failure.
     pub const COLOR: Self = Self {
         yellow: "\x1b[38;5;222m",
+        bright_yellow: "\x1b[93m",
         dim: "\x1b[38;5;244m",
         green: "\x1b[38;5;114m",
         red: "\x1b[31m",
@@ -142,6 +147,7 @@ impl Palette {
     /// The plain palette: every escape is empty, yielding aligned plain text.
     pub const PLAIN: Self = Self {
         yellow: "",
+        bright_yellow: "",
         dim: "",
         green: "",
         red: "",
@@ -178,6 +184,10 @@ mod tests {
     fn color_palette_carries_ansi_plain_does_not() {
         assert!(Palette::COLOR.yellow.contains('\x1b'));
         assert!(Palette::PLAIN.yellow.is_empty());
+        // The bright-yellow field the doctor fix bullets use follows the same
+        // rule: an escape under colour, empty under plain.
+        assert!(Palette::COLOR.bright_yellow.contains('\x1b'));
+        assert!(Palette::PLAIN.bright_yellow.is_empty());
         // `select` returns the coloured palette on true, the plain one on false.
         assert!(Palette::select(true).red.contains('\x1b'));
         assert!(Palette::select(false).red.is_empty());
