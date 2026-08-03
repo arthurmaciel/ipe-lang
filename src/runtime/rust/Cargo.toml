@@ -26,13 +26,15 @@ path = "src/mod.rs"
 tokio = { version = "1", features = ["rt", "rt-multi-thread", "macros", "time", "sync"], optional = true }
 serde_json = { version = "1", optional = true }
 jsonwebtoken = { version = "9", optional = true }
-# NON-optional: `crypto_core` (the always-on cryptographic floor: SHA-2 hash /
-# HMAC family + typed Key/Mac) is declared unconditionally, mirroring the
-# emitted floor (`templates/ipe_runtime/mod.rs` declares `pub mod crypto_core;`
-# and the base template ships `sha2` non-optional). jwt/auth/db/web/email all
-# rely on this floor being present at `--no-default-features`. The heavy RSA
-# arms inside `crypto_core.rs` stay `cfg(feature = "crypto")`.
-sha2 = { version = "0.10" }
+# `crypto_core.rs` (the cryptographic floor: SHA-2 hash + HMAC family + typed
+# Key/Mac + entropy pair + constant-time compare) is behind the `crypto-core`
+# feature: a program that reaches no crypto-floor kernel — and no crypto / jwt /
+# db / web / webview / email / server surface that reaches the floor — drops the
+# module and this whole subtree (`sha2` / `hmac` / `subtle` / `getrandom` +
+# `digest` / `block-buffer` / `crypto-common` / `generic-array` / `typenum` /
+# `cpufeatures`). The heavy RSA arms inside `crypto_core.rs` stay behind the
+# `crypto` feature (which implies `crypto-core`).
+sha2 = { version = "0.10", optional = true }
 rsa = { version = "0.9", features = ["sha2"], optional = true }
 aes-gcm = { version = "0.10", optional = true }
 chacha20poly1305 = { version = "0.10", optional = true }
@@ -70,23 +72,31 @@ serde = { version = "1", features = ["derive"] }
 # NON-optional: `dom/form.rs` (always compiled — shared by the Live wire and
 # the browser-WASM sink) decodes typed form records through it. Pure serde.
 serde_urlencoded = "0.7"
-subtle = "2"
-# OS CSPRNG for the always-on `crypto_core` entropy pair
-# (`Crypto.randomBytes` / `randomToken`) on native targets. The wasm32 target
-# block below adds the `js` feature (backing `getrandom` with
+# Constant-time compare: the `crypto_core` floor's `constantTimeEqual`, the
+# `secret.rs` `Secret` compare, and the `web`/`server` CSRF/session-id compares.
+# Optional, behind `crypto-core` (and `secret`, which implies `crypto-core`): a
+# program that reaches neither the crypto floor nor a `Secret` drops it.
+subtle = { version = "2", optional = true }
+# OS CSPRNG for the `crypto_core` entropy pair (`Crypto.randomBytes` /
+# `randomToken`) on native targets, and `random.rs`'s wasm seed arm. The wasm32
+# target block below adds the `js` feature (backing `getrandom` with
 # `crypto.getRandomValues`); cargo unions the two, so native uses the OS source
 # and the browser uses its substitute — neither pulls `aes-gcm` for entropy.
-# NON-optional: the always-on `crypto_core` floor needs it, so it stays present
-# even for a bare Program (and even when the `random` feature is off). Demoting it
-# out of the floor lands with the crypto-core demotion, not the `random` gate.
-getrandom = "0.2"
-# `Ipe.Core.Secret` (backlog #44): zeroizes the backing buffer on `Drop` so a
-# revealed/discarded secret does not linger in freed heap memory. NON-optional
-# (like `subtle`) — `secret.rs` is always compiled, no feature gate.
-zeroize = "1"
-hmac = "0.12"
-sha1 = "0.10"
-md-5 = "0.10"
+# Optional, enabled by `random || crypto-core`: now that the crypto floor is
+# gated, a bare synchronous Program (no crypto/jwt/db/web/email/server/random)
+# reaches neither and finally drops `getrandom`.
+getrandom = { version = "0.2", optional = true }
+# `Ipe.Secret`: zeroizes the backing buffer on `Drop` so a revealed/discarded
+# secret does not linger in freed heap memory. Optional, behind the `secret`
+# feature: a program that reaches no `Secret` drops `secret.rs` and `zeroize`.
+zeroize = { version = "1", optional = true }
+# HMAC family — the `crypto_core` floor's `hmacSha256`/`hmacSha512`. Optional,
+# behind `crypto-core`.
+hmac = { version = "0.12", optional = true }
+# Legacy SHA-1 / MD5 checksums (`Crypto.sha1`/`md5`) live in `crypto.rs`, the
+# heavy surface — optional, behind the `crypto` feature.
+sha1 = { version = "0.10", optional = true }
+md-5 = { version = "0.10", optional = true }
 # The driver features (`sqlite`/`postgres`) are activated by the `db-sqlite` /
 # `db-postgres` selectors, not enabled here — a program pulls only the driver
 # it emits. `db-postgres` also activates `sqlite` (the Live session store keeps
@@ -265,12 +275,24 @@ regex = ["dep:regex"]
 # `server` / `web` surfaces mint session/CSRF ids via `uuid::new_v4`, so both
 # imply `uuid`; a bare Program that reaches no `Ipe.Uuid` kernel drops the crate.
 uuid = ["dep:uuid"]
-# `Ipe.Random` non-cryptographic PRNG: gates the `random.rs` MODULE only. It does
-# NOT list `dep:getrandom` — `getrandom` stays a non-optional base dep because the
-# always-on `crypto_core` floor needs it for entropy, so a bare Program keeps
-# `getrandom` but drops `random.rs`. Dropping `getrandom` for a bare Program lands
-# with the crypto-core demotion, not this feature.
-random = []
+# `Ipe.Random` non-cryptographic PRNG: gates the `random.rs` module. `getrandom`
+# is enabled by `random || crypto-core` (either); `random.rs`'s wasm seed arm
+# draws from it, and on native it seeds the LCG. A bare synchronous Program
+# reaches neither `random` nor `crypto-core` and drops `getrandom`.
+random = ["dep:getrandom"]
+# The cryptographic floor: `crypto_core.rs` (SHA-2 hash + HMAC + RSA-gated arm +
+# constant-time compare + entropy pair + typed Key/Mac). Pulls `sha2` / `hmac` /
+# `subtle` / `getrandom` and their subtrees, plus `encoding` (the floor's inline
+# base64url encoder is crate-free, but the heavy `crypto`/`jwt` consumers that
+# imply `crypto-core` also need the codec crates, so folding `encoding` here keeps
+# the graph closed at `--no-default-features`). Every heavier crypto surface
+# (`crypto`/`jwt`) and every floor-reaching surface (`db`/`web`/`email`/`server`)
+# implies this.
+crypto-core = ["dep:sha2", "dep:hmac", "dep:subtle", "dep:getrandom", "encoding"]
+# `Ipe.Secret` opaque secret-string module (`secret.rs` + `zeroize`). Implies
+# `crypto-core` for the shared `subtle` constant-time compare. A program that
+# reaches no `Secret` drops `secret.rs` + `zeroize`.
+secret = ["dep:zeroize", "dep:subtle", "crypto-core"]
 # `Ipe.Decimal` + `Ipe.Money`: the `rust_decimal` crate (and its `arrayvec`
 # subtree) plus the `decimal.rs` / `money.rs` modules. `money.rs` builds on
 # `decimal.rs`'s `Decimal`, so one feature gates both. The `db` surface decodes
@@ -287,7 +309,7 @@ char-category = ["dep:unicode-general-category"]
 # the `jwt` feature.
 json = ["serde_json"]
 # `sha2` (the `_ipe_migrations` ledger checksum, a cross-backend byte-exact DB
-# contract) is now a non-optional base dep, so it is NOT listed. `tokio/sync`:
+# contract) rides the `crypto-core` feature `db` lists below. `tokio/sync`:
 # `db.rs`, `telemetry_spill.rs`, and the `tea` loop use `tokio::sync`. BOTH the
 # `sqlite` and `postgres` sqlx drivers link with `db`: the vendored Live session
 # store (`web/store.rs`) references `SqlitePool` AND `PgPool` under `db`, and the
@@ -300,7 +322,9 @@ json = ["serde_json"]
 # retention cutoff stamp `chrono::Utc::now()` timestamps. `decimal`: `db.rs`
 # decodes numeric SQL columns (and `Db.Decode.money`) through `rust_decimal` +
 # the `Decimal` newtype.
-db = ["sqlx", "sqlx?/sqlite", "sqlx?/postgres", "tokio", "tokio/sync", "serde_json", "json", "bincode", "encoding", "random", "time-core", "decimal"]
+# `crypto-core`: `db.rs` SHA-256s the `_ipe_migrations` ledger checksum (a
+# cross-backend byte-exact contract).
+db = ["sqlx", "sqlx?/sqlite", "sqlx?/postgres", "tokio", "tokio/sync", "serde_json", "json", "bincode", "encoding", "random", "time-core", "decimal", "crypto-core"]
 # `db-sqlite` / `db-postgres`: config.rs alias selectors. Only the emitter ever
 # enables one, and it selects exactly one (SEAL-checked) — the standalone crate
 # links both sqlx drivers regardless (see `db`). The `compile_error!` in
@@ -308,12 +332,18 @@ db = ["sqlx", "sqlx?/sqlite", "sqlx?/postgres", "tokio", "tokio/sync", "serde_js
 db-sqlite = ["db"]
 db-postgres = ["db"]
 redis_store = ["redis", "tokio", "tokio/sync", "serde_json", "async-trait", "bincode", "random"]
-crypto = ["rsa", "bcrypt", "aes-gcm", "chacha20poly1305", "pbkdf2", "encoding"]
+# Heavy crypto surface (`crypto.rs`): legacy SHA-1/MD5 checksums, AEAD, PBKDF2,
+# RSA. Owns `sha1` + `md-5` (crypto.rs-only) and implies `crypto-core` (the RSA
+# arm, the `Key` reveal, and the re-exported floor all live there).
+crypto = ["rsa", "bcrypt", "aes-gcm", "chacha20poly1305", "pbkdf2", "dep:sha1", "dep:md-5", "encoding", "crypto-core"]
 # `jwt`: the JWT encode/decode surface (`jwt.rs`, `all(json, crypto)`-gated).
 # Splits `jsonwebtoken` (+ its ring closure) out of the floor `json` feature so
 # a plain JSON program does not link it. `auth.rs` (register/login) also needs
 # this surface. Implies both `json` and `crypto`, matching the module gate.
-jwt = ["json", "crypto", "dep:jsonwebtoken"]
+# `jwt.rs` signs with `crypto_core`'s HMAC/RSA (via `crypto`, which implies
+# `crypto-core`) and wraps its `Algorithm` in a `secret::Secret`, so it implies
+# `secret` (which itself implies `crypto-core`).
+jwt = ["json", "crypto", "secret", "dep:jsonwebtoken"]
 compression = ["flate2", "zstd", "tokio", "random"]
 csv_kernel = ["csv", "tokio", "random"]
 cache_kernel = ["tokio", "random"]
@@ -329,7 +359,8 @@ webview = ["wry", "tao", "web"]
 config = ["json", "toml", "serde_yaml"]
 # `tokio/net`+`tokio/sync`: axum binds a listener (`tokio::net`) and the
 # server/live loop uses `tokio::sync`.
-server = ["tokio", "tokio/net", "tokio/sync", "axum", "tower-http", "futures-util", "encoding", "uuid", "random"]
+# `crypto-core`: `server.rs` constant-time compares session ids via `subtle`.
+server = ["tokio", "tokio/net", "tokio/sync", "axum", "tower-http", "futures-util", "encoding", "uuid", "random", "crypto-core"]
 # The reqwest-free `ssrf` module parses URLs via the `url` crate (which reqwest
 # re-exports as `reqwest::Url`); `url` is behind the `url` feature.
 http_client = ["tokio", "reqwest", "futures-util", "url", "random"]
@@ -337,26 +368,29 @@ http_client = ["tokio", "reqwest", "futures-util", "url", "random"]
 # SSRF hardening; ws_client.rs reuses `http_client::ssrf_validate_url` +
 # `ssrf_pinned_ws_addr`. Both need the http_client module present. (`sha2` is a
 # non-optional base dep now.)
-email = ["tokio", "reqwest", "lettre", "serde_json", "http_client", "encoding"]
+# `crypto-core`: `email.rs` HMAC-SHA-256s the SMTP auth.
+email = ["tokio", "reqwest", "lettre", "serde_json", "http_client", "encoding", "crypto-core"]
 # ws needs ONLY the reqwest-free ssrf validators (which use `url`, behind the
 # `url` feature), NOT the reqwest HTTP client — so it does not pull
 # `http_client`. `tokio/net`: `ws_client.rs` opens the pinned TCP socket.
 websocket_client = ["tokio", "tokio/net", "tokio/sync", "tokio-tungstenite", "futures-util", "url", "random"]
-# The session-id / CSRF-token RNG draws from the OS CSPRNG via `uuid` (a
-# non-optional base dep), so `web` needs no `aes-gcm`; `subtle` (constant-time
-# compare), `sha2` (client-JS SRI integrity hash) and `serde` are non-optional
-# base deps now. `tokio/signal`+`tokio/process`: the Live console reverse-proxy
+# The session-id / CSRF-token RNG draws from the OS CSPRNG via `uuid`, so `web`
+# needs no `aes-gcm`; `subtle` (constant-time compare) and `sha2` (client-JS SRI
+# integrity hash) ride the `crypto-core` feature `web` lists below, and `serde` is
+# a non-optional base dep. `tokio/signal`+`tokio/process`: the Live console reverse-proxy
 # (`web/console_proxy.rs`, `web/mod.rs`) spawns a child (`tokio::process`) and
 # handles signals (`tokio::signal`) — matching the emitted `web_cargo_toml`
 # live-runtime tokio feature set.
 # `time-core`: `web/store.rs` (Live session store) and `web/hub.rs`/`web/mod.rs`
 # (console-proxy + hub timestamps) render `chrono` instants. `webview` implies
 # `web`, so the native-window backend carries it transitively.
-web = ["server", "http_client", "serde_json", "async-trait", "tokio/signal", "tokio/process", "encoding", "uuid", "time-core"]
+# `crypto-core`: `web/mod.rs` SHA-256s the client-JS SRI integrity hash and
+# `web/csrf.rs` constant-time compares CSRF tokens via `subtle`.
+web = ["server", "http_client", "serde_json", "async-trait", "tokio/signal", "tokio/process", "encoding", "uuid", "time-core", "crypto-core"]
 # `db-postgres` (not bare `db`) selects a concrete sqlx driver — it also pulls
 # `sqlite`, so both driver code paths compile. `jwt` + `url` cover the
 # JWT/auth and URL/SSRF surfaces that `db`/`web`/`http_client` reach.
-full = ["async", "json", "jwt", "url", "db", "db-postgres", "redis_store", "crypto", "compression", "csv_kernel", "cache_kernel", "tui", "config", "server", "http_client", "email", "websocket_client", "web", "time", "log", "regex", "uuid", "random", "decimal", "char-category"]
+full = ["async", "json", "jwt", "url", "db", "db-postgres", "redis_store", "crypto", "crypto-core", "secret", "compression", "csv_kernel", "cache_kernel", "tui", "config", "server", "http_client", "email", "websocket_client", "web", "time", "log", "regex", "uuid", "random", "decimal", "char-category"]
 # Browser-WASM TEA sink (`src/wasm/`): mount + patch-apply + delegated events.
 # Compiles only on wasm32 (the module is target-cfg'd); NOT in `full` — native
 # builds never link the wasm glue.
@@ -367,8 +401,13 @@ wasm-client = [
     "dep:web-sys",
     "dep:console_error_panic_hook",
     "dep:gloo-timers",
-    # `sha2` (the wasm32 `crypto.rs`/`crypto_core.rs` hash family) is a
-    # non-optional base dep now, so no feature entry is needed here.
+    # The static wasm module set (`WASM_RUNTIME_MOD_RS`) declares `crypto_core`
+    # and `secret` unconditionally, so `wasm-client` implies both features to
+    # satisfy the source `#[cfg]` gates and pull `sha2`/`hmac`/`subtle`/`getrandom`
+    # (the wasm32 hash family + entropy shim) and `zeroize`. `secret` implies
+    # `crypto-core`; naming both is explicit, not redundant selection.
+    "crypto-core",
+    "secret",
     # `url`: the wasm32 `http_client.rs` fetch arm parses/narrows URLs via
     # `crate::url` (now behind the `url` feature).
     "url",

@@ -6222,6 +6222,12 @@ impl StdlibKernel {
             self,
             Self::CryptoSha1
                 | Self::CryptoMd5
+                // RSA sign/verify: emit into `crypto_core.rs` but their bodies are
+                // `#[cfg(feature = "crypto")]` (the `rsa` subtree), so they need the
+                // heavy feature. `crypto` implies `crypto-core`, so the floor is
+                // still present for their `crypto_core`-resident symbol.
+                | Self::CryptoRsaSha256Sign
+                | Self::CryptoRsaSha256Verify
                 | Self::CryptoAesGcmEncrypt
                 | Self::CryptoAesGcmDecrypt
                 | Self::CryptoAesGcmEncryptKey
@@ -6234,6 +6240,64 @@ impl StdlibKernel {
                 | Self::CryptoChachaKeyFromPassword
                 | Self::CryptoAesKeyFromPasswordKey
                 | Self::CryptoChachaKeyFromPasswordKey
+        )
+    }
+
+    /// `true` when this variant's emitted symbol lives in `crypto_core.rs` AND is
+    /// available with only the `crypto-core` feature — the cryptographic floor:
+    /// SHA-2 hash (`sha256`/`sha512`), the HMAC family (`hmacSha256`/`hmacSha512`
+    /// and their `Key`-typed `WithKey` forms), the constant-time compare, the
+    /// entropy pair (`randomBytes`/`randomToken`), and the typed `Key`/`Mac`
+    /// newtype kernels (`Key.fromString` / `Key.fromBytes` / `Mac.toHex`).
+    ///
+    /// EXCLUDES RSA sign/verify: although their emit symbols reside in
+    /// `crypto_core.rs`, their bodies are `#[cfg(feature = "crypto")]` (they pull
+    /// the ~34-crate `rsa` subtree), so they need the heavy `crypto` feature — they
+    /// are classified by [`Self::is_crypto`], which implies `crypto-core`. Gating
+    /// an RSA-only program on `crypto-core` alone would drop the `#[cfg]`-off RSA
+    /// arm and ship an E0433.
+    ///
+    /// Used by `ipe_lower` to detect `uses_crypto_core` and by the backend to
+    /// select the `crypto-core` Cargo feature (which pulls `sha2` / `hmac` /
+    /// `subtle` / `getrandom`). A program that reaches no crypto-floor kernel —
+    /// and no `crypto` / `jwt` / `db` / `web` / `webview` / `email` / `server`
+    /// surface that reaches the floor transitively (folded in by the backend's
+    /// `reaches_crypto_core`) — drops the module and its crates. Disjoint from
+    /// [`Self::is_crypto`]: the heavy legacy-checksum / AEAD / PBKDF2 kernels live
+    /// in `crypto.rs` (the `crypto` feature), which itself implies `crypto-core`.
+    #[must_use]
+    pub const fn is_crypto_core(self) -> bool {
+        matches!(
+            self,
+            Self::CryptoSha256
+                | Self::CryptoSha512
+                | Self::CryptoHmacSha256
+                | Self::CryptoHmacSha512
+                | Self::CryptoHmacSha256WithKey
+                | Self::CryptoHmacSha512WithKey
+                | Self::CryptoConstantTimeEqual
+                | Self::CryptoRandomBytes
+                | Self::CryptoRandomToken
+                | Self::CryptoKeyFromString
+                | Self::CryptoKeyFromBytes
+                | Self::CryptoMacToHex
+        )
+    }
+
+    /// `true` when this variant belongs to the `Ipe.Secret` opaque
+    /// secret-string family (`Secret.fromString` / `reveal` / `redacted`).
+    ///
+    /// The `secret.rs` runtime module (a `zeroize`-on-`Drop` newtype with a
+    /// `subtle` constant-time compare) is its sole consumer. Used by `ipe_lower`
+    /// to detect `uses_secret` and by the backend to select the `secret` Cargo
+    /// feature (which pulls `zeroize` + `subtle`, and implies `crypto-core` for
+    /// the shared `subtle`). A program that reaches no `Secret.*` kernel and holds
+    /// no `Secret`-typed value drops the module and `zeroize`.
+    #[must_use]
+    pub const fn is_secret(self) -> bool {
+        matches!(
+            self,
+            Self::SecretFromString | Self::SecretReveal | Self::SecretRedacted
         )
     }
 
@@ -7849,6 +7913,7 @@ mod tests {
             let emit = k.decl().emit;
             let lives_in_heavy_crypto = emit == "crypto_sha1"
                 || emit == "crypto_md5"
+                || emit.contains("rsa_sha256")
                 || emit.contains("aes_gcm")
                 || emit.contains("chacha20")
                 || emit.contains("_key_from_password");
@@ -7861,6 +7926,67 @@ mod tests {
                  uses only the always-on crypto_core floor",
                 k.is_crypto(),
                 lives_in_heavy_crypto,
+            );
+        }
+    }
+
+    /// Every crypto-floor kernel emits a symbol into `crypto_core.rs` (the sole
+    /// consumer of `sha2` / `hmac` / the `subtle` compare / the `getrandom`
+    /// entropy pair once `crypto-core` gates them), so `is_crypto_core()` MUST
+    /// report exactly the kernels whose emit symbol resides there — and NONE of
+    /// the heavy `crypto.rs` kernels. Residency is content-addressed off the emit
+    /// symbol, the SAME discipline `crypto_predicate_tracks_heavy_module_residency`
+    /// uses on the other side of the split: a floor symbol is one under the
+    /// `Crypto` / `Key` / `Mac` qualifiers that is NOT a heavy residency
+    /// (`crypto_sha1` / `crypto_md5`, an AEAD op — `aes_gcm` / `chacha20` in the
+    /// name — or a PBKDF2 derivation, `_key_from_password`). Both directions are
+    /// asserted, so mis-gating a floor kernel (E0433 for a program using only
+    /// `Crypto.sha256`) or wrongly claiming a heavy kernel fails the instant the
+    /// emit symbol and the predicate disagree.
+    #[test]
+    fn crypto_core_predicate_tracks_floor_module_residency() {
+        for k in StdlibKernel::ALL {
+            let decl = k.decl();
+            let emit = decl.emit;
+            let qual = decl.qualifier;
+            let heavy = emit == "crypto_sha1"
+                || emit == "crypto_md5"
+                || emit.contains("rsa_sha256")
+                || emit.contains("aes_gcm")
+                || emit.contains("chacha20")
+                || emit.contains("_key_from_password");
+            let lives_in_floor = (qual == "Crypto" || qual == "Key" || qual == "Mac") && !heavy;
+            assert_eq!(
+                k.is_crypto_core(),
+                lives_in_floor,
+                "{k:?} emits `{emit}` (qualifier `{qual}`): is_crypto_core()={} but \
+                 crypto_core residency={} — the emitted crate would either fail to \
+                 select the `crypto-core` feature (E0433 for a floor kernel) or pull \
+                 sha2/hmac/subtle/getrandom into a program that reaches no crypto floor",
+                k.is_crypto_core(),
+                lives_in_floor,
+            );
+        }
+    }
+
+    /// Every `Ipe.Secret` kernel emits a symbol into the `secret.rs` runtime
+    /// module (the sole consumer of `zeroize`), so `is_secret()` MUST report
+    /// exactly `qualifier == "Secret"`, and no other qualifier may. Both
+    /// directions asserted, so a new `Secret.*` kernel the predicate forgets — or
+    /// an unrelated kernel wrongly claimed — fails the instant the two disagree
+    /// (the module would be dropped for a program that needs it, E0433).
+    #[test]
+    fn secret_predicate_tracks_secret_qualifier() {
+        for k in StdlibKernel::ALL {
+            let is_secret_qualifier = k.decl().qualifier == "Secret";
+            assert_eq!(
+                k.is_secret(),
+                is_secret_qualifier,
+                "{k:?}: is_secret()={} but qualifier==\"Secret\" is {} — \
+                 a Secret-using program would drop the `secret` module it needs or \
+                 a non-Secret program would pull `zeroize`",
+                k.is_secret(),
+                is_secret_qualifier,
             );
         }
     }

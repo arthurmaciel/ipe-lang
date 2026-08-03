@@ -115,8 +115,21 @@ pub enum RuntimeFeature {
     /// (`reaches_char_category()`: an `Ipe.Char` `General_Category` predicate). A
     /// standalone leaf. The std-only `Ipe.Char` kernels stay in `char_kernel.rs`.
     CharCategory,
+    /// `crypto-core` — the cryptographic floor: `crypto_core.rs` and its `sha2`
+    /// hash / `hmac` / `subtle` constant-time / `getrandom` entropy deps
+    /// (`reaches_crypto_core()`: a crypto-floor kernel, OR the crypto / jwt / db /
+    /// web / webview / email / server surfaces, all of which reach the floor). A
+    /// bare synchronous Program reaches none of these and drops the module, the
+    /// `sha2`/`hmac`/`subtle` subtree, and — since `getrandom` is enabled only by
+    /// `random || crypto-core` — `getrandom` too.
+    CryptoCore,
+    /// `secret` — the `secret.rs` opaque secret-string module and its `zeroize`
+    /// dep (`reaches_secret()`: a `Secret.*` kernel / `Secret`-typed value, or the
+    /// JWT / Auth surface whose `Algorithm` is a `secret::Secret`). Implies
+    /// `crypto-core` for the shared `subtle` compare.
+    Secret,
     /// `crypto` — the heavy crypto surface: rsa + bcrypt + AEAD + pbkdf2
-    /// (`uses_crypto`). Implies the always-on `crypto_core` floor.
+    /// (`uses_crypto`). Implies `crypto-core`.
     Crypto,
     /// `jwt` — the JWT encode/decode surface, `jsonwebtoken` (`reaches_jwt()`:
     /// a JWT kernel or the `Ipe.Auth` surface). Implies `json` + `crypto`.
@@ -151,6 +164,8 @@ impl RuntimeFeature {
             Self::TimeCore => "time-core",
             Self::Decimal => "decimal",
             Self::CharCategory => "char-category",
+            Self::CryptoCore => "crypto-core",
+            Self::Secret => "secret",
             Self::Crypto => "crypto",
             Self::Jwt => "jwt",
         }
@@ -331,6 +346,28 @@ pub fn runtime_features(ctx: &EmitCtx) -> RuntimeFeatureSet {
     if ctx.uses_crypto {
         set.insert(RuntimeFeature::Crypto);
     }
+
+    // Crypto floor (`crypto_core.rs` + `sha2`/`hmac`/`subtle`/`getrandom`).
+    // `reaches_crypto_core()` folds a direct crypto-floor kernel with every
+    // surface whose runtime module reaches the floor: crypto (re-export/reveal),
+    // jwt (HMAC/RSA sign + `secret::Secret` Algorithm), db (migration-checksum
+    // SHA-256), web/webview (client-JS SRI SHA-256 + CSRF `subtle` compare), email
+    // (SMTP-auth HMAC-SHA-256), server (session-id `subtle` compare). Each is
+    // verified against the runtime source. The crate-side implications (crypto/jwt/
+    // db/web/email/server each list `crypto-core`) carry the same closure at
+    // `--no-default-features`. FAIL-CLOSED: any uncertain floor consumer keeps it.
+    if ctx.reaches_crypto_core() {
+        set.insert(RuntimeFeature::CryptoCore);
+    }
+    // Secret (`secret.rs` + `zeroize`). `reaches_secret()` folds a direct
+    // `Secret.*` kernel / `Secret`-typed value with the JWT/Auth surface (whose
+    // `Algorithm` is a `secret::Secret`). `secret` implies `crypto-core` (shared
+    // `subtle`) in the crate graph, so the two selections agree at
+    // `--no-default-features`.
+    if ctx.reaches_secret() {
+        set.insert(RuntimeFeature::Secret);
+    }
+
     // JWT surface (`jsonwebtoken`) — a JWT kernel or the `Ipe.Auth` surface.
     if ctx.reaches_jwt() {
         set.insert(RuntimeFeature::Jwt);
@@ -379,6 +416,8 @@ mod tests {
             uses_log: false,
             uses_decimal: false,
             uses_char_category: false,
+            uses_crypto_core: false,
+            uses_secret: false,
             uses_crypto: false,
             uses_jwt: false,
             uses_url: false,

@@ -695,9 +695,24 @@ pub(crate) struct EmitCtx<'a> {
     /// * adds the `sha1` + `md-5` + `aes-gcm` + `chacha20poly1305` + `pbkdf2`
     ///   dependencies to the emitted `Cargo.toml`.
     ///
-    /// The always-on `crypto_core` floor stays in the base module set, so no
-    /// other `uses_*` flag forces the heavy `crypto` module on.
+    /// The `crypto` runtime feature implies `crypto-core`, so the floor rides
+    /// along transitively (see [`Self::reaches_crypto_core`]).
     pub(crate) uses_crypto: bool,
+    /// `true` when the program uses at least one crypto-FLOOR kernel (SHA-2 hash,
+    /// the HMAC family, RSA sign/verify, constant-time compare, the entropy pair,
+    /// or a `Key`/`Mac` newtype kernel). Folded with the heavy-crypto / jwt / db /
+    /// web / webview / email / server surfaces in [`Self::reaches_crypto_core`],
+    /// which selects the `crypto-core` runtime feature (`crypto_core.rs` plus
+    /// `sha2` + `hmac` + `subtle` + `getrandom`). A program reaching none of these
+    /// drops the module and those crates — and, since `getrandom` is enabled only
+    /// by `random || crypto-core`, a bare synchronous Program finally drops
+    /// `getrandom` too.
+    pub(crate) uses_crypto_core: bool,
+    /// `true` when the program uses at least one `Ipe.Secret` kernel or holds a
+    /// `Secret`-typed value. Selects the `secret` runtime feature (`secret.rs`
+    /// plus `zeroize`); `secret` implies `crypto-core` for the shared `subtle`
+    /// compare (see [`Self::reaches_crypto_core`]).
+    pub(crate) uses_secret: bool,
     /// `true` when the program uses at least one `Ipe.Jwt` kernel. When set,
     /// [`crate::project::assemble_project_files`]:
     ///
@@ -1374,9 +1389,19 @@ impl<'a> EmitCtx<'a> {
         let uses_csv = program.modules.iter().any(|m| m.uses_csv);
 
         // detect HEAVY Ipe.Crypto usage (gates `crypto` module + sha1 + md-5 +
-        // aes-gcm + chacha20poly1305 + pbkdf2). The `crypto_core` floor is
-        // always-on and unaffected.
+        // aes-gcm + chacha20poly1305 + pbkdf2). The `crypto` feature implies
+        // `crypto-core`, so the floor is pulled transitively.
         let uses_crypto = program.modules.iter().any(|m| m.uses_crypto);
+
+        // detect crypto-FLOOR usage (gates `crypto_core.rs` + sha2 + hmac +
+        // subtle + getrandom via the `crypto-core` feature). Folded with the
+        // crypto/jwt/db/web/webview/email/server surfaces in
+        // [`Self::reaches_crypto_core`], not here.
+        let uses_crypto_core = program.modules.iter().any(|m| m.uses_crypto_core);
+
+        // detect Ipe.Secret usage (gates `secret.rs` + zeroize via the `secret`
+        // feature). `secret` implies `crypto-core` for the shared `subtle`.
+        let uses_secret = program.modules.iter().any(|m| m.uses_secret);
 
         // detect Ipe.Encoding / Ipe.Bytes usage (gates `encoding` + `bytes`
         // modules + base64 + hex + percent-encoding crates). Also reached by the
@@ -1493,6 +1518,8 @@ impl<'a> EmitCtx<'a> {
             uses_log,
             uses_decimal,
             uses_char_category,
+            uses_crypto_core,
+            uses_secret,
             uses_crypto,
             uses_jwt,
             uses_url,
@@ -1619,6 +1646,53 @@ impl<'a> EmitCtx<'a> {
     /// `rsa`.
     pub(crate) const fn reaches_crypto_core_heavy(&self) -> bool {
         self.uses_crypto || self.reaches_jwt()
+    }
+
+    /// `true` when the emitted crate reaches the `crypto_core.rs` FLOOR — so
+    /// `project::assemble_project_files` selects the `crypto-core` feature
+    /// (`sha2` + `hmac` + `subtle` + `getrandom`) and, in the prelude, keeps the
+    /// `crypto_random_bytes`/`crypto_random_token` wrapper block. This is the
+    /// single source of truth shared by the manifest feature selection, the
+    /// prelude-section gate ([`crate::project::native_runtime_bindings`]), and the
+    /// closure SEALs; they can never disagree.
+    ///
+    /// Reached directly by a crypto-floor kernel ([`Self::uses_crypto_core`]), or
+    /// transitively by every surface whose runtime module reaches the floor:
+    /// `crypto.rs` ([`Self::uses_crypto`]) re-exports and reveals through it;
+    /// `jwt.rs` (via [`Self::reaches_jwt`]) signs with `crypto_core`'s HMAC/RSA and
+    /// wraps its `Algorithm` in a `secret::Secret`; `db.rs` ([`Self::uses_db`])
+    /// SHA-256s the `_ipe_migrations` ledger checksum; `web/*` ([`Self::uses_web`]
+    /// / [`Self::uses_webview`]) SHA-256s the client-JS SRI hash and constant-time
+    /// compares CSRF tokens through `subtle`; `email.rs` ([`Self::uses_email`])
+    /// HMAC-SHA-256s the SMTP auth; `server.rs` ([`Self::uses_server`])
+    /// constant-time compares session ids through `subtle`. Each consumer is
+    /// verified against the runtime source. FAIL-CLOSED — any uncertain consumer
+    /// keeps the floor on. Because `getrandom` is enabled only by `random ||
+    /// crypto-core`, a program that reaches none of these (and no `Ipe.Random`
+    /// kernel) is the first to drop `getrandom` and the whole SHA-2/HMAC subtree.
+    pub(crate) const fn reaches_crypto_core(&self) -> bool {
+        self.uses_crypto_core
+            || self.uses_crypto
+            || self.reaches_jwt()
+            || self.uses_db
+            || self.uses_web
+            || self.uses_webview
+            || self.uses_email
+            || self.uses_server
+            || self.reaches_secret()
+    }
+
+    /// `true` when the emitted crate reaches the `secret.rs` module — so
+    /// `project::assemble_project_files` selects the `secret` feature (`zeroize` +
+    /// `subtle`, which itself implies `crypto-core`).
+    ///
+    /// Reached directly by an `Ipe.Secret` kernel or a `Secret`-typed value
+    /// ([`Self::uses_secret`]), or transitively by the JWT / Auth surface (via
+    /// [`Self::reaches_jwt`]): `jwt.rs`'s builder returns its `Algorithm` as a
+    /// `secret::Secret`, and `auth.rs` reaches `jwt`. The single source of truth
+    /// shared by the manifest augmenter and the closure SEALs.
+    pub(crate) const fn reaches_secret(&self) -> bool {
+        self.uses_secret || self.reaches_jwt()
     }
 
     /// `true` when the emitted crate reaches the `base64` / `hex` /
@@ -3404,6 +3478,8 @@ mod record_struct_namespace_tests {
                 uses_log: false,
                 uses_decimal: false,
                 uses_char_category: false,
+                uses_crypto_core: false,
+                uses_secret: false,
                 uses_crypto: false,
                 uses_jwt: false,
                 uses_url: false,
@@ -3499,6 +3575,8 @@ mod record_struct_namespace_tests {
                 uses_log: false,
                 uses_decimal: false,
                 uses_char_category: false,
+                uses_crypto_core: false,
+                uses_secret: false,
                 uses_crypto: false,
                 uses_jwt: false,
                 uses_url: false,
