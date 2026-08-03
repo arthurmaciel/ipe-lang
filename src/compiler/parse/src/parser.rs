@@ -1296,13 +1296,25 @@ impl<'a> Parser<'a> {
         let param_sym = self.interner.intern("ipe_accessor_arg")?;
         let param = Located::new(dot_span, Pattern_::PVar(param_sym));
         let mut body = Located::new(dot_span, Expr_::VarLocal(param_sym));
+        // Each field of a dotted accessor `.a.b` gets a distinct sub-span carved
+        // from the single field-identifier token, so no two Access nodes share a
+        // `(module, span)` type-region key (a shared key lets a field's result
+        // type overwrite the record type). `cursor` tracks the byte offset (into
+        // the `text` token) at the end of the current segment.
+        let mut cursor = tok.span.lo;
         for (seg_count, seg) in (0_u32..).zip(text.split('.')) {
             if seg_count > MAX_DEPTH {
                 return Err(self.too_deep(Construct::Expression));
             }
-            let field = Located::new(tok.span, self.interner.intern(seg)?);
-            let span = Self::span_merge(dot_span, tok.span);
+            let seg_len = u32::try_from(seg.len()).unwrap_or(0);
+            let field_lo = cursor;
+            cursor = field_lo.saturating_add(seg_len);
+            let field = Located::new(Span::new(field_lo, cursor), self.interner.intern(seg)?);
+            // The Access node spans from the leading `.` up to this segment's end.
+            let span = Span::new(dot_span.lo, cursor);
             body = Located::new(span, Expr_::Access(Box::new(body), field));
+            // Advance past the '.' separator before the next segment.
+            cursor = cursor.saturating_add(1);
         }
         let span = Self::span_merge(dot_span, tok.span);
         Ok(Located::new(
@@ -1544,9 +1556,13 @@ impl<'a> Parser<'a> {
     ///   followed by zero or more record-field accesses — `p.x.y` becomes
     ///   `Access (Access p x) y`. A bare `p` (no dots) is just `VarLocal p`.
     ///
-    /// `span` is the whole identifier token's span; every node built here reuses
-    /// it (the lexer produces one token for the dotted run, so there is no
-    /// finer-grained span to attribute the pieces to).
+    /// `span` is the whole identifier token's span. The lexer produces one token
+    /// for the dotted run, so the sub-spans of the base var and each field access
+    /// are computed from the token's byte range plus the segment lengths: the base
+    /// `VarLocal` spans the first segment, and each `Access` widens the span up to
+    /// the end of its own field segment. Distinct sub-spans keep every node's
+    /// `(module, span)` key unique, which the type-region map relies on — a shared
+    /// key lets a field's result type overwrite the record type at the same key.
     fn ident_expr(&mut self, text: &str, span: Span) -> DResult<Expr_> {
         let mut segs = text.split('.');
         let first = segs.next().unwrap_or("");
@@ -1571,14 +1587,28 @@ impl<'a> Parser<'a> {
             let name = self.interner.intern(last)?;
             return Ok(Expr_::VarQual(q, name));
         }
-        // Lower-case head: a local var with a chain of field accesses.
-        let mut expr = Located::new(span, Expr_::VarLocal(self.interner.intern(first)?));
+        // Lower-case head: a local var with a chain of field accesses. Each node
+        // gets a distinct sub-span carved from the single dotted token. `cursor`
+        // tracks the byte offset (into the token) at the end of the current
+        // segment; the '.' separators are one byte each.
+        let base_len = u32::try_from(first.len()).unwrap_or(0);
+        let mut cursor = span.lo.saturating_add(base_len);
+        let base_span = Span::new(span.lo, cursor);
+        let mut expr = Located::new(base_span, Expr_::VarLocal(self.interner.intern(first)?));
         for (seg_count, seg) in (0_u32..).zip(rest) {
             if seg_count > MAX_DEPTH {
                 return Err(self.too_deep(Construct::Expression));
             }
-            let field = Located::new(span, self.interner.intern(seg)?);
-            expr = Located::new(span, Expr_::Access(Box::new(expr), field));
+            let seg_len = u32::try_from(seg.len()).unwrap_or(0);
+            // Advance over the '.' and the segment; the field name spans just the
+            // segment, the Access node spans from the base up to the segment end.
+            let field_lo = cursor.saturating_add(1);
+            cursor = field_lo.saturating_add(seg_len);
+            let field = Located::new(Span::new(field_lo, cursor), self.interner.intern(seg)?);
+            expr = Located::new(
+                Span::new(span.lo, cursor),
+                Expr_::Access(Box::new(expr), field),
+            );
         }
         Ok(expr.value)
     }
