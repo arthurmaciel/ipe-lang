@@ -331,6 +331,74 @@ jobs:
           # token rewrite never touches string literals).
           echo "$OUT" | grep -q 'Hello from Sky!'
 
+  # First-party shape examples — the representative user-facing gate. Every
+  # committed example under examples/shapes/ (one per shape: program, terminal,
+  # web) must `ipe check`, `ipe build`, and cargo-build its emitted crate on
+  # every PR. This is the fast, non-flaky core of the examples proof: it catches
+  # a compiler change that makes a shipped example stop type-checking or emit a
+  # crate that no longer compiles — the two ways a user first feels a regression.
+  # Interactive RUN coverage (browser round-trips, pty-driven tui) stays in the
+  # nightly examples-sweep, which also carries the live upstream-mirror set.
+  shapes-examples:
+    name: first-party shapes (build gate)
+    runs-on: ubuntu-latest
+    needs: [changes, quick-check]
+    if: needs.changes.outputs.code == 'true' || github.event_name != 'pull_request'
+    env:
+      RUSTFLAGS: -C link-arg=-fuse-ld=mold
+      IPE_RUNTIME_DIR: ${{ github.workspace }}/src/runtime/rust/src
+      # Shared emitted-crate target (kept out of the workspace target/): the
+      # runtime dep tree compiles once, later shape builds go incremental.
+      IPE_SHAPES_TARGET: ${{ github.workspace }}/.cache/shapes-shared-target
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: rui314/setup-mold@v1
+      - uses: mozilla-actions/sccache-action@v0.0.9
+      - uses: Swatinem/rust-cache@v2
+        with:
+          cache-directories: ${{ github.workspace }}/.cache/shapes-shared-target
+      - name: Build ipe
+        run: cargo build --release -p ipe
+      # Pre-warm the shared target with the runtime dep tree (via the lightest
+      # shape) so the first heavy shape build goes incremental instead of cold.
+      - name: Pre-warm the shared emitted-crate target
+        env:
+          CARGO_TARGET_DIR: ${{ github.workspace }}/.cache/shapes-shared-target
+        run: |
+          set -euo pipefail
+          IPE="$PWD/target/release/ipe"
+          WARM="$(mktemp -d)"; cd "$WARM"
+          "$IPE" build "$GITHUB_WORKSPACE/examples/shapes/program/release-preflight/ipe.toml" --out out/rust
+          cd out/rust && cargo build --release
+      - name: Check + emit + build every first-party shape
+        env:
+          CARGO_TARGET_DIR: ${{ github.workspace }}/.cache/shapes-shared-target
+        run: |
+          set -uo pipefail
+          IPE="$PWD/target/release/ipe"
+          fail=0
+          for toml in examples/shapes/*/*/ipe.toml; do
+            dir="$(dirname "$toml")"
+            entry="$dir/src/Main.ipe"
+            echo "::group::$dir"
+            if ! "$IPE" check "$entry"; then
+              echo "::error::ipe check regressed: $dir"; fail=1; echo "::endgroup::"; continue
+            fi
+            if ! "$IPE" build "$toml" --out "$dir/out/rust"; then
+              echo "::error::ipe build regressed: $dir"; fail=1; echo "::endgroup::"; continue
+            fi
+            if ! ( cd "$dir/out/rust" && cargo build --release ); then
+              echo "::error::emitted cargo build regressed: $dir"; fail=1
+            fi
+            echo "::endgroup::"
+          done
+          if [ "$fail" != 0 ]; then
+            echo "one or more first-party shape examples regressed — a user-facing break" >&2
+            exit 1
+          fi
+          echo "all first-party shape examples check + build + emit cleanly."
+
   # `ipe-runtime-rust`'s `default = []` leaves `compression`/`csv`/`config`/
   # `tokio` (and every other optional feature) OFF, so the `test` job above
   # never compiles the `#[cfg(feature = "...")]`-gated unit tests that live
