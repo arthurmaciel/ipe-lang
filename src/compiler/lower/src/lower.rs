@@ -840,6 +840,100 @@ fn ty_contains_fun(ty: &Ty) -> bool {
     }
 }
 
+/// Does instantiating a generic type parameter to `ty` make the emitted Rust
+/// generic parameter's unconditional `Clone` bound unsatisfiable?
+///
+/// A generic user function emits `fn f<T1: Clone>(..)` (`render_fn_generics`
+/// injects `Clone` on every type parameter, and generic composite structs
+/// derive `Clone` with a `T1: Clone` bound). A function value instantiating
+/// that parameter lowers to a `Box<dyn Fn>` — which is not `Clone` — so the
+/// instantiation is cargo-broken (E0277) regardless of the surrounding shape.
+/// This predicate is the value-side condition for that breakage: a function
+/// reachable in `ty` that is NOT stored behind an opaque boxed wrapper
+/// (`Decoder`/`Task`/`Cmd`/`Sub`, whose Rust rendering IS `Clone` over any
+/// payload). A function behind such a wrapper does not break the bound and is
+/// not flagged; a bare function, or one nested in a tuple / record / collection
+/// / enum payload, does.
+fn generic_binding_breaks_clone(interner: &Interner, ty: &Ty) -> bool {
+    match ty {
+        Ty::Fun(_, _) => true,
+        Ty::Var(_) | Ty::Unit => false,
+        Ty::Tuple(elems) => elems
+            .iter()
+            .any(|e| generic_binding_breaks_clone(interner, e)),
+        // An opaque boxed wrapper renders to a `Clone` handle over its payload
+        // (the payload lives behind a trait object), so a function under it does
+        // not break the parameter's `Clone` bound.
+        Ty::Con { name, .. } if is_opaque_boxed_wrapper(interner, *name) => false,
+        Ty::Con { args, .. } => args
+            .iter()
+            .any(|a| generic_binding_breaks_clone(interner, a)),
+        Ty::Record(fields, _) => fields
+            .values()
+            .any(|f| generic_binding_breaks_clone(interner, f)),
+    }
+}
+
+/// Match a declared signature-template type against the solved (monomorphic)
+/// type it was instantiated to at a use site, recording each template type
+/// variable's binding in `subst`. Structural, one arm per [`Ty`] shape; a
+/// template variable binds to the whole concrete sub-type at its position, and
+/// a template arrow / tuple / record / constructor recurses structurally.
+///
+/// A shape or arity mismatch (a solved region that does not instantiate the
+/// template) leaves `subst` as far as it got and returns without error: the
+/// gate this feeds only ever *adds* a rejection, so an incomplete match can at
+/// worst miss a binding (fail-open for that argument), never fabricate one. The
+/// caller treats a fabricated binding as the only unsound direction, and there
+/// is none: a variable is bound solely to the concrete type structurally
+/// aligned with its declared position.
+fn match_signature_template(template: &Ty, concrete: &Ty, subst: &mut BTreeMap<u32, Ty>) {
+    match template {
+        Ty::Var(v) => {
+            subst.entry(*v).or_insert_with(|| concrete.clone());
+        }
+        Ty::Fun(tp, tr) => {
+            if let Ty::Fun(cp, cr) = concrete {
+                match_signature_template(tp, cp, subst);
+                match_signature_template(tr, cr, subst);
+            }
+        }
+        Ty::Tuple(ts) => {
+            if let Ty::Tuple(cs) = concrete
+                && ts.len() == cs.len()
+            {
+                for (t, c) in ts.iter().zip(cs) {
+                    match_signature_template(t, c, subst);
+                }
+            }
+        }
+        Ty::Con {
+            name: tn, args: ta, ..
+        } => {
+            if let Ty::Con {
+                name: cn, args: ca, ..
+            } = concrete
+                && tn == cn
+                && ta.len() == ca.len()
+            {
+                for (t, c) in ta.iter().zip(ca) {
+                    match_signature_template(t, c, subst);
+                }
+            }
+        }
+        Ty::Record(tf, _) => {
+            if let Ty::Record(cf, _) = concrete {
+                for (k, tv) in tf {
+                    if let Some(cv) = cf.get(k) {
+                        match_signature_template(tv, cv, subst);
+                    }
+                }
+            }
+        }
+        Ty::Unit => {}
+    }
+}
+
 /// context suppression (let-bound shape). Recursively clear a
 /// [`CallPin::DefaultI64`] from any `task_fail(…)` call that is the VALUE of a
 /// `let` / `Destructure` binding: the binding slot's type (emitted as an
@@ -12125,6 +12219,67 @@ impl<'a> Lowerer<'a> {
         Ok(())
     }
 
+    /// Reject a function value that instantiates a top-level callee's declared
+    /// *type variable* (a generic slot), which the region-based gate cannot see.
+    ///
+    /// The seam: `wrap : a -> { value : a }` applied as `wrap (\n -> n + 1)`
+    /// emits a generic `fn main_wrap<T1: Clone>(x: T1) -> RecValue<T1>` and a
+    /// generic struct `RecValue<T1>` that derives `Clone`. The call instantiates
+    /// `T1 = Box<dyn Fn>`, which is not `Clone` — E0277 at monomorphization, an
+    /// `ipe`-exit-0-then-`cargo`-fail SEAL breach. [`region_ty`] shows only the
+    /// monomorphized `{ value : Int -> Int }`, identical to a directly-declared
+    /// `Ty::Fun` field the record-field carrier flip made legal (the `Arc<dyn
+    /// Fn>` carrier on a *concrete* struct). The two are distinguishable only at
+    /// the callee's DECLARED signature: a field declared `a` (a type variable) is
+    /// the broken generic slot; a field declared `Int -> Int` is the sound
+    /// flipped carrier. This gate recovers the declared template from
+    /// [`SolvedTypes::env`] and matches it against the arguments' solved region
+    /// types, rejecting exactly when a declared variable binds to a function-
+    /// embedding type — the class every generic `Clone` bound cannot discharge.
+    ///
+    /// Narrowness is by the matching itself, not a heuristic: a higher-order
+    /// callee's declared arrow parameter (`apply : (a -> b) -> a -> b`) matches
+    /// the argument's *arrow* structurally, binding `a`, `b` to the arrow's own
+    /// operand/result — no variable binds to a function — so an HOF stays
+    /// accepted and emits the already-supported `Box<dyn Fn>` parameter. Only a
+    /// bare variable bound to a fn-embedding type is flagged, and every such
+    /// instantiation is cargo-broken today, so the gate never rejects a program
+    /// that would build. It covers the DIRECT-call shape (the common case); a
+    /// point-free instantiation that routes through a local function value
+    /// (`let w = f in w x`) reaches lowering as an `Expr::Apply` and is not seen
+    /// here — that residual leak is tracked separately. A missing declared
+    /// template (env absent) fails open — the region gate and the value-side
+    /// carrier normalization still cover the shapes they own.
+    fn reject_fn_through_generic_slot(
+        &self,
+        module: &[Symbol],
+        name: Symbol,
+        args: &[canon::Expr],
+        call_span: Span,
+    ) -> DResult<()> {
+        let Some(declared) = self.types.env.get(&(module.to_vec(), name)) else {
+            return Ok(());
+        };
+        let mut subst: BTreeMap<u32, Ty> = BTreeMap::new();
+        let mut cur = declared;
+        for arg in args {
+            let Ty::Fun(param_tpl, rest) = cur else {
+                break;
+            };
+            if let Some(arg_ty) = self.region_ty(arg.span) {
+                match_signature_template(param_tpl, arg_ty, &mut subst);
+            }
+            cur = rest.as_ref();
+        }
+        if subst
+            .values()
+            .any(|bound| generic_binding_breaks_clone(self.interner, bound))
+        {
+            return Err(unsupported(call_span, Feature::FirstClassFunctions));
+        }
+        Ok(())
+    }
+
     // `lower_expr` is a large dispatch function that covers every canon AST
     // variant in one place for readability; split would add indirection without
     // clarity.
@@ -13461,6 +13616,15 @@ impl<'a> Lowerer<'a> {
                 }
             }
             canon::Expr_::VarKernel { .. } | canon::Expr_::VarTopLevel { .. } => {
+                // A function value instantiating a user def's declared type
+                // variable (a generic slot) emits a `Clone`-bounded generic the
+                // `Box<dyn Fn>` argument cannot satisfy — the region gate cannot
+                // see it, so recover the declared template and reject here. Only
+                // user top-level defs are generic in this way; kernels carry
+                // their own dedicated obligations (the Maybe/Result HOF gates).
+                if let canon::Expr_::VarTopLevel { module, name } = &callee.value {
+                    self.reject_fn_through_generic_slot(module, *name, args, call_span)?;
+                }
                 let resolved = match peeked {
                     Some(c) => c,
                     None => self.lower_callee(callee)?,

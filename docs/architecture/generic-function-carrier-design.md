@@ -1,7 +1,11 @@
 # Function values crossing generic call boundaries: carrier design
 
-Status: accepted design; implementation staged (gate first, carrier
-propagation second).
+Status: accepted design. The A1 fail-closed gate is implemented
+(`reject_fn_through_generic_slot`, `src/compiler/lower/src/lower.rs`): a
+function value instantiating a top-level callee's declared type variable is
+rejected at the call boundary with IPE-L0107, so the class can no longer emit
+cargo-failing Rust. The A2 carrier propagation (build-and-run via `Arc`
+instantiation) remains future work.
 
 Companion to `docs/architecture/tbd/first-class-functions-design.md`, which
 designs function *storage* in concrete composites. This document covers the
