@@ -254,11 +254,19 @@ pub fn staticize_manifest(base: &str, allocator: StaticAllocator) -> DResult<Str
         return Ok(base.to_owned());
     };
 
+    // Anchor on the `default = [` that BEGINS a line — never a `# … default = [`
+    // comment that merely mentions the array (a manifest may document the anchor
+    // in prose above it). A comment line starts with `#`, so the line-initial
+    // constraint skips it.
     let pfx = base
-        .find(DEFAULT_PREFIX)
+        .match_indices(DEFAULT_PREFIX)
+        .map(|(i, _)| i)
+        .find(|&i| i == 0 || base.as_bytes().get(i - 1) == Some(&b'\n'))
         .ok_or_else(|| Diagnostic::CompilerBug {
             where_: "ipe_backend_rust::static_build::staticize_manifest",
-            detail: format!("Cargo.toml anchor {DEFAULT_PREFIX:?} not found — golden drifted"),
+            detail: format!(
+                "Cargo.toml line-initial anchor {DEFAULT_PREFIX:?} not found — golden drifted"
+            ),
         })?;
     let search_from = pfx + DEFAULT_PREFIX.len();
     let rel = base
@@ -280,9 +288,19 @@ pub fn staticize_manifest(base: &str, allocator: StaticAllocator) -> DResult<Str
         });
     }
 
+    // Splice the allocator as the last element. An EMPTY list (`default = []` —
+    // the dependency-model shape, where every runtime feature lives on the
+    // `ipe_runtime` path dependency and the program crate's own default carries
+    // only the allocator) takes the feature with no leading comma; a non-empty
+    // list gets `, "feature"`.
+    let sep = if default_list.trim().is_empty() {
+        "\""
+    } else {
+        ", \""
+    };
     let mut out = String::with_capacity(base.len() + feature.len() + 4);
     out.push_str(base.get(..close).unwrap_or(""));
-    out.push_str(", \"");
+    out.push_str(sep);
     out.push_str(feature);
     out.push('"');
     out.push_str(base.get(close..).unwrap_or(""));
@@ -407,6 +425,43 @@ mod tests {
         assert!(
             default_line(&out)
                 .contains(r#""tokio", "crypto", "json", "db", "server", "alloc_dlmalloc""#)
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn empty_dep_model_default_takes_the_allocator_without_a_leading_comma() -> DResult<()> {
+        // The dependency-model emit carries every runtime feature on the
+        // `ipe_runtime` path dependency, so the program crate's own list is
+        // empty (`default = []`). The allocator must splice as the sole element
+        // — `["alloc_dlmalloc"]`, NEVER the malformed `[, "alloc_dlmalloc"]`.
+        let base = CARGO_TOML.replacen(r#"default = ["json"]"#, "default = []", 1);
+        let out = staticize_manifest(&base, StaticAllocator::Dlmalloc)?;
+        assert!(
+            default_line(&out).contains(r#"default = ["alloc_dlmalloc"]"#),
+            "{}",
+            default_line(&out)
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn anchor_ignores_a_comment_that_mentions_the_default_list() -> DResult<()> {
+        // A `# … default = [ …` comment above the real line must not shadow the
+        // line-initial anchor: the allocator lands on the FEATURE line, and the
+        // comment is left untouched.
+        let base = "[features]\n\
+                    # example: default = [\"json\"] is the anchor\n\
+                    default = [\"json\"]\n";
+        let out = staticize_manifest(base, StaticAllocator::Mimalloc)?;
+        assert!(
+            default_line(&out).contains(r#""alloc_mimalloc""#),
+            "real default line must gain the allocator: {}",
+            default_line(&out)
+        );
+        assert!(
+            out.contains("# example: default = [\"json\"] is the anchor\n"),
+            "the comment must be left verbatim"
         );
         Ok(())
     }
