@@ -5981,6 +5981,20 @@ struct KernelUsage {
     /// (folded in by the backend's `reaches_encoding`), so this flag alone gates
     /// only the direct encoding/bytes reach.
     encoding: bool,
+    /// Any `Ipe.Regex` kernel or `String.isUrl` — gates the `regex_kernel`
+    /// runtime module and the `regex` dependency (its `aho-corasick` /
+    /// `regex-automata` / `regex-syntax` subtree). A standalone leaf; no other
+    /// surface reaches it.
+    regex: bool,
+    /// Any `Ipe.Uuid` kernel — gates the `uuid_kernel` runtime module and the
+    /// `uuid` dependency. The `server`/`web` surfaces also draw ids from
+    /// `uuid::new_v4` (folded in by the backend's `reaches_uuid`), so this flag
+    /// alone gates only the direct `Ipe.Uuid` reach.
+    uuid: bool,
+    /// Any `Ipe.Random` kernel — gates the `random.rs` runtime module (the
+    /// `random` feature). A standalone leaf; no other surface reaches it. Does NOT
+    /// gate `getrandom` (kept by the always-on `crypto_core` floor).
+    random: bool,
     /// Any HEAVY `Ipe.Crypto` kernel (legacy SHA-1/MD5, AES-GCM /
     /// ChaCha20-Poly1305 AEAD, PBKDF2 key derivation) — gates the `crypto`
     /// runtime module and the `sha1` + `md-5` + `aes-gcm` + `chacha20poly1305` +
@@ -6072,6 +6086,9 @@ impl KernelUsage {
             && self.compression
             && self.csv
             && self.encoding
+            && self.regex
+            && self.uuid
+            && self.random
             && self.crypto
             && self.jwt
             && self.url
@@ -6106,6 +6123,9 @@ impl KernelUsage {
         self.compression |= k.is_compression();
         self.csv |= k.is_csv();
         self.encoding |= k.is_encoding();
+        self.regex |= k.is_regex();
+        self.uuid |= k.is_uuid();
+        self.random |= k.is_random();
         self.crypto |= k.is_crypto();
         self.jwt |= k.is_jwt();
         self.url |= k.is_url();
@@ -8281,6 +8301,24 @@ impl<'a> Lowerer<'a> {
         // encoding kernel, so a program holding a `Bytes` has called one.
         let uses_encoding = kernel_usage.encoding;
 
+        // detect `Ipe.Regex` / `String.isUrl` usage. The backend uses this flag to
+        // declare `regex_kernel` in the emitted `ipe_runtime/mod.rs` and add the
+        // `regex` dependency. `regex` is a standalone leaf — no other surface
+        // reaches it — so the flag alone gates it. `String.isUrl`'s validator body
+        // lives in `regex_kernel.rs`, so it reaches the module too.
+        let uses_regex = kernel_usage.regex;
+
+        // detect `Ipe.Uuid` usage. The backend uses this flag to declare
+        // `uuid_kernel` and add the `uuid` dependency; the `server`/`web` surfaces
+        // (whose runtime modules mint session/CSRF ids via `uuid::new_v4`) fold in
+        // through the backend's `reaches_uuid`, not here.
+        let uses_uuid = kernel_usage.uuid;
+
+        // detect `Ipe.Random` usage. The backend uses this flag to declare the
+        // `random.rs` module (the `random` feature). No type-mention guard: a
+        // `Random.Generator` value is produced by a `Random.*` seeded kernel.
+        let uses_random = kernel_usage.random;
+
         // detect `Ipe.Jwt` usage — any JWT encode/decode or builder kernel. The
         // backend uses this flag to declare `jwt` in the emitted
         // `ipe_runtime/mod.rs` and add the `jsonwebtoken` dependency. `auth.rs`
@@ -8371,6 +8409,9 @@ impl<'a> Lowerer<'a> {
             uses_compression,
             uses_csv,
             uses_encoding,
+            uses_regex,
+            uses_uuid,
+            uses_random,
             uses_crypto,
             uses_jwt,
             uses_url,

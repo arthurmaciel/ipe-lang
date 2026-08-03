@@ -485,42 +485,11 @@ pub fn string_is_email(s: String) -> bool {
     true
 }
 
-/// `String.isUrl : String -> Bool`
-/// Absolute URL with scheme http/https/ws/wss.
-/// Go parity: `String_isUrl` in validate.go — `url.Parse` + `IsAbs()` + host
-///   non-empty + scheme in {http, https, ws, wss}. Rejects relative paths and
-///   <javascript:/data>: URLs to prevent XSS footguns.
-///
-/// Implementation: structural parse without external `url` crate — mirrors Go's
-/// `url.Parse` behaviour (scheme + "://" + non-empty host) using only the `regex`
-/// crate that is already an unconditional dep (Cargo.toml).
-pub fn string_is_url(s: String) -> bool {
-    use regex::Regex;
-    use std::sync::OnceLock;
-    // Compiled once; the pattern is a string literal so `Regex::new` can only
-    // fail if the literal is malformed — verified by the unit tests below.
-    // `OnceLock::get_or_init` returns a reference to the cached value; if
-    // compilation somehow failed we store `None` and return `false` (total).
-    static URL_RE: OnceLock<Option<Regex>> = OnceLock::new();
-    let re = URL_RE.get_or_init(|| {
-        // Scheme in {http, https, ws, wss} (case-insensitive), followed by
-        // "://" and at least one non-whitespace host character.
-        Regex::new(r"(?i)^(https?|wss?)://[^/\s?#]+").ok()
-    });
-    let t = s.trim();
-    // Go's url.Parse rejects ASCII control bytes (0x00–0x1F, 0x7F) anywhere in
-    // the URL, but the regex host class `[^/\s?#]` only excludes `\s` whitespace
-    // — an embedded NUL / ESC / other control char would otherwise pass and slip
-    // through this XSS-link gate. Reject up front. (Audit finding:
-    // security-relevant validator parity.)
-    if t.bytes().any(|b| b.is_ascii_control()) {
-        return false;
-    }
-    match re {
-        Some(re) => re.is_match(t),
-        None => false,
-    }
-}
+// `String.isUrl` (`string_is_url`) is the sole `regex`-crate consumer outside the
+// `Ipe.Regex` kernels, so its validator body lives in `regex_kernel.rs` — behind
+// the `regex` feature — keeping this always-compiled module free of the `regex`
+// crate. `String.isUrl` therefore reaches the `regex_kernel` module and selects
+// the `regex` feature, exactly like an `Ipe.Regex` kernel.
 
 /// `String.padLeft : Int -> Char -> String -> String`
 /// Pads `s` on the left with `ch` until `s` is at least `n` rune-characters
@@ -1041,50 +1010,6 @@ mod tests {
     #[test]
     fn test_is_email_with_plus() {
         assert!(string_is_email("user+tag@example.com".into()));
-    }
-
-    // string_is_url
-    #[test]
-    fn test_is_url_http() {
-        assert!(string_is_url("http://example.com".into()));
-    }
-    #[test]
-    fn test_is_url_https() {
-        assert!(string_is_url("https://example.com/path".into()));
-    }
-    #[test]
-    fn test_is_url_ws() {
-        assert!(string_is_url("ws://example.com".into()));
-    }
-    #[test]
-    fn test_is_url_wss() {
-        assert!(string_is_url("wss://example.com".into()));
-    }
-    #[test]
-    fn test_is_url_relative() {
-        assert!(!string_is_url("/api/users".into()));
-    }
-    #[test]
-    fn test_is_url_javascript() {
-        assert!(!string_is_url("javascript:alert(1)".into()));
-    }
-    #[test]
-    fn test_is_url_data() {
-        assert!(!string_is_url("data:text/html,<h1>".into()));
-    }
-    #[test]
-    fn test_is_url_empty() {
-        assert!(!string_is_url(String::new()));
-    }
-    #[test]
-    fn test_is_url_ftp() {
-        assert!(!string_is_url("ftp://example.com".into()));
-    }
-    #[test]
-    fn test_is_url_rejects_control_chars() {
-        // Embedded control bytes (NUL / ESC) → reject (XSS-link-gate parity with Go url.Parse).
-        assert!(!string_is_url("http://exa\u{0}mple.com".into()));
-        assert!(!string_is_url("https://e\u{1b}vil.com".into()));
     }
 
     // string_pad_left

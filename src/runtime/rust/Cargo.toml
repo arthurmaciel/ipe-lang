@@ -76,6 +76,9 @@ subtle = "2"
 # block below adds the `js` feature (backing `getrandom` with
 # `crypto.getRandomValues`); cargo unions the two, so native uses the OS source
 # and the browser uses its substitute — neither pulls `aes-gcm` for entropy.
+# NON-optional: the always-on `crypto_core` floor needs it, so it stays present
+# even for a bare Program (and even when the `random` feature is off). Demoting it
+# out of the floor lands with the crypto-core demotion, not the `random` gate.
 getrandom = "0.2"
 # `Ipe.Core.Secret` (backlog #44): zeroizes the backing buffer on `Drop` so a
 # revealed/discarded secret does not linger in freed heap memory. NON-optional
@@ -92,7 +95,10 @@ sqlx = { version = "0.8", features = ["runtime-tokio-rustls"], optional = true }
 # Ipe.Live session-checkpoint body encoding (H24 wire format: base64(tag ++ bincode)).
 bincode = { version = "1", optional = true }
 redis = { version = "0.27", features = ["tokio-comp"], optional = true }
-regex = "1"
+# `Ipe.Regex` regex kernels + `String.isUrl`, behind the `regex` feature. A
+# program that reaches neither drops `regex` and its aho-corasick / regex-automata
+# / regex-syntax subtree.
+regex = { version = "1", optional = true }
 # Exact Unicode General_Category lookup. NON-optional: char_kernel.rs (always
 # compiled) needs it to match Go's `unicode.Is{Digit,Letter,Lower,Upper}` —
 # which key off precise GCs (Nd / L* / Ll / Lu), narrower than Rust std's
@@ -104,7 +110,10 @@ unicode-general-category = "1"
 # the crypto/db/server/email/jwt/web surfaces — those features each imply
 # `encoding`. A program that reaches none of these drops all three crates.
 base64 = { version = "0.22", optional = true }
-uuid = { version = "1", features = ["v4", "v7"] }
+# `Ipe.Uuid` v4/v7/parse, behind the `uuid` feature. The `server` / `web`
+# surfaces mint session/CSRF ids via `uuid::new_v4` (they imply `uuid`); a bare
+# Program that reaches none drops the crate.
+uuid = { version = "1", features = ["v4", "v7"], optional = true }
 hex = { version = "0.4", optional = true }
 percent-encoding = { version = "2", optional = true }
 chrono = "0.4"
@@ -196,7 +205,12 @@ console_error_panic_hook = { version = "0.1", optional = true }
 
 [features]
 default = []
-async = ["tokio"]
+# Every feature that enables `tokio` also enables `random`: `task.rs`'s
+# tokio-gated retry-with-jitter path draws from `random`'s LCG
+# (`super::random::lcg_next`), so the `random.rs` module must be present whenever
+# the async runtime is. Keeps the graph closed at `--no-default-features` for any
+# single tokio-enabling feature.
+async = ["tokio", "random"]
 # The `Ipe.Url` typed-URL module + the reqwest-free `ssrf` validators. Pulled
 # by every surface that parses URLs (http_client / websocket_client / email /
 # web) and selectable standalone. A program that reaches no URL surface drops
@@ -217,6 +231,21 @@ time = ["dep:chrono-tz"]
 # so it stays available at `--no-default-features` for the always-emitted prelude
 # wrapper — it is deliberately NOT a consumer of this feature.
 encoding = ["dep:base64", "dep:hex", "dep:percent-encoding"]
+# `Ipe.Regex` kernels + `String.isUrl` (whose validator lives in
+# `regex_kernel.rs`): the `regex` crate and its aho-corasick / regex-automata /
+# regex-syntax subtree. A standalone leaf — no surface implies it. A program that
+# reaches neither an `Ipe.Regex` kernel nor `String.isUrl` drops all four crates.
+regex = ["dep:regex"]
+# `Ipe.Uuid` v4/v7/parse: the `uuid` crate and the `uuid_kernel.rs` module. The
+# `server` / `web` surfaces mint session/CSRF ids via `uuid::new_v4`, so both
+# imply `uuid`; a bare Program that reaches no `Ipe.Uuid` kernel drops the crate.
+uuid = ["dep:uuid"]
+# `Ipe.Random` non-cryptographic PRNG: gates the `random.rs` MODULE only. It does
+# NOT list `dep:getrandom` — `getrandom` stays a non-optional base dep because the
+# always-on `crypto_core` floor needs it for entropy, so a bare Program keeps
+# `getrandom` but drops `random.rs`. Dropping `getrandom` for a bare Program lands
+# with the crypto-core demotion, not this feature.
+random = []
 # `json` is the emitted FLOOR feature (`default = ["json"]`); it must NOT drag
 # `jsonwebtoken` (+ ring) into a plain JSON program. The JWT surface moved to
 # the `jwt` feature.
@@ -231,27 +260,27 @@ json = ["serde_json"]
 # driver). Which driver a program actually *uses* is chosen by `config.rs` — the
 # emitter's `config_postgres.rs` overlay for postgres — not by dropping a sqlx
 # driver feature.
-db = ["sqlx", "sqlx?/sqlite", "sqlx?/postgres", "tokio", "tokio/sync", "serde_json", "json", "bincode", "encoding"]
+db = ["sqlx", "sqlx?/sqlite", "sqlx?/postgres", "tokio", "tokio/sync", "serde_json", "json", "bincode", "encoding", "random"]
 # `db-sqlite` / `db-postgres`: config.rs alias selectors. Only the emitter ever
 # enables one, and it selects exactly one (SEAL-checked) — the standalone crate
 # links both sqlx drivers regardless (see `db`). The `compile_error!` in
 # `config.rs` guards the union as a fail-closed guard, not a user surface.
 db-sqlite = ["db"]
 db-postgres = ["db"]
-redis_store = ["redis", "tokio", "tokio/sync", "serde_json", "async-trait", "bincode"]
+redis_store = ["redis", "tokio", "tokio/sync", "serde_json", "async-trait", "bincode", "random"]
 crypto = ["rsa", "bcrypt", "aes-gcm", "chacha20poly1305", "pbkdf2", "encoding"]
 # `jwt`: the JWT encode/decode surface (`jwt.rs`, `all(json, crypto)`-gated).
 # Splits `jsonwebtoken` (+ its ring closure) out of the floor `json` feature so
 # a plain JSON program does not link it. `auth.rs` (register/login) also needs
 # this surface. Implies both `json` and `crypto`, matching the module gate.
 jwt = ["json", "crypto", "dep:jsonwebtoken"]
-compression = ["flate2", "zstd", "tokio"]
-csv_kernel = ["csv", "tokio"]
-cache_kernel = ["tokio"]
+compression = ["flate2", "zstd", "tokio", "random"]
+csv_kernel = ["csv", "tokio", "random"]
+cache_kernel = ["tokio", "random"]
 # `tokio`: tea.rs (the shared Cli/Tui event loop, pulled by tui/app.rs) uses
 # `tokio::sync::mpsc`. Without it the standalone `--features tui` build fails to
 # resolve the `tea` module + `tokio`.
-tui = ["unicode-width", "crossterm", "tokio"]
+tui = ["unicode-width", "crossterm", "tokio", "random"]
 # Real native-window Webview backend (opt-in; needs the system webview dev libs).
 # NOT in `full` — default/CI builds compile the cross-platform stub instead.
 # Pulls `web` to reuse its Html renderer + event-dispatch (HandlerIndex) for the
@@ -260,10 +289,10 @@ webview = ["wry", "tao", "web"]
 config = ["json", "toml", "serde_yaml"]
 # `tokio/net`+`tokio/sync`: axum binds a listener (`tokio::net`) and the
 # server/live loop uses `tokio::sync`.
-server = ["tokio", "tokio/net", "tokio/sync", "axum", "tower-http", "futures-util", "encoding"]
+server = ["tokio", "tokio/net", "tokio/sync", "axum", "tower-http", "futures-util", "encoding", "uuid", "random"]
 # The reqwest-free `ssrf` module parses URLs via the `url` crate (which reqwest
 # re-exports as `reqwest::Url`); `url` is behind the `url` feature.
-http_client = ["tokio", "reqwest", "futures-util", "url"]
+http_client = ["tokio", "reqwest", "futures-util", "url", "random"]
 # `http_client`: email.rs reuses `http_client::ssrf_apply` for outbound-request
 # SSRF hardening; ws_client.rs reuses `http_client::ssrf_validate_url` +
 # `ssrf_pinned_ws_addr`. Both need the http_client module present. (`sha2` is a
@@ -272,7 +301,7 @@ email = ["tokio", "reqwest", "lettre", "serde_json", "http_client", "encoding"]
 # ws needs ONLY the reqwest-free ssrf validators (which use `url`, behind the
 # `url` feature), NOT the reqwest HTTP client — so it does not pull
 # `http_client`. `tokio/net`: `ws_client.rs` opens the pinned TCP socket.
-websocket_client = ["tokio", "tokio/net", "tokio/sync", "tokio-tungstenite", "futures-util", "url"]
+websocket_client = ["tokio", "tokio/net", "tokio/sync", "tokio-tungstenite", "futures-util", "url", "random"]
 # The session-id / CSRF-token RNG draws from the OS CSPRNG via `uuid` (a
 # non-optional base dep), so `web` needs no `aes-gcm`; `subtle` (constant-time
 # compare), `sha2` (client-JS SRI integrity hash) and `serde` are non-optional
@@ -280,11 +309,11 @@ websocket_client = ["tokio", "tokio/net", "tokio/sync", "tokio-tungstenite", "fu
 # (`web/console_proxy.rs`, `web/mod.rs`) spawns a child (`tokio::process`) and
 # handles signals (`tokio::signal`) — matching the emitted `web_cargo_toml`
 # live-runtime tokio feature set.
-web = ["server", "http_client", "serde_json", "async-trait", "tokio/signal", "tokio/process", "encoding"]
+web = ["server", "http_client", "serde_json", "async-trait", "tokio/signal", "tokio/process", "encoding", "uuid"]
 # `db-postgres` (not bare `db`) selects a concrete sqlx driver — it also pulls
 # `sqlite`, so both driver code paths compile. `jwt` + `url` cover the
 # JWT/auth and URL/SSRF surfaces that `db`/`web`/`http_client` reach.
-full = ["async", "json", "jwt", "url", "db", "db-postgres", "redis_store", "crypto", "compression", "csv_kernel", "cache_kernel", "tui", "config", "server", "http_client", "email", "websocket_client", "web", "time"]
+full = ["async", "json", "jwt", "url", "db", "db-postgres", "redis_store", "crypto", "compression", "csv_kernel", "cache_kernel", "tui", "config", "server", "http_client", "email", "websocket_client", "web", "time", "regex", "uuid", "random"]
 # Browser-WASM TEA sink (`src/wasm/`): mount + patch-apply + delegated events.
 # Compiles only on wasm32 (the module is target-cfg'd); NOT in `full` — native
 # builds never link the wasm glue.
@@ -303,6 +332,13 @@ wasm-client = [
     # `encoding`: the static wasm module set keeps `encoding.rs` / `bytes.rs`
     # behind the `encoding` feature.
     "encoding",
+    # The static wasm module set (`WASM_RUNTIME_MOD_RS`) declares `regex_kernel`,
+    # `uuid_kernel`, and `random` unconditionally, so `wasm-client` implies their
+    # features to satisfy the source `#[cfg]` gates. (`getrandom` is non-optional,
+    # so `random` — which is empty — pulls no dep here.)
+    "regex",
+    "uuid",
+    "random",
 ]
 
 [dev-dependencies]

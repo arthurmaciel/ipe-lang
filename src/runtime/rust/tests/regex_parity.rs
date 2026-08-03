@@ -1,3 +1,7 @@
+// The `Ipe.Regex` kernels live behind the `regex` feature (the `regex_kernel`
+// module gate); this parity suite compiles only when it is selected. CI's
+// `--features full` includes `regex`, so the fixtures still run there.
+#![cfg(feature = "regex")]
 //! Go≡Rust parity fixtures for Ipe.Regex kernels.
 //!
 //! Every assertion mirrors the Go oracle in `runtime-go/rt/rt.go`

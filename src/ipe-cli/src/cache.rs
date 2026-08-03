@@ -955,6 +955,7 @@ mod tests {
     // The lowered-IR cache tier
     // -----------------------------------------------------------------
 
+    #[allow(clippy::too_many_lines)] // exhaustive `Module` literal (every `uses_*` flag)
     fn sample_ir_program(i: &mut Interner) -> ipe_diagnostics::DResult<Program> {
         use ipe_ir::{
             Arm, CallPin, Callee, EnumDef, Expr, Func, FuncId, IrType, KernelFn, Match, ModPath,
@@ -1039,6 +1040,9 @@ mod tests {
                 uses_compression: false,
                 uses_csv: false,
                 uses_encoding: false,
+                uses_regex: false,
+                uses_uuid: false,
+                uses_random: false,
                 uses_crypto: false,
                 uses_jwt: false,
                 uses_url: false,

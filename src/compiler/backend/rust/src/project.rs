@@ -595,6 +595,46 @@ const RUNTIME_MOD_RS_CSV_APPEND: &str = "pub mod csv;\npub use csv::*;\n";
 const RUNTIME_MOD_RS_ENCODING_APPEND: &str =
     "pub mod encoding;\npub use encoding::*;\npub mod bytes;\npub use bytes::*;\n";
 
+// ── Ipe.Regex — regular expressions + String.isUrl ──────────────────────────
+
+/// Lines appended to `ipe_runtime/mod.rs` when the program reaches the `regex`
+/// crate — an `Ipe.Regex` kernel OR `String.isUrl` ([`EmitCtx::uses_regex`]).
+///
+/// `regex_kernel.rs` is the sole consumer of the `regex` crate; its
+/// `string_is_url` validator moved in from `string.rs` (the only other regex-crate
+/// user), so `String.isUrl` reaches it too. Declared only on demand — behind the
+/// `regex` feature, which [`runtime_features`] selects under the same
+/// [`EmitCtx::uses_regex`] condition and [`regex_cargo_toml`] adds the dep for. A
+/// standalone leaf: no surface implies it.
+const RUNTIME_MOD_RS_REGEX_APPEND: &str = "pub mod regex_kernel;\npub use regex_kernel::*;\n";
+
+// ── Ipe.Uuid — v4 / v7 / parse ──────────────────────────────────────────────
+
+/// Lines appended to `ipe_runtime/mod.rs` when the program reaches the `uuid`
+/// crate — an `Ipe.Uuid` kernel, OR the `server` / `web` surfaces whose runtime
+/// modules mint session/CSRF ids via `uuid::new_v4` ([`EmitCtx::reaches_uuid`]).
+///
+/// `uuid_kernel.rs` is the sole consumer of the `uuid` crate as a runtime module.
+/// Declared only on demand — behind the `uuid` feature, which [`runtime_features`]
+/// selects under the same [`EmitCtx::reaches_uuid`] condition and
+/// [`uuid_cargo_toml`] adds the dep for. A bare Program that reaches none drops
+/// the crate.
+const RUNTIME_MOD_RS_UUID_APPEND: &str = "pub mod uuid_kernel;\npub use uuid_kernel::*;\n";
+
+// ── Ipe.Random — non-cryptographic PRNG ─────────────────────────────────────
+
+/// Lines appended to `ipe_runtime/mod.rs` when the program reaches an
+/// `Ipe.Random` kernel ([`EmitCtx::uses_random`]).
+///
+/// `random.rs` (the LCG / seeded-generator surface) is declared only on demand —
+/// behind the `random` feature, which [`runtime_features`] selects under the same
+/// condition. A standalone leaf: no surface implies it. The `random` feature gates
+/// this MODULE declaration only; the `getrandom` crate stays a non-optional base
+/// dep (the always-on `crypto_core` floor needs it for entropy) until the
+/// crypto-core demotion phase, so a bare Program keeps `getrandom` but drops
+/// `random.rs`.
+const RUNTIME_MOD_RS_RANDOM_APPEND: &str = "pub mod random;\npub use random::*;\n";
+
 // ── Ipe.Crypto — heavy cryptography (SHA-1/MD5, AEAD, PBKDF2) ────────────────
 
 /// Lines appended to `ipe_runtime/mod.rs` when the program uses a HEAVY
@@ -1031,16 +1071,54 @@ fn runtime_bindings() -> DResult<&'static str> {
 /// bindings (`AUTH_WRAPPERS`, the TEA aliases, …) are not glued onto the last
 /// kept line. The `HTTP_SECTION` anchor is content-addressed, so a prelude drift
 /// that renamed it fails loud (a `CompilerBug`) rather than mis-slicing.
-fn native_runtime_bindings(uses_http_client: bool) -> DResult<String> {
+fn native_runtime_bindings(uses_http_client: bool, reaches_random: bool) -> DResult<String> {
     // The comment header that opens the outbound-`Http` prelude section. The
     // section runs from here to the end of `runtime_bindings()` (its `END`
     // anchor is the `http_parse_query` wrapper, the section's sole binding).
     const HTTP_SECTION: &str = "// ── Http kernels";
     let full = runtime_bindings()?;
+
+    // Drop the `Random` prelude section (the three monomorphic `random_*`
+    // wrappers, the only static-prelude references to `ipe_runtime::random`) when
+    // the program does not reach `random.rs`. Unlike `Http`, this section is
+    // mid-prelude, so it is cut between its own header and the next section header
+    // (`File kernels`). A program that reaches no `Ipe.Random` kernel and is
+    // synchronous (no tokio) keeps `random.rs` absent, so keeping these wrappers
+    // would fail to resolve (E0433). Applied before the `Http` cut so both slices
+    // compose.
+    let random_filtered = if reaches_random {
+        full.to_owned()
+    } else {
+        const RANDOM_SECTION: &str = "// ── Random kernels";
+        const FILE_SECTION: &str = "// ── File kernels";
+        let start = full
+            .find(RANDOM_SECTION)
+            .ok_or_else(|| Diagnostic::CompilerBug {
+                where_: "ipe_backend_rust::project::native_runtime_bindings",
+                detail: format!(
+                    "kernel-wrapper prelude anchor {RANDOM_SECTION:?} not found — golden \
+                     drifted; cannot drop the random wrappers for a non-Random program"
+                ),
+            })?;
+        let end_rel = full
+            .get(start..)
+            .and_then(|rest| rest.find(FILE_SECTION))
+            .ok_or_else(|| Diagnostic::CompilerBug {
+                where_: "ipe_backend_rust::project::native_runtime_bindings",
+                detail: format!(
+                    "kernel-wrapper prelude anchor {FILE_SECTION:?} not found after \
+                     {RANDOM_SECTION:?} — golden drifted; cannot bound the random section"
+                ),
+            })?;
+        let mut out = full.get(..start).unwrap_or("").to_owned();
+        out.push_str(full.get(start + end_rel..).unwrap_or(""));
+        out
+    };
+
     if uses_http_client {
-        return Ok(full.to_owned());
+        return Ok(random_filtered);
     }
-    let cut = full
+    let cut = random_filtered
         .find(HTTP_SECTION)
         .ok_or_else(|| Diagnostic::CompilerBug {
             where_: "ipe_backend_rust::project::native_runtime_bindings",
@@ -1049,7 +1127,7 @@ fn native_runtime_bindings(uses_http_client: bool) -> DResult<String> {
              cannot drop the http_client wrappers for a non-HTTP program"
             ),
         })?;
-    let mut out = full.get(..cut).unwrap_or("").to_owned();
+    let mut out = random_filtered.get(..cut).unwrap_or("").to_owned();
     // The slice ends immediately before the `Http` comment (the byte before it
     // is the newline that terminated the previous wrapper's `}`), so `out`
     // already ends in `\n` — the following bindings start on their own line.
@@ -1245,7 +1323,10 @@ pub fn emit_program(ctx: &EmitCtx, program: &Program) -> DResult<EmittedProject>
         // the wasm target takes the floor-filtered subset.
         match ctx.target {
             ipe_ir::Target::Native => {
-                out.push_str(&native_runtime_bindings(ctx.reaches_http_client())?);
+                out.push_str(&native_runtime_bindings(
+                    ctx.reaches_http_client(),
+                    ctx.reaches_random(),
+                )?);
             }
             ipe_ir::Target::WasmClient => out.push_str(&wasm_runtime_bindings()?),
         }
@@ -1834,6 +1915,29 @@ fn assemble_project_files(
         if ctx.reaches_encoding() {
             mod_rs.push_str(RUNTIME_MOD_RS_ENCODING_APPEND);
         }
+        // Ipe.Regex / String.isUrl. `regex_kernel.rs` (the sole consumer of the
+        // `regex` crate) is declared when the program reaches an `Ipe.Regex`
+        // kernel or `String.isUrl`. A standalone leaf — a program that touches
+        // neither keeps it absent, dropping `regex` + its aho-corasick/
+        // regex-automata/regex-syntax subtree.
+        if ctx.uses_regex {
+            mod_rs.push_str(RUNTIME_MOD_RS_REGEX_APPEND);
+        }
+        // Ipe.Uuid. `uuid_kernel.rs` (the sole consumer of the `uuid` crate) is
+        // declared when the program reaches an `Ipe.Uuid` kernel or a server/web
+        // surface (whose runtime module mints ids via `uuid::new_v4`). A bare
+        // Program that reaches none keeps it absent, dropping `uuid`.
+        if ctx.reaches_uuid() {
+            mod_rs.push_str(RUNTIME_MOD_RS_UUID_APPEND);
+        }
+        // Ipe.Random. `random.rs` (the non-crypto PRNG) is declared when the
+        // program reaches an `Ipe.Random` kernel OR the async runtime (`task.rs`'s
+        // tokio retry-with-jitter path draws from `random`'s LCG). A bare (sync)
+        // program that never draws random keeps it absent. `getrandom` is
+        // unaffected (the always-on crypto_core floor keeps it).
+        if ctx.reaches_random() {
+            mod_rs.push_str(RUNTIME_MOD_RS_RANDOM_APPEND);
+        }
         if ctx.uses_db {
             mod_rs.push_str(RUNTIME_MOD_RS_DB_APPEND);
         }
@@ -2265,7 +2369,10 @@ pub fn emit_spine(ctx: &EmitCtx, program: &Program) -> DResult<String> {
 
     match ctx.target {
         ipe_ir::Target::Native => {
-            out.push_str(&native_runtime_bindings(ctx.reaches_http_client())?);
+            out.push_str(&native_runtime_bindings(
+                ctx.reaches_http_client(),
+                ctx.reaches_random(),
+            )?);
         }
         ipe_ir::Target::WasmClient => out.push_str(&wasm_runtime_bindings()?),
     }

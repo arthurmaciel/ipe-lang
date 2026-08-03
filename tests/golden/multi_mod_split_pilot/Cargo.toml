@@ -15,7 +15,7 @@ mimalloc = { version = "0.1", optional = true, default-features = false }
 # This crate is NOT relocatable: `cargo build` outside a machine whose Ipê
 # toolchain provides that path fails with cargo's own missing-path-dependency
 # error. It is a build artifact, not a source distribution.
-ipe_runtime = { package = "ipe-runtime-rust", path = "__IPE_RUNTIME_PATH__", default-features = false, features = ["json", "async", "db-sqlite", "encoding"] }
+ipe_runtime = { package = "ipe-runtime-rust", path = "__IPE_RUNTIME_PATH__", default-features = false, features = ["json", "async", "db-sqlite", "encoding", "random"] }
 
 [profile.dev]
 debug = 0

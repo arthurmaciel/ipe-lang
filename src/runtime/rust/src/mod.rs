@@ -95,6 +95,12 @@ pub mod file;
 // `console.{debug,info,warn,error}` (see `log.rs`'s `cfg(target_arch =
 // "wasm32")` sink split).
 pub mod log;
+// `Ipe.Random` non-cryptographic PRNG. Behind the `random` feature: a program
+// that reaches no `Ipe.Random` kernel drops the module. The feature gates only
+// this module — `getrandom` (the entropy source of the always-on `crypto_core`
+// floor, and of this module's wasm seed arm) stays a non-optional base dep until
+// the crypto-core demotion phase, so gating `random` never removes `getrandom`.
+#[cfg(feature = "random")]
 pub mod random;
 // `system` is always compiled (not tokio-gated): it owns the process-global
 // env RwLock + the `read_env_var` / `read_env_var_os` / `locked_set_var` /
@@ -170,6 +176,7 @@ pub use json::*;
 // on `tokio` instead would drop those std-available items from the crate root
 // and break every non-async dependency-model program (E0425).
 pub use log::*;
+#[cfg(feature = "random")]
 pub use random::*;
 pub use system::*;
 pub use task::*;
@@ -194,7 +201,13 @@ pub mod bytes;
 #[cfg(feature = "encoding")]
 pub use bytes::*;
 
+// `Ipe.Regex` regular expressions + `String.isUrl` (its validator body lives
+// here). Behind the `regex` feature (the `regex` crate is optional): a program
+// that reaches neither an `Ipe.Regex` kernel nor `String.isUrl` drops `regex` and
+// its aho-corasick / regex-automata / regex-syntax subtree.
+#[cfg(feature = "regex")]
 pub mod regex_kernel;
+#[cfg(feature = "regex")]
 pub use regex_kernel::*;
 
 // JWT needs `jsonwebtoken` (decode) plus json (the Go-parity JSON encoder for
@@ -234,7 +247,13 @@ pub mod tui;
 #[cfg(feature = "tui")]
 pub use tui::{tui_app, tui_app_ui};
 
+// `Ipe.Uuid` v4 / v7 / parse. Behind the `uuid` feature (the `uuid` crate is
+// optional): a program that reaches no `Ipe.Uuid` kernel — and no `server` /
+// `web` surface (whose runtime modules mint session/CSRF ids via `uuid::new_v4`,
+// so both imply `uuid`) — drops the crate.
+#[cfg(feature = "uuid")]
 pub mod uuid_kernel;
+#[cfg(feature = "uuid")]
 pub use uuid_kernel::*;
 
 // `Ipe.Secret` — opaque secret-string wrapper. Always

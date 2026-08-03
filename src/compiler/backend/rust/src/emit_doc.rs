@@ -1960,6 +1960,7 @@ mod tests {
         just_ctor: ipe_intern::Symbol,
     }
 
+    #[allow(clippy::too_many_lines)] // exhaustive `Module` literal (every `uses_*` flag)
     fn fixture() -> Fixture {
         let mut interner = Interner::new();
         let main_mod = interner.intern("Main").expect("intern Main");
@@ -2048,6 +2049,9 @@ mod tests {
                 uses_compression: false,
                 uses_csv: false,
                 uses_encoding: false,
+                uses_regex: false,
+                uses_uuid: false,
+                uses_random: false,
                 uses_crypto: false,
                 uses_jwt: false,
                 uses_url: false,
@@ -2613,6 +2617,9 @@ mod tests {
                 uses_compression: false,
                 uses_csv: false,
                 uses_encoding: false,
+                uses_regex: false,
+                uses_uuid: false,
+                uses_random: false,
                 uses_crypto: false,
                 uses_jwt: false,
                 uses_url: false,
@@ -3219,6 +3226,9 @@ mod tests {
                 uses_compression: false,
                 uses_csv: false,
                 uses_encoding: false,
+                uses_regex: false,
+                uses_uuid: false,
+                uses_random: false,
                 uses_crypto: false,
                 uses_jwt: false,
                 uses_url: false,
@@ -3615,6 +3625,9 @@ mod tests {
                 uses_compression: false,
                 uses_csv: false,
                 uses_encoding: false,
+                uses_regex: false,
+                uses_uuid: false,
+                uses_random: false,
                 uses_crypto: false,
                 uses_jwt: false,
                 uses_url: false,
