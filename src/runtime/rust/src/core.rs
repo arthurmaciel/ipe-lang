@@ -837,6 +837,216 @@ pub fn maybe_combine<A>(maybes: Vec<IpeMaybe<A>>) -> IpeMaybe<Vec<A>> {
 }
 
 // ===========================================
+// Recursion depth guard
+// ===========================================
+// A user function that recurses without a reachable base case grows the native
+// stack until it hits the guard page. A native stack overflow is an immediate
+// `abort()` — it does NOT unwind, so every panic-containment mechanism the
+// runtime has (the classifying panic hook, the `catch_unwind` task funnels, the
+// server's per-request `CatchPanicLayer`) is bypassed and the whole process
+// dies. On a long-lived server that is a one-request denial of service against
+// every in-flight request.
+//
+// The guard converts that uncatchable abort into an ordinary classified panic.
+// The emitter prepends `let _ipe_recursion_guard = crate::recursion_guard();`
+// to every user function body; the RAII guard increments a per-thread depth
+// counter on entry (and, on native targets, probes the remaining stack), trips
+// with a fixed-message `panic!` when either bound is exceeded, and decrements on
+// drop. Because a panic unwinds, the existing containment isolates the trip per
+// request / per task / per process exit. The counter stays exact across the
+// unwind: every frame between the trip and the catcher restores its decrement as
+// it unwinds.
+//
+// Two independent bounds, either of which trips:
+//
+//   * Depth budget — a per-thread counter against a configurable limit. Fires
+//     in the common case (typical emitted frames are small), so the failure is
+//     reproducible at the same depth on every platform and the diagnostic is
+//     teachable. Catches direct, mutual, and function-value-mediated recursion:
+//     any unbounded chain re-enters some emitted function infinitely often, and
+//     every emitted function is guarded.
+//   * Remaining-stack red zone (native only) — the runtime records a stack floor
+//     for every thread it owns; the guard compares the address of a local
+//     against `floor + RED_ZONE`. This is the soundness backstop for frames of
+//     any size: even a single hundred-kilobyte frame trips while a comfortable
+//     margin remains for the panic/unwind machinery. A thread whose floor was
+//     never recorded (a foreign thread calling into emitted code) degrades to
+//     depth-only — fail-safe, never a false trip. Compiled out on wasm32 (no
+//     native stack introspection); the depth budget remains.
+
+/// The default recursion depth budget when `IPE_RECURSION_LIMIT` is unset,
+/// unparseable, or zero. Calibrated against the 8 MiB runtime-owned stacks: at
+/// ~100–800 bytes per emitted frame, 10 000 frames occupy ~1–8 MiB, so the depth
+/// budget trips deterministically for typical frames and the red-zone probe
+/// covers the fat-frame tail.
+const DEFAULT_RECURSION_LIMIT: usize = 10_000;
+
+/// The remaining-stack margin that must stay free when the guard admits a call.
+/// Its contract: one emitted frame plus the deepest non-guarded call chain
+/// beneath it must fit in this margin, so the panic/unwind machinery and any
+/// runtime kernels beneath the last guarded entry always have room. An internal
+/// soundness constant, not a user-facing tunable.
+#[cfg(not(target_arch = "wasm32"))]
+const RECURSION_RED_ZONE: usize = 256 * 1024;
+
+/// The stack size the runtime requests for every thread it spawns, and the size
+/// the recorded floor (`record_stack_floor`) is derived against. Uniform so the
+/// same program trips at the same depth whether the recursion started from a CLI
+/// `main`, an HTTP handler, or a live-session driver.
+#[cfg(not(target_arch = "wasm32"))]
+pub const RUNTIME_THREAD_STACK_SIZE: usize = 8 * 1024 * 1024;
+
+thread_local! {
+    /// The current guarded recursion depth on this thread. Incremented by
+    /// `recursion_guard()`, decremented by `RecursionGuard::drop` — exact under
+    /// both normal return and unwind.
+    static RECURSION_DEPTH: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    /// The lowest stack address this thread may descend to before the guard
+    /// trips (`stack base − stack size + red zone`, since every supported target
+    /// grows the stack downward). `None` on a thread whose floor was never
+    /// recorded — the probe then degrades to depth-only.
+    #[cfg(not(target_arch = "wasm32"))]
+    static STACK_FLOOR: std::cell::Cell<Option<usize>> = const { std::cell::Cell::new(None) };
+}
+
+/// The configured recursion depth budget, read once from `IPE_RECURSION_LIMIT`
+/// and cached for the process lifetime. Unset, unparseable, or zero falls back
+/// to [`DEFAULT_RECURSION_LIMIT`]; any positive value is accepted (the red-zone
+/// probe still backstops a value set recklessly high, so raising the env var can
+/// never reintroduce the abort).
+fn recursion_limit() -> usize {
+    use std::sync::OnceLock;
+    static LIMIT: OnceLock<usize> = OnceLock::new();
+    *LIMIT.get_or_init(|| {
+        parse_recursion_limit(crate::system::read_env_var("IPE_RECURSION_LIMIT").ok())
+    })
+}
+
+/// Interpret a raw `IPE_RECURSION_LIMIT` value into a depth budget. Unset
+/// (`None`), unparseable, or zero yields [`DEFAULT_RECURSION_LIMIT`]; any
+/// positive integer is accepted verbatim. Pure so the fallback ladder is unit
+/// tested without touching the process environment or the cached read.
+fn parse_recursion_limit(raw: Option<String>) -> usize {
+    raw.and_then(|v| v.trim().parse::<usize>().ok())
+        .filter(|&n| n > 0)
+        .unwrap_or(DEFAULT_RECURSION_LIMIT)
+}
+
+/// An approximation of the current stack pointer: the address of a stack local.
+/// Stacks grow downward on every supported native target, so a deeper call
+/// yields a smaller address. Reading the address of a local — never
+/// dereferencing a dangling pointer — is safe.
+#[cfg(not(target_arch = "wasm32"))]
+#[inline]
+fn approx_stack_pointer() -> usize {
+    let anchor: u8 = 0;
+    std::ptr::from_ref(&anchor) as usize
+}
+
+/// Record the calling thread's stack floor so the guard's red-zone probe has a
+/// reference point. Called once, first thing, on every thread the runtime owns
+/// (the main thread via the panic classifier, the `block_on` entry thread, and
+/// each tokio worker via `on_thread_start`), passing that thread's known stack
+/// size. The floor is `current stack pointer − usable_below + RED_ZONE`, where
+/// `usable_below` is how far this thread may still descend; the guard then trips
+/// once a probed pointer drops below the floor. Idempotent per thread: recording
+/// again simply overwrites with an equivalent value.
+///
+/// `usable_below` is derived conservatively as `stack_size` minus the space
+/// already consumed above the recording point, which is unknown here, so the
+/// caller passes the full `stack_size` and the recording happens as early as
+/// possible on the thread (where consumption above is minimal). A floor set a
+/// little high only trips the guard slightly sooner — never later — so the
+/// soundness direction is preserved.
+#[cfg(not(target_arch = "wasm32"))]
+pub fn record_stack_floor(stack_size: usize) {
+    let sp = approx_stack_pointer();
+    // Saturating throughout: on the (impossible for supported targets) chance
+    // that `stack_size` exceeds the addressable space below `sp`, the floor
+    // saturates to 0 and the probe simply never trips — depth-only, fail-safe.
+    let floor = sp
+        .saturating_sub(stack_size)
+        .saturating_add(RECURSION_RED_ZONE);
+    STACK_FLOOR.with(|c| c.set(Some(floor)));
+}
+
+/// Read this thread's recorded stack floor, if any. Test-only accessor for the
+/// floor-recording regressions; production code never needs to read it directly.
+#[cfg(all(test, not(target_arch = "wasm32")))]
+pub(crate) fn stack_floor_for_test() -> Option<usize> {
+    STACK_FLOOR.with(std::cell::Cell::get)
+}
+
+/// Read this thread's current guarded recursion depth. Test-only accessor for
+/// the RAII-balance regressions.
+#[cfg(test)]
+pub(crate) fn recursion_depth_for_test() -> usize {
+    RECURSION_DEPTH.with(std::cell::Cell::get)
+}
+
+/// The RAII recursion guard. Its construction (`recursion_guard`) enters one
+/// level of guarded recursion; its `Drop` leaves it. The type carries no public
+/// field — it exists only to tie the decrement to the caller's scope.
+#[must_use = "the guard must be bound to a named local for the whole function body; \
+              dropping it immediately (e.g. `let _ = recursion_guard();`) would decrement \
+              the depth counter at once and defeat the guard"]
+pub struct RecursionGuard {
+    // Zero-sized: the depth lives in the thread-local, not here. A private field
+    // keeps the type unconstructible outside this module.
+    _private: (),
+}
+
+/// Enter one level of guarded recursion, returning a [`RecursionGuard`] whose
+/// drop leaves it. Called at the top of every emitted user function body. Trips
+/// with a fixed-message `panic!` when the per-thread depth budget is exceeded or
+/// — on native targets with a recorded floor — when the remaining stack falls
+/// into the red zone. The trip message deliberately avoids the word "overflow"
+/// so it can never misclassify as `ArithmeticOverflow`.
+///
+/// Total apart from the deliberate trip: the increment is a `Cell` bump, the
+/// probe an address compare, and the trip a `panic!` with a constant `&'static
+/// str` — no allocation on the trip path beyond the panic itself, no unwrap, no
+/// index. It runs on the panic path (a trip deeper in the same chain unwinds
+/// through outer guards' drops), so it must stay total, and it is.
+#[inline]
+#[allow(clippy::panic)] // the deliberate, sole trip path — converts an uncatchable
+// stack-overflow abort into a classifiable, containable panic
+pub fn recursion_guard() -> RecursionGuard {
+    let depth = RECURSION_DEPTH.with(|c| {
+        let next = c.get().saturating_add(1);
+        c.set(next);
+        next
+    });
+    // On a trip, NO `RecursionGuard` is returned, so no `Drop` will restore this
+    // frame's increment — the trip path must undo it itself before unwinding.
+    // (Outer frames each own a guard whose drop restores their own increment as
+    // the panic unwinds, so the counter returns exactly to zero once caught.)
+    let trip = depth > recursion_limit() || {
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            STACK_FLOOR
+                .with(std::cell::Cell::get)
+                .is_some_and(|floor| approx_stack_pointer() <= floor)
+        }
+        #[cfg(target_arch = "wasm32")]
+        {
+            false
+        }
+    };
+    if trip {
+        RECURSION_DEPTH.with(|c| c.set(c.get().saturating_sub(1)));
+        panic!("maximum recursion depth exceeded");
+    }
+    RecursionGuard { _private: () }
+}
+
+impl Drop for RecursionGuard {
+    fn drop(&mut self) {
+        RECURSION_DEPTH.with(|c| c.set(c.get().saturating_sub(1)));
+    }
+}
+
+// ===========================================
 // Synchronous-panic gate (Go parity: rt.LogPanicAndExit)
 // ===========================================
 // The generated `fn main()` installs this FIRST so any panic that escapes the
@@ -856,6 +1066,11 @@ fn classify_panic(msg: &str) -> &'static str {
         "DivisionByZero"
     } else if m.contains("index out of bounds") || m.contains("out of range") {
         "IndexOutOfRange"
+    } else if m.contains("recursion depth") {
+        // Ordered before the `"overflow"` arm: the recursion-guard trip message
+        // (`maximum recursion depth exceeded`) deliberately omits "overflow", so
+        // this substring match is what classifies it — never `ArithmeticOverflow`.
+        "RecursionLimit"
     } else if m.contains("overflow") {
         "ArithmeticOverflow"
     } else {
@@ -959,6 +1174,13 @@ pub fn panic_500_body(payload: &(dyn std::any::Any + Send)) -> String {
 /// it), the Rust runtime prints a backtrace and aborts/exits — still a clean
 /// non-zero exit. The classified log line always fires first.
 pub fn install_panic_classifier() {
+    // The main thread carries the platform-default 8 MiB stack by convention; the
+    // std-only and current-thread `block_on` entries poll on it, so record its
+    // floor here — the one call every emitted `main()` already makes — giving the
+    // recursion guard's red-zone probe a reference point on the main thread. A
+    // shape that never installs the hook simply runs depth-only there.
+    #[cfg(not(target_arch = "wasm32"))]
+    record_stack_floor(RUNTIME_THREAD_STACK_SIZE);
     std::panic::set_hook(Box::new(|info| {
         // Log (classified, with errId) — diagnostic fires regardless of whether
         // the panic is subsequently caught by catch_unwind / tokio::task::spawn.
@@ -1206,7 +1428,26 @@ mod tests {
             classify_panic("attempt to add with overflow"),
             "ArithmeticOverflow"
         );
+        assert_eq!(
+            classify_panic("maximum recursion depth exceeded"),
+            "RecursionLimit"
+        );
         assert_eq!(classify_panic("something else entirely"), "Unexpected");
+    }
+
+    // The `RecursionLimit` arm is matched BEFORE the `"overflow"` arm and the trip
+    // message omits "overflow", so a recursion trip can never misclassify as
+    // `ArithmeticOverflow`, and a genuine overflow message is unaffected.
+    #[test]
+    fn recursion_trip_never_misclassifies_as_overflow() {
+        assert_eq!(
+            classify_panic("maximum recursion depth exceeded"),
+            "RecursionLimit"
+        );
+        assert_eq!(
+            classify_panic("attempt to multiply with overflow"),
+            "ArithmeticOverflow"
+        );
     }
 
     // [B8] The Ipê-visible message NEVER contains the foreign error's Debug detail
@@ -1319,5 +1560,210 @@ mod tests {
         let nothing: IpeResult<String, i64> =
             ipe_result_from_maybe("missing".to_string(), IpeMaybe::Nothing);
         assert_eq!(nothing, IpeResult::Err("missing".to_string()));
+    }
+}
+
+// The recursion-guard tests need no serde impls, so they live in their own
+// always-on module. Each depth-sensitive test runs on a dedicated thread so the
+// thread-local depth counter and stack floor start clean and never race another
+// test on the process's threads.
+#[cfg(test)]
+mod recursion_guard_tests {
+    use super::*;
+
+    #[test]
+    fn parse_recursion_limit_ladder() {
+        // Unset / unparseable / zero → default; positive → verbatim.
+        assert_eq!(parse_recursion_limit(None), DEFAULT_RECURSION_LIMIT);
+        assert_eq!(
+            parse_recursion_limit(Some("garbage".to_string())),
+            DEFAULT_RECURSION_LIMIT
+        );
+        assert_eq!(
+            parse_recursion_limit(Some("0".to_string())),
+            DEFAULT_RECURSION_LIMIT
+        );
+        assert_eq!(
+            parse_recursion_limit(Some("-5".to_string())),
+            DEFAULT_RECURSION_LIMIT
+        );
+        assert_eq!(parse_recursion_limit(Some("  42  ".to_string())), 42);
+        assert_eq!(parse_recursion_limit(Some("1".to_string())), 1);
+    }
+
+    // A balanced enter/leave returns the depth counter to where it started, and a
+    // guard held across a nested guard sees a strictly deeper level.
+    #[test]
+    fn raii_decrement_balances_on_normal_return() {
+        std::thread::Builder::new()
+            .stack_size(RUNTIME_THREAD_STACK_SIZE)
+            .spawn(|| {
+                assert_eq!(recursion_depth_for_test(), 0);
+                {
+                    let _outer = recursion_guard();
+                    assert_eq!(recursion_depth_for_test(), 1);
+                    {
+                        let _inner = recursion_guard();
+                        assert_eq!(recursion_depth_for_test(), 2);
+                    }
+                    assert_eq!(recursion_depth_for_test(), 1);
+                }
+                assert_eq!(recursion_depth_for_test(), 0);
+            })
+            .expect("spawn test thread")
+            .join()
+            .expect("test thread panicked");
+    }
+
+    // The RAII decrement fires as the stack unwinds through a caught panic, so the
+    // depth counter returns to zero even when a guarded call chain is torn down by
+    // an unwind rather than a normal return.
+    #[test]
+    fn raii_decrement_balances_across_caught_unwind() {
+        std::thread::Builder::new()
+            .stack_size(RUNTIME_THREAD_STACK_SIZE)
+            .spawn(|| {
+                let r = std::panic::catch_unwind(|| {
+                    let _g0 = recursion_guard();
+                    let _g1 = recursion_guard();
+                    let _g2 = recursion_guard();
+                    assert_eq!(recursion_depth_for_test(), 3);
+                    panic!("unwind through three guards");
+                });
+                assert!(r.is_err(), "the deliberate panic must propagate");
+                assert_eq!(
+                    recursion_depth_for_test(),
+                    0,
+                    "every guard's drop must restore its decrement across the unwind"
+                );
+            })
+            .expect("spawn test thread")
+            .join()
+            .expect("test thread panicked");
+    }
+
+    // Unbounded recursion trips at the depth budget with the fixed message — a
+    // clean, catchable panic, never a process abort. Driven with the real default
+    // limit so the test pins the shipped budget.
+    #[test]
+    fn depth_budget_trips_with_fixed_message() {
+        // Unbounded by construction — the guard, not a base case, is what stops it.
+        #[allow(unconditional_recursion)]
+        fn recurse() {
+            let _g = recursion_guard();
+            recurse();
+        }
+        // A stack large enough to hold DEFAULT_RECURSION_LIMIT guarded frames so
+        // the DEPTH budget — not a native overflow — is what trips. No floor is
+        // recorded on this thread, so the probe is inert (depth-only).
+        std::thread::Builder::new()
+            .stack_size(64 * 1024 * 1024)
+            .spawn(|| {
+                let r = std::panic::catch_unwind(recurse);
+                let payload = r.expect_err("unbounded recursion must trip the guard");
+                let msg = payload
+                    .downcast_ref::<&str>()
+                    .map(|s| (*s).to_string())
+                    .or_else(|| payload.downcast_ref::<String>().cloned())
+                    .unwrap_or_default();
+                assert_eq!(msg, "maximum recursion depth exceeded");
+                assert_eq!(classify_panic(&msg), "RecursionLimit");
+                assert_eq!(
+                    recursion_depth_for_test(),
+                    0,
+                    "the counter must unwind back to zero after the trip"
+                );
+            })
+            .expect("spawn test thread")
+            .join()
+            .expect("test thread panicked");
+    }
+
+    // A correct bounded recursion well under the limit never trips — the guard is
+    // invisible to working programs.
+    #[test]
+    fn bounded_recursion_under_limit_does_not_trip() {
+        fn sum_to(n: u64) -> u64 {
+            let _g = recursion_guard();
+            if n == 0 { 0 } else { n + sum_to(n - 1) }
+        }
+        std::thread::Builder::new()
+            .stack_size(RUNTIME_THREAD_STACK_SIZE)
+            .spawn(|| {
+                assert_eq!(sum_to(1_000), 500_500);
+                assert_eq!(recursion_depth_for_test(), 0);
+            })
+            .expect("spawn test thread")
+            .join()
+            .expect("test thread panicked");
+    }
+
+    // On a deliberately small stack WITH a recorded floor, the red-zone probe
+    // trips before the depth budget: a runaway recursion on a small stack fails
+    // via the remaining-stack backstop, not a native overflow, and well below
+    // DEFAULT_RECURSION_LIMIT frames.
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn red_zone_probe_trips_below_depth_limit_on_small_stack() {
+        // 512 KiB: above the 256 KiB red zone (so a floor can be recorded with
+        // headroom), but far too small to hold 10 000 frames — the probe must
+        // trip first.
+        let small_stack = 512 * 1024;
+        std::thread::Builder::new()
+            .stack_size(small_stack)
+            .spawn(move || {
+                record_stack_floor(small_stack);
+                assert!(stack_floor_for_test().is_some(), "floor must be recorded");
+                // Unbounded by construction — the red-zone probe, not a base case,
+                // is what stops it on this deliberately small stack.
+                #[allow(unconditional_recursion)]
+                fn recurse() -> usize {
+                    let _g = recursion_guard();
+                    // A non-trivial local array grows the frame so the probe is
+                    // exercised well before 10 000 depth.
+                    let pad = [0u8; 256];
+                    std::hint::black_box(&pad);
+                    recurse() + usize::from(pad[0])
+                }
+                let r = std::panic::catch_unwind(recurse);
+                let payload = r.expect_err("small stack must trip the guard, not overflow");
+                let msg = payload
+                    .downcast_ref::<&str>()
+                    .map(|s| (*s).to_string())
+                    .or_else(|| payload.downcast_ref::<String>().cloned())
+                    .unwrap_or_default();
+                assert_eq!(msg, "maximum recursion depth exceeded");
+                assert!(
+                    recursion_depth_for_test() < DEFAULT_RECURSION_LIMIT,
+                    "the probe must trip BELOW the depth budget on a small stack; \
+                     tripped at depth {}",
+                    recursion_depth_for_test()
+                );
+            })
+            .expect("spawn test thread")
+            .join()
+            .expect("test thread panicked");
+    }
+
+    // A thread whose floor was never recorded runs depth-only: the probe is inert
+    // (fail-safe, never a false trip), so a shallow guarded call always succeeds.
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn floorless_thread_runs_depth_only() {
+        std::thread::Builder::new()
+            .stack_size(RUNTIME_THREAD_STACK_SIZE)
+            .spawn(|| {
+                assert!(
+                    stack_floor_for_test().is_none(),
+                    "a fresh thread has no recorded floor"
+                );
+                // Shallow guarded calls must succeed with no floor present.
+                let _g0 = recursion_guard();
+                let _g1 = recursion_guard();
+                assert_eq!(recursion_depth_for_test(), 2);
+            })
+            .expect("spawn test thread")
+            .join()
+            .expect("test thread panicked");
     }
 }
