@@ -1394,6 +1394,126 @@ fn ir_type_mentions_json(ty: &IrType) -> bool {
     }
 }
 
+/// Does any [`IrType`] occurring ANYWHERE in `expr` satisfy `pred`?
+///
+/// A runtime-feature guard (`uses_json` / `uses_server` / `uses_http`) must be a
+/// SUPERSET of the emitter's type rendering: whenever [`crate::emit_types`] will
+/// spell a feature-gated type (`JsonVal`, `ServerResponse`, `HttpRequest`), the
+/// corresponding feature must be selected, or the emitted crate references a type
+/// with no definition in scope (E0412/E0425/E0433 — a SEAL breach). The emitter
+/// renders types not only from a function's SIGNATURE but from every type carried
+/// inside its BODY — a local lambda's parameter/return types, a `let`-bound
+/// closure's, an empty list's element type, a record-field read's field type, a
+/// reified function value's type, a tail-loop's parameter types. A guard scanning
+/// signatures alone under-approximates and drops a feature the body still spells.
+///
+/// This walker closes that gap: it visits every type-carrying position of the
+/// expression tree and applies `pred` (an `ir_type_mentions_*` predicate, itself
+/// fully recursive over a type's structure). Enumerated exhaustively (no `_`
+/// catch-all) so a future [`Expr`] variant that introduces a new type position is
+/// a compile error here — never a silently-missed render (SEAL discipline).
+fn expr_type_mentions(expr: &Expr, pred: &impl Fn(&IrType) -> bool) -> bool {
+    // Types carried directly at this node.
+    let here = match expr {
+        Expr::List { elem, .. } => pred(elem),
+        Expr::Access { field_ty, .. } => pred(field_ty),
+        Expr::Lambda { params, ret, .. } | Expr::SharedLambda { params, ret, .. } => {
+            params.iter().any(|(_, t)| pred(t)) || pred(ret)
+        }
+        Expr::FuncValue { ty, .. } => pred(ty),
+        Expr::TailLoop { params, .. } => params.iter().any(|(_, t)| pred(t)),
+        Expr::Record { ty, .. } => matches!(ty, Some(t) if pred(t)),
+        Expr::Int(_)
+        | Expr::Bool(_)
+        | Expr::Float(_)
+        | Expr::Str(_)
+        | Expr::PathLit(_)
+        | Expr::Char(_)
+        | Expr::Unit
+        | Expr::Var(_)
+        | Expr::CloneVar(_)
+        | Expr::Ctor { .. }
+        | Expr::BinOp { .. }
+        | Expr::Let { .. }
+        | Expr::Destructure { .. }
+        | Expr::If { .. }
+        | Expr::Match(_)
+        | Expr::Call { .. }
+        | Expr::Tuple(_)
+        | Expr::Cons { .. }
+        | Expr::ListIndexClone { .. }
+        | Expr::ListLenCheck { .. }
+        | Expr::Update { .. }
+        | Expr::Apply { .. }
+        | Expr::TaskSeq { .. }
+        | Expr::TaskSeqSync { .. }
+        | Expr::TailRecur { .. } => false,
+    };
+    if here {
+        return true;
+    }
+    // Recurse into every child expression.
+    match expr {
+        Expr::BinOp { lhs, rhs, .. } => {
+            expr_type_mentions(lhs, pred) || expr_type_mentions(rhs, pred)
+        }
+        Expr::Let { value, body, .. } | Expr::Destructure { value, body, .. } => {
+            expr_type_mentions(value, pred) || expr_type_mentions(body, pred)
+        }
+        Expr::If { cond, then_, else_ } => {
+            expr_type_mentions(cond, pred)
+                || expr_type_mentions(then_, pred)
+                || expr_type_mentions(else_, pred)
+        }
+        Expr::Match(m) => {
+            expr_type_mentions(m.scrutinee(), pred)
+                || m.arms().iter().any(|arm| {
+                    expr_type_mentions(&arm.body, pred)
+                        || arm
+                            .guard
+                            .as_ref()
+                            .is_some_and(|g| expr_type_mentions(g, pred))
+                })
+        }
+        Expr::Call { args, .. }
+        | Expr::Tuple(args)
+        | Expr::Ctor { args, .. }
+        | Expr::TailRecur { args } => args.iter().any(|a| expr_type_mentions(a, pred)),
+        Expr::List { items, .. } => items.iter().any(|e| expr_type_mentions(e, pred)),
+        Expr::Cons { head, tail } => {
+            expr_type_mentions(head, pred) || expr_type_mentions(tail, pred)
+        }
+        Expr::ListIndexClone { list, .. } | Expr::ListLenCheck { list, .. } => {
+            expr_type_mentions(list, pred)
+        }
+        Expr::Record { fields, .. } => fields.iter().any(|(_, e)| expr_type_mentions(e, pred)),
+        Expr::Update { record, fields } => {
+            expr_type_mentions(record, pred)
+                || fields.iter().any(|(_, e)| expr_type_mentions(e, pred))
+        }
+        Expr::Lambda { body, .. }
+        | Expr::SharedLambda { body, .. }
+        | Expr::TailLoop { body, .. } => expr_type_mentions(body, pred),
+        Expr::Apply { func, args } => {
+            expr_type_mentions(func, pred) || args.iter().any(|a| expr_type_mentions(a, pred))
+        }
+        Expr::TaskSeq { effect, rest } | Expr::TaskSeqSync { effect, rest } => {
+            expr_type_mentions(effect, pred) || expr_type_mentions(rest, pred)
+        }
+        Expr::Access { record, .. } => expr_type_mentions(record, pred),
+        Expr::Int(_)
+        | Expr::Bool(_)
+        | Expr::Float(_)
+        | Expr::Str(_)
+        | Expr::PathLit(_)
+        | Expr::Char(_)
+        | Expr::Unit
+        | Expr::Var(_)
+        | Expr::CloneVar(_)
+        | Expr::FuncValue { .. } => false,
+    }
+}
+
 fn ir_contains_fun(ty: &IrType) -> bool {
     match ty {
         // A curried `FnOnce` chain is the same boxed-closure family as `Fun`; the
@@ -8358,6 +8478,7 @@ impl<'a> Lowerer<'a> {
             || funcs.iter().any(|f| {
                 ir_type_mentions_server(&f.ret)
                     || f.params.iter().any(|(_, t)| ir_type_mentions_server(t))
+                    || expr_type_mentions(&f.body, &ir_type_mentions_server)
             });
 
         // detect outbound `Ipe.Http` client usage — any client kernel, or a
@@ -8369,6 +8490,7 @@ impl<'a> Lowerer<'a> {
             || funcs.iter().any(|f| {
                 ir_type_mentions_http(&f.ret)
                     || f.params.iter().any(|(_, t)| ir_type_mentions_http(t))
+                    || expr_type_mentions(&f.body, &ir_type_mentions_http)
             });
 
         // detect `Ipe.Config` TOML/YAML decoder usage — any kernel emitting into
@@ -8405,6 +8527,7 @@ impl<'a> Lowerer<'a> {
             || funcs.iter().any(|f| {
                 ir_type_mentions_csv(&f.ret)
                     || f.params.iter().any(|(_, t)| ir_type_mentions_csv(t))
+                    || expr_type_mentions(&f.body, &ir_type_mentions_csv)
             });
 
         // detect HEAVY `Ipe.Crypto` usage — any legacy SHA-1/MD5, AEAD, or PBKDF2
@@ -8438,22 +8561,27 @@ impl<'a> Lowerer<'a> {
             || funcs.iter().any(|f| {
                 ir_type_mentions_secret(&f.ret)
                     || f.params.iter().any(|(_, t)| ir_type_mentions_secret(t))
+                    || expr_type_mentions(&f.body, &ir_type_mentions_secret)
             });
 
         // detect `json` reach — a `Value`/`Decoder`-building kernel OR a `Json` /
         // `Decoder` TYPE mentioned in ANY reachable type position. The two prelude
         // aliases (`type Value = JsonVal;`, `pub type Decoder<T> = …`) and the
-        // `json` feature ride on this. The type-mention guard is REQUIRED and
-        // scans every position that renders a type: function signatures (params +
-        // return), record field types, and enum-variant payload types — a
-        // signature naming `Value`/`Decoder` (a forwarded decoder) with no
-        // `Json.*`/`Config`/`Db.Decode` call site would otherwise drop an alias
-        // the emitted code still spells (E0412/E0433). FAIL-CLOSED: any of the
-        // three signals keeps `json` on.
+        // `json` feature ride on this. The type-mention guard is REQUIRED and must
+        // be a SUPERSET of every position the emitter renders a type: function
+        // signatures (params + return), record field types, enum-variant payload
+        // types, AND every type carried inside a function BODY (a local callback's
+        // parameter/return type, a `let`-bound closure, an empty list's element
+        // type, …). A `Value`/`Decoder` named ONLY in a body position (a forwarded
+        // decoder, a TEA/Cmd callback typed against `Value`) with no
+        // `Json.*`/`Config`/`Db.Decode` call site would otherwise drop an alias the
+        // emitted code still spells (E0412/E0425/E0433). FAIL-CLOSED: any signal
+        // keeps `json` on.
         let uses_json = kernel_usage.json
             || funcs.iter().any(|f| {
                 ir_type_mentions_json(&f.ret)
                     || f.params.iter().any(|(_, t)| ir_type_mentions_json(t))
+                    || expr_type_mentions(&f.body, &ir_type_mentions_json)
             })
             || records.iter().any(ir_type_mentions_json)
             || types_ir.iter().any(|td| match td {
@@ -19922,5 +20050,98 @@ mod tests {
         // reproduces it exactly despite the widest def sitting in the second
         // module — the equality the byte-identical eta/cap sizing rests on.
         assert_eq!(super::max_def_arity_per_module(&m), 3);
+    }
+
+    // ── body-carried type detection ties `uses_*` to the emitter ────────────
+    //
+    // The `uses_json`/`uses_server`/`uses_http` guards must be a SUPERSET of the
+    // emitter's type rendering: a feature-gated type named ANYWHERE the emitter
+    // will spell it — including inside a function BODY (a local callback's
+    // parameter type) — must select the feature, or the emitted crate references
+    // an undefined type (E0425). The runtime-featureset SEAL proves the closure
+    // GIVEN correct `uses_*` flags; these tests prove the flags themselves see a
+    // body-only mention, closing the gap a signatures-only scan left.
+
+    /// A `Json` type named ONLY inside a function body — a local lambda's
+    /// parameter type — is detected. The signature (a bare `f() -> Unit`) names
+    /// no json; the emitter still renders `JsonVal` for the lambda parameter, so
+    /// the guard must fire.
+    #[test]
+    fn body_only_json_in_lambda_param_is_detected() {
+        use ipe_ir::{Expr, IrType};
+
+        // `\_: Json -> ()` — a lambda whose sole parameter is typed `Json`.
+        let mut interner = Interner::new();
+        let p = interner.intern("p").unwrap();
+        let lambda = Expr::Lambda {
+            params: vec![(p, IrType::Json)],
+            ret: IrType::Unit,
+            body: Box::new(Expr::Unit),
+        };
+        // The body of `f` binds that lambda and returns unit — no json in `f`'s
+        // own signature, only inside its body.
+        let body = Expr::Let {
+            name: p,
+            value: Box::new(lambda),
+            body: Box::new(Expr::Unit),
+        };
+        assert!(
+            super::expr_type_mentions(&body, &super::ir_type_mentions_json),
+            "a `Json` type named only inside a function body (a local lambda \
+             parameter) must be detected — the guard under-approximated the \
+             emitter otherwise (E0425)"
+        );
+    }
+
+    /// A `Decoder` return type on a body-nested lambda is likewise detected —
+    /// `ir_type_mentions_json` treats a `Decoder` node as a json mention, and the
+    /// body walker reaches the lambda's return position.
+    #[test]
+    fn body_only_decoder_in_lambda_ret_is_detected() {
+        use ipe_ir::{Expr, IrType};
+
+        let mut interner = Interner::new();
+        let p = interner.intern("p").unwrap();
+        let lambda = Expr::Lambda {
+            params: vec![(p, IrType::Unit)],
+            ret: IrType::Decoder(Box::new(IrType::Int)),
+            body: Box::new(Expr::Unit),
+        };
+        assert!(
+            super::expr_type_mentions(&lambda, &super::ir_type_mentions_json),
+            "a `Decoder` return type on a body-nested lambda must be detected"
+        );
+    }
+
+    /// The bare floor is preserved: a json-free body (a plain integer return, an
+    /// `if` over unit-typed lambdas whose types name no json) does NOT trip the
+    /// guard — over-detection would keep the `json` feature for every program,
+    /// defeating the floor.
+    #[test]
+    fn json_free_body_does_not_trip_the_guard() {
+        use ipe_ir::{Expr, IrType};
+
+        let mut interner = Interner::new();
+        let p = interner.intern("p").unwrap();
+        // `if True then (\_: Int -> ()) else (\_: Str -> ())` bound in a let —
+        // several body type positions, none naming json.
+        let body = Expr::If {
+            cond: Box::new(Expr::Bool(true)),
+            then_: Box::new(Expr::Lambda {
+                params: vec![(p, IrType::Int)],
+                ret: IrType::Unit,
+                body: Box::new(Expr::Unit),
+            }),
+            else_: Box::new(Expr::Lambda {
+                params: vec![(p, IrType::Str)],
+                ret: IrType::List(Box::new(IrType::Int)),
+                body: Box::new(Expr::Unit),
+            }),
+        };
+        assert!(
+            !super::expr_type_mentions(&body, &super::ir_type_mentions_json),
+            "a json-free body must NOT set the json guard — the floor (drop \
+             `json` for a program that names no json anywhere) must hold"
+        );
     }
 }
