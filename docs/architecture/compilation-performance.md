@@ -87,12 +87,22 @@ developer machine, `examples/sky/ipe/01-hello-world` (`Io.println` only), built 
 each stage of the work and hand-trimmed to the floor its single kernel needs — a
 synchronous `fn main` printing to stdout with no dependencies:
 
-| Metric | Before S1 | After S1 | After S3 | Floor (`Io.println`) |
-|---|---|---|---|---|
-| Crates compiled | 105 | 51 | 45 | 1 |
-| Cold build | ~62 s | ~40 s | ~40 s | ~0.6 s |
-| Warm rebuild (edit `main`) | ~2.4 s | ~2.4 s | **~0.78 s** | ~0.5 s |
-| Binary | 1.06 MB | 0.44 MB | 0.45 MB | 0.36 MB |
+| Metric | Before S1 | After S1 | After S3 | After feature split | Floor (ideal) |
+|---|---|---|---|---|---|
+| Crates compiled | 105 | 51 | 45 | **3** | 1 |
+| Cold build | ~62 s | ~40 s | ~40 s | **~6.8 s** | ~0.6 s |
+| Warm rebuild (edit `main`) | ~2.4 s | ~2.4 s | ~0.78 s | **~0.34 s** | ~0.5 s |
+| Binary | 1.06 MB | 0.44 MB | 0.45 MB | **0.37 MB** | 0.36 MB |
+
+The "after feature split" column is the measured emitted-app floor once the
+runtime-crate feature split gates every optional surface: a bare `Io.println`
+program is `app + ipe_runtime + libc` — **3 crates, no serde, no tokio** — its
+`cargo tree -e normal`, cold `cargo build --release`, and warm rebuild taken on
+the same warm developer machine. Three crates *is* the floor (the ideal "1"
+removes the runtime crate and `libc` themselves, which every program keeps);
+binary size and warm rebuild land at the ideal. Optional surfaces stay
+pay-for-use: a JSON program measures 14 crates, an HTTP server 134 — each
+carrying only its own stack, none of it charged to the bare program.
 
 S1 gates the heavy roots — `url`/idna, `rsa`, and `tokio` for pure programs
 (synchronous `fn main`) — cutting the cold closure and the binary by roughly a
