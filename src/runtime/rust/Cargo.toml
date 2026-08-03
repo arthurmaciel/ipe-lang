@@ -150,10 +150,15 @@ chrono-tz = { version = "0.10", optional = true }
 # kernel and no Db surface drops the crate. `rust_decimal`'s own `serde` half is
 # NOT enabled here — it activates weakly via the `serde` feature
 # (`serde = [… "rust_decimal?/serde"]`), so `Decimal`'s inner `RD` gains serde
-# impls only when both `decimal` and `serde` are selected. `rust_decimal`'s own
-# default features still link the `serde` crate, so a decimal-only program keeps
-# it; adding `default-features = false` here would drop it — a separate dep-shrink.
-rust_decimal = { version = "1", optional = true }
+# impls only when both `decimal` and `serde` are selected. `default-features =
+# false` drops `rust_decimal`'s own default `serde` link, so a decimal-only program
+# (no `serde`-selecting surface) sheds the serde crate too; `std` and `maths` are
+# re-selected explicitly — `std` for the owned `Decimal` display/parse the runtime
+# uses, `maths` for the `powi`/rounding the `Ipe.Money` surface calls.
+rust_decimal = { version = "1", optional = true, default-features = false, features = [
+    "std",
+    "maths",
+] }
 bcrypt = { version = "0.17", optional = true }
 # `icu_casemap`: locale-aware case mapping (`String.toUpperIn`/`toLowerIn`).
 # Feature-gated so programs that never use locale-aware case pay nothing.

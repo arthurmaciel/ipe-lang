@@ -713,6 +713,13 @@ pub(crate) struct EmitCtx<'a> {
     /// plus `zeroize`); `secret` implies `crypto-core` for the shared `subtle`
     /// compare (see [`Self::reaches_crypto_core`]).
     pub(crate) uses_secret: bool,
+    /// `true` when the program names the `Value` (`JsonVal`) or `Decoder<T>` type
+    /// — set by the lowerer as the union of a `Json`-building kernel call and a
+    /// `Json`/`Decoder` type-mention scan (see [`ipe_ir::Module::uses_json`]).
+    /// Folded with the db / config / jwt surfaces (whose emitted decoders and
+    /// crate-feature implications also reach `json`) in [`Self::reaches_json`],
+    /// which keeps the two prelude aliases and selects the `json` runtime feature.
+    pub(crate) uses_json: bool,
     /// `true` when the program uses at least one `Ipe.Jwt` kernel. When set,
     /// [`crate::project::assemble_project_files`]:
     ///
@@ -1403,6 +1410,12 @@ impl<'a> EmitCtx<'a> {
         // feature). `secret` implies `crypto-core` for the shared `subtle`.
         let uses_secret = program.modules.iter().any(|m| m.uses_secret);
 
+        // detect whether the program names `Value`/`Decoder` (a Json-building
+        // kernel or a `Json`/`Decoder` type-mention). Gates the two fixed prelude
+        // aliases and the `json` runtime feature; folded with db/config/jwt in
+        // `reaches_json`.
+        let uses_json = program.modules.iter().any(|m| m.uses_json);
+
         // detect Ipe.Encoding / Ipe.Bytes usage (gates `encoding` + `bytes`
         // modules + base64 + hex + percent-encoding crates). Also reached by the
         // crypto/db/server/email/jwt/web surfaces — folded in by
@@ -1520,6 +1533,7 @@ impl<'a> EmitCtx<'a> {
             uses_char_category,
             uses_crypto_core,
             uses_secret,
+            uses_json,
             uses_crypto,
             uses_jwt,
             uses_url,
@@ -1627,6 +1641,36 @@ impl<'a> EmitCtx<'a> {
     /// augmenter and the `mod.rs` append — they can never disagree.
     pub(crate) const fn reaches_jwt(&self) -> bool {
         self.uses_jwt || self.uses_auth
+    }
+
+    /// `true` when the emitted crate names the `Value` (`JsonVal`) or `Decoder<T>`
+    /// type — so [`crate::project::assemble_project_files`] keeps the two fixed
+    /// prelude aliases (`type Value = JsonVal;` and `pub type Decoder<T> = …`) and
+    /// selects the `json` runtime feature (`serde_json`, and via `json = […,
+    /// "serde"]` the whole serde stack). A program that reaches neither drops both
+    /// aliases and that whole dependency subtree — the last structural feature-floor
+    /// removal, leaving a bare emitted app at `app + ipe_runtime + libc`.
+    ///
+    /// Reached directly by [`Self::uses_json`] (a `Json`-building kernel or a
+    /// `Json`/`Decoder` type-mention), or transitively by a surface whose crate
+    /// feature already lists `json` — so this SSOT and the crate-graph closure
+    /// agree even at `--no-default-features`: the `Db` surface (`Db.Decode.*` share
+    /// the `json` module's carrier; `db = [… "json"]`), `Config` (its decoders
+    /// share `decode_*`; `config = [… "json"]`), `jwt` (`jwt = [… "json"]` for the
+    /// claims round-trip), and the `web` / `webview` app runtimes (`web = […
+    /// "json"]`, and `webview` implies `web`). `server` / `tui` do NOT list `json`,
+    /// so a bare server or TUI program that names neither `Value` nor `Decoder`
+    /// still drops the feature and the two aliases. FAIL-CLOSED: any uncertain
+    /// `json` consumer keeps the feature and the aliases on; dropping them from a
+    /// program that spells either type is the forbidden failure, over-inclusion the
+    /// accepted cost.
+    pub(crate) const fn reaches_json(&self) -> bool {
+        self.uses_json
+            || self.uses_db
+            || self.uses_config
+            || self.uses_web
+            || self.uses_webview
+            || self.reaches_jwt()
     }
 
     /// `true` when the emitted crate reaches the heavy `crypto_core` floor — the
@@ -3480,6 +3524,7 @@ mod record_struct_namespace_tests {
                 uses_char_category: false,
                 uses_crypto_core: false,
                 uses_secret: false,
+                uses_json: false,
                 uses_crypto: false,
                 uses_jwt: false,
                 uses_url: false,
@@ -3577,6 +3622,7 @@ mod record_struct_namespace_tests {
                 uses_char_category: false,
                 uses_crypto_core: false,
                 uses_secret: false,
+                uses_json: false,
                 uses_crypto: false,
                 uses_jwt: false,
                 uses_url: false,
