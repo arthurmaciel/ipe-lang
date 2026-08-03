@@ -4,11 +4,21 @@ version = "0.1.0"
 edition = "2024"
 
 [features]
+# The default feature list below is a load-bearing ANCHOR mutated in place by the
+# manifest augmenters (`async_runtime_cargo_toml` restores `"tokio"`, the
+# server/db/… steps insert their feature, the static path splices the allocator)
+# — it must stay byte-exact, and every augmenter finds it as the line-initial
+# occurrence, so no comment here may open a bracketed list. The vendored fallback
+# keeps `encoding` ON via `json` implying it (json is always defaulted here), so
+# the vendored `encoding.rs` / `bytes.rs` `#[cfg]` gates stay satisfied without
+# perturbing the anchor. The `base64` / `hex` / `percent-encoding` deps below
+# stay non-optional in the vendored escape hatch.
 default = ["json"]
 tokio = []
 crypto = []
-json = []
+json = ["encoding"]
 db = []
+encoding = []
 web = []
 redis_store = []
 webview = []

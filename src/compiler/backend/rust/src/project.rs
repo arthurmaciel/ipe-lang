@@ -81,8 +81,13 @@ autobins = false
 [features]
 # Selects the browser-target impls of the shared form-submit helpers in the
 # vendored runtime (`cfg(any(feature = "web", feature = "wasm-client"))`).
-default = ["wasm-client"]
+default = ["wasm-client", "encoding"]
 wasm-client = []
+# Gates the vendored `encoding.rs` / `bytes.rs` modules. The `base64` / `hex` /
+# `percent-encoding` deps below stay non-optional in this closed wasm template
+# (byte-identical output), so this only satisfies the source `#[cfg]` gates —
+# defaulted on.
+encoding = []
 # Gates the IANA-zone calendar surface of the always-declared `time` runtime
 # module (the `chrono-tz`-backed helpers). Promoted into `default` and paired
 # with the `chrono-tz` dependency only for a program that reaches an `Ipe.Time`
@@ -571,6 +576,24 @@ const RUNTIME_MOD_RS_COMPRESS_APPEND: &str = "pub mod compression;\npub use comp
 /// it is declared exactly when the program reaches it directly, and never forced
 /// on transitively.
 const RUNTIME_MOD_RS_CSV_APPEND: &str = "pub mod csv;\npub use csv::*;\n";
+
+// ── Ipe.Encoding / Ipe.Bytes — base64 / hex / percent codecs ─────────────────
+
+/// Lines appended to `ipe_runtime/mod.rs` when the program reaches the codec
+/// crates — an `Ipe.Encoding` / `Ipe.Bytes` kernel ([`EmitCtx::uses_encoding`]),
+/// OR a crypto/db/server/email/jwt/web surface whose runtime module uses the raw
+/// `base64` / `hex` / `percent-encoding` crates ([`EmitCtx::reaches_encoding`]).
+///
+/// `encoding.rs` (the `Ipe.Encoding` codecs) and `bytes.rs` (the `Ipe.Bytes`
+/// buffer kernels) are vendored into every emitted crate but declared only on
+/// demand — they are behind the `encoding` feature, which the `runtime_features`
+/// SSOT selects into `__IPE_RUNTIME_FEATURES__` under the same
+/// [`EmitCtx::reaches_encoding`] condition. Declared here whenever the program
+/// reaches the codec crates so the selected feature (and its `base64` / `hex` /
+/// `percent-encoding` deps) and the module declarations can never disagree — the
+/// same fail-closed SSOT discipline as `jwt` / `url`.
+const RUNTIME_MOD_RS_ENCODING_APPEND: &str =
+    "pub mod encoding;\npub use encoding::*;\npub mod bytes;\npub use bytes::*;\n";
 
 // ── Ipe.Crypto — heavy cryptography (SHA-1/MD5, AEAD, PBKDF2) ────────────────
 
@@ -1802,6 +1825,15 @@ fn assemble_project_files(
     // each kernel group the program uses.
     let runtime_mod_rs = {
         let mut mod_rs = RUNTIME_MOD_RS.to_owned();
+        // Ipe.Encoding / Ipe.Bytes codecs. `encoding.rs` + `bytes.rs` (the sole
+        // consumers of `base64` / `hex` / `percent-encoding` as runtime modules)
+        // are declared when the program reaches the codec crates — an encoding/
+        // bytes kernel, or a crypto/db/server/email/jwt/web surface whose runtime
+        // module uses the raw crates (`reaches_encoding`). A pure-CLI program that
+        // touches none keeps both modules absent, dropping `base64` + `hex`.
+        if ctx.reaches_encoding() {
+            mod_rs.push_str(RUNTIME_MOD_RS_ENCODING_APPEND);
+        }
         if ctx.uses_db {
             mod_rs.push_str(RUNTIME_MOD_RS_DB_APPEND);
         }

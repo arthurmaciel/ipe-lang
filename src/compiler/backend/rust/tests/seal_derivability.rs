@@ -50,6 +50,7 @@ fn program_with_web(
             uses_config: false,
             uses_compression: false,
             uses_csv: false,
+            uses_encoding: false,
             uses_crypto: false,
             uses_jwt: false,
             uses_url: false,

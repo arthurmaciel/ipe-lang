@@ -5975,6 +5975,12 @@ struct KernelUsage {
     /// module and the `csv` dependency. Unioned with a `CsvDoc` type-mention
     /// guard at the assembly site.
     csv: bool,
+    /// Any `Ipe.Encoding` / `Ipe.Bytes` kernel — gates the `encoding` + `bytes`
+    /// runtime modules and the `base64` + `hex` + `percent-encoding` dependencies.
+    /// The crypto/db/server/email/jwt/web surfaces also reach the raw codec crates
+    /// (folded in by the backend's `reaches_encoding`), so this flag alone gates
+    /// only the direct encoding/bytes reach.
+    encoding: bool,
     /// Any HEAVY `Ipe.Crypto` kernel (legacy SHA-1/MD5, AES-GCM /
     /// ChaCha20-Poly1305 AEAD, PBKDF2 key derivation) — gates the `crypto`
     /// runtime module and the `sha1` + `md-5` + `aes-gcm` + `chacha20poly1305` +
@@ -6065,6 +6071,7 @@ impl KernelUsage {
             && self.config
             && self.compression
             && self.csv
+            && self.encoding
             && self.crypto
             && self.jwt
             && self.url
@@ -6098,6 +6105,7 @@ impl KernelUsage {
         self.config |= k.is_config();
         self.compression |= k.is_compression();
         self.csv |= k.is_csv();
+        self.encoding |= k.is_encoding();
         self.crypto |= k.is_crypto();
         self.jwt |= k.is_jwt();
         self.url |= k.is_url();
@@ -8265,6 +8273,14 @@ impl<'a> Lowerer<'a> {
         // module — only a heavy kernel call site does.
         let uses_crypto = kernel_usage.crypto;
 
+        // detect `Ipe.Encoding` / `Ipe.Bytes` usage. The backend uses this flag to
+        // declare `encoding` + `bytes` in the emitted `ipe_runtime/mod.rs` and add
+        // the `base64` + `hex` + `percent-encoding` dependencies. No type-mention
+        // guard is needed: a `Bytes` value has a constructor kernel
+        // (`Bytes.empty` / `fromString` / `fromHex` / `fromBase64`), each an
+        // encoding kernel, so a program holding a `Bytes` has called one.
+        let uses_encoding = kernel_usage.encoding;
+
         // detect `Ipe.Jwt` usage — any JWT encode/decode or builder kernel. The
         // backend uses this flag to declare `jwt` in the emitted
         // `ipe_runtime/mod.rs` and add the `jsonwebtoken` dependency. `auth.rs`
@@ -8354,6 +8370,7 @@ impl<'a> Lowerer<'a> {
             uses_config,
             uses_compression,
             uses_csv,
+            uses_encoding,
             uses_crypto,
             uses_jwt,
             uses_url,

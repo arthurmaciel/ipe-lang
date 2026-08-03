@@ -642,6 +642,13 @@ pub(crate) struct EmitCtx<'a> {
     /// `csv` is a leaf module — no other runtime surface reaches it — so no other
     /// `uses_*` flag forces it on.
     pub(crate) uses_csv: bool,
+    /// `true` when the program reaches an `Ipe.Encoding` / `Ipe.Bytes` kernel. The
+    /// `encoding` runtime feature — the `base64`, `hex`, and `percent-encoding`
+    /// crates plus the `encoding.rs` / `bytes.rs` modules — is selected under
+    /// [`Self::reaches_encoding`]: this flag unioned with the `crypto`, `db`,
+    /// `server`, `email`, `jwt`, and `web` surfaces, whose runtime modules use the
+    /// raw codec crates directly.
+    pub(crate) uses_encoding: bool,
     /// `true` when the program uses at least one HEAVY `Ipe.Crypto` kernel
     /// (legacy SHA-1/MD5, AES-GCM / ChaCha20-Poly1305 AEAD, or PBKDF2 key
     /// derivation). When set, [`crate::project::assemble_project_files`]:
@@ -1334,6 +1341,12 @@ impl<'a> EmitCtx<'a> {
         // always-on and unaffected.
         let uses_crypto = program.modules.iter().any(|m| m.uses_crypto);
 
+        // detect Ipe.Encoding / Ipe.Bytes usage (gates `encoding` + `bytes`
+        // modules + base64 + hex + percent-encoding crates). Also reached by the
+        // crypto/db/server/email/jwt/web surfaces — folded in by
+        // [`Self::reaches_encoding`], not here.
+        let uses_encoding = program.modules.iter().any(|m| m.uses_encoding);
+
         // detect Ipe.Jwt usage (gates `jwt` module + `jsonwebtoken` crate).
         let uses_jwt = program.modules.iter().any(|m| m.uses_jwt);
 
@@ -1409,6 +1422,7 @@ impl<'a> EmitCtx<'a> {
             uses_config,
             uses_compression,
             uses_csv,
+            uses_encoding,
             uses_crypto,
             uses_jwt,
             uses_url,
@@ -1535,6 +1549,35 @@ impl<'a> EmitCtx<'a> {
     /// `rsa`.
     pub(crate) const fn reaches_crypto_core_heavy(&self) -> bool {
         self.uses_crypto || self.reaches_jwt()
+    }
+
+    /// `true` when the emitted crate reaches the `base64` / `hex` /
+    /// `percent-encoding` crates — so `project::assemble_project_files` selects
+    /// the `encoding` feature, declares `pub mod encoding;` + `pub mod bytes;`,
+    /// and adds the three codec deps. The single source of truth shared by the
+    /// manifest augmenter and the `mod.rs` append; they can never disagree.
+    ///
+    /// Reached directly by an `Ipe.Encoding` / `Ipe.Bytes` kernel
+    /// ([`Self::uses_encoding`]), OR transitively by every
+    /// surface whose runtime module uses the raw codec crates: `crypto.rs`
+    /// ([`Self::uses_crypto`]) base64-encodes AEAD output; `db.rs`
+    /// ([`Self::uses_db`]) hex-encodes blob columns + migration checksums;
+    /// `server.rs` ([`Self::uses_server`]) percent-decodes path params; `email.rs`
+    /// ([`Self::uses_email`]) base64/hex for SMTP + signing; `jwt.rs` (via
+    /// [`Self::reaches_jwt`]) base64url/hex for token segments; and `web/*`
+    /// ([`Self::uses_web`] / [`Self::uses_webview`]) base64/hex for the session
+    /// store + console proxy + SRI. FAIL-CLOSED — any uncertain consumer keeps
+    /// the feature on; over-inclusion is the accepted precision loss, dropping a
+    /// codec a program needs is the forbidden failure.
+    pub(crate) const fn reaches_encoding(&self) -> bool {
+        self.uses_encoding
+            || self.uses_crypto
+            || self.uses_db
+            || self.uses_server
+            || self.uses_email
+            || self.uses_web
+            || self.uses_webview
+            || self.reaches_jwt()
     }
 
     /// `true` when the emitted crate reaches the `url` runtime module — so
@@ -3198,6 +3241,7 @@ mod record_struct_namespace_tests {
                 uses_config: false,
                 uses_compression: false,
                 uses_csv: false,
+                uses_encoding: false,
                 uses_crypto: false,
                 uses_jwt: false,
                 uses_url: false,
@@ -3286,6 +3330,7 @@ mod record_struct_namespace_tests {
                 uses_config: false,
                 uses_compression: false,
                 uses_csv: false,
+                uses_encoding: false,
                 uses_crypto: false,
                 uses_jwt: false,
                 uses_url: false,

@@ -73,7 +73,7 @@ fn resolve_runtime() -> Option<PathBuf> {
 ///
 /// The proof is per-flag + monotone + composed (see module docs), NOT a
 /// `2^FLAG_COUNT` enumeration — it scales linearly.
-const FLAG_COUNT: usize = 18;
+const FLAG_COUNT: usize = 19;
 
 /// How many random full masks the backstop [`sampled_full_masks_are_closed`]
 /// checks, on top of the deterministic corners. Bounded so cost stays constant
@@ -151,6 +151,9 @@ fn module_for_mask(name: ipe_intern::Symbol, mask: u32) -> Module {
         uses_config: f(12),
         uses_compression: f(13),
         uses_csv: f(14),
+        // `uses_encoding` is a pure surface (no reactor) — like `crypto`/`csv` it
+        // is NOT added to the `uses_async_runtime` union above.
+        uses_encoding: f(18),
         uses_crypto: f(15),
         uses_jwt: f(16),
         uses_url: f(17),
