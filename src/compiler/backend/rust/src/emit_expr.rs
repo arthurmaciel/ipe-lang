@@ -9564,42 +9564,37 @@ fn render_fn_generics(
         .enumerate()
         .map(|(i, (sym, bounds))| {
             let n = i.saturating_add(1);
-            let bounds = *bounds;
             // Always inject `Clone` — field reads emit `.clone()` to prevent
-            // partial-move errors. The solver's BoundSet may already carry it,
-            // but `with_clone()` is idempotent so this is safe.
-            let clause = render_bounds(bounds.with_clone(), n);
-            // `render_bounds` returns ": Clone[+ ...]" or "".
-            //
-            // Append `Send + 'static` when the return type is a task OR this
-            // type variable appears inside a first-class-function-value
-            // parameter. A `Fun` / `FnOnceChain` param renders as
-            // `Box<dyn Fn(..) -> R + Send + Sync + 'static>` (see
-            // `emit_types::render_type`) — or, for a direct-call `Fun` param, as
-            // a `FN{i}: Fn(..) -> R + Send + Sync + 'static` generic — both of
-            // which pin EVERY type they mention to `'static`; without a
-            // `T{n}: 'static` bound the param — or an `Arc`-wrap of it into a
-            // UI/Web event slot (`arc_callback_wrap`) — is an E0310
-            // (`T{n} may not live long enough`), the deeper layer of the
-            // `26-ui-showcase` seal break (a generic-over-Msg helper taking an
-            // `onEdit : String -> msg` callback and forwarding it into
-            // `input_multiline_`). Same `Send + 'static` treatment as the task
-            // path, gated to exactly the vars that need it so pure
-            // record/ADT-returning callers stay unconstrained.
-            let needs_static = ret_is_task || type_var_in_fn_param(func, *sym);
-            if needs_static {
-                if clause.is_empty() {
-                    format!("T{n}: Clone + Send + 'static")
-                } else {
-                    format!("T{n}{clause} + Send + 'static")
-                }
+            // partial-move errors. `with_*` are idempotent, so folding the same
+            // flag the solver already recorded is a no-op.
+            let mut bounds = bounds.with_clone();
+            // A task return, or a type var inside a first-class-function-value
+            // PARAMETER, moves the value into a spawned / boxed
+            // `Box<dyn Fn(..) -> R + Send + Sync + 'static>` consumer, so it
+            // needs `Send + 'static` (`with_send` sets both). Example: a
+            // generic-over-`msg` helper taking an `onEdit : String -> msg`
+            // callback and forwarding it into `input_multiline_`.
+            if ret_is_task || type_var_in_fn_param(func, *sym) {
+                bounds = bounds.with_send();
+            }
+            // A type var that is the `msg` of a `Ipe.Ui` / `Ipe.Html` carrier in
+            // the RETURN type needs only `'static`: such a function is a leaf
+            // renderer boxed by its caller's `List.map` into a
+            // `Box<dyn Fn(..) -> Element<msg> + 'static>`, and a boxed `fn` item
+            // is `Send + Sync` regardless of `msg`, so `'static` alone lets the
+            // coercion type-check (`with_static`, not `with_send`). Without it
+            // the leaf renderer is an E0310 (`msg may not live long enough`).
+            if type_var_in_ui_carrier(&func.ret, *sym) {
+                bounds = bounds.with_static();
+            }
+            // ONE render pass: `render_bounds` orders the lifetime bound first
+            // and de-duplicates, so `'static` never doubles even when the
+            // lowerer's `BoundSet::STATIC` already set it.
+            let clause = render_bounds(bounds, n);
+            if clause.is_empty() {
+                format!("T{n}")
             } else {
-                // Pure function (returns a record, ADT, scalar …): Clone suffices.
-                if clause.is_empty() {
-                    format!("T{n}: Clone")
-                } else {
-                    format!("T{n}{clause}")
-                }
+                format!("T{n}{clause}")
             }
         })
         .collect();
@@ -9656,6 +9651,70 @@ fn type_var_in_fn_param(func: &Func, sym: Symbol) -> bool {
         .any(|(_, ty)| ty_mentions_var_under_fn(ty, sym, false))
 }
 
+/// `true` if the type variable `sym` is the message parameter of a `Ipe.Ui` /
+/// `Ipe.Html` carrier (`Element msg`, `Attribute msg`, `Html msg`, …) anywhere
+/// in the return type `ret`.
+///
+/// A carrier over `msg` holds event handlers as `Arc<dyn Fn(..) -> msg + Send +
+/// Sync + 'static>` (`Attribute`'s `AttrEvent` / `HtmlAttribute`), so a
+/// `msg`-generic function returning one is boxable into a `Box<dyn Fn(..) ->
+/// Element<msg> + 'static>` slot — precisely how `List.map renderCell cells`
+/// forwards a leaf renderer. Without a `msg: 'static` bound that box is an
+/// E0310 (`msg may not live long enough`) even though the leaf's own body names
+/// no function-typed parameter. Pinning exactly the carried `msg` var mirrors
+/// the boxed-`dyn Fn` treatment and leaves pure record/ADT-returning generics
+/// unconstrained.
+fn type_var_in_ui_carrier(ret: &IrType, sym: Symbol) -> bool {
+    match ret {
+        IrType::Ui { msg, .. } => ty_mentions_var(msg, sym),
+        IrType::Task(inner)
+        | IrType::Maybe(inner)
+        | IrType::List(inner)
+        | IrType::Set(inner)
+        | IrType::Decoder(inner)
+        | IrType::Cmd(inner)
+        | IrType::Sub(inner)
+        | IrType::WebRoute(inner) => type_var_in_ui_carrier(inner, sym),
+        IrType::Result(a, b) | IrType::Dict(a, b) => {
+            type_var_in_ui_carrier(a, sym) || type_var_in_ui_carrier(b, sym)
+        }
+        IrType::Tuple(items) => items.iter().any(|t| type_var_in_ui_carrier(t, sym)),
+        IrType::Enum { args, .. } => args.iter().any(|t| type_var_in_ui_carrier(t, sym)),
+        IrType::Record(fields) => fields.values().any(|t| type_var_in_ui_carrier(t, sym)),
+        _ => false,
+    }
+}
+
+/// `true` if `IrType::Generic(sym)` occurs anywhere in `ty` — the carrier's
+/// message argument may itself be a nested structure (`List msg`, `(msg, a)`),
+/// so the whole sub-tree is scanned.
+fn ty_mentions_var(ty: &IrType, sym: Symbol) -> bool {
+    match ty {
+        IrType::Generic(s) => *s == sym,
+        IrType::Ui { msg, .. } => ty_mentions_var(msg, sym),
+        IrType::Task(inner)
+        | IrType::Maybe(inner)
+        | IrType::List(inner)
+        | IrType::Set(inner)
+        | IrType::Decoder(inner)
+        | IrType::Cmd(inner)
+        | IrType::Sub(inner)
+        | IrType::WebRoute(inner) => ty_mentions_var(inner, sym),
+        IrType::Fun(params, ret)
+        | IrType::SharedFun(params, ret)
+        | IrType::FnOnceChain(params, ret) => {
+            params.iter().any(|p| ty_mentions_var(p, sym)) || ty_mentions_var(ret, sym)
+        }
+        IrType::Result(a, b) | IrType::Dict(a, b) => {
+            ty_mentions_var(a, sym) || ty_mentions_var(b, sym)
+        }
+        IrType::Tuple(items) => items.iter().any(|t| ty_mentions_var(t, sym)),
+        IrType::Enum { args, .. } => args.iter().any(|t| ty_mentions_var(t, sym)),
+        IrType::Record(fields) => fields.values().any(|t| ty_mentions_var(t, sym)),
+        _ => false,
+    }
+}
+
 /// Walk `ty`, returning `true` if `IrType::Generic(sym)` occurs while `under_fn`
 /// is set (i.e. inside a `Fun` / `FnOnceChain` sub-tree). Once a function-typed
 /// node is entered, `under_fn` stays set for the whole sub-tree — the entire
@@ -9663,7 +9722,11 @@ fn type_var_in_fn_param(func: &Func, sym: Symbol) -> bool {
 fn ty_mentions_var_under_fn(ty: &IrType, sym: Symbol, under_fn: bool) -> bool {
     match ty {
         IrType::Generic(s) => under_fn && *s == sym,
-        IrType::Fun(params, ret) | IrType::FnOnceChain(params, ret) => {
+        // `SharedFun` shares `Fun`'s `+ 'static` boxed/`Arc` carrier, so entering
+        // it pins every type it names to `'static` just as `Fun` does.
+        IrType::Fun(params, ret)
+        | IrType::SharedFun(params, ret)
+        | IrType::FnOnceChain(params, ret) => {
             params
                 .iter()
                 .any(|p| ty_mentions_var_under_fn(p, sym, true))
