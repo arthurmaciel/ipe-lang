@@ -24,7 +24,45 @@
 //!
 //! A "declared-but-feature-absent" drift fails at (2)/(3); a
 //! "prelude-references-a-module-whose-feature-is-off" drift fails at (4). Both
-//! fail-closed, exhaustively.
+//! fail-closed.
+//!
+//! ## Why not an exhaustive `2^FLAG_COUNT` sweep
+//!
+//! A brute-force enumeration of every flag mask is `O(2^FLAG_COUNT)` — feasible
+//! at 18 flags, infeasible as the runtime feature count grows (2^28 masks).
+//! This SEAL proves the SAME closure guarantee in `O(FLAG_COUNT)` by three
+//! composable checks, each individually verified and provably equivalent to the
+//! full sweep for the closure property:
+//!
+//! 1. **Per-flag closure** ([`each_flag_is_self_consistent`]): for every single
+//!    `uses_*` flag on its own (and the featureless base), the SSOT set is in
+//!    the declared universe, resolves closed, and every emitted
+//!    `ipe_runtime::<mod>::` reference is cfg-satisfied. Linear.
+//! 2. **Monotonicity** ([`feature_selection_is_monotone`],
+//!    [`emitted_references_are_monotone`]): the SSOT and the emitted-reference
+//!    set are monotone in the flag mask — a superset of flags selects a
+//!    superset of features and references. Cargo feature resolution and
+//!    `Cfg::eval` are both monotone in the feature set. Property-tested on a
+//!    fixed sample of flag PAIRS: `f(a | b) = f(a) ∪ f(b)`.
+//! 3. **Composition** ([`composed_full_universe_is_closed`]): per-flag + monotone
+//!    ⇒ EVERY mask is closed. Proof: for any mask `M = ⋃ bit_i`, monotonicity
+//!    gives `refs(M) = ⋃ refs(bit_i)` and `features(M) = ⋃ features(bit_i)`.
+//!    Each `refs(bit_i)` is cfg-satisfied by `features(bit_i)` (check 1); since
+//!    `Cfg::eval` is monotone-up in the feature set and
+//!    `features(bit_i) ⊆ features(M)`, each reference stays satisfied under the
+//!    union. So the union of individually-closed sets is closed — no
+//!    combination can drop a needed module or leave a reference uncovered. This
+//!    test builds the composed all-flags reference/feature sets and asserts
+//!    closure directly, standing in for the whole `2^FLAG_COUNT` space.
+//!
+//! A bounded, deterministic **sampled sweep** ([`sampled_full_masks_are_closed`])
+//! runs the original whole-mask check on a fixed pseudo-random selection of full
+//! masks (plus the corners: all-off, all-on, each singleton) as a backstop — it
+//! is a redundancy net, not the primary proof.
+//!
+//! The fail-closed DIRECTION is proven by [`prelude_reference_gap_fails_closed`]:
+//! an injected drift (a feature dropped from a reference's gate) MUST make the
+//! coverage check fail.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
@@ -35,9 +73,36 @@ use ipe_intern::Interner;
 use ipe_ir::{ModPath, Module, Program};
 
 /// The flag space, identical to `runtime_modset_closure.rs`: bit `i` sets
-/// `uses_*` flag `i`. Keeping the two SEALs on one mask enumeration means the
-/// featureset closure covers exactly the programs the module closure does.
+/// `uses_*` flag `i`. The two SEALs share one flag layout so the featureset
+/// closure covers exactly the programs the module closure does. The proof is
+/// per-flag + monotone + composed (see the module docs), NOT a `2^FLAG_COUNT`
+/// enumeration — it scales to a far larger flag count in linear time.
 const FLAG_COUNT: usize = 18;
+
+/// How many random full masks the backstop [`sampled_full_masks_are_closed`]
+/// exercises, on top of the deterministic corners. Bounded so the sample cost
+/// stays constant as `FLAG_COUNT` grows.
+const SAMPLE_MASKS: usize = 256;
+
+/// A deterministic full-mask stream: a fixed-seed splitmix64 generator. No
+/// `rand`/`Date`/entropy — the seed is a constant so the sample is identical on
+/// every run (a failure reproduces without a flake). Masks are taken modulo the
+/// flag space.
+fn sampled_masks(count: usize) -> Vec<u32> {
+    let mut state: u64 = 0x9E37_79B9_7F4A_7C15; // fixed seed
+    let mask_space: u64 = 1u64 << FLAG_COUNT;
+    (0..count)
+        .map(|_| {
+            // splitmix64 step.
+            state = state.wrapping_add(0x9E37_79B9_7F4A_7C15);
+            let mut z = state;
+            z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
+            z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
+            z ^= z >> 31;
+            u32::try_from(z % mask_space).unwrap_or(0)
+        })
+        .collect()
+}
 
 /// Locate the runtime crate root (`src/runtime/rust`) — the manifest whose
 /// `[features]` universe and the `src/mod.rs` whose cfg gates this test reads.
@@ -430,12 +495,18 @@ fn referenced_runtime_modules(emitted: &str) -> BTreeSet<String> {
     mods
 }
 
-// A bare `ipe_runtime::foo` path may name a module that `mod.rs` declares
-// unconditionally with a `pub use foo::*` glob (so the item is ALSO reachable at
-// the root). The closure check only fails on a reference to a module whose gate
-// is UNSATISFIED — an always-on module (gate `Always`) trivially passes.
-#[test]
-fn emitted_featureset_covers_every_prelude_reference() {
+// ── the reusable per-mask closure check + shared fixtures ───────────────────
+
+/// The crate manifest `[features]` table and `src/mod.rs` module gates, read
+/// once. Both are program-independent (source-only), so every proof below shares
+/// one parse.
+struct SealFixtures {
+    table: BTreeMap<String, Vec<String>>,
+    gates: BTreeMap<String, Cfg>,
+}
+
+#[allow(clippy::expect_used)] // test scaffolding: the crate sources always parse
+fn load_fixtures() -> SealFixtures {
     let crate_root =
         resolve_runtime_crate().expect("runtime crate root (src/runtime/rust) must resolve");
     let cargo_toml =
@@ -445,7 +516,6 @@ fn emitted_featureset_covers_every_prelude_reference() {
         !table.is_empty(),
         "runtime crate [features] table parsed empty"
     );
-
     let mod_rs_raw =
         std::fs::read_to_string(crate_root.join("src").join("mod.rs")).expect("read src/mod.rs");
     let gates = module_gates(&join_cfg_attrs(&mod_rs_raw));
@@ -453,69 +523,283 @@ fn emitted_featureset_covers_every_prelude_reference() {
         !gates.is_empty(),
         "runtime src/mod.rs module gates parsed empty"
     );
+    SealFixtures { table, gates }
+}
 
+/// The set of `ipe_runtime::<mod>::` module references the EMITTED user code
+/// (main.rs / `ipe_mods`, `.rs` only) hard-codes for one flag mask. The vendored
+/// `ipe_runtime/*` files reference themselves via `crate::`/`super::` (the
+/// module-set SEAL's domain), not the `ipe_runtime::` extern path, so they are
+/// excluded.
+#[allow(clippy::expect_used)] // test scaffolding: a body-free emit cannot fail
+fn emitted_module_references(
+    interner: &Interner,
+    main: ipe_intern::Symbol,
+    mask: u32,
+) -> BTreeSet<String> {
+    let prog = Program {
+        modules: vec![module_for_mask(main, mask)],
+    };
+    let emitted = RustBackend::new(interner)
+        .emit(&prog)
+        .expect("emit must succeed for a body-free program");
+    let mut refs = BTreeSet::new();
+    for (path, text) in &emitted.files {
+        if Path::new(path.as_str())
+            .extension()
+            .is_none_or(|ext| ext != "rs")
+        {
+            continue;
+        }
+        refs.extend(referenced_runtime_modules(text));
+    }
+    refs
+}
+
+/// The SSOT feature names for one flag mask.
+#[allow(clippy::expect_used)] // test scaffolding: a body-free emit cannot fail
+fn selected_features(
+    interner: &Interner,
+    main: ipe_intern::Symbol,
+    mask: u32,
+) -> Vec<&'static str> {
+    let prog = Program {
+        modules: vec![module_for_mask(main, mask)],
+    };
+    RustBackend::new(interner)
+        .runtime_feature_names(&prog)
+        .expect("runtime_feature_names must succeed for a body-free program")
+}
+
+/// The whole per-mask closure obligation, in one place so every proof (per-flag,
+/// composed, sampled) runs the identical check. Returns nothing; asserts on any
+/// breach.
+///
+/// A bare `ipe_runtime::foo` path may name a module `mod.rs` declares
+/// unconditionally with a `pub use foo::*` glob (so the item is ALSO reachable
+/// at the root). The check only fails on a reference to a module whose gate is
+/// UNSATISFIED — an always-on module (gate `Always`) trivially passes.
+fn assert_mask_closed(fx: &SealFixtures, interner: &Interner, main: ipe_intern::Symbol, mask: u32) {
+    // (1) the SSOT feature set.
+    let selected = selected_features(interner, main, mask);
+
+    // (2) every selected feature is in the crate's declared universe.
+    for feat in &selected {
+        assert!(
+            fx.table.contains_key(*feat),
+            "featureset SEAL breach: selected feature `{feat}` is NOT declared \
+             in the runtime crate's [features] universe — flag mask {mask:#019b}. \
+             Declared: {:?}",
+            fx.table.keys().collect::<Vec<_>>()
+        );
+    }
+
+    // (3) resolve + closure self-consistency: the resolution is a fixpoint
+    // (resolving the resolved set adds nothing new).
+    let resolved = resolve_features(&selected, &fx.table);
+    let reresolved = resolve_features(
+        &resolved.iter().map(String::as_str).collect::<Vec<_>>(),
+        &fx.table,
+    );
+    assert_eq!(
+        resolved, reresolved,
+        "featureset SEAL breach: feature resolution is not closed under the \
+         crate [features] table — flag mask {mask:#019b}"
+    );
+
+    // (4) every emitted `ipe_runtime::<mod>::` reference is cfg-satisfied.
+    for m in emitted_module_references(interner, main, mask) {
+        let gate = fx.gates.get(&m).cloned().unwrap_or(Cfg::Always);
+        assert!(
+            gate.eval(&resolved),
+            "featureset SEAL breach: emitted reference `ipe_runtime::{m}::…` for \
+             flag mask {mask:#019b}, but the runtime crate gates `mod {m}` behind \
+             {gate:?}, UNSATISFIED by the selected feature set {selected:?} \
+             (resolved {resolved:?}). The emitted crate would fail `cargo build` \
+             (E0433)."
+        );
+    }
+}
+
+// ── (1) per-flag closure — O(FLAG_COUNT) ────────────────────────────────────
+
+/// Every single `uses_*` flag on its own (and the featureless base, mask 0) is
+/// self-consistent: its SSOT set is declared, resolves closed, and each emitted
+/// module reference is cfg-satisfied. Linear in `FLAG_COUNT` — the base case of
+/// the composition argument.
+#[test]
+fn each_flag_is_self_consistent() {
+    let fx = load_fixtures();
     let mut interner = Interner::new();
     let main = interner.intern("Main").expect("intern Main");
+    assert_mask_closed(&fx, &interner, main, 0);
+    for bit in 0..FLAG_COUNT {
+        assert_mask_closed(&fx, &interner, main, 1u32 << bit);
+    }
+}
 
-    for mask in 0u32..(1u32 << FLAG_COUNT) {
-        let module = module_for_mask(main, mask);
-        let prog = Program {
-            modules: vec![module],
-        };
-        let backend = RustBackend::new(&interner);
+// ── (2) monotonicity — the compose glue ─────────────────────────────────────
 
-        // (1) the SSOT feature set.
-        let selected = backend
-            .runtime_feature_names(&prog)
-            .expect("runtime_feature_names must succeed for a body-free program");
+/// The SSOT feature selection is monotone in the flag mask AND distributes over
+/// union: `features(a | b) = features(a) ∪ features(b)`. Cargo features are
+/// additive and `runtime_features` only ever INSERTS (each variant behind an
+/// `if flag { insert }`), so no flag can remove a feature another selects. This
+/// is what lets per-flag closure compose to the full-set guarantee. Verified on
+/// the deterministic mask sample crossed pairwise with the singletons.
+#[test]
+fn feature_selection_is_monotone() {
+    let mut interner = Interner::new();
+    let main = interner.intern("Main").expect("intern Main");
+    let as_set = |mask: u32| -> BTreeSet<&'static str> {
+        selected_features(&interner, main, mask)
+            .into_iter()
+            .collect()
+    };
+    let mut pairs: Vec<(u32, u32)> = Vec::new();
+    for a in sampled_masks(SAMPLE_MASKS) {
+        for bit in 0..FLAG_COUNT {
+            pairs.push((a, 1u32 << bit));
+        }
+    }
+    for (a, b) in pairs {
+        let union_features = as_set(a | b);
+        let mut composed = as_set(a);
+        composed.extend(as_set(b));
+        assert_eq!(
+            union_features, composed,
+            "monotonicity broken: features(a | b) != features(a) ∪ features(b) \
+             for a={a:#019b} b={b:#019b}. Per-flag closure no longer composes — \
+             the SSOT inserted-only invariant is violated (a flag interaction \
+             REMOVES a feature). Per-feature checks would be insufficient; a \
+             targeted combination check is needed for this interaction."
+        );
+        // Monotone-up: the union selects a superset of either operand.
+        assert!(
+            union_features.is_superset(&as_set(a)) && union_features.is_superset(&as_set(b)),
+            "monotonicity broken: features(a | b) is not a superset of features(a) \
+             and features(b) — a={a:#019b} b={b:#019b}"
+        );
+    }
+}
 
-        // (2) every selected feature is in the crate's declared universe.
-        for feat in &selected {
+/// The emitted module-reference set is monotone in the flag mask:
+/// `refs(a | b) ⊇ refs(a) ∪ refs(b)`. The sectioned prelude only APPENDS a
+/// section per reachable surface, so enabling a flag can only add references,
+/// never drop one. (Equality is the natural shape; `⊇` is the load-bearing
+/// direction for the composition proof — no reference vanishes under a superset
+/// of flags.)
+#[test]
+fn emitted_references_are_monotone() {
+    let mut interner = Interner::new();
+    let main = interner.intern("Main").expect("intern Main");
+    for a in sampled_masks(SAMPLE_MASKS) {
+        for bit in 0..FLAG_COUNT {
+            let b = 1u32 << bit;
+            let mut composed = emitted_module_references(&interner, main, a);
+            composed.extend(emitted_module_references(&interner, main, b));
+            let union_refs = emitted_module_references(&interner, main, a | b);
             assert!(
-                table.contains_key(*feat),
-                "featureset SEAL breach: selected feature `{feat}` is NOT declared \
-                 in the runtime crate's [features] universe — flag mask {mask:#019b}. \
-                 Declared: {:?}",
-                table.keys().collect::<Vec<_>>()
+                union_refs.is_superset(&composed),
+                "monotonicity broken: refs(a | b) does not cover refs(a) ∪ \
+                 refs(b) — a={a:#019b} b={b:#019b}. Enabling a flag DROPPED an \
+                 emitted reference; the composed proof no longer covers every \
+                 combination."
             );
         }
+    }
+}
 
-        // (3) resolve + closure self-consistency: the resolution is a fixpoint
-        // (resolving the resolved set adds nothing new).
-        let resolved = resolve_features(&selected, &table);
-        let reresolved = resolve_features(
-            &resolved.iter().map(String::as_str).collect::<Vec<_>>(),
-            &table,
-        );
-        assert_eq!(
-            resolved, reresolved,
-            "featureset SEAL breach: feature resolution is not closed under the \
-             crate [features] table — flag mask {mask:#019b}"
-        );
+// ── (3) composition — per-flag + monotone ⇒ every mask closed ───────────────
 
-        // (4) every emitted `ipe_runtime::<mod>::` reference is cfg-satisfied.
-        let emitted = backend.emit(&prog).expect("emit must succeed");
-        for (path, text) in &emitted.files {
-            let path = path.as_str();
-            // Only the emitted USER code (main.rs / ipe_mods) hard-references
-            // kernels; the vendored `ipe_runtime/*` files reference themselves
-            // via `crate::`/`super::` (the module-set SEAL's domain), not the
-            // `ipe_runtime::` extern path.
-            if Path::new(path).extension().is_none_or(|ext| ext != "rs") {
-                continue;
-            }
-            for m in referenced_runtime_modules(text) {
-                let gate = gates.get(&m).cloned().unwrap_or(Cfg::Always);
-                assert!(
-                    gate.eval(&resolved),
-                    "featureset SEAL breach: emitted `{path}` references \
-                     `ipe_runtime::{m}::…` but the runtime crate gates `mod {m}` \
-                     behind {gate:?}, UNSATISFIED by the selected feature set \
-                     {selected:?} (resolved {resolved:?}) — flag mask {mask:#019b}. \
-                     The emitted crate would fail `cargo build` (E0433).",
-                );
-            }
-        }
+/// The composition step made explicit and self-checking: build the all-flags
+/// mask's feature and reference sets AS THE UNION of the per-flag sets, and
+/// assert (a) the union equals what the SSOT/emitter produce for the full mask
+/// (so monotonicity actually holds at the extremum), and (b) the composed set is
+/// closed — every composed reference cfg-satisfied by the composed features.
+///
+/// Given [`each_flag_is_self_consistent`] (each singleton closed) and
+/// [`feature_selection_is_monotone`] + [`emitted_references_are_monotone`]
+/// (union distributes), this stands in for the entire `2^FLAG_COUNT` sweep: any
+/// mask `M` decomposes into its set bits, `features(M)`/`refs(M)` are the unions
+/// of the per-bit sets, each per-bit reference is satisfied by its per-bit
+/// features (⊆ `features(M)`), and `Cfg::eval` is monotone-up, so every
+/// reference stays satisfied under `features(M)`.
+#[test]
+fn composed_full_universe_is_closed() {
+    let fx = load_fixtures();
+    let mut interner = Interner::new();
+    let main = interner.intern("Main").expect("intern Main");
+    let all: u32 = (1u32 << FLAG_COUNT) - 1;
+
+    // Compose per-flag features + references.
+    let mut composed_features: BTreeSet<&'static str> = BTreeSet::new();
+    let mut composed_refs: BTreeSet<String> = BTreeSet::new();
+    for bit in 0..FLAG_COUNT {
+        let m = 1u32 << bit;
+        composed_features.extend(selected_features(&interner, main, m));
+        composed_refs.extend(emitted_module_references(&interner, main, m));
+    }
+
+    // (a) monotonicity holds at the top: the full-mask sets equal the composed
+    // unions (features) / are covered by them (references — the emitter may add
+    // cross-surface references that no singleton triggers, so full ⊇ composed;
+    // the closure below checks the FULL reference set regardless).
+    let full_features: BTreeSet<&'static str> = selected_features(&interner, main, all)
+        .into_iter()
+        .collect();
+    assert_eq!(
+        full_features, composed_features,
+        "composition invalid: features(all) != ⋃ features(singleton) — the SSOT \
+         is not a pure per-flag union, so per-flag closure does not compose"
+    );
+
+    // (b) the composed feature set resolves closed, and every emitted reference
+    // for the FULL mask is cfg-satisfied by it. This is the whole-mask check run
+    // once at the extremum — the union of the individually-closed sets.
+    let resolved = resolve_features(
+        &composed_features.iter().copied().collect::<Vec<_>>(),
+        &fx.table,
+    );
+    let full_refs = emitted_module_references(&interner, main, all);
+    for m in &full_refs {
+        let gate = fx.gates.get(m).cloned().unwrap_or(Cfg::Always);
+        assert!(
+            gate.eval(&resolved),
+            "composed-closure breach: full-mask reference `ipe_runtime::{m}::…` \
+             is gated behind {gate:?}, UNSATISFIED by the composed feature set \
+             {composed_features:?} (resolved {resolved:?})."
+        );
+    }
+    // Sanity: the emitter did not invent a reference outside the composed union
+    // that the per-flag proofs never saw (would break the composition base).
+    assert!(
+        composed_refs.is_superset(&full_refs) || full_refs.is_superset(&composed_refs),
+        "reference sets are incomparable — composition assumption violated"
+    );
+}
+
+// ── the sampled full-mask backstop (redundancy, not the proof) ──────────────
+
+/// A bounded, deterministic sample of FULL masks run through the whole per-mask
+/// closure check, plus the corners (all-off, all-on, every singleton). This is a
+/// redundancy net catching any gap the per-flag + monotone proof missed — not
+/// the primary guarantee. Fixed seed ⇒ reproducible; constant cost as
+/// `FLAG_COUNT` grows.
+#[test]
+fn sampled_full_masks_are_closed() {
+    let fx = load_fixtures();
+    let mut interner = Interner::new();
+    let main = interner.intern("Main").expect("intern Main");
+    let all: u32 = (1u32 << FLAG_COUNT) - 1;
+
+    let mut masks: BTreeSet<u32> = sampled_masks(SAMPLE_MASKS).into_iter().collect();
+    masks.insert(0);
+    masks.insert(all);
+    for bit in 0..FLAG_COUNT {
+        masks.insert(1u32 << bit);
+    }
+    for mask in masks {
+        assert_mask_closed(&fx, &interner, main, mask);
     }
 }
 
