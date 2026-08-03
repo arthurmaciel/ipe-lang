@@ -797,7 +797,7 @@ pub(crate) struct EmitCtx<'a> {
     /// into the `default` list) and adds the `chrono-tz` dependency — the
     /// IANA-zone calendar surface of the always-declared `time` runtime module,
     /// gated behind that feature. A program that reaches no `Ipe.Time` kernel
-    /// drops the crate. The `chrono` core crate stays unconditional.
+    /// drops the crate. The `chrono` core crate is gated by `time-core`/`log`.
     pub(crate) uses_time: bool,
     /// `true` when the program lowers at least one [`ipe_ir::Callee::Ffi`]
     /// foreign-wrapper call. When set,
