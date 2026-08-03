@@ -1597,19 +1597,19 @@ impl<'a> EmitCtx<'a> {
     /// ([`Self::uses_db`]) hex-encodes blob columns + migration checksums;
     /// `server.rs` ([`Self::uses_server`]) percent-decodes path params; `email.rs`
     /// ([`Self::uses_email`]) base64/hex for SMTP + signing; `jwt.rs` (via
-    /// [`Self::reaches_jwt`]) base64url/hex for token segments; and `web/*`
+    /// [`Self::reaches_jwt`]) base64url/hex for token segments; `web/*`
     /// ([`Self::uses_web`] / [`Self::uses_webview`]) base64/hex for the session
-    /// store + console proxy + SRI. FAIL-CLOSED — any uncertain consumer keeps
-    /// the feature on; over-inclusion is the accepted precision loss, dropping a
-    /// codec a program needs is the forbidden failure.
+    /// store + console proxy + SRI; and `http_client.rs` (via
+    /// [`Self::reaches_http_client`]) form-url-decodes query pairs, so every
+    /// program that reaches the client module — including a bare `Ipe.Http` client
+    /// with no server/web surface — needs `encoding`. FAIL-CLOSED — any uncertain
+    /// consumer keeps the feature on; over-inclusion is the accepted precision
+    /// loss, dropping a codec a program needs is the forbidden failure.
     pub(crate) const fn reaches_encoding(&self) -> bool {
         self.uses_encoding
             || self.uses_crypto
             || self.uses_db
-            || self.uses_server
-            || self.uses_email
-            || self.uses_web
-            || self.uses_webview
+            || self.reaches_http_client()
             || self.reaches_jwt()
     }
 

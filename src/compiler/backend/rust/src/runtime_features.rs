@@ -376,6 +376,31 @@ mod tests {
     }
 
     #[test]
+    fn http_client_only_selects_encoding() {
+        // A bare `Ipe.Http` client (no server/web/db surface) still reaches
+        // `http_client.rs`, which form-url-decodes query pairs through
+        // `encoding.rs`. Dropping `encoding` here ships a program whose `cargo
+        // build` fails on an unresolved `form_url_decode` — the forbidden
+        // under-inclusion. `encoding` must ride along with `http_client`.
+        let f = features_for(|m| {
+            m.uses_http = true;
+            m.uses_async_runtime = true;
+        });
+        assert!(
+            f.contains(&"http_client"),
+            "http program selects `http_client`: {f:?}"
+        );
+        assert!(
+            f.contains(&"encoding"),
+            "http_client form-url-decodes → must select `encoding`: {f:?}"
+        );
+        assert!(
+            !f.contains(&"server"),
+            "a bare client must not select `server`: {f:?}"
+        );
+    }
+
+    #[test]
     fn websocket_pulls_url_but_not_http_client() {
         // The WS client parses URLs (via `url`) but does not link the reqwest
         // HTTP stack — the option-B split the crate features encode.
