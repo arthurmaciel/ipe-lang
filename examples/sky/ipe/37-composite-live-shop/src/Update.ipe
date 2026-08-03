@@ -30,7 +30,7 @@ update msg model =
                           , cartFlash = announcement
                           , recentTopic = announcement
                           }
-                        , Cmd.batch [ Cmd.publish "cart" payload ]
+                        , Cmd.batch [ Cmd.publish cartTopic payload ]
                         )
 
         RemoveFromCart productId ->
@@ -139,8 +139,6 @@ parsePriceCents raw =
             0
 
 
-mkCartPayload : String -> Int -> { name : String
-, count : Int
-}
+mkCartPayload : String -> Int -> CartEvent
 mkCartPayload name count =
     { name = name, count = count }

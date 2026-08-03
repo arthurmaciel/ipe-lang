@@ -33,6 +33,7 @@ import Ipe.Html.Events exposing (onSubmit)
 import Ipe.Web exposing (app, route)
 import Ipe.Tea.Web.Cmd as Cmd
 import Ipe.Tea.Web.Sub as Sub
+import Ipe.PubSub as PubSub
 import Ipe.Db as Db
 
 -- ─── Model ───────────────────────────────────────────────────────
@@ -65,7 +66,7 @@ type alias ChatForm =
 type Msg
     = JoinRoom JoinPayload
     | SendMessage ChatForm
-    | MessageReceived any
+    | MessageReceived (Dict String String)
     | PersistResult (Result Error Int)
 
 
@@ -143,19 +144,21 @@ persistMessage room msg =
 
 
 -- ─── Topic naming ────────────────────────────────────────────────
-roomTopic : String -> String
+-- One typed topic handle per room. Publisher and subscriber both call
+-- `roomTopic room`, so the compiler enforces the shared
+-- `Dict String String` payload type across both sides.
+roomTopic : String -> PubSub.Topic (Dict String String)
 roomTopic room =
-    "chat:room-" ++ room
+    PubSub.topic ("chat:room-" ++ room)
 
 
 -- ─── Decoder for broadcast payloads ──────────────────────────────
 -- The publisher passes `Cmd.publish topic payload` with payload typed
--- `any`. Subscribers receive it as `any` and decode it back to the
--- application shape via the toMsg callback. We carry the payload as
--- a `Dict String String` (see SendMessage in update) so the
--- subscriber side just reads fields back via Db.unsafeGetString (which is
--- a Dict-shaped accessor in disguise).
-decodeChatMessage : any -> ChatMessage
+-- `Dict String String` (see SendMessage in update). Subscribers
+-- receive the same type — the topic handle's payload type is what
+-- keeps the two sides in agreement — and read fields back via
+-- Db.unsafeGetString (a Dict-shaped accessor in disguise).
+decodeChatMessage : Dict String String -> ChatMessage
 decodeChatMessage payload =
     { author = Db.unsafeGetString "author" payload
     , text = Db.unsafeGetString "text" payload

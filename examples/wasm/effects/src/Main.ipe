@@ -40,6 +40,13 @@ type Page
     = EffectsPage
 
 
+-- The shared topic handle. Its `String` payload type is what `publish` and
+-- `Sub.subscribeTopic` on the same value must agree on.
+pingTopic : PubSub.Topic String
+pingTopic =
+    PubSub.topic "wasm-effects-ping"
+
+
 type Msg
     = Tick
     | LogClicked
@@ -108,7 +115,7 @@ update msg model =
 
         PingClicked ->
             ( model
-            , Cmd.perform (PubSub.publish "wasm-effects-ping" "hello-from-ping") GotPingCount
+            , Cmd.perform (PubSub.publish pingTopic "hello-from-ping") GotPingCount
             )
 
         GotPingCount result ->
@@ -140,7 +147,7 @@ subscriptions : Model -> Sub Msg
 subscriptions _model =
     Sub.batch
         [ Sub.every 1000 Tick
-        , Sub.subscribeTopic "wasm-effects-ping" GotPing
+        , Sub.subscribeTopic pingTopic GotPing
         ]
 
 
