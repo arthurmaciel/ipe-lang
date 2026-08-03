@@ -168,6 +168,24 @@ fn db_query_decode() {
     assert_runs_and_matches_oracle("db_query_decode");
 }
 
+// ── Db.Decode.andThen — function-first surface, decoder-first runtime ─────────
+
+/// `Db.Decode.andThen (\n -> Db.Decode.succeed (String.toUpper n))
+/// (Db.Decode.string "n")` chains a row decoder: read `n : String`, then
+/// upper-case it. Two rows ("alice", "bob") decode to `"ALICE"` / `"BOB"`,
+/// joined with `","`. Output: `"ALICE,BOB"`.
+///
+/// The surface passes the continuation first; the runtime `decode_and_then`
+/// takes the decoder first, so the emitter must reorder the two arguments —
+/// without the reorder the emitted `decode_and_then(closure, decoder)` is a
+/// type error. This golden is that reorder's regression anchor.
+///
+/// Sanctioned divergence: Ipê emits Rust+sqlx; oracle is Ipê's own output.
+#[test]
+fn db_decode_and_then() {
+    assert_runs_and_matches_oracle("db_decode_and_then");
+}
+
 // ── Db CRUD roundtrip ────────────────────────────────────────────────────────
 
 /// `Db.insertRow` → `Db.getById` (read) → `Db.updateById` (update) →
