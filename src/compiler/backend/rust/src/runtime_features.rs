@@ -80,6 +80,22 @@ pub enum RuntimeFeature {
     /// reaches none of these drops `base64` + `hex` (`percent-encoding` also
     /// enters via the always-on `serde_urlencoded` floor dep, untouched here).
     Encoding,
+    /// `regex` — the `regex` crate (+ its `aho-corasick` / `regex-automata` /
+    /// `regex-syntax` subtree) and the `regex_kernel.rs` module (`reaches_regex()`:
+    /// an `Ipe.Regex` kernel or `String.isUrl`, whose validator relocated into
+    /// that module). A standalone leaf — no surface implies it. A program that
+    /// reaches neither drops all four crates.
+    Regex,
+    /// `uuid` — the `uuid` crate and the `uuid_kernel.rs` module
+    /// (`reaches_uuid()`: an `Ipe.Uuid` kernel, OR the `server` / `web` surfaces
+    /// whose runtime modules mint ids via `uuid::new_v4`). A bare Program that
+    /// reaches none drops the crate.
+    Uuid,
+    /// `random` — the `random.rs` module (`reaches_random()`: an `Ipe.Random`
+    /// kernel). A standalone leaf — no surface implies it. The feature gates the
+    /// MODULE only, not `getrandom` (kept by the always-on `crypto_core` floor
+    /// until the crypto-core demotion phase).
+    Random,
     /// `crypto` — the heavy crypto surface: rsa + bcrypt + AEAD + pbkdf2
     /// (`uses_crypto`). Implies the always-on `crypto_core` floor.
     Crypto,
@@ -109,6 +125,9 @@ impl RuntimeFeature {
             Self::CsvKernel => "csv_kernel",
             Self::Time => "time",
             Self::Encoding => "encoding",
+            Self::Regex => "regex",
+            Self::Uuid => "uuid",
+            Self::Random => "random",
             Self::Crypto => "crypto",
             Self::Jwt => "jwt",
         }
@@ -215,6 +234,34 @@ pub fn runtime_features(ctx: &EmitCtx) -> RuntimeFeatureSet {
         set.insert(RuntimeFeature::Encoding);
     }
 
+    // Regex (`regex` crate + its aho-corasick/regex-automata/regex-syntax subtree)
+    // + the `regex_kernel.rs` module. A standalone leaf: `uses_regex` folds an
+    // `Ipe.Regex` kernel with `String.isUrl` (its body relocated into
+    // `regex_kernel.rs`); no surface implies it.
+    if ctx.uses_regex {
+        set.insert(RuntimeFeature::Regex);
+    }
+
+    // Uuid (`uuid` crate) + the `uuid_kernel.rs` module. `reaches_uuid()` folds
+    // the direct `Ipe.Uuid` kernels with the server/web surfaces (whose runtime
+    // modules mint ids via `uuid::new_v4`). The crate-side implications (server/web
+    // each list `uuid`) carry the same closure at `--no-default-features`.
+    if ctx.reaches_uuid() {
+        set.insert(RuntimeFeature::Uuid);
+    }
+
+    // Random (`random.rs` module). `reaches_random()` folds the direct
+    // `Ipe.Random` kernels with the async runtime — `task.rs`'s tokio retry-jitter
+    // path draws from `random`'s LCG, so any tokio program needs the module. The
+    // crate-side `async`/`db`/`server`/… features (which enable `tokio`) each list
+    // `random`, carrying the same closure at `--no-default-features`. The feature
+    // gates the MODULE only; `getrandom` stays non-optional (the always-on
+    // `crypto_core` floor needs it) until the crypto-core demotion phase, so a bare
+    // (sync) Program keeps `getrandom` but drops `random.rs`.
+    if ctx.reaches_random() {
+        set.insert(RuntimeFeature::Random);
+    }
+
     // Heavy crypto (rsa/bcrypt/AEAD/pbkdf2). The `crypto_core` floor
     // (sha2/hmac/entropy) stays unconditional in the base manifest; only the
     // heavy surface is a feature. `reaches_crypto_core_heavy()` (crypto ∪ jwt)
@@ -265,6 +312,9 @@ mod tests {
             uses_compression: false,
             uses_csv: false,
             uses_encoding: false,
+            uses_regex: false,
+            uses_uuid: false,
+            uses_random: false,
             uses_crypto: false,
             uses_jwt: false,
             uses_url: false,
