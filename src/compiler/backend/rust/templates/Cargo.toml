@@ -31,6 +31,13 @@ redis_store = []
 webview = []
 tui = []
 websocket_client = []
+# Declared but inert in the vendored escape hatch: `chrono` stays non-optional
+# below and the template `ipe_runtime/mod.rs` declares `log` / `time` by
+# inclusion, not by `#[cfg]`. These entries only keep rustc's check-cfg quiet for
+# the `#[cfg(feature = "log")]` / `#[cfg(feature = "time-core")]` gates the
+# vendored runtime source carries.
+log = []
+time-core = []
 # Gates the IANA-zone calendar surface of the always-declared `time` runtime
 # module (the `chrono-tz`-backed helpers). Promoted into `default` and paired
 # with the `chrono-tz` dependency only for a program that reaches an `Ipe.Time`

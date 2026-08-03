@@ -96,6 +96,16 @@ pub enum RuntimeFeature {
     /// MODULE only, not `getrandom` (kept by the always-on `crypto_core` floor
     /// until the crypto-core demotion phase).
     Random,
+    /// `log` — the `log.rs` module (`reaches_log()`: an `Ipe.Log` kernel). A
+    /// standalone leaf — no surface implies it. Enables base `chrono` (`log =
+    /// ["dep:chrono"]`), so it is one of the two selectors that keep `chrono` in
+    /// the graph (the other is `time-core`).
+    Log,
+    /// `time-core` — base `chrono` and the `time.rs` module
+    /// (`reaches_time_core()`: `log` OR any Time/Db/Web/WebView surface). The IANA
+    /// zone DB (`chrono-tz`) is the separate `Time` feature, which implies this.
+    /// The single selector for whether the emitted crate keeps `chrono`.
+    TimeCore,
     /// `crypto` — the heavy crypto surface: rsa + bcrypt + AEAD + pbkdf2
     /// (`uses_crypto`). Implies the always-on `crypto_core` floor.
     Crypto,
@@ -128,6 +138,8 @@ impl RuntimeFeature {
             Self::Regex => "regex",
             Self::Uuid => "uuid",
             Self::Random => "random",
+            Self::Log => "log",
+            Self::TimeCore => "time-core",
             Self::Crypto => "crypto",
             Self::Jwt => "jwt",
         }
@@ -262,6 +274,25 @@ pub fn runtime_features(ctx: &EmitCtx) -> RuntimeFeatureSet {
         set.insert(RuntimeFeature::Random);
     }
 
+    // Log (`log.rs` module + base `chrono`). A standalone leaf: `reaches_log()`
+    // is exactly `uses_log` (an `Ipe.Log` kernel). Selecting `log` enables
+    // `chrono` via `log = ["dep:chrono"]`; the `time-core` insertion below folds
+    // `log` into the broader `chrono`-keeping union so the manifest and this SSOT
+    // agree even at `--no-default-features`.
+    if ctx.reaches_log() {
+        set.insert(RuntimeFeature::Log);
+    }
+
+    // Time-core (base `chrono` + the `time.rs` module). `reaches_time_core()`
+    // folds `log` with every timestamp-rendering surface — any `Ipe.Time` kernel
+    // and the db/web/webview modules. This is the single selector for whether the
+    // emitted crate keeps `chrono`. The IANA zone DB (`chrono-tz`) rides the
+    // separate `Time` feature below, which the crate graph makes imply
+    // `time-core`. FAIL-CLOSED: any uncertain `chrono` consumer keeps it on.
+    if ctx.reaches_time_core() {
+        set.insert(RuntimeFeature::TimeCore);
+    }
+
     // Heavy crypto (rsa/bcrypt/AEAD/pbkdf2). The `crypto_core` floor
     // (sha2/hmac/entropy) stays unconditional in the base manifest; only the
     // heavy surface is a feature. `reaches_crypto_core_heavy()` (crypto ∪ jwt)
@@ -315,6 +346,7 @@ mod tests {
             uses_regex: false,
             uses_uuid: false,
             uses_random: false,
+            uses_log: false,
             uses_crypto: false,
             uses_jwt: false,
             uses_url: false,

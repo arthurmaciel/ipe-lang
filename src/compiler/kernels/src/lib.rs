@@ -6038,13 +6038,13 @@ impl StdlibKernel {
     /// (`Time.now` / `unixMillis` / `sleep` / `timeString` / `isLeapYear` /
     /// `daysInMonth`). Excludes `Time.every`, which is TEA (`is_tea()`).
     ///
-    /// The `time` runtime module is always declared, but its IANA-zone helpers
-    /// (the `chrono-tz`-backed calendar surface) are gated behind the `time`
-    /// Cargo feature. Used by `ipe_lower` to detect `uses_time` and by the
-    /// backend to enable the `time` feature and add the `chrono-tz` dependency to
-    /// the emitted manifest; a program that reaches no `Ipe.Time` kernel drops
-    /// the crate. `chrono` core (the always-on log/db/web timestamp floor) stays
-    /// unconditional regardless of this flag.
+    /// The whole `time.rs` runtime module is behind the `time-core` Cargo feature
+    /// (base `chrono`); its IANA-zone calendar surface additionally needs the
+    /// `time` feature (`chrono-tz`), which implies `time-core`. Used by
+    /// `ipe_lower` to detect `uses_time` and by the backend to enable both
+    /// features and add the `chrono-tz` dependency; a program that reaches no
+    /// `Ipe.Time` kernel drops `chrono-tz` and — unless a Log/Db/Web/WebView
+    /// surface also reaches `time-core` — `chrono` itself.
     #[must_use]
     pub const fn is_time(self) -> bool {
         matches!(
@@ -6055,6 +6055,33 @@ impl StdlibKernel {
                 | Self::TimeTimeString
                 | Self::TimeIsLeapYear
                 | Self::TimeDaysInMonth
+        )
+    }
+
+    /// `true` when this variant reaches the `log.rs` runtime module — the
+    /// `Ipe.Log.*` observability kernels (`info` / `debug` / `warn` / `error` and
+    /// their `*With` structured-attribute companions). `log.rs` is the sole
+    /// always-emittable consumer of `chrono` for its RFC3339-nano timestamp, so
+    /// the module — and, via `time-core`, the base `chrono` crate — is behind the
+    /// `log` feature. Used by `ipe_lower` to detect `uses_log` and by the backend
+    /// to declare `log` and add `chrono`. A program that reaches no `Log.*` kernel
+    /// (and no Time/Db/Web/WebView surface) drops `chrono`.
+    ///
+    /// `Debug.log` is deliberately NOT here: `debug.rs` is a pure `IpeStringify`
+    /// passthrough (no `chrono`, no `log.rs`), always compiled, so it never
+    /// selects the `log` feature.
+    #[must_use]
+    pub const fn is_log(self) -> bool {
+        matches!(
+            self,
+            Self::LogInfo
+                | Self::LogDebug
+                | Self::LogWarn
+                | Self::LogError
+                | Self::LogInfoWith
+                | Self::LogDebugWith
+                | Self::LogWarnWith
+                | Self::LogErrorWith
         )
     }
 
@@ -7553,6 +7580,31 @@ mod tests {
                  non-Time program would pull it",
                 k.is_time(),
                 is_time_qualifier,
+            );
+        }
+    }
+
+    /// Every `Ipe.Log` kernel reaches the `log.rs` runtime module — the sole
+    /// always-emittable consumer of `chrono` (its RFC3339-nano timestamp), gated
+    /// behind the `log` feature. So `is_log()` MUST report exactly
+    /// `qualifier == "Log"`, and no other qualifier may — in particular NOT
+    /// `Debug.log` (qualifier "Debug"), whose `debug.rs` body is a pure
+    /// `IpeStringify` passthrough with no `chrono`. Both directions asserted, so a
+    /// new `Log.*` kernel the predicate forgets — or an unrelated kernel wrongly
+    /// claimed — drops `chrono`/`log.rs` a program needs (E0433) or pulls it into
+    /// a program that does not.
+    #[test]
+    fn log_predicate_tracks_log_qualifier() {
+        for k in StdlibKernel::ALL {
+            let is_log_qualifier = k.decl().qualifier == "Log";
+            assert_eq!(
+                k.is_log(),
+                is_log_qualifier,
+                "{k:?}: is_log()={} but qualifier==\"Log\" is {} — \
+                 a Log-using program would drop the `log`/`chrono` surface it needs \
+                 or a non-Log program (e.g. one calling Debug.log) would pull it",
+                k.is_log(),
+                is_log_qualifier,
             );
         }
     }

@@ -59,6 +59,7 @@ fn program(name: Symbol, funcs: Vec<Func>, records: Vec<IrType>, entry: Option<F
             uses_regex: false,
             uses_uuid: false,
             uses_random: false,
+            uses_log: false,
             uses_crypto: false,
             uses_jwt: false,
             uses_url: false,

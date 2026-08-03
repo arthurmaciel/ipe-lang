@@ -54,6 +54,7 @@ fn program_with_web(
             uses_regex: false,
             uses_uuid: false,
             uses_random: false,
+            uses_log: false,
             uses_crypto: false,
             uses_jwt: false,
             uses_url: false,
