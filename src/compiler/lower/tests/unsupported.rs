@@ -10,8 +10,8 @@ use std::collections::BTreeMap;
 
 use ipe_canon::ast as canon;
 use ipe_diagnostics::{
-    Code, DResult, Diagnostic, Feature, IPE_L0101, IPE_L0102, IPE_L0108, IPE_L0114, IPE_L0119,
-    Located, LowerError, Span,
+    Code, DResult, Diagnostic, Feature, IPE_L0101, IPE_L0102, IPE_L0107, IPE_L0108, IPE_L0114,
+    IPE_L0119, Located, LowerError, Span,
 };
 use ipe_intern::{Interner, Symbol};
 use ipe_ir::{BoundSet, Callee, Expr, FuncId, IrType, KernelFn};
@@ -122,6 +122,28 @@ fn ty_int(interner: &mut Interner) -> DResult<Ty> {
         module: Vec::new(),
         name: interner.intern("Int")?,
         args: Vec::new(),
+    })
+}
+
+/// A minimal, resolvable top-level callee binding so a `VarTopLevel` reference
+/// to `name` finds an entry in `func_ids` (which drives `lower_callee`'s
+/// top-level resolution). Its own signature is monomorphic (`Int -> Int`) and
+/// its body a trivial literal, so it lowers cleanly; the generic scheme the
+/// call-boundary gate reads for `name` is supplied separately through the
+/// `env`, exactly as the real solver populates it. The `patterns`/spans use a
+/// far-away byte range that never overlaps a caller's spans.
+fn resolvable_callee_def(interner: &mut Interner, name: Symbol) -> DResult<canon::Def> {
+    let p = interner.intern("cx")?;
+    Ok(canon::Def::Typed {
+        home: vec![],
+        name: Located::new(Span::new(1000, 1001), name),
+        free_vars: Vec::new(),
+        patterns: vec![Located::new(
+            Span::new(1002, 1003),
+            canon::Pattern_::PVar(p),
+        )],
+        body: int(Span::new(1004, 1005), 0),
+        ty: canon::Type::Lambda(Box::new(con_int(interner)?), Box::new(con_int(interner)?)),
     })
 }
 
@@ -647,6 +669,220 @@ fn function_inside_opaque_boxed_wrapper_is_accepted() -> DResult<()> {
         res.is_ok(),
         "a function inside an opaque boxed wrapper (Decoder) must lower cleanly, \
          not trip the ctor-payload/record-field function gate: {:?}",
+        res.err()
+    );
+    Ok(())
+}
+
+#[test]
+fn fn_instantiating_a_generic_record_slot_is_rejected() -> DResult<()> {
+    // `wrap : a -> { value : a }` applied as `wrap (\n -> n + 1)` emits a
+    // GENERIC `fn wrap<T1: Clone>(x: T1) -> RecValue<T1>` and a generic struct
+    // `RecValue<T1>` deriving `Clone`. Instantiating `T1 = Box<dyn Fn>` cannot
+    // satisfy the `Clone` bound (E0277). The region gate sees only the
+    // monomorphized `{ value : Int -> Int }` (indistinguishable from a directly
+    // declared `Ty::Fun` field, which the carrier flip made legal), so the
+    // call-boundary gate must recover the declared template `a -> { value : a }`,
+    // match the lambda argument's `Int -> Int` against `a`, and reject IPE-L0107.
+    let mut i = Interner::new();
+    let main = i.intern("main")?;
+    let wrap = i.intern("wrap")?;
+    let value = i.intern("value")?;
+    let n = i.intern("n")?;
+    let int_name = i.intern("Int")?;
+    let ty = con_int(&mut i)?;
+    let con = |name| Ty::Con {
+        module: Vec::new(),
+        name,
+        args: Vec::new(),
+    };
+    let arrow_int = || Ty::Fun(Box::new(con(int_name)), Box::new(con(int_name)));
+
+    // body: `wrap (\n -> n)` — the argument's region type is `Int -> Int`.
+    let arg_span = Span::new(40, 50);
+    let lambda = Located::new(
+        arg_span,
+        canon::Expr_::Lambda(
+            vec![Located::new(Span::new(41, 42), canon::Pattern_::PVar(n))],
+            Box::new(Located::new(Span::new(46, 47), canon::Expr_::VarLocal(n))),
+        ),
+    );
+    let callee = Located::new(
+        Span::new(35, 39),
+        canon::Expr_::VarTopLevel {
+            module: vec![],
+            name: wrap,
+        },
+    );
+    let call_span = Span::new(35, 51);
+    let body = Located::new(
+        call_span,
+        canon::Expr_::Call(Box::new(callee), vec![lambda]),
+    );
+    let def = canon::Def::Typed {
+        home: vec![],
+        name: Located::new(Span::new(30, 34), main),
+        free_vars: Vec::new(),
+        patterns: Vec::new(),
+        body,
+        ty,
+    };
+    // Declared template `wrap : a -> { value : a }`.
+    let mut record_fields = BTreeMap::new();
+    record_fields.insert(value, Ty::Var(0));
+    let mut env = BTreeMap::new();
+    env.insert(
+        (vec![], wrap),
+        Ty::Fun(
+            Box::new(Ty::Var(0)),
+            Box::new(Ty::Record(record_fields, ipe_types::RowTail::Closed)),
+        ),
+    );
+    // The argument's solved region type is `Int -> Int`.
+    let mut regions = BTreeMap::new();
+    regions.insert(arg_span, arrow_int());
+    let callee_def = resolvable_callee_def(&mut i, wrap)?;
+    let res = run_with_regions(Vec::new(), vec![callee_def, def], env, regions, &mut i);
+    assert_unsupported(res, Feature::FirstClassFunctions, IPE_L0107, call_span);
+    Ok(())
+}
+
+#[test]
+fn fn_instantiating_a_bare_generic_slot_is_rejected() -> DResult<()> {
+    // The record is incidental: the same E0277 hits any bare-variable slot.
+    // `always : a -> b -> a` applied to a lambda for `a` instantiates the
+    // `Clone`-bounded `T1` to `Box<dyn Fn>` just the same. Partial application
+    // (one argument to a two-arrow callee) must gate identically — the boundary
+    // gate runs before the arity reshape.
+    let mut i = Interner::new();
+    let main = i.intern("main")?;
+    let always = i.intern("always")?;
+    let n = i.intern("n")?;
+    let int_name = i.intern("Int")?;
+    let ty = con_int(&mut i)?;
+    let arrow_int = Ty::Fun(
+        Box::new(Ty::Con {
+            module: vec![],
+            name: int_name,
+            args: vec![],
+        }),
+        Box::new(Ty::Con {
+            module: vec![],
+            name: int_name,
+            args: vec![],
+        }),
+    );
+    let arg_span = Span::new(40, 50);
+    let lambda = Located::new(
+        arg_span,
+        canon::Expr_::Lambda(
+            vec![Located::new(Span::new(41, 42), canon::Pattern_::PVar(n))],
+            Box::new(Located::new(Span::new(46, 47), canon::Expr_::VarLocal(n))),
+        ),
+    );
+    let callee = Located::new(
+        Span::new(33, 39),
+        canon::Expr_::VarTopLevel {
+            module: vec![],
+            name: always,
+        },
+    );
+    let call_span = Span::new(33, 51);
+    let body = Located::new(
+        call_span,
+        canon::Expr_::Call(Box::new(callee), vec![lambda]),
+    );
+    let def = canon::Def::Typed {
+        home: vec![],
+        name: Located::new(Span::new(30, 34), main),
+        free_vars: Vec::new(),
+        patterns: Vec::new(),
+        body,
+        ty,
+    };
+    // `always : a -> b -> a`.
+    let mut env = BTreeMap::new();
+    env.insert(
+        (vec![], always),
+        Ty::Fun(
+            Box::new(Ty::Var(0)),
+            Box::new(Ty::Fun(Box::new(Ty::Var(1)), Box::new(Ty::Var(0)))),
+        ),
+    );
+    let mut regions = BTreeMap::new();
+    regions.insert(arg_span, arrow_int);
+    let callee_def = resolvable_callee_def(&mut i, always)?;
+    let res = run_with_regions(Vec::new(), vec![callee_def, def], env, regions, &mut i);
+    assert_unsupported(res, Feature::FirstClassFunctions, IPE_L0107, call_span);
+    Ok(())
+}
+
+#[test]
+fn hof_argument_matching_a_declared_arrow_stays_accepted() -> DResult<()> {
+    // The over-rejection tripwire: a genuine higher-order function
+    // `apply : (a -> b) -> a -> b` applied to a lambda must STAY ACCEPTED. The
+    // function argument matches the callee's declared ARROW `(a -> b)`, binding
+    // `a := Int`, `b := Int` — no type variable binds to a function, so the gate
+    // stays silent and the already-supported `Box<dyn Fn>` parameter emits. The
+    // gate rejects ONLY a variable bound to a function, never a declared arrow.
+    let mut i = Interner::new();
+    let main = i.intern("main")?;
+    let apply = i.intern("apply")?;
+    let n = i.intern("n")?;
+    let int_name = i.intern("Int")?;
+    let ty = con_int(&mut i)?;
+    let con_int_ty = || Ty::Con {
+        module: vec![],
+        name: int_name,
+        args: vec![],
+    };
+    let arrow_int = || Ty::Fun(Box::new(con_int_ty()), Box::new(con_int_ty()));
+    let arg_span = Span::new(40, 50);
+    let lambda = Located::new(
+        arg_span,
+        canon::Expr_::Lambda(
+            vec![Located::new(Span::new(41, 42), canon::Pattern_::PVar(n))],
+            Box::new(Located::new(Span::new(46, 47), canon::Expr_::VarLocal(n))),
+        ),
+    );
+    let callee = Located::new(
+        Span::new(33, 38),
+        canon::Expr_::VarTopLevel {
+            module: vec![],
+            name: apply,
+        },
+    );
+    let call_span = Span::new(33, 51);
+    // `apply f` — one argument to the two-arrow callee (partial application).
+    let body = Located::new(
+        call_span,
+        canon::Expr_::Call(Box::new(callee), vec![lambda]),
+    );
+    let def = canon::Def::Typed {
+        home: vec![],
+        name: Located::new(Span::new(30, 34), main),
+        free_vars: Vec::new(),
+        patterns: Vec::new(),
+        body,
+        ty,
+    };
+    // `apply : (a -> b) -> a -> b`.
+    let mut env = BTreeMap::new();
+    env.insert(
+        (vec![], apply),
+        Ty::Fun(
+            Box::new(Ty::Fun(Box::new(Ty::Var(0)), Box::new(Ty::Var(1)))),
+            Box::new(Ty::Fun(Box::new(Ty::Var(0)), Box::new(Ty::Var(1)))),
+        ),
+    );
+    let mut regions = BTreeMap::new();
+    regions.insert(arg_span, arrow_int());
+    let callee_def = resolvable_callee_def(&mut i, apply)?;
+    let res = run_with_regions(Vec::new(), vec![callee_def, def], env, regions, &mut i);
+    assert!(
+        res.is_ok(),
+        "a higher-order argument matching a declared arrow must stay accepted \
+         (no variable binds to a function): {:?}",
         res.err()
     );
     Ok(())
