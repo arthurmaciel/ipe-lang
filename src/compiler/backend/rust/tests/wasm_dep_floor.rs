@@ -41,6 +41,7 @@ fn minimal_wasm_program() -> (Program, Interner) {
             uses_regex: false,
             uses_uuid: false,
             uses_random: false,
+            uses_log: false,
             uses_crypto: false,
             uses_jwt: false,
             uses_url: false,

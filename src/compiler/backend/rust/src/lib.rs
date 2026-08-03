@@ -666,6 +666,13 @@ pub(crate) struct EmitCtx<'a> {
     /// `getrandom` crate — that stays with the always-on `crypto_core` floor until
     /// the crypto-core demotion phase.
     pub(crate) uses_random: bool,
+    /// `true` when the program reaches an `Ipe.Log` kernel. The `log` runtime
+    /// feature gates the `log.rs` module and — via `log = ["dep:chrono"]` — the
+    /// base `chrono` crate. This flag alone selects `log` (a standalone leaf);
+    /// `chrono` itself is selected under [`Self::reaches_time_core`] (`log` OR any
+    /// Time/Db/Web/WebView surface). `Debug.log` does NOT set this (`debug.rs` is
+    /// a pure, always-compiled passthrough with no `chrono`).
+    pub(crate) uses_log: bool,
     /// `true` when the program uses at least one HEAVY `Ipe.Crypto` kernel
     /// (legacy SHA-1/MD5, AES-GCM / ChaCha20-Poly1305 AEAD, or PBKDF2 key
     /// derivation). When set, [`crate::project::assemble_project_files`]:
@@ -1377,6 +1384,11 @@ impl<'a> EmitCtx<'a> {
         // feature). Standalone leaf — no surface folds in.
         let uses_random = program.modules.iter().any(|m| m.uses_random);
 
+        // detect Ipe.Log usage (gates the `log.rs` module + the base `chrono`
+        // crate). `chrono` itself is selected under `reaches_time_core` (log ∪
+        // Time/Db/Web/WebView); this flag is the `log`-feature leaf.
+        let uses_log = program.modules.iter().any(|m| m.uses_log);
+
         // detect Ipe.Jwt usage (gates `jwt` module + `jsonwebtoken` crate).
         let uses_jwt = program.modules.iter().any(|m| m.uses_jwt);
 
@@ -1456,6 +1468,7 @@ impl<'a> EmitCtx<'a> {
             uses_regex,
             uses_uuid,
             uses_random,
+            uses_log,
             uses_crypto,
             uses_jwt,
             uses_url,
@@ -1645,6 +1658,34 @@ impl<'a> EmitCtx<'a> {
     /// kernel still drops the module.
     pub(crate) const fn reaches_random(&self) -> bool {
         self.uses_random || self.uses_async_runtime
+    }
+
+    /// `true` when the emitted crate reaches the `log.rs` runtime module — so
+    /// `project::assemble_project_files` selects the `log` feature and declares
+    /// `pub mod log;`. A standalone leaf: only an `Ipe.Log` kernel
+    /// ([`Self::uses_log`]) reaches `log.rs` (nothing else calls into it). `Debug`
+    /// is a separate always-on module, so it does not fold in here.
+    pub(crate) const fn reaches_log(&self) -> bool {
+        self.uses_log
+    }
+
+    /// `true` when the emitted crate reaches base `chrono` (the `time-core`
+    /// feature) — so `project::assemble_project_files` selects `time-core`,
+    /// enabling the `chrono` dependency and the `time.rs` module.
+    ///
+    /// `chrono` is reached by any of: the `log.rs` timestamp
+    /// ([`Self::reaches_log`]); any `Ipe.Time` kernel ([`Self::uses_time`], whose
+    /// whole `time.rs` module — calendar math + the `chrono-tz` zone helpers —
+    /// lives behind `time-core`, with the IANA zones additionally behind `time`);
+    /// or the `db` / `web` / `webview` surfaces, whose runtime modules render
+    /// `chrono` timestamps (migration ledger, session store, console proxy). The
+    /// crate-side feature graph carries the SAME closure — `log`/`time`/`db`/`web`
+    /// each imply `time-core` — so this selection and the manifest agree even at
+    /// `--no-default-features`. FAIL-CLOSED: any uncertain `chrono` consumer keeps
+    /// `time-core` on; dropping `chrono` from a program that renders a timestamp
+    /// is the forbidden failure, over-inclusion the accepted precision loss.
+    pub(crate) const fn reaches_time_core(&self) -> bool {
+        self.reaches_log() || self.uses_time || self.uses_db || self.uses_web || self.uses_webview
     }
 
     /// `true` when the emitted crate reaches the `url` runtime module — so
@@ -3312,6 +3353,7 @@ mod record_struct_namespace_tests {
                 uses_regex: false,
                 uses_uuid: false,
                 uses_random: false,
+                uses_log: false,
                 uses_crypto: false,
                 uses_jwt: false,
                 uses_url: false,
@@ -3404,6 +3446,7 @@ mod record_struct_namespace_tests {
                 uses_regex: false,
                 uses_uuid: false,
                 uses_random: false,
+                uses_log: false,
                 uses_crypto: false,
                 uses_jwt: false,
                 uses_url: false,

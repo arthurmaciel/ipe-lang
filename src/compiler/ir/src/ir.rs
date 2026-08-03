@@ -166,6 +166,15 @@ pub struct Module {
     /// `getrandom` crate (which the always-on `crypto_core` floor keeps present);
     /// a program that reaches no `Ipe.Random` kernel drops the `random.rs` module.
     pub uses_random: bool,
+    /// `true` when the lowerer detected an `Ipe.Log` kernel
+    /// (`KernelFn::is_log()`). The backend reads this to declare `pub mod log;`
+    /// behind the `log` feature and add `chrono` (via `log = ["dep:chrono"]`).
+    /// `log.rs` is the sole always-emittable consumer of `chrono` (its
+    /// RFC3339-nano timestamp). A program that reaches no `Log.*` kernel — and no
+    /// Time/Db/Web/WebView surface, which reach `chrono` via `time-core` — drops
+    /// `chrono`. `Debug.log` does NOT set this flag (`debug.rs` is a pure,
+    /// always-compiled `IpeStringify` passthrough with no `chrono`).
+    pub uses_log: bool,
     /// `true` when the lowerer detected at least one HEAVY `Ipe.Crypto` kernel
     /// call (legacy SHA-1/MD5, AES-GCM / ChaCha20-Poly1305 AEAD, or PBKDF2
     /// key derivation).
@@ -3801,6 +3810,7 @@ mod tests {
                 uses_regex: false,
                 uses_uuid: false,
                 uses_random: false,
+                uses_log: false,
                 uses_crypto: false,
                 uses_jwt: false,
                 uses_url: false,
@@ -4310,6 +4320,7 @@ mod serde_persistence_tests {
                 uses_regex: false,
                 uses_uuid: false,
                 uses_random: false,
+                uses_log: false,
                 uses_crypto: false,
                 uses_jwt: false,
                 uses_url: false,
@@ -4391,6 +4402,7 @@ mod serde_persistence_tests {
                 uses_regex: false,
                 uses_uuid: false,
                 uses_random: false,
+                uses_log: false,
                 uses_crypto: false,
                 uses_jwt: false,
                 uses_url: false,
