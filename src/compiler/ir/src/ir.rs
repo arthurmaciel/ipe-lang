@@ -201,8 +201,7 @@ pub struct Module {
     /// crypto/jwt/db/web/webview/email/server surfaces (`reaches_crypto_core`) to
     /// select the `crypto-core` runtime feature — `crypto_core.rs` plus its
     /// `sha2`, `hmac`, `subtle`, and `getrandom` dependencies. A program that
-    /// reaches none of these drops the module and that whole subtree (the biggest
-    /// single crate drop of the feature-split campaign).
+    /// reaches none of these drops the module and that whole dependency subtree.
     pub uses_crypto_core: bool,
     /// `true` when the lowerer detected at least one `Ipe.Secret` kernel call
     /// (`Secret.fromString`/`reveal`/`redacted`) OR a `Secret`-typed value in a

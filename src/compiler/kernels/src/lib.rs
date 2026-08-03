@@ -6119,13 +6119,12 @@ impl StdlibKernel {
     /// module. Used by `ipe_lower` to detect `uses_random` and by the backend to
     /// declare `random`.
     ///
-    /// NOTE the `random` feature gates only the module, NOT the `getrandom` crate:
-    /// `getrandom` is also the entropy source of the always-on `crypto_core` floor
-    /// (`crypto_random_bytes` / `crypto_random_token`), so it stays a non-optional
-    /// base dep this phase — dropping it from a bare Program lands with the
-    /// `crypto_core` demotion, not here. On native `random.rs` uses no `getrandom`
-    /// at all (only its `cfg(target_arch = "wasm32")` seed arm does); the floor
-    /// carries it regardless.
+    /// NOTE the `random` feature gates the `random.rs` module. `getrandom` (the
+    /// entropy source) is shared with the `crypto_core` module
+    /// (`crypto_random_bytes` / `crypto_random_token`), so it is selected whenever
+    /// `random` OR the crypto floor is reached; a Program that reaches neither
+    /// drops it. On native, `random.rs` uses no `getrandom` at all — only its
+    /// `cfg(target_arch = "wasm32")` seed arm does.
     #[must_use]
     pub const fn is_random(self) -> bool {
         matches!(
@@ -8040,7 +8039,7 @@ mod tests {
     /// report exactly the kernels whose emit symbol resides there — and NONE of
     /// the heavy `crypto.rs` kernels. Residency is content-addressed off the emit
     /// symbol, the SAME discipline `crypto_predicate_tracks_heavy_module_residency`
-    /// uses on the other side of the split: a floor symbol is one under the
+    /// uses for the heavy side: a floor symbol is one under the
     /// `Crypto` / `Key` / `Mac` qualifiers that is NOT a heavy residency
     /// (`crypto_sha1` / `crypto_md5`, an AEAD op — `aes_gcm` / `chacha20` in the
     /// name — or a PBKDF2 derivation, `_key_from_password`). Both directions are
