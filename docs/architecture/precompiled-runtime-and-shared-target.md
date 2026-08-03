@@ -2,7 +2,7 @@
 
 The design for strategies S3 (runtime as a real dependency crate) and S2
 (ipe-managed shared `CARGO_TARGET_DIR`) from
-`compilation-performance.md` — the pair that fixes the **warm** dev loop.
+ADR 0054 — the pair that fixes the **warm** dev loop.
 S1 gated the dependency floor and cut the cold build; the warm rebuild is
 unchanged at ~2.4 s because every edit recompiles the ~2.6 MB runtime
 vendored as source *inside* the user crate. S3 moves the runtime out of the
@@ -29,7 +29,7 @@ what distinguishes this pair from the rejected S4 prebuilt-binary route.
    compilation unit,
 3. link.
 
-The measured floor row in `compilation-performance.md` (hand-trimmed
+The measured floor row in ADR 0054 (hand-trimmed
 runtime, 1 crate) puts the same edit at ~0.5 s — the difference is entirely
 the vendored-runtime recompile. That is the cost S3 removes: once the
 runtime is a dependency crate, cargo fingerprints it like any other dep and
@@ -409,7 +409,7 @@ supply-chain reproducibility (exact pinned closure, reviewable once).
 
 ## Predicted warm loop
 
-Anchored two ways: the measured table in `compilation-performance.md`
+Anchored two ways: the measured table in ADR 0054
 (hello-world, warm dev box), and a direct prototype measurement of the
 S3 emit model itself.
 
@@ -552,7 +552,7 @@ re-blessing is mechanical and automated; its size is noted, not weighed.
    builds `--locked`; drift between the blessed lock and the runtime
    manifest fails a SEAL check.
 8. **Re-measure** the table (cold/warm × hello/complex × linker) and update
-   `compilation-performance.md`; this measurement is the S6 go/no-go input.
+   ADR 0054; this measurement is the S6 go/no-go input.
 
 ## Risks and honest costs
 

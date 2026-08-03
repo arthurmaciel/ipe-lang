@@ -5,7 +5,7 @@ Design: make every currently-unconditional external dependency of
 so the reachability-driven feature selection
 (`docs/architecture/function-level-dependency-emission.md`) actually drops the
 residual dependency floor. This is the runtime-crate half that design defers;
-companion to `compilation-performance.md` and
+companion to ADR 0054 and
 `precompiled-runtime-and-shared-target.md`.
 
 Security first: a program that calls nothing must ship nothing. Every crate a
@@ -318,7 +318,7 @@ emitted project; the number must only go down).
    `json` off the floor before those typedefs are conditional would be an
    E0433 under-inclusion on every bare app).
 8. **Remeasure + record**. Re-run the measured-floor table of
-   `compilation-performance.md` (bare / log-only / regex tool / db / web) and
+   ADR 0054 (bare / log-only / regex tool / db / web) and
    record the numbers there. Target: bare Program ≤ 3 crates.
 
 Each of 2–7: dep → `optional = true`, `[features]` entry, `mod.rs` cfg gate,
