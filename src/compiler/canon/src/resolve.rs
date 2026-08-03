@@ -1012,20 +1012,25 @@ fn check_program_tea_import_gate(
         return Ok(());
     };
 
-    // The module is a TEA app iff its `main` head-calls a shape entry.
+    // The Program/TEA distinction only applies to an ENTRY module — one that
+    // defines `main`. A helper submodule with no `main` (e.g. an `Update`
+    // module that imports `Ipe.Tea.Web.Cmd` solely to name `Cmd` in `update`'s
+    // signature and build `Cmd.none` / `Cmd.batch` effects) is neither a
+    // Program nor an app entry, so it is exempt from this gate.
     let main_sym = interner.lookup("main");
-    let main_is_app_entry = main_sym.is_some_and(|main_sym| {
-        canon_mod
-            .defs
-            .iter()
-            .find(|d| d.name().value == main_sym)
-            .is_some_and(|d| {
-                let body = match d {
-                    canon::Def::Untyped { body, .. } | canon::Def::Typed { body, .. } => body,
-                };
-                main_head_is_tea_entry(body, interner)
-            })
-    });
+    let main_def =
+        main_sym.and_then(|main_sym| canon_mod.defs.iter().find(|d| d.name().value == main_sym));
+    let Some(main_def) = main_def else {
+        return Ok(());
+    };
+
+    // The module is a TEA app iff its `main` head-calls a shape entry.
+    let main_is_app_entry = {
+        let body = match main_def {
+            canon::Def::Untyped { body, .. } | canon::Def::Typed { body, .. } => body,
+        };
+        main_head_is_tea_entry(body, interner)
+    };
 
     if main_is_app_entry {
         return Ok(());
@@ -2432,6 +2437,13 @@ fn inject_dep_exports(
     let qualifier = import
         .alias
         .unwrap_or_else(|| dep_path.last().copied().unwrap_or_else(name_zero));
+    // A user dep module whose qualifier collides with a gated stdlib short-name
+    // (e.g. a project-local `import Auth` over the stdlib `Auth`) shadows the
+    // Tier-C import gate: its members now live in `qual_vars` under that
+    // qualifier, so `Qualifier.member` must resolve against the imported local
+    // module rather than raise IPE-N0034 for the un-imported stdlib module of
+    // the same name. Marking the qualifier imported makes the gate defer here.
+    env.mark_stdlib_qualifier_imported(qualifier);
     let qual_map = std::rc::Rc::make_mut(&mut env.qual_vars)
         .entry(qualifier)
         .or_default();
