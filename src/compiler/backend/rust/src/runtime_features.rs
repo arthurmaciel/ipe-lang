@@ -96,8 +96,8 @@ pub enum RuntimeFeature {
     Uuid,
     /// `random` — the `random.rs` module (`reaches_random()`: an `Ipe.Random`
     /// kernel). A standalone leaf — no surface implies it. The feature gates the
-    /// MODULE only, not `getrandom` (kept by the always-on `crypto_core` floor
-    /// until the crypto-core demotion phase).
+    /// MODULE only, not `getrandom`, which is shared with `crypto_core` and
+    /// enabled by `random || crypto-core`.
     Random,
     /// `log` — the `log.rs` module (`reaches_log()`: an `Ipe.Log` kernel). A
     /// standalone leaf — no surface implies it. Enables base `chrono` (`log =
@@ -302,9 +302,9 @@ pub fn runtime_features(ctx: &EmitCtx) -> RuntimeFeatureSet {
     // path draws from `random`'s LCG, so any tokio program needs the module. The
     // crate-side `async`/`db`/`server`/… features (which enable `tokio`) each list
     // `random`, carrying the same closure at `--no-default-features`. The feature
-    // gates the MODULE only; `getrandom` stays non-optional (the always-on
-    // `crypto_core` floor needs it) until the crypto-core demotion phase, so a bare
-    // (sync) Program keeps `getrandom` but drops `random.rs`.
+    // gates the MODULE only; `getrandom` is enabled by `random || crypto-core`
+    // (shared with the crypto floor), so a bare (sync) Program that reaches
+    // neither drops both `getrandom` and `random.rs`.
     if ctx.reaches_random() {
         set.insert(RuntimeFeature::Random);
     }

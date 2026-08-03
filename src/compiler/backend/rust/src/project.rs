@@ -652,10 +652,9 @@ const RUNTIME_MOD_RS_UUID_APPEND: &str = "pub mod uuid_kernel;\npub use uuid_ker
 /// `random.rs` (the LCG / seeded-generator surface) is declared only on demand —
 /// behind the `random` feature, which [`runtime_features`] selects under the same
 /// condition. A standalone leaf: no surface implies it. The `random` feature gates
-/// this MODULE declaration only; the `getrandom` crate stays a non-optional base
-/// dep (the always-on `crypto_core` floor needs it for entropy) until the
-/// crypto-core demotion phase, so a bare Program keeps `getrandom` but drops
-/// `random.rs`.
+/// this MODULE declaration only; the `getrandom` crate is enabled by
+/// `random || crypto-core` (shared with the crypto floor for entropy), so a bare
+/// Program that reaches neither drops it.
 const RUNTIME_MOD_RS_RANDOM_APPEND: &str = "pub mod random;\npub use random::*;\n";
 
 // ── Ipe.Crypto — heavy cryptography (SHA-1/MD5, AEAD, PBKDF2) ────────────────

@@ -663,8 +663,8 @@ pub(crate) struct EmitCtx<'a> {
     /// `true` when the program reaches an `Ipe.Random` kernel. The `random`
     /// runtime feature gates the `random.rs` module declaration; this flag alone
     /// selects it (`random` is a standalone leaf). It does NOT gate the
-    /// `getrandom` crate — that stays with the always-on `crypto_core` floor until
-    /// the crypto-core demotion phase.
+    /// `getrandom` crate alone — `getrandom` is enabled by `random || crypto-core`,
+    /// shared with the crypto floor.
     pub(crate) uses_random: bool,
     /// `true` when the program reaches an `Ipe.Log` kernel. The `log` runtime
     /// feature gates the `log.rs` module and — via `log = ["dep:chrono"]` — the

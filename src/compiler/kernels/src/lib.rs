@@ -6075,8 +6075,8 @@ impl StdlibKernel {
 
     /// `true` when this variant reaches the `regex_kernel.rs` runtime module —
     /// the `Ipe.Regex` compile/match/find/replace/split kernels PLUS
-    /// `String.isUrl`, whose validator body relocated INTO `regex_kernel.rs` (it
-    /// was the sole non-`Ipe.Regex` consumer of the `regex` crate). The whole
+    /// `String.isUrl`, whose validator body lives in `regex_kernel.rs` (the one
+    /// non-`Ipe.Regex` consumer of the `regex` crate). The whole
     /// module — hence the `regex` crate and its `aho-corasick` / `regex-automata`
     /// / `regex-syntax` subtree — is behind the `regex` feature: a program that
     /// reaches neither an `Ipe.Regex` kernel nor `String.isUrl` drops all four
