@@ -1350,9 +1350,11 @@ pub const fn kernel_swaps_first_two(k: ipe_ir::KernelFn) -> bool {
             | KernelFn::ResultMapError
             // `JsonDec.andThen f decoder` — Ipê passes fn first; Rust runtime
             // `decode_and_then(decoder, f)` expects decoder first. `Config.andThen`
-            // shares `decode_and_then`, so it needs the same reorder.
+            // and `Db.Decode.andThen` share `decode_and_then`, so they need the
+            // same reorder.
             | KernelFn::JsonDecAndThen
             | KernelFn::ConfigAndThen
+            | KernelFn::DbDecAndThen
             // `Task.andThen f task` — Ipê passes continuation first; Rust runtime
             // `task_and_then(task, f)` expects effect first so Rust evaluates the
             // effect expression BEFORE the continuation closure captures shared Db
