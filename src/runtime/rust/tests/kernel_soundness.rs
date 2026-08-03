@@ -94,7 +94,10 @@ proptest! {
 }
 
 // ── seeded random — deterministic, in-range, empty-safe ────────────────────
+// The `Ipe.Random` surface (`random.rs`) is behind the `random` feature; these
+// fixtures compile only when it is selected (CI's `--features full` includes it).
 
+#[cfg(feature = "random")]
 #[test]
 fn seeded_int_is_deterministic_and_in_range() {
     let (v1, s1) = ipe_runtime_rust::random::random_seeded_int(12345, 10, 20);
@@ -103,6 +106,7 @@ fn seeded_int_is_deterministic_and_in_range() {
     assert!((10..=20).contains(&v1));
 }
 
+#[cfg(feature = "random")]
 #[test]
 fn seeded_int_hi_le_lo_returns_lo() {
     let (v, _) = ipe_runtime_rust::random::random_seeded_int(7, 5, 5);
@@ -111,12 +115,14 @@ fn seeded_int_hi_le_lo_returns_lo() {
     assert_eq!(v2, 9);
 }
 
+#[cfg(feature = "random")]
 #[test]
 fn seeded_choice_empty_is_nothing_not_panic() {
     let (m, _): (IpeMaybe<i64>, i64) = ipe_runtime_rust::random::random_seeded_choice(42, vec![]);
     assert!(m.is_nothing());
 }
 
+#[cfg(feature = "random")]
 #[test]
 fn seeded_choice_picks_in_bounds_deterministically() {
     let items = vec!["a", "b", "c", "d"];
@@ -126,12 +132,14 @@ fn seeded_choice_picks_in_bounds_deterministically() {
     assert_eq!(m1, m2);
 }
 
+#[cfg(feature = "random")]
 #[test]
 fn seeded_float_in_unit_interval() {
     let (f, _) = ipe_runtime_rust::random::random_seeded_float(123);
     assert!((0.0..1.0).contains(&f));
 }
 
+#[cfg(feature = "random")]
 proptest! {
     #[test]
     fn prop_seeded_int_always_in_range(seed in any::<i64>(), lo in -1000i64..1000, span in 0i64..1000) {

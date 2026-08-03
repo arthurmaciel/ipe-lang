@@ -5969,6 +5969,71 @@ impl StdlibKernel {
         )
     }
 
+    /// `true` when this variant reaches the `regex_kernel.rs` runtime module —
+    /// the `Ipe.Regex` compile/match/find/replace/split kernels PLUS
+    /// `String.isUrl`, whose validator body relocated INTO `regex_kernel.rs` (it
+    /// was the sole non-`Ipe.Regex` consumer of the `regex` crate). The whole
+    /// module — hence the `regex` crate and its `aho-corasick` / `regex-automata`
+    /// / `regex-syntax` subtree — is behind the `regex` feature: a program that
+    /// reaches neither an `Ipe.Regex` kernel nor `String.isUrl` drops all four
+    /// crates. Used by `ipe_lower` to detect `uses_regex` and by the backend to
+    /// declare `regex_kernel` and add the `regex` dependency. `String.isUrl` is
+    /// deliberately here (not a `Regex`-qualifier kernel) — the exhaustiveness
+    /// test below asserts exactly `qualifier == "Regex" || StringIsUrl`.
+    #[must_use]
+    pub const fn is_regex(self) -> bool {
+        matches!(
+            self,
+            Self::RegexCompile
+                | Self::RegexMatch
+                | Self::RegexFind
+                | Self::RegexFindAll
+                | Self::RegexReplace
+                | Self::RegexSplit
+                | Self::StringIsUrl
+        )
+    }
+
+    /// `true` when this variant reaches the `uuid_kernel.rs` runtime module — the
+    /// `Ipe.Uuid` v4 / v7 / parse kernels, the sole consumers of the `uuid` crate
+    /// as a runtime module. Behind the `uuid` feature: a program that reaches no
+    /// `Ipe.Uuid` kernel — and no `server` / `web` surface, whose runtime modules
+    /// draw session/CSRF ids from `uuid::new_v4` directly — drops the crate. Used
+    /// by `ipe_lower` to detect `uses_uuid` and by the backend to declare
+    /// `uuid_kernel` and add the `uuid` dependency; the `server` / `web`
+    /// implications are folded in by the backend's `reaches_uuid`.
+    #[must_use]
+    pub const fn is_uuid(self) -> bool {
+        matches!(self, Self::UuidV4 | Self::UuidV7 | Self::UuidParse)
+    }
+
+    /// `true` when this variant reaches the `random.rs` runtime module — the
+    /// `Ipe.Random` non-cryptographic PRNG surface (`int` / `float` / `choice`
+    /// and the seeded `Random.Generator` primitives `seededIntRaw` /
+    /// `seededFloatRaw`). Behind the `random` feature, which gates the `random.rs`
+    /// module declaration. A program that reaches no `Ipe.Random` kernel drops the
+    /// module. Used by `ipe_lower` to detect `uses_random` and by the backend to
+    /// declare `random`.
+    ///
+    /// NOTE the `random` feature gates only the module, NOT the `getrandom` crate:
+    /// `getrandom` is also the entropy source of the always-on `crypto_core` floor
+    /// (`crypto_random_bytes` / `crypto_random_token`), so it stays a non-optional
+    /// base dep this phase — dropping it from a bare Program lands with the
+    /// `crypto_core` demotion, not here. On native `random.rs` uses no `getrandom`
+    /// at all (only its `cfg(target_arch = "wasm32")` seed arm does); the floor
+    /// carries it regardless.
+    #[must_use]
+    pub const fn is_random(self) -> bool {
+        matches!(
+            self,
+            Self::RandomInt
+                | Self::RandomFloat
+                | Self::RandomChoice
+                | Self::RandomSeededInt
+                | Self::RandomSeededFloat
+        )
+    }
+
     /// `true` when this variant belongs to the non-TEA `Ipe.Time` kernel family
     /// (`Time.now` / `unixMillis` / `sleep` / `timeString` / `isLeapYear` /
     /// `daysInMonth`). Excludes `Time.every`, which is TEA (`is_tea()`).
@@ -7488,6 +7553,73 @@ mod tests {
                  non-Time program would pull it",
                 k.is_time(),
                 is_time_qualifier,
+            );
+        }
+    }
+
+    /// Every `Ipe.Regex` kernel — plus `String.isUrl`, whose validator body lives
+    /// in `regex_kernel.rs` — reaches the gated `regex_kernel` runtime module (the
+    /// sole consumer of the `regex` crate). So `is_regex()` MUST report exactly
+    /// `qualifier == "Regex" || StringIsUrl`, and nothing else. Both directions
+    /// are asserted: a new `Regex.*` kernel the predicate forgets — or an
+    /// unrelated kernel wrongly claimed — drops `regex` a program needs or pulls
+    /// it into a program that does not.
+    #[test]
+    fn regex_predicate_tracks_regex_module_residency() {
+        for k in StdlibKernel::ALL {
+            let lives_in_regex_module =
+                k.decl().qualifier == "Regex" || matches!(k, StdlibKernel::StringIsUrl);
+            assert_eq!(
+                k.is_regex(),
+                lives_in_regex_module,
+                "{k:?}: is_regex()={} but (qualifier==\"Regex\" || StringIsUrl) is {} — \
+                 the emitted crate would either drop the `regex` crate it needs \
+                 (E0433) or pull it into a program that reaches neither Regex nor \
+                 String.isUrl",
+                k.is_regex(),
+                lives_in_regex_module,
+            );
+        }
+    }
+
+    /// Every `Ipe.Uuid` kernel reaches the gated `uuid_kernel` runtime module (the
+    /// sole consumer of the `uuid` crate as a runtime module). So `is_uuid()` MUST
+    /// report exactly `qualifier == "Uuid"`, and no other qualifier may. Both
+    /// directions asserted.
+    #[test]
+    fn uuid_predicate_tracks_uuid_qualifier() {
+        for k in StdlibKernel::ALL {
+            let is_uuid_qualifier = k.decl().qualifier == "Uuid";
+            assert_eq!(
+                k.is_uuid(),
+                is_uuid_qualifier,
+                "{k:?}: is_uuid()={} but qualifier==\"Uuid\" is {} — \
+                 a Uuid-using program would drop the `uuid` crate it needs or a \
+                 non-Uuid program would pull it",
+                k.is_uuid(),
+                is_uuid_qualifier,
+            );
+        }
+    }
+
+    /// Every `Ipe.Random` kernel reaches the gated `random.rs` runtime module. So
+    /// `is_random()` MUST report exactly `qualifier == "Random"`, and no other
+    /// qualifier may. Both directions asserted, so a new `Random.*` kernel the
+    /// predicate forgets — or an unrelated kernel wrongly claimed — fails the
+    /// instant the two disagree (the module would be dropped for a program that
+    /// needs it, E0433).
+    #[test]
+    fn random_predicate_tracks_random_qualifier() {
+        for k in StdlibKernel::ALL {
+            let is_random_qualifier = k.decl().qualifier == "Random";
+            assert_eq!(
+                k.is_random(),
+                is_random_qualifier,
+                "{k:?}: is_random()={} but qualifier==\"Random\" is {} — \
+                 a Random-using program would drop the `random` module it needs or \
+                 a non-Random program would pull it",
+                k.is_random(),
+                is_random_qualifier,
             );
         }
     }

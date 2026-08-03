@@ -649,6 +649,23 @@ pub(crate) struct EmitCtx<'a> {
     /// `server`, `email`, `jwt`, and `web` surfaces, whose runtime modules use the
     /// raw codec crates directly.
     pub(crate) uses_encoding: bool,
+    /// `true` when the program reaches an `Ipe.Regex` kernel or `String.isUrl`.
+    /// The `regex` runtime feature — the `regex` crate (and its `aho-corasick` /
+    /// `regex-automata` / `regex-syntax` subtree) plus the `regex_kernel.rs`
+    /// module — is selected on this flag alone: `regex` is a standalone leaf, no
+    /// other surface reaches it.
+    pub(crate) uses_regex: bool,
+    /// `true` when the program reaches an `Ipe.Uuid` kernel. The `uuid` runtime
+    /// feature — the `uuid` crate plus the `uuid_kernel.rs` module — is selected
+    /// under [`Self::reaches_uuid`]: this flag unioned with the `server` and `web`
+    /// surfaces, whose runtime modules mint session/CSRF ids via `uuid::new_v4`.
+    pub(crate) uses_uuid: bool,
+    /// `true` when the program reaches an `Ipe.Random` kernel. The `random`
+    /// runtime feature gates the `random.rs` module declaration; this flag alone
+    /// selects it (`random` is a standalone leaf). It does NOT gate the
+    /// `getrandom` crate — that stays with the always-on `crypto_core` floor until
+    /// the crypto-core demotion phase.
+    pub(crate) uses_random: bool,
     /// `true` when the program uses at least one HEAVY `Ipe.Crypto` kernel
     /// (legacy SHA-1/MD5, AES-GCM / ChaCha20-Poly1305 AEAD, or PBKDF2 key
     /// derivation). When set, [`crate::project::assemble_project_files`]:
@@ -1347,6 +1364,19 @@ impl<'a> EmitCtx<'a> {
         // [`Self::reaches_encoding`], not here.
         let uses_encoding = program.modules.iter().any(|m| m.uses_encoding);
 
+        // detect Ipe.Regex / String.isUrl usage (gates `regex_kernel` module +
+        // the `regex` crate). Standalone leaf — no surface folds in.
+        let uses_regex = program.modules.iter().any(|m| m.uses_regex);
+
+        // detect Ipe.Uuid usage (gates `uuid_kernel` module + the `uuid` crate).
+        // Also reached by the server/web surfaces — folded in by
+        // [`Self::reaches_uuid`], not here.
+        let uses_uuid = program.modules.iter().any(|m| m.uses_uuid);
+
+        // detect Ipe.Random usage (gates the `random.rs` module via the `random`
+        // feature). Standalone leaf — no surface folds in.
+        let uses_random = program.modules.iter().any(|m| m.uses_random);
+
         // detect Ipe.Jwt usage (gates `jwt` module + `jsonwebtoken` crate).
         let uses_jwt = program.modules.iter().any(|m| m.uses_jwt);
 
@@ -1423,6 +1453,9 @@ impl<'a> EmitCtx<'a> {
             uses_compression,
             uses_csv,
             uses_encoding,
+            uses_regex,
+            uses_uuid,
+            uses_random,
             uses_crypto,
             uses_jwt,
             uses_url,
@@ -1564,20 +1597,54 @@ impl<'a> EmitCtx<'a> {
     /// ([`Self::uses_db`]) hex-encodes blob columns + migration checksums;
     /// `server.rs` ([`Self::uses_server`]) percent-decodes path params; `email.rs`
     /// ([`Self::uses_email`]) base64/hex for SMTP + signing; `jwt.rs` (via
-    /// [`Self::reaches_jwt`]) base64url/hex for token segments; and `web/*`
+    /// [`Self::reaches_jwt`]) base64url/hex for token segments; `web/*`
     /// ([`Self::uses_web`] / [`Self::uses_webview`]) base64/hex for the session
-    /// store + console proxy + SRI. FAIL-CLOSED — any uncertain consumer keeps
-    /// the feature on; over-inclusion is the accepted precision loss, dropping a
-    /// codec a program needs is the forbidden failure.
+    /// store + console proxy + SRI; and `http_client.rs` (via
+    /// [`Self::reaches_http_client`]) form-url-decodes query pairs, so every
+    /// program that reaches the client module — including a bare `Ipe.Http` client
+    /// with no server/web surface — needs `encoding`. FAIL-CLOSED — any uncertain
+    /// consumer keeps the feature on; over-inclusion is the accepted precision
+    /// loss, dropping a codec a program needs is the forbidden failure.
     pub(crate) const fn reaches_encoding(&self) -> bool {
         self.uses_encoding
             || self.uses_crypto
             || self.uses_db
-            || self.uses_server
-            || self.uses_email
-            || self.uses_web
-            || self.uses_webview
+            || self.reaches_http_client()
             || self.reaches_jwt()
+    }
+
+    /// `true` when the emitted crate reaches the `uuid` crate — so
+    /// `project::assemble_project_files` selects the `uuid` feature, declares
+    /// `pub mod uuid_kernel;`, and adds the dep. The single source of truth shared
+    /// by the manifest augmenter and the `mod.rs` append; they can never disagree.
+    ///
+    /// Reached directly by an `Ipe.Uuid` kernel ([`Self::uses_uuid`]), OR
+    /// transitively by the `server` ([`Self::uses_server`]) and `web`
+    /// ([`Self::uses_web`] / [`Self::uses_webview`]) surfaces, whose runtime
+    /// modules mint session ids / CSRF tokens via `uuid::new_v4` directly. Web
+    /// implies server, but both are listed for locality. FAIL-CLOSED — any
+    /// uncertain consumer keeps the feature on; dropping `uuid` a server/web
+    /// program needs is the forbidden failure.
+    pub(crate) const fn reaches_uuid(&self) -> bool {
+        self.uses_uuid || self.uses_server || self.uses_web || self.uses_webview
+    }
+
+    /// `true` when the emitted crate reaches the `random.rs` module — so
+    /// `project::assemble_project_files` selects the `random` feature and declares
+    /// `pub mod random;`.
+    ///
+    /// Reached directly by an `Ipe.Random` kernel ([`Self::uses_random`]), OR
+    /// transitively by the async runtime ([`Self::uses_async_runtime`]):
+    /// `task.rs`'s `tokio`-gated retry-with-jitter path draws from `random`'s LCG
+    /// (`super::random::lcg_next`), so any tokio program links `random.rs`
+    /// regardless of whether user code names a `Random.*` kernel. The crate-side
+    /// `async` / `db` / `server` / … features (each of which enables `tokio`) list
+    /// `random`, carrying the same closure at `--no-default-features`. FAIL-CLOSED
+    /// — dropping `random.rs` from a program whose `task.rs` retry path needs it is
+    /// the forbidden failure; a bare (sync) Program that reaches no `Ipe.Random`
+    /// kernel still drops the module.
+    pub(crate) const fn reaches_random(&self) -> bool {
+        self.uses_random || self.uses_async_runtime
     }
 
     /// `true` when the emitted crate reaches the `url` runtime module — so
@@ -3242,6 +3309,9 @@ mod record_struct_namespace_tests {
                 uses_compression: false,
                 uses_csv: false,
                 uses_encoding: false,
+                uses_regex: false,
+                uses_uuid: false,
+                uses_random: false,
                 uses_crypto: false,
                 uses_jwt: false,
                 uses_url: false,
@@ -3331,6 +3401,9 @@ mod record_struct_namespace_tests {
                 uses_compression: false,
                 uses_csv: false,
                 uses_encoding: false,
+                uses_regex: false,
+                uses_uuid: false,
+                uses_random: false,
                 uses_crypto: false,
                 uses_jwt: false,
                 uses_url: false,

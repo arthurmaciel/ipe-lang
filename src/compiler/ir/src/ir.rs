@@ -142,6 +142,30 @@ pub struct Module {
     /// the backend force-declares `encoding` under `reaches_encoding()` — the
     /// union of this flag with those surfaces.
     pub uses_encoding: bool,
+    /// `true` when the lowerer detected an `Ipe.Regex` kernel or `String.isUrl`
+    /// (`KernelFn::is_regex()`). The backend reads this to declare
+    /// `pub mod regex_kernel;` in the emitted `ipe_runtime/mod.rs` and add the
+    /// `regex` dependency (with its `aho-corasick` / `regex-automata` /
+    /// `regex-syntax` subtree). `regex` is a standalone leaf — no other surface
+    /// reaches it — so this flag alone gates it. A program that reaches neither an
+    /// `Ipe.Regex` kernel nor `String.isUrl` drops all four crates.
+    pub uses_regex: bool,
+    /// `true` when the lowerer detected an `Ipe.Uuid` kernel
+    /// (`KernelFn::is_uuid()`). The backend reads this to declare
+    /// `pub mod uuid_kernel;` and add the `uuid` dependency. The `server` and
+    /// `web` surfaces also draw session/CSRF ids from `uuid::new_v4` directly, so
+    /// the backend force-declares `uuid` under `reaches_uuid()` — the union of
+    /// this flag with those two surfaces. A bare Program that reaches none drops
+    /// the crate.
+    pub uses_uuid: bool,
+    /// `true` when the lowerer detected an `Ipe.Random` kernel
+    /// (`KernelFn::is_random()`). The backend reads this to declare
+    /// `pub mod random;` in the emitted `ipe_runtime/mod.rs`. `random` is a
+    /// standalone leaf — no other surface reaches it — so this flag alone gates
+    /// the module. The `random` feature gates only the module declaration, NOT the
+    /// `getrandom` crate (which the always-on `crypto_core` floor keeps present);
+    /// a program that reaches no `Ipe.Random` kernel drops the `random.rs` module.
+    pub uses_random: bool,
     /// `true` when the lowerer detected at least one HEAVY `Ipe.Crypto` kernel
     /// call (legacy SHA-1/MD5, AES-GCM / ChaCha20-Poly1305 AEAD, or PBKDF2
     /// key derivation).
@@ -3774,6 +3798,9 @@ mod tests {
                 uses_compression: false,
                 uses_csv: false,
                 uses_encoding: false,
+                uses_regex: false,
+                uses_uuid: false,
+                uses_random: false,
                 uses_crypto: false,
                 uses_jwt: false,
                 uses_url: false,
@@ -4280,6 +4307,9 @@ mod serde_persistence_tests {
                 uses_compression: false,
                 uses_csv: false,
                 uses_encoding: false,
+                uses_regex: false,
+                uses_uuid: false,
+                uses_random: false,
                 uses_crypto: false,
                 uses_jwt: false,
                 uses_url: false,
@@ -4358,6 +4388,9 @@ mod serde_persistence_tests {
                 uses_compression: false,
                 uses_csv: false,
                 uses_encoding: false,
+                uses_regex: false,
+                uses_uuid: false,
+                uses_random: false,
                 uses_crypto: false,
                 uses_jwt: false,
                 uses_url: false,
