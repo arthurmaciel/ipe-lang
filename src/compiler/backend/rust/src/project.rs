@@ -1583,9 +1583,60 @@ fn dep_model_cargo_toml(ctx: &EmitCtx, dep: &crate::RuntimeDep) -> DResult<Strin
             detail: format!("dep-model manifest template lost the {FEATURES_ANCHOR:?} anchor"),
         });
     }
-    Ok(CARGO_DEP_TOML
+    let mut manifest = CARGO_DEP_TOML
         .replace(PATH_ANCHOR, &path_escaped)
-        .replace(FEATURES_ANCHOR, &feature_list))
+        .replace(FEATURES_ANCHOR, &feature_list);
+    // A Ipe.Web program emits `#[derive(serde::Serialize, serde::Deserialize)]`
+    // on its Model / other serde-eligible types (see `emit_types`), so the APP
+    // crate references the `serde` crate by path. Under the dependency model the
+    // app crate depends only on `ipe_runtime`, whose `serde` is a private
+    // dependency not re-exported — so the app must declare its own `serde`.
+    // Pin + feature match the vendored `templates/Cargo.toml`. A non-web program
+    // emits no serde derive, so its manifest stays serde-free. Inserted right
+    // after the runtime dependency line, inside `[dependencies]`.
+    if ctx.uses_web {
+        manifest = insert_app_serde_dependency(&manifest)?;
+    }
+    Ok(manifest)
+}
+
+/// Insert the app-crate `serde` dependency (version + `derive` feature identical
+/// to the vendored `templates/Cargo.toml`) immediately after the `ipe_runtime`
+/// line in the dep-model manifest's `[dependencies]` table.
+///
+/// # Errors
+///
+/// Returns [`Diagnostic::CompilerBug`] if the runtime dependency line is absent
+/// — a drifted dep-model template, surfaced loudly rather than emitting a
+/// manifest whose `[dependencies]` silently lacks the anchor line.
+fn insert_app_serde_dependency(manifest: &str) -> DResult<String> {
+    const RUNTIME_DEP_ANCHOR: &str = "ipe_runtime = { package = \"ipe-runtime-rust\"";
+    const SERDE_DEP_LINE: &str = "serde = { version = \"1\", features = [\"derive\"] }";
+    let Some(anchor_start) = manifest.find(RUNTIME_DEP_ANCHOR) else {
+        return Err(Diagnostic::CompilerBug {
+            where_: "ipe_backend_rust::project::insert_app_serde_dependency",
+            detail: format!(
+                "dep-model manifest lost the runtime dependency line \
+                 (anchor {RUNTIME_DEP_ANCHOR:?}) — cannot place the app `serde` dep"
+            ),
+        });
+    };
+    // The runtime dependency line ends at the next newline; splice the serde line
+    // in on its own line just after it.
+    let Some(rel_eol) = manifest[anchor_start..].find('\n') else {
+        return Err(Diagnostic::CompilerBug {
+            where_: "ipe_backend_rust::project::insert_app_serde_dependency",
+            detail: "dep-model manifest runtime dependency line has no terminating newline"
+                .to_owned(),
+        });
+    };
+    let insert_at = anchor_start + rel_eol + 1;
+    let mut out = String::with_capacity(manifest.len() + SERDE_DEP_LINE.len() + 1);
+    out.push_str(&manifest[..insert_at]);
+    out.push_str(SERDE_DEP_LINE);
+    out.push('\n');
+    out.push_str(&manifest[insert_at..]);
+    Ok(out)
 }
 
 /// Render the per-project `env_public` module for the dependency model as a

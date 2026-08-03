@@ -208,6 +208,39 @@ fn declared_modules(mod_rs: &str) -> BTreeSet<String> {
     out
 }
 
+/// Every top-level module DECLARATION line in an emitted `ipe_runtime/mod.rs`,
+/// as it literally appears — a `Vec`, NOT a set, so a module declared twice
+/// shows up twice. Distinct from [`declared_modules`], whose `BTreeSet` silently
+/// dedups and so cannot witness a double `pub mod`.
+fn declared_module_lines(mod_rs: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    for line in mod_rs.lines() {
+        let t = line.trim();
+        let rest = t
+            .strip_prefix("pub mod ")
+            .or_else(|| t.strip_prefix("mod "));
+        if let Some(rest) = rest
+            && let Some(name) = rest.strip_suffix(';')
+            && name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
+        {
+            out.push(name.to_owned());
+        }
+    }
+    out
+}
+
+/// The names a `mod.rs` declares more than once (each reported once).
+fn duplicate_declarations(mod_rs: &str) -> BTreeSet<String> {
+    let mut seen = BTreeSet::new();
+    let mut dups = BTreeSet::new();
+    for name in declared_module_lines(mod_rs) {
+        if !seen.insert(name.clone()) {
+            dups.insert(name);
+        }
+    }
+    dups
+}
+
 /// For one runtime module `name`, read its source (`<name>.rs` or
 /// `<name>/mod.rs`) and return the set of top-level modules it references via an
 /// UNCONDITIONAL `use crate::<dep>` (dep = first path segment after `crate::`).
@@ -345,6 +378,23 @@ fn declared_for_mask(interner: &Interner, main: ipe_intern::Symbol, mask: u32) -
     declared_modules(mod_rs)
 }
 
+/// The raw text of the emitted `ipe_runtime/mod.rs` for one flag mask — the
+/// literal file, before any dedup, so a doubled `pub mod` line is observable.
+#[allow(clippy::expect_used)] // test scaffolding: a body-free emit cannot fail
+fn mod_rs_for_mask(interner: &Interner, main: ipe_intern::Symbol, mask: u32) -> String {
+    let prog = Program {
+        modules: vec![module_for_mask(main, mask)],
+    };
+    let emitted = RustBackend::new(interner)
+        .emit(&prog)
+        .expect("emit must succeed for a body-free program");
+    emitted
+        .files
+        .get("src/ipe_runtime/mod.rs")
+        .expect("emitted project must contain ipe_runtime/mod.rs")
+        .clone()
+}
+
 /// The per-mask closure obligation: the declared module set is CLOSED under
 /// every declared module's unconditional `use crate::<dep>` references. Shared
 /// by the per-flag, composed, and sampled proofs so they run an identical check.
@@ -475,6 +525,48 @@ fn sampled_full_masks_are_closed() {
     }
     for mask in masks {
         assert_mask_closed(&runtime_root, &interner, main, mask, &mut dep_cache);
+    }
+}
+
+// ── no duplicate `pub mod` declaration in the emitted mod.rs ─────────────────
+
+/// No emitted `ipe_runtime/mod.rs` may declare the same top-level module twice.
+/// The emitter builds the file from a base list plus per-flag appends; if a
+/// module sits in BOTH the base and a gated append, enabling that flag emits
+/// `pub mod X;` twice and the emitted crate fails `cargo build` with
+/// `error[E0428]: the name X is defined multiple times` — while `ipe` itself
+/// exits 0. That is a SEAL breach: the ground-truth failure is a downstream
+/// cargo error, so this proves the same property statically, without cargo.
+///
+/// Checked over the featureless base, every singleton flag, the all-flags
+/// union, and the deterministic full-mask sample. The declaration set is a
+/// per-flag union of appends (monotone; see module docs), so a duplicate can
+/// only arise from a base/append or append/append overlap — both of which a
+/// singleton or the union exercises. `declared_modules`' `BTreeSet` dedups
+/// silently, so this test parses the raw text via `duplicate_declarations`.
+#[test]
+fn emitted_mod_rs_declares_no_module_twice() {
+    let mut interner = Interner::new();
+    let main = interner.intern("Main").expect("intern Main");
+    let all: u32 = (1u32 << FLAG_COUNT) - 1;
+
+    let mut masks: BTreeSet<u32> = sampled_masks(SAMPLE_MASKS).into_iter().collect();
+    masks.insert(0);
+    masks.insert(all);
+    for bit in 0..FLAG_COUNT {
+        masks.insert(1u32 << bit);
+    }
+    for mask in masks {
+        let mod_rs = mod_rs_for_mask(&interner, main, mask);
+        let dups = duplicate_declarations(&mod_rs);
+        assert!(
+            dups.is_empty(),
+            "duplicate-declaration SEAL breach: emitted `mod.rs` declares \
+             {dups:?} more than once — flag mask {mask:#019b}. A module in both \
+             the base list and a gated append emits `pub mod` twice; the \
+             emitted crate fails `cargo build` (E0428) though `ipe` exits 0. \
+             Declare it SOLELY via its gated append, or SOLELY in the base."
+        );
     }
 }
 
