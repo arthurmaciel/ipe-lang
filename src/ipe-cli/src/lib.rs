@@ -629,6 +629,42 @@ pub fn build_with_sibling_discovery_with_options(
     )
 }
 
+/// Build `ipe verify`'s test entry against the project's `src/` sources.
+///
+/// Unlike [`build_with_sibling_discovery`], which roots discovery at the
+/// entry's own directory, this roots the code under test at `project_src_root`
+/// (the `src/` tree) and additionally discovers the test entry's own directory
+/// (the `tests/` tree) — so a `tests/Main.ipe` that imports `Lib.Foo` from
+/// `src/Lib/Foo.ipe` resolves. See [`collect_test_sources`] for the source-set
+/// model.
+///
+/// # Errors
+/// [`CliError::Pipeline`] when the compiler rejects the program; [`CliError::Io`]
+/// on any filesystem failure; [`CliError::StaticRefusal`] when the emitted app
+/// shape cannot be static.
+fn build_test_with_project_sources(
+    project_src_root: &Path,
+    test_entry: &Path,
+    out_dir: &Path,
+    runtime_dir: &Path,
+) -> Result<(), CliError> {
+    let collected = collect_test_sources(project_src_root, test_entry)?;
+
+    // No ipe.toml driver is threaded here (the test stage mirrors the sibling
+    // build's "no manifest" fallback) — default to sqlite, same rationale as
+    // `build_with_sibling_discovery`.
+    compile_modules(
+        collected.sources,
+        collected.discovered,
+        &collected.entry_module_path,
+        out_dir,
+        runtime_dir,
+        test_entry,
+        ipe_backend_rust::DbDriver::Sqlite,
+        BuildOptions::from_env(),
+    )
+}
+
 /// The entry file and every sibling `.ipe` module discovered in its source
 /// directory, ready to feed the shared compile core.
 struct CollectedSources {
@@ -655,21 +691,7 @@ struct CollectedSources {
 /// any filesystem failure reading a discovered module.
 fn collect_entry_and_siblings(entry: &Path) -> Result<CollectedSources, CliError> {
     let source = fs::read_to_string(entry).map_err(|e| io_err(entry, e))?;
-    let pipeline_err = |diag: Diagnostic| CliError::Pipeline {
-        file: entry.to_path_buf(),
-        src: source.clone(),
-        diag: Box::new(diag),
-    };
-
-    // Parse the entry to learn its declared module path.
-    let mut name_interner = Interner::new();
-    let parsed = ipe_parse::parse_module(&source, &mut name_interner).map_err(&pipeline_err)?;
-    let entry_module_path: Vec<String> = parsed
-        .name
-        .value
-        .iter()
-        .map(|s| name_interner.resolve(*s).unwrap_or_default().to_owned())
-        .collect();
+    let entry_module_path = parse_entry_module_path(entry, &source)?;
 
     // Source root: the directory containing the entry file.
     let src_root = entry
@@ -679,39 +701,141 @@ fn collect_entry_and_siblings(entry: &Path) -> Result<CollectedSources, CliError
 
     // Discover ALL .ipe files in the source root (recursively).
     let mut discovered = project::discover_modules(src_root)?;
+    ensure_entry_present(&mut discovered, entry, &entry_module_path);
 
-    // Ensure the entry itself is always in the discovered set, even when its
-    // file name doesn't match the module-segment validation (e.g. a temp
-    // path). This prevents the entry from being silently dropped.
-    if !discovered
-        .iter()
-        .any(|m| m.module_path == entry_module_path)
-    {
-        discovered.push(project::DiscoveredModule {
-            path: entry.to_path_buf(),
-            module_path: entry_module_path.clone(),
-        });
-    }
-
-    // Read every discovered module. The entry's source is already in memory.
-    let mut sources: BTreeMap<Vec<String>, (PathBuf, String)> = BTreeMap::new();
-    for m in &discovered {
-        if m.module_path == entry_module_path {
-            sources.insert(
-                entry_module_path.clone(),
-                (entry.to_path_buf(), source.clone()),
-            );
-        } else {
-            let src = fs::read_to_string(&m.path).map_err(|e| io_err(&m.path, e))?;
-            sources.insert(m.module_path.clone(), (m.path.clone(), src));
-        }
-    }
+    let sources = read_discovered_sources(&discovered, entry, &entry_module_path, &source)?;
 
     Ok(CollectedSources {
         sources,
         discovered,
         entry_module_path,
     })
+}
+
+/// Collect the sources for `ipe verify`'s test stage: the project's `src/`
+/// tree (the code under test) unioned with the `tests/` tree (the test entry
+/// and any test-only siblings).
+///
+/// A test entry lives in a sibling directory from the code it exercises
+/// (`tests/Main.ipe` importing `Lib.Db` under `src/Lib/`), so a single-root
+/// discovery cannot see both: `src/` and `tests/` must be relativised against
+/// their OWN roots for module paths to resolve (`src/Lib/Foo.ipe` → `Lib.Foo`,
+/// `tests/Main.ipe` → `Main`). This resolves both rooted discoveries into one
+/// well-typed [`CollectedSources`] whose entry is the test module, so a test
+/// module can import the code under test AND its test-only siblings.
+///
+/// When a module path is defined in both trees, the `src/` definition wins for
+/// non-entry modules — the code under test is authoritative — while the entry
+/// module is always the test entry itself.
+///
+/// # Errors
+/// [`CliError::Pipeline`] when the test entry does not parse; [`CliError::Io`]
+/// on any filesystem failure reading a discovered module.
+fn collect_test_sources(
+    project_src_root: &Path,
+    test_entry: &Path,
+) -> Result<CollectedSources, CliError> {
+    let entry_source = fs::read_to_string(test_entry).map_err(|e| io_err(test_entry, e))?;
+    let entry_module_path = parse_entry_module_path(test_entry, &entry_source)?;
+
+    // The `tests/` tree: the directory holding the test entry, rooted at itself
+    // so `tests/Main.ipe` → `Main` and `tests/Support/Fixtures.ipe` →
+    // `Support.Fixtures`.
+    let tests_root = test_entry
+        .parent()
+        .filter(|p| p.is_dir())
+        .unwrap_or_else(|| Path::new("."));
+
+    // The code under test: the `src/` tree, rooted at itself so
+    // `src/Lib/Foo.ipe` → `Lib.Foo` — the SAME relativisation the build stage
+    // uses. Union the two rooted discoveries; a `src/` module masks a `tests/`
+    // module of the same path (code under test wins), and the test entry is
+    // always added last so it is never masked.
+    let mut discovered = project::discover_modules(project_src_root)?;
+    let src_paths: std::collections::BTreeSet<Vec<String>> =
+        discovered.iter().map(|m| m.module_path.clone()).collect();
+    for m in project::discover_modules(tests_root)? {
+        if !src_paths.contains(&m.module_path) {
+            discovered.push(m);
+        }
+    }
+    ensure_entry_present(&mut discovered, test_entry, &entry_module_path);
+
+    let sources =
+        read_discovered_sources(&discovered, test_entry, &entry_module_path, &entry_source)?;
+
+    Ok(CollectedSources {
+        sources,
+        discovered,
+        entry_module_path,
+    })
+}
+
+/// Parse a `.ipe` entry file's already-read source to learn its declared
+/// module path (e.g. `["Lib", "Db"]`).
+///
+/// # Errors
+/// [`CliError::Pipeline`] when the source does not parse.
+fn parse_entry_module_path(entry: &Path, source: &str) -> Result<Vec<String>, CliError> {
+    let pipeline_err = |diag: Diagnostic| CliError::Pipeline {
+        file: entry.to_path_buf(),
+        src: source.to_owned(),
+        diag: Box::new(diag),
+    };
+    let mut name_interner = Interner::new();
+    let parsed = ipe_parse::parse_module(source, &mut name_interner).map_err(&pipeline_err)?;
+    Ok(parsed
+        .name
+        .value
+        .iter()
+        .map(|s| name_interner.resolve(*s).unwrap_or_default().to_owned())
+        .collect())
+}
+
+/// Ensure the entry itself is in the discovered set, even when its file name
+/// does not match the module-segment validation (e.g. a temp path). This
+/// prevents the entry from being silently dropped.
+fn ensure_entry_present(
+    discovered: &mut Vec<project::DiscoveredModule>,
+    entry: &Path,
+    entry_module_path: &[String],
+) {
+    if !discovered
+        .iter()
+        .any(|m| m.module_path == entry_module_path)
+    {
+        discovered.push(project::DiscoveredModule {
+            path: entry.to_path_buf(),
+            module_path: entry_module_path.to_vec(),
+        });
+    }
+}
+
+/// Read every discovered module into the module-path-keyed source map. The
+/// entry's source is already in memory (`entry_source`), so it is inserted
+/// without a second read.
+///
+/// # Errors
+/// [`CliError::Io`] on any filesystem failure reading a discovered module.
+fn read_discovered_sources(
+    discovered: &[project::DiscoveredModule],
+    entry: &Path,
+    entry_module_path: &[String],
+    entry_source: &str,
+) -> Result<BTreeMap<Vec<String>, (PathBuf, String)>, CliError> {
+    let mut sources: BTreeMap<Vec<String>, (PathBuf, String)> = BTreeMap::new();
+    for m in discovered {
+        if m.module_path == entry_module_path {
+            sources.insert(
+                entry_module_path.to_vec(),
+                (entry.to_path_buf(), entry_source.to_owned()),
+            );
+        } else {
+            let src = fs::read_to_string(&m.path).map_err(|e| io_err(&m.path, e))?;
+            sources.insert(m.module_path.clone(), (m.path.clone(), src));
+        }
+    }
+    Ok(sources)
 }
 
 /// Walk up the directory tree from a `.ipe` file's parent, looking for a
@@ -3318,14 +3442,17 @@ fn verify_build(path: Option<&str>) -> Result<(), CliError> {
 
 /// Stage 4: the test run — build and execute `tests/Main.ipe` if one exists.
 ///
-/// The test entry is the file at `<project-root>/tests/Main.ipe` (where
-/// "project root" is the directory holding `ipe.toml`, or the directory
-/// containing the supplied `.ipe` file when no manifest exists). When that
-/// file is absent the stage passes immediately — a project with no test entry
-/// is not an error. When it exists, the test runner is compiled to a temporary
-/// output directory, the emitted Rust project is built with `cargo build`, and
-/// the resulting `ipe-app` binary is executed. A non-zero exit from the binary
-/// (propagated by `Ipe.Test.runMain`) is reported as a stage failure.
+/// The test entry is the file at `<project-root>/tests/Main.ipe`. The project
+/// root is the directory holding `ipe.toml`; with no manifest it is the parent
+/// of the entry's `src/` directory (the conventional layout), or the entry's
+/// own directory for a flat single-directory project. The test entry is built
+/// against the project's `src/` tree AND its `tests/` siblings, so a test that
+/// imports the code under test resolves. When the test entry is absent the
+/// stage passes immediately — a project with no test entry is not an error.
+/// When it exists, the test runner is compiled to a temporary output directory,
+/// the emitted Rust project is built with `cargo build`, and the resulting
+/// `ipe-app` binary is executed. A non-zero exit from the binary (propagated by
+/// `Ipe.Test.runMain`) is reported as a stage failure.
 fn verify_test(path: Option<&str>) -> Result<(), CliError> {
     // Resolve the project root from the supplied path (or cwd defaults).
     let entry_path = match path {
@@ -3333,20 +3460,33 @@ fn verify_test(path: Option<&str>) -> Result<(), CliError> {
         None => PathBuf::from(default_entry()?),
     };
 
-    // Determine the directory that is the project root: a manifest directory,
-    // or the parent of the supplied .ipe file.
+    // Resolve the project root and the source root (the `src/` tree the code
+    // under test lives in). With a manifest, both come from it — the manifest's
+    // directory and its declared `src_root` (honouring a `srcDir` override).
+    // Without a manifest, the entry's own directory is the source root, and the
+    // project root is the source root's parent when the entry lives under a
+    // conventional `src/` directory (so `src/Main.ipe`'s sibling `tests/` tree
+    // is at `<project-root>/tests`, not `src/tests`); otherwise the entry's
+    // directory is itself the project root (a flat single-directory project).
     let manifest = discover_manifest(&entry_path)?;
-    let project_root: PathBuf = manifest.as_ref().map_or_else(
-        || {
-            entry_path
+    let (project_root, project_src_root): (PathBuf, PathBuf) = if let Some(m) = manifest.as_ref() {
+        let root = m
+            .parent()
+            .map_or_else(|| PathBuf::from("."), Path::to_path_buf);
+        (root, project::parse_manifest(m)?.src_root)
+    } else {
+        let src_root = entry_path
+            .parent()
+            .map_or_else(|| PathBuf::from("."), Path::to_path_buf);
+        let root = if src_root.file_name().and_then(|n| n.to_str()) == Some("src") {
+            src_root
                 .parent()
                 .map_or_else(|| PathBuf::from("."), Path::to_path_buf)
-        },
-        |m| {
-            m.parent()
-                .map_or_else(|| PathBuf::from("."), Path::to_path_buf)
-        },
-    );
+        } else {
+            src_root.clone()
+        };
+        (root, src_root)
+    };
 
     let test_entry = project_root.join("tests").join("Main.ipe");
     if !test_entry.is_file() {
@@ -3365,9 +3505,18 @@ fn verify_test(path: Option<&str>) -> Result<(), CliError> {
     // collide and the output is never confused with the project's own `out/`.
     let out_dir = std::env::temp_dir().join(format!("ipe_verify_test_{}", std::process::id()));
 
-    // Build the test entry. On any compile failure the stage propagates that
-    // error directly — the error is already a well-formed `CliError`.
-    build_with_sibling_discovery(&test_entry, &out_dir, &runtime_dir)?;
+    // Build the test entry. When the project has a `src/` tree, the test entry
+    // is built against BOTH it (the code under test) and the `tests/` tree (its
+    // test-only siblings), so a `tests/Main.ipe` importing `Lib.Foo` from
+    // `src/Lib/Foo.ipe` resolves. A `tests/`-only project with no `src/` (a
+    // standalone test) falls back to sibling discovery rooted at `tests/`. On
+    // any compile failure the stage propagates that error directly — the error
+    // is already a well-formed `CliError`.
+    if project_src_root.is_dir() {
+        build_test_with_project_sources(&project_src_root, &test_entry, &out_dir, &runtime_dir)?;
+    } else {
+        build_with_sibling_discovery(&test_entry, &out_dir, &runtime_dir)?;
+    }
 
     // Compile the emitted Rust project.
     let cargo_status = std::process::Command::new(cargo_bin.path())
@@ -4661,6 +4810,99 @@ main =
             result.is_ok(),
             "two-module program must compile via sibling discovery: {:?}",
             result.err()
+        );
+        let _ = fs::remove_dir_all(&tmp);
+    }
+
+    /// `ipe verify`'s test-stage build: a `tests/Main.ipe` that imports a module
+    /// living under `src/Lib/` must resolve the `src/` code under test, not fail
+    /// with IPE-N0020. This is the standard `src/` + `tests/` layout the naive
+    /// entry-parent source root cannot see across.
+    #[test]
+    fn test_stage_build_resolves_src_modules_from_tests_dir() {
+        let runtime = resolve_runtime();
+        let Ok(runtime) = runtime else { return };
+
+        let tmp = std::env::temp_dir().join("ipec_verify_test_stage_src_disc");
+        let _ = fs::remove_dir_all(&tmp);
+        let src = tmp.join("src");
+        let tests = tmp.join("tests");
+        fs::create_dir_all(src.join("Lib")).expect("create src/Lib/");
+        fs::create_dir_all(&tests).expect("create tests/");
+
+        // Code under test: src/Lib/Foo.ipe (a multi-segment module referenced
+        // via an alias, the way real projects import a nested module).
+        fs::write(
+            src.join("Lib").join("Foo.ipe"),
+            "module Lib.Foo exposing (answer)\nanswer = 42\n",
+        )
+        .expect("write src/Lib/Foo.ipe");
+
+        // A src entry that also uses the library (mirrors a real project).
+        fs::write(
+            src.join("Main.ipe"),
+            "module Main exposing (main)\nimport Lib.Foo as Foo\nimport Ipe.Io as Io\nimport Ipe.String as String\nmain = Io.println (String.fromInt Foo.answer)\n",
+        )
+        .expect("write src/Main.ipe");
+
+        // Test entry in the sibling tests/ directory imports the src/ module.
+        fs::write(
+            tests.join("Main.ipe"),
+            "module Main exposing (main)\nimport Lib.Foo as Foo\nimport Ipe.Io as Io\nimport Ipe.String as String\nmain = Io.println (String.fromInt Foo.answer)\n",
+        )
+        .expect("write tests/Main.ipe");
+
+        let out = tmp.join("out");
+        let result = build_test_with_project_sources(&src, &tests.join("Main.ipe"), &out, &runtime);
+        assert!(
+            result.is_ok(),
+            "the test stage must resolve src/ modules from tests/ (no IPE-N0020): {:?}",
+            result.err()
+        );
+        let _ = fs::remove_dir_all(&tmp);
+    }
+
+    /// The test-stage source collection unions the `src/` and `tests/` trees
+    /// with the correct per-root relativisation: `src/Lib/Foo.ipe` → `Lib.Foo`,
+    /// `tests/Main.ipe` → `Main`, and the entry is the test module. This is the
+    /// resolution the build depends on, asserted without a runtime.
+    #[test]
+    fn collect_test_sources_unions_src_and_tests_trees() {
+        let tmp = std::env::temp_dir().join("ipec_collect_test_sources_union");
+        let _ = fs::remove_dir_all(&tmp);
+        let src = tmp.join("src");
+        let tests = tmp.join("tests");
+        fs::create_dir_all(src.join("Lib")).expect("create src/Lib/");
+        fs::create_dir_all(&tests).expect("create tests/");
+        fs::write(
+            src.join("Lib").join("Foo.ipe"),
+            "module Lib.Foo exposing (answer)\nanswer = 42\n",
+        )
+        .expect("write src/Lib/Foo.ipe");
+        fs::write(
+            tests.join("Main.ipe"),
+            "module Main exposing (main)\nimport Lib.Foo as Foo\nmain = Foo.answer\n",
+        )
+        .expect("write tests/Main.ipe");
+
+        let collected = collect_test_sources(&src, &tests.join("Main.ipe"))
+            .expect("collect_test_sources must succeed");
+
+        assert_eq!(
+            collected.entry_module_path,
+            vec!["Main".to_owned()],
+            "the entry is the test module"
+        );
+        assert!(
+            collected
+                .sources
+                .contains_key(&vec!["Lib".to_owned(), "Foo".to_owned()]),
+            "src/Lib/Foo.ipe must be present as Lib.Foo, got keys: {:?}",
+            collected.sources.keys().collect::<Vec<_>>()
+        );
+        assert!(
+            collected.sources.contains_key(&vec!["Main".to_owned()]),
+            "the test entry must be present as Main"
         );
         let _ = fs::remove_dir_all(&tmp);
     }
