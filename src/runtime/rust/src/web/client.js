@@ -361,7 +361,11 @@ function __ipeCopyAttrsExceptAuthority(src, dst) {
 // and the server's full-HTML fallback path. Routes through the
 // node-preservation splicer so keystrokes never land on a destroyed
 // DOM node.
-function __ipePatch(t) {
+//
+// A live re-render of the current page preserves the reader's scroll
+// offset; a navigation to a new page starts at the top. Pass
+// mode === "nav" for the navigation case; the default preserves scroll.
+function __ipePatch(t, mode) {
   var root = document.getElementById("ipe-root");
   if (!root) return;
   // Strip the full-document envelope when present (ipe-nav fetches
@@ -371,7 +375,14 @@ function __ipePatch(t) {
   if (m) t = m[1];
   var scrollX = window.scrollX, scrollY = window.scrollY;
   __ipeReplaceHTMLPreservingFocus(root, t);
-  window.scrollTo(scrollX, scrollY);
+  // behavior:"instant" keeps this housekeeping scroll a synchronous jump
+  // even under a global `scroll-behavior: smooth`, which would otherwise
+  // animate every restore and fight the caret on per-keystroke re-renders.
+  if (mode === "nav") {
+    window.scrollTo({ left: 0, top: 0, behavior: "instant" });
+  } else {
+    window.scrollTo({ left: scrollX, top: scrollY, behavior: "instant" });
+  }
   __ipeBindEvents(document);
   __ipeRunPaths(root);
   __ipeReviveScripts(root);
@@ -1121,8 +1132,12 @@ function __ipeExtractArgs(ev) {
 document.addEventListener("change", function(ev) {
   var el = ev.target;
   if (!el || el.tagName !== "INPUT" || el.type !== "file") return;
-  var fileId  = el.getAttribute("data-ipe-ev-ipe-file");
-  var imageId = el.getAttribute("data-ipe-ev-ipe-image");
+  // The data-attr value is the EVENT NAME (ipe-file / ipe-image); the
+  // handler is resolved server-side by (handlerId, event), so the id
+  // travels in data-ipe-hid — the same wire shape click/submit use.
+  var fileEv  = el.getAttribute("data-ipe-ev-ipe-file");
+  var imageEv = el.getAttribute("data-ipe-ev-ipe-image");
+  var hid     = el.getAttribute("data-ipe-hid");
   var f = el.files && el.files[0];
   if (!f) return;
   // Client-side size guard via fileMaxSize. Saves the round-trip when
@@ -1141,21 +1156,21 @@ document.addEventListener("change", function(ev) {
     el.value = "";  // clear the input so the user can pick another
     return;
   }
-  if (fileId) {
+  if (fileEv) {
     var r = new FileReader();
     // __ipeSend's args param is List a on the wire (server expects
     // []json.RawMessage); a bare string would unmarshal-fail. Wrap
     // the data URL in a single-element array — the Ipe-side Msg
     // constructor declared as 'String -> Msg' reads args[0].
-    r.onload = function(e) { __ipeSend(fileId, [e.target.result]); };
+    r.onload = function(e) { __ipeSend(fileEv, [e.target.result], hid); };
     r.readAsDataURL(f);
   }
-  if (imageId) {
+  if (imageEv) {
     var maxW = parseInt(el.getAttribute("data-ipe-ev-ipe-file-max-width")  || "1200");
     var maxH = parseInt(el.getAttribute("data-ipe-ev-ipe-file-max-height") || "1200");
     __ipeResizeImage(f, maxW, maxH, function(dataUrl) {
       // Same wire-format reason as the onFile branch — wrap in array.
-      __ipeSend(imageId, [dataUrl]);
+      __ipeSend(imageEv, [dataUrl], hid);
     });
   }
 });
@@ -1177,12 +1192,22 @@ function __ipeResizeImage(file, maxW, maxH, cb) {
 }
 
 // Expose programmatic dispatch for custom JS integrations (e.g. Firebase
-// auth callbacks that need to send a Msg after the SDK resolves).
-window.__ipe_send = function(id, value, opts) { __ipeSend(id, value, opts); };
+// auth callbacks that need to send a Msg after the SDK resolves). The
+// contract is (handlerId, value, options): a caller targets a specific
+// registered handler by id, so the id maps to __ipeSend's handlerId slot
+// (not msgName) and value maps to args.
+window.__ipe_send = function(id, value, opts) { __ipeSend("", value, id, opts); };
 // ipe-nav: intercept clicks on <a ipe-nav ...> links so navigation is a
 // client-side fetch + innerHTML swap instead of a full page reload.
 // Falls back to normal navigation on modifier keys (cmd/ctrl/shift/alt),
 // middle-click, and non-GET targets.
+//
+// The last document location the client actually rendered. popstate has no
+// access to the prior URL, so tracking it here lets the popstate handler
+// tell a pure in-page fragment jump from a real path/query change.
+var __ipeNavPath   = window.location.pathname;
+var __ipeNavSearch = window.location.search;
+var __ipeNavHref   = window.location.href;
 document.addEventListener("click", function(ev) {
   if (ev.defaultPrevented) return;
   if (ev.button !== 0) return;
@@ -1202,15 +1227,31 @@ document.addEventListener("click", function(ev) {
   fetch(href, { headers: { "X-Ipe-Nav": "1" }, credentials: "same-origin" })
     .then(function(r) { return r.text(); })
     .then(function(t) {
-      __ipePatch(t);
+      __ipePatch(t, "nav");
       window.history.pushState({}, "", href);
+      __ipeNavPath   = window.location.pathname;
+      __ipeNavSearch = window.location.search;
+      __ipeNavHref   = window.location.href;
     })
     .catch(function() { window.location.href = href; });
 });
 window.addEventListener("popstate", function() {
-  fetch(window.location.href, { headers: { "X-Ipe-Nav": "1" }, credentials: "same-origin" })
+  // A pure fragment change (same path + query, only the hash differs) is
+  // an in-page anchor jump: let the browser scroll to the target natively.
+  // Re-fetching + restoring the pre-jump offset would freeze a smooth
+  // in-page scroll mid-animation, so only re-fetch on a path/query change.
+  var here = window.location;
+  if (here.href === __ipeNavHref) return;
+  if (here.pathname === __ipeNavPath && here.search === __ipeNavSearch) {
+    __ipeNavHref = here.href;
+    return;
+  }
+  __ipeNavPath = here.pathname;
+  __ipeNavSearch = here.search;
+  __ipeNavHref = here.href;
+  fetch(here.href, { headers: { "X-Ipe-Nav": "1" }, credentials: "same-origin" })
     .then(function(r) { return r.text(); })
-    .then(__ipePatch);
+    .then(function(t) { __ipePatch(t, "nav"); });
 });
 // ── Status banner (connection state) ─────────────────────────
 // Single bottom-pinned element rendered by the runtime (NOT by the
