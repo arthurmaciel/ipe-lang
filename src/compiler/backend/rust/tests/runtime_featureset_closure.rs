@@ -77,7 +77,7 @@ use ipe_ir::{ModPath, Module, Program};
 /// closure covers exactly the programs the module closure does. The proof is
 /// per-flag + monotone + composed (see the module docs), NOT a `2^FLAG_COUNT`
 /// enumeration — it scales to a far larger flag count in linear time.
-const FLAG_COUNT: usize = 25;
+const FLAG_COUNT: usize = 27;
 
 /// How many random full masks the backstop [`sampled_full_masks_are_closed`]
 /// exercises, on top of the deterministic corners. Bounded so the sample cost
@@ -190,6 +190,12 @@ fn module_for_mask(name: ipe_intern::Symbol, mask: u32) -> Module {
         uses_log: f(22),
         uses_decimal: f(23),
         uses_char_category: f(24),
+        // `uses_crypto_core` / `uses_secret` are pure surfaces (no reactor) — like
+        // `crypto`/`encoding`, NOT in the async union. `uses_crypto_core` drives
+        // `reaches_crypto_core` (the crypto-floor feature); `uses_secret` gates
+        // `secret.rs` and implies `crypto-core` (shared `subtle`).
+        uses_crypto_core: f(25),
+        uses_secret: f(26),
         uses_crypto: f(15),
         uses_jwt: f(16),
         uses_url: f(17),

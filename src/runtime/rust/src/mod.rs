@@ -63,18 +63,22 @@ pub mod config;
 pub mod config_decode;
 pub mod core;
 
-// The always-on cryptographic floor: the entropy pair, the SHA-2 hash/HMAC
-// family, the RSA sign/verify pair, the typed `Key`/`Mac` newtypes and the
-// constant-time compare. Declared unconditionally, mirroring the emitted floor
-// (`templates/ipe_runtime/mod.rs` declares `pub mod crypto_core;` for every
-// program): jwt/auth/db/web/email rely on this floor at `--no-default-features`.
-// The heavy RSA arms inside the module stay `cfg(feature = "crypto")`; wasm32
-// compiles the entropy pair + pure hash family.
+// The cryptographic floor: the entropy pair, the SHA-2 hash/HMAC family, the RSA
+// sign/verify pair, the typed `Key`/`Mac` newtypes and the constant-time compare.
+// Behind the `crypto-core` feature (`sha2`/`hmac`/`subtle`/`getrandom`): a
+// program that reaches no crypto-floor kernel — and no crypto/jwt/db/web/webview/
+// email/server surface that reaches the floor (each of those features implies
+// `crypto-core`) — drops the module and its subtree. The heavy RSA arms inside
+// the module stay `cfg(feature = "crypto")`; wasm32 (`wasm-client` implies
+// `crypto-core`) compiles the entropy pair + pure hash family.
+#[cfg(feature = "crypto-core")]
 pub mod crypto_core;
 // Floor re-export, mirroring the emitted `pub use crypto_core::*` — the SHA-2 /
 // HMAC family, entropy pair, and typed Key/Mac are reachable at the crate root
-// with `--no-default-features`. When `crypto` is on, `crypto.rs` re-exports the
-// same items again; a glob of identical items is not ambiguous.
+// when `crypto-core` is on. When `crypto` is on it implies `crypto-core`, and
+// `crypto.rs` re-exports the same items again; a glob of identical items is not
+// ambiguous.
+#[cfg(feature = "crypto-core")]
 pub use crypto_core::*;
 // wasm32: `crypto_random_bytes`/`crypto_random_token` (the browser entropy
 // substitute) plus the pure hash family compile without the native-only AEAD
@@ -86,6 +90,17 @@ pub use crypto_core::*;
     all(target_arch = "wasm32", feature = "wasm-client")
 ))]
 pub mod crypto;
+// Heavy-crypto glob re-export — the legacy `crypto_sha1` / `crypto_md5` checksums
+// and the AEAD/PBKDF2 kernels are named unqualified at the crate root by emitted
+// user bodies (`Crypto.sha1` → `crypto_sha1`), so the glob must surface them.
+// Gated on the same `crypto` feature as the module. `crypto.rs` also re-globs the
+// `crypto_core` floor; when both are on, a glob of identical items is not
+// ambiguous.
+#[cfg(any(
+    feature = "crypto",
+    all(target_arch = "wasm32", feature = "wasm-client")
+))]
+pub use crypto::*;
 pub mod file;
 // `log` is behind the `log` feature: `log.rs`'s native RFC3339-nano timestamp is
 // the one always-emittable `chrono` consumer, so a program that reaches no
@@ -282,11 +297,15 @@ pub mod uuid_kernel;
 #[cfg(feature = "uuid")]
 pub use uuid_kernel::*;
 
-// `Ipe.Secret` — opaque secret-string wrapper. Always
-// compiled (no cfg gate): a plain newtype over `String` with only `subtle` /
-// `zeroize` as deps (both non-optional base deps), so every feature subset
-// gets the type.
+// `Ipe.Secret` — opaque secret-string wrapper. Behind the `secret` feature (its
+// `zeroize`-on-`Drop` buffer + `subtle` compare): a program that reaches no
+// `Secret.*` kernel and holds no `Secret`-typed value drops the module and
+// `zeroize`. `secret` implies `crypto-core` for the shared `subtle`. The JWT/Auth
+// surface reaches it (its `Algorithm` is a `secret::Secret`), so `jwt` implies
+// `secret`.
+#[cfg(feature = "secret")]
 pub mod secret;
+#[cfg(feature = "secret")]
 pub use secret::*;
 
 // Canonical HTTP header-name casing, shared by Ipe.Web, Ipe.Http.Server AND

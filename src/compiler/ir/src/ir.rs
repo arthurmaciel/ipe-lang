@@ -192,6 +192,28 @@ pub struct Module {
     /// A program that reaches only the std-only `Ipe.Char` kernels (or none) drops
     /// the crate; those std kernels stay in the always-compiled `char_kernel.rs`.
     pub uses_char_category: bool,
+    /// `true` when the lowerer detected at least one crypto-FLOOR kernel call
+    /// (SHA-2 hash, the HMAC family, RSA sign/verify, constant-time compare, the
+    /// entropy pair, or a `Key`/`Mac` newtype kernel).
+    ///
+    /// Set by `ipe_lower` when any call site resolves to a
+    /// `KernelFn::is_crypto_core()` variant. The backend folds this flag with the
+    /// crypto/jwt/db/web/webview/email/server surfaces (`reaches_crypto_core`) to
+    /// select the `crypto-core` runtime feature — `crypto_core.rs` plus its
+    /// `sha2`, `hmac`, `subtle`, and `getrandom` dependencies. A program that
+    /// reaches none of these drops the module and that whole subtree (the biggest
+    /// single crate drop of the feature-split campaign).
+    pub uses_crypto_core: bool,
+    /// `true` when the lowerer detected at least one `Ipe.Secret` kernel call
+    /// (`Secret.fromString`/`reveal`/`redacted`) OR a `Secret`-typed value in a
+    /// function signature.
+    ///
+    /// Set by `ipe_lower` (call site via `KernelFn::is_secret()`, or the
+    /// `Secret` type-mention guard). The backend reads this flag to select the
+    /// `secret` runtime feature — `secret.rs` plus its `zeroize` dependency (and,
+    /// via the shared `subtle`, `crypto-core`). A program that reaches no `Secret`
+    /// kernel and holds no `Secret` value drops the module and `zeroize`.
+    pub uses_secret: bool,
     /// `true` when the lowerer detected at least one HEAVY `Ipe.Crypto` kernel
     /// call (legacy SHA-1/MD5, AES-GCM / ChaCha20-Poly1305 AEAD, or PBKDF2
     /// key derivation).
@@ -200,10 +222,9 @@ pub struct Module {
     /// `KernelFn::is_crypto()` variant. The backend reads this flag to decide
     /// whether to declare `pub mod crypto; pub use crypto::*;` in the emitted
     /// `ipe_runtime/mod.rs` and add the `sha1` + `md-5` + `aes-gcm` +
-    /// `chacha20poly1305` + `pbkdf2` dependencies. The always-on `crypto_core`
-    /// floor (SHA-2, HMAC, RSA, constant-time compare, the entropy pair, the
-    /// `Key`/`Mac` newtypes) stays in the base module set, so no other `uses_*`
-    /// flag forces `crypto` on.
+    /// `chacha20poly1305` + `pbkdf2` dependencies. The `crypto` feature implies
+    /// `crypto-core`, so the floor (SHA-2, HMAC, RSA, constant-time compare, the
+    /// entropy pair, the `Key`/`Mac` newtypes) rides along transitively.
     pub uses_crypto: bool,
     /// `true` when the lowerer detected at least one `Ipe.Jwt` kernel call
     /// (`Jwt.encodeHs256` / `decodeHs256` / … or a builder-API kernel).
@@ -3830,6 +3851,8 @@ mod tests {
                 uses_log: false,
                 uses_decimal: false,
                 uses_char_category: false,
+                uses_crypto_core: false,
+                uses_secret: false,
                 uses_crypto: false,
                 uses_jwt: false,
                 uses_url: false,
@@ -4342,6 +4365,8 @@ mod serde_persistence_tests {
                 uses_log: false,
                 uses_decimal: false,
                 uses_char_category: false,
+                uses_crypto_core: false,
+                uses_secret: false,
                 uses_crypto: false,
                 uses_jwt: false,
                 uses_url: false,
@@ -4426,6 +4451,8 @@ mod serde_persistence_tests {
                 uses_log: false,
                 uses_decimal: false,
                 uses_char_category: false,
+                uses_crypto_core: false,
+                uses_secret: false,
                 uses_crypto: false,
                 uses_jwt: false,
                 uses_url: false,

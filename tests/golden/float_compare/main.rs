@@ -192,12 +192,6 @@ pub fn file_copy(src: ipe_runtime::path::Path, dst: ipe_runtime::path::Path) -> 
 pub fn file_rename(src: ipe_runtime::path::Path, dst: ipe_runtime::path::Path) -> IpeTask<()> {
     ipe_runtime::file::file_rename(src, dst)
 }
-pub fn crypto_random_bytes(n: i64) -> IpeTask<String> {
-    ipe_runtime::crypto_core::crypto_random_bytes(n)
-}
-pub fn crypto_random_token(n: i64) -> IpeTask<String> {
-    ipe_runtime::crypto_core::crypto_random_token(n)
-}
 
 pub fn main_bigger() -> bool {
     static CELL: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
