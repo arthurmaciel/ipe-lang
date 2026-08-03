@@ -126,7 +126,10 @@ fn wrap_unwrap_program(interner: &mut Interner) -> DResult<Program> {
         type_params: vec![(a, BoundSet::UNBOUNDED)],
         params: vec![(x, IrType::Generic(a))],
         ret: value_record(value, IrType::Generic(a)),
-        body: Expr::Record(vec![(value, Expr::Var(x))]),
+        body: Expr::Record {
+            fields: vec![(value, Expr::Var(x))],
+            ty: None,
+        },
     };
     // unwrap : { value : b } -> b ; unwrap r = r.value
     let unwrap_fn = Func {
@@ -251,7 +254,10 @@ fn merges_generic_and_concrete_field_set() -> DResult<()> {
         type_params: vec![(a, BoundSet::UNBOUNDED)],
         params: vec![(x, IrType::Generic(a))],
         ret: value_record(value, IrType::Generic(a)),
-        body: Expr::Record(vec![(value, Expr::Var(x))]),
+        body: Expr::Record {
+            fields: vec![(value, Expr::Var(x))],
+            ty: None,
+        },
     };
     // mkBox : Int -> { value : Int } ; mkBox n = { value = n }
     let mk_box_fn = Func {
@@ -261,7 +267,10 @@ fn merges_generic_and_concrete_field_set() -> DResult<()> {
         type_params: vec![],
         params: vec![(n, IrType::Int)],
         ret: value_record(value, IrType::Int),
-        body: Expr::Record(vec![(value, Expr::Var(n))]),
+        body: Expr::Record {
+            fields: vec![(value, Expr::Var(n))],
+            ty: None,
+        },
     };
     let prog = program(main_mod, vec![wrap_fn, mk_box_fn], vec![], None);
     let out = emit(&interner, &prog)?;
@@ -311,7 +320,10 @@ fn two_type_parameter_record() -> DResult<()> {
         type_params: vec![(a, BoundSet::UNBOUNDED), (b, BoundSet::UNBOUNDED)],
         params: vec![(x, IrType::Generic(a)), (y, IrType::Generic(b))],
         ret: rec,
-        body: Expr::Record(vec![(first, Expr::Var(x)), (second, Expr::Var(y))]),
+        body: Expr::Record {
+            fields: vec![(first, Expr::Var(x)), (second, Expr::Var(y))],
+            ty: None,
+        },
     };
     let prog = program(main_mod, vec![pair_fn], vec![], None);
     let out = emit(&interner, &prog)?;
@@ -354,7 +366,10 @@ fn monomorphic_record_stays_byte_identical() -> DResult<()> {
         type_params: vec![],
         params: vec![(n, IrType::Int)],
         ret: value_record(value, IrType::Int),
-        body: Expr::Record(vec![(value, Expr::Var(n))]),
+        body: Expr::Record {
+            fields: vec![(value, Expr::Var(n))],
+            ty: None,
+        },
     };
     let prog = program(main_mod, vec![mk_box_fn], vec![], None);
     let out = emit(&interner, &prog)?;

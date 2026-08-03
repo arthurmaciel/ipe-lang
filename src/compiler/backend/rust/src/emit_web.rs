@@ -84,7 +84,7 @@ pub fn emit_web_call(
             // Unreachable for well-typed source: a non-literal cfg is rejected
             // at lower with IPE-L0119 (Feature::LetBoundAppCfg); this guard is a
             // defensive invariant, mirroring the `WebAppRouted` precedent.
-            let Expr::Record(fields) = cfg_e else {
+            let Expr::Record { fields, .. } = cfg_e else {
                 return Err(Diagnostic::CompilerBug {
                     where_: "ipe_backend_rust::emit_web_call::WebApp",
                     detail: "Web.app cfg must be an inline record literal; \
@@ -110,7 +110,7 @@ pub fn emit_web_call(
                     detail: format!("Web.appRouted requires 1 argument, got {}", args.len()),
                 });
             };
-            let Expr::Record(fields) = cfg_e else {
+            let Expr::Record { fields, .. } = cfg_e else {
                 return Err(Diagnostic::CompilerBug {
                     where_: "ipe_backend_rust::emit_web_call::WebAppRouted",
                     detail: "Web.appRouted cfg must be an inline record literal; \
@@ -879,42 +879,45 @@ mod schema_tag_tests {
         let [init_sym, update_sym, view_sym, subs_sym] = syms;
         let cmd_int = || IrType::Cmd(Box::new(IrType::Int));
         let pair = || IrType::Tuple(vec![model.clone(), cmd_int()]);
-        Expr::Record(vec![
-            (
-                init_sym,
-                func_value(0, IrType::Fun(vec![IrType::WebReq], Box::new(pair()))),
-            ),
-            (
-                update_sym,
-                func_value(
-                    1,
-                    IrType::Fun(vec![IrType::Int, model.clone()], Box::new(pair())),
+        Expr::Record {
+            ty: None,
+            fields: vec![
+                (
+                    init_sym,
+                    func_value(0, IrType::Fun(vec![IrType::WebReq], Box::new(pair()))),
                 ),
-            ),
-            (
-                view_sym,
-                func_value(
-                    2,
-                    IrType::Fun(
-                        vec![model.clone()],
-                        Box::new(IrType::Ui {
-                            ctor: UiCtor::Html,
-                            msg: Box::new(IrType::Int),
-                        }),
+                (
+                    update_sym,
+                    func_value(
+                        1,
+                        IrType::Fun(vec![IrType::Int, model.clone()], Box::new(pair())),
                     ),
                 ),
-            ),
-            (
-                subs_sym,
-                func_value(
-                    3,
-                    IrType::Fun(
-                        vec![model.clone()],
-                        Box::new(IrType::Sub(Box::new(IrType::Int))),
+                (
+                    view_sym,
+                    func_value(
+                        2,
+                        IrType::Fun(
+                            vec![model.clone()],
+                            Box::new(IrType::Ui {
+                                ctor: UiCtor::Html,
+                                msg: Box::new(IrType::Int),
+                            }),
+                        ),
                     ),
                 ),
-            ),
-        ])
+                (
+                    subs_sym,
+                    func_value(
+                        3,
+                        IrType::Fun(
+                            vec![model.clone()],
+                            Box::new(IrType::Sub(Box::new(IrType::Int))),
+                        ),
+                    ),
+                ),
+            ],
+        }
     }
 
     /// The emitted `web_app(...)` call carries the compile-time Model schema

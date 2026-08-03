@@ -90,7 +90,7 @@ pub fn emit_tui_call(
             // Unreachable for well-typed source: a non-literal cfg is rejected
             // at lower with IPE-L0119 (Feature::LetBoundAppCfg); this guard is a
             // defensive invariant, mirroring the `WebAppRouted` precedent.
-            let Expr::Record(fields) = cfg_e else {
+            let Expr::Record { fields, .. } = cfg_e else {
                 return Err(Diagnostic::CompilerBug {
                     where_: "ipe_backend_rust::emit_tui_call::TerminalAppScreen",
                     detail: "Terminal.appScreen cfg must be an inline record literal; \
@@ -283,9 +283,11 @@ fn on_key_struct_literal(
         .collect::<DResult<_>>()?;
     fields.sort_by(|a, b| a.0.cmp(&b.0));
 
-    // Look up the Rust struct name for this record shape (uses sorted field names).
+    // Look up the Rust struct name for this record shape. The full field map is
+    // the disambiguating shape when the name set is shared by two structs.
     let field_names: Vec<String> = fields.iter().map(|(n, _)| n.clone()).collect();
-    let struct_name = ctx.record_name_for_literal(&field_names)?;
+    let shape = IrType::Record(rec_fields.clone());
+    let struct_name = ctx.record_name_for_literal(&field_names, Some(&shape))?;
 
     // Build the struct-literal body, mapping runtime params + zero defaults.
     let mut init_parts: Vec<String> = Vec::with_capacity(fields.len());

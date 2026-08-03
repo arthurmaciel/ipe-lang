@@ -241,7 +241,7 @@ fn walk_expr(
         } => {
             walk_expr(list, direct_calls, types);
         }
-        Expr::Record(fields) => {
+        Expr::Record { fields, .. } => {
             for (_, value) in fields {
                 walk_expr(value, direct_calls, types);
             }
