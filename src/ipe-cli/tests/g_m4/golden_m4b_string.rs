@@ -164,27 +164,26 @@ fn string_split_empty_sep_unicode_five_runes() {
     assert_runs_and_matches_oracle("string_split_empty_unicode");
 }
 
-// ── String.toInt — NO trim (Go's observable `String_toInt`, Elm semantics) ─────
+// ── String.toInt — trims surrounding Unicode whitespace ────────────────────────
 
-/// `String.toInt " 42 "` → `Nothing`. The Go reference's emitted path is
-/// `strconv.Atoi(s)` (no `TrimSpace`), so surrounding whitespace fails the
-/// parse — matching Elm. The golden oracle pins `Nothing`.
+/// `String.toInt " 42 "` → `Just 42` (printed `42`). Leading and trailing
+/// Unicode whitespace is trimmed before parsing, consistent with `toFloat`.
 #[test]
-fn string_to_int_surrounding_space_is_nothing() {
+fn string_to_int_surrounding_space_trims() {
     assert_runs_and_matches_oracle("string_to_int_trim");
 }
 
-/// `String.toInt "1 "` → `Nothing` — a single trailing space is enough to fail
-/// the parse (no trim).
+/// `String.toInt "1 "` → `Just 1` (printed `1`) — a single trailing space is
+/// trimmed away before the parse.
 #[test]
-fn string_to_int_trailing_space_is_nothing() {
+fn string_to_int_trailing_space_trims() {
     assert_runs_and_matches_oracle("string_to_int_trailing");
 }
 
-// ── String.toFloat — DOES trim (Go's `String_toFloat` = ParseFloat(TrimSpace)) ─
+// ── String.toFloat — trims surrounding Unicode whitespace ──────────────────────
 
-/// `String.toFloat " 1.5 "` → `Just 1.5` (printed `1.5`). Unlike `toInt`, Go's
-/// float path trims surrounding whitespace; the golden oracle pins `1.5`.
+/// `String.toFloat " 1.5 "` → `Just 1.5` (printed `1.5`). Leading and trailing
+/// Unicode whitespace is trimmed before parsing, consistent with `toInt`.
 #[test]
 fn string_to_float_surrounding_space_is_just() {
     assert_runs_and_matches_oracle("string_to_float_trim");
