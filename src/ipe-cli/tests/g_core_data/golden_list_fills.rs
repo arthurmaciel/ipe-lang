@@ -2,7 +2,8 @@
 //! Elm-matching results.
 //!
 //! Exercises `List.sum` / `product` / `maximum` / `minimum` / `singleton` /
-//! `repeat` / `intersperse` / `partition` / `unzip` / `sort` / `sortWith` in
+//! `repeat` / `intersperse` / `partition` / `unzip` / `sort` / `sortWith` /
+//! `sortBy` / `filterMap` / `unique` in
 //! one program (`tests/golden/list_fills/Main.ipe`), building and running the
 //! emitted binary and asserting the stdout line — the SEAL guarantee (ipe exit
 //! 0 ⇒ emitted Rust builds and runs) plus behaviour parity with `elm/core`.
@@ -60,6 +61,8 @@ fn list_fills_run_with_parity() {
     // sum (singleton 7)=7; sum (repeat 4 2)=8; length (intersperse 0 [1,2,3])=5;
     // length (fst (partition (>3)))=4; unzip key-sum=6, val-sum=60;
     // head (sort)=1; head (sortWith descending)=9;
-    // sum (map2 (+) [1,2,3] [10,20])=33; sum (map3 (+) …)=333.
-    assert_eq!(out.stdout.trim(), "31 24 9 1 7 8 5 4 6 60 1 9 33 333");
+    // sum (map2 (+) [1,2,3] [10,20])=33; sum (map3 (+) …)=333;
+    // head (sortBy negate)=9; sum (filterMap halve-evens [4,2,6]→[2,1,3])=6;
+    // sum (unique [1,1,2,3,2,1]→[1,2,3])=6.
+    assert_eq!(out.stdout.trim(), "31 24 9 1 7 8 5 4 6 60 1 9 33 333 9 6 6");
 }

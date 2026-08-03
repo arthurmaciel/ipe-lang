@@ -1,20 +1,10 @@
--- | Ipe.List — list combinators (subset).
+-- | Ipe.List — list combinators.
 --
--- v0.13 Layer 3 / Phase B3: Ipe source for the non-HOF
--- combinators.  HOFs (`map`, `filter`, `foldl`, `foldr`,
--- `concatMap`, `filterMap`, `indexedMap`, `find`, `any`, `all`,
--- `sortBy`) stay kernel-anchored for now because Ipe lambdas
--- always lower to `func(any) any` and cross-module HOF param
--- positions need typed lambda lowering to round-trip cleanly
--- through `splitInferredSigWithReg`'s rendering (Limitation #18 /
--- Gap 4 territory).  Migrating them surfaces "cannot infer T2"
--- at call sites because the recursive body uses fn's any-typed
--- return.
---
--- This phase ships the non-HOF surface: nullable accessors
--- (head, tail), arithmetic predicates (isEmpty, member, length),
--- non-HOF traversals (reverse, take, drop, append, concat, range,
--- zip), and cons.
+-- The definitions below are the readable reference for each member; the
+-- executable implementations are the native kernels resolved by the `List`
+-- qualifier (`src/runtime/rust/src/list.rs`), so this source is parsed but
+-- never itself compiled. Keeping the bodies here documents the exact
+-- Elm-matching semantics next to the surface a user imports.
 module Ipe.List exposing
     ( isEmpty
     , length
@@ -38,6 +28,13 @@ module Ipe.List exposing
     , foldr
     , concatMap
     , indexedMap
+    , filterMap
+    , sortBy
+    , sortWith
+    , sum
+    , maximum
+    , minimum
+    , unique
     )
 
 
@@ -541,3 +538,115 @@ zipHelp xs ys acc =
 
                 y :: yRest ->
                     zipHelp xRest yRest (( x, y ) :: acc)
+
+
+-- | `filterMap fn list` — apply `fn : a -> Maybe b` to each element and keep
+-- only the `Just` payloads, in order.  Combines `map` and `filter` in one pass.
+filterMap fn list =
+    foldr
+        (\x acc ->
+            case fn x of
+
+                Just y ->
+                    y :: acc
+
+                Nothing ->
+                    acc)
+        []
+        list
+
+
+-- | `sortWith cmp list` — stable sort by a user comparator `cmp : a -> a -> Order`
+-- returning `LT` / `EQ` / `GT`.  Elements that compare `EQ` keep their input
+-- order.  Reference body: insertion sort, inserting AFTER every element the new
+-- one is not `LT` than, which preserves the input order of equal elements.
+sortWith cmp list =
+    foldr (insertWith cmp) [] list
+
+
+insertWith cmp x sorted =
+    case sorted of
+
+        [] ->
+            [ x ]
+
+        y :: rest ->
+            case cmp x y of
+
+                GT ->
+                    y :: insertWith cmp x rest
+
+                _ ->
+                    x :: y :: rest
+
+
+-- | `sortBy keyFn list` — stable ascending sort by the `keyFn elem` projection.
+-- Equal keys keep their input order; `keyFn` is applied once per element.
+sortBy keyFn list =
+    sortWith (\a b -> compare (keyFn a) (keyFn b)) list
+
+
+-- | `sum list` — the additive fold; `sum [] == 0`.
+sum list =
+    foldl (\x acc -> x + acc) 0 list
+
+
+-- | `maximum list` — the largest element, or `Nothing` on the empty list.
+maximum list =
+    case list of
+
+        [] ->
+            Nothing
+
+        x :: rest ->
+            foldl
+                (\y acc ->
+                    if y > acc then
+                        y
+
+                    else
+                        acc)
+                x
+                rest
+                |> Just
+
+
+-- | `minimum list` — the smallest element, or `Nothing` on the empty list.
+minimum list =
+    case list of
+
+        [] ->
+            Nothing
+
+        x :: rest ->
+            foldl
+                (\y acc ->
+                    if y < acc then
+                        y
+
+                    else
+                        acc)
+                x
+                rest
+                |> Just
+
+
+-- | `unique list` — the elements with duplicates removed, keeping the FIRST
+-- occurrence of each and preserving that first-seen order.  Uses `==`, so it
+-- works for any equatable element type.
+unique list =
+    uniqueHelp list [] []
+
+
+uniqueHelp list seen acc =
+    case list of
+
+        [] ->
+            reverseHelp acc []
+
+        x :: rest ->
+            if member x seen then
+                uniqueHelp rest seen acc
+
+            else
+                uniqueHelp rest (x :: seen) (x :: acc)

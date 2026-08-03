@@ -4373,6 +4373,10 @@ impl<'a> Builder<'a> {
             // maximum / minimum : comparable a => List a -> Maybe a — BASE
             // scheme only (Ord obligation layered in `constrain_var_kernel`).
             K::ListMaximum | K::ListMinimum => fun(list(var(0)), maybe(var(0))),
+            // unique : List a -> List a — fully generic (equality-only, tested
+            // with `==` by the runtime; no Ord/Hash obligation, exactly like
+            // `List.member`), so the scheme needs no bounded var.
+            K::ListUnique => fun(list(var(0)), list(var(0))),
             // intersperse : a -> List a -> List a
             K::ListIntersperse => fun(var(0), fun(list(var(0)), list(var(0)))),
             // partition : (a -> Bool) -> List a -> (List a, List a)
@@ -8464,6 +8468,7 @@ mod registry_phase_c_tests {
             K::ListProduct,
             K::ListMaximum,
             K::ListMinimum,
+            K::ListUnique,
             K::ListIntersperse,
             K::ListPartition,
             K::ListUnzip,
