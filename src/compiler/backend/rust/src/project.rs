@@ -94,6 +94,13 @@ encoding = []
 # `#[cfg(feature = "time-core")]` gates the runtime source carries.
 log = []
 time-core = []
+# Declared but inert in this closed wasm template: `rust_decimal` /
+# `unicode-general-category` stay non-optional below and the wasm module set
+# declares `decimal` / `money` / `char_category` by inclusion. These keep rustc's
+# check-cfg quiet for the `#[cfg(feature = "decimal")]` /
+# `#[cfg(feature = "char-category")]` gates the runtime source carries.
+decimal = []
+char-category = []
 # Gates the IANA-zone calendar surface of the always-declared `time` runtime
 # module (the `chrono-tz`-backed helpers). Promoted into `default` and paired
 # with the `chrono-tz` dependency only for a program that reaches an `Ipe.Time`
@@ -186,6 +193,7 @@ pub mod basics;
 pub mod bitwise;
 pub mod bytes;
 pub mod char_kernel;
+pub mod char_category;
 pub mod config;
 pub mod core;
 pub mod crypto;
@@ -230,6 +238,7 @@ pub use basics::*;
 pub use bitwise::*;
 pub use bytes::*;
 pub use char_kernel::*;
+pub use char_category::*;
 pub use config::*;
 pub use core::*;
 pub use crypto::*;

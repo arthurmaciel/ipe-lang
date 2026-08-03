@@ -9,6 +9,10 @@
 //! bit-identical. Non-terminating fractions (1/3 etc.) may diverge
 //! beyond 28 digits — documented as a neutral platform difference.
 
+// `money.rs` (and the `decimal.rs` it builds on) is behind the `decimal`
+// feature, so this whole fixture is too.
+#![cfg(feature = "decimal")]
+
 use ipe_runtime_rust::*;
 
 // ── decimal helper ─────────────────────────────────────────────────────────

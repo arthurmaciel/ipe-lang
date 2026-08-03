@@ -38,6 +38,14 @@ websocket_client = []
 # vendored runtime source carries.
 log = []
 time-core = []
+# Declared but inert in the vendored escape hatch: `rust_decimal` /
+# `unicode-general-category` stay non-optional below and the template
+# `ipe_runtime/mod.rs` declares `decimal` / `money` / `char_category` by
+# inclusion, not by `#[cfg]`. These entries only keep rustc's check-cfg quiet for
+# the `#[cfg(feature = "decimal")]` / `#[cfg(feature = "char-category")]` gates
+# the vendored runtime source carries.
+decimal = []
+char-category = []
 # Gates the IANA-zone calendar surface of the always-declared `time` runtime
 # module (the `chrono-tz`-backed helpers). Promoted into `default` and paired
 # with the `chrono-tz` dependency only for a program that reaches an `Ipe.Time`

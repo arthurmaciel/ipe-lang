@@ -673,6 +673,19 @@ pub(crate) struct EmitCtx<'a> {
     /// Time/Db/Web/WebView surface). `Debug.log` does NOT set this (`debug.rs` is
     /// a pure, always-compiled passthrough with no `chrono`).
     pub(crate) uses_log: bool,
+    /// `true` when the program reaches an `Ipe.Decimal` or `Ipe.Money` kernel. The
+    /// `decimal` runtime feature gates the `decimal.rs` / `money.rs` modules and
+    /// the `rust_decimal` crate. `chrono`-style implication: the `Db` surface also
+    /// decodes numeric columns through `rust_decimal`, so [`Self::reaches_decimal`]
+    /// is `uses_decimal || uses_db`. A program that reaches neither drops the crate.
+    pub(crate) uses_decimal: bool,
+    /// `true` when the program reaches an `Ipe.Char` `General_Category` predicate
+    /// (`isAlpha`/`isDigit`/`isLower`/`isUpper`/`isAlphaNum`). The `char-category`
+    /// runtime feature gates the `char_category.rs` module and the
+    /// `unicode-general-category` crate. A standalone leaf: only such a predicate
+    /// reaches it ([`Self::reaches_char_category`] is exactly this flag). The
+    /// std-only `Ipe.Char` kernels stay in the always-compiled `char_kernel.rs`.
+    pub(crate) uses_char_category: bool,
     /// `true` when the program uses at least one HEAVY `Ipe.Crypto` kernel
     /// (legacy SHA-1/MD5, AES-GCM / ChaCha20-Poly1305 AEAD, or PBKDF2 key
     /// derivation). When set, [`crate::project::assemble_project_files`]:
@@ -1389,6 +1402,15 @@ impl<'a> EmitCtx<'a> {
         // Time/Db/Web/WebView); this flag is the `log`-feature leaf.
         let uses_log = program.modules.iter().any(|m| m.uses_log);
 
+        // detect Ipe.Decimal / Ipe.Money usage (gates `decimal.rs`/`money.rs` +
+        // the `rust_decimal` crate). `chrono`-style: the crate is kept under
+        // `reaches_decimal` (this flag OR the Db surface).
+        let uses_decimal = program.modules.iter().any(|m| m.uses_decimal);
+
+        // detect Ipe.Char General_Category-predicate usage (gates `char_category.rs`
+        // + the `unicode-general-category` crate). A standalone leaf.
+        let uses_char_category = program.modules.iter().any(|m| m.uses_char_category);
+
         // detect Ipe.Jwt usage (gates `jwt` module + `jsonwebtoken` crate).
         let uses_jwt = program.modules.iter().any(|m| m.uses_jwt);
 
@@ -1469,6 +1491,8 @@ impl<'a> EmitCtx<'a> {
             uses_uuid,
             uses_random,
             uses_log,
+            uses_decimal,
+            uses_char_category,
             uses_crypto,
             uses_jwt,
             uses_url,
@@ -1667,6 +1691,30 @@ impl<'a> EmitCtx<'a> {
     /// is a separate always-on module, so it does not fold in here.
     pub(crate) const fn reaches_log(&self) -> bool {
         self.uses_log
+    }
+
+    /// `true` when the emitted crate reaches the `decimal.rs` / `money.rs` runtime
+    /// modules — so `project::assemble_project_files` selects the `decimal` feature
+    /// (declaring `pub mod decimal;` / `pub mod money;` and adding `rust_decimal`).
+    ///
+    /// Reached by a `Decimal.*`/`Money.*` kernel ([`Self::uses_decimal`]) OR the
+    /// `db` surface: `db.rs` decodes numeric SQL columns (and `Db.Decode.money`)
+    /// through `rust_decimal` and the `Decimal` newtype. The crate-side feature
+    /// graph carries the same closure (`db = [… "decimal"]`), so this selection and
+    /// the manifest agree even at `--no-default-features`. FAIL-CLOSED: an uncertain
+    /// `rust_decimal` consumer keeps `decimal` on.
+    pub(crate) const fn reaches_decimal(&self) -> bool {
+        self.uses_decimal || self.uses_db
+    }
+
+    /// `true` when the emitted crate reaches the `char_category.rs` runtime module
+    /// — so `project::assemble_project_files` selects the `char-category` feature
+    /// (declaring `pub mod char_category;` and adding `unicode-general-category`).
+    /// A standalone leaf: only an `Ipe.Char` `General_Category` predicate
+    /// ([`Self::uses_char_category`]) reaches it; no surface folds in. The std-only
+    /// `Ipe.Char` kernels stay in the always-compiled `char_kernel.rs`.
+    pub(crate) const fn reaches_char_category(&self) -> bool {
+        self.uses_char_category
     }
 
     /// `true` when the emitted crate reaches base `chrono` (the `time-core`
@@ -3354,6 +3402,8 @@ mod record_struct_namespace_tests {
                 uses_uuid: false,
                 uses_random: false,
                 uses_log: false,
+                uses_decimal: false,
+                uses_char_category: false,
                 uses_crypto: false,
                 uses_jwt: false,
                 uses_url: false,
@@ -3447,6 +3497,8 @@ mod record_struct_namespace_tests {
                 uses_uuid: false,
                 uses_random: false,
                 uses_log: false,
+                uses_decimal: false,
+                uses_char_category: false,
                 uses_crypto: false,
                 uses_jwt: false,
                 uses_url: false,
