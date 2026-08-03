@@ -140,6 +140,7 @@ fn build_m0(interner: &mut Interner) -> DResult<Program> {
         name: update,
         home: ModPath(vec![]),
         type_params: vec![],
+        row_params: vec![],
         params: vec![
             (
                 msg,
@@ -160,6 +161,7 @@ fn build_m0(interner: &mut Interner) -> DResult<Program> {
         name: main,
         home: ModPath(vec![]),
         type_params: vec![],
+        row_params: vec![],
         params: vec![],
         ret: IrType::Task(Box::new(IrType::Unit)),
         body: Expr::Call {
@@ -311,6 +313,7 @@ fn build_no_user_items(interner: &mut Interner) -> DResult<Program> {
         name: main,
         home: ModPath(vec![]),
         type_params: vec![],
+        row_params: vec![],
         params: vec![],
         ret: IrType::Task(Box::new(IrType::Unit)),
         body: Expr::Call {

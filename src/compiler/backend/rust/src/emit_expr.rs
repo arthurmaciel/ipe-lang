@@ -6811,6 +6811,21 @@ pub fn emit_expr_at(
             // audit's second half — last-use analysis to elide the clone on a
             // heap field's FINAL read — is explicitly deferred (spec §3.5).
             let base = emit_expr_at(ctx, record, indent, child, generics)?;
+            // A field read on a row-generic parameter cannot name a struct field
+            // (the concrete struct is unknown at emit time): it routes through the
+            // field's witness getter `ipe_<field>()`, which rustc resolves to the
+            // monomorphised struct's field. Any other base keeps the ordinary
+            // struct-field read.
+            if let Expr::Var(sym) = record.as_ref()
+                && generics.is_row(*sym)
+            {
+                let getter = crate::naming::field_witness_getter_name(ctx.resolve_ident(*field)?);
+                if ir_type_is_definitely_copy(field_ty) {
+                    // The getter borrows; a `Copy` field is copied out by deref.
+                    return Ok(format!("*({base}).{getter}()"));
+                }
+                return Ok(format!("({base}).{getter}().clone()"));
+            }
             let field = ctx.emit_ident(*field)?;
             if ir_type_is_definitely_copy(field_ty) {
                 Ok(format!("({base}).{field}"))
@@ -9190,7 +9205,18 @@ pub fn emit_func_vis(ctx: &EmitCtx, func: &Func, vis_prefix: &str) -> DResult<St
     // name; only the variable symbols participate, so project them out of the
     // `(Symbol, BoundSet)` pairs.
     let scope_syms: Vec<Symbol> = func.type_params.iter().map(|(sym, _)| *sym).collect();
-    let generics = GenericScope::new(&scope_syms);
+    // The row variables this function quantifies, in order, projected out of
+    // `row_params` so an `IrType::RowGeneric` renders to its positional `R{n}`.
+    let row_syms: Vec<Symbol> = func.row_params.iter().map(|r| r.var).collect();
+    // The parameter binders carrying a row-generic type — the value-level names
+    // whose field reads must route through the witness getters.
+    let row_binder_syms: Vec<Symbol> = func
+        .params
+        .iter()
+        .filter(|(_, ty)| matches!(ty, IrType::RowGeneric(_)))
+        .map(|(sym, _)| *sym)
+        .collect();
+    let generics = GenericScope::with_rows(&scope_syms, &row_syms, &row_binder_syms);
 
     let ret_is_task = matches!(ret_ty, IrType::Task(_));
 
@@ -9566,7 +9592,7 @@ fn render_fn_generics(
     impl_fn_params: &[usize],
     generics: GenericScope,
 ) -> DResult<String> {
-    if func.type_params.is_empty() && impl_fn_params.is_empty() {
+    if func.type_params.is_empty() && impl_fn_params.is_empty() && func.row_params.is_empty() {
         return Ok(String::new());
     }
 
@@ -9634,6 +9660,28 @@ fn render_fn_generics(
             impl_fn_generic_name(idx),
             parts.join(", ")
         ));
+    }
+
+    // Row generics: each `R{n}` is bounded by one per-field witness trait —
+    // `IpeHasField<Field = FieldTy>` — plus `Clone` (field reads emit `.clone()`
+    // for value semantics, §4.4). The bounds are exactly the field obligations
+    // the solver already proved at every call site, so exit-0 ⇒ cargo-green.
+    for (i, row) in func.row_params.iter().enumerate() {
+        let n = i.saturating_add(1);
+        let mut bounds: Vec<String> = Vec::with_capacity(row.fields.len() + 1);
+        for (field_sym, field_ty) in &row.fields {
+            let field_name = ctx.resolve_ident(*field_sym)?;
+            let trait_name = crate::naming::field_witness_trait_name(field_name);
+            let assoc = crate::naming::field_witness_assoc_type_name(field_name);
+            // The field type is rendered in the SAME scope as the signature, so a
+            // field carrying a generic (`{ r | value : a }`) resolves its `a` to
+            // the function's `T{n}`. For increment-1 single-field concrete rows
+            // this is a plain scalar/struct type.
+            let field_ty_s = render_type(ctx, field_ty, generics)?;
+            bounds.push(format!("{trait_name}<{assoc} = {field_ty_s}>"));
+        }
+        bounds.push("Clone".to_owned());
+        entries.push(format!("R{n}: {}", bounds.join(" + ")));
     }
 
     Ok(format!("<{}>", entries.join(", ")))

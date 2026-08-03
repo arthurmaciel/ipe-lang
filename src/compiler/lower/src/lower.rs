@@ -22,8 +22,8 @@ use ipe_diagnostics::{DResult, Diagnostic, Feature, Located, LowerError, Span};
 use ipe_intern::{Interner, Symbol};
 use ipe_ir::{
     Arm, BinOp, BoundSet, CallPin, Callee, Capability, EnumDef, Expr, Func, FuncId, IrType,
-    KernelFn, Match, ModPath, Module, OnFormKind, Pat, Program, RuntimeModule, TypeDef, UiCtor,
-    UiPlain, Variant, fun_value_arc_promotable, is_dispatch_free, is_irrefutable,
+    KernelFn, Match, ModPath, Module, OnFormKind, Pat, Program, RowParam, RuntimeModule, TypeDef,
+    UiCtor, UiPlain, Variant, fun_value_arc_promotable, is_dispatch_free, is_irrefutable,
 };
 use ipe_types::{SolvedTypes, Ty, TyBounds};
 
@@ -1327,6 +1327,38 @@ fn canon_type_has_open_row(t: &canon::Type) -> bool {
     }
 }
 
+/// Does `sig` embed an open row in a position the backend cannot yet emit?
+///
+/// The supported shape is a top-level argument-position single-field open row
+/// `{ r | f : T }` whose field type is itself closed. The signature is walked as
+/// its arrow chain: each argument position accepts exactly that shape (or any
+/// closed type); every other open-row occurrence — in return position, nested
+/// under a container / record / tuple, or an argument-position open row with
+/// more than one field or a field type that itself embeds an open row — is
+/// unsupported and gated (`IPE-L0131`). A supported argument row is NOT reported
+/// here, so `split_typed_sig` may erase it to an [`IrType::RowGeneric`].
+fn canon_sig_has_unsupported_open_row(sig: &canon::Type) -> bool {
+    match sig {
+        canon::Type::Lambda(arg, rest) => {
+            let arg_unsupported = match arg.as_ref() {
+                // A supported argument-position open row: exactly one field, and
+                // that field's type carries no further open row. Anything else is
+                // gated. (Return-position and nested rows are handled by the
+                // recursive `rest` walk / the fallthrough below.)
+                canon::Type::RecordOpen(_, fields) => {
+                    fields.len() != 1 || fields.iter().any(|(_, f)| canon_type_has_open_row(f))
+                }
+                // A closed / non-record argument: unsupported only if it embeds
+                // an open row anywhere (nested rows are not yet emittable).
+                other => canon_type_has_open_row(other),
+            };
+            arg_unsupported || canon_sig_has_unsupported_open_row(rest)
+        }
+        // The trailing (return) type: any open row here is unsupported.
+        ret => canon_type_has_open_row(ret),
+    }
+}
+
 /// Does this IR type embed a function type anywhere? An enum variant whose
 /// payload field carries a `Box<dyn Fn>` cannot satisfy the enum's derived
 /// `Clone`/`Debug`/`PartialEq` nor its `IpeStringify` impl, so a function-bearing
@@ -1644,6 +1676,9 @@ fn ir_contains_fun(ty: &IrType) -> bool {
         | IrType::WebSocketServer
         | IrType::WebSocketServerCfg
         | IrType::Generic(_)
+        // A row variable erases to a witness-bounded generic; it embeds no
+        // function type of its own.
+        | IrType::RowGeneric(_)
         // nullary plain types (`Length`, `Color`, etc.) trivially contain no
         // functions.  `WebReq` is an opaque handle with no `Fn` fields.
         | IrType::UiPlain(_)
@@ -1847,7 +1882,12 @@ fn clone_class(env: CloneEnv<'_>, t: &IrType) -> CloneClass {
         | IrType::Decoder(_)
         | IrType::Cmd(_)
         | IrType::Sub(_)
-        | IrType::Generic(_) => CloneClass::NonClone,
+        | IrType::Generic(_)
+        // A row variable, like a bare generic, is floored to `NonClone` here:
+        // its `Clone` rides the emitted `R: … + Clone` witness bound, and every
+        // field read off it emits an explicit `.clone()`, so no bare capture of
+        // the whole row value relies on a `CloneOk` classification.
+        | IrType::RowGeneric(_) => CloneClass::NonClone,
         // Composite: CloneOk iff all components CloneOk (no NonClone part).
         // `Maybe`, `List`, `Set`, `Result`, `Dict` are NAMED Rust types
         // (`IpeMaybe<T>`, `Vec<T>`, `BTreeSet<T>`, `IpeResult<E,A>`,
@@ -4609,7 +4649,10 @@ fn ir_type_mentions_generic(ty: &IrType, tv: Symbol) -> bool {
         | IrType::CryptoMac
         | IrType::EmailAddress
         // `Locale` is non-parametric — no type var.
-        | IrType::Locale => false,
+        | IrType::Locale
+        // A row variable is a distinct row generic (`R{n}`), never the ordinary
+        // `T{n}` type variable this predicate tracks.
+        | IrType::RowGeneric(_) => false,
     }
 }
 
@@ -8022,14 +8065,23 @@ pub struct SymbolPools {
     pub nested_strlit_binders: Vec<Symbol>,
 }
 
-/// `(params, prologue, ret, any_syms_minted)` — [`Lowerer::split_typed_sig`]'s
-/// return shape, named so the signature stays under clippy's type-complexity
-/// ceiling. `any_syms_minted` (AUD-01 seal fix) lists every fresh symbol
-/// handed out by [`Lowerer::fresh_any_param_symbol`] for THIS call — the
-/// caller must union these into whatever set gates `type_params` (they are
-/// NOT in [`canon::Def::Typed::free_vars`], since they didn't exist at canon
-/// time), or the backend would reference an undeclared Rust generic.
-type TypedSigParts = (Vec<IrParam>, Vec<ParamPrologue>, IrType, Vec<Symbol>);
+/// `(params, prologue, ret, any_syms_minted, row_params)` —
+/// [`Lowerer::split_typed_sig`]'s return shape, named so the signature stays
+/// under clippy's type-complexity ceiling. `any_syms_minted` (AUD-01 seal fix)
+/// lists every fresh symbol handed out by [`Lowerer::fresh_any_param_symbol`]
+/// for THIS call — the caller must union these into whatever set gates
+/// `type_params` (they are NOT in [`canon::Def::Typed::free_vars`], since they
+/// didn't exist at canon time), or the backend would reference an undeclared
+/// Rust generic. `row_params` carries one [`RowParam`] per row-polymorphic
+/// argument-position record annotation the signature erased to an
+/// [`IrType::RowGeneric`]; the caller records them on the emitted [`Func`].
+type TypedSigParts = (
+    Vec<IrParam>,
+    Vec<ParamPrologue>,
+    IrType,
+    Vec<Symbol>,
+    Vec<RowParam>,
+);
 
 impl<'a> Lowerer<'a> {
     #[allow(clippy::too_many_lines)] // Error/ErrorKind ADT seeding pushes it over 100
@@ -9335,7 +9387,7 @@ impl<'a> Lowerer<'a> {
                 // unannotated path). Only whole-annotation aliases are unfolded
                 // here; a `Handler` in argument position (`withCors : … -> Handler
                 // -> Handler`) still lowers via `split_typed_sig` unchanged.
-                let (params, prologue, ret, any_syms_minted) = if !patterns.is_empty()
+                let (params, prologue, ret, any_syms_minted, row_params) = if !patterns.is_empty()
                     && self.annotation_is_function_alias(ty)
                 {
                     let solved_ty = self
@@ -9353,15 +9405,18 @@ impl<'a> Lowerer<'a> {
                     // `Ty::Var`, never carrying the annotation-only `any` marker)
                     // — nothing minted here.
                     let (p, pr, r) = self.split_unannotated_sig(solved_ty, patterns, sig_span)?;
-                    (p, pr, r, Vec::new())
+                    (p, pr, r, Vec::new(), Vec::new())
                 } else {
-                    // A row-polymorphic record annotation types cleanly but has
-                    // no single field set to emit — fail closed here (IPE-L0131)
-                    // rather than emit Rust that misses the A7 exact-key struct
-                    // registry. Until per-record-shape callee monomorphisation
-                    // lands, the closed annotation / inferred-shape paths remain
-                    // the supported surface.
-                    if canon_type_has_open_row(ty) {
+                    // A row-polymorphic record annotation in a SUPPORTED position
+                    // (a top-level argument-position single-field open row) erases
+                    // to a witness-bounded `IrType::RowGeneric` in `split_typed_sig`
+                    // and monomorphises per call-site shape in the backend. Every
+                    // UNSUPPORTED open-row form — return position, nested under a
+                    // container/record, or carrying more than one field — has no
+                    // emission yet, so it is failed closed here (IPE-L0131) rather
+                    // than emitting Rust that misses the A7 exact-key struct
+                    // registry.
+                    if canon_sig_has_unsupported_open_row(ty) {
                         return Err(unsupported(sig_span, Feature::RowPolyRecordAnnotation));
                     }
                     self.split_typed_sig(ty, patterns, free_vars)?
@@ -9608,6 +9663,7 @@ impl<'a> Lowerer<'a> {
                     name,
                     home: ModPath(def.home().to_vec()),
                     type_params,
+                    row_params,
                     params,
                     ret,
                     body: lowered_body,
@@ -9759,6 +9815,9 @@ impl<'a> Lowerer<'a> {
                         name,
                         home: ModPath(def.home().to_vec()),
                         type_params,
+                        // An unannotated binding never generalises over a record
+                        // row (D3): pinned on first concrete use, so no row params.
+                        row_params: Vec::new(),
                         params,
                         ret,
                         body: lowered_body,
@@ -9794,6 +9853,8 @@ impl<'a> Lowerer<'a> {
                     name,
                     home: ModPath(def.home().to_vec()),
                     type_params,
+                    // Zero-param value binding: no arguments, so no row params.
+                    row_params: Vec::new(),
                     params: Vec::new(),
                     ret,
                     body: lowered_body,
@@ -9964,6 +10025,7 @@ impl<'a> Lowerer<'a> {
         let mut params = Vec::with_capacity(patterns.len());
         let mut prologue = Vec::new();
         let mut any_syms_minted = Vec::new();
+        let mut row_params = Vec::new();
         for pat in patterns {
             let canon::Type::Lambda(arg, rest) = cur else {
                 // More parameter patterns than the annotation has arrows. The
@@ -9977,7 +10039,26 @@ impl<'a> Lowerer<'a> {
                     "annotation has fewer arrows than parameters",
                 ));
             };
-            let mut ir_ty = self.ir_type_from_canon(arg, generics)?;
+            // A row-polymorphic record annotation in argument position erases to
+            // an `IrType::RowGeneric` bounded by per-field witness traits (the
+            // backend synthesises them); its required fields are recorded as a
+            // `RowParam` so emission knows what to bound. Only the increment's
+            // SUPPORTED shape is admitted here — a top-level single-field open
+            // row; every unsupported open-row form (return position, nested,
+            // multi-field) is still failed closed by `IPE-L0131` before
+            // `split_typed_sig` is reached, so this arm never mis-erases one.
+            let mut ir_ty = if let canon::Type::RecordOpen(row_var, fields) = arg.as_ref() {
+                row_params.push(RowParam {
+                    var: *row_var,
+                    fields: fields
+                        .iter()
+                        .map(|(fname, fty)| Ok((*fname, self.ir_type_from_canon(fty, generics)?)))
+                        .collect::<DResult<_>>()?,
+                });
+                IrType::RowGeneric(*row_var)
+            } else {
+                self.ir_type_from_canon(arg, generics)?
+            };
             // Per-occurrence `any` seal fix (AUD-01): a bare param-position `any`
             // lowers to `IrType::Generic(any_sym)` above — the SAME interned
             // Symbol for EVERY occurrence, so `f : any -> any -> Int` emits
@@ -10021,6 +10102,7 @@ impl<'a> Lowerer<'a> {
             prologue,
             self.ir_type_from_canon(cur, generics)?,
             any_syms_minted,
+            row_params,
         ))
     }
 
@@ -19381,7 +19463,11 @@ fn collect_ir_generic_syms(ty: &IrType, out: &mut BTreeSet<Symbol>) {
         | IrType::CryptoMac
         | IrType::EmailAddress
         // `Locale` is non-parametric — no generic syms.
-        | IrType::Locale => {}
+        | IrType::Locale
+        // A row variable is tracked in `Func::row_params`, NOT in the ordinary
+        // `T{n}` generic scope. Collecting it here would double-count it as both
+        // a `T`-generic and an `R`-generic, so this arm is a deliberate no-op.
+        | IrType::RowGeneric(_) => {}
     }
 }
 
@@ -20306,6 +20392,81 @@ mod tests {
             !super::expr_type_mentions(&body, &super::ir_type_mentions_json),
             "a json-free body must NOT set the json guard — the floor (drop \
              `json` for a program that names no json anywhere) must hold"
+        );
+    }
+
+    // ── Row-polymorphism lowering gate ─────────────────────────────────────
+
+    fn ty_string(interner: &mut Interner) -> canon::Type {
+        canon::Type::Con {
+            home: Vec::new(),
+            name: interner.intern("String").unwrap(),
+            args: Vec::new(),
+        }
+    }
+
+    /// `{ r | name : String } -> String` — the supported increment-1 shape: a
+    /// single-field open row in argument position with a closed field type. It
+    /// must NOT be gated (it lowers to a witness-bounded `RowGeneric`).
+    #[test]
+    fn single_field_arg_open_row_is_supported() {
+        let mut interner = Interner::new();
+        let r = interner.intern("r").unwrap();
+        let name = interner.intern("name").unwrap();
+        let arg = canon::Type::RecordOpen(r, vec![(name, ty_string(&mut interner))]);
+        let sig = canon::Type::Lambda(Box::new(arg), Box::new(ty_string(&mut interner)));
+        assert!(
+            !super::canon_sig_has_unsupported_open_row(&sig),
+            "a single-field argument-position open row is the supported shape"
+        );
+    }
+
+    /// A two-field argument open row is NOT yet emittable, so it stays gated.
+    #[test]
+    fn multi_field_arg_open_row_is_gated() {
+        let mut interner = Interner::new();
+        let r = interner.intern("r").unwrap();
+        let name = interner.intern("name").unwrap();
+        let age = interner.intern("age").unwrap();
+        let arg = canon::Type::RecordOpen(
+            r,
+            vec![
+                (name, ty_string(&mut interner)),
+                (age, ty_string(&mut interner)),
+            ],
+        );
+        let sig = canon::Type::Lambda(Box::new(arg), Box::new(ty_string(&mut interner)));
+        assert!(
+            super::canon_sig_has_unsupported_open_row(&sig),
+            "a multi-field argument open row is not yet emittable — must be gated"
+        );
+    }
+
+    /// An open row in RETURN position is not yet emittable, so it stays gated.
+    #[test]
+    fn return_position_open_row_is_gated() {
+        let mut interner = Interner::new();
+        let r = interner.intern("r").unwrap();
+        let name = interner.intern("name").unwrap();
+        let ret = canon::Type::RecordOpen(r, vec![(name, ty_string(&mut interner))]);
+        let sig = canon::Type::Lambda(Box::new(ty_string(&mut interner)), Box::new(ret));
+        assert!(
+            super::canon_sig_has_unsupported_open_row(&sig),
+            "a return-position open row is not yet emittable — must be gated"
+        );
+    }
+
+    /// A closed-record signature carrying no open row is never gated.
+    #[test]
+    fn closed_signature_is_not_gated() {
+        let mut interner = Interner::new();
+        let sig = canon::Type::Lambda(
+            Box::new(ty_string(&mut interner)),
+            Box::new(ty_string(&mut interner)),
+        );
+        assert!(
+            !super::canon_sig_has_unsupported_open_row(&sig),
+            "a fully closed signature carries no open row to gate"
         );
     }
 }

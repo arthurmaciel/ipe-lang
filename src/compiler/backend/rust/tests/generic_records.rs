@@ -124,6 +124,7 @@ fn wrap_unwrap_program(interner: &mut Interner) -> DResult<Program> {
         name: wrap,
         home: ModPath(vec![]),
         type_params: vec![(a, BoundSet::UNBOUNDED)],
+        row_params: vec![],
         params: vec![(x, IrType::Generic(a))],
         ret: value_record(value, IrType::Generic(a)),
         body: Expr::Record {
@@ -137,6 +138,7 @@ fn wrap_unwrap_program(interner: &mut Interner) -> DResult<Program> {
         name: unwrap,
         home: ModPath(vec![]),
         type_params: vec![(b, BoundSet::UNBOUNDED)],
+        row_params: vec![],
         params: vec![(r, value_record(value, IrType::Generic(b)))],
         ret: IrType::Generic(b),
         body: Expr::Access {
@@ -151,6 +153,7 @@ fn wrap_unwrap_program(interner: &mut Interner) -> DResult<Program> {
         name: main,
         home: ModPath(vec![]),
         type_params: vec![],
+        row_params: vec![],
         params: vec![],
         ret: IrType::Task(Box::new(IrType::Unit)),
         body: Expr::Call {
@@ -252,6 +255,7 @@ fn merges_generic_and_concrete_field_set() -> DResult<()> {
         name: wrap,
         home: ModPath(vec![]),
         type_params: vec![(a, BoundSet::UNBOUNDED)],
+        row_params: vec![],
         params: vec![(x, IrType::Generic(a))],
         ret: value_record(value, IrType::Generic(a)),
         body: Expr::Record {
@@ -265,6 +269,7 @@ fn merges_generic_and_concrete_field_set() -> DResult<()> {
         name: mk_box,
         home: ModPath(vec![]),
         type_params: vec![],
+        row_params: vec![],
         params: vec![(n, IrType::Int)],
         ret: value_record(value, IrType::Int),
         body: Expr::Record {
@@ -318,6 +323,7 @@ fn two_type_parameter_record() -> DResult<()> {
         name: pair,
         home: ModPath(vec![]),
         type_params: vec![(a, BoundSet::UNBOUNDED), (b, BoundSet::UNBOUNDED)],
+        row_params: vec![],
         params: vec![(x, IrType::Generic(a)), (y, IrType::Generic(b))],
         ret: rec,
         body: Expr::Record {
@@ -364,6 +370,7 @@ fn monomorphic_record_stays_byte_identical() -> DResult<()> {
         name: mk_box,
         home: ModPath(vec![]),
         type_params: vec![],
+        row_params: vec![],
         params: vec![(n, IrType::Int)],
         ret: value_record(value, IrType::Int),
         body: Expr::Record {

@@ -128,6 +128,7 @@ fn record_trio(interner: &mut Interner) -> DResult<Program> {
         name: mk,
         home: ModPath(vec![]),
         type_params: vec![],
+        row_params: vec![],
         params: vec![(arg, IrType::Int)],
         ret: rec.clone(),
         body: Expr::Record {
@@ -141,6 +142,7 @@ fn record_trio(interner: &mut Interner) -> DResult<Program> {
         name: bump,
         home: ModPath(vec![]),
         type_params: vec![],
+        row_params: vec![],
         params: vec![(par, rec.clone())],
         ret: rec.clone(),
         body: Expr::Update {
@@ -154,6 +156,7 @@ fn record_trio(interner: &mut Interner) -> DResult<Program> {
         name: getx,
         home: ModPath(vec![]),
         type_params: vec![],
+        row_params: vec![],
         params: vec![(par, rec)],
         ret: IrType::Int,
         body: Expr::Access {
@@ -168,6 +171,7 @@ fn record_trio(interner: &mut Interner) -> DResult<Program> {
         name: main,
         home: ModPath(vec![]),
         type_params: vec![],
+        row_params: vec![],
         params: vec![],
         ret: IrType::Task(Box::new(IrType::Unit)),
         body: Expr::Call {
@@ -293,6 +297,7 @@ fn synthesises_nested_record_structs() -> DResult<()> {
         name: func,
         home: ModPath(vec![]),
         type_params: vec![],
+        row_params: vec![],
         params: vec![(par, outer)],
         ret: xy.clone(),
         body: Expr::Access {
@@ -336,6 +341,7 @@ fn literal_with_unknown_shape_fails_fast() -> DResult<()> {
         name: func,
         home: ModPath(vec![]),
         type_params: vec![],
+        row_params: vec![],
         params: vec![],
         ret: IrType::Int, // NOT a record type → the literal's shape is uncollected
         body: Expr::Access {
@@ -383,6 +389,7 @@ fn distinct_shapes_sharing_a_field_set_emit_two_structs() -> DResult<()> {
         name: fsym,
         home: ModPath(vec![]),
         type_params: vec![],
+        row_params: vec![],
         params: vec![(par, int_ty.clone())],
         ret: int_ty.clone(),
         body: Expr::Record {
@@ -396,6 +403,7 @@ fn distinct_shapes_sharing_a_field_set_emit_two_structs() -> DResult<()> {
         name: gsym,
         home: ModPath(vec![]),
         type_params: vec![],
+        row_params: vec![],
         params: vec![(qar, str_ty.clone())],
         ret: str_ty.clone(),
         body: Expr::Record {
@@ -464,6 +472,7 @@ fn end_to_end_distinct_shapes_cargo_check() -> DResult<()> {
         name: fsym,
         home: ModPath(vec![]),
         type_params: vec![],
+        row_params: vec![],
         params: vec![(par, int_ty.clone())],
         ret: int_ty.clone(),
         body: Expr::Record {
@@ -476,6 +485,7 @@ fn end_to_end_distinct_shapes_cargo_check() -> DResult<()> {
         name: gsym,
         home: ModPath(vec![]),
         type_params: vec![],
+        row_params: vec![],
         params: vec![(qar, str_ty.clone())],
         ret: str_ty.clone(),
         body: Expr::Record {
@@ -491,6 +501,7 @@ fn end_to_end_distinct_shapes_cargo_check() -> DResult<()> {
         name: main,
         home: ModPath(vec![]),
         type_params: vec![],
+        row_params: vec![],
         params: vec![],
         ret: IrType::Task(Box::new(IrType::Unit)),
         body: Expr::Call {

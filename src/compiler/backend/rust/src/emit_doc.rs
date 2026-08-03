@@ -2031,6 +2031,7 @@ mod tests {
                     name: helper_fn,
                     home: ModPath(vec![main_mod]),
                     type_params: vec![],
+                    row_params: vec![],
                     params: vec![],
                     ret: IrType::Int,
                     body: Expr::Int(0),

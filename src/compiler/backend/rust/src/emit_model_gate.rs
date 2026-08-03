@@ -329,6 +329,9 @@ fn leaf_of_bounded(ctx: &EmitCtx, ty: &IrType, app: AppShape, fuel: u32) -> Mode
         | IrType::Unit
         | IrType::Bytes
         | IrType::Json
-        | IrType::Generic(_) => ModelLeaf::Handle,
+        | IrType::Generic(_)
+        // A row variable never types a concrete Model field (a Model is a
+        // closed record); classified with the other opaque leaves for totality.
+        | IrType::RowGeneric(_) => ModelLeaf::Handle,
     }
 }
