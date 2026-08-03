@@ -23,7 +23,19 @@
 -- every output routes through typed `Ipe.Ui` constructors. Feed untrusted
 -- markdown without an extra sanitisation step. (Compare: HTML-string
 -- renderers need a sanitiser equivalent to bluemonday; this one does not.)
-module Ipe.Markdown exposing (render, renderInline)
+--
+-- Chrome colours (code surfaces, dividers, list markers) derive from the
+-- inherited theme foreground via `currentColor`, so the render tracks a light
+-- or dark surrounding page with no fixed palette.
+--
+-- The parser is public: `parseBlocks` / `parseSpans` return the `Block` /
+-- `Span` trees, so a caller wanting the parse but its own typography and
+-- palette can walk them directly instead of reimplementing the parser.
+module Ipe.Markdown exposing
+    ( render, renderInline
+    , parseBlocks, parseSpans
+    , Block(..), Span(..)
+    )
 
 
 import Ipe.List as List
@@ -65,7 +77,8 @@ type Block
 
 -- ─── Block parsing ──────────────────────────────────────────────────────────
 
--- Split a markdown document into a list of Blocks.
+-- Split a markdown document into its list of `Block`s — the block-level parse
+-- tree, for callers that render with their own typography and palette.
 parseBlocks : String -> List Block
 parseBlocks src =
     blocksFromLines (String.lines src)
@@ -416,6 +429,43 @@ parseTableRow l =
         List.map String.trim (String.split "|" trimmedTrailing)
 
 
+-- ─── Theme-following palette ────────────────────────────────────────────────
+
+-- Chrome colours (code surfaces, dividers, muted markers) are derived from
+-- `currentColor` — the inherited theme foreground — so a light page yields
+-- dark chrome and a dark page yields light chrome without any fixed hex.
+-- `color-mix` blends the foreground toward transparency for a faint fill; a
+-- direct `currentColor` alpha gives a subtle divider. Text and links keep the
+-- theme foreground outright.
+
+-- A faint fill tinted from the theme foreground, for code surfaces and table
+-- header cells.
+codeSurfaceFill : String
+codeSurfaceFill =
+    "background:color-mix(in srgb, currentColor 8%, transparent)"
+
+
+-- The code-block surface: the faint fill plus a hairline theme-derived border.
+codeSurfaceStyle : String
+codeSurfaceStyle =
+    codeSurfaceFill
+        ++ ";border:1px solid "
+        ++ dividerColor
+        ++ ";border-radius:8px"
+
+
+-- Hairline divider colour for rules, table borders, and row separators.
+dividerColor : String
+dividerColor =
+    "color-mix(in srgb, currentColor 20%, transparent)"
+
+
+-- Muted foreground for list markers — dimmer than body text, still theme-bound.
+mutedColor : String
+mutedColor =
+    "color-mix(in srgb, currentColor 60%, transparent)"
+
+
 -- ─── Block rendering ────────────────────────────────────────────────────────
 
 renderBlock : Block -> Element msg
@@ -432,8 +482,7 @@ renderBlock b =
             Ui.el
                 [ Ui.width Ui.fill
                 , Ui.paddingXY 12 10
-                , Ui.htmlAttribute "style"
-                    "background:#101116;border:1px solid #2A2A33;border-radius:8px;overflow-x:auto;white-space:pre"
+                , Ui.htmlAttribute "style" (codeSurfaceStyle ++ ";overflow-x:auto;white-space:pre")
                 , Font.family "ui-monospace,SFMono-Regular,Menlo,Consolas,monospace"
                 , Font.size 13
                 ]
@@ -456,7 +505,7 @@ renderBlock b =
             Ui.el
                 [ Ui.width Ui.fill
                 , Ui.htmlAttribute "style"
-                    "border-top:1px solid #2A2A33;margin:4px 0"
+                    ("border-top:1px solid " ++ dividerColor ++ ";margin:4px 0")
                 ]
                 Ui.none
 
@@ -494,7 +543,9 @@ bulletRow marker text =
     Ui.row
         [ Ui.spacing 8 ]
         [ Ui.el
-              [ Font.color (Ui.rgb 158 158 175) ]
+              -- Marker tint follows the surrounding text colour, muted.
+              [ Ui.htmlAttribute "style"
+                    ("color:" ++ mutedColor) ]
               (Ui.text marker)
         , Ui.paragraph [] (renderSpans (parseSpans text))
         ]
@@ -512,7 +563,7 @@ renderTable header rows =
     Ui.column
         [ Ui.width Ui.fill
         , Ui.htmlAttribute "style"
-            "border:1px solid #2A2A33;border-radius:8px;overflow:hidden"
+            ("border:1px solid " ++ dividerColor ++ ";border-radius:8px;overflow:hidden")
         ]
         (renderTableHeader header :: List.map renderTableRow rows)
 
@@ -522,7 +573,7 @@ renderTableHeader cells =
     Ui.row
         [ Ui.width Ui.fill
         , Ui.htmlAttribute "style"
-            "background:#1c1c23;border-bottom:1px solid #2A2A33"
+            (codeSurfaceFill ++ ";border-bottom:1px solid " ++ dividerColor)
         ]
         (List.map renderTableHeaderCell cells)
 
@@ -542,7 +593,7 @@ renderTableRow : List String -> Element msg
 renderTableRow cells =
     Ui.row
         [ Ui.width Ui.fill
-        , Ui.htmlAttribute "style" "border-top:1px solid #1f1f27"
+        , Ui.htmlAttribute "style" ("border-top:1px solid " ++ dividerColor)
         ]
         (List.map renderTableCell cells)
 
@@ -570,6 +621,8 @@ type Span
 
 -- ─── Inline parsing ─────────────────────────────────────────────────────────
 
+-- Parse one line of inline markup into its list of `Span`s — the inline parse
+-- tree, for callers rendering inline runs with their own styling.
 parseSpans : String -> List Span
 parseSpans s =
     spanLoop s [] ""
@@ -728,13 +781,15 @@ renderSpan span =
             Ui.el
                 [ Font.family "ui-monospace,SFMono-Regular,Menlo,Consolas,monospace"
                 , Ui.htmlAttribute "style"
-                    "background:#1c1c23;padding:1px 5px;border-radius:3px"
+                    (codeSurfaceFill ++ ";padding:1px 5px;border-radius:3px")
                 ]
                 (Ui.text text)
 
         LinkSpan text url ->
             Ui.link
-                [ Font.color (Ui.rgb 62 207 142)
+                -- Underline distinguishes the link; colour inherits the theme
+                -- (the page's `Font.color`) rather than a fixed accent hex.
+                [ Ui.htmlAttribute "style" "text-decoration:underline"
                 , Ui.htmlAttribute "target" "_blank"
                 ]
                 { url = url, label = Ui.text text }
