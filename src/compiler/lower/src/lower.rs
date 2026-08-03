@@ -5995,6 +5995,11 @@ struct KernelUsage {
     /// `random` feature). A standalone leaf; no other surface reaches it. Does NOT
     /// gate `getrandom` (kept by the always-on `crypto_core` floor).
     random: bool,
+    /// Any `Ipe.Log` kernel — gates the `log.rs` runtime module (the `log`
+    /// feature) and the base `chrono` crate (via `log = ["dep:chrono"]`).
+    /// `log.rs` is the sole always-emittable `chrono` consumer. `Debug.log` does
+    /// NOT set this (its `debug.rs` body has no `chrono`).
+    log: bool,
     /// Any HEAVY `Ipe.Crypto` kernel (legacy SHA-1/MD5, AES-GCM /
     /// ChaCha20-Poly1305 AEAD, PBKDF2 key derivation) — gates the `crypto`
     /// runtime module and the `sha1` + `md-5` + `aes-gcm` + `chacha20poly1305` +
@@ -6089,6 +6094,7 @@ impl KernelUsage {
             && self.regex
             && self.uuid
             && self.random
+            && self.log
             && self.crypto
             && self.jwt
             && self.url
@@ -6126,6 +6132,7 @@ impl KernelUsage {
         self.regex |= k.is_regex();
         self.uuid |= k.is_uuid();
         self.random |= k.is_random();
+        self.log |= k.is_log();
         self.crypto |= k.is_crypto();
         self.jwt |= k.is_jwt();
         self.url |= k.is_url();
@@ -8319,6 +8326,11 @@ impl<'a> Lowerer<'a> {
         // `Random.Generator` value is produced by a `Random.*` seeded kernel.
         let uses_random = kernel_usage.random;
 
+        // detect `Ipe.Log` usage. The backend uses this flag to declare the
+        // `log.rs` module (the `log` feature) and add the base `chrono` crate.
+        // `Debug.log` is excluded (its `debug.rs` body has no `chrono`).
+        let uses_log = kernel_usage.log;
+
         // detect `Ipe.Jwt` usage — any JWT encode/decode or builder kernel. The
         // backend uses this flag to declare `jwt` in the emitted
         // `ipe_runtime/mod.rs` and add the `jsonwebtoken` dependency. `auth.rs`
@@ -8412,6 +8424,7 @@ impl<'a> Lowerer<'a> {
             uses_regex,
             uses_uuid,
             uses_random,
+            uses_log,
             uses_crypto,
             uses_jwt,
             uses_url,

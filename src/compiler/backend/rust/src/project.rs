@@ -88,6 +88,12 @@ wasm-client = []
 # (byte-identical output), so this only satisfies the source `#[cfg]` gates —
 # defaulted on.
 encoding = []
+# Declared but inert in this closed wasm template: `chrono` stays non-optional
+# below and the wasm module set declares `log` / `time` by inclusion. These keep
+# rustc's check-cfg quiet for the `#[cfg(feature = "log")]` /
+# `#[cfg(feature = "time-core")]` gates the runtime source carries.
+log = []
+time-core = []
 # Gates the IANA-zone calendar surface of the always-declared `time` runtime
 # module (the `chrono-tz`-backed helpers). Promoted into `default` and paired
 # with the `chrono-tz` dependency only for a program that reaches an `Ipe.Time`
@@ -1056,9 +1062,59 @@ fn runtime_bindings() -> DResult<&'static str> {
     GOLDEN.get(start..end).ok_or_else(|| anchor_missing(END))
 }
 
-/// The native-target kernel-wrapper prelude: [`runtime_bindings`] with the
-/// outbound-HTTP section dropped when the program does not reach the
-/// `http_client` runtime module (`uses_http_client == false`).
+/// Which optional kernel-wrapper prelude sections a program reaches — the gate
+/// for whether each mid-prelude section stays or is cut in
+/// [`native_runtime_bindings`]. Grouped into one value (rather than four bare
+/// `bool` parameters) so the caller reads at the call site and the wiring cannot
+/// transpose two flags.
+//
+// The four fields ARE four independent reachability gates (one per gateable
+// prelude section); a bitflags/enum would obscure, not clarify, four orthogonal
+// yes/no reach facts named at the struct-literal call site.
+#[derive(Clone, Copy)]
+#[allow(clippy::struct_excessive_bools)]
+struct PreludeReach {
+    /// The program reaches `http_client.rs` — keep the final `Http` section.
+    http_client: bool,
+    /// The program reaches `random.rs` — keep the `Random` section.
+    random: bool,
+    /// The program reaches `log.rs` — keep the `Log` section.
+    log: bool,
+    /// The program reaches `time.rs` (`time-core`) — keep the `Time` section.
+    time_core: bool,
+}
+
+/// Drop a mid-prelude section — the wrappers between its own `header` and the
+/// following `next_header` — from `text`, returning the joined remainder. Used
+/// when the program does not reach the module those wrappers hard-reference;
+/// keeping them would fail to resolve (E0433) once the gated module is dropped.
+/// Both anchors are content-addressed, so a golden drift that renamed either
+/// fails loud (a [`Diagnostic::CompilerBug`]) rather than mis-slicing.
+fn drop_prelude_section(text: &str, header: &str, next_header: &str) -> DResult<String> {
+    let start = text.find(header).ok_or_else(|| Diagnostic::CompilerBug {
+        where_: "ipe_backend_rust::project::native_runtime_bindings",
+        detail: format!(
+            "kernel-wrapper prelude anchor {header:?} not found — golden drifted; \
+             cannot drop its wrappers for a program that does not reach the module"
+        ),
+    })?;
+    let end_rel = text
+        .get(start..)
+        .and_then(|rest| rest.find(next_header))
+        .ok_or_else(|| Diagnostic::CompilerBug {
+            where_: "ipe_backend_rust::project::native_runtime_bindings",
+            detail: format!(
+                "kernel-wrapper prelude anchor {next_header:?} not found after \
+                 {header:?} — golden drifted; cannot bound the section"
+            ),
+        })?;
+    let mut out = text.get(..start).unwrap_or("").to_owned();
+    out.push_str(text.get(start + end_rel..).unwrap_or(""));
+    Ok(out)
+}
+
+/// The native-target kernel-wrapper prelude: [`runtime_bindings`] with each
+/// section a program does not reach dropped (see [`PreludeReach`]).
 ///
 /// The always-emitted prelude ends with the `Http` section — a comment header
 /// plus the monomorphic `http_parse_query` wrapper, which hard-references
@@ -1070,55 +1126,44 @@ fn runtime_bindings() -> DResult<&'static str> {
 /// one slice, and a trailing newline is preserved so the following kernel-family
 /// bindings (`AUTH_WRAPPERS`, the TEA aliases, …) are not glued onto the last
 /// kept line. The `HTTP_SECTION` anchor is content-addressed, so a prelude drift
-/// that renamed it fails loud (a `CompilerBug`) rather than mis-slicing.
-fn native_runtime_bindings(uses_http_client: bool, reaches_random: bool) -> DResult<String> {
+/// that renamed it fails loud (a `CompilerBug`) rather than mis-slicing. The
+/// mid-prelude `Log` / `Time` / `Random` sections are cut the same way when
+/// their modules are dropped.
+fn native_runtime_bindings(reach: PreludeReach) -> DResult<String> {
     // The comment header that opens the outbound-`Http` prelude section. The
     // section runs from here to the end of `runtime_bindings()` (its `END`
     // anchor is the `http_parse_query` wrapper, the section's sole binding).
     const HTTP_SECTION: &str = "// ── Http kernels";
-    let full = runtime_bindings()?;
+    let mut filtered = runtime_bindings()?.to_owned();
 
-    // Drop the `Random` prelude section (the three monomorphic `random_*`
-    // wrappers, the only static-prelude references to `ipe_runtime::random`) when
-    // the program does not reach `random.rs`. Unlike `Http`, this section is
-    // mid-prelude, so it is cut between its own header and the next section header
-    // (`File kernels`). A program that reaches no `Ipe.Random` kernel and is
-    // synchronous (no tokio) keeps `random.rs` absent, so keeping these wrappers
-    // would fail to resolve (E0433). Applied before the `Http` cut so both slices
-    // compose.
-    let random_filtered = if reaches_random {
-        full.to_owned()
-    } else {
-        const RANDOM_SECTION: &str = "// ── Random kernels";
-        const FILE_SECTION: &str = "// ── File kernels";
-        let start = full
-            .find(RANDOM_SECTION)
-            .ok_or_else(|| Diagnostic::CompilerBug {
-                where_: "ipe_backend_rust::project::native_runtime_bindings",
-                detail: format!(
-                    "kernel-wrapper prelude anchor {RANDOM_SECTION:?} not found — golden \
-                     drifted; cannot drop the random wrappers for a non-Random program"
-                ),
-            })?;
-        let end_rel = full
-            .get(start..)
-            .and_then(|rest| rest.find(FILE_SECTION))
-            .ok_or_else(|| Diagnostic::CompilerBug {
-                where_: "ipe_backend_rust::project::native_runtime_bindings",
-                detail: format!(
-                    "kernel-wrapper prelude anchor {FILE_SECTION:?} not found after \
-                     {RANDOM_SECTION:?} — golden drifted; cannot bound the random section"
-                ),
-            })?;
-        let mut out = full.get(..start).unwrap_or("").to_owned();
-        out.push_str(full.get(start + end_rel..).unwrap_or(""));
-        out
-    };
-
-    if uses_http_client {
-        return Ok(random_filtered);
+    // `Log` — the eight `log_*` wrappers (the only static-prelude references to
+    // `ipe_runtime::log`), cut between the `Log` header and the following
+    // `System (env)` header when the program reaches no `Ipe.Log.*` kernel (so
+    // `log.rs`, and via `time-core` `chrono`, is dropped).
+    if !reach.log {
+        filtered =
+            drop_prelude_section(&filtered, "// ── Log kernels", "// ── System (env) kernels")?;
     }
-    let cut = random_filtered
+
+    // `Time` — the three `time_*` wrappers (`time_now`/`sleep`/`unix_millis`),
+    // cut between the `Time` header and the following `Random` header when the
+    // program reaches `time-core` neither directly (an `Ipe.Time` kernel) nor via
+    // a Log/Db/Web surface, so the whole `time.rs` module is dropped.
+    if !reach.time_core {
+        filtered = drop_prelude_section(&filtered, "// ── Time kernels", "// ── Random kernels")?;
+    }
+
+    // `Random` — the three `random_*` wrappers, cut between the `Random` header
+    // and the following `File` header when the program does not reach `random.rs`
+    // (a non-Random synchronous program).
+    if !reach.random {
+        filtered = drop_prelude_section(&filtered, "// ── Random kernels", "// ── File kernels")?;
+    }
+
+    if reach.http_client {
+        return Ok(filtered);
+    }
+    let cut = filtered
         .find(HTTP_SECTION)
         .ok_or_else(|| Diagnostic::CompilerBug {
             where_: "ipe_backend_rust::project::native_runtime_bindings",
@@ -1127,7 +1172,7 @@ fn native_runtime_bindings(uses_http_client: bool, reaches_random: bool) -> DRes
              cannot drop the http_client wrappers for a non-HTTP program"
             ),
         })?;
-    let mut out = random_filtered.get(..cut).unwrap_or("").to_owned();
+    let mut out = filtered.get(..cut).unwrap_or("").to_owned();
     // The slice ends immediately before the `Http` comment (the byte before it
     // is the newline that terminated the previous wrapper's `}`), so `out`
     // already ends in `\n` — the following bindings start on their own line.
@@ -1323,10 +1368,12 @@ pub fn emit_program(ctx: &EmitCtx, program: &Program) -> DResult<EmittedProject>
         // the wasm target takes the floor-filtered subset.
         match ctx.target {
             ipe_ir::Target::Native => {
-                out.push_str(&native_runtime_bindings(
-                    ctx.reaches_http_client(),
-                    ctx.reaches_random(),
-                )?);
+                out.push_str(&native_runtime_bindings(PreludeReach {
+                    http_client: ctx.reaches_http_client(),
+                    random: ctx.reaches_random(),
+                    log: ctx.reaches_log(),
+                    time_core: ctx.reaches_time_core(),
+                })?);
             }
             ipe_ir::Target::WasmClient => out.push_str(&wasm_runtime_bindings()?),
         }
@@ -2369,10 +2416,12 @@ pub fn emit_spine(ctx: &EmitCtx, program: &Program) -> DResult<String> {
 
     match ctx.target {
         ipe_ir::Target::Native => {
-            out.push_str(&native_runtime_bindings(
-                ctx.reaches_http_client(),
-                ctx.reaches_random(),
-            )?);
+            out.push_str(&native_runtime_bindings(PreludeReach {
+                http_client: ctx.reaches_http_client(),
+                random: ctx.reaches_random(),
+                log: ctx.reaches_log(),
+                time_core: ctx.reaches_time_core(),
+            })?);
         }
         ipe_ir::Target::WasmClient => out.push_str(&wasm_runtime_bindings()?),
     }

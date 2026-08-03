@@ -87,13 +87,15 @@ pub use crypto_core::*;
 ))]
 pub mod crypto;
 pub mod file;
-// `log` is always compiled, mirroring the emitted floor
-// (`templates/ipe_runtime/mod.rs` declares `pub mod log;` for every program).
-// Its Ipê-facing kernels return `IpeTask`/`IpeResult` (from `core`, no tokio
-// dependency) and its bodies split only on the wasm32 console sink — so the
-// module compiles at `--no-default-features`. wasm32: `Log.*` routes to
-// `console.{debug,info,warn,error}` (see `log.rs`'s `cfg(target_arch =
-// "wasm32")` sink split).
+// `log` is behind the `log` feature: `log.rs`'s native RFC3339-nano timestamp is
+// the one always-emittable `chrono` consumer, so a program that reaches no
+// `Ipe.Log.*` kernel drops the module — and, via `time-core`, `chrono`. Its
+// Ipê-facing kernels return `IpeTask`/`IpeResult` (from `core`, no tokio
+// dependency) and its bodies split only on the wasm32 console sink. wasm32:
+// `Log.*` routes to `console.{debug,info,warn,error}` (see `log.rs`'s
+// `cfg(target_arch = "wasm32")` sink split) using `js_sys::Date`, not `chrono`;
+// `wasm-client` implies `log` so the static wasm module set still resolves.
+#[cfg(feature = "log")]
 pub mod log;
 // `Ipe.Random` non-cryptographic PRNG. Behind the `random` feature: a program
 // that reaches no `Ipe.Random` kernel drops the module. The feature gates only
@@ -121,6 +123,15 @@ pub mod system;
 // module is available in every config, mirroring the always-on `pub mod task;`
 // in the emitted crate's runtime template.
 pub mod task;
+// `time` is behind the `time-core` feature (base `chrono`). The whole module —
+// the reactor-free clock reads (`Time.now`/`unixMillis`), the `Time.sleep`
+// timer, the calendar math, and the `chrono-tz`-gated IANA zone helpers — lives
+// behind `time-core`; a program that reaches no `Ipe.Time` kernel (and no
+// Log/Db/Web surface) drops the module and `chrono`. The IANA zone helpers keep
+// their inner `#[cfg(feature = "time")]` on top (they additionally need
+// `chrono-tz`). wasm32: `wasm-client` implies `time`, so the static wasm module
+// set resolves; its arms read `js_sys::Date`/`gloo-timers`, not `chrono`.
+#[cfg(feature = "time-core")]
 pub mod time;
 // Always declared, matching the emitted floor (`templates/ipe_runtime/mod.rs`
 // declares `pub mod trace;` for every program). `trace.rs` builds a std
@@ -166,20 +177,26 @@ pub use config_decode::*;
 pub use core::*;
 #[cfg(feature = "json")]
 pub use json::*;
-// Floor-module glob re-exports: unconditional, matching the emitted floor
-// (`templates/ipe_runtime/mod.rs` re-exports these for EVERY program). The
-// modules are always declared and their tokio-bound items are item-gated
-// inside each file (`block_on`, `system_load_env`, … carry both a
-// `feature = "tokio"` and a `not(feature = "tokio")` arm), so a sync program's
-// generated prelude — which names `block_on` / `system_*` / `log_*` unqualified
-// at the crate root — resolves under `--no-default-features`. Gating the glob
-// on `tokio` instead would drop those std-available items from the crate root
-// and break every non-async dependency-model program (E0425).
+// Floor-module glob re-exports: the always-declared modules are unconditional,
+// matching the emitted floor. Their tokio-bound items are item-gated inside each
+// file (`block_on`, `system_load_env`, … carry both a `feature = "tokio"` and a
+// `not(feature = "tokio")` arm), so a sync program's generated prelude — which
+// names `block_on` / `system_*` unqualified at the crate root — resolves under
+// `--no-default-features`. Gating those globs on `tokio` instead would drop the
+// std-available items and break every non-async dependency-model program (E0425).
+//
+// `log` / `time` re-exports track their module gates (`log` / `time-core`): a
+// program that reaches no Log/Time surface drops the module, so its glob must
+// drop with it. The emitted prelude's `log_*` / `time_*` wrappers are cut in the
+// same case (`project::native_runtime_bindings`), so no unqualified name is left
+// dangling at the crate root.
+#[cfg(feature = "log")]
 pub use log::*;
 #[cfg(feature = "random")]
 pub use random::*;
 pub use system::*;
 pub use task::*;
+#[cfg(feature = "time-core")]
 pub use time::*;
 pub use trace::*;
 

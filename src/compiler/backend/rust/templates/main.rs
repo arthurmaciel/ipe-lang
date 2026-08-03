@@ -60,6 +60,7 @@ pub fn ok_res<A>(a: A) -> IpeResult<IpeError, A> {
 pub fn task_succeed<A: Send + 'static>(a: A) -> IpeTask<A> {
     ipe_runtime::task::task_succeed(a)
 }
+// ── Log kernels ────────────────────────────────────────────────────────────
 pub fn log_info(msg: String) -> IpeTask<()> {
     ipe_runtime::log::log_info(msg)
 }
@@ -84,6 +85,7 @@ pub fn log_debug_with<A: IpeStringify>(msg: String, attrs: Vec<A>) -> IpeTask<()
 pub fn log_warn_with<A: IpeStringify>(msg: String, attrs: Vec<A>) -> IpeTask<()> {
     ipe_runtime::log::log_warn_with(msg, attrs)
 }
+// ── System (env) kernels ───────────────────────────────────────────────────
 pub fn system_args(_: ()) -> IpeTask<Vec<String>> {
     ipe_runtime::system::system_args(())
 }
@@ -93,6 +95,7 @@ pub fn system_setenv(key: String, val: String) -> IpeTask<()> {
 pub fn system_unsetenv(key: String) -> IpeTask<()> {
     ipe_runtime::system::system_unsetenv(key)
 }
+// ── Time kernels ───────────────────────────────────────────────────────────
 pub fn time_now(_: ()) -> IpeTask<i64> {
     ipe_runtime::time::time_now(())
 }

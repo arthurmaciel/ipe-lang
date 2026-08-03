@@ -116,11 +116,16 @@ base64 = { version = "0.22", optional = true }
 uuid = { version = "1", features = ["v4", "v7"], optional = true }
 hex = { version = "0.4", optional = true }
 percent-encoding = { version = "2", optional = true }
-chrono = "0.4"
+# `chrono` (base calendar/clock) is optional, behind the `time-core` feature.
+# Its two always-emittable consumers — `log.rs` (RFC3339-nano log timestamp) and
+# `time.rs` (the `Ipe.Time` calendar surface) — are each feature-gated, and the
+# db/web/webview surfaces render `chrono` timestamps too. A program that reaches
+# no Log/Time kernel and no Db/Web/WebView surface drops `chrono` entirely.
+chrono = { version = "0.4", optional = true }
 # `chrono-tz` (the embedded IANA zone DB) is optional: only the `time` runtime
 # module's IANA-zone helpers use it, and they are gated behind the `time`
-# feature. A program that reaches no `Ipe.Time` kernel drops the crate. `chrono`
-# core (log/db/web/telemetry timestamps) stays unconditional.
+# feature (which implies `time-core`, since the zones build on base `chrono`). A
+# program that reaches no `Ipe.Time` kernel drops the crate.
 chrono-tz = { version = "0.10", optional = true }
 rust_decimal = { version = "1", features = ["serde"] }
 bcrypt = { version = "0.17", optional = true }
@@ -220,9 +225,21 @@ url = ["dep:url"]
 # Programs that never import `Ipe.Locale` pay nothing — the ICU4X casemap +
 # locale-core deps are entirely absent from the default feature graph.
 locale = ["dep:icu_casemap", "dep:icu_locale_core"]
+# Base `chrono` (calendar/clock) + the `time.rs` module. Enabled by any surface
+# that renders a `chrono` timestamp: `log` (the RFC3339-nano log line), an
+# `Ipe.Time` kernel (`time` implies this), or the `db`/`web` surfaces (migration
+# ledger + Live session store timestamps). A program that reaches none drops
+# `chrono`. Separate from `time` so a `Time`-free program that only logs still
+# drops the heavier IANA zone DB.
+time-core = ["dep:chrono"]
+# `log.rs` (`Ipe.Log.*` observability). Its RFC3339-nano timestamp is the one
+# always-emittable `chrono` consumer, so `log` pulls base `chrono` via
+# `time-core`. `Debug.log` (`debug.rs`, a pure passthrough) is NOT gated here.
+log = ["time-core"]
 # Ipe.Time IANA-zone calendar surface (`time.rs`'s zone helpers). Gated so a
-# program that reaches no `Ipe.Time` kernel drops the embedded IANA zone DB.
-time = ["dep:chrono-tz"]
+# program that reaches no `Ipe.Time` kernel drops the embedded IANA zone DB. The
+# zones build on base `chrono`, so `time` implies `time-core`.
+time = ["dep:chrono-tz", "time-core"]
 # `Ipe.Encoding` codecs + `Ipe.Bytes` buffer kernels: the `base64` + `hex` +
 # `percent-encoding` crates and the `encoding.rs` / `bytes.rs` modules. Every
 # surface that uses the raw codec crates implies this (crypto/db/server/email/jwt/
@@ -260,7 +277,9 @@ json = ["serde_json"]
 # driver). Which driver a program actually *uses* is chosen by `config.rs` — the
 # emitter's `config_postgres.rs` overlay for postgres — not by dropping a sqlx
 # driver feature.
-db = ["sqlx", "sqlx?/sqlite", "sqlx?/postgres", "tokio", "tokio/sync", "serde_json", "json", "bincode", "encoding", "random"]
+# `time-core`: `db.rs`'s migration-ledger `applied_at` and `telemetry_spill.rs`'s
+# retention cutoff stamp `chrono::Utc::now()` timestamps.
+db = ["sqlx", "sqlx?/sqlite", "sqlx?/postgres", "tokio", "tokio/sync", "serde_json", "json", "bincode", "encoding", "random", "time-core"]
 # `db-sqlite` / `db-postgres`: config.rs alias selectors. Only the emitter ever
 # enables one, and it selects exactly one (SEAL-checked) — the standalone crate
 # links both sqlx drivers regardless (see `db`). The `compile_error!` in
@@ -309,11 +328,14 @@ websocket_client = ["tokio", "tokio/net", "tokio/sync", "tokio-tungstenite", "fu
 # (`web/console_proxy.rs`, `web/mod.rs`) spawns a child (`tokio::process`) and
 # handles signals (`tokio::signal`) — matching the emitted `web_cargo_toml`
 # live-runtime tokio feature set.
-web = ["server", "http_client", "serde_json", "async-trait", "tokio/signal", "tokio/process", "encoding", "uuid"]
+# `time-core`: `web/store.rs` (Live session store) and `web/hub.rs`/`web/mod.rs`
+# (console-proxy + hub timestamps) render `chrono` instants. `webview` implies
+# `web`, so the native-window backend carries it transitively.
+web = ["server", "http_client", "serde_json", "async-trait", "tokio/signal", "tokio/process", "encoding", "uuid", "time-core"]
 # `db-postgres` (not bare `db`) selects a concrete sqlx driver — it also pulls
 # `sqlite`, so both driver code paths compile. `jwt` + `url` cover the
 # JWT/auth and URL/SSRF surfaces that `db`/`web`/`http_client` reach.
-full = ["async", "json", "jwt", "url", "db", "db-postgres", "redis_store", "crypto", "compression", "csv_kernel", "cache_kernel", "tui", "config", "server", "http_client", "email", "websocket_client", "web", "time", "regex", "uuid", "random"]
+full = ["async", "json", "jwt", "url", "db", "db-postgres", "redis_store", "crypto", "compression", "csv_kernel", "cache_kernel", "tui", "config", "server", "http_client", "email", "websocket_client", "web", "time", "log", "regex", "uuid", "random"]
 # Browser-WASM TEA sink (`src/wasm/`): mount + patch-apply + delegated events.
 # Compiles only on wasm32 (the module is target-cfg'd); NOT in `full` — native
 # builds never link the wasm glue.
@@ -339,6 +361,14 @@ wasm-client = [
     "regex",
     "uuid",
     "random",
+    # The static wasm module set also declares `log` and `time` unconditionally.
+    # Their wasm arms read `js_sys::Date` / `gloo-timers`, not `chrono`, but the
+    # module declarations are now feature-gated, so `wasm-client` implies both to
+    # satisfy the source `#[cfg]`. `log`/`time` pull `dep:chrono` via `time-core`;
+    # the closed WASM app template (`WASM_CARGO_TOML`) declares `chrono`
+    # non-optional regardless, so this changes no emitted-app dep graph.
+    "log",
+    "time",
 ]
 
 [dev-dependencies]
