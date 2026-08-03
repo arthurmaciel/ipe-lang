@@ -52,6 +52,26 @@ pub fn list_minimum<T: PartialOrd>(xs: Vec<T>) -> IpeMaybe<T> {
     }
 }
 
+/// `Ipe.List.unique : List a -> List a` — the elements with duplicates removed,
+/// keeping the FIRST occurrence of each and preserving that first-seen order.
+/// `T: PartialEq` is the same equality bound `list_member` carries: membership is
+/// tested with `==`, so an already-seen element is dropped. `T: Clone` because
+/// each kept element is retained in the `seen` set while its original flows into
+/// the output. Quadratic in the worst case (linear membership scan per element),
+/// matching the equality-only contract — no `Ord`/`Hash` obligation is imposed on
+/// the element type, so it is total for any equatable `a`.
+pub fn list_unique<T: PartialEq + Clone>(xs: Vec<T>) -> Vec<T> {
+    let mut seen: Vec<T> = Vec::new();
+    let mut out: Vec<T> = Vec::new();
+    for x in xs {
+        if !seen.contains(&x) {
+            seen.push(x.clone());
+            out.push(x);
+        }
+    }
+    out
+}
+
 /// `Ipe.List.intersperse : a -> List a -> List a` — place `sep` between each
 /// pair of elements. `[]` and `[x]` are unchanged. `T: Clone` because `sep` is
 /// cloned into every gap.
@@ -672,6 +692,28 @@ mod tests {
         // Elm: maximum [] == Nothing.
         assert_eq!(list_maximum(Vec::<i64>::new()), IpeMaybe::Nothing);
         assert_eq!(list_minimum(Vec::<i64>::new()), IpeMaybe::Nothing);
+    }
+
+    #[test]
+    fn unique_keeps_first_occurrence_order() {
+        // Duplicates dropped; the FIRST occurrence's position is preserved.
+        assert_eq!(list_unique(vec![1i64, 1, 2, 3, 2, 1]), vec![1i64, 2, 3]);
+        // Already-unique input is returned unchanged (order preserved).
+        assert_eq!(list_unique(vec![3i64, 1, 2]), vec![3i64, 1, 2]);
+        // Empty and singleton edges.
+        assert_eq!(list_unique(Vec::<i64>::new()), Vec::<i64>::new());
+        assert_eq!(list_unique(vec![7i64]), vec![7i64]);
+        // Equality-only bound: works for a non-Ord/non-Hash equatable type too.
+        assert_eq!(
+            list_unique(vec![
+                "a".to_string(),
+                "b".into(),
+                "a".into(),
+                "c".into(),
+                "b".into()
+            ]),
+            vec!["a".to_string(), "b".into(), "c".into()]
+        );
     }
 
     #[test]

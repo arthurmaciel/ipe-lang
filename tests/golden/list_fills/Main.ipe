@@ -67,7 +67,19 @@ main =
         map3Sum =
             List.sum (List.map3 (\a b c -> a + b + c) [ 1, 2 ] [ 10, 20 ] [ 100, 200 ])
 
+        -- sortBy on the negated value orders descending; head is the largest (9).
+        sortByHead =
+            Maybe.withDefault 0 (List.head (List.sortBy (\n -> 0 - n) xs))
+
+        -- filterMap keeps evens and halves them: [4,2,6] → sum 6.
+        halvedEvens =
+            List.sum (List.filterMap (\n -> if modBy 2 n == 0 then Just (n // 2) else Nothing) xs)
+
+        -- unique drops duplicates, keeping first-seen order: [1,2,3] → sum 6.
+        distinct =
+            List.sum (List.unique [ 1, 1, 2, 3, 2, 1 ])
+
         nums =
-            [ total, prod, hi, lo, one, rep, gaps, big, keys, vals, sortedHead, descHead, map2Sum, map3Sum ]
+            [ total, prod, hi, lo, one, rep, gaps, big, keys, vals, sortedHead, descHead, map2Sum, map3Sum, sortByHead, halvedEvens, distinct ]
     in
     Io.println (String.join " " (List.map String.fromInt nums))

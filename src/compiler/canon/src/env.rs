@@ -683,6 +683,7 @@ impl Env {
                     "product",
                     "maximum",
                     "minimum",
+                    "unique",
                     "intersperse",
                     "partition",
                     "unzip",

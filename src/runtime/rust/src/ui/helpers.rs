@@ -1495,11 +1495,14 @@ pub fn ui_on_pseudo_<M: Clone>(pc: PseudoClass, attrs: Vec<Attribute<M>>) -> Att
 /// `Ui.mediaQuery : String -> List (Attribute msg) -> Element msg -> Element msg`
 ///
 /// Raw-CSS-media-query escape hatch (mirrors `../ipe` `Ipe.Ui.ipe`'s
-/// `mediaQuery`): wraps `child` in a `<div>` carrying the
+/// `mediaQuery`): attaches to `child` the
 /// `data-ipe-mq-q` (the query) + `data-ipe-mq-rules` (the attrs folded
 /// through the SAME `render::build_style_string` collector as the inline
 /// `style=""` path and `Ui.onPseudo`, so every value-as-data attr inherits
-/// the `SafeCssValue` gate) marker pair.  The Ipe.Web / Ipe.WebView render
+/// the `SafeCssValue` gate) marker pair.  The markers land on the child's own
+/// attribute list so the breakpoint rule targets the styled node (letting a
+/// media rule re-lay-out that node's own contents); a non-attributed leaf
+/// child falls back to a marker-carrying wrapper.  The Ipe.Web / Ipe.WebView render
 /// pipelines consume the markers post-`assign_ipe_ids` via
 /// `web::style_inject::apply_style_injections` (`build_mq`), emitting a
 /// ipe-id-scoped `<style data-ipe-mq="<sid>">@media <q> {
@@ -1513,10 +1516,10 @@ pub fn ui_on_pseudo_<M: Clone>(pc: PseudoClass, attrs: Vec<Attribute<M>>) -> Att
 /// [`crate::css_safety::SafeCssMediaQuery`].  A query that fails
 /// the gate (ruleset/declaration breakout `{ } ;`, `</` close-tag, `/*`
 /// comment, `@import`, script sinks, or any CSS-hex-escaped spelling of
-/// those) drops the ENTIRE media-query styling: the wrapper `<div>` is still
-/// emitted (stable DOM shape for the Web diff) but carries no marker attrs,
-/// so no `<style>` block is ever built.  `build_mq`'s `strip_style_close` at
-/// the sink stays as defence-in-depth, not the primary gate.
+/// those) drops the ENTIRE media-query styling: the child renders unchanged,
+/// carrying no marker attrs, so no `<style>` block is ever built.
+/// `build_mq`'s `strip_style_close` at the sink stays as defence-in-depth, not
+/// the primary gate.
 #[must_use]
 pub fn ui_media_query_<M: Clone>(
     query: String,
@@ -1532,10 +1535,35 @@ pub fn ui_media_query_<M: Clone>(
             Attribute::AttrAttribute("data-ipe-mq-rules".to_owned(), rules),
         ],
         // Gate failure or nothing to style → no markers (fail-closed drop of
-        // the styling only; the child still renders inside the wrapper).
+        // the styling only; the child still renders unchanged).
         _ => vec![],
     };
-    Element::Node(Description::NoDescription, markers, vec![child])
+    attach_markers_to_child(child, markers)
+}
+
+/// Attach media-query marker attributes to `child`'s OWN attribute list so the
+/// breakpoint rule targets the styled node directly — a media rule can then
+/// re-lay-out that node's own contents (e.g. `align-items` on a column). Only
+/// `Node` / `TaggedNode` carry attributes; a childless variant (`Text`,
+/// `Empty`, `Raw`, `Cells`) has no attribute slot, so it falls back to a
+/// marker-carrying wrapper `Node` (the media rule then targets the wrapper,
+/// which is the best available anchor for a non-attributed leaf). An empty
+/// `markers` (gate failure) leaves the child untouched.
+fn attach_markers_to_child<M: Clone>(child: Element<M>, markers: Vec<Attribute<M>>) -> Element<M> {
+    if markers.is_empty() {
+        return child;
+    }
+    match child {
+        Element::Node(desc, mut attrs, kids) => {
+            attrs.extend(markers);
+            Element::Node(desc, attrs, kids)
+        }
+        Element::TaggedNode(tag, desc, mut attrs, kids) => {
+            attrs.extend(markers);
+            Element::TaggedNode(tag, desc, attrs, kids)
+        }
+        leaf => Element::Node(Description::NoDescription, markers, vec![leaf]),
+    }
 }
 
 /// `Ui.breakpoint : String -> List (Attribute msg) -> Element msg -> Element msg`

@@ -433,6 +433,7 @@ pub const fn kernel_name(k: KernelFn) -> &'static str {
         KernelFn::ListProduct => "list_product",
         KernelFn::ListMaximum => "list_maximum",
         KernelFn::ListMinimum => "list_minimum",
+        KernelFn::ListUnique => "list_unique",
         KernelFn::ListIntersperse => "list_intersperse",
         KernelFn::ListPartition => "list_partition",
         KernelFn::ListUnzip => "list_unzip",
