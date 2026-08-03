@@ -83,25 +83,30 @@ structure that makes hello world pay for `rsa`.
 ### Measured floor
 
 The budget is reachable and the gap is structural, not incidental. On a warm
-developer machine, `examples/sky/ipe/01-hello-world` (`Io.println` only), built
-before the usage-driven floor, after it, and hand-trimmed to the floor its single
-kernel needs — a synchronous `fn main` printing to stdout with no dependencies:
+developer machine, `examples/sky/ipe/01-hello-world` (`Io.println` only), built at
+each stage of the work and hand-trimmed to the floor its single kernel needs — a
+synchronous `fn main` printing to stdout with no dependencies:
 
-| Metric | Before S1 | After S1 | Floor (`Io.println`) |
-|---|---|---|---|
-| Crates compiled | 105 | 51 | 1 |
-| Cold build | ~62 s | ~40 s | ~0.6 s |
-| Warm rebuild (edit `main`) | ~2.4 s | ~2.4 s | ~0.5 s |
-| Binary | 1.06 MB | 0.44 MB | 0.36 MB |
+| Metric | Before S1 | After S1 | After S3 | Floor (`Io.println`) |
+|---|---|---|---|---|
+| Crates compiled | 105 | 51 | 45 | 1 |
+| Cold build | ~62 s | ~40 s | ~40 s | ~0.6 s |
+| Warm rebuild (edit `main`) | ~2.4 s | ~2.4 s | **~0.78 s** | ~0.5 s |
+| Binary | 1.06 MB | 0.44 MB | 0.45 MB | 0.36 MB |
 
 S1 gates the heavy roots — `url`/idna, `rsa`, and `tokio` for pure programs
 (synchronous `fn main`) — cutting the cold closure and the binary by roughly a
-third to a half. The **warm rebuild is unchanged**, because it recompiles the
-vendored 2.6 MB runtime *inside* the user crate on every edit — a cost S1 cannot
-touch. That gap is S3's target (the runtime as a precompiled crate). Neither cost
-is required by the program's semantics: the emit ships the whole runtime and its
-dependency floor for every program, because the emitted `main.rs` prelude
-references modules the user never calls.
+third to a half, but the **warm rebuild is unchanged**: it recompiles the vendored
+2.6 MB runtime *inside* the user crate on every edit, a cost S1 cannot touch.
+
+S3 fixes exactly that. With the runtime emitted as a precompiled dependency crate
+instead of vendored source, an edit recompiles only the user's own crate and
+relinks — the runtime's compiled artifact is reused — so the warm loop drops to
+**~0.78 s**, near the sub-second budget. The residual crate count (45) and cold
+build (~40 s) are the runtime crate's still-unconditional floor deps (serde,
+regex, chrono, …); making those usage-gated — the runtime-crate feature split,
+driven by the function-level reachability engine — is what takes a bare `Program`
+toward single digits and pulls the cold build down with it.
 
 ## Strategies
 
