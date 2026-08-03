@@ -56,6 +56,19 @@ use ipe_diagnostics::{
 };
 use ipe_intern::Interner;
 
+/// The runtime crate an emitted project linked against: its root and declared
+/// version.
+///
+/// Carried into [`CliError::EmittedBuildFailed`] so a `cargo` failure that names
+/// a missing runtime feature can point at the exact stale crate.
+#[derive(Debug, Clone)]
+pub struct RuntimeContext {
+    /// The resolved runtime crate root.
+    pub root: PathBuf,
+    /// The version that crate declares.
+    pub version: String,
+}
+
 /// A driver-level error. Distinct from a compiler [`Diagnostic`]: it also covers
 /// filesystem failures and command-line misuse, neither of which is a property
 /// of the Ipê program being compiled.
@@ -122,6 +135,40 @@ pub enum CliError {
     RuntimeMaterializeFailed {
         /// What specifically failed.
         detail: String,
+    },
+    /// The resolved runtime crate declares a version different from the
+    /// compiler's own. The emitted project pins features and shapes against the
+    /// compiler's runtime; a crate at a different version lacks those, so linking
+    /// it fails deep inside `cargo` with an opaque feature error. This is a hard,
+    /// typed refusal at resolution time — a stale `out/`, a walked-up old crate
+    /// root, or a mismatched `IPE_RUNTIME_DIR` is caught before emit, never
+    /// linked. Carries the resolved root, the version found there, and the
+    /// compiler's expected version.
+    RuntimeVersionMismatch {
+        /// The resolved runtime crate root whose version disagrees.
+        path: PathBuf,
+        /// The version that crate's `Cargo.toml` declares.
+        found: String,
+        /// The compiler's own version, which the runtime must equal.
+        expected: String,
+    },
+    /// Building the emitted Rust project failed — `cargo` exited non-zero while
+    /// compiling the program this compiler emitted. This is neither a
+    /// command-line misuse (so it never shows the command's `--help` page) nor a
+    /// fault in the user's Ipê source (the compile already succeeded). Carries
+    /// `cargo`'s exit code and its captured stderr so `Display` can surface a
+    /// targeted cause (a runtime-feature gap) or the trimmed `cargo` error under
+    /// a clean header.
+    EmittedBuildFailed {
+        /// What the build step compiled (e.g. `the emitted program`).
+        what: &'static str,
+        /// `cargo`'s exit code.
+        code: i32,
+        /// `cargo`'s captured stderr, presented after trimming.
+        stderr: String,
+        /// The runtime crate root the emitted project linked against, when the
+        /// caller resolved one — named in a runtime-feature-gap message.
+        runtime: Option<RuntimeContext>,
     },
     /// `ipe explain <CODE>` was given a string that is not a taxonomy code.
     /// Carries the (trimmed) input and a deterministic did-you-mean list over
@@ -262,17 +309,7 @@ impl std::fmt::Display for CliError {
         match self {
             Self::Usage(hint) => write!(f, "{hint}"),
             Self::UsageOwned(hint) => write!(f, "{hint}"),
-            // The top-level help, coloured for a terminal. Rendered against
-            // stderr because misuse output goes to stderr.
-            Self::UnknownCommand { attempted } => {
-                if !attempted.is_empty() {
-                    writeln!(f, "unknown command `{attempted}`")?;
-                    if let Some(sugg) = nearest_command(attempted) {
-                        writeln!(f, "  = help: maybe `{sugg}`?")?;
-                    }
-                }
-                f.write_str(help::top_level(&std::io::stderr()).trim_start())
-            }
+            Self::UnknownCommand { attempted } => fmt_unknown_command(attempted, f),
             Self::Io { path, source } => write!(f, "io error at {}: {source}", path.display()),
             Self::Pipeline { file, src, diag } => {
                 f.write_str(&render(diag, &file.to_string_lossy(), src))
@@ -284,7 +321,9 @@ impl std::fmt::Display for CliError {
             ),
             Self::RuntimeDirInvalid { .. }
             | Self::RuntimeHomeUnknown
-            | Self::RuntimeMaterializeFailed { .. } => fmt_runtime_install_error(self, f),
+            | Self::RuntimeMaterializeFailed { .. }
+            | Self::RuntimeVersionMismatch { .. } => fmt_runtime_install_error(self, f),
+            Self::EmittedBuildFailed { .. } => fmt_emitted_build_failed(self, f),
             Self::StaticRefusal(refusal) => write!(f, "static build refused: {refusal}"),
             Self::CapabilityMismatch { missing, extra } => {
                 f.write_str("declared capabilities do not match the program's inferred set")?;
@@ -374,6 +413,19 @@ impl std::fmt::Display for CliError {
     }
 }
 
+/// Render [`CliError::UnknownCommand`] for `Display`: an optional "unknown
+/// command" line with a near-miss suggestion, then the top-level help screen
+/// (coloured for a terminal). Output goes to stderr, where misuse output belongs.
+fn fmt_unknown_command(attempted: &str, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    if !attempted.is_empty() {
+        writeln!(f, "unknown command `{attempted}`")?;
+        if let Some(sugg) = nearest_command(attempted) {
+            writeln!(f, "  = help: maybe `{sugg}`?")?;
+        }
+    }
+    f.write_str(help::top_level(&std::io::stderr()).trim_start())
+}
+
 /// Render the runtime-install error family (`RuntimeDirInvalid`,
 /// `RuntimeHomeUnknown`, `RuntimeMaterializeFailed`) for [`CliError`]'s `Display`.
 /// Split out so the main `Display` match stays within one screen.
@@ -409,8 +461,91 @@ fn fmt_runtime_install_error(err: &CliError, f: &mut std::fmt::Formatter<'_>) ->
             "could not install the Ipe runtime: {detail}\n  \
              the build was stopped rather than link an incomplete runtime"
         ),
-        // The caller only dispatches the three runtime-install variants here.
+        CliError::RuntimeVersionMismatch {
+            path,
+            found,
+            expected,
+        } => write!(
+            f,
+            "the Ipe runtime at {} is version {found}, but this compiler is {expected}; \
+             a program emitted by this compiler cannot link a different runtime.\n  \
+             = help: this runtime is out of date. Remove the stale copy (the project's \
+             `out/` directory, or whatever `IPE_RUNTIME_DIR` points at) and rebuild — the \
+             matching runtime re-materializes automatically.",
+            path.display()
+        ),
+        // The caller only dispatches the runtime-install variants here.
         _ => Ok(()),
+    }
+}
+
+/// Render [`CliError::EmittedBuildFailed`] for `Display`. When `cargo`'s stderr
+/// reveals a missing runtime feature, lead with a targeted line naming the
+/// out-of-date runtime; otherwise present the trimmed `cargo` error under a clean
+/// header. Neither form shows any command's `--help` page.
+fn fmt_emitted_build_failed(err: &CliError, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    let CliError::EmittedBuildFailed {
+        what,
+        code,
+        stderr,
+        runtime,
+    } = err
+    else {
+        // The caller only dispatches the one variant here.
+        return Ok(());
+    };
+    let runtime = runtime.as_ref();
+    let trimmed = stderr.trim();
+    if let Some(feature) = missing_runtime_feature(trimmed) {
+        write!(
+            f,
+            "building {what} failed: it needs the runtime feature `{feature}`",
+        )?;
+        if let Some(rt) = runtime {
+            write!(
+                f,
+                ", but the runtime at {} (version {}) does not provide it",
+                rt.root.display(),
+                rt.version
+            )?;
+        }
+        return write!(
+            f,
+            ".\n  = help: the runtime is out of date. Remove the stale copy (the project's \
+             `out/` directory, or whatever `IPE_RUNTIME_DIR` points at) and rebuild — the \
+             matching runtime re-materializes automatically."
+        );
+    }
+    write!(f, "building {what} failed (cargo exited {code})")?;
+    if !trimmed.is_empty() {
+        write!(f, "\n{trimmed}")?;
+    }
+    Ok(())
+}
+
+/// Extract the runtime feature name from a `cargo` feature-resolution error of
+/// the form ``… depends on ipe-runtime-rust with feature `X` but ipe-runtime-rust
+/// does not have that feature``. The name is quoted in backticks or single
+/// quotes; both are accepted. `None` when the stderr is some other failure.
+fn missing_runtime_feature(stderr: &str) -> Option<String> {
+    if !stderr.contains("does not have that feature") {
+        return None;
+    }
+    // The name sits between `with feature <q>` and the matching close quote,
+    // where the quote is a backtick or a single quote.
+    let after = stderr.split_once("with feature ")?.1;
+    let mut chars = after.chars();
+    let close = match chars.next()? {
+        '`' => '`',
+        '\'' => '\'',
+        _ => return None,
+    };
+    let rest = chars.as_str();
+    let name = rest.split_once(close)?.0;
+    if name.is_empty() {
+        None
+    } else {
+        Some(name.to_owned())
     }
 }
 
@@ -2396,6 +2531,56 @@ fn run_build(rest: &[String]) -> Result<(), CliError> {
     Ok(())
 }
 
+/// Run a `cargo build` of an emitted project to completion, capturing its
+/// stderr. `cargo`'s output is forwarded to this process's stderr on every
+/// outcome (so progress and warnings are not swallowed); on a non-zero exit the
+/// captured text is returned inside a typed [`CliError::EmittedBuildFailed`] so
+/// the failure renders as a clean `ipe`-level diagnostic — a targeted
+/// runtime-feature line when `cargo` reports a missing feature, otherwise the
+/// trimmed `cargo` error under a plain header — and never the command's `--help`
+/// page. `what` names what was built; `runtime` is the crate the project linked
+/// against, when the caller resolved one.
+///
+/// # Errors
+/// - [`CliError::Io`] if `cargo` cannot be spawned.
+/// - [`CliError::EmittedBuildFailed`] if `cargo` exits non-zero.
+fn build_emitted_project(
+    cargo: &mut std::process::Command,
+    what: &'static str,
+    runtime: Option<RuntimeContext>,
+    io_path: &Path,
+) -> Result<(), CliError> {
+    let output = cargo.output().map_err(|e| CliError::Io {
+        path: io_path.to_path_buf(),
+        source: e,
+    })?;
+    // Forward cargo's own stderr so its progress and warnings still reach the
+    // terminal; on failure the same text is also carried in the typed error.
+    let stderr = String::from_utf8_lossy(&output.stderr).into_owned();
+    eprint!("{stderr}");
+    if output.status.success() {
+        return Ok(());
+    }
+    Err(CliError::EmittedBuildFailed {
+        what,
+        code: output.status.code().unwrap_or(1),
+        stderr,
+        runtime,
+    })
+}
+
+/// The runtime crate the emit will link against, as a [`RuntimeContext`] for a
+/// build-failure message. `None` when no dependency-model runtime is resolved
+/// (a wasm or vendored build), in which case a feature-gap message simply omits
+/// the crate reference. Resolution failure is swallowed to `None` — this is only
+/// for enriching an error message, never a gate.
+fn runtime_context_for_message() -> Option<RuntimeContext> {
+    runtime_embed::resolve().ok().map(|r| RuntimeContext {
+        root: r.root().to_path_buf(),
+        version: r.version().to_owned(),
+    })
+}
+
 /// Run the three post-emit bundle steps for `--target wasm`:
 /// 1. `cargo build --target wasm32-unknown-unknown --release` (THE SEAL cross-target)
 /// 2. `wasm-bindgen` CLI — emits the JS glue + `www/pkg/ipe_app_bg.wasm`
@@ -2405,27 +2590,21 @@ fn run_build(rest: &[String]) -> Result<(), CliError> {
 /// directory at `out_dir/www/` is a self-contained static SPA ready to serve.
 ///
 /// # Errors
-/// [`CliError::UsageOwned`] when cargo or wasm-bindgen fails.
+/// [`CliError::EmittedBuildFailed`] when the wasm `cargo build` fails;
+/// [`CliError::UsageOwned`] when `wasm-bindgen` fails.
 fn bundle_wasm(out_dir: &Path) -> Result<(), CliError> {
     // Fail closed before the cross-compile: a missing toolchain becomes a clear
     // root-cause message rather than an opaque OS spawn error.
     let cargo_bin = toolchain::require_cargo(toolchain::ToolIntent::BundleWasm)?;
 
     // Step 1: compile to .wasm
-    let cargo_status = std::process::Command::new(cargo_bin.path())
+    let mut cargo = std::process::Command::new(cargo_bin.path());
+    cargo
         .args(["build", "--target", "wasm32-unknown-unknown", "--release"])
-        .current_dir(out_dir)
-        .status()
-        .map_err(|e| CliError::Io {
-            path: out_dir.to_path_buf(),
-            source: e,
-        })?;
-    if !cargo_status.success() {
-        let code = cargo_status.code().unwrap_or(1);
-        return Err(CliError::UsageOwned(format!(
-            "cargo build --target wasm32-unknown-unknown failed (exit {code})"
-        )));
-    }
+        .current_dir(out_dir);
+    // The wasm build uses the vendored runtime template, not the dependency-model
+    // crate, so no `RuntimeContext` is attached.
+    build_emitted_project(&mut cargo, "the emitted wasm program", None, out_dir)?;
 
     // Step 2: wasm-bindgen — locate the .wasm the cargo build just produced
     // (`CARGO_TARGET_DIR` may relocate it; probe the env var first, then the
@@ -2623,16 +2802,12 @@ fn run_run(rest: &[String]) -> Result<(), CliError> {
     if let Some(plan) = &static_plan {
         cargo.args(["--target", plan.triple.as_str()]);
     }
-    let cargo_status = cargo.status().map_err(|e| CliError::Io {
-        path: out_dir.clone(),
-        source: e,
-    })?;
-    if !cargo_status.success() {
-        let code = cargo_status.code().unwrap_or(1);
-        return Err(CliError::UsageOwned(format!(
-            "cargo build failed with exit code {code}"
-        )));
-    }
+    let runtime_ctx = if runtime_dep && !wasm_target {
+        runtime_context_for_message()
+    } else {
+        None
+    };
+    build_emitted_project(&mut cargo, "the emitted program", runtime_ctx, &out_dir)?;
 
     // --- Step 3: exec the emitted binary, forwarding args and exit code ---
     // The binary name is always `ipe-app` (the default package name used by
@@ -3519,20 +3694,14 @@ fn verify_test(path: Option<&str>) -> Result<(), CliError> {
     }
 
     // Compile the emitted Rust project.
-    let cargo_status = std::process::Command::new(cargo_bin.path())
-        .arg("build")
-        .current_dir(&out_dir)
-        .status()
-        .map_err(|e| CliError::Io {
-            path: out_dir.clone(),
-            source: e,
-        })?;
-    if !cargo_status.success() {
-        let code = cargo_status.code().unwrap_or(1);
-        return Err(CliError::UsageOwned(format!(
-            "cargo build of the test runner failed with exit code {code}"
-        )));
-    }
+    let mut cargo = std::process::Command::new(cargo_bin.path());
+    cargo.arg("build").current_dir(&out_dir);
+    build_emitted_project(
+        &mut cargo,
+        "the emitted test runner",
+        runtime_context_for_message(),
+        &out_dir,
+    )?;
 
     // Locate the compiled binary via `cargo metadata` so a user-level
     // `CARGO_TARGET_DIR` pin or workspace override is respected.
@@ -4276,6 +4445,68 @@ const fn diag_span(d: &Diagnostic) -> ipe_diagnostics::Span {
 mod tests {
     use super::*;
     use ipe_diagnostics::{NameError, Span};
+
+    /// `missing_runtime_feature` pulls the feature name out of `cargo`'s
+    /// feature-resolution error, whether the name is backtick- or single-quoted,
+    /// and yields `None` for an unrelated failure.
+    #[test]
+    fn extracts_missing_runtime_feature() {
+        let backtick = "package `ipe-app` depends on `ipe-runtime-rust` with feature `regex` \
+             but `ipe-runtime-rust` does not have that feature.";
+        assert_eq!(missing_runtime_feature(backtick).as_deref(), Some("regex"));
+        let single = "package `ipe-app` depends on ipe-runtime-rust with feature 'random' \
+             but ipe-runtime-rust does not have that feature";
+        assert_eq!(missing_runtime_feature(single).as_deref(), Some("random"));
+        assert_eq!(
+            missing_runtime_feature("error: linking with `cc` failed: exit status: 1"),
+            None
+        );
+    }
+
+    /// A cargo build failure whose stderr names a missing runtime feature renders
+    /// a targeted, actionable diagnostic that names the feature and the stale
+    /// runtime — and never the `run` command's `--help` page.
+    #[test]
+    fn emitted_build_failure_reports_missing_feature() {
+        let err = CliError::EmittedBuildFailed {
+            what: "the emitted program",
+            code: 101,
+            stderr: "package `ipe-app` depends on `ipe-runtime-rust` with feature `regex` \
+                 but `ipe-runtime-rust` does not have that feature."
+                .to_owned(),
+            runtime: Some(RuntimeContext {
+                root: PathBuf::from("/tmp/rt"),
+                version: "0.1.34".to_owned(),
+            }),
+        };
+        let rendered = err.to_string();
+        assert!(rendered.contains("runtime feature `regex`"), "{rendered}");
+        assert!(rendered.contains("/tmp/rt"), "{rendered}");
+        assert!(rendered.contains("out of date"), "{rendered}");
+        assert!(
+            !rendered.contains("ipe run [<path>]"),
+            "the build failure must not print the run help page: {rendered}"
+        );
+    }
+
+    /// A cargo build failure that is not a feature gap renders the trimmed cargo
+    /// error under a plain header, still without any help page.
+    #[test]
+    fn emitted_build_failure_reports_generic_cargo_error() {
+        let err = CliError::EmittedBuildFailed {
+            what: "the emitted program",
+            code: 101,
+            stderr: "error[E0425]: cannot find value `x` in this scope".to_owned(),
+            runtime: None,
+        };
+        let rendered = err.to_string();
+        assert!(
+            rendered.contains("building the emitted program failed"),
+            "{rendered}"
+        );
+        assert!(rendered.contains("cannot find value"), "{rendered}");
+        assert!(!rendered.contains("ipe run [<path>]"), "{rendered}");
+    }
 
     /// The golden entry, located relative to this crate's manifest.
     fn golden_entry() -> PathBuf {
