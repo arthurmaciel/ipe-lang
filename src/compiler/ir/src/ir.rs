@@ -129,6 +129,19 @@ pub struct Module {
     /// — no other runtime surface reaches it — so no other `uses_*` flag forces
     /// it on.
     pub uses_csv: bool,
+    /// `true` when the lowerer detected at least one `Ipe.Encoding` codec kernel
+    /// (`base64Encode` / `base64Decode` / `urlEncode` / `urlDecode` / `hexEncode`
+    /// / `hexDecode`) or any `Ipe.Bytes` kernel.
+    ///
+    /// Set by `ipe_lower` when any call site resolves to a
+    /// `KernelFn::is_encoding()` variant. The backend reads this flag to declare
+    /// `pub mod encoding;` + `pub mod bytes;` in the emitted `ipe_runtime/mod.rs`
+    /// and add the `base64` + `hex` + `percent-encoding` dependencies. Those three
+    /// crates are also reached by the `crypto` / `db` / `server` / `email` / `jwt`
+    /// / `web` surfaces (whose runtime modules use the raw crates directly), so
+    /// the backend force-declares `encoding` under `reaches_encoding()` — the
+    /// union of this flag with those surfaces.
+    pub uses_encoding: bool,
     /// `true` when the lowerer detected at least one HEAVY `Ipe.Crypto` kernel
     /// call (legacy SHA-1/MD5, AES-GCM / ChaCha20-Poly1305 AEAD, or PBKDF2
     /// key derivation).
@@ -3760,6 +3773,7 @@ mod tests {
                 uses_config: false,
                 uses_compression: false,
                 uses_csv: false,
+                uses_encoding: false,
                 uses_crypto: false,
                 uses_jwt: false,
                 uses_url: false,
@@ -4265,6 +4279,7 @@ mod serde_persistence_tests {
                 uses_config: false,
                 uses_compression: false,
                 uses_csv: false,
+                uses_encoding: false,
                 uses_crypto: false,
                 uses_jwt: false,
                 uses_url: false,
@@ -4342,6 +4357,7 @@ mod serde_persistence_tests {
                 uses_config: false,
                 uses_compression: false,
                 uses_csv: false,
+                uses_encoding: false,
                 uses_crypto: false,
                 uses_jwt: false,
                 uses_url: false,

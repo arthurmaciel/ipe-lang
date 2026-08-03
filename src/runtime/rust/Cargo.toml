@@ -99,10 +99,14 @@ regex = "1"
 # `char::is_numeric`/`is_lowercase`/`is_uppercase` (which fold in No/Nl,
 # Other_Lowercase, Other_Uppercase). See char_kernel.rs.
 unicode-general-category = "1"
-base64 = "0.22"
+# base64 / hex / percent-encoding: the `Ipe.Encoding` codecs + `Ipe.Bytes`
+# buffer kernels, behind the `encoding` feature. Also used by the raw crates in
+# the crypto/db/server/email/jwt/web surfaces — those features each imply
+# `encoding`. A program that reaches none of these drops all three crates.
+base64 = { version = "0.22", optional = true }
 uuid = { version = "1", features = ["v4", "v7"] }
-hex = "0.4"
-percent-encoding = "2"
+hex = { version = "0.4", optional = true }
+percent-encoding = { version = "2", optional = true }
 chrono = "0.4"
 # `chrono-tz` (the embedded IANA zone DB) is optional: only the `time` runtime
 # module's IANA-zone helpers use it, and they are gated behind the `time`
@@ -205,6 +209,14 @@ locale = ["dep:icu_casemap", "dep:icu_locale_core"]
 # Ipe.Time IANA-zone calendar surface (`time.rs`'s zone helpers). Gated so a
 # program that reaches no `Ipe.Time` kernel drops the embedded IANA zone DB.
 time = ["dep:chrono-tz"]
+# `Ipe.Encoding` codecs + `Ipe.Bytes` buffer kernels: the `base64` + `hex` +
+# `percent-encoding` crates and the `encoding.rs` / `bytes.rs` modules. Every
+# surface that uses the raw codec crates implies this (crypto/db/server/email/jwt/
+# web); a program that reaches none of them drops `base64` + `hex`. The floor
+# `crypto_core::crypto_random_token` uses an INLINE base64url encoder (no crate),
+# so it stays available at `--no-default-features` for the always-emitted prelude
+# wrapper — it is deliberately NOT a consumer of this feature.
+encoding = ["dep:base64", "dep:hex", "dep:percent-encoding"]
 # `json` is the emitted FLOOR feature (`default = ["json"]`); it must NOT drag
 # `jsonwebtoken` (+ ring) into a plain JSON program. The JWT surface moved to
 # the `jwt` feature.
@@ -219,7 +231,7 @@ json = ["serde_json"]
 # driver). Which driver a program actually *uses* is chosen by `config.rs` — the
 # emitter's `config_postgres.rs` overlay for postgres — not by dropping a sqlx
 # driver feature.
-db = ["sqlx", "sqlx?/sqlite", "sqlx?/postgres", "tokio", "tokio/sync", "serde_json", "json", "bincode"]
+db = ["sqlx", "sqlx?/sqlite", "sqlx?/postgres", "tokio", "tokio/sync", "serde_json", "json", "bincode", "encoding"]
 # `db-sqlite` / `db-postgres`: config.rs alias selectors. Only the emitter ever
 # enables one, and it selects exactly one (SEAL-checked) — the standalone crate
 # links both sqlx drivers regardless (see `db`). The `compile_error!` in
@@ -227,7 +239,7 @@ db = ["sqlx", "sqlx?/sqlite", "sqlx?/postgres", "tokio", "tokio/sync", "serde_js
 db-sqlite = ["db"]
 db-postgres = ["db"]
 redis_store = ["redis", "tokio", "tokio/sync", "serde_json", "async-trait", "bincode"]
-crypto = ["rsa", "bcrypt", "aes-gcm", "chacha20poly1305", "pbkdf2"]
+crypto = ["rsa", "bcrypt", "aes-gcm", "chacha20poly1305", "pbkdf2", "encoding"]
 # `jwt`: the JWT encode/decode surface (`jwt.rs`, `all(json, crypto)`-gated).
 # Splits `jsonwebtoken` (+ its ring closure) out of the floor `json` feature so
 # a plain JSON program does not link it. `auth.rs` (register/login) also needs
@@ -248,7 +260,7 @@ webview = ["wry", "tao", "web"]
 config = ["json", "toml", "serde_yaml"]
 # `tokio/net`+`tokio/sync`: axum binds a listener (`tokio::net`) and the
 # server/live loop uses `tokio::sync`.
-server = ["tokio", "tokio/net", "tokio/sync", "axum", "tower-http", "futures-util"]
+server = ["tokio", "tokio/net", "tokio/sync", "axum", "tower-http", "futures-util", "encoding"]
 # The reqwest-free `ssrf` module parses URLs via the `url` crate (which reqwest
 # re-exports as `reqwest::Url`); `url` is behind the `url` feature.
 http_client = ["tokio", "reqwest", "futures-util", "url"]
@@ -256,7 +268,7 @@ http_client = ["tokio", "reqwest", "futures-util", "url"]
 # SSRF hardening; ws_client.rs reuses `http_client::ssrf_validate_url` +
 # `ssrf_pinned_ws_addr`. Both need the http_client module present. (`sha2` is a
 # non-optional base dep now.)
-email = ["tokio", "reqwest", "lettre", "serde_json", "http_client"]
+email = ["tokio", "reqwest", "lettre", "serde_json", "http_client", "encoding"]
 # ws needs ONLY the reqwest-free ssrf validators (which use `url`, behind the
 # `url` feature), NOT the reqwest HTTP client — so it does not pull
 # `http_client`. `tokio/net`: `ws_client.rs` opens the pinned TCP socket.
@@ -268,7 +280,7 @@ websocket_client = ["tokio", "tokio/net", "tokio/sync", "tokio-tungstenite", "fu
 # (`web/console_proxy.rs`, `web/mod.rs`) spawns a child (`tokio::process`) and
 # handles signals (`tokio::signal`) — matching the emitted `web_cargo_toml`
 # live-runtime tokio feature set.
-web = ["server", "http_client", "serde_json", "async-trait", "tokio/signal", "tokio/process"]
+web = ["server", "http_client", "serde_json", "async-trait", "tokio/signal", "tokio/process", "encoding"]
 # `db-postgres` (not bare `db`) selects a concrete sqlx driver — it also pulls
 # `sqlite`, so both driver code paths compile. `jwt` + `url` cover the
 # JWT/auth and URL/SSRF surfaces that `db`/`web`/`http_client` reach.
@@ -288,6 +300,9 @@ wasm-client = [
     # `url`: the wasm32 `http_client.rs` fetch arm parses/narrows URLs via
     # `crate::url` (now behind the `url` feature).
     "url",
+    # `encoding`: the static wasm module set keeps `encoding.rs` / `bytes.rs`
+    # behind the `encoding` feature.
+    "encoding",
 ]
 
 [dev-dependencies]
