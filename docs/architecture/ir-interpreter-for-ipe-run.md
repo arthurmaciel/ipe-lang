@@ -1,6 +1,6 @@
 # IR interpreter for `ipe run`
 
-The design for strategy S6 of `docs/architecture/compilation-performance.md`:
+The design for strategy S6 of ADR 0054:
 `ipe run` executes the lowered `ipe_ir` program directly, removing `rustc`
 from the dev loop. `ipe build`, `--release`, and every FFI-bearing program
 keep the rustc AOT path unchanged. This is the only strategy that reaches the
@@ -558,7 +558,7 @@ generation-stamped portable-IR artifact (P3's encoding reused); readiness
 probe unchanged.
 Gate: full watch suite (including SIGTERM forwarding) green; measured
 edit-to-restart — including the decode + re-intern cost — logged into
-`compilation-performance.md`'s measured table.
+ADR 0054's measured table.
 
 **P6 — corpus-wide parity and cutover.**
 Goal: the interpreter as the `ipe run` default.
