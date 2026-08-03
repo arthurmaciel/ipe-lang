@@ -31,6 +31,12 @@ Tooling:
   - `ipe-index def <sym>` / `refs <sym>` / `kind <fn|struct|enum|trait|type|impl>`.
   - `ipe-index parity --gaps` — Go-vs-Rust kernel parity gaps.
   Reserve `rg` for free-text hunts index can't answer.
+  - **`rg` pitfall — never write `rg -rn`/`-rl`/`-rln`.** Unlike `grep`,
+    ripgrep's `-r` is `--replace <TEXT>`, and it swallows the trailing letters
+    as the replacement string: `rg -rn 'sky'` means *replace every `sky` with
+    `n`*, printing `sky skyc` as `n nc` — silently corrupting the output you
+    read. ripgrep recurses by default, so recursive+line-number is just
+    `rg -n PATTERN` (no `-r`). Reproduce: `printf 'sky skyc\n' | rg -rn 'sky'`.
 - **Learn how reference handles THIS task before designing fix.**
   `../ipe` = READ-ONLY source of truth. For construct you're fixing,
   read each layer: **Ipe compiler** (Haskell, `../ipe/src/Ipe/` —
