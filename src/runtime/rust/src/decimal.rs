@@ -5,10 +5,15 @@
 use super::IpeResult;
 use rust_decimal::{Decimal as RD, prelude::FromPrimitive};
 
-/// Opaque Ipê `Decimal` — newtype around `rust_decimal::Decimal`.
-#[derive(
-    Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Debug, serde::Serialize, serde::Deserialize,
-)]
+/// Opaque Ipê `Decimal` — newtype around `rust_decimal::Decimal`. The serde
+/// derives are gated on the `serde` feature; `serde` in turn weakly enables
+/// `rust_decimal/serde` (`rust_decimal?/serde`) so the inner `RD` gains its serde
+/// impls only when both `decimal` and `serde` are selected, so this type carries
+/// no serde impls when the `serde` feature is off. (The `rust_decimal` crate's
+/// own default features still link `serde`; dropping that crate for a
+/// decimal-only program needs `default-features = false` — a separate dep-shrink.)
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Debug)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct Decimal(pub RD);
 
 use rust_decimal::RoundingStrategy;

@@ -29,7 +29,8 @@ pub fn basics_mod_by(divisor: i64, n: i64) -> i64 {
 /// returns `-1 / 0 / 1` as a plain `int`.  The Rust backend returns a typed
 /// enum so pattern-match on `LT / EQ / GT` is sound and exhaustive without
 /// an extra range-check.  See `docs/divergences-from-sky.md §B-compare`.
-#[derive(Clone, Copy, PartialEq, Eq, Debug, serde::Serialize, serde::Deserialize)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[repr(u8)]
 pub enum IpeOrder {
     LT = 0,

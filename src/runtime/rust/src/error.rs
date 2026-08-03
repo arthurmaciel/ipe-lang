@@ -33,7 +33,8 @@ use crate::core::IpeMaybe;
 /// exhaustively-matched runtime type (mirrors `IpeOrder`'s convention).
 /// Variant order matches canon's registration (`crates/ipe_canon/src/env.rs`,
 /// "E-12") — do not reorder without updating that table.
-#[derive(Clone, Copy, PartialEq, Eq, Debug, serde::Serialize, serde::Deserialize)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[repr(u8)]
 pub enum IpeErrorKind {
     Io = 0,
@@ -71,7 +72,8 @@ impl IpeErrorKind {
 
 /// Ipê's `PanicInfo` — `FfiPanic`'s payload: `{ message : String, stack :
 /// List String }`.
-#[derive(Clone, PartialEq, Eq, Debug, serde::Serialize, serde::Deserialize)]
+#[derive(Clone, PartialEq, Eq, Debug)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct IpePanicInfo {
     pub message: String,
     pub stack: Vec<String>,
@@ -79,7 +81,8 @@ pub struct IpePanicInfo {
 
 /// Ipê's `TypeInfo` — `TypeMismatch`'s payload: `{ expected : String, actual
 /// : String }`.
-#[derive(Clone, PartialEq, Eq, Debug, serde::Serialize, serde::Deserialize)]
+#[derive(Clone, PartialEq, Eq, Debug)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct IpeTypeInfo {
     pub expected: String,
     pub actual: String,
@@ -90,7 +93,8 @@ pub struct IpeTypeInfo {
 /// (`ipe_backend_rust`'s `builtin_runtime_enum("ErrorDetails")` routes
 /// `FfiPanic` / `TypeMismatch` / `HttpStatus` / `JsonDecode` / `Custom`
 /// straight to these variants — no synthetic `EnumDef`).
-#[derive(Clone, PartialEq, Eq, Debug, serde::Serialize, serde::Deserialize)]
+#[derive(Clone, PartialEq, Eq, Debug)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum IpeErrorDetails {
     FfiPanic(IpePanicInfo),
     TypeMismatch(IpeTypeInfo),
@@ -105,7 +109,8 @@ pub enum IpeErrorDetails {
 /// only `PartialEq`, not `Eq` (see `core.rs`'s `IpeMaybe` doc), so `Eq` here
 /// would fail to compile. `PartialEq` is unaffected and is what
 /// `ir_type_is_derivable`'s Rust-side gate actually requires.
-#[derive(Clone, PartialEq, Debug, serde::Serialize, serde::Deserialize)]
+#[derive(Clone, PartialEq, Debug)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct IpeErrorInfo {
     pub message: String,
     pub details: IpeMaybe<IpeErrorDetails>,
@@ -118,7 +123,8 @@ pub struct IpeErrorInfo {
 ///
 /// No `#[derive(Eq)]` (see `IpeErrorInfo`'s doc — it carries a `IpeMaybe`
 /// field, and `IpeMaybe` is `PartialEq`-only).
-#[derive(Clone, PartialEq, Debug, serde::Serialize, serde::Deserialize)]
+#[derive(Clone, PartialEq, Debug)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum IpeError {
     Error(IpeErrorKind, IpeErrorInfo),
 }

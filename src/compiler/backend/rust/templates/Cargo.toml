@@ -16,9 +16,16 @@ edition = "2024"
 default = ["json"]
 tokio = []
 crypto = []
-json = ["encoding"]
+json = ["encoding", "serde"]
 db = []
 encoding = []
+# Declared but inert in the vendored escape hatch: `serde` / `serde_json` /
+# `serde_urlencoded` stay non-optional below. The floor serde derives
+# (`IpeMaybe`/`IpeResult`/`IpeError`/`Decimal`/`Patch`) and the `dom/form`
+# decode are `#[cfg(feature = "serde")]` in the vendored source, so this entry
+# keeps rustc's check-cfg quiet AND enables those derives. `json` implies it (the
+# floor `default = ["json"]` keeps serde on), mirroring the runtime crate.
+serde = []
 # Declared but inert in the vendored escape hatch: `regex` / `uuid` deps stay
 # non-optional below, and the emitted `ipe_runtime/mod.rs` declares
 # `regex_kernel` / `uuid_kernel` / `random` by inclusion, not by `#[cfg]`. These

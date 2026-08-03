@@ -1,21 +1,28 @@
 use crate::html::{Attribute, Html};
-use serde::Serialize;
 use std::collections::HashMap;
 
 /// A single DOM patch emitted by `diff`. Field names mirror the Go `Patch` struct
 /// (JSON: `id`, `text`, `html`, `attrs`, `remove`) — see `runtime-go/rt/live.go`.
-#[derive(Debug, Clone, Serialize, PartialEq)]
+///
+/// `diff` is in the always-compiled `dom` data path, but `Patch` is serialized
+/// only by the Web SSE wire / the browser-WASM sink — surfaces that imply the
+/// `serde` feature. The `Serialize` derive (and its `#[serde(...)]` field skips)
+/// are therefore gated on `serde`: a program that reaches neither still builds
+/// `Patch` and runs `diff`, it simply cannot serialize the patch (no such call
+/// exists in that config). Behaviour is byte-identical where serde is on.
+#[derive(Debug, Clone, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize))]
 pub struct Patch {
     pub id: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "serde", serde(skip_serializing_if = "Option::is_none"))]
     pub text: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "serde", serde(skip_serializing_if = "Option::is_none"))]
     pub html: Option<String>,
     /// Attribute delta: present key with non-empty value → set; empty value → remove.
     /// Go convention: `""` means remove; `BoolAttr(k,true)` encodes as `{k:k}`.
-    #[serde(skip_serializing_if = "HashMap::is_empty")]
+    #[cfg_attr(feature = "serde", serde(skip_serializing_if = "HashMap::is_empty"))]
     pub attrs: HashMap<String, String>,
-    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    #[cfg_attr(feature = "serde", serde(skip_serializing_if = "std::ops::Not::not"))]
     pub remove: bool,
 }
 
