@@ -4126,30 +4126,17 @@ fn run_test(rest: &[String]) -> Result<(), CliError> {
 /// the non-zero exit; a clean run exits 0.
 fn run_verify(rest: &[String]) -> Result<(), CliError> {
     let path = cli_args::single_positional(rest, "verify")?;
-    let p = style::Palette::for_stream(&std::io::stdout());
+    let total = VERIFY_STAGES.len();
 
     for (index, (name, stage)) in VERIFY_STAGES.iter().enumerate() {
         let step = index + 1;
-        print!(
-            "{}",
-            style::gutter(&format!(
-                "{}{} stage {step}/{}: {name}{}\n",
-                p.yellow,
-                style::glyph::STEP,
-                VERIFY_STAGES.len(),
-                p.reset,
-            ))
-        );
+        // Each stage is one progress line: a light-yellow running line that
+        // settles to a green ✓ or a red ✗ — the shared stage shape every
+        // multi-step command uses, not a hand-rolled colour print.
+        let line =
+            progress::Stage::start(std::io::stdout(), format!("stage {step}/{total}: {name}"));
         if let Err(err) = stage(path) {
-            print!(
-                "{}",
-                style::gutter(&format!(
-                    "{}{} {name} failed{}\n",
-                    p.red,
-                    style::glyph::FAIL,
-                    p.reset,
-                ))
-            );
+            line.failure(format!("stage {step}/{total}: {name} failed"));
             // The stage ran correctly and reported a real failure — a gate
             // result, not a misuse of `verify`. Rewrap it as [`VerifyFailed`] so
             // the stage's own rendered report is shown alone, never the `verify`
@@ -4159,27 +4146,11 @@ fn run_verify(rest: &[String]) -> Result<(), CliError> {
                 report: err.to_string(),
             });
         }
-        print!(
-            "{}",
-            style::gutter(&format!(
-                "{}{} {name} passed{}\n",
-                p.green,
-                style::glyph::OK,
-                p.reset,
-            ))
-        );
+        line.success(format!("stage {step}/{total}: {name} passed"));
     }
 
-    print!(
-        "{}",
-        style::frame(&style::gutter(&format!(
-            "{}{} all {} stages passed{}",
-            p.green,
-            style::glyph::OK,
-            VERIFY_STAGES.len(),
-            p.reset,
-        )))
-    );
+    let summary = progress::Stage::start(std::io::stdout(), "gate");
+    summary.success(format!("all {total} stages passed"));
     Ok(())
 }
 
