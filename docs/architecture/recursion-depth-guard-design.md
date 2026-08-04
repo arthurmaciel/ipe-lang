@@ -117,7 +117,9 @@ pub fn recursion_guard() -> RecursionGuard {
     // thread-local state: depth: Cell<usize>, stack_floor: Cell<Option<usize>>
     // 1. depth += 1; if depth > limit()            -> trip
     // 2. (non-wasm) if approx_sp() < floor + RED_ZONE -> trip
-    // trip: panic!("maximum recursion depth exceeded")
+    // trip: panic_any(RecursionLimit)  // zero-size typed payload; the
+    //       classifier downcasts the type, and renders its fixed message
+    //       "maximum recursion depth exceeded" to the log / 500-side / stderr
 }
 
 impl Drop for RecursionGuard {
@@ -153,9 +155,13 @@ Two checks, one TLS access, one trip path:
   thread calling into emitted code), the probe degrades to depth-only —
   fail-safe, never a false trip. `cfg(target_arch = "wasm32")` compiles the
   probe out (no native stack introspection; the depth budget remains).
-- **The trip is a plain `panic!` with a fixed message.** That is the entire
-  trick: a panic *unwinds*, so every containment mechanism in §1 that the
-  abort bypassed now works unchanged. The RAII decrement makes the counter
+- **The trip is a `panic_any(RecursionLimit)` — a typed zero-size payload.**
+  That is the entire trick: a panic *unwinds*, so every containment mechanism
+  in §1 that the abort bypassed now works unchanged. The classifier downcasts
+  the `RecursionLimit` type rather than matching a message substring, so the
+  `RecursionLimit` classification is driven by the type, not by the wording; the
+  fixed human message `maximum recursion depth exceeded` is rendered back from
+  the type at the log / 500-side / stderr sites, byte-unchanged. The RAII decrement makes the counter
   correct across that unwind (frames between the trip and the catcher
   restore their decrements as they unwind). The binding must be a *named*
   underscore-prefixed variable (`let _ipe_recursion_guard = …`), never
@@ -229,12 +235,13 @@ implementer must confirm the margin (§10).
 
 ## 4. Failure semantics
 
-Fail-closed and observable, per shape — in every case the trip is the fixed
-panic message classified as a new kind `RecursionLimit`
-(`classify_panic`, `core.rs:853`, gains one arm; the arm must be matched
-*before* the existing `"overflow"` substring arm, and the message
-deliberately avoids the word "overflow" so it can never misclassify as
-`ArithmeticOverflow`):
+Fail-closed and observable, per shape — in every case the trip carries the
+typed `RecursionLimit` payload, which `classify_and_log_panic` downcasts to the
+kind `RecursionLimit` before the message path is consulted. The message-based
+`classify_panic` retains a `"recursion depth"` arm (ordered *before* the
+`"overflow"` arm, and the fixed message omits "overflow") as the fallback for a
+panic that carries the recursion wording only as a string; a typed trip never
+reaches it, so it can never misclassify as `ArithmeticOverflow`:
 
 | Shape | Today (stack overflow) | With the guard |
 | --- | --- | --- |
