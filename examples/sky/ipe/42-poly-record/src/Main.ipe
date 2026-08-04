@@ -9,6 +9,7 @@ module Main exposing (main)
 -- rejects it. See lower_record's mixed-struct case.
 
 import Ipe.Io as Io
+import Ipe.String as String
 
 
 wrap : a -> { val : a
