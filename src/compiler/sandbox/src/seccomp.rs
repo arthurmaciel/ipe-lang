@@ -22,10 +22,15 @@
 //! kills the process on any architecture other than the one it was built for —
 //! an unexpected ABI refuses, it never runs unfiltered.
 //!
-//! The first cut supports `x86_64` (the primary Linux target). On any other
-//! build target [`subprocess_deny_program`] returns `None` and the run-jail
-//! wiring refuses (fail-closed) rather than install an filter that does not
-//! match the running kernel's syscall numbers.
+//! Two Linux ABIs are supported: `x86_64` and `aarch64`. Each has its own audit
+//! architecture and its own syscall-number table (the numbers differ entirely
+//! between the two — aarch64 follows the asm-generic table and has no `open`,
+//! `fork`, or `vfork` at all). The active table is selected at compile time by
+//! [`target_arch`], and the emitted filter first checks the audit arch and kills
+//! any process running the mismatched ABI. On any other build target
+//! [`subprocess_deny_program`] returns `None` and the run-jail wiring refuses
+//! (fail-closed) rather than install a filter that does not match the running
+//! kernel's syscall numbers.
 
 // ── classic-BPF instruction encoding ────────────────────────────────────────
 
@@ -72,13 +77,22 @@ const BPF_K: u16 = 0x00;
 const OFF_NR: u32 = 0;
 const OFF_ARCH: u32 = 4;
 /// `args[0]` is a `u64` at offset 16; its low 32 bits (little-endian) hold the
-/// `clone` flags, which is where `CLONE_VM`/`CLONE_THREAD` live.
+/// `clone` flags, which is where `CLONE_VM`/`CLONE_THREAD` live. Both supported
+/// ABIs place `clone_flags` as raw-syscall arg0: `x86_64` and `aarch64` both use
+/// the flags-first `sys_clone` signature (aarch64 does NOT set
+/// `CONFIG_CLONE_BACKWARDS`, unlike 32-bit arm/x86), so this offset reads the
+/// flag mask on both.
 const OFF_ARG0_LO: u32 = 16;
 
-/// The audit architecture this filter is built for. `AUDIT_ARCH_X86_64` =
-/// `EM_X86_64 (62) | __AUDIT_ARCH_64BIT (0x8000_0000) | __AUDIT_ARCH_LE
-/// (0x4000_0000)`.
+/// The `x86_64` audit architecture. `AUDIT_ARCH_X86_64` = `EM_X86_64 (62) |
+/// __AUDIT_ARCH_64BIT (0x8000_0000) | __AUDIT_ARCH_LE (0x4000_0000)` =
+/// `0xC000_003E`.
 const AUDIT_ARCH_X86_64: u32 = 0x3E | 0x8000_0000 | 0x4000_0000;
+
+/// The aarch64 audit architecture. `AUDIT_ARCH_AARCH64` = `EM_AARCH64 (183) |
+/// __AUDIT_ARCH_64BIT (0x8000_0000) | __AUDIT_ARCH_LE (0x4000_0000)` =
+/// `0xC000_00B7`. aarch64 is little-endian in the ABI Ipê targets.
+const AUDIT_ARCH_AARCH64: u32 = 0xB7 | 0x8000_0000 | 0x4000_0000;
 
 /// seccomp return actions (from <linux/seccomp.h>).
 const SECCOMP_RET_KILL_PROCESS: u32 = 0x8000_0000;
@@ -88,38 +102,203 @@ const SECCOMP_RET_ALLOW: u32 = 0x7fff_0000;
 /// error, the same as any other blocked operation, rather than a crash).
 const EPERM: u32 = 1;
 
-// ── x86_64 syscall numbers (from <asm/unistd_64.h>) ─────────────────────────
+// ── per-ABI syscall numbers ─────────────────────────────────────────────────
+//
+// The syscall numbers differ completely between the two Linux ABIs. x86_64
+// numbers come from <asm/unistd_64.h>; aarch64 numbers come from the asm-generic
+// table <asm-generic/unistd.h> (aarch64 has no arch-specific unistd overrides
+// for these calls). aarch64 notably has NO `open`, `fork`, or `vfork` syscall —
+// user space uses `openat` and creates tasks exclusively through `clone`/
+// `clone3` — so the fork/vfork deny list is empty there and the whole
+// subprocess-deny axis rests on the `clone` flag split plus the `clone3`
+// all-or-nothing allow.
+//
+// Each field of [`AbiSyscalls`] names one syscall the filter reasons about;
+// [`X86_64_SYSCALLS`] and [`AARCH64_SYSCALLS`] hold the two tables, and
+// [`active_abi`] selects the one matching the build target.
 
-const NR_CLONE: u32 = 56;
-const NR_FORK: u32 = 57;
-const NR_VFORK: u32 = 58;
-// `execve`/`execveat` are intentionally NOT denied (see `CREATE_DENIED_NON_CLONE`);
-// these numbers exist to pin their ABI value in the removal-guard test.
-#[cfg_attr(not(test), allow(dead_code))]
-const NR_EXECVE: u32 = 59;
-const NR_PTRACE: u32 = 101;
-const NR_PIVOT_ROOT: u32 = 155;
-const NR_MOUNT: u32 = 165;
-const NR_UMOUNT2: u32 = 166;
-const NR_UNSHARE: u32 = 272;
-const NR_SETNS: u32 = 308;
-const NR_PROCESS_VM_READV: u32 = 310;
-const NR_PROCESS_VM_WRITEV: u32 = 311;
-#[cfg_attr(not(test), allow(dead_code))]
-const NR_EXECVEAT: u32 = 322;
-const NR_IO_URING_SETUP: u32 = 425;
-const NR_IO_URING_ENTER: u32 = 426;
-const NR_IO_URING_REGISTER: u32 = 427;
-const NR_OPEN_TREE: u32 = 428;
-const NR_MOVE_MOUNT: u32 = 429;
-const NR_FSOPEN: u32 = 430;
-const NR_FSCONFIG: u32 = 431;
-const NR_FSMOUNT: u32 = 432;
-// `clone3` is intentionally allowed unconditionally (see `CREATE_DENIED_NON_CLONE`);
-// this number exists to pin its ABI value in the allow-guard test.
-#[cfg_attr(not(test), allow(dead_code))]
-const NR_CLONE3: u32 = 435;
-const NR_MOUNT_SETATTR: u32 = 442;
+/// The audit architecture plus the syscall numbers one ABI's filter needs. The
+/// numbers are ABI-specific and must never be shared across ABIs — a single
+/// wrong number would deny the wrong call (fail-open for the intended one).
+#[derive(Debug, Clone, Copy)]
+struct AbiSyscalls {
+    /// The `AUDIT_ARCH_*` value the arch guard compares against.
+    audit_arch: u32,
+    nr_clone: u32,
+    /// `fork`/`vfork` on `x86_64`; empty on `aarch64` (no such syscalls there).
+    create_denied_non_clone: &'static [u32],
+    /// The unconditional escape/exfiltration denials for this ABI.
+    baseline_denied: &'static [u32],
+    /// `execve`/`execveat`/`clone3` — never denied; carried only so the
+    /// removal/allow-guard tests can assert they are absent from the filter. The
+    /// builder never reads it, so a non-test build sees it unused.
+    #[cfg_attr(not(test), allow(dead_code))]
+    never_denied: &'static [u32],
+}
+
+// Each ABI's table is compile-time-selected by `active_abi`, so on a host of the
+// OTHER arch its numbers and table are referenced only by the unit tests (which
+// build both). Each ABI's numbers live in a private module carrying one
+// dead-code allowance for exactly that case: `not(any(<that arch>, test))`. On a
+// build FOR the arch, `active_abi` uses the table and it is live; under `test`,
+// both are live. The table `const`s are re-exported so `active_abi` and the
+// tests can name them unqualified.
+
+/// `x86_64` syscall numbers (from `<asm/unistd_64.h>`) and the table built from
+/// them.
+#[cfg_attr(not(any(target_arch = "x86_64", test)), allow(dead_code))]
+mod x86_64_abi {
+    use super::{AUDIT_ARCH_X86_64, AbiSyscalls};
+
+    const NR_CLONE: u32 = 56;
+    const NR_FORK: u32 = 57;
+    const NR_VFORK: u32 = 58;
+    const NR_EXECVE: u32 = 59;
+    const NR_PTRACE: u32 = 101;
+    const NR_PIVOT_ROOT: u32 = 155;
+    const NR_MOUNT: u32 = 165;
+    const NR_UMOUNT2: u32 = 166;
+    const NR_UNSHARE: u32 = 272;
+    const NR_SETNS: u32 = 308;
+    const NR_PROCESS_VM_READV: u32 = 310;
+    const NR_PROCESS_VM_WRITEV: u32 = 311;
+    const NR_EXECVEAT: u32 = 322;
+    const NR_IO_URING_SETUP: u32 = 425;
+    const NR_IO_URING_ENTER: u32 = 426;
+    const NR_IO_URING_REGISTER: u32 = 427;
+    const NR_OPEN_TREE: u32 = 428;
+    const NR_MOVE_MOUNT: u32 = 429;
+    const NR_FSOPEN: u32 = 430;
+    const NR_FSCONFIG: u32 = 431;
+    const NR_FSMOUNT: u32 = 432;
+    const NR_CLONE3: u32 = 435;
+    const NR_MOUNT_SETATTR: u32 = 442;
+
+    /// The `x86_64` syscall table. See the deny-axes commentary above
+    /// [`super::build_program_for`] for why each baseline entry is denied.
+    pub(super) const SYSCALLS: AbiSyscalls = AbiSyscalls {
+        audit_arch: AUDIT_ARCH_X86_64,
+        nr_clone: NR_CLONE,
+        create_denied_non_clone: &[NR_FORK, NR_VFORK],
+        baseline_denied: &[
+            NR_PTRACE,
+            NR_PROCESS_VM_READV,
+            NR_PROCESS_VM_WRITEV,
+            NR_IO_URING_SETUP,
+            NR_IO_URING_ENTER,
+            NR_IO_URING_REGISTER,
+            NR_MOUNT,
+            NR_UMOUNT2,
+            NR_PIVOT_ROOT,
+            NR_SETNS,
+            NR_UNSHARE,
+            NR_MOVE_MOUNT,
+            NR_OPEN_TREE,
+            NR_FSOPEN,
+            NR_FSCONFIG,
+            NR_FSMOUNT,
+            NR_MOUNT_SETATTR,
+        ],
+        never_denied: &[NR_EXECVE, NR_EXECVEAT, NR_CLONE3],
+    };
+}
+
+/// `aarch64` syscall numbers (from `<asm-generic/unistd.h>`) and the table built
+/// from them. `aarch64` has NO `fork`, `vfork`, or `open` — task creation is
+/// `clone`/`clone3` only, file open is `openat` only — so `create_denied_non_clone`
+/// is empty and the subprocess axis rests on the `clone` flag split.
+#[cfg_attr(not(any(target_arch = "aarch64", test)), allow(dead_code))]
+mod aarch64_abi {
+    use super::{AUDIT_ARCH_AARCH64, AbiSyscalls};
+
+    const NR_UMOUNT2: u32 = 39;
+    const NR_MOUNT: u32 = 40;
+    const NR_PIVOT_ROOT: u32 = 41;
+    const NR_UNSHARE: u32 = 97;
+    const NR_PTRACE: u32 = 117;
+    const NR_CLONE: u32 = 220;
+    const NR_EXECVE: u32 = 221;
+    const NR_SETNS: u32 = 268;
+    const NR_PROCESS_VM_READV: u32 = 270;
+    const NR_PROCESS_VM_WRITEV: u32 = 271;
+    const NR_EXECVEAT: u32 = 281;
+    const NR_IO_URING_SETUP: u32 = 425;
+    const NR_IO_URING_ENTER: u32 = 426;
+    const NR_IO_URING_REGISTER: u32 = 427;
+    const NR_OPEN_TREE: u32 = 428;
+    const NR_MOVE_MOUNT: u32 = 429;
+    const NR_FSOPEN: u32 = 430;
+    const NR_FSCONFIG: u32 = 431;
+    const NR_FSMOUNT: u32 = 432;
+    const NR_CLONE3: u32 = 435;
+    const NR_MOUNT_SETATTR: u32 = 442;
+
+    /// The `aarch64` syscall table. The baseline denies mirror `x86_64`'s exactly
+    /// (same escape/exfiltration primitives, different numbers).
+    pub(super) const SYSCALLS: AbiSyscalls = AbiSyscalls {
+        audit_arch: AUDIT_ARCH_AARCH64,
+        nr_clone: NR_CLONE,
+        create_denied_non_clone: &[],
+        baseline_denied: &[
+            NR_PTRACE,
+            NR_PROCESS_VM_READV,
+            NR_PROCESS_VM_WRITEV,
+            NR_IO_URING_SETUP,
+            NR_IO_URING_ENTER,
+            NR_IO_URING_REGISTER,
+            NR_MOUNT,
+            NR_UMOUNT2,
+            NR_PIVOT_ROOT,
+            NR_SETNS,
+            NR_UNSHARE,
+            NR_MOVE_MOUNT,
+            NR_OPEN_TREE,
+            NR_FSOPEN,
+            NR_FSCONFIG,
+            NR_FSMOUNT,
+            NR_MOUNT_SETATTR,
+        ],
+        never_denied: &[NR_EXECVE, NR_EXECVEAT, NR_CLONE3],
+    };
+}
+
+/// The `x86_64` syscall table (see [`x86_64_abi`]).
+#[cfg_attr(not(any(target_arch = "x86_64", test)), allow(dead_code))]
+const X86_64_SYSCALLS: AbiSyscalls = x86_64_abi::SYSCALLS;
+
+/// The `aarch64` syscall table (see [`aarch64_abi`]).
+#[cfg_attr(not(any(target_arch = "aarch64", test)), allow(dead_code))]
+const AARCH64_SYSCALLS: AbiSyscalls = aarch64_abi::SYSCALLS;
+
+/// The syscall table matching the build target, or `None` on an unsupported ABI
+/// (the caller then refuses, fail-closed). Only `x86_64` and `aarch64` have a
+/// vetted table.
+///
+/// The `Option` is the fail-closed contract, not incidental: on an unvetted ABI
+/// the `None` arm is the ONLY one compiled and the caller must refuse. On a
+/// vetted-ABI build the `None` arm is `cfg`'d out, so clippy sees a
+/// provably-`Some` return and would flag the wrapper — that flag is silenced
+/// here because dropping the `Option` would erase the refuse path on the arch
+/// where it is the whole point.
+#[must_use]
+#[cfg_attr(
+    any(target_arch = "x86_64", target_arch = "aarch64"),
+    allow(clippy::unnecessary_wraps)
+)]
+const fn active_abi() -> Option<AbiSyscalls> {
+    #[cfg(target_arch = "x86_64")]
+    {
+        Some(X86_64_SYSCALLS)
+    }
+    #[cfg(target_arch = "aarch64")]
+    {
+        Some(AARCH64_SYSCALLS)
+    }
+    #[cfg(not(any(target_arch = "x86_64", target_arch = "aarch64")))]
+    {
+        None
+    }
+}
 
 /// `clone` flags (from <linux/sched.h>): `CLONE_VM | CLONE_THREAD` is exactly
 /// the thread/process discriminator. `pthread_create` (and thus tokio's worker
@@ -128,106 +307,86 @@ const NR_MOUNT_SETATTR: u32 = 442;
 const CLONE_VM: u32 = 0x0000_0100;
 const CLONE_THREAD: u32 = 0x0001_0000;
 
-/// The syscalls denied **unconditionally**, independent of the capability set —
-/// escape / exfiltration primitives no legitimate declared effect needs.
-///
-/// - `ptrace`, `process_vm_readv`/`process_vm_writev`: cross-process memory read
-///   / code injection against jail siblings.
-/// - `io_uring_setup`/`enter`/`register`: file and network I/O *without* the
-///   `openat`/`connect` syscalls a naive filter watches — a direct-I/O bypass of
-///   the mount-scope and (belt-and-braces to the empty netns) the network view.
-/// - the mount family (`mount`/`umount2`/`pivot_root`/`setns`/`unshare`/
-///   `move_mount`/`open_tree`/`fsopen`/`fsconfig`/`fsmount`/`mount_setattr`):
-///   remount / namespace-re-enter escape levers.
-const BASELINE_DENIED: &[u32] = &[
-    NR_PTRACE,
-    NR_PROCESS_VM_READV,
-    NR_PROCESS_VM_WRITEV,
-    NR_IO_URING_SETUP,
-    NR_IO_URING_ENTER,
-    NR_IO_URING_REGISTER,
-    NR_MOUNT,
-    NR_UMOUNT2,
-    NR_PIVOT_ROOT,
-    NR_SETNS,
-    NR_UNSHARE,
-    NR_MOVE_MOUNT,
-    NR_OPEN_TREE,
-    NR_FSOPEN,
-    NR_FSCONFIG,
-    NR_FSMOUNT,
-    NR_MOUNT_SETATTR,
-];
+// ── the deny axes (rationale shared by both ABIs) ───────────────────────────
+//
+// **Baseline denials** ([`AbiSyscalls::baseline_denied`]) are unconditional,
+// independent of the capability set — escape / exfiltration primitives no
+// legitimate declared effect needs:
+//   - `ptrace`, `process_vm_readv`/`process_vm_writev`: cross-process memory
+//     read / code injection against jail siblings.
+//   - `io_uring_setup`/`enter`/`register`: file and network I/O *without* the
+//     `openat`/`connect` syscalls a naive filter watches — a direct-I/O bypass
+//     of the mount-scope and (belt-and-braces to the empty netns) the network.
+//   - the mount family (`mount`/`umount2`/`pivot_root`/`setns`/`unshare`/
+//     `move_mount`/`open_tree`/`fsopen`/`fsconfig`/`fsmount`/`mount_setattr`):
+//     remount / namespace-re-enter escape levers.
+//
+// **Task-creation denials** ([`AbiSyscalls::create_denied_non_clone`]) apply
+// only when `subprocess` is **absent**: `fork` and `vfork` on x86_64 (aarch64
+// has neither — its list is empty). Legacy `clone` is handled separately below
+// (allowed only for a thread — `CLONE_VM|CLONE_THREAD` — via the flag split).
+//
+// **`clone3` is deliberately never denied — allowed unconditionally.** On
+// glibc >= 2.34 (verified: `pthread_create` on glibc 2.35 issues exactly one
+// `clone3({flags=CLONE_VM|…|CLONE_THREAD})`), thread creation routes through
+// `clone3`, and the emitted runtime spawns an OS thread + a multi-threaded
+// tokio runtime on *every* entry. seccomp cannot inspect `clone3`'s argument
+// (the flags live in a `struct clone_args` behind a pointer classic BPF cannot
+// dereference), so a thread/process split is not expressible for it — it is
+// all-or-nothing, and denying it is a universal false-deny (nothing runs). A
+// subprocess-absent program *can* raw-`clone3` a new process, but that child is
+// born inside the *same* jail — same PID/net/mount/IPC namespaces, same scrubbed
+// env and fresh `/proc`, and the same inherited seccomp filter (`no_new_privs`
+// makes it unremovable across `execve`) — so it is confined **identically to the
+// parent and cannot exceed its capability set**. The `subprocess` axis controls
+// the common, portable spawn paths (`fork`/`vfork`/legacy-process-`clone` — what
+// `posix_spawn`, `Command::new`, `system`, `fork()+exec()` use); a determined
+// wrapper using raw `clone3` makes an equally-confined sibling. That residual (a
+// process *count*, not a capability axis) is the coarse first cut. On aarch64,
+// where there is no `fork`/`vfork` at all, the whole subprocess axis rests on
+// the `clone` flag split (process-clone → EPERM) plus this `clone3` allow.
+//
+// **`execve`/`execveat` are deliberately never denied** (replace-not-spawn
+// model): `execve` *replaces* the current process image, it does not create a
+// child. A subprocess needs a `fork`/`vfork`/`clone`(process) FIRST, then an
+// `execve` in the child — and those steps are denied above, so the common
+// subprocess paths are contained without touching `execve`. Denying `execve`
+// would also kill the jail's own launch: bubblewrap installs the filter and then
+// `execve`s the confined payload (`prlimit`, then the app), so an `execve` deny
+// is a universal false-deny. A lone `execve` grants no new authority: the filter
+// survives it (kernel design), and `no_new_privs` + the read-only root leave the
+// exec'd image equally confined — this holds for a raw-`clone3` child that then
+// execs, too.
 
-/// The task-creation syscalls denied outright when `subprocess` is **absent**:
-/// `fork` and `vfork`. Legacy `clone` is handled separately (allowed only for a
-/// thread — `CLONE_VM|CLONE_THREAD` — via the flag split below).
-///
-/// **`clone3` is deliberately NOT here — it is allowed unconditionally.** On
-/// glibc >= 2.34 (verified: `pthread_create` on glibc 2.35 issues exactly one
-/// `clone3({flags=CLONE_VM|…|CLONE_THREAD})`), thread creation routes through
-/// `clone3`, and the emitted runtime spawns an OS thread + a multi-threaded
-/// tokio runtime on *every* entry. seccomp cannot inspect `clone3`'s argument
-/// (the flags live in a `struct clone_args` behind a pointer classic BPF cannot
-/// dereference), so a thread/process split is not expressible for it — it is
-/// all-or-nothing, and denying it is a universal false-deny (nothing runs).
-///
-/// Allowing `clone3` means a subprocess-absent program *can* raw-`clone3` a new
-/// process. That does not breach the capability boundary: the child is born
-/// inside the *same* jail — same PID/net/mount/IPC namespaces, same scrubbed
-/// env and fresh `/proc`, and the same seccomp filter (a child inherits the
-/// parent's filter, and `no_new_privs` makes it unremovable across `execve`). So
-/// the child is confined **identically to the parent and cannot exceed its
-/// capability set**; it can reach no network/file/env the parent could not.
-/// What the `subprocess` axis still controls is the common, portable spawn paths
-/// (`fork`/`vfork`/legacy-process-`clone` — the syscalls `posix_spawn`,
-/// `Command::new`, `system`, and `fork()+exec()` use); a determined wrapper
-/// using raw `clone3` can make an equally-confined sibling. That residual (a
-/// process *count*, not a capability axis) is the coarse first cut.
-///
-/// **`execve`/`execveat` are deliberately NOT here** (replace-not-spawn model):
-/// `execve` *replaces* the current process image, it does not create a child. A
-/// subprocess needs a `fork`/`vfork`/`clone`(process) FIRST, then an `execve` in
-/// the child — and those fork steps are denied above, so the common subprocess
-/// paths are contained without touching `execve`. Denying `execve` would also
-/// kill the jail's own launch: bubblewrap installs the filter and then `execve`s
-/// the confined payload (`prlimit`, then the app), so an `execve` deny is a
-/// universal false-deny. A lone `execve` grants no new authority: the seccomp
-/// filter survives it (kernel design), and `no_new_privs` + the read-only root
-/// leave the exec'd image equally confined — this holds for a raw-`clone3` child
-/// that then execs, too.
-const CREATE_DENIED_NON_CLONE: &[u32] = &[NR_FORK, NR_VFORK];
-
-/// Build the seccomp program for the run jail.
+/// Build the seccomp program for the run jail on the active build ABI.
 ///
 /// `allow_subprocess` = whether the resolved capability set grants
 /// `subprocess`; when `false`, the task-creation family is denied (threads
-/// excepted, per [`CREATE_DENIED_NON_CLONE`] and the `clone` flag check).
+/// excepted, via the `clone` flag check).
 ///
-/// Returns `None` on any architecture other than `x86_64` — the syscall numbers
-/// above are `x86_64`-specific, so emitting them for another ABI would be a
+/// Returns `None` on any ABI other than `x86_64` or `aarch64` — the syscall
+/// numbers are ABI-specific, so emitting them for an unvetted ABI would be a
 /// mismatched, fail-open filter. The caller treats `None` as "no filter can be
 /// built here" and refuses (fail-closed).
 #[must_use]
 pub fn subprocess_deny_program(allow_subprocess: bool) -> Option<Vec<SockFilter>> {
-    if !cfg!(target_arch = "x86_64") {
-        return None;
-    }
-    Some(build_program(allow_subprocess))
+    let abi = active_abi()?;
+    Some(build_program_for(abi, allow_subprocess))
 }
 
-/// The pure program builder, independent of the host arch so its bytes are
-/// unit-testable on any developer machine. [`subprocess_deny_program`] is the
-/// arch-gated entry point.
+/// The pure program builder for an explicit ABI, independent of the host arch so
+/// both ABIs' bytes are unit-testable on any developer machine.
+/// [`subprocess_deny_program`] is the arch-gated entry point that picks the ABI.
 #[must_use]
-pub fn build_program(allow_subprocess: bool) -> Vec<SockFilter> {
-    // 1. Load the audit arch and refuse (kill) if it is not the one we built
-    //    for. A mismatched ABI has different syscall numbers, so an unchecked
-    //    filter would be a silent no-op — fail-closed here instead. The JEQ
-    //    skips the kill (jump +1) when the arch matches; else it falls through.
+fn build_program_for(abi: AbiSyscalls, allow_subprocess: bool) -> Vec<SockFilter> {
+    // 1. Load the audit arch and refuse (kill) if it is not the one this filter
+    //    was built for. A mismatched ABI has different syscall numbers, so an
+    //    unchecked filter would be a silent no-op — fail-closed here instead. The
+    //    JEQ skips the kill (jump +1) when the arch matches; else it falls
+    //    through to the kill.
     let mut prog: Vec<SockFilter> = vec![
         stmt(BPF_LD | BPF_W | BPF_ABS, OFF_ARCH),
-        jump(BPF_JMP | BPF_JEQ | BPF_K, AUDIT_ARCH_X86_64, 1, 0),
+        jump(BPF_JMP | BPF_JEQ | BPF_K, abi.audit_arch, 1, 0),
         ret(SECCOMP_RET_KILL_PROCESS),
     ];
 
@@ -235,14 +394,14 @@ pub fn build_program(allow_subprocess: bool) -> Vec<SockFilter> {
     prog.push(stmt(BPF_LD | BPF_W | BPF_ABS, OFF_NR));
 
     // 3. Baseline denials (unconditional). Each: if nr == denied → EPERM.
-    for &nr in BASELINE_DENIED {
+    for &nr in abi.baseline_denied {
         prog.push(jump(BPF_JMP | BPF_JEQ | BPF_K, nr, 0, 1));
         prog.push(ret(SECCOMP_RET_ERRNO | EPERM));
     }
 
     // 4. Task-creation denials when subprocess is absent.
     if !allow_subprocess {
-        for &nr in CREATE_DENIED_NON_CLONE {
+        for &nr in abi.create_denied_non_clone {
             prog.push(jump(BPF_JMP | BPF_JEQ | BPF_K, nr, 0, 1));
             prog.push(ret(SECCOMP_RET_ERRNO | EPERM));
         }
@@ -262,7 +421,7 @@ pub fn build_program(allow_subprocess: bool) -> Vec<SockFilter> {
         //   c3 JSET VM     jf=1 → vm-bit clear    → c5 (EPERM)
         //   c4 ret ALLOW          (both bits set: a thread)
         //   c5 ret EPERM
-        prog.push(jump(BPF_JMP | BPF_JEQ | BPF_K, NR_CLONE, 0, 5));
+        prog.push(jump(BPF_JMP | BPF_JEQ | BPF_K, abi.nr_clone, 0, 5));
         prog.push(stmt(BPF_LD | BPF_W | BPF_ABS, OFF_ARG0_LO));
         prog.push(jump(BPF_JMP | BPF_JSET | BPF_K, CLONE_THREAD, 0, 2));
         prog.push(jump(BPF_JMP | BPF_JSET | BPF_K, CLONE_VM, 0, 1));
@@ -320,155 +479,133 @@ pub fn program_bytes(prog: &[SockFilter]) -> Vec<u8> {
 mod tests {
     use super::*;
 
+    /// Every vetted ABI table, so each property is asserted for both `x86_64` and
+    /// `aarch64` on any developer host (the tables are pure data, not host-gated).
+    const ABIS: &[AbiSyscalls] = &[X86_64_SYSCALLS, AARCH64_SYSCALLS];
+
+    fn has_jeq(prog: &[SockFilter], nr: u32) -> bool {
+        prog.iter()
+            .any(|i| i.code == (BPF_JMP | BPF_JEQ | BPF_K) && i.k == nr)
+    }
+
     #[test]
     fn arch_guard_is_the_first_decision_and_kills_a_mismatch() {
-        let prog = build_program(false);
-        // insn 0 loads the arch; insn 1 branches on it; insn 2 is the kill.
-        assert_eq!(prog[0], stmt(BPF_LD | BPF_W | BPF_ABS, OFF_ARCH));
-        assert_eq!(prog[1].code, BPF_JMP | BPF_JEQ | BPF_K);
-        assert_eq!(prog[1].k, AUDIT_ARCH_X86_64);
-        assert_eq!(prog[2], ret(SECCOMP_RET_KILL_PROCESS));
+        for &abi in ABIS {
+            let prog = build_program_for(abi, false);
+            // insn 0 loads the arch; insn 1 branches on it; insn 2 is the kill.
+            assert_eq!(prog[0], stmt(BPF_LD | BPF_W | BPF_ABS, OFF_ARCH));
+            assert_eq!(prog[1].code, BPF_JMP | BPF_JEQ | BPF_K);
+            assert_eq!(
+                prog[1].k, abi.audit_arch,
+                "arch guard must compare against this ABI's audit arch"
+            );
+            assert_eq!(prog[2], ret(SECCOMP_RET_KILL_PROCESS));
+        }
     }
 
     #[test]
     fn baseline_denials_are_present_in_both_modes() {
-        for allow in [true, false] {
-            let prog = build_program(allow);
-            // Every baseline syscall appears as a JEQ compare against its nr.
-            for &nr in BASELINE_DENIED {
-                assert!(
-                    prog.iter()
-                        .any(|i| i.code == (BPF_JMP | BPF_JEQ | BPF_K) && i.k == nr),
-                    "baseline syscall {nr} missing from filter (allow_subprocess={allow})"
-                );
+        for &abi in ABIS {
+            for allow in [true, false] {
+                let prog = build_program_for(abi, allow);
+                for &nr in abi.baseline_denied {
+                    assert!(
+                        has_jeq(&prog, nr),
+                        "baseline syscall {nr} missing (arch={:#x}, allow={allow})",
+                        abi.audit_arch
+                    );
+                }
             }
         }
     }
 
     #[test]
     fn create_family_is_denied_only_when_subprocess_absent() {
-        let denied = build_program(false);
-        let allowed = build_program(true);
-        for &nr in CREATE_DENIED_NON_CLONE {
-            assert!(
-                denied
-                    .iter()
-                    .any(|i| i.code == (BPF_JMP | BPF_JEQ | BPF_K) && i.k == nr),
-                "create syscall {nr} must be denied when subprocess absent"
-            );
-            assert!(
-                !allowed
-                    .iter()
-                    .any(|i| i.code == (BPF_JMP | BPF_JEQ | BPF_K) && i.k == nr),
-                "create syscall {nr} must NOT be denied when subprocess granted"
-            );
-        }
-    }
-
-    #[test]
-    fn clone_thread_discriminator_uses_both_clone_flags() {
-        // The subprocess-absent program must test BOTH CLONE_THREAD and
-        // CLONE_VM via JSET — a thread (both set) is allowed, a process (neither)
-        // is EPERM'd. Two JSET compares against the two flags prove the split.
-        let prog = build_program(false);
-        let jset_thread = prog
-            .iter()
-            .any(|i| i.code == (BPF_JMP | BPF_JSET | BPF_K) && i.k == CLONE_THREAD);
-        let jset_vm = prog
-            .iter()
-            .any(|i| i.code == (BPF_JMP | BPF_JSET | BPF_K) && i.k == CLONE_VM);
-        assert!(jset_thread && jset_vm, "clone flag split not expressed");
-        // And the plain `clone` nr is matched (to enter the flag check).
-        assert!(
-            prog.iter()
-                .any(|i| i.code == (BPF_JMP | BPF_JEQ | BPF_K) && i.k == NR_CLONE),
-        );
-    }
-
-    #[test]
-    fn execve_is_never_denied_in_either_mode() {
-        // execve/execveat must stay ALLOWED even when subprocess is absent:
-        // bubblewrap execs the confined payload, and execve replaces (never
-        // spawns) a process. This pins the removal so a future edit cannot
-        // silently re-add them and reintroduce the universal false-deny.
-        for allow in [true, false] {
-            let prog = build_program(allow);
-            for nr in [NR_EXECVE, NR_EXECVEAT] {
+        for &abi in ABIS {
+            let denied = build_program_for(abi, false);
+            let allowed = build_program_for(abi, true);
+            for &nr in abi.create_denied_non_clone {
                 assert!(
-                    !prog
-                        .iter()
-                        .any(|i| i.code == (BPF_JMP | BPF_JEQ | BPF_K) && i.k == nr),
-                    "execve nr {nr} must not be denied (allow_subprocess={allow})"
+                    has_jeq(&denied, nr),
+                    "create syscall {nr} must be denied when subprocess absent"
+                );
+                assert!(
+                    !has_jeq(&allowed, nr),
+                    "create syscall {nr} must NOT be denied when subprocess granted"
                 );
             }
         }
     }
 
     #[test]
-    fn clone3_is_never_denied_in_either_mode() {
-        // clone3 must stay ALLOWED even when subprocess is absent: on glibc
-        // >= 2.34 pthread_create issues clone3(CLONE_THREAD), so denying it kills
-        // every thread (a universal false-deny). seccomp cannot inspect clone3's
-        // pointer arg, so it is all-or-nothing; the child it may create is
-        // confined identically to the parent (same filter + namespaces). This
-        // pins the allow so a future edit cannot silently re-add the deny.
-        for allow in [true, false] {
-            let prog = build_program(allow);
-            assert!(
-                !prog
-                    .iter()
-                    .any(|i| i.code == (BPF_JMP | BPF_JEQ | BPF_K) && i.k == NR_CLONE3),
-                "clone3 must not be denied (allow_subprocess={allow})"
-            );
+    fn clone_thread_discriminator_uses_both_clone_flags() {
+        // The subprocess-absent program must test BOTH CLONE_THREAD and CLONE_VM
+        // via JSET — a thread (both set) is allowed, a process (neither) is
+        // EPERM'd. The clone flags are ABI-independent (linux/sched.h), so both
+        // tables express the same split, each keyed on its own `clone` nr.
+        for &abi in ABIS {
+            let prog = build_program_for(abi, false);
+            let jset_thread = prog
+                .iter()
+                .any(|i| i.code == (BPF_JMP | BPF_JSET | BPF_K) && i.k == CLONE_THREAD);
+            let jset_vm = prog
+                .iter()
+                .any(|i| i.code == (BPF_JMP | BPF_JSET | BPF_K) && i.k == CLONE_VM);
+            assert!(jset_thread && jset_vm, "clone flag split not expressed");
+            // And this ABI's `clone` nr is matched (to enter the flag check).
+            assert!(has_jeq(&prog, abi.nr_clone));
         }
     }
 
     #[test]
-    fn fork_and_vfork_are_denied_only_when_subprocess_absent() {
-        // The portable spawn paths (posix_spawn/Command::new/system/fork+exec)
-        // route through fork/vfork/legacy-process-clone; those must EPERM when
-        // subprocess is absent and be allowed when granted.
-        let denied = build_program(false);
-        let allowed = build_program(true);
-        for nr in [NR_FORK, NR_VFORK] {
-            assert!(
-                denied
-                    .iter()
-                    .any(|i| i.code == (BPF_JMP | BPF_JEQ | BPF_K) && i.k == nr),
-                "fork/vfork {nr} must be denied when subprocess absent"
-            );
-            assert!(
-                !allowed
-                    .iter()
-                    .any(|i| i.code == (BPF_JMP | BPF_JEQ | BPF_K) && i.k == nr),
-                "fork/vfork {nr} must be allowed when subprocess granted"
-            );
+    fn never_denied_syscalls_stay_allowed_in_either_mode() {
+        // execve/execveat/clone3 must stay ALLOWED even when subprocess is
+        // absent: bubblewrap execs the confined payload (execve replaces, never
+        // spawns), and pthread_create routes through clone3 (denying it kills
+        // every thread). This pins the removals so a future edit cannot silently
+        // re-add them and reintroduce a universal false-deny.
+        for &abi in ABIS {
+            for allow in [true, false] {
+                let prog = build_program_for(abi, allow);
+                for &nr in abi.never_denied {
+                    assert!(
+                        !has_jeq(&prog, nr),
+                        "never-denied nr {nr} must not be denied (arch={:#x}, allow={allow})",
+                        abi.audit_arch
+                    );
+                }
+            }
         }
     }
 
     #[test]
     fn a_granted_subprocess_program_has_no_clone_flag_check() {
-        // With subprocess granted, clone/fork/exec are simply allowed — no
-        // flag discriminator, no create denials.
-        let prog = build_program(true);
-        assert!(
-            !prog.iter().any(|i| i.code == (BPF_JMP | BPF_JSET | BPF_K)),
-            "no clone-flag JSET when subprocess is granted"
-        );
+        // With subprocess granted, clone/fork/exec are simply allowed — no flag
+        // discriminator, no create denials — on every ABI.
+        for &abi in ABIS {
+            let prog = build_program_for(abi, true);
+            assert!(
+                !prog.iter().any(|i| i.code == (BPF_JMP | BPF_JSET | BPF_K)),
+                "no clone-flag JSET when subprocess is granted"
+            );
+        }
     }
 
     #[test]
     fn the_program_ends_with_a_default_allow() {
-        for allow in [true, false] {
-            let prog = build_program(allow);
-            assert_eq!(*prog.last().expect("non-empty"), ret(SECCOMP_RET_ALLOW));
+        for &abi in ABIS {
+            for allow in [true, false] {
+                let prog = build_program_for(abi, allow);
+                assert_eq!(*prog.last().expect("non-empty"), ret(SECCOMP_RET_ALLOW));
+            }
         }
     }
 
     #[test]
     fn instruction_encoding_is_eight_little_endian_bytes() {
         // A fixed instruction's byte encoding is pinned: the kernel ABI is
-        // code(2) jt(1) jf(1) k(4), and we emit native-endian (x86_64 is LE).
+        // code(2) jt(1) jf(1) k(4), emitted native-endian (both supported ABIs
+        // are little-endian).
         let insn = ret(SECCOMP_RET_ERRNO | EPERM);
         let bytes = insn.to_bytes();
         assert_eq!(bytes.len(), 8);
@@ -480,65 +617,115 @@ mod tests {
     }
 
     #[test]
-    fn arch_number_matches_the_kernel_constant() {
-        // AUDIT_ARCH_X86_64 = 0xC000003E. A typo here silently disables the
-        // whole filter (every syscall would mismatch the arch and be killed —
-        // actually fail-closed — but the value must be exact so a LEGITIMATE
-        // x86_64 program is not killed).
+    fn arch_numbers_match_the_kernel_constants() {
+        // A typo silently disables the whole filter for that ABI (every syscall
+        // mismatches the arch and is killed — fail-closed — but the value must be
+        // exact so a LEGITIMATE program on that ABI is not killed).
         assert_eq!(AUDIT_ARCH_X86_64, 0xC000_003E);
+        assert_eq!(AUDIT_ARCH_AARCH64, 0xC000_00B7);
+        assert_eq!(X86_64_SYSCALLS.audit_arch, AUDIT_ARCH_X86_64);
+        assert_eq!(AARCH64_SYSCALLS.audit_arch, AUDIT_ARCH_AARCH64);
+    }
+
+    #[test]
+    fn aarch64_has_no_fork_or_vfork_deny() {
+        // aarch64 has NO fork/vfork syscall (asm-generic table): its
+        // create-denied list is empty, so the subprocess axis rests entirely on
+        // the clone flag split. x86_64 keeps fork(57)/vfork(58).
+        assert!(AARCH64_SYSCALLS.create_denied_non_clone.is_empty());
+        assert_eq!(X86_64_SYSCALLS.create_denied_non_clone, &[57, 58]);
+    }
+
+    #[test]
+    fn aarch64_syscall_numbers_are_the_asm_generic_values() {
+        // Pin the aarch64 numbers to the asm-generic/unistd.h table so a wrong
+        // number (e.g. an accidental reuse of an x86_64 nr) is caught in review.
+        // Asserted through the table's public fields (the NR consts are private
+        // to the ABI module).
+        let a = AARCH64_SYSCALLS;
+        assert_eq!(a.nr_clone, 220);
+        assert_eq!(a.never_denied, &[221, 281, 435], "execve/execveat/clone3");
+        // Baseline: ptrace(117), pvm_readv/writev(270/271), io_uring(425/426/427),
+        // mount(40)/umount2(39)/pivot_root(41)/setns(268)/unshare(97)/
+        // move_mount(429)/open_tree(428)/fsopen(430)/fsconfig(431)/fsmount(432)/
+        // mount_setattr(442) — the asm-generic values, in table order.
+        assert_eq!(
+            a.baseline_denied,
+            &[
+                117, 270, 271, 425, 426, 427, 40, 39, 41, 268, 97, 429, 428, 430, 431, 432, 442
+            ],
+        );
+    }
+
+    #[test]
+    fn active_abi_is_some_only_on_a_vetted_arch() {
+        // The build-target selector must return a table iff the host arch is one
+        // whose numbers are vetted; anything else is None → the caller refuses.
+        let selected = active_abi();
+        if cfg!(any(target_arch = "x86_64", target_arch = "aarch64")) {
+            assert!(selected.is_some(), "vetted arch must have a table");
+        } else {
+            assert!(selected.is_none(), "unvetted arch must refuse");
+        }
     }
 
     #[test]
     fn program_bytes_is_dense_eight_per_instruction() {
-        let prog = build_program(false);
-        let bytes = program_bytes(&prog);
-        assert_eq!(bytes.len(), prog.len() * 8);
+        for &abi in ABIS {
+            let prog = build_program_for(abi, false);
+            let bytes = program_bytes(&prog);
+            assert_eq!(bytes.len(), prog.len() * 8);
+        }
     }
 
     #[test]
     fn clone_block_jump_offsets_land_on_the_right_returns() {
         // The clone thread/process split is the most fragile part — an
-        // off-by-one in a jump offset silently allows a process create or kills
-        // a thread. Locate the block by its `JEQ clone` head and verify each
-        // branch resolves to the intended return, by opcode at the target.
-        let prog = build_program(false);
-        let c0 = prog
-            .iter()
-            .position(|i| i.code == (BPF_JMP | BPF_JEQ | BPF_K) && i.k == NR_CLONE)
-            .expect("clone JEQ present");
-        // c0 jf → default ALLOW (the last instruction).
-        let not_clone_target = c0 + 1 + prog[c0].jf as usize;
-        assert_eq!(prog[not_clone_target], ret(SECCOMP_RET_ALLOW));
-        assert_eq!(
-            not_clone_target,
-            prog.len() - 1,
-            "not-clone → default allow"
-        );
-        // c2 = JSET CLONE_THREAD, its jf → EPERM.
-        let c2 = c0 + 2;
-        assert_eq!(prog[c2].code, BPF_JMP | BPF_JSET | BPF_K);
-        assert_eq!(prog[c2].k, CLONE_THREAD);
-        let thread_clear_target = c2 + 1 + prog[c2].jf as usize;
-        assert_eq!(prog[thread_clear_target], ret(SECCOMP_RET_ERRNO | EPERM));
-        // c3 = JSET CLONE_VM, its jf → EPERM; its fall-through → ALLOW.
-        let c3 = c0 + 3;
-        assert_eq!(prog[c3].k, CLONE_VM);
-        let vm_clear_target = c3 + 1 + prog[c3].jf as usize;
-        assert_eq!(prog[vm_clear_target], ret(SECCOMP_RET_ERRNO | EPERM));
-        // Fall-through of c3 (both bits set) is the ALLOW for a thread.
-        assert_eq!(prog[c3 + 1], ret(SECCOMP_RET_ALLOW));
+        // off-by-one in a jump offset silently allows a process create or kills a
+        // thread. Locate the block by its `JEQ clone` head and verify each branch
+        // resolves to the intended return, on every ABI.
+        for &abi in ABIS {
+            let prog = build_program_for(abi, false);
+            let c0 = prog
+                .iter()
+                .position(|i| i.code == (BPF_JMP | BPF_JEQ | BPF_K) && i.k == abi.nr_clone)
+                .expect("clone JEQ present");
+            // c0 jf → default ALLOW (the last instruction).
+            let not_clone_target = c0 + 1 + prog[c0].jf as usize;
+            assert_eq!(prog[not_clone_target], ret(SECCOMP_RET_ALLOW));
+            assert_eq!(
+                not_clone_target,
+                prog.len() - 1,
+                "not-clone → default allow"
+            );
+            // c2 = JSET CLONE_THREAD, its jf → EPERM.
+            let c2 = c0 + 2;
+            assert_eq!(prog[c2].code, BPF_JMP | BPF_JSET | BPF_K);
+            assert_eq!(prog[c2].k, CLONE_THREAD);
+            let thread_clear_target = c2 + 1 + prog[c2].jf as usize;
+            assert_eq!(prog[thread_clear_target], ret(SECCOMP_RET_ERRNO | EPERM));
+            // c3 = JSET CLONE_VM, its jf → EPERM; its fall-through → ALLOW.
+            let c3 = c0 + 3;
+            assert_eq!(prog[c3].k, CLONE_VM);
+            let vm_clear_target = c3 + 1 + prog[c3].jf as usize;
+            assert_eq!(prog[vm_clear_target], ret(SECCOMP_RET_ERRNO | EPERM));
+            // Fall-through of c3 (both bits set) is the ALLOW for a thread.
+            assert_eq!(prog[c3 + 1], ret(SECCOMP_RET_ALLOW));
+        }
     }
 
     #[test]
     fn arch_gate_precedes_every_syscall_compare() {
         // No syscall-number compare may appear before the arch guard, or a
         // wrong-ABI process could match a number before being killed.
-        let prog = build_program(false);
-        let first_nr_load = prog
-            .iter()
-            .position(|i| *i == stmt(BPF_LD | BPF_W | BPF_ABS, OFF_NR))
-            .expect("NR load present");
-        // The arch load+branch+kill occupy indices 0,1,2; the NR load is after.
-        assert!(first_nr_load >= 3, "NR load must follow the arch guard");
+        for &abi in ABIS {
+            let prog = build_program_for(abi, false);
+            let first_nr_load = prog
+                .iter()
+                .position(|i| *i == stmt(BPF_LD | BPF_W | BPF_ABS, OFF_NR))
+                .expect("NR load present");
+            // The arch load+branch+kill occupy indices 0,1,2; the NR load is after.
+            assert!(first_nr_load >= 3, "NR load must follow the arch guard");
+        }
     }
 }
