@@ -1,0 +1,22 @@
+module Main exposing (main)
+
+import Ipe.Json.Decode as Decode
+import Ipe.Json.Decode.Pipeline as Pipeline
+import Ipe.Io as Io
+
+-- The accumulator is reached through a `let` binder, so the inner nesting is a
+-- Var, not a syntactically-nested call — still rejected N0040 after binder
+-- resolution.
+userDecoder =
+    let
+        acc =
+            Pipeline.required "email" Decode.string
+                (Decode.succeed (\name email -> { name = name, email = email }))
+    in
+    Pipeline.required "name" Decode.string acc
+
+main =
+    let
+        _ = userDecoder
+    in
+    Io.println "binder"
