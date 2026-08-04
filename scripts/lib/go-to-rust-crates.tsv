@@ -1,0 +1,69 @@
+# go-to-rust-crates.tsv — declarative Go-package -> Rust-crate map for the
+# Sky->Ipê project converter.
+#
+# When a converted Sky project carries a `["go.dependencies"]` section, the
+# converter (scripts/sky-to-ipe-project.sh, via scripts/lib/go-deps-to-rust.py)
+# looks up each Go import path here and, for a real crates.io crate, emits it
+# under `[rust.dependencies]` in the generated ipe.toml — the section the Ipê FFI
+# binder (`ipe install`) consumes.
+#
+# COLUMNS (tab-separated):
+#   1  go-import-path     the exact key from `["go.dependencies"]`
+#   2  rust-crate         crates.io crate name + version spec, OR one of the
+#                         sentinels below. A `{...}` value carries cargo features
+#                         and is emitted verbatim as an inline table.
+#   3  confidence         `mapped`   — a reviewed, honest crates.io equivalent
+#                         `stdlib`   — covered by Ipê's own stdlib / Rust std;
+#                                      NO crate dependency is emitted (the Ipê
+#                                      program uses `Ipe.*` modules instead)
+#                         `unsure`   — a plausible but UNVERIFIED equivalent;
+#                                      emitted commented-out with an `# UNSURE`
+#                                      marker so a human confirms it, never a
+#                                      silent assertion
+#   4  note               short human rationale (why this crate / why stdlib)
+#
+# HONESTY RULE (PRINCIPLES.md §Security, §0): a mapping we are not sure of is
+# marked `unsure`, never asserted as `mapped`. A Go crate with a stronger safety
+# or capability guarantee than its nearest Rust crate is flagged in the note, not
+# silently downgraded. Adding a row is the whole registration — the converter
+# reads this file, nothing is hard-coded.
+#
+# The seed rows come from 13-skyshop, whose committed override
+# (examples/sky/ipe-overrides/13-skyshop/ipe.toml) is the reference port: its
+# `[rust.dependencies]` block is the source of the skyshop mappings below.
+
+# ── Go standard library — covered by Ipê stdlib / Rust std, no crate needed ──
+fmt	-	stdlib	Rust std formatting; Ipê emits via Ipe.Io / string interpolation
+io	-	stdlib	Rust std::io; Ipê exposes IO through Ipe.Io
+os	-	stdlib	Rust std::env / std::fs; Ipê exposes via Ipe.System
+strings	-	stdlib	Rust std str/String; Ipê via Ipe.String
+strconv	-	stdlib	Rust std parse/format; Ipê via Ipe.String / Ipe.Int
+context	-	stdlib	Rust std has no direct analogue; Ipê Task carries cancellation
+time	-	stdlib	Rust std::time + Ipê Ipe.Time kernels
+encoding/json	-	stdlib	Ipê Ipe.Json (serde under the hood in the runtime)
+encoding/hex	-	stdlib	Ipê Ipe.Bytes / runtime hex helpers
+encoding/base64	-	stdlib	Ipê Ipe.Bytes base64 helpers
+crypto/sha256	-	stdlib	Ipê Ipe.Crypto (runtime sha2); no user crate
+net/http	-	stdlib	Ipê Ipe.Http.Server / Ipe.Http.Client — the shape provides it
+log/slog	-	stdlib	Ipê Ipe.Log structured logging
+
+# ── Go third-party — real crates.io equivalents (reviewed) ──
+github.com/google/uuid	uuid = { version = "1", features = ["v4", "v7"] }	mapped	the de-facto Rust UUID crate; v4+v7 match Sky's uuidV4/uuidV7
+github.com/joho/godotenv	dotenvy = "0.15"	mapped	maintained fork of the abandoned dotenv crate; loads .env
+github.com/gorilla/mux	-	stdlib	HTTP routing is provided by Ipê's Ipe.Http.Server shape, not a crate
+github.com/anzellai/sky-tailwind	-	stdlib	Ipê ships the Tailwind CSS surface in-shape; no external crate
+
+# ── 13-skyshop seed — the reference FFI port (override ipe.toml) ──
+cloud.google.com/go/firestore	firestore = "=0.49.0"	mapped	skyshop override: Google Firestore client
+firebase.google.com/go/v4	rs-firebase-admin-sdk = "4.3"	mapped	skyshop override: Firebase Admin SDK (auth + app)
+firebase.google.com/go/v4/auth	rs-firebase-admin-sdk = "4.3"	mapped	same crate as firebase v4 — auth is a submodule there
+google.golang.org/api/iterator	-	unsure	Go API iterator helper; the Rust firestore crate exposes its own stream API — no separate crate
+google.golang.org/api/option	-	unsure	Go API client-option helper; folded into the Rust firestore crate's builder — no separate crate
+github.com/stripe/stripe-go/v84	async-stripe = { version = "=1.0.0-rc.6", features = ["default-tls"] }	mapped	skyshop override: async Stripe client (default-tls pins the tokio-hyper surface)
+github.com/stripe/stripe-go/v84/checkout/session	async-stripe-checkout = { version = "=1.0.0-rc.6", features = ["checkout_session"] }	mapped	skyshop override: Stripe Checkout Session split crate
+github.com/stripe/stripe-go/v84/customer	async-stripe-core = { version = "=1.0.0-rc.6", features = ["customer"] }	mapped	skyshop override: Stripe customer surface on async-stripe-core
+
+# ── Desktop GUI (11-fyne-stopwatch) — no reviewed equivalent yet ──
+fyne.io/fyne/v2	-	unsure	Go Fyne GUI toolkit; nearest Rust GUI is `iced`/`egui` but the widget model differs — needs a design pass, not a drop-in map
+fyne.io/fyne/v2/app	-	unsure	Fyne app lifecycle; folded into whatever Rust GUI crate a port picks
+fyne.io/fyne/v2/widget	-	unsure	Fyne widgets; no 1:1 Rust widget crate — port-specific

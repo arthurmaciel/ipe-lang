@@ -29,6 +29,12 @@
 SKY_TRANSFORM="${SKY_TRANSFORM:-$REPO/scripts/lib/sky-to-ipe-transform.py}"
 SKY_EDITS_APPLY="${SKY_EDITS_APPLY:-$REPO/scripts/lib/apply-ipe-edits.py}"
 SKY_RENAME_MAP="${SKY_RENAME_MAP:-$REPO/examples/sky/rename-map.tsv}"
+# Go-package -> Rust-crate map + translator. Consulted only when
+# SKY_TRANSLATE_GO_DEPS=1 (the general converter, sky-to-ipe-project.sh) — the
+# committed-mirror regen keeps the raw `["go.dependencies"]` verbatim so its
+# ports (and `regen --check`) stay byte-stable.
+SKY_GODEPS_TRANSLATE="${SKY_GODEPS_TRANSLATE:-$REPO/scripts/lib/go-deps-to-rust.py}"
+SKY_GODEPS_MAP="${SKY_GODEPS_MAP:-$REPO/scripts/lib/go-to-rust-crates.tsv}"
 SKY_EDITS_DIR="${SKY_EDITS_DIR:-$REPO/examples/sky/ipe-edits}"
 # Per-example whole-port override trees (a structural rebuild that replaces the
 # transformed port; the edits/rename-map are skipped for an overridden example).
@@ -171,6 +177,18 @@ sky_transform_one() {
     sed -i.bak -E 's/^([[:space:]]*entry[[:space:]]*=[[:space:]]*")([^"]*)\.sky(")/\1\2.ipe\3/' "$ipe/sky.toml"
     rm -f "$ipe/sky.toml.bak"
     mv -f "$ipe/sky.toml" "$ipe/ipe.toml"
+  fi
+
+  # Go-package -> Rust-crate FFI translation (general converter only). Rewrites
+  # the manifest's `["go.dependencies"]` table into `[rust.dependencies]` via the
+  # reviewed map. OFF by default so the committed-mirror regen keeps the raw
+  # go.dependencies verbatim (its ports must stay byte-stable for `regen --check`);
+  # sky-to-ipe-project.sh sets SKY_TRANSLATE_GO_DEPS=1 to enable it.
+  if [ "${SKY_TRANSLATE_GO_DEPS:-0}" = 1 ] && [ -f "$ipe/ipe.toml" ]; then
+    python3 "$SKY_GODEPS_TRANSLATE" "$SKY_GODEPS_MAP" "$ipe/ipe.toml" || {
+      echo "mirror: go-deps->rust translation failed for '$name'" >&2
+      return 2
+    }
   fi
 
   # Bare stdlib imports (`import System` -> `import Ipe.System`): the set of
