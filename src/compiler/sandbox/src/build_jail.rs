@@ -2174,13 +2174,15 @@ mod tests {
         // the offending path, never a value that later mis-mounts.
         let err = AbsScratchPath::new(Path::new("relative/scratch"))
             .expect_err("a relative scratch must be rejected");
-        match err {
-            RunJailDefect::MountFailed { target, detail } => {
-                assert_eq!(target, PathBuf::from("relative/scratch"));
-                assert!(detail.contains("not absolute"), "{detail}");
-            }
-            other => panic!("expected MountFailed, got {other:?}"),
-        }
+        assert!(
+            matches!(
+                &err,
+                RunJailDefect::MountFailed { target, detail }
+                    if target.as_path() == Path::new("relative/scratch")
+                        && detail.contains("not absolute")
+            ),
+            "expected MountFailed naming the offending path, got {err:?}"
+        );
     }
 
     #[test]
