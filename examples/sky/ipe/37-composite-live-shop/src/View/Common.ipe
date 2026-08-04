@@ -186,7 +186,13 @@ adaptStack vp children =
         Phone ->
             Ui.column [ Ui.spacing 16, Ui.width Ui.fill ] children
 
-        _ ->
+        Tablet ->
+            Ui.row [ Ui.spacing 16, Ui.width Ui.fill ] children
+
+        Desktop ->
+            Ui.row [ Ui.spacing 16, Ui.width Ui.fill ] children
+
+        BigDesktop ->
             Ui.row [ Ui.spacing 16, Ui.width Ui.fill ] children
 
 

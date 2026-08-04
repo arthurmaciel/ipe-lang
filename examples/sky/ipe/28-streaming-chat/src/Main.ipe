@@ -34,6 +34,7 @@ import Ipe.Error as Error exposing (Error)
 import Ipe.Http as Http exposing (HttpRequest)
 import Ipe.Http.Stream as HttpStream exposing (StreamId, ChunkEvent(..))
 import Ipe.Io as Io
+import Ipe.Ui as Ui exposing (Element)
 import Ipe.Html exposing (..)
 import Ipe.Html.Attributes exposing (..)
 import Ipe.Html.Events exposing (onSubmit)
@@ -119,7 +120,7 @@ update msg model =
                 else
                     let
                         req =
-                            { method = "POST"
+                            { method = Http.Post
                             , url = mockStreamUrl
                             , body = trimmed
                             , headers = [ ( "Content-Type", "text/plain" ) ]
@@ -208,8 +209,13 @@ update msg model =
 
 
 -- ─── View ────────────────────────────────────────────────────────
-view : Model -> Html Msg
+view : Model -> Element Msg
 view model =
+    Ui.html (pageView model)
+
+
+pageView : Model -> Html Msg
+pageView model =
     div
         []
         [ styleNode [] pageStyles
