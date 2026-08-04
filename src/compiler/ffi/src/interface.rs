@@ -835,6 +835,19 @@ impl DefineAdmission<'_> {
     /// transparent shape when the definition qualifies AND no other surface
     /// pins the nominal to the opaque representation, else the reason it stays
     /// an opaque handle. Fail-closed: any doubt keeps the opaque default.
+    ///
+    /// Transparency is a least-fixpoint over the define types a surface names at
+    /// a member seam: a define type may surface transparent only when every
+    /// define type it references (a field/payload carrier, a closure signature
+    /// slot) is itself transparent. A referenced type held at a member seam is
+    /// pinned opaque through [`define_referenced_nominals`], so a type holding
+    /// it can never qualify — [`crate::transparency::classify_define_struct`] /
+    /// [`crate::transparency::classify_define_enum`] admit only identity SCALAR
+    /// members, and a define-nominal member is not a scalar. The referenced
+    /// type's un-flip therefore fans back out to its holder by construction: a
+    /// record surfaced over an opaque or dropped member would be an
+    /// `ipe`-exit-0-then-cargo-fail (a missing type or an `E0308`), the keystone
+    /// breach this decision forbids.
     fn representation(
         &self,
         nominal: &str,
@@ -892,11 +905,22 @@ impl DefineAdmission<'_> {
     }
 }
 
-/// Every nominal a define surface references as an OPAQUE carrier: closure
+/// Every nominal a define surface references at a member seam: closure
 /// signature params/returns and define types' fields/payloads. A define type
 /// named here must keep the opaque-handle representation — the referencing
 /// wrapper's seam names the defined Rust type directly, a position the
 /// record/union conversion glue does not cover.
+///
+/// This set is the seed of the transparency least-fixpoint (see
+/// [`DefineAdmission::representation`]): a referenced nominal is pinned opaque,
+/// and because [`crate::transparency::classify_define_struct`] /
+/// [`crate::transparency::classify_define_enum`] admit only identity SCALAR
+/// members, a type holding any define-nominal member is disqualified in the same
+/// pass — so the un-flip fans transitively to every referencing parent without a
+/// second iteration. Flipping a seam is the removal of THAT seam's carrier
+/// contribution from this set, in the same change that emits and seals the
+/// seam's conversion glue; until then every referenced nominal stays fail-closed
+/// opaque with its reason recorded.
 fn define_referenced_nominals(pkg: &PkgInfo) -> BTreeSet<String> {
     use crate::carrier::{Carrier, ClosureRet};
     let mut out = BTreeSet::new();
