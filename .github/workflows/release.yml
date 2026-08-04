@@ -119,13 +119,21 @@ jobs:
           if-no-files-found: ignore
 
   # Assemble assets, checksum, upload them to the release-please-created release.
+  #
+  # `if: always()` runs this job even when a build leg failed, so every binary
+  # that DID build is still published. A failed leg uploaded no artifact; this
+  # job attaches whatever artifacts exist, then a completeness gate fails the run
+  # LOUDLY for each missing platform — the good binaries ship first, the failure
+  # stays visible (red run + `::error::` annotations), never swallowed.
   release:
     needs: [build, build-freebsd]
+    if: ${{ always() && !cancelled() }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
         with:
           ref: ${{ github.event.release.tag_name || github.event.inputs.tag }}
+      # A failed build leg uploaded nothing, so some names may be absent.
       - uses: actions/download-artifact@v8
         with:
           path: artifacts
@@ -135,12 +143,13 @@ jobs:
           find artifacts -type f \( -name '*.tar.gz' -o -name '*.zip' \) -exec cp {} release/ \;
           # Ship the installer alongside the binaries so the one-liner is versioned.
           cp scripts/install.sh release/install.sh
+          # Checksum only over what is present — a missing leg is not a hole here.
           ( cd release && sha256sum * > SHA256SUMS )
           ls -la release/
-      # Attach binaries to the release release-please already created. Upload,
-      # not create: the release object and its changelog body already exist.
-      # `--clobber` makes a manual workflow_dispatch re-run idempotent (replaces
-      # same-named assets instead of erroring).
+      # Attach the binaries that built to the release release-please already
+      # created. Upload, not create: the release object and its changelog body
+      # already exist. `--clobber` makes a manual workflow_dispatch re-run
+      # idempotent (replaces same-named assets instead of erroring).
       - name: Upload assets to release
         env:
           GH_TOKEN: ${{ github.token }}
@@ -149,3 +158,26 @@ jobs:
           gh release upload "$TAG" release/* \
             --clobber \
             --repo "${{ github.repository }}"
+      # Completeness gate, AFTER the upload so present binaries are already
+      # attached. Every expected platform must have staged an artifact; each
+      # absent one is a red `::error::` annotation plus a summary line, and the
+      # run exits non-zero. Loud but non-blocking: the binaries that built are
+      # published; the failure keeps our attention rather than being swallowed.
+      - name: Verify every platform published
+        run: |
+          expected="ipe-linux-x64 ipe-linux-arm64 ipe-darwin-arm64 ipe-windows-x64 ipe-freebsd-x64"
+          missing=0
+          echo "## Release asset completeness" >> "$GITHUB_STEP_SUMMARY"
+          for name in $expected; do
+            if ls "release/$name".* >/dev/null 2>&1; then
+              echo "- ok: \`$name\`" >> "$GITHUB_STEP_SUMMARY"
+            else
+              echo "::error title=Release asset missing::$name did not build; its binary is NOT in this release"
+              echo "- MISSING: \`$name\`" >> "$GITHUB_STEP_SUMMARY"
+              missing=1
+            fi
+          done
+          if [ "$missing" -ne 0 ]; then
+            echo "One or more platform binaries are missing from the release (see annotations above)." >&2
+            exit 1
+          fi

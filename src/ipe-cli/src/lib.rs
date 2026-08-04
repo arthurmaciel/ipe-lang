@@ -563,13 +563,15 @@ fn missing_runtime_feature(stderr: &str) -> Option<String> {
 impl std::error::Error for CliError {}
 
 // `CliError` is the `Err` type of every driver `Result`, so its size is paid
-// in the `Err` slot of ~200 functions. Boxing the `Pipeline` diagnostic keeps
-// it well under clippy's `result_large_err` 128-byte threshold (80 bytes today,
-// bounded by the three-`String` variants such as `HashMismatch`); this
-// assertion fails the build if a future variant reintroduces the bloat rather
-// than boxing its payload.
+// in the `Err` slot of ~200 functions. Boxing the wide payloads (the `Pipeline`
+// diagnostic) keeps it under clippy's `result_large_err` threshold; the bound
+// below IS that threshold, so the assertion and the lint enforce one fact. A
+// future variant that carries an unboxed wide payload trips both. The bound is
+// the lint's ceiling, not the type's current exact size, so it holds on every
+// target ABI (`std::io::Error` is wider on Windows than on Linux, for one).
+const CLI_ERROR_MAX_BYTES: usize = 128;
 // IPE-RUST-AUDIT:ACCEPTED (Arthur Maciel) — compile-time `const` assertion (not a runtime panic); it fails the build if a future `CliError` variant exceeds the size bound rather than boxing its payload [ledger #boundary]
-const _: () = assert!(std::mem::size_of::<CliError>() <= 96);
+const _: () = assert!(std::mem::size_of::<CliError>() <= CLI_ERROR_MAX_BYTES);
 
 /// Options modifying a build beyond plain source compilation — some (the
 /// static plan) apply post-emit at write time; others (`target`,
