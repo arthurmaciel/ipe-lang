@@ -265,6 +265,41 @@ pub enum BuiltinTag {
     ServerCookie,
     /// `ServerRoute` — the nullary opaque HTTP-server route.
     ServerRoute,
+    /// `Attribute` — the `Ipe.Ui` attribute constructor `Attribute msg`, applied
+    /// to the message type. Empty-module (unqualified), distinct from
+    /// [`Self::HtmlAttribute`], which shares the same interned `Attribute` name
+    /// but carries a module path so the lowerer selects the `Html` variant.
+    UiAttribute,
+    /// `Attribute` — the `Ipe.Html` attribute constructor `Attribute msg`. Shares
+    /// the interned `Attribute` name with [`Self::UiAttribute`] but is
+    /// MODULE-QUALIFIED with the `Html` constructor symbol, so `ir_type_from_ty`
+    /// disambiguation resolves it to the `Html` attribute variant that every
+    /// `Ipe.Html` node kernel takes. The one tag whose interpreted `Con` carries
+    /// a non-empty module path (see `builtin_con_module`).
+    HtmlAttribute,
+    /// `Element` — the `Ipe.Ui` element constructor `Element msg`, applied to the
+    /// message type.
+    UiElement,
+    /// `Html` — the `Html msg` constructor shared by `Ipe.Html` and the `Ipe.Ui`
+    /// render entry points, applied to the message type.
+    Html,
+    /// `Length` — the nullary `Ipe.Ui` length value type.
+    UiLength,
+    /// `Color` — the nullary `Ipe.Ui` colour value type.
+    UiColor,
+    /// `Description` — the nullary `Ipe.Ui` semantic-description value type.
+    UiDescription,
+    /// `PseudoClass` — the nullary `Ipe.Ui` pseudo-class-selector value type.
+    UiPseudoClass,
+    /// `Label` — the `Ipe.Ui.Input` label constructor `Label msg`, applied to the
+    /// message type.
+    InputLabel,
+    /// `Placeholder` — the `Ipe.Ui.Input` placeholder constructor `Placeholder
+    /// msg`, applied to the message type.
+    InputPlaceholder,
+    /// `RadioOption` — the `Ipe.Ui.Input` radio-option constructor `RadioOption
+    /// msg`, applied to the message type.
+    InputRadioOption,
 }
 
 /// A `'static`, `const`-embeddable representation of a kernel's HM type scheme.
@@ -6263,6 +6298,235 @@ impl StdlibKernel {
         const STRING_TO_MAYBE_HTTP_METHOD: TyShape = TyShape::Fun(&STRING, &MAYBE_HTTP_METHOD);
         const STRING_TO_MAYBE_STRING_ENV: TyShape = TyShape::Fun(&STRING, &MAYBE_STRING);
 
+        // ── Ipe.Ui / Ipe.Html / style constructor leaves. ──
+        // The message-parametric constructors carry the scheme's first variable
+        // `msg` (`A` = `Var(0)`). `HTML_ATTR_A` is the module-qualified
+        // `Ipe.Html.Attribute msg` (its interpreted `Con` carries the `Html`
+        // module path — see `builtin_con_module`); `UI_ATTR_A` is the bare
+        // `Ipe.Ui.Attribute msg`. `LENGTH` / `COLOR` / `DESCRIPTION` /
+        // `PSEUDO_CLASS` are nullary value types.
+        const UI_ATTR_A: TyShape = TyShape::Con(BuiltinTag::UiAttribute, &[A]);
+        const HTML_ATTR_A: TyShape = TyShape::Con(BuiltinTag::HtmlAttribute, &[A]);
+        const UI_ELEM_A: TyShape = TyShape::Con(BuiltinTag::UiElement, &[A]);
+        const HTML_A: TyShape = TyShape::Con(BuiltinTag::Html, &[A]);
+        const LENGTH: TyShape = TyShape::Con(BuiltinTag::UiLength, &[]);
+        const COLOR: TyShape = TyShape::Con(BuiltinTag::UiColor, &[]);
+        const DESCRIPTION: TyShape = TyShape::Con(BuiltinTag::UiDescription, &[]);
+        const PSEUDO_CLASS: TyShape = TyShape::Con(BuiltinTag::UiPseudoClass, &[]);
+        const LABEL_A: TyShape = TyShape::Con(BuiltinTag::InputLabel, &[A]);
+        const PLACEHOLDER_A: TyShape = TyShape::Con(BuiltinTag::InputPlaceholder, &[A]);
+        const RADIO_OPTION_A: TyShape = TyShape::Con(BuiltinTag::InputRadioOption, &[A]);
+        // `List (Attribute msg)` / `List (Element msg)` / `List (Html msg)` /
+        // `List (Html.Attribute msg)` slots.
+        const LIST_UI_ATTR_A: TyShape = TyShape::Con(BuiltinTag::List, &[UI_ATTR_A]);
+        const LIST_UI_ELEM_A: TyShape = TyShape::Con(BuiltinTag::List, &[UI_ELEM_A]);
+        const LIST_HTML_A: TyShape = TyShape::Con(BuiltinTag::List, &[HTML_A]);
+        const LIST_HTML_ATTR_A: TyShape = TyShape::Con(BuiltinTag::List, &[HTML_ATTR_A]);
+
+        // ── Ipe.Ui element / layout arrows. ──
+        // `layout : List (Attribute msg) -> Element msg -> Html msg`.
+        const UI_ELEM_A_TO_HTML_A: TyShape = TyShape::Fun(&UI_ELEM_A, &HTML_A);
+        const UI_LAYOUT: TyShape = TyShape::Fun(&LIST_UI_ATTR_A, &UI_ELEM_A_TO_HTML_A);
+        // `el : List (Attribute msg) -> Element msg -> Element msg`.
+        const UI_ELEM_A_TO_UI_ELEM_A: TyShape = TyShape::Fun(&UI_ELEM_A, &UI_ELEM_A);
+        const UI_EL: TyShape = TyShape::Fun(&LIST_UI_ATTR_A, &UI_ELEM_A_TO_UI_ELEM_A);
+        // `column / row / … : List (Attribute msg) -> List (Element msg) -> Element msg`.
+        const LIST_UI_ELEM_A_TO_UI_ELEM_A: TyShape = TyShape::Fun(&LIST_UI_ELEM_A, &UI_ELEM_A);
+        const UI_CONTAINER: TyShape = TyShape::Fun(&LIST_UI_ATTR_A, &LIST_UI_ELEM_A_TO_UI_ELEM_A);
+        // `above / below / … : Element msg -> Attribute msg`.
+        const UI_ELEM_A_TO_UI_ATTR_A: TyShape = TyShape::Fun(&UI_ELEM_A, &UI_ATTR_A);
+        // `onClick / … : msg -> Attribute msg`.
+        const A_TO_UI_ATTR_A: TyShape = TyShape::Fun(&A, &UI_ATTR_A);
+        // `onInput / … : (String -> msg) -> Attribute msg` (reuses `STRING_TO_A`).
+        const STRING_TO_A_TO_UI_ATTR_A: TyShape = TyShape::Fun(&STRING_TO_A, &UI_ATTR_A);
+        // `onBool : (Bool -> msg) -> Attribute msg`.
+        const BOOL_TO_A: TyShape = TyShape::Fun(&BOOL, &A);
+        const BOOL_TO_A_TO_UI_ATTR_A: TyShape = TyShape::Fun(&BOOL_TO_A, &UI_ATTR_A);
+        // `onSubmit : (formData -> msg) -> Attribute msg`, form-data var `B`
+        // (reuses `B_TO_A`).
+        const B_TO_A_TO_UI_ATTR_A: TyShape = TyShape::Fun(&B_TO_A, &UI_ATTR_A);
+        // `text : String -> Element msg`; `html : Html msg -> Element msg`.
+        const STRING_TO_UI_ELEM_A: TyShape = TyShape::Fun(&STRING, &UI_ELEM_A);
+        const HTML_A_TO_UI_ELEM_A: TyShape = TyShape::Fun(&HTML_A, &UI_ELEM_A);
+        // `cells : List (List Char) -> Element msg` (reuses `LIST_CHAR`).
+        const LIST_LIST_CHAR: TyShape = TyShape::Con(BuiltinTag::List, &[LIST_CHAR]);
+        const LIST_LIST_CHAR_TO_UI_ELEM_A: TyShape = TyShape::Fun(&LIST_LIST_CHAR, &UI_ELEM_A);
+
+        // ── Attribute builders by argument shape. ──
+        const INT_TO_UI_ATTR_A: TyShape = TyShape::Fun(&INT, &UI_ATTR_A);
+        const FLOAT_TO_UI_ATTR_A: TyShape = TyShape::Fun(&FLOAT, &UI_ATTR_A);
+        const LENGTH_TO_UI_ATTR_A: TyShape = TyShape::Fun(&LENGTH, &UI_ATTR_A);
+        const COLOR_TO_UI_ATTR_A: TyShape = TyShape::Fun(&COLOR, &UI_ATTR_A);
+        const STRING_TO_UI_ATTR_A: TyShape = TyShape::Fun(&STRING, &UI_ATTR_A);
+        // `paddingXY / aspectRatioWH : Int -> Int -> Attribute msg`.
+        const INT_TO_INT_TO_UI_ATTR_A: TyShape = TyShape::Fun(&INT, &INT_TO_UI_ATTR_A);
+        // `htmlAttribute / style / gridTracksRaw : String -> String -> Attribute msg`.
+        const STRING_TO_UI_ATTR_A_INNER: TyShape = TyShape::Fun(&STRING, &UI_ATTR_A);
+        const STRING_TO_STRING_TO_UI_ATTR_A: TyShape =
+            TyShape::Fun(&STRING, &STRING_TO_UI_ATTR_A_INNER);
+        // `transitionRaw : String -> Bool -> Attribute msg`.
+        const BOOL_TO_UI_ATTR_A: TyShape = TyShape::Fun(&BOOL, &UI_ATTR_A);
+        const STRING_TO_BOOL_TO_UI_ATTR_A: TyShape = TyShape::Fun(&STRING, &BOOL_TO_UI_ATTR_A);
+        // `animateRaw : String -> String -> String -> Bool -> Attribute msg`.
+        const STRING_TO_STRING_TO_BOOL_TO_UI_ATTR_A: TyShape =
+            TyShape::Fun(&STRING, &STRING_TO_BOOL_TO_UI_ATTR_A);
+        const UI_ANIMATE_RAW: TyShape =
+            TyShape::Fun(&STRING, &STRING_TO_STRING_TO_BOOL_TO_UI_ATTR_A);
+        // `Background.linearGradient : Float -> List (Float, Color) -> Attribute msg`.
+        const FLOAT_COLOR: TyShape = TyShape::Tuple(&[FLOAT, COLOR]);
+        const LIST_FLOAT_COLOR: TyShape = TyShape::Con(BuiltinTag::List, &[FLOAT_COLOR]);
+        const LIST_FLOAT_COLOR_TO_UI_ATTR_A: TyShape = TyShape::Fun(&LIST_FLOAT_COLOR, &UI_ATTR_A);
+        const BG_LINEAR_GRADIENT: TyShape = TyShape::Fun(&FLOAT, &LIST_FLOAT_COLOR_TO_UI_ATTR_A);
+
+        // ── breakpoint / mediaQuery : String -> List (Attribute msg)
+        //    -> Element msg -> Element msg. ──
+        const LIST_UI_ATTR_A_TO_UI_ELEM_A_TO_UI_ELEM_A: TyShape =
+            TyShape::Fun(&LIST_UI_ATTR_A, &UI_ELEM_A_TO_UI_ELEM_A);
+        const UI_BREAKPOINT: TyShape =
+            TyShape::Fun(&STRING, &LIST_UI_ATTR_A_TO_UI_ELEM_A_TO_UI_ELEM_A);
+
+        // ── PseudoClass + onPseudo. ──
+        // `onPseudo : PseudoClass -> List (Attribute msg) -> Attribute msg`.
+        const LIST_UI_ATTR_A_TO_UI_ATTR_A: TyShape = TyShape::Fun(&LIST_UI_ATTR_A, &UI_ATTR_A);
+        const UI_ON_PSEUDO: TyShape = TyShape::Fun(&PSEUDO_CLASS, &LIST_UI_ATTR_A_TO_UI_ATTR_A);
+
+        // ── Ipe.Html node / attribute / render arrows. ──
+        // `render / toString : Html msg -> String`; `attrToString : Html.Attribute msg -> String`.
+        const HTML_A_TO_STRING: TyShape = TyShape::Fun(&HTML_A, &STRING);
+        const HTML_ATTR_A_TO_STRING: TyShape = TyShape::Fun(&HTML_ATTR_A, &STRING);
+        // `textNode / titleNode : String -> Html msg`.
+        const STRING_TO_HTML_A: TyShape = TyShape::Fun(&STRING, &HTML_A);
+        // container node: `List (Html.Attribute msg) -> List (Html msg) -> Html msg`.
+        const LIST_HTML_A_TO_HTML_A: TyShape = TyShape::Fun(&LIST_HTML_A, &HTML_A);
+        const HTML_CONTAINER: TyShape = TyShape::Fun(&LIST_HTML_ATTR_A, &LIST_HTML_A_TO_HTML_A);
+        // generic `node : String -> List (Html.Attribute msg) -> List (Html msg) -> Html msg`.
+        const HTML_NODE: TyShape = TyShape::Fun(&STRING, &HTML_CONTAINER);
+        // void node: `List (Html.Attribute msg) -> Html msg`.
+        const LIST_HTML_ATTR_A_TO_HTML_A: TyShape = TyShape::Fun(&LIST_HTML_ATTR_A, &HTML_A);
+        // `voidNode : String -> List (Html.Attribute msg) -> Html msg`.
+        const STRING_TO_LIST_HTML_ATTR_A_TO_HTML_A: TyShape =
+            TyShape::Fun(&STRING, &LIST_HTML_ATTR_A_TO_HTML_A);
+        // `doctype : List (Html msg) -> Html msg`.
+        const LIST_HTML_A_TO_HTML_A_TOP: TyShape = TyShape::Fun(&LIST_HTML_A, &HTML_A);
+        // `styleNode : List (Html.Attribute msg) -> String -> Html msg`.
+        const STRING_TO_HTML_A_INNER: TyShape = TyShape::Fun(&STRING, &HTML_A);
+        const HTML_STYLE_NODE: TyShape = TyShape::Fun(&LIST_HTML_ATTR_A, &STRING_TO_HTML_A_INNER);
+        // Html.Attributes builders.
+        const STRING_TO_HTML_ATTR_A: TyShape = TyShape::Fun(&STRING, &HTML_ATTR_A);
+        const BOOL_TO_HTML_ATTR_A: TyShape = TyShape::Fun(&BOOL, &HTML_ATTR_A);
+        const INT_TO_HTML_ATTR_A: TyShape = TyShape::Fun(&INT, &HTML_ATTR_A);
+        // `attribute : String -> String -> Html.Attribute msg`.
+        const STRING_TO_HTML_ATTR_A_INNER: TyShape = TyShape::Fun(&STRING, &HTML_ATTR_A);
+        const STRING_TO_STRING_TO_HTML_ATTR_A: TyShape =
+            TyShape::Fun(&STRING, &STRING_TO_HTML_ATTR_A_INNER);
+        // `boolAttribute : String -> Bool -> Html.Attribute msg`.
+        const STRING_TO_BOOL_TO_HTML_ATTR_A: TyShape = TyShape::Fun(&STRING, &BOOL_TO_HTML_ATTR_A);
+
+        // ── Html.Events builders (`html_event_shape`). ──
+        // Msg form: `msg -> Html.Attribute msg`.
+        const A_TO_HTML_ATTR_A: TyShape = TyShape::Fun(&A, &HTML_ATTR_A);
+        // String form: `(String -> msg) -> Html.Attribute msg`.
+        const STRING_TO_A_TO_HTML_ATTR_A: TyShape = TyShape::Fun(&STRING_TO_A, &HTML_ATTR_A);
+        // Bool form: `(Bool -> msg) -> Html.Attribute msg`.
+        const BOOL_TO_A_TO_HTML_ATTR_A: TyShape = TyShape::Fun(&BOOL_TO_A, &HTML_ATTR_A);
+        // Raw (onSubmit) form: `handler -> Html.Attribute msg`, handler var `B`.
+        const B_TO_HTML_ATTR_A: TyShape = TyShape::Fun(&B, &HTML_ATTR_A);
+
+        // ── Ipe.Ui.Keyed : List (Attribute msg)
+        //    -> List (String, Element msg) -> Element msg. ──
+        const STRING_UI_ELEM_A: TyShape = TyShape::Tuple(&[STRING, UI_ELEM_A]);
+        const LIST_STRING_UI_ELEM_A: TyShape = TyShape::Con(BuiltinTag::List, &[STRING_UI_ELEM_A]);
+        const LIST_STRING_UI_ELEM_A_TO_UI_ELEM_A: TyShape =
+            TyShape::Fun(&LIST_STRING_UI_ELEM_A, &UI_ELEM_A);
+        const KEYED_CONTAINER: TyShape =
+            TyShape::Fun(&LIST_UI_ATTR_A, &LIST_STRING_UI_ELEM_A_TO_UI_ELEM_A);
+
+        // ── Region attribute builders. ──
+        const INT_TO_UI_ATTR_A_REGION: TyShape = TyShape::Fun(&INT, &UI_ATTR_A);
+        const STRING_TO_UI_ATTR_A_REGION: TyShape = TyShape::Fun(&STRING, &UI_ATTR_A);
+
+        // ── Ui.input / describe / Description constructors. ──
+        // `input : List (Attribute msg) -> Element msg`.
+        const LIST_UI_ATTR_A_TO_UI_ELEM_A: TyShape = TyShape::Fun(&LIST_UI_ATTR_A, &UI_ELEM_A);
+        // `describe : Description -> Attribute msg`.
+        const DESCRIPTION_TO_UI_ATTR_A: TyShape = TyShape::Fun(&DESCRIPTION, &UI_ATTR_A);
+        // `descHeading : Int -> Description`; `descLabel : String -> Description`.
+        const INT_TO_DESCRIPTION: TyShape = TyShape::Fun(&INT, &DESCRIPTION);
+        const STRING_TO_DESCRIPTION: TyShape = TyShape::Fun(&STRING, &DESCRIPTION);
+
+        // ── Ipe.Ui.Input non-record constructors. ──
+        // label*: `List (Attribute msg) -> Element msg -> Label msg`.
+        const UI_ELEM_A_TO_LABEL_A: TyShape = TyShape::Fun(&UI_ELEM_A, &LABEL_A);
+        const INPUT_LABEL: TyShape = TyShape::Fun(&LIST_UI_ATTR_A, &UI_ELEM_A_TO_LABEL_A);
+        // `labelHidden : String -> Label msg`.
+        const STRING_TO_LABEL_A: TyShape = TyShape::Fun(&STRING, &LABEL_A);
+        // `placeholder : List (Attribute msg) -> Element msg -> Placeholder msg`.
+        const UI_ELEM_A_TO_PLACEHOLDER_A: TyShape = TyShape::Fun(&UI_ELEM_A, &PLACEHOLDER_A);
+        const INPUT_PLACEHOLDER: TyShape =
+            TyShape::Fun(&LIST_UI_ATTR_A, &UI_ELEM_A_TO_PLACEHOLDER_A);
+        // `option : String -> Element msg -> RadioOption msg`.
+        const UI_ELEM_A_TO_RADIO_OPTION_A: TyShape = TyShape::Fun(&UI_ELEM_A, &RADIO_OPTION_A);
+        const INPUT_OPTION: TyShape = TyShape::Fun(&STRING, &UI_ELEM_A_TO_RADIO_OPTION_A);
+
+        // ── Ipe.Ui.Lazy (function reuse, arity 1..5). ──
+        // `lazy : (a -> Element msg) -> a -> Element msg`, msg var `B`.
+        const A_TO_UI_ELEM_B: TyShape =
+            TyShape::Fun(&A, &TyShape::Con(BuiltinTag::UiElement, &[B]));
+        const LAZY_LAZY: TyShape = TyShape::Fun(&A_TO_UI_ELEM_B, &A_TO_UI_ELEM_B);
+        // `lazy2 : (a -> b -> Element msg) -> a -> b -> Element msg`, msg var `C`.
+        const UI_ELEM_C: TyShape = TyShape::Con(BuiltinTag::UiElement, &[C]);
+        const B_TO_UI_ELEM_C: TyShape = TyShape::Fun(&B, &UI_ELEM_C);
+        const A_TO_B_TO_UI_ELEM_C: TyShape = TyShape::Fun(&A, &B_TO_UI_ELEM_C);
+        const LAZY_LAZY2: TyShape = TyShape::Fun(&A_TO_B_TO_UI_ELEM_C, &A_TO_B_TO_UI_ELEM_C);
+        // `lazy3`, msg var `D`.
+        const UI_ELEM_D: TyShape = TyShape::Con(BuiltinTag::UiElement, &[D]);
+        const C_TO_UI_ELEM_D: TyShape = TyShape::Fun(&C, &UI_ELEM_D);
+        const B_TO_C_TO_UI_ELEM_D: TyShape = TyShape::Fun(&B, &C_TO_UI_ELEM_D);
+        const A_TO_B_TO_C_TO_UI_ELEM_D: TyShape = TyShape::Fun(&A, &B_TO_C_TO_UI_ELEM_D);
+        const LAZY_LAZY3: TyShape =
+            TyShape::Fun(&A_TO_B_TO_C_TO_UI_ELEM_D, &A_TO_B_TO_C_TO_UI_ELEM_D);
+        // `lazy4`, msg var `E`.
+        const UI_ELEM_E: TyShape = TyShape::Con(BuiltinTag::UiElement, &[E]);
+        const D_TO_UI_ELEM_E: TyShape = TyShape::Fun(&D, &UI_ELEM_E);
+        const C_TO_D_TO_UI_ELEM_E: TyShape = TyShape::Fun(&C, &D_TO_UI_ELEM_E);
+        const B_TO_C_TO_D_TO_UI_ELEM_E: TyShape = TyShape::Fun(&B, &C_TO_D_TO_UI_ELEM_E);
+        const A_TO_B_TO_C_TO_D_TO_UI_ELEM_E: TyShape = TyShape::Fun(&A, &B_TO_C_TO_D_TO_UI_ELEM_E);
+        const LAZY_LAZY4: TyShape = TyShape::Fun(
+            &A_TO_B_TO_C_TO_D_TO_UI_ELEM_E,
+            &A_TO_B_TO_C_TO_D_TO_UI_ELEM_E,
+        );
+        // `lazy5`, msg var `F`.
+        const UI_ELEM_F: TyShape = TyShape::Con(BuiltinTag::UiElement, &[F]);
+        const E_TO_UI_ELEM_F: TyShape = TyShape::Fun(&E, &UI_ELEM_F);
+        const D_TO_E_TO_UI_ELEM_F: TyShape = TyShape::Fun(&D, &E_TO_UI_ELEM_F);
+        const C_TO_D_TO_E_TO_UI_ELEM_F: TyShape = TyShape::Fun(&C, &D_TO_E_TO_UI_ELEM_F);
+        const B_TO_C_TO_D_TO_E_TO_UI_ELEM_F: TyShape = TyShape::Fun(&B, &C_TO_D_TO_E_TO_UI_ELEM_F);
+        const A_TO_B_TO_C_TO_D_TO_E_TO_UI_ELEM_F: TyShape =
+            TyShape::Fun(&A, &B_TO_C_TO_D_TO_E_TO_UI_ELEM_F);
+        const LAZY_LAZY5: TyShape = TyShape::Fun(
+            &A_TO_B_TO_C_TO_D_TO_E_TO_UI_ELEM_F,
+            &A_TO_B_TO_C_TO_D_TO_E_TO_UI_ELEM_F,
+        );
+
+        // ── Ui length / color builders. ──
+        const INT_TO_LENGTH: TyShape = TyShape::Fun(&INT, &LENGTH);
+        const LENGTH_TO_LENGTH: TyShape = TyShape::Fun(&LENGTH, &LENGTH);
+        const INT_TO_LENGTH_TO_LENGTH: TyShape = TyShape::Fun(&INT, &LENGTH_TO_LENGTH);
+        const INT_TO_COLOR: TyShape = TyShape::Fun(&INT, &COLOR);
+        const INT_TO_INT_TO_COLOR: TyShape = TyShape::Fun(&INT, &INT_TO_COLOR);
+        const UI_RGB: TyShape = TyShape::Fun(&INT, &INT_TO_INT_TO_COLOR);
+        const FLOAT_TO_COLOR: TyShape = TyShape::Fun(&FLOAT, &COLOR);
+        const INT_TO_FLOAT_TO_COLOR: TyShape = TyShape::Fun(&INT, &FLOAT_TO_COLOR);
+        const INT_TO_INT_TO_FLOAT_TO_COLOR: TyShape = TyShape::Fun(&INT, &INT_TO_FLOAT_TO_COLOR);
+        const UI_RGBA: TyShape = TyShape::Fun(&INT, &INT_TO_INT_TO_FLOAT_TO_COLOR);
+        const COLOR_TO_STRING: TyShape = TyShape::Fun(&COLOR, &STRING);
+
+        // ── ServerListen : Int -> List ServerRoute -> Task (). ──
+        const LIST_SERVER_ROUTE: TyShape = TyShape::Con(BuiltinTag::List, &[SERVER_ROUTE]);
+        const LIST_SERVER_ROUTE_TO_TASK_UNIT: TyShape =
+            TyShape::Fun(&LIST_SERVER_ROUTE, &TASK_UNIT);
+        const SERVER_LISTEN: TyShape = TyShape::Fun(&INT, &LIST_SERVER_ROUTE_TO_TASK_UNIT);
+
         match self {
             // ── Bitwise — Int -> Int -> Int / Int -> Int. ──
             Self::BitwiseAnd
@@ -6901,6 +7165,307 @@ impl StdlibKernel {
             }
             Self::SqlInList => Some(&SQL_IN_LIST),
             Self::SqlLike => Some(&SQL_LIKE),
+
+            // ── Ipe.Ui layout / element / container. ──
+            Self::UiLayout => Some(&UI_LAYOUT),
+            Self::UiEl => Some(&UI_EL),
+            Self::UiColumn
+            | Self::UiRow
+            | Self::UiWrappedRow
+            | Self::UiGrid
+            | Self::UiParagraph
+            | Self::UiTextColumn
+            | Self::UiForm => Some(&UI_CONTAINER),
+            Self::UiAbove
+            | Self::UiBelow
+            | Self::UiOnLeft
+            | Self::UiOnRight
+            | Self::UiInFront
+            | Self::UiBehind => Some(&UI_ELEM_A_TO_UI_ATTR_A),
+
+            // ── Ipe.Ui events. ──
+            Self::UiOnClick
+            | Self::UiOnFocus
+            | Self::UiOnBlur
+            | Self::UiOnMouseOver
+            | Self::UiOnMouseOut => Some(&A_TO_UI_ATTR_A),
+            Self::UiOnInput
+            | Self::UiOnChange
+            | Self::UiOnKeyDown
+            | Self::UiOnKeyUp
+            | Self::UiOnFile => Some(&STRING_TO_A_TO_UI_ATTR_A),
+            Self::UiOnBool => Some(&BOOL_TO_A_TO_UI_ATTR_A),
+            Self::UiOnSubmit => Some(&B_TO_A_TO_UI_ATTR_A),
+
+            // ── Ipe.Html.Events (arg shape from `html_event_shape`). ──
+            Self::HtmlOnClick
+            | Self::HtmlOnFocus
+            | Self::HtmlOnBlur
+            | Self::HtmlOnMouseOver
+            | Self::HtmlOnMouseOut
+            | Self::HtmlOnSubmit
+            | Self::HtmlOnInput
+            | Self::HtmlOnChange
+            | Self::HtmlOnKeyDown
+            | Self::HtmlOnKeyUp
+            | Self::HtmlOnBool => match self.html_event_shape() {
+                Some(HtmlEventShape::Msg) => Some(&A_TO_HTML_ATTR_A),
+                Some(HtmlEventShape::String) => Some(&STRING_TO_A_TO_HTML_ATTR_A),
+                Some(HtmlEventShape::Bool) => Some(&BOOL_TO_A_TO_HTML_ATTR_A),
+                Some(HtmlEventShape::Raw) => Some(&B_TO_HTML_ATTR_A),
+                None => None,
+            },
+
+            // ── Ipe.Html serialise / element / attribute builders. ──
+            Self::HtmlRender | Self::HtmlToString => Some(&HTML_A_TO_STRING),
+            Self::HtmlAttrToString => Some(&HTML_ATTR_A_TO_STRING),
+            Self::HtmlTextNode | Self::HtmlRawNode | Self::HtmlTitleNode => Some(&STRING_TO_HTML_A),
+            Self::HtmlNode => Some(&HTML_NODE),
+            Self::HtmlVoidNode => Some(&STRING_TO_LIST_HTML_ATTR_A_TO_HTML_A),
+            Self::HtmlDoctype => Some(&LIST_HTML_A_TO_HTML_A_TOP),
+            Self::HtmlDiv
+            | Self::HtmlSpan
+            | Self::HtmlA
+            | Self::HtmlButton
+            | Self::HtmlP
+            | Self::HtmlH1
+            | Self::HtmlH2
+            | Self::HtmlH3
+            | Self::HtmlH4
+            | Self::HtmlH5
+            | Self::HtmlH6
+            | Self::HtmlNav
+            | Self::HtmlSection
+            | Self::HtmlArticle
+            | Self::HtmlHeader
+            | Self::HtmlHeaderNode
+            | Self::HtmlCodeNode
+            | Self::HtmlMainNode
+            | Self::HtmlFooterNode
+            | Self::HtmlFooter
+            | Self::HtmlMain
+            | Self::HtmlAside
+            | Self::HtmlUl
+            | Self::HtmlOl
+            | Self::HtmlLi
+            | Self::HtmlTable
+            | Self::HtmlThead
+            | Self::HtmlTbody
+            | Self::HtmlTfoot
+            | Self::HtmlTr
+            | Self::HtmlTh
+            | Self::HtmlTd
+            | Self::HtmlTextarea
+            | Self::HtmlSelect
+            | Self::HtmlOption
+            | Self::HtmlLabel
+            | Self::HtmlForm
+            | Self::HtmlFieldset
+            | Self::HtmlLegend
+            | Self::HtmlPre
+            | Self::HtmlCode
+            | Self::HtmlStrong
+            | Self::HtmlEm
+            | Self::HtmlSmall
+            | Self::HtmlBlockquote
+            | Self::HtmlFigure
+            | Self::HtmlFigcaption
+            | Self::HtmlDetails
+            | Self::HtmlSummary
+            | Self::HtmlDialog
+            | Self::HtmlVideo
+            | Self::HtmlAudio
+            | Self::HtmlCanvas
+            | Self::HtmlIframe
+            | Self::HtmlProgress
+            | Self::HtmlMeter
+            | Self::HtmlScript
+            | Self::HtmlBody
+            | Self::HtmlTitle
+            | Self::HtmlHtmlNode
+            | Self::HtmlHeadNode => Some(&HTML_CONTAINER),
+            Self::HtmlInput
+            | Self::HtmlImg
+            | Self::HtmlBr
+            | Self::HtmlHr
+            | Self::HtmlMeta
+            | Self::HtmlLink
+            | Self::HtmlLinkNode
+            | Self::HtmlArea
+            | Self::HtmlBase
+            | Self::HtmlCol
+            | Self::HtmlEmbed
+            | Self::HtmlSource
+            | Self::HtmlTrack
+            | Self::HtmlWbr => Some(&LIST_HTML_ATTR_A_TO_HTML_A),
+            Self::HtmlStyleNode => Some(&HTML_STYLE_NODE),
+            Self::HtmlAttrClass
+            | Self::HtmlAttrId
+            | Self::HtmlAttrHref
+            | Self::HtmlAttrSrc
+            | Self::HtmlAttrAlt
+            | Self::HtmlAttrValue
+            | Self::HtmlAttrName
+            | Self::HtmlAttrPlaceholder
+            | Self::HtmlAttrType
+            | Self::HtmlAttrFor
+            | Self::HtmlAttrStyle
+            | Self::HtmlAttrTitle
+            | Self::HtmlAttrAutocomplete => Some(&STRING_TO_HTML_ATTR_A),
+            Self::HtmlAttrChecked
+            | Self::HtmlAttrDisabled
+            | Self::HtmlAttrReadonly
+            | Self::HtmlAttrRequired
+            | Self::HtmlAttrMultiple
+            | Self::HtmlAttrSelected
+            | Self::HtmlAttrAutofocus => Some(&BOOL_TO_HTML_ATTR_A),
+            Self::HtmlAttribute => Some(&STRING_TO_STRING_TO_HTML_ATTR_A),
+            Self::HtmlBoolAttribute => Some(&STRING_TO_BOOL_TO_HTML_ATTR_A),
+            Self::HtmlNoAttr => Some(&HTML_ATTR_A),
+            Self::HtmlAttrTabindex | Self::HtmlAttrRows => Some(&INT_TO_HTML_ATTR_A),
+
+            // ── Ipe.Ui element builders. ──
+            Self::UiNone => Some(&UI_ELEM_A),
+            Self::UiText => Some(&STRING_TO_UI_ELEM_A),
+            Self::UiHtml => Some(&HTML_A_TO_UI_ELEM_A),
+            Self::UiCells => Some(&LIST_LIST_CHAR_TO_UI_ELEM_A),
+
+            // ── Ipe.Ui / Font / Border nullary attribute builders. ──
+            Self::UiCenterX
+            | Self::UiCenterY
+            | Self::UiAlignLeft
+            | Self::UiAlignRight
+            | Self::UiAlignTop
+            | Self::UiAlignBottom
+            | Self::UiPointer
+            | Self::UiClip
+            | Self::UiClipX
+            | Self::UiClipY
+            | Self::UiScrollbars
+            | Self::UiScrollbarX
+            | Self::UiScrollbarY
+            | Self::FontBold
+            | Self::FontItalic
+            | Self::UiSquare
+            | Self::UiWidescreen
+            | Self::UiCinemascope
+            | Self::BorderSolid
+            | Self::BorderDashed
+            | Self::BorderDotted
+            | Self::FontSemiBold
+            | Self::FontRegular
+            | Self::FontLight
+            | Self::FontExtraBold
+            | Self::FontBlack
+            | Self::FontUnderline
+            | Self::FontNoDecoration
+            | Self::FontLineThrough
+            | Self::FontAlignLeft
+            | Self::FontAlignRight
+            | Self::FontAlignCenter
+            | Self::FontCenter
+            | Self::FontJustify => Some(&UI_ATTR_A),
+
+            // ── Attribute builders by argument shape. ──
+            Self::UiSpacing
+            | Self::UiPadding
+            | Self::UiGridColumns
+            | Self::BorderWidth
+            | Self::BorderRounded
+            | Self::FontSize
+            | Self::FontWeight
+            | Self::FontHoverSize
+            | Self::BorderHoverWidth
+            | Self::BorderHoverRounded => Some(&INT_TO_UI_ATTR_A),
+            Self::FontLetterSpacing | Self::FontWordSpacing | Self::UiAspectRatio => {
+                Some(&FLOAT_TO_UI_ATTR_A)
+            }
+            Self::UiWidth | Self::UiHeight => Some(&LENGTH_TO_UI_ATTR_A),
+            Self::BackgroundColor
+            | Self::BorderColor
+            | Self::FontColor
+            | Self::BackgroundHoverColor
+            | Self::BackgroundFocusColor
+            | Self::BackgroundActiveColor
+            | Self::BackgroundDisabledColor
+            | Self::BorderHoverColor
+            | Self::BorderFocusColor
+            | Self::BorderActiveColor
+            | Self::FontHoverColor
+            | Self::FontFocusColor
+            | Self::FontActiveColor
+            | Self::FontDisabledColor => Some(&COLOR_TO_UI_ATTR_A),
+            Self::BackgroundImage | Self::FontFamily => Some(&STRING_TO_UI_ATTR_A),
+            Self::BackgroundLinearGradient => Some(&BG_LINEAR_GRADIENT),
+            Self::UiPaddingXY | Self::UiAspectRatioWH => Some(&INT_TO_INT_TO_UI_ATTR_A),
+            Self::UiHtmlAttribute | Self::UiStyle | Self::UiGridTracksRaw => {
+                Some(&STRING_TO_STRING_TO_UI_ATTR_A)
+            }
+            Self::UiName => Some(&STRING_TO_UI_ATTR_A),
+            Self::UiTransitionRaw => Some(&STRING_TO_BOOL_TO_UI_ATTR_A),
+            Self::UiAnimateRaw => Some(&UI_ANIMATE_RAW),
+            Self::UiBreakpoint | Self::UiMediaQuery => Some(&UI_BREAKPOINT),
+
+            // ── PseudoClass constants + onPseudo. ──
+            Self::UiHover
+            | Self::UiFocus
+            | Self::UiFocusVisible
+            | Self::UiActive
+            | Self::UiDisabled => Some(&PSEUDO_CLASS),
+            Self::UiOnPseudo => Some(&UI_ON_PSEUDO),
+
+            // ── Ipe.Ui.Keyed. ──
+            Self::KeyedColumn | Self::KeyedRow => Some(&KEYED_CONTAINER),
+
+            // ── Ipe.Ui.Region. ──
+            Self::RegionMainContent
+            | Self::RegionNavigation
+            | Self::RegionFooter
+            | Self::RegionAside
+            | Self::RegionAnnounce
+            | Self::RegionAnnounceUrgently => Some(&UI_ATTR_A),
+            Self::RegionHeading => Some(&INT_TO_UI_ATTR_A_REGION),
+            Self::RegionLabel => Some(&STRING_TO_UI_ATTR_A_REGION),
+
+            // ── Ui.input / describe / Description. ──
+            Self::UiInput => Some(&LIST_UI_ATTR_A_TO_UI_ELEM_A),
+            Self::UiDescribe => Some(&DESCRIPTION_TO_UI_ATTR_A),
+            Self::UiDescMain
+            | Self::UiDescNavigation
+            | Self::UiDescContentInfo
+            | Self::UiDescComplementary
+            | Self::UiDescLivePolite
+            | Self::UiDescLiveAssertive => Some(&DESCRIPTION),
+            Self::UiDescHeading => Some(&INT_TO_DESCRIPTION),
+            Self::UiDescLabel => Some(&STRING_TO_DESCRIPTION),
+
+            // ── Ipe.Ui.Input non-record constructors. ──
+            Self::InputLabelAbove
+            | Self::InputLabelBelow
+            | Self::InputLabelLeft
+            | Self::InputLabelRight => Some(&INPUT_LABEL),
+            Self::InputLabelHidden => Some(&STRING_TO_LABEL_A),
+            Self::InputPlaceholder => Some(&INPUT_PLACEHOLDER),
+            Self::InputOption => Some(&INPUT_OPTION),
+
+            // ── Ipe.Ui.Lazy. ──
+            Self::LazyLazy => Some(&LAZY_LAZY),
+            Self::LazyLazy2 => Some(&LAZY_LAZY2),
+            Self::LazyLazy3 => Some(&LAZY_LAZY3),
+            Self::LazyLazy4 => Some(&LAZY_LAZY4),
+            Self::LazyLazy5 => Some(&LAZY_LAZY5),
+
+            // ── Ui length / color builders. ──
+            Self::UiPx | Self::UiFillPortion | Self::UiVh | Self::UiVw => Some(&INT_TO_LENGTH),
+            Self::UiFill | Self::UiContent | Self::UiShrink => Some(&LENGTH),
+            Self::UiMinimum | Self::UiMaximum => Some(&INT_TO_LENGTH_TO_LENGTH),
+            Self::UiRgb => Some(&UI_RGB),
+            Self::UiRgba => Some(&UI_RGBA),
+            Self::UiWhite | Self::UiBlack | Self::UiTransparent => Some(&COLOR),
+            Self::UiColorCss => Some(&COLOR_TO_STRING),
+
+            // ── Server route-listen (non-record). ──
+            Self::ServerListen => Some(&SERVER_LISTEN),
 
             _ => None,
         }
