@@ -984,6 +984,32 @@ pub(crate) fn recursion_depth_for_test() -> usize {
     RECURSION_DEPTH.with(std::cell::Cell::get)
 }
 
+/// The typed payload of the recursion-guard trip panic. Zero-size: the fact that
+/// the depth budget (or the stack red-zone probe) was exceeded IS the type — it
+/// carries no data. Panicking with this value (`panic_any`) instead of a message
+/// string lets the catch-layer classifier `downcast_ref` it rather than match a
+/// substring of a free-form message, so the `RecursionLimit` classification is
+/// driven by the type, not by the wording of a string.
+///
+/// [`RecursionLimit::MESSAGE`] is the single source of the human-facing text; the
+/// classifier renders it back to `"maximum recursion depth exceeded"` so the
+/// server log / 500-side line / CLI stderr are byte-identical to a string trip.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct RecursionLimit;
+
+impl RecursionLimit {
+    /// The fixed human-facing message for a recursion trip. Byte-stable (golden-
+    /// and E2E-asserted) and deliberately omits the word "overflow" so no message
+    /// path can misclassify it as an arithmetic overflow.
+    pub const MESSAGE: &'static str = "maximum recursion depth exceeded";
+}
+
+impl std::fmt::Display for RecursionLimit {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(Self::MESSAGE)
+    }
+}
+
 /// The RAII recursion guard. Its construction (`recursion_guard`) enters one
 /// level of guarded recursion; its `Drop` leaves it. The type carries no public
 /// field — it exists only to tie the decrement to the caller's scope.
@@ -998,19 +1024,18 @@ pub struct RecursionGuard {
 
 /// Enter one level of guarded recursion, returning a [`RecursionGuard`] whose
 /// drop leaves it. Called at the top of every emitted user function body. Trips
-/// with a fixed-message `panic!` when the per-thread depth budget is exceeded or
-/// — on native targets with a recorded floor — when the remaining stack falls
-/// into the red zone. The trip message deliberately avoids the word "overflow"
-/// so it can never misclassify as `ArithmeticOverflow`.
+/// by panicking with the typed [`RecursionLimit`] payload when the per-thread
+/// depth budget is exceeded or — on native targets with a recorded floor — when
+/// the remaining stack falls into the red zone. The classifier downcasts that
+/// type (never a message substring), so the trip can never misclassify as
+/// `ArithmeticOverflow`.
 ///
 /// Total apart from the deliberate trip: the increment is a `Cell` bump, the
-/// probe an address compare, and the trip a `panic!` with a constant `&'static
-/// str` — no allocation on the trip path beyond the panic itself, no unwrap, no
+/// probe an address compare, and the trip a `panic_any` with a zero-size marker
+/// — no allocation on the trip path beyond the panic itself, no unwrap, no
 /// index. It runs on the panic path (a trip deeper in the same chain unwinds
 /// through outer guards' drops), so it must stay total, and it is.
 #[inline]
-#[allow(clippy::panic)] // the deliberate, sole trip path — converts an uncatchable
-// stack-overflow abort into a classifiable, containable panic
 pub fn recursion_guard() -> RecursionGuard {
     let depth = RECURSION_DEPTH.with(|c| {
         let next = c.get().saturating_add(1);
@@ -1035,7 +1060,10 @@ pub fn recursion_guard() -> RecursionGuard {
     };
     if trip {
         RECURSION_DEPTH.with(|c| c.set(c.get().saturating_sub(1)));
-        panic!("maximum recursion depth exceeded");
+        // IPE-RUST-AUDIT:ACCEPTED (Arthur Maciel) — the deliberate, sole trip path: it converts an uncatchable stack-overflow abort into a classifiable, containable panic carrying the typed `RecursionLimit` payload (the classifier downcasts it, never a message substring) [ledger #boundary]
+        #[allow(clippy::panic, clippy::disallowed_methods)]
+        // panic_any is the trip: a typed payload the catch-layer downcasts, not a stringly-typed message
+        std::panic::panic_any(RecursionLimit);
     }
     RecursionGuard { _private: () }
 }
@@ -1067,9 +1095,12 @@ fn classify_panic(msg: &str) -> &'static str {
     } else if m.contains("index out of bounds") || m.contains("out of range") {
         "IndexOutOfRange"
     } else if m.contains("recursion depth") {
-        // Ordered before the `"overflow"` arm: the recursion-guard trip message
-        // (`maximum recursion depth exceeded`) deliberately omits "overflow", so
-        // this substring match is what classifies it — never `ArithmeticOverflow`.
+        // The live recursion trip is classified by its typed `RecursionLimit`
+        // payload in `classify_and_log_panic`, before this message path is
+        // reached. This arm remains the fallback for a panic that carries the
+        // recursion wording only as a message string. Ordered before the
+        // `"overflow"` arm, and the wording omits "overflow", so it can never
+        // misclassify as `ArithmeticOverflow`.
         "RecursionLimit"
     } else if m.contains("overflow") {
         "ArithmeticOverflow"
@@ -1078,11 +1109,16 @@ fn classify_panic(msg: &str) -> &'static str {
     }
 }
 
-/// A panic payload's human-readable message: the standard `&str` / `String`
-/// payload downcasts, with a fixed fallback for any other payload type.
-/// Total — no unwrap/index/panic.
+/// A panic payload's human-readable message: the typed [`RecursionLimit`] trip
+/// renders to its fixed message, then the standard `&str` / `String` payload
+/// downcasts, with a fixed fallback for any other payload type. Recognising the
+/// typed trip here keeps the server log / 500-side line / CLI stderr byte-
+/// identical to the message a string trip once carried. Total — no
+/// unwrap/index/panic.
 fn panic_payload_message(payload: &(dyn std::any::Any + Send)) -> String {
-    if let Some(s) = payload.downcast_ref::<&str>() {
+    if payload.downcast_ref::<RecursionLimit>().is_some() {
+        RecursionLimit::MESSAGE.to_string()
+    } else if let Some(s) = payload.downcast_ref::<&str>() {
         (*s).to_string()
     } else if let Some(s) = payload.downcast_ref::<String>() {
         s.clone()
@@ -1117,7 +1153,16 @@ fn short_err_id() -> String {
 ///    happens to contain a secret / PII / internal path is never sent to a client).
 pub fn classify_and_log_panic(payload: &(dyn std::any::Any + Send)) -> String {
     let msg = panic_payload_message(payload);
-    let kind = classify_panic(&msg);
+    // The recursion trip carries a typed [`RecursionLimit`] payload: classify it
+    // by DOWNCASTING the type, never by matching the message wording. Every other
+    // panic (a caught foreign `&str`/`String`, an arithmetic overflow, an index
+    // out of bounds) has no typed payload here, so it falls through to the
+    // message-based `classify_panic` unchanged.
+    let kind = if payload.downcast_ref::<RecursionLimit>().is_some() {
+        "RecursionLimit"
+    } else {
+        classify_panic(&msg)
+    };
     let err_id = short_err_id();
     let json =
         crate::system::read_env_var("IPE_LOG_FORMAT").is_ok_and(|v| v.eq_ignore_ascii_case("json"));
@@ -1450,6 +1495,31 @@ mod tests {
         );
     }
 
+    // The typed `RecursionLimit` payload renders to the fixed human message and is
+    // recognised regardless of any wording — the classification is type-driven,
+    // not string-driven. A genuine overflow, carried only as a message string,
+    // still classifies as `ArithmeticOverflow`, unaffected by the typed path.
+    #[test]
+    fn typed_recursion_payload_renders_fixed_message() {
+        let payload: Box<dyn std::any::Any + Send> = Box::new(RecursionLimit);
+        assert_eq!(
+            panic_payload_message(payload.as_ref()),
+            "maximum recursion depth exceeded"
+        );
+        assert_eq!(RecursionLimit::MESSAGE, "maximum recursion depth exceeded");
+        assert_eq!(
+            RecursionLimit.to_string(),
+            "maximum recursion depth exceeded"
+        );
+
+        let overflow: Box<dyn std::any::Any + Send> = Box::new("attempt to multiply with overflow");
+        assert!(overflow.downcast_ref::<RecursionLimit>().is_none());
+        assert_eq!(
+            classify_panic(&panic_payload_message(overflow.as_ref())),
+            "ArithmeticOverflow"
+        );
+    }
+
     // [B8] The Ipê-visible message NEVER contains the foreign error's Debug detail
     // (which can carry a bearer token / API key / URL from a transport error). It
     // is a fixed generic message + a correlation id only.
@@ -1661,13 +1731,16 @@ mod recursion_guard_tests {
             .spawn(|| {
                 let r = std::panic::catch_unwind(recurse);
                 let payload = r.expect_err("unbounded recursion must trip the guard");
-                let msg = payload
-                    .downcast_ref::<&str>()
-                    .map(|s| (*s).to_string())
-                    .or_else(|| payload.downcast_ref::<String>().cloned())
-                    .unwrap_or_default();
-                assert_eq!(msg, "maximum recursion depth exceeded");
-                assert_eq!(classify_panic(&msg), "RecursionLimit");
+                // The trip carries the TYPED `RecursionLimit` payload, not a string.
+                assert!(
+                    payload.downcast_ref::<RecursionLimit>().is_some(),
+                    "the trip must panic with the typed RecursionLimit payload"
+                );
+                // The human message the classifier renders stays byte-identical.
+                assert_eq!(
+                    panic_payload_message(payload.as_ref()),
+                    "maximum recursion depth exceeded"
+                );
                 assert_eq!(
                     recursion_depth_for_test(),
                     0,
@@ -1727,12 +1800,14 @@ mod recursion_guard_tests {
                 }
                 let r = std::panic::catch_unwind(recurse);
                 let payload = r.expect_err("small stack must trip the guard, not overflow");
-                let msg = payload
-                    .downcast_ref::<&str>()
-                    .map(|s| (*s).to_string())
-                    .or_else(|| payload.downcast_ref::<String>().cloned())
-                    .unwrap_or_default();
-                assert_eq!(msg, "maximum recursion depth exceeded");
+                assert!(
+                    payload.downcast_ref::<RecursionLimit>().is_some(),
+                    "the red-zone trip must panic with the typed RecursionLimit payload"
+                );
+                assert_eq!(
+                    panic_payload_message(payload.as_ref()),
+                    "maximum recursion depth exceeded"
+                );
                 assert!(
                     recursion_depth_for_test() < DEFAULT_RECURSION_LIMIT,
                     "the probe must trip BELOW the depth budget on a small stack; \
