@@ -12,8 +12,15 @@ license.workspace = true
 # external leaf dependency (no in-workspace edge), added so `StdlibKernel`
 # can derive `Serialize`/`Deserialize` for the Phase 6.5 on-disk lowered-IR
 # cache (`ipe_ir::Callee::Kernel` embeds a `StdlibKernel`).
+#
+# `strum` is likewise an external leaf dependency (no in-workspace edge). Only
+# its `EnumCount` derive is used, to give `StdlibKernel` a compiler-maintained
+# variant count that the `ALL`-completeness guard checks against — so a variant
+# added to the enum but forgotten in `ALL` fails the guard, with no hand-listed
+# census to keep in sync.
 [dependencies]
 serde = { version = "1", features = ["derive"] }
+strum = { version = "0.26", features = ["derive"] }
 
 [lints]
 workspace = true
