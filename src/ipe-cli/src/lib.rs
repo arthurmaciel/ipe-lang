@@ -1511,6 +1511,26 @@ fn attribute_post_link_error(
     }
 }
 
+/// Run the canon decoder-pipeline direction gate (IPE-N0040) over the linked
+/// program, returning the rejection in the post-link `(diag, home)` shape both
+/// the build and the type-check surfaces attribute through.
+///
+/// The gate rejects the reverse-associated hand-nested spelling of the
+/// `required` / `optional` / `requiredAt` / `custom` decoder combinators, which
+/// silently swaps two same-typed fields with no type error. It runs on the
+/// LINKED module so a decoder split across modules is still seen whole. Both
+/// [`compile_prepared`] (the build/lower/emit path) and the `ipe type-check`
+/// flow call THIS one helper, so the two surfaces cannot drift on whether the
+/// footgun is caught. The returned `home` is empty: the diagnostic's own span
+/// carries the offending source location, resolved by the byte-offset heuristic
+/// the other homeless post-link errors already use.
+fn gate_decoder_pipelines(
+    linked: &ipe_canon::ast::Module,
+) -> Result<(), (Diagnostic, Vec<ipe_intern::Symbol>)> {
+    ipe_canon::decoder_pipeline_gate::check_decoder_pipelines(linked)
+        .map_err(|diag| (diag, Vec::new()))
+}
+
 /// Demand `canonicalize` for every module in dep-first order, attributing a
 /// canon error (e.g. IPE-N0020 module-not-found) to the source file of the
 /// module that produced it. A canon error fires *before* `link`, so there is no
@@ -1751,6 +1771,16 @@ pub fn compile_prepared(
         |(diag, home): (ipe_diagnostics::Diagnostic, Vec<ipe_intern::Symbol>)| {
             attribute_post_link_error(linked, &home_to_source, &entry, diag, &home)
         };
+
+    // Decoder-pipeline direction gate (IPE-N0040): reject the hand-nested
+    // `required`/`optional`/`requiredAt`/`custom` spelling that silently
+    // reverses field→constructor binding. Runs on the linked module, framed
+    // against the owning source like every other post-link diagnostic. The
+    // IDENTICAL gate runs on the `ipe type-check` path (both call
+    // `gate_decoder_pipelines`), so the footgun is caught on every pre-ship
+    // surface, not just the build.
+    gate_decoder_pipelines(linked).map_err(span_attributed_err)?;
+
     // `ipe_db::program_metadata` — the whole-program DCE-reachability seam
     // over `lower_program`.
     // Its own dependency on `lower_program` is what forces the lowering pass
@@ -3810,9 +3840,17 @@ fn build_source_graph(entry: &Path) -> Result<SourceGraph, CliError> {
 /// [`CliError::Io`] when a source file cannot be read.
 fn typecheck_entry_via_graph(entry: &Path) -> Result<(), CliError> {
     let graph = build_source_graph(entry)?;
-    graph
-        .run_attributed(entry, |db, root, file| ipe_db::typecheck(db, root, file))
-        .map(|_| ())
+    graph.run_attributed(entry, |db, root, file| {
+        // Type-check first so an ordinary type error surfaces ahead of the
+        // decoder-direction gate; then run the SAME IPE-N0040 gate the build
+        // path runs (`gate_decoder_pipelines`) over the linked module, so
+        // `ipe type-check` rejects the hand-nested decoder footgun for the
+        // earliest possible feedback rather than deferring it to `ipe build`.
+        // `linked_program` re-demands the memos `typecheck` just populated.
+        ipe_db::typecheck(db, root, file)?;
+        let linked = ipe_db::linked_program(db, root, file).map_err(|d| (d, Vec::new()))?;
+        gate_decoder_pipelines(&linked.module)
+    })
 }
 
 /// `ipe capabilities <entry.ipe>` — print the program's inferred security
@@ -5074,7 +5112,7 @@ mod tests {
         let index = code_index();
         let lines = index.lines().count();
         assert_eq!(lines, ALL_CODES.len(), "one line per code");
-        assert_eq!(ALL_CODES.len(), 118, "taxonomy is 118 codes");
+        assert_eq!(ALL_CODES.len(), 119, "taxonomy is 119 codes");
         assert!(
             index.contains("IPE-T0001  type mismatch"),
             "index pairs code with title"

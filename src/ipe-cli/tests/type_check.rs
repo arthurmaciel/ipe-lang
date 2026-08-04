@@ -276,6 +276,68 @@ fn closed_union_catch_all_build_emits_no_crate() -> TestResult {
     Ok(())
 }
 
+/// FAIL-CLOSED on `type-check`: the reverse-associated hand-nested decoder
+/// pipeline (`required "a" da (required "b" db (succeed ctor))`) silently swaps
+/// same-typed fields with no type error. `ipe type-check` — the earliest
+/// feedback surface, and the one that previously missed this — must reject it
+/// with IPE-N0040, not print "No type errors".
+#[test]
+fn decoder_nested_direct_fails_check_with_n0040() -> TestResult {
+    let (ok, stdout, stderr) = run_ipe(&[
+        "type-check",
+        &fixture("decoder_nested_direct.ipe").to_string_lossy(),
+    ])?;
+    assert!(
+        !ok,
+        "a hand-nested decoder pipeline must fail type-check (fail-closed), got:\n{stdout}"
+    );
+    assert!(
+        stderr.contains("IPE-N0040"),
+        "the rendered IPE-N0040 diagnostic must be shown on the type-check path, got:\n{stderr}"
+    );
+    Ok(())
+}
+
+/// The binder-indirected reverse nesting — the accumulator reached through a
+/// `let` binder rather than a syntactically-nested call — must ALSO be rejected
+/// by `type-check` with IPE-N0040 (the binder-resolution gap).
+#[test]
+fn decoder_nested_through_binder_fails_check_with_n0040() -> TestResult {
+    let (ok, stdout, stderr) = run_ipe(&[
+        "type-check",
+        &fixture("decoder_nested_binder.ipe").to_string_lossy(),
+    ])?;
+    assert!(
+        !ok,
+        "a binder-indirected hand-nested decoder must fail type-check, got:\n{stdout}"
+    );
+    assert!(
+        stderr.contains("IPE-N0040"),
+        "the binder-indirected nesting must reject with IPE-N0040, got:\n{stderr}"
+    );
+    Ok(())
+}
+
+/// NO false positive: the idiomatic `|>` pipe form binds fields top-to-bottom
+/// and must type-check clean — the gate rejects only the reverse-nested
+/// spelling, never the pipe.
+#[test]
+fn decoder_idiomatic_pipe_form_checks_clean() -> TestResult {
+    let (ok, stdout, stderr) = run_ipe(&[
+        "type-check",
+        &fixture("decoder_pipe_clean.ipe").to_string_lossy(),
+    ])?;
+    assert!(
+        ok,
+        "the idiomatic |> decoder pipe must type-check, got stderr:\n{stderr}"
+    );
+    assert!(
+        stdout.contains("type-checks"),
+        "a clean check prints the success message, got:\n{stdout}"
+    );
+    Ok(())
+}
+
 #[test]
 fn check_help_page_names_the_command() -> TestResult {
     let (ok, stdout, _) = run_ipe(&["type-check", "--help"])?;
