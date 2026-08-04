@@ -19,7 +19,7 @@ use std::rc::Rc;
 use ipe_canon::ast as canon;
 use ipe_diagnostics::{DResult, Diagnostic, Feature, LowerError, Span, TypeError};
 use ipe_intern::{Interner, Symbol};
-use ipe_kernels::StdlibKernel;
+use ipe_kernels::{SchemeKey, StdlibKernel};
 
 use crate::doc::{VarNamer, canon_type_to_doc, ty_to_doc};
 use crate::solve::{Budget, Constraint};
@@ -3830,6 +3830,22 @@ impl<'a> Builder<'a> {
                 },
             },
         )
+    }
+
+    /// Resolve a [`SchemeKey`] carried on a [`ipe_kernels::KernelDef`] to its
+    /// concrete HM type scheme.
+    ///
+    /// A [`SchemeKey`] names a kernel's scheme without carrying it (the scheme is
+    /// built from interned `Symbol`s that exist only after the `Interner` runs,
+    /// so it cannot be a `'static` value on the descriptor). This is the single
+    /// interpreter that turns the key back into a `Ty`: it delegates to
+    /// [`Self::stdlib_scheme`], the authoritative scheme table, keyed on the
+    /// kernel identity the key wraps. `None` mirrors `stdlib_scheme` — the kernel
+    /// has no registry scheme (a routed / unlowered bucket). Routing every
+    /// `def().scheme` read through this one adapter means the descriptor's scheme
+    /// reference and the table can never resolve to different types.
+    fn resolve_scheme(&self, key: SchemeKey) -> Option<Ty> {
+        self.stdlib_scheme(key.0)
     }
 
     /// Parse-once type scheme for a stdlib kernel, keyed by the pre-resolved
@@ -8005,6 +8021,26 @@ pub fn kernel_type_table(interner: &mut Interner) -> Result<Vec<(StdlibKernel, T
         .collect())
 }
 
+/// Resolve a single [`SchemeKey`] to its concrete HM type scheme, outside a full
+/// inference run.
+///
+/// This is the free-function entry to the scheme-by-key bridge: a consumer
+/// holding a [`ipe_kernels::KernelDef`] reads `def.scheme` (a [`SchemeKey`]) and
+/// resolves it here to the same `Ty` inference uses, via the single
+/// [`Builder::resolve_scheme`] interpreter (which delegates to
+/// [`Builder::stdlib_scheme`]). `Ok(None)` mirrors the table — the kernel has no
+/// registry scheme (a routed / unlowered bucket).
+///
+/// # Errors
+/// Propagates the interner-capacity diagnostic from [`Builtins::new`] (the only
+/// fallible step; the scheme read itself is total).
+pub fn resolve_scheme(key: SchemeKey, interner: &mut Interner) -> Result<Option<Ty>, Diagnostic> {
+    let builtins = Builtins::new(interner)?;
+    let mut uf: UnionFind<Content> = UnionFind::new();
+    let builder = Builder::for_scheme_table(&mut uf, interner, builtins);
+    Ok(builder.resolve_scheme(key))
+}
+
 #[cfg(test)]
 mod registry_phase_c_tests {
     use super::{Builder, Builtins, Content, Diagnostic, Feature, LowerError, Ty, UnionFind};
@@ -9394,6 +9430,112 @@ mod registry_phase_c_tests {
                  RELOCATED∪FIRST_SCHEMED membership = {expected}",
             );
         }
+    }
+
+    /// The number of leading `->` arrows on a scheme's curried spine — its
+    /// Ipê-level argument count.
+    ///
+    /// Walks ONLY the result (right) branch of each top-level [`Ty::Fun`],
+    /// stopping at the first non-`Fun` node. A function that sits in an
+    /// *argument* position (a higher-order kernel's callback, e.g. the
+    /// `(Char -> Char)` in `String.map : (Char -> Char) -> String -> String`) is
+    /// NOT descended into: it is one argument, not two, so `String.map` counts
+    /// two arrows, matching its arity of 2. A kernel whose *result* is itself a
+    /// function would count that trailing arrow too — which is the point: such a
+    /// kernel's declared arity must include it, or the two disagree and the
+    /// coherence test fires.
+    fn scheme_arrow_count(ty: &Ty) -> u8 {
+        let mut n: u8 = 0;
+        let mut cur = ty;
+        while let Ty::Fun(_, result) = cur {
+            n = n.saturating_add(1);
+            cur = result;
+        }
+        n
+    }
+
+    /// Kernels whose *result value is itself a function*, so their scheme's
+    /// curried spine carries exactly ONE arrow more than `def().arity`.
+    ///
+    /// A `Middleware.with*` kernel is a handler transformer: applied to its
+    /// declared arguments (a config plus, for most, nothing else) it yields a
+    /// `Handler` value — and a `Handler` is `Req -> Task Resp`, itself a
+    /// one-arrow function type. So `withLogging : Handler -> Handler` has
+    /// arity 1 (it is applied to one argument, the wrapped handler) but a
+    /// two-arrow scheme `(Req -> Task Resp) -> (Req -> Task Resp)`: the trailing
+    /// arrow belongs to the RETURNED handler value, not to an argument position.
+    /// The runtime confirms it — `middleware_with_logging(h) -> ServerHandler`
+    /// takes one argument and returns a handler closure.
+    ///
+    /// This is the ONE legitimate non-1:1 arrow-vs-arity class; it is listed
+    /// explicitly (with this reason) rather than excluded silently, so a NEW
+    /// returns-a-function kernel that forgot to account for its trailing arrow
+    /// still trips the coherence test until it is classified here on purpose.
+    const RETURNS_HANDLER: &[StdlibKernel] = &[
+        StdlibKernel::MiddlewareWithCors,
+        StdlibKernel::MiddlewareWithLogging,
+        StdlibKernel::MiddlewareWithBasicAuth,
+        StdlibKernel::MiddlewareWithRateLimit,
+        StdlibKernel::MiddlewareWithCsrf,
+    ];
+
+    /// The arity ↔ scheme coherence tripwire (the declared-but-mis-schemed
+    /// drift catcher).
+    ///
+    /// For every schemed kernel in [`StdlibKernel::ALL`], resolve its scheme
+    /// THROUGH the [`SchemeKey`] bridge — `def().scheme` -> [`resolve_scheme`] —
+    /// and assert the scheme's leading-arrow count equals `def().arity`, plus one
+    /// for the [`RETURNS_HANDLER`] class whose result value is itself a function.
+    /// This is the extension of ADR 0009's
+    /// `callee_arity`-derives-from-`decl().arity` rule to the *scheme*: a kernel
+    /// whose declared arity disagrees with the arrow count of its type is a
+    /// coherence failure here, caught pre-cargo, not a silent hole deep in the
+    /// emitter — the drift class where a declared member had no coherent scheme
+    /// and shipped as an exit-0-then-cargo-fail.
+    ///
+    /// Routing through [`Builder::resolve_scheme`] (not `stdlib_scheme` directly)
+    /// is deliberate: it exercises the scheme-by-key bridge, proving `def().scheme`
+    /// is resolvable to the exact same `Ty` the table produces.
+    ///
+    /// The relationship is 1:1 for every kernel except [`RETURNS_HANDLER`]:
+    /// a curried `arg0 -> … -> result` scheme has `arity` leading arrows, and a
+    /// nullary value kernel (e.g. `Jwt.claims : Claims`) has arity 0 and a
+    /// non-`Fun` scheme (0 arrows). The returns-a-function class carries exactly
+    /// one extra trailing arrow (the returned handler's own `Req -> Task Resp`),
+    /// encoded above with its reason.
+    #[test]
+    fn scheme_arrow_count_matches_arity() {
+        let mut interner = Interner::new();
+        let builtins = make_builder(&mut interner);
+        let mut uf = UnionFind::<Content>::new();
+        let builder = Builder::for_scheme_table(&mut uf, &interner, builtins);
+
+        let mut mismatches: Vec<(StdlibKernel, u8, u8)> = Vec::new();
+        for &k in StdlibKernel::ALL {
+            let def = k.def();
+            // Only schemed kernels are checked; the un-schemed (routed /
+            // unlowered) buckets are gated by `stdlib_scheme_total_over_reachable`
+            // and fail closed at their call sites, so there is no scheme to weigh
+            // against arity here.
+            if let Some(scheme) = builder.resolve_scheme(def.scheme) {
+                let arrows = scheme_arrow_count(&scheme);
+                // The returns-a-function class carries one arrow for its returned
+                // handler value on top of its argument arrows; every other kernel
+                // is strictly arrows == arity.
+                let extra = u8::from(RETURNS_HANDLER.contains(&k));
+                let expected = def.arity.saturating_add(extra);
+                if arrows != expected {
+                    mismatches.push((k, arrows, expected));
+                }
+            }
+        }
+        assert!(
+            mismatches.is_empty(),
+            "arity <-> scheme coherence broken — these kernels' scheme \
+             arrow-count disagrees with the expected count (def().arity, plus \
+             one for the returns-a-function class): {mismatches:?} \
+             (kernel, scheme_arrows, expected)",
+        );
     }
 
     /// Totality gate. `stdlib_scheme` is TOTAL over the reachable set:
