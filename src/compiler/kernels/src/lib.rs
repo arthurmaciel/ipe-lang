@@ -4779,25 +4779,226 @@ impl StdlibKernel {
     /// variables, no open rows) have a shape, because [`TyShape`]'s vocabulary
     /// carries no solver-touching nodes.
     ///
-    /// The `Bitwise` family carries a shape — seven `Int`-only kernels
-    /// (`and`/`or`/`xor`/`shiftLeftBy`/`shiftRightBy`/`shiftRightZfBy` are
-    /// `Int -> Int -> Int`; `complement` is `Int -> Int`), each a fully-concrete
-    /// arrow spine over one primitive.
+    /// Every fully-monomorphic kernel family whose scheme is an arrow spine over
+    /// ONLY the six primitive built-ins ([`BuiltinTag`]) carries a shape — no
+    /// type variable, no row, no record, no tuple, no opaque constructor. Each
+    /// spine is a `'static` value assembled from the primitive leaves below, so
+    /// it embeds directly as the carried shape and the `ipe_types` interpreter
+    /// reproduces the exact `Ty` the (now-removed) `stdlib_scheme` arm did.
+    ///
+    /// A family that touches any non-primitive constructor (`List`, `Maybe`,
+    /// `Result`, `Task`, a tuple, a record, an opaque handle) or any type
+    /// variable carries NO shape and resolves through the `stdlib_scheme` table.
     #[must_use]
+    #[allow(clippy::too_many_lines)] // one flat declarative spine table per family
+    #[allow(clippy::match_same_arms)] // family-grouped spine table; merging cross-family arms with coincidentally-equal spines would obscure the per-family structure
     pub const fn scheme_shape(self) -> Option<&'static TyShape> {
-        // `Int -> Int` and `Int -> Int -> Int` spines, shared by the Bitwise
-        // arms. All-`'static`, so they embed directly as the carried shape.
+        // ── Primitive leaves (nullary constructor applications). ──
         const INT: TyShape = TyShape::Con(BuiltinTag::Int, &[]);
+        const FLOAT: TyShape = TyShape::Con(BuiltinTag::Float, &[]);
+        const BOOL: TyShape = TyShape::Con(BuiltinTag::Bool, &[]);
+        const STRING: TyShape = TyShape::Con(BuiltinTag::String, &[]);
+        const CHAR: TyShape = TyShape::Con(BuiltinTag::Char, &[]);
+        const BYTES: TyShape = TyShape::Con(BuiltinTag::Bytes, &[]);
+        // ── Arrow spines, each named by its curried signature. ──
         const INT_TO_INT: TyShape = TyShape::Fun(&INT, &INT);
         const INT_TO_INT_TO_INT: TyShape = TyShape::Fun(&INT, &INT_TO_INT);
+        const INT_TO_BOOL: TyShape = TyShape::Fun(&INT, &BOOL);
+        const INT_TO_STRING: TyShape = TyShape::Fun(&INT, &STRING);
+        const INT_TO_CHAR: TyShape = TyShape::Fun(&INT, &CHAR);
+        const FLOAT_TO_FLOAT: TyShape = TyShape::Fun(&FLOAT, &FLOAT);
+        const FLOAT_TO_INT: TyShape = TyShape::Fun(&FLOAT, &INT);
+        const FLOAT_TO_BOOL: TyShape = TyShape::Fun(&FLOAT, &BOOL);
+        const FLOAT_TO_STRING: TyShape = TyShape::Fun(&FLOAT, &STRING);
+        const FLOAT_TO_FLOAT_TO_FLOAT: TyShape = TyShape::Fun(&FLOAT, &FLOAT_TO_FLOAT);
+        const BOOL_TO_BOOL: TyShape = TyShape::Fun(&BOOL, &BOOL);
+        const CHAR_TO_BOOL: TyShape = TyShape::Fun(&CHAR, &BOOL);
+        const CHAR_TO_INT: TyShape = TyShape::Fun(&CHAR, &INT);
+        const CHAR_TO_STRING: TyShape = TyShape::Fun(&CHAR, &STRING);
+        const CHAR_TO_CHAR: TyShape = TyShape::Fun(&CHAR, &CHAR);
+        const STRING_TO_INT: TyShape = TyShape::Fun(&STRING, &INT);
+        const STRING_TO_BOOL: TyShape = TyShape::Fun(&STRING, &BOOL);
+        const STRING_TO_STRING: TyShape = TyShape::Fun(&STRING, &STRING);
+        const STRING_TO_BYTES: TyShape = TyShape::Fun(&STRING, &BYTES);
+        const STRING_TO_STRING_TO_STRING: TyShape = TyShape::Fun(&STRING, &STRING_TO_STRING);
+        const STRING_TO_STRING_TO_BOOL: TyShape = TyShape::Fun(&STRING, &STRING_TO_BOOL);
+        const STRING_TO_STRING_TO_STRING_TO_STRING: TyShape =
+            TyShape::Fun(&STRING, &STRING_TO_STRING_TO_STRING);
+        const STRING_TO_STRING_TO_STRING_TO_BOOL: TyShape =
+            TyShape::Fun(&STRING, &STRING_TO_STRING_TO_BOOL);
+        const BYTES_TO_INT: TyShape = TyShape::Fun(&BYTES, &INT);
+        const BYTES_TO_BOOL: TyShape = TyShape::Fun(&BYTES, &BOOL);
+        const BYTES_TO_STRING: TyShape = TyShape::Fun(&BYTES, &STRING);
+        const BYTES_TO_BYTES: TyShape = TyShape::Fun(&BYTES, &BYTES);
+        const BYTES_TO_BYTES_TO_BYTES: TyShape = TyShape::Fun(&BYTES, &BYTES_TO_BYTES);
+        const INT_TO_BYTES_TO_BYTES: TyShape = TyShape::Fun(&INT, &BYTES_TO_BYTES);
+        const INT_TO_INT_TO_BYTES_TO_BYTES: TyShape = TyShape::Fun(&INT, &INT_TO_BYTES_TO_BYTES);
+        const INT_TO_STRING_TO_STRING: TyShape = TyShape::Fun(&INT, &STRING_TO_STRING);
+        const INT_TO_INT_TO_STRING_TO_STRING: TyShape =
+            TyShape::Fun(&INT, &INT_TO_STRING_TO_STRING);
+        const CHAR_TO_STRING_TO_STRING: TyShape = TyShape::Fun(&CHAR, &STRING_TO_STRING);
+        const INT_TO_CHAR_TO_STRING_TO_STRING: TyShape =
+            TyShape::Fun(&INT, &CHAR_TO_STRING_TO_STRING);
+        // Higher-order-over-`Char` spines (the callback is itself an all-primitive
+        // arrow — no type variable, so still fully monomorphic).
+        const CHAR_TO_CHAR_ARROW: TyShape = TyShape::Fun(&CHAR_TO_CHAR, &STRING_TO_STRING);
+        const CHAR_TO_BOOL_TO_STRING_STRING: TyShape =
+            TyShape::Fun(&CHAR_TO_BOOL, &STRING_TO_STRING);
+        const STRING_TO_BOOL_SPINE: TyShape = TyShape::Fun(&STRING, &BOOL);
+        const CHAR_TO_BOOL_TO_STRING_BOOL: TyShape =
+            TyShape::Fun(&CHAR_TO_BOOL, &STRING_TO_BOOL_SPINE);
+        // `String -> String -> Int -> Int -> Bool` (RateLimit.allow).
+        const INT_TO_INT_TO_BOOL: TyShape = TyShape::Fun(&INT, &INT_TO_BOOL);
+        const STRING_TO_INT_TO_INT_TO_BOOL: TyShape = TyShape::Fun(&STRING, &INT_TO_INT_TO_BOOL);
+        const STRING_TO_STRING_TO_INT_TO_INT_TO_BOOL: TyShape =
+            TyShape::Fun(&STRING, &STRING_TO_INT_TO_INT_TO_BOOL);
         match self {
+            // ── Bitwise — Int -> Int -> Int / Int -> Int. ──
             Self::BitwiseAnd
             | Self::BitwiseOr
             | Self::BitwiseXor
             | Self::BitwiseShiftLeftBy
             | Self::BitwiseShiftRightBy
             | Self::BitwiseShiftRightZfBy => Some(&INT_TO_INT_TO_INT),
-            Self::BitwiseComplement => Some(&INT_TO_INT),
+            Self::BitwiseComplement | Self::MathAbs => Some(&INT_TO_INT),
+
+            // ── Math (the fully-monomorphic arms; min/max stay on the
+            //    obligation path and carry no shape). ──
+            Self::MathPi
+            | Self::MathE
+            | Self::MathPhi
+            | Self::MathSqrt2
+            | Self::MathInf
+            | Self::MathNan => Some(&FLOAT),
+            Self::MathIsNaN => Some(&FLOAT_TO_BOOL),
+            Self::MathSqrt
+            | Self::MathCbrt
+            | Self::MathExp
+            | Self::MathExp2
+            | Self::MathLog
+            | Self::MathLog2
+            | Self::MathLog10
+            | Self::MathSin
+            | Self::MathCos
+            | Self::MathTan
+            | Self::MathAsin
+            | Self::MathAcos
+            | Self::MathAtan
+            | Self::MathSinh
+            | Self::MathCosh
+            | Self::MathTanh
+            | Self::MathAsinh
+            | Self::MathAcosh
+            | Self::MathAtanh
+            | Self::BasicsSqrt => Some(&FLOAT_TO_FLOAT),
+            Self::MathFloor | Self::MathCeil | Self::MathRound | Self::MathTrunc => {
+                Some(&FLOAT_TO_INT)
+            }
+            Self::MathPow
+            | Self::MathHypot
+            | Self::MathAtan2
+            | Self::MathMod
+            | Self::MathRemainder => Some(&FLOAT_TO_FLOAT_TO_FLOAT),
+
+            // ── Basics (monomorphic arms). ──
+            Self::BasicsNot => Some(&BOOL_TO_BOOL),
+
+            // ── String → String / String → Int / String → Bool primitive kernels. ──
+            Self::StringFromInt | Self::TimeTimeString => Some(&INT_TO_STRING),
+            Self::StringFromFloat => Some(&FLOAT_TO_STRING),
+            // `Money.minorUnits : String -> Int` (the code-taking kernel).
+            Self::StringLength | Self::MoneyMinorUnits => Some(&STRING_TO_INT),
+            Self::StringIsEmpty
+            | Self::StringIsEmail
+            | Self::StringIsUrl
+            | Self::MoneyIsKnownCurrency => Some(&STRING_TO_BOOL),
+            Self::StringReverse
+            | Self::StringToUpper
+            | Self::StringToLower
+            | Self::StringCasefold
+            | Self::StringTrim
+            | Self::StringTrimStart
+            | Self::StringTrimEnd
+            | Self::CryptoSha256
+            | Self::CryptoSha512
+            | Self::CryptoSha1
+            | Self::CryptoMd5
+            | Self::EncodingBase64Encode
+            | Self::EncodingUrlEncode
+            | Self::EncodingHexEncode
+            | Self::HtmlEscapeText
+            | Self::HtmlEscapeAttr
+            | Self::CssSafetyStripStyleClose
+            | Self::MoneySymbol
+            | Self::MoneyCurrencyName => Some(&STRING_TO_STRING),
+            Self::StringFromChar | Self::CharToLower | Self::CharToUpper => Some(&CHAR_TO_STRING),
+            Self::StringAppend
+            | Self::SystemGetenvOr
+            | Self::CryptoHmacSha256
+            | Self::CryptoHmacSha512
+            | Self::CryptoAesKeyFromPassword
+            | Self::CryptoChachaKeyFromPassword => Some(&STRING_TO_STRING_TO_STRING),
+            Self::StringContains
+            | Self::StringStartsWith
+            | Self::StringEndsWith
+            | Self::StringEqualFold
+            | Self::StringContainsIn
+            | Self::StringStartsWithIn
+            | Self::StringEndsWithIn
+            | Self::CryptoConstantTimeEqual
+            | Self::MoneyHasRate => Some(&STRING_TO_STRING_TO_BOOL),
+            Self::StringReplace => Some(&STRING_TO_STRING_TO_STRING_TO_STRING),
+            Self::CryptoRsaSha256Verify => Some(&STRING_TO_STRING_TO_STRING_TO_BOOL),
+            Self::StringRepeat
+            | Self::StringDropLeft
+            | Self::StringDropRight
+            | Self::StringLeft
+            | Self::StringRight => Some(&INT_TO_STRING_TO_STRING),
+            Self::StringSlice => Some(&INT_TO_INT_TO_STRING_TO_STRING),
+            Self::StringPadLeft | Self::StringPadRight | Self::StringPad => {
+                Some(&INT_TO_CHAR_TO_STRING_TO_STRING)
+            }
+            Self::StringCons => Some(&CHAR_TO_STRING_TO_STRING),
+            Self::StringMap => Some(&CHAR_TO_CHAR_ARROW),
+            Self::StringFilter => Some(&CHAR_TO_BOOL_TO_STRING_STRING),
+            Self::StringAny | Self::StringAll => Some(&CHAR_TO_BOOL_TO_STRING_BOOL),
+
+            // ── Char primitive kernels. ──
+            Self::CharIsAlpha
+            | Self::CharIsDigit
+            | Self::CharIsLower
+            | Self::CharIsUpper
+            | Self::CharIsAlphaNum
+            | Self::CharIsHexDigit
+            | Self::CharIsOctDigit => Some(&CHAR_TO_BOOL),
+            Self::CharToCode => Some(&CHAR_TO_INT),
+            Self::CharFromCode => Some(&INT_TO_CHAR),
+
+            // ── Bytes primitive kernels. ──
+            Self::BytesEmpty => Some(&BYTES),
+            Self::BytesLength => Some(&BYTES_TO_INT),
+            Self::BytesIsEmpty => Some(&BYTES_TO_BOOL),
+            Self::BytesFromString => Some(&STRING_TO_BYTES),
+            Self::BytesToHex | Self::BytesToBase64 => Some(&BYTES_TO_STRING),
+            Self::BytesAppend => Some(&BYTES_TO_BYTES_TO_BYTES),
+            Self::BytesSlice => Some(&INT_TO_INT_TO_BYTES_TO_BYTES),
+
+            // ── Time (pure calendar kernels — no Task wrap). ──
+            Self::TimeIsLeapYear => Some(&INT_TO_BOOL),
+            Self::TimeDaysInMonth => Some(&INT_TO_INT_TO_INT),
+
+            // ── RateLimit / string-constant kernels. ──
+            Self::RateLimitAllow => Some(&STRING_TO_STRING_TO_INT_TO_INT_TO_BOOL),
+            Self::FontSansSerif
+            | Self::FontSerif
+            | Self::FontMonospace
+            | Self::UiMobile
+            | Self::UiTablet
+            | Self::UiDesktop
+            | Self::UiDarkMode
+            | Self::UiLightMode
+            | Self::UiReducedMotion => Some(&STRING),
+
             _ => None,
         }
     }
