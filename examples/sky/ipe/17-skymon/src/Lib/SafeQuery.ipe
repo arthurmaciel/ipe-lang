@@ -15,7 +15,7 @@ import Ipe.Db as Db
 runReadOnly : Db -> String -> List String -> Result Error (List (Dict String String))
 runReadOnly dbConn query params =
     if isSelectOnly query then
-        Task.run (Db.query dbConn query params)
+        Task.run (Db.unsafeQuery dbConn query params)
 
     else
         let

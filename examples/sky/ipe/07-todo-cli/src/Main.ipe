@@ -79,7 +79,7 @@ reportError e =
 
 initDb : Db -> Task Error ()
 initDb conn =
-    Db.execRaw
+    Db.unsafeExecRaw
         conn
         """CREATE TABLE IF NOT EXISTS todos (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -103,7 +103,7 @@ addTodo conn todoTitle =
 
 listTodos : Db -> Task Error ()
 listTodos conn =
-    Db.query conn "SELECT id, title, done FROM todos ORDER BY id" []
+    Db.unsafeQuery conn "SELECT id, title, done FROM todos ORDER BY id" []
         |> Task.map
                (\rows ->
                    if List.isEmpty rows then
@@ -131,9 +131,9 @@ listTodos conn =
 
 formatTodo row =
     let
-        todoId = Db.getField "id" row
-        todoName = Db.getField "title" row
-        todoDone = Db.getField "done" row
+        todoId = Db.unsafeGetField "id" row
+        todoName = Db.unsafeGetField "title" row
+        todoDone = Db.unsafeGetField "done" row
         status =
             if todoDone == "1" then
                 "[x]"
