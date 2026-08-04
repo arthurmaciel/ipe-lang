@@ -182,6 +182,17 @@ pub enum BuiltinTag {
     List,
     /// `Maybe` — the built-in optional constructor, applied to one payload type.
     Maybe,
+    /// `Result` — the built-in fallible constructor, applied to its error and
+    /// success payload types (`Result e a`).
+    Result,
+    /// `Set` — the built-in ordered-set constructor, applied to one element type.
+    Set,
+    /// `Dict` — the built-in ordered-map constructor, applied to its key and
+    /// value types (`Dict k v`).
+    Dict,
+    /// `Order` — the nullary three-way-comparison result constructor
+    /// (`LT` / `EQ` / `GT`).
+    Order,
 }
 
 /// A `'static`, `const`-embeddable representation of a kernel's HM type scheme.
@@ -889,7 +900,7 @@ pub enum StdlibKernel {
     DbWithTransaction,
     DbMigrate,
     /// `Db.defaultMigration : String -> Migration` — a Migration named with an
-    /// empty SQL body (reference `Std/Db.ipe:246`).
+    /// empty SQL body.
     DbDefaultMigration,
     // ── Db.Decode ───────────────────────────────────────────────────────────
     DbDecString,
@@ -4944,6 +4955,321 @@ impl StdlibKernel {
         const A_TO_MAYBE_B: TyShape = TyShape::Fun(&A, &MAYBE_B);
         const LIST_FILTER_MAP: TyShape = TyShape::Fun(&A_TO_MAYBE_B, &LIST_A_TO_LIST_B);
 
+        // ── Further scheme-local variables and constructor leaves. ──
+        // Vars `c` (2), `d` (3), `e` (4), `f` (5), `g` (6) for the N-ary
+        // combinators; `Order` / `Set a` / `Set b` / `Result e a` and the `Dict`
+        // key/value applications, spelled once and reused by reference.
+        const C: TyShape = TyShape::Var(2);
+        const D: TyShape = TyShape::Var(3);
+        const E: TyShape = TyShape::Var(4);
+        const F: TyShape = TyShape::Var(5);
+        const G: TyShape = TyShape::Var(6);
+        const ORDER: TyShape = TyShape::Con(BuiltinTag::Order, &[]);
+
+        // ── List fold / sort / reduce (rank-1 polymorphic, arrow-only). ──
+        // foldl / foldr : (a -> b -> b) -> b -> List a -> b
+        const A_TO_B_TO_B: TyShape = TyShape::Fun(&A, &TyShape::Fun(&B, &B));
+        const LIST_A_TO_B: TyShape = TyShape::Fun(&LIST_A, &B);
+        const B_TO_LIST_A_TO_B: TyShape = TyShape::Fun(&B, &LIST_A_TO_B);
+        const LIST_FOLD: TyShape = TyShape::Fun(&A_TO_B_TO_B, &B_TO_LIST_A_TO_B);
+        // sort : List a -> List a  (base scheme; the Ord obligation is layered
+        // separately, so the shape is exercised only by the totality / oracle
+        // tripwires, never in production).
+        const LIST_SORT: TyShape = LIST_A_TO_LIST_A;
+        // sortBy : (a -> b) -> List a -> List a  (base scheme).
+        const LIST_SORT_BY: TyShape = TyShape::Fun(&A_TO_B, &LIST_A_TO_LIST_A);
+        // sortWith : (a -> a -> Order) -> List a -> List a
+        const A_TO_A_TO_ORDER: TyShape = TyShape::Fun(&A, &TyShape::Fun(&A, &ORDER));
+        const LIST_SORT_WITH: TyShape = TyShape::Fun(&A_TO_A_TO_ORDER, &LIST_A_TO_LIST_A);
+        // sum / product : List a -> a  (base scheme; number obligation layered).
+        const LIST_SUM: TyShape = TyShape::Fun(&LIST_A, &A);
+        // maximum / minimum : List a -> Maybe a  (base scheme; Ord obligation
+        // layered).
+        const LIST_MAX_MIN: TyShape = LIST_A_TO_MAYBE_A;
+
+        // ── Basics (rank-1 polymorphic, arrow-only). ──
+        // identity : a -> a; negate / abs : a -> a (base scheme).
+        const A_TO_A: TyShape = TyShape::Fun(&A, &A);
+        // always : a -> b -> a
+        const B_TO_A: TyShape = TyShape::Fun(&B, &A);
+        const BASICS_ALWAYS: TyShape = TyShape::Fun(&A, &B_TO_A);
+        // modBy : Int -> Int -> Int
+        const INT_TO_INT_TO_INT_LEAF: TyShape = INT_TO_INT_TO_INT;
+        // clamp / min / max : a -> a -> a (base scheme; Ord obligation layered).
+        const A_TO_A_TO_A: TyShape = TyShape::Fun(&A, &A_TO_A);
+        const BASICS_CLAMP: TyShape = TyShape::Fun(&A, &A_TO_A_TO_A);
+        // toString : a -> String (base scheme; Stringify obligation layered).
+        const A_TO_STRING: TyShape = TyShape::Fun(&A, &STRING);
+        // compare : a -> a -> Order (base scheme; Ord obligation layered).
+        const A_TO_ORDER: TyShape = TyShape::Fun(&A, &ORDER);
+        const BASICS_COMPARE: TyShape = TyShape::Fun(&A, &A_TO_ORDER);
+
+        // ── Maybe combinators (rank-1 polymorphic, arrow-only). ──
+        // withDefault : a -> Maybe a -> a
+        const MAYBE_A_TO_A: TyShape = TyShape::Fun(&MAYBE_A, &A);
+        const MAYBE_WITH_DEFAULT: TyShape = TyShape::Fun(&A, &MAYBE_A_TO_A);
+        // map : (a -> b) -> Maybe a -> Maybe b
+        const MAYBE_A_TO_MAYBE_B: TyShape = TyShape::Fun(&MAYBE_A, &MAYBE_B);
+        const MAYBE_MAP: TyShape = TyShape::Fun(&A_TO_B, &MAYBE_A_TO_MAYBE_B);
+        // andThen : (a -> Maybe b) -> Maybe a -> Maybe b
+        const MAYBE_AND_THEN: TyShape = TyShape::Fun(&A_TO_MAYBE_B, &MAYBE_A_TO_MAYBE_B);
+        // map2 : (a -> b -> c) -> Maybe a -> Maybe b -> Maybe c
+        const MAYBE_C: TyShape = TyShape::Con(BuiltinTag::Maybe, &[C]);
+        const A_TO_B_TO_C: TyShape = TyShape::Fun(&A, &TyShape::Fun(&B, &C));
+        const MAYBE_MAP2: TyShape = TyShape::Fun(
+            &A_TO_B_TO_C,
+            &TyShape::Fun(&MAYBE_A, &TyShape::Fun(&MAYBE_B, &MAYBE_C)),
+        );
+        // map3 : (a -> b -> c -> d) -> Maybe a -> Maybe b -> Maybe c -> Maybe d
+        const MAYBE_D: TyShape = TyShape::Con(BuiltinTag::Maybe, &[D]);
+        const A_TO_B_TO_C_TO_D: TyShape =
+            TyShape::Fun(&A, &TyShape::Fun(&B, &TyShape::Fun(&C, &D)));
+        const MAYBE_MAP3: TyShape = TyShape::Fun(
+            &A_TO_B_TO_C_TO_D,
+            &TyShape::Fun(
+                &MAYBE_A,
+                &TyShape::Fun(&MAYBE_B, &TyShape::Fun(&MAYBE_C, &MAYBE_D)),
+            ),
+        );
+        // map4 : (a -> b -> c -> d -> e) -> Maybe a..d -> Maybe e
+        const MAYBE_E: TyShape = TyShape::Con(BuiltinTag::Maybe, &[E]);
+        const A_TO_B_TO_C_TO_D_TO_E: TyShape = TyShape::Fun(
+            &A,
+            &TyShape::Fun(&B, &TyShape::Fun(&C, &TyShape::Fun(&D, &E))),
+        );
+        const MAYBE_MAP4: TyShape = TyShape::Fun(
+            &A_TO_B_TO_C_TO_D_TO_E,
+            &TyShape::Fun(
+                &MAYBE_A,
+                &TyShape::Fun(
+                    &MAYBE_B,
+                    &TyShape::Fun(&MAYBE_C, &TyShape::Fun(&MAYBE_D, &MAYBE_E)),
+                ),
+            ),
+        );
+        // map5 : (a -> b -> c -> d -> e -> f) -> Maybe a..e -> Maybe f
+        const MAYBE_F: TyShape = TyShape::Con(BuiltinTag::Maybe, &[F]);
+        const A_TO_B_TO_C_TO_D_TO_E_TO_F: TyShape = TyShape::Fun(
+            &A,
+            &TyShape::Fun(
+                &B,
+                &TyShape::Fun(&C, &TyShape::Fun(&D, &TyShape::Fun(&E, &F))),
+            ),
+        );
+        const MAYBE_MAP5: TyShape = TyShape::Fun(
+            &A_TO_B_TO_C_TO_D_TO_E_TO_F,
+            &TyShape::Fun(
+                &MAYBE_A,
+                &TyShape::Fun(
+                    &MAYBE_B,
+                    &TyShape::Fun(
+                        &MAYBE_C,
+                        &TyShape::Fun(&MAYBE_D, &TyShape::Fun(&MAYBE_E, &MAYBE_F)),
+                    ),
+                ),
+            ),
+        );
+        // andMap : Maybe a -> Maybe (a -> b) -> Maybe b
+        const MAYBE_A_TO_B: TyShape = TyShape::Con(BuiltinTag::Maybe, &[A_TO_B]);
+        const MAYBE_AND_MAP: TyShape =
+            TyShape::Fun(&MAYBE_A, &TyShape::Fun(&MAYBE_A_TO_B, &MAYBE_B));
+        // combine : List (Maybe a) -> Maybe (List a)
+        const LIST_MAYBE_A: TyShape = TyShape::Con(BuiltinTag::List, &[MAYBE_A]);
+        const MAYBE_LIST_A_LEAF: TyShape = MAYBE_LIST_A;
+        const MAYBE_COMBINE: TyShape = TyShape::Fun(&LIST_MAYBE_A, &MAYBE_LIST_A_LEAF);
+
+        // ── Result combinators (rank-1 polymorphic, arrow-only). Var indices
+        //    follow each kernel's scheme exactly (see the `stdlib_scheme`
+        //    witness). ──
+        // withDefault : a -> Result b a -> a   (var(0)=a, var(1)=b)
+        const RESULT_B_A: TyShape = TyShape::Con(BuiltinTag::Result, &[B, A]);
+        const RESULT_B_A_TO_A: TyShape = TyShape::Fun(&RESULT_B_A, &A);
+        const RESULT_WITH_DEFAULT: TyShape = TyShape::Fun(&A, &RESULT_B_A_TO_A);
+        // map : (a -> b) -> Result c a -> Result c b  (var(0)=a, var(1)=b, var(2)=c)
+        const RESULT_C_A: TyShape = TyShape::Con(BuiltinTag::Result, &[C, A]);
+        const RESULT_C_B: TyShape = TyShape::Con(BuiltinTag::Result, &[C, B]);
+        const RESULT_MAP: TyShape = TyShape::Fun(&A_TO_B, &TyShape::Fun(&RESULT_C_A, &RESULT_C_B));
+        // andThen : (a -> Result b c) -> Result b a -> Result b c
+        const RESULT_B_C: TyShape = TyShape::Con(BuiltinTag::Result, &[B, C]);
+        const A_TO_RESULT_B_C: TyShape = TyShape::Fun(&A, &RESULT_B_C);
+        const RESULT_AND_THEN: TyShape =
+            TyShape::Fun(&A_TO_RESULT_B_C, &TyShape::Fun(&RESULT_B_A, &RESULT_B_C));
+        // mapError : (a -> b) -> Result a c -> Result b c
+        const RESULT_A_C: TyShape = TyShape::Con(BuiltinTag::Result, &[A, C]);
+        const RESULT_B_C2: TyShape = TyShape::Con(BuiltinTag::Result, &[B, C]);
+        const RESULT_MAP_ERROR: TyShape =
+            TyShape::Fun(&A_TO_B, &TyShape::Fun(&RESULT_A_C, &RESULT_B_C2));
+        // map2 : (a -> b -> c) -> Result d a -> Result d b -> Result d c
+        const RESULT_D_A: TyShape = TyShape::Con(BuiltinTag::Result, &[D, A]);
+        const RESULT_D_B: TyShape = TyShape::Con(BuiltinTag::Result, &[D, B]);
+        const RESULT_D_C: TyShape = TyShape::Con(BuiltinTag::Result, &[D, C]);
+        const RESULT_MAP2: TyShape = TyShape::Fun(
+            &A_TO_B_TO_C,
+            &TyShape::Fun(&RESULT_D_A, &TyShape::Fun(&RESULT_D_B, &RESULT_D_C)),
+        );
+        // map3 : (a -> b -> c -> d) -> Result e a -> Result e b -> Result e c -> Result e d
+        const RESULT_E_A: TyShape = TyShape::Con(BuiltinTag::Result, &[E, A]);
+        const RESULT_E_B: TyShape = TyShape::Con(BuiltinTag::Result, &[E, B]);
+        const RESULT_E_C: TyShape = TyShape::Con(BuiltinTag::Result, &[E, C]);
+        const RESULT_E_D: TyShape = TyShape::Con(BuiltinTag::Result, &[E, D]);
+        const RESULT_MAP3: TyShape = TyShape::Fun(
+            &A_TO_B_TO_C_TO_D,
+            &TyShape::Fun(
+                &RESULT_E_A,
+                &TyShape::Fun(&RESULT_E_B, &TyShape::Fun(&RESULT_E_C, &RESULT_E_D)),
+            ),
+        );
+        // map4 : (a -> b -> c -> d -> e) -> Result f a..d -> Result f e
+        const RESULT_F_A: TyShape = TyShape::Con(BuiltinTag::Result, &[F, A]);
+        const RESULT_F_B: TyShape = TyShape::Con(BuiltinTag::Result, &[F, B]);
+        const RESULT_F_C: TyShape = TyShape::Con(BuiltinTag::Result, &[F, C]);
+        const RESULT_F_D: TyShape = TyShape::Con(BuiltinTag::Result, &[F, D]);
+        const RESULT_F_E: TyShape = TyShape::Con(BuiltinTag::Result, &[F, E]);
+        const RESULT_MAP4: TyShape = TyShape::Fun(
+            &A_TO_B_TO_C_TO_D_TO_E,
+            &TyShape::Fun(
+                &RESULT_F_A,
+                &TyShape::Fun(
+                    &RESULT_F_B,
+                    &TyShape::Fun(&RESULT_F_C, &TyShape::Fun(&RESULT_F_D, &RESULT_F_E)),
+                ),
+            ),
+        );
+        // map5 : (a -> b -> c -> d -> e -> f) -> Result g a..e -> Result g f
+        const RESULT_G_A: TyShape = TyShape::Con(BuiltinTag::Result, &[G, A]);
+        const RESULT_G_B: TyShape = TyShape::Con(BuiltinTag::Result, &[G, B]);
+        const RESULT_G_C: TyShape = TyShape::Con(BuiltinTag::Result, &[G, C]);
+        const RESULT_G_D: TyShape = TyShape::Con(BuiltinTag::Result, &[G, D]);
+        const RESULT_G_E: TyShape = TyShape::Con(BuiltinTag::Result, &[G, E]);
+        const RESULT_G_F: TyShape = TyShape::Con(BuiltinTag::Result, &[G, F]);
+        const RESULT_MAP5: TyShape = TyShape::Fun(
+            &A_TO_B_TO_C_TO_D_TO_E_TO_F,
+            &TyShape::Fun(
+                &RESULT_G_A,
+                &TyShape::Fun(
+                    &RESULT_G_B,
+                    &TyShape::Fun(
+                        &RESULT_G_C,
+                        &TyShape::Fun(&RESULT_G_D, &TyShape::Fun(&RESULT_G_E, &RESULT_G_F)),
+                    ),
+                ),
+            ),
+        );
+        // andMap : Result c a -> Result c (a -> b) -> Result c b
+        const RESULT_C_A_TO_B: TyShape = TyShape::Con(BuiltinTag::Result, &[C, A_TO_B]);
+        const RESULT_AND_MAP: TyShape =
+            TyShape::Fun(&RESULT_C_A, &TyShape::Fun(&RESULT_C_A_TO_B, &RESULT_C_B));
+        // combine : List (Result b a) -> Result b (List a)   (var(0)=a, var(1)=b)
+        const LIST_RESULT_B_A: TyShape = TyShape::Con(BuiltinTag::List, &[RESULT_B_A]);
+        const RESULT_B_LIST_A: TyShape = TyShape::Con(BuiltinTag::Result, &[B, LIST_A]);
+        const RESULT_COMBINE: TyShape = TyShape::Fun(&LIST_RESULT_B_A, &RESULT_B_LIST_A);
+        // traverse : (a -> Result c b) -> List a -> Result c (List b)
+        const A_TO_RESULT_C_B: TyShape = TyShape::Fun(&A, &RESULT_C_B);
+        const RESULT_C_LIST_B: TyShape = TyShape::Con(BuiltinTag::Result, &[C, LIST_B]);
+        const RESULT_TRAVERSE: TyShape =
+            TyShape::Fun(&A_TO_RESULT_C_B, &TyShape::Fun(&LIST_A, &RESULT_C_LIST_B));
+        // toMaybe : Result a b -> Maybe b   (var(0)=a, var(1)=b)
+        const RESULT_A_B: TyShape = TyShape::Con(BuiltinTag::Result, &[A, B]);
+        const RESULT_TO_MAYBE: TyShape = TyShape::Fun(&RESULT_A_B, &MAYBE_B);
+        // fromMaybe : a -> Maybe b -> Result a b   (var(0)=a, var(1)=b)
+        const MAYBE_B_TO_RESULT_A_B: TyShape = TyShape::Fun(&MAYBE_B, &RESULT_A_B);
+        const RESULT_FROM_MAYBE: TyShape = TyShape::Fun(&A, &MAYBE_B_TO_RESULT_A_B);
+        // okDefault : a -> Result b a   (var(0)=a, var(1)=b)
+        const RESULT_OK_DEFAULT: TyShape = TyShape::Fun(&A, &RESULT_B_A);
+
+        // ── Set combinators (base schemes; the `set_elem` Ord obligation is
+        //    layered in `constrain_var_kernel`, so these shapes are exercised
+        //    only by the totality / oracle tripwires, never in production). ──
+        const SET_A: TyShape = TyShape::Con(BuiltinTag::Set, &[A]);
+        const SET_B: TyShape = TyShape::Con(BuiltinTag::Set, &[B]);
+        const SET_A_TO_SET_A: TyShape = TyShape::Fun(&SET_A, &SET_A);
+        // size : Set a -> Int
+        const SET_SIZE: TyShape = TyShape::Fun(&SET_A, &INT);
+        // insert / remove : a -> Set a -> Set a
+        const SET_INSERT: TyShape = TyShape::Fun(&A, &SET_A_TO_SET_A);
+        // member : a -> Set a -> Bool
+        const SET_A_TO_BOOL: TyShape = TyShape::Fun(&SET_A, &BOOL);
+        const SET_MEMBER: TyShape = TyShape::Fun(&A, &SET_A_TO_BOOL);
+        // toList : Set a -> List a; fromList : List a -> Set a
+        const SET_TO_LIST: TyShape = TyShape::Fun(&SET_A, &LIST_A);
+        const SET_FROM_LIST: TyShape = TyShape::Fun(&LIST_A, &SET_A);
+        // union / intersect / diff : Set a -> Set a -> Set a
+        const SET_UNION: TyShape = TyShape::Fun(&SET_A, &SET_A_TO_SET_A);
+        // isEmpty : Set a -> Bool
+        const SET_IS_EMPTY: TyShape = TyShape::Fun(&SET_A, &BOOL);
+        // singleton : a -> Set a
+        const SET_SINGLETON: TyShape = TyShape::Fun(&A, &SET_A);
+        // foldl / foldr : (a -> b -> b) -> b -> Set a -> b
+        const SET_A_TO_B: TyShape = TyShape::Fun(&SET_A, &B);
+        const B_TO_SET_A_TO_B: TyShape = TyShape::Fun(&B, &SET_A_TO_B);
+        const SET_FOLD: TyShape = TyShape::Fun(&A_TO_B_TO_B, &B_TO_SET_A_TO_B);
+        // map : (a -> b) -> Set a -> Set b
+        const SET_A_TO_SET_B: TyShape = TyShape::Fun(&SET_A, &SET_B);
+        const SET_MAP: TyShape = TyShape::Fun(&A_TO_B, &SET_A_TO_SET_B);
+        // filter : (a -> Bool) -> Set a -> Set a
+        const SET_FILTER: TyShape = TyShape::Fun(&A_TO_BOOL, &SET_A_TO_SET_A);
+
+        // ── Dict combinators (base schemes; the `dict_key` obligation is layered
+        //    in `constrain_var_kernel`, so these shapes are exercised only by the
+        //    totality / oracle tripwires, never in production). Var(0)=k, Var(1)=v,
+        //    higher indices as each scheme requires. ──
+        const DICT_A_B: TyShape = TyShape::Con(BuiltinTag::Dict, &[A, B]);
+        const DICT_A_B_TO_DICT_A_B: TyShape = TyShape::Fun(&DICT_A_B, &DICT_A_B);
+        // empty : Dict k v
+        const DICT_EMPTY: TyShape = DICT_A_B;
+        // isEmpty : Dict k v -> Bool
+        const DICT_IS_EMPTY: TyShape = TyShape::Fun(&DICT_A_B, &BOOL);
+        // size : Dict k v -> Int
+        const DICT_SIZE: TyShape = TyShape::Fun(&DICT_A_B, &INT);
+        // insert : k -> v -> Dict k v -> Dict k v
+        const B_TO_DICT_A_B_TO_DICT_A_B: TyShape = TyShape::Fun(&B, &DICT_A_B_TO_DICT_A_B);
+        const DICT_INSERT: TyShape = TyShape::Fun(&A, &B_TO_DICT_A_B_TO_DICT_A_B);
+        // get : k -> Dict k v -> Maybe v
+        const DICT_A_B_TO_MAYBE_B: TyShape = TyShape::Fun(&DICT_A_B, &MAYBE_B);
+        const DICT_GET: TyShape = TyShape::Fun(&A, &DICT_A_B_TO_MAYBE_B);
+        // remove : k -> Dict k v -> Dict k v
+        const DICT_REMOVE: TyShape = TyShape::Fun(&A, &DICT_A_B_TO_DICT_A_B);
+        // member : k -> Dict k v -> Bool
+        const DICT_A_B_TO_BOOL: TyShape = TyShape::Fun(&DICT_A_B, &BOOL);
+        const DICT_MEMBER: TyShape = TyShape::Fun(&A, &DICT_A_B_TO_BOOL);
+        // keys : Dict k v -> List k
+        const DICT_KEYS: TyShape = TyShape::Fun(&DICT_A_B, &LIST_A);
+        // values : Dict k v -> List v
+        const DICT_VALUES: TyShape = TyShape::Fun(&DICT_A_B, &LIST_B);
+        // map : (k -> v -> c) -> Dict k v -> Dict k c
+        const DICT_A_C: TyShape = TyShape::Con(BuiltinTag::Dict, &[A, C]);
+        const A_TO_B_TO_C_LEAF: TyShape = A_TO_B_TO_C;
+        const DICT_MAP: TyShape =
+            TyShape::Fun(&A_TO_B_TO_C_LEAF, &TyShape::Fun(&DICT_A_B, &DICT_A_C));
+        // foldl / foldr : (k -> v -> c -> c) -> c -> Dict k v -> c
+        const A_TO_B_TO_C_TO_C: TyShape =
+            TyShape::Fun(&A, &TyShape::Fun(&B, &TyShape::Fun(&C, &C)));
+        const DICT_A_B_TO_C: TyShape = TyShape::Fun(&DICT_A_B, &C);
+        const C_TO_DICT_A_B_TO_C: TyShape = TyShape::Fun(&C, &DICT_A_B_TO_C);
+        const DICT_FOLD: TyShape = TyShape::Fun(&A_TO_B_TO_C_TO_C, &C_TO_DICT_A_B_TO_C);
+        // union / intersect / diff : Dict k v -> Dict k v -> Dict k v
+        const DICT_UNION: TyShape = TyShape::Fun(&DICT_A_B, &DICT_A_B_TO_DICT_A_B);
+        // singleton : k -> v -> Dict k v
+        const B_TO_DICT_A_B: TyShape = TyShape::Fun(&B, &DICT_A_B);
+        const DICT_SINGLETON: TyShape = TyShape::Fun(&A, &B_TO_DICT_A_B);
+        // filter : (k -> v -> Bool) -> Dict k v -> Dict k v
+        const A_TO_B_TO_BOOL: TyShape = TyShape::Fun(&A, &TyShape::Fun(&B, &BOOL));
+        const DICT_FILTER: TyShape = TyShape::Fun(&A_TO_B_TO_BOOL, &DICT_A_B_TO_DICT_A_B);
+        // update : k -> (Maybe v -> Maybe v) -> Dict k v -> Dict k v
+        const MAYBE_B_TO_MAYBE_B: TyShape = TyShape::Fun(&MAYBE_B, &MAYBE_B);
+        const DICT_UPDATE: TyShape = TyShape::Fun(
+            &A,
+            &TyShape::Fun(&MAYBE_B_TO_MAYBE_B, &DICT_A_B_TO_DICT_A_B),
+        );
+
+        // ── Bytes decode / codec (arrow-only over `Maybe`). ──
+        // toString : Bytes -> Maybe String
+        const MAYBE_STRING: TyShape = TyShape::Con(BuiltinTag::Maybe, &[STRING]);
+        const BYTES_TO_MAYBE_STRING: TyShape = TyShape::Fun(&BYTES, &MAYBE_STRING);
+        // fromHex / fromBase64 : String -> Maybe Bytes
+        const MAYBE_BYTES: TyShape = TyShape::Con(BuiltinTag::Maybe, &[BYTES]);
+        const STRING_TO_MAYBE_BYTES: TyShape = TyShape::Fun(&STRING, &MAYBE_BYTES);
+
         match self {
             // ── Bitwise — Int -> Int -> Int / Int -> Int. ──
             Self::BitwiseAnd
@@ -5091,10 +5417,13 @@ impl StdlibKernel {
             | Self::UiLightMode
             | Self::UiReducedMotion => Some(&STRING),
 
-            // ── Core `List` combinators (rank-1 polymorphic). The
-            //    obligation-bearing (`sort*`/`sum`/`product`/`maximum`/`minimum`)
-            //    and tuple-shaped (`zip`/`unzip`/`partition`/`map2`..`map5`/
-            //    `indexedMap`/`foldl`/`foldr`/`sortWith`) members carry no shape. ──
+            // ── Core `List` combinators (rank-1 polymorphic). The tuple-shaped
+            //    members (`zip`/`unzip`/`partition`/`map2`..`map5`/`indexedMap`)
+            //    carry no shape; the obligation-bearing base schemes
+            //    (`sort*`/`sum`/`product`/`maximum`/`minimum`) DO carry a shape —
+            //    the obligation is layered separately in `constrain_var_kernel`,
+            //    so the shape is exercised only by the totality / oracle
+            //    tripwires, never in production. ──
             Self::ListMap => Some(&LIST_MAP),
             Self::ListFilter => Some(&LIST_FILTER),
             Self::ListAny | Self::ListAll => Some(&LIST_ANY),
@@ -5114,6 +5443,85 @@ impl StdlibKernel {
             Self::ListSingleton => Some(&A_TO_LIST_A),
             Self::ListConcatMap => Some(&LIST_CONCAT_MAP),
             Self::ListFilterMap => Some(&LIST_FILTER_MAP),
+            Self::ListFoldl | Self::ListFoldr => Some(&LIST_FOLD),
+            Self::ListSort => Some(&LIST_SORT),
+            Self::ListSortBy => Some(&LIST_SORT_BY),
+            Self::ListSortWith => Some(&LIST_SORT_WITH),
+            Self::ListSum | Self::ListProduct => Some(&LIST_SUM),
+            Self::ListMaximum | Self::ListMinimum => Some(&LIST_MAX_MIN),
+
+            // ── Basics (rank-1 polymorphic; the obligation-bearing arms carry
+            //    their base scheme, the obligation layered in
+            //    `constrain_var_kernel`). ──
+            Self::BasicsIdentity | Self::BasicsNegate | Self::BasicsAbs => Some(&A_TO_A),
+            Self::BasicsAlways => Some(&BASICS_ALWAYS),
+            Self::BasicsModBy => Some(&INT_TO_INT_TO_INT_LEAF),
+            Self::BasicsClamp => Some(&BASICS_CLAMP),
+            Self::BasicsToString => Some(&A_TO_STRING),
+            Self::BasicsMin | Self::BasicsMax | Self::MathMin | Self::MathMax => Some(&A_TO_A_TO_A),
+            Self::BasicsCompare => Some(&BASICS_COMPARE),
+
+            // ── Maybe combinators. ──
+            Self::MaybeWithDefault => Some(&MAYBE_WITH_DEFAULT),
+            Self::MaybeMap => Some(&MAYBE_MAP),
+            Self::MaybeAndThen => Some(&MAYBE_AND_THEN),
+            Self::MaybeMap2 => Some(&MAYBE_MAP2),
+            Self::MaybeMap3 => Some(&MAYBE_MAP3),
+            Self::MaybeMap4 => Some(&MAYBE_MAP4),
+            Self::MaybeMap5 => Some(&MAYBE_MAP5),
+            Self::MaybeAndMap => Some(&MAYBE_AND_MAP),
+            Self::MaybeCombine => Some(&MAYBE_COMBINE),
+
+            // ── Result combinators. ──
+            Self::ResultWithDefault => Some(&RESULT_WITH_DEFAULT),
+            Self::ResultMap => Some(&RESULT_MAP),
+            Self::ResultAndThen => Some(&RESULT_AND_THEN),
+            Self::ResultMapError => Some(&RESULT_MAP_ERROR),
+            Self::ResultMap2 => Some(&RESULT_MAP2),
+            Self::ResultMap3 => Some(&RESULT_MAP3),
+            Self::ResultMap4 => Some(&RESULT_MAP4),
+            Self::ResultMap5 => Some(&RESULT_MAP5),
+            Self::ResultAndMap => Some(&RESULT_AND_MAP),
+            Self::ResultCombine => Some(&RESULT_COMBINE),
+            Self::ResultTraverse => Some(&RESULT_TRAVERSE),
+            Self::ResultToMaybe => Some(&RESULT_TO_MAYBE),
+            Self::ResultFromMaybe => Some(&RESULT_FROM_MAYBE),
+            Self::ResultOkDefault => Some(&RESULT_OK_DEFAULT),
+
+            // ── Set combinators (base schemes; `set_elem` obligation layered). ──
+            Self::SetEmpty => Some(&SET_A),
+            Self::SetSize => Some(&SET_SIZE),
+            Self::SetInsert | Self::SetRemove => Some(&SET_INSERT),
+            Self::SetMember => Some(&SET_MEMBER),
+            Self::SetToList => Some(&SET_TO_LIST),
+            Self::SetFromList => Some(&SET_FROM_LIST),
+            Self::SetUnion | Self::SetIntersect | Self::SetDiff => Some(&SET_UNION),
+            Self::SetIsEmpty => Some(&SET_IS_EMPTY),
+            Self::SetSingleton => Some(&SET_SINGLETON),
+            Self::SetFoldl | Self::SetFoldr => Some(&SET_FOLD),
+            Self::SetMap => Some(&SET_MAP),
+            Self::SetFilter => Some(&SET_FILTER),
+
+            // ── Dict combinators (base schemes; `dict_key` obligation layered). ──
+            Self::DictEmpty => Some(&DICT_EMPTY),
+            Self::DictIsEmpty => Some(&DICT_IS_EMPTY),
+            Self::DictSize => Some(&DICT_SIZE),
+            Self::DictInsert => Some(&DICT_INSERT),
+            Self::DictGet => Some(&DICT_GET),
+            Self::DictRemove => Some(&DICT_REMOVE),
+            Self::DictMember => Some(&DICT_MEMBER),
+            Self::DictKeys => Some(&DICT_KEYS),
+            Self::DictValues => Some(&DICT_VALUES),
+            Self::DictMap => Some(&DICT_MAP),
+            Self::DictFoldl | Self::DictFoldr => Some(&DICT_FOLD),
+            Self::DictUnion | Self::DictIntersect | Self::DictDiff => Some(&DICT_UNION),
+            Self::DictSingleton => Some(&DICT_SINGLETON),
+            Self::DictFilter => Some(&DICT_FILTER),
+            Self::DictUpdate => Some(&DICT_UPDATE),
+
+            // ── Bytes decode / codec. ──
+            Self::BytesToString => Some(&BYTES_TO_MAYBE_STRING),
+            Self::BytesFromHex | Self::BytesFromBase64 => Some(&STRING_TO_MAYBE_BYTES),
 
             _ => None,
         }
