@@ -3867,9 +3867,14 @@ impl<'a> Builder<'a> {
     /// the same kernel (proven per-kernel by the `interpreted_shape_matches_legacy`
     /// tripwire).
     ///
-    /// It touches no union-find state — [`TyShape`]'s vocabulary is monomorphic —
-    /// so it takes `&self`. Adding a quantified-`Var` or open-row node to the
-    /// vocabulary would require threading a fresh-var allocator through here.
+    /// It touches no union-find state even for the polymorphic [`TyShape::Var`]
+    /// node: a scheme var is interpreted to the SAME placeholder `Ty::Var` the
+    /// `stdlib_scheme` table's `var(i)` builder produces — the bare positional
+    /// index raw, in annotation-symbol space — NOT a fresh union-find var.
+    /// Generalization / instantiation with fresh solver vars happens later at the
+    /// use site (`instantiate_in`), exactly as for a table-built scheme, so this
+    /// interpreter still takes `&self`. Because `Ty::Var` is `Eq`, repeating an
+    /// index reuses one variable structurally without any shared-cell handling.
     fn interpret_shape(&self, shape: &TyShape) -> Ty {
         match shape {
             TyShape::Fun(arg, res) => Ty::Fun(
@@ -3881,6 +3886,10 @@ impl<'a> Builder<'a> {
                 name: self.builtin_symbol(*tag),
                 args: args.iter().map(|a| self.interpret_shape(a)).collect(),
             },
+            // The `stdlib_scheme` table binds `let var = Ty::Var`, so its
+            // `var(i)` is `Ty::Var(i)`: a scheme-local variable's raw is its bare
+            // positional index. Match that exactly for byte-identity.
+            TyShape::Var(i) => Ty::Var(u32::from(*i)),
         }
     }
 
@@ -3895,6 +3904,8 @@ impl<'a> Builder<'a> {
             BuiltinTag::String => self.builtins.string,
             BuiltinTag::Char => self.builtins.char,
             BuiltinTag::Bytes => self.builtins.bytes,
+            BuiltinTag::List => self.builtins.list,
+            BuiltinTag::Maybe => self.builtins.maybe,
         }
     }
 
@@ -9631,11 +9642,12 @@ mod registry_phase_c_tests {
             );
         }
         // Guard against a silently-empty sweep: the Bitwise family carries seven
-        // shapes, so at least that many must resolve.
+        // monomorphic shapes and the migrated core `List` family carries the
+        // polymorphic ones, so at least that combined floor must resolve.
         assert!(
-            migrated >= 7,
-            "expected at least the Bitwise family (7 kernels) to carry a \
-             TyShape, found only {migrated}",
+            migrated >= 23,
+            "expected at least the Bitwise (7) + migrated core List families to \
+             carry a TyShape, found only {migrated}",
         );
     }
 
