@@ -9598,15 +9598,22 @@ mod registry_phase_c_tests {
         // monomorphic primitive kernels, the 23 core `List` combinators, the
         // arrow-only polymorphic slice (further `List` folds/sorts/reductions,
         // the `Basics` arrow arms, the `Maybe` / `Result` / `Set` / `Dict`
-        // combinators, and the `Bytes` decoders), and the tuple-shaped slice
+        // combinators, and the `Bytes` decoders), the tuple-shaped slice
         // (`List.zip`/`unzip`/`partition`, `Basics.fst`/`snd`,
         // `Set.partition`, `Dict.toList`/`fromList`/`partition`,
-        // `Random.seededInt`/`seededFloat`).
+        // `Random.seededInt`/`seededFloat`), and the arrow-scalar remainder
+        // (`List.indexedMap`/`map2`..`map5`, the `String` combinators —
+        // `toInt`/`toFloat`/`fromList`/`concat`/`words`/`lines`/`toList`/`join`/
+        // `split`/`uncons`/`indexes`/`foldl`/`foldr`, the `String -> Maybe
+        // String` parsers `Css.Safety.safeValue`/`safePropName`/`safeSelector`
+        // and `Uuid.parse`, `Debug.log`, `Error.toString`, `System.exit`,
+        // `Http.parseQuery`, and `Db.getString`/`getField`/`getInt`/`getBool`).
         assert!(
-            migrated >= 251,
+            migrated >= 281,
             "expected at least the 136 monomorphic + 23 core List + 81 \
-             arrow-only + 11 tuple-shaped polymorphic kernels (251) to carry \
-             a TyShape, found only {migrated}",
+             arrow-only + 11 tuple-shaped + 30 arrow-scalar-remainder \
+             polymorphic kernels (281) to carry a TyShape, found only \
+             {migrated}",
         );
     }
 
