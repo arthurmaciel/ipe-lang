@@ -19,7 +19,7 @@ use std::rc::Rc;
 use ipe_canon::ast as canon;
 use ipe_diagnostics::{DResult, Diagnostic, Feature, LowerError, Span, TypeError};
 use ipe_intern::{Interner, Symbol};
-use ipe_kernels::{SchemeKey, StdlibKernel};
+use ipe_kernels::{BuiltinTag, SchemeKey, StdlibKernel, TyShape};
 
 use crate::doc::{VarNamer, canon_type_to_doc, ty_to_doc};
 use crate::solve::{Budget, Constraint};
@@ -3215,7 +3215,11 @@ impl<'a> Builder<'a> {
         // fail-closed with IPE-L0108 (loud) via `kernel_scheme_or_unsupported`,
         // never silently typed as a free variable that `cargo` later rejects.
         let _ = (module, name); // retained for diagnostics
-        let registry = id.and_then(|k| self.stdlib_scheme(k));
+        // Route through `resolve_scheme`, not `stdlib_scheme` directly, so a
+        // kernel carrying a structural `TyShape` resolves via the interpreter and
+        // one without a shape resolves through the table — a single adapter, so
+        // the two paths can never resolve to different types.
+        let registry = id.and_then(|k| self.resolve_scheme(SchemeKey(k)));
         let ty = Self::kernel_scheme_or_unsupported(registry, None, span)?;
         self.instantiate(&ty)
     }
@@ -3845,7 +3849,53 @@ impl<'a> Builder<'a> {
     /// `def().scheme` read through this one adapter means the descriptor's scheme
     /// reference and the table can never resolve to different types.
     fn resolve_scheme(&self, key: SchemeKey) -> Option<Ty> {
+        // A kernel that carries a structural `TyShape` is resolved by
+        // interpreting it; the result is byte-identical to the `stdlib_scheme`
+        // table's (pinned by `interpreted_shape_matches_legacy`). One without a
+        // shape (`shape == None`) resolves through the table.
+        if let Some(shape) = key.0.def().shape {
+            return Some(self.interpret_shape(shape));
+        }
         self.stdlib_scheme(key.0)
+    }
+
+    /// Interpret a `'static` [`TyShape`] into a concrete [`Ty`], resolving each
+    /// [`BuiltinTag`] against the interned-symbol cache.
+    ///
+    /// The single interpreter a structural kernel scheme routes through. Its
+    /// output is byte-identical to the `Ty` [`Self::stdlib_scheme`] produces for
+    /// the same kernel (proven per-kernel by the `interpreted_shape_matches_legacy`
+    /// tripwire).
+    ///
+    /// It touches no union-find state — [`TyShape`]'s vocabulary is monomorphic —
+    /// so it takes `&self`. Adding a quantified-`Var` or open-row node to the
+    /// vocabulary would require threading a fresh-var allocator through here.
+    fn interpret_shape(&self, shape: &TyShape) -> Ty {
+        match shape {
+            TyShape::Fun(arg, res) => Ty::Fun(
+                Box::new(self.interpret_shape(arg)),
+                Box::new(self.interpret_shape(res)),
+            ),
+            TyShape::Con(tag, args) => Ty::Con {
+                module: Vec::new(),
+                name: self.builtin_symbol(*tag),
+                args: args.iter().map(|a| self.interpret_shape(a)).collect(),
+            },
+        }
+    }
+
+    /// Resolve a structural [`BuiltinTag`] to the interned type-constructor
+    /// [`Symbol`] the `stdlib_scheme` table uses for the same built-in, so an
+    /// interpreted shape is byte-identical to the hand-built `Ty`.
+    const fn builtin_symbol(&self, tag: BuiltinTag) -> Symbol {
+        match tag {
+            BuiltinTag::Int => self.builtins.int,
+            BuiltinTag::Float => self.builtins.float,
+            BuiltinTag::Bool => self.builtins.bool,
+            BuiltinTag::String => self.builtins.string,
+            BuiltinTag::Char => self.builtins.char,
+            BuiltinTag::Bytes => self.builtins.bytes,
+        }
     }
 
     /// Parse-once type scheme for a stdlib kernel, keyed by the pre-resolved
@@ -9535,6 +9585,57 @@ mod registry_phase_c_tests {
              arrow-count disagrees with the expected count (def().arity, plus \
              one for the returns-a-function class): {mismatches:?} \
              (kernel, scheme_arrows, expected)",
+        );
+    }
+
+    /// The load-bearing byte-identity guarantee: for every kernel that carries a
+    /// structural [`TyShape`], interpreting its shape yields a `Ty`
+    /// BYTE-IDENTICAL to the one [`Builder::stdlib_scheme`] produces. This is
+    /// belt-and-braces beyond the golden suite — it pins the interpreter directly
+    /// against the hand-built table, so a shape or interpreter that disagrees with
+    /// it is caught here, pre-cargo, rather than as a golden-diff.
+    ///
+    /// The `stdlib_scheme` arm for a kernel that also carries a shape is RETAINED
+    /// as this equality oracle. Production resolves the kernel through the shape
+    /// (via `resolve_scheme`), but the table arm stays as the reference the
+    /// `stdlib_scheme` totality invariants (`migrated_set_burndown`,
+    /// `stdlib_scheme_total_over_reachable`) also read directly; removing it would
+    /// break those invariants for no interpreter benefit.
+    #[test]
+    fn interpreted_shape_matches_legacy() {
+        let mut interner = Interner::new();
+        let builtins = make_builder(&mut interner);
+        let mut uf = UnionFind::<Content>::new();
+        let builder = Builder::for_scheme_table(&mut uf, &interner, builtins);
+
+        let mut migrated = 0usize;
+        for &k in StdlibKernel::ALL {
+            let Some(shape) = k.def().shape else { continue };
+            migrated += 1;
+            let interpreted = builder.interpret_shape(shape);
+            // The legacy arm is the byte-identity oracle and must be retained for
+            // every migrated kernel until the totality invariants migrate off the
+            // direct-table read.
+            let legacy = builder.stdlib_scheme(k);
+            assert!(
+                legacy.is_some(),
+                "kernel {k:?} carries a TyShape but has no stdlib_scheme arm to \
+                 prove byte-identity against — the oracle arm must be retained",
+            );
+            assert_eq!(
+                Some(interpreted),
+                legacy,
+                "interpreted TyShape for {k:?} is NOT byte-identical to its \
+                 stdlib_scheme Ty — the structural encoding disagrees with the \
+                 hand-built table",
+            );
+        }
+        // Guard against a silently-empty sweep: the Bitwise family carries seven
+        // shapes, so at least that many must resolve.
+        assert!(
+            migrated >= 7,
+            "expected at least the Bitwise family (7 kernels) to carry a \
+             TyShape, found only {migrated}",
         );
     }
 
