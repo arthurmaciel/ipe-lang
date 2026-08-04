@@ -465,35 +465,98 @@ fn canon_custom_element_definition_reserved() {
     assert_rejected("canon_custom_element_def", &src, "IPE-N0026");
 }
 
-/// Using the reserved `CustomElement down up` boundary type in an annotation is
-/// rejected FAIL-CLOSED (IPE-N0037) until its runtime transport ships: the seam
-/// is not yet emittable, and there is deliberately no untyped fallback. This is
-/// the contrapositive of THE SEAL pointed at the JS boundary — a `CustomElement`
-/// annotation can never reach emission and pass an untyped value across it.
+/// A `CustomElement down up` annotation whose two parameters are plain, closed
+/// value types (here two primitives) TYPE-RESOLVES at canon — the arity and SEAL
+/// gates pass. It is not emittable: the widget transport is not shipped, so it is
+/// rejected FAIL-CLOSED at emission with IPE-L0133, NOT at canon. That the
+/// rejection is the emission code (not a canon `IPE-N0xxx`) proves canon accepted
+/// the annotation; the SEAL contract — no untyped value ever reaches codegen — is
+/// upheld by the emission-level gate.
 #[test]
-fn canon_custom_element_use_fail_closed() {
+fn canon_custom_element_use_resolves_then_fail_closed_at_emit() {
     let src = format!(
         "{HEAD}editor : CustomElement Int String\n\
          editor = editor\n\
          main = 1\n"
     );
-    assert_rejected("canon_custom_element_use", &src, "IPE-N0037");
+    assert_rejected("canon_custom_element_use", &src, "IPE-L0133");
 }
 
-/// A QUALIFIED spelling of the reserved boundary type (`D.CustomElement …`
-/// through an imported module) must fail closed with the same IPE-N0037 at
-/// check time — never slip past the boundary gate on its non-empty home into a
-/// build-time ICE. The name is reserved against every origin, so no qualifier
-/// can name a legitimate `CustomElement`.
+/// A QUALIFIED spelling of the boundary type (`D.CustomElement …` through an
+/// imported module) is checked by NAME regardless of its non-empty home: the
+/// arity + SEAL gates pass for two primitives, so it too type-RESOLVES at canon
+/// and is rejected only at emission (IPE-L0133) — never slipping past a home gate
+/// into a build-time ICE.
 #[test]
-fn canon_custom_element_qualified_use_fail_closed() {
+fn canon_custom_element_qualified_use_resolves_then_fail_closed_at_emit() {
     let src = format!(
         "{HEAD}import Ipe.Dict as D\n\
          editor : D.CustomElement Int String\n\
          editor = editor\n\
          main = 1\n"
     );
-    assert_rejected("canon_custom_element_qualified", &src, "IPE-N0037");
+    assert_rejected("canon_custom_element_qualified", &src, "IPE-L0133");
+}
+
+/// The boundary SEAL accepts plain, closed, concrete value types transitively:
+/// a `CustomElement` whose down-state is a user record alias and whose up-event
+/// is a user ADT over primitives type-RESOLVES at canon (arity + seal pass), so
+/// the only rejection is the emission-level IPE-L0133. This is the POSITIVE seal
+/// case — the intended `CustomElement EditorState EditorEvent` shape is admitted.
+#[test]
+fn canon_custom_element_plain_user_seal_resolves() {
+    let src = format!(
+        "{HEAD}type alias EditorState = {{ text : String, cursor : Int }}\n\
+         type EditorEvent = TextChanged String | CursorMoved Int\n\
+         editor : CustomElement EditorState EditorEvent\n\
+         editor = editor\n\
+         main = 1\n"
+    );
+    assert_rejected("canon_custom_element_plain_seal", &src, "IPE-L0133");
+}
+
+/// `CustomElement` demands EXACTLY two type parameters — the sealed down-state
+/// and the up-event. Too FEW is a clean arity error (IPE-N0031, the same code the
+/// closed built-in containers use), checked before the seal so a mis-shaped
+/// annotation never reaches emission.
+#[test]
+fn canon_custom_element_arity_too_few() {
+    let src = format!("{HEAD}x : CustomElement Int\nx = x\nmain = 1\n");
+    assert_rejected("canon_custom_element_arity1", &src, "IPE-N0031");
+}
+
+/// Too MANY type parameters is the same arity rejection (IPE-N0031).
+#[test]
+fn canon_custom_element_arity_too_many() {
+    let src = format!("{HEAD}x : CustomElement Int String Bool\nx = x\nmain = 1\n");
+    assert_rejected("canon_custom_element_arity3", &src, "IPE-N0031");
+}
+
+/// The SEAL rejects a function-carrying boundary parameter (IPE-N0039): a
+/// function is behaviour, not a serialisable value, and must never cross the
+/// Ipê↔JS seam. Fail-closed at the type level, before emission.
+#[test]
+fn canon_custom_element_seal_rejects_function() {
+    let src = format!("{HEAD}x : CustomElement (Int -> Int) String\nx = x\nmain = 1\n");
+    assert_rejected("canon_custom_element_seal_fn", &src, "IPE-N0039");
+}
+
+/// The SEAL rejects a `Secret`-carrying boundary parameter (IPE-N0039): a
+/// secret-tier value must never be serialised across the JS seam. This is the
+/// security-critical exclusion the seal adds over the plain-value gate.
+#[test]
+fn canon_custom_element_seal_rejects_secret() {
+    let src = format!("{HEAD}x : CustomElement Secret String\nx = x\nmain = 1\n");
+    assert_rejected("canon_custom_element_seal_secret", &src, "IPE-N0039");
+}
+
+/// The SEAL rejects a type-variable boundary parameter (IPE-N0039): the seal is
+/// monomorphic and concrete, so a bare type variable — which has no single
+/// generated codec — is refused fail-closed.
+#[test]
+fn canon_custom_element_seal_rejects_type_variable() {
+    let src = format!("{HEAD}x : CustomElement a String\nx = x\nmain = 1\n");
+    assert_rejected("canon_custom_element_seal_tyvar", &src, "IPE-N0039");
 }
 
 /// Two imports registering the same qualifier for DIFFERENT sibling modules.
