@@ -9724,8 +9724,9 @@ fn render_fn_generics(
             let assoc = crate::naming::field_witness_assoc_type_name(field_name);
             // The field type is rendered in the SAME scope as the signature, so a
             // field carrying a generic (`{ r | value : a }`) resolves its `a` to
-            // the function's `T{n}`. For increment-1 single-field concrete rows
-            // this is a plain scalar/struct type.
+            // the function's `T{n}`. Each field of a multi-field row contributes
+            // one such witness bound; for a concrete field type this is a plain
+            // scalar/struct type.
             let field_ty_s = render_type(ctx, field_ty, generics)?;
             bounds.push(format!("{trait_name}<{assoc} = {field_ty_s}>"));
         }
