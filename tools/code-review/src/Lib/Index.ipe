@@ -1,0 +1,267 @@
+module Lib.Index exposing (Unit, loadPending)
+
+import Ipe.Db
+import Ipe.Db.Decode
+import Ipe.Error as Error
+import Ipe.File as File
+import Ipe.List as List
+import Ipe.Maybe as Maybe
+import Ipe.Path as Path
+import Ipe.String as String
+import Ipe.System as System
+import Ipe.Task as Task
+
+
+-- One queued ipe-index unit plus its source slice. `path` is the
+-- `tag:relative` form ipe-index stores; `source` is the unit's line slice
+-- read from disk.
+type alias Unit =
+    { uid : String
+    , change : String
+    , oldHash : Maybe String
+    , newHash : Maybe String
+    , path : String
+    , name : String
+    , qualified : String
+    , kind : String
+    , lineStart : Int
+    , lineEnd : Int
+    , facing : String
+    , purpose : Maybe String
+    , bodyHash : String
+    , updatedSha : String
+    , source : String
+    }
+
+
+-- The unit columns as they come off the DB, before the source is attached.
+type alias RowUnit =
+    { uid : String
+    , change : String
+    , oldHash : Maybe String
+    , newHash : Maybe String
+    , path : String
+    , name : String
+    , qualified : String
+    , kind : String
+    , lineStart : Int
+    , lineEnd : Int
+    , facing : String
+    , purpose : Maybe String
+    , bodyHash : String
+    , updatedSha : String
+    }
+
+
+-- The queue row is decoded in two halves of at most ten columns each
+-- (`Db.Decode.succeed` lifts at most 10 parameters — IPE-L0121), then merged.
+type alias RowA =
+    { uid : String
+    , change : String
+    , oldHash : Maybe String
+    , newHash : Maybe String
+    , path : String
+    , name : String
+    , qualified : String
+    }
+
+
+type alias RowB =
+    { kind : String
+    , lineStart : Int
+    , lineEnd : Int
+    , facing : String
+    , purpose : Maybe String
+    , bodyHash : String
+    , updatedSha : String
+    }
+
+
+makeRowA : String -> String -> Maybe String -> Maybe String -> String -> String -> String -> RowA
+makeRowA uid change oldHash newHash path name qualified =
+    { uid = uid
+    , change = change
+    , oldHash = oldHash
+    , newHash = newHash
+    , path = path
+    , name = name
+    , qualified = qualified
+    }
+
+
+makeRowB : String -> Int -> Int -> String -> Maybe String -> String -> String -> RowB
+makeRowB kind lineStart lineEnd facing purpose bodyHash updatedSha =
+    { kind = kind
+    , lineStart = lineStart
+    , lineEnd = lineEnd
+    , facing = facing
+    , purpose = purpose
+    , bodyHash = bodyHash
+    , updatedSha = updatedSha
+    }
+
+
+mergeRows : RowA -> RowB -> RowUnit
+mergeRows a b =
+    { uid = a.uid
+    , change = a.change
+    , oldHash = a.oldHash
+    , newHash = a.newHash
+    , path = a.path
+    , name = a.name
+    , qualified = a.qualified
+    , kind = b.kind
+    , lineStart = b.lineStart
+    , lineEnd = b.lineEnd
+    , facing = b.facing
+    , purpose = b.purpose
+    , bodyHash = b.bodyHash
+    , updatedSha = b.updatedSha
+    }
+
+
+rowDecoder : Db.Decode.Decoder RowUnit
+rowDecoder =
+    Db.Decode.andThen
+        (\a -> Db.Decode.map (\b -> mergeRows a b) partBDecoder)
+        partADecoder
+
+
+partADecoder : Db.Decode.Decoder RowA
+partADecoder =
+    Db.Decode.succeed makeRowA
+        |> Db.Decode.required "uid" (Db.Decode.string "uid")
+        |> Db.Decode.required "change" (Db.Decode.string "change")
+        |> Db.Decode.required "old_hash" (Db.Decode.nullable (Db.Decode.string "old_hash"))
+        |> Db.Decode.required "new_hash" (Db.Decode.nullable (Db.Decode.string "new_hash"))
+        |> Db.Decode.required "path" (Db.Decode.string "path")
+        |> Db.Decode.required "name" (Db.Decode.string "name")
+        |> Db.Decode.required "qualified" (Db.Decode.string "qualified")
+
+
+partBDecoder : Db.Decode.Decoder RowB
+partBDecoder =
+    Db.Decode.succeed makeRowB
+        |> Db.Decode.required "kind" (Db.Decode.string "kind")
+        |> Db.Decode.required "line_start" (Db.Decode.int "line_start")
+        |> Db.Decode.required "line_end" (Db.Decode.int "line_end")
+        |> Db.Decode.required "facing" (Db.Decode.string "facing")
+        |> Db.Decode.required "purpose" (Db.Decode.nullable (Db.Decode.string "purpose"))
+        |> Db.Decode.required "body_hash" (Db.Decode.string "body_hash")
+        |> Db.Decode.required "updated_sha" (Db.Decode.string "updated_sha")
+
+
+-- The ipe-index sqlite database, opened read-only. A `sqlite://` URL with an
+-- explicit `mode=ro` query is passed through verbatim by the runtime, so the
+-- index DB is never created or modified. IPE_INDEX_DB overrides the default.
+indexDbUrl : String
+indexDbUrl =
+    let
+        raw =
+            System.getenvOr "IPE_INDEX_DB" ".ipe-index/index.db"
+    in
+    if String.contains "://" raw then
+        if String.contains "?" raw then
+            raw
+
+        else
+            raw ++ "?mode=ro"
+
+    else
+        "sqlite://" ++ raw ++ "?mode=ro"
+
+
+pendingSql : String
+pendingSql =
+    "SELECT q.uid, q.change, q.old_hash, q.new_hash, u.path, u.name, u.qualified, u.kind, u.line_start, u.line_end, u.facing, u.purpose, u.body_hash, u.updated_sha FROM change_queue q JOIN units u ON u.uid = q.uid WHERE q.change IN ('new','modified') ORDER BY q.enqueued_at, q.uid"
+
+
+-- Queue units (new + modified, ordered by enqueue time), each with its
+-- source slice resolved against the index root. Deleted units drop out of
+-- the JOIN — they have no row to slice.
+loadPending : Task.Task Error (List Unit)
+loadPending =
+    System.cwd ()
+        |> Task.map (\cwd -> System.getenvOr "IPE_INDEX_ROOT" cwd)
+        |> Task.andThen
+            (\root ->
+                Db.open "sqlite" indexDbUrl
+                    |> Task.andThen
+                        (\conn ->
+                            Db.queryDecode conn pendingSql [] rowDecoder
+                                |> Task.andThen (loadSources root)
+                        )
+            )
+
+
+loadSources : String -> List RowUnit -> Task.Task Error (List Unit)
+loadSources root rows =
+    rows
+        |> List.map (loadSource root)
+        |> Task.sequence
+
+
+-- Reading a unit's source fails the whole load with a typed error: a queued
+-- unit whose file cannot be resolved or read is a real problem, not a row to
+-- silently skip.
+loadSource : String -> RowUnit -> Task.Task Error Unit
+loadSource root row =
+    case resolvePath root row.path of
+        Nothing ->
+            Task.fail (Error.unexpected ("index unit has an unresolvable path: " ++ row.path))
+
+        Just absPath ->
+            Task.fromResult (Path.fromString absPath)
+                |> Task.andThen File.readFile
+                |> Task.map (\text -> withSource (sliceLines row.lineStart row.lineEnd text) row)
+
+
+withSource : String -> RowUnit -> Unit
+withSource source row =
+    { uid = row.uid
+    , change = row.change
+    , oldHash = row.oldHash
+    , newHash = row.newHash
+    , path = row.path
+    , name = row.name
+    , qualified = row.qualified
+    , kind = row.kind
+    , lineStart = row.lineStart
+    , lineEnd = row.lineEnd
+    , facing = row.facing
+    , purpose = row.purpose
+    , bodyHash = row.bodyHash
+    , updatedSha = row.updatedSha
+    , source = source
+    }
+
+
+-- `ipe:src/Main.ipe` -> `src/Main.ipe`. The first `:`-segment is the repo tag
+-- (e.g. `ipe:`); relative paths are joined onto the index root. Absolute and
+-- `..`-escaping paths are refused.
+resolvePath : String -> String -> Maybe String
+resolvePath root stored =
+    case String.split ":" stored of
+        _ :: rest ->
+            let
+                rel =
+                    String.join ":" rest
+            in
+            if rel == "" || String.startsWith "/" rel || String.startsWith ".." rel then
+                Nothing
+
+            else
+                Just (root ++ "/" ++ rel)
+
+        [] ->
+            Nothing
+
+
+-- 1-based inclusive slice of the unit's lines.
+sliceLines : Int -> Int -> String -> String
+sliceLines start end text =
+    text
+        |> String.split "\n"
+        |> List.drop (max 0 (start - 1))
+        |> List.take (max 0 (end - start + 1))
+        |> String.join "\n"

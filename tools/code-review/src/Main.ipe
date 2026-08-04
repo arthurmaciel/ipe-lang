@@ -1,0 +1,111 @@
+module Main exposing (main)
+
+import Ipe.Error as Error
+import Ipe.List as List
+import Ipe.Maybe as Maybe
+import Ipe.String as String
+import Ipe.Tea.Web as Web
+import Ipe.Tea.Web.Cmd as Cmd
+import Ipe.Tea.Web.Sub as Sub
+import Ipe.Ui as Ui
+import Ipe.Ui.Background as Background
+import Ipe.Ui.Border as Border
+import Ipe.Ui.Font as Font
+import Lib.Index as Index
+
+
+type Page
+    = Shell
+
+
+type alias Model =
+    { page : Page
+    , queue : List Index.Unit
+    , queueError : Maybe String
+    }
+
+
+init : Web.WebReq -> ( Model, Cmd Msg )
+init _ =
+    ( { page = Shell, queue = [], queueError = Nothing }
+    , Cmd.perform Index.loadPending PendingLoaded
+    )
+
+
+type Msg
+    = NoOp
+    | PendingLoaded (Result Error (List Index.Unit))
+
+
+update : Msg -> Model -> ( Model, Cmd Msg )
+update msg model =
+    case msg of
+        NoOp ->
+            ( model, Cmd.none )
+
+        PendingLoaded result ->
+            case result of
+                Ok units ->
+                    ( { model | queue = units, queueError = Nothing }, Cmd.none )
+
+                Err e ->
+                    ( { model | queue = [], queueError = Just (Error.toString e) }, Cmd.none )
+
+
+header : Model -> Ui.Element Msg
+header model =
+    Ui.row
+        [ Ui.width Ui.fill
+        , Ui.paddingEach { top = 12, right = 16, bottom = 12, left = 16 }
+        , Ui.spacing 16
+        , Ui.centerY
+        , Background.color (Ui.rgb 24 24 32)
+        , Border.solid
+        , Border.color (Ui.rgb 60 60 72)
+        , Border.widthEach { top = 0, right = 0, bottom = 1, left = 0 }
+        ]
+        [ Ui.el [ Font.size 16, Font.bold, Font.color (Ui.rgb 235 235 240) ] (Ui.text "Code review")
+        , Ui.el [ Font.size 14, Font.color (Ui.rgb 160 160 175) ] (Ui.text "0% reviewed")
+        ]
+
+
+view : Model -> Ui.Element Msg
+view model =
+    Ui.column
+        [ Ui.width Ui.fill, Ui.height Ui.fill, Background.color (Ui.rgb 16 16 22) ]
+        [ header model
+        , Ui.el
+            [ Ui.width Ui.fill, Ui.height Ui.fill, Ui.padding 24, Font.color (Ui.rgb 190 190 200) ]
+            (body model)
+        ]
+
+
+body : Model -> Ui.Element Msg
+body model =
+    case model.queueError of
+        Just err ->
+            Ui.text ("Index load failed: " ++ err)
+
+        Nothing ->
+            if List.isEmpty model.queue then
+                Ui.text "No units queued yet."
+
+            else
+                Ui.text (String.fromInt (List.length model.queue) ++ " units queued.")
+
+
+subscriptions : Model -> Sub Msg
+subscriptions model =
+    Sub.none
+
+
+main : Task Error ()
+main =
+    Web.app
+        { init = init
+        , update = update
+        , view = view
+        , subscriptions = subscriptions
+        , routes = [ Web.route "/" Shell ]
+        , notFound = Shell
+        }

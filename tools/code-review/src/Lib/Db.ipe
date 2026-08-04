@@ -1,0 +1,127 @@
+module Lib.Db exposing (Decision(..), findDecision, insertDecision, migrate, open, openAt)
+
+import Ipe.Db as Db
+import Ipe.Db.Sql as Sql
+import Ipe.Dict as Dict
+import Ipe.Error as Error
+import Ipe.List as List
+import Ipe.Maybe as Maybe
+import Ipe.String as String
+import Ipe.System as System
+import Ipe.Task as Task
+import Ipe.Time as Time
+import Migrations exposing (all)
+
+
+type Decision
+    = Approved
+    | Refused String
+
+
+open : Task.Task Error Db
+open =
+    Db.open "sqlite" (System.getenvOr "IPE_REVIEW_DB" "review.db")
+
+
+openAt : String -> Task.Task Error Db
+openAt path =
+    Db.open "sqlite" path
+
+
+migrate : Db -> Task.Task Error (List String)
+migrate db =
+    Db.migrate db all
+
+
+insertDecision : Db -> String -> String -> Decision -> Task.Task Error Int
+insertDecision db uid bodyHash decision =
+    case decision of
+        Refused r ->
+            if String.length (String.trim r) == 0 then
+                Task.fail (Error.unexpected "a refused review needs a non-empty reason")
+
+            else
+                insertIfAbsent db uid bodyHash decision
+
+        Approved ->
+            insertIfAbsent db uid bodyHash decision
+
+
+-- Fail fast with a typed error; the SQL CHECK remains the
+-- backstop for other callers.
+-- A duplicate (uid, body_hash) pair is a no-op: the first review wins and
+-- re-reviewing the same pair never overwrites it. The pre-check keeps the
+-- DB layer strict — a real constraint violation still fails loudly.
+insertIfAbsent : Db -> String -> String -> Decision -> Task.Task Error Int
+insertIfAbsent db uid bodyHash decision =
+    findDecision db uid bodyHash
+        |> Task.andThen
+            (\existing ->
+                case existing of
+                    Just _ ->
+                        Task.succeed 0
+
+                    Nothing ->
+                        insertNew db uid bodyHash decision
+            )
+
+
+insertNew : Db -> String -> String -> Decision -> Task.Task Error Int
+insertNew db uid bodyHash decision =
+    Time.unixMillis ()
+        |> Task.andThen
+            (\now ->
+                let
+                    ( decisionText, reason ) =
+                        case decision of
+                            Approved ->
+                                ( "approve", Nothing )
+
+                            Refused r ->
+                                ( "refuse", Just r )
+                in
+                Db.insertFields db
+                    "review"
+                    [ ( "uid", SetField (SqlString uid) )
+                    , ( "body_hash", SetField (SqlString bodyHash) )
+                    , ( "decision", SetField (SqlString decisionText) )
+                    , ( "reason"
+                    , case reason of
+                        Just r ->
+                            SetField (SqlString r)
+
+                        Nothing ->
+                            SetField (SqlNull (SqlString ""))
+                    )
+                    , ( "reviewed_at", SetField (SqlTime now) )
+                    ]
+            )
+
+
+findDecision : Db -> String -> String -> Task.Task Error (Maybe Decision)
+findDecision db uid bodyHash =
+    Db.findWhere db
+        "review"
+        (Sql.and
+            (Sql.eq (Sql.column "uid") (Sql.param (SqlString uid)))
+            (Sql.eq (Sql.column "body_hash") (Sql.param (SqlString bodyHash)))
+        )
+        |> Task.map (List.head >> Maybe.map decodeDecision)
+
+
+decodeDecision : Dict.Dict String String -> Decision
+decodeDecision row =
+    case Dict.get "decision" row of
+        Just d ->
+            case d of
+                "approve" ->
+                    Approved
+
+                "refuse" ->
+                    Refused (Maybe.withDefault "" (Dict.get "reason" row))
+
+                other ->
+                    Refused ("malformed decision: " ++ other)
+
+        Nothing ->
+            Refused "malformed row"
