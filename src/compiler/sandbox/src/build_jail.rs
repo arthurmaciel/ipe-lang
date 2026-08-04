@@ -966,7 +966,9 @@ mod freebsd_jail {
         // jail is chrooted (`path=`) to a fresh root that is a READ-ONLY nullfs view
         // of the host `/`, with ONLY the scratch (and, when the filesystem axis is
         // granted, the working tree) nullfs-mounted read-write inside it, plus a
-        // FRESH minimal devfs and an EMPTY `/proc` masking the host's. This is the
+        // FRESH minimal devfs and an EMPTY `/proc` (its nullfs source rooted OUTSIDE
+        // the writable scratch, so the payload cannot write it) masking the host's.
+        // This is the
         // exact FreeBSD counterpart of the Linux arm's `--ro-bind / /` + one
         // writable mount + fresh `--dev`/`--proc`: an out-of-scratch write targets
         // the read-only root and is denied by the mount flag, never reliant on host
@@ -1204,10 +1206,16 @@ mod freebsd_jail {
         }
     }
 
-    /// Create an empty directory named `name` under `parent` (the scratch), used as
-    /// the read-only nullfs source that masks the jail's `/proc` with an EMPTY tree.
-    /// A creation failure refuses (fail-closed) — a `/proc` that cannot be masked
-    /// would leave the host `/proc` exposed, never run against.
+    /// Create an empty directory named `name` under `parent`, used as the read-only
+    /// nullfs source that masks the jail's `/proc` with an EMPTY tree. A creation
+    /// failure refuses (fail-closed) — a `/proc` that cannot be masked would leave
+    /// the host `/proc` exposed, never run against.
+    ///
+    /// `parent` MUST be a location the jailed payload cannot write: the source's
+    /// vnode is what the read-only `/proc` mask exposes, so a payload that could
+    /// write it could surface files under its own `/proc`. The caller roots it
+    /// OUTSIDE the writable scratch (a per-run sibling of the jail root) so the
+    /// payload has no mount into it — the `/proc` mask is immutable to the payload.
     fn mount_dir_under(parent: &Path, name: &str) -> Result<PathBuf, RunJailDefect> {
         let dir = parent.join(name);
         match std::fs::create_dir_all(&dir) {
@@ -1233,6 +1241,12 @@ mod freebsd_jail {
     struct RoRootMount {
         umount_bin: PathBuf,
         root: PathBuf,
+        /// The empty dir the read-only `/proc` mask is nullfs-mounted FROM. It is
+        /// rooted OUTSIDE the writable scratch (a sibling of `root`), so the jailed
+        /// payload — which only has the scratch and granted working tree mounted
+        /// read-write inside the chroot — has no mount to it and cannot write it, so
+        /// the `/proc` mask stays immutable to the payload. Removed on drop.
+        proc_mask_source: PathBuf,
         /// Every mounted target, in mount order; unmounted in reverse on drop.
         mounted: Vec<PathBuf>,
     }
@@ -1274,9 +1288,19 @@ mod freebsd_jail {
                 });
             }
 
+            // The `/proc`-mask source: an empty dir rooted OUTSIDE the writable
+            // scratch, a per-run sibling of the jail root under the system temp. It
+            // is NOT under the scratch (which is nullfs-mounted READ-WRITE inside the
+            // chroot) and NOT under the chroot root (over which host `/` is mounted
+            // read-only), so the jailed payload has no mount to it and cannot write
+            // it — the read-only `/proc` mask it feeds stays immutable to the payload.
+            // A creation failure refuses (fail-closed).
+            let proc_mask_source = mount_dir_under(&proc_mask_source_dir(), "empty-proc")?;
+
             let mut mount = Self {
                 umount_bin,
                 root,
+                proc_mask_source,
                 mounted: Vec::new(),
             };
 
@@ -1301,16 +1325,26 @@ mod freebsd_jail {
             mount.mounted.push(dev_target);
 
             // 3. Mask the jail's `/proc` with a FRESH EMPTY read-only nullfs of an
-            //    empty scratch-local dir, layered over the read-only host `/proc` the
-            //    ro-root exposed. An unmasked host `/proc` would leak sibling env via
-            //    `/proc/<pid>/environ` (defeating the launcher env scrub) and expose
-            //    host process metadata — a covert-channel surface. This empties it,
-            //    matching the Linux arm's fresh `--proc /proc`. (A jail with an empty
-            //    net stack and its own PID view has no meaningful procfs to publish;
-            //    an empty `/proc` is the fail-closed choice over the host's.)
-            let proc_mask_source = mount_dir_under(scoped_tmp, "ipe-tier2-empty-proc")?;
+            //    empty dir rooted OUTSIDE the writable scratch, layered over the
+            //    read-only host `/proc` the ro-root exposed. An unmasked host `/proc`
+            //    would leak sibling env via `/proc/<pid>/environ` (defeating the
+            //    launcher env scrub) and expose host process metadata — a
+            //    covert-channel surface. This empties it, matching the Linux arm's
+            //    fresh `--proc /proc`. (A jail with an empty net stack and its own PID
+            //    view has no meaningful procfs to publish; an empty `/proc` is the
+            //    fail-closed choice over the host's.)
+            //
+            //    The mask source is `mount.proc_mask_source` — a per-run sibling of
+            //    the jail root, NOT under the read-write scratch — so the payload has
+            //    no mount to it and cannot surface files under its own `/proc`. The
+            //    mount is read-only regardless, so `/proc` is truly immutable.
             let proc_target = under_root(&mount.root, Path::new("/proc"));
-            mount_nullfs(&mount_nullfs_bin, true, &proc_mask_source, &proc_target)?;
+            mount_nullfs(
+                &mount_nullfs_bin,
+                true,
+                &mount.proc_mask_source,
+                &proc_target,
+            )?;
             mount.mounted.push(proc_target);
 
             // 4. The scratch, READ-WRITE, at its original absolute path inside the
@@ -1348,6 +1382,13 @@ mod freebsd_jail {
                     .status();
             }
             let _ = std::fs::remove_dir(&self.root);
+            // Remove the `/proc`-mask source dir (a sibling of the root, outside the
+            // scratch) AFTER its read-only `/proc` mount is unmounted above, then its
+            // per-run parent. Best-effort — a leftover empty dir is inert.
+            let _ = std::fs::remove_dir(&self.proc_mask_source);
+            if let Some(parent) = self.proc_mask_source.parent() {
+                let _ = std::fs::remove_dir(parent);
+            }
         }
     }
 
@@ -1359,6 +1400,20 @@ mod freebsd_jail {
             .duration_since(std::time::UNIX_EPOCH)
             .map_or(0, |d| d.as_nanos());
         std::env::temp_dir().join(format!("ipe-tier2-jailroot-{pid}-{nanos}"))
+    }
+
+    /// A per-run parent dir for the empty `/proc`-mask source, a sibling of the jail
+    /// root under the system temp root — NOT under the read-write scratch and NOT
+    /// under the chroot root. The jailed payload has no mount into it, so the empty
+    /// dir it holds (the read-only `/proc` mask's nullfs source) is immutable to the
+    /// payload: it cannot surface files under its own `/proc`. Unique per run so
+    /// concurrent audit calls do not collide.
+    fn proc_mask_source_dir() -> PathBuf {
+        let pid = std::process::id();
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0, |d| d.as_nanos());
+        std::env::temp_dir().join(format!("ipe-tier2-procmask-{pid}-{nanos}"))
     }
 
     /// A per-run jail name unique enough that concurrent audit calls do not collide.
