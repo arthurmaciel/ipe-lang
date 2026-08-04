@@ -113,6 +113,22 @@ const COMMANDS: &[Command] = &[
         ],
     },
     Command {
+        name: "eject",
+        summary: "Emit a self-contained Rust project with a tree-shaken runtime.",
+        args: "[<path>]",
+        args_desc: "A source file, a project directory, or an ipe.toml. Defaults to the current project.",
+        options: &[
+            Opt {
+                flag: "--out <dir>",
+                desc: "write the standalone project to <dir> (required)",
+            },
+            Opt {
+                flag: "[--runtime <dir>]",
+                desc: "vendor the Ipê runtime source from <dir>",
+            },
+        ],
+    },
+    Command {
         name: "check",
         summary: "Type-check a program without building or running it.",
         args: "[<path>]",
@@ -443,6 +459,7 @@ const SECTIONS: &[Section] = &[
             "init",
             "upgrade-agents",
             "build",
+            "eject",
             "check",
             "verify",
             "run",
