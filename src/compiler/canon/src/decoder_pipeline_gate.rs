@@ -222,9 +222,9 @@ pub fn check_decoder_pipelines(module: &Module) -> DResult<()> {
 /// `let`-bound locals are pushed onto `scope.locals` for the duration of the
 /// binding's body and its `in` body, then popped, so a family call resolves its
 /// accumulator against exactly the bindings visible at its own site. Native
-/// recursion mirrors the tree; a decoder-pipeline body is not adversarially
-/// deep (each hand-nesting level is one source-written combinator call), so no
-/// explicit heap stack is required for this check.
+/// recursion mirrors the tree: canonicalisation already recurses natively over
+/// this same tree upstream, so any body deep enough to overflow here overflowed
+/// canon first — this gate adds no new stack-depth exposure.
 fn check_expr<'e>(expr: &'e Expr, scope: &mut Scope<'e>) -> DResult<()> {
     // A hand-nested family call is the rejection: this expression is a
     // fully-applied family call AND its accumulator resolves to another.

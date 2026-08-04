@@ -567,9 +567,9 @@ fn name_label(msg: &NameError) -> Option<String> {
         NameError::NestedDecoderPipeline => Some(
             "this decoder-pipeline combinator is hand-nested, which binds fields to the \
              constructor in REVERSE source order and silently swaps any two same-typed \
-             fields. Thread the combinators with `|>` instead — `Db.Decode.succeed Ctor |> \
-             Db.Decode.required \"a\" da |> Db.Decode.required \"b\" db` — so the fields bind \
-             top-to-bottom in the order written"
+             fields. Thread the combinators with `|>` instead — `succeed Ctor |> required \
+             \"a\" da |> required \"b\" db` — so the fields bind top-to-bottom in the order \
+             written"
                 .to_string(),
         ),
         NameError::Unknown => None,
