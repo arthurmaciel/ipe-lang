@@ -1020,6 +1020,23 @@ mod tests {
     }
 
     #[test]
+    fn random_range_resolves_as_int_kernel() {
+        // `Random.range` is a source-level pipeline-readable spelling of
+        // `Random.int` (a `FUNC_ALIASES` entry). It must resolve to the same
+        // canonical `RandomInt` kernel — never an IPE-N0005 no-such-member miss
+        // (the reported drift) nor a `ReservedKernel` fail-closed. Its kernel
+        // body is (Random, int), identical to `Random.int`.
+        let src = "module Main exposing (main)\n\
+                   import Ipe.Random as Random\n\n\
+                   main = Random.range\n";
+        let Some((m, i)) = canon_module_src(src) else {
+            assert!(false_marker(), "Random import must canonicalise");
+            return;
+        };
+        assert_main_is_kernel(&m, &i, "Random", "int");
+    }
+
+    #[test]
     fn unknown_stdlib_alias_stays_fail_closed() {
         // A `Ipê.*` path with no registered canonical qualifier must NOT invent
         // one: the alias reference surfaces UnknownModule at its use site.
