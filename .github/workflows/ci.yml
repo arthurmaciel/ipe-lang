@@ -399,6 +399,42 @@ jobs:
           fi
           echo "all first-party shape examples check + build + emit cleanly."
 
+  # `ipe check`-only FLOOR over the WHOLE first-party example set — the cheap,
+  # gating compile floor (scripts/first-party-check-floor.sh, set derived in
+  # scripts/lib/examples.sh `first_party_check_set`). It type-checks every shipped
+  # examples/shapes/** and examples/wasm/** entry (FFI-gated examples excluded)
+  # and fails loud, naming each that does not `ipe check` clean.
+  #
+  # Complementary, not redundant, to `shapes-examples` above: that job BUILDS +
+  # cargo-compiles the 4 shapes; this floor is check-only (no cargo) but WIDER —
+  # it also covers examples/wasm/**, which otherwise reaches `ipe check` scrutiny
+  # only in the non-gating nightly examples-sweep. So a wasm example that stops
+  # type-checking (e.g. a pub/sub contract change) breaks a PR here instead of
+  # rotting in the tree.
+  first-party-check-floor:
+    name: first-party check floor (ipe check only)
+    runs-on: ubuntu-latest
+    needs: [changes, quick-check]
+    if: needs.changes.outputs.code == 'true' || github.event_name != 'pull_request'
+    env:
+      RUSTFLAGS: -C link-arg=-fuse-ld=mold
+      IPE_RUNTIME_DIR: ${{ github.workspace }}/src/runtime/rust/src
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: rui314/setup-mold@v1
+      - uses: mozilla-actions/sccache-action@v0.0.9
+      - uses: Swatinem/rust-cache@v2
+      # ripgrep — scripts/lib/examples.sh's classification helpers require it.
+      - name: Install ripgrep
+        run: sudo apt-get update && sudo apt-get install -y ripgrep
+      - name: Build ipe
+        run: cargo build --release -p ipe
+      - name: Type-check every first-party example
+        env:
+          IPE_BIN: ${{ github.workspace }}/target/release/ipe
+        run: bash scripts/first-party-check-floor.sh
+
   # `ipe-runtime-rust`'s `default = []` leaves `compression`/`csv`/`config`/
   # `tokio` (and every other optional feature) OFF, so the `test` job above
   # never compiles the `#[cfg(feature = "...")]`-gated unit tests that live

@@ -240,3 +240,36 @@ build_set() {
 
 run_set()  { build_set; }
 perf_set() { build_set; }
+
+# ── first_party_check_set: the `ipe check`-only FLOOR over shipped examples ────
+# The first-party examples the project SHIPS and expects to type-check: every
+# flat `examples/shapes/*/*` and `examples/wasm/*` dir with a `src/Main.ipe`
+# entry. Emitted one per line.
+#
+# SCOPE — this is a floor, not the parity sweep:
+#   • INCLUDE examples/shapes/** and examples/wasm/** — authored, expected to
+#     `ipe check` clean; a non-compiling one is a shipped regression.
+#   • EXCLUDE examples/sky/** — the upstream mirror is intentionally non-gating
+#     (legitimately red mid-parity), so build_set/the sweep own it, never this
+#     floor.
+#   • EXCLUDE an FFI-gated example — one that declares `[rust.dependencies]`
+#     with no generated bindings cache (needs_ffi_install). Its `import Rust.<Crate>`
+#     modules are absent until `ipe install --allow-build-scripts` runs its
+#     sandboxed bindings generation, which the per-commit gate does not do
+#     (build-scripts / network / RCE-sandbox — the Rust-FFI subsystem, tracked
+#     as issue #396). That is an install prerequisite, not a shipped-broken
+#     example. This is the SSOT exclusion shared with the build sweep, so no
+#     example needs a hand-maintained skip name here.
+#
+# A dir without a flat `src/Main.ipe` (a nested multi-project like
+# examples/wasm/language-playground, whose sub-projects each carry their own
+# manifest) has no single check entry and is not part of this flat floor.
+first_party_check_set() {
+  local d globs=(examples/shapes/*/*/ examples/wasm/*/)
+  for d in "${globs[@]}"; do
+    d="${d%/}"
+    [ -f "$d/src/Main.ipe" ] || continue
+    needs_ffi_install "$d" && continue
+    printf '%s\n' "$d"
+  done
+}
