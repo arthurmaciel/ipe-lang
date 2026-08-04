@@ -24,7 +24,8 @@ pub use code::{
     IPE_P0015, IPE_P0016, IPE_P0017, IPE_P0018, IPE_P0020, IPE_P0021, IPE_P0030, IPE_P0031,
     IPE_P0040, IPE_P0041, IPE_P0050, IPE_P0060, IPE_P0061, IPE_P0062, IPE_P0063, IPE_T0001,
     IPE_T0002, IPE_T0003, IPE_T0004, IPE_T0010, IPE_T0011, IPE_T0012, IPE_T0013, IPE_T0014,
-    IPE_T0015, IPE_T0016, IPE_T0017, IPE_T0019, ISSUE_TRACKER_URL, Severity, explain_page, title,
+    IPE_T0015, IPE_T0016, IPE_T0017, IPE_T0019, IPE_T0020, ISSUE_TRACKER_URL, Severity,
+    explain_page, title,
 };
 pub use diagnostic::{
     AliasExpansionKind, AppShape, Applicability, CaseDefect, CmdSubShapeMismatch, Construct,

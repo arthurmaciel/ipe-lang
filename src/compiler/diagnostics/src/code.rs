@@ -201,6 +201,8 @@ pub const IPE_T0018: Code = Code("IPE-T0018");
 ///
 /// T0018 is now the closed-union catch-all lint; or-patterns keep T0019.
 pub const IPE_T0019: Code = Code("IPE-T0019");
+/// an `Html` value is used where an `Element` is required (wrap it in `Ui.html`)
+pub const IPE_T0020: Code = Code("IPE-T0020");
 
 // ---------------------------------------------------------------------------
 // Lower / not-yet-supported (IPE-L####)
@@ -419,6 +421,7 @@ pub fn title(c: Code) -> &'static str {
         IPE_T0017 => "built-in type cannot be updated with record syntax",
         IPE_T0018 => "this catch-all arm hides constructors of a closed union",
         IPE_T0019 => "each alternative of an or-pattern must bind the same variables",
+        IPE_T0020 => "this is `Html` where an `Element` is required",
         IPE_L0100 => "pattern kind not supported yet",
         IPE_L0101 => "operator not supported yet",
         IPE_L0102 => "polymorphic value's type could not be determined",
@@ -566,6 +569,7 @@ fn front_end_explain_page(c: Code) -> Option<&'static str> {
         IPE_T0017 => Some(include_str!("../explain/IPE-T0017.md")),
         IPE_T0018 => Some(include_str!("../explain/IPE-T0018.md")),
         IPE_T0019 => Some(include_str!("../explain/IPE-T0019.md")),
+        IPE_T0020 => Some(include_str!("../explain/IPE-T0020.md")),
         _ => None,
     }
 }
@@ -646,14 +650,14 @@ pub const ALL_CODES: &[Code] = &[
     IPE_N0028, IPE_N0029, IPE_N0030, IPE_N0031, IPE_N0032, IPE_N0033, IPE_N0034, IPE_N0035,
     IPE_N0036, IPE_N0037, IPE_N0038, IPE_N0039, IPE_N0040, IPE_T0001, IPE_T0002, IPE_T0003,
     IPE_T0004, IPE_T0010, IPE_T0011, IPE_T0012, IPE_T0013, IPE_T0014, IPE_T0015, IPE_T0016,
-    IPE_T0017, IPE_T0018, IPE_T0019, IPE_L0100, IPE_L0101, IPE_L0102, IPE_L0103, IPE_L0104,
-    IPE_L0105, IPE_L0106, IPE_L0107, IPE_L0108, IPE_L0110, IPE_L0111, IPE_L0112, IPE_L0113,
-    IPE_L0114, IPE_L0115, IPE_L0116, IPE_L0117, IPE_L0118, IPE_L0119, IPE_L0120, IPE_L0121,
-    IPE_L0122, IPE_L0123, IPE_L0124, IPE_L0125, IPE_L0126, IPE_L0127, IPE_L0128, IPE_L0129,
-    IPE_L0130, IPE_L0131, IPE_L0132, IPE_L0133, IPE_L0140, IPE_L0200, IPE_F4400, IPE_F4401,
-    IPE_F4402, IPE_F4410, IPE_F4411, IPE_F4412, IPE_F4413, IPE_F4414, IPE_I0001, IPE_I0010,
-    IPE_I0011, IPE_I0100, IPE_I0101, IPE_I0102, IPE_I0103, IPE_I0200, IPE_I0201, IPE_I0202,
-    IPE_I0203,
+    IPE_T0017, IPE_T0018, IPE_T0019, IPE_T0020, IPE_L0100, IPE_L0101, IPE_L0102, IPE_L0103,
+    IPE_L0104, IPE_L0105, IPE_L0106, IPE_L0107, IPE_L0108, IPE_L0110, IPE_L0111, IPE_L0112,
+    IPE_L0113, IPE_L0114, IPE_L0115, IPE_L0116, IPE_L0117, IPE_L0118, IPE_L0119, IPE_L0120,
+    IPE_L0121, IPE_L0122, IPE_L0123, IPE_L0124, IPE_L0125, IPE_L0126, IPE_L0127, IPE_L0128,
+    IPE_L0129, IPE_L0130, IPE_L0131, IPE_L0132, IPE_L0133, IPE_L0140, IPE_L0200, IPE_F4400,
+    IPE_F4401, IPE_F4402, IPE_F4410, IPE_F4411, IPE_F4412, IPE_F4413, IPE_F4414, IPE_I0001,
+    IPE_I0010, IPE_I0011, IPE_I0100, IPE_I0101, IPE_I0102, IPE_I0103, IPE_I0200, IPE_I0201,
+    IPE_I0202, IPE_I0203,
 ];
 
 #[cfg(test)]
@@ -662,7 +666,7 @@ mod tests {
 
     #[test]
     fn taxonomy_code_count_is_pinned() {
-        assert_eq!(ALL_CODES.len(), 121);
+        assert_eq!(ALL_CODES.len(), 122);
     }
 
     #[test]
@@ -680,7 +684,7 @@ mod tests {
             assert!(s.starts_with("IPE-"), "{s} bad prefix");
             assert!(seen.insert(s), "{s} duplicated");
         }
-        assert_eq!(seen.len(), 121);
+        assert_eq!(seen.len(), 122);
     }
 
     /// CI coverage gate: every taxonomy code has a conforming explain page.

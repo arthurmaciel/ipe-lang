@@ -24,7 +24,7 @@ use crate::code::{
     IPE_P0020, IPE_P0021, IPE_P0030, IPE_P0031, IPE_P0040, IPE_P0041, IPE_P0050, IPE_P0060,
     IPE_P0061, IPE_P0062, IPE_P0063, IPE_T0001, IPE_T0002, IPE_T0003, IPE_T0004, IPE_T0010,
     IPE_T0011, IPE_T0012, IPE_T0013, IPE_T0014, IPE_T0015, IPE_T0016, IPE_T0017, IPE_T0018,
-    IPE_T0019, Severity,
+    IPE_T0019, IPE_T0020, Severity,
 };
 use crate::span::Span;
 
@@ -743,6 +743,18 @@ pub enum TypeError {
     /// or 2 args), `"Cmd"` / `"Sub"` (expect exactly 1) — so the rendered
     /// message names the actual type the user mis-applied, not always `Task`.
     TaskArity { carrier: &'static str, found: usize },
+    /// An `Html` value is used where an `Element` is required — most often a
+    /// managed-update-loop (`Web.app` / `WebView.app`) `view` whose body called
+    /// `Ui.layout` / `Ui.layoutWith` (which turn an `Element` into `Html`) when
+    /// the shape wanted the inner `Element` and applies the layout itself. The
+    /// remedy is the same wherever it arises: wrap the `Html` with `Ui.html`, or
+    /// return the `Element`. Emitted for any `Element`/`Html` unification clash,
+    /// so the wildcard-`any` view case — which a plain type-mismatch would blame
+    /// generically — reads as this tailored, actionable hint. For the view case
+    /// this also keeps the SEAL: rejecting it here means the accepted program
+    /// still `cargo build`s (the emitted `ui_layout` would otherwise reject an
+    /// `Html` where it wants an `Element`, E0308). [IPE-T0020]
+    WebViewReturnsHtml,
 }
 
 /// A language feature that the Milestone-0 lowerer does not yet support. Each
@@ -1205,7 +1217,8 @@ impl Diagnostic {
                 | TypeError::SuperTypeUnsatisfied { .. }
                 | TypeError::RefutablePatternParameter
                 | TypeError::OrPatternBindingMismatch { .. }
-                | TypeError::TaskArity { .. } => Severity::Error,
+                | TypeError::TaskArity { .. }
+                | TypeError::WebViewReturnsHtml => Severity::Error,
             },
             Self::CompilerBug { .. } => Severity::Bug,
         }
@@ -1320,6 +1333,7 @@ const fn type_code(msg: &TypeError) -> Code {
         TypeError::RefutablePatternParameter => IPE_T0015,
         TypeError::OrPatternBindingMismatch { .. } => IPE_T0019,
         TypeError::TaskArity { .. } => IPE_T0016,
+        TypeError::WebViewReturnsHtml => IPE_T0020,
     }
 }
 
@@ -1521,6 +1535,13 @@ fn type_help(msg: &TypeError) -> Vec<HelpLine> {
             .iter()
             .map(|c| HelpLine::MissingConstructor(c.clone()))
             .collect(),
+        TypeError::WebViewReturnsHtml => vec![HelpLine::Note(
+            "wrap the `Html` with `Ui.html (…)` to get an `Element`. In a \
+             `Web.app` / `WebView.app` `view`, prefer returning the inner \
+             `Element` directly (annotate `view : Model -> Element Msg`) and let \
+             the shape apply `Ui.layout` for you."
+                .into(),
+        )],
         TypeError::Mismatch
         | TypeError::InfiniteType { .. }
         | TypeError::TooManyParameters { .. }
