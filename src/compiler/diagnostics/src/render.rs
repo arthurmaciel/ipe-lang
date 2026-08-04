@@ -576,6 +576,7 @@ fn name_label(msg: &NameError) -> Option<String> {
     }
 }
 
+#[allow(clippy::too_many_lines)] // one match arm per TypeError variant — mechanical dispatch
 fn type_label(msg: &TypeError) -> Option<String> {
     match msg {
         TypeError::TypeMismatch {
@@ -676,6 +677,12 @@ fn type_label(msg: &TypeError) -> Option<String> {
             "{route_count} route(s) declared but the Model has no `page` field — \
              routing is disabled and the routes are ignored"
         )),
+        TypeError::WebViewReturnsHtml => Some(
+            "this is `Html`, but an `Element` is required here — `Ui.layout` / \
+             `Ui.layoutWith` turn an `Element` into `Html`, so a `view` that \
+             calls one returns `Html` (the app shape applies the layout for you)"
+                .to_string(),
+        ),
         TypeError::Mismatch | TypeError::BudgetExceeded | TypeError::StepBudgetExceeded { .. } => {
             None
         }
