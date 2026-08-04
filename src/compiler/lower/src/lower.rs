@@ -843,6 +843,39 @@ fn ty_contains_fun(ty: &Ty) -> bool {
     }
 }
 
+/// Does `ty` store a function inside a DERIVE CARRIER — a record field, a
+/// user-enum / collection / tuple payload — as opposed to a bare arrow or a
+/// function behind an opaque boxed wrapper?
+///
+/// A derive carrier is a Rust struct/enum the backend `#[derive]`s `Clone` over,
+/// so a function reaching one through a generic type parameter emits a
+/// `<T: Clone>` bound the `Box<dyn Fn>` value cannot discharge. An opaque boxed
+/// wrapper (`Decoder`/`Task`/`Cmd`/`Sub`) renders to a `Clone` handle over its
+/// payload and derives nothing over it, so a function there is legitimate and is
+/// NOT flagged. Used by the computed-callee gate
+/// ([`Lowerer::reject_value_callee_fn_into_carrier`]) to decide whether a value
+/// callee's result laundered a function into a carrier the value path cannot
+/// `Arc`-promote.
+fn ty_has_fun_in_derive_carrier(interner: &Interner, ty: &Ty) -> bool {
+    match ty {
+        Ty::Var(_) | Ty::Unit => false,
+        // A bare arrow at the top of the walk is a direct position, not a
+        // carrier field; recurse its own operand/result so a carrier nested
+        // inside an arrow type is still seen.
+        Ty::Fun(a, b) => {
+            ty_has_fun_in_derive_carrier(interner, a) || ty_has_fun_in_derive_carrier(interner, b)
+        }
+        Ty::Tuple(elems) => elems.iter().any(ty_contains_fun),
+        // An opaque boxed wrapper stores its payload behind a trait object and
+        // derives nothing over it — a function there is legitimate.
+        Ty::Con { name, .. } if is_opaque_boxed_wrapper(interner, *name) => false,
+        // Every other constructor head (a user enum, a builtin collection) is a
+        // derive carrier over its type arguments.
+        Ty::Con { args, .. } => args.iter().any(ty_contains_fun),
+        Ty::Record(fields, _) => fields.values().any(ty_contains_fun),
+    }
+}
+
 /// Does instantiating a generic type parameter to `ty` make the emitted Rust
 /// generic parameter's unconditional `Clone` bound unsatisfiable?
 ///
@@ -12612,8 +12645,13 @@ impl<'a> Lowerer<'a> {
     /// callee is resolved back to `f`'s top-level key via
     /// [`Self::toplevel_fn_aliases`]) — the two paths share this one gate, so a
     /// generic slot is rejected identically however the callee is spelled. A
-    /// missing declared template (env absent, or a point-free callee that is not
-    /// a top-level alias) fails open — the region gate and the value-side carrier
+    /// generic function referenced as a bare VALUE rather than applied (`let
+    /// mk = wrap in … mk (\n -> n)`, where the binding reifies `wrap` into a
+    /// `Box::new(main_wrap)` fn value) is caught by the reify twin
+    /// ([`Self::reject_fn_value_reify_generic_slot`]), which matches the declared
+    /// template against the whole solved reference type. A missing declared
+    /// template (env absent, or a point-free callee that is not a top-level
+    /// alias) fails open — the region gate and the value-side carrier
     /// normalization still cover the shapes they own.
     fn reject_fn_through_generic_slot(
         &self,
@@ -12664,6 +12702,74 @@ impl<'a> Lowerer<'a> {
             && let Some((module, name)) = self.toplevel_fn_aliases.borrow().get(s).cloned()
         {
             self.reject_fn_through_generic_slot(&module, name, args, call_span)?;
+        }
+        Ok(())
+    }
+
+    /// The reify twin of [`Self::reject_fn_through_generic_slot`]. A generic
+    /// top-level function referenced as a first-class VALUE (rather than
+    /// applied) — the `let mk = wrap` binding, or `wrap` passed/returned bare —
+    /// reifies into an [`Expr::FuncValue`] (`Box::new(main_wrap)`) whose
+    /// monomorphized arrow instantiates the declared `<T1: Clone>` slot to the
+    /// solved type at this site. When that instantiation binds a declared type
+    /// variable to a function-embedding type (`wrap`'s `a` bound to
+    /// `Int -> Int`), the reified value's element type is `Box<dyn Fn>` while
+    /// the generic `main_wrap`'s `T1: Clone` bound — and the record field's
+    /// `Arc` carrier the read side expects — cannot be discharged, so the
+    /// emitted crate fails `cargo` (E0271/E0277) after `ipe` reported exit 0.
+    /// Neither the direct-call gate ([`Self::reject_fn_through_generic_slot`])
+    /// nor its point-free twin sees this: the value is never applied here, so no
+    /// argument region types drive the match. Match the declared template
+    /// against the WHOLE solved region type of the reference and reject on the
+    /// same fn-embedding-binding condition. A missing declared template (env
+    /// absent) fails open, exactly as the call-site gate does.
+    fn reject_fn_value_reify_generic_slot(
+        &self,
+        module: &[Symbol],
+        name: Symbol,
+        reified: &Ty,
+        span: Span,
+    ) -> DResult<()> {
+        let Some(declared) = self.types.env.get(&(module.to_vec(), name)) else {
+            return Ok(());
+        };
+        let mut subst: BTreeMap<u32, Ty> = BTreeMap::new();
+        match_signature_template(declared, reified, &mut subst);
+        if subst
+            .values()
+            .any(|bound| generic_binding_breaks_clone(self.interner, bound))
+        {
+            return Err(unsupported(span, Feature::FirstClassFunctions));
+        }
+        Ok(())
+    }
+
+    /// The computed-callee twin of the generic-slot gate family. A value callee
+    /// applied via [`Expr::Apply`] — a local binding, or a top-level function's
+    /// *result* laundered through an application (`pick b = wrap`, then
+    /// `mk = pick True in mk (\n -> n)`) — has no recoverable declared template,
+    /// so the direct-call, point-free, and reify gates all miss it. When such a
+    /// callee's solved arrow threads a function-typed ARGUMENT into a derive
+    /// carrier (a record field or user-enum payload) of its RESULT, the result's
+    /// emitted struct is the generic `<T: Clone>` carrier the type variable
+    /// produced — instantiated at the non-`Clone` `Box<dyn Fn>` argument. Unlike
+    /// a record/ctor literal or a known top-level call, the value-callee path
+    /// applies no `Arc` carrier normalization, so this is always cargo-broken
+    /// (E0277). Fail closed. A callee whose result embeds no function, or one
+    /// that embeds a function unrelated to any argument (a fn the callee itself
+    /// builds), is left to the paths that own it.
+    fn reject_value_callee_fn_into_carrier(&self, callee: &canon::Expr) -> DResult<()> {
+        let Some(callee_ty @ Ty::Fun(_, _)) = self.region_ty(callee.span) else {
+            return Ok(());
+        };
+        let mut takes_fn_param = false;
+        let mut result = callee_ty;
+        while let Ty::Fun(p, r) = result {
+            takes_fn_param |= ty_contains_fun(p);
+            result = r.as_ref();
+        }
+        if takes_fn_param && ty_has_fun_in_derive_carrier(self.interner, result) {
+            return Err(unsupported(callee.span, Feature::FirstClassFunctions));
         }
         Ok(())
     }
@@ -13015,6 +13121,15 @@ impl<'a> Lowerer<'a> {
                         "no inferred type for a function/value reference",
                     )
                 })?;
+                // A user top-level function reified as a first-class VALUE whose
+                // declared type variable is instantiated to a function here emits
+                // a generic `Clone`-bounded `Box::new(main_f)` the record/enum
+                // read side cannot discharge — fail closed, the reify twin of the
+                // direct-call generic-slot gate. Kernels carry their own
+                // obligations and are exempt.
+                if let canon::Expr_::VarTopLevel { module, name } = &e.value {
+                    self.reject_fn_value_reify_generic_slot(module, *name, ty, e.span)?;
+                }
                 // For kernel callees use the JSON-aware type resolver so that
                 // a `Value = any = Ty::Var` in the argument / return position
                 // of a JSON kernel (e.g. `JsonEnc.string : String -> Value`)
@@ -14063,6 +14178,7 @@ impl<'a> Lowerer<'a> {
             }
             _ => {
                 self.reject_point_free_fn_through_generic_slot(callee, args, call_span)?;
+                self.reject_value_callee_fn_into_carrier(callee)?;
                 // A first-class function *value* applied via [`Expr::Apply`]
                 // (a local function-typed binding, a lambda, or another
                 // expression's result). The named-callee path above reshapes an
