@@ -50,6 +50,11 @@ pub use ipe_runtime::error::IpeError;
 pub fn str_err(s: &str) -> IpeError {
     IpeError::unexpected(s.to_string())
 }
+// Recursion guard shim — every user function body opens with
+// `let _ipe_recursion_guard = crate::recursion_guard();`, which resolves here.
+pub fn recursion_guard() -> ipe_runtime::core::RecursionGuard {
+    ipe_runtime::core::recursion_guard()
+}
 
 pub type IpeTask<A> = ipe_runtime::IpeTask<IpeError, A>;
 pub type Decoder<T> = ipe_runtime::json::Decoder<IpeError, T>;

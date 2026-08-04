@@ -437,6 +437,20 @@ match), the SEALs, the wasm and `--no-default-features` builds.
   spawn (FFI callbacks) runs depth-only (no floor). The depth budget still
   contains unbounded recursion there; only the fat-frame backstop degrades.
   Acceptable: the FFI boundary already has its own hardening track.
+- **Main thread under a reduced `ulimit -s`.** The floor recorded for the
+  process main thread assumes the 8 MiB platform default (§3.4); the size is
+  not queried, because the only portable query is a `getrlimit`/`pthread` FFI
+  call and the runtime holds the line at exactly one sanctioned `unsafe` block.
+  A synchronous program (the std-only `block_on`, which polls on the main
+  thread) run under a soft stack limit *smaller* than 8 MiB therefore has a
+  floor calibrated too low and a depth budget (10 000) that may not fit the
+  reduced stack, so a runaway recursion there can still overflow before either
+  bound trips. Every runtime-*spawned* thread is unaffected — its 8 MiB stack
+  is requested explicitly and survives a lowered soft limit — so servers, live
+  sessions, and the async-entry `block_on` are contained regardless. Closing
+  the synchronous-main-thread case for a shrunken `ulimit` needs the real stack
+  bound, i.e. the `getrlimit` FFI; deferred rather than trade away the
+  no-new-`unsafe` invariant.
 - **Red-zone sufficiency.** The 256 KiB margin must cover one frame plus the
   deepest unguarded callee chain (§3.4 contract). Runtime kernels are
   bounded; the FFI margin is an explicit deferred verification (§10).

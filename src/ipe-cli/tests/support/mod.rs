@@ -537,6 +537,71 @@ pub fn build_and_run_stack_limited(
     }
 }
 
+/// Outcome of building and running an emitted project, additionally capturing
+/// stderr — the channel the recursion-guard trip logs its classified line to.
+#[allow(dead_code)]
+pub struct RunOutcomeWithStderr {
+    /// The program's standard output, decoded lossily from UTF-8.
+    pub stdout: String,
+    /// The program's standard error, decoded lossily from UTF-8.
+    pub stderr: String,
+    /// The process exit code (`None` if the process was killed by a signal —
+    /// which is exactly how an UNGUARDED stack overflow presents: SIGABRT).
+    pub exit_code: Option<i32>,
+}
+
+/// Build the emitted project and run its binary on the default stack, capturing
+/// stdout, stderr, AND the exit code.
+///
+/// The recursion-guard `DoS` proof runs here: on the normalized 8 MiB stack the
+/// depth budget (default `10000`) trips an unbounded recursion and unwinds into
+/// the panic classifier, so the process exits with a code (`Some(1)`) after
+/// logging the classified `RecursionLimit` line to stderr — never the SIGABRT
+/// (`exit_code == None`, no classified line) an unguarded stack overflow would
+/// produce.
+///
+/// # Panics
+/// Fails the calling test if `cargo build` fails (surfacing cargo's stderr), the
+/// binary cannot be located, or it cannot be spawned.
+#[must_use]
+#[allow(dead_code)] // only the recursion-guard DoS golden exercises this helper
+pub fn build_and_run_emitted_capturing_stderr(
+    golden_name: &str,
+    emitted_dir: &Path,
+) -> RunOutcomeWithStderr {
+    let exe = e2e_support::build_rust_binary(golden_name, emitted_dir);
+    assert!(
+        exe.is_ok(),
+        "{}",
+        exe.as_ref().err().map_or("", String::as_str)
+    );
+    let Ok(exe) = exe else {
+        return RunOutcomeWithStderr {
+            stdout: String::new(),
+            stderr: String::new(),
+            exit_code: None,
+        };
+    };
+    let output = Command::new(&exe).output();
+    assert!(
+        output.is_ok(),
+        "{golden_name}: failed to spawn `{exe}`: {:?}",
+        output.as_ref().err()
+    );
+    let Ok(output) = output else {
+        return RunOutcomeWithStderr {
+            stdout: String::new(),
+            stderr: String::new(),
+            exit_code: None,
+        };
+    };
+    RunOutcomeWithStderr {
+        stdout: String::from_utf8_lossy(&output.stdout).into_owned(),
+        stderr: String::from_utf8_lossy(&output.stderr).into_owned(),
+        exit_code: output.status.code(),
+    }
+}
+
 /// Assert ipe's stdout matches the golden's captured expected output.
 ///
 /// Reads `tests/golden/<name>/expected.txt` (the self-regression anchor) and

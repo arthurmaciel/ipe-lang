@@ -1,0 +1,21 @@
+module Main exposing (main)
+import Ipe.Io as Io
+import Ipe.String
+
+-- Unbounded mutual recursion with NO reachable base case. Each call is in
+-- non-tail position (the `1 +` forces a pending add after the recursive call),
+-- so the tail-call rewrite cannot absorb it into a constant-stack loop: the
+-- native stack grows without bound. Unguarded this SIGABRTs (an uncatchable
+-- stack-overflow abort); the recursion guard converts it into a classified,
+-- containable `RecursionLimit` panic, so the process exits cleanly instead of
+-- dying by signal.
+bounce : Int -> Int
+bounce n =
+    1 + settle n
+
+settle : Int -> Int
+settle n =
+    1 + bounce n
+
+main =
+    Io.println (String.fromInt (bounce 0))

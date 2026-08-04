@@ -9297,7 +9297,19 @@ pub fn emit_func_vis(ctx: &EmitCtx, func: &Func, vis_prefix: &str) -> DResult<St
     };
 
     let signature = render_fn_signature(vis_prefix, &name, &generic_clause, &params, &ret);
-    Ok(format!("{signature} {{\n    {body}\n}}\n"))
+    // Recursion guard prologue: one RAII line at the top of every user function
+    // body converts an uncatchable native stack-overflow abort (unbounded direct,
+    // mutual, or function-value recursion) into a classifiable, containable panic.
+    // The `crate::`-qualified path binds from both the single-file layout (the
+    // shim lives at crate root) and a split `IpeModule` file (inside a `mod`
+    // block), matching the call convention every cross-module user call uses. The
+    // binding MUST be a named `_`-prefixed local, never `let _ = …`, which would
+    // drop — and decrement — the guard immediately. A `TailLoop` body carries the
+    // guard outside its `loop`, so a tail-recursive function pays it once at entry
+    // (§tail-call exemption). See `ipe_runtime::core::recursion_guard`.
+    Ok(format!(
+        "{signature} {{\n    let _ipe_recursion_guard = crate::recursion_guard();\n    {body}\n}}\n"
+    ))
 }
 
 /// Is `ty` a value type that a top-level CAF may share through a `static`

@@ -14,12 +14,14 @@ impl IpeStringify for LibStatus {
     }
 }
 pub(crate) fn lib_label(status: LibStatus) -> String {
+    let _ipe_recursion_guard = crate::recursion_guard();
     match status {
         LibStatus::Empty => "empty".to_string(),
         LibStatus::Seeded => "seeded".to_string(),
     }
 }
 pub(crate) fn lib_seed_and_count() -> IpeTask<i64> {
+    let _ipe_recursion_guard = crate::recursion_guard();
     task_and_then(
         db_open("sqlite".to_string(), "sqlite::memory:".to_string()),
         {
