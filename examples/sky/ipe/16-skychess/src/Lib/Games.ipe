@@ -61,7 +61,7 @@ exec queryStr args =
 
 -- query : Result Error (List Row). Same contract as exec.
 query queryStr args =
-    Task.run (Db.unsafeQuery dbConn queryStr args)
+    Task.run (Db.query dbConn queryStr args)
 
 
 initSchema conn =
@@ -186,4 +186,4 @@ deleteGame gameId =
 
 getField : String -> Dict String String -> String
 getField field row =
-    Db.unsafeGetField field row
+    Db.getField field row

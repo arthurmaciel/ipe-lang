@@ -37,11 +37,11 @@ viewNotFound model =
 
 viewIdeaDetail model idea =
     let
-        ideaId = Db.unsafeGetField "id" idea
-        voteCount = Db.unsafeGetField "vote_count" idea
-        commentCount = Db.unsafeGetField "comment_count" idea
-        status = Db.unsafeGetField "status" idea
-        category = Db.unsafeGetField "category" idea
+        ideaId = Db.getField "id" idea
+        voteCount = Db.getField "vote_count" idea
+        commentCount = Db.getField "comment_count" idea
+        status = Db.getField "status" idea
+        category = Db.getField "category" idea
     in
         div
             [ class "mt-32" ]
@@ -57,21 +57,21 @@ viewIdeaDetail model idea =
                               [ viewCategoryBadge category, statusBadge status ]
                         , h1
                               [ class "detail-title" ]
-                              [ text (Db.unsafeGetField "title" idea) ]
+                              [ text (Db.getField "title" idea) ]
                         , div
                               [ class "idea-meta" ]
                               [ span
                                     []
                                     [ text
                                           ("by "
-                                              ++ Db.unsafeGetField "author_name" idea)
+                                              ++ Db.getField "author_name" idea)
                                     ]
-                              , span [] [ text (Db.unsafeGetField "created_at" idea) ]
+                              , span [] [ text (Db.getField "created_at" idea) ]
                               ]
                         ]
                   , div
                         [ class "detail-body" ]
-                        [ p [] [ text (Db.unsafeGetField "description" idea) ] ]
+                        [ p [] [ text (Db.getField "description" idea) ] ]
                   , div
                         [ class "detail-actions" ]
                         [ button
@@ -135,12 +135,12 @@ viewComment comment =
               [ class "comment-header" ]
               [ span
                     [ class "comment-author" ]
-                    [ text (Db.unsafeGetField "author_name" comment) ]
+                    [ text (Db.getField "author_name" comment) ]
               , span
                     [ class "comment-date" ]
-                    [ text (Db.unsafeGetField "created_at" comment) ]
+                    [ text (Db.getField "created_at" comment) ]
               ]
-        , div [ class "comment-body" ] [ text (Db.unsafeGetField "content" comment) ]
+        , div [ class "comment-body" ] [ text (Db.getField "content" comment) ]
         ]
 
 

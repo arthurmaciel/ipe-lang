@@ -10,7 +10,7 @@ import Ipe.Random as Random
 import Ipe.Crypto as Crypto
 import Ipe.Error as Error exposing (Error)
 import Ipe.Db as Db
-import Ipe.Web as Live exposing (app, route)
+import Ipe.Tea.Web as Live exposing (app, route)
 import Ipe.Html exposing (..)
 import Ipe.Html.Events exposing (onClick)
 import Ipe.Tea.Web.Cmd as Cmd
@@ -172,7 +172,7 @@ loadHistory : Task Error (List Snapshot)
 loadHistory =
     let
         selectRecent db =
-            Db.unsafeQuery
+            Db.query
                 db
                 "SELECT ok, failed, total, ts FROM snapshots ORDER BY ts DESC LIMIT 5"
                 []
