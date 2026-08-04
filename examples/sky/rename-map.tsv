@@ -39,10 +39,13 @@ Sky.Http.	Ipe.Http.
 Sky.Ffi	Ipe.Ffi
 Sky.Test	Ipe.Test
 
-# ── Std.Live.* -> Ipe.Web.*  (Live.Head, Live.Console — longer prefix before Std.)
+# ── Std.Live.* -> Ipe.Web.*  (Live.Head, Live.Console — the shape's page-head and
+#    console submodules stay under Ipe.Web.*; longer prefix binds before Std.Live).
+# ── Std.Live -> Ipe.Tea.Web  (the web app-shape module: entries app/appRouted/route,
+#    imported `exposing (app, route)` or `as Web`; Cmd/Sub re-home to Ipe.Tea.Web.*).
 # ── Std.Webview -> Ipe.WebView  (CamelCase fix — longer prefix before Std.)
 Std.Live.	Ipe.Web.
-Std.Live	Ipe.Web
+Std.Live	Ipe.Tea.Web
 Std.Webview	Ipe.WebView
 
 # ── Std.Db.execRaw -> Ipe.Db.unsafeExecRaw  (the raw-SQL escape hatch is renamed

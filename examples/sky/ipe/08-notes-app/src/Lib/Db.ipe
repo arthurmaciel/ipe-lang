@@ -47,7 +47,7 @@ exec queryStr args =
 
 -- query : Result Error (List Row). Same contract as exec.
 query queryStr args =
-    Task.run (Db.unsafeQuery conn queryStr args)
+    Task.run (Db.query conn queryStr args)
 
 
 -- Missing columns are a Sky-side schema mismatch, not a runtime error.

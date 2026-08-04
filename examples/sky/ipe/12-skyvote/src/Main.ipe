@@ -7,7 +7,7 @@ import Ipe.String as String
 import Ipe.Html exposing (..)
 import Ipe.Html.Attributes exposing (..)
 import Ipe.Io as Io
-import Ipe.Web exposing (app, route)
+import Ipe.Tea.Web exposing (app, route)
 import Ipe.Html.Events exposing (onClick)
 import Ipe.Tea.Web.Cmd as Cmd
 import Ipe.Tea.Web.Sub as Sub
@@ -306,7 +306,7 @@ handleSetSearch query model =
 handleToggleVoteAuth : String -> Dict String String -> Model -> ( Model, Cmd Msg )
 handleToggleVoteAuth ideaId user model =
     let
-        userId = Db.unsafeGetField "id" user
+        userId = Db.getField "id" user
     in
         case Ideas.toggleVote ideaId userId of
 
@@ -368,7 +368,7 @@ handleViewIdea ideaId model =
 doSubmitComment : Dict String String -> Model -> ( Model, Cmd Msg )
 doSubmitComment user model =
     let
-        userId = Db.unsafeGetField "id" user
+        userId = Db.getField "id" user
     in
         case Comments.createComment model.selectedIdeaId userId model.newComment of
 
@@ -446,7 +446,7 @@ handleBackToBoard model =
 doCreateIdea : Dict String String -> Model -> ( Model, Cmd Msg )
 doCreateIdea user model =
     let
-        userId = Db.unsafeGetField "id" user
+        userId = Db.getField "id" user
     in
         case Ideas.createIdea
                  model.submitTitle

@@ -4,7 +4,7 @@ import Ipe.String as String
 import Ipe.Html exposing (..)
 import Ipe.Html.Attributes exposing (..)
 import Ipe.Css exposing (..)
-import Ipe.Web exposing (app, route)
+import Ipe.Tea.Web exposing (app, route)
 import Ipe.Html.Events exposing (onClick)
 import Ipe.Tea.Web.Cmd as Cmd
 import Ipe.Tea.Web.Sub as Sub
