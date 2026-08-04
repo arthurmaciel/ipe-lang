@@ -146,6 +146,57 @@ pub struct StdlibDecl {
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub struct SchemeKey(pub StdlibKernel);
 
+/// A built-in type constructor named structurally, by tag rather than by an
+/// interned `Symbol`.
+///
+/// A [`TyShape`] cannot reference `ipe_types::Ty`'s interned `Symbol`s — those
+/// exist only after the `Interner` runs, and `ipe_kernels` is a leaf crate that
+/// must not depend on `ipe_types`. So a shape names each built-in constructor by
+/// this `'static` tag, and the single interpreter in `ipe_types` resolves the
+/// tag against its `Builtins` symbol cache.
+///
+/// Only the tags a structural kernel scheme references are listed; a scheme that
+/// needs another built-in adds its tag here and an arm in the `ipe_types`
+/// interpreter that resolves it.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum BuiltinTag {
+    /// `Int` — the signed-integer primitive.
+    Int,
+    /// `Float` — the double-precision primitive.
+    Float,
+    /// `Bool` — the boolean primitive.
+    Bool,
+    /// `String` — the UTF-8 string primitive.
+    String,
+    /// `Char` — the Unicode-scalar primitive.
+    Char,
+    /// `Bytes` — the opaque byte-buffer primitive.
+    Bytes,
+}
+
+/// A `'static`, `const`-embeddable representation of a kernel's HM type scheme.
+///
+/// A [`KernelDef`] carries this beside the row so a kernel's scheme lives with
+/// its other facts rather than in a distant `match` in `ipe_types`. `ipe_types`
+/// owns the single interpreter that turns a `TyShape` back into a concrete `Ty`,
+/// resolving each [`BuiltinTag`] against its interned-symbol cache.
+///
+/// The vocabulary encodes only **monomorphic** schemes — an arrow spine over
+/// built-in constructor applications, with no type variables and no open rows.
+/// The nodes that would touch the solver's union-find — a quantified `Var` and a
+/// row-polymorphic open record — are absent, so the interpreter needs no
+/// fresh-var or open-tail handling. A kernel whose scheme is polymorphic carries
+/// no shape and resolves through the `stdlib_scheme` table instead.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum TyShape {
+    /// A function arrow `arg -> result`. Nested on the right to build a spine.
+    Fun(&'static Self, &'static Self),
+    /// A built-in type-constructor application, named by [`BuiltinTag`] with its
+    /// (possibly empty) type arguments. A nullary constructor (`Int`, `Bool`, …)
+    /// carries an empty argument slice.
+    Con(BuiltinTag, &'static [Self]),
+}
+
 /// The whole kernel "row" as one descriptor.
 ///
 /// It co-locates the facts about a single kernel that were otherwise smeared
@@ -188,6 +239,12 @@ pub struct KernelDef {
     pub runtime_module: Option<RuntimeModule>,
     /// A reference to this kernel's HM type scheme (see [`SchemeKey`]).
     pub scheme: SchemeKey,
+    /// The structural encoding of this kernel's HM type scheme, when one exists.
+    /// `Some` means `ipe_types` interprets this shape (producing a `Ty`
+    /// byte-identical to the `stdlib_scheme` table's); `None` means the kernel
+    /// resolves through the `stdlib_scheme` table via [`Self::scheme`] — the case
+    /// for every polymorphic scheme. See [`StdlibKernel::scheme_shape`].
+    pub shape: Option<&'static TyShape>,
 }
 
 /// Every stdlib kernel function known to the Ipê compiler.
@@ -4708,6 +4765,40 @@ impl StdlibKernel {
             capability: self.capability(),
             runtime_module: self.required_runtime_module(),
             scheme: SchemeKey(self),
+            shape: self.scheme_shape(),
+        }
+    }
+
+    /// The structural [`TyShape`] encoding of this kernel's HM type scheme, when
+    /// it has one.
+    ///
+    /// `Some` when the scheme is expressible structurally — `ipe_types`
+    /// interprets the returned shape into a `Ty` byte-identical to what the
+    /// `stdlib_scheme` table produces. `None` for a scheme that is not, which
+    /// resolves through that table instead. Only **monomorphic** schemes (no type
+    /// variables, no open rows) have a shape, because [`TyShape`]'s vocabulary
+    /// carries no solver-touching nodes.
+    ///
+    /// The `Bitwise` family carries a shape — seven `Int`-only kernels
+    /// (`and`/`or`/`xor`/`shiftLeftBy`/`shiftRightBy`/`shiftRightZfBy` are
+    /// `Int -> Int -> Int`; `complement` is `Int -> Int`), each a fully-concrete
+    /// arrow spine over one primitive.
+    #[must_use]
+    pub const fn scheme_shape(self) -> Option<&'static TyShape> {
+        // `Int -> Int` and `Int -> Int -> Int` spines, shared by the Bitwise
+        // arms. All-`'static`, so they embed directly as the carried shape.
+        const INT: TyShape = TyShape::Con(BuiltinTag::Int, &[]);
+        const INT_TO_INT: TyShape = TyShape::Fun(&INT, &INT);
+        const INT_TO_INT_TO_INT: TyShape = TyShape::Fun(&INT, &INT_TO_INT);
+        match self {
+            Self::BitwiseAnd
+            | Self::BitwiseOr
+            | Self::BitwiseXor
+            | Self::BitwiseShiftLeftBy
+            | Self::BitwiseShiftRightBy
+            | Self::BitwiseShiftRightZfBy => Some(&INT_TO_INT_TO_INT),
+            Self::BitwiseComplement => Some(&INT_TO_INT),
+            _ => None,
         }
     }
 
