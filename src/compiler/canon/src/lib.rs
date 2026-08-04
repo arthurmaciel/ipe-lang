@@ -2896,6 +2896,23 @@ mod tests {
     }
 
     #[test]
+    fn helper_submodule_without_main_importing_tea_shape_is_not_gated_n0033() {
+        // The Program/TEA distinction is only about an ENTRY module (one that
+        // defines `main`). A helper submodule with no `main` that imports
+        // `Ipe.Tea.Web.Cmd` solely to name `Cmd` in an `update` signature and
+        // build `Cmd.none` effects is a library module — neither a Program nor
+        // an app entry — so it must NOT trip the IPE-N0033 gate.
+        let src = "module Update exposing (update)\n\
+                   import Ipe.Tea.Web.Cmd as Cmd\n\n\
+                   update msg model =\n    ( model, Cmd.none )\n";
+        assert!(
+            canon_err(src).is_none(),
+            "a `main`-less helper submodule importing a TEA shape must not trip \
+             the IPE-N0033 gate"
+        );
+    }
+
+    #[test]
     fn stdlib_exposing_println_resolves_unqualified() {
         // `import Ipe.Io exposing (println)` → bare `println` resolves via the
         // exposing path to `VarKernel { module: Io, name: println }`.
@@ -3307,6 +3324,28 @@ mod tests {
                 })
             ),
             "user module without import must still be IPE-N0034, got {err:?}"
+        );
+    }
+
+    #[test]
+    fn local_module_shadowing_stdlib_qualifier_not_gated_n0034() {
+        // A project-local module whose name collides with a gated stdlib
+        // short-name (here `Auth`, colliding with the stdlib `Auth`) shadows the
+        // Tier-C import gate: importing it brings its members into scope under
+        // that qualifier, so `Auth.member` resolves against the LOCAL module and
+        // must NOT raise IPE-N0034 for the un-imported stdlib `Auth`.
+        let err = canon_main_with_dep(
+            "module Auth exposing (verifyBearer)\n\
+             verifyBearer : String -> Bool\n\
+             verifyBearer token =\n    token == \"ok\"\n",
+            "module Main exposing (main)\n\
+             import Auth\n\n\
+             main =\n    Auth.verifyBearer \"ok\"\n",
+        );
+        assert!(
+            err.is_none(),
+            "a local module shadowing a stdlib qualifier must resolve without \
+             IPE-N0034, got {err:?}"
         );
     }
 
