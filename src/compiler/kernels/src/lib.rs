@@ -117,8 +117,11 @@ pub struct StdlibDecl {
     pub arity: u8,
     /// Which subsystem owns emission of this kernel.
     pub class: KernelClass,
-    /// Name of the Rust runtime symbol that implements this kernel (from
-    /// `ipe_backend_rust::naming::kernel_name`).
+    /// Name of the Rust runtime symbol that implements this kernel. The
+    /// emit-time ground truth is `ipe_backend_rust::naming::kernel_name`, which
+    /// lives on the far side of the crate DAG (`ipe_kernels` is a leaf and may
+    /// not depend on the backend), so this field mirrors it rather than reading
+    /// it; for a small set of variants the two currently differ.
     pub emit: &'static str,
 }
 
@@ -143,10 +146,14 @@ pub struct SchemeKey(pub StdlibKernel);
 ///
 /// Binding the fragments to one row makes an incoherent row (a capability with
 /// no scheme, an emit symbol whose runtime module is never appended) a testable
-/// unit rather than a silent hole. The per-variant [`StdlibKernel::decl`],
-/// [`StdlibKernel::capability`], and [`StdlibKernel::required_runtime_module`]
-/// matches remain authoritative; [`StdlibKernel::def`] is a pure projection that
-/// reads them, so it changes no emitted output.
+/// unit rather than a silent hole. [`StdlibKernel::def`] is the authoritative
+/// source: the identity + emit fields come from the single
+/// [`StdlibKernel::identity`] match, while the security and runtime-residency
+/// axes are aggregated from [`StdlibKernel::capability`] and
+/// [`StdlibKernel::required_runtime_module`] — each the grouped
+/// single-source-of-truth for its axis. [`StdlibKernel::decl`] is a projection
+/// of this row, not an independent table, so no fact has two homes and the row
+/// changes no emitted output.
 ///
 /// All non-scheme fields are `'static`/`Copy`; the scheme is carried as a
 /// [`SchemeKey`] reference (see its doc).
@@ -187,7 +194,9 @@ pub struct KernelDef {
 /// the `canon_equals_registry` tripwire test in `ipe_canon`).  Variants
 /// intentionally absent from `ALL` have their qualifier noted in the `decl()`
 /// doc section below.
-#[derive(Clone, Copy, PartialEq, Eq, Debug, serde::Serialize, serde::Deserialize)]
+#[derive(
+    Clone, Copy, PartialEq, Eq, Debug, serde::Serialize, serde::Deserialize, strum::EnumCount,
+)]
 pub enum StdlibKernel {
     // ── Log ─────────────────────────────────────────────────────────────────
     LogInfo,
@@ -1857,13 +1866,18 @@ pub enum StdlibKernel {
 }
 
 impl StdlibKernel {
-    /// Canonical metadata for this kernel variant.
+    /// The co-locatable identity + emit facts of this kernel — its qualifier,
+    /// source name, arity, emit class, and runtime symbol.
     ///
-    /// The returned [`StdlibDecl`] is `'static` and `Copy` — safe to embed in
-    /// `const` contexts.
+    /// This is the ONE authoritative `match self` over the whole registry for
+    /// those five facts. [`Self::def`] aggregates it with the two axis-specific
+    /// sources ([`Self::capability`], [`Self::required_runtime_module`]) into the
+    /// full kernel row; [`Self::decl`] projects the row back down to this subset.
+    /// The subset is expressed as a [`StdlibDecl`] because that struct already
+    /// holds exactly these fields and is `'static`/`Copy` (`const`-embeddable).
     #[must_use]
     #[allow(clippy::too_many_lines)]
-    pub const fn decl(self) -> StdlibDecl {
+    const fn identity(self) -> StdlibDecl {
         // Shorthand constructor to keep each arm concise.
         const fn d(
             qualifier: &'static str,
@@ -4662,26 +4676,48 @@ impl StdlibKernel {
         )
     }
 
-    /// The whole kernel row as one [`KernelDef`] descriptor.
+    /// The whole kernel row as one [`KernelDef`] descriptor — the authoritative
+    /// source for the co-located per-kernel facts.
     ///
-    /// A pure projection: it reads [`Self::decl`], [`Self::capability`], and
-    /// [`Self::required_runtime_module`] and folds them into one struct, plus a
-    /// [`SchemeKey`] pointing back at this variant. Those methods stay the
-    /// authoritative per-variant tables, so `def` changes no emitted output; it
-    /// exists to bind the fragments into one row the coherence and
-    /// emit-symbol-defined invariant tests can gate.
+    /// The identity + emit facts (qualifier / name / arity / class / `runtime_fn`)
+    /// come from the single [`Self::identity`] match; the security and
+    /// runtime-residency axes are aggregated from their own grouped sources
+    /// ([`Self::capability`], [`Self::required_runtime_module`]), each the
+    /// readable single-source-of-truth for its axis; the scheme is carried as a
+    /// [`SchemeKey`] pointing back at this variant. [`Self::decl`] projects this
+    /// row back down to the identity subset, so the row and its projection can
+    /// never disagree — that binding is what the coherence and
+    /// emit-symbol-defined invariant tests gate.
     #[must_use]
     pub const fn def(self) -> KernelDef {
-        let decl = self.decl();
+        let identity = self.identity();
         KernelDef {
-            qualifier: decl.qualifier,
-            name: decl.name,
-            arity: decl.arity,
-            class: decl.class,
-            runtime_fn: decl.emit,
+            qualifier: identity.qualifier,
+            name: identity.name,
+            arity: identity.arity,
+            class: identity.class,
+            runtime_fn: identity.emit,
             capability: self.capability(),
             runtime_module: self.required_runtime_module(),
             scheme: SchemeKey(self),
+        }
+    }
+
+    /// Canonical identity + emit metadata for this kernel variant — a projection
+    /// of [`Self::def`] onto the qualifier / name / arity / class / emit subset.
+    ///
+    /// The returned [`StdlibDecl`] is `'static` and `Copy` — safe to embed in
+    /// `const` contexts. `def()` is authoritative; this reads it, so the two can
+    /// never disagree.
+    #[must_use]
+    pub const fn decl(self) -> StdlibDecl {
+        let def = self.def();
+        StdlibDecl {
+            qualifier: def.qualifier,
+            name: def.name,
+            arity: def.arity,
+            class: def.class,
+            emit: def.runtime_fn,
         }
     }
 
@@ -7644,7 +7680,69 @@ impl StdlibKernel {
 mod tests {
     use std::collections::HashMap;
 
+    use strum::EnumCount as _;
+
     use super::StdlibKernel;
+
+    /// The kernel variants deliberately absent from [`StdlibKernel::ALL`], each
+    /// with the reason it is not a wired row.
+    ///
+    /// `ALL` is the canonical *wired* slice — the variants that carry a kernel
+    /// id and whose scheme arm is consulted. Two `Task` aliases are intentionally
+    /// not wired:
+    ///
+    /// - [`StdlibKernel::TaskRun`] and [`StdlibKernel::TaskPerform`] are the
+    ///   auto-run entry aliases (both emit `task_run`, arity 1, class `Pure`, no
+    ///   capability, no runtime module). They are lowered and emitted through a
+    ///   dedicated whole-function-body path, not through `ALL`-driven kernel-id
+    ///   dispatch, so wiring them into `ALL` would assign them ids and pull them
+    ///   into every `ALL`-iterating consumer for no benefit. They are excluded
+    ///   here explicitly rather than silently missing.
+    ///
+    /// The [`all_covers_every_variant_except_documented_exclusions`] guard fails
+    /// closed if the count of wired + excluded variants ever disagrees with the
+    /// compiler-maintained [`StdlibKernel::COUNT`] — so a newly added variant
+    /// forgotten in both `ALL` and this list cannot slip through.
+    const UNWIRED_VARIANTS: &[StdlibKernel] = &[StdlibKernel::TaskRun, StdlibKernel::TaskPerform];
+
+    /// `ALL` must cover every `StdlibKernel` variant except the documented
+    /// [`UNWIRED_VARIANTS`]. Both Kernel Row invariant suites iterate `ALL`, so
+    /// their whole safety rests on `ALL` being exhaustive; this guard is that
+    /// safety net.
+    ///
+    /// The count comes from `strum::EnumCount`, which the compiler regenerates
+    /// on every enum edit — a variant added but forgotten in `ALL` (and not
+    /// listed as an explicit exclusion) makes `ALL.len() + UNWIRED == COUNT`
+    /// false and fails here, before any downstream `ALL`-driven test can pass on
+    /// an incomplete registry. It also asserts `ALL` has no duplicate entries and
+    /// no exclusion is wrongly also present in `ALL`.
+    #[test]
+    fn all_covers_every_variant_except_documented_exclusions() {
+        for (i, &a) in StdlibKernel::ALL.iter().enumerate() {
+            let rest = StdlibKernel::ALL.get(i + 1..).unwrap_or(&[]);
+            assert!(
+                !rest.contains(&a),
+                "{a:?} appears more than once in StdlibKernel::ALL"
+            );
+        }
+        for &excluded in UNWIRED_VARIANTS {
+            assert!(
+                !StdlibKernel::ALL.contains(&excluded),
+                "{excluded:?} is listed as UNWIRED but is also present in ALL"
+            );
+        }
+        assert_eq!(
+            StdlibKernel::ALL.len() + UNWIRED_VARIANTS.len(),
+            StdlibKernel::COUNT,
+            "ALL ({}) + UNWIRED ({}) != StdlibKernel::COUNT ({}) — a variant was \
+             added to the enum but forgotten in ALL and not listed as an explicit \
+             exclusion; every kernel must be either wired in ALL or documented in \
+             UNWIRED_VARIANTS",
+            StdlibKernel::ALL.len(),
+            UNWIRED_VARIANTS.len(),
+            StdlibKernel::COUNT,
+        );
+    }
 
     /// Every wired kernel is callable through `capability()` (the exhaustive
     /// match is total over the whole registry — no panic, no gap). The compile
