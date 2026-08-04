@@ -4,7 +4,9 @@ module State exposing (..)
 -- per-module HM heap stays well below Limitation #17's heap-exhaustion
 -- limit; the heavy unification load lives in the per-View modules.
 
+import Ipe.Dict as Dict exposing (Dict)
 import Ipe.List as List
+import Ipe.PubSub as PubSub exposing (Topic)
 import Ipe.String as String
 
 type alias Product =
@@ -127,6 +129,15 @@ sortLabel s =
 
         SortPriceDesc ->
             "Price (high to low)"
+
+
+-- A single typed topic handle keyed "cart". Shared between the publisher
+-- (`Cmd.publish`) and the subscriber (`Sub.subscribeTopic`) so the compiler
+-- proves both ends agree on the `Dict String String` payload the broker
+-- carries.
+cartTopic : Topic (Dict String String)
+cartTopic =
+    PubSub.topic "cart"
 
 
 cartCount : List CartItem -> Int
