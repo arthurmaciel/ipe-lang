@@ -895,10 +895,16 @@ fn run_inner(
                         emit(opts, WatchEvent::CompileFailed { generation: g });
                     }
                     CompileOutcome::Green(emitted) => {
-                        // Watch is always a dynamic dev build — no static plan.
-                        if let Err(e) =
-                            write_emitted_project(&emitted, &opts.out_dir, &opts.runtime_dir, None)
-                        {
+                        // Watch is always a dynamic dev build — no static plan,
+                        // no tree-shaking (the full runtime tree keeps rebuilds
+                        // incremental across a session's changing reach set).
+                        if let Err(e) = write_emitted_project(
+                            &emitted,
+                            &opts.out_dir,
+                            &opts.runtime_dir,
+                            None,
+                            false,
+                        ) {
                             eprintln!(
                                 "{}",
                                 crate::style::gutter(&format!(
