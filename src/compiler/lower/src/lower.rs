@@ -36,6 +36,9 @@ type IrParam = (Symbol, IrType);
 /// at the top of the function body (`let <Pat> = <synthetic>`).
 type ParamPrologue = (Symbol, Pat);
 
+/// A top-level binding's fully-qualified key: its `(module, name)`.
+type TopLevelKey = (Vec<Symbol>, Symbol);
+
 /// Build a [`Diagnostic::CompilerBug`] for a violated lowering invariant.
 ///
 /// Reserved **strictly** for genuinely-unreachable states: a symbol foreign to
@@ -7643,6 +7646,19 @@ pub struct Lowerer<'a> {
     /// IPE-L0126 instead of emitting a `.clone()` on a non-`Clone` `Box`
     /// (E0599 — a SEAL break). Cleared per def.
     deferred_fun_captures: std::cell::RefCell<BTreeMap<Symbol, Span>>,
+    /// A `let`-bound local that names a top-level function, mapped to that
+    /// function's `(module, name)` key — a point-free alias `let w = wrap`.
+    ///
+    /// The direct-call generic-slot gate ([`Self::reject_fn_through_generic_slot`])
+    /// recovers a callee's DECLARED template from [`SolvedTypes::env`], which is
+    /// keyed by top-level `(module, name)`. A point-free application `w (\n -> n)`
+    /// reaches lowering with a [`canon::Expr_::VarLocal`] callee whose declared
+    /// scheme is not in `env`, so the same generic `Clone`-bounded slot escapes
+    /// the gate and fails `cargo` with E0277. This alias resolves the local back
+    /// to the top-level key so the point-free application runs the identical
+    /// template match. Scoped save/restore per registering `let`; interior
+    /// mutability so the lowering walk stays over a shared `&self`.
+    toplevel_fn_aliases: std::cell::RefCell<BTreeMap<Symbol, TopLevelKey>>,
 }
 
 /// Normalize the fn-carrier of every function type that sits DIRECTLY under a
@@ -8505,6 +8521,7 @@ impl<'a> Lowerer<'a> {
             fn_is_async: Cell::new(false),
             promotable_fn_binders: std::cell::RefCell::new(BTreeSet::new()),
             deferred_fun_captures: std::cell::RefCell::new(BTreeMap::new()),
+            toplevel_fn_aliases: std::cell::RefCell::new(BTreeMap::new()),
         }
     }
 
@@ -12562,12 +12579,14 @@ impl<'a> Lowerer<'a> {
     /// accepted and emits the already-supported `Box<dyn Fn>` parameter. Only a
     /// bare variable bound to a fn-embedding type is flagged, and every such
     /// instantiation is cargo-broken today, so the gate never rejects a program
-    /// that would build. It covers the DIRECT-call shape (the common case); a
-    /// point-free instantiation that routes through a local function value
-    /// (`let w = f in w x`) reaches lowering as an `Expr::Apply` and is not seen
-    /// here — that residual leak is tracked separately. A missing declared
-    /// template (env absent) fails open — the region gate and the value-side
-    /// carrier normalization still cover the shapes they own.
+    /// that would build. It runs at both the DIRECT-call shape (a `VarTopLevel`
+    /// callee) and the point-free shape (`let w = f in w x`, whose `VarLocal`
+    /// callee is resolved back to `f`'s top-level key via
+    /// [`Self::toplevel_fn_aliases`]) — the two paths share this one gate, so a
+    /// generic slot is rejected identically however the callee is spelled. A
+    /// missing declared template (env absent, or a point-free callee that is not
+    /// a top-level alias) fails open — the region gate and the value-side carrier
+    /// normalization still cover the shapes they own.
     fn reject_fn_through_generic_slot(
         &self,
         module: &[Symbol],
@@ -12594,6 +12613,29 @@ impl<'a> Lowerer<'a> {
             .any(|bound| generic_binding_breaks_clone(self.interner, bound))
         {
             return Err(unsupported(call_span, Feature::FirstClassFunctions));
+        }
+        Ok(())
+    }
+
+    /// The point-free twin of [`Self::reject_fn_through_generic_slot`]. A
+    /// generic top-level function instantiated through a local alias
+    /// (`let w = wrap in w (\n -> n)`) reaches [`Self::lower_call_uniform`]'s
+    /// value arm with a [`canon::Expr_::VarLocal`] callee, so the direct-call
+    /// gate never saw it and the generic `Clone`-bounded slot escapes to E0277
+    /// at `cargo` time. Resolve the local back to its aliased top-level key
+    /// ([`Self::toplevel_fn_aliases`]) and run the identical template match. A
+    /// callee that is not a registered alias is left untouched — the value path
+    /// owns its own carrier decisions.
+    fn reject_point_free_fn_through_generic_slot(
+        &self,
+        callee: &canon::Expr,
+        args: &[canon::Expr],
+        call_span: Span,
+    ) -> DResult<()> {
+        if let canon::Expr_::VarLocal(s) = &callee.value
+            && let Some((module, name)) = self.toplevel_fn_aliases.borrow().get(s).cloned()
+        {
+            self.reject_fn_through_generic_slot(&module, name, args, call_span)?;
         }
         Ok(())
     }
@@ -13992,6 +14034,7 @@ impl<'a> Lowerer<'a> {
                 }
             }
             _ => {
+                self.reject_point_free_fn_through_generic_slot(callee, args, call_span)?;
                 // A first-class function *value* applied via [`Expr::Apply`]
                 // (a local function-typed binding, a lambda, or another
                 // expression's result). The named-callee path above reshapes an
@@ -18814,7 +18857,72 @@ impl<'a> Lowerer<'a> {
                 _ => None,
             })
             .collect();
-        self.with_promotable_fn_binders(names, || self.lower_let_inner(bindings, body))
+        // Register point-free aliases (`let w = wrap`) so the point-free
+        // generic-slot gate can recover a top-level callee's declared template.
+        // Bindings register in SOURCE ORDER, each resolved against the map with
+        // its predecessors already installed — canon `let` is sequential
+        // (`let*`), so a later sibling `v = w` sees the earlier `w = wrap` and
+        // resolves through it. Every `PVar` name is (re)registered — paired with
+        // its resolved key, or `None` when the value is not a top-level fn ref —
+        // so a rebinding `let w = 5` of an outer alias `w` shadows it CLEARED
+        // rather than leaving the stale outer alias visible.
+        self.with_promotable_fn_binders(names, || {
+            self.with_toplevel_fn_aliases(bindings, || self.lower_let_inner(bindings, body))
+        })
+    }
+
+    /// Resolve `value` to the top-level `(module, name)` it names, if it is a
+    /// bare reference to a top-level function — either a direct
+    /// [`canon::Expr_::VarTopLevel`] or a [`canon::Expr_::VarLocal`] that is
+    /// itself a registered alias (`let v = w` where `w = wrap`). Every other
+    /// value shape (a lambda, a partial application, a computed function) has no
+    /// recoverable declared top-level template and yields `None`.
+    fn resolve_toplevel_fn_alias(&self, value: &canon::Expr) -> Option<TopLevelKey> {
+        match &value.value {
+            canon::Expr_::VarTopLevel { module, name } => Some((module.clone(), *name)),
+            canon::Expr_::VarLocal(s) => self.toplevel_fn_aliases.borrow().get(s).cloned(),
+            _ => None,
+        }
+    }
+
+    /// Register every `PVar` binding of `bindings` as a point-free alias over
+    /// the closure `f`, restoring the previous map after — the point-free twin of
+    /// [`Self::with_promotable_fn_binders`]. Bindings install in source order,
+    /// each value resolved against the map with its predecessors already present
+    /// (canon `let` is sequential, so `let v = w` must see the earlier
+    /// `w = wrap`). A binding whose value is not a top-level fn ref registers as
+    /// a REMOVAL of any outer alias of that name, so a rebinding `let w = 5`
+    /// shadowing an outer `let w = wrap` clears the alias rather than leaving the
+    /// stale key visible.
+    fn with_toplevel_fn_aliases<T>(
+        &self,
+        bindings: &[canon::LetBinding],
+        f: impl FnOnce() -> T,
+    ) -> T {
+        let has_pvar = bindings
+            .iter()
+            .any(|b| matches!(b.pat.value, canon::Pattern_::PVar(_)));
+        if !has_pvar {
+            return f();
+        }
+        let saved = self.toplevel_fn_aliases.borrow().clone();
+        for b in bindings {
+            if let canon::Pattern_::PVar(name) = &b.pat.value {
+                let key = self.resolve_toplevel_fn_alias(&b.body);
+                let mut map = self.toplevel_fn_aliases.borrow_mut();
+                match key {
+                    Some(k) => {
+                        map.insert(*name, k);
+                    }
+                    None => {
+                        map.remove(name);
+                    }
+                }
+            }
+        }
+        let out = f();
+        *self.toplevel_fn_aliases.borrow_mut() = saved;
+        out
     }
 
     fn lower_let_inner(&self, bindings: &[canon::LetBinding], body: &canon::Expr) -> DResult<Expr> {
