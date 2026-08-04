@@ -1,0 +1,26 @@
+module Main exposing (main)
+
+import Ipe.Io as Io
+import Ipe.String
+
+
+-- A function value reaching a record field THROUGH a type variable, via a
+-- REIFIED generic function rather than a direct call. `wrap : a -> { value : a }`
+-- is aliased (`mk = wrap`), which reifies `wrap` into a `Box::new(main_wrap)`
+-- first-class value; applying it stores the function in `wrap`'s type-var field
+-- `value : a`, so the emitted generic `main_wrap<T1: Clone>` is instantiated at
+-- `T1 = Box<dyn Fn>` (not `Clone`) and the read side expects the `Arc` carrier —
+-- `ipe` must reject this cleanly (IPE-L0107), never emit Rust that fails `cargo`
+-- with E0271/E0277. The direct-call and point-free-call generic-slot gates do
+-- not see it: the value is reified, never applied at the gate's call site.
+wrap : a -> { value : a }
+wrap x =
+    { value = x }
+
+
+main =
+    let
+        mk = wrap
+        r = mk (\n -> n + 1)
+    in
+    Io.println (String.fromInt (r.value 41))
