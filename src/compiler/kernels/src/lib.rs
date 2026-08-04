@@ -5318,6 +5318,109 @@ impl StdlibKernel {
         const TUPLE_FLOAT_INT: TyShape = TyShape::Tuple(&[FLOAT, INT]);
         const RANDOM_SEEDED_FLOAT: TyShape = TyShape::Fun(&INT, &TUPLE_FLOAT_INT);
 
+        // ── List higher-arity mappers (arrow-only, rank-1 polymorphic). ──
+        // indexedMap : (Int -> a -> b) -> List a -> List b
+        const INT_TO_A_TO_B: TyShape = TyShape::Fun(&INT, &A_TO_B);
+        const LIST_INDEXED_MAP: TyShape = TyShape::Fun(&INT_TO_A_TO_B, &LIST_A_TO_LIST_B);
+        // map2 : (a -> b -> c) -> List a -> List b -> List c   (vars 0=a,1=b,2=c)
+        const LIST_C: TyShape = TyShape::Con(BuiltinTag::List, &[C]);
+        const LIST_MAP2: TyShape = TyShape::Fun(
+            &A_TO_B_TO_C,
+            &TyShape::Fun(&LIST_A, &TyShape::Fun(&LIST_B, &LIST_C)),
+        );
+        // map3 : (a -> b -> c -> d) -> List a -> List b -> List c -> List d
+        const LIST_D: TyShape = TyShape::Con(BuiltinTag::List, &[D]);
+        const LIST_MAP3: TyShape = TyShape::Fun(
+            &A_TO_B_TO_C_TO_D,
+            &TyShape::Fun(
+                &LIST_A,
+                &TyShape::Fun(&LIST_B, &TyShape::Fun(&LIST_C, &LIST_D)),
+            ),
+        );
+        // map4 : (a -> b -> c -> d -> e) -> List a..d -> List e
+        const LIST_E: TyShape = TyShape::Con(BuiltinTag::List, &[E]);
+        const LIST_MAP4: TyShape = TyShape::Fun(
+            &A_TO_B_TO_C_TO_D_TO_E,
+            &TyShape::Fun(
+                &LIST_A,
+                &TyShape::Fun(
+                    &LIST_B,
+                    &TyShape::Fun(&LIST_C, &TyShape::Fun(&LIST_D, &LIST_E)),
+                ),
+            ),
+        );
+        // map5 : (a -> b -> c -> d -> e -> f) -> List a..e -> List f
+        const LIST_F: TyShape = TyShape::Con(BuiltinTag::List, &[F]);
+        const LIST_MAP5: TyShape = TyShape::Fun(
+            &A_TO_B_TO_C_TO_D_TO_E_TO_F,
+            &TyShape::Fun(
+                &LIST_A,
+                &TyShape::Fun(
+                    &LIST_B,
+                    &TyShape::Fun(
+                        &LIST_C,
+                        &TyShape::Fun(&LIST_D, &TyShape::Fun(&LIST_E, &LIST_F)),
+                    ),
+                ),
+            ),
+        );
+
+        // ── String combinators (arrow spines over the primitives and `Char`). ──
+        const LIST_CHAR: TyShape = TyShape::Con(BuiltinTag::List, &[CHAR]);
+        const STRING_LIST: TyShape = TyShape::Con(BuiltinTag::List, &[STRING]);
+        const MAYBE_INT: TyShape = TyShape::Con(BuiltinTag::Maybe, &[INT]);
+        const MAYBE_FLOAT: TyShape = TyShape::Con(BuiltinTag::Maybe, &[FLOAT]);
+        // toInt : String -> Maybe Int; toFloat : String -> Maybe Float
+        const STRING_TO_MAYBE_INT: TyShape = TyShape::Fun(&STRING, &MAYBE_INT);
+        const STRING_TO_MAYBE_FLOAT: TyShape = TyShape::Fun(&STRING, &MAYBE_FLOAT);
+        // fromList : List Char -> String
+        const STRING_FROM_LIST: TyShape = TyShape::Fun(&LIST_CHAR, &STRING);
+        // concat : List String -> String
+        const STRING_CONCAT: TyShape = TyShape::Fun(&STRING_LIST, &STRING);
+        // words / lines : String -> List String
+        const STRING_TO_LIST_STRING: TyShape = TyShape::Fun(&STRING, &STRING_LIST);
+        // toList : String -> List Char
+        const STRING_TO_LIST_CHAR: TyShape = TyShape::Fun(&STRING, &LIST_CHAR);
+        // join : String -> List String -> String  (`STRING_CONCAT` is the shared
+        // `List String -> String` tail).
+        const STRING_JOIN: TyShape = TyShape::Fun(&STRING, &STRING_CONCAT);
+        // split : String -> String -> List String
+        const STRING_SPLIT: TyShape = TyShape::Fun(&STRING, &STRING_TO_LIST_STRING);
+        // uncons : String -> Maybe (Char, String)
+        const TUPLE_CHAR_STRING: TyShape = TyShape::Tuple(&[CHAR, STRING]);
+        const MAYBE_TUPLE_CHAR_STRING: TyShape =
+            TyShape::Con(BuiltinTag::Maybe, &[TUPLE_CHAR_STRING]);
+        const STRING_UNCONS: TyShape = TyShape::Fun(&STRING, &MAYBE_TUPLE_CHAR_STRING);
+        // indexes : String -> String -> List Int
+        const STRING_TO_LIST_INT: TyShape = TyShape::Fun(&STRING, &LIST_INT);
+        const STRING_INDEXES: TyShape = TyShape::Fun(&STRING, &STRING_TO_LIST_INT);
+        // foldl / foldr : (Char -> b -> b) -> b -> String -> b   (b = var(0))
+        const CHAR_TO_A_TO_A: TyShape = TyShape::Fun(&CHAR, &A_TO_A);
+        const STRING_TO_A: TyShape = TyShape::Fun(&STRING, &A);
+        const A_TO_STRING_TO_A: TyShape = TyShape::Fun(&A, &STRING_TO_A);
+        const STRING_FOLD: TyShape = TyShape::Fun(&CHAR_TO_A_TO_A, &A_TO_STRING_TO_A);
+
+        // ── `String -> Maybe String` parsers (CSS-safety guards, Uuid.parse). ──
+        const STRING_TO_MAYBE_STRING: TyShape = TyShape::Fun(&STRING, &MAYBE_STRING);
+
+        // ── Miscellaneous arrow-only polymorphic / primitive schemes. ──
+        // Debug.log : String -> a -> a   (base scheme; STRINGIFY obligation layered)
+        const STRING_TO_A_TO_A: TyShape = TyShape::Fun(&STRING, &A_TO_A);
+        // System.exit : Int -> a
+        const INT_TO_A: TyShape = TyShape::Fun(&INT, &A);
+        // Http.parseQuery : String -> Dict String String
+        const DICT_STRING_STRING: TyShape = TyShape::Con(BuiltinTag::Dict, &[STRING, STRING]);
+        const STRING_TO_DICT_STRING_STRING: TyShape = TyShape::Fun(&STRING, &DICT_STRING_STRING);
+        // Db.getString / getField : String -> Dict String String -> String
+        const DICT_TO_STRING: TyShape = TyShape::Fun(&DICT_STRING_STRING, &STRING);
+        const DB_GET_STRING: TyShape = TyShape::Fun(&STRING, &DICT_TO_STRING);
+        // Db.getInt : String -> Dict String String -> Int
+        const DICT_TO_INT: TyShape = TyShape::Fun(&DICT_STRING_STRING, &INT);
+        const DB_GET_INT: TyShape = TyShape::Fun(&STRING, &DICT_TO_INT);
+        // Db.getBool : String -> Dict String String -> Bool
+        const DICT_TO_BOOL: TyShape = TyShape::Fun(&DICT_STRING_STRING, &BOOL);
+        const DB_GET_BOOL: TyShape = TyShape::Fun(&STRING, &DICT_TO_BOOL);
+
         match self {
             // ── Bitwise — Int -> Int -> Int / Int -> Int. ──
             Self::BitwiseAnd
@@ -5584,6 +5687,47 @@ impl StdlibKernel {
             // ── Bytes decode / codec. ──
             Self::BytesToString => Some(&BYTES_TO_MAYBE_STRING),
             Self::BytesFromHex | Self::BytesFromBase64 => Some(&STRING_TO_MAYBE_BYTES),
+
+            // ── List higher-arity mappers (rank-1 polymorphic, arrow-only). ──
+            Self::ListIndexedMap => Some(&LIST_INDEXED_MAP),
+            Self::ListMap2 => Some(&LIST_MAP2),
+            Self::ListMap3 => Some(&LIST_MAP3),
+            Self::ListMap4 => Some(&LIST_MAP4),
+            Self::ListMap5 => Some(&LIST_MAP5),
+
+            // ── String combinators over the primitives / `Char`. The
+            //    obligation-free members carry their shape directly; `foldl`/`foldr`
+            //    are fully generic (the callback supplies the fold), so no
+            //    obligation is layered. ──
+            Self::StringToInt => Some(&STRING_TO_MAYBE_INT),
+            Self::StringToFloat => Some(&STRING_TO_MAYBE_FLOAT),
+            Self::StringFromList => Some(&STRING_FROM_LIST),
+            Self::StringConcat => Some(&STRING_CONCAT),
+            Self::StringWords | Self::StringLines => Some(&STRING_TO_LIST_STRING),
+            Self::StringToList => Some(&STRING_TO_LIST_CHAR),
+            Self::StringJoin => Some(&STRING_JOIN),
+            Self::StringSplit => Some(&STRING_SPLIT),
+            Self::StringUncons => Some(&STRING_UNCONS),
+            Self::StringIndexes => Some(&STRING_INDEXES),
+            Self::StringFoldl | Self::StringFoldr => Some(&STRING_FOLD),
+
+            // ── `String -> Maybe String` parsers. ──
+            Self::CssSafetySafeValue
+            | Self::CssSafetySafePropName
+            | Self::CssSafetySafeSelector
+            | Self::UuidParse => Some(&STRING_TO_MAYBE_STRING),
+
+            // ── Miscellaneous arrow-only schemes. `Debug.log` / `Error.toString`
+            //    carry their base scheme; the STRINGIFY obligation is layered in
+            //    `constrain_var_kernel`, so the shape is exercised only by the
+            //    totality / oracle tripwires, never in production. ──
+            Self::DebugLog => Some(&STRING_TO_A_TO_A),
+            Self::ErrorToString => Some(&A_TO_STRING),
+            Self::SystemExit => Some(&INT_TO_A),
+            Self::HttpParseQuery => Some(&STRING_TO_DICT_STRING_STRING),
+            Self::DbGetString | Self::DbGetField => Some(&DB_GET_STRING),
+            Self::DbGetInt => Some(&DB_GET_INT),
+            Self::DbGetBool => Some(&DB_GET_BOOL),
 
             _ => None,
         }
