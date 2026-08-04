@@ -1677,6 +1677,30 @@ pub fn compile_prepared(
         })?;
     }
 
+    // Decoder-pipeline footgun gate (IPE-N0040): reject the reverse-associated
+    // hand-nested form of the `Db.Decode` / `Json.Decode.Pipeline`
+    // `required` / `optional` / `requiredAt` / `custom` combinators, which
+    // silently reverses field↔constructor binding whenever adjacent fields share
+    // a runtime type (no type error surfaces). Target-independent, and runs on
+    // the LINKED module before type-checking so the fix (thread with `|>`)
+    // reaches the author before any downstream error. Blame via the same
+    // span→file heuristic the type errors use.
+    {
+        let gate_result = {
+            let interner = shared_interner.lock();
+            ipe_canon::decoder_pipeline_gate::check_decoder_pipelines(linked, &interner)
+        };
+        gate_result.map_err(|diag| {
+            let span = diag_span(&diag);
+            let (file, src) = source_for_span(span);
+            CliError::Pipeline {
+                file,
+                src,
+                diag: Box::new(diag),
+            }
+        })?;
+    }
+
     // Use the attributed variant so cross-module type errors are attributed to
     // the correct source file via the `home` carried on the failing constraint,
     // rather than relying solely on the byte-offset heuristic (`source_for_span`)

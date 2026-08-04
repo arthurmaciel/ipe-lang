@@ -19,12 +19,12 @@ use crate::code::{
     IPE_N0003, IPE_N0004, IPE_N0005, IPE_N0010, IPE_N0011, IPE_N0012, IPE_N0013, IPE_N0020,
     IPE_N0021, IPE_N0022, IPE_N0023, IPE_N0024, IPE_N0025, IPE_N0026, IPE_N0027, IPE_N0028,
     IPE_N0029, IPE_N0030, IPE_N0031, IPE_N0032, IPE_N0033, IPE_N0034, IPE_N0035, IPE_N0036,
-    IPE_N0037, IPE_N0038, IPE_N0039, IPE_P0001, IPE_P0002, IPE_P0003, IPE_P0010, IPE_P0011,
-    IPE_P0012, IPE_P0013, IPE_P0014, IPE_P0015, IPE_P0016, IPE_P0017, IPE_P0018, IPE_P0020,
-    IPE_P0021, IPE_P0030, IPE_P0031, IPE_P0040, IPE_P0041, IPE_P0050, IPE_P0060, IPE_P0061,
-    IPE_P0062, IPE_P0063, IPE_T0001, IPE_T0002, IPE_T0003, IPE_T0004, IPE_T0010, IPE_T0011,
-    IPE_T0012, IPE_T0013, IPE_T0014, IPE_T0015, IPE_T0016, IPE_T0017, IPE_T0018, IPE_T0019,
-    Severity,
+    IPE_N0037, IPE_N0038, IPE_N0039, IPE_N0040, IPE_P0001, IPE_P0002, IPE_P0003, IPE_P0010,
+    IPE_P0011, IPE_P0012, IPE_P0013, IPE_P0014, IPE_P0015, IPE_P0016, IPE_P0017, IPE_P0018,
+    IPE_P0020, IPE_P0021, IPE_P0030, IPE_P0031, IPE_P0040, IPE_P0041, IPE_P0050, IPE_P0060,
+    IPE_P0061, IPE_P0062, IPE_P0063, IPE_T0001, IPE_T0002, IPE_T0003, IPE_T0004, IPE_T0010,
+    IPE_T0011, IPE_T0012, IPE_T0013, IPE_T0014, IPE_T0015, IPE_T0016, IPE_T0017, IPE_T0018,
+    IPE_T0019, Severity,
 };
 use crate::span::Span;
 
@@ -563,6 +563,18 @@ pub enum NameError {
         seal_type: Box<str>,
         reason: SealRejection,
     },
+    /// A decoder-pipeline combinator (`Db.Decode` / `Json.Decode.Pipeline`
+    /// `required` / `optional` / `requiredAt` / `custom`) is written in the
+    /// reverse-associated hand-nested application form
+    /// (`required a da (required b db (succeed ctor))`), where the innermost
+    /// combinator binds to the constructor's FIRST parameter — so first-in-source
+    /// binds to the LAST parameter, silently reversing fields whenever adjacent
+    /// fields share a runtime type (no type error surfaces). The `|>` pipe form
+    /// threads the accumulator the other way and is the correct spelling; this
+    /// rejects the directly hand-nested application, where one combinator is
+    /// applied straight to another as its last argument.
+    /// `qualifier.name` is the offending combinator. [IPE-N0040]
+    ReverseNestedDecoderPipeline { qualifier: Box<str>, name: Box<str> },
 }
 
 /// Why a `CustomElement` boundary type parameter fails the SEAL.
@@ -1290,6 +1302,7 @@ const fn name_code(msg: &NameError) -> Code {
         NameError::UnsupportedBoundaryType { .. } => IPE_N0037,
         NameError::AssertedCallMalformed { .. } => IPE_N0038,
         NameError::BoundarySealIllegal { .. } => IPE_N0039,
+        NameError::ReverseNestedDecoderPipeline { .. } => IPE_N0040,
     }
 }
 
@@ -1457,7 +1470,8 @@ fn name_help(msg: &NameError, span: Span) -> Vec<HelpLine> {
         | NameError::RemovedSurface { .. }
         | NameError::UnsupportedBoundaryType { .. }
         | NameError::AssertedCallMalformed { .. }
-        | NameError::BoundarySealIllegal { .. } => Vec::new(), // no span-based help
+        | NameError::BoundarySealIllegal { .. }
+        | NameError::ReverseNestedDecoderPipeline { .. } => Vec::new(), // no span-based help
     }
 }
 
