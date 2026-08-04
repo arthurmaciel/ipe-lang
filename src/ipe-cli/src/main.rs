@@ -17,6 +17,7 @@ fn main() -> ExitCode {
             | ipe::CliError::CommandUsage { .. }
             | ipe::CliError::DocCoverage(_)
             | ipe::CliError::VerifyFailed { .. }
+            | ipe::CliError::TestFailed { .. }
             | ipe::CliError::UpgradeNoPrebuilt { .. }
             | ipe::CliError::ToolchainMissing(_)
             | ipe::CliError::EmittedBuildFailed { .. }

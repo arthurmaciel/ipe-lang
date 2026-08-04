@@ -260,6 +260,17 @@ pub enum CliError {
         /// The stage's rendered failure report, printed as-is.
         report: String,
     },
+    /// The project's test runner exited non-zero — one or more `Ipe.Test` cases
+    /// failed. The test binary has already printed the per-case failures and the
+    /// `N passed, M failed` summary to stdout, so this carries only the exit
+    /// code and renders a short trailing line; it is a legitimate gate result
+    /// (`ipe test` / `verify`'s test stage ran correctly), never a command-line
+    /// misuse, so it exits non-zero with no `--help` page.
+    TestFailed {
+        /// The test binary's exit code (1 from `Ipe.Test.runMain` on a failing
+        /// case, or another non-zero code from a crash).
+        code: i32,
+    },
     /// `ipe upgrade` could not find a prebuilt binary for the requested version
     /// and platform. This is a transient operational failure — the release was
     /// tagged but the CI build artifacts are still being generated — NOT a
@@ -314,6 +325,18 @@ impl From<build_plan::Refusal> for CliError {
     fn from(refusal: build_plan::Refusal) -> Self {
         Self::StaticRefusal(refusal)
     }
+}
+
+/// The one-line stderr verdict for a failed test run, guttered and glyphed so
+/// the caller prints it as-is. The per-case failures and the `N passed, M
+/// failed` summary already went to stdout from the test binary; this pairs the
+/// non-zero exit with a short, human-readable reason.
+fn test_failed_message(code: i32) -> String {
+    format!(
+        "{}{} one or more tests failed (runner exited {code})",
+        style::GUTTER,
+        style::glyph::FAIL,
+    )
 }
 
 impl std::fmt::Display for CliError {
@@ -399,6 +422,11 @@ impl std::fmt::Display for CliError {
                 writeln!(f, "verify: the {stage} stage failed")?;
                 f.write_str(report.trim_end_matches('\n'))
             }
+            // The test binary already printed its own per-case failures and the
+            // `N passed, M failed` summary to stdout; this is only the one-line
+            // verdict that pairs with the non-zero exit, self-guttered so the
+            // caller prints it as-is.
+            Self::TestFailed { code } => f.write_str(&test_failed_message(*code)),
             Self::UpgradeNoPrebuilt { version, platform } => {
                 use crate::style::{GUTTER, glyph};
                 write!(
@@ -2333,6 +2361,7 @@ pub fn run_cli(args: &[String]) -> Result<(), CliError> {
         Some((cmd, rest)) if cmd == "type-check" => {
             with_help_on_misuse("type-check", run_type_check(rest))
         }
+        Some((cmd, rest)) if cmd == "test" => with_help_on_misuse("test", run_test(rest)),
         Some((cmd, rest)) if cmd == "verify" => with_help_on_misuse("verify", run_verify(rest)),
         Some((cmd, rest)) if cmd == "run" => with_help_on_misuse("run", run_run(rest)),
         Some((cmd, rest)) if cmd == "exec" => with_help_on_misuse("exec", run_exec(rest)),
@@ -3884,7 +3913,28 @@ fn verify_build(path: Option<&str>) -> Result<(), CliError> {
     run_build(&path.map(str::to_owned).into_iter().collect::<Vec<_>>())
 }
 
-/// Stage 4: the test run — build and execute `tests/Main.ipe` if one exists.
+/// The outcome of running a project's `tests/Main.ipe` entry.
+///
+/// A parsed result rather than a bare `Result<(), _>`: "the project defines no
+/// test entry" is a distinct, legitimate state from "the tests ran and all
+/// passed", and the two render differently (`no tests to run` vs `all passed`).
+/// A failing test run is NOT this type — it is a hard [`CliError::TestFailed`],
+/// because the test binary has already printed its own summary and the CLI's
+/// only job is to fail non-zero. This makes the exit-code contract structural:
+/// a `TestOutcome` value can never represent a failure, so no caller can
+/// accidentally return success over failing tests.
+#[derive(Debug, PartialEq, Eq)]
+enum TestOutcome {
+    /// The project has no `tests/Main.ipe` — there is nothing to run, which is
+    /// not an error.
+    NoTestEntry,
+    /// The test entry was built, run, and every case passed (the binary exited
+    /// zero).
+    AllPassed,
+}
+
+/// Build and run a project's `tests/Main.ipe`, the single test runner shared by
+/// `ipe test` and `ipe verify`'s final stage.
 ///
 /// The test entry is the file at `<project-root>/tests/Main.ipe`. The project
 /// root is the directory holding `ipe.toml`; with no manifest it is the parent
@@ -3892,12 +3942,18 @@ fn verify_build(path: Option<&str>) -> Result<(), CliError> {
 /// own directory for a flat single-directory project. The test entry is built
 /// against the project's `src/` tree AND its `tests/` siblings, so a test that
 /// imports the code under test resolves. When the test entry is absent the
-/// stage passes immediately — a project with no test entry is not an error.
-/// When it exists, the test runner is compiled to a temporary output directory,
-/// the emitted Rust project is built with `cargo build`, and the resulting
-/// `ipe-app` binary is executed. A non-zero exit from the binary (propagated by
-/// `Ipe.Test.runMain`) is reported as a stage failure.
-fn verify_test(path: Option<&str>) -> Result<(), CliError> {
+/// runner returns [`TestOutcome::NoTestEntry`] — a project with no test entry is
+/// not an error. When it exists, the test runner is compiled to a temporary
+/// output directory, the emitted Rust project is built with `cargo build`, and
+/// the resulting `ipe-app` binary is executed. The binary itself prints the
+/// per-test failures and the `N passed, M failed` summary (from
+/// `Ipe.Test.runMain`) to stdout; this function only classifies its exit code.
+///
+/// # Errors
+/// [`CliError::TestFailed`] when the test binary exits non-zero (one or more
+/// cases failed) — the binary's own output is the report. Otherwise any build
+/// or toolchain error encountered while compiling the runner.
+fn run_project_tests(path: Option<&str>) -> Result<TestOutcome, CliError> {
     // Resolve the project root from the supplied path (or cwd defaults).
     let entry_path = match path {
         Some(p) => PathBuf::from(p),
@@ -3934,8 +3990,8 @@ fn verify_test(path: Option<&str>) -> Result<(), CliError> {
 
     let test_entry = project_root.join("tests").join("Main.ipe");
     if !test_entry.is_file() {
-        // No test entry — the stage is vacuously green.
-        return Ok(());
+        // No test entry — there is nothing to run.
+        return Ok(TestOutcome::NoTestEntry);
     }
 
     // Fail closed before emitting: the test stage shells out to cargo to build
@@ -3991,12 +4047,65 @@ fn verify_test(path: Option<&str>) -> Result<(), CliError> {
     let _ = std::fs::remove_dir_all(&out_dir);
 
     if run_status.success() {
-        Ok(())
+        Ok(TestOutcome::AllPassed)
     } else {
+        // A zero exit is the ONLY success signal. Any other exit — a failing
+        // case (1 from `Ipe.Test.runMain`) or a crash/signal (no code) — is a
+        // failure; classify the absent code as a failure, never a pass.
         let code = run_status.code().unwrap_or(1);
-        Err(CliError::UsageOwned(format!(
-            "test runner exited with code {code}: one or more Ipe.Test cases failed"
-        )))
+        Err(CliError::TestFailed { code })
+    }
+}
+
+/// Stage 4 of `ipe verify`: run the project's tests via the shared
+/// [`run_project_tests`] runner, discarding the pass/no-entry distinction the
+/// stage does not need (both are a passing stage).
+///
+/// # Errors
+/// [`CliError::TestFailed`] when a test case fails; otherwise any build or
+/// toolchain error from compiling the runner.
+fn verify_test(path: Option<&str>) -> Result<(), CliError> {
+    run_project_tests(path).map(|_| ())
+}
+
+/// `ipe test [<path>]` — build and run the project's tests, with human-friendly
+/// output and a machine-readable exit code.
+///
+/// Compiles `tests/Main.ipe` against the project's `src/` tree and runs it. The
+/// test binary prints the per-case failures and the `N passed, M failed`
+/// summary itself (from `Ipe.Test.runMain`); this command wraps that in a
+/// single progress stage — a light-yellow running line that settles to a green
+/// check (`all tests passed` / `no tests to run`) or, on a failing case, a red
+/// cross and a non-zero exit. A project with no `tests/Main.ipe` is not an
+/// error: the command reports there is nothing to run and exits zero.
+///
+/// # Errors
+/// [`CliError::UsageOwned`] on an unexpected option or extra argument.
+/// [`CliError::TestFailed`] when a test case fails (the non-zero exit contract).
+/// Otherwise any build or toolchain error from compiling the runner.
+fn run_test(rest: &[String]) -> Result<(), CliError> {
+    let path = cli_args::single_positional(rest, "test")?;
+
+    // Wrap the runner in a progress stage so `ipe test` follows the same
+    // running → ✓/✗ shape every other multi-step command uses. The stage writes
+    // to stdout; the test binary the runner spawns inherits stdout too, so its
+    // own summary appears between the running line and the settled outcome.
+    let stage = progress::Stage::start(std::io::stdout(), "Running tests");
+    match run_project_tests(path) {
+        Ok(TestOutcome::AllPassed) => {
+            stage.success("all tests passed");
+            Ok(())
+        }
+        Ok(TestOutcome::NoTestEntry) => {
+            stage.success("no tests to run (no tests/Main.ipe)");
+            Ok(())
+        }
+        Err(err) => {
+            // A failing case (or any build error) settles the stage red before
+            // the error propagates to the exit-code contract.
+            stage.failure("tests failed");
+            Err(err)
+        }
     }
 }
 
