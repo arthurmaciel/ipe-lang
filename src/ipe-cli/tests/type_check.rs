@@ -1,4 +1,4 @@
-//! `ipe check` — type-check a program with no build, no run, no emit.
+//! `ipe type-check` — type-check a program with no build, no run, no emit.
 //!
 //! Exit 0 with a friendly framed success line when the program type-checks;
 //! non-zero with the rendered diagnostic on any parse/canon/type error. A
@@ -14,10 +14,10 @@ mod support;
 
 type TestResult = Result<(), Box<dyn Error>>;
 
-/// Absolute path to a fixture under this crate's `tests/fixtures/check`.
+/// Absolute path to a fixture under this crate's `tests/fixtures/type_check`.
 fn fixture(name: &str) -> PathBuf {
     support::manifest_dir()
-        .join("tests/fixtures/check")
+        .join("tests/fixtures/type_check")
         .join(name)
 }
 
@@ -33,7 +33,7 @@ fn run_ipe(args: &[&str]) -> Result<(bool, String, String), Box<dyn Error>> {
 
 #[test]
 fn well_typed_program_exits_zero_with_ok() -> TestResult {
-    let (ok, stdout, _) = run_ipe(&["check", &fixture("well_typed.ipe").to_string_lossy()])?;
+    let (ok, stdout, _) = run_ipe(&["type-check", &fixture("well_typed.ipe").to_string_lossy()])?;
     assert!(ok, "a well-typed program must exit 0");
     assert!(
         stdout.contains("type-checks"),
@@ -49,7 +49,7 @@ fn well_typed_program_exits_zero_with_ok() -> TestResult {
 
 #[test]
 fn type_error_program_exits_nonzero_with_the_diagnostic() -> TestResult {
-    let (ok, _, stderr) = run_ipe(&["check", &fixture("type_error.ipe").to_string_lossy()])?;
+    let (ok, _, stderr) = run_ipe(&["type-check", &fixture("type_error.ipe").to_string_lossy()])?;
     assert!(!ok, "a type-error program must exit non-zero");
     assert!(
         stderr.contains("IPE-T0001") && stderr.contains("type mismatch"),
@@ -64,8 +64,10 @@ fn type_error_program_exits_nonzero_with_the_diagnostic() -> TestResult {
 /// resolution here (IPE-N0004) because the module's source is never injected.
 #[test]
 fn program_using_ipe_test_resolves_and_type_checks() -> TestResult {
-    let (ok, stdout, stderr) =
-        run_ipe(&["check", &fixture("uses_ipe_test.ipe").to_string_lossy()])?;
+    let (ok, stdout, stderr) = run_ipe(&[
+        "type-check",
+        &fixture("uses_ipe_test.ipe").to_string_lossy(),
+    ])?;
     assert!(
         ok,
         "an Ipe.Test-using program must type-check, got stderr:\n{stderr}"
@@ -87,7 +89,7 @@ fn check_writes_no_emitted_project() -> TestResult {
     let src = dir.join("Main.ipe");
     std::fs::copy(fixture("well_typed.ipe"), &src)?;
 
-    let (ok, _, _) = run_ipe(&["check", &src.to_string_lossy()])?;
+    let (ok, _, _) = run_ipe(&["type-check", &src.to_string_lossy()])?;
     let out_present = dir.join("out").exists();
     let siblings: Vec<_> = std::fs::read_dir(&dir)?
         .flatten()
@@ -131,7 +133,7 @@ fn build_stderr(entry: &Path) -> Option<String> {
     Some(String::from_utf8_lossy(&out.stderr).into_owned())
 }
 
-/// `ipe check` must frame an unresolved-import diagnostic against the DEPENDENCY
+/// `ipe type-check` must frame an unresolved-import diagnostic against the DEPENDENCY
 /// module that owns it, with the caret under the real import token — identical
 /// to `ipe build`. The fixture's error lives in `src/Lib/Helper.ipe`, one line
 /// below a comment; a report framed against the entry file (the caret bug) would
@@ -139,7 +141,7 @@ fn build_stderr(entry: &Path) -> Option<String> {
 #[test]
 fn check_caret_matches_build_for_unresolved_import_in_dependency() -> TestResult {
     let entry = fixture("multi_unresolved_import/src/Main.ipe");
-    let (ok, _, check_err) = run_ipe(&["check", &entry.to_string_lossy()])?;
+    let (ok, _, check_err) = run_ipe(&["type-check", &entry.to_string_lossy()])?;
     assert!(!ok, "an unresolved import must exit non-zero");
     assert!(
         check_err.contains("IPE-N0020") && check_err.contains("Lib/Helper.ipe"),
@@ -168,14 +170,14 @@ fn check_caret_matches_build_for_unresolved_import_in_dependency() -> TestResult
     Ok(())
 }
 
-/// `ipe check` must frame a stdlib-qualifier-without-import diagnostic against
+/// `ipe type-check` must frame a stdlib-qualifier-without-import diagnostic against
 /// the dependency module that owns it, caret under the qualifier — identical to
 /// `ipe build`. The fixture uses `Math.abs` in `src/Lib/Calc.ipe` without
 /// importing `Ipe.Math`.
 #[test]
 fn check_caret_matches_build_for_missing_qualifier_in_dependency() -> TestResult {
     let entry = fixture("multi_missing_qualifier/src/Main.ipe");
-    let (ok, _, check_err) = run_ipe(&["check", &entry.to_string_lossy()])?;
+    let (ok, _, check_err) = run_ipe(&["type-check", &entry.to_string_lossy()])?;
     assert!(!ok, "an unimported stdlib qualifier must exit non-zero");
     assert!(
         check_err.contains("IPE-N0034") && check_err.contains("Lib/Calc.ipe"),
@@ -206,13 +208,13 @@ fn check_caret_matches_build_for_missing_qualifier_in_dependency() -> TestResult
 
 /// FAIL-CLOSED at the compile boundary: a `case` over a closed union with a
 /// top-level catch-all (`_ ->`) that absorbs a named constructor must make
-/// `ipe check` exit NON-ZERO with the rendered IPE-T0018 error. A mere printed
+/// `ipe type-check` exit NON-ZERO with the rendered IPE-T0018 error. A mere printed
 /// warning that still exits 0 would be fail-open — the exact silent-accept this
 /// diagnostic exists to prevent.
 #[test]
 fn closed_union_catch_all_fails_check_nonzero() -> TestResult {
     let (ok, _, stderr) = run_ipe(&[
-        "check",
+        "type-check",
         &fixture("closed_union_catch_all.ipe").to_string_lossy(),
     ])?;
     assert!(
@@ -276,10 +278,10 @@ fn closed_union_catch_all_build_emits_no_crate() -> TestResult {
 
 #[test]
 fn check_help_page_names_the_command() -> TestResult {
-    let (ok, stdout, _) = run_ipe(&["check", "--help"])?;
+    let (ok, stdout, _) = run_ipe(&["type-check", "--help"])?;
     assert!(ok, "--help exits 0");
     assert!(
-        stdout.contains("check") && stdout.contains("Type-check"),
+        stdout.contains("type-check") && stdout.contains("Type-check"),
         "help page names the command, got:\n{stdout}"
     );
     Ok(())
@@ -287,7 +289,7 @@ fn check_help_page_names_the_command() -> TestResult {
 
 #[test]
 fn check_rejects_an_unexpected_option() -> TestResult {
-    let (ok, _, stderr) = run_ipe(&["check", "--json"])?;
+    let (ok, _, stderr) = run_ipe(&["type-check", "--json"])?;
     assert!(!ok, "an unknown flag is misuse");
     assert!(
         stderr.contains("unexpected option"),

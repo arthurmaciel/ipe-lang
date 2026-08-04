@@ -20,6 +20,7 @@ pub mod audit;
 pub mod audit_native;
 pub mod build_plan;
 mod cache;
+pub mod clean;
 pub mod cli_args;
 pub mod diff;
 pub mod doc;
@@ -1460,7 +1461,7 @@ fn source_for_span_in_linked(
 /// an empty home (homeless backend/emit error, or a non-solver error) falls
 /// back to the byte-offset heuristic over the linked program. This is the
 /// single attribution rule every post-link pipeline error shares, so `ipe build`
-/// and `ipe check` frame the identical diagnostic against the identical source.
+/// and `ipe type-check` frame the identical diagnostic against the identical source.
 fn attribute_post_link_error(
     linked: &ipe_canon::ast::Module,
     home_to_source: &BTreeMap<Vec<ipe_intern::Symbol>, (PathBuf, String)>,
@@ -2327,12 +2328,11 @@ pub fn run_cli(args: &[String]) -> Result<(), CliError> {
     }
     match args.split_first() {
         Some((cmd, rest)) if cmd == "init" => with_help_on_misuse("init", init::run_init(rest)),
-        Some((cmd, rest)) if cmd == "upgrade-agents" => {
-            with_help_on_misuse("upgrade-agents", init::run_upgrade_agents(rest))
-        }
         Some((cmd, rest)) if cmd == "build" => with_help_on_misuse("build", run_build(rest)),
         Some((cmd, rest)) if cmd == "eject" => with_help_on_misuse("eject", run_eject(rest)),
-        Some((cmd, rest)) if cmd == "check" => with_help_on_misuse("check", run_check(rest)),
+        Some((cmd, rest)) if cmd == "type-check" => {
+            with_help_on_misuse("type-check", run_type_check(rest))
+        }
         Some((cmd, rest)) if cmd == "verify" => with_help_on_misuse("verify", run_verify(rest)),
         Some((cmd, rest)) if cmd == "run" => with_help_on_misuse("run", run_run(rest)),
         Some((cmd, rest)) if cmd == "exec" => with_help_on_misuse("exec", run_exec(rest)),
@@ -2352,6 +2352,7 @@ pub fn run_cli(args: &[String]) -> Result<(), CliError> {
         Some((cmd, rest)) if cmd == "login" => with_help_on_misuse("login", login::run_login(rest)),
         Some((cmd, rest)) if cmd == "fix" => with_help_on_misuse("fix", run_fix(rest)),
         Some((cmd, rest)) if cmd == "fmt" => with_help_on_misuse("fmt", fmt::run_fmt(rest)),
+        Some((cmd, rest)) if cmd == "clean" => with_help_on_misuse("clean", clean::run_clean(rest)),
         Some((cmd, rest)) if cmd == "lsp" => with_help_on_misuse("lsp", lsp::run_lsp(rest)),
         Some((cmd, rest)) if cmd == "upgrade" => with_help_on_misuse("upgrade", run_upgrade(rest)),
         Some((cmd, rest)) if cmd == "health" => {
@@ -3604,7 +3605,7 @@ impl SourceGraph {
     /// Run the per-module canonicalisation blame loop, then map a rejecting
     /// query's `(diag, home)` to the source file that OWNS it — the SAME
     /// attribution the build path uses (`attribute_canon_errors` +
-    /// `attribute_post_link_error`), so `ipe check` and every other analysis
+    /// `attribute_post_link_error`), so `ipe type-check` and every other analysis
     /// surface frame a given diagnostic against the identical source as
     /// `ipe build`.
     ///
@@ -3687,7 +3688,7 @@ fn build_source_graph(entry: &Path) -> Result<SourceGraph, CliError> {
         project::inject_compiled_std_closure(&mut collected.sources, &mut collected.discovered);
     // The SAME FFI seam the build runs: without it, a project with installed
     // crates (or asserted `Rust.Ffi.call` definitions) has no `Rust.*`
-    // interface modules here, so `ipe check` / `ipe capabilities` /
+    // interface modules here, so `ipe type-check` / `ipe capabilities` /
     // `--emit-ir` would refuse a program the build accepts.
     let ffi_injected = ffi::prepare_ffi(&mut collected.sources, entry)?.injected;
 
@@ -3713,7 +3714,7 @@ fn build_source_graph(entry: &Path) -> Result<SourceGraph, CliError> {
 /// Type-check a single `.ipe` entry through the SAME injection-aware
 /// source-graph pipeline the build path uses, stopping at type-checking: it
 /// demands the `typecheck` query (parse → canon → link → HM infer) and never
-/// lowers to IR or emits Rust. This is what `ipe check` runs.
+/// lowers to IR or emits Rust. This is what `ipe type-check` runs.
 ///
 /// # Errors
 /// [`CliError::Pipeline`] carrying the first compiler diagnostic;
@@ -3820,13 +3821,13 @@ fn resolve_analysis_entry(path: &Path) -> Result<PathBuf, CliError> {
     }
 }
 
-/// `ipe check [<path>]` — type-check a program and stop. Runs the same
+/// `ipe type-check [<path>]` — type-check a program and stop. Runs the same
 /// injection-aware source graph `ipe build` uses, but demands only the
 /// `typecheck` query: no IR lowering, no Rust emission, nothing written. Exits
 /// 0 with a friendly framed success line when the program type-checks, or
 /// non-zero carrying the first rendered diagnostic when it does not.
-fn run_check(rest: &[String]) -> Result<(), CliError> {
-    let arg = match cli_args::single_positional(rest, "check")? {
+fn run_type_check(rest: &[String]) -> Result<(), CliError> {
+    let arg = match cli_args::single_positional(rest, "type-check")? {
         Some(e) => PathBuf::from(e),
         None => PathBuf::from(default_entry()?),
     };
@@ -3873,9 +3874,9 @@ fn verify_fmt(path: Option<&str>) -> Result<(), CliError> {
     fmt::run_fmt(&rest)
 }
 
-/// Stage 2: the type-check — the same source-graph pipeline as `ipe check`.
+/// Stage 2: the type-check — the same source-graph pipeline as `ipe type-check`.
 fn verify_check(path: Option<&str>) -> Result<(), CliError> {
-    run_check(&path.map(str::to_owned).into_iter().collect::<Vec<_>>())
+    run_type_check(&path.map(str::to_owned).into_iter().collect::<Vec<_>>())
 }
 
 /// Stage 3: the build — the same compilation as `ipe build`.
@@ -4080,7 +4081,7 @@ fn run_capabilities(rest: &[String]) -> Result<(), CliError> {
         None => PathBuf::from(default_entry()?),
     };
     // Route a directory / `ipe.toml` / project-root `.` to its entry `.ipe` file,
-    // the same argument convention `ipe check` uses. Without this a bare
+    // the same argument convention `ipe type-check` uses. Without this a bare
     // `ipe capabilities` in a project dir passes `.` straight to the reader and
     // fails with a raw "Is a directory" io error.
     let entry = resolve_analysis_entry(&arg)?;
@@ -4639,13 +4640,25 @@ fn apply_fixes_cmd<W: Write>(entry: &Path, auto: bool, w: &mut W) -> Result<(), 
 /// Read a line from stdin and interpret it as a yes/no answer. EOF or any read
 /// error is treated as "no" (the safe default for a mutating action).
 pub(crate) fn read_yes_no() -> bool {
+    read_yes_no_default(false)
+}
+
+/// Read a line from stdin and interpret it as a yes/no answer, taking `default`
+/// when the answer is empty (a bare Enter). An explicit `y`/`yes` or `n`/`no`
+/// overrides the default; EOF or any read error takes the default, so the caller
+/// controls the fail-safe direction (default `false` for a mutating action).
+pub(crate) fn read_yes_no_default(default: bool) -> bool {
     let mut line = String::new();
     match std::io::stdin().read_line(&mut line) {
         Ok(_) => {
             let a = line.trim();
-            a.eq_ignore_ascii_case("y") || a.eq_ignore_ascii_case("yes")
+            if a.is_empty() {
+                default
+            } else {
+                a.eq_ignore_ascii_case("y") || a.eq_ignore_ascii_case("yes")
+            }
         }
-        Err(_) => false,
+        Err(_) => default,
     }
 }
 
