@@ -202,8 +202,9 @@ pub enum BuiltinTag {
 /// owns the single interpreter that turns a `TyShape` back into a concrete `Ty`,
 /// resolving each [`BuiltinTag`] against its interned-symbol cache.
 ///
-/// The vocabulary encodes an arrow spine over built-in constructor applications,
-/// with **rank-1 scheme-local type variables** ([`Self::Var`]) but no open rows.
+/// The vocabulary encodes an arrow spine over built-in constructor applications
+/// and anonymous tuples, with **rank-1 scheme-local type variables**
+/// ([`Self::Var`]) but no open rows.
 /// A scheme var is a `'static` positional index, NOT a solver union-find var:
 /// the `ipe_types` interpreter maps each index to the same placeholder
 /// `Ty::Var` the `stdlib_scheme` table builds, and generalization /
@@ -222,6 +223,11 @@ pub enum TyShape {
     /// carries an empty argument slice; a parametric one (`List`, `Maybe`)
     /// carries its argument shapes.
     Con(BuiltinTag, &'static [Self]),
+    /// An anonymous tuple over an ordered element list, `(e0, e1, …)`. Element
+    /// order is significant and preserved: the interpreter materialises the
+    /// same-ordered `Ty::Tuple` a hand-built scheme's `Ty::Tuple(vec![…])`
+    /// produces. A two-element slice encodes the common pair `(a, b)`.
+    Tuple(&'static [Self]),
     /// A rank-1 scheme-local type variable, named by a positional index
     /// (`0` → the scheme's first variable `a`, `1` → `b`, …). Repeating the
     /// same index within one scheme denotes the SAME variable — the interpreter
@@ -5270,6 +5276,48 @@ impl StdlibKernel {
         const MAYBE_BYTES: TyShape = TyShape::Con(BuiltinTag::Maybe, &[BYTES]);
         const STRING_TO_MAYBE_BYTES: TyShape = TyShape::Fun(&STRING, &MAYBE_BYTES);
 
+        // ── Tuple-shaped schemes (pairs / paired projections). ──
+        // fst / snd : (a, b) -> a  /  (a, b) -> b
+        const TUPLE_A_B: TyShape = TyShape::Tuple(&[A, B]);
+        const BASICS_FST: TyShape = TyShape::Fun(&TUPLE_A_B, &A);
+        const BASICS_SND: TyShape = TyShape::Fun(&TUPLE_A_B, &B);
+
+        // List.zip : List a -> List b -> List (a, b)
+        const LIST_TUPLE_A_B: TyShape = TyShape::Con(BuiltinTag::List, &[TUPLE_A_B]);
+        const LIST_B_TO_LIST_TUPLE: TyShape = TyShape::Fun(&LIST_B, &LIST_TUPLE_A_B);
+        const LIST_ZIP: TyShape = TyShape::Fun(&LIST_A, &LIST_B_TO_LIST_TUPLE);
+        // List.unzip : List (a, b) -> (List a, List b)
+        const TUPLE_LIST_A_LIST_B: TyShape = TyShape::Tuple(&[LIST_A, LIST_B]);
+        const LIST_UNZIP: TyShape = TyShape::Fun(&LIST_TUPLE_A_B, &TUPLE_LIST_A_LIST_B);
+        // List.partition : (a -> Bool) -> List a -> (List a, List a)
+        const TUPLE_LIST_A_LIST_A: TyShape = TyShape::Tuple(&[LIST_A, LIST_A]);
+        const LIST_A_TO_TUPLE_LISTS: TyShape = TyShape::Fun(&LIST_A, &TUPLE_LIST_A_LIST_A);
+        const LIST_PARTITION: TyShape = TyShape::Fun(&A_TO_BOOL, &LIST_A_TO_TUPLE_LISTS);
+
+        // Set.partition : (a -> Bool) -> Set a -> (Set a, Set a)
+        const TUPLE_SET_A_SET_A: TyShape = TyShape::Tuple(&[SET_A, SET_A]);
+        const SET_A_TO_TUPLE_SETS: TyShape = TyShape::Fun(&SET_A, &TUPLE_SET_A_SET_A);
+        const SET_PARTITION: TyShape = TyShape::Fun(&A_TO_BOOL, &SET_A_TO_TUPLE_SETS);
+
+        // Dict.toList : Dict a b -> List (a, b)
+        const LIST_TUPLE_DICT: TyShape = TyShape::Con(BuiltinTag::List, &[TUPLE_A_B]);
+        const DICT_TO_LIST: TyShape = TyShape::Fun(&DICT_A_B, &LIST_TUPLE_DICT);
+        // Dict.fromList : List (a, b) -> Dict a b
+        const DICT_FROM_LIST: TyShape = TyShape::Fun(&LIST_TUPLE_DICT, &DICT_A_B);
+        // Dict.partition : (a -> b -> Bool) -> Dict a b -> (Dict a b, Dict a b)
+        const TUPLE_DICT_DICT: TyShape = TyShape::Tuple(&[DICT_A_B, DICT_A_B]);
+        const DICT_A_B_TO_TUPLE_DICTS: TyShape = TyShape::Fun(&DICT_A_B, &TUPLE_DICT_DICT);
+        const DICT_PARTITION: TyShape = TyShape::Fun(&A_TO_B_TO_BOOL, &DICT_A_B_TO_TUPLE_DICTS);
+
+        // Random.seededInt : Int -> Int -> Int -> (Int, Int)
+        const TUPLE_INT_INT: TyShape = TyShape::Tuple(&[INT, INT]);
+        const INT_TO_TUPLE_INT_INT: TyShape = TyShape::Fun(&INT, &TUPLE_INT_INT);
+        const INT_TO_INT_TO_TUPLE: TyShape = TyShape::Fun(&INT, &INT_TO_TUPLE_INT_INT);
+        const RANDOM_SEEDED_INT: TyShape = TyShape::Fun(&INT, &INT_TO_INT_TO_TUPLE);
+        // Random.seededFloat : Int -> (Float, Int)
+        const TUPLE_FLOAT_INT: TyShape = TyShape::Tuple(&[FLOAT, INT]);
+        const RANDOM_SEEDED_FLOAT: TyShape = TyShape::Fun(&INT, &TUPLE_FLOAT_INT);
+
         match self {
             // ── Bitwise — Int -> Int -> Int / Int -> Int. ──
             Self::BitwiseAnd
@@ -5417,13 +5465,17 @@ impl StdlibKernel {
             | Self::UiLightMode
             | Self::UiReducedMotion => Some(&STRING),
 
-            // ── Core `List` combinators (rank-1 polymorphic). The tuple-shaped
-            //    members (`zip`/`unzip`/`partition`/`map2`..`map5`/`indexedMap`)
-            //    carry no shape; the obligation-bearing base schemes
+            // ── Core `List` combinators (rank-1 polymorphic). The pair-shaped
+            //    members (`zip`/`unzip`/`partition`) carry a tuple shape; the
+            //    arrow-only `map2`..`map5`/`indexedMap` still carry no shape.
+            //    The obligation-bearing base schemes
             //    (`sort*`/`sum`/`product`/`maximum`/`minimum`) DO carry a shape —
             //    the obligation is layered separately in `constrain_var_kernel`,
             //    so the shape is exercised only by the totality / oracle
             //    tripwires, never in production. ──
+            Self::ListZip => Some(&LIST_ZIP),
+            Self::ListUnzip => Some(&LIST_UNZIP),
+            Self::ListPartition => Some(&LIST_PARTITION),
             Self::ListMap => Some(&LIST_MAP),
             Self::ListFilter => Some(&LIST_FILTER),
             Self::ListAny | Self::ListAll => Some(&LIST_ANY),
@@ -5454,6 +5506,8 @@ impl StdlibKernel {
             //    their base scheme, the obligation layered in
             //    `constrain_var_kernel`). ──
             Self::BasicsIdentity | Self::BasicsNegate | Self::BasicsAbs => Some(&A_TO_A),
+            Self::BasicsFst => Some(&BASICS_FST),
+            Self::BasicsSnd => Some(&BASICS_SND),
             Self::BasicsAlways => Some(&BASICS_ALWAYS),
             Self::BasicsModBy => Some(&INT_TO_INT_TO_INT_LEAF),
             Self::BasicsClamp => Some(&BASICS_CLAMP),
@@ -5501,6 +5555,7 @@ impl StdlibKernel {
             Self::SetFoldl | Self::SetFoldr => Some(&SET_FOLD),
             Self::SetMap => Some(&SET_MAP),
             Self::SetFilter => Some(&SET_FILTER),
+            Self::SetPartition => Some(&SET_PARTITION),
 
             // ── Dict combinators (base schemes; `dict_key` obligation layered). ──
             Self::DictEmpty => Some(&DICT_EMPTY),
@@ -5512,12 +5567,19 @@ impl StdlibKernel {
             Self::DictMember => Some(&DICT_MEMBER),
             Self::DictKeys => Some(&DICT_KEYS),
             Self::DictValues => Some(&DICT_VALUES),
+            Self::DictToList => Some(&DICT_TO_LIST),
+            Self::DictFromList => Some(&DICT_FROM_LIST),
+            Self::DictPartition => Some(&DICT_PARTITION),
             Self::DictMap => Some(&DICT_MAP),
             Self::DictFoldl | Self::DictFoldr => Some(&DICT_FOLD),
             Self::DictUnion | Self::DictIntersect | Self::DictDiff => Some(&DICT_UNION),
             Self::DictSingleton => Some(&DICT_SINGLETON),
             Self::DictFilter => Some(&DICT_FILTER),
             Self::DictUpdate => Some(&DICT_UPDATE),
+
+            // ── Random seeded generators (pure, reproducible; monomorphic). ──
+            Self::RandomSeededInt => Some(&RANDOM_SEEDED_INT),
+            Self::RandomSeededFloat => Some(&RANDOM_SEEDED_FLOAT),
 
             // ── Bytes decode / codec. ──
             Self::BytesToString => Some(&BYTES_TO_MAYBE_STRING),

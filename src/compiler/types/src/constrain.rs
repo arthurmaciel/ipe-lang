@@ -3886,6 +3886,11 @@ impl<'a> Builder<'a> {
                 name: self.builtin_symbol(*tag),
                 args: args.iter().map(|a| self.interpret_shape(a)).collect(),
             },
+            // Element order is preserved, matching the hand-built
+            // `Ty::Tuple(vec![…])` a `stdlib_scheme` arm produces.
+            TyShape::Tuple(elems) => {
+                Ty::Tuple(elems.iter().map(|e| self.interpret_shape(e)).collect())
+            }
             // The `stdlib_scheme` table binds `let var = Ty::Var`, so its
             // `var(i)` is `Ty::Var(i)`: a scheme-local variable's raw is its bare
             // positional index. Match that exactly for byte-identity.
@@ -9539,18 +9544,20 @@ mod registry_phase_c_tests {
     /// The reference each shape is checked against depends on the kernel's class,
     /// and both references are INDEPENDENT of the shape and its interpreter:
     ///
-    /// - A **monomorphic** shape-migrated family has NO `stdlib_scheme` arm (its
-    ///   scheme lives once, on the descriptor), so there is no table `Ty` to
-    ///   compare against. Its reference is [`expected_primitive_scheme`] below: a
-    ///   per-kernel hand-built `Ty` authored from the published signature over the
-    ///   primitive constructors.
-    /// - A **polymorphic** family (`List` / `Maybe` / `Result` / `Set` / `Dict`
-    ///   combinators, the `Basics` arrow-only arms, the `Bytes` decoders) KEEPS
-    ///   its `stdlib_scheme` arm (that retained hand-built arm — over
-    ///   `let var = Ty::Var` and the `list`/`maybe`/`result`/`set`/`dict`/`order`
-    ///   closures — is the byte-identity witness). Its reference is that arm,
-    ///   `stdlib_scheme(k)`, which `expected_primitive_scheme` (primitives only)
-    ///   cannot express.
+    /// - A **primitive monomorphic** shape-migrated family has NO `stdlib_scheme`
+    ///   arm (its scheme lives once, on the descriptor), so there is no table `Ty`
+    ///   to compare against. Its reference is [`expected_primitive_scheme`] below:
+    ///   a per-kernel hand-built `Ty` authored from the published signature over
+    ///   the primitive constructors.
+    /// - A family whose scheme `expected_primitive_scheme` cannot express — the
+    ///   `List` / `Maybe` / `Result` / `Set` / `Dict` combinators, the `Basics`
+    ///   arrow-only arms, the `Bytes` decoders, and the tuple-shaped slice
+    ///   (`zip`/`unzip`/`partition`, `fst`/`snd`, `toList`/`fromList`, the
+    ///   `Random` seeded generators) — KEEPS its `stdlib_scheme` arm (that
+    ///   retained hand-built arm — over `let var = Ty::Var`, the
+    ///   `list`/`maybe`/`result`/`set`/`dict`/`order` closures, and the `tuple2`
+    ///   builder — is the byte-identity witness). Its reference is that arm,
+    ///   `stdlib_scheme(k)`, which `expected_primitive_scheme` cannot express.
     ///
     /// Selecting the reference by "does the kernel still have a table arm" keeps
     /// each shaped kernel checked against a genuine second source, so a wrong
@@ -9588,15 +9595,18 @@ mod registry_phase_c_tests {
             );
         }
         // Guard against a silently-empty sweep: the migrated set is the 136
-        // monomorphic primitive kernels, the 23 core `List` combinators, and the
+        // monomorphic primitive kernels, the 23 core `List` combinators, the
         // arrow-only polymorphic slice (further `List` folds/sorts/reductions,
         // the `Basics` arrow arms, the `Maybe` / `Result` / `Set` / `Dict`
-        // combinators, and the `Bytes` decoders).
+        // combinators, and the `Bytes` decoders), and the tuple-shaped slice
+        // (`List.zip`/`unzip`/`partition`, `Basics.fst`/`snd`,
+        // `Set.partition`, `Dict.toList`/`fromList`/`partition`,
+        // `Random.seededInt`/`seededFloat`).
         assert!(
-            migrated >= 240,
+            migrated >= 251,
             "expected at least the 136 monomorphic + 23 core List + 81 \
-             arrow-only polymorphic kernels (240) to carry a TyShape, \
-             found only {migrated}",
+             arrow-only + 11 tuple-shaped polymorphic kernels (251) to carry \
+             a TyShape, found only {migrated}",
         );
     }
 
