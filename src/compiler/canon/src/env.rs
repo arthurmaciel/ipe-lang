@@ -1846,6 +1846,11 @@ impl Env {
             ("Html", "htmlEscapeText", "escapeHtml"),
             ("Html", "htmlEscapeAttr", "escapeAttr"),
             ("Html", "htmlAttrToString", "attrToString"),
+            // `Random.range lo hi` is the pipeline-readable spelling of
+            // `Random.int lo hi` — same type (`Int -> Int -> Task Error Int`)
+            // and same inclusive-both-ends semantics — so it resolves to the
+            // `RandomInt` kernel exactly like `int`.
+            ("Random", "range", "int"),
         ];
 
         // ── Cross-qualifier member re-exports ────────────────────────────────
