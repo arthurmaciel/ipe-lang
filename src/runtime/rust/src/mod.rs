@@ -379,6 +379,17 @@ pub use tea::*;
 // meaningful on wasm32; the feature keeps native builds' dep graph untouched.
 #[cfg(all(target_arch = "wasm32", feature = "wasm-client"))]
 pub mod wasm;
+// `Cmd.publish` / `Cmd.publishNoEcho` / `PubSub.publish` / `PubSub.publishNoEcho`
+// / `Sub.subscribeTopic` resolve to `ipe_runtime::web::pubsub::*` natively; the
+// wasm target has no `web` module (Layer 3 — no tokio/axum to link), so its
+// in-tab broker (`wasm::pubsub`) exports the SAME bare kernel names. Selective
+// re-export (not `pub use wasm::pubsub::*;`) so the broker's internal `Broker` /
+// `Listener` types stay unexported, matching the native `live/pubsub.rs`
+// re-export.
+#[cfg(all(target_arch = "wasm32", feature = "wasm-client"))]
+pub use wasm::pubsub::{
+    cmd_publish, cmd_publish_no_echo, pubsub_publish, pubsub_publish_no_echo, sub_subscribe_topic,
+};
 
 // wasm32: `Ipe.WebSocket` client routes to `web_sys::WebSocket` (see
 // `ws_client.rs`'s `cfg(target_arch = "wasm32")` split) instead of
