@@ -6429,6 +6429,44 @@ fn emit_json_decoder_call(
                 let closure = emit_lambda_unboxed(ctx, params, ret, body, indent, child, generics)?;
                 return Ok(Some(format!("decode_succeed(curry{n}({closure}))")));
             }
+            // Case 2b: an `Arc`-carried function payload (the lowerer eta-expands
+            // a non-literal function-value leaf here — a let-bound name, a field
+            // read, a call result — into a `SharedLambda` so the boxed `Box<dyn
+            // Fn>` leaf is moved into an `Arc` once, never clone-forwarded).
+            // `Arc<dyn Fn>` is `Clone` but is not itself `Fn`, so it is wrapped
+            // in a fresh `move |p0, …| (arc)(p0, …)` closure — `Fn + Clone +
+            // Send`, satisfying `curry{n}`'s bound — before currying.
+            //
+            // `emit_shared_lambda` pins the `Arc` payload to `+ Send + Sync`, so
+            // the wrapper closure that move-captures it is `Send`, and the
+            // `Arc::new` construction inside it is valid (a `Send`-only leaf
+            // would fail the `Arc: Send` obligation `curry{n}` forwards).
+            // Every function leaf renders with `+ Send + Sync` (`emit_types`
+            // `IrType::Fun`), so this holds by construction.
+            Expr::SharedLambda { params, ret, body } if !params.is_empty() => {
+                let n = params.len();
+                if n > 10 {
+                    return Err(Diagnostic::Lower {
+                        span: Span::DUMMY,
+                        msg: LowerError::DecodeSucceedArityTooHigh { n },
+                    });
+                }
+                let arc = emit_shared_lambda(ctx, params, ret, body, indent, child, generics)?;
+                let mut param_decls = Vec::with_capacity(params.len());
+                let mut param_names = Vec::with_capacity(params.len());
+                for (idx, (_, ty)) in params.iter().enumerate() {
+                    let name = format!("__ipe_succeed_p{idx}");
+                    param_decls.push(format!("{name}: {}", render_type(ctx, ty, generics)?));
+                    param_names.push(name);
+                }
+                let ret_s = render_type(ctx, ret, generics)?;
+                let wrapper = format!(
+                    "{{ let __ipe_succeed = {arc}; move |{}| -> {ret_s} {{ (__ipe_succeed)({}) }} }}",
+                    param_decls.join(", "),
+                    param_names.join(", ")
+                );
+                return Ok(Some(format!("decode_succeed(curry{n}({wrapper}))")));
+            }
             // Case 3: any other value — factory-wrap so it is called per run.
             // Turbofish `<IpeError, _>` pins the error type when there is no
             // surrounding pipeline to drive inference (E0283 otherwise).
