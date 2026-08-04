@@ -120,6 +120,23 @@ reasons to covered one seam at a time, never by widening the classifier
 ahead of the glue. No new trust surface: every emitted line remains a total
 function of decode-validated data.
 
+The flip is load-bearing for THE SEAL through one invariant that is not
+optional: **transparency of a define type is a fixpoint over its referenced
+define types.** A define type may surface transparent only when *every*
+define type it names at a to-be-flipped seam (a closure parameter/return, a
+member's payload) is itself transparent and survived decode; a referenced
+type that stays opaque or over-drops must fan back out to un-flip its
+referencing parent (or drop it with the member). A parent record emitted over
+a field whose define type is opaque or dropped is exactly an
+ipe-exit-0-then-cargo-fail — a missing type or an `E0308`. The classifier
+must therefore compute the flip as a least-fixpoint, not a per-type local
+decision, and the coverage ledger records the un-flip reason for a parent held
+back by a non-transparent member. Each seam lands as its own slice: the flip
+for a seam is the removal of *that seam's* carrier contribution from the
+referenced-nominal set, in the same change that emits and seals that seam's
+conversion glue — the other, un-covered seam's references stay fail-closed
+opaque with their reason recorded.
+
 ### 2.4 Asserted-call residuals
 
 Four independent residuals, each preserving the shipped invariants (parsed
@@ -265,10 +282,17 @@ dependency plus risk-burn-down.
    storefront E2E is green shim-free with used-set DCE.
 3. **define-seams.** Failing seals: a transparent define type in a closure
    signature, and as another define's member, each asserting the
-   record/union surface and round-trip conversion behaviour. Minimal change:
-   glue emission at the two seams, classifier flip per seam. Gate: existing
-   `define_*_seal.rs` suite untouched-green (the fail-closed classifier must
-   not widen ahead of the glue), guardian review.
+   record/union surface and round-trip conversion behaviour, each landing as
+   its own per-seam slice. A third seal proves the fixpoint (§2.3): a define
+   type holding a member whose define type stays opaque or over-drops itself
+   un-flips to opaque (or falls with the member), never a record over a
+   non-transparent field. Minimal change: glue emission at the two seams,
+   classifier flip computed as a least-fixpoint over referenced define types,
+   the flip per seam being the removal of that seam's carrier contribution
+   from the referenced-nominal set. Gate: existing `define_*_seal.rs` suite
+   untouched-green (the fail-closed classifier must not widen ahead of the
+   glue), each new seam's `IPE_E2E` cargo build green, the fixpoint seal
+   green, guardian diff review.
 4. **asserted-attribution.** Failing test: a deliberately wrong assertion
    against an over-dropped symbol produces a diagnostic carrying the
    assertion's source span, not raw cargo text. Minimal change:
