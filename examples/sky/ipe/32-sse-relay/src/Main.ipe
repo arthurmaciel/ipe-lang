@@ -3,7 +3,7 @@ module Main exposing (main)
 import Ipe.Task as Task
 import Ipe.String as String
 import Ipe.Time as Time
-import Ipe.Http exposing (HttpRequest)
+import Ipe.Http as Http exposing (HttpRequest)
 import Ipe.Http.Stream as HttpStream
 import Ipe.Http.Server as Server
 import Ipe.Http.Server exposing (Request, Response)
@@ -110,7 +110,7 @@ handleRelay _ =
 
 upstreamRequest : HttpRequest
 upstreamRequest =
-    { method = "GET"
+    { method = Http.Get
     , url = "http://127.0.0.1:8001/upstream"
     , body = ""
     , headers = []
