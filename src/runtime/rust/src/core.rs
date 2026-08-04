@@ -1035,6 +1035,7 @@ pub fn recursion_guard() -> RecursionGuard {
     };
     if trip {
         RECURSION_DEPTH.with(|c| c.set(c.get().saturating_sub(1)));
+        // IPE-RUST-AUDIT:ACCEPTED (Arthur Maciel) — the sole recursion-limit trip: a deliberate panic converting an uncatchable stack-overflow abort into a classifiable, containable unwind at the RecursionLimit boundary [ledger #boundary]
         panic!("maximum recursion depth exceeded");
     }
     RecursionGuard { _private: () }
