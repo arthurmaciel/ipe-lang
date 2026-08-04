@@ -146,6 +146,7 @@ impl IpeStringify for IpeMoneyMoney {
     }
 }
 pub(crate) fn user_ipe_money_currency_code(c: IpeMoneyCurrency) -> String {
+    let _ipe_recursion_guard = crate::recursion_guard();
     match c {
         IpeMoneyCurrency::USD => "USD".to_string(),
         IpeMoneyCurrency::EUR => "EUR".to_string(),
@@ -209,6 +210,7 @@ pub(crate) fn user_ipe_money_currency_code(c: IpeMoneyCurrency) -> String {
     }
 }
 pub(crate) fn user_ipe_money_parse_currency(code: String) -> IpeMaybe<IpeMoneyCurrency> {
+    let _ipe_recursion_guard = crate::recursion_guard();
     match (string_to_upper(string_trim(code))).as_str() {
         "USD" => IpeMaybe::Just(IpeMoneyCurrency::USD),
         "EUR" => IpeMaybe::Just(IpeMoneyCurrency::EUR),

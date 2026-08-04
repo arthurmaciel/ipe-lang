@@ -34,6 +34,11 @@ pub use ipe_runtime::error::IpeError;
 pub fn str_err(s: &str) -> IpeError {
     IpeError::unexpected(s.to_string())
 }
+// Recursion guard shim — every user function body opens with
+// `let _ipe_recursion_guard = crate::recursion_guard();`, which resolves here.
+pub fn recursion_guard() -> ipe_runtime::core::RecursionGuard {
+    ipe_runtime::core::recursion_guard()
+}
 
 pub type IpeTask<A> = ipe_runtime::IpeTask<IpeError, A>;
 
@@ -192,18 +197,21 @@ pub fn file_rename(src: ipe_runtime::path::Path, dst: ipe_runtime::path::Path) -
 }
 
 pub fn main_fst<T1: Clone, T2: Clone>(arg_0: (T1, T2)) -> T1 {
+    let _ipe_recursion_guard = crate::recursion_guard();
     ({
         let (a, b) = arg_0;
         a
     })
 }
 pub fn main_snd<T1: Clone, T2: Clone>(arg_1: (T1, T2)) -> T2 {
+    let _ipe_recursion_guard = crate::recursion_guard();
     ({
         let (a, b) = arg_1;
         b
     })
 }
 pub fn main_pair_sum() -> i64 {
+    let _ipe_recursion_guard = crate::recursion_guard();
     static CELL: std::sync::OnceLock<i64> = std::sync::OnceLock::new();
     CELL.get_or_init(|| {
         ({
@@ -214,6 +222,7 @@ pub fn main_pair_sum() -> i64 {
     .clone()
 }
 pub fn ipe_main() -> IpeTask<()> {
+    let _ipe_recursion_guard = crate::recursion_guard();
     io_println(string_from_int(
         ((crate::main_fst((41, 99)) + crate::main_snd((7, 2))) + crate::main_pair_sum()),
     ))

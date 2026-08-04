@@ -34,6 +34,11 @@ pub use ipe_runtime::error::IpeError;
 pub fn str_err(s: &str) -> IpeError {
     IpeError::unexpected(s.to_string())
 }
+// Recursion guard shim — every user function body opens with
+// `let _ipe_recursion_guard = crate::recursion_guard();`, which resolves here.
+pub fn recursion_guard() -> ipe_runtime::core::RecursionGuard {
+    ipe_runtime::core::recursion_guard()
+}
 
 pub type IpeTask<A> = ipe_runtime::IpeTask<IpeError, A>;
 
@@ -192,14 +197,17 @@ pub fn file_rename(src: ipe_runtime::path::Path, dst: ipe_runtime::path::Path) -
 }
 
 pub fn main_small() -> f64 {
+    let _ipe_recursion_guard = crate::recursion_guard();
     static CELL: std::sync::OnceLock<f64> = std::sync::OnceLock::new();
     CELL.get_or_init(|| 0.00001).clone()
 }
 pub fn main_large() -> f64 {
+    let _ipe_recursion_guard = crate::recursion_guard();
     static CELL: std::sync::OnceLock<f64> = std::sync::OnceLock::new();
     CELL.get_or_init(|| 1000000000000000000000.0).clone()
 }
 pub fn ipe_main() -> IpeTask<()> {
+    let _ipe_recursion_guard = crate::recursion_guard();
     io_println(format!(
         "{}{}",
         string_from_float(crate::main_small()),
