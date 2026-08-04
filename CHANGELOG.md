@@ -10,6 +10,32 @@ Entries below the header are maintained by
 section is generated from Conventional Commit messages and prepended when the
 standing release pull request is merged.
 
+## [0.1.38](https://github.com/arthurmaciel/ipe-lang/compare/ipe-v0.1.37...ipe-v0.1.38) (2026-08-04)
+
+
+### Features
+
+* **examples:** idiomatic TEA async-DB port of 17-skymon (ipe-overrides) ([#644](https://github.com/arthurmaciel/ipe-lang/issues/644)) ([a391879](https://github.com/arthurmaciel/ipe-lang/commit/a3918795b4c2b23954236011289ac4587b772000))
+* **examples:** ipe-overrides/12-skyvote — TEA async-DB port ([#638](https://github.com/arthurmaciel/ipe-lang/issues/638)) ([3ac8b65](https://github.com/arthurmaciel/ipe-lang/commit/3ac8b65a6773dd09fa14c66e29cf2556d97f4a5b))
+* **examples:** ipe-overrides/16-skychess — TEA async-DB port ([#580](https://github.com/arthurmaciel/ipe-lang/issues/580)) ([#639](https://github.com/arthurmaciel/ipe-lang/issues/639)) ([e9d56b7](https://github.com/arthurmaciel/ipe-lang/commit/e9d56b70436c7cd6b5af799cfaec0390b0524835))
+* **scripts:** generalize the Sky→Ipê transform to any project + Go→Rust FFI dependency map ([#652](https://github.com/arthurmaciel/ipe-lang/issues/652)) ([d9fbbc3](https://github.com/arthurmaciel/ipe-lang/commit/d9fbbc3d6938f382f1be287a9d5c65c33f3a242d))
+
+
+### Bug Fixes
+
+* **canon:** scope HttpMethod verbs to Http qualifier, unshadowing user ctors ([#653](https://github.com/arthurmaciel/ipe-lang/issues/653)) ([0a0a949](https://github.com/arthurmaciel/ipe-lang/commit/0a0a949e3033be76785a2b35a3b8ab64990f2686)), closes [#646](https://github.com/arthurmaciel/ipe-lang/issues/646)
+* **diagnostics:** register IPE-N0036 + IPE-N0030 so `ipe explain` resolves them ([#629](https://github.com/arthurmaciel/ipe-lang/issues/629)) ([#640](https://github.com/arthurmaciel/ipe-lang/issues/640)) ([7c793cc](https://github.com/arthurmaciel/ipe-lang/commit/7c793cc9a5284985f6c54c7ff0fa4627c5896d31))
+* **emit:** sound curry lowering for `succeed` applied to a fn value ([#634](https://github.com/arthurmaciel/ipe-lang/issues/634)) ([#642](https://github.com/arthurmaciel/ipe-lang/issues/642)) ([2d75899](https://github.com/arthurmaciel/ipe-lang/commit/2d75899fbdcc5725116aa6a50a2d38ef62679d12))
+* **examples:** add missing stdlib imports to 8 Sky-mirror ports ([#580](https://github.com/arthurmaciel/ipe-lang/issues/580)) ([#655](https://github.com/arthurmaciel/ipe-lang/issues/655)) ([0f8e41d](https://github.com/arthurmaciel/ipe-lang/commit/0f8e41d2f4a9a1523d9f4c857dc9e0c690e72f9d))
+* **examples:** green 19-skyforum, 28-streaming-chat, 37-composite-live-shop ([#580](https://github.com/arthurmaciel/ipe-lang/issues/580)) ([#650](https://github.com/arthurmaciel/ipe-lang/issues/650)) ([c3adc63](https://github.com/arthurmaciel/ipe-lang/commit/c3adc63d0a84bf37149d575095d9abeab832856e))
+* **examples:** map removed Cli/Tui/Webview mirror shapes onto Ipe.Tea.Terminal/WebView ([#656](https://github.com/arthurmaciel/ipe-lang/issues/656)) ([cc8f538](https://github.com/arthurmaciel/ipe-lang/commit/cc8f5388a6913a7e0117dce15a71c24598d543c5)), closes [#580](https://github.com/arthurmaciel/ipe-lang/issues/580)
+* **examples:** remap 24-tui-kitchen-sink + 38-composite mirror shapes onto Terminal/WebView ([#580](https://github.com/arthurmaciel/ipe-lang/issues/580)) ([#659](https://github.com/arthurmaciel/ipe-lang/issues/659)) ([798a022](https://github.com/arthurmaciel/ipe-lang/commit/798a02210a98f234adb45f957231db3837ca678a))
+* **lower:** fail-closed gate for a fn value reaching a record field via a reified generic slot ([#584](https://github.com/arthurmaciel/ipe-lang/issues/584)) ([#636](https://github.com/arthurmaciel/ipe-lang/issues/636)) ([229e400](https://github.com/arthurmaciel/ipe-lang/commit/229e4008d1e37f29b687752667176e5ddf51305e))
+* **sandbox:** FreeBSD build-jail mounts fresh devfs + masks /proc ([#645](https://github.com/arthurmaciel/ipe-lang/issues/645)) ([#657](https://github.com/arthurmaciel/ipe-lang/issues/657)) ([aa58734](https://github.com/arthurmaciel/ipe-lang/commit/aa58734230879978f7a8b65b23190157662206e6))
+* **sandbox:** FreeBSD Tier-2 jail truly denies network + filesystem axes ([#266](https://github.com/arthurmaciel/ipe-lang/issues/266)) ([#648](https://github.com/arthurmaciel/ipe-lang/issues/648)) ([7f0f1bf](https://github.com/arthurmaciel/ipe-lang/commit/7f0f1bf52decf7f7ba3e6375cfc952bf79684508))
+* **sandbox:** render macOS SBPL scratch write-allow in symlink-resolved form ([#654](https://github.com/arthurmaciel/ipe-lang/issues/654)) ([b5bddff](https://github.com/arthurmaciel/ipe-lang/commit/b5bddffbcb6ff09eda2347af65bb0a0d6ffb6df1)), closes [#266](https://github.com/arthurmaciel/ipe-lang/issues/266)
+* **sandbox:** Windows CreateProcessW env block sorts in uppercase-ordinal order ([#266](https://github.com/arthurmaciel/ipe-lang/issues/266)) ([#649](https://github.com/arthurmaciel/ipe-lang/issues/649)) ([4c983b8](https://github.com/arthurmaciel/ipe-lang/commit/4c983b8fec720402a050eebaa97037163154eefe))
+
 ## [0.1.37](https://github.com/arthurmaciel/ipe-lang/compare/ipe-v0.1.36...ipe-v0.1.37) (2026-08-04)
 
 
