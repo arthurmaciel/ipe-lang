@@ -409,7 +409,7 @@ const COMMANDS: &[Command] = &[
         }],
     },
     Command {
-        name: "doctor",
+        name: "health",
         summary: "Diagnose the build environment and offer consent-gated setup.",
         args: "",
         args_desc: "",
@@ -487,7 +487,7 @@ const SECTIONS: &[Section] = &[
             "capabilities",
             "diff",
             "doc",
-            "doctor",
+            "health",
             "lsp",
             "upgrade",
             "version",
