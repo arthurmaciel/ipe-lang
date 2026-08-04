@@ -8,7 +8,7 @@ import Ipe.Result as Result
 import Ipe.Html exposing (..)
 import Ipe.Html.Attributes exposing (..)
 import Ipe.Io as Io
-import Ipe.Web exposing (app, route)
+import Ipe.Tea.Web exposing (app, route)
 import Ipe.Html.Events exposing (onClick, onInput)
 import Ipe.Tea.Web.Cmd as Cmd
 import Ipe.Tea.Web.Sub as Sub
