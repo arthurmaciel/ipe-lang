@@ -10,6 +10,23 @@ Entries below the header are maintained by
 section is generated from Conventional Commit messages and prepended when the
 standing release pull request is merged.
 
+## [0.1.36](https://github.com/arthurmaciel/ipe-lang/compare/ipe-v0.1.35...ipe-v0.1.36) (2026-08-04)
+
+
+### Features
+
+* **backend:** row-polymorphic single-field argument records — Increment 1 ([#287](https://github.com/arthurmaciel/ipe-lang/issues/287)) ([#593](https://github.com/arthurmaciel/ipe-lang/issues/593)) ([8077355](https://github.com/arthurmaciel/ipe-lang/commit/80773550fd57901e1a9357e3b84f46776997fece))
+* **cli:** ipe eject — self-contained Rust project with a tree-shaken vendored runtime ([#515](https://github.com/arthurmaciel/ipe-lang/issues/515)) ([#596](https://github.com/arthurmaciel/ipe-lang/issues/596)) ([9252ef5](https://github.com/arthurmaciel/ipe-lang/commit/9252ef579ce285674492417a3658fbec46781ce0))
+* **runtime,backend:** bounded recursion — depth guard converts stack-overflow DoS into a contained error ([#532](https://github.com/arthurmaciel/ipe-lang/issues/532)) ([#591](https://github.com/arthurmaciel/ipe-lang/issues/591)) ([ed9d719](https://github.com/arthurmaciel/ipe-lang/commit/ed9d719aab07ff7b2716a63e91ad90fe157821b2))
+
+
+### Bug Fixes
+
+* **canon:** local module shadows stdlib import gate; helper submodule exempt from Program/TEA gate ([#589](https://github.com/arthurmaciel/ipe-lang/issues/589)) ([6801c37](https://github.com/arthurmaciel/ipe-lang/commit/6801c377adf9027be7d0c8d23c1db2f3799f9629))
+* **ci,sandbox:** install nextest in e2e + macOS/Windows/FreeBSD run-jail correctness ([#266](https://github.com/arthurmaciel/ipe-lang/issues/266)) ([#599](https://github.com/arthurmaciel/ipe-lang/issues/599)) ([4676ef2](https://github.com/arthurmaciel/ipe-lang/commit/4676ef2dcf56cb3159ca8d615fb5e0c40209f382))
+* **release,runtime:** Windows binary builds again + resilient/loud publish + sanction the recursion trip for panic-scan ([#598](https://github.com/arthurmaciel/ipe-lang/issues/598)) ([e1c7a2e](https://github.com/arthurmaciel/ipe-lang/commit/e1c7a2ed535c396d8da081be48c802f2c3d829aa))
+* **runtime,backend:** cmd double-render + wasm url import ([#483](https://github.com/arthurmaciel/ipe-lang/issues/483)) ([#586](https://github.com/arthurmaciel/ipe-lang/issues/586)) ([5af51e9](https://github.com/arthurmaciel/ipe-lang/commit/5af51e90c24b7f6eab1f8756848781e66e4bfef8))
+
 ## [0.1.35](https://github.com/arthurmaciel/ipe-lang/compare/ipe-v0.1.34...ipe-v0.1.35) (2026-08-03)
 
 
