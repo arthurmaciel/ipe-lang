@@ -389,7 +389,8 @@ confirmed available on the runner. Remove `continue-on-error` from
 ## Faster builds
 
 `ipe build` / `ipe run` compile an emitted Rust project, so most of the time is
-`rustc` + linking. Optional per-machine tools — a compilation cache
+`rustc` + linking. A failed emitted-crate compile is a non-zero `ipe` exit with a
+named build-failure diagnostic, never a silent success. Optional per-machine tools — a compilation cache
 ([sccache](https://github.com/mozilla/sccache)), a fast linker
 ([mold](https://github.com/rui314/mold) / [lld](https://lld.llvm.org/)), and a
 fast debug codegen backend
