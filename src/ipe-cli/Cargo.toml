@@ -54,7 +54,7 @@ semver = "1"
 # Same `toml` version the runtime crate already pins, so this adds no new crate
 # to the vetted dependency graph.
 toml = "0.8"
-# `ipe doctor`'s config-edit fixes rewrite a user's `~/.cargo/config.toml` and
+# `ipe health`'s config-edit fixes rewrite a user's `~/.cargo/config.toml` and
 # `<IPE_HOME>/config.toml`. A structural edit that dropped their comments and
 # formatting would be a hostile surprise on a file the user owns, so the edit
 # goes through the format-preserving `toml_edit` document model: only the exact
@@ -74,6 +74,14 @@ include_dir = "0.7"
 # construct. `panic-scan` declares its own `[workspace]`, so this path dependency
 # is built as a standalone unit rather than a workspace member.
 panic-scan = { path = "../../tools/panic-scan" }
+
+# `ipe health`'s free-disk check reads the filesystem's available blocks via
+# `statvfs(2)`. rustix exposes the syscall directly — no libc binding in our own
+# code and no `df` subprocess — and it is already in the dependency graph, so the
+# check adds no new vetted crate. Unix-only: the query has no portable analogue
+# on the non-Unix targets this CLI builds for.
+[target.'cfg(unix)'.dependencies]
+rustix = { version = "0.38", features = ["fs"] }
 
 [dev-dependencies]
 # Build + run plumbing shared by the golden E2E tests (tests/support/mod.rs).
