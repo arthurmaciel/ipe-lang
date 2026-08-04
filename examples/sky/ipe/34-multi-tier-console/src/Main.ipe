@@ -1,6 +1,7 @@
 module Main exposing (main)
 
 import Ipe.String as String
+import Ipe.Ui as Ui
 import Ipe.Tea.Web.Cmd as Cmd
 import Ipe.Css exposing (..)
 import Ipe.Html exposing (..)
@@ -154,8 +155,13 @@ pageLabel page =
             "auth"
 
 
-view : Model -> Html Msg
+view : Model -> Element Msg
 view model =
+    Ui.html (viewBody model)
+
+
+viewBody : Model -> Html Msg
+viewBody model =
     div
         [ style
               "max-width: 720px; margin: 40px auto; padding: 24px; font-family: ui-sans-serif, system-ui, -apple-system, sans-serif; color: #1c1c1c;"

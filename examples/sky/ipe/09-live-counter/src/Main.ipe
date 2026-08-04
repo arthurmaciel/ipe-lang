@@ -1,6 +1,7 @@
 module Main exposing (main)
 
 import Ipe.String as String
+import Ipe.Ui as Ui
 import Ipe.Html exposing (..)
 import Ipe.Html.Attributes exposing (..)
 import Ipe.Css exposing (..)
@@ -72,7 +73,7 @@ subscriptions model =
         CounterPage ->
             Time.every 1000 Tick
 
-        _ ->
+        AboutPage ->
             Sub.none
 
 
@@ -94,6 +95,11 @@ main =
 -- VIEW
 -- ======================================================
 view model =
+    Ui.html (viewBody model)
+
+
+viewBody : Model -> Html Msg
+viewBody model =
     div
         []
         [ styleNode [] pageStyles
