@@ -1702,6 +1702,53 @@ fn ir_type_mentions_csv(ty: &IrType) -> bool {
     ir_type_mentions(ty, &|t| matches!(t, IrType::CsvDoc))
 }
 
+/// `true` when `ty` mentions the `Ipe.Cache` config record `CacheCfg`
+/// (`IrType::CacheCfg`, rendered `ipe_runtime::cache::CacheCfg`) or the stats
+/// record `CacheStats` (`IrType::CacheStats`), both defined in the `cache`
+/// runtime module. `Cache.defaultCfg` and the `withMaxEntries` / `withTTL` /
+/// `withMaxBytes` builders are pure Ipê source that construct a `CacheCfg`
+/// record literal with NO kernel call, so a program that only builds a config
+/// (never calling `Cache.new`) still emits a `CacheCfg` reference resolved
+/// through the module's `pub use cache::*` glob — omitting this guard would
+/// leave that reference undefined (E0433 — a SEAL breach). This guard covers
+/// the folded config/stats records; the opaque handle enum is covered
+/// separately by [`ir_type_mentions_cache_handle`] (which needs the interner to
+/// resolve its `Ipe.Cache.Cache` identity). Mirrors [`ir_type_mentions_csv`].
+fn ir_type_mentions_cache(ty: &IrType) -> bool {
+    ir_type_mentions(ty, &|t| matches!(t, IrType::CacheCfg | IrType::CacheStats))
+}
+
+/// `true` when `ty` mentions the opaque `Ipe.Cache` handle enum — an
+/// `IrType::Enum` whose `home` resolves to `["Ipe", "Cache"]` and whose `name`
+/// resolves to `"Cache"` (the same identity [`Lowerer::is_cache_handle_con`]
+/// encodes). The stdlib declares `type Cache k v = Cache Int` with a public
+/// constructor whose `EnumDef` is suppressed (it is backed by the runtime
+/// `IpeCacheHandle`), so user code can NAME the handle in a signature,
+/// CONSTRUCT it (`Cache 7`), or PATTERN-MATCH it (`case c of Cache raw -> …`)
+/// WITHOUT calling any `Cache.*` kernel and WITHOUT mentioning `CacheCfg` /
+/// `CacheStats`. Every such position emits an `IpeCacheHandle` reference resolved
+/// through the module's `pub use cache::*` glob, so — like
+/// [`ir_type_mentions_cache`] for the config record — the guard must include the
+/// handle type, or the emitted crate references `IpeCacheHandle` with no
+/// definition in scope (E0425/E0433 — a SEAL breach). Symbol resolution is
+/// required to match the interned `home` / `name`, so the interner is threaded
+/// in rather than a bare `matches!`. Stays a TOTAL walk via
+/// [`ir_type_mentions`].
+fn ir_type_mentions_cache_handle(ty: &IrType, interner: &Interner) -> bool {
+    ir_type_mentions(ty, &|t| match t {
+        IrType::Enum { home, name, .. } => {
+            interner.resolve(*name) == Some("Cache")
+                && matches!(
+                    home.0.as_slice(),
+                    [a, b]
+                        if interner.resolve(*a) == Some("Ipe")
+                            && interner.resolve(*b) == Some("Cache")
+                )
+        }
+        _ => false,
+    })
+}
+
 /// `true` when `ty` mentions the `Ipe.Secret` opaque type `Secret`, defined in
 /// the `secret` runtime module (backed by `ipe_runtime::secret::Secret`). A
 /// function that only forwards a `Secret` parameter — e.g. an `Ipe.Auth` token
@@ -6570,6 +6617,13 @@ struct KernelUsage {
     /// module and the `csv` dependency. Unioned with a `CsvDoc` type-mention
     /// guard at the assembly site.
     csv: bool,
+    /// Any `Ipe.Cache` kernel (`newRaw` / `get` / `put` / `remove` / `clear` /
+    /// `size` / `stats`) — gates the `cache` runtime module and the `cache_kernel`
+    /// runtime-crate feature. A standalone leaf; no other surface reaches it.
+    /// Unioned with a `CacheCfg` / `CacheStats` type-mention guard at the assembly
+    /// site (the pure-Ipê `defaultCfg` / `with*` builders produce a `CacheCfg`
+    /// with no kernel call).
+    cache: bool,
     /// Any `Ipe.Encoding` / `Ipe.Bytes` kernel — gates the `encoding` + `bytes`
     /// runtime modules and the `base64` + `hex` + `percent-encoding` dependencies.
     /// The crypto/db/server/email/jwt/web surfaces also reach the raw codec crates
@@ -6718,6 +6772,7 @@ impl KernelUsage {
             && self.config
             && self.compression
             && self.csv
+            && self.cache
             && self.encoding
             && self.regex
             && self.uuid
@@ -6761,6 +6816,7 @@ impl KernelUsage {
         self.config |= k.is_config();
         self.compression |= k.is_compression();
         self.csv |= k.is_csv();
+        self.cache |= k.is_cache();
         self.encoding |= k.is_encoding();
         self.regex |= k.is_regex();
         self.uuid |= k.is_uuid();
@@ -8944,6 +9000,29 @@ impl<'a> Lowerer<'a> {
         let uses_csv = kernel_usage.csv
             || program_type_mentions(&funcs, &records, &types_ir, &ir_type_mentions_csv);
 
+        // detect `Ipe.Cache` usage — any `Cache.newRaw` / `get` / `put` /
+        // `remove` / `clear` / `size` / `stats` kernel, OR any emittable type
+        // position that mentions the folded `CacheCfg` / `CacheStats` records. The
+        // backend uses this flag to declare `cache` in the emitted
+        // `ipe_runtime/mod.rs` and enable the `cache_kernel` runtime feature. The
+        // type-mention guard is required: `Cache.defaultCfg` and the `with*`
+        // builders are pure Ipê source that construct a `CacheCfg` record literal
+        // with no kernel call, so a config-only program (never calling `Cache.new`)
+        // still names the type and would otherwise emit `CacheCfg` with no
+        // definition in scope (E0433 — a SEAL breach). The opaque `IpeCacheHandle`
+        // ALSO needs a type-mention guard: the stdlib `type Cache k v = Cache Int`
+        // exposes its constructor publicly, so user code can construct
+        // (`Cache 7`), pattern-match (`case c of Cache raw -> …`), or name the
+        // handle in a signature with NO `Cache.*` kernel and NO `CacheCfg` /
+        // `CacheStats` mention — every such position emits an `IpeCacheHandle`
+        // reference that would otherwise be undefined. The handle scan resolves
+        // interned symbols, so it threads `self.interner`.
+        let interner = &self.interner;
+        let uses_cache = kernel_usage.cache
+            || program_type_mentions(&funcs, &records, &types_ir, &|t| {
+                ir_type_mentions_cache(t) || ir_type_mentions_cache_handle(t, interner)
+            });
+
         // detect HEAVY `Ipe.Crypto` usage — any legacy SHA-1/MD5, AEAD, or PBKDF2
         // kernel. The backend uses this flag to declare `crypto` in the emitted
         // `ipe_runtime/mod.rs` and add the `sha1` + `md-5` + `aes-gcm` +
@@ -9121,6 +9200,7 @@ impl<'a> Lowerer<'a> {
             uses_config,
             uses_compression,
             uses_csv,
+            uses_cache,
             uses_encoding,
             uses_regex,
             uses_uuid,
@@ -21051,6 +21131,80 @@ mod tests {
             "a `CsvDoc` in an enum-def variant payload (named by no function) \
              must select `csv` — the sibling scan covers enum-def payloads for \
              every feature"
+        );
+    }
+
+    /// Build the opaque `Ipe.Cache` handle type — an `IrType::Enum` with home
+    /// `["Ipe", "Cache"]` and name `Cache` — the shape a `type Cache k v = Cache
+    /// Int` param / ctor / match folds to (backed by the runtime
+    /// `IpeCacheHandle`, its `EnumDef` suppressed).
+    fn cache_handle_ty(interner: &mut Interner) -> ipe_ir::IrType {
+        use ipe_ir::{IrType, ModPath};
+        let ipe = interner.intern("Ipe").unwrap();
+        let cache_mod = interner.intern("Cache").unwrap();
+        let cache_name = interner.intern("Cache").unwrap();
+        IrType::Enum {
+            home: ModPath(vec![ipe, cache_mod]),
+            name: cache_name,
+            args: Vec::new(),
+        }
+    }
+
+    /// The load-bearing SEAL regression: the opaque `Ipe.Cache` handle in a
+    /// function SIGNATURE (`unwrap : Cache k v -> Int`) selects `cache` via
+    /// [`super::ir_type_mentions_cache_handle`]. The stdlib exposes the handle
+    /// constructor publicly, so user code can name / construct / match the handle
+    /// with NO `Cache.*` kernel and NO `CacheCfg` / `CacheStats` mention — every
+    /// such position emits an `IpeCacheHandle` reference that must resolve. The
+    /// plain [`super::ir_type_mentions_cache`] (`CacheCfg` / `CacheStats` only)
+    /// does NOT cover it — this asserts the gap the handle scan closes.
+    #[test]
+    fn cache_handle_in_signature_selects_cache() {
+        use ipe_ir::IrType;
+        let mut interner = Interner::new();
+        let handle = cache_handle_ty(&mut interner);
+        assert!(
+            super::ir_type_mentions_cache_handle(&handle, &interner),
+            "the `Ipe.Cache` handle enum in a signature must select `cache`"
+        );
+        // A `Result Error (Cache k v)` return position — the handle buried in a
+        // carrier is still detected (the shared walk is total).
+        let carried = IrType::Result(Box::new(IrType::Error), Box::new(handle.clone()));
+        assert!(
+            super::ir_type_mentions_cache_handle(&carried, &interner),
+            "a handle buried in a `Result` carrier must still be detected"
+        );
+        // The gap the fix closes: the CacheCfg/CacheStats-only guard does NOT see
+        // the handle, so before folding the handle scan into `uses_cache` the
+        // handle-only program dropped the `cache` module (E0425/E0433 SEAL breach).
+        assert!(
+            !super::ir_type_mentions_cache(&handle),
+            "the CacheCfg/CacheStats guard must NOT match the opaque handle — \
+             this is the coverage gap the handle scan closes"
+        );
+    }
+
+    /// The floor: an unrelated user enum with the SAME constructor name `Cache`
+    /// but a DIFFERENT home (`Main`, not `Ipe.Cache`) does NOT trip the handle
+    /// scan — the guard matches the resolved `["Ipe", "Cache"].Cache` identity,
+    /// not the bare name, so a local `type Cache = …` never spuriously pins the
+    /// runtime `cache` module on.
+    #[test]
+    fn look_alike_local_cache_enum_does_not_trip_handle_scan() {
+        use ipe_ir::{IrType, ModPath};
+        let mut interner = Interner::new();
+        let main = interner.intern("Main").unwrap();
+        let cache_name = interner.intern("Cache").unwrap();
+        let local = IrType::Enum {
+            home: ModPath(vec![main]),
+            name: cache_name,
+            args: Vec::new(),
+        };
+        assert!(
+            !super::ir_type_mentions_cache_handle(&local, &interner),
+            "a look-alike `Main.Cache` enum must NOT select the runtime `cache` \
+             module — the guard matches the `Ipe.Cache.Cache` identity, not the \
+             bare name"
         );
     }
 

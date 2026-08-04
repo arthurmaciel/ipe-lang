@@ -643,6 +643,21 @@ pub(crate) struct EmitCtx<'a> {
     /// `csv` is a leaf module — no other runtime surface reaches it — so no other
     /// `uses_*` flag forces it on.
     pub(crate) uses_csv: bool,
+    /// `true` when the program uses at least one `Ipe.Cache` kernel (`Cache.new` /
+    /// `get` / `put` / `remove` / `clear` / `size` / `stats`) or a
+    /// signature/record/enum mentioning the folded `CacheCfg` / `CacheStats`
+    /// records. When set, [`crate::project::assemble_project_files`]:
+    ///
+    /// * declares `pub mod cache; pub use cache::*;` in the emitted
+    ///   `ipe_runtime/mod.rs` (the vendored path);
+    /// * selects the `cache_kernel` runtime feature (the dependency-model path),
+    ///   so the runtime crate compiles `cache.rs` (its `cache_new_raw` /
+    ///   `cache_get` / `cache_put` / … functions, the `CacheCfg` / `CacheStats`
+    ///   structs, and the `IpeCacheHandle` enum the emitted code references).
+    ///
+    /// `cache` is a leaf module — no other runtime surface reaches it — so no other
+    /// `uses_*` flag forces it on.
+    pub(crate) uses_cache: bool,
     /// `true` when the program reaches an `Ipe.Encoding` / `Ipe.Bytes` kernel. The
     /// `encoding` runtime feature — the `base64`, `hex`, and `percent-encoding`
     /// crates plus the `encoding.rs` / `bytes.rs` modules — is selected under
@@ -1405,6 +1420,10 @@ impl<'a> EmitCtx<'a> {
         // detect Ipe.Csv usage (gates `csv` module + `csv` crate).
         let uses_csv = program.modules.iter().any(|m| m.uses_csv);
 
+        // detect Ipe.Cache usage (gates the `cache` module + the `cache_kernel`
+        // runtime feature). A leaf — no other surface reaches it.
+        let uses_cache = program.modules.iter().any(|m| m.uses_cache);
+
         // detect HEAVY Ipe.Crypto usage (gates `crypto` module + sha1 + md-5 +
         // aes-gcm + chacha20poly1305 + pbkdf2). The `crypto` feature implies
         // `crypto-core`, so the floor is pulled transitively.
@@ -1534,6 +1553,7 @@ impl<'a> EmitCtx<'a> {
             uses_config,
             uses_compression,
             uses_csv,
+            uses_cache,
             uses_encoding,
             uses_regex,
             uses_uuid,
@@ -3735,6 +3755,7 @@ mod record_struct_namespace_tests {
                 uses_config: false,
                 uses_compression: false,
                 uses_csv: false,
+                uses_cache: false,
                 uses_encoding: false,
                 uses_regex: false,
                 uses_uuid: false,
@@ -3833,6 +3854,7 @@ mod record_struct_namespace_tests {
                 uses_config: false,
                 uses_compression: false,
                 uses_csv: false,
+                uses_cache: false,
                 uses_encoding: false,
                 uses_regex: false,
                 uses_uuid: false,
@@ -3911,6 +3933,7 @@ mod record_struct_namespace_tests {
                 uses_config: false,
                 uses_compression: false,
                 uses_csv: false,
+                uses_cache: false,
                 uses_encoding: false,
                 uses_regex: false,
                 uses_uuid: false,
