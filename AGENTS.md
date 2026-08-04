@@ -1082,7 +1082,7 @@ ipe doc Module                     # terminal docs
 ipe doc --serve [--port 8080]      # browsable HTTP doc server
 ipe doc --tui                      # interactive terminal doc browser
 ipe doc --list                     # list every documented module
-ipe doctor [--fix] [--verbose]     # project / environment health checks
+ipe health [--fix] [--verbose]     # project / environment health checks
 ipe console [--port 8025]          # standalone Ipe.Ui console (--tui for the Ipe.Tea.Terminal backend)
 ipe add <package>                  # add an FFI binding
 ipe remove <package>
