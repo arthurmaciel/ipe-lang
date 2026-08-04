@@ -11,11 +11,13 @@ REPO="arthurmaciel/ipe-lang"
 INSTALL_DIR="${IPE_INSTALL_DIR:-$HOME/.local/bin}"
 
 # ── Palette ──────────────────────────────────────────────────────────────────
-# Mirror the CLI (help.rs): a soft Ipê-amarelo (256-colour 222) for the banner,
-# a mid grey (244) for dim hints. Colour only when stderr is a terminal and
-# NO_COLOR is unset (per https://no-color.org).
+# Mirror the CLI (style.rs): a soft Ipê-amarelo (256-colour 222) for the banner,
+# a light (bright) yellow (ANSI 93) for a running stage, a soft green (114) for
+# success, a plain red (31) for failure, a mid grey (244) for dim hints. Colour
+# only when stderr is a terminal and NO_COLOR is unset (per https://no-color.org).
 if [ -t 2 ] && [ -z "${NO_COLOR:-}" ]; then
   C_YELLOW="$(printf '\033[38;5;222m')"
+  C_LYELLOW="$(printf '\033[93m')"
   C_DIM="$(printf '\033[38;5;244m')"
   C_GREEN="$(printf '\033[38;5;114m')"
   C_RED="$(printf '\033[31m')"
@@ -23,21 +25,80 @@ if [ -t 2 ] && [ -z "${NO_COLOR:-}" ]; then
   C_RESET="$(printf '\033[0m')"
   IS_TTY=1
 else
-  C_YELLOW=''; C_DIM=''; C_GREEN=''; C_RED=''; C_BOLD=''; C_RESET=''
+  C_YELLOW=''; C_LYELLOW=''; C_DIM=''; C_GREEN=''; C_RED=''; C_BOLD=''; C_RESET=''
   IS_TTY=0
 fi
 
-# Friendly status lines. A leading "•" bullet keeps the log scannable; all
-# progress chatter goes to stderr so `curl … | sh` keeps stdout clean.
-step() { printf '  %s•%s %s\n' "$C_YELLOW" "$C_RESET" "$1" >&2; }
-info() { printf '    %s%s%s\n' "$C_DIM" "$1" "$C_RESET" >&2; }
-done_() { printf '  %s✓%s %s\n' "$C_GREEN" "$C_RESET" "$1" >&2; }
+# ── Stage progress ───────────────────────────────────────────────────────────
+# The streamlined per-stage shape shared with the CLI (src/ipe-cli/src/progress.rs):
+# while a stage runs it is one line — a light-yellow spinner + label; on success
+# the SAME line is rewritten (carriage return) to a light-green ✓ + message; on
+# failure to a light-red ✗ + message. Off a terminal (pipe / CI / NO_COLOR) each
+# stage is one plain flush-left line with no spinner, no rewrite, and no ANSI, so
+# `curl … | sh` logs stay clean. All chatter goes to stderr so stdout stays clean.
+#
+# The label of the stage currently in flight, so an outcome can clear a line at
+# least as wide as it and leave no tail behind.
+STAGE_LABEL=''
 
-# die MESSAGE — a blank line, a red "error:" label, then the message dimmed and
-# indented beneath it, then exit non-zero. Mirrors the CLI's failure shape.
+# stage_start LABEL — paint the running line (spinner frame 0 + LABEL in light
+# yellow) with no trailing newline on a terminal, so the outcome overwrites it.
+stage_start() {
+  STAGE_LABEL="$1"
+  if [ "$IS_TTY" = 1 ]; then
+    printf '\r  %s⠋%s %s%s%s\033[0K' \
+      "$C_LYELLOW" "$C_RESET" "$C_LYELLOW" "$STAGE_LABEL" "$C_RESET" >&2
+  else
+    printf '  %s\n' "$STAGE_LABEL" >&2
+  fi
+}
+
+# stage_ok MSG — settle the running stage as success: rewrite the line to a
+# light-green ✓ and MSG (terminal), or emit one plain line (non-terminal).
+stage_ok() {
+  if [ "$IS_TTY" = 1 ]; then
+    printf '\r  %s✓%s %s%s%s\033[0K\n' \
+      "$C_GREEN" "$C_RESET" "$C_GREEN" "$1" "$C_RESET" >&2
+  else
+    printf '  ✓ %s\n' "$1" >&2
+  fi
+  STAGE_LABEL=''
+}
+
+# stage_fail MSG — settle the running stage as failure: rewrite the line to a
+# light-red ✗ and MSG (terminal), or emit one plain line (non-terminal). Whether
+# the caller then stops or continues is its own decision; this only renders.
+stage_fail() {
+  if [ "$IS_TTY" = 1 ]; then
+    printf '\r  %s✗%s %s%s%s\033[0K\n' \
+      "$C_RED" "$C_RESET" "$C_RED" "$1" "$C_RESET" >&2
+  else
+    printf '  ✗ %s\n' "$1" >&2
+  fi
+  STAGE_LABEL=''
+}
+
+# info — a dimmed, deeper-indented sub-note beneath a stage (a soft skip, a
+# secondary fact). Never a stage outcome itself. If a stage is still running on
+# a terminal, settle its line first (a soft skip, in dim) so the note lands on
+# its own line rather than overwriting the spinner.
+info() {
+  if [ -n "$STAGE_LABEL" ] && [ "$IS_TTY" = 1 ]; then
+    printf '\r  %s•%s %s%s%s\033[0K\n' \
+      "$C_DIM" "$C_RESET" "$C_DIM" "$STAGE_LABEL" "$C_RESET" >&2
+    STAGE_LABEL=''
+  fi
+  printf '    %s%s%s\n' "$C_DIM" "$1" "$C_RESET" >&2
+}
+
+# die MESSAGE — settle any running stage as a failure, then exit non-zero.
+# Mirrors the CLI's failure shape: the actionable message rides the ✗ line.
 die() {
-  printf '\n    There was an %serror%s:\n        %s%s%s\n' \
-    "$C_RED" "$C_RESET" "$C_DIM" "$1" "$C_RESET" >&2
+  if [ -n "$STAGE_LABEL" ]; then
+    stage_fail "$1"
+  else
+    printf '\n  %s✗%s %s%s%s\n' "$C_RED" "$C_RESET" "$C_RED" "$1" "$C_RESET" >&2
+  fi
   exit 1
 }
 
@@ -107,13 +168,13 @@ if [ -n "${IPE_VERSION:-}" ]; then
   banner "$tag"
 else
   banner "latest"
-  step "Resolving the latest release…"
+  stage_start "Resolving the latest release…"
   resp="$(curl -fsSL "https://api.github.com/repos/$REPO/releases/latest")" \
     || die "Could not reach GitHub to resolve the latest release (set IPE_VERSION=vX.Y.Z)."
   # Grep over the captured string — no pipe from curl, so no early-close.
   tag="$(printf '%s\n' "$resp" | sed -n 's/.*"tag_name": *"\([^"]*\)".*/\1/p' | head -n1)"
   [ -n "$tag" ] || die "Could not parse the latest release tag (set IPE_VERSION=vX.Y.Z)."
-  info "Found $tag."
+  stage_ok "Found $tag."
 fi
 
 # Display version: the release tag may carry an `ipe-` prefix (e.g. ipe-v0.1.2).
@@ -124,11 +185,11 @@ base="https://github.com/$REPO/releases/download/$tag"
 url="$base/$artifact.$ext"
 
 # ── Check prebuilt binary availability ──────────────────────────────
-step "Checking for prebuilt binaries…"
+stage_start "Checking for prebuilt binaries…"
 have_bin=0
 if curl -fsSL -o /dev/null -I --max-time 10 "$url" 2>/dev/null; then
   have_bin=1
-  done_ "Prebuilt binary available for $plat-$cpu."
+  stage_ok "Prebuilt binary available for $plat-$cpu."
 else
   info "No prebuilt binary for $tag on $plat-$cpu."
   if [ -n "${IPE_VERSION:-}" ] && [ "$IS_TTY" = 1 ] && [ -r /dev/tty ]; then
@@ -140,7 +201,7 @@ else
     if IFS= read -r ans < /dev/tty 2>/dev/null; then
       case "$ans" in
         ''|[Yy]|[Yy][Ee][Ss])
-          step "Resolving the latest release…"
+          stage_start "Resolving the latest release…"
           resp="$(curl -fsSL "https://api.github.com/repos/$REPO/releases/latest")" \
             || die "Could not reach GitHub."
           tag="$(printf '%s\n' "$resp" | sed -n 's/.*"tag_name": *"\([^"]*\)".*/\1/p' | head -n1)"
@@ -150,7 +211,7 @@ else
           url="$base/$artifact.$ext"
           if curl -fsSL -o /dev/null -I --max-time 10 "$url" 2>/dev/null; then
             have_bin=1
-            done_ "Prebuilt binary available for $plat-$cpu."
+            stage_ok "Prebuilt binary available for $plat-$cpu."
           else
             info "Latest release also has no binary for $plat-$cpu."
           fi
@@ -177,7 +238,7 @@ version_gte() {
 }
 
 # ── Check Rust toolchain ────────────────────────────────────────────
-step "Checking Rust toolchain…"
+stage_start "Checking Rust toolchain…"
 cargo_ok=0
 if command -v cargo >/dev/null 2>&1; then
   cargo_ver_raw="$(cargo version 2>/dev/null | cut -d' ' -f2)"
@@ -192,7 +253,7 @@ if command -v cargo >/dev/null 2>&1; then
   if version_gte "$cargo_major" "$cargo_minor" "$cargo_patch" \
                   "$min_major" "$min_minor" "$min_patch"; then
     cargo_ok=1
-    done_ "Found cargo $cargo_ver_raw (>= $MIN_CARGO_VERSION)."
+    stage_ok "Found cargo $cargo_ver_raw (>= $MIN_CARGO_VERSION)."
   else
     info "Found cargo $cargo_ver_raw (< required $MIN_CARGO_VERSION)."
   fi
@@ -211,7 +272,7 @@ else
           . "$HOME/.cargo/env"
           if command -v cargo >/dev/null 2>&1; then
             cargo_ok=1
-            done_ "Rust now available ($(cargo version | cut -d' ' -f2))."
+            stage_ok "Rust now available ($(cargo version | cut -d' ' -f2))."
           fi
           ;;
       esac
@@ -245,7 +306,7 @@ else
           ''|[Yy]|[Yy][Ee][Ss])
             case "$plat" in
               linux|darwin|freebsd)
-                step "Installing Rust via rustup…"
+                stage_start "Installing Rust via rustup…"
                 if eval "$rustup_cmd" -y 2>/dev/null; then
                   if [ -f "$HOME/.cargo/env" ]; then
                     # shellcheck source=/dev/null
@@ -282,7 +343,7 @@ fi
 tmp="$(mktemp -d)"; trap 'rm -rf "$tmp"' EXIT
 pkg="$tmp/pkg.$ext"
 
-step "Downloading ipe $ver for ${plat}-${cpu}…"
+stage_start "Downloading ipe $ver for ${plat}-${cpu}…"
 
 # download_with_progress URL DEST
 # On a TTY, run curl in the background writing to DEST, and animate a spinner +
@@ -311,7 +372,7 @@ download_with_progress() {
     curl -fsSL "$dl_url" -o "$dl_dest" \
       || die "Download failed: $dl_url"
     got="$(wc -c < "$dl_dest" 2>/dev/null || echo 0)"
-    info "Downloaded $(human "$got")."
+    stage_ok "Downloaded $(human "$got")."
     return 0
   fi
 
@@ -341,7 +402,7 @@ download_with_progress() {
   [ "$rc" = 0 ] || die "Download failed: $dl_url"
 
   got="$(wc -c < "$dl_dest" 2>/dev/null || echo 0)"
-  done_ "Downloaded $(human "$got")."
+  stage_ok "Downloaded $(human "$got")."
 }
 
 # spin_glyph IDX → the IDXth braille spinner frame (0-9). Selected by `case`
@@ -429,7 +490,7 @@ download_with_progress "$url" "$pkg"
 # Opportunistic: if the release publishes SHA256SUMS and we have a sha256 tool,
 # verify the artifact. A present-but-mismatched sum is fatal; a missing sums
 # file or missing tool is a soft skip (older releases, minimal environments).
-step "Verifying the download…"
+stage_start "Verifying the download…"
 sums="$(curl -fsSL "$base/SHA256SUMS" 2>/dev/null || true)"
 if [ -n "$sums" ]; then
   want="$(printf '%s\n' "$sums" \
@@ -446,7 +507,7 @@ if [ -n "$sums" ]; then
     if [ -z "$got_sum" ]; then
       info "No sha256 tool found — skipping checksum verification."
     elif [ "$got_sum" = "$want" ]; then
-      done_ "Checksum verified."
+      stage_ok "Checksum verified."
     else
       die "Checksum mismatch for $artifact.$ext — refusing to install (expected $want, got $got_sum)."
     fi
@@ -461,7 +522,7 @@ fi
 # Brace the name: on a non-UTF-8 `/bin/sh` (macOS bash in POSIX mode) an
 # unbraced `$INSTALL_DIR` followed by the multibyte `…` slurps the ellipsis's
 # first byte into the variable name → an "unbound variable" abort under set -u.
-step "Installing to ${INSTALL_DIR}…"
+stage_start "Installing to ${INSTALL_DIR}…"
 if [ "$ext" = zip ]; then
   # `unzip` isn't guaranteed (e.g. Git Bash on Windows); bsdtar (`tar`) reads
   # zips on Windows and macOS, so fall back to it.
@@ -484,6 +545,7 @@ for b in ipe ipe-ffi-inspector; do
   fi
 done
 [ "$installed" -gt 0 ] || die "The archive contained no ipe binaries."
+stage_ok "Installed ipe $ver to $INSTALL_DIR/ipe"
 
 # ── PATH setup ────────────────────────────────────────────────────────────────
 # ipe is installed, but a bin dir is only useful once it is on PATH. We make
@@ -638,7 +700,7 @@ persist_path() {
 
   # Already sourcing our env file from the rc — nothing to add.
   if [ -f "$RC_FILE" ] && grep -Fq "$RC_SOURCE_LINE" "$RC_FILE" 2>/dev/null; then
-    done_ "ipe is on your PATH (via $RC_FILE)."
+    stage_ok "ipe is on your PATH (via $RC_FILE)."
     return 0
   fi
 
@@ -668,7 +730,7 @@ persist_path() {
       { printf '\n# Added by the Ipê installer\n'
         printf '%s\n' "$RC_SOURCE_LINE"
       } >> "$RC_FILE" || die "Could not write to $RC_FILE."
-      done_ "Added ipe to your PATH (via $RC_FILE)."
+      stage_ok "Added ipe to your PATH (via $RC_FILE)."
       activation_hint
       ;;
     *)
@@ -679,7 +741,6 @@ persist_path() {
 }
 
 # ── Done + next steps ────────────────────────────────────────────────────────
-done_ "Installed ipe $ver to $INSTALL_DIR/ipe"
 if ! on_path; then
   # Put INSTALL_DIR on PATH for this run (live immediately when the installer is
   # sourced), then persist it for future shells.
