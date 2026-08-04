@@ -241,14 +241,14 @@ build_set() {
 run_set()  { build_set; }
 perf_set() { build_set; }
 
-# ── first_party_check_set: the `ipe check`-only FLOOR over shipped examples ────
+# ── first_party_check_set: the `ipe type-check`-only FLOOR over shipped examples ─
 # The first-party examples the project SHIPS and expects to type-check: every
 # flat `examples/shapes/*/*` and `examples/wasm/*` dir with a `src/Main.ipe`
 # entry. Emitted one per line.
 #
 # SCOPE — this is a floor, not the parity sweep:
 #   • INCLUDE examples/shapes/** and examples/wasm/** — authored, expected to
-#     `ipe check` clean; a non-compiling one is a shipped regression.
+#     `ipe type-check` clean; a non-compiling one is a shipped regression.
 #   • EXCLUDE examples/sky/** — the upstream mirror is intentionally non-gating
 #     (legitimately red mid-parity), so build_set/the sweep own it, never this
 #     floor.

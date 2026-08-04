@@ -1002,7 +1002,7 @@ config is a distinct, narrower surface, not a `getenv` backdoor.
 
 Genuine compiler gaps to work around when writing code.
 
-1. **`ipe check` does not fully model FFI interface satisfaction.** Opaque
+1. **`ipe type-check` does not fully model FFI interface satisfaction.** Opaque
    FFI types unify with each other; concrete-satisfies-interface checks fall
    through.
 2. **Non-tail-recursive list ops are O(N) on call stack.** `map`, `filter`,
@@ -1071,7 +1071,7 @@ ipe build|run … --static           # fully-static musl single binary (dlmalloc
                                    #  <auto|system|dlmalloc|talc|mimalloc>
                                    #  --allow-slow-allocator)
 ipe watch src/Main.ipe             # file-watch rebuild + restart
-ipe check src/Main.ipe             # type-check only — no build, no run, no emit
+ipe type-check src/Main.ipe        # type-check only — no build, no run, no emit
 ipe fmt src/Main.ipe               # opinionated formatter (run after editing .ipe/.ipei)
                                    # test runner: place tests/Main.ipe in the
                                    #   project root and run `ipe verify` — the
@@ -1100,7 +1100,7 @@ ipe --version
 cd examples/sky/ipe/01-hello-world && ipe build src/Main.ipe
 ```
 
-`ipe check` runs the same pipeline as `ipe build` up through type-checking,
+`ipe type-check` runs the same pipeline as `ipe build` up through type-checking,
 then stops — it emits no Rust and runs no `cargo`, so it is the fastest way to
 ask "does this program type-check?". Run `ipe fmt` after editing
 `.ipe`/`.ipei` files (formatter idempotent).
