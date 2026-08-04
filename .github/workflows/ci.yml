@@ -531,6 +531,9 @@ jobs:
       - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
       - uses: rui314/setup-mold@v1
+      # The shard driver is `cargo nextest run`; the runner has no nextest unless
+      # this installs it (every other nextest-driven job installs it too).
+      - uses: taiki-e/install-action@nextest
       - uses: mozilla-actions/sccache-action@v0.0.9
       # Cache the shared emitted-crate target across runs so the runtime dep tree
       # (axum/tokio/sqlx/serde) stays warm and each shard's goldens link
