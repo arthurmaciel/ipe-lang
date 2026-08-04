@@ -925,3 +925,63 @@ jobs:
             # windows-2022/macos jobs prove on their platforms.
             IPE_E2E=1 IPE_RUNTIME_DIR="$GITHUB_WORKSPACE/src/runtime/rust/src" \
               cargo test -p ipe --test audit_native -- --nocapture
+
+  # ── Linux arm64 Tier-2 (the fifth shipped platform) ────────────────────────
+  # We ship a linux-arm64 binary, but the Linux bwrap+seccomp Tier-2 build-jail
+  # arm is `target_arch = "x86_64"`-gated: the seccomp BPF program encodes the
+  # x86_64 syscall-number ABI (`subprocess_deny_program` returns `None` on any
+  # other arch → fail-closed), so on aarch64 `build_in_jail` falls to the
+  # refuse-arm (`JailOutcome::Unavailable`) and `CERTIFIED_PLATFORM` is the
+  # `unwired` sentinel. That is SAFE (a native package is never admitted
+  # un-confined on arm64), but nothing proved it — the arm64 Tier-2 path was the
+  # one shipped platform with no CI at all (the admission-sandbox matrix proves
+  # the substrate JAIL SCRIPT on arm64, never the reconciler). ADR 0040 names
+  # exactly this "admit for a platform we never exercised" blind spot.
+  #
+  # This job runs the reconciler's own tests on a NATIVE aarch64 runner and
+  # asserts the fail-closed guarantee holds there: the sandbox crate's own unit
+  # tests (the pure decode/lowering matrix) pass, and the CLI-level `audit_native`
+  # tests confirm a native-bearing package is REFUSED (never silently admitted)
+  # on an arch whose jail is unwired. It is NOT an `IPE_E2E` real-jail run — there
+  # is deliberately no wired jail to exercise on arm64; the point is to prove the
+  # refuse-to-certify path, so a future aarch64 seccomp arm (which would flip this
+  # to a real certifying platform) cannot land un-proven.
+  linux-arm64-tier2:
+    name: linux-arm64-tier2 (fifth platform — fail-closed refuse-to-certify proof)
+    runs-on: ubuntu-24.04-arm
+    if: github.event_name != 'pull_request'   # off the PR gate; push/nightly/merge_group
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: mozilla-actions/sccache-action@v0.0.9
+      - uses: Swatinem/rust-cache@v2
+      - uses: taiki-e/install-action@nextest
+
+      # Assert we really are on aarch64 — the whole point is proving the UNWIRED
+      # arch's fail-closed path, so a silent runner-arch drift to x86_64 (where a
+      # wired jail exists) would defeat the proof. Hard-fail if not aarch64.
+      - name: Assert the runner is aarch64 (the unwired Tier-2 arch under test)
+        run: |
+          arch="$(uname -m)"
+          echo "runner arch: $arch"
+          if [ "$arch" != "aarch64" ] && [ "$arch" != "arm64" ]; then
+            echo "ERROR: expected an aarch64 runner to prove the arm64 fail-closed Tier-2 path, got '$arch'." >&2
+            exit 1
+          fi
+
+      # The sandbox crate's pure decode/lowering matrix compiles and passes on
+      # aarch64 (the returning build jail's typed-outcome + fail-closed decode are
+      # arch-independent; the bwrap+seccomp establishment is x86_64-gated and
+      # simply refuses here).
+      - name: ipe_sandbox unit tests on aarch64
+        run: cargo nextest run -p ipe_sandbox --profile ci
+
+      # The CLI-level Tier-2 fail-closed proof: a native-bearing package is
+      # REFUSED (never silently admitted) on this unwired arch. NOT IPE_E2E —
+      # there is no wired jail to exercise on arm64; this proves the reconciler's
+      # refuse-to-certify path holds for the fifth shipped platform.
+      - name: audit_native fail-closed refuse-to-certify on aarch64
+        env:
+          IPE_RUNTIME_DIR: ${{ github.workspace }}/src/runtime/rust/src
+        run: cargo nextest run -p ipe --test audit_native --profile ci
