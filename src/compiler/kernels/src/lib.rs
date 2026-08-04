@@ -70,6 +70,14 @@ pub enum RuntimeModule {
     /// The `server` feature-module set (`ipe_runtime::server` +
     /// `server_stream` + `http_stream`). Declared by the `uses_server` append.
     Server,
+    /// The `cache` feature-module (`ipe_runtime::cache`, whose `cache_*`
+    /// functions, `CacheCfg` / `CacheStats` structs, and `IpeCacheHandle` enum
+    /// the emitted code references). Declared by the `uses_cache` append.
+    Cache,
+    /// The `random` feature-module (`ipe_runtime::random`, whose `random_*`
+    /// draw functions the emitted code references). Declared by the `uses_random`
+    /// append.
+    Random,
 }
 
 /// The event-payload shape of a `Ipe.Html.Events` builder.
@@ -4723,6 +4731,32 @@ impl StdlibKernel {
             // `chunks` can be reached with a param-supplied `StreamId` and no `open`
             // in the same module set (E0412 `IpeStreamId` + E0425 otherwise).
             Self::HttpStreamChunks => Some(RuntimeModule::Server),
+            // The `Ipe.Cache` family is `class = Pure` (task-returning handle
+            // ops), but every `cache_*` symbol, `CacheCfg` / `CacheStats`, and the
+            // `IpeCacheHandle` enum live in `ipe_runtime::cache` — a standalone
+            // feature-module no emit-class pulls in. Declaring the module here is
+            // the SSOT that gates the `cache` append (the lowerer additionally
+            // forces the module on a bare `CacheCfg` / `CacheStats` / handle
+            // type-mention with no kernel call — see `ir_type_mentions_cache`
+            // and `ir_type_mentions_cache_handle`).
+            Self::CacheNewRaw
+            | Self::CacheGet
+            | Self::CachePut
+            | Self::CacheRemove
+            | Self::CacheClear
+            | Self::CacheSize
+            | Self::CacheStats => Some(RuntimeModule::Cache),
+            // The `Ipe.Random` family is `class = Pure` but its `random_*` draw
+            // symbols live only in `ipe_runtime::random` — a standalone
+            // feature-module no emit-class pulls in. Declaring the module here is
+            // the SSOT that gates the `random` append. (The seeded generators are
+            // pure/deterministic but still emit `random_seeded_*` from `random.rs`,
+            // so they share the module.)
+            Self::RandomInt
+            | Self::RandomFloat
+            | Self::RandomChoice
+            | Self::RandomSeededInt
+            | Self::RandomSeededFloat => Some(RuntimeModule::Random),
             _ => None,
         }
     }
