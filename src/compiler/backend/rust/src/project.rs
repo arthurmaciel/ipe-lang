@@ -132,6 +132,11 @@ base64 = "0.22"
 uuid = { version = "1", features = ["v4", "v7", "js"] }
 hex = "0.4"
 percent-encoding = "2"
+# The wasm module set declares `url.rs` unconditionally (`pub mod url;` in
+# WASM_RUNTIME_MOD_RS), and `http_client.rs`'s `fetch` arm targets a typed
+# `crate::url::Url`, so the `url` crate is always in this closed template's
+# dependency closure — non-optional here, like the other closed-set crates.
+url = "2"
 chrono = "0.4"
 rust_decimal = { version = "1", features = ["serde"] }
 hmac = "0.12"
