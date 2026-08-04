@@ -46,12 +46,15 @@ fn runtime_src_root() -> PathBuf {
 ///
 /// `Web` is the `web` feature-module (`web/*`, including `web::pubsub`).
 /// `Server` is the server feature-module set (`server` + `server_stream` +
-/// `http_stream`).
+/// `http_stream`). `Cache` is the `cache` feature-module (`cache.rs`). `Random`
+/// is the `random` feature-module (`random.rs`).
 fn module_source_files(module: RuntimeModule) -> Vec<PathBuf> {
     let root = runtime_src_root();
     let rel: &[&str] = match module {
         RuntimeModule::Web => &["web/pubsub.rs", "web/mod.rs"],
         RuntimeModule::Server => &["server.rs", "server_stream.rs", "http_stream.rs"],
+        RuntimeModule::Cache => &["cache.rs"],
+        RuntimeModule::Random => &["random.rs"],
     };
     rel.iter().map(|r| root.join(r)).collect()
 }
