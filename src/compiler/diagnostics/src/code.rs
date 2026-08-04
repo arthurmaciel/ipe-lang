@@ -643,7 +643,8 @@ pub const ALL_CODES: &[Code] = &[
     IPE_P0040, IPE_P0041, IPE_P0050, IPE_P0060, IPE_P0061, IPE_P0062, IPE_P0063, IPE_N0001,
     IPE_N0002, IPE_N0003, IPE_N0004, IPE_N0005, IPE_N0010, IPE_N0011, IPE_N0012, IPE_N0013,
     IPE_N0020, IPE_N0021, IPE_N0022, IPE_N0023, IPE_N0024, IPE_N0025, IPE_N0026, IPE_N0027,
-    IPE_N0028, IPE_N0029, IPE_N0031, IPE_N0032, IPE_N0033, IPE_N0034, IPE_N0035, IPE_N0036,
+    IPE_N0028, IPE_N0029, IPE_N0030, IPE_N0031, IPE_N0032, IPE_N0033, IPE_N0034, IPE_N0035,
+    IPE_N0036,
     IPE_N0037, IPE_N0038, IPE_N0039, IPE_N0040, IPE_T0001, IPE_T0002, IPE_T0003, IPE_T0004,
     IPE_T0010, IPE_T0011, IPE_T0012, IPE_T0013, IPE_T0014, IPE_T0015, IPE_T0016, IPE_T0017,
     IPE_T0018, IPE_T0019, IPE_L0100, IPE_L0101, IPE_L0102, IPE_L0103, IPE_L0104, IPE_L0105,
@@ -661,7 +662,7 @@ mod tests {
 
     #[test]
     fn taxonomy_code_count_is_pinned() {
-        assert_eq!(ALL_CODES.len(), 120);
+        assert_eq!(ALL_CODES.len(), 121);
     }
 
     #[test]
@@ -679,7 +680,7 @@ mod tests {
             assert!(s.starts_with("IPE-"), "{s} bad prefix");
             assert!(seen.insert(s), "{s} duplicated");
         }
-        assert_eq!(seen.len(), 120);
+        assert_eq!(seen.len(), 121);
     }
 
     /// CI coverage gate: every taxonomy code has a conforming explain page.
