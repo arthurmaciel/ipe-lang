@@ -32,7 +32,7 @@
 //!   `no_new_privs`, the seccomp filter).
 
 use std::collections::BTreeSet;
-use std::ffi::OsString;
+use std::ffi::{OsStr, OsString};
 use std::path::{Path, PathBuf};
 
 use ipe_diagnostics::{Code, IPE_F4413};
@@ -1430,27 +1430,109 @@ pub fn windows_scrubbed_env(
         env.push((OsString::from("LANG"), lang));
     }
     // Only the profile's declared env names re-enter, and only when the host
-    // actually sets them.
+    // actually sets them. An empty name can never form a valid `NAME=VALUE` entry
+    // (Windows rejects a block containing one), so a granted-but-empty name is
+    // dropped fail-closed rather than emitted as a malformed entry.
     for name in &profile.env_allowlist {
+        if name.is_empty() {
+            continue;
+        }
         if let Some(value) = host_env(name) {
             env.push((OsString::from(name), value));
         }
     }
     // `CreateProcessW` with `CREATE_UNICODE_ENVIRONMENT` requires the environment
-    // block sorted by name, case-insensitively (Unicode order). The loader/CRT
-    // does an ordered lookup on the block it is handed, so an UNSORTED block makes
-    // it miss a variable it needs to initialise the child (notably `SystemRoot`) —
-    // `CreateProcessW` then fails with `ERROR_ENVVAR_NOT_FOUND` (203) before the
-    // child runs. Sort here (name only; an env name cannot contain `=`) so the
-    // block the launcher builds from these pairs is always well-formed. A stable
-    // sort keeps a deterministic order for duplicate-insensitive names (there are
-    // none here — the base names and the allowlist are distinct).
-    env.sort_by(|(a, _), (b, _)| {
-        let a = a.to_string_lossy().to_ascii_lowercase();
-        let b = b.to_string_lossy().to_ascii_lowercase();
-        a.cmp(&b)
-    });
+    // block sorted by name, case-insensitively in Windows' UPPERCASE-ordinal
+    // collation — the same order the child's CRT/loader expects when it does an
+    // ordered lookup on the block it is handed. An out-of-order block makes that
+    // lookup miss a variable the child needs to initialise (notably `SystemRoot`),
+    // and `CreateProcessW` fails with `ERROR_ENVVAR_NOT_FOUND` (203) before the
+    // child runs. The distinction is load-bearing: lowercasing puts `_` (0x5F)
+    // BEFORE the letters (`a`..=`z` = 0x61..=0x7A), whereas Windows uppercases and
+    // so puts `_` AFTER the letters (`A`..=`Z` = 0x41..=0x5A) — an env name with an
+    // underscore (the common case) sorts differently under the two, and only the
+    // uppercase order matches what the child scans. Sort by name only (an env name
+    // cannot contain `=`).
+    env.sort_by_key(|(name, _)| env_name_collation_key(name));
+    // The environment is case-insensitive on Windows, so a block holding two names
+    // that collide under the collation key is malformed — the child's ordered lookup
+    // sees an ambiguous key and `CreateProcessW` can 203. The profile parser accepts
+    // an `env` name that collides with a fixed base name (e.g. a granted `SystemRoot`
+    // or `Path`), so drop any later collision, keeping the first: the fixed base wins
+    // over an allowlist re-grant, so a granted name can never displace a scrubbed base
+    // to a different value. A stable sort keeps the base entry ahead of an allowlist
+    // duplicate (the base was pushed first), so first-kept is fail-closed.
+    env.dedup_by_key(|(name, _)| env_name_collation_key(name));
     env
+}
+
+/// The case-insensitive collation key `CreateProcessW`'s `CREATE_UNICODE_ENVIRONMENT`
+/// block must be sorted on: Windows compares environment names by UPPERCASE ordinal,
+/// so an env block the child can scan in order is one sorted on the ASCII-uppercased
+/// name (matching the child CRT/loader's own ordered lookup). Sorting on the
+/// lowercased name instead reorders any name containing a character that case-folds
+/// across the letter range — `_` most notably — and the child then misses a required
+/// variable, so process creation fails with `ERROR_ENVVAR_NOT_FOUND` (203).
+///
+/// Pure and host-independent (the produced pairs are unit-tested on any host); env
+/// names are ASCII, so ASCII-uppercasing reproduces Windows' uppercase-ordinal order
+/// over the range names actually use.
+fn env_name_collation_key(name: &OsStr) -> String {
+    name.to_string_lossy().to_ascii_uppercase()
+}
+
+/// An `OsStr` as UTF-16LE code units for the environment block. On Windows this is
+/// the exact `encode_wide` of the underlying wide string (a path may hold a wide
+/// unit no UTF-8 round-trip preserves, so the child receives it losslessly); off
+/// Windows (the unit-test hosts) the lossy UTF-8 view suffices because the block
+/// bytes are only asserted for ASCII names/values that round-trip identically.
+#[cfg(windows)]
+fn os_to_utf16(s: &OsStr) -> Vec<u16> {
+    use std::os::windows::ffi::OsStrExt as _;
+    s.encode_wide().collect()
+}
+
+// Compiled only for the unit tests off Windows (the block builder that calls it is
+// Windows-production / any-host-test); the Windows arm always uses the exact
+// `encode_wide` variant above.
+#[cfg(all(not(windows), test))]
+fn os_to_utf16(s: &OsStr) -> Vec<u16> {
+    s.to_string_lossy().encode_utf16().collect()
+}
+
+/// The scrubbed environment as a doubly-NUL-terminated UTF-16LE block for
+/// `CreateProcess` `lpEnvironment` under `CREATE_UNICODE_ENVIRONMENT`: each surviving
+/// pair as `NAME=VALUE\0`, in the case-insensitive uppercase-ordinal name order
+/// Windows requires, closed by a final extra NUL (so a non-empty block ends `\0\0`
+/// and an empty block is a lone `\0\0`).
+///
+/// Pure and host-independent: it consumes the pairs [`windows_scrubbed_env`] already
+/// scrubbed and sorted, so the exact bytes handed to `CreateProcessW` are asserted by
+/// unit tests on any host — the Windows arm's `env_block_utf16` is a thin wrapper over
+/// this. An entry with an empty name can never form a valid `NAME=VALUE` (Windows
+/// rejects a block containing one), so the pair source drops empty names before this
+/// point; this builder therefore only ever encodes well-formed entries.
+// Windows production (the arm's `env_block_utf16` wraps it) plus the any-host unit
+// tests that assert its exact bytes; nothing else on a non-Windows host calls it.
+#[cfg(any(windows, test))]
+#[must_use]
+fn env_block_from_pairs(pairs: &[(OsString, OsString)]) -> Vec<u16> {
+    let mut block: Vec<u16> = Vec::new();
+    for (name, value) in pairs {
+        block.extend(os_to_utf16(name));
+        block.push(u16::from(b'='));
+        block.extend(os_to_utf16(value));
+        block.push(0);
+    }
+    // A non-empty block already ends in the last entry's own NUL; this appends the
+    // block terminator (giving `\0\0`). An empty block needs both NULs written here
+    // so `CreateProcess` reads a valid empty environment rather than running past a
+    // lone terminator.
+    if block.is_empty() {
+        block.push(0);
+    }
+    block.push(0);
+    block
 }
 
 /// Off every jailed target the run jail is a documented refuse-gap.
@@ -2378,24 +2460,11 @@ mod windows_jail {
         scoped_tmp: &Path,
         host_env: &dyn Fn(&str) -> Option<OsString>,
     ) -> Vec<u16> {
-        let pairs = windows_scrubbed_env(profile, scoped_tmp, host_env);
-        let mut block: Vec<u16> = Vec::new();
-        for (name, value) in pairs {
-            // `NAME=VALUE\0`
-            block.extend(name.encode_wide());
-            block.push(u16::from(b'='));
-            block.extend(value.encode_wide());
-            block.push(0);
-        }
-        // Doubly-NUL terminate. A non-empty block ends in the last entry's own NUL
-        // plus this terminator (two NULs); an empty block (no entries) needs BOTH
-        // NULs written here so `CreateProcess` sees a valid empty environment (`\0\0`)
-        // rather than a single NUL it would read past.
-        if block.is_empty() {
-            block.push(0);
-        }
-        block.push(0);
-        block
+        // The scrub + the block layout (sorted, doubly-NUL-terminated, no empty-name
+        // entries) is one host-independent source: `windows_scrubbed_env` +
+        // `env_block_from_pairs`. Unit tests on any host assert the exact bytes this
+        // hands to `CreateProcessW`, so the arm cannot drift from what is proven.
+        super::env_block_from_pairs(&windows_scrubbed_env(profile, scoped_tmp, host_env))
     }
 
     /// The created child's owned process + thread handles.
@@ -2640,7 +2709,13 @@ mod windows_jail {
         }
 
         #[test]
-        fn env_block_is_doubly_nul_terminated_and_scrubbed() {
+        fn env_block_utf16_matches_the_shared_host_independent_builder() {
+            // The Windows arm's `env_block_utf16` is a thin wrapper: it must produce
+            // exactly what the host-independent `windows_scrubbed_env` +
+            // `env_block_from_pairs` (asserted by the outer module's tests on every
+            // host) produce, so the bytes proven there are the bytes handed to
+            // `CreateProcessW`. This guards the SSOT on Windows too — a wide-string
+            // divergence (a non-UTF-8 path unit) would surface as a byte mismatch.
             let profile = profile_with_env(&["ALLOWED"]);
             let host = |k: &str| match k {
                 "ALLOWED" => Some(OsString::from("yes")),
@@ -2648,43 +2723,15 @@ mod windows_jail {
                 "SystemRoot" => Some(OsString::from("C:\\Windows")),
                 _ => None,
             };
-            let block = env_block_utf16(&profile, Path::new("C:\\scratch"), &host);
-            // Ends in two NULs (last entry's NUL + block terminator).
-            assert_eq!(block.last().copied(), Some(0));
-            let decoded = String::from_utf16_lossy(&block);
-            assert!(decoded.contains("ALLOWED=yes"), "{decoded:?}");
-            // A non-allowlisted host var must NOT appear.
-            assert!(!decoded.contains("SECRET"), "{decoded:?}");
-            assert!(!decoded.contains("leak"), "{decoded:?}");
-            // The scrubbed base is present.
-            assert!(decoded.contains("SystemRoot="), "{decoded:?}");
-            assert!(decoded.contains("TMP=C:\\scratch"), "{decoded:?}");
-        }
-
-        #[test]
-        fn scrubbed_env_is_sorted_case_insensitively_for_createprocessw() {
-            // CreateProcessW's CREATE_UNICODE_ENVIRONMENT requires a name-sorted
-            // block (case-insensitive); an unsorted one fails with
-            // ERROR_ENVVAR_NOT_FOUND (203). Assert the pairs come back sorted so the
-            // block built from them is well-formed.
-            let profile = profile_with_env(&["APP_KEY", "zeta"]);
-            let host = |k: &str| match k {
-                "APP_KEY" => Some(OsString::from("v")),
-                "zeta" => Some(OsString::from("z")),
-                "SystemRoot" => Some(OsString::from("C:\\Windows")),
-                "PATH" => Some(OsString::from("C:\\Windows\\System32")),
-                _ => None,
-            };
-            let pairs = windows_scrubbed_env(&profile, Path::new("C:\\scratch"), &host);
-            let names: Vec<String> = pairs
-                .iter()
-                .map(|(n, _)| n.to_string_lossy().to_ascii_lowercase())
-                .collect();
-            let mut sorted = names.clone();
-            sorted.sort();
+            let via_arm = env_block_utf16(&profile, Path::new("C:\\scratch"), &host);
+            let via_shared = super::super::env_block_from_pairs(&windows_scrubbed_env(
+                &profile,
+                Path::new("C:\\scratch"),
+                &host,
+            ));
             assert_eq!(
-                names, sorted,
-                "env pairs must be name-sorted (case-insensitive)"
+                via_arm, via_shared,
+                "arm must not drift from the SSOT block"
             );
         }
 
@@ -3299,6 +3346,191 @@ mod tests {
         assert!(
             joined.starts_with("/usr/bin/timeout --kill-after=5s 30 /usr/bin/bwrap"),
             "{joined}"
+        );
+    }
+
+    // ── the Windows `CreateProcessW` environment block (host-independent) ──────────
+    //
+    // The Windows run-jail + build-jail both pass this UTF-16 block to
+    // `CreateProcessW` as `lpEnvironment` under `CREATE_UNICODE_ENVIRONMENT`. A block
+    // that is not sorted in Windows' uppercase-ordinal name order, holds an empty-name
+    // entry, or is not doubly-NUL-terminated makes the child's CRT miss a variable it
+    // needs (notably `SystemRoot`) and process creation fails with
+    // `ERROR_ENVVAR_NOT_FOUND` (203) before the child runs. These assert the exact
+    // bytes on ANY host, so the invariant the real windows-2022 runner depends on is
+    // guarded even though the true E2E only runs there.
+
+    fn env_profile(names: &[&str]) -> SandboxProfile {
+        SandboxProfile {
+            env_allowlist: names.iter().map(|n| (*n).to_owned()).collect(),
+            ..SandboxProfile::maximally_isolated()
+        }
+    }
+
+    /// Decode the block into its `NAME=VALUE` entries (split on the NUL separators,
+    /// dropping the terminating empties), for order/content assertions.
+    fn decode_block(block: &[u16]) -> Vec<String> {
+        String::from_utf16_lossy(block)
+            .split('\0')
+            .filter(|s| !s.is_empty())
+            .map(str::to_owned)
+            .collect()
+    }
+
+    #[test]
+    fn env_block_is_doubly_nul_terminated_and_scrubs_non_allowlisted() {
+        let profile = env_profile(&["ALLOWED"]);
+        let host = |k: &str| match k {
+            "ALLOWED" => Some(OsString::from("yes")),
+            "SECRET" => Some(OsString::from("leak")),
+            "SystemRoot" => Some(OsString::from("C:\\Windows")),
+            _ => None,
+        };
+        let pairs = windows_scrubbed_env(&profile, Path::new("C:\\scratch"), &host);
+        let block = env_block_from_pairs(&pairs);
+        // Doubly-NUL terminated: the last entry's own NUL plus the block terminator.
+        assert!(
+            block.ends_with(&[0, 0]),
+            "must be doubly-NUL-terminated (\\0\\0)"
+        );
+        let entries = decode_block(&block);
+        assert!(
+            entries.iter().any(|e| e == "ALLOWED=yes"),
+            "allowlisted var survives: {entries:?}"
+        );
+        // A non-allowlisted host var must NOT reach the child.
+        assert!(
+            !entries
+                .iter()
+                .any(|e| e.contains("SECRET") || e.contains("leak")),
+            "non-allowlisted var must be scrubbed: {entries:?}"
+        );
+        // The required AppContainer base is present.
+        assert!(
+            entries.iter().any(|e| e.starts_with("SystemRoot=")),
+            "SystemRoot must be present for AppContainer: {entries:?}"
+        );
+    }
+
+    #[test]
+    fn env_block_names_are_sorted_in_windows_uppercase_ordinal_order() {
+        // `_` (0x5F) sorts AFTER the letters under Windows' uppercase-ordinal
+        // collation (`A`..=`Z` = 0x41..=0x5A) but BEFORE them if the block were
+        // lowercased (`a`..=`z` = 0x61..=0x7A). `APP_KEY` vs `APPLE` distinguishes
+        // the two orders: correct Windows order is `APPLE` before `APP_KEY`.
+        let profile = env_profile(&["APP_KEY", "APPLE", "zeta"]);
+        let host = |k: &str| match k {
+            "APP_KEY" | "APPLE" | "zeta" => Some(OsString::from("v")),
+            "SystemRoot" => Some(OsString::from("C:\\Windows")),
+            _ => None,
+        };
+        let pairs = windows_scrubbed_env(&profile, Path::new("C:\\scratch"), &host);
+        let names: Vec<String> = pairs
+            .iter()
+            .map(|(n, _)| n.to_string_lossy().into_owned())
+            .collect();
+        let apple = names.iter().position(|n| n == "APPLE");
+        let app_key = names.iter().position(|n| n == "APP_KEY");
+        assert!(
+            apple < app_key,
+            "uppercase-ordinal order puts APPLE before APP_KEY (got {names:?})"
+        );
+        // The whole block is sorted on the uppercase-ordinal key.
+        let keys: Vec<String> = pairs
+            .iter()
+            .map(|(n, _)| env_name_collation_key(n))
+            .collect();
+        let mut sorted = keys.clone();
+        sorted.sort();
+        assert_eq!(
+            keys, sorted,
+            "block must be name-sorted (uppercase ordinal)"
+        );
+    }
+
+    #[test]
+    fn env_block_has_no_empty_name_entry_even_when_an_empty_name_is_granted() {
+        // An empty allowlist name can never form a valid `NAME=VALUE`; Windows rejects
+        // a block containing one. Even if a profile carries an empty name it must be
+        // dropped fail-closed, never emitted as a `=VALUE` entry.
+        let profile = env_profile(&["", "REAL"]);
+        let host = |k: &str| match k {
+            "" => Some(OsString::from("wat")),
+            "REAL" => Some(OsString::from("ok")),
+            "SystemRoot" => Some(OsString::from("C:\\Windows")),
+            _ => None,
+        };
+        let pairs = windows_scrubbed_env(&profile, Path::new("C:\\scratch"), &host);
+        let block = env_block_from_pairs(&pairs);
+        for entry in decode_block(&block) {
+            assert!(
+                !entry.starts_with('='),
+                "no entry may have an empty name: {entry:?}"
+            );
+            assert!(
+                entry.contains('='),
+                "every entry is a NAME=VALUE pair: {entry:?}"
+            );
+        }
+        assert!(
+            decode_block(&block).iter().any(|e| e == "REAL=ok"),
+            "the non-empty allowlisted var still survives"
+        );
+    }
+
+    #[test]
+    fn empty_pairs_still_yield_a_valid_empty_block() {
+        // No pairs → a lone `\0\0`, the valid empty environment `CreateProcess`
+        // expects (never a single NUL it would read past).
+        let block = env_block_from_pairs(&[]);
+        assert_eq!(block, vec![0u16, 0u16]);
+    }
+
+    #[test]
+    fn an_allowlisted_name_colliding_case_insensitively_with_a_base_is_deduped() {
+        // Windows environments are case-insensitive: a block holding two names that
+        // fold to the same key is malformed and can 203. A profile can grant a name
+        // that collides with a fixed base (`SystemRoot`), so the collision must
+        // collapse to ONE entry — the base value, never the allowlist re-grant's.
+        let profile = env_profile(&["systemroot"]);
+        let host = |k: &str| match k {
+            "SystemRoot" => Some(OsString::from("C:\\Windows")),
+            "systemroot" => Some(OsString::from("C:\\Attacker")),
+            _ => None,
+        };
+        let pairs = windows_scrubbed_env(&profile, Path::new("C:\\scratch"), &host);
+        let system_roots: Vec<&OsString> = pairs
+            .iter()
+            .filter(|(n, _)| env_name_collation_key(n) == "SYSTEMROOT")
+            .map(|(_, value)| value)
+            .collect();
+        assert_eq!(
+            system_roots,
+            vec![&OsString::from("C:\\Windows")],
+            "a case-insensitive collision collapses to one entry, base value winning: {pairs:?}"
+        );
+    }
+
+    #[test]
+    fn a_value_containing_an_equals_sign_is_preserved_whole() {
+        // A `=` in a VALUE is not a separator: Windows splits a block entry on the
+        // FIRST `=`, so `NAME=a=b` is name `NAME`, value `a=b`. The builder must not
+        // mangle it.
+        let profile = env_profile(&["CONN"]);
+        let host = |k: &str| match k {
+            "CONN" => Some(OsString::from("k=v;x=y")),
+            "SystemRoot" => Some(OsString::from("C:\\Windows")),
+            _ => None,
+        };
+        let block = env_block_from_pairs(&windows_scrubbed_env(
+            &profile,
+            Path::new("C:\\scratch"),
+            &host,
+        ));
+        assert!(
+            decode_block(&block).iter().any(|e| e == "CONN=k=v;x=y"),
+            "a `=` inside a value must survive whole: {:?}",
+            decode_block(&block)
         );
     }
 }
