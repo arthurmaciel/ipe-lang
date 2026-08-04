@@ -1,6 +1,7 @@
 module Main exposing (main)
 
 import Ipe.Io as Io
+import Ipe.String as String
 
 
 -- Unannotated record + updates at TOP-LEVEL bindings whose base is a sibling

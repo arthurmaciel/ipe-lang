@@ -1,0 +1,20 @@
+# Add the explicit Ipe.List and Ipe.String imports the transform cannot supply.
+#
+# Upstream reaches List.* and String.* through `import Sky.Core.Prelude exposing
+# (..)`, which the transform drops (Ipê has no Prelude — its Tier-A Ipe.Basics
+# surface is auto-imported, ADR 0047). Ipe.List and Ipe.String are not in that
+# auto-imported set, so their uses need explicit imports. Anchor on the retained
+# Ipe.Io import.
+
+[[edit]]
+file: src/Main.ipe
+find:
+"""
+import Ipe.Io as Io
+"""
+replace:
+"""
+import Ipe.Io as Io
+import Ipe.List as List
+import Ipe.String as String
+"""
