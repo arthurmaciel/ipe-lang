@@ -564,6 +564,15 @@ fn name_label(msg: &NameError) -> Option<String> {
                  record, list, tuple, `Maybe`, or user ADT over those"
             ))
         }
+        NameError::ReverseNestedDecoderPipeline { qualifier, name } => Some(format!(
+            "`{qualifier}.{name}` is written in the hand-nested form, which binds fields to \
+             constructor parameters in REVERSE — first-in-source binds to the LAST parameter, \
+             silently swapping same-typed fields. Thread the decoder with the `|>` pipe instead, \
+             starting from `succeed ctor`, so source order matches parameter order:\n\n    \
+             succeed ctor\n        \
+             |> {qualifier}.{name} \"first\" firstDec\n        \
+             |> {qualifier}.{name} \"second\" secondDec"
+        )),
         NameError::Unknown => None,
     }
 }

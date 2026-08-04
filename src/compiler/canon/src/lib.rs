@@ -12,6 +12,7 @@
 pub mod asserted;
 pub mod ast;
 pub mod builtins;
+pub mod decoder_pipeline_gate;
 mod env;
 pub mod link;
 pub mod module_classify;
