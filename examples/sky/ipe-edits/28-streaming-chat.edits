@@ -1,0 +1,55 @@
+# Typed HTTP method — Ipê's `HttpRequest.method` is a typed `HttpMethod` ADT
+# (`Get | Post | Put | ...`), not a bare verb `String`. The upstream builds the
+# streaming request record with `method = "POST"`, which Ipê rejects
+# (IPE-T0001: expected `HttpMethod`, found `String`) when the record flows into
+# `HttpStream.open : HttpRequest -> Task Error StreamId`. Use the `Http.Post`
+# constructor (already in scope via `import Ipe.Http as Http`).
+#
+# Web `app`'s `view` is `Model -> Element Msg` (the framework applies
+# `Ui.layout` internally over `Ipe.Ui.Element`). This app renders raw HTML, so
+# reach it through the single `Ui.html` node: keep the HTML tree as `pageView`
+# and wrap it in `Ui.html` at the `view` boundary, which lifts an `Html Msg`
+# into the `Element Msg` the shape requires.
+
+[[edit]]
+file: src/Main.ipe
+find:
+"""
+                            { method = "POST"
+"""
+replace:
+"""
+                            { method = Http.Post
+"""
+
+[[edit]]
+file: src/Main.ipe
+find:
+"""
+import Ipe.Io as Io
+"""
+replace:
+"""
+import Ipe.Io as Io
+import Ipe.Ui as Ui exposing (Element)
+"""
+
+[[edit]]
+file: src/Main.ipe
+find:
+"""
+view : Model -> Html Msg
+view model =
+    div
+"""
+replace:
+"""
+view : Model -> Element Msg
+view model =
+    Ui.html (pageView model)
+
+
+pageView : Model -> Html Msg
+pageView model =
+    div
+"""
