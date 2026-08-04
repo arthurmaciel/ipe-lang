@@ -26,17 +26,23 @@ fn repo_root() -> PathBuf {
 
 /// Compile the on-disk `live_on_navigate` golden and return the emitted
 /// `main.rs`. `None` (skip) when the embedded runtime cannot be resolved.
+///
+/// `slug` uniquely names the emit directory per test: both tests in this file
+/// compile the same golden but run as separate nextest processes sharing one
+/// `CARGO_TARGET_TMPDIR`, so a shared output path would let one test's initial
+/// `remove_dir_all` delete a directory the other is emitting into or reading.
 // test scaffolding: an ipe-compile failure or a missing emitted file IS the
 // failure signal we want to surface loudly.
 #[allow(clippy::expect_used)]
-fn emit_main_rs() -> Option<String> {
+fn emit_main_rs(slug: &str) -> Option<String> {
     let root = repo_root();
     let entry = root
         .join("tests")
         .join("golden")
         .join("live_on_navigate")
         .join("Main.ipe");
-    let out = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("live_on_navigate_emit");
+    let out =
+        PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join(format!("live_on_navigate_emit_{slug}"));
     let _ = std::fs::remove_dir_all(&out);
 
     let runtime = ipe::resolve_runtime().ok()?;
@@ -52,7 +58,7 @@ fn emit_main_rs() -> Option<String> {
 /// `page`-field write.
 #[test]
 fn on_navigate_dispatches_matched_page_through_update() {
-    let Some(main_rs) = emit_main_rs() else {
+    let Some(main_rs) = emit_main_rs("dispatch") else {
         return;
     };
     assert!(
@@ -77,7 +83,7 @@ fn on_navigate_dispatches_matched_page_through_update() {
 /// an app that supplies `onNavigate` must never emit it.
 #[test]
 fn on_navigate_present_suppresses_magic_page_struct_update() {
-    let Some(main_rs) = emit_main_rs() else {
+    let Some(main_rs) = emit_main_rs("suppress") else {
         return;
     };
     assert!(
