@@ -49,6 +49,11 @@ pub use ipe_runtime::error::IpeError;
 pub fn str_err(s: &str) -> IpeError {
     IpeError::unexpected(s.to_string())
 }
+// Recursion guard shim — every user function body opens with
+// `let _ipe_recursion_guard = crate::recursion_guard();`, which resolves here.
+pub fn recursion_guard() -> ipe_runtime::core::RecursionGuard {
+    ipe_runtime::core::recursion_guard()
+}
 
 pub type IpeTask<A> = ipe_runtime::IpeTask<IpeError, A>;
 
@@ -207,36 +212,44 @@ pub fn file_rename(src: ipe_runtime::path::Path, dst: ipe_runtime::path::Path) -
 }
 
 pub fn main_apply_i<FN0: Fn(i64) -> i64 + Send + Sync + 'static>(f: FN0, x: i64) -> i64 {
+    let _ipe_recursion_guard = crate::recursion_guard();
     (f)(x)
 }
 pub fn main_apply_p<FN0: Fn((i64, i64)) -> i64 + Send + Sync + 'static>(
     f: FN0,
     p: (i64, i64),
 ) -> i64 {
+    let _ipe_recursion_guard = crate::recursion_guard();
     (f)(p)
 }
 pub fn main_apply_r<FN0: Fn(RecXY) -> i64 + Send + Sync + 'static>(f: FN0, r: RecXY) -> i64 {
+    let _ipe_recursion_guard = crate::recursion_guard();
     (f)(r)
 }
 pub fn main_apply_m<FN0: Fn(i64, i64, (i64, i64)) -> i64 + Send + Sync + 'static>(f: FN0) -> i64 {
+    let _ipe_recursion_guard = crate::recursion_guard();
     (f)(100, 3, (4, 5))
 }
 pub fn main_ignore_arg(arg_0: i64) -> i64 {
+    let _ipe_recursion_guard = crate::recursion_guard();
     7
 }
 pub fn main_sum_pair(arg_1: (i64, i64)) -> i64 {
+    let _ipe_recursion_guard = crate::recursion_guard();
     ({
         let (a, b) = arg_1;
         (a + b)
     })
 }
 pub fn main_get_y(arg_2: RecXY) -> i64 {
+    let _ipe_recursion_guard = crate::recursion_guard();
     ({
         let RecXY { x: _, y, .. } = arg_2;
         y
     })
 }
 pub fn main_first_of_alias(arg_3: (i64, i64)) -> i64 {
+    let _ipe_recursion_guard = crate::recursion_guard();
     ({
         let whole = arg_3;
         let (a, b) = whole.clone();
@@ -244,6 +257,7 @@ pub fn main_first_of_alias(arg_3: (i64, i64)) -> i64 {
     })
 }
 pub fn main_countdown(arg_4: (i64, i64)) -> i64 {
+    let _ipe_recursion_guard = crate::recursion_guard();
     let mut arg_4 = arg_4;
     loop {
         let (n, acc) = arg_4;
@@ -260,6 +274,7 @@ pub fn main_countdown(arg_4: (i64, i64)) -> i64 {
     }
 }
 pub fn ipe_main() -> IpeTask<()> {
+    let _ipe_recursion_guard = crate::recursion_guard();
     io_println(string_from_int(
         ((((((((crate::main_apply_i(move |arg_5: i64| -> i64 { 42 }, 0)
             + crate::main_apply_p(

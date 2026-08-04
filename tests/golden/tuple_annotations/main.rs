@@ -34,6 +34,11 @@ pub use ipe_runtime::error::IpeError;
 pub fn str_err(s: &str) -> IpeError {
     IpeError::unexpected(s.to_string())
 }
+// Recursion guard shim — every user function body opens with
+// `let _ipe_recursion_guard = crate::recursion_guard();`, which resolves here.
+pub fn recursion_guard() -> ipe_runtime::core::RecursionGuard {
+    ipe_runtime::core::recursion_guard()
+}
 
 pub type IpeTask<A> = ipe_runtime::IpeTask<IpeError, A>;
 
@@ -192,12 +197,15 @@ pub fn file_rename(src: ipe_runtime::path::Path, dst: ipe_runtime::path::Path) -
 }
 
 pub fn main_first_of(t: (i64, i64)) -> i64 {
+    let _ipe_recursion_guard = crate::recursion_guard();
     (if (t == (41, 7)) { 41 } else { 0 })
 }
 pub fn main_second_of(t: (i64, i64)) -> i64 {
+    let _ipe_recursion_guard = crate::recursion_guard();
     (if (t == (41, 7)) { 7 } else { 0 })
 }
 pub fn ipe_main() -> IpeTask<()> {
+    let _ipe_recursion_guard = crate::recursion_guard();
     io_println(string_from_int(
         (crate::main_first_of((41, 7)) + crate::main_second_of((41, 7))),
     ))

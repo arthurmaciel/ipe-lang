@@ -154,12 +154,14 @@ mod tests {
     }
 
     #[test]
-    fn epilogue_matches_golden_lines_277_to_end() -> DResult<()> {
-        // Lines 277..=end: the `Ffi.kernel` polyfill through `fn main`. (The
-        // `Crypto (entropy)` prelude section header added ahead of the
-        // `crypto_random_*` wrappers shifted the polyfill down one line.)
-        let expected: String = GOLDEN.split_inclusive('\n').skip(276).collect();
-        assert_eq!(epilogue()?, expected);
+    fn epilogue_matches_golden_tail() -> DResult<()> {
+        // The epilogue is the golden's tail from the `Ffi.kernel` polyfill
+        // through `fn main`, located by its section marker so growth in the
+        // preamble above it never invalidates this check.
+        let start = GOLDEN
+            .find("// Ffi.kernel polyfill")
+            .expect("golden contains the epilogue polyfill marker");
+        assert_eq!(epilogue()?.as_str(), &GOLDEN[start..]);
         Ok(())
     }
 

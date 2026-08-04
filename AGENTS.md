@@ -1028,6 +1028,15 @@ Not limitations — the language is meant to work this way.
   `() -> Task Error a` (entropy/clock/env/I/O are effects), so the call form
   is `Uuid.v4 ()`. Pure nullary values (`Dict.empty`, `Set.empty`,
   `Maybe.Nothing`) stay bare.
+- **Recursion depth is bounded.** Unbounded non-tail recursion (a missing base
+  case, or genuine data too deep) trips a guard at a default depth of `10000`
+  rather than exhausting the native stack. The trip is a contained runtime
+  defect: an HTTP handler returns a 500 with a correlation ref and the server
+  survives, a live session ends and the client reconnects, a CLI exits non-zero
+  with a classified message — never a whole-process crash. Raise the ceiling
+  with the `IPE_RECURSION_LIMIT` environment variable. Self-tail-recursive
+  functions the compiler rewrites into a loop run in constant stack and are
+  exempt, so the limit only bounds recursion that actually grows the stack.
 
 ## Non-goals
 

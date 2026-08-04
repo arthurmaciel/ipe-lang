@@ -52,6 +52,11 @@ pub use ipe_runtime::error::IpeError;
 pub fn str_err(s: &str) -> IpeError {
     IpeError::unexpected(s.to_string())
 }
+// Recursion guard shim — every user function body opens with
+// `let _ipe_recursion_guard = crate::recursion_guard();`, which resolves here.
+pub fn recursion_guard() -> ipe_runtime::core::RecursionGuard {
+    ipe_runtime::core::recursion_guard()
+}
 
 pub type IpeTask<A> = ipe_runtime::IpeTask<IpeError, A>;
 
@@ -210,6 +215,7 @@ pub fn file_rename(src: ipe_runtime::path::Path, dst: ipe_runtime::path::Path) -
 }
 
 pub fn main_ops() -> RecAddMul {
+    let _ipe_recursion_guard = crate::recursion_guard();
     RecAddMul {
         add: {
             let __ipe_fn: ::std::sync::Arc<dyn Fn(i64) -> i64 + Send + Sync + 'static> =
@@ -224,9 +230,11 @@ pub fn main_ops() -> RecAddMul {
     }
 }
 pub fn main_run(table: RecAddMul, x: i64) -> i64 {
+    let _ipe_recursion_guard = crate::recursion_guard();
     ((table.clone()).add.clone()(x) + (table).mul.clone()(x))
 }
 pub fn ipe_main() -> IpeTask<()> {
+    let _ipe_recursion_guard = crate::recursion_guard();
     io_println(string_from_int(crate::main_run(crate::main_ops(), 4)))
 }
 

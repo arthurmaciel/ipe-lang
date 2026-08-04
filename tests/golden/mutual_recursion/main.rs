@@ -63,6 +63,11 @@ pub use ipe_runtime::error::IpeError;
 pub fn str_err(s: &str) -> IpeError {
     IpeError::unexpected(s.to_string())
 }
+// Recursion guard shim — every user function body opens with
+// `let _ipe_recursion_guard = crate::recursion_guard();`, which resolves here.
+pub fn recursion_guard() -> ipe_runtime::core::RecursionGuard {
+    ipe_runtime::core::recursion_guard()
+}
 
 pub type IpeTask<A> = ipe_runtime::IpeTask<IpeError, A>;
 
@@ -221,6 +226,7 @@ pub fn file_rename(src: ipe_runtime::path::Path, dst: ipe_runtime::path::Path) -
 }
 
 pub fn main_count_odd(o: MainOdd) -> i64 {
+    let _ipe_recursion_guard = crate::recursion_guard();
     match o {
         MainOdd::OSucc(e) => {
             let e = *e;
@@ -229,6 +235,7 @@ pub fn main_count_odd(o: MainOdd) -> i64 {
     }
 }
 pub fn main_count_even(e: MainEven) -> i64 {
+    let _ipe_recursion_guard = crate::recursion_guard();
     match e {
         MainEven::EZero => 0,
         MainEven::ESucc(o) => {
@@ -238,6 +245,7 @@ pub fn main_count_even(e: MainEven) -> i64 {
     }
 }
 pub fn ipe_main() -> IpeTask<()> {
+    let _ipe_recursion_guard = crate::recursion_guard();
     io_println(string_from_int(crate::main_count_odd(MainOdd::OSucc(
         Box::new(MainEven::ESucc(Box::new(MainOdd::OSucc(Box::new(
             MainEven::ESucc(Box::new(MainOdd::OSucc(Box::new(MainEven::EZero)))),

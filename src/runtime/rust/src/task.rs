@@ -40,8 +40,19 @@ fn global_runtime() -> Result<&'static tokio::runtime::Runtime, String> {
     if let Some(rt) = GLOBAL_RUNTIME.get() {
         return Ok(rt);
     }
-    let rt =
-        tokio::runtime::Runtime::new().map_err(|e| format!("tokio runtime init failed: {e}"))?;
+    // A uniform 8 MiB stack on every worker (axum handlers, `drive_session`,
+    // `task_parallel` workers, the blocking pool) makes the recursion guard's
+    // depth budget calibrated and the trip depth identical across shapes; the
+    // `on_thread_start` hook records each worker's stack floor so the guard's
+    // red-zone probe has a reference point on every runtime-owned thread.
+    let rt = tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .thread_stack_size(crate::core::RUNTIME_THREAD_STACK_SIZE)
+        .on_thread_start(|| {
+            crate::core::record_stack_floor(crate::core::RUNTIME_THREAD_STACK_SIZE);
+        })
+        .build()
+        .map_err(|e| format!("tokio runtime init failed: {e}"))?;
     // A racing initializer's spare runtime is dropped unused (no tasks on it).
     Ok(GLOBAL_RUNTIME.get_or_init(|| rt))
 }
@@ -90,7 +101,22 @@ where
     // caught payload routes through the redacting foreign-panic funnel: raw
     // detail goes to the server log under a correlation id, and the typed
     // Ipê error carries only the generic message plus that id.
-    match std::thread::spawn(move || rt.block_on(future)).join() {
+    //
+    // The entry thread is spawned with the uniform 8 MiB stack and records its
+    // floor first thing, so a guarded recursion entered directly from `block_on`
+    // (a synchronous CLI computation) trips at the same depth as one entered on a
+    // tokio worker, and the red-zone probe has a floor here too.
+    let spawned = std::thread::Builder::new()
+        .stack_size(crate::core::RUNTIME_THREAD_STACK_SIZE)
+        .spawn(move || {
+            crate::core::record_stack_floor(crate::core::RUNTIME_THREAD_STACK_SIZE);
+            rt.block_on(future)
+        });
+    let handle = match spawned {
+        Ok(h) => h,
+        Err(e) => return IpeResult::Err(format!("failed to spawn block_on thread: {e}").into()),
+    };
+    match handle.join() {
         Ok(r) => r,
         Err(payload) => IpeResult::Err(ipe_error_from_panic("async task panicked", payload)),
     }
@@ -1204,5 +1230,63 @@ mod std_block_on_tests {
             2,
             "driver must park, not spin"
         );
+    }
+}
+
+// Stack-floor recording on runtime-owned threads. The tokio `on_thread_start`
+// hook records each worker's floor; the `block_on` entry thread records its own.
+// Gated to the tokio native path — the only build where `global_runtime` and the
+// spawning `block_on` exist.
+#[cfg(all(feature = "tokio", not(target_arch = "wasm32")))]
+#[cfg(test)]
+mod stack_floor_tests {
+    use super::*;
+    use std::future::Future;
+    use std::pin::Pin;
+    use std::task::{Context, Poll};
+
+    // A future that resolves to whether the thread it is polled on has a recorded
+    // stack floor, letting a test observe the TLS state of a tokio worker.
+    struct ReadFloor;
+    impl Future for ReadFloor {
+        type Output = IpeResult<String, bool>;
+        fn poll(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<Self::Output> {
+            Poll::Ready(ok_res::<String, bool>(
+                crate::core::stack_floor_for_test().is_some(),
+            ))
+        }
+    }
+
+    #[test]
+    fn tokio_worker_records_stack_floor() {
+        let task: IpeTask<String, bool> = Box::pin(ReadFloor);
+        match block_on(task) {
+            IpeResult::Ok(has_floor) => assert!(
+                has_floor,
+                "every tokio worker must record its stack floor via on_thread_start"
+            ),
+            IpeResult::Err(e) => panic!("block_on failed: {e}"),
+        }
+    }
+
+    // A future that records the floor of whatever thread FIRST polls it (a tokio
+    // worker), then reads it back — proving `record_stack_floor` from within the
+    // async spine both writes and reads the same thread's TLS. The entry thread's
+    // own recording (before `rt.block_on`) is exercised by every `block_on` call.
+    struct RecordThenRead;
+    impl Future for RecordThenRead {
+        type Output = IpeResult<String, bool>;
+        fn poll(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<Self::Output> {
+            crate::core::record_stack_floor(crate::core::RUNTIME_THREAD_STACK_SIZE);
+            Poll::Ready(ok_res::<String, bool>(
+                crate::core::stack_floor_for_test().is_some(),
+            ))
+        }
+    }
+
+    #[test]
+    fn record_stack_floor_writes_and_reads_same_thread_tls() {
+        let task: IpeTask<String, bool> = Box::pin(RecordThenRead);
+        assert!(matches!(block_on(task), IpeResult::Ok(true)));
     }
 }

@@ -48,6 +48,8 @@ mod golden_literals;
 mod golden_number_typeclass;
 #[path = "g_core_data/golden_poly_fn_attr_list.rs"]
 mod golden_poly_fn_attr_list;
+#[path = "g_core_data/golden_recursion_guard.rs"]
+mod golden_recursion_guard;
 #[path = "g_core_data/golden_set_hofs.rs"]
 mod golden_set_hofs;
 #[path = "g_core_data/golden_string_fills.rs"]

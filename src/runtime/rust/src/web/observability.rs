@@ -379,6 +379,104 @@ mod tests {
         assert!(m.contains("status=\"500\""), "{m}");
     }
 
+    // Request isolation for a recursion trip: a handler whose panic is the
+    // recursion-guard trip (`maximum recursion depth exceeded`) is contained by
+    // the SAME `CatchPanicLayer` — that request gets a 500 carrying only the
+    // errId, a CONCURRENT healthy route completes normally, and a request AFTER
+    // the trip is still served. The listener (here the shared router service)
+    // survives the runaway recursion; only the one request is lost. The 500 body
+    // never carries the trip message. This is the runtime half of the Ipe.Http.Server
+    // isolation contract the emitted handler rides.
+    #[tokio::test]
+    async fn recursion_trip_in_handler_is_isolated_per_request() {
+        use axum::Router;
+        use axum::body::Body;
+        use axum::http::Request;
+        use axum::routing::get;
+        use tower::ServiceExt; // oneshot
+
+        // A handler that trips the recursion guard: it panics with the exact
+        // fixed message `recursion_guard()` raises. Explicit `-> Response` so the
+        // never type doesn't trip the denied never-type-fallback lint.
+        #[cfg(test)]
+        async fn runaway() -> axum::response::Response {
+            let _g = crate::core::recursion_guard();
+            // Drive the guard to a trip directly rather than actually recursing
+            // 10 000 frames in a unit test: raise the same fixed message the guard
+            // raises, so this exercises the classify→500 containment path a real
+            // trip takes.
+            panic!("maximum recursion depth exceeded")
+        }
+        #[cfg(test)]
+        async fn healthy() -> axum::response::Response {
+            use axum::response::IntoResponse;
+            (StatusCode::OK, "ok").into_response()
+        }
+
+        let app = Router::new()
+            .route("/runaway", get(runaway))
+            .route("/healthy", get(healthy))
+            .layer(tower_http::catch_panic::CatchPanicLayer::custom(
+                |err: Box<dyn std::any::Any + Send + 'static>| {
+                    use axum::response::IntoResponse;
+                    (
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        [(axum::http::header::CONTENT_TYPE, "application/json")],
+                        crate::core::panic_500_body(&*err),
+                    )
+                        .into_response()
+                },
+            ))
+            .layer(axum::middleware::from_fn(track));
+
+        let call = |path: &'static str| {
+            let app = app.clone();
+            async move {
+                let req = match Request::builder().uri(path).body(Body::empty()) {
+                    Ok(r) => r,
+                    Err(e) => panic!("build request: {e}"),
+                };
+                let resp = app.oneshot(req).await.unwrap_or_else(|e| match e {});
+                let status = resp.status();
+                let body = body_string(resp).await;
+                (status, body)
+            }
+        };
+
+        // Request A (runaway) and request B (healthy) run concurrently; A must be
+        // contained without taking B down with it.
+        let (a, b) = tokio::join!(call("/runaway"), call("/healthy"));
+        let (a_status, a_body) = a;
+        let (b_status, _b_body) = b;
+
+        assert_eq!(
+            a_status,
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "the tripped handler returns a 500"
+        );
+        assert!(
+            a_body.contains("ref"),
+            "the 500 carries a correlation ref: {a_body}"
+        );
+        assert!(
+            !a_body.contains("maximum recursion depth exceeded"),
+            "the trip message must NEVER reach the client: {a_body}"
+        );
+        assert_eq!(
+            b_status,
+            StatusCode::OK,
+            "a concurrent healthy request completes normally"
+        );
+
+        // Request C after the trip: the service is still alive and serving.
+        let (c_status, _c_body) = call("/healthy").await;
+        assert_eq!(
+            c_status,
+            StatusCode::OK,
+            "a request after the trip is still served — the listener survives"
+        );
+    }
+
     #[tokio::test]
     async fn readyz_flips_to_draining() {
         // Default ready.
