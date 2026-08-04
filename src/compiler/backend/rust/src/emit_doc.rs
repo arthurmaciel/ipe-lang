@@ -4069,7 +4069,7 @@ mod tests {
         let effect = Expr::Access {
             record: Box::new(Expr::Var(row)),
             field,
-            field_ty: Some(IrType::Str),
+            field_ty: IrType::Str,
         };
         let rewritten = crate::emit_expr::clone_targets_in_expr(effect, &captures, &row_binders);
         match rewritten {
