@@ -3882,7 +3882,7 @@ impl<'a> Builder<'a> {
                 Box::new(self.interpret_shape(res)),
             ),
             TyShape::Con(tag, args) => Ty::Con {
-                module: Vec::new(),
+                module: self.builtin_con_module(*tag),
                 name: self.builtin_symbol(*tag),
                 args: args.iter().map(|a| self.interpret_shape(a)).collect(),
             },
@@ -3950,6 +3950,38 @@ impl<'a> Builder<'a> {
             BuiltinTag::ServerRequest => self.builtins.server_request,
             BuiltinTag::ServerCookie => self.builtins.server_cookie,
             BuiltinTag::ServerRoute => self.builtins.server_route,
+            // `Ipe.Ui.Attribute` and `Ipe.Html.Attribute` share this interned
+            // `Attribute` name; they differ only in the module path
+            // (`builtin_con_module`).
+            BuiltinTag::UiAttribute | BuiltinTag::HtmlAttribute => self.builtins.attribute,
+            BuiltinTag::UiElement => self.builtins.element,
+            BuiltinTag::Html => self.builtins.html_con,
+            BuiltinTag::UiLength => self.builtins.length,
+            BuiltinTag::UiColor => self.builtins.color,
+            BuiltinTag::UiDescription => self.builtins.description,
+            BuiltinTag::UiPseudoClass => self.builtins.pseudo_class,
+            BuiltinTag::InputLabel => self.builtins.input_label_con,
+            BuiltinTag::InputPlaceholder => self.builtins.input_placeholder_con,
+            BuiltinTag::InputRadioOption => self.builtins.input_radio_option_con,
+        }
+    }
+
+    /// The module path an interpreted [`TyShape::Con`] carries for a given
+    /// [`BuiltinTag`], mirroring the exact `Ty::Con { module, .. }` its
+    /// `stdlib_scheme` arm builds.
+    ///
+    /// Every tag is empty-module (unqualified) EXCEPT
+    /// [`BuiltinTag::HtmlAttribute`]: it shares the `Attribute` name with
+    /// [`BuiltinTag::UiAttribute`] but is module-qualified with the `Html`
+    /// constructor symbol, so `ir_type_from_ty`'s disambiguation selects the
+    /// `Html` attribute variant that every `Ipe.Html` node kernel takes. Keeping
+    /// this the ONE non-empty case preserves byte-identity for the qualified
+    /// `Ipe.Html.Attribute` cons while leaving all other interpreted cons
+    /// unqualified.
+    fn builtin_con_module(&self, tag: BuiltinTag) -> Vec<Symbol> {
+        match tag {
+            BuiltinTag::HtmlAttribute => vec![self.builtins.html_con],
+            _ => Vec::new(),
         }
     }
 
@@ -9647,19 +9679,36 @@ mod registry_phase_c_tests {
         // `ServerRoute` / `ServerCookie` / `ServerRequest` handle kernels, and
         // the raw-`Int`-handle `WebSocket` client.
         //
-        // Still on the `stdlib_scheme` table (not shape-migrated here): the
-        // `Ui` / `Html` builder giants (need `Attribute` / `Element` / `Html`
-        // cons), and every closed-record / open-row family (the app-entry cfg
-        // records, `HttpRequest` / `HttpResponse` / `Response`, `Migration`,
-        // `Csv` / `CacheCfg` / `CacheStats` / `WebSocketCfg` / `EmailMessage`,
-        // `RetryPolicy`, and the `Input` / `Border` / `Ui.link`·`image` record
-        // arms) — they need a record / row node.
+        // Now shape-migrated too: the `Ui` / `Html` / style builder families —
+        // layout / element / event / attribute builders, the `Html` node and
+        // `Html.Attributes` / `Html.Events` builders, the `Font` / `Border` /
+        // `Background` / `Region` attribute builders, the `Length` / `Color` /
+        // `Description` / `PseudoClass` value builders, the non-record `Input`
+        // constructors (`label*` / `labelHidden` / `placeholder` / `option`),
+        // `Ui.Keyed`, `Ui.Lazy`, `Ui.breakpoint` / `mediaQuery` / `onPseudo`,
+        // and `Server.listen` — via the `Attribute` / `Element` / `Html` /
+        // `Length` / `Color` / `Description` / `PseudoClass` / `Label` /
+        // `Placeholder` / `RadioOption` `Con` tags. The `Ipe.Html.Attribute`
+        // cons are module-qualified (the `HtmlAttribute` tag carries the `Html`
+        // module path — see `builtin_con_module`), byte-identical to the
+        // `stdlib_scheme` `html_attr` builder.
+        //
+        // Still on the `stdlib_scheme` table (not shape-migrated here): every
+        // closed-record / open-row family — the app-entry cfg records
+        // (`WebApp` / `WebView` / `Terminal` / `Program`), `HttpRequest` /
+        // `HttpResponse` / `Response`, `Migration`, `Csv` / `CacheCfg` /
+        // `CacheStats` / `WebSocketCfg` / `EmailMessage`, `RetryPolicy`, and the
+        // record-carrying `Input` (`text` / `multiline` / `checkbox` / `slider`
+        // / `radio` / `radioRow`) / `Border` (`widthEach` / `shadow` /
+        // `innerShadow`) / `Ui.button` / `Ui.layoutWith` / `Ui.paddingEach` /
+        // `Ui.link` / `Ui.image` arms, plus the record-producing `Server`
+        // route-handler kernels — they need a record / row node.
         assert!(
-            migrated >= 607,
+            migrated >= 889,
             "expected at least the primitive + core-List + arrow-only + \
              tuple-shaped + arrow-scalar polymorphic kernels plus the migrated \
-             effect / scalar-opaque families (607 total) to carry a TyShape, \
-             found only {migrated}",
+             effect / scalar-opaque families and the Ui / Html / style builder \
+             families (889 total) to carry a TyShape, found only {migrated}",
         );
     }
 
