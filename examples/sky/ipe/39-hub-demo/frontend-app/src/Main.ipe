@@ -14,7 +14,7 @@ import Ipe.Task as Task
 import Ipe.Tea.Web.Cmd as Cmd
 import Ipe.Html exposing (..)
 import Ipe.Html.Attributes exposing (..)
-import Ipe.Web exposing (app, route)
+import Ipe.Tea.Web exposing (app, route)
 import Ipe.Log as Log
 import Ipe.Tea.Web.Sub as Sub
 

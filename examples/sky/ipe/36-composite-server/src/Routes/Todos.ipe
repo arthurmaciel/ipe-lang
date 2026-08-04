@@ -64,7 +64,7 @@ handleList cfg db req =
         cfg
         req
         (\claims ->
-            Db.unsafeQuery
+            Db.query
                 db
                 "SELECT id, user_id, text, done, created_at FROM todos WHERE user_id = ? ORDER BY created_at DESC"
                 [ String.fromInt claims.userId ]
@@ -128,19 +128,12 @@ insertTodo db claims payload =
                                                          })))
 
 
--- The typed topic handle. Its `JsonEnc.Value` payload type is what any
--- subscriber on this same value must agree on.
-todoCreatedTopic : PubSub.Topic JsonEnc.Value
-todoCreatedTopic =
-    PubSub.topic "todos.created"
-
-
 -- Task-shaped publish.  Returns the subscriber count, but the route
 -- never refuses the request when no Live.app is listening — the
 -- publish failure is logged + swallowed via Task.onError.
 publishTodoCreated : Todo -> Task Error Response
 publishTodoCreated todo =
-    PubSub.publish todoCreatedTopic (encodeTodo todo)
+    PubSub.publish "todos.created" (encodeTodo todo)
         |> Task.onError
                (\e ->
                    let

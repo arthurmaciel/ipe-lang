@@ -21,7 +21,7 @@ import Ipe.System as System
 import Ipe.Task as Task
 import Ipe.Time as Time
 import Ipe.Tea.WebView.Cmd as Cmd
-import Ipe.Web as Live
+import Ipe.Tea.Web as Live
 import Ipe.Tea.WebView.Sub as Sub
 import Ipe.Tea.WebView.Sub exposing (Sub)
 import Ipe.Tui as Tui

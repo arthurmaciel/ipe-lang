@@ -6,7 +6,6 @@ module State exposing (..)
 
 import Ipe.List as List
 import Ipe.String as String
-import Ipe.PubSub as PubSub
 
 type alias Product =
     { id : Int
@@ -73,18 +72,6 @@ type alias Model =
     , recentTopic : String
     }
 
-type alias CartEvent =
-    { name : String
-    , count : Int
-    }
-
--- The shared pub/sub topic handle. Publisher (Update) and subscriber
--- (Main) reference this same value so the compiler enforces the
--- `CartEvent` payload type on both sides.
-cartTopic : PubSub.Topic CartEvent
-cartTopic =
-    PubSub.topic "cart"
-
 type Msg
     = Navigate Page
     | AddToCart Int
@@ -96,7 +83,7 @@ type Msg
     | DoSignIn SignInForm
     | LogoutClicked
     | Tick
-    | CartTopicReceived CartEvent
+    | CartTopicReceived any
     | CheckoutClicked
 
 
