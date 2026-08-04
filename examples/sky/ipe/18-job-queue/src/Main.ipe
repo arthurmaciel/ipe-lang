@@ -153,7 +153,7 @@ saveSnapshot okCount failCount total =
                 "INSERT INTO snapshots (ok, failed, total, ts) VALUES (?, ?, ?, ?)"
                 [ okCount, failCount, total, ts ]
         writeAll db =
-            Db.execRaw db createSnapshotTable
+            Db.unsafeExecRaw db createSnapshotTable
                 |> Task.andThen (\_ -> Time.now ())
                 |> Task.andThen (\ts -> insertRow db ts)
         successMsg =
@@ -172,12 +172,12 @@ loadHistory : Task Error (List Snapshot)
 loadHistory =
     let
         selectRecent db =
-            Db.query
+            Db.unsafeQuery
                 db
                 "SELECT ok, failed, total, ts FROM snapshots ORDER BY ts DESC LIMIT 5"
                 []
         readAll db =
-            Db.execRaw db createSnapshotTable
+            Db.unsafeExecRaw db createSnapshotTable
                 |> Task.andThen (\_ -> selectRecent db)
     in
         Db.open "sqlite" dbPath |> Task.andThen readAll
