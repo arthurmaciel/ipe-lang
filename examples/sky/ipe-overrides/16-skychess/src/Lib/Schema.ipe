@@ -1,0 +1,42 @@
+module Lib.Schema exposing (ensureSchema)
+
+import Ipe.Task as Task
+import Ipe.Db as Db
+import Ipe.Error as Error exposing (Error)
+
+
+-- Create the games and moves tables if they do not already exist, chained
+-- off an open connection. Every effect in this app calls `ensureSchema`
+-- right after `Db.connect` (via `Lib.Db.withConn`), so the schema is
+-- guaranteed present before any read or write and the connection never
+-- escapes into the session-persisted Model. The same connection flows out
+-- so the caller can keep building its Task pipeline.
+ensureSchema : Db -> Task Error Db
+ensureSchema conn =
+    Db.unsafeExecRaw
+        conn
+        """CREATE TABLE IF NOT EXISTS games (
+            id TEXT PRIMARY KEY,
+            player_name TEXT NOT NULL,
+            status TEXT NOT NULL DEFAULT 'playing',
+            result TEXT NOT NULL DEFAULT '',
+            move_count INTEGER NOT NULL DEFAULT 0,
+            created_at TEXT DEFAULT (datetime('now')),
+            updated_at TEXT DEFAULT (datetime('now'))
+        )"""
+        |> Task.andThen
+            (\_ ->
+                Db.unsafeExecRaw
+                    conn
+                    """CREATE TABLE IF NOT EXISTS moves (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        game_id TEXT NOT NULL,
+                        move_number INTEGER NOT NULL,
+                        from_square INTEGER NOT NULL,
+                        to_square INTEGER NOT NULL,
+                        algebraic TEXT NOT NULL,
+                        colour TEXT NOT NULL,
+                        created_at TEXT DEFAULT (datetime('now'))
+                    )"""
+            )
+        |> Task.map (\_ -> conn)
