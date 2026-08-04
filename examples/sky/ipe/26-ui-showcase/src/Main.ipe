@@ -7,6 +7,8 @@ import Ipe.Ui.Background as Background
 import Ipe.Ui.Border as Border
 import Ipe.Ui.Chart as Chart
 import Ipe.Ui.Font as Font
+import Ipe.Tea.Web.Cmd as Cmd
+import Ipe.Tea.Web.Sub as Sub
 import RegressionGates
 
 type alias Model =
@@ -18,7 +20,7 @@ type Msg
     | Edit String
 
 
-init : LiveReq -> ( Model, Cmd Msg )
+init : WebReq -> ( Model, Cmd Msg )
 init _ =
     ( { count = 0 }, Cmd.none )
 
@@ -565,7 +567,7 @@ counterDemo model =
         ]
 
 
-view : Model -> any
+view : Model -> Element Msg
 view model =
     let
         originalSections =
@@ -597,20 +599,17 @@ view model =
             , section "Chart — heatmap (24 h x 7 d errors)" heatmapDemo
             ]
     in
-        Ui.layout
-            [ Ui.width Ui.fill
+        Ui.column
+            [ Ui.width (Ui.maximum 760 Ui.fill)
             , Ui.height Ui.fill
+            , Ui.centerX
+            , Ui.padding 28
+            , Ui.spacing 18
             , Background.color (Ui.rgb 244 245 248)
             , Font.family "system-ui, -apple-system, Segoe UI, sans-serif"
+            , Ui.htmlAttribute "data-test-id" "showcase-root"
             ]
-            (Ui.column
-                [ Ui.width (Ui.maximum 760 Ui.fill)
-                , Ui.centerX
-                , Ui.padding 28
-                , Ui.spacing 18
-                , Ui.htmlAttribute "data-test-id" "showcase-root"
-                ]
-                (originalSections ++ RegressionGates.cases Edit))
+            (originalSections ++ RegressionGates.cases Edit)
 
 
 main =

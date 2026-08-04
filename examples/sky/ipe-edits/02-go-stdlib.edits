@@ -1,10 +1,42 @@
-module Main exposing (main)
+# The removed synchronous `Task.run` becomes a `Task Error ()` chain performed
+# by the entry boundary: the current time and the HTTP fetch are threaded with
+# `Task.andThen`, and the request failure is recovered with `Task.onError`.
 
-import Ipe.Crypto as Crypto
-import Ipe.Http as Http
-import Ipe.Result as Result
-import Ipe.String as String
-import Ipe.Task as Task
+[[edit]]
+file: src/Main.ipe
+find:
+"""
+import Ipe.Time as Time
+import Ipe.Io as Io
+
+
+main =
+    let
+        nowStr =
+            Time.now () |> Task.run |> Result.map Time.timeString
+                |> Result.withDefault "unknown"
+        _ = Io.println ("Current time: " ++ nowStr)
+        data = "Hello, Sky!"
+        -- v0.10.0: Crypto.sha256 returns the hex digest directly
+        -- (was: Sha256.sum256 + Hex.encodeToString chain).
+        _ = Io.println ("SHA256 of 'Hello, Sky!': " ++ Crypto.sha256 data)
+        _ = Io.println "Sending HTTP request..."
+        httpResult = Task.run (Http.get "https://httpbin.org/get")
+        _ =
+            case httpResult of
+
+                Ok resp ->
+                    Io.println
+                        ("HTTP response received, body length: "
+                            ++ String.fromInt (String.length resp.body))
+
+                Err e ->
+                    Io.println ("HTTP error: " ++ errorToString e)
+    in
+        ()
+"""
+replace:
+"""
 import Ipe.Time as Time
 import Ipe.Io as Io
 import Ipe.Error as Error exposing (Error)
@@ -43,3 +75,4 @@ main =
                                                   ("HTTP error: " ++ Error.toString e)
                                       in
                                           Task.succeed ()))
+"""
