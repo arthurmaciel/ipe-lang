@@ -579,6 +579,13 @@ const _: () = assert!(std::mem::size_of::<CliError>() <= 96);
 /// and its on-disk caches stay untouched (their keys deliberately exclude
 /// the plan; the transform is a deterministic function of the plan applied
 /// on cache-hit and cache-miss paths alike).
+// The four `bool` fields (`wasm_hydrate_mode`, `production`, `runtime_dep`,
+// `tree_shake_vendored`) are genuinely independent, orthogonal build toggles —
+// any combination is valid (a production dep-model build, a vendored tree-shaken
+// dev build, …). They are not the states of one machine, so collapsing them into
+// a two-variant enum or a state enum would obscure their independence rather than
+// clarify it; the clippy heuristic's usual remedy does not apply here.
+#[allow(clippy::struct_excessive_bools)]
 #[derive(Clone, Default)]
 pub struct BuildOptions {
     /// `Some` — staticize the emitted project (activate the planned
@@ -2701,10 +2708,20 @@ fn run_eject(rest: &[String]) -> Result<(), CliError> {
         });
     }
 
+    let manifest = discover_manifest(&entry_path)?;
+
     // Eject targets a plain native `cargo build`; the wasm target has its own
-    // bundling step and a distinct closed vendoring template. Refuse an explicit
-    // wasm request rather than silently emit a native tree.
-    if std::env::var("IPE_TARGET").ok().as_deref() == Some("wasm") {
+    // bundling step and a distinct closed vendoring template. Refuse a wasm
+    // request from ANY tier — the `IPE_TARGET=wasm` env OR a project's
+    // `[wasm].mode` — rather than silently emit a native tree for a browser app.
+    // (`parse_eject` has no `--target` flag, so the CLI tier cannot select wasm
+    // here; `false` for the CLI axis is exact.)
+    let manifest_wasm: Option<project::WasmConfig> = manifest
+        .as_deref()
+        .map(project::parse_manifest)
+        .transpose()?
+        .map(|m| m.wasm);
+    if resolve_wasm_target(false, manifest_wasm.as_ref()) {
         return Err(CliError::EjectUnsupported {
             reason: "eject produces a native Cargo project; the wasm target has a separate \
                      bundling step — use `ipe build --target wasm`"
@@ -2735,7 +2752,6 @@ fn run_eject(rest: &[String]) -> Result<(), CliError> {
         );
     }
 
-    let manifest = discover_manifest(&entry_path)?;
     manifest.as_ref().map_or_else(
         || {
             build_with_sibling_discovery_with_options(
@@ -6103,6 +6119,47 @@ pub mod web {
         assert!(
             !manifest.keys().any(|k| k.starts_with("src/ipe_runtime/db")),
             "an undeclared directory module's whole subtree is tree-shaken away"
+        );
+        let _ = fs::remove_dir_all(&tmp);
+    }
+
+    /// Eject refuses a wasm-target project from the `[wasm].mode` manifest tier —
+    /// not only the `IPE_TARGET` env — so a browser SPA is never silently ejected
+    /// as a native tree (a target the emitted crate would not build). The refusal
+    /// fires before any file is written.
+    #[test]
+    fn eject_refuses_a_wasm_mode_project_from_the_manifest_tier() {
+        let tmp = std::env::temp_dir().join("ipe_eject_wasm_mode_refuse");
+        let _ = fs::remove_dir_all(&tmp);
+        let src = tmp.join("src");
+        fs::create_dir_all(&src).expect("create src/");
+        // A project whose manifest selects the wasm target via `[wasm].mode`,
+        // with no `IPE_TARGET` env set — the tier the env-only check missed.
+        fs::write(
+            tmp.join("ipe.toml"),
+            "name = \"w\"\nentry = \"src/Main.ipe\"\n\n[wasm]\nmode = \"spa\"\n",
+        )
+        .expect("write ipe.toml");
+        fs::write(
+            src.join("Main.ipe"),
+            "module Main exposing (main)\nmain = 0\n",
+        )
+        .expect("write Main.ipe");
+
+        let out = tmp.join("out");
+        let args = [
+            tmp.join("ipe.toml").to_string_lossy().into_owned(),
+            "--out".to_owned(),
+            out.to_string_lossy().into_owned(),
+        ];
+        let result = run_eject(&args);
+        assert!(
+            matches!(result, Err(CliError::EjectUnsupported { .. })),
+            "a `[wasm].mode` project must be refused, not ejected native: {result:?}"
+        );
+        assert!(
+            !out.exists(),
+            "the refusal must fire before any project tree is written"
         );
         let _ = fs::remove_dir_all(&tmp);
     }

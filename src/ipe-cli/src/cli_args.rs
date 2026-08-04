@@ -495,10 +495,12 @@ pub struct EjectArgs {
     pub runtime: Option<String>,
 }
 
-/// Parse `ipe eject`'s argument tail. `--out <dir>` is required: eject writes a
-/// whole standalone project, so there is no sensible in-place default the way a
-/// throwaway `ipe build` artifact has — the destination must be named. Each
-/// value flag is rejected on a second occurrence.
+/// Parse `ipe eject`'s argument tail.
+///
+/// `--out <dir>` is required: eject writes a whole standalone project, so there
+/// is no sensible in-place default the way a throwaway `ipe build` artifact has —
+/// the destination must be named. Each value flag is rejected on a second
+/// occurrence.
 ///
 /// # Errors
 /// [`CliError::Usage`] / [`CliError::UsageOwned`] naming the exact problem,
