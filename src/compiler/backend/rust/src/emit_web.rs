@@ -954,6 +954,7 @@ mod schema_tag_tests {
                 uses_config: false,
                 uses_compression: false,
                 uses_csv: false,
+                uses_cache: false,
                 uses_encoding: false,
                 uses_regex: false,
                 uses_uuid: false,

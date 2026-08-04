@@ -1702,6 +1702,22 @@ fn ir_type_mentions_csv(ty: &IrType) -> bool {
     ir_type_mentions(ty, &|t| matches!(t, IrType::CsvDoc))
 }
 
+/// `true` when `ty` mentions the `Ipe.Cache` config record `CacheCfg`
+/// (`IrType::CacheCfg`, rendered `ipe_runtime::cache::CacheCfg`) or the stats
+/// record `CacheStats` (`IrType::CacheStats`), both defined in the `cache`
+/// runtime module. `Cache.defaultCfg` and the `withMaxEntries` / `withTTL` /
+/// `withMaxBytes` builders are pure Ipê source that construct a `CacheCfg`
+/// record literal with NO kernel call, so a program that only builds a config
+/// (never calling `Cache.new`) still emits a `CacheCfg` reference resolved
+/// through the module's `pub use cache::*` glob — omitting this guard would
+/// leave that reference undefined (E0433 — a SEAL breach). The opaque
+/// `IpeCacheHandle` needs no guard: it can only be produced by the
+/// `Cache.newRaw` kernel (mirrors `Url` / `Bytes`), so any program holding a
+/// handle already set the `cache` call-site flag. Mirrors [`ir_type_mentions_csv`].
+fn ir_type_mentions_cache(ty: &IrType) -> bool {
+    ir_type_mentions(ty, &|t| matches!(t, IrType::CacheCfg | IrType::CacheStats))
+}
+
 /// `true` when `ty` mentions the `Ipe.Secret` opaque type `Secret`, defined in
 /// the `secret` runtime module (backed by `ipe_runtime::secret::Secret`). A
 /// function that only forwards a `Secret` parameter — e.g. an `Ipe.Auth` token
@@ -6570,6 +6586,13 @@ struct KernelUsage {
     /// module and the `csv` dependency. Unioned with a `CsvDoc` type-mention
     /// guard at the assembly site.
     csv: bool,
+    /// Any `Ipe.Cache` kernel (`newRaw` / `get` / `put` / `remove` / `clear` /
+    /// `size` / `stats`) — gates the `cache` runtime module and the `cache_kernel`
+    /// runtime-crate feature. A standalone leaf; no other surface reaches it.
+    /// Unioned with a `CacheCfg` / `CacheStats` type-mention guard at the assembly
+    /// site (the pure-Ipê `defaultCfg` / `with*` builders produce a `CacheCfg`
+    /// with no kernel call).
+    cache: bool,
     /// Any `Ipe.Encoding` / `Ipe.Bytes` kernel — gates the `encoding` + `bytes`
     /// runtime modules and the `base64` + `hex` + `percent-encoding` dependencies.
     /// The crypto/db/server/email/jwt/web surfaces also reach the raw codec crates
@@ -6718,6 +6741,7 @@ impl KernelUsage {
             && self.config
             && self.compression
             && self.csv
+            && self.cache
             && self.encoding
             && self.regex
             && self.uuid
@@ -6761,6 +6785,7 @@ impl KernelUsage {
         self.config |= k.is_config();
         self.compression |= k.is_compression();
         self.csv |= k.is_csv();
+        self.cache |= k.is_cache();
         self.encoding |= k.is_encoding();
         self.regex |= k.is_regex();
         self.uuid |= k.is_uuid();
@@ -8944,6 +8969,21 @@ impl<'a> Lowerer<'a> {
         let uses_csv = kernel_usage.csv
             || program_type_mentions(&funcs, &records, &types_ir, &ir_type_mentions_csv);
 
+        // detect `Ipe.Cache` usage — any `Cache.newRaw` / `get` / `put` /
+        // `remove` / `clear` / `size` / `stats` kernel, OR any emittable type
+        // position that mentions the folded `CacheCfg` / `CacheStats` records. The
+        // backend uses this flag to declare `cache` in the emitted
+        // `ipe_runtime/mod.rs` and enable the `cache_kernel` runtime feature. The
+        // type-mention guard is required: `Cache.defaultCfg` and the `with*`
+        // builders are pure Ipê source that construct a `CacheCfg` record literal
+        // with no kernel call, so a config-only program (never calling `Cache.new`)
+        // still names the type and would otherwise emit `CacheCfg` with no
+        // definition in scope (E0433 — a SEAL breach). The opaque `IpeCacheHandle`
+        // needs no guard — a handle is produced only by the `newRaw` kernel, which
+        // sets the call-site flag.
+        let uses_cache = kernel_usage.cache
+            || program_type_mentions(&funcs, &records, &types_ir, &ir_type_mentions_cache);
+
         // detect HEAVY `Ipe.Crypto` usage — any legacy SHA-1/MD5, AEAD, or PBKDF2
         // kernel. The backend uses this flag to declare `crypto` in the emitted
         // `ipe_runtime/mod.rs` and add the `sha1` + `md-5` + `aes-gcm` +
@@ -9121,6 +9161,7 @@ impl<'a> Lowerer<'a> {
             uses_config,
             uses_compression,
             uses_csv,
+            uses_cache,
             uses_encoding,
             uses_regex,
             uses_uuid,

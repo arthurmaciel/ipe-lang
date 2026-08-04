@@ -1,0 +1,30 @@
+module Main exposing (main)
+
+import Ipe.Cache as Cache
+import Ipe.Io as Io
+import Ipe.String
+import Ipe.Task
+
+-- SEAL regression: an `Ipe.Cache` program type-checks (exit 0), but the emitted
+-- crate must also `cargo build`. `Ipe.Cache` reaches `cache_new_raw` /
+-- `cache_put` / `cache_size`, the `CacheCfg` struct, and the `IpeCacheHandle`
+-- enum — all defined in the `cache` runtime module. Before the fix the emitter
+-- never selected that module (no `uses_cache` gate), so the emitted crate
+-- referenced those symbols with no definition in scope (E0422/E0425/E0433 at
+-- `cargo build`). The config is built through the pure-Ipê `defaultCfg` /
+-- `withMaxEntries` / `withTTL` builders, which construct a `CacheCfg` record
+-- with NO kernel call — the type-mention half of the gate.
+cfg : Cache.CacheCfg
+cfg =
+    Cache.defaultCfg
+        |> Cache.withMaxEntries 64
+        |> Cache.withTTL 0
+
+
+main =
+    Task.andThen
+        (\cache ->
+            Task.andThen
+                (\n -> Io.println (String.fromInt n))
+                (Cache.size cache))
+        (Cache.new cfg)
