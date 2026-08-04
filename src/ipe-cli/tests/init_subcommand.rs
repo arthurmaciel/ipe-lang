@@ -56,10 +56,12 @@ fn init_scaffolds_project_files() {
     let _ = fs::remove_dir_all(&dir);
 }
 
-/// A second `ipe init` on an already-scaffolded directory is refused unless
-/// `--force` is supplied.
+/// A second `ipe init` on an already-scaffolded directory never clobbers the
+/// user's project. In this non-interactive harness (no TTY) it succeeds without
+/// prompting and leaves every existing managed file byte-for-byte untouched;
+/// `--force` overwrites them.
 #[test]
-fn init_refuses_existing_project_without_force() {
+fn init_reconciles_existing_project_without_clobbering() {
     let dir = fresh_dir("guard");
     let target = dir.join("app");
     let target_str = target.to_string_lossy().into_owned();
@@ -67,20 +69,40 @@ fn init_refuses_existing_project_without_force() {
     let first = ipe::run_cli(&["init".to_owned(), target_str.clone()]);
     assert!(first.is_ok(), "first init must succeed: {first:?}");
 
+    // A user edit to a managed file must survive a bare re-init.
+    let main_path = target.join("src").join("Main.ipe");
+    let edited = "-- my own program\nmodule Main exposing (main)\n";
+    fs::write(&main_path, edited).expect("edit Main.ipe");
+
     let second = ipe::run_cli(&["init".to_owned(), target_str.clone()]);
     assert!(
-        matches!(
-            second,
-            Err(ipe::CliError::CommandUsage {
-                command: "init",
-                ..
-            })
-        ),
-        "re-init without --force must be refused (and show init's help), got: {second:?}"
+        second.is_ok(),
+        "re-init in an existing dir must not error (no TTY: it reconciles), got: {second:?}"
+    );
+    let after = fs::read_to_string(&main_path).unwrap_or_default();
+    assert_eq!(
+        after, edited,
+        "a bare re-init must not overwrite an existing managed file"
     );
 
+    // A missing managed file IS restored by a non-interactive re-init.
+    let gitignore = target.join(".gitignore");
+    fs::remove_file(&gitignore).expect("remove .gitignore");
+    let third = ipe::run_cli(&["init".to_owned(), target_str.clone()]);
+    assert!(third.is_ok(), "re-init must succeed: {third:?}");
+    assert!(
+        gitignore.is_file(),
+        "a missing managed file must be restored by re-init"
+    );
+
+    // `--force` overwrites even an edited managed file.
     let forced = ipe::run_cli(&["init".to_owned(), target_str, "--force".to_owned()]);
     assert!(forced.is_ok(), "init --force must succeed: {forced:?}");
+    let restored = fs::read_to_string(&main_path).unwrap_or_default();
+    assert!(
+        restored.contains("Increment") && restored.contains("Decrement"),
+        "init --force must overwrite the managed file with the scaffold"
+    );
 
     let _ = fs::remove_dir_all(&dir);
 }

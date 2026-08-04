@@ -10,6 +10,8 @@
 //! Templates are embedded at build time via [`include_str!`] (the sibling
 //! `templates/` directory), so scaffolding is self-contained and offline.
 
+use std::fmt::Write as _;
+use std::io::{IsTerminal as _, Write as _};
 use std::path::{Path, PathBuf};
 
 use crate::CliError;
@@ -27,10 +29,31 @@ const README_MD: &str = include_str!("../templates/README.md.in");
 const GITIGNORE: &str = include_str!("../templates/gitignore.in");
 
 /// `AGENTS.md` — the Ipê authoring reference, embedded from the repository root
-/// so every scaffolded project (and `ipe upgrade-agents`) ships the same
-/// self-contained guide an agent or developer needs to write Ipê. No
-/// substitution: it is byte-identical for every project.
+/// so every scaffolded project ships the same self-contained guide an agent or
+/// developer needs to write Ipê. No substitution: it is byte-identical for every
+/// project.
 const AGENTS_MD: &str = include_str!("../../../AGENTS.md");
+
+/// One file `ipe init` manages: where it lives, relative to the target, and the
+/// content it would write there.
+struct ManagedFile {
+    /// The file's path relative to the target directory.
+    rel: PathBuf,
+    /// The exact bytes `init` would write.
+    content: String,
+}
+
+/// What `init` will do with a single managed file, decided once from its
+/// on-disk presence and the run's consent mode. Making the choice a value
+/// keeps the decision (which may prompt) separate from the write (which never
+/// prompts), so no write path re-derives consent.
+enum FileAction {
+    /// Write the file — it is absent, or the user consented to overwrite it.
+    Write,
+    /// Leave the file untouched — the user declined, or a non-interactive run
+    /// refused to overwrite silently.
+    Skip,
+}
 
 /// `ipe init [<name>] [--force]`.
 ///
@@ -38,11 +61,15 @@ const AGENTS_MD: &str = include_str!("../../../AGENTS.md");
 /// `<name>` as the project name. With no argument or `.`, scaffold in the
 /// current directory and take the project name from the directory's own name.
 ///
+/// In an already-populated directory `init` never clobbers silently: for each
+/// managed file it asks per file — restoring a missing one (default yes) or
+/// overwriting an existing one (default no). `--force` overwrites every managed
+/// file without asking. A non-interactive run (no TTY) never prompts: it writes
+/// only the missing files and reports the existing ones it left untouched.
+///
 /// # Errors
-/// Returns [`CliError::Usage`] on an unrecognised flag,
-/// [`CliError::UsageOwned`] when the target already holds a project (an
-/// existing `ipe.toml` or a non-empty `src/`) and `--force` was not given, and
-/// [`CliError::Io`] on any filesystem failure.
+/// Returns [`CliError::UsageOwned`] on an unrecognised flag or an unexpected
+/// argument, and [`CliError::Io`] on any filesystem failure.
 pub fn run_init(rest: &[String]) -> Result<(), CliError> {
     let mut target_arg: Option<String> = None;
     let mut force = false;
@@ -67,13 +94,143 @@ pub fn run_init(rest: &[String]) -> Result<(), CliError> {
     let target_dir = PathBuf::from(target);
     let project_name = project_name_for(&target_dir)?;
 
-    if !force {
-        guard_empty(&target_dir)?;
+    let files = managed_files(&project_name);
+    let fresh = is_fresh_target(&target_dir)?;
+    if fresh || force {
+        scaffold(&target_dir, &files)?;
+        print_next_steps(target, &project_name);
+    } else {
+        reconcile_existing(&target_dir, &files)?;
+    }
+    Ok(())
+}
+
+/// The complete set of files `init` writes, each with its final content
+/// (`{name}` already substituted). The single source of truth for both a fresh
+/// scaffold and a per-file reconcile of an existing project.
+fn managed_files(project_name: &str) -> Vec<ManagedFile> {
+    vec![
+        ManagedFile {
+            rel: PathBuf::from("ipe.toml"),
+            content: IPE_TOML.replace("{name}", project_name),
+        },
+        ManagedFile {
+            rel: PathBuf::from("src").join("Main.ipe"),
+            content: MAIN_IPE.to_owned(),
+        },
+        ManagedFile {
+            rel: PathBuf::from("README.md"),
+            content: README_MD.replace("{name}", project_name),
+        },
+        ManagedFile {
+            rel: PathBuf::from(".gitignore"),
+            content: GITIGNORE.to_owned(),
+        },
+        ManagedFile {
+            rel: PathBuf::from("AGENTS.md"),
+            content: AGENTS_MD.to_owned(),
+        },
+    ]
+}
+
+/// Whether the target holds none of `init`'s footprint: no `ipe.toml` and no
+/// non-empty `src/`. A fresh (or absent) target scaffolds without prompting.
+fn is_fresh_target(target_dir: &Path) -> Result<bool, CliError> {
+    if target_dir.join("ipe.toml").exists() {
+        return Ok(false);
+    }
+    let src = target_dir.join("src");
+    if src.is_dir() {
+        let mut entries = std::fs::read_dir(&src).map_err(|e| CliError::Io {
+            path: src.clone(),
+            source: e,
+        })?;
+        if entries.next().is_some() {
+            return Ok(false);
+        }
+    }
+    Ok(true)
+}
+
+/// Reconcile an already-populated target against the managed set, one file at a
+/// time. An interactive run asks per file (restore a missing file, default yes;
+/// overwrite an existing one, default no). A non-interactive run writes only the
+/// missing files and reports every existing file it left untouched — it never
+/// overwrites without a visible decision.
+fn reconcile_existing(target_dir: &Path, files: &[ManagedFile]) -> Result<(), CliError> {
+    let interactive = std::io::stdin().is_terminal() && std::io::stdout().is_terminal();
+    let mut restored: Vec<PathBuf> = Vec::new();
+    let mut skipped: Vec<PathBuf> = Vec::new();
+
+    for file in files {
+        let path = target_dir.join(&file.rel);
+        let exists = path.exists();
+        let action = decide_action(&file.rel, exists, interactive);
+        match action {
+            FileAction::Write => {
+                if let Some(parent) = path.parent() {
+                    create_dir_all(parent)?;
+                }
+                write_file(&path, &file.content)?;
+                restored.push(file.rel.clone());
+            }
+            FileAction::Skip => skipped.push(file.rel.clone()),
+        }
     }
 
-    scaffold(&target_dir, &project_name)?;
-    print_next_steps(target, &project_name);
+    print_reconcile_summary(interactive, &restored, &skipped);
     Ok(())
+}
+
+/// Decide what to do with one managed file. A missing file defaults to being
+/// restored; an existing file defaults to being left alone — the fail-closed
+/// choice, so a project's own edits are never overwritten without an explicit
+/// yes. An interactive run may override either default through a per-file
+/// prompt; a non-interactive run takes the default silently.
+fn decide_action(rel: &Path, exists: bool, interactive: bool) -> FileAction {
+    if !exists {
+        // Restoring a missing file: default yes.
+        if !interactive || prompt_yes_no(&format!("Restore {}?", rel.display()), true) {
+            return FileAction::Write;
+        }
+        return FileAction::Skip;
+    }
+    // Overwriting an existing file: default no, and never without a prompt.
+    if interactive && prompt_yes_no(&format!("Overwrite {}?", rel.display()), false) {
+        FileAction::Write
+    } else {
+        FileAction::Skip
+    }
+}
+
+/// Ask a `[Y/n]` / `[y/N]` question and read the answer, echoing the default in
+/// the brackets. An empty answer (a bare Enter) takes `default`.
+fn prompt_yes_no(question: &str, default: bool) -> bool {
+    let hint = if default { "[Y/n]" } else { "[y/N]" };
+    print!("{}", style::gutter(&format!("{question} {hint} ")));
+    let _ = std::io::stdout().flush();
+    crate::read_yes_no_default(default)
+}
+
+/// Report what `reconcile_existing` did: the files restored and the ones left in
+/// place. A non-interactive run frames the skipped set as "would change" so a
+/// script's operator sees what an interactive run would have offered.
+fn print_reconcile_summary(interactive: bool, restored: &[PathBuf], skipped: &[PathBuf]) {
+    let mut body = String::new();
+    for rel in restored {
+        let _ = writeln!(body, "restored {}", rel.display());
+    }
+    for rel in skipped {
+        if interactive {
+            let _ = writeln!(body, "kept {} (unchanged)", rel.display());
+        } else {
+            let _ = writeln!(body, "would overwrite {} (skipped: no TTY)", rel.display());
+        }
+    }
+    if body.is_empty() {
+        body.push_str("nothing to do.\n");
+    }
+    print!("{}", style::frame(&style::gutter(&body)));
 }
 
 /// Derive the project name: the last path component of the target, resolved to
@@ -102,75 +259,16 @@ fn project_name_for(target_dir: &Path) -> Result<String, CliError> {
     Ok(name)
 }
 
-/// Refuse to overwrite an existing project: a present `ipe.toml`, or a `src/`
-/// directory that already holds files. An empty or absent target is fine.
-fn guard_empty(target_dir: &Path) -> Result<(), CliError> {
-    if target_dir.join("ipe.toml").exists() {
-        return Err(CliError::UsageOwned(format!(
-            "init: {} already contains an ipe.toml — pass --force to scaffold anyway",
-            target_dir.display()
-        )));
-    }
-    let src = target_dir.join("src");
-    if src.is_dir() {
-        let mut entries = std::fs::read_dir(&src).map_err(|e| CliError::Io {
-            path: src.clone(),
-            source: e,
-        })?;
-        if entries.next().is_some() {
-            return Err(CliError::UsageOwned(format!(
-                "init: {} already has a non-empty src/ — pass --force to scaffold anyway",
-                target_dir.display()
-            )));
+/// Write every managed file into a fresh (or force-overwritten) target,
+/// creating each file's parent directory as needed.
+fn scaffold(target_dir: &Path, files: &[ManagedFile]) -> Result<(), CliError> {
+    for file in files {
+        let path = target_dir.join(&file.rel);
+        if let Some(parent) = path.parent() {
+            create_dir_all(parent)?;
         }
+        write_file(&path, &file.content)?;
     }
-    Ok(())
-}
-
-/// Write every scaffold file, creating `<target>/` and `<target>/src/` as
-/// needed. `{name}` in the templated files is replaced with `project_name`.
-fn scaffold(target_dir: &Path, project_name: &str) -> Result<(), CliError> {
-    let src_dir = target_dir.join("src");
-    create_dir_all(&src_dir)?;
-
-    write_file(
-        &target_dir.join("ipe.toml"),
-        &IPE_TOML.replace("{name}", project_name),
-    )?;
-    write_file(&src_dir.join("Main.ipe"), MAIN_IPE)?;
-    write_file(
-        &target_dir.join("README.md"),
-        &README_MD.replace("{name}", project_name),
-    )?;
-    write_file(&target_dir.join(".gitignore"), GITIGNORE)?;
-    write_file(&target_dir.join("AGENTS.md"), AGENTS_MD)?;
-    Ok(())
-}
-
-/// `ipe upgrade-agents` — (re)write `AGENTS.md` in the current directory.
-///
-/// Writes the version of the Ipê authoring reference this `ipe` ships, so an
-/// existing project can refresh it as the reference evolves. Overwrites any
-/// existing `AGENTS.md` (that is the point — it is a generated, non-hand-edited
-/// reference).
-///
-/// # Errors
-/// [`CliError::UsageOwned`] on any unexpected argument; [`CliError::Io`] when the
-/// file cannot be written.
-pub fn run_upgrade_agents(rest: &[String]) -> Result<(), CliError> {
-    if let Some(arg) = rest.first() {
-        return Err(CliError::UsageOwned(format!(
-            "upgrade-agents: unexpected argument `{arg}` (it takes none)"
-        )));
-    }
-    write_file(Path::new("AGENTS.md"), AGENTS_MD)?;
-    print!(
-        "{}",
-        style::frame(&style::gutter(&format!(
-            "wrote AGENTS.md ({} bytes)",
-            AGENTS_MD.len()
-        )))
-    );
     Ok(())
 }
 
