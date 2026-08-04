@@ -319,6 +319,32 @@ See [`docs/editor-integration.md`](docs/editor-integration.md) for setup
 instructions covering Helix, Neovim, VS Code, Emacs (lsp-mode and Doom Emacs),
 and Zed.
 
+## Ejecting to plain Rust
+
+`ipe eject` emits a self-contained Rust Cargo project you can `cargo build` with
+no `ipe` toolchain installed — the escape hatch from the runtime-crate model.
+Unlike `ipe build`, which emits a project that names the Ipê runtime as a
+dependency, eject **vendors** the runtime source into the output and **tree-shakes**
+it to only the modules your program reaches. The result is small, offline-buildable,
+and auditable: plain, reviewable Rust with no external runtime path — ideal for a
+Rust-only shop that must comply with a "Rust only" rule.
+
+```sh
+# Eject the program-shape example into a standalone project:
+ipe eject examples/shapes/program/release-preflight/ipe.toml --out /tmp/eject-demo
+
+# Build it with plain cargo — no ipe toolchain required:
+cd /tmp/eject-demo
+cargo build --release
+```
+
+The vendored runtime under `src/ipe_runtime/` contains only the modules the
+program reaches — a program that touches no database, web, or crypto surface
+carries none of those runtime modules. A program that binds a foreign Rust crate
+(FFI) cannot be ejected (its external crates would need a registry fetch, which
+the source-only contract forbids); eject refuses such a program with a clear
+message rather than emitting a project that would not build offline.
+
 ## Static compilation
 
 `ipe build --static` produces a fully-static musl binary — zero runtime

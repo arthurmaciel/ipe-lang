@@ -46,7 +46,7 @@ pub mod toolchain;
 pub use ipe_stdlib as stdlib;
 pub mod watch;
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::io::Write;
 use std::path::{Path, PathBuf};
@@ -284,6 +284,16 @@ pub enum CliError {
     /// never shows the `doctor` command's `--help` page. Carries nothing: the
     /// report is the message; this variant is only the exit-code signal.
     DoctorCritical,
+    /// `ipe eject` was asked to eject a program it cannot make self-contained.
+    /// Eject vendors ONLY the embedded runtime source; a program that binds a
+    /// foreign Rust crate (FFI) would need those external crates pulled from a
+    /// registry, which the self-contained, source-only eject contract forbids.
+    /// This is a hard, typed refusal — never a partial eject that would emit a
+    /// tree `cargo build` could not resolve offline. Carries the reason.
+    EjectUnsupported {
+        /// The specific reason the program cannot be ejected.
+        reason: String,
+    },
 }
 
 impl From<toolchain::ToolchainMissing> for CliError {
@@ -409,6 +419,7 @@ impl std::fmt::Display for CliError {
                 "{}doctor: a required prerequisite is missing (see the report above)",
                 style::GUTTER
             ),
+            Self::EjectUnsupported { reason } => write!(f, "{}eject: {reason}", style::GUTTER),
         }
     }
 }
@@ -568,6 +579,13 @@ const _: () = assert!(std::mem::size_of::<CliError>() <= 96);
 /// and its on-disk caches stay untouched (their keys deliberately exclude
 /// the plan; the transform is a deterministic function of the plan applied
 /// on cache-hit and cache-miss paths alike).
+// The four `bool` fields (`wasm_hydrate_mode`, `production`, `runtime_dep`,
+// `tree_shake_vendored`) are genuinely independent, orthogonal build toggles —
+// any combination is valid (a production dep-model build, a vendored tree-shaken
+// dev build, …). They are not the states of one machine, so collapsing them into
+// a two-variant enum or a state enum would obscure their independence rather than
+// clarify it; the clippy heuristic's usual remedy does not apply here.
+#[allow(clippy::struct_excessive_bools)]
 #[derive(Clone, Default)]
 pub struct BuildOptions {
     /// `Some` — staticize the emitted project (activate the planned
@@ -608,6 +626,16 @@ pub struct BuildOptions {
     /// No effect on the wasm target (its manifest is a closed vendoring template
     /// for now — its emit returns before the dependency-model branch).
     pub runtime_dep: bool,
+    /// `true` tree-shakes the vendored runtime tree to only the modules the
+    /// program reaches — the `ipe eject` shape. The emitted `ipe_runtime/mod.rs`
+    /// already declares `pub mod X;` for exactly the reached top-level modules,
+    /// so [`build_emit_manifest`] vendors only those source files instead of the
+    /// whole runtime tree. Ignored unless the emit is the vendored shape (it has
+    /// no effect on a dependency-model emit, which carries no vendored source at
+    /// all). Default `false`: a plain vendored build copies the whole tree
+    /// (rustc drops the undeclared files itself, so the emitted binary is
+    /// identical either way — trimming only changes what source lands on disk).
+    pub tree_shake_vendored: bool,
 }
 
 /// Select the emit model from the environment.
@@ -1152,7 +1180,13 @@ fn compile_modules_observed(
         && let Some(emitted) = cache::try_load(root, epoch, &cache_key)
     {
         return (
-            write_emitted_project(&emitted, out_dir, runtime_dir, options.static_plan.as_ref()),
+            write_emitted_project(
+                &emitted,
+                out_dir,
+                runtime_dir,
+                options.static_plan.as_ref(),
+                options.tree_shake_vendored,
+            ),
             CacheOutcome::Hit,
         );
     }
@@ -1216,6 +1250,7 @@ fn compile_modules_observed(
                         out_dir,
                         runtime_dir,
                         options.static_plan.as_ref(),
+                        options.tree_shake_vendored,
                     ),
                     CacheOutcome::IrHit,
                 );
@@ -1286,7 +1321,13 @@ fn compile_modules_observed(
     }
 
     (
-        write_emitted_project(&emitted, out_dir, runtime_dir, options.static_plan.as_ref()),
+        write_emitted_project(
+            &emitted,
+            out_dir,
+            runtime_dir,
+            options.static_plan.as_ref(),
+            options.tree_shake_vendored,
+        ),
         CacheOutcome::Miss,
     )
 }
@@ -1738,10 +1779,11 @@ fn write_emitted_project(
     out_dir: &Path,
     runtime_dir: &Path,
     static_plan: Option<&ipe_backend_rust::static_build::StaticPlan>,
+    tree_shake_vendored: bool,
 ) -> Result<(), CliError> {
     use ipe_backend_rust::static_build;
 
-    let mut manifest = build_emit_manifest(emitted, runtime_dir)?;
+    let mut manifest = build_emit_manifest(emitted, runtime_dir, tree_shake_vendored)?;
     if let Some(plan) = static_plan {
         if static_build::manifest_is_webview(&emitted.cargo_toml).map_err(backend_invariant_err)? {
             return Err(CliError::StaticRefusal(build_plan::Refusal::WebviewStatic));
@@ -1822,24 +1864,106 @@ fn remove_stale_static_config(out_dir: &Path) -> Result<(), CliError> {
 fn build_emit_manifest(
     emitted: &ipe_backend::EmittedProject,
     runtime_dir: &Path,
+    tree_shake_vendored: bool,
 ) -> Result<BTreeMap<PathBuf, String>, CliError> {
     let mut manifest = BTreeMap::new();
     // Vendoring is skipped for a dependency-model emit — it declares the runtime
     // as a path dependency and carries NO `src/ipe_runtime/` files, so there is
     // no vendored tree to overlay. The emit shape is self-describing: a vendored
     // emit always writes `src/ipe_runtime/mod.rs`; the dep-model emit never does.
-    let is_dep_model = !emitted
+    let emitted_mod_rs = emitted
         .files
-        .keys()
-        .any(|rel| rel.as_str() == "src/ipe_runtime/mod.rs");
-    if !is_dep_model {
-        collect_dir_text(runtime_dir, Path::new("src/ipe_runtime"), &mut manifest)?;
+        .iter()
+        .find(|(rel, _)| rel.as_str() == "src/ipe_runtime/mod.rs")
+        .map(|(_, contents)| contents.as_str());
+    if let Some(mod_rs) = emitted_mod_rs {
+        if tree_shake_vendored {
+            // Eject shape: vendor only the runtime source the program reaches.
+            // The emitted `mod.rs` declares `pub mod X;` for exactly the reached
+            // top-level modules; a source file whose module is never declared is
+            // one rustc would drop anyway, so omitting it from the tree is
+            // behaviour-preserving and shrinks the shippable, auditable artifact.
+            collect_reachable_runtime_text(
+                runtime_dir,
+                Path::new("src/ipe_runtime"),
+                mod_rs,
+                &mut manifest,
+            )?;
+        } else {
+            collect_dir_text(runtime_dir, Path::new("src/ipe_runtime"), &mut manifest)?;
+        }
     }
     manifest.insert(PathBuf::from("Cargo.toml"), emitted.cargo_toml.clone());
     for (rel, contents) in &emitted.files {
         manifest.insert(PathBuf::from(rel.as_str()), contents.clone());
     }
     Ok(manifest)
+}
+
+/// Vendor only the runtime source files the emitted `mod.rs` reaches.
+///
+/// The emitted `ipe_runtime/mod.rs` is a flat, non-`cfg`-gated list of `pub mod
+/// X;` for exactly the top-level modules the program reaches. For each declared
+/// name this copies either the single file `X.rs` or, when `X` is a directory
+/// module, the ENTIRE `X/` subtree — never parsing the subtree's own nested
+/// `mod` declarations. Copying a reached directory whole is the fail-closed
+/// choice the eject contract requires: it can only ever include a file, never
+/// omit one a nested `mod` needs, so the vendored tree always compiles. The
+/// modules a directory does not reach are already excluded at the top level
+/// (an unreached `web`/`db`/`tui`/… directory is never declared, so its whole
+/// subtree is dropped) — where the large size wins come from.
+///
+/// `mod.rs` itself is always copied (it IS the emitted file, overlaid verbatim
+/// by the caller's `emitted.files` pass afterwards); the loop only resolves the
+/// modules it names.
+///
+/// # Errors
+/// [`CliError::Io`] on any filesystem failure reading `runtime_dir`.
+fn collect_reachable_runtime_text(
+    runtime_dir: &Path,
+    dst_prefix: &Path,
+    emitted_mod_rs: &str,
+    manifest: &mut BTreeMap<PathBuf, String>,
+) -> Result<(), CliError> {
+    for name in declared_modules(emitted_mod_rs) {
+        let file = runtime_dir.join(format!("{name}.rs"));
+        let dir = runtime_dir.join(&name);
+        if dir.is_dir() {
+            collect_dir_text(&dir, &dst_prefix.join(&name), manifest)?;
+        } else if file.is_file() {
+            let text = fs::read_to_string(&file).map_err(|e| io_err(&file, e))?;
+            manifest.insert(dst_prefix.join(format!("{name}.rs")), text);
+        }
+        // A `pub mod X;` with neither `X.rs` nor `X/` on disk is an inline
+        // module (a `pub mod web { pub mod route; }` block) — it has no separate
+        // source file to vendor, so there is nothing to copy for it here.
+    }
+    Ok(())
+}
+
+/// The module names a runtime `mod.rs` declares with `pub mod X;` / `mod X;`.
+///
+/// A parse-free line scan sufficient for the emitted `mod.rs`, whose module
+/// declarations are one-per-line `pub mod <name>;` with no attributes, braces,
+/// or trailing content. A declaration that opens an inline module body (`pub
+/// mod web {`) is deliberately excluded — it has no separate source file — by
+/// requiring the statement to end in `;`.
+fn declared_modules(mod_rs: &str) -> BTreeSet<String> {
+    let mut names = BTreeSet::new();
+    for line in mod_rs.lines() {
+        let line = line.trim();
+        let rest = line
+            .strip_prefix("pub mod ")
+            .or_else(|| line.strip_prefix("mod "));
+        if let Some(rest) = rest
+            && let Some(name) = rest.strip_suffix(';')
+            && !name.is_empty()
+            && name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
+        {
+            names.insert(name.to_owned());
+        }
+    }
+    names
 }
 
 /// Recursively read every file under `src_dir` as UTF-8 text, inserting
@@ -2200,6 +2324,7 @@ pub fn run_cli(args: &[String]) -> Result<(), CliError> {
             with_help_on_misuse("upgrade-agents", init::run_upgrade_agents(rest))
         }
         Some((cmd, rest)) if cmd == "build" => with_help_on_misuse("build", run_build(rest)),
+        Some((cmd, rest)) if cmd == "eject" => with_help_on_misuse("eject", run_eject(rest)),
         Some((cmd, rest)) if cmd == "check" => with_help_on_misuse("check", run_check(rest)),
         Some((cmd, rest)) if cmd == "verify" => with_help_on_misuse("verify", run_verify(rest)),
         Some((cmd, rest)) if cmd == "run" => with_help_on_misuse("run", run_run(rest)),
@@ -2459,6 +2584,11 @@ fn run_build(rest: &[String]) -> Result<(), CliError> {
         wasm_hydrate_mode: false,
         production: args.production,
         runtime_dep,
+        // `ipe build` never tree-shakes the vendored tree — a dep-model build
+        // carries no vendored source, and a vendored (`IPE_RUNTIME_VENDORED`)
+        // build keeps the full tree so rustc, not the driver, drops the unreached
+        // files. Only `ipe eject` sets this.
+        tree_shake_vendored: false,
     };
 
     // Human-friendly progress: the compile+emit below is otherwise silent, so
@@ -2524,6 +2654,123 @@ fn run_build(rest: &[String]) -> Result<(), CliError> {
             style::gutter(&format!(
                 "{} built → {}",
                 style::glyph::OK,
+                out_dir.display()
+            ))
+        );
+    }
+    Ok(())
+}
+
+/// `ipe eject [<path>] --out <dir>` — emit a self-contained Rust Cargo project a
+/// user can `cargo build` with no `ipe` toolchain installed.
+///
+/// The escape hatch from the dependency-crate model: where `ipe build` emits a
+/// project that names the runtime as a path dependency (resolved by the
+/// toolchain), eject VENDORS the runtime source into the output — and tree-shakes
+/// it to only the modules the program reaches. The emitted `ipe_runtime/mod.rs`
+/// already declares `pub mod X;` for exactly the reached top-level modules, so
+/// [`build_emit_manifest`] copies only those source files. The result is a
+/// small, auditable, offline-buildable crate: pure, reviewable Rust with no
+/// external runtime path and no registry fetch.
+///
+/// Eject is native-only and FFI-free by contract:
+///   - A foreign-crate FFI binding would need external crates pulled from a
+///     registry, which the source-only, self-contained contract forbids — so an
+///     FFI-bearing program is a hard [`CliError::EjectUnsupported`] refusal
+///     rather than a tree that would not resolve offline.
+///   - `--target wasm` is a distinct compilation axis with its own bundling
+///     step; eject targets a plain-`cargo build` native crate.
+///
+/// # Errors
+/// [`CliError::EjectUnsupported`] for an FFI-bearing program; the same
+/// pipeline / filesystem / runtime-resolution errors as [`build_project`].
+fn run_eject(rest: &[String]) -> Result<(), CliError> {
+    let args = cli_args::parse_eject(rest)?;
+    let entry = match args.entry {
+        Some(e) => e,
+        None => default_entry()?,
+    };
+    let entry_path = PathBuf::from(&entry);
+    let out_dir = PathBuf::from(&args.out);
+
+    // Fail closed on an FFI-bearing project BEFORE any emit: eject vendors only
+    // the embedded runtime SOURCE, so a program binding a foreign Rust crate
+    // cannot be made self-contained (its external crates would be a registry
+    // fetch at the ejected project's `cargo build`). Detecting it from the
+    // installed FFI catalog is the same trusted signal the build pipeline reads;
+    // a non-empty catalog means at least one `Rust.` binding is in scope.
+    if !ffi::load_catalog_for(&entry_path)?.is_empty() {
+        return Err(CliError::EjectUnsupported {
+            reason: "this program binds a foreign Rust crate (FFI). Eject vendors only the \
+                     embedded runtime source, so it cannot produce a self-contained project for \
+                     a program that pulls external crates — build it with `ipe build` instead"
+                .to_owned(),
+        });
+    }
+
+    let manifest = discover_manifest(&entry_path)?;
+
+    // Eject targets a plain native `cargo build`; the wasm target has its own
+    // bundling step and a distinct closed vendoring template. Refuse a wasm
+    // request from ANY tier — the `IPE_TARGET=wasm` env OR a project's
+    // `[wasm].mode` — rather than silently emit a native tree for a browser app.
+    // (`parse_eject` has no `--target` flag, so the CLI tier cannot select wasm
+    // here; `false` for the CLI axis is exact.)
+    let manifest_wasm: Option<project::WasmConfig> = manifest
+        .as_deref()
+        .map(project::parse_manifest)
+        .transpose()?
+        .map(|m| m.wasm);
+    if resolve_wasm_target(false, manifest_wasm.as_ref()) {
+        return Err(CliError::EjectUnsupported {
+            reason: "eject produces a native Cargo project; the wasm target has a separate \
+                     bundling step — use `ipe build --target wasm`"
+                .to_owned(),
+        });
+    }
+
+    let runtime_dir = resolve_vendored_runtime_dir(args.runtime, true)?;
+
+    // Force the vendored, tree-shaken emit shape: a self-contained project names
+    // no runtime path dependency (`runtime_dep = false`) and carries only the
+    // reached runtime source (`tree_shake_vendored = true`). Static/wasm options
+    // stay at their defaults — eject is the plain native standalone shape.
+    let options = BuildOptions {
+        runtime_dep: false,
+        tree_shake_vendored: true,
+        ..BuildOptions::default()
+    };
+
+    let show_progress = {
+        use std::io::IsTerminal as _;
+        std::io::stderr().is_terminal()
+    };
+    if show_progress {
+        eprintln!(
+            "{}",
+            style::gutter(&format!("{} ejecting {entry}", style::glyph::STEP))
+        );
+    }
+
+    manifest.as_ref().map_or_else(
+        || {
+            build_with_sibling_discovery_with_options(
+                &entry_path,
+                &out_dir,
+                &runtime_dir,
+                options.clone(),
+            )
+        },
+        |m| build_project_with_options(m, &out_dir, &runtime_dir, options.clone()),
+    )?;
+
+    if show_progress {
+        eprintln!(
+            "{}",
+            style::gutter(&format!(
+                "{} ejected → {} (self-contained; `cd {} && cargo build`)",
+                style::glyph::OK,
+                out_dir.display(),
                 out_dir.display()
             ))
         );
@@ -2763,6 +3010,9 @@ fn run_run(rest: &[String]) -> Result<(), CliError> {
         wasm_hydrate_mode: false,
         production: false,
         runtime_dep,
+        // `ipe run` builds and executes; it never tree-shakes the vendored tree
+        // (only `ipe eject` does).
+        tree_shake_vendored: false,
     };
 
     manifest.as_ref().map_or_else(
@@ -5782,5 +6032,135 @@ main =
             resolve_wasm_target(true, Some(&cfg)),
             "explicit cli --target wasm must win over mode=off"
         );
+    }
+
+    /// `declared_modules` reads exactly the `pub mod X;` / `mod X;` statements a
+    /// runtime `mod.rs` declares — the oracle the eject tree-shaker copies from.
+    /// A `pub use X::*;` re-export is NOT a module declaration and must not add a
+    /// file to the copy set, and a block-opening `pub mod X {` (an inline module
+    /// with no separate source file) is excluded by the `;` requirement.
+    #[test]
+    fn declared_modules_reads_only_semicolon_terminated_mod_statements() {
+        let mod_rs = "\
+// GENERATED by Ipê — do not edit
+pub mod basics;
+pub mod core;
+mod path_core;
+pub use basics::*;
+pub use core::*;
+pub mod web {
+    pub mod route;
+}
+";
+        let names = declared_modules(mod_rs);
+        assert!(names.contains("basics"), "a `pub mod` is a declaration");
+        assert!(names.contains("core"), "a `pub mod` is a declaration");
+        assert!(names.contains("path_core"), "a bare `mod` is a declaration");
+        assert!(
+            !names.contains("web"),
+            "a block-opening `pub mod web {{` has no separate file — excluded"
+        );
+        // A `pub use X::*;` glob is a re-export, never a module declaration.
+        assert!(
+            !names.contains("basics::*") && names.iter().all(|n| !n.contains('*')),
+            "a glob re-export is not a module declaration"
+        );
+        // The one `;`-terminated statement inside the block (`pub mod route;`) is
+        // collected by name — it is harmless in practice: the copy step resolves
+        // it against no top-level `route.rs`/`route/` and vendors nothing for it.
+        // The real emitted native `mod.rs` is flat (no inline blocks), so this
+        // case never arises there; the copy step, not this scanner, is where the
+        // fail-safe lives.
+        assert!(names.contains("route"));
+    }
+
+    /// The tree-shaker copies a reached module's single `.rs` file, a reached
+    /// directory module's ENTIRE subtree (fail-closed — never omit a nested
+    /// `mod`'s file), and nothing for a module the emitted `mod.rs` never
+    /// declares. This is the whole tree-shaking contract, asserted without a
+    /// compile.
+    #[test]
+    fn reachable_runtime_copy_takes_declared_files_and_whole_reached_dirs() {
+        let tmp = std::env::temp_dir().join("ipe_eject_reach_copy");
+        let _ = fs::remove_dir_all(&tmp);
+        let rt = tmp.join("ipe_runtime");
+        fs::create_dir_all(rt.join("web")).expect("create web/");
+        fs::create_dir_all(rt.join("db")).expect("create db/");
+        fs::write(rt.join("mod.rs"), "pub mod core;\npub mod web;\n").expect("mod.rs");
+        fs::write(rt.join("core.rs"), "// core").expect("core.rs");
+        fs::write(rt.join("unreached.rs"), "// unreached").expect("unreached.rs");
+        fs::write(rt.join("web").join("mod.rs"), "pub mod route;").expect("web/mod.rs");
+        fs::write(rt.join("web").join("route.rs"), "// route").expect("web/route.rs");
+        // An unreached directory module: its whole subtree must be dropped.
+        fs::write(rt.join("db").join("mod.rs"), "// db").expect("db/mod.rs");
+
+        // The emitted mod.rs reaches `core` (file) and `web` (directory), never
+        // `unreached` or `db`.
+        let emitted_mod_rs = "pub mod core;\npub mod web;\n";
+        let mut manifest = BTreeMap::new();
+        collect_reachable_runtime_text(
+            &rt,
+            Path::new("src/ipe_runtime"),
+            emitted_mod_rs,
+            &mut manifest,
+        )
+        .expect("copy reachable runtime");
+
+        let has = |p: &str| manifest.contains_key(&PathBuf::from(p));
+        assert!(has("src/ipe_runtime/core.rs"), "reached file copied");
+        assert!(
+            has("src/ipe_runtime/web/mod.rs") && has("src/ipe_runtime/web/route.rs"),
+            "reached directory module copied WHOLE (nested mod's file included)"
+        );
+        assert!(
+            !has("src/ipe_runtime/unreached.rs"),
+            "an undeclared file is tree-shaken away"
+        );
+        assert!(
+            !manifest.keys().any(|k| k.starts_with("src/ipe_runtime/db")),
+            "an undeclared directory module's whole subtree is tree-shaken away"
+        );
+        let _ = fs::remove_dir_all(&tmp);
+    }
+
+    /// Eject refuses a wasm-target project from the `[wasm].mode` manifest tier —
+    /// not only the `IPE_TARGET` env — so a browser SPA is never silently ejected
+    /// as a native tree (a target the emitted crate would not build). The refusal
+    /// fires before any file is written.
+    #[test]
+    fn eject_refuses_a_wasm_mode_project_from_the_manifest_tier() {
+        let tmp = std::env::temp_dir().join("ipe_eject_wasm_mode_refuse");
+        let _ = fs::remove_dir_all(&tmp);
+        let src = tmp.join("src");
+        fs::create_dir_all(&src).expect("create src/");
+        // A project whose manifest selects the wasm target via `[wasm].mode`,
+        // with no `IPE_TARGET` env set — the tier the env-only check missed.
+        fs::write(
+            tmp.join("ipe.toml"),
+            "name = \"w\"\nentry = \"src/Main.ipe\"\n\n[wasm]\nmode = \"spa\"\n",
+        )
+        .expect("write ipe.toml");
+        fs::write(
+            src.join("Main.ipe"),
+            "module Main exposing (main)\nmain = 0\n",
+        )
+        .expect("write Main.ipe");
+
+        let out = tmp.join("out");
+        let args = [
+            tmp.join("ipe.toml").to_string_lossy().into_owned(),
+            "--out".to_owned(),
+            out.to_string_lossy().into_owned(),
+        ];
+        let result = run_eject(&args);
+        assert!(
+            matches!(result, Err(CliError::EjectUnsupported { .. })),
+            "a `[wasm].mode` project must be refused, not ejected native: {result:?}"
+        );
+        assert!(
+            !out.exists(),
+            "the refusal must fire before any project tree is written"
+        );
+        let _ = fs::remove_dir_all(&tmp);
     }
 }
