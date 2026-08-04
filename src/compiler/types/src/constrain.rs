@@ -3895,6 +3895,9 @@ impl<'a> Builder<'a> {
             // `var(i)` is `Ty::Var(i)`: a scheme-local variable's raw is its bare
             // positional index. Match that exactly for byte-identity.
             TyShape::Var(i) => Ty::Var(u32::from(*i)),
+            // The `stdlib_scheme` table materialises `()` as the bare `Ty::Unit`
+            // leaf; match it exactly.
+            TyShape::Unit => Ty::Unit,
         }
     }
 
@@ -3915,6 +3918,38 @@ impl<'a> Builder<'a> {
             BuiltinTag::Set => self.builtins.set,
             BuiltinTag::Dict => self.builtins.dict,
             BuiltinTag::Order => self.builtins.order,
+            BuiltinTag::Error => self.builtins.error,
+            BuiltinTag::ErrorKind => self.builtins.errorkind,
+            BuiltinTag::ErrorDetails => self.builtins.errordetails,
+            BuiltinTag::Decimal => self.builtins.decimal,
+            BuiltinTag::Task => self.builtins.task,
+            BuiltinTag::Cmd => self.builtins.cmd,
+            BuiltinTag::Sub => self.builtins.sub,
+            BuiltinTag::Topic => self.builtins.topic_con,
+            BuiltinTag::Decoder => self.builtins.decoder,
+            BuiltinTag::Db => self.builtins.db,
+            BuiltinTag::SqlValue => self.builtins.sqlvalue,
+            BuiltinTag::SqlField => self.builtins.sqlfield,
+            BuiltinTag::SqlFragment => self.builtins.sqlfragment,
+            BuiltinTag::Secret => self.builtins.secret,
+            BuiltinTag::Path => self.builtins.path,
+            BuiltinTag::Regex => self.builtins.regex,
+            BuiltinTag::Url => self.builtins.url,
+            BuiltinTag::Locale => self.builtins.locale,
+            BuiltinTag::HttpMethod => self.builtins.http_method,
+            BuiltinTag::CryptoKey => self.builtins.crypto_key,
+            BuiltinTag::CryptoMac => self.builtins.crypto_mac,
+            BuiltinTag::EmailAddress => self.builtins.email_address,
+            BuiltinTag::Claims => self.builtins.jwt_claims,
+            BuiltinTag::Algorithm => self.builtins.jwt_algorithm,
+            BuiltinTag::JsonValue => self.builtins.json_value,
+            BuiltinTag::StreamId => self.builtins.stream_id,
+            BuiltinTag::StreamWriter => self.builtins.stream_writer,
+            BuiltinTag::WsServer => self.builtins.ws_server,
+            BuiltinTag::WsServerCfg => self.builtins.ws_server_cfg,
+            BuiltinTag::ServerRequest => self.builtins.server_request,
+            BuiltinTag::ServerCookie => self.builtins.server_cookie,
+            BuiltinTag::ServerRoute => self.builtins.server_route,
         }
     }
 
@@ -9594,26 +9629,37 @@ mod registry_phase_c_tests {
                  hand-authored signature",
             );
         }
-        // Guard against a silently-empty sweep: the migrated set is the 136
-        // monomorphic primitive kernels, the 23 core `List` combinators, the
-        // arrow-only polymorphic slice (further `List` folds/sorts/reductions,
-        // the `Basics` arrow arms, the `Maybe` / `Result` / `Set` / `Dict`
-        // combinators, and the `Bytes` decoders), the tuple-shaped slice
-        // (`List.zip`/`unzip`/`partition`, `Basics.fst`/`snd`,
-        // `Set.partition`, `Dict.toList`/`fromList`/`partition`,
-        // `Random.seededInt`/`seededFloat`), and the arrow-scalar remainder
-        // (`List.indexedMap`/`map2`..`map5`, the `String` combinators —
-        // `toInt`/`toFloat`/`fromList`/`concat`/`words`/`lines`/`toList`/`join`/
-        // `split`/`uncons`/`indexes`/`foldl`/`foldr`, the `String -> Maybe
-        // String` parsers `Css.Safety.safeValue`/`safePropName`/`safeSelector`
-        // and `Uuid.parse`, `Debug.log`, `Error.toString`, `System.exit`,
-        // `Http.parseQuery`, and `Db.getString`/`getField`/`getInt`/`getBool`).
+        // Guard against a silently-empty sweep. The migrated set spans the
+        // primitive-monomorphic kernels, the core `List` combinators, the
+        // arrow-only / tuple-shaped / arrow-scalar polymorphic slices, and the
+        // effect / scalar-opaque families now expressible with the `Unit` node
+        // and the opaque/parametric `Con` tags: the `Task` / `Cmd` / `Sub` /
+        // `PubSub` combinators, the `() -> …` and `… -> Task ()` effect kernels
+        // (`Io` / `File` / `System` / `Time` / `Random` / `Process` / `Log` /
+        // `Uuid` v4·v7 / `Trace`), the shared `Decoder a` families
+        // (`Json.Decode` / `Db.Decode` / `Config`), the `JsonEnc` encoders, the
+        // `Error` / `ErrorKind` / `ErrorDetails` ADT surface, the scalar-opaque
+        // families (`Secret` / `Regex` / `Path` / `Url` / `Locale` / `Decimal`
+        // via `Db.Decode.money` / `Crypto` typed-key / `EmailAddress` / `Sql`
+        // fragment builders / `Jwt` builder / `Auth` / `Compression` /
+        // `Encoding` decoders / `HttpMethod` / `Env`), the opaque-`Db`-handle
+        // operations, the opaque `StreamWriter` / `StreamId` / `WsServer(Cfg)` /
+        // `ServerRoute` / `ServerCookie` / `ServerRequest` handle kernels, and
+        // the raw-`Int`-handle `WebSocket` client.
+        //
+        // Still on the `stdlib_scheme` table (not shape-migrated here): the
+        // `Ui` / `Html` builder giants (need `Attribute` / `Element` / `Html`
+        // cons), and every closed-record / open-row family (the app-entry cfg
+        // records, `HttpRequest` / `HttpResponse` / `Response`, `Migration`,
+        // `Csv` / `CacheCfg` / `CacheStats` / `WebSocketCfg` / `EmailMessage`,
+        // `RetryPolicy`, and the `Input` / `Border` / `Ui.link`·`image` record
+        // arms) — they need a record / row node.
         assert!(
-            migrated >= 281,
-            "expected at least the 136 monomorphic + 23 core List + 81 \
-             arrow-only + 11 tuple-shaped + 30 arrow-scalar-remainder \
-             polymorphic kernels (281) to carry a TyShape, found only \
-             {migrated}",
+            migrated >= 607,
+            "expected at least the primitive + core-List + arrow-only + \
+             tuple-shaped + arrow-scalar polymorphic kernels plus the migrated \
+             effect / scalar-opaque families (607 total) to carry a TyShape, \
+             found only {migrated}",
         );
     }
 
