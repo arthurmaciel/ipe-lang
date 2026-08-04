@@ -405,14 +405,17 @@ pub fn run_in_bwrap_jail(
 /// `prlimit` caps to confine any child to the parent's capability set, and on
 /// `--nproc` + the wall clock to bound a fork bomb.
 ///
-/// Fail-closed: on any architecture with no compilable filter (non-`x86_64`) this
-/// REFUSES rather than running the payload unfiltered.
+/// Fail-closed: on any architecture with no compilable filter (neither `x86_64`
+/// nor `aarch64`) this REFUSES rather than running the payload unfiltered.
 ///
 /// # Errors
 ///
 /// [`SandboxDefect::NoIsolationMechanism`] when no seccomp filter can be built for
 /// this architecture (fail-closed); otherwise as [`run_in_bwrap_jail`].
-#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+#[cfg(all(
+    target_os = "linux",
+    any(target_arch = "x86_64", target_arch = "aarch64")
+))]
 pub fn run_in_bwrap_jail_deny_subprocess(
     caps: &Capabilities,
     spec: &JailSpec,
@@ -483,7 +486,10 @@ fn run_bwrap(
     // pre_exec hook clears its close-on-exec flag right before exec. A failure
     // aborts the exec, so a jail that could not un-cloexec its filter refuses
     // rather than running the payload without the filter (fail-closed).
-    #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+    #[cfg(all(
+        target_os = "linux",
+        any(target_arch = "x86_64", target_arch = "aarch64")
+    ))]
     if let Some(fd) = seccomp_fd {
         // The seccomp fd must survive the exec so bwrap reads the filter from it;
         // `run_jail::clear_cloexec` is async-signal-safe and defined once, shared
@@ -496,7 +502,10 @@ fn run_bwrap(
         }
     }
     // On platforms without the seccomp path, no caller ever passes a fd.
-    #[cfg(not(all(target_os = "linux", target_arch = "x86_64")))]
+    #[cfg(not(all(
+        target_os = "linux",
+        any(target_arch = "x86_64", target_arch = "aarch64")
+    )))]
     let _ = seccomp_fd;
     let mut child = cmd.spawn().map_err(spawn_err)?;
     let cap = spec.limits.out_cap_bytes;

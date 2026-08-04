@@ -38,17 +38,20 @@ use std::path::{Path, PathBuf};
 use ipe_diagnostics::{Code, IPE_F4413};
 use ipe_kernels::Capability;
 
-// The seccomp program is the Linux/x86_64 lowering of the subprocess axis; off
-// that target no argv/seccomp this crate builds would confine the app (the
-// documented refuse-gap), so the import is Linux-only.
-#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+// The seccomp program is the Linux (x86_64 or aarch64) lowering of the
+// subprocess axis; off those targets no argv/seccomp this crate builds would
+// confine the app (the documented refuse-gap), so the import is Linux-only.
+#[cfg(all(
+    target_os = "linux",
+    any(target_arch = "x86_64", target_arch = "aarch64")
+))]
 use crate::seccomp;
 
 /// Stamp `$item` with the `#[cfg(...)]` for the targets that HAVE a real run
 /// jail compiled into [`exec_in_run_jail`], and the negation on a matching `no:`
 /// item — the ONE place the supported-target set is written as a predicate.
 ///
-/// The supported set is `Linux/x86_64` (the `bwrap`+seccomp jail), macOS (the
+/// The supported set is Linux `x86_64`/`aarch64` (the `bwrap`+seccomp jail), macOS (the
 /// `sandbox-exec` SBPL jail), and Windows (the Job Object + `AppContainer` +
 /// launcher-scrub jail). The value [`platform_supports_jail`] returns
 /// (`JAIL_COMPILED_IN`) is stamped through this macro, and the refuse-stub
@@ -71,7 +74,7 @@ macro_rules! on_jailed_target {
     (yes: { $($yes:item)* } no: { $($no:item)* }) => {
         $(
             #[cfg(any(
-                all(target_os = "linux", target_arch = "x86_64"),
+                all(target_os = "linux", any(target_arch = "x86_64", target_arch = "aarch64")),
                 target_os = "macos",
                 target_os = "windows"
             ))]
@@ -79,7 +82,7 @@ macro_rules! on_jailed_target {
         )*
         $(
             #[cfg(not(any(
-                all(target_os = "linux", target_arch = "x86_64"),
+                all(target_os = "linux", any(target_arch = "x86_64", target_arch = "aarch64")),
                 target_os = "macos",
                 target_os = "windows"
             )))]
@@ -823,7 +826,7 @@ pub fn is_low_value_only(union: &BTreeSet<Capability>) -> bool {
 /// The build-time platform verdict: can a sound run jail be built on THIS
 /// target at all?
 ///
-/// `Linux/x86_64` (the `bwrap`+seccomp jail), macOS (the `sandbox-exec` SBPL
+/// Linux `x86_64`/`aarch64` (the `bwrap`+seccomp jail), macOS (the `sandbox-exec` SBPL
 /// jail), and Windows (the Job Object + `AppContainer` + launcher-scrub jail) →
 /// yes. Everything else is the documented refuse-gap.
 ///
@@ -953,7 +956,13 @@ pub(crate) const fn volume_flags_confine_filesystem(filesystem_flags: u32) -> bo
 /// [`database_confined`] holds (both net and fs are confined); the
 /// `database_membership_is_derived_from_net_and_fs` test proves the list matches
 /// the derivation rather than asserting `database` standalone.
-#[cfg(any(all(target_os = "linux", target_arch = "x86_64"), target_os = "macos"))]
+#[cfg(any(
+    all(
+        target_os = "linux",
+        any(target_arch = "x86_64", target_arch = "aarch64")
+    ),
+    target_os = "macos"
+))]
 const CONFINED_AXES: &[Capability] = &[
     Capability::Network,
     Capability::Filesystem,
@@ -983,7 +992,10 @@ const CONFINED_AXES: &[Capability] = &[
 
 /// The stub arm confines nothing — the fail-closed empty set.
 #[cfg(not(any(
-    all(target_os = "linux", target_arch = "x86_64"),
+    all(
+        target_os = "linux",
+        any(target_arch = "x86_64", target_arch = "aarch64")
+    ),
     target_os = "macos",
     target_os = "windows"
 )))]
@@ -993,7 +1005,7 @@ const CONFINED_AXES: &[Capability] = &[];
 /// built, returning the tools or the fail-closed refusal.
 ///
 /// The required primitives are per-OS, so this function is cfg-split to match the
-/// same platforms [`exec_in_run_jail`] confines: on `Linux/x86_64` it requires
+/// same platforms [`exec_in_run_jail`] confines: on Linux (`x86_64`/`aarch64`) it requires
 /// `bwrap` + `prlimit` (+ `timeout` when the profile sets a wall clock); on macOS
 /// it requires `sandbox-exec`. Off both it is the refuse-gap. `wants_wall_clock`
 /// selects whether `timeout` is additionally required (Linux only).
@@ -1002,7 +1014,10 @@ const CONFINED_AXES: &[Capability] = &[];
 ///
 /// [`RunJailDefect::UnsupportedPlatform`] off every jailed target;
 /// [`RunJailDefect::PrimitiveUnavailable`] when a required primitive is absent.
-#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+#[cfg(all(
+    target_os = "linux",
+    any(target_arch = "x86_64", target_arch = "aarch64")
+))]
 pub fn probe_run_jail_tools(wants_wall_clock: bool) -> Result<RunJailTools, RunJailDefect> {
     let caps = crate::probe();
     let mut missing: Vec<&'static str> = Vec::new();
@@ -1104,14 +1119,17 @@ pub fn probe_run_jail_tools(_wants_wall_clock: bool) -> Result<RunJailTools, Run
 ///
 /// Always [`RunJailDefect::UnsupportedPlatform`].
 #[cfg(not(any(
-    all(target_os = "linux", target_arch = "x86_64"),
+    all(
+        target_os = "linux",
+        any(target_arch = "x86_64", target_arch = "aarch64")
+    ),
     target_os = "macos",
     target_os = "windows"
 )))]
 #[allow(clippy::missing_const_for_fn)]
 pub fn probe_run_jail_tools(_wants_wall_clock: bool) -> Result<RunJailTools, RunJailDefect> {
     Err(RunJailDefect::UnsupportedPlatform {
-        reason: "runtime jail is compiled only for Linux/x86_64, macOS, and Windows",
+        reason: "runtime jail is compiled only for Linux (x86_64/aarch64), macOS, and Windows",
     })
 }
 
@@ -1130,7 +1148,10 @@ pub fn probe_run_jail_tools(_wants_wall_clock: bool) -> Result<RunJailTools, Run
 /// # Errors
 ///
 /// Any [`RunJailDefect`]; on success (Linux) it does not return.
-#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+#[cfg(all(
+    target_os = "linux",
+    any(target_arch = "x86_64", target_arch = "aarch64")
+))]
 pub fn exec_in_run_jail(
     tools: &RunJailTools,
     profile: &SandboxProfile,
@@ -1208,7 +1229,7 @@ pub fn exec_in_run_jail(
 /// described by `profile`, replacing the current process on success (Unix
 /// `exec`).
 ///
-/// The macOS counterpart to the `Linux/x86_64` [`exec_in_run_jail`]: it lowers
+/// The macOS counterpart to the `Linux` [`exec_in_run_jail`]: it lowers
 /// the SAME [`SandboxProfile`] to a Seatbelt SBPL profile via the SAME
 /// [`crate::build_jail::sbpl_from_profile`] the Tier-2 `build_in_jail` uses —
 /// there is ONE SBPL generator, so what confines a Tier-2 build and what confines
@@ -1565,7 +1586,10 @@ fn env_block_from_pairs(pairs: &[(OsString, OsString)]) -> Vec<u16> {
 // Kept a plain `fn` (not `const fn`) so its signature matches the real
 // `exec_in_run_jail` arms, which cannot be `const`.
 #[cfg(not(any(
-    all(target_os = "linux", target_arch = "x86_64"),
+    all(
+        target_os = "linux",
+        any(target_arch = "x86_64", target_arch = "aarch64")
+    ),
     target_os = "macos",
     target_os = "windows"
 )))]
@@ -1579,16 +1603,22 @@ pub fn exec_in_run_jail(
     _app_args: &[OsString],
 ) -> Result<std::convert::Infallible, RunJailDefect> {
     Err(RunJailDefect::UnsupportedPlatform {
-        reason: "runtime jail is compiled only for Linux/x86_64, macOS, and Windows",
+        reason: "runtime jail is compiled only for Linux (x86_64/aarch64), macOS, and Windows",
     })
 }
 
 // The two `fcntl` operations the pre_exec hook needs, wrapped so the raw
 // `extern "C"` surface is contained. `FD_CLOEXEC` is the close-on-exec flag.
-#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+#[cfg(all(
+    target_os = "linux",
+    any(target_arch = "x86_64", target_arch = "aarch64")
+))]
 const FD_CLOEXEC: i32 = 1;
 
-#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+#[cfg(all(
+    target_os = "linux",
+    any(target_arch = "x86_64", target_arch = "aarch64")
+))]
 unsafe extern "C" {
     fn fcntl(fd: i32, cmd: i32, ...) -> i32;
     fn memfd_create(name: *const core::ffi::c_char, flags: core::ffi::c_uint) -> i32;
@@ -1596,12 +1626,21 @@ unsafe extern "C" {
     fn lseek(fd: i32, offset: i64, whence: i32) -> i64;
 }
 
-#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+#[cfg(all(
+    target_os = "linux",
+    any(target_arch = "x86_64", target_arch = "aarch64")
+))]
 const F_GETFD: i32 = 1;
-#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+#[cfg(all(
+    target_os = "linux",
+    any(target_arch = "x86_64", target_arch = "aarch64")
+))]
 const F_SETFD: i32 = 2;
 
-#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+#[cfg(all(
+    target_os = "linux",
+    any(target_arch = "x86_64", target_arch = "aarch64")
+))]
 fn libc_fcntl_getfd(fd: i32) -> std::io::Result<i32> {
     // SAFETY: a plain fcntl(F_GETFD) query on an owned fd; no memory is touched.
     let r = unsafe { fcntl(fd, F_GETFD) };
@@ -1611,7 +1650,10 @@ fn libc_fcntl_getfd(fd: i32) -> std::io::Result<i32> {
     Ok(r)
 }
 
-#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+#[cfg(all(
+    target_os = "linux",
+    any(target_arch = "x86_64", target_arch = "aarch64")
+))]
 fn libc_fcntl_setfd(fd: i32, flags: i32) -> std::io::Result<()> {
     // SAFETY: fcntl(F_SETFD, flags) on an owned fd; the variadic arg is a plain
     // int as the ABI requires.
@@ -1631,7 +1673,10 @@ fn libc_fcntl_setfd(fd: i32, flags: i32) -> std::io::Result<()> {
 /// # Errors
 ///
 /// [`std::io::Error`] when either `fcntl` fails.
-#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+#[cfg(all(
+    target_os = "linux",
+    any(target_arch = "x86_64", target_arch = "aarch64")
+))]
 pub(crate) fn clear_cloexec(fd: i32) -> std::io::Result<()> {
     let flags = libc_fcntl_getfd(fd)?;
     libc_fcntl_setfd(fd, flags & !FD_CLOEXEC)
@@ -1643,7 +1688,10 @@ pub(crate) fn clear_cloexec(fd: i32) -> std::io::Result<()> {
 /// A `memfd` is used rather than a temp file so the program bytes never touch
 /// the filesystem (nothing to race or tamper on disk) and the fd is
 /// self-cleaning when closed.
-#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+#[cfg(all(
+    target_os = "linux",
+    any(target_arch = "x86_64", target_arch = "aarch64")
+))]
 pub(crate) fn write_seccomp_memfd(bytes: &[u8]) -> Result<i32, RunJailDefect> {
     let spawn = |detail: String| RunJailDefect::Spawn { detail };
     let name = c"ipe-seccomp";
@@ -3274,7 +3322,10 @@ mod tests {
         // spells that predicate independently and asserts equality, so a future
         // edit that flips one without the other fails this test.
         let compiled_in_here = cfg!(any(
-            all(target_os = "linux", target_arch = "x86_64"),
+            all(
+                target_os = "linux",
+                any(target_arch = "x86_64", target_arch = "aarch64")
+            ),
             target_os = "macos",
             target_os = "windows"
         ));
@@ -3337,7 +3388,10 @@ mod tests {
     }
 
     #[test]
-    #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+    #[cfg(all(
+        target_os = "linux",
+        any(target_arch = "x86_64", target_arch = "aarch64")
+    ))]
     fn linux_x86_64_is_a_jail_holds_target() {
         // On the Linux/x86_64 build host the run jail is compiled in, so the FFI
         // admit predicate must see a jail-holds target.
