@@ -1,0 +1,46 @@
+# Reshape the web view to the Ipê app-shape's contract.
+#
+# Ipe.Tea.Web's `app` takes `view : Model -> Element msg`, but the upstream view
+# builds an `Html msg` tree. Wrap the top-level view through `Ipe.Ui.html`
+# (`Html a -> Element a`) — the shipped conversion — keeping the Html-building
+# helper (`viewBody`) untouched.
+
+[[edit]]
+file: src/Main.ipe
+find:
+"""
+import Ipe.String as String
+import Ipe.Tea.Web.Cmd as Cmd
+"""
+replace:
+"""
+import Ipe.String as String
+import Ipe.Ui as Ui
+import Ipe.Tea.Web.Cmd as Cmd
+"""
+
+[[edit]]
+file: src/Main.ipe
+find:
+"""
+view : Model -> Html Msg
+view model =
+    div
+        [ style
+              "max-width: 720px; margin: 40px auto; padding: 24px; font-family: ui-sans-serif, system-ui, -apple-system, sans-serif; color: #1c1c1c;"
+        ]
+"""
+replace:
+"""
+view : Model -> Element Msg
+view model =
+    Ui.html (viewBody model)
+
+
+viewBody : Model -> Html Msg
+viewBody model =
+    div
+        [ style
+              "max-width: 720px; margin: 40px auto; padding: 24px; font-family: ui-sans-serif, system-ui, -apple-system, sans-serif; color: #1c1c1c;"
+        ]
+"""

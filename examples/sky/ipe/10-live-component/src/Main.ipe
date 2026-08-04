@@ -1,6 +1,7 @@
 module Main exposing (main)
 
 import Ipe.String as String
+import Ipe.Ui as Ui
 import Ipe.Html exposing (..)
 import Ipe.Html.Attributes exposing (..)
 import Ipe.Css exposing (..)
@@ -87,8 +88,13 @@ main =
 -- ======================================================
 -- VIEW
 -- ======================================================
-view : Model -> Html Msg
+view : Model -> Element Msg
 view model =
+    Ui.html (viewBody model)
+
+
+viewBody : Model -> Html Msg
+viewBody model =
     div
         []
         [ styleNode [] pageStyles

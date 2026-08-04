@@ -1,0 +1,22 @@
+# Add the explicit Math import the port needs.
+#
+# The upstream view calls `Math.round` but imports no Math module — Sky provided
+# it through `Sky.Core.Prelude`, which the transform drops (Ipê auto-imports only
+# the Tier-A Ipe.Basics surface, and Math is not in it). Ipê requires every
+# stdlib qualifier to be imported (IPE-N0034), so add `import Ipe.Math`.
+
+[[edit]]
+file: src/View.ipe
+find:
+"""
+import Ipe.List as List
+import Ipe.String as String
+import Ipe.Ui as Ui
+"""
+replace:
+"""
+import Ipe.List as List
+import Ipe.Math as Math
+import Ipe.String as String
+import Ipe.Ui as Ui
+"""
