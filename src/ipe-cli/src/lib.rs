@@ -419,11 +419,7 @@ impl std::fmt::Display for CliError {
                 "{}doctor: a required prerequisite is missing (see the report above)",
                 style::GUTTER
             ),
-            Self::EjectUnsupported { reason } => write!(
-                f,
-                "{}eject: {reason}",
-                style::GUTTER
-            ),
+            Self::EjectUnsupported { reason } => write!(f, "{}eject: {reason}", style::GUTTER),
         }
     }
 }
