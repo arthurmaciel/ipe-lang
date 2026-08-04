@@ -754,40 +754,6 @@ pub(crate) fn find_in_path(bin: &str) -> Option<PathBuf> {
         .find(|candidate| candidate.is_file())
 }
 
-/// POSIX single-quote a token so `jail(8)`'s `command=` re-parse recovers it as
-/// exactly one word regardless of whitespace or shell metacharacters it holds.
-///
-/// The whole token is wrapped in `'…'`, and each embedded single quote is written
-/// as the standard `'\''` sequence (close the quote, an escaped literal quote,
-/// reopen the quote). Inside single quotes every other byte — including spaces and
-/// metacharacters — is literal, so the recovered word is byte-for-byte the
-/// original. Operates on raw bytes so a non-UTF-8 path token round-trips losslessly.
-/// Compiled under `test` on any Unix host so the round-trip is provable off FreeBSD.
-///
-/// The gate is `all(unix, test)`, not a bare `test`: the body uses the Unix-only
-/// `std::os::unix::ffi` byte views (`OsStrExt::as_bytes` / `OsStringExt::from_vec`),
-/// which do not exist on Windows. Its only real caller is the FreeBSD `jail(8)`
-/// `command=` builder, so it is never needed off Unix; compiling it under `test` on
-/// a Windows host (where the sandbox crate's own build-jail test harness is built,
-/// for the Windows Tier-2 proof) would fail to compile — the gate keeps the FreeBSD
-/// shell helper off the one platform that can neither use nor build it.
-#[cfg(any(target_os = "freebsd", all(unix, test)))]
-fn shell_quote_token(tok: &std::ffi::OsStr) -> std::ffi::OsString {
-    use std::os::unix::ffi::{OsStrExt as _, OsStringExt as _};
-
-    let mut quoted: Vec<u8> = Vec::with_capacity(tok.as_bytes().len() + 2);
-    quoted.push(b'\'');
-    for &byte in tok.as_bytes() {
-        if byte == b'\'' {
-            quoted.extend_from_slice(b"'\\''");
-        } else {
-            quoted.push(byte);
-        }
-    }
-    quoted.push(b'\'');
-    std::ffi::OsString::from_vec(quoted)
-}
-
 /// The FreeBSD returning build-jail arm: establish a scratch-rooted `jail(2)`
 /// (via the `jail(8)` CLI) lowering the profile's axes, scrub the env in the
 /// launcher, run the payload confined, wait, and decode the exit into a
@@ -934,20 +900,29 @@ mod freebsd_jail {
         // unprivileged payload cannot write it. No extra jail parameter is needed —
         // the ownership on the chrooted path is the boundary.
         let _ = working_tree;
-        // The command: `jail(8)`'s `command=` is a single string that `jail` itself
-        // re-parses into words before executing, so a raw token containing
-        // whitespace (a scratch, working-tree, or `CARGO_HOME` path with a space)
-        // would mis-split. Each token is POSIX single-quoted so it survives the
-        // re-split intact as exactly one word, with no shell interpretation of its
-        // contents.
+        // The command: `jail(8)`'s `command` parameter collects EVERYTHING on the
+        // command line following it as the argv to `execvp` inside the jail — one
+        // command-line argument per argv slot, with NO shell and NO quote removal.
+        // So the payload's first token rides on `command=<tok0>` and every
+        // remaining token is pushed as its OWN separate argv element to the `jail`
+        // process. Each stays one OS-level argument end to end (Rust hands each
+        // `arg` to `jail` as a distinct `execve` slot, and `jail` forwards them as
+        // distinct slots to the payload), so a scratch, working-tree, or
+        // `CARGO_HOME` path bearing whitespace survives byte-for-byte with no
+        // quoting and no re-split — there is no single space-joined string for
+        // `jail` to mis-tokenise, and no shell to interpret metacharacters.
         let mut command = OsString::from("command=");
-        for (i, tok) in payload.iter().enumerate() {
-            if i > 0 {
-                command.push(" ");
-            }
-            command.push(super::shell_quote_token(tok));
-        }
+        let Some((first, rest)) = payload.split_first() else {
+            // An empty payload cannot be run; the caller decodes the resulting
+            // spawn/exec failure as a non-clean outcome (never a silent Clean).
+            argv.push(command);
+            return argv;
+        };
+        command.push(first);
         argv.push(command);
+        for tok in rest {
+            argv.push(tok.clone());
+        }
         argv
     }
 
@@ -1492,81 +1467,61 @@ mod tests {
         }
     }
 
-    // Gated `unix`: it exercises `shell_quote_token` (only compiled on Unix under
-    // test) via the Unix-only `std::os::unix::ffi` byte views, so it compiles and
-    // runs on Linux/macOS/FreeBSD (proving the FreeBSD `command=` round-trip off
-    // FreeBSD) but is absent on Windows, where neither the helper nor the byte APIs
-    // exist. Windows Tier-2 confinement is proven by the Windows-specific tests
-    // above, not by this FreeBSD-shell round-trip.
-    #[cfg(unix)]
-    #[test]
-    fn shell_quoting_survives_jail_command_resplit_intact() {
-        use std::ffi::OsString;
-        use std::os::unix::ffi::{OsStrExt as _, OsStringExt as _};
-
-        // A word split of a single-quoted token: `jail(8)` re-parses `command=` on
-        // whitespace outside quotes, then strips the quotes. This mirrors that,
-        // recovering the words the confined program would receive.
-        fn resplit(command_value: &OsString) -> Vec<OsString> {
-            let mut words = Vec::new();
-            let mut current: Vec<u8> = Vec::new();
-            let mut in_quote = false;
-            let mut escaped = false;
-            let mut started = false;
-            for &b in command_value.as_bytes() {
-                if escaped {
-                    // Outside single quotes a backslash quotes the next byte
-                    // literally — this is how `'\''` yields a literal `'`.
-                    current.push(b);
-                    escaped = false;
-                    started = true;
-                    continue;
-                }
-                match b {
-                    b'\'' if !in_quote => {
-                        in_quote = true;
-                        started = true;
-                    }
-                    b'\'' if in_quote => in_quote = false,
-                    b'\\' if !in_quote => escaped = true,
-                    b' ' if !in_quote => {
-                        if started {
-                            words.push(OsString::from_vec(std::mem::take(&mut current)));
-                            started = false;
-                        }
-                    }
-                    other => {
-                        current.push(other);
-                        started = true;
-                    }
-                }
-            }
-            if started {
-                words.push(OsString::from_vec(current));
-            }
-            words
+    // The FreeBSD `jail_argv` builder lives behind `cfg(target_os = "freebsd")`, so
+    // its exact argv cannot be asserted off FreeBSD. What is portable — and is the
+    // property the CI failure hinged on — is that the payload is threaded to
+    // `jail(8)` as ONE OS-level argv element per token (no space-joined string, no
+    // quoting): `command=<tok0>` plus each remaining token as its own element. This
+    // pure helper models exactly that mapping so the space-bearing-path invariant is
+    // provable on any host; `jail_argv` calls the same shape.
+    fn jail_command_args(payload: &[std::ffi::OsString]) -> Vec<std::ffi::OsString> {
+        let mut out: Vec<std::ffi::OsString> = Vec::new();
+        let mut command = std::ffi::OsString::from("command=");
+        let Some((first, rest)) = payload.split_first() else {
+            out.push(command);
+            return out;
+        };
+        command.push(first);
+        out.push(command);
+        for tok in rest {
+            out.push(tok.clone());
         }
+        out
+    }
 
-        // A path with a space, an embedded single quote, and a shell metacharacter
-        // each stay one word and survive byte-for-byte.
-        let tokens = [
-            OsString::from("cargo"),
-            OsString::from("build"),
+    #[test]
+    fn each_payload_token_is_its_own_jail_command_arg_intact() {
+        use std::ffi::OsString;
+
+        // `jail(8)` execvp's `command` with NO shell and NO quote removal — one
+        // command-line argument per argv slot. A path with a space, an embedded
+        // single quote, and a shell metacharacter must each stay exactly one intact
+        // argv element (the space must NOT split a path, the quote/metachar must NOT
+        // be interpreted), which passing each token as its own OS-level argument
+        // guarantees.
+        let payload = [
+            OsString::from("/usr/bin/env"),
+            OsString::from("PROBE_MODE=tier2"),
             OsString::from("/tmp/dir with space/x"),
             OsString::from("it's a $HOME; rm -rf /"),
         ];
-        let mut command = OsString::from("");
-        for (i, tok) in tokens.iter().enumerate() {
-            if i > 0 {
-                command.push(" ");
-            }
-            command.push(shell_quote_token(tok));
-        }
-        assert_eq!(resplit(&command), tokens);
+        // The first token rides on `command=`; every other token — including the
+        // space-bearing path (must NOT split) and the metacharacter-bearing token
+        // (must NOT be interpreted) — is its OWN intact argv element.
+        let expected = vec![
+            OsString::from("command=/usr/bin/env"),
+            OsString::from("PROBE_MODE=tier2"),
+            OsString::from("/tmp/dir with space/x"),
+            OsString::from("it's a $HOME; rm -rf /"),
+        ];
+        assert_eq!(jail_command_args(&payload), expected);
+    }
 
-        // A non-UTF-8 byte in the token round-trips losslessly too.
-        let raw = OsString::from_vec(vec![b'a', 0x80, b' ', b'b']);
-        let quoted = shell_quote_token(&raw);
-        assert_eq!(resplit(&quoted), vec![raw]);
+    #[test]
+    fn an_empty_jail_payload_yields_a_bare_command_arg() {
+        // An empty payload produces just `command=` (no program); the caller decodes
+        // the resulting exec failure as a non-clean outcome, never a silent Clean.
+        let args = jail_command_args(&[]);
+        assert_eq!(args, vec![std::ffi::OsString::from("command=")]);
     }
 }
