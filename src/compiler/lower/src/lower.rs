@@ -10818,6 +10818,16 @@ impl<'a> Lowerer<'a> {
                         msg: Box::new(msg),
                     })
                 }
+                // `CustomElement down up` — the JS-widget boundary type. Canon
+                // resolves it (arity + seal checked) to an empty-home `Con`, so it
+                // reaches the lowerer. Its runtime denotation — the generated glue,
+                // the content-addressed custom-element tag, and the DOM-patch node
+                // family — is not emitted. Fail CLOSED with a clean IPE-L0133
+                // rather than fall through to the empty-home catch-all ICE
+                // (IPE-I0001): the contract is that no untyped or undenoted seam
+                // ever reaches codegen. A `CustomElement`-typed binding type-checks
+                // but cannot be built until the widget transport ships.
+                "CustomElement" => Err(unsupported(Span::DUMMY, Feature::CustomElementTransport)),
                 _ if self
                     .enum_variants
                     .contains_key(&(ModPath(home.clone()), *name)) =>
