@@ -1,9 +1,11 @@
-# Port Go uuid to Ipe.Crypto.randomToken.
+# Port the Go uuid dependency to `Ipe.Crypto.randomToken` and adopt the
+# effect-boundary `main`.
 #
 # Upstream Sky used Github.Com.Google.Uuid (Go FFI). Replace with
 # Ipe.Crypto.randomToken 16, which produces a random 32-char hex token — same
 # uniqueness guarantee, different format. Sanctioned divergence: no UUID RFC 4122
-# stdlib; randomToken is the closest native primitive.
+# stdlib; randomToken is the closest native primitive. The removed synchronous
+# `Task.run` becomes a `Task Error ()` chain performed by the entry boundary.
 
 [[edit]]
 file: src/Main.ipe
@@ -12,44 +14,31 @@ find:
 import Ipe.Result as Result
 import Ipe.Io as Io
 import Github.Com.Google.Uuid as Uuid
+
+
+main =
+    case Uuid.newString () of
+
+        Ok uuid ->
+            Io.println ("Generated UUID: " ++ uuid)
+
+        Err e ->
+            Io.println ("Failed to generate UUID: " ++ errorToString e)
 """
 replace:
 """
-import Ipe.Result as Result
 import Ipe.Task as Task
 import Ipe.Crypto as Crypto
 import Ipe.Io as Io
-"""
+import Ipe.Error as Error exposing (Error)
 
-[[edit]]
-file: src/Main.ipe
-find:
-"""
-case Uuid.newString () of
-"""
-replace:
-"""
-case Task.run (Crypto.randomToken 16) of
-"""
 
-[[edit]]
-file: src/Main.ipe
-find:
-"""
-Ok uuid ->
-"""
-replace:
-"""
-Ok token ->
-"""
-
-[[edit]]
-file: src/Main.ipe
-find:
-"""
-("Generated UUID: " ++ uuid)
-"""
-replace:
-"""
-("Generated UUID: " ++ token)
+main : Task Error ()
+main =
+    Crypto.randomToken 16
+        |> Task.andThen
+               (\token -> Io.println ("Generated UUID: " ++ token))
+        |> Task.onError
+               (\e ->
+                   Io.println ("Failed to generate UUID: " ++ Error.toString e))
 """
