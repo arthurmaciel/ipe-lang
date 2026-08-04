@@ -200,10 +200,13 @@ fn emits_generic_function_signature() -> DResult<()> {
         main_rs.contains("pub fn main_identity<T1: Clone>(x: T1) -> T1 {"),
         "generic function emits a `<T1>` clause with T1-typed param and return:\n{main_rs}"
     );
-    // Its body is the bare pass-through parameter.
+    // Its body is the recursion-guard prologue followed by the bare pass-through
+    // parameter.
     assert!(
-        main_rs.contains("pub fn main_identity<T1: Clone>(x: T1) -> T1 {\n    x\n}"),
-        "identity's body is the bare parameter `x`:\n{main_rs}"
+        main_rs.contains(
+            "pub fn main_identity<T1: Clone>(x: T1) -> T1 {\n    let _ipe_recursion_guard = crate::recursion_guard();\n    x\n}"
+        ),
+        "identity's body is the guard prologue then the bare parameter `x`:\n{main_rs}"
     );
     // The monomorphic entry carries NO generic clause — the empty `type_params`
     // path emits no generic clause.
