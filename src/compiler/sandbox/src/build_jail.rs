@@ -665,15 +665,26 @@ pub fn sbpl_from_profile(
     s.push_str("(allow file-write* (subpath \"/private/var/folders\"))\n");
     s.push_str("(allow file-write* (subpath \"/private/tmp\"))\n\n");
 
-    // Subprocess: deny process creation unless the profile grants it. This
-    // mirrors the Linux jail's seccomp denial of the task-creation family
-    // (`fork`/`vfork`/`clone`/`exec`), so a subprocess-withholding profile
-    // confines the app to a single process on BOTH platforms — and closes the
-    // `native-ffi`-via-exec escape (opaque native code shelling out to a helper).
-    // When granted, no denial is emitted, so the allow-default base leaves
-    // spawning reachable.
+    // Subprocess: deny NEW-process creation unless the profile grants it. On
+    // macOS `sandbox-exec -f <profile> <app>` applies the profile and THEN
+    // `execve`s <app> in place (no fork) — so a `(deny process-exec*)` here would
+    // catch that mandatory initial exec and the app would never start. Denying
+    // `process-fork` alone is the correct lowering: every way to create a NEW
+    // process (`fork`/`vfork`/`posix_spawn`, all of which fork under Seatbelt)
+    // requires the fork primitive, so a fork denial confines the app to a single
+    // process. An `execve` that does NOT fork (an in-place image replacement)
+    // stays permitted so the launcher's own initial exec of the target runs; that
+    // replaces the one jailed process rather than creating a second one, so it is
+    // within the single-process contract, not an escape (the Seatbelt profile
+    // persists across the replacing exec, so network/filesystem stay confined for
+    // the new image). This mirrors the Linux jail's seccomp denial of the
+    // task-creation family, which — because Linux installs the filter AFTER the
+    // initial exec — can deny the exec family outright; Seatbelt applies the
+    // profile BEFORE the target exec, so only the fork axis is denied here. The
+    // `native-ffi`-via-exec escape (opaque native code shelling out to a HELPER)
+    // is still closed: a helper is a new process and so must fork. When granted,
+    // no denial is emitted, so the allow-default base leaves spawning reachable.
     if !profile.subprocess {
-        s.push_str("(deny process-exec*)\n");
         s.push_str("(deny process-fork)\n");
     }
 
@@ -1286,16 +1297,25 @@ mod tests {
 
     #[test]
     fn sbpl_denies_process_creation_when_the_subprocess_axis_is_withheld() {
-        // Withheld subprocess ⇒ both process-creation denials present, mirroring
-        // the Linux seccomp denial of the task-creation family. This also closes
-        // the native-ffi-via-exec escape.
+        // Withheld subprocess ⇒ the NEW-process denial (`process-fork`) is present,
+        // mirroring the Linux seccomp denial of the task-creation family and
+        // closing the native-ffi-via-a-helper escape (a helper is a new process, so
+        // it must fork). `process-exec*` is deliberately NOT denied: Seatbelt
+        // applies the profile before `sandbox-exec` execs the target in place, so an
+        // exec denial would refuse that mandatory initial exec and the app would
+        // never start (see `sbpl_from_profile`). A fork denial alone confines the
+        // app to a single process while permitting the launcher's initial exec.
         let sbpl = sbpl_from_profile(
             &with_subprocess(false),
             Path::new("/tmp/scratch"),
             Path::new("/work/tree"),
         );
-        assert!(sbpl.contains("(deny process-exec*)"), "{sbpl}");
         assert!(sbpl.contains("(deny process-fork)"), "{sbpl}");
+        assert!(
+            !sbpl.contains("(deny process-exec"),
+            "the initial target exec must stay permitted (Seatbelt applies the \
+             profile before exec'ing the target): {sbpl}"
+        );
     }
 
     #[test]
@@ -1322,7 +1342,10 @@ mod tests {
         // The floor enforces every runtime-enforced axis Seatbelt CAN enforce:
         // network, filesystem, subprocess. (Env is enforced by the launcher, not
         // the SBPL — see `macos_scrubbed_env`.) This is the `Holds`-is-honest
-        // invariant: `Holds` may only claim axes the jail actually confines.
+        // invariant: `Holds` may only claim axes the jail actually confines. The
+        // subprocess axis is the NEW-process denial (`process-fork`); the initial
+        // target exec must stay permitted, so `process-exec*` is NOT denied (see
+        // `sbpl_from_profile`).
         let sbpl = sbpl_from_profile(
             &SandboxProfile::maximally_isolated(),
             Path::new("/s"),
@@ -1331,12 +1354,12 @@ mod tests {
         assert!(sbpl.contains("(deny network*)"), "network: {sbpl}");
         assert!(sbpl.contains("(deny file-write*)"), "filesystem: {sbpl}");
         assert!(
-            sbpl.contains("(deny process-exec*)"),
-            "subprocess exec: {sbpl}"
-        );
-        assert!(
             sbpl.contains("(deny process-fork)"),
             "subprocess fork: {sbpl}"
+        );
+        assert!(
+            !sbpl.contains("(deny process-exec"),
+            "the initial target exec must stay permitted: {sbpl}"
         );
     }
 
