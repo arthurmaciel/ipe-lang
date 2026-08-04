@@ -3867,9 +3867,14 @@ impl<'a> Builder<'a> {
     /// the same kernel (proven per-kernel by the `interpreted_shape_matches_legacy`
     /// tripwire).
     ///
-    /// It touches no union-find state — [`TyShape`]'s vocabulary is monomorphic —
-    /// so it takes `&self`. Adding a quantified-`Var` or open-row node to the
-    /// vocabulary would require threading a fresh-var allocator through here.
+    /// It touches no union-find state even for the polymorphic [`TyShape::Var`]
+    /// node: a scheme var is interpreted to the SAME placeholder `Ty::Var` the
+    /// `stdlib_scheme` table's `var(i)` builder produces — the bare positional
+    /// index raw, in annotation-symbol space — NOT a fresh union-find var.
+    /// Generalization / instantiation with fresh solver vars happens later at the
+    /// use site (`instantiate_in`), exactly as for a table-built scheme, so this
+    /// interpreter still takes `&self`. Because `Ty::Var` is `Eq`, repeating an
+    /// index reuses one variable structurally without any shared-cell handling.
     fn interpret_shape(&self, shape: &TyShape) -> Ty {
         match shape {
             TyShape::Fun(arg, res) => Ty::Fun(
@@ -3881,6 +3886,10 @@ impl<'a> Builder<'a> {
                 name: self.builtin_symbol(*tag),
                 args: args.iter().map(|a| self.interpret_shape(a)).collect(),
             },
+            // The `stdlib_scheme` table binds `let var = Ty::Var`, so its
+            // `var(i)` is `Ty::Var(i)`: a scheme-local variable's raw is its bare
+            // positional index. Match that exactly for byte-identity.
+            TyShape::Var(i) => Ty::Var(u32::from(*i)),
         }
     }
 
@@ -3895,6 +3904,8 @@ impl<'a> Builder<'a> {
             BuiltinTag::String => self.builtins.string,
             BuiltinTag::Char => self.builtins.char,
             BuiltinTag::Bytes => self.builtins.bytes,
+            BuiltinTag::List => self.builtins.list,
+            BuiltinTag::Maybe => self.builtins.maybe,
         }
     }
 
@@ -9521,13 +9532,23 @@ mod registry_phase_c_tests {
     ///
     /// # Where the oracle lives
     ///
-    /// A shape-carrying family has no `stdlib_scheme` arm (its scheme lives once,
-    /// on the descriptor), so there is no table `Ty` to compare against. The
-    /// byte-identity reference is [`expected_primitive_scheme`] below: a per-kernel
-    /// hand-built `Ty`, authored from each kernel's published type signature using
-    /// the primitive constructors. It is a genuine independent oracle — NOT derived
-    /// from the shape or the interpreter — so a wrong shape or a wrong interpreter
-    /// arm makes `interpret_shape(shape) != expected` fire here.
+    /// The reference each shape is checked against depends on the kernel's class,
+    /// and both references are INDEPENDENT of the shape and its interpreter:
+    ///
+    /// - A **monomorphic** shape-migrated family has NO `stdlib_scheme` arm (its
+    ///   scheme lives once, on the descriptor), so there is no table `Ty` to
+    ///   compare against. Its reference is [`expected_primitive_scheme`] below: a
+    ///   per-kernel hand-built `Ty` authored from the published signature over the
+    ///   primitive constructors.
+    /// - A **polymorphic** `List`-family shape KEEPS its `stdlib_scheme` arm (that
+    ///   retained hand-built arm — over `let var = Ty::Var` and the `list`/`maybe`
+    ///   closures — is the byte-identity witness). Its reference is that arm,
+    ///   `stdlib_scheme(k)`, which `expected_primitive_scheme` (primitives only)
+    ///   cannot express.
+    ///
+    /// Selecting the reference by "does the kernel still have a table arm" keeps
+    /// each of the 159 shaped kernels checked against a genuine second source, so
+    /// a wrong shape or a wrong interpreter arm makes the `assert_eq!` fire here.
     #[test]
     fn interpreted_shape_matches_legacy() {
         let mut interner = Interner::new();
@@ -9540,12 +9561,17 @@ mod registry_phase_c_tests {
             let Some(shape) = k.def().shape else { continue };
             migrated += 1;
             let interpreted = builder.interpret_shape(shape);
-            let expected = expected_primitive_scheme(&builder, k);
+            // Monomorphic families dropped their arm → the primitive oracle is
+            // their only reference. Polymorphic `List` families kept their arm →
+            // it is the reference (the primitive oracle has no `Ty` for them).
+            let expected =
+                expected_primitive_scheme(&builder, k).or_else(|| builder.stdlib_scheme(k));
             assert!(
                 expected.is_some(),
-                "kernel {k:?} carries a TyShape but the test oracle \
-                 `expected_primitive_scheme` has no reference `Ty` for it — \
-                 add its hand-built signature so byte-identity stays proven",
+                "kernel {k:?} carries a TyShape but neither the primitive oracle \
+                 `expected_primitive_scheme` nor the retained `stdlib_scheme` arm \
+                 provides a reference `Ty` for it — add one so byte-identity \
+                 stays proven",
             );
             assert_eq!(
                 Some(interpreted),
@@ -9555,12 +9581,12 @@ mod registry_phase_c_tests {
                  hand-authored signature",
             );
         }
-        // Guard against a silently-empty sweep: the Bitwise family alone carries
-        // seven shapes, and many more primitive families carry one.
+        // Guard against a silently-empty sweep: the migrated set is the 136
+        // monomorphic primitive kernels plus the 23 core `List` combinators.
         assert!(
-            migrated >= 7,
-            "expected at least the Bitwise family (7 kernels) to carry a \
-             TyShape, found only {migrated}",
+            migrated >= 159,
+            "expected at least the 136 monomorphic + 23 core List kernels \
+             (159) to carry a TyShape, found only {migrated}",
         );
     }
 

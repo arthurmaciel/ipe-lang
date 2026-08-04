@@ -158,6 +158,12 @@ pub struct SchemeKey(pub StdlibKernel);
 /// Only the tags a structural kernel scheme references are listed; a scheme that
 /// needs another built-in adds its tag here and an arm in the `ipe_types`
 /// interpreter that resolves it.
+///
+/// Both nullary primitives (`Int`, `Bool`, …, an empty argument slice) and the
+/// parametric built-in constructors a polymorphic scheme applies to type
+/// arguments (`List a`, `Maybe a`) are named here; the arity is carried by the
+/// argument slice of the [`TyShape::Con`] that references the tag, not by the
+/// tag itself.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum BuiltinTag {
     /// `Int` — the signed-integer primitive.
@@ -172,6 +178,10 @@ pub enum BuiltinTag {
     Char,
     /// `Bytes` — the opaque byte-buffer primitive.
     Bytes,
+    /// `List` — the built-in sequence constructor, applied to one element type.
+    List,
+    /// `Maybe` — the built-in optional constructor, applied to one payload type.
+    Maybe,
 }
 
 /// A `'static`, `const`-embeddable representation of a kernel's HM type scheme.
@@ -181,20 +191,34 @@ pub enum BuiltinTag {
 /// owns the single interpreter that turns a `TyShape` back into a concrete `Ty`,
 /// resolving each [`BuiltinTag`] against its interned-symbol cache.
 ///
-/// The vocabulary encodes only **monomorphic** schemes — an arrow spine over
-/// built-in constructor applications, with no type variables and no open rows.
-/// The nodes that would touch the solver's union-find — a quantified `Var` and a
-/// row-polymorphic open record — are absent, so the interpreter needs no
-/// fresh-var or open-tail handling. A kernel whose scheme is polymorphic carries
-/// no shape and resolves through the `stdlib_scheme` table instead.
+/// The vocabulary encodes an arrow spine over built-in constructor applications,
+/// with **rank-1 scheme-local type variables** ([`Self::Var`]) but no open rows.
+/// A scheme var is a `'static` positional index, NOT a solver union-find var:
+/// the `ipe_types` interpreter maps each index to the same placeholder
+/// `Ty::Var` the `stdlib_scheme` table builds, and generalization /
+/// instantiation with fresh solver vars happens LATER at the use site
+/// (`instantiate_in`). So the interpreter still touches no union-find state.
+///
+/// The one node still absent is the row-polymorphic open record; a kernel whose
+/// scheme needs an open row (or a not-yet-tagged constructor) carries no shape
+/// and resolves through the `stdlib_scheme` table instead.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum TyShape {
     /// A function arrow `arg -> result`. Nested on the right to build a spine.
     Fun(&'static Self, &'static Self),
     /// A built-in type-constructor application, named by [`BuiltinTag`] with its
     /// (possibly empty) type arguments. A nullary constructor (`Int`, `Bool`, …)
-    /// carries an empty argument slice.
+    /// carries an empty argument slice; a parametric one (`List`, `Maybe`)
+    /// carries its argument shapes.
     Con(BuiltinTag, &'static [Self]),
+    /// A rank-1 scheme-local type variable, named by a positional index
+    /// (`0` → the scheme's first variable `a`, `1` → `b`, …). Repeating the
+    /// same index within one scheme denotes the SAME variable — the interpreter
+    /// resolves each index to the identical placeholder `Ty::Var`, so both `a`s
+    /// in `List a -> List b`'s shape share one variable. The index is the raw
+    /// the `stdlib_scheme` table's `var(i)` builder uses, so an interpreted
+    /// shape is byte-identical to the hand-built scheme.
+    Var(u8),
 }
 
 /// The whole kernel "row" as one descriptor.
@@ -4775,9 +4799,11 @@ impl StdlibKernel {
     /// `Some` when the scheme is expressible structurally — `ipe_types`
     /// interprets the returned shape into a `Ty` byte-identical to what the
     /// `stdlib_scheme` table produces. `None` for a scheme that is not, which
-    /// resolves through that table instead. Only **monomorphic** schemes (no type
-    /// variables, no open rows) have a shape, because [`TyShape`]'s vocabulary
-    /// carries no solver-touching nodes.
+    /// resolves through that table instead. A shape may be **monomorphic** (an
+    /// arrow spine over the primitive built-ins) or **rank-1 polymorphic** (over
+    /// [`TyShape::Var`] applied to the `List` / `Maybe` constructors); the one
+    /// class still absent is an open row, because [`TyShape`]'s vocabulary
+    /// carries no solver-touching open-tail node.
     ///
     /// Every fully-monomorphic kernel family whose scheme is an arrow spine over
     /// ONLY the six primitive built-ins ([`BuiltinTag`]) carries a shape — no
@@ -4786,9 +4812,20 @@ impl StdlibKernel {
     /// it embeds directly as the carried shape and the `ipe_types` interpreter
     /// reproduces the exact `Ty` the (now-removed) `stdlib_scheme` arm did.
     ///
-    /// A family that touches any non-primitive constructor (`List`, `Maybe`,
-    /// `Result`, `Task`, a tuple, a record, an opaque handle) or any type
-    /// variable carries NO shape and resolves through the `stdlib_scheme` table.
+    /// The core `List` combinator family carries a **polymorphic** shape over
+    /// the scheme-local type variables `a` (index 0) and `b` (index 1) applied to
+    /// the `List` / `Maybe` constructors, e.g. `map : (a -> b) -> List a ->
+    /// List b`. Only the obligation-free members migrate: the `comparable` /
+    /// `number`-bounded ones (`sort`/`sortBy`, `sum`, `product`, `maximum`,
+    /// `minimum`) keep their `stdlib_scheme` base-scheme arm because their bounded
+    /// super-var is minted in `constrain_var_kernel` before the scheme is read,
+    /// and the tuple-shaped ones (`zip`, `unzip`, `partition`, `map2`..`map5`,
+    /// `indexedMap`, `foldl`/`foldr`, `sortWith`) are deferred until [`TyShape`]
+    /// gains a tuple node.
+    ///
+    /// A family that touches any not-yet-tagged constructor (`Result`, `Task`, a
+    /// tuple, a record, an opaque handle) or an open row carries NO shape and
+    /// resolves through the `stdlib_scheme` table.
     #[must_use]
     #[allow(clippy::too_many_lines)] // one flat declarative spine table per family
     #[allow(clippy::match_same_arms)] // family-grouped spine table; merging cross-family arms with coincidentally-equal spines would obscure the per-family structure
@@ -4852,6 +4889,61 @@ impl StdlibKernel {
         const STRING_TO_INT_TO_INT_TO_BOOL: TyShape = TyShape::Fun(&STRING, &INT_TO_INT_TO_BOOL);
         const STRING_TO_STRING_TO_INT_TO_INT_TO_BOOL: TyShape =
             TyShape::Fun(&STRING, &STRING_TO_INT_TO_INT_TO_BOOL);
+
+        // ── Polymorphic leaves for the core `List` combinator family. ──
+        // Scheme-local type variables `a` (index 0) and `b` (index 1); `Int` /
+        // `Bool` reuse the primitive leaves above.
+        const A: TyShape = TyShape::Var(0);
+        const B: TyShape = TyShape::Var(1);
+        // `List a` / `List b` / `List Int` / `List (List a)` and `Maybe a` /
+        // `Maybe (List a)` / `Maybe b` constructor applications, spelled once and
+        // reused by reference.
+        const LIST_A: TyShape = TyShape::Con(BuiltinTag::List, &[A]);
+        const LIST_B: TyShape = TyShape::Con(BuiltinTag::List, &[B]);
+        const LIST_INT: TyShape = TyShape::Con(BuiltinTag::List, &[INT]);
+        const LIST_LIST_A: TyShape = TyShape::Con(BuiltinTag::List, &[LIST_A]);
+        const MAYBE_A: TyShape = TyShape::Con(BuiltinTag::Maybe, &[A]);
+        const MAYBE_B: TyShape = TyShape::Con(BuiltinTag::Maybe, &[B]);
+        const MAYBE_LIST_A: TyShape = TyShape::Con(BuiltinTag::Maybe, &[LIST_A]);
+        // Shared arrow spines over the `List` variables.
+        const LIST_A_TO_LIST_A: TyShape = TyShape::Fun(&LIST_A, &LIST_A);
+        const LIST_A_TO_LIST_B: TyShape = TyShape::Fun(&LIST_A, &LIST_B);
+        const LIST_A_TO_BOOL: TyShape = TyShape::Fun(&LIST_A, &BOOL);
+        const LIST_A_TO_MAYBE_A: TyShape = TyShape::Fun(&LIST_A, &MAYBE_A);
+        // map : (a -> b) -> List a -> List b
+        const A_TO_B: TyShape = TyShape::Fun(&A, &B);
+        const LIST_MAP: TyShape = TyShape::Fun(&A_TO_B, &LIST_A_TO_LIST_B);
+        // filter / any / find : (a -> Bool) -> List a -> (List a | Bool | Maybe a)
+        const A_TO_BOOL: TyShape = TyShape::Fun(&A, &BOOL);
+        const LIST_FILTER: TyShape = TyShape::Fun(&A_TO_BOOL, &LIST_A_TO_LIST_A);
+        const LIST_ANY: TyShape = TyShape::Fun(&A_TO_BOOL, &LIST_A_TO_BOOL);
+        const LIST_FIND: TyShape = TyShape::Fun(&A_TO_BOOL, &LIST_A_TO_MAYBE_A);
+        // length : List a -> Int
+        const LIST_LENGTH: TyShape = TyShape::Fun(&LIST_A, &INT);
+        // tail : List a -> Maybe (List a)
+        const LIST_TAIL: TyShape = TyShape::Fun(&LIST_A, &MAYBE_LIST_A);
+        // member / cons / intersperse : a -> List a -> (Bool | List a)
+        const LIST_MEMBER: TyShape = TyShape::Fun(&A, &LIST_A_TO_BOOL);
+        const LIST_CONS: TyShape = TyShape::Fun(&A, &LIST_A_TO_LIST_A);
+        // range : Int -> Int -> List Int
+        const INT_TO_LIST_INT: TyShape = TyShape::Fun(&INT, &LIST_INT);
+        const LIST_RANGE: TyShape = TyShape::Fun(&INT, &INT_TO_LIST_INT);
+        // append : List a -> List a -> List a
+        const LIST_APPEND: TyShape = TyShape::Fun(&LIST_A, &LIST_A_TO_LIST_A);
+        // concat : List (List a) -> List a
+        const LIST_CONCAT: TyShape = TyShape::Fun(&LIST_LIST_A, &LIST_A);
+        // take / drop : Int -> List a -> List a
+        const INT_TO_LIST_A_TO_LIST_A: TyShape = TyShape::Fun(&INT, &LIST_A_TO_LIST_A);
+        // singleton : a -> List a; repeat : Int -> a -> List a
+        const A_TO_LIST_A: TyShape = TyShape::Fun(&A, &LIST_A);
+        const LIST_REPEAT: TyShape = TyShape::Fun(&INT, &A_TO_LIST_A);
+        // concatMap : (a -> List b) -> List a -> List b
+        const A_TO_LIST_B: TyShape = TyShape::Fun(&A, &LIST_B);
+        const LIST_CONCAT_MAP: TyShape = TyShape::Fun(&A_TO_LIST_B, &LIST_A_TO_LIST_B);
+        // filterMap : (a -> Maybe b) -> List a -> List b
+        const A_TO_MAYBE_B: TyShape = TyShape::Fun(&A, &MAYBE_B);
+        const LIST_FILTER_MAP: TyShape = TyShape::Fun(&A_TO_MAYBE_B, &LIST_A_TO_LIST_B);
+
         match self {
             // ── Bitwise — Int -> Int -> Int / Int -> Int. ──
             Self::BitwiseAnd
@@ -4998,6 +5090,30 @@ impl StdlibKernel {
             | Self::UiDarkMode
             | Self::UiLightMode
             | Self::UiReducedMotion => Some(&STRING),
+
+            // ── Core `List` combinators (rank-1 polymorphic). The
+            //    obligation-bearing (`sort*`/`sum`/`product`/`maximum`/`minimum`)
+            //    and tuple-shaped (`zip`/`unzip`/`partition`/`map2`..`map5`/
+            //    `indexedMap`/`foldl`/`foldr`/`sortWith`) members carry no shape. ──
+            Self::ListMap => Some(&LIST_MAP),
+            Self::ListFilter => Some(&LIST_FILTER),
+            Self::ListAny | Self::ListAll => Some(&LIST_ANY),
+            Self::ListFind => Some(&LIST_FIND),
+            Self::ListLength => Some(&LIST_LENGTH),
+            Self::ListIsEmpty => Some(&LIST_A_TO_BOOL),
+            Self::ListHead => Some(&LIST_A_TO_MAYBE_A),
+            Self::ListTail => Some(&LIST_TAIL),
+            Self::ListMember => Some(&LIST_MEMBER),
+            Self::ListCons | Self::ListIntersperse => Some(&LIST_CONS),
+            Self::ListRange => Some(&LIST_RANGE),
+            Self::ListReverse | Self::ListUnique => Some(&LIST_A_TO_LIST_A),
+            Self::ListAppend => Some(&LIST_APPEND),
+            Self::ListConcat => Some(&LIST_CONCAT),
+            Self::ListTake | Self::ListDrop => Some(&INT_TO_LIST_A_TO_LIST_A),
+            Self::ListRepeat => Some(&LIST_REPEAT),
+            Self::ListSingleton => Some(&A_TO_LIST_A),
+            Self::ListConcatMap => Some(&LIST_CONCAT_MAP),
+            Self::ListFilterMap => Some(&LIST_FILTER_MAP),
 
             _ => None,
         }
