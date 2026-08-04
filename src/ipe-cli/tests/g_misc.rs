@@ -22,6 +22,8 @@ mod golden_aud14_duplicate_qualifier;
 mod golden_bare_ui_arity_fill;
 #[path = "g_misc/golden_basics.rs"]
 mod golden_basics;
+#[path = "g_misc/golden_cache_handle_seal.rs"]
+mod golden_cache_handle_seal;
 #[path = "g_misc/golden_cache_module_seal.rs"]
 mod golden_cache_module_seal;
 #[path = "g_misc/golden_cli_program_seal.rs"]
