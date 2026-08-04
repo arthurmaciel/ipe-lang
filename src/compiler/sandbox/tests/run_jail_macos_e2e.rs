@@ -153,9 +153,9 @@ fn undeclared_network_is_denied_under_the_run_jail_but_succeeds_under_control() 
         let _ = std::fs::remove_dir_all(&scratch);
         return; // no outbound route on this runner — nothing to prove.
     }
-    // Subprocess is granted so the external `nc` probe can `exec`; network is the
-    // only withheld axis, so a denied connect is attributable to the network rule
-    // (not to the subprocess-exec denial).
+    // Subprocess is granted so the external `nc` probe can fork+exec; network is
+    // the only withheld axis, so a denied connect is attributable to the network
+    // rule (not to the subprocess fork denial).
     let net_withheld = SandboxProfile {
         subprocess: true,
         ..SandboxProfile::maximally_isolated()
@@ -238,7 +238,7 @@ fn an_in_scratch_write_succeeds_under_the_run_jail() {
 // ── the subprocess axis (SBPL process-creation denial) ────────────────────────
 
 /// Spawn a child process (an external `/usr/bin/true`, NOT a shell builtin, so it
-/// exercises the `process-exec*`/`process-fork` deny). `command -v` resolves it
+/// forks+execs and exercises the `process-fork` deny). `command -v` resolves it
 /// via the scrubbed `/usr/bin:/bin` PATH; the payload runs it and reports its
 /// exit through the shell's own exit code.
 const SPAWN_CHILD: &str = "exec_target=$(command -v true); \"$exec_target\"";
