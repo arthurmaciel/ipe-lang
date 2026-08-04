@@ -34,7 +34,20 @@ use std::path::{Path, PathBuf};
 
 use ipe_ir::Capability;
 use ipe_sandbox::build_jail::{CapabilityAxis, JailOutcome};
-use ipe_sandbox::run_jail::{DatabaseAxis, RunJailDefect, RunJailTools, SandboxProfile};
+use ipe_sandbox::run_jail::{DatabaseAxis, RunJailDefect, SandboxProfile};
+// `RunJailTools` is named only by the per-platform `establish_jail_tools` and the
+// `JailProbeRunner` — the wired arms. On an unwired host (no jail primitive) no
+// item references it, so its import is gated to exactly the wired set.
+#[cfg(any(
+    all(
+        target_os = "linux",
+        any(target_arch = "x86_64", target_arch = "aarch64")
+    ),
+    target_os = "macos",
+    target_os = "freebsd",
+    target_os = "windows"
+))]
+use ipe_sandbox::run_jail::RunJailTools;
 
 use crate::CliError;
 use crate::audit::{Check, Rejection};
@@ -42,8 +55,9 @@ use crate::audit::{Check, Rejection};
 /// The platform whose jail is wired and proven on THIS host, so Tier-2 may
 /// certify on it.
 ///
-/// The value is the host's own wired platform name — `linux-x64` under
-/// bwrap+seccomp, `macos-arm64` under `sandbox-exec` Seatbelt, `freebsd-x64`
+/// The value is the host's own wired platform name — `linux-x64` / `linux-arm64`
+/// under bwrap+seccomp (the seccomp filter carries an ABI-specific syscall
+/// table per arch), `macos-arm64` under `sandbox-exec` Seatbelt, `freebsd-x64`
 /// under `jail(8)` — so a certify names exactly the platform whose jail actually
 /// ran, never another.
 ///
@@ -66,6 +80,14 @@ use crate::audit::{Check, Rejection};
 #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
 pub const CERTIFIED_PLATFORM: &str = "linux-x64";
 
+/// The Linux/`aarch64` wired-platform name (see [`CERTIFIED_PLATFORM`]).
+///
+/// The SAME bwrap+seccomp jail as `linux-x64`, with the `aarch64` syscall-NR
+/// table and `AUDIT_ARCH_AARCH64` arch guard. Proven by the `linux-arm64-tier2`
+/// CI job.
+#[cfg(all(target_os = "linux", target_arch = "aarch64"))]
+pub const CERTIFIED_PLATFORM: &str = "linux-arm64";
+
 /// The macOS wired-platform name (see [`CERTIFIED_PLATFORM`]).
 #[cfg(target_os = "macos")]
 pub const CERTIFIED_PLATFORM: &str = "macos-arm64";
@@ -85,7 +107,10 @@ pub const CERTIFIED_PLATFORM: &str = "windows-x64";
 /// `native_tier2_on_platform` there refuses to certify before this is ever used
 /// as an admit label, so it can never appear on a passing line.
 #[cfg(not(any(
-    all(target_os = "linux", target_arch = "x86_64"),
+    all(
+        target_os = "linux",
+        any(target_arch = "x86_64", target_arch = "aarch64")
+    ),
     target_os = "macos",
     target_os = "freebsd",
     target_os = "windows"
@@ -255,7 +280,10 @@ impl ProbePayload {
 ///   verdict may rest on — positive proof of a confined clean build+link of the
 ///   package's native surface.
 #[cfg(any(
-    all(target_os = "linux", target_arch = "x86_64"),
+    all(
+        target_os = "linux",
+        any(target_arch = "x86_64", target_arch = "aarch64")
+    ),
     target_os = "macos",
     target_os = "freebsd",
     target_os = "windows"
@@ -271,7 +299,10 @@ pub enum ProbeExercise {
 }
 
 #[cfg(any(
-    all(target_os = "linux", target_arch = "x86_64"),
+    all(
+        target_os = "linux",
+        any(target_arch = "x86_64", target_arch = "aarch64")
+    ),
     target_os = "macos",
     target_os = "freebsd",
     target_os = "windows"
@@ -680,7 +711,7 @@ fn collect_bindings(dir: &Path, out: &mut Vec<PathBuf>) -> Result<(), CliError> 
 ///
 /// 1. Gather the DCE-survivor wrapper set over the package's own inspected
 ///    bindings (the SAME survivor gate the interface emitter uses). An empty set
-///    is un-exercisable ⇒ reject ([`no_probeable_entrypoint`], kept). An
+///    is un-exercisable ⇒ reject (`no_probeable_entrypoint`, kept). An
 ///    unenumerable / opaque binding is read fail-closed.
 /// 2. Emit a link-reachability probe crate that references every surviving
 ///    wrapper (never invokes one) into the emitted app crate, so building it
@@ -689,8 +720,9 @@ fn collect_bindings(dir: &Path, out: &mut Vec<PathBuf>) -> Result<(), CliError> 
 ///    probe crate's REAL `cargo build` as the untrusted, wrapper-owned exercise.
 ///
 /// [`Tier2Outcome::Certified`] is constructed at EXACTLY ONE site, only on
-/// `Ok(())` from the reconciler, only on a wired host (`linux-x86_64`, macOS, or
-/// FreeBSD), and only when the exercise was a real (non-empty) untrusted build —
+/// `Ok(())` from the reconciler, only on a wired host (Linux `x86_64`/`aarch64`,
+/// macOS, FreeBSD, or Windows), and only when the exercise was a real (non-empty)
+/// untrusted build —
 /// the sub-PR 2 guardian gate. Every other branch is a typed reject or a
 /// non-certifying platform note.
 ///
@@ -716,7 +748,10 @@ pub fn native_tier2(audit: &NativeAudit) -> Result<Tier2Outcome, CliError> {
 /// finds and drives its confinement itself, so the `RunJailTools` fields are
 /// unused there; this only confirms the primitive exists so an absent one is a
 /// sandbox-unavailable reject, never a silent skip.
-#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+#[cfg(all(
+    target_os = "linux",
+    any(target_arch = "x86_64", target_arch = "aarch64")
+))]
 fn establish_jail_tools() -> Result<RunJailTools, CliError> {
     let caps = ipe_sandbox::probe();
     let (Some(bwrap), Some(prlimit)) = (caps.bwrap, caps.prlimit) else {
@@ -825,8 +860,8 @@ fn which_on_path(bin: &str) -> Option<PathBuf> {
         .find(|candidate| candidate.is_file())
 }
 
-/// A wired platform where Tier-2 can certify (`Linux/x86_64`, macOS, FreeBSD, or
-/// Windows): gather survivors, emit the probe, establish the jail, reconcile, and
+/// A wired platform where Tier-2 can certify (Linux `x86_64`/`aarch64`, macOS,
+/// FreeBSD, or Windows): gather survivors, emit the probe, establish the jail, reconcile, and
 /// construct the SINGLE `Certified`. The body is platform-agnostic — it drives
 /// `build_in_jail` through [`JailProbeRunner`] and names this host's own
 /// [`CERTIFIED_PLATFORM`] — so promoting a platform is a `cfg`-gate change plus a
@@ -836,7 +871,10 @@ fn which_on_path(bin: &str) -> Option<PathBuf> {
 /// since the Windows jail runs `payload[0]` directly through `CreateProcessW`),
 /// so both drive the SAME reconciler.
 #[cfg(any(
-    all(target_os = "linux", target_arch = "x86_64"),
+    all(
+        target_os = "linux",
+        any(target_arch = "x86_64", target_arch = "aarch64")
+    ),
     target_os = "macos",
     target_os = "freebsd",
     target_os = "windows"
@@ -937,7 +975,10 @@ fn native_tier2_on_platform(audit: &NativeAudit) -> Result<Tier2Outcome, CliErro
 /// fail-closed (an unwired host cannot confine the build, so it cannot vouch for
 /// the native surface). Only the CI matrix on a wired platform admits (ADR 0046).
 #[cfg(not(any(
-    all(target_os = "linux", target_arch = "x86_64"),
+    all(
+        target_os = "linux",
+        any(target_arch = "x86_64", target_arch = "aarch64")
+    ),
     target_os = "macos",
     target_os = "freebsd",
     target_os = "windows"
@@ -957,7 +998,10 @@ fn native_tier2_on_platform(_audit: &NativeAudit) -> Result<Tier2Outcome, CliErr
 /// The Tier-2 probe scratch directory under the OS temp root, keyed by the
 /// package root and this process so concurrent audits never collide.
 #[cfg(any(
-    all(target_os = "linux", target_arch = "x86_64"),
+    all(
+        target_os = "linux",
+        any(target_arch = "x86_64", target_arch = "aarch64")
+    ),
     target_os = "macos",
     target_os = "freebsd",
     target_os = "windows"
@@ -985,7 +1029,10 @@ fn probe_scratch_dir(root: &Path) -> PathBuf {
 /// [`CliError::Io`] on a cache read failure; [`CliError::PackageAudit`] when a
 /// `pkg.json` cannot be decoded (an unusable inspection must never seed a certify).
 #[cfg(any(
-    all(target_os = "linux", target_arch = "x86_64"),
+    all(
+        target_os = "linux",
+        any(target_arch = "x86_64", target_arch = "aarch64")
+    ),
     target_os = "macos",
     target_os = "freebsd",
     target_os = "windows"
@@ -1052,7 +1099,10 @@ fn gather_survivor_paths(root: &Path) -> Result<Vec<String>, CliError> {
 /// [`CliError::Io`] when the probe source or the patched manifest cannot be
 /// written.
 #[cfg(any(
-    all(target_os = "linux", target_arch = "x86_64"),
+    all(
+        target_os = "linux",
+        any(target_arch = "x86_64", target_arch = "aarch64")
+    ),
     target_os = "macos",
     target_os = "freebsd",
     target_os = "windows"
@@ -1109,6 +1159,19 @@ fn emit_probe_and_build_argv(
 
 /// The un-exercised reject: a native-bearing package with no probeable entrypoint
 /// for the differential probe to drive. Fail-closed — never a silent clean.
+///
+/// Only [`native_tier2_on_platform`]'s wired arm calls this; on an unwired host
+/// the refuse-to-certify is decided earlier and this is never reached, so its
+/// definition is gated to the same wired set (used-or-absent per platform).
+#[cfg(any(
+    all(
+        target_os = "linux",
+        any(target_arch = "x86_64", target_arch = "aarch64")
+    ),
+    target_os = "macos",
+    target_os = "freebsd",
+    target_os = "windows"
+))]
 fn no_probeable_entrypoint() -> Rejection {
     Rejection {
         check: Check::NativeTier2,
@@ -1125,7 +1188,10 @@ fn no_probeable_entrypoint() -> Rejection {
 /// masks (the interpreters `/bin/sh`, `/usr/bin/env`, python3/nc for the net
 /// probe). Only existing paths are bound.
 #[cfg(any(
-    all(target_os = "linux", target_arch = "x86_64"),
+    all(
+        target_os = "linux",
+        any(target_arch = "x86_64", target_arch = "aarch64")
+    ),
     target_os = "macos",
     target_os = "freebsd"
 ))]
@@ -1167,7 +1233,10 @@ pub const fn default_ro_binds() -> Vec<PathBuf> {
 /// wrapper-probe-only control fixture needs no toolchain, so its bind set is
 /// unchanged.
 #[cfg(any(
-    all(target_os = "linux", target_arch = "x86_64"),
+    all(
+        target_os = "linux",
+        any(target_arch = "x86_64", target_arch = "aarch64")
+    ),
     target_os = "macos",
     target_os = "freebsd"
 ))]
@@ -1210,7 +1279,10 @@ pub const fn toolchain_ro_binds() -> Vec<PathBuf> {
 /// real Windows Tier-2 build allowlists the homes through the declared `env`
 /// axis), so this is not compiled on Windows.
 #[cfg(any(
-    all(target_os = "linux", target_arch = "x86_64"),
+    all(
+        target_os = "linux",
+        any(target_arch = "x86_64", target_arch = "aarch64")
+    ),
     target_os = "macos",
     target_os = "freebsd"
 ))]
@@ -1238,7 +1310,10 @@ fn cargo_home_env() -> Vec<(String, std::ffi::OsString)> {
 /// toolchain bind makes the absolute path executable). `None` when cargo is not
 /// on the host `PATH`.
 #[cfg(any(
-    all(target_os = "linux", target_arch = "x86_64"),
+    all(
+        target_os = "linux",
+        any(target_arch = "x86_64", target_arch = "aarch64")
+    ),
     target_os = "macos",
     target_os = "freebsd",
     target_os = "windows"
@@ -1260,7 +1335,10 @@ fn absolute_cargo() -> Option<PathBuf> {
 ///
 /// [`build_in_jail`]: ipe_sandbox::build_jail::build_in_jail
 #[cfg(any(
-    all(target_os = "linux", target_arch = "x86_64"),
+    all(
+        target_os = "linux",
+        any(target_arch = "x86_64", target_arch = "aarch64")
+    ),
     target_os = "macos",
     target_os = "freebsd",
     target_os = "windows"
@@ -1284,7 +1362,10 @@ pub struct JailProbeRunner<'a> {
 }
 
 #[cfg(any(
-    all(target_os = "linux", target_arch = "x86_64"),
+    all(
+        target_os = "linux",
+        any(target_arch = "x86_64", target_arch = "aarch64")
+    ),
     target_os = "macos",
     target_os = "freebsd",
     target_os = "windows"
@@ -1327,7 +1408,10 @@ impl<'a> JailProbeRunner<'a> {
 }
 
 #[cfg(any(
-    all(target_os = "linux", target_arch = "x86_64"),
+    all(
+        target_os = "linux",
+        any(target_arch = "x86_64", target_arch = "aarch64")
+    ),
     target_os = "macos",
     target_os = "freebsd",
     target_os = "windows"
@@ -1386,7 +1470,10 @@ impl ProbeRunner for JailProbeRunner<'_> {
 // argv, which flows through `CreateProcessW`).
 
 #[cfg(any(
-    all(target_os = "linux", target_arch = "x86_64"),
+    all(
+        target_os = "linux",
+        any(target_arch = "x86_64", target_arch = "aarch64")
+    ),
     target_os = "macos",
     target_os = "freebsd"
 ))]
@@ -1480,7 +1567,10 @@ impl JailProbeRunner<'_> {
 /// tightenable axis (the caller then produces a Clean-by-construction outcome
 /// without a spawn).
 #[cfg(any(
-    all(target_os = "linux", target_arch = "x86_64"),
+    all(
+        target_os = "linux",
+        any(target_arch = "x86_64", target_arch = "aarch64")
+    ),
     target_os = "macos",
     target_os = "freebsd",
     target_os = "windows"
@@ -1502,7 +1592,10 @@ fn exercised_selector(exercised: &[TightenableAxis]) -> Option<&'static str> {
 /// POSIX-only: the Windows probe payload carries config as named command-line
 /// parameters, not `env(1)` assignments, so this is not compiled on Windows.
 #[cfg(any(
-    all(target_os = "linux", target_arch = "x86_64"),
+    all(
+        target_os = "linux",
+        any(target_arch = "x86_64", target_arch = "aarch64")
+    ),
     target_os = "macos",
     target_os = "freebsd"
 ))]
