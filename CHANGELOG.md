@@ -10,6 +10,32 @@ Entries below the header are maintained by
 section is generated from Conventional Commit messages and prepended when the
 standing release pull request is merged.
 
+## [0.1.37](https://github.com/arthurmaciel/ipe-lang/compare/ipe-v0.1.36...ipe-v0.1.37) (2026-08-04)
+
+
+### Features
+
+* **backend:** converge wasm emit onto the runtime dependency-crate model ([#514](https://github.com/arthurmaciel/ipe-lang/issues/514)) ([#602](https://github.com/arthurmaciel/ipe-lang/issues/602)) ([d056102](https://github.com/arthurmaciel/ipe-lang/commit/d056102dca94d6338d5d6ca81135ce31ac95061c))
+* **canon,lower,diagnostics:** CustomElement typing acceptance + fail-closed seal gate ([#333](https://github.com/arthurmaciel/ipe-lang/issues/333) increment 2) ([#600](https://github.com/arthurmaciel/ipe-lang/issues/600)) ([67d1535](https://github.com/arthurmaciel/ipe-lang/commit/67d153546191cac50a48d49786736411abcef9e1))
+* **canon:** IPE-N0040 rejects hand-nested decoder pipelines, incl. binder indirection, on type-check too ([#614](https://github.com/arthurmaciel/ipe-lang/issues/614) [#615](https://github.com/arthurmaciel/ipe-lang/issues/615) [#619](https://github.com/arthurmaciel/ipe-lang/issues/619) [#622](https://github.com/arthurmaciel/ipe-lang/issues/622)) ([#633](https://github.com/arthurmaciel/ipe-lang/issues/633)) ([bc18895](https://github.com/arthurmaciel/ipe-lang/commit/bc188954c274986be8a036f2e90e553dd81871f6))
+* **cli:** ipe test command + verify calls it + standardized verify output ([#609](https://github.com/arthurmaciel/ipe-lang/issues/609) [#610](https://github.com/arthurmaciel/ipe-lang/issues/610)) ([#631](https://github.com/arthurmaciel/ipe-lang/issues/631)) ([4cf38fa](https://github.com/arthurmaciel/ipe-lang/commit/4cf38fad7129c196353b084817f3f270999d8f2d))
+* **cli:** rename check→type-check, add `ipe clean`, sectioned usage, safe `ipe init` re-init ([#611](https://github.com/arthurmaciel/ipe-lang/issues/611) [#607](https://github.com/arthurmaciel/ipe-lang/issues/607) [#608](https://github.com/arthurmaciel/ipe-lang/issues/608) [#612](https://github.com/arthurmaciel/ipe-lang/issues/612)) ([#621](https://github.com/arthurmaciel/ipe-lang/issues/621)) ([2d84c15](https://github.com/arthurmaciel/ipe-lang/commit/2d84c15137ca26eba773816cbdd16430322dd496))
+* **cli:** streamlined stage-progress output standard + adopt in install.sh and ipe upgrade ([#613](https://github.com/arthurmaciel/ipe-lang/issues/613)) ([#616](https://github.com/arthurmaciel/ipe-lang/issues/616)) ([ee526e6](https://github.com/arthurmaciel/ipe-lang/commit/ee526e681ba5f194b7f3541b432f7211f395c1a7))
+* **examples:** ipe-overrides/27-multi-session-chat — TEA async-DB port ([#635](https://github.com/arthurmaciel/ipe-lang/issues/635)) ([285008f](https://github.com/arthurmaciel/ipe-lang/commit/285008fb35fdbe94aad759e22a3ad3ea7c4ac708))
+* **lower,backend:** row-poly multi-field argument rows monomorphise per call-site shape ([#287](https://github.com/arthurmaciel/ipe-lang/issues/287)) ([#617](https://github.com/arthurmaciel/ipe-lang/issues/617)) ([da3b07b](https://github.com/arthurmaciel/ipe-lang/commit/da3b07b5ee70f5779389b2c172ebbd492d57be64))
+
+
+### Bug Fixes
+
+* **canon:** local module shadows stdlib import gate; helper submodule exempt from Program/TEA gate ([#605](https://github.com/arthurmaciel/ipe-lang/issues/605)) ([95c5486](https://github.com/arthurmaciel/ipe-lang/commit/95c54861da74a2d8aec89c16617ba4c71a94be9e))
+* **cli:** ipe build compiles the emitted crate so a cargo failure exits non-zero ([#590](https://github.com/arthurmaciel/ipe-lang/issues/590)) ([#627](https://github.com/arthurmaciel/ipe-lang/issues/627)) ([e0dc830](https://github.com/arthurmaciel/ipe-lang/commit/e0dc830a65042d3cd3dbf39bf5f13796a401e221))
+* **cli:** rename `ipe doctor` → `ipe health`; real free-disk check; clearer version wording ([#603](https://github.com/arthurmaciel/ipe-lang/issues/603)) ([60bd42c](https://github.com/arthurmaciel/ipe-lang/commit/60bd42cf145f0fa3a07ff20849b6afe265cb9537))
+* **examples/transform:** alias-aware stdlib Db raw-surface marking ([#630](https://github.com/arthurmaciel/ipe-lang/issues/630)) ([#632](https://github.com/arthurmaciel/ipe-lang/issues/632)) ([4e67e89](https://github.com/arthurmaciel/ipe-lang/commit/4e67e89729d1e8da9c17e10b26c58e7f6f11d643))
+* **examples:** map Std.Live -&gt; Ipe.Tea.Web in the Sky mirror (fixes [#588](https://github.com/arthurmaciel/ipe-lang/issues/588)) ([#618](https://github.com/arthurmaciel/ipe-lang/issues/618)) ([1282864](https://github.com/arthurmaciel/ipe-lang/commit/1282864e5e3164d47559da28f657020d09d01d98))
+* **examples:** web-shape view reshape (Html→Element) + Math import — mirror green 11→15/52 ([#580](https://github.com/arthurmaciel/ipe-lang/issues/580)) ([#624](https://github.com/arthurmaciel/ipe-lang/issues/624)) ([43a5195](https://github.com/arthurmaciel/ipe-lang/commit/43a5195350c5e11d42c909c9198296e3f57015a0))
+* **lower:** exhaustive, uniform ir_type_mentions feature detection ([#577](https://github.com/arthurmaciel/ipe-lang/issues/577)) ([#628](https://github.com/arthurmaciel/ipe-lang/issues/628)) ([0c9d555](https://github.com/arthurmaciel/ipe-lang/commit/0c9d5552eadee29d5b0a78ed2d8f1c60f2c0f94b))
+* **lower:** fail-closed gate for point-free generic-fn-carrier instantiation ([#572](https://github.com/arthurmaciel/ipe-lang/issues/572)) ([#626](https://github.com/arthurmaciel/ipe-lang/issues/626)) ([efd70a7](https://github.com/arthurmaciel/ipe-lang/commit/efd70a75fa7902cf08c79fe88de4c7ca964481f2))
+
 ## [0.1.36](https://github.com/arthurmaciel/ipe-lang/compare/ipe-v0.1.35...ipe-v0.1.36) (2026-08-04)
 
 
