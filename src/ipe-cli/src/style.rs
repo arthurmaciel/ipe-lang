@@ -114,7 +114,7 @@ pub struct Palette {
     /// A soft Ipê-amarelo (256-colour 222), for the product name and command
     /// names.
     pub yellow: &'static str,
-    /// A bright/light yellow (ANSI bright yellow), for the `ipe doctor`
+    /// A bright/light yellow (ANSI bright yellow), for the `ipe health`
     /// suggested-fix bullets — a stronger amber than [`yellow`](Self::yellow) so
     /// each actionable item stands out from the report above it.
     pub bright_yellow: &'static str,
@@ -184,7 +184,7 @@ mod tests {
     fn color_palette_carries_ansi_plain_does_not() {
         assert!(Palette::COLOR.yellow.contains('\x1b'));
         assert!(Palette::PLAIN.yellow.is_empty());
-        // The bright-yellow field the doctor fix bullets use follows the same
+        // The bright-yellow field the health fix bullets use follows the same
         // rule: an escape under colour, empty under plain.
         assert!(Palette::COLOR.bright_yellow.contains('\x1b'));
         assert!(Palette::PLAIN.bright_yellow.is_empty());

@@ -1,4 +1,4 @@
-//! `ipe doctor` — environment diagnostics and consent-gated build-optimization
+//! `ipe health` — environment diagnostics and consent-gated build-optimization
 //! setup.
 //!
 //! In the tradition of `flutter doctor` / `rustup check`, but precise because
@@ -175,7 +175,7 @@ fn cargo_config_path() -> Result<PathBuf, CliError> {
     }
     let home = home_dir().ok_or_else(|| {
         CliError::UsageOwned(
-            "doctor: cannot locate your home directory (neither CARGO_HOME nor HOME is set)"
+            "health: cannot locate your home directory (neither CARGO_HOME nor HOME is set)"
                 .to_owned(),
         )
     })?;
@@ -316,7 +316,7 @@ impl Report {
     }
 }
 
-/// `ipe doctor` entry point.
+/// `ipe health` entry point.
 ///
 /// Parses the shared output-format flags plus `--yes`/`-y`, runs the read-only
 /// detectors, prints the report in the requested mode, and — on a terminal (or
@@ -327,8 +327,8 @@ impl Report {
 /// [`CliError::UsageOwned`] on an unknown flag or a combination the parse
 /// rejects (`--yes` with `--plain` / `--json`, which never mutate); a filesystem
 /// error from an accepted fix.
-pub fn run_doctor(rest: &[String]) -> Result<(), CliError> {
-    let args = crate::cli_args::parse_doctor(rest)?;
+pub fn run_health(rest: &[String]) -> Result<(), CliError> {
+    let args = crate::cli_args::parse_health(rest)?;
     let report = detect();
 
     let stdout = std::io::stdout();
@@ -361,8 +361,8 @@ pub fn run_doctor(rest: &[String]) -> Result<(), CliError> {
             print!(
                 "{}",
                 style::gutter(
-                    "Run `ipe doctor` in a terminal to apply these interactively, or \
-                     `ipe doctor --yes` to apply them all.\n"
+                    "Run `ipe health` in a terminal to apply these interactively, or \
+                     `ipe health --yes` to apply them all.\n"
                 )
             );
         }
@@ -377,7 +377,7 @@ pub fn run_doctor(rest: &[String]) -> Result<(), CliError> {
 /// missing check exits non-zero (so CI can gate); everything else is success.
 fn finish(report: &Report) -> Result<(), CliError> {
     if report.has_critical_failure() {
-        return Err(CliError::DoctorCritical);
+        return Err(CliError::HealthCritical);
     }
     Ok(())
 }
@@ -410,16 +410,16 @@ fn detect() -> Report {
 /// The running `ipe` version — reported as `Unknown` on purpose.
 ///
 /// There is no release feed to compare the running binary against, so claiming
-/// "up to date" would be a fabrication. The honest answer is the version we are
-/// and an `unknown` currency, with a pointer to the one shipped self-update
-/// command (`ipe upgrade`).
+/// "up to date" would be a fabrication. The honest answer names the running
+/// version and states that the up-to-date check is unavailable, with a pointer
+/// to the one shipped self-update command (`ipe upgrade`).
 fn check_ipe_version() -> Check {
     Check {
         group: Group::Toolchain,
         id: "ipe",
         status: Status::Unknown,
         detail: format!(
-            "running ipe {} — currency is unknown (no release feed to compare against)",
+            "running ipe {} — cannot check for a newer release (no release feed to compare against)",
             runtime_embed::COMPILER_VERSION
         ),
         suggestion: Some("run `ipe upgrade` to re-fetch the latest release installer".to_owned()),
@@ -909,17 +909,16 @@ fn free_space_bytes(dir: &Path) -> Option<u64> {
     None
 }
 
-/// `statvfs(2)`-based free-space query. Uses a raw libc-free path: shell out is
-/// forbidden, and the CLI carries no libc binding, so this reads the value from
-/// `nix`-free `statvfs` via the standard library where available, else `None`.
+/// `statvfs(2)`-based free-space query via `rustix`: available blocks times the
+/// fragment size — the bytes an unprivileged process may actually use. `None`
+/// when the syscall fails (a path that vanished mid-probe, or a filesystem that
+/// does not report the figure).
 #[cfg(unix)]
-const fn statvfs_free(_p: &Path) -> Option<u64> {
-    // The standard library exposes no `statvfs`, and the CLI takes no libc
-    // dependency for one read. Rather than add an FFI surface for a convenience
-    // metric, report `Unknown` (the caller renders it honestly) — the disk check
-    // never gates the exit code, so an unknown here costs nothing but a warning
-    // the user can verify with `df`.
-    None
+fn statvfs_free(p: &Path) -> Option<u64> {
+    let vfs = rustix::fs::statvfs(p).ok()?;
+    // `f_bavail` counts fragments free to a non-root caller; `f_frsize` is the
+    // fragment size in bytes. Their product is the usable free byte count.
+    vfs.f_bavail.checked_mul(vfs.f_frsize)
 }
 
 /// Free bytes — unavailable without a platform query on non-Unix here.
@@ -1212,16 +1211,16 @@ fn apply_one(fix: &Fix) -> Result<String, CliError> {
 fn run_install(argv: &[String]) -> Result<(), CliError> {
     let (program, rest) = argv
         .split_first()
-        .ok_or_else(|| CliError::UsageOwned("doctor: an install command was empty".to_owned()))?;
+        .ok_or_else(|| CliError::UsageOwned("health: an install command was empty".to_owned()))?;
     let status = Command::new(program)
         .args(rest)
         .status()
-        .map_err(|e| CliError::UsageOwned(format!("doctor: could not launch `{program}`: {e}")))?;
+        .map_err(|e| CliError::UsageOwned(format!("health: could not launch `{program}`: {e}")))?;
     if status.success() {
         Ok(())
     } else {
         Err(CliError::UsageOwned(format!(
-            "doctor: `{program}` exited non-zero — nothing was changed"
+            "health: `{program}` exited non-zero — nothing was changed"
         )))
     }
 }
@@ -1257,13 +1256,13 @@ fn apply_config_edit(path: &Path, key: &[&str], value: &str) -> Result<(), CliEr
 
     let mut doc = existing.parse::<toml_edit::DocumentMut>().map_err(|e| {
         CliError::UsageOwned(format!(
-            "doctor: {} is not valid TOML ({e}); refusing to overwrite it",
+            "health: {} is not valid TOML ({e}); refusing to overwrite it",
             path.display()
         ))
     })?;
 
     // Idempotent: if the key already holds exactly this value, no write, no
-    // backup — running doctor twice changes nothing.
+    // backup — running health twice changes nothing.
     if dotted_str(&doc, key).as_deref() == Some(value) {
         return Ok(());
     }
@@ -1283,7 +1282,7 @@ fn apply_config_edit(path: &Path, key: &[&str], value: &str) -> Result<(), CliEr
     // round-trip is a bug, and we roll back rather than write it.
     if rendered.parse::<toml_edit::DocumentMut>().is_err() {
         return Err(CliError::UsageOwned(format!(
-            "doctor: the edited config for {} did not re-parse; no change was made",
+            "health: the edited config for {} did not re-parse; no change was made",
             path.display()
         )));
     }
@@ -1351,7 +1350,7 @@ fn set_dotted(doc: &mut toml_edit::DocumentMut, key: &[&str], value: &str) {
 /// (`<name>.bak`, `<name>.bak.1`, …). Returns the backup path.
 ///
 /// The free slot is claimed with an exclusive `create_new` open, not a
-/// check-then-write: a concurrent `ipe doctor` that raced to the same slot loses
+/// check-then-write: a concurrent `ipe health` that raced to the same slot loses
 /// the open with `AlreadyExists` and this loop advances to the next number, so a
 /// backup is never truncated over an existing one.
 fn numbered_backup(path: &Path, contents: &str) -> Result<PathBuf, CliError> {
@@ -1402,7 +1401,7 @@ fn write_atomic_config(path: &Path, contents: &str) -> Result<(), CliError> {
         || "config.toml".to_owned(),
         |n| n.to_string_lossy().into_owned(),
     );
-    let tmp_name = format!(".{name}.doctor.{}.tmp", std::process::id());
+    let tmp_name = format!(".{name}.health.{}.tmp", std::process::id());
     let tmp = dir.map_or_else(|| PathBuf::from(&tmp_name), |d| d.join(&tmp_name));
     std::fs::write(&tmp, contents).map_err(|e| CliError::Io {
         path: tmp.clone(),
@@ -1428,7 +1427,7 @@ mod tests {
     impl TempDir {
         fn new(tag: &str) -> Self {
             let dir = std::env::temp_dir().join(format!(
-                "ipe_doctor_{tag}_{}_{:?}",
+                "ipe_health_{tag}_{}_{:?}",
                 std::process::id(),
                 std::time::SystemTime::now()
                     .duration_since(std::time::UNIX_EPOCH)

@@ -23,9 +23,9 @@ mod cache;
 pub mod cli_args;
 pub mod diff;
 pub mod doc;
-pub mod doctor;
 pub mod ffi;
 pub mod fmt;
+pub mod health;
 pub mod help;
 pub mod index;
 pub mod init;
@@ -278,13 +278,13 @@ pub enum CliError {
     /// the typed [`toolchain::ToolchainMissing`] naming what the command was
     /// doing and whether the toolchain is uninstalled or merely off the `PATH`.
     ToolchainMissing(toolchain::ToolchainMissing),
-    /// `ipe doctor` found a critical prerequisite missing (no `rustc`/`cargo`,
+    /// `ipe health` found a critical prerequisite missing (no `rustc`/`cargo`,
     /// or an unresolvable runtime). This is a legitimate diagnostic verdict —
     /// the command ran correctly and reported the environment fully to stdout —
     /// not a command-line misuse, so it exits non-zero after the report and
-    /// never shows the `doctor` command's `--help` page. Carries nothing: the
+    /// never shows the `health` command's `--help` page. Carries nothing: the
     /// report is the message; this variant is only the exit-code signal.
-    DoctorCritical,
+    HealthCritical,
     /// `ipe eject` was asked to eject a program it cannot make self-contained.
     /// Eject vendors ONLY the embedded runtime source; a program that binds a
     /// foreign Rust crate (FFI) would need those external crates pulled from a
@@ -415,9 +415,9 @@ impl std::fmt::Display for CliError {
             // The full diagnostic report already went to stdout; this stderr
             // line is only the one-line verdict that pairs with the non-zero
             // exit, self-guttered so the caller prints it as-is.
-            Self::DoctorCritical => write!(
+            Self::HealthCritical => write!(
                 f,
-                "{}doctor: a required prerequisite is missing (see the report above)",
+                "{}health: a required prerequisite is missing (see the report above)",
                 style::GUTTER
             ),
             Self::EjectUnsupported { reason } => write!(f, "{}eject: {reason}", style::GUTTER),
@@ -2354,8 +2354,8 @@ pub fn run_cli(args: &[String]) -> Result<(), CliError> {
         Some((cmd, rest)) if cmd == "fmt" => with_help_on_misuse("fmt", fmt::run_fmt(rest)),
         Some((cmd, rest)) if cmd == "lsp" => with_help_on_misuse("lsp", lsp::run_lsp(rest)),
         Some((cmd, rest)) if cmd == "upgrade" => with_help_on_misuse("upgrade", run_upgrade(rest)),
-        Some((cmd, rest)) if cmd == "doctor" => {
-            with_help_on_misuse("doctor", doctor::run_doctor(rest))
+        Some((cmd, rest)) if cmd == "health" => {
+            with_help_on_misuse("health", health::run_health(rest))
         }
         Some((cmd, rest)) if cmd == "version" || cmd == "--version" || cmd == "-V" => {
             with_help_on_misuse("version", run_version(rest))

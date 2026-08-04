@@ -152,7 +152,7 @@ pub fn require_cargo(intent: ToolIntent) -> Result<CargoBin, ToolchainMissing> {
 /// The outcome of a diagnostic probe for `cargo`: the resolved path, or why it
 /// is absent.
 ///
-/// This is the read-only sibling of [`require_cargo`]: `ipe doctor` reports the
+/// This is the read-only sibling of [`require_cargo`]: `ipe health` reports the
 /// toolchain's presence without an intent (it is not about to invoke `cargo`),
 /// so it needs the resolution outcome, not a fail-closed [`CargoBin`] token.
 #[derive(Debug, Clone)]
@@ -166,7 +166,7 @@ pub enum Probe {
 /// Probe for `cargo` without an [`ToolIntent`], for a diagnostic report.
 ///
 /// Shares the exact search [`require_cargo`] uses (the `PATH`, then the known
-/// install directories), so `doctor`'s verdict and a real build's verdict can
+/// install directories), so `health`'s verdict and a real build's verdict can
 /// never disagree.
 #[must_use]
 pub fn probe_cargo() -> Probe {
