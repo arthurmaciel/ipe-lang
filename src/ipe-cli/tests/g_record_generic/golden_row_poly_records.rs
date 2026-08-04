@@ -23,6 +23,7 @@
 //! | `row_poly_two_supersets_neg` | P6 (class-1 tripwire) | reject | unannotated let-bound getter called with two DIFFERENT superset shapes → IPE-T0001 |
 //! | `row_poly_annotation_gap` | P1 | accept | single-field arg-position row `{ r \| name : String }` erases to a witness-bounded rustc generic (`R1: IpeHasName<Name = String>`); the field read routes through `ipe_name()` |
 //! | `row_poly_greet` | P1 | accept | one row-poly fn called at TWO shapes (`{name,age}`, `{name,id}`); both concrete structs + a witness impl each; `IPE_E2E=1` prints `Ada, Bo` |
+//! | `row_poly_task_seq_row_read` | row containment (emit-time) | accept | a row field read inside a discarded-Task effect AND its continuation, sequenced at two shapes; the effect's `rec.name` survives the emit-time capture-clone as a `Var` receiver (getter-routed, not a whole-row `CloneVar`), and `R1` carries `Send + 'static` for the boxed continuation; `IPE_E2E=1` prints `Ada`×2 then `Bo`×2 |
 //! | `row_poly_accessor` | P8 | accept | first-class accessor `.name` (desugars to `\r -> r.name`) through `List.map` over a superset list; emits a concrete getter closure over the superset struct; `IPE_E2E=1` prints `Ada, Bo` |
 //! | `row_poly_accessor_two_shapes` | P8 | accept | `.name` through `List.map` over two DIFFERENT record shapes; each occurrence a concrete getter; `IPE_E2E=1` prints `Ada, Bo | Cy, Di` |
 //! | `row_poly_let_rebind_neg` | row containment | reject | a row-typed param re-bound (`let n = rec in n.name`) escapes the direct-access form → IPE-L0131 (else the emitted `n.name` is E0609) |
@@ -539,6 +540,95 @@ fn row_poly_greet_cargo_builds_and_prints_both() {
     assert_eq!(
         outcome.stdout, "Ada, Bo\n",
         "must print both greetings — one machine copy of greet per record shape"
+    );
+}
+
+/// ipe-0: a row-generic field read that lands in a discarded-Task effect AND its
+/// continuation must route BOTH reads through the borrowing witness getter. The
+/// effect read is the load-bearing case: the Task-sequencing tail captures `rec`
+/// into its continuation, so the emit-time capture-clone would otherwise rewrite
+/// the effect's `rec.name` receiver to a `CloneVar` (a raw struct-field read on
+/// the bare `R1` generic — E0609). The row generic also carries `Send + 'static`
+/// for the boxed continuation.
+#[test]
+fn row_poly_task_seq_row_read_routes_effect_through_getter() {
+    let entry = golden_dir("row_poly_task_seq_row_read").join("Main.ipe");
+    let out =
+        PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("row_poly_task_seq_row_read_ipec_out");
+    let _ = std::fs::remove_dir_all(&out);
+
+    let Ok(runtime) = ipe::resolve_runtime() else {
+        eprintln!("SKIP row_poly_task_seq_row_read: runtime not available");
+        return;
+    };
+
+    let built = ipe::build(&entry, &out, &runtime);
+    assert!(
+        built.is_ok(),
+        "ipe build must accept row_poly_task_seq_row_read: {:?}",
+        built.err()
+    );
+
+    let emitted = std::fs::read_to_string(out.join("src").join("main.rs"))
+        .expect("emitted main.rs must exist");
+    // The effect read must NOT be a whole-row clone feeding a raw field read.
+    assert!(
+        !emitted.contains(".clone()).name") && !emitted.contains("(rec.clone()).name"),
+        "the effect's row read must not become a raw struct-field read on a \
+         cloned R1; got main.rs:\n{emitted}"
+    );
+    // Both the effect and the continuation route through the witness getter.
+    assert!(
+        emitted.matches("ipe_name()").count() >= 2,
+        "both the effect and the continuation must route `name` through the \
+         witness getter; got main.rs:\n{emitted}"
+    );
+    // The row generic carries the auto-trait bounds the boxed continuation needs.
+    assert!(
+        emitted.contains("Send") && emitted.contains("'static"),
+        "a task-captured row generic must carry Send + 'static; got \
+         main.rs:\n{emitted}"
+    );
+    assert!(
+        !emitted.contains("dyn Any"),
+        "row routing must stay static; got main.rs:\n{emitted}"
+    );
+}
+
+/// cargo-0 ∧ run-0: the emitted project compiles (the SEAL: exit-0 ⇒
+/// cargo-green) and prints each name twice — `report ada` runs its effect then
+/// its continuation (`Ada` twice), then `report bo` (`Bo` twice). Gated on
+/// `IPE_E2E=1`.
+#[test]
+fn row_poly_task_seq_row_read_cargo_builds_and_runs() {
+    if std::env::var("IPE_E2E").is_err() {
+        return;
+    }
+
+    let entry = golden_dir("row_poly_task_seq_row_read").join("Main.ipe");
+    let out = std::env::temp_dir().join("ipec_row_poly_task_seq_row_read_e2e");
+    let _ = std::fs::remove_dir_all(&out);
+
+    let Ok(runtime) = ipe::resolve_runtime() else {
+        return;
+    };
+    let built = ipe::build(&entry, &out, &runtime);
+    assert!(
+        built.is_ok(),
+        "ipe build must succeed for row_poly_task_seq_row_read: {:?}",
+        built.err()
+    );
+
+    let outcome = crate::support::build_and_run_emitted("row_poly_task_seq_row_read", &out);
+    assert_eq!(
+        outcome.exit_code,
+        Some(0),
+        "row_poly_task_seq_row_read binary must exit 0 (SEAL); got {:?}",
+        outcome.exit_code
+    );
+    assert_eq!(
+        outcome.stdout, "Ada\nAda\nBo\nBo\n",
+        "each report prints its row field in the effect then the continuation"
     );
 }
 
