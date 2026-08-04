@@ -680,10 +680,30 @@ pub fn sbpl_from_profile(
     // over that tree would re-permit every sibling of the scratch, defeating the
     // differential confinement — an out-of-scratch write next to the scratch
     // would leak. Fail-closed: allow only the resolved scratch subpath.
+    //
+    // The subpath is rendered in its SYMLINK-RESOLVED form. Seatbelt matches a
+    // `(subpath X)` rule against the kernel-RESOLVED write path, and on macOS the
+    // per-user temp tree is reached through the `/var → /private/var` symlink: a
+    // scratch handed in as `/var/folders/…/T/…` is written by the kernel as
+    // `/private/var/folders/…/T/…`. An allow rule bearing the unresolved `/var`
+    // form would therefore NOT cover the resolved write, false-denying a
+    // legitimate in-scratch write. [`macos_resolved_subpath`] resolves the path so
+    // the allow matches the kernel-resolved write. Resolution only rewrites the
+    // path to its canonical location; it never widens the allow to a parent, so
+    // the out-of-scratch deny is untouched (a sibling of the scratch resolves to a
+    // sibling of the resolved scratch, still outside the allowed subtree).
     s.push_str("(deny file-write*)\n");
-    let _ = writeln!(s, "(allow file-write* (subpath {}))", quote(scoped_tmp));
+    let _ = writeln!(
+        s,
+        "(allow file-write* (subpath {}))",
+        quote(&macos_resolved_subpath(scoped_tmp))
+    );
     if matches!(profile.filesystem, FilesystemScope::WorkingTreeReadWrite) {
-        let _ = writeln!(s, "(allow file-write* (subpath {}))", quote(working_tree));
+        let _ = writeln!(
+            s,
+            "(allow file-write* (subpath {}))",
+            quote(&macos_resolved_subpath(working_tree))
+        );
     }
     s.push('\n');
 
@@ -711,6 +731,47 @@ pub fn sbpl_from_profile(
     }
 
     s
+}
+
+/// Resolve a write-allow path to the form Seatbelt matches against — the
+/// kernel-RESOLVED path — so a `(subpath …)` allow covers the actual write.
+///
+/// Seatbelt evaluates a `(subpath X)` rule against the path the kernel resolves a
+/// write to, not the literal string the caller held. On macOS the per-user temp
+/// tree (`$TMPDIR`) and `/tmp` are reached through firmlinks/symlinks
+/// (`/var → /private/var`, `/tmp → /private/tmp`): a scratch handed in as
+/// `/var/folders/…/T/…` is written by the kernel as `/private/var/folders/…/T/…`.
+/// An allow rule bearing the unresolved form would not cover the resolved write,
+/// FALSE-DENYING a legitimate in-scratch write. This maps the caller's path to the
+/// resolved form the kernel will match.
+///
+/// [`std::fs::canonicalize`] is authoritative — it resolves every symlink on the
+/// real path, which at profile-build time already exists — and is used when it
+/// succeeds. When it cannot (the path does not exist on this host, e.g. a unit
+/// test on Linux), the two macOS firmlink prefixes are rewritten explicitly so the
+/// lowering is still deterministic and host-independently testable. Both paths
+/// only rewrite a leading component to its canonical location; neither widens the
+/// allow to a parent, so the enclosing per-user temp tree is never blanket-allowed
+/// and the out-of-scratch deny is preserved.
+///
+/// PURE up to a filesystem read of the (already-existing) scratch: it takes an
+/// owned resolved path so `sbpl_from_profile` stays a total function of its inputs
+/// plus the host's symlink layout, exactly what the kernel will enforce.
+#[cfg(any(target_os = "macos", test))]
+#[must_use]
+fn macos_resolved_subpath(path: &Path) -> PathBuf {
+    if let Ok(canonical) = std::fs::canonicalize(path) {
+        return canonical;
+    }
+    // Fallback when the path cannot be canonicalized on this host: rewrite the two
+    // macOS firmlink prefixes to their `/private`-rooted resolved form. A path
+    // already under `/private/…`, or under neither prefix, is returned unchanged.
+    for (link, resolved) in [("/var/", "/private/var/"), ("/tmp/", "/private/tmp/")] {
+        if let Ok(rest) = path.strip_prefix(link) {
+            return PathBuf::from(resolved).join(rest);
+        }
+    }
+    path.to_path_buf()
 }
 
 /// The environment the macOS launcher `exec`s `sandbox-exec` under — the `env`
@@ -1429,12 +1490,15 @@ mod tests {
     #[test]
     fn sbpl_confines_writes_to_the_scratch_when_filesystem_is_withheld() {
         let p = scoped(false, FilesystemScope::Isolated);
-        let sbpl = sbpl_from_profile(&p, Path::new("/tmp/scratch"), Path::new("/work/tree"));
+        // A non-firmlink scratch prefix, so this structural assertion is about the
+        // deny+re-allow shape, not the macOS symlink resolution (which its own
+        // tests cover); such a path is rendered unchanged.
+        let sbpl = sbpl_from_profile(&p, Path::new("/work/scratch"), Path::new("/work/tree"));
         // A blanket write denial, then the scratch re-allowed — an out-of-scratch
         // write is denied so the filesystem axis is observable.
         assert!(sbpl.contains("(deny file-write*)"), "{sbpl}");
         assert!(
-            sbpl.contains("(allow file-write* (subpath \"/tmp/scratch\"))"),
+            sbpl.contains("(allow file-write* (subpath \"/work/scratch\"))"),
             "scratch must be writable: {sbpl}"
         );
         // The working tree is NOT writable under a filesystem-withholding profile.
@@ -1476,9 +1540,83 @@ mod tests {
     }
 
     #[test]
+    fn sbpl_renders_the_scratch_allow_in_its_symlink_resolved_form() {
+        // Seatbelt matches a `(subpath …)` allow against the KERNEL-RESOLVED write
+        // path. On macOS the per-user temp tree is reached through the
+        // `/var → /private/var` firmlink, so a scratch handed in as
+        // `/var/folders/…/T/…` is written by the kernel as `/private/var/folders/…`.
+        // The allow MUST therefore render in the resolved `/private/var` form, or a
+        // legitimate in-scratch write is FALSE-DENIED (the E2E
+        // `an_in_scratch_write_succeeds_under_the_run_jail` regression). This asserts
+        // the resolution host-independently via the explicit-firmlink fallback (the
+        // scratch path does not exist on a Linux CI host, so `canonicalize` cannot
+        // run — the deterministic prefix rewrite is exercised). The real runner
+        // proves the same allow via `canonicalize` on the macos-run-jail E2E.
+        let unresolved = Path::new("/var/folders/ab/xxxx/T/ipe-run-scratch");
+        let p = scoped(false, FilesystemScope::Isolated);
+        let sbpl = sbpl_from_profile(&p, unresolved, Path::new("/work/tree"));
+        assert!(
+            sbpl.contains(
+                "(allow file-write* (subpath \"/private/var/folders/ab/xxxx/T/ipe-run-scratch\"))"
+            ),
+            "the scratch allow must render in the resolved /private/var form so it \
+             covers the kernel-resolved write: {sbpl}"
+        );
+        // The unresolved `/var` form must NOT appear — it would not match the write.
+        assert!(
+            !sbpl.contains("(subpath \"/var/folders/ab/xxxx/T/ipe-run-scratch\"))"),
+            "the unresolved /var form must not be emitted (it would false-deny): {sbpl}"
+        );
+        // Resolving must NOT widen the allow to the enclosing per-user temp tree:
+        // the out-of-scratch deny stays intact (a sibling of the scratch resolves to
+        // a sibling of the resolved scratch, still outside the allowed subtree).
+        assert!(
+            !sbpl.contains("(allow file-write* (subpath \"/private/var/folders\"))"),
+            "resolving must not blanket-allow the enclosing temp tree: {sbpl}"
+        );
+        assert!(
+            !sbpl.contains("(allow file-write* (subpath \"/private/var\"))"),
+            "resolving must not blanket-allow /private/var: {sbpl}"
+        );
+    }
+
+    #[test]
+    fn macos_resolved_subpath_rewrites_firmlink_prefixes_without_widening() {
+        // The resolver maps the two macOS firmlink prefixes to their resolved form
+        // and leaves every other path (including an already-resolved one) untouched
+        // — a pure prefix rewrite, never a widening to a parent. (The `canonicalize`
+        // branch cannot run for these non-existent paths, so the fallback is
+        // exercised deterministically on any host.)
+        assert_eq!(
+            macos_resolved_subpath(Path::new("/var/folders/x/T/s")),
+            PathBuf::from("/private/var/folders/x/T/s")
+        );
+        assert_eq!(
+            macos_resolved_subpath(Path::new("/tmp/s")),
+            PathBuf::from("/private/tmp/s")
+        );
+        // Already resolved — unchanged (no double `/private`).
+        assert_eq!(
+            macos_resolved_subpath(Path::new("/private/var/folders/x/T/s")),
+            PathBuf::from("/private/var/folders/x/T/s")
+        );
+        // A non-firmlink path — unchanged.
+        assert_eq!(
+            macos_resolved_subpath(Path::new("/work/tree")),
+            PathBuf::from("/work/tree")
+        );
+        // Component-wise matching: `/variant` is NOT under the `/var` firmlink, so
+        // it must not be rewritten (a naive string prefix would corrupt it).
+        assert_eq!(
+            macos_resolved_subpath(Path::new("/variant/x")),
+            PathBuf::from("/variant/x")
+        );
+    }
+
+    #[test]
     fn sbpl_grants_the_working_tree_write_when_filesystem_is_granted() {
         let p = scoped(false, FilesystemScope::WorkingTreeReadWrite);
-        let sbpl = sbpl_from_profile(&p, Path::new("/tmp/scratch"), Path::new("/work/tree"));
+        let sbpl = sbpl_from_profile(&p, Path::new("/work/scratch"), Path::new("/work/tree"));
         // The blanket deny stays (so a path outside BOTH scratch and tree is
         // still denied), and the working tree is re-allowed.
         assert!(sbpl.contains("(deny file-write*)"), "{sbpl}");
@@ -1493,9 +1631,11 @@ mod tests {
         // A scratch path with an embedded quote/backslash must not break the SBPL
         // grammar — both are escaped so a crafted path cannot inject a rule.
         let p = scoped(false, FilesystemScope::Isolated);
-        let sbpl = sbpl_from_profile(&p, Path::new("/tmp/scr\"atch\\x"), Path::new("/work/tree"));
+        // A non-firmlink prefix isolates this assertion to the escaping, not the
+        // macOS symlink resolution.
+        let sbpl = sbpl_from_profile(&p, Path::new("/work/scr\"atch\\x"), Path::new("/work/tree"));
         assert!(
-            sbpl.contains("(allow file-write* (subpath \"/tmp/scr\\\"atch\\\\x\"))"),
+            sbpl.contains("(allow file-write* (subpath \"/work/scr\\\"atch\\\\x\"))"),
             "the quote and backslash must be escaped: {sbpl}"
         );
     }
