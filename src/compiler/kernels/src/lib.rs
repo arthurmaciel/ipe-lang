@@ -193,6 +193,78 @@ pub enum BuiltinTag {
     /// `Order` — the nullary three-way-comparison result constructor
     /// (`LT` / `EQ` / `GT`).
     Order,
+    /// `Error` — the nullary runtime `IpeError` value type (the implicit error
+    /// channel of every `Task` and the payload of the `Result Error _` schemes).
+    Error,
+    /// `ErrorKind` — the nullary classified-error-kind union.
+    ErrorKind,
+    /// `ErrorDetails` — the nullary structured-error-detail union.
+    ErrorDetails,
+    /// `Decimal` — the nullary fixed-point decimal value type.
+    Decimal,
+    /// `Task` — the effect constructor `Task a` (its error channel is the
+    /// implicit `Error`), applied to its result payload type.
+    Task,
+    /// `Cmd` — the TEA outbound-command constructor `Cmd msg`, applied to the
+    /// message type.
+    Cmd,
+    /// `Sub` — the TEA subscription constructor `Sub msg`, applied to the
+    /// message type.
+    Sub,
+    /// `Topic` — the phantom publish/subscribe topic-handle constructor
+    /// `Topic a`, applied to the shared payload type.
+    Topic,
+    /// `Decoder` — the opaque row/JSON/config decoder constructor `Decoder a`,
+    /// applied to the decoded result type.
+    Decoder,
+    /// `Db` — the nullary opaque database-connection handle.
+    Db,
+    /// `SqlValue` — the nullary opaque typed SQL bind-value.
+    SqlValue,
+    /// `SqlField` — the nullary opaque typed SQL column-assignment value.
+    SqlField,
+    /// `SqlFragment` — the nullary opaque validated SQL WHERE-fragment.
+    SqlFragment,
+    /// `Secret` — the nullary opaque sealed secret-string.
+    Secret,
+    /// `Path` — the nullary opaque validated filesystem path.
+    Path,
+    /// `Regex` — the nullary opaque compiled regular-expression handle.
+    Regex,
+    /// `Url` — the nullary opaque validated URL.
+    Url,
+    /// `Locale` — the nullary opaque BCP-47 locale handle.
+    Locale,
+    /// `HttpMethod` — the nullary closed HTTP-method ADT.
+    HttpMethod,
+    /// `CryptoKey` — the nullary opaque role-typed crypto key.
+    CryptoKey,
+    /// `CryptoMac` — the nullary opaque role-typed MAC output.
+    CryptoMac,
+    /// `EmailAddress` — the nullary opaque validated email address.
+    EmailAddress,
+    /// `Claims` — the nullary opaque JWT claims accumulator.
+    Claims,
+    /// `Algorithm` — the nullary opaque JWT signing-algorithm descriptor.
+    Algorithm,
+    /// `Value` — the nullary opaque JSON node (`Value = any`) the
+    /// `JsonEnc.*` encoders produce and consume.
+    JsonValue,
+    /// `StreamId` — the nullary opaque HTTP-stream registry handle.
+    StreamId,
+    /// `StreamWriter` — the nullary opaque server-side streaming-response
+    /// writer handle.
+    StreamWriter,
+    /// `WsServer` — the nullary opaque per-peer WebSocket-server handle.
+    WsServer,
+    /// `WsServerCfg` — the nullary opaque WebSocket-server configuration.
+    WsServerCfg,
+    /// `ServerRequest` — the nullary opaque inbound HTTP-server request.
+    ServerRequest,
+    /// `ServerCookie` — the nullary opaque HTTP-server cookie.
+    ServerCookie,
+    /// `ServerRoute` — the nullary opaque HTTP-server route.
+    ServerRoute,
 }
 
 /// A `'static`, `const`-embeddable representation of a kernel's HM type scheme.
@@ -228,6 +300,11 @@ pub enum TyShape {
     /// same-ordered `Ty::Tuple` a hand-built scheme's `Ty::Tuple(vec![…])`
     /// produces. A two-element slice encodes the common pair `(a, b)`.
     Tuple(&'static [Self]),
+    /// The empty-tuple unit type `()`. Materialises the interpreter's `Ty::Unit`
+    /// — the argument of every `() -> …` kernel and the result payload of a
+    /// `Task ()` (`Task Error ()`). A leaf with no children, distinct from a
+    /// zero-argument `Con` (it names no interned constructor symbol).
+    Unit,
     /// A rank-1 scheme-local type variable, named by a positional index
     /// (`0` → the scheme's first variable `a`, `1` → `b`, …). Repeating the
     /// same index within one scheme denotes the SAME variable — the interpreter
@@ -5421,6 +5498,771 @@ impl StdlibKernel {
         const DICT_TO_BOOL: TyShape = TyShape::Fun(&DICT_STRING_STRING, &BOOL);
         const DB_GET_BOOL: TyShape = TyShape::Fun(&STRING, &DICT_TO_BOOL);
 
+        // ── Opaque-constructor leaves for the effect / scalar-opaque families. ──
+        // The unit type `()` and the nullary opaque constructors, each spelled
+        // once and shared by reference.
+        const UNIT: TyShape = TyShape::Unit;
+        const ERROR: TyShape = TyShape::Con(BuiltinTag::Error, &[]);
+        const ERRORKIND: TyShape = TyShape::Con(BuiltinTag::ErrorKind, &[]);
+        const ERRORDETAILS: TyShape = TyShape::Con(BuiltinTag::ErrorDetails, &[]);
+        const DECIMAL: TyShape = TyShape::Con(BuiltinTag::Decimal, &[]);
+        const DB: TyShape = TyShape::Con(BuiltinTag::Db, &[]);
+        const SQLVALUE: TyShape = TyShape::Con(BuiltinTag::SqlValue, &[]);
+        const SQLFIELD: TyShape = TyShape::Con(BuiltinTag::SqlField, &[]);
+        const SQLFRAGMENT: TyShape = TyShape::Con(BuiltinTag::SqlFragment, &[]);
+        const SECRET: TyShape = TyShape::Con(BuiltinTag::Secret, &[]);
+        const PATH: TyShape = TyShape::Con(BuiltinTag::Path, &[]);
+        const REGEX: TyShape = TyShape::Con(BuiltinTag::Regex, &[]);
+        const URL: TyShape = TyShape::Con(BuiltinTag::Url, &[]);
+        const LOCALE: TyShape = TyShape::Con(BuiltinTag::Locale, &[]);
+        const HTTP_METHOD: TyShape = TyShape::Con(BuiltinTag::HttpMethod, &[]);
+        const CRYPTO_KEY: TyShape = TyShape::Con(BuiltinTag::CryptoKey, &[]);
+        const CRYPTO_MAC: TyShape = TyShape::Con(BuiltinTag::CryptoMac, &[]);
+        const EMAIL_ADDRESS: TyShape = TyShape::Con(BuiltinTag::EmailAddress, &[]);
+        const CLAIMS: TyShape = TyShape::Con(BuiltinTag::Claims, &[]);
+        const ALGORITHM: TyShape = TyShape::Con(BuiltinTag::Algorithm, &[]);
+        const JSON_VALUE: TyShape = TyShape::Con(BuiltinTag::JsonValue, &[]);
+        const STREAM_ID: TyShape = TyShape::Con(BuiltinTag::StreamId, &[]);
+        const STREAM_WRITER: TyShape = TyShape::Con(BuiltinTag::StreamWriter, &[]);
+        const WS_SERVER: TyShape = TyShape::Con(BuiltinTag::WsServer, &[]);
+        const WS_SERVER_CFG: TyShape = TyShape::Con(BuiltinTag::WsServerCfg, &[]);
+        const SERVER_REQUEST: TyShape = TyShape::Con(BuiltinTag::ServerRequest, &[]);
+        const SERVER_COOKIE: TyShape = TyShape::Con(BuiltinTag::ServerCookie, &[]);
+        const SERVER_ROUTE: TyShape = TyShape::Con(BuiltinTag::ServerRoute, &[]);
+        // Scheme-local vars beyond `g` (index 6) for the widest `Config.map*`.
+        const H: TyShape = TyShape::Var(7);
+        const I_VAR: TyShape = TyShape::Var(8);
+        // `Task a` / `Task ()` / `Cmd msg` / `Sub msg` / `Topic a` / `Decoder a`
+        // applications reused across the effect families.
+        const TASK_A: TyShape = TyShape::Con(BuiltinTag::Task, &[A]);
+        const TASK_B: TyShape = TyShape::Con(BuiltinTag::Task, &[B]);
+        const TASK_UNIT: TyShape = TyShape::Con(BuiltinTag::Task, &[UNIT]);
+        const TASK_INT: TyShape = TyShape::Con(BuiltinTag::Task, &[INT]);
+        const TASK_STRING: TyShape = TyShape::Con(BuiltinTag::Task, &[STRING]);
+        const TASK_BOOL: TyShape = TyShape::Con(BuiltinTag::Task, &[BOOL]);
+        const TASK_FLOAT: TyShape = TyShape::Con(BuiltinTag::Task, &[FLOAT]);
+        const TASK_BYTES: TyShape = TyShape::Con(BuiltinTag::Task, &[BYTES]);
+        const CMD_A: TyShape = TyShape::Con(BuiltinTag::Cmd, &[A]);
+        const CMD_B: TyShape = TyShape::Con(BuiltinTag::Cmd, &[B]);
+        const SUB_A: TyShape = TyShape::Con(BuiltinTag::Sub, &[A]);
+        const SUB_B: TyShape = TyShape::Con(BuiltinTag::Sub, &[B]);
+        const TOPIC_A: TyShape = TyShape::Con(BuiltinTag::Topic, &[A]);
+        const TOPIC_B: TyShape = TyShape::Con(BuiltinTag::Topic, &[B]);
+        const DEC_A: TyShape = TyShape::Con(BuiltinTag::Decoder, &[A]);
+        const DEC_B: TyShape = TyShape::Con(BuiltinTag::Decoder, &[B]);
+        const DEC_STRING: TyShape = TyShape::Con(BuiltinTag::Decoder, &[STRING]);
+        const DEC_INT: TyShape = TyShape::Con(BuiltinTag::Decoder, &[INT]);
+        const DEC_FLOAT: TyShape = TyShape::Con(BuiltinTag::Decoder, &[FLOAT]);
+        const DEC_BOOL: TyShape = TyShape::Con(BuiltinTag::Decoder, &[BOOL]);
+        // `Result Error _` — the fixed-error-channel result the opaque families
+        // return (`e = Error`).
+        const RESULT_ERR_STRING: TyShape = TyShape::Con(BuiltinTag::Result, &[ERROR, STRING]);
+        const RESULT_ERR_BOOL: TyShape = TyShape::Con(BuiltinTag::Result, &[ERROR, BOOL]);
+        const RESULT_ERR_A: TyShape = TyShape::Con(BuiltinTag::Result, &[ERROR, A]);
+        const RESULT_ERR_REGEX: TyShape = TyShape::Con(BuiltinTag::Result, &[ERROR, REGEX]);
+        const RESULT_ERR_PATH: TyShape = TyShape::Con(BuiltinTag::Result, &[ERROR, PATH]);
+        const RESULT_ERR_URL: TyShape = TyShape::Con(BuiltinTag::Result, &[ERROR, URL]);
+        const RESULT_ERR_DICT_SS: TyShape =
+            TyShape::Con(BuiltinTag::Result, &[ERROR, DICT_STRING_STRING]);
+
+        // ── Effect / scalar-opaque per-kernel shapes. ──
+        // `Log.*`, `Time.sleep`, `System.loadEnv`, `Io.*` → `String -> Task ()`.
+        const STRING_TO_TASK_UNIT: TyShape = TyShape::Fun(&STRING, &TASK_UNIT);
+        // `Log.*With : String -> List a -> Task ()`.
+        const LIST_A_TO_TASK_UNIT: TyShape = TyShape::Fun(&LIST_A, &TASK_UNIT);
+        const LOG_WITH: TyShape = TyShape::Fun(&STRING, &LIST_A_TO_TASK_UNIT);
+        // `File.remove/mkdirAll/delete : Path -> Task ()`.
+        const PATH_TO_TASK_UNIT: TyShape = TyShape::Fun(&PATH, &TASK_UNIT);
+        // `() -> Task ()` (system.loadEnv).
+        const UNIT_TO_TASK_UNIT: TyShape = TyShape::Fun(&UNIT, &TASK_UNIT);
+        // `() -> Task String`.
+        const UNIT_TO_TASK_STRING: TyShape = TyShape::Fun(&UNIT, &TASK_STRING);
+        // `String -> Task String` (getenv / tempFile / tempDir / readSecret).
+        const STRING_TO_TASK_STRING: TyShape = TyShape::Fun(&STRING, &TASK_STRING);
+        // `Path -> Task String` (readFile).
+        const PATH_TO_TASK_STRING: TyShape = TyShape::Fun(&PATH, &TASK_STRING);
+        // `() -> Task Int` (time.now / unixMillis).
+        const UNIT_TO_TASK_INT: TyShape = TyShape::Fun(&UNIT, &TASK_INT);
+        // `Int -> Task ()` (time.sleep).
+        const INT_TO_TASK_UNIT: TyShape = TyShape::Fun(&INT, &TASK_UNIT);
+        // `Int -> a -> Sub a` (time.every / sub.every).
+        const A_TO_SUB_A: TyShape = TyShape::Fun(&A, &SUB_A);
+        const INT_TO_A_TO_SUB_A: TyShape = TyShape::Fun(&INT, &A_TO_SUB_A);
+        // `() -> Task (List String)` (system.args).
+        const LIST_STRING: TyShape = TyShape::Con(BuiltinTag::List, &[STRING]);
+        const TASK_LIST_STRING: TyShape = TyShape::Con(BuiltinTag::Task, &[LIST_STRING]);
+        const UNIT_TO_TASK_LIST_STRING: TyShape = TyShape::Fun(&UNIT, &TASK_LIST_STRING);
+        // `String -> String -> Task ()` (system.setenv).
+        const STRING_TO_STRING_TO_TASK_UNIT: TyShape = TyShape::Fun(&STRING, &STRING_TO_TASK_UNIT);
+        // `Path -> String -> Task ()` (file.writeFile / append).
+        const PATH_TO_STRING_TO_TASK_UNIT: TyShape = TyShape::Fun(&PATH, &STRING_TO_TASK_UNIT);
+        // `Path -> Path -> Task ()` (file.copy / rename).
+        const PATH_TO_PATH_TO_TASK_UNIT: TyShape = TyShape::Fun(&PATH, &PATH_TO_TASK_UNIT);
+        // `Int -> Task (Maybe String)` (system.getArg).
+        const TASK_MAYBE_STRING: TyShape = TyShape::Con(BuiltinTag::Task, &[MAYBE_STRING]);
+        const INT_TO_TASK_MAYBE_STRING: TyShape = TyShape::Fun(&INT, &TASK_MAYBE_STRING);
+        // `String -> Task Int` / `String -> Task Bool` (getenvInt/getenvBool).
+        const STRING_TO_TASK_INT: TyShape = TyShape::Fun(&STRING, &TASK_INT);
+        const STRING_TO_TASK_BOOL: TyShape = TyShape::Fun(&STRING, &TASK_BOOL);
+        // `Path -> Task Bool` (file.exists / isDir).
+        const PATH_TO_TASK_BOOL: TyShape = TyShape::Fun(&PATH, &TASK_BOOL);
+        // `Int -> Int -> Task Int` (random.int).
+        const INT_TO_TASK_INT: TyShape = TyShape::Fun(&INT, &TASK_INT);
+        const INT_TO_INT_TO_TASK_INT: TyShape = TyShape::Fun(&INT, &INT_TO_TASK_INT);
+        // `Float -> Float -> Task Float` (random.float).
+        const FLOAT_TO_TASK_FLOAT: TyShape = TyShape::Fun(&FLOAT, &TASK_FLOAT);
+        const FLOAT_TO_FLOAT_TO_TASK_FLOAT: TyShape = TyShape::Fun(&FLOAT, &FLOAT_TO_TASK_FLOAT);
+        // `List a -> Task a` (random.choice).
+        const LIST_A_TO_TASK_A: TyShape = TyShape::Fun(&LIST_A, &TASK_A);
+        // `String -> List String -> Task String` (process.run).
+        const LIST_STRING_TO_TASK_STRING: TyShape = TyShape::Fun(&LIST_STRING, &TASK_STRING);
+        const PROCESS_RUN: TyShape = TyShape::Fun(&STRING, &LIST_STRING_TO_TASK_STRING);
+        // `Path -> Task (List String)` (file.readDir).
+        const PATH_TO_TASK_LIST_STRING: TyShape = TyShape::Fun(&PATH, &TASK_LIST_STRING);
+        // `Path -> Int -> Task String` (file.readFileLimit).
+        const INT_TO_TASK_STRING: TyShape = TyShape::Fun(&INT, &TASK_STRING);
+        const PATH_TO_INT_TO_TASK_STRING: TyShape = TyShape::Fun(&PATH, &INT_TO_TASK_STRING);
+        // `Path -> Task (List Int)` (file.readFileBytes).
+        const TASK_LIST_INT: TyShape = TyShape::Con(BuiltinTag::Task, &[LIST_INT]);
+        const PATH_TO_TASK_LIST_INT: TyShape = TyShape::Fun(&PATH, &TASK_LIST_INT);
+        // `Int -> a` (system.exit).
+        // (INT_TO_A already defined above.)
+
+        // ── Task combinator shapes. ──
+        // `a -> Task a` (succeed).
+        const A_TO_TASK_A: TyShape = TyShape::Fun(&A, &TASK_A);
+        // `Error -> Task a` (fail).
+        const ERROR_TO_TASK_A: TyShape = TyShape::Fun(&ERROR, &TASK_A);
+        // `(a -> b) -> Task a -> Task b` (map).
+        const TASK_A_TO_TASK_B: TyShape = TyShape::Fun(&TASK_A, &TASK_B);
+        const TASK_MAP: TyShape = TyShape::Fun(&A_TO_B, &TASK_A_TO_TASK_B);
+        // map2..5 spines share the callback shapes with the List/Maybe families
+        // (A_TO_B_TO_C etc are defined in the polymorphic block below or here).
+        const TASK_C: TyShape = TyShape::Con(BuiltinTag::Task, &[C]);
+        const TASK_D: TyShape = TyShape::Con(BuiltinTag::Task, &[D]);
+        const TASK_E: TyShape = TyShape::Con(BuiltinTag::Task, &[E]);
+        const TASK_F: TyShape = TyShape::Con(BuiltinTag::Task, &[F]);
+        // Curried callback spines `A_TO_B_TO_C` … `A_TO_B_TO_C_TO_D_TO_E_TO_F`
+        // are already defined by the polymorphic `List`/`Maybe` map families
+        // above; reused here by reference.
+        const TASK_MAP2: TyShape = TyShape::Fun(
+            &A_TO_B_TO_C,
+            &TyShape::Fun(&TASK_A, &TyShape::Fun(&TASK_B, &TASK_C)),
+        );
+        const TASK_MAP3: TyShape = TyShape::Fun(
+            &A_TO_B_TO_C_TO_D,
+            &TyShape::Fun(
+                &TASK_A,
+                &TyShape::Fun(&TASK_B, &TyShape::Fun(&TASK_C, &TASK_D)),
+            ),
+        );
+        const TASK_MAP4: TyShape = TyShape::Fun(
+            &A_TO_B_TO_C_TO_D_TO_E,
+            &TyShape::Fun(
+                &TASK_A,
+                &TyShape::Fun(
+                    &TASK_B,
+                    &TyShape::Fun(&TASK_C, &TyShape::Fun(&TASK_D, &TASK_E)),
+                ),
+            ),
+        );
+        const TASK_MAP5: TyShape = TyShape::Fun(
+            &A_TO_B_TO_C_TO_D_TO_E_TO_F,
+            &TyShape::Fun(
+                &TASK_A,
+                &TyShape::Fun(
+                    &TASK_B,
+                    &TyShape::Fun(
+                        &TASK_C,
+                        &TyShape::Fun(&TASK_D, &TyShape::Fun(&TASK_E, &TASK_F)),
+                    ),
+                ),
+            ),
+        );
+        // `Task.attempt : (Result Error a -> msg) -> Task a -> Cmd msg`.
+        const RESULT_ERR_A_TO_B: TyShape = TyShape::Fun(&RESULT_ERR_A, &B);
+        const TASK_A_TO_CMD_B: TyShape = TyShape::Fun(&TASK_A, &CMD_B);
+        const TASK_ATTEMPT: TyShape = TyShape::Fun(&RESULT_ERR_A_TO_B, &TASK_A_TO_CMD_B);
+        // `andThen : (a -> Task b) -> Task a -> Task b`.
+        const A_TO_TASK_B: TyShape = TyShape::Fun(&A, &TASK_B);
+        const TASK_AND_THEN: TyShape = TyShape::Fun(&A_TO_TASK_B, &TASK_A_TO_TASK_B);
+        // `mapError : (Error -> Error) -> Task a -> Task a`.
+        const ERROR_TO_ERROR: TyShape = TyShape::Fun(&ERROR, &ERROR);
+        const TASK_A_TO_TASK_A: TyShape = TyShape::Fun(&TASK_A, &TASK_A);
+        const TASK_MAP_ERROR: TyShape = TyShape::Fun(&ERROR_TO_ERROR, &TASK_A_TO_TASK_A);
+        // `onError : (Error -> Task a) -> Task a -> Task a`.
+        const TASK_ON_ERROR: TyShape = TyShape::Fun(&ERROR_TO_TASK_A, &TASK_A_TO_TASK_A);
+        // `fromResult : Result a b -> Task b`. (`RESULT_A_B` defined above.)
+        const TASK_FROM_RESULT: TyShape = TyShape::Fun(&RESULT_A_B, &TASK_B);
+        // `andThenResult : (a -> Result b c) -> Task a -> Task c`.
+        // (`RESULT_B_C` / `A_TO_RESULT_B_C` defined above.)
+        const TASK_A_TO_TASK_C: TyShape = TyShape::Fun(&TASK_A, &TASK_C);
+        const TASK_AND_THEN_RESULT: TyShape = TyShape::Fun(&A_TO_RESULT_B_C, &TASK_A_TO_TASK_C);
+        // `sequence / parallel : List (Task a) -> Task (List a)`.
+        const LIST_TASK_A: TyShape = TyShape::Con(BuiltinTag::List, &[TASK_A]);
+        const TASK_LIST_A: TyShape = TyShape::Con(BuiltinTag::Task, &[LIST_A]);
+        const TASK_SEQUENCE: TyShape = TyShape::Fun(&LIST_TASK_A, &TASK_LIST_A);
+        // `run / perform : Task a -> Result Error a`.
+        const TASK_A_TO_RESULT_ERR_A: TyShape = TyShape::Fun(&TASK_A, &RESULT_ERR_A);
+        // `lazy : (() -> Task a) -> Task a`.
+        const UNIT_TO_TASK_A: TyShape = TyShape::Fun(&UNIT, &TASK_A);
+        const TASK_LAZY: TyShape = TyShape::Fun(&UNIT_TO_TASK_A, &TASK_A);
+
+        // ── Cmd / Sub shapes. ──
+        // `Cmd.batch : List (Cmd a) -> Cmd a`.
+        const LIST_CMD_A: TyShape = TyShape::Con(BuiltinTag::List, &[CMD_A]);
+        const CMD_BATCH: TyShape = TyShape::Fun(&LIST_CMD_A, &CMD_A);
+        // `Cmd.perform : Task a -> (Result Error a -> b) -> Cmd b`.
+        const RESULT_ERR_A_TO_B_TO_CMD_B: TyShape = TyShape::Fun(&RESULT_ERR_A_TO_B, &CMD_B);
+        const CMD_PERFORM: TyShape = TyShape::Fun(&TASK_A, &RESULT_ERR_A_TO_B_TO_CMD_B);
+        // `Cmd.map / Sub.map : (a -> b) -> Cmd a -> Cmd b`.
+        const CMD_A_TO_CMD_B: TyShape = TyShape::Fun(&CMD_A, &CMD_B);
+        const CMD_MAP: TyShape = TyShape::Fun(&A_TO_B, &CMD_A_TO_CMD_B);
+        const SUB_A_TO_SUB_B: TyShape = TyShape::Fun(&SUB_A, &SUB_B);
+        const SUB_MAP: TyShape = TyShape::Fun(&A_TO_B, &SUB_A_TO_SUB_B);
+        // `Cmd.publish : Topic b -> b -> Cmd a`. var(0)=msg, var(1)=payload.
+        const B_TO_CMD_A: TyShape = TyShape::Fun(&B, &CMD_A);
+        const CMD_PUBLISH: TyShape = TyShape::Fun(&TOPIC_B, &B_TO_CMD_A);
+        // `Sub.batch : List (Sub a) -> Sub a`.
+        const LIST_SUB_A: TyShape = TyShape::Con(BuiltinTag::List, &[SUB_A]);
+        const SUB_BATCH: TyShape = TyShape::Fun(&LIST_SUB_A, &SUB_A);
+        // `Sub.subscribeTopic : Topic b -> (b -> a) -> Sub a`.
+        // (`B_TO_A` defined above.)
+        const B_TO_A_TO_SUB_A: TyShape = TyShape::Fun(&B_TO_A, &SUB_A);
+        const SUB_SUBSCRIBE_TOPIC: TyShape = TyShape::Fun(&TOPIC_B, &B_TO_A_TO_SUB_A);
+        // `PubSub.publish : Topic a -> a -> Task Int`.
+        const A_TO_TASK_INT: TyShape = TyShape::Fun(&A, &TASK_INT);
+        const PUBSUB_PUBLISH: TyShape = TyShape::Fun(&TOPIC_A, &A_TO_TASK_INT);
+        // `PubSub.topic : String -> Topic a`.
+        const STRING_TO_TOPIC_A: TyShape = TyShape::Fun(&STRING, &TOPIC_A);
+
+        // ── Decoder families (Json.Decode / Db.Decode / Config), sharing the
+        //    `Decoder a` carrier. ──
+        // Bare primitive decoders (`Decoder String` … arity 0).
+        // (DEC_STRING/DEC_INT/DEC_FLOAT/DEC_BOOL defined above.)
+        // `field/at/index : … -> Decoder a -> Decoder a`.
+        const DEC_A_TO_DEC_A: TyShape = TyShape::Fun(&DEC_A, &DEC_A);
+        const STRING_TO_DEC_A_TO_DEC_A: TyShape = TyShape::Fun(&STRING, &DEC_A_TO_DEC_A);
+        const LIST_STRING_TO_DEC_A_TO_DEC_A: TyShape = TyShape::Fun(&LIST_STRING, &DEC_A_TO_DEC_A);
+        const INT_TO_DEC_A_TO_DEC_A: TyShape = TyShape::Fun(&INT, &DEC_A_TO_DEC_A);
+        // `map : (a -> b) -> Decoder a -> Decoder b`.
+        const DEC_A_TO_DEC_B: TyShape = TyShape::Fun(&DEC_A, &DEC_B);
+        const DEC_MAP: TyShape = TyShape::Fun(&A_TO_B, &DEC_A_TO_DEC_B);
+        // `andThen : (a -> Decoder b) -> Decoder a -> Decoder b`.
+        const A_TO_DEC_B: TyShape = TyShape::Fun(&A, &DEC_B);
+        const DEC_AND_THEN: TyShape = TyShape::Fun(&A_TO_DEC_B, &DEC_A_TO_DEC_B);
+        // `succeed : a -> Decoder a`.
+        const A_TO_DEC_A: TyShape = TyShape::Fun(&A, &DEC_A);
+        // `fail : String -> Decoder a`.
+        const STRING_TO_DEC_A: TyShape = TyShape::Fun(&STRING, &DEC_A);
+        // `list : Decoder a -> Decoder (List a)`.
+        const DEC_LIST_A: TyShape = TyShape::Con(BuiltinTag::Decoder, &[LIST_A]);
+        const DEC_LIST: TyShape = TyShape::Fun(&DEC_A, &DEC_LIST_A);
+        // `nullable / maybe : Decoder a -> Decoder (Maybe a)`.
+        const DEC_MAYBE_A: TyShape = TyShape::Con(BuiltinTag::Decoder, &[MAYBE_A]);
+        const DEC_NULLABLE: TyShape = TyShape::Fun(&DEC_A, &DEC_MAYBE_A);
+        // `oneOf : List (Decoder a) -> Decoder a`.
+        const LIST_DEC_A: TyShape = TyShape::Con(BuiltinTag::List, &[DEC_A]);
+        const DEC_ONE_OF: TyShape = TyShape::Fun(&LIST_DEC_A, &DEC_A);
+        // `map2..8 : (a -> … -> r) -> Decoder a -> … -> Decoder r`.
+        const DEC_MAP2: TyShape = TyShape::Fun(
+            &A_TO_B_TO_C,
+            &TyShape::Fun(&DEC_A, &TyShape::Fun(&DEC_B, &DEC_C)),
+        );
+        const DEC_C: TyShape = TyShape::Con(BuiltinTag::Decoder, &[C]);
+        const DEC_D: TyShape = TyShape::Con(BuiltinTag::Decoder, &[D]);
+        const DEC_E: TyShape = TyShape::Con(BuiltinTag::Decoder, &[E]);
+        const DEC_F: TyShape = TyShape::Con(BuiltinTag::Decoder, &[F]);
+        const DEC_G: TyShape = TyShape::Con(BuiltinTag::Decoder, &[G]);
+        const DEC_H: TyShape = TyShape::Con(BuiltinTag::Decoder, &[H]);
+        const DEC_I: TyShape = TyShape::Con(BuiltinTag::Decoder, &[I_VAR]);
+        const DEC_MAP3: TyShape = TyShape::Fun(
+            &A_TO_B_TO_C_TO_D,
+            &TyShape::Fun(&DEC_A, &TyShape::Fun(&DEC_B, &TyShape::Fun(&DEC_C, &DEC_D))),
+        );
+        const DEC_MAP4: TyShape = TyShape::Fun(
+            &A_TO_B_TO_C_TO_D_TO_E,
+            &TyShape::Fun(
+                &DEC_A,
+                &TyShape::Fun(&DEC_B, &TyShape::Fun(&DEC_C, &TyShape::Fun(&DEC_D, &DEC_E))),
+            ),
+        );
+        const DEC_MAP5: TyShape = TyShape::Fun(
+            &A_TO_B_TO_C_TO_D_TO_E_TO_F,
+            &TyShape::Fun(
+                &DEC_A,
+                &TyShape::Fun(
+                    &DEC_B,
+                    &TyShape::Fun(&DEC_C, &TyShape::Fun(&DEC_D, &TyShape::Fun(&DEC_E, &DEC_F))),
+                ),
+            ),
+        );
+        // 7-ary callback spine `a -> b -> c -> d -> e -> f -> g` and map6.
+        const A_TO_G_SPINE7: TyShape = TyShape::Fun(
+            &A,
+            &TyShape::Fun(
+                &B,
+                &TyShape::Fun(
+                    &C,
+                    &TyShape::Fun(&D, &TyShape::Fun(&E, &TyShape::Fun(&F, &G))),
+                ),
+            ),
+        );
+        const DEC_MAP6: TyShape = TyShape::Fun(
+            &A_TO_G_SPINE7,
+            &TyShape::Fun(
+                &DEC_A,
+                &TyShape::Fun(
+                    &DEC_B,
+                    &TyShape::Fun(
+                        &DEC_C,
+                        &TyShape::Fun(&DEC_D, &TyShape::Fun(&DEC_E, &TyShape::Fun(&DEC_F, &DEC_G))),
+                    ),
+                ),
+            ),
+        );
+        // 8-ary callback spine and map7.
+        const A_TO_H_SPINE8: TyShape = TyShape::Fun(
+            &A,
+            &TyShape::Fun(
+                &B,
+                &TyShape::Fun(
+                    &C,
+                    &TyShape::Fun(
+                        &D,
+                        &TyShape::Fun(&E, &TyShape::Fun(&F, &TyShape::Fun(&G, &H))),
+                    ),
+                ),
+            ),
+        );
+        const DEC_MAP7: TyShape = TyShape::Fun(
+            &A_TO_H_SPINE8,
+            &TyShape::Fun(
+                &DEC_A,
+                &TyShape::Fun(
+                    &DEC_B,
+                    &TyShape::Fun(
+                        &DEC_C,
+                        &TyShape::Fun(
+                            &DEC_D,
+                            &TyShape::Fun(
+                                &DEC_E,
+                                &TyShape::Fun(&DEC_F, &TyShape::Fun(&DEC_G, &DEC_H)),
+                            ),
+                        ),
+                    ),
+                ),
+            ),
+        );
+        // 9-ary callback spine and map8.
+        const A_TO_I_SPINE9: TyShape = TyShape::Fun(
+            &A,
+            &TyShape::Fun(
+                &B,
+                &TyShape::Fun(
+                    &C,
+                    &TyShape::Fun(
+                        &D,
+                        &TyShape::Fun(
+                            &E,
+                            &TyShape::Fun(&F, &TyShape::Fun(&G, &TyShape::Fun(&H, &I_VAR))),
+                        ),
+                    ),
+                ),
+            ),
+        );
+        const DEC_MAP8: TyShape = TyShape::Fun(
+            &A_TO_I_SPINE9,
+            &TyShape::Fun(
+                &DEC_A,
+                &TyShape::Fun(
+                    &DEC_B,
+                    &TyShape::Fun(
+                        &DEC_C,
+                        &TyShape::Fun(
+                            &DEC_D,
+                            &TyShape::Fun(
+                                &DEC_E,
+                                &TyShape::Fun(
+                                    &DEC_F,
+                                    &TyShape::Fun(&DEC_G, &TyShape::Fun(&DEC_H, &DEC_I)),
+                                ),
+                            ),
+                        ),
+                    ),
+                ),
+            ),
+        );
+        // `required/optional/custom` pipeline: `next : Decoder (a -> b)`.
+        const A_TO_B_FN: TyShape = A_TO_B;
+        const DEC_A_TO_B: TyShape = TyShape::Con(BuiltinTag::Decoder, &[A_TO_B_FN]);
+        const DEC_AB_TO_DEC_B: TyShape = TyShape::Fun(&DEC_A_TO_B, &DEC_B);
+        const DEC_A_TO_DEC_AB_TO_DEC_B: TyShape = TyShape::Fun(&DEC_A, &DEC_AB_TO_DEC_B);
+        // `required : String -> Decoder a -> Decoder (a -> b) -> Decoder b`.
+        const DEC_REQUIRED: TyShape = TyShape::Fun(&STRING, &DEC_A_TO_DEC_AB_TO_DEC_B);
+        // `requiredAt : List String -> Decoder a -> Decoder (a -> b) -> Decoder b`.
+        const DEC_REQUIRED_AT: TyShape = TyShape::Fun(&LIST_STRING, &DEC_A_TO_DEC_AB_TO_DEC_B);
+        // `custom : Decoder a -> Decoder (a -> b) -> Decoder b`.
+        const DEC_CUSTOM: TyShape = DEC_A_TO_DEC_AB_TO_DEC_B;
+        // `optional : String -> Decoder a -> a -> Decoder (a -> b) -> Decoder b`.
+        const A_TO_DEC_AB_TO_DEC_B: TyShape = TyShape::Fun(&A, &DEC_AB_TO_DEC_B);
+        const DEC_A_TO_A_TO_DEC_AB_TO_DEC_B: TyShape = TyShape::Fun(&DEC_A, &A_TO_DEC_AB_TO_DEC_B);
+        const DEC_OPTIONAL: TyShape = TyShape::Fun(&STRING, &DEC_A_TO_A_TO_DEC_AB_TO_DEC_B);
+        // `decodeString : Decoder a -> String -> Result Error a`.
+        const STRING_TO_RESULT_ERR_A: TyShape = TyShape::Fun(&STRING, &RESULT_ERR_A);
+        const DEC_DECODE_STRING: TyShape = TyShape::Fun(&DEC_A, &STRING_TO_RESULT_ERR_A);
+        // Config `decodeToml/Yaml/Json : String -> Decoder a -> Result Error a`.
+        const DEC_A_TO_RESULT_ERR_A: TyShape = TyShape::Fun(&DEC_A, &RESULT_ERR_A);
+        const CONFIG_DECODE: TyShape = TyShape::Fun(&STRING, &DEC_A_TO_RESULT_ERR_A);
+        // Config `loadFromFile : String -> Decoder a -> Task a`.
+        const DEC_A_TO_TASK_A: TyShape = TyShape::Fun(&DEC_A, &TASK_A);
+        const CONFIG_LOAD: TyShape = TyShape::Fun(&STRING, &DEC_A_TO_TASK_A);
+        // Config `keyValuePairs : Decoder a -> Decoder (List (String, a))`.
+        const TUPLE_STRING_A: TyShape = TyShape::Tuple(&[STRING, A]);
+        const LIST_TUPLE_STRING_A: TyShape = TyShape::Con(BuiltinTag::List, &[TUPLE_STRING_A]);
+        const DEC_LIST_TUPLE_STRING_A: TyShape =
+            TyShape::Con(BuiltinTag::Decoder, &[LIST_TUPLE_STRING_A]);
+        const CONFIG_KVP: TyShape = TyShape::Fun(&DEC_A, &DEC_LIST_TUPLE_STRING_A);
+        // Config `dict : Decoder a -> Decoder (Dict String a)`.
+        const DICT_STRING_A: TyShape = TyShape::Con(BuiltinTag::Dict, &[STRING, A]);
+        const DEC_DICT_STRING_A: TyShape = TyShape::Con(BuiltinTag::Decoder, &[DICT_STRING_A]);
+        const CONFIG_DICT: TyShape = TyShape::Fun(&DEC_A, &DEC_DICT_STRING_A);
+        // Db.Decode extras.
+        // `Db.Decode.money : String -> Decoder (Decimal, String)`.
+        const TUPLE_DECIMAL_STRING: TyShape = TyShape::Tuple(&[DECIMAL, STRING]);
+        const DEC_TUPLE_DECIMAL_STRING: TyShape =
+            TyShape::Con(BuiltinTag::Decoder, &[TUPLE_DECIMAL_STRING]);
+        const DB_DEC_MONEY: TyShape = TyShape::Fun(&STRING, &DEC_TUPLE_DECIMAL_STRING);
+        // `Db.Decode.bytes : String -> Decoder (List Int)`.
+        const DEC_LIST_INT: TyShape = TyShape::Con(BuiltinTag::Decoder, &[LIST_INT]);
+        const DB_DEC_BYTES: TyShape = TyShape::Fun(&STRING, &DEC_LIST_INT);
+        // Db.Decode column primitives: `String -> Decoder <prim>`.
+        const STRING_TO_DEC_STRING: TyShape = TyShape::Fun(&STRING, &DEC_STRING);
+        const STRING_TO_DEC_INT: TyShape = TyShape::Fun(&STRING, &DEC_INT);
+        const STRING_TO_DEC_FLOAT: TyShape = TyShape::Fun(&STRING, &DEC_FLOAT);
+        const STRING_TO_DEC_BOOL: TyShape = TyShape::Fun(&STRING, &DEC_BOOL);
+
+        // ── JsonEnc encoders (`Value = any`). ──
+        const STRING_TO_VALUE: TyShape = TyShape::Fun(&STRING, &JSON_VALUE);
+        const INT_TO_VALUE: TyShape = TyShape::Fun(&INT, &JSON_VALUE);
+        const FLOAT_TO_VALUE: TyShape = TyShape::Fun(&FLOAT, &JSON_VALUE);
+        const BOOL_TO_VALUE: TyShape = TyShape::Fun(&BOOL, &JSON_VALUE);
+        const A_TO_VALUE: TyShape = TyShape::Fun(&A, &JSON_VALUE);
+        const LIST_A_TO_VALUE: TyShape = TyShape::Fun(&LIST_A, &JSON_VALUE);
+        const JSON_ENC_LIST: TyShape = TyShape::Fun(&A_TO_VALUE, &LIST_A_TO_VALUE);
+        const TUPLE_STRING_VALUE: TyShape = TyShape::Tuple(&[STRING, JSON_VALUE]);
+        const LIST_TUPLE_STRING_VALUE: TyShape =
+            TyShape::Con(BuiltinTag::List, &[TUPLE_STRING_VALUE]);
+        const JSON_ENC_OBJECT: TyShape = TyShape::Fun(&LIST_TUPLE_STRING_VALUE, &JSON_VALUE);
+        const VALUE_TO_STRING: TyShape = TyShape::Fun(&JSON_VALUE, &STRING);
+        const JSON_ENC_ENCODE: TyShape = TyShape::Fun(&INT, &VALUE_TO_STRING);
+
+        // ── Error ADT family. ──
+        const STRING_TO_ERROR: TyShape = TyShape::Fun(&STRING, &ERROR);
+        const ERROR_TO_ERROR_SPINE: TyShape = TyShape::Fun(&ERROR, &ERROR);
+        const STRING_TO_ERROR_TO_ERROR: TyShape = TyShape::Fun(&STRING, &ERROR_TO_ERROR_SPINE);
+        const ERROR_TO_BOOL: TyShape = TyShape::Fun(&ERROR, &BOOL);
+        const ERRORDETAILS_TO_ERROR_TO_ERROR: TyShape =
+            TyShape::Fun(&ERRORDETAILS, &ERROR_TO_ERROR_SPINE);
+        const ERROR_TO_ERRORKIND: TyShape = TyShape::Fun(&ERROR, &ERRORKIND);
+        const ERROR_TO_STRING: TyShape = TyShape::Fun(&ERROR, &STRING);
+        const ERRORKIND_TO_STRING: TyShape = TyShape::Fun(&ERRORKIND, &STRING);
+
+        // ── Scalar-opaque families (Secret / Regex / Path / Url / Locale /
+        //    Crypto typed-key / EmailAddress / Sql / Auth / Compression /
+        //    Trace / HttpStream / WebSocket / Ws-server / Encoding / Uuid). ──
+        // Secret.
+        const STRING_TO_SECRET: TyShape = TyShape::Fun(&STRING, &SECRET);
+        const SECRET_TO_STRING: TyShape = TyShape::Fun(&SECRET, &STRING);
+        // Regex.
+        const STRING_TO_RESULT_ERR_REGEX: TyShape = TyShape::Fun(&STRING, &RESULT_ERR_REGEX);
+        const STRING_TO_BOOL_LEAF: TyShape = TyShape::Fun(&STRING, &BOOL);
+        const REGEX_TO_STRING_TO_BOOL: TyShape = TyShape::Fun(&REGEX, &STRING_TO_BOOL_LEAF);
+        const STRING_TO_MAYBE_STRING_LEAF: TyShape = TyShape::Fun(&STRING, &MAYBE_STRING);
+        const REGEX_TO_STRING_TO_MAYBE_STRING: TyShape =
+            TyShape::Fun(&REGEX, &STRING_TO_MAYBE_STRING_LEAF);
+        const REGEX_TO_STRING_TO_LIST_STRING: TyShape =
+            TyShape::Fun(&REGEX, &TyShape::Fun(&STRING, &LIST_STRING));
+        const REGEX_TO_STRING_TO_STRING_TO_STRING: TyShape = TyShape::Fun(
+            &REGEX,
+            &TyShape::Fun(&STRING, &TyShape::Fun(&STRING, &STRING)),
+        );
+        // Path.
+        const STRING_TO_RESULT_ERR_PATH: TyShape = TyShape::Fun(&STRING, &RESULT_ERR_PATH);
+        const PATH_TO_STRING: TyShape = TyShape::Fun(&PATH, &STRING);
+        const PATH_TO_BOOL: TyShape = TyShape::Fun(&PATH, &BOOL);
+        // Url.
+        const STRING_TO_RESULT_ERR_URL: TyShape = TyShape::Fun(&STRING, &RESULT_ERR_URL);
+        const URL_TO_STRING: TyShape = TyShape::Fun(&URL, &STRING);
+        const URL_TO_MAYBE_STRING: TyShape = TyShape::Fun(&URL, &MAYBE_STRING);
+        // (`MAYBE_INT` defined above.)
+        const URL_TO_MAYBE_INT: TyShape = TyShape::Fun(&URL, &MAYBE_INT);
+        const TUPLE_STRING_STRING: TyShape = TyShape::Tuple(&[STRING, STRING]);
+        const LIST_TUPLE_STRING_STRING: TyShape =
+            TyShape::Con(BuiltinTag::List, &[TUPLE_STRING_STRING]);
+        const URL_BUILD_QUERY: TyShape = TyShape::Fun(&LIST_TUPLE_STRING_STRING, &STRING);
+        // Locale.
+        const MAYBE_LOCALE: TyShape = TyShape::Con(BuiltinTag::Maybe, &[LOCALE]);
+        const STRING_TO_MAYBE_LOCALE: TyShape = TyShape::Fun(&STRING, &MAYBE_LOCALE);
+        const LOCALE_TO_STRING: TyShape = TyShape::Fun(&LOCALE, &STRING);
+        const LOCALE_TO_STRING_TO_STRING: TyShape =
+            TyShape::Fun(&LOCALE, &TyShape::Fun(&STRING, &STRING));
+        // Crypto typed-key.
+        const STRING_TO_CRYPTO_KEY: TyShape = TyShape::Fun(&STRING, &CRYPTO_KEY);
+        const CRYPTO_MAC_TO_STRING: TyShape = TyShape::Fun(&CRYPTO_MAC, &STRING);
+        const STRING_TO_CRYPTO_MAC: TyShape = TyShape::Fun(&STRING, &CRYPTO_MAC);
+        const CRYPTO_KEY_TO_STRING_TO_CRYPTO_MAC: TyShape =
+            TyShape::Fun(&CRYPTO_KEY, &STRING_TO_CRYPTO_MAC);
+        const STRING_TO_STRING_TO_CRYPTO_KEY: TyShape =
+            TyShape::Fun(&STRING, &STRING_TO_CRYPTO_KEY);
+        const STRING_TO_RESULT_ERR_STRING: TyShape = TyShape::Fun(&STRING, &RESULT_ERR_STRING);
+        const CRYPTO_KEY_TO_STRING_TO_RESULT_ERR_STRING: TyShape =
+            TyShape::Fun(&CRYPTO_KEY, &STRING_TO_RESULT_ERR_STRING);
+        // Crypto/Jwt `String -> String -> Result Error String`.
+        const STRING_TO_STRING_TO_RESULT_ERR_STRING: TyShape =
+            TyShape::Fun(&STRING, &STRING_TO_RESULT_ERR_STRING);
+        // Crypto.randomBytes / randomToken : Int -> Task String.
+        const INT_TO_TASK_STRING_LEAF: TyShape = TyShape::Fun(&INT, &TASK_STRING);
+        // EmailAddress.
+        const MAYBE_EMAIL_ADDRESS: TyShape = TyShape::Con(BuiltinTag::Maybe, &[EMAIL_ADDRESS]);
+        const STRING_TO_MAYBE_EMAIL_ADDRESS: TyShape = TyShape::Fun(&STRING, &MAYBE_EMAIL_ADDRESS);
+        const EMAIL_ADDRESS_TO_STRING: TyShape = TyShape::Fun(&EMAIL_ADDRESS, &STRING);
+        // Email.send : EmailProvider -> EmailMessage -> Task String  (record → S4).
+        // Auth.
+        const DICT_SS_TO_INT_TO_RESULT_ERR_STRING: TyShape =
+            TyShape::Fun(&DICT_STRING_STRING, &TyShape::Fun(&INT, &RESULT_ERR_STRING));
+        const AUTH_SIGN_TOKEN: TyShape =
+            TyShape::Fun(&SECRET, &DICT_SS_TO_INT_TO_RESULT_ERR_STRING);
+        const STRING_TO_RESULT_ERR_DICT_SS: TyShape = TyShape::Fun(&STRING, &RESULT_ERR_DICT_SS);
+        const AUTH_VERIFY_TOKEN: TyShape = TyShape::Fun(&SECRET, &STRING_TO_RESULT_ERR_DICT_SS);
+        const STRING_TO_RESULT_ERR_BOOL: TyShape = TyShape::Fun(&STRING, &RESULT_ERR_BOOL);
+        const STRING_TO_STRING_TO_RESULT_ERR_BOOL: TyShape =
+            TyShape::Fun(&STRING, &STRING_TO_RESULT_ERR_BOOL);
+        const INT_TO_RESULT_ERR_STRING: TyShape = TyShape::Fun(&INT, &RESULT_ERR_STRING);
+        const STRING_TO_INT_TO_RESULT_ERR_STRING: TyShape =
+            TyShape::Fun(&STRING, &INT_TO_RESULT_ERR_STRING);
+        const DB_TO_STRING_TO_STRING_TO_TASK_INT: TyShape = TyShape::Fun(
+            &DB,
+            &TyShape::Fun(&STRING, &TyShape::Fun(&STRING, &TASK_INT)),
+        );
+        const DB_TO_INT_TO_STRING_TO_TASK_UNIT: TyShape =
+            TyShape::Fun(&DB, &TyShape::Fun(&INT, &TyShape::Fun(&STRING, &TASK_UNIT)));
+        // Compression : Bytes -> Task Bytes.
+        const BYTES_TO_TASK_BYTES: TyShape = TyShape::Fun(&BYTES, &TASK_BYTES);
+        // Trace.
+        const TASK_A_TO_TASK_A_TRACE: TyShape = TyShape::Fun(&TASK_A, &TASK_A);
+        const STRING_TO_TASK_A_TO_TASK_A: TyShape = TyShape::Fun(&STRING, &TASK_A_TO_TASK_A_TRACE);
+        const STRING_TO_STRING_TO_TASK_UNIT_TRACE: TyShape =
+            TyShape::Fun(&STRING, &STRING_TO_TASK_UNIT);
+        // HttpStream.
+        const STREAM_ID_TO_TASK_UNIT: TyShape = TyShape::Fun(&STREAM_ID, &TASK_UNIT);
+        const STRING_TO_TASK_UNIT_LEAF: TyShape = TyShape::Fun(&STRING, &TASK_UNIT);
+        const STREAM_ID_FOR_EACH: TyShape = TyShape::Fun(
+            &STREAM_ID,
+            &TyShape::Fun(&STRING_TO_TASK_UNIT_LEAF, &TASK_UNIT),
+        );
+        const A_TO_B_TO_SUB_B: TyShape = TyShape::Fun(&A_TO_B, &SUB_B);
+        const STREAM_ID_CHUNKS: TyShape = TyShape::Fun(&STREAM_ID, &A_TO_B_TO_SUB_B);
+        // WebSocket client (raw Int handle).
+        const INT_TO_TASK_UNIT_LEAF: TyShape = TyShape::Fun(&INT, &TASK_UNIT);
+        const STRING_TO_TASK_INT_LEAF: TyShape = TyShape::Fun(&STRING, &TASK_INT);
+        const INT_TO_STRING_TO_TASK_UNIT: TyShape = TyShape::Fun(&INT, &STRING_TO_TASK_UNIT);
+        const INT_TO_BYTES_TO_TASK_UNIT: TyShape =
+            TyShape::Fun(&INT, &TyShape::Fun(&BYTES, &TASK_UNIT));
+        const WS_CLOSE_WITH_CODE: TyShape = TyShape::Fun(
+            &INT,
+            &TyShape::Fun(&STRING, &TyShape::Fun(&INT, &TASK_UNIT)),
+        );
+        const SUB_SUBSCRIBE_WS: TyShape =
+            TyShape::Fun(&INT, &TyShape::Fun(&STRING, &TyShape::Fun(&A, &SUB_B)));
+        // Ws server.
+        const WS_ON_CB_TO_CFG: TyShape = TyShape::Fun(
+            &TyShape::Fun(&WS_SERVER, &TASK_UNIT),
+            &TyShape::Fun(&WS_SERVER_CFG, &WS_SERVER_CFG),
+        );
+        const WS_ON_MESSAGE: TyShape = TyShape::Fun(
+            &TyShape::Fun(&WS_SERVER, &STRING_TO_TASK_UNIT),
+            &TyShape::Fun(&WS_SERVER_CFG, &WS_SERVER_CFG),
+        );
+        const WS_ON_ERROR: TyShape = TyShape::Fun(
+            &TyShape::Fun(&WS_SERVER, &TyShape::Fun(&ERROR, &TASK_UNIT)),
+            &TyShape::Fun(&WS_SERVER_CFG, &WS_SERVER_CFG),
+        );
+        const INT_TO_CFG_TO_CFG: TyShape =
+            TyShape::Fun(&INT, &TyShape::Fun(&WS_SERVER_CFG, &WS_SERVER_CFG));
+        const LIST_STRING_TO_CFG_TO_CFG: TyShape =
+            TyShape::Fun(&LIST_STRING, &TyShape::Fun(&WS_SERVER_CFG, &WS_SERVER_CFG));
+        const WS_SEND_TO_CLIENT: TyShape = TyShape::Fun(&WS_SERVER, &STRING_TO_TASK_UNIT);
+        const WS_SEND_BINARY: TyShape = TyShape::Fun(&WS_SERVER, &TyShape::Fun(&BYTES, &TASK_UNIT));
+        const LIST_WS_SERVER: TyShape = TyShape::Con(BuiltinTag::List, &[WS_SERVER]);
+        const WS_BROADCAST: TyShape = TyShape::Fun(&LIST_WS_SERVER, &STRING_TO_TASK_UNIT);
+        const WS_CLOSE_CLIENT: TyShape = TyShape::Fun(&WS_SERVER, &TASK_UNIT);
+        // Server (route/cookie only — non-record arms).
+        const STRING_TO_STRING_TO_ROUTE: TyShape =
+            TyShape::Fun(&STRING, &TyShape::Fun(&STRING, &SERVER_ROUTE));
+        const STRING_TO_STRING_TO_COOKIE: TyShape =
+            TyShape::Fun(&STRING, &TyShape::Fun(&STRING, &SERVER_COOKIE));
+        const REQ_TO_STRING: TyShape = TyShape::Fun(&SERVER_REQUEST, &STRING);
+        const STRING_TO_REQ_TO_MAYBE_STRING: TyShape =
+            TyShape::Fun(&STRING, &TyShape::Fun(&SERVER_REQUEST, &MAYBE_STRING));
+        // Jwt builder.
+        const STRING_TO_ALGORITHM: TyShape = TyShape::Fun(&STRING, &ALGORITHM);
+        const STRING_TO_CLAIMS_TO_CLAIMS: TyShape =
+            TyShape::Fun(&STRING, &TyShape::Fun(&CLAIMS, &CLAIMS));
+        const INT_TO_CLAIMS_TO_CLAIMS: TyShape =
+            TyShape::Fun(&INT, &TyShape::Fun(&CLAIMS, &CLAIMS));
+        const JWT_WITH_CLAIM: TyShape = TyShape::Fun(
+            &STRING,
+            &TyShape::Fun(&JSON_VALUE, &TyShape::Fun(&CLAIMS, &CLAIMS)),
+        );
+        const JWT_ENCODE: TyShape =
+            TyShape::Fun(&ALGORITHM, &TyShape::Fun(&CLAIMS, &RESULT_ERR_STRING));
+        const JWT_DECODE: TyShape = TyShape::Fun(
+            &ALGORITHM,
+            &TyShape::Fun(&INT, &TyShape::Fun(&STRING, &RESULT_ERR_STRING)),
+        );
+        // Sql fragment builders.
+        const STRING_TO_SQLFRAGMENT: TyShape = TyShape::Fun(&STRING, &SQLFRAGMENT);
+        const SQLVALUE_TO_SQLFRAGMENT: TyShape = TyShape::Fun(&SQLVALUE, &SQLFRAGMENT);
+        const INT_TO_SQLFRAGMENT: TyShape = TyShape::Fun(&INT, &SQLFRAGMENT);
+        const FLOAT_TO_SQLFRAGMENT: TyShape = TyShape::Fun(&FLOAT, &SQLFRAGMENT);
+        const BOOL_TO_SQLFRAGMENT: TyShape = TyShape::Fun(&BOOL, &SQLFRAGMENT);
+        const SQLFRAGMENT_TO_SQLFRAGMENT: TyShape = TyShape::Fun(&SQLFRAGMENT, &SQLFRAGMENT);
+        const SQLFRAGMENT_BINOP: TyShape = TyShape::Fun(&SQLFRAGMENT, &SQLFRAGMENT_TO_SQLFRAGMENT);
+        const LIST_SQLVALUE: TyShape = TyShape::Con(BuiltinTag::List, &[SQLVALUE]);
+        const SQL_IN_LIST: TyShape =
+            TyShape::Fun(&SQLFRAGMENT, &TyShape::Fun(&LIST_SQLVALUE, &SQLFRAGMENT));
+        const SQL_LIKE: TyShape = TyShape::Fun(&SQLFRAGMENT, &TyShape::Fun(&STRING, &SQLFRAGMENT));
+        // Server-side stream (opaque `StreamWriter` handle).
+        // `emit : String -> StreamWriter -> Task ()`.
+        const SW_TO_TASK_UNIT: TyShape = TyShape::Fun(&STREAM_WRITER, &TASK_UNIT);
+        const STRING_TO_SW_TO_TASK_UNIT: TyShape = TyShape::Fun(&STRING, &SW_TO_TASK_UNIT);
+        // Db.insertFields / updateFields (opaque `SqlField` / `SqlValue`, no record).
+        // `insertFields : Db -> String -> List (String, SqlField) -> Task Int`.
+        const TUPLE_STRING_SQLFIELD: TyShape = TyShape::Tuple(&[STRING, SQLFIELD]);
+        const LIST_TUPLE_STRING_SQLFIELD: TyShape =
+            TyShape::Con(BuiltinTag::List, &[TUPLE_STRING_SQLFIELD]);
+        const LIST_SQLFIELD_TO_TASK_INT: TyShape =
+            TyShape::Fun(&LIST_TUPLE_STRING_SQLFIELD, &TASK_INT);
+        const STRING_TO_LIST_SQLFIELD_TO_TASK_INT: TyShape =
+            TyShape::Fun(&STRING, &LIST_SQLFIELD_TO_TASK_INT);
+        const DB_INSERT_FIELDS: TyShape = TyShape::Fun(&DB, &STRING_TO_LIST_SQLFIELD_TO_TASK_INT);
+        // `updateFields : Db -> String -> List (String, SqlValue)
+        //                 -> List (String, SqlField) -> Task Int`.
+        const TUPLE_STRING_SQLVALUE: TyShape = TyShape::Tuple(&[STRING, SQLVALUE]);
+        const LIST_TUPLE_STRING_SQLVALUE: TyShape =
+            TyShape::Con(BuiltinTag::List, &[TUPLE_STRING_SQLVALUE]);
+        const LIST_SQLVALUE_TO_LIST_SQLFIELD_TO_TASK_INT: TyShape =
+            TyShape::Fun(&LIST_TUPLE_STRING_SQLVALUE, &LIST_SQLFIELD_TO_TASK_INT);
+        const STRING_TO_UPDATE_FIELDS: TyShape =
+            TyShape::Fun(&STRING, &LIST_SQLVALUE_TO_LIST_SQLFIELD_TO_TASK_INT);
+        const DB_UPDATE_FIELDS: TyShape = TyShape::Fun(&DB, &STRING_TO_UPDATE_FIELDS);
+        // Db.exec / query / findWhere / deleteWhere / etc. (opaque Db + Dict rows,
+        // no record).
+        // `Db.connect : () -> Task Db`.
+        const TASK_DB: TyShape = TyShape::Con(BuiltinTag::Task, &[DB]);
+        const UNIT_TO_TASK_DB: TyShape = TyShape::Fun(&UNIT, &TASK_DB);
+        // `Db.open : String -> String -> Task Db`.
+        const STRING_TO_TASK_DB: TyShape = TyShape::Fun(&STRING, &TASK_DB);
+        const STRING_TO_STRING_TO_TASK_DB: TyShape = TyShape::Fun(&STRING, &STRING_TO_TASK_DB);
+        // `Db.close : Db -> Task ()`.
+        const DB_TO_TASK_UNIT: TyShape = TyShape::Fun(&DB, &TASK_UNIT);
+        // `Db.execRaw : Db -> String -> Task Int`.
+        const STRING_TO_TASK_INT_LEAF2: TyShape = TyShape::Fun(&STRING, &TASK_INT);
+        const DB_EXEC_RAW: TyShape = TyShape::Fun(&DB, &STRING_TO_TASK_INT_LEAF2);
+        // `Db.exec : Db -> String -> List a -> Task Int`.
+        const LIST_A_TO_TASK_INT: TyShape = TyShape::Fun(&LIST_A, &TASK_INT);
+        const STRING_TO_LIST_A_TO_TASK_INT: TyShape = TyShape::Fun(&STRING, &LIST_A_TO_TASK_INT);
+        const DB_EXEC: TyShape = TyShape::Fun(&DB, &STRING_TO_LIST_A_TO_TASK_INT);
+        // `Db.query : Db -> String -> List a -> Task (List (Dict String String))`.
+        const LIST_DICT_SS: TyShape = TyShape::Con(BuiltinTag::List, &[DICT_STRING_STRING]);
+        const TASK_LIST_DICT_SS: TyShape = TyShape::Con(BuiltinTag::Task, &[LIST_DICT_SS]);
+        const LIST_A_TO_TASK_LIST_DICT_SS: TyShape = TyShape::Fun(&LIST_A, &TASK_LIST_DICT_SS);
+        const STRING_TO_LIST_A_TO_TASK_LIST_DICT_SS: TyShape =
+            TyShape::Fun(&STRING, &LIST_A_TO_TASK_LIST_DICT_SS);
+        const DB_QUERY: TyShape = TyShape::Fun(&DB, &STRING_TO_LIST_A_TO_TASK_LIST_DICT_SS);
+        // `Db.queryDecode : Db -> String -> List b -> Decoder a -> Task (List a)`.
+        const DEC_A_TO_TASK_LIST_A: TyShape = TyShape::Fun(&DEC_A, &TASK_LIST_A);
+        const LIST_B_TO_DEC_A_TO_TASK_LIST_A: TyShape =
+            TyShape::Fun(&LIST_B, &DEC_A_TO_TASK_LIST_A);
+        const STRING_TO_QUERY_DECODE: TyShape =
+            TyShape::Fun(&STRING, &LIST_B_TO_DEC_A_TO_TASK_LIST_A);
+        const DB_QUERY_DECODE: TyShape = TyShape::Fun(&DB, &STRING_TO_QUERY_DECODE);
+        // `Db.insertRow : Db -> String -> Dict String String -> Task Int`.
+        const DICT_SS_TO_TASK_INT: TyShape = TyShape::Fun(&DICT_STRING_STRING, &TASK_INT);
+        const STRING_TO_DICT_SS_TO_TASK_INT: TyShape = TyShape::Fun(&STRING, &DICT_SS_TO_TASK_INT);
+        const DB_INSERT_ROW: TyShape = TyShape::Fun(&DB, &STRING_TO_DICT_SS_TO_TASK_INT);
+        // `Db.getById : Db -> String -> String -> Task (Maybe (Dict String String))`.
+        const MAYBE_DICT_SS: TyShape = TyShape::Con(BuiltinTag::Maybe, &[DICT_STRING_STRING]);
+        const TASK_MAYBE_DICT_SS: TyShape = TyShape::Con(BuiltinTag::Task, &[MAYBE_DICT_SS]);
+        const STRING_TO_TASK_MAYBE_DICT_SS: TyShape = TyShape::Fun(&STRING, &TASK_MAYBE_DICT_SS);
+        const STRING_TO_STRING_TO_TASK_MAYBE_DICT_SS: TyShape =
+            TyShape::Fun(&STRING, &STRING_TO_TASK_MAYBE_DICT_SS);
+        const DB_GET_BY_ID: TyShape = TyShape::Fun(&DB, &STRING_TO_STRING_TO_TASK_MAYBE_DICT_SS);
+        // `Db.updateById : Db -> String -> String -> Dict String String -> Task Int`.
+        const STRING_TO_DICT_SS_TO_TASK_INT_2: TyShape =
+            TyShape::Fun(&STRING, &DICT_SS_TO_TASK_INT);
+        const STRING_TO_UPDATE_BY_ID: TyShape =
+            TyShape::Fun(&STRING, &STRING_TO_DICT_SS_TO_TASK_INT_2);
+        const DB_UPDATE_BY_ID: TyShape = TyShape::Fun(&DB, &STRING_TO_UPDATE_BY_ID);
+        // `Db.deleteById : Db -> String -> String -> Task Int`.
+        const STRING_TO_TASK_INT_2: TyShape = TyShape::Fun(&STRING, &TASK_INT);
+        const STRING_TO_STRING_TO_TASK_INT: TyShape = TyShape::Fun(&STRING, &STRING_TO_TASK_INT_2);
+        const DB_DELETE_BY_ID: TyShape = TyShape::Fun(&DB, &STRING_TO_STRING_TO_TASK_INT);
+        // `Db.findOneByField : Db -> String -> String -> String
+        //                      -> Task (Maybe (Dict String String))`.
+        const STRING_TO_STRING_TO_TASK_MAYBE_DICT_SS_2: TyShape =
+            TyShape::Fun(&STRING, &STRING_TO_TASK_MAYBE_DICT_SS);
+        const STRING_TO_FIND_ONE: TyShape =
+            TyShape::Fun(&STRING, &STRING_TO_STRING_TO_TASK_MAYBE_DICT_SS_2);
+        const DB_FIND_ONE_BY_FIELD: TyShape = TyShape::Fun(&DB, &STRING_TO_FIND_ONE);
+        // `Db.findManyByField : Db -> String -> String -> String
+        //                       -> Task (List (Dict String String))`.
+        const STRING_TO_TASK_LIST_DICT_SS: TyShape = TyShape::Fun(&STRING, &TASK_LIST_DICT_SS);
+        const STRING_TO_STRING_TO_TASK_LIST_DICT_SS: TyShape =
+            TyShape::Fun(&STRING, &STRING_TO_TASK_LIST_DICT_SS);
+        const STRING_TO_FIND_MANY: TyShape =
+            TyShape::Fun(&STRING, &STRING_TO_STRING_TO_TASK_LIST_DICT_SS);
+        const DB_FIND_MANY_BY_FIELD: TyShape = TyShape::Fun(&DB, &STRING_TO_FIND_MANY);
+        // `Db.findByConditions : Db -> String -> Dict String String
+        //                        -> Task (List (Dict String String))`.
+        const DICT_SS_TO_TASK_LIST_DICT_SS: TyShape =
+            TyShape::Fun(&DICT_STRING_STRING, &TASK_LIST_DICT_SS);
+        const STRING_TO_FIND_BY_COND: TyShape =
+            TyShape::Fun(&STRING, &DICT_SS_TO_TASK_LIST_DICT_SS);
+        const DB_FIND_BY_CONDITIONS: TyShape = TyShape::Fun(&DB, &STRING_TO_FIND_BY_COND);
+        // `Db.findWhere : Db -> String -> SqlFragment
+        //                 -> Task (List (Dict String String))`.
+        const SQLFRAGMENT_TO_TASK_LIST_DICT_SS: TyShape =
+            TyShape::Fun(&SQLFRAGMENT, &TASK_LIST_DICT_SS);
+        const STRING_TO_FIND_WHERE: TyShape =
+            TyShape::Fun(&STRING, &SQLFRAGMENT_TO_TASK_LIST_DICT_SS);
+        const DB_FIND_WHERE: TyShape = TyShape::Fun(&DB, &STRING_TO_FIND_WHERE);
+        // `Db.deleteWhere : Db -> String -> SqlFragment -> Task Int`.
+        const SQLFRAGMENT_TO_TASK_INT: TyShape = TyShape::Fun(&SQLFRAGMENT, &TASK_INT);
+        const STRING_TO_DELETE_WHERE: TyShape = TyShape::Fun(&STRING, &SQLFRAGMENT_TO_TASK_INT);
+        const DB_DELETE_WHERE: TyShape = TyShape::Fun(&DB, &STRING_TO_DELETE_WHERE);
+        // `Db.insertFieldsReturning : Db -> String -> List (String, SqlField)
+        //                             -> String -> Decoder a -> Task (List a)`.
+        const DEC_A_TO_TASK_LIST_A_2: TyShape = TyShape::Fun(&DEC_A, &TASK_LIST_A);
+        const STRING_TO_DEC_A_TO_TASK_LIST_A: TyShape =
+            TyShape::Fun(&STRING, &DEC_A_TO_TASK_LIST_A_2);
+        const LIST_SQLFIELD_TO_RETURNING: TyShape =
+            TyShape::Fun(&LIST_TUPLE_STRING_SQLFIELD, &STRING_TO_DEC_A_TO_TASK_LIST_A);
+        const STRING_TO_INSERT_RETURNING: TyShape =
+            TyShape::Fun(&STRING, &LIST_SQLFIELD_TO_RETURNING);
+        const DB_INSERT_FIELDS_RETURNING: TyShape = TyShape::Fun(&DB, &STRING_TO_INSERT_RETURNING);
+        // `Db.withTransaction : Db -> (Db -> Task a) -> Task a`.
+        const DB_TO_TASK_A: TyShape = TyShape::Fun(&DB, &TASK_A);
+        const DB_TO_TASK_A_TO_TASK_A: TyShape = TyShape::Fun(&DB_TO_TASK_A, &TASK_A);
+        const DB_WITH_TRANSACTION: TyShape = TyShape::Fun(&DB, &DB_TO_TASK_A_TO_TASK_A);
+
+        // Encoding decoders / Env / HttpMethod.
+        const HTTP_METHOD_TO_STRING: TyShape = TyShape::Fun(&HTTP_METHOD, &STRING);
+        const MAYBE_HTTP_METHOD: TyShape = TyShape::Con(BuiltinTag::Maybe, &[HTTP_METHOD]);
+        const STRING_TO_MAYBE_HTTP_METHOD: TyShape = TyShape::Fun(&STRING, &MAYBE_HTTP_METHOD);
+        const STRING_TO_MAYBE_STRING_ENV: TyShape = TyShape::Fun(&STRING, &MAYBE_STRING);
+
         match self {
             // ── Bitwise — Int -> Int -> Int / Int -> Int. ──
             Self::BitwiseAnd
@@ -5728,6 +6570,337 @@ impl StdlibKernel {
             Self::DbGetString | Self::DbGetField => Some(&DB_GET_STRING),
             Self::DbGetInt => Some(&DB_GET_INT),
             Self::DbGetBool => Some(&DB_GET_BOOL),
+
+            // ── Log (base schemes; the `*With` STRINGIFY obligation is layered
+            //    in `constrain_var_kernel`). ──
+            Self::LogInfo | Self::LogDebug | Self::LogWarn | Self::LogError => {
+                Some(&STRING_TO_TASK_UNIT)
+            }
+            Self::LogInfoWith | Self::LogDebugWith | Self::LogWarnWith | Self::LogErrorWith => {
+                Some(&LOG_WITH)
+            }
+
+            // ── Task combinators. ──
+            Self::TaskSucceed => Some(&A_TO_TASK_A),
+            Self::TaskFail => Some(&ERROR_TO_TASK_A),
+            Self::TaskMap => Some(&TASK_MAP),
+            Self::TaskMap2 => Some(&TASK_MAP2),
+            Self::TaskMap3 => Some(&TASK_MAP3),
+            Self::TaskMap4 => Some(&TASK_MAP4),
+            Self::TaskMap5 => Some(&TASK_MAP5),
+            Self::TaskAttempt => Some(&TASK_ATTEMPT),
+            Self::TaskAndThen => Some(&TASK_AND_THEN),
+            Self::TaskMapError => Some(&TASK_MAP_ERROR),
+            Self::TaskOnError => Some(&TASK_ON_ERROR),
+            Self::TaskFromResult => Some(&TASK_FROM_RESULT),
+            Self::TaskAndThenResult => Some(&TASK_AND_THEN_RESULT),
+            Self::TaskSequence | Self::TaskParallel => Some(&TASK_SEQUENCE),
+            Self::TaskRun | Self::TaskPerform => Some(&TASK_A_TO_RESULT_ERR_A),
+            Self::TaskLazy => Some(&TASK_LAZY),
+
+            // ── Cmd / Sub / PubSub. ──
+            Self::CmdNone => Some(&CMD_A),
+            Self::CmdBatch => Some(&CMD_BATCH),
+            Self::CmdPerform => Some(&CMD_PERFORM),
+            Self::CmdMap => Some(&CMD_MAP),
+            Self::CmdPublish | Self::CmdPublishNoEcho => Some(&CMD_PUBLISH),
+            Self::SubNone => Some(&SUB_A),
+            Self::SubBatch => Some(&SUB_BATCH),
+            Self::SubEvery | Self::TimeEvery => Some(&INT_TO_A_TO_SUB_A),
+            Self::SubMap => Some(&SUB_MAP),
+            Self::SubSubscribeTopic => Some(&SUB_SUBSCRIBE_TOPIC),
+            Self::PubSubPublish | Self::PubSubPublishNoEcho => Some(&PUBSUB_PUBLISH),
+            Self::PubSubTopic => Some(&STRING_TO_TOPIC_A),
+
+            // ── Io / File / System / Time — `()`/`Task ()` effect kernels. ──
+            Self::IoWriteStdout
+            | Self::IoWriteStderr
+            | Self::IoPrintln
+            | Self::IoEprintln
+            | Self::SystemUnsetenv => Some(&STRING_TO_TASK_UNIT),
+            Self::FileRemove | Self::FileMkdirAll | Self::FileDelete => Some(&PATH_TO_TASK_UNIT),
+            Self::IoReadLine | Self::SystemCwd => Some(&UNIT_TO_TASK_STRING),
+            Self::IoReadSecret => Some(&STRING_TO_TASK_STRING),
+            Self::TimeNow | Self::TimeUnixMillis => Some(&UNIT_TO_TASK_INT),
+            Self::TimeSleep => Some(&INT_TO_TASK_UNIT),
+            Self::SystemGetenv | Self::FileTempFile | Self::FileTempDir => {
+                Some(&STRING_TO_TASK_STRING)
+            }
+            Self::FileReadFile => Some(&PATH_TO_TASK_STRING),
+            Self::SystemArgs => Some(&UNIT_TO_TASK_LIST_STRING),
+            Self::SystemLoadEnv => Some(&UNIT_TO_TASK_UNIT),
+            Self::SystemSetenv => Some(&STRING_TO_STRING_TO_TASK_UNIT),
+            Self::FileWriteFile | Self::FileAppend => Some(&PATH_TO_STRING_TO_TASK_UNIT),
+            Self::FileCopy | Self::FileRename => Some(&PATH_TO_PATH_TO_TASK_UNIT),
+            Self::SystemGetArg => Some(&INT_TO_TASK_MAYBE_STRING),
+            Self::SystemGetenvInt => Some(&STRING_TO_TASK_INT),
+            Self::SystemGetenvBool => Some(&STRING_TO_TASK_BOOL),
+            Self::FileExists | Self::FileIsDir => Some(&PATH_TO_TASK_BOOL),
+            Self::FileReadDir => Some(&PATH_TO_TASK_LIST_STRING),
+            Self::FileReadFileLimit => Some(&PATH_TO_INT_TO_TASK_STRING),
+            Self::FileReadFileBytes => Some(&PATH_TO_TASK_LIST_INT),
+
+            // ── Random / Process. ──
+            Self::RandomInt => Some(&INT_TO_INT_TO_TASK_INT),
+            Self::RandomFloat => Some(&FLOAT_TO_FLOAT_TO_TASK_FLOAT),
+            Self::RandomChoice => Some(&LIST_A_TO_TASK_A),
+            Self::ProcessRun => Some(&PROCESS_RUN),
+
+            // ── Json.Decode / Db.Decode / Config — the shared `Decoder a`
+            //    carrier families. ──
+            Self::JsonDecString | Self::ConfigString => Some(&DEC_STRING),
+            Self::JsonDecInt | Self::ConfigInt => Some(&DEC_INT),
+            Self::JsonDecFloat | Self::ConfigFloat => Some(&DEC_FLOAT),
+            Self::JsonDecBool | Self::ConfigBool => Some(&DEC_BOOL),
+            Self::JsonDecField | Self::ConfigField => Some(&STRING_TO_DEC_A_TO_DEC_A),
+            Self::DbDecString => Some(&STRING_TO_DEC_STRING),
+            Self::JsonDecAt | Self::ConfigAt => Some(&LIST_STRING_TO_DEC_A_TO_DEC_A),
+            Self::JsonDecPRequiredAt => Some(&DEC_REQUIRED_AT),
+            Self::JsonDecIndex | Self::ConfigIndex => Some(&INT_TO_DEC_A_TO_DEC_A),
+            Self::JsonDecList | Self::ConfigList => Some(&DEC_LIST),
+            Self::JsonDecMap | Self::ConfigMap | Self::DbDecMap => Some(&DEC_MAP),
+            Self::JsonDecAndThen | Self::ConfigAndThen | Self::DbDecAndThen => Some(&DEC_AND_THEN),
+            Self::JsonDecSucceed | Self::ConfigSucceed | Self::DbDecSucceed => Some(&A_TO_DEC_A),
+            Self::JsonDecFail | Self::ConfigFail | Self::DbDecFail => Some(&STRING_TO_DEC_A),
+            Self::JsonDecOneOf | Self::ConfigOneOf => Some(&DEC_ONE_OF),
+            Self::JsonDecMap2 | Self::ConfigMap2 | Self::DbDecMap2 => Some(&DEC_MAP2),
+            Self::JsonDecMap3 | Self::ConfigMap3 | Self::DbDecMap3 => Some(&DEC_MAP3),
+            Self::JsonDecMap4 | Self::ConfigMap4 | Self::DbDecMap4 => Some(&DEC_MAP4),
+            Self::ConfigMap5 => Some(&DEC_MAP5),
+            Self::ConfigMap6 => Some(&DEC_MAP6),
+            Self::ConfigMap7 => Some(&DEC_MAP7),
+            Self::ConfigMap8 => Some(&DEC_MAP8),
+            Self::JsonDecPRequired | Self::DbDecRequired => Some(&DEC_REQUIRED),
+            Self::JsonDecPOptional | Self::DbDecOptional => Some(&DEC_OPTIONAL),
+            Self::JsonDecPCustom => Some(&DEC_CUSTOM),
+            Self::JsonDecDecodeString => Some(&DEC_DECODE_STRING),
+            Self::ConfigNullable | Self::ConfigMaybe | Self::DbDecNullable => Some(&DEC_NULLABLE),
+            Self::ConfigKeyValuePairs => Some(&CONFIG_KVP),
+            Self::ConfigDict => Some(&CONFIG_DICT),
+            Self::ConfigDecodeToml | Self::ConfigDecodeYaml | Self::ConfigDecodeJson => {
+                Some(&CONFIG_DECODE)
+            }
+            Self::ConfigLoadFromFile => Some(&CONFIG_LOAD),
+            // Db.Decode primitives with a `String` key argument.
+            Self::DbDecInt => Some(&STRING_TO_DEC_INT),
+            Self::DbDecFloat => Some(&STRING_TO_DEC_FLOAT),
+            Self::DbDecBool => Some(&STRING_TO_DEC_BOOL),
+            Self::DbDecMoney => Some(&DB_DEC_MONEY),
+            Self::DbDecBytes => Some(&DB_DEC_BYTES),
+
+            // ── Json.Encode encoders (`Value = any`). ──
+            Self::JsonEncString => Some(&STRING_TO_VALUE),
+            Self::JsonEncInt => Some(&INT_TO_VALUE),
+            Self::JsonEncFloat => Some(&FLOAT_TO_VALUE),
+            Self::JsonEncBool => Some(&BOOL_TO_VALUE),
+            Self::JsonEncNull => Some(&JSON_VALUE),
+            Self::JsonEncList => Some(&JSON_ENC_LIST),
+            Self::JsonEncObject => Some(&JSON_ENC_OBJECT),
+            Self::JsonEncEncode => Some(&JSON_ENC_ENCODE),
+
+            // ── Error ADT family. ──
+            Self::ErrorUnexpected
+            | Self::ErrorInvalidInput
+            | Self::ErrorIo
+            | Self::ErrorNetwork
+            | Self::ErrorFfi
+            | Self::ErrorDecode
+            | Self::ErrorConflict
+            | Self::ErrorUnavailable => Some(&STRING_TO_ERROR),
+            Self::ErrorTimeout | Self::ErrorNotFound | Self::ErrorPermissionDenied => Some(&ERROR),
+            Self::ErrorWithMessage => Some(&STRING_TO_ERROR_TO_ERROR),
+            Self::ErrorIsRetryable => Some(&ERROR_TO_BOOL),
+            Self::ErrorWithDetails => Some(&ERRORDETAILS_TO_ERROR_TO_ERROR),
+            Self::ErrorKind => Some(&ERROR_TO_ERRORKIND),
+            Self::ErrorMessage => Some(&ERROR_TO_STRING),
+            Self::ErrorKindName => Some(&ERRORKIND_TO_STRING),
+
+            // ── Encoding decoders / HttpMethod / Env. ──
+            Self::EncodingBase64Decode | Self::EncodingUrlDecode | Self::EncodingHexDecode => {
+                Some(&STRING_TO_RESULT_ERR_STRING)
+            }
+            Self::HttpMethodToString => Some(&HTTP_METHOD_TO_STRING),
+            Self::HttpMethodFromString => Some(&STRING_TO_MAYBE_HTTP_METHOD),
+            Self::EnvPublic => Some(&STRING_TO_MAYBE_STRING_ENV),
+
+            // ── Uuid entropy effect + parse. ──
+            Self::UuidV4 | Self::UuidV7 => Some(&UNIT_TO_TASK_STRING),
+
+            // ── Secret. ──
+            Self::SecretFromString => Some(&STRING_TO_SECRET),
+            Self::SecretReveal | Self::SecretRedacted => Some(&SECRET_TO_STRING),
+
+            // ── Regex. ──
+            Self::RegexCompile => Some(&STRING_TO_RESULT_ERR_REGEX),
+            Self::RegexMatch => Some(&REGEX_TO_STRING_TO_BOOL),
+            Self::RegexFind => Some(&REGEX_TO_STRING_TO_MAYBE_STRING),
+            Self::RegexFindAll | Self::RegexSplit => Some(&REGEX_TO_STRING_TO_LIST_STRING),
+            Self::RegexReplace => Some(&REGEX_TO_STRING_TO_STRING_TO_STRING),
+
+            // ── Path. ──
+            Self::PathFromString => Some(&STRING_TO_RESULT_ERR_PATH),
+            Self::PathToString | Self::PathBase | Self::PathDir | Self::PathExt => {
+                Some(&PATH_TO_STRING)
+            }
+            Self::PathIsAbsolute => Some(&PATH_TO_BOOL),
+
+            // ── Url. ──
+            Self::UrlFromString => Some(&STRING_TO_RESULT_ERR_URL),
+            Self::UrlToString | Self::UrlScheme | Self::UrlPath => Some(&URL_TO_STRING),
+            Self::UrlHost | Self::UrlQuery | Self::UrlFragment => Some(&URL_TO_MAYBE_STRING),
+            Self::UrlPort => Some(&URL_TO_MAYBE_INT),
+            Self::UrlBuildQuery => Some(&URL_BUILD_QUERY),
+
+            // ── Locale. ──
+            Self::LocaleFromTag => Some(&STRING_TO_MAYBE_LOCALE),
+            Self::LocaleToTag => Some(&LOCALE_TO_STRING),
+            Self::StringToUpperIn | Self::StringToLowerIn => Some(&LOCALE_TO_STRING_TO_STRING),
+
+            // ── Crypto typed-key newtypes + AEAD/HMAC/sign. ──
+            Self::CryptoKeyFromString | Self::CryptoKeyFromBytes => Some(&STRING_TO_CRYPTO_KEY),
+            Self::CryptoMacToHex => Some(&CRYPTO_MAC_TO_STRING),
+            Self::CryptoHmacSha256WithKey | Self::CryptoHmacSha512WithKey => {
+                Some(&CRYPTO_KEY_TO_STRING_TO_CRYPTO_MAC)
+            }
+            Self::CryptoAesKeyFromPasswordKey | Self::CryptoChachaKeyFromPasswordKey => {
+                Some(&STRING_TO_STRING_TO_CRYPTO_KEY)
+            }
+            Self::CryptoAesGcmEncryptKey
+            | Self::CryptoAesGcmDecryptKey
+            | Self::CryptoChacha20EncryptKey
+            | Self::CryptoChacha20DecryptKey => Some(&CRYPTO_KEY_TO_STRING_TO_RESULT_ERR_STRING),
+            Self::CryptoRsaSha256Sign
+            | Self::CryptoAesGcmEncrypt
+            | Self::CryptoAesGcmDecrypt
+            | Self::CryptoChacha20Encrypt
+            | Self::CryptoChacha20Decrypt => Some(&STRING_TO_STRING_TO_RESULT_ERR_STRING),
+            Self::CryptoRandomBytes | Self::CryptoRandomToken => Some(&INT_TO_TASK_STRING_LEAF),
+
+            // ── Jwt (raw + builder). ──
+            Self::JwtDecodeHs256
+            | Self::JwtDecodeRs256
+            | Self::JwtEncodeHs256
+            | Self::JwtEncodeRs256 => Some(&STRING_TO_STRING_TO_RESULT_ERR_STRING),
+            Self::JwtClaims => Some(&CLAIMS),
+            Self::JwtHs256 | Self::JwtRs256 => Some(&STRING_TO_ALGORITHM),
+            Self::JwtSubject | Self::JwtIssuer | Self::JwtAudience | Self::JwtJwtId => {
+                Some(&STRING_TO_CLAIMS_TO_CLAIMS)
+            }
+            Self::JwtExpiresAt | Self::JwtNotBefore | Self::JwtIssuedAt => {
+                Some(&INT_TO_CLAIMS_TO_CLAIMS)
+            }
+            Self::JwtWithClaim => Some(&JWT_WITH_CLAIM),
+            Self::JwtEncode => Some(&JWT_ENCODE),
+            Self::JwtDecode => Some(&JWT_DECODE),
+
+            // ── EmailAddress. ──
+            Self::EmailAddressParse => Some(&STRING_TO_MAYBE_EMAIL_ADDRESS),
+            Self::EmailAddressToString => Some(&EMAIL_ADDRESS_TO_STRING),
+
+            // ── Auth. ──
+            Self::AuthHashPassword | Self::AuthPasswordStrength => {
+                Some(&STRING_TO_RESULT_ERR_STRING)
+            }
+            Self::AuthHashPasswordCost => Some(&STRING_TO_INT_TO_RESULT_ERR_STRING),
+            Self::AuthVerifyPassword => Some(&STRING_TO_STRING_TO_RESULT_ERR_BOOL),
+            Self::AuthSignToken => Some(&AUTH_SIGN_TOKEN),
+            Self::AuthVerifyToken => Some(&AUTH_VERIFY_TOKEN),
+            Self::AuthRegister | Self::AuthLogin => Some(&DB_TO_STRING_TO_STRING_TO_TASK_INT),
+            Self::AuthSetRole => Some(&DB_TO_INT_TO_STRING_TO_TASK_UNIT),
+
+            // ── Compression. ──
+            Self::CompressionGzip
+            | Self::CompressionGunzip
+            | Self::CompressionZstdCompress
+            | Self::CompressionZstdDecompress => Some(&BYTES_TO_TASK_BYTES),
+
+            // ── Trace. ──
+            Self::TraceSpan => Some(&STRING_TO_TASK_A_TO_TASK_A),
+            Self::TraceEvent => Some(&STRING_TO_TASK_UNIT),
+            Self::TraceAttr => Some(&STRING_TO_STRING_TO_TASK_UNIT_TRACE),
+
+            // ── HttpStream. ──
+            Self::HttpStreamForEachChunk => Some(&STREAM_ID_FOR_EACH),
+            Self::HttpStreamClose => Some(&STREAM_ID_TO_TASK_UNIT),
+            Self::HttpStreamChunks => Some(&STREAM_ID_CHUNKS),
+
+            // ── Server-side Stream (opaque StreamWriter; `stream` itself keeps a
+            //    table arm — its result is a `Response` record). ──
+            Self::StreamFinish => Some(&SW_TO_TASK_UNIT),
+            Self::StreamEmit | Self::StreamWithContentType => Some(&STRING_TO_SW_TO_TASK_UNIT),
+
+            // ── Db (opaque Db handle + Dict rows; the record-shaped Migration
+            //    arms keep their table entry — S4). ──
+            Self::DbConnect => Some(&UNIT_TO_TASK_DB),
+            Self::DbOpen => Some(&STRING_TO_STRING_TO_TASK_DB),
+            Self::DbClose => Some(&DB_TO_TASK_UNIT),
+            Self::DbExecRaw => Some(&DB_EXEC_RAW),
+            Self::DbExec => Some(&DB_EXEC),
+            Self::DbQuery => Some(&DB_QUERY),
+            Self::DbQueryDecode => Some(&DB_QUERY_DECODE),
+            Self::DbInsertRow => Some(&DB_INSERT_ROW),
+            Self::DbGetById => Some(&DB_GET_BY_ID),
+            Self::DbUpdateById => Some(&DB_UPDATE_BY_ID),
+            Self::DbDeleteById => Some(&DB_DELETE_BY_ID),
+            Self::DbFindOneByField => Some(&DB_FIND_ONE_BY_FIELD),
+            Self::DbFindManyByField => Some(&DB_FIND_MANY_BY_FIELD),
+            Self::DbFindByConditions => Some(&DB_FIND_BY_CONDITIONS),
+            Self::DbFindWhere => Some(&DB_FIND_WHERE),
+            Self::DbDeleteWhere => Some(&DB_DELETE_WHERE),
+            Self::DbInsertFields => Some(&DB_INSERT_FIELDS),
+            Self::DbUpdateFields => Some(&DB_UPDATE_FIELDS),
+            Self::DbInsertFieldsReturning => Some(&DB_INSERT_FIELDS_RETURNING),
+            Self::DbWithTransaction => Some(&DB_WITH_TRANSACTION),
+
+            // ── WebSocket client. ──
+            Self::WebSocketConnect => Some(&STRING_TO_TASK_INT_LEAF),
+            Self::WebSocketSend => Some(&INT_TO_STRING_TO_TASK_UNIT),
+            Self::WebSocketSendBinary => Some(&INT_TO_BYTES_TO_TASK_UNIT),
+            Self::WebSocketClose => Some(&INT_TO_TASK_UNIT_LEAF),
+            Self::WebSocketCloseWithCode => Some(&WS_CLOSE_WITH_CODE),
+            Self::SubSubscribeWebSocket => Some(&SUB_SUBSCRIBE_WS),
+
+            // ── Ws server (opaque handle / cfg). ──
+            Self::WsDefaultCfg => Some(&WS_SERVER_CFG),
+            Self::WsWithOnConnect | Self::WsWithOnClose => Some(&WS_ON_CB_TO_CFG),
+            Self::WsWithOnMessage => Some(&WS_ON_MESSAGE),
+            Self::WsWithOnError => Some(&WS_ON_ERROR),
+            Self::WsWithMaxMessageBytes => Some(&INT_TO_CFG_TO_CFG),
+            Self::WsWithOriginPatterns => Some(&LIST_STRING_TO_CFG_TO_CFG),
+            Self::WsSendToClient => Some(&WS_SEND_TO_CLIENT),
+            Self::WsSendBinaryToClient => Some(&WS_SEND_BINARY),
+            Self::WsBroadcast => Some(&WS_BROADCAST),
+            Self::WsCloseClient => Some(&WS_CLOSE_CLIENT),
+
+            // ── Server (non-record route/cookie arms). ──
+            Self::ServerStatic => Some(&STRING_TO_STRING_TO_ROUTE),
+            Self::ServerCookieNew => Some(&STRING_TO_STRING_TO_COOKIE),
+            Self::ServerBody | Self::ServerPath | Self::ServerMethod => Some(&REQ_TO_STRING),
+            Self::ServerParam
+            | Self::ServerQueryParam
+            | Self::ServerHeader
+            | Self::ServerGetCookie => Some(&STRING_TO_REQ_TO_MAYBE_STRING),
+
+            // ── Sql fragment builders. ──
+            Self::SqlColumn => Some(&STRING_TO_SQLFRAGMENT),
+            Self::SqlParam => Some(&SQLVALUE_TO_SQLFRAGMENT),
+            Self::SqlInt => Some(&INT_TO_SQLFRAGMENT),
+            Self::SqlString => Some(&STRING_TO_SQLFRAGMENT),
+            Self::SqlFloat => Some(&FLOAT_TO_SQLFRAGMENT),
+            Self::SqlBool => Some(&BOOL_TO_SQLFRAGMENT),
+            Self::SqlEq
+            | Self::SqlNe
+            | Self::SqlGt
+            | Self::SqlLt
+            | Self::SqlGte
+            | Self::SqlLte
+            | Self::SqlAnd
+            | Self::SqlOr => Some(&SQLFRAGMENT_BINOP),
+            Self::SqlNot | Self::SqlIsNull | Self::SqlIsNotNull => {
+                Some(&SQLFRAGMENT_TO_SQLFRAGMENT)
+            }
+            Self::SqlInList => Some(&SQL_IN_LIST),
+            Self::SqlLike => Some(&SQL_LIKE),
 
             _ => None,
         }
