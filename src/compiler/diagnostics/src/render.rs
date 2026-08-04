@@ -25,8 +25,8 @@ use core::fmt::Write as _;
 use crate::code::{ISSUE_TRACKER_URL, Severity, title};
 use crate::diagnostic::{
     AppShape, CaseDefect, Diagnostic, Expected, ExpectedSet, ExposingDefect, Feature, HeaderDefect,
-    HelpLine, Hint, IfDefect, LetDefect, LowerError, NameError, ParseError, SpanRole, Suggestion,
-    TokenKind, TyDoc, TypeDeclDefect, TypeError,
+    HelpLine, Hint, IfDefect, LetDefect, LowerError, NameError, ParseError, SealRejection,
+    SpanRole, Suggestion, TokenKind, TyDoc, TypeDeclDefect, TypeError,
 };
 use crate::span::Span;
 
@@ -537,6 +537,33 @@ fn name_label(msg: &NameError) -> Option<String> {
              top-level annotated definition whose whole body is `Rust.Ffi.call \
              \"<crate>::<function>\"`"
         )),
+        NameError::BoundarySealIllegal { seal_type, reason } => {
+            let why = match reason {
+                SealRejection::Function => {
+                    "a function is not a plain value and cannot be serialised"
+                }
+                SealRejection::EffectCarrier => {
+                    "an effect carrier (`Cmd` / `Task` / `Sub`) does not cross the seam as data"
+                }
+                SealRejection::ViewValue => {
+                    "a view value (`Html` / `Element` / `Attribute`) is not a boundary data value"
+                }
+                SealRejection::SecretOrSink => {
+                    "a `Secret` or reserved sink type must never be exposed across the JS seam"
+                }
+                SealRejection::NonConcrete => {
+                    "the seal is monomorphic — a type variable or open row has no concrete codec"
+                }
+                SealRejection::NotProvenPlain => {
+                    "the seal cannot prove this is a plain, closed, serialisable value type"
+                }
+            };
+            Some(format!(
+                "`{seal_type}` cannot cross the Ipê↔JS boundary: {why}. A `CustomElement \
+                 down up` parameter must be a plain, closed value type — a primitive, \
+                 record, list, tuple, `Maybe`, or user ADT over those"
+            ))
+        }
         NameError::Unknown => None,
     }
 }
@@ -977,6 +1004,13 @@ const fn feature_label(f: Feature) -> &'static str {
              use a closed record annotation, or drop the annotation and let the \
              parameter's shape be inferred at its call site \
              [feature: row-poly-record-annotation]"
+        }
+        Feature::CustomElementTransport => {
+            "a `CustomElement down up` boundary value is accepted at the type level \
+             but its typed JS-widget transport — the generated glue, the \
+             content-addressed custom-element tag, and the DOM-patch node — is not \
+             emittable yet, so a program that builds one cannot be compiled to Rust \
+             until that transport ships [feature: custom-element-transport]"
         }
     }
 }
