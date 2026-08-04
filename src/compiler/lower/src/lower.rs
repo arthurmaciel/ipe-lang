@@ -1519,10 +1519,108 @@ fn row_value_escapes_direct_access(body: &Expr, row_syms: &BTreeSet<Symbol>) -> 
     }
 }
 
-/// Does this IR type embed a function type anywhere? An enum variant whose
-/// payload field carries a `Box<dyn Fn>` cannot satisfy the enum's derived
-/// `Clone`/`Debug`/`PartialEq` nor its `IpeStringify` impl, so a function-bearing
-/// field is the fail-closed first-class gap.
+/// Total structural walk over an [`IrType`], returning `true` when `leaf`
+/// matches the type itself or any type it transitively carries.
+///
+/// This is the ONE recursion the whole runtime-feature-mention family shares:
+/// each per-feature guard (`ir_type_mentions_server` / `_http` / `_csv` /
+/// `_secret` / `_json`) is a thin wrapper supplying only its LEAF predicate —
+/// the set of nominal `IrType` variants whose emitted Rust form lives in that
+/// feature's runtime module. The wrapper never re-implements the recursion, so
+/// the family cannot drift into per-feature recursion asymmetry (a carrier one
+/// guard descends into but another skips).
+///
+/// The match is deliberately EXHAUSTIVE with no wildcard arm: a future
+/// [`IrType`] variant that introduces a new type-carrying position is a compile
+/// error here rather than a silently-missed mention. A guard scanning a subset
+/// of carriers under-selects a runtime feature, and the emitted crate then
+/// references a type with no definition in scope (E0412/E0425/E0433 — a breach
+/// of the ipe-exit-0-then-cargo-build SEAL). Every carrier — including the
+/// reference-counted `SharedFun`, the `Set`/`WebRoute`/`Ui` carriers, and the
+/// curried `FnOnceChain` — descends uniformly; every non-carrier leaf that is
+/// not itself matched by `leaf` terminates the walk. Detection is thereby a
+/// SUPERSET of every position the emitter can spell a feature-gated type.
+fn ir_type_mentions(ty: &IrType, leaf: &impl Fn(&IrType) -> bool) -> bool {
+    if leaf(ty) {
+        return true;
+    }
+    match ty {
+        // Non-carrier leaves: no nested `IrType`. A leaf that `leaf` did not
+        // already accept above cannot mention the feature type.
+        IrType::Int
+        | IrType::Float
+        | IrType::Bool
+        | IrType::Str
+        | IrType::Char
+        | IrType::Unit
+        | IrType::Bytes
+        | IrType::Json
+        | IrType::Db
+        | IrType::Generic(_)
+        | IrType::RowGeneric(_)
+        | IrType::Order
+        | IrType::HttpMethod
+        | IrType::Decimal
+        | IrType::ErrorKind
+        | IrType::Error
+        | IrType::ErrorDetails
+        | IrType::ErrorInfo
+        | IrType::PanicInfo
+        | IrType::TypeInfo
+        | IrType::SqlFragment
+        | IrType::Secret
+        | IrType::Path
+        | IrType::Url
+        | IrType::Locale
+        | IrType::CacheCfg
+        | IrType::CacheStats
+        | IrType::WebSocketClientCfg
+        | IrType::CsvDoc
+        | IrType::CryptoKey
+        | IrType::CryptoMac
+        | IrType::EmailMessage
+        | IrType::EmailAttachment
+        | IrType::EmailSesConfig
+        | IrType::EmailSmtpConfig
+        | IrType::EmailProvider
+        | IrType::EmailAddress
+        | IrType::ServerRequest
+        | IrType::ServerResponse
+        | IrType::ServerRoute
+        | IrType::ServerCookie
+        | IrType::StreamWriter
+        | IrType::HttpRequest
+        | IrType::WebSocketServer
+        | IrType::WebSocketServerCfg
+        | IrType::WebReq
+        | IrType::Regex
+        | IrType::UiPlain(_) => false,
+        // Single-payload carriers.
+        IrType::Task(inner)
+        | IrType::Cmd(inner)
+        | IrType::Sub(inner)
+        | IrType::Decoder(inner)
+        | IrType::Maybe(inner)
+        | IrType::Set(inner)
+        | IrType::WebRoute(inner)
+        | IrType::Ui { msg: inner, .. }
+        | IrType::List(inner) => ir_type_mentions(inner, leaf),
+        // Two-payload carriers.
+        IrType::Result(a, b) | IrType::Dict(a, b) => {
+            ir_type_mentions(a, leaf) || ir_type_mentions(b, leaf)
+        }
+        // Function carriers, all three boxing families.
+        IrType::Fun(params, ret)
+        | IrType::SharedFun(params, ret)
+        | IrType::FnOnceChain(params, ret) => {
+            params.iter().any(|p| ir_type_mentions(p, leaf)) || ir_type_mentions(ret, leaf)
+        }
+        IrType::Tuple(elems) => elems.iter().any(|e| ir_type_mentions(e, leaf)),
+        IrType::Record(fields) => fields.values().any(|f| ir_type_mentions(f, leaf)),
+        IrType::Enum { args, .. } => args.iter().any(|a| ir_type_mentions(a, leaf)),
+    }
+}
+
 /// Does `ty` mention any opaque `Ipe.Http.Server` runtime type
 /// (`ServerRequest` / `ServerResponse` / `ServerRoute` / `ServerCookie`)?
 ///
@@ -1534,28 +1632,15 @@ fn row_value_escapes_direct_access(body: &Expr, row_syms: &BTreeSet<Symbol>) -> 
 /// used-check must include the TYPES, not just the kernels; otherwise
 /// `ServerResponse` is referenced but undefined (E0412 — a SEAL breach).
 fn ir_type_mentions_server(ty: &IrType) -> bool {
-    match ty {
-        IrType::ServerRequest
-        | IrType::ServerResponse
-        | IrType::ServerRoute
-        | IrType::ServerCookie => true,
-        IrType::Task(inner)
-        | IrType::Cmd(inner)
-        | IrType::Sub(inner)
-        | IrType::Decoder(inner)
-        | IrType::Maybe(inner)
-        | IrType::List(inner) => ir_type_mentions_server(inner),
-        IrType::Result(a, b) | IrType::Dict(a, b) => {
-            ir_type_mentions_server(a) || ir_type_mentions_server(b)
-        }
-        IrType::Fun(params, ret) | IrType::FnOnceChain(params, ret) => {
-            params.iter().any(ir_type_mentions_server) || ir_type_mentions_server(ret)
-        }
-        IrType::Tuple(elems) => elems.iter().any(ir_type_mentions_server),
-        IrType::Record(fields) => fields.values().any(ir_type_mentions_server),
-        IrType::Enum { args, .. } => args.iter().any(ir_type_mentions_server),
-        _ => false,
-    }
+    ir_type_mentions(ty, &|t| {
+        matches!(
+            t,
+            IrType::ServerRequest
+                | IrType::ServerResponse
+                | IrType::ServerRoute
+                | IrType::ServerCookie
+        )
+    })
 }
 
 /// `true` when `ty` mentions an `Ipe.Http`-client opaque type — `HttpRequest`
@@ -1565,25 +1650,9 @@ fn ir_type_mentions_server(ty: &IrType) -> bool {
 /// its `reqwest` dependency must be present. Mirrors [`ir_type_mentions_server`]
 /// for the client surface.
 fn ir_type_mentions_http(ty: &IrType) -> bool {
-    match ty {
-        IrType::HttpRequest | IrType::HttpMethod => true,
-        IrType::Task(inner)
-        | IrType::Cmd(inner)
-        | IrType::Sub(inner)
-        | IrType::Decoder(inner)
-        | IrType::Maybe(inner)
-        | IrType::List(inner) => ir_type_mentions_http(inner),
-        IrType::Result(a, b) | IrType::Dict(a, b) => {
-            ir_type_mentions_http(a) || ir_type_mentions_http(b)
-        }
-        IrType::Fun(params, ret) | IrType::FnOnceChain(params, ret) => {
-            params.iter().any(ir_type_mentions_http) || ir_type_mentions_http(ret)
-        }
-        IrType::Tuple(elems) => elems.iter().any(ir_type_mentions_http),
-        IrType::Record(fields) => fields.values().any(ir_type_mentions_http),
-        IrType::Enum { args, .. } => args.iter().any(ir_type_mentions_http),
-        _ => false,
-    }
+    ir_type_mentions(ty, &|t| {
+        matches!(t, IrType::HttpRequest | IrType::HttpMethod)
+    })
 }
 
 /// `true` when `ty` mentions the `Ipe.Csv` opaque type `CsvDoc`, defined in the
@@ -1594,25 +1663,7 @@ fn ir_type_mentions_http(ty: &IrType) -> bool {
 /// still references the type in emitted code, and the module (and its `csv`
 /// dependency) must be present. Mirrors [`ir_type_mentions_http`].
 fn ir_type_mentions_csv(ty: &IrType) -> bool {
-    match ty {
-        IrType::CsvDoc => true,
-        IrType::Task(inner)
-        | IrType::Cmd(inner)
-        | IrType::Sub(inner)
-        | IrType::Decoder(inner)
-        | IrType::Maybe(inner)
-        | IrType::List(inner) => ir_type_mentions_csv(inner),
-        IrType::Result(a, b) | IrType::Dict(a, b) => {
-            ir_type_mentions_csv(a) || ir_type_mentions_csv(b)
-        }
-        IrType::Fun(params, ret) | IrType::FnOnceChain(params, ret) => {
-            params.iter().any(ir_type_mentions_csv) || ir_type_mentions_csv(ret)
-        }
-        IrType::Tuple(elems) => elems.iter().any(ir_type_mentions_csv),
-        IrType::Record(fields) => fields.values().any(ir_type_mentions_csv),
-        IrType::Enum { args, .. } => args.iter().any(ir_type_mentions_csv),
-        _ => false,
-    }
+    ir_type_mentions(ty, &|t| matches!(t, IrType::CsvDoc))
 }
 
 /// `true` when `ty` mentions the `Ipe.Secret` opaque type `Secret`, defined in
@@ -1624,60 +1675,20 @@ fn ir_type_mentions_csv(ty: &IrType) -> bool {
 /// `Algorithm` also folds to `IrType::Secret` (see the JWT `Algorithm` alias),
 /// so this guard covers it too. Mirrors [`ir_type_mentions_csv`].
 fn ir_type_mentions_secret(ty: &IrType) -> bool {
-    match ty {
-        IrType::Secret => true,
-        IrType::Task(inner)
-        | IrType::Cmd(inner)
-        | IrType::Sub(inner)
-        | IrType::Decoder(inner)
-        | IrType::Maybe(inner)
-        | IrType::List(inner) => ir_type_mentions_secret(inner),
-        IrType::Result(a, b) | IrType::Dict(a, b) => {
-            ir_type_mentions_secret(a) || ir_type_mentions_secret(b)
-        }
-        IrType::Fun(params, ret) | IrType::FnOnceChain(params, ret) => {
-            params.iter().any(ir_type_mentions_secret) || ir_type_mentions_secret(ret)
-        }
-        IrType::Tuple(elems) => elems.iter().any(ir_type_mentions_secret),
-        IrType::Record(fields) => fields.values().any(ir_type_mentions_secret),
-        IrType::Enum { args, .. } => args.iter().any(ir_type_mentions_secret),
-        _ => false,
-    }
+    ir_type_mentions(ty, &|t| matches!(t, IrType::Secret))
 }
 
 /// `true` when `ty` mentions `Json` (`IrType::Json`, rendered `JsonVal`) or a
 /// `Decoder<T>` (`IrType::Decoder`, rendered `Decoder<…>`) anywhere in its
 /// structure — the two types the fixed prelude aliases against the `json` runtime
-/// module. Recurses through every carrier; a `Decoder` node is itself a mention
-/// (the `Decoder<T>` alias must exist) AND its inner type is scanned. Used at the
+/// module. A `Decoder` node is itself a mention (the `Decoder<T>` alias must
+/// exist) AND its inner type is scanned by the shared walk. Used at the
 /// module-assembly site to keep the two prelude aliases + the `json` feature for a
 /// program that NAMES either type in a signature, record field, or enum payload
 /// even when it calls no `Json.*` kernel (a decoder forwarded as a parameter) —
 /// the type-mention guard the fail-closed `uses_json` requires.
 fn ir_type_mentions_json(ty: &IrType) -> bool {
-    match ty {
-        // Either type is itself a mention: `Json` renders `JsonVal`, and a
-        // `Decoder<T>` node names the `Decoder` alias regardless of its payload.
-        IrType::Json | IrType::Decoder(_) => true,
-        IrType::Task(inner)
-        | IrType::Cmd(inner)
-        | IrType::Sub(inner)
-        | IrType::Maybe(inner)
-        | IrType::Set(inner)
-        | IrType::List(inner) => ir_type_mentions_json(inner),
-        IrType::Result(a, b) | IrType::Dict(a, b) => {
-            ir_type_mentions_json(a) || ir_type_mentions_json(b)
-        }
-        IrType::Fun(params, ret)
-        | IrType::SharedFun(params, ret)
-        | IrType::FnOnceChain(params, ret) => {
-            params.iter().any(ir_type_mentions_json) || ir_type_mentions_json(ret)
-        }
-        IrType::Tuple(elems) => elems.iter().any(ir_type_mentions_json),
-        IrType::Record(fields) => fields.values().any(ir_type_mentions_json),
-        IrType::Enum { args, .. } => args.iter().any(ir_type_mentions_json),
-        _ => false,
-    }
+    ir_type_mentions(ty, &|t| matches!(t, IrType::Json | IrType::Decoder(_)))
 }
 
 /// Does any [`IrType`] occurring ANYWHERE in `expr` satisfy `pred`?
@@ -1824,6 +1835,38 @@ fn func_type_mentions(f: &Func, pred: &impl Fn(&IrType) -> bool) -> bool {
         || f.row_params
             .iter()
             .any(|r| r.fields.iter().any(|(_, t)| pred(t)))
+}
+
+/// Does `pred` match any type position the WHOLE program can emit? The single
+/// per-feature program scan every runtime-feature guard shares, so no feature's
+/// `uses_*` flag can under-approximate by scanning a subset of the emittable
+/// surface. It covers, exhaustively, every place the emitter renders a type:
+///
+/// * every function's signature + body + row-generic fields
+///   ([`func_type_mentions`]),
+/// * every synthesised / collected closed record type (a record standing alone
+///   in a Model or a bare literal, reached by no function mention),
+/// * every user enum-def variant payload (a feature type sitting only in a
+///   variant field, reached by no function mention).
+///
+/// The record and enum-def arms are what make detection ⊇ emission for an
+/// opaque feature type embedded ONLY in a data declaration — a `CsvDoc` record
+/// field, a `Secret` enum payload — with no function ever naming it. A guard
+/// scanning only `funcs` would drop the feature the emitted struct/enum still
+/// spells (the crate would reference a type with no definition in scope —
+/// E0412/E0433). Every runtime-feature guard runs this identical surface, so
+/// the family cannot drift into per-feature scan asymmetry.
+fn program_type_mentions(
+    funcs: &[Func],
+    records: &[IrType],
+    types_ir: &[TypeDef],
+    pred: &impl Fn(&IrType) -> bool,
+) -> bool {
+    funcs.iter().any(|f| func_type_mentions(f, pred))
+        || records.iter().any(pred)
+        || types_ir.iter().any(|td| match td {
+            TypeDef::Enum(e) => e.variants.iter().any(|v| v.fields.iter().any(pred)),
+        })
 }
 
 fn ir_contains_fun(ty: &IrType) -> bool {
@@ -8798,7 +8841,7 @@ impl<'a> Lowerer<'a> {
         let uses_tea = kernel_usage.tea;
 
         // detect whether any Ipe.Http.Server kernel call is present, OR any
-        // function signature references a server type (a `Response` record
+        // emittable type position references a server type (a `Response` record
         // literal / `Request`-typed handler uses the server structs without
         // necessarily calling a server kernel). Either pulls in the `server`
         // runtime module — the backend injects the `server` Cargo feature and
@@ -8807,19 +8850,15 @@ impl<'a> Lowerer<'a> {
         // reference `ServerResponse`/`ServerRequest` in emitted code with no
         // definition in scope (E0412 — a SEAL breach).
         let uses_server = kernel_usage.server
-            || funcs
-                .iter()
-                .any(|f| func_type_mentions(f, &ir_type_mentions_server));
+            || program_type_mentions(&funcs, &records, &types_ir, &ir_type_mentions_server);
 
-        // detect outbound `Ipe.Http` client usage — any client kernel, or a
-        // function signature that mentions an `HttpRequest` / `HttpMethod`
+        // detect outbound `Ipe.Http` client usage — any client kernel, or any
+        // emittable type position that mentions an `HttpRequest` / `HttpMethod`
         // (both live in the `http_client` runtime module). The backend uses
         // this flag to declare `http_client` in the emitted `ipe_runtime/mod.rs`
         // and add the `reqwest` dependency.
         let uses_http = kernel_usage.http
-            || funcs
-                .iter()
-                .any(|f| func_type_mentions(f, &ir_type_mentions_http));
+            || program_type_mentions(&funcs, &records, &types_ir, &ir_type_mentions_http);
 
         // detect `Ipe.Config` TOML/YAML decoder usage — any kernel emitting into
         // the `config_decode` runtime module (`Config.decodeToml` / `decodeYaml`
@@ -8842,19 +8881,18 @@ impl<'a> Lowerer<'a> {
         let uses_compression = kernel_usage.compression;
 
         // detect `Ipe.Csv` usage — any `Csv.parse` / `parseWithDelimiter` /
-        // `encode` / `encodeWithDelimiter` / `parseStreamFromFile` kernel, OR a
-        // function signature that mentions the `CsvDoc` opaque type. The backend
-        // uses this flag to declare `csv` in the emitted `ipe_runtime/mod.rs` and
-        // add the `csv` dependency. The type-mention guard is required: a bare
-        // `{ header, rows }` record shape folds to `IrType::CsvDoc`, which emits a
-        // bare `CsvDoc` reference resolved through the module's `pub use csv::*`
-        // glob — a function that only names such a value (never calling a `Csv`
-        // kernel) still references the type, so omitting the guard would emit
-        // `CsvDoc` with no definition in scope (E0433 — a SEAL breach).
+        // `encode` / `encodeWithDelimiter` / `parseStreamFromFile` kernel, OR any
+        // emittable type position that mentions the `CsvDoc` opaque type. The
+        // backend uses this flag to declare `csv` in the emitted
+        // `ipe_runtime/mod.rs` and add the `csv` dependency. The type-mention
+        // guard is required: a bare `{ header, rows }` record shape folds to
+        // `IrType::CsvDoc`, which emits a bare `CsvDoc` reference resolved through
+        // the module's `pub use csv::*` glob — a program that only names such a
+        // value (in a signature, a standalone record, or an enum payload — never
+        // calling a `Csv` kernel) still references the type, so omitting the guard
+        // would emit `CsvDoc` with no definition in scope (E0433 — a SEAL breach).
         let uses_csv = kernel_usage.csv
-            || funcs
-                .iter()
-                .any(|f| func_type_mentions(f, &ir_type_mentions_csv));
+            || program_type_mentions(&funcs, &records, &types_ir, &ir_type_mentions_csv);
 
         // detect HEAVY `Ipe.Crypto` usage — any legacy SHA-1/MD5, AEAD, or PBKDF2
         // kernel. The backend uses this flag to declare `crypto` in the emitted
@@ -8878,15 +8916,14 @@ impl<'a> Lowerer<'a> {
         let uses_crypto_core = kernel_usage.crypto_core;
 
         // detect `Ipe.Secret` usage — any `Secret.*` kernel OR a `Secret`-typed
-        // value in a function signature. The type-mention guard is REQUIRED: a
-        // function that only forwards a `Secret` parameter (e.g. an `Ipe.Auth`
-        // wrapper) names the type in its signature without calling a `Secret.*`
-        // kernel, so dropping `secret.rs` on the call-site flag alone would emit a
-        // signature referencing an absent `ipe_runtime::secret::Secret` (E0433).
+        // value in ANY emittable type position. The type-mention guard is
+        // REQUIRED: a program that only forwards a `Secret` (e.g. an `Ipe.Auth`
+        // wrapper parameter, or a `Secret` sitting in a standalone record field
+        // or enum payload) names the type without calling a `Secret.*` kernel, so
+        // dropping `secret.rs` on the call-site flag alone would emit a reference
+        // to an absent `ipe_runtime::secret::Secret` (E0433).
         let uses_secret = kernel_usage.secret
-            || funcs
-                .iter()
-                .any(|f| func_type_mentions(f, &ir_type_mentions_secret));
+            || program_type_mentions(&funcs, &records, &types_ir, &ir_type_mentions_secret);
 
         // detect `json` reach — a `Value`/`Decoder`-building kernel OR a `Json` /
         // `Decoder` TYPE mentioned in ANY reachable type position. The two prelude
@@ -8902,16 +8939,7 @@ impl<'a> Lowerer<'a> {
         // emitted code still spells (E0412/E0425/E0433). FAIL-CLOSED: any signal
         // keeps `json` on.
         let uses_json = kernel_usage.json
-            || funcs
-                .iter()
-                .any(|f| func_type_mentions(f, &ir_type_mentions_json))
-            || records.iter().any(ir_type_mentions_json)
-            || types_ir.iter().any(|td| match td {
-                TypeDef::Enum(e) => e
-                    .variants
-                    .iter()
-                    .any(|v| v.fields.iter().any(ir_type_mentions_json)),
-            });
+            || program_type_mentions(&funcs, &records, &types_ir, &ir_type_mentions_json);
 
         // detect `Ipe.Encoding` / `Ipe.Bytes` usage. The backend uses this flag to
         // declare `encoding` + `bytes` in the emitted `ipe_runtime/mod.rs` and add
@@ -20628,6 +20656,94 @@ mod tests {
             !super::expr_type_mentions(&body, &super::ir_type_mentions_json),
             "a json-free body must NOT set the json guard — the floor (drop \
              `json` for a program that names no json anywhere) must hold"
+        );
+    }
+
+    // ── feature-mention family: uniform carrier recursion ───────────────────
+    //
+    // Every `ir_type_mentions_*` guard shares ONE exhaustive recursive walk
+    // (`ir_type_mentions`), so a feature type buried in ANY carrier — including
+    // the reference-counted `SharedFun` and the `Set` carrier — is seen by
+    // every guard. A carrier one guard skips would under-select the feature and
+    // emit a reference to an absent runtime type (E0433).
+
+    /// A `Secret` inside a `Set` element type is detected: the guard recurses
+    /// through every carrier uniformly, so a `Set Secret` field cannot emit a
+    /// `Secret` reference with no `secret` module in scope.
+    #[test]
+    fn secret_inside_set_is_detected() {
+        use ipe_ir::IrType;
+        let ty = IrType::Set(Box::new(IrType::Secret));
+        assert!(
+            super::ir_type_mentions_secret(&ty),
+            "a `Secret` buried in a `Set` must be detected — the guard recurses \
+             through every carrier uniformly"
+        );
+    }
+
+    /// A `Secret` in a `SharedFun` return position is detected: the shared walk
+    /// descends into every function carrier (the reference-counted `Arc<dyn Fn>`
+    /// promotion included).
+    #[test]
+    fn secret_inside_shared_fun_is_detected() {
+        use ipe_ir::IrType;
+        let ty = IrType::SharedFun(vec![IrType::Int], Box::new(IrType::Secret));
+        assert!(
+            super::ir_type_mentions_secret(&ty),
+            "a `Secret` in a `SharedFun` return must be detected — the shared \
+             walk descends into every function carrier"
+        );
+    }
+
+    /// A `CsvDoc` sitting ONLY in a user enum-def variant payload — reached by
+    /// no function mention — selects `csv`. `program_type_mentions` scans
+    /// enum-def payloads for every feature, so `csv` stays on and the emitted
+    /// enum never references an absent `CsvDoc` (E0433).
+    #[test]
+    fn csv_in_enum_variant_payload_is_detected() {
+        use ipe_ir::{EnumDef, IrType, ModPath, TypeDef, Variant};
+        let mut interner = Interner::new();
+        let name = interner.intern("Wrapper").unwrap();
+        let ctor = interner.intern("Wrap").unwrap();
+        let type_def = TypeDef::Enum(EnumDef {
+            name,
+            home: ModPath(Vec::new()),
+            type_params: Vec::new(),
+            variants: vec![Variant {
+                name: ctor,
+                fields: vec![IrType::CsvDoc],
+            }],
+        });
+        assert!(
+            super::program_type_mentions(&[], &[], &[type_def], &super::ir_type_mentions_csv),
+            "a `CsvDoc` in an enum-def variant payload (named by no function) \
+             must select `csv` — the sibling scan covers enum-def payloads for \
+             every feature"
+        );
+    }
+
+    /// The floor holds for the unified family: a feature-free enum-def payload
+    /// does NOT trip a guard — over-detection would pin the feature on for every
+    /// program.
+    #[test]
+    fn feature_free_enum_payload_does_not_trip_the_guard() {
+        use ipe_ir::{EnumDef, IrType, ModPath, TypeDef, Variant};
+        let mut interner = Interner::new();
+        let name = interner.intern("Plain").unwrap();
+        let ctor = interner.intern("P").unwrap();
+        let type_def = TypeDef::Enum(EnumDef {
+            name,
+            home: ModPath(Vec::new()),
+            type_params: Vec::new(),
+            variants: vec![Variant {
+                name: ctor,
+                fields: vec![IrType::List(Box::new(IrType::Int))],
+            }],
+        });
+        assert!(
+            !super::program_type_mentions(&[], &[], &[type_def], &super::ir_type_mentions_secret),
+            "a feature-free enum payload must NOT select the feature — the floor \
+             (drop a runtime module a program never names) must hold"
         );
     }
 
