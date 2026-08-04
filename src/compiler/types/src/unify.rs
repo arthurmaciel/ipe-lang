@@ -23,7 +23,7 @@ use ipe_intern::Interner;
 use crate::constrain::zonk;
 use crate::doc::{VarNamer, ty_to_doc};
 use crate::solve::Budget;
-use crate::ty::{Content, FlatType, TyBounds};
+use crate::ty::{Content, FlatType, Ty, TyBounds};
 use crate::unionfind::{UnionFind, VarId};
 
 /// Whether a concrete structure `flat` satisfies a variable's super-type
@@ -515,6 +515,18 @@ fn mismatch(
         Ok(t) => t,
         Err(bug) => return bug,
     };
+    // A managed-loop `view` returns `Html` where the shape requires `Element`
+    // (or the symmetric case): render the tailored IPE-T0020, which tells the
+    // user to return an `Element` or wrap raw `Html` with `Ui.html`, instead of
+    // the generic type-mismatch. `Ui.layout` / `Ui.layoutWith` turn an
+    // `Element` into `Html`; the shape applies that wrapping itself, so a `view`
+    // body ending in one is a first-order authoring mistake worth its own hint.
+    if is_element_html_clash(interner, &expected_ty, &found_ty) {
+        return Diagnostic::Type {
+            span,
+            msg: TypeError::WebViewReturnsHtml,
+        };
+    }
     let expected_doc = match ty_to_doc(&expected_ty, interner, &mut namer) {
         Ok(d) => d,
         Err(bug) => return bug,
@@ -532,6 +544,22 @@ fn mismatch(
             path: Box::new([]),
         },
     }
+}
+
+/// Whether the two diverging types are the `Element` / `Html` pair (in either
+/// order) — a managed-loop `view` returning `Html` where an `Element` is
+/// required (or the symmetric case). Both are unqualified nominal cons
+/// (`self.builtins.element` / `html_con` carry no module for the emitted type),
+/// so a name-string match is exact and cannot collide with a user type.
+fn is_element_html_clash(interner: &Interner, a: &Ty, b: &Ty) -> bool {
+    let con_name = |t: &Ty| match t {
+        Ty::Con { name, .. } => interner.resolve(*name),
+        _ => None,
+    };
+    matches!(
+        (con_name(a), con_name(b)),
+        (Some("Element"), Some("Html")) | (Some("Html"), Some("Element"))
+    )
 }
 
 /// Build an owned [`TypeError::InfiniteType`] naming the offending variable and

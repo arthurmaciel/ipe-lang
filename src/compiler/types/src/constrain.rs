@@ -13,7 +13,7 @@
 //! the solver level: [`Builder::instantiate`] (a [`Ty`] → fresh union-find
 //! structure) and [`Builder::zonk`] (a settled union-find variable → [`Ty`]).
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::rc::Rc;
 
 use ipe_canon::ast as canon;
@@ -1327,6 +1327,22 @@ pub struct Builder<'a> {
     /// Deferred per-route page-witness checks (one per `Web.route` reference),
     /// resolved after the main solve, BEFORE the routed-Web.app checks.
     route_witness_checks: Vec<RouteWitnessCheck>,
+    /// Body result var of every typed top-level binding whose RETURN annotation
+    /// is the bare wildcard `any`. Keyed by `(home_module_path, bare_name)`.
+    /// A wildcard `any` return severs the body's settled type from every use
+    /// site (each occurrence instantiates its own fresh flex); this map is the
+    /// handle [`Self::tie_wildcard_any_uses_to_bodies`] uses to re-connect them.
+    wildcard_any_return_bodies: BTreeMap<(Vec<Symbol>, Symbol), VarId>,
+    /// Names of typed bindings whose RETURN annotation is the bare wildcard
+    /// `any`, recorded in the registration pass. Each reference to one of these
+    /// (in [`Self::constrain_var_top_level`]) records a use tie so its body can
+    /// flow to the use site.
+    wildcard_any_return_bindings: BTreeSet<(Vec<Symbol>, Symbol)>,
+    /// One entry per reference to a wildcard-`any`-return binding: the use's
+    /// instantiated arrow var + the binding it references. Tied to the binding's
+    /// body by [`Self::tie_wildcard_any_uses_to_bodies`] once every def is
+    /// constrained.
+    wildcard_any_use_results: Vec<(VarId, (Vec<Symbol>, Symbol))>,
     /// The type scheme of every data constructor declared in this module, keyed
     /// by constructor name. A constructor is a (possibly generic) function
     /// `field0 -> … -> fieldN -> T vars`; each use site instantiates the scheme
@@ -1628,6 +1644,9 @@ impl<'a> Builder<'a> {
             record_updates: Vec::new(),
             routed_web_checks: Vec::new(),
             route_witness_checks: Vec::new(),
+            wildcard_any_return_bodies: BTreeMap::new(),
+            wildcard_any_return_bindings: BTreeSet::new(),
+            wildcard_any_use_results: Vec::new(),
             ctors: BTreeMap::new(),
             typed_rigids: Vec::new(),
             scheme_apps: Vec::new(),
@@ -1754,6 +1773,15 @@ impl<'a> Builder<'a> {
                         raw
                     };
                     let normalized = builder.normalize_annotation_ty(expanded, name.span)?;
+                    // A bare wildcard `any` in the annotation's RETURN position
+                    // severs the body from every use (see
+                    // [`Builder::tie_wildcard_any_uses_to_bodies`]); record the
+                    // binding so each reference is tied back to its body.
+                    if builder.annotation_returns_wildcard_any(&normalized) {
+                        builder
+                            .wildcard_any_return_bindings
+                            .insert((home_key.clone(), name.value));
+                    }
                     builder
                         .top_level
                         .insert((home_key, name.value), Rc::new(normalized));
@@ -1769,6 +1797,12 @@ impl<'a> Builder<'a> {
         for def in &module.defs {
             builder.constrain_def(def)?;
         }
+
+        // With every binding constrained, `wildcard_any_return_bodies` is
+        // complete: tie every wildcard-`any`-return reference to its body so the
+        // body's real type flows to each use before the solver runs, regardless
+        // of the source order in which a use and its binding appeared.
+        builder.tie_wildcard_any_uses_to_bodies()?;
 
         // `module.defs` is already dependency-first topo order (link::link
         // concatenates each source module's whole def list in the
@@ -2312,6 +2346,22 @@ impl<'a> Builder<'a> {
                 // `Color`'s constructors first.
                 self.record_expected(body.span, ret_var);
                 self.eq(body.span, body_var, ret_var);
+                // A binding whose RETURN annotation is the bare wildcard `any`
+                // severs its body's settled type from every use site (each `any`
+                // occurrence instantiates its own fresh flex). Record the body
+                // var so [`Self::tie_wildcard_any_uses_to_bodies`] can re-connect
+                // it to every use, undoing the severance at its root (a
+                // `view = <this binding>` with an `Html` body then reaches the
+                // shape's `Element` requirement as an ordinary mismatch). The
+                // guard mirrors the registration pass exactly
+                // ([`Self::annotation_returns_wildcard_any`]): a point-free def
+                // (`alias : Model -> any; alias = view`, zero written patterns)
+                // leaves `ret_ty` as the whole `Model -> any` arrow, which the
+                // tie peels along with the use — so both def forms are recorded.
+                if self.annotation_returns_wildcard_any(&ret_ty) {
+                    self.wildcard_any_return_bodies
+                        .insert((self.current_home.clone(), name.value), body_var);
+                }
                 // Record the skolem each annotation variable instantiated to, so
                 // its body-imposed super-type obligations can be read back for
                 // generalisation. Keyed by the variable's symbol (the lowerer's
@@ -2397,6 +2447,29 @@ impl<'a> Builder<'a> {
             },
             Err(bug) => bug,
         }
+    }
+
+    /// Whether `ty` is the bare wildcard `any` annotation type — a `Ty::Var`
+    /// whose interned symbol resolves to `"any"`. Mirrors the `Ty::Var` "any"
+    /// arm in [`Self::instantiate_in`]: `any` is Ipê's wildcard type-variable
+    /// name, distinct from a genuine named parameter (`a`, `msg`).
+    fn is_wildcard_any_ty(&self, ty: &Ty) -> bool {
+        matches!(ty, Ty::Var(id) if self
+            .interner
+            .resolve(Symbol::from_raw(*id))
+            .is_some_and(|name| name == "any"))
+    }
+
+    /// Whether an annotation type's final RETURN (after peeling every leading
+    /// `_ -> _` arrow) is the bare wildcard `any`. Such a binding's body is
+    /// severed from its uses by the wildcard and must be re-tied — see
+    /// [`Self::tie_wildcard_any_uses_to_bodies`].
+    fn annotation_returns_wildcard_any(&self, ty: &Ty) -> bool {
+        let mut cur = ty;
+        while let Ty::Fun(_, ret) = cur {
+            cur = ret;
+        }
+        self.is_wildcard_any_ty(cur)
     }
 
     /// Reduce a 2-arg `Task Error a` annotation type to the internal unary
@@ -2683,6 +2756,14 @@ impl<'a> Builder<'a> {
                 vars,
                 span,
             });
+            // A reference to a wildcard-`any`-return binding: record this use's
+            // instantiated arrow so [`Self::tie_wildcard_any_uses_to_bodies`]
+            // (after all defs are constrained) ties its result to the binding's
+            // body — undoing the wildcard severance so the body's real type
+            // reaches this use site.
+            if self.wildcard_any_return_bindings.contains(&key) {
+                self.wildcard_any_use_results.push((var, key));
+            }
             Ok(var)
         } else if let Some(v) = self.untyped.get(&key).copied() {
             if key.0 == self.current_home {
@@ -3372,6 +3453,52 @@ impl<'a> Builder<'a> {
         }
         let ext = self.empty_record_tail()?;
         self.structure(FlatType::Record(field_vars, ext))
+    }
+
+    /// Tie each reference to a wildcard-`any`-return binding to that binding's
+    /// body result, so the body's settled type flows to every use site — closing
+    /// the wildcard severance at its root. Run once EVERY def is constrained
+    /// (so all body vars exist and the tie is independent of source order),
+    /// before the main solve, so the tied type propagates through the same
+    /// unification the use participates in. A `view = <binding>` whose body is
+    /// `Html` therefore reaches the shape's `Element` requirement as an ordinary
+    /// mismatch (rendered as IPE-T0020), rather than passing ipe and failing
+    /// `cargo build`. Covers every indirection — direct reference, `let` alias
+    /// chains, eta-expansion — because it is plain unification, not a syntactic
+    /// reference walk.
+    fn tie_wildcard_any_uses_to_bodies(&mut self) -> DResult<()> {
+        let ties = std::mem::take(&mut self.wildcard_any_use_results);
+        for (use_arrow, binding) in ties {
+            let Some(&body_var) = self.wildcard_any_return_bodies.get(&binding) else {
+                continue;
+            };
+            // Peel BOTH the use's instantiated arrow and the recorded body to
+            // their final results, then tie the two result slots. The use arrow
+            // is `param0 -> … -> any`; the body is either the applied result
+            // (a def written with parameters) OR the same arrow shape (a
+            // point-free def, `alias = view`), so peeling both reaches the
+            // matching `any`/`Html` slot regardless of the def form or arity.
+            let use_result = self.peel_arrow_result(use_arrow)?;
+            let body_result = self.peel_arrow_result(body_var)?;
+            self.eq(Span::DUMMY, use_result, body_result);
+        }
+        Ok(())
+    }
+
+    /// Follow a variable's settled structure, peeling leading `_ -> rest`
+    /// arrows, and return the final non-arrow result. Bounded fuel guards a
+    /// pathological cyclic chain.
+    fn peel_arrow_result(&mut self, var: VarId) -> DResult<VarId> {
+        let mut cur = self.uf.find(var)?;
+        let mut fuel: u32 = 1024;
+        while fuel > 0 {
+            match self.uf.content(cur)? {
+                Content::Structure(FlatType::Fun(_, ret)) => cur = self.uf.find(ret)?,
+                _ => break,
+            }
+            fuel -= 1;
+        }
+        Ok(cur)
     }
 
     /// Constrain a record field access `record.field`. With closed records (no
@@ -7836,6 +7963,9 @@ impl<'a> Builder<'a> {
             record_updates: Vec::new(),
             routed_web_checks: Vec::new(),
             route_witness_checks: Vec::new(),
+            wildcard_any_return_bodies: BTreeMap::new(),
+            wildcard_any_return_bindings: BTreeSet::new(),
+            wildcard_any_use_results: Vec::new(),
             ctors: BTreeMap::new(),
             typed_rigids: Vec::new(),
             scheme_apps: Vec::new(),
