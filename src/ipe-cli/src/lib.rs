@@ -4012,25 +4012,60 @@ fn run_project_tests(path: Option<&str>) -> Result<TestOutcome, CliError> {
     // standalone test) falls back to sibling discovery rooted at `tests/`. On
     // any compile failure the stage propagates that error directly — the error
     // is already a well-formed `CliError`.
+    // Build, then run, the test entry. Everything after the temp output is
+    // created runs inside this closure so a single cleanup below removes the
+    // temp directory on EVERY exit — a compile failure, a cargo failure, a
+    // spawn error, or a normal run — not only the success path.
+    let outcome = build_and_run_test_entry(
+        &project_src_root,
+        &test_entry,
+        &out_dir,
+        &runtime_dir,
+        cargo_bin.path(),
+    );
+
+    // Clean up the temp output regardless of the outcome.
+    let _ = std::fs::remove_dir_all(&out_dir);
+
+    outcome
+}
+
+/// Compile the test entry into `out_dir`, build the emitted Rust project, and
+/// run the resulting `ipe-app` binary, classifying its exit code.
+///
+/// Split from [`run_project_tests`] so the caller's temp-directory cleanup runs
+/// on every exit of this fallible sequence, not only the success path.
+///
+/// # Errors
+/// The compile/build error on a compile or cargo failure; [`CliError::Io`] when
+/// the test binary cannot be spawned; [`CliError::TestFailed`] when it exits
+/// non-zero (a failing case, or a crash/signal with no exit code).
+fn build_and_run_test_entry(
+    project_src_root: &Path,
+    test_entry: &Path,
+    out_dir: &Path,
+    runtime_dir: &Path,
+    cargo_bin: &Path,
+) -> Result<TestOutcome, CliError> {
     if project_src_root.is_dir() {
-        build_test_with_project_sources(&project_src_root, &test_entry, &out_dir, &runtime_dir)?;
+        build_test_with_project_sources(project_src_root, test_entry, out_dir, runtime_dir)?;
     } else {
-        build_with_sibling_discovery(&test_entry, &out_dir, &runtime_dir)?;
+        build_with_sibling_discovery(test_entry, out_dir, runtime_dir)?;
     }
 
     // Compile the emitted Rust project.
-    let mut cargo = std::process::Command::new(cargo_bin.path());
-    cargo.arg("build").current_dir(&out_dir);
+    let mut cargo = std::process::Command::new(cargo_bin);
+    cargo.arg("build").current_dir(out_dir);
     build_emitted_project(
         &mut cargo,
         "the emitted test runner",
         runtime_context_for_message(),
-        &out_dir,
+        out_dir,
     )?;
 
     // Locate the compiled binary via `cargo metadata` so a user-level
     // `CARGO_TARGET_DIR` pin or workspace override is respected.
-    let mut bin = cargo_target_directory(&out_dir)?;
+    let mut bin = cargo_target_directory(out_dir)?;
     bin.push("debug");
     bin.push("ipe-app");
 
@@ -4042,9 +4077,6 @@ fn run_project_tests(path: Option<&str>) -> Result<TestOutcome, CliError> {
             path: bin.clone(),
             source: e,
         })?;
-
-    // Clean up the temp output regardless of the run outcome.
-    let _ = std::fs::remove_dir_all(&out_dir);
 
     if run_status.success() {
         Ok(TestOutcome::AllPassed)
