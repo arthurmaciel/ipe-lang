@@ -1,20 +1,31 @@
 //! Layer-3 red-team tests for the wasm security gate: the emitted `Cargo.toml`
-//! for a `--target wasm` build must contain the browser-glue crates
-//! (`wasm-bindgen`, `web-sys`) and MUST NOT contain any server-side dep
-//! (`tokio`, `axum`, `sqlx`, `reqwest`) or server-feature flag (`server`,
-//! `db`, `live`).
+//! for a `--target wasm` build MUST NOT contain any server-side dep (`tokio`,
+//! `axum`, `sqlx`, `reqwest`) or activate any server-feature flag (`server`,
+//! `db`, `live`), and MUST keep the browser-glue entry crate (`wasm-bindgen`)
+//! the emitted `#[wasm_bindgen(start)]` references.
 //!
-//! These are enforced BY CONSTRUCTION (the `WASM_CARGO_TOML` constant in
-//! `project.rs` never includes those deps), but construction alone is not an
-//! asserted contract — a future edit that inadvertently adds one would pass
-//! every other test. This file makes that contract machine-checked.
+//! Two emit shapes are covered:
 //!
-//! The emitted `Cargo.toml` is obtained by calling the real backend
-//! (`RustBackend::with_target(WasmClient)`) on a minimal body-free program,
-//! so the test exercises the same code path `ipe build --target wasm` uses.
+//!   • the dependency model (the default `ipe build --target wasm` shape): the
+//!     runtime is a path dependency selected by the `wasm-client` feature floor,
+//!     so the security-forbidden crates are absent from the app manifest and
+//!     pulled (only their wasm-safe subset) transitively by that feature. The
+//!     browser-glue crates (`web-sys`, `js-sys`, …) live in the runtime crate's
+//!     own wasm32 `[target]` table, NOT the app manifest.
+//!   • the vendored fallback (`IPE_RUNTIME_VENDORED=1`): the closed
+//!     `WASM_CARGO_TOML` template declares every dependency non-optional, so the
+//!     browser-glue crates appear directly and the forbidden crates are absent by
+//!     construction.
+//!
+//! These are enforced BY CONSTRUCTION (the manifest templates never include the
+//! forbidden crates), but construction alone is not an asserted contract — a
+//! future edit that inadvertently adds one would pass every other test. This file
+//! makes that contract machine-checked over BOTH shapes.
+
+use std::path::{Path, PathBuf};
 
 use ipe_backend::Backend;
-use ipe_backend_rust::RustBackend;
+use ipe_backend_rust::{RuntimeDep, RustBackend};
 use ipe_intern::Interner;
 use ipe_ir::{ModPath, Module, Program, Target};
 
@@ -68,130 +79,190 @@ fn minimal_wasm_program() -> (Program, Interner) {
     (program, interner)
 }
 
-fn emit_wasm_cargo_toml() -> String {
+/// Locate the runtime crate root (`src/runtime/rust`) by walking up from the
+/// crate manifest dir — the same in-repo resolution the driver performs, so the
+/// dependency-model emit gets a real resolvable `path`.
+#[allow(clippy::expect_used)]
+fn runtime_crate_root() -> PathBuf {
+    let mut here: Option<&Path> = Some(Path::new(env!("CARGO_MANIFEST_DIR")));
+    let found = std::iter::from_fn(|| {
+        let dir = here?;
+        here = dir.parent();
+        Some(dir.join("src").join("runtime").join("rust"))
+    })
+    .find(|candidate| candidate.join("Cargo.toml").is_file())
+    .expect("the ipe-runtime-rust crate root (src/runtime/rust) must resolve for the wasm floor");
+    found
+        .canonicalize()
+        .expect("runtime crate root canonicalizes")
+}
+
+/// The dependency-model wasm manifest — the DEFAULT `ipe build --target wasm`
+/// shape: the app crate declares the runtime as a path dependency feature-gated
+/// by the `wasm-client` floor.
+fn emit_wasm_dep_cargo_toml() -> String {
     let (program, interner) = minimal_wasm_program();
-    // A test precondition: a body-free wasm program must emit, and a failure
-    // here should fail the test at its source rather than mask a real breach in
-    // a downstream `contains` assertion.
+    #[allow(clippy::expect_used)] // emit-must-succeed is the test's precondition
+    RustBackend::new(&interner)
+        .with_target(Target::WasmClient)
+        .with_runtime_dep(Some(RuntimeDep {
+            root: runtime_crate_root(),
+        }))
+        .emit(&program)
+        .expect("emit must succeed for a body-free wasm dep-model program")
+        .cargo_toml
+}
+
+/// The vendored-fallback wasm manifest — the closed `WASM_CARGO_TOML` template
+/// with every dependency non-optional.
+fn emit_wasm_vendored_cargo_toml() -> String {
+    let (program, interner) = minimal_wasm_program();
     #[allow(clippy::expect_used)] // emit-must-succeed is the test's precondition
     RustBackend::new(&interner)
         .with_target(Target::WasmClient)
         .emit(&program)
-        .expect("emit must succeed for a body-free wasm program")
+        .expect("emit must succeed for a body-free wasm vendored program")
         .cargo_toml
 }
 
-/// The wasm manifest MUST name `wasm-bindgen` — without it the `cdylib`
-/// produces no JS glue and the browser cannot load the module.
+/// Strip `#`-comment lines so a feature/dep NAME mentioned in prose does not
+/// trigger a false positive in the forbidden-substring checks below.
+fn without_comments(toml: &str) -> String {
+    toml.lines()
+        .filter(|l| !l.trim_start().starts_with('#'))
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+/// Every wasm-forbidden server-side crate — none may appear in EITHER emitted
+/// manifest. `tokio`/`mio` need OS threads + epoll; `axum`/`sqlx`/`reqwest` pull
+/// them transitively. Their presence would break the `wasm32-unknown-unknown`
+/// build (THE SEAL) and, for `sqlx`/`reqwest`, link a credential path.
+const FORBIDDEN_CRATES: &[&str] = &["tokio", "axum", "sqlx", "reqwest"];
+
+/// The dep-model wasm manifest keeps `wasm-bindgen` (the `#[wasm_bindgen(start)]`
+/// entry macro the app references by path) and selects the runtime's
+/// `wasm-client` floor — the browser module set (and its glue crates: `web-sys`,
+/// `js-sys`, …) is pulled transitively by that feature, not declared in the app
+/// manifest.
 #[test]
-fn wasm_manifest_contains_wasm_bindgen() {
-    let cargo_toml = emit_wasm_cargo_toml();
+fn wasm_dep_manifest_keeps_wasm_bindgen_and_selects_wasm_client() {
+    let toml = emit_wasm_dep_cargo_toml();
     assert!(
-        cargo_toml.contains("wasm-bindgen"),
-        "wasm Cargo.toml must declare wasm-bindgen;\ngot:\n{cargo_toml}"
+        toml.contains("wasm-bindgen"),
+        "wasm dep-model Cargo.toml must declare wasm-bindgen (the entry macro);\ngot:\n{toml}"
+    );
+    assert!(
+        toml.contains("package = \"ipe-runtime-rust\""),
+        "wasm dep-model Cargo.toml must declare the ipe_runtime path dependency;\ngot:\n{toml}"
+    );
+    assert!(
+        toml.contains("\"wasm-client\""),
+        "wasm dep-model Cargo.toml must select the `wasm-client` floor feature;\ngot:\n{toml}"
     );
 }
 
-/// The wasm manifest MUST name `web-sys` — the DOM / browser API surface the
-/// runtime sink (`wasm/mod.rs`) calls.
+/// No server-side crate may appear in the dep-model wasm manifest — the app crate
+/// declares only the runtime + `wasm-bindgen` + `serde`, and the runtime's
+/// `wasm-client` feature graph excludes tokio/axum/sqlx/reqwest entirely.
 #[test]
-fn wasm_manifest_contains_web_sys() {
-    let cargo_toml = emit_wasm_cargo_toml();
-    assert!(
-        cargo_toml.contains("web-sys"),
-        "wasm Cargo.toml must declare web-sys;\ngot:\n{cargo_toml}"
-    );
-}
-
-/// `tokio` must never appear in the wasm manifest — it requires OS threads and
-/// the Mio epoll backend, neither of which exist in `wasm32-unknown-unknown`.
-/// Its presence would cause `cargo build --target wasm32-unknown-unknown` to
-/// fail, breaking THE SEAL.
-#[test]
-fn wasm_manifest_excludes_tokio() {
-    let cargo_toml = emit_wasm_cargo_toml();
-    assert!(
-        !cargo_toml.contains("tokio"),
-        "wasm Cargo.toml must not contain tokio (SEAL breach);\ngot:\n{cargo_toml}"
-    );
-}
-
-/// `axum` and `sqlx` depend on tokio and must equally be absent.
-#[test]
-fn wasm_manifest_excludes_axum_and_sqlx() {
-    let cargo_toml = emit_wasm_cargo_toml();
-    assert!(
-        !cargo_toml.contains("axum"),
-        "wasm Cargo.toml must not contain axum;\ngot:\n{cargo_toml}"
-    );
-    assert!(
-        !cargo_toml.contains("sqlx"),
-        "wasm Cargo.toml must not contain sqlx;\ngot:\n{cargo_toml}"
-    );
-}
-
-/// The `server`, `db`, and `live` runtime features must not be activated in
-/// the wasm manifest — they enable tokio-bound code paths in the runtime that
-/// do not compile to `wasm32-unknown-unknown`.
-///
-/// The check targets feature-declaration and default-activation patterns
-/// (`server = [`, `db = [`, `live = [`, `"server"` / `"db"` / `"live"` in the
-/// `default = […]` line) rather than bare name strings, so a comment that
-/// mentions the feature name (e.g. a `cfg(any(feature = "live", …))` prose
-/// line) does not trigger a false positive.
-#[test]
-fn wasm_manifest_excludes_server_db_web_features() {
-    let cargo_toml = emit_wasm_cargo_toml();
-    // A feature is *declared* with `<name> = [` and *activated* as a dep via
-    // `features = ["<name>"]` or the default list `default = ["…", "<name>"]`.
-    // Neither form must appear for the forbidden names.
-    for forbidden in ["server", "db", "live"] {
-        let declared = format!("{forbidden} = [");
-        // Activated in default or another feature list: `"server"`, `"db"`, `"live"`
-        // followed by `]` or `,` (i.e. actually listed as a feature value).
-        // We check both forms.
-        let activated_bracket = format!("\"{forbidden}\"");
-        // The comment prose in WASM_CARGO_TOML contains `feature = "live"` and
-        // `feature = "wasm-client"` — those are inside `# …` lines. Strip all
-        // comment lines before checking the activated form.
-        let toml_no_comments: String = cargo_toml
-            .lines()
-            .filter(|l| !l.trim_start().starts_with('#'))
-            .collect::<Vec<_>>()
-            .join("\n");
-
+fn wasm_dep_manifest_excludes_server_crates() {
+    let toml = without_comments(&emit_wasm_dep_cargo_toml());
+    for forbidden in FORBIDDEN_CRATES {
         assert!(
-            !toml_no_comments.contains(&declared),
-            "wasm Cargo.toml must not declare the '{forbidden}' feature;\ngot:\n{cargo_toml}"
-        );
-        assert!(
-            !toml_no_comments.contains(&activated_bracket),
-            "wasm Cargo.toml must not activate the '{forbidden}' feature;\ngot:\n{cargo_toml}"
+            !toml.contains(forbidden),
+            "wasm dep-model Cargo.toml must not contain `{forbidden}` (SEAL breach);\ngot:\n{toml}"
         );
     }
 }
 
-/// The emitted crate type must be `cdylib` — a native `bin` type cannot be
-/// loaded by the browser's WebAssembly runtime.
+/// The dep-model wasm manifest must not select any server-side runtime feature.
+/// The `wasm-client` floor is the ONLY feature the app selects; a drift that
+/// unioned `web`/`server`/`db` (their native tokio/axum backends) would break the
+/// wasm32 build.
 #[test]
-fn wasm_manifest_is_cdylib() {
-    let cargo_toml = emit_wasm_cargo_toml();
+fn wasm_dep_manifest_selects_only_the_wasm_floor() {
+    let toml = without_comments(&emit_wasm_dep_cargo_toml());
+    for forbidden in [
+        "\"server\"",
+        "\"web\"",
+        "\"db\"",
+        "\"async\"",
+        "\"http_client\"",
+    ] {
+        assert!(
+            !toml.contains(forbidden),
+            "wasm dep-model Cargo.toml must not select the {forbidden} feature (a native \
+             tokio/axum surface has no wasm denotation);\ngot:\n{toml}"
+        );
+    }
+}
+
+/// The emitted crate type must be `cdylib` — a native `bin` cannot be loaded by
+/// the browser's WebAssembly runtime.
+#[test]
+fn wasm_dep_manifest_is_cdylib() {
+    let toml = emit_wasm_dep_cargo_toml();
     assert!(
-        cargo_toml.contains("cdylib"),
-        "wasm Cargo.toml must declare crate-type = [\"cdylib\"];\ngot:\n{cargo_toml}"
+        toml.contains("cdylib"),
+        "wasm dep-model Cargo.toml must declare crate-type = [\"cdylib\"];\ngot:\n{toml}"
     );
 }
 
-/// The emitted manifest must detach from any ancestor workspace (`[workspace]`
-/// section with no members) so `cargo build --target wasm32-unknown-unknown`
-/// inside the emitted dir is hermetic even when the dir lives inside a larger
-/// workspace tree.
+/// The emitted manifest must detach from any ancestor workspace so `cargo build
+/// --target wasm32-unknown-unknown` inside the emitted dir is hermetic.
 #[test]
-fn wasm_manifest_detaches_from_workspace() {
-    let cargo_toml = emit_wasm_cargo_toml();
+fn wasm_dep_manifest_detaches_from_workspace() {
+    let toml = emit_wasm_dep_cargo_toml();
     assert!(
-        cargo_toml.contains("[workspace]"),
-        "wasm Cargo.toml must include a bare [workspace] section to detach from ancestor \
-         workspaces;\ngot:\n{cargo_toml}"
+        toml.contains("[workspace]"),
+        "wasm dep-model Cargo.toml must include a bare [workspace] section;\ngot:\n{toml}"
     );
+}
+
+// ── the vendored fallback keeps the same security floor ────────────────────
+
+/// The vendored fallback manifest MUST name `wasm-bindgen` and `web-sys` (both
+/// direct in the closed template) — without them the `cdylib` produces no JS glue
+/// and the runtime sink cannot reach the DOM.
+#[test]
+fn wasm_vendored_manifest_contains_glue_crates() {
+    let toml = emit_wasm_vendored_cargo_toml();
+    for want in ["wasm-bindgen", "web-sys"] {
+        assert!(
+            toml.contains(want),
+            "wasm vendored Cargo.toml must declare {want};\ngot:\n{toml}"
+        );
+    }
+}
+
+/// No server-side crate may appear in the vendored fallback manifest either.
+#[test]
+fn wasm_vendored_manifest_excludes_server_crates() {
+    let toml = without_comments(&emit_wasm_vendored_cargo_toml());
+    for forbidden in FORBIDDEN_CRATES {
+        assert!(
+            !toml.contains(forbidden),
+            "wasm vendored Cargo.toml must not contain `{forbidden}` (SEAL breach);\ngot:\n{toml}"
+        );
+    }
+}
+
+/// The `server`, `db`, and `live` runtime features must not be declared or
+/// activated in the vendored fallback manifest.
+#[test]
+fn wasm_vendored_manifest_excludes_server_db_web_features() {
+    let toml = without_comments(&emit_wasm_vendored_cargo_toml());
+    for forbidden in ["server", "db", "live"] {
+        let declared = format!("{forbidden} = [");
+        let activated = format!("\"{forbidden}\"");
+        assert!(
+            !toml.contains(&declared),
+            "wasm vendored Cargo.toml must not declare the '{forbidden}' feature;\ngot:\n{toml}"
+        );
+        assert!(
+            !toml.contains(&activated),
+            "wasm vendored Cargo.toml must not activate the '{forbidden}' feature;\ngot:\n{toml}"
+        );
+    }
 }

@@ -224,14 +224,15 @@ impl<'a> RustBackend<'a> {
         }
     }
 
-    /// Select the dependency-model emit (opt-in `IPE_RUNTIME_DEP` /
-    /// [`ipe_cli::BuildOptions::runtime_dep`]): the emitted native project
-    /// declares the runtime as a path dependency with a
-    /// [`runtime_features`]-selected feature list and vendors no runtime source.
-    /// `None` (the default) keeps the byte-identical vendored-source emit.
+    /// Select the dependency-model emit: the emitted project declares the runtime
+    /// as a path dependency with a [`runtime_features`]-selected feature list and
+    /// vendors no runtime source. `None` keeps the vendored-source emit.
     ///
-    /// No-op on the wasm target — its manifest is a closed template that keeps
-    /// vendoring for now (design §"Out of scope: the WASM target").
+    /// Applies to BOTH targets. The native project selects the reached native
+    /// features; the wasm project selects the `wasm-client` floor (which pulls
+    /// the whole closed browser module set + its glue crates transitively) plus
+    /// any browser-admissible surface it reaches — one emit model, no vendored
+    /// subtree on either target.
     #[must_use]
     pub fn with_runtime_dep(mut self, runtime_dep: Option<RuntimeDep>) -> Self {
         self.runtime_dep = runtime_dep;
