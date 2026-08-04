@@ -484,6 +484,64 @@ pub fn parse_run(rest: &[String]) -> Result<RunArgs, CliError> {
     })
 }
 
+/// Fully-parsed `ipe eject` arguments.
+pub struct EjectArgs {
+    /// The positional entry (`None` → project-aware default).
+    pub entry: Option<String>,
+    /// `--out <dir>` — where to write the self-contained project (required).
+    pub out: String,
+    /// `--runtime <dir>` — vendor the Ipê runtime source from here instead of
+    /// the resolved in-repo / installed tree.
+    pub runtime: Option<String>,
+}
+
+/// Parse `ipe eject`'s argument tail. `--out <dir>` is required: eject writes a
+/// whole standalone project, so there is no sensible in-place default the way a
+/// throwaway `ipe build` artifact has — the destination must be named. Each
+/// value flag is rejected on a second occurrence.
+///
+/// # Errors
+/// [`CliError::Usage`] / [`CliError::UsageOwned`] naming the exact problem,
+/// including a missing `--out`.
+pub fn parse_eject(rest: &[String]) -> Result<EjectArgs, CliError> {
+    let mut it = rest.iter().peekable();
+    let entry = take_leading_entry(&mut it);
+
+    let mut out: Option<String> = None;
+    let mut runtime: Option<String> = None;
+    while let Some(flag) = it.next() {
+        match flag.as_str() {
+            "--out" => set_once(
+                &mut out,
+                take_value(&mut it, "--out", "eject")?,
+                "--out",
+                "eject",
+            )?,
+            "--runtime" => set_once(
+                &mut runtime,
+                take_value(&mut it, "--runtime", "eject")?,
+                "--runtime",
+                "eject",
+            )?,
+            other => {
+                return Err(CliError::UsageOwned(format!(
+                    "ipe eject: unknown flag `{other}`"
+                )));
+            }
+        }
+    }
+
+    let out = out.ok_or(CliError::Usage(
+        "ipe eject: --out <dir> is required (the directory to write the standalone project to)",
+    ))?;
+
+    Ok(EjectArgs {
+        entry,
+        out,
+        runtime,
+    })
+}
+
 /// Fully-parsed `ipe watch` arguments.
 pub struct WatchArgs {
     /// The positional entry (`None` → project-aware default).
