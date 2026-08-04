@@ -13569,6 +13569,38 @@ impl<'a> Lowerer<'a> {
                         }));
                     }
                 }
+                // ── `succeed <fn-value>` fn-payload carrier normalization ──
+                //
+                // `decode_succeed` boxes its payload into a `Box<dyn Fn() -> A>`
+                // FACTORY that yields `A` on every run. When `A` is itself a
+                // FUNCTION whose lowered value is a `Box<dyn Fn>` leaf — a
+                // let-bound name, a field read, a call result (anything that is
+                // NOT an inline lambda or a bare top-level-function reference) —
+                // the emit `succeed` path would clone-forward that boxed fn, and
+                // `Box<dyn Fn>` is not `Clone` (E0599). The inline-lambda and
+                // bare-function-reference leaves already curry soundly at emit
+                // (they satisfy the `curry{n}` `Clone` bound), so they fall
+                // through untouched and stay byte-identical.
+                //
+                // Eta-expand every OTHER function-arrow leaf into an
+                // `Arc`-carried [`Expr::SharedLambda`] over the arrow's own
+                // params/ret — the `Arc` closure is built once (the boxed leaf
+                // is MOVED in, never cloned) and is itself `Clone`, so the emit
+                // `succeed` path can wrap it in the `curry{n}` factory soundly.
+                Callee::Kernel(
+                    KernelFn::JsonDecSucceed | KernelFn::DbDecSucceed | KernelFn::ConfigSucceed,
+                ) if args.len() == 1 => {
+                    if let Some(arg0) = args.first() {
+                        let lowered_arg = self.lower_expr(arg0)?;
+                        let normalized = self.eta_expand_succeed_fn_value(arg0, lowered_arg)?;
+                        return Ok(Intercepted::Done(Expr::Call {
+                            callee: peek,
+                            args: vec![normalized],
+                            pin: CallPin::None,
+                            on_form: OnFormKind::NotForm,
+                        }));
+                    }
+                }
                 _ => {}
             }
             // Any other callee: fall through to the uniform path, carrying
@@ -14232,6 +14264,82 @@ impl<'a> Lowerer<'a> {
             let sym = self.eta_params.get(offset).copied().ok_or_else(|| {
                 bug(
                     "ipe_lower::promote_ctor_arg_fn_carrier",
+                    "eta-parameter pool smaller than the payload arrow's arity",
+                )
+            })?;
+            fresh_params.push((sym, pty.clone()));
+            call_args.push(Expr::Var(sym));
+        }
+        Ok(Expr::SharedLambda {
+            params: fresh_params,
+            ret: *ret,
+            body: Box::new(Expr::Apply {
+                func: Box::new(callee),
+                args: call_args,
+            }),
+        })
+    }
+
+    /// Normalize the single argument of a `succeed` decoder kernel
+    /// (`Json.Decode.succeed` / `Db.Decode.succeed` / `Config.succeed`) whose
+    /// value is a FUNCTION that reaches emit as a non-`Clone` `Box<dyn Fn>` leaf.
+    ///
+    /// `decode_succeed` factory-wraps its payload into a `Box<dyn Fn() -> A>`
+    /// that reproduces `A` on every run, so the emit path curries a function
+    /// payload through the runtime `curry{n}`, whose `F: Fn(..) -> R + Clone`
+    /// bound a bare `Box<dyn Fn>` leaf cannot satisfy (E0599 on the emitted
+    /// `.clone()`). The two literal leaves emit soundly already — an inline
+    /// lambda ([`Expr::Lambda`]) and a bare top-level-function reference
+    /// ([`Expr::FuncValue`] over a direct arrow) both curry without a clone — so
+    /// they pass through unchanged and stay byte-identical.
+    ///
+    /// Every OTHER function-arrow leaf (a let-bound name, a field read, a call
+    /// result) is eta-expanded into an [`Expr::SharedLambda`] over the arrow's
+    /// own params/ret: `\eta_0 … eta_{n-1} -> (leaf)(eta_0, …)`. The `Arc`
+    /// closure is built once — the boxed leaf is MOVED in (a `Var`/`CloneVar`
+    /// leaf is rewritten to a plain `Var` so it is not clone-forwarded) and
+    /// called by shared reference — and an `Arc<dyn Fn>` value IS `Clone`, so
+    /// the emit `succeed` path wraps it in `curry{n}` soundly. A non-function
+    /// leaf, or one whose solved type is not a direct arrow, is left unchanged.
+    fn eta_expand_succeed_fn_value(&self, canon_arg: &canon::Expr, value: Expr) -> DResult<Expr> {
+        // The literal leaves that already curry soundly at emit stay untouched.
+        if matches!(
+            value,
+            Expr::Lambda { ref params, .. } if !params.is_empty()
+        ) || matches!(
+            value,
+            Expr::SharedLambda { ref params, .. } if !params.is_empty()
+        ) || matches!(
+            value,
+            Expr::FuncValue { ty: IrType::Fun(ref params, _), .. } if !params.is_empty()
+        ) {
+            return Ok(value);
+        }
+        // Only a DIRECT function arrow needs the fn-payload carrier flip; a
+        // non-function value (or a still-generic / collection-carried slot) is a
+        // plain payload and stays on its own carrier.
+        let Some(solved @ Ty::Fun(_, _)) = self.region_ty(canon_arg.span) else {
+            return Ok(value);
+        };
+        let IrType::Fun(params, ret) = self.ir_type_from_ty(solved, canon_arg.span)? else {
+            return Ok(value);
+        };
+        if params.is_empty() {
+            return Ok(value);
+        }
+        // A `Var`/`CloneVar` leaf is MOVED into the `Arc` (a `Box<dyn Fn>` is not
+        // `Clone`, so a clone-forward would be an E0599 inside the `Fn`
+        // wrapper); every other leaf is a fresh value forwarded as-is.
+        let callee = match value {
+            Expr::Var(s) | Expr::CloneVar(s) => Expr::Var(s),
+            other => other,
+        };
+        let mut fresh_params: Vec<(Symbol, IrType)> = Vec::with_capacity(params.len());
+        let mut call_args: Vec<Expr> = Vec::with_capacity(params.len());
+        for (offset, pty) in params.iter().enumerate() {
+            let sym = self.eta_params.get(offset).copied().ok_or_else(|| {
+                bug(
+                    "ipe_lower::eta_expand_succeed_fn_value",
                     "eta-parameter pool smaller than the payload arrow's arity",
                 )
             })?;
