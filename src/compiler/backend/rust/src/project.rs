@@ -50,6 +50,20 @@ const CARGO_TOML: &str = include_str!("../templates/Cargo.toml");
 /// pulled transitively by the selected features.
 const CARGO_DEP_TOML: &str = include_str!("../templates/Cargo.dep.toml");
 
+/// The dependency-model project `Cargo.toml` for the browser-WASM target. The
+/// wasm counterpart of [`CARGO_DEP_TOML`]: the runtime is the SAME `ipe_runtime`
+/// path dependency, feature-selected from the [`crate::runtime_features`] SSOT
+/// (whose `wasm-client` floor pulls the whole closed browser module set and its
+/// glue crates transitively). The two placeholders are substituted by
+/// [`dep_model_wasm_cargo_toml`]. Beyond the runtime it declares only the two
+/// crates the emitted wasm app code names BY PATH — `wasm-bindgen` (the
+/// `#[wasm_bindgen(start)]` entry macro) and `serde` (the TEA-type wire
+/// derives); `serde_json` is spliced in only for a `mode = "hydrate"` program
+/// (its `hydrate` export parses the island JSON). No `tokio`/`axum`/`sqlx`/
+/// `reqwest` and no server/db/web feature — the Layer-3 wasm security floor,
+/// enforced by construction and machine-checked by `tests/wasm_dep_floor.rs`.
+const CARGO_WASM_DEP_TOML: &str = include_str!("../templates/Cargo.wasm-dep.toml");
+
 /// The generated `ipe_runtime/mod.rs` — the curated set of runtime modules whose
 /// dependencies are satisfied by [`CARGO_TOML`]. The vendored runtime source
 /// ships a fuller `mod.rs` (declaring `uuid` / `web` / `db` / … modules that
@@ -1559,6 +1573,82 @@ fn toml_escape_basic(s: &str) -> String {
 /// — a drifted dep-model manifest template, surfaced loudly rather than emitting
 /// a manifest that names no runtime.
 fn dep_model_cargo_toml(ctx: &EmitCtx, dep: &crate::RuntimeDep) -> DResult<String> {
+    let mut manifest = substitute_dep_manifest_anchors(
+        CARGO_DEP_TOML,
+        ctx,
+        dep,
+        "ipe_backend_rust::project::dep_model_cargo_toml",
+    )?;
+    // A Ipe.Web program emits `#[derive(serde::Serialize, serde::Deserialize)]`
+    // on its Model / other serde-eligible types (see `emit_types`), so the APP
+    // crate references the `serde` crate by path. Under the dependency model the
+    // app crate depends only on `ipe_runtime`, whose `serde` is a private
+    // dependency not re-exported — so the app must declare its own `serde`.
+    // Pin + feature match the vendored `templates/Cargo.toml`. A non-web program
+    // emits no serde derive, so its manifest stays serde-free. Inserted right
+    // after the runtime dependency line, inside `[dependencies]`.
+    if ctx.uses_web {
+        manifest = insert_app_serde_dependency(&manifest)?;
+    }
+    Ok(manifest)
+}
+
+/// Render the dependency-model project `Cargo.toml` for the browser-WASM target:
+/// the [`CARGO_WASM_DEP_TOML`] user-crate template with the runtime crate root
+/// and the [`crate::runtime_features`] feature selection substituted in. The
+/// feature list carries the `wasm-client` floor (from the SSOT, since
+/// `ctx.target == WasmClient`) plus any browser-admissible surface the program
+/// reaches. The template already declares the two crates the emitted wasm app
+/// names by path (`wasm-bindgen`, `serde`); `serde_json` is spliced in only for
+/// a `mode = "hydrate"` program, whose `hydrate` export parses the island JSON
+/// via `serde_json::from_str`.
+///
+/// # Errors
+///
+/// Returns [`Diagnostic::CompilerBug`] if either template placeholder is absent,
+/// or (hydrate only) if the runtime dependency anchor line the `serde_json`
+/// splice keys on has drifted — each surfaced loudly rather than emitting a
+/// manifest that names no runtime or drops a referenced crate.
+fn dep_model_wasm_cargo_toml(ctx: &EmitCtx, dep: &crate::RuntimeDep) -> DResult<String> {
+    let mut manifest = substitute_dep_manifest_anchors(
+        CARGO_WASM_DEP_TOML,
+        ctx,
+        dep,
+        "ipe_backend_rust::project::dep_model_wasm_cargo_toml",
+    )?;
+    // The `mode = "hydrate"` second entry (`wasm_hydrate_entry`) parses the
+    // island blob with `serde_json::from_str` BY PATH, so a hydrate program's app
+    // crate must declare `serde_json`. A non-hydrate wasm app never names it (the
+    // runtime's own `serde_json`, behind the `json` feature `wasm-client` pulls,
+    // stays private), so its manifest stays serde_json-free.
+    if ctx.wasm_hydrate_mode {
+        manifest = insert_app_serde_json_dependency(&manifest)?;
+    }
+    Ok(manifest)
+}
+
+/// Substitute the `__IPE_RUNTIME_PATH__` / `__IPE_RUNTIME_FEATURES__` anchors in
+/// a dependency-model manifest `template` with the resolved runtime crate root
+/// and the [`crate::runtime_features`] SSOT selection for `ctx`. Shared by the
+/// native ([`dep_model_cargo_toml`]) and wasm ([`dep_model_wasm_cargo_toml`])
+/// renderers so the anchor contract has ONE definition.
+///
+/// The feature list is the SSOT image — the ONLY authority for which runtime
+/// features a program selects — rendered as a quoted, comma-separated list in the
+/// crate's canonical order. The join is correct for any arity (no trailing
+/// comma), including the empty native selection.
+///
+/// # Errors
+///
+/// Returns [`Diagnostic::CompilerBug`] (tagged `where_`) if either placeholder is
+/// absent from `template` — a drifted manifest template, surfaced loudly rather
+/// than emitting a manifest that names no runtime.
+fn substitute_dep_manifest_anchors(
+    template: &str,
+    ctx: &EmitCtx,
+    dep: &crate::RuntimeDep,
+    where_: &'static str,
+) -> DResult<String> {
     const PATH_ANCHOR: &str = "__IPE_RUNTIME_PATH__";
     const FEATURES_ANCHOR: &str = "__IPE_RUNTIME_FEATURES__";
 
@@ -1576,33 +1666,21 @@ fn dep_model_cargo_toml(ctx: &EmitCtx, dep: &crate::RuntimeDep) -> DResult<Strin
     let path_forward = dep.root.to_string_lossy().replace('\\', "/");
     let path_escaped = toml_escape_basic(&path_forward);
 
-    if !CARGO_DEP_TOML.contains(PATH_ANCHOR) {
+    if !template.contains(PATH_ANCHOR) {
         return Err(Diagnostic::CompilerBug {
-            where_: "ipe_backend_rust::project::dep_model_cargo_toml",
+            where_,
             detail: format!("dep-model manifest template lost the {PATH_ANCHOR:?} anchor"),
         });
     }
-    if !CARGO_DEP_TOML.contains(FEATURES_ANCHOR) {
+    if !template.contains(FEATURES_ANCHOR) {
         return Err(Diagnostic::CompilerBug {
-            where_: "ipe_backend_rust::project::dep_model_cargo_toml",
+            where_,
             detail: format!("dep-model manifest template lost the {FEATURES_ANCHOR:?} anchor"),
         });
     }
-    let mut manifest = CARGO_DEP_TOML
+    Ok(template
         .replace(PATH_ANCHOR, &path_escaped)
-        .replace(FEATURES_ANCHOR, &feature_list);
-    // A Ipe.Web program emits `#[derive(serde::Serialize, serde::Deserialize)]`
-    // on its Model / other serde-eligible types (see `emit_types`), so the APP
-    // crate references the `serde` crate by path. Under the dependency model the
-    // app crate depends only on `ipe_runtime`, whose `serde` is a private
-    // dependency not re-exported — so the app must declare its own `serde`.
-    // Pin + feature match the vendored `templates/Cargo.toml`. A non-web program
-    // emits no serde derive, so its manifest stays serde-free. Inserted right
-    // after the runtime dependency line, inside `[dependencies]`.
-    if ctx.uses_web {
-        manifest = insert_app_serde_dependency(&manifest)?;
-    }
-    Ok(manifest)
+        .replace(FEATURES_ANCHOR, &feature_list))
 }
 
 /// Insert the app-crate `serde` dependency (version + `derive` feature identical
@@ -1644,6 +1722,46 @@ fn insert_app_serde_dependency(manifest: &str) -> DResult<String> {
     Ok(out)
 }
 
+/// Insert the app-crate `serde_json` dependency immediately after the
+/// `ipe_runtime` line in the wasm dep-model manifest's `[dependencies]` table.
+/// Used only for a `mode = "hydrate"` wasm program, whose emitted `hydrate`
+/// export parses the island JSON with `serde_json::from_str` BY PATH — the
+/// runtime's own `serde_json` (behind the `json` feature `wasm-client` pulls)
+/// stays a private, non-re-exported dependency.
+///
+/// # Errors
+///
+/// Returns [`Diagnostic::CompilerBug`] if the runtime dependency line is absent
+/// — a drifted dep-model template, surfaced loudly rather than emitting a
+/// manifest whose `[dependencies]` silently lacks the anchor line.
+fn insert_app_serde_json_dependency(manifest: &str) -> DResult<String> {
+    const RUNTIME_DEP_ANCHOR: &str = "ipe_runtime = { package = \"ipe-runtime-rust\"";
+    const SERDE_JSON_DEP_LINE: &str = "serde_json = \"1\"";
+    let Some(anchor_start) = manifest.find(RUNTIME_DEP_ANCHOR) else {
+        return Err(Diagnostic::CompilerBug {
+            where_: "ipe_backend_rust::project::insert_app_serde_json_dependency",
+            detail: format!(
+                "wasm dep-model manifest lost the runtime dependency line \
+                 (anchor {RUNTIME_DEP_ANCHOR:?}) — cannot place the app `serde_json` dep"
+            ),
+        });
+    };
+    let Some(rel_eol) = manifest[anchor_start..].find('\n') else {
+        return Err(Diagnostic::CompilerBug {
+            where_: "ipe_backend_rust::project::insert_app_serde_json_dependency",
+            detail: "wasm dep-model manifest runtime dependency line has no terminating newline"
+                .to_owned(),
+        });
+    };
+    let insert_at = anchor_start + rel_eol + 1;
+    let mut out = String::with_capacity(manifest.len() + SERDE_JSON_DEP_LINE.len() + 1);
+    out.push_str(&manifest[..insert_at]);
+    out.push_str(SERDE_JSON_DEP_LINE);
+    out.push('\n');
+    out.push_str(&manifest[insert_at..]);
+    Ok(out)
+}
+
 /// Render the per-project `env_public` module for the dependency model as a
 /// USER-crate module (`src/ipe_env_public.rs`), declared + re-exported from
 /// `main.rs`. Byte-identical to [`render_env_public_rs`] except the one runtime
@@ -1668,33 +1786,171 @@ fn rewrite_runtime_paths_for_dep(src: &str) -> String {
     src.replace("crate::ipe_runtime::", "ipe_runtime::")
 }
 
+/// The wasm files shared by both emit models: the target-scoped `.cargo/config`
+/// (so a host mold/native-linker `build.rustflags` cannot leak into the wasm32
+/// link) and the static browser shell (`index.html` + `boot.js`). The
+/// wasm-bindgen CLI drops the JS glue + `.wasm` beside them under `www/pkg/`.
+///
+/// # Errors
+///
+/// Returns a [`Diagnostic`] only if a fixed [`RelPath`] fails validation — a
+/// compiler bug, never a program property.
+fn insert_wasm_shared_files(files: &mut BTreeMap<RelPath, String>) -> DResult<()> {
+    // Host/global cargo configs may carry native-linker rustflags (e.g. mold),
+    // which rust-lld rejects for wasm32. A target-scoped set here takes
+    // precedence — and it must be NON-empty (cargo treats an empty array as unset
+    // and falls back to `build.rustflags`).
+    files.insert(
+        RelPath::new(".cargo/config.toml")?,
+        "[target.wasm32-unknown-unknown]\n\
+         # Non-empty on purpose: an empty array would not override a host\n\
+         # config's native `build.rustflags` (e.g. a mold link-arg).\n\
+         rustflags = [\"-C\", \"debuginfo=0\"]\n"
+            .to_owned(),
+    );
+    // The static browser shell (CSP: `script-src 'self' 'wasm-unsafe-eval'` —
+    // wasm instantiation allowed, JS eval not; boot module external so no inline
+    // allowance is needed).
+    files.insert(
+        RelPath::new("www/index.html")?,
+        "<!doctype html>\n<html>\n<head>\n<meta charset=\"utf-8\">\n\
+         <meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">\n\
+         <meta http-equiv=\"Content-Security-Policy\" content=\"default-src 'self'; \
+         script-src 'self' 'wasm-unsafe-eval'; style-src 'self' 'unsafe-inline'; \
+         connect-src 'self'\">\n\
+         <title>Ip\u{ea} App</title>\n</head>\n<body>\n\
+         <script type=\"module\" src=\"./boot.js\"></script>\n</body>\n</html>\n"
+            .to_owned(),
+    );
+    files.insert(
+        RelPath::new("www/boot.js")?,
+        "import init from \"./pkg/ipe_app.js\";\ninit();\n".to_owned(),
+    );
+    Ok(())
+}
+
+/// Drop the crate-root `pub mod ipe_runtime;` (the vendored-source declaration)
+/// from `src/main.rs` for the dependency model, where the runtime is an extern
+/// crate reached through the prelude. The following `pub use ipe_runtime::*;`
+/// line — and every `ipe_runtime::…` path in generated code — then resolves
+/// against the extern crate unchanged. Shared by the native and wasm dep-model
+/// branches.
+///
+/// # Errors
+///
+/// Returns [`Diagnostic::CompilerBug`] if `src/main.rs` is absent from the file
+/// set, or if the `pub mod ipe_runtime;` line the drop keys on is absent — a
+/// drifted emit template, surfaced loudly.
+fn drop_vendored_runtime_module_decl(files: &mut BTreeMap<RelPath, String>) -> DResult<()> {
+    let main = files
+        .get_mut("src/main.rs")
+        .ok_or_else(|| Diagnostic::CompilerBug {
+            where_: "ipe_backend_rust::project::drop_vendored_runtime_module_decl",
+            detail: "no src/main.rs in the assembled file set".to_owned(),
+        })?;
+    let dropped = main.replacen("pub mod ipe_runtime;\n", "", 1);
+    if dropped == *main {
+        return Err(Diagnostic::CompilerBug {
+            where_: "ipe_backend_rust::project::drop_vendored_runtime_module_decl",
+            detail: "dep-model emit expected `pub mod ipe_runtime;` in the preamble to drop, but \
+                     it was absent — the emit template drifted"
+                .to_owned(),
+        });
+    }
+    *main = dropped;
+    Ok(())
+}
+
+/// Relocate `env_public` to a user-crate module (`src/ipe_env_public.rs`) for the
+/// dependency model, declared + glob-re-exported from `main.rs` right after the
+/// runtime re-export. Its one runtime import is retargeted to the extern crate.
+/// Shared by the native and wasm dep-model branches.
+///
+/// # Errors
+///
+/// Returns [`Diagnostic::CompilerBug`] if `src/main.rs` is absent, or if the
+/// `pub use ipe_runtime::*;` anchor the re-export injects after is absent — a
+/// drifted emit template, surfaced loudly.
+fn relocate_env_public_to_user_crate(
+    files: &mut BTreeMap<RelPath, String>,
+    public_env: &[String],
+) -> DResult<()> {
+    files.insert(
+        RelPath::new("src/ipe_env_public.rs")?,
+        render_env_public_user_rs(public_env),
+    );
+    let main = files
+        .get_mut("src/main.rs")
+        .ok_or_else(|| Diagnostic::CompilerBug {
+            where_: "ipe_backend_rust::project::relocate_env_public_to_user_crate",
+            detail: "no src/main.rs in the assembled file set".to_owned(),
+        })?;
+    // Declared + glob-re-exported at the crate root right after the runtime
+    // re-export, so `env_public(key)` (an unqualified call in generated code,
+    // resolved via `pub use ipe_runtime::*` in the vendored model) stays in scope
+    // on both the single-file and split paths (the latter's module files see it
+    // via `use crate::*`).
+    let anchor = "pub use ipe_runtime::*;\n";
+    let barrel = "pub use ipe_runtime::*;\nmod ipe_env_public;\npub use ipe_env_public::*;\n";
+    let injected = main.replacen(anchor, barrel, 1);
+    if injected == *main {
+        return Err(Diagnostic::CompilerBug {
+            where_: "ipe_backend_rust::project::relocate_env_public_to_user_crate",
+            detail: "dep-model env_public relocation expected the `pub use ipe_runtime::*;` anchor \
+                     in main.rs — the emit template drifted"
+                .to_owned(),
+        });
+    }
+    *main = injected;
+    Ok(())
+}
+
 #[allow(clippy::too_many_lines)] // one linear manifest/runtime assembly pass
 fn assemble_project_files(
     ctx: &EmitCtx,
     rust_sources: Vec<(RelPath, String)>,
 ) -> DResult<EmittedProject> {
-    // ── Browser-WASM branch: fixed manifest + module set ─────────────────────
-    // The wasm manifest/runtime shape is a closed template (Layer 3 of the
-    // security gate: no tokio/axum/sqlx/TLS to link a credential through), so
-    // none of the native manifest surgeries below apply.
+    // ── Browser-WASM branch ──────────────────────────────────────────────────
+    // Both wasm models share the closed Layer-3 security floor (no
+    // tokio/axum/sqlx/TLS to link a credential through) and the static browser
+    // shell; they differ only in whether the runtime is a path dependency
+    // (`runtime_dep` set — the unified model) or a vendored source subtree.
     if ctx.target == ipe_ir::Target::WasmClient {
         assert_wasm_admissible(ctx)?;
         let mut files = BTreeMap::new();
         for (path, text) in rust_sources {
+            // Under the dependency model the runtime is an extern crate reached
+            // through the prelude, so the one emitted `crate::ipe_runtime::…`
+            // reference is retargeted to `ipe_runtime::…`; the vendored model
+            // keeps the byte-identical `crate::ipe_runtime::…` form.
+            let text = if ctx.runtime_dep.is_some() {
+                rewrite_runtime_paths_for_dep(&text)
+            } else {
+                text
+            };
             files.insert(path, text);
         }
-        // Host/global cargo configs may carry native-linker rustflags (e.g.
-        // mold), which rust-lld rejects for wasm32. A target-scoped set here
-        // takes precedence — and it must be NON-empty (cargo treats an empty
-        // array as unset and falls back to `build.rustflags`).
-        files.insert(
-            RelPath::new(".cargo/config.toml")?,
-            "[target.wasm32-unknown-unknown]\n\
-             # Non-empty on purpose: an empty array would not override a host\n\
-             # config's native `build.rustflags` (e.g. a mold link-arg).\n\
-             rustflags = [\"-C\", \"debuginfo=0\"]\n"
-                .to_owned(),
-        );
+        insert_wasm_shared_files(&mut files)?;
+
+        if let Some(dep) = ctx.runtime_dep.clone() {
+            // Dependency model: the runtime is a real path dependency selected by
+            // the SSOT `wasm-client` floor (+ any browser-admissible surface),
+            // built for wasm32 by cargo — no vendored `src/ipe_runtime/` tree.
+            // The crate-root `pub mod ipe_runtime;` (vendored-source declaration)
+            // is dropped; `pub use ipe_runtime::*;` and every `ipe_runtime::…`
+            // path resolve against the extern crate. `env_public` moves to a
+            // user-crate module, matching the native dep-model relocation.
+            let cargo_toml = dep_model_wasm_cargo_toml(ctx, &dep)?;
+            drop_vendored_runtime_module_decl(&mut files)?;
+            if ctx.uses_env_public {
+                relocate_env_public_to_user_crate(&mut files, &ctx.wasm_public_env)?;
+            }
+            return Ok(EmittedProject { files, cargo_toml });
+        }
+
+        // Vendored model: the trimmed runtime module subtree is emitted into the
+        // app crate, and the closed vendored manifest carries every dependency
+        // non-optional.
         let wasm_mod_rs = if ctx.uses_env_public {
             let mut m = WASM_RUNTIME_MOD_RS.to_owned();
             m.push_str(RUNTIME_MOD_RS_ENV_PUBLIC_APPEND);
@@ -1713,25 +1969,6 @@ fn assemble_project_files(
                 render_env_public_rs(&ctx.wasm_public_env),
             );
         }
-        // The static browser shell (CSP: `script-src 'self' 'wasm-unsafe-eval'`
-        // — wasm instantiation allowed, JS eval not; boot module external so
-        // no inline allowance is needed). The wasm-bindgen CLI drops the
-        // bundle beside them under `www/pkg/`.
-        files.insert(
-            RelPath::new("www/index.html")?,
-            "<!doctype html>\n<html>\n<head>\n<meta charset=\"utf-8\">\n\
-             <meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">\n\
-             <meta http-equiv=\"Content-Security-Policy\" content=\"default-src 'self'; \
-             script-src 'self' 'wasm-unsafe-eval'; style-src 'self' 'unsafe-inline'; \
-             connect-src 'self'\">\n\
-             <title>Ip\u{ea} App</title>\n</head>\n<body>\n\
-             <script type=\"module\" src=\"./boot.js\"></script>\n</body>\n</html>\n"
-                .to_owned(),
-        );
-        files.insert(
-            RelPath::new("www/boot.js")?,
-            "import init from \"./pkg/ipe_app.js\";\ninit();\n".to_owned(),
-        );
         // Ipe.Time IANA-zone surface: same gate as the native path — the wasm
         // `time` module is always present, its zone helpers behind the `time`
         // feature. Promote the feature + re-inject `chrono-tz` only for a Time
@@ -1768,57 +2005,12 @@ fn assemble_project_files(
         // dropped; the following `pub use ipe_runtime::*;` line — and every
         // `ipe_runtime::…` path in generated code — resolves against the extern
         // crate unchanged.
-        {
-            let main = files
-                .get_mut("src/main.rs")
-                .ok_or_else(|| Diagnostic::CompilerBug {
-                    where_: "ipe_backend_rust::project::assemble_project_files",
-                    detail: "no src/main.rs in the assembled file set".to_owned(),
-                })?;
-            let dropped = main.replacen("pub mod ipe_runtime;\n", "", 1);
-            if dropped == *main {
-                return Err(Diagnostic::CompilerBug {
-                    where_: "ipe_backend_rust::project::assemble_project_files",
-                    detail: "dep-model emit expected `pub mod ipe_runtime;` in the preamble to \
-                             drop, but it was absent — the emit template drifted"
-                        .to_owned(),
-                });
-            }
-            *main = dropped;
-        }
+        drop_vendored_runtime_module_decl(&mut files)?;
         // `env_public` is per-project code, so under the dep model it belongs in
         // the user crate (`src/ipe_env_public.rs`), declared + re-exported from
         // `main.rs`. Its one runtime import is retargeted to the extern crate.
         if ctx.uses_env_public {
-            files.insert(
-                RelPath::new("src/ipe_env_public.rs")?,
-                render_env_public_user_rs(&ctx.wasm_public_env),
-            );
-            let main = files
-                .get_mut("src/main.rs")
-                .ok_or_else(|| Diagnostic::CompilerBug {
-                    where_: "ipe_backend_rust::project::assemble_project_files",
-                    detail: "no src/main.rs in the assembled file set".to_owned(),
-                })?;
-            // Declared + glob-re-exported at the crate root right after the
-            // runtime re-export, so `env_public(key)` (an unqualified call in
-            // generated code, resolved via `pub use ipe_runtime::*` in the
-            // vendored model) stays in scope on both the single-file and split
-            // paths (the latter's module files see it via `use crate::*`).
-            let anchor = "pub use ipe_runtime::*;\n";
-            let barrel =
-                "pub use ipe_runtime::*;\nmod ipe_env_public;\npub use ipe_env_public::*;\n";
-            let injected = main.replacen(anchor, barrel, 1);
-            if injected == *main {
-                return Err(Diagnostic::CompilerBug {
-                    where_: "ipe_backend_rust::project::assemble_project_files",
-                    detail: "dep-model env_public relocation expected the \
-                             `pub use ipe_runtime::*;` anchor in main.rs — the emit template \
-                             drifted"
-                        .to_owned(),
-                });
-            }
-            *main = injected;
+            relocate_env_public_to_user_crate(&mut files, &ctx.wasm_public_env)?;
         }
         // FFI wrappers are user-project code in BOTH models — the wrapper module
         // + its `mod ffi;` declaration ride the emitted crate unchanged.

@@ -599,14 +599,16 @@ pub struct BuildOptions {
     /// development-only `Debug.*` escape hatch (IPE-L0140). Default `false`
     /// (a development build).
     pub production: bool,
-    /// `true` (the DEFAULT for a native build) selects the dependency-model
-    /// emit: the emitted native project declares the runtime as a path
-    /// dependency with a `runtime_features`-selected feature list and vendors no
-    /// runtime source. `false` opts back into the byte-identical vendored-source
-    /// emit — the fallback for debugging / a machine without an installed
-    /// runtime crate — set via `IPE_RUNTIME_VENDORED=1` (or directly by a test).
-    /// No effect on the wasm target (its manifest is a closed vendoring template
-    /// for now — its emit returns before the dependency-model branch).
+    /// `true` (the DEFAULT) selects the dependency-model emit: the emitted
+    /// project declares the runtime as a path dependency with a
+    /// `runtime_features`-selected feature list and vendors no runtime source.
+    /// Applies to BOTH targets — a native project selects the reached native
+    /// features; a wasm project selects the `wasm-client` floor plus any
+    /// browser-admissible surface it reaches, built for
+    /// `wasm32-unknown-unknown`. `false` opts back into the byte-identical
+    /// vendored-source emit — the fallback for debugging / a machine without an
+    /// installed runtime crate — set via `IPE_RUNTIME_VENDORED=1` (or directly by
+    /// a test).
     pub runtime_dep: bool,
 }
 
@@ -1109,8 +1111,10 @@ fn compile_modules_observed(
     // Resolve the dependency-model runtime crate ONCE, fail-closed: if the
     // opt-in is set but no verified `ipe-runtime-rust` crate root is found, the
     // build refuses loudly here rather than falling back to a vendored — or
-    // worse, a wrong — runtime. Native only (wasm keeps its vendored template).
-    let runtime_dep = if options.runtime_dep && options.target == ipe_ir::Target::Native {
+    // worse, a wrong — runtime. Native and wasm share the ONE dependency model
+    // (the wasm emit selects the crate's `wasm-client` floor + reached surface,
+    // built for `wasm32-unknown-unknown`).
+    let runtime_dep = if options.runtime_dep {
         match runtime_embed::resolve() {
             Ok(resolved) => Some(ipe_backend_rust::RuntimeDep {
                 root: resolved.root().to_path_buf(),
@@ -2443,9 +2447,10 @@ fn run_build(rest: &[String]) -> Result<(), CliError> {
     // Precedence: CLI --target wasm > IPE_TARGET=wasm > [wasm].mode != "off".
     let wasm_target = resolve_wasm_target(wasm_target, manifest_wasm.as_ref());
 
-    // The dep-model native emit needs no vendored tree; wasm and dep-off do.
+    // The dependency model (native OR wasm) needs no vendored tree — the runtime
+    // is a path dependency. Only a dep-model-OFF build vendors the source subtree.
     let runtime_dep = runtime_dep_from_env();
-    let runtime_dir = resolve_vendored_runtime_dir(args.runtime, wasm_target || !runtime_dep)?;
+    let runtime_dir = resolve_vendored_runtime_dir(args.runtime, !runtime_dep)?;
 
     let static_plan = resolve_static_plan(cli_layer, manifest.as_deref())?;
     let options = BuildOptions {
@@ -2602,9 +2607,18 @@ fn bundle_wasm(out_dir: &Path) -> Result<(), CliError> {
     cargo
         .args(["build", "--target", "wasm32-unknown-unknown", "--release"])
         .current_dir(out_dir);
-    // The wasm build uses the vendored runtime template, not the dependency-model
-    // crate, so no `RuntimeContext` is attached.
-    build_emitted_project(&mut cargo, "the emitted wasm program", None, out_dir)?;
+    // The wasm build uses the SAME dependency-model runtime crate the native path
+    // does (selected via the `wasm-client` floor). Attach the resolved runtime
+    // context so a `cargo build` failure that names a missing runtime feature can
+    // point at the exact crate; resolution failure degrades to `None` (message
+    // enrichment only, never a gate — the missing-path-dependency error cargo
+    // itself raises is already fail-closed).
+    build_emitted_project(
+        &mut cargo,
+        "the emitted wasm program",
+        runtime_context_for_message(),
+        out_dir,
+    )?;
 
     // Step 2: wasm-bindgen — locate the .wasm the cargo build just produced
     // (`CARGO_TARGET_DIR` may relocate it; probe the env var first, then the
@@ -2734,9 +2748,10 @@ fn run_run(rest: &[String]) -> Result<(), CliError> {
     // exec). A plain `ipe run` in a non-wasm project stays native.
     let wasm_target = resolve_wasm_target(false, manifest_wasm.as_ref());
 
-    // The dep-model native emit needs no vendored tree; wasm and dep-off do.
+    // The dependency model (native OR wasm) needs no vendored tree — the runtime
+    // is a path dependency. Only a dep-model-OFF build vendors the source subtree.
     let runtime_dep = runtime_dep_from_env();
-    let runtime_dir = resolve_vendored_runtime_dir(args.runtime, wasm_target || !runtime_dep)?;
+    let runtime_dir = resolve_vendored_runtime_dir(args.runtime, !runtime_dep)?;
 
     // Fail closed before emitting: `ipe run` shells out to cargo to build the
     // emitted project, so a missing toolchain is a clear root-cause error now,

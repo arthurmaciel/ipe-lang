@@ -137,6 +137,16 @@ pub enum RuntimeFeature {
     /// `jwt` — the JWT encode/decode surface, `jsonwebtoken` (`reaches_jwt()`:
     /// a JWT kernel or the `Ipe.Auth` surface). Implies `json` + `crypto`.
     Jwt,
+    /// `wasm-client` — the browser-WASM TEA sink (`src/wasm/`): the closed wasm
+    /// module floor. Selected ONLY on [`ipe_ir::Target::WasmClient`]. It is the
+    /// wasm target's fail-closed floor: the feature transitively pulls the whole
+    /// proven wasm module set (`json` → `serde`, `crypto-core`, `secret`, `url`,
+    /// `encoding`, `regex`, `uuid`, `random`, `log`, `time`, `decimal`,
+    /// `char-category`), so a wasm program selects it plus whatever additional
+    /// browser-admissible surface it reaches (`websocket_client`, `time`). Never
+    /// selected on a native target — the `wasm` runtime module is target-cfg'd to
+    /// `wasm32`, so a native crate that enabled it would fail to link.
+    WasmClient,
 }
 
 impl RuntimeFeature {
@@ -171,6 +181,7 @@ impl RuntimeFeature {
             Self::Secret => "secret",
             Self::Crypto => "crypto",
             Self::Jwt => "jwt",
+            Self::WasmClient => "wasm-client",
         }
     }
 }
@@ -197,6 +208,34 @@ impl RuntimeFeatureSet {
 /// emitter can never disagree once the emit path reads this (the closure SEAL
 /// enforces that the referenced modules are covered).
 pub fn runtime_features(ctx: &EmitCtx) -> RuntimeFeatureSet {
+    // Browser-WASM: the feature set is EXACTLY the `wasm-client` floor — nothing
+    // unioned. This is the genuine wasm-specific divergence from the native
+    // reachability map, and it is sound BY CONSTRUCTION:
+    //
+    //   • `wasm-client` is the closed, SSOT-declared browser floor. It
+    //     transitively pulls the whole wasm module set (`json` → `serde`, `url`,
+    //     `encoding`, `crypto-core`, `secret`, `regex`, `uuid`, `random`, `log`,
+    //     `time`, `decimal`, `char-category`) and its browser-glue crates, so it
+    //     already covers every kernel a wasm program can reach.
+    //   • The native surface features (`web`/`server`/`http_client`/`async`/
+    //     `websocket_client`/…) map to the tokio/axum/reqwest/tokio-tungstenite
+    //     stacks, NONE of which compile to `wasm32-unknown-unknown`. Their browser
+    //     denotations are the `cfg(target_arch = "wasm32")` arms INSIDE the
+    //     `wasm-client` module set (the `web_sys::WebSocket` WS substitute, the
+    //     `fetch` HTTP arm, the in-tab pubsub broker), reached WITHOUT their
+    //     native feature. Selecting a native surface feature here would link a
+    //     tokio backend and break the wasm build (mio has no wasm32 backend).
+    //
+    // `assert_wasm_admissible` already rejected every non-browser surface
+    // upstream, so a wasm program can only reach the browser sink — which the
+    // floor covers. This is fail-closed: the floor is always the full wasm set,
+    // never a narrowed subset that could drop a reached module.
+    if ctx.target == ipe_ir::Target::WasmClient {
+        let mut set = BTreeSet::new();
+        set.insert(RuntimeFeature::WasmClient);
+        return RuntimeFeatureSet(set);
+    }
+
     let mut set = BTreeSet::new();
 
     // JSON codec (`serde_json`, and via `json = […, "serde"]` the serde stack).
@@ -641,6 +680,7 @@ mod tests {
             RuntimeFeature::CharCategory,
             RuntimeFeature::Crypto,
             RuntimeFeature::Jwt,
+            RuntimeFeature::WasmClient,
         ];
         let mut seen = std::collections::BTreeSet::new();
         for f in all {
