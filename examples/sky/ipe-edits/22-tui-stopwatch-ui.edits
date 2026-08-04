@@ -1,0 +1,27 @@
+# The full-screen TUI shape is `Ipe.Tea.Terminal.appScreen`: upstream Sky's
+# `Std.Tui` full-screen TEA backend is the Terminal shape's screen entry. The
+# `Std.` -> `Ipe.` prefix rewrite lands on the removed `Ipe.Tui`; requalify the
+# import onto `Ipe.Tea.Terminal` and call the shipped `appScreen` entry. The cfg
+# record already matches `appScreen` (view : Model -> Element Msg, onKey).
+
+[[edit]]
+file: src/Main.ipe
+find:
+"""
+import Ipe.Tui as Tui
+"""
+replace:
+"""
+import Ipe.Tea.Terminal as Terminal
+"""
+
+[[edit]]
+file: src/Main.ipe
+find:
+"""
+    Tui.app
+"""
+replace:
+"""
+    Terminal.appScreen
+"""
