@@ -1366,7 +1366,9 @@ fn build_task_seq_sync(
     generics: GenericScope,
 ) -> DResult<Doc> {
     let rest_captures = free_vars(rest);
-    let effect_rw = clone_targets_in_expr(effect.clone(), &rest_captures);
+    let row_binders: std::collections::BTreeSet<Symbol> =
+        generics.row_binders().iter().copied().collect();
+    let effect_rw = clone_targets_in_expr(effect.clone(), &rest_captures, &row_binders);
     let effect_doc = build_doc(ctx, &effect_rw, indent, child, generics)?;
     let rest_doc = build_doc(ctx, rest, indent, child, generics)?;
     Ok(Doc::concat(vec![
@@ -1414,7 +1416,9 @@ fn build_task_seq(
     generics: GenericScope,
 ) -> DResult<Doc> {
     let rest_captures = free_vars(rest);
-    let effect_rw = clone_targets_in_expr(effect.clone(), &rest_captures);
+    let row_binders: std::collections::BTreeSet<Symbol> =
+        generics.row_binders().iter().copied().collect();
+    let effect_rw = clone_targets_in_expr(effect.clone(), &rest_captures, &row_binders);
     let effect_doc = build_doc(ctx, &effect_rw, indent, child, generics)?;
     let rest_doc = build_doc(ctx, rest, indent, child, generics)?;
     // The continuation `Box::new(move |_| <brace-body>[rest])`: the closure body's
@@ -4043,5 +4047,57 @@ mod tests {
             let doc = build_doc(ctx, &expr, 0, 0, scope).expect("build_doc");
             assert_eq!(render(&doc, RenderConfig::default()), "IpeMaybe::Just(a)");
         });
+    }
+
+    /// The emit-time capture-clone invariant: a row-generic value only ever
+    /// reaches emission as `Access { record: Var(row) }`. Cloning the captures of
+    /// a continuation must NOT rewrite a row-generic Access receiver to a
+    /// `CloneVar` — the witness getter borrows, so the whole-row clone is
+    /// spurious AND unroutable (the Access emitter routes `Var` alone). Rewriting
+    /// it would emit a raw struct-field read on the opaque `R{n}` generic (E0609
+    /// — the exit-0-then-cargo-fail class this seal closes).
+    #[test]
+    fn clone_capture_leaves_row_access_receiver_a_var() {
+        let fx = fixture();
+        let row = sym(&fx, 0); // `a` stands in for the row binder `rec`.
+        let field = sym(&fx, 1); // `b` stands in for the read field `name`.
+        let row_binders: std::collections::BTreeSet<ipe_intern::Symbol> =
+            std::iter::once(row).collect();
+        // `rec` is captured by the continuation, so it lands in the target set.
+        let captures: std::collections::BTreeSet<ipe_intern::Symbol> =
+            std::iter::once(row).collect();
+        let effect = Expr::Access {
+            record: Box::new(Expr::Var(row)),
+            field,
+            field_ty: Some(IrType::Str),
+        };
+        let rewritten = crate::emit_expr::clone_targets_in_expr(effect, &captures, &row_binders);
+        match rewritten {
+            Expr::Access { record, .. } => assert!(
+                matches!(*record, Expr::Var(s) if s == row),
+                "row-generic Access receiver must stay a bare Var, not a CloneVar"
+            ),
+            other => panic!("expected an Access, got {other:?}"),
+        }
+    }
+
+    /// A NON-row captured variable read in an effect is still cloned (the ordinary
+    /// left-to-right move hazard). The invariant only exempts row-generic Access
+    /// receivers; every other captured read keeps its `CloneVar` rewrite, so a
+    /// String/record moved into the effect is not double-moved by the continuation.
+    #[test]
+    fn clone_capture_still_clones_non_row_var() {
+        let fx = fixture();
+        let plain = sym(&fx, 2); // `c`: a captured non-row value.
+        let row_binders: std::collections::BTreeSet<ipe_intern::Symbol> =
+            std::collections::BTreeSet::new();
+        let captures: std::collections::BTreeSet<ipe_intern::Symbol> =
+            std::iter::once(plain).collect();
+        let effect = Expr::Var(plain);
+        let rewritten = crate::emit_expr::clone_targets_in_expr(effect, &captures, &row_binders);
+        assert!(
+            matches!(rewritten, Expr::CloneVar(s) if s == plain),
+            "a captured non-row variable must be rewritten to CloneVar"
+        );
     }
 }
