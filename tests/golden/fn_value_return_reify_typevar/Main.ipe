@@ -1,0 +1,31 @@
+module Main exposing (main)
+
+import Ipe.Io as Io
+import Ipe.String
+
+
+-- A function value reaching a record field through a type variable, laundered
+-- through a RETURNING function's result. `pick` returns the generic `wrap`
+-- (`a -> { value : a }`); binding its result (`mk = pick True`) and applying it
+-- (`mk (\n -> n + 1)`) stores the function in `wrap`'s type-var field `value : a`,
+-- so the emitted generic `main_wrap<T1: Clone>` is instantiated at
+-- `T1 = Box<dyn Fn>`. The callee at the application site is a computed value
+-- (`pick True`'s result), so no declared template is recoverable — the
+-- computed-callee gate rejects it (IPE-L0107) rather than emit Rust that fails
+-- `cargo` with E0277.
+wrap : a -> { value : a }
+wrap x =
+    { value = x }
+
+
+pick : Bool -> (a -> { value : a })
+pick b =
+    wrap
+
+
+main =
+    let
+        mk = pick True
+        r = mk (\n -> n + 1)
+    in
+    Io.println (String.fromInt (r.value 41))
