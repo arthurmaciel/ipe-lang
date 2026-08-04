@@ -158,11 +158,16 @@ mod x86_64_abi {
     const NR_PIVOT_ROOT: u32 = 155;
     const NR_MOUNT: u32 = 165;
     const NR_UMOUNT2: u32 = 166;
+    const NR_KEXEC_LOAD: u32 = 246;
+    const NR_KEYCTL: u32 = 250;
     const NR_UNSHARE: u32 = 272;
     const NR_SETNS: u32 = 308;
     const NR_PROCESS_VM_READV: u32 = 310;
     const NR_PROCESS_VM_WRITEV: u32 = 311;
+    const NR_KEXEC_FILE_LOAD: u32 = 320;
+    const NR_BPF: u32 = 321;
     const NR_EXECVEAT: u32 = 322;
+    const NR_USERFAULTFD: u32 = 323;
     const NR_IO_URING_SETUP: u32 = 425;
     const NR_IO_URING_ENTER: u32 = 426;
     const NR_IO_URING_REGISTER: u32 = 427;
@@ -172,6 +177,7 @@ mod x86_64_abi {
     const NR_FSCONFIG: u32 = 431;
     const NR_FSMOUNT: u32 = 432;
     const NR_CLONE3: u32 = 435;
+    const NR_PIDFD_GETFD: u32 = 438;
     const NR_MOUNT_SETATTR: u32 = 442;
 
     /// The `x86_64` syscall table. See the deny-axes commentary above
@@ -187,6 +193,12 @@ mod x86_64_abi {
             NR_IO_URING_SETUP,
             NR_IO_URING_ENTER,
             NR_IO_URING_REGISTER,
+            NR_PIDFD_GETFD,
+            NR_BPF,
+            NR_USERFAULTFD,
+            NR_KEYCTL,
+            NR_KEXEC_LOAD,
+            NR_KEXEC_FILE_LOAD,
             NR_MOUNT,
             NR_UMOUNT2,
             NR_PIVOT_ROOT,
@@ -215,13 +227,18 @@ mod aarch64_abi {
     const NR_MOUNT: u32 = 40;
     const NR_PIVOT_ROOT: u32 = 41;
     const NR_UNSHARE: u32 = 97;
+    const NR_KEXEC_LOAD: u32 = 104;
     const NR_PTRACE: u32 = 117;
+    const NR_KEYCTL: u32 = 219;
     const NR_CLONE: u32 = 220;
     const NR_EXECVE: u32 = 221;
     const NR_SETNS: u32 = 268;
     const NR_PROCESS_VM_READV: u32 = 270;
     const NR_PROCESS_VM_WRITEV: u32 = 271;
+    const NR_BPF: u32 = 280;
     const NR_EXECVEAT: u32 = 281;
+    const NR_USERFAULTFD: u32 = 282;
+    const NR_KEXEC_FILE_LOAD: u32 = 294;
     const NR_IO_URING_SETUP: u32 = 425;
     const NR_IO_URING_ENTER: u32 = 426;
     const NR_IO_URING_REGISTER: u32 = 427;
@@ -231,6 +248,7 @@ mod aarch64_abi {
     const NR_FSCONFIG: u32 = 431;
     const NR_FSMOUNT: u32 = 432;
     const NR_CLONE3: u32 = 435;
+    const NR_PIDFD_GETFD: u32 = 438;
     const NR_MOUNT_SETATTR: u32 = 442;
 
     /// The `aarch64` syscall table. The baseline denies mirror `x86_64`'s exactly
@@ -246,6 +264,12 @@ mod aarch64_abi {
             NR_IO_URING_SETUP,
             NR_IO_URING_ENTER,
             NR_IO_URING_REGISTER,
+            NR_PIDFD_GETFD,
+            NR_BPF,
+            NR_USERFAULTFD,
+            NR_KEYCTL,
+            NR_KEXEC_LOAD,
+            NR_KEXEC_FILE_LOAD,
             NR_MOUNT,
             NR_UMOUNT2,
             NR_PIVOT_ROOT,
@@ -317,6 +341,15 @@ const CLONE_THREAD: u32 = 0x0001_0000;
 //   - `io_uring_setup`/`enter`/`register`: file and network I/O *without* the
 //     `openat`/`connect` syscalls a naive filter watches — a direct-I/O bypass
 //     of the mount-scope and (belt-and-braces to the empty netns) the network.
+//   - `pidfd_getfd`: steal an open fd from a jail sibling by its pidfd,
+//     smuggling a descriptor past the mount scope.
+//   - `bpf`: load kernel BPF programs — an in-kernel authority the jail never
+//     grants.
+//   - `userfaultfd`: hand userspace control over the jail's own page faults, a
+//     lever for kernel-race and use-after-free exploitation.
+//   - `keyctl`: reach the kernel keyring, a cross-process credential/secret store.
+//   - `kexec_load`/`kexec_file_load`: stage a replacement kernel image — total
+//     host takeover if the jail ever ran privileged.
 //   - the mount family (`mount`/`umount2`/`pivot_root`/`setns`/`unshare`/
 //     `move_mount`/`open_tree`/`fsopen`/`fsconfig`/`fsmount`/`mount_setattr`):
 //     remount / namespace-re-enter escape levers.
@@ -520,6 +553,49 @@ mod tests {
     }
 
     #[test]
+    fn escape_primitives_are_baseline_denied_on_each_abi() {
+        // pidfd_getfd/bpf/userfaultfd/keyctl/kexec_load/kexec_file_load are
+        // unconditional escape/exfiltration levers with the correct per-ABI
+        // number. pidfd_getfd is 438 on both ABIs; the rest differ. A wrong
+        // number would deny the wrong call and leave the target open, so the
+        // numbers are pinned here per ABI, and their presence in the emitted
+        // program is checked in both modes.
+        let expected: &[(u32, [u32; 6])] = &[
+            // (audit_arch, [pidfd_getfd, bpf, userfaultfd, keyctl, kexec_load, kexec_file_load])
+            (AUDIT_ARCH_X86_64, [438, 321, 323, 250, 246, 320]),
+            (AUDIT_ARCH_AARCH64, [438, 280, 282, 219, 104, 294]),
+        ];
+        for &abi in ABIS {
+            let nrs = expected
+                .iter()
+                .find(|(arch, _)| *arch == abi.audit_arch)
+                .map(|(_, nrs)| nrs);
+            assert!(
+                nrs.is_some(),
+                "no expected escape-primitive numbers for arch {:#x}",
+                abi.audit_arch
+            );
+            if let Some(nrs) = nrs {
+                for &nr in nrs {
+                    assert!(
+                        abi.baseline_denied.contains(&nr),
+                        "escape nr {nr} missing from baseline table (arch={:#x})",
+                        abi.audit_arch
+                    );
+                    for allow in [true, false] {
+                        let prog = build_program_for(abi, allow);
+                        assert!(
+                            has_jeq(&prog, nr),
+                            "escape nr {nr} not denied in program (arch={:#x}, allow={allow})",
+                            abi.audit_arch
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
     fn create_family_is_denied_only_when_subprocess_absent() {
         for &abi in ABIS {
             let denied = build_program_for(abi, false);
@@ -646,13 +722,16 @@ mod tests {
         assert_eq!(a.nr_clone, 220);
         assert_eq!(a.never_denied, &[221, 281, 435], "execve/execveat/clone3");
         // Baseline: ptrace(117), pvm_readv/writev(270/271), io_uring(425/426/427),
+        // pidfd_getfd(438), bpf(280), userfaultfd(282), keyctl(219),
+        // kexec_load(104)/kexec_file_load(294),
         // mount(40)/umount2(39)/pivot_root(41)/setns(268)/unshare(97)/
         // move_mount(429)/open_tree(428)/fsopen(430)/fsconfig(431)/fsmount(432)/
         // mount_setattr(442) — the asm-generic values, in table order.
         assert_eq!(
             a.baseline_denied,
             &[
-                117, 270, 271, 425, 426, 427, 40, 39, 41, 268, 97, 429, 428, 430, 431, 432, 442
+                117, 270, 271, 425, 426, 427, 438, 280, 282, 219, 104, 294, 40, 39, 41, 268, 97,
+                429, 428, 430, 431, 432, 442
             ],
         );
     }
