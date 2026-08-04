@@ -1399,6 +1399,11 @@ pub(crate) fn build_windows_jailed(
 /// `SystemRoot` (Win32 API calls fail without it), `PATH` (system tool
 /// resolution), and `TMP`/`TEMP` pointed at the always-writable scratch. `LANG`
 /// re-exports when the host sets it, matching the Unix arms.
+///
+/// The returned pairs are sorted by name (case-insensitively) so the UTF-16 block
+/// built from them satisfies `CreateProcessW`'s `CREATE_UNICODE_ENVIRONMENT`
+/// sorted-block requirement — an unsorted block fails process creation with
+/// `ERROR_ENVVAR_NOT_FOUND` (203).
 #[must_use]
 #[allow(clippy::too_long_first_doc_paragraph)]
 pub fn windows_scrubbed_env(
@@ -1431,6 +1436,20 @@ pub fn windows_scrubbed_env(
             env.push((OsString::from(name), value));
         }
     }
+    // `CreateProcessW` with `CREATE_UNICODE_ENVIRONMENT` requires the environment
+    // block sorted by name, case-insensitively (Unicode order). The loader/CRT
+    // does an ordered lookup on the block it is handed, so an UNSORTED block makes
+    // it miss a variable it needs to initialise the child (notably `SystemRoot`) —
+    // `CreateProcessW` then fails with `ERROR_ENVVAR_NOT_FOUND` (203) before the
+    // child runs. Sort here (name only; an env name cannot contain `=`) so the
+    // block the launcher builds from these pairs is always well-formed. A stable
+    // sort keeps a deterministic order for duplicate-insensitive names (there are
+    // none here — the base names and the allowlist are distinct).
+    env.sort_by(|(a, _), (b, _)| {
+        let a = a.to_string_lossy().to_ascii_lowercase();
+        let b = b.to_string_lossy().to_ascii_lowercase();
+        a.cmp(&b)
+    });
     env
 }
 
@@ -1837,11 +1856,18 @@ mod windows_jail {
         let env_block = env_block_utf16(profile, scoped_tmp, &host_env);
 
         // 6. CreateProcess suspended, with the AppContainer security-capabilities
-        //    attribute and the scrubbed environment.
+        //    attribute and the scrubbed environment. The child's current directory
+        //    is the always-ACLed scratch — the ONE directory the container token can
+        //    always reach. The working tree cannot be the CWD: under a
+        //    filesystem-withholding profile it is NOT ACLed to the container SID, so
+        //    CreateProcessW would fail resolving the current directory with
+        //    ERROR_ENVVAR_NOT_FOUND (203) before the child ran. The CWD is not a
+        //    capability, so scratch-as-CWD neither grants nor widens any axis (and
+        //    matches the Unix arms, which do not chdir into the working tree either).
         let child = create_suspended_appcontainer_process(
             app,
             app_args,
-            working_tree,
+            scoped_tmp,
             &container,
             &mut capabilities,
             &env_block,
@@ -2361,8 +2387,13 @@ mod windows_jail {
             block.extend(value.encode_wide());
             block.push(0);
         }
-        // A doubly-NUL terminator (an extra NUL after the last entry). An empty
-        // block is still two NULs so `CreateProcess` sees a valid empty env.
+        // Doubly-NUL terminate. A non-empty block ends in the last entry's own NUL
+        // plus this terminator (two NULs); an empty block (no entries) needs BOTH
+        // NULs written here so `CreateProcess` sees a valid empty environment (`\0\0`)
+        // rather than a single NUL it would read past.
+        if block.is_empty() {
+            block.push(0);
+        }
         block.push(0);
         block
     }
@@ -2376,10 +2407,19 @@ mod windows_jail {
     /// CreateProcess suspended with the AppContainer security-capabilities
     /// attribute and the scrubbed environment. The command line is built from the
     /// app path + args with proper quoting; there is no shell.
+    ///
+    /// `current_dir` is the child's `lpCurrentDirectory`. It MUST be a directory the
+    /// AppContainer token can access — otherwise `CreateProcessW` fails resolving
+    /// the current directory with `ERROR_ENVVAR_NOT_FOUND` (203) before the child
+    /// starts. The caller passes the always-ACLed scratch (never the working tree,
+    /// which is unreachable to the container when the filesystem axis is withheld).
+    /// The CWD is not a capability: the child can still reach only what is ACLed to
+    /// the container SID, so pointing it at the scratch neither grants nor widens
+    /// any axis.
     fn create_suspended_appcontainer_process(
         app: &Path,
         app_args: &[OsString],
-        working_tree: &Path,
+        current_dir: &Path,
         container: &AppContainer,
         capabilities: &mut CapabilitySids,
         env_block: &[u16],
@@ -2436,7 +2476,7 @@ mod windows_jail {
         si.lpAttributeList = attr_list;
 
         let mut cmdline = build_command_line(app, app_args);
-        let mut wdir = wide(working_tree.as_os_str());
+        let mut wdir = wide(current_dir.as_os_str());
         // The env block is `*const c_void` (cast from the u16 slice).
         let env_ptr = env_block.as_ptr().cast::<std::ffi::c_void>().cast_mut();
 
@@ -2619,6 +2659,33 @@ mod windows_jail {
             // The scrubbed base is present.
             assert!(decoded.contains("SystemRoot="), "{decoded:?}");
             assert!(decoded.contains("TMP=C:\\scratch"), "{decoded:?}");
+        }
+
+        #[test]
+        fn scrubbed_env_is_sorted_case_insensitively_for_createprocessw() {
+            // CreateProcessW's CREATE_UNICODE_ENVIRONMENT requires a name-sorted
+            // block (case-insensitive); an unsorted one fails with
+            // ERROR_ENVVAR_NOT_FOUND (203). Assert the pairs come back sorted so the
+            // block built from them is well-formed.
+            let profile = profile_with_env(&["APP_KEY", "zeta"]);
+            let host = |k: &str| match k {
+                "APP_KEY" => Some(OsString::from("v")),
+                "zeta" => Some(OsString::from("z")),
+                "SystemRoot" => Some(OsString::from("C:\\Windows")),
+                "PATH" => Some(OsString::from("C:\\Windows\\System32")),
+                _ => None,
+            };
+            let pairs = windows_scrubbed_env(&profile, Path::new("C:\\scratch"), &host);
+            let names: Vec<String> = pairs
+                .iter()
+                .map(|(n, _)| n.to_string_lossy().to_ascii_lowercase())
+                .collect();
+            let mut sorted = names.clone();
+            sorted.sort();
+            assert_eq!(
+                names, sorted,
+                "env pairs must be name-sorted (case-insensitive)"
+            );
         }
 
         #[test]
