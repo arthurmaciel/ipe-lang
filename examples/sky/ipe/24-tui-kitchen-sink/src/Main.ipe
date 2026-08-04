@@ -24,14 +24,11 @@ Sky.Live too — typed Std.Ui primitives are the only thing the view
 uses. Run under both to compare.
 -}
 
-import Ipe.List as List
 import Ipe.String as String
 import Ipe.System as System
-import Ipe.Task as Task
-import Ipe.Tui as Tui
-import Ipe.Tea.Web as Live
-import Ipe.Tea.Web.Cmd as Cmd
-import Ipe.Tea.Web.Sub as Sub
+import Ipe.Tea.Terminal as Terminal
+import Ipe.Tea.Terminal.Cmd as Cmd
+import Ipe.Tea.Terminal.Sub as Sub
 import Ipe.Ui as Ui
 import Ipe.Ui exposing (Element)
 import Ipe.Ui.Background as Background
@@ -73,11 +70,7 @@ type Msg
     | NoOp
 
 
-{- Polymorphic input — Tui calls with `()`, Live calls with the
-   request record (a `Dict String String`). Either way we ignore
-   the argument and return the seed model.
--}
-init : a -> ( Model, Cmd Msg )
+init : () -> ( Model, Cmd Msg )
 init _ =
     ( { textValue = ""
       , passwordValue = ""
@@ -179,16 +172,6 @@ viewBody model =
 view : Model -> Element Msg
 view model =
     viewBody model
-
-
-{- Sky.Live renders Std.Ui via `Ui.layout [] body`, which wraps the
-   element in the host HTML scaffolding (head / body / inline style
-   block). Tui doesn't need this — it paints directly into cells.
-   Same `viewBody` feeds both.
--}
-viewLive : Model -> any
-viewLive model =
-    Ui.layout [] (viewBody model)
 
 
 headerSection : Element Msg
@@ -526,34 +509,11 @@ footerSection =
    meaningfully render a Std.Ui scene. Use Sky.Cli for line-driven
    programs (REPLs, scripts), not for UI showcases.
 -}
-argsList : List String
-argsList =
-    System.args () |> Task.run |> Result.withDefault []
-
-type Page
-    = KitchenSink
-
-
 main =
-    case List.head argsList of
-
-        Just "live" ->
-            Live.app
-                { init = init
-                , update = update
-                , view = viewLive
-                , subscriptions = subscriptions
-                , routes = [ Live.route "/" KitchenSink ]
-                , notFound = KitchenSink
-                }
-
-        _ ->
-            Tui.app
-                { init = init
-                , update = update
-                , view = view
-                , subscriptions = subscriptions
-                , onKey = onKey
-                , routes = []
-                , notFound = ()
-                }
+    Terminal.appScreen
+        { init = init
+        , update = update
+        , view = view
+        , subscriptions = subscriptions
+        , onKey = onKey
+        }
