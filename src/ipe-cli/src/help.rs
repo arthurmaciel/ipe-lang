@@ -2,9 +2,9 @@
 //! screen and every per-command `--help` page.
 //!
 //! One table ([`COMMANDS`]) holds each command's synopsis, argument description,
-//! and option list; the top-level screen highlights a few in [`MOST_USED`] and
-//! groups all of them into [`SECTIONS`]. Both the overview and the per-command
-//! pages render from that one source, so a command or flag is described once.
+//! and option list; the top-level screen groups them into [`SECTIONS`]. Both the
+//! overview and the per-command pages render from that one source, so a command
+//! or flag is described once.
 //!
 //! Colour is opt-in per output stream: ANSI escapes are emitted only when the
 //! destination is a terminal and `NO_COLOR` is unset. Piped or redirected
@@ -30,8 +30,8 @@ struct Opt {
 struct Command {
     /// The subcommand name (e.g. `build`).
     name: &'static str,
-    /// A one-line description of the command, shown both under `Most used
-    /// commands` and at the top of the command's own `--help` page.
+    /// A one-line description of the command, shown at the top of the command's
+    /// own `--help` page.
     summary: &'static str,
     /// The positional arguments, rendered inline after the name on the synopsis
     /// line (e.g. `[<path>]`). Empty when the command takes none.
@@ -64,13 +64,6 @@ const COMMANDS: &[Command] = &[
             flag: "[--force]",
             desc: "overwrite a non-empty target directory",
         }],
-    },
-    Command {
-        name: "upgrade-agents",
-        summary: "Refresh AGENTS.md — the Ipê authoring reference — in the current directory.",
-        args: "",
-        args_desc: "",
-        options: &[],
     },
     Command {
         name: "build",
@@ -129,7 +122,7 @@ const COMMANDS: &[Command] = &[
         ],
     },
     Command {
-        name: "check",
+        name: "type-check",
         summary: "Type-check a program without building or running it.",
         args: "[<path>]",
         args_desc: "A source file, a project directory, or an ipe.toml. Defaults to the current project.",
@@ -223,6 +216,13 @@ const COMMANDS: &[Command] = &[
                 desc: "format stdin to stdout (for editors and pipes); excludes <path>",
             },
         ],
+    },
+    Command {
+        name: "clean",
+        summary: "Remove the project's build-generated output (out/, target/, .ipe/).",
+        args: "",
+        args_desc: "",
+        options: &[],
     },
     Command {
         name: "add",
@@ -446,27 +446,16 @@ const COMMANDS: &[Command] = &[
     },
 ];
 
-/// The handful of commands a newcomer reaches for first, highlighted with a
-/// one-line description above the full sectioned list.
-const MOST_USED: &[&str] = &["init", "run", "watch"];
-
 /// The top-level screen's command groups, in display order. Every command
-/// appears in exactly one section (the `MOST_USED` highlights repeat here).
+/// appears in exactly one section.
 const SECTIONS: &[Section] = &[
     Section {
         title: "Development",
-        commands: &[
-            "init",
-            "upgrade-agents",
-            "build",
-            "eject",
-            "check",
-            "verify",
-            "run",
-            "watch",
-            "fix",
-            "fmt",
-        ],
+        commands: &["init", "build", "run", "watch"],
+    },
+    Section {
+        title: "Quality",
+        commands: &["type-check", "verify"],
     },
     Section {
         title: "Using external packages",
@@ -483,12 +472,16 @@ const SECTIONS: &[Section] = &[
     Section {
         title: "Tools",
         commands: &[
+            "doc",
+            "fmt",
+            "lsp",
+            "clean",
+            "doctor",
             "explain",
             "capabilities",
             "diff",
-            "doc",
-            "doctor",
-            "lsp",
+            "fix",
+            "eject",
             "upgrade",
             "version",
         ],
@@ -538,8 +531,8 @@ fn command_line(cmd: &Command, p: &Palette) -> String {
     line
 }
 
-/// Render the top-level overview: the header, a highlighted `Most used
-/// commands` block, then every command grouped by section.
+/// Render the top-level overview: the header, then every command grouped by
+/// section.
 fn render_top_level(p: &Palette) -> String {
     let version = env!("CARGO_PKG_VERSION");
     let mut out = String::new();
@@ -551,15 +544,6 @@ fn render_top_level(p: &Palette) -> String {
         "{}Ipê language{} - v{version} - {}{REPO_URL}{}",
         p.yellow, p.reset, p.dim, p.reset
     );
-
-    // Most-used commands: each name with a one-line description below it.
-    out.push('\n');
-    let _ = writeln!(out, "{}Most used commands:{}", p.bold, p.reset);
-    for &name in MOST_USED {
-        let Some(cmd) = find(name) else { continue };
-        let _ = writeln!(out, "  {}ipe {}{}", p.yellow, cmd.name, p.reset);
-        let _ = writeln!(out, "{}      {}{}", p.dim, cmd.summary, p.reset);
-    }
 
     // The full list: every command by section, each shown as a ready-to-run
     // `ipe <command> --help`. The `--help` suffix aligns into one column within
@@ -652,15 +636,6 @@ mod tests {
             );
         }
         assert!(!plain.contains('\x1b'), "plain output must carry no ANSI");
-    }
-
-    #[test]
-    fn most_used_commands_appear_with_their_summaries() {
-        let plain = render_top_level(&Palette::PLAIN);
-        for &name in MOST_USED {
-            let cmd = find(name).expect("most-used command exists");
-            assert!(plain.contains(cmd.summary), "missing summary for {name}");
-        }
     }
 
     #[test]
