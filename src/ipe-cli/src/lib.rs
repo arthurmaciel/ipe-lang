@@ -33,6 +33,7 @@ pub mod lockfile;
 pub mod login;
 mod lsp;
 pub mod pkg;
+pub mod progress;
 pub mod project;
 pub mod publish;
 pub mod resolve;
@@ -4220,22 +4221,34 @@ pub fn run_upgrade(rest: &[String]) -> Result<(), CliError> {
         )));
     }
 
-    eprintln!(
-        "{}",
-        style::gutter(&format!(
-            "{} upgrading ipe via install.sh …",
-            style::glyph::STEP
-        ))
-    );
-    let status = std::process::Command::new("sh")
+    // Render the hand-off to the installer as a stage on stderr: a running
+    // light-yellow line while we spawn `sh`, settled to a green success (or a
+    // red failure) BEFORE the child inherits the terminal, so the installer's
+    // own staged output begins on a fresh, uncorrupted line.
+    let stage = progress::Stage::start(std::io::stderr(), "Launching the release installer…");
+    let child = std::process::Command::new("sh")
         .arg("-c")
         .arg(&command)
-        .status()
-        .map_err(|e| {
-            CliError::UsageOwned(format!(
+        .spawn();
+    let mut child = match child {
+        Ok(child) => {
+            stage.success("Installer launched — following its progress below.");
+            child
+        }
+        Err(e) => {
+            stage.failure(format!(
+                "Could not launch the installer (needs `sh` and `curl`): {e}"
+            ));
+            return Err(CliError::UsageOwned(format!(
                 "upgrade: cannot launch the installer (needs `sh` and `curl`): {e}"
-            ))
-        })?;
+            )));
+        }
+    };
+    let status = child.wait().map_err(|e| {
+        CliError::UsageOwned(format!(
+            "upgrade: the installer could not be waited on: {e}"
+        ))
+    })?;
     if status.success() {
         return Ok(());
     }
