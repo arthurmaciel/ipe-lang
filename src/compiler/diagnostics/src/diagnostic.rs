@@ -874,14 +874,15 @@ pub enum Feature {
     /// handle linearly (use a receiver-returning method, then read it once at the
     /// end) until borrow-threaded FFI receivers land. [IPE-L0130]
     ForeignHandleReuse,
-    /// A row-polymorphic record annotation `{ r | f : T }` on a function
-    /// parameter or return type. The type layer models the open row and accepts
-    /// the program, but the Rust backend emits one struct per exact field set
-    /// and cannot yet emit a callee once per record shape observed at its call
-    /// sites (per-record-shape callee monomorphisation). Use a closed record
-    /// annotation, or drop the annotation and let the parameter's shape be
-    /// inferred at its single call site, until that backend pass lands.
-    /// [IPE-L0131]
+    /// A row-polymorphic record annotation `{ r | f : T }` in a position with no
+    /// backend emission. An argument-position open row of one or more
+    /// closed-typed fields IS emittable — it erases to a rustc generic bounded by
+    /// one field-witness trait per field, monomorphised per call-site shape. This
+    /// feature gates the forms that have no emission yet: an open row in return
+    /// position, nested under a container / record / tuple, or one whose field
+    /// type itself embeds an open row. Use a closed record annotation, or drop
+    /// the annotation and let the parameter's shape be inferred at its call site,
+    /// until each such form lands. [IPE-L0131]
     RowPolyRecordAnnotation,
     /// A `CustomElement down up` boundary value reached lowering. The type
     /// resolves and its two parameters pass the SEAL, but the widget transport —

@@ -101,6 +101,8 @@ pinned-records invariant. The one emittable use of a row-typed parameter is as
 the direct receiver of a field read (`rec.name`); a row value that flows
 anywhere else — re-bound, destructured by a subset pattern, passed as an
 argument, stored, returned, or matched — has no witness-getter route and is
-gated with `IPE-L0131`, as are multi-field rows, return-position rows, nested
-rows, and rows under containers. These are extensions of the same witness-trait
-design, gated until each lands.
+gated with `IPE-L0131`. An argument-position open row may carry one or more
+required fields (each contributes one witness bound); return-position rows,
+rows nested under a container/record/tuple, and a field whose type is itself an
+open row remain gated with `IPE-L0131`. These are extensions of the same
+witness-trait design, gated until each lands.
