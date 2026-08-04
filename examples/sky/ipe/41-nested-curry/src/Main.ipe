@@ -8,6 +8,7 @@ module Main exposing (main)
 -- (`((makeAdder 1) 2) 3`) of the result must work.
 
 import Ipe.Io as Io
+import Ipe.String as String
 
 
 q : Int -> Int -> Int -> Int -> Int
