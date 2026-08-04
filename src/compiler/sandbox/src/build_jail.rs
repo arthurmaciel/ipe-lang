@@ -11,7 +11,7 @@
 //! ## The confinement is not forked
 //!
 //! The jail is lowered from the SAME [`crate::run_jail::SandboxProfile`] the
-//! runtime jail runs under. On `Linux/x86_64` it lowers via the SAME
+//! runtime jail runs under. On Linux (`x86_64`/`aarch64`) it lowers via the SAME
 //! [`crate::run_jail::run_jail_argv`] + [`crate::seccomp`] program the runtime
 //! jail uses; on macOS it lowers the SAME profile to a Seatbelt SBPL profile
 //! ([`sbpl_from_profile`]) enforced by `sandbox-exec`. Either way there is a
@@ -28,14 +28,23 @@
 //! exit, signal, or ambiguous state decodes to a non-`Clean` outcome.
 
 use std::ffi::OsString;
-#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+#[cfg(all(
+    target_os = "linux",
+    any(target_arch = "x86_64", target_arch = "aarch64")
+))]
 use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
 use std::path::{Path, PathBuf};
 
-#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+#[cfg(all(
+    target_os = "linux",
+    any(target_arch = "x86_64", target_arch = "aarch64")
+))]
 use crate::run_jail::run_jail_argv;
 use crate::run_jail::{RunJailDefect, RunJailTools, SandboxProfile};
-#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+#[cfg(all(
+    target_os = "linux",
+    any(target_arch = "x86_64", target_arch = "aarch64")
+))]
 use crate::seccomp;
 // The SBPL text is a pure function of the profile, so its deny/allow surface is
 // unit-testable on any host (compiled under `test` on Linux); the macOS jail
@@ -269,7 +278,10 @@ impl AbsScratchPath {
 /// jail is folded into a non-`Clean` [`JailOutcome`], so a caller reconciling
 /// declared-vs-demanded has a total value to match on and cannot mistake an
 /// establishment failure for a clean run.
-#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+#[cfg(all(
+    target_os = "linux",
+    any(target_arch = "x86_64", target_arch = "aarch64")
+))]
 #[must_use]
 pub fn build_in_jail(
     tools: &RunJailTools,
@@ -324,7 +336,7 @@ pub fn build_in_jail(
 /// Run `payload` inside a `sandbox-exec` Seatbelt jail lowered from `profile`,
 /// wait for it, and return the decoded [`JailOutcome`] (macOS).
 ///
-/// The macOS counterpart to the `Linux/x86_64` [`build_in_jail`]: it lowers the
+/// The macOS counterpart to the `Linux` [`build_in_jail`]: it lowers the
 /// SAME [`SandboxProfile`] to a Seatbelt SBPL profile ([`sbpl_from_profile`]),
 /// writes it to a scratch-local file, and spawns
 /// `sandbox-exec -f <profile> <payload>`, so a build observed under Tier-2 is
@@ -405,7 +417,7 @@ pub fn build_in_jail(
 /// Run `payload` inside a Windows Job Object + AppContainer jail lowered from
 /// `profile`, wait for it, and return the decoded [`JailOutcome`] (Windows).
 ///
-/// The Windows counterpart to the `Linux/x86_64` and macOS [`build_in_jail`]: it
+/// The Windows counterpart to the `Linux` and macOS [`build_in_jail`]: it
 /// lowers the SAME [`SandboxProfile`] through the SAME Win32 sequence the run jail
 /// uses ([`crate::run_jail::build_windows_jailed`] → `windows_jail::run_confined`)
 /// — a Job Object (subprocess axis, kill-on-close so no orphan survives the audit
@@ -560,10 +572,13 @@ pub fn build_in_jail(
     freebsd_jail::build_in_jail(profile, scoped_tmp, working_tree, payload)
 }
 
-/// Off Linux/x86_64, macOS, Windows, and FreeBSD the returning build jail is a
+/// Off Linux (x86_64/aarch64), macOS, Windows, and FreeBSD the returning build jail is a
 /// documented refuse-gap, mirroring [`crate::run_jail::exec_in_run_jail`].
 #[cfg(not(any(
-    all(target_os = "linux", target_arch = "x86_64"),
+    all(
+        target_os = "linux",
+        any(target_arch = "x86_64", target_arch = "aarch64")
+    ),
     target_os = "macos",
     target_os = "windows",
     target_os = "freebsd"
@@ -582,7 +597,7 @@ pub fn build_in_jail(
 ) -> JailOutcome {
     JailOutcome::Unavailable {
         defect: RunJailDefect::UnsupportedPlatform {
-            reason: "build jail is wired only on Linux/x86_64, macOS, Windows, and FreeBSD",
+            reason: "build jail is wired only on Linux (x86_64/aarch64), macOS, Windows, and FreeBSD",
         },
     }
 }
@@ -596,7 +611,13 @@ pub fn build_in_jail(
 /// `env_override`, when `Some`, clears the inherited environment and sets exactly
 /// the given `(name, value)` pairs — the macOS jails' `env`-axis enforcement (the
 /// Linux jail scrubs env inside bwrap, so it passes `None`).
-#[cfg(any(all(target_os = "linux", target_arch = "x86_64"), target_os = "macos"))]
+#[cfg(any(
+    all(
+        target_os = "linux",
+        any(target_arch = "x86_64", target_arch = "aarch64")
+    ),
+    target_os = "macos"
+))]
 fn spawn_and_decode(
     argv: &[OsString],
     env_override: Option<&[(OsString, OsString)]>,
