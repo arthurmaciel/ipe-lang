@@ -419,3 +419,25 @@ References use bare issue numbers (no tracker prefix) to satisfy doc hygiene.
   (292/671/674), hosted ipe-index (470), `Db.open` (641), diagnostics quality
   bar (561), git-history pruning (240) touch neither `emit_ui_call` nor UI
   placement. Listed for completeness; no action.
+
+## Related placement findings — `Ipe.Html` split and CSS-value single source
+
+Two findings from reviewing the Html/Css/Ui render paths, folded into this design.
+
+### `Ipe.Html` follows the same builders-vs-serializer line
+
+`Ipe.Html` is kernel-backed today (`src/runtime/rust/src/html.rs`). Split it exactly as the UI builders split:
+
+- **to `.ipe`:** the `Html` tree constructors and pure attribute helpers — data construction, no I/O.
+- **stays a native leaf:** `render_html` and the escapers (`escape_text` / `escape_attr` / `escape_html`) and `assign_ipe_ids`. This is the XSS / injection output-encoding barrier; Security is the top of the precedence order, so the encoder stays native and audited.
+
+The HTML string path is already single-source: an `Element` (the Ui tree) lowers through `ui/render.rs` into `Html` markup nodes, and `html.rs::render_html` is the one serializer and escaper. Ui delegates to it — there is no parallel HTML serializer to unify.
+
+### CSS-value rendering is duplicated — unify onto `Ipe.Css`
+
+Two independent `Length` / `Color` models with two renderers cover the same domain:
+
+- `Ipe.Css` (`.ipe`): opaque `Length` / `Color` built via typed builders, with pure `lengthToString` / `colorToString`.
+- `ui/render.rs` (native): its own `Length` / `Color` enums with `length_css` / `color_css`.
+
+They have already drifted — Ui carries layout-intent variants (`Content` / `Fill`); Css carries `em` / `pct` / `ch` / `fr` / `calc` / `minmax` — so the shared raw-value formatting (`Px`, `Vh`, `rgba(...)`) can diverge, a single-source-of-truth violation. When the Ui builders move to `.ipe`, render raw values through `Ipe.Css`'s typed `Length` / `Color` and its renderers, keeping only Ui's genuine layout-intent wrappers on top, and retire the native `length_css` / `color_css`. One CSS-value vocabulary and one renderer for both inline styles and stylesheets.
