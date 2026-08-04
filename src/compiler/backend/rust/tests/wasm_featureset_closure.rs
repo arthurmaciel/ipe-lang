@@ -137,10 +137,10 @@ fn parse_feature_table(cargo_toml: &str) -> BTreeMap<String, Vec<String>> {
                     toks.push(normalize_feature_token(t));
                 }
             }
-            if line.contains(']') {
-                if let Some((name, toks)) = current.take() {
-                    table.insert(name, toks);
-                }
+            if line.contains(']')
+                && let Some((name, toks)) = current.take()
+            {
+                table.insert(name, toks);
             }
             continue;
         }
@@ -226,11 +226,21 @@ fn parse_cfg_pred(inner: &str) -> Cfg {
     let s = inner.trim();
     if let Some(rest) = s.strip_prefix("all(") {
         let body = rest.strip_suffix(')').unwrap_or(rest);
-        return Cfg::All(split_cfg_args(body).iter().map(|a| parse_cfg_pred(a)).collect());
+        return Cfg::All(
+            split_cfg_args(body)
+                .iter()
+                .map(|a| parse_cfg_pred(a))
+                .collect(),
+        );
     }
     if let Some(rest) = s.strip_prefix("any(") {
         let body = rest.strip_suffix(')').unwrap_or(rest);
-        return Cfg::Any(split_cfg_args(body).iter().map(|a| parse_cfg_pred(a)).collect());
+        return Cfg::Any(
+            split_cfg_args(body)
+                .iter()
+                .map(|a| parse_cfg_pred(a))
+                .collect(),
+        );
     }
     if let Some(rest) = s.strip_prefix("feature")
         && let Some(eq) = rest.trim_start().strip_prefix('=')
@@ -396,7 +406,11 @@ fn wasm_backend(interner: &Interner) -> RustBackend<'_> {
 }
 
 #[allow(clippy::expect_used)]
-fn selected_features(interner: &Interner, main: ipe_intern::Symbol, mask: u32) -> Vec<&'static str> {
+fn selected_features(
+    interner: &Interner,
+    main: ipe_intern::Symbol,
+    mask: u32,
+) -> Vec<&'static str> {
     let prog = Program {
         modules: vec![wasm_module_for_mask(main, mask)],
     };

@@ -92,7 +92,9 @@ fn runtime_crate_root() -> PathBuf {
     })
     .find(|candidate| candidate.join("Cargo.toml").is_file())
     .expect("the ipe-runtime-rust crate root (src/runtime/rust) must resolve for the wasm floor");
-    found.canonicalize().expect("runtime crate root canonicalizes")
+    found
+        .canonicalize()
+        .expect("runtime crate root canonicalizes")
 }
 
 /// The dependency-model wasm manifest — the DEFAULT `ipe build --target wasm`
@@ -181,7 +183,13 @@ fn wasm_dep_manifest_excludes_server_crates() {
 #[test]
 fn wasm_dep_manifest_selects_only_the_wasm_floor() {
     let toml = without_comments(&emit_wasm_dep_cargo_toml());
-    for forbidden in ["\"server\"", "\"web\"", "\"db\"", "\"async\"", "\"http_client\""] {
+    for forbidden in [
+        "\"server\"",
+        "\"web\"",
+        "\"db\"",
+        "\"async\"",
+        "\"http_client\"",
+    ] {
         assert!(
             !toml.contains(forbidden),
             "wasm dep-model Cargo.toml must not select the {forbidden} feature (a native \

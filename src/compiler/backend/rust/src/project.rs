@@ -1896,9 +1896,10 @@ fn relocate_env_public_to_user_crate(
     if injected == *main {
         return Err(Diagnostic::CompilerBug {
             where_: "ipe_backend_rust::project::relocate_env_public_to_user_crate",
-            detail: "dep-model env_public relocation expected the `pub use ipe_runtime::*;` anchor \
+            detail:
+                "dep-model env_public relocation expected the `pub use ipe_runtime::*;` anchor \
                      in main.rs — the emit template drifted"
-                .to_owned(),
+                    .to_owned(),
         });
     }
     *main = injected;
