@@ -60,6 +60,11 @@ def _extract_go_block(text: str) -> tuple[str, list[str]] | None:
     runs from the header line to the next top-level `[` table header or EOF, so
     removing it excises the whole section. Keys are read from `"key" = …` /
     `key = …` lines within the span (both TOML quoted and bare key forms).
+
+    Assumes one `key = <single-line value>` per line — the shape Sky manifests
+    always use for `["go.dependencies"]` (each is `"pkg" = "latest"`). A key
+    misread from an unexpected multi-line value fails CLOSED: it maps to no crate
+    and surfaces as a `# UNMAPPED` comment, never a silent live dependency.
     """
     header = re.compile(r'^[ \t]*\[["\']?go\.dependencies["\']?\][ \t]*$', re.MULTILINE)
     m = header.search(text)
@@ -104,18 +109,25 @@ def render_rust_deps(keys: list[str], crate_map: dict[str, tuple[str, str, str]]
         if confidence == "stdlib":
             stdlib_pkgs.append(go_path)
             continue
+        if confidence == "mapped":
+            # A reviewed live dependency. Dedup by crate name (token before " =").
+            name = crate.split("=", 1)[0].strip()
+            if name in live_seen:
+                continue
+            live_seen.add(name)
+            live.append(crate)
+            continue
+        # Fail closed (PRINCIPLES.md §Security): `unsure` — and ANY unrecognized
+        # confidence (a typo like `maped`, an empty/mixed-case token) — never emits
+        # a live crate. It is commented out for a human to confirm, so an
+        # unreviewed mapping can never silently enter [rust.dependencies].
         if confidence == "unsure":
             reason = note or "unverified equivalent"
-            commented.append(f'# UNSURE ({go_path}): {reason}')
-            if crate and crate != "-":
-                commented.append(f'# {crate}')
-            continue
-        # mapped — a live dependency. Dedup by crate name (token before " =").
-        name = crate.split("=", 1)[0].strip()
-        if name in live_seen:
-            continue
-        live_seen.add(name)
-        live.append(crate)
+        else:
+            reason = f'unrecognized confidence "{confidence}"'
+        commented.append(f'# UNSURE ({go_path}): {reason}')
+        if crate and crate != "-":
+            commented.append(f'# {crate}')
 
     lines: list[str] = ["[rust.dependencies]"]
     if stdlib_pkgs:
