@@ -1,6 +1,7 @@
 module Main exposing (main)
 
 import Ipe.Io as Io
+import Ipe.String as String
 
 
 -- A tuple destructure in a `let` that IGNORES some elements. `pattern_test`
