@@ -4484,10 +4484,6 @@ impl<'a> Builder<'a> {
             Ty::Record(rp_fields, RowTail::Closed)
         };
         Some(match k {
-            // ── String ──
-            K::StringFromInt => fun(int(), string()),
-            K::StringFromFloat => fun(float(), string()),
-
             // ── List (kernel-anchored combinators) ──
             // map : (a -> b) -> List a -> List b
             K::ListMap => fun(fun(var(0), var(1)), fun(list(var(0)), list(var(1)))),
@@ -4627,7 +4623,6 @@ impl<'a> Builder<'a> {
             ),
 
             // ── Basics core Prelude (6 — slice) ──
-            K::BasicsNot => fun(bool_ty(), bool_ty()),
             K::BasicsIdentity => fun(var(0), var(0)),
             K::BasicsAlways => fun(var(0), fun(var(1), var(0))),
             K::BasicsFst => fun(tuple2(var(0), var(1)), var(0)),
@@ -4652,7 +4647,6 @@ impl<'a> Builder<'a> {
             // gate (`stdlib_scheme_total_over_reachable`).
             K::BasicsNegate | K::BasicsAbs => fun(var(0), var(0)),
             // sqrt : Float -> Float — monomorphic, no obligation pre-check needed.
-            K::BasicsSqrt => fun(float(), float()),
             // min / max: `comparable a => a -> a -> a`. BASE scheme only (bounded
             // scheme is direct-built in constrain_var_kernel, same as MathMin/MathMax).
             K::BasicsMin | K::BasicsMax => fun(var(0), fun(var(0), var(0))),
@@ -4663,52 +4657,17 @@ impl<'a> Builder<'a> {
 
             // ── Math (min / max stay on the obligation path — NOT migrated) ──
             // Constants — bare Float values (arity 0).
-            K::MathPi | K::MathE | K::MathPhi | K::MathSqrt2 | K::MathInf | K::MathNan => float(),
             // isNaN : Float -> Bool.
-            K::MathIsNaN => fun(float(), bool_ty()),
             // abs : Int -> Int.
-            K::MathAbs => fun(int(), int()),
             // Arity-1 Float -> Float.
-            K::MathSqrt
-            | K::MathCbrt
-            | K::MathExp
-            | K::MathExp2
-            | K::MathLog
-            | K::MathLog2
-            | K::MathLog10
-            | K::MathSin
-            | K::MathCos
-            | K::MathTan
-            | K::MathAsin
-            | K::MathAcos
-            | K::MathAtan
-            | K::MathSinh
-            | K::MathCosh
-            | K::MathTanh
-            | K::MathAsinh
-            | K::MathAcosh
-            | K::MathAtanh => fun(float(), float()),
             // Arity-1 Float -> Int (rounding functions).
-            K::MathFloor | K::MathCeil | K::MathRound | K::MathTrunc => fun(float(), int()),
             // Arity-2 Float -> Float -> Float.
-            K::MathPow | K::MathHypot | K::MathAtan2 | K::MathMod | K::MathRemainder => {
-                fun(float(), fun(float(), float()))
-            }
             // Math.min / max — BASE scheme only (the `Comparable a` obligation is
             // layered on top in `constrain_var_kernel`, keyed off the id). The
             // parity tripwire checks this base against `kernel_ty("Math","min")`;
             // production never reaches this arm for min/max (the obligation
             // pre-check early-returns the bounded scheme).
             K::MathMin | K::MathMax => fun(var(0), fun(var(0), var(0))),
-
-            // ── Bitwise — Int-only, maps 1:1 to Rust integer ops ──
-            K::BitwiseAnd
-            | K::BitwiseOr
-            | K::BitwiseXor
-            | K::BitwiseShiftLeftBy
-            | K::BitwiseShiftRightBy
-            | K::BitwiseShiftRightZfBy => fun(int(), fun(int(), int())),
-            K::BitwiseComplement => fun(int(), int()),
 
             // ── Random seeded (Generator primitives) — pure, reproducible ──
             // seededIntRaw : Int -> Int -> Int -> (Int, Int)   (seed, lo, hi) → (value, nextSeed)
@@ -4883,15 +4842,8 @@ impl<'a> Builder<'a> {
             K::ResultFromMaybe => fun(var(0), fun(maybe(var(1)), result(var(0), var(1)))),
 
             // ── Bytes ──
-            K::BytesEmpty => bytes(),
-            K::BytesLength => fun(bytes(), int()),
-            K::BytesIsEmpty => fun(bytes(), bool_ty()),
-            K::BytesFromString => fun(string(), bytes()),
             K::BytesToString => fun(bytes(), maybe(string())),
             K::BytesFromHex | K::BytesFromBase64 => fun(string(), maybe(bytes())),
-            K::BytesToHex | K::BytesToBase64 => fun(bytes(), string()),
-            K::BytesAppend => fun(bytes(), fun(bytes(), bytes())),
-            K::BytesSlice => fun(int(), fun(int(), fun(bytes(), bytes()))),
 
             // ── Task ──
             K::TaskSucceed => fun(var(0), task(var(0))),
@@ -5009,11 +4961,6 @@ impl<'a> Builder<'a> {
             // ── Time ──
             K::TimeNow | K::TimeUnixMillis => fun(Ty::Unit, task(int())),
             K::TimeSleep => fun(int(), task_unit()),
-            K::TimeTimeString => fun(int(), string()),
-            // `isLeapYear : Int -> Bool`, `daysInMonth : Int -> Int -> Int`
-            // (pure calendar helpers — no Task wrap).
-            K::TimeIsLeapYear => fun(int(), bool_ty()),
-            K::TimeDaysInMonth => fun(int(), fun(int(), int())),
             K::TimeEvery => fun(int(), fun(var(0), sub(var(0)))),
 
             // ── System ──
@@ -5023,7 +4970,6 @@ impl<'a> Builder<'a> {
             K::SystemGetenv | K::FileTempFile | K::FileTempDir => fun(string(), task(string())),
             // `readFile` consumes a validated `Path`.
             K::FileReadFile => fun(path(), task(string())),
-            K::SystemGetenvOr => fun(string(), fun(string(), string())),
             K::SystemArgs => fun(Ty::Unit, task(list(string()))),
             K::SystemLoadEnv => fun(Ty::Unit, task_unit()),
             K::SystemSetenv => fun(string(), fun(string(), task_unit())),
@@ -5155,9 +5101,6 @@ impl<'a> Builder<'a> {
                 ),
             ),
             K::MiddlewareWithCsrf => fun(fun(req(), task(resp())), fun(req(), task(resp()))),
-
-            // ── RateLimit ──
-            K::RateLimitAllow => fun(string(), fun(string(), fun(int(), fun(int(), bool_ty())))),
 
             // ── Db ──
             K::DbConnect => fun(Ty::Unit, task(db())),
@@ -5716,88 +5659,32 @@ impl<'a> Builder<'a> {
             // inferred callee type.
 
             // ── String (33 — the kernels beyond `fromInt`/`fromFloat`) ──
-            K::StringLength => fun(string(), int()),
-            K::StringIsEmpty | K::StringIsEmail | K::StringIsUrl => fun(string(), bool_ty()),
-            K::StringReverse
-            | K::StringToUpper
-            | K::StringToLower
-            | K::StringCasefold
-            | K::StringTrim
-            | K::StringTrimStart
-            | K::StringTrimEnd => fun(string(), string()),
             K::StringToInt => fun(string(), maybe(int())),
             K::StringToFloat => fun(string(), maybe(float())),
-            K::StringFromChar => fun(char(), string()),
             K::StringFromList => fun(list(char()), string()),
             K::StringConcat => fun(list(string()), string()),
             K::StringWords | K::StringLines => fun(string(), list(string())),
             K::StringToList => fun(string(), list(char())),
-            K::StringAppend => fun(string(), fun(string(), string())),
-            K::StringContains
-            | K::StringStartsWith
-            | K::StringEndsWith
-            | K::StringEqualFold
-            // Haystack-first companions — same `String -> String -> Bool` shape.
-            | K::StringContainsIn
-            | K::StringStartsWithIn
-            | K::StringEndsWithIn => fun(string(), fun(string(), bool_ty())),
             K::StringJoin => fun(string(), fun(list(string()), string())),
             K::StringSplit => fun(string(), fun(string(), list(string()))),
-            K::StringRepeat | K::StringDropLeft | K::StringDropRight => {
-                fun(int(), fun(string(), string()))
-            }
-            K::StringReplace => fun(string(), fun(string(), fun(string(), string()))),
-            K::StringSlice => fun(int(), fun(int(), fun(string(), string()))),
-            K::StringPadLeft | K::StringPadRight => {
-                fun(int(), fun(char(), fun(string(), string())))
-            }
-            // left / right : Int -> String -> String
-            K::StringLeft | K::StringRight => fun(int(), fun(string(), string())),
-            // cons : Char -> String -> String
-            K::StringCons => fun(char(), fun(string(), string())),
             // uncons : String -> Maybe (Char, String)
             K::StringUncons => fun(string(), maybe(tuple2(char(), string()))),
-            // pad : Int -> Char -> String -> String
-            K::StringPad => fun(int(), fun(char(), fun(string(), string()))),
             // indexes : String -> String -> List Int
             K::StringIndexes => fun(string(), fun(string(), list(int()))),
-            // map : (Char -> Char) -> String -> String
-            K::StringMap => fun(fun(char(), char()), fun(string(), string())),
-            // filter : (Char -> Bool) -> String -> String
-            K::StringFilter => fun(fun(char(), bool_ty()), fun(string(), string())),
             // foldl / foldr : (Char -> b -> b) -> b -> String -> b
             K::StringFoldl | K::StringFoldr => fun(
                 fun(char(), fun(var(0), var(0))),
                 fun(var(0), fun(string(), var(0))),
             ),
-            // any / all : (Char -> Bool) -> String -> Bool
-            K::StringAny | K::StringAll => fun(fun(char(), bool_ty()), fun(string(), bool_ty())),
 
-            // ── Char (8) — `Char -> …`; `toLower`/`toUpper` return a 1-rune
-            //    String (runtime `char_to_lower : char -> String`). ──
-            K::CharIsAlpha
-            | K::CharIsDigit
-            | K::CharIsLower
-            | K::CharIsUpper
-            | K::CharIsAlphaNum
-            | K::CharIsHexDigit
-            | K::CharIsOctDigit => fun(char(), bool_ty()),
-            K::CharToLower | K::CharToUpper => fun(char(), string()),
-            K::CharToCode => fun(char(), int()),
-            K::CharFromCode => fun(int(), char()),
-
-            // ── Crypto (15) — AEAD (`aesGcm*`/`chacha20*`) now schemed: the
+            // ── Crypto AEAD / Result-returning arms (the monomorphic hash /
+            //    HMAC / verify kernels carry a shape; these keep a table arm for
+            //    their `Result`/`Task` return). AEAD `decl().arity` is 2 (a fresh
+            //    random nonce is prepended internally by the runtime). ──
             //    registry `decl().arity` was corrected 3→2 to match the Rust
             //    runtime (`ipe_aes_gcm_encrypt(key, plaintext)` — a fresh random
             //    nonce is prepended internally, so no third arg). Both take
             //    `key -> plaintext/ciphertext -> Result Error String`. ──
-            K::CryptoSha256 | K::CryptoSha512 | K::CryptoSha1 | K::CryptoMd5 => {
-                fun(string(), string())
-            }
-            K::CryptoHmacSha256
-            | K::CryptoHmacSha512
-            | K::CryptoAesKeyFromPassword
-            | K::CryptoChachaKeyFromPassword => fun(string(), fun(string(), string())),
             K::CryptoRsaSha256Sign
             | K::CryptoAesGcmEncrypt
             | K::CryptoAesGcmDecrypt
@@ -5805,8 +5692,6 @@ impl<'a> Builder<'a> {
             | K::CryptoChacha20Decrypt => {
                 fun(string(), fun(string(), result(error_ty(), string())))
             }
-            K::CryptoRsaSha256Verify => fun(string(), fun(string(), fun(string(), bool_ty()))),
-            K::CryptoConstantTimeEqual => fun(string(), fun(string(), bool_ty())),
             K::CryptoRandomBytes | K::CryptoRandomToken => fun(int(), task(string())),
 
             // ── Jwt (4) — `secret -> token/claims -> Result Error String`.
@@ -5844,14 +5729,10 @@ impl<'a> Builder<'a> {
             // `Jwt.decode : Algorithm -> Int -> String -> Result Error String`
             K::JwtDecode => fun(algorithm_ty(), fun(int(), fun(string(), result(error_ty(), string())))),
 
-            // ── Encoding (6) — the base64 / url / hex text codecs.
-            //    Encoders `String -> String` (UTF-8 bytes, Go parity);
-            //    decoders `String -> Result Error String` (decoded bytes must be
-            //    valid UTF-8 — non-UTF-8 payloads surface as `Err`; raw bytes go
-            //    through `Ipe.Bytes`). Each is a `Ty::Var(u32::MAX)` hole. ──
-            K::EncodingBase64Encode | K::EncodingUrlEncode | K::EncodingHexEncode => {
-                fun(string(), string())
-            }
+            // ── Encoding decoders — `String -> Result Error String` (decoded
+            //    bytes must be valid UTF-8 — non-UTF-8 payloads surface as `Err`;
+            //    raw bytes go through `Ipe.Bytes`). The `String -> String`
+            //    encoders carry a shape and resolve via `resolve_scheme`. ──
             K::EncodingBase64Decode | K::EncodingUrlDecode | K::EncodingHexDecode => {
                 fun(string(), result(error_ty(), string()))
             }
@@ -5869,7 +5750,6 @@ impl<'a> Builder<'a> {
 
             // Ipe.Html serialise / escape (arity 1).
             K::HtmlRender => fun(html_t(var(0)), string()),
-            K::HtmlEscapeText | K::HtmlEscapeAttr => fun(string(), string()),
             K::HtmlAttrToString => fun(html_attr(var(0)), string()),
 
             // Ipe.Ui element builders (arity 0 / 1).
@@ -5914,9 +5794,6 @@ impl<'a> Builder<'a> {
             | K::FontAlignCenter
             | K::FontCenter
             | K::FontJustify => attr(var(0)),
-
-            // Font string constants — nullary (arity 0), return String.
-            K::FontSansSerif | K::FontSerif | K::FontMonospace => string(),
 
             // Attribute builders — single Int arg.
             K::UiSpacing
@@ -6028,9 +5905,6 @@ impl<'a> Builder<'a> {
                 string(),
                 fun(list(attr(var(0))), fun(elem_t(var(0)), elem_t(var(0)))),
             ),
-            // Breakpoint constants: all return a String (the CSS media-query string).
-            K::UiMobile | K::UiTablet | K::UiDesktop | K::UiDarkMode | K::UiLightMode
-            | K::UiReducedMotion => string(),
 
             // ── PseudoClass opaque constants + Ui.onPseudo ──────────────────
             // Typed-constant shortcuts — all return the opaque `PseudoClass` type
@@ -6188,10 +6062,6 @@ impl<'a> Builder<'a> {
             // compiled-source `Ipe.Money` wrappers do the `Currency -> code`
             // conversion before the call. `Error` here is the runtime `IpeError`
             // channel (`error_ty()`), matching the `Result Error _` runtime sigs.
-            K::MoneyMinorUnits => fun(string(), int()),
-            K::MoneySymbol | K::MoneyCurrencyName => fun(string(), string()),
-            K::MoneyIsKnownCurrency => fun(string(), bool_ty()),
-            K::MoneyHasRate => fun(string(), fun(string(), bool_ty())),
             K::MoneyFormat | K::MoneyFormatWithCode => {
                 fun(string(), fun(decimal(), string()))
             }
@@ -6734,7 +6604,6 @@ impl<'a> Builder<'a> {
             K::CssSafetySafeValue | K::CssSafetySafePropName | K::CssSafetySafeSelector => {
                 fun(string(), maybe(string()))
             }
-            K::CssSafetyStripStyleClose => fun(string(), string()),
 
             // ── Ipe.Uuid (3) — ENTROPY IS AN EFFECT ──
             //    `v4`/`v7` draw fresh entropy per call, so they are typed on the
@@ -6769,6 +6638,51 @@ impl<'a> Builder<'a> {
             //  * `Sub.subscribeTopic` / `Cmd.publish` / `Cmd.publishNoEcho` /
             //    `PubSub.publish` / `PubSub.publishNoEcho` are wired and have
             //    their schemes above; not in this arm.
+
+            // ── Shape-carrying monomorphic families ──
+            // Every kernel below carries a structural `TyShape`
+            // (`StdlibKernel::scheme_shape`), so `resolve_scheme` types it by
+            // interpreting that shape and never consults this table — its scheme
+            // lives once, on the descriptor, not as an arm here. Each resolves to
+            // `Some` through `resolve_scheme`; the byte-identity of every
+            // interpreted shape is pinned by `interpreted_shape_matches_legacy`.
+            // The explicit `return None` keeps this match wildcard-free (a new
+            // variant must still be classified) while the shape stays the SSOT.
+            K::BasicsNot | K::BasicsSqrt | K::BitwiseAnd | K::BitwiseComplement |
+            K::BitwiseOr | K::BitwiseShiftLeftBy | K::BitwiseShiftRightBy | K::BitwiseShiftRightZfBy |
+            K::BitwiseXor | K::BytesAppend | K::BytesEmpty | K::BytesFromString |
+            K::BytesIsEmpty | K::BytesLength | K::BytesSlice | K::BytesToBase64 |
+            K::BytesToHex | K::CharFromCode | K::CharIsAlpha | K::CharIsAlphaNum |
+            K::CharIsDigit | K::CharIsHexDigit | K::CharIsLower | K::CharIsOctDigit |
+            K::CharIsUpper | K::CharToCode | K::CharToLower | K::CharToUpper |
+            K::CryptoAesKeyFromPassword | K::CryptoChachaKeyFromPassword | K::CryptoConstantTimeEqual | K::CryptoHmacSha256 |
+            K::CryptoHmacSha512 | K::CryptoMd5 | K::CryptoRsaSha256Verify | K::CryptoSha1 |
+            K::CryptoSha256 | K::CryptoSha512 | K::CssSafetyStripStyleClose | K::EncodingBase64Encode |
+            K::EncodingHexEncode | K::EncodingUrlEncode | K::FontMonospace | K::FontSansSerif |
+            K::FontSerif | K::HtmlEscapeAttr | K::HtmlEscapeText | K::MathAbs |
+            K::MathAcos | K::MathAcosh | K::MathAsin | K::MathAsinh |
+            K::MathAtan | K::MathAtan2 | K::MathAtanh | K::MathCbrt |
+            K::MathCeil | K::MathCos | K::MathCosh | K::MathE |
+            K::MathExp | K::MathExp2 | K::MathFloor | K::MathHypot |
+            K::MathInf | K::MathIsNaN | K::MathLog | K::MathLog10 |
+            K::MathLog2 | K::MathMod | K::MathNan | K::MathPhi |
+            K::MathPi | K::MathPow | K::MathRemainder | K::MathRound |
+            K::MathSin | K::MathSinh | K::MathSqrt | K::MathSqrt2 |
+            K::MathTan | K::MathTanh | K::MathTrunc | K::MoneyCurrencyName |
+            K::MoneyHasRate | K::MoneyIsKnownCurrency | K::MoneyMinorUnits | K::MoneySymbol |
+            K::RateLimitAllow | K::StringAll | K::StringAny | K::StringAppend |
+            K::StringCasefold | K::StringCons | K::StringContains | K::StringContainsIn |
+            K::StringDropLeft | K::StringDropRight | K::StringEndsWith | K::StringEndsWithIn |
+            K::StringEqualFold | K::StringFilter | K::StringFromChar | K::StringFromFloat |
+            K::StringFromInt | K::StringIsEmail | K::StringIsEmpty | K::StringIsUrl |
+            K::StringLeft | K::StringLength | K::StringMap | K::StringPad |
+            K::StringPadLeft | K::StringPadRight | K::StringRepeat | K::StringReplace |
+            K::StringReverse | K::StringRight | K::StringSlice | K::StringStartsWith |
+            K::StringStartsWithIn | K::StringToLower | K::StringToUpper | K::StringTrim |
+            K::StringTrimEnd | K::StringTrimStart | K::SystemGetenvOr | K::TimeDaysInMonth |
+            K::TimeIsLeapYear | K::TimeTimeString | K::UiDarkMode | K::UiDesktop |
+            K::UiLightMode | K::UiMobile | K::UiReducedMotion | K::UiTablet => return None,
+
             K::WebAppRouted => return None,
 
             // ── Ipe.Auth (9 kernels) ──────────────────────────────────────
@@ -8049,8 +7963,9 @@ impl<'a> Builder<'a> {
 /// IPE-L0108 at their call sites).
 ///
 /// This is the *lift* behind the salsa `kernel_types()` query: the table is
-/// read through the SAME [`Builder::stdlib_scheme`]
-/// method inference uses, so the memoized table can never drift from what
+/// read through the SAME [`Builder::resolve_scheme`] adapter inference uses
+/// (a `TyShape`-carrying kernel is interpreted; every other resolves through
+/// [`Builder::stdlib_scheme`]), so the memoized table can never drift from what
 /// constraint generation actually applies. The schemes are pure functions of
 /// the interned builtin names — no union-find state is created or consumed.
 ///
@@ -8067,7 +7982,7 @@ pub fn kernel_type_table(interner: &mut Interner) -> Result<Vec<(StdlibKernel, T
     let builder = Builder::for_scheme_table(&mut uf, interner, builtins);
     Ok(StdlibKernel::ALL
         .iter()
-        .filter_map(|&k| builder.stdlib_scheme(k).map(|ty| (k, ty)))
+        .filter_map(|&k| builder.resolve_scheme(SchemeKey(k)).map(|ty| (k, ty)))
         .collect())
 }
 
@@ -9454,16 +9369,25 @@ mod registry_phase_c_tests {
                  bucket.",
             );
             assert!(
-                builder.stdlib_scheme(k).is_some(),
-                "FIRST_SCHEMED {k:?} has no stdlib_scheme — a first-schemed \
-                 kernel must actually be schemed.",
+                builder.resolve_scheme(k.def().scheme).is_some(),
+                "FIRST_SCHEMED {k:?} does not resolve to a scheme — a \
+                 first-schemed kernel must actually be schemed (via its table arm \
+                 or, once migrated, its structural `TyShape`).",
             );
         }
     }
 
-    /// Condition 4 — monotone burndown. `stdlib_scheme` returns `Some` for
+    /// Condition 4 — monotone burndown. Scheme resolution returns `Some` for
     /// EXACTLY `RELOCATED ∪ FIRST_SCHEMED` and `None` for every other variant.
     /// Pins the migrated set so an accidental over- or under-migration is caught.
+    ///
+    /// Resolution is read through [`Builder::resolve_scheme`], NOT
+    /// [`Builder::stdlib_scheme`] directly: a kernel migrated to a structural
+    /// `TyShape` has NO table arm (it resolves by interpreting its shape), so
+    /// reading the table alone would see `None` and falsely report it
+    /// un-migrated. `resolve_scheme` unions both routes — the same adapter
+    /// inference and [`kernel_type_table`] use — so the burndown tracks the true
+    /// schemed set regardless of which route a family takes.
     #[test]
     fn migrated_set_burndown() {
         let mut interner = Interner::new();
@@ -9472,11 +9396,11 @@ mod registry_phase_c_tests {
         let builder = Builder::for_scheme_table(&mut uf, &interner, builtins);
 
         for &k in StdlibKernel::ALL {
-            let migrated = builder.stdlib_scheme(k).is_some();
+            let migrated = builder.resolve_scheme(k.def().scheme).is_some();
             let expected = RELOCATED.contains(&k) || FIRST_SCHEMED.contains(&k);
             assert_eq!(
                 migrated, expected,
-                "stdlib_scheme({k:?}).is_some() = {migrated} but \
+                "resolve_scheme({k:?}).is_some() = {migrated} but \
                  RELOCATED∪FIRST_SCHEMED membership = {expected}",
             );
         }
@@ -9590,17 +9514,20 @@ mod registry_phase_c_tests {
 
     /// The load-bearing byte-identity guarantee: for every kernel that carries a
     /// structural [`TyShape`], interpreting its shape yields a `Ty`
-    /// BYTE-IDENTICAL to the one [`Builder::stdlib_scheme`] produces. This is
-    /// belt-and-braces beyond the golden suite — it pins the interpreter directly
-    /// against the hand-built table, so a shape or interpreter that disagrees with
-    /// it is caught here, pre-cargo, rather than as a golden-diff.
+    /// BYTE-IDENTICAL to the type its (now-removed) `stdlib_scheme` arm produced.
+    /// This is belt-and-braces beyond the golden suite — it pins the interpreter
+    /// directly against an INDEPENDENT reference, so a shape or interpreter that
+    /// disagrees with it is caught here, pre-cargo, rather than as a golden-diff.
     ///
-    /// The `stdlib_scheme` arm for a kernel that also carries a shape is RETAINED
-    /// as this equality oracle. Production resolves the kernel through the shape
-    /// (via `resolve_scheme`), but the table arm stays as the reference the
-    /// `stdlib_scheme` totality invariants (`migrated_set_burndown`,
-    /// `stdlib_scheme_total_over_reachable`) also read directly; removing it would
-    /// break those invariants for no interpreter benefit.
+    /// # Where the oracle lives
+    ///
+    /// A shape-carrying family has no `stdlib_scheme` arm (its scheme lives once,
+    /// on the descriptor), so there is no table `Ty` to compare against. The
+    /// byte-identity reference is [`expected_primitive_scheme`] below: a per-kernel
+    /// hand-built `Ty`, authored from each kernel's published type signature using
+    /// the primitive constructors. It is a genuine independent oracle — NOT derived
+    /// from the shape or the interpreter — so a wrong shape or a wrong interpreter
+    /// arm makes `interpret_shape(shape) != expected` fire here.
     #[test]
     fn interpreted_shape_matches_legacy() {
         let mut interner = Interner::new();
@@ -9613,25 +9540,23 @@ mod registry_phase_c_tests {
             let Some(shape) = k.def().shape else { continue };
             migrated += 1;
             let interpreted = builder.interpret_shape(shape);
-            // The legacy arm is the byte-identity oracle and must be retained for
-            // every migrated kernel until the totality invariants migrate off the
-            // direct-table read.
-            let legacy = builder.stdlib_scheme(k);
+            let expected = expected_primitive_scheme(&builder, k);
             assert!(
-                legacy.is_some(),
-                "kernel {k:?} carries a TyShape but has no stdlib_scheme arm to \
-                 prove byte-identity against — the oracle arm must be retained",
+                expected.is_some(),
+                "kernel {k:?} carries a TyShape but the test oracle \
+                 `expected_primitive_scheme` has no reference `Ty` for it — \
+                 add its hand-built signature so byte-identity stays proven",
             );
             assert_eq!(
                 Some(interpreted),
-                legacy,
+                expected,
                 "interpreted TyShape for {k:?} is NOT byte-identical to its \
-                 stdlib_scheme Ty — the structural encoding disagrees with the \
-                 hand-built table",
+                 reference Ty — the structural encoding disagrees with the \
+                 hand-authored signature",
             );
         }
-        // Guard against a silently-empty sweep: the Bitwise family carries seven
-        // shapes, so at least that many must resolve.
+        // Guard against a silently-empty sweep: the Bitwise family alone carries
+        // seven shapes, and many more primitive families carry one.
         assert!(
             migrated >= 7,
             "expected at least the Bitwise family (7 kernels) to carry a \
@@ -9639,12 +9564,203 @@ mod registry_phase_c_tests {
         );
     }
 
-    /// Totality gate. `stdlib_scheme` is TOTAL over the reachable set:
+    /// Independent byte-identity oracle for the shape-migrated primitive
+    /// families: the exact `Ty` each kernel's removed `stdlib_scheme` arm built,
+    /// re-authored here from the kernel's published signature over the six
+    /// primitive constructors. Returns `None` for a kernel that carries no
+    /// primitive shape (so a future non-primitive migration is flagged loudly by
+    /// [`interpreted_shape_matches_legacy`] rather than silently unproven).
+    ///
+    /// Deliberately built with LOCAL closures (not by calling `stdlib_scheme`,
+    /// which carries no arm for a shape-migrated family) so it is a second,
+    /// independent source — the whole point of an oracle.
+    #[allow(clippy::too_many_lines)] // declarative reference table — mirrors the removed arms
+    #[allow(clippy::match_same_arms)] // family-grouped; coincidentally-equal signatures across families stay separate for readability
+    fn expected_primitive_scheme(builder: &Builder, k: StdlibKernel) -> Option<Ty> {
+        use StdlibKernel as K;
+        let b = &builder.builtins;
+        let int = || Ty::Con {
+            module: Vec::new(),
+            name: b.int,
+            args: Vec::new(),
+        };
+        let float = || Ty::Con {
+            module: Vec::new(),
+            name: b.float,
+            args: Vec::new(),
+        };
+        let bool_ty = || Ty::Con {
+            module: Vec::new(),
+            name: b.bool,
+            args: Vec::new(),
+        };
+        let string = || Ty::Con {
+            module: Vec::new(),
+            name: b.string,
+            args: Vec::new(),
+        };
+        let char = || Ty::Con {
+            module: Vec::new(),
+            name: b.char,
+            args: Vec::new(),
+        };
+        let bytes = || Ty::Con {
+            module: Vec::new(),
+            name: b.bytes,
+            args: Vec::new(),
+        };
+        let fun = |a: Ty, b: Ty| Ty::Fun(Box::new(a), Box::new(b));
+        Some(match k {
+            // ── Bitwise / Math.abs. ──
+            K::BitwiseAnd
+            | K::BitwiseOr
+            | K::BitwiseXor
+            | K::BitwiseShiftLeftBy
+            | K::BitwiseShiftRightBy
+            | K::BitwiseShiftRightZfBy => fun(int(), fun(int(), int())),
+            K::BitwiseComplement | K::MathAbs => fun(int(), int()),
+
+            // ── Math (monomorphic arms). ──
+            K::MathPi | K::MathE | K::MathPhi | K::MathSqrt2 | K::MathInf | K::MathNan => float(),
+            K::MathIsNaN => fun(float(), bool_ty()),
+            K::MathSqrt
+            | K::MathCbrt
+            | K::MathExp
+            | K::MathExp2
+            | K::MathLog
+            | K::MathLog2
+            | K::MathLog10
+            | K::MathSin
+            | K::MathCos
+            | K::MathTan
+            | K::MathAsin
+            | K::MathAcos
+            | K::MathAtan
+            | K::MathSinh
+            | K::MathCosh
+            | K::MathTanh
+            | K::MathAsinh
+            | K::MathAcosh
+            | K::MathAtanh
+            | K::BasicsSqrt => fun(float(), float()),
+            K::MathFloor | K::MathCeil | K::MathRound | K::MathTrunc => fun(float(), int()),
+            K::MathPow | K::MathHypot | K::MathAtan2 | K::MathMod | K::MathRemainder => {
+                fun(float(), fun(float(), float()))
+            }
+
+            // ── Basics. ──
+            K::BasicsNot => fun(bool_ty(), bool_ty()),
+
+            // ── String / Money / Time primitive shapes. ──
+            K::StringFromInt | K::TimeTimeString => fun(int(), string()),
+            K::StringFromFloat => fun(float(), string()),
+            // `Money.minorUnits : String -> Int` (the ISO-code-taking kernel).
+            K::StringLength | K::MoneyMinorUnits => fun(string(), int()),
+            K::StringIsEmpty | K::StringIsEmail | K::StringIsUrl | K::MoneyIsKnownCurrency => {
+                fun(string(), bool_ty())
+            }
+            K::StringReverse
+            | K::StringToUpper
+            | K::StringToLower
+            | K::StringCasefold
+            | K::StringTrim
+            | K::StringTrimStart
+            | K::StringTrimEnd
+            | K::CryptoSha256
+            | K::CryptoSha512
+            | K::CryptoSha1
+            | K::CryptoMd5
+            | K::EncodingBase64Encode
+            | K::EncodingUrlEncode
+            | K::EncodingHexEncode
+            | K::HtmlEscapeText
+            | K::HtmlEscapeAttr
+            | K::CssSafetyStripStyleClose
+            | K::MoneySymbol
+            | K::MoneyCurrencyName => fun(string(), string()),
+            K::StringFromChar | K::CharToLower | K::CharToUpper => fun(char(), string()),
+            K::StringAppend
+            | K::SystemGetenvOr
+            | K::CryptoHmacSha256
+            | K::CryptoHmacSha512
+            | K::CryptoAesKeyFromPassword
+            | K::CryptoChachaKeyFromPassword => fun(string(), fun(string(), string())),
+            K::StringContains
+            | K::StringStartsWith
+            | K::StringEndsWith
+            | K::StringEqualFold
+            | K::StringContainsIn
+            | K::StringStartsWithIn
+            | K::StringEndsWithIn
+            | K::CryptoConstantTimeEqual
+            | K::MoneyHasRate => fun(string(), fun(string(), bool_ty())),
+            K::StringReplace => fun(string(), fun(string(), fun(string(), string()))),
+            K::CryptoRsaSha256Verify => fun(string(), fun(string(), fun(string(), bool_ty()))),
+            K::StringRepeat
+            | K::StringDropLeft
+            | K::StringDropRight
+            | K::StringLeft
+            | K::StringRight => fun(int(), fun(string(), string())),
+            K::StringSlice => fun(int(), fun(int(), fun(string(), string()))),
+            K::StringPadLeft | K::StringPadRight | K::StringPad => {
+                fun(int(), fun(char(), fun(string(), string())))
+            }
+            K::StringCons => fun(char(), fun(string(), string())),
+            K::StringMap => fun(fun(char(), char()), fun(string(), string())),
+            K::StringFilter => fun(fun(char(), bool_ty()), fun(string(), string())),
+            K::StringAny | K::StringAll => fun(fun(char(), bool_ty()), fun(string(), bool_ty())),
+
+            // ── Char. ──
+            K::CharIsAlpha
+            | K::CharIsDigit
+            | K::CharIsLower
+            | K::CharIsUpper
+            | K::CharIsAlphaNum
+            | K::CharIsHexDigit
+            | K::CharIsOctDigit => fun(char(), bool_ty()),
+            K::CharToCode => fun(char(), int()),
+            K::CharFromCode => fun(int(), char()),
+
+            // ── Bytes. ──
+            K::BytesEmpty => bytes(),
+            K::BytesLength => fun(bytes(), int()),
+            K::BytesIsEmpty => fun(bytes(), bool_ty()),
+            K::BytesFromString => fun(string(), bytes()),
+            K::BytesToHex | K::BytesToBase64 => fun(bytes(), string()),
+            K::BytesAppend => fun(bytes(), fun(bytes(), bytes())),
+            K::BytesSlice => fun(int(), fun(int(), fun(bytes(), bytes()))),
+
+            // ── Time calendar helpers. ──
+            K::TimeIsLeapYear => fun(int(), bool_ty()),
+            K::TimeDaysInMonth => fun(int(), fun(int(), int())),
+
+            // ── RateLimit / string constants. ──
+            K::RateLimitAllow => fun(string(), fun(string(), fun(int(), fun(int(), bool_ty())))),
+            K::FontSansSerif
+            | K::FontSerif
+            | K::FontMonospace
+            | K::UiMobile
+            | K::UiTablet
+            | K::UiDesktop
+            | K::UiDarkMode
+            | K::UiLightMode
+            | K::UiReducedMotion => string(),
+
+            _ => return None,
+        })
+    }
+
+    /// Totality gate. Scheme resolution is TOTAL over the reachable set:
     /// every `StdlibKernel` except the explicit `KNOWN_UNBACKED` exclusions has a
     /// concrete scheme. This is the load-bearing precondition for deleting the
     /// `Ty::Var(u32::MAX)` fallback — only sound if no reachable kernel is
     /// silently riding it. If this fails, it prints the un-schemed variants;
     /// they must be schemed (or classified `KNOWN_UNBACKED`).
+    ///
+    /// Read through [`Builder::resolve_scheme`], not [`Builder::stdlib_scheme`]:
+    /// a shape-migrated kernel has no table arm and is schemed by interpreting
+    /// its `TyShape`, so the totality check must union both routes exactly as
+    /// inference does.
     #[test]
     fn stdlib_scheme_total_over_reachable() {
         let mut interner = Interner::new();
@@ -9658,7 +9774,7 @@ mod registry_phase_c_tests {
             .filter(|k| {
                 !KNOWN_UNBACKED.contains(k)
                     && !REACHABLE_BUT_UNLOWERED.contains(k)
-                    && builder.stdlib_scheme(*k).is_none()
+                    && builder.resolve_scheme(k.def().scheme).is_none()
             })
             .collect();
         assert!(
