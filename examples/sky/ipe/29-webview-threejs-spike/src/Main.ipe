@@ -32,11 +32,13 @@ module Main exposing (main)
 --      Sky.Live uses).
 
 import Ipe.Task as Task
-import Ipe.WebView as Webview
+import Ipe.Tea.WebView as WebView
 import Ipe.Tea.WebView.Cmd as Cmd
 import Ipe.Tea.WebView.Sub as Sub
 import Ipe.Html as Html
 import Ipe.Html.Attributes as Attr
+import Ipe.Ui as Ui
+import Ipe.Ui exposing (Element)
 
 -- ═══════════════════════════════════════════════════════════════════
 -- TEA shape — minimal: nothing in Model the WebGL scene cares about,
@@ -75,9 +77,12 @@ subscriptions _ =
 -- because the Three.js scene paints into a plain <div id="canvas-wrap">
 -- that the loaded JS bundle takes over — no Std.Ui layout machinery
 -- needed.
-view : Model -> any
+view : Model -> Element Msg
 view _ =
-    Html.node
+    -- Raw DOM (the Three.js canvas mount + vendored <script> tags) reaches the
+    -- portable `Element` view through the `Ui.html` raw-HTML escape.
+    Ui.html
+        (Html.node
         "div"
         [ Attr.id "scene-root" ]
         [ Html.node
@@ -137,13 +142,14 @@ view _ =
         , Html.script [ Attr.src "/static/three.min.js" ] []
         , Html.script [ Attr.src "/static/scene.js" ] []
         ]
+        )
 
 
 -- ═══════════════════════════════════════════════════════════════════
 -- Main
 -- ═══════════════════════════════════════════════════════════════════
 main =
-    Webview.app
+    WebView.app
         { init = init
         , update = update
         , view = view

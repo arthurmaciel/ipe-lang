@@ -19,7 +19,7 @@ Then type:
 import Ipe.String as String
 import Ipe.System as System
 import Ipe.Task as Task
-import Ipe.Cli as Cli
+import Ipe.Tea.Terminal as Terminal
 import Ipe.Tea.Terminal.Cmd as Cmd
 import Ipe.Tea.Terminal.Sub as Sub
 
@@ -92,7 +92,7 @@ onLine line =
 
 
 main =
-    Cli.program
+    Terminal.appLines
         { init = init
         , update = update
         , view = view
