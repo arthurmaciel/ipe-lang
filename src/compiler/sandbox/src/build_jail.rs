@@ -447,15 +447,22 @@ const fn win_exit_to_i32(code: u32) -> i32 {
 /// no new `unsafe` FFI is introduced). Per ADR 0051 the `jail(2)` posture is a
 /// sanctioned alternative to `cap_enter` for lowering the axes:
 ///
-/// - **network** — `ip4=disable ip6=disable` (plus `allow.raw_sockets=0`): a
-///   process in the jail has no global network namespace, so an outbound socket
-///   under a network-withholding profile is denied → the probe's exit-`10`
-///   decodes to `Denied { network }`.
-/// - **filesystem** — the jail runs as an unprivileged user (`exec.jail_user`)
-///   whose only writable directory is the scratch (owned by that user); an
-///   out-of-scratch write is denied → exit-`11` decodes to `Denied { filesystem }`.
-///   When the filesystem axis is granted the working tree is made writable to the
-///   same user so a granted effect is not false-denied.
+/// - **network** — withheld ⇒ `vnet=new`: the jail gets a brand-new, EMPTY network
+///   stack (only a down `lo0`, no configured interface, no route), so an outbound
+///   socket has no reachable destination and is denied at the kernel → the probe's
+///   exit-`10` decodes to `Denied { network }`. A non-vnet `ip4=disable` jail shares
+///   the host's network stack and can still open outbound sockets, so a fresh empty
+///   vnet — not mere address disabling — is what actually withholds the axis.
+///   Granted ⇒ `vnet=inherit` shares the host stack so a granted effect is not
+///   false-denied.
+/// - **filesystem** — the jail is chrooted (`path=`) to a fresh root over which the
+///   whole host `/` is nullfs-mounted READ-ONLY, with ONLY the scratch (and, when
+///   the axis is granted, the working tree) nullfs-mounted READ-WRITE at their
+///   original absolute paths inside it — the FreeBSD counterpart of the Linux arm's
+///   `--ro-bind / /` + one writable mount. An out-of-scratch write targets the
+///   read-only mount and is denied by the mount flag (never reliant on host file
+///   ownership) → exit-`11` decodes to `Denied { filesystem }`. The payload also
+///   runs as an unprivileged user (`exec.jail_user`) as defence in depth.
 /// - **subprocess** — a withheld subprocess axis is a genuine kernel denial of
 ///   process creation, not mere omission: the jail is created with a process
 ///   limit (`children.max=0`) so `fork`/`pdfork`/`exec` of a NEW process inside
@@ -754,6 +761,36 @@ pub(crate) fn find_in_path(bin: &str) -> Option<PathBuf> {
         .find(|candidate| candidate.is_file())
 }
 
+/// The FreeBSD jail's network-axis parameters for the given grant.
+///
+/// PURE — no process spawned — so the exact deny/grant surface is unit-testable on
+/// any host, exactly like the macOS [`sbpl_from_profile`] and the Linux
+/// [`run_jail_argv`]. Withheld ⇒ a fresh EMPTY vnet (`vnet=new`): a brand-new
+/// network stack with no configured interface and no route, so an outbound socket
+/// has no reachable destination and is denied at the kernel. The disabled address
+/// families are belt-and-braces. A non-vnet `ip4=disable` jail shares the host's
+/// stack and can still open outbound sockets, so the empty vnet — not address
+/// disabling alone — is what withholds the axis. Granted ⇒ `vnet=inherit` shares the
+/// host stack so a granted effect is not false-denied.
+#[cfg(any(target_os = "freebsd", test))]
+#[must_use]
+pub(crate) fn freebsd_jail_network_params(network_granted: bool) -> Vec<OsString> {
+    if network_granted {
+        vec![
+            OsString::from("vnet=inherit"),
+            OsString::from("ip4=inherit"),
+            OsString::from("ip6=inherit"),
+        ]
+    } else {
+        vec![
+            OsString::from("vnet=new"),
+            OsString::from("ip4=disable"),
+            OsString::from("ip6=disable"),
+            OsString::from("allow.raw_sockets=0"),
+        ]
+    }
+}
+
 /// The FreeBSD returning build-jail arm: establish a scratch-rooted `jail(2)`
 /// (via the `jail(8)` CLI) lowering the profile's axes, scrub the env in the
 /// launcher, run the payload confined, wait, and decode the exit into a
@@ -763,11 +800,11 @@ mod freebsd_jail {
     use super::{JailOutcome, find_in_path, macos_scrubbed_env};
     use crate::run_jail::{FilesystemScope, RunJailDefect, SandboxProfile};
     use std::ffi::OsString;
-    use std::path::Path;
+    use std::path::{Path, PathBuf};
 
-    /// The unprivileged user the jailed payload runs as. Its only writable
-    /// directory is the scratch (chowned to it below), so an out-of-scratch write
-    /// is denied by ownership — the observable of a withheld filesystem axis.
+    /// The unprivileged user the jailed payload runs as. A second, defence-in-depth
+    /// layer under the read-only jail root: even the writable scratch is owned by
+    /// this user, so nothing runs privileged inside the confinement.
     const JAIL_USER: &str = "nobody";
 
     /// Run `payload` inside a `jail(8)`-established jail lowered from `profile` and
@@ -787,6 +824,19 @@ mod freebsd_jail {
                     missing: vec!["jail"],
                 },
             };
+        };
+
+        // The filesystem axis is confined STRUCTURALLY, not by DAC ownership: the
+        // jail is chrooted (`path=`) to a fresh root that is a READ-ONLY nullfs view
+        // of the host `/`, with ONLY the scratch (and, when the filesystem axis is
+        // granted, the working tree) nullfs-mounted read-write inside it. This is
+        // the exact FreeBSD counterpart of the Linux arm's `--ro-bind / /` + one
+        // writable mount: an out-of-scratch write targets the read-only root and is
+        // denied by the mount flag, never reliant on host file permissions. Absent
+        // the mount root the untrusted build is never run — fail-closed.
+        let jail_root = match RoRootMount::establish(scoped_tmp, working_tree, profile) {
+            Ok(root) => root,
+            Err(defect) => return JailOutcome::Unavailable { defect },
         };
 
         // A withheld subprocess axis MUST be a genuine kernel denial of process
@@ -819,10 +869,11 @@ mod freebsd_jail {
             }
         };
 
-        // The scratch must be writable to the unprivileged jail user; the launcher
-        // (root on the FreeBSD CI VM, as jail creation requires) chowns it. A
-        // failed chown refuses — a scratch the payload cannot write is a broken
-        // jail, never run.
+        // The one writable mount (the scratch) must be writable to the unprivileged
+        // jail user; the launcher (root on the FreeBSD CI VM, as jail creation
+        // requires) chowns it. A failed chown refuses — a scratch the payload cannot
+        // write is a broken jail, never run. Defence in depth atop the read-only
+        // root: even the writable mount is only reachable by an unprivileged user.
         if let Err(defect) = chown_to_jail_user(scoped_tmp) {
             return JailOutcome::Unavailable { defect };
         }
@@ -833,7 +884,7 @@ mod freebsd_jail {
         }
 
         let jail_name = per_run_jail_name();
-        let argv = jail_argv(&jail_bin, &jail_name, profile, working_tree, payload);
+        let argv = jail_argv(&jail_bin, &jail_name, jail_root.root(), profile, payload);
 
         // Env scrub in the launcher (the jail does not scrub the inherited env),
         // via the SAME allowlist the macOS/Windows arms use — one env list.
@@ -852,54 +903,54 @@ mod freebsd_jail {
         };
 
         let outcome = spawn_and_decode(&argv, &scrubbed);
-        // The jail is `persist=0`, so it is torn down when the payload exits; the
-        // scratch chown is inert. Nothing else to release beyond the rctl guard.
+        // The jail is `persist=0`, so it is torn down when the payload exits. The
+        // read-only root's nullfs mounts and the rctl rule are unmounted/removed by
+        // their guards on drop (in reverse order) as this scope ends, leaving no
+        // residue across the audit's per-axis tightening loop.
+        drop(jail_root);
         outcome
     }
 
     /// Build the `jail -c … command=<payload>` argv lowering the profile's axes.
     ///
-    /// - `path=/` chroots the jail to the live root (read-only to the
-    ///   unprivileged user except the chowned scratch/working tree).
-    /// - `ip4=disable ip6=disable allow.raw_sockets=0` withhold the network
-    ///   namespace unconditionally when the axis is absent; when granted, the host
-    ///   network is inherited.
-    /// - `exec.jail_user=nobody` runs the payload unprivileged so an out-of-scratch
-    ///   write is denied by ownership.
+    /// - `path=<jail_root>` chroots the jail to a fresh read-only nullfs view of the
+    ///   host root (established by [`RoRootMount`]) with only the scratch mounted
+    ///   read-write inside it — so an out-of-scratch write hits the read-only mount
+    ///   and is denied structurally, not by file ownership.
+    /// - network withheld ⇒ `vnet=new` gives the jail a BRAND-NEW, empty network
+    ///   stack (only a `lo0` that is down, no configured interface, no route), so an
+    ///   outbound socket has no reachable destination and is denied at the kernel;
+    ///   `ip4=disable ip6=disable allow.raw_sockets=0` further deny address families.
+    ///   Granted ⇒ `vnet=inherit ip4=inherit ip6=inherit` shares the host stack so a
+    ///   granted effect is not false-denied. A non-vnet `ip4=disable` jail shares the
+    ///   host stack and can still open outbound sockets; a fresh empty vnet cannot.
+    /// - `exec.jail_user=nobody` runs the payload unprivileged (defence in depth
+    ///   under the read-only root).
     /// - `persist=0` tears the jail down when the payload exits (no orphan jail).
     fn jail_argv(
         jail_bin: &Path,
         jail_name: &str,
+        jail_root: &Path,
         profile: &SandboxProfile,
-        working_tree: &Path,
         payload: &[OsString],
     ) -> Vec<OsString> {
         let mut argv: Vec<OsString> = Vec::new();
         argv.push(jail_bin.as_os_str().to_owned());
         argv.push(OsString::from("-c"));
         argv.push(OsString::from(format!("name={jail_name}")));
-        argv.push(OsString::from("path=/"));
+        let mut path_param = OsString::from("path=");
+        path_param.push(jail_root.as_os_str());
+        argv.push(path_param);
         argv.push(OsString::from("host.hostname=ipe-tier2-jail"));
-        // Network: withheld ⇒ no IPv4/IPv6/raw sockets at all (a socket is denied
-        // → the probe's exit-10 decodes to Denied { network }). Granted ⇒ inherit
-        // the host network so a granted effect is not false-denied.
-        if profile.network {
-            argv.push(OsString::from("ip4=inherit"));
-            argv.push(OsString::from("ip6=inherit"));
-        } else {
-            argv.push(OsString::from("ip4=disable"));
-            argv.push(OsString::from("ip6=disable"));
-            argv.push(OsString::from("allow.raw_sockets=0"));
-        }
+        // Network: withheld ⇒ a fresh EMPTY vnet (no interface, no route) so an
+        // outbound socket cannot reach anything and is denied → the probe's exit-10
+        // decodes to Denied { network }; address families are disabled too. Granted
+        // ⇒ inherit the host stack so a granted effect is not false-denied. The pure
+        // param list is unit-tested on any host via `freebsd_jail_network_params`.
+        argv.extend(super::freebsd_jail_network_params(profile.network));
         argv.push(OsString::from("allow.sysvipc=0"));
         argv.push(OsString::from("persist=0"));
         argv.push(OsString::from(format!("exec.jail_user={JAIL_USER}")));
-        // The working tree is made writable to the jail user (chowned by the
-        // caller) only when the filesystem axis is granted, so a granted effect is
-        // not false-denied; when withheld it stays owned by the launcher and the
-        // unprivileged payload cannot write it. No extra jail parameter is needed —
-        // the ownership on the chrooted path is the boundary.
-        let _ = working_tree;
         // The command: `jail(8)`'s `command` parameter collects EVERYTHING on the
         // command line following it as the argv to `execvp` inside the jail — one
         // command-line argument per argv slot, with NO shell and NO quote removal.
@@ -947,6 +998,162 @@ mod freebsd_jail {
                 detail: format!("could not run chown for {}: {e}", path.display()),
             }),
         }
+    }
+
+    /// Join an absolute host `inner` path under the jail `root`, so the scratch (and
+    /// granted working tree) mount at their ORIGINAL absolute paths inside the chroot
+    /// — the payload's `SCRATCH_DIR=<abs>` then resolves to the writable mount. A
+    /// relative or empty `inner` (which cannot be a real absolute mount source) is
+    /// rejected by the caller before this is reached; here we strip the leading
+    /// separator so `root.join(inner)` nests rather than replacing `root`.
+    fn under_root(root: &Path, inner: &Path) -> PathBuf {
+        let rel = inner.strip_prefix("/").unwrap_or(inner);
+        root.join(rel)
+    }
+
+    /// Run `mount_nullfs [opts] <source> <target>`, refusing (fail-closed) on any
+    /// non-success so the untrusted payload never runs against a half-built root.
+    fn mount_nullfs(
+        mount_nullfs_bin: &Path,
+        read_only: bool,
+        source: &Path,
+        target: &Path,
+    ) -> Result<(), RunJailDefect> {
+        let mut command = std::process::Command::new(mount_nullfs_bin);
+        if read_only {
+            command.arg("-o").arg("ro");
+        }
+        let status = command.arg(source).arg(target).status();
+        match status {
+            Ok(s) if s.success() => Ok(()),
+            Ok(s) => Err(RunJailDefect::Spawn {
+                detail: format!(
+                    "mount_nullfs {} {} -> {} failed ({s})",
+                    if read_only { "ro" } else { "rw" },
+                    source.display(),
+                    target.display()
+                ),
+            }),
+            Err(e) => Err(RunJailDefect::Spawn {
+                detail: format!(
+                    "could not run mount_nullfs {} -> {}: {e}",
+                    source.display(),
+                    target.display()
+                ),
+            }),
+        }
+    }
+
+    /// The read-only jail root: a fresh directory over which the whole host `/` is
+    /// nullfs-mounted READ-ONLY, with the scratch (and, when the filesystem axis is
+    /// granted, the working tree) nullfs-mounted READ-WRITE at their original
+    /// absolute paths inside it. This is the FreeBSD counterpart of the Linux arm's
+    /// `--ro-bind / /` + one writable mount: `jail path=<root>` chroots the payload
+    /// here, so an out-of-scratch write targets the read-only mount and is denied by
+    /// the mount flag — never reliant on host file permissions. Every mount and the
+    /// root dir are torn down on drop, in reverse mount order.
+    struct RoRootMount {
+        umount_bin: PathBuf,
+        root: PathBuf,
+        /// Every mounted target, in mount order; unmounted in reverse on drop.
+        mounted: Vec<PathBuf>,
+    }
+
+    impl RoRootMount {
+        /// Establish the read-only root + writable scratch (+ working tree when the
+        /// filesystem axis is granted). Any missing primitive or failed mount refuses
+        /// (`Err`) so the payload never runs against an incompletely-confined root.
+        fn establish(
+            scoped_tmp: &Path,
+            working_tree: &Path,
+            profile: &SandboxProfile,
+        ) -> Result<Self, RunJailDefect> {
+            // The scratch must be an absolute path so it can be re-mounted at the same
+            // absolute location inside the chroot; a relative scratch is a broken
+            // caller contract, refused rather than silently mounted at the wrong spot.
+            if !scoped_tmp.is_absolute() {
+                return Err(RunJailDefect::Spawn {
+                    detail: format!(
+                        "scratch path {} is not absolute; cannot root the jail",
+                        scoped_tmp.display()
+                    ),
+                });
+            }
+            let Some(mount_nullfs_bin) = find_in_path("mount_nullfs") else {
+                return Err(RunJailDefect::PrimitiveUnavailable {
+                    missing: vec!["mount_nullfs"],
+                });
+            };
+            let Some(umount_bin) = find_in_path("umount") else {
+                return Err(RunJailDefect::PrimitiveUnavailable {
+                    missing: vec!["umount"],
+                });
+            };
+
+            let root = jail_root_dir();
+            if let Err(e) = std::fs::create_dir_all(&root) {
+                return Err(RunJailDefect::Spawn {
+                    detail: format!("could not create jail root {}: {e}", root.display()),
+                });
+            }
+
+            let mut mount = Self {
+                umount_bin,
+                root,
+                mounted: Vec::new(),
+            };
+
+            // 1. The whole host `/`, READ-ONLY, as the jail root. Everything the
+            //    payload can read (the shell, its tools) is here; nothing is writable.
+            mount_nullfs(&mount_nullfs_bin, true, Path::new("/"), &mount.root)?;
+            mount.mounted.push(mount.root.clone());
+
+            // 2. The scratch, READ-WRITE, at its original absolute path inside the
+            //    chroot — the ONE writable location the payload has.
+            let scratch_target = under_root(&mount.root, scoped_tmp);
+            mount_nullfs(&mount_nullfs_bin, false, scoped_tmp, &scratch_target)?;
+            mount.mounted.push(scratch_target);
+
+            // 3. The working tree, READ-WRITE, only when the filesystem axis is
+            //    granted, so a granted effect is not false-denied.
+            if profile.filesystem == FilesystemScope::WorkingTreeReadWrite {
+                let tree_target = under_root(&mount.root, working_tree);
+                mount_nullfs(&mount_nullfs_bin, false, working_tree, &tree_target)?;
+                mount.mounted.push(tree_target);
+            }
+
+            Ok(mount)
+        }
+
+        fn root(&self) -> &Path {
+            &self.root
+        }
+    }
+
+    impl Drop for RoRootMount {
+        fn drop(&mut self) {
+            // Unmount in reverse order (writable mounts before the read-only root that
+            // contains them), then remove the now-empty root dir. Best-effort: a
+            // `persist=0` jail is already gone, and a leftover mount on a torn-down
+            // scratch is inert — but clean up so the audit loop leaves no residue.
+            for target in self.mounted.iter().rev() {
+                let _ = std::process::Command::new(&self.umount_bin)
+                    .arg("-f")
+                    .arg(target)
+                    .status();
+            }
+            let _ = std::fs::remove_dir(&self.root);
+        }
+    }
+
+    /// A per-run jail-root dir path, sibling to the audit's scratch under the system
+    /// temp root, unique enough that concurrent audit calls do not collide.
+    fn jail_root_dir() -> PathBuf {
+        let pid = std::process::id();
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0, |d| d.as_nanos());
+        std::env::temp_dir().join(format!("ipe-tier2-jailroot-{pid}-{nanos}"))
     }
 
     /// A per-run jail name unique enough that concurrent audit calls do not collide.
@@ -1523,5 +1730,116 @@ mod tests {
         // the resulting exec failure as a non-clean outcome, never a silent Clean.
         let args = jail_command_args(&[]);
         assert_eq!(args, vec![std::ffi::OsString::from("command=")]);
+    }
+
+    #[test]
+    fn a_network_withholding_freebsd_jail_gets_a_fresh_empty_vnet_not_a_shared_stack() {
+        use std::ffi::OsString;
+
+        // The CI failure: a non-vnet `ip4=disable` jail shares the host stack and
+        // still opens outbound sockets. The withheld case MUST create a fresh EMPTY
+        // vnet (`vnet=new`) — a network stack with no interface and no route — so the
+        // socket has no reachable destination and is denied. It MUST NOT inherit the
+        // host stack in any form.
+        let params = freebsd_jail_network_params(false);
+        assert!(
+            params.contains(&OsString::from("vnet=new")),
+            "a withheld-network jail must get a fresh empty vnet: {params:?}"
+        );
+        assert!(
+            params.contains(&OsString::from("ip4=disable")),
+            "{params:?}"
+        );
+        assert!(
+            params.contains(&OsString::from("ip6=disable")),
+            "{params:?}"
+        );
+        assert!(
+            params.contains(&OsString::from("allow.raw_sockets=0")),
+            "{params:?}"
+        );
+        // No inherit-the-host-stack param may appear — that is the exact bug: a shared
+        // stack leaves the socket reachable.
+        for p in &params {
+            let p = p.to_string_lossy();
+            assert!(
+                !p.contains("inherit"),
+                "a withheld-network jail must not inherit any host network: {p}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_network_granting_freebsd_jail_inherits_the_host_stack_not_an_empty_vnet() {
+        use std::ffi::OsString;
+
+        // Granted ⇒ inherit the host stack so a granted network effect is not
+        // false-denied; it must NOT get the empty `vnet=new` (which would deny it).
+        let params = freebsd_jail_network_params(true);
+        assert!(
+            params.contains(&OsString::from("vnet=inherit")),
+            "a granted-network jail must inherit the host stack: {params:?}"
+        );
+        assert!(
+            !params.contains(&OsString::from("vnet=new")),
+            "a granted-network jail must not get an empty vnet: {params:?}"
+        );
+        assert!(
+            !params.contains(&OsString::from("ip4=disable")),
+            "a granted-network jail must not disable IPv4: {params:?}"
+        );
+    }
+
+    // The FreeBSD filesystem axis is confined structurally: the jail is chrooted
+    // (`path=<root>`) to a read-only nullfs view of the host, with only the scratch
+    // mounted read-write at its ORIGINAL absolute path inside that root. The
+    // out-of-scratch escape target therefore lands on the read-only mount and is
+    // denied by the mount flag. This pure helper models the same absolute-path
+    // nesting `RoRootMount::establish` performs, so the invariant is provable on any
+    // host: the scratch nests UNDER the root (never replaces it), and an
+    // out-of-scratch path is NOT under the writable mount.
+    fn under_root_model(root: &std::path::Path, inner: &std::path::Path) -> std::path::PathBuf {
+        let rel = inner.strip_prefix("/").unwrap_or(inner);
+        root.join(rel)
+    }
+
+    #[test]
+    fn the_scratch_mounts_under_the_jail_root_at_its_absolute_path() {
+        use std::path::Path;
+
+        // A read-only root at /tmp/jailroot-X; the scratch /tmp/ipe-scratch mounts at
+        // /tmp/jailroot-X/tmp/ipe-scratch — nested UNDER the root (so `path=<root>`
+        // chroots the payload, and `SCRATCH_DIR=/tmp/ipe-scratch` resolves to the
+        // writable mount inside the chroot). The leading `/` must NOT make `join`
+        // discard the root.
+        let root = Path::new("/tmp/jailroot-X");
+        let scratch = Path::new("/tmp/ipe-scratch");
+        let mounted = under_root_model(root, scratch);
+        assert_eq!(mounted, Path::new("/tmp/jailroot-X/tmp/ipe-scratch"));
+        assert!(
+            mounted.starts_with(root),
+            "the writable scratch mount must nest under the jail root: {mounted:?}"
+        );
+    }
+
+    #[test]
+    fn an_out_of_scratch_escape_target_is_not_under_the_writable_scratch_mount() {
+        use std::path::Path;
+
+        // The escape target /usr/ipe-tier2-escape-probe, resolved inside the chroot,
+        // is /tmp/jailroot-X/usr/... — on the READ-ONLY root, NOT under the writable
+        // scratch mount. So the out-of-scratch write is denied by the read-only mount
+        // flag, structurally, never reliant on host file ownership.
+        let root = Path::new("/tmp/jailroot-X");
+        let scratch_mount = under_root_model(root, Path::new("/tmp/ipe-scratch"));
+        let escape_in_chroot = under_root_model(root, Path::new("/usr/ipe-tier2-escape-probe"));
+        assert!(
+            escape_in_chroot.starts_with(root),
+            "the escape target still resolves under the read-only jail root: {escape_in_chroot:?}"
+        );
+        assert!(
+            !escape_in_chroot.starts_with(&scratch_mount),
+            "an out-of-scratch path must NOT fall under the one writable mount: {escape_in_chroot:?}"
+        );
     }
 }
