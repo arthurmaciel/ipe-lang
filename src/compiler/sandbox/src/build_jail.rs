@@ -595,13 +595,18 @@ fn spawn_and_decode(
 ///   blanket `(deny file-write*)` withholds every other path, so an
 ///   out-of-scratch write under a filesystem-withholding profile is denied and
 ///   the `filesystem` axis is observable.
-/// - **subprocess**: withheld (`!profile.subprocess`) ⇒ `(deny process-exec*)`
-///   and `(deny process-fork)`, mirroring the Linux jail's seccomp denial of
-///   the task-creation family. A `fork`/`exec` under a subprocess-withholding
-///   profile is denied, so the `subprocess` axis is observable — and the
-///   `native-ffi`-via-exec escape (opaque native code shelling out) is closed.
-///   Granted ⇒ no process denial, so the allow-default base leaves spawning
-///   reachable.
+/// - **subprocess**: withheld (`!profile.subprocess`) ⇒ `(deny process-fork)`,
+///   the NEW-process denial. Every way to create a new process
+///   (`fork`/`vfork`/`posix_spawn`) forks under Seatbelt, so a fork denial
+///   confines the app to a single process — mirroring the Linux jail's seccomp
+///   denial of the task-creation family, and closing the `native-ffi`-via-a-
+///   helper escape (a helper is a new process, so it must fork). `process-exec*`
+///   is deliberately NOT denied: Seatbelt applies the profile before
+///   `sandbox-exec` execs the target in place, so an exec denial would refuse
+///   that mandatory initial exec and the app would never start. An in-place
+///   `execve` (no fork) replaces the one jailed process rather than creating a
+///   second, so it is within the single-process contract. Granted ⇒ no process
+///   denial, so the allow-default base leaves spawning reachable.
 ///
 /// The scratch and (when granted) the working tree are written as `(subpath …)`
 /// allow rules so the probe's benign write and a granted filesystem effect
