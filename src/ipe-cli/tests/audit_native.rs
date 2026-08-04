@@ -133,9 +133,21 @@ fn a_native_bearing_package_with_no_probeable_entrypoint_fails_closed() {
         stderr.contains("native Tier-2 capability enforcement"),
         "the reject names the Tier-2 check; got:\n{stderr}"
     );
+    // The fail-closed reject takes one of two shapes, both correct:
+    //   • on a WIRED arch (Tier-2 can establish a jail here) the reject is the
+    //     un-exercised one — a native-bearing package with no probe entrypoint;
+    //   • on an UNWIRED arch (e.g. linux-arm64, where the bwrap+seccomp arm is
+    //     `target_arch = "x86_64"`-gated) the reject is the refuse-to-certify one
+    //     — the native surface cannot be confined and reconciled on this host.
+    // Either is a fail-closed refusal that never silently admits the native
+    // package, which is the guarantee under test on every shipped platform.
     assert!(
-        stderr.contains("no capability-probe entrypoint") || stderr.contains("cannot exercise"),
-        "the diagnostic explains the un-exercised fail-closed reject; got:\n{stderr}"
+        stderr.contains("no capability-probe entrypoint")
+            || stderr.contains("cannot exercise")
+            || stderr.contains("cannot be confined")
+            || stderr.contains("not wired on this host"),
+        "the diagnostic explains the fail-closed reject (un-exercised on a wired arch, \
+         or refuse-to-certify on an unwired one); got:\n{stderr}"
     );
 }
 
