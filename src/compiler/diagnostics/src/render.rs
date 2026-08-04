@@ -998,12 +998,12 @@ const fn feature_label(f: Feature) -> &'static str {
              call chain and read it once at the end [feature: foreign-handle-reuse]"
         }
         Feature::RowPolyRecordAnnotation => {
-            "a row-polymorphic record annotation `{ r | f : T }` is not yet \
-             emittable — the backend emits one struct per exact field set and \
-             cannot yet emit a callee once per record shape at its call sites; \
-             use a closed record annotation, or drop the annotation and let the \
-             parameter's shape be inferred at its call site \
-             [feature: row-poly-record-annotation]"
+            "this row-polymorphic record annotation `{ r | f : T }` is not yet \
+             emittable — an argument-position open row is supported, but a row in \
+             return position, nested under a container/record/tuple, or one whose \
+             field type itself embeds an open row, is not; use a closed record \
+             annotation, or drop the annotation and let the parameter's shape be \
+             inferred at its call site [feature: row-poly-record-annotation]"
         }
         Feature::CustomElementTransport => {
             "a `CustomElement down up` boundary value is accepted at the type level \

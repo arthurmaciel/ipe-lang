@@ -1,0 +1,30 @@
+module Main exposing (main)
+
+import Ipe.Io as Io
+import Ipe.String as String
+
+
+-- A genuinely row-polymorphic annotated function with TWO required fields. The
+-- row variable `r` absorbs whatever else each record carries. It is called with
+-- two DIFFERENT concrete shapes — `{ name, id, age }` and `{ name, id, active }`
+-- — so no single closed struct serves both. The backend erases the open row
+-- into one rustc generic bounded by ONE witness trait per required field
+-- (`IpeHasName<Name = String>` + `IpeHasId<Id = i64>`), and rustc monomorphises
+-- one machine copy per shape.
+label : { r | name : String, id : Int } -> String
+label r =
+    r.name ++ "#" ++ String.fromInt r.id
+
+
+tagged : { name : String, id : Int, age : Int }
+tagged =
+    { name = "Ada", id = 1, age = 36 }
+
+
+flagged : { name : String, id : Int, active : Bool }
+flagged =
+    { name = "Bo", id = 2, active = True }
+
+
+main =
+    Io.println (label tagged ++ " " ++ label flagged)

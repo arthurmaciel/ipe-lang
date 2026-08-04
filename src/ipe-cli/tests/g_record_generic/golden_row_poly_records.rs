@@ -23,6 +23,7 @@
 //! | `row_poly_two_supersets_neg` | P6 (class-1 tripwire) | reject | unannotated let-bound getter called with two DIFFERENT superset shapes → IPE-T0001 |
 //! | `row_poly_annotation_gap` | P1 | accept | single-field arg-position row `{ r \| name : String }` erases to a witness-bounded rustc generic (`R1: IpeHasName<Name = String>`); the field read routes through `ipe_name()` |
 //! | `row_poly_greet` | P1 | accept | one row-poly fn called at TWO shapes (`{name,age}`, `{name,id}`); both concrete structs + a witness impl each; `IPE_E2E=1` prints `Ada, Bo` |
+//! | `row_poly_multi` | P1 (multi-field) | accept | a TWO-field arg row `{ r \| name : String, id : Int }` at two shapes erases to ONE generic bounded by `IpeHasName<Name = String> + IpeHasId<Id = i64>`, one witness impl per field per struct; `IPE_E2E=1` prints `Ada#1 Bo#2` |
 //! | `row_poly_task_seq_row_read` | row containment (emit-time) | accept | a row field read inside a discarded-Task effect AND its continuation, sequenced at two shapes; the effect's `rec.name` survives the emit-time capture-clone as a `Var` receiver (getter-routed, not a whole-row `CloneVar`), and `R1` carries `Send + 'static` for the boxed continuation; `IPE_E2E=1` prints `Ada`×2 then `Bo`×2 |
 //! | `row_poly_accessor` | P8 | accept | first-class accessor `.name` (desugars to `\r -> r.name`) through `List.map` over a superset list; emits a concrete getter closure over the superset struct; `IPE_E2E=1` prints `Ada, Bo` |
 //! | `row_poly_accessor_two_shapes` | P8 | accept | `.name` through `List.map` over two DIFFERENT record shapes; each occurrence a concrete getter; `IPE_E2E=1` prints `Ada, Bo | Cy, Di` |
@@ -817,5 +818,101 @@ fn accessor_two_shapes_cargo_builds_and_prints_both() {
     assert_eq!(
         outcome.stdout, "Ada, Bo | Cy, Di\n",
         "must print names read through the accessor over two distinct shapes"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// row_poly_multi — a row-polymorphic annotated function with TWO required
+// fields (`{ r | name : String, id : Int }`) called at TWO different concrete
+// shapes. Each field contributes one witness bound; rustc monomorphises one
+// machine copy per shape. Accept end-to-end.
+// ---------------------------------------------------------------------------
+
+/// ipe-0: a multi-field argument-position open row erases to ONE rustc generic
+/// carrying one witness bound per required field
+/// (`IpeHasName<Name = String> + IpeHasId<Id = i64>`), with a witness impl for
+/// each concrete struct carrying those fields. No `dyn`, no per-shape compiler
+/// monomorphisation pass — rustc specialises per call-site shape.
+#[test]
+fn row_poly_multi_lowers_with_one_witness_bound_per_field() {
+    let entry = golden_dir("row_poly_multi").join("Main.ipe");
+    let out = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("row_poly_multi_ipec_out");
+    let _ = std::fs::remove_dir_all(&out);
+
+    let Ok(runtime) = ipe::resolve_runtime() else {
+        eprintln!("SKIP row_poly_multi: runtime not available");
+        return;
+    };
+
+    let built = ipe::build(&entry, &out, &runtime);
+    assert!(
+        built.is_ok(),
+        "ipe build must accept row_poly_multi (a two-field row at two shapes): \
+         {:?}",
+        built.err()
+    );
+
+    let emitted = std::fs::read_to_string(out.join("src").join("main.rs"))
+        .expect("emitted main.rs must exist");
+    // One generic bounded by BOTH field witnesses — the multi-field slice.
+    assert!(
+        emitted.contains("IpeHasName<Name = String>") && emitted.contains("IpeHasId<Id = i64>"),
+        "the row parameter must carry one witness bound per required field; got \
+         main.rs:\n{emitted}"
+    );
+    // Both concrete argument structs reach the registry unchanged; the open row
+    // never becomes a Record (the pinned-records ADR survives).
+    assert!(
+        emitted.contains("struct RecAgeIdName") && emitted.contains("struct RecActiveIdName"),
+        "both concrete argument structs must be emitted; got main.rs:\n{emitted}"
+    );
+    // A witness impl for EACH field on EACH struct.
+    assert!(
+        emitted.contains("IpeHasName for RecAgeIdName")
+            && emitted.contains("IpeHasId for RecAgeIdName")
+            && emitted.contains("IpeHasName for RecActiveIdName")
+            && emitted.contains("IpeHasId for RecActiveIdName"),
+        "each required field must have a witness impl on each carrying struct; \
+         got main.rs:\n{emitted}"
+    );
+    assert!(
+        !emitted.contains("dyn Any"),
+        "row monomorphisation must be static — no type erasure; got \
+         main.rs:\n{emitted}"
+    );
+}
+
+/// cargo-0 ∧ run-0: the emitted project compiles (the SEAL) and prints both
+/// labels, each field read off a different concrete shape. Gated on `IPE_E2E=1`.
+#[test]
+fn row_poly_multi_cargo_builds_and_prints_both() {
+    if std::env::var("IPE_E2E").is_err() {
+        return;
+    }
+
+    let entry = golden_dir("row_poly_multi").join("Main.ipe");
+    let out = std::env::temp_dir().join("ipec_row_poly_multi_e2e");
+    let _ = std::fs::remove_dir_all(&out);
+
+    let Ok(runtime) = ipe::resolve_runtime() else {
+        return;
+    };
+    let built = ipe::build(&entry, &out, &runtime);
+    assert!(
+        built.is_ok(),
+        "ipe build must succeed for row_poly_multi: {:?}",
+        built.err()
+    );
+
+    let outcome = crate::support::build_and_run_emitted("row_poly_multi", &out);
+    assert_eq!(
+        outcome.exit_code,
+        Some(0),
+        "row_poly_multi binary must exit 0 (SEAL); got {:?}",
+        outcome.exit_code
+    );
+    assert_eq!(
+        outcome.stdout, "Ada#1 Bo#2\n",
+        "must print both labels — one machine copy of label per record shape"
     );
 }
