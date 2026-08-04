@@ -1,9 +1,22 @@
-# Keep the doc comment accurate after the println move.
+# Make `main` and the argv read run through the Task boundary, and keep the doc
+# comment accurate after the println move.
+#
+# The upstream demo forced its pipeline with `Task.run` at module load and read
+# argv synchronously with `System.args () |> Task.run` mid-chain — both a
+# removed surface (IPE-N0036). A Task-typed `main` is performed for you at the
+# entry boundary, so `main` is just the pipeline value; argv is threaded with
+# `System.args () |> Task.andThen` so its error flows through the Task channel.
 #
 # println/eprintln moved from Std.Log to Ipe.Io (imported as Io), so the code
 # call site is Io.println. This comment names that identifier, so requalify it to
 # match — the transform rewrites code only and never touches a comment, so a
 # documentary reference to a moved value is corrected here.
+#
+# The upstream imported `Sky.Core.Prelude exposing (..)` and `Std.Log exposing
+# (println)`, which brought `String`, the structured `Log` logger, and more into
+# scope implicitly. Ipê has no wildcard prelude, so add the explicit imports the
+# code needs — `Ipe.String` (String.join) and `Ipe.Log` (Log.info/infoWith/
+# errorWith).
 
 [[edit]]
 file: src/Main.ipe
@@ -14,4 +27,84 @@ find:
 replace:
 """
                            -- single `Io.println` call fires the side
+"""
+
+[[edit]]
+file: src/Main.ipe
+find:
+"""
+--
+-- We force the chain with Task.run at the entry point — runtime's
+-- main-auto-run only fires for top-level `main : Task` exports, but
+-- the codegen for that path is fragile under the current effect-
+-- boundary migration; explicit Task.run is the reliable form for
+-- CLI entry points.
+main =
+    let
+        -- System.args is Task Error (List String) after the
+        -- v1.0 Task-everywhere migration. Force at the
+        -- read site for ergonomic let-binding access.
+        pipeline =
+            Db.connect () |> Task.andThen runApp |> Task.onError reportError
+        _ = Task.run pipeline
+    in
+        ()
+"""
+replace:
+"""
+--
+-- `main` is a `Task Error ()`; the entry boundary performs it for you, so the
+-- whole program is one chained pipeline with no synchronous force.
+main : Task Error ()
+main =
+    Db.connect () |> Task.andThen runApp |> Task.onError reportError
+"""
+
+[[edit]]
+file: src/Main.ipe
+find:
+"""
+    initDb conn
+        |> Task.andThen
+               (\_ ->
+                   let
+                       userArgs =
+                           System.args () |> Task.run |> Result.withDefault []
+                       cmd = getArg userArgs
+                       cmdArg = getArg (List.drop 1 userArgs)
+                   in
+                       runCommand conn cmd cmdArg)
+"""
+replace:
+"""
+    initDb conn
+        |> Task.andThen
+               (\_ ->
+                   System.args ()
+                       |> Task.andThen
+                              (\userArgs ->
+                                  let
+                                      cmd = getArg userArgs
+                                      cmdArg = getArg (List.drop 1 userArgs)
+                                  in
+                                      runCommand conn cmd cmdArg))
+"""
+
+[[edit]]
+file: src/Main.ipe
+find:
+"""
+import Ipe.List as List
+import Ipe.Maybe as Maybe
+import Ipe.Task as Task
+import Ipe.Db as Db
+"""
+replace:
+"""
+import Ipe.List as List
+import Ipe.Maybe as Maybe
+import Ipe.String as String
+import Ipe.Task as Task
+import Ipe.Log as Log
+import Ipe.Db as Db
 """
