@@ -5,7 +5,7 @@ use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
 use ipe_diagnostics::{
     AliasExpansionKind, CmdSubShapeMismatch, DResult, Diagnostic, Located, NameError, ParseError,
-    Span, TypeError,
+    SealRejection, Span, TypeError,
 };
 use ipe_intern::{Interner, Symbol};
 use ipe_kernels::StdlibKernel;
@@ -153,10 +153,12 @@ const RESERVED_BUILTIN_TYPES: &[&str] = &[
     // Reserved so user code cannot declare its own `type CustomElement …` and
     // smuggle an untyped widget past the seal: the reservation is what makes the
     // typed boundary the ONLY spelling of the boundary (Security #1, fail-closed
-    // by construction). Until the widget transport's runtime denotation ships,
-    // any USE of the name is rejected outright in `canonicalise_type`
-    // (IPE-N0037) — before its type arguments are ever inspected — so the boundary
-    // is simply closed rather than half-emittable.
+    // by construction). A USE of the name in an annotation resolves in
+    // `canonicalise_type` only through two fail-closed gates — exactly two type
+    // parameters (arity, IPE-N0031) and a plain-value SEAL on each (IPE-N0039).
+    // The widget transport's runtime denotation is not shipped, so a
+    // `CustomElement`-typed binding is closed at emission (IPE-L0133): it
+    // type-checks but never reaches codegen with an untyped seam.
     "CustomElement",
     // `Ipe.PubSub`'s phantom topic handle type — reserved so user code cannot
     // define `type Topic` and silently bypass the lowerer's `Topic a → Str` arm.
@@ -260,9 +262,10 @@ const EXTRA_BUILTIN_TYPE_NAMES: &[&str] = &[
     // `CustomElement down up` — the JS-widget boundary type (reserved in
     // `RESERVED_BUILTIN_TYPES`). Registered here too so a bare annotation
     // `codeEditor : CustomElement EditorState EditorEvent` resolves to the
-    // empty-home sentinel rather than IPE-N0002; the annotation is then
-    // rejected fail-closed at `canonicalise_type` (IPE-N0037) until the widget
-    // transport's runtime denotation ships.
+    // empty-home sentinel rather than IPE-N0002; `canonicalise_type` then gates
+    // it fail-closed on arity (IPE-N0031) and the plain-value SEAL (IPE-N0039),
+    // and emission stays closed (IPE-L0133) until the widget transport's runtime
+    // denotation ships.
     "CustomElement",
 ];
 
@@ -332,6 +335,154 @@ fn builtin_container_arity(name: Option<&str>) -> Option<usize> {
         "List" | "Maybe" | "Set" => Some(1),
         "Dict" | "Result" => Some(2),
         _ => None,
+    }
+}
+
+/// Built-in primitive value types that ARE plain, closed, and serialisable —
+/// the leaves the boundary seal (§2.1) accepts directly. Every crossing value is
+/// encoded/decoded as canonical JSON, so this is exactly the set of primitives
+/// with a total JSON denotation.
+const SEAL_PLAIN_PRIMITIVES: &[&str] = &["Int", "Float", "Bool", "String", "Char", "Bytes"];
+
+/// Built-in single-argument value CONTAINERS the seal accepts by recursing into
+/// their element type.
+const SEAL_UNARY_CONTAINERS: &[&str] = &["List", "Set", "Maybe"];
+
+/// Built-in two-argument value CONTAINERS the seal accepts by recursing into
+/// both arguments.
+const SEAL_BINARY_CONTAINERS: &[&str] = &["Dict", "Result"];
+
+/// Built-in effect carriers — never a boundary DATA value.
+const SEAL_EFFECT_CARRIERS: &[&str] = &["Cmd", "Sub", "Task"];
+
+/// Built-in view / `Ipe.Ui` value types — clonable but not a boundary
+/// serialisable data value.
+const SEAL_VIEW_TYPES: &[&str] = &[
+    "Html",
+    "Element",
+    "Attribute",
+    "Event",
+    "Color",
+    "Length",
+    "HAlign",
+    "VAlign",
+    "Location",
+    "PseudoClass",
+    "Description",
+    "LayoutContext",
+];
+
+/// Built-in `Secret` / reserved-sink / opaque security-boundary handle types.
+/// A secret- or sink-privileged value, or an opaque validated handle, must never
+/// be serialised across the JS seam — these mirror the non-serde leaves of the
+/// `HydrationState` plain-value gate
+/// (`ipe_backend_rust::project::ir_type_contains_non_serde`), extended with the
+/// explicit `Secret` / sink exclusion the boundary seal adds.
+const SEAL_SECRET_OR_SINK: &[&str] = &[
+    "Secret",
+    "SqlFragment",
+    "SqlValue",
+    "SqlField",
+    "Regex",
+    "Path",
+    "Url",
+    "Key",
+    "Mac",
+    "EmailAddress",
+    "Locale",
+];
+
+/// The boundary-seal legality check over a canonicalised type (§2.1). Returns
+/// `Some(reason)` when `ty` may NOT cross the Ipê↔JS seam, `None` when it is a
+/// plain, closed, concrete value type.
+///
+/// FAIL-CLOSED by construction: only shapes PROVEN plain-and-safe return `None`.
+/// Primitives, `Unit`, tuples, closed records, and the value containers
+/// (`List` / `Set` / `Maybe` / `Dict` / `Result`) are accepted by recursing into
+/// their element types. Type variables and open rows are rejected (the seal is
+/// monomorphic and concrete). Functions, effect carriers, view values, and
+/// `Secret` / sink / opaque-handle builtins are rejected by category.
+///
+/// A reference to a user-declared ADT (a `Con` whose name is neither a known
+/// plain nor a known non-plain builtin) is accepted at THIS layer: its
+/// transitive payload types are not visible in the canonicaliser's type context
+/// (only alias BODIES are, and those are already expanded before reaching here).
+/// The generated per-type seal codec (a later increment) re-derives and
+/// re-verifies each concrete field; until then emission stays fully closed by the
+/// lowerer's `CustomElementTransport` fail-closed arm, so an ADT that would carry
+/// a non-plain field can never reach codegen with an untyped seam.
+fn boundary_seal_rejection(ty: &canon::Type, interner: &Interner) -> Option<SealRejection> {
+    match ty {
+        // The seal is monomorphic and concrete: a type variable has no single
+        // codec, and an open row is not a closed value type.
+        canon::Type::Var(_) | canon::Type::RecordOpen(_, _) => Some(SealRejection::NonConcrete),
+        // A function is not a plain value and is not serialisable.
+        canon::Type::Lambda(_, _) => Some(SealRejection::Function),
+        // Unit, tuples, and closed records are plain when every element is.
+        canon::Type::Unit => None,
+        canon::Type::Tuple(elems) => elems
+            .iter()
+            .find_map(|e| boundary_seal_rejection(e, interner)),
+        canon::Type::Record(fields) => fields
+            .iter()
+            .find_map(|(_, t)| boundary_seal_rejection(t, interner)),
+        canon::Type::Con { home, name, args } => {
+            let Some(text) = interner.resolve(*name) else {
+                // A name not backed by the interner is an impossible invariant;
+                // fail closed rather than treat it as plain.
+                return Some(SealRejection::NotProvenPlain);
+            };
+            if SEAL_PLAIN_PRIMITIVES.contains(&text) {
+                return None;
+            }
+            if SEAL_EFFECT_CARRIERS.contains(&text) {
+                return Some(SealRejection::EffectCarrier);
+            }
+            if SEAL_VIEW_TYPES.contains(&text) {
+                return Some(SealRejection::ViewValue);
+            }
+            if SEAL_SECRET_OR_SINK.contains(&text) {
+                return Some(SealRejection::SecretOrSink);
+            }
+            if SEAL_UNARY_CONTAINERS.contains(&text) || SEAL_BINARY_CONTAINERS.contains(&text) {
+                return args
+                    .iter()
+                    .find_map(|a| boundary_seal_rejection(a, interner));
+            }
+            // A user-declared ADT reference: accepted at this layer (its payloads
+            // are re-verified by the generated codec later). Distinguished from an
+            // unknown/opaque builtin by having a real defining home OR by not
+            // being any known builtin type name. An empty-home name that IS a
+            // known builtin but reached none of the arms above (an opaque handle
+            // such as `Db`, `Decoder`, a server type, or `CustomElement` itself)
+            // is NOT proven plain — fail closed.
+            if home.is_empty() && is_reserved_builtin_type_name(text) {
+                return Some(SealRejection::NotProvenPlain);
+            }
+            None
+        }
+    }
+}
+
+/// Render a canonicalised type for a boundary-seal diagnostic. Deliberately
+/// terse (constructor name with `…` for its arguments) — the diagnostic's job is
+/// to name WHICH parameter is illegal and WHY, not to pretty-print the full type.
+fn canon_type_display(ty: &canon::Type, interner: &Interner) -> Box<str> {
+    match ty {
+        canon::Type::Var(v) => interner.resolve(*v).unwrap_or("_").into(),
+        canon::Type::Lambda(_, _) => "a function type".into(),
+        canon::Type::Unit => "()".into(),
+        canon::Type::Tuple(_) => "a tuple type".into(),
+        canon::Type::Record(_) => "a record type".into(),
+        canon::Type::RecordOpen(_, _) => "an open record type".into(),
+        canon::Type::Con { name, args, .. } => {
+            let base = interner.resolve(*name).unwrap_or("_");
+            if args.is_empty() {
+                base.into()
+            } else {
+                format!("{base} …").into()
+            }
+        }
     }
 }
 
@@ -4175,26 +4326,55 @@ fn canonicalise_type(
                     },
                 });
             }
-            // The `CustomElement down up` JS-widget boundary type is RESERVED
-            // and resolvable, but its runtime denotation — the generated glue and
-            // the DOM-patch node family — is not shipped yet. An annotation naming
-            // it must fail CLOSED here, at the single canon site that carries a
-            // span, rather than resolve to a `Con` that reaches the lowerer's
-            // catch-all and ICEs (IPE-I0001), or silently type-check to an untyped
-            // hole. Checked on the NAME regardless of home: the name is reserved
-            // against every origin (no module — not even trusted stdlib, see the
-            // exemption sets — may define or export it), so a qualified spelling
-            // (`Dep.CustomElement`) is as illegitimate as the bare one and must
-            // not slip past a home gate into a build-time ICE. User DEFINITION of
-            // the name is already rejected earlier (IPE-N0026). The two-parameter
-            // down/up seal is reported in the message so the diagnostic teaches
-            // the intended shape.
+            // The `CustomElement down up` JS-widget boundary type RESOLVES to a
+            // two-parameter opaque builtin — but only after two fail-closed gates,
+            // checked on the NAME regardless of home. The name is reserved against
+            // every origin (no module — not even trusted stdlib — may define or
+            // export it, see the exemption sets), so a qualified spelling
+            // (`Dep.CustomElement`) is checked identically to the bare one; user
+            // DEFINITION of the name is already rejected earlier (IPE-N0026).
+            //
+            //   (a) ARITY: exactly two type arguments — the sealed down-state and
+            //       the up-event. A mis-arity is a clean IPE-N0031, the same code
+            //       the closed builtin containers use; a dedicated NAME-based check
+            //       (not `builtin_container_arity`, which gates on the empty-home
+            //       sentinel) so the qualified spelling is gated too.
+            //   (b) SEAL: each of the two parameters must be a plain, closed,
+            //       concrete value type (§2.1). A function, an effect carrier, a
+            //       view value, a `Secret`/reserved-sink type, an open row, or a
+            //       type variable is rejected fail-closed (IPE-N0039) — such a
+            //       value must never be serialised across the Ipê↔JS seam.
+            //
+            // On passing both, the type resolves to a `Con` with the empty-home
+            // sentinel. Emission is still closed: the lowerer carries an explicit
+            // fail-closed arm (IPE-L0133) for the not-yet-shipped widget transport,
+            // so nothing untyped or undenoted reaches codegen.
             if ctx.interner.resolve(name) == Some("CustomElement") {
-                return Err(Diagnostic::Name {
-                    span: ctx.ann_span,
-                    msg: NameError::UnsupportedBoundaryType {
-                        name: name_str(ctx.interner, name)?,
-                    },
+                if can_args.len() != 2 {
+                    return Err(Diagnostic::Name {
+                        span: ctx.ann_span,
+                        msg: NameError::BuiltinTypeArity {
+                            name: name_str(ctx.interner, name)?,
+                            expected: 2,
+                            found: can_args.len(),
+                        },
+                    });
+                }
+                for arg in &can_args {
+                    if let Some(reason) = boundary_seal_rejection(arg, ctx.interner) {
+                        return Err(Diagnostic::Name {
+                            span: ctx.ann_span,
+                            msg: NameError::BoundarySealIllegal {
+                                seal_type: canon_type_display(arg, ctx.interner),
+                                reason,
+                            },
+                        });
+                    }
+                }
+                return Ok(canon::Type::Con {
+                    home: Vec::new(),
+                    name,
+                    args: can_args,
                 });
             }
             // A bare builtin parametric UI constructor (`Html` / `Element` /

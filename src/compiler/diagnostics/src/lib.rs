@@ -30,7 +30,7 @@ pub use diagnostic::{
     AliasExpansionKind, AppShape, Applicability, CaseDefect, CmdSubShapeMismatch, Construct,
     DResult, Diagnostic, Expected, ExpectedSet, ExposingDefect, Feature, HOF_KERNEL_RESULT_CLASS,
     HeaderDefect, HelpLine, Hint, IfDefect, LetDefect, LowerError, ModelLeaf, NameError,
-    ParseError, SpanRole, Suggestion, TokenKind, TyDoc, TypeDeclDefect, TypeError,
+    ParseError, SealRejection, SpanRole, Suggestion, TokenKind, TyDoc, TypeDeclDefect, TypeError,
 };
 pub use render::{plain_message, render, render_ty};
 pub use span::{Located, Span};
