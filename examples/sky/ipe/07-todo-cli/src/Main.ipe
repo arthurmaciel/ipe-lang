@@ -20,7 +20,9 @@ module Main exposing (main)
 
 import Ipe.List as List
 import Ipe.Maybe as Maybe
+import Ipe.String as String
 import Ipe.Task as Task
+import Ipe.Log as Log
 import Ipe.Db as Db
 import Ipe.Error as Error exposing (Error)
 import Ipe.System
@@ -33,21 +35,11 @@ import Ipe.Io as Io
 --   3. Anything that fails along the way lands in reportError, which
 --      writes a human-readable message and exits non-zero.
 --
--- We force the chain with Task.run at the entry point — runtime's
--- main-auto-run only fires for top-level `main : Task` exports, but
--- the codegen for that path is fragile under the current effect-
--- boundary migration; explicit Task.run is the reliable form for
--- CLI entry points.
+-- `main` is a `Task Error ()`; the entry boundary performs it for you, so the
+-- whole program is one chained pipeline with no synchronous force.
+main : Task Error ()
 main =
-    let
-        -- System.args is Task Error (List String) after the
-        -- v1.0 Task-everywhere migration. Force at the
-        -- read site for ergonomic let-binding access.
-        pipeline =
-            Db.connect () |> Task.andThen runApp |> Task.onError reportError
-        _ = Task.run pipeline
-    in
-        ()
+    Db.connect () |> Task.andThen runApp |> Task.onError reportError
 
 
 runApp : Db -> Task Error ()
@@ -55,13 +47,14 @@ runApp conn =
     initDb conn
         |> Task.andThen
                (\_ ->
-                   let
-                       userArgs =
-                           System.args () |> Task.run |> Result.withDefault []
-                       cmd = getArg userArgs
-                       cmdArg = getArg (List.drop 1 userArgs)
-                   in
-                       runCommand conn cmd cmdArg)
+                   System.args ()
+                       |> Task.andThen
+                              (\userArgs ->
+                                  let
+                                      cmd = getArg userArgs
+                                      cmdArg = getArg (List.drop 1 userArgs)
+                                  in
+                                      runCommand conn cmd cmdArg))
 
 
 -- Top-level error reporter for the CLI. Prints the user-facing
