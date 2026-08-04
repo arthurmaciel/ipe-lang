@@ -1,0 +1,33 @@
+module Main exposing (main)
+
+import Ipe.Io as Io
+import Ipe.Task as Task
+
+
+-- A row-polymorphic function that reads its row field inside a discarded Task
+-- effect AND again in the continuation. The discarded `let _ = <task>` lowers to
+-- a Task-sequencing tail whose continuation captures `rec`, so the effect's field
+-- read `rec.name` must survive the emit-time capture-clone as a bare `Var`
+-- receiver (routing through the borrowing witness getter), never a whole-row
+-- clone. `report` is sequenced at two DIFFERENT shapes so the row stays generic.
+report : { r | name : String } -> Task Error ()
+report rec =
+    let
+        _ =
+            Io.println rec.name
+    in
+    Io.println rec.name
+
+
+ada : { name : String, age : Int }
+ada =
+    { name = "Ada", age = 36 }
+
+
+bo : { name : String, id : Int }
+bo =
+    { name = "Bo", id = 7 }
+
+
+main =
+    Task.andThen (\_ -> report bo) (report ada)

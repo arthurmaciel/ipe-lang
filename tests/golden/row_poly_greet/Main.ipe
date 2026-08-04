@@ -1,0 +1,28 @@
+module Main exposing (main)
+
+import Ipe.Io as Io
+
+
+-- A genuinely row-polymorphic annotated function. `greet` guarantees only the
+-- `name` field; the row variable `r` absorbs whatever else each record carries.
+-- It is called with two DIFFERENT concrete shapes — `{ name, age }` and
+-- `{ name, id }` — so no single closed struct can serve both. The backend
+-- erases the open row into a rustc generic bounded by the synthesised `name`
+-- witness trait, and rustc monomorphises one machine copy per shape.
+greet : { r | name : String } -> String
+greet rec =
+    rec.name
+
+
+ada : { name : String, age : Int }
+ada =
+    { name = "Ada", age = 36 }
+
+
+bo : { name : String, id : Int }
+bo =
+    { name = "Bo", id = 7 }
+
+
+main =
+    Io.println (greet ada ++ ", " ++ greet bo)

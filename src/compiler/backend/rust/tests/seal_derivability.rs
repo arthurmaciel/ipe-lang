@@ -154,6 +154,7 @@ fn decoder_field_record_has_no_derive() -> DResult<()> {
         name: f,
         home: ModPath(vec![]),
         type_params: vec![],
+        row_params: vec![],
         params: vec![(par, rec)],
         ret: IrType::Int,
         body: Expr::Access {
@@ -203,6 +204,7 @@ fn normal_record_keeps_full_derive() -> DResult<()> {
         name: f,
         home: ModPath(vec![]),
         type_params: vec![],
+        row_params: vec![],
         params: vec![(par, rec)],
         ret: IrType::Int,
         body: Expr::Access {
@@ -319,6 +321,7 @@ fn web_html_helper_record_gets_cdpeq_without_serde() -> DResult<()> {
         name: helper_fn,
         home: ModPath(vec![]),
         type_params: vec![],
+        row_params: vec![],
         params: vec![(p, helper_rec)],
         ret: IrType::Str,
         body: Expr::Access {
@@ -332,6 +335,7 @@ fn web_html_helper_record_gets_cdpeq_without_serde() -> DResult<()> {
         name: model_fn,
         home: ModPath(vec![]),
         type_params: vec![],
+        row_params: vec![],
         params: vec![(p, model_rec)],
         ret: IrType::Int,
         body: Expr::Access {

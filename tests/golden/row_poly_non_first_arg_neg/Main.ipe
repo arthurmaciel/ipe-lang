@@ -1,0 +1,18 @@
+module Main exposing (main)
+
+import Ipe.Io as Io
+
+
+-- The row `{ r | name : String }` sits in the SECOND argument position, but the
+-- body binds only the first parameter (`n`) and reaches the row through an inner
+-- lambda (`\rec -> rec.name`). The row arrow the body never binds as a top-level
+-- parameter lands in the trailing type, which has no witness-getter route. This
+-- must surface a clean IPE-L0131, never an ICE — a well-typed program must not
+-- reach the compiler's internal fail-closed backstop.
+getName : Int -> { r | name : String } -> String
+getName n =
+    \rec -> rec.name
+
+
+main =
+    Io.println (getName 1 { name = "Ada", age = 36 })

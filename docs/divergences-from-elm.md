@@ -83,3 +83,24 @@ semantics:
 The parser consumes the already-parsed `Url` through the shipped `Ipe.Url`
 accessors (`path` / `query`) — it splits path segments and query pairs once,
 over the typed value, and never re-parses a raw string.
+
+## Row polymorphism — concrete monomorphisation, opt-in via annotation
+
+Elm compiles one row-polymorphic function to a single body and reads record
+fields by dynamic JavaScript property access. Ipê has no dynamic field lookup in
+the emitted Rust, so a row-polymorphic annotated function
+(`greet : { r | name : String } -> String`) lowers to one rustc-generic function
+bounded by a synthesised per-field *witness trait*; rustc then emits one machine
+copy per record shape the function is called with. The bare accessor `.name`
+diverges similarly: each `.name` *occurrence* is typed and pinned independently,
+so `List.map .name people` works, but reusing one unannotated binding at two
+different record shapes stays a type error — polymorphic reuse of a single
+binding requires the row annotation. Row polymorphism is therefore opt-in via an
+annotation; unannotated bindings still pin on first concrete use, preserving the
+pinned-records invariant. The one emittable use of a row-typed parameter is as
+the direct receiver of a field read (`rec.name`); a row value that flows
+anywhere else — re-bound, destructured by a subset pattern, passed as an
+argument, stored, returned, or matched — has no witness-getter route and is
+gated with `IPE-L0131`, as are multi-field rows, return-position rows, nested
+rows, and rows under containers. These are extensions of the same witness-trait
+design, gated until each lands.

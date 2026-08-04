@@ -119,6 +119,7 @@ fn maybe_program(i: &mut Interner) -> DResult<Program> {
         name: unwrap,
         home: ModPath(vec![]),
         type_params: vec![],
+        row_params: vec![],
         params: vec![(
             m,
             IrType::Enum {
@@ -136,6 +137,7 @@ fn maybe_program(i: &mut Interner) -> DResult<Program> {
         name: main,
         home: ModPath(vec![]),
         type_params: vec![],
+        row_params: vec![],
         params: vec![],
         ret: IrType::Task(Box::new(IrType::Unit)),
         body: Expr::Call {
@@ -299,6 +301,7 @@ fn tree_sum_fn(interner: &mut Interner, syms: &TreeSyms) -> DResult<Func> {
         name: sum_tree,
         home: ModPath(vec![]),
         type_params: vec![],
+        row_params: vec![],
         params: vec![(scrut, syms.self_ty.clone())],
         ret: IrType::Int,
         body: Expr::Match(Match::new(Expr::Var(scrut), arms, &[syms.leaf, syms.node])?),
@@ -332,6 +335,7 @@ fn tree_main_fn(interner: &mut Interner, syms: &TreeSyms) -> DResult<Func> {
         name: main,
         home: ModPath(vec![]),
         type_params: vec![],
+        row_params: vec![],
         params: vec![],
         ret: IrType::Task(Box::new(IrType::Unit)),
         body: Expr::Call {
@@ -512,6 +516,7 @@ fn concrete_multi_field_enum_emits() -> DResult<()> {
         name: area,
         home: ModPath(vec![]),
         type_params: vec![],
+        row_params: vec![],
         params: vec![(
             s,
             IrType::Enum {

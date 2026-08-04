@@ -2,18 +2,11 @@ module Main exposing (main)
 import Ipe.Io as Io
 
 
--- The row-var record annotation syntax `{ r | name : String }` PARSES and
--- TYPE-CHECKS: the type layer models the open row (RowTail::Open) and accepts
--- the program. It is rejected at LOWERING with IPE-L0131 because the Rust
--- backend emits one struct per exact field set and cannot yet emit a callee
--- once per record shape at its call sites (per-record-shape callee
--- monomorphisation). Failing closed at the lowering boundary — the layer that
--- cannot yet emit — keeps SEAL: no Rust is produced that would miss the A7
--- exact-key struct registry.
---
--- Canary: this MUST start failing (the program begins to BUILD) the moment the
--- backend gains per-record-shape monomorphisation. See
--- docs/architecture/row-poly-subset-superset-design.md "Gap filed" and
+-- A single-field argument-position row-polymorphic annotation. The type layer
+-- models the open row (RowTail::Open); the backend erases it to a rustc generic
+-- bounded by the synthesised `name` witness trait, so the field read resolves
+-- through a getter and rustc monomorphises the call to the one concrete
+-- argument shape. See docs/architecture/row-polymorphism-design.md §4 and
 -- docs/adr/0018-row-poly-records-pinned-before-lowering.md.
 getName : { r | name : String } -> String
 getName rec =

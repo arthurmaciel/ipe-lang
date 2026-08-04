@@ -133,6 +133,7 @@ fn getx_program(interner: &mut Interner) -> DResult<Program> {
         name: getx,
         home: ModPath(vec![]),
         type_params: vec![],
+        row_params: vec![],
         params: vec![(par, rec)],
         ret: IrType::Int,
         body: Expr::Destructure {
@@ -147,6 +148,7 @@ fn getx_program(interner: &mut Interner) -> DResult<Program> {
         name: main,
         home: ModPath(vec![]),
         type_params: vec![],
+        row_params: vec![],
         params: vec![],
         ret: IrType::Task(Box::new(IrType::Unit)),
         body: Expr::Call {
@@ -221,6 +223,7 @@ fn nested_tuple_in_record_field_renders_recursively() -> DResult<()> {
         name: sx,
         home: ModPath(vec![]),
         type_params: vec![],
+        row_params: vec![],
         params: vec![(par, p_rec)],
         ret: IrType::Int,
         body: Expr::Destructure {
@@ -272,6 +275,7 @@ fn record_pattern_with_unknown_shape_fails_fast() -> DResult<()> {
         name: func,
         home: ModPath(vec![]),
         type_params: vec![],
+        row_params: vec![],
         params: vec![(par, IrType::Int)],
         ret: IrType::Int,
         body: Expr::Destructure {

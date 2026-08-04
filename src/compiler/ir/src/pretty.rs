@@ -106,6 +106,10 @@ fn ir_type_name_at(interner: &Interner, ty: &IrType, depth: u16) -> String {
         // Rust generic spelling (`T1`, …) is a backend concern, so the IR view
         // keeps the source-facing name.
         IrType::Generic(name) => sym_name(interner, *name),
+        // A row variable renders by its source name (e.g. `r`) prefixed to mark
+        // it as an open row — the backend erases it to a witness-bounded generic,
+        // but the IR view keeps the source-facing spelling.
+        IrType::RowGeneric(name) => format!("{{ {} | .. }}", sym_name(interner, *name)),
         // An enum renders by its type name, applied to its type arguments in
         // source-like prefix form (`Maybe Int`). A non-generic enum (empty
         // `args`) is just the bare type name.
@@ -2097,6 +2101,7 @@ mod tests {
             name: main_sym,
             home: ModPath(vec![]),
             type_params: vec![],
+            row_params: vec![],
             params: vec![],
             ret: IrType::Task(Box::new(IrType::Unit)),
             body: Expr::Call {
@@ -2147,6 +2152,7 @@ mod tests {
             name: tick,
             home: ModPath(vec![]),
             type_params: vec![],
+            row_params: vec![],
             params: vec![
                 (
                     m,
@@ -2303,6 +2309,7 @@ program
                     name: f,
                     home: ModPath(vec![]),
                     type_params: vec![],
+                    row_params: vec![],
                     params: vec![(n, IrType::Int)],
                     ret: IrType::Int,
                     body,
@@ -2390,6 +2397,7 @@ program
                     name: f,
                     home: ModPath(vec![]),
                     type_params: vec![],
+                    row_params: vec![],
                     params: vec![(n, IrType::Int)],
                     ret: IrType::Tuple(vec![IrType::Int, IrType::Bool]),
                     body,
@@ -2480,6 +2488,7 @@ program
                     name: func,
                     home: ModPath(vec![]),
                     type_params: vec![],
+                    row_params: vec![],
                     params: vec![(param, rec_ty.clone())],
                     ret: rec_ty,
                     body,
@@ -2558,6 +2567,7 @@ program
                     name: f,
                     home: ModPath(vec![]),
                     type_params: vec![],
+                    row_params: vec![],
                     params: vec![],
                     ret: IrType::Int,
                     body,
@@ -2642,6 +2652,7 @@ program
                     name: f,
                     home: ModPath(vec![]),
                     type_params: vec![],
+                    row_params: vec![],
                     params: vec![(g, IrType::Fun(vec![IrType::Int], Box::new(IrType::Int)))],
                     ret: IrType::Int,
                     body,
@@ -2718,6 +2729,7 @@ program
                     name: f,
                     home: ModPath(vec![]),
                     type_params: vec![],
+                    row_params: vec![],
                     params: vec![(i.intern("k")?, IrType::Fun(vec![], Box::new(IrType::Bool)))],
                     ret: IrType::Bool,
                     body: Expr::Int(0),
@@ -2830,6 +2842,7 @@ program
                     name: unwrap,
                     home: ModPath(vec![]),
                     type_params: vec![],
+                    row_params: vec![],
                     params: vec![(
                         m,
                         IrType::Enum {
@@ -2939,6 +2952,7 @@ program
                         name: fst_of,
                         home: ModPath(vec![]),
                         type_params: vec![],
+                        row_params: vec![],
                         params: vec![(
                             w,
                             IrType::Enum {
@@ -2955,6 +2969,7 @@ program
                         name: nop,
                         home: ModPath(vec![]),
                         type_params: vec![],
+                        row_params: vec![],
                         params: vec![],
                         ret: IrType::Unit,
                         body: Expr::Unit,
@@ -3085,6 +3100,7 @@ program
                     name: deep,
                     home: ModPath(vec![]),
                     type_params: vec![],
+                    row_params: vec![],
                     params: vec![],
                     ret: IrType::Int,
                     body,
