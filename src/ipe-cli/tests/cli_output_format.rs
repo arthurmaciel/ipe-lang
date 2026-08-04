@@ -142,7 +142,7 @@ fn capabilities_json_is_a_stable_object() {
 /// rather than trying to read the directory itself. The prior bug surfaced as a
 /// raw `io error at .: Is a directory` because the bare `.` default was passed
 /// straight to the source reader instead of through the same directory→entry
-/// resolution `ipe check` uses.
+/// resolution `ipe type-check` uses.
 #[test]
 fn capabilities_in_a_project_dir_resolves_the_entry() {
     // A known-valid example project (an `ipe.toml` + `src/Main.ipe`). Run
@@ -501,9 +501,9 @@ fn upgrade_bad_flag_shows_help() {
     );
 }
 
-// ---- check success output --------------------------------------------------
+// ---- type-check success output ---------------------------------------------
 
-/// `ipe check` on a well-typed program exits 0 and prints a guttered, framed
+/// `ipe type-check` on a well-typed program exits 0 and prints a guttered, framed
 /// success confirmation — the human success line must not be flush-left.
 #[test]
 fn check_success_output_is_guttered_and_framed() {
@@ -513,10 +513,10 @@ fn check_success_output_is_guttered_and_framed() {
     if !entry.is_file() {
         return;
     }
-    let r = run(&["check", &entry.to_string_lossy()]);
+    let r = run(&["type-check", &entry.to_string_lossy()]);
     assert!(
         r.ok,
-        "check on a well-typed program must exit 0; stderr: {}",
+        "type-check on a well-typed program must exit 0; stderr: {}",
         r.stderr
     );
     // The success `ok` must be framed (leading newline) and guttered.

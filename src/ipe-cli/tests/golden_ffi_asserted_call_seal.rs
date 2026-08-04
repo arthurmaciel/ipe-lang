@@ -311,7 +311,7 @@ fn asserted_program_discloses_ffi_raw() {
 }
 
 /// The ANALYSIS entrypoints run the same FFI seam the build does: the real
-/// `ipe check` dispatch type-checks an asserted program, and package
+/// `ipe type-check` dispatch type-checks an asserted program, and package
 /// capability inference (the jail/admission input) reports `ffi-raw` instead
 /// of refusing on an unresolvable `Rust.Ffi` import.
 #[test]
@@ -328,8 +328,8 @@ fn analysis_entrypoints_accept_an_asserted_program() {
     .expect("ipe.toml");
 
     let entry = tmp.join("src").join("Main.ipe");
-    ipe::run_cli(&["check".to_owned(), entry.display().to_string()])
-        .expect("`ipe check` must accept an asserted program");
+    ipe::run_cli(&["type-check".to_owned(), entry.display().to_string()])
+        .expect("`ipe type-check` must accept an asserted program");
 
     let caps = ipe::infer_package_capabilities(&tmp.join("ipe.toml"))
         .expect("package capability inference must lower an asserted program");

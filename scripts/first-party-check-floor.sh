@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
-# Ipê FIRST-PARTY `ipe check` FLOOR — the cheap, gating compile floor.
+# Ipê FIRST-PARTY `ipe type-check` FLOOR — the cheap, gating compile floor.
 #
-# Runs `ipe check` (type-check ONLY — no `ipe build`, no cargo) over every
+# Runs `ipe type-check` (type-check ONLY — no `ipe build`, no cargo) over every
 # shipped first-party example (first_party_check_set in scripts/lib/examples.sh:
 # examples/shapes/** + examples/wasm/**, minus the FFI-gated ones). A shipped
 # example that fails to type-check FAILS this floor LOUD, naming each broken
@@ -9,9 +9,9 @@
 # instead of rotting silently in the tree.
 #
 # This is a FLOOR, complementary to (not a duplicate of) two heavier checks:
-#   • ci.yml's `shapes-examples` build gate — `ipe check` + `ipe build` + cargo
-#     over the 4 shapes only. This floor is check-only but WIDER: it also covers
-#     examples/wasm/**, which otherwise reaches `ipe check` scrutiny only in the
+#   • ci.yml's `shapes-examples` build gate — `ipe type-check` + `ipe build` +
+#     cargo over the 4 shapes only. This floor is check-only but WIDER: it also
+#     covers examples/wasm/**, which otherwise reaches `ipe type-check` only in the
 #     non-gating nightly examples-sweep.
 #   • examples-sweep.sh — the full mirror BUILD+RUN parity proof (heavy,
 #     non-gating, includes the upstream examples/sky/** set this floor excludes).
@@ -38,9 +38,9 @@ checked=0
 while IFS= read -r dir; do
   [ -z "$dir" ] && continue
   checked=$((checked + 1))
-  # `ipe check` type-checks the source graph reachable from the entry; it emits
+  # `ipe type-check` type-checks the source graph reachable from the entry; it emits
   # no Rust and runs no cargo, so the floor stays fast and deterministic.
-  if timeout 120 "$IPE_BIN" check "$dir/src/Main.ipe" >/tmp/first-party-check.$$.log 2>&1; then
+  if timeout 120 "$IPE_BIN" type-check "$dir/src/Main.ipe" >/tmp/first-party-check.$$.log 2>&1; then
     printf '  ok    %s\n' "$dir"
   else
     printf '  FAIL  %s\n' "$dir"
@@ -52,7 +52,7 @@ rm -f /tmp/first-party-check.$$.log
 
 echo
 if [ "${#failed[@]}" -gt 0 ]; then
-  echo "=== VERDICT: FAIL — ${#failed[@]} of $checked first-party example(s) do not 'ipe check' clean:"
+  echo "=== VERDICT: FAIL — ${#failed[@]} of $checked first-party example(s) do not 'ipe type-check' clean:"
   for d in "${failed[@]}"; do echo "  BROKEN: $d"; done
   echo
   echo "A shipped first-party example must type-check. Fix the compiler regression"
