@@ -16,8 +16,8 @@ mod pretty;
 
 pub use ir::{
     Arm, BinOp, BoundSet, CallPin, Callee, EnumDef, Expr, Func, FuncId, HtmlEventShape, IrType,
-    KernelFn, Match, ModPath, Module, OnFormKind, Pat, Program, RuntimeModule, TypeDef, UiCtor,
-    UiPlain, Variant, carrier_is_clone, fun_value_arc_promotable, ir_type_is_derivable,
+    KernelFn, Match, ModPath, Module, OnFormKind, Pat, Program, RowParam, RuntimeModule, TypeDef,
+    UiCtor, UiPlain, Variant, carrier_is_clone, fun_value_arc_promotable, ir_type_is_derivable,
     ir_type_is_serde, is_dispatch_free, is_irrefutable,
 };
 pub use pretty::{MAX_IR_RENDER_DEPTH, pretty};

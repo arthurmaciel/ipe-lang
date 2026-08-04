@@ -2127,6 +2127,49 @@ impl<'a> EmitCtx<'a> {
         Ok(())
     }
 
+    /// Fail closed if the synthesised `IpeHas<Field>` witness-trait names are not
+    /// pairwise distinct, or if one collides with a user enum / mod name.
+    ///
+    /// A witness trait's Rust name is `to_camel_case("Ipe_has_" + field)`, so two
+    /// DIFFERENT surface field names that camel-case to the same base — the
+    /// canonical hazard being `first_name` and `firstName`, BOTH valid
+    /// lowercase-initial identifiers the parser admits — synthesise the SAME
+    /// `IpeHasFirstName` trait. Emitting two traits under one name is `E0428`
+    /// (a SEAL breach); relying on the intra-witness field-name set to be
+    /// casing-unique is unsound because the field-name lexer does NOT normalise
+    /// case. This gate proves the witness namespace collision-free by
+    /// construction — the sibling of the record-struct disjointness gate for the
+    /// row-poly substrate.
+    ///
+    /// `field_names` is the whole-program set of row-required field-name symbols
+    /// (see `emit_types::row_witness_field_names`); the empty set (no
+    /// row-polymorphic annotation) trivially passes.
+    pub(crate) fn assert_row_witness_names_disjoint(
+        &self,
+        field_names: &BTreeSet<Symbol>,
+        mod_idents: &BTreeSet<String>,
+    ) -> DResult<()> {
+        // Map each witness-trait name back to the field it came from; a second
+        // field mapping to a name already claimed is the collision.
+        let mut seen: BTreeMap<String, Symbol> = BTreeMap::new();
+        for &field in field_names {
+            let field_str = self.resolve_ident(field)?;
+            let trait_name = crate::naming::field_witness_trait_name(field_str);
+            let collides_type =
+                self.contains_type_name(&trait_name) || mod_idents.contains(&trait_name);
+            if collides_type || seen.insert(trait_name.clone(), field).is_some() {
+                return Err(Diagnostic::Name {
+                    span: Span::DUMMY,
+                    msg: NameError::DuplicateValue {
+                        name: trait_name.into_boxed_str(),
+                        first: Span::DUMMY,
+                    },
+                });
+            }
+        }
+        Ok(())
+    }
+
     /// Render a record TYPE at a USE SITE to its Rust spelling, keyed by its
     /// field-name set: the bare struct name for a monomorphic shape (`RecXY`),
     /// or the struct instantiated at concrete type
@@ -2357,7 +2400,7 @@ impl<'a> EmitCtx<'a> {
     /// failure here is an internal invariant violation (IPE-I0201) — surfaced as
     /// a [`Diagnostic::CompilerBug`] rather than silently emitting an empty (and
     /// uncompilable) Rust identifier.
-    fn resolve_ident(&self, sym: Symbol) -> DResult<&str> {
+    pub(crate) fn resolve_ident(&self, sym: Symbol) -> DResult<&str> {
         match self.interner.resolve(sym) {
             Some(s) if !s.is_empty() => Ok(s),
             _ => Err(Diagnostic::CompilerBug {
@@ -2670,6 +2713,9 @@ fn collect_record_shapes(
         | IrType::WebSocketServerCfg
         // A generic type variable carries no concrete record shape of its own.
         | IrType::Generic(_)
+        // A row variable is erased to a witness-bounded generic; its concrete
+        // record shapes are collected from the actual argument structs, not here.
+        | IrType::RowGeneric(_)
         // nullary plain types (`Length`, `Color`, …) and the opaque live
         // request handle carry no record shapes of their own.
         | IrType::UiPlain(_)
@@ -2824,6 +2870,9 @@ fn type_reaches_enum(
         // `Fun` — pointer-sized, no size-cycle risk.
         | IrType::FnOnceChain(_, _)
         | IrType::Generic(_)
+        // A row variable is erased to a witness-bounded generic; it reaches no
+        // enum of its own (the concrete struct at the call site is finite).
+        | IrType::RowGeneric(_)
         // nullary plain types and the opaque live request handle are
         // pointer-sized — they cannot form an infinite-size cycle.
         | IrType::UiPlain(_)
@@ -2966,7 +3015,11 @@ fn contains_generic(ty: &IrType) -> bool {
         | IrType::CryptoMac
         | IrType::EmailAddress
         // `Locale` is monomorphic — no generic parameters.
-        | IrType::Locale => false,
+        | IrType::Locale
+        // A row variable is a SEPARATE row generic (`R{n}`), never an ordinary
+        // `T{n}` record-struct parameter, and never appears inside a record-
+        // struct field. It contributes no `<T>` clause here.
+        | IrType::RowGeneric(_) => false,
         // `WebRoute page` is parametric on `page`; check if it carries a
         // generic.
         IrType::WebRoute(page) => contains_generic(page),
@@ -3087,7 +3140,10 @@ fn collect_generics(ty: &IrType, out: &mut Vec<Symbol>) {
         | IrType::CryptoMac
         | IrType::EmailAddress
         // `Locale` is monomorphic — no generics to collect.
-        | IrType::Locale => {}
+        | IrType::Locale
+        // A row variable is a separate row generic (`R{n}`), tracked in
+        // `Func::row_params`, never in the ordinary `T{n}` scope collected here.
+        | IrType::RowGeneric(_) => {}
         // `WebRoute page` may carry generic parameters through `page`.
         IrType::WebRoute(page) => collect_generics(page, out),
         // `Ui { ctor, msg }` may carry generic parameters through `msg`.
@@ -3441,6 +3497,15 @@ fn match_template(
             IrType::Ui { ctor: cc, msg: cm } if tc == cc => match_template(tm, cm, subst),
             _ => Err(mismatch()),
         },
+        // A row variable never enters the struct registry — it is erased to a
+        // witness-bounded generic in a function signature, never a record-struct
+        // template field. Reaching this arm is an invariant violation.
+        IrType::RowGeneric(_) => Err(Diagnostic::CompilerBug {
+            where_: "ipe_backend_rust::match_template",
+            detail: "row-generic type reached record-struct template reconciliation; \
+                     an open row must never enter the struct registry"
+                .to_owned(),
+        }),
     }
 }
 
@@ -3807,5 +3872,105 @@ mod record_struct_namespace_tests {
             None,
         )?;
         ctx.assert_record_structs_disjoint_from_type_namespace(&BTreeSet::new())
+    }
+
+    /// Two row-required field names that camel-case to ONE witness-trait name
+    /// (`first_name` / `firstName` → `IpeHasFirstName`) must fail the row-witness
+    /// disjointness gate closed — emitting two `IpeHasFirstName` traits is E0428.
+    #[test]
+    fn colliding_row_witness_names_fail_closed() -> DResult<()> {
+        let mut interner = Interner::new();
+        let main_mod = interner.intern("Main")?;
+        let snake = interner.intern("first_name")?;
+        let camel = interner.intern("firstName")?;
+
+        // A minimal well-formed program (one nullary enum, no records) is enough
+        // to build the ctx; the field-name set is supplied to the gate directly,
+        // exactly as `row_witness_field_names` would collect it.
+        let unit_ctor = interner.intern("Unit")?;
+        let ty = interner.intern("T")?;
+        let program = Program {
+            modules: vec![Module {
+                name: ModPath(vec![main_mod]),
+                types: vec![TypeDef::Enum(EnumDef {
+                    name: ty,
+                    home: ModPath(vec![main_mod]),
+                    type_params: vec![],
+                    variants: vec![Variant {
+                        name: unit_ctor,
+                        fields: vec![],
+                    }],
+                })],
+                funcs: vec![],
+                entry: None,
+                records: vec![],
+                uses_tea: false,
+                uses_server: false,
+                uses_http: false,
+                uses_config: false,
+                uses_compression: false,
+                uses_csv: false,
+                uses_encoding: false,
+                uses_regex: false,
+                uses_uuid: false,
+                uses_random: false,
+                uses_log: false,
+                uses_decimal: false,
+                uses_char_category: false,
+                uses_crypto_core: false,
+                uses_secret: false,
+                uses_json: false,
+                uses_crypto: false,
+                uses_jwt: false,
+                uses_url: false,
+                uses_ui: false,
+                uses_web: false,
+                uses_tui: false,
+                uses_webview: false,
+                uses_css: false,
+                uses_auth: false,
+                uses_websocket: false,
+                uses_email: false,
+                uses_time: false,
+                uses_env_public: false,
+                uses_debug: false,
+                uses_ffi: false,
+                uses_async_runtime: false,
+            }],
+        };
+
+        let ctx = EmitCtx::build(
+            &interner,
+            &program,
+            DbDriver::Sqlite,
+            None,
+            ipe_ir::Target::Native,
+            Vec::new(),
+            false,
+            None,
+        )?;
+
+        let colliding: BTreeSet<Symbol> = [snake, camel].into_iter().collect();
+        let result = ctx.assert_row_witness_names_disjoint(&colliding, &BTreeSet::new());
+        assert!(
+            matches!(
+                result,
+                Err(Diagnostic::Name {
+                    msg: NameError::DuplicateValue { .. },
+                    ..
+                })
+            ),
+            "two field names colliding to one witness trait must fail closed, \
+             got {result:?}"
+        );
+
+        // Distinct field names pass — the gate is purely additive.
+        let distinct: BTreeSet<Symbol> = std::iter::once(snake).collect();
+        assert!(
+            ctx.assert_row_witness_names_disjoint(&distinct, &BTreeSet::new())
+                .is_ok(),
+            "a single field name has no collision to report"
+        );
+        Ok(())
     }
 }

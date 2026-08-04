@@ -160,6 +160,7 @@ const TAG_CRYPTO_MAC: u8 = 60;
 const TAG_EMAIL_ADDRESS: u8 = 61;
 const TAG_URL: u8 = 62;
 const TAG_LOCALE: u8 = 63;
+const TAG_ROW_GENERIC: u8 = 64;
 /// Fuel exhaustion marker — distinct from every variant tag.
 const TAG_FUEL_EXHAUSTED: u8 = 0xFF;
 
@@ -326,6 +327,13 @@ fn hash_ty(ctx: &EmitCtx, ty: &IrType, h: &mut Sha256, fuel: u32) -> DResult<()>
         }
         IrType::Generic(sym) => {
             h.update([TAG_GENERIC]);
+            update_str(h, ctx.resolve_ident(*sym)?);
+        }
+        // A row variable hashes by its source name under a distinct tag. Not
+        // serde-admissible (a row-poly type never types a serde-gated Model
+        // field); the arm keeps the hash total.
+        IrType::RowGeneric(sym) => {
+            h.update([TAG_ROW_GENERIC]);
             update_str(h, ctx.resolve_ident(*sym)?);
         }
         IrType::Ui { ctor, msg } => {

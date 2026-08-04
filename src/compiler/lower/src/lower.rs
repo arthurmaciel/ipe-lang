@@ -22,8 +22,8 @@ use ipe_diagnostics::{DResult, Diagnostic, Feature, Located, LowerError, Span};
 use ipe_intern::{Interner, Symbol};
 use ipe_ir::{
     Arm, BinOp, BoundSet, CallPin, Callee, Capability, EnumDef, Expr, Func, FuncId, IrType,
-    KernelFn, Match, ModPath, Module, OnFormKind, Pat, Program, RuntimeModule, TypeDef, UiCtor,
-    UiPlain, Variant, fun_value_arc_promotable, is_dispatch_free, is_irrefutable,
+    KernelFn, Match, ModPath, Module, OnFormKind, Pat, Program, RowParam, RuntimeModule, TypeDef,
+    UiCtor, UiPlain, Variant, fun_value_arc_promotable, is_dispatch_free, is_irrefutable,
 };
 use ipe_types::{SolvedTypes, Ty, TyBounds};
 
@@ -1327,6 +1327,193 @@ fn canon_type_has_open_row(t: &canon::Type) -> bool {
     }
 }
 
+/// Does `sig` embed an open row in a position the backend cannot yet emit?
+///
+/// The supported shape is a top-level argument-position single-field open row
+/// `{ r | f : T }` whose field type is itself closed. The signature is walked as
+/// its arrow chain: each argument position accepts exactly that shape (or any
+/// closed type); every other open-row occurrence — in return position, nested
+/// under a container / record / tuple, or an argument-position open row with
+/// more than one field or a field type that itself embeds an open row — is
+/// unsupported and gated (`IPE-L0131`). A supported argument row is NOT reported
+/// here, so `split_typed_sig` may erase it to an [`IrType::RowGeneric`].
+fn canon_sig_has_unsupported_open_row(sig: &canon::Type) -> bool {
+    match sig {
+        canon::Type::Lambda(arg, rest) => {
+            let arg_unsupported = match arg.as_ref() {
+                // A supported argument-position open row: exactly one field, and
+                // that field's type carries no further open row. Anything else is
+                // gated. (Return-position and nested rows are handled by the
+                // recursive `rest` walk / the fallthrough below.)
+                canon::Type::RecordOpen(_, fields) => {
+                    fields.len() != 1 || fields.iter().any(|(_, f)| canon_type_has_open_row(f))
+                }
+                // A closed / non-record argument: unsupported only if it embeds
+                // an open row anywhere (nested rows are not yet emittable).
+                other => canon_type_has_open_row(other),
+            };
+            arg_unsupported || canon_sig_has_unsupported_open_row(rest)
+        }
+        // The trailing (return) type: any open row here is unsupported.
+        ret => canon_type_has_open_row(ret),
+    }
+}
+
+/// Does a row-generic parameter symbol reach a position the backend cannot
+/// route? The ONLY emittable use of a row-typed value is as the immediate
+/// receiver of a direct field read — `rec.name`, lowered to `Expr::Access {
+/// record: Expr::Var(rec), .. }`, which the emitter routes through the field's
+/// witness getter (`emit_expr` §Access, matching `Expr::Var` ALONE). A
+/// row-typed value that flows ANYWHERE else — let/destructure-bound, passed as
+/// a call argument, stored in a record/tuple/list, updated, returned bare, or
+/// matched — reaches the backend as a bare `R{n}` generic against which it
+/// emits a struct operation (E0609/E0308: the exit-0-then-cargo-fail class).
+/// This walk fails such a body closed with `IPE-L0131`; only the
+/// direct-`Var`-receiver form is emittable.
+///
+/// A row parameter captured into an inner `move` lambda (`\_ -> rec.name`) is
+/// rewritten `Var(rec)` -> `CloneVar(rec)` by `rewrite_captured_clones` before
+/// this walk runs, giving `Access { record: CloneVar(rec), .. }`. The emitter
+/// does NOT route a `CloneVar` receiver (it is `Var`-only), so this form is an
+/// escape: the receiver exemption below is `Var`-only, exactly the emitter's
+/// routable shape, and the captured `CloneVar` receiver is failed closed here.
+///
+/// The invariant enforced is exactly "a row-generic value is only ever the
+/// direct `record` of an `Access`": the walk visits every sub-expression and
+/// reports `true` (escape) the instant a row symbol appears in any other
+/// position. It is EXHAUSTIVE over [`Expr`] by construction — every arm is
+/// listed, so a future IR node cannot silently open a new escape route.
+///
+/// `row_syms` is the set of value-level parameter binders whose IR type is
+/// [`IrType::RowGeneric`] (the same set the backend derives for its getter
+/// routing), so the check is defined over precisely the symbols the emitter
+/// treats as row-typed.
+fn row_value_escapes_direct_access(body: &Expr, row_syms: &BTreeSet<Symbol>) -> bool {
+    // A read of a row symbol in ANY position other than the direct receiver of
+    // a field access is an escape — as a bare `Var` or as a `CloneVar` (the
+    // form `rewrite_captured_clones` produces when the row parameter is captured
+    // into an inner `move` lambda). Both are caught here, and the `Access`
+    // receiver is exempted only for the exact shape the emitter routes.
+    fn is_row_read(e: &Expr, row_syms: &BTreeSet<Symbol>) -> bool {
+        matches!(e, Expr::Var(s) | Expr::CloneVar(s) if row_syms.contains(s))
+    }
+    // The ONLY receiver shape the emitter turns into a witness-getter call is
+    // `Access { record: Var(row), .. }` (`emit_expr` §Access matches `Var`
+    // alone). A captured receiver is `CloneVar(row)`, which the emitter falls
+    // through to an ordinary struct-field read on the bare `R{n}` generic
+    // (E0609 — the exit-0-then-cargo-fail class). This predicate is therefore
+    // `Var`-only: the containment check's routable set is exactly the emitter's,
+    // never a superset, so a `CloneVar` receiver is not exempted and escapes.
+    fn is_routable_receiver(e: &Expr, row_syms: &BTreeSet<Symbol>) -> bool {
+        matches!(e, Expr::Var(s) if row_syms.contains(s))
+    }
+    if is_row_read(body, row_syms) {
+        return true;
+    }
+    match body {
+        // The one routable position: `Access { record: Var(row), .. }`. That
+        // receiver read is allowed and NOT recursed into as a general
+        // sub-expression. Any OTHER `record` shape — a nested `Access`, an
+        // update, or a captured `CloneVar(row)` receiver — is walked normally,
+        // so `rec.a.b` (where `rec.a` is a row read feeding another access) and
+        // a captured `(\_ -> rec.name)` receiver are both caught: the inner
+        // `record` reaches the top-level `is_row_read` guard on recursion.
+        // `field_ty` is a type, not an expression, so it carries no escape.
+        Expr::Access { record, .. } => {
+            if is_routable_receiver(record, row_syms) {
+                false
+            } else {
+                row_value_escapes_direct_access(record, row_syms)
+            }
+        }
+        // Leaves. A `Var`/`CloneVar` of a row symbol was already caught by the
+        // top-level `is_row_read` guard (which every recursive call re-runs), so
+        // a `Var`/`CloneVar` reaching this arm names a NON-row symbol and is
+        // safe; the remaining leaves carry no symbol at all.
+        Expr::Int(_)
+        | Expr::Bool(_)
+        | Expr::Float(_)
+        | Expr::Str(_)
+        | Expr::PathLit(_)
+        | Expr::Char(_)
+        | Expr::Unit
+        | Expr::Var(_)
+        | Expr::CloneVar(_)
+        | Expr::FuncValue { .. } => false,
+        Expr::Ctor { args, .. } => args
+            .iter()
+            .any(|a| row_value_escapes_direct_access(a, row_syms)),
+        Expr::BinOp { lhs, rhs, .. } => {
+            row_value_escapes_direct_access(lhs, row_syms)
+                || row_value_escapes_direct_access(rhs, row_syms)
+        }
+        Expr::Let { value, body, .. } => {
+            // A `let n = rec in …` binds `rec`'s value to a fresh symbol whose
+            // type is still the bare `R{n}` generic; the emitter has no getter
+            // route for `n`, so the RHS read `Var(rec)` is a real escape here.
+            row_value_escapes_direct_access(value, row_syms)
+                || row_value_escapes_direct_access(body, row_syms)
+        }
+        Expr::Destructure { value, body, .. } => {
+            row_value_escapes_direct_access(value, row_syms)
+                || row_value_escapes_direct_access(body, row_syms)
+        }
+        Expr::If { cond, then_, else_ } => {
+            row_value_escapes_direct_access(cond, row_syms)
+                || row_value_escapes_direct_access(then_, row_syms)
+                || row_value_escapes_direct_access(else_, row_syms)
+        }
+        Expr::Match(m) => {
+            row_value_escapes_direct_access(m.scrutinee(), row_syms)
+                || m.arms().iter().any(|arm| {
+                    arm.guard
+                        .as_ref()
+                        .is_some_and(|g| row_value_escapes_direct_access(g, row_syms))
+                        || row_value_escapes_direct_access(&arm.body, row_syms)
+                })
+        }
+        Expr::Call { args, .. } => args
+            .iter()
+            .any(|a| row_value_escapes_direct_access(a, row_syms)),
+        Expr::Tuple(items) | Expr::List { items, .. } => items
+            .iter()
+            .any(|i| row_value_escapes_direct_access(i, row_syms)),
+        Expr::Cons { head, tail } => {
+            row_value_escapes_direct_access(head, row_syms)
+                || row_value_escapes_direct_access(tail, row_syms)
+        }
+        Expr::ListIndexClone { list, .. } | Expr::ListLenCheck { list, .. } => {
+            row_value_escapes_direct_access(list, row_syms)
+        }
+        Expr::Record { fields, .. } => fields
+            .iter()
+            .any(|(_, v)| row_value_escapes_direct_access(v, row_syms)),
+        Expr::Update { record, fields } => {
+            row_value_escapes_direct_access(record, row_syms)
+                || fields
+                    .iter()
+                    .any(|(_, v)| row_value_escapes_direct_access(v, row_syms))
+        }
+        Expr::Lambda { body, .. } | Expr::SharedLambda { body, .. } => {
+            row_value_escapes_direct_access(body, row_syms)
+        }
+        Expr::Apply { func, args } => {
+            row_value_escapes_direct_access(func, row_syms)
+                || args
+                    .iter()
+                    .any(|a| row_value_escapes_direct_access(a, row_syms))
+        }
+        Expr::TaskSeq { effect, rest } | Expr::TaskSeqSync { effect, rest } => {
+            row_value_escapes_direct_access(effect, row_syms)
+                || row_value_escapes_direct_access(rest, row_syms)
+        }
+        Expr::TailLoop { body, .. } => row_value_escapes_direct_access(body, row_syms),
+        Expr::TailRecur { args } => args
+            .iter()
+            .any(|a| row_value_escapes_direct_access(a, row_syms)),
+    }
+}
+
 /// Does this IR type embed a function type anywhere? An enum variant whose
 /// payload field carries a `Box<dyn Fn>` cannot satisfy the enum's derived
 /// `Clone`/`Debug`/`PartialEq` nor its `IpeStringify` impl, so a function-bearing
@@ -1608,6 +1795,32 @@ fn expr_type_mentions(expr: &Expr, pred: &impl Fn(&IrType) -> bool) -> bool {
     }
 }
 
+/// Does any type-carrying position of a whole [`Func`] satisfy `pred`? The
+/// SINGLE per-function type scan every runtime-feature guard shares, so no guard
+/// can under-approximate by forgetting a position. It covers, exhaustively:
+///
+/// * the return type,
+/// * every value-level parameter type,
+/// * every type carried inside the body ([`expr_type_mentions`]),
+/// * every field type of every row-generic parameter ([`Func::row_params`]).
+///
+/// The row-field arm is what makes detection ⊇ emission for a row-polymorphic
+/// parameter: a row field typed `Json` / `Secret` / … is emitted as the witness
+/// trait's associated type (`R1: IpeHasPayload<Payload = Json>`) even when the
+/// body never reads it, so a guard that scanned only params / ret / body would
+/// drop the feature the witness impl still spells (the emitted crate would then
+/// reference a type with no definition in scope — E0412). The row's field types
+/// live ONLY in `row_params` — the parameter itself is the opaque `RowGeneric` —
+/// so this is the sole position that reaches them.
+fn func_type_mentions(f: &Func, pred: &impl Fn(&IrType) -> bool) -> bool {
+    pred(&f.ret)
+        || f.params.iter().any(|(_, t)| pred(t))
+        || expr_type_mentions(&f.body, pred)
+        || f.row_params
+            .iter()
+            .any(|r| r.fields.iter().any(|(_, t)| pred(t)))
+}
+
 fn ir_contains_fun(ty: &IrType) -> bool {
     match ty {
         // A curried `FnOnce` chain is the same boxed-closure family as `Fun`; the
@@ -1644,6 +1857,9 @@ fn ir_contains_fun(ty: &IrType) -> bool {
         | IrType::WebSocketServer
         | IrType::WebSocketServerCfg
         | IrType::Generic(_)
+        // A row variable erases to a witness-bounded generic; it embeds no
+        // function type of its own.
+        | IrType::RowGeneric(_)
         // nullary plain types (`Length`, `Color`, etc.) trivially contain no
         // functions.  `WebReq` is an opaque handle with no `Fn` fields.
         | IrType::UiPlain(_)
@@ -1847,7 +2063,12 @@ fn clone_class(env: CloneEnv<'_>, t: &IrType) -> CloneClass {
         | IrType::Decoder(_)
         | IrType::Cmd(_)
         | IrType::Sub(_)
-        | IrType::Generic(_) => CloneClass::NonClone,
+        | IrType::Generic(_)
+        // A row variable, like a bare generic, is floored to `NonClone` here:
+        // its `Clone` rides the emitted `R: … + Clone` witness bound, and every
+        // field read off it emits an explicit `.clone()`, so no bare capture of
+        // the whole row value relies on a `CloneOk` classification.
+        | IrType::RowGeneric(_) => CloneClass::NonClone,
         // Composite: CloneOk iff all components CloneOk (no NonClone part).
         // `Maybe`, `List`, `Set`, `Result`, `Dict` are NAMED Rust types
         // (`IpeMaybe<T>`, `Vec<T>`, `BTreeSet<T>`, `IpeResult<E,A>`,
@@ -4609,7 +4830,10 @@ fn ir_type_mentions_generic(ty: &IrType, tv: Symbol) -> bool {
         | IrType::CryptoMac
         | IrType::EmailAddress
         // `Locale` is non-parametric — no type var.
-        | IrType::Locale => false,
+        | IrType::Locale
+        // A row variable is a distinct row generic (`R{n}`), never the ordinary
+        // `T{n}` type variable this predicate tracks.
+        | IrType::RowGeneric(_) => false,
     }
 }
 
@@ -8022,14 +8246,23 @@ pub struct SymbolPools {
     pub nested_strlit_binders: Vec<Symbol>,
 }
 
-/// `(params, prologue, ret, any_syms_minted)` — [`Lowerer::split_typed_sig`]'s
-/// return shape, named so the signature stays under clippy's type-complexity
-/// ceiling. `any_syms_minted` (AUD-01 seal fix) lists every fresh symbol
-/// handed out by [`Lowerer::fresh_any_param_symbol`] for THIS call — the
-/// caller must union these into whatever set gates `type_params` (they are
-/// NOT in [`canon::Def::Typed::free_vars`], since they didn't exist at canon
-/// time), or the backend would reference an undeclared Rust generic.
-type TypedSigParts = (Vec<IrParam>, Vec<ParamPrologue>, IrType, Vec<Symbol>);
+/// `(params, prologue, ret, any_syms_minted, row_params)` —
+/// [`Lowerer::split_typed_sig`]'s return shape, named so the signature stays
+/// under clippy's type-complexity ceiling. `any_syms_minted` (AUD-01 seal fix)
+/// lists every fresh symbol handed out by [`Lowerer::fresh_any_param_symbol`]
+/// for THIS call — the caller must union these into whatever set gates
+/// `type_params` (they are NOT in [`canon::Def::Typed::free_vars`], since they
+/// didn't exist at canon time), or the backend would reference an undeclared
+/// Rust generic. `row_params` carries one [`RowParam`] per row-polymorphic
+/// argument-position record annotation the signature erased to an
+/// [`IrType::RowGeneric`]; the caller records them on the emitted [`Func`].
+type TypedSigParts = (
+    Vec<IrParam>,
+    Vec<ParamPrologue>,
+    IrType,
+    Vec<Symbol>,
+    Vec<RowParam>,
+);
 
 impl<'a> Lowerer<'a> {
     #[allow(clippy::too_many_lines)] // Error/ErrorKind ADT seeding pushes it over 100
@@ -8569,11 +8802,9 @@ impl<'a> Lowerer<'a> {
         // reference `ServerResponse`/`ServerRequest` in emitted code with no
         // definition in scope (E0412 — a SEAL breach).
         let uses_server = kernel_usage.server
-            || funcs.iter().any(|f| {
-                ir_type_mentions_server(&f.ret)
-                    || f.params.iter().any(|(_, t)| ir_type_mentions_server(t))
-                    || expr_type_mentions(&f.body, &ir_type_mentions_server)
-            });
+            || funcs
+                .iter()
+                .any(|f| func_type_mentions(f, &ir_type_mentions_server));
 
         // detect outbound `Ipe.Http` client usage — any client kernel, or a
         // function signature that mentions an `HttpRequest` / `HttpMethod`
@@ -8581,11 +8812,9 @@ impl<'a> Lowerer<'a> {
         // this flag to declare `http_client` in the emitted `ipe_runtime/mod.rs`
         // and add the `reqwest` dependency.
         let uses_http = kernel_usage.http
-            || funcs.iter().any(|f| {
-                ir_type_mentions_http(&f.ret)
-                    || f.params.iter().any(|(_, t)| ir_type_mentions_http(t))
-                    || expr_type_mentions(&f.body, &ir_type_mentions_http)
-            });
+            || funcs
+                .iter()
+                .any(|f| func_type_mentions(f, &ir_type_mentions_http));
 
         // detect `Ipe.Config` TOML/YAML decoder usage — any kernel emitting into
         // the `config_decode` runtime module (`Config.decodeToml` / `decodeYaml`
@@ -8618,11 +8847,9 @@ impl<'a> Lowerer<'a> {
         // kernel) still references the type, so omitting the guard would emit
         // `CsvDoc` with no definition in scope (E0433 — a SEAL breach).
         let uses_csv = kernel_usage.csv
-            || funcs.iter().any(|f| {
-                ir_type_mentions_csv(&f.ret)
-                    || f.params.iter().any(|(_, t)| ir_type_mentions_csv(t))
-                    || expr_type_mentions(&f.body, &ir_type_mentions_csv)
-            });
+            || funcs
+                .iter()
+                .any(|f| func_type_mentions(f, &ir_type_mentions_csv));
 
         // detect HEAVY `Ipe.Crypto` usage — any legacy SHA-1/MD5, AEAD, or PBKDF2
         // kernel. The backend uses this flag to declare `crypto` in the emitted
@@ -8652,11 +8879,9 @@ impl<'a> Lowerer<'a> {
         // kernel, so dropping `secret.rs` on the call-site flag alone would emit a
         // signature referencing an absent `ipe_runtime::secret::Secret` (E0433).
         let uses_secret = kernel_usage.secret
-            || funcs.iter().any(|f| {
-                ir_type_mentions_secret(&f.ret)
-                    || f.params.iter().any(|(_, t)| ir_type_mentions_secret(t))
-                    || expr_type_mentions(&f.body, &ir_type_mentions_secret)
-            });
+            || funcs
+                .iter()
+                .any(|f| func_type_mentions(f, &ir_type_mentions_secret));
 
         // detect `json` reach — a `Value`/`Decoder`-building kernel OR a `Json` /
         // `Decoder` TYPE mentioned in ANY reachable type position. The two prelude
@@ -8672,11 +8897,9 @@ impl<'a> Lowerer<'a> {
         // emitted code still spells (E0412/E0425/E0433). FAIL-CLOSED: any signal
         // keeps `json` on.
         let uses_json = kernel_usage.json
-            || funcs.iter().any(|f| {
-                ir_type_mentions_json(&f.ret)
-                    || f.params.iter().any(|(_, t)| ir_type_mentions_json(t))
-                    || expr_type_mentions(&f.body, &ir_type_mentions_json)
-            })
+            || funcs
+                .iter()
+                .any(|f| func_type_mentions(f, &ir_type_mentions_json))
             || records.iter().any(ir_type_mentions_json)
             || types_ir.iter().any(|td| match td {
                 TypeDef::Enum(e) => e
@@ -9335,7 +9558,7 @@ impl<'a> Lowerer<'a> {
                 // unannotated path). Only whole-annotation aliases are unfolded
                 // here; a `Handler` in argument position (`withCors : … -> Handler
                 // -> Handler`) still lowers via `split_typed_sig` unchanged.
-                let (params, prologue, ret, any_syms_minted) = if !patterns.is_empty()
+                let (params, prologue, ret, any_syms_minted, row_params) = if !patterns.is_empty()
                     && self.annotation_is_function_alias(ty)
                 {
                     let solved_ty = self
@@ -9353,18 +9576,21 @@ impl<'a> Lowerer<'a> {
                     // `Ty::Var`, never carrying the annotation-only `any` marker)
                     // — nothing minted here.
                     let (p, pr, r) = self.split_unannotated_sig(solved_ty, patterns, sig_span)?;
-                    (p, pr, r, Vec::new())
+                    (p, pr, r, Vec::new(), Vec::new())
                 } else {
-                    // A row-polymorphic record annotation types cleanly but has
-                    // no single field set to emit — fail closed here (IPE-L0131)
-                    // rather than emit Rust that misses the A7 exact-key struct
-                    // registry. Until per-record-shape callee monomorphisation
-                    // lands, the closed annotation / inferred-shape paths remain
-                    // the supported surface.
-                    if canon_type_has_open_row(ty) {
+                    // A row-polymorphic record annotation in a SUPPORTED position
+                    // (a top-level argument-position single-field open row) erases
+                    // to a witness-bounded `IrType::RowGeneric` in `split_typed_sig`
+                    // and monomorphises per call-site shape in the backend. Every
+                    // UNSUPPORTED open-row form — return position, nested under a
+                    // container/record, or carrying more than one field — has no
+                    // emission yet, so it is failed closed here (IPE-L0131) rather
+                    // than emitting Rust that misses the A7 exact-key struct
+                    // registry.
+                    if canon_sig_has_unsupported_open_row(ty) {
                         return Err(unsupported(sig_span, Feature::RowPolyRecordAnnotation));
                     }
-                    self.split_typed_sig(ty, patterns, free_vars)?
+                    self.split_typed_sig(ty, patterns, free_vars, sig_span)?
                 };
                 // Bug-29 fix: `view : Model -> any` where the body region is a UI
                 // type `Html<Ty::Var(uv)>`.  We need to inject `(uv_rep →
@@ -9520,6 +9746,26 @@ impl<'a> Lowerer<'a> {
                         body: Box::new(lowered_body),
                     };
                 }
+                // Row-generic containment: a row-typed parameter
+                // is emittable ONLY as the direct receiver of a field read
+                // (`rec.name`); every other flow of it reaches the backend as a
+                // bare `R{n}` generic and emits a struct op that cannot compile
+                // (E0609/E0308 — the exit-0-then-cargo-fail class). Fail such a
+                // body closed here with IPE-L0131 rather than letting a
+                // non-routable row value reach emission. The set is precisely
+                // the `RowGeneric`-typed parameter binders — the same symbols the
+                // backend routes through the witness getters — so the check is
+                // defined over exactly what the emitter treats as row-typed.
+                if !row_params.is_empty() {
+                    let row_syms: BTreeSet<Symbol> = params
+                        .iter()
+                        .filter(|(_, ty)| matches!(ty, IrType::RowGeneric(_)))
+                        .map(|(s, _)| *s)
+                        .collect();
+                    if row_value_escapes_direct_access(&lowered_body, &row_syms) {
+                        return Err(unsupported(sig_span, Feature::RowPolyRecordAnnotation));
+                    }
+                }
                 // Each quantified variable carries the Rust trait bound its
                 // body-imposed super-type obligations require (empty for a
                 // structurally-parametric variable — a bare `T{n}`).
@@ -9608,6 +9854,7 @@ impl<'a> Lowerer<'a> {
                     name,
                     home: ModPath(def.home().to_vec()),
                     type_params,
+                    row_params,
                     params,
                     ret,
                     body: lowered_body,
@@ -9759,6 +10006,9 @@ impl<'a> Lowerer<'a> {
                         name,
                         home: ModPath(def.home().to_vec()),
                         type_params,
+                        // An unannotated binding never generalises over a record
+                        // row (D3): pinned on first concrete use, so no row params.
+                        row_params: Vec::new(),
                         params,
                         ret,
                         body: lowered_body,
@@ -9794,6 +10044,8 @@ impl<'a> Lowerer<'a> {
                     name,
                     home: ModPath(def.home().to_vec()),
                     type_params,
+                    // Zero-param value binding: no arguments, so no row params.
+                    row_params: Vec::new(),
                     params: Vec::new(),
                     ret,
                     body: lowered_body,
@@ -9959,11 +10211,13 @@ impl<'a> Lowerer<'a> {
         ty: &canon::Type,
         patterns: &[canon::Pattern],
         generics: &[Symbol],
+        sig_span: Span,
     ) -> DResult<TypedSigParts> {
         let mut cur = ty;
         let mut params = Vec::with_capacity(patterns.len());
         let mut prologue = Vec::new();
         let mut any_syms_minted = Vec::new();
+        let mut row_params = Vec::new();
         for pat in patterns {
             let canon::Type::Lambda(arg, rest) = cur else {
                 // More parameter patterns than the annotation has arrows. The
@@ -9977,7 +10231,39 @@ impl<'a> Lowerer<'a> {
                     "annotation has fewer arrows than parameters",
                 ));
             };
-            let mut ir_ty = self.ir_type_from_canon(arg, generics)?;
+            // A row-polymorphic record annotation in argument position erases to
+            // an `IrType::RowGeneric` bounded by per-field witness traits (the
+            // backend synthesises them); its required fields are recorded as a
+            // `RowParam` so emission knows what to bound. Only the increment's
+            // SUPPORTED shape is admitted here — a top-level single-field open
+            // row; every unsupported open-row form (return position, nested,
+            // multi-field) is still failed closed by `IPE-L0131` before
+            // `split_typed_sig` is reached, so this arm never mis-erases one.
+            let mut ir_ty = if let canon::Type::RecordOpen(row_var, fields) = arg.as_ref() {
+                // A row parameter is emittable only when bound to a plain
+                // variable, so the body can route `param.field` through the
+                // witness getter. A subset-pattern binder (`f {name} = name`)
+                // would have `lower_param` destructure the bare `R{n}` generic
+                // with a concrete struct pattern — E0308 (expected `R{n}`, found
+                // the concrete struct) — so a non-variable binder over a row is
+                // failed closed here; only a plain-variable binder is routable.
+                if !matches!(
+                    pat.value,
+                    canon::Pattern_::PVar(_) | canon::Pattern_::PAnything
+                ) {
+                    return Err(unsupported(pat.span, Feature::RowPolyRecordAnnotation));
+                }
+                row_params.push(RowParam {
+                    var: *row_var,
+                    fields: fields
+                        .iter()
+                        .map(|(fname, fty)| Ok((*fname, self.ir_type_from_canon(fty, generics)?)))
+                        .collect::<DResult<_>>()?,
+                });
+                IrType::RowGeneric(*row_var)
+            } else {
+                self.ir_type_from_canon(arg, generics)?
+            };
             // Per-occurrence `any` seal fix (AUD-01): a bare param-position `any`
             // lowers to `IrType::Generic(any_sym)` above — the SAME interned
             // Symbol for EVERY occurrence, so `f : any -> any -> Int` emits
@@ -10015,12 +10301,27 @@ impl<'a> Lowerer<'a> {
             }
             cur = rest.as_ref();
         }
+        // The trailing type is what remains after every parameter pattern has
+        // consumed one arrow. If it STILL embeds an open row, that row was not
+        // bound as a direct top-level parameter — it sits in return position, or
+        // in a later-arrow arg the body reaches only through an inner lambda
+        // (`f n = \rec -> rec.name`, where `n` consumes the first arrow and the
+        // `{r|..} -> String` row arrow lands here). The signature gate admits a
+        // single-field row per arrow, so such a program passes it, but there is
+        // no witness-getter route for a row that never became a bound param;
+        // lowering `cur` would drive the row into `ir_type_from_canon`'s
+        // fail-closed backstop and ICE (IPE-I0001). Reject it cleanly here — a
+        // well-typed program must surface IPE-L0131, never an ICE.
+        if canon_type_has_open_row(cur) {
+            return Err(unsupported(sig_span, Feature::RowPolyRecordAnnotation));
+        }
         // The trailing type is the return type.
         Ok((
             params,
             prologue,
             self.ir_type_from_canon(cur, generics)?,
             any_syms_minted,
+            row_params,
         ))
     }
 
@@ -19381,7 +19682,11 @@ fn collect_ir_generic_syms(ty: &IrType, out: &mut BTreeSet<Symbol>) {
         | IrType::CryptoMac
         | IrType::EmailAddress
         // `Locale` is non-parametric — no generic syms.
-        | IrType::Locale => {}
+        | IrType::Locale
+        // A row variable is tracked in `Func::row_params`, NOT in the ordinary
+        // `T{n}` generic scope. Collecting it here would double-count it as both
+        // a `T`-generic and an `R`-generic, so this arm is a deliberate no-op.
+        | IrType::RowGeneric(_) => {}
     }
 }
 
@@ -20306,6 +20611,226 @@ mod tests {
             !super::expr_type_mentions(&body, &super::ir_type_mentions_json),
             "a json-free body must NOT set the json guard — the floor (drop \
              `json` for a program that names no json anywhere) must hold"
+        );
+    }
+
+    // ── Row-polymorphism lowering gate ─────────────────────────────────────
+
+    fn ty_string(interner: &mut Interner) -> canon::Type {
+        canon::Type::Con {
+            home: Vec::new(),
+            name: interner.intern("String").unwrap(),
+            args: Vec::new(),
+        }
+    }
+
+    /// `{ r | name : String } -> String` — the supported increment-1 shape: a
+    /// single-field open row in argument position with a closed field type. It
+    /// must NOT be gated (it lowers to a witness-bounded `RowGeneric`).
+    #[test]
+    fn single_field_arg_open_row_is_supported() {
+        let mut interner = Interner::new();
+        let r = interner.intern("r").unwrap();
+        let name = interner.intern("name").unwrap();
+        let arg = canon::Type::RecordOpen(r, vec![(name, ty_string(&mut interner))]);
+        let sig = canon::Type::Lambda(Box::new(arg), Box::new(ty_string(&mut interner)));
+        assert!(
+            !super::canon_sig_has_unsupported_open_row(&sig),
+            "a single-field argument-position open row is the supported shape"
+        );
+    }
+
+    /// A two-field argument open row is NOT yet emittable, so it stays gated.
+    #[test]
+    fn multi_field_arg_open_row_is_gated() {
+        let mut interner = Interner::new();
+        let r = interner.intern("r").unwrap();
+        let name = interner.intern("name").unwrap();
+        let age = interner.intern("age").unwrap();
+        let arg = canon::Type::RecordOpen(
+            r,
+            vec![
+                (name, ty_string(&mut interner)),
+                (age, ty_string(&mut interner)),
+            ],
+        );
+        let sig = canon::Type::Lambda(Box::new(arg), Box::new(ty_string(&mut interner)));
+        assert!(
+            super::canon_sig_has_unsupported_open_row(&sig),
+            "a multi-field argument open row is not yet emittable — must be gated"
+        );
+    }
+
+    /// An open row in RETURN position is not yet emittable, so it stays gated.
+    #[test]
+    fn return_position_open_row_is_gated() {
+        let mut interner = Interner::new();
+        let r = interner.intern("r").unwrap();
+        let name = interner.intern("name").unwrap();
+        let ret = canon::Type::RecordOpen(r, vec![(name, ty_string(&mut interner))]);
+        let sig = canon::Type::Lambda(Box::new(ty_string(&mut interner)), Box::new(ret));
+        assert!(
+            super::canon_sig_has_unsupported_open_row(&sig),
+            "a return-position open row is not yet emittable — must be gated"
+        );
+    }
+
+    /// A closed-record signature carrying no open row is never gated.
+    #[test]
+    fn closed_signature_is_not_gated() {
+        let mut interner = Interner::new();
+        let sig = canon::Type::Lambda(
+            Box::new(ty_string(&mut interner)),
+            Box::new(ty_string(&mut interner)),
+        );
+        assert!(
+            !super::canon_sig_has_unsupported_open_row(&sig),
+            "a fully closed signature carries no open row to gate"
+        );
+    }
+
+    // ── Row-generic containment invariant ──────────────────────────────────
+    //
+    // `row_value_escapes_direct_access` is the airtight body-level check: a
+    // row-typed value is emittable ONLY as the direct receiver of a field read.
+    // Every other position is an escape that would otherwise reach the backend
+    // as a bare `R{n}` generic and cargo-fail (the exit-0-then-cargo-fail
+    // class). These tests pin each escape route AND the one allowed shape.
+
+    use ipe_intern::Symbol;
+    use ipe_ir::{CallPin, Expr, IrType, OnFormKind};
+
+    fn row_set(interner: &mut Interner) -> (Symbol, BTreeSet<Symbol>) {
+        let rec = interner.intern("rec").unwrap();
+        let mut s = BTreeSet::new();
+        s.insert(rec);
+        (rec, s)
+    }
+
+    fn access(rec: Symbol, interner: &mut Interner) -> Expr {
+        Expr::Access {
+            record: Box::new(Expr::Var(rec)),
+            field: interner.intern("name").unwrap(),
+            field_ty: IrType::Str,
+        }
+    }
+
+    /// The ONE routable shape: `rec.name` — a direct field read on the row
+    /// binder. It must NOT be reported as an escape.
+    #[test]
+    fn direct_field_read_is_not_an_escape() {
+        let mut interner = Interner::new();
+        let (rec, syms) = row_set(&mut interner);
+        let body = access(rec, &mut interner);
+        assert!(
+            !super::row_value_escapes_direct_access(&body, &syms),
+            "a direct `rec.name` read is the one emittable row use"
+        );
+    }
+
+    /// `Access { record: CloneVar(rec), .. }` — the captured-receiver form a
+    /// row parameter takes once `rewrite_captured_clones` rewrites its read
+    /// inside an inner `move` lambda (`\_ -> rec.name`). The emitter routes a
+    /// `Var` receiver ONLY, so a `CloneVar` receiver would emit a raw struct
+    /// field read on the bare `R1` generic (E0609). It must be reported as an
+    /// escape, mirroring `direct_field_read_is_not_an_escape` for the `Var` form.
+    #[test]
+    fn captured_clone_receiver_of_row_is_an_escape() {
+        let mut interner = Interner::new();
+        let (rec, syms) = row_set(&mut interner);
+        let body = Expr::Access {
+            record: Box::new(Expr::CloneVar(rec)),
+            field: interner.intern("name").unwrap(),
+            field_ty: IrType::Str,
+        };
+        assert!(
+            super::row_value_escapes_direct_access(&body, &syms),
+            "a `CloneVar` receiver (the captured-into-lambda form) is not the \
+             emitter's routable `Var` receiver — it escapes"
+        );
+    }
+
+    /// `let n = rec in n.name` — the let-rebind blocker. `rec` flows into the
+    /// `Let` value, not an `Access` receiver, so it escapes.
+    #[test]
+    fn let_rebind_of_row_is_an_escape() {
+        let mut interner = Interner::new();
+        let (rec, syms) = row_set(&mut interner);
+        let n = interner.intern("n").unwrap();
+        let body = Expr::Let {
+            name: n,
+            value: Box::new(Expr::Var(rec)),
+            body: Box::new(Expr::Access {
+                record: Box::new(Expr::Var(n)),
+                field: interner.intern("name").unwrap(),
+                field_ty: IrType::Str,
+            }),
+        };
+        assert!(
+            super::row_value_escapes_direct_access(&body, &syms),
+            "binding a row value to a fresh name escapes the direct-access form"
+        );
+    }
+
+    /// Passing a row value as a call argument escapes.
+    #[test]
+    fn call_argument_of_row_is_an_escape() {
+        let mut interner = Interner::new();
+        let (rec, syms) = row_set(&mut interner);
+        let body = Expr::Call {
+            callee: Callee::Kernel(KernelFn::TaskFail),
+            args: vec![Expr::Var(rec)],
+            pin: CallPin::None,
+            on_form: OnFormKind::NotForm,
+        };
+        assert!(
+            super::row_value_escapes_direct_access(&body, &syms),
+            "a row value passed as a call argument escapes"
+        );
+    }
+
+    /// Storing a row value in a record literal escapes.
+    #[test]
+    fn record_store_of_row_is_an_escape() {
+        let mut interner = Interner::new();
+        let (rec, syms) = row_set(&mut interner);
+        let f = interner.intern("f").unwrap();
+        let body = Expr::Record {
+            fields: vec![(f, Expr::Var(rec))],
+            ty: None,
+        };
+        assert!(
+            super::row_value_escapes_direct_access(&body, &syms),
+            "a row value stored in a record field escapes"
+        );
+    }
+
+    /// Returning a row value bare (the whole body is the row read) escapes.
+    #[test]
+    fn bare_return_of_row_is_an_escape() {
+        let mut interner = Interner::new();
+        let (rec, syms) = row_set(&mut interner);
+        let body = Expr::Var(rec);
+        assert!(
+            super::row_value_escapes_direct_access(&body, &syms),
+            "returning the row value itself escapes — the whole struct is unknown"
+        );
+    }
+
+    /// A non-row symbol used freely is never an escape.
+    #[test]
+    fn unrelated_symbol_is_never_an_escape() {
+        let mut interner = Interner::new();
+        let (_rec, syms) = row_set(&mut interner);
+        let other = interner.intern("other").unwrap();
+        let body = Expr::Let {
+            name: interner.intern("x").unwrap(),
+            value: Box::new(Expr::Var(other)),
+            body: Box::new(Expr::Var(other)),
+        };
+        assert!(
+            !super::row_value_escapes_direct_access(&body, &syms),
+            "a symbol outside the row set flows freely"
         );
     }
 }

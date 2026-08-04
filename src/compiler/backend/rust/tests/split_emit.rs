@@ -87,6 +87,7 @@ const fn int_func(id: u32, name: ipe_intern::Symbol, home: ModPath) -> Func {
         name,
         home,
         type_params: vec![],
+        row_params: vec![],
         params: vec![],
         ret: IrType::Int,
         body: Expr::Int(0),

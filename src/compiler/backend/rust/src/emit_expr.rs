@@ -296,8 +296,21 @@ fn collect_free_vars(expr: &Expr, out: &mut std::collections::BTreeSet<Symbol>) 
 /// so this never needs a Copy/non-Copy type check to stay sound; it only ever
 /// clones a variable that a caller determined is genuinely captured (see
 /// `clone_targets_in_expr`).
+///
+/// `row_binders` is the enclosing function's set of row-generic parameter
+/// binders (the symbols the Access emitter routes through a borrowing witness
+/// getter `ipe_<field>()`). A whole-row `CloneVar` on such a receiver would
+/// fall through the emitter's `Var`-only getter route to a raw struct-field
+/// read on the opaque `R{n}` generic — the exit-0-then-cargo-fail class. The
+/// getter borrows, so no whole-row clone is ever needed there: a row-generic
+/// Access receiver is left a bare `Var`, upholding the invariant that a
+/// row-generic value only ever reaches emission as `Access { record: Var(row) }`.
 #[allow(clippy::too_many_lines)] // A recursive tree-walk over a large enum — necessarily long.
-fn clone_free_target(expr: Expr, target: Symbol) -> Expr {
+fn clone_free_target(
+    expr: Expr,
+    target: Symbol,
+    row_binders: &std::collections::BTreeSet<Symbol>,
+) -> Expr {
     match expr {
         Expr::Var(s) if s == target => Expr::CloneVar(s),
         Expr::Var(_)
@@ -312,15 +325,15 @@ fn clone_free_target(expr: Expr, target: Symbol) -> Expr {
         | Expr::FuncValue { .. } => expr,
         Expr::BinOp { op, lhs, rhs } => Expr::BinOp {
             op,
-            lhs: Box::new(clone_free_target(*lhs, target)),
-            rhs: Box::new(clone_free_target(*rhs, target)),
+            lhs: Box::new(clone_free_target(*lhs, target, row_binders)),
+            rhs: Box::new(clone_free_target(*rhs, target, row_binders)),
         },
         Expr::Let { name, value, body } => {
-            let new_value = Box::new(clone_free_target(*value, target));
+            let new_value = Box::new(clone_free_target(*value, target, row_binders));
             let new_body = if name == target {
                 body
             } else {
-                Box::new(clone_free_target(*body, target))
+                Box::new(clone_free_target(*body, target, row_binders))
             };
             Expr::Let {
                 name,
@@ -333,11 +346,11 @@ fn clone_free_target(expr: Expr, target: Symbol) -> Expr {
             value,
             body,
         } => {
-            let new_value = Box::new(clone_free_target(*value, target));
+            let new_value = Box::new(clone_free_target(*value, target, row_binders));
             let new_body = if pat_binds_target(&binder, target) {
                 body
             } else {
-                Box::new(clone_free_target(*body, target))
+                Box::new(clone_free_target(*body, target, row_binders))
             };
             Expr::Destructure {
                 binder,
@@ -346,18 +359,18 @@ fn clone_free_target(expr: Expr, target: Symbol) -> Expr {
             }
         }
         Expr::If { cond, then_, else_ } => Expr::If {
-            cond: Box::new(clone_free_target(*cond, target)),
-            then_: Box::new(clone_free_target(*then_, target)),
-            else_: Box::new(clone_free_target(*else_, target)),
+            cond: Box::new(clone_free_target(*cond, target, row_binders)),
+            then_: Box::new(clone_free_target(*then_, target, row_binders)),
+            else_: Box::new(clone_free_target(*else_, target, row_binders)),
         },
         Expr::Match(m) => Expr::Match(m.map_bodies(
-            |scrutinee| clone_free_target(scrutinee, target),
+            |scrutinee| clone_free_target(scrutinee, target, row_binders),
             |pat, body, guard| {
                 let binds = pat_binds_target(pat, target);
                 let new_body = if binds {
                     body
                 } else {
-                    clone_free_target(body, target)
+                    clone_free_target(body, target, row_binders)
                 };
                 // Preserve the list-length guard, rewriting it too when the arm
                 // pattern does not bind `target`.
@@ -365,7 +378,7 @@ fn clone_free_target(expr: Expr, target: Symbol) -> Expr {
                     if binds {
                         g
                     } else {
-                        clone_free_target(g, target)
+                        clone_free_target(g, target, row_binders)
                     }
                 });
                 (new_body, new_guard)
@@ -380,7 +393,7 @@ fn clone_free_target(expr: Expr, target: Symbol) -> Expr {
             callee,
             args: args
                 .into_iter()
-                .map(|a| clone_free_target(a, target))
+                .map(|a| clone_free_target(a, target, row_binders))
                 .collect(),
             pin,
             on_form,
@@ -388,33 +401,33 @@ fn clone_free_target(expr: Expr, target: Symbol) -> Expr {
         Expr::Tuple(items) => Expr::Tuple(
             items
                 .into_iter()
-                .map(|e| clone_free_target(e, target))
+                .map(|e| clone_free_target(e, target, row_binders))
                 .collect(),
         ),
         Expr::List { elem, items } => Expr::List {
             elem,
             items: items
                 .into_iter()
-                .map(|e| clone_free_target(e, target))
+                .map(|e| clone_free_target(e, target, row_binders))
                 .collect(),
         },
         Expr::Cons { head, tail } => Expr::Cons {
-            head: Box::new(clone_free_target(*head, target)),
-            tail: Box::new(clone_free_target(*tail, target)),
+            head: Box::new(clone_free_target(*head, target, row_binders)),
+            tail: Box::new(clone_free_target(*tail, target, row_binders)),
         },
         Expr::ListIndexClone { list, index } => Expr::ListIndexClone {
-            list: Box::new(clone_free_target(*list, target)),
+            list: Box::new(clone_free_target(*list, target, row_binders)),
             index,
         },
         Expr::ListLenCheck { list, len, exact } => Expr::ListLenCheck {
-            list: Box::new(clone_free_target(*list, target)),
+            list: Box::new(clone_free_target(*list, target, row_binders)),
             len,
             exact,
         },
         Expr::Record { fields, ty } => Expr::Record {
             fields: fields
                 .into_iter()
-                .map(|(s, e)| (s, clone_free_target(e, target)))
+                .map(|(s, e)| (s, clone_free_target(e, target, row_binders)))
                 .collect(),
             ty,
         },
@@ -422,23 +435,34 @@ fn clone_free_target(expr: Expr, target: Symbol) -> Expr {
             record,
             field,
             field_ty,
-        } => Expr::Access {
-            record: Box::new(clone_free_target(*record, target)),
-            field,
-            field_ty,
-        },
+        } => {
+            // A row-generic Access receiver stays a bare `Var`: the witness
+            // getter `ipe_<field>()` BORROWS, so a whole-row `CloneVar` here is
+            // both spurious and unroutable (the emitter's getter route matches
+            // `Var` alone). Leaving it `Var(row)` is what upholds the invariant
+            // uniformly at emit time. Any other receiver is rewritten normally.
+            let new_record = match *record {
+                Expr::Var(s) if row_binders.contains(&s) => Expr::Var(s),
+                other => clone_free_target(other, target, row_binders),
+            };
+            Expr::Access {
+                record: Box::new(new_record),
+                field,
+                field_ty,
+            }
+        }
         Expr::Update { record, fields } => Expr::Update {
-            record: Box::new(clone_free_target(*record, target)),
+            record: Box::new(clone_free_target(*record, target, row_binders)),
             fields: fields
                 .into_iter()
-                .map(|(s, e)| (s, clone_free_target(e, target)))
+                .map(|(s, e)| (s, clone_free_target(e, target, row_binders)))
                 .collect(),
         },
         Expr::Lambda { params, ret, body } => {
             let new_body = if params.iter().any(|(s, _)| *s == target) {
                 body
             } else {
-                Box::new(clone_free_target(*body, target))
+                Box::new(clone_free_target(*body, target, row_binders))
             };
             Expr::Lambda {
                 params,
@@ -450,7 +474,7 @@ fn clone_free_target(expr: Expr, target: Symbol) -> Expr {
             let new_body = if params.iter().any(|(s, _)| *s == target) {
                 body
             } else {
-                Box::new(clone_free_target(*body, target))
+                Box::new(clone_free_target(*body, target, row_binders))
             };
             Expr::SharedLambda {
                 params,
@@ -459,19 +483,19 @@ fn clone_free_target(expr: Expr, target: Symbol) -> Expr {
             }
         }
         Expr::Apply { func, args } => Expr::Apply {
-            func: Box::new(clone_free_target(*func, target)),
+            func: Box::new(clone_free_target(*func, target, row_binders)),
             args: args
                 .into_iter()
-                .map(|a| clone_free_target(a, target))
+                .map(|a| clone_free_target(a, target, row_binders))
                 .collect(),
         },
         Expr::TaskSeq { effect, rest } => Expr::TaskSeq {
-            effect: Box::new(clone_free_target(*effect, target)),
-            rest: Box::new(clone_free_target(*rest, target)),
+            effect: Box::new(clone_free_target(*effect, target, row_binders)),
+            rest: Box::new(clone_free_target(*rest, target, row_binders)),
         },
         Expr::TaskSeqSync { effect, rest } => Expr::TaskSeqSync {
-            effect: Box::new(clone_free_target(*effect, target)),
-            rest: Box::new(clone_free_target(*rest, target)),
+            effect: Box::new(clone_free_target(*effect, target, row_binders)),
+            rest: Box::new(clone_free_target(*rest, target, row_binders)),
         },
         Expr::Ctor {
             home,
@@ -484,14 +508,14 @@ fn clone_free_target(expr: Expr, target: Symbol) -> Expr {
             variant,
             args: args
                 .into_iter()
-                .map(|a| clone_free_target(a, target))
+                .map(|a| clone_free_target(a, target, row_binders))
                 .collect(),
         },
         Expr::TailLoop { params, body } => {
             let new_body = if params.iter().any(|(s, _)| *s == target) {
                 body
             } else {
-                Box::new(clone_free_target(*body, target))
+                Box::new(clone_free_target(*body, target, row_binders))
             };
             Expr::TailLoop {
                 params,
@@ -501,7 +525,7 @@ fn clone_free_target(expr: Expr, target: Symbol) -> Expr {
         Expr::TailRecur { args } => Expr::TailRecur {
             args: args
                 .into_iter()
-                .map(|a| clone_free_target(a, target))
+                .map(|a| clone_free_target(a, target, row_binders))
                 .collect(),
         },
     }
@@ -535,8 +559,18 @@ fn pat_binds_target(pat: &Pat, target: Symbol) -> bool {
 /// only ever rewrites bare `Var` occurrences into `CloneVar` — the passes
 /// don't interfere with each other regardless of order (a `CloneVar` leaf is
 /// never re-matched by a later target's pass).
-pub fn clone_targets_in_expr(expr: Expr, targets: &std::collections::BTreeSet<Symbol>) -> Expr {
-    targets.iter().fold(expr, |e, &t| clone_free_target(e, t))
+///
+/// `row_binders` is the enclosing function's set of row-generic parameter
+/// binders. A row-generic Access receiver is left a bare `Var` (never cloned)
+/// so the borrowing witness getter still routes — see [`clone_free_target`].
+pub fn clone_targets_in_expr(
+    expr: Expr,
+    targets: &std::collections::BTreeSet<Symbol>,
+    row_binders: &std::collections::BTreeSet<Symbol>,
+) -> Expr {
+    targets
+        .iter()
+        .fold(expr, |e, &t| clone_free_target(e, t, row_binders))
 }
 
 /// Does `sym` — a function-typed binder — appear anywhere in `body` in a
@@ -6811,6 +6845,21 @@ pub fn emit_expr_at(
             // audit's second half — last-use analysis to elide the clone on a
             // heap field's FINAL read — is explicitly deferred (spec §3.5).
             let base = emit_expr_at(ctx, record, indent, child, generics)?;
+            // A field read on a row-generic parameter cannot name a struct field
+            // (the concrete struct is unknown at emit time): it routes through the
+            // field's witness getter `ipe_<field>()`, which rustc resolves to the
+            // monomorphised struct's field. Any other base keeps the ordinary
+            // struct-field read.
+            if let Expr::Var(sym) = record.as_ref()
+                && generics.is_row(*sym)
+            {
+                let getter = crate::naming::field_witness_getter_name(ctx.resolve_ident(*field)?);
+                if ir_type_is_definitely_copy(field_ty) {
+                    // The getter borrows; a `Copy` field is copied out by deref.
+                    return Ok(format!("*({base}).{getter}()"));
+                }
+                return Ok(format!("({base}).{getter}().clone()"));
+            }
             let field = ctx.emit_ident(*field)?;
             if ir_type_is_definitely_copy(field_ty) {
                 Ok(format!("({base}).{field}"))
@@ -6864,7 +6913,9 @@ pub fn emit_expr_at(
             // text-level `clone_captured_vars` pass matched on rendered source
             // and could rewrite either).
             let rest_captures = free_vars(rest);
-            let effect_rw = clone_targets_in_expr((**effect).clone(), &rest_captures);
+            let row_binders: std::collections::BTreeSet<Symbol> =
+                generics.row_binders().iter().copied().collect();
+            let effect_rw = clone_targets_in_expr((**effect).clone(), &rest_captures, &row_binders);
             let effect_s = emit_expr_at(ctx, &effect_rw, indent, child, generics)?;
             let rest_s = emit_expr_at(ctx, rest, indent, child, generics)?;
             Ok(format!(
@@ -6887,7 +6938,9 @@ pub fn emit_expr_at(
         Expr::TaskSeqSync { effect, rest } => {
             let child = depth + 1;
             let rest_captures = free_vars(rest);
-            let effect_rw = clone_targets_in_expr((**effect).clone(), &rest_captures);
+            let row_binders: std::collections::BTreeSet<Symbol> =
+                generics.row_binders().iter().copied().collect();
+            let effect_rw = clone_targets_in_expr((**effect).clone(), &rest_captures, &row_binders);
             let effect_s = emit_expr_at(ctx, &effect_rw, indent, child, generics)?;
             let rest_s = emit_expr_at(ctx, rest, indent, child, generics)?;
             Ok(format!("{{ let _ = task_run({effect_s}); {rest_s} }}"))
@@ -9190,7 +9243,18 @@ pub fn emit_func_vis(ctx: &EmitCtx, func: &Func, vis_prefix: &str) -> DResult<St
     // name; only the variable symbols participate, so project them out of the
     // `(Symbol, BoundSet)` pairs.
     let scope_syms: Vec<Symbol> = func.type_params.iter().map(|(sym, _)| *sym).collect();
-    let generics = GenericScope::new(&scope_syms);
+    // The row variables this function quantifies, in order, projected out of
+    // `row_params` so an `IrType::RowGeneric` renders to its positional `R{n}`.
+    let row_syms: Vec<Symbol> = func.row_params.iter().map(|r| r.var).collect();
+    // The parameter binders carrying a row-generic type — the value-level names
+    // whose field reads must route through the witness getters.
+    let row_binder_syms: Vec<Symbol> = func
+        .params
+        .iter()
+        .filter(|(_, ty)| matches!(ty, IrType::RowGeneric(_)))
+        .map(|(sym, _)| *sym)
+        .collect();
+    let generics = GenericScope::with_rows(&scope_syms, &row_syms, &row_binder_syms);
 
     let ret_is_task = matches!(ret_ty, IrType::Task(_));
 
@@ -9566,7 +9630,7 @@ fn render_fn_generics(
     impl_fn_params: &[usize],
     generics: GenericScope,
 ) -> DResult<String> {
-    if func.type_params.is_empty() && impl_fn_params.is_empty() {
+    if func.type_params.is_empty() && impl_fn_params.is_empty() && func.row_params.is_empty() {
         return Ok(String::new());
     }
 
@@ -9634,6 +9698,39 @@ fn render_fn_generics(
             impl_fn_generic_name(idx),
             parts.join(", ")
         ));
+    }
+
+    // Row generics: each `R{n}` is bounded by one per-field witness trait —
+    // `IpeHasField<Field = FieldTy>` — plus `Clone` (field reads emit `.clone()`
+    // for value semantics, §4.4). The bounds are exactly the field obligations
+    // the solver already proved at every call site, so exit-0 ⇒ cargo-green.
+    for (i, row) in func.row_params.iter().enumerate() {
+        let n = i.saturating_add(1);
+        let mut bounds: Vec<String> = Vec::with_capacity(row.fields.len() + 3);
+        // A task-returning function moves its row-generic parameter into the
+        // boxed continuation of its `task_and_then` tail — a
+        // `Box<dyn FnOnce(..) -> Pin<Box<.. + Send>> + Send>` — so the row generic
+        // needs `Send + 'static`, exactly as a task-flowing `T{n}` does above.
+        // The lifetime bound must precede every trait bound (`R{n}: 'static + …`),
+        // so it is pushed first. Both auto-traits hold for every concrete Ipê
+        // record (owned, never borrows), so exit-0 ⇒ cargo-green is preserved.
+        if ret_is_task {
+            bounds.push("'static".to_owned());
+            bounds.push("Send".to_owned());
+        }
+        for (field_sym, field_ty) in &row.fields {
+            let field_name = ctx.resolve_ident(*field_sym)?;
+            let trait_name = crate::naming::field_witness_trait_name(field_name);
+            let assoc = crate::naming::field_witness_assoc_type_name(field_name);
+            // The field type is rendered in the SAME scope as the signature, so a
+            // field carrying a generic (`{ r | value : a }`) resolves its `a` to
+            // the function's `T{n}`. For increment-1 single-field concrete rows
+            // this is a plain scalar/struct type.
+            let field_ty_s = render_type(ctx, field_ty, generics)?;
+            bounds.push(format!("{trait_name}<{assoc} = {field_ty_s}>"));
+        }
+        bounds.push("Clone".to_owned());
+        entries.push(format!("R{n}: {}", bounds.join(" + ")));
     }
 
     Ok(format!("<{}>", entries.join(", ")))

@@ -23,7 +23,7 @@ use ipe_ir::{IrType, ModPath, Program};
 use crate::EmitCtx;
 use crate::crate_specs;
 use crate::emit_expr::emit_func;
-use crate::emit_types::{emit_enum, emit_record_struct};
+use crate::emit_types::{emit_enum, emit_record_struct, emit_row_witnesses};
 use crate::preamble::{epilogue, preamble};
 use crate::rust_file;
 use crate::rust_file::{Partitioned, RustFileId, partition_items};
@@ -1315,6 +1315,14 @@ pub fn emit_program(ctx: &EmitCtx, program: &Program) -> DResult<EmittedProject>
         BTreeSet::new()
     };
     ctx.assert_record_structs_disjoint_from_type_namespace(&mod_idents)?;
+    // The row-poly witness substrate shares Rust's TYPE namespace with the
+    // record structs and enums above: the synthesised `IpeHas<Field>` traits
+    // must be pairwise distinct AND disjoint from user types / mods, or two
+    // field names that camel-case to one trait (E0428) reach rustc.
+    ctx.assert_row_witness_names_disjoint(
+        &crate::emit_types::row_witness_field_names(program),
+        &mod_idents,
+    )?;
 
     // The emitted Rust source files (`src/main.rs` plus, in the real split,
     // one `src/ipe_mods/<ident>.rs` per module). The manifest + runtime-module
@@ -1423,6 +1431,9 @@ pub fn emit_program(ctx: &EmitCtx, program: &Program) -> DResult<EmittedProject>
         for rec in ctx.record_structs() {
             out.push_str(&emit_record_struct(ctx, rec)?);
         }
+        // Per-field witness traits + impls for any row-polymorphic function.
+        // Empty (nothing pushed) when the program has no row annotation.
+        out.push_str(&emit_row_witnesses(ctx, program)?);
 
         // boundary-projection impl blocks.  When the program uses Db
         // kernels, the lowerer injected synthetic `SqlValue` / `SqlField`
@@ -2351,7 +2362,10 @@ fn ir_type_contains_non_serde(ty: &IrType) -> bool {
         | IrType::ErrorInfo
         | IrType::PanicInfo
         | IrType::TypeInfo
-        | IrType::Generic(_) => false,
+        | IrType::Generic(_)
+        // A row variable's serde-representability rides its witness bound set,
+        // exactly as a plain generic's rides its `T: Serialize` bound.
+        | IrType::RowGeneric(_) => false,
 
         // ── Serialisable container types — recurse into inner types ───────
         IrType::Maybe(inner) | IrType::List(inner) | IrType::Set(inner) => {
@@ -2532,6 +2546,8 @@ pub fn emit_spine(ctx: &EmitCtx, program: &Program) -> DResult<String> {
     for rec in ctx.record_structs() {
         out.push_str(&emit_record_struct(ctx, rec)?);
     }
+    // Per-field witness traits + impls for any row-polymorphic function.
+    out.push_str(&emit_row_witnesses(ctx, program)?);
     if ctx.uses_db {
         out.push_str(&emit_db_projection_impls(ctx)?);
     }
@@ -2703,6 +2719,10 @@ pub fn assemble_split_manifest(
         })
         .collect::<DResult<BTreeSet<String>>>()?;
     ctx.assert_record_structs_disjoint_from_type_namespace(&mod_idents)?;
+    ctx.assert_row_witness_names_disjoint(
+        &crate::emit_types::row_witness_field_names(program),
+        &mod_idents,
+    )?;
 
     let mut rust_sources: Vec<(RelPath, String)> = Vec::new();
 

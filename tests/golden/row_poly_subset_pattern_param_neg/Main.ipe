@@ -1,0 +1,17 @@
+module Main exposing (main)
+
+import Ipe.Io as Io
+
+
+-- A row-typed parameter bound with a SUBSET record pattern (`{ name }`) rather
+-- than a plain variable. Lowering would destructure the bare `R1` generic with
+-- a concrete struct pattern (E0308: expected `R1`, found the concrete struct).
+-- Only a plain-variable binder over a row is routable, so lowering fails this
+-- closed with IPE-L0131.
+getName : { r | name : String } -> String
+getName { name } =
+    name
+
+
+main =
+    Io.println (getName { name = "Ada", age = 36 })

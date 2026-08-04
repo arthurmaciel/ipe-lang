@@ -1,0 +1,19 @@
+module Main exposing (main)
+
+import Ipe.Io as Io
+
+
+-- A row-typed parameter captured into an inner lambda, whose body reads the
+-- field (`\_ -> rec.name`). Capturing `rec` into a `move` closure rewrites its
+-- read to the `CloneVar` form, which the backend does NOT route through the
+-- witness getter (the getter route fires on a direct `Var` receiver only). The
+-- captured `rec.name` would therefore emit a struct-field read against the bare
+-- `R1` generic (E0609). Only a DIRECT field read on the parameter itself is
+-- emittable, so lowering fails this closed with IPE-L0131.
+makeGetter : { r | name : String } -> (Int -> String)
+makeGetter rec =
+    \_ -> rec.name
+
+
+main =
+    Io.println (makeGetter { name = "Ada", age = 36 } 0)

@@ -116,6 +116,7 @@ fn tag_program(interner: &mut Interner, payload: Pat) -> DResult<Program> {
         name: f,
         home: ModPath(vec![]),
         type_params: vec![],
+        row_params: vec![],
         params: vec![(
             w,
             IrType::Enum {
@@ -134,6 +135,7 @@ fn tag_program(interner: &mut Interner, payload: Pat) -> DResult<Program> {
         name: zero,
         home: ModPath(vec![]),
         type_params: vec![],
+        row_params: vec![],
         params: vec![],
         ret: IrType::Task(Box::new(IrType::Unit)),
         body: Expr::Call {
@@ -309,6 +311,7 @@ fn alias_program(interner: &mut Interner) -> DResult<(Program, Symbol, Symbol)> 
         name: f,
         home: ModPath(vec![]),
         type_params: vec![],
+        row_params: vec![],
         params: vec![(
             w,
             IrType::Enum {
@@ -327,6 +330,7 @@ fn alias_program(interner: &mut Interner) -> DResult<(Program, Symbol, Symbol)> 
         name: main,
         home: ModPath(vec![]),
         type_params: vec![],
+        row_params: vec![],
         params: vec![],
         ret: IrType::Task(Box::new(IrType::Unit)),
         body: Expr::Call {
