@@ -2938,3 +2938,47 @@ mod static_noise_mime_tests {
         assert_eq!(static_noise_mime(""), "application/octet-stream");
     }
 }
+
+// Live-session isolation for a recursion trip. `drive_session` folds each Msg
+// through the user `update` inside a `tokio::spawn`ed task; a recursion trip in
+// `update` unwinds into that spawn boundary, ending only the tripping session's
+// driver while the process — and every other session's driver — survives. This
+// module pins that isolation at the spawn boundary the driver uses.
+#[cfg(test)]
+mod recursion_session_isolation_tests {
+    // A session-`update` that trips the recursion guard, spawned exactly as
+    // `drive_session` spawns its fold task, dies as a panicking `JoinError`
+    // (its session is lost) — and a sibling session's spawned update, driven
+    // concurrently, still completes. The process outlives the trip.
+    #[tokio::test]
+    async fn a_recursion_trip_in_update_ends_only_its_session() {
+        // The tripping session: its update raises the exact recursion-guard trip
+        // message inside the spawned task, mirroring an unbounded `update`.
+        let tripping = tokio::spawn(async {
+            let _g = crate::core::recursion_guard();
+            panic!("maximum recursion depth exceeded");
+        });
+
+        // A healthy sibling session driven concurrently on its own spawned task.
+        let healthy = tokio::spawn(async { 21_i64 * 2 });
+
+        let tripping_result = tripping.await;
+        let healthy_result = healthy.await;
+
+        // The tripping session's driver ended by panic — that session is lost.
+        let join_err = tripping_result
+            .expect_err("the tripping session's task must end by panic, not complete");
+        assert!(
+            join_err.is_panic(),
+            "the session driver ends via the spawn boundary's panic funnel, \
+             so the trip is isolated to this one session"
+        );
+
+        // The process survived: the sibling session completed normally.
+        assert_eq!(
+            healthy_result.expect("a healthy concurrent session must complete"),
+            42,
+            "a concurrent session is unaffected by another session's trip"
+        );
+    }
+}
