@@ -543,12 +543,20 @@ where
         // `"count=" ++ ... ++ "  (+, -, r, q) > "` with NO trailing newline so
         // the cursor stays on the prompt line for the user's input. An app that
         // wants each render on its own line supplies its own trailing "\n"
-        // in its `view` string, exactly as the Go contract requires — see
-        // `tests/golden/console_app_view_separator` for a fixture that
-        // deliberately does NOT do this and therefore glues renders
-        // together, matching Go byte-for-byte.
-        let _ = std::io::stdout().write_all(view(model.clone()).as_bytes());
-        let _ = std::io::stdout().flush();
+        // in its `view` string — see `tests/golden/console_app_view_separator`
+        // for a fixture that deliberately does NOT do this and therefore glues
+        // renders together.
+        //
+        // The initial render is skipped when `init` issued an outstanding
+        // effect: that effect's Msg folds through `update` and renders the
+        // settled model below, so an eager render here would paint the
+        // pre-effect model and duplicate the frame. An effect-free `init`
+        // (`Cmd.none`) has nothing to settle, so its initial model renders now
+        // (the `lines: 0` frame the separator fixture pins).
+        if outstanding.load(std::sync::atomic::Ordering::SeqCst) == 0 {
+            let _ = std::io::stdout().write_all(view(model.clone()).as_bytes());
+            let _ = std::io::stdout().flush();
+        }
 
         while let Some(ev) = rx.recv().await {
             let msg = match ev {
