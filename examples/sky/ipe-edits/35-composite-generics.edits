@@ -1,0 +1,106 @@
+# A `Task`-typed `main` is performed by the entry boundary; the removed
+# synchronous `Task.run` becomes a plain `Task Error ()` value. Ipê's
+# `Ipe.Regex` takes a compiled `Regex` (parse, don't validate): a pattern is
+# `compile`d once and an invalid pattern conservatively yields no match.
+
+[[edit]]
+file: src/Compute.ipe
+find:
+"""
+        if Regex.match "^transfer" cat then
+            Transfer
+
+        else if Regex.match "refund" cat then
+            Refund
+
+        else if Regex.match "(salary|bonus|payroll)" cat then
+            Income
+
+        else if isPositive && Regex.match "(deposit|interest|dividend)" cat then
+            Income
+"""
+replace:
+"""
+        if matches "^transfer" cat then
+            Transfer
+
+        else if matches "refund" cat then
+            Refund
+
+        else if matches "(salary|bonus|payroll)" cat then
+            Income
+
+        else if isPositive && matches "(deposit|interest|dividend)" cat then
+            Income
+"""
+
+[[edit]]
+file: src/Compute.ipe
+find:
+"""
+        wordTokens = Regex.findAll "[a-z]+" haystack
+        sanitised = List.map (\tok -> Regex.replace "-" "_" tok) wordTokens
+    in
+        sanitised
+"""
+replace:
+"""
+        wordTokens = matchesAll "[a-z]+" haystack
+        sanitised = List.map (\tok -> replaceAll "-" "_" tok) wordTokens
+    in
+        sanitised
+
+
+-- The compiled-`Regex` surface, wrapped for a static literal pattern. An
+-- invalid pattern conservatively yields no match / no-op rather than a
+-- silent false positive.
+matches : String -> String -> Bool
+matches pattern haystack =
+    case Regex.compile pattern of
+
+        Ok re ->
+            Regex.match re haystack
+
+        Err _ ->
+            False
+
+
+matchesAll : String -> String -> List String
+matchesAll pattern haystack =
+    case Regex.compile pattern of
+
+        Ok re ->
+            Regex.findAll re haystack
+
+        Err _ ->
+            []
+
+
+replaceAll : String -> String -> String -> String
+replaceAll pattern replacement haystack =
+    case Regex.compile pattern of
+
+        Ok re ->
+            Regex.replace re replacement haystack
+
+        Err _ ->
+            haystack
+"""
+
+[[edit]]
+file: src/Main.ipe
+find:
+"""
+main =
+    let
+        pipeline = runPipeline () |> Task.onError reportError
+        _ = Task.run pipeline
+    in
+        ()
+"""
+replace:
+"""
+main : Task Error ()
+main =
+    runPipeline () |> Task.onError reportError
+"""

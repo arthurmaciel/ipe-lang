@@ -23,12 +23,9 @@ import Compute
 import Report
 
 
+main : Task Error ()
 main =
-    let
-        pipeline = runPipeline () |> Task.onError reportError
-        _ = Task.run pipeline
-    in
-        ()
+    runPipeline () |> Task.onError reportError
 
 
 runPipeline : () -> Task Error ()

@@ -1,16 +1,16 @@
 module Main exposing (main)
 
-import Ipe.Result as Result
 import Ipe.Task as Task
 import Ipe.Crypto as Crypto
 import Ipe.Io as Io
+import Ipe.Error as Error exposing (Error)
 
 
+main : Task Error ()
 main =
-    case Task.run (Crypto.randomToken 16) of
-
-        Ok token ->
-            Io.println ("Generated UUID: " ++ token)
-
-        Err e ->
-            Io.println ("Failed to generate UUID: " ++ errorToString e)
+    Crypto.randomToken 16
+        |> Task.andThen
+               (\token -> Io.println ("Generated UUID: " ++ token))
+        |> Task.onError
+               (\e ->
+                   Io.println ("Failed to generate UUID: " ++ Error.toString e))

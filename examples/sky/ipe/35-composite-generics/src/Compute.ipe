@@ -29,16 +29,16 @@ classify tx =
         amountStr = tx.amount
         isPositive = not (String.startsWith "-" amountStr)
     in
-        if Regex.match "^transfer" cat then
+        if matches "^transfer" cat then
             Transfer
 
-        else if Regex.match "refund" cat then
+        else if matches "refund" cat then
             Refund
 
-        else if Regex.match "(salary|bonus|payroll)" cat then
+        else if matches "(salary|bonus|payroll)" cat then
             Income
 
-        else if isPositive && Regex.match "(deposit|interest|dividend)" cat then
+        else if isPositive && matches "(deposit|interest|dividend)" cat then
             Income
 
         else if not isPositive then
@@ -148,10 +148,46 @@ tagsFor : Transaction -> List String
 tagsFor tx =
     let
         haystack = String.toLower tx.category
-        wordTokens = Regex.findAll "[a-z]+" haystack
-        sanitised = List.map (\tok -> Regex.replace "-" "_" tok) wordTokens
+        wordTokens = matchesAll "[a-z]+" haystack
+        sanitised = List.map (\tok -> replaceAll "-" "_" tok) wordTokens
     in
         sanitised
+
+
+-- The compiled-`Regex` surface, wrapped for a static literal pattern. An
+-- invalid pattern conservatively yields no match / no-op rather than a
+-- silent false positive.
+matches : String -> String -> Bool
+matches pattern haystack =
+    case Regex.compile pattern of
+
+        Ok re ->
+            Regex.match re haystack
+
+        Err _ ->
+            False
+
+
+matchesAll : String -> String -> List String
+matchesAll pattern haystack =
+    case Regex.compile pattern of
+
+        Ok re ->
+            Regex.findAll re haystack
+
+        Err _ ->
+            []
+
+
+replaceAll : String -> String -> String -> String
+replaceAll pattern replacement haystack =
+    case Regex.compile pattern of
+
+        Ok re ->
+            Regex.replace re replacement haystack
+
+        Err _ ->
+            haystack
 
 
 enrich : Transaction -> EnrichedRow

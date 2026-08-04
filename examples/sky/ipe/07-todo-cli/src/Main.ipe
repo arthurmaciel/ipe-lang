@@ -25,6 +25,8 @@ import Ipe.Db as Db
 import Ipe.Error as Error exposing (Error)
 import Ipe.System
 import Ipe.Io as Io
+import Ipe.Log as Log
+import Ipe.String as String
 
 
 -- Top-level pipeline:
@@ -33,31 +35,21 @@ import Ipe.Io as Io
 --   3. Anything that fails along the way lands in reportError, which
 --      writes a human-readable message and exits non-zero.
 --
--- We force the chain with Task.run at the entry point — runtime's
--- main-auto-run only fires for top-level `main : Task` exports, but
--- the codegen for that path is fragile under the current effect-
--- boundary migration; explicit Task.run is the reliable form for
--- CLI entry points.
+-- The whole CLI is one `Task Error ()` chain performed by the entry
+-- boundary: open the DB, run the chosen command, and route any failure to
+-- `reportError`.
+main : Task Error ()
 main =
-    let
-        -- System.args is Task Error (List String) after the
-        -- v1.0 Task-everywhere migration. Force at the
-        -- read site for ergonomic let-binding access.
-        pipeline =
-            Db.connect () |> Task.andThen runApp |> Task.onError reportError
-        _ = Task.run pipeline
-    in
-        ()
+    Db.connect () |> Task.andThen runApp |> Task.onError reportError
 
 
 runApp : Db -> Task Error ()
 runApp conn =
     initDb conn
+        |> Task.andThen (\_ -> System.args ())
         |> Task.andThen
-               (\_ ->
+               (\userArgs ->
                    let
-                       userArgs =
-                           System.args () |> Task.run |> Result.withDefault []
                        cmd = getArg userArgs
                        cmdArg = getArg (List.drop 1 userArgs)
                    in
