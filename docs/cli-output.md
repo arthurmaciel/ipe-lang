@@ -21,6 +21,24 @@ $ ipe capabilities examples/sky/02-go-stdlib/src/Main.ipe
 The gutter and colour rule are the same everywhere — every command, and the
 installer, indent identically — because they come from one place in the code.
 
+## Stage progress
+
+A multi-step command reports each step as one settled line. While a step runs it
+is a light-yellow spinner and label; on success the same line is rewritten in
+place to a light-green `✓` and message, on failure to a light-red `✗` and
+message. Illustrative — the three states of one line, not three commands:
+
+```
+  ⠙ Resolving the latest release…      (while it runs)
+  ✓ Found ipe-v0.1.36                  (on success — the same line)
+  ✗ Binary for latest release not found — set IPE_VERSION=vX.Y.Z   (on failure)
+```
+
+Off a terminal (piped, redirected, or `NO_COLOR`) each step is a single
+flush-left plain line with no spinner, no in-place rewrite, and no ANSI, so
+`curl … | sh` logs and scripts stay clean. The installer (`scripts/install.sh`)
+and `ipe upgrade` render this shape; other commands adopt it incrementally.
+
 ## `--plain` and `--json`
 
 The data-producing commands — `capabilities`, `diff`, `version`, and `explain`

@@ -36,6 +36,7 @@ fn installer_palette_mirrors_the_style_ssot() {
     // spelling exactly while staying independent of which shell var holds it.
     for (name, escape) in [
         ("yellow", color.yellow),
+        ("bright_yellow", color.bright_yellow),
         ("dim", color.dim),
         ("green", color.green),
         ("red", color.red),
@@ -101,11 +102,15 @@ fn installer_mirrors_the_spinner_frames() {
 
 #[test]
 fn installer_mirrors_the_status_glyphs_it_uses() {
-    // The installer leads step lines with `•` and success lines with `✓`; its
-    // failure format spells out "error:" instead of a glyph, so the `✗` fail
-    // glyph is CLI-only. Assert the two the installer does render match the SSOT.
+    // The stage renderer leads a success outcome with `✓`, a failure outcome
+    // with `✗`, and a soft-skip settle with the `•` step glyph. All three come
+    // from the style SSOT; assert each appears in the script.
     let script = install_script();
-    for (name, glyph) in [("step", style::glyph::STEP), ("ok", style::glyph::OK)] {
+    for (name, glyph) in [
+        ("step", style::glyph::STEP),
+        ("ok", style::glyph::OK),
+        ("fail", style::glyph::FAIL),
+    ] {
         assert!(
             script.contains(glyph),
             "install.sh must use the style `{name}` glyph `{glyph}`"
@@ -113,10 +118,10 @@ fn installer_mirrors_the_status_glyphs_it_uses() {
     }
 }
 
-/// The GUTTER (2 spaces) must lead every human banner/success/footer line in
-/// the installer. These three lines are the ones the install experience presents
-/// to the user as a "frame"; a 4-space regression here made them visually
-/// inconsistent with the CLI's guttered output.
+/// The GUTTER (2 spaces) must lead every human stage/banner/footer line in the
+/// installer. These are the lines the install experience presents to the user as
+/// a "frame"; a 4-space regression here made them visually inconsistent with the
+/// CLI's guttered output.
 ///
 /// The assertions check the rendered indent prefix in the `printf` call, not a
 /// parsed AST — a character-level match is enough to catch a width regression
@@ -126,22 +131,22 @@ fn installer_banner_success_and_footer_use_the_two_space_gutter() {
     let script = install_script();
     let gutter = style::GUTTER;
 
-    // The step() and done_() helpers each lead with exactly the GUTTER before
-    // their status glyph. The format strings are `'  %s•%s …'` and `'  %s✓%s …'`
-    // — two spaces then the colour escape placeholder then the glyph.
-    let step_prefix = format!("'{gutter}%s{}", style::glyph::STEP);
+    // The stage success (`stage_ok`) and failure (`stage_fail`) helpers each
+    // rewrite the running line in place: a carriage return, then the GUTTER, then
+    // the colour placeholder and glyph — `'\r  %s✓…'` and `'\r  %s✗…'`.
+    let ok_prefix = format!("'\\r{gutter}%s{}", style::glyph::OK);
     assert!(
-        script.contains(&step_prefix),
-        "install.sh step() must use the {}-space GUTTER before the glyph; \
-         expected prefix `{step_prefix}` in script",
+        script.contains(&ok_prefix),
+        "install.sh stage_ok must rewrite with the {}-space GUTTER before the ✓ glyph; \
+         expected prefix `{ok_prefix}` in script",
         gutter.len()
     );
 
-    let done_prefix = format!("'{gutter}%s{}", style::glyph::OK);
+    let fail_prefix = format!("'\\r{gutter}%s{}", style::glyph::FAIL);
     assert!(
-        script.contains(&done_prefix),
-        "install.sh done_() must use the {}-space GUTTER before the glyph; \
-         expected prefix `{done_prefix}` in script",
+        script.contains(&fail_prefix),
+        "install.sh stage_fail must rewrite with the {}-space GUTTER before the ✗ glyph; \
+         expected prefix `{fail_prefix}` in script",
         gutter.len()
     );
 
