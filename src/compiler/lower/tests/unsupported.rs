@@ -748,6 +748,272 @@ fn fn_instantiating_a_generic_record_slot_is_rejected() -> DResult<()> {
 }
 
 #[test]
+fn point_free_fn_instantiating_a_generic_record_slot_is_rejected() -> DResult<()> {
+    // The point-free twin of `fn_instantiating_a_generic_record_slot_is_rejected`:
+    // `let w = wrap in w (\n -> n)` routes the same generic-slot instantiation
+    // through a local alias, so the callee reaches lowering as a `VarLocal(w)`
+    // whose declared scheme is not in `env`. Without the alias-resolving gate the
+    // generic `fn wrap<T1: Clone>` is emitted and instantiated at `T1 = Box<dyn
+    // Fn>`, an `ipe`-exit-0-then-`cargo`-fail E0277 SEAL breach. The gate must
+    // resolve `w` back to `wrap`'s top-level key and reject IPE-L0107 identically.
+    let mut i = Interner::new();
+    let main = i.intern("main")?;
+    let wrap = i.intern("wrap")?;
+    let w = i.intern("w")?;
+    let value = i.intern("value")?;
+    let n = i.intern("n")?;
+    let int_name = i.intern("Int")?;
+    let ty = con_int(&mut i)?;
+    let con = |name| Ty::Con {
+        module: Vec::new(),
+        name,
+        args: Vec::new(),
+    };
+    let arrow_int = || Ty::Fun(Box::new(con(int_name)), Box::new(con(int_name)));
+
+    // `let w = wrap in w (\n -> n)` — the alias binds the top-level `wrap`, and
+    // the inner call instantiates it at `Int -> Int`.
+    let arg_span = Span::new(40, 50);
+    let lambda = Located::new(
+        arg_span,
+        canon::Expr_::Lambda(
+            vec![Located::new(Span::new(41, 42), canon::Pattern_::PVar(n))],
+            Box::new(Located::new(Span::new(46, 47), canon::Expr_::VarLocal(n))),
+        ),
+    );
+    let call_span = Span::new(35, 51);
+    let inner_call = Located::new(
+        call_span,
+        canon::Expr_::Call(
+            Box::new(Located::new(Span::new(35, 36), canon::Expr_::VarLocal(w))),
+            vec![lambda],
+        ),
+    );
+    let binding = canon::LetBinding {
+        pat: Located::new(Span::new(30, 31), canon::Pattern_::PVar(w)),
+        body: Located::new(
+            Span::new(34, 38),
+            canon::Expr_::VarTopLevel {
+                module: vec![],
+                name: wrap,
+            },
+        ),
+    };
+    let body = Located::new(
+        Span::new(28, 52),
+        canon::Expr_::Let(vec![binding], Box::new(inner_call)),
+    );
+    let def = canon::Def::Typed {
+        home: vec![],
+        name: Located::new(Span::new(20, 24), main),
+        free_vars: Vec::new(),
+        patterns: Vec::new(),
+        body,
+        ty,
+    };
+    // Declared template `wrap : a -> { value : a }`.
+    let mut record_fields = BTreeMap::new();
+    record_fields.insert(value, Ty::Var(0));
+    let mut env = BTreeMap::new();
+    env.insert(
+        (vec![], wrap),
+        Ty::Fun(
+            Box::new(Ty::Var(0)),
+            Box::new(Ty::Record(record_fields, ipe_types::RowTail::Closed)),
+        ),
+    );
+    // The argument's solved region type is `Int -> Int`.
+    let mut regions = BTreeMap::new();
+    regions.insert(arg_span, arrow_int());
+    let callee_def = resolvable_callee_def(&mut i, wrap)?;
+    let res = run_with_regions(Vec::new(), vec![callee_def, def], env, regions, &mut i);
+    assert_unsupported(res, Feature::FirstClassFunctions, IPE_L0107, call_span);
+    Ok(())
+}
+
+#[test]
+fn same_let_sibling_alias_instantiating_a_generic_record_slot_is_rejected() -> DResult<()> {
+    // The sibling-alias twin of `point_free_fn_instantiating_a_generic_record_slot_is_rejected`:
+    // `let w = wrap; v = w in v (\n -> n)` is ONE multi-binding `let`, and canon
+    // `let` is sequential (`let*`), so `v = w` resolves `w` to the local alias
+    // installed by the earlier sibling. The alias registration therefore must run
+    // in source order over the live map — a later sibling has to see its
+    // predecessors — otherwise `v` resolves to no alias, the callee `VarLocal(v)`
+    // escapes the gate, and the generic `fn wrap<T1: Clone>` is emitted and
+    // instantiated at `T1 = Box<dyn Fn>`: an `ipe`-exit-0-then-`cargo`-fail E0277
+    // SEAL breach. The gate must resolve `v` through `w` back to `wrap` and reject
+    // IPE-L0107 identically.
+    let mut i = Interner::new();
+    let main = i.intern("main")?;
+    let wrap = i.intern("wrap")?;
+    let w = i.intern("w")?;
+    let v = i.intern("v")?;
+    let value = i.intern("value")?;
+    let n = i.intern("n")?;
+    let int_name = i.intern("Int")?;
+    let ty = con_int(&mut i)?;
+    let con = |name| Ty::Con {
+        module: Vec::new(),
+        name,
+        args: Vec::new(),
+    };
+    let arrow_int = || Ty::Fun(Box::new(con(int_name)), Box::new(con(int_name)));
+
+    // `let w = wrap; v = w in v (\n -> n)` — two siblings in one `let`. The
+    // inner call instantiates the aliased `wrap` at `Int -> Int`.
+    let arg_span = Span::new(48, 58);
+    let lambda = Located::new(
+        arg_span,
+        canon::Expr_::Lambda(
+            vec![Located::new(Span::new(49, 50), canon::Pattern_::PVar(n))],
+            Box::new(Located::new(Span::new(54, 55), canon::Expr_::VarLocal(n))),
+        ),
+    );
+    let call_span = Span::new(43, 59);
+    let inner_call = Located::new(
+        call_span,
+        canon::Expr_::Call(
+            Box::new(Located::new(Span::new(43, 44), canon::Expr_::VarLocal(v))),
+            vec![lambda],
+        ),
+    );
+    // First sibling: `w = wrap`.
+    let binding_w = canon::LetBinding {
+        pat: Located::new(Span::new(30, 31), canon::Pattern_::PVar(w)),
+        body: Located::new(
+            Span::new(34, 38),
+            canon::Expr_::VarTopLevel {
+                module: vec![],
+                name: wrap,
+            },
+        ),
+    };
+    // Second sibling: `v = w` — a `VarLocal` referring to the earlier sibling.
+    let binding_v = canon::LetBinding {
+        pat: Located::new(Span::new(39, 40), canon::Pattern_::PVar(v)),
+        body: Located::new(Span::new(43, 44), canon::Expr_::VarLocal(w)),
+    };
+    let body = Located::new(
+        Span::new(28, 60),
+        canon::Expr_::Let(vec![binding_w, binding_v], Box::new(inner_call)),
+    );
+    let def = canon::Def::Typed {
+        home: vec![],
+        name: Located::new(Span::new(20, 24), main),
+        free_vars: Vec::new(),
+        patterns: Vec::new(),
+        body,
+        ty,
+    };
+    // Declared template `wrap : a -> { value : a }`.
+    let mut record_fields = BTreeMap::new();
+    record_fields.insert(value, Ty::Var(0));
+    let mut env = BTreeMap::new();
+    env.insert(
+        (vec![], wrap),
+        Ty::Fun(
+            Box::new(Ty::Var(0)),
+            Box::new(Ty::Record(record_fields, ipe_types::RowTail::Closed)),
+        ),
+    );
+    // The argument's solved region type is `Int -> Int`.
+    let mut regions = BTreeMap::new();
+    regions.insert(arg_span, arrow_int());
+    let callee_def = resolvable_callee_def(&mut i, wrap)?;
+    let res = run_with_regions(Vec::new(), vec![callee_def, def], env, regions, &mut i);
+    assert_unsupported(res, Feature::FirstClassFunctions, IPE_L0107, call_span);
+    Ok(())
+}
+
+#[test]
+fn point_free_alias_instantiating_a_clone_slot_lowers_cleanly() -> DResult<()> {
+    // The gate is narrow: a point-free alias applied to a NON-function argument
+    // (`let w = wrap in w 0`) instantiates the generic slot at `Int` — a `Clone`
+    // type whose bound is satisfiable — so it must lower cleanly, never a false
+    // IPE-L0107. Only a fn-embedding binding is a real E0277.
+    let mut i = Interner::new();
+    let main = i.intern("main")?;
+    let wrap = i.intern("wrap")?;
+    let w = i.intern("w")?;
+    let value = i.intern("value")?;
+    let int_name = i.intern("Int")?;
+    let ty = con_int(&mut i)?;
+
+    // `let w = wrap in w 0` — the argument's region type is `Int`.
+    let arg_span = Span::new(40, 41);
+    let arg = int(arg_span, 0);
+    let call_span = Span::new(35, 42);
+    let inner_call = Located::new(
+        call_span,
+        canon::Expr_::Call(
+            Box::new(Located::new(Span::new(35, 36), canon::Expr_::VarLocal(w))),
+            vec![arg],
+        ),
+    );
+    let binding = canon::LetBinding {
+        pat: Located::new(Span::new(30, 31), canon::Pattern_::PVar(w)),
+        body: Located::new(
+            Span::new(34, 38),
+            canon::Expr_::VarTopLevel {
+                module: vec![],
+                name: wrap,
+            },
+        ),
+    };
+    let body = Located::new(
+        Span::new(28, 43),
+        canon::Expr_::Let(vec![binding], Box::new(inner_call)),
+    );
+    let def = canon::Def::Typed {
+        home: vec![],
+        name: Located::new(Span::new(20, 24), main),
+        free_vars: Vec::new(),
+        patterns: Vec::new(),
+        body,
+        ty,
+    };
+    let mut record_fields = BTreeMap::new();
+    record_fields.insert(value, Ty::Var(0));
+    let mut env = BTreeMap::new();
+    env.insert(
+        (vec![], wrap),
+        Ty::Fun(
+            Box::new(Ty::Var(0)),
+            Box::new(Ty::Record(record_fields, ipe_types::RowTail::Closed)),
+        ),
+    );
+    // The value path reifies the callee's solved type: `w` monomorphized to
+    // `Int -> { value : Int }`. Seed that region (and the alias body's) so the
+    // clean lowering does not surface a spurious "no inferred type" bug.
+    let int_con = Ty::Con {
+        module: vec![],
+        name: int_name,
+        args: vec![],
+    };
+    let mut mono_fields = BTreeMap::new();
+    mono_fields.insert(value, int_con.clone());
+    let mono_wrap = || {
+        Ty::Fun(
+            Box::new(int_con.clone()),
+            Box::new(Ty::Record(mono_fields.clone(), ipe_types::RowTail::Closed)),
+        )
+    };
+    let mut regions = BTreeMap::new();
+    regions.insert(arg_span, ty_int(&mut i)?);
+    regions.insert(Span::new(35, 36), mono_wrap());
+    regions.insert(Span::new(34, 38), mono_wrap());
+    let callee_def = resolvable_callee_def(&mut i, wrap)?;
+    let res = run_with_regions(Vec::new(), vec![callee_def, def], env, regions, &mut i);
+    assert!(
+        res.is_ok(),
+        "a point-free alias instantiating a Clone (Int) slot must lower cleanly, \
+         not trip the generic-slot gate: {:?}",
+        res.err()
+    );
+    Ok(())
+}
+
+#[test]
 fn fn_instantiating_a_bare_generic_slot_is_rejected() -> DResult<()> {
     // The record is incidental: the same E0277 hits any bare-variable slot.
     // `always : a -> b -> a` applied to a lambda for `a` instantiates the
