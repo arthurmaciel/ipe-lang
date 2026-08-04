@@ -2672,9 +2672,9 @@ impl<'a> Builder<'a> {
                     Ok(Ty::Record(resp_fields, RowTail::Closed))
                 } else if args.is_empty() && self.interner.resolve(name) == Some("Migration") {
                     // `Ipe.Db.Migration` is a record alias
-                    // `{ name : String, sql : String }` (reference
-                    // `Std/Db.ipe:237`). Expand structurally so a program can
-                    // build migrations as record literals in a `List Migration`.
+                    // `{ name : String, sql : String }`. Expand structurally so a
+                    // program can build migrations as record literals in a
+                    // `List Migration`.
                     let mk = |n: Symbol| Ty::Con {
                         module: Vec::new(),
                         name: n,
@@ -3906,6 +3906,10 @@ impl<'a> Builder<'a> {
             BuiltinTag::Bytes => self.builtins.bytes,
             BuiltinTag::List => self.builtins.list,
             BuiltinTag::Maybe => self.builtins.maybe,
+            BuiltinTag::Result => self.builtins.result,
+            BuiltinTag::Set => self.builtins.set,
+            BuiltinTag::Dict => self.builtins.dict,
+            BuiltinTag::Order => self.builtins.order,
         }
     }
 
@@ -4059,12 +4063,12 @@ impl<'a> Builder<'a> {
             name: self.builtins.db,
             args: Vec::new(),
         };
-        // `Ipe.Db.Migration` is a record alias `{ name : String, sql : String }`
-        // (reference `Std/Db.ipe:237`). `Db.migrate` schemes over `List
-        // Migration`, and `Db.defaultMigration` returns one — so a program can
-        // build migrations as record literals. The record folds to a synthesised
-        // `Rec…` struct; the `DbMigrate` emit converts each to a `(name, sql)`
-        // tuple for the `db_migrate_apply` runtime kernel.
+        // `Ipe.Db.Migration` is a record alias `{ name : String, sql : String }`.
+        // `Db.migrate` schemes over `List Migration`, and `Db.defaultMigration`
+        // returns one — so a program can build migrations as record literals. The
+        // record folds to a synthesised `Rec…` struct; the `DbMigrate` emit
+        // converts each to a `(name, sql)` tuple for the `db_migrate_apply`
+        // runtime kernel.
         let migration = || {
             let string = || Ty::Con {
                 module: Vec::new(),
@@ -5237,16 +5241,16 @@ impl<'a> Builder<'a> {
                 ),
             ),
             K::DbWithTransaction => fun(db(), fun(fun(db(), task(var(0))), task(var(0)))),
-            // `Db.migrate : Db -> List Migration -> Task Error (List String)`
-            // (reference `Std/Db.ipe:300`). The record-shaped `Migration` API is
-            // the surface; the `db_migrate_apply` runtime kernel still takes
-            // `(name, sql)` pairs — the emitter converts at the call site.
+            // `Db.migrate : Db -> List Migration -> Task Error (List String)`.
+            // The record-shaped `Migration` API is the surface; the
+            // `db_migrate_apply` runtime kernel still takes `(name, sql)` pairs —
+            // the emitter converts at the call site.
             K::DbMigrate => fun(
                 db(),
                 fun(list(migration()), task(list(string()))),
             ),
-            // `Db.defaultMigration : String -> Migration` (reference
-            // `Std/Db.ipe:246`) — a Migration named with an empty SQL body.
+            // `Db.defaultMigration : String -> Migration` — a Migration named
+            // with an empty SQL body.
             K::DbDefaultMigration => fun(string(), migration()),
 
             // ── Db.Decode ──
@@ -9540,15 +9544,17 @@ mod registry_phase_c_tests {
     ///   compare against. Its reference is [`expected_primitive_scheme`] below: a
     ///   per-kernel hand-built `Ty` authored from the published signature over the
     ///   primitive constructors.
-    /// - A **polymorphic** `List`-family shape KEEPS its `stdlib_scheme` arm (that
-    ///   retained hand-built arm — over `let var = Ty::Var` and the `list`/`maybe`
+    /// - A **polymorphic** family (`List` / `Maybe` / `Result` / `Set` / `Dict`
+    ///   combinators, the `Basics` arrow-only arms, the `Bytes` decoders) KEEPS
+    ///   its `stdlib_scheme` arm (that retained hand-built arm — over
+    ///   `let var = Ty::Var` and the `list`/`maybe`/`result`/`set`/`dict`/`order`
     ///   closures — is the byte-identity witness). Its reference is that arm,
     ///   `stdlib_scheme(k)`, which `expected_primitive_scheme` (primitives only)
     ///   cannot express.
     ///
     /// Selecting the reference by "does the kernel still have a table arm" keeps
-    /// each of the 159 shaped kernels checked against a genuine second source, so
-    /// a wrong shape or a wrong interpreter arm makes the `assert_eq!` fire here.
+    /// each shaped kernel checked against a genuine second source, so a wrong
+    /// shape or a wrong interpreter arm makes the `assert_eq!` fire here.
     #[test]
     fn interpreted_shape_matches_legacy() {
         let mut interner = Interner::new();
@@ -9582,11 +9588,15 @@ mod registry_phase_c_tests {
             );
         }
         // Guard against a silently-empty sweep: the migrated set is the 136
-        // monomorphic primitive kernels plus the 23 core `List` combinators.
+        // monomorphic primitive kernels, the 23 core `List` combinators, and the
+        // arrow-only polymorphic slice (further `List` folds/sorts/reductions,
+        // the `Basics` arrow arms, the `Maybe` / `Result` / `Set` / `Dict`
+        // combinators, and the `Bytes` decoders).
         assert!(
-            migrated >= 159,
-            "expected at least the 136 monomorphic + 23 core List kernels \
-             (159) to carry a TyShape, found only {migrated}",
+            migrated >= 240,
+            "expected at least the 136 monomorphic + 23 core List + 81 \
+             arrow-only polymorphic kernels (240) to carry a TyShape, \
+             found only {migrated}",
         );
     }
 
