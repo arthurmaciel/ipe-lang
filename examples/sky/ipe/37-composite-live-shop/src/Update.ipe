@@ -1,5 +1,6 @@
 module Update exposing (update)
 
+import Ipe.Dict as Dict
 import Ipe.List as List
 import Ipe.String as String
 import Ipe.Tea.Web.Cmd as Cmd
@@ -30,7 +31,7 @@ update msg model =
                           , cartFlash = announcement
                           , recentTopic = announcement
                           }
-                        , Cmd.batch [ Cmd.publish "cart" payload ]
+                        , Cmd.batch [ Cmd.publish cartTopic payload ]
                         )
 
         RemoveFromCart productId ->
@@ -139,8 +140,8 @@ parsePriceCents raw =
             0
 
 
-mkCartPayload : String -> Int -> { name : String
-, count : Int
-}
+-- The broadcast payload for the cart topic: the added product's name and the
+-- new cart count, carried as the `Dict String String` the pub/sub broker uses.
+mkCartPayload : String -> Int -> Dict String String
 mkCartPayload name count =
-    { name = name, count = count }
+    Dict.fromList [ ( "name", name ), ( "count", String.fromInt count ) ]

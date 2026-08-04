@@ -30,7 +30,7 @@ init : a -> ( Model, Cmd Msg )
 init _req =
     let
         seedPosts =
-            [ Post
+            [ State.Post
                   1
                   "Show SF: Sky.Ui — a typed no-CSS layout DSL for Sky.Live"
                   "https://github.com/anzellai/sky"
@@ -39,7 +39,7 @@ init _req =
                   5
                   []
                   []
-            , Post
+            , State.Post
                   2
                   "Tiny CRDT primitives in 200 lines"
                   "https://example.com/crdt"
@@ -48,7 +48,7 @@ init _req =
                   1
                   []
                   []
-            , Post
+            , State.Post
                   3
                   "Ask SF: Best resources for learning Hindley-Milner?"
                   "https://example.com/hm"
@@ -57,7 +57,7 @@ init _req =
                   2
                   []
                   []
-            , Post
+            , State.Post
                   4
                   "Why server-driven UIs are having a moment"
                   "https://example.com/server-ui"
@@ -66,7 +66,7 @@ init _req =
                   0
                   []
                   []
-            , Post
+            , State.Post
                   5
                   "Postgres tips that actually matter in production"
                   "https://example.com/pg-tips"
@@ -165,11 +165,9 @@ init _req =
 
 
 -- ─── View dispatcher ─────────────────────────────────────────────
-view : Model -> any
+view : Model -> Element Msg
 view model =
-    Ui.layout
-        []
-        (Ui.column
+    Ui.column
             [ Ui.padding 24
             , Ui.spacing 24
             , Background.color (Ui.rgb 246 246 240)
@@ -177,7 +175,7 @@ view model =
             , Font.size 14
             , Font.color (Ui.rgb 33 33 33)
             ]
-            [ topNav model, pageBody model, pageFooter ])
+            [ topNav model, pageBody model, pageFooter ]
 
 
 pageBody : Model -> Element Msg
