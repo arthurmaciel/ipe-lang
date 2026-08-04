@@ -28,6 +28,7 @@
 //! | `row_poly_let_rebind_neg` | row containment | reject | a row-typed param re-bound (`let n = rec in n.name`) escapes the direct-access form → IPE-L0131 (else the emitted `n.name` is E0609) |
 //! | `row_poly_subset_pattern_param_neg` | row containment | reject | a row param bound with a subset pattern (`getName {name} = name`) → IPE-L0131 (else the destructure of `R1` is E0308) |
 //! | `row_poly_non_first_arg_neg` | row containment | reject | a single-field row in a non-first arg reached via a body lambda → clean IPE-L0131 (else the IPE-I0001 ICE backstop) |
+//! | `row_poly_captured_clone_neg` | row containment | reject | a row field read captured into an inner lambda (`\_ -> rec.name`) becomes a `CloneVar` receiver the emitter cannot route → IPE-L0131 (else the emitted `rec.name` on the bare `R1` generic is E0609) |
 //!
 //! Run the E2E accept-path bodies (real `cargo build` + run) with:
 //! ```text
@@ -641,6 +642,42 @@ fn non_first_arg_row_is_ipe_l0131_not_ice() {
         Some(ipe_diagnostics::IPE_L0131),
         "a non-first-arg row reached via a body lambda must be a clean \
          IPE-L0131, never the IPE-I0001 ICE backstop; err = {err}"
+    );
+    assert!(
+        !out.join("src").join("main.rs").exists(),
+        "{name}: no Rust must be emitted on a rejection"
+    );
+}
+
+/// A row-typed parameter captured into an inner lambda whose body reads the
+/// field (`makeGetter rec = \_ -> rec.name`) is rewritten to the `CloneVar`
+/// receiver form by the capture pass. The emitter routes a `Var` receiver
+/// ONLY, so the captured `rec.name` would emit a struct-field read against the
+/// bare `R1` generic (E0609 — exit-0-then-cargo-fail). The lowering containment
+/// check fails it closed with IPE-L0131 and emits NO Rust.
+#[test]
+fn captured_clone_field_read_is_ipe_l0131() {
+    let name = "row_poly_captured_clone_neg";
+    let entry = golden_dir(name).join("Main.ipe");
+    let out = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join(format!("{name}_out"));
+    let _ = std::fs::remove_dir_all(&out);
+
+    let Ok(runtime) = ipe::resolve_runtime() else {
+        eprintln!("SKIP {name}: runtime not available");
+        return;
+    };
+    let res = ipe::build(&entry, &out, &runtime);
+    assert!(
+        res.is_err(),
+        "{name} must fail to compile (captured row field read escapes)"
+    );
+    let Err(err) = res else { return };
+    assert_eq!(
+        diag_code(&err),
+        Some(ipe_diagnostics::IPE_L0131),
+        "a row field read captured into an inner lambda must be IPE-L0131 \
+         (else the emitted `rec.name` on the bare `R1` generic is E0609); \
+         err = {err}"
     );
     assert!(
         !out.join("src").join("main.rs").exists(),

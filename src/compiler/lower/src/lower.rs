@@ -1363,12 +1363,20 @@ fn canon_sig_has_unsupported_open_row(sig: &canon::Type) -> bool {
 /// route? The ONLY emittable use of a row-typed value is as the immediate
 /// receiver of a direct field read — `rec.name`, lowered to `Expr::Access {
 /// record: Expr::Var(rec), .. }`, which the emitter routes through the field's
-/// witness getter (`emit_expr` §Access). A row-typed value that flows ANYWHERE
-/// else — let/destructure-bound, passed as a call argument, stored in a
-/// record/tuple/list, updated, returned bare, or matched — reaches the backend
-/// as a bare `R{n}` generic against which it emits a struct operation
-/// (E0609/E0308: the exit-0-then-cargo-fail class). This walk fails such a body
-/// closed with `IPE-L0131`; only the direct-receiver form is emittable.
+/// witness getter (`emit_expr` §Access, matching `Expr::Var` ALONE). A
+/// row-typed value that flows ANYWHERE else — let/destructure-bound, passed as
+/// a call argument, stored in a record/tuple/list, updated, returned bare, or
+/// matched — reaches the backend as a bare `R{n}` generic against which it
+/// emits a struct operation (E0609/E0308: the exit-0-then-cargo-fail class).
+/// This walk fails such a body closed with `IPE-L0131`; only the
+/// direct-`Var`-receiver form is emittable.
+///
+/// A row parameter captured into an inner `move` lambda (`\_ -> rec.name`) is
+/// rewritten `Var(rec)` -> `CloneVar(rec)` by `rewrite_captured_clones` before
+/// this walk runs, giving `Access { record: CloneVar(rec), .. }`. The emitter
+/// does NOT route a `CloneVar` receiver (it is `Var`-only), so this form is an
+/// escape: the receiver exemption below is `Var`-only, exactly the emitter's
+/// routable shape, and the captured `CloneVar` receiver is failed closed here.
 ///
 /// The invariant enforced is exactly "a row-generic value is only ever the
 /// direct `record` of an `Access`": the walk visits every sub-expression and
@@ -1381,32 +1389,47 @@ fn canon_sig_has_unsupported_open_row(sig: &canon::Type) -> bool {
 /// routing), so the check is defined over precisely the symbols the emitter
 /// treats as row-typed.
 fn row_value_escapes_direct_access(body: &Expr, row_syms: &BTreeSet<Symbol>) -> bool {
-    // A leaf read of a row symbol OUTSIDE an `Access.record` is an escape.
-    // `Access` handles its own `record` child specially (see below), so by the
-    // time a bare `Var`/`CloneVar` is visited here it is NOT in the allowed
-    // direct-receiver position.
+    // A read of a row symbol in ANY position other than the direct receiver of
+    // a field access is an escape — as a bare `Var` or as a `CloneVar` (the
+    // form `rewrite_captured_clones` produces when the row parameter is captured
+    // into an inner `move` lambda). Both are caught here, and the `Access`
+    // receiver is exempted only for the exact shape the emitter routes.
     fn is_row_read(e: &Expr, row_syms: &BTreeSet<Symbol>) -> bool {
         matches!(e, Expr::Var(s) | Expr::CloneVar(s) if row_syms.contains(s))
+    }
+    // The ONLY receiver shape the emitter turns into a witness-getter call is
+    // `Access { record: Var(row), .. }` (`emit_expr` §Access matches `Var`
+    // alone). A captured receiver is `CloneVar(row)`, which the emitter falls
+    // through to an ordinary struct-field read on the bare `R{n}` generic
+    // (E0609 — the exit-0-then-cargo-fail class). This predicate is therefore
+    // `Var`-only: the containment check's routable set is exactly the emitter's,
+    // never a superset, so a `CloneVar` receiver is not exempted and escapes.
+    fn is_routable_receiver(e: &Expr, row_syms: &BTreeSet<Symbol>) -> bool {
+        matches!(e, Expr::Var(s) if row_syms.contains(s))
     }
     if is_row_read(body, row_syms) {
         return true;
     }
     match body {
-        // The one routable position: `Access { record: Var(row), .. }`. The
+        // The one routable position: `Access { record: Var(row), .. }`. That
         // receiver read is allowed and NOT recursed into as a general
-        // sub-expression; any OTHER `record` shape is walked normally (a nested
-        // `Access`, an update, etc.), so `rec.a.b` — where `rec.a` is a row
-        // read feeding another access — is caught because the inner `record`
-        // is the row read, not `rec` directly. `field_ty` is a type, not an
-        // expression, so it carries no escape.
+        // sub-expression. Any OTHER `record` shape — a nested `Access`, an
+        // update, or a captured `CloneVar(row)` receiver — is walked normally,
+        // so `rec.a.b` (where `rec.a` is a row read feeding another access) and
+        // a captured `(\_ -> rec.name)` receiver are both caught: the inner
+        // `record` reaches the top-level `is_row_read` guard on recursion.
+        // `field_ty` is a type, not an expression, so it carries no escape.
         Expr::Access { record, .. } => {
-            if is_row_read(record, row_syms) {
+            if is_routable_receiver(record, row_syms) {
                 false
             } else {
                 row_value_escapes_direct_access(record, row_syms)
             }
         }
-        // Leaves that can never carry a row read.
+        // Leaves. A `Var`/`CloneVar` of a row symbol was already caught by the
+        // top-level `is_row_read` guard (which every recursive call re-runs), so
+        // a `Var`/`CloneVar` reaching this arm names a NON-row symbol and is
+        // safe; the remaining leaves carry no symbol at all.
         Expr::Int(_)
         | Expr::Bool(_)
         | Expr::Float(_)
@@ -20702,6 +20725,28 @@ mod tests {
         assert!(
             !super::row_value_escapes_direct_access(&body, &syms),
             "a direct `rec.name` read is the one emittable row use"
+        );
+    }
+
+    /// `Access { record: CloneVar(rec), .. }` — the captured-receiver form a
+    /// row parameter takes once `rewrite_captured_clones` rewrites its read
+    /// inside an inner `move` lambda (`\_ -> rec.name`). The emitter routes a
+    /// `Var` receiver ONLY, so a `CloneVar` receiver would emit a raw struct
+    /// field read on the bare `R1` generic (E0609). It must be reported as an
+    /// escape, mirroring `direct_field_read_is_not_an_escape` for the `Var` form.
+    #[test]
+    fn captured_clone_receiver_of_row_is_an_escape() {
+        let mut interner = Interner::new();
+        let (rec, syms) = row_set(&mut interner);
+        let body = Expr::Access {
+            record: Box::new(Expr::CloneVar(rec)),
+            field: interner.intern("name").unwrap(),
+            field_ty: IrType::Str,
+        };
+        assert!(
+            super::row_value_escapes_direct_access(&body, &syms),
+            "a `CloneVar` receiver (the captured-into-lambda form) is not the \
+             emitter's routable `Var` receiver — it escapes"
         );
     }
 
