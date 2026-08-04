@@ -40,6 +40,8 @@ impl CargoBin {
 /// (build vs run vs test vs the browser bundle) rather than a generic one.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ToolIntent {
+    /// `ipe build` — compile the program to a native artifact.
+    Build,
     /// `ipe run` — compile and execute the program.
     Run,
     /// `ipe build --target wasm` — compile and bundle the browser artifact.
@@ -54,6 +56,7 @@ impl ToolIntent {
     /// The task phrase for this command, completing "Ipê needs Cargo to …".
     pub(crate) const fn task_phrase(self) -> &'static str {
         match self {
+            Self::Build => "compile this program to a native artifact",
             Self::Run => "compile and run this program",
             Self::BundleWasm => "compile this program to a WebAssembly bundle",
             Self::Test => "compile and run this project's tests",
@@ -331,6 +334,7 @@ mod tests {
     #[test]
     fn every_intent_has_a_task_phrase() {
         for intent in [
+            ToolIntent::Build,
             ToolIntent::Run,
             ToolIntent::BundleWasm,
             ToolIntent::Test,
