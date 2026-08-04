@@ -122,6 +122,59 @@ pub struct StdlibDecl {
     pub emit: &'static str,
 }
 
+/// A reference to the HM type scheme of a kernel, without carrying the scheme
+/// itself.
+///
+/// The scheme cannot be a `'static` value: it is built from interned `Symbol`s
+/// that exist only after the `Interner` runs, and some schemes are
+/// row-polymorphic (fresh unification vars). So a [`KernelDef`] identifies its
+/// scheme by KEY — the kernel variant itself — and the scheme builder
+/// (`ipe_types::constrain`, where the `Interner`/`Builtins`/`UnionFind` live)
+/// resolves the key to a concrete `Ty`. Keeping the key as the variant means the
+/// row binds the scheme without `ipe_kernels` gaining a `types` dependency.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct SchemeKey(pub StdlibKernel);
+
+/// The whole kernel "row" as one descriptor.
+///
+/// It co-locates the facts about a single kernel that were otherwise smeared
+/// across [`StdlibKernel::decl`], [`StdlibKernel::capability`], and
+/// [`StdlibKernel::required_runtime_module`].
+///
+/// Binding the fragments to one row makes an incoherent row (a capability with
+/// no scheme, an emit symbol whose runtime module is never appended) a testable
+/// unit rather than a silent hole. The per-variant [`StdlibKernel::decl`],
+/// [`StdlibKernel::capability`], and [`StdlibKernel::required_runtime_module`]
+/// matches remain authoritative; [`StdlibKernel::def`] is a pure projection that
+/// reads them, so it changes no emitted output.
+///
+/// All non-scheme fields are `'static`/`Copy`; the scheme is carried as a
+/// [`SchemeKey`] reference (see its doc).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct KernelDef {
+    /// The canonical qualifier (e.g. `"Random"`), from [`StdlibDecl::qualifier`].
+    pub qualifier: &'static str,
+    /// The canonical source name (e.g. `"shuffle"`), from [`StdlibDecl::name`].
+    pub name: &'static str,
+    /// Ipê-level arity — argument count before the result, from
+    /// [`StdlibDecl::arity`].
+    pub arity: u8,
+    /// Which subsystem owns emission, from [`StdlibDecl::class`].
+    pub class: KernelClass,
+    /// The Rust runtime symbol this kernel emits, from [`StdlibDecl::emit`].
+    pub runtime_fn: &'static str,
+    /// The security capability this kernel exercises, from
+    /// [`StdlibKernel::capability`]. `None` when pure.
+    pub capability: Option<Capability>,
+    /// The conditionally-vendored runtime module `runtime_fn` lives in when it
+    /// diverges from the module `class` already pulls in, from
+    /// [`StdlibKernel::required_runtime_module`]. `None` when the symbol is in
+    /// the class's own module.
+    pub runtime_module: Option<RuntimeModule>,
+    /// A reference to this kernel's HM type scheme (see [`SchemeKey`]).
+    pub scheme: SchemeKey,
+}
+
 /// Every stdlib kernel function known to the Ipê compiler.
 ///
 /// Variant order matches `lower.rs` `lower_callee` declaration order so that
@@ -4607,6 +4660,29 @@ impl StdlibKernel {
                 | Self::DbFindWhere
                 | Self::DbDeleteWhere
         )
+    }
+
+    /// The whole kernel row as one [`KernelDef`] descriptor.
+    ///
+    /// A pure projection: it reads [`Self::decl`], [`Self::capability`], and
+    /// [`Self::required_runtime_module`] and folds them into one struct, plus a
+    /// [`SchemeKey`] pointing back at this variant. Those methods stay the
+    /// authoritative per-variant tables, so `def` changes no emitted output; it
+    /// exists to bind the fragments into one row the coherence and
+    /// emit-symbol-defined invariant tests can gate.
+    #[must_use]
+    pub const fn def(self) -> KernelDef {
+        let decl = self.decl();
+        KernelDef {
+            qualifier: decl.qualifier,
+            name: decl.name,
+            arity: decl.arity,
+            class: decl.class,
+            runtime_fn: decl.emit,
+            capability: self.capability(),
+            runtime_module: self.required_runtime_module(),
+            scheme: SchemeKey(self),
+        }
     }
 
     /// The conditionally-vendored runtime module this kernel's emitted symbol
