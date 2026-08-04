@@ -610,8 +610,12 @@ fn spawn_and_decode(
 ///
 /// The scratch and (when granted) the working tree are written as `(subpath …)`
 /// allow rules so the probe's benign write and a granted filesystem effect
-/// succeed; the system temp locations the shell itself uses are always allowed
-/// so the jail does not false-deny the launcher.
+/// succeed. The scratch is the ONLY unconditional write allow: the launcher
+/// writes only into it and points `TMPDIR` at it, so no broader system-temp
+/// tree is allowed. Allowing the per-user temp tree would re-permit every
+/// sibling of the scratch (the scratch itself lives under it), so an
+/// out-of-scratch write next to the scratch would leak — the fail-closed jail
+/// allows only the resolved scratch subpath.
 ///
 /// The `env` axis is NOT enforced here: Seatbelt cannot scrub environment
 /// variables, so the run/build launcher clears the environment down to the
@@ -659,16 +663,22 @@ pub fn sbpl_from_profile(
     // scratch and — only when the axis is granted — the working tree. The
     // blanket deny makes an out-of-scratch write observable as the filesystem
     // axis under a withholding profile.
+    //
+    // The scratch (`scoped_tmp`) is the ONLY unconditional write allow. The
+    // launcher writes only into it (the `.sb` profile file) and points `TMPDIR`
+    // at it (`macos_scrubbed_env`), so a well-behaved child's temp writes land
+    // there. No broader system-temp tree is allowed: `scoped_tmp` itself lives
+    // under the per-user temp tree (`/private/var/folders/…` — `$TMPDIR`
+    // resolved through the `/var → /private/var` symlink), so a blanket allow
+    // over that tree would re-permit every sibling of the scratch, defeating the
+    // differential confinement — an out-of-scratch write next to the scratch
+    // would leak. Fail-closed: allow only the resolved scratch subpath.
     s.push_str("(deny file-write*)\n");
     let _ = writeln!(s, "(allow file-write* (subpath {}))", quote(scoped_tmp));
     if matches!(profile.filesystem, FilesystemScope::WorkingTreeReadWrite) {
         let _ = writeln!(s, "(allow file-write* (subpath {}))", quote(working_tree));
     }
-    // The system temp locations the shell and its children write to; allowing
-    // them prevents a false-deny of the launcher itself (never a threat path —
-    // they are not the differentially-confined out-of-scratch escape target).
-    s.push_str("(allow file-write* (subpath \"/private/var/folders\"))\n");
-    s.push_str("(allow file-write* (subpath \"/private/tmp\"))\n\n");
+    s.push('\n');
 
     // Subprocess: deny NEW-process creation unless the profile grants it. On
     // macOS `sandbox-exec -f <profile> <app>` applies the profile and THEN
@@ -1224,6 +1234,37 @@ mod tests {
         assert!(
             !sbpl.contains("(allow file-write* (subpath \"/work/tree\"))"),
             "the working tree must not be writable when filesystem is withheld: {sbpl}"
+        );
+    }
+
+    #[test]
+    fn sbpl_does_not_blanket_allow_the_per_user_temp_tree() {
+        // The scratch lives under the macOS per-user temp tree (`$TMPDIR`, which
+        // resolves through the `/var → /private/var` symlink to
+        // `/private/var/folders/…`). A blanket write allow over that tree — or
+        // over `/private/tmp` — would re-permit every SIBLING of the scratch, so
+        // an out-of-scratch write placed next to the scratch would succeed and
+        // the differential filesystem confinement would leak. The ONLY write
+        // allow must be the scratch subpath itself; the enclosing temp tree must
+        // NOT be allowed. Guards the fail-closed intent host-independently (the
+        // real deny is proven by the `macos-run-jail` E2E on a macOS runner).
+        let scratch = Path::new("/private/var/folders/ab/xxxx/T/ipe-run-scratch");
+        let p = scoped(false, FilesystemScope::Isolated);
+        let sbpl = sbpl_from_profile(&p, scratch, Path::new("/work/tree"));
+        assert!(
+            sbpl.contains(
+                "(allow file-write* (subpath \"/private/var/folders/ab/xxxx/T/ipe-run-scratch\"))"
+            ),
+            "the scratch subpath must be the write allow: {sbpl}"
+        );
+        assert!(
+            !sbpl.contains("(allow file-write* (subpath \"/private/var/folders\"))"),
+            "the per-user temp tree must NOT be blanket-allowed (it encloses the \
+             scratch, so it would re-permit an out-of-scratch sibling write): {sbpl}"
+        );
+        assert!(
+            !sbpl.contains("(allow file-write* (subpath \"/private/tmp\"))"),
+            "the system temp tree must NOT be blanket-allowed: {sbpl}"
         );
     }
 
