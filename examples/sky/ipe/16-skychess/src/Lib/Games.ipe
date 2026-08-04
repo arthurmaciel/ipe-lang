@@ -61,14 +61,14 @@ exec queryStr args =
 
 -- query : Result Error (List Row). Same contract as exec.
 query queryStr args =
-    Task.run (Db.query dbConn queryStr args)
+    Task.run (Db.unsafeQuery dbConn queryStr args)
 
 
 initSchema conn =
     let
         _ =
             Task.run
-                (Db.execRaw
+                (Db.unsafeExecRaw
                     conn
                     """CREATE TABLE IF NOT EXISTS games (
                         id TEXT PRIMARY KEY,
@@ -81,7 +81,7 @@ initSchema conn =
                     )""")
         _ =
             Task.run
-                (Db.execRaw
+                (Db.unsafeExecRaw
                     conn
                     """CREATE TABLE IF NOT EXISTS moves (
                         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -186,4 +186,4 @@ deleteGame gameId =
 
 getField : String -> Dict String String -> String
 getField field row =
-    Db.getField field row
+    Db.unsafeGetField field row

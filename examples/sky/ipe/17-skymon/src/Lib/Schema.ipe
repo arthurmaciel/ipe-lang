@@ -15,7 +15,7 @@ initDb =
     let
         _ =
             Task.run
-                (Db.execRaw
+                (Db.unsafeExecRaw
                     conn
                     """CREATE TABLE IF NOT EXISTS monitors (
                         id TEXT PRIMARY KEY,
@@ -30,7 +30,7 @@ initDb =
                     )""")
         _ =
             Task.run
-                (Db.execRaw
+                (Db.unsafeExecRaw
                     conn
                     """CREATE TABLE IF NOT EXISTS metrics (
                         id TEXT PRIMARY KEY,
@@ -44,7 +44,7 @@ initDb =
                     )""")
         _ =
             Task.run
-                (Db.execRaw
+                (Db.unsafeExecRaw
                     conn
                     """CREATE TABLE IF NOT EXISTS metric_history (
                         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -54,7 +54,7 @@ initDb =
                     )""")
         _ =
             Task.run
-                (Db.execRaw
+                (Db.unsafeExecRaw
                     conn
                     """CREATE TABLE IF NOT EXISTS alerts (
                         id TEXT PRIMARY KEY,
@@ -68,7 +68,7 @@ initDb =
                     )""")
         _ =
             Task.run
-                (Db.execRaw
+                (Db.unsafeExecRaw
                     conn
                     """CREATE TABLE IF NOT EXISTS sessions (
                         id TEXT PRIMARY KEY,
@@ -79,7 +79,7 @@ initDb =
                     )""")
         _ =
             Task.run
-                (Db.execRaw
+                (Db.unsafeExecRaw
                     conn
                     """CREATE TABLE IF NOT EXISTS monitor_history (
                         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -90,7 +90,7 @@ initDb =
                     )""")
         _ =
             Task.run
-                (Db.execRaw
+                (Db.unsafeExecRaw
                     conn
                     """CREATE TABLE IF NOT EXISTS alert_history (
                         id INTEGER PRIMARY KEY AUTOINCREMENT,

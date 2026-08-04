@@ -12,6 +12,12 @@ rewritten together (an exposed bare `println` -> `Io.println`; a `Log.println`
 alias call -> `Io.println`). A `Std.Log` import used only for its remaining
 members (infoWith/errorWith/…) is left to the ordinary prefix rename (-> Ipe.Log).
 
+A DB-SURFACE-MARKING pass marks the aliased raw-SQL / stringly-row-read Db
+surface: rename-map.tsv marks it only fully-qualified (`Std.Db.query` ->
+`Ipe.Db.unsafeQuery`), so the common `import Std.Db as Db` + `Db.query` form is
+marked here (`Db.query` -> `Db.unsafeQuery`). Scoped to the STDLIB `Std.Db`
+alias per file, so a project-local `import Lib.Db as Db` keeps its own members.
+
 A REMOVED-MODULE pass then drops import lines for modules Ipê no longer has:
 Sky's open `import Sky.Core.Prelude exposing (..)` becomes `Ipe.Prelude` under
 the prefix rename, but Ipê auto-imports its Tier-A `Ipe.Basics` surface (ADR
@@ -395,6 +401,100 @@ def apply_member_moves(text: str) -> str:
     return text
 
 
+# ── Stdlib Db raw-surface marking (Std.Db aliased member -> unsafe*) ───────────
+# rename-map.tsv marks the raw-SQL / stringly-row-read surface only in its
+# FULLY-QUALIFIED form (`Std.Db.query` -> `Ipe.Db.unsafeQuery`, …). The common
+# aliased form — `import Std.Db as Db` then `Db.query` — is a bare member on an
+# alias, which the qualifier-prefix rewrite never sees, so those call sites would
+# resolve to a non-existent `Db.query` (IPE-N0005). This pass marks them too.
+#
+# SECURITY (load-bearing): the rewrite is scoped to the alias bound by the
+# STDLIB `import Std.Db as <Alias>` in THIS file, and to that alias only. A
+# project-LOCAL Db module (`import Lib.Db as Db`, `import <Project>.Db as Db`)
+# defines its OWN `query`/`getField`/… with its own contract; marking those
+# `unsafe*` would mis-attribute the SQL-injection surface (a Security-principle
+# regression), so a local Db alias is never touched. Resolution is per file: a
+# file that only imports the local Db is left alone even when its alias is the
+# literal `Db`, and a file that imports the stdlib Db (e.g. the local wrapper
+# module `Lib/Db.ipe` itself, which does `import Std.Db as Db`) has ITS stdlib
+# alias marked. Runs BEFORE the prefix rename, while the qualifier is `Std.Db`.
+#
+# member -> marked member name (typed `queryDecode` + Decode.* path stays
+# unmarked; only the raw/stringly surface is marked).
+_DB_MODULE = "Std.Db"
+_DB_UNSAFE_MEMBERS: dict[str, str] = {
+    "execRaw": "unsafeExecRaw",
+    "query": "unsafeQuery",
+    "getString": "unsafeGetString",
+    "getInt": "unsafeGetInt",
+    "getBool": "unsafeGetBool",
+    "getField": "unsafeGetField",
+}
+
+
+def _stdlib_db_alias(text: str) -> str | None:
+    """The alias bound by `import Std.Db as <Alias>` in this file, or None.
+
+    Only an `import Std.Db as A` line qualifies — never `import Lib.Db as A` or
+    any other module ending in `.Db` — so the returned alias is guaranteed to
+    name the STDLIB Db module. If the stdlib Db is imported without an alias, or
+    with `exposing`, there is nothing to key an `<alias>.<member>` rewrite on and
+    None is returned (a bare-exposed raw member would need a different handling
+    and does not occur in the mirrored corpus). Imports live at line starts,
+    never inside a string or comment, so the scan is line-oriented.
+    """
+    for line in text.split("\n"):
+        stripped = line.lstrip()
+        if stripped.startswith("import ") and _import_module(stripped) == _DB_MODULE:
+            alias = _import_alias(stripped[len("import ") :])
+            if alias is not None and _exposing_names(stripped[len("import ") :]) is None:
+                return alias
+    return None
+
+
+def mark_stdlib_db(text: str) -> str:
+    """Mark aliased stdlib-Db raw/stringly members: `<A>.query` -> `<A>.unsafeQuery`.
+
+    `<A>` is the alias bound by `import Std.Db as <A>` in this file (see
+    `_stdlib_db_alias`); no rewrite happens when the file does not import the
+    stdlib Db under an alias, so a local `import Lib.Db as Db` is left untouched.
+    Only the members in `_DB_UNSAFE_MEMBERS` are marked — `queryDecode` and the
+    typed surface stay as-is. A right boundary keeps `<A>.query` from matching
+    inside `<A>.queryDecode` and keeps a member from being the head of a longer
+    identifier. Call-site rewrites go through walk_code so strings and comments
+    stay verbatim.
+    """
+    alias = _stdlib_db_alias(text)
+    if alias is None:
+        return text
+    prefix = alias + "."
+
+    def on_code(seg: str) -> str:
+        out: list[str] = []
+        i = 0
+        n = len(seg)
+        while i < n:
+            left_ok = i == 0 or not (seg[i - 1].isalnum() or seg[i - 1] == "_")
+            matched = False
+            if left_ok and seg.startswith(prefix, i):
+                for member, marked in _DB_UNSAFE_MEMBERS.items():
+                    end = i + len(prefix) + len(member)
+                    right = seg[end] if end < n else ""
+                    if seg.startswith(prefix + member, i) and not (
+                        right.isalnum() or right in ("_", ".")
+                    ):
+                        out.append(prefix + marked)
+                        i = end
+                        matched = True
+                        break
+            if not matched:
+                out.append(seg[i])
+                i += 1
+        return "".join(out)
+
+    return walk_code(text, on_code)
+
+
 def desugar_pure(text: str) -> str:
     """Rewrite `Sky.Core.Pure` companions to their canonical kernel form.
 
@@ -655,7 +755,9 @@ def main(argv: list[str]) -> int:
             text = fh.read()
         originals[path] = text
         transformed[path] = prefix_bare_imports(
-            drop_removed_imports(transform(apply_member_moves(desugar_pure(text)), pairs)),
+            drop_removed_imports(
+                transform(mark_stdlib_db(apply_member_moves(desugar_pure(text))), pairs)
+            ),
             bare,
         )
 
