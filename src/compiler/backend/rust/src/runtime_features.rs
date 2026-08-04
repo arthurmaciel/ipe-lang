@@ -74,6 +74,15 @@ pub enum RuntimeFeature {
     Compression,
     /// `csv_kernel` — the csv crate (`uses_csv`).
     CsvKernel,
+    /// `cache_kernel` — the `cache.rs` handle-based LRU cache module (`uses_cache`:
+    /// an `Ipe.Cache` kernel, or a `CacheCfg` / `CacheStats` type-mention). A
+    /// standalone leaf — no surface implies it. Selecting it compiles `cache.rs`
+    /// (the `cache_new_raw` / `cache_get` / `cache_put` / … functions, the
+    /// `CacheCfg` / `CacheStats` structs, and the `IpeCacheHandle` enum the emitted
+    /// code references). The runtime feature pulls `tokio` + `random` (the module's
+    /// `IpeTask` return + its LCG-free eviction clock), so a program that reaches no
+    /// `Ipe.Cache` surface drops the module.
+    CacheKernel,
     /// `time` — the IANA-zone calendar surface, `chrono-tz` (`uses_time`).
     Time,
     /// `encoding` — the `base64` + `hex` + `percent-encoding` codec crates and
@@ -168,6 +177,7 @@ impl RuntimeFeature {
             Self::Config => "config",
             Self::Compression => "compression",
             Self::CsvKernel => "csv_kernel",
+            Self::CacheKernel => "cache_kernel",
             Self::Time => "time",
             Self::Encoding => "encoding",
             Self::Regex => "regex",
@@ -305,6 +315,14 @@ pub fn runtime_features(ctx: &EmitCtx) -> RuntimeFeatureSet {
     }
     if ctx.uses_csv {
         set.insert(RuntimeFeature::CsvKernel);
+    }
+    // Ipe.Cache (`cache.rs`): the handle-based LRU cache module. A standalone leaf
+    // — no surface implies it. `uses_cache` folds an `Ipe.Cache` kernel with a
+    // `CacheCfg` / `CacheStats` type-mention (the pure-Ipê `defaultCfg` / `with*`
+    // builders construct a `CacheCfg` with no kernel call). A program that reaches
+    // none drops the module and its `cache_kernel`-gated deps.
+    if ctx.uses_cache {
+        set.insert(RuntimeFeature::CacheKernel);
     }
     if ctx.uses_time {
         set.insert(RuntimeFeature::Time);
@@ -457,6 +475,7 @@ mod tests {
             uses_config: false,
             uses_compression: false,
             uses_csv: false,
+            uses_cache: false,
             uses_encoding: false,
             uses_regex: false,
             uses_uuid: false,
@@ -675,6 +694,7 @@ mod tests {
             RuntimeFeature::Config,
             RuntimeFeature::Compression,
             RuntimeFeature::CsvKernel,
+            RuntimeFeature::CacheKernel,
             RuntimeFeature::Time,
             RuntimeFeature::Decimal,
             RuntimeFeature::CharCategory,

@@ -129,6 +129,20 @@ pub struct Module {
     /// — no other runtime surface reaches it — so no other `uses_*` flag forces
     /// it on.
     pub uses_csv: bool,
+    /// `true` when the lowerer detected an `Ipe.Cache` kernel
+    /// (`KernelFn::is_cache()`), or a signature/record/enum mentions the folded
+    /// `CacheCfg` / `CacheStats` config-and-stats record types. The backend reads
+    /// this flag to declare `pub mod cache; pub use cache::*;` in the emitted
+    /// `ipe_runtime/mod.rs` and enable the `cache_kernel` runtime-crate feature
+    /// (which provides `cache_new_raw` / `cache_get` / `cache_put` / …, the
+    /// `CacheCfg` / `CacheStats` structs, and the `IpeCacheHandle` enum the
+    /// emitted code references). `cache` is a leaf module — no other runtime
+    /// surface reaches it — so no other `uses_*` flag forces it on. The
+    /// type-mention guard mirrors `uses_csv`'s `CsvDoc` guard: `Cache.defaultCfg`
+    /// and the `with*` builders are pure Ipê source producing `CacheCfg` record
+    /// literals with no kernel call, so a config-only program still names the type
+    /// and needs the module.
+    pub uses_cache: bool,
     /// `true` when the lowerer detected at least one `Ipe.Encoding` codec kernel
     /// (`base64Encode` / `base64Decode` / `urlEncode` / `urlDecode` / `hexEncode`
     /// / `hexDecode`) or any `Ipe.Bytes` kernel.
@@ -3948,6 +3962,7 @@ mod tests {
                 uses_config: false,
                 uses_compression: false,
                 uses_csv: false,
+                uses_cache: false,
                 uses_encoding: false,
                 uses_regex: false,
                 uses_uuid: false,
@@ -4393,6 +4408,9 @@ mod serde_persistence_tests {
     /// entry function whose body pattern-matches the enum via a genuine
     /// [`Match`] node and constructs a record literal — every
     /// `Symbol`-carrying IR shape this module's doc names, in one value.
+    // A single exhaustive `Module` struct literal (every `uses_*` gate spelled
+    // out) dominates the length; splitting it would only scatter the fixture.
+    #[allow(clippy::too_many_lines)]
     fn sample_program(i: &mut Interner) -> DResult<Program> {
         let msg_ty = i.intern("Msg")?;
         let inc = i.intern("Increment")?;
@@ -4470,6 +4488,7 @@ mod serde_persistence_tests {
                 uses_config: false,
                 uses_compression: false,
                 uses_csv: false,
+                uses_cache: false,
                 uses_encoding: false,
                 uses_regex: false,
                 uses_uuid: false,
@@ -4558,6 +4577,7 @@ mod serde_persistence_tests {
                 uses_config: false,
                 uses_compression: false,
                 uses_csv: false,
+                uses_cache: false,
                 uses_encoding: false,
                 uses_regex: false,
                 uses_uuid: false,
