@@ -129,6 +129,13 @@ const COMMANDS: &[Command] = &[
         options: &[],
     },
     Command {
+        name: "test",
+        summary: "Build and run the project's tests/Main.ipe, reporting pass/fail.",
+        args: "[<path>]",
+        args_desc: "A source file, a project directory, or an ipe.toml. Defaults to the current project.",
+        options: &[],
+    },
+    Command {
         name: "verify",
         summary: "Run the whole project gate: format, type-check, build, then test.",
         args: "[<path>]",
@@ -455,7 +462,7 @@ const SECTIONS: &[Section] = &[
     },
     Section {
         title: "Quality",
-        commands: &["type-check", "verify"],
+        commands: &["type-check", "test", "verify"],
     },
     Section {
         title: "Using external packages",
