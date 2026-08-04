@@ -153,10 +153,12 @@ const RESERVED_BUILTIN_TYPES: &[&str] = &[
     // Reserved so user code cannot declare its own `type CustomElement …` and
     // smuggle an untyped widget past the seal: the reservation is what makes the
     // typed boundary the ONLY spelling of the boundary (Security #1, fail-closed
-    // by construction). Until the widget transport's runtime denotation ships,
-    // any USE of the name is rejected outright in `canonicalise_type`
-    // (IPE-N0037) — before its type arguments are ever inspected — so the boundary
-    // is simply closed rather than half-emittable.
+    // by construction). A USE of the name in an annotation resolves in
+    // `canonicalise_type` only through two fail-closed gates — exactly two type
+    // parameters (arity, IPE-N0031) and a plain-value SEAL on each (IPE-N0039).
+    // The widget transport's runtime denotation is not shipped, so a
+    // `CustomElement`-typed binding is closed at emission (IPE-L0133): it
+    // type-checks but never reaches codegen with an untyped seam.
     "CustomElement",
     // `Ipe.PubSub`'s phantom topic handle type — reserved so user code cannot
     // define `type Topic` and silently bypass the lowerer's `Topic a → Str` arm.
@@ -260,9 +262,10 @@ const EXTRA_BUILTIN_TYPE_NAMES: &[&str] = &[
     // `CustomElement down up` — the JS-widget boundary type (reserved in
     // `RESERVED_BUILTIN_TYPES`). Registered here too so a bare annotation
     // `codeEditor : CustomElement EditorState EditorEvent` resolves to the
-    // empty-home sentinel rather than IPE-N0002; the annotation is then
-    // rejected fail-closed at `canonicalise_type` (IPE-N0037) until the widget
-    // transport's runtime denotation ships.
+    // empty-home sentinel rather than IPE-N0002; `canonicalise_type` then gates
+    // it fail-closed on arity (IPE-N0031) and the plain-value SEAL (IPE-N0039),
+    // and emission stays closed (IPE-L0133) until the widget transport's runtime
+    // denotation ships.
     "CustomElement",
 ];
 
