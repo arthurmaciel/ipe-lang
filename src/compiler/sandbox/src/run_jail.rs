@@ -742,6 +742,19 @@ pub enum RunJailDefect {
         /// The rendered OS error.
         detail: String,
     },
+    /// A jail-root mount (or unmount) could not be established while building the
+    /// confinement — the read-only root, a read-write scratch/working-tree mount,
+    /// the fresh devfs, or the masked `/proc`. Distinct from [`Self::Spawn`] so a
+    /// failure to *build* the jail root is never conflated with a failure to
+    /// *launch* the payload: a half-built root refuses before any process runs.
+    /// Fail-closed — the untrusted payload never runs against an
+    /// incompletely-mounted root.
+    MountFailed {
+        /// The mount target that could not be established.
+        target: PathBuf,
+        /// The rendered OS error or non-success detail for the mount attempt.
+        detail: String,
+    },
     /// A tampered `ipe.profile` requested *less* isolation than the capability
     /// floor embedded in the binary. Refuse — a weaker profile cannot widen the
     /// jail below what the binary was built for.
@@ -776,6 +789,12 @@ impl std::fmt::Display for RunJailDefect {
             Self::Spawn { detail } => {
                 write!(f, "{code}: failed to spawn the jailed app: {detail}")
             }
+            Self::MountFailed { target, detail } => write!(
+                f,
+                "{code}: could not establish the jail-root mount at {} ({detail}); refusing to \
+                 run the untrusted payload against an incompletely-mounted root",
+                target.display()
+            ),
             Self::ProfileWeakerThanFloor => write!(
                 f,
                 "{code}: the artifact's ipe.profile requests less isolation than the capability \

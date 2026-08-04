@@ -197,6 +197,55 @@ impl JailOutcome {
     }
 }
 
+// ── the absolute-scratch invariant, made unrepresentable-if-violated ─────────
+
+/// An absolute scratch path — the ONE writable location a jail re-mounts inside
+/// its chroot at the SAME absolute location the payload was told to write.
+///
+/// Parse-don't-validate: the only constructor ([`Self::new`]) REJECTS a
+/// non-absolute path, so a value of this type is proof the invariant holds. The
+/// FreeBSD jail re-mounts the scratch at `<root>/<scratch-stripped-of-leading-/>`
+/// (see `under_root`) and hands the payload `SCRATCH_DIR=<abs>`; a relative
+/// scratch would mount at the wrong spot inside the chroot and the payload's
+/// absolute write would miss the writable mount. Threading the raw `&Path` and
+/// re-checking `is_absolute()` at each use invites a missed check; a value that
+/// cannot exist unless absolute removes the possibility.
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[cfg_attr(not(any(target_os = "freebsd", test)), allow(dead_code))]
+pub(crate) struct AbsScratchPath(PathBuf);
+
+impl AbsScratchPath {
+    /// Construct from a path, or reject a non-absolute one. The sole way to build
+    /// an [`AbsScratchPath`]: a returned value is proof the wrapped path is
+    /// absolute, so no caller re-checks.
+    ///
+    /// # Errors
+    ///
+    /// [`RunJailDefect::MountFailed`] naming the offending path when it is not
+    /// absolute — a relative scratch is a broken caller contract that would root
+    /// the jail at the wrong location, refused rather than silently mis-mounted.
+    #[cfg_attr(not(any(target_os = "freebsd", test)), allow(dead_code))]
+    pub(crate) fn new(path: &Path) -> Result<Self, RunJailDefect> {
+        if path.is_absolute() {
+            Ok(Self(path.to_path_buf()))
+        } else {
+            Err(RunJailDefect::MountFailed {
+                target: path.to_path_buf(),
+                detail: format!(
+                    "scratch path {} is not absolute; cannot root the jail at a fixed location",
+                    path.display()
+                ),
+            })
+        }
+    }
+
+    /// Borrow the wrapped absolute path.
+    #[cfg_attr(not(any(target_os = "freebsd", test)), allow(dead_code))]
+    pub(crate) fn as_path(&self) -> &Path {
+        &self.0
+    }
+}
+
 // ── the returning build-jail entry ───────────────────────────────────────────
 
 /// Run `payload` inside a jail lowered from `profile`, wait for it, and return
@@ -463,6 +512,13 @@ const fn win_exit_to_i32(code: u32) -> i32 {
 ///   read-only mount and is denied by the mount flag (never reliant on host file
 ///   ownership) → exit-`11` decodes to `Denied { filesystem }`. The payload also
 ///   runs as an unprivileged user (`exec.jail_user`) as defence in depth.
+///   Over that read-only root a FRESH minimal `devfs` masks the jail's `/dev` and
+///   an EMPTY read-only nullfs masks its `/proc`, so the host device nodes and host
+///   process metadata (e.g. `/proc/<pid>/environ`, a covert-channel/enumeration
+///   surface) the ro-root would otherwise expose read-only are not visible —
+///   matching the Linux arm's fresh `--dev`/`--proc`. These layer AFTER the
+///   read-only root and BEFORE the jailed process starts, and are unmounted in
+///   reverse order on teardown.
 /// - **subprocess** — a withheld subprocess axis is a genuine kernel denial of
 ///   process creation, not mere omission: the jail is created with a process
 ///   limit (`children.max=0`) so `fork`/`pdfork`/`exec` of a NEW process inside
@@ -868,7 +924,7 @@ pub(crate) fn freebsd_jail_network_params(network_granted: bool) -> Vec<OsString
 /// [`JailOutcome`] — fail-closed at every establishment step.
 #[cfg(target_os = "freebsd")]
 mod freebsd_jail {
-    use super::{JailOutcome, find_in_path, macos_scrubbed_env};
+    use super::{AbsScratchPath, JailOutcome, find_in_path, macos_scrubbed_env};
     use crate::run_jail::{FilesystemScope, RunJailDefect, SandboxProfile};
     use std::ffi::OsString;
     use std::path::{Path, PathBuf};
@@ -897,15 +953,26 @@ mod freebsd_jail {
             };
         };
 
+        // The scratch must be absolute so it can be re-mounted at the SAME absolute
+        // location inside the chroot; the newtype rejects a non-absolute path at
+        // construction, so `RoRootMount` never re-checks. A relative scratch is a
+        // broken caller contract, refused rather than silently mis-mounted.
+        let scoped_tmp = match AbsScratchPath::new(scoped_tmp) {
+            Ok(abs) => abs,
+            Err(defect) => return JailOutcome::Unavailable { defect },
+        };
+
         // The filesystem axis is confined STRUCTURALLY, not by DAC ownership: the
         // jail is chrooted (`path=`) to a fresh root that is a READ-ONLY nullfs view
         // of the host `/`, with ONLY the scratch (and, when the filesystem axis is
-        // granted, the working tree) nullfs-mounted read-write inside it. This is
-        // the exact FreeBSD counterpart of the Linux arm's `--ro-bind / /` + one
-        // writable mount: an out-of-scratch write targets the read-only root and is
-        // denied by the mount flag, never reliant on host file permissions. Absent
-        // the mount root the untrusted build is never run — fail-closed.
-        let jail_root = match RoRootMount::establish(scoped_tmp, working_tree, profile) {
+        // granted, the working tree) nullfs-mounted read-write inside it, plus a
+        // FRESH minimal devfs and an EMPTY `/proc` masking the host's. This is the
+        // exact FreeBSD counterpart of the Linux arm's `--ro-bind / /` + one
+        // writable mount + fresh `--dev`/`--proc`: an out-of-scratch write targets
+        // the read-only root and is denied by the mount flag, never reliant on host
+        // file permissions. Absent the mount root the untrusted build is never run —
+        // fail-closed.
+        let jail_root = match RoRootMount::establish(&scoped_tmp, working_tree, profile) {
             Ok(root) => root,
             Err(defect) => return JailOutcome::Unavailable { defect },
         };
@@ -945,7 +1012,7 @@ mod freebsd_jail {
         // requires) chowns it. A failed chown refuses — a scratch the payload cannot
         // write is a broken jail, never run. Defence in depth atop the read-only
         // root: even the writable mount is only reachable by an unprivileged user.
-        if let Err(defect) = chown_to_jail_user(scoped_tmp) {
+        if let Err(defect) = chown_to_jail_user(scoped_tmp.as_path()) {
             return JailOutcome::Unavailable { defect };
         }
         if profile.filesystem == FilesystemScope::WorkingTreeReadWrite
@@ -960,7 +1027,7 @@ mod freebsd_jail {
         // Env scrub in the launcher (the jail does not scrub the inherited env),
         // via the SAME allowlist the macOS/Windows arms use — one env list.
         let host_env = |k: &str| std::env::var_os(k);
-        let scrubbed = macos_scrubbed_env(profile, scoped_tmp, &host_env);
+        let scrubbed = macos_scrubbed_env(profile, scoped_tmp.as_path(), &host_env);
 
         // Apply the rctl process-cap rule (withheld subprocess only) BEFORE the
         // jail runs, then remove it on return regardless of outcome so nothing
@@ -1097,20 +1164,57 @@ mod freebsd_jail {
         let status = command.arg(source).arg(target).status();
         match status {
             Ok(s) if s.success() => Ok(()),
-            Ok(s) => Err(RunJailDefect::Spawn {
+            Ok(s) => Err(RunJailDefect::MountFailed {
+                target: target.to_path_buf(),
                 detail: format!(
-                    "mount_nullfs {} {} -> {} failed ({s})",
+                    "mount_nullfs {} {} failed ({s})",
                     if read_only { "ro" } else { "rw" },
                     source.display(),
-                    target.display()
                 ),
             }),
-            Err(e) => Err(RunJailDefect::Spawn {
+            Err(e) => Err(RunJailDefect::MountFailed {
+                target: target.to_path_buf(),
                 detail: format!(
-                    "could not run mount_nullfs {} -> {}: {e}",
-                    source.display(),
-                    target.display()
+                    "could not run mount_nullfs (source {}): {e}",
+                    source.display()
                 ),
+            }),
+        }
+    }
+
+    /// Mount a FRESH minimal `devfs` at `target` (the jail's `/dev`), refusing
+    /// (fail-closed) on any non-success. This gives the jail the default devfs
+    /// ruleset — a minimal `/dev` (null/zero/random/…) — NOT the host devfs the
+    /// read-only root nullfs-exposed, so the jail sees a fresh minimal `/dev` and
+    /// the host device nodes are not enumerable (matching the Linux arm's `--dev`).
+    fn mount_devfs(mount_devfs_bin: &Path, target: &Path) -> Result<(), RunJailDefect> {
+        let status = std::process::Command::new(mount_devfs_bin)
+            .arg(target)
+            .status();
+        match status {
+            Ok(s) if s.success() => Ok(()),
+            Ok(s) => Err(RunJailDefect::MountFailed {
+                target: target.to_path_buf(),
+                detail: format!("mount_devfs failed ({s})"),
+            }),
+            Err(e) => Err(RunJailDefect::MountFailed {
+                target: target.to_path_buf(),
+                detail: format!("could not run mount_devfs: {e}"),
+            }),
+        }
+    }
+
+    /// Create an empty directory named `name` under `parent` (the scratch), used as
+    /// the read-only nullfs source that masks the jail's `/proc` with an EMPTY tree.
+    /// A creation failure refuses (fail-closed) — a `/proc` that cannot be masked
+    /// would leave the host `/proc` exposed, never run against.
+    fn mount_dir_under(parent: &Path, name: &str) -> Result<PathBuf, RunJailDefect> {
+        let dir = parent.join(name);
+        match std::fs::create_dir_all(&dir) {
+            Ok(()) => Ok(dir),
+            Err(e) => Err(RunJailDefect::MountFailed {
+                target: dir,
+                detail: format!("could not create the empty /proc mask source: {e}"),
             }),
         }
     }
@@ -1118,11 +1222,14 @@ mod freebsd_jail {
     /// The read-only jail root: a fresh directory over which the whole host `/` is
     /// nullfs-mounted READ-ONLY, with the scratch (and, when the filesystem axis is
     /// granted, the working tree) nullfs-mounted READ-WRITE at their original
-    /// absolute paths inside it. This is the FreeBSD counterpart of the Linux arm's
-    /// `--ro-bind / /` + one writable mount: `jail path=<root>` chroots the payload
-    /// here, so an out-of-scratch write targets the read-only mount and is denied by
-    /// the mount flag — never reliant on host file permissions. Every mount and the
-    /// root dir are torn down on drop, in reverse mount order.
+    /// absolute paths inside it, plus a FRESH minimal devfs over `/dev` and an EMPTY
+    /// read-only `/proc` mask over `/proc`. This is the FreeBSD counterpart of the
+    /// Linux arm's `--ro-bind / /` + one writable mount + fresh `--dev`/`--proc`:
+    /// `jail path=<root>` chroots the payload here, so an out-of-scratch write targets
+    /// the read-only mount and is denied by the mount flag — never reliant on host
+    /// file permissions — and the fresh `/dev`/empty `/proc` deny the host
+    /// device/process metadata the ro-root would otherwise expose read-only. Every
+    /// mount and the root dir are torn down on drop, in reverse mount order.
     struct RoRootMount {
         umount_bin: PathBuf,
         root: PathBuf,
@@ -1135,24 +1242,22 @@ mod freebsd_jail {
         /// filesystem axis is granted). Any missing primitive or failed mount refuses
         /// (`Err`) so the payload never runs against an incompletely-confined root.
         fn establish(
-            scoped_tmp: &Path,
+            scoped_tmp: &AbsScratchPath,
             working_tree: &Path,
             profile: &SandboxProfile,
         ) -> Result<Self, RunJailDefect> {
-            // The scratch must be an absolute path so it can be re-mounted at the same
-            // absolute location inside the chroot; a relative scratch is a broken
-            // caller contract, refused rather than silently mounted at the wrong spot.
-            if !scoped_tmp.is_absolute() {
-                return Err(RunJailDefect::Spawn {
-                    detail: format!(
-                        "scratch path {} is not absolute; cannot root the jail",
-                        scoped_tmp.display()
-                    ),
-                });
-            }
+            // The scratch is an `AbsScratchPath`, so its absoluteness is already
+            // proven by construction — it can be re-mounted at the same absolute
+            // location inside the chroot with no re-check here.
+            let scoped_tmp = scoped_tmp.as_path();
             let Some(mount_nullfs_bin) = find_in_path("mount_nullfs") else {
                 return Err(RunJailDefect::PrimitiveUnavailable {
                     missing: vec!["mount_nullfs"],
+                });
+            };
+            let Some(mount_devfs_bin) = find_in_path("mount_devfs") else {
+                return Err(RunJailDefect::PrimitiveUnavailable {
+                    missing: vec!["mount_devfs"],
                 });
             };
             let Some(umount_bin) = find_in_path("umount") else {
@@ -1163,8 +1268,9 @@ mod freebsd_jail {
 
             let root = jail_root_dir();
             if let Err(e) = std::fs::create_dir_all(&root) {
-                return Err(RunJailDefect::Spawn {
-                    detail: format!("could not create jail root {}: {e}", root.display()),
+                return Err(RunJailDefect::MountFailed {
+                    target: root,
+                    detail: format!("could not create jail root: {e}"),
                 });
             }
 
@@ -1176,16 +1282,44 @@ mod freebsd_jail {
 
             // 1. The whole host `/`, READ-ONLY, as the jail root. Everything the
             //    payload can read (the shell, its tools) is here; nothing is writable.
+            //    This also nullfs-exposes the host `/dev` and `/proc` READ-ONLY, so
+            //    steps 2–3 layer a FRESH minimal `/dev` and an EMPTY `/proc` over them
+            //    before the jailed process starts — matching the Linux arm's fresh
+            //    `--dev`/`--proc`, which mask the ro-bound host nodes.
             mount_nullfs(&mount_nullfs_bin, true, Path::new("/"), &mount.root)?;
             mount.mounted.push(mount.root.clone());
 
-            // 2. The scratch, READ-WRITE, at its original absolute path inside the
+            // 2. A FRESH minimal devfs over the jail's `/dev`, layered on top of the
+            //    read-only host `/dev` the ro-root exposed. Without this the jail sees
+            //    the HOST devfs read-only — a metadata/enumeration leak (every host
+            //    device node is visible, a covert-channel/enumeration surface). A
+            //    fresh `mount_devfs` gives the jail the minimal default devfs ruleset
+            //    (null/zero/random/…), NOT the host's, matching the Linux arm's fresh
+            //    `--dev /dev`.
+            let dev_target = under_root(&mount.root, Path::new("/dev"));
+            mount_devfs(&mount_devfs_bin, &dev_target)?;
+            mount.mounted.push(dev_target);
+
+            // 3. Mask the jail's `/proc` with a FRESH EMPTY read-only nullfs of an
+            //    empty scratch-local dir, layered over the read-only host `/proc` the
+            //    ro-root exposed. An unmasked host `/proc` would leak sibling env via
+            //    `/proc/<pid>/environ` (defeating the launcher env scrub) and expose
+            //    host process metadata — a covert-channel surface. This empties it,
+            //    matching the Linux arm's fresh `--proc /proc`. (A jail with an empty
+            //    net stack and its own PID view has no meaningful procfs to publish;
+            //    an empty `/proc` is the fail-closed choice over the host's.)
+            let proc_mask_source = mount_dir_under(scoped_tmp, "ipe-tier2-empty-proc")?;
+            let proc_target = under_root(&mount.root, Path::new("/proc"));
+            mount_nullfs(&mount_nullfs_bin, true, &proc_mask_source, &proc_target)?;
+            mount.mounted.push(proc_target);
+
+            // 4. The scratch, READ-WRITE, at its original absolute path inside the
             //    chroot — the ONE writable location the payload has.
             let scratch_target = under_root(&mount.root, scoped_tmp);
             mount_nullfs(&mount_nullfs_bin, false, scoped_tmp, &scratch_target)?;
             mount.mounted.push(scratch_target);
 
-            // 3. The working tree, READ-WRITE, only when the filesystem axis is
+            // 5. The working tree, READ-WRITE, only when the filesystem axis is
             //    granted, so a granted effect is not false-denied.
             if profile.filesystem == FilesystemScope::WorkingTreeReadWrite {
                 let tree_target = under_root(&mount.root, working_tree);
@@ -2021,6 +2155,57 @@ mod tests {
         assert!(
             !escape_in_chroot.starts_with(&scratch_mount),
             "an out-of-scratch path must NOT fall under the one writable mount: {escape_in_chroot:?}"
+        );
+    }
+
+    // ── the absolute-scratch newtype (pure — runs on any host) ────────────────
+
+    #[test]
+    fn an_absolute_scratch_path_constructs_and_preserves_its_path() {
+        // The invariant holds ⇒ a value exists, wrapping the exact path unchanged.
+        let abs = AbsScratchPath::new(Path::new("/tmp/ipe-scratch")).expect("absolute");
+        assert_eq!(abs.as_path(), Path::new("/tmp/ipe-scratch"));
+    }
+
+    #[test]
+    fn a_relative_scratch_path_is_rejected_as_a_mount_failure() {
+        // A relative scratch cannot root the jail at a fixed location, so it is
+        // unrepresentable: the constructor refuses with a typed MountFailed naming
+        // the offending path, never a value that later mis-mounts.
+        let err = AbsScratchPath::new(Path::new("relative/scratch"))
+            .expect_err("a relative scratch must be rejected");
+        assert!(
+            matches!(
+                &err,
+                RunJailDefect::MountFailed { target, detail }
+                    if target.as_path() == Path::new("relative/scratch")
+                        && detail.contains("not absolute")
+            ),
+            "expected MountFailed naming the offending path, got {err:?}"
+        );
+    }
+
+    #[test]
+    fn a_mount_failure_defect_renders_its_target_and_is_not_a_spawn() {
+        // A mount failure is a distinct typed variant, so a broken jail-root mount
+        // is never conflated with a failure to launch the payload. Its display names
+        // the mount target and refuses to run against a half-built root.
+        let defect = RunJailDefect::MountFailed {
+            target: PathBuf::from("/tmp/jailroot-X/dev"),
+            detail: "mount_devfs failed (exit status: 1)".to_owned(),
+        };
+        assert_ne!(
+            defect,
+            RunJailDefect::Spawn {
+                detail: "mount_devfs failed (exit status: 1)".to_owned()
+            },
+            "a mount failure must not equal a spawn failure"
+        );
+        let rendered = defect.to_string();
+        assert!(rendered.contains("/tmp/jailroot-X/dev"), "{rendered}");
+        assert!(
+            rendered.contains("incompletely-mounted root"),
+            "the mount failure must state the fail-closed refusal: {rendered}"
         );
     }
 }
