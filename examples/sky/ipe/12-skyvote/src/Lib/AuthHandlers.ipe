@@ -22,7 +22,7 @@ import Ipe.Error as Error exposing (Error(..), ErrorKind(..))
 handleSignInSuccess user model =
     let
         ideas = Result.withDefault [] (Ideas.getIdeas "newest" "all" "")
-        _ = Io.println ("[AUTH] Sign-in: " ++ Db.unsafeGetField "email" user)
+        _ = Io.println ("[AUTH] Sign-in: " ++ Db.getField "email" user)
     in
         ( { model | currentUser = Just user
           , ideas = ideas

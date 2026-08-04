@@ -76,13 +76,13 @@ getIdeas sortBy filterCategory searchQuery =
                 " ORDER BY i.created_at DESC"
         fullQuery = baseQuery ++ whereClause ++ orderClause
     in
-        Db.unsafeQuery fullQuery []
+        Db.query fullQuery []
 
 
 -- getIdea: outer Result is for DB failure, inner Maybe is "found / not".
 getIdea : String -> Result Error (Maybe (Dict String String))
 getIdea ideaId =
-    case Db.unsafeQuery
+    case Db.query
              "SELECT i.id, i.title, i.description, i.category, i.status, i.author_id, i.created_at, u.username as author_name, (SELECT COUNT(*) FROM votes v WHERE v.idea_id = i.id) as vote_count, (SELECT COUNT(*) FROM comments c WHERE c.idea_id = i.id) as comment_count FROM ideas i LEFT JOIN users u ON i.author_id = u.id WHERE i.id = ? LIMIT 1"
              [ ideaId ] of
 
@@ -95,14 +95,14 @@ getIdea ideaId =
 
 getIdeasByStatus : String -> Result Error (List (Dict String String))
 getIdeasByStatus status =
-    Db.unsafeQuery
+    Db.query
         "SELECT i.id, i.title, i.description, i.category, i.status, i.author_id, i.created_at, u.username as author_name, (SELECT COUNT(*) FROM votes v WHERE v.idea_id = i.id) as vote_count FROM ideas i LEFT JOIN users u ON i.author_id = u.id WHERE i.status = ? ORDER BY vote_count DESC"
         [ status ]
 
 
 toggleVote : String -> String -> Result Error ()
 toggleVote ideaId userId =
-    case Db.unsafeQuery
+    case Db.query
              "SELECT id FROM votes WHERE idea_id = ? AND user_id = ?"
              [ ideaId, userId ] of
 
@@ -159,7 +159,7 @@ toggleVote ideaId userId =
 -- The error has already been logged at the toggleVote site if it's chronic.
 hasVoted : String -> String -> Bool
 hasVoted ideaId userId =
-    case Db.unsafeQuery
+    case Db.query
              "SELECT id FROM votes WHERE idea_id = ? AND user_id = ?"
              [ ideaId, userId ] of
 
@@ -183,7 +183,7 @@ hasVoted ideaId userId =
 -- getVoteCount: same view-helper degradation pattern as hasVoted.
 getVoteCount : String -> String
 getVoteCount ideaId =
-    case Db.unsafeQuery
+    case Db.query
              "SELECT COUNT(*) as cnt FROM votes WHERE idea_id = ?"
              [ ideaId ] of
 
@@ -199,7 +199,7 @@ getVoteCount ideaId =
             case List.head rows of
 
                 Just row ->
-                    Db.unsafeGetField "cnt" row
+                    Db.getField "cnt" row
 
                 Nothing ->
                     "0"

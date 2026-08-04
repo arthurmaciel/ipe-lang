@@ -37,7 +37,7 @@ import Ipe.Io as Io
 import Ipe.Html exposing (..)
 import Ipe.Html.Attributes exposing (..)
 import Ipe.Html.Events exposing (onSubmit)
-import Ipe.Web exposing (app, route)
+import Ipe.Tea.Web exposing (app, route)
 import Ipe.Tea.Web.Cmd as Cmd
 import Ipe.Tea.Web.Sub as Sub
 

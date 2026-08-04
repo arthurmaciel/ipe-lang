@@ -1,7 +1,7 @@
 module Main exposing (main)
 
 import Ipe.String as String
-import Ipe.Web as Live
+import Ipe.Tea.Web as Live
 import Ipe.Ui as Ui exposing (Element)
 import Ipe.Ui.Background as Background
 import Ipe.Ui.Border as Border
