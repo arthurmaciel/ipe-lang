@@ -1,0 +1,27 @@
+module Main exposing (main)
+
+import Ipe.Cache exposing (Cache(..))
+import Ipe.Io as Io
+import Ipe.String
+
+
+-- SEAL regression for the OPAQUE `Ipe.Cache` HANDLE (distinct from the
+-- `cache_module_seal` fixture, which exercises the `CacheCfg` config record + a
+-- cache kernel). The stdlib `type Cache k v = Cache Int` exposes its
+-- constructor publicly and is backed by the runtime `IpeCacheHandle` (its
+-- `EnumDef` suppressed), so this program NAMES the handle in a signature,
+-- CONSTRUCTS it (`Cache 7`), and PATTERN-MATCHES it (`case c of Cache raw`) with
+-- NO `Cache.*` kernel call. Every such position emits an `IpeCacheHandle`
+-- reference resolved through the `cache` runtime module. The `uses_cache` gate
+-- must therefore fire on the handle type-mention (via `ir_type_mentions_cache_handle`),
+-- not only on a `CacheCfg` / `CacheStats` mention, or the emitted crate would
+-- reference `IpeCacheHandle` with no definition in scope (E0425/E0433 — a SEAL
+-- breach).
+unwrap : Cache k v -> Int
+unwrap c =
+    case c of
+        Cache raw -> raw
+
+
+main =
+    Io.println (String.fromInt (unwrap (Cache 7)))

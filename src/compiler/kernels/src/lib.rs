@@ -6141,6 +6141,30 @@ impl StdlibKernel {
         )
     }
 
+    /// `true` when this variant belongs to the `Ipe.Cache` kernel family — the
+    /// handle-based LRU cache operations backed by `cache.rs`. Selecting the flag
+    /// declares the `cache` runtime module (whose `cache_new_raw` / `cache_get` /
+    /// `cache_put` / … functions, the `CacheCfg` / `CacheStats` structs, and the
+    /// `IpeCacheHandle` enum the emitted code references) and enables the
+    /// `cache_kernel` runtime-crate feature. A standalone leaf — no other surface
+    /// reaches it — so the flag alone gates the module. The `CacheCfg` /
+    /// `CacheStats` config/stats types are folded from record shapes and can be
+    /// named without a call site, so the lowerer unions this flag with a
+    /// type-mention guard (mirrors `CsvDoc`).
+    #[must_use]
+    pub const fn is_cache(self) -> bool {
+        matches!(
+            self,
+            Self::CacheNewRaw
+                | Self::CacheGet
+                | Self::CachePut
+                | Self::CacheRemove
+                | Self::CacheClear
+                | Self::CacheSize
+                | Self::CacheStats
+        )
+    }
+
     /// `true` when this variant belongs to the non-TEA `Ipe.Time` kernel family
     /// (`Time.now` / `unixMillis` / `sleep` / `timeString` / `isLeapYear` /
     /// `daysInMonth`). Excludes `Time.every`, which is TEA (`is_tea()`).
