@@ -1,0 +1,131 @@
+# Remap onto the shipped Terminal shape.
+#
+# Upstream drove one Element view under both Sky.Tui and Sky.Live, choosing the
+# backend from argv at module load with a synchronous `Task.run`. Ipê removes
+# synchronous `Task.run` (IPE-N0036) and a module proves exactly one TEA shape
+# from its `main` entry (IPE-N0035), so the argv multiplexer collapses to a
+# single `Terminal.appScreen` app — the entry that matches an `Element` view
+# driven by `onKey`. The whole view is unchanged; only the imports, the `init`
+# argument type (`appScreen` pins `init : () -> …`), and `main` are reshaped.
+
+[[edit]]
+file: src/Main.ipe
+find:
+"""
+import Ipe.List as List
+import Ipe.String as String
+import Ipe.System as System
+import Ipe.Task as Task
+import Ipe.Tui as Tui
+import Ipe.Tea.Web as Live
+import Ipe.Tea.Web.Cmd as Cmd
+import Ipe.Tea.Web.Sub as Sub
+import Ipe.Ui as Ui
+import Ipe.Ui exposing (Element)
+import Ipe.Ui.Background as Background
+import Ipe.Ui.Border as Border
+import Ipe.Ui.Font as Font
+"""
+replace:
+"""
+import Ipe.String as String
+import Ipe.System as System
+import Ipe.Tea.Terminal as Terminal
+import Ipe.Tea.Terminal.Cmd as Cmd
+import Ipe.Tea.Terminal.Sub as Sub
+import Ipe.Ui as Ui
+import Ipe.Ui exposing (Element)
+import Ipe.Ui.Background as Background
+import Ipe.Ui.Border as Border
+import Ipe.Ui.Font as Font
+"""
+
+[[edit]]
+file: src/Main.ipe
+find:
+"""
+{- Polymorphic input — Tui calls with `()`, Live calls with the
+   request record (a `Dict String String`). Either way we ignore
+   the argument and return the seed model.
+-}
+init : a -> ( Model, Cmd Msg )
+init _ =
+"""
+replace:
+"""
+init : () -> ( Model, Cmd Msg )
+init _ =
+"""
+
+[[edit]]
+file: src/Main.ipe
+find:
+"""
+view : Model -> Element Msg
+view model =
+    viewBody model
+
+
+{- Sky.Live renders Std.Ui via `Ui.layout [] body`, which wraps the
+   element in the host HTML scaffolding (head / body / inline style
+   block). Tui doesn't need this — it paints directly into cells.
+   Same `viewBody` feeds both.
+-}
+viewLive : Model -> any
+viewLive model =
+    Ui.layout [] (viewBody model)
+"""
+replace:
+"""
+view : Model -> Element Msg
+view model =
+    viewBody model
+"""
+
+[[edit]]
+file: src/Main.ipe
+find:
+"""
+argsList : List String
+argsList =
+    System.args () |> Task.run |> Result.withDefault []
+
+type Page
+    = KitchenSink
+
+
+main =
+    case List.head argsList of
+
+        Just "live" ->
+            Live.app
+                { init = init
+                , update = update
+                , view = viewLive
+                , subscriptions = subscriptions
+                , routes = [ Live.route "/" KitchenSink ]
+                , notFound = KitchenSink
+                }
+
+        _ ->
+            Tui.app
+                { init = init
+                , update = update
+                , view = view
+                , subscriptions = subscriptions
+                , onKey = onKey
+                , routes = []
+                , notFound = ()
+                }
+"""
+replace:
+"""
+main =
+    Terminal.appScreen
+        { init = init
+        , update = update
+        , view = view
+        , subscriptions = subscriptions
+        , onKey = onKey
+        }
+"""
