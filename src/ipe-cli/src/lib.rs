@@ -2575,6 +2575,19 @@ fn run_build(rest: &[String]) -> Result<(), CliError> {
     let runtime_dir = resolve_vendored_runtime_dir(args.runtime, wasm_target || !runtime_dep)?;
 
     let static_plan = resolve_static_plan(cli_layer, manifest.as_deref())?;
+
+    // Fail closed before emitting: `ipe build` compiles the emitted project so a
+    // reported success means the crate actually built. A missing toolchain is a
+    // clear root-cause error now, not an opaque OS spawn error after the
+    // (wasted) emit. The wasm branch delegates to `bundle_wasm`, which resolves
+    // cargo itself, so only the native branch resolves here — the resolved path
+    // is reused for its build.
+    let native_cargo = if wasm_target {
+        None
+    } else {
+        Some(toolchain::require_cargo(toolchain::ToolIntent::Build)?)
+    };
+
     let options = BuildOptions {
         static_plan,
         target: if wasm_target {
@@ -2625,29 +2638,14 @@ fn run_build(rest: &[String]) -> Result<(), CliError> {
     if wasm_target {
         bundle_wasm(&out_dir)?;
     } else {
-        // A native-bearing build artifact carries its own runtime enforcement: an
-        // `ipe.profile` mirror plus the authoritative capability floor embedded
-        // in the binary. `ipe exec <out_dir>` reads these and applies the jail,
-        // so the enforcement travels with a copied-off-host artifact. A pure Ipê
-        // artifact is structurally bounded and needs no jail (ADR 0040), so it
-        // carries no profile or floor and `ipe exec` runs it directly. (A wasm
-        // bundle has no native binary to jail.)
-        let manifest_parsed = match &manifest {
-            Some(m) => Some(project::parse_manifest(m)?),
-            None => None,
-        };
-        let driver = manifest_parsed
-            .as_ref()
-            .map_or(ipe_backend_rust::DbDriver::Sqlite, |m| m.driver);
-        let resolved = run_sandbox::resolve_for_run(
-            manifest_parsed.as_ref(),
+        compile_and_finalize_native_build(
+            &out_dir,
+            native_cargo,
+            static_plan,
+            runtime_dep,
             manifest.as_deref(),
             &entry_path,
         )?;
-        if run_sandbox::is_native_bearing(&resolved.union()) {
-            let profile = run_sandbox::build_profile(&resolved, driver)?;
-            run_sandbox::write_build_artifacts(&out_dir, &profile)?;
-        }
     }
 
     if show_progress {
@@ -2659,6 +2657,68 @@ fn run_build(rest: &[String]) -> Result<(), CliError> {
                 out_dir.display()
             ))
         );
+    }
+    Ok(())
+}
+
+/// Compile the just-emitted native crate and write its runtime-enforcement
+/// artifacts. Split out of [`run_build`] so each stays a readable unit.
+///
+/// The compile is the SEAL: a reported build success MUST mean the crate
+/// actually built, so a non-zero cargo exit surfaces as a typed
+/// [`CliError::EmittedBuildFailed`] rather than a silent exit-0 that would mask a
+/// miscompile. It also produces the `target/debug/ipe-app` binary that
+/// `ipe exec` later runs. CWD = the emitted crate dir so the generated
+/// `.cargo/config.toml` is discovered; a static plan additionally selects the
+/// target triple explicitly.
+///
+/// A native-bearing artifact then carries its own runtime enforcement — an
+/// `ipe.profile` mirror plus the authoritative capability floor embedded in the
+/// binary — so the jail travels with a copied-off-host artifact (ADR 0040). A
+/// pure Ipê artifact is structurally bounded and needs neither profile nor floor.
+///
+/// # Errors
+/// - [`CliError::EmittedBuildFailed`] when the emitted crate fails to compile.
+/// - The toolchain, manifest-parse, and capability-resolution errors of the
+///   steps it composes.
+fn compile_and_finalize_native_build(
+    out_dir: &Path,
+    native_cargo: Option<toolchain::CargoBin>,
+    static_plan: Option<ipe_backend_rust::static_build::StaticPlan>,
+    runtime_dep: bool,
+    manifest: Option<&Path>,
+    entry_path: &Path,
+) -> Result<(), CliError> {
+    // `native_cargo` is `Some` on every native path (the caller's wasm branch
+    // returns before here); the fallback re-resolves rather than unwrapping so
+    // the toolchain error stays typed even if that invariant ever changes.
+    let cargo_bin = match native_cargo {
+        Some(bin) => bin,
+        None => toolchain::require_cargo(toolchain::ToolIntent::Build)?,
+    };
+    let mut cargo = std::process::Command::new(cargo_bin.path());
+    cargo.arg("build").current_dir(out_dir);
+    if let Some(plan) = &static_plan {
+        cargo.args(["--target", plan.triple.as_str()]);
+    }
+    let runtime_ctx = if runtime_dep {
+        runtime_context_for_message()
+    } else {
+        None
+    };
+    build_emitted_project(&mut cargo, "the emitted program", runtime_ctx, out_dir)?;
+
+    let manifest_parsed = match manifest {
+        Some(m) => Some(project::parse_manifest(m)?),
+        None => None,
+    };
+    let driver = manifest_parsed
+        .as_ref()
+        .map_or(ipe_backend_rust::DbDriver::Sqlite, |m| m.driver);
+    let resolved = run_sandbox::resolve_for_run(manifest_parsed.as_ref(), manifest, entry_path)?;
+    if run_sandbox::is_native_bearing(&resolved.union()) {
+        let profile = run_sandbox::build_profile(&resolved, driver)?;
+        run_sandbox::write_build_artifacts(out_dir, &profile)?;
     }
     Ok(())
 }
