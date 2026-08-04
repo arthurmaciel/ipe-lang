@@ -162,6 +162,11 @@ pub const IPE_N0038: Code = Code("IPE-N0038");
 /// a `CustomElement` boundary type parameter is not a plain, closed, concrete
 /// value type — the SEAL rejects it before it can cross the Ipê↔JS seam
 pub const IPE_N0039: Code = Code("IPE-N0039");
+/// a decoder-pipeline combinator (`Db.Decode` / `Json.Decode.Pipeline`
+/// `required` / `optional` / `requiredAt` / `custom`) is written in the
+/// reverse-associated hand-nested form, which binds fields to constructor
+/// parameters in reverse — the `|>` pipe form is the only accepted spelling
+pub const IPE_N0040: Code = Code("IPE-N0040");
 
 // ---------------------------------------------------------------------------
 // Type (IPE-T####)
@@ -397,6 +402,7 @@ pub fn title(c: Code) -> &'static str {
         IPE_N0037 => "a reserved Ipê↔JS boundary type is used before its transport ships",
         IPE_N0038 => "an asserted foreign call (Rust.Ffi.call) is malformed",
         IPE_N0039 => "a CustomElement boundary type parameter is not a plain, closed value type",
+        IPE_N0040 => "a decoder pipeline is hand-nested instead of threaded with `|>`",
         IPE_T0001 => "type mismatch",
         IPE_T0002 => "infinite type",
         IPE_T0003 => "type inference exceeded its step budget",
@@ -544,6 +550,7 @@ fn front_end_explain_page(c: Code) -> Option<&'static str> {
         IPE_N0037 => Some(include_str!("../explain/IPE-N0037.md")),
         IPE_N0038 => Some(include_str!("../explain/IPE-N0038.md")),
         IPE_N0039 => Some(include_str!("../explain/IPE-N0039.md")),
+        IPE_N0040 => Some(include_str!("../explain/IPE-N0040.md")),
         IPE_T0001 => Some(include_str!("../explain/IPE-T0001.md")),
         IPE_T0002 => Some(include_str!("../explain/IPE-T0002.md")),
         IPE_T0003 => Some(include_str!("../explain/IPE-T0003.md")),
@@ -636,15 +643,15 @@ pub const ALL_CODES: &[Code] = &[
     IPE_N0002, IPE_N0003, IPE_N0004, IPE_N0005, IPE_N0010, IPE_N0011, IPE_N0012, IPE_N0013,
     IPE_N0020, IPE_N0021, IPE_N0022, IPE_N0023, IPE_N0024, IPE_N0025, IPE_N0026, IPE_N0027,
     IPE_N0028, IPE_N0029, IPE_N0031, IPE_N0032, IPE_N0033, IPE_N0034, IPE_N0035, IPE_N0037,
-    IPE_N0038, IPE_N0039, IPE_T0001, IPE_T0002, IPE_T0003, IPE_T0004, IPE_T0010, IPE_T0011,
-    IPE_T0012, IPE_T0013, IPE_T0014, IPE_T0015, IPE_T0016, IPE_T0017, IPE_T0018, IPE_T0019,
-    IPE_L0100, IPE_L0101, IPE_L0102, IPE_L0103, IPE_L0104, IPE_L0105, IPE_L0106, IPE_L0107,
-    IPE_L0108, IPE_L0110, IPE_L0111, IPE_L0112, IPE_L0113, IPE_L0114, IPE_L0115, IPE_L0116,
-    IPE_L0117, IPE_L0118, IPE_L0119, IPE_L0120, IPE_L0121, IPE_L0122, IPE_L0123, IPE_L0124,
-    IPE_L0125, IPE_L0126, IPE_L0127, IPE_L0128, IPE_L0129, IPE_L0130, IPE_L0131, IPE_L0132,
-    IPE_L0133, IPE_L0140, IPE_L0200, IPE_F4400, IPE_F4401, IPE_F4402, IPE_F4410, IPE_F4411,
-    IPE_F4412, IPE_F4413, IPE_F4414, IPE_I0001, IPE_I0010, IPE_I0011, IPE_I0100, IPE_I0101,
-    IPE_I0102, IPE_I0103, IPE_I0200, IPE_I0201, IPE_I0202, IPE_I0203,
+    IPE_N0038, IPE_N0039, IPE_N0040, IPE_T0001, IPE_T0002, IPE_T0003, IPE_T0004, IPE_T0010,
+    IPE_T0011, IPE_T0012, IPE_T0013, IPE_T0014, IPE_T0015, IPE_T0016, IPE_T0017, IPE_T0018,
+    IPE_T0019, IPE_L0100, IPE_L0101, IPE_L0102, IPE_L0103, IPE_L0104, IPE_L0105, IPE_L0106,
+    IPE_L0107, IPE_L0108, IPE_L0110, IPE_L0111, IPE_L0112, IPE_L0113, IPE_L0114, IPE_L0115,
+    IPE_L0116, IPE_L0117, IPE_L0118, IPE_L0119, IPE_L0120, IPE_L0121, IPE_L0122, IPE_L0123,
+    IPE_L0124, IPE_L0125, IPE_L0126, IPE_L0127, IPE_L0128, IPE_L0129, IPE_L0130, IPE_L0131,
+    IPE_L0132, IPE_L0133, IPE_L0140, IPE_L0200, IPE_F4400, IPE_F4401, IPE_F4402, IPE_F4410,
+    IPE_F4411, IPE_F4412, IPE_F4413, IPE_F4414, IPE_I0001, IPE_I0010, IPE_I0011, IPE_I0100,
+    IPE_I0101, IPE_I0102, IPE_I0103, IPE_I0200, IPE_I0201, IPE_I0202, IPE_I0203,
 ];
 
 #[cfg(test)]
@@ -653,7 +660,7 @@ mod tests {
 
     #[test]
     fn taxonomy_code_count_is_pinned() {
-        assert_eq!(ALL_CODES.len(), 118);
+        assert_eq!(ALL_CODES.len(), 119);
     }
 
     #[test]
@@ -671,7 +678,7 @@ mod tests {
             assert!(s.starts_with("IPE-"), "{s} bad prefix");
             assert!(seen.insert(s), "{s} duplicated");
         }
-        assert_eq!(seen.len(), 118);
+        assert_eq!(seen.len(), 119);
     }
 
     /// CI coverage gate: every taxonomy code has a conforming explain page.
