@@ -6816,11 +6816,9 @@ impl KernelUsage {
         self.config |= k.is_config();
         self.compression |= k.is_compression();
         self.csv |= k.is_csv();
-        self.cache |= k.is_cache();
         self.encoding |= k.is_encoding();
         self.regex |= k.is_regex();
         self.uuid |= k.is_uuid();
-        self.random |= k.is_random();
         self.log |= k.is_log();
         self.decimal |= k.is_decimal();
         self.char_category |= k.is_char_category();
@@ -6846,10 +6844,18 @@ impl KernelUsage {
         // does not pull in (e.g. `Cmd.publish`'s `cmd_publish` in `web::pubsub`,
         // `HttpStream.chunks`'s `sub_subscribe_stream` in `http_stream`) forces
         // that module here — decoupled from the `is_*` emit-dispatch predicates so
-        // the module-set stays closed without perturbing codegen routing.
+        // the module-set stays closed without perturbing codegen routing. The
+        // `Cache` / `Random` families are `class = Pure` and so ALWAYS diverge
+        // from their class's (empty) module home: the descriptor's
+        // `runtime_module` is their SOLE kernel-usage selector — the standalone
+        // `is_cache()` / `is_random()` unions retired in favour of this row. (The
+        // `cache` flag is additionally forced by a `CacheCfg` / `CacheStats` /
+        // handle type-mention with no kernel call, at the assembly site.)
         match k.required_runtime_module() {
             Some(RuntimeModule::Web) => self.web = true,
             Some(RuntimeModule::Server) => self.server = true,
+            Some(RuntimeModule::Cache) => self.cache = true,
+            Some(RuntimeModule::Random) => self.random = true,
             None => {}
         }
     }
