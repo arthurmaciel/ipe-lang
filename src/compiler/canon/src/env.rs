@@ -413,9 +413,9 @@ impl Env {
         // built-in type's interned symbol so downstream stages recognise it.
         for union in crate::builtins::BUILTIN_UNIONS {
             let type_name = interner.intern(union.type_name)?;
-            // A built-in union whose constructors are ALSO reachable qualified
-            // through a kernel-qualifier module (e.g. `Http.Post`) names that
-            // qualifier; `None` means unqualified-only like `Just`/`Ok`.
+            // A built-in union whose constructors live under a kernel-qualifier
+            // module (e.g. `Http.Post`) names that qualifier and is registered
+            // qualified-only; `None` means ambient-unqualified like `Just`/`Ok`.
             let qualifier = union
                 .qualified_home
                 .map(|q| interner.intern(q))
@@ -429,12 +429,22 @@ impl Env {
                     index,
                     arity,
                 };
-                Rc::make_mut(&mut self.ctors).insert(name, ctor_home.clone());
-                if let Some(qsym) = qualifier {
-                    Rc::make_mut(&mut self.qual_ctors)
-                        .entry(qsym)
-                        .or_default()
-                        .insert(name, ctor_home);
+                match qualifier {
+                    // A built-in union with a `qualified_home` (e.g. `HttpMethod`
+                    // -> `Http`) is import-scoped: its constructors are reachable
+                    // ONLY as `Http.Post`, never ambient unqualified, so a user's
+                    // own `Post`/`Get`/… constructor is not silently shadowed.
+                    Some(qsym) => {
+                        Rc::make_mut(&mut self.qual_ctors)
+                            .entry(qsym)
+                            .or_default()
+                            .insert(name, ctor_home);
+                    }
+                    // A home-less built-in (`Just`/`Nothing`/`Ok`/`Err`/`True`/
+                    // `False`) has no user module and stays ambient unqualified.
+                    None => {
+                        Rc::make_mut(&mut self.ctors).insert(name, ctor_home);
+                    }
                 }
             }
         }
@@ -2019,5 +2029,66 @@ impl Env {
         }
 
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod builtin_ctor_registration_tests {
+    //! A built-in union with a `qualified_home` (e.g. `HttpMethod` -> `Http`)
+    //! is import-scoped: its constructors live ONLY under the qualified
+    //! path (`Http.Post`), never in the ambient unqualified table where they
+    //! would shadow a user's own same-spelled constructor. The home-less
+    //! built-ins (`Just`/`Nothing`/`Ok`/`Err`/`True`/`False`) stay ambient.
+
+    use super::Env;
+    use ipe_intern::Interner;
+
+    /// The `HttpMethod` verbs must NOT be ambient unqualified — a user's own
+    /// `Post`/`Get`/… constructor must win.
+    #[test]
+    fn http_verbs_are_not_ambient_unqualified() {
+        let mut interner = Interner::new();
+        let env = Env::initial(Vec::new(), &mut interner).expect("base env");
+        for verb in ["Get", "Post", "Put", "Delete", "Patch", "Head", "Options"] {
+            let sym = interner.intern(verb).expect("intern");
+            assert!(
+                env.lookup_ctor(sym).is_none(),
+                "`{verb}` must not be an ambient unqualified constructor \
+                 (it would shadow a user's own `{verb}` ctor)"
+            );
+        }
+    }
+
+    /// The `HttpMethod` verbs stay reachable qualified as `Http.<Verb>`.
+    #[test]
+    fn http_verbs_resolve_qualified() {
+        let mut interner = Interner::new();
+        let env = Env::initial(Vec::new(), &mut interner).expect("base env");
+        let http = interner.intern("Http").expect("intern");
+        for verb in ["Get", "Post", "Put", "Delete", "Patch", "Head", "Options"] {
+            let sym = interner.intern(verb).expect("intern");
+            let members = env
+                .qual_ctors
+                .get(&http)
+                .expect("`Http` qualifier must carry ctors");
+            assert!(
+                members.contains_key(&sym),
+                "`Http.{verb}` must resolve to the HttpMethod verb"
+            );
+        }
+    }
+
+    /// The home-less prelude constructors stay ambient unqualified.
+    #[test]
+    fn homeless_builtin_ctors_stay_ambient() {
+        let mut interner = Interner::new();
+        let env = Env::initial(Vec::new(), &mut interner).expect("base env");
+        for ctor in ["Just", "Nothing", "Ok", "Err", "True", "False"] {
+            let sym = interner.intern(ctor).expect("intern");
+            assert!(
+                env.lookup_ctor(sym).is_some(),
+                "`{ctor}` must stay an ambient unqualified constructor"
+            );
+        }
     }
 }
