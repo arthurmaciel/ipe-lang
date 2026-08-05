@@ -3130,6 +3130,74 @@ mod tests {
     }
 
     #[test]
+    fn two_compiled_stdlib_wildcards_sharing_a_leaf_are_ambiguous_at_use() {
+        // Two DISTINCT compiled-source stdlib modules whose paths share a LEAF
+        // segment (`Ipe.Foo.Widget` and `Ipe.Bar.Widget`), each open-imported and
+        // each exposing the same bare `gadget`, must make a bare use of `gadget`
+        // an `AmbiguousImport` (IPE-N0024) — the wildcard-origin map keys on the
+        // FULL dotted path, so the shared leaf `Widget` can never collapse the two
+        // origins into one and silently mask the ambiguity (last-wins). Keyed on
+        // the leaf alone, this test resolves `gadget` to a single surviving origin
+        // and no diagnostic is raised.
+        let mut i = Interner::new();
+        let ipe = i.intern("Ipe").expect("intern Ipe");
+        let foo = i.intern("Foo").expect("intern Foo");
+        let bar = i.intern("Bar").expect("intern Bar");
+        let widget = i.intern("Widget").expect("intern Widget");
+        let gadget = i.intern("gadget").expect("intern gadget");
+
+        // Hand-built compiled-source deps: a user module can never DECLARE an
+        // `Ipe.*` name (ReservedNamespace), but the build driver injects real
+        // compiled-source stdlib modules under `Ipe.*` paths into `deps` exactly
+        // like this, so constructing the exports directly is faithful.
+        let foo_widget = ModuleExports {
+            path: vec![ipe, foo, widget],
+            values: BTreeSet::from([gadget]),
+            ..ModuleExports::default()
+        };
+        let bar_widget = ModuleExports {
+            path: vec![ipe, bar, widget],
+            values: BTreeSet::from([gadget]),
+            ..ModuleExports::default()
+        };
+
+        let mut deps: BTreeMap<Vec<Symbol>, ModuleExports> = BTreeMap::new();
+        deps.insert(foo_widget.path.clone(), foo_widget);
+        deps.insert(bar_widget.path.clone(), bar_widget);
+
+        // Distinct `as` aliases keep the auto-qualifiers (both would default to the
+        // shared leaf `Widget`) from colliding as a separate `DuplicateQualifier`
+        // — the point under test is the bare-VALUE wildcard ambiguity, not the
+        // qualifier one.
+        let main_src = "module Main exposing (main)\n\
+                        import Ipe.Foo.Widget as FW exposing (..)\n\
+                        import Ipe.Bar.Widget as BW exposing (..)\n\
+                        main = gadget\n";
+        let parsed = ipe_parse::parse_module(main_src, &mut i).expect("main parses");
+        let expected = parsed.name.value.clone();
+        let err = canonicalise_module(&parsed, &expected, &deps, &mut i).err();
+
+        let Some(Diagnostic::Name {
+            msg: NameError::AmbiguousImport { name, modules },
+            ..
+        }) = &err
+        else {
+            assert!(
+                false_marker(),
+                "same-leaf compiled-source wildcards must be AmbiguousImport at \
+                 the bare use, got {err:?}"
+            );
+            return;
+        };
+        assert_eq!(&**name, "gadget");
+        assert!(
+            modules.iter().any(|m| &**m == "Ipe.Foo.Widget")
+                && modules.iter().any(|m| &**m == "Ipe.Bar.Widget"),
+            "both same-leaf origins must be named, got {modules:?}"
+        );
+    }
+
+    #[test]
     fn two_stdlib_wildcards_shared_name_ok_when_unused() {
         // The ambiguity is deferred: two wildcards exposing `text` are legal as
         // long as no bare `text` is used (a non-shared name still resolves).

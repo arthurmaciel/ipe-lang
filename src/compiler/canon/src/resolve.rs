@@ -1771,16 +1771,17 @@ fn fold_html_stdlib_qualifier_homes(
 ///   rest"). [`resolve_var`] consults this tier last.
 ///
 /// Ambiguity is NOT decided here: two wildcards exposing the same name are both
-/// legal at import time. The clash is recorded (both origins kept, keyed by
-/// canonical qualifier) and only surfaces as [`NameError::AmbiguousImport`] if a
-/// bare use of the name actually occurs and no higher-priority binding shadows it
-/// — matching the deferred-conflict rule Elm applies to open imports.
+/// legal at import time. The clash is recorded (both origins kept, keyed by the
+/// module's full dotted path) and only surfaces as [`NameError::AmbiguousImport`]
+/// if a bare use of the name actually occurs and no higher-priority binding
+/// shadows it — matching the deferred-conflict rule Elm applies to open imports.
 ///
 /// Soundness: each cloned [`VarHome::Kernel`] carries the canonical module + name
 /// (and kernel id) of the qualified member, so an unqualified wildcard reference
 /// lowers byte-identically to a qualified `M.member` reference. Keying by the
-/// canonical qualifier symbol means importing the same module twice (or once
-/// under an alias) collapses to a single origin — never a spurious self-ambiguity.
+/// full dotted path means importing the same module twice (or once under an
+/// alias) collapses to a single origin — never a spurious self-ambiguity — while
+/// two distinct modules that share a leaf segment stay separate origins.
 ///
 /// A path that names no known/ported stdlib module floods nothing (fail-closed,
 /// via [`Env::canonical_stdlib_qualifier`]); a later bare use surfaces the
@@ -1815,16 +1816,20 @@ fn inject_stdlib_wildcard_values(
             continue;
         };
         let dep_owned = dep_path.clone();
+        // The canonical qualifier gated the flood above (fail-closed on an
+        // unknown module); it plays no further part now that the origin key is
+        // the full dotted path.
+        let _ = canonical;
         for (name, home) in members {
-            // Dedup by canonical qualifier: a second import of the SAME module
-            // (or an aliased re-import) overwrites its own prior origin rather
-            // than registering a phantom second candidate that would fake an
-            // ambiguity with itself.
+            // Key by the module's FULL dotted path: a second import of the SAME
+            // module overwrites its own prior origin (same key → no self-
+            // ambiguity), while two distinct modules sharing a leaf segment stay
+            // separate origins and remain distinguishable at a bare use site.
             std::rc::Rc::make_mut(&mut env.wildcard_vars)
                 .entry(name)
                 .or_default()
                 .insert(
-                    canonical,
+                    dep_owned.clone(),
                     WildcardOrigin {
                         home,
                         dep_path: dep_owned.clone(),
@@ -2498,14 +2503,12 @@ fn inject_dep_exports(
 
     match &import.exposing.value {
         src::Exposing::All if is_stdlib_dep => {
-            // Deferred wildcard flood — keyed by the dep's leaf segment so two
+            // Deferred wildcard flood — keyed by the dep's FULL dotted path so two
             // distinct stdlib modules exposing the same bare name register as two
             // origins (ambiguous only at a bare use site), while a re-import of the
-            // SAME module collapses to one origin (never a self-ambiguity).
-            let origin_key = dep_path
-                .last()
-                .copied()
-                .unwrap_or_else(|| dep_path.first().copied().unwrap_or_else(name_zero));
+            // SAME module collapses to one origin (never a self-ambiguity). Keying
+            // on the leaf segment alone would let `Ipe.A.Input` and `Ipe.B.Input`
+            // collide on `Input` and silently mask that ambiguity.
             for &name in &dep.values {
                 let home = dep.kernel_aliases.get(&name).map_or_else(
                     || VarHome::TopLevel(dep_path.clone()),
@@ -2515,7 +2518,7 @@ fn inject_dep_exports(
                     .entry(name)
                     .or_default()
                     .insert(
-                        origin_key,
+                        dep_path.clone(),
                         WildcardOrigin {
                             home,
                             dep_path: dep_path.clone(),
