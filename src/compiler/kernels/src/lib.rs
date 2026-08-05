@@ -2995,13 +2995,13 @@ impl StdlibKernel {
             Self::DbDecFloat => d("Db.Decode", "float", 1, Db, "db_decode_float"),
             Self::DbDecBool => d("Db.Decode", "bool", 1, Db, "db_decode_bool"),
             Self::DbDecNullable => d("Db.Decode", "nullable", 1, Db, "db_decode_nullable"),
-            Self::DbDecMap => d("Db.Decode", "map", 2, Db, "db_decode_map"),
-            Self::DbDecAndThen => d("Db.Decode", "andThen", 2, Db, "db_decode_and_then"),
-            Self::DbDecSucceed => d("Db.Decode", "succeed", 1, Db, "db_decode_succeed"),
-            Self::DbDecFail => d("Db.Decode", "fail", 1, Db, "db_decode_fail"),
-            Self::DbDecMap2 => d("Db.Decode", "map2", 3, Db, "db_decode_map2"),
-            Self::DbDecMap3 => d("Db.Decode", "map3", 4, Db, "db_decode_map3"),
-            Self::DbDecMap4 => d("Db.Decode", "map4", 5, Db, "db_decode_map4"),
+            Self::DbDecMap => d("Db.Decode", "map", 2, Db, "decode_map"),
+            Self::DbDecAndThen => d("Db.Decode", "andThen", 2, Db, "decode_and_then"),
+            Self::DbDecSucceed => d("Db.Decode", "succeed", 1, Db, "decode_succeed"),
+            Self::DbDecFail => d("Db.Decode", "fail", 1, Db, "decode_fail"),
+            Self::DbDecMap2 => d("Db.Decode", "map2", 3, Db, "decode_map2"),
+            Self::DbDecMap3 => d("Db.Decode", "map3", 4, Db, "decode_map3"),
+            Self::DbDecMap4 => d("Db.Decode", "map4", 5, Db, "decode_map4"),
             Self::DbDecRequired => d("Db.Decode", "required", 3, Db, "db_decode_required"),
             Self::DbDecOptional => d("Db.Decode", "optional", 4, Db, "db_decode_optional"),
             Self::DbDecMoney => d("Db.Decode", "money", 1, Db, "db_decode_money"),
@@ -3427,7 +3427,7 @@ impl StdlibKernel {
             Self::HtmlAttrRows => d("Attr", "rows", 1, Ui, "html_attr_rows_"),
             // ── Effect stdlib modules ────────────────────────────────────
             // Ipe.Terminal line-oriented app-entry.
-            Self::TerminalAppLines => d("Terminal", "appLines", 1, Terminal, "console_app"),
+            Self::TerminalAppLines => d("Terminal", "appLines", 1, Terminal, "ipe_console_app_"),
             // Ipe.Auth / Ipe.Auth (fail-closed: qual-registered only, no lower arm).
             Self::AuthHashPassword => d("Auth", "hashPassword", 1, Pure, "auth_hash_password"),
             Self::AuthHashPasswordCost => d(
