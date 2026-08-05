@@ -300,6 +300,15 @@ pub enum BuiltinTag {
     /// `RadioOption` — the `Ipe.Ui.Input` radio-option constructor `RadioOption
     /// msg`, applied to the message type.
     InputRadioOption,
+    /// `WebReq` — the opaque request handle threaded through `Web.app`'s `init`
+    /// field. Nullary.
+    WebReq,
+    /// `WebRoute` — the route descriptor `WebRoute page`, applied to the page
+    /// type. Carried by the `routes` field of the `Web.app` cfg record.
+    WebRoute,
+    /// `EmailProvider` — the opaque provider handle `Email.send` takes before the
+    /// `EmailMessage`. Nullary.
+    EmailProvider,
 }
 
 /// A `'static`, `const`-embeddable representation of a kernel's HM type scheme.
@@ -309,18 +318,14 @@ pub enum BuiltinTag {
 /// owns the single interpreter that turns a `TyShape` back into a concrete `Ty`,
 /// resolving each [`BuiltinTag`] against its interned-symbol cache.
 ///
-/// The vocabulary encodes an arrow spine over built-in constructor applications
-/// and anonymous tuples, with **rank-1 scheme-local type variables**
-/// ([`Self::Var`]) but no open rows.
+/// The vocabulary encodes an arrow spine over built-in constructor applications,
+/// anonymous tuples, and records (closed or open-row), with **rank-1
+/// scheme-local type variables** ([`Self::Var`]).
 /// A scheme var is a `'static` positional index, NOT a solver union-find var:
 /// the `ipe_types` interpreter maps each index to the same placeholder
 /// `Ty::Var` the `stdlib_scheme` table builds, and generalization /
 /// instantiation with fresh solver vars happens LATER at the use site
 /// (`instantiate_in`). So the interpreter still touches no union-find state.
-///
-/// The one node still absent is the row-polymorphic open record; a kernel whose
-/// scheme needs an open row (or a not-yet-tagged constructor) carries no shape
-/// and resolves through the `stdlib_scheme` table instead.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum TyShape {
     /// A function arrow `arg -> result`. Nested on the right to build a spine.
@@ -335,6 +340,20 @@ pub enum TyShape {
     /// same-ordered `Ty::Tuple` a hand-built scheme's `Ty::Tuple(vec![…])`
     /// produces. A two-element slice encodes the common pair `(a, b)`.
     Tuple(&'static [Self]),
+    /// A record over named fields, closed or open-row. Each field pairs a
+    /// [`FieldTag`] (naming the interned field [`ipe_intern::Symbol`] the
+    /// interpreter resolves against its `Builtins` cache) with the field's shape.
+    /// The interpreter materialises a `Ty::Record` whose `BTreeMap` keys are the
+    /// resolved field symbols — insertion into the `BTreeMap` re-sorts by symbol,
+    /// so the map's key order is byte-identical to a hand-built one regardless of
+    /// the declared slice order. Declared fields are kept in ascending
+    /// resolved-symbol order so the byte-identity oracle can also assert order.
+    Record {
+        /// The named fields, each a `(FieldTag, field-shape)` pair.
+        fields: &'static [(FieldTag, &'static Self)],
+        /// Closed (exact field set) or open (a row variable absorbs extras).
+        tail: RowTailShape,
+    },
     /// The empty-tuple unit type `()`. Materialises the interpreter's `Ty::Unit`
     /// — the argument of every `() -> …` kernel and the result payload of a
     /// `Task ()` (`Task Error ()`). A leaf with no children, distinct from a
@@ -348,6 +367,215 @@ pub enum TyShape {
     /// the `stdlib_scheme` table's `var(i)` builder uses, so an interpreted
     /// shape is byte-identical to the hand-built scheme.
     Var(u8),
+}
+
+/// The tail of a record [`TyShape`] — closed (exact fields) or open (a row
+/// variable absorbs additional fields).
+///
+/// Mirrors `ipe_types::RowTail`, kept in the leaf `ipe_kernels` crate so a
+/// record shape is `const`-embeddable without an `ipe_types` dependency. The
+/// interpreter maps [`Self::Closed`] to `RowTail::Closed` and [`Self::Open`] to
+/// `RowTail::Open(raw)` over the same scheme-local variable index space as
+/// [`TyShape::Var`].
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum RowTailShape {
+    /// Exact field set — no extension variable.
+    Closed,
+    /// Extra fields flow into the scheme-local row variable named by this
+    /// positional index (the same index space as [`TyShape::Var`]).
+    Open(u8),
+}
+
+/// A record field name, named structurally by tag rather than by an interned
+/// [`ipe_intern::Symbol`].
+///
+/// A [`TyShape::Record`] cannot reference the interned field symbols the
+/// `stdlib_scheme` table's `Ty::Record` keys use — those exist only after the
+/// `Interner` runs, and `ipe_kernels` is a leaf crate. So a record shape names
+/// each field by this `'static` tag, and the single interpreter in `ipe_types`
+/// resolves the tag against its `Builtins` field-symbol cache, reproducing the
+/// exact `BTreeMap` key the hand-built record used.
+///
+/// One variant per distinct field name a migrated record family uses; a field
+/// symbol shared across families (e.g. `label` between the `Input` config
+/// records) resolves to one tag.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum FieldTag {
+    // ── Ipe.Db.Migration ──
+    /// `"name"`.
+    MigrationName,
+    /// `"sql"`.
+    MigrationSql,
+    // ── Http request / response / server response ──
+    /// `"body"`.
+    HttpBody,
+    /// `"headers"`.
+    HttpHeaders,
+    /// `"status"`.
+    HttpStatus,
+    /// `"method"`.
+    HttpMethod,
+    /// `"url"`.
+    HttpUrl,
+    /// `"timeout"`.
+    HttpTimeout,
+    /// `"followRedirects"`.
+    HttpFollowRedirects,
+    /// `"maxRedirects"`.
+    HttpMaxRedirects,
+    /// `"contentType"` — `Ipe.Http.Server.Response`.
+    ServerContentType,
+    // ── Csv ──
+    /// `"header"`.
+    CsvHeader,
+    /// `"rows"`.
+    CsvRows,
+    // ── CacheCfg / CacheStats ──
+    /// `"maxEntries"`.
+    CacheMaxEntries,
+    /// `"ttlMs"`.
+    CacheTtlMs,
+    /// `"maxBytes"`.
+    CacheMaxBytes,
+    /// `"hits"`.
+    CacheHits,
+    /// `"misses"`.
+    CacheMisses,
+    /// `"evictions"`.
+    CacheEvictions,
+    // ── WebSocketCfg (client) ──
+    /// `"url"` — `WebSocketCfg`.
+    WsUrl,
+    /// `"headers"` — `WebSocketCfg`.
+    WsHeaders,
+    /// `"timeout"` — `WebSocketCfg`.
+    WsTimeout,
+    /// `"pingInterval"` — `WebSocketCfg`.
+    WsPingInterval,
+    // ── EmailMessage + nested Attachment ──
+    /// `"from"`.
+    EmailFrom,
+    /// `"to"`.
+    EmailTo,
+    /// `"cc"`.
+    EmailCc,
+    /// `"bcc"`.
+    EmailBcc,
+    /// `"subject"`.
+    EmailSubject,
+    /// `"textBody"`.
+    EmailTextBody,
+    /// `"htmlBody"`.
+    EmailHtmlBody,
+    /// `"attachments"`.
+    EmailAttachments,
+    /// `"replyTo"`.
+    EmailReplyTo,
+    /// `"filename"` — `EmailAttachment`.
+    EmailFilename,
+    /// `"mimeType"` — `EmailAttachment`.
+    EmailMimeType,
+    /// `"content"` — `EmailAttachment`.
+    EmailContent,
+    // ── RetryPolicy ──
+    /// `"baseMs"`.
+    RetryBaseMs,
+    /// `"jitter"`.
+    RetryJitter,
+    /// `"kind"`.
+    RetryKind,
+    /// `"maxAttempts"`.
+    RetryMaxAttempts,
+    /// `"shouldRetry"`.
+    RetryShouldRetry,
+    // ── Ui.layoutWith ──
+    /// `"wrapperAttrs"`.
+    LayoutWrapperAttrs,
+    /// `"rootAttrs"`.
+    LayoutRootAttrs,
+    // ── Ui.button / shared `label` field ──
+    /// `"onPress"`.
+    ButtonOnPress,
+    /// `"label"` — shared by `Ui.button`, `Ui.link`, and every `Input` config
+    /// record.
+    Label,
+    // ── App-entry cfg (Web / WebView / Terminal) shared TEA fields ──
+    /// `"init"`.
+    AppInit,
+    /// `"update"`.
+    AppUpdate,
+    /// `"view"`.
+    AppView,
+    /// `"subscriptions"`.
+    AppSubscriptions,
+    /// `"routes"` — `Web.app` only.
+    AppRoutes,
+    /// `"notFound"` — `Web.app` only.
+    AppNotFound,
+    /// `"onKey"` — `Terminal.appScreen` only.
+    TerminalOnKey,
+    /// `"kind"` — the `KeyEvent` record field.
+    TerminalKeyKind,
+    /// `"value"` — the `KeyEvent` record field.
+    TerminalKeyValue,
+    /// `"onLine"` — `Terminal.appLines` only.
+    TerminalOnLine,
+    /// `"window"` — `WebView.app` only.
+    WebViewWindow,
+    /// `"title"` — the `WebView` window record field.
+    WebViewTitle,
+    /// `"size"` — the `WebView` window record field.
+    WebViewSize,
+    // ── Edge record (Ui.paddingEach / Border.widthEach) ──
+    /// `"top"`.
+    EdgeTop,
+    /// `"right"`.
+    EdgeRight,
+    /// `"bottom"`.
+    EdgeBottom,
+    /// `"left"`.
+    EdgeLeft,
+    // ── Input config records ──
+    /// `"onChange"`.
+    InputOnChange,
+    /// `"text"`.
+    InputText,
+    /// `"placeholder"`.
+    InputPlaceholder,
+    /// `"icon"`.
+    InputIcon,
+    /// `"checked"`.
+    InputChecked,
+    /// `"spellcheck"`.
+    InputSpellcheck,
+    /// `"value"`.
+    InputValue,
+    /// `"min"`.
+    InputMin,
+    /// `"max"`.
+    InputMax,
+    /// `"step"`.
+    InputStep,
+    /// `"options"`.
+    InputOptions,
+    /// `"selected"`.
+    InputSelected,
+    // ── Border.shadow / innerShadow ──
+    /// `"offsetX"`.
+    ShadowOffsetX,
+    /// `"offsetY"`.
+    ShadowOffsetY,
+    /// `"blur"`.
+    ShadowBlur,
+    /// `"spread"`.
+    ShadowSpread,
+    /// `"color"`.
+    ShadowColor,
+    // ── Ui.image ──
+    /// `"src"`.
+    ImageSrc,
+    /// `"description"`.
+    ImageDescription,
 }
 
 /// The whole kernel "row" as one descriptor.
@@ -6527,6 +6755,447 @@ impl StdlibKernel {
             TyShape::Fun(&LIST_SERVER_ROUTE, &TASK_UNIT);
         const SERVER_LISTEN: TyShape = TyShape::Fun(&INT, &LIST_SERVER_ROUTE_TO_TASK_UNIT);
 
+        // ── Record field-value shapes + the record nodes themselves. ──
+        // Each record mirrors its `stdlib_scheme` arm's `Ty::Record` field-for-
+        // field; the interpreter re-sorts by resolved field symbol, so fields are
+        // declared here in ascending resolved-symbol order (asserted by the
+        // byte-identity oracle). The `label` field symbol is shared across the
+        // `Ui.button` / `Ui.link` / `Input` records via `FieldTag::Label`.
+        const WEB_REQ: TyShape = TyShape::Con(BuiltinTag::WebReq, &[]);
+        const WEB_ROUTE_C: TyShape = TyShape::Con(BuiltinTag::WebRoute, &[C]);
+        const UI_ELEM_B: TyShape = TyShape::Con(BuiltinTag::UiElement, &[B]);
+        const LIST_LIST_STRING: TyShape = TyShape::Con(BuiltinTag::List, &[LIST_STRING]);
+        const MAYBE_PLACEHOLDER_A: TyShape = TyShape::Con(BuiltinTag::Maybe, &[PLACEHOLDER_A]);
+        const LIST_RADIO_OPTION_A: TyShape = TyShape::Con(BuiltinTag::List, &[RADIO_OPTION_A]);
+
+        // Migration `{ name : String, sql : String }`.
+        const MIGRATION: TyShape = TyShape::Record {
+            fields: &[
+                (FieldTag::MigrationName, &STRING),
+                (FieldTag::MigrationSql, &STRING),
+            ],
+            tail: RowTailShape::Closed,
+        };
+        // Server `Response { body, contentType, headers, status }`.
+        const SERVER_RESPONSE: TyShape = TyShape::Record {
+            fields: &[
+                (FieldTag::HttpBody, &STRING),
+                (FieldTag::HttpHeaders, &DICT_STRING_STRING),
+                (FieldTag::HttpStatus, &INT),
+                (FieldTag::ServerContentType, &STRING),
+            ],
+            tail: RowTailShape::Closed,
+        };
+        // `HttpResponse { body, headers, status }`.
+        const HTTP_RESPONSE: TyShape = TyShape::Record {
+            fields: &[
+                (FieldTag::HttpBody, &STRING),
+                (FieldTag::HttpHeaders, &DICT_STRING_STRING),
+                (FieldTag::HttpStatus, &INT),
+            ],
+            tail: RowTailShape::Closed,
+        };
+        // `HttpRequest { body, followRedirects, headers, maxRedirects, method,
+        // timeout, url }`.
+        const HTTP_REQUEST: TyShape = TyShape::Record {
+            fields: &[
+                (FieldTag::HttpBody, &STRING),
+                (FieldTag::HttpHeaders, &LIST_TUPLE_STRING_STRING),
+                (FieldTag::HttpMethod, &HTTP_METHOD),
+                (FieldTag::HttpUrl, &STRING),
+                (FieldTag::HttpTimeout, &INT),
+                (FieldTag::HttpFollowRedirects, &BOOL),
+                (FieldTag::HttpMaxRedirects, &INT),
+            ],
+            tail: RowTailShape::Closed,
+        };
+        // `Csv { header : List String, rows : List (List String) }`.
+        const CSV: TyShape = TyShape::Record {
+            fields: &[
+                (FieldTag::CsvHeader, &LIST_STRING),
+                (FieldTag::CsvRows, &LIST_LIST_STRING),
+            ],
+            tail: RowTailShape::Closed,
+        };
+        // `CacheCfg { maxEntries, ttlMs, maxBytes }`.
+        const CACHE_CFG: TyShape = TyShape::Record {
+            fields: &[
+                (FieldTag::CacheMaxEntries, &INT),
+                (FieldTag::CacheTtlMs, &INT),
+                (FieldTag::CacheMaxBytes, &INT),
+            ],
+            tail: RowTailShape::Closed,
+        };
+        // `CacheStats { hits, misses, evictions }`.
+        const CACHE_STATS: TyShape = TyShape::Record {
+            fields: &[
+                (FieldTag::CacheHits, &INT),
+                (FieldTag::CacheMisses, &INT),
+                (FieldTag::CacheEvictions, &INT),
+            ],
+            tail: RowTailShape::Closed,
+        };
+        // `WebSocketCfg { url, headers : List (String, String), timeout,
+        // pingInterval }`.
+        const WS_CLIENT_CFG: TyShape = TyShape::Record {
+            fields: &[
+                (FieldTag::WsHeaders, &LIST_TUPLE_STRING_STRING),
+                (FieldTag::WsUrl, &STRING),
+                (FieldTag::WsTimeout, &INT),
+                (FieldTag::WsPingInterval, &INT),
+            ],
+            tail: RowTailShape::Closed,
+        };
+        // `EmailAttachment { filename, mimeType, content : Bytes }`.
+        const EMAIL_ATTACHMENT: TyShape = TyShape::Record {
+            fields: &[
+                (FieldTag::EmailFilename, &STRING),
+                (FieldTag::EmailMimeType, &STRING),
+                (FieldTag::EmailContent, &BYTES),
+            ],
+            tail: RowTailShape::Closed,
+        };
+        const LIST_EMAIL_ATTACHMENT: TyShape = TyShape::Con(BuiltinTag::List, &[EMAIL_ATTACHMENT]);
+        // `EmailMessage { from, to, cc, bcc, subject, textBody, htmlBody,
+        // attachments : List Attachment, replyTo }`.
+        const EMAIL_MESSAGE: TyShape = TyShape::Record {
+            fields: &[
+                (FieldTag::EmailFrom, &STRING),
+                (FieldTag::EmailTo, &LIST_STRING),
+                (FieldTag::EmailCc, &LIST_STRING),
+                (FieldTag::EmailBcc, &LIST_STRING),
+                (FieldTag::EmailSubject, &STRING),
+                (FieldTag::EmailTextBody, &STRING),
+                (FieldTag::EmailHtmlBody, &STRING),
+                (FieldTag::EmailAttachments, &LIST_EMAIL_ATTACHMENT),
+                (FieldTag::EmailReplyTo, &STRING),
+            ],
+            tail: RowTailShape::Closed,
+        };
+        // `RetryPolicy e { baseMs, jitter, kind, maxAttempts, shouldRetry : e -> Bool }`.
+        // `e` = var(0). `A_TO_BOOL` (`shouldRetry : a -> Bool`) is defined above.
+        const RETRY_POLICY: TyShape = TyShape::Record {
+            fields: &[
+                (FieldTag::RetryKind, &INT),
+                (FieldTag::RetryMaxAttempts, &INT),
+                (FieldTag::RetryBaseMs, &INT),
+                (FieldTag::RetryJitter, &BOOL),
+                (FieldTag::RetryShouldRetry, &A_TO_BOOL),
+            ],
+            tail: RowTailShape::Closed,
+        };
+        // `RetryPolicy Error` — `Task.retryWith`'s policy fixes the error channel
+        // to `Error`, so `shouldRetry : Error -> Bool`.
+        const RETRY_POLICY_ERROR: TyShape = TyShape::Record {
+            fields: &[
+                (FieldTag::RetryKind, &INT),
+                (FieldTag::RetryMaxAttempts, &INT),
+                (FieldTag::RetryBaseMs, &INT),
+                (FieldTag::RetryJitter, &BOOL),
+                (FieldTag::RetryShouldRetry, &ERROR_TO_BOOL),
+            ],
+            tail: RowTailShape::Closed,
+        };
+        // `Ui.layoutWith { wrapperAttrs, rootAttrs } : List (Attribute msg)` each.
+        const LAYOUT_WITH_CFG: TyShape = TyShape::Record {
+            fields: &[
+                (FieldTag::LayoutWrapperAttrs, &LIST_UI_ATTR_A),
+                (FieldTag::LayoutRootAttrs, &LIST_UI_ATTR_A),
+            ],
+            tail: RowTailShape::Closed,
+        };
+        // `Ui.button { onPress : Maybe msg, label : Element msg }`.
+        const BUTTON_CFG: TyShape = TyShape::Record {
+            fields: &[
+                (FieldTag::ButtonOnPress, &MAYBE_A),
+                (FieldTag::Label, &UI_ELEM_A),
+            ],
+            tail: RowTailShape::Closed,
+        };
+        // ── App-entry cfg records. var(0)=model, var(1)=msg, var(2)=page,
+        // var(3)=appExt (open-row tail on Web / Terminal.appScreen). ──
+        const TUPLE_A_CMD_B: TyShape = TyShape::Tuple(&[A, CMD_B]);
+        const WEB_REQ_TO_TUPLE: TyShape = TyShape::Fun(&WEB_REQ, &TUPLE_A_CMD_B);
+        const UNIT_TO_TUPLE: TyShape = TyShape::Fun(&UNIT, &TUPLE_A_CMD_B);
+        const A_TO_TUPLE: TyShape = TyShape::Fun(&A, &TUPLE_A_CMD_B);
+        const UPDATE_FN: TyShape = TyShape::Fun(&B, &A_TO_TUPLE);
+        const VIEW_ELEM_FN: TyShape = TyShape::Fun(&A, &UI_ELEM_B);
+        const VIEW_STRING_FN: TyShape = TyShape::Fun(&A, &STRING);
+        const SUBS_FN: TyShape = TyShape::Fun(&A, &SUB_B);
+        const LIST_WEB_ROUTE_C: TyShape = TyShape::Con(BuiltinTag::List, &[WEB_ROUTE_C]);
+        // `Web.app` cfg — OPEN row (var(3) absorbs optional extra fields).
+        const WEB_APP_CFG: TyShape = TyShape::Record {
+            fields: &[
+                (FieldTag::AppInit, &WEB_REQ_TO_TUPLE),
+                (FieldTag::AppUpdate, &UPDATE_FN),
+                (FieldTag::AppView, &VIEW_ELEM_FN),
+                (FieldTag::AppSubscriptions, &SUBS_FN),
+                (FieldTag::AppRoutes, &LIST_WEB_ROUTE_C),
+                (FieldTag::AppNotFound, &C),
+            ],
+            tail: RowTailShape::Open(3),
+        };
+        // `Terminal.appScreen` — pinned `onKey : KeyEvent -> msg`, OPEN row.
+        const KEY_EVENT: TyShape = TyShape::Record {
+            fields: &[
+                (FieldTag::TerminalKeyKind, &STRING),
+                (FieldTag::TerminalKeyValue, &STRING),
+            ],
+            tail: RowTailShape::Closed,
+        };
+        const ON_KEY_FN: TyShape = TyShape::Fun(&KEY_EVENT, &B);
+        const TERMINAL_SCREEN_CFG: TyShape = TyShape::Record {
+            fields: &[
+                (FieldTag::AppInit, &UNIT_TO_TUPLE),
+                (FieldTag::AppUpdate, &UPDATE_FN),
+                (FieldTag::AppView, &VIEW_ELEM_FN),
+                (FieldTag::AppSubscriptions, &SUBS_FN),
+                (FieldTag::TerminalOnKey, &ON_KEY_FN),
+            ],
+            tail: RowTailShape::Open(3),
+        };
+        // `Terminal.appLines` — `view : model -> String`, `onLine`, CLOSED.
+        const ON_LINE_FN: TyShape = TyShape::Fun(&STRING, &B);
+        const TERMINAL_LINES_CFG: TyShape = TyShape::Record {
+            fields: &[
+                (FieldTag::AppInit, &UNIT_TO_TUPLE),
+                (FieldTag::AppUpdate, &UPDATE_FN),
+                (FieldTag::AppView, &VIEW_STRING_FN),
+                (FieldTag::AppSubscriptions, &SUBS_FN),
+                (FieldTag::TerminalOnLine, &ON_LINE_FN),
+            ],
+            tail: RowTailShape::Closed,
+        };
+        // `WebView.app` — `window { title, size : (Int, Int) }`, CLOSED.
+        const WEBVIEW_WINDOW: TyShape = TyShape::Record {
+            fields: &[
+                (FieldTag::WebViewTitle, &STRING),
+                (FieldTag::WebViewSize, &TUPLE_INT_INT),
+            ],
+            tail: RowTailShape::Closed,
+        };
+        const WEBVIEW_APP_CFG: TyShape = TyShape::Record {
+            fields: &[
+                (FieldTag::AppInit, &UNIT_TO_TUPLE),
+                (FieldTag::AppUpdate, &UPDATE_FN),
+                (FieldTag::AppView, &VIEW_ELEM_FN),
+                (FieldTag::AppSubscriptions, &SUBS_FN),
+                (FieldTag::WebViewWindow, &WEBVIEW_WINDOW),
+            ],
+            tail: RowTailShape::Closed,
+        };
+        // Edge record `{ top, right, bottom, left }` (Ui.paddingEach /
+        // Border.widthEach).
+        const EDGE: TyShape = TyShape::Record {
+            fields: &[
+                (FieldTag::EdgeTop, &INT),
+                (FieldTag::EdgeRight, &INT),
+                (FieldTag::EdgeBottom, &INT),
+                (FieldTag::EdgeLeft, &INT),
+            ],
+            tail: RowTailShape::Closed,
+        };
+        // Shadow record `{ offsetX, offsetY, blur, spread, color }`
+        // (Border.shadow / innerShadow).
+        const SHADOW: TyShape = TyShape::Record {
+            fields: &[
+                (FieldTag::ShadowOffsetX, &INT),
+                (FieldTag::ShadowOffsetY, &INT),
+                (FieldTag::ShadowBlur, &INT),
+                (FieldTag::ShadowSpread, &INT),
+                (FieldTag::ShadowColor, &COLOR),
+            ],
+            tail: RowTailShape::Closed,
+        };
+        // ── Input config records. var(0) = msg. Shared `label` via
+        // `FieldTag::Label`. ──
+        const BOOL_TO_UI_ELEM_A: TyShape = TyShape::Fun(&BOOL, &UI_ELEM_A);
+        // `Input.text` / email / … `{ onChange, text, placeholder, label }`.
+        const INPUT_TEXT_CFG: TyShape = TyShape::Record {
+            fields: &[
+                (FieldTag::Label, &LABEL_A),
+                (FieldTag::InputOnChange, &STRING_TO_A),
+                (FieldTag::InputText, &STRING),
+                (FieldTag::InputPlaceholder, &MAYBE_PLACEHOLDER_A),
+            ],
+            tail: RowTailShape::Closed,
+        };
+        // `Input.multiline` — adds `spellcheck : Bool`.
+        const INPUT_MULTILINE_CFG: TyShape = TyShape::Record {
+            fields: &[
+                (FieldTag::Label, &LABEL_A),
+                (FieldTag::InputOnChange, &STRING_TO_A),
+                (FieldTag::InputText, &STRING),
+                (FieldTag::InputPlaceholder, &MAYBE_PLACEHOLDER_A),
+                (FieldTag::InputSpellcheck, &BOOL),
+            ],
+            tail: RowTailShape::Closed,
+        };
+        // `Input.checkbox` — `{ onChange : Bool -> msg, icon : Bool -> Element
+        // msg, checked, label }`.
+        const INPUT_CHECKBOX_CFG: TyShape = TyShape::Record {
+            fields: &[
+                (FieldTag::Label, &LABEL_A),
+                (FieldTag::InputOnChange, &BOOL_TO_A),
+                (FieldTag::InputChecked, &BOOL),
+                (FieldTag::InputIcon, &BOOL_TO_UI_ELEM_A),
+            ],
+            tail: RowTailShape::Closed,
+        };
+        // `Input.slider` — `{ onChange, value, min, max, step, label }`.
+        const INPUT_SLIDER_CFG: TyShape = TyShape::Record {
+            fields: &[
+                (FieldTag::InputValue, &STRING),
+                (FieldTag::Label, &LABEL_A),
+                (FieldTag::InputOnChange, &STRING_TO_A),
+                (FieldTag::InputMin, &STRING),
+                (FieldTag::InputMax, &STRING),
+                (FieldTag::InputStep, &STRING),
+            ],
+            tail: RowTailShape::Closed,
+        };
+        // `Input.radio` / `radioRow` — `{ onChange, options, selected, label }`.
+        const INPUT_RADIO_CFG: TyShape = TyShape::Record {
+            fields: &[
+                (FieldTag::Label, &LABEL_A),
+                (FieldTag::InputOnChange, &STRING_TO_A),
+                (FieldTag::InputOptions, &LIST_RADIO_OPTION_A),
+                (FieldTag::InputSelected, &STRING),
+            ],
+            tail: RowTailShape::Closed,
+        };
+        // `Ui.link { url : String, label : Element msg }`.
+        const LINK_CFG: TyShape = TyShape::Record {
+            fields: &[(FieldTag::HttpUrl, &STRING), (FieldTag::Label, &UI_ELEM_A)],
+            tail: RowTailShape::Closed,
+        };
+        // `Ui.image { src : String, description : String }`.
+        const IMAGE_CFG: TyShape = TyShape::Record {
+            fields: &[
+                (FieldTag::ImageSrc, &STRING),
+                (FieldTag::ImageDescription, &STRING),
+            ],
+            tail: RowTailShape::Closed,
+        };
+
+        // ── Whole-signature spines over the record nodes. ──
+        // Migration.
+        const DB_DEFAULT_MIGRATION: TyShape = TyShape::Fun(&STRING, &MIGRATION);
+        const LIST_MIGRATION: TyShape = TyShape::Con(BuiltinTag::List, &[MIGRATION]);
+        // `Db.migrate : Db -> List Migration -> Task (List String)`.
+        const LIST_MIGRATION_TO_TASK: TyShape = TyShape::Fun(&LIST_MIGRATION, &TASK_LIST_STRING);
+        const DB_MIGRATE: TyShape = TyShape::Fun(&DB, &LIST_MIGRATION_TO_TASK);
+        // Http.
+        const TASK_HTTP_RESPONSE: TyShape = TyShape::Con(BuiltinTag::Task, &[HTTP_RESPONSE]);
+        const HTTP_GET: TyShape = TyShape::Fun(&STRING, &TASK_HTTP_RESPONSE);
+        const STRING_TO_TASK_HTTP_RESPONSE: TyShape = TyShape::Fun(&STRING, &TASK_HTTP_RESPONSE);
+        const HTTP_POST: TyShape = TyShape::Fun(&STRING, &STRING_TO_TASK_HTTP_RESPONSE);
+        const HTTP_DO_REQUEST: TyShape = TyShape::Fun(&HTTP_REQUEST, &TASK_HTTP_RESPONSE);
+        const RESULT_ERROR_HTTP_REQUEST: TyShape =
+            TyShape::Con(BuiltinTag::Result, &[ERROR, HTTP_REQUEST]);
+        const HTTP_DEFAULT_REQUEST: TyShape = TyShape::Fun(&URL, &RESULT_ERROR_HTTP_REQUEST);
+        const HTTP_DEFAULT_REQUEST_FROM_STRING: TyShape =
+            TyShape::Fun(&STRING, &RESULT_ERROR_HTTP_REQUEST);
+        const HTTP_REQUEST_TO_HTTP_REQUEST: TyShape = TyShape::Fun(&HTTP_REQUEST, &HTTP_REQUEST);
+        const HTTP_WITH_METHOD: TyShape = TyShape::Fun(&HTTP_METHOD, &HTTP_REQUEST_TO_HTTP_REQUEST);
+        const HTTP_WITH_TIMEOUT: TyShape = TyShape::Fun(&INT, &HTTP_REQUEST_TO_HTTP_REQUEST);
+        const HTTP_WITH_MAX_REDIRECTS: TyShape = TyShape::Fun(&INT, &HTTP_REQUEST_TO_HTTP_REQUEST);
+        const HTTP_WITH_BODY: TyShape = TyShape::Fun(&STRING, &HTTP_REQUEST_TO_HTTP_REQUEST);
+        const HTTP_WITH_FOLLOW_REDIRECTS: TyShape =
+            TyShape::Fun(&BOOL, &HTTP_REQUEST_TO_HTTP_REQUEST);
+        const STRING_TO_HTTP_REQUEST_TO_HTTP_REQUEST: TyShape =
+            TyShape::Fun(&STRING, &HTTP_REQUEST_TO_HTTP_REQUEST);
+        const HTTP_WITH_HEADER: TyShape =
+            TyShape::Fun(&STRING, &STRING_TO_HTTP_REQUEST_TO_HTTP_REQUEST);
+        const HTTP_REQUEST_TO_RESULT: TyShape =
+            TyShape::Fun(&HTTP_REQUEST, &RESULT_ERROR_HTTP_REQUEST);
+        const HTTP_WITH_URL: TyShape = TyShape::Fun(&URL, &HTTP_REQUEST_TO_RESULT);
+        // Server.
+        const RESP_HANDLER: TyShape = TyShape::Fun(&SERVER_REQUEST, &TASK_SERVER_RESPONSE);
+        const TASK_SERVER_RESPONSE: TyShape = TyShape::Con(BuiltinTag::Task, &[SERVER_RESPONSE]);
+        const HANDLER_TO_ROUTE: TyShape = TyShape::Fun(&RESP_HANDLER, &SERVER_ROUTE);
+        const SERVER_ROUTE_KERNEL: TyShape = TyShape::Fun(&STRING, &HANDLER_TO_ROUTE);
+        const STRING_TO_RESPONSE: TyShape = TyShape::Fun(&STRING, &SERVER_RESPONSE);
+        const RESPONSE_TO_RESPONSE: TyShape = TyShape::Fun(&SERVER_RESPONSE, &SERVER_RESPONSE);
+        const SERVER_WITH_STATUS: TyShape = TyShape::Fun(&INT, &RESPONSE_TO_RESPONSE);
+        const STRING_TO_RESPONSE_TO_RESPONSE: TyShape =
+            TyShape::Fun(&STRING, &RESPONSE_TO_RESPONSE);
+        const SERVER_WITH_HEADER: TyShape = TyShape::Fun(&STRING, &STRING_TO_RESPONSE_TO_RESPONSE);
+        // Csv.
+        const RESULT_ERROR_CSV: TyShape = TyShape::Con(BuiltinTag::Result, &[ERROR, CSV]);
+        const CSV_PARSE: TyShape = TyShape::Fun(&STRING, &RESULT_ERROR_CSV);
+        const STRING_TO_RESULT_ERROR_CSV: TyShape = TyShape::Fun(&STRING, &RESULT_ERROR_CSV);
+        const CSV_PARSE_WITH_DELIMITER: TyShape =
+            TyShape::Fun(&STRING, &STRING_TO_RESULT_ERROR_CSV);
+        const CSV_ENCODE: TyShape = TyShape::Fun(&CSV, &STRING);
+        const CSV_TO_STRING: TyShape = TyShape::Fun(&CSV, &STRING);
+        const CSV_ENCODE_WITH_DELIMITER: TyShape = TyShape::Fun(&STRING, &CSV_TO_STRING);
+        // Cache.
+        const CACHE_NEW_RAW: TyShape = TyShape::Fun(&CACHE_CFG, &TASK_INT);
+        const TASK_CACHE_STATS: TyShape = TyShape::Con(BuiltinTag::Task, &[CACHE_STATS]);
+        const CACHE_STATS_KERNEL: TyShape = TyShape::Fun(&INT, &TASK_CACHE_STATS);
+        // WebSocket client.
+        const WS_CONNECT_WITH: TyShape = TyShape::Fun(&WS_CLIENT_CFG, &TASK_INT);
+        // Email — `send : EmailProvider -> EmailMessage -> Task String`.
+        const EMAIL_PROVIDER: TyShape = TyShape::Con(BuiltinTag::EmailProvider, &[]);
+        const EMAIL_MESSAGE_TO_TASK: TyShape = TyShape::Fun(&EMAIL_MESSAGE, &TASK_STRING);
+        const EMAIL_SEND: TyShape = TyShape::Fun(&EMAIL_PROVIDER, &EMAIL_MESSAGE_TO_TASK);
+        // RetryPolicy builders.
+        const RETRY_POLICY_TO_RETRY_POLICY: TyShape = TyShape::Fun(&RETRY_POLICY, &RETRY_POLICY);
+        const INT_TO_RETRY_POLICY: TyShape = TyShape::Fun(&INT, &RETRY_POLICY);
+        const TASK_BACKOFF: TyShape = TyShape::Fun(&INT, &INT_TO_RETRY_POLICY);
+        const INT_TO_RETRY_TO_RETRY: TyShape = TyShape::Fun(&INT, &RETRY_POLICY_TO_RETRY_POLICY);
+        const RETRY_ON: TyShape = TyShape::Fun(&A_TO_BOOL, &RETRY_POLICY_TO_RETRY_POLICY);
+        // `retryWith : RetryPolicy Error -> Task e a -> Task e a`. var(0) = a.
+        const RETRY_WITH: TyShape = TyShape::Fun(&RETRY_POLICY_ERROR, &TASK_A_TO_TASK_A);
+        // App-entry whole signatures — `cfg -> Task ()`.
+        const WEB_APP: TyShape = TyShape::Fun(&WEB_APP_CFG, &TASK_UNIT);
+        const TERMINAL_APP_SCREEN: TyShape = TyShape::Fun(&TERMINAL_SCREEN_CFG, &TASK_UNIT);
+        const TERMINAL_APP_LINES: TyShape = TyShape::Fun(&TERMINAL_LINES_CFG, &TASK_UNIT);
+        const WEBVIEW_APP: TyShape = TyShape::Fun(&WEBVIEW_APP_CFG, &TASK_UNIT);
+        // Ui builders taking a record.
+        const LAYOUT_WITH: TyShape = {
+            const HTML_A_INNER: TyShape = TyShape::Con(BuiltinTag::Html, &[A]);
+            const ELEM_TO_HTML: TyShape = TyShape::Fun(&UI_ELEM_A, &HTML_A_INNER);
+            TyShape::Fun(&LAYOUT_WITH_CFG, &ELEM_TO_HTML)
+        };
+        const BUTTON: TyShape = {
+            const CFG_TO_ELEM: TyShape = TyShape::Fun(&BUTTON_CFG, &UI_ELEM_A);
+            TyShape::Fun(&LIST_UI_ATTR_A, &CFG_TO_ELEM)
+        };
+        const PADDING_EACH: TyShape = TyShape::Fun(&EDGE, &UI_ATTR_A);
+        const WIDTH_EACH: TyShape = TyShape::Fun(&EDGE, &UI_ATTR_A);
+        const SHADOW_ATTR: TyShape = TyShape::Fun(&SHADOW, &UI_ATTR_A);
+        const LINK: TyShape = {
+            const CFG_TO_ELEM: TyShape = TyShape::Fun(&LINK_CFG, &UI_ELEM_A);
+            TyShape::Fun(&LIST_UI_ATTR_A, &CFG_TO_ELEM)
+        };
+        const IMAGE: TyShape = {
+            const CFG_TO_ELEM: TyShape = TyShape::Fun(&IMAGE_CFG, &UI_ELEM_A);
+            TyShape::Fun(&LIST_UI_ATTR_A, &CFG_TO_ELEM)
+        };
+        // Input builders — `List (Attribute msg) -> cfg -> Element msg`.
+        const INPUT_TEXT: TyShape = {
+            const CFG_TO_ELEM: TyShape = TyShape::Fun(&INPUT_TEXT_CFG, &UI_ELEM_A);
+            TyShape::Fun(&LIST_UI_ATTR_A, &CFG_TO_ELEM)
+        };
+        const INPUT_MULTILINE: TyShape = {
+            const CFG_TO_ELEM: TyShape = TyShape::Fun(&INPUT_MULTILINE_CFG, &UI_ELEM_A);
+            TyShape::Fun(&LIST_UI_ATTR_A, &CFG_TO_ELEM)
+        };
+        const INPUT_CHECKBOX: TyShape = {
+            const CFG_TO_ELEM: TyShape = TyShape::Fun(&INPUT_CHECKBOX_CFG, &UI_ELEM_A);
+            TyShape::Fun(&LIST_UI_ATTR_A, &CFG_TO_ELEM)
+        };
+        const INPUT_SLIDER: TyShape = {
+            const CFG_TO_ELEM: TyShape = TyShape::Fun(&INPUT_SLIDER_CFG, &UI_ELEM_A);
+            TyShape::Fun(&LIST_UI_ATTR_A, &CFG_TO_ELEM)
+        };
+        const INPUT_RADIO: TyShape = {
+            const CFG_TO_ELEM: TyShape = TyShape::Fun(&INPUT_RADIO_CFG, &UI_ELEM_A);
+            TyShape::Fun(&LIST_UI_ATTR_A, &CFG_TO_ELEM)
+        };
+
         match self {
             // ── Bitwise — Int -> Int -> Int / Int -> Int. ──
             Self::BitwiseAnd
@@ -7466,6 +8135,80 @@ impl StdlibKernel {
 
             // ── Server route-listen (non-record). ──
             Self::ServerListen => Some(&SERVER_LISTEN),
+
+            // ── Record / open-row families. ──
+            // Migration (Db).
+            Self::DbMigrate => Some(&DB_MIGRATE),
+            Self::DbDefaultMigration => Some(&DB_DEFAULT_MIGRATION),
+            // Http request / response.
+            Self::HttpGet => Some(&HTTP_GET),
+            Self::HttpPost => Some(&HTTP_POST),
+            Self::HttpRequest => Some(&HTTP_DO_REQUEST),
+            Self::HttpDefaultRequest => Some(&HTTP_DEFAULT_REQUEST),
+            Self::HttpDefaultRequestFromString => Some(&HTTP_DEFAULT_REQUEST_FROM_STRING),
+            Self::HttpWithMethod => Some(&HTTP_WITH_METHOD),
+            Self::HttpWithTimeout => Some(&HTTP_WITH_TIMEOUT),
+            Self::HttpWithMaxRedirects => Some(&HTTP_WITH_MAX_REDIRECTS),
+            Self::HttpWithBody => Some(&HTTP_WITH_BODY),
+            Self::HttpWithHeader => Some(&HTTP_WITH_HEADER),
+            Self::HttpWithUrl => Some(&HTTP_WITH_URL),
+            Self::HttpWithFollowRedirects => Some(&HTTP_WITH_FOLLOW_REDIRECTS),
+            // Server response (record) kernels.
+            Self::ServerGet
+            | Self::ServerPost
+            | Self::ServerPut
+            | Self::ServerDelete
+            | Self::ServerAny
+            | Self::ServerApi => Some(&SERVER_ROUTE_KERNEL),
+            Self::ServerText | Self::ServerJson | Self::ServerHtml | Self::ServerRedirect => {
+                Some(&STRING_TO_RESPONSE)
+            }
+            Self::ServerWithStatus => Some(&SERVER_WITH_STATUS),
+            Self::ServerWithHeader => Some(&SERVER_WITH_HEADER),
+            // Csv.
+            Self::CsvParse => Some(&CSV_PARSE),
+            Self::CsvParseWithDelimiter => Some(&CSV_PARSE_WITH_DELIMITER),
+            Self::CsvEncode => Some(&CSV_ENCODE),
+            Self::CsvEncodeWithDelimiter => Some(&CSV_ENCODE_WITH_DELIMITER),
+            // Cache.
+            Self::CacheNewRaw => Some(&CACHE_NEW_RAW),
+            Self::CacheStats => Some(&CACHE_STATS_KERNEL),
+            // WebSocket client.
+            Self::WebSocketConnectWith => Some(&WS_CONNECT_WITH),
+            // Email.
+            Self::EmailSend => Some(&EMAIL_SEND),
+            // RetryPolicy.
+            Self::TaskLinearBackoff | Self::TaskExponentialBackoff => Some(&TASK_BACKOFF),
+            Self::TaskWithJitter => Some(&RETRY_POLICY_TO_RETRY_POLICY),
+            Self::TaskRetryOn | Self::TaskWithRetryOn => Some(&RETRY_ON),
+            Self::TaskDefaultRetryPolicy => Some(&RETRY_POLICY),
+            Self::TaskWithMaxAttempts | Self::TaskWithBaseMs | Self::TaskWithKind => {
+                Some(&INT_TO_RETRY_TO_RETRY)
+            }
+            Self::TaskRetryWith => Some(&RETRY_WITH),
+            // App-entry cfg records.
+            Self::WebApp => Some(&WEB_APP),
+            Self::TerminalAppScreen => Some(&TERMINAL_APP_SCREEN),
+            Self::TerminalAppLines => Some(&TERMINAL_APP_LINES),
+            Self::WebViewApp => Some(&WEBVIEW_APP),
+            // Ui / Input / Border record builders.
+            Self::UiLayoutWith => Some(&LAYOUT_WITH),
+            Self::UiButton => Some(&BUTTON),
+            Self::UiPaddingEach => Some(&PADDING_EACH),
+            Self::UiLink => Some(&LINK),
+            Self::UiImage => Some(&IMAGE),
+            Self::BorderWidthEach => Some(&WIDTH_EACH),
+            Self::BorderShadow | Self::BorderInnerShadow => Some(&SHADOW_ATTR),
+            Self::InputText
+            | Self::InputEmail
+            | Self::InputUsername
+            | Self::InputSearch
+            | Self::InputCurrentPassword
+            | Self::InputNewPassword => Some(&INPUT_TEXT),
+            Self::InputMultiline => Some(&INPUT_MULTILINE),
+            Self::InputCheckbox => Some(&INPUT_CHECKBOX),
+            Self::InputSlider => Some(&INPUT_SLIDER),
+            Self::InputRadio | Self::InputRadioRow => Some(&INPUT_RADIO),
 
             _ => None,
         }
