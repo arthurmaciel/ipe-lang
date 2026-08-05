@@ -1,0 +1,329 @@
+module Main exposing (main)
+
+-- Round-trip soundness proof for `Ipe.Codec`: for a representative type
+-- (nested record + Maybe + List + nullary enum + data-carrying union +
+-- Decimal), `fromJson codec (toJson codec x) == Ok x` across a spread of
+-- values. A malformed document decodes to a typed `Err`, never a panic.
+--
+-- The object/enum/union codecs are written inline as one `Codec` value each:
+-- the encoder is an `Encode.object` / tag over the field encoders, the decoder
+-- is a `Pipeline` / `oneOf` chain over the field decoders. `Codec.map` (the
+-- bijection) wraps a `UserId` over `String`.
+
+import Ipe.Io as Io
+import Ipe.Codec as Codec exposing (Codec(..))
+import Ipe.Json.Encode as Encode
+import Ipe.Json.Decode as Decode
+import Ipe.Json.Decode.Pipeline as Pipeline
+import Ipe.Decimal as Dec exposing (Decimal)
+import Ipe.List as List
+import Ipe.String as String
+import Ipe.Maybe exposing (Maybe(..))
+
+
+type UserId
+    = UserId String
+
+
+unwrapUserId : UserId -> String
+unwrapUserId u =
+    case u of
+        UserId s ->
+            s
+
+
+-- `map` is a bijection: `UserId` <-> `String`.
+userIdCodec : Codec UserId
+userIdCodec =
+    Codec.map UserId unwrapUserId Codec.string
+
+
+type Rank
+    = Bronze
+    | Silver
+    | Gold
+
+
+type Payment
+    = Cash
+    | Card String
+
+
+type alias Line =
+    { sku : String, price : Decimal }
+
+
+type alias Cart =
+    { id : UserId
+    , rank : Rank
+    , note : Maybe String
+    , lines : List Line
+    , pay : Payment
+    }
+
+
+-- ── enum: nullary Rank <-> readable TEXT (total; unknown tag is an Err) ──
+encRank : Rank -> Value
+encRank r =
+    Encode.string
+        (case r of
+            Bronze ->
+                "bronze"
+
+            Silver ->
+                "silver"
+
+            Gold ->
+                "gold"
+        )
+
+
+rankDecoder : Decoder Rank
+rankDecoder =
+    Decode.andThen rankFromName Decode.string
+
+
+rankFromName : String -> Decoder Rank
+rankFromName s =
+    if s == "bronze" then
+        Decode.succeed Bronze
+
+    else if s == "silver" then
+        Decode.succeed Silver
+
+    else if s == "gold" then
+        Decode.succeed Gold
+
+    else
+        Decode.fail "Codec: unknown rank tag"
+
+
+-- ── data-carrying union: Payment tagged, both directions in one place ──
+encPayment : Payment -> Value
+encPayment p =
+    case p of
+        Cash ->
+            Encode.object [ ( "tag", Encode.string "Cash" ) ]
+
+        Card n ->
+            Encode.object
+                [ ( "tag", Encode.string "Card" )
+                , ( "pan", Encode.string n )
+                ]
+
+
+paymentDecoder : Decoder Payment
+paymentDecoder =
+    Decode.andThen paymentFromTag (Decode.field "tag" Decode.string)
+
+
+paymentFromTag : String -> Decoder Payment
+paymentFromTag tag =
+    if tag == "Cash" then
+        Decode.succeed Cash
+
+    else if tag == "Card" then
+        Decode.map Card (Decode.field "pan" Decode.string)
+
+    else
+        Decode.fail "Codec: unknown payment tag"
+
+
+-- ── decimal: lossless string-encoded exact decimal (never Float) ──
+encDecimal : Decimal -> Value
+encDecimal d =
+    Encode.string (Dec.toString d)
+
+
+decimalDecoder : Decoder Decimal
+decimalDecoder =
+    Decode.andThen decimalFromString Decode.string
+
+
+decimalFromString : String -> Decoder Decimal
+decimalFromString s =
+    case Dec.fromString s of
+        Ok d ->
+            Decode.succeed d
+
+        Err _ ->
+            Decode.fail "Codec: malformed decimal"
+
+
+-- ── Maybe: null <-> Nothing, value <-> Just ──
+encMaybeStr : Maybe String -> Value
+encMaybeStr m =
+    case m of
+        Just s ->
+            Encode.string s
+
+        Nothing ->
+            Encode.null
+
+
+maybeStrDecoder : Decoder (Maybe String)
+maybeStrDecoder =
+    Decode.oneOf
+        [ Decode.map Just Decode.string
+        , Decode.succeed Nothing
+        ]
+
+
+-- ── List Line ──
+encLine : Line -> Value
+encLine l =
+    Encode.object
+        [ ( "sku", Encode.string l.sku )
+        , ( "price", encDecimal l.price )
+        ]
+
+
+lineDecoder : Decoder Line
+lineDecoder =
+    Decode.map2 (\sku price -> { sku = sku, price = price })
+        (Decode.field "sku" Decode.string)
+        (Decode.field "price" decimalDecoder)
+
+
+-- ── the whole Cart codec: one value, encoder ⟷ decoder over the same fields ──
+cartCodec : Codec Cart
+cartCodec =
+    Codec
+        { enc =
+            \c ->
+                Encode.object
+                    [ ( "id", Codec.toValue userIdCodec c.id )
+                    , ( "rank", encRank c.rank )
+                    , ( "note", encMaybeStr c.note )
+                    , ( "lines", Encode.list encLine c.lines )
+                    , ( "pay", encPayment c.pay )
+                    ]
+        , dec = Decode.decodeString cartDecoder
+        }
+
+
+cartDecoder : Decoder Cart
+cartDecoder =
+    Decode.succeed makeCart
+        |> Pipeline.required "id" (Decode.map UserId Decode.string)
+        |> Pipeline.required "rank" rankDecoder
+        |> Pipeline.required "note" maybeStrDecoder
+        |> Pipeline.required "lines" (Decode.list lineDecoder)
+        |> Pipeline.required "pay" paymentDecoder
+
+
+makeCart : UserId -> Rank -> Maybe String -> List Line -> Payment -> Cart
+makeCart id rank note lines pay =
+    { id = id, rank = rank, note = note, lines = lines, pay = pay }
+
+
+-- ── the round-trip check: encode then decode; assert structural equality ──
+cartEq : Cart -> Cart -> Bool
+cartEq a b =
+    unwrapUserId a.id
+        == unwrapUserId b.id
+        && rankName a.rank
+        == rankName b.rank
+        && noteStr a.note
+        == noteStr b.note
+        && List.length a.lines
+        == List.length b.lines
+        && payStr a.pay
+        == payStr b.pay
+
+
+roundTrips : Cart -> Bool
+roundTrips c =
+    case Codec.fromJson cartCodec (Codec.toJson cartCodec c) of
+        Ok back ->
+            cartEq c back
+
+        Err _ ->
+            False
+
+
+sample1 : Cart
+sample1 =
+    { id = UserId "u-1"
+    , rank = Gold
+    , note = Just "gift"
+    , lines =
+        [ { sku = "A1", price = Dec.fromInt 1099 }
+        , { sku = "B2", price = Dec.fromInt 250 }
+        ]
+    , pay = Card "4242"
+    }
+
+
+sample2 : Cart
+sample2 =
+    { id = UserId "u-2"
+    , rank = Bronze
+    , note = Nothing
+    , lines = []
+    , pay = Cash
+    }
+
+
+main =
+    let
+        allRoundTrip =
+            roundTrips sample1 && roundTrips sample2
+
+        -- Negative: malformed JSON must be a typed Err, never a panic.
+        malformed =
+            case Codec.fromJson cartCodec "{not json" of
+                Ok _ ->
+                    False
+
+                Err _ ->
+                    True
+
+        -- fromJsonSafe rejects oversize input before decoding.
+        oversizeRejected =
+            case Codec.fromJsonSafe 4 Codec.string "\"a really long string\"" of
+                Ok _ ->
+                    False
+
+                Err _ ->
+                    True
+    in
+    if allRoundTrip && malformed && oversizeRejected then
+        Io.println "codec-roundtrip-ok"
+
+    else
+        Io.println "codec-roundtrip-FAIL"
+
+
+-- helpers to compare unions structurally
+rankName : Rank -> String
+rankName r =
+    case r of
+        Bronze ->
+            "bronze"
+
+        Silver ->
+            "silver"
+
+        Gold ->
+            "gold"
+
+
+noteStr : Maybe String -> String
+noteStr m =
+    case m of
+        Just s ->
+            s
+
+        Nothing ->
+            "<none>"
+
+
+payStr : Payment -> String
+payStr p =
+    case p of
+        Cash ->
+            "cash"
+
+        Card n ->
+            "card:" ++ n

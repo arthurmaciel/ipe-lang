@@ -441,6 +441,18 @@ const STD_UI_TRANSFORM: &str = include_str!("../Ipe/Ui/Transform.ipe");
 /// Unblocks `26-ui-showcase` (IPE-N0004: Ipe.Ui.Animation — Animation.attribute).
 const STD_UI_ANIMATION: &str = include_str!("../Ipe/Ui/Animation.ipe");
 
+/// `Ipe.Codec` — one invariant codec that drives the JSON direction.
+///
+/// Pure Ipê source: defines the `Codec a` nominal union (an encoder plus a
+/// decode-runner, both stored on the clonable shared-function carrier) and the
+/// `map` bijection over the existing `Ipe.Json.Encode` / `Ipe.Json.Decode`
+/// kernels — no new kernel, no `Ffi.kernel` call. The decode side is stored as
+/// `String -> Result Error a` (a runner) rather than a bare `Decoder a` because
+/// the runtime JSON decoder is a single-shot non-clonable carrier that cannot be
+/// held in a reusable value. Not in `STDLIB_MODULE_QUALIFIERS` so the
+/// disjointness invariant holds.
+const STD_CODEC: &str = include_str!("../Ipe/Codec.ipe");
+
 /// `Ipe.Money` — currency-typed Money on `Ipe.Decimal` + ISO 4217 enum.
 ///
 /// Compiled pure-Ipê source: defines the `Money` / `Currency` ADTs and
@@ -641,6 +653,10 @@ pub const COMPILED_STD_MODULES: &[CompiledStdModule] = &[
     CompiledStdModule {
         dotted: "Ipe.Ui.Animation",
         source: STD_UI_ANIMATION,
+    },
+    CompiledStdModule {
+        dotted: "Ipe.Codec",
+        source: STD_CODEC,
     },
     CompiledStdModule {
         dotted: "Ipe.Money",
