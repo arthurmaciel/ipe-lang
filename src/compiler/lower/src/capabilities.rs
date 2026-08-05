@@ -112,6 +112,22 @@ mod tests {
         );
     }
 
+    /// A REAL relocated member's home: importing the shipped `Ipe.Web.Head.Unsafe`
+    /// submodule — the verbatim JSON-LD `<script>` hatch relocated out of
+    /// `Ipe.Web.Head` — discloses `unsafe`. Proves the disclosure fires for the
+    /// raw-script boundary specifically.
+    #[test]
+    fn importing_ipe_web_head_unsafe_discloses_unsafe() {
+        let caps = caps_of(
+            "module Main exposing (main)\nimport Ipe.Io\nimport Ipe.Web.Head.Unsafe\nmain : Task ()\nmain =\n    Io.println \"hi\"\n",
+        );
+        assert!(
+            caps.as_ref()
+                .is_some_and(|c| c.contains(&Capability::Unsafe)),
+            "a program importing `Ipe.Web.Head.Unsafe` must disclose the `unsafe` capability, got {caps:?}"
+        );
+    }
+
     /// The other half of the partition: a program that imports NO `.Unsafe`
     /// submodule discloses nothing on the `unsafe` axis. Guards against the scan
     /// firing `unsafe` unconditionally — the default path must be untouched.

@@ -3413,6 +3413,45 @@ mod tests {
         );
     }
 
+    /// A four-segment `Ipe.Web.Head.Unsafe` submodule — the JSON-LD hatch home —
+    /// resolves under the same reserved-namespace exemption when the driver tags
+    /// it `EmbeddedStdlib`. The gate keys on the FIRST segment (`Ipe`), so the
+    /// extra depth versus `Ipe.Db.Unsafe` changes nothing.
+    const WEB_HEAD_UNSAFE_SRC: &str = "module Ipe.Web.Head.Unsafe exposing (marker)\n\
+         marker : String\n\
+         marker =\n    \"x\"\n";
+
+    #[test]
+    fn embedded_stdlib_origin_hosts_a_dotted_web_head_unsafe_submodule() {
+        let res = canon_with_origin(WEB_HEAD_UNSAFE_SRC, ModuleOrigin::EmbeddedStdlib);
+        assert!(
+            res.is_ok(),
+            "EmbeddedStdlib `Ipe.Web.Head.Unsafe` must canonicalise via the reserved-namespace exemption: {:?}",
+            res.err()
+        );
+    }
+
+    #[test]
+    fn user_origin_ipe_web_head_unsafe_submodule_is_reserved_namespace() {
+        // SECURITY: a hostile user file literally named `Ipe.Web.Head.Unsafe`
+        // cannot squat the JSON-LD escape-hatch home — it reaches canon as `User`
+        // origin and stays N0025-rejected. Trust is the driver's tag, never the
+        // name, so a program cannot forge the `.Unsafe` home to disclose (or hide)
+        // `unsafe`.
+        let err = canon_with_origin(WEB_HEAD_UNSAFE_SRC, ModuleOrigin::User)
+            .expect_err("user `Ipe.Web.Head.Unsafe` must be rejected");
+        assert!(
+            matches!(
+                &err,
+                Diagnostic::Name {
+                    msg: NameError::ReservedNamespace { .. },
+                    ..
+                }
+            ),
+            "hostile user `Ipe.Web.Head.Unsafe` must be IPE-N0025, got {err:?}"
+        );
+    }
+
     #[test]
     fn embedded_stdlib_unannotated_binding_fails_closed() {
         // The fail-closed annotation gate: an EmbeddedStdlib module with an
