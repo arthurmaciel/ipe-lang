@@ -1,4 +1,4 @@
-module Lib.Index exposing (Unit, loadPending)
+module Lib.Index exposing (Unit, drainUnit, loadPending)
 
 import Ipe.Db
 import Ipe.Db.Decode
@@ -150,15 +150,13 @@ partBDecoder =
         |> Db.Decode.required "updated_sha" (Db.Decode.string "updated_sha")
 
 
--- The ipe-index sqlite database, opened read-only. A `sqlite://` URL with an
+-- Read URL for the ipe-index sqlite database. A `sqlite://` URL with an
 -- explicit `mode=ro` query is passed through verbatim by the runtime, so the
--- index DB is never created or modified. IPE_INDEX_DB overrides the default.
-indexDbUrl : String
-indexDbUrl =
-    let
-        raw =
-            System.getenvOr "IPE_INDEX_DB" ".ipe-index/index.db"
-    in
+-- index DB is never created or modified. This is a function of the env value
+-- (not a cached top-level value): loadPending runs against different
+-- IPE_INDEX_DB settings within one process (tests).
+indexDbUrlFor : String -> String
+indexDbUrlFor raw =
     if String.contains "://" raw then
         if String.contains "?" raw then
             raw
@@ -168,6 +166,19 @@ indexDbUrl =
 
     else
         "sqlite://" ++ raw ++ "?mode=ro"
+
+
+-- The same database opened read-write, for the drain step. `mode=ro` (either
+-- explicit or implied by the pass-through branch above) is rewritten so the
+-- consumed queue row can be deleted; a URL with no mode already defaults to
+-- read-write in SQLite.
+indexDbWriteUrlFor : String -> String
+indexDbWriteUrlFor raw =
+    if String.contains "://" raw then
+        String.replace "mode=ro" "mode=rwc" raw
+
+    else
+        "sqlite://" ++ raw ++ "?mode=rwc"
 
 
 pendingSql : String
@@ -184,12 +195,26 @@ loadPending =
         |> Task.map (\cwd -> System.getenvOr "IPE_INDEX_ROOT" cwd)
         |> Task.andThen
             (\root ->
-                Db.open "sqlite" indexDbUrl
+                Db.open "sqlite" (indexDbUrlFor (System.getenvOr "IPE_INDEX_DB" ".ipe-index/index.db"))
                     |> Task.andThen
                         (\conn ->
                             Db.queryDecode conn pendingSql [] rowDecoder
                                 |> Task.andThen (loadSources root)
                         )
+            )
+
+
+-- The review app consumes and clears explicitly: after a unit is decided,
+-- its change_queue row is deleted so it stops appearing in loadPending. The
+-- row comes back only when the index re-queues the unit after it changes
+-- again (per-uid PRIMARY KEY in change_queue — a fresh change, a fresh
+-- review).
+drainUnit : String -> Task.Task Error Int
+drainUnit uid =
+    Db.open "sqlite" (indexDbWriteUrlFor (System.getenvOr "IPE_INDEX_DB" ".ipe-index/index.db"))
+        |> Task.andThen
+            (\conn ->
+                Db.exec conn "DELETE FROM change_queue WHERE uid = ?" [ SqlString uid ]
             )
 
 

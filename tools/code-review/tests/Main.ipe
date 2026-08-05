@@ -410,6 +410,8 @@ cleanupIndex : String -> String -> Task.Task Error ()
 cleanupIndex indexDb repo =
     Task.sequence
         [ removeFileIfAny indexDb
+        , removeFileIfAny (indexDb ++ "-wal")
+        , removeFileIfAny (indexDb ++ "-shm")
         , removeFileIfAny (repo ++ "/src/Lib.rs")
         , removeFileIfAny (repo ++ "/src/Main.ipe")
         ]
@@ -483,6 +485,123 @@ seedTraversalDb base =
         |> Task.map (\_ -> ())
 
 
+-- ── B5: decision drain loop ─────────────────────────────────────────────────
+--
+-- A decided unit leaves the index queue: recordDrain writes the drain cursor
+-- (idempotent on the same pair), drainUnit deletes the consumed change_queue
+-- row, and a subsequent loadPending no longer lists the unit.
+drainFlow : Task.Task Error Bool
+drainFlow =
+    let
+        base =
+            System.getenvOr "TMPDIR" "/tmp" ++ "/ipe-index-b5-drain"
+
+        repo =
+            base ++ "/repo"
+
+        indexDb =
+            base ++ "/index.db"
+
+        reviewDb =
+            base ++ "/review.db"
+    in
+    Task.fromResult (Path.fromString indexDb)
+        |> Task.andThen File.remove
+        |> Task.onError (\_ -> Task.succeed ())
+        |> Task.andThen (\_ -> Task.fromResult (Path.fromString base) |> Task.andThen File.mkdirAll)
+        |> Task.andThen (\_ -> Task.fromResult (Path.fromString (repo ++ "/src")) |> Task.andThen File.mkdirAll)
+        |> Task.andThen (\_ -> writeFileText (repo ++ "/src/D.ipe") fixtureMainIpe)
+        |> Task.andThen (\_ -> seedDrainDb indexDb)
+        |> Task.andThen (\_ -> System.setenv "IPE_INDEX_DB" indexDb)
+        |> Task.andThen (\_ -> System.setenv "IPE_INDEX_ROOT" repo)
+        |> Task.andThen (\_ -> Index.loadPending)
+        |> Task.map (\units -> List.length units == 1)
+        |> Task.andThen
+            (\queued ->
+                if not queued then
+                    Task.succeed False
+
+                else
+                    LibDb.openAt reviewDb
+                        |> Task.andThen (\db -> LibDb.migrate db |> Task.map (\_ -> db))
+                        |> Task.andThen
+                            (\db ->
+                                LibDb.recordDrain db "u-d" "hashD"
+                                    |> Task.andThen (\_ -> LibDb.recordDrain db "u-d" "hashD")
+                                    |> Task.andThen (\_ -> countDrainRows db "u-d" "hashD")
+                                    |> Task.map (\n -> n == 1)
+                            )
+            )
+        |> Task.andThen
+            (\drained ->
+                if not drained then
+                    Task.succeed False
+
+                else
+                    Index.drainUnit "u-d"
+                        |> Task.andThen (\_ -> Index.loadPending)
+                        |> Task.map (\units -> List.length units == 0)
+            )
+        |> Task.andThen
+            (\ok ->
+                Task.sequence
+                    [ removeFileIfAny indexDb
+                    , removeFileIfAny (indexDb ++ "-wal")
+                    , removeFileIfAny (indexDb ++ "-shm")
+                    , removeFileIfAny (repo ++ "/src/D.ipe")
+                    , removeFileIfAny reviewDb
+                    , removeFileIfAny (reviewDb ++ "-wal")
+                    , removeFileIfAny (reviewDb ++ "-shm")
+                    ]
+                    |> Task.map (\_ -> ok)
+            )
+
+
+countDrainRows : Db -> String -> String -> Task.Task Error Int
+countDrainRows db uid bodyHash =
+    Db.findWhere db
+        "drain_cursor"
+        (Sql.and
+            (Sql.eq (Sql.column "uid") (Sql.string uid))
+            (Sql.eq (Sql.column "body_hash") (Sql.string bodyHash))
+        )
+        |> Task.map List.length
+
+
+seedDrainDb : String -> Task.Task Error ()
+seedDrainDb indexDb =
+    Db.open "sqlite" ("sqlite://" ++ indexDb ++ "?mode=rwc")
+        |> Task.andThen
+            (\conn ->
+                Db.exec conn unitsDdl []
+                    |> Task.andThen (\_ -> Db.exec conn queueDdl [])
+                    |> Task.andThen
+                        (\_ ->
+                            Db.exec conn
+                                "INSERT INTO units VALUES (?,?,?,?,?,?,?,?,?,?,?)"
+                                [ SqlString "u-d"
+                                , SqlString "ipe:src/D.ipe"
+                                , SqlString "module"
+                                , SqlString "D"
+                                , SqlString "D"
+                                , SqlInt 1
+                                , SqlInt 2
+                                , SqlString "user"
+                                , SqlNull (SqlString "")
+                                , SqlString "hashD"
+                                , SqlString "shaD"
+                                ]
+                        )
+                    |> Task.andThen
+                        (\_ ->
+                            Db.exec conn
+                                "INSERT INTO change_queue VALUES (?,?,?,?,?,?)"
+                                [ SqlString "u-d", SqlString "new", SqlNull (SqlString ""), SqlNull (SqlString ""), SqlString "shaD", SqlInt 1 ]
+                        )
+            )
+        |> Task.map (\_ -> ())
+
+
 report : List ( String, Bool ) -> String
 report results =
     List.map
@@ -533,6 +652,11 @@ main =
             (\results ->
                 traversalPathsRejected
                     |> Task.map (\ok -> results ++ [ ( "traversal paths rejected", ok ) ])
+            )
+        |> Task.andThen
+            (\results ->
+                drainFlow
+                    |> Task.map (\ok -> results ++ [ ( "decided unit drained from queue", ok ) ])
             )
         |> Task.andThen
             (\results ->

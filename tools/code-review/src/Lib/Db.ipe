@@ -1,4 +1,4 @@
-module Lib.Db exposing (Decision(..), decidedCount, findDecision, insertDecision, migrate, open, openAt)
+module Lib.Db exposing (Decision(..), decidedCount, findDecision, insertDecision, migrate, open, openAt, recordDrain)
 
 import Ipe.Db as Db
 import Ipe.Db.Sql as Sql
@@ -158,3 +158,18 @@ decidedCount decisions =
         )
         0
         decisions
+
+
+-- Bookkeeping for the drain loop: the (uid, body_hash) pair the review app
+-- has consumed from the index queue, and when. Re-draining the same pair is
+-- a no-op (INSERT OR REPLACE), so a re-queued unit that gets reviewed twice
+-- keeps a single cursor row.
+recordDrain : Db -> String -> String -> Task.Task Error Int
+recordDrain db uid bodyHash =
+    Time.unixMillis ()
+        |> Task.andThen
+            (\now ->
+                Db.exec db
+                    "INSERT OR REPLACE INTO drain_cursor VALUES (?, ?, ?)"
+                    [ SqlString uid, SqlString bodyHash, SqlTime now ]
+            )

@@ -63,7 +63,6 @@ type Msg
     | RefuseCancel
     | RefuseSubmit String
     | DecisionSaved String (Result Error Int)
-    | DecisionFound String (Result Error (Maybe LibDb.Decision))
 
 
 update : Msg -> Model -> ( Model, Cmd Msg )
@@ -111,18 +110,10 @@ update msg model =
         DecisionSaved uid result ->
             case result of
                 Ok _ ->
-                    ( model, refindDecision model uid )
+                    ( model, drainAndReload model uid )
 
                 Err e ->
                     ( { model | queueError = Just ("Decision save failed: " ++ Error.toString e) }, Cmd.none )
-
-        DecisionFound uid result ->
-            case result of
-                Ok d ->
-                    ( { model | decisions = Dict.insert uid d model.decisions }, Cmd.none )
-
-                Err e ->
-                    ( { model | queueError = Just ("Decision lookup failed: " ++ Error.toString e) }, Cmd.none )
 
 
 saveDecision : Model -> String -> LibDb.Decision -> Cmd Msg
@@ -142,21 +133,27 @@ saveDecision model uid decision =
         (DecisionSaved uid)
 
 
-refindDecision : Model -> String -> Cmd Msg
-refindDecision model uid =
-    Cmd.perform
-        (reviewDb
-            |> Task.andThen
-                (\db ->
-                    case bodyHashOf uid model.queue of
-                        Just bodyHash ->
-                            LibDb.findDecision db uid bodyHash
+-- The drain loop: the decision is already saved (DecisionSaved Ok), so the
+-- consumed queue entry leaves the index queue and the drain cursor records
+-- the hand-off. A failure anywhere fails closed with the queue unchanged —
+-- the unit stays visible with its badge and the next click retries.
+drainAndReload : Model -> String -> Cmd Msg
+drainAndReload model uid =
+    case bodyHashOf uid model.queue of
+        Nothing ->
+            Cmd.none
 
-                        Nothing ->
-                            Task.fail (Error.unexpected "unit is no longer in the queue")
+        Just bodyHash ->
+            Cmd.perform
+                (reviewDb
+                    |> Task.andThen
+                        (\db ->
+                            LibDb.recordDrain db uid bodyHash
+                                |> Task.andThen (\_ -> Index.drainUnit uid)
+                                |> Task.andThen (\_ -> Index.loadPending)
+                        )
                 )
-        )
-        (DecisionFound uid)
+                PendingLoaded
 
 
 loadDecisions : List Index.Unit -> Task Error (List ( String, Maybe LibDb.Decision ))
