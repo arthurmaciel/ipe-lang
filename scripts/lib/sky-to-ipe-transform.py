@@ -401,27 +401,32 @@ def apply_member_moves(text: str) -> str:
     return text
 
 
-# ── Stdlib Db raw-surface marking (Std.Db aliased member -> unsafe*) ───────────
+# ── Stdlib Db raw-surface marking (Std.Db aliased member -> Ipe.Db.Unsafe.*) ───
 # rename-map.tsv marks the raw-SQL / stringly-row-read surface only in its
-# FULLY-QUALIFIED form (`Std.Db.query` -> `Ipe.Db.unsafeQuery`, …). The common
-# aliased form — `import Std.Db as Db` then `Db.query` — is a bare member on an
-# alias, which the qualifier-prefix rewrite never sees, so those call sites would
-# resolve to a non-existent `Db.query` (IPE-N0005). This pass marks them too.
+# FULLY-QUALIFIED form (`Std.Db.query` -> `Ipe.Db.Unsafe.unsafeQuery`, …). The
+# common aliased form — `import Std.Db as Db` then `Db.query` — is a bare member
+# on an alias, which the qualifier-prefix rewrite never sees, so those call sites
+# would resolve to a non-existent `Db.query` (IPE-N0005). This pass marks them.
+#
+# After the #679 relocation the unsafe members live in `Ipe.Db.Unsafe`, not
+# `Ipe.Db`. A file that uses BOTH safe (`Db.exec`) and unsafe (`Db.query`) stdlib
+# Db members needs TWO imports: the original `import Std.Db as <A>` (which the
+# prefix rename turns into `import Ipe.Db as <A>`) for the safe surface, and a
+# new `import Ipe.Db.Unsafe as <A>Unsafe` for the relocated members. Call sites
+# are requalified: `<A>.query` → `<A>Unsafe.unsafeQuery`, etc.
 #
 # SECURITY (load-bearing): the rewrite is scoped to the alias bound by the
 # STDLIB `import Std.Db as <Alias>` in THIS file, and to that alias only. A
 # project-LOCAL Db module (`import Lib.Db as Db`, `import <Project>.Db as Db`)
 # defines its OWN `query`/`getField`/… with its own contract; marking those
 # `unsafe*` would mis-attribute the SQL-injection surface (a Security-principle
-# regression), so a local Db alias is never touched. Resolution is per file: a
-# file that only imports the local Db is left alone even when its alias is the
-# literal `Db`, and a file that imports the stdlib Db (e.g. the local wrapper
-# module `Lib/Db.ipe` itself, which does `import Std.Db as Db`) has ITS stdlib
-# alias marked. Runs BEFORE the prefix rename, while the qualifier is `Std.Db`.
+# regression), so a local Db alias is never touched. Runs BEFORE the prefix
+# rename, while the qualifier is `Std.Db`.
 #
 # member -> marked member name (typed `queryDecode` + Decode.* path stays
 # unmarked; only the raw/stringly surface is marked).
 _DB_MODULE = "Std.Db"
+_DB_UNSAFE_MODULE = "Ipe.Db.Unsafe"
 _DB_UNSAFE_MEMBERS: dict[str, str] = {
     "execRaw": "unsafeExecRaw",
     "query": "unsafeQuery",
@@ -453,20 +458,21 @@ def _stdlib_db_alias(text: str) -> str | None:
 
 
 def mark_stdlib_db(text: str) -> str:
-    """Mark aliased stdlib-Db raw/stringly members: `<A>.query` -> `<A>.unsafeQuery`.
+    """Mark aliased stdlib-Db raw members: `<A>.query` -> `<A>Unsafe.unsafeQuery`.
 
-    `<A>` is the alias bound by `import Std.Db as <A>` in this file (see
-    `_stdlib_db_alias`); no rewrite happens when the file does not import the
-    stdlib Db under an alias, so a local `import Lib.Db as Db` is left untouched.
-    Only the members in `_DB_UNSAFE_MEMBERS` are marked — `queryDecode` and the
-    typed surface stay as-is. A right boundary keeps `<A>.query` from matching
-    inside `<A>.queryDecode` and keeps a member from being the head of a longer
-    identifier. Call-site rewrites go through walk_code so strings and comments
-    stay verbatim.
+    Detects `import Std.Db as <A>`, rewrites unsafe call sites to `<A>Unsafe.*`,
+    and injects `import Ipe.Db.Unsafe as <A>Unsafe` after the original import
+    line. The original `import Std.Db as <A>` is kept so the prefix rename turns
+    it into `import Ipe.Db as <A>` for the safe surface (`exec`, `queryDecode`,
+    …). Only the members in `_DB_UNSAFE_MEMBERS` are requalified — `queryDecode`
+    and the typed surface stay on the `<A>` alias. A right boundary prevents
+    `<A>.query` from matching inside `<A>.queryDecode`. Call-site rewrites go
+    through walk_code so strings and comments stay verbatim.
     """
     alias = _stdlib_db_alias(text)
     if alias is None:
         return text
+    unsafe_alias = alias + "Unsafe"
     prefix = alias + "."
 
     def on_code(seg: str) -> str:
@@ -483,7 +489,7 @@ def mark_stdlib_db(text: str) -> str:
                     if seg.startswith(prefix + member, i) and not (
                         right.isalnum() or right in ("_", ".")
                     ):
-                        out.append(prefix + marked)
+                        out.append(unsafe_alias + "." + marked)
                         i = end
                         matched = True
                         break
@@ -492,7 +498,26 @@ def mark_stdlib_db(text: str) -> str:
                 i += 1
         return "".join(out)
 
-    return walk_code(text, on_code)
+    text = walk_code(text, on_code)
+
+    # Inject `import Ipe.Db.Unsafe as <A>Unsafe` directly after the `import
+    # Std.Db as <A>` line so the prefix rename sees the original line and the
+    # new import is already in place. Only inject when the alias has at least
+    # one unsafe call site (walk_code above already rewrote them, so check the
+    # rewritten text for the unsafe alias).
+    unsafe_prefix = unsafe_alias + "."
+    if unsafe_prefix in text:
+        new_import = f"import {_DB_UNSAFE_MODULE} as {unsafe_alias}"
+        out_lines: list[str] = []
+        for line in text.split("\n"):
+            out_lines.append(line)
+            stripped = line.lstrip()
+            if stripped.startswith("import ") and _import_module(stripped) == _DB_MODULE:
+                indent = line[: len(line) - len(stripped)]
+                out_lines.append(f"{indent}{new_import}")
+        text = "\n".join(out_lines)
+
+    return text
 
 
 def desugar_pure(text: str) -> str:
@@ -725,9 +750,96 @@ def prefix_bare_imports(text: str, bare: frozenset[str]) -> str:
     return "\n".join(out_lines)
 
 
+# ── Unsafe modules whose import discloses the `unsafe` capability ─────────────
+# Any Ipê source file that imports one of these modules causes the whole program
+# to require `unsafe` in its manifest `[capabilities] declared` list. The set is
+# checked AFTER the full per-file transform (when the imports are already in Ipê
+# form), so the strings here use the post-rename Ipê module paths.
+_UNSAFE_IMPORT_MODULES: frozenset[str] = frozenset({
+    "Ipe.Db.Unsafe",
+    "Ipe.Html.Unsafe",
+    "Ipe.Web.Head.Unsafe",
+    "Ipe.Secret.Unsafe",
+})
+
+
+def _needs_unsafe_capability(texts: list[str]) -> bool:
+    """True if any transformed source file imports an unsafe-disclosing module."""
+    for text in texts:
+        for line in text.split("\n"):
+            stripped = line.lstrip()
+            if stripped.startswith("import ") and _import_module(stripped) in _UNSAFE_IMPORT_MODULES:
+                return True
+    return False
+
+
+def _inject_unsafe_capability(manifest_path: str) -> None:
+    """Add `unsafe` to the `[capabilities] declared` list in ipe.toml if absent.
+
+    Reads the manifest, finds or creates the `[capabilities]` section, and
+    ensures `"unsafe"` is in the `declared` list. A manifest that already
+    declares `unsafe` is left byte-identical. Non-fatal: a missing or
+    unparseable manifest is silently skipped (the capability gate in `ipe check`
+    will surface the omission at build time).
+    """
+    import os
+    import re as _re
+    if not os.path.isfile(manifest_path):
+        return
+    try:
+        with open(manifest_path, encoding="utf-8") as fh:
+            content = fh.read()
+    except OSError:
+        return
+
+    # Already declares unsafe — nothing to do.
+    if '"unsafe"' in content or "'unsafe'" in content:
+        return
+
+    # Find an existing `declared = [...]` line inside a `[capabilities]` section.
+    # We support single-line arrays only (the format used by the transform output
+    # and the fixture corpus). A multi-line array is left untouched; `ipe check`
+    # will surface the missing capability at build time.
+    cap_section = _re.search(r'^\[capabilities\]', content, flags=_re.MULTILINE)
+    declared_line = _re.search(
+        r'^(\s*declared\s*=\s*\[)([^\]]*?)(\])',
+        content,
+        flags=_re.MULTILINE,
+    )
+
+    if declared_line is not None:
+        # Append `"unsafe"` to the existing declared list.
+        before = content[: declared_line.start(2)]
+        inner = declared_line.group(2).strip()
+        after = content[declared_line.end(2) :]
+        sep = ", " if inner else ""
+        new_inner = f'{inner}{sep}"unsafe"'
+        content = before + new_inner + after
+    elif cap_section is not None:
+        # `[capabilities]` section exists but no `declared` line — add one.
+        insert_at = cap_section.end()
+        # Skip to end of the section header line.
+        nl = content.find("\n", insert_at)
+        if nl == -1:
+            nl = len(content)
+        content = content[: nl + 1] + 'declared = ["unsafe"]\n' + content[nl + 1 :]
+    else:
+        # No `[capabilities]` section at all — append one.
+        if not content.endswith("\n"):
+            content += "\n"
+        content += '\n[capabilities]\ndeclared = ["unsafe"]\n'
+
+    try:
+        with open(manifest_path, "w", encoding="utf-8") as fh:
+            fh.write(content)
+    except OSError:
+        pass
+
+
 def main(argv: list[str]) -> int:
     args = argv[1:]
     bare: frozenset[str] = frozenset()
+    manifest: str | None = None
     rest: list[str] = []
     i = 0
     while i < len(args):
@@ -735,12 +847,16 @@ def main(argv: list[str]) -> int:
             bare = frozenset(n for n in args[i + 1].split(",") if n)
             i += 2
             continue
+        if args[i] == "--manifest" and i + 1 < len(args):
+            manifest = args[i + 1]
+            i += 2
+            continue
         rest.append(args[i])
         i += 1
     if len(rest) < 2:
         sys.stderr.write(
             "usage: sky-to-ipe-transform.py [--bare-stdlib N1,N2] "
-            "<rename-map.tsv> <file> [<file> ...]\n"
+            "[--manifest ipe.toml] <rename-map.tsv> <file> [<file> ...]\n"
         )
         return 2
     pairs = load_map(rest[0])
@@ -775,6 +891,13 @@ def main(argv: list[str]) -> int:
         if transformed[path] != originals[path]:
             with open(path, "w", encoding="utf-8") as fh:
                 fh.write(transformed[path])
+
+    # Phase 3 — manifest unsafe-capability injection. When any source file now
+    # imports an unsafe-disclosing module, add `"unsafe"` to the manifest's
+    # `[capabilities] declared` list so `ipe check` can gate on it.
+    if manifest is not None and _needs_unsafe_capability(list(transformed.values())):
+        _inject_unsafe_capability(manifest)
+
     return 0
 
 

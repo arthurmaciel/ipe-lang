@@ -199,8 +199,12 @@ sky_transform_one() {
   [ -n "$bare" ] && bareflag=(--bare-stdlib "$bare")
 
   # Step 1 — the shared token rewrite (code-only; strings/comments preserved).
+  # Pass --manifest so the transform can inject the `unsafe` capability into the
+  # project manifest when any source file imports an unsafe-disclosing module.
+  local manifest_flag=()
+  [ -f "$ipe/ipe.toml" ] && manifest_flag=(--manifest "$ipe/ipe.toml")
   find "$ipe" -type f -name '*.ipe' -print0 2>/dev/null \
-    | xargs -0 -r python3 "$SKY_TRANSFORM" "${bareflag[@]}" "$SKY_RENAME_MAP"
+    | xargs -0 -r python3 "$SKY_TRANSFORM" "${bareflag[@]}" "${manifest_flag[@]}" "$SKY_RENAME_MAP"
 
   # Step 2 — the optional per-example content-anchored edits. An edit whose
   # `find` text no longer occurs (upstream genuinely changed the target) fails
