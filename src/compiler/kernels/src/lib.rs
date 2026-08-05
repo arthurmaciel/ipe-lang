@@ -7121,6 +7121,38 @@ impl StdlibKernel {
         const STRING_TO_RESPONSE_TO_RESPONSE: TyShape =
             TyShape::Fun(&STRING, &RESPONSE_TO_RESPONSE);
         const SERVER_WITH_HEADER: TyShape = TyShape::Fun(&STRING, &STRING_TO_RESPONSE_TO_RESPONSE);
+        // Server withCookie : Cookie -> Response -> Response.
+        const SERVER_WITH_COOKIE: TyShape = TyShape::Fun(&SERVER_COOKIE, &RESPONSE_TO_RESPONSE);
+        // Middleware — every wrapper is a `Handler -> Handler` transform over the
+        // response handler `Request -> Task Response`, some behind leading config
+        // arguments. `Handler` reuses the `RESP_HANDLER` spine.
+        const MIDDLEWARE_TRANSFORM: TyShape = TyShape::Fun(&RESP_HANDLER, &RESP_HANDLER);
+        // withCors : List String -> Handler -> Handler.
+        const MIDDLEWARE_WITH_CORS: TyShape = TyShape::Fun(&LIST_STRING, &MIDDLEWARE_TRANSFORM);
+        // withBasicAuth : String -> String -> Handler -> Handler.
+        const STRING_TO_MIDDLEWARE_TRANSFORM: TyShape =
+            TyShape::Fun(&STRING, &MIDDLEWARE_TRANSFORM);
+        const MIDDLEWARE_WITH_BASIC_AUTH: TyShape =
+            TyShape::Fun(&STRING, &STRING_TO_MIDDLEWARE_TRANSFORM);
+        // withRateLimit : String -> Int -> Int -> Handler -> Handler.
+        const INT_TO_MIDDLEWARE_TRANSFORM: TyShape = TyShape::Fun(&INT, &MIDDLEWARE_TRANSFORM);
+        const INT_TO_INT_TO_MIDDLEWARE_TRANSFORM: TyShape =
+            TyShape::Fun(&INT, &INT_TO_MIDDLEWARE_TRANSFORM);
+        const MIDDLEWARE_WITH_RATE_LIMIT: TyShape =
+            TyShape::Fun(&STRING, &INT_TO_INT_TO_MIDDLEWARE_TRANSFORM);
+        // Stream.stream : String -> (StreamWriter -> Task ()) -> Task Response.
+        const STREAM_STREAM: TyShape = TyShape::Fun(
+            &STRING,
+            &TyShape::Fun(&SW_TO_TASK_UNIT, &TASK_SERVER_RESPONSE),
+        );
+        // HttpStream.open : HttpRequest -> Task StreamId.
+        const TASK_STREAM_ID: TyShape = TyShape::Con(BuiltinTag::Task, &[STREAM_ID]);
+        const HTTP_STREAM_OPEN: TyShape = TyShape::Fun(&HTTP_REQUEST, &TASK_STREAM_ID);
+        // Ws.upgrade : Request -> WsServerCfg -> Task Response.
+        const WS_UPGRADE: TyShape = TyShape::Fun(
+            &SERVER_REQUEST,
+            &TyShape::Fun(&WS_SERVER_CFG, &TASK_SERVER_RESPONSE),
+        );
         // Csv.
         const RESULT_ERROR_CSV: TyShape = TyShape::Con(BuiltinTag::Result, &[ERROR, CSV]);
         const CSV_PARSE: TyShape = TyShape::Fun(&STRING, &RESULT_ERROR_CSV);
@@ -8165,6 +8197,16 @@ impl StdlibKernel {
             }
             Self::ServerWithStatus => Some(&SERVER_WITH_STATUS),
             Self::ServerWithHeader => Some(&SERVER_WITH_HEADER),
+            Self::ServerWithCookie => Some(&SERVER_WITH_COOKIE),
+            // Middleware wrappers (arrow spines over the response record).
+            Self::MiddlewareWithLogging | Self::MiddlewareWithCsrf => Some(&MIDDLEWARE_TRANSFORM),
+            Self::MiddlewareWithCors => Some(&MIDDLEWARE_WITH_CORS),
+            Self::MiddlewareWithBasicAuth => Some(&MIDDLEWARE_WITH_BASIC_AUTH),
+            Self::MiddlewareWithRateLimit => Some(&MIDDLEWARE_WITH_RATE_LIMIT),
+            // Server-side / client-side streaming and WebSocket upgrade.
+            Self::StreamStream => Some(&STREAM_STREAM),
+            Self::HttpStreamOpen => Some(&HTTP_STREAM_OPEN),
+            Self::WsUpgrade => Some(&WS_UPGRADE),
             // Csv.
             Self::CsvParse => Some(&CSV_PARSE),
             Self::CsvParseWithDelimiter => Some(&CSV_PARSE_WITH_DELIMITER),
