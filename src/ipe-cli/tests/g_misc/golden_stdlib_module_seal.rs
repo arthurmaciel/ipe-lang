@@ -47,17 +47,21 @@ fn e2e_enabled() -> bool {
 /// emitted Rust project rooted at a per-`slug` temp dir. Asserts ipe exit 0 —
 /// a resolution/seal regression fails loudly. Returns the emitted-project dir.
 fn compile_module_probe(slug: &str, main: &str) -> Option<PathBuf> {
-    // Unique dir PER CALL: the `_resolves_and_emits` and `_builds_and_runs` tests for
-    // one module share a slug and run concurrently under nextest, so a shared temp dir
-    // races (write vs remove_dir_all) and flakily fails write_project. A monotonic
-    // counter makes every probe dir distinct. Declared at scope top (before any
-    // statement) to satisfy clippy::items_after_statements.
+    // Unique dir PER CALL AND PER PROCESS: the `_resolves_and_emits` and
+    // `_builds_and_runs` tests for one module share a slug and run concurrently under
+    // nextest, so a shared temp dir races (write vs remove_dir_all) and flakily fails
+    // write_project. The per-call counter alone is per-process, so two parallel test
+    // binaries restart at 0 and collide on the same path under the shared temp_dir;
+    // folding the PID in makes the path unforgeably unique across processes too.
+    // Declared at scope top (before any statement) to satisfy
+    // clippy::items_after_statements.
     static PROBE_SEQ: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
     let Ok(runtime) = ipe::resolve_runtime() else {
         return None; // runtime unavailable in this environment — caller skips
     };
     let uid = PROBE_SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-    let tmp = std::env::temp_dir().join(format!("ipec_stdlib_seal_{slug}_{uid}"));
+    let pid = std::process::id();
+    let tmp = std::env::temp_dir().join(format!("ipec_stdlib_seal_{slug}_{pid}_{uid}"));
     assert!(
         write_project(&tmp, main),
         "must write the {slug} fixture project"
@@ -479,7 +483,10 @@ fn pubsub_topic_type_mismatch_is_rejected() {
         return; // runtime unavailable — skip
     };
     let uid = SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-    let tmp = std::env::temp_dir().join(format!("ipec_pubsub_mismatch_{uid}"));
+    // Fold the PID in so two parallel test binaries never collide on the shared
+    // temp_dir (the per-process counter alone restarts at 0 in each binary).
+    let pid = std::process::id();
+    let tmp = std::env::temp_dir().join(format!("ipec_pubsub_mismatch_{pid}_{uid}"));
     assert!(
         write_project(&tmp, PUBSUB_TOPIC_MISMATCH),
         "must write the pubsub_mismatch fixture"
