@@ -1,10 +1,11 @@
 module Lib1 exposing (withConn, query, exec)
 
 import Ipe.Db
+import Ipe.Db.Unsafe
 import Ipe.Task as Task
 
 
--- Regression: a wrapper function around `Db.exec` / `Db.unsafeQuery` forwards its
+-- Regression: a wrapper function around `Db.exec` / `Unsafe.unsafeQuery` forwards its
 -- own polymorphic `args : List a` parameter straight into the kernel's params
 -- position — exactly the `examples/17-ipemon` `Lib.Database` shape.
 --
@@ -16,7 +17,7 @@ import Ipe.Task as Task
 -- `Into<ipe_runtime::db::SqlParam>` bound and the empty-list call site is
 -- not left ambiguous (E0277 / E0283 were the pre-fix cargo failures).
 query conn queryStr args =
-    Db.unsafeQuery conn queryStr args
+    Unsafe.unsafeQuery conn queryStr args
 
 
 exec conn queryStr args =

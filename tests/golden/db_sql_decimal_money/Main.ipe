@@ -1,11 +1,12 @@
 module Main exposing (main)
 import Ipe.Io as Io
 import Ipe.Db
+import Ipe.Db.Unsafe
 import Ipe.List
 import Ipe.String
 import Ipe.Task
 
--- M5b-db golden: SqlDecimal + SqlMoney params in Db.exec + Db.unsafeQuery.
+-- M5b-db golden: SqlDecimal + SqlMoney params in Db.exec + Unsafe.unsafeQuery.
 -- Proves both new ctors are reachable end-to-end: canon name table,
 -- constrain.rs type schemes, lower.rs emit path, and project.rs
 -- into_sql_param dispatch (SqlDecimal/SqlMoney -> SqlParam::Text).
@@ -17,7 +18,7 @@ main =
                 (\txconn ->
                     let
                         _ =
-                            Db.unsafeExecRaw txconn
+                            Unsafe.unsafeExecRaw txconn
                                 "CREATE TABLE prices (label TEXT, amount TEXT, money TEXT)"
 
                         _ =
@@ -31,17 +32,17 @@ main =
                                 (String.join "\n"
                                     (List.map
                                         (\row ->
-                                            Db.unsafeGetString "label" row
+                                            Unsafe.unsafeGetString "label" row
                                                 ++ ":"
-                                                ++ Db.unsafeGetString "amount" row
+                                                ++ Unsafe.unsafeGetString "amount" row
                                                 ++ ":"
-                                                ++ Db.unsafeGetString "money" row
+                                                ++ Unsafe.unsafeGetString "money" row
                                         )
                                         rows
                                     )
                                 )
                         )
-                        (Db.unsafeQuery txconn
+                        (Unsafe.unsafeQuery txconn
                             "SELECT label, amount, money FROM prices"
                             []
                         )

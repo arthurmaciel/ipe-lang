@@ -5,11 +5,12 @@ import Ipe.Task as Task
 import Lib1
 import Lib2
 import Ipe.Db
+import Ipe.Db.Unsafe
 import Ipe.List
 import Ipe.String
 
 
--- Regression: a wrapper around `Db.exec` / `Db.unsafeQuery` forwards its
+-- Regression: a wrapper around `Db.exec` / `Unsafe.unsafeQuery` forwards its
 -- polymorphic `args : List a` parameter into the kernel — exercised
 -- cross-module at both empty `[]` (the regression trigger) and non-empty
 -- `List SqlValue` (the typed mixed-param path).
@@ -37,7 +38,7 @@ main =
                     (\rows ->
                         Io.println
                             (String.join ","
-                                (List.map (\row -> Db.unsafeGetString "name" row) rows)
+                                (List.map (\row -> Unsafe.unsafeGetString "name" row) rows)
                             )
                     )
         )

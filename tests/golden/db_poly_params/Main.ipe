@@ -1,12 +1,13 @@
 module Main exposing (main)
 import Ipe.Io as Io
 import Ipe.Db
+import Ipe.Db.Unsafe
 import Ipe.List
 import Ipe.String
 import Ipe.Task
 
 -- T0001 regression (IPE-T0001 poly-params fix):
---   `Db.exec` / `Db.unsafeQuery` accept `List a` (polymorphic params), so callers may
+--   `Db.exec` / `Unsafe.unsafeQuery` accept `List a` (polymorphic params), so callers may
 --   pass `List Int`, `List String`, or `List SqlValue` without a type mismatch.
 --
 -- This program exercises THREE param-list shapes in a single `Db.withTransaction`:
@@ -25,7 +26,7 @@ main =
                 (\txconn ->
                     let
                         _ =
-                            Db.unsafeExecRaw txconn
+                            Unsafe.unsafeExecRaw txconn
                                 "CREATE TABLE t (v TEXT)"
 
                         -- (a) List Int params — T0001 regression
@@ -48,7 +49,7 @@ main =
                     in
                     Task.andThen
                         (\rows -> Io.println (String.fromInt (List.length rows)))
-                        (Db.unsafeQuery txconn "SELECT v FROM t" [])
+                        (Unsafe.unsafeQuery txconn "SELECT v FROM t" [])
                 )
         )
         (Db.open "sqlite" "sqlite::memory:")

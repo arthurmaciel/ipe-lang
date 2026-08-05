@@ -1888,6 +1888,11 @@ pub enum StdlibKernel {
     /// `Sql.column : String -> SqlFragment` — validated column/table reference
     /// (dot-accepting, so `users.id` is legal).
     SqlColumn,
+    /// `Ipe.Db.Unsafe.unsafeFragment : String -> SqlFragment` — the un-validated
+    /// anti-`Sql.column`: mints a `SqlFragment` from a verbatim string WITHOUT
+    /// the `valid_sql_ident` gate. Reachable only through the disclosed
+    /// `Ipe.Db.Unsafe` submodule; the caller asserts the identifier is safe.
+    SqlUnsafeFragment,
     /// `Sql.param : SqlValue -> SqlFragment` — binds a single `?` placeholder.
     SqlParam,
     /// `Sql.int : Int -> SqlFragment` — sugar over `Sql.param`; shares the
@@ -3468,6 +3473,7 @@ impl StdlibKernel {
             Self::MoneyClearRates => d("Money", "clearRates", 1, Pure, "money_clear_rates"),
             // ── Ipe.Db.Sql — SqlFragment builder ───────────────
             Self::SqlColumn => d("Sql", "column", 1, Db, "sql_column"),
+            Self::SqlUnsafeFragment => d("Sql", "unsafeFragment", 1, Db, "sql_unsafe_fragment"),
             // `int` / `string` / `float` / `bool` are Ipê-level type
             // narrowings of `param`; all five share the `sql_param` runtime
             // symbol (see the emit-side note in `ipe_backend_rust::naming`).
@@ -4602,6 +4608,7 @@ impl StdlibKernel {
         Self::MoneyHasRate,
         Self::MoneyClearRates,
         Self::SqlColumn,
+        Self::SqlUnsafeFragment,
         Self::SqlParam,
         Self::SqlInt,
         Self::SqlString,
@@ -4779,6 +4786,7 @@ impl StdlibKernel {
                 // `feature = "db"`-gated `db.rs` module, so a program using
                 // ONLY `Sql.*` still needs the `db` Cargo feature turned on.
                 | Self::SqlColumn
+                | Self::SqlUnsafeFragment
                 | Self::SqlParam
                 | Self::SqlInt
                 | Self::SqlString
@@ -7525,7 +7533,7 @@ impl StdlibKernel {
             | Self::ServerGetCookie => Some(&STRING_TO_REQ_TO_MAYBE_STRING),
 
             // ── Sql fragment builders. ──
-            Self::SqlColumn => Some(&STRING_TO_SQLFRAGMENT),
+            Self::SqlColumn | Self::SqlUnsafeFragment => Some(&STRING_TO_SQLFRAGMENT),
             Self::SqlParam => Some(&SQLVALUE_TO_SQLFRAGMENT),
             Self::SqlInt => Some(&INT_TO_SQLFRAGMENT),
             Self::SqlString => Some(&STRING_TO_SQLFRAGMENT),
@@ -8754,6 +8762,7 @@ impl StdlibKernel {
             | Self::MoneyHasRate
             | Self::MoneyClearRates
             | Self::SqlColumn
+            | Self::SqlUnsafeFragment
             | Self::SqlParam
             | Self::SqlInt
             | Self::SqlString

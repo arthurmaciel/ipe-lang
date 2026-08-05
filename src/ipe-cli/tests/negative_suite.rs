@@ -400,6 +400,89 @@ fn security_ui_html_typed_bridge_compiles() {
     assert_compiles("security_ui_html_bridge", src);
 }
 
+/// SECURITY: the raw-SQL hatch `unsafeExecRaw` no longer lives on the plain
+/// `Ipe.Db` surface — it relocated to `Ipe.Db.Unsafe`. A program that imports
+/// only `Ipe.Db` and reaches for `Db.unsafeExecRaw` must be rejected, so the
+/// verbatim-SQL injection surface cannot be used without the disclosing
+/// `Ipe.Db.Unsafe` import.
+#[test]
+fn security_db_unsafe_exec_raw_off_plain_db_is_rejected() {
+    let src = "module Main exposing (main)\n\
+               import Ipe.Db as Db\n\
+               import Ipe.Task as Task\n\
+               main =\n\
+                   Task.andThen (\\conn -> Db.unsafeExecRaw conn \"SELECT 1\") (Db.open \"sqlite\" \"sqlite::memory:\")\n";
+    assert_rejected("security_db_unsafe_exec_raw_off_plain", src, "IPE-N0005");
+}
+
+/// SECURITY: the untyped row read `unsafeGetField` no longer lives on the plain
+/// `Ipe.Db` surface — it relocated to `Ipe.Db.Unsafe`. Reaching it off a plain
+/// `Ipe.Db` import must be rejected, so the decoder-bypassing read cannot be
+/// used without the disclosing submodule.
+#[test]
+fn security_db_unsafe_get_field_off_plain_db_is_rejected() {
+    let src = "module Main exposing (main)\n\
+               import Ipe.Db as Db\n\
+               import Ipe.Dict as Dict\n\
+               main = Db.unsafeGetField \"k\" (Dict.fromList [ ( \"k\", \"v\" ) ])\n";
+    assert_rejected("security_db_unsafe_get_field_off_plain", src, "IPE-N0005");
+}
+
+/// SECURITY (contrapositive): the marked replacements, homed in `Ipe.Db.Unsafe`,
+/// still compile — the raw-SQL and untyped-read capabilities are preserved, only
+/// relocated to the disclosing submodule that names the risk.
+#[test]
+fn security_db_unsafe_members_compile_off_submodule() {
+    let src = "module Main exposing (main)\n\
+               import Ipe.Db.Unsafe as Unsafe\n\
+               import Ipe.Dict as Dict\n\
+               main = Unsafe.unsafeGetField \"k\" (Dict.fromList [ ( \"k\", \"v\" ) ])\n";
+    assert_compiles("security_db_unsafe_members", src);
+}
+
+/// SECURITY: `unsafeFragment` — the un-validated anti-`Sql.column` — is homed in
+/// `Ipe.Db.Unsafe`, mints a `SqlFragment` from an unchecked string, and compiles
+/// there. The deliberate skip of `Sql.column`'s `valid_sql_ident` gate is the
+/// disclosed hatch: it is reachable ONLY through the `.Unsafe` import.
+#[test]
+fn security_db_unsafe_fragment_compiles_off_submodule() {
+    let src = "module Main exposing (main)\n\
+               import Ipe.Db.Sql as Sql\n\
+               import Ipe.Db.Unsafe as Unsafe\n\
+               main = Sql.eq (Unsafe.unsafeFragment \"users.id\") (Sql.int 1)\n";
+    assert_compiles("security_db_unsafe_fragment", src);
+}
+
+/// SECURITY: `unsafeFragment` did NOT leak onto the safe `Ipe.Db.Sql` surface —
+/// it is a member of `Ipe.Db.Unsafe` only. Reaching `Sql.unsafeFragment` off a
+/// plain `Ipe.Db.Sql` import must be rejected, so the un-validated mint cannot
+/// be used without the disclosing submodule.
+#[test]
+fn security_db_unsafe_fragment_off_plain_sql_is_rejected() {
+    let src = "module Main exposing (main)\n\
+               import Ipe.Db.Sql as Sql\n\
+               main = Sql.unsafeFragment \"users.id\"\n";
+    assert_rejected(
+        "security_db_unsafe_fragment_off_plain_sql",
+        src,
+        "IPE-N0005",
+    );
+}
+
+/// SECURITY (untouched safe default): `Sql.column` — the VALIDATED identifier
+/// path — stays on the plain `Ipe.Db.Sql` surface and compiles unchanged. Its
+/// `valid_sql_ident` gate + poison-on-invalid behaviour is the safe default the
+/// `unsafeFragment` hatch deliberately skips; tightening the raw surface leaves
+/// the validated builder intact. (The runtime poison behaviour is proved by
+/// `ipe_runtime::db::test_poisoned_column_surfaces_as_task_err`.)
+#[test]
+fn security_db_sql_column_still_validates_and_compiles() {
+    let src = "module Main exposing (main)\n\
+               import Ipe.Db.Sql as Sql\n\
+               main = Sql.eq (Sql.column \"users.id\") (Sql.int 1)\n";
+    assert_compiles("security_db_sql_column_validates", src);
+}
+
 /// The same top-level value defined twice.
 #[test]
 fn canon_duplicate_value() {

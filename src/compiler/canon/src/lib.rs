@@ -2119,11 +2119,42 @@ mod tests {
         let env = Env::initial(vec![], &mut interner)
             .expect("Env::initial must not fail in the tripwire test");
 
+        // Kernels whose CANONICAL (qualifier, member) key is retained for
+        // `Ffi.kernel` alias resolution (via `stdlib_index`) but whose SURFACE
+        // relocated OUT of the native qualifier into a compiled-source
+        // `Ipe.<M>.Unsafe` escape-hatch submodule. The canonical qualifier stays
+        // (so `Ffi.kernel "Db_unsafeExecRaw"` still splits to `("Db", …)` and
+        // resolves the same kernel), but the member is intentionally ABSENT from
+        // `qual_vars[qualifier]` so it no longer resolves off a plain import of
+        // the native module. Verified positively by the `Ipe.Db.Unsafe`
+        // disclosure + resolution tests; this set exempts them from the
+        // surface-parity tripwire below.
+        let relocated_to_unsafe: std::collections::BTreeSet<(&str, &str)> = [
+            ("Db", "unsafeExecRaw"),
+            ("Db", "unsafeQuery"),
+            ("Db", "unsafeGetString"),
+            ("Db", "unsafeGetInt"),
+            ("Db", "unsafeGetBool"),
+            ("Db", "unsafeGetField"),
+            // The un-validated anti-`Sql.column`: canonical `("Sql", …)` key for
+            // the alias, surfaced only through `Ipe.Db.Unsafe.unsafeFragment`.
+            ("Sql", "unsafeFragment"),
+        ]
+        .into_iter()
+        .collect();
+
         for sk in StdlibKernel::ALL {
             let decl = sk.decl();
 
             // Skip internal-only qualifiers (e.g. "_internal_").
             if decl.qualifier.starts_with('_') {
+                continue;
+            }
+
+            // Skip members relocated to a compiled-source `.Unsafe` submodule:
+            // their canonical key stays for alias resolution but the surface
+            // deliberately left the native qualifier (see the set above).
+            if relocated_to_unsafe.contains(&(decl.qualifier, decl.name)) {
                 continue;
             }
 
