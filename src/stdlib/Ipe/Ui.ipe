@@ -26,7 +26,7 @@ module Ipe.Ui exposing
     , onMouseOver, onMouseOut, onKeyDown, onKeyUp, onBool, onFile
     , htmlAttribute, mediaQuery, breakpoint
     , aspectRatio, aspectRatioWH, square, widescreen, cinemascope
-    , name, style, transitionRaw, gridTracksRaw, animateRaw
+    , name, style, transition, gridTracks, animate
     , onPseudo, hover, focus, focusVisible, active, disabled
     , mobile, tablet, desktop, darkMode, lightMode, reducedMotion
     , px, fill, fillPortion, content, shrink, minimum, maximum, vh, vw
@@ -314,16 +314,16 @@ style : String -> String -> Attribute msg
 style = Ffi.kernel "Ui_style"
 
 
-transitionRaw : String -> Bool -> Attribute msg
-transitionRaw = Ffi.kernel "Ui_transitionRaw"
+transition : String -> Bool -> Attribute msg
+transition = Ffi.kernel "Ui_transition"
 
 
-gridTracksRaw : String -> String -> Attribute msg
-gridTracksRaw = Ffi.kernel "Ui_gridTracksRaw"
+gridTracks : String -> String -> Attribute msg
+gridTracks = Ffi.kernel "Ui_gridTracks"
 
 
-animateRaw : String -> String -> String -> Bool -> Attribute msg
-animateRaw = Ffi.kernel "Ui_animateRaw"
+animate : String -> String -> String -> Bool -> Attribute msg
+animate = Ffi.kernel "Ui_animate"
 
 
 onPseudo : PseudoClass -> List (Attribute msg) -> Attribute msg

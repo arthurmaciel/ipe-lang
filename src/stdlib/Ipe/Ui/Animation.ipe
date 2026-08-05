@@ -7,12 +7,9 @@
 -- a11y; opt out via `respectReducedMotion = False` ONLY when motion
 -- is semantically required (loading spinner, progress indicator).
 --
--- Rust-port note: `animateRaw` is a native `Ipe.Ui` kernel
--- (`KernelFn::UiAnimateRaw`) that constructs `AttrAnimation name
--- shorthand keyframes respect`; the reference exposes it from
--- `Ipe.Ui`.  This compiled-source port qualifies it as
--- `Ui.animateRaw` (same semantic — mirrors the `Ipe.Ui.Transition`
--- port's `Ui.transitionRaw` call).
+-- The animation shorthand and `@keyframes` body are emitted through
+-- `Ui.animate`, both scanned by the native CSS sanitiser at the
+-- render sink.
 module Ipe.Ui.Animation exposing
     ( Iterations
     , FillMode
@@ -344,7 +341,7 @@ renderFrame frame =
 -- disambiguation.
 attribute : Spec -> Attribute msg
 attribute spec =
-    Ui.animateRaw
+    Ui.animate
         spec.name
         (buildShorthandTail spec)
         (buildKeyframesBody spec.keyframes)
