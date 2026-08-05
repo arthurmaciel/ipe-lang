@@ -4995,6 +4995,102 @@ fn ir_type_mentions_generic(ty: &IrType, tv: Symbol) -> bool {
     }
 }
 
+/// Does the type variable `tv` appear INSIDE a [`IrType::Decoder`] payload
+/// anywhere in `ty`?
+///
+/// The runtime `Decoder<E, T>` (`ipe_runtime::json::Decoder`) holds a
+/// `Box<dyn Fn(..) -> IpeResult<E, T> + Send>`, so its auto-derived `Send` holds
+/// only when `T: Send`. A generic helper whose signature carries a `Decoder<_,
+/// tv>` — the `custom`/`enum`-style decoder factories, whose return type is
+/// `Decoder tv` built from a caller-supplied piece — therefore needs `tv: Send +
+/// 'static` for the emitted `Decoder` value to be `Send` wherever the runtime
+/// requires it. Without the bound the crate is well-typed to `ipe` but the
+/// emitted Rust fails `cargo build` (a SEAL violation).
+///
+/// This fires ONLY when the tvar sits UNDER a `Decoder` node: a bare
+/// `Generic(tv)` param or return, or a `tv` under any other carrier, is left
+/// untouched, so a truly-parametric pass-through stays unbounded. The obligation
+/// is on the tvar's appearance in the emitted SIGNATURE type, mirroring the
+/// structural-walk shape of [`body_boxes_generic_callback`] (the `'static`
+/// callback obligation) rather than the kernel-on-param matchers.
+fn ir_type_generic_in_decoder(ty: &IrType, tv: Symbol) -> bool {
+    match ty {
+        // A `Decoder` payload that mentions `tv` is the obligation itself.
+        IrType::Decoder(inner) => ir_type_mentions_generic(inner, tv),
+        // Recurse through every compound carrier; a `Decoder` may be nested
+        // (e.g. `Task Error (Decoder tv)`, `List (Decoder tv)`).
+        IrType::Task(inner)
+        | IrType::Maybe(inner)
+        | IrType::List(inner)
+        | IrType::Cmd(inner)
+        | IrType::Sub(inner)
+        | IrType::Set(inner)
+        | IrType::WebRoute(inner)
+        | IrType::Ui { msg: inner, .. } => ir_type_generic_in_decoder(inner, tv),
+        IrType::Result(a, b) | IrType::Dict(a, b) => {
+            ir_type_generic_in_decoder(a, tv) || ir_type_generic_in_decoder(b, tv)
+        }
+        IrType::Tuple(items) => items.iter().any(|t| ir_type_generic_in_decoder(t, tv)),
+        IrType::Enum { args, .. } => args.iter().any(|t| ir_type_generic_in_decoder(t, tv)),
+        IrType::Record(fields) => fields.values().any(|t| ir_type_generic_in_decoder(t, tv)),
+        IrType::Fun(params, ret)
+        | IrType::SharedFun(params, ret)
+        | IrType::FnOnceChain(params, ret) => {
+            params.iter().any(|t| ir_type_generic_in_decoder(t, tv))
+                || ir_type_generic_in_decoder(ret, tv)
+        }
+        // Nullary leaves + the non-parametric `UiPlain` carry no `Decoder`.
+        IrType::Generic(_)
+        | IrType::Int
+        | IrType::Float
+        | IrType::Bool
+        | IrType::Str
+        | IrType::Char
+        | IrType::Unit
+        | IrType::Bytes
+        | IrType::Json
+        | IrType::Db
+        | IrType::ServerRequest
+        | IrType::ServerResponse
+        | IrType::ServerRoute
+        | IrType::ServerCookie
+        | IrType::StreamWriter
+        | IrType::HttpRequest
+        | IrType::Regex
+        | IrType::WebSocketServer
+        | IrType::WebSocketServerCfg
+        | IrType::UiPlain(_)
+        | IrType::WebReq
+        | IrType::Order
+        | IrType::HttpMethod
+        | IrType::Decimal
+        | IrType::ErrorKind
+        | IrType::Error
+        | IrType::ErrorDetails
+        | IrType::ErrorInfo
+        | IrType::PanicInfo
+        | IrType::TypeInfo
+        | IrType::SqlFragment
+        | IrType::Secret
+        | IrType::Path
+        | IrType::Url
+        | IrType::CacheCfg
+        | IrType::WebSocketClientCfg
+        | IrType::CacheStats
+        | IrType::CsvDoc
+        | IrType::EmailMessage
+        | IrType::EmailAttachment
+        | IrType::EmailSesConfig
+        | IrType::EmailSmtpConfig
+        | IrType::EmailProvider
+        | IrType::CryptoKey
+        | IrType::CryptoMac
+        | IrType::EmailAddress
+        | IrType::Locale
+        | IrType::RowGeneric(_) => false,
+    }
+}
+
 /// Does `expr` contain a boxed CALLBACK value — a [`Expr::FuncValue`] or a
 /// [`Expr::Lambda`] / [`Expr::SharedLambda`] — whose OWN type still mentions the
 /// type variable `tv`?
@@ -5077,8 +5173,15 @@ fn body_boxes_generic_callback(tv: Symbol, expr: &Expr) -> bool {
     }
 }
 
-/// GENERAL kernel→type-param-bound propagation (`IpeRow` + `Display`,
-/// generalising the original single-purpose `Db.get*`→`IpeRow` walk).
+/// GENERAL type-param-bound propagation for the emitted signature.
+///
+/// Two families of obligation land here. Most are kernel-on-param
+/// (`IpeRow` + `Display`, generalising the original single-purpose
+/// `Db.get*`→`IpeRow` walk). The remainder are structural walks over the
+/// signature/body TYPE, not keyed on a kernel application: the `'static`
+/// boxed-callback bound ([`body_boxes_generic_callback`]) and the `Send +
+/// 'static` bound on a generic tvar carried inside a `Decoder<E, tv>`
+/// ([`ir_type_generic_in_decoder`]).
 ///
 /// A kernel whose Rust signature bounds a type parameter — `db_get_*<R: IpeRow>`,
 /// `basics_to_string<T: std::fmt::Display>` — obliges that Rust bound on the Ipê
@@ -5112,6 +5215,7 @@ fn apply_kernel_type_param_bounds(
     interner: &Interner,
     type_params: &mut [(Symbol, BoundSet)],
     params: &[(Symbol, IrType)],
+    ret: &IrType,
     body: &Expr,
 ) {
     // IpeRow: a `Db.get*(field, &row)` accessor whose ROW arg (index 1)
@@ -5178,6 +5282,22 @@ fn apply_kernel_type_param_bounds(
         // which E0310s without `T{n}: 'static`.
         if body_boxes_generic_callback(*tv, body) {
             *bounds = bounds.with_static();
+        }
+        // `Send + 'static` — a generic tvar carried inside a `Decoder<E, tv>` in
+        // the emitted SIGNATURE (a param type or the return type). The runtime
+        // `Decoder<E, T>` boxes `Box<dyn Fn(..) -> IpeResult<E, T> + Send>`, so
+        // its auto-`Send` needs `T: Send`; a generic `custom`/`enum` decoder
+        // helper emits `fn(..) -> Decoder<IpeError, A>` and would cargo-fail
+        // without `A: Send`. Wildcard OR named. A structural TYPE walk (not a
+        // kernel-on-param matcher): the obligation reads the tvar's appearance
+        // under a `Decoder` node, so it fires ONLY for the generic-`Decoder`
+        // shape and never over-bounds an unrelated pass-through.
+        if params
+            .iter()
+            .any(|(_, ty)| ir_type_generic_in_decoder(ty, *tv))
+            || ir_type_generic_in_decoder(ret, *tv)
+        {
+            *bounds = bounds.with_send();
         }
     }
 }
@@ -10063,6 +10183,7 @@ impl<'a> Lowerer<'a> {
                     self.interner,
                     &mut type_params,
                     &params,
+                    &ret,
                     &lowered_body,
                 );
                 Ok(Func {
@@ -10215,6 +10336,7 @@ impl<'a> Lowerer<'a> {
                         self.interner,
                         &mut type_params,
                         &params,
+                        &ret,
                         &lowered_body,
                     );
                     return Ok(Func {
@@ -20807,6 +20929,107 @@ mod tests {
         assert!(
             super::expr_type_mentions(&lambda, &super::ir_type_mentions_json),
             "a `Decoder` return type on a body-nested lambda must be detected"
+        );
+    }
+
+    /// The `Send`-obligation walk fires ONLY when a tvar sits inside a
+    /// `Decoder<E, tv>` — the generic-decoder-helper shape — and never on a bare
+    /// `Generic(tv)`, a tvar under any non-`Decoder` carrier, or an unrelated
+    /// tvar. This is the narrowness contract that keeps the bound off unrelated
+    /// pass-through generics (byte-neutral for every existing golden).
+    #[test]
+    fn generic_in_decoder_is_precise() {
+        use ipe_ir::IrType;
+
+        let mut interner = Interner::new();
+        let a = interner.intern("a").unwrap();
+        let b = interner.intern("b").unwrap();
+        let ga = || IrType::Generic(a);
+
+        // Fires: `Decoder a` directly, and `Decoder a` nested under carriers.
+        assert!(super::ir_type_generic_in_decoder(
+            &IrType::Decoder(Box::new(ga())),
+            a
+        ));
+        assert!(super::ir_type_generic_in_decoder(
+            &IrType::Result(
+                Box::new(IrType::Error),
+                Box::new(IrType::Decoder(Box::new(ga()))),
+            ),
+            a
+        ));
+        assert!(super::ir_type_generic_in_decoder(
+            &IrType::Fun(vec![IrType::Str], Box::new(IrType::Decoder(Box::new(ga())))),
+            a
+        ));
+
+        // Never fires: a bare `Generic(a)`, a tvar under a non-`Decoder` carrier,
+        // a `Decoder` whose payload is a DIFFERENT tvar, or a `Decoder` with no
+        // tvar at all.
+        assert!(!super::ir_type_generic_in_decoder(&ga(), a));
+        assert!(!super::ir_type_generic_in_decoder(
+            &IrType::List(Box::new(ga())),
+            a
+        ));
+        assert!(!super::ir_type_generic_in_decoder(
+            &IrType::Task(Box::new(ga())),
+            a
+        ));
+        assert!(!super::ir_type_generic_in_decoder(
+            &IrType::Decoder(Box::new(IrType::Generic(b))),
+            a
+        ));
+        assert!(!super::ir_type_generic_in_decoder(
+            &IrType::Decoder(Box::new(IrType::Int)),
+            a
+        ));
+    }
+
+    /// End-to-end of the obligation: `apply_kernel_type_param_bounds` stamps
+    /// `Send + 'static` on the tvar of a generic helper whose return type is a
+    /// `Decoder a`, and leaves an unrelated tvar (a plain `a -> a`) unbounded.
+    #[test]
+    fn decoder_return_stamps_send_and_static() {
+        use ipe_ir::{Expr, IrType};
+
+        let mut interner = Interner::new();
+        let a = interner.intern("a").unwrap();
+        let x = interner.intern("x").unwrap();
+
+        // Helper shape `custom : a -> Decoder a`: the tvar flows into the return
+        // `Decoder a`. Body is irrelevant to the type-walk obligation.
+        let mut decoder_params = vec![(a, super::BoundSet::UNBOUNDED.with_clone())];
+        super::apply_kernel_type_param_bounds(
+            &interner,
+            &mut decoder_params,
+            &[(x, IrType::Generic(a))],
+            &IrType::Decoder(Box::new(IrType::Generic(a))),
+            &Expr::Unit,
+        );
+        let decoder_bound = decoder_params.first().map(|(_, b)| *b).unwrap_or_default();
+        assert!(
+            decoder_bound.has_send(),
+            "a generic `Decoder a` return must stamp `Send` on its tvar"
+        );
+        assert!(
+            decoder_bound.has_static(),
+            "`Send` is always paired with its `'static` companion"
+        );
+
+        // Control `identity : a -> a`: no `Decoder`, so the tvar stays as it was
+        // (only its incoming `Clone`), proving the obligation cannot over-bound.
+        let mut id_params = vec![(a, super::BoundSet::UNBOUNDED.with_clone())];
+        super::apply_kernel_type_param_bounds(
+            &interner,
+            &mut id_params,
+            &[(x, IrType::Generic(a))],
+            &IrType::Generic(a),
+            &Expr::Unit,
+        );
+        let id_bound = id_params.first().map(|(_, b)| *b).unwrap_or_default();
+        assert!(
+            !id_bound.has_send(),
+            "a plain `a -> a` must NOT gain a `Send` bound (no over-bounding)"
         );
     }
 
