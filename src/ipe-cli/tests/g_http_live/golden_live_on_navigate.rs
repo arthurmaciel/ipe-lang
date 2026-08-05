@@ -47,10 +47,9 @@ fn emit_main_rs(slug: &str) -> Option<String> {
 
     let runtime = ipe::resolve_runtime().ok()?;
     ipe::build(&entry, &out, &runtime).expect("onNavigate routed app must ipe-compile");
-    Some(
-        std::fs::read_to_string(out.join("src").join("main.rs"))
-            .expect("emitted main.rs must exist"),
-    )
+    // A layout builder is compiled-source Ipê now, so a home may lower to
+    // `src/ipe_mods/*.rs` — scan the WHOLE emitted Ipê-side tree.
+    Some(crate::support::read_all_emitted_src(&out))
 }
 
 /// The `onNavigate` cfg field makes the runtime `set_page` closure route the

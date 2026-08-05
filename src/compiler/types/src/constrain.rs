@@ -5587,17 +5587,22 @@ impl<'a> Builder<'a> {
                 }, RowTail::Closed);
                 fun(cfg_rec, fun(elem_t(var(0)), html_t(var(0))))
             }
-            K::UiEl => fun(list(attr(var(0))), fun(elem_t(var(0)), elem_t(var(0)))),
-            K::UiColumn
-            | K::UiRow
-            | K::UiWrappedRow
-            | K::UiGrid
-            | K::UiParagraph
-            | K::UiTextColumn
-            // `Ui.form : List (Attribute msg) -> List (Element msg) -> Element msg`
-            | K::UiForm => fun(
-                list(attr(var(0))),
-                fun(list(elem_t(var(0))), elem_t(var(0))),
+            // `Ui.node : Description -> List (Attribute msg) -> List (Element msg) -> Element msg`
+            // — the container-element primitive backing `el`/`row`/`column`/
+            // `wrappedRow`/`grid` in `Ipe/Ui.ipe`.
+            K::UiNode => fun(
+                description(),
+                fun(list(attr(var(0))), fun(list(elem_t(var(0))), elem_t(var(0)))),
+            ),
+            // `Ui.taggedNode : String -> Description -> List (Attribute msg) -> List (Element msg) -> Element msg`
+            // — the tagged-element primitive backing `paragraph`/`textColumn`/
+            // `form`/`input`.
+            K::UiTaggedNode => fun(
+                string(),
+                fun(
+                    description(),
+                    fun(list(attr(var(0))), fun(list(elem_t(var(0))), elem_t(var(0)))),
+                ),
             ),
             // ── Ipe.Ui nearby attribute builders ─────────────────────────────────
             // `Ui.above/below/onLeft/onRight/inFront/behind : Element msg -> Attribute msg`
@@ -6248,13 +6253,15 @@ impl<'a> Builder<'a> {
             K::RegionHeading => fun(int(), attr(var(0))),
             K::RegionLabel => fun(string(), attr(var(0))),
 
-            // ── Ui.input + Ui.describe + desc* constructors ───────────────────
-            // `Ui.input : List (Attribute msg) -> Element msg`
-            K::UiInput => fun(list(attr(var(0))), elem_t(var(0))),
+            // ── Ui.describe + desc* constructors ──────────────────────────────
             // `Ui.describe : Description -> Attribute msg`
             K::UiDescribe => fun(description(), attr(var(0))),
             // Nullary `Description` constructors — return `Description`.
-            K::UiDescMain
+            // `descNone`/`descParagraph` back the `node`/`taggedNode` sugar in
+            // `Ipe/Ui.ipe`; the rest are `Ui.describe` roles.
+            K::UiDescNone
+            | K::UiDescParagraph
+            | K::UiDescMain
             | K::UiDescNavigation
             | K::UiDescContentInfo
             | K::UiDescComplementary
@@ -8465,17 +8472,9 @@ mod registry_phase_c_tests {
             K::DictIntersect,
             K::DictDiff,
             K::DictUpdate,
-            // Ipe.Ui layout / element / event (17)
+            // Ipe.Ui layout / element / event
             K::UiLayout,
             K::UiLayoutWith,
-            K::UiEl,
-            K::UiRow,
-            K::UiColumn,
-            K::UiWrappedRow,
-            K::UiGrid,
-            K::UiParagraph,
-            K::UiTextColumn,
-            K::UiForm,
             K::UiAbove,
             K::UiBelow,
             K::UiOnLeft,
@@ -8863,7 +8862,10 @@ mod registry_phase_c_tests {
             K::UiText,
             K::UiHtml,
             K::UiCells,
-            // UiParagraph / UiTextColumn live in RELOCATED (hole XOR relocation).
+            // The container / tagged-element primitives (first-schemed — no
+            // legacy). The layout / flow builders are pure Ipê over them.
+            K::UiNode,
+            K::UiTaggedNode,
             K::UiSpacing,
             K::UiPadding,
             K::UiPaddingXY,
@@ -9026,9 +9028,10 @@ mod registry_phase_c_tests {
             K::RegionLabel,
             K::RegionAnnounce,
             K::RegionAnnounceUrgently,
-            // ── Ui.input + Ui.describe batch ──
-            K::UiInput,
+            // ── Ui.describe + desc* batch ──
             K::UiDescribe,
+            K::UiDescNone,
+            K::UiDescParagraph,
             K::UiDescMain,
             K::UiDescNavigation,
             K::UiDescContentInfo,
@@ -9686,13 +9689,13 @@ mod registry_phase_c_tests {
         // `Ui.link` / `Ui.image`, and the record-producing `Server` route-handler
         // kernels — each byte-identical to its retained `stdlib_scheme` arm.
         assert!(
-            migrated >= 868,
+            migrated >= 863,
             "expected at least the primitive + core-List + arrow-only + \
              tuple-shaped + arrow-scalar polymorphic kernels plus the migrated \
              effect / scalar-opaque / Ui / Html / style builder families, the \
              closed-record / open-row families, and the arrow-over-record \
              server kernels (`Server.withCookie`, the `Middleware` wrappers, \
-             `Stream.stream`, `HttpStream.open`, `Ws.upgrade`) — 868 total — to \
+             `Stream.stream`, `HttpStream.open`, `Ws.upgrade`) — 863 total — to \
              carry a TyShape, found only {migrated}",
         );
     }

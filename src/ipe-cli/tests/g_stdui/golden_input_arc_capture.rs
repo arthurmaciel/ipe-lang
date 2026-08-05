@@ -59,8 +59,10 @@ fn i191_ipec_accepts_and_hoists_capture_clone() {
         built.err()
     );
 
-    let emitted = std::fs::read_to_string(out.join("src").join("main.rs"))
-        .expect("emitted main.rs must exist");
+    // A layout builder (`Ui.row`) is compiled-source Ipê now, so its home lowers
+    // to `src/ipe_mods/*.rs` and `main_habit_row` lands there — scan the WHOLE
+    // emitted Ipê-side tree (main.rs + ipe_mods/*.rs).
+    let emitted = crate::support::read_all_emitted_src(&out);
 
     // Post-emit rustfmt reflows long lines, so the two statements can land on
     // separate (indented) lines rather than the single-line span ipec first

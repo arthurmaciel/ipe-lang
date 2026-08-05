@@ -973,16 +973,20 @@ mod tests {
 
     #[test]
     fn stdlib_alias_registers_std_module() {
-        // Completeness: a `Ipe.*` module aliased to a name differing from both
-        // the last segment and the canonical qualifier.
+        // Completeness: a kernel-qualifier `Ipe.*` module aliased to a name
+        // differing from both the last segment and the canonical qualifier.
+        // (`Ipe.Ui` is compiled-source now, so `Ipe.Decimal` is the example.)
         let src = "module Main exposing (main)\n\
-                   import Ipe.Ui as U\n\n\
-                   main = U.text\n";
+                   import Ipe.Decimal as D\n\n\
+                   main = D.zero\n";
         let Some((m, i)) = canon_module_src(src) else {
-            assert!(false_marker(), "aliased Ipe.Ui import must canonicalise");
+            assert!(
+                false_marker(),
+                "aliased Ipe.Decimal import must canonicalise"
+            );
             return;
         };
-        assert_main_is_kernel(&m, &i, "Ui", "text");
+        assert_main_is_kernel(&m, &i, "Decimal", "zero");
     }
 
     #[test]
@@ -3046,36 +3050,36 @@ mod tests {
 
     #[test]
     fn stdlib_wildcard_brings_member_into_unqualified_scope() {
-        // `import Ipe.Ui exposing (..)` → bare `el` resolves to the same
-        // `VarKernel { module: Ui, name: el }` a `Ui.el` reference would. This is
-        // the wildcard-tier flood a kernel-qualifier module gets on an open import
-        // (`Ipe.Html` is compiled-source now, so `Ipe.Ui` is the example).
+        // `import Ipe.Ui.Font exposing (..)` → bare `bold` resolves to the same
+        // `VarKernel { module: Font, name: bold }` a `Font.bold` reference would.
+        // This is the wildcard-tier flood a kernel-qualifier module gets on an open
+        // import (`Ipe.Ui` is compiled-source now, so `Ipe.Ui.Font` is the example).
         let src = "module Main exposing (main)\n\
-                   import Ipe.Ui exposing (..)\n\n\
-                   main = el\n";
+                   import Ipe.Ui.Font exposing (..)\n\n\
+                   main = bold\n";
         let Some((m, i)) = canon_src(src) else {
-            assert!(false_marker(), "wildcard `el` must canonicalise");
+            assert!(false_marker(), "wildcard `bold` must canonicalise");
             return;
         };
-        assert_main_is_kernel(&m, &i, "Ui", "el");
+        assert_main_is_kernel(&m, &i, "Font", "bold");
     }
 
     #[test]
     fn stdlib_wildcard_member_lowers_identically_to_qualified() {
-        // A wildcard `text` and a qualified `Ui.text` must produce the same
+        // A wildcard `bold` and a qualified `Font.bold` must produce the same
         // `VarKernel` (identical module + name), so lowering is unaffected.
         let bare = "module Main exposing (main)\n\
-                    import Ipe.Ui exposing (..)\n\n\
-                    main = text\n";
+                    import Ipe.Ui.Font exposing (..)\n\n\
+                    main = bold\n";
         let qual = "module Main exposing (main)\n\
-                    import Ipe.Ui\n\n\
-                    main = Ui.text\n";
+                    import Ipe.Ui.Font\n\n\
+                    main = Font.bold\n";
         let Some((mb, ib)) = canon_src(bare) else {
-            assert!(false_marker(), "bare wildcard `text` must canonicalise");
+            assert!(false_marker(), "bare wildcard `bold` must canonicalise");
             return;
         };
         let Some((mq, iq)) = canon_src(qual) else {
-            assert!(false_marker(), "qualified `Html.text` must canonicalise");
+            assert!(false_marker(), "qualified `Font.bold` must canonicalise");
             return;
         };
         let kernel_of = |m: &ast::Module, i: &Interner| -> Option<(String, String)> {
@@ -3092,8 +3096,8 @@ mod tests {
         };
         assert_eq!(
             kernel_of(&mb, &ib),
-            Some(("Ui".to_string(), "text".to_string())),
-            "bare wildcard `text` resolves to VarKernel(Ui, text)"
+            Some(("Font".to_string(), "bold".to_string())),
+            "bare wildcard `bold` resolves to VarKernel(Font, bold)"
         );
         assert_eq!(
             kernel_of(&mb, &ib),
@@ -3104,14 +3108,14 @@ mod tests {
 
     #[test]
     fn two_stdlib_wildcards_same_name_is_ambiguous_at_use() {
-        // Both `Ipe.Ui` and `Ipe.Ui.Input` export `text`. Two `exposing (..)`
-        // imports are BOTH legal at import time; a bare `text` USE is
-        // `AmbiguousImport` (IPE-N0024), never a silent last-wins.
+        // Both `Ipe.Ui.Background` and `Ipe.Ui.Font` export `color`. Two
+        // `exposing (..)` imports are BOTH legal at import time; a bare `color` USE
+        // is `AmbiguousImport` (IPE-N0024), never a silent last-wins.
         let err = canon_err(
             "module Main exposing (main)\n\
-             import Ipe.Ui exposing (..)\n\
-             import Ipe.Ui.Input exposing (..)\n\
-             main = text\n",
+             import Ipe.Ui.Background exposing (..)\n\
+             import Ipe.Ui.Font exposing (..)\n\
+             main = color\n",
         );
         let Some(Diagnostic::Name {
             msg: NameError::AmbiguousImport { name, modules },
@@ -3121,10 +3125,10 @@ mod tests {
             assert!(false_marker(), "expected AmbiguousImport, got {err:?}");
             return;
         };
-        assert_eq!(&**name, "text");
+        assert_eq!(&**name, "color");
         assert!(
-            modules.iter().any(|m| &**m == "Ipe.Ui")
-                && modules.iter().any(|m| &**m == "Ipe.Ui.Input"),
+            modules.iter().any(|m| &**m == "Ipe.Ui.Background")
+                && modules.iter().any(|m| &**m == "Ipe.Ui.Font"),
             "both origins named, got {modules:?}"
         );
     }
@@ -3199,13 +3203,13 @@ mod tests {
 
     #[test]
     fn two_stdlib_wildcards_shared_name_ok_when_unused() {
-        // The ambiguity is deferred: two wildcards exposing `text` are legal as
-        // long as no bare `text` is used (a non-shared name still resolves).
+        // The ambiguity is deferred: two wildcards sharing `color` are legal as
+        // long as no bare `color` is used (a non-shared name still resolves).
         let ok = canon_src(
             "module Main exposing (main)\n\
-             import Ipe.Ui exposing (..)\n\
-             import Ipe.Ui.Input exposing (..)\n\
-             main = el\n",
+             import Ipe.Ui.Background exposing (..)\n\
+             import Ipe.Ui.Font exposing (..)\n\
+             main = bold\n",
         );
         assert!(
             ok.is_some(),
@@ -3218,10 +3222,10 @@ mod tests {
         // A local binding silently shadows BOTH wildcard origins — no ambiguity,
         // no `DuplicateValue`.
         let src = "module Main exposing (main)\n\
-                   import Ipe.Ui exposing (..)\n\
-                   import Ipe.Ui.Input exposing (..)\n\
-                   text = 1\n\
-                   main = text\n";
+                   import Ipe.Ui.Background exposing (..)\n\
+                   import Ipe.Ui.Font exposing (..)\n\
+                   color = 1\n\
+                   main = color\n";
         let Some((m, i)) = canon_src(src) else {
             assert!(false_marker(), "local shadow resolves the ambiguity");
             return;
@@ -3231,24 +3235,24 @@ mod tests {
             None => None,
         };
         assert!(
-            matches!(body, Some(Expr_::VarTopLevel { name, .. }) if i.resolve(*name) == Some("text")),
-            "local `text` shadows both wildcards, got {body:?}"
+            matches!(body, Some(Expr_::VarTopLevel { name, .. }) if i.resolve(*name) == Some("color")),
+            "local `color` shadows both wildcards, got {body:?}"
         );
     }
 
     #[test]
     fn stdlib_wildcard_shadowed_by_explicit_exposing() {
-        // An explicit `exposing (text)` (higher priority, in `env.vars`) wins over
-        // a wildcard `text`; the pair is NOT ambiguous. Resolves to Input.text.
+        // An explicit `exposing (color)` (higher priority, in `env.vars`) wins over
+        // a wildcard `color`; the pair is NOT ambiguous. Resolves to Font.color.
         let src = "module Main exposing (main)\n\
-                   import Ipe.Ui exposing (..)\n\
-                   import Ipe.Ui.Input exposing (text)\n\
-                   main = text\n";
+                   import Ipe.Ui.Background exposing (..)\n\
+                   import Ipe.Ui.Font exposing (color)\n\
+                   main = color\n";
         let Some((m, i)) = canon_src(src) else {
             assert!(false_marker(), "explicit exposure wins over wildcard");
             return;
         };
-        assert_main_is_kernel(&m, &i, "Input", "text");
+        assert_main_is_kernel(&m, &i, "Font", "color");
     }
 
     #[test]
@@ -3256,14 +3260,14 @@ mod tests {
         // Importing the same module under an alias AND a wildcard must not fake a
         // self-ambiguity (dedup by canonical qualifier).
         let src = "module Main exposing (main)\n\
-                   import Ipe.Ui exposing (..)\n\
-                   import Ipe.Ui as U exposing (..)\n\
-                   main = el\n";
+                   import Ipe.Ui.Font exposing (..)\n\
+                   import Ipe.Ui.Font as F exposing (..)\n\
+                   main = bold\n";
         let Some((m, i)) = canon_src(src) else {
             assert!(false_marker(), "same module twice must not be ambiguous");
             return;
         };
-        assert_main_is_kernel(&m, &i, "Ui", "el");
+        assert_main_is_kernel(&m, &i, "Font", "bold");
     }
 
     #[test]
