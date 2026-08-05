@@ -1,5 +1,12 @@
 # `Codec.auto` — a compile-time record derive, zero runtime reflection
 
+> **Superseded by `codec-and-store-design.md`.** That document absorbs this
+> derive design, keeps and sharpens the compile-time-derive decision, corrects
+> the `Codec.map` signature (it is invariant, taking a bijection, not covariant),
+> and replaces this draft's DB half with a concrete `Ipe.Db.Store` design that
+> drives the codec shape. Read `codec-and-store-design.md`; this file is retained
+> only as the derive's first sketch.
+
 Status: design proposal, no implementation yet. Every fenced block below is
 **illustrative of the proposed surface or the intended emit** — none is shipped
 API or a verified command. Issue references use bare numbers in the affected-issues
