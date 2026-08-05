@@ -48,24 +48,41 @@ Std.Live.	Ipe.Web.
 Std.Live	Ipe.Tea.Web
 Std.Webview	Ipe.WebView
 
-# ── Std.Db.execRaw -> Ipe.Db.unsafeExecRaw  (the raw-SQL escape hatch is renamed
-#    to mark the SQL-injection surface; longest-prefix wins binds this member
-#    rewrite before the broad Std. -> Ipe. row below).
-Std.Db.execRaw	Ipe.Db.unsafeExecRaw
+# ── Std.Db.execRaw -> Ipe.Db.Unsafe.unsafeExecRaw  (raw-SQL escape hatch relocated
+#    to Ipe.Db.Unsafe; longest-prefix wins binds this before the broad Std. row).
+Std.Db.execRaw	Ipe.Db.Unsafe.unsafeExecRaw
 
-# ── Std.Db.{query,getString,getInt,getBool,getField} -> Ipe.Db.unsafe*  (the
-#    stringly row-read surface is renamed to mark the schema-drift surface; the
-#    typed Db.queryDecode + Db.Decode.* path is the unmarked default. Std.Db.query
-#    binds before Std.Db.queryDecode because the transform is longest-prefix-wins
-#    and queryDecode is left untouched, so the query row is listed with a trailing
-#    boundary in mind — queryDecode never matches Std.Db.query as a prefix here
-#    because the map keys are whole qualified values, not substrings).
+# ── Std.Db.{query,getString,getInt,getBool,getField} -> Ipe.Db.Unsafe.unsafe*
+#    (stringly row-read surface relocated to Ipe.Db.Unsafe; typed Db.queryDecode +
+#    Db.Decode.* stays in Ipe.Db. Std.Db.queryDecode listed first so its longer
+#    prefix binds before Std.Db.query).
 Std.Db.queryDecode	Ipe.Db.queryDecode
-Std.Db.query	Ipe.Db.unsafeQuery
-Std.Db.getString	Ipe.Db.unsafeGetString
-Std.Db.getInt	Ipe.Db.unsafeGetInt
-Std.Db.getBool	Ipe.Db.unsafeGetBool
-Std.Db.getField	Ipe.Db.unsafeGetField
+Std.Db.query	Ipe.Db.Unsafe.unsafeQuery
+Std.Db.getString	Ipe.Db.Unsafe.unsafeGetString
+Std.Db.getInt	Ipe.Db.Unsafe.unsafeGetInt
+Std.Db.getBool	Ipe.Db.Unsafe.unsafeGetBool
+Std.Db.getField	Ipe.Db.Unsafe.unsafeGetField
+
+# ── Std.Html.raw / Std.Html.unsafeRaw -> Ipe.Html.Unsafe.unsafeRaw  (XSS surface
+#    relocated to Ipe.Html.Unsafe; longest prefix binds before Std.Html. row).
+Std.Html.unsafeRaw	Ipe.Html.Unsafe.unsafeRaw
+Std.Html.raw	Ipe.Html.Unsafe.unsafeRaw
+
+# ── Std.Web.Head.unsafeJsonLd -> Ipe.Web.Head.Unsafe.unsafeJsonLd  (raw-script
+#    injection hatch relocated to Ipe.Web.Head.Unsafe; longer prefix binds before
+#    Std.Web.Head. and Std.Web. rows).
+Std.Web.Head.unsafeJsonLd	Ipe.Web.Head.Unsafe.unsafeJsonLd
+
+# ── Std.Secret.reveal -> Ipe.Secret.Unsafe.unsafeReveal  (plaintext-leak surface
+#    relocated to Ipe.Secret.Unsafe; scoped consume is Secret.use off the unsafe
+#    axis; longest prefix binds before Std.Secret. row).
+Std.Secret.reveal	Ipe.Secret.Unsafe.unsafeReveal
+
+# ── Std.Ui.*Raw -> Ipe.Ui.* pure renames (capability-neutral; no import or
+#    capability change; longest prefixes bind before the broad Std. row).
+Std.Ui.gridTracksRaw	Ipe.Ui.gridTracks
+Std.Ui.transitionRaw	Ipe.Ui.transition
+Std.Ui.animateRaw	Ipe.Ui.animate
 
 # ── Std.* -> Ipe.*  (Log, Ui, Ui.*, Web, Web.Head, Db, Money, Console, Cmd, Sub,
 #    Time, Css, Csv, Cache, PubSub, Decimal, Html, Html.*, WebView, Auth, ...)
