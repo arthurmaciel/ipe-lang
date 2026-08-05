@@ -5,7 +5,6 @@ module Ipe.Web.Head exposing
     , metaProperty
     , link
     , canonical
-    , unsafeJsonLd
     , themeColor
     , rss
     )
@@ -52,8 +51,11 @@ module Ipe.Web.Head exposing
 --         , Head.metaProperty "og:type" "website"
 --         , Head.themeColor "#1a1a2e"
 --         , Head.rss "/rss.xml" "Site Blog"
---         , Head.unsafeJsonLd jsonLdBlobFor model.page
 --         ]
+--
+-- The verbatim JSON-LD `<script>` hatch lives in `Ipe.Web.Head.Unsafe`
+-- (`import Ipe.Web.Head.Unsafe exposing (unsafeJsonLd)`), which discloses the
+-- `unsafe` capability.
 --
 -- COMPILED-SOURCE PORT NOTES (task #98):
 --   Faithfully copied from ../ipe/ipe-stdlib/Std/Live/Head.ipe.
@@ -139,23 +141,6 @@ canonical href =
         [ Attr.attribute "rel" "canonical"
         , Attr.attribute "href" href
         ]
-
-
--- unsafeJsonLd body — emits `<script type="application/ld+json">…</script>`
--- with the raw JSON body. The renderer treats <script> bodies as
--- raw text (CDATA-like), so the body is emitted VERBATIM — an
--- un-escaped raw-String injection into a scripting context.
---
--- The `unsafe` prefix names that risk at the surface (Db.unsafeFindWhere
--- precedent): the caller MUST guarantee the body cannot contain
--- `</script>` and is not user-controlled. Build the JSON from typed
--- data (e.g. an encoder over your own record types) so the string is
--- structurally trusted; never splice raw request input here.
-unsafeJsonLd : String -> Html msg
-unsafeJsonLd body =
-    Html.script
-        [ Attr.attribute "type" "application/ld+json" ]
-        [ Html.text body ]
 
 
 -- themeColor color — emits `<meta name="theme-color" content="…">`.

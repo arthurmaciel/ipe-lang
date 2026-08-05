@@ -483,6 +483,34 @@ fn security_db_sql_column_still_validates_and_compiles() {
     assert_compiles("security_db_sql_column_validates", src);
 }
 
+/// SECURITY: the verbatim JSON-LD `<script>` hatch `unsafeJsonLd` no longer
+/// lives on the plain `Ipe.Web.Head` surface — it relocated to
+/// `Ipe.Web.Head.Unsafe`. A program that imports only `Ipe.Web.Head` and reaches
+/// for `Head.unsafeJsonLd` must be rejected, so the raw-script injection surface
+/// cannot be used without the disclosing `Ipe.Web.Head.Unsafe` import.
+#[test]
+fn security_web_head_unsafe_json_ld_off_plain_head_is_rejected() {
+    let src = "module Main exposing (main)\n\
+               import Ipe.Web.Head as Head\n\
+               main = Head.unsafeJsonLd \"{}\"\n";
+    assert_rejected(
+        "security_web_head_unsafe_json_ld_off_plain",
+        src,
+        "IPE-N0005",
+    );
+}
+
+/// SECURITY (contrapositive): the marked member, homed in `Ipe.Web.Head.Unsafe`,
+/// still compiles — the verbatim JSON-LD capability is preserved, only relocated
+/// to the disclosing submodule that names the risk.
+#[test]
+fn security_web_head_unsafe_json_ld_compiles_off_submodule() {
+    let src = "module Main exposing (main)\n\
+               import Ipe.Web.Head.Unsafe as Unsafe\n\
+               main = Unsafe.unsafeJsonLd \"{}\"\n";
+    assert_compiles("security_web_head_unsafe_json_ld", src);
+}
+
 /// The same top-level value defined twice.
 #[test]
 fn canon_duplicate_value() {
