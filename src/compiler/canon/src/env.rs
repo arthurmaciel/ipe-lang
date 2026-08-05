@@ -258,9 +258,14 @@ pub struct Env {
     /// **Low-priority wildcard-exposed stdlib value members.**
     ///
     /// A bare value name maps to the set of stdlib modules that flooded it into
-    /// unqualified scope via `import M exposing (..)`, keyed by canonical
-    /// qualifier so re-importing the same module (or importing it under an
-    /// alias) dedups to a single origin.
+    /// unqualified scope via `import M exposing (..)`, keyed by the module's FULL
+    /// dotted path so re-importing the same module (or importing it under an
+    /// alias) dedups to a single origin, while two distinct modules that share a
+    /// leaf segment (`Ipe.A.Input` vs `Ipe.B.Input`) stay separate origins.
+    ///
+    /// The full path — not the leaf segment — is the origin key precisely so a
+    /// same-leaf/different-path pair can never collapse to one entry and silently
+    /// mask a genuine cross-module ambiguity.
     ///
     /// This is a strictly LOWER-priority tier than [`Self::vars`] /
     /// [`Self::ctors`]: [`resolve_var`](crate::resolve) consults it ONLY after a
@@ -270,7 +275,7 @@ pub struct Env {
     /// explicit-list path). When two or more distinct modules survive for a bare
     /// use, that use is `AmbiguousImport` (IPE-N0024) AT THE USE SITE, never a
     /// silent last-wins.
-    pub wildcard_vars: Rc<BTreeMap<Symbol, BTreeMap<Symbol, WildcardOrigin>>>,
+    pub wildcard_vars: Rc<BTreeMap<Symbol, BTreeMap<Vec<Symbol>, WildcardOrigin>>>,
     /// **Parse-once registry index.**  Maps `(qualifier_sym, name_sym)`
     /// to the typed [`StdlibKernel`] variant, built anti-drift from
     /// [`StdlibKernel::ALL`] in `install_prelude_qualifiers`.
