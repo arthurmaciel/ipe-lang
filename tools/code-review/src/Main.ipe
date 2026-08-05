@@ -19,6 +19,7 @@ import Ipe.Ui.Font as Font
 import Ipe.Ui.Input as Input
 import Lib.Db as LibDb exposing (Decision(..))
 import Lib.Format as Format
+import Lib.Highlight as Highlight exposing (Token(..))
 import Lib.Index as Index
 
 
@@ -593,12 +594,12 @@ sourceBlock unit =
         ]
         (Ui.column
             [ Ui.width Ui.fill, Ui.spacing 2 ]
-            (List.map numberedLine (Format.numberedLines unit.lineStart unit.source))
+            (List.map (numberedLine (Highlight.langFor unit.kind)) (Format.numberedLines unit.lineStart unit.source))
         )
 
 
-numberedLine : ( Int, String ) -> Ui.Element Msg
-numberedLine ( n, line ) =
+numberedLine : Highlight.Lang -> ( Int, String ) -> Ui.Element Msg
+numberedLine lang ( n, line ) =
     Ui.row
         [ Ui.width Ui.fill, Ui.spacing 8 ]
         [ Ui.el
@@ -613,10 +614,44 @@ numberedLine ( n, line ) =
             [ Ui.width Ui.fill
             , Font.family Font.monospace
             , Font.size 12
-            , Font.color (Ui.rgb 205 205 215)
             ]
-            (Ui.text line)
+            (Ui.wrappedRow
+                [ Ui.width Ui.fill, Ui.spacing 0 ]
+                (List.map tokenEl (Highlight.tokenize lang line))
+            )
         ]
+
+
+tokenEl : Highlight.Token -> Ui.Element Msg
+tokenEl tok =
+    Ui.el
+        [ Font.family Font.monospace
+        , Font.size 12
+        , Font.color (tokenColor tok)
+        ]
+        (Ui.text (Highlight.tokenText tok))
+
+
+tokenColor : Highlight.Token -> Ui.Color
+tokenColor tok =
+    case tok of
+        Keyword _ ->
+            Ui.rgb 199 146 234
+
+        Str _ ->
+            Ui.rgb 152 195 121
+
+        Comment _ ->
+            Ui.rgb 110 110 125
+
+        Num _ ->
+            Ui.rgb 209 154 102
+
+        Ident _ ->
+            Ui.rgb 205 205 215
+
+        Plain _ ->
+            Ui.rgb 205 205 215
 
 
 subscriptions : Model -> Sub Msg

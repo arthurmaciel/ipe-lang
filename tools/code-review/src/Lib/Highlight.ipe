@@ -1,0 +1,333 @@
+module Lib.Highlight exposing (Lang(..), Token(..), langFor, tokenText, tokenize)
+
+import Ipe.Char as Char
+import Ipe.List as List
+import Ipe.Maybe as Maybe
+import Ipe.String as String
+
+
+-- Server-side syntax highlighting, Ipê-native: a small hand-rolled tokenizer
+-- (no lexer, no JS). Coarser than Prism but readable for review display; the
+-- spec's B11 custom-element upgrade is a drop-in for the same render slot.
+type Lang
+    = Rust
+    | Shell
+    | Ipe
+    | Unknown
+
+
+type Token
+    = Keyword String
+    | Str String
+    | Comment String
+    | Num String
+    | Ident String
+    | Plain String
+
+
+langFor : String -> Lang
+langFor kind =
+    case kind of
+        "rust" ->
+            Rust
+
+        "shell" ->
+            Shell
+
+        "sh" ->
+            Shell
+
+        "bash" ->
+            Shell
+
+        "ipe" ->
+            Ipe
+
+        _ ->
+            Unknown
+
+
+tokenText : Token -> String
+tokenText tok =
+    case tok of
+        Keyword s ->
+            s
+
+        Str s ->
+            s
+
+        Comment s ->
+            s
+
+        Num s ->
+            s
+
+        Ident s ->
+            s
+
+        Plain s ->
+            s
+
+
+-- Tokens a whole source snippet (newlines come through as Plain). Unknown
+-- languages degrade to a single Plain token: readable, never panics, and no
+-- color claims the code does not have.
+tokenize : Lang -> String -> List Token
+tokenize lang text =
+    if lang == Unknown then
+        [ Plain text ]
+
+    else
+        scan lang (String.toList text) []
+
+
+scan : Lang -> List Char -> List Token -> List Token
+scan lang chars acc =
+    case chars of
+        [] ->
+            List.reverse acc
+
+        c :: rest ->
+            if Char.isDigit c then
+                let
+                    ( num, rest2 ) =
+                        spanWhile isNumChar rest
+                in
+                scan lang rest2 (Num (String.fromList (c :: num)) :: acc)
+
+            else if c == '"' then
+                let
+                    ( consumed, rest2, closed ) =
+                        takeString rest
+                in
+                if closed then
+                    scan lang rest2 (Str (String.fromList ('"' :: consumed)) :: acc)
+
+                else
+                    scan lang [] (Plain (String.fromList ('"' :: consumed)) :: acc)
+
+            else if c == '/' then
+                case rest of
+                    '/' :: rest2 ->
+                        let
+                            ( consumed, rest3 ) =
+                                spanWhile
+                                    (\ch ->
+                                        ch
+                                            /= '
+'
+                                    )
+                                    rest2
+                        in
+                        scan lang rest3 (Comment (String.fromList ('/' :: '/' :: consumed)) :: acc)
+
+                    '*' :: _ ->
+                        let
+                            ( consumed, rest2, closed ) =
+                                takeBlock rest
+                        in
+                        if closed then
+                            scan lang rest2 (Comment (String.fromList ('/' :: consumed)) :: acc)
+
+                        else
+                            scan lang [] (Plain (String.fromList ('/' :: consumed)) :: acc)
+
+                    _ ->
+                        scan lang rest (Plain "/" :: acc)
+
+            else if isWordStart c then
+                let
+                    ( word, rest2 ) =
+                        spanWhile isWordChar rest
+
+                    w =
+                        String.fromList (c :: word)
+                in
+                if List.member w (keywords lang) then
+                    scan lang rest2 (Keyword w :: acc)
+
+                else
+                    scan lang rest2 (Ident w :: acc)
+
+            else
+                scan lang rest (Plain (String.fromChar c) :: acc)
+
+
+-- Consumes a double-quoted literal. Returns (consumed-inner, remaining,
+-- closed); `closed = False` on end-of-input before the closing quote, so the
+-- caller can degrade the unterminated literal to Plain.
+takeString : List Char -> ( List Char, List Char, Bool )
+takeString chars =
+    stringGo chars [] True
+
+
+-- The backslash character, derived from a string instead of the `'\\'` char
+-- literal (the formatter ICEs on that escape today).
+backslashChar : Char
+backslashChar =
+    Maybe.withDefault ' ' (List.head (String.toList "\\"))
+
+
+stringGo : List Char -> List Char -> Bool -> ( List Char, List Char, Bool )
+stringGo chars acc closed =
+    case chars of
+        [] ->
+            ( List.reverse acc, [], False )
+
+        '"' :: rest ->
+            ( List.reverse ('"' :: acc), rest, True )
+
+        c :: rest ->
+            if c == backslashChar then
+                case rest of
+                    next :: rest2 ->
+                        stringGo rest2 (next :: c :: acc) closed
+
+                    [] ->
+                        ( List.reverse (c :: acc), [], False )
+
+            else
+                stringGo rest (c :: acc) closed
+
+
+-- Consumes a /* ... */ block comment; unclosed comments return closed = False.
+takeBlock : List Char -> ( List Char, List Char, Bool )
+takeBlock chars =
+    blockGo chars []
+
+
+blockGo : List Char -> List Char -> ( List Char, List Char, Bool )
+blockGo chars acc =
+    case chars of
+        [] ->
+            ( List.reverse acc, [], False )
+
+        '*' :: '/' :: rest ->
+            ( List.reverse ('*' :: '/' :: acc), rest, True )
+
+        c :: rest ->
+            blockGo rest (c :: acc)
+
+
+spanWhile : (Char -> Bool) -> List Char -> ( List Char, List Char )
+spanWhile pred chars =
+    spanGo pred chars []
+
+
+spanGo : (Char -> Bool) -> List Char -> List Char -> ( List Char, List Char )
+spanGo pred chars acc =
+    case chars of
+        [] ->
+            ( List.reverse acc, [] )
+
+        c :: rest ->
+            if pred c then
+                spanGo pred rest (c :: acc)
+
+            else
+                ( List.reverse acc, chars )
+
+
+isWordStart : Char -> Bool
+isWordStart c =
+    Char.isAlpha c || c == '_'
+
+
+isWordChar : Char -> Bool
+isWordChar c =
+    Char.isAlpha c || Char.isDigit c || c == '_'
+
+
+isNumChar : Char -> Bool
+isNumChar c =
+    Char.isDigit c || c == '_' || c == '.'
+
+
+keywords : Lang -> List String
+keywords lang =
+    case lang of
+        Rust ->
+            [ "fn"
+            , "let"
+            , "mut"
+            , "pub"
+            , "struct"
+            , "enum"
+            , "impl"
+            , "match"
+            , "if"
+            , "else"
+            , "for"
+            , "while"
+            , "return"
+            , "use"
+            , "mod"
+            , "type"
+            , "trait"
+            , "const"
+            , "static"
+            , "async"
+            , "await"
+            , "move"
+            , "ref"
+            , "unsafe"
+            , "where"
+            , "loop"
+            , "break"
+            , "continue"
+            , "in"
+            , "as"
+            , "dyn"
+            , "crate"
+            , "super"
+            , "self"
+            , "true"
+            , "false"
+            ]
+
+        Shell ->
+            [ "if"
+            , "then"
+            , "else"
+            , "elif"
+            , "fi"
+            , "for"
+            , "while"
+            , "do"
+            , "done"
+            , "case"
+            , "esac"
+            , "in"
+            , "function"
+            , "echo"
+            , "export"
+            , "local"
+            , "return"
+            , "read"
+            , "set"
+            , "unset"
+            , "cd"
+            , "pwd"
+            , "true"
+            , "false"
+            , "null"
+            ]
+
+        Ipe ->
+            [ "module"
+            , "import"
+            , "exposing"
+            , "type"
+            , "alias"
+            , "as"
+            , "case"
+            , "of"
+            , "if"
+            , "then"
+            , "else"
+            , "let"
+            , "in"
+            ]
+
+        Unknown ->
+            []

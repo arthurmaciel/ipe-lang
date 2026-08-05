@@ -12,6 +12,7 @@ import Ipe.System as System
 import Ipe.Task as Task
 import Lib.Db as LibDb exposing (Decision(..))
 import Lib.Format as Format
+import Lib.Highlight as Highlight exposing (Lang(..), Token(..))
 import Lib.Index as Index
 
 
@@ -179,7 +180,192 @@ allChecks db =
             , Format.numberedLines 10 "a\nb\nc"
                 == [ ( 10, "a" ), ( 11, "b" ), ( 12, "c" ) ]
             )
+        , Task.succeed
+            ( "highlight: rust keywords vs identifiers"
+            , List.any (isKeyword "fn") (Highlight.tokenize Highlight.Rust "fn answer() -> i32 { 42 }")
+                && List.any (isIdent "answer") (Highlight.tokenize Highlight.Rust "fn answer() -> i32 { 42 }")
+                && List.any (isNum "42") (Highlight.tokenize Highlight.Rust "fn answer() -> i32 { 42 }")
+                && List.any (isStr "\"hi\"") (Highlight.tokenize Highlight.Rust "let s = \"hi\";")
+                && List.any (isComment "// note") (Highlight.tokenize Highlight.Rust "// note\nfn f() {}")
+            )
+        , Task.succeed
+            ( "highlight: shell tokenizes"
+            , List.any (isKeyword "echo") (Highlight.tokenize Highlight.Shell "echo hi")
+                && List.any (isIdent "hi") (Highlight.tokenize Highlight.Shell "echo hi")
+                && isShell (Highlight.langFor "sh")
+            )
+        , Task.succeed
+            ( "highlight: malformed degrades to plain"
+            , List.any (isPlain "\"unterminated") (Highlight.tokenize Highlight.Rust "\"unterminated")
+                && List.any (isPlain "/* open") (Highlight.tokenize Highlight.Rust "/* open")
+                && List.any (isPlain "any old text") (Highlight.tokenize Highlight.Unknown "any old text")
+                && isUnknown (Highlight.langFor "weird")
+            )
         ]
+
+
+isKeyword : String -> Token -> Bool
+isKeyword kw tok =
+    case tok of
+        Keyword k ->
+            k == kw
+
+        Str _ ->
+            False
+
+        Comment _ ->
+            False
+
+        Num _ ->
+            False
+
+        Ident _ ->
+            False
+
+        Plain _ ->
+            False
+
+
+isIdent : String -> Token -> Bool
+isIdent s tok =
+    case tok of
+        Ident t ->
+            t == s
+
+        Keyword _ ->
+            False
+
+        Str _ ->
+            False
+
+        Comment _ ->
+            False
+
+        Num _ ->
+            False
+
+        Plain _ ->
+            False
+
+
+isNum : String -> Token -> Bool
+isNum s tok =
+    case tok of
+        Num t ->
+            t == s
+
+        Keyword _ ->
+            False
+
+        Str _ ->
+            False
+
+        Comment _ ->
+            False
+
+        Ident _ ->
+            False
+
+        Plain _ ->
+            False
+
+
+isStr : String -> Token -> Bool
+isStr s tok =
+    case tok of
+        Str t ->
+            t == s
+
+        Keyword _ ->
+            False
+
+        Comment _ ->
+            False
+
+        Num _ ->
+            False
+
+        Ident _ ->
+            False
+
+        Plain _ ->
+            False
+
+
+isComment : String -> Token -> Bool
+isComment s tok =
+    case tok of
+        Comment t ->
+            t == s
+
+        Keyword _ ->
+            False
+
+        Str _ ->
+            False
+
+        Num _ ->
+            False
+
+        Ident _ ->
+            False
+
+        Plain _ ->
+            False
+
+
+isPlain : String -> Token -> Bool
+isPlain s tok =
+    case tok of
+        Plain t ->
+            t == s
+
+        Keyword _ ->
+            False
+
+        Str _ ->
+            False
+
+        Comment _ ->
+            False
+
+        Num _ ->
+            False
+
+        Ident _ ->
+            False
+
+
+isShell : Lang -> Bool
+isShell lang =
+    case lang of
+        Shell ->
+            True
+
+        Rust ->
+            False
+
+        Ipe ->
+            False
+
+        Unknown ->
+            False
+
+
+isUnknown : Lang -> Bool
+isUnknown lang =
+    case lang of
+        Unknown ->
+            True
+
+        Rust ->
+            False
+
+        Shell ->
+            False
+
+        Ipe ->
+            False
 
 
 -- ── B3: ipe-index bridge ───────────────────────────────────────────────────
