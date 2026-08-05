@@ -234,10 +234,29 @@ main =
         |> Task.onError (\_ -> doSomethingWith "default")
 ```
 
-Such a zero-parameter top-level binding is a shared **value**, not a function:
-it is evaluated once, on first use, and every later reference sees that same
-result — so `apiKey` reads the environment a single time regardless of how many
-call sites use it.
+**Top-level binding evaluation — pure vs effectful.**  A zero-parameter
+top-level binding whose return type is a plain shareable data type (`String`,
+`Int`, `List`, `Dict`, and structural composites of these) is wrapped in a
+`static OnceLock` and computed **once** for the process lifetime — every
+reference sees that same value.  A `Task`-typed (or otherwise effectful,
+function-carrying, or type-parametric) binding cannot live in a `static`
+cell, so it takes the direct inline path: **each reference re-evaluates the
+binding**, and its effects run per reference.  `apiKey` above reads the
+environment on **every use** — not once.
+
+To reuse an effect's result deterministically, make it a function of its
+inputs (pass the resolved value as an argument):
+
+```elm
+-- idiomatic: accept the key as an argument, keeping the function pure
+indexDbUrlFor : String -> String
+indexDbUrlFor apiKey =
+    "https://api.example.com?key=" ++ apiKey
+```
+
+A Task is a **description** of an effect; using it N times runs it N times.
+Force it once at the entry boundary (`Task.andThen`) and thread the result
+inward as a plain value.
 
 **`Process.run` runs a child process with NO shell** — the arguments are a
 direct `argv` vector, never `sh -c`, so no argument can be reinterpreted as
