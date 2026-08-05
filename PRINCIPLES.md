@@ -1,9 +1,10 @@
 # PRINCIPLES.md
 
 Every enforced rule of the Rust-backend project lives here, stated once. The
-other governance docs — `AGENTS.md` (Ipê language authoring reference),
-`DEVELOPMENT.md` (dev-ops workflow), `misc/scripts/progressive-development/context.md`
-(autonomous-lane contract) — reference this file rather than restate it.
+other governance docs — the root `AGENTS.md` (contributor onboarding),
+`src/ipe-cli/templates/AGENTS.md.in` (Ipê language authoring reference), and
+`docs/internals/dev-ops.md` (deep operational procedure) — reference this file
+rather than restate it.
 
 ## The main values
 
@@ -36,9 +37,10 @@ rules during development and use.
    unbounded resource a remote party can exhaust. On untrusted input the safe
    outcome is the only reachable outcome — fail closed: absent proof the input
    is safe, take the conservative, secure branch, never the permissive one.
-2. **Correctness** — same well-typed Ipê program + same input ⇒ the Rust output
-   matches the Go reference's observable behaviour (ideally byte-for-byte).
-   Deliberate divergence is documented, never silent.
+2. **Correctness** — the same well-typed Ipê program with the same input yields
+   the same deterministic output, every run. Behaviour is defined by the
+   language's own semantics, not by any external oracle; a deliberate divergence
+   is documented, never silent.
 3. **Soundness** — a well-typed Ipê program can never trigger a runtime failure
    in the generated Rust: no panic, no `.unwrap()`/`.expect()` blowup, no
    out-of-bounds index, no integer-overflow abort, no unchecked downcast, no
@@ -174,58 +176,39 @@ never erased or downcast): `runtime/src/ipe_runtime/cache.rs` and
 
 ### The two-tier gate
 
-Master only ever advances to a full-gate-certified sha.
-
-- **Cheap gate — per landed lane (~minutes):** `cargo check -p ipe` + scoped
-  `nextest` on the touched crates + scoped clippy `-D warnings`; for a
-  sweep/example blocker, build the fresh `ipe` (`cargo build -p ipe` — a build,
-  not a check, since the SEAL step needs the binary) and rebuild that example to
-  confirm the original diagnostic is gone (THE SEAL on the specific example).
-  A cheap-green lane lands but stays uncertified.
-- **Full gate — the ONE authoritative run per batch** (every N cycles or when
-  pending work drains): `cargo nextest run --workspace`; `cargo nextest run
-  -p ipe-runtime-rust --features full` (LOAD-BEARING — the runtime's
-  `default = []` means the workspace run skips every feature-gated test,
-  including the entire `live::*` surface); `cargo test --workspace --doc`;
-  `cargo clippy --workspace --all-targets -- -D warnings`; fuzz + full
-  examples sweep. Full-green → certify the batch + advance master. Full-red →
-  reset to the last certified sha + re-queue.
-- The two gates MUST agree on lint scope, and the cheap gate is never
-  *stricter* than the full gate. Exact commands: `context.md` §6 and
-  `misc/scripts/progressive-development/autopilot.sh`.
+Master only ever advances to a full-gate-certified sha. Two tiers hold this: a
+**cheap gate** on each landed lane (scoped check/test/lint on the touched crates,
+plus THE SEAL on the specific example a sweep blocker names) certifies nothing on
+its own; a single **full gate** per batch (the whole workspace test/doc/lint set,
+fuzz, and the full example sweep) is the one authoritative run — full-green
+certifies and advances master, full-red resets to the last certified sha. The two
+gates must agree on lint scope, and the cheap gate is never *stricter* than the
+full gate. Step lists and exact commands: `docs/internals/dev-ops.md`.
 
 ### Write-boundary
 
 Exactly two writable locations, for everyone (agent or human):
 
-- **Cargo targets + scratch build state → under `~/.cache/ipe/` ONLY.** Never
+- **Cargo targets and scratch build state → under `~/.cache/ipe/` only.** Never
   `/tmp`, never `$HOME` root, never a bare `~/.cache/<name>-target`. A target
   outside this root is invisible to disk-reclaim and fills the disk to 100%.
-  Emergency prune is one place: `rm -rf ~/.cache/ipe/*` (rebuilds warm).
-- **Source/doc/test edits → the repo working tree ONLY.** Boundary: `crates/`,
-  `runtime/`, ipe-stdlib compiled-source, `examples/` fixtures, `docs/`.
-  `../ipe` is READ-ONLY reference — never edit the Haskell/Go backend or
-  upstream.
+- **Source, doc, and test edits → the repo working tree only** — the compiler
+  crates under `src/compiler/`, the runtime, the compiled-source stdlib, the
+  `examples/` fixtures, and `docs/`.
+
+Target naming, the reclaim order, and pruning procedure: `docs/internals/dev-ops.md`.
 
 ### Agent-lane operational rules
 
-Every dispatched lane (autopilot or hand-dispatched):
-
-- **Foreground only.** No background processes: no `&`, no `nohup`, no
-  `run_in_background`, no Monitor/self-poll on your own build — a detached
-  monitor outlives the lane and resurrects killed builds.
-- **Every build/test wrapped in `timeout`.** A hung command is killed and
-  filed, never waited out.
-- **Own `CARGO_TARGET_DIR` per lane** under `~/.cache/ipe/` whenever the
-  change touches compiled code — parallel lanes sharing a target race
-  (phantom errors). Leaf-only/doc edits may share.
-- **No sub-agent dispatch.** A dispatched lane never spawns its own
-  sub-agents; the orchestrator is the only dispatcher.
-- **Understand before changing — port, don't invent.** Query the indexes
-  BEFORE `rg`: `scripts/ipe-index` for our Rust (`def`/`refs`/`kind`/
-  `locate`/`parity`), `ipedex` for the `../ipe` reference (`locate`/`rdeps`/
-  `covers`/`parity`). Learn how the reference handles the construct across
-  compiler + backend + runtime before designing the fix.
+Every dispatched lane is **foreground-only** (no `&`, `nohup`, `run_in_background`,
+or self-monitor — a detached monitor outlives the lane and resurrects killed
+builds), wraps every build and test in `timeout`, uses its **own
+`CARGO_TARGET_DIR`** under `~/.cache/ipe/` when it touches compiled code (parallel
+lanes sharing a target race into phantom errors), and **never dispatches its own
+sub-agents** — the orchestrator is the only dispatcher. Understand before
+changing: query `scripts/ipe-index` before `rg`, and port a construct
+deliberately rather than inventing one. The operational detail is in
+`docs/internals/dev-ops.md`.
 
 ### Documentation & code standards
 
