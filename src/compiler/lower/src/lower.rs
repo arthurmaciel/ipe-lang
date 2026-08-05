@@ -1749,6 +1749,33 @@ fn ir_type_mentions_cache_handle(ty: &IrType, interner: &Interner) -> bool {
     })
 }
 
+/// `true` when `ty` mentions a builtin `Ipe.Http.Stream` opaque type — the
+/// `ChunkEvent` chunk-event enum (backed by
+/// `ipe_runtime::http_stream::ChunkEvent`) or the `StreamId` handle (backed by
+/// `ipe_runtime::http_stream::IpeStreamId`). Both lower to `IrType::Enum` with an
+/// empty `home` and a `name` resolving to the source identifier (no synthetic
+/// `EnumDef`, so no `home` path to match — the empty home is the identity).
+///
+/// `HttpStream.chunks` produces a `ChunkEvent`-payloaded message and takes a
+/// `StreamId`, so a program that names either type in a signature, record field,
+/// or enum payload — while the `HttpStream.chunks` kernel itself sits behind an
+/// unreachable binding, so the kernel scan never records it — still emits a
+/// `ChunkEvent<…>` / `IpeStreamId` reference resolved through the module's
+/// `pub use http_stream::*` glob. The `http_stream` module is declared only by
+/// the `server` append ([`RuntimeModule::Server`]), so this mention must set
+/// `uses_server`, or the emitted crate references the type with no definition in
+/// scope (E0425 `ChunkEvent` / E0412 `IpeStreamId` — a SEAL breach). Symbol
+/// resolution is required to match the interned `name`, so the interner is
+/// threaded in. Mirrors [`ir_type_mentions_cache_handle`].
+fn ir_type_mentions_http_stream(ty: &IrType, interner: &Interner) -> bool {
+    ir_type_mentions(ty, &|t| match t {
+        IrType::Enum { home, name, .. } => {
+            home.0.is_empty() && matches!(interner.resolve(*name), Some("ChunkEvent" | "StreamId"))
+        }
+        _ => false,
+    })
+}
+
 /// `true` when `ty` mentions the `Ipe.Secret` opaque type `Secret`, defined in
 /// the `secret` runtime module (backed by `ipe_runtime::secret::Secret`). A
 /// function that only forwards a `Secret` parameter — e.g. an `Ipe.Auth` token
@@ -8961,8 +8988,15 @@ impl<'a> Lowerer<'a> {
         // use server_stream::*;` to mod.rs. Missing the type-only case would
         // reference `ServerResponse`/`ServerRequest` in emitted code with no
         // definition in scope (E0412 — a SEAL breach).
+        // The `ChunkEvent` / `StreamId` type-mention arm covers `HttpStream.chunks`
+        // reached through an unreachable binding (the kernel scan misses it, but the
+        // emitted `Msg` payload still names `ChunkEvent<…>` / `IpeStreamId`, both
+        // living in `http_stream` — declared only by the `server` append).
+        let srv_interner = &self.interner;
         let uses_server = kernel_usage.server
-            || program_type_mentions(&funcs, &records, &types_ir, &ir_type_mentions_server);
+            || program_type_mentions(&funcs, &records, &types_ir, &|t| {
+                ir_type_mentions_server(t) || ir_type_mentions_http_stream(t, srv_interner)
+            });
 
         // detect outbound `Ipe.Http` client usage — any client kernel, or any
         // emittable type position that mentions an `HttpRequest` / `HttpMethod`
@@ -20935,6 +20969,107 @@ mod tests {
             "a look-alike `Main.Cache` enum must NOT select the runtime `cache` \
              module — the guard matches the `Ipe.Cache.Cache` identity, not the \
              bare name"
+        );
+    }
+
+    /// Build a builtin `Ipe.Http.Stream` opaque type — an `IrType::Enum` with an
+    /// EMPTY home and the given source name (`ChunkEvent` / `StreamId`), the shape
+    /// lower folds these two builtins to (no synthetic `EnumDef`, so the empty home
+    /// is the identity).
+    fn http_stream_ty(interner: &mut Interner, source_name: &str) -> ipe_ir::IrType {
+        use ipe_ir::{IrType, ModPath};
+        let name = interner.intern(source_name).unwrap();
+        IrType::Enum {
+            home: ModPath(Vec::new()),
+            name,
+            args: Vec::new(),
+        }
+    }
+
+    /// The load-bearing SEAL regression: `ChunkEvent` sitting ONLY in a user
+    /// enum-def variant payload — the `type Msg = Chunked ChunkEvent` shape whose
+    /// producing `HttpStream.chunks` binding is unreachable, so the kernel scan
+    /// never records the `http_stream` module — still selects `server`, the append
+    /// that declares `http_stream`. Before the fix the emitted `Msg` payload named
+    /// `ChunkEvent<IpeError>` with no module in scope (E0425 — a SEAL breach). The
+    /// plain [`super::ir_type_mentions_server`] (`ServerRequest`/`Response`/etc.)
+    /// does NOT cover it — this asserts the gap the http-stream scan closes.
+    #[test]
+    fn chunk_event_in_enum_variant_payload_selects_server() {
+        use ipe_ir::{EnumDef, ModPath, TypeDef, Variant};
+        let mut interner = Interner::new();
+        let msg = interner.intern("Msg").unwrap();
+        let ctor = interner.intern("Chunked").unwrap();
+        let chunk_event = http_stream_ty(&mut interner, "ChunkEvent");
+        let type_def = TypeDef::Enum(EnumDef {
+            name: msg,
+            home: ModPath(Vec::new()),
+            type_params: Vec::new(),
+            variants: vec![Variant {
+                name: ctor,
+                fields: vec![chunk_event.clone()],
+            }],
+        });
+        // The exact fold the assembly site applies to `uses_server`.
+        let mentions_server = super::program_type_mentions(&[], &[], &[type_def], &|t| {
+            super::ir_type_mentions_server(t) || super::ir_type_mentions_http_stream(t, &interner)
+        });
+        assert!(
+            mentions_server,
+            "a `ChunkEvent` in an enum-def variant payload (produced by an \
+             unreachable `HttpStream.chunks`) must select `server` — the append \
+             that declares `http_stream`, where `ChunkEvent` lives"
+        );
+        // The gap the fix closes: the plain server-struct guard does NOT see the
+        // builtin `ChunkEvent` enum, so on the kernel flag alone the http_stream
+        // module dropped (E0425 SEAL breach).
+        assert!(
+            !super::ir_type_mentions_server(&chunk_event),
+            "the ServerRequest/Response guard must NOT match the builtin \
+             `ChunkEvent` — this is the coverage gap the http-stream scan closes"
+        );
+    }
+
+    /// `StreamId` in a function-signature carrier (`chunks : StreamId -> Sub Msg`)
+    /// selects `server` — the handle lives in `http_stream` (backed by
+    /// `IpeStreamId`), declared only by the `server` append. Buried in a `Sub`
+    /// carrier it is still detected (the shared walk is total).
+    #[test]
+    fn stream_id_in_signature_selects_server() {
+        use ipe_ir::IrType;
+        let mut interner = Interner::new();
+        let stream_id = http_stream_ty(&mut interner, "StreamId");
+        assert!(
+            super::ir_type_mentions_http_stream(&stream_id, &interner),
+            "a bare `StreamId` in a signature must select `server`"
+        );
+        let carried = IrType::Sub(Box::new(stream_id));
+        assert!(
+            super::ir_type_mentions_http_stream(&carried, &interner),
+            "a `StreamId` buried in a `Sub` carrier must still be detected"
+        );
+    }
+
+    /// The floor: a look-alike user enum named `ChunkEvent` with a NON-empty home
+    /// (`Main.ChunkEvent`, a user `type ChunkEvent = …`) does NOT trip the scan —
+    /// the guard matches the empty-home builtin identity, not the bare name, so a
+    /// local declaration never spuriously pins the runtime `http_stream` module on.
+    #[test]
+    fn look_alike_local_chunk_event_enum_does_not_trip_scan() {
+        use ipe_ir::{IrType, ModPath};
+        let mut interner = Interner::new();
+        let main = interner.intern("Main").unwrap();
+        let name = interner.intern("ChunkEvent").unwrap();
+        let local = IrType::Enum {
+            home: ModPath(vec![main]),
+            name,
+            args: Vec::new(),
+        };
+        assert!(
+            !super::ir_type_mentions_http_stream(&local, &interner),
+            "a look-alike `Main.ChunkEvent` enum must NOT select the runtime \
+             `http_stream` module — the guard matches the empty-home builtin \
+             identity, not the bare name"
         );
     }
 
