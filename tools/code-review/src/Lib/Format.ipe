@@ -1,4 +1,4 @@
-module Lib.Format exposing (formatReviewedAt, numberedLines)
+module Lib.Format exposing (formatReviewedAt, numberedLines, percent)
 
 import Ipe.List as List
 import Ipe.String
@@ -93,3 +93,14 @@ numberedLines start text =
     text
         |> String.lines
         |> List.indexedMap (\i line -> ( start + i, line ))
+
+
+-- Floor percentage of k decided out of n queued; 0% when nothing is queued
+-- (a 0/0 division would otherwise be undefined).
+percent : Int -> Int -> String
+percent k n =
+    if n == 0 then
+        "0%"
+
+    else
+        String.fromInt ((k * 100) // n) ++ "%"

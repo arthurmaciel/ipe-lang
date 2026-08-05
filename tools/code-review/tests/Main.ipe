@@ -201,6 +201,19 @@ allChecks db =
                 && List.any (isPlain "any old text") (Highlight.tokenize Highlight.Unknown "any old text")
                 && isUnknown (Highlight.langFor "weird")
             )
+        , Task.succeed
+            ( "percent: decided over queued"
+            , Format.percent 3 4
+                == "75%"
+                && Format.percent 0 4
+                == "0%"
+                && Format.percent 4 4
+                == "100%"
+                && Format.percent 5 4
+                == "125%"
+                && Format.percent 0 0
+                == "0%"
+            )
         ]
 
 

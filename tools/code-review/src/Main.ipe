@@ -276,9 +276,7 @@ header model =
         , Ui.el [ Ui.width Ui.fill ] Ui.none
         , navButton (model.page == QueuePage) "Queue" ShowQueue
         , navButton (model.page == HistoryPage) "History" ShowHistory
-        , Ui.el
-            [ Font.size 14, Font.color (Ui.rgb 160 160 175) ]
-            (Ui.text (String.fromInt (LibDb.decidedCount model.decisions) ++ " of " ++ String.fromInt (List.length model.queue) ++ " reviewed"))
+        , progressEl model
         ]
 
 
@@ -297,6 +295,46 @@ navButton active label msg =
         , Font.color (Ui.rgb 200 200 210)
         ]
         { onPress = Just msg, label = Ui.text label }
+
+
+progressEl : Model -> Ui.Element Msg
+progressEl model =
+    let
+        k =
+            LibDb.decidedCount model.decisions
+
+        n =
+            List.length model.queue
+
+        pct =
+            Format.percent k n
+    in
+    Ui.column
+        [ Ui.width (Ui.px 220), Ui.spacing 4 ]
+        [ Ui.el
+            [ Font.size 12, Font.color (Ui.rgb 160 160 175) ]
+            (Ui.text (String.fromInt k ++ " of " ++ String.fromInt n ++ " reviewed (" ++ pct ++ ")"))
+        , progressBar k n
+        ]
+
+
+progressBar : Int -> Int -> Ui.Element Msg
+progressBar k n =
+    if n == 0 then
+        Ui.el
+            [ Ui.width (Ui.px 220), Ui.height (Ui.px 6), Border.rounded 3, Background.color (Ui.rgb 45 45 58) ]
+            Ui.none
+
+    else
+        Ui.row
+            [ Ui.width (Ui.px 220), Ui.height (Ui.px 6), Border.rounded 3, Background.color (Ui.rgb 45 45 58) ]
+            [ Ui.el
+                [ Ui.width (Ui.fillPortion k), Ui.height Ui.fill, Border.rounded 3, Background.color (Ui.rgb 102 187 106) ]
+                Ui.none
+            , Ui.el
+                [ Ui.width (Ui.fillPortion (n - k)), Ui.height Ui.fill ]
+                Ui.none
+            ]
 
 
 view : Model -> Ui.Element Msg
