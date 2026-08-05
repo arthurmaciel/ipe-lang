@@ -7247,6 +7247,9 @@ impl<'a> Builder<'a> {
             // `Sql.column : String -> SqlFragment` — validated column/table
             // reference (dot-accepting, so `users.id` is legal).
             K::SqlColumn => fun(string(), sqlfragment()),
+            // `Ipe.Db.Unsafe.unsafeFragment : String -> SqlFragment` — the
+            // un-validated anti-`Sql.column` (same shape, no `valid_sql_ident`).
+            K::SqlUnsafeFragment => fun(string(), sqlfragment()),
             // `Sql.param : SqlValue -> SqlFragment` — binds a single `?`.
             K::SqlParam => fun(sqlvalue(), sqlfragment()),
             // `int` / `string` / `float` / `bool` are Ipê-level type
@@ -9158,8 +9161,10 @@ mod registry_phase_c_tests {
             K::MoneyGetRate,
             K::MoneyHasRate,
             K::MoneyClearRates,
-            // ── Ipe.Db.Sql — SqlFragment builder (19) ──────────────
+            // ── Ipe.Db.Sql — SqlFragment builder (20) ──────────────
             K::SqlColumn,
+            // Ipe.Db.Unsafe.unsafeFragment — the un-validated anti-`Sql.column`.
+            K::SqlUnsafeFragment,
             K::SqlParam,
             K::SqlInt,
             K::SqlString,

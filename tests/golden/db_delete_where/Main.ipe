@@ -1,6 +1,7 @@
 module Main exposing (main)
 import Ipe.Io as Io
 import Ipe.Db
+import Ipe.Db.Unsafe
 import Ipe.List
 import Ipe.Db.Sql
 import Ipe.String
@@ -19,7 +20,7 @@ main =
                 (\txconn ->
                     let
                         _ =
-                            Db.unsafeExecRaw txconn
+                            Unsafe.unsafeExecRaw txconn
                                 "CREATE TABLE products (name TEXT NOT NULL, qty INTEGER NOT NULL)"
 
                         _ =
@@ -43,11 +44,11 @@ main =
                                 (\rows ->
                                     let
                                         names =
-                                            List.map (\r -> Db.unsafeGetString "name" r) rows
+                                            List.map (\r -> Unsafe.unsafeGetString "name" r) rows
                                     in
                                     Io.println (String.fromInt deletedCount ++ ":" ++ String.join "," names)
                                 )
-                                (Db.unsafeQuery txconn "SELECT * FROM products ORDER BY name" [])
+                                (Unsafe.unsafeQuery txconn "SELECT * FROM products ORDER BY name" [])
                         )
                         (Db.deleteWhere txconn "products" (Sql.eq (Sql.column "name") (Sql.string "gadget")))
                 )

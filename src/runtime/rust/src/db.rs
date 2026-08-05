@@ -2081,6 +2081,25 @@ pub fn sql_column(name: String) -> SqlFragment {
     }
 }
 
+/// `Ipe.Db.Unsafe.unsafeFragment : String -> SqlFragment` — the anti-[`sql_column`]:
+/// mints a `SqlFragment` from `name` VERBATIM, deliberately SKIPPING the
+/// [`valid_sql_ident`] gate that `sql_column` applies. The caller asserts, under
+/// the `unsafe` capability, that `name` is a safe SQL identifier or fragment; no
+/// validator runs and no poison marker is set. This is the un-validated escape
+/// hatch the safe `Sql.column` path exists to avoid — reachable only through the
+/// disclosed `Ipe.Db.Unsafe` submodule.
+///
+/// Total and panic-free: it constructs the plain `SqlFragment` record with the
+/// verbatim text, an empty bind list, and no poison — no indexing, no unwrap, no
+/// fallible step.
+pub fn sql_unsafe_fragment(name: String) -> SqlFragment {
+    SqlFragment {
+        sql: name,
+        binds: Vec::new(),
+        invalid: None,
+    }
+}
+
 /// `Sql.param : SqlValue -> SqlFragment` — binds `v` as a single `?`
 /// placeholder. Also the shared runtime symbol for `Sql.int` / `Sql.string` /
 /// `Sql.float` / `Sql.bool`: each is a Ipê-level type narrowing of this same
@@ -3930,6 +3949,44 @@ mod tests {
         assert!(
             matches!(found, IpeResult::Err(_)),
             "poisoned column must surface as Task::Err, got {found:?}"
+        );
+    }
+
+    /// SECURITY: `sql_unsafe_fragment` (the `Ipe.Db.Unsafe.unsafeFragment`
+    /// runtime) DELIBERATELY skips the `valid_sql_ident` gate that
+    /// [`sql_column`] applies. On the SAME identifier that `sql_column` poisons,
+    /// the unsafe mint produces a NON-poisoned fragment carrying the verbatim
+    /// text — this is the disclosed escape hatch: no validator runs, the caller
+    /// asserts the identifier is safe. The contrast with the poisoned
+    /// `sql_column` result is the whole point of the two-member split.
+    #[test]
+    fn test_unsafe_fragment_skips_validation() {
+        // An identifier `sql_column` rejects (space + semicolon outside the
+        // `valid_sql_ident` charset), which it poisons.
+        let hostile = "title; DROP TABLE todos".to_string();
+        let validated = sql_column(hostile.clone());
+        assert!(
+            validated.invalid.is_some(),
+            "sql_column must poison a malformed identifier"
+        );
+        assert!(
+            validated.sql.is_empty(),
+            "a poisoned sql_column carries no verbatim text"
+        );
+
+        // The unsafe mint on the SAME input: NO poison, verbatim text preserved.
+        let unsafe_frag = sql_unsafe_fragment(hostile.clone());
+        assert!(
+            unsafe_frag.invalid.is_none(),
+            "sql_unsafe_fragment must NOT poison — it deliberately skips valid_sql_ident"
+        );
+        assert_eq!(
+            unsafe_frag.sql, hostile,
+            "sql_unsafe_fragment must carry the verbatim identifier text"
+        );
+        assert!(
+            unsafe_frag.binds.is_empty(),
+            "sql_unsafe_fragment mints no binds"
         );
     }
 

@@ -1,9 +1,11 @@
-//! The raw-SQL escape hatch is `Db.unsafeExecRaw`, and the old unmarked
-//! `Db.execRaw` name no longer exists. This pins the security property that the
-//! verbatim-SQL injection surface is only reachable through a lexically-marked
-//! `unsafe` name — a caller cannot fall into raw SQL by using an unmarked
-//! default. The positive half (that `unsafeExecRaw` itself compiles) is covered
-//! by every `db_*` golden and by `postgres_driver_reachability`.
+//! The raw-SQL escape hatch is `Ipe.Db.Unsafe.unsafeExecRaw`, and neither the
+//! old unmarked `Db.execRaw` name nor the relocated `Db.unsafeExecRaw` off a
+//! plain `import Ipe.Db` exists. This pins the security property that the
+//! verbatim-SQL injection surface is only reachable through the lexically-marked
+//! `unsafe` name in the disclosed `Ipe.Db.Unsafe` submodule — a caller cannot
+//! fall into raw SQL by using an unmarked default, nor without disclosing the
+//! `unsafe` capability. The positive half (that `unsafeExecRaw` itself compiles)
+//! is covered by every `db_*` golden and by `postgres_driver_reachability`.
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -30,8 +32,9 @@ fn build(dir: &Path, test_name: &str) -> Result<(), ipe::CliError> {
     ipe::build_project(&dir.join("ipe.toml"), &out, &runtime())
 }
 
-/// `Db.unsafeExecRaw` is the raw-SQL escape hatch — it type-checks (the marked
-/// path stays available for DDL that cannot be parameterised).
+/// `Ipe.Db.Unsafe.unsafeExecRaw` is the raw-SQL escape hatch — it type-checks
+/// when imported from its `.Unsafe` submodule (the marked path stays available
+/// for DDL that cannot be parameterised).
 #[test]
 fn unsafe_exec_raw_is_the_raw_sql_entry() {
     let dir = write_project(
@@ -39,12 +42,13 @@ fn unsafe_exec_raw_is_the_raw_sql_entry() {
         "\
 module Main exposing (main)
 import Ipe.Db
+import Ipe.Db.Unsafe
 import Ipe.Task
 
 main =
     Task.andThen
         (\\conn ->
-            Db.unsafeExecRaw conn \"CREATE TABLE t (id INTEGER)\"
+            Unsafe.unsafeExecRaw conn \"CREATE TABLE t (id INTEGER)\"
         )
         (Db.open \"sqlite\" \"sqlite::memory:\")
 ",
@@ -52,7 +56,7 @@ main =
     let built = build(&dir, "marked");
     assert!(
         built.is_ok(),
-        "Db.unsafeExecRaw must type-check as the raw-SQL escape hatch: {:?}",
+        "Ipe.Db.Unsafe.unsafeExecRaw must type-check as the raw-SQL escape hatch: {:?}",
         built.err()
     );
     let _ = fs::remove_dir_all(&dir);
@@ -82,7 +86,36 @@ main =
     assert!(
         built.is_err(),
         "the unmarked Db.execRaw name must NOT compile — the raw-SQL injection \
-         surface may only be reached through the marked Db.unsafeExecRaw"
+         surface may only be reached through the marked Ipe.Db.Unsafe.unsafeExecRaw"
+    );
+    let _ = fs::remove_dir_all(&dir);
+}
+
+/// The relocated `unsafeExecRaw` no longer resolves off a plain `import Ipe.Db`:
+/// the raw-SQL surface LEFT `Ipe.Db` for `Ipe.Db.Unsafe`, so reaching it without
+/// importing the disclosed `.Unsafe` submodule is a compile error.
+#[test]
+fn relocated_exec_raw_off_plain_db_no_longer_compiles() {
+    let dir = write_project(
+        "relocated",
+        "\
+module Main exposing (main)
+import Ipe.Db
+import Ipe.Task
+
+main =
+    Task.andThen
+        (\\conn ->
+            Db.unsafeExecRaw conn \"CREATE TABLE t (id INTEGER)\"
+        )
+        (Db.open \"sqlite\" \"sqlite::memory:\")
+",
+    );
+    let built = build(&dir, "relocated");
+    assert!(
+        built.is_err(),
+        "Db.unsafeExecRaw off a plain `import Ipe.Db` must NOT compile — the \
+         raw-SQL surface relocated to the disclosed `Ipe.Db.Unsafe` submodule"
     );
     let _ = fs::remove_dir_all(&dir);
 }

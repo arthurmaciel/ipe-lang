@@ -30,12 +30,13 @@ fn runtime() -> PathBuf {
 const MAIN_IPE: &str = "\
 module Main exposing (main)
 import Ipe.Db
+import Ipe.Db.Unsafe
 import Ipe.Task
 
 main =
     Task.andThen
         (\\conn ->
-            Db.unsafeExecRaw conn \"CREATE TABLE t (id INTEGER)\"
+            Unsafe.unsafeExecRaw conn \"CREATE TABLE t (id INTEGER)\"
         )
         (Db.open \"sqlite\" \"sqlite::memory:\")
 ";

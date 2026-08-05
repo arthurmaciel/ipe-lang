@@ -16695,6 +16695,7 @@ impl<'a> Lowerer<'a> {
             // `param`), `not`/`isNull`/`isNotNull : SqlFragment -> SqlFragment`.
             Callee::Kernel(
                 KernelFn::SqlColumn
+                | KernelFn::SqlUnsafeFragment
                 | KernelFn::SqlParam
                 | KernelFn::SqlInt
                 | KernelFn::SqlString
@@ -17509,6 +17510,7 @@ impl<'a> Lowerer<'a> {
                     // ── Db kernels ──────────────────────────────────
                     // ── Sql kernels (SqlFragment combinators) ──────────
                     ("Sql", "column") => Ok(Callee::Kernel(KernelFn::SqlColumn)),
+                    ("Sql", "unsafeFragment") => Ok(Callee::Kernel(KernelFn::SqlUnsafeFragment)),
                     ("Sql", "param") => Ok(Callee::Kernel(KernelFn::SqlParam)),
                     ("Sql", "int") => Ok(Callee::Kernel(KernelFn::SqlInt)),
                     ("Sql", "string") => Ok(Callee::Kernel(KernelFn::SqlString)),

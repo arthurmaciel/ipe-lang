@@ -3,6 +3,7 @@ module Main exposing (main)
 import Ipe.Error as Error
 import Ipe.Io as Io
 import Ipe.Db
+import Ipe.Db.Unsafe
 import Ipe.List
 import Ipe.String
 import Ipe.Task
@@ -18,11 +19,11 @@ main =
         (\conn ->
             let
                 _ =
-                    Db.unsafeExecRaw conn
+                    Unsafe.unsafeExecRaw conn
                         "CREATE TABLE IF NOT EXISTS log (msg TEXT)"
 
                 _ =
-                    Db.unsafeExecRaw conn "DELETE FROM log"
+                    Unsafe.unsafeExecRaw conn "DELETE FROM log"
             in
             -- Transaction 1: INSERT "hello" + succeed → COMMIT → durable.
             Task.andThen
@@ -35,10 +36,10 @@ main =
                                 (\rows ->
                                     Io.println
                                         (String.join ","
-                                            (List.map (\r -> Db.unsafeGetString "msg" r) rows)
+                                            (List.map (\r -> Unsafe.unsafeGetString "msg" r) rows)
                                         )
                                 )
-                                (Db.unsafeQuery conn
+                                (Unsafe.unsafeQuery conn
                                     "SELECT msg FROM log ORDER BY msg"
                                     []
                                 )

@@ -1,6 +1,7 @@
 module Main exposing (main)
 import Ipe.Io as Io
 import Ipe.Db
+import Ipe.Db.Unsafe
 import Ipe.List
 import Ipe.String
 import Ipe.Task
@@ -61,11 +62,11 @@ import Ipe.Task
 -- enumerated there — reported separately as a blocking finding.
 
 formatRow row =
-    Db.unsafeGetString "name" row
+    Unsafe.unsafeGetString "name" row
         ++ ":"
-        ++ Db.unsafeGetString "category" row
+        ++ Unsafe.unsafeGetString "category" row
         ++ ":"
-        ++ String.fromInt (Db.unsafeGetInt "qty" row)
+        ++ String.fromInt (Unsafe.unsafeGetInt "qty" row)
 
 
 formatRows rows =
@@ -79,7 +80,7 @@ main =
                 (\txconn ->
                     let
                         _ =
-                            Db.unsafeExecRaw txconn
+                            Unsafe.unsafeExecRaw txconn
                                 "CREATE TABLE items (name TEXT NOT NULL, category TEXT NOT NULL, qty INTEGER NOT NULL)"
 
                         _ =
@@ -123,7 +124,7 @@ main =
                                         (\many ->
                                             let
                                                 sorted =
-                                                    List.sortBy (\r -> Db.unsafeGetString "name" r) many
+                                                    List.sortBy (\r -> Unsafe.unsafeGetString "name" r) many
 
                                                 joined3 =
                                                     formatRows sorted

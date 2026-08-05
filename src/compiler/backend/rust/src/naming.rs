@@ -928,6 +928,7 @@ pub const fn kernel_name(k: KernelFn) -> &'static str {
         // each is a Ipê-level type narrowing of the same generic
         // `sql_param::<T: Into<SqlParam>>`, so no separate runtime fn exists.
         KernelFn::SqlColumn => "sql_column",
+        KernelFn::SqlUnsafeFragment => "sql_unsafe_fragment",
         KernelFn::SqlParam
         | KernelFn::SqlInt
         | KernelFn::SqlString
