@@ -1,13 +1,13 @@
-//! Seal gate for the native `Ui.gridTracksRaw` primitive and the compiled
+//! Seal gate for the native `Ui.gridTracks` primitive and the compiled
 //! `Ipe.Ui.Grid` module (26-ui-showcase: `__gridTracks` sentinel silently
 //! dropped by the web renderer's `SafeCssPropertyName` gate).
 //!
 //! `Ipe.Ui.Grid.columns`/`rows`/`tracks` are pure-Ipê wrappers over the native
-//! `Ui.gridTracksRaw : String -> String -> Attribute msg` kernel
+//! `Ui.gridTracks : String -> String -> Attribute msg` kernel
 //! (`KernelFn::UiGridTracksRaw`), which constructs `AttrGridTracks(cols, rows)`.
 //! This test proves the whole seam:
 //!   * `import Ipe.Ui.Grid` resolves (no IPE-N0004 regression);
-//!   * `gridTracksRaw` type-checks as `String -> String -> Attribute msg`;
+//!   * `gridTracks` type-checks as `String -> String -> Attribute msg`;
 //!   * the emit lowers both `Grid.columns` and `Grid.tracks` to
 //!     `ui_grid_tracks_raw_(…)` — NO `__gridTracks` sentinel in emitted Rust;
 //!   * (`IPE_E2E`) the emitted Cargo project builds AND rendered web HTML carries
@@ -75,7 +75,7 @@ fn grid_module_resolves_and_emits_kernel() {
     assert!(
         res.is_ok(),
         "ipe build with `import Ipe.Ui.Grid` must succeed \
-         (native gridTracksRaw + compiled module): {:?}",
+         (native gridTracks + compiled module): {:?}",
         res.err()
     );
 
@@ -90,7 +90,7 @@ fn grid_module_resolves_and_emits_kernel() {
     let calls = emitted.matches("ui_grid_tracks_raw_(").count();
     assert!(
         calls >= 2,
-        "emitted Rust must carry BOTH gridTracksRaw helper calls (got {calls}):\n{emitted}"
+        "emitted Rust must carry BOTH gridTracks helper calls (got {calls}):\n{emitted}"
     );
 
     // The old __gridTracks sentinel must be gone — it was silently dropped by
