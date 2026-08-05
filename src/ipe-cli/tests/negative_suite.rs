@@ -511,6 +511,48 @@ fn security_web_head_unsafe_json_ld_compiles_off_submodule() {
     assert_compiles("security_web_head_unsafe_json_ld", src);
 }
 
+/// SECURITY: the blunt raw secret-reveal `reveal` no longer lives on the plain
+/// `Ipe.Secret` surface — it relocated to `Ipe.Secret.Unsafe.unsafeReveal`. A
+/// program that imports only `Ipe.Secret` and reaches for `Secret.reveal` must
+/// be rejected, so un-sealing a `Secret` into a bare `String` cannot happen
+/// without the disclosing `Ipe.Secret.Unsafe` import.
+#[test]
+fn security_secret_reveal_off_plain_secret_is_rejected() {
+    let src = "module Main exposing (main)\n\
+               import Ipe.Secret as Secret\n\
+               main =\n\
+                   Secret.reveal (Secret.fromString \"sk\")\n";
+    assert_rejected("security_secret_reveal_off_plain", src, "IPE-N0005");
+}
+
+/// SECURITY (contrapositive): the relocated `unsafeReveal`, homed in
+/// `Ipe.Secret.Unsafe`, still compiles — the raw un-seal capability is
+/// preserved, only relocated to the disclosing submodule that names the risk.
+#[test]
+fn security_secret_unsafe_reveal_compiles_off_submodule() {
+    let src = "module Main exposing (main)\n\
+               import Ipe.Secret as Secret\n\
+               import Ipe.Secret.Unsafe as Unsafe\n\
+               main =\n\
+                   Unsafe.unsafeReveal (Secret.fromString \"sk\")\n";
+    assert_compiles("security_secret_unsafe_reveal", src);
+}
+
+/// SECURITY (the safe scoped default): `Secret.use` — the scoped consume — stays
+/// on the native `Ipe.Secret` surface and compiles off a plain `import
+/// Ipe.Secret`, WITHOUT any `Ipe.Secret.Unsafe` import. It is capability-neutral
+/// (the disclosure half is proved in `ipe_lower::capabilities`'s
+/// `importing_ipe_secret_unsafe_discloses_unsafe` and its no-unsafe partition):
+/// the common scoped case never touches the `unsafe` axis.
+#[test]
+fn security_secret_use_compiles_off_plain_secret() {
+    let src = "module Main exposing (main)\n\
+               import Ipe.Secret as Secret\n\
+               main =\n\
+                   Secret.use (Secret.fromString \"sk\") (\\plain -> plain)\n";
+    assert_compiles("security_secret_use_scoped", src);
+}
+
 /// The same top-level value defined twice.
 #[test]
 fn canon_duplicate_value() {

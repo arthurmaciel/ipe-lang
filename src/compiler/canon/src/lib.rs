@@ -2139,6 +2139,11 @@ mod tests {
             // The un-validated anti-`Sql.column`: canonical `("Sql", …)` key for
             // the alias, surfaced only through `Ipe.Db.Unsafe.unsafeFragment`.
             ("Sql", "unsafeFragment"),
+            // The blunt secret un-parse: canonical `("Secret", "reveal")` key
+            // retained for the `Ffi.kernel "Secret_reveal"` alias, surfaced only
+            // through `Ipe.Secret.Unsafe.unsafeReveal`. The scoped `Secret.use`
+            // stays on the native `Secret` surface (capability-neutral).
+            ("Secret", "reveal"),
         ]
         .into_iter()
         .collect();

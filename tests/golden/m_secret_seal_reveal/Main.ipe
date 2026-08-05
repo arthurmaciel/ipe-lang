@@ -2,13 +2,15 @@ module Main exposing (main)
 import Ipe.Io as Io
 import Ipe.Secret
 
--- backlog #44 golden: `Secret.fromString` is the seal; `Secret.reveal` is the
--- single greppable un-parse; `Secret.redacted` is the explicit "<redacted>"
--- accessor. Plaintext-grep-guard (see `golden_secret.rs`): the marker
--- "sk_live_zx9K3_MARKER" appears in THIS SOURCE exactly once (sealed right
--- here) and the compiled binary's stdout is asserted to contain it exactly
--- once too (from the deliberate `Secret.reveal` Io.println below) — proving
--- `Secret.redacted` never echoes it.
+-- golden: `Secret.fromString` is the seal; `Secret.use` is the scoped consume
+-- (apply a function to the plaintext, return its result); `Secret.redacted` is
+-- the explicit "<redacted>" accessor. Plaintext-grep-guard (see
+-- `golden_secret.rs`): the marker "sk_live_zx9K3_MARKER" appears in THIS SOURCE
+-- exactly once (sealed right here) and the compiled binary's stdout is asserted
+-- to contain it exactly once too (from the deliberate `Secret.use` scoped
+-- println below) — proving `Secret.redacted` never echoes it. The blunt raw
+-- un-parse now lives in `Ipe.Secret.Unsafe.unsafeReveal` (discloses `unsafe`);
+-- the scoped `Secret.use` covers this common case off the `unsafe` axis.
 
 secretVal =
     Secret.fromString "sk_live_zx9K3_MARKER"
@@ -17,4 +19,4 @@ main =
     let
         _ = Io.println (Secret.redacted secretVal)
     in
-    Io.println (Secret.reveal secretVal)
+    Secret.use secretVal Io.println

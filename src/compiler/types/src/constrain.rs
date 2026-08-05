@@ -6903,6 +6903,11 @@ impl<'a> Builder<'a> {
             // `ipe_types::{concrete_super_ok, emitted_bound_satisfied}`.
             K::SecretFromString => fun(string(), secret()),
             K::SecretReveal => fun(secret(), string()),
+            // `Secret.use : Secret -> (String -> a) -> a` — apply the caller's
+            // function to the revealed plaintext, return its result. Secret-first
+            // (pipe-friendly), matching the `secret_use(s, f)` runtime arg order,
+            // so it stays off the `kernel_swaps_first_two` list.
+            K::SecretUse => fun(secret(), fun(fun(string(), var(0)), var(0))),
             K::SecretRedacted => fun(secret(), string()),
 
             // ── Ipe.Http.Server.Stream (4 kernels) ────────────────────────
@@ -9191,9 +9196,12 @@ mod registry_phase_c_tests {
             // DbDec siblings are RELOCATED; these are deliberately not.
             K::DbDecMoney,
             K::DbDecBytes,
-            // ── Ipe.Secret (3) ─────────────────────────────
+            // ── Ipe.Secret (4) ─────────────────────────────
             K::SecretFromString,
             K::SecretReveal,
+            // `Secret.use : Secret -> (String -> a) -> a` — Ipê-new scoped
+            // consume (no legacy oracle); the polymorphic higher-order arm.
+            K::SecretUse,
             K::SecretRedacted,
             // ── Ipe.Regex (6) ─────────────────────────────────────
             K::RegexCompile,
