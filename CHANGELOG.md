@@ -10,6 +10,24 @@ Entries below the header are maintained by
 section is generated from Conventional Commit messages and prepended when the
 standing release pull request is merged.
 
+## [0.1.40](https://github.com/arthurmaciel/ipe-lang/compare/ipe-v0.1.39...ipe-v0.1.40) (2026-08-05)
+
+
+### Features
+
+* **capability:** add the `unsafe` capability + `Ipe.<M>.Unsafe` disclosure plumbing ([#679](https://github.com/arthurmaciel/ipe-lang/issues/679) slice 0) ([#729](https://github.com/arthurmaciel/ipe-lang/issues/729)) ([a159246](https://github.com/arthurmaciel/ipe-lang/commit/a1592464232ed9dbc20a1572afc82e3b0685b354))
+* **stdlib:** add Ipe.Codec JSON-direction compiled-source surface (codec slice 1) ([#740](https://github.com/arthurmaciel/ipe-lang/issues/740)) ([d96c0d5](https://github.com/arthurmaciel/ipe-lang/commit/d96c0d5369c1c4ad53d2f12fea1cc711c1459b12))
+* **stdlib:** add scoped Secret.use + relocate Secret.reveal -&gt; Ipe.Secret.Unsafe.unsafeReveal (unsafe-axis slice E) ([#679](https://github.com/arthurmaciel/ipe-lang/issues/679)) ([#736](https://github.com/arthurmaciel/ipe-lang/issues/736)) ([cdde69b](https://github.com/arthurmaciel/ipe-lang/commit/cdde69b9f3a600e9e304d72a062083103e8af183))
+* **stdlib:** convert Ipe.Ui layout builders to compiled-source ([#726](https://github.com/arthurmaciel/ipe-lang/issues/726)) ([0a7f808](https://github.com/arthurmaciel/ipe-lang/commit/0a7f8086fc3ee7b58e54c41645eda9e3f559c726))
+* **stdlib:** relocate Html.unsafeRaw -&gt; Ipe.Html.Unsafe.unsafeRaw (unsafe-axis slice A) ([#679](https://github.com/arthurmaciel/ipe-lang/issues/679)) ([#730](https://github.com/arthurmaciel/ipe-lang/issues/730)) ([0ab85b0](https://github.com/arthurmaciel/ipe-lang/commit/0ab85b01d1b07356c82ae59796e2dc47ce8f363a))
+* **stdlib:** relocate raw-SQL / untyped-read Db hatches to Ipe.Db.Unsafe + add unsafeFragment (unsafe-axis slice C) ([#679](https://github.com/arthurmaciel/ipe-lang/issues/679)) ([#733](https://github.com/arthurmaciel/ipe-lang/issues/733)) ([903cba4](https://github.com/arthurmaciel/ipe-lang/commit/903cba44734b7fc59643cc0cf9076fb5f80a3e7d))
+* **stdlib:** relocate Web.Head.unsafeJsonLd to Ipe.Web.Head.Unsafe (unsafe-axis slice D) ([#679](https://github.com/arthurmaciel/ipe-lang/issues/679)) ([#735](https://github.com/arthurmaciel/ipe-lang/issues/735)) ([6a2a529](https://github.com/arthurmaciel/ipe-lang/commit/6a2a5298829f6ad60629c5a252656fe3df685ccf))
+
+
+### Bug Fixes
+
+* **lower:** close http-stream ChunkEvent/StreamId module-set SEAL breach ([#724](https://github.com/arthurmaciel/ipe-lang/issues/724)) ([d7b2c52](https://github.com/arthurmaciel/ipe-lang/commit/d7b2c52b0930958b5ab88e1ce17b9866b21589b3))
+
 ## [0.1.39](https://github.com/arthurmaciel/ipe-lang/compare/ipe-v0.1.38...ipe-v0.1.39) (2026-08-05)
 
 
