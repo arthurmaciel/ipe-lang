@@ -409,7 +409,7 @@ app code.
 | `Server` | `Ipe.Http.Server` | param, queryParam, header, getCookie, static (Layer 3 surface); higher-level `get/post/listen/text/json/html` are kernel-only |
 | `Stream` | `Ipe.Http.Server.Stream` | stream, emit, finish, withContentType — server-side streaming HTTP responses (SSE/LLM token forwarding/chunked downloads). Mirror of `Ipe.Core.Http.Stream`. Sync bridge: `Ipe.Core.Http.Stream.forEachChunk hdl body` drains an upstream stream from inside a plain Ipe.Http.Server handler (relay shape). |
 | `Middleware` | `Ipe.Http.Middleware` | withCors, withLogging, withBasicAuth, withRateLimit |
-| `Head` | `Ipe.Web.Head` | Per-page `<head>` injection — `title`/`meta`/`metaProperty` (OG)/`link`/`canonical`/`jsonLd`/`themeColor`/`rss`. Opt in via optional `head : Model -> List (Html msg)` field on `Web.app` cfg. |
+| `Head` | `Ipe.Web.Head` | Per-page `<head>` injection — `title`/`meta`/`metaProperty` (OG)/`link`/`canonical`/`themeColor`/`rss`. Opt in via optional `head : Model -> List (Html msg)` field on `Web.app` cfg. The verbatim JSON-LD `<script>` hatch `unsafeJsonLd` lives in `Ipe.Web.Head.Unsafe` (discloses the `unsafe` capability). |
 | `Console` | `Ipe.Web.Console` | `Identity` type alias (`{ subject, email, claims : Dict String String }`) for optional row-poly `consoleAuth : Request -> Task Error (Maybe Identity)` field on `Web.app` cfg. |
 | `RateLimit` | `Ipe.Http.RateLimit` | allow |
 | `WebSocket` | `Ipe.WebSocket` (client) + `Ipe.Http.Server.WebSocket` (server) | Bidirectional sockets. Client: `connect`/`connectWith`/`send`/`sendBinary`/`close`/`closeWithCode` (Task-tier) + `onOpen`/`onMessage`/`onClose`/`onError` (Sub-tier). Server: `upgrade` (returns from a Ipe.Http.Server handler) + `sendToClient`/`sendBinaryToClient`/`broadcast`/`closeClient`. Server production gate: empty `originPatterns` returns 403 when `ENV=production`. |
@@ -507,9 +507,12 @@ headFor model =
     , Head.metaProperty "og:image" "https://example.com/og.png"
     , Head.themeColor "#1a1a2e"
     , Head.rss "/rss.xml" "Site Blog"
-    , Head.jsonLd (jsonLdFor model.page)  -- raw JSON string body
     ]
 ```
+
+The verbatim JSON-LD `<script>` hatch is `Ipe.Web.Head.Unsafe.unsafeJsonLd`
+(`import Ipe.Web.Head.Unsafe exposing (unsafeJsonLd)`) — importing it discloses
+the `unsafe` capability, and the JSON body is spliced un-escaped.
 
 `Ipe.Web.Head` helpers (all return `Html msg`):
 
@@ -520,9 +523,14 @@ headFor model =
 | `metaProperty : String -> String -> Html msg` | `<meta property="…" content="…">` (Open Graph) |
 | `link : List (String, String) -> Html msg` | `<link …>` with arbitrary attr pairs |
 | `canonical : String -> Html msg` | `<link rel="canonical" href="…">` |
-| `jsonLd : String -> Html msg` | `<script type="application/ld+json">…</script>` (raw JSON body) |
 | `themeColor : String -> Html msg` | `<meta name="theme-color" content="…">` |
 | `rss : String -> String -> Html msg` | `<link rel="alternate" type="application/rss+xml" …>` |
+
+`Ipe.Web.Head.Unsafe` (discloses `unsafe`):
+
+| Helper | Emits |
+|---|---|
+| `unsafeJsonLd : String -> Html msg` | `<script type="application/ld+json">…</script>` (raw JSON body, spliced un-escaped) |
 
 Pair w/ `Ipe.Html.node "link" […] []` for cases helpers no cover.
 
