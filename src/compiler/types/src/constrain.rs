@@ -19,7 +19,7 @@ use std::rc::Rc;
 use ipe_canon::ast as canon;
 use ipe_diagnostics::{DResult, Diagnostic, Feature, LowerError, Span, TypeError};
 use ipe_intern::{Interner, Symbol};
-use ipe_kernels::{BuiltinTag, SchemeKey, StdlibKernel, TyShape};
+use ipe_kernels::{BuiltinTag, FieldTag, RowTailShape, SchemeKey, StdlibKernel, TyShape};
 
 use crate::doc::{VarNamer, canon_type_to_doc, ty_to_doc};
 use crate::solve::{Budget, Constraint};
@@ -3891,6 +3891,21 @@ impl<'a> Builder<'a> {
             TyShape::Tuple(elems) => {
                 Ty::Tuple(elems.iter().map(|e| self.interpret_shape(e)).collect())
             }
+            // The `BTreeMap` re-sorts by the resolved field `Symbol`, so the
+            // key order is byte-identical to the hand-built `Ty::Record`
+            // regardless of the declared slice order (the declared order is
+            // additionally pinned ascending by `interpreted_shape_matches_legacy`).
+            TyShape::Record { fields, tail } => {
+                let mut map = BTreeMap::new();
+                for (name, field) in *fields {
+                    map.insert(self.field_symbol(*name), self.interpret_shape(field));
+                }
+                let tail = match tail {
+                    RowTailShape::Closed => RowTail::Closed,
+                    RowTailShape::Open(i) => RowTail::Open(u32::from(*i)),
+                };
+                Ty::Record(map, tail)
+            }
             // The `stdlib_scheme` table binds `let var = Ty::Var`, so its
             // `var(i)` is `Ty::Var(i)`: a scheme-local variable's raw is its bare
             // positional index. Match that exactly for byte-identity.
@@ -3963,6 +3978,98 @@ impl<'a> Builder<'a> {
             BuiltinTag::InputLabel => self.builtins.input_label_con,
             BuiltinTag::InputPlaceholder => self.builtins.input_placeholder_con,
             BuiltinTag::InputRadioOption => self.builtins.input_radio_option_con,
+            BuiltinTag::WebReq => self.builtins.web_req,
+            BuiltinTag::WebRoute => self.builtins.live_route_con,
+            BuiltinTag::EmailProvider => self.builtins.email_provider,
+        }
+    }
+
+    /// Resolve a structural [`FieldTag`] to the interned field-name [`Symbol`]
+    /// the `stdlib_scheme` table uses as the `Ty::Record` `BTreeMap` key for the
+    /// same field, so an interpreted record shape is byte-identical to the
+    /// hand-built `Ty::Record`.
+    const fn field_symbol(&self, tag: FieldTag) -> Symbol {
+        match tag {
+            FieldTag::MigrationName => self.builtins.migration_f_name,
+            FieldTag::MigrationSql => self.builtins.migration_f_sql,
+            FieldTag::HttpBody => self.builtins.http_f_body,
+            FieldTag::HttpHeaders => self.builtins.http_f_headers,
+            FieldTag::HttpStatus => self.builtins.http_f_status,
+            FieldTag::HttpMethod => self.builtins.http_f_method,
+            FieldTag::HttpUrl => self.builtins.http_f_url,
+            FieldTag::HttpTimeout => self.builtins.http_f_timeout,
+            FieldTag::HttpFollowRedirects => self.builtins.http_f_follow_redirects,
+            FieldTag::HttpMaxRedirects => self.builtins.http_f_max_redirects,
+            FieldTag::ServerContentType => self.builtins.server_f_content_type,
+            FieldTag::CsvHeader => self.builtins.csv_f_header,
+            FieldTag::CsvRows => self.builtins.csv_f_rows,
+            FieldTag::CacheMaxEntries => self.builtins.cache_f_max_entries,
+            FieldTag::CacheTtlMs => self.builtins.cache_f_ttl_ms,
+            FieldTag::CacheMaxBytes => self.builtins.cache_f_max_bytes,
+            FieldTag::CacheHits => self.builtins.cache_f_hits,
+            FieldTag::CacheMisses => self.builtins.cache_f_misses,
+            FieldTag::CacheEvictions => self.builtins.cache_f_evictions,
+            FieldTag::WsUrl => self.builtins.ws_f_url,
+            FieldTag::WsHeaders => self.builtins.ws_f_headers,
+            FieldTag::WsTimeout => self.builtins.ws_f_timeout,
+            FieldTag::WsPingInterval => self.builtins.ws_f_ping_interval,
+            FieldTag::EmailFrom => self.builtins.email_f_from,
+            FieldTag::EmailTo => self.builtins.email_f_to,
+            FieldTag::EmailCc => self.builtins.email_f_cc,
+            FieldTag::EmailBcc => self.builtins.email_f_bcc,
+            FieldTag::EmailSubject => self.builtins.email_f_subject,
+            FieldTag::EmailTextBody => self.builtins.email_f_text_body,
+            FieldTag::EmailHtmlBody => self.builtins.email_f_html_body,
+            FieldTag::EmailAttachments => self.builtins.email_f_attachments,
+            FieldTag::EmailReplyTo => self.builtins.email_f_reply_to,
+            FieldTag::EmailFilename => self.builtins.email_f_filename,
+            FieldTag::EmailMimeType => self.builtins.email_f_mime_type,
+            FieldTag::EmailContent => self.builtins.email_f_content,
+            FieldTag::RetryBaseMs => self.builtins.retry_f_base_ms,
+            FieldTag::RetryJitter => self.builtins.retry_f_jitter,
+            FieldTag::RetryKind => self.builtins.retry_f_kind,
+            FieldTag::RetryMaxAttempts => self.builtins.retry_f_max_attempts,
+            FieldTag::RetryShouldRetry => self.builtins.retry_f_should_retry,
+            FieldTag::LayoutWrapperAttrs => self.builtins.lw_wrapper_attrs,
+            FieldTag::LayoutRootAttrs => self.builtins.lw_root_attrs,
+            FieldTag::ButtonOnPress => self.builtins.btn_f_on_press,
+            FieldTag::Label => self.builtins.btn_f_label,
+            FieldTag::AppInit => self.builtins.live_f_init,
+            FieldTag::AppUpdate => self.builtins.live_f_update,
+            FieldTag::AppView => self.builtins.live_f_view,
+            FieldTag::AppSubscriptions => self.builtins.live_f_subscriptions,
+            FieldTag::AppRoutes => self.builtins.live_f_routes,
+            FieldTag::AppNotFound => self.builtins.live_f_not_found,
+            FieldTag::TerminalOnKey => self.builtins.tui_f_on_key,
+            FieldTag::TerminalKeyKind => self.builtins.tui_f_key_kind,
+            FieldTag::TerminalKeyValue => self.builtins.tui_f_key_value,
+            FieldTag::TerminalOnLine => self.builtins.cli_f_on_line,
+            FieldTag::WebViewWindow => self.builtins.webview_f_window,
+            FieldTag::WebViewTitle => self.builtins.webview_f_title,
+            FieldTag::WebViewSize => self.builtins.webview_f_size,
+            FieldTag::EdgeTop => self.builtins.edge_f_top,
+            FieldTag::EdgeRight => self.builtins.edge_f_right,
+            FieldTag::EdgeBottom => self.builtins.edge_f_bottom,
+            FieldTag::EdgeLeft => self.builtins.edge_f_left,
+            FieldTag::InputOnChange => self.builtins.input_f_on_change,
+            FieldTag::InputText => self.builtins.input_f_text,
+            FieldTag::InputPlaceholder => self.builtins.input_f_placeholder,
+            FieldTag::InputIcon => self.builtins.input_f_icon,
+            FieldTag::InputChecked => self.builtins.input_f_checked,
+            FieldTag::InputSpellcheck => self.builtins.input_f_spellcheck,
+            FieldTag::InputValue => self.builtins.input_f_value,
+            FieldTag::InputMin => self.builtins.input_f_min,
+            FieldTag::InputMax => self.builtins.input_f_max,
+            FieldTag::InputStep => self.builtins.input_f_step,
+            FieldTag::InputOptions => self.builtins.input_f_options,
+            FieldTag::InputSelected => self.builtins.input_f_selected,
+            FieldTag::ShadowOffsetX => self.builtins.shadow_f_offset_x,
+            FieldTag::ShadowOffsetY => self.builtins.shadow_f_offset_y,
+            FieldTag::ShadowBlur => self.builtins.shadow_f_blur,
+            FieldTag::ShadowSpread => self.builtins.shadow_f_spread,
+            FieldTag::ShadowColor => self.builtins.shadow_f_color,
+            FieldTag::ImageSrc => self.builtins.img_f_src,
+            FieldTag::ImageDescription => self.builtins.img_f_description,
         }
     }
 
@@ -8097,8 +8204,8 @@ pub fn resolve_scheme(key: SchemeKey, interner: &mut Interner) -> Result<Option<
 mod registry_phase_c_tests {
     use super::{Builder, Builtins, Content, Diagnostic, Feature, LowerError, Ty, UnionFind};
     use ipe_diagnostics::Span;
-    use ipe_intern::Interner;
-    use ipe_kernels::StdlibKernel;
+    use ipe_intern::{Interner, Symbol};
+    use ipe_kernels::{StdlibKernel, TyShape};
 
     /// Kernels RELOCATED into `stdlib_scheme` from the legacy `kernel_ty` table
     /// (String / List / Math plus the remaining backed families). Each carries
@@ -9660,6 +9767,14 @@ mod registry_phase_c_tests {
                  reference Ty — the structural encoding disagrees with the \
                  hand-authored signature",
             );
+            // Field ORDER tripwire. `interpret_shape` builds the record via a
+            // `BTreeMap`, which re-sorts by resolved symbol — so a reordered
+            // declared field slice yields the SAME `Ty` and the byte-identity
+            // `assert_eq!` above cannot catch it. Assert every record shape's
+            // declared fields are in strictly-ascending resolved-symbol order
+            // (matching the `BTreeMap` iteration order): a field reorder OR a
+            // duplicate field now fails here.
+            assert_record_fields_ordered(&builder, shape, k);
         }
         // Guard against a silently-empty sweep. The migrated set spans the
         // primitive-monomorphic kernels, the core `List` combinators, the
@@ -9679,37 +9794,77 @@ mod registry_phase_c_tests {
         // `ServerRoute` / `ServerCookie` / `ServerRequest` handle kernels, and
         // the raw-`Int`-handle `WebSocket` client.
         //
-        // Now shape-migrated too: the `Ui` / `Html` / style builder families —
-        // layout / element / event / attribute builders, the `Html` node and
-        // `Html.Attributes` / `Html.Events` builders, the `Font` / `Border` /
-        // `Background` / `Region` attribute builders, the `Length` / `Color` /
-        // `Description` / `PseudoClass` value builders, the non-record `Input`
-        // constructors (`label*` / `labelHidden` / `placeholder` / `option`),
-        // `Ui.Keyed`, `Ui.Lazy`, `Ui.breakpoint` / `mediaQuery` / `onPseudo`,
-        // and `Server.listen` — via the `Attribute` / `Element` / `Html` /
-        // `Length` / `Color` / `Description` / `PseudoClass` / `Label` /
-        // `Placeholder` / `RadioOption` `Con` tags. The `Ipe.Html.Attribute`
-        // cons are module-qualified (the `HtmlAttribute` tag carries the `Html`
-        // module path — see `builtin_con_module`), byte-identical to the
+        // The `Ui` / `Html` / style builder families — layout / element / event
+        // / attribute builders, the `Html` node and `Html.Attributes` /
+        // `Html.Events` builders, the `Font` / `Border` / `Background` / `Region`
+        // attribute builders, the `Length` / `Color` / `Description` /
+        // `PseudoClass` value builders, the non-record `Input` constructors
+        // (`label*` / `labelHidden` / `placeholder` / `option`), `Ui.Keyed`,
+        // `Ui.Lazy`, `Ui.breakpoint` / `mediaQuery` / `onPseudo`, and
+        // `Server.listen` — via the `Attribute` / `Element` / `Html` / `Length` /
+        // `Color` / `Description` / `PseudoClass` / `Label` / `Placeholder` /
+        // `RadioOption` `Con` tags. The `Ipe.Html.Attribute` cons are
+        // module-qualified (the `HtmlAttribute` tag carries the `Html` module
+        // path — see `builtin_con_module`), byte-identical to the
         // `stdlib_scheme` `html_attr` builder.
         //
-        // Still on the `stdlib_scheme` table (not shape-migrated here): every
-        // closed-record / open-row family — the app-entry cfg records
-        // (`WebApp` / `WebView` / `Terminal` / `Program`), `HttpRequest` /
-        // `HttpResponse` / `Response`, `Migration`, `Csv` / `CacheCfg` /
-        // `CacheStats` / `WebSocketCfg` / `EmailMessage`, `RetryPolicy`, and the
-        // record-carrying `Input` (`text` / `multiline` / `checkbox` / `slider`
-        // / `radio` / `radioRow`) / `Border` (`widthEach` / `shadow` /
-        // `innerShadow`) / `Ui.button` / `Ui.layoutWith` / `Ui.paddingEach` /
-        // `Ui.link` / `Ui.image` arms, plus the record-producing `Server`
-        // route-handler kernels — they need a record / row node.
+        // The closed-record / open-row families via the `Record` node: the
+        // app-entry cfg records (`Web.app` open-row, `WebView.app` /
+        // `Terminal.appScreen` open-row / `Terminal.appLines`), `HttpRequest` /
+        // `HttpResponse` / server `Response`, `Migration`, `Csv` / `CacheCfg` /
+        // `CacheStats` / `WebSocketCfg` / `EmailMessage` (+ nested attachment),
+        // `RetryPolicy` (incl. the `Error`-channel `retryWith`), the
+        // record-carrying `Input` (`text` / `multiline` / `checkbox` / `slider` /
+        // `radio` / `radioRow`), `Border` (`widthEach` / `shadow` /
+        // `innerShadow`), `Ui.button` / `Ui.layoutWith` / `Ui.paddingEach` /
+        // `Ui.link` / `Ui.image`, and the record-producing `Server` route-handler
+        // kernels — each byte-identical to its retained `stdlib_scheme` arm.
         assert!(
-            migrated >= 889,
+            migrated >= 956,
             "expected at least the primitive + core-List + arrow-only + \
              tuple-shaped + arrow-scalar polymorphic kernels plus the migrated \
-             effect / scalar-opaque families and the Ui / Html / style builder \
-             families (889 total) to carry a TyShape, found only {migrated}",
+             effect / scalar-opaque / Ui / Html / style builder families and the \
+             closed-record / open-row families (956 total) to carry a TyShape, \
+             found only {migrated}",
         );
+    }
+
+    /// Assert every [`TyShape::Record`] reachable from `shape` declares its
+    /// fields in strictly-ascending resolved-symbol order — the order a
+    /// `BTreeMap` iterates, so the declared slice mirrors the materialised
+    /// `Ty::Record`'s key order. A reordered slice, or a duplicated field name,
+    /// fails here even though `interpret_shape`'s `BTreeMap` re-sort hides both
+    /// from the byte-identity `assert_eq!`.
+    fn assert_record_fields_ordered(builder: &Builder, shape: &TyShape, k: StdlibKernel) {
+        match shape {
+            TyShape::Fun(a, b) => {
+                assert_record_fields_ordered(builder, a, k);
+                assert_record_fields_ordered(builder, b, k);
+            }
+            TyShape::Con(_, args) | TyShape::Tuple(args) => {
+                for a in *args {
+                    assert_record_fields_ordered(builder, a, k);
+                }
+            }
+            TyShape::Record { fields, .. } => {
+                let mut prev: Option<Symbol> = None;
+                for (name, field) in *fields {
+                    let sym = builder.field_symbol(*name);
+                    if let Some(p) = prev {
+                        assert!(
+                            p < sym,
+                            "record TyShape for {k:?} declares field {name:?} \
+                             out of ascending resolved-symbol order (or a \
+                             duplicate) — declare record fields sorted by \
+                             resolved symbol so the slice mirrors the BTreeMap",
+                        );
+                    }
+                    prev = Some(sym);
+                    assert_record_fields_ordered(builder, field, k);
+                }
+            }
+            TyShape::Unit | TyShape::Var(_) => {}
+        }
     }
 
     /// Independent byte-identity oracle for the shape-migrated primitive
