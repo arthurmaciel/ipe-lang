@@ -41,6 +41,45 @@ hatch a boundary as strong as the one the type gives the constructor — **and m
 that boundary machine-readable**, disclosed by `ipe capabilities` exactly like
 `native-ffi` is today.
 
+## Precedence: secure by construction before you mark unsafe
+
+Marking a function `unsafe*` is a *warning label*, not a fix. By the fundamental
+rule **fix the structure, not the symptom** — and Security first — this
+convention applies **only to irreducible hatches**. Before any `*Raw` / escape
+function is relocated into `Ipe.<M>.Unsafe`, apply this gate:
+
+1. **Can the raw input be parsed/validated into the safe type?** If yes, route it
+   through the validator so the function is secure by construction
+   (make-invalid-states-unrepresentable) — it is then *not* an escape hatch. A
+   fixable `*Raw` MUST be fixed, never merely labeled: a hazard a validator pass
+   would have removed is not one to relieve with a name.
+2. **Can a narrower, safer API replace the raw one?** Prefer it (e.g. a scoped
+   consume over a raw reveal).
+3. **Only if the bypass is genuinely irreducible** — arbitrary input, no
+   validation can guarantee safety, and a legitimate verbatim need exists — does
+   it get `Ipe.<M>.Unsafe.unsafe*` plus the `unsafe` capability.
+
+Per-function audit (the front half of this work):
+
+- **`Ui.*Raw` (grid tracks / animate / transition) → SECURE, not Unsafe.** Route
+  the raw CSS string through `CssSafety`'s validator, or replace it with a typed
+  API; a validated CSS value has no injection hatch left to mark. [rule 1]
+- **`Secret.reveal` → prefer a scoped consume** `Secret.use : Secret -> (String
+  -> a) -> a` (the raw value never escapes the closure), falling back to
+  `Ipe.Secret.Unsafe.unsafeReveal` only where a scoped form cannot express the
+  need. [rule 2, then 3]
+- **`Db.unsafeExecRaw` / `Db.unsafeFragment`, `Html.unsafeRaw`, `Js.unsafeEval`
+  → Unsafe (irreducible).** No validator makes arbitrary SQL / HTML / JS safe;
+  the secure norms (parameterised queries, escaped `Html` construction, no eval)
+  are already the ordinary API, and these are the genuine verbatim escapes. For
+  `Html`, additionally offer a secure `Html.sanitize : String -> Html` where a
+  sanitiser exists, so `unsafeRaw` is reserved for truly-trusted input.
+- **Audit every remaining `*Raw` / `reveal` / `*FromString`** against the three
+  hatch shapes (mint-by-assertion, demote-to-raw, inject-into-a-sink). The
+  `*FromString` constructors that return `Maybe` / `Result` are safe parses and
+  stay; `Secret.fromString` (promotion *into* the protected type) is safe and
+  stays.
+
 ## The convention: one submodule, one prefix, belt and suspenders
 
 > Every parse-bypassing / unsafe escape in the standard library lives in a

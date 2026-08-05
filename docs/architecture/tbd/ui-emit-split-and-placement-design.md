@@ -14,7 +14,7 @@ largest function in the compiler:
    `misc/disentanglement-opportunities.md`).
 2. **The placement question** — should the UI view-builders (`Ui.column`,
    `Ui.text`, `Html` constructors, attributes) be native kernels or pure Ipê,
-   per `misc/stdlib-kernel-vs-library.md`?
+   per `docs/architecture/tbd/stdlib-placement-policy.md`?
 
 The two answers reinforce each other: the placement move (stage two) shrinks the
 very table the deepening (stage one) builds.
