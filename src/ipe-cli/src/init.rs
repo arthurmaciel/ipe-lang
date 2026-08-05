@@ -28,11 +28,11 @@ const README_MD: &str = include_str!("../templates/README.md.in");
 /// `.gitignore` — no substitution; the same ignore set fits every project.
 const GITIGNORE: &str = include_str!("../templates/gitignore.in");
 
-/// `AGENTS.md` — the Ipê authoring reference, embedded from the repository root
-/// so every scaffolded project ships the same self-contained guide an agent or
-/// developer needs to write Ipê. No substitution: it is byte-identical for every
-/// project.
-const AGENTS_MD: &str = include_str!("../../../AGENTS.md");
+/// `AGENTS.md` — the Ipê authoring reference, embedded from the sibling
+/// `templates/` directory so every scaffolded project ships the same
+/// self-contained guide an agent or developer needs to write Ipê. No
+/// substitution: it is byte-identical for every project.
+const AGENTS_MD: &str = include_str!("../templates/AGENTS.md.in");
 
 /// One file `ipe init` manages: where it lives, relative to the target, and the
 /// content it would write there.

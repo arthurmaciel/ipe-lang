@@ -243,7 +243,7 @@ Over `std::process::Command`. Requirements, in principle order:
 ### The single-construction-point wiring (all anti-drift sites)
 
 Registering `Process_run` and `Process_exec` updates every site enumerated in
-`DEVELOPMENT.md` §0b, each fail-closed at ipe time:
+the root `AGENTS.md` "Registering a kernel", each fail-closed at ipe time:
 
 | Site | Change |
 |---|---|

@@ -8,7 +8,7 @@
 > justification, not by oversight.
 >
 > **Anti-drift note.** Every new kernel or stdlib value must update **all**
-> anti-drift sites (DEVELOPMENT.md §0b): `ipe_kernels` (enum + `decl()` + `ALL`),
+> anti-drift sites (root `AGENTS.md`, "Registering a kernel"): `ipe_kernels` (enum + `decl()` + `ALL`),
 > `ipe_types::constrain` (type-scheme + `FIRST_SCHEMED`), `ipe_lower` (arity table
 > + `REGISTRY_ONLY_ALLOWLIST` for alias-only), `ipe_backend_rust/naming.rs`,
 > `ipe_ir::pretty`, and `crates/ipe/src/stdlib.rs` (module registration). Values

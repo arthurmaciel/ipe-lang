@@ -181,7 +181,7 @@ emitter, plus the medium-admissibility seal, plus `docs/shapes/terminal.md`.
   `WebView.app` it must be rejected with a clear diagnostic (mirror how `Ui.html`
   admissibility is gated for the terminal side, if such a seal exists; if not,
   add a minimal shape-node seal). If adding a new diagnostic code, follow
-  DEVELOPMENT.md §0b registration EXACTLY.
+  the root `AGENTS.md` "Registering a kernel" registration EXACTLY.
 - [ ] A golden/e2e: an `appScreen` view using `Ui.cells` builds+runs; a `Web.app`
   view using `Ui.cells` is rejected.
 - [ ] Document `Ui.cells` in `docs/shapes/terminal.md` with a runnable example.
