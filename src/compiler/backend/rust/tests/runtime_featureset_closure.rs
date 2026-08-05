@@ -566,6 +566,7 @@ fn emitted_module_references(
     mask: u32,
 ) -> BTreeSet<String> {
     let prog = Program {
+        imports_unsafe_submodule: false,
         modules: vec![module_for_mask(main, mask)],
     };
     let emitted = RustBackend::new(interner)
@@ -592,6 +593,7 @@ fn selected_features(
     mask: u32,
 ) -> Vec<&'static str> {
     let prog = Program {
+        imports_unsafe_submodule: false,
         modules: vec![module_for_mask(main, mask)],
     };
     RustBackend::new(interner)
@@ -851,6 +853,7 @@ fn prelude_reference_gap_fails_closed() {
     // A `uses_auth` program: its emitted prelude hard-references
     // `ipe_runtime::auth::…`, and `mod auth` is gated on `feature = "jwt"`.
     let prog = Program {
+        imports_unsafe_submodule: false,
         modules: vec![module_for_mask(main, 1 << 7)],
     };
     let backend = RustBackend::new(&interner);
@@ -914,6 +917,7 @@ fn ssot_selects_a_meaningful_subset_of_the_universe() {
     // union every surface feature.
     for bit in 0..FLAG_COUNT {
         let prog = Program {
+            imports_unsafe_submodule: false,
             modules: vec![module_for_mask(main, 1 << bit)],
         };
         for f in RustBackend::new(&interner)

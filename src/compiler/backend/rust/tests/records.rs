@@ -45,6 +45,7 @@ use ipe_ir::{
 /// A single-module program with the given funcs and optional entry.
 fn program(name: Symbol, funcs: Vec<Func>, entry: Option<FuncId>) -> Program {
     Program {
+        imports_unsafe_submodule: false,
         modules: vec![Module {
             name: ModPath(vec![name]),
             types: vec![],

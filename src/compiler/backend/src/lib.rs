@@ -296,6 +296,7 @@ mod tests {
         assert_eq!(backend.name(), "noop");
 
         let program = Program {
+            imports_unsafe_submodule: false,
             modules: Vec::new(),
         };
         let emitted = backend.emit(&program);

@@ -534,6 +534,10 @@ pub fn profile_from_capabilities(
             // same crossing under an author-asserted signature: pure
             // disclosure, no control of its own.
             Capability::NativeFfi | Capability::FfiRaw => {}
+            // `unsafe` marks a value minted by assertion rather than by parse.
+            // Like the FFI arms it is pure provenance disclosure, not a resource
+            // axis the jail can open or close — an explicit no-op arm.
+            Capability::Unsafe => {}
         }
     }
 
@@ -811,16 +815,22 @@ impl std::error::Error for RunJailDefect {}
 
 /// Whether the resolved capability set is entirely low-value.
 ///
-/// The low-value axes are `clock`/`random` (or empty) — the only case the narrow
-/// `IPE_ALLOW_UNSANDBOXED` override may downgrade to a warning. Any high-value
-/// native axis (network, filesystem, database, env, subprocess, native-ffi)
-/// makes the override a hard error: there is no flag that runs admitted native
-/// code unconfined.
+/// The low-value axes are `clock`/`random`/`unsafe` (or empty) — the only case
+/// the narrow `IPE_ALLOW_UNSANDBOXED` override may downgrade to a warning. Any
+/// high-value native axis (network, filesystem, database, env, subprocess,
+/// native-ffi) makes the override a hard error: there is no flag that runs
+/// admitted native code unconfined. `unsafe` is a provenance disclosure over
+/// Ipê-level escape hatches, not a native OS effect the jail confines, so it
+/// carries no isolation surface the override would unconfine — jail-orthogonal,
+/// grouped with clock/random.
 #[must_use]
 pub fn is_low_value_only(union: &BTreeSet<Capability>) -> bool {
-    union
-        .iter()
-        .all(|c| matches!(c, Capability::Clock | Capability::Random))
+    union.iter().all(|c| {
+        matches!(
+            c,
+            Capability::Clock | Capability::Random | Capability::Unsafe
+        )
+    })
 }
 
 /// The build-time platform verdict: can a sound run jail be built on THIS

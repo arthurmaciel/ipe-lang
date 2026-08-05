@@ -390,6 +390,7 @@ mod tests {
         let main = vec![intern(interner, "Main")];
         let name = intern(interner, "decoder");
         Module {
+            imports_unsafe_submodule: false,
             name: main.clone(),
             unions: Vec::new(),
             defs: vec![Def::Untyped {
@@ -473,6 +474,7 @@ mod tests {
             }),
         );
         let module = Module {
+            imports_unsafe_submodule: false,
             name: main.clone(),
             unions: Vec::new(),
             defs: vec![

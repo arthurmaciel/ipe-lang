@@ -76,6 +76,54 @@ mod tests {
         );
     }
 
+    /// The `unsafe` capability is import-derived, disclosed IFF the program
+    /// imports an `Ipe.<M>.Unsafe` submodule. This is the load-bearing half of
+    /// the bidirectional partition: importing the escape-hatch submodule MUST
+    /// scan the `unsafe` capability. Fails-before if the scan omits the
+    /// `program.imports_unsafe_submodule` insert.
+    #[test]
+    fn importing_an_unsafe_submodule_discloses_unsafe() {
+        let caps = caps_of(
+            "module Main exposing (main)\nimport Ipe.Io\nimport Ipe.Db.Unsafe\nmain : Task ()\nmain =\n    Io.println \"hi\"\n",
+        );
+        assert!(
+            caps.as_ref()
+                .is_some_and(|c| c.contains(&Capability::Unsafe)),
+            "a program importing an `Ipe.<M>.Unsafe` submodule must disclose the `unsafe` capability, got {caps:?}"
+        );
+    }
+
+    /// The other half of the partition: a program that imports NO `.Unsafe`
+    /// submodule discloses nothing on the `unsafe` axis. Guards against the scan
+    /// firing `unsafe` unconditionally — the default path must be untouched.
+    #[test]
+    fn a_program_without_an_unsafe_import_discloses_no_unsafe() {
+        let caps = caps_of(
+            "module Main exposing (main)\nimport Ipe.Io\nimport Ipe.String\nmain : Task ()\nmain =\n    Io.println (String.toUpper \"hi\")\n",
+        );
+        assert_eq!(
+            caps,
+            Some(std::collections::BTreeSet::new()),
+            "a program that imports no `.Unsafe` submodule must disclose no capability, least of all `unsafe`"
+        );
+    }
+
+    /// The `Unsafe` segment is matched at the END of a dotted `Ipe.<M>.Unsafe`
+    /// path, not anywhere: an unrelated stdlib import whose name merely contains
+    /// no trailing `Unsafe` segment does not trip the disclosure. A bare
+    /// `import Ipe.Html` (a safe surface) discloses nothing.
+    #[test]
+    fn a_plain_stdlib_import_is_not_mistaken_for_unsafe() {
+        let caps = caps_of(
+            "module Main exposing (main)\nimport Ipe.Io\nimport Ipe.Html\nmain : Task ()\nmain =\n    Io.println \"hi\"\n",
+        );
+        assert!(
+            caps.as_ref()
+                .is_some_and(|c| !c.contains(&Capability::Unsafe)),
+            "a plain `import Ipe.Html` must not disclose `unsafe`, got {caps:?}"
+        );
+    }
+
     #[test]
     fn file_and_env_program_infers_both() {
         // `File.writeFile` now takes a validated `Path`. This minimal

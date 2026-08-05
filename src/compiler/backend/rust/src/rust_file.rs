@@ -422,6 +422,7 @@ mod tests {
         ];
 
         let program = Program {
+            imports_unsafe_submodule: false,
             modules: vec![module],
         };
         let Partitioned { buckets, .. } = partition_items(&program, &interner);
@@ -475,6 +476,7 @@ mod tests {
         }];
 
         let program = Program {
+            imports_unsafe_submodule: false,
             modules: vec![module],
         };
         let Partitioned { buckets, .. } = partition_items(&program, &interner);
@@ -514,6 +516,7 @@ mod tests {
         })];
 
         let program = Program {
+            imports_unsafe_submodule: false,
             modules: vec![module],
         };
         let Partitioned { buckets, .. } = partition_items(&program, &interner);
@@ -562,6 +565,7 @@ mod tests {
         ];
 
         let program = Program {
+            imports_unsafe_submodule: false,
             modules: vec![module],
         };
         let Partitioned { buckets, .. } = partition_items(&program, &interner);
@@ -635,6 +639,7 @@ mod tests {
 
         // `Zeta` FIRST in `program.modules` — reverse alphabetical order.
         let program = Program {
+            imports_unsafe_submodule: false,
             modules: vec![zeta, alpha],
         };
         let Partitioned {
