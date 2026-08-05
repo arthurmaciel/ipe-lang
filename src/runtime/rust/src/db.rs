@@ -358,10 +358,14 @@ pub fn db_decode_int<E: From<String> + 'static>(col: String) -> Decoder<E, i64> 
     // clamp `1e30` to `i64::MAX` and report `Ok` — data loss presented as
     // success. Reject it as a typed decode error instead (fail-closed).
     fn float_to_i64_checked<E: From<String>>(col: &str, f: f64) -> IpeResult<E, i64> {
-        // `i64::MAX as f64` rounds up to 2^63, one past the representable range,
-        // so the upper bound is exclusive; `i64::MIN as f64` is exactly -2^63.
+        // Both bounds are exclusive: f64 cannot distinguish a boundary from its
+        // out-of-range neighbour. `i64::MAX as f64` rounds up to 2^63 and an
+        // input just past `i64::MIN` rounds down to `i64::MIN as f64`, so `<=`/
+        // `>=` would admit an out-of-range magnitude and let `as i64` saturate
+        // to the limit — data loss reported as success. An exact `i64::MIN`/
+        // `i64::MAX` still decodes through the integer path above.
         let truncated = f.trunc();
-        if truncated >= i64::MIN as f64 && truncated < 9_223_372_036_854_775_808.0 {
+        if truncated > i64::MIN as f64 && truncated < 9_223_372_036_854_775_808.0 {
             decode_ok(truncated as i64)
         } else {
             decode_err_str(format!(
@@ -3521,6 +3525,21 @@ mod tests {
         match (db_decode_int::<String>("n".to_string()).run)(&over_str) {
             IpeResult::Ok(i) => panic!("out-of-range string saturated to {i} instead of erroring"),
             IpeResult::Err(_) => {}
+        }
+
+        // i64::MIN-1 rounds to i64::MIN as f64; a non-strict lower bound would
+        // admit it and saturate to i64::MIN. It must reject.
+        let under = serde_json::json!({ "n": "-9223372036854775809" });
+        match (db_decode_int::<String>("n".to_string()).run)(&under) {
+            IpeResult::Ok(i) => panic!("i64::MIN-1 saturated to {i} instead of erroring"),
+            IpeResult::Err(_) => {}
+        }
+
+        // The exact boundaries still decode through the integer path.
+        let min = serde_json::json!({ "n": "-9223372036854775808" });
+        match (db_decode_int::<String>("n".to_string()).run)(&min) {
+            IpeResult::Ok(i) => assert_eq!(i, i64::MIN),
+            IpeResult::Err(e) => panic!("i64::MIN decode failed: {:?}", e),
         }
     }
 

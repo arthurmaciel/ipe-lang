@@ -393,10 +393,17 @@ pub fn json_decode_int<E: From<String> + 'static>() -> Decoder<E, i64> {
             JsonVal::Number(n) => match n.as_i64() {
                 Some(i) => decode_ok(i),
                 // `1.0` is stored as a float; recover it when it is integral and
-                // representable, still rejecting `1.5` and out-of-range values.
+                // representable, rejecting `1.5` and out-of-range values. Both
+                // bounds are *strict* because f64 cannot distinguish a boundary
+                // from its out-of-range neighbour: `i64::MAX as f64` rounds up
+                // to `2^63` and `i64::MIN-1` rounds down to `i64::MIN as f64`,
+                // so `<=`/`>=` would admit an out-of-range integer and let
+                // `f as i64` saturate to the limit — a silent wrong value. An
+                // exact `i64::MIN`/`i64::MAX` arrives as an integer through
+                // `as_i64` above; this fallback only admits the open interval.
                 None => match n.as_f64() {
                     Some(f)
-                        if f.fract() == 0.0 && (i64::MIN as f64..=i64::MAX as f64).contains(&f) =>
+                        if f.fract() == 0.0 && f > (i64::MIN as f64) && f < (i64::MAX as f64) =>
                     {
                         decode_ok(f as i64)
                     }
@@ -1852,6 +1859,55 @@ mod elm_behaviour_verdicts {
         assert!(matches!(
             (dec.run)(&serde_json::json!("7")),
             IpeResult::Err(_)
+        ));
+    }
+
+    // The i64 boundary: `i64::MAX as f64` rounds up to 2^63, so a naive
+    // float-range gate would admit an out-of-range integer and let `f as i64`
+    // saturate to the limit — a silently-wrong value at an attacker-controlled
+    // boundary. The exact bounds must decode; one past either must reject.
+    #[test]
+    fn int_decoder_accepts_i64_max() {
+        let dec = json_decode_int::<String>();
+        let v: serde_json::Value = serde_json::from_str("9223372036854775807").unwrap();
+        assert!(matches!((dec.run)(&v), IpeResult::Ok(i64::MAX)));
+    }
+    #[test]
+    fn int_decoder_accepts_i64_min() {
+        let dec = json_decode_int::<String>();
+        let v: serde_json::Value = serde_json::from_str("-9223372036854775808").unwrap();
+        assert!(matches!((dec.run)(&v), IpeResult::Ok(i64::MIN)));
+    }
+    #[test]
+    fn int_decoder_rejects_i64_max_plus_one() {
+        let dec = json_decode_int::<String>();
+        let v: serde_json::Value = serde_json::from_str("9223372036854775808").unwrap();
+        assert!(
+            matches!((dec.run)(&v), IpeResult::Err(_)),
+            "i64::MAX+1 must reject, not saturate to i64::MAX; got {:?}",
+            (dec.run)(&v)
+        );
+    }
+    #[test]
+    fn int_decoder_rejects_i64_min_minus_one() {
+        let dec = json_decode_int::<String>();
+        let v: serde_json::Value = serde_json::from_str("-9223372036854775809").unwrap();
+        assert!(
+            matches!((dec.run)(&v), IpeResult::Err(_)),
+            "i64::MIN-1 must reject, not saturate to i64::MIN; got {:?}",
+            (dec.run)(&v)
+        );
+    }
+    #[test]
+    fn int_decoder_accepts_ordinary_in_range() {
+        let dec = json_decode_int::<String>();
+        assert!(matches!(
+            (dec.run)(&serde_json::json!(-7)),
+            IpeResult::Ok(-7)
+        ));
+        assert!(matches!(
+            (dec.run)(&serde_json::json!(1_000_000_000_000_i64)),
+            IpeResult::Ok(1_000_000_000_000)
         ));
     }
 
