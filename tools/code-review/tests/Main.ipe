@@ -2,6 +2,7 @@ module Main exposing (main)
 
 import Ipe.Db as Db
 import Ipe.Db.Sql as Sql
+import Ipe.Dict as Dict
 import Ipe.File as File
 import Ipe.Io as Io
 import Ipe.List as List
@@ -146,6 +147,16 @@ decisionRoundtrip db =
             )
 
 
+decidedCountChecks : Bool
+decidedCountChecks =
+    LibDb.decidedCount Dict.empty
+        == 0
+        && LibDb.decidedCount (Dict.fromList [ ( "a", Nothing ), ( "b", Nothing ) ])
+        == 0
+        && LibDb.decidedCount (Dict.fromList [ ( "a", Just Approved ), ( "b", Nothing ), ( "c", Just (Refused "x") ) ])
+        == 2
+
+
 allChecks : Db -> Task.Task Error (List ( String, Bool ))
 allChecks db =
     Task.sequence
@@ -154,6 +165,7 @@ allChecks db =
         , Task.map (\ok -> ( "duplicate (uid,body_hash) no-op", ok )) (duplicateInsertIsNoop db)
         , Task.map (\ok -> ( "refuse without reason rejected", ok )) (refuseWithoutReasonRejected db)
         , Task.map (\ok -> ( "decision roundtrip", ok )) (decisionRoundtrip db)
+        , Task.succeed ( "decidedCount counts only decided", decidedCountChecks )
         ]
 
 
@@ -370,7 +382,8 @@ isUnitA u =
         == "hashA"
         && u.updatedSha
         == "shaA"
-        && String.contains "the answer to everything" u.source
+        && u.source
+        == "pub fn answer() -> i32 {\n    // the answer to everything\n    42\n}"
 
 
 isUnitB : Index.Unit -> Bool
@@ -408,6 +421,66 @@ removeFileIfAny path =
     Task.fromResult (Path.fromString path)
         |> Task.andThen File.remove
         |> Task.onError (\_ -> Task.succeed ())
+
+
+-- ── B4: guard the path resolver ─────────────────────────────────────────────
+--
+-- A queued unit whose stored path escapes the index root (mid-path `..`
+-- segment) must fail the whole load closed, never read a file outside root.
+traversalPathsRejected : Task.Task Error Bool
+traversalPathsRejected =
+    let
+        base =
+            System.getenvOr "TMPDIR" "/tmp" ++ "/ipe-index-b3-traversal"
+    in
+    Task.fromResult (Path.fromString (base ++ "/index.db"))
+        |> Task.andThen File.remove
+        |> Task.onError (\_ -> Task.succeed ())
+        |> Task.andThen (\_ -> Task.fromResult (Path.fromString base) |> Task.andThen File.mkdirAll)
+        |> Task.andThen (\_ -> seedTraversalDb base)
+        |> Task.andThen
+            (\_ ->
+                Index.loadPending
+                    |> Task.map (\_ -> False)
+                    |> Task.onError (\_ -> Task.succeed True)
+            )
+        |> Task.andThen (\ok -> removeFileIfAny (base ++ "/index.db") |> Task.map (\_ -> ok))
+
+
+seedTraversalDb : String -> Task.Task Error ()
+seedTraversalDb base =
+    Db.open "sqlite" ("sqlite://" ++ base ++ "/index.db?mode=rwc")
+        |> Task.andThen
+            (\conn ->
+                Db.exec conn unitsDdl []
+                    |> Task.andThen (\_ -> Db.exec conn queueDdl [])
+                    |> Task.andThen
+                        (\_ ->
+                            Db.exec conn
+                                "INSERT INTO units VALUES (?,?,?,?,?,?,?,?,?,?,?)"
+                                [ SqlString "u-esc"
+                                , SqlString "ipe:a/../../escape"
+                                , SqlString "fn"
+                                , SqlString "x"
+                                , SqlString "x"
+                                , SqlInt 1
+                                , SqlInt 1
+                                , SqlString "user"
+                                , SqlNull (SqlString "")
+                                , SqlString "h"
+                                , SqlString "s"
+                                ]
+                        )
+                    |> Task.andThen
+                        (\_ ->
+                            Db.exec conn
+                                "INSERT INTO change_queue VALUES (?,?,?,?,?,?)"
+                                [ SqlString "u-esc", SqlString "new", SqlNull (SqlString ""), SqlNull (SqlString ""), SqlString "s", SqlInt 1 ]
+                        )
+            )
+        |> Task.andThen (\_ -> System.setenv "IPE_INDEX_DB" (base ++ "/index.db"))
+        |> Task.andThen (\_ -> System.setenv "IPE_INDEX_ROOT" base)
+        |> Task.map (\_ -> ())
 
 
 report : List ( String, Bool ) -> String
@@ -455,6 +528,11 @@ main =
             (\results ->
                 indexBridge
                     |> Task.map (\ok -> results ++ [ ( "index bridge loads queued units", ok ) ])
+            )
+        |> Task.andThen
+            (\results ->
+                traversalPathsRejected
+                    |> Task.map (\ok -> results ++ [ ( "traversal paths rejected", ok ) ])
             )
         |> Task.andThen
             (\results ->

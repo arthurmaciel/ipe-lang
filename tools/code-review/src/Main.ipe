@@ -4,7 +4,6 @@ import Ipe.Db as Db
 import Ipe.Dict as Dict
 import Ipe.Error as Error
 import Ipe.List as List
-import Ipe.Maybe as Maybe
 import Ipe.String as String
 import Ipe.System as System
 import Ipe.Task as Task
@@ -56,8 +55,7 @@ reviewDb =
 
 
 type Msg
-    = NoOp
-    | PendingLoaded (Result Error (List Index.Unit))
+    = PendingLoaded (Result Error (List Index.Unit))
     | DecisionsLoaded (Result Error (List ( String, Maybe LibDb.Decision )))
     | ApproveUnit String
     | RefuseStart String
@@ -71,9 +69,6 @@ type Msg
 update : Msg -> Model -> ( Model, Cmd Msg )
 update msg model =
     case msg of
-        NoOp ->
-            ( model, Cmd.none )
-
         PendingLoaded result ->
             case result of
                 Ok units ->
@@ -134,7 +129,15 @@ saveDecision : Model -> String -> LibDb.Decision -> Cmd Msg
 saveDecision model uid decision =
     Cmd.perform
         (reviewDb
-            |> Task.andThen (\db -> LibDb.insertDecision db uid (bodyHashOf uid model.queue) decision)
+            |> Task.andThen
+                (\db ->
+                    case bodyHashOf uid model.queue of
+                        Just bodyHash ->
+                            LibDb.insertDecision db uid bodyHash decision
+
+                        Nothing ->
+                            Task.fail (Error.unexpected "unit is no longer in the queue")
+                )
         )
         (DecisionSaved uid)
 
@@ -143,7 +146,15 @@ refindDecision : Model -> String -> Cmd Msg
 refindDecision model uid =
     Cmd.perform
         (reviewDb
-            |> Task.andThen (\db -> LibDb.findDecision db uid (bodyHashOf uid model.queue))
+            |> Task.andThen
+                (\db ->
+                    case bodyHashOf uid model.queue of
+                        Just bodyHash ->
+                            LibDb.findDecision db uid bodyHash
+
+                        Nothing ->
+                            Task.fail (Error.unexpected "unit is no longer in the queue")
+                )
         )
         (DecisionFound uid)
 
@@ -161,14 +172,14 @@ loadDecisions units =
             )
 
 
-bodyHashOf : String -> List Index.Unit -> String
+bodyHashOf : String -> List Index.Unit -> Maybe String
 bodyHashOf uid units =
     case List.find (\u -> u.uid == uid) units of
         Just u ->
-            u.bodyHash
+            Just u.bodyHash
 
         Nothing ->
-            ""
+            Nothing
 
 
 header : Model -> Ui.Element Msg
@@ -186,7 +197,7 @@ header model =
         [ Ui.el [ Font.size 16, Font.bold, Font.color (Ui.rgb 235 235 240) ] (Ui.text "Code review")
         , Ui.el
             [ Font.size 14, Font.color (Ui.rgb 160 160 175) ]
-            (Ui.text (String.fromInt (Dict.size model.decisions) ++ " of " ++ String.fromInt (List.length model.queue) ++ " reviewed"))
+            (Ui.text (String.fromInt (LibDb.decidedCount model.decisions) ++ " of " ++ String.fromInt (List.length model.queue) ++ " reviewed"))
         ]
 
 
@@ -205,7 +216,7 @@ body : Model -> Ui.Element Msg
 body model =
     case model.queueError of
         Just err ->
-            Ui.text ("Index load failed: " ++ err)
+            Ui.text err
 
         Nothing ->
             if List.isEmpty model.queue then

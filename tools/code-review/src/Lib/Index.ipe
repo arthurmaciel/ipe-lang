@@ -5,7 +5,6 @@ import Ipe.Db.Decode
 import Ipe.Error as Error
 import Ipe.File as File
 import Ipe.List as List
-import Ipe.Maybe as Maybe
 import Ipe.Path as Path
 import Ipe.String as String
 import Ipe.System as System
@@ -246,8 +245,11 @@ resolvePath root stored =
             let
                 rel =
                     String.join ":" rest
+
+                segments =
+                    String.split "/" rel
             in
-            if rel == "" || String.startsWith "/" rel || String.startsWith ".." rel then
+            if rel == "" || String.startsWith "/" rel || List.member ".." segments then
                 Nothing
 
             else

@@ -1,4 +1,4 @@
-module Lib.Db exposing (Decision(..), findDecision, insertDecision, migrate, open, openAt)
+module Lib.Db exposing (Decision(..), decidedCount, findDecision, insertDecision, migrate, open, openAt)
 
 import Ipe.Db as Db
 import Ipe.Db.Sql as Sql
@@ -106,22 +106,55 @@ findDecision db uid bodyHash =
             (Sql.eq (Sql.column "uid") (Sql.param (SqlString uid)))
             (Sql.eq (Sql.column "body_hash") (Sql.param (SqlString bodyHash)))
         )
-        |> Task.map (List.head >> Maybe.map decodeDecision)
+        |> Task.map List.head
+        |> Task.andThen
+            (\mb ->
+                case mb of
+                    Nothing ->
+                        Task.succeed Nothing
+
+                    Just row ->
+                        case decodeDecision row of
+                            Ok d ->
+                                Task.succeed (Just d)
+
+                            Err e ->
+                                Task.fail e
+            )
 
 
-decodeDecision : Dict.Dict String String -> Decision
+decodeDecision : Dict.Dict String String -> Result Error Decision
 decodeDecision row =
     case Dict.get "decision" row of
         Just d ->
             case d of
                 "approve" ->
-                    Approved
+                    Ok Approved
 
                 "refuse" ->
-                    Refused (Maybe.withDefault "" (Dict.get "reason" row))
+                    case Dict.get "reason" row of
+                        Just r ->
+                            Ok (Refused r)
+
+                        Nothing ->
+                            Err (Error.unexpected "review row is refused but has no reason")
 
                 other ->
-                    Refused ("malformed decision: " ++ other)
+                    Err (Error.unexpected ("malformed review decision: " ++ other))
 
         Nothing ->
-            Refused "malformed row"
+            Err (Error.unexpected "review row has no decision column")
+
+
+decidedCount : Dict.Dict String (Maybe Decision) -> Int
+decidedCount decisions =
+    Dict.foldl
+        (\_ v acc ->
+            if v == Nothing then
+                acc
+
+            else
+                acc + 1
+        )
+        0
+        decisions
