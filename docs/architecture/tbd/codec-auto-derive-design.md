@@ -361,9 +361,9 @@ both block only on the Kernel Row.
 
 | Issue | Relationship | One-line annotation |
 |---|---|---|
-| 663 | **IMPLEMENTS** | This design *is* `Std.Codec` for Ipê: the pure `Codec a` surface + the `Codec.auto` compile-time record derive (no runtime reflection), replacing Sky's tag+registry reflection model (see docs/architecture/tbd/codec-auto-derive-design.md). |
+| 663 | **IMPLEMENTS** | This design *is* `Ipe.Codec`: the pure `Codec a` surface + the `Codec.auto` compile-time record derive (no runtime reflection), replacing Sky's tag+registry reflection model (see docs/architecture/tbd/codec-auto-derive-design.md). |
 | 680 | **FEEDS (second landing)** | `Db.Store` consumes the derived codec's `Shape`/`ColType` for columns + `enc`/`dec` for row read/write — one codec drives JSON and the dialect-safe column map with no second shape. |
-| 664 | **CONSUMES** | `Std.Analytics`' typed-payload / event-record persistence uses the `Codec.auto` derive for its event records instead of Sky's `trackEvent` reflective derive; same compile-time-derive model, no reflection kernel. |
+| 664 | **CONSUMES** | `Ipe.Analytics`' typed-payload / event-record persistence uses the `Codec.auto` derive for its event records instead of Sky's `trackEvent` reflective derive; same compile-time-derive model, no reflection kernel. |
 | 641 | **COORDINATES** | `Db.open <driver> <dsn>` supplies the connection the second landing's `Db.Store` read/write runs against; the codec is dialect-agnostic, so `Db.open`'s driver choice selects the dialect mapping under the shared `ColType`. |
 | 665 | **INDEPENDENT (of `auto`)** | First-class functions are NOT needed by the derive (it emits first-order `object/field` calls); only a future `Codec.recursive` fixpoint would need issue 665, and `auto` rejects recursion rather than requiring it. |
 | 666 | **COORDINATES** | `Html.Unsafe.unsafeRaw` and the codec share the "safe default + rare marked escape" posture: a custom-format single column is the `autoWith` override, raw SQL is `Ipe.Db.Unsafe` — the codec makes hand-written SQL the rare escape, mirroring issue 666's raw-HTML escape. |

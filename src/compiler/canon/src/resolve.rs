@@ -237,7 +237,7 @@ const EXTRA_BUILTIN_TYPE_NAMES: &[&str] = &[
     // Lowerer arm: `ir_type_from_canon` `"Decimal" => IrType::Decimal`.
     "Decimal",
     // `Ipe.Db.Migration` record alias `{ name : String, sql : String }`
-    // (reference `Std/Db.ipe:237`). Structural record — `normalize_annotation_ty`
+    // (reference `Ipe/Db.ipe:237`). Structural record — `normalize_annotation_ty`
     // expands the name to the record; the lowerer keeps it a synthesised struct
     // (no opaque arm), so it is user-shadowable-safe like `HttpRequest`.
     "Migration",

@@ -2314,7 +2314,7 @@ fn emit_db_call(
         }
         // ── DbMigrate: (conn, List Migration) → Task e (List String) ──
         // `Migration` is the record alias `{ name : String, sql : String }`
-        // (reference `Std/Db.ipe:237`), lowered to the synthesised struct with
+        // (reference `Ipe/Db.ipe:237`), lowered to the synthesised struct with
         // those two fields. The runtime `db_migrate_apply` takes `Vec<(String,
         // String)>`, so map each record to a `(name, sql)` tuple — the exact
         // shape the reference's pure-Ipê `migrate` produces via `List.map (\m ->
@@ -2332,7 +2332,7 @@ fn emit_db_call(
         }
         // ── DbDefaultMigration: String -> Migration ──────────────────────────
         // Pure record builder — a `Migration` named with an empty SQL body
-        // (reference `Std/Db.ipe:246`). Emitted inline as the synthesised
+        // (reference `Ipe/Db.ipe:246`). Emitted inline as the synthesised
         // `{ name, sql }` struct literal so no runtime kernel is required.
         KernelFn::DbDefaultMigration => {
             let name_e = arg!(0, "name")?;

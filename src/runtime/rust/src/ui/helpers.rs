@@ -1,7 +1,7 @@
 //! Helper functions backing the Ipe.Ui kernel dispatch in the Rust code-gen.
 //!
 //! Each function corresponds to one `KernelFn` variant wired in `ipe_lower` +
-//! `ipe_backend_rust`. The signatures mirror `Std/Ui.ipe` exactly so that the
+//! `ipe_backend_rust`. The signatures mirror `Ipe/Ui.ipe` exactly so that the
 //! emitter can call them without any wrapping or unwrapping.
 //!
 //! Naming convention: every public function carries a trailing underscore to
@@ -93,7 +93,7 @@ pub fn ui_el_<M: Clone>(attrs: Vec<Attribute<M>>, ch: Element<M>) -> Element<M> 
 /// `Ui.row : List (Attribute msg) -> List (Element msg) -> Element msg`
 ///
 /// Prepends the `__row` row-direction marker matching `rowMarker` in
-/// `Std/Ui.ipe`.
+/// `Ipe/Ui.ipe`.
 #[must_use]
 pub fn ui_row_<M: Clone>(attrs: Vec<Attribute<M>>, children: Vec<Element<M>>) -> Element<M> {
     let mut full = Vec::with_capacity(attrs.len() + 1);
@@ -105,7 +105,7 @@ pub fn ui_row_<M: Clone>(attrs: Vec<Attribute<M>>, children: Vec<Element<M>>) ->
 /// `Ui.column : List (Attribute msg) -> List (Element msg) -> Element msg`
 ///
 /// Prepends the `__col` column-direction marker matching `colMarker` in
-/// `Std/Ui.ipe`.
+/// `Ipe/Ui.ipe`.
 #[must_use]
 pub fn ui_column_<M: Clone>(attrs: Vec<Attribute<M>>, children: Vec<Element<M>>) -> Element<M> {
     let mut full = Vec::with_capacity(attrs.len() + 1);
@@ -1204,7 +1204,7 @@ pub fn ui_desc_label_(s: String) -> Description {
 
 /// `Ui.paragraph : List (Attribute msg) -> List (Element msg) -> Element msg`
 ///
-/// Mirrors `paragraph` in `Std/Ui.ipe`: a `<p>`-tagged node carrying
+/// Mirrors `paragraph` in `Ipe/Ui.ipe`: a `<p>`-tagged node carrying
 /// `DescParagraph` plus the `__paragraph` marker (matching `paragraphMarker`),
 /// so text children wrap as inline flow.
 #[must_use]

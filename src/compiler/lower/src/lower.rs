@@ -10623,7 +10623,7 @@ impl<'a> Lowerer<'a> {
     /// missing from the binding's free-variable set), so no node `span` is
     /// threaded — those are [`bug`]s, not span-carrying feature gaps.
     /// The IR type of `Ipe.Db.Migration` — the record `{ name : String, sql :
-    /// String }` (reference `Std/Db.ipe:237`). Both field names appear in every
+    /// String }` (reference `Ipe/Db.ipe:237`). Both field names appear in every
     /// program that annotates `Migration` (the record literals / `defaultMigration`
     /// call sites intern them), so a read-only interner lookup resolves them; a
     /// missing symbol is a compiler bug (the annotation implies the fields).
@@ -10951,7 +10951,7 @@ impl<'a> Lowerer<'a> {
                 // this opaque variant.
                 "HttpRequest" => Ok(IrType::HttpRequest),
                 // `Ipe.Db.Migration` — the record alias `{ name : String,
-                // sql : String }` (reference `Std/Db.ipe:237`). Annotated
+                // sql : String }` (reference `Ipe/Db.ipe:237`). Annotated
                 // directly (`migrations : List Db.Migration`), so expand it to
                 // the synthesised record here — mirrors how the type-checker's
                 // `normalize_annotation_ty` expands the same name.

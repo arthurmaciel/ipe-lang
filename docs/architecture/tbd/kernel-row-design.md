@@ -299,8 +299,8 @@ doc). In summary:
   bug are *subsumed*: the first by `runtime_module` on `KernelDef` plus the
   emit-symbol-defined invariant test, the second by the arity↔scheme coherence
   test.
-- New-kernel / new-stdlib-module tasks (external-DB `Db.open`, `Std.Codec`,
-  `Std.Analytics`, `Html.raw`/`render`) *coordinate*: any kernels they add
+- New-kernel / new-stdlib-module tasks (external-DB `Db.open`, `Ipe.Codec`,
+  `Ipe.Analytics`, `Html.raw`/`render`) *coordinate*: any kernels they add
   should be authored as Kernel Rows, and any vendored module they ship becomes a
   new `RuntimeModule` variant covered by the invariant test. Compiled-source
   modules (ADR 0029) that use `Ffi.kernel` aliases still route to existing rows.
