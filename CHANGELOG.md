@@ -10,6 +10,28 @@ Entries below the header are maintained by
 section is generated from Conventional Commit messages and prepended when the
 standing release pull request is merged.
 
+## [0.1.39](https://github.com/arthurmaciel/ipe-lang/compare/ipe-v0.1.38...ipe-v0.1.39) (2026-08-05)
+
+
+### Features
+
+* **kernels,types:** polymorphic TyShape (type vars) + migrate the List family, on the D.2 base (Kernel Row stage D.3) ([#696](https://github.com/arthurmaciel/ipe-lang/issues/696)) ([fc17bec](https://github.com/arthurmaciel/ipe-lang/commit/fc17becf6d27d498091928f671ad8e31364da2b6))
+* **kernels,types:** TyShape scheme ADT + interpreter, migrate the Bitwise family (Kernel Row stage D template slice) ([#694](https://github.com/arthurmaciel/ipe-lang/issues/694)) ([14603fe](https://github.com/arthurmaciel/ipe-lang/commit/14603fe7eb2fb8b05e54453f990d26e79d55bd5d))
+* **kernels:** KernelDef descriptor projecting the existing kernel row + emit-symbol-defined invariant test (Kernel Row stage A) ([#685](https://github.com/arthurmaciel/ipe-lang/issues/685)) ([4e5c7df](https://github.com/arthurmaciel/ipe-lang/commit/4e5c7df592e4188f634fb5de55a30e7c3f447bef))
+* **sandbox:** aarch64 Linux Tier-2 certifying seccomp arm ([#620](https://github.com/arthurmaciel/ipe-lang/issues/620)) ([#670](https://github.com/arthurmaciel/ipe-lang/issues/670)) ([040ba10](https://github.com/arthurmaciel/ipe-lang/commit/040ba1012651f01c20277aa612c53b3c5009c40e))
+* **types:** resolve KernelDef scheme by key + arity-vs-scheme coherence test (Kernel Row stage C) ([#692](https://github.com/arthurmaciel/ipe-lang/issues/692)) ([0ae0298](https://github.com/arthurmaciel/ipe-lang/commit/0ae029879b835cf5c0b31a33a3b812e1ea27ec26))
+
+
+### Bug Fixes
+
+* **backend,lower:** emit the Ipe.Cache runtime module + close the bare-handle SEAL hole ([#661](https://github.com/arthurmaciel/ipe-lang/issues/661)) ([#684](https://github.com/arthurmaciel/ipe-lang/issues/684)) ([35c33d4](https://github.com/arthurmaciel/ipe-lang/commit/35c33d4a9959daf05bc597e1a07c9a53d18420f3))
+* **canon:** resolve Random.range as an int-kernel alias ([#667](https://github.com/arthurmaciel/ipe-lang/issues/667)) ([#673](https://github.com/arthurmaciel/ipe-lang/issues/673)) ([b5eb86e](https://github.com/arthurmaciel/ipe-lang/commit/b5eb86e09bc5f868fe216a9e563c8675dfb16fa8))
+* **examples:** green 02/03/18/26/32 mirror examples (Task-boundary, Element view, Http/Regex APIs) ([#580](https://github.com/arthurmaciel/ipe-lang/issues/580)) ([#669](https://github.com/arthurmaciel/ipe-lang/issues/669)) ([88b0cc4](https://github.com/arthurmaciel/ipe-lang/commit/88b0cc4451345ee333566ef5fb7722b1264cf99e))
+* **examples:** remap N0036 Task.run examples 07/14/35 onto TEA auto-run entry ([#580](https://github.com/arthurmaciel/ipe-lang/issues/580)) ([#660](https://github.com/arthurmaciel/ipe-lang/issues/660)) ([74ad83d](https://github.com/arthurmaciel/ipe-lang/commit/74ad83d90f90c852968cd77c4cf11e7e4b5e5e29))
+* **sandbox:** deny pidfd_getfd/bpf/userfaultfd/keyctl/kexec in the seccomp baseline (both ABIs) ([#671](https://github.com/arthurmaciel/ipe-lang/issues/671)) ([#682](https://github.com/arthurmaciel/ipe-lang/issues/682)) ([126bbdb](https://github.com/arthurmaciel/ipe-lang/commit/126bbdbf872c348a4e5868f0438cc4c7df049031))
+* **sandbox:** root FreeBSD /proc-mask source outside writable scratch ([#658](https://github.com/arthurmaciel/ipe-lang/issues/658)) ([#675](https://github.com/arthurmaciel/ipe-lang/issues/675)) ([e8b0797](https://github.com/arthurmaciel/ipe-lang/commit/e8b0797acf08654a177dd94c09ba003adfaf012c))
+* **types:** fail closed on a managed-loop view that settles to Html — IPE-T0020 ([#647](https://github.com/arthurmaciel/ipe-lang/issues/647)) ([#668](https://github.com/arthurmaciel/ipe-lang/issues/668)) ([217fe00](https://github.com/arthurmaciel/ipe-lang/commit/217fe00fa5f6e56c38b5d01c30ec230c269e1b36))
+
 ## [0.1.38](https://github.com/arthurmaciel/ipe-lang/compare/ipe-v0.1.37...ipe-v0.1.38) (2026-08-04)
 
 
