@@ -1341,17 +1341,17 @@ pub enum StdlibKernel {
     /// `Ui.cells : List (List Char) -> Element msg` — a raw terminal cell grid
     /// embedded as an island inside an `Ipe.Ui` view under `Terminal.appScreen`.
     UiCells,
-    UiEl,
-    UiRow,
-    UiColumn,
-    UiWrappedRow,
-    UiGrid,
-    UiParagraph,
-    UiTextColumn,
+    /// `Ui.node : Description -> List (Attribute msg) -> List (Element msg) -> Element msg`
+    /// — the irreducible container-element constructor. The layout builders
+    /// (`el`/`row`/`column`/`wrappedRow`/`grid`) are pure Ipê over this in
+    /// `Ipe/Ui.ipe`.
+    UiNode,
+    /// `Ui.taggedNode : String -> Description -> List (Attribute msg) -> List (Element msg) -> Element msg`
+    /// — the irreducible tagged-element constructor. The flow builders
+    /// (`paragraph`/`textColumn`/`form`/`input`) are pure Ipê over this.
+    UiTaggedNode,
     UiButton, // (List Attr, { onPress : Maybe msg, label : Element msg }) → Element msg
     UiLink,   // (List Attr, { url : String, label : Element msg }) → Element msg
-    /// `Ui.form : List (Attribute msg) -> List (Element msg) -> Element msg`
-    UiForm,
     /// `Ui.image : List Attr -> { src : String, description : String } -> Element msg`
     /// — renders `<img src=… alt=…>` (a void `TaggedNode`, no children).
     UiImage,
@@ -1691,9 +1691,10 @@ pub enum StdlibKernel {
     RegionLabel,            // String → Attribute msg (arity 1)
     RegionAnnounce,         // Attribute msg (arity 0)
     RegionAnnounceUrgently, // Attribute msg (arity 0)
-    // ── Ui.input + Ui.describe + desc* constructors ───────────────────────
-    UiInput,             // List (Attribute msg) -> Element msg (arity 1)
+    // ── Ui.describe + desc* constructors ──────────────────────────────────
     UiDescribe,          // Description -> Attribute msg (arity 1)
+    UiDescNone,          // Description (arity 0) — the `NoDescription` role
+    UiDescParagraph,     // Description (arity 0) — the `DescParagraph` role
     UiDescMain,          // Description (arity 0)
     UiDescNavigation,    // Description (arity 0)
     UiDescContentInfo,   // Description (arity 0)
@@ -2992,16 +2993,10 @@ impl StdlibKernel {
             Self::UiText => d("Ui", "text", 1, Ui, "ui_text_"),
             Self::UiHtml => d("Ui", "html", 1, Ui, "ui_html_"),
             Self::UiCells => d("Ui", "cells", 1, Ui, "ui_cells_"),
-            Self::UiEl => d("Ui", "el", 2, Ui, "ui_el_"),
-            Self::UiRow => d("Ui", "row", 2, Ui, "ui_row_"),
-            Self::UiColumn => d("Ui", "column", 2, Ui, "ui_column_"),
-            Self::UiWrappedRow => d("Ui", "wrappedRow", 2, Ui, "ui_wrapped_row_"),
-            Self::UiGrid => d("Ui", "grid", 2, Ui, "ui_grid_"),
-            Self::UiParagraph => d("Ui", "paragraph", 2, Ui, "ui_paragraph_"),
-            Self::UiTextColumn => d("Ui", "textColumn", 2, Ui, "ui_text_column_"),
+            Self::UiNode => d("Ui", "node", 3, Ui, "ui_node_"),
+            Self::UiTaggedNode => d("Ui", "taggedNode", 4, Ui, "ui_tagged_node_"),
             Self::UiButton => d("Ui", "button", 2, Ui, "ui_button_"),
             Self::UiLink => d("Ui", "link", 2, Ui, "ui_link_"),
-            Self::UiForm => d("Ui", "form", 2, Ui, "ui_form_"),
             Self::UiImage => d("Ui", "image", 2, Ui, "ui_image_"),
             // ── Ipe.Ui nearby attribute builders ───────────────────────
             Self::UiAbove => d("Ui", "above", 1, Ui, "ui_above_"),
@@ -3358,8 +3353,9 @@ impl StdlibKernel {
                 "ui_region_announce_urgently_",
             ),
             // ── Ui.input + Ui.describe + desc* constructors ───────────────
-            Self::UiInput => d("Ui", "input", 1, Ui, "ui_input_"),
             Self::UiDescribe => d("Ui", "describe", 1, Ui, "ui_describe_"),
+            Self::UiDescNone => d("Ui", "descNone", 0, Ui, "ui_desc_none_"),
+            Self::UiDescParagraph => d("Ui", "descParagraph", 0, Ui, "ui_desc_paragraph_"),
             Self::UiDescMain => d("Ui", "descMain", 0, Ui, "ui_desc_main_"),
             Self::UiDescNavigation => d("Ui", "descNavigation", 0, Ui, "ui_desc_navigation_"),
             Self::UiDescContentInfo => d("Ui", "descContentInfo", 0, Ui, "ui_desc_content_info_"),
@@ -4282,16 +4278,10 @@ impl StdlibKernel {
         Self::UiText,
         Self::UiHtml,
         Self::UiCells,
-        Self::UiEl,
-        Self::UiRow,
-        Self::UiColumn,
-        Self::UiWrappedRow,
-        Self::UiGrid,
-        Self::UiParagraph,
-        Self::UiTextColumn,
+        Self::UiNode,
+        Self::UiTaggedNode,
         Self::UiButton,
         Self::UiLink,
-        Self::UiForm,
         Self::UiImage,
         // Ui nearby attribute builders
         Self::UiAbove,
@@ -4520,8 +4510,9 @@ impl StdlibKernel {
         Self::RegionAnnounce,
         Self::RegionAnnounceUrgently,
         // ── Ui.input + Ui.describe + desc* constructors ───────────────────
-        Self::UiInput,
         Self::UiDescribe,
+        Self::UiDescNone,
+        Self::UiDescParagraph,
         Self::UiDescMain,
         Self::UiDescNavigation,
         Self::UiDescContentInfo,
@@ -6244,12 +6235,14 @@ impl StdlibKernel {
         // `layout : List (Attribute msg) -> Element msg -> Html msg`.
         const UI_ELEM_A_TO_HTML_A: TyShape = TyShape::Fun(&UI_ELEM_A, &HTML_A);
         const UI_LAYOUT: TyShape = TyShape::Fun(&LIST_UI_ATTR_A, &UI_ELEM_A_TO_HTML_A);
-        // `el : List (Attribute msg) -> Element msg -> Element msg`.
         const UI_ELEM_A_TO_UI_ELEM_A: TyShape = TyShape::Fun(&UI_ELEM_A, &UI_ELEM_A);
-        const UI_EL: TyShape = TyShape::Fun(&LIST_UI_ATTR_A, &UI_ELEM_A_TO_UI_ELEM_A);
         // `column / row / … : List (Attribute msg) -> List (Element msg) -> Element msg`.
         const LIST_UI_ELEM_A_TO_UI_ELEM_A: TyShape = TyShape::Fun(&LIST_UI_ELEM_A, &UI_ELEM_A);
         const UI_CONTAINER: TyShape = TyShape::Fun(&LIST_UI_ATTR_A, &LIST_UI_ELEM_A_TO_UI_ELEM_A);
+        // `node : Description -> List (Attribute msg) -> List (Element msg) -> Element msg`.
+        const UI_NODE: TyShape = TyShape::Fun(&DESCRIPTION, &UI_CONTAINER);
+        // `taggedNode : String -> Description -> List (Attribute msg) -> List (Element msg) -> Element msg`.
+        const UI_TAGGED_NODE: TyShape = TyShape::Fun(&STRING, &UI_NODE);
         // `above / below / … : Element msg -> Attribute msg`.
         const UI_ELEM_A_TO_UI_ATTR_A: TyShape = TyShape::Fun(&UI_ELEM_A, &UI_ATTR_A);
         // `onClick / … : msg -> Attribute msg`.
@@ -6360,9 +6353,7 @@ impl StdlibKernel {
         const INT_TO_UI_ATTR_A_REGION: TyShape = TyShape::Fun(&INT, &UI_ATTR_A);
         const STRING_TO_UI_ATTR_A_REGION: TyShape = TyShape::Fun(&STRING, &UI_ATTR_A);
 
-        // ── Ui.input / describe / Description constructors. ──
-        // `input : List (Attribute msg) -> Element msg`.
-        const LIST_UI_ATTR_A_TO_UI_ELEM_A: TyShape = TyShape::Fun(&LIST_UI_ATTR_A, &UI_ELEM_A);
+        // ── Ui.describe / Description constructors. ──
         // `describe : Description -> Attribute msg`.
         const DESCRIPTION_TO_UI_ATTR_A: TyShape = TyShape::Fun(&DESCRIPTION, &UI_ATTR_A);
         // `descHeading : Int -> Description`; `descLabel : String -> Description`.
@@ -7556,14 +7547,6 @@ impl StdlibKernel {
 
             // ── Ipe.Ui layout / element / container. ──
             Self::UiLayout => Some(&UI_LAYOUT),
-            Self::UiEl => Some(&UI_EL),
-            Self::UiColumn
-            | Self::UiRow
-            | Self::UiWrappedRow
-            | Self::UiGrid
-            | Self::UiParagraph
-            | Self::UiTextColumn
-            | Self::UiForm => Some(&UI_CONTAINER),
             Self::UiAbove
             | Self::UiBelow
             | Self::UiOnLeft
@@ -7621,6 +7604,8 @@ impl StdlibKernel {
             Self::UiText => Some(&STRING_TO_UI_ELEM_A),
             Self::UiHtml => Some(&HTML_A_TO_UI_ELEM_A),
             Self::UiCells => Some(&LIST_LIST_CHAR_TO_UI_ELEM_A),
+            Self::UiNode => Some(&UI_NODE),
+            Self::UiTaggedNode => Some(&UI_TAGGED_NODE),
 
             // ── Ipe.Ui / Font / Border nullary attribute builders. ──
             Self::UiCenterX
@@ -7719,10 +7704,11 @@ impl StdlibKernel {
             Self::RegionHeading => Some(&INT_TO_UI_ATTR_A_REGION),
             Self::RegionLabel => Some(&STRING_TO_UI_ATTR_A_REGION),
 
-            // ── Ui.input / describe / Description. ──
-            Self::UiInput => Some(&LIST_UI_ATTR_A_TO_UI_ELEM_A),
+            // ── Ui.describe / Description. ──
             Self::UiDescribe => Some(&DESCRIPTION_TO_UI_ATTR_A),
-            Self::UiDescMain
+            Self::UiDescNone
+            | Self::UiDescParagraph
+            | Self::UiDescMain
             | Self::UiDescNavigation
             | Self::UiDescContentInfo
             | Self::UiDescComplementary
@@ -8499,16 +8485,10 @@ impl StdlibKernel {
             | Self::UiText
             | Self::UiHtml
             | Self::UiCells
-            | Self::UiEl
-            | Self::UiRow
-            | Self::UiColumn
-            | Self::UiWrappedRow
-            | Self::UiGrid
-            | Self::UiParagraph
-            | Self::UiTextColumn
+            | Self::UiNode
+            | Self::UiTaggedNode
             | Self::UiButton
             | Self::UiLink
-            | Self::UiForm
             | Self::UiImage
             | Self::UiAbove
             | Self::UiBelow
@@ -8686,8 +8666,9 @@ impl StdlibKernel {
             | Self::RegionLabel
             | Self::RegionAnnounce
             | Self::RegionAnnounceUrgently
-            | Self::UiInput
             | Self::UiDescribe
+            | Self::UiDescNone
+            | Self::UiDescParagraph
             | Self::UiDescMain
             | Self::UiDescNavigation
             | Self::UiDescContentInfo
@@ -9788,16 +9769,10 @@ impl StdlibKernel {
                 | Self::UiText
                 | Self::UiHtml
                 | Self::UiCells
-                | Self::UiEl
-                | Self::UiRow
-                | Self::UiColumn
-                | Self::UiWrappedRow
-                | Self::UiGrid
-                | Self::UiParagraph
-                | Self::UiTextColumn
+                | Self::UiNode
+                | Self::UiTaggedNode
                 | Self::UiButton
                 | Self::UiLink
-                | Self::UiForm
                 | Self::UiImage
                 | Self::UiAbove
                 | Self::UiBelow
@@ -9961,9 +9936,10 @@ impl StdlibKernel {
                 | Self::RegionLabel
                 | Self::RegionAnnounce
                 | Self::RegionAnnounceUrgently
-                // ── Ui.input + Ui.describe + desc* constructors ──────────
-                | Self::UiInput
+                // ── Ui.describe + desc* constructors ─────────────────────
                 | Self::UiDescribe
+                | Self::UiDescNone
+                | Self::UiDescParagraph
                 | Self::UiDescMain
                 | Self::UiDescNavigation
                 | Self::UiDescContentInfo

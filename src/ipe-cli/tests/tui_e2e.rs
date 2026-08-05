@@ -190,9 +190,26 @@ fn tui_onkey_record_typechecks() {
             built.err()
         );
 
-        // Return emitted main.rs text for structural assertions.
-        std::fs::read_to_string(out_dir.join("src").join("main.rs"))
-            .unwrap_or_else(|_| String::new())
+        // Return the WHOLE emitted Ipê-side tree (main.rs + ipe_mods/*.rs) for
+        // structural assertions: a layout builder is compiled-source Ipê now, so a
+        // home may lower into `src/ipe_mods/*.rs`.
+        let src = out_dir.join("src");
+        let mut combined = std::fs::read_to_string(src.join("main.rs")).unwrap_or_default();
+        if let Ok(entries) = std::fs::read_dir(src.join("ipe_mods")) {
+            let mut files: Vec<std::path::PathBuf> = entries
+                .filter_map(Result::ok)
+                .map(|e| e.path())
+                .filter(|p| p.extension().is_some_and(|x| x == "rs"))
+                .collect();
+            files.sort();
+            for path in files {
+                if let Ok(text) = std::fs::read_to_string(&path) {
+                    combined.push('\n');
+                    combined.push_str(&text);
+                }
+            }
+        }
+        combined
     }
 
     // ── Terminal.appScreen with `onKey : KeyEvent -> Msg` ────────────────────
