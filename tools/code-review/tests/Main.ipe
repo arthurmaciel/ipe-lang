@@ -11,6 +11,7 @@ import Ipe.String as String
 import Ipe.System as System
 import Ipe.Task as Task
 import Lib.Db as LibDb exposing (Decision(..))
+import Lib.Format as Format
 import Lib.Index as Index
 
 
@@ -166,6 +167,13 @@ allChecks db =
         , Task.map (\ok -> ( "refuse without reason rejected", ok )) (refuseWithoutReasonRejected db)
         , Task.map (\ok -> ( "decision roundtrip", ok )) (decisionRoundtrip db)
         , Task.succeed ( "decidedCount counts only decided", decidedCountChecks )
+        , Task.succeed
+            ( "formatReviewedAt renders UTC"
+            , Format.formatReviewedAt 0
+                == "1970-01-01 00:00:00"
+                && Format.formatReviewedAt 1700000000000
+                == "2023-11-14 22:13:20"
+            )
         ]
 
 
@@ -602,6 +610,56 @@ seedDrainDb indexDb =
         |> Task.map (\_ -> ())
 
 
+-- ── B6: review history ──────────────────────────────────────────────────────
+--
+-- Two decisions on a scratch review db must come back through findDecisions
+-- with their columns in order (descending reviewed_at, then uid).
+historyRoundtrip : Task.Task Error Bool
+historyRoundtrip =
+    let
+        base =
+            System.getenvOr "TMPDIR" "/tmp" ++ "/ipe-index-b6-history"
+
+        reviewDb =
+            base ++ "/review.db"
+    in
+    removeFileIfAny reviewDb
+        |> Task.andThen (\_ -> Task.fromResult (Path.fromString base))
+        |> Task.andThen File.mkdirAll
+        |> Task.andThen (\_ -> LibDb.openAt reviewDb)
+        |> Task.andThen
+            (\db ->
+                LibDb.migrate db
+                    |> Task.andThen (\_ -> insertBoth db)
+                    |> Task.map (\_ -> db)
+            )
+        |> Task.andThen
+            (\db ->
+                LibDb.findDecisions db
+                    |> Task.map
+                        (\rows ->
+                            List.length rows
+                                == 2
+                                && List.member ( "u-a", "approve" ) (List.map (\r -> ( r.uid, r.decision )) rows)
+                                && List.member ( "u-b", "refuse" ) (List.map (\r -> ( r.uid, r.decision )) rows)
+                                && List.member (Just "too big") (List.map (\r -> r.reason) rows)
+                        )
+            )
+        |> Task.andThen
+            (\ok ->
+                removeFileIfAny reviewDb
+                    |> Task.andThen (\_ -> removeFileIfAny (reviewDb ++ "-wal"))
+                    |> Task.andThen (\_ -> removeFileIfAny (reviewDb ++ "-shm"))
+                    |> Task.map (\_ -> ok)
+            )
+
+
+insertBoth : Db -> Task.Task Error Int
+insertBoth db =
+    LibDb.insertDecision db "u-a" "hashA" Approved
+        |> Task.andThen (\_ -> LibDb.insertDecision db "u-b" "hashB" (Refused "too big"))
+
+
 report : List ( String, Bool ) -> String
 report results =
     List.map
@@ -657,6 +715,11 @@ main =
             (\results ->
                 drainFlow
                     |> Task.map (\ok -> results ++ [ ( "decided unit drained from queue", ok ) ])
+            )
+        |> Task.andThen
+            (\results ->
+                historyRoundtrip
+                    |> Task.map (\ok -> results ++ [ ( "review history roundtrip", ok ) ])
             )
         |> Task.andThen
             (\results ->

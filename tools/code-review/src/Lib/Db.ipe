@@ -1,6 +1,7 @@
-module Lib.Db exposing (Decision(..), decidedCount, findDecision, insertDecision, migrate, open, openAt, recordDrain)
+module Lib.Db exposing (Decision(..), ReviewRow, decidedCount, findDecision, findDecisions, insertDecision, migrate, open, openAt, recordDrain)
 
 import Ipe.Db as Db
+import Ipe.Db.Decode
 import Ipe.Db.Sql as Sql
 import Ipe.Dict as Dict
 import Ipe.Error as Error
@@ -16,6 +17,17 @@ import Migrations exposing (all)
 type Decision
     = Approved
     | Refused String
+
+
+-- One row of the review table, as stored: the raw decision string and an
+-- optional reason. The History page enriches it with the unit name.
+type alias ReviewRow =
+    { uid : String
+    , bodyHash : String
+    , decision : String
+    , reason : Maybe String
+    , reviewedAt : Int
+    }
 
 
 open : Task.Task Error Db
@@ -173,3 +185,31 @@ recordDrain db uid bodyHash =
                     "INSERT OR REPLACE INTO drain_cursor VALUES (?, ?, ?)"
                     [ SqlString uid, SqlString bodyHash, SqlTime now ]
             )
+
+
+-- Every review row, newest first. The History page builds its list from this.
+findDecisions : Db -> Task.Task Error (List ReviewRow)
+findDecisions db =
+    Db.queryDecode db
+        "SELECT uid, body_hash, decision, reason, reviewed_at FROM review ORDER BY reviewed_at DESC, uid"
+        []
+        reviewRowDecoder
+
+
+reviewRowDecoder =
+    Db.Decode.succeed makeRow
+        |> Db.Decode.required "uid" (Db.Decode.string "uid")
+        |> Db.Decode.required "body_hash" (Db.Decode.string "body_hash")
+        |> Db.Decode.required "decision" (Db.Decode.string "decision")
+        |> Db.Decode.required "reason" (Db.Decode.nullable (Db.Decode.string "reason"))
+        |> Db.Decode.required "reviewed_at" (Db.Decode.int "reviewed_at")
+
+
+makeRow : String -> String -> String -> Maybe String -> Int -> ReviewRow
+makeRow uid bodyHash decision reason reviewedAt =
+    { uid = uid
+    , bodyHash = bodyHash
+    , decision = decision
+    , reason = reason
+    , reviewedAt = reviewedAt
+    }

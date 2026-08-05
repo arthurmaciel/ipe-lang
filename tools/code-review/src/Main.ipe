@@ -3,6 +3,8 @@ module Main exposing (main)
 import Ipe.Db as Db
 import Ipe.Dict as Dict
 import Ipe.Error as Error
+import Ipe.Html as Html
+import Ipe.Html.Attributes as Attr
 import Ipe.List as List
 import Ipe.String as String
 import Ipe.System as System
@@ -16,11 +18,26 @@ import Ipe.Ui.Border as Border
 import Ipe.Ui.Font as Font
 import Ipe.Ui.Input as Input
 import Lib.Db as LibDb exposing (Decision(..))
+import Lib.Format as Format
 import Lib.Index as Index
 
 
 type Page
-    = Shell
+    = QueuePage
+    | HistoryPage
+
+
+-- A decided unit as the History page shows it: the review row plus the unit's
+-- qualified name resolved from the index db (Nothing when the unit no longer
+-- exists there).
+type alias HistoryRow =
+    { uid : String
+    , bodyHash : String
+    , decision : String
+    , reason : Maybe String
+    , reviewedAt : Int
+    , name : Maybe String
+    }
 
 
 type alias Model =
@@ -31,20 +48,35 @@ type alias Model =
     , refusingUid : Maybe String
     , refuseDraft : String
     , refuseError : Maybe String
+    , history : List HistoryRow
+    , historyError : Maybe String
     }
 
 
 init : Web.WebReq -> ( Model, Cmd Msg )
-init _ =
-    ( { page = Shell
-      , queue = []
-      , queueError = Nothing
-      , decisions = Dict.empty
-      , refusingUid = Nothing
-      , refuseDraft = ""
-      , refuseError = Nothing
-      }
-    , Cmd.perform Index.loadPending PendingLoaded
+init req =
+    ( { page = if req.path == "/history" then
+        HistoryPage
+
+    else
+        QueuePage
+    , queue = []
+    , queueError = Nothing
+    , decisions = Dict.empty
+    , refusingUid = Nothing
+    , refuseDraft = ""
+    , refuseError = Nothing
+    , history = []
+    , historyError = Nothing
+    }
+    , Cmd.batch
+        [ Cmd.perform Index.loadPending PendingLoaded
+        , if req.path == "/history" then
+            Cmd.perform loadHistory HistoryLoaded
+
+        else
+            Cmd.none
+        ]
     )
 
 
@@ -63,6 +95,9 @@ type Msg
     | RefuseCancel
     | RefuseSubmit String
     | DecisionSaved String (Result Error Int)
+    | ShowQueue
+    | ShowHistory
+    | HistoryLoaded (Result Error (List HistoryRow))
 
 
 update : Msg -> Model -> ( Model, Cmd Msg )
@@ -114,6 +149,20 @@ update msg model =
 
                 Err e ->
                     ( { model | queueError = Just ("Decision save failed: " ++ Error.toString e) }, Cmd.none )
+
+        ShowQueue ->
+            ( { model | page = QueuePage }, Cmd.none )
+
+        ShowHistory ->
+            ( { model | page = HistoryPage }, Cmd.perform loadHistory HistoryLoaded )
+
+        HistoryLoaded result ->
+            case result of
+                Ok rows ->
+                    ( { model | history = rows, historyError = Nothing }, Cmd.none )
+
+                Err e ->
+                    ( { model | historyError = Just ("History load failed: " ++ Error.toString e) }, Cmd.none )
 
 
 saveDecision : Model -> String -> LibDb.Decision -> Cmd Msg
@@ -179,6 +228,37 @@ bodyHashOf uid units =
             Nothing
 
 
+-- Review history: every decided row, newest first, with the unit's qualified
+-- name resolved from the index db (Nothing when the unit no longer exists).
+loadHistory : Task Error (List HistoryRow)
+loadHistory =
+    reviewDb
+        |> Task.andThen (\db -> LibDb.findDecisions db)
+        |> Task.andThen
+            (\rows ->
+                Db.open "sqlite" (Index.indexDbUrlFor (System.getenvOr "IPE_INDEX_DB" ".ipe-index/index.db"))
+                    |> Task.andThen
+                        (\conn ->
+                            Task.sequence (List.map (enrich conn) rows)
+                        )
+            )
+
+
+enrich : Db.Db -> LibDb.ReviewRow -> Task Error HistoryRow
+enrich conn row =
+    Task.map
+        (\name ->
+            { uid = row.uid
+            , bodyHash = row.bodyHash
+            , decision = row.decision
+            , reason = row.reason
+            , reviewedAt = row.reviewedAt
+            , name = name
+            }
+        )
+        (Index.nameFor conn row.uid)
+
+
 header : Model -> Ui.Element Msg
 header model =
     Ui.row
@@ -192,10 +272,30 @@ header model =
         , Border.widthEach { top = 0, right = 0, bottom = 1, left = 0 }
         ]
         [ Ui.el [ Font.size 16, Font.bold, Font.color (Ui.rgb 235 235 240) ] (Ui.text "Code review")
+        , Ui.el [ Ui.width Ui.fill ] Ui.none
+        , navButton (model.page == QueuePage) "Queue" ShowQueue
+        , navButton (model.page == HistoryPage) "History" ShowHistory
         , Ui.el
             [ Font.size 14, Font.color (Ui.rgb 160 160 175) ]
             (Ui.text (String.fromInt (LibDb.decidedCount model.decisions) ++ " of " ++ String.fromInt (List.length model.queue) ++ " reviewed"))
         ]
+
+
+navButton : Bool -> String -> Msg -> Ui.Element Msg
+navButton active label msg =
+    Ui.button
+        [ Ui.paddingXY 10 5
+        , Border.rounded 4
+        , Font.size 12
+        , Font.bold
+        , if active then
+            Background.color (Ui.rgb 55 55 70)
+
+        else
+            Background.color (Ui.rgb 24 24 32)
+        , Font.color (Ui.rgb 200 200 210)
+        ]
+        { onPress = Just msg, label = Ui.text label }
 
 
 view : Model -> Ui.Element Msg
@@ -205,12 +305,23 @@ view model =
         [ header model
         , Ui.el
             [ Ui.width Ui.fill, Ui.height Ui.fill, Ui.padding 24, Font.color (Ui.rgb 190 190 200) ]
-            (body model)
+            (pageBody model)
+        , urlSync model
         ]
 
 
-body : Model -> Ui.Element Msg
-body model =
+pageBody : Model -> Ui.Element Msg
+pageBody model =
+    case model.page of
+        QueuePage ->
+            queueBody model
+
+        HistoryPage ->
+            historyBody model
+
+
+queueBody : Model -> Ui.Element Msg
+queueBody model =
     case model.queueError of
         Just err ->
             Ui.text err
@@ -223,6 +334,94 @@ body model =
                 Ui.column
                     [ Ui.width Ui.fill, Ui.spacing 16, Ui.scrollbars ]
                     (List.map (unitCard model) model.queue)
+
+
+historyBody : Model -> Ui.Element Msg
+historyBody model =
+    case model.historyError of
+        Just err ->
+            Ui.text err
+
+        Nothing ->
+            if List.isEmpty model.history then
+                Ui.text "No reviews yet."
+
+            else
+                Ui.column
+                    [ Ui.width Ui.fill, Ui.spacing 16, Ui.scrollbars ]
+                    (List.map historyCard model.history)
+
+
+historyCard : HistoryRow -> Ui.Element Msg
+historyCard row =
+    Ui.column
+        [ Ui.width Ui.fill
+        , Ui.padding 16
+        , Ui.spacing 10
+        , Background.color (Ui.rgb 24 24 32)
+        , Border.rounded 8
+        , Border.solid
+        , Border.width 1
+        , Border.color (Ui.rgb 50 50 62)
+        ]
+        [ Ui.row
+            [ Ui.width Ui.fill, Ui.spacing 10, Ui.centerY ]
+            [ decisionBadge row.decision
+            , Ui.el [ Font.size 14, Font.bold, Font.color (Ui.rgb 235 235 240) ] (Ui.text (nameOf row))
+            , Ui.el
+                [ Font.size 12, Font.family Font.monospace, Font.color (Ui.rgb 150 150 165) ]
+                (Ui.text (String.slice 0 8 row.bodyHash))
+            , Ui.el [ Ui.width Ui.fill ] Ui.none
+            , Ui.el
+                [ Font.size 12, Font.color (Ui.rgb 150 150 165) ]
+                (Ui.text (Format.formatReviewedAt row.reviewedAt))
+            ]
+        , case row.reason of
+            Just r ->
+                Ui.el [ Font.size 12, Font.color (Ui.rgb 200 120 120) ] (Ui.text r)
+
+            Nothing ->
+                Ui.none
+        ]
+
+
+nameOf : HistoryRow -> String
+nameOf row =
+    case row.name of
+        Just n ->
+            n
+
+        Nothing ->
+            row.uid
+
+
+decisionBadge : String -> Ui.Element Msg
+decisionBadge d =
+    case d of
+        "approve" ->
+            chipColored "✓ Approved" (Ui.rgb 35 120 55)
+
+        "refuse" ->
+            chipColored "✗ Refused" (Ui.rgb 130 45 45)
+
+        _ ->
+            chipColored d (Ui.rgb 40 40 52)
+
+
+currentPath : Model -> String
+currentPath model =
+    case model.page of
+        QueuePage ->
+            "/"
+
+        HistoryPage ->
+            "/history"
+
+
+urlSync : Model -> Ui.Element Msg
+urlSync model =
+    Ui.html
+        (Html.node "div" [ Attr.attribute "data-ipe-path" (currentPath model) ] [])
 
 
 unitCard : Model -> Index.Unit -> Ui.Element Msg
@@ -421,6 +620,6 @@ main =
         , update = update
         , view = view
         , subscriptions = subscriptions
-        , routes = [ Web.route "/" Shell ]
-        , notFound = Shell
+        , routes = [ Web.route "/" QueuePage, Web.route "/history" HistoryPage ]
+        , notFound = QueuePage
         }

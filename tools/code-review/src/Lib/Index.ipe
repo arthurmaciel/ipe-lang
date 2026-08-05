@@ -1,7 +1,9 @@
-module Lib.Index exposing (Unit, drainUnit, loadPending)
+module Lib.Index exposing (Unit, drainUnit, indexDbUrlFor, loadPending, nameFor)
 
 import Ipe.Db
 import Ipe.Db.Decode
+import Ipe.Db.Sql as Sql
+import Ipe.Dict as Dict
 import Ipe.Error as Error
 import Ipe.File as File
 import Ipe.List as List
@@ -215,6 +217,22 @@ drainUnit uid =
         |> Task.andThen
             (\conn ->
                 Db.exec conn "DELETE FROM change_queue WHERE uid = ?" [ SqlString uid ]
+            )
+
+
+-- The unit's qualified name from the units table, if the unit still exists
+-- (a decided unit whose source was deleted leaves a review row but no name).
+nameFor : Db.Db -> String -> Task.Task Error (Maybe String)
+nameFor conn uid =
+    Db.findWhere conn "units" (Sql.eq (Sql.column "uid") (Sql.param (SqlString uid)))
+        |> Task.map
+            (\rows ->
+                case List.head rows of
+                    Just d ->
+                        Dict.get "qualified" d
+
+                    Nothing ->
+                        Nothing
             )
 
 
