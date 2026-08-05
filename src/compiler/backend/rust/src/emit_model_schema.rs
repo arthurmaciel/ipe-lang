@@ -410,7 +410,10 @@ mod tests {
     /// An `EmitCtx` over an empty program — enough for hashing types whose
     /// leaves are builtins (no user enums to resolve).
     fn empty_program() -> Program {
-        Program { modules: vec![] }
+        Program {
+            modules: vec![],
+            imports_unsafe_submodule: false,
+        }
     }
 
     fn hash_record(
@@ -496,6 +499,7 @@ mod tests {
     /// enum-identity tests below).
     fn program_with_types(name: ipe_ir::ModPath, types: Vec<ipe_ir::TypeDef>) -> Program {
         Program {
+            imports_unsafe_submodule: false,
             modules: vec![ipe_ir::Module {
                 name,
                 types,

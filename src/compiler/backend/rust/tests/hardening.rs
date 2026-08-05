@@ -25,6 +25,7 @@ use ipe_ir::{
 /// emission does not require one).
 fn program(name: Symbol, types: Vec<TypeDef>, funcs: Vec<Func>) -> Program {
     Program {
+        imports_unsafe_submodule: false,
         modules: vec![Module {
             name: ModPath(vec![name]),
             types,
@@ -261,6 +262,7 @@ fn cross_module_type_name_collision_is_rejected() -> DResult<()> {
         })
     };
     let prog = Program {
+        imports_unsafe_submodule: false,
         modules: vec![
             Module {
                 name: ModPath(vec![main_mod]),

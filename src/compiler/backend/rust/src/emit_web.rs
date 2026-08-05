@@ -942,6 +942,7 @@ mod schema_tag_tests {
         let main_mod = interner.intern("Main")?;
 
         let program = Program {
+            imports_unsafe_submodule: false,
             modules: vec![Module {
                 name: ModPath(vec![main_mod]),
                 types: vec![],

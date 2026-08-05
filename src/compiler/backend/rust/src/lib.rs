@@ -3727,6 +3727,7 @@ mod record_struct_namespace_tests {
         let y_field = interner.intern("y")?;
 
         let program = Program {
+            imports_unsafe_submodule: false,
             modules: vec![Module {
                 name: ModPath(vec![rec_mod]),
                 types: vec![TypeDef::Enum(EnumDef {
@@ -3832,6 +3833,7 @@ mod record_struct_namespace_tests {
         let b_field = interner.intern("b")?;
 
         let program = Program {
+            imports_unsafe_submodule: false,
             modules: vec![Module {
                 name: ModPath(vec![main_mod]),
                 types: vec![TypeDef::Enum(EnumDef {
@@ -3914,6 +3916,7 @@ mod record_struct_namespace_tests {
         let unit_ctor = interner.intern("Unit")?;
         let ty = interner.intern("T")?;
         let program = Program {
+            imports_unsafe_submodule: false,
             modules: vec![Module {
                 name: ModPath(vec![main_mod]),
                 types: vec![TypeDef::Enum(EnumDef {

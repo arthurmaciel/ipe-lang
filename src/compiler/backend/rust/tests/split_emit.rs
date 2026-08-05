@@ -122,6 +122,7 @@ fn build_two_module(interner: &mut Interner) -> DResult<(Program, ModPath, ModPa
 
     Ok((
         Program {
+            imports_unsafe_submodule: false,
             modules: vec![module],
         },
         lib_home,
@@ -165,6 +166,7 @@ fn build_two_module_db(interner: &mut Interner) -> DResult<(Program, ModPath, Mo
 
     Ok((
         Program {
+            imports_unsafe_submodule: false,
             modules: vec![module],
         },
         lib_home,

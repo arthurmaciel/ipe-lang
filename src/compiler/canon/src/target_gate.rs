@@ -59,6 +59,7 @@ fn single_def_module(interner: &mut Interner, body_expr: Expr_) -> Module {
         body: Located::new(Span::DUMMY, body_expr),
     };
     Module {
+        imports_unsafe_submodule: false,
         name: main,
         unions: Vec::new(),
         defs: vec![def],

@@ -136,6 +136,7 @@ fn wrap_program(i: &mut Interner) -> DResult<Program> {
     };
 
     Ok(Program {
+        imports_unsafe_submodule: false,
         modules: vec![Module {
             name: ModPath(vec![main_mod]),
             types: vec![TypeDef::Enum(def)],
@@ -211,6 +212,7 @@ fn unit_value_and_type_render() -> DResult<()> {
 
     // nop() -> () = ()
     let prog = Program {
+        imports_unsafe_submodule: false,
         modules: vec![Module {
             name: ModPath(vec![main_mod]),
             types: vec![],

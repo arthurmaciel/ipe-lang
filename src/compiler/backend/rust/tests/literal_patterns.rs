@@ -162,6 +162,7 @@ fn tag_program(interner: &mut Interner, payload: Pat) -> DResult<Program> {
     };
 
     Ok(Program {
+        imports_unsafe_submodule: false,
         modules: vec![Module {
             name: ModPath(vec![main_mod]),
             types: vec![TypeDef::Enum(def)],
@@ -359,6 +360,7 @@ fn alias_program(interner: &mut Interner) -> DResult<(Program, Symbol, Symbol)> 
 
     Ok((
         Program {
+            imports_unsafe_submodule: false,
             modules: vec![Module {
                 name: ModPath(vec![main_mod]),
                 types: vec![TypeDef::Enum(def)],

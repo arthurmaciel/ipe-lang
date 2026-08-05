@@ -52,6 +52,7 @@ fn run_with_regions(
     interner: &mut Interner,
 ) -> DResult<ipe_ir::Program> {
     let m = canon::Module {
+        imports_unsafe_submodule: false,
         name: Vec::new(),
         unions,
         defs,
