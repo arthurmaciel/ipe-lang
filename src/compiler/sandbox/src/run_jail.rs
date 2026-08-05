@@ -813,26 +813,6 @@ impl std::fmt::Display for RunJailDefect {
 
 impl std::error::Error for RunJailDefect {}
 
-/// Whether the resolved capability set is entirely low-value.
-///
-/// The low-value axes are `clock`/`random`/`unsafe` (or empty) — the only case
-/// the narrow `IPE_ALLOW_UNSANDBOXED` override may downgrade to a warning. Any
-/// high-value native axis (network, filesystem, database, env, subprocess,
-/// native-ffi) makes the override a hard error: there is no flag that runs
-/// admitted native code unconfined. `unsafe` is a provenance disclosure over
-/// Ipê-level escape hatches, not a native OS effect the jail confines, so it
-/// carries no isolation surface the override would unconfine — jail-orthogonal,
-/// grouped with clock/random.
-#[must_use]
-pub fn is_low_value_only(union: &BTreeSet<Capability>) -> bool {
-    union.iter().all(|c| {
-        matches!(
-            c,
-            Capability::Clock | Capability::Random | Capability::Unsafe
-        )
-    })
-}
-
 /// The build-time platform verdict: can a sound run jail be built on THIS
 /// target at all?
 ///
