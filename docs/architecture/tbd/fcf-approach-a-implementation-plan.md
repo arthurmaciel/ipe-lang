@@ -549,3 +549,48 @@ function-storing emitted signature is only needed if a combinator is emitted wit
 such a signature; the target codec idioms instantiate concretely, so it is
 deferred until a polymorphic-combinator golden actually requires it (add it as a
 Slice-3 companion only if a Slice-4/5 fixture surfaces the need).
+
+## Resolved design decisions
+
+These close the open questions the plan flagged. An implementer should treat them
+as settled.
+
+1. **`Codec.auto` elaboration site → lowering (post-inference).** Synthesize the
+   derived codec in `lower`, where the solved record field-list (names + concrete
+   types) is stable and generic instantiation is already resolved. Do not attempt
+   it in `canon` (field types are not fully solved there).
+
+2. **`toString` / `IpeStringify` on a function-carrying value → render a fully
+   opaque `<function>`.** Do not embed the binding name, the type signature, the
+   arity, or the captured environment. Rationale (Security first, then the
+   no-runtime-reflection stance): a name or type-signature leaks internal symbols
+   into logs/UI (information disclosure) and reintroduces runtime type information;
+   a captured environment can hold a `Secret` and must never be printed; a
+   function has no return value to show without applying it. Opaque `<function>`
+   is the only safe rendering.
+
+3. **Polymorphic `+ 'static` bound → deferred.** Target codec/Store idioms
+   instantiate concretely, so no pinned golden requires a genuinely-polymorphic
+   function-storing emitted signature. Add the handling only if a Slice 4/5
+   fixture surfaces one; treat that as a companion to the collection slice, not a
+   prerequisite.
+
+4. **Functions in the TEA Model → hard-forbidden (a new slice).** A `Model` type
+   that transitively contains a function is rejected at compile time with a
+   diagnostic that points to defunctionalization (store a data ADT you interpret
+   in `update`, not a closure). This is deliberately stricter than the existing
+   `==`-on-function rejection: the Model must stay serializable, comparable
+   (so `lazy`/diff work), inspectable, and testable, and defunctionalization
+   cleanly expresses every real case (a queued continuation becomes a
+   `PendingAction` variant). First-class functions remain values everywhere else;
+   only the Model-type position is function-free. Preserve the existing
+   equality-rejection of functions as well.
+
+   **Added slice — Model-function-free gate.** A structural check on the Model
+   type (recovered from the app config's `view`/`update`, the same place the
+   routing `page`-field detection reads) that transitively rejects a function
+   leaf, plus its explain diagnostic. Additive and independent of the collection
+   and capture slices; gate it on the full-corpus golden diff (no existing
+   function-free Model changes) plus a negative test (a function-carrying Model is
+   rejected with the defunctionalization diagnostic) and a positive test (the
+   defunctionalized equivalent compiles).
