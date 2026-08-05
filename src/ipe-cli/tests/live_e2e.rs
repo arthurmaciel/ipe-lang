@@ -2290,3 +2290,60 @@ fn live_unrouted_get_does_not_wipe_form_handlers() -> Result<(), BoxError> {
 
     Ok(())
 }
+
+/// A generic `.ipe` helper that RETURNS a `Decoder a` built from a
+/// caller-supplied value — the `custom`/`enum`-style decoder-factory shape.
+///
+/// The runtime `Decoder<E, T>` (`ipe_runtime::json::Decoder`) boxes a
+/// `Box<dyn Fn(..) -> IpeResult<E, T> + Send>`, so `decode_succeed` bounds its
+/// payload `A: 'static + Send`. `custom`'s tvar `a` flows into its return
+/// `Decoder a`, so the emitted `fn main_custom<T1>` needs `T1: Send + 'static`;
+/// without it `ipe` accepts but `cargo build` fails with E0277 (`T1 cannot be
+/// sent between threads safely`) — an exit-0-then-cargo-fail SEAL break. The
+/// decoder is then RUN through `Config.decodeJson`, keeping the helper reachable
+/// so the generic signature is actually emitted (never DCE'd).
+const IPE_GENERIC_DECODER_HELPER: &str = r#"module Main exposing (main)
+
+import Ipe.Io as Io
+import Ipe.String as String
+import Ipe.Config as Config exposing (Decoder)
+import Ipe.Error exposing (Error)
+import Ipe.Result as Result exposing (Result(..))
+
+
+custom : a -> Decoder a
+custom fallback =
+    Config.succeed fallback
+
+
+main : Task Error ()
+main =
+    case Config.decodeJson "{}" (custom 8080) of
+        Ok n ->
+            Io.println (String.fromInt n)
+
+        Err _ ->
+            Io.println "err"
+"#;
+
+/// SEAL — a generic `Decoder`-returning helper must build end-to-end. Without
+/// the `Send`-bound obligation on a tvar carried inside a `Decoder<E, tv>`, `ipe`
+/// accepts this and the emitted crate fails `cargo build` (`decode_succeed`'s
+/// `A: Send` unmet on the helper's unbounded `T1`). A successful `ipe` +
+/// `cargo build` IS the assertion.
+///
+/// # Errors
+///
+/// Propagates any pipeline or Cargo build failure as a test error.
+#[test]
+fn live_generic_decoder_helper_build_only() -> Result<(), BoxError> {
+    if std::env::var("IPE_E2E").is_err() {
+        return Ok(());
+    }
+
+    let _exe = compile_and_build(
+        "live_generic_decoder_helper_build_only",
+        IPE_GENERIC_DECODER_HELPER,
+    )?;
+    Ok(())
+}
