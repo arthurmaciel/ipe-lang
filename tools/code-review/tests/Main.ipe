@@ -14,6 +14,7 @@ import Lib.Db as LibDb exposing (Decision(..))
 import Lib.Format as Format
 import Lib.Highlight as Highlight exposing (Lang(..), Token(..))
 import Lib.Index as Index
+import Lib.Queue as Queue
 
 
 tableExists : Db -> String -> Task.Task Error Bool
@@ -149,16 +150,6 @@ decisionRoundtrip db =
             )
 
 
-decidedCountChecks : Bool
-decidedCountChecks =
-    LibDb.decidedCount Dict.empty
-        == 0
-        && LibDb.decidedCount (Dict.fromList [ ( "a", Nothing ), ( "b", Nothing ) ])
-        == 0
-        && LibDb.decidedCount (Dict.fromList [ ( "a", Just Approved ), ( "b", Nothing ), ( "c", Just (Refused "x") ) ])
-        == 2
-
-
 allChecks : Db -> Task.Task Error (List ( String, Bool ))
 allChecks db =
     Task.sequence
@@ -167,7 +158,6 @@ allChecks db =
         , Task.map (\ok -> ( "duplicate (uid,body_hash) no-op", ok )) (duplicateInsertIsNoop db)
         , Task.map (\ok -> ( "refuse without reason rejected", ok )) (refuseWithoutReasonRejected db)
         , Task.map (\ok -> ( "decision roundtrip", ok )) (decisionRoundtrip db)
-        , Task.succeed ( "decidedCount counts only decided", decidedCountChecks )
         , Task.succeed
             ( "formatReviewedAt renders UTC"
             , Format.formatReviewedAt 0
@@ -864,6 +854,196 @@ insertBoth db =
         |> Task.andThen (\_ -> LibDb.insertDecision db "u-b" "hashB" (Refused "too big"))
 
 
+-- ── B8: change re-enqueue ─────────────────────────────────────────────────────
+--
+-- A unit already decided on its current hash stays hidden; a unit decided on an
+-- OLDER hash resurfaced at the queue head, flagged with the previous decision;
+-- never-seen units follow in their natural order.
+changeReenqueue : Task.Task Error Bool
+changeReenqueue =
+    let
+        base =
+            System.getenvOr "TMPDIR" "/tmp" ++ "/ipe-index-b8-reenqueue"
+
+        repo =
+            base ++ "/repo"
+
+        indexDb =
+            base ++ "/index.db"
+
+        reviewDb =
+            base ++ "/review.db"
+    in
+    Task.fromResult (Path.fromString indexDb)
+        |> Task.andThen File.remove
+        |> Task.onError (\_ -> Task.succeed ())
+        |> Task.andThen (\_ -> Task.fromResult (Path.fromString base) |> Task.andThen File.mkdirAll)
+        |> Task.andThen (\_ -> Task.fromResult (Path.fromString (repo ++ "/src")) |> Task.andThen File.mkdirAll)
+        |> Task.andThen (\_ -> writeFileText (repo ++ "/src/A.ipe") fixtureMainIpe)
+        |> Task.andThen (\_ -> writeFileText (repo ++ "/src/B.ipe") fixtureMainIpe)
+        |> Task.andThen (\_ -> writeFileText (repo ++ "/src/C.ipe") fixtureMainIpe)
+        |> Task.andThen (\_ -> seedB8Db indexDb)
+        |> Task.andThen (\_ -> System.setenv "IPE_INDEX_DB" indexDb)
+        |> Task.andThen (\_ -> System.setenv "IPE_INDEX_ROOT" repo)
+        |> Task.andThen
+            (\_ ->
+                LibDb.openAt reviewDb
+                    |> Task.andThen (\db -> LibDb.migrate db |> Task.map (\_ -> db))
+                    |> Task.andThen
+                        (\db ->
+                            LibDb.insertDecision db "u-a" "hashA" Approved
+                                |> Task.andThen (\_ -> LibDb.insertDecision db "u-b" "hashB" (Refused "too big"))
+                                |> Task.map (\_ -> db)
+                        )
+                    |> Task.andThen (\_ -> System.setenv "IPE_REVIEW_DB" reviewDb)
+                    |> Task.andThen (\_ -> Queue.load)
+            )
+        |> Task.map
+            (\units ->
+                changedHead units
+                    && freshSecond units
+                    && List.length units
+                    == 2
+            )
+        |> Task.andThen
+            (\ok ->
+                Task.sequence
+                    [ removeFileIfAny indexDb
+                    , removeFileIfAny (indexDb ++ "-wal")
+                    , removeFileIfAny (indexDb ++ "-shm")
+                    , removeFileIfAny (repo ++ "/src/A.ipe")
+                    , removeFileIfAny (repo ++ "/src/B.ipe")
+                    , removeFileIfAny (repo ++ "/src/C.ipe")
+                    , removeFileIfAny reviewDb
+                    , removeFileIfAny (reviewDb ++ "-wal")
+                    , removeFileIfAny (reviewDb ++ "-shm")
+                    ]
+                    |> Task.map (\_ -> ok)
+            )
+
+
+changedHead : List Queue.QueuedUnit -> Bool
+changedHead units =
+    case List.head units of
+        Just first ->
+            first.unit.uid == "u-a" && resurfaced first.changed
+
+        Nothing ->
+            False
+
+
+resurfaced : Maybe LibDb.ReviewRow -> Bool
+resurfaced old =
+    case old of
+        Just row ->
+            row.decision == "approve" && row.bodyHash == "hashA"
+
+        Nothing ->
+            False
+
+
+freshSecond : List Queue.QueuedUnit -> Bool
+freshSecond units =
+    case List.head (List.drop 1 units) of
+        Just second ->
+            second.unit.uid == "u-c" && neverSeen second.changed
+
+        Nothing ->
+            False
+
+
+neverSeen : Maybe LibDb.ReviewRow -> Bool
+neverSeen old =
+    case old of
+        Nothing ->
+            True
+
+        Just _ ->
+            False
+
+
+seedB8Db : String -> Task.Task Error ()
+seedB8Db indexDb =
+    Db.open "sqlite" ("sqlite://" ++ indexDb ++ "?mode=rwc")
+        |> Task.andThen
+            (\conn ->
+                Db.exec conn unitsDdl []
+                    |> Task.andThen (\_ -> Db.exec conn queueDdl [])
+                    |> Task.andThen (\_ -> insertB8Units conn)
+            )
+        |> Task.map (\_ -> ())
+
+
+insertB8Units : Db -> Task.Task Error Int
+insertB8Units conn =
+    Db.exec conn
+        "INSERT INTO units VALUES (?,?,?,?,?,?,?,?,?,?,?)"
+        [ SqlString "u-a"
+        , SqlString "ipe:src/A.ipe"
+        , SqlString "module"
+        , SqlString "A"
+        , SqlString "A"
+        , SqlInt 1
+        , SqlInt 2
+        , SqlString "user"
+        , SqlNull (SqlString "")
+        , SqlString "hashA2"
+        , SqlString "shaA2"
+        ]
+        |> Task.andThen
+            (\_ ->
+                Db.exec conn
+                    "INSERT INTO units VALUES (?,?,?,?,?,?,?,?,?,?,?)"
+                    [ SqlString "u-b"
+                    , SqlString "ipe:src/B.ipe"
+                    , SqlString "module"
+                    , SqlString "B"
+                    , SqlString "B"
+                    , SqlInt 1
+                    , SqlInt 2
+                    , SqlString "user"
+                    , SqlNull (SqlString "")
+                    , SqlString "hashB"
+                    , SqlString "shaB"
+                    ]
+            )
+        |> Task.andThen
+            (\_ ->
+                Db.exec conn
+                    "INSERT INTO units VALUES (?,?,?,?,?,?,?,?,?,?,?)"
+                    [ SqlString "u-c"
+                    , SqlString "ipe:src/C.ipe"
+                    , SqlString "module"
+                    , SqlString "C"
+                    , SqlString "C"
+                    , SqlInt 1
+                    , SqlInt 2
+                    , SqlString "user"
+                    , SqlNull (SqlString "")
+                    , SqlString "hashC"
+                    , SqlString "shaC"
+                    ]
+            )
+        |> Task.andThen
+            (\_ ->
+                Db.exec conn
+                    "INSERT INTO change_queue VALUES (?,?,?,?,?,?)"
+                    [ SqlString "u-a", SqlString "modified", SqlString "hashA", SqlString "hashA2", SqlString "shaA2", SqlInt 3 ]
+            )
+        |> Task.andThen
+            (\_ ->
+                Db.exec conn
+                    "INSERT INTO change_queue VALUES (?,?,?,?,?,?)"
+                    [ SqlString "u-b", SqlString "new", SqlNull (SqlString ""), SqlString "hashB", SqlString "shaB", SqlInt 2 ]
+            )
+        |> Task.andThen
+            (\_ ->
+                Db.exec conn
+                    "INSERT INTO change_queue VALUES (?,?,?,?,?,?)"
+                    [ SqlString "u-c", SqlString "new", SqlNull (SqlString ""), SqlString "hashC", SqlString "shaC", SqlInt 1 ]
+            )
+
+
 report : List ( String, Bool ) -> String
 report results =
     List.map
@@ -924,6 +1104,11 @@ main =
             (\results ->
                 historyRoundtrip
                     |> Task.map (\ok -> results ++ [ ( "review history roundtrip", ok ) ])
+            )
+        |> Task.andThen
+            (\results ->
+                changeReenqueue
+                    |> Task.map (\ok -> results ++ [ ( "changed unit resurfaced at head, unchanged stays hidden", ok ) ])
             )
         |> Task.andThen
             (\results ->

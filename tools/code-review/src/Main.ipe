@@ -1,7 +1,6 @@
 module Main exposing (main)
 
 import Ipe.Db as Db
-import Ipe.Dict as Dict
 import Ipe.Error as Error
 import Ipe.Html as Html
 import Ipe.Html.Attributes as Attr
@@ -21,6 +20,7 @@ import Lib.Db as LibDb exposing (Decision(..))
 import Lib.Format as Format
 import Lib.Highlight as Highlight exposing (Token(..))
 import Lib.Index as Index
+import Lib.Queue as Queue
 
 
 type Page
@@ -43,9 +43,9 @@ type alias HistoryRow =
 
 type alias Model =
     { page : Page
-    , queue : List Index.Unit
+    , queue : List Queue.QueuedUnit
     , queueError : Maybe String
-    , decisions : Dict.Dict String (Maybe LibDb.Decision)
+    , decidedThisPass : Int
     , refusingUid : Maybe String
     , refuseDraft : String
     , refuseError : Maybe String
@@ -63,7 +63,7 @@ init req =
         QueuePage
     , queue = []
     , queueError = Nothing
-    , decisions = Dict.empty
+    , decidedThisPass = 0
     , refusingUid = Nothing
     , refuseDraft = ""
     , refuseError = Nothing
@@ -71,7 +71,7 @@ init req =
     , historyError = Nothing
     }
     , Cmd.batch
-        [ Cmd.perform Index.loadPending PendingLoaded
+        [ Cmd.perform Queue.load PendingLoaded
         , if req.path == "/history" then
             Cmd.perform loadHistory HistoryLoaded
 
@@ -88,8 +88,7 @@ reviewDb =
 
 
 type Msg
-    = PendingLoaded (Result Error (List Index.Unit))
-    | DecisionsLoaded (Result Error (List ( String, Maybe LibDb.Decision )))
+    = PendingLoaded (Result Error (List Queue.QueuedUnit))
     | ApproveUnit String
     | RefuseStart String
     | RefuseDraft String
@@ -107,22 +106,10 @@ update msg model =
         PendingLoaded result ->
             case result of
                 Ok units ->
-                    let
-                        m =
-                            { model | queue = units, decisions = Dict.empty, refusingUid = Nothing }
-                    in
-                    ( m, Cmd.perform (loadDecisions units) DecisionsLoaded )
+                    ( { model | queue = units, refusingUid = Nothing }, Cmd.none )
 
                 Err e ->
                     ( { model | queue = [], queueError = Just (Error.toString e) }, Cmd.none )
-
-        DecisionsLoaded result ->
-            case result of
-                Ok pairs ->
-                    ( { model | decisions = Dict.fromList pairs }, Cmd.none )
-
-                Err e ->
-                    ( { model | queueError = Just ("Decision lookup failed: " ++ Error.toString e) }, Cmd.none )
 
         ApproveUnit uid ->
             ( model, saveDecision model uid Approved )
@@ -146,7 +133,7 @@ update msg model =
         DecisionSaved uid result ->
             case result of
                 Ok _ ->
-                    ( model, drainAndReload model uid )
+                    ( { model | decidedThisPass = model.decidedThisPass + 1 }, drainAndReload model uid )
 
                 Err e ->
                     ( { model | queueError = Just ("Decision save failed: " ++ Error.toString e) }, Cmd.none )
@@ -200,30 +187,17 @@ drainAndReload model uid =
                         (\db ->
                             LibDb.recordDrain db uid bodyHash
                                 |> Task.andThen (\_ -> Index.drainUnit uid)
-                                |> Task.andThen (\_ -> Index.loadPending)
+                                |> Task.andThen (\_ -> Queue.load)
                         )
                 )
                 PendingLoaded
 
 
-loadDecisions : List Index.Unit -> Task Error (List ( String, Maybe LibDb.Decision ))
-loadDecisions units =
-    reviewDb
-        |> Task.andThen
-            (\db ->
-                Task.sequence
-                    (List.map
-                        (\u -> Task.map (\d -> ( u.uid, d )) (LibDb.findDecision db u.uid u.bodyHash))
-                        units
-                    )
-            )
-
-
-bodyHashOf : String -> List Index.Unit -> Maybe String
-bodyHashOf uid units =
-    case List.find (\u -> u.uid == uid) units of
-        Just u ->
-            Just u.bodyHash
+bodyHashOf : String -> List Queue.QueuedUnit -> Maybe String
+bodyHashOf uid qs =
+    case List.find (\q -> q.unit.uid == uid) qs of
+        Just q ->
+            Just q.unit.bodyHash
 
         Nothing ->
             Nothing
@@ -301,10 +275,10 @@ progressEl : Model -> Ui.Element Msg
 progressEl model =
     let
         k =
-            LibDb.decidedCount model.decisions
+            model.decidedThisPass
 
         n =
-            List.length model.queue
+            k + List.length model.queue
 
         pct =
             Format.percent k n
@@ -463,8 +437,12 @@ urlSync model =
         (Html.node "div" [ Attr.attribute "data-ipe-path" (currentPath model) ] [])
 
 
-unitCard : Model -> Index.Unit -> Ui.Element Msg
-unitCard model unit =
+unitCard : Model -> Queue.QueuedUnit -> Ui.Element Msg
+unitCard model q =
+    let
+        unit =
+            q.unit
+    in
     Ui.column
         [ Ui.width Ui.fill
         , Ui.padding 16
@@ -479,14 +457,16 @@ unitCard model unit =
             [ Ui.width Ui.fill, Ui.spacing 10, Ui.centerY ]
             [ Ui.el [ Font.size 14, Font.bold, Font.color (Ui.rgb 235 235 240) ] (Ui.text unit.qualified)
             , changeBadge unit.change
+            , changedChip q
             , chip unit.facing
             , chip unit.kind
             , Ui.el [ Ui.width Ui.fill ] Ui.none
-            , decisionArea model unit
+            , decisionButtons model unit
             ]
         , Ui.el
             [ Font.size 12, Font.family Font.monospace, Font.color (Ui.rgb 150 150 165) ]
             (Ui.text (unit.path ++ " · lines " ++ String.fromInt unit.lineStart ++ "-" ++ String.fromInt unit.lineEnd ++ maybePurpose unit))
+        , changedLine q
         , sourceBlock unit
         ]
 
@@ -511,6 +491,50 @@ changeBadge change =
             chipColored "MODIFIED" (Ui.rgb 145 95 20)
 
 
+-- B8: a unit that was already reviewed on an older hash gets an amber
+-- "changed" chip at the queue head; unchanged re-queues are hidden entirely.
+changedChip : Queue.QueuedUnit -> Ui.Element Msg
+changedChip q =
+    case q.changed of
+        Just _ ->
+            chipColored "CHANGED" (Ui.rgb 145 95 20)
+
+        Nothing ->
+            Ui.none
+
+
+changedLine : Queue.QueuedUnit -> Ui.Element Msg
+changedLine q =
+    case q.changed of
+        Just old ->
+            Ui.el
+                [ Font.size 12, Font.color (Ui.rgb 200 160 90) ]
+                (Ui.text (previousLabel old ++ " on " ++ Format.formatReviewedAt old.reviewedAt))
+
+        Nothing ->
+            Ui.none
+
+
+previousLabel : LibDb.ReviewRow -> String
+previousLabel row =
+    case row.decision of
+        "approve" ->
+            "Previously Approved"
+
+        "refuse" ->
+            "Previously Refused"
+                ++ (case row.reason of
+                    Just r ->
+                        " (" ++ r ++ ")"
+
+                    Nothing ->
+                        ""
+                )
+
+        other ->
+            "Previously " ++ other
+
+
 chip : String -> Ui.Element Msg
 chip label =
     chipColored label (Ui.rgb 40 40 52)
@@ -527,28 +551,6 @@ chipColored label bg =
         , Font.color (Ui.rgb 220 220 230)
         ]
         (Ui.text label)
-
-
-decisionArea : Model -> Index.Unit -> Ui.Element Msg
-decisionArea model unit =
-    case Dict.get unit.uid model.decisions of
-        Just decided ->
-            case decided of
-                Just Approved ->
-                    chipColored "✓ Approved" (Ui.rgb 35 120 55)
-
-                Just (Refused reason) ->
-                    Ui.row
-                        [ Ui.spacing 8, Ui.centerY ]
-                        [ chipColored "✗ Refused" (Ui.rgb 130 45 45)
-                        , Ui.el [ Font.size 11, Font.color (Ui.rgb 200 120 120) ] (Ui.text reason)
-                        ]
-
-                Nothing ->
-                    decisionButtons model unit
-
-        Nothing ->
-            decisionButtons model unit
 
 
 decisionButtons : Model -> Index.Unit -> Ui.Element Msg

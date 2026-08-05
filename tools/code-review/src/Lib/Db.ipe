@@ -1,4 +1,4 @@
-module Lib.Db exposing (Decision(..), ReviewRow, decidedCount, findDecision, findDecisions, insertDecision, migrate, open, openAt, recordDrain)
+module Lib.Db exposing (Decision(..), ReviewRow, findDecision, findDecisions, findLatestForUid, insertDecision, migrate, open, openAt, recordDrain)
 
 import Ipe.Db as Db
 import Ipe.Db.Decode
@@ -158,18 +158,18 @@ decodeDecision row =
             Err (Error.unexpected "review row has no decision column")
 
 
-decidedCount : Dict.Dict String (Maybe Decision) -> Int
-decidedCount decisions =
-    Dict.foldl
-        (\_ v acc ->
-            if v == Nothing then
-                acc
-
-            else
-                acc + 1
-        )
-        0
-        decisions
+-- The most recent review row for a uid across all hashes, if any. The change
+-- re-enqueue path (B8) uses it to tell "decided on this exact content" apart
+-- from "decided on an OLDER version of this unit": when the current
+-- (uid, body_hash) pair has no decision but an older hash does, the unit was
+-- edited after its review and must be reviewed again.
+findLatestForUid : Db -> String -> Task.Task Error (Maybe ReviewRow)
+findLatestForUid db uid =
+    Db.queryDecode db
+        "SELECT uid, body_hash, decision, reason, reviewed_at FROM review WHERE uid = ? ORDER BY reviewed_at DESC, body_hash LIMIT 1"
+        [ SqlString uid ]
+        reviewRowDecoder
+        |> Task.map List.head
 
 
 -- Bookkeeping for the drain loop: the (uid, body_hash) pair the review app
