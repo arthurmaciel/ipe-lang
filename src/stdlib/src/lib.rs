@@ -87,6 +87,19 @@ const PATH: &str = include_str!("../Ipe/Path.ipe");
 /// Registered in [`COMPILED_STD_MODULES`] (NOT `MODULES`); NOT in
 /// `STDLIB_MODULE_QUALIFIERS`, so the disjointness invariant holds.
 const HTML_ATTRIBUTES: &str = include_str!("../Ipe/Html/Attributes.ipe");
+/// `Ipe.Html` — HTML element builders, compiled-source Layer-3.
+///
+/// Every element builder (`div`/`nav`/`br`/…) is pure Ipê over two retained
+/// primitives — `node`/`voidNode` — which, with `text`/`unsafeRaw`/`doctype`/
+/// `titleNode`/`styleNode`, are point-free `Ffi.kernel "Html_*"` aliases
+/// resolved by `ipe_canon::resolve::detect_kernel_alias` to the retained
+/// `HtmlNode`/`HtmlVoidNode`/… kernels (runtime: `ipe_runtime::ui::helpers::*`).
+/// The serialiser (`render`/`toString`/`escapeHtml`/`escapeAttr`/`attrToString`)
+/// and `renderStatic` stay native — the XSS barrier — and are re-aliased here so
+/// `Html.render` keeps resolving. Event attributes stay in `Ipe.Html.Events`.
+/// Registered in [`COMPILED_STD_MODULES`] (NOT `MODULES`); NOT in
+/// `STDLIB_MODULE_QUALIFIERS`, so the disjointness invariant holds.
+const HTML: &str = include_str!("../Ipe/Html.ipe");
 /// `Ipe.Regex` — RE2 regex helpers, compiled-source Layer-3.
 ///
 /// The members are point-free `Ffi.kernel "Regex_*"` aliases resolved by the
@@ -625,6 +638,13 @@ pub const COMPILED_STD_MODULES: &[CompiledStdModule] = &[
     CompiledStdModule {
         dotted: "Ipe.Html.Attributes",
         source: HTML_ATTRIBUTES,
+    },
+    // Ipe.Html — Layer-3 source; element builders are pure Ipê over the retained
+    // `Ffi.kernel "Html_node"` / `"Html_voidNode"` primitives, with the native
+    // serialiser (`render`/`escape*`) re-aliased (`ipe_runtime::ui::helpers::*`).
+    CompiledStdModule {
+        dotted: "Ipe.Html",
+        source: HTML,
     },
     // Ipe.Markdown — pure Ipê markdown→Ui renderer; no kernel calls.
     CompiledStdModule {
