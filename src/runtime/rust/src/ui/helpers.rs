@@ -757,7 +757,7 @@ pub fn ui_style_<M>(property: String, value: String) -> Attribute<M> {
     Attribute::AttrStyle(property, value)
 }
 
-/// `Ui.transitionRaw : String -> Bool -> Attribute msg` — the CSS `transition`
+/// `Ui.transition : String -> Bool -> Attribute msg` — the CSS `transition`
 /// shorthand (built by `Ipe.Ui.Transition.buildShorthand`) plus a
 /// respect-`prefers-reduced-motion` flag. `respect = True` (via
 /// `Transition.attribute`) auto-gates the rule behind
@@ -768,14 +768,14 @@ pub fn ui_transition_raw_<M>(shorthand: String, respect: bool) -> Attribute<M> {
     Attribute::AttrTransition(shorthand, respect)
 }
 
-/// `Ui.gridTracksRaw : String -> String -> Attribute msg` — CSS grid-template-columns
+/// `Ui.gridTracks : String -> String -> Attribute msg` — CSS grid-template-columns
 /// (first arg) and grid-template-rows (second arg).  Pass `""` for either axis to skip it.
 #[must_use]
 pub fn ui_grid_tracks_raw_<M>(cols: String, rows: String) -> Attribute<M> {
     Attribute::AttrGridTracks(cols, rows)
 }
 
-/// `Ui.animateRaw : String -> String -> String -> Bool -> Attribute msg` — the
+/// `Ui.animate : String -> String -> String -> Bool -> Attribute msg` — the
 /// keyframe-animation `name`, the animation shorthand TAIL (built by
 /// `Ipe.Ui.Animation.buildShorthandTail`: `<dur>ms <easing> <delay>ms <iter>
 /// <fill>`, without the leading name token), the `@keyframes` BODY (built by

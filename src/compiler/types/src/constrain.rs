@@ -6067,16 +6067,16 @@ impl<'a> Builder<'a> {
             K::UiHtmlAttribute => fun(string(), fun(string(), attr(var(0)))),
             K::UiName => fun(string(), attr(var(0))),
             K::UiStyle => fun(string(), fun(string(), attr(var(0)))),
-            // `Ui.transitionRaw : String -> Bool -> Attribute msg` — the CSS
+            // `Ui.transition : String -> Bool -> Attribute msg` — the CSS
             // transition shorthand + a respect-`prefers-reduced-motion` flag.
             // Native surface backing `Ipe.Ui.Transition.attribute` /
             // `attributeUnsafe`.
             K::UiTransitionRaw => fun(string(), fun(bool_ty(), attr(var(0)))),
-            // `Ui.gridTracksRaw : String -> String -> Attribute msg` — CSS
+            // `Ui.gridTracks : String -> String -> Attribute msg` — CSS
             // grid-template-columns (first arg) and grid-template-rows (second arg).
             // Native surface backing `Ipe.Ui.Grid.columns`/`rows`/`tracks`.
             K::UiGridTracksRaw => fun(string(), fun(string(), attr(var(0)))),
-            // `Ui.animateRaw : String -> String -> String -> Bool -> Attribute msg`
+            // `Ui.animate : String -> String -> String -> Bool -> Attribute msg`
             // — keyframe-animation name, the animation shorthand tail
             // (`<dur>ms <easing> <delay>ms <iter> <fill>`), the `@keyframes`
             // body, and a respect-`prefers-reduced-motion` flag. Native surface

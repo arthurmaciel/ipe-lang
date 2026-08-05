@@ -3135,9 +3135,9 @@ impl StdlibKernel {
             Self::UiHtmlAttribute => d("Ui", "htmlAttribute", 2, Ui, "ui_html_attribute_"),
             Self::UiName => d("Ui", "name", 1, Ui, "ui_name_"),
             Self::UiStyle => d("Ui", "style", 2, Ui, "ui_style_"),
-            Self::UiTransitionRaw => d("Ui", "transitionRaw", 2, Ui, "ui_transition_raw_"),
-            Self::UiGridTracksRaw => d("Ui", "gridTracksRaw", 2, Ui, "ui_grid_tracks_raw_"),
-            Self::UiAnimateRaw => d("Ui", "animateRaw", 4, Ui, "ui_animate_raw_"),
+            Self::UiTransitionRaw => d("Ui", "transition", 2, Ui, "ui_transition_raw_"),
+            Self::UiGridTracksRaw => d("Ui", "gridTracks", 2, Ui, "ui_grid_tracks_raw_"),
+            Self::UiAnimateRaw => d("Ui", "animate", 4, Ui, "ui_animate_raw_"),
             // Breakpoint
             Self::UiBreakpoint => d("Ui", "breakpoint", 3, Ui, "ui_breakpoint_"),
             Self::UiMediaQuery => d("Ui", "mediaQuery", 3, Ui, "ui_media_query_"),
@@ -6270,14 +6270,14 @@ impl StdlibKernel {
         const STRING_TO_UI_ATTR_A: TyShape = TyShape::Fun(&STRING, &UI_ATTR_A);
         // `paddingXY / aspectRatioWH : Int -> Int -> Attribute msg`.
         const INT_TO_INT_TO_UI_ATTR_A: TyShape = TyShape::Fun(&INT, &INT_TO_UI_ATTR_A);
-        // `htmlAttribute / style / gridTracksRaw : String -> String -> Attribute msg`.
+        // `htmlAttribute / style / gridTracks : String -> String -> Attribute msg`.
         const STRING_TO_UI_ATTR_A_INNER: TyShape = TyShape::Fun(&STRING, &UI_ATTR_A);
         const STRING_TO_STRING_TO_UI_ATTR_A: TyShape =
             TyShape::Fun(&STRING, &STRING_TO_UI_ATTR_A_INNER);
-        // `transitionRaw : String -> Bool -> Attribute msg`.
+        // `transition : String -> Bool -> Attribute msg`.
         const BOOL_TO_UI_ATTR_A: TyShape = TyShape::Fun(&BOOL, &UI_ATTR_A);
         const STRING_TO_BOOL_TO_UI_ATTR_A: TyShape = TyShape::Fun(&STRING, &BOOL_TO_UI_ATTR_A);
-        // `animateRaw : String -> String -> String -> Bool -> Attribute msg`.
+        // `animate : String -> String -> String -> Bool -> Attribute msg`.
         const STRING_TO_STRING_TO_BOOL_TO_UI_ATTR_A: TyShape =
             TyShape::Fun(&STRING, &STRING_TO_BOOL_TO_UI_ATTR_A);
         const UI_ANIMATE_RAW: TyShape =

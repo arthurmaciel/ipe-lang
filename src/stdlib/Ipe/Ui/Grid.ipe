@@ -148,16 +148,16 @@ tracksToCss ts =
 -- Set both columns + rows explicitly.  Pass `[]` for either axis to skip it.
 tracks : List Track -> List Track -> Attribute msg
 tracks cols rs =
-    Ui.gridTracksRaw (tracksToCss cols) (tracksToCss rs)
+    Ui.gridTracks (tracksToCss cols) (tracksToCss rs)
 
 
 -- Set only columns — convenience for the common case.
 columns : List Track -> Attribute msg
 columns cols =
-    Ui.gridTracksRaw (tracksToCss cols) ""
+    Ui.gridTracks (tracksToCss cols) ""
 
 
 -- Set only rows.
 rows : List Track -> Attribute msg
 rows rs =
-    Ui.gridTracksRaw "" (tracksToCss rs)
+    Ui.gridTracks "" (tracksToCss rs)

@@ -1383,7 +1383,7 @@ API-shape review):
 - **Reference:** `upstream:sky-stdlib/Std/Ui/Grid.sky` implements `tracks`/`columns`/`rows`
   as `AttrStyle "__gridTracks" (cols ++ "|" ++ rows)` — a pure-Ipê sentinel consumed
   by the reference renderer's `findGridTemplate` (Ui.ipe:2539) before raw-style emission.
-- **Port:** Uses a native `Ui.gridTracksRaw : String -> String -> Attribute msg` kernel
+- **Port:** Uses a native `Ui.gridTracks : String -> String -> Attribute msg` kernel
   (`KernelFn::UiGridTracksRaw`) that constructs a typed `Attribute::AttrGridTracks(cols, rows)`
   variant. The web renderer emits `grid-template-columns:{cols}` / `grid-template-rows:{rows}`
   directly; the TUI layout parser reads `AttrGridTracks` directly (no `split('|')`).

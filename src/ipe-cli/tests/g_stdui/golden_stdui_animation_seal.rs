@@ -1,9 +1,9 @@
-//! Seal gate for the native `Ipe.Ui.animateRaw` primitive + the compiled
+//! Seal gate for the native `Ipe.Ui.animate` primitive + the compiled
 //! `Ipe.Ui.Animation` module (26-ui-showcase blocker #175: IPE-N0004 unknown
 //! module `Animation`).
 //!
 //! `Ipe.Ui.Animation.attribute` is a pure-Ipê wrapper over the native
-//! `Ui.animateRaw : String -> String -> String -> Bool -> Attribute msg` kernel
+//! `Ui.animate : String -> String -> String -> Bool -> Attribute msg` kernel
 //! (`KernelFn::UiAnimateRaw`), which constructs `AttrAnimation name shorthand
 //! keyframes respect`.  This test proves the whole seam:
 //!   * `import Ipe.Ui.Animation` resolves (no IPE-N0004 regression) — the module
@@ -28,7 +28,7 @@ fn runtime() -> PathBuf {
 /// (`( "transform", v ) -> …`) hit the still-unimplemented `IPE-L0115
 /// TuplePatternMatch` lowering — an INDEPENDENT blocker from this
 /// module's resolution + kernel wiring. Empty keyframes still fully
-/// exercise `Ui.animateRaw` (name + shorthand tail + empty body + respect flag),
+/// exercise `Ui.animate` (name + shorthand tail + empty body + respect flag),
 /// so the seal this test guards — `Ipe.Ui.Animation` resolves and its
 /// `attribute` lowers to the native kernel — is proven without depending on it.
 const MAIN_IPE: &str = r#"module Main exposing (main)
@@ -89,7 +89,7 @@ fn animation_module_resolves_and_emits_kernel() {
     assert!(
         res.is_ok(),
         "ipe build with `import Ipe.Ui.Animation` must succeed \
-         (native animateRaw + compiled module): {:?}",
+         (native animate + compiled module): {:?}",
         res.err()
     );
 
@@ -101,11 +101,11 @@ fn animation_module_resolves_and_emits_kernel() {
     let calls = emitted.matches("ui_animate_raw_(").count();
     assert!(
         calls >= 1,
-        "emitted Rust must carry the animateRaw helper call (got {calls}):\n{emitted}"
+        "emitted Rust must carry the animate helper call (got {calls}):\n{emitted}"
     );
     // `Ipe.Ui.Animation.attribute` (`src/stdlib/Ipe/Ui/Animation.ipe`) is a
     // stdlib function of `spec : Spec`, compiled ONCE — it calls
-    // `Ui.animateRaw spec.name (buildShorthandTail spec) (buildKeyframesBody
+    // `Ui.animate spec.name (buildShorthandTail spec) (buildKeyframesBody
     // spec.keyframes) spec.respectReducedMotion`, so `respectReducedMotion`
     // threads through as a genuine field READ on the runtime `spec` value,
     // never as a literal baked in from THIS fixture's `respectReducedMotion =
