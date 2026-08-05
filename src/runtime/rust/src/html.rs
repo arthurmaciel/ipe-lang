@@ -804,26 +804,6 @@ pub fn html_named_attr_<M>(key: String, val: String) -> Attribute<M> {
     Attribute::Attr(key, val)
 }
 
-/// `Attr.rows : Int -> Html.Attribute msg` — sets the `rows` attribute on a
-/// `<textarea>` element.
-///
-/// **Note**: `emit_ui_call` intercepts `HtmlAttrRows` and emits
-/// `html_named_attr_("rows", n.to_string())` directly.  This thin wrapper
-/// exists so the parity-matrix tooling can verify the kernel/runtime contract
-/// without a `MISMATCH:runtime_sym_missing` failure.
-#[must_use]
-pub fn html_attr_rows_<M>(n: i64) -> Attribute<M> {
-    Attribute::Attr("rows".to_owned(), n.to_string())
-}
-
-/// `Attr.tabindex : Int -> Html.Attribute msg` — sets the `tabindex` attribute.
-///
-/// Same "dead by interception" note as [`html_attr_rows_`].
-#[must_use]
-pub fn html_attr_tabindex_<M>(n: i64) -> Attribute<M> {
-    Attribute::Attr("tabindex".to_owned(), n.to_string())
-}
-
 /// `Ipe.Html.Attributes.{checked,disabled,…}` and the generic
 /// `boolAttribute k b` — a boolean HTML attribute (emitted bare when `true`,
 /// omitted when `false`, per the render sink's `BoolAttr` handling).

@@ -76,6 +76,17 @@ const PROCESS: &str = include_str!("../Ipe/Process.ipe");
 /// is actually compiled; NOT in `STDLIB_MODULE_QUALIFIERS`, so the disjointness
 /// invariant holds.
 const PATH: &str = include_str!("../Ipe/Path.ipe");
+/// `Ipe.Html.Attributes` — HTML attribute builders, compiled-source Layer-3.
+///
+/// Every fixed-key builder (`class`/`id`/`checked`/…) is pure Ipê over the
+/// three retained primitives `attribute`/`boolAttribute`/`noAttr`, which are
+/// point-free `Ffi.kernel "Attr_attribute"`/`"Attr_boolAttribute"`/`"Attr_noAttr"`
+/// aliases resolved by `ipe_canon::resolve::detect_kernel_alias` to the
+/// `HtmlAttribute`/`HtmlBoolAttribute`/`HtmlNoAttr` kernels (runtime:
+/// `ipe_runtime::html::html_named_attr_`/`html_bool_named_attr_`/`html_no_attr_`).
+/// Registered in [`COMPILED_STD_MODULES`] (NOT `MODULES`); NOT in
+/// `STDLIB_MODULE_QUALIFIERS`, so the disjointness invariant holds.
+const HTML_ATTRIBUTES: &str = include_str!("../Ipe/Html/Attributes.ipe");
 /// `Ipe.Regex` — RE2 regex helpers, compiled-source Layer-3.
 ///
 /// The members are point-free `Ffi.kernel "Regex_*"` aliases resolved by the
@@ -286,13 +297,10 @@ const IPE_TEST: &str = include_str!("../Ipe/Test.ipe");
 
 /// `Ipe.Web.Head` — typed `<head>` helpers for Ipe.Web per-page injection.
 ///
-/// Faithfully ported from `../ipe/ipe-stdlib/Std/Live/Head.ipe`.
-/// All helpers delegate to existing kernel qualifiers (`Html` / `Attr`) —
-/// no new kernel variants required.  `Ipe.Web.Head` is NOT in
-/// `STDLIB_MODULE_QUALIFIERS` (that table only has `Ipe.Web` → `"Web"`),
-/// so the disjointness invariant holds.
-///
-/// Unblocks `38-composite-ui-multibackend` (N0004: Ipe.Web.Head).
+/// Helpers delegate to the `Html` kernel qualifier and the compiled-source
+/// `Ipe.Html.Attributes` builders — no new kernel variants required.
+/// `Ipe.Web.Head` is NOT in `STDLIB_MODULE_QUALIFIERS` (that table only has
+/// `Ipe.Web` → `"Web"`), so the disjointness invariant holds.
 const STD_LIVE_HEAD: &str = include_str!("../Ipe/Web/Head.ipe");
 
 /// `Ipe.Ui.Responsive` — device-class helpers for responsive layout branching.
@@ -611,6 +619,12 @@ pub const COMPILED_STD_MODULES: &[CompiledStdModule] = &[
     CompiledStdModule {
         dotted: "Ipe.Path",
         source: PATH,
+    },
+    // Ipe.Html.Attributes — Layer-3 source; fixed-key builders are pure Ipê over
+    // the retained `Ffi.kernel "Attr_*"` primitives (`ipe_runtime::html::*`).
+    CompiledStdModule {
+        dotted: "Ipe.Html.Attributes",
+        source: HTML_ATTRIBUTES,
     },
     // Ipe.Markdown — pure Ipê markdown→Ui renderer; no kernel calls.
     CompiledStdModule {

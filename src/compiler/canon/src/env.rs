@@ -114,7 +114,10 @@ pub const STDLIB_MODULE_QUALIFIERS: &[(&[&str], &str)] = &[
     (&["Ipe", "Ui", "Keyed"], "Keyed"), // ipe-key diff identity
     (&["Ipe", "Decimal"], "Decimal"),   // arbitrary-precision decimal arithmetic
     (&["Ipe", "Html"], "Html"),
-    (&["Ipe", "Html", "Attributes"], "Attr"),
+    // `Ipe.Html.Attributes` is COMPILED-SOURCE (see `COMPILED_STD_MODULES`), not
+    // a kernel qualifier: its builders are pure Ipê over the retained
+    // `attribute`/`boolAttribute`/`noAttr` primitives, reached via `Ffi.kernel
+    // "Attr_*"` aliases. The disjointness invariant forbids it here.
     (&["Ipe", "Html", "Events"], "Event"),
     // ── Ipe.Tea.<Shape> managed-update-loop shapes (ADR 0048) ────────────────
     // The four TEA shapes live under `Ipe.Tea.*`; the canonical short qualifier
@@ -1685,37 +1688,13 @@ impl Env {
                     "linkNode",
                 ],
             ),
-            // ── Ipe.Html.Attributes alias ────────────────────────────────────────
-            (
-                "Attr",
-                &[
-                    "attribute",
-                    "boolAttribute",
-                    "style",
-                    "class",
-                    "id",
-                    "type_",
-                    "name",
-                    "value",
-                    "placeholder",
-                    "href",
-                    "src",
-                    "alt",
-                    "title",
-                    "for_",
-                    "checked",
-                    "disabled",
-                    "readonly",
-                    "required",
-                    "multiple",
-                    "selected",
-                    "autofocus",
-                    "autocomplete",
-                    "tabindex",
-                    "rows",
-                    "noAttr",
-                ],
-            ),
+            // NOTE — `Attr` (`Ipe.Html.Attributes`) is DELIBERATELY absent: it is
+            // a COMPILED-SOURCE Layer-3 module (`COMPILED_STD_MODULES`). Its three
+            // retained primitives are reached through the point-free
+            // `Ffi.kernel "Attr_attribute"` / `"Attr_boolAttribute"` / `"Attr_noAttr"`
+            // aliases, which `detect_kernel_alias` routes to the `HtmlAttribute` /
+            // `HtmlBoolAttribute` / `HtmlNoAttr` kernels via `stdlib_index` — no
+            // prelude-qualifier install needed (mirrors `Path` / `Url` / `Regex`).
             // ── Ipe.Html.Events alias ─────────────────────────────────────────────
             (
                 "Event",
@@ -1900,7 +1879,9 @@ impl Env {
             // (alias_qualifier, canonical_qualifier)
             ("Ipe.Html", "Html"),
             ("Ipe.Ui", "Ui"),
-            ("Ipe.Html.Attributes", "Attr"),
+            // `Ipe.Html.Attributes` is compiled-source (mirrors `Ipe.Path` /
+            // `Ipe.Url`): no qualifier alias — members resolve through source-dep
+            // injection, its retained primitives via `Ffi.kernel "Attr_*"`.
             ("Ipe.Html.Events", "Event"),
             // ── Ipe.Tea.<Shape> shape aliases (ADR 0048) ──────────────────────
             ("Ipe.Tea.Web", "Web"),
