@@ -16470,9 +16470,9 @@ impl<'a> Lowerer<'a> {
                 | KernelFn::UiAspectRatioWH
                 | KernelFn::UiHtmlAttribute
                 | KernelFn::UiStyle
-                // `Ui.transitionRaw : String -> Bool -> Attribute msg`
+                // `Ui.transition : String -> Bool -> Attribute msg`
                 | KernelFn::UiTransitionRaw
-                // `Ui.gridTracksRaw : String -> String -> Attribute msg`
+                // `Ui.gridTracks : String -> String -> Attribute msg`
                 | KernelFn::UiGridTracksRaw
                 // ── Ipe.Ui.Input — arity-2 constructors ───────────────────
                 // `Input.labelAbove : List (Attribute msg) -> Element msg -> Label msg`
@@ -16536,11 +16536,11 @@ impl<'a> Lowerer<'a> {
                 // web::style_inject::build_mq (see ui_media_query_).
                 | KernelFn::UiMediaQuery,
             ) => Ok(3),
-            // Arity 4: `Ui.rgba r g b a`, `Ui.animateRaw name shorthand kf respect`.
+            // Arity 4: `Ui.rgba r g b a`, `Ui.animate name shorthand kf respect`.
             Callee::Kernel(
                 // `Ui.rgba : Int -> Int -> Int -> Float -> Color`
                 KernelFn::UiRgba
-                // `Ui.animateRaw : String -> String -> String -> Bool -> Attribute msg`
+                // `Ui.animate : String -> String -> String -> Bool -> Attribute msg`
                 // Native surface backing `Ipe.Ui.Animation.attribute` — carries the
                 // keyframe name, animation shorthand tail, `@keyframes` body, and the
                 // respect-`prefers-reduced-motion` flag (see ui_animate_raw_).
@@ -17795,9 +17795,9 @@ impl<'a> Lowerer<'a> {
                     ("Ui", "htmlAttribute") => Ok(Callee::Kernel(KernelFn::UiHtmlAttribute)),
                     ("Ui", "name") => Ok(Callee::Kernel(KernelFn::UiName)),
                     ("Ui", "style") => Ok(Callee::Kernel(KernelFn::UiStyle)),
-                    ("Ui", "transitionRaw") => Ok(Callee::Kernel(KernelFn::UiTransitionRaw)),
-                    ("Ui", "gridTracksRaw") => Ok(Callee::Kernel(KernelFn::UiGridTracksRaw)),
-                    ("Ui", "animateRaw") => Ok(Callee::Kernel(KernelFn::UiAnimateRaw)),
+                    ("Ui", "transition") => Ok(Callee::Kernel(KernelFn::UiTransitionRaw)),
+                    ("Ui", "gridTracks") => Ok(Callee::Kernel(KernelFn::UiGridTracksRaw)),
+                    ("Ui", "animate") => Ok(Callee::Kernel(KernelFn::UiAnimateRaw)),
                     // Ui.breakpoint + Breakpoint constants
                     ("Ui", "breakpoint") => Ok(Callee::Kernel(KernelFn::UiBreakpoint)),
                     ("Ui", "mediaQuery") => Ok(Callee::Kernel(KernelFn::UiMediaQuery)),

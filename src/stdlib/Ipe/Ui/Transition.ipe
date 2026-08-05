@@ -8,11 +8,8 @@
 -- a11y; opt out via `attributeUnsafe` ONLY when motion is
 -- semantically required (loading spinner, progress indicator).
 --
--- Rust-port note: `transitionRaw` is a native `Ipe.Ui` kernel
--- (`KernelFn::UiTransitionRaw`) that constructs `AttrTransition
--- shorthand respect`; the reference exposes it from `Ipe.Ui`.  This
--- compiled-source port qualifies it as `Ui.transitionRaw` (same
--- semantic — mirrors the `Ipe.Ui.Grid` port's `Ui.style` call).
+-- The shorthand is emitted through `Ui.transition`, whose value is
+-- scanned by the native CSS sanitiser at the render sink.
 module Ipe.Ui.Transition exposing
     ( Step
     , Easing
@@ -274,7 +271,7 @@ buildShorthand steps =
 --         cfg
 attribute : List Step -> Attribute msg
 attribute steps =
-    Ui.transitionRaw (buildShorthand steps) True
+    Ui.transition (buildShorthand steps) True
 
 
 -- Same as `attribute` but opts OUT of the `prefers-reduced-motion`
@@ -284,4 +281,4 @@ attribute steps =
 -- a UI bug).
 attributeUnsafe : List Step -> Attribute msg
 attributeUnsafe steps =
-    Ui.transitionRaw (buildShorthand steps) False
+    Ui.transition (buildShorthand steps) False

@@ -1,13 +1,13 @@
-//! Seal gate for the native `Ipe.Ui.transitionRaw` primitive + the compiled
+//! Seal gate for the native `Ipe.Ui.transition` primitive + the compiled
 //! `Ipe.Ui.Transition` module (26-ui-showcase blocker: IPE-N0004 unknown
 //! module `Transition`).
 //!
 //! `Ipe.Ui.Transition.attribute` / `attributeUnsafe` are pure-Ipê wrappers over
-//! the native `Ui.transitionRaw : String -> Bool -> Attribute msg` kernel
+//! the native `Ui.transition : String -> Bool -> Attribute msg` kernel
 //! (`KernelFn::UiTransitionRaw`), which constructs `AttrTransition shorthand
 //! respect`.  This test proves the whole seam:
 //!   * `import Ipe.Ui.Transition` resolves (no IPE-N0004 regression);
-//!   * `transitionRaw` type-checks as `String -> Bool -> Attribute msg`;
+//!   * `transition` type-checks as `String -> Bool -> Attribute msg`;
 //!   * the emit lowers both entry points to `ui_transition_raw_(<shorthand>,
 //!     <respect>)` with the CORRECT respect flag (`true` for `attribute`,
 //!     `false` for `attributeUnsafe`);
@@ -83,7 +83,7 @@ fn transition_module_resolves_and_emits_kernel() {
     assert!(
         res.is_ok(),
         "ipe build with `import Ipe.Ui.Transition` must succeed \
-         (native transitionRaw + compiled module): {:?}",
+         (native transition + compiled module): {:?}",
         res.err()
     );
 
@@ -98,7 +98,7 @@ fn transition_module_resolves_and_emits_kernel() {
     let calls = emitted.matches("ui_transition_raw_(").count();
     assert!(
         calls >= 2,
-        "emitted Rust must carry BOTH transitionRaw helper calls (got {calls}):\n{emitted}"
+        "emitted Rust must carry BOTH transition helper calls (got {calls}):\n{emitted}"
     );
     // `attribute` gates on reduced-motion (respect = true); `attributeUnsafe`
     // opts out (respect = false). Both flags must reach the emit as the

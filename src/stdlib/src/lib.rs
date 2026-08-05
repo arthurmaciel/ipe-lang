@@ -364,26 +364,19 @@ const STD_UI_CHART: &str = include_str!("../Ipe/Ui/Chart.ipe");
 
 /// `Ipe.Ui.Grid` — typed CSS-grid track ADT + `columns`/`rows`/`tracks` builders.
 ///
-/// Pure-Ipê; uses the native `Ui.gridTracksRaw` kernel (`KernelFn::UiGridTracksRaw`)
+/// Pure-Ipê; uses the native `Ui.gridTracks` kernel (`KernelFn::UiGridTracksRaw`)
 /// that constructs `AttrGridTracks(cols, rows)`, rendered as `grid-template-columns`/
 /// `grid-template-rows` by the web renderer and parsed by `tui/layout.rs`.
-/// Ported from `../ipe/ipe-stdlib/Std/Ui/Grid.ipe`; divergence recorded in
-/// `docs/divergences-from-sky.md` (typed carrier vs reference's sentinel approach).
 /// Not in `STDLIB_MODULE_QUALIFIERS` so disjointness invariant holds.
-/// Unblocks `26-ui-showcase` (IPE-N0004: Ipe.Ui.Grid — Grid.columns/fr/px).
 const STD_UI_GRID: &str = include_str!("../Ipe/Ui/Grid.ipe");
 
 /// `Ipe.Ui.Transition` — typed CSS transition `Step`/`Easing` ADTs +
 /// `attribute`/`attributeUnsafe` builders.
 ///
-/// Pure-Ipê; the `transitionRaw` primitive is a native `Ipe.Ui` kernel
+/// Pure-Ipê; the `transition` primitive is a native `Ipe.Ui` kernel
 /// (`KernelFn::UiTransitionRaw`) that constructs `AttrTransition shorthand
-/// respect`, rendered by `src/runtime/rust/src/ui/render.rs`.  Ported from
-/// `../ipe/ipe-stdlib/Std/Ui/Transition.ipe`; the reference's
-/// `import Ipe.Ui exposing (transitionRaw)` is qualified to `Ui.transitionRaw`
-/// (mirrors the `Ipe.Ui.Grid` port's `Ui.style` call).
+/// respect`, rendered by `src/runtime/rust/src/ui/render.rs`.
 /// Not in `STDLIB_MODULE_QUALIFIERS` so disjointness invariant holds.
-/// Unblocks `26-ui-showcase` (IPE-N0004: Ipe.Ui.Transition).
 const STD_UI_TRANSITION: &str = include_str!("../Ipe/Ui/Transition.ipe");
 
 /// `Ipe.Ui.Transform` — typed CSS transform / opacity helpers for `Ui.animate`
@@ -395,16 +388,13 @@ const STD_UI_TRANSFORM: &str = include_str!("../Ipe/Ui/Transform.ipe");
 /// `Ipe.Ui.Animation` — typed CSS keyframe-animation `Iterations`/`FillMode`
 /// ADTs + `Spec` record + `attribute`/`defaultSpec`/`with*` builders.
 ///
-/// Pure-Ipê; the `animateRaw` primitive is a native `Ipe.Ui` kernel
+/// Pure-Ipê; the `animate` primitive is a native `Ipe.Ui` kernel
 /// (`KernelFn::UiAnimateRaw`, `String -> String -> String -> Bool -> Attribute`)
 /// that constructs `AttrAnimation name shorthand keyframes respect`, rendered
 /// by `src/runtime/rust/src/ui/render.rs` (inline `animation:` property) and
 /// injected as an `@keyframes` block by `web::style_inject::build_anim`.
-/// Ported from `../ipe/ipe-stdlib/Std/Ui/Animation.ipe`; the reference's
-/// `import Ipe.Ui exposing (animateRaw)` is qualified to `Ui.animateRaw`
-/// (mirrors the `Ipe.Ui.Transition` port's `Ui.transitionRaw` call).
 /// Depends on the sibling `Ipe.Ui.Transition` (`Easing`) and `Ipe.Ui.Transform`
-/// (`Prop`/`propsToCss`) ports.
+/// (`Prop`/`propsToCss`).
 /// Not in `STDLIB_MODULE_QUALIFIERS` so disjointness invariant holds.
 /// Unblocks `26-ui-showcase` (IPE-N0004: Ipe.Ui.Animation — Animation.attribute).
 const STD_UI_ANIMATION: &str = include_str!("../Ipe/Ui/Animation.ipe");
