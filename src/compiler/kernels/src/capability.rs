@@ -72,6 +72,21 @@ impl Capability {
         Self::Unsafe,
     ];
 
+    /// Whether this capability carries no OS-isolatable resource surface — the
+    /// low-value axes `clock`/`random`/`unsafe`.
+    ///
+    /// `clock` and `random` are non-determinism, not exfiltration; `unsafe` is a
+    /// provenance disclosure over Ipê-level escape hatches, not a native OS
+    /// effect. None of the three is a jail confinement axis, so none can ever be
+    /// a member of a confined set. This is the SSOT for that grouping: every site
+    /// that distinguishes the low-value axes from the runtime-enforced ones
+    /// (network/filesystem/database/env/subprocess/native-ffi) reads it here
+    /// rather than re-listing the trio and risking drift.
+    #[must_use]
+    pub const fn is_low_value(self) -> bool {
+        matches!(self, Self::Clock | Self::Random | Self::Unsafe)
+    }
+
     /// The stable lowercase wire name, used in the `ipe capabilities` report and
     /// the generated manifest.
     #[must_use]
@@ -178,6 +193,24 @@ mod tests {
         use std::str::FromStr as _;
         let err = Capability::from_str("filesytem").unwrap_err();
         assert_eq!(err, super::UnknownCapability("filesytem".to_owned()));
+    }
+
+    #[test]
+    fn low_value_is_exactly_clock_random_unsafe() {
+        // Pins the SSOT low-value grouping against drift: exactly the three axes
+        // with no OS-isolatable surface. A new capability defaults to high-value
+        // (runtime-enforced) unless it is deliberately added here.
+        let low: Vec<&str> = Capability::ALL
+            .iter()
+            .filter(|c| c.is_low_value())
+            .map(|c| c.as_str())
+            .collect();
+        assert_eq!(low, vec!["clock", "random", "unsafe"]);
+        assert!(Capability::Clock.is_low_value());
+        assert!(Capability::Random.is_low_value());
+        assert!(Capability::Unsafe.is_low_value());
+        assert!(!Capability::Network.is_low_value());
+        assert!(!Capability::NativeFfi.is_low_value());
     }
 
     #[test]

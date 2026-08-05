@@ -57,15 +57,11 @@ module Ipe.Web.Head exposing
 -- (`import Ipe.Web.Head.Unsafe exposing (unsafeJsonLd)`), which discloses the
 -- `unsafe` capability.
 --
--- COMPILED-SOURCE PORT NOTES (task #98):
---   Faithfully copied from ../ipe/ipe-stdlib/Std/Live/Head.ipe.
---   All Html.* / Attr.* calls delegate to existing kernel qualifiers
---   (M7: Ipe.Html → "Html", Ipe.Html.Attributes → "Attr") — no new
---   kernel variants are required. `exposing (Html)` / `exposing
---   (Attribute)` in the import lists are Type exposures; they are
---   kernel-implicit builtin types and are silently skipped by the
---   compiled-source canonicaliser, so the signatures `Html msg` and
---   `Attribute msg` resolve correctly as builtins.
+-- All Html.* / Attr.* calls delegate to existing kernel qualifiers, so this
+-- module needs no kernel variants of its own. `exposing (Html)` / `exposing
+-- (Attribute)` in the imports are Type exposures of kernel-implicit builtin
+-- types; the compiled-source canonicaliser silently skips them, so `Html msg`
+-- and `Attribute msg` resolve as builtins.
 
 
 import Ipe.List as List
