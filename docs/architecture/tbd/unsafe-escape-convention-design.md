@@ -387,7 +387,7 @@ one-line annotation suitable for appending to the issue body.
 | 672 | **INDEPENDENT** | `Ipe.Random` source-vs-kernel drift; unrelated (Random has no parse-bypass sink). |
 | 671 | **INDEPENDENT** | seccomp baseline denials; the OS jail is orthogonal to `unsafe`, which is a compile-time disclosure, not a runtime-enforced axis. |
 | 674 | **INDEPENDENT** | Sandbox regression-test/dedup; no interaction. |
-| 664 | **INDEPENDENT** | `Std.Analytics` is consent-gated at its own layer; if it ever needs a raw event blob, that blob follows `Ipe.Analytics.Unsafe.unsafe*`. |
+| 664 | **INDEPENDENT** | `Ipe.Analytics` is consent-gated at its own layer; if it ever needs a raw event blob, that blob follows `Ipe.Analytics.Unsafe.unsafe*`. |
 | 397 | **INDEPENDENT** | `Ipe.Parser` combinator port; a parser is the *safe* path — no escape hatch (noted only to confirm no interference). |
 | 470 | **INDEPENDENT** | Hosted ipe-index infra; consumes the capability set (incl. `unsafe`) as data but needs no design change here. |
 | 473 | **INDEPENDENT** | Native playground; unrelated build/runtime work. |

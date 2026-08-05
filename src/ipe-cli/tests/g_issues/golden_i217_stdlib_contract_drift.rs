@@ -11,7 +11,7 @@
 //!   (`Ipê/Core/Jwt.ipe:79`) — ours had drifted to `String -> String -> …`.
 //! * `type alias Migration = { name : String, sql : String }` +
 //!   `migrate : Db -> List Migration -> Task Error (List String)`
-//!   (`Std/Db.ipe:237,300`) — ours had no `Migration` and `migrate` took
+//!   (`Ipê/Db.ipe:237,300`) — ours had no `Migration` and `migrate` took
 //!   `List (String, String)`.
 //! * `type alias Response = { status : Int, body : String, headers : Dict
 //!   String String, contentType : String }` (`Ipê/Http/Server.ipe:66`) — ours
