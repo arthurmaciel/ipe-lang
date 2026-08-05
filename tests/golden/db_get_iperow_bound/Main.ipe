@@ -3,6 +3,7 @@ module Main exposing (main)
 import Ipe.Task as Task
 import Ipe.Dict as Dict
 import Ipe.Db as Db
+import Ipe.Db.Unsafe
 import Ipe.Io as Io
 
 
@@ -18,7 +19,7 @@ import Ipe.Io as Io
 --
 -- The trigger idiom (mirrors example 27's `decodeChatMessage`): a decoder
 -- typed `any -> Record` that reads named fields out of its payload via
--- `Db.unsafeGetString` (a Dict-shaped accessor). The `any` param lowers to a
+-- `Unsafe.unsafeGetString` (a Dict-shaped accessor). The `any` param lowers to a
 -- wildcard generic; the fix appends `+ IpeRow` to exactly that generic (and
 -- ONLY when the body actually calls a `db_get_*`), leaving the record STRUCT
 -- itself unbounded so it stays reusable in non-row contexts.
@@ -31,11 +32,11 @@ type alias Row =
 
 
 -- The payload is typed `any` (the pub/sub / broadcast convention). We carry
--- it as a `Dict String String` so `Db.unsafeGetString` reads fields straight back.
+-- it as a `Dict String String` so `Unsafe.unsafeGetString` reads fields straight back.
 decodeRow : any -> Row
 decodeRow payload =
-    { author = Db.unsafeGetString "author" payload
-    , text = Db.unsafeGetString "text" payload
+    { author = Unsafe.unsafeGetString "author" payload
+    , text = Unsafe.unsafeGetString "text" payload
     }
 
 
