@@ -16731,6 +16731,9 @@ impl<'a> Lowerer<'a> {
             Callee::Kernel(
                 KernelFn::SecretFromString | KernelFn::SecretReveal | KernelFn::SecretRedacted,
             ) => Ok(1),
+            // `Secret.use : Secret -> (String -> a) -> a` — the scoped consume,
+            // arity 2 (secret, then the caller's function).
+            Callee::Kernel(KernelFn::SecretUse) => Ok(2),
             // ── Ipe.Regex ─────────────────────────────────────────
             // `compile : String -> Result Error Regex` (arity 1);
             // `match`/`find`/`findAll`/`split : Regex -> String -> _` (arity 2);
@@ -17534,6 +17537,7 @@ impl<'a> Lowerer<'a> {
                     // ── Secret kernels ──────────────────────────
                     ("Secret", "fromString") => Ok(Callee::Kernel(KernelFn::SecretFromString)),
                     ("Secret", "reveal") => Ok(Callee::Kernel(KernelFn::SecretReveal)),
+                    ("Secret", "use") => Ok(Callee::Kernel(KernelFn::SecretUse)),
                     ("Secret", "redacted") => Ok(Callee::Kernel(KernelFn::SecretRedacted)),
                     ("Db", "connect") => Ok(Callee::Kernel(KernelFn::DbConnect)),
                     ("Db", "open") => Ok(Callee::Kernel(KernelFn::DbOpen)),

@@ -950,6 +950,7 @@ pub const fn kernel_name(k: KernelFn) -> &'static str {
         // ── Ipe.Secret — opaque secret-string wrapper ─────
         KernelFn::SecretFromString => "secret_from_string",
         KernelFn::SecretReveal => "secret_reveal",
+        KernelFn::SecretUse => "secret_use",
         KernelFn::SecretRedacted => "secret_redacted",
         // ── Ipe.Regex kernels (pure; ungated runtime re-export) ────
         // Names MUST match `ipe_runtime::regex_kernel::*` exactly.

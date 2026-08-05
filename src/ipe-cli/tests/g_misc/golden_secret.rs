@@ -53,11 +53,11 @@ fn compile_build_run(name: &str) -> crate::support::RunOutcome {
 
 // ── (a) normal safe usage works end-to-end ──────────────────────────────────
 
-/// `Secret.fromString` seals a plaintext `String`; `Secret.reveal` is the
-/// single greppable un-parse; `Secret.redacted` is the explicit
-/// `"<redacted>"` accessor. Plaintext-grep-guard: the marker string appears
-/// in stdout EXACTLY ONCE (the deliberate `reveal` line) — `redacted` never
-/// echoes it.
+/// `Secret.fromString` seals a plaintext `String`; `Secret.use` is the scoped
+/// consume (applies a function to the plaintext, returns its result);
+/// `Secret.redacted` is the explicit `"<redacted>"` accessor. Plaintext-grep-
+/// guard: the marker string appears in stdout EXACTLY ONCE (the deliberate
+/// `Secret.use` scoped-println line) — `redacted` never echoes it.
 #[test]
 fn seal_reveal_round_trips_and_redacted_never_leaks() {
     if !e2e_enabled() {
@@ -70,8 +70,9 @@ fn seal_reveal_round_trips_and_redacted_never_leaks() {
         out.stdout.matches(marker).count(),
         1,
         "the secret marker must appear in stdout EXACTLY ONCE (the deliberate \
-         `Secret.reveal` line) — any other count means either `Secret.redacted` \
-         leaked it or `reveal` didn't run. Full stdout: {:?}",
+         `Secret.use` scoped-println line) — any other count means either \
+         `Secret.redacted` leaked it or the scoped consume didn't run. Full \
+         stdout: {:?}",
         out.stdout
     );
     assert!(

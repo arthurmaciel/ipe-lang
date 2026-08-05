@@ -116,6 +116,19 @@ const HTML_UNSAFE: &str = include_str!("../Ipe/Html/Unsafe.ipe");
 /// [`COMPILED_STD_MODULES`] (NOT `MODULES`); NOT in `STDLIB_MODULE_QUALIFIERS`,
 /// so the disjointness invariant holds.
 const DB_UNSAFE: &str = include_str!("../Ipe/Db/Unsafe.ipe");
+/// `Ipe.Secret.Unsafe` — the raw secret-reveal escape hatch for `Ipe.Secret`,
+/// compiled-source Layer-3.
+///
+/// The single member `unsafeReveal` is a point-free `Ffi.kernel "Secret_reveal"`
+/// alias resolved by `ipe_canon::resolve::detect_kernel_alias` to the retained
+/// `SecretReveal` kernel (runtime: `ipe_runtime::secret::secret_reveal`, the
+/// single greppable un-parse). Only the surface home moved here from
+/// `Ipe.Secret`; the kernel, its registry key, and the sealed-newtype barrier
+/// are unchanged. The scoped `Secret.use` stays on the native `Ipe.Secret`
+/// surface. Importing this dotted `Ipe.<M>.Unsafe` submodule discloses the
+/// `unsafe` capability. Registered in [`COMPILED_STD_MODULES`] (NOT `MODULES`);
+/// NOT in `STDLIB_MODULE_QUALIFIERS`, so the disjointness invariant holds.
+const SECRET_UNSAFE: &str = include_str!("../Ipe/Secret/Unsafe.ipe");
 /// `Ipe.Html` — HTML element builders, compiled-source Layer-3.
 ///
 /// Every element builder (`div`/`nav`/`br`/…) is pure Ipê over two retained
@@ -708,6 +721,14 @@ pub const COMPILED_STD_MODULES: &[CompiledStdModule] = &[
     CompiledStdModule {
         dotted: "Ipe.Db.Unsafe",
         source: DB_UNSAFE,
+    },
+    // Ipe.Secret.Unsafe — Layer-3 source; the single `unsafeReveal` escape hatch
+    // is a `Ffi.kernel "Secret_reveal"` alias to the unchanged `SecretReveal`
+    // kernel. Importing it discloses the `unsafe` capability. The scoped
+    // `Secret.use` stays on the native `Ipe.Secret` surface (capability-neutral).
+    CompiledStdModule {
+        dotted: "Ipe.Secret.Unsafe",
+        source: SECRET_UNSAFE,
     },
     // Ipe.Html — Layer-3 source; element builders are pure Ipê over the retained
     // `Ffi.kernel "Html_node"` / `"Html_voidNode"` primitives, with the native
