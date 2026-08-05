@@ -9820,12 +9820,14 @@ mod registry_phase_c_tests {
         // `Ui.link` / `Ui.image`, and the record-producing `Server` route-handler
         // kernels — each byte-identical to its retained `stdlib_scheme` arm.
         assert!(
-            migrated >= 956,
+            migrated >= 965,
             "expected at least the primitive + core-List + arrow-only + \
              tuple-shaped + arrow-scalar polymorphic kernels plus the migrated \
-             effect / scalar-opaque / Ui / Html / style builder families and the \
-             closed-record / open-row families (956 total) to carry a TyShape, \
-             found only {migrated}",
+             effect / scalar-opaque / Ui / Html / style builder families, the \
+             closed-record / open-row families, and the arrow-over-record \
+             server kernels (`Server.withCookie`, the `Middleware` wrappers, \
+             `Stream.stream`, `HttpStream.open`, `Ws.upgrade`) — 965 total — to \
+             carry a TyShape, found only {migrated}",
         );
     }
 
