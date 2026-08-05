@@ -14,6 +14,7 @@ import Lib.Db as LibDb exposing (Decision(..))
 import Lib.Format as Format
 import Lib.Highlight as Highlight exposing (Lang(..), Token(..))
 import Lib.Index as Index
+import Lib.Links as Links exposing (Link(..))
 import Lib.Queue as Queue
 
 
@@ -1044,6 +1045,123 @@ insertB8Units conn =
             )
 
 
+-- ── B9: internal/external linking ───────────────────────────────────────────
+--
+-- Identifier tokens in a unit's source resolve against the index's qualified
+-- names (internal) or http(s) URLs (external); the unit's own name never
+-- links to itself and punctuation is stripped from tokens.
+linksResolve : Bool
+linksResolve =
+    let
+        units =
+            [ ( "Lib.answer", "u-a" )
+            , ( "Lib.answer2", "u-b" )
+            , ( "Main.main", "u-m" )
+            ]
+
+        got =
+            Links.resolve
+                "Lib.answer"
+                units
+                "use Lib.answer();\nLib.answer2 helper https://docs.rs/serde\nMain.main() Main.main"
+
+        want =
+            [ Links.Internal "Lib.answer2" "u-b"
+            , Links.External "https://docs.rs/serde"
+            , Links.Internal "Main.main" "u-m"
+            ]
+    in
+    List.map Links.linkKey got == List.map Links.linkKey want
+
+
+linksSubstring : Bool
+linksSubstring =
+    let
+        noSelf =
+            List.isEmpty (Links.resolve "Main" [ ( "Main", "u-x" ) ] "Main.main()")
+
+        urlPunct =
+            Links.resolve "" [] "(https://a.io/b,)"
+                == [ Links.External "https://a.io/b" ]
+    in
+    noSelf && urlPunct
+
+
+-- The unit page's data path: a uid that exists loads with source and qualified
+-- name; a bogus uid loads Nothing; the qualified-name table lists every unit.
+unitPageLoad : Task.Task Error Bool
+unitPageLoad =
+    let
+        base =
+            System.getenvOr "TMPDIR" "/tmp" ++ "/ipe-index-b9-unit"
+
+        repo =
+            base ++ "/repo"
+
+        indexDb =
+            base ++ "/index.db"
+    in
+    Task.fromResult (Path.fromString indexDb)
+        |> Task.andThen File.remove
+        |> Task.onError (\_ -> Task.succeed ())
+        |> Task.andThen (\_ -> Task.fromResult (Path.fromString base) |> Task.andThen File.mkdirAll)
+        |> Task.andThen (\_ -> Task.fromResult (Path.fromString (repo ++ "/src")) |> Task.andThen File.mkdirAll)
+        |> Task.andThen (\_ -> writeFileText (repo ++ "/src/Lib.rs") fixtureLibRs)
+        |> Task.andThen (\_ -> writeFileText (repo ++ "/src/Main.ipe") fixtureMainIpe)
+        |> Task.andThen (\_ -> seedIndexDb indexDb)
+        |> Task.andThen (\_ -> setIndexEnv indexDb repo)
+        |> Task.andThen
+            (\_ ->
+                Index.loadUnitByUid "u-a"
+                    |> Task.andThen
+                        (\mb ->
+                            case mb of
+                                Just unit ->
+                                    Index.qualifiedUids
+                                        |> Task.map
+                                            (\qs ->
+                                                unit.qualified
+                                                    == "Lib.answer"
+                                                    && String.contains "answer" unit.source
+                                                    && List.length qs
+                                                    == 3
+                                                    && List.member ( "Lib.answer", "u-a" ) qs
+                                            )
+
+                                Nothing ->
+                                    Task.succeed False
+                        )
+            )
+        |> Task.andThen
+            (\ok ->
+                if not ok then
+                    Task.succeed False
+
+                else
+                    Index.loadUnitByUid "u-zz"
+                        |> Task.map
+                            (\mb ->
+                                case mb of
+                                    Nothing ->
+                                        True
+
+                                    Just _ ->
+                                        False
+                            )
+            )
+        |> Task.andThen
+            (\ok ->
+                Task.sequence
+                    [ removeFileIfAny indexDb
+                    , removeFileIfAny (indexDb ++ "-wal")
+                    , removeFileIfAny (indexDb ++ "-shm")
+                    , removeFileIfAny (repo ++ "/src/Lib.rs")
+                    , removeFileIfAny (repo ++ "/src/Main.ipe")
+                    ]
+                    |> Task.map (\_ -> ok)
+            )
+
+
 report : List ( String, Bool ) -> String
 report results =
     List.map
@@ -1109,6 +1227,20 @@ main =
             (\results ->
                 changeReenqueue
                     |> Task.map (\ok -> results ++ [ ( "changed unit resurfaced at head, unchanged stays hidden", ok ) ])
+            )
+        |> Task.andThen
+            (\results ->
+                Task.succeed
+                    (results
+                        ++ [ ( "links resolve internal and external", linksResolve )
+                        , ( "link tokens: no self-links, urls strip punctuation", linksSubstring )
+                        ]
+                    )
+            )
+        |> Task.andThen
+            (\results ->
+                unitPageLoad
+                    |> Task.map (\ok -> results ++ [ ( "unit page loads by uid, names resolve", ok ) ])
             )
         |> Task.andThen
             (\results ->

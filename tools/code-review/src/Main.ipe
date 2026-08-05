@@ -20,12 +20,14 @@ import Lib.Db as LibDb exposing (Decision(..))
 import Lib.Format as Format
 import Lib.Highlight as Highlight exposing (Token(..))
 import Lib.Index as Index
+import Lib.Links as Links exposing (Link(..))
 import Lib.Queue as Queue
 
 
 type Page
     = QueuePage
     | HistoryPage
+    | UnitPage String
 
 
 -- A decided unit as the History page shows it: the review row plus the unit's
@@ -51,34 +53,56 @@ type alias Model =
     , refuseError : Maybe String
     , history : List HistoryRow
     , historyError : Maybe String
+    , unitPage : Maybe Index.Unit
+    , unitLinks : List Links.Link
+    , unitError : Maybe String
     }
 
 
 init : Web.WebReq -> ( Model, Cmd Msg )
 init req =
-    ( { page = if req.path == "/history" then
+    ( { page = pageFor req.path
+      , queue = []
+      , queueError = Nothing
+      , decidedThisPass = 0
+      , refusingUid = Nothing
+      , refuseDraft = ""
+      , refuseError = Nothing
+      , history = []
+      , historyError = Nothing
+      , unitPage = Nothing
+      , unitLinks = []
+      , unitError = Nothing
+      }
+    , Cmd.batch
+        [ Cmd.perform Queue.load PendingLoaded
+        , pageCmd req.path
+        ]
+    )
+
+
+pageFor : String -> Page
+pageFor path =
+    if path == "/history" then
         HistoryPage
+
+    else if String.startsWith "/unit/" path then
+        UnitPage (String.dropLeft 6 path)
 
     else
         QueuePage
-    , queue = []
-    , queueError = Nothing
-    , decidedThisPass = 0
-    , refusingUid = Nothing
-    , refuseDraft = ""
-    , refuseError = Nothing
-    , history = []
-    , historyError = Nothing
-    }
-    , Cmd.batch
-        [ Cmd.perform Queue.load PendingLoaded
-        , if req.path == "/history" then
-            Cmd.perform loadHistory HistoryLoaded
 
-        else
-            Cmd.none
-        ]
-    )
+
+pageCmd : String -> Cmd Msg
+pageCmd path =
+    if path == "/history" then
+        Cmd.perform loadHistory HistoryLoaded
+
+    else if String.startsWith "/unit/" path then
+        Cmd.perform (loadUnitView (String.dropLeft 6 path)) UnitLoaded
+
+    else
+        Cmd.none
 
 
 reviewDb : Task Error Db.Db
@@ -98,6 +122,7 @@ type Msg
     | ShowQueue
     | ShowHistory
     | HistoryLoaded (Result Error (List HistoryRow))
+    | UnitLoaded (Result Error ( Maybe Index.Unit, List Links.Link ))
 
 
 update : Msg -> Model -> ( Model, Cmd Msg )
@@ -151,6 +176,14 @@ update msg model =
 
                 Err e ->
                     ( { model | historyError = Just ("History load failed: " ++ Error.toString e) }, Cmd.none )
+
+        UnitLoaded result ->
+            case result of
+                Ok ( mb, links ) ->
+                    ( { model | unitPage = mb, unitLinks = links, unitError = Nothing }, Cmd.none )
+
+                Err e ->
+                    ( { model | unitError = Just ("Unit load failed: " ++ Error.toString e) }, Cmd.none )
 
 
 saveDecision : Model -> String -> LibDb.Decision -> Cmd Msg
@@ -232,6 +265,27 @@ enrich conn row =
             }
         )
         (Index.nameFor conn row.uid)
+
+
+-- B9: the unit page loads the unit by uid (decided units have no change_queue
+-- row, so the page queries units directly) and resolves every identifier
+-- token of its source against the index's qualified names.
+loadUnitView : String -> Task Error ( Maybe Index.Unit, List Links.Link )
+loadUnitView uid =
+    Index.loadUnitByUid uid
+        |> Task.andThen
+            (\mb ->
+                case mb of
+                    Just unit ->
+                        Index.qualifiedUids
+                            |> Task.map
+                                (\qs ->
+                                    ( Just unit, Links.resolve unit.qualified qs unit.source )
+                                )
+
+                    Nothing ->
+                        Task.succeed ( Nothing, [] )
+            )
 
 
 header : Model -> Ui.Element Msg
@@ -332,6 +386,9 @@ pageBody model =
         HistoryPage ->
             historyBody model
 
+        UnitPage _ ->
+            unitPageBody model
+
 
 queueBody : Model -> Ui.Element Msg
 queueBody model =
@@ -408,6 +465,84 @@ nameOf row =
             row.uid
 
 
+-- B9: the unit page shows the source of one unit with its resolved links —
+-- no decision buttons, no change state; the unit is read-only here.
+unitPageBody : Model -> Ui.Element Msg
+unitPageBody model =
+    case model.unitError of
+        Just err ->
+            Ui.text err
+
+        Nothing ->
+            case model.unitPage of
+                Just unit ->
+                    Ui.column
+                        [ Ui.width Ui.fill, Ui.spacing 16, Ui.scrollbars ]
+                        [ unitPageCard model unit ]
+
+                Nothing ->
+                    Ui.text "Loading unit…"
+
+
+unitPageCard : Model -> Index.Unit -> Ui.Element Msg
+unitPageCard model unit =
+    Ui.column
+        [ Ui.width Ui.fill
+        , Ui.padding 16
+        , Ui.spacing 10
+        , Background.color (Ui.rgb 24 24 32)
+        , Border.rounded 8
+        , Border.solid
+        , Border.width 1
+        , Border.color (Ui.rgb 50 50 62)
+        ]
+        [ Ui.row
+            [ Ui.width Ui.fill, Ui.spacing 10, Ui.centerY ]
+            [ Ui.el [ Font.size 14, Font.bold, Font.color (Ui.rgb 235 235 240) ] (Ui.text unit.qualified)
+            , chip unit.facing
+            , chip unit.kind
+            ]
+        , Ui.el
+            [ Font.size 12, Font.family Font.monospace, Font.color (Ui.rgb 150 150 165) ]
+            (Ui.text (unit.path ++ " · lines " ++ String.fromInt unit.lineStart ++ "-" ++ String.fromInt unit.lineEnd))
+        , referencesRow model.unitLinks
+        , sourceBlock unit
+        ]
+
+
+referencesRow : List Links.Link -> Ui.Element Msg
+referencesRow links =
+    if List.isEmpty links then
+        Ui.none
+
+    else
+        Ui.wrappedRow
+            [ Ui.spacing 6, Ui.width Ui.fill ]
+            (List.map linkEl links)
+
+
+linkEl : Links.Link -> Ui.Element Msg
+linkEl link =
+    case link of
+        Internal qualified uid ->
+            Ui.link
+                [ Font.size 12
+                , Font.family Font.monospace
+                , Font.color (Ui.rgb 130 170 240)
+                , Ui.padding 4
+                ]
+                { url = "/unit/" ++ uid, label = Ui.text ("→ " ++ qualified) }
+
+        External url ->
+            Ui.link
+                [ Font.size 12
+                , Font.family Font.monospace
+                , Font.color (Ui.rgb 130 170 240)
+                , Ui.padding 4
+                ]
+                { url = url, label = Ui.text ("↗ " ++ url) }
+
+
 decisionBadge : String -> Ui.Element Msg
 decisionBadge d =
     case d of
@@ -429,6 +564,9 @@ currentPath model =
 
         HistoryPage ->
             "/history"
+
+        UnitPage uid ->
+            "/unit/" ++ uid
 
 
 urlSync : Model -> Ui.Element Msg
@@ -706,6 +844,6 @@ main =
         , update = update
         , view = view
         , subscriptions = subscriptions
-        , routes = [ Web.route "/" QueuePage, Web.route "/history" HistoryPage ]
+        , routes = [ Web.route "/" QueuePage, Web.route "/history" HistoryPage, Web.route "/unit/:uid" UnitPage ]
         , notFound = QueuePage
         }

@@ -1,4 +1,4 @@
-module Lib.Index exposing (Unit, drainUnit, indexDbUrlFor, loadPending, nameFor)
+module Lib.Index exposing (Unit, drainUnit, indexDbUrlFor, loadPending, loadUnitByUid, nameFor, qualifiedUids)
 
 import Ipe.Db
 import Ipe.Db.Decode
@@ -36,6 +36,65 @@ type alias Unit =
 
 
 -- The unit columns as they come off the DB, before the source is attached.
+-- The unit page (B9) queries units directly, not via change_queue: a decided
+-- unit has no queue row, but its page must still render. change/old_hash/
+-- new_hash are literals then, since the queue row is the only source of a
+-- real change state.
+unitByUidSql : String
+unitByUidSql =
+    "SELECT u.uid, 'new' AS change, NULL AS old_hash, NULL AS new_hash, u.path, u.name, u.qualified, u.kind, u.line_start, u.line_end, u.facing, u.purpose, u.body_hash, u.updated_sha FROM units u WHERE u.uid = ?"
+
+
+-- One unit by uid (decided or not), with its source slice resolved against
+-- the index root; Nothing when no such unit exists.
+loadUnitByUid : String -> Task.Task Error (Maybe Unit)
+loadUnitByUid uid =
+    System.cwd ()
+        |> Task.map (\cwd -> System.getenvOr "IPE_INDEX_ROOT" cwd)
+        |> Task.andThen
+            (\root ->
+                Db.open "sqlite" (indexDbUrlFor (System.getenvOr "IPE_INDEX_DB" ".ipe-index/index.db"))
+                    |> Task.andThen
+                        (\conn ->
+                            Db.queryDecode conn unitByUidSql [ SqlString uid ] rowDecoder
+                                |> Task.map List.head
+                                |> Task.andThen
+                                    (\mb ->
+                                        case mb of
+                                            Just row ->
+                                                loadSource root row
+                                                    |> Task.map Just
+
+                                            Nothing ->
+                                                Task.succeed Nothing
+                                    )
+                        )
+            )
+
+
+-- Every unit's (qualified, uid) pair. The link resolver (B9) matches
+-- identifier references in a unit's source against these names to build
+-- internal jump links; only the names are needed, so no file reads happen.
+qualifiedUids : Task.Task Error (List ( String, String ))
+qualifiedUids =
+    Db.open "sqlite" (indexDbUrlFor (System.getenvOr "IPE_INDEX_DB" ".ipe-index/index.db"))
+        |> Task.andThen
+            (\conn ->
+                Db.queryDecode conn "SELECT qualified, uid FROM units" [] qualifiedDecoder
+            )
+
+
+qualifiedDecoder : Db.Decode.Decoder ( String, String )
+qualifiedDecoder =
+    Db.Decode.succeed (\q u -> ( q, u ))
+        |> Db.Decode.required "qualified" (Db.Decode.string "qualified")
+        |> Db.Decode.required "uid" (Db.Decode.string "uid")
+
+
+-- A unit row before the source is attached. The unit page (B9) queries units
+-- directly, not via change_queue: a decided unit has no queue row, but its
+-- page must still render. change/old_hash/new_hash are literals then, since
+-- the queue row is the only source of a real change state.
 type alias RowUnit =
     { uid : String
     , change : String
