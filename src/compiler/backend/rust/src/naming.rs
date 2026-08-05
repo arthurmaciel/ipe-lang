@@ -1282,88 +1282,10 @@ pub const fn kernel_name(k: KernelFn) -> &'static str {
         KernelFn::HtmlDoctype => "html_doctype_",
         KernelFn::HtmlTitleNode => "html_title_node_",
         KernelFn::HtmlStyleNode => "html_style_node_",
-        KernelFn::HtmlDiv => "html_div_",
-        KernelFn::HtmlSpan => "html_span_",
-        KernelFn::HtmlA => "html_a_",
-        KernelFn::HtmlButton => "html_button_",
-        KernelFn::HtmlP => "html_p_",
-        KernelFn::HtmlInput => "html_input_",
-        KernelFn::HtmlImg => "html_img_",
-        // batch 2: Ipe.Html element builders — tag-as-data, all share the
-        // generic `html_node_` sink (the wire tag is injected by `emit_ui_call`).
-        // `Html.node` itself shares this bare helper name (same sink).
-        // `Html.voidNode` shares it too — tag is a real runtime arg, empty
-        // children vec baked at the emit site.
-        KernelFn::HtmlNode
-        | KernelFn::HtmlVoidNode
-        | KernelFn::HtmlH1
-        | KernelFn::HtmlH2
-        | KernelFn::HtmlH3
-        | KernelFn::HtmlH4
-        | KernelFn::HtmlH5
-        | KernelFn::HtmlH6
-        | KernelFn::HtmlNav
-        | KernelFn::HtmlSection
-        | KernelFn::HtmlArticle
-        | KernelFn::HtmlHeader
-        | KernelFn::HtmlHeaderNode
-        | KernelFn::HtmlCodeNode
-        | KernelFn::HtmlMainNode
-        | KernelFn::HtmlFooterNode
-        | KernelFn::HtmlFooter
-        | KernelFn::HtmlMain
-        | KernelFn::HtmlAside
-        | KernelFn::HtmlUl
-        | KernelFn::HtmlOl
-        | KernelFn::HtmlLi
-        | KernelFn::HtmlTable
-        | KernelFn::HtmlThead
-        | KernelFn::HtmlTbody
-        | KernelFn::HtmlTfoot
-        | KernelFn::HtmlTr
-        | KernelFn::HtmlTh
-        | KernelFn::HtmlTd
-        | KernelFn::HtmlTextarea
-        | KernelFn::HtmlSelect
-        | KernelFn::HtmlOption
-        | KernelFn::HtmlLabel
-        | KernelFn::HtmlForm
-        | KernelFn::HtmlFieldset
-        | KernelFn::HtmlLegend
-        | KernelFn::HtmlPre
-        | KernelFn::HtmlCode
-        | KernelFn::HtmlStrong
-        | KernelFn::HtmlEm
-        | KernelFn::HtmlSmall
-        | KernelFn::HtmlBlockquote
-        | KernelFn::HtmlFigure
-        | KernelFn::HtmlFigcaption
-        | KernelFn::HtmlDetails
-        | KernelFn::HtmlSummary
-        | KernelFn::HtmlDialog
-        | KernelFn::HtmlVideo
-        | KernelFn::HtmlAudio
-        | KernelFn::HtmlCanvas
-        | KernelFn::HtmlIframe
-        | KernelFn::HtmlProgress
-        | KernelFn::HtmlMeter
-        | KernelFn::HtmlScript
-        | KernelFn::HtmlBody
-        | KernelFn::HtmlTitle
-        | KernelFn::HtmlHtmlNode
-        | KernelFn::HtmlHeadNode
-        | KernelFn::HtmlBr
-        | KernelFn::HtmlHr
-        | KernelFn::HtmlMeta
-        | KernelFn::HtmlLink
-        | KernelFn::HtmlLinkNode
-        | KernelFn::HtmlArea
-        | KernelFn::HtmlBase
-        | KernelFn::HtmlCol
-        | KernelFn::HtmlEmbed
-        | KernelFn::HtmlSource
-        | KernelFn::HtmlTrack
-        | KernelFn::HtmlWbr => "html_node_",
+        // `Html.node` / `Html.voidNode` share the generic `html_node_` sink;
+        // the wire tag is a real runtime arg, and `voidNode` bakes an empty
+        // children vec at the emit site.
+        KernelFn::HtmlNode | KernelFn::HtmlVoidNode => "html_node_",
         // Ipe.Html.Attributes retained primitives. The full call (including the
         // key argument) is produced by `emit_ui_call`; these names are the bare
         // runtime helpers.

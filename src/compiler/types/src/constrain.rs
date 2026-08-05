@@ -6143,16 +6143,6 @@ impl<'a> Builder<'a> {
             // `Html.toString : Html msg -> String` — alias of `Html.render`.
             K::HtmlToString => fun(html_t(var(0)), string()),
 
-            // Ipe.Html container nodes (arity 2 — attrs, children; tag baked).
-            K::HtmlDiv | K::HtmlSpan | K::HtmlA | K::HtmlButton | K::HtmlP
-            | K::HtmlH1 | K::HtmlH2 | K::HtmlH3 | K::HtmlH4 | K::HtmlH5 | K::HtmlH6 | K::HtmlNav | K::HtmlSection | K::HtmlArticle | K::HtmlHeader | K::HtmlHeaderNode | K::HtmlCodeNode | K::HtmlMainNode | K::HtmlFooterNode | K::HtmlFooter | K::HtmlMain | K::HtmlAside | K::HtmlUl | K::HtmlOl | K::HtmlLi | K::HtmlTable | K::HtmlThead | K::HtmlTbody | K::HtmlTfoot | K::HtmlTr | K::HtmlTh | K::HtmlTd | K::HtmlTextarea | K::HtmlSelect | K::HtmlOption | K::HtmlLabel | K::HtmlForm | K::HtmlFieldset | K::HtmlLegend | K::HtmlPre | K::HtmlCode | K::HtmlStrong | K::HtmlEm | K::HtmlSmall | K::HtmlBlockquote | K::HtmlFigure | K::HtmlFigcaption | K::HtmlDetails | K::HtmlSummary | K::HtmlDialog | K::HtmlVideo | K::HtmlAudio | K::HtmlCanvas | K::HtmlIframe | K::HtmlProgress | K::HtmlMeter | K::HtmlScript | K::HtmlBody | K::HtmlTitle | K::HtmlHtmlNode | K::HtmlHeadNode => fun(
-                list(html_attr(var(0))),
-                fun(list(html_t(var(0))), html_t(var(0))),
-            ),
-
-            // Ipe.Html void nodes (arity 1 — attrs only).
-            K::HtmlInput | K::HtmlImg | K::HtmlBr | K::HtmlHr | K::HtmlMeta | K::HtmlLink | K::HtmlLinkNode | K::HtmlArea | K::HtmlBase | K::HtmlCol | K::HtmlEmbed | K::HtmlSource | K::HtmlTrack | K::HtmlWbr => fun(list(html_attr(var(0))), html_t(var(0))),
-
             // Ipe.Html styleNode (arity 2 — attrs, css string; F7). The
             // runtime bakes `strip_style_close` on the css. RELOCATED — matches
             // the legacy `kernel_ty(Html, styleNode)` byte-for-byte (html_attr +
@@ -8902,80 +8892,6 @@ mod registry_phase_c_tests {
             K::HtmlTextNode,
             K::HtmlRawNode,
             K::HtmlNode,
-            K::HtmlDiv,
-            K::HtmlSpan,
-            K::HtmlA,
-            K::HtmlButton,
-            K::HtmlP,
-            K::HtmlInput,
-            K::HtmlImg,
-            // Ipe.Html element builders (first-schemed — no legacy).
-            K::HtmlH1,
-            K::HtmlH2,
-            K::HtmlH3,
-            K::HtmlH4,
-            K::HtmlH5,
-            K::HtmlH6,
-            K::HtmlNav,
-            K::HtmlSection,
-            K::HtmlArticle,
-            K::HtmlHeader,
-            K::HtmlHeaderNode,
-            K::HtmlFooter,
-            K::HtmlFooterNode,
-            K::HtmlMain,
-            K::HtmlMainNode,
-            K::HtmlAside,
-            K::HtmlUl,
-            K::HtmlOl,
-            K::HtmlLi,
-            K::HtmlTable,
-            K::HtmlThead,
-            K::HtmlTbody,
-            K::HtmlTfoot,
-            K::HtmlTr,
-            K::HtmlTh,
-            K::HtmlTd,
-            K::HtmlTextarea,
-            K::HtmlSelect,
-            K::HtmlOption,
-            K::HtmlLabel,
-            K::HtmlForm,
-            K::HtmlFieldset,
-            K::HtmlLegend,
-            K::HtmlPre,
-            K::HtmlCode,
-            K::HtmlCodeNode,
-            K::HtmlStrong,
-            K::HtmlEm,
-            K::HtmlSmall,
-            K::HtmlBlockquote,
-            K::HtmlFigure,
-            K::HtmlFigcaption,
-            K::HtmlDetails,
-            K::HtmlSummary,
-            K::HtmlDialog,
-            K::HtmlVideo,
-            K::HtmlAudio,
-            K::HtmlCanvas,
-            K::HtmlIframe,
-            K::HtmlProgress,
-            K::HtmlMeter,
-            K::HtmlScript,
-            K::HtmlBody,
-            K::HtmlTitle,
-            K::HtmlBr,
-            K::HtmlHr,
-            K::HtmlMeta,
-            K::HtmlLink,
-            K::HtmlLinkNode,
-            K::HtmlArea,
-            K::HtmlBase,
-            K::HtmlCol,
-            K::HtmlEmbed,
-            K::HtmlSource,
-            K::HtmlTrack,
-            K::HtmlWbr,
             // Ipe.Html.Attributes retained primitives (first-schemed — no legacy).
             K::HtmlAttribute,
             K::HtmlBoolAttribute,
@@ -9176,8 +9092,6 @@ mod registry_phase_c_tests {
             K::HtmlVoidNode,
             K::HtmlDoctype,
             K::HtmlTitleNode,
-            K::HtmlHtmlNode,
-            K::HtmlHeadNode,
             K::BackgroundLinearGradient,
             K::UiOnPseudo,
             K::UiHover,
@@ -9772,13 +9686,13 @@ mod registry_phase_c_tests {
         // `Ui.link` / `Ui.image`, and the record-producing `Server` route-handler
         // kernels — each byte-identical to its retained `stdlib_scheme` arm.
         assert!(
-            migrated >= 943,
+            migrated >= 868,
             "expected at least the primitive + core-List + arrow-only + \
              tuple-shaped + arrow-scalar polymorphic kernels plus the migrated \
              effect / scalar-opaque / Ui / Html / style builder families, the \
              closed-record / open-row families, and the arrow-over-record \
              server kernels (`Server.withCookie`, the `Middleware` wrappers, \
-             `Stream.stream`, `HttpStream.open`, `Ws.upgrade`) — 943 total — to \
+             `Stream.stream`, `HttpStream.open`, `Ws.upgrade`) — 868 total — to \
              carry a TyShape, found only {migrated}",
         );
     }

@@ -16300,35 +16300,6 @@ impl<'a> Lowerer<'a> {
                 | KernelFn::HtmlTextNode
                 // `Html.raw : String -> Html msg`
                 | KernelFn::HtmlRawNode
-                // `Html.input : List (Attribute msg) -> Html msg` (void element)
-                | KernelFn::HtmlInput
-                // `Html.img : List (Attribute msg) -> Html msg` (void element)
-                | KernelFn::HtmlImg
-                // ── Ipe.Html void element builders — arity 1 ────
-                // `Html.br : List (Attribute msg) -> Html msg` (void element)
-                | KernelFn::HtmlBr
-                // `Html.hr : List (Attribute msg) -> Html msg` (void element)
-                | KernelFn::HtmlHr
-                // `Html.meta : List (Attribute msg) -> Html msg` (void element)
-                | KernelFn::HtmlMeta
-                // `Html.link : List (Attribute msg) -> Html msg` (void element)
-                | KernelFn::HtmlLink
-                // `Html.linkNode : List (Attribute msg) -> Html msg` (void element alias)
-                | KernelFn::HtmlLinkNode
-                // `Html.area : List (Attribute msg) -> Html msg` (void element)
-                | KernelFn::HtmlArea
-                // `Html.base : List (Attribute msg) -> Html msg` (void element)
-                | KernelFn::HtmlBase
-                // `Html.col : List (Attribute msg) -> Html msg` (void element)
-                | KernelFn::HtmlCol
-                // `Html.embed : List (Attribute msg) -> Html msg` (void element)
-                | KernelFn::HtmlEmbed
-                // `Html.source : List (Attribute msg) -> Html msg` (void element)
-                | KernelFn::HtmlSource
-                // `Html.track : List (Attribute msg) -> Html msg` (void element)
-                | KernelFn::HtmlTrack
-                // `Html.wbr : List (Attribute msg) -> Html msg` (void element)
-                | KernelFn::HtmlWbr
                 // ── event-attribute builders — arity 1 ──────────
                 // `Ui.onClick : msg -> Attribute msg`
                 | KernelFn::UiOnClick
@@ -16457,130 +16428,6 @@ impl<'a> Lowerer<'a> {
                 // ── Html element builders — arity 2 ──────────────────────
                 // `Html.styleNode : List (Attribute msg) -> String -> Html msg`
                 | KernelFn::HtmlStyleNode
-                // `Html.div : List (Attribute msg) -> List (Html msg) -> Html msg`
-                | KernelFn::HtmlDiv
-                // `Html.span : List (Attribute msg) -> List (Html msg) -> Html msg`
-                | KernelFn::HtmlSpan
-                // `Html.a : List (Attribute msg) -> List (Html msg) -> Html msg`
-                | KernelFn::HtmlA
-                // `Html.button : List (Attribute msg) -> List (Html msg) -> Html msg`
-                | KernelFn::HtmlButton
-                // `Html.p : List (Attribute msg) -> List (Html msg) -> Html msg`
-                | KernelFn::HtmlP
-                // ── Ipe.Html container element builders — arity 2 ─
-                // `Html.h1 : List (Attribute msg) -> List (Html msg) -> Html msg`
-                | KernelFn::HtmlH1
-                // `Html.h2 : List (Attribute msg) -> List (Html msg) -> Html msg`
-                | KernelFn::HtmlH2
-                // `Html.h3 : List (Attribute msg) -> List (Html msg) -> Html msg`
-                | KernelFn::HtmlH3
-                // `Html.h4 : List (Attribute msg) -> List (Html msg) -> Html msg`
-                | KernelFn::HtmlH4
-                // `Html.h5 : List (Attribute msg) -> List (Html msg) -> Html msg`
-                | KernelFn::HtmlH5
-                // `Html.h6 : List (Attribute msg) -> List (Html msg) -> Html msg`
-                | KernelFn::HtmlH6
-                // `Html.nav : List (Attribute msg) -> List (Html msg) -> Html msg`
-                | KernelFn::HtmlNav
-                // `Html.section : List (Attribute msg) -> List (Html msg) -> Html msg`
-                | KernelFn::HtmlSection
-                // `Html.article : List (Attribute msg) -> List (Html msg) -> Html msg`
-                | KernelFn::HtmlArticle
-                // `Html.header : List (Attribute msg) -> List (Html msg) -> Html msg`
-                | KernelFn::HtmlHeader
-                // `Html.headerNode : List (Attribute msg) -> List (Html msg) -> Html msg`
-                // (legacy compat alias — same <header> tag, arity 2)
-                | KernelFn::HtmlHeaderNode
-                // `Html.codeNode : List (Attribute msg) -> List (Html msg) -> Html msg`
-                | KernelFn::HtmlCodeNode
-                // `Html.mainNode : List (Attribute msg) -> List (Html msg) -> Html msg`
-                | KernelFn::HtmlMainNode
-                // `Html.footerNode : List (Attribute msg) -> List (Html msg) -> Html msg`
-                | KernelFn::HtmlFooterNode
-                // `Html.footer : List (Attribute msg) -> List (Html msg) -> Html msg`
-                | KernelFn::HtmlFooter
-                // `Html.main : List (Attribute msg) -> List (Html msg) -> Html msg`
-                | KernelFn::HtmlMain
-                // `Html.aside : List (Attribute msg) -> List (Html msg) -> Html msg`
-                | KernelFn::HtmlAside
-                // `Html.ul : List (Attribute msg) -> List (Html msg) -> Html msg`
-                | KernelFn::HtmlUl
-                // `Html.ol : List (Attribute msg) -> List (Html msg) -> Html msg`
-                | KernelFn::HtmlOl
-                // `Html.li : List (Attribute msg) -> List (Html msg) -> Html msg`
-                | KernelFn::HtmlLi
-                // `Html.table : List (Attribute msg) -> List (Html msg) -> Html msg`
-                | KernelFn::HtmlTable
-                // `Html.thead : List (Attribute msg) -> List (Html msg) -> Html msg`
-                | KernelFn::HtmlThead
-                // `Html.tbody : List (Attribute msg) -> List (Html msg) -> Html msg`
-                | KernelFn::HtmlTbody
-                // `Html.tfoot : List (Attribute msg) -> List (Html msg) -> Html msg`
-                | KernelFn::HtmlTfoot
-                // `Html.tr : List (Attribute msg) -> List (Html msg) -> Html msg`
-                | KernelFn::HtmlTr
-                // `Html.th : List (Attribute msg) -> List (Html msg) -> Html msg`
-                | KernelFn::HtmlTh
-                // `Html.td : List (Attribute msg) -> List (Html msg) -> Html msg`
-                | KernelFn::HtmlTd
-                // `Html.textarea : List (Attribute msg) -> List (Html msg) -> Html msg`
-                | KernelFn::HtmlTextarea
-                // `Html.select : List (Attribute msg) -> List (Html msg) -> Html msg`
-                | KernelFn::HtmlSelect
-                // `Html.option : List (Attribute msg) -> List (Html msg) -> Html msg`
-                | KernelFn::HtmlOption
-                // `Html.label : List (Attribute msg) -> List (Html msg) -> Html msg`
-                | KernelFn::HtmlLabel
-                // `Html.form : List (Attribute msg) -> List (Html msg) -> Html msg`
-                | KernelFn::HtmlForm
-                // `Html.fieldset : List (Attribute msg) -> List (Html msg) -> Html msg`
-                | KernelFn::HtmlFieldset
-                // `Html.legend : List (Attribute msg) -> List (Html msg) -> Html msg`
-                | KernelFn::HtmlLegend
-                // `Html.pre : List (Attribute msg) -> List (Html msg) -> Html msg`
-                | KernelFn::HtmlPre
-                // `Html.code : List (Attribute msg) -> List (Html msg) -> Html msg`
-                | KernelFn::HtmlCode
-                // `Html.strong : List (Attribute msg) -> List (Html msg) -> Html msg`
-                | KernelFn::HtmlStrong
-                // `Html.em : List (Attribute msg) -> List (Html msg) -> Html msg`
-                | KernelFn::HtmlEm
-                // `Html.small : List (Attribute msg) -> List (Html msg) -> Html msg`
-                | KernelFn::HtmlSmall
-                // `Html.blockquote : List (Attribute msg) -> List (Html msg) -> Html msg`
-                | KernelFn::HtmlBlockquote
-                // `Html.figure : List (Attribute msg) -> List (Html msg) -> Html msg`
-                | KernelFn::HtmlFigure
-                // `Html.figcaption : List (Attribute msg) -> List (Html msg) -> Html msg`
-                | KernelFn::HtmlFigcaption
-                // `Html.details : List (Attribute msg) -> List (Html msg) -> Html msg`
-                | KernelFn::HtmlDetails
-                // `Html.summary : List (Attribute msg) -> List (Html msg) -> Html msg`
-                | KernelFn::HtmlSummary
-                // `Html.dialog : List (Attribute msg) -> List (Html msg) -> Html msg`
-                | KernelFn::HtmlDialog
-                // `Html.video : List (Attribute msg) -> List (Html msg) -> Html msg`
-                | KernelFn::HtmlVideo
-                // `Html.audio : List (Attribute msg) -> List (Html msg) -> Html msg`
-                | KernelFn::HtmlAudio
-                // `Html.canvas : List (Attribute msg) -> List (Html msg) -> Html msg`
-                | KernelFn::HtmlCanvas
-                // `Html.iframe : List (Attribute msg) -> List (Html msg) -> Html msg`
-                | KernelFn::HtmlIframe
-                // `Html.progress : List (Attribute msg) -> List (Html msg) -> Html msg`
-                | KernelFn::HtmlProgress
-                // `Html.meter : List (Attribute msg) -> List (Html msg) -> Html msg`
-                | KernelFn::HtmlMeter
-                // `Html.script : List (Attribute msg) -> List (Html msg) -> Html msg`
-                | KernelFn::HtmlScript
-                // `Html.body : List (Attribute msg) -> List (Html msg) -> Html msg`
-                | KernelFn::HtmlBody
-                // `Html.title : List (Attribute msg) -> List (Html msg) -> Html msg`
-                | KernelFn::HtmlTitle
-                // `Html.htmlNode : List (Attribute msg) -> List (Html msg) -> Html msg`
-                | KernelFn::HtmlHtmlNode
-                // `Html.headNode : List (Attribute msg) -> List (Html msg) -> Html msg`
-                | KernelFn::HtmlHeadNode
                 // `Web.route : String -> page -> WebRoute` (`page` is a
                 // bare polymorphic value — nullary ctor OR `String -> Page`)
                 | KernelFn::WebRoute
@@ -17859,92 +17706,13 @@ impl<'a> Lowerer<'a> {
                     // dedicated kernel close-tag-neutralises the CSS body (F7).
                     ("Html", "styleNode") => Ok(Callee::Kernel(KernelFn::HtmlStyleNode)),
                     ("Html", "node") => Ok(Callee::Kernel(KernelFn::HtmlNode)),
-                    // Each of these 5 is its own dedicated `KernelFn` variant
+                    // Each of these 3 is its own dedicated `KernelFn` variant
                     // (distinct arity from the generic arity-3 `Html.node`);
                     // routing them through the combined `HtmlNode` arm above
                     // would silently mis-arity them.
                     ("Html", "voidNode") => Ok(Callee::Kernel(KernelFn::HtmlVoidNode)),
                     ("Html", "doctype") => Ok(Callee::Kernel(KernelFn::HtmlDoctype)),
                     ("Html", "titleNode") => Ok(Callee::Kernel(KernelFn::HtmlTitleNode)),
-                    ("Html", "htmlNode") => Ok(Callee::Kernel(KernelFn::HtmlHtmlNode)),
-                    ("Html", "headNode") => Ok(Callee::Kernel(KernelFn::HtmlHeadNode)),
-                    ("Html", "div") => Ok(Callee::Kernel(KernelFn::HtmlDiv)),
-                    ("Html", "span") => Ok(Callee::Kernel(KernelFn::HtmlSpan)),
-                    ("Html", "a") => Ok(Callee::Kernel(KernelFn::HtmlA)),
-                    ("Html", "button") => Ok(Callee::Kernel(KernelFn::HtmlButton)),
-                    ("Html", "p") => Ok(Callee::Kernel(KernelFn::HtmlP)),
-                    ("Html", "input") => Ok(Callee::Kernel(KernelFn::HtmlInput)),
-                    ("Html", "img") => Ok(Callee::Kernel(KernelFn::HtmlImg)),
-                    // ── Ipe.Html element builders (canonical tag →
-                    //    dedicated variant; the emit arm bakes the wire tag via
-                    //    `html_element_tag`). Replaces the old wrong-render fold
-                    //    (nav→<p>, h1→<p>, br→<img>, header→<div>, link→<a>). ──
-                    ("Html", "h1") => Ok(Callee::Kernel(KernelFn::HtmlH1)),
-                    ("Html", "h2") => Ok(Callee::Kernel(KernelFn::HtmlH2)),
-                    ("Html", "h3") => Ok(Callee::Kernel(KernelFn::HtmlH3)),
-                    ("Html", "h4") => Ok(Callee::Kernel(KernelFn::HtmlH4)),
-                    ("Html", "h5") => Ok(Callee::Kernel(KernelFn::HtmlH5)),
-                    ("Html", "h6") => Ok(Callee::Kernel(KernelFn::HtmlH6)),
-                    ("Html", "nav") => Ok(Callee::Kernel(KernelFn::HtmlNav)),
-                    ("Html", "section") => Ok(Callee::Kernel(KernelFn::HtmlSection)),
-                    ("Html", "article") => Ok(Callee::Kernel(KernelFn::HtmlArticle)),
-                    ("Html", "header") => Ok(Callee::Kernel(KernelFn::HtmlHeader)),
-                    ("Html", "headerNode") => Ok(Callee::Kernel(KernelFn::HtmlHeaderNode)),
-                    ("Html", "codeNode") => Ok(Callee::Kernel(KernelFn::HtmlCodeNode)),
-                    ("Html", "mainNode") => Ok(Callee::Kernel(KernelFn::HtmlMainNode)),
-                    ("Html", "footerNode") => Ok(Callee::Kernel(KernelFn::HtmlFooterNode)),
-                    ("Html", "linkNode") => Ok(Callee::Kernel(KernelFn::HtmlLinkNode)),
-                    ("Html", "footer") => Ok(Callee::Kernel(KernelFn::HtmlFooter)),
-                    ("Html", "main") => Ok(Callee::Kernel(KernelFn::HtmlMain)),
-                    ("Html", "aside") => Ok(Callee::Kernel(KernelFn::HtmlAside)),
-                    ("Html", "ul") => Ok(Callee::Kernel(KernelFn::HtmlUl)),
-                    ("Html", "ol") => Ok(Callee::Kernel(KernelFn::HtmlOl)),
-                    ("Html", "li") => Ok(Callee::Kernel(KernelFn::HtmlLi)),
-                    ("Html", "table") => Ok(Callee::Kernel(KernelFn::HtmlTable)),
-                    ("Html", "thead") => Ok(Callee::Kernel(KernelFn::HtmlThead)),
-                    ("Html", "tbody") => Ok(Callee::Kernel(KernelFn::HtmlTbody)),
-                    ("Html", "tfoot") => Ok(Callee::Kernel(KernelFn::HtmlTfoot)),
-                    ("Html", "tr") => Ok(Callee::Kernel(KernelFn::HtmlTr)),
-                    ("Html", "th") => Ok(Callee::Kernel(KernelFn::HtmlTh)),
-                    ("Html", "td") => Ok(Callee::Kernel(KernelFn::HtmlTd)),
-                    ("Html", "textarea") => Ok(Callee::Kernel(KernelFn::HtmlTextarea)),
-                    ("Html", "select") => Ok(Callee::Kernel(KernelFn::HtmlSelect)),
-                    ("Html", "option") => Ok(Callee::Kernel(KernelFn::HtmlOption)),
-                    ("Html", "label") => Ok(Callee::Kernel(KernelFn::HtmlLabel)),
-                    ("Html", "form") => Ok(Callee::Kernel(KernelFn::HtmlForm)),
-                    ("Html", "fieldset") => Ok(Callee::Kernel(KernelFn::HtmlFieldset)),
-                    ("Html", "legend") => Ok(Callee::Kernel(KernelFn::HtmlLegend)),
-                    ("Html", "pre") => Ok(Callee::Kernel(KernelFn::HtmlPre)),
-                    ("Html", "code") => Ok(Callee::Kernel(KernelFn::HtmlCode)),
-                    ("Html", "strong") => Ok(Callee::Kernel(KernelFn::HtmlStrong)),
-                    ("Html", "em") => Ok(Callee::Kernel(KernelFn::HtmlEm)),
-                    ("Html", "small") => Ok(Callee::Kernel(KernelFn::HtmlSmall)),
-                    ("Html", "blockquote") => Ok(Callee::Kernel(KernelFn::HtmlBlockquote)),
-                    ("Html", "figure") => Ok(Callee::Kernel(KernelFn::HtmlFigure)),
-                    ("Html", "figcaption") => Ok(Callee::Kernel(KernelFn::HtmlFigcaption)),
-                    ("Html", "details") => Ok(Callee::Kernel(KernelFn::HtmlDetails)),
-                    ("Html", "summary") => Ok(Callee::Kernel(KernelFn::HtmlSummary)),
-                    ("Html", "dialog") => Ok(Callee::Kernel(KernelFn::HtmlDialog)),
-                    ("Html", "video") => Ok(Callee::Kernel(KernelFn::HtmlVideo)),
-                    ("Html", "audio") => Ok(Callee::Kernel(KernelFn::HtmlAudio)),
-                    ("Html", "canvas") => Ok(Callee::Kernel(KernelFn::HtmlCanvas)),
-                    ("Html", "iframe") => Ok(Callee::Kernel(KernelFn::HtmlIframe)),
-                    ("Html", "progress") => Ok(Callee::Kernel(KernelFn::HtmlProgress)),
-                    ("Html", "meter") => Ok(Callee::Kernel(KernelFn::HtmlMeter)),
-                    ("Html", "script") => Ok(Callee::Kernel(KernelFn::HtmlScript)),
-                    ("Html", "body") => Ok(Callee::Kernel(KernelFn::HtmlBody)),
-                    ("Html", "title") => Ok(Callee::Kernel(KernelFn::HtmlTitle)),
-                    ("Html", "br") => Ok(Callee::Kernel(KernelFn::HtmlBr)),
-                    ("Html", "hr") => Ok(Callee::Kernel(KernelFn::HtmlHr)),
-                    ("Html", "meta") => Ok(Callee::Kernel(KernelFn::HtmlMeta)),
-                    ("Html", "link") => Ok(Callee::Kernel(KernelFn::HtmlLink)),
-                    ("Html", "area") => Ok(Callee::Kernel(KernelFn::HtmlArea)),
-                    ("Html", "base") => Ok(Callee::Kernel(KernelFn::HtmlBase)),
-                    ("Html", "col") => Ok(Callee::Kernel(KernelFn::HtmlCol)),
-                    ("Html", "embed") => Ok(Callee::Kernel(KernelFn::HtmlEmbed)),
-                    ("Html", "source") => Ok(Callee::Kernel(KernelFn::HtmlSource)),
-                    ("Html", "track") => Ok(Callee::Kernel(KernelFn::HtmlTrack)),
-                    ("Html", "wbr") => Ok(Callee::Kernel(KernelFn::HtmlWbr)),
                     // ── Ipe.Html.Attributes retained primitives (legacy arm; the
                     //    `Ffi.kernel "Attr_*"` alias handles these in practice,
                     //    this arm keeps decl() ⇔ legacy parity per

@@ -2881,35 +2881,48 @@ mod tests {
     }
 
     #[test]
-    fn render_static_resolves_under_ipe_html_qualifier() {
-        // `renderStatic` is the shape-neutral static-render bridge — it lives
-        // under `Ipe.Html`, next to `render`, NOT under any `Ipe.Tea.*` shape.
-        let src = "module Main exposing (main)\n\
-                   import Ipe.Html as Html\n\n\
-                   main = Html.renderStatic\n";
-        let Some((m, i)) = canon_src(src) else {
-            assert!(false_marker(), "Html.renderStatic must canonicalise");
-            return;
-        };
-        assert_main_is_kernel(&m, &i, "Html", "renderStatic");
+    fn html_kernel_qualifier_absent_compiled_source() {
+        use ipe_intern::Interner;
+
+        // `Ipe.Html` is a COMPILED-SOURCE module (`COMPILED_STD_MODULES`), so the
+        // `Html` kernel qualifier must be ABSENT from `env.qual_vars`: its element
+        // builders and the re-exposed serialiser (`render` / `renderStatic` / …)
+        // resolve through the `Ffi.kernel "Html_*"` aliases in `Ipe/Html.ipe`, not
+        // a kernel-qualifier prelude (mirrors the `PubSub` precedent).
+        let mut interner = Interner::new();
+        let html = interner.intern("Html").expect("tripwire: intern Html OOM");
+        let env = Env::initial(vec![], &mut interner)
+            .expect("Env::initial must not fail in the tripwire test");
+        assert!(
+            !env.qual_vars.contains_key(&html),
+            "The `Html` kernel qualifier must stay OUT of env.qual_vars — \
+             `Ipe.Html` is a compiled-source module resolved via the \
+             `Ffi.kernel \"Html_*\"` alias, not a kernel qualifier.",
+        );
     }
 
     #[test]
-    fn program_using_render_static_is_not_a_tea_app() {
+    fn program_importing_ipe_html_is_not_a_tea_app() {
         // ADR 0048: a module is a TEA app iff it imports something under
-        // `Ipe.Tea.*`. A plain Program renders a static view with
-        // `Html.renderStatic` and imports only the shape-neutral `Ipe.Html`, so
-        // it must canonicalise cleanly — never rejected as a Program-importing-
-        // a-shape contradiction (IPE-N0033).
+        // `Ipe.Tea.*`. Importing the shape-neutral `Ipe.Html` (where the static
+        // render bridge `renderStatic` lives, next to `render`) must NOT be
+        // rejected as a Program-importing-a-shape contradiction (IPE-N0033). The
+        // canon-only harness does not inject the compiled-source `Ipe.Html` dep,
+        // so a bare `Html.*` member is unresolved here — the point is only that no
+        // TEA-gate (IPE-N0033) error fires for the import itself.
         let src = "module Main exposing (main)\n\
-                   import Ipe.Html as Html\n\
-                   viewStatic model =\n    \
-                       Html.node \"div\" [] [ Html.text model.title ]\n\
-                   main =\n    \
-                       Html.renderStatic viewStatic { title = \"hi\" }\n";
+                   import Ipe.Html as Html\n\n\
+                   main = 0\n";
         assert!(
-            canon_err(src).is_none(),
-            "a Program using Html.renderStatic must not trip the TEA-import gate"
+            !matches!(
+                canon_err(src),
+                Some(Diagnostic::Name {
+                    msg: NameError::ProgramImportsTeaShape { .. },
+                    ..
+                })
+            ),
+            "importing the shape-neutral `Ipe.Html` must not trip the IPE-N0033 \
+             TEA-import gate"
         );
     }
 
@@ -3033,29 +3046,30 @@ mod tests {
 
     #[test]
     fn stdlib_wildcard_brings_member_into_unqualified_scope() {
-        // `import Ipe.Html exposing (..)` → bare `div` resolves to the same
-        // `VarKernel { module: Html, name: div }` a `Html.div` reference would.
-        // This is the exact 09-live-counter blocker (IPE-N0001 on bare `div`).
+        // `import Ipe.Ui exposing (..)` → bare `el` resolves to the same
+        // `VarKernel { module: Ui, name: el }` a `Ui.el` reference would. This is
+        // the wildcard-tier flood a kernel-qualifier module gets on an open import
+        // (`Ipe.Html` is compiled-source now, so `Ipe.Ui` is the example).
         let src = "module Main exposing (main)\n\
-                   import Ipe.Html exposing (..)\n\n\
-                   main = div\n";
+                   import Ipe.Ui exposing (..)\n\n\
+                   main = el\n";
         let Some((m, i)) = canon_src(src) else {
-            assert!(false_marker(), "wildcard `div` must canonicalise");
+            assert!(false_marker(), "wildcard `el` must canonicalise");
             return;
         };
-        assert_main_is_kernel(&m, &i, "Html", "div");
+        assert_main_is_kernel(&m, &i, "Ui", "el");
     }
 
     #[test]
     fn stdlib_wildcard_member_lowers_identically_to_qualified() {
-        // A wildcard `text` and a qualified `Html.text` must produce the same
+        // A wildcard `text` and a qualified `Ui.text` must produce the same
         // `VarKernel` (identical module + name), so lowering is unaffected.
         let bare = "module Main exposing (main)\n\
-                    import Ipe.Html exposing (..)\n\n\
+                    import Ipe.Ui exposing (..)\n\n\
                     main = text\n";
         let qual = "module Main exposing (main)\n\
-                    import Ipe.Html\n\n\
-                    main = Html.text\n";
+                    import Ipe.Ui\n\n\
+                    main = Ui.text\n";
         let Some((mb, ib)) = canon_src(bare) else {
             assert!(false_marker(), "bare wildcard `text` must canonicalise");
             return;
@@ -3078,8 +3092,8 @@ mod tests {
         };
         assert_eq!(
             kernel_of(&mb, &ib),
-            Some(("Html".to_string(), "text".to_string())),
-            "bare wildcard `text` resolves to VarKernel(Html, text)"
+            Some(("Ui".to_string(), "text".to_string())),
+            "bare wildcard `text` resolves to VarKernel(Ui, text)"
         );
         assert_eq!(
             kernel_of(&mb, &ib),
@@ -3090,13 +3104,13 @@ mod tests {
 
     #[test]
     fn two_stdlib_wildcards_same_name_is_ambiguous_at_use() {
-        // Both `Ipe.Html` and `Ipe.Ui` export `text`. Two `exposing (..)` imports
-        // are BOTH legal at import time; a bare `text` USE is `AmbiguousImport`
-        // (IPE-N0024), never a silent last-wins.
+        // Both `Ipe.Ui` and `Ipe.Ui.Input` export `text`. Two `exposing (..)`
+        // imports are BOTH legal at import time; a bare `text` USE is
+        // `AmbiguousImport` (IPE-N0024), never a silent last-wins.
         let err = canon_err(
             "module Main exposing (main)\n\
-             import Ipe.Html exposing (..)\n\
              import Ipe.Ui exposing (..)\n\
+             import Ipe.Ui.Input exposing (..)\n\
              main = text\n",
         );
         let Some(Diagnostic::Name {
@@ -3109,7 +3123,8 @@ mod tests {
         };
         assert_eq!(&**name, "text");
         assert!(
-            modules.iter().any(|m| &**m == "Ipe.Html") && modules.iter().any(|m| &**m == "Ipe.Ui"),
+            modules.iter().any(|m| &**m == "Ipe.Ui")
+                && modules.iter().any(|m| &**m == "Ipe.Ui.Input"),
             "both origins named, got {modules:?}"
         );
     }
@@ -3120,9 +3135,9 @@ mod tests {
         // long as no bare `text` is used (a non-shared name still resolves).
         let ok = canon_src(
             "module Main exposing (main)\n\
-             import Ipe.Html exposing (..)\n\
              import Ipe.Ui exposing (..)\n\
-             main = div\n",
+             import Ipe.Ui.Input exposing (..)\n\
+             main = el\n",
         );
         assert!(
             ok.is_some(),
@@ -3135,8 +3150,8 @@ mod tests {
         // A local binding silently shadows BOTH wildcard origins — no ambiguity,
         // no `DuplicateValue`.
         let src = "module Main exposing (main)\n\
-                   import Ipe.Html exposing (..)\n\
                    import Ipe.Ui exposing (..)\n\
+                   import Ipe.Ui.Input exposing (..)\n\
                    text = 1\n\
                    main = text\n";
         let Some((m, i)) = canon_src(src) else {
@@ -3156,16 +3171,16 @@ mod tests {
     #[test]
     fn stdlib_wildcard_shadowed_by_explicit_exposing() {
         // An explicit `exposing (text)` (higher priority, in `env.vars`) wins over
-        // a wildcard `text`; the pair is NOT ambiguous. Resolves to Html.text.
+        // a wildcard `text`; the pair is NOT ambiguous. Resolves to Input.text.
         let src = "module Main exposing (main)\n\
                    import Ipe.Ui exposing (..)\n\
-                   import Ipe.Html exposing (text)\n\
+                   import Ipe.Ui.Input exposing (text)\n\
                    main = text\n";
         let Some((m, i)) = canon_src(src) else {
             assert!(false_marker(), "explicit exposure wins over wildcard");
             return;
         };
-        assert_main_is_kernel(&m, &i, "Html", "text");
+        assert_main_is_kernel(&m, &i, "Input", "text");
     }
 
     #[test]
@@ -3173,14 +3188,14 @@ mod tests {
         // Importing the same module under an alias AND a wildcard must not fake a
         // self-ambiguity (dedup by canonical qualifier).
         let src = "module Main exposing (main)\n\
-                   import Ipe.Html exposing (..)\n\
-                   import Ipe.Html as H exposing (..)\n\
-                   main = div\n";
+                   import Ipe.Ui exposing (..)\n\
+                   import Ipe.Ui as U exposing (..)\n\
+                   main = el\n";
         let Some((m, i)) = canon_src(src) else {
             assert!(false_marker(), "same module twice must not be ambiguous");
             return;
         };
-        assert_main_is_kernel(&m, &i, "Html", "div");
+        assert_main_is_kernel(&m, &i, "Ui", "el");
     }
 
     #[test]

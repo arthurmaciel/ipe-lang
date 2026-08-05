@@ -2487,7 +2487,66 @@ fn inject_dep_exports(
 ) -> DResult<()> {
     let dep_path = &dep.path;
 
+    // A compiled-source STDLIB dep (`Ipe.*`) imported open (`exposing (..)`)
+    // floods the DEFERRED wildcard tier, not the eager `env.vars`: an `import
+    // Ipe.Html exposing (..)` + `import Ipe.Html.Attributes exposing (..)` both
+    // expose a bare `title` (the `<title>` element vs the `title=` attribute),
+    // but that overlap is only a conflict if the program actually uses bare
+    // `title` — the deferred Elm open-import rule (see `resolve_wildcard_var`).
+    // A user multi-file dep keeps the eager import-time ambiguity check.
+    let is_stdlib_dep = dep_path.first().and_then(|s| interner.resolve(*s)) == Some("Ipe");
+
     match &import.exposing.value {
+        src::Exposing::All if is_stdlib_dep => {
+            // Deferred wildcard flood — keyed by the dep's leaf segment so two
+            // distinct stdlib modules exposing the same bare name register as two
+            // origins (ambiguous only at a bare use site), while a re-import of the
+            // SAME module collapses to one origin (never a self-ambiguity).
+            let origin_key = dep_path
+                .last()
+                .copied()
+                .unwrap_or_else(|| dep_path.first().copied().unwrap_or_else(name_zero));
+            for &name in &dep.values {
+                let home = dep.kernel_aliases.get(&name).map_or_else(
+                    || VarHome::TopLevel(dep_path.clone()),
+                    |a| VarHome::Kernel(a.id, a.module, a.function),
+                );
+                std::rc::Rc::make_mut(&mut env.wildcard_vars)
+                    .entry(name)
+                    .or_default()
+                    .insert(
+                        origin_key,
+                        WildcardOrigin {
+                            home,
+                            dep_path: dep_path.clone(),
+                        },
+                    );
+            }
+            // Types + ctors + aliases still inject eagerly: the `title` overlap is
+            // value-only, and a reserved builtin type (`Attribute`) resolves to the
+            // same home from either module, so `inject_dep_type` is idempotent.
+            for (&type_name, home) in &dep.types {
+                inject_dep_type(type_home_map, type_name, home, import.name.span, interner)?;
+                inject_ctors_for_type(
+                    type_name,
+                    dep,
+                    env,
+                    import.name.span,
+                    unqual_ctor_origins,
+                    interner,
+                )?;
+            }
+            for (&alias_name, ea) in &dep.aliases {
+                injected_aliases
+                    .entry(alias_name)
+                    .or_insert_with(|| AliasDef {
+                        params: ea.params.clone(),
+                        body: ea.body.clone(),
+                        dep_scope_types: Some(dep.scope_types.clone()),
+                        dep_scope_aliases: Some(dep.scope_aliases.clone()),
+                    });
+            }
+        }
         src::Exposing::All => {
             // Inject all dep values unqualified.
             for &name in &dep.values {

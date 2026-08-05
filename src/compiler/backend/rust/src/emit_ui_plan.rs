@@ -92,10 +92,6 @@ pub enum NativeUiEmit {
     InputRadioRow,
     /// `Html.voidNode` — a runtime-tag void element (empty children vec).
     HtmlVoidNode,
-    /// A fixed-tag `Html` container element, keyed by `html_element_tag`.
-    HtmlContainer,
-    /// A fixed-tag `Html` void element, keyed by `html_element_tag`.
-    HtmlVoid,
     /// `Ui.onInput` — string-carrying event handler, peel-hoisted Arc callback.
     OnInput,
     /// `Ui.onChange` — string-carrying event handler, peel-hoisted Arc callback.
@@ -429,13 +425,6 @@ pub const fn ui_call_shape(k: KernelFn) -> Option<UiEmitPlan> {
         KernelFn::HtmlDoctype => pos("ipe_runtime::ui::helpers::html_doctype_", 1),
         KernelFn::HtmlTitleNode => pos("ipe_runtime::ui::helpers::html_title_node_", 1),
         KernelFn::HtmlStyleNode => pos("ipe_runtime::ui::helpers::html_style_node_", 2),
-        KernelFn::HtmlDiv => pos("ipe_runtime::ui::helpers::html_div_", 2),
-        KernelFn::HtmlSpan => pos("ipe_runtime::ui::helpers::html_span_", 2),
-        KernelFn::HtmlA => pos("ipe_runtime::ui::helpers::html_a_", 2),
-        KernelFn::HtmlButton => pos("ipe_runtime::ui::helpers::html_button_", 2),
-        KernelFn::HtmlP => pos("ipe_runtime::ui::helpers::html_p_", 2),
-        KernelFn::HtmlInput => pos("ipe_runtime::ui::helpers::html_input_", 1),
-        KernelFn::HtmlImg => pos("ipe_runtime::ui::helpers::html_img_", 1),
 
         // ── Plain-message event attrs ─────────────────────────────────────
         KernelFn::UiOnClick => pos("ipe_runtime::ui::helpers::ui_on_click_", 1),
@@ -483,8 +472,6 @@ pub const fn ui_call_shape(k: KernelFn) -> Option<UiEmitPlan> {
 
         // ── Predicate-keyed HTML families ─────────────────────────────────
         _ if k.html_event_shape().is_some() => native(N::HtmlEvent),
-        _ if k.is_html_container() => native(N::HtmlContainer),
-        _ if k.is_html_void() => native(N::HtmlVoid),
 
         // Not a UI-family kernel — no plan.
         _ => return None,
