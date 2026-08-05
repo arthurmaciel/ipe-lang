@@ -16375,28 +16375,6 @@ impl<'a> Lowerer<'a> {
                 | KernelFn::WebViewApp
                 // `Terminal.appLines : TerminalCfg model msg -> Task Error ()`
                 | KernelFn::TerminalAppLines
-                // Ipe.Html.Attributes fixed-key builders (`String`/`Bool`
-                // -> Attribute msg).
-                | KernelFn::HtmlAttrClass
-                | KernelFn::HtmlAttrId
-                | KernelFn::HtmlAttrHref
-                | KernelFn::HtmlAttrSrc
-                | KernelFn::HtmlAttrAlt
-                | KernelFn::HtmlAttrValue
-                | KernelFn::HtmlAttrName
-                | KernelFn::HtmlAttrPlaceholder
-                | KernelFn::HtmlAttrType
-                | KernelFn::HtmlAttrFor
-                | KernelFn::HtmlAttrStyle
-                | KernelFn::HtmlAttrTitle
-                | KernelFn::HtmlAttrChecked
-                | KernelFn::HtmlAttrDisabled
-                | KernelFn::HtmlAttrReadonly
-                | KernelFn::HtmlAttrRequired
-                | KernelFn::HtmlAttrMultiple
-                | KernelFn::HtmlAttrSelected
-                | KernelFn::HtmlAttrAutofocus
-                | KernelFn::HtmlAttrAutocomplete
                 // ── arity 1 ────────────────────────────────────
                 | KernelFn::UiAspectRatio
                 | KernelFn::UiName
@@ -16417,8 +16395,6 @@ impl<'a> Lowerer<'a> {
                 | KernelFn::FontActiveColor
                 | KernelFn::FontDisabledColor
                 | KernelFn::FontHoverSize
-                | KernelFn::HtmlAttrTabindex
-                | KernelFn::HtmlAttrRows
                 // ── Ipe.Ui.Region — arity-1 attrs ─────────────────────────
                 | KernelFn::RegionHeading
                 | KernelFn::RegionLabel
@@ -17969,29 +17945,11 @@ impl<'a> Lowerer<'a> {
                     ("Html", "source") => Ok(Callee::Kernel(KernelFn::HtmlSource)),
                     ("Html", "track") => Ok(Callee::Kernel(KernelFn::HtmlTrack)),
                     ("Html", "wbr") => Ok(Callee::Kernel(KernelFn::HtmlWbr)),
-                    // ── Ipe.Html.Attributes builders (legacy arm; the
-                    //    id-fast-path handles these in practice, this arm keeps
-                    //    decl() ⇔ legacy parity per `decl_equiv_legacy_match`). ──
-                    ("Attr", "class") => Ok(Callee::Kernel(KernelFn::HtmlAttrClass)),
-                    ("Attr", "id") => Ok(Callee::Kernel(KernelFn::HtmlAttrId)),
-                    ("Attr", "href") => Ok(Callee::Kernel(KernelFn::HtmlAttrHref)),
-                    ("Attr", "src") => Ok(Callee::Kernel(KernelFn::HtmlAttrSrc)),
-                    ("Attr", "alt") => Ok(Callee::Kernel(KernelFn::HtmlAttrAlt)),
-                    ("Attr", "value") => Ok(Callee::Kernel(KernelFn::HtmlAttrValue)),
-                    ("Attr", "name") => Ok(Callee::Kernel(KernelFn::HtmlAttrName)),
-                    ("Attr", "placeholder") => Ok(Callee::Kernel(KernelFn::HtmlAttrPlaceholder)),
-                    ("Attr", "type_") => Ok(Callee::Kernel(KernelFn::HtmlAttrType)),
-                    ("Attr", "for_") => Ok(Callee::Kernel(KernelFn::HtmlAttrFor)),
-                    ("Attr", "style") => Ok(Callee::Kernel(KernelFn::HtmlAttrStyle)),
-                    ("Attr", "title") => Ok(Callee::Kernel(KernelFn::HtmlAttrTitle)),
-                    ("Attr", "checked") => Ok(Callee::Kernel(KernelFn::HtmlAttrChecked)),
-                    ("Attr", "disabled") => Ok(Callee::Kernel(KernelFn::HtmlAttrDisabled)),
-                    ("Attr", "readonly") => Ok(Callee::Kernel(KernelFn::HtmlAttrReadonly)),
-                    ("Attr", "required") => Ok(Callee::Kernel(KernelFn::HtmlAttrRequired)),
-                    ("Attr", "multiple") => Ok(Callee::Kernel(KernelFn::HtmlAttrMultiple)),
-                    ("Attr", "selected") => Ok(Callee::Kernel(KernelFn::HtmlAttrSelected)),
-                    ("Attr", "autofocus") => Ok(Callee::Kernel(KernelFn::HtmlAttrAutofocus)),
-                    ("Attr", "autocomplete") => Ok(Callee::Kernel(KernelFn::HtmlAttrAutocomplete)),
+                    // ── Ipe.Html.Attributes retained primitives (legacy arm; the
+                    //    `Ffi.kernel "Attr_*"` alias handles these in practice,
+                    //    this arm keeps decl() ⇔ legacy parity per
+                    //    `decl_equiv_legacy_match`). The fixed-key builders are
+                    //    pure Ipê over these in `Ipe/Html/Attributes.ipe`. ──
                     ("Attr", "attribute") => Ok(Callee::Kernel(KernelFn::HtmlAttribute)),
                     ("Attr", "boolAttribute") => Ok(Callee::Kernel(KernelFn::HtmlBoolAttribute)),
                     ("Attr", "noAttr") => Ok(Callee::Kernel(KernelFn::HtmlNoAttr)),
@@ -18102,8 +18060,6 @@ impl<'a> Lowerer<'a> {
                     ("Font", "activeColor") => Ok(Callee::Kernel(KernelFn::FontActiveColor)),
                     ("Font", "disabledColor") => Ok(Callee::Kernel(KernelFn::FontDisabledColor)),
                     ("Font", "hoverSize") => Ok(Callee::Kernel(KernelFn::FontHoverSize)),
-                    ("Attr", "tabindex") => Ok(Callee::Kernel(KernelFn::HtmlAttrTabindex)),
-                    ("Attr", "rows") => Ok(Callee::Kernel(KernelFn::HtmlAttrRows)),
                     // ── Ipe.Ui.Region sub-module ───────────────────────
                     ("Region", "mainContent") => Ok(Callee::Kernel(KernelFn::RegionMainContent)),
                     ("Region", "navigation") => Ok(Callee::Kernel(KernelFn::RegionNavigation)),

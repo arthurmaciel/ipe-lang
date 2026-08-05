@@ -1077,7 +1077,8 @@ pub fn canonicalise_module_in_project(
     // Build the export surface from the module's own `exposing (…)` clause.
     // Then record the full type scope so importers can use it when expanding
     // this module's alias bodies (see `AliasDef::dep_scope_types`).
-    let mut exports = build_module_exports(&home, m, &env, &synth_ctor_names, &kernel_aliases);
+    let mut exports =
+        build_module_exports(&home, m, &env, &synth_ctor_names, &kernel_aliases, interner);
     exports.scope_types = type_home_map;
 
     // Build the full alias scope: own local aliases + all injected dep aliases.
@@ -1626,6 +1627,35 @@ fn inject_stdlib_exposed_type_homes(
         return Ok(());
     }
 
+    // The module's OWN home-sensitive builtin type exposure. A compiled-source
+    // Html-family module (`Ipe.Html.Attributes`) writes its builders'
+    // signatures over the bare `Attribute` it defines; without recording the
+    // `["Html"]` home here, that bare `Attribute` reaches the empty-home
+    // sentinel and mis-lowers to `ui::element::Attribute` while the body
+    // produces `html::Attribute` — a cargo-fail E0308. Keyed on the module's own
+    // Html-family name + its `module … exposing` list, mirroring the import case.
+    let self_is_html_family = m
+        .name
+        .value
+        .iter()
+        .any(|s| interner.resolve(*s) == Some("Html"));
+    if self_is_html_family && let src::Exposing::List(items) = &m.exposing.value {
+        for item in items {
+            let src::Exposed::Type(type_name, _privacy) = &item.value else {
+                continue;
+            };
+            let Some(resolved) = interner.resolve(*type_name) else {
+                continue;
+            };
+            if !HOME_SENSITIVE_BUILTIN_TYPES.contains(&resolved) {
+                continue;
+            }
+            type_home_map
+                .entry(*type_name)
+                .or_insert_with(|| vec![html_sym]);
+        }
+    }
+
     for import in &m.imports {
         let src::Exposing::List(items) = &import.exposing.value else {
             continue;
@@ -1674,8 +1704,14 @@ fn inject_stdlib_exposed_type_homes(
 /// type unifies with `Html.node`'s parameter rather than minting a distinct
 /// `Ipe.Html.Attributes.Attribute`.
 ///
-/// A qualifier the user has ALSO bound to a real dep module keeps its dep path
-/// (`entry(..).or_insert` — the dep-path insertion runs first and wins).
+/// An Html-family qualifier resolves to `["Html"]` even when the same qualifier
+/// was already bound to the compiled-source `Ipe.Html.Attributes` dep path: a
+/// qualified `Attr.Attribute` type ref must lower to the `html::Attribute` home
+/// the HM constrainer and the lowerer's `is_html` check both expect. Forcing
+/// `["Html"]` here (over the just-inserted `["Ipe","Html","Attributes"]` dep
+/// path) is the qualified-type counterpart of the `["Html"]` builtin home
+/// recorded in `build_module_exports`; the value members are unaffected (they
+/// resolve through the compiled-source module, not `qualifier_paths`).
 ///
 /// # Errors
 /// [`Diagnostic::CompilerBug`] if interning `Html` exhausts the interner.
@@ -1698,9 +1734,21 @@ fn fold_html_stdlib_qualifier_homes(
         let qualifier = import
             .alias
             .unwrap_or_else(|| dep_path.last().copied().unwrap_or_else(name_zero));
-        qualifier_paths
-            .entry(qualifier)
-            .or_insert_with(|| vec![html_sym]);
+        // A stdlib `Ipe.Html*` import forces `["Html"]` even over the
+        // compiled-source `Ipe.Html.Attributes` dep path already inserted by the
+        // user-dep loop (so `Attr.Attribute` lowers to `html::Attribute`). A
+        // non-stdlib Html-family user dep keeps its own path (`or_insert`).
+        let is_stdlib_html = matches!(
+            dep_path.first().and_then(|s| interner.resolve(*s)),
+            Some("Ipe")
+        );
+        if is_stdlib_html {
+            qualifier_paths.insert(qualifier, vec![html_sym]);
+        } else {
+            qualifier_paths
+                .entry(qualifier)
+                .or_insert_with(|| vec![html_sym]);
+        }
     }
     Ok(())
 }
@@ -2731,6 +2779,7 @@ fn build_module_exports(
     env: &Env,
     synth_ctor_names: &BTreeSet<Symbol>,
     kernel_aliases: &BTreeMap<Symbol, KernelAlias>,
+    interner: &Interner,
 ) -> crate::ModuleExports {
     let mut exports = crate::ModuleExports {
         path: home.to_owned(),
@@ -2791,6 +2840,32 @@ fn build_module_exports(
                                     }
                                 }
                             }
+                        } else if let Some(resolved) = interner
+                            .resolve(*type_name)
+                            .filter(|n| is_reserved_builtin_type_name(n))
+                        {
+                            // A compiled-source stdlib module re-exports a reserved
+                            // builtin TYPE it does not (and, for `Attribute` et al.,
+                            // may not) declare as a source ADT — e.g. `Ipe.Path
+                            // exposing (Path)`, `Ipe.Html.Attributes exposing
+                            // (Attribute)`. Record it so an importer's `exposing
+                            // (T)` resolves instead of failing `NameNotExposed`; no
+                            // constructors (a builtin carrier has none at source).
+                            //
+                            // A HOME-SENSITIVE builtin (`Attribute` / `Event`) is
+                            // recorded under `["Html"]`, the home the HM constrainer
+                            // and the lowerer's `is_html` check both expect — the
+                            // full module path would mint a nominally-distinct
+                            // `Attribute` that fails to unify with `Html.node`'s
+                            // parameter (an exit-0-then-cargo-fail E0308).
+                            let builtin_home = if HOME_SENSITIVE_BUILTIN_TYPES.contains(&resolved) {
+                                interner
+                                    .lookup("Html")
+                                    .map_or_else(|| home.to_owned(), |html| vec![html])
+                            } else {
+                                home.to_owned()
+                            };
+                            exports.types.insert(*type_name, builtin_home);
                         } else if own_alias_names.contains(type_name) {
                             for a in &m.aliases {
                                 if a.value.name.value == *type_name {

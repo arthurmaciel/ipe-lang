@@ -1,0 +1,141 @@
+-- | Ipe.Html.Attributes — HTML attribute builders (Layer 3 Ipe source).
+--
+-- Every fixed-key builder (`class` / `id` / `checked` / …) is ordinary Ipê over
+-- the three retained native primitives `attribute` / `boolAttribute` / `noAttr`,
+-- which are the irreducible `Attribute`-value constructors reached through
+-- `Ffi.kernel` aliases (`html_named_attr_` / `html_bool_named_attr_` /
+-- `html_no_attr_`). The attribute VALUE is escaped at the native render sink
+-- (`escape_attr`), so no escaping happens here; the fixed keys are literals.
+module Ipe.Html.Attributes exposing
+    ( Attribute
+    , attribute, boolAttribute, noAttr
+    , class, id, href, src, alt, value, name, placeholder
+    , type_, for_, style, title, autocomplete
+    , checked, disabled, readonly, required, multiple, selected, autofocus
+    , tabindex, rows
+    )
+
+
+import Ipe.Ffi as Ffi
+import Ipe.String as String
+
+
+-- | `attribute key value` — a plain `key="value"` HTML attribute. The one
+-- string-valued `Attribute` constructor every fixed-key string builder below
+-- specialises.
+attribute : String -> String -> Attribute msg
+attribute = Ffi.kernel "Attr_attribute"
+
+
+-- | `boolAttribute key on` — a boolean HTML attribute (emitted bare when `on`
+-- is `True`, omitted otherwise). The one bool-valued `Attribute` constructor
+-- every fixed-key bool builder below specialises.
+boolAttribute : String -> Bool -> Attribute msg
+boolAttribute = Ffi.kernel "Attr_boolAttribute"
+
+
+-- | `noAttr` — the identity attribute (renders nothing). Makes "no attribute" a
+-- first-class value rather than a `Maybe`/sentinel.
+noAttr : Attribute msg
+noAttr = Ffi.kernel "Attr_noAttr"
+
+
+-- ── String fixed-key attributes ──────────────────────────────────────────────
+
+class : String -> Attribute msg
+class = attribute "class"
+
+
+id : String -> Attribute msg
+id = attribute "id"
+
+
+href : String -> Attribute msg
+href = attribute "href"
+
+
+src : String -> Attribute msg
+src = attribute "src"
+
+
+alt : String -> Attribute msg
+alt = attribute "alt"
+
+
+value : String -> Attribute msg
+value = attribute "value"
+
+
+name : String -> Attribute msg
+name = attribute "name"
+
+
+placeholder : String -> Attribute msg
+placeholder = attribute "placeholder"
+
+
+-- | `type_` — the `type` attribute (`type` is an Ipê keyword-adjacent spelling).
+type_ : String -> Attribute msg
+type_ = attribute "type"
+
+
+-- | `for_` — the `for` attribute (`for` is an Ipê keyword).
+for_ : String -> Attribute msg
+for_ = attribute "for"
+
+
+style : String -> Attribute msg
+style = attribute "style"
+
+
+title : String -> Attribute msg
+title = attribute "title"
+
+
+autocomplete : String -> Attribute msg
+autocomplete = attribute "autocomplete"
+
+
+-- ── Bool fixed-key attributes ────────────────────────────────────────────────
+
+checked : Bool -> Attribute msg
+checked = boolAttribute "checked"
+
+
+disabled : Bool -> Attribute msg
+disabled = boolAttribute "disabled"
+
+
+readonly : Bool -> Attribute msg
+readonly = boolAttribute "readonly"
+
+
+required : Bool -> Attribute msg
+required = boolAttribute "required"
+
+
+multiple : Bool -> Attribute msg
+multiple = boolAttribute "multiple"
+
+
+selected : Bool -> Attribute msg
+selected = boolAttribute "selected"
+
+
+autofocus : Bool -> Attribute msg
+autofocus = boolAttribute "autofocus"
+
+
+-- ── Int fixed-key attributes ─────────────────────────────────────────────────
+
+-- | `tabindex n` — the `tabindex` attribute, rendered as its decimal string.
+tabindex : Int -> Attribute msg
+tabindex n =
+    attribute "tabindex" (String.fromInt n)
+
+
+-- | `rows n` — the `<textarea>` `rows` attribute, rendered as its decimal
+-- string.
+rows : Int -> Attribute msg
+rows n =
+    attribute "rows" (String.fromInt n)

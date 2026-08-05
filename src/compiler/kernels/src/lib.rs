@@ -1544,31 +1544,10 @@ pub enum StdlibKernel {
     HtmlSource,
     HtmlTrack,
     HtmlWbr,
-    // ── Ipe.Html.Attributes builders (corpus-used direct-backing) ───────
-    // String fixed-key attributes (`String -> Attribute msg`). The wire key is
-    // the member name except `type_`→`type` / `for_`→`for` (see `html_attr_key`).
-    HtmlAttrClass,
-    HtmlAttrId,
-    HtmlAttrHref,
-    HtmlAttrSrc,
-    HtmlAttrAlt,
-    HtmlAttrValue,
-    HtmlAttrName,
-    HtmlAttrPlaceholder,
-    HtmlAttrType,
-    HtmlAttrFor,
-    HtmlAttrStyle,
-    HtmlAttrTitle,
-    // Bool fixed-key attributes (`Bool -> Attribute msg`).
-    HtmlAttrChecked,
-    HtmlAttrDisabled,
-    HtmlAttrReadonly,
-    HtmlAttrRequired,
-    HtmlAttrMultiple,
-    HtmlAttrSelected,
-    HtmlAttrAutofocus,
-    HtmlAttrAutocomplete, // `autocomplete : String -> Attribute msg`
-    // Generic attribute builders + identity.
+    // ── Ipe.Html.Attributes retained primitives ─────────────────────────
+    // The three irreducible `Attribute`-value constructors. The fixed-key
+    // builders (`class`/`checked`/…) are pure Ipê in `Ipe/Html/Attributes.ipe`
+    // over these, reached via `Ffi.kernel "Attr_attribute"` etc.
     HtmlAttribute,     // `attribute : String -> String -> Attribute msg`
     HtmlBoolAttribute, // `boolAttribute : String -> Bool -> Attribute msg`
     HtmlNoAttr,        // `noAttr : Attribute msg`
@@ -1729,9 +1708,6 @@ pub enum StdlibKernel {
     FontActiveColor,
     FontDisabledColor,
     FontHoverSize, // Int → Attr pseudo
-    // Html.Attributes — tabindex, rows
-    HtmlAttrTabindex, // Int → HtmlAttr
-    HtmlAttrRows,     // Int → HtmlAttr  (<textarea rows="N">)
     // ── Effect stdlib modules ────────────────────────────────────────
     // `Terminal.appLines` — line-oriented TEA app-entry, `view : Model ->
     // String`, driven by `onLine`.
@@ -3271,29 +3247,10 @@ impl StdlibKernel {
             Self::HtmlTrack => d("Html", "track", 1, Ui, "html_node_"),
             Self::HtmlWbr => d("Html", "wbr", 1, Ui, "html_node_"),
             // ── Ipe.Html.Attributes builders ────────────────────────────
-            // Qualifier "Attr" matches the `QUALIFIERS` table in env.rs. Emit
-            // routes through the two generic runtime helpers; the fixed key is
-            // supplied by the emit arm (see `html_attr_key`).
-            Self::HtmlAttrClass => d("Attr", "class", 1, Ui, "html_named_attr_"),
-            Self::HtmlAttrId => d("Attr", "id", 1, Ui, "html_named_attr_"),
-            Self::HtmlAttrHref => d("Attr", "href", 1, Ui, "html_named_attr_"),
-            Self::HtmlAttrSrc => d("Attr", "src", 1, Ui, "html_named_attr_"),
-            Self::HtmlAttrAlt => d("Attr", "alt", 1, Ui, "html_named_attr_"),
-            Self::HtmlAttrValue => d("Attr", "value", 1, Ui, "html_named_attr_"),
-            Self::HtmlAttrName => d("Attr", "name", 1, Ui, "html_named_attr_"),
-            Self::HtmlAttrPlaceholder => d("Attr", "placeholder", 1, Ui, "html_named_attr_"),
-            Self::HtmlAttrType => d("Attr", "type_", 1, Ui, "html_named_attr_"),
-            Self::HtmlAttrFor => d("Attr", "for_", 1, Ui, "html_named_attr_"),
-            Self::HtmlAttrStyle => d("Attr", "style", 1, Ui, "html_named_attr_"),
-            Self::HtmlAttrTitle => d("Attr", "title", 1, Ui, "html_named_attr_"),
-            Self::HtmlAttrChecked => d("Attr", "checked", 1, Ui, "html_bool_named_attr_"),
-            Self::HtmlAttrDisabled => d("Attr", "disabled", 1, Ui, "html_bool_named_attr_"),
-            Self::HtmlAttrReadonly => d("Attr", "readonly", 1, Ui, "html_bool_named_attr_"),
-            Self::HtmlAttrRequired => d("Attr", "required", 1, Ui, "html_bool_named_attr_"),
-            Self::HtmlAttrMultiple => d("Attr", "multiple", 1, Ui, "html_bool_named_attr_"),
-            Self::HtmlAttrSelected => d("Attr", "selected", 1, Ui, "html_bool_named_attr_"),
-            Self::HtmlAttrAutofocus => d("Attr", "autofocus", 1, Ui, "html_bool_named_attr_"),
-            Self::HtmlAttrAutocomplete => d("Attr", "autocomplete", 1, Ui, "html_named_attr_"),
+            // Qualifier "Attr" matches the `Ffi.kernel "Attr_*"` alias namespace
+            // (the compiled-source `Ipe.Html.Attributes` reaches these three
+            // retained primitives through it). Emit routes through the generic
+            // runtime helpers; a fixed key is a plain runtime argument.
             Self::HtmlAttribute => d("Attr", "attribute", 2, Ui, "html_named_attr_"),
             Self::HtmlBoolAttribute => d("Attr", "boolAttribute", 2, Ui, "html_bool_named_attr_"),
             Self::HtmlNoAttr => d("Attr", "noAttr", 0, Ui, "html_no_attr_"),
@@ -3422,9 +3379,6 @@ impl StdlibKernel {
             Self::FontActiveColor => d("Font", "activeColor", 1, Ui, "ui_font_active_color_"),
             Self::FontDisabledColor => d("Font", "disabledColor", 1, Ui, "ui_font_disabled_color_"),
             Self::FontHoverSize => d("Font", "hoverSize", 1, Ui, "ui_font_hover_size_"),
-            // Html.Attributes
-            Self::HtmlAttrTabindex => d("Attr", "tabindex", 1, Ui, "html_attr_tabindex_"),
-            Self::HtmlAttrRows => d("Attr", "rows", 1, Ui, "html_attr_rows_"),
             // ── Effect stdlib modules ────────────────────────────────────
             // Ipe.Terminal line-oriented app-entry.
             Self::TerminalAppLines => d("Terminal", "appLines", 1, Terminal, "ipe_console_app_"),
@@ -4651,28 +4605,8 @@ impl StdlibKernel {
         Self::HtmlSource,
         Self::HtmlTrack,
         Self::HtmlWbr,
-        // Ipe.Html.Attributes builders (all registered under "Attr" in
-        // env.rs QUALIFIERS).
-        Self::HtmlAttrClass,
-        Self::HtmlAttrId,
-        Self::HtmlAttrHref,
-        Self::HtmlAttrSrc,
-        Self::HtmlAttrAlt,
-        Self::HtmlAttrValue,
-        Self::HtmlAttrName,
-        Self::HtmlAttrPlaceholder,
-        Self::HtmlAttrType,
-        Self::HtmlAttrFor,
-        Self::HtmlAttrStyle,
-        Self::HtmlAttrTitle,
-        Self::HtmlAttrChecked,
-        Self::HtmlAttrDisabled,
-        Self::HtmlAttrReadonly,
-        Self::HtmlAttrRequired,
-        Self::HtmlAttrMultiple,
-        Self::HtmlAttrSelected,
-        Self::HtmlAttrAutofocus,
-        Self::HtmlAttrAutocomplete,
+        // Ipe.Html.Attributes retained primitives (reached from the
+        // compiled-source module via `Ffi.kernel "Attr_*"`).
         Self::HtmlAttribute,
         Self::HtmlBoolAttribute,
         Self::HtmlNoAttr,
@@ -4777,8 +4711,6 @@ impl StdlibKernel {
         Self::FontActiveColor,
         Self::FontDisabledColor,
         Self::FontHoverSize,
-        Self::HtmlAttrTabindex,
-        Self::HtmlAttrRows,
         // ── Effect stdlib modules ────────────────────────────────────────
         Self::TerminalAppLines,
         Self::AuthHashPassword,
@@ -6639,10 +6571,8 @@ impl StdlibKernel {
         // `styleNode : List (Html.Attribute msg) -> String -> Html msg`.
         const STRING_TO_HTML_A_INNER: TyShape = TyShape::Fun(&STRING, &HTML_A);
         const HTML_STYLE_NODE: TyShape = TyShape::Fun(&LIST_HTML_ATTR_A, &STRING_TO_HTML_A_INNER);
-        // Html.Attributes builders.
-        const STRING_TO_HTML_ATTR_A: TyShape = TyShape::Fun(&STRING, &HTML_ATTR_A);
+        // Html.Attributes retained primitives.
         const BOOL_TO_HTML_ATTR_A: TyShape = TyShape::Fun(&BOOL, &HTML_ATTR_A);
-        const INT_TO_HTML_ATTR_A: TyShape = TyShape::Fun(&INT, &HTML_ATTR_A);
         // `attribute : String -> String -> Html.Attribute msg`.
         const STRING_TO_HTML_ATTR_A_INNER: TyShape = TyShape::Fun(&STRING, &HTML_ATTR_A);
         const STRING_TO_STRING_TO_HTML_ATTR_A: TyShape =
@@ -8000,30 +7930,9 @@ impl StdlibKernel {
             | Self::HtmlTrack
             | Self::HtmlWbr => Some(&LIST_HTML_ATTR_A_TO_HTML_A),
             Self::HtmlStyleNode => Some(&HTML_STYLE_NODE),
-            Self::HtmlAttrClass
-            | Self::HtmlAttrId
-            | Self::HtmlAttrHref
-            | Self::HtmlAttrSrc
-            | Self::HtmlAttrAlt
-            | Self::HtmlAttrValue
-            | Self::HtmlAttrName
-            | Self::HtmlAttrPlaceholder
-            | Self::HtmlAttrType
-            | Self::HtmlAttrFor
-            | Self::HtmlAttrStyle
-            | Self::HtmlAttrTitle
-            | Self::HtmlAttrAutocomplete => Some(&STRING_TO_HTML_ATTR_A),
-            Self::HtmlAttrChecked
-            | Self::HtmlAttrDisabled
-            | Self::HtmlAttrReadonly
-            | Self::HtmlAttrRequired
-            | Self::HtmlAttrMultiple
-            | Self::HtmlAttrSelected
-            | Self::HtmlAttrAutofocus => Some(&BOOL_TO_HTML_ATTR_A),
             Self::HtmlAttribute => Some(&STRING_TO_STRING_TO_HTML_ATTR_A),
             Self::HtmlBoolAttribute => Some(&STRING_TO_BOOL_TO_HTML_ATTR_A),
             Self::HtmlNoAttr => Some(&HTML_ATTR_A),
-            Self::HtmlAttrTabindex | Self::HtmlAttrRows => Some(&INT_TO_HTML_ATTR_A),
 
             // ── Ipe.Ui element builders. ──
             Self::UiNone => Some(&UI_ELEM_A),
@@ -9058,26 +8967,6 @@ impl StdlibKernel {
             | Self::HtmlSource
             | Self::HtmlTrack
             | Self::HtmlWbr
-            | Self::HtmlAttrClass
-            | Self::HtmlAttrId
-            | Self::HtmlAttrHref
-            | Self::HtmlAttrSrc
-            | Self::HtmlAttrAlt
-            | Self::HtmlAttrValue
-            | Self::HtmlAttrName
-            | Self::HtmlAttrPlaceholder
-            | Self::HtmlAttrType
-            | Self::HtmlAttrFor
-            | Self::HtmlAttrStyle
-            | Self::HtmlAttrTitle
-            | Self::HtmlAttrChecked
-            | Self::HtmlAttrDisabled
-            | Self::HtmlAttrReadonly
-            | Self::HtmlAttrRequired
-            | Self::HtmlAttrMultiple
-            | Self::HtmlAttrSelected
-            | Self::HtmlAttrAutofocus
-            | Self::HtmlAttrAutocomplete
             | Self::HtmlAttribute
             | Self::HtmlBoolAttribute
             | Self::HtmlNoAttr
@@ -9171,8 +9060,6 @@ impl StdlibKernel {
             | Self::FontActiveColor
             | Self::FontDisabledColor
             | Self::FontHoverSize
-            | Self::HtmlAttrTabindex
-            | Self::HtmlAttrRows
             | Self::TerminalAppLines
             | Self::AuthHashPassword
             | Self::AuthHashPasswordCost
@@ -10444,26 +10331,6 @@ impl StdlibKernel {
                 | Self::HtmlSource
                 | Self::HtmlTrack
                 | Self::HtmlWbr
-                | Self::HtmlAttrClass
-                | Self::HtmlAttrId
-                | Self::HtmlAttrHref
-                | Self::HtmlAttrSrc
-                | Self::HtmlAttrAlt
-                | Self::HtmlAttrValue
-                | Self::HtmlAttrName
-                | Self::HtmlAttrPlaceholder
-                | Self::HtmlAttrType
-                | Self::HtmlAttrFor
-                | Self::HtmlAttrStyle
-                | Self::HtmlAttrTitle
-                | Self::HtmlAttrChecked
-                | Self::HtmlAttrDisabled
-                | Self::HtmlAttrReadonly
-                | Self::HtmlAttrRequired
-                | Self::HtmlAttrMultiple
-                | Self::HtmlAttrSelected
-                | Self::HtmlAttrAutofocus
-                | Self::HtmlAttrAutocomplete
                 | Self::HtmlAttribute
                 | Self::HtmlBoolAttribute
                 | Self::HtmlNoAttr
@@ -10553,8 +10420,6 @@ impl StdlibKernel {
                 | Self::FontActiveColor
                 | Self::FontDisabledColor
                 | Self::FontHoverSize
-                | Self::HtmlAttrTabindex
-                | Self::HtmlAttrRows
                 // ── Ipe.Ui.Region ──────────────────────────────────────
                 | Self::RegionMainContent
                 | Self::RegionNavigation
@@ -10711,78 +10576,6 @@ impl StdlibKernel {
                 | Self::HtmlOnSubmit
                 | Self::StreamStream
         )
-    }
-
-    /// `true` for a `Ipe.Html.Attributes` string-valued fixed-key builder
-    /// (`class`/`id`/… — `String -> Attribute msg`). Used by the backend emit
-    /// arm to route through `html_named_attr_` with the wire key from
-    /// [`Self::html_attr_key`].
-    #[must_use]
-    pub const fn is_html_str_attr(self) -> bool {
-        matches!(
-            self,
-            Self::HtmlAttrClass
-                | Self::HtmlAttrId
-                | Self::HtmlAttrHref
-                | Self::HtmlAttrSrc
-                | Self::HtmlAttrAlt
-                | Self::HtmlAttrValue
-                | Self::HtmlAttrName
-                | Self::HtmlAttrPlaceholder
-                | Self::HtmlAttrType
-                | Self::HtmlAttrFor
-                | Self::HtmlAttrStyle
-                | Self::HtmlAttrTitle
-                | Self::HtmlAttrAutocomplete
-        )
-    }
-
-    /// `true` for a `Ipe.Html.Attributes` bool-valued fixed-key builder
-    /// (`checked`/`disabled`/… — `Bool -> Attribute msg`).
-    #[must_use]
-    pub const fn is_html_bool_attr(self) -> bool {
-        matches!(
-            self,
-            Self::HtmlAttrChecked
-                | Self::HtmlAttrDisabled
-                | Self::HtmlAttrReadonly
-                | Self::HtmlAttrRequired
-                | Self::HtmlAttrMultiple
-                | Self::HtmlAttrSelected
-                | Self::HtmlAttrAutofocus
-        )
-    }
-
-    /// The wire attribute name for a fixed-key `Ipe.Html.Attributes` builder.
-    /// Matches the member name except for the two Ipê-keyword-avoidance
-    /// spellings `type_`→`type` and `for_`→`for`. `None` for any non-fixed-key
-    /// variant (the generic `attribute`/`boolAttribute` carry the key as a
-    /// runtime argument, `noAttr` has none).
-    #[must_use]
-    pub const fn html_attr_key(self) -> Option<&'static str> {
-        Some(match self {
-            Self::HtmlAttrClass => "class",
-            Self::HtmlAttrId => "id",
-            Self::HtmlAttrHref => "href",
-            Self::HtmlAttrSrc => "src",
-            Self::HtmlAttrAlt => "alt",
-            Self::HtmlAttrValue => "value",
-            Self::HtmlAttrName => "name",
-            Self::HtmlAttrPlaceholder => "placeholder",
-            Self::HtmlAttrType => "type",
-            Self::HtmlAttrFor => "for",
-            Self::HtmlAttrStyle => "style",
-            Self::HtmlAttrTitle => "title",
-            Self::HtmlAttrChecked => "checked",
-            Self::HtmlAttrDisabled => "disabled",
-            Self::HtmlAttrReadonly => "readonly",
-            Self::HtmlAttrRequired => "required",
-            Self::HtmlAttrMultiple => "multiple",
-            Self::HtmlAttrSelected => "selected",
-            Self::HtmlAttrAutofocus => "autofocus",
-            Self::HtmlAttrAutocomplete => "autocomplete",
-            _ => return None,
-        })
     }
 
     /// `true` for a Ipe.Html CONTAINER element builder

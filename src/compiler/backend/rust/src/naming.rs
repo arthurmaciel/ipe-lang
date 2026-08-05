@@ -1237,8 +1237,6 @@ pub const fn kernel_name(k: KernelFn) -> &'static str {
         KernelFn::FontActiveColor => "ui_font_active_color_",
         KernelFn::FontDisabledColor => "ui_font_disabled_color_",
         KernelFn::FontHoverSize => "ui_font_hover_size_",
-        KernelFn::HtmlAttrTabindex => "html_attr_tabindex_",
-        KernelFn::HtmlAttrRows => "html_attr_rows_",
         // ── Ipe.Ui.Region ──────────────────────────────────────────────
         KernelFn::RegionMainContent => "ui_region_main_content_",
         KernelFn::RegionNavigation => "ui_region_navigation_",
@@ -1366,31 +1364,11 @@ pub const fn kernel_name(k: KernelFn) -> &'static str {
         | KernelFn::HtmlSource
         | KernelFn::HtmlTrack
         | KernelFn::HtmlWbr => "html_node_",
-        // Ipe.Html.Attributes builders. The full call (including the fixed
-        // key literal) is produced by `emit_ui_call`; these names are the bare
-        // runtime helpers, kept for the exhaustive match / any generic path.
-        KernelFn::HtmlAttrClass
-        | KernelFn::HtmlAttrId
-        | KernelFn::HtmlAttrHref
-        | KernelFn::HtmlAttrSrc
-        | KernelFn::HtmlAttrAlt
-        | KernelFn::HtmlAttrValue
-        | KernelFn::HtmlAttrName
-        | KernelFn::HtmlAttrPlaceholder
-        | KernelFn::HtmlAttrType
-        | KernelFn::HtmlAttrFor
-        | KernelFn::HtmlAttrStyle
-        | KernelFn::HtmlAttrTitle
-        | KernelFn::HtmlAttrAutocomplete
-        | KernelFn::HtmlAttribute => "html_named_attr_",
-        KernelFn::HtmlAttrChecked
-        | KernelFn::HtmlAttrDisabled
-        | KernelFn::HtmlAttrReadonly
-        | KernelFn::HtmlAttrRequired
-        | KernelFn::HtmlAttrMultiple
-        | KernelFn::HtmlAttrSelected
-        | KernelFn::HtmlAttrAutofocus
-        | KernelFn::HtmlBoolAttribute => "html_bool_named_attr_",
+        // Ipe.Html.Attributes retained primitives. The full call (including the
+        // key argument) is produced by `emit_ui_call`; these names are the bare
+        // runtime helpers.
+        KernelFn::HtmlAttribute => "html_named_attr_",
+        KernelFn::HtmlBoolAttribute => "html_bool_named_attr_",
         KernelFn::HtmlNoAttr => "html_no_attr_",
         // Event-attribute builders
         KernelFn::UiOnClick => "ui_on_click_",
