@@ -20,6 +20,7 @@ import Lib.Db as LibDb exposing (Decision(..))
 import Lib.Format as Format
 import Lib.Highlight as Highlight exposing (Token(..))
 import Lib.Index as Index
+import Lib.Keys as Keys exposing (KeyAction(..))
 import Lib.Links as Links exposing (Link(..))
 import Lib.Queue as Queue
 
@@ -56,6 +57,7 @@ type alias Model =
     , unitPage : Maybe Index.Unit
     , unitLinks : List Links.Link
     , unitError : Maybe String
+    , selected : Int
     }
 
 
@@ -73,6 +75,7 @@ init req =
       , unitPage = Nothing
       , unitLinks = []
       , unitError = Nothing
+      , selected = 0
       }
     , Cmd.batch
         [ Cmd.perform Queue.load PendingLoaded
@@ -123,6 +126,8 @@ type Msg
     | ShowHistory
     | HistoryLoaded (Result Error (List HistoryRow))
     | UnitLoaded (Result Error ( Maybe Index.Unit, List Links.Link ))
+    | KeyDown String
+    | SelectUnit Int
 
 
 update : Msg -> Model -> ( Model, Cmd Msg )
@@ -131,7 +136,7 @@ update msg model =
         PendingLoaded result ->
             case result of
                 Ok units ->
-                    ( { model | queue = units, refusingUid = Nothing }, Cmd.none )
+                    ( { model | queue = units, refusingUid = Nothing, selected = clampIndex model.selected (List.length units) }, Cmd.none )
 
                 Err e ->
                     ( { model | queue = [], queueError = Just (Error.toString e) }, Cmd.none )
@@ -149,11 +154,7 @@ update msg model =
             ( { model | refusingUid = Nothing, refuseDraft = "", refuseError = Nothing }, Cmd.none )
 
         RefuseSubmit uid ->
-            if String.isEmpty (String.trim model.refuseDraft) then
-                ( { model | refuseError = Just "Reason is required" }, Cmd.none )
-
-            else
-                ( { model | refusingUid = Nothing, refuseDraft = "" }, saveDecision model uid (Refused model.refuseDraft) )
+            submitRefuse model uid
 
         DecisionSaved uid result ->
             case result of
@@ -184,6 +185,75 @@ update msg model =
 
                 Err e ->
                     ( { model | unitError = Just ("Unit load failed: " ++ Error.toString e) }, Cmd.none )
+
+        KeyDown key ->
+            keyActionMsg (Keys.keyAction (model.refusingUid /= Nothing) (List.length model.queue) model.selected key) model
+
+        SelectUnit i ->
+            ( { model | selected = clampIndex i (List.length model.queue) }, Cmd.none )
+
+
+-- B10: every KeyAction dispatches the same Msg the matching button sends —
+-- the buttons remain the single source of truth; the keys are a mirror.
+keyActionMsg : KeyAction -> Model -> ( Model, Cmd Msg )
+keyActionMsg action model =
+    case action of
+        ApproveSelected ->
+            case selectedUid model of
+                Just uid ->
+                    ( model, saveDecision model uid Approved )
+
+                Nothing ->
+                    ( model, Cmd.none )
+
+        RefuseSelected ->
+            case selectedUid model of
+                Just uid ->
+                    ( { model | refusingUid = Just uid, refuseDraft = "", refuseError = Nothing }, Cmd.none )
+
+                Nothing ->
+                    ( model, Cmd.none )
+
+        Select i ->
+            ( { model | selected = i }, Cmd.none )
+
+        ConfirmRefuse ->
+            case model.refusingUid of
+                Just uid ->
+                    submitRefuse model uid
+
+                Nothing ->
+                    ( model, Cmd.none )
+
+        CancelRefuse ->
+            ( { model | refusingUid = Nothing, refuseDraft = "", refuseError = Nothing }, Cmd.none )
+
+        Ignore ->
+            ( model, Cmd.none )
+
+
+submitRefuse : Model -> String -> ( Model, Cmd Msg )
+submitRefuse model uid =
+    if String.isEmpty (String.trim model.refuseDraft) then
+        ( { model | refuseError = Just "Reason is required" }, Cmd.none )
+
+    else
+        ( { model | refusingUid = Nothing, refuseDraft = "" }, saveDecision model uid (Refused model.refuseDraft) )
+
+
+selectedUid : Model -> Maybe String
+selectedUid model =
+    case List.head (List.drop model.selected model.queue) of
+        Just q ->
+            Just q.unit.uid
+
+        Nothing ->
+            Nothing
+
+
+clampIndex : Int -> Int -> Int
+clampIndex i len =
+    max 0 (min i (len - 1))
 
 
 saveDecision : Model -> String -> LibDb.Decision -> Cmd Msg
@@ -368,7 +438,12 @@ progressBar k n =
 view : Model -> Ui.Element Msg
 view model =
     Ui.column
-        [ Ui.width Ui.fill, Ui.height Ui.fill, Background.color (Ui.rgb 16 16 22) ]
+        [ Ui.width Ui.fill
+        , Ui.height Ui.fill
+        , Background.color (Ui.rgb 16 16 22)
+        , Ui.onKeyDown KeyDown
+        , Ui.htmlAttribute "tabindex" "0"
+        ]
         [ header model
         , Ui.el
             [ Ui.width Ui.fill, Ui.height Ui.fill, Ui.padding 24, Font.color (Ui.rgb 190 190 200) ]
@@ -401,9 +476,79 @@ queueBody model =
                 Ui.text "No units queued yet."
 
             else
-                Ui.column
-                    [ Ui.width Ui.fill, Ui.spacing 16, Ui.scrollbars ]
-                    (List.map (unitCard model) model.queue)
+                Ui.row
+                    [ Ui.width Ui.fill, Ui.height Ui.fill, Ui.spacing 16 ]
+                    [ queueRail model
+                    , Ui.column
+                        [ Ui.width Ui.fill, Ui.height Ui.fill, Ui.spacing 16, Ui.scrollbars ]
+                        [ hintLine
+                        , case selectedUnit model of
+                            Just q ->
+                                unitCard model True q
+
+                            Nothing ->
+                                Ui.none
+                        ]
+                    ]
+
+
+-- B10: the left rail is the keyboard-first overview — one button per queued
+-- unit, the selected one highlighted; j/k, g and 1-5 move the selection.
+queueRail : Model -> Ui.Element Msg
+queueRail model =
+    Ui.column
+        [ Ui.width (Ui.px 280)
+        , Ui.height Ui.fill
+        , Ui.spacing 4
+        , Ui.scrollbars
+        ]
+        (List.indexedMap (railItem model) model.queue)
+
+
+railItem : Model -> Int -> Queue.QueuedUnit -> Ui.Element Msg
+railItem model i q =
+    let
+        selected =
+            i == model.selected
+    in
+    Ui.button
+        [ Ui.width Ui.fill
+        , Ui.paddingXY 10 7
+        , Border.rounded 4
+        , Border.solid
+        , Border.width 1
+        , if selected then
+            Border.color (Ui.rgb 130 170 240)
+
+        else
+            Border.color (Ui.rgb 40 40 52)
+        , if selected then
+            Background.color (Ui.rgb 34 34 46)
+
+        else
+            Background.color (Ui.rgb 24 24 32)
+        ]
+        { onPress = Just (SelectUnit i)
+        , label = Ui.row
+            [ Ui.width Ui.fill, Ui.spacing 6, Ui.centerY ]
+            [ Ui.el
+                [ Font.size 12, Font.bold, Font.color (Ui.rgb 220 220 230) ]
+                (Ui.text q.unit.qualified)
+            , changeBadge q.unit.change
+            ]
+        }
+
+
+selectedUnit : Model -> Maybe Queue.QueuedUnit
+selectedUnit model =
+    List.head (List.drop model.selected model.queue)
+
+
+hintLine : Ui.Element Msg
+hintLine =
+    Ui.el
+        [ Font.size 11, Font.color (Ui.rgb 140 140 155) ]
+        (Ui.text "a approve · r refuse · j/k move · g top · 1-5 jump · Enter confirm")
 
 
 historyBody : Model -> Ui.Element Msg
@@ -575,8 +720,8 @@ urlSync model =
         (Html.node "div" [ Attr.attribute "data-ipe-path" (currentPath model) ] [])
 
 
-unitCard : Model -> Queue.QueuedUnit -> Ui.Element Msg
-unitCard model q =
+unitCard : Model -> Bool -> Queue.QueuedUnit -> Ui.Element Msg
+unitCard model selected q =
     let
         unit =
             q.unit
@@ -588,8 +733,16 @@ unitCard model q =
         , Background.color (Ui.rgb 24 24 32)
         , Border.rounded 8
         , Border.solid
-        , Border.width 1
-        , Border.color (Ui.rgb 50 50 62)
+        , if selected then
+            Border.width 2
+
+        else
+            Border.width 1
+        , if selected then
+            Border.color (Ui.rgb 130 170 240)
+
+        else
+            Border.color (Ui.rgb 50 50 62)
         ]
         [ Ui.row
             [ Ui.width Ui.fill, Ui.spacing 10, Ui.centerY ]

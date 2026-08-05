@@ -14,6 +14,7 @@ import Lib.Db as LibDb exposing (Decision(..))
 import Lib.Format as Format
 import Lib.Highlight as Highlight exposing (Lang(..), Token(..))
 import Lib.Index as Index
+import Lib.Keys as Keys exposing (KeyAction(..))
 import Lib.Links as Links exposing (Link(..))
 import Lib.Queue as Queue
 
@@ -1162,6 +1163,30 @@ unitPageLoad =
             )
 
 
+-- The keyboard shortcuts drive exactly the messages the buttons send: a/r
+-- act on the selected unit, j/k/g/1-5 move the selection, Enter/Escape
+-- confirm/cancel an open refuse panel, and every key is ignored while the
+-- refuse reason input is open (so typing a reason is not hijacked).
+testKeys : Bool
+testKeys =
+    List.all identity
+        [ Keys.label (Keys.keyAction False 3 0 "a") == "approve"
+        , Keys.label (Keys.keyAction False 3 0 "r") == "refuse"
+        , Keys.label (Keys.keyAction False 3 0 "j") == "select1"
+        , Keys.label (Keys.keyAction False 3 0 "k") == "select0"
+        , Keys.label (Keys.keyAction False 3 2 "g") == "select0"
+        , Keys.label (Keys.keyAction False 3 0 "2") == "select1"
+        , Keys.label (Keys.keyAction False 3 0 "5") == "select2"
+        , Keys.label (Keys.keyAction False 3 2 "j") == "select2"
+        , Keys.label (Keys.keyAction False 3 1 "Enter") == "ignore"
+        , Keys.label (Keys.keyAction False 0 0 "a") == "ignore"
+        , Keys.label (Keys.keyAction True 3 0 "a") == "ignore"
+        , Keys.label (Keys.keyAction True 3 0 "j") == "ignore"
+        , Keys.label (Keys.keyAction True 3 0 "Enter") == "confirm"
+        , Keys.label (Keys.keyAction True 3 0 "Escape") == "cancel"
+        ]
+
+
 report : List ( String, Bool ) -> String
 report results =
     List.map
@@ -1241,6 +1266,13 @@ main =
             (\results ->
                 unitPageLoad
                     |> Task.map (\ok -> results ++ [ ( "unit page loads by uid, names resolve", ok ) ])
+            )
+        |> Task.andThen
+            (\results ->
+                Task.succeed
+                    (results
+                        ++ [ ( "keyboard shortcuts map to the button msgs", testKeys ) ]
+                    )
             )
         |> Task.andThen
             (\results ->
