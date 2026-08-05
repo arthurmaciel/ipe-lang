@@ -24,6 +24,7 @@ mod emit_model_gate;
 mod emit_model_schema;
 mod emit_tui;
 mod emit_types;
+mod emit_ui_plan;
 mod emit_web;
 mod emit_webview;
 mod naming;
