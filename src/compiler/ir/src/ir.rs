@@ -38,6 +38,13 @@ impl FuncId {
 #[derive(Clone, PartialEq, Debug, serde::Serialize, serde::Deserialize)]
 pub struct Program {
     pub modules: Vec<Module>,
+    /// `true` when the program's source imported at least one `Ipe.<M>.Unsafe`
+    /// submodule — the import-derived signal that discloses the `unsafe`
+    /// capability. Carried whole-program (not per module) because the import is
+    /// the reviewable act regardless of which module reached for the hatch; set
+    /// by the lowerer from the canonical module's `imports_unsafe_submodule`
+    /// fact and read by `program_capabilities_scan`.
+    pub imports_unsafe_submodule: bool,
 }
 
 /// A single module: its declared types and functions, plus an optional entry
@@ -3936,6 +3943,7 @@ mod tests {
             },
         };
         let program = Program {
+            imports_unsafe_submodule: false,
             modules: vec![Module {
                 name: ModPath(vec![main_mod]),
                 types: vec![TypeDef::Enum(EnumDef {
@@ -4462,6 +4470,7 @@ mod serde_persistence_tests {
             body,
         };
         Ok(Program {
+            imports_unsafe_submodule: false,
             modules: vec![Module {
                 name: ModPath(vec![main_mod]),
                 types: vec![TypeDef::Enum(EnumDef {
@@ -4551,6 +4560,7 @@ mod serde_persistence_tests {
         let f = plain.intern("f")?;
         let interner = Arc::new(Mutex::new(plain));
         let program = Program {
+            imports_unsafe_submodule: false,
             modules: vec![Module {
                 name: ModPath(vec![f]),
                 types: vec![],

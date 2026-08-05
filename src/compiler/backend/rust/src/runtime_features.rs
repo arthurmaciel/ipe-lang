@@ -504,6 +504,7 @@ mod tests {
         let mut interner = Interner::new();
         let main = interner.intern("Main").expect("intern Main");
         let prog = Program {
+            imports_unsafe_submodule: false,
             modules: vec![ctx_module(main, configure)],
         };
         let backend = RustBackend::new(&interner);
@@ -639,6 +640,7 @@ mod tests {
             (DbDriver::Postgres, "db-postgres"),
         ] {
             let prog = Program {
+                imports_unsafe_submodule: false,
                 modules: vec![db_module(&mut interner, main)],
             };
             let backend = RustBackend::new(&interner).with_db_driver(driver);

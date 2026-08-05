@@ -203,7 +203,10 @@ impl CapabilitySet {
             // confine one without the other, so a separate bit would be a
             // second list that could silently disagree.
             Capability::NativeFfi | Capability::FfiRaw => Some(5),
-            Capability::Clock | Capability::Random => None,
+            // `unsafe` is a provenance label, not a confinement axis: there is
+            // no runtime surface a jail could isolate, so it is never a set
+            // member — the same posture as clock/random.
+            Capability::Clock | Capability::Random | Capability::Unsafe => None,
         }
     }
 
@@ -317,7 +320,9 @@ impl JailForTarget {
 pub const fn is_runtime_unenforceable_for(cap: Capability, jail: JailForTarget) -> bool {
     match cap {
         // Non-determinism, never an isolation surface: enforceable everywhere.
-        Capability::Clock | Capability::Random => false,
+        // `unsafe` is likewise a provenance label with no isolation surface, so
+        // the unenforceability question does not apply — never unenforceable.
+        Capability::Clock | Capability::Random | Capability::Unsafe => false,
         // A runtime-enforced axis is unenforceable exactly where the target's
         // jail does NOT confine it.
         Capability::Network
@@ -1106,7 +1111,9 @@ mod tests {
         for cap in Capability::ALL {
             let unenf = is_runtime_unenforceable(*cap);
             match cap {
-                Capability::Clock | Capability::Random => assert!(!unenf, "{cap:?}"),
+                Capability::Clock | Capability::Random | Capability::Unsafe => {
+                    assert!(!unenf, "{cap:?}");
+                }
                 _ => assert!(unenf, "{cap:?} must be refused until a runtime jail exists"),
             }
         }
@@ -1130,7 +1137,9 @@ mod tests {
         for cap in Capability::ALL {
             let unenf = is_runtime_unenforceable_for(*cap, JailForTarget::REFUSE_GAP);
             match cap {
-                Capability::Clock | Capability::Random => assert!(!unenf, "{cap:?}"),
+                Capability::Clock | Capability::Random | Capability::Unsafe => {
+                    assert!(!unenf, "{cap:?}");
+                }
                 _ => assert!(unenf, "{cap:?} stays refused on a refuse-gap target"),
             }
         }
@@ -1393,7 +1402,12 @@ mod tests {
         for cap in Capability::ALL {
             let unenf = is_runtime_unenforceable_for(*cap, JailForTarget::REFUSE_GAP);
             match cap {
-                Capability::Clock | Capability::Random => assert!(!unenf, "{cap:?}"),
+                // Non-determinism and the `unsafe` provenance label carry no
+                // isolation surface, so they are enforceable on every target —
+                // never refused, even on the empty set.
+                Capability::Clock | Capability::Random | Capability::Unsafe => {
+                    assert!(!unenf, "{cap:?}");
+                }
                 _ => assert!(unenf, "{cap:?} stays refused on an empty-set target"),
             }
         }

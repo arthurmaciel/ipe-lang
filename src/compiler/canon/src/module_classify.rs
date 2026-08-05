@@ -316,6 +316,7 @@ mod tests {
             ),
         ];
         let linked = Module {
+            imports_unsafe_submodule: false,
             name: main.clone(),
             unions: Vec::new(),
             defs,
@@ -367,6 +368,7 @@ mod tests {
             ),
         ];
         let linked = Module {
+            imports_unsafe_submodule: false,
             name: main.clone(),
             unions: Vec::new(),
             defs,
@@ -398,6 +400,7 @@ mod tests {
             top_level(view, call_view, Expr_::Unit),
         ];
         let linked = Module {
+            imports_unsafe_submodule: false,
             name: main.clone(),
             unions: Vec::new(),
             defs,

@@ -47,6 +47,7 @@ fn hydrate_program(interner: &mut Interner, fields: Vec<IrType>) -> DResult<Prog
         }],
     };
     Ok(Program {
+        imports_unsafe_submodule: false,
         modules: vec![Module {
             name: ModPath(vec![main]),
             types: vec![TypeDef::Enum(hs_def)],
@@ -147,6 +148,7 @@ fn no_hydration_state_type_passes_gate() -> DResult<()> {
     let mut interner = Interner::new();
     let main = interner.intern("Main")?;
     let prog = Program {
+        imports_unsafe_submodule: false,
         modules: vec![Module {
             name: ModPath(vec![main]),
             types: vec![],
@@ -225,6 +227,7 @@ fn hydrate_program_with_record_projection(interner: &mut Interner) -> DResult<Pr
         body: Expr::Var(hs),
     };
     Ok(Program {
+        imports_unsafe_submodule: false,
         modules: vec![Module {
             name: ModPath(vec![main]),
             types: vec![],
@@ -317,6 +320,7 @@ fn no_projection_emits_no_hydrate_glue() -> DResult<()> {
     let mut interner = Interner::new();
     let main = interner.intern("Main")?;
     let prog = Program {
+        imports_unsafe_submodule: false,
         modules: vec![Module {
             name: ModPath(vec![main]),
             types: vec![],

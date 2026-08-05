@@ -36,6 +36,7 @@ fn minimal_wasm_program() -> (Program, Interner) {
     #[allow(clippy::expect_used)]
     let main = interner.intern("Main").expect("intern");
     let program = Program {
+        imports_unsafe_submodule: false,
         modules: vec![Module {
             name: ModPath(vec![main]),
             types: vec![],

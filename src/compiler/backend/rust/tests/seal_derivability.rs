@@ -38,6 +38,7 @@ fn program_with_web(
     uses_web: bool,
 ) -> Program {
     Program {
+        imports_unsafe_submodule: false,
         modules: vec![Module {
             name: ModPath(vec![name]),
             types,

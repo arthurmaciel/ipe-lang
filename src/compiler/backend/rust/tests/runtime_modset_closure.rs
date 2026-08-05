@@ -370,6 +370,7 @@ fn crate_root_dep(line: &str, supers_to_root: usize) -> Option<String> {
 #[allow(clippy::expect_used)] // test scaffolding: a body-free emit cannot fail
 fn declared_for_mask(interner: &Interner, main: ipe_intern::Symbol, mask: u32) -> BTreeSet<String> {
     let prog = Program {
+        imports_unsafe_submodule: false,
         modules: vec![module_for_mask(main, mask)],
     };
     let emitted = RustBackend::new(interner)
@@ -387,6 +388,7 @@ fn declared_for_mask(interner: &Interner, main: ipe_intern::Symbol, mask: u32) -
 #[allow(clippy::expect_used)] // test scaffolding: a body-free emit cannot fail
 fn mod_rs_for_mask(interner: &Interner, main: ipe_intern::Symbol, mask: u32) -> String {
     let prog = Program {
+        imports_unsafe_submodule: false,
         modules: vec![module_for_mask(main, mask)],
     };
     let emitted = RustBackend::new(interner)
@@ -602,6 +604,7 @@ fn base_modules_do_not_reach_gated_modules() {
     // The always-compiled BASE floor: the module set emitted with every `uses_*`
     // flag off.
     let base_prog = Program {
+        imports_unsafe_submodule: false,
         modules: vec![module_for_mask(main, 0)],
     };
     let emitted = RustBackend::new(&interner)
@@ -637,6 +640,7 @@ fn web_shape_declares_tea() {
     let main = interner.intern("Main").expect("intern Main");
     // uses_web only (bit 3).
     let prog = Program {
+        imports_unsafe_submodule: false,
         modules: vec![module_for_mask(main, 1 << 3)],
     };
     let emitted = RustBackend::new(&interner).emit(&prog).expect("emit");
@@ -654,6 +658,7 @@ fn server_shape_declares_tea_and_http_stream() {
     let main = interner.intern("Main").expect("intern Main");
     // uses_server only (bit 1).
     let prog = Program {
+        imports_unsafe_submodule: false,
         modules: vec![module_for_mask(main, 1 << 1)],
     };
     let emitted = RustBackend::new(&interner).emit(&prog).expect("emit");

@@ -164,6 +164,7 @@ fn maybe_program(i: &mut Interner) -> DResult<Program> {
     };
 
     Ok(Program {
+        imports_unsafe_submodule: false,
         modules: vec![Module {
             name: ModPath(vec![main_mod]),
             types: vec![TypeDef::Enum(def)],
@@ -365,6 +366,7 @@ fn tree_program(interner: &mut Interner) -> DResult<Program> {
     let sum_fn = tree_sum_fn(interner, &syms)?;
     let main_fn = tree_main_fn(interner, &syms)?;
     Ok(Program {
+        imports_unsafe_submodule: false,
         modules: vec![Module {
             name: ModPath(vec![main_mod]),
             types: vec![TypeDef::Enum(def)],
@@ -531,6 +533,7 @@ fn concrete_multi_field_enum_emits() -> DResult<()> {
         body: Expr::Match(Match::new(Expr::Var(s), arms, &[circle, rect])?),
     };
     let prog = Program {
+        imports_unsafe_submodule: false,
         modules: vec![Module {
             name: ModPath(vec![main_mod]),
             types: vec![TypeDef::Enum(def)],

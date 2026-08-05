@@ -24,6 +24,16 @@ pub struct Module {
     pub name: Vec<Symbol>,
     pub unions: Vec<Union>,
     pub defs: Vec<Def>,
+    /// `true` when this module's source imported at least one `Ipe.<M>.Unsafe`
+    /// submodule — the reviewable act of reaching for a trust-escape hatch.
+    ///
+    /// Import-derived, computed at canonicalisation from the source import list
+    /// (which is discarded before lowering), then OR'd across every module by
+    /// [`crate::link::link`] and read by the lowerer to set the whole-program
+    /// fact the `unsafe` capability scan discloses. The import — not the call of
+    /// a specific member — is the signal, so a module that imports an `.Unsafe`
+    /// submodule discloses even if a path to its members is dead code.
+    pub imports_unsafe_submodule: bool,
 }
 
 /// A resolved union type and its constructors.

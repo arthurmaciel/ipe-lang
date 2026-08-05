@@ -1871,6 +1871,13 @@ fn canonicalise_with_env(
 ) -> DResult<(canon::Module, BTreeMap<Symbol, KernelAlias>)> {
     let home = env.home.clone();
 
+    // Import-derived `unsafe` disclosure: does this module reach for a trust-escape
+    // hatch by importing an `Ipe.<M>.Unsafe` submodule? Computed here, where the
+    // source import list is still present (it is dropped from the canonical module),
+    // and carried on the canonical module so the lowerer can thread it to the
+    // whole-program capability scan.
+    let imports_unsafe_submodule = imports_an_unsafe_submodule(&m.imports, interner);
+
     // The `"any"` wildcard symbol used to arity-fill a bare builtin parametric
     // UI annotation (`view : Html` → `view : Html any`). Interned once here where
     // the interner is mutable; the deeper `canonicalise_type` TType arm runs under
@@ -2141,9 +2148,32 @@ fn canonicalise_with_env(
             name: home,
             unions,
             defs,
+            imports_unsafe_submodule,
         },
         kernel_aliases,
     ))
+}
+
+/// Does any `import` name an `Ipe.<M>.Unsafe` submodule?
+///
+/// The signal for the `unsafe` capability: a dotted import whose FIRST segment is
+/// `Ipe` and whose LAST segment is `Unsafe`, with a module segment between them
+/// (path length ≥ 3, e.g. `Ipe.Html.Unsafe`, `Ipe.Db.Unsafe`). A user file
+/// literally named `Ipe.Db.Unsafe` cannot be imported — it is rejected at
+/// discovery as `User` origin (IPE-N0025) — so a matching import can only name a
+/// vouched `EmbeddedStdlib` submodule. Mirrors the `Ipe.Tea.*` import-shape
+/// check: a segment-slice pattern, no string allocation on the hot path.
+fn imports_an_unsafe_submodule(imports: &[src::Import], interner: &Interner) -> bool {
+    let Some((ipe_sym, unsafe_sym)) = interner.lookup("Ipe").zip(interner.lookup("Unsafe")) else {
+        // Neither segment interned in this build → no such import can exist.
+        return false;
+    };
+    imports.iter().any(|imp| {
+        matches!(
+            imp.name.value.as_slice(),
+            [first, _, .., last] if *first == ipe_sym && *last == unsafe_sym
+        )
+    })
 }
 
 /// Synthesize the value-level auto-constructor for every LOCAL `type alias`

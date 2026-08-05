@@ -4982,6 +4982,7 @@ mod tests {
         // No `unions` → `ImportedCtor` has no scheme, triggering the no-scheme
         // fallback path in `constrain_pattern`.
         let module = canon::Module {
+            imports_unsafe_submodule: false,
             name: vec![main_sym],
             unions: vec![],
             defs: vec![canon::Def::Untyped {

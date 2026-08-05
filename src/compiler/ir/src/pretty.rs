@@ -2066,6 +2066,7 @@ mod tests {
         };
 
         Ok(Program {
+            imports_unsafe_submodule: false,
             modules: vec![Module {
                 name: ModPath(vec![main_mod]),
                 types: vec![TypeDef::Enum(EnumDef {
@@ -2199,6 +2200,7 @@ program
             }),
         };
         let program = Program {
+            imports_unsafe_submodule: false,
             modules: vec![Module {
                 name: ModPath(vec![main_mod]),
                 types: vec![],
@@ -2288,6 +2290,7 @@ program
         // pair(n : Int) -> (Int, Bool) = (n, n)  (shape only; types illustrative)
         let body = Expr::Tuple(vec![Expr::Var(n), Expr::Int(1)]);
         let program = Program {
+            imports_unsafe_submodule: false,
             modules: vec![Module {
                 name: ModPath(vec![main_mod]),
                 types: vec![],
@@ -2380,6 +2383,7 @@ program
         rec_fields.insert(y, IrType::Int);
         let rec_ty = IrType::Record(rec_fields);
         let program = Program {
+            imports_unsafe_submodule: false,
             modules: vec![Module {
                 name: ModPath(vec![main_mod]),
                 types: vec![],
@@ -2460,6 +2464,7 @@ program
             ty: None,
         };
         let program = Program {
+            imports_unsafe_submodule: false,
             modules: vec![Module {
                 name: ModPath(vec![main_mod]),
                 types: vec![],
@@ -2546,6 +2551,7 @@ program
             args: vec![Expr::Int(2)],
         };
         let program = Program {
+            imports_unsafe_submodule: false,
             modules: vec![Module {
                 name: ModPath(vec![main_mod]),
                 types: vec![],
@@ -2624,6 +2630,7 @@ program
 
         // thunk(k : () -> Bool) -> Bool = ...  (body shape illustrative)
         let program = Program {
+            imports_unsafe_submodule: false,
             modules: vec![Module {
                 name: ModPath(vec![main_mod]),
                 types: vec![],
@@ -2724,6 +2731,7 @@ program
             },
         ];
         let program = Program {
+            imports_unsafe_submodule: false,
             modules: vec![Module {
                 name: ModPath(vec![main_mod]),
                 types: vec![TypeDef::Enum(EnumDef {
@@ -2840,6 +2848,7 @@ program
             guard: None,
         }];
         let program = Program {
+            imports_unsafe_submodule: false,
             modules: vec![Module {
                 name: ModPath(vec![main_mod]),
                 types: vec![TypeDef::Enum(EnumDef {
@@ -2940,6 +2949,7 @@ program
         let i = Interner::new();
         // A program referencing a symbol this interner never handed out.
         let program = Program {
+            imports_unsafe_submodule: false,
             modules: vec![Module {
                 name: ModPath(vec![Symbol::from_raw(999)]),
                 types: vec![],
@@ -2999,6 +3009,7 @@ program
             };
         }
         Ok(Program {
+            imports_unsafe_submodule: false,
             modules: vec![Module {
                 name: ModPath(vec![main_mod]),
                 types: vec![],

@@ -141,6 +141,7 @@ fn build_identity_program(interner: &mut Interner) -> DResult<Program> {
     };
 
     Ok(Program {
+        imports_unsafe_submodule: false,
         modules: vec![Module {
             name: ModPath(vec![main_mod]),
             types: vec![],
@@ -326,6 +327,7 @@ fn build_bounded_program(interner: &mut Interner) -> DResult<Program> {
     };
 
     Ok(Program {
+        imports_unsafe_submodule: false,
         modules: vec![Module {
             name: ModPath(vec![main_mod]),
             types: vec![],
