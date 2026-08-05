@@ -151,6 +151,32 @@ pub fn secret_reveal(mut s: Secret) -> String {
     std::mem::take(&mut s.0)
 }
 
+/// `Secret.use : Secret -> (String -> a) -> a` — the SCOPED consume. Reveals
+/// the plaintext, hands it to `f`, and returns `f`'s result. A thin wrapper
+/// over [`secret_reveal`]: `secret_use(s, f) == f(secret_reveal(s))`.
+///
+/// The revealed `String` is a local `moved` into `f` and touched nowhere else —
+/// never logged, cached, stored, cloned, or `Debug`-printed here. It lives only
+/// for the duration of the `f` call; once `f` returns, the local is dropped.
+/// The whole body is a single `f(secret_reveal(s))` expression: no indexing, no
+/// `unwrap`/`expect`, no `panic!` — it cannot fail on its own (any panic can
+/// only come from inside the caller's `f`).
+///
+/// GUARANTEE BOUNDARY (honest): this is NOT a type-enforced non-escape. The
+/// common scoped shape — build a header, compute an HMAC, compare, and return a
+/// NON-secret `a` — keeps the plaintext inside `f`. But a determined caller can
+/// write `Secret.use s (\x -> x)` (identity) and extract the raw `String` all
+/// the same, exactly as `Ipe.Secret.Unsafe.unsafeReveal` does. That identity
+/// form is a VISIBLE code smell at the call site, not a hidden bypass; the hard,
+/// disclosed extract remains `unsafeReveal` (which discloses the `unsafe`
+/// capability program-wide). The value of `use` is the greppable trust surface:
+/// the common scoped uses stay OFF the `unsafe` axis, so the disclosed hatch is
+/// reserved for the blunt raw-extract.
+#[must_use]
+pub fn secret_use<A>(s: Secret, f: impl FnOnce(String) -> A) -> A {
+    f(secret_reveal(s))
+}
+
 /// `Secret.redacted : Secret -> String` — the EXPLICIT redaction accessor.
 /// Also exactly what `toString` / interpolation gives automatically via
 /// [`IpeStringify`] above; exists as a named, discoverable, non-`Debug`-
@@ -172,6 +198,40 @@ mod tests {
     fn seal_then_reveal_round_trips() {
         let s = secret_from_string("sk_live_abc123".to_owned());
         assert_eq!(secret_reveal(s), "sk_live_abc123");
+    }
+
+    #[test]
+    fn use_applies_the_function_to_the_revealed_plaintext() {
+        let s = secret_from_string("sk_live_abc123".to_owned());
+        // The scoped function sees the exact revealed plaintext.
+        let seen = secret_use(s, |plain| plain.len());
+        assert_eq!(seen, "sk_live_abc123".len());
+    }
+
+    #[test]
+    fn use_returns_a_non_secret_derived_value_without_the_payload() {
+        // The common scoped shape: derive a NON-secret `a` (here a masked
+        // prefix) inside the closure and return it. The returned value does
+        // not contain the raw payload — the plaintext stayed in the closure.
+        let s = secret_from_string("sk_live_super_secret".to_owned());
+        let masked = secret_use(s, |plain| {
+            let head: String = plain.chars().take(7).collect();
+            format!("{head}…")
+        });
+        assert_eq!(masked, "sk_live…");
+        assert!(!masked.contains("super_secret"));
+    }
+
+    #[test]
+    fn use_reveal_equivalence() {
+        // `secret_use(s, f) == f(secret_reveal(s))` — the wrapper is exactly a
+        // scoped `reveal`. Two independently-sealed clones prove both paths
+        // yield the same value.
+        let a = secret_from_string("token-xyz".to_owned());
+        let b = secret_from_string("token-xyz".to_owned());
+        let via_use = secret_use(a, |p| format!("Bearer {p}"));
+        let via_reveal = format!("Bearer {}", secret_reveal(b));
+        assert_eq!(via_use, via_reveal);
     }
 
     #[test]

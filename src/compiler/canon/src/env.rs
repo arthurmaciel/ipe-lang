@@ -1032,9 +1032,15 @@ impl Env {
             // `v4` and `v7` are arity-0 (bare value); `parse` is arity-1.
             ("Uuid", &["v4", "v7", "parse"]),
             // `Ipe.Secret` — opaque secret-string wrapper.
-            // `fromString` is the seal; `reveal` is the single greppable
-            // un-parse; `redacted` is the explicit "<redacted>" accessor.
-            ("Secret", &["fromString", "reveal", "redacted"]),
+            // `fromString` is the seal; `use` is the scoped consume (apply a
+            // function to the plaintext, return its result); `redacted` is the
+            // explicit "<redacted>" accessor. The blunt raw un-parse `reveal`
+            // relocated to the compiled-source `Ipe.Secret.Unsafe` submodule
+            // (`src/stdlib/Ipe/Secret/Unsafe.ipe`) as `unsafeReveal`, reached
+            // through the `Ffi.kernel "Secret_reveal"` alias to the SAME kernel —
+            // so it is absent here and no longer resolves off a plain
+            // `import Ipe.Secret`.
+            ("Secret", &["fromString", "use", "redacted"]),
             // `Ipe.Jwt` — JWT encode/decode for HS256 and RS256,
             // plus builder API: claims / hs256 / rs256 / subject / issuer /
             // audience / expiresAt / notBefore / issuedAt / jwtId / withClaim /

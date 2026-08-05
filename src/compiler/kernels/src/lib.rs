@@ -1944,6 +1944,12 @@ pub enum StdlibKernel {
     SecretFromString,
     /// `Secret.reveal : Secret -> String` — the single greppable un-parse.
     SecretReveal,
+    /// `Secret.use : Secret -> (String -> a) -> a` — the scoped consume. Applies
+    /// the caller's function to the revealed plaintext and returns its result;
+    /// a thin wrapper over `reveal` that keeps the common case off the `unsafe`
+    /// axis. Capability-neutral (like every `Secret.*` kernel): disclosure is
+    /// import-derived, and `use` is reached off a plain `import Ipe.Secret`.
+    SecretUse,
     /// `Secret.redacted : Secret -> String` — explicit `"<redacted>"` (also
     /// what `toString` / interpolation gives automatically — see
     /// `ipe_runtime::secret`'s hand-written `IpeStringify` impl).
@@ -3500,6 +3506,7 @@ impl StdlibKernel {
             // ── Ipe.Secret — opaque secret-string wrapper ─
             Self::SecretFromString => d("Secret", "fromString", 1, Pure, "secret_from_string"),
             Self::SecretReveal => d("Secret", "reveal", 1, Pure, "secret_reveal"),
+            Self::SecretUse => d("Secret", "use", 2, Pure, "secret_use"),
             Self::SecretRedacted => d("Secret", "redacted", 1, Pure, "secret_redacted"),
             // ── Ipe.Regex ────────────────────────────────────────
             // Runtime names MUST match `ipe_runtime::regex_kernel::*` exactly
@@ -4631,6 +4638,7 @@ impl StdlibKernel {
         Self::DbDeleteWhere,
         Self::SecretFromString,
         Self::SecretReveal,
+        Self::SecretUse,
         Self::SecretRedacted,
         // ── Ipe.Regex ────────────────────────────────────────────
         Self::RegexCompile,
@@ -8783,6 +8791,7 @@ impl StdlibKernel {
             | Self::SqlLike
             | Self::SecretFromString
             | Self::SecretReveal
+            | Self::SecretUse
             | Self::SecretRedacted
             | Self::RegexCompile
             | Self::RegexMatch
@@ -9591,7 +9600,7 @@ impl StdlibKernel {
     }
 
     /// `true` when this variant belongs to the `Ipe.Secret` opaque
-    /// secret-string family (`Secret.fromString` / `reveal` / `redacted`).
+    /// secret-string family (`Secret.fromString` / `reveal` / `use` / `redacted`).
     ///
     /// The `secret.rs` runtime module (a `zeroize`-on-`Drop` newtype with a
     /// `subtle` constant-time compare) is its sole consumer. Used by `ipe_lower`
@@ -9603,7 +9612,7 @@ impl StdlibKernel {
     pub const fn is_secret(self) -> bool {
         matches!(
             self,
-            Self::SecretFromString | Self::SecretReveal | Self::SecretRedacted
+            Self::SecretFromString | Self::SecretReveal | Self::SecretUse | Self::SecretRedacted
         )
     }
 

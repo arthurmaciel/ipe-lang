@@ -807,6 +807,7 @@ const fn kernel_name(kernel: KernelFn) -> &'static str {
         KernelFn::SqlLike => "Sql.like",
         KernelFn::SecretFromString => "Secret.fromString",
         KernelFn::SecretReveal => "Secret.reveal",
+        KernelFn::SecretUse => "Secret.use",
         KernelFn::SecretRedacted => "Secret.redacted",
         // Ipe.Regex
         KernelFn::RegexCompile => "Regex.compile",
