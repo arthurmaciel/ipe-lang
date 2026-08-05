@@ -25,6 +25,37 @@ fn color_to_css(c: &Color) -> String {
 
 // ── Element builders ──────────────────────────────────────────────────────────
 
+/// `Ui.node : Description -> List (Attribute msg) -> List (Element msg) -> Element msg`
+///
+/// The irreducible container-element constructor: an `Element::Node` carrying a
+/// role `Description`, its attributes, and its children verbatim. The layout
+/// builders (`el` / `row` / `column` / `wrappedRow` / `grid`) are pure Ipê over
+/// this primitive with a fixed direction marker prepended.
+#[must_use]
+pub fn ui_node_<M>(
+    desc: Description,
+    attrs: Vec<Attribute<M>>,
+    children: Vec<Element<M>>,
+) -> Element<M> {
+    Element::Node(desc, attrs, children)
+}
+
+/// `Ui.taggedNode : String -> Description -> List (Attribute msg) -> List (Element msg) -> Element msg`
+///
+/// The irreducible tagged-element constructor: an `Element::TaggedNode` fixing
+/// the HTML tag, role `Description`, attributes, and children. The flow builders
+/// (`paragraph` / `textColumn` / `form` / `input`) are pure Ipê over this
+/// primitive with a fixed tag + marker.
+#[must_use]
+pub fn ui_tagged_node_<M>(
+    tag: String,
+    desc: Description,
+    attrs: Vec<Attribute<M>>,
+    children: Vec<Element<M>>,
+) -> Element<M> {
+    Element::TaggedNode(tag, desc, attrs, children)
+}
+
 /// `Ui.none : Element msg`
 #[must_use]
 pub fn ui_none_<M>() -> Element<M> {
@@ -94,15 +125,6 @@ pub fn ui_wrapped_row_<M: Clone>(
         "__wrappedrow".to_owned(),
         "true".to_owned(),
     ));
-    full.extend(attrs);
-    Element::Node(Description::NoDescription, full, children)
-}
-
-/// `Ui.grid : List (Attribute msg) -> List (Element msg) -> Element msg`
-#[must_use]
-pub fn ui_grid_<M: Clone>(attrs: Vec<Attribute<M>>, children: Vec<Element<M>>) -> Element<M> {
-    let mut full = Vec::with_capacity(attrs.len() + 1);
-    full.push(Attribute::AttrStyle("__grid".to_owned(), "true".to_owned()));
     full.extend(attrs);
     Element::Node(Description::NoDescription, full, children)
 }
@@ -1117,6 +1139,21 @@ pub fn ui_describe_<M>(d: Description) -> Attribute<M> {
     Attribute::AttrDescribe(d)
 }
 
+/// The `NoDescription` role — the default carried by every layout builder that
+/// takes no explicit ARIA role. Backs the module-local `descNone` in
+/// `Ipe/Ui.ipe`.
+#[must_use]
+pub fn ui_desc_none_() -> Description {
+    Description::NoDescription
+}
+
+/// The `DescParagraph` role — carried by `Ui.paragraph`. Backs the module-local
+/// `descParagraph` in `Ipe/Ui.ipe`.
+#[must_use]
+pub fn ui_desc_paragraph_() -> Description {
+    Description::DescParagraph
+}
+
 /// `Ui.descMain : Description`
 #[must_use]
 pub fn ui_desc_main_() -> Description {
@@ -1181,42 +1218,7 @@ pub fn ui_paragraph_<M: Clone>(attrs: Vec<Attribute<M>>, children: Vec<Element<M
     Element::TaggedNode("p".to_owned(), Description::DescParagraph, full, children)
 }
 
-/// `Ui.textColumn : List (Attribute msg) -> List (Element msg) -> Element msg`
-///
-/// Mirrors `textColumn` in `Std/Ui.ipe`: a `<section>`-tagged block container
-/// with the `__textcolumn` marker (matching `textColumnMarker`), keeping each
-/// paragraph child on its own line with normal text flow.
-#[must_use]
-pub fn ui_text_column_<M: Clone>(
-    attrs: Vec<Attribute<M>>,
-    children: Vec<Element<M>>,
-) -> Element<M> {
-    let mut full = Vec::with_capacity(attrs.len() + 1);
-    full.push(Attribute::AttrStyle(
-        "__textcolumn".to_owned(),
-        "true".to_owned(),
-    ));
-    full.extend(attrs);
-    Element::TaggedNode(
-        "section".to_owned(),
-        Description::NoDescription,
-        full,
-        children,
-    )
-}
-
 // ── Form ─────────────────────────────────────────────────────────────────────
-
-/// `Ui.form : List (Attribute msg) -> List (Element msg) -> Element msg`
-#[must_use]
-pub fn ui_form_<M: Clone>(attrs: Vec<Attribute<M>>, children: Vec<Element<M>>) -> Element<M> {
-    Element::TaggedNode(
-        "form".to_owned(),
-        Description::NoDescription,
-        attrs,
-        children,
-    )
-}
 
 /// `Ui.onSubmit : (a -> msg) -> Attribute msg`
 ///
