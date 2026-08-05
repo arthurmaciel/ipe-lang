@@ -113,11 +113,6 @@ pub enum NativeUiEmit {
     /// An `Ipe.Html.Events` builder, keyed by `html_event_shape` /
     /// `html_event_wire_name`.
     HtmlEvent,
-    /// A fixed-key string `Ipe.Html.Attributes` builder, keyed by
-    /// `html_attr_key`.
-    HtmlStrAttr,
-    /// A fixed-key bool `Ipe.Html.Attributes` builder, keyed by `html_attr_key`.
-    HtmlBoolAttr,
     /// `Lazy.lazy` — one-argument deferred subtree, eta-wrapped.
     LazyLazy,
     /// `Lazy.lazy2` — two-argument deferred subtree, eta-wrapped.
@@ -382,11 +377,6 @@ pub const fn ui_call_shape(k: KernelFn) -> Option<UiEmitPlan> {
         KernelFn::FontDisabledColor => pos("ipe_runtime::ui::helpers::ui_font_disabled_color_", 1),
         KernelFn::FontHoverSize => pos("ipe_runtime::ui::helpers::ui_font_hover_size_", 1),
 
-        // ── Fixed-key ARIA/DOM attrs backed by the generic named-attr sink ─
-        KernelFn::HtmlAttrTabindex | KernelFn::HtmlAttrRows => {
-            pos("ipe_runtime::html::html_named_attr_", 1)
-        }
-
         // ── Region / describe accessibility constructors ──────────────────
         KernelFn::RegionMainContent => pos("ipe_runtime::ui::helpers::ui_region_main_content_", 0),
         KernelFn::RegionNavigation => pos("ipe_runtime::ui::helpers::ui_region_navigation_", 0),
@@ -493,8 +483,6 @@ pub const fn ui_call_shape(k: KernelFn) -> Option<UiEmitPlan> {
 
         // ── Predicate-keyed HTML families ─────────────────────────────────
         _ if k.html_event_shape().is_some() => native(N::HtmlEvent),
-        _ if k.is_html_str_attr() => native(N::HtmlStrAttr),
-        _ if k.is_html_bool_attr() => native(N::HtmlBoolAttr),
         _ if k.is_html_container() => native(N::HtmlContainer),
         _ if k.is_html_void() => native(N::HtmlVoid),
 

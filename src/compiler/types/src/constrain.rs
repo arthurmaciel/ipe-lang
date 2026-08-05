@@ -6159,37 +6159,12 @@ impl<'a> Builder<'a> {
             // html_t). `List (Ipe.Html.Attribute msg) -> String -> Html msg`.
             K::HtmlStyleNode => fun(list(html_attr(var(0))), fun(string(), html_t(var(0)))),
 
-            // ── Ipe.Html.Attributes builders ────────────────────────────
-            // String fixed-key: `String -> Ipe.Html.Attribute msg`.
-            K::HtmlAttrClass
-            | K::HtmlAttrId
-            | K::HtmlAttrHref
-            | K::HtmlAttrSrc
-            | K::HtmlAttrAlt
-            | K::HtmlAttrValue
-            | K::HtmlAttrName
-            | K::HtmlAttrPlaceholder
-            | K::HtmlAttrType
-            | K::HtmlAttrFor
-            | K::HtmlAttrStyle
-            | K::HtmlAttrTitle
-            | K::HtmlAttrAutocomplete => fun(string(), html_attr(var(0))),
-            // Bool fixed-key: `Bool -> Ipe.Html.Attribute msg`.
-            K::HtmlAttrChecked
-            | K::HtmlAttrDisabled
-            | K::HtmlAttrReadonly
-            | K::HtmlAttrRequired
-            | K::HtmlAttrMultiple
-            | K::HtmlAttrSelected
-            | K::HtmlAttrAutofocus => fun(bool_ty(), html_attr(var(0))),
-            // Generic builders + identity.
+            // ── Ipe.Html.Attributes retained primitives ─────────────────
+            // The fixed-key builders are pure Ipê in `Ipe/Html/Attributes.ipe`
+            // over these three `Attribute`-value constructors.
             K::HtmlAttribute => fun(string(), fun(string(), html_attr(var(0)))),
             K::HtmlBoolAttribute => fun(string(), fun(bool_ty(), html_attr(var(0)))),
             K::HtmlNoAttr => html_attr(var(0)),
-            // Tier 1 — Int-keyed html attr.
-            K::HtmlAttrTabindex => fun(int(), html_attr(var(0))),
-            // Textarea rows attribute — `Int -> HtmlAttribute msg`.
-            K::HtmlAttrRows => fun(int(), html_attr(var(0))),
 
             // ── Ipe.Ui.Keyed ──────────────────────────────────────────────────
             // `Keyed.column / Keyed.row : List (Attribute msg) -> List (String, Element msg) -> Element msg`
@@ -9001,27 +8976,7 @@ mod registry_phase_c_tests {
             K::HtmlSource,
             K::HtmlTrack,
             K::HtmlWbr,
-            // Ipe.Html.Attributes builders (first-schemed — no legacy).
-            K::HtmlAttrClass,
-            K::HtmlAttrId,
-            K::HtmlAttrHref,
-            K::HtmlAttrSrc,
-            K::HtmlAttrAlt,
-            K::HtmlAttrValue,
-            K::HtmlAttrName,
-            K::HtmlAttrPlaceholder,
-            K::HtmlAttrType,
-            K::HtmlAttrFor,
-            K::HtmlAttrStyle,
-            K::HtmlAttrTitle,
-            K::HtmlAttrChecked,
-            K::HtmlAttrDisabled,
-            K::HtmlAttrReadonly,
-            K::HtmlAttrRequired,
-            K::HtmlAttrMultiple,
-            K::HtmlAttrSelected,
-            K::HtmlAttrAutofocus,
-            K::HtmlAttrAutocomplete,
+            // Ipe.Html.Attributes retained primitives (first-schemed — no legacy).
             K::HtmlAttribute,
             K::HtmlBoolAttribute,
             K::HtmlNoAttr,
@@ -9099,7 +9054,6 @@ mod registry_phase_c_tests {
             K::FontActiveColor,
             K::FontDisabledColor,
             K::FontHoverSize,
-            K::HtmlAttrTabindex,
             // Ipe.Terminal line-oriented app-entry.
             K::TerminalAppLines,
             // ── Ipe.Auth (9 kernels) — schemed + lowered, moved from REACHABLE_BUT_UNLOWERED ──
@@ -9287,8 +9241,6 @@ mod registry_phase_c_tests {
             K::MoneyGetRate,
             K::MoneyHasRate,
             K::MoneyClearRates,
-            // ── Textarea rows attr ─────────────────────────────────────────────
-            K::HtmlAttrRows,
             // ── Ipe.Db.Sql — SqlFragment builder (19) ──────────────
             K::SqlColumn,
             K::SqlParam,
@@ -9820,13 +9772,13 @@ mod registry_phase_c_tests {
         // `Ui.link` / `Ui.image`, and the record-producing `Server` route-handler
         // kernels — each byte-identical to its retained `stdlib_scheme` arm.
         assert!(
-            migrated >= 965,
+            migrated >= 943,
             "expected at least the primitive + core-List + arrow-only + \
              tuple-shaped + arrow-scalar polymorphic kernels plus the migrated \
              effect / scalar-opaque / Ui / Html / style builder families, the \
              closed-record / open-row families, and the arrow-over-record \
              server kernels (`Server.withCookie`, the `Middleware` wrappers, \
-             `Stream.stream`, `HttpStream.open`, `Ws.upgrade`) — 965 total — to \
+             `Stream.stream`, `HttpStream.open`, `Ws.upgrade`) — 943 total — to \
              carry a TyShape, found only {migrated}",
         );
     }

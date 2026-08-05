@@ -41,10 +41,6 @@ const KNOWN_DEAD_OR_EPILOGUE: &[&str] = &[
     "task_with_kind",
     "task_with_max_attempts",
     "task_with_retry_on",
-    // ── Dead: emit_ui_call intercepts HtmlAttrTabindex/HtmlAttrRows and emits
-    //         html_named_attr_("tabindex"/"rows", …) instead of these names. ─
-    "html_attr_tabindex_",
-    "html_attr_rows_",
     // ── Dead: emit_http_builder_call constructs an HttpRequest struct inline
     //         for these variants; the name string is never used. ─────────────
     "http_default_request",

@@ -4272,45 +4272,6 @@ fn emit_ui_plan(
             Ok(call)
         }
 
-        // ── Ipe.Html.Attributes builders ─────────────────────────────────
-        // Fixed-key string attr: `class v` → `html_named_attr_("class", v)`.
-        // The key is a compile-time literal (never attacker data); the VALUE is
-        // escaped at the render sink (`escape_attr`), so no escaping here.
-        NativeUiEmit::HtmlStrAttr => {
-            let [v_e] = args else {
-                return Err(Diagnostic::CompilerBug {
-                    where_: "ipe_backend_rust::emit_ui_call::HtmlStrAttr",
-                    detail: format!("{k:?} requires exactly 1 argument, got {}", args.len()),
-                });
-            };
-            let key = k.html_attr_key().ok_or_else(|| Diagnostic::CompilerBug {
-                where_: "ipe_backend_rust::emit_ui_call::HtmlStrAttr",
-                detail: format!("{k:?} is_html_str_attr but html_attr_key returned None"),
-            })?;
-            let v_s = emit_expr_at(ctx, v_e, indent, child, generics)?;
-            Ok(format!(
-                "ipe_runtime::html::html_named_attr_({key:?}.to_owned(), {v_s})"
-            ))
-        }
-
-        // Fixed-key bool attr: `checked b` → `html_bool_named_attr_("checked", b)`.
-        NativeUiEmit::HtmlBoolAttr => {
-            let [b_e] = args else {
-                return Err(Diagnostic::CompilerBug {
-                    where_: "ipe_backend_rust::emit_ui_call::HtmlBoolAttr",
-                    detail: format!("{k:?} requires exactly 1 argument, got {}", args.len()),
-                });
-            };
-            let key = k.html_attr_key().ok_or_else(|| Diagnostic::CompilerBug {
-                where_: "ipe_backend_rust::emit_ui_call::HtmlBoolAttr",
-                detail: format!("{k:?} is_html_bool_attr but html_attr_key returned None"),
-            })?;
-            let b_s = emit_expr_at(ctx, b_e, indent, child, generics)?;
-            Ok(format!(
-                "ipe_runtime::html::html_bool_named_attr_({key:?}.to_owned(), {b_s})"
-            ))
-        }
-
         // ── Ipe.Ui.Lazy — deferred subtree helpers ───────────────────────────
         // Each variant carries (f, a..e) — f is a function-valued Ipê expr;
         // we eta-wrap it so any callable shape (fn item, Box<dyn Fn>, closure)
