@@ -104,7 +104,11 @@ pub const STDLIB_MODULE_QUALIFIERS: &[(&[&str], &str)] = &[
     (&["Ipe", "Db"], "Db"),
     (&["Ipe", "Db", "Decode"], "Db.Decode"),
     (&["Ipe", "Db", "Sql"], "Sql"), // SqlFragment builder
-    (&["Ipe", "Ui"], "Ui"),
+    // `Ipe.Ui` is COMPILED-SOURCE (see `COMPILED_STD_MODULES`), not a kernel
+    // qualifier: its layout builders are pure Ipê over the retained
+    // `node`/`taggedNode` primitives, every other member a `Ffi.kernel "Ui_*"`
+    // alias. The disjointness invariant forbids it here. The `Ipe.Ui.*`
+    // sub-qualifiers below stay native.
     (&["Ipe", "Ui", "Background"], "Background"),
     (&["Ipe", "Ui", "Border"], "Border"),
     (&["Ipe", "Ui", "Font"], "Font"),
@@ -1354,128 +1358,14 @@ impl Env {
             ),
             // Ipe.Http.RateLimit kernels.
             ("RateLimit", &["allow"]),
-            // ── Ipe.Ui — element / attribute / color / layout builders ──────────
-            // `layout` and `layoutWith` are render kernels; the rest are element /
-            // attribute / length / color value builders wired as kernel helpers.
-            // All names below resolve as `VarHome::Kernel("Ui", name)` so that
-            // qualified references like `Ui.column [...]` succeed in the canon phase.
-            (
-                "Ui",
-                &[
-                    // ── render kernels ────────────────────────────────────────
-                    "layout",
-                    "layoutWith",
-                    // ── element builders ─────────────────────────────────────
-                    "none",
-                    "text",
-                    "el",
-                    "row",
-                    "column",
-                    "wrappedRow",
-                    "grid",
-                    "html",
-                    "cells",
-                    // ── attribute builders ───────────────────────────────────
-                    "spacing",
-                    "padding",
-                    "paddingXY",
-                    "paddingEach",
-                    "width",
-                    "height",
-                    "centerX",
-                    "centerY",
-                    "alignLeft",
-                    "alignRight",
-                    "alignTop",
-                    "alignBottom",
-                    "pointer",
-                    "clip",
-                    "clipX",
-                    "clipY",
-                    "scrollbars",
-                    "scrollbarX",
-                    "scrollbarY",
-                    "gridColumns",
-                    "above",
-                    "below",
-                    "onLeft",
-                    "onRight",
-                    "inFront",
-                    "behind",
-                    "onClick",
-                    "onSubmit",
-                    "onInput",
-                    "onChange",
-                    "onFocus",
-                    "onBlur",
-                    "onMouseOver",
-                    "onMouseOut",
-                    "onKeyDown",
-                    "onKeyUp",
-                    "onBool",
-                    "onFile",
-                    "htmlAttribute",
-                    "mediaQuery",
-                    "breakpoint",
-                    "aspectRatio",
-                    "aspectRatioWH",
-                    "square",
-                    "widescreen",
-                    "cinemascope",
-                    "name",
-                    "style",
-                    "transitionRaw",
-                    "gridTracksRaw",
-                    "animateRaw",
-                    "onPseudo",
-                    "hover",
-                    "focus",
-                    "focusVisible",
-                    "active",
-                    "disabled",
-                    "mobile",
-                    "tablet",
-                    "desktop",
-                    "darkMode",
-                    "lightMode",
-                    "reducedMotion",
-                    // ── Length builders ─────────────────────────────────────
-                    "px",
-                    "fill",
-                    "fillPortion",
-                    "content",
-                    "shrink",
-                    "minimum",
-                    "maximum",
-                    "vh",
-                    "vw",
-                    // ── Color builders ──────────────────────────────────────
-                    "rgb",
-                    "rgba",
-                    "white",
-                    "black",
-                    "transparent",
-                    "colorCss",
-                    // ── Other ────────────────────────────────────────────────
-                    "paragraph",
-                    "textColumn",
-                    "image",
-                    "link",
-                    "button",
-                    "input",
-                    "form",
-                    // ── Ui.describe + desc* constructors ─────────────────────
-                    "describe",
-                    "descMain",
-                    "descNavigation",
-                    "descContentInfo",
-                    "descComplementary",
-                    "descLivePolite",
-                    "descLiveAssertive",
-                    "descHeading",
-                    "descLabel",
-                ],
-            ),
+            // `Ipe.Ui` is COMPILED-SOURCE (see `COMPILED_STD_MODULES`), not a
+            // kernel qualifier: the layout builders (`el`/`row`/`column`/
+            // `wrappedRow`/`grid`/`paragraph`/`textColumn`/`form`/`input`) are
+            // pure Ipê over the retained `node`/`taggedNode` primitives, and every
+            // other member is a `Ffi.kernel "Ui_*"` alias resolving to its
+            // unchanged kernel. The `Ipe.Ui.*` sub-qualifiers (Background/Border/
+            // Font/Region/Input/Lazy/Keyed) stay native below. The disjointness
+            // invariant forbids `Ui` here.
             // ── Ipe.Ui.Background sub-module ─────────────────────────────────────
             (
                 "Background",
@@ -1785,11 +1675,11 @@ impl Env {
         // `clippy::items_after_statements`.
         const QUALIFIER_ALIASES: &[(&str, &str)] = &[
             // (alias_qualifier, canonical_qualifier)
-            ("Ipe.Ui", "Ui"),
-            // `Ipe.Html` and `Ipe.Html.Attributes` are compiled-source (mirror
-            // `Ipe.Path` / `Ipe.Url`): no qualifier alias — members resolve
-            // through source-dep injection, their retained primitives + native
-            // serialiser via `Ffi.kernel "Html_*"` / `"Attr_*"`.
+            // `Ipe.Ui`, `Ipe.Html`, and `Ipe.Html.Attributes` are compiled-source
+            // (mirror `Ipe.Path` / `Ipe.Url`): no qualifier alias — members
+            // resolve through source-dep injection, their retained primitives +
+            // native serialiser via `Ffi.kernel "Ui_*"` / `"Html_*"` / `"Attr_*"`.
+            // The `Ipe.Ui.*` sub-module aliases stay below.
             ("Ipe.Html.Events", "Event"),
             // ── Ipe.Tea.<Shape> shape aliases (ADR 0048) ──────────────────────
             ("Ipe.Tea.Web", "Web"),

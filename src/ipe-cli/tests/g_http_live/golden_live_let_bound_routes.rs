@@ -90,8 +90,9 @@ fn live_let_bound_routes_renders_route_page() {
         return;
     };
     assert!(result.is_ok(), "must compile: {:?}", result.err());
-    let main_rs = std::fs::read_to_string(out.join("src").join("main.rs"))
-        .expect("emitted main.rs must exist");
+    // A layout builder is compiled-source Ipê now, so the route table's home may
+    // lower to `src/ipe_mods/*.rs` — scan the WHOLE emitted Ipê-side tree.
+    let main_rs = crate::support::read_all_emitted_src(&out);
     assert!(
         main_rs.contains("route::Route<MainPage>"),
         "#108 hole 1: the let-bound route table's signature must render \

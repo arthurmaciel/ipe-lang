@@ -16239,6 +16239,8 @@ impl<'a> Lowerer<'a> {
                 | KernelFn::RegionAnnounce
                 | KernelFn::RegionAnnounceUrgently
                 // ── Ui.describe desc* constructors — arity-0 ────────────────
+                | KernelFn::UiDescNone
+                | KernelFn::UiDescParagraph
                 | KernelFn::UiDescMain
                 | KernelFn::UiDescNavigation
                 | KernelFn::UiDescContentInfo
@@ -16403,8 +16405,7 @@ impl<'a> Lowerer<'a> {
                 // ── Ipe.Ui.Region — arity-1 attrs ─────────────────────────
                 | KernelFn::RegionHeading
                 | KernelFn::RegionLabel
-                // ── Ui.input + Ui.describe + desc* arity-1 ──────────────────────
-                | KernelFn::UiInput
+                // ── Ui.describe + desc* arity-1 ─────────────────────────────────
                 | KernelFn::UiDescribe
                 | KernelFn::UiDescHeading
                 | KernelFn::UiDescLabel
@@ -16430,23 +16431,6 @@ impl<'a> Lowerer<'a> {
                 KernelFn::UiLayout
                 // `Ui.layoutWith : { wrapperAttrs, rootAttrs } -> Element msg -> Html msg`
                 | KernelFn::UiLayoutWith
-                // ── Ui element builders — arity 2 ────────────────────────
-                // `Ui.el : List (Attribute msg) -> Element msg -> Element msg`
-                | KernelFn::UiEl
-                // `Ui.row : List (Attribute msg) -> List (Element msg) -> Element msg`
-                | KernelFn::UiRow
-                // `Ui.column : List (Attribute msg) -> List (Element msg) -> Element msg`
-                | KernelFn::UiColumn
-                // `Ui.wrappedRow : List (Attribute msg) -> List (Element msg) -> Element msg`
-                | KernelFn::UiWrappedRow
-                // `Ui.grid : List (Attribute msg) -> List (Element msg) -> Element msg`
-                | KernelFn::UiGrid
-                // `Ui.paragraph : List (Attribute msg) -> List (Element msg) -> Element msg`
-                | KernelFn::UiParagraph
-                // `Ui.textColumn : List (Attribute msg) -> List (Element msg) -> Element msg`
-                | KernelFn::UiTextColumn
-                // `Ui.form : List (Attribute msg) -> List (Element msg) -> Element msg`
-                | KernelFn::UiForm
                 // `Ui.button : List (Attribute msg) -> { onPress : Maybe msg, label : Element msg } -> Element msg`
                 | KernelFn::UiButton
                 // `Ui.link : List (Attribute msg) -> { url : String, label : Element msg } -> Element msg`
@@ -16530,6 +16514,8 @@ impl<'a> Lowerer<'a> {
                 KernelFn::UiRgb
                 // `Html.node : String -> List (Attribute msg) -> List (Html msg) -> Html msg`
                 | KernelFn::HtmlNode
+                // `Ui.node : Description -> List (Attribute msg) -> List (Element msg) -> Element msg`
+                | KernelFn::UiNode
                 // `Ui.breakpoint : String -> List (Attribute msg) -> Element msg -> Element msg`
                 // (delegates to Ui.mediaQuery at runtime — see ui_breakpoint_)
                 | KernelFn::UiBreakpoint
@@ -16546,7 +16532,9 @@ impl<'a> Lowerer<'a> {
                 // Native surface backing `Ipe.Ui.Animation.attribute` — carries the
                 // keyframe name, animation shorthand tail, `@keyframes` body, and the
                 // respect-`prefers-reduced-motion` flag (see ui_animate_raw_).
-                | KernelFn::UiAnimateRaw,
+                | KernelFn::UiAnimateRaw
+                // `Ui.taggedNode : String -> Description -> List (Attribute msg) -> List (Element msg) -> Element msg`
+                | KernelFn::UiTaggedNode,
             ) => Ok(4),
             // ── Ipe.Auth / Stream / HttpStream — fail-closed kernels ──
             // These kernels are registered in the qualifier table but have no
@@ -17646,14 +17634,10 @@ impl<'a> Lowerer<'a> {
                     ("Ui", "text") => Ok(Callee::Kernel(KernelFn::UiText)),
                     ("Ui", "html") => Ok(Callee::Kernel(KernelFn::UiHtml)),
                     ("Ui", "cells") => Ok(Callee::Kernel(KernelFn::UiCells)),
-                    ("Ui", "el") => Ok(Callee::Kernel(KernelFn::UiEl)),
-                    ("Ui", "row") => Ok(Callee::Kernel(KernelFn::UiRow)),
-                    ("Ui", "column") => Ok(Callee::Kernel(KernelFn::UiColumn)),
-                    ("Ui", "wrappedRow") => Ok(Callee::Kernel(KernelFn::UiWrappedRow)),
-                    ("Ui", "grid") => Ok(Callee::Kernel(KernelFn::UiGrid)),
-                    ("Ui", "paragraph") => Ok(Callee::Kernel(KernelFn::UiParagraph)),
-                    ("Ui", "textColumn") => Ok(Callee::Kernel(KernelFn::UiTextColumn)),
-                    ("Ui", "form") => Ok(Callee::Kernel(KernelFn::UiForm)),
+                    // Retained container / tagged-element primitives — the layout
+                    // and flow builders are pure Ipê over these in `Ipe/Ui.ipe`.
+                    ("Ui", "node") => Ok(Callee::Kernel(KernelFn::UiNode)),
+                    ("Ui", "taggedNode") => Ok(Callee::Kernel(KernelFn::UiTaggedNode)),
                     ("Ui", "button") => Ok(Callee::Kernel(KernelFn::UiButton)),
                     ("Ui", "link") => Ok(Callee::Kernel(KernelFn::UiLink)),
                     ("Ui", "image") => Ok(Callee::Kernel(KernelFn::UiImage)),
@@ -17873,9 +17857,10 @@ impl<'a> Lowerer<'a> {
                     ("Region", "announceUrgently") => {
                         Ok(Callee::Kernel(KernelFn::RegionAnnounceUrgently))
                     }
-                    // ── Ui.input + Ui.describe + desc* constructors ───────────
-                    ("Ui", "input") => Ok(Callee::Kernel(KernelFn::UiInput)),
+                    // ── Ui.describe + desc* constructors ──────────────────────
                     ("Ui", "describe") => Ok(Callee::Kernel(KernelFn::UiDescribe)),
+                    ("Ui", "descNone") => Ok(Callee::Kernel(KernelFn::UiDescNone)),
+                    ("Ui", "descParagraph") => Ok(Callee::Kernel(KernelFn::UiDescParagraph)),
                     ("Ui", "descMain") => Ok(Callee::Kernel(KernelFn::UiDescMain)),
                     ("Ui", "descNavigation") => Ok(Callee::Kernel(KernelFn::UiDescNavigation)),
                     ("Ui", "descContentInfo") => Ok(Callee::Kernel(KernelFn::UiDescContentInfo)),

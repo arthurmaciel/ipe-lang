@@ -100,6 +100,22 @@ const HTML_ATTRIBUTES: &str = include_str!("../Ipe/Html/Attributes.ipe");
 /// Registered in [`COMPILED_STD_MODULES`] (NOT `MODULES`); NOT in
 /// `STDLIB_MODULE_QUALIFIERS`, so the disjointness invariant holds.
 const HTML: &str = include_str!("../Ipe/Html.ipe");
+/// `Ipe.Ui` — element / attribute / colour / layout surface, compiled-source
+/// Layer-3.
+///
+/// The layout builders (`el`/`row`/`column`/`wrappedRow`/`grid`/`paragraph`/
+/// `textColumn`/`form`/`input`) are pure Ipê over two retained primitives —
+/// `node`/`taggedNode` — point-free `Ffi.kernel "Ui_*"` aliases resolved by
+/// `ipe_canon::resolve::detect_kernel_alias` to the retained `UiNode`/
+/// `UiTaggedNode` kernels (runtime: `ipe_runtime::ui::helpers::*`). Every other
+/// member (`layout`/`spacing`/`button`/`link`/`image`/the `on*` events/the
+/// security-gated `mediaQuery`/`breakpoint`/`onPseudo`/the `desc*` roles/…)
+/// stays native and is re-aliased here through the same mechanism, so its
+/// bespoke emit arm is unchanged. The `Ipe.Ui.*` sub-modules (Background/Border/
+/// Font/Region/Input/Lazy/Keyed) stay native kernel qualifiers. Registered in
+/// [`COMPILED_STD_MODULES`] (NOT `MODULES`); NOT in `STDLIB_MODULE_QUALIFIERS`,
+/// so the disjointness invariant holds.
+const UI: &str = include_str!("../Ipe/Ui.ipe");
 /// `Ipe.Regex` — RE2 regex helpers, compiled-source Layer-3.
 ///
 /// The members are point-free `Ffi.kernel "Regex_*"` aliases resolved by the
@@ -645,6 +661,13 @@ pub const COMPILED_STD_MODULES: &[CompiledStdModule] = &[
     CompiledStdModule {
         dotted: "Ipe.Html",
         source: HTML,
+    },
+    // Ipe.Ui — Layer-3 source; the layout builders are pure Ipê over the retained
+    // `Ffi.kernel "Ui_node"` / `"Ui_taggedNode"` primitives, with every other
+    // member re-aliased to its unchanged native kernel (`ipe_runtime::ui::*`).
+    CompiledStdModule {
+        dotted: "Ipe.Ui",
+        source: UI,
     },
     // Ipe.Markdown — pure Ipê markdown→Ui renderer; no kernel calls.
     CompiledStdModule {

@@ -46,7 +46,7 @@ pub enum ArgPlan {
     /// `path`, i.e. `path(a0, a1, …, a{arity-1})`. `arity == 0` emits `path()`.
     ///
     /// `path` is the fully-qualified runtime function, e.g.
-    /// `"ipe_runtime::ui::helpers::ui_column_"`.
+    /// `"ipe_runtime::ui::helpers::ui_node_"`.
     Positional { path: &'static str, arity: u8 },
     /// The kernel's emission is bespoke — a callback carrier, an inline record
     /// config, the HTML serialiser, a predicate-keyed tag/attribute family, a
@@ -219,14 +219,8 @@ pub const fn ui_call_shape(k: KernelFn) -> Option<UiEmitPlan> {
             1,
             Guard::RejectInWebShape,
         ),
-        KernelFn::UiEl => pos("ipe_runtime::ui::helpers::ui_el_", 2),
-        KernelFn::UiRow => pos("ipe_runtime::ui::helpers::ui_row_", 2),
-        KernelFn::UiColumn => pos("ipe_runtime::ui::helpers::ui_column_", 2),
-        KernelFn::UiWrappedRow => pos("ipe_runtime::ui::helpers::ui_wrapped_row_", 2),
-        KernelFn::UiGrid => pos("ipe_runtime::ui::helpers::ui_grid_", 2),
-        KernelFn::UiParagraph => pos("ipe_runtime::ui::helpers::ui_paragraph_", 2),
-        KernelFn::UiTextColumn => pos("ipe_runtime::ui::helpers::ui_text_column_", 2),
-        KernelFn::UiForm => pos("ipe_runtime::ui::helpers::ui_form_", 2),
+        KernelFn::UiNode => pos("ipe_runtime::ui::helpers::ui_node_", 3),
+        KernelFn::UiTaggedNode => pos("ipe_runtime::ui::helpers::ui_tagged_node_", 4),
         KernelFn::UiAbove => pos("ipe_runtime::ui::helpers::ui_above_", 1),
         KernelFn::UiBelow => pos("ipe_runtime::ui::helpers::ui_below_", 1),
         KernelFn::UiOnLeft => pos("ipe_runtime::ui::helpers::ui_on_left_", 1),
@@ -384,8 +378,9 @@ pub const fn ui_call_shape(k: KernelFn) -> Option<UiEmitPlan> {
         KernelFn::RegionAnnounceUrgently => {
             pos("ipe_runtime::ui::helpers::ui_region_announce_urgently_", 0)
         }
-        KernelFn::UiInput => pos("ipe_runtime::ui::helpers::ui_input_", 1),
         KernelFn::UiDescribe => pos("ipe_runtime::ui::helpers::ui_describe_", 1),
+        KernelFn::UiDescNone => pos("ipe_runtime::ui::helpers::ui_desc_none_", 0),
+        KernelFn::UiDescParagraph => pos("ipe_runtime::ui::helpers::ui_desc_paragraph_", 0),
         KernelFn::UiDescMain => pos("ipe_runtime::ui::helpers::ui_desc_main_", 0),
         KernelFn::UiDescNavigation => pos("ipe_runtime::ui::helpers::ui_desc_navigation_", 0),
         KernelFn::UiDescContentInfo => pos("ipe_runtime::ui::helpers::ui_desc_content_info_", 0),
@@ -497,12 +492,12 @@ mod tests {
     fn positional_widgets_carry_path_and_arity() {
         let cases = [
             (KernelFn::UiText, "ipe_runtime::ui::helpers::ui_text_", 1u8),
+            (KernelFn::UiNode, "ipe_runtime::ui::helpers::ui_node_", 3),
             (
-                KernelFn::UiColumn,
-                "ipe_runtime::ui::helpers::ui_column_",
-                2,
+                KernelFn::UiTaggedNode,
+                "ipe_runtime::ui::helpers::ui_tagged_node_",
+                4,
             ),
-            (KernelFn::UiGrid, "ipe_runtime::ui::helpers::ui_grid_", 2),
             (KernelFn::UiRgb, "ipe_runtime::ui::helpers::ui_rgb_", 3),
             (KernelFn::UiRgba, "ipe_runtime::ui::helpers::ui_rgba_", 4),
             (KernelFn::UiNone, "ipe_runtime::ui::helpers::ui_none_", 0),
