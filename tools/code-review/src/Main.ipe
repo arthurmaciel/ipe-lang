@@ -1,9 +1,13 @@
 module Main exposing (main)
 
+import Ipe.Db as Db
+import Ipe.Dict as Dict
 import Ipe.Error as Error
 import Ipe.List as List
 import Ipe.Maybe as Maybe
 import Ipe.String as String
+import Ipe.System as System
+import Ipe.Task as Task
 import Ipe.Tea.Web as Web
 import Ipe.Tea.Web.Cmd as Cmd
 import Ipe.Tea.Web.Sub as Sub
@@ -11,6 +15,8 @@ import Ipe.Ui as Ui
 import Ipe.Ui.Background as Background
 import Ipe.Ui.Border as Border
 import Ipe.Ui.Font as Font
+import Ipe.Ui.Input as Input
+import Lib.Db as LibDb exposing (Decision(..))
 import Lib.Index as Index
 
 
@@ -22,19 +28,44 @@ type alias Model =
     { page : Page
     , queue : List Index.Unit
     , queueError : Maybe String
+    , decisions : Dict.Dict String (Maybe LibDb.Decision)
+    , refusingUid : Maybe String
+    , refuseDraft : String
+    , refuseError : Maybe String
     }
 
 
 init : Web.WebReq -> ( Model, Cmd Msg )
 init _ =
-    ( { page = Shell, queue = [], queueError = Nothing }
+    ( { page = Shell
+      , queue = []
+      , queueError = Nothing
+      , decisions = Dict.empty
+      , refusingUid = Nothing
+      , refuseDraft = ""
+      , refuseError = Nothing
+      }
     , Cmd.perform Index.loadPending PendingLoaded
     )
+
+
+reviewDb : Task Error Db.Db
+reviewDb =
+    Db.open "sqlite" (System.getenvOr "IPE_REVIEW_DB" "review.db")
+        |> Task.andThen (\db -> Task.map (\_ -> db) (LibDb.migrate db))
 
 
 type Msg
     = NoOp
     | PendingLoaded (Result Error (List Index.Unit))
+    | DecisionsLoaded (Result Error (List ( String, Maybe LibDb.Decision )))
+    | ApproveUnit String
+    | RefuseStart String
+    | RefuseDraft String
+    | RefuseCancel
+    | RefuseSubmit String
+    | DecisionSaved String (Result Error Int)
+    | DecisionFound String (Result Error (Maybe LibDb.Decision))
 
 
 update : Msg -> Model -> ( Model, Cmd Msg )
@@ -46,10 +77,98 @@ update msg model =
         PendingLoaded result ->
             case result of
                 Ok units ->
-                    ( { model | queue = units, queueError = Nothing }, Cmd.none )
+                    let
+                        m =
+                            { model | queue = units, decisions = Dict.empty, refusingUid = Nothing }
+                    in
+                    ( m, Cmd.perform (loadDecisions units) DecisionsLoaded )
 
                 Err e ->
                     ( { model | queue = [], queueError = Just (Error.toString e) }, Cmd.none )
+
+        DecisionsLoaded result ->
+            case result of
+                Ok pairs ->
+                    ( { model | decisions = Dict.fromList pairs }, Cmd.none )
+
+                Err e ->
+                    ( { model | queueError = Just ("Decision lookup failed: " ++ Error.toString e) }, Cmd.none )
+
+        ApproveUnit uid ->
+            ( model, saveDecision model uid Approved )
+
+        RefuseStart uid ->
+            ( { model | refusingUid = Just uid, refuseDraft = "", refuseError = Nothing }, Cmd.none )
+
+        RefuseDraft text ->
+            ( { model | refuseDraft = text, refuseError = Nothing }, Cmd.none )
+
+        RefuseCancel ->
+            ( { model | refusingUid = Nothing, refuseDraft = "", refuseError = Nothing }, Cmd.none )
+
+        RefuseSubmit uid ->
+            if String.isEmpty (String.trim model.refuseDraft) then
+                ( { model | refuseError = Just "Reason is required" }, Cmd.none )
+
+            else
+                ( { model | refusingUid = Nothing, refuseDraft = "" }, saveDecision model uid (Refused model.refuseDraft) )
+
+        DecisionSaved uid result ->
+            case result of
+                Ok _ ->
+                    ( model, refindDecision model uid )
+
+                Err e ->
+                    ( { model | queueError = Just ("Decision save failed: " ++ Error.toString e) }, Cmd.none )
+
+        DecisionFound uid result ->
+            case result of
+                Ok d ->
+                    ( { model | decisions = Dict.insert uid d model.decisions }, Cmd.none )
+
+                Err e ->
+                    ( { model | queueError = Just ("Decision lookup failed: " ++ Error.toString e) }, Cmd.none )
+
+
+saveDecision : Model -> String -> LibDb.Decision -> Cmd Msg
+saveDecision model uid decision =
+    Cmd.perform
+        (reviewDb
+            |> Task.andThen (\db -> LibDb.insertDecision db uid (bodyHashOf uid model.queue) decision)
+        )
+        (DecisionSaved uid)
+
+
+refindDecision : Model -> String -> Cmd Msg
+refindDecision model uid =
+    Cmd.perform
+        (reviewDb
+            |> Task.andThen (\db -> LibDb.findDecision db uid (bodyHashOf uid model.queue))
+        )
+        (DecisionFound uid)
+
+
+loadDecisions : List Index.Unit -> Task Error (List ( String, Maybe LibDb.Decision ))
+loadDecisions units =
+    reviewDb
+        |> Task.andThen
+            (\db ->
+                Task.sequence
+                    (List.map
+                        (\u -> Task.map (\d -> ( u.uid, d )) (LibDb.findDecision db u.uid u.bodyHash))
+                        units
+                    )
+            )
+
+
+bodyHashOf : String -> List Index.Unit -> String
+bodyHashOf uid units =
+    case List.find (\u -> u.uid == uid) units of
+        Just u ->
+            u.bodyHash
+
+        Nothing ->
+            ""
 
 
 header : Model -> Ui.Element Msg
@@ -65,7 +184,9 @@ header model =
         , Border.widthEach { top = 0, right = 0, bottom = 1, left = 0 }
         ]
         [ Ui.el [ Font.size 16, Font.bold, Font.color (Ui.rgb 235 235 240) ] (Ui.text "Code review")
-        , Ui.el [ Font.size 14, Font.color (Ui.rgb 160 160 175) ] (Ui.text "0% reviewed")
+        , Ui.el
+            [ Font.size 14, Font.color (Ui.rgb 160 160 175) ]
+            (Ui.text (String.fromInt (Dict.size model.decisions) ++ " of " ++ String.fromInt (List.length model.queue) ++ " reviewed"))
         ]
 
 
@@ -91,7 +212,193 @@ body model =
                 Ui.text "No units queued yet."
 
             else
-                Ui.text (String.fromInt (List.length model.queue) ++ " units queued.")
+                Ui.column
+                    [ Ui.width Ui.fill, Ui.spacing 16, Ui.scrollbars ]
+                    (List.map (unitCard model) model.queue)
+
+
+unitCard : Model -> Index.Unit -> Ui.Element Msg
+unitCard model unit =
+    Ui.column
+        [ Ui.width Ui.fill
+        , Ui.padding 16
+        , Ui.spacing 10
+        , Background.color (Ui.rgb 24 24 32)
+        , Border.rounded 8
+        , Border.solid
+        , Border.width 1
+        , Border.color (Ui.rgb 50 50 62)
+        ]
+        [ Ui.row
+            [ Ui.width Ui.fill, Ui.spacing 10, Ui.centerY ]
+            [ Ui.el [ Font.size 14, Font.bold, Font.color (Ui.rgb 235 235 240) ] (Ui.text unit.qualified)
+            , changeBadge unit.change
+            , chip unit.facing
+            , chip unit.kind
+            , Ui.el [ Ui.width Ui.fill ] Ui.none
+            , decisionArea model unit
+            ]
+        , Ui.el
+            [ Font.size 12, Font.family Font.monospace, Font.color (Ui.rgb 150 150 165) ]
+            (Ui.text (unit.path ++ " · lines " ++ String.fromInt unit.lineStart ++ "-" ++ String.fromInt unit.lineEnd ++ maybePurpose unit))
+        , sourceBlock unit
+        ]
+
+
+maybePurpose : Index.Unit -> String
+maybePurpose unit =
+    case unit.purpose of
+        Just p ->
+            " · purpose " ++ p
+
+        Nothing ->
+            ""
+
+
+changeBadge : String -> Ui.Element Msg
+changeBadge change =
+    case change of
+        "new" ->
+            chipColored "NEW" (Ui.rgb 35 120 55)
+
+        _ ->
+            chipColored "MODIFIED" (Ui.rgb 145 95 20)
+
+
+chip : String -> Ui.Element Msg
+chip label =
+    chipColored label (Ui.rgb 40 40 52)
+
+
+chipColored : String -> Ui.Color -> Ui.Element Msg
+chipColored label bg =
+    Ui.el
+        [ Ui.paddingXY 8 3
+        , Background.color bg
+        , Border.rounded 4
+        , Font.size 11
+        , Font.bold
+        , Font.color (Ui.rgb 220 220 230)
+        ]
+        (Ui.text label)
+
+
+decisionArea : Model -> Index.Unit -> Ui.Element Msg
+decisionArea model unit =
+    case Dict.get unit.uid model.decisions of
+        Just decided ->
+            case decided of
+                Just Approved ->
+                    chipColored "✓ Approved" (Ui.rgb 35 120 55)
+
+                Just (Refused reason) ->
+                    Ui.row
+                        [ Ui.spacing 8, Ui.centerY ]
+                        [ chipColored "✗ Refused" (Ui.rgb 130 45 45)
+                        , Ui.el [ Font.size 11, Font.color (Ui.rgb 200 120 120) ] (Ui.text reason)
+                        ]
+
+                Nothing ->
+                    decisionButtons model unit
+
+        Nothing ->
+            decisionButtons model unit
+
+
+decisionButtons : Model -> Index.Unit -> Ui.Element Msg
+decisionButtons model unit =
+    if model.refusingUid == Just unit.uid then
+        refusePanel model unit.uid
+
+    else
+        Ui.row
+            [ Ui.spacing 8 ]
+            [ Ui.button
+                [ Ui.paddingXY 10 5
+                , Background.color (Ui.rgb 46 160 67)
+                , Border.rounded 4
+                , Font.size 12
+                , Font.bold
+                , Font.color (Ui.rgb 10 20 12)
+                ]
+                { onPress = Just (ApproveUnit unit.uid), label = Ui.text "Approve" }
+            , Ui.button
+                [ Ui.paddingXY 10 5
+                , Background.color (Ui.rgb 165 60 60)
+                , Border.rounded 4
+                , Font.size 12
+                , Font.bold
+                , Font.color (Ui.rgb 245 235 235)
+                ]
+                { onPress = Just (RefuseStart unit.uid), label = Ui.text "Refuse" }
+            ]
+
+
+refusePanel : Model -> String -> Ui.Element Msg
+refusePanel model uid =
+    Ui.column
+        [ Ui.width (Ui.px 240), Ui.spacing 6 ]
+        [ Input.text
+            [ Ui.width Ui.fill ]
+            { label = Input.labelAbove [ Font.size 11 ] (Ui.text "Reason")
+            , text = model.refuseDraft
+            , onChange = RefuseDraft
+            , placeholder = Just (Input.placeholder [ Font.size 12 ] (Ui.text "Why refuse?"))
+            }
+        , case model.refuseError of
+            Just err ->
+                Ui.el [ Font.size 11, Font.color (Ui.rgb 220 110 110) ] (Ui.text err)
+
+            Nothing ->
+                Ui.none
+        , Ui.row
+            [ Ui.spacing 8 ]
+            [ Ui.button
+                [ Ui.paddingXY 10 5
+                , Background.color (Ui.rgb 165 60 60)
+                , Border.rounded 4
+                , Font.size 12
+                , Font.bold
+                , Font.color (Ui.rgb 245 235 235)
+                ]
+                { onPress = Just (RefuseSubmit uid), label = Ui.text "Confirm" }
+            , Ui.button
+                [ Ui.paddingXY 10 5
+                , Background.color (Ui.rgb 55 55 70)
+                , Border.rounded 4
+                , Font.size 12
+                , Font.color (Ui.rgb 200 200 210)
+                ]
+                { onPress = Just RefuseCancel, label = Ui.text "Cancel" }
+            ]
+        ]
+
+
+sourceBlock : Index.Unit -> Ui.Element Msg
+sourceBlock unit =
+    Ui.el
+        [ Ui.width Ui.fill
+        , Ui.height (Ui.px 240)
+        , Ui.scrollbars
+        , Background.color (Ui.rgb 12 12 18)
+        , Border.rounded 4
+        , Ui.padding 12
+        ]
+        (Ui.column
+            [ Ui.width Ui.fill, Ui.spacing 2 ]
+            (List.map sourceLine (String.lines unit.source))
+        )
+
+
+sourceLine : String -> Ui.Element Msg
+sourceLine line =
+    Ui.el
+        [ Ui.width Ui.fill
+        , Font.family Font.monospace
+        , Font.size 12
+        , Font.color (Ui.rgb 205 205 215)
+        ]
+        (Ui.text line)
 
 
 subscriptions : Model -> Sub Msg
