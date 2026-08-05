@@ -16,6 +16,7 @@ use ipe_ir::{
 use crate::EmitCtx;
 use crate::doc::Doc;
 use crate::emit_types::{GenericScope, render_type};
+use crate::emit_ui_plan::{ArgPlan, Guard, NativeUiEmit, UiDelegate, UiEmitPlan, ui_call_shape};
 use crate::naming::kernel_name;
 use crate::render::{RenderConfig, render_seeded};
 
@@ -3146,18 +3147,16 @@ fn emit_arc_callback_field(
 
 /// Handle `Ipe.Ui` / `Ipe.Html` kernel calls.
 ///
-/// The render kernels (`UiLayout`, `UiLayoutWith`, `HtmlRender`,
-/// `HtmlEscapeText`, `HtmlEscapeAttr`, `HtmlAttrToString`) emit calls to
-/// `ipe_runtime::ui::render::*` and `ipe_runtime::html::*` here. The app-entry
-/// kernels (`WebApp`, `WebAppRouted`, `WebRoute`, `WebRenderStatic`,
-/// `TerminalAppScreen`, `TerminalAppLines`, `WebViewApp`) delegate to their
-/// respective `emit_web` / `emit_tui` / `emit_console` / `emit_webview` emitters.
+/// Two steps: [`ui_call_shape`] classifies the kernel into a pure
+/// [`UiEmitPlan`] (or `None` for a non-UI-family kernel), then [`emit_ui_plan`]
+/// interprets the plan into emitted Rust. The uniform majority — a call to one
+/// runtime path with N positionally emitted arguments — needs no per-kernel
+/// code; the capability and security leaves (record configs, event-handler
+/// wiring, the HTML serialiser, deferred-subtree wrappers, the `Ui.cells` seal,
+/// and the shape-router delegations) are dispatched by their plan's native tag.
 ///
 /// Returns `None` for any kernel that is not a `Ui` / `Web` / `Terminal` /
 /// `WebView` variant, letting the standard call path handle it.
-#[allow(clippy::too_many_lines)] // declarative UI kernel dispatch — must list every variant explicitly
-#[allow(clippy::many_single_char_names)] // r/g/b/a/k are conventional names for colour channels and kernel var
-#[inline(never)]
 fn emit_ui_call(
     ctx: &EmitCtx,
     callee: &Callee,
@@ -3170,35 +3169,77 @@ fn emit_ui_call(
     let Callee::Kernel(k) = callee else {
         return Ok(None);
     };
-    // Only handle Ui / Web / Tui / Webview / Cli kernels.
-    if !k.is_ui() && !k.is_web() && !k.is_tui() && !k.is_webview() && !k.is_console() {
+    let Some(plan) = ui_call_shape(*k) else {
         return Ok(None);
+    };
+    emit_ui_plan(
+        ctx, &plan, *k, callee, args, on_form, indent, child, generics,
+    )
+    .map(Some)
+}
+
+/// Interpret one [`UiEmitPlan`] into the emitted Rust the call lowers to.
+///
+/// A [`ArgPlan::Positional`] plan emits each argument in order and formats them
+/// into the plan's runtime path — the uniform shape that subsumes the majority
+/// of UI kernels. A [`ArgPlan::Native`] plan dispatches to the bespoke emission
+/// for that capability or security leaf. The single [`Guard::RejectInWebShape`]
+/// check runs first, fail-closed.
+#[allow(clippy::too_many_lines)] // the capability-leaf emitters, gathered under one native dispatch
+#[allow(clippy::many_single_char_names)] // r/g/b/a are the conventional colour-channel names in moved arms
+#[allow(clippy::too_many_arguments)] // the emit thread-through (ctx, callee, on_form, indent, child, generics)
+fn emit_ui_plan(
+    ctx: &EmitCtx,
+    plan: &UiEmitPlan,
+    k: KernelFn,
+    callee: &Callee,
+    args: &[Expr],
+    on_form: ipe_ir::OnFormKind,
+    indent: usize,
+    child: u16,
+    generics: GenericScope,
+) -> DResult<String> {
+    // Guard first — fail closed. `Ui.cells` paints raw terminal cells and has
+    // no browser denotation; in a Web/WebView build its runtime helper degrades
+    // to plain text, so it would ipe-succeed and silently render wrong. Reject
+    // it here — the one point it is emitted — converting a wrong render into a
+    // shape-keyed ipe error.
+    if plan.guard == Guard::RejectInWebShape && (ctx.uses_web || ctx.uses_webview) {
+        let app = if ctx.uses_webview {
+            ipe_diagnostics::AppShape::WebView
+        } else {
+            ipe_diagnostics::AppShape::Web
+        };
+        return Err(Diagnostic::Lower {
+            span: Span::DUMMY,
+            msg: LowerError::UiCellsInWebShape(app),
+        });
     }
-    match k {
-        // ── Ipe.Ui / Ipe.Html render kernels ─────────────────────────────────
 
-        // `Ui.layout : List (Attribute msg) -> Element msg -> Html msg`
-        //
-        // Emits: `ipe_runtime::ui::render::ui_layout(attrs, elem)`
-        KernelFn::UiLayout => {
-            let [attrs_e, elem_e] = args else {
+    let native = match plan.args {
+        // The uniform majority: emit each argument in order, join, format into
+        // the runtime path. `arity == 0` emits `path()`. A wrong argument count
+        // is a compiler bug — the lowerer already enforced the kernel's arity.
+        ArgPlan::Positional { path, arity } => {
+            if args.len() != usize::from(arity) {
                 return Err(Diagnostic::CompilerBug {
-                    where_: "ipe_backend_rust::emit_ui_call::UiLayout",
-                    detail: format!("Ui.layout requires exactly 2 arguments, got {}", args.len()),
+                    where_: "ipe_backend_rust::emit_ui_plan",
+                    detail: format!(
+                        "{k:?} requires exactly {arity} arguments, got {}",
+                        args.len()
+                    ),
                 });
-            };
-            let attrs_s = emit_expr_at(ctx, attrs_e, indent, child, generics)?;
-            let elem_s = emit_expr_at(ctx, elem_e, indent, child, generics)?;
-            // M is inferred bottom-up from the concrete element /
-            // attrs types that the region-type–sourced emit propagates.  No
-            // turbofish required; Rust unifies M from the element argument or from
-            // the enclosing function's return type annotation — both supply a
-            // concrete `Msg` type.  The old `enclosing_ui_msg` mechanism is gone.
-            Ok(Some(format!(
-                "ipe_runtime::ui::render::ui_layout({attrs_s}, {elem_s})"
-            )))
+            }
+            let mut rendered = Vec::with_capacity(args.len());
+            for a in args {
+                rendered.push(emit_expr_at(ctx, a, indent, child, generics)?);
+            }
+            return Ok(format!("{path}({})", rendered.join(", ")));
         }
+        ArgPlan::Native(native) => native,
+    };
 
+    match native {
         // `Ui.layoutWith : { wrapperAttrs : ..., rootAttrs : ... } -> Element msg -> Html msg`
         //
         // Emits: `ipe_runtime::ui::render::ui_layout_with_vecs::<M>(wrapper, root, elem)`
@@ -3214,7 +3255,7 @@ fn emit_ui_call(
         //
         // Non-literal cfg (e.g. `let cfg = { … } in Ui.layoutWith cfg elem`) is
         // rejected fail-closed with `CompilerBug` (unsupported).
-        KernelFn::UiLayoutWith => {
+        NativeUiEmit::LayoutWith => {
             let [cfg_e, elem_e] = args else {
                 return Err(Diagnostic::CompilerBug {
                     where_: "ipe_backend_rust::emit_ui_call::UiLayoutWith",
@@ -3236,7 +3277,7 @@ fn emit_ui_call(
                 });
             };
             // Same bottom-up M inference as UiLayout — no turbofish.
-            Ok(Some(emit_cfg_record_call(
+            Ok(emit_cfg_record_call(
                 ctx,
                 &[],
                 fields,
@@ -3247,13 +3288,13 @@ fn emit_ui_call(
                 indent,
                 child,
                 generics,
-            )?))
+            )?)
         }
 
         // `Html.render : Html msg -> String`
         //
         // Emits: `ipe_runtime::html::render_html(&html)`
-        KernelFn::HtmlRender => {
+        NativeUiEmit::HtmlSerialise => {
             let [html_e] = args else {
                 return Err(Diagnostic::CompilerBug {
                     where_: "ipe_backend_rust::emit_ui_call::HtmlRender",
@@ -3264,339 +3305,13 @@ fn emit_ui_call(
                 });
             };
             let html_s = emit_expr_at(ctx, html_e, indent, child, generics)?;
-            Ok(Some(format!("ipe_runtime::html::render_html(&{html_s})")))
-        }
-
-        // `Html.toString : Html msg -> String` — alias of `Html.render`.
-        KernelFn::HtmlToString => {
-            let [html_e] = args else {
-                return Err(Diagnostic::CompilerBug {
-                    where_: "ipe_backend_rust::emit_ui_call::HtmlToString",
-                    detail: format!(
-                        "Html.toString requires exactly 1 argument, got {}",
-                        args.len()
-                    ),
-                });
-            };
-            let html_s = emit_expr_at(ctx, html_e, indent, child, generics)?;
-            Ok(Some(format!("ipe_runtime::html::render_html(&{html_s})")))
-        }
-
-        // `Html.escapeText : String -> String`
-        //
-        // Emits: `ipe_runtime::html::html_escape_text_(s)` (takes owned String).
-        KernelFn::HtmlEscapeText => {
-            let [s_e] = args else {
-                return Err(Diagnostic::CompilerBug {
-                    where_: "ipe_backend_rust::emit_ui_call::HtmlEscapeText",
-                    detail: format!(
-                        "Html.escapeText requires exactly 1 argument, got {}",
-                        args.len()
-                    ),
-                });
-            };
-            let s_s = emit_expr_at(ctx, s_e, indent, child, generics)?;
-            Ok(Some(format!("ipe_runtime::html::html_escape_text_({s_s})")))
-        }
-
-        // `Html.escapeAttr : String -> String`
-        //
-        // Emits: `ipe_runtime::html::html_escape_attr_(s)` (takes owned String).
-        KernelFn::HtmlEscapeAttr => {
-            let [s_e] = args else {
-                return Err(Diagnostic::CompilerBug {
-                    where_: "ipe_backend_rust::emit_ui_call::HtmlEscapeAttr",
-                    detail: format!(
-                        "Html.escapeAttr requires exactly 1 argument, got {}",
-                        args.len()
-                    ),
-                });
-            };
-            let s_s = emit_expr_at(ctx, s_e, indent, child, generics)?;
-            Ok(Some(format!("ipe_runtime::html::html_escape_attr_({s_s})")))
-        }
-
-        // `Html.attrToString : Html.Attribute msg -> String`
-        //
-        // Emits: `ipe_runtime::html::html_attr_to_string_(attr)` (takes owned Attribute<M>).
-        KernelFn::HtmlAttrToString => {
-            let [attr_e] = args else {
-                return Err(Diagnostic::CompilerBug {
-                    where_: "ipe_backend_rust::emit_ui_call::HtmlAttrToString",
-                    detail: format!(
-                        "Html.attrToString requires exactly 1 argument, got {}",
-                        args.len()
-                    ),
-                });
-            };
-            let attr_s = emit_expr_at(ctx, attr_e, indent, child, generics)?;
-            Ok(Some(format!(
-                "ipe_runtime::html::html_attr_to_string_({attr_s})"
-            )))
-        }
-
-        // ── Ipe.Ui element builders ───────────────────────────────────────────
-
-        // `Ui.none : Element msg`
-        KernelFn::UiNone => Ok(Some("ipe_runtime::ui::helpers::ui_none_()".to_owned())),
-
-        // `Ui.text : String -> Element msg`
-        KernelFn::UiText => {
-            let [s_e] = args else {
-                return Err(Diagnostic::CompilerBug {
-                    where_: "ipe_backend_rust::emit_ui_call::UiText",
-                    detail: format!("Ui.text requires 1 argument, got {}", args.len()),
-                });
-            };
-            let s = emit_expr_at(ctx, s_e, indent, child, generics)?;
-            Ok(Some(format!("ipe_runtime::ui::helpers::ui_text_({s})")))
-        }
-
-        // `Ui.html : Html msg -> Element msg`
-        KernelFn::UiHtml => {
-            let [h_e] = args else {
-                return Err(Diagnostic::CompilerBug {
-                    where_: "ipe_backend_rust::emit_ui_call::UiHtml",
-                    detail: format!("Ui.html requires 1 argument, got {}", args.len()),
-                });
-            };
-            let h = emit_expr_at(ctx, h_e, indent, child, generics)?;
-            Ok(Some(format!("ipe_runtime::ui::helpers::ui_html_({h})")))
-        }
-
-        // `Ui.cells : List (List Char) -> Element msg` — raw terminal cell grid,
-        // painted as an island inside an `Ipe.Ui` view under `Terminal.appScreen`.
-        KernelFn::UiCells => {
-            // seal (SECURITY, fail-closed): `Ui.cells` paints raw terminal cells
-            // and has no browser denotation. In a Web/WebView build its runtime
-            // helper degrades to plain text, so it would ipe-succeed and silently
-            // render wrong. Reject it here — the one point it is emitted — with a
-            // shape-keyed IPE-L0132, converting a wrong-render into an ipe error.
-            if ctx.uses_web || ctx.uses_webview {
-                let app = if ctx.uses_webview {
-                    ipe_diagnostics::AppShape::WebView
-                } else {
-                    ipe_diagnostics::AppShape::Web
-                };
-                return Err(Diagnostic::Lower {
-                    span: Span::DUMMY,
-                    msg: LowerError::UiCellsInWebShape(app),
-                });
-            }
-            let [grid_e] = args else {
-                return Err(Diagnostic::CompilerBug {
-                    where_: "ipe_backend_rust::emit_ui_call::UiCells",
-                    detail: format!("Ui.cells requires 1 argument, got {}", args.len()),
-                });
-            };
-            let grid = emit_expr_at(ctx, grid_e, indent, child, generics)?;
-            Ok(Some(format!("ipe_runtime::ui::helpers::ui_cells_({grid})")))
-        }
-
-        // `Ui.el : List (Attribute msg) -> Element msg -> Element msg`
-        KernelFn::UiEl => {
-            let [attrs_e, child_e] = args else {
-                return Err(Diagnostic::CompilerBug {
-                    where_: "ipe_backend_rust::emit_ui_call::UiEl",
-                    detail: format!("Ui.el requires 2 arguments, got {}", args.len()),
-                });
-            };
-            let attrs = emit_expr_at(ctx, attrs_e, indent, child, generics)?;
-            let ch = emit_expr_at(ctx, child_e, indent, child, generics)?;
-            Ok(Some(format!(
-                "ipe_runtime::ui::helpers::ui_el_({attrs}, {ch})"
-            )))
-        }
-
-        // `Ui.row : List (Attribute msg) -> List (Element msg) -> Element msg`
-        KernelFn::UiRow => {
-            let [attrs_e, children_e] = args else {
-                return Err(Diagnostic::CompilerBug {
-                    where_: "ipe_backend_rust::emit_ui_call::UiRow",
-                    detail: format!("Ui.row requires 2 arguments, got {}", args.len()),
-                });
-            };
-            let attrs = emit_expr_at(ctx, attrs_e, indent, child, generics)?;
-            let children = emit_expr_at(ctx, children_e, indent, child, generics)?;
-            Ok(Some(format!(
-                "ipe_runtime::ui::helpers::ui_row_({attrs}, {children})"
-            )))
-        }
-
-        // `Ui.column : List (Attribute msg) -> List (Element msg) -> Element msg`
-        KernelFn::UiColumn => {
-            let [attrs_e, children_e] = args else {
-                return Err(Diagnostic::CompilerBug {
-                    where_: "ipe_backend_rust::emit_ui_call::UiColumn",
-                    detail: format!("Ui.column requires 2 arguments, got {}", args.len()),
-                });
-            };
-            let attrs = emit_expr_at(ctx, attrs_e, indent, child, generics)?;
-            let children = emit_expr_at(ctx, children_e, indent, child, generics)?;
-            Ok(Some(format!(
-                "ipe_runtime::ui::helpers::ui_column_({attrs}, {children})"
-            )))
-        }
-
-        // `Ui.wrappedRow : List (Attribute msg) -> List (Element msg) -> Element msg`
-        KernelFn::UiWrappedRow => {
-            let [attrs_e, children_e] = args else {
-                return Err(Diagnostic::CompilerBug {
-                    where_: "ipe_backend_rust::emit_ui_call::UiWrappedRow",
-                    detail: format!("Ui.wrappedRow requires 2 arguments, got {}", args.len()),
-                });
-            };
-            let attrs = emit_expr_at(ctx, attrs_e, indent, child, generics)?;
-            let children = emit_expr_at(ctx, children_e, indent, child, generics)?;
-            Ok(Some(format!(
-                "ipe_runtime::ui::helpers::ui_wrapped_row_({attrs}, {children})"
-            )))
-        }
-
-        // `Ui.grid : List (Attribute msg) -> List (Element msg) -> Element msg`
-        KernelFn::UiGrid => {
-            let [attrs_e, children_e] = args else {
-                return Err(Diagnostic::CompilerBug {
-                    where_: "ipe_backend_rust::emit_ui_call::UiGrid",
-                    detail: format!("Ui.grid requires 2 arguments, got {}", args.len()),
-                });
-            };
-            let attrs = emit_expr_at(ctx, attrs_e, indent, child, generics)?;
-            let children = emit_expr_at(ctx, children_e, indent, child, generics)?;
-            Ok(Some(format!(
-                "ipe_runtime::ui::helpers::ui_grid_({attrs}, {children})"
-            )))
-        }
-
-        // `Ui.paragraph : List (Attribute msg) -> List (Element msg) -> Element msg`
-        KernelFn::UiParagraph => {
-            let [attrs_e, children_e] = args else {
-                return Err(Diagnostic::CompilerBug {
-                    where_: "ipe_backend_rust::emit_ui_call::UiParagraph",
-                    detail: format!("Ui.paragraph requires 2 arguments, got {}", args.len()),
-                });
-            };
-            let attrs = emit_expr_at(ctx, attrs_e, indent, child, generics)?;
-            let children = emit_expr_at(ctx, children_e, indent, child, generics)?;
-            Ok(Some(format!(
-                "ipe_runtime::ui::helpers::ui_paragraph_({attrs}, {children})"
-            )))
-        }
-
-        // `Ui.textColumn : List (Attribute msg) -> List (Element msg) -> Element msg`
-        KernelFn::UiTextColumn => {
-            let [attrs_e, children_e] = args else {
-                return Err(Diagnostic::CompilerBug {
-                    where_: "ipe_backend_rust::emit_ui_call::UiTextColumn",
-                    detail: format!("Ui.textColumn requires 2 arguments, got {}", args.len()),
-                });
-            };
-            let attrs = emit_expr_at(ctx, attrs_e, indent, child, generics)?;
-            let children = emit_expr_at(ctx, children_e, indent, child, generics)?;
-            Ok(Some(format!(
-                "ipe_runtime::ui::helpers::ui_text_column_({attrs}, {children})"
-            )))
-        }
-
-        // `Ui.form : List (Attribute msg) -> List (Element msg) -> Element msg`
-        KernelFn::UiForm => {
-            let [attrs_e, children_e] = args else {
-                return Err(Diagnostic::CompilerBug {
-                    where_: "ipe_backend_rust::emit_ui_call::UiForm",
-                    detail: format!("Ui.form requires 2 arguments, got {}", args.len()),
-                });
-            };
-            let attrs = emit_expr_at(ctx, attrs_e, indent, child, generics)?;
-            let children = emit_expr_at(ctx, children_e, indent, child, generics)?;
-            Ok(Some(format!(
-                "ipe_runtime::ui::helpers::ui_form_({attrs}, {children})"
-            )))
-        }
-
-        // `Ui.above : Element msg -> Attribute msg`
-        KernelFn::UiAbove => {
-            let [elem_e] = args else {
-                return Err(Diagnostic::CompilerBug {
-                    where_: "ipe_backend_rust::emit_ui_call::UiAbove",
-                    detail: format!("Ui.above requires 1 argument, got {}", args.len()),
-                });
-            };
-            let elem = emit_expr_at(ctx, elem_e, indent, child, generics)?;
-            Ok(Some(format!("ipe_runtime::ui::helpers::ui_above_({elem})")))
-        }
-
-        // `Ui.below : Element msg -> Attribute msg`
-        KernelFn::UiBelow => {
-            let [elem_e] = args else {
-                return Err(Diagnostic::CompilerBug {
-                    where_: "ipe_backend_rust::emit_ui_call::UiBelow",
-                    detail: format!("Ui.below requires 1 argument, got {}", args.len()),
-                });
-            };
-            let elem = emit_expr_at(ctx, elem_e, indent, child, generics)?;
-            Ok(Some(format!("ipe_runtime::ui::helpers::ui_below_({elem})")))
-        }
-
-        // `Ui.onLeft : Element msg -> Attribute msg`
-        KernelFn::UiOnLeft => {
-            let [elem_e] = args else {
-                return Err(Diagnostic::CompilerBug {
-                    where_: "ipe_backend_rust::emit_ui_call::UiOnLeft",
-                    detail: format!("Ui.onLeft requires 1 argument, got {}", args.len()),
-                });
-            };
-            let elem = emit_expr_at(ctx, elem_e, indent, child, generics)?;
-            Ok(Some(format!(
-                "ipe_runtime::ui::helpers::ui_on_left_({elem})"
-            )))
-        }
-
-        // `Ui.onRight : Element msg -> Attribute msg`
-        KernelFn::UiOnRight => {
-            let [elem_e] = args else {
-                return Err(Diagnostic::CompilerBug {
-                    where_: "ipe_backend_rust::emit_ui_call::UiOnRight",
-                    detail: format!("Ui.onRight requires 1 argument, got {}", args.len()),
-                });
-            };
-            let elem = emit_expr_at(ctx, elem_e, indent, child, generics)?;
-            Ok(Some(format!(
-                "ipe_runtime::ui::helpers::ui_on_right_({elem})"
-            )))
-        }
-
-        // `Ui.inFront : Element msg -> Attribute msg`
-        KernelFn::UiInFront => {
-            let [elem_e] = args else {
-                return Err(Diagnostic::CompilerBug {
-                    where_: "ipe_backend_rust::emit_ui_call::UiInFront",
-                    detail: format!("Ui.inFront requires 1 argument, got {}", args.len()),
-                });
-            };
-            let elem = emit_expr_at(ctx, elem_e, indent, child, generics)?;
-            Ok(Some(format!(
-                "ipe_runtime::ui::helpers::ui_in_front_({elem})"
-            )))
-        }
-
-        // `Ui.behind : Element msg -> Attribute msg`
-        KernelFn::UiBehind => {
-            let [elem_e] = args else {
-                return Err(Diagnostic::CompilerBug {
-                    where_: "ipe_backend_rust::emit_ui_call::UiBehind",
-                    detail: format!("Ui.behind requires 1 argument, got {}", args.len()),
-                });
-            };
-            let elem = emit_expr_at(ctx, elem_e, indent, child, generics)?;
-            Ok(Some(format!(
-                "ipe_runtime::ui::helpers::ui_behind_({elem})"
-            )))
+            Ok(format!("ipe_runtime::html::render_html(&{html_s})"))
         }
 
         // `Ui.button : List (Attribute msg) -> { onPress : Maybe msg, label : Element msg } -> Element msg`
         //
         // Emits: `ipe_runtime::ui::helpers::ui_button_(attrs, on_press, label)`
-        KernelFn::UiButton => {
+        NativeUiEmit::Button => {
             let [attrs_e, cfg_e] = args else {
                 return Err(Diagnostic::CompilerBug {
                     where_: "ipe_backend_rust::emit_ui_call::UiButton",
@@ -3611,7 +3326,7 @@ fn emit_ui_call(
                         .into(),
                 });
             };
-            Ok(Some(emit_cfg_record_call(
+            Ok(emit_cfg_record_call(
                 ctx,
                 &[attrs_e],
                 fields,
@@ -3622,11 +3337,11 @@ fn emit_ui_call(
                 indent,
                 child,
                 generics,
-            )?))
+            )?)
         }
 
         // `Ui.link : List (Attribute msg) -> { url : String, label : Element msg } -> Element msg`
-        KernelFn::UiLink => {
+        NativeUiEmit::Link => {
             let [attrs_e, cfg_e] = args else {
                 return Err(Diagnostic::CompilerBug {
                     where_: "ipe_backend_rust::emit_ui_call::UiLink",
@@ -3641,7 +3356,7 @@ fn emit_ui_call(
                         .into(),
                 });
             };
-            Ok(Some(emit_cfg_record_call(
+            Ok(emit_cfg_record_call(
                 ctx,
                 &[attrs_e],
                 fields,
@@ -3652,11 +3367,11 @@ fn emit_ui_call(
                 indent,
                 child,
                 generics,
-            )?))
+            )?)
         }
 
         // `Ui.image : List (Attribute msg) -> { src : String, description : String } -> Element msg`
-        KernelFn::UiImage => {
+        NativeUiEmit::Image => {
             let [attrs_e, cfg_e] = args else {
                 return Err(Diagnostic::CompilerBug {
                     where_: "ipe_backend_rust::emit_ui_call::UiImage",
@@ -3671,7 +3386,7 @@ fn emit_ui_call(
                         .into(),
                 });
             };
-            Ok(Some(emit_cfg_record_call(
+            Ok(emit_cfg_record_call(
                 ctx,
                 &[attrs_e],
                 fields,
@@ -3682,52 +3397,11 @@ fn emit_ui_call(
                 indent,
                 child,
                 generics,
-            )?))
-        }
-
-        // ── Ipe.Ui attribute builders ─────────────────────────────────────────
-
-        // `Ui.spacing : Int -> Attribute msg`
-        KernelFn::UiSpacing => {
-            let [n_e] = args else {
-                return Err(Diagnostic::CompilerBug {
-                    where_: "ipe_backend_rust::emit_ui_call::UiSpacing",
-                    detail: format!("Ui.spacing requires 1 argument, got {}", args.len()),
-                });
-            };
-            let n = emit_expr_at(ctx, n_e, indent, child, generics)?;
-            Ok(Some(format!("ipe_runtime::ui::helpers::ui_spacing_({n})")))
-        }
-
-        // `Ui.padding : Int -> Attribute msg`
-        KernelFn::UiPadding => {
-            let [n_e] = args else {
-                return Err(Diagnostic::CompilerBug {
-                    where_: "ipe_backend_rust::emit_ui_call::UiPadding",
-                    detail: format!("Ui.padding requires 1 argument, got {}", args.len()),
-                });
-            };
-            let n = emit_expr_at(ctx, n_e, indent, child, generics)?;
-            Ok(Some(format!("ipe_runtime::ui::helpers::ui_padding_({n})")))
-        }
-
-        // `Ui.paddingXY : Int -> Int -> Attribute msg`
-        KernelFn::UiPaddingXY => {
-            let [x_e, y_e] = args else {
-                return Err(Diagnostic::CompilerBug {
-                    where_: "ipe_backend_rust::emit_ui_call::UiPaddingXY",
-                    detail: format!("Ui.paddingXY requires 2 arguments, got {}", args.len()),
-                });
-            };
-            let x = emit_expr_at(ctx, x_e, indent, child, generics)?;
-            let y = emit_expr_at(ctx, y_e, indent, child, generics)?;
-            Ok(Some(format!(
-                "ipe_runtime::ui::helpers::ui_padding_xy_({x}, {y})"
-            )))
+            )?)
         }
 
         // `Ui.paddingEach : { top : Int, right : Int, bottom : Int, left : Int } -> Attribute msg`
-        KernelFn::UiPaddingEach => {
+        NativeUiEmit::PaddingEach => {
             let [rec_e] = args else {
                 return Err(Diagnostic::CompilerBug {
                     where_: "ipe_backend_rust::emit_ui_call::UiPaddingEach",
@@ -3768,328 +3442,13 @@ fn emit_ui_call(
             let right = emit_expr_at(ctx, right_e, indent, child, generics)?;
             let bottom = emit_expr_at(ctx, bottom_e, indent, child, generics)?;
             let left = emit_expr_at(ctx, left_e, indent, child, generics)?;
-            Ok(Some(format!(
+            Ok(format!(
                 "ipe_runtime::ui::helpers::ui_padding_each_({top}, {right}, {bottom}, {left})"
-            )))
-        }
-
-        // `Ui.width : Length -> Attribute msg`
-        KernelFn::UiWidth => {
-            let [l_e] = args else {
-                return Err(Diagnostic::CompilerBug {
-                    where_: "ipe_backend_rust::emit_ui_call::UiWidth",
-                    detail: format!("Ui.width requires 1 argument, got {}", args.len()),
-                });
-            };
-            let l = emit_expr_at(ctx, l_e, indent, child, generics)?;
-            Ok(Some(format!("ipe_runtime::ui::helpers::ui_width_({l})")))
-        }
-
-        // `Ui.height : Length -> Attribute msg`
-        KernelFn::UiHeight => {
-            let [l_e] = args else {
-                return Err(Diagnostic::CompilerBug {
-                    where_: "ipe_backend_rust::emit_ui_call::UiHeight",
-                    detail: format!("Ui.height requires 1 argument, got {}", args.len()),
-                });
-            };
-            let l = emit_expr_at(ctx, l_e, indent, child, generics)?;
-            Ok(Some(format!("ipe_runtime::ui::helpers::ui_height_({l})")))
-        }
-
-        // `Ui.centerX : Attribute msg` (arity 0)
-        KernelFn::UiCenterX => Ok(Some("ipe_runtime::ui::helpers::ui_center_x_()".to_owned())),
-        // `Ui.centerY : Attribute msg` (arity 0)
-        KernelFn::UiCenterY => Ok(Some("ipe_runtime::ui::helpers::ui_center_y_()".to_owned())),
-        // `Ui.alignLeft : Attribute msg` (arity 0)
-        KernelFn::UiAlignLeft => Ok(Some(
-            "ipe_runtime::ui::helpers::ui_align_left_()".to_owned(),
-        )),
-        // `Ui.alignRight : Attribute msg` (arity 0)
-        KernelFn::UiAlignRight => Ok(Some(
-            "ipe_runtime::ui::helpers::ui_align_right_()".to_owned(),
-        )),
-        // `Ui.alignTop : Attribute msg` (arity 0)
-        KernelFn::UiAlignTop => Ok(Some("ipe_runtime::ui::helpers::ui_align_top_()".to_owned())),
-        // `Ui.alignBottom : Attribute msg` (arity 0)
-        KernelFn::UiAlignBottom => Ok(Some(
-            "ipe_runtime::ui::helpers::ui_align_bottom_()".to_owned(),
-        )),
-        // `Ui.pointer : Attribute msg` (arity 0)
-        KernelFn::UiPointer => Ok(Some("ipe_runtime::ui::helpers::ui_pointer_()".to_owned())),
-        // `Ui.clip : Attribute msg` (arity 0)
-        KernelFn::UiClip => Ok(Some("ipe_runtime::ui::helpers::ui_clip_()".to_owned())),
-        // `Ui.clipX : Attribute msg` (arity 0)
-        KernelFn::UiClipX => Ok(Some("ipe_runtime::ui::helpers::ui_clip_x_()".to_owned())),
-        // `Ui.clipY : Attribute msg` (arity 0)
-        KernelFn::UiClipY => Ok(Some("ipe_runtime::ui::helpers::ui_clip_y_()".to_owned())),
-        // `Ui.scrollbars : Attribute msg` (arity 0)
-        KernelFn::UiScrollbars => Ok(Some(
-            "ipe_runtime::ui::helpers::ui_scrollbars_()".to_owned(),
-        )),
-        // `Ui.scrollbarX : Attribute msg` (arity 0)
-        KernelFn::UiScrollbarX => Ok(Some(
-            "ipe_runtime::ui::helpers::ui_scrollbar_x_()".to_owned(),
-        )),
-        // `Ui.scrollbarY : Attribute msg` (arity 0)
-        KernelFn::UiScrollbarY => Ok(Some(
-            "ipe_runtime::ui::helpers::ui_scrollbar_y_()".to_owned(),
-        )),
-
-        // `Ui.gridColumns : Int -> Attribute msg`
-        KernelFn::UiGridColumns => {
-            let [n_e] = args else {
-                return Err(Diagnostic::CompilerBug {
-                    where_: "ipe_backend_rust::emit_ui_call::UiGridColumns",
-                    detail: format!("Ui.gridColumns requires 1 argument, got {}", args.len()),
-                });
-            };
-            let n = emit_expr_at(ctx, n_e, indent, child, generics)?;
-            Ok(Some(format!(
-                "ipe_runtime::ui::helpers::ui_grid_columns_({n})"
-            )))
-        }
-
-        // ── Ipe.Ui Length builders ────────────────────────────────────────────
-
-        // `Ui.px : Int -> Length`
-        KernelFn::UiPx => {
-            let [n_e] = args else {
-                return Err(Diagnostic::CompilerBug {
-                    where_: "ipe_backend_rust::emit_ui_call::UiPx",
-                    detail: format!("Ui.px requires 1 argument, got {}", args.len()),
-                });
-            };
-            let n = emit_expr_at(ctx, n_e, indent, child, generics)?;
-            Ok(Some(format!("ipe_runtime::ui::helpers::ui_px_({n})")))
-        }
-
-        // `Ui.fill : Length` (arity 0)
-        KernelFn::UiFill => Ok(Some("ipe_runtime::ui::helpers::ui_fill_()".to_owned())),
-        // `Ui.content : Length` (arity 0)
-        KernelFn::UiContent => Ok(Some("ipe_runtime::ui::helpers::ui_content_()".to_owned())),
-        // `Ui.shrink : Length` (arity 0)
-        KernelFn::UiShrink => Ok(Some("ipe_runtime::ui::helpers::ui_shrink_()".to_owned())),
-
-        // `Ui.fillPortion : Int -> Length`
-        KernelFn::UiFillPortion => {
-            let [n_e] = args else {
-                return Err(Diagnostic::CompilerBug {
-                    where_: "ipe_backend_rust::emit_ui_call::UiFillPortion",
-                    detail: format!("Ui.fillPortion requires 1 argument, got {}", args.len()),
-                });
-            };
-            let n = emit_expr_at(ctx, n_e, indent, child, generics)?;
-            Ok(Some(format!(
-                "ipe_runtime::ui::helpers::ui_fill_portion_({n})"
-            )))
-        }
-
-        // `Ui.vh : Int -> Length`
-        KernelFn::UiVh => {
-            let [n_e] = args else {
-                return Err(Diagnostic::CompilerBug {
-                    where_: "ipe_backend_rust::emit_ui_call::UiVh",
-                    detail: format!("Ui.vh requires 1 argument, got {}", args.len()),
-                });
-            };
-            let n = emit_expr_at(ctx, n_e, indent, child, generics)?;
-            Ok(Some(format!("ipe_runtime::ui::helpers::ui_vh_({n})")))
-        }
-
-        // `Ui.vw : Int -> Length`
-        KernelFn::UiVw => {
-            let [n_e] = args else {
-                return Err(Diagnostic::CompilerBug {
-                    where_: "ipe_backend_rust::emit_ui_call::UiVw",
-                    detail: format!("Ui.vw requires 1 argument, got {}", args.len()),
-                });
-            };
-            let n = emit_expr_at(ctx, n_e, indent, child, generics)?;
-            Ok(Some(format!("ipe_runtime::ui::helpers::ui_vw_({n})")))
-        }
-
-        // `Ui.minimum : Int -> Length -> Length`
-        KernelFn::UiMinimum => {
-            let [n_e, l_e] = args else {
-                return Err(Diagnostic::CompilerBug {
-                    where_: "ipe_backend_rust::emit_ui_call::UiMinimum",
-                    detail: format!("Ui.minimum requires 2 arguments, got {}", args.len()),
-                });
-            };
-            let n = emit_expr_at(ctx, n_e, indent, child, generics)?;
-            let l = emit_expr_at(ctx, l_e, indent, child, generics)?;
-            Ok(Some(format!(
-                "ipe_runtime::ui::helpers::ui_minimum_({n}, {l})"
-            )))
-        }
-
-        // `Ui.maximum : Int -> Length -> Length`
-        KernelFn::UiMaximum => {
-            let [n_e, l_e] = args else {
-                return Err(Diagnostic::CompilerBug {
-                    where_: "ipe_backend_rust::emit_ui_call::UiMaximum",
-                    detail: format!("Ui.maximum requires 2 arguments, got {}", args.len()),
-                });
-            };
-            let n = emit_expr_at(ctx, n_e, indent, child, generics)?;
-            let l = emit_expr_at(ctx, l_e, indent, child, generics)?;
-            Ok(Some(format!(
-                "ipe_runtime::ui::helpers::ui_maximum_({n}, {l})"
-            )))
-        }
-
-        // ── Ipe.Ui Color builders ─────────────────────────────────────────────
-
-        // `Ui.rgb : Int -> Int -> Int -> Color`
-        KernelFn::UiRgb => {
-            let [r_e, g_e, b_e] = args else {
-                return Err(Diagnostic::CompilerBug {
-                    where_: "ipe_backend_rust::emit_ui_call::UiRgb",
-                    detail: format!("Ui.rgb requires 3 arguments, got {}", args.len()),
-                });
-            };
-            let r = emit_expr_at(ctx, r_e, indent, child, generics)?;
-            let g = emit_expr_at(ctx, g_e, indent, child, generics)?;
-            let b = emit_expr_at(ctx, b_e, indent, child, generics)?;
-            Ok(Some(format!(
-                "ipe_runtime::ui::helpers::ui_rgb_({r}, {g}, {b})"
-            )))
-        }
-
-        // `Ui.rgba : Int -> Int -> Int -> Float -> Color`
-        KernelFn::UiRgba => {
-            let [r_e, g_e, b_e, a_e] = args else {
-                return Err(Diagnostic::CompilerBug {
-                    where_: "ipe_backend_rust::emit_ui_call::UiRgba",
-                    detail: format!("Ui.rgba requires 4 arguments, got {}", args.len()),
-                });
-            };
-            let r = emit_expr_at(ctx, r_e, indent, child, generics)?;
-            let g = emit_expr_at(ctx, g_e, indent, child, generics)?;
-            let b = emit_expr_at(ctx, b_e, indent, child, generics)?;
-            let a = emit_expr_at(ctx, a_e, indent, child, generics)?;
-            Ok(Some(format!(
-                "ipe_runtime::ui::helpers::ui_rgba_({r}, {g}, {b}, {a})"
-            )))
-        }
-
-        // `Ui.white : Color` (arity 0)
-        KernelFn::UiWhite => Ok(Some("ipe_runtime::ui::helpers::ui_white_()".to_owned())),
-        // `Ui.black : Color` (arity 0)
-        KernelFn::UiBlack => Ok(Some("ipe_runtime::ui::helpers::ui_black_()".to_owned())),
-        // `Ui.transparent : Color` (arity 0)
-        KernelFn::UiTransparent => Ok(Some(
-            "ipe_runtime::ui::helpers::ui_transparent_()".to_owned(),
-        )),
-        // `Ui.colorCss : Color -> String` (arity 1)
-        KernelFn::UiColorCss => {
-            let [c_e] = args else {
-                return Err(Diagnostic::CompilerBug {
-                    where_: "ipe_backend_rust::emit_ui_call::UiColorCss",
-                    detail: format!("Ui.colorCss requires 1 argument, got {}", args.len()),
-                });
-            };
-            let c = emit_expr_at(ctx, c_e, indent, child, generics)?;
-            Ok(Some(format!(
-                "ipe_runtime::ui::helpers::ui_color_css_({c})"
-            )))
-        }
-
-        // ── Background sub-module ─────────────────────────────────────────────
-
-        // `Background.color : Color -> Attribute msg`
-        KernelFn::BackgroundColor => {
-            let [c_e] = args else {
-                return Err(Diagnostic::CompilerBug {
-                    where_: "ipe_backend_rust::emit_ui_call::BackgroundColor",
-                    detail: format!("Background.color requires 1 argument, got {}", args.len()),
-                });
-            };
-            let c = emit_expr_at(ctx, c_e, indent, child, generics)?;
-            Ok(Some(format!(
-                "ipe_runtime::ui::helpers::ui_background_color_({c})"
-            )))
-        }
-
-        // `Background.image : String -> Attribute msg`
-        KernelFn::BackgroundImage => {
-            let [s_e] = args else {
-                return Err(Diagnostic::CompilerBug {
-                    where_: "ipe_backend_rust::emit_ui_call::BackgroundImage",
-                    detail: format!("Background.image requires 1 argument, got {}", args.len()),
-                });
-            };
-            let s = emit_expr_at(ctx, s_e, indent, child, generics)?;
-            Ok(Some(format!(
-                "ipe_runtime::ui::helpers::ui_background_image_({s})"
-            )))
-        }
-
-        // `Background.linearGradient : Float -> List (Float, Color) -> Attribute msg`
-        KernelFn::BackgroundLinearGradient => {
-            let [angle_e, stops_e] = args else {
-                return Err(Diagnostic::CompilerBug {
-                    where_: "ipe_backend_rust::emit_ui_call::BackgroundLinearGradient",
-                    detail: format!(
-                        "Background.linearGradient requires 2 arguments, got {}",
-                        args.len()
-                    ),
-                });
-            };
-            let angle = emit_expr_at(ctx, angle_e, indent, child, generics)?;
-            let stops = emit_expr_at(ctx, stops_e, indent, child, generics)?;
-            Ok(Some(format!(
-                "ipe_runtime::ui::helpers::ui_background_linear_gradient_({angle}, {stops})"
-            )))
-        }
-
-        // ── Border sub-module ─────────────────────────────────────────────────
-
-        // `Border.width : Int -> Attribute msg`
-        KernelFn::BorderWidth => {
-            let [n_e] = args else {
-                return Err(Diagnostic::CompilerBug {
-                    where_: "ipe_backend_rust::emit_ui_call::BorderWidth",
-                    detail: format!("Border.width requires 1 argument, got {}", args.len()),
-                });
-            };
-            let n = emit_expr_at(ctx, n_e, indent, child, generics)?;
-            Ok(Some(format!(
-                "ipe_runtime::ui::helpers::ui_border_width_({n})"
-            )))
-        }
-
-        // `Border.rounded : Int -> Attribute msg`
-        KernelFn::BorderRounded => {
-            let [n_e] = args else {
-                return Err(Diagnostic::CompilerBug {
-                    where_: "ipe_backend_rust::emit_ui_call::BorderRounded",
-                    detail: format!("Border.rounded requires 1 argument, got {}", args.len()),
-                });
-            };
-            let n = emit_expr_at(ctx, n_e, indent, child, generics)?;
-            Ok(Some(format!(
-                "ipe_runtime::ui::helpers::ui_border_rounded_({n})"
-            )))
-        }
-
-        // `Border.color : Color -> Attribute msg`
-        KernelFn::BorderColor => {
-            let [c_e] = args else {
-                return Err(Diagnostic::CompilerBug {
-                    where_: "ipe_backend_rust::emit_ui_call::BorderColor",
-                    detail: format!("Border.color requires 1 argument, got {}", args.len()),
-                });
-            };
-            let c = emit_expr_at(ctx, c_e, indent, child, generics)?;
-            Ok(Some(format!(
-                "ipe_runtime::ui::helpers::ui_border_color_({c})"
-            )))
+            ))
         }
 
         // `Border.widthEach : { top : Int, right : Int, bottom : Int, left : Int } -> Attribute msg`
-        KernelFn::BorderWidthEach => {
+        NativeUiEmit::BorderWidthEach => {
             let [rec_e] = args else {
                 return Err(Diagnostic::CompilerBug {
                     where_: "ipe_backend_rust::emit_ui_call::BorderWidthEach",
@@ -4130,13 +3489,13 @@ fn emit_ui_call(
             let right = emit_expr_at(ctx, right_e, indent, child, generics)?;
             let bottom = emit_expr_at(ctx, bottom_e, indent, child, generics)?;
             let left = emit_expr_at(ctx, left_e, indent, child, generics)?;
-            Ok(Some(format!(
+            Ok(format!(
                 "ipe_runtime::ui::helpers::ui_border_width_each_({top}, {right}, {bottom}, {left})"
-            )))
+            ))
         }
 
         // `Border.shadow : { offsetX : Int, offsetY : Int, blur : Int, spread : Int, color : Color } -> Attribute msg`
-        KernelFn::BorderShadow => {
+        NativeUiEmit::BorderShadow => {
             let [rec_e] = args else {
                 return Err(Diagnostic::CompilerBug {
                     where_: "ipe_backend_rust::emit_ui_call::BorderShadow",
@@ -4187,31 +3546,14 @@ fn emit_ui_call(
             let blur = emit_expr_at(ctx, blur_e, indent, child, generics)?;
             let spread = emit_expr_at(ctx, spread_e, indent, child, generics)?;
             let color = emit_expr_at(ctx, color_e, indent, child, generics)?;
-            Ok(Some(format!(
+            Ok(format!(
                 "ipe_runtime::ui::helpers::ui_border_shadow_({horiz}, {vert}, {blur}, {spread}, {color})"
-            )))
-        }
-
-        // `Border.glow : Int -> Color -> Attribute msg` — convenience box-shadow
-        // with 0,0 offset + 0 spread. Two positional args (blur Int + colour
-        // Color); no record destructure, unlike `Border.shadow`.
-        KernelFn::BorderGlow => {
-            let [blur_e, color_e] = args else {
-                return Err(Diagnostic::CompilerBug {
-                    where_: "ipe_backend_rust::emit_ui_call::BorderGlow",
-                    detail: format!("Border.glow requires 2 arguments, got {}", args.len()),
-                });
-            };
-            let blur = emit_expr_at(ctx, blur_e, indent, child, generics)?;
-            let color = emit_expr_at(ctx, color_e, indent, child, generics)?;
-            Ok(Some(format!(
-                "ipe_runtime::ui::helpers::ui_border_glow_({blur}, {color})"
-            )))
+            ))
         }
 
         // `Border.innerShadow : { offsetX : Int, offsetY : Int, blur : Int, spread : Int, color : Color } -> Attribute msg`
         // Same record destructure as `Border.shadow`, emitting the INSET helper.
-        KernelFn::BorderInnerShadow => {
+        NativeUiEmit::BorderInnerShadow => {
             let [rec_e] = args else {
                 return Err(Diagnostic::CompilerBug {
                     where_: "ipe_backend_rust::emit_ui_call::BorderInnerShadow",
@@ -4262,820 +3604,13 @@ fn emit_ui_call(
             let blur = emit_expr_at(ctx, blur_e, indent, child, generics)?;
             let spread = emit_expr_at(ctx, spread_e, indent, child, generics)?;
             let color = emit_expr_at(ctx, color_e, indent, child, generics)?;
-            Ok(Some(format!(
+            Ok(format!(
                 "ipe_runtime::ui::helpers::ui_border_inner_shadow_({horiz}, {vert}, {blur}, {spread}, {color})"
-            )))
-        }
-
-        // ── Font sub-module ───────────────────────────────────────────────────
-
-        // `Font.size : Int -> Attribute msg`
-        KernelFn::FontSize => {
-            let [n_e] = args else {
-                return Err(Diagnostic::CompilerBug {
-                    where_: "ipe_backend_rust::emit_ui_call::FontSize",
-                    detail: format!("Font.size requires 1 argument, got {}", args.len()),
-                });
-            };
-            let n = emit_expr_at(ctx, n_e, indent, child, generics)?;
-            Ok(Some(format!(
-                "ipe_runtime::ui::helpers::ui_font_size_({n})"
-            )))
-        }
-
-        // `Font.color : Color -> Attribute msg`
-        KernelFn::FontColor => {
-            let [c_e] = args else {
-                return Err(Diagnostic::CompilerBug {
-                    where_: "ipe_backend_rust::emit_ui_call::FontColor",
-                    detail: format!("Font.color requires 1 argument, got {}", args.len()),
-                });
-            };
-            let c = emit_expr_at(ctx, c_e, indent, child, generics)?;
-            Ok(Some(format!(
-                "ipe_runtime::ui::helpers::ui_font_color_({c})"
-            )))
-        }
-
-        // `Font.family : String -> Attribute msg`
-        KernelFn::FontFamily => {
-            let [l_e] = args else {
-                return Err(Diagnostic::CompilerBug {
-                    where_: "ipe_backend_rust::emit_ui_call::FontFamily",
-                    detail: format!("Font.family requires 1 argument, got {}", args.len()),
-                });
-            };
-            let l = emit_expr_at(ctx, l_e, indent, child, generics)?;
-            Ok(Some(format!(
-                "ipe_runtime::ui::helpers::ui_font_family_({l})"
-            )))
-        }
-
-        // `Font.bold : Attribute msg` (arity 0)
-        KernelFn::FontBold => Ok(Some("ipe_runtime::ui::helpers::ui_font_bold_()".to_owned())),
-        // `Font.italic : Attribute msg` (arity 0)
-        KernelFn::FontItalic => Ok(Some(
-            "ipe_runtime::ui::helpers::ui_font_italic_()".to_owned(),
-        )),
-
-        // ── extended Ipe.Ui / Font / Background / Border builders ──
-
-        // Ui namespace — nullary aspect-ratio attrs
-        KernelFn::UiSquare => Ok(Some("ipe_runtime::ui::helpers::ui_square_()".to_owned())),
-        KernelFn::UiWidescreen => Ok(Some(
-            "ipe_runtime::ui::helpers::ui_widescreen_()".to_owned(),
-        )),
-        KernelFn::UiCinemascope => Ok(Some(
-            "ipe_runtime::ui::helpers::ui_cinemascope_()".to_owned(),
-        )),
-
-        // `Ui.name : String -> Attribute msg`
-        KernelFn::UiName => {
-            let [v_e] = args else {
-                return Err(Diagnostic::CompilerBug {
-                    where_: "ipe_backend_rust::emit_ui_call::UiName",
-                    detail: format!("Ui.name requires 1 argument, got {}", args.len()),
-                });
-            };
-            let v = emit_expr_at(ctx, v_e, indent, child, generics)?;
-            Ok(Some(format!("ipe_runtime::ui::helpers::ui_name_({v})")))
-        }
-
-        // `Ui.style : String -> String -> Attribute msg`
-        KernelFn::UiStyle => {
-            let [k_e, v_e] = args else {
-                return Err(Diagnostic::CompilerBug {
-                    where_: "ipe_backend_rust::emit_ui_call::UiStyle",
-                    detail: format!("Ui.style requires 2 arguments, got {}", args.len()),
-                });
-            };
-            let k = emit_expr_at(ctx, k_e, indent, child, generics)?;
-            let v = emit_expr_at(ctx, v_e, indent, child, generics)?;
-            Ok(Some(format!(
-                "ipe_runtime::ui::helpers::ui_style_({k}, {v})"
-            )))
-        }
-
-        // `Ui.transitionRaw : String -> Bool -> Attribute msg`
-        KernelFn::UiTransitionRaw => {
-            let [s_e, respect_e] = args else {
-                return Err(Diagnostic::CompilerBug {
-                    where_: "ipe_backend_rust::emit_ui_call::UiTransitionRaw",
-                    detail: format!("Ui.transitionRaw requires 2 arguments, got {}", args.len()),
-                });
-            };
-            let s = emit_expr_at(ctx, s_e, indent, child, generics)?;
-            let respect = emit_expr_at(ctx, respect_e, indent, child, generics)?;
-            Ok(Some(format!(
-                "ipe_runtime::ui::helpers::ui_transition_raw_({s}, {respect})"
-            )))
-        }
-
-        // `Ui.gridTracksRaw : String -> String -> Attribute msg`
-        KernelFn::UiGridTracksRaw => {
-            let [cols_e, rows_e] = args else {
-                return Err(Diagnostic::CompilerBug {
-                    where_: "ipe_backend_rust::emit_ui_call::UiGridTracksRaw",
-                    detail: format!("Ui.gridTracksRaw requires 2 arguments, got {}", args.len()),
-                });
-            };
-            let cols = emit_expr_at(ctx, cols_e, indent, child, generics)?;
-            let rows = emit_expr_at(ctx, rows_e, indent, child, generics)?;
-            Ok(Some(format!(
-                "ipe_runtime::ui::helpers::ui_grid_tracks_raw_({cols}, {rows})"
-            )))
-        }
-
-        // `Ui.animateRaw : String -> String -> String -> Bool -> Attribute msg`
-        KernelFn::UiAnimateRaw => {
-            let [name_e, shorthand_e, keyframes_e, respect_e] = args else {
-                return Err(Diagnostic::CompilerBug {
-                    where_: "ipe_backend_rust::emit_ui_call::UiAnimateRaw",
-                    detail: format!("Ui.animateRaw requires 4 arguments, got {}", args.len()),
-                });
-            };
-            let name = emit_expr_at(ctx, name_e, indent, child, generics)?;
-            let shorthand = emit_expr_at(ctx, shorthand_e, indent, child, generics)?;
-            let keyframes = emit_expr_at(ctx, keyframes_e, indent, child, generics)?;
-            let respect = emit_expr_at(ctx, respect_e, indent, child, generics)?;
-            Ok(Some(format!(
-                "ipe_runtime::ui::helpers::ui_animate_raw_({name}, {shorthand}, {keyframes}, {respect})"
-            )))
-        }
-
-        // `Ui.aspectRatio : Float -> Attribute msg`
-        KernelFn::UiAspectRatio => {
-            let [r_e] = args else {
-                return Err(Diagnostic::CompilerBug {
-                    where_: "ipe_backend_rust::emit_ui_call::UiAspectRatio",
-                    detail: format!("Ui.aspectRatio requires 1 argument, got {}", args.len()),
-                });
-            };
-            let r = emit_expr_at(ctx, r_e, indent, child, generics)?;
-            Ok(Some(format!(
-                "ipe_runtime::ui::helpers::ui_aspect_ratio_({r})"
-            )))
-        }
-
-        // `Ui.aspectRatioWH : Int -> Int -> Attribute msg`
-        KernelFn::UiAspectRatioWH => {
-            let [w_e, h_e] = args else {
-                return Err(Diagnostic::CompilerBug {
-                    where_: "ipe_backend_rust::emit_ui_call::UiAspectRatioWH",
-                    detail: format!("Ui.aspectRatioWH requires 2 arguments, got {}", args.len()),
-                });
-            };
-            let w = emit_expr_at(ctx, w_e, indent, child, generics)?;
-            let h = emit_expr_at(ctx, h_e, indent, child, generics)?;
-            Ok(Some(format!(
-                "ipe_runtime::ui::helpers::ui_aspect_ratio_wh_({w}, {h})"
-            )))
-        }
-
-        // `Ui.htmlAttribute : String -> String -> Attribute msg`
-        KernelFn::UiHtmlAttribute => {
-            let [k_e, v_e] = args else {
-                return Err(Diagnostic::CompilerBug {
-                    where_: "ipe_backend_rust::emit_ui_call::UiHtmlAttribute",
-                    detail: format!("Ui.htmlAttribute requires 2 arguments, got {}", args.len()),
-                });
-            };
-            let k = emit_expr_at(ctx, k_e, indent, child, generics)?;
-            let v = emit_expr_at(ctx, v_e, indent, child, generics)?;
-            Ok(Some(format!(
-                "ipe_runtime::ui::helpers::ui_html_attribute_({k}, {v})"
-            )))
-        }
-
-        // Breakpoint constants — `Ui.mobile` / `Ui.tablet` / … : String (0-arity)
-        KernelFn::UiMobile => Ok(Some("ipe_runtime::ui::helpers::ui_mobile_()".to_owned())),
-        KernelFn::UiTablet => Ok(Some("ipe_runtime::ui::helpers::ui_tablet_()".to_owned())),
-        KernelFn::UiDesktop => Ok(Some("ipe_runtime::ui::helpers::ui_desktop_()".to_owned())),
-        KernelFn::UiDarkMode => Ok(Some("ipe_runtime::ui::helpers::ui_dark_mode_()".to_owned())),
-        KernelFn::UiLightMode => Ok(Some(
-            "ipe_runtime::ui::helpers::ui_light_mode_()".to_owned(),
-        )),
-        KernelFn::UiReducedMotion => Ok(Some(
-            "ipe_runtime::ui::helpers::ui_reduced_motion_()".to_owned(),
-        )),
-
-        // PseudoClass constants — `Ui.hover` / `Ui.focus` / … : PseudoClass (0-arity)
-        KernelFn::UiHover => Ok(Some("ipe_runtime::ui::helpers::ui_hover_()".to_owned())),
-        KernelFn::UiFocus => Ok(Some("ipe_runtime::ui::helpers::ui_focus_()".to_owned())),
-        KernelFn::UiFocusVisible => Ok(Some(
-            "ipe_runtime::ui::helpers::ui_focus_visible_()".to_owned(),
-        )),
-        KernelFn::UiActive => Ok(Some("ipe_runtime::ui::helpers::ui_active_()".to_owned())),
-        KernelFn::UiDisabled => Ok(Some("ipe_runtime::ui::helpers::ui_disabled_()".to_owned())),
-
-        // `Ui.onPseudo : PseudoClass -> List (Attribute msg) -> Attribute msg`
-        // — generic escape hatch: folds `attrs` into one CSS rules-string and
-        // attaches it as `AttrPseudoRule(pc, css)`.
-        KernelFn::UiOnPseudo => {
-            let [pc_e, attrs_e] = args else {
-                return Err(Diagnostic::CompilerBug {
-                    where_: "ipe_backend_rust::emit_ui_call::UiOnPseudo",
-                    detail: format!("Ui.onPseudo requires 2 arguments, got {}", args.len()),
-                });
-            };
-            let pc = emit_expr_at(ctx, pc_e, indent, child, generics)?;
-            let attrs = emit_expr_at(ctx, attrs_e, indent, child, generics)?;
-            Ok(Some(format!(
-                "ipe_runtime::ui::helpers::ui_on_pseudo_({pc}, {attrs})"
-            )))
-        }
-
-        // `Ui.breakpoint : String -> List (Attribute msg) -> Element msg -> Element msg`
-        // Eager passthrough — breakpoint CSS media queries are not yet
-        // applied in the Rust runtime.  The element is returned unchanged.
-        KernelFn::UiBreakpoint => {
-            let [q_e, a_e, el_e] = args else {
-                return Err(Diagnostic::CompilerBug {
-                    where_: "ipe_backend_rust::emit_ui_call::UiBreakpoint",
-                    detail: format!("Ui.breakpoint requires 3 arguments, got {}", args.len()),
-                });
-            };
-            let q = emit_expr_at(ctx, q_e, indent, child, generics)?;
-            let a = emit_expr_at(ctx, a_e, indent, child, generics)?;
-            let el = emit_expr_at(ctx, el_e, indent, child, generics)?;
-            Ok(Some(format!(
-                "ipe_runtime::ui::helpers::ui_breakpoint_({q}, {a}, {el})"
-            )))
-        }
-
-        // `Ui.mediaQuery : String -> List (Attribute msg) -> Element msg -> Element msg`
-        // Raw-CSS-media-query escape hatch: wraps the child in a
-        // marker-carrying `<div>` (`data-ipe-mq-q` / `data-ipe-mq-rules`)
-        // consumed by `web::style_inject::build_mq` into a ipe-id-scoped
-        // `<style data-ipe-mq=…>` block. The query string is gated through
-        // `SafeCssMediaQuery` inside the runtime helper (fail-closed drop).
-        // See docs/adr/0019-ui-mediaquery-safe-boundary.md.
-        KernelFn::UiMediaQuery => {
-            let [q_e, a_e, el_e] = args else {
-                return Err(Diagnostic::CompilerBug {
-                    where_: "ipe_backend_rust::emit_ui_call::UiMediaQuery",
-                    detail: format!("Ui.mediaQuery requires 3 arguments, got {}", args.len()),
-                });
-            };
-            let q = emit_expr_at(ctx, q_e, indent, child, generics)?;
-            let a = emit_expr_at(ctx, a_e, indent, child, generics)?;
-            let el = emit_expr_at(ctx, el_e, indent, child, generics)?;
-            Ok(Some(format!(
-                "ipe_runtime::ui::helpers::ui_media_query_({q}, {a}, {el})"
-            )))
-        }
-
-        // Background pseudo-class colour attrs (Color -> Attribute msg)
-        KernelFn::BackgroundHoverColor => {
-            let [c_e] = args else {
-                return Err(Diagnostic::CompilerBug {
-                    where_: "ipe_backend_rust::emit_ui_call::BackgroundHoverColor",
-                    detail: format!(
-                        "Background.hoverColor requires 1 argument, got {}",
-                        args.len()
-                    ),
-                });
-            };
-            let c = emit_expr_at(ctx, c_e, indent, child, generics)?;
-            Ok(Some(format!(
-                "ipe_runtime::ui::helpers::ui_bg_hover_color_({c})"
-            )))
-        }
-        KernelFn::BackgroundFocusColor => {
-            let [c_e] = args else {
-                return Err(Diagnostic::CompilerBug {
-                    where_: "ipe_backend_rust::emit_ui_call::BackgroundFocusColor",
-                    detail: format!(
-                        "Background.focusColor requires 1 argument, got {}",
-                        args.len()
-                    ),
-                });
-            };
-            let c = emit_expr_at(ctx, c_e, indent, child, generics)?;
-            Ok(Some(format!(
-                "ipe_runtime::ui::helpers::ui_bg_focus_color_({c})"
-            )))
-        }
-        KernelFn::BackgroundActiveColor => {
-            let [c_e] = args else {
-                return Err(Diagnostic::CompilerBug {
-                    where_: "ipe_backend_rust::emit_ui_call::BackgroundActiveColor",
-                    detail: format!(
-                        "Background.activeColor requires 1 argument, got {}",
-                        args.len()
-                    ),
-                });
-            };
-            let c = emit_expr_at(ctx, c_e, indent, child, generics)?;
-            Ok(Some(format!(
-                "ipe_runtime::ui::helpers::ui_bg_active_color_({c})"
-            )))
-        }
-        KernelFn::BackgroundDisabledColor => {
-            let [c_e] = args else {
-                return Err(Diagnostic::CompilerBug {
-                    where_: "ipe_backend_rust::emit_ui_call::BackgroundDisabledColor",
-                    detail: format!(
-                        "Background.disabledColor requires 1 argument, got {}",
-                        args.len()
-                    ),
-                });
-            };
-            let c = emit_expr_at(ctx, c_e, indent, child, generics)?;
-            Ok(Some(format!(
-                "ipe_runtime::ui::helpers::ui_bg_disabled_color_({c})"
-            )))
-        }
-
-        // Border namespace — nullary style attrs
-        KernelFn::BorderSolid => Ok(Some(
-            "ipe_runtime::ui::helpers::ui_border_solid_()".to_owned(),
-        )),
-        KernelFn::BorderDashed => Ok(Some(
-            "ipe_runtime::ui::helpers::ui_border_dashed_()".to_owned(),
-        )),
-        KernelFn::BorderDotted => Ok(Some(
-            "ipe_runtime::ui::helpers::ui_border_dotted_()".to_owned(),
-        )),
-
-        // Border pseudo-class attrs
-        KernelFn::BorderHoverColor => {
-            let [c_e] = args else {
-                return Err(Diagnostic::CompilerBug {
-                    where_: "ipe_backend_rust::emit_ui_call::BorderHoverColor",
-                    detail: format!("Border.hoverColor requires 1 argument, got {}", args.len()),
-                });
-            };
-            let c = emit_expr_at(ctx, c_e, indent, child, generics)?;
-            Ok(Some(format!(
-                "ipe_runtime::ui::helpers::ui_border_hover_color_({c})"
-            )))
-        }
-        KernelFn::BorderFocusColor => {
-            let [c_e] = args else {
-                return Err(Diagnostic::CompilerBug {
-                    where_: "ipe_backend_rust::emit_ui_call::BorderFocusColor",
-                    detail: format!("Border.focusColor requires 1 argument, got {}", args.len()),
-                });
-            };
-            let c = emit_expr_at(ctx, c_e, indent, child, generics)?;
-            Ok(Some(format!(
-                "ipe_runtime::ui::helpers::ui_border_focus_color_({c})"
-            )))
-        }
-        KernelFn::BorderActiveColor => {
-            let [c_e] = args else {
-                return Err(Diagnostic::CompilerBug {
-                    where_: "ipe_backend_rust::emit_ui_call::BorderActiveColor",
-                    detail: format!("Border.activeColor requires 1 argument, got {}", args.len()),
-                });
-            };
-            let c = emit_expr_at(ctx, c_e, indent, child, generics)?;
-            Ok(Some(format!(
-                "ipe_runtime::ui::helpers::ui_border_active_color_({c})"
-            )))
-        }
-        KernelFn::BorderHoverWidth => {
-            let [n_e] = args else {
-                return Err(Diagnostic::CompilerBug {
-                    where_: "ipe_backend_rust::emit_ui_call::BorderHoverWidth",
-                    detail: format!("Border.hoverWidth requires 1 argument, got {}", args.len()),
-                });
-            };
-            let n = emit_expr_at(ctx, n_e, indent, child, generics)?;
-            Ok(Some(format!(
-                "ipe_runtime::ui::helpers::ui_border_hover_width_({n})"
-            )))
-        }
-        KernelFn::BorderHoverRounded => {
-            let [n_e] = args else {
-                return Err(Diagnostic::CompilerBug {
-                    where_: "ipe_backend_rust::emit_ui_call::BorderHoverRounded",
-                    detail: format!(
-                        "Border.hoverRounded requires 1 argument, got {}",
-                        args.len()
-                    ),
-                });
-            };
-            let n = emit_expr_at(ctx, n_e, indent, child, generics)?;
-            Ok(Some(format!(
-                "ipe_runtime::ui::helpers::ui_border_hover_rounded_({n})"
-            )))
-        }
-
-        // Font namespace — Int-keyed weight
-        KernelFn::FontWeight => {
-            let [n_e] = args else {
-                return Err(Diagnostic::CompilerBug {
-                    where_: "ipe_backend_rust::emit_ui_call::FontWeight",
-                    detail: format!("Font.weight requires 1 argument, got {}", args.len()),
-                });
-            };
-            let n = emit_expr_at(ctx, n_e, indent, child, generics)?;
-            Ok(Some(format!(
-                "ipe_runtime::ui::helpers::ui_font_weight_({n})"
-            )))
-        }
-
-        // Font namespace — nullary weight presets
-        KernelFn::FontSemiBold => Ok(Some(
-            "ipe_runtime::ui::helpers::ui_font_semi_bold_()".to_owned(),
-        )),
-        KernelFn::FontRegular => Ok(Some(
-            "ipe_runtime::ui::helpers::ui_font_regular_()".to_owned(),
-        )),
-        KernelFn::FontLight => Ok(Some(
-            "ipe_runtime::ui::helpers::ui_font_light_()".to_owned(),
-        )),
-        KernelFn::FontExtraBold => Ok(Some(
-            "ipe_runtime::ui::helpers::ui_font_extra_bold_()".to_owned(),
-        )),
-        KernelFn::FontBlack => Ok(Some(
-            "ipe_runtime::ui::helpers::ui_font_black_()".to_owned(),
-        )),
-
-        // Font namespace — nullary decoration
-        KernelFn::FontUnderline => Ok(Some(
-            "ipe_runtime::ui::helpers::ui_font_underline_()".to_owned(),
-        )),
-        KernelFn::FontNoDecoration => Ok(Some(
-            "ipe_runtime::ui::helpers::ui_font_no_decoration_()".to_owned(),
-        )),
-        KernelFn::FontLineThrough => Ok(Some(
-            "ipe_runtime::ui::helpers::ui_font_line_through_()".to_owned(),
-        )),
-
-        // Font namespace — Float spacing attrs
-        KernelFn::FontLetterSpacing => {
-            let [v_e] = args else {
-                return Err(Diagnostic::CompilerBug {
-                    where_: "ipe_backend_rust::emit_ui_call::FontLetterSpacing",
-                    detail: format!("Font.letterSpacing requires 1 argument, got {}", args.len()),
-                });
-            };
-            let v = emit_expr_at(ctx, v_e, indent, child, generics)?;
-            Ok(Some(format!(
-                "ipe_runtime::ui::helpers::ui_font_letter_spacing_({v})"
-            )))
-        }
-        KernelFn::FontWordSpacing => {
-            let [v_e] = args else {
-                return Err(Diagnostic::CompilerBug {
-                    where_: "ipe_backend_rust::emit_ui_call::FontWordSpacing",
-                    detail: format!("Font.wordSpacing requires 1 argument, got {}", args.len()),
-                });
-            };
-            let v = emit_expr_at(ctx, v_e, indent, child, generics)?;
-            Ok(Some(format!(
-                "ipe_runtime::ui::helpers::ui_font_word_spacing_({v})"
-            )))
-        }
-
-        // Font namespace — nullary text-alignment
-        KernelFn::FontAlignLeft => Ok(Some(
-            "ipe_runtime::ui::helpers::ui_font_align_left_()".to_owned(),
-        )),
-        KernelFn::FontAlignRight => Ok(Some(
-            "ipe_runtime::ui::helpers::ui_font_align_right_()".to_owned(),
-        )),
-        KernelFn::FontAlignCenter => Ok(Some(
-            "ipe_runtime::ui::helpers::ui_font_align_center_()".to_owned(),
-        )),
-        KernelFn::FontCenter => Ok(Some(
-            "ipe_runtime::ui::helpers::ui_font_center_()".to_owned(),
-        )),
-        KernelFn::FontJustify => Ok(Some(
-            "ipe_runtime::ui::helpers::ui_font_justify_()".to_owned(),
-        )),
-
-        // Font namespace — String constants (nullary, return String not Attr)
-        KernelFn::FontSansSerif => Ok(Some(
-            "ipe_runtime::ui::helpers::ui_font_sans_serif_()".to_owned(),
-        )),
-        KernelFn::FontSerif => Ok(Some(
-            "ipe_runtime::ui::helpers::ui_font_serif_()".to_owned(),
-        )),
-        KernelFn::FontMonospace => Ok(Some(
-            "ipe_runtime::ui::helpers::ui_font_monospace_()".to_owned(),
-        )),
-
-        // Font namespace — pseudo-class colour attrs (Color -> Attribute msg)
-        KernelFn::FontHoverColor => {
-            let [c_e] = args else {
-                return Err(Diagnostic::CompilerBug {
-                    where_: "ipe_backend_rust::emit_ui_call::FontHoverColor",
-                    detail: format!("Font.hoverColor requires 1 argument, got {}", args.len()),
-                });
-            };
-            let c = emit_expr_at(ctx, c_e, indent, child, generics)?;
-            Ok(Some(format!(
-                "ipe_runtime::ui::helpers::ui_font_hover_color_({c})"
-            )))
-        }
-        KernelFn::FontFocusColor => {
-            let [c_e] = args else {
-                return Err(Diagnostic::CompilerBug {
-                    where_: "ipe_backend_rust::emit_ui_call::FontFocusColor",
-                    detail: format!("Font.focusColor requires 1 argument, got {}", args.len()),
-                });
-            };
-            let c = emit_expr_at(ctx, c_e, indent, child, generics)?;
-            Ok(Some(format!(
-                "ipe_runtime::ui::helpers::ui_font_focus_color_({c})"
-            )))
-        }
-        KernelFn::FontActiveColor => {
-            let [c_e] = args else {
-                return Err(Diagnostic::CompilerBug {
-                    where_: "ipe_backend_rust::emit_ui_call::FontActiveColor",
-                    detail: format!("Font.activeColor requires 1 argument, got {}", args.len()),
-                });
-            };
-            let c = emit_expr_at(ctx, c_e, indent, child, generics)?;
-            Ok(Some(format!(
-                "ipe_runtime::ui::helpers::ui_font_active_color_({c})"
-            )))
-        }
-        KernelFn::FontDisabledColor => {
-            let [c_e] = args else {
-                return Err(Diagnostic::CompilerBug {
-                    where_: "ipe_backend_rust::emit_ui_call::FontDisabledColor",
-                    detail: format!("Font.disabledColor requires 1 argument, got {}", args.len()),
-                });
-            };
-            let c = emit_expr_at(ctx, c_e, indent, child, generics)?;
-            Ok(Some(format!(
-                "ipe_runtime::ui::helpers::ui_font_disabled_color_({c})"
-            )))
-        }
-        KernelFn::FontHoverSize => {
-            let [n_e] = args else {
-                return Err(Diagnostic::CompilerBug {
-                    where_: "ipe_backend_rust::emit_ui_call::FontHoverSize",
-                    detail: format!("Font.hoverSize requires 1 argument, got {}", args.len()),
-                });
-            };
-            let n = emit_expr_at(ctx, n_e, indent, child, generics)?;
-            Ok(Some(format!(
-                "ipe_runtime::ui::helpers::ui_font_hover_size_({n})"
-            )))
-        }
-
-        // Html.Attributes — tabindex (Int → Html.Attribute msg)
-        // Converted to string at emit time: `tabindex 3` → `<... tabindex="3">`.
-        KernelFn::HtmlAttrTabindex => {
-            let [n_e] = args else {
-                return Err(Diagnostic::CompilerBug {
-                    where_: "ipe_backend_rust::emit_ui_call::HtmlAttrTabindex",
-                    detail: format!("Attr.tabindex requires 1 argument, got {}", args.len()),
-                });
-            };
-            let n = emit_expr_at(ctx, n_e, indent, child, generics)?;
-            Ok(Some(format!(
-                "ipe_runtime::html::html_named_attr_(\"tabindex\".to_owned(), ({n}).to_string())"
-            )))
-        }
-
-        // Html.Attributes — rows (Int → Html.Attribute msg)
-        // Used on `<textarea rows="N">`.
-        KernelFn::HtmlAttrRows => {
-            let [n_e] = args else {
-                return Err(Diagnostic::CompilerBug {
-                    where_: "ipe_backend_rust::emit_ui_call::HtmlAttrRows",
-                    detail: format!("Attr.rows requires 1 argument, got {}", args.len()),
-                });
-            };
-            let n = emit_expr_at(ctx, n_e, indent, child, generics)?;
-            Ok(Some(format!(
-                "ipe_runtime::html::html_named_attr_(\"rows\".to_owned(), ({n}).to_string())"
-            )))
-        }
-
-        // ── Ipe.Ui.Region ──────────────────────────────────────────────
-
-        // `Region.mainContent : Attribute msg`
-        KernelFn::RegionMainContent => Ok(Some(
-            "ipe_runtime::ui::helpers::ui_region_main_content_()".to_owned(),
-        )),
-
-        // `Region.navigation : Attribute msg`
-        KernelFn::RegionNavigation => Ok(Some(
-            "ipe_runtime::ui::helpers::ui_region_navigation_()".to_owned(),
-        )),
-
-        // `Region.footer : Attribute msg`
-        KernelFn::RegionFooter => Ok(Some(
-            "ipe_runtime::ui::helpers::ui_region_footer_()".to_owned(),
-        )),
-
-        // `Region.aside : Attribute msg`
-        KernelFn::RegionAside => Ok(Some(
-            "ipe_runtime::ui::helpers::ui_region_aside_()".to_owned(),
-        )),
-
-        // `Region.heading : Int -> Attribute msg`
-        KernelFn::RegionHeading => {
-            let [n_e] = args else {
-                return Err(Diagnostic::CompilerBug {
-                    where_: "ipe_backend_rust::emit_ui_call::RegionHeading",
-                    detail: format!("Region.heading requires 1 argument, got {}", args.len()),
-                });
-            };
-            let n = emit_expr_at(ctx, n_e, indent, child, generics)?;
-            Ok(Some(format!(
-                "ipe_runtime::ui::helpers::ui_region_heading_({n})"
-            )))
-        }
-
-        // `Region.label : String -> Attribute msg`
-        KernelFn::RegionLabel => {
-            let [s_e] = args else {
-                return Err(Diagnostic::CompilerBug {
-                    where_: "ipe_backend_rust::emit_ui_call::RegionLabel",
-                    detail: format!("Region.label requires 1 argument, got {}", args.len()),
-                });
-            };
-            let s = emit_expr_at(ctx, s_e, indent, child, generics)?;
-            Ok(Some(format!(
-                "ipe_runtime::ui::helpers::ui_region_label_({s})"
-            )))
-        }
-
-        // `Region.announce : Attribute msg`
-        KernelFn::RegionAnnounce => Ok(Some(
-            "ipe_runtime::ui::helpers::ui_region_announce_()".to_owned(),
-        )),
-
-        // `Region.announceUrgently : Attribute msg`
-        KernelFn::RegionAnnounceUrgently => Ok(Some(
-            "ipe_runtime::ui::helpers::ui_region_announce_urgently_()".to_owned(),
-        )),
-
-        // ── Ui.input + Ui.describe + desc* constructors ───────────────────────
-
-        // `Ui.input : List (Attribute msg) -> Element msg`
-        KernelFn::UiInput => {
-            let [attrs_e] = args else {
-                return Err(Diagnostic::CompilerBug {
-                    where_: "ipe_backend_rust::emit_ui_call::UiInput",
-                    detail: format!("Ui.input requires 1 argument, got {}", args.len()),
-                });
-            };
-            let attrs = emit_expr_at(ctx, attrs_e, indent, child, generics)?;
-            Ok(Some(format!(
-                "ipe_runtime::ui::helpers::ui_input_({attrs})"
-            )))
-        }
-
-        // `Ui.describe : Description -> Attribute msg`
-        KernelFn::UiDescribe => {
-            let [d_e] = args else {
-                return Err(Diagnostic::CompilerBug {
-                    where_: "ipe_backend_rust::emit_ui_call::UiDescribe",
-                    detail: format!("Ui.describe requires 1 argument, got {}", args.len()),
-                });
-            };
-            let d = emit_expr_at(ctx, d_e, indent, child, generics)?;
-            Ok(Some(format!("ipe_runtime::ui::helpers::ui_describe_({d})")))
-        }
-
-        // Nullary `Description` constructors (arity 0).
-        KernelFn::UiDescMain => Ok(Some("ipe_runtime::ui::helpers::ui_desc_main_()".to_owned())),
-        KernelFn::UiDescNavigation => Ok(Some(
-            "ipe_runtime::ui::helpers::ui_desc_navigation_()".to_owned(),
-        )),
-        KernelFn::UiDescContentInfo => Ok(Some(
-            "ipe_runtime::ui::helpers::ui_desc_content_info_()".to_owned(),
-        )),
-        KernelFn::UiDescComplementary => Ok(Some(
-            "ipe_runtime::ui::helpers::ui_desc_complementary_()".to_owned(),
-        )),
-        KernelFn::UiDescLivePolite => Ok(Some(
-            "ipe_runtime::ui::helpers::ui_desc_live_polite_()".to_owned(),
-        )),
-        KernelFn::UiDescLiveAssertive => Ok(Some(
-            "ipe_runtime::ui::helpers::ui_desc_live_assertive_()".to_owned(),
-        )),
-
-        // `Ui.descHeading : Int -> Description`
-        KernelFn::UiDescHeading => {
-            let [n_e] = args else {
-                return Err(Diagnostic::CompilerBug {
-                    where_: "ipe_backend_rust::emit_ui_call::UiDescHeading",
-                    detail: format!("Ui.descHeading requires 1 argument, got {}", args.len()),
-                });
-            };
-            let n = emit_expr_at(ctx, n_e, indent, child, generics)?;
-            Ok(Some(format!(
-                "ipe_runtime::ui::helpers::ui_desc_heading_({n})"
-            )))
-        }
-
-        // `Ui.descLabel : String -> Description`
-        KernelFn::UiDescLabel => {
-            let [s_e] = args else {
-                return Err(Diagnostic::CompilerBug {
-                    where_: "ipe_backend_rust::emit_ui_call::UiDescLabel",
-                    detail: format!("Ui.descLabel requires 1 argument, got {}", args.len()),
-                });
-            };
-            let s = emit_expr_at(ctx, s_e, indent, child, generics)?;
-            Ok(Some(format!(
-                "ipe_runtime::ui::helpers::ui_desc_label_({s})"
-            )))
-        }
-
-        // ── Ipe.Ui.Input — Label constructors ──────────────────────────
-        KernelFn::InputLabelAbove => {
-            let [attrs_e, el_e] = args else {
-                return Err(Diagnostic::CompilerBug {
-                    where_: "ipe_backend_rust::emit_ui_call::InputLabelAbove",
-                    detail: format!("Input.labelAbove requires 2 arguments, got {}", args.len()),
-                });
-            };
-            let attrs_s = emit_expr_at(ctx, attrs_e, indent, child, generics)?;
-            let el_s = emit_expr_at(ctx, el_e, indent, child, generics)?;
-            Ok(Some(format!(
-                "ipe_runtime::ui::input::input_label_above_({attrs_s}, {el_s})"
-            )))
-        }
-
-        KernelFn::InputLabelBelow => {
-            let [attrs_e, el_e] = args else {
-                return Err(Diagnostic::CompilerBug {
-                    where_: "ipe_backend_rust::emit_ui_call::InputLabelBelow",
-                    detail: format!("Input.labelBelow requires 2 arguments, got {}", args.len()),
-                });
-            };
-            let attrs_s = emit_expr_at(ctx, attrs_e, indent, child, generics)?;
-            let el_s = emit_expr_at(ctx, el_e, indent, child, generics)?;
-            Ok(Some(format!(
-                "ipe_runtime::ui::input::input_label_below_({attrs_s}, {el_s})"
-            )))
-        }
-
-        KernelFn::InputLabelLeft => {
-            let [attrs_e, el_e] = args else {
-                return Err(Diagnostic::CompilerBug {
-                    where_: "ipe_backend_rust::emit_ui_call::InputLabelLeft",
-                    detail: format!("Input.labelLeft requires 2 arguments, got {}", args.len()),
-                });
-            };
-            let attrs_s = emit_expr_at(ctx, attrs_e, indent, child, generics)?;
-            let el_s = emit_expr_at(ctx, el_e, indent, child, generics)?;
-            Ok(Some(format!(
-                "ipe_runtime::ui::input::input_label_left_({attrs_s}, {el_s})"
-            )))
-        }
-
-        KernelFn::InputLabelRight => {
-            let [attrs_e, el_e] = args else {
-                return Err(Diagnostic::CompilerBug {
-                    where_: "ipe_backend_rust::emit_ui_call::InputLabelRight",
-                    detail: format!("Input.labelRight requires 2 arguments, got {}", args.len()),
-                });
-            };
-            let attrs_s = emit_expr_at(ctx, attrs_e, indent, child, generics)?;
-            let el_s = emit_expr_at(ctx, el_e, indent, child, generics)?;
-            Ok(Some(format!(
-                "ipe_runtime::ui::input::input_label_right_({attrs_s}, {el_s})"
-            )))
-        }
-
-        KernelFn::InputLabelHidden => {
-            let [s_e] = args else {
-                return Err(Diagnostic::CompilerBug {
-                    where_: "ipe_backend_rust::emit_ui_call::InputLabelHidden",
-                    detail: format!("Input.labelHidden requires 1 argument, got {}", args.len()),
-                });
-            };
-            let s = emit_expr_at(ctx, s_e, indent, child, generics)?;
-            Ok(Some(format!(
-                "ipe_runtime::ui::input::input_label_hidden_({s})"
-            )))
-        }
-
-        KernelFn::InputPlaceholder => {
-            let [attrs_e, el_e] = args else {
-                return Err(Diagnostic::CompilerBug {
-                    where_: "ipe_backend_rust::emit_ui_call::InputPlaceholder",
-                    detail: format!("Input.placeholder requires 2 arguments, got {}", args.len()),
-                });
-            };
-            let attrs_s = emit_expr_at(ctx, attrs_e, indent, child, generics)?;
-            let el_s = emit_expr_at(ctx, el_e, indent, child, generics)?;
-            Ok(Some(format!(
-                "ipe_runtime::ui::input::input_placeholder_({attrs_s}, {el_s})"
-            )))
+            ))
         }
 
         // ── Ipe.Ui.Input — text-family controls ────────────────────────
-        KernelFn::InputText
-        | KernelFn::InputEmail
-        | KernelFn::InputUsername
-        | KernelFn::InputSearch
-        | KernelFn::InputCurrentPassword
-        | KernelFn::InputNewPassword => {
+        NativeUiEmit::InputText => {
             let [attrs_e, cfg_e] = args else {
                 return Err(Diagnostic::CompilerBug {
                     where_: "ipe_backend_rust::emit_ui_call::InputText",
@@ -5130,12 +3665,12 @@ fn emit_ui_call(
                 KernelFn::InputNewPassword => "input_new_password_",
                 _ => "input_text_",
             };
-            Ok(Some(format!(
+            Ok(format!(
                 "ipe_runtime::ui::input::{fn_name}({attrs_s}, {on_change_s}, {text_s}, {placeholder_s}, {label_s})"
-            )))
+            ))
         }
 
-        KernelFn::InputMultiline => {
+        NativeUiEmit::InputMultiline => {
             let [attrs_e, cfg_e] = args else {
                 return Err(Diagnostic::CompilerBug {
                     where_: "ipe_backend_rust::emit_ui_call::InputMultiline",
@@ -5185,12 +3720,12 @@ fn emit_ui_call(
             let placeholder_s = emit_expr_at(ctx, placeholder_e, indent, child, generics)?;
             let label_s = emit_expr_at(ctx, label_e, indent, child, generics)?;
             let spellcheck_s = emit_expr_at(ctx, spellcheck_e, indent, child, generics)?;
-            Ok(Some(format!(
+            Ok(format!(
                 "ipe_runtime::ui::input::input_multiline_({attrs_s}, {on_change_s}, {text_s}, {placeholder_s}, {label_s}, {spellcheck_s})"
-            )))
+            ))
         }
 
-        KernelFn::InputCheckbox => {
+        NativeUiEmit::InputCheckbox => {
             let [attrs_e, cfg_e] = args else {
                 return Err(Diagnostic::CompilerBug {
                     where_: "ipe_backend_rust::emit_ui_call::InputCheckbox",
@@ -5232,13 +3767,13 @@ fn emit_ui_call(
             let icon_s = emit_arc_callback_field(ctx, icon_e, indent, child, generics)?;
             let checked_s = emit_expr_at(ctx, checked_e, indent, child, generics)?;
             let label_s = emit_expr_at(ctx, label_e, indent, child, generics)?;
-            Ok(Some(format!(
+            Ok(format!(
                 "ipe_runtime::ui::input::input_checkbox_({attrs_s}, {on_change_s}, {icon_s}, {checked_s}, {label_s})"
-            )))
+            ))
         }
 
         // `Input.slider attrs { onChange, value, min, max, step, label }`
-        KernelFn::InputSlider => {
+        NativeUiEmit::InputSlider => {
             let [attrs_e, cfg_e] = args else {
                 return Err(Diagnostic::CompilerBug {
                     where_: "ipe_backend_rust::emit_ui_call::InputSlider",
@@ -5294,28 +3829,13 @@ fn emit_ui_call(
             let max_s = emit_expr_at(ctx, max_e, indent, child, generics)?;
             let step_s = emit_expr_at(ctx, step_e, indent, child, generics)?;
             let label_s = emit_expr_at(ctx, label_e, indent, child, generics)?;
-            Ok(Some(format!(
+            Ok(format!(
                 "ipe_runtime::ui::input::input_slider_({attrs_s}, {on_change_s}, {value_s}, {min_s}, {max_s}, {step_s}, {label_s})"
-            )))
-        }
-
-        // `Input.option value labelEl` — constructs a RadioOption
-        KernelFn::InputOption => {
-            let [value_e, label_e] = args else {
-                return Err(Diagnostic::CompilerBug {
-                    where_: "ipe_backend_rust::emit_ui_call::InputOption",
-                    detail: format!("Input.option requires 2 arguments, got {}", args.len()),
-                });
-            };
-            let value_s = emit_expr_at(ctx, value_e, indent, child, generics)?;
-            let label_s = emit_expr_at(ctx, label_e, indent, child, generics)?;
-            Ok(Some(format!(
-                "ipe_runtime::ui::input::input_option_({value_s}, {label_s})"
-            )))
+            ))
         }
 
         // `Input.radio attrs { onChange, options, selected, label }`
-        KernelFn::InputRadio => {
+        NativeUiEmit::InputRadio => {
             let [attrs_e, cfg_e] = args else {
                 return Err(Diagnostic::CompilerBug {
                     where_: "ipe_backend_rust::emit_ui_call::InputRadio",
@@ -5357,13 +3877,13 @@ fn emit_ui_call(
             let options_s = emit_expr_at(ctx, options_e, indent, child, generics)?;
             let selected_s = emit_expr_at(ctx, selected_e, indent, child, generics)?;
             let label_s = emit_expr_at(ctx, label_e, indent, child, generics)?;
-            Ok(Some(format!(
+            Ok(format!(
                 "ipe_runtime::ui::input::input_radio_({attrs_s}, {on_change_s}, {options_s}, {selected_s}, {label_s})"
-            )))
+            ))
         }
 
         // `Input.radioRow attrs { onChange, options, selected, label }`
-        KernelFn::InputRadioRow => {
+        NativeUiEmit::InputRadioRow => {
             let [attrs_e, cfg_e] = args else {
                 return Err(Diagnostic::CompilerBug {
                     where_: "ipe_backend_rust::emit_ui_call::InputRadioRow",
@@ -5405,62 +3925,16 @@ fn emit_ui_call(
             let options_s = emit_expr_at(ctx, options_e, indent, child, generics)?;
             let selected_s = emit_expr_at(ctx, selected_e, indent, child, generics)?;
             let label_s = emit_expr_at(ctx, label_e, indent, child, generics)?;
-            Ok(Some(format!(
+            Ok(format!(
                 "ipe_runtime::ui::input::input_radio_row_({attrs_s}, {on_change_s}, {options_s}, {selected_s}, {label_s})"
-            )))
-        }
-
-        // ── Ipe.Html element builders ─────────────────────────────────────────
-
-        // `Html.text : String -> Html msg`
-        KernelFn::HtmlTextNode => {
-            let [s_e] = args else {
-                return Err(Diagnostic::CompilerBug {
-                    where_: "ipe_backend_rust::emit_ui_call::HtmlTextNode",
-                    detail: format!("Html.text requires 1 argument, got {}", args.len()),
-                });
-            };
-            let s = emit_expr_at(ctx, s_e, indent, child, generics)?;
-            Ok(Some(format!(
-                "ipe_runtime::ui::helpers::html_text_node_({s})"
-            )))
-        }
-
-        // `Html.unsafeRaw : String -> Html msg`
-        KernelFn::HtmlRawNode => {
-            let [s_e] = args else {
-                return Err(Diagnostic::CompilerBug {
-                    where_: "ipe_backend_rust::emit_ui_call::HtmlRawNode",
-                    detail: format!("Html.unsafeRaw requires 1 argument, got {}", args.len()),
-                });
-            };
-            let s = emit_expr_at(ctx, s_e, indent, child, generics)?;
-            Ok(Some(format!(
-                "ipe_runtime::ui::helpers::html_raw_node_({s})"
-            )))
-        }
-
-        // `Html.node : String -> List Attr -> List Html -> Html msg`
-        KernelFn::HtmlNode => {
-            let [tag_e, attrs_e, children_e] = args else {
-                return Err(Diagnostic::CompilerBug {
-                    where_: "ipe_backend_rust::emit_ui_call::HtmlNode",
-                    detail: format!("Html.node requires 3 arguments, got {}", args.len()),
-                });
-            };
-            let tag = emit_expr_at(ctx, tag_e, indent, child, generics)?;
-            let attrs = emit_expr_at(ctx, attrs_e, indent, child, generics)?;
-            let children = emit_expr_at(ctx, children_e, indent, child, generics)?;
-            Ok(Some(format!(
-                "ipe_runtime::ui::helpers::html_node_({tag}, {attrs}, {children})"
-            )))
+            ))
         }
 
         // `Html.voidNode : String -> List Attr -> Html msg` — the generic
         // void counterpart of `Html.node`: arbitrary runtime tag, no children
         // arg. Shares the same `html_node_` sink with an emit-baked empty
         // children vec, exactly like the fixed-tag void builders below.
-        KernelFn::HtmlVoidNode => {
+        NativeUiEmit::HtmlVoidNode => {
             let [tag_e, attrs_e] = args else {
                 return Err(Diagnostic::CompilerBug {
                     where_: "ipe_backend_rust::emit_ui_call::HtmlVoidNode",
@@ -5469,174 +3943,13 @@ fn emit_ui_call(
             };
             let tag = emit_expr_at(ctx, tag_e, indent, child, generics)?;
             let attrs = emit_expr_at(ctx, attrs_e, indent, child, generics)?;
-            Ok(Some(format!(
+            Ok(format!(
                 "ipe_runtime::ui::helpers::html_node_({tag}, {attrs}, ::std::vec::Vec::new())"
-            )))
+            ))
         }
-
-        // `Html.doctype : List Html -> Html msg` — wraps children in the
-        // `!doctype-wrapper` pseudo-tag; `html::render_into_ctx` already
-        // special-cases that tag to emit `<!DOCTYPE html>`.
-        KernelFn::HtmlDoctype => {
-            let [children_e] = args else {
-                return Err(Diagnostic::CompilerBug {
-                    where_: "ipe_backend_rust::emit_ui_call::HtmlDoctype",
-                    detail: format!("Html.doctype requires 1 argument, got {}", args.len()),
-                });
-            };
-            let children = emit_expr_at(ctx, children_e, indent, child, generics)?;
-            Ok(Some(format!(
-                "ipe_runtime::ui::helpers::html_doctype_({children})"
-            )))
-        }
-
-        // `Html.titleNode : String -> Html msg` — wraps a raw string
-        // directly in `<title>`.
-        KernelFn::HtmlTitleNode => {
-            let [s_e] = args else {
-                return Err(Diagnostic::CompilerBug {
-                    where_: "ipe_backend_rust::emit_ui_call::HtmlTitleNode",
-                    detail: format!("Html.titleNode requires 1 argument, got {}", args.len()),
-                });
-            };
-            let s = emit_expr_at(ctx, s_e, indent, child, generics)?;
-            Ok(Some(format!(
-                "ipe_runtime::ui::helpers::html_title_node_({s})"
-            )))
-        }
-
-        // `Html.styleNode : List Attr -> String -> Html msg` (arity-2; the
-        // dedicated kernel close-tag-neutralises the CSS body — F7).
-        KernelFn::HtmlStyleNode => {
-            let [attrs_e, css_e] = args else {
-                return Err(Diagnostic::CompilerBug {
-                    where_: "ipe_backend_rust::emit_ui_call::HtmlStyleNode",
-                    detail: format!("Html.styleNode requires 2 arguments, got {}", args.len()),
-                });
-            };
-            let attrs = emit_expr_at(ctx, attrs_e, indent, child, generics)?;
-            let css = emit_expr_at(ctx, css_e, indent, child, generics)?;
-            Ok(Some(format!(
-                "ipe_runtime::ui::helpers::html_style_node_({attrs}, {css})"
-            )))
-        }
-
-        // `Html.div : List Attr -> List Html -> Html msg`
-        KernelFn::HtmlDiv => {
-            let [attrs_e, children_e] = args else {
-                return Err(Diagnostic::CompilerBug {
-                    where_: "ipe_backend_rust::emit_ui_call::HtmlDiv",
-                    detail: format!("Html.div requires 2 arguments, got {}", args.len()),
-                });
-            };
-            let attrs = emit_expr_at(ctx, attrs_e, indent, child, generics)?;
-            let children = emit_expr_at(ctx, children_e, indent, child, generics)?;
-            Ok(Some(format!(
-                "ipe_runtime::ui::helpers::html_div_({attrs}, {children})"
-            )))
-        }
-
-        // `Html.span : List Attr -> List Html -> Html msg`
-        KernelFn::HtmlSpan => {
-            let [attrs_e, children_e] = args else {
-                return Err(Diagnostic::CompilerBug {
-                    where_: "ipe_backend_rust::emit_ui_call::HtmlSpan",
-                    detail: format!("Html.span requires 2 arguments, got {}", args.len()),
-                });
-            };
-            let attrs = emit_expr_at(ctx, attrs_e, indent, child, generics)?;
-            let children = emit_expr_at(ctx, children_e, indent, child, generics)?;
-            Ok(Some(format!(
-                "ipe_runtime::ui::helpers::html_span_({attrs}, {children})"
-            )))
-        }
-
-        // `Html.a : List Attr -> List Html -> Html msg`
-        KernelFn::HtmlA => {
-            let [attrs_e, children_e] = args else {
-                return Err(Diagnostic::CompilerBug {
-                    where_: "ipe_backend_rust::emit_ui_call::HtmlA",
-                    detail: format!("Html.a requires 2 arguments, got {}", args.len()),
-                });
-            };
-            let attrs = emit_expr_at(ctx, attrs_e, indent, child, generics)?;
-            let children = emit_expr_at(ctx, children_e, indent, child, generics)?;
-            Ok(Some(format!(
-                "ipe_runtime::ui::helpers::html_a_({attrs}, {children})"
-            )))
-        }
-
-        // `Html.button : List Attr -> List Html -> Html msg`
-        KernelFn::HtmlButton => {
-            let [attrs_e, children_e] = args else {
-                return Err(Diagnostic::CompilerBug {
-                    where_: "ipe_backend_rust::emit_ui_call::HtmlButton",
-                    detail: format!("Html.button requires 2 arguments, got {}", args.len()),
-                });
-            };
-            let attrs = emit_expr_at(ctx, attrs_e, indent, child, generics)?;
-            let children = emit_expr_at(ctx, children_e, indent, child, generics)?;
-            Ok(Some(format!(
-                "ipe_runtime::ui::helpers::html_button_({attrs}, {children})"
-            )))
-        }
-
-        // `Html.p (and other block elements) : List Attr -> List Html -> Html msg`
-        KernelFn::HtmlP => {
-            let [attrs_e, children_e] = args else {
-                return Err(Diagnostic::CompilerBug {
-                    where_: "ipe_backend_rust::emit_ui_call::HtmlP",
-                    detail: format!("Html.p/block requires 2 arguments, got {}", args.len()),
-                });
-            };
-            let attrs = emit_expr_at(ctx, attrs_e, indent, child, generics)?;
-            let children = emit_expr_at(ctx, children_e, indent, child, generics)?;
-            Ok(Some(format!(
-                "ipe_runtime::ui::helpers::html_p_({attrs}, {children})"
-            )))
-        }
-
-        // `Html.input : List Attr -> Html msg` (void element)
-        KernelFn::HtmlInput => {
-            let [attrs_e] = args else {
-                return Err(Diagnostic::CompilerBug {
-                    where_: "ipe_backend_rust::emit_ui_call::HtmlInput",
-                    detail: format!("Html.input requires 1 argument, got {}", args.len()),
-                });
-            };
-            let attrs = emit_expr_at(ctx, attrs_e, indent, child, generics)?;
-            Ok(Some(format!(
-                "ipe_runtime::ui::helpers::html_input_({attrs})"
-            )))
-        }
-
-        // `Html.img : List Attr -> Html msg` (void element)
-        KernelFn::HtmlImg => {
-            let [attrs_e] = args else {
-                return Err(Diagnostic::CompilerBug {
-                    where_: "ipe_backend_rust::emit_ui_call::HtmlImg",
-                    detail: format!("Html.img requires 1 argument, got {}", args.len()),
-                });
-            };
-            let attrs = emit_expr_at(ctx, attrs_e, indent, child, generics)?;
-            Ok(Some(format!(
-                "ipe_runtime::ui::helpers::html_img_({attrs})"
-            )))
-        }
-
-        // ── Ipe.Html element builders (tag-as-data) ──────────────────
-        //
-        // Every container (`h1`/`nav`/`table`/…) and void (`br`/`hr`/`link`/…)
-        // element routes through the SAME generic `html_node_(tag, attrs, children)`
-        // runtime sink — no per-tag runtime fn. The wire tag is the kernel's
-        // `html_element_tag()` literal (injected here as data), so `nav` renders
-        // `<nav>`, `h1` renders `<h1>`, etc. — NOT the old wrong-render fold to
-        // `<p>`/`<img>`. Void elements pass an empty child vec; the render sink
-        // (`html::render_into`) additionally self-closes and drops children for any
-        // tag in its `VOID` set, so no injected-child XSS surface exists.
 
         // Container: `<tag> : List Attr -> List Html -> Html msg`.
-        k if k.is_html_container() => {
+        NativeUiEmit::HtmlContainer => {
             let [attrs_e, children_e] = args else {
                 return Err(Diagnostic::CompilerBug {
                     where_: "ipe_backend_rust::emit_ui_call::HtmlContainer",
@@ -5651,13 +3964,13 @@ fn emit_ui_call(
                 })?;
             let attrs = emit_expr_at(ctx, attrs_e, indent, child, generics)?;
             let children = emit_expr_at(ctx, children_e, indent, child, generics)?;
-            Ok(Some(format!(
+            Ok(format!(
                 "ipe_runtime::ui::helpers::html_node_({tag:?}.to_owned(), {attrs}, {children})"
-            )))
+            ))
         }
 
         // Void: `<tag> : List Attr -> Html msg` (no children).
-        k if k.is_html_void() => {
+        NativeUiEmit::HtmlVoid => {
             let [attrs_e] = args else {
                 return Err(Diagnostic::CompilerBug {
                     where_: "ipe_backend_rust::emit_ui_call::HtmlVoid",
@@ -5671,92 +3984,9 @@ fn emit_ui_call(
                     detail: format!("{k:?} is_html_void but html_element_tag returned None"),
                 })?;
             let attrs = emit_expr_at(ctx, attrs_e, indent, child, generics)?;
-            Ok(Some(format!(
+            Ok(format!(
                 "ipe_runtime::ui::helpers::html_node_({tag:?}.to_owned(), {attrs}, ::std::vec::Vec::new())"
-            )))
-        }
-
-        // ── Event-attribute builders ─────────────────────────────────────────────
-        //
-        // Plain-message events (onClick/onFocus/onBlur/onMouseOver/onMouseOut):
-        //   Ui.onClick : msg -> Attribute msg
-        //   emit: ipe_runtime::ui::helpers::ui_on_click_(msg_expr)
-        //
-        // String-carrying events (onInput/onChange/onKeyDown/onKeyUp) — T6 trap:
-        //   The Ipê fn arg is an emitted Rust fn-value (closure or fn-ptr).
-        //   The runtime requires `Arc<dyn Fn(String)->M+Send+Sync>`.
-        //   We emit: ui_on_input_(std::sync::Arc::new(move |_x| (f)(_x)))
-        //   This is sound: the Arc captures `f` by move; `f` is always 'static
-        //   since emitted Ipê fns carry no borrow-lifetime context.
-
-        // `Ui.onClick / Event.onClick : msg -> Attribute msg`
-        KernelFn::UiOnClick => {
-            let [msg_e] = args else {
-                return Err(Diagnostic::CompilerBug {
-                    where_: "ipe_backend_rust::emit_ui_call::UiOnClick",
-                    detail: format!("Ui.onClick requires 1 argument, got {}", args.len()),
-                });
-            };
-            let msg_s = emit_expr_at(ctx, msg_e, indent, child, generics)?;
-            Ok(Some(format!(
-                "ipe_runtime::ui::helpers::ui_on_click_({msg_s})"
-            )))
-        }
-
-        // `Ui.onFocus : msg -> Attribute msg`
-        KernelFn::UiOnFocus => {
-            let [msg_e] = args else {
-                return Err(Diagnostic::CompilerBug {
-                    where_: "ipe_backend_rust::emit_ui_call::UiOnFocus",
-                    detail: format!("Ui.onFocus requires 1 argument, got {}", args.len()),
-                });
-            };
-            let msg_s = emit_expr_at(ctx, msg_e, indent, child, generics)?;
-            Ok(Some(format!(
-                "ipe_runtime::ui::helpers::ui_on_focus_({msg_s})"
-            )))
-        }
-
-        // `Ui.onBlur : msg -> Attribute msg`
-        KernelFn::UiOnBlur => {
-            let [msg_e] = args else {
-                return Err(Diagnostic::CompilerBug {
-                    where_: "ipe_backend_rust::emit_ui_call::UiOnBlur",
-                    detail: format!("Ui.onBlur requires 1 argument, got {}", args.len()),
-                });
-            };
-            let msg_s = emit_expr_at(ctx, msg_e, indent, child, generics)?;
-            Ok(Some(format!(
-                "ipe_runtime::ui::helpers::ui_on_blur_({msg_s})"
-            )))
-        }
-
-        // `Ui.onMouseOver : msg -> Attribute msg`
-        KernelFn::UiOnMouseOver => {
-            let [msg_e] = args else {
-                return Err(Diagnostic::CompilerBug {
-                    where_: "ipe_backend_rust::emit_ui_call::UiOnMouseOver",
-                    detail: format!("Ui.onMouseOver requires 1 argument, got {}", args.len()),
-                });
-            };
-            let msg_s = emit_expr_at(ctx, msg_e, indent, child, generics)?;
-            Ok(Some(format!(
-                "ipe_runtime::ui::helpers::ui_on_mouse_over_({msg_s})"
-            )))
-        }
-
-        // `Ui.onMouseOut : msg -> Attribute msg`
-        KernelFn::UiOnMouseOut => {
-            let [msg_e] = args else {
-                return Err(Diagnostic::CompilerBug {
-                    where_: "ipe_backend_rust::emit_ui_call::UiOnMouseOut",
-                    detail: format!("Ui.onMouseOut requires 1 argument, got {}", args.len()),
-                });
-            };
-            let msg_s = emit_expr_at(ctx, msg_e, indent, child, generics)?;
-            Ok(Some(format!(
-                "ipe_runtime::ui::helpers::ui_on_mouse_out_({msg_s})"
-            )))
+            ))
         }
 
         // `Ui.onInput : (String -> msg) -> Attribute msg`  (Arc-wrap the fn)
@@ -5769,7 +3999,7 @@ fn emit_ui_call(
         // on_change FIELD path guards against, applied to the inline-wrap sites.
         // When there are no leading pure-alias `let`s, `emit_arc_callback_field`
         // produces output byte-identical to a plain `arc_callback_wrap` call.
-        KernelFn::UiOnInput => {
+        NativeUiEmit::OnInput => {
             let [f_e] = args else {
                 return Err(Diagnostic::CompilerBug {
                     where_: "ipe_backend_rust::emit_ui_call::UiOnInput",
@@ -5778,14 +4008,12 @@ fn emit_ui_call(
             };
             // Peel any leading capture-clone `let`s outside the Arc closure.
             let peeled = emit_arc_callback_field(ctx, f_e, indent, child, generics)?;
-            Ok(Some(format!(
-                "ipe_runtime::ui::helpers::ui_on_input_({peeled})"
-            )))
+            Ok(format!("ipe_runtime::ui::helpers::ui_on_input_({peeled})"))
         }
 
         // `Ui.onChange : (String -> msg) -> Attribute msg`  (Arc-wrap)
         // D5: same peel-hoist as UiOnInput above.
-        KernelFn::UiOnChange => {
+        NativeUiEmit::OnChange => {
             let [f_e] = args else {
                 return Err(Diagnostic::CompilerBug {
                     where_: "ipe_backend_rust::emit_ui_call::UiOnChange",
@@ -5793,13 +4021,11 @@ fn emit_ui_call(
                 });
             };
             let peeled = emit_arc_callback_field(ctx, f_e, indent, child, generics)?;
-            Ok(Some(format!(
-                "ipe_runtime::ui::helpers::ui_on_change_({peeled})"
-            )))
+            Ok(format!("ipe_runtime::ui::helpers::ui_on_change_({peeled})"))
         }
 
         // `Ui.onKeyDown : (String -> msg) -> Attribute msg`  (Arc-wrap)
-        KernelFn::UiOnKeyDown => {
+        NativeUiEmit::OnKeyDown => {
             let [f_e] = args else {
                 return Err(Diagnostic::CompilerBug {
                     where_: "ipe_backend_rust::emit_ui_call::UiOnKeyDown",
@@ -5807,13 +4033,13 @@ fn emit_ui_call(
                 });
             };
             let f_s = emit_expr_at(ctx, f_e, indent, child, generics)?;
-            Ok(Some(format!(
+            Ok(format!(
                 "ipe_runtime::ui::helpers::ui_on_key_down_(::std::sync::Arc::new(move |_x| ({f_s})(_x)))"
-            )))
+            ))
         }
 
         // `Ui.onKeyUp : (String -> msg) -> Attribute msg`  (Arc-wrap)
-        KernelFn::UiOnKeyUp => {
+        NativeUiEmit::OnKeyUp => {
             let [f_e] = args else {
                 return Err(Diagnostic::CompilerBug {
                     where_: "ipe_backend_rust::emit_ui_call::UiOnKeyUp",
@@ -5821,13 +4047,13 @@ fn emit_ui_call(
                 });
             };
             let f_s = emit_expr_at(ctx, f_e, indent, child, generics)?;
-            Ok(Some(format!(
+            Ok(format!(
                 "ipe_runtime::ui::helpers::ui_on_key_up_(::std::sync::Arc::new(move |_x| ({f_s})(_x)))"
-            )))
+            ))
         }
 
         // `Ui.onFile : (String -> msg) -> Attribute msg`  (Arc-wrap)
-        KernelFn::UiOnFile => {
+        NativeUiEmit::OnFile => {
             let [f_e] = args else {
                 return Err(Diagnostic::CompilerBug {
                     where_: "ipe_backend_rust::emit_ui_call::UiOnFile",
@@ -5835,13 +4061,13 @@ fn emit_ui_call(
                 });
             };
             let f_s = emit_expr_at(ctx, f_e, indent, child, generics)?;
-            Ok(Some(format!(
+            Ok(format!(
                 "ipe_runtime::ui::helpers::ui_on_file_(::std::sync::Arc::new(move |_x| ({f_s})(_x)))"
-            )))
+            ))
         }
 
         // `Event.onBool : (Bool -> msg) -> Attribute msg`  (Arc-wrap, bool arg)
-        KernelFn::UiOnBool => {
+        NativeUiEmit::OnBool => {
             let [f_e] = args else {
                 return Err(Diagnostic::CompilerBug {
                     where_: "ipe_backend_rust::emit_ui_call::UiOnBool",
@@ -5849,9 +4075,9 @@ fn emit_ui_call(
                 });
             };
             let f_s = emit_expr_at(ctx, f_e, indent, child, generics)?;
-            Ok(Some(format!(
+            Ok(format!(
                 "ipe_runtime::ui::helpers::ui_on_bool_(::std::sync::Arc::new(move |_x| ({f_s})(_x)))"
-            )))
+            ))
         }
 
         // `Ui.onSubmit : (a -> msg) -> Attribute msg`
@@ -5887,7 +4113,7 @@ fn emit_ui_call(
         // `flows_into_sync_kernel_call` promotes the LET-BOUND VALUE itself to
         // `Expr::SharedLambda` (`Arc<dyn Fn + Send + Sync>`), so `f_s` here is
         // already `Send + Sync` — no change needed in this arm.
-        KernelFn::UiOnSubmit => {
+        NativeUiEmit::OnSubmit => {
             let [f_e] = args else {
                 return Err(Diagnostic::CompilerBug {
                     where_: "ipe_backend_rust::emit_ui_call::UiOnSubmit",
@@ -5916,7 +4142,7 @@ fn emit_ui_call(
                     });
                 }
             };
-            Ok(Some(call))
+            Ok(call)
         }
 
         // ── Ipe.Html.Events builders ────────────────────────────────────
@@ -5929,7 +4155,7 @@ fn emit_ui_call(
         // `Event::OnForm` with the concrete payload type recovered by Rust
         // generic inference on the emitted closure — never a type-erased
         // handler.
-        k if k.html_event_shape().is_some() => {
+        NativeUiEmit::HtmlEvent => {
             let (Some(shape), Some(name)) = (k.html_event_shape(), k.html_event_wire_name()) else {
                 return Err(Diagnostic::CompilerBug {
                     where_: "ipe_backend_rust::emit_ui_call::HtmlEvent",
@@ -6043,14 +4269,14 @@ fn emit_ui_call(
                     }
                 },
             };
-            Ok(Some(call))
+            Ok(call)
         }
 
         // ── Ipe.Html.Attributes builders ─────────────────────────────────
         // Fixed-key string attr: `class v` → `html_named_attr_("class", v)`.
         // The key is a compile-time literal (never attacker data); the VALUE is
         // escaped at the render sink (`escape_attr`), so no escaping here.
-        k if k.is_html_str_attr() => {
+        NativeUiEmit::HtmlStrAttr => {
             let [v_e] = args else {
                 return Err(Diagnostic::CompilerBug {
                     where_: "ipe_backend_rust::emit_ui_call::HtmlStrAttr",
@@ -6062,12 +4288,13 @@ fn emit_ui_call(
                 detail: format!("{k:?} is_html_str_attr but html_attr_key returned None"),
             })?;
             let v_s = emit_expr_at(ctx, v_e, indent, child, generics)?;
-            Ok(Some(format!(
+            Ok(format!(
                 "ipe_runtime::html::html_named_attr_({key:?}.to_owned(), {v_s})"
-            )))
+            ))
         }
+
         // Fixed-key bool attr: `checked b` → `html_bool_named_attr_("checked", b)`.
-        k if k.is_html_bool_attr() => {
+        NativeUiEmit::HtmlBoolAttr => {
             let [b_e] = args else {
                 return Err(Diagnostic::CompilerBug {
                     where_: "ipe_backend_rust::emit_ui_call::HtmlBoolAttr",
@@ -6079,141 +4306,9 @@ fn emit_ui_call(
                 detail: format!("{k:?} is_html_bool_attr but html_attr_key returned None"),
             })?;
             let b_s = emit_expr_at(ctx, b_e, indent, child, generics)?;
-            Ok(Some(format!(
+            Ok(format!(
                 "ipe_runtime::html::html_bool_named_attr_({key:?}.to_owned(), {b_s})"
-            )))
-        }
-        // Generic `attribute k v` — runtime key gated at the render sink through
-        // `SafeAttrName` (drops `on*`/`srcdoc`/charset-invalid names).
-        KernelFn::HtmlAttribute => {
-            let [k_e, v_e] = args else {
-                return Err(Diagnostic::CompilerBug {
-                    where_: "ipe_backend_rust::emit_ui_call::HtmlAttribute",
-                    detail: format!("Attr.attribute requires 2 arguments, got {}", args.len()),
-                });
-            };
-            let k_s = emit_expr_at(ctx, k_e, indent, child, generics)?;
-            let v_s = emit_expr_at(ctx, v_e, indent, child, generics)?;
-            Ok(Some(format!(
-                "ipe_runtime::html::html_named_attr_({k_s}, {v_s})"
-            )))
-        }
-        // Generic `boolAttribute k b`.
-        KernelFn::HtmlBoolAttribute => {
-            let [k_e, b_e] = args else {
-                return Err(Diagnostic::CompilerBug {
-                    where_: "ipe_backend_rust::emit_ui_call::HtmlBoolAttribute",
-                    detail: format!(
-                        "Attr.boolAttribute requires 2 arguments, got {}",
-                        args.len()
-                    ),
-                });
-            };
-            let k_s = emit_expr_at(ctx, k_e, indent, child, generics)?;
-            let b_s = emit_expr_at(ctx, b_e, indent, child, generics)?;
-            Ok(Some(format!(
-                "ipe_runtime::html::html_bool_named_attr_({k_s}, {b_s})"
-            )))
-        }
-        // `noAttr : Attribute msg` — nullary identity attribute.
-        KernelFn::HtmlNoAttr => Ok(Some("ipe_runtime::html::html_no_attr_()".to_owned())),
-
-        // ── Web app-entry kernels ─────────────────────────────────────────────
-        // Delegate to `emit_web::emit_web_call`; it returns `Some(s)` for the
-        // four Web variants and `None` for anything else (the `_ => None` arm).
-        // A `None` here is an internal error (the `is_web()` guard above already
-        // filtered to Web variants), so promote it to a `CompilerBug`.
-        KernelFn::WebApp
-        | KernelFn::WebAppRouted
-        | KernelFn::WebRoute
-        | KernelFn::WebRenderStatic => {
-            let s = crate::emit_web::emit_web_call(ctx, callee, args, indent, child, generics)?
-                .ok_or_else(|| Diagnostic::CompilerBug {
-                    where_: "ipe_backend_rust::emit_ui_call",
-                    detail: format!("emit_web returned None for Web kernel {k:?} — missing arm"),
-                })?;
-            Ok(Some(s))
-        }
-
-        // ── Terminal full-screen app-entry ───────────────────────────────────
-        // Delegate to `emit_tui::emit_tui_call`; it returns `Some(s)` for the
-        // `appScreen` variant and `None` for anything else. A `None` here is an
-        // internal error (the `k.is_tui()` guard already filtered), so promote
-        // it to a `CompilerBug`.
-        KernelFn::TerminalAppScreen => {
-            let s = crate::emit_tui::emit_tui_call(ctx, callee, args, indent, child, generics)?
-                .ok_or_else(|| Diagnostic::CompilerBug {
-                    where_: "ipe_backend_rust::emit_ui_call",
-                    detail: format!(
-                        "emit_tui returned None for Terminal kernel {k:?} — missing arm"
-                    ),
-                })?;
-            Ok(Some(s))
-        }
-
-        // ── Webview app-entry kernel ─────────────────────────────────────────
-        // Delegate to `emit_webview::emit_webview_call`; it returns `Some(s)` for
-        // the WebviewApp variant and `None` for anything else. A `None` here is an
-        // internal error (the `k.is_webview()` guard above already filtered), so
-        // promote it to a `CompilerBug`.
-        KernelFn::WebViewApp => {
-            let s =
-                crate::emit_webview::emit_webview_call(ctx, callee, args, indent, child, generics)?
-                    .ok_or_else(|| Diagnostic::CompilerBug {
-                        where_: "ipe_backend_rust::emit_ui_call",
-                        detail: format!(
-                            "emit_webview returned None for Webview kernel {k:?} — missing arm"
-                        ),
-                    })?;
-            Ok(Some(s))
-        }
-
-        // ── Terminal line-oriented app-entry ─────────────────────────────────
-        // Delegate to `emit_console::emit_console_call`; it returns `Some(s)` for
-        // the `appLines` variant and `None` for anything else. A `None` here is
-        // an internal error (the `k.is_console()` guard above already filtered),
-        // so promote it to a `CompilerBug`.
-        KernelFn::TerminalAppLines => {
-            let s =
-                crate::emit_console::emit_console_call(ctx, callee, args, indent, child, generics)?
-                    .ok_or_else(|| Diagnostic::CompilerBug {
-                        where_: "ipe_backend_rust::emit_ui_call",
-                        detail: format!(
-                            "emit_console returned None for Terminal kernel {k:?} — missing arm"
-                        ),
-                    })?;
-            Ok(Some(s))
-        }
-
-        // ── Ipe.Ui.Keyed — ipe-key diff identity ─────────────────────────────
-        // `Keyed.column : List Attr -> List (String, Element msg) -> Element msg`
-        KernelFn::KeyedColumn => {
-            let [attrs_e, children_e] = args else {
-                return Err(Diagnostic::CompilerBug {
-                    where_: "ipe_backend_rust::emit_ui_call::KeyedColumn",
-                    detail: format!("Keyed.column requires 2 arguments, got {}", args.len()),
-                });
-            };
-            let attrs = emit_expr_at(ctx, attrs_e, indent, child, generics)?;
-            let children = emit_expr_at(ctx, children_e, indent, child, generics)?;
-            Ok(Some(format!(
-                "ipe_runtime::ui::keyed::keyed_column_({attrs}, {children})"
-            )))
-        }
-
-        // `Keyed.row : List Attr -> List (String, Element msg) -> Element msg`
-        KernelFn::KeyedRow => {
-            let [attrs_e, children_e] = args else {
-                return Err(Diagnostic::CompilerBug {
-                    where_: "ipe_backend_rust::emit_ui_call::KeyedRow",
-                    detail: format!("Keyed.row requires 2 arguments, got {}", args.len()),
-                });
-            };
-            let attrs = emit_expr_at(ctx, attrs_e, indent, child, generics)?;
-            let children = emit_expr_at(ctx, children_e, indent, child, generics)?;
-            Ok(Some(format!(
-                "ipe_runtime::ui::keyed::keyed_row_({attrs}, {children})"
-            )))
+            ))
         }
 
         // ── Ipe.Ui.Lazy — deferred subtree helpers ───────────────────────────
@@ -6221,7 +4316,7 @@ fn emit_ui_call(
         // we eta-wrap it so any callable shape (fn item, Box<dyn Fn>, closure)
         // is accepted by the `impl Fn` bound without Arc overhead.
         // Arg order MUST match the runtime signature; a swap is a silent bug.
-        KernelFn::LazyLazy => {
+        NativeUiEmit::LazyLazy => {
             let [f_e, a_e] = args else {
                 return Err(Diagnostic::CompilerBug {
                     where_: "ipe_backend_rust::emit_ui_call::LazyLazy",
@@ -6230,12 +4325,12 @@ fn emit_ui_call(
             };
             let f_s = emit_expr_at(ctx, f_e, indent, child, generics)?;
             let a_s = emit_expr_at(ctx, a_e, indent, child, generics)?;
-            Ok(Some(format!(
+            Ok(format!(
                 "ipe_runtime::ui::lazy::lazy_lazy_(move |_a| ({f_s})(_a), {a_s})"
-            )))
+            ))
         }
 
-        KernelFn::LazyLazy2 => {
+        NativeUiEmit::LazyLazy2 => {
             let [f_e, a_e, b_e] = args else {
                 return Err(Diagnostic::CompilerBug {
                     where_: "ipe_backend_rust::emit_ui_call::LazyLazy2",
@@ -6245,12 +4340,12 @@ fn emit_ui_call(
             let f_s = emit_expr_at(ctx, f_e, indent, child, generics)?;
             let a_s = emit_expr_at(ctx, a_e, indent, child, generics)?;
             let b_s = emit_expr_at(ctx, b_e, indent, child, generics)?;
-            Ok(Some(format!(
+            Ok(format!(
                 "ipe_runtime::ui::lazy::lazy_lazy2_(move |_a, _b| ({f_s})(_a, _b), {a_s}, {b_s})"
-            )))
+            ))
         }
 
-        KernelFn::LazyLazy3 => {
+        NativeUiEmit::LazyLazy3 => {
             let [f_e, a_e, b_e, c_e] = args else {
                 return Err(Diagnostic::CompilerBug {
                     where_: "ipe_backend_rust::emit_ui_call::LazyLazy3",
@@ -6261,12 +4356,12 @@ fn emit_ui_call(
             let a_s = emit_expr_at(ctx, a_e, indent, child, generics)?;
             let b_s = emit_expr_at(ctx, b_e, indent, child, generics)?;
             let c_s = emit_expr_at(ctx, c_e, indent, child, generics)?;
-            Ok(Some(format!(
+            Ok(format!(
                 "ipe_runtime::ui::lazy::lazy_lazy3_(move |_a, _b, _c| ({f_s})(_a, _b, _c), {a_s}, {b_s}, {c_s})"
-            )))
+            ))
         }
 
-        KernelFn::LazyLazy4 => {
+        NativeUiEmit::LazyLazy4 => {
             let [f_e, a_e, b_e, c_e, d_e] = args else {
                 return Err(Diagnostic::CompilerBug {
                     where_: "ipe_backend_rust::emit_ui_call::LazyLazy4",
@@ -6278,12 +4373,12 @@ fn emit_ui_call(
             let b_s = emit_expr_at(ctx, b_e, indent, child, generics)?;
             let c_s = emit_expr_at(ctx, c_e, indent, child, generics)?;
             let d_s = emit_expr_at(ctx, d_e, indent, child, generics)?;
-            Ok(Some(format!(
+            Ok(format!(
                 "ipe_runtime::ui::lazy::lazy_lazy4_(move |_a, _b, _c, _d| ({f_s})(_a, _b, _c, _d), {a_s}, {b_s}, {c_s}, {d_s})"
-            )))
+            ))
         }
 
-        KernelFn::LazyLazy5 => {
+        NativeUiEmit::LazyLazy5 => {
             let [f_e, a_e, b_e, c_e, d_e, e_e] = args else {
                 return Err(Diagnostic::CompilerBug {
                     where_: "ipe_backend_rust::emit_ui_call::LazyLazy5",
@@ -6296,9 +4391,9 @@ fn emit_ui_call(
             let c_s = emit_expr_at(ctx, c_e, indent, child, generics)?;
             let d_s = emit_expr_at(ctx, d_e, indent, child, generics)?;
             let e_s = emit_expr_at(ctx, e_e, indent, child, generics)?;
-            Ok(Some(format!(
+            Ok(format!(
                 "ipe_runtime::ui::lazy::lazy_lazy5_(move |_a, _b, _c, _d, _e| ({f_s})(_a, _b, _c, _d, _e), {a_s}, {b_s}, {c_s}, {d_s}, {e_s})"
-            )))
+            ))
         }
 
         // ── Ipe.PubSub.publish / publishNoEcho ────────────────────────────
@@ -6310,7 +4405,7 @@ fn emit_ui_call(
         // `pub use web::*`, so no full path needed in the emitted crate. These are
         // `class = Web` (Task-shaped), not TEA-loop kernels — the runtime bus lives
         // in the `web` module's `web::pubsub`, hence their home here.
-        KernelFn::PubSubPublish | KernelFn::PubSubPublishNoEcho => {
+        NativeUiEmit::PubSubPublish => {
             let [topic_e, payload_e] = args else {
                 return Err(Diagnostic::CompilerBug {
                     where_: "ipe_backend_rust::emit_ui_call::PubSubPublish",
@@ -6322,19 +4417,73 @@ fn emit_ui_call(
             };
             let topic_s = emit_expr_at(ctx, topic_e, indent, child, generics)?;
             let payload_s = emit_expr_at(ctx, payload_e, indent, child, generics)?;
-            let name = kernel_name(*k); // "pubsub_publish" / "pubsub_publish_no_echo"
-            Ok(Some(format!(
-                "{name}::<_, IpeError>({topic_s}, {payload_s})"
-            )))
+            let name = kernel_name(k); // "pubsub_publish" / "pubsub_publish_no_echo"
+            Ok(format!("{name}::<_, IpeError>({topic_s}, {payload_s})"))
         }
 
-        // Any is_ui/live/tui/webview/cli() variant not listed is a gap — hard error.
-        _ => Err(Diagnostic::CompilerBug {
-            where_: "ipe_backend_rust::emit_ui_call",
-            detail: format!(
-                "UI/Web/Tui/WebView/Console kernel {k:?} has no emit arm — add it to emit_ui_call"
-            ),
-        }),
+        // ── Web app-entry kernels ─────────────────────────────────────────────
+        // Delegate to `emit_web::emit_web_call`; it returns `Some(s)` for the
+        // four Web variants and `None` for anything else (the `_ => None` arm).
+        // A `None` here is an internal error (the `is_web()` guard above already
+        // filtered to Web variants), so promote it to a `CompilerBug`.
+        NativeUiEmit::Delegate(UiDelegate::Web) => {
+            let s = crate::emit_web::emit_web_call(ctx, callee, args, indent, child, generics)?
+                .ok_or_else(|| Diagnostic::CompilerBug {
+                    where_: "ipe_backend_rust::emit_ui_call",
+                    detail: format!("emit_web returned None for Web kernel {k:?} — missing arm"),
+                })?;
+            Ok(s)
+        }
+
+        // ── Terminal full-screen app-entry ───────────────────────────────────
+        // Delegate to `emit_tui::emit_tui_call`; it returns `Some(s)` for the
+        // `appScreen` variant and `None` for anything else. A `None` here is an
+        // internal error (the `k.is_tui()` guard already filtered), so promote
+        // it to a `CompilerBug`.
+        NativeUiEmit::Delegate(UiDelegate::Tui) => {
+            let s = crate::emit_tui::emit_tui_call(ctx, callee, args, indent, child, generics)?
+                .ok_or_else(|| Diagnostic::CompilerBug {
+                    where_: "ipe_backend_rust::emit_ui_call",
+                    detail: format!(
+                        "emit_tui returned None for Terminal kernel {k:?} — missing arm"
+                    ),
+                })?;
+            Ok(s)
+        }
+
+        // ── Webview app-entry kernel ─────────────────────────────────────────
+        // Delegate to `emit_webview::emit_webview_call`; it returns `Some(s)` for
+        // the WebviewApp variant and `None` for anything else. A `None` here is an
+        // internal error (the `k.is_webview()` guard above already filtered), so
+        // promote it to a `CompilerBug`.
+        NativeUiEmit::Delegate(UiDelegate::WebView) => {
+            let s =
+                crate::emit_webview::emit_webview_call(ctx, callee, args, indent, child, generics)?
+                    .ok_or_else(|| Diagnostic::CompilerBug {
+                        where_: "ipe_backend_rust::emit_ui_call",
+                        detail: format!(
+                            "emit_webview returned None for Webview kernel {k:?} — missing arm"
+                        ),
+                    })?;
+            Ok(s)
+        }
+
+        // ── Terminal line-oriented app-entry ─────────────────────────────────
+        // Delegate to `emit_console::emit_console_call`; it returns `Some(s)` for
+        // the `appLines` variant and `None` for anything else. A `None` here is
+        // an internal error (the `k.is_console()` guard above already filtered),
+        // so promote it to a `CompilerBug`.
+        NativeUiEmit::Delegate(UiDelegate::Console) => {
+            let s =
+                crate::emit_console::emit_console_call(ctx, callee, args, indent, child, generics)?
+                    .ok_or_else(|| Diagnostic::CompilerBug {
+                        where_: "ipe_backend_rust::emit_ui_call",
+                        detail: format!(
+                            "emit_console returned None for Terminal kernel {k:?} — missing arm"
+                        ),
+                    })?;
+            Ok(s)
+        }
     }
 }
 
