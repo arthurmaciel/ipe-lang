@@ -1,6 +1,7 @@
 module Main exposing (main)
 import Ipe.Io as Io
 import Ipe.Db
+import Ipe.Db.Unsafe
 import Ipe.List
 import Ipe.Db.Sql
 import Ipe.String
@@ -19,7 +20,7 @@ main =
                 (\txconn ->
                     let
                         _ =
-                            Db.unsafeExecRaw txconn
+                            Unsafe.unsafeExecRaw txconn
                                 "CREATE TABLE items (name TEXT NOT NULL, qty INTEGER NOT NULL, price REAL NOT NULL, active INTEGER NOT NULL, note TEXT)"
 
                         _ =
@@ -80,10 +81,10 @@ main =
                                         (\nullMatched ->
                                             let
                                                 names =
-                                                    List.map (\r -> Db.unsafeGetString "name" r) matched
+                                                    List.map (\r -> Unsafe.unsafeGetString "name" r) matched
 
                                                 nullNames =
-                                                    List.map (\r -> Db.unsafeGetString "name" r) nullMatched
+                                                    List.map (\r -> Unsafe.unsafeGetString "name" r) nullMatched
 
                                                 summary =
                                                     String.join "," names

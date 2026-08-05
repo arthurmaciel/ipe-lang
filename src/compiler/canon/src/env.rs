@@ -1239,26 +1239,22 @@ impl Env {
             // the canonical `("PubSub", "publish")` kernel (`class = Web`,
             // Task-shaped — NOT TEA-loop machinery).
             // ── Db kernels ──────────────────────────────────────────────────────
-            // `Ipe.Db` — database connection + query surface.
-            // All effect-returning kernels (Task Error …) and pure helpers
-            // (`unsafeGetString`, `unsafeGetInt`, `unsafeGetBool`,
-            // `unsafeGetField`) are registered here. `SqlValue` / `SqlField` ADT
-            // constructors are handled by `install_builtin_ctors` above; they are
-            // unqualified.
+            // `Ipe.Db` — the SAFE database connection + query surface. The
+            // raw-SQL and untyped-column-read escape hatches (`unsafeExecRaw`,
+            // `unsafeQuery`, `unsafeGet*`) live in the compiled-source
+            // `Ipe.Db.Unsafe` submodule (`src/stdlib/Ipe/Db/Unsafe.ipe`), reached
+            // through `Ffi.kernel "Db_*"` aliases to the SAME kernels — so they
+            // are absent here and no longer resolve off a plain `import Ipe.Db`.
+            // `SqlValue` / `SqlField` ADT constructors are handled by
+            // `install_builtin_ctors` above; they are unqualified.
             (
                 "Db",
                 &[
                     "connect",
                     "open",
                     "close",
-                    "unsafeExecRaw",
                     "exec",
-                    "unsafeQuery",
                     "queryDecode",
-                    "unsafeGetString",
-                    "unsafeGetInt",
-                    "unsafeGetBool",
-                    "unsafeGetField",
                     "insertRow",
                     "getById",
                     "updateById",

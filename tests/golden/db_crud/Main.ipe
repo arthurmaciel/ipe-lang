@@ -1,6 +1,7 @@
 module Main exposing (main)
 import Ipe.Io as Io
 import Ipe.Db
+import Ipe.Db.Unsafe
 import Ipe.Dict
 import Ipe.Task
 
@@ -16,7 +17,7 @@ main =
                 (\txconn ->
                     let
                         _ =
-                            Db.unsafeExecRaw txconn
+                            Unsafe.unsafeExecRaw txconn
                                 "CREATE TABLE fruits (id TEXT PRIMARY KEY, name TEXT, qty TEXT)"
 
                         _ =
@@ -47,9 +48,9 @@ main =
                                                 r1 =
                                                     case before of
                                                         Just row ->
-                                                            Db.unsafeGetString "name" row
+                                                            Unsafe.unsafeGetString "name" row
                                                                 ++ "/"
-                                                                ++ Db.unsafeGetString "qty" row
+                                                                ++ Unsafe.unsafeGetString "qty" row
 
                                                         Nothing ->
                                                             "missing"
@@ -57,9 +58,9 @@ main =
                                                 r2 =
                                                     case after of
                                                         Just row ->
-                                                            Db.unsafeGetString "name" row
+                                                            Unsafe.unsafeGetString "name" row
                                                                 ++ "/"
-                                                                ++ Db.unsafeGetString "qty" row
+                                                                ++ Unsafe.unsafeGetString "qty" row
 
                                                         Nothing ->
                                                             "missing"

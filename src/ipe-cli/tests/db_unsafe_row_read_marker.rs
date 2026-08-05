@@ -1,23 +1,25 @@
-//! The stringly row-read surface is `Db.unsafeQuery` / `Db.unsafeGetField` /
-//! `Db.unsafeGetString` / `Db.unsafeGetInt` / `Db.unsafeGetBool`, and the old
-//! unmarked names no longer exist. This pins the schema-drift property that the
-//! silently-coercing row readers are only reachable through a lexically-marked
-//! `unsafe` name — a caller cannot fall into a `"" `/`0`-on-drift read by using
-//! an unmarked default. The typed `Db.queryDecode` + `Db.Decode.*` path (which a
-//! missing/renamed column fails closed on) is the unmarked row-read default.
+//! The stringly row-read surface is `Ipe.Db.Unsafe.unsafeQuery` /
+//! `unsafeGetField` / `unsafeGetString` / `unsafeGetInt` / `unsafeGetBool`, and
+//! neither the old unmarked names nor the relocated `Db.unsafe*` off a plain
+//! `import Ipe.Db` exist. This pins the schema-drift property that the
+//! silently-coercing row readers are only reachable through the lexically-marked
+//! `unsafe` names in the disclosed `Ipe.Db.Unsafe` submodule — a caller cannot
+//! fall into a `"" `/`0`-on-drift read by using an unmarked default, nor without
+//! disclosing the `unsafe` capability. The typed `Db.queryDecode` +
+//! `Db.Decode.*` path (which a missing/renamed column fails closed on) is the
+//! unmarked row-read default and stays in `Ipe.Db`.
 //!
-//! The guarantee must hold on BOTH resolution routes, or a smuggled alias would
-//! reopen the unmarked path:
+//! The guarantee is checked on BOTH resolution routes:
 //!
-//! * the direct qualifier (`Db.getField` / `Db.query` / …), and
-//! * the `Ffi.kernel "Db_getField"` string-alias route (`detect_kernel_alias`
-//!   splits the string into `(module, function)` and looks the pair up in the
-//!   same kernel registry the direct qualifier resolves against).
-//!
-//! Both routes key off the one registry, so renaming the decl member spelling to
-//! `unsafe*` moves the key: `("Db", "getField")` no longer resolves, `("Db",
-//! "unsafeGetField")` does. This mirrors `db_unsafe_exec_raw_marker.rs`, which
-//! covers the same two routes for the raw-SQL hatch.
+//! * the surface qualifier (`Unsafe.unsafeGetField` off `import Ipe.Db.Unsafe`,
+//!   and — for the relocation — `Db.unsafeGetField` off plain `Ipe.Db` failing),
+//!   and
+//! * the `Ffi.kernel "Db_unsafeGetField"` string-alias route
+//!   (`detect_kernel_alias` splits the string into `(module, function)` and
+//!   looks the pair up in the kernel registry). The alias keys off the UNCHANGED
+//!   canonical `("Db", "unsafeGetField")` pair — only the SURFACE home moved —
+//!   so the alias still resolves; the old unmarked `("Db", "getField")` pair
+//!   does not. This mirrors `db_unsafe_exec_raw_marker.rs`.
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -46,12 +48,43 @@ fn build(dir: &Path, test_name: &str) -> Result<(), ipe::CliError> {
 
 // ── Direct-qualifier route ────────────────────────────────────────────────────
 
-/// `Db.unsafeGetField` is the marked stringly row accessor — it type-checks (the
-/// untyped convenience stays available for genuinely dynamic reads).
+/// `Ipe.Db.Unsafe.unsafeGetField` is the marked stringly row accessor — it
+/// type-checks when imported from its `.Unsafe` submodule (the untyped
+/// convenience stays available for genuinely dynamic reads).
 #[test]
 fn marked_get_field_type_checks() {
     let dir = write_project(
         "marked",
+        "\
+module Main exposing (main)
+import Ipe.Db.Unsafe
+import Ipe.Dict as Dict
+import Ipe.Io as Io
+
+main =
+    let
+        row =
+            Dict.fromList [ ( \"name\", \"ada\" ) ]
+    in
+    Io.println (Unsafe.unsafeGetField \"name\" row)
+",
+    );
+    let built = build(&dir, "marked");
+    assert!(
+        built.is_ok(),
+        "Ipe.Db.Unsafe.unsafeGetField must type-check as the marked stringly accessor: {:?}",
+        built.err()
+    );
+    let _ = fs::remove_dir_all(&dir);
+}
+
+/// The relocated `unsafeGetField` no longer resolves off a plain `import Ipe.Db`:
+/// the untyped row-read surface LEFT `Ipe.Db` for `Ipe.Db.Unsafe`, so reaching
+/// it without importing the disclosed `.Unsafe` submodule is a compile error.
+#[test]
+fn relocated_get_field_off_plain_db_no_longer_compiles() {
+    let dir = write_project(
+        "relocated_direct",
         "\
 module Main exposing (main)
 import Ipe.Db
@@ -66,11 +99,11 @@ main =
     Io.println (Db.unsafeGetField \"name\" row)
 ",
     );
-    let built = build(&dir, "marked");
+    let built = build(&dir, "relocated_direct");
     assert!(
-        built.is_ok(),
-        "Db.unsafeGetField must type-check as the marked stringly accessor: {:?}",
-        built.err()
+        built.is_err(),
+        "Db.unsafeGetField off a plain `import Ipe.Db` must NOT compile — the \
+         untyped row-read surface relocated to the disclosed `Ipe.Db.Unsafe` submodule"
     );
     let _ = fs::remove_dir_all(&dir);
 }

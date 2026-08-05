@@ -100,6 +100,22 @@ const HTML_ATTRIBUTES: &str = include_str!("../Ipe/Html/Attributes.ipe");
 /// (NOT `MODULES`); NOT in `STDLIB_MODULE_QUALIFIERS`, so the disjointness
 /// invariant holds.
 const HTML_UNSAFE: &str = include_str!("../Ipe/Html/Unsafe.ipe");
+/// `Ipe.Db.Unsafe` — the raw-SQL / untyped-column-read escape hatches for
+/// `Ipe.Db`, compiled-source Layer-3.
+///
+/// Every member is a point-free `Ffi.kernel "Db_*"` / `"Sql_unsafeFragment"`
+/// alias resolved by `ipe_canon::resolve::detect_kernel_alias` to a retained
+/// kernel: `unsafeExecRaw`/`unsafeQuery`/`unsafeGet*` to the unchanged `Db*`
+/// kernels (runtime: `ipe_runtime::db::db_exec_raw`/`db_query_params`/
+/// `db_get_*`), and the new `unsafeFragment` to the `SqlUnsafeFragment` kernel
+/// (runtime: `ipe_runtime::db::sql_unsafe_fragment`, the un-validated
+/// counterpart to `sql_column`). Only the surface home moved here from
+/// `Ipe.Db` / `Ipe.Db.Sql`; the kernels, their registry keys, and their
+/// runtime behaviour are unchanged. Importing this dotted `Ipe.<M>.Unsafe`
+/// submodule discloses the `unsafe` capability. Registered in
+/// [`COMPILED_STD_MODULES`] (NOT `MODULES`); NOT in `STDLIB_MODULE_QUALIFIERS`,
+/// so the disjointness invariant holds.
+const DB_UNSAFE: &str = include_str!("../Ipe/Db/Unsafe.ipe");
 /// `Ipe.Html` — HTML element builders, compiled-source Layer-3.
 ///
 /// Every element builder (`div`/`nav`/`br`/…) is pure Ipê over two retained
@@ -664,6 +680,13 @@ pub const COMPILED_STD_MODULES: &[CompiledStdModule] = &[
     CompiledStdModule {
         dotted: "Ipe.Html.Unsafe",
         source: HTML_UNSAFE,
+    },
+    // Ipe.Db.Unsafe — Layer-3 source; the raw-SQL / untyped-read escape hatches
+    // are `Ffi.kernel "Db_*"` / `"Sql_unsafeFragment"` aliases to unchanged (and
+    // one new) kernels. Importing it discloses the `unsafe` capability.
+    CompiledStdModule {
+        dotted: "Ipe.Db.Unsafe",
+        source: DB_UNSAFE,
     },
     // Ipe.Html — Layer-3 source; element builders are pure Ipê over the retained
     // `Ffi.kernel "Html_node"` / `"Html_voidNode"` primitives, with the native

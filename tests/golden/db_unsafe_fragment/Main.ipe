@@ -9,15 +9,15 @@ import Ipe.Db.Sql
 import Ipe.String
 import Ipe.Task
 
--- M5b-db golden: Db.findWhere with a typed SqlFragment predicate (backlog #61).
--- Replaces the removed Db.unsafeFindWhere raw-string golden: the WHERE clause
--- is built from Sql.column / Sql.int / Sql.gt combinators, never a hand-built
--- string, so the parameterised channel is structural rather than a caller
--- convention.
+-- M5b-db golden: the Ipe.Db.Unsafe.unsafeFragment escape hatch mints a
+-- SqlFragment from a verbatim identifier string WITHOUT the Sql.column
+-- valid_sql_ident validation. Here the identifier ("qty") is a safe one the
+-- caller asserts, so the query behaves identically to the Sql.column path — the
+-- hatch's whole point is that the parse is skipped by caller assertion, not that
+-- the identifier is malformed. Importing Ipe.Db.Unsafe discloses the `unsafe`
+-- capability.
 --
--- Inserts two rows then queries WHERE qty > 9 so only the high-qty row
--- matches. Uses sqlite::memory: inside withTransaction so all ops share one
--- connection.
+-- Inserts two rows then queries WHERE qty > 9 so only the high-qty row matches.
 
 main =
     Task.andThen
@@ -53,11 +53,9 @@ main =
                             in
                             Io.println (name ++ ":" ++ String.fromInt qty)
                         )
-                        -- Typed WHERE clause: SQL injection via a naive
-                        -- string-concatenated WHERE is a compile-time type
-                        -- error at this call site (String vs SqlFragment) —
-                        -- see the db_gate_findwhere_string negative golden.
-                        (Db.findWhere txconn "products" (Sql.gt (Sql.column "qty") (Sql.int 9)))
+                        -- The WHERE column is minted by unsafeFragment: no
+                        -- valid_sql_ident runs, the caller asserts "qty" is safe.
+                        (Db.findWhere txconn "products" (Sql.gt (Unsafe.unsafeFragment "qty") (Sql.int 9)))
                 )
         )
         (Db.open "sqlite" "sqlite::memory:")

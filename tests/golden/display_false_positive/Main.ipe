@@ -3,6 +3,7 @@ module Main exposing (main)
 import Ipe.Task as Task
 import Ipe.Dict as Dict
 import Ipe.Db as Db
+import Ipe.Db.Unsafe
 import Ipe.Io as Io
 
 
@@ -16,7 +17,7 @@ import Ipe.Io as Io
 -- the param does not need and does not reflect its use.
 grab : any -> String -> String
 grab row prefix =
-    toString prefix ++ ":" ++ Db.unsafeGetString "k" row
+    toString prefix ++ ":" ++ Unsafe.unsafeGetString "k" row
 
 
 main : Task Error ()

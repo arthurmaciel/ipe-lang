@@ -35,10 +35,11 @@
 //!
 //! ## Golden catalogue
 //!
-//! * `db_exec` — `Db.open` → `Db.withTransaction` → `Db.unsafeExecRaw` (DDL) →
-//!   `Db.exec` with `[SqlString, SqlInt]` params (two INSERTs) → `Db.query`
-//!   with empty params (SELECT ORDER BY name) → `Db.getString` / `Db.getInt`
-//!   field access → `println`. Output: `"apple:5\nbanana:3"`.
+//! * `db_exec` — `Db.open` → `Db.withTransaction` → `Unsafe.unsafeExecRaw` (DDL,
+//!   from `Ipe.Db.Unsafe`) → `Db.exec` with `[SqlString, SqlInt]` params (two
+//!   INSERTs) → `Unsafe.unsafeQuery` with empty params (SELECT ORDER BY name) →
+//!   `Unsafe.unsafeGetString` / `unsafeGetInt` field access → `println`.
+//!   Output: `"apple:5\nbanana:3"`.
 //! * `db_find_by_conditions` — `Db.exec` two INSERTs →
 //!   `Db.findByConditions conn "items" (Dict.fromList [("name","apple")])` →
 //!   single-row result → `Db.getString` / `Db.getInt` → `println`.
@@ -284,6 +285,21 @@ fn db_find_by_conditions() {
 #[test]
 fn db_find_where() {
     assert_runs_and_matches_oracle("db_find_where");
+}
+
+/// `Db.findWhere` with an `Ipe.Db.Unsafe.unsafeFragment`-minted WHERE column:
+/// the un-validated anti-`Sql.column` mints a `SqlFragment` from the verbatim
+/// identifier `"qty"` WITHOUT the `valid_sql_ident` gate, then `Sql.gt (… ) 9`
+/// selects the single high-qty row → print `"widget:10"`. Proves the new
+/// escape-hatch member emits and reaches its runtime path (`sql_unsafe_fragment`)
+/// end-to-end. The caller asserts `"qty"` is safe, so the result matches the
+/// validated `Sql.column` path.
+///
+/// Sanctioned divergence: Ipê emits Rust+sqlx; `unsafeFragment` is an Ipê-only
+/// hatch with no Go counterpart; oracle is Ipê's own output.
+#[test]
+fn db_unsafe_fragment() {
+    assert_runs_and_matches_oracle("db_unsafe_fragment");
 }
 
 /// `Db.exec` INSERTs three rows → `Db.deleteWhere conn "products" (Sql.eq

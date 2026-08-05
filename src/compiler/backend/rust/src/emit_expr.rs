@@ -2491,6 +2491,7 @@ fn emit_db_call(
         // `gte`/`lte`/`and`/`or`/`not`/`isNull`/`isNotNull`/`like` take plain
         // scalar or `SqlFragment` args — no `Db` handle, no List projection.
         | KernelFn::SqlColumn
+        | KernelFn::SqlUnsafeFragment
         | KernelFn::SqlParam
         | KernelFn::SqlInt
         | KernelFn::SqlString
