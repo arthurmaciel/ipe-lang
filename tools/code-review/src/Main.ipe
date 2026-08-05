@@ -593,19 +593,30 @@ sourceBlock unit =
         ]
         (Ui.column
             [ Ui.width Ui.fill, Ui.spacing 2 ]
-            (List.map sourceLine (String.lines unit.source))
+            (List.map numberedLine (Format.numberedLines unit.lineStart unit.source))
         )
 
 
-sourceLine : String -> Ui.Element Msg
-sourceLine line =
-    Ui.el
-        [ Ui.width Ui.fill
-        , Font.family Font.monospace
-        , Font.size 12
-        , Font.color (Ui.rgb 205 205 215)
+numberedLine : ( Int, String ) -> Ui.Element Msg
+numberedLine ( n, line ) =
+    Ui.row
+        [ Ui.width Ui.fill, Ui.spacing 8 ]
+        [ Ui.el
+            [ Ui.width (Ui.px 40)
+            , Font.family Font.monospace
+            , Font.size 12
+            , Font.color (Ui.rgb 120 120 135)
+            , Ui.alignRight
+            ]
+            (Ui.text (String.fromInt n))
+        , Ui.el
+            [ Ui.width Ui.fill
+            , Font.family Font.monospace
+            , Font.size 12
+            , Font.color (Ui.rgb 205 205 215)
+            ]
+            (Ui.text line)
         ]
-        (Ui.text line)
 
 
 subscriptions : Model -> Sub Msg
