@@ -87,10 +87,23 @@ const PATH: &str = include_str!("../Ipe/Path.ipe");
 /// Registered in [`COMPILED_STD_MODULES`] (NOT `MODULES`); NOT in
 /// `STDLIB_MODULE_QUALIFIERS`, so the disjointness invariant holds.
 const HTML_ATTRIBUTES: &str = include_str!("../Ipe/Html/Attributes.ipe");
+/// `Ipe.Html.Unsafe` — the un-escaped raw-HTML escape hatch, compiled-source
+/// Layer-3.
+///
+/// The single member `unsafeRaw` is a point-free `Ffi.kernel "Html_unsafeRaw"`
+/// alias resolved by `ipe_canon::resolve::detect_kernel_alias` to the retained
+/// `HtmlRawNode` kernel (runtime: `ipe_runtime::ui::helpers::html_raw_node_`,
+/// the `HRaw` verbatim sink). Only the surface home moved here from `Ipe.Html`;
+/// the kernel, its `("Html", "unsafeRaw")` registry key, and the render-sink
+/// behaviour are unchanged. Importing this dotted `Ipe.<M>.Unsafe` submodule
+/// discloses the `unsafe` capability. Registered in [`COMPILED_STD_MODULES`]
+/// (NOT `MODULES`); NOT in `STDLIB_MODULE_QUALIFIERS`, so the disjointness
+/// invariant holds.
+const HTML_UNSAFE: &str = include_str!("../Ipe/Html/Unsafe.ipe");
 /// `Ipe.Html` — HTML element builders, compiled-source Layer-3.
 ///
 /// Every element builder (`div`/`nav`/`br`/…) is pure Ipê over two retained
-/// primitives — `node`/`voidNode` — which, with `text`/`unsafeRaw`/`doctype`/
+/// primitives — `node`/`voidNode` — which, with `text`/`doctype`/
 /// `titleNode`/`styleNode`, are point-free `Ffi.kernel "Html_*"` aliases
 /// resolved by `ipe_canon::resolve::detect_kernel_alias` to the retained
 /// `HtmlNode`/`HtmlVoidNode`/… kernels (runtime: `ipe_runtime::ui::helpers::*`).
@@ -654,6 +667,13 @@ pub const COMPILED_STD_MODULES: &[CompiledStdModule] = &[
     CompiledStdModule {
         dotted: "Ipe.Html.Attributes",
         source: HTML_ATTRIBUTES,
+    },
+    // Ipe.Html.Unsafe — Layer-3 source; the single `unsafeRaw` escape hatch is a
+    // `Ffi.kernel "Html_unsafeRaw"` alias to the unchanged `HtmlRawNode` kernel.
+    // Importing it discloses the `unsafe` capability.
+    CompiledStdModule {
+        dotted: "Ipe.Html.Unsafe",
+        source: HTML_UNSAFE,
     },
     // Ipe.Html — Layer-3 source; element builders are pure Ipê over the retained
     // `Ffi.kernel "Html_node"` / `"Html_voidNode"` primitives, with the native

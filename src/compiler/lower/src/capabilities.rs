@@ -93,6 +93,25 @@ mod tests {
         );
     }
 
+    /// A REAL relocated member's home: importing the shipped `Ipe.Html.Unsafe`
+    /// submodule — the raw-HTML XSS escape hatch relocated out of `Ipe.Html` —
+    /// discloses `unsafe`. Exercises the import-derived `unsafe` scan on an actual
+    /// shipped `.Unsafe` module rather than a bare name, proving the disclosure
+    /// fires for the raw-HTML boundary specifically. (Member resolution + the
+    /// behaviour-identical `html_raw_node_` output is proved end-to-end in the
+    /// negative-suite full-pipeline test, which injects the compiled stdlib.)
+    #[test]
+    fn importing_ipe_html_unsafe_discloses_unsafe() {
+        let caps = caps_of(
+            "module Main exposing (main)\nimport Ipe.Io\nimport Ipe.Html.Unsafe\nmain : Task ()\nmain =\n    Io.println \"hi\"\n",
+        );
+        assert!(
+            caps.as_ref()
+                .is_some_and(|c| c.contains(&Capability::Unsafe)),
+            "a program importing `Ipe.Html.Unsafe` must disclose the `unsafe` capability, got {caps:?}"
+        );
+    }
+
     /// The other half of the partition: a program that imports NO `.Unsafe`
     /// submodule discloses nothing on the `unsafe` axis. Guards against the scan
     /// firing `unsafe` unconditionally — the default path must be untouched.

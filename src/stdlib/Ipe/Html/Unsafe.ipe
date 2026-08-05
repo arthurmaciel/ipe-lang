@@ -1,0 +1,24 @@
+-- | Ipe.Html.Unsafe — the un-escaped raw-HTML escape hatch (Layer 3 Ipe source).
+--
+-- This submodule is the one home for the raw-HTML injection surface. Importing
+-- it discloses the `unsafe` capability program-wide, so a dependency's raw sink
+-- is visible before the program runs. The safe default is `Html.text`, escaped
+-- by construction; `unsafeRaw` bypasses that escaping for trusted, verbatim
+-- markup only.
+--
+-- `unsafeRaw` is a point-free `Ffi.kernel "Html_unsafeRaw"` alias to the retained
+-- `HtmlRawNode` kernel (runtime: `ipe_runtime::ui::helpers::html_raw_node_`) — the
+-- same kernel and the same `HRaw` sink as before; only the surface home moved
+-- from `Ipe.Html` to here. The render sink still emits the string verbatim, so
+-- the caller owns the XSS invariant: the input must be trusted, already-safe
+-- HTML.
+module Ipe.Html.Unsafe exposing (unsafeRaw)
+
+
+import Ipe.Ffi as Ffi
+
+
+-- | `unsafeRaw s` — an UN-escaped raw HTML node. The `unsafe` prefix names the
+-- XSS risk at every call site; user content goes through `Html.text` instead.
+unsafeRaw : String -> Html msg
+unsafeRaw = Ffi.kernel "Html_unsafeRaw"
