@@ -353,9 +353,9 @@ fn canon_member_not_exposed() {
 }
 
 /// SECURITY: the un-escaped raw-String→HTML surface `Html.raw` is REMOVED — its
-/// only spelling is now the explicitly-marked `Html.unsafeRaw`, so a raw
-/// injection can never be written under a name that looks safe. The old name no
-/// longer resolves.
+/// only spelling is now the explicitly-marked `unsafeRaw` in the dedicated
+/// `Ipe.Html.Unsafe` escape-hatch submodule, so a raw injection can never be
+/// written under a name that looks safe. The old name no longer resolves.
 #[test]
 fn security_html_raw_unmarked_is_rejected() {
     let src = "module Main exposing (main)\n\
@@ -364,13 +364,26 @@ fn security_html_raw_unmarked_is_rejected() {
     assert_rejected("security_html_raw_unmarked", src, "IPE-N0005");
 }
 
-/// SECURITY (contrapositive): the marked replacement `Html.unsafeRaw` still
-/// compiles — the raw capability is preserved, only renamed to name the risk.
+/// SECURITY: `unsafeRaw` no longer lives on the plain `Ipe.Html` surface — it
+/// relocated to `Ipe.Html.Unsafe`. A program that imports only `Ipe.Html` and
+/// reaches for `Html.unsafeRaw` must be rejected, so the escape hatch cannot be
+/// used without the disclosing `Ipe.Html.Unsafe` import.
 #[test]
-fn security_html_unsafe_raw_compiles() {
+fn security_html_unsafe_raw_off_plain_html_is_rejected() {
     let src = "module Main exposing (main)\n\
                import Ipe.Html as Html\n\
                main = Html.unsafeRaw \"<b>x</b>\"\n";
+    assert_rejected("security_html_unsafe_raw_off_plain", src, "IPE-N0005");
+}
+
+/// SECURITY (contrapositive): the marked replacement, now homed in
+/// `Ipe.Html.Unsafe`, still compiles — the raw capability is preserved, only
+/// relocated to the disclosing submodule that names the risk.
+#[test]
+fn security_html_unsafe_raw_compiles() {
+    let src = "module Main exposing (main)\n\
+               import Ipe.Html.Unsafe exposing (unsafeRaw)\n\
+               main = unsafeRaw \"<b>x</b>\"\n";
     assert_compiles("security_html_unsafe_raw", src);
 }
 
