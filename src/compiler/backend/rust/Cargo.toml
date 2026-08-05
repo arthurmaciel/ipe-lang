@@ -6,6 +6,9 @@ license.workspace = true
 
 [dependencies]
 ipe_ir = { path = "../../ir" }
+# Direct edge (already transitive via ipe_ir) so the emit-symbol drift tripwire
+# in naming.rs can read StdlibKernel::ALL and KernelDef.runtime_fn.
+ipe_kernels = { path = "../../kernels" }
 ipe_intern = { path = "../../intern" }
 ipe_backend = { path = ".." }
 ipe_diagnostics = { path = "../../diagnostics" }

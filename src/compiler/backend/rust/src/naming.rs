@@ -347,8 +347,12 @@ pub fn field_witness_assoc_type_name(field_name: &str) -> String {
     to_camel_case(field_name)
 }
 
-/// The Rust runtime function name for a kernel built-in. Mirrors
-/// `Kernel.kernelToRust`.
+/// The Rust runtime function name a kernel built-in emits.
+///
+/// This table is the emit ground truth `emit_expr` reads. It is pinned equal to
+/// the `KernelDef.runtime_fn` descriptor in `ipe_kernels` by the
+/// `kernel_name_equals_descriptor_runtime_fn` tripwire, so the two statements of
+/// a kernel's emitted symbol can never drift.
 #[must_use]
 #[allow(clippy::too_many_lines)]
 pub const fn kernel_name(k: KernelFn) -> &'static str {
@@ -1674,6 +1678,31 @@ mod tests {
         assert_eq!(
             module_value(&["String"], "myHelper"),
             "user_string_my_helper"
+        );
+    }
+
+    /// A kernel's emitted runtime symbol is stated in two places: the greppable
+    /// `kernel_name` table here (the emit ground truth `emit_expr` reads) and the
+    /// `KernelDef.runtime_fn` descriptor field in `ipe_kernels`. This tripwire
+    /// pins them equal for every kernel, so the two statements can never drift: a
+    /// commit that changes one without the other fails to merge. Emitted output is
+    /// therefore identical whichever source a future reader trusts.
+    #[test]
+    fn kernel_name_equals_descriptor_runtime_fn() {
+        let mut drifted: Vec<String> = Vec::new();
+        for &k in ipe_kernels::StdlibKernel::ALL {
+            let emitted = kernel_name(k);
+            let descriptor = k.def().runtime_fn;
+            if emitted != descriptor {
+                drifted.push(format!(
+                    "{k:?}: kernel_name = `{emitted}` but KernelDef.runtime_fn = `{descriptor}`"
+                ));
+            }
+        }
+        assert!(
+            drifted.is_empty(),
+            "emit-symbol drift between kernel_name and KernelDef.runtime_fn:\n{}",
+            drifted.join("\n")
         );
     }
 
