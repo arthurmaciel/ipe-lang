@@ -3933,7 +3933,7 @@ fn emit_ui_plan(
         // `Html.voidNode : String -> List Attr -> Html msg` — the generic
         // void counterpart of `Html.node`: arbitrary runtime tag, no children
         // arg. Shares the same `html_node_` sink with an emit-baked empty
-        // children vec, exactly like the fixed-tag void builders below.
+        // children vec.
         NativeUiEmit::HtmlVoidNode => {
             let [tag_e, attrs_e] = args else {
                 return Err(Diagnostic::CompilerBug {
@@ -3945,47 +3945,6 @@ fn emit_ui_plan(
             let attrs = emit_expr_at(ctx, attrs_e, indent, child, generics)?;
             Ok(format!(
                 "ipe_runtime::ui::helpers::html_node_({tag}, {attrs}, ::std::vec::Vec::new())"
-            ))
-        }
-
-        // Container: `<tag> : List Attr -> List Html -> Html msg`.
-        NativeUiEmit::HtmlContainer => {
-            let [attrs_e, children_e] = args else {
-                return Err(Diagnostic::CompilerBug {
-                    where_: "ipe_backend_rust::emit_ui_call::HtmlContainer",
-                    detail: format!("{k:?} container requires 2 arguments, got {}", args.len()),
-                });
-            };
-            let tag = k
-                .html_element_tag()
-                .ok_or_else(|| Diagnostic::CompilerBug {
-                    where_: "ipe_backend_rust::emit_ui_call::HtmlContainer",
-                    detail: format!("{k:?} is_html_container but html_element_tag returned None"),
-                })?;
-            let attrs = emit_expr_at(ctx, attrs_e, indent, child, generics)?;
-            let children = emit_expr_at(ctx, children_e, indent, child, generics)?;
-            Ok(format!(
-                "ipe_runtime::ui::helpers::html_node_({tag:?}.to_owned(), {attrs}, {children})"
-            ))
-        }
-
-        // Void: `<tag> : List Attr -> Html msg` (no children).
-        NativeUiEmit::HtmlVoid => {
-            let [attrs_e] = args else {
-                return Err(Diagnostic::CompilerBug {
-                    where_: "ipe_backend_rust::emit_ui_call::HtmlVoid",
-                    detail: format!("{k:?} void element requires 1 argument, got {}", args.len()),
-                });
-            };
-            let tag = k
-                .html_element_tag()
-                .ok_or_else(|| Diagnostic::CompilerBug {
-                    where_: "ipe_backend_rust::emit_ui_call::HtmlVoid",
-                    detail: format!("{k:?} is_html_void but html_element_tag returned None"),
-                })?;
-            let attrs = emit_expr_at(ctx, attrs_e, indent, child, generics)?;
-            Ok(format!(
-                "ipe_runtime::ui::helpers::html_node_({tag:?}.to_owned(), {attrs}, ::std::vec::Vec::new())"
             ))
         }
 

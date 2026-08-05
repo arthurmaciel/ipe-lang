@@ -113,11 +113,12 @@ pub const STDLIB_MODULE_QUALIFIERS: &[(&[&str], &str)] = &[
     (&["Ipe", "Ui", "Lazy"], "Lazy"),
     (&["Ipe", "Ui", "Keyed"], "Keyed"), // ipe-key diff identity
     (&["Ipe", "Decimal"], "Decimal"),   // arbitrary-precision decimal arithmetic
-    (&["Ipe", "Html"], "Html"),
-    // `Ipe.Html.Attributes` is COMPILED-SOURCE (see `COMPILED_STD_MODULES`), not
-    // a kernel qualifier: its builders are pure Ipê over the retained
-    // `attribute`/`boolAttribute`/`noAttr` primitives, reached via `Ffi.kernel
-    // "Attr_*"` aliases. The disjointness invariant forbids it here.
+    // `Ipe.Html` and `Ipe.Html.Attributes` are COMPILED-SOURCE (see
+    // `COMPILED_STD_MODULES`), not kernel qualifiers: their element/attribute
+    // builders are pure Ipê over the retained `node`/`voidNode` /
+    // `attribute`/`boolAttribute`/`noAttr` primitives (and the native
+    // serialiser), reached via `Ffi.kernel "Html_*"` / `"Attr_*"` aliases. The
+    // disjointness invariant forbids either here.
     (&["Ipe", "Html", "Events"], "Event"),
     // ── Ipe.Tea.<Shape> managed-update-loop shapes (ADR 0048) ────────────────
     // The four TEA shapes live under `Ipe.Tea.*`; the canonical short qualifier
@@ -1581,113 +1582,14 @@ impl Env {
             ("Lazy", &["lazy", "lazy2", "lazy3", "lazy4", "lazy5"]),
             // ── Ipe.Ui.Keyed — ipe-key for diff identity ─────────────────────────
             ("Keyed", &["column", "row"]),
-            // ── Ipe.Html — typed HTML element / text surface ─────────────────────
-            // `render` / `escapeHtml` / `escapeAttr` / `attrToString` are render
-            // kernels; all element-builder names create `Html msg` values.
-            // `renderStatic` is the effectful sibling of `render`: it renders a
-            // `view` once to HTML and returns a `Task` — shape-neutral, so a plain
-            // Program uses it without importing any `Ipe.Tea.*` shape (ADR 0048).
-            (
-                "Html",
-                &[
-                    // render kernels
-                    "render",
-                    "renderStatic",
-                    "toString",
-                    "escapeHtml",
-                    "escapeAttr",
-                    "attrToString",
-                    // text / raw nodes
-                    "text",
-                    "unsafeRaw",
-                    // generic builder
-                    "node",
-                    "voidNode",
-                    "doctype",
-                    "styleNode",
-                    "titleNode",
-                    // common containers
-                    "div",
-                    "span",
-                    "p",
-                    "a",
-                    "button",
-                    "form",
-                    "label",
-                    "nav",
-                    "section",
-                    "article",
-                    "header",
-                    "footer",
-                    "main",
-                    "aside",
-                    "ul",
-                    "ol",
-                    "li",
-                    "table",
-                    "thead",
-                    "tbody",
-                    "tfoot",
-                    "tr",
-                    "th",
-                    "td",
-                    "textarea",
-                    "select",
-                    "option",
-                    "pre",
-                    "code",
-                    "strong",
-                    "em",
-                    "small",
-                    "fieldset",
-                    "legend",
-                    "blockquote",
-                    "figure",
-                    "figcaption",
-                    "details",
-                    "summary",
-                    "dialog",
-                    "video",
-                    "audio",
-                    "canvas",
-                    "iframe",
-                    "progress",
-                    "meter",
-                    "script",
-                    // headings
-                    "h1",
-                    "h2",
-                    "h3",
-                    "h4",
-                    "h5",
-                    "h6",
-                    // void elements
-                    "img",
-                    "input",
-                    "br",
-                    "hr",
-                    "meta",
-                    "link",
-                    "area",
-                    "base",
-                    "col",
-                    "embed",
-                    "source",
-                    "track",
-                    "wbr",
-                    // document elements
-                    "body",
-                    "htmlNode",
-                    "headNode",
-                    "title",
-                    // legacy compat aliases
-                    "headerNode",
-                    "codeNode",
-                    "mainNode",
-                    "footerNode",
-                    "linkNode",
-                ],
-            ),
+            // NOTE — `Html` (`Ipe.Html`) is DELIBERATELY absent: it is a
+            // COMPILED-SOURCE Layer-3 module (`COMPILED_STD_MODULES`). Its element
+            // builders are pure Ipê over the retained `node`/`voidNode` primitives,
+            // and the native serialiser (`render`/`escapeHtml`/`escapeAttr`/
+            // `attrToString`/`renderStatic`) is re-exposed there through
+            // `Ffi.kernel "Html_*"` aliases, which `detect_kernel_alias` routes to
+            // the retained `Html*` kernels via `stdlib_index` — no prelude-qualifier
+            // install needed (mirrors `Path` / `Url` / `Regex`).
             // NOTE — `Attr` (`Ipe.Html.Attributes`) is DELIBERATELY absent: it is
             // a COMPILED-SOURCE Layer-3 module (`COMPILED_STD_MODULES`). Its three
             // retained primitives are reached through the point-free
@@ -1821,10 +1723,11 @@ impl Env {
         // alias entries are included in any qual-to-qual copy.
         const FUNC_ALIASES: &[(&str, &str, &str)] = &[
             // ("qualifier", "alias_name", "canonical_kernel_name")
-            ("Html", "htmlRender", "render"),
-            ("Html", "htmlEscapeText", "escapeHtml"),
-            ("Html", "htmlEscapeAttr", "escapeAttr"),
-            ("Html", "htmlAttrToString", "attrToString"),
+            // `Html`'s legacy pipeline-readable spellings (`htmlRender` /
+            // `htmlEscapeText` / `htmlEscapeAttr` / `htmlAttrToString`) are
+            // DELIBERATELY absent: `Ipe.Html` is now COMPILED-SOURCE
+            // (`COMPILED_STD_MODULES`), so those aliases live in `Ipe/Html.ipe`
+            // as `Ffi.kernel "Html_*"` bindings, not the kernel-qualifier prelude.
             // `Random.range lo hi` is the pipeline-readable spelling of
             // `Random.int lo hi` — same type (`Int -> Int -> Task Error Int`)
             // and same inclusive-both-ends semantics — so it resolves to the
@@ -1877,11 +1780,11 @@ impl Env {
         // `clippy::items_after_statements`.
         const QUALIFIER_ALIASES: &[(&str, &str)] = &[
             // (alias_qualifier, canonical_qualifier)
-            ("Ipe.Html", "Html"),
             ("Ipe.Ui", "Ui"),
-            // `Ipe.Html.Attributes` is compiled-source (mirrors `Ipe.Path` /
-            // `Ipe.Url`): no qualifier alias — members resolve through source-dep
-            // injection, its retained primitives via `Ffi.kernel "Attr_*"`.
+            // `Ipe.Html` and `Ipe.Html.Attributes` are compiled-source (mirror
+            // `Ipe.Path` / `Ipe.Url`): no qualifier alias — members resolve
+            // through source-dep injection, their retained primitives + native
+            // serialiser via `Ffi.kernel "Html_*"` / `"Attr_*"`.
             ("Ipe.Html.Events", "Event"),
             // ── Ipe.Tea.<Shape> shape aliases (ADR 0048) ──────────────────────
             ("Ipe.Tea.Web", "Web"),

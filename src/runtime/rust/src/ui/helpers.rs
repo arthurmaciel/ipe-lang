@@ -601,54 +601,6 @@ pub fn html_title_node_<M>(s: String) -> Html<M> {
     Html::HElement("title".to_owned(), Vec::new(), vec![Html::HText(s)])
 }
 
-/// `Html.div (and header) : List (Attribute msg) -> List (Html msg) -> Html msg`
-#[must_use]
-pub fn html_div_<M>(attrs: Vec<crate::html::Attribute<M>>, children: Vec<Html<M>>) -> Html<M> {
-    Html::HElement("div".to_owned(), attrs, children)
-}
-
-/// `Html.span : List (Attribute msg) -> List (Html msg) -> Html msg`
-#[must_use]
-pub fn html_span_<M>(attrs: Vec<crate::html::Attribute<M>>, children: Vec<Html<M>>) -> Html<M> {
-    Html::HElement("span".to_owned(), attrs, children)
-}
-
-/// `Html.a (and link) : List (Attribute msg) -> List (Html msg) -> Html msg`
-#[must_use]
-pub fn html_a_<M>(attrs: Vec<crate::html::Attribute<M>>, children: Vec<Html<M>>) -> Html<M> {
-    Html::HElement("a".to_owned(), attrs, children)
-}
-
-/// `Html.button : List (Attribute msg) -> List (Html msg) -> Html msg`
-#[must_use]
-pub fn html_button_<M>(attrs: Vec<crate::html::Attribute<M>>, children: Vec<Html<M>>) -> Html<M> {
-    Html::HElement("button".to_owned(), attrs, children)
-}
-
-/// `Html.p (and other block elements) : List (Attribute msg) -> List (Html msg) -> Html msg`
-///
-/// NOTE: `h1`/`h2`/.../`body`/`footer`/`nav`/`section`/… all map here because
-/// they share the 2-arg `(attrs, children)` signature. These could split into
-/// per-tag kernel variants or use `html_node_` with an injected tag-name arg;
-/// `p` is the primary tag, the other tag names are not yet exercised by any
-/// test.
-#[must_use]
-pub fn html_p_<M>(attrs: Vec<crate::html::Attribute<M>>, children: Vec<Html<M>>) -> Html<M> {
-    Html::HElement("p".to_owned(), attrs, children)
-}
-
-/// `Html.input : List (Attribute msg) -> Html msg`  (void element, no children)
-#[must_use]
-pub fn html_input_<M>(attrs: Vec<crate::html::Attribute<M>>) -> Html<M> {
-    Html::HElement("input".to_owned(), attrs, vec![])
-}
-
-/// `Html.img (and other void elements) : List (Attribute msg) -> Html msg`
-#[must_use]
-pub fn html_img_<M>(attrs: Vec<crate::html::Attribute<M>>) -> Html<M> {
-    Html::HElement("img".to_owned(), attrs, vec![])
-}
-
 // ── Event-attribute builders ───────────────────────────────────────
 //
 // These back the `UiOnClick`, `UiOnFocus`, … KernelFn variants.  They return

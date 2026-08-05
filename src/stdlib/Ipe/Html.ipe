@@ -1,0 +1,454 @@
+-- | Ipe.Html — HTML element builders (Layer 3 Ipe source).
+--
+-- Every element builder (`div` / `nav` / `table` / `br` / …) is ordinary Ipê
+-- over two retained native primitives: `node` (a container element) and
+-- `voidNode` (a childless void element). Those two, plus `text` / `unsafeRaw` /
+-- `doctype` / `titleNode` / `styleNode`, are the irreducible `Html`-value
+-- constructors, reached through point-free `Ffi.kernel "Html_*"` aliases.
+--
+-- The serialiser (`render` / `toString` / `escapeHtml` / `escapeAttr` /
+-- `attrToString`) and `renderStatic` stay native — they are the XSS barrier and
+-- the render sink — and are re-exposed here through the same alias mechanism so
+-- `Html.render` / `Html.escapeHtml` keep resolving from user code. Event
+-- attributes live in `Ipe.Html.Events`, not here.
+module Ipe.Html exposing
+    ( Html, Attribute
+    , node, voidNode, text, unsafeRaw, doctype, titleNode, styleNode
+    , render, renderStatic, toString, escapeHtml, escapeAttr, attrToString
+    , htmlRender, htmlEscapeText, htmlEscapeAttr, htmlAttrToString
+    , div, span, p, a, button, form, label
+    , nav, section, article, header, footer, main, aside
+    , ul, ol, li
+    , table, thead, tbody, tfoot, tr, th, td
+    , textarea, select, option
+    , pre, code, strong, em, small
+    , fieldset, legend, blockquote, figure, figcaption
+    , details, summary, dialog
+    , video, audio, canvas, iframe, progress, meter, script
+    , h1, h2, h3, h4, h5, h6
+    , img, input, br, hr, meta, link
+    , area, base, col, embed, source, track, wbr
+    , body, htmlNode, headNode, title
+    , headerNode, codeNode, mainNode, footerNode, linkNode
+    )
+
+
+import Ipe.Ffi as Ffi
+
+
+-- ── Retained native primitives ───────────────────────────────────────────────
+-- The irreducible `Html`-value constructors. Every element builder below is
+-- pure Ipê over `node` / `voidNode`; these five carry the values the render
+-- sink recognises directly.
+
+-- | `node tag attrs children` — a container element `<tag …>children</tag>`.
+node : String -> List (Attribute msg) -> List (Html msg) -> Html msg
+node = Ffi.kernel "Html_node"
+
+
+-- | `voidNode tag attrs` — a childless void element `<tag …>` (self-closed by
+-- the render sink for any void tag).
+voidNode : String -> List (Attribute msg) -> Html msg
+voidNode = Ffi.kernel "Html_voidNode"
+
+
+-- | `text s` — an escaped text node. The value is escaped at the render sink,
+-- so this is the safe-by-construction way to embed user content.
+text : String -> Html msg
+text = Ffi.kernel "Html_text"
+
+
+-- | `unsafeRaw s` — an UN-escaped raw HTML node. The `unsafe` prefix names the
+-- XSS risk at the surface; user content goes through `text` instead.
+unsafeRaw : String -> Html msg
+unsafeRaw = Ffi.kernel "Html_unsafeRaw"
+
+
+-- | `doctype children` — wraps children in the document `<!DOCTYPE html>`
+-- preamble emitted by the render sink.
+doctype : List (Html msg) -> Html msg
+doctype = Ffi.kernel "Html_doctype"
+
+
+-- | `titleNode s` — `<title>` wrapping a raw string directly.
+titleNode : String -> Html msg
+titleNode = Ffi.kernel "Html_titleNode"
+
+
+-- | `styleNode attrs css` — a `<style>` element whose CSS body is
+-- close-tag-neutralised once at construction (parse, don't validate).
+styleNode : List (Attribute msg) -> String -> Html msg
+styleNode = Ffi.kernel "Html_styleNode"
+
+
+-- ── Retained native serialiser (the XSS barrier) ─────────────────────────────
+-- These stay native — the escaping/serialisation sink — and are re-exposed here
+-- so `Html.render` / `Html.escapeHtml` keep resolving from user code.
+
+-- | `render html` — serialise an `Html` tree to a `String`, escaping text and
+-- attribute values at the sink.
+render : Html msg -> String
+render = Ffi.kernel "Html_render"
+
+
+-- | `renderStatic view model` — render a `model -> Html msg` view once to a
+-- static HTML string, as a `Task`.
+renderStatic : (model -> Html msg) -> model -> Task Error ()
+renderStatic = Ffi.kernel "Html_renderStatic"
+
+
+-- | `toString html` — an alias of `render`.
+toString : Html msg -> String
+toString = Ffi.kernel "Html_toString"
+
+
+-- | `escapeHtml s` — escape a string for safe inclusion in text content.
+escapeHtml : String -> String
+escapeHtml = Ffi.kernel "Html_escapeHtml"
+
+
+-- | `escapeAttr s` — escape a string for safe inclusion in an attribute value.
+escapeAttr : String -> String
+escapeAttr = Ffi.kernel "Html_escapeAttr"
+
+
+-- | `attrToString attr` — serialise a single `Attribute` to its ` key="value"`
+-- wire form.
+attrToString : Attribute msg -> String
+attrToString = Ffi.kernel "Html_attrToString"
+
+
+-- | `htmlRender` — pipeline-readable spelling of `render`.
+htmlRender : Html msg -> String
+htmlRender = Ffi.kernel "Html_render"
+
+
+-- | `htmlEscapeText` — pipeline-readable spelling of `escapeHtml`.
+htmlEscapeText : String -> String
+htmlEscapeText = Ffi.kernel "Html_escapeHtml"
+
+
+-- | `htmlEscapeAttr` — pipeline-readable spelling of `escapeAttr`.
+htmlEscapeAttr : String -> String
+htmlEscapeAttr = Ffi.kernel "Html_escapeAttr"
+
+
+-- | `htmlAttrToString` — pipeline-readable spelling of `attrToString`.
+htmlAttrToString : Attribute msg -> String
+htmlAttrToString = Ffi.kernel "Html_attrToString"
+
+
+-- ── Container elements ───────────────────────────────────────────────────────
+-- `<tag> : List (Attribute msg) -> List (Html msg) -> Html msg`, pure sugar over
+-- `node` with the fixed tag literal.
+
+div : List (Attribute msg) -> List (Html msg) -> Html msg
+div = node "div"
+
+
+span : List (Attribute msg) -> List (Html msg) -> Html msg
+span = node "span"
+
+
+p : List (Attribute msg) -> List (Html msg) -> Html msg
+p = node "p"
+
+
+a : List (Attribute msg) -> List (Html msg) -> Html msg
+a = node "a"
+
+
+button : List (Attribute msg) -> List (Html msg) -> Html msg
+button = node "button"
+
+
+form : List (Attribute msg) -> List (Html msg) -> Html msg
+form = node "form"
+
+
+label : List (Attribute msg) -> List (Html msg) -> Html msg
+label = node "label"
+
+
+nav : List (Attribute msg) -> List (Html msg) -> Html msg
+nav = node "nav"
+
+
+section : List (Attribute msg) -> List (Html msg) -> Html msg
+section = node "section"
+
+
+article : List (Attribute msg) -> List (Html msg) -> Html msg
+article = node "article"
+
+
+header : List (Attribute msg) -> List (Html msg) -> Html msg
+header = node "header"
+
+
+footer : List (Attribute msg) -> List (Html msg) -> Html msg
+footer = node "footer"
+
+
+main : List (Attribute msg) -> List (Html msg) -> Html msg
+main = node "main"
+
+
+aside : List (Attribute msg) -> List (Html msg) -> Html msg
+aside = node "aside"
+
+
+ul : List (Attribute msg) -> List (Html msg) -> Html msg
+ul = node "ul"
+
+
+ol : List (Attribute msg) -> List (Html msg) -> Html msg
+ol = node "ol"
+
+
+li : List (Attribute msg) -> List (Html msg) -> Html msg
+li = node "li"
+
+
+table : List (Attribute msg) -> List (Html msg) -> Html msg
+table = node "table"
+
+
+thead : List (Attribute msg) -> List (Html msg) -> Html msg
+thead = node "thead"
+
+
+tbody : List (Attribute msg) -> List (Html msg) -> Html msg
+tbody = node "tbody"
+
+
+tfoot : List (Attribute msg) -> List (Html msg) -> Html msg
+tfoot = node "tfoot"
+
+
+tr : List (Attribute msg) -> List (Html msg) -> Html msg
+tr = node "tr"
+
+
+th : List (Attribute msg) -> List (Html msg) -> Html msg
+th = node "th"
+
+
+td : List (Attribute msg) -> List (Html msg) -> Html msg
+td = node "td"
+
+
+textarea : List (Attribute msg) -> List (Html msg) -> Html msg
+textarea = node "textarea"
+
+
+select : List (Attribute msg) -> List (Html msg) -> Html msg
+select = node "select"
+
+
+option : List (Attribute msg) -> List (Html msg) -> Html msg
+option = node "option"
+
+
+pre : List (Attribute msg) -> List (Html msg) -> Html msg
+pre = node "pre"
+
+
+code : List (Attribute msg) -> List (Html msg) -> Html msg
+code = node "code"
+
+
+strong : List (Attribute msg) -> List (Html msg) -> Html msg
+strong = node "strong"
+
+
+em : List (Attribute msg) -> List (Html msg) -> Html msg
+em = node "em"
+
+
+small : List (Attribute msg) -> List (Html msg) -> Html msg
+small = node "small"
+
+
+fieldset : List (Attribute msg) -> List (Html msg) -> Html msg
+fieldset = node "fieldset"
+
+
+legend : List (Attribute msg) -> List (Html msg) -> Html msg
+legend = node "legend"
+
+
+blockquote : List (Attribute msg) -> List (Html msg) -> Html msg
+blockquote = node "blockquote"
+
+
+figure : List (Attribute msg) -> List (Html msg) -> Html msg
+figure = node "figure"
+
+
+figcaption : List (Attribute msg) -> List (Html msg) -> Html msg
+figcaption = node "figcaption"
+
+
+details : List (Attribute msg) -> List (Html msg) -> Html msg
+details = node "details"
+
+
+summary : List (Attribute msg) -> List (Html msg) -> Html msg
+summary = node "summary"
+
+
+dialog : List (Attribute msg) -> List (Html msg) -> Html msg
+dialog = node "dialog"
+
+
+video : List (Attribute msg) -> List (Html msg) -> Html msg
+video = node "video"
+
+
+audio : List (Attribute msg) -> List (Html msg) -> Html msg
+audio = node "audio"
+
+
+canvas : List (Attribute msg) -> List (Html msg) -> Html msg
+canvas = node "canvas"
+
+
+iframe : List (Attribute msg) -> List (Html msg) -> Html msg
+iframe = node "iframe"
+
+
+progress : List (Attribute msg) -> List (Html msg) -> Html msg
+progress = node "progress"
+
+
+meter : List (Attribute msg) -> List (Html msg) -> Html msg
+meter = node "meter"
+
+
+script : List (Attribute msg) -> List (Html msg) -> Html msg
+script = node "script"
+
+
+-- ── Headings ─────────────────────────────────────────────────────────────────
+
+h1 : List (Attribute msg) -> List (Html msg) -> Html msg
+h1 = node "h1"
+
+
+h2 : List (Attribute msg) -> List (Html msg) -> Html msg
+h2 = node "h2"
+
+
+h3 : List (Attribute msg) -> List (Html msg) -> Html msg
+h3 = node "h3"
+
+
+h4 : List (Attribute msg) -> List (Html msg) -> Html msg
+h4 = node "h4"
+
+
+h5 : List (Attribute msg) -> List (Html msg) -> Html msg
+h5 = node "h5"
+
+
+h6 : List (Attribute msg) -> List (Html msg) -> Html msg
+h6 = node "h6"
+
+
+-- ── Document elements ────────────────────────────────────────────────────────
+
+body : List (Attribute msg) -> List (Html msg) -> Html msg
+body = node "body"
+
+
+-- | `htmlNode` — the root `<html>` element.
+htmlNode : List (Attribute msg) -> List (Html msg) -> Html msg
+htmlNode = node "html"
+
+
+-- | `headNode` — the `<head>` element.
+headNode : List (Attribute msg) -> List (Html msg) -> Html msg
+headNode = node "head"
+
+
+title : List (Attribute msg) -> List (Html msg) -> Html msg
+title = node "title"
+
+
+-- ── Legacy compat aliases ────────────────────────────────────────────────────
+
+headerNode : List (Attribute msg) -> List (Html msg) -> Html msg
+headerNode = node "header"
+
+
+codeNode : List (Attribute msg) -> List (Html msg) -> Html msg
+codeNode = node "code"
+
+
+mainNode : List (Attribute msg) -> List (Html msg) -> Html msg
+mainNode = node "main"
+
+
+footerNode : List (Attribute msg) -> List (Html msg) -> Html msg
+footerNode = node "footer"
+
+
+linkNode : List (Attribute msg) -> Html msg
+linkNode = voidNode "link"
+
+
+-- ── Void elements ────────────────────────────────────────────────────────────
+-- `<tag> : List (Attribute msg) -> Html msg` (no children), pure sugar over
+-- `voidNode` with the fixed tag literal.
+
+img : List (Attribute msg) -> Html msg
+img = voidNode "img"
+
+
+input : List (Attribute msg) -> Html msg
+input = voidNode "input"
+
+
+br : List (Attribute msg) -> Html msg
+br = voidNode "br"
+
+
+hr : List (Attribute msg) -> Html msg
+hr = voidNode "hr"
+
+
+meta : List (Attribute msg) -> Html msg
+meta = voidNode "meta"
+
+
+link : List (Attribute msg) -> Html msg
+link = voidNode "link"
+
+
+area : List (Attribute msg) -> Html msg
+area = voidNode "area"
+
+
+base : List (Attribute msg) -> Html msg
+base = voidNode "base"
+
+
+col : List (Attribute msg) -> Html msg
+col = voidNode "col"
+
+
+embed : List (Attribute msg) -> Html msg
+embed = voidNode "embed"
+
+
+source : List (Attribute msg) -> Html msg
+source = voidNode "source"
+
+
+track : List (Attribute msg) -> Html msg
+track = voidNode "track"
+
+
+wbr : List (Attribute msg) -> Html msg
+wbr = voidNode "wbr"
