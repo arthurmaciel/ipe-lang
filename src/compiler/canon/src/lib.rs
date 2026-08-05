@@ -3457,6 +3457,43 @@ mod tests {
         );
     }
 
+    /// The `Ipe.Html.Unsafe` submodule — the un-escaped raw-HTML hatch home —
+    /// resolves under the reserved-namespace exemption when the driver tags it
+    /// `EmbeddedStdlib`, exactly like `Ipe.Db.Unsafe`.
+    const HTML_UNSAFE_SRC: &str = "module Ipe.Html.Unsafe exposing (marker)\n\
+         marker : String\n\
+         marker =\n    \"x\"\n";
+
+    #[test]
+    fn embedded_stdlib_origin_hosts_a_dotted_html_unsafe_submodule() {
+        let res = canon_with_origin(HTML_UNSAFE_SRC, ModuleOrigin::EmbeddedStdlib);
+        assert!(
+            res.is_ok(),
+            "EmbeddedStdlib `Ipe.Html.Unsafe` must canonicalise via the reserved-namespace exemption: {:?}",
+            res.err()
+        );
+    }
+
+    #[test]
+    fn user_origin_ipe_html_unsafe_submodule_is_reserved_namespace() {
+        // SECURITY: a hostile user file literally named `Ipe.Html.Unsafe` cannot
+        // squat the raw-HTML escape-hatch home — it reaches canon as `User` origin
+        // and stays N0025-rejected. Trust is the driver's tag, never the name, so a
+        // program cannot forge the `.Unsafe` home to disclose (or hide) `unsafe`.
+        let err = canon_with_origin(HTML_UNSAFE_SRC, ModuleOrigin::User)
+            .expect_err("user `Ipe.Html.Unsafe` must be rejected");
+        assert!(
+            matches!(
+                &err,
+                Diagnostic::Name {
+                    msg: NameError::ReservedNamespace { .. },
+                    ..
+                }
+            ),
+            "hostile user `Ipe.Html.Unsafe` must be IPE-N0025, got {err:?}"
+        );
+    }
+
     #[test]
     fn embedded_stdlib_unannotated_binding_fails_closed() {
         // The fail-closed annotation gate: an EmbeddedStdlib module with an
