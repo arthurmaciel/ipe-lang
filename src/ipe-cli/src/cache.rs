@@ -1005,6 +1005,7 @@ mod tests {
         )?);
 
         Ok(Program {
+            imports_unsafe_submodule: false,
             modules: vec![Module {
                 name: ModPath(vec![main_mod]),
                 types: vec![TypeDef::Enum(EnumDef {

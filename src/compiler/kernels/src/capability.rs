@@ -47,6 +47,12 @@ pub enum Capability {
     /// own presence discloses that the foreign signature was vouched by the
     /// author, not derived from crate introspection.
     FfiRaw,
+    /// Reaching for a trust-escape hatch: the program imports an `Ipe.<M>.Unsafe`
+    /// submodule, whose members mint a security-tier value by assertion rather
+    /// than by parse. Like [`Self::NativeFfi`], this is a provenance disclosure,
+    /// not a resource axis an OS jail can isolate — its presence marks that the
+    /// program contains a value the compiler could not prove safe.
+    Unsafe,
 }
 
 impl Capability {
@@ -63,6 +69,7 @@ impl Capability {
         Self::Random,
         Self::NativeFfi,
         Self::FfiRaw,
+        Self::Unsafe,
     ];
 
     /// The stable lowercase wire name, used in the `ipe capabilities` report and
@@ -79,6 +86,7 @@ impl Capability {
             Self::Random => "random",
             Self::NativeFfi => "native-ffi",
             Self::FfiRaw => "ffi-raw",
+            Self::Unsafe => "unsafe",
         }
     }
 }
@@ -101,6 +109,7 @@ impl std::str::FromStr for Capability {
             "random" => Ok(Self::Random),
             "native-ffi" => Ok(Self::NativeFfi),
             "ffi-raw" => Ok(Self::FfiRaw),
+            "unsafe" => Ok(Self::Unsafe),
             other => Err(UnknownCapability(other.to_owned())),
         }
     }
@@ -117,7 +126,7 @@ impl std::fmt::Display for UnknownCapability {
         write!(
             f,
             "unknown capability {:?} (expected one of: network, filesystem, \
-             database, env, subprocess, clock, random, native-ffi, ffi-raw)",
+             database, env, subprocess, clock, random, native-ffi, ffi-raw, unsafe)",
             self.0
         )
     }
@@ -134,7 +143,7 @@ mod tests {
         // A guard against `ALL` drifting from the enum: each name is distinct,
         // and the count matches the declared axes.
         let names: Vec<&str> = Capability::ALL.iter().map(|c| c.as_str()).collect();
-        assert_eq!(names.len(), 9);
+        assert_eq!(names.len(), 10);
         let mut sorted = names.clone();
         sorted.sort_unstable();
         sorted.dedup();
@@ -152,6 +161,7 @@ mod tests {
         assert_eq!(Capability::Random.as_str(), "random");
         assert_eq!(Capability::NativeFfi.as_str(), "native-ffi");
         assert_eq!(Capability::FfiRaw.as_str(), "ffi-raw");
+        assert_eq!(Capability::Unsafe.as_str(), "unsafe");
     }
 
     #[test]

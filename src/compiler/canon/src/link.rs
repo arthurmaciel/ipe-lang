@@ -57,10 +57,15 @@ pub fn link(
     let total_defs: usize = modules.iter().map(|m| m.defs.len()).sum();
     let mut unions = Vec::with_capacity(total_unions);
     let mut defs = Vec::with_capacity(total_defs);
+    // The whole-program `unsafe` disclosure is the OR of every linked module's
+    // import-derived fact: a program reaches for an escape hatch iff ANY of its
+    // modules imported an `Ipe.<M>.Unsafe` submodule.
+    let mut imports_unsafe_submodule = false;
     // Nominal-identity gate: reject a genuine duplicate `(home, name)` (the same
     // type declared twice), but ALLOW two distinct homes sharing a short name.
     let mut seen: HashSet<(Vec<Symbol>, Symbol)> = HashSet::new();
     for m in modules {
+        imports_unsafe_submodule |= m.imports_unsafe_submodule;
         for u in &m.unions {
             if !seen.insert((u.home.clone(), u.name)) {
                 let name = interner
@@ -84,5 +89,6 @@ pub fn link(
         name: entry_name,
         unions,
         defs,
+        imports_unsafe_submodule,
     })
 }

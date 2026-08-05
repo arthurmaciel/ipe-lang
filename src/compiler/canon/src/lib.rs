@@ -3342,6 +3342,46 @@ mod tests {
         );
     }
 
+    /// A dotted `Ipe.<M>.Unsafe` submodule — the escape-hatch home the
+    /// `unsafe` capability discloses. The reserved-namespace gate keys on the
+    /// FIRST segment (`Ipe`) only, so a driver-vouched `EmbeddedStdlib`
+    /// submodule with a trailing `Unsafe` segment resolves through the same
+    /// exemption as `Ipe.Palette` — no new module-system concept, no
+    /// reserved-type-list change.
+    const DB_UNSAFE_SRC: &str = "module Ipe.Db.Unsafe exposing (marker)\n\
+         marker : String\n\
+         marker =\n    \"x\"\n";
+
+    #[test]
+    fn embedded_stdlib_origin_hosts_a_dotted_unsafe_submodule() {
+        let res = canon_with_origin(DB_UNSAFE_SRC, ModuleOrigin::EmbeddedStdlib);
+        assert!(
+            res.is_ok(),
+            "EmbeddedStdlib `Ipe.Db.Unsafe` must canonicalise via the reserved-namespace exemption: {:?}",
+            res.err()
+        );
+    }
+
+    #[test]
+    fn user_origin_ipe_unsafe_submodule_is_reserved_namespace() {
+        // SECURITY: a hostile user file literally named `Ipe.Db.Unsafe` cannot
+        // squat the escape-hatch home — it reaches canon as `User` origin and
+        // stays N0025-rejected. Trust is the driver's tag, never the name, so a
+        // program cannot forge the `.Unsafe` home to disclose (or hide) `unsafe`.
+        let err = canon_with_origin(DB_UNSAFE_SRC, ModuleOrigin::User)
+            .expect_err("user `Ipe.Db.Unsafe` must be rejected");
+        assert!(
+            matches!(
+                &err,
+                Diagnostic::Name {
+                    msg: NameError::ReservedNamespace { .. },
+                    ..
+                }
+            ),
+            "hostile user `Ipe.Db.Unsafe` must be IPE-N0025, got {err:?}"
+        );
+    }
+
     #[test]
     fn embedded_stdlib_unannotated_binding_fails_closed() {
         // The fail-closed annotation gate: an EmbeddedStdlib module with an

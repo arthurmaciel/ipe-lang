@@ -143,10 +143,16 @@ pub fn resolve_refusal(
     union: &BTreeSet<Capability>,
 ) -> Result<bool, CliError> {
     // The axes that would run with the user's full authority (clock/random carry
-    // no OS control and are not part of the warning).
+    // no OS control, and `unsafe` is a provenance label with no isolation surface,
+    // so none of them is part of the jail-authority warning).
     let names: Vec<&str> = union
         .iter()
-        .filter(|c| !matches!(c, Capability::Clock | Capability::Random))
+        .filter(|c| {
+            !matches!(
+                c,
+                Capability::Clock | Capability::Random | Capability::Unsafe
+            )
+        })
         .map(|c| c.as_str())
         .collect();
 

@@ -117,6 +117,7 @@ fn emit_count_main_rs(tco: bool) -> DResult<String> {
     };
 
     let program = Program {
+        imports_unsafe_submodule: false,
         modules: vec![Module {
             name: ModPath(vec![main_mod]),
             types: vec![],

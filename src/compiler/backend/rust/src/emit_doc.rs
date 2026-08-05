@@ -2009,6 +2009,7 @@ mod tests {
         .map(|n| interner.intern(n).expect("intern var"))
         .collect::<Vec<_>>();
         let program = Program {
+            imports_unsafe_submodule: false,
             modules: vec![Module {
                 name: ModPath(vec![main_mod]),
                 types: vec![TypeDef::Enum(EnumDef {
@@ -2623,6 +2624,7 @@ mod tests {
         let thenv = interner.intern("thenvalab").expect("intern");
         let elsev = interner.intern("elsevalab").expect("intern");
         let program = Program {
+            imports_unsafe_submodule: false,
             modules: vec![Module {
                 name: ModPath(vec![main_mod]),
                 types: vec![],
@@ -3239,6 +3241,7 @@ mod tests {
             )
             .expect("intern wide");
         let program = Program {
+            imports_unsafe_submodule: false,
             modules: vec![Module {
                 name: ModPath(vec![main_mod]),
                 types: vec![],
@@ -3648,6 +3651,7 @@ mod tests {
             .intern("a_body_wide_enough_to_break_only_the_closure_body_padding_padding_padding_pad")
             .expect("intern");
         let program = Program {
+            imports_unsafe_submodule: false,
             modules: vec![Module {
                 name: ModPath(vec![main_mod]),
                 types: vec![],

@@ -7152,7 +7152,9 @@ fn scan_kernel_usage(expr: &Expr, usage: &mut KernelUsage) {
 /// kernel's [`KernelFn::capability`] plus [`Capability::NativeFfi`] when the
 /// program crosses into `Rust.` (any [`Callee::Ffi`]), plus
 /// [`Capability::FfiRaw`] when any crossing is an author-asserted
-/// `Rust.Ffi.call` shim.
+/// `Rust.Ffi.call` shim, plus [`Capability::Unsafe`] when the program imported
+/// an `Ipe.<M>.Unsafe` submodule (an import-derived fact carried on the
+/// [`Program`], not a kernel visit).
 ///
 /// Reuses the SAME [`scan_kernel_usage`] traversal the lowerer runs for the
 /// `uses_*` runtime-module flags — the capability set is collected on the same
@@ -7182,6 +7184,12 @@ pub fn program_capabilities_scan(program: &Program) -> BTreeSet<Capability> {
     }
     if usage.ffi_asserted {
         usage.caps.insert(Capability::FfiRaw);
+    }
+    // `unsafe` is import-derived, not kernel-tagged: the signal is that the
+    // program imported an `Ipe.<M>.Unsafe` submodule, so it comes from the
+    // whole-program fact the lowerer threaded through, not from a kernel visit.
+    if program.imports_unsafe_submodule {
+        usage.caps.insert(Capability::Unsafe);
     }
     usage.caps
 }
@@ -9270,6 +9278,10 @@ impl<'a> Lowerer<'a> {
         };
         Ok(Program {
             modules: vec![module],
+            // Import-derived, computed in canon (the source imports are gone by
+            // now) and carried on the canonical module; the capability scan reads
+            // it to disclose `unsafe`.
+            imports_unsafe_submodule: self.m.imports_unsafe_submodule,
         })
     }
 
@@ -20078,6 +20090,7 @@ mod tests {
         let chunk_event = interner.intern("ChunkEvent").expect("intern");
         let stream_id = interner.intern("StreamId").expect("intern");
         let module = canon::Module {
+            imports_unsafe_submodule: false,
             name: vec![],
             unions: vec![],
             defs: vec![],
@@ -20347,6 +20360,7 @@ mod tests {
             .collect();
 
         let module = canon::Module {
+            imports_unsafe_submodule: false,
             name: vec![],
             unions: vec![],
             defs: vec![],
@@ -20460,6 +20474,7 @@ mod tests {
         let mut interner = Interner::new();
         let builtins = build_test_builtin_ctors(&mut interner);
         let module = canon::Module {
+            imports_unsafe_submodule: false,
             name: vec![],
             unions: vec![],
             defs: vec![],
@@ -20713,6 +20728,7 @@ mod tests {
         // SECOND module — exactly the case a whole-program `max` would catch but
         // a first-module-only shortcut would miss.
         let m = canon::Module {
+            imports_unsafe_submodule: false,
             name: vec![main],
             unions: vec![],
             defs: vec![

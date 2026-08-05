@@ -413,6 +413,7 @@ fn selected_features(
     mask: u32,
 ) -> Vec<&'static str> {
     let prog = Program {
+        imports_unsafe_submodule: false,
         modules: vec![wasm_module_for_mask(main, mask)],
     };
     wasm_backend(interner)
@@ -427,6 +428,7 @@ fn emitted_module_references(
     mask: u32,
 ) -> BTreeSet<String> {
     let prog = Program {
+        imports_unsafe_submodule: false,
         modules: vec![wasm_module_for_mask(main, mask)],
     };
     let emitted = wasm_backend(interner)
