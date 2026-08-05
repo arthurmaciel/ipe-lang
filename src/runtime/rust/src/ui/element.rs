@@ -1,6 +1,6 @@
 //! Shared `Ipe.Ui` element tree — the general UI abstraction.
 //!
-//! These types mirror `ipe-stdlib/Std/Ui.ipe`'s ADTs **variant-for-variant and
+//! These types mirror `ipe-stdlib/Ipe/Ui.ipe`'s ADTs **variant-for-variant and
 //! field-for-field**. They live in the runtime (not generated per-project) so
 //! that every backend — Ipe.Web (→ HTML), Ipe.Tui (→ ANSI cells), Ipe.WebView
 //! (→ native webview) — renders the SAME structured `Element` tree to its own

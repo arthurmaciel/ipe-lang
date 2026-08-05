@@ -288,8 +288,8 @@ contract owned in exactly one crate.
 - **Issues 671 / 674** — adjacent, non-conflicting. Seccomp baseline + sandbox
   regression tests are runtime-jail (ADR 0040/0046), downstream of the decoded
   document; no wire-schema overlap.
-- **Issues 663 / 664 / 397 / 541** — unaffected (deferred). Std.Codec,
-  Std.Analytics, Ipe.Parser, is_json partition test; stdlib, no FFI-wire
+- **Issues 663 / 664 / 397 / 541** — unaffected (deferred). Ipe.Codec,
+  Ipe.Analytics, Ipe.Parser, is_json partition test; stdlib, no FFI-wire
   interaction.
 - **Issue 470** — adjacent. Hosted ipe-index repo (ADR 0044) carries capability
   sets, not inspection documents; no overlap, but shares the "one typed
