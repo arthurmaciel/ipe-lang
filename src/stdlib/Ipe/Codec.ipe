@@ -1,0 +1,166 @@
+-- | Ipe.Codec — one invariant codec that drives the JSON direction.
+--
+-- A `Codec a` bundles an encoder and a decoder for one type in a single value,
+-- so encode and decode cannot drift apart: you cannot hold a codec that encodes
+-- but does not decode. This is bidirectionality enforced by the type, not by
+-- discipline. `toJson codec` and `fromJson codec` read the same codec, so the
+-- round-trip law `fromJson codec (toJson codec x) == Ok x` holds by
+-- construction for every codec built here.
+--
+-- `map` is the load-bearing combinator and is a BIJECTION — it takes BOTH
+-- directions (`a -> b` and `b -> a`). A one-way map could not encode a `b`,
+-- because the encoder needs `b -> a` to reach the underlying encoder. Requiring
+-- the inverse makes the drift a covariant map would permit impossible to write.
+--
+-- Representation note (why the decoder is stored as a runner, not a bare
+-- `Decoder a`): the runtime JSON `Decoder` is a single-shot, non-clonable
+-- carrier, so it cannot be held in a value that is read back out and reused.
+-- `Codec a` therefore stores the decode side as `String -> Result Error a` — a
+-- clonable function that already closes over the underlying decoder and runs it.
+-- Both fields are functions, which the backend stores on a shared, clonable
+-- carrier, so a `Codec a` is an ordinary reusable value.
+--
+-- Building object and union codecs: an object codec is written as one `Codec`
+-- value whose encoder is an `Encode.object` over the field encoders and whose
+-- decoder is a `Ipe.Json.Decode.Pipeline` chain over the field decoders — the
+-- same field appears once on each side. A nullary enum maps to a readable TEXT
+-- scalar (a queryable name, never an opaque blob or an empty string on an
+-- unmapped value); a data-carrying union tags each variant and carries both its
+-- encoder and its decoder in one place.
+module Ipe.Codec exposing
+    ( Codec(..)
+    , toValue, toJson, fromJson, fromJsonSafe
+    , string, int, bool, float
+    , map
+    )
+
+
+import Ipe.Json.Encode as Encode
+import Ipe.Json.Decode as Decode
+import Ipe.String as String
+import Ipe.Result as Result
+import Ipe.Error as Error exposing (Error)
+
+
+-- | An invariant codec for `a`: an encoder to a JSON `Value` and a decoder that
+-- runs a JSON string back to an `a`. Invariant in `a` — it both produces and
+-- consumes `a`, which is what keeps the two directions in step.
+type Codec a
+    = Codec
+        { enc : a -> Value
+        , dec : String -> Result Error a
+        }
+
+
+-- ─── Projections / runs ────────────────────────────────────────────
+
+
+-- | The encoder half applied: `a` to a JSON `Value` node.
+toValue : Codec a -> a -> Value
+toValue codec x =
+    case codec of
+        Codec r ->
+            r.enc x
+
+
+-- | Encode `a` to a compact JSON string.
+toJson : Codec a -> a -> String
+toJson codec x =
+    case codec of
+        Codec r ->
+            Encode.encode 0 (r.enc x)
+
+
+-- | Decode a JSON string back to `a`, or a typed `Error` on malformed input or
+-- a shape mismatch. Never panics: a bad document is an `Err`, not a crash.
+fromJson : Codec a -> String -> Result Error a
+fromJson codec s =
+    case codec of
+        Codec r ->
+            r.dec s
+
+
+-- | The untrusted-input door: reject input longer than `maxChars` BEFORE
+-- decoding — a size guard for request bodies and webhooks — then decode. A
+-- payload over the limit is a typed `Err`, never parsed. Parser nesting depth
+-- is separately bounded by the JSON decoder itself.
+fromJsonSafe : Int -> Codec a -> String -> Result Error a
+fromJsonSafe maxChars codec s =
+    if String.length s > maxChars then
+        Err tooLargeError
+
+    else
+        fromJson codec s
+
+
+-- ─── Primitive codecs ──────────────────────────────────────────────
+--
+-- Each primitive is a self-contained `Codec` value that inlines its own encoder
+-- and decoder. They are written as literals (rather than through a shared
+-- `Decoder a -> Codec a` sealing helper) because the non-clonable runtime
+-- decoder cannot be threaded through a helper argument and stored.
+
+
+-- | JSON string ⇄ `String`.
+string : Codec String
+string =
+    Codec
+        { enc = \s -> Encode.string s
+        , dec = Decode.decodeString Decode.string
+        }
+
+
+-- | JSON integer ⇄ `Int`. A non-integral number is rejected, never truncated.
+int : Codec Int
+int =
+    Codec
+        { enc = \n -> Encode.int n
+        , dec = Decode.decodeString Decode.int
+        }
+
+
+-- | JSON boolean ⇄ `Bool`.
+bool : Codec Bool
+bool =
+    Codec
+        { enc = \b -> Encode.bool b
+        , dec = Decode.decodeString Decode.bool
+        }
+
+
+-- | JSON number ⇄ `Float`. Prefer `decimal`/`money` for exact quantities —
+-- a `Float` round-trip is lossy for money.
+float : Codec Float
+float =
+    Codec
+        { enc = \x -> Encode.float x
+        , dec = Decode.decodeString Decode.float
+        }
+
+
+-- ─── Combinators ───────────────────────────────────────────────────
+
+
+-- | Adapt a `Codec a` to a `Codec b` given a BIJECTION `a <-> b`. Both
+-- directions are required: `toB` reshapes a decoded `a` into a `b`, `toA`
+-- reshapes a `b` back into an `a` the underlying encoder accepts. This is the
+-- newtype-wrapper combinator (`UserId` over `String`); the inverse is what lets
+-- the wrapped codec still encode.
+map : (a -> b) -> (b -> a) -> Codec a -> Codec b
+map toB toA inner =
+    case inner of
+        Codec r ->
+            Codec
+                { enc = \x -> r.enc (toA x)
+                , dec = \s -> Result.map toB (r.dec s)
+                }
+
+
+-- ─── Errors ────────────────────────────────────────────────────────
+
+
+-- | Raised by `fromJsonSafe` when input exceeds the caller's size limit —
+-- an invalid-input error carrying the reason, never a panic.
+tooLargeError : Error
+tooLargeError =
+    Error.invalidInput "Ipe.Codec.fromJsonSafe: input exceeds the size limit"
