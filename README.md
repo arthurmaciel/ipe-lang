@@ -32,7 +32,7 @@ It compiles to readable, `rustfmt`-clean Rust.
 
 Installation:
 ```sh
-curl -fsSL https://raw.githubusercontent.com/arthurmaciel/ipe-lang/main/scripts/install.sh | sh
+curl -fsSL https://raw.githubusercontent.com/arthurmaciel/ipe-lang/main/tools/scripts/install.sh | sh
 ```
 
 Scaffold a new project — `ipe init` writes an `ipe.toml`, a `README.md`, and a
