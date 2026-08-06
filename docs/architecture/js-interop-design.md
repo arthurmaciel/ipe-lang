@@ -44,7 +44,7 @@ spellings are fixed by the golden tests of each increment.
 | Content-addressed + SRI script serving | shipped — `/_ipe/client.<hex16>.js` with `integrity="sha256-…"`; the pattern any generated glue reuses | `src/runtime/rust/src/web/mod.rs:279–343` (`render_page_full`, `client_js_hashes`) |
 | Typed hydration island (the flags analogue) | shipped — `[wasm] mode = "spa" \| "hydrate"`; `HydrationState` serialised into a `<script type="application/ipe-model+json">` island, `island_escape`d (script-injection foreclosed), parsed with `serde_json`, never evaluated; `HydrationState` must be a plain value | `src/runtime/rust/src/web/mod.rs:190–224` (`render_page_hydrate`), `src/ipe-cli/src/project.rs:87–118`, `src/compiler/backend/rust/src/project.rs:351–408,1916` |
 | Escape hatch | shipped — `Ui.html : Html msg -> Element msg` (`src/compiler/lower/src/lower.rs:14777`, kernel wiring `:16325`); `Html.unsafeRaw` → `HRaw` is the ONLY un-escaped render surface; every other text path is entity-escaped | `src/runtime/rust/src/html.rs:18,222,1468–1484` |
-| Capability machinery | shipped — closed `Capability` vocabulary; `ipe capabilities` report; manifest `[capabilities]` must EQUAL the inferred set; package-index admission CI re-runs the gate | `src/compiler/kernels/src/capability.rs:21,56`, `src/ipe-cli/src/help.rs:311`, `src/ipe-cli/src/audit.rs:494–534`, `docs/package-index/README.md`, `docs/adr/0044-package-coordination-manifest-index-gate.md` |
+| Capability machinery | shipped — closed `Capability` vocabulary; `ipe capabilities` report; manifest `[capabilities]` must EQUAL the inferred set; package-index admission CI re-runs the gate | `src/compiler/kernels/src/capability.rs:21,56`, `src/ipe-cli/src/help.rs:311`, `src/ipe-cli/src/audit.rs:494–534`, the hosted index repository `arthurmaciel/ipe-index`, `docs/adr/0044-package-coordination-manifest-index-gate.md` |
 | Security headers / CSP | shipped — safe-by-default response headers; `frame-ancestors` env value response-splitting-sanitised; inline bootstrap still needs `'unsafe-inline'` (nonce tightening deferred) | `src/runtime/rust/src/telemetry.rs:277`, `src/runtime/rust/src/web/mod.rs:285–290` |
 
 So: the reserved name, the fail-closed gate, both wire directions, the typed
@@ -218,7 +218,7 @@ bounds:
    the package-index admission CI re-verifies it — no new machinery, one new
    enum variant plus tagging.
 2. **Content pinning.** The package entry (extend
-   `docs/package-index/SCHEMA.md`) records the content hash of every shipped
+   the `arthurmaciel/ipe-index` `SCHEMA.md`) records the content hash of every shipped
    widget JS file; `ipe package publish` computes it, the admission CI
    re-verifies it, and the consuming build refuses a hash mismatch. The same
    hash is what SRI pins in the served page — one hash from index to browser.
