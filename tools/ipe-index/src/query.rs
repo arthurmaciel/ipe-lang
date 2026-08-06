@@ -846,9 +846,11 @@ pub fn cmd_rename_symbol(
         for r in rows {
             let (path, line, qualified) = r?;
             let replacement = to.map(|t| {
-                // Replace final segment
-                if let Some(idx) = qualified.rfind(':').or_else(|| qualified.rfind('.')) {
-                    format!("{}::{t}", &qualified[..idx + 1])
+                // Replace final segment — detect separator (:: or .) and splice correctly
+                if let Some(idx) = qualified.rfind("::") {
+                    format!("{}{t}", &qualified[..idx + 2])
+                } else if let Some(idx) = qualified.rfind('.') {
+                    format!("{}{t}", &qualified[..idx + 1])
                 } else {
                     t.to_string()
                 }
@@ -906,6 +908,9 @@ pub fn cmd_rename_symbol(
         };
 
         // Clamp span to file bounds
+        if lines.is_empty() {
+            continue;
+        }
         let start = (line_start as usize).max(1).min(lines.len());
         let end = (line_end as usize).max(start).min(lines.len());
 

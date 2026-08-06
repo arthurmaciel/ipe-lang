@@ -69,7 +69,14 @@ fn lang_grammar(path: &str, lang: Lang) -> Option<(tree_sitter::Language, &'stat
 /// Examples:
 ///   `std::{collections::HashMap, io}`  →  `["std::collections::HashMap", "std::io"]`
 ///   `crate::model`                      →  `["crate::model"]`
+///   `crate::lib as renamed`             →  `["crate::lib"]` (alias stripped)
 fn expand_rust_use(text: &str) -> Vec<String> {
+    // Strip ` as <ident>` alias if present
+    let text = if let Some(idx) = text.find(" as ") {
+        text[..idx].trim()
+    } else {
+        text
+    };
     if !text.contains('{') {
         return vec![text.to_string()];
     }

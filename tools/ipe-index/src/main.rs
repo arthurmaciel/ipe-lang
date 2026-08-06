@@ -279,8 +279,15 @@ fn cmd_update(repo_specs: &[String], db: &str) -> Result<()> {
         for f in &ups {
             let tagged = format!("{tag}:{}", f.path);
             let old = store.units_for_path(&tagged)?;
+            // Read source BEFORE dropping — if the file is oversized/unreadable,
+            // we still need to enqueue `deleted` events for the old units.
+            let src = read_capped(root, &f.path);
             store.drop_file(&tagged)?;
-            let Some(src) = read_capped(root, &f.path) else {
+            let Some(src) = src else {
+                // File unreadable/oversized → all old units are deleted.
+                for (uid, h) in old {
+                    store.enqueue_change(&uid, "deleted", Some(&h), None, &sha, now)?;
+                }
                 continue;
             };
             let role = model::role_of(&tagged);
