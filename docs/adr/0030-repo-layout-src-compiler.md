@@ -30,7 +30,7 @@ backend emitter which copies it into each emitted project as `src/ipe_runtime/`.
 ## Consequences
 
 - `Cargo.toml` workspace members and all `path = "…"` dep references updated.
-- Scripts that refer to crate paths (`scripts/lib/env.sh`, CI workflows) updated once;
+- Scripts that refer to crate paths (`tools/scripts/lib/env.sh`, CI workflows) updated once;
   subsequent renames (Step B) and namespace flattening (Step C) happen in separate
   commits that each leave the gate green.
 - The step-A relocation is purely mechanical — `rustc` verifies the rename total via

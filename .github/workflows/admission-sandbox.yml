@@ -87,7 +87,7 @@ jobs:
           sudo apt-get install -y --no-install-recommends bubblewrap python3
 
       - name: Make scripts executable
-        run: chmod +x scripts/admission/jail-linux.sh tests/fixtures/admission/untrusted-build.sh
+        run: chmod +x tools/scripts/admission/jail-linux.sh tests/fixtures/admission/untrusted-build.sh
 
       # Positive control: OUTSIDE the jail, as the same root principal, net +
       # fs-escape must SUCCEED — so a block in the enforce run below can only be
@@ -103,7 +103,7 @@ jobs:
           ESCAPE_PATH: ${{ github.workspace }}/admission-escape-probe
         # sudo: bwrap needs root to set up uid/gid maps on GHA runners
         # (the runner user has no /etc/subuid entry).
-        run: sudo -E scripts/admission/jail-linux.sh tests/fixtures/admission/untrusted-build.sh
+        run: sudo -E tools/scripts/admission/jail-linux.sh tests/fixtures/admission/untrusted-build.sh
 
   # ── Linux arm64 ────────────────────────────────────────────────────────────
   # Identical layering to linux-x64, on a native arm64 runner.
@@ -121,7 +121,7 @@ jobs:
           sudo apt-get install -y --no-install-recommends bubblewrap python3
 
       - name: Make scripts executable
-        run: chmod +x scripts/admission/jail-linux.sh tests/fixtures/admission/untrusted-build.sh
+        run: chmod +x tools/scripts/admission/jail-linux.sh tests/fixtures/admission/untrusted-build.sh
 
       # Positive control: OUTSIDE the jail, as the same root principal (see linux-x64).
       - name: Positive control (no jail — forbidden actions must succeed)
@@ -134,7 +134,7 @@ jobs:
           ADMISSION_TIMEOUT_SECS: '60'
           ESCAPE_PATH: ${{ github.workspace }}/admission-escape-probe
         # sudo: bwrap needs root to set up uid/gid maps on GHA runners
-        run: sudo -E scripts/admission/jail-linux.sh tests/fixtures/admission/untrusted-build.sh
+        run: sudo -E tools/scripts/admission/jail-linux.sh tests/fixtures/admission/untrusted-build.sh
 
   # ── macOS arm64 ────────────────────────────────────────────────────────────
   # Jail: sandbox-exec(1) with an SBPL profile (Seatbelt).
@@ -149,7 +149,7 @@ jobs:
       - uses: actions/checkout@v5
 
       - name: Make scripts executable
-        run: chmod +x scripts/admission/jail-macos.sh tests/fixtures/admission/untrusted-build.sh
+        run: chmod +x tools/scripts/admission/jail-macos.sh tests/fixtures/admission/untrusted-build.sh
 
       # Positive control: OUTSIDE the jail, as the same user principal, net +
       # fs-escape must SUCCEED (the workspace path is outside the SBPL allow-list
@@ -163,7 +163,7 @@ jobs:
         env:
           ADMISSION_TIMEOUT_SECS: '60'
           ESCAPE_PATH: ${{ github.workspace }}/admission-escape-probe
-        run: scripts/admission/jail-macos.sh tests/fixtures/admission/untrusted-build.sh
+        run: tools/scripts/admission/jail-macos.sh tests/fixtures/admission/untrusted-build.sh
 
   # ── Windows x64 ────────────────────────────────────────────────────────────
   # Jail: Docker Windows container with --isolation process --network none.
@@ -244,7 +244,7 @@ jobs:
         if: steps.winctr.outputs.available == 'true'
         env:
           ADMISSION_TIMEOUT_SECS: '90'
-        run: powershell -NoProfile -ExecutionPolicy Bypass -File scripts/admission/jail-windows.ps1
+        run: powershell -NoProfile -ExecutionPolicy Bypass -File tools/scripts/admission/jail-windows.ps1
         shell: powershell
 
   # ── FreeBSD x64 ────────────────────────────────────────────────────────────
@@ -270,7 +270,7 @@ jobs:
           prepare: |
             pkg install -y python3
           run: |
-            chmod +x scripts/admission/jail-freebsd.sh tests/fixtures/admission/untrusted-build.sh
+            chmod +x tools/scripts/admission/jail-freebsd.sh tests/fixtures/admission/untrusted-build.sh
             # Shared escape path: root-owned repo dir — root-writable unjailed
             # (control), unwritable to the jailed `nobody` (enforce).
             ESCAPE_PATH="$(pwd)/admission-escape-probe"
@@ -279,4 +279,4 @@ jobs:
               sh tests/fixtures/admission/untrusted-build.sh
             echo "== enforce (jailed — forbidden actions must be blocked) =="
             ADMISSION_TIMEOUT_SECS=60 ESCAPE_PATH="$ESCAPE_PATH" \
-              scripts/admission/jail-freebsd.sh tests/fixtures/admission/untrusted-build.sh
+              tools/scripts/admission/jail-freebsd.sh tests/fixtures/admission/untrusted-build.sh

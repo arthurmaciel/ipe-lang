@@ -2,7 +2,7 @@
 # Sky->Ipê project converter.
 #
 # When a converted Sky project carries a `["go.dependencies"]` section, the
-# converter (scripts/sky-to-ipe-project.sh, via scripts/lib/go-deps-to-rust.py)
+# converter (tools/tools/scripts/sky-to-ipe-project.sh, via tools/tools/scripts/lib/go-deps-to-rust.py)
 # looks up each Go import path here and, for a real crates.io crate, emits it
 # under `[rust.dependencies]` in the generated ipe.toml — the section the Ipê FFI
 # binder (`ipe install`) consumes.

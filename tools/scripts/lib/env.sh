@@ -1,5 +1,5 @@
 # shellcheck shell=bash
-# scripts/lib/env.sh — SINGLE SOURCE OF TRUTH for the Ipê examples-sweep command
+# tools/scripts/lib/env.sh — SINGLE SOURCE OF TRUTH for the Ipê examples-sweep command
 # env. SOURCE this (never execute it): `source "$(dirname "$0")/lib/env.sh"`.
 #
 # The compiler is `ipe` (a Rust cargo workspace); the binary is built by cargo
@@ -47,7 +47,7 @@ fi
 # the root; REPO is a common var other tooling exports, so trusting an inherited
 # value would poison every "$REPO/…" path.
 REPO="${IPE_REPO:-}"
-[ -z "$REPO" ] && [ -f "$PWD/scripts/lib/examples.sh" ] && REPO="$PWD"
+[ -z "$REPO" ] && [ -f "$PWD/tools/tools/scripts/lib/examples.sh" ] && REPO="$PWD"
 if [ -z "$REPO" ]; then
   _env_sh_dir="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" 2>/dev/null && pwd)"
   if [ -n "$_env_sh_dir" ]; then

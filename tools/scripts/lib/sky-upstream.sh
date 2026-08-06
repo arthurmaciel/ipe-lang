@@ -1,5 +1,5 @@
 # shellcheck shell=bash
-# scripts/lib/sky-upstream.sh — install the upstream Sky compiler for LIVE
+# tools/scripts/lib/sky-upstream.sh — install the upstream Sky compiler for LIVE
 # reference comparison. SOURCE this (never execute).
 #
 # The sweep's parity proof is "does ipe build+run the real upstream examples?".

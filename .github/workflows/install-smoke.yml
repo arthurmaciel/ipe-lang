@@ -1,4 +1,4 @@
-# Proves scripts/install.sh actually downloads, extracts, and installs a working
+# Proves tools/scripts/install.sh actually downloads, extracts, and installs a working
 # `ipe` on every platform it claims to support — Linux, macOS, Windows (Git
 # Bash), and FreeBSD. A published release must exist for the installer to fetch,
 # so this runs post-merge, on a weekly schedule, and on any PR that touches the
@@ -10,11 +10,11 @@ on:
   push:
     branches: [main, master]
     paths:
-      - 'scripts/install.sh'
+      - 'tools/scripts/install.sh'
       - '.github/workflows/install-smoke.yml'
   pull_request:
     paths:
-      - 'scripts/install.sh'
+      - 'tools/scripts/install.sh'
       - '.github/workflows/install-smoke.yml'
   schedule:
     - cron: '19 6 * * 1'      # Mondays, offset from the other scheduled jobs
@@ -45,7 +45,7 @@ jobs:
           IPE_INSTALL_DIR: ${{ runner.temp }}/ipe-smoke
         run: |
           set -eu
-          sh scripts/install.sh
+          sh tools/scripts/install.sh
           # Git Bash on Windows installs ipe.exe; resolve either name.
           bin="$IPE_INSTALL_DIR/ipe"
           [ -x "$bin" ] || bin="$bin.exe"
@@ -66,5 +66,5 @@ jobs:
           run: |
             set -eu
             export IPE_INSTALL_DIR="$HOME/ipe-smoke"
-            sh scripts/install.sh
+            sh tools/scripts/install.sh
             "$IPE_INSTALL_DIR/ipe" --version

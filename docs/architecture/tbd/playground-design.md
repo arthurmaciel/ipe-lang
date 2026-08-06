@@ -570,7 +570,7 @@ References to update (search-and-fix list):
 | any doc mentioning `ipe-playground` / `IPE_PLAYGROUND_*` env vars / `/compile` endpoint / axum | rewrite for the Ipê server + `/run` |
 | `docs/internals/wasm.md` (referenced from `src/wasm/src/lib.rs`) | note the run step is now an Ipê server, not axum |
 | `.github/workflows/*` referencing `ipe-playground` | remove; add the temporary sandbox matrix (§D) |
-| examples sweep (`scripts/lib/examples.sh`) | the new `server/` is a normal server-shape example — verify it is auto-included (disk-derived `build_set`) or add its dir |
+| examples sweep (`tools/scripts/lib/examples.sh`) | the new `server/` is a normal server-shape example — verify it is auto-included (disk-derived `build_set`) or add its dir |
 
 Note (write-boundary): `examples/*/target` is git-tracked in places (a known bug,
 per project memory) — ensure the new `server/` does not commit a `target/`, and
@@ -615,7 +615,7 @@ decision (§C) — confirm the binary-body path or take `Server.static`.
 ### P4 — client SPA · *start immediately*
 Second output pane, Run gating, `/run` fetch, unsandboxed warning box, Sky→Ipê
 strip, GitHub link (§E). Pure static HTML/JS — no compiler dependency.
-- **SEAL:** the wasm example's headless driver (`scripts/lib/wasm-verify.mjs`)
+- **SEAL:** the wasm example's headless driver (`tools/scripts/lib/wasm-verify.mjs`)
   loads the page, edits to a good program (Run enabled), to a bad program (Run
   disabled + diagnostics shown), and — against a running P3 server — clicks Run and
   asserts the bottom pane fills. (Verify real interaction, not boot-only.)

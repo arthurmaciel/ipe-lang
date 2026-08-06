@@ -4,7 +4,7 @@
 The upstream Sky manifest names Go packages the program binds through Sky's
 Go-FFI. Ipê binds crates.io crates instead, declared under `[rust.dependencies]`
 and materialised by `ipe install`. This pass reads the Go→Rust map
-(scripts/lib/go-to-rust-crates.tsv) and rewrites an already-`entry`-renamed
+(tools/scripts/lib/go-to-rust-crates.tsv) and rewrites an already-`entry`-renamed
 ipe.toml in place: the `["go.dependencies"]` table is removed and replaced by a
 `[rust.dependencies]` block holding the mapped crates.
 

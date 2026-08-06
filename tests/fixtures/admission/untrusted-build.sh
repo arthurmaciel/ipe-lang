@@ -1,7 +1,7 @@
 #!/bin/sh
 # Admission-sandbox fixture: simulates an untrusted build.
 #
-# The jail wrapper (scripts/admission/jail-<platform>.sh) runs this script
+# The jail wrapper (tools/scripts/admission/jail-<platform>.sh) runs this script
 # inside the confinement layer with SCRATCH_DIR set to the one writable
 # directory. The same script also runs OUTSIDE the jail as a positive control,
 # to prove the forbidden actions are only blocked BECAUSE of the jail — not

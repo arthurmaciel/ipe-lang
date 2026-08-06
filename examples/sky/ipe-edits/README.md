@@ -1,7 +1,7 @@
 # `examples/sky/ipe-edits/`
 
-Per-example semantic-delta edits, applied by `scripts/lib/mirror.sh` (via
-`scripts/lib/apply-ipe-edits.py`) AFTER the shared `rename-map.tsv` token
+Per-example semantic-delta edits, applied by `tools/scripts/lib/mirror.sh` (via
+`tools/scripts/lib/apply-ipe-edits.py`) AFTER the shared `rename-map.tsv` token
 rewrite, to produce the `examples/sky/ipe/<name>/` port. One optional
 `<name>.edits` file per example.
 
@@ -36,4 +36,4 @@ replace:
   a total port (e.g. a Go-FFI example reimplemented on `Ipe.Http.Server`).
 - A fence is a lone triple-double-quote line; content between fences is verbatim.
 
-The applier is `scripts/lib/apply-ipe-edits.py <name>.edits <example-dir>`.
+The applier is `tools/scripts/lib/apply-ipe-edits.py <name>.edits <example-dir>`.

@@ -666,7 +666,7 @@ fn spawn_and_decode(
 /// function is what that jail enforces, proven correct here.
 ///
 /// The profile is a `(allow default)` base with *targeted denials*, mirroring
-/// `scripts/admission/jail-macos.sh`: on recent macOS a `(deny default)` base
+/// `tools/scripts/admission/jail-macos.sh`: on recent macOS a `(deny default)` base
 /// blocks so many benign system operations that even explicit `(allow …)`
 /// overrides leave the shell and its tools unable to run, so the working base is
 /// allow-default plus the two threat denials Tier-2 differentially confines:

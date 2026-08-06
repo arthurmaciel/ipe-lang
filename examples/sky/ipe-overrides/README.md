@@ -1,7 +1,7 @@
 # `examples/sky/ipe-overrides/`
 
 Per-example **whole-port override trees**. When `ipe-overrides/<name>/` exists,
-`scripts/lib/mirror.sh` uses it as the `examples/sky/ipe/<name>/` port verbatim —
+`tools/scripts/lib/mirror.sh` uses it as the `examples/sky/ipe/<name>/` port verbatim —
 the `rename-map.tsv` token rewrite and any `ipe-edits/<name>.edits` are skipped
 entirely for that example.
 

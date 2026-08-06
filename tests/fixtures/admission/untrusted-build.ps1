@@ -9,7 +9,7 @@
 # contract the decoder (CapabilityAxis::from_exit_code) reads.
 #
 # It runs ONLY the tier2 differential-confinement contract (the enforce/control
-# admission modes live in scripts/admission/jail-windows.ps1 and the POSIX
+# admission modes live in tools/scripts/admission/jail-windows.ps1 and the POSIX
 # fixture). Inside a jail scoped to a package's DECLARED capability set, a DENIED
 # action names the axis the native code demanded but the declared set withheld
 # (used-but-undeclared). The exit code is the wrapper-owned per-axis denial

@@ -653,7 +653,7 @@ only to pre-empt mis-listing (see AGENTS.md "Agent learnings").
   Rust is a `Clone`-bounded generic monomorphized per use site. Re-verified via
   a real `cargo build` + `cargo run` golden
   (`crates/ipe/tests/golden_i201_cross_module_poly_recursion.rs`, `IPE_E2E=1`,
-  prints `EO`) and the fuzzer (`scripts/fuzz-well-typed.sh --seed 31348`, now
+  prints `EO`) and the fuzzer (`tools/scripts/fuzz-well-typed.sh --seed 31348`, now
   green).
 
 ### B24 — Prescriptive TEA `init` signature (Web → `WebReq`; Tui/Webview → `()`) (#180)

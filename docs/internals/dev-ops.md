@@ -40,7 +40,7 @@ per-example artifacts (`out/`). A near-full disk dies mid-run with ENOSPC *after
 type-check and codegen succeed, surfacing as a file-copy or "build failed" error
 that masquerades as a codegen regression and wastes the whole run on a
 misdiagnosis — always read the actual build log before blaming a code change.
-`scripts/examples-sweep.sh` aborts with a `< 5G free` guard before starting. A
+`tools/scripts/examples-sweep.sh` aborts with a `< 5G free` guard before starting. A
 host under 5 GB free must abort the next agent spawn until cleanup completes —
 an ENOSPC mid-build leaves half-written artifacts worse than a clean rebuild.
 
@@ -76,7 +76,7 @@ A hung test or build is a silent time-waster. Rules:
   be re-run.
 - **The example sweep already bounds every stage:** `ipe build` `timeout
   ${IPE_SWEEP_BUILD_TIMEOUT:-900}`, `cargo build` `timeout 900`, emitted-app run
-  `timeout 8` (`exercise_cli` in `scripts/lib/checks.sh`) — don't remove or widen
+  `timeout 8` (`exercise_cli` in `tools/scripts/lib/checks.sh`) — don't remove or widen
   without a real reason.
 - **Background shell commands** waiting on a process must `kill -KILL` after a
   finite wait (default 600 s); never `wait $PID` unbounded.
@@ -107,7 +107,7 @@ tests + lints only the touched crates:
   feature-gated test, including the entire `live::*` surface)
 - `cargo +nightly test --workspace --doc`
 - `cargo +nightly clippy --workspace --all-targets -- -D warnings`
-- fuzz (`scripts/fuzz-well-typed.sh`) and the full examples sweep
+- fuzz (`tools/scripts/fuzz-well-typed.sh`) and the full examples sweep
 
 Full-green certifies the batch and advances master; full-red resets to the last
 certified sha and re-queues. The two gates must agree on lint scope, and the
@@ -192,7 +192,7 @@ the PR; an unfixable advisory is handled by a documented, reviewed ignore — ne
 by downgrading the gate.
 
 **Branch protection** is enabled by running
-`scripts/ci/enable-branch-protection.sh` (required checks = the fast jobs,
+`tools/scripts/ci/enable-branch-protection.sh` (required checks = the fast jobs,
 `strict` up-to-date branch, PRs required, auto-merge on). It is deliberately run
 by hand, not by CI — flip it on only after in-flight direct-push lanes drain.
 
@@ -244,9 +244,9 @@ lands, so users receive it under a version rather than only on `main`.
 ## Release checklist
 
 1. Rebuild the driver: `cargo build --release -p ipe`; `source
-   scripts/lib/env.sh` exports `IPEC_BIN` + `IPE_RUNTIME_DIR`.
+   tools/scripts/lib/env.sh` exports `IPEC_BIN` + `IPE_RUNTIME_DIR`.
 2. Full gate green — one authoritative run (the two-tier gate above).
-3. Example sweep green — `scripts/examples-sweep.sh` (per example: `ipe build` →
+3. Example sweep green — `tools/scripts/examples-sweep.sh` (per example: `ipe build` →
    `cargo build` the emitted crate → run `ipe-app`). VERDICT PASS iff zero red
    rows (THE SEAL end to end).
 4. CI parity — `.github/workflows/{ci,examples-sweep,security}.yml` runs the same
