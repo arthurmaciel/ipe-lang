@@ -10,6 +10,15 @@ Entries below the header are maintained by
 section is generated from Conventional Commit messages and prepended when the
 standing release pull request is merged.
 
+## [0.1.41](https://github.com/arthurmaciel/ipe-lang/compare/ipe-v0.1.40...ipe-v0.1.41) (2026-08-06)
+
+
+### Bug Fixes
+
+* **path:** Update install script URL for ipe-lang ([#753](https://github.com/arthurmaciel/ipe-lang/issues/753)) ([5b24862](https://github.com/arthurmaciel/ipe-lang/commit/5b24862de2dedba2d5623a7f07c3dd7ad2ef0032))
+* **path:** Update INSTALL_SH_URL to new script path ([#754](https://github.com/arthurmaciel/ipe-lang/issues/754)) ([c05deed](https://github.com/arthurmaciel/ipe-lang/commit/c05deede8dbca77a796070588c81d80b4bb7a00d))
+* **path:** Update installation script URL in README ([#756](https://github.com/arthurmaciel/ipe-lang/issues/756)) ([7b4af38](https://github.com/arthurmaciel/ipe-lang/commit/7b4af38e663b1d4d0eee6a3216daf9ed225cda71))
+
 ## [0.1.40](https://github.com/arthurmaciel/ipe-lang/compare/ipe-v0.1.39...ipe-v0.1.40) (2026-08-05)
 
 
