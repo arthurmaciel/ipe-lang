@@ -98,7 +98,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
-      - run: ./scripts/ci/artifact-guard.sh
+      - run: ./tools/scripts/ci/artifact-guard.sh
 
   fmt:
     runs-on: ubuntu-latest
@@ -433,7 +433,7 @@ jobs:
       - name: Type-check every first-party example
         env:
           IPE_BIN: ${{ github.workspace }}/target/release/ipe
-        run: bash scripts/first-party-check-floor.sh
+        run: bash tools/scripts/first-party-check-floor.sh
 
   # `ipe-runtime-rust`'s `default = []` leaves `compression`/`csv`/`config`/
   # `tokio` (and every other optional feature) OFF, so the `test` job above
@@ -619,7 +619,7 @@ jobs:
           echo "sandbox-exec present: $(command -v sandbox-exec)"
 
       - name: Make admission scripts executable
-        run: chmod +x scripts/admission/jail-macos.sh tests/fixtures/admission/untrusted-build.sh
+        run: chmod +x tools/scripts/admission/jail-macos.sh tests/fixtures/admission/untrusted-build.sh
 
       # Positive control (OUTSIDE the jail): the same net + fs-escape actions must
       # SUCCEED, so a block under `enforce` below can only be the jail — not an
@@ -635,7 +635,7 @@ jobs:
         env:
           ADMISSION_TIMEOUT_SECS: '60'
           ESCAPE_PATH: ${{ github.workspace }}/admission-escape-probe
-        run: scripts/admission/jail-macos.sh tests/fixtures/admission/untrusted-build.sh
+        run: tools/scripts/admission/jail-macos.sh tests/fixtures/admission/untrusted-build.sh
 
       # The real reconciler through the real sandbox-exec jail (the macOS
       # build_in_jail path): used-but-undeclared rejects, benign certifies.

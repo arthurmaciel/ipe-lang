@@ -91,12 +91,12 @@ where drift hides.
 
 ## Tooling — use first
 
-- **`scripts/ipe-index locate|refs|parity|wakeup`** — a pre-built structural
+- **`tools/scripts/ipe-index locate|refs|parity|wakeup`** — a pre-built structural
   index of the tree; use it before `rg` for "where is X / who calls Y / kernel
   gaps". (`rg` pitfall: never `rg -r`/`-rn` — ripgrep's `-r` is `--replace` and
   eats the pattern; use `rg -n`.)
 - **tokensave** MCP (if initialised) for code-graph questions.
-- **Backlog = GitHub issues** via `scripts/github/issue-ticket.sh add|list|close`
+- **Backlog = GitHub issues** via `tools/scripts/github/issue-ticket.sh add|list|close`
   — there is no tracked backlog file.
 
 ## Governance

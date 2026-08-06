@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# scripts/regen-sky-examples.sh — regenerate the committed Sky example trees.
+# tools/scripts/regen-sky-examples.sh — regenerate the committed Sky example trees.
 #
 # Fetches every manifest example from the upstream GitHub repo (anzellai/sky)
 # and writes two committed trees:
@@ -12,8 +12,8 @@
 # CI runs it regularly to track upstream; a drift PR lands any refresh.
 #
 # USAGE
-#   scripts/regen-sky-examples.sh [--only "NAME ..."]   regenerate (default: all)
-#   scripts/regen-sky-examples.sh --check               regenerate to a temp and
+#   tools/scripts/regen-sky-examples.sh [--only "NAME ..."]   regenerate (default: all)
+#   tools/scripts/regen-sky-examples.sh --check               regenerate to a temp and
 #                                                       fail if it differs from the
 #                                                       committed trees (CI gate).
 #
@@ -88,7 +88,7 @@ if [ "$MODE" = check ]; then
   if [ "$drift" = 1 ]; then
     echo "" >&2
     echo "regen --check: committed ports are stale vs rename-map/ipe-edits. Run:" >&2
-    echo "  scripts/regen-sky-examples.sh && git add examples/sky/original examples/sky/ipe" >&2
+    echo "  tools/scripts/regen-sky-examples.sh && git add examples/sky/original examples/sky/ipe" >&2
     exit 1
   fi
   echo "regen --check: $checked committed port(s) match a fresh transform of original/."

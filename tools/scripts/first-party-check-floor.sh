@@ -2,7 +2,7 @@
 # Ipê FIRST-PARTY `ipe type-check` FLOOR — the cheap, gating compile floor.
 #
 # Runs `ipe type-check` (type-check ONLY — no `ipe build`, no cargo) over every
-# shipped first-party example (first_party_check_set in scripts/lib/examples.sh:
+# shipped first-party example (first_party_check_set in tools/scripts/lib/examples.sh:
 # examples/shapes/** + examples/wasm/**, minus the FFI-gated ones). A shipped
 # example that fails to type-check FAILS this floor LOUD, naming each broken
 # entry — so a compiler change that reddens a canonical example breaks the gate
@@ -23,7 +23,7 @@ set -uo pipefail
 source "$(dirname "$0")/lib/env.sh"
 source "$(dirname "$0")/lib/examples.sh"
 
-if [ -z "$REPO" ] || [ ! -f "$REPO/scripts/first-party-check-floor.sh" ]; then
+if [ -z "$REPO" ] || [ ! -f "$REPO/tools/tools/scripts/first-party-check-floor.sh" ]; then
   echo "ERROR: can't locate the repo. cd into it, or set IPE_REPO=/path/to/sky-rust." >&2; exit 2
 fi
 cd "$REPO" || { echo "ERROR: could not cd into repo '$REPO'." >&2; exit 2; }

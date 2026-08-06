@@ -206,7 +206,7 @@ builds), wraps every build and test in `timeout`, uses its **own
 `CARGO_TARGET_DIR`** under `~/.cache/ipe/` when it touches compiled code (parallel
 lanes sharing a target race into phantom errors), and **never dispatches its own
 sub-agents** — the orchestrator is the only dispatcher. Understand before
-changing: query `scripts/ipe-index` before `rg`, and port a construct
+changing: query `tools/scripts/ipe-index` before `rg`, and port a construct
 deliberately rather than inventing one. The operational detail is in
 `docs/internals/dev-ops.md`.
 

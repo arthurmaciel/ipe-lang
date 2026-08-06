@@ -1,13 +1,13 @@
 # ─────────────────────────────────────────────────────────────────────────────
 # Ipê EXAMPLES sweep — the upstream-mirror parity PROOF.
 #
-# Runs `scripts/examples-sweep.sh`. For each in-scope example it mirrors the real
+# Runs `tools/scripts/examples-sweep.sh`. For each in-scope example it mirrors the real
 # upstream Sky example (fetched from the anzellai/sky GitHub repo), patches it
 # into Ipê (examples/sky/rename-map.tsv token rewrite
 # + optional examples/sky/ipe-patches/<name>.patch), then runs BUILD (`ipe build`
 # + `cargo build`) and RUN (headless, per shape). There is NO reference-compiler
 # build and no cross-compiler output comparison — this proves OUR compiler
-# builds+runs the real upstream examples. `scripts/lib/checks.sh` drives every host.
+# builds+runs the real upstream examples. `tools/scripts/lib/checks.sh` drives every host.
 #
 # ── UNPATCHED NEW EXAMPLES (FAIL LOUD) ───────────────────────────────────────
 # Any upstream Sky example NOT listed in examples/sky/manifest.toml emits a RED
@@ -131,7 +131,7 @@ jobs:
 
       # Build the compiler under test into the shared target dir. --release keeps
       # the per-example build ceilings comfortable; IPE_BIN auto-resolves to
-      # $CARGO_TARGET_DIR/release/ipe (see scripts/lib/env.sh).
+      # $CARGO_TARGET_DIR/release/ipe (see tools/scripts/lib/env.sh).
       - name: Build ipe
         run: cargo build --release -p ipe
 
@@ -148,13 +148,13 @@ jobs:
       - name: Check committed Sky ports are consistent
         if: startsWith(matrix.os, 'ubuntu')
         shell: bash
-        run: bash scripts/regen-sky-examples.sh --check
+        run: bash tools/scripts/regen-sky-examples.sh --check
 
       # The mirror fetches every example from the anzellai/sky GitHub repo
       # (curl + tar, both preinstalled on the runners).
       - name: Run examples sweep (mirror + BUILD + RUN)
         shell: bash
-        run: bash scripts/examples-sweep.sh
+        run: bash tools/scripts/examples-sweep.sh
 
       # Open a refresh PR when upstream drifted. The sweep above regenerated
       # examples/sky/{original,ipe} from the CURRENT upstream; if that differs
@@ -304,7 +304,7 @@ jobs:
       # Bash) + BUILD (ipe.exe + cargo) + per-shape RUN. flock no-ops here; ipe.exe
       # / ipe-app.exe resolve via the Windows-conditional paths in env.sh/checks.sh.
       - name: Run examples sweep (mirror + BUILD + RUN)
-        run: bash scripts/examples-sweep.sh
+        run: bash tools/scripts/examples-sweep.sh
 
       # Per-OS job summary: the BUILD·RUN table inline on the run page. always()
       # so it renders even on a RED verdict. COSMETIC — never fails the job.

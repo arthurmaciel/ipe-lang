@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# scripts/fuzz-ill-typed.sh — ill-typed (rejection) fuzzer for the Ipê/ipe-lang port.
+# tools/scripts/fuzz-ill-typed.sh — ill-typed (rejection) fuzzer for the Ipê/ipe-lang port.
 #
 # INVERSE of fuzz-well-typed.sh. Property:
 #   An ILL-TYPED Ipê program MUST be REJECTED by `ipe` (exit != 0).
@@ -72,8 +72,8 @@
 #        1 = FALSE ACCEPTANCE found (soundness bug) or harness error;
 #        2 = setup error.
 #
-# Reproduce: ./scripts/fuzz-ill-typed.sh --seed N --iters 1 --keep
-# Full gate:  IPE_FUZZ_NEG_FULL=1 ./scripts/fuzz-ill-typed.sh
+# Reproduce: ./tools/scripts/fuzz-ill-typed.sh --seed N --iters 1 --keep
+# Full gate:  IPE_FUZZ_NEG_FULL=1 ./tools/scripts/fuzz-ill-typed.sh
 
 set -uo pipefail
 
@@ -891,7 +891,7 @@ if [[ "$rejected" -eq "$ITERS" ]]; then
     if (( ITERS >= 1000 )); then
         echo "  Full gate SATISFIED — 1000+ iters clean."
     else
-        echo "  Smoke PASS. Full gate: IPE_FUZZ_NEG_FULL=1 ./scripts/fuzz-ill-typed.sh"
+        echo "  Smoke PASS. Full gate: IPE_FUZZ_NEG_FULL=1 ./tools/scripts/fuzz-ill-typed.sh"
     fi
     exit 0
 else

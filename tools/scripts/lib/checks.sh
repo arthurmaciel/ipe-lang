@@ -1,5 +1,5 @@
 # shellcheck shell=bash
-# scripts/lib/checks.sh — SINGLE SOURCE OF TRUTH for the per-shape "exercise an
+# tools/scripts/lib/checks.sh — SINGLE SOURCE OF TRUTH for the per-shape "exercise an
 # already-built binary" logic. SOURCE this (never execute it):
 #   source "$(dirname "$0")/lib/checks.sh"
 #
