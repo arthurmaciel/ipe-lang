@@ -1,4 +1,4 @@
-//! Drift guard: the shell installer (`scripts/install.sh`) cannot import the
+//! Drift guard: the shell installer (`tools/scripts/install.sh`) cannot import the
 //! Rust `style` module, so it hand-mirrors the palette, the repository URL, and
 //! the "report bugs" footer. This test reads the script and asserts those
 //! mirrored values EQUAL the `style` SSOT constants — an unmirrored change to
@@ -7,12 +7,15 @@
 
 use ipe::style::{self, Palette};
 
-/// Read `scripts/install.sh` from the repository root (two levels up from this
+/// Read `tools/scripts/install.sh` from the repository root (two levels up from this
 /// crate's manifest). A read failure surfaces as a plain assertion carrying the
 /// path and error — the empty string it returns then fails every `contains`
 /// check with a clear message, never a silent pass.
 fn install_script() -> String {
-    let path = concat!(env!("CARGO_MANIFEST_DIR"), "/../../scripts/install.sh");
+    let path = concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../tools/scripts/install.sh"
+    );
     let read = std::fs::read_to_string(path);
     assert!(read.is_ok(), "could not read {path}: {read:?}");
     read.unwrap_or_default()

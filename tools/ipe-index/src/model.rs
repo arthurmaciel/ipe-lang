@@ -81,8 +81,8 @@ mod tests {
         assert_eq!(role_of("crates/ipe_parse/src/lexer.rs"), Role::CompilerRs);
         assert_eq!(role_of("runtime/src/list.rs"), Role::RuntimeRs);
         assert_eq!(role_of("tools/ipe-index/src/main.rs"), Role::ToolRs);
-        assert_eq!(role_of("scripts/lib/wasm-verify.mjs"), Role::ConsoleTs); // JS/TS/MJS not Other
-        assert_eq!(lang_of("scripts/x.mjs"), Lang::Ts);
+        assert_eq!(role_of("tools/scripts/lib/wasm-verify.mjs"), Role::ConsoleTs); // JS/TS/MJS not Other
+        assert_eq!(lang_of("tools/scripts/x.mjs"), Lang::Ts);
         assert_eq!(stage_of("crates/ipe_canon/src/module.rs"), Some(Stage::Canonicalise));
         assert_eq!(stage_of("crates/ipe_backend_rust/src/builder.rs"), Some(Stage::Generate));
     }

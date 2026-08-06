@@ -577,7 +577,7 @@ actually is:
   blocking gate as the goldens.
 - App-shaped examples (server/live/webview/tui) have no byte-comparable
   stdout; their RUN checks are boot/probe checks
-  (`scripts/examples-sweep.sh` + `scripts/lib/checks.sh`). Their engine
+  (`tools/scripts/examples-sweep.sh` + `tools/scripts/lib/checks.sh`). Their engine
   parity is an **engine matrix dimension in the sweep harness itself** — the
   same per-shape probe must go green under `--engine=interp` — and it
   inherits the examples-sweep lane's status: CI-only (push + nightly, never

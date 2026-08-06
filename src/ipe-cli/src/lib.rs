@@ -4389,7 +4389,7 @@ const INSTALL_SH_URL: &str =
 
 /// `ipe upgrade [--dry-run]` — self-update by re-running the release installer.
 ///
-/// Delegates to `scripts/install.sh` (the documented install path): it detects
+/// Delegates to `tools/scripts/install.sh` (the documented install path): it detects
 /// the platform, downloads the matching latest-release binary, and installs it
 /// over the current one — the same function and interface as a fresh install.
 /// Requires `sh` and `curl` (a POSIX host); `--dry-run` prints the command

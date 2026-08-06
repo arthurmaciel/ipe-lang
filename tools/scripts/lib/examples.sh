@@ -1,5 +1,5 @@
 # shellcheck shell=bash
-# scripts/lib/examples.sh — SINGLE SOURCE OF TRUTH for the example set.
+# tools/scripts/lib/examples.sh — SINGLE SOURCE OF TRUTH for the example set.
 # SOURCE this (never execute it).
 #
 # DERIVED, NOT HARDCODED. Every set is computed at call time from the example

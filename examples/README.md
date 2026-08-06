@@ -48,11 +48,11 @@ materialised at sweep time:
 - `sky/manifest.toml` — the authoritative list of upstream examples and their
   scope (`rename-map` patch, or excluded via `go_ffi = true`).
 - `sky/rename-map.tsv` — the token-level `Sky.*`/`Std.*` → `Ipe.*` rename map
-  applied by `scripts/lib/sky-to-ipe-transform.py`.
+  applied by `tools/scripts/lib/sky-to-ipe-transform.py`.
 - `sky/ipe-patches/<name>.patch` — optional per-example semantic delta on top.
 - `sky/README.md` — how the mirror + patch pipeline works.
 
-Run `bash scripts/examples-sweep.sh` to materialise the mirrored examples under
+Run `bash tools/scripts/examples-sweep.sh` to materialise the mirrored examples under
 `sky/<name>/`, patch them, and build + run each. The materialised trees are
 git-ignored.
 
@@ -71,5 +71,5 @@ ipe build ipe.toml --out out/rust --target wasm
 Or use the sweep to build and run all in-scope examples at once:
 
 ```sh
-IPE_SWEEP_BUILD_ONLY=1 bash scripts/examples-sweep.sh
+IPE_SWEEP_BUILD_ONLY=1 bash tools/scripts/examples-sweep.sh
 ```

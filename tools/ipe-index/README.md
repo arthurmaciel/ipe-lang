@@ -13,14 +13,14 @@ instantly, instead of grepping and guessing.
 
 ```bash
 # From the repo root. The wrapper builds the Rust binary on first run.
-scripts/ipe-index index          # build the index → .ipe-index/index.db
-scripts/ipe-index locate Lowerer # where is `Lowerer` defined / impl'd?
-scripts/ipe-index wakeup         # one-screen digest of the whole index
+tools/scripts/ipe-index index          # build the index → .ipe-index/index.db
+tools/scripts/ipe-index locate Lowerer # where is `Lowerer` defined / impl'd?
+tools/scripts/ipe-index wakeup         # one-screen digest of the whole index
 ```
 
-`scripts/ipe-index` is a thin wrapper that execs the compiled binary at
+`tools/scripts/ipe-index` is a thin wrapper that execs the compiled binary at
 `tools/ipe-index/target/release/ipe-index`. Anywhere the docs say `ipe-index`,
-run `scripts/ipe-index` (or the binary directly).
+run `tools/scripts/ipe-index` (or the binary directly).
 
 The index auto-refreshes after **every commit** (git `post-commit` hook) — you
 rarely run `index`/`update` by hand.
@@ -113,5 +113,5 @@ automatically.
 - `.git/hooks/post-commit` → `ipe-index index` (background, quiet).
 
 Hooks are local (`.git/hooks/`, not committed). After a fresh clone, re-run
-`scripts/ipe-index index` once (or reinstall the hook) to seed the index. See
+`tools/scripts/ipe-index index` once (or reinstall the hook) to seed the index. See
 `PORT.md` for design/status.

@@ -1,9 +1,0 @@
-{
-  "name": "ipe-verify-tooling",
-  "private": true,
-  "type": "module",
-  "description": "Dev-tooling dep for the wasm RUN driver (scripts/lib/wasm-verify.mjs — serves the emitted www/ tree and drives it in headless Chromium). Not part of the compiler/runtime; node_modules is gitignored.",
-  "devDependencies": {
-    "playwright": "^1.49.0"
-  }
-}

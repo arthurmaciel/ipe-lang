@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
-# scripts/fuzz-well-typed.sh — well-typed soundness fuzzer (Ipê/ipe-lang port).
+# tools/scripts/fuzz-well-typed.sh — well-typed soundness fuzzer (Ipê/ipe-lang port).
 #
-# Ported from ../ipe/scripts/fuzz-well-typed.sh (Haskell backend, Go target).
+# Ported from ../ipe/tools/scripts/fuzz-well-typed.sh (Haskell backend, Go target).
 # KEY ADAPTATIONS — Rust/Ipê backend:
 #
 #   BUILD: ipe build src/Main.ipe --out out/rust
@@ -46,8 +46,8 @@
 # Exit: 0 = all iterations green; 1 = first failure (seed + forensics dir
 # under /tmp/ipe-fuzz/FAILURES/); 2 = setup error.
 #
-# Reproduce a failure: ./scripts/fuzz-well-typed.sh --seed N --iters 1 --keep
-# Full 10k gate:       IPE_FUZZ_FULL=1 ./scripts/fuzz-well-typed.sh
+# Reproduce a failure: ./tools/scripts/fuzz-well-typed.sh --seed N --iters 1 --keep
+# Full 10k gate:       IPE_FUZZ_FULL=1 ./tools/scripts/fuzz-well-typed.sh
 
 set -uo pipefail
 
@@ -1036,7 +1036,7 @@ if [[ "$failures" -eq 0 ]]; then
         echo "ipe-fuzz: full gate SATISFIED — ran $ITERS iters clean (criterion 8)"
     else
         echo "ipe-fuzz: smoke PASS — ran $ITERS iters clean"
-        echo "          (full gate: IPE_FUZZ_FULL=1 ./scripts/fuzz-well-typed.sh)"
+        echo "          (full gate: IPE_FUZZ_FULL=1 ./tools/scripts/fuzz-well-typed.sh)"
     fi
     exit 0
 else

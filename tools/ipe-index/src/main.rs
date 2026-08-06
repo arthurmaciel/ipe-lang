@@ -141,7 +141,7 @@ fn cmd_index(repo_specs: &[String], db: &str) -> Result<()> {
                 continue;
             };
             // Store every path prefixed with the repo tag so multiple repos never
-            // collide (each has Cargo.toml, README.md, scripts/*, tools/*).
+            // collide (each has Cargo.toml, README.md, tools/scripts/*, tools/*).
             let tagged = format!("{tag}:{}", f.path);
             // `walk` classified the role on the UNTAGGED path (before the tag is
             // known). Recompute the role on the tagged path so the tag-aware

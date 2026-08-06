@@ -1,17 +1,17 @@
 #!/usr/bin/env bash
-# scripts/sky-to-ipe-project.sh — convert ANY Sky project into an Ipê project.
+# tools/scripts/sky-to-ipe-project.sh — convert ANY Sky project into an Ipê project.
 #
-# Generalises the example-mirror transform (scripts/lib/mirror.sh's
+# Generalises the example-mirror transform (tools/scripts/lib/mirror.sh's
 # sky_transform_one) into a converter for an arbitrary Sky project directory, not
 # only the committed example set. Given a Sky project tree it applies every known
 # transform — the rename-map token rewrite, the stdlib member moves, Pure
 # desugaring, bare-stdlib qualifier injection, Cmd/Sub shape re-home, the
 # .sky->.ipe + sky.toml->ipe.toml renames — AND translates the manifest's
 # `["go.dependencies"]` into `[rust.dependencies]` via the reviewed Go->Rust
-# crate map (scripts/lib/go-to-rust-crates.tsv).
+# crate map (tools/scripts/lib/go-to-rust-crates.tsv).
 #
 # USAGE
-#   scripts/sky-to-ipe-project.sh <sky-project-dir> [--out <dir>]
+#   tools/scripts/sky-to-ipe-project.sh <sky-project-dir> [--out <dir>]
 #
 #   <sky-project-dir>  a directory holding a Sky project (its sky.toml + src/).
 #                      A bare NAME with no slash is resolved against the committed

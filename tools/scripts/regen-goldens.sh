@@ -21,8 +21,8 @@
 # below mirrors the normalize-on-compare the golden tests apply.
 #
 # Usage:
-#   source scripts/lib/env.sh        # exports IPE_BIN + IPE_RUNTIME_DIR
-#   scripts/regen-goldens.sh [--check]
+#   source tools/scripts/lib/env.sh        # exports IPE_BIN + IPE_RUNTIME_DIR
+#   tools/scripts/regen-goldens.sh [--check]
 #
 # --check regenerates into a scratch dir and DIFFS instead of overwriting,
 # exiting non-zero on any drift (a dry-run gate).
@@ -34,8 +34,8 @@ GOLDEN_ROOT="$REPO/tests/golden"
 CHECK=0
 [[ "${1:-}" == "--check" ]] && CHECK=1
 
-: "${IPE_BIN:?source scripts/lib/env.sh first (IPE_BIN unset)}"
-: "${IPE_RUNTIME_DIR:?source scripts/lib/env.sh first (IPE_RUNTIME_DIR unset)}"
+: "${IPE_BIN:?source tools/scripts/lib/env.sh first (IPE_BIN unset)}"
+: "${IPE_RUNTIME_DIR:?source tools/scripts/lib/env.sh first (IPE_RUNTIME_DIR unset)}"
 
 # The token a blessed golden `Cargo.toml` stores in place of the machine-specific
 # dependency-model runtime path (kept in sync with the golden tests' own

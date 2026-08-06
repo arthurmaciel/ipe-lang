@@ -15,7 +15,7 @@
 # DB defaults to .ipe-index/index.db (gitignored). Agents: prefer this over rg
 # for "where is X defined / who imports Y / which examples exercise a module".
 set -euo pipefail
-REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 BIN="$REPO/tools/ipe-index/target/release/ipe-index"
 if [ ! -x "$BIN" ]; then
     echo "ipe-index: building the Rust binary (first run)…" >&2

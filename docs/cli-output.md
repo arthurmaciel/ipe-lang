@@ -36,7 +36,7 @@ message. Illustrative — the three states of one line, not three commands:
 
 Off a terminal (piped, redirected, or `NO_COLOR`) each step is a single
 flush-left plain line with no spinner, no in-place rewrite, and no ANSI, so
-`curl … | sh` logs and scripts stay clean. The installer (`scripts/install.sh`)
+`curl … | sh` logs and scripts stay clean. The installer (`tools/scripts/install.sh`)
 and `ipe upgrade` render this shape; other commands adopt it incrementally.
 
 ## `--plain` and `--json`

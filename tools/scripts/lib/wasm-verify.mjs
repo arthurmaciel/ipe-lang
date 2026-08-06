@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// scripts/lib/wasm-verify.mjs — browser RUN driver for `--target wasm` SPA
+// tools/scripts/lib/wasm-verify.mjs — browser RUN driver for `--target wasm` SPA
 // examples. Serves the emitted `www/` tree with a local HTTP server (no binary
 // to boot — the WASM runs entirely in the browser), launches headless Chromium,
 // runs the named scenario, and exits 0/1.
