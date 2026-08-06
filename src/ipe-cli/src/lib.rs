@@ -4385,7 +4385,7 @@ fn run_version(rest: &[String]) -> Result<(), CliError> {
 /// uses. `ipe upgrade` re-runs it to fetch the latest release binary and install
 /// it over the current one.
 const INSTALL_SH_URL: &str =
-    "https://raw.githubusercontent.com/arthurmaciel/ipe-lang/main/scripts/install.sh";
+    "https://raw.githubusercontent.com/arthurmaciel/ipe-lang/main/tools/scripts/install.sh";
 
 /// `ipe upgrade [--dry-run]` — self-update by re-running the release installer.
 ///
