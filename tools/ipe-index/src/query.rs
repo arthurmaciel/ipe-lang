@@ -1,6 +1,7 @@
 use crate::store::Store;
 use anyhow::Result;
-use std::collections::HashSet;
+use regex::Regex;
+use std::collections::{HashMap, HashSet};
 
 pub fn cmd_locate(db: &str, name: &str) -> Result<()> {
     use std::io::Write;
@@ -414,4 +415,601 @@ fn find_crate_root(src_file: &std::path::Path) -> Option<String> {
         };
     }
     None
+}
+
+/// A5 `links <uid>`: outgoing links and callgraph calls of one unit.
+/// Internal link targets resolve to the callee unit's qualified name (via the
+/// `to_uid` join); external refs keep the raw URL. One text line per row.
+pub fn cmd_links(db: &str, uid: &str) -> Result<()> {
+    use std::io::Write;
+    let s = Store::open(db)?;
+    let stdout = std::io::stdout();
+    let mut locked = stdout.lock();
+
+    macro_rules! writeln_bp {
+        ($($arg:tt)*) => {
+            if let Err(e) = writeln!(locked, $($arg)*) {
+                if e.kind() == std::io::ErrorKind::BrokenPipe { return Ok(()); }
+                return Err(e.into());
+            }
+        };
+    }
+
+    let mut any = false;
+    let mut st = s.conn.prepare(
+        "SELECT l.to_kind, COALESCE(u.qualified, l.to_ref), l.line \
+         FROM links l LEFT JOIN units u ON u.uid = l.to_uid \
+         WHERE l.from_uid = ?1 ORDER BY l.line, l.to_kind",
+    )?;
+    let rows = st.query_map([uid], |r| {
+        Ok((
+            r.get::<_, String>(0)?,
+            r.get::<_, String>(1)?,
+            r.get::<_, i64>(2)?,
+        ))
+    })?;
+    for r in rows {
+        let (kind, target, line) = r?;
+        writeln_bp!("{kind:<8} {target} (line {line})");
+        any = true;
+    }
+    let mut st = s.conn.prepare(
+        "SELECT u.qualified FROM callgraph c JOIN units u ON u.uid = c.callee_uid \
+         WHERE c.caller_uid = ?1 ORDER BY u.qualified",
+    )?;
+    let rows = st.query_map([uid], |r| r.get::<_, String>(0))?;
+    for r in rows {
+        writeln_bp!("call     {}", r?);
+        any = true;
+    }
+    if !any {
+        writeln_bp!("(no links or calls for {uid})");
+    }
+    Ok(())
+}
+
+/// A5 `neighbors <uid>`: links + callgraph edges in BOTH directions around a
+/// unit. `link-out`/`call` originate at the unit; `link-in`/`called-by` point
+/// at it. One text line per row.
+pub fn cmd_neighbors(db: &str, uid: &str) -> Result<()> {
+    use std::io::Write;
+    let s = Store::open(db)?;
+    let stdout = std::io::stdout();
+    let mut locked = stdout.lock();
+
+    macro_rules! writeln_bp {
+        ($($arg:tt)*) => {
+            if let Err(e) = writeln!(locked, $($arg)*) {
+                if e.kind() == std::io::ErrorKind::BrokenPipe { return Ok(()); }
+                return Err(e.into());
+            }
+        };
+    }
+
+    let mut st = s.conn.prepare(
+        "SELECT 'link-out', COALESCE(u.qualified, l.to_ref), l.line \
+         FROM links l LEFT JOIN units u ON u.uid = l.to_uid \
+         WHERE l.from_uid = ?1 \
+         UNION ALL \
+         SELECT 'link-in', COALESCE(u.qualified, l.to_ref), l.line \
+         FROM links l LEFT JOIN units u ON u.uid = l.from_uid \
+         WHERE l.to_uid = ?1 \
+         UNION ALL \
+         SELECT 'call', u.qualified, 0 \
+         FROM callgraph c JOIN units u ON u.uid = c.callee_uid WHERE c.caller_uid = ?1 \
+         UNION ALL \
+         SELECT 'called-by', u.qualified, 0 \
+         FROM callgraph c JOIN units u ON u.uid = c.caller_uid WHERE c.callee_uid = ?1 \
+         ORDER BY 1, 3, 2",
+    )?;
+    let rows = st.query_map([uid], |r| {
+        Ok((
+            r.get::<_, String>(0)?,
+            r.get::<_, String>(1)?,
+            r.get::<_, i64>(2)?,
+        ))
+    })?;
+    let mut any = false;
+    for r in rows {
+        let (dir, target, line) = r?;
+        writeln_bp!("{dir:<9} {target} (line {line})");
+        any = true;
+    }
+    if !any {
+        writeln_bp!("(no neighbors for {uid})");
+    }
+    Ok(())
+}
+
+/// A6 `pending`: change-queue rows as JSON lines (one object per queued unit).
+/// `--since <sha>` excludes rows enqueued by that update run (empty matches
+/// everything); `--limit N` caps the result. Deleted units join to NULL unit
+/// columns (their `units` row is gone), so `qualified`/`path`/`kind` are null.
+pub fn cmd_pending(db: &str, since: Option<&str>, limit: Option<i64>) -> Result<()> {
+    use std::io::Write;
+    let s = Store::open(db)?;
+    let stdout = std::io::stdout();
+    let mut locked = stdout.lock();
+
+    macro_rules! writeln_bp {
+        ($($arg:tt)*) => {
+            if let Err(e) = writeln!(locked, $($arg)*) {
+                if e.kind() == std::io::ErrorKind::BrokenPipe { return Ok(()); }
+                return Err(e.into());
+            }
+        };
+    }
+
+    // `?1 = ''` short-circuits when no --since was given (match all rows).
+    // Ordering: modified first, then new, then deleted; ties by enqueue time.
+    // `LIMIT -1` is SQLite's "no upper bound" — binding NULL would raise a
+    // datatype-mismatch error, so an absent --limit becomes -1.
+    let since_str = since.unwrap_or("");
+    let limit_val = limit.unwrap_or(-1);
+    let mut st = s.conn.prepare(
+        "SELECT q.uid, q.change, q.old_hash, q.new_hash, q.enqueued_sha, q.enqueued_at, \
+                u.qualified, u.path, u.kind \
+         FROM change_queue q LEFT JOIN units u ON u.uid = q.uid \
+         WHERE (?1 = '' OR q.enqueued_sha != ?1) \
+         ORDER BY CASE q.change WHEN 'modified' THEN 0 WHEN 'new' THEN 1 ELSE 2 END, \
+                  q.enqueued_at, q.uid \
+         LIMIT ?2",
+    )?;
+    let rows = st.query_map(rusqlite::params![since_str, limit_val], |r| {
+        Ok(serde_json::json!({
+            "uid": r.get::<_, String>(0)?,
+            "change": r.get::<_, String>(1)?,
+            "old_hash": r.get::<_, Option<String>>(2)?,
+            "new_hash": r.get::<_, Option<String>>(3)?,
+            "enqueued_sha": r.get::<_, String>(4)?,
+            "enqueued_at": r.get::<_, i64>(5)?,
+            "qualified": r.get::<_, Option<String>>(6)?,
+            "path": r.get::<_, Option<String>>(7)?,
+            "kind": r.get::<_, Option<String>>(8)?,
+        }))
+    })?;
+    for r in rows {
+        writeln_bp!("{}", serde_json::to_string(&r?)?);
+    }
+    Ok(())
+}
+
+/// A7 `rename-path <old> [--to <new>]`: whole-segment path match across
+/// files, symbols, units, import edges (dst/resolved), and links (to_ref).
+/// Outputs JSON lines: {kind,path,line,col,context,replacement?}.
+/// kind ∈ {file,symbol,unit,import,link}. Read-only.
+pub fn cmd_rename_path(db: &str, old: &str, to: Option<&str>) -> Result<()> {
+    use std::io::Write;
+    let s = Store::open(db)?;
+    let stdout = std::io::stdout();
+    let mut locked = stdout.lock();
+
+    macro_rules! writeln_bp {
+        ($($arg:tt)*) => {
+            if let Err(e) = writeln!(locked, $($arg)*) {
+                if e.kind() == std::io::ErrorKind::BrokenPipe { return Ok(()); }
+                return Err(e.into());
+            }
+        };
+    }
+
+    let mut sites = Vec::new();
+
+    // files.path == old OR LIKE old + '/%'
+    {
+        let mut st = s
+            .conn
+            .prepare("SELECT path FROM files WHERE path = ?1 OR path LIKE ?2")?;
+        let rows = st.query_map([old, &format!("{old}/%")], |r| r.get::<_, String>(0))?;
+        for r in rows {
+            let path = r?;
+            let replacement = to.map(|t| {
+                if path == old {
+                    t.to_string()
+                } else {
+                    format!("{t}{}", &path[old.len()..])
+                }
+            });
+            sites.push(serde_json::json!({
+                "kind": "file",
+                "path": path,
+                "line": 0,
+                "col": 0,
+                "context": path,
+                "replacement": replacement,
+            }));
+        }
+    }
+
+    // symbols.file == old OR LIKE old + '/%'
+    {
+        let mut st = s
+            .conn
+            .prepare("SELECT file, line, col, name FROM symbols WHERE file = ?1 OR file LIKE ?2")?;
+        let rows = st.query_map([old, &format!("{old}/%")], |r| {
+            Ok((
+                r.get::<_, String>(0)?,
+                r.get::<_, i64>(1)?,
+                r.get::<_, i64>(2)?,
+                r.get::<_, String>(3)?,
+            ))
+        })?;
+        for r in rows {
+            let (file, line, col, name) = r?;
+            let replacement = to.map(|t| {
+                if file == old {
+                    t.to_string()
+                } else {
+                    format!("{t}{}", &file[old.len()..])
+                }
+            });
+            sites.push(serde_json::json!({
+                "kind": "symbol",
+                "path": file,
+                "line": line,
+                "col": col,
+                "context": name,
+                "replacement": replacement,
+            }));
+        }
+    }
+
+    // units.path == old OR LIKE old + '/%'
+    {
+        let mut st = s.conn.prepare(
+            "SELECT path, line_start, qualified FROM units WHERE path = ?1 OR path LIKE ?2",
+        )?;
+        let rows = st.query_map([old, &format!("{old}/%")], |r| {
+            Ok((
+                r.get::<_, String>(0)?,
+                r.get::<_, i64>(1)?,
+                r.get::<_, String>(2)?,
+            ))
+        })?;
+        for r in rows {
+            let (path, line, qualified) = r?;
+            let replacement = to.map(|t| {
+                if path == old {
+                    t.to_string()
+                } else {
+                    format!("{t}{}", &path[old.len()..])
+                }
+            });
+            sites.push(serde_json::json!({
+                "kind": "unit",
+                "path": path,
+                "line": line,
+                "col": 0,
+                "context": qualified,
+                "replacement": replacement,
+            }));
+        }
+    }
+
+    // import edges: dst == old OR resolved == old OR dst LIKE old + '.%' OR resolved LIKE old + '.%'
+    {
+        let mut st = s.conn.prepare(
+            "SELECT src, dst, resolved FROM edges WHERE kind='import' AND (dst = ?1 OR resolved = ?1 OR dst LIKE ?2 OR resolved LIKE ?2)",
+        )?;
+        let rows = st.query_map([old, &format!("{old}.%")], |r| {
+            Ok((
+                r.get::<_, String>(0)?,
+                r.get::<_, String>(1)?,
+                r.get::<_, Option<String>>(2)?,
+            ))
+        })?;
+        for r in rows {
+            let (src, dst, resolved) = r?;
+            let hit = if dst == old || resolved.as_deref() == Some(old) {
+                old
+            } else if dst.starts_with(&format!("{old}.")) {
+                &dst
+            } else {
+                &resolved.unwrap_or_default()
+            };
+            let replacement = to.map(|t| {
+                if hit == old {
+                    t.to_string()
+                } else {
+                    format!("{t}{}", &hit[old.len()..])
+                }
+            });
+            sites.push(serde_json::json!({
+                "kind": "import",
+                "path": src,
+                "line": 0,
+                "col": 0,
+                "context": dst,
+                "replacement": replacement,
+            }));
+        }
+    }
+
+    // links.to_ref == old OR LIKE old + '.%' (join units for path/line)
+    {
+        let mut st = s.conn.prepare(
+            "SELECT l.to_ref, u.path, l.line FROM links l JOIN units u ON u.uid = l.from_uid WHERE l.to_ref = ?1 OR l.to_ref LIKE ?2",
+        )?;
+        let rows = st.query_map([old, &format!("{old}.%")], |r| {
+            Ok((
+                r.get::<_, String>(0)?,
+                r.get::<_, String>(1)?,
+                r.get::<_, i64>(2)?,
+            ))
+        })?;
+        for r in rows {
+            let (to_ref, path, line) = r?;
+            let replacement = to.map(|t| {
+                if to_ref == old {
+                    t.to_string()
+                } else {
+                    format!("{t}{}", &to_ref[old.len()..])
+                }
+            });
+            sites.push(serde_json::json!({
+                "kind": "link",
+                "path": path,
+                "line": line,
+                "col": 0,
+                "context": to_ref,
+                "replacement": replacement,
+            }));
+        }
+    }
+
+    // Sort for deterministic output
+    sites.sort_by(|a, b| {
+        let a_path = a.get("path").and_then(|v| v.as_str()).unwrap_or("");
+        let b_path = b.get("path").and_then(|v| v.as_str()).unwrap_or("");
+        let a_line = a.get("line").and_then(|v| v.as_i64()).unwrap_or(0);
+        let b_line = b.get("line").and_then(|v| v.as_i64()).unwrap_or(0);
+        let a_kind = a.get("kind").and_then(|v| v.as_str()).unwrap_or("");
+        let b_kind = b.get("kind").and_then(|v| v.as_str()).unwrap_or("");
+        let a_ctx = a.get("context").and_then(|v| v.as_str()).unwrap_or("");
+        let b_ctx = b.get("context").and_then(|v| v.as_str()).unwrap_or("");
+        a_path
+            .cmp(b_path)
+            .then(a_line.cmp(&b_line))
+            .then(a_kind.cmp(b_kind))
+            .then(a_ctx.cmp(b_ctx))
+    });
+
+    for site in sites {
+        writeln_bp!("{}", serde_json::to_string(&site)?);
+    }
+    Ok(())
+}
+
+/// A8 `rename-symbol <old> [--to <new>] [--preserve <regex>...] [--map k=v,...]`:
+/// finds resolved occurrences of a symbol name (units/links). Outputs JSON lines:
+/// {kind,path,line,col,context,replacement?}. kind ∈ {symbol,occurrence}.
+/// --preserve: user regexes + baked defaults (URL-ish, kebab-case attrs).
+/// --map: k=v comma-separated, longest-key-first overrides correlated replacements.
+/// Read-only.
+pub fn cmd_rename_symbol(
+    db: &str,
+    old: &str,
+    to: Option<&str>,
+    preserves: &[String],
+    map: Option<&str>,
+) -> Result<()> {
+    use std::io::Write;
+    let s = Store::open(db)?;
+    let stdout = std::io::stdout();
+    let mut locked = stdout.lock();
+
+    macro_rules! writeln_bp {
+        ($($arg:tt)*) => {
+            if let Err(e) = writeln!(locked, $($arg)*) {
+                if e.kind() == std::io::ErrorKind::BrokenPipe { return Ok(()); }
+                return Err(e.into());
+            }
+        };
+    }
+
+    // Compile user preserves + baked defaults
+    let mut preserve_regexes = Vec::new();
+    // Baked defaults: URL-ish (contains ://), kebab-case attrs
+    preserve_regexes.push(Regex::new(r".*://.*").unwrap());
+    preserve_regexes.push(Regex::new(r"(?i)^[a-z]+(-[a-z]+)+$").unwrap());
+    for p in preserves {
+        preserve_regexes.push(
+            Regex::new(p).map_err(|e| anyhow::anyhow!("invalid --preserve regex {p:?}: {e}"))?,
+        );
+    }
+
+    // Parse --map k=v,... longest-key-first
+    let mut map_vec = Vec::new();
+    if let Some(m) = map {
+        for pair in m.split(',') {
+            if let Some((k, v)) = pair.split_once('=') {
+                map_vec.push((k.to_string(), v.to_string()));
+            }
+        }
+        map_vec.sort_by(|a, b| b.0.len().cmp(&a.0.len()));
+    }
+
+    let mut sites = Vec::new();
+
+    // 1. Symbol-table sites: units whose qualified ends with ::old or .old (final component)
+    {
+        let mut st = s.conn.prepare(
+            "SELECT path, line_start, qualified FROM units WHERE qualified = ?1 OR qualified LIKE ?2 OR qualified LIKE ?3",
+        )?;
+        let rows = st.query_map([old, &format!("%::{old}"), &format!("%.{old}")], |r| {
+            Ok((
+                r.get::<_, String>(0)?,
+                r.get::<_, i64>(1)?,
+                r.get::<_, String>(2)?,
+            ))
+        })?;
+        for r in rows {
+            let (path, line, qualified) = r?;
+            let replacement = to.map(|t| {
+                // Replace final segment
+                if let Some(idx) = qualified.rfind(':').or_else(|| qualified.rfind('.')) {
+                    format!("{}::{t}", &qualified[..idx + 1])
+                } else {
+                    t.to_string()
+                }
+            });
+            sites.push(serde_json::json!({
+                "kind": "symbol",
+                "path": path,
+                "line": line,
+                "col": 0,
+                "context": qualified,
+                "replacement": replacement,
+            }));
+        }
+    }
+
+    // 2. Occurrence sites: scan unit source spans for whole-token matches
+    // Load all units with their spans
+    let units: Vec<(String, String, i64, i64, String)> = {
+        let mut st = s
+            .conn
+            .prepare("SELECT uid, path, line_start, line_end, qualified FROM units")?;
+        st.query_map([], |r| {
+            Ok((
+                r.get::<_, String>(0)?,
+                r.get::<_, String>(1)?,
+                r.get::<_, i64>(2)?,
+                r.get::<_, i64>(3)?,
+                r.get::<_, String>(4)?,
+            ))
+        })?
+        .collect::<std::result::Result<_, _>>()?
+    };
+
+    // Cache file lines per path
+    let mut line_cache: HashMap<String, Vec<String>> = HashMap::new();
+
+    for (_uid, path, line_start, line_end, _qualified) in units {
+        // Read file lines (tagged path: tag:rel)
+        let lines = if let Some(cached) = line_cache.get(&path) {
+            cached.clone()
+        } else {
+            // Extract repo root from tagged path
+            let (tag, rel) = if let Some(idx) = path.find(':') {
+                (&path[..idx], &path[idx + 1..])
+            } else {
+                ("", path.as_str())
+            };
+            // Find repo root from tag (we only have one repo in practice: ipe:.)
+            let repo_root = if tag == "ipe" { "." } else { "." };
+            let full_path = std::path::Path::new(repo_root).join(rel);
+            let content = std::fs::read_to_string(&full_path).unwrap_or_default();
+            let lines: Vec<String> = content.lines().map(|s| s.to_string()).collect();
+            line_cache.insert(path.clone(), lines.clone());
+            lines
+        };
+
+        // Clamp span to file bounds
+        let start = (line_start as usize).max(1).min(lines.len());
+        let end = (line_end as usize).max(start).min(lines.len());
+
+        for line_no in start..=end {
+            let line = &lines[line_no - 1];
+            // Simple whole-token scan for `old`
+            // Token = [A-Za-z0-9_$]+
+            let mut col = 0usize;
+            let bytes = line.as_bytes();
+            while col < bytes.len() {
+                // Skip non-ident chars
+                while col < bytes.len() && !is_ident_start(bytes[col]) {
+                    col += 1;
+                }
+                if col >= bytes.len() {
+                    break;
+                }
+                let token_start = col;
+                while col < bytes.len() && is_ident_char(bytes[col]) {
+                    col += 1;
+                }
+                let token = &line[token_start..col];
+                if token == old {
+                    // Check preserves
+                    let mut skip = false;
+                    for re in &preserve_regexes {
+                        if re.is_match(token) {
+                            skip = true;
+                            break;
+                        }
+                    }
+                    if skip {
+                        continue;
+                    }
+
+                    // Check map override
+                    let replacement = to.map(|t| {
+                        map_vec
+                            .iter()
+                            .find(|(k, _)| k == token)
+                            .map(|(_, v)| v.clone())
+                            .unwrap_or_else(|| t.to_string())
+                    });
+
+                    sites.push(serde_json::json!({
+                        "kind": "occurrence",
+                        "path": path,
+                        "line": line_no as i64,
+                        "col": token_start as i64 + 1,
+                        "context": line.trim(),
+                        "replacement": replacement,
+                    }));
+                }
+            }
+        }
+    }
+
+    // Deduplicate by (path, line, col, kind)
+    use std::collections::HashSet;
+    let mut seen = HashSet::new();
+    let mut deduped = Vec::new();
+    for s in sites {
+        let key = (
+            s.get("path")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string(),
+            s.get("line").and_then(|v| v.as_i64()).unwrap_or(0),
+            s.get("col").and_then(|v| v.as_i64()).unwrap_or(0),
+            s.get("kind")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string(),
+        );
+        if seen.insert(key) {
+            deduped.push(s);
+        }
+    }
+    let mut sites = deduped;
+
+    // Sort for deterministic output
+    sites.sort_by(|a, b| {
+        let a_path = a.get("path").and_then(|v| v.as_str()).unwrap_or("");
+        let b_path = b.get("path").and_then(|v| v.as_str()).unwrap_or("");
+        let a_line = a.get("line").and_then(|v| v.as_i64()).unwrap_or(0);
+        let b_line = b.get("line").and_then(|v| v.as_i64()).unwrap_or(0);
+        let a_kind = a.get("kind").and_then(|v| v.as_str()).unwrap_or("");
+        let b_kind = b.get("kind").and_then(|v| v.as_str()).unwrap_or("");
+        a_path
+            .cmp(b_path)
+            .then(a_line.cmp(&b_line))
+            .then(a_kind.cmp(b_kind))
+    });
+
+    for site in sites {
+        writeln_bp!("{}", serde_json::to_string(&site)?);
+    }
+    Ok(())
+}
+
+fn is_ident_start(b: u8) -> bool {
+    b.is_ascii_alphabetic() || b == b'_' || b == b'$'
+}
+
+fn is_ident_char(b: u8) -> bool {
+    b.is_ascii_alphanumeric() || b == b'_' || b == b'$'
 }

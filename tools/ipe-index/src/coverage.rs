@@ -29,7 +29,12 @@ mod tests {
     #[test]
     fn ignores_local_imports() {
         let s = Store::open(":memory:").unwrap();
-        record_coverage(&s, "examples/x/src/Main.ipe", "import State\nimport Update\n").unwrap();
+        record_coverage(
+            &s,
+            "examples/x/src/Main.ipe",
+            "import State\nimport Update\n",
+        )
+        .unwrap();
         assert_eq!(s.count("edges").unwrap(), 0);
     }
 }

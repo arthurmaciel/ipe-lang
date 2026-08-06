@@ -23,16 +23,28 @@ pub struct IpeScan {
 }
 
 /// `module X.Y exposing (..)` or `module X.Y` / `module X.Y exposing (a, b)`.
-fn re_module() -> &'static Regex { static R: OnceLock<Regex> = OnceLock::new(); R.get_or_init(|| Regex::new(r"^module\s+([\w.]+)(?:\s+exposing\s*\(([^)]*)\))?").unwrap()) }
-fn re_import() -> &'static Regex { static R: OnceLock<Regex> = OnceLock::new(); R.get_or_init(|| Regex::new(r"^import\s+([\w.]+)").unwrap()) }
+fn re_module() -> &'static Regex {
+    static R: OnceLock<Regex> = OnceLock::new();
+    R.get_or_init(|| Regex::new(r"^module\s+([\w.]+)(?:\s+exposing\s*\(([^)]*)\))?").unwrap())
+}
+fn re_import() -> &'static Regex {
+    static R: OnceLock<Regex> = OnceLock::new();
+    R.get_or_init(|| Regex::new(r"^import\s+([\w.]+)").unwrap())
+}
 /// A candidate top-level binding: a lowercase identifier followed by
 /// whitespace. Declarations that are not bindings (`module`, `import`,
 /// `exposing`, `let`) are excluded — the regex would otherwise capture them as
 /// bogus "bindings".
-fn re_binding() -> &'static Regex { static R: OnceLock<Regex> = OnceLock::new(); R.get_or_init(|| Regex::new(r"^([a-z][\w]*)\s").unwrap()) }
+fn re_binding() -> &'static Regex {
+    static R: OnceLock<Regex> = OnceLock::new();
+    R.get_or_init(|| Regex::new(r"^([a-z][\w]*)\s").unwrap())
+}
 
 fn is_decl(line: &str) -> bool {
-    line.starts_with("module ") || line.starts_with("import ") || line.starts_with("exposing") || line.starts_with("let ")
+    line.starts_with("module ")
+        || line.starts_with("import ")
+        || line.starts_with("exposing")
+        || line.starts_with("let ")
 }
 
 pub fn scan_ipe(src: &str) -> IpeScan {
@@ -51,16 +63,26 @@ pub fn scan_ipe(src: &str) -> IpeScan {
                 exposing = if raw == ".." {
                     vec!["..".to_string()]
                 } else {
-                    raw.split(',').map(|s| s.trim().to_string()).filter(|s| !s.is_empty()).collect()
+                    raw.split(',')
+                        .map(|s| s.trim().to_string())
+                        .filter(|s| !s.is_empty())
+                        .collect()
                 };
             }
             continue;
         }
-        if let Some(c) = re_import().captures(line) { imports.push(c[1].to_string()); continue; }
-        if is_decl(line) { continue; }
+        if let Some(c) = re_import().captures(line) {
+            imports.push(c[1].to_string());
+            continue;
+        }
+        if is_decl(line) {
+            continue;
+        }
         if let Some(c) = re_binding().captures(line) {
             let b = c[1].to_string();
-            if seen.insert(b.clone()) { names.push((b, lineno)); }
+            if seen.insert(b.clone()) {
+                names.push((b, lineno));
+            }
         }
     }
     let bindings = names
@@ -68,10 +90,19 @@ pub fn scan_ipe(src: &str) -> IpeScan {
         .enumerate()
         .map(|(idx, (name, line))| {
             let end = names.get(idx + 1).map_or(src.lines().count(), |(_, l)| *l);
-            IpeBinding { name: name.clone(), line: *line as i64 + 1, line_end: end as i64 }
+            IpeBinding {
+                name: name.clone(),
+                line: *line as i64 + 1,
+                line_end: end as i64,
+            }
         })
         .collect();
-    IpeScan { module, exposing, imports, bindings }
+    IpeScan {
+        module,
+        exposing,
+        imports,
+        bindings,
+    }
 }
 
 /// Is this binding exported from its module (`exposing (..)` exports all)?
@@ -90,7 +121,7 @@ pub fn doc_purpose(src: &str, line: i64) -> Option<String> {
         let t = l.trim_start();
         if let Some(rest) = t.strip_prefix("--") {
             // The FIRST line of the block is the topmost (last visited).
-            top = Some(rest.trim_start_matches(|c| c == ' ' || c == '|').trim().to_string());
+            top = Some(rest.trim_start_matches([' ', '|']).trim().to_string());
         } else {
             break;
         }
@@ -120,14 +151,20 @@ mod tests {
         assert!(r.bindings.iter().any(|b| b.name == "head"));
         assert!(r.bindings.iter().any(|b| b.name == "map"));
         // module/import/exposing/let are NOT bindings.
-        assert!(r.bindings.iter().all(|b| b.name != "module" && b.name != "import" && b.name != "exposing" && b.name != "let"));
+        assert!(r.bindings.iter().all(|b| b.name != "module"
+            && b.name != "import"
+            && b.name != "exposing"
+            && b.name != "let"));
     }
 
     #[test]
     fn exposing_list_membership() {
         let src = "module X exposing (render, renderInline)\nrender s = s\nhelper x = x\n";
         let r = scan_ipe(src);
-        assert_eq!(r.exposing, vec!["render".to_string(), "renderInline".to_string()]);
+        assert_eq!(
+            r.exposing,
+            vec!["render".to_string(), "renderInline".to_string()]
+        );
         assert!(is_pub(&r.exposing, "render"));
         assert!(!is_pub(&r.exposing, "helper"));
         assert!(is_pub(&["..".to_string()], "anything"));

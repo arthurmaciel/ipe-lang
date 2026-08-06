@@ -1,8 +1,10 @@
-use crate::model::{Facing, Kind, Unit};
-use anyhow::{bail, Result};
+use crate::model::{Kind, Unit};
+use anyhow::{Result, bail};
 use rusqlite::Connection;
 
-pub struct Store { pub conn: Connection }
+pub struct Store {
+    pub conn: Connection,
+}
 
 /// Schema v2 — additive over v1: `units`/`links`/`callgraph`/`change_queue`
 /// are the review backbone. All `CREATE … IF NOT EXISTS` so an old DB gains
@@ -43,6 +45,7 @@ CREATE TABLE IF NOT EXISTS links (
 );
 CREATE INDEX IF NOT EXISTS i_links_from ON links(from_uid);
 CREATE INDEX IF NOT EXISTS i_links_to   ON links(to_uid);
+CREATE UNIQUE INDEX IF NOT EXISTS u_links ON links(from_uid,to_kind,to_uid,to_ref,line);
 CREATE TABLE IF NOT EXISTS callgraph (
   caller_uid TEXT NOT NULL,
   callee_uid TEXT NOT NULL,
@@ -85,53 +88,103 @@ impl Store {
         ensure_schema_version(&conn)?;
         Ok(Store { conn })
     }
-    pub fn begin(&self) -> Result<()> { self.conn.execute_batch("BEGIN;")?; Ok(()) }
-    pub fn commit(&self) -> Result<()> { self.conn.execute_batch("COMMIT;")?; Ok(()) }
-    pub fn put_file(&self, path:&str, lang:&str, role:&str, size:i64, sha:&str) -> Result<()> {
-        self.conn.execute("INSERT OR REPLACE INTO files VALUES (?,?,?,?,?)", rusqlite::params![path,lang,role,size,sha])?; Ok(())
+    pub fn begin(&self) -> Result<()> {
+        self.conn.execute_batch("BEGIN;")?;
+        Ok(())
     }
-    pub fn put_symbol(&self, file:&str, name:&str, kind:&str, line:i64, col:i64) -> Result<()> {
-        self.conn.execute("INSERT INTO symbols VALUES (?,?,?,?,?)", rusqlite::params![file,name,kind,line,col])?; Ok(())
+    pub fn commit(&self) -> Result<()> {
+        self.conn.execute_batch("COMMIT;")?;
+        Ok(())
     }
-    pub fn put_edge(&self, src:&str, dst:&str, kind:&str) -> Result<()> {
-        self.conn.execute("INSERT OR IGNORE INTO edges(src,dst,kind) VALUES (?,?,?)", rusqlite::params![src,dst,kind])?; Ok(())
+    pub fn put_file(&self, path: &str, lang: &str, role: &str, size: i64, sha: &str) -> Result<()> {
+        self.conn.execute(
+            "INSERT OR REPLACE INTO files VALUES (?,?,?,?,?)",
+            rusqlite::params![path, lang, role, size, sha],
+        )?;
+        Ok(())
+    }
+    pub fn put_symbol(
+        &self,
+        file: &str,
+        name: &str,
+        kind: &str,
+        line: i64,
+        col: i64,
+    ) -> Result<()> {
+        self.conn.execute(
+            "INSERT INTO symbols VALUES (?,?,?,?,?)",
+            rusqlite::params![file, name, kind, line, col],
+        )?;
+        Ok(())
+    }
+    pub fn put_edge(&self, src: &str, dst: &str, kind: &str) -> Result<()> {
+        self.conn.execute(
+            "INSERT OR IGNORE INTO edges(src,dst,kind) VALUES (?,?,?)",
+            rusqlite::params![src, dst, kind],
+        )?;
+        Ok(())
     }
     pub fn put_unit(&self, u: &Unit) -> Result<()> {
         let uid = unit_uid(&u.path, u.kind, &u.qualified);
         self.conn.execute(
             "INSERT OR REPLACE INTO units VALUES (?,?,?,?,?,?,?,?,?,?,?)",
             rusqlite::params![
-                uid, u.path, u.kind.as_str(), u.name, u.qualified,
-                u.line_start, u.line_end, u.facing.as_str(), u.purpose,
-                u.body_hash, u.updated_sha
+                uid,
+                u.path,
+                u.kind.as_str(),
+                u.name,
+                u.qualified,
+                u.line_start,
+                u.line_end,
+                u.facing.as_str(),
+                u.purpose,
+                u.body_hash,
+                u.updated_sha
             ],
         )?;
         Ok(())
     }
-    pub fn put_link(&self, from_uid:&str, to_kind:&str, to_uid:Option<&str>, to_ref:&str, line:i64) -> Result<()> {
+    pub fn put_link(
+        &self,
+        from_uid: &str,
+        to_kind: &str,
+        to_uid: Option<&str>,
+        to_ref: &str,
+        line: i64,
+    ) -> Result<()> {
         self.conn.execute(
-            "INSERT INTO links(from_uid,to_kind,to_uid,to_ref,line) VALUES (?,?,?,?,?)",
+            "INSERT OR IGNORE INTO links(from_uid,to_kind,to_uid,to_ref,line) VALUES (?,?,?,?,?)",
             rusqlite::params![from_uid, to_kind, to_uid, to_ref, line],
         )?;
         Ok(())
     }
-    pub fn put_call(&self, caller_uid:&str, callee_uid:&str) -> Result<()> {
+    pub fn put_call(&self, caller_uid: &str, callee_uid: &str) -> Result<()> {
         self.conn.execute(
             "INSERT OR IGNORE INTO callgraph(caller_uid,callee_uid) VALUES (?,?)",
             rusqlite::params![caller_uid, callee_uid],
         )?;
         Ok(())
     }
-    pub fn enqueue_change(&self, uid:&str, change:&str, old_hash:Option<&str>, new_hash:Option<&str>, sha:&str, at:i64) -> Result<()> {
+    pub fn enqueue_change(
+        &self,
+        uid: &str,
+        change: &str,
+        old_hash: Option<&str>,
+        new_hash: Option<&str>,
+        sha: &str,
+        at: i64,
+    ) -> Result<()> {
         self.conn.execute(
             "INSERT OR REPLACE INTO change_queue VALUES (?,?,?,?,?,?)",
             rusqlite::params![uid, change, old_hash, new_hash, sha, at],
         )?;
         Ok(())
     }
-    pub fn drop_file(&self, path:&str) -> Result<()> {
-        self.conn.execute("DELETE FROM files WHERE path=?", [path])?;
-        self.conn.execute("DELETE FROM symbols WHERE file=?", [path])?;
+    pub fn drop_file(&self, path: &str) -> Result<()> {
+        self.conn
+            .execute("DELETE FROM files WHERE path=?", [path])?;
+        self.conn
+            .execute("DELETE FROM symbols WHERE file=?", [path])?;
         self.conn.execute("DELETE FROM edges WHERE src=?", [path])?;
         // Units/links/callgraph are keyed by uid; delete everything owned by
         // this path's units (and links pointing at them).
@@ -145,14 +198,20 @@ impl Store {
              OR callee_uid IN (SELECT uid FROM units WHERE path=?)",
             rusqlite::params![path, path],
         )?;
-        self.conn.execute("DELETE FROM units WHERE path=?", [path])?;
+        self.conn
+            .execute("DELETE FROM units WHERE path=?", [path])?;
         Ok(())
     }
-    pub fn set_meta(&self, k:&str, v:&str) -> Result<()> {
-        self.conn.execute("INSERT OR REPLACE INTO meta VALUES (?,?)", [k,v])?; Ok(())
+    pub fn set_meta(&self, k: &str, v: &str) -> Result<()> {
+        self.conn
+            .execute("INSERT OR REPLACE INTO meta VALUES (?,?)", [k, v])?;
+        Ok(())
     }
-    pub fn get_meta(&self, k:&str) -> Result<Option<String>> {
-        Ok(self.conn.query_row("SELECT v FROM meta WHERE k=?", [k], |r| r.get(0)).ok())
+    pub fn get_meta(&self, k: &str) -> Result<Option<String>> {
+        Ok(self
+            .conn
+            .query_row("SELECT v FROM meta WHERE k=?", [k], |r| r.get(0))
+            .ok())
     }
     pub fn count(&self, table: &str) -> Result<i64> {
         // Defense-in-depth: map table names to static SQL literals instead of formatting.
@@ -172,16 +231,43 @@ impl Store {
     // Used only in unit tests (the CLI `locate` path runs its own SQL);
     // suppress the dead_code lint the non-test build would otherwise fire.
     #[allow(dead_code)]
-    pub fn symbols_named(&self, name:&str) -> Result<Vec<(String,i64,i64)>> {
-        let mut st = self.conn.prepare("SELECT file,line,col FROM symbols WHERE name=? ORDER BY file")?;
+    pub fn symbols_named(&self, name: &str) -> Result<Vec<(String, i64, i64)>> {
+        let mut st = self
+            .conn
+            .prepare("SELECT file,line,col FROM symbols WHERE name=? ORDER BY file")?;
         let rows = st.query_map([name], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?;
-        Ok(rows.collect::<std::result::Result<_,_>>()?)
+        Ok(rows.collect::<std::result::Result<_, _>>()?)
+    }
+    /// Every (uid, body_hash) pair for a path — the old/new snapshots the
+    /// update loop diffs (A6) to decide what enters the change queue.
+    pub fn units_for_path(&self, path: &str) -> Result<Vec<(String, String)>> {
+        let mut st = self
+            .conn
+            .prepare("SELECT uid, body_hash FROM units WHERE path=? ORDER BY uid")?;
+        let rows = st.query_map([path], |r| Ok((r.get(0)?, r.get(1)?)))?;
+        Ok(rows.collect::<std::result::Result<_, _>>()?)
+    }
+    /// Resolve a unit by exact qualified name (A5 callee lookup). Prefers a
+    /// same-path match — several indexed crates can each own a `crate::run` —
+    /// then falls back to any exact match. `None` when no unit qualifies.
+    pub fn uid_for_qualified(&self, qualified: &str, path: &str) -> Result<Option<String>> {
+        Ok(self
+            .conn
+            .query_row(
+                "SELECT uid FROM units WHERE qualified=?1 \
+             ORDER BY (path=?2) DESC, uid LIMIT 1",
+                rusqlite::params![qualified, path],
+                |r| r.get(0),
+            )
+            .ok())
     }
 }
 
 fn ensure_schema_version(conn: &Connection) -> Result<()> {
     let current: Option<String> = conn
-        .query_row("SELECT v FROM meta WHERE k='schema_version'", [], |r| r.get(0))
+        .query_row("SELECT v FROM meta WHERE k='schema_version'", [], |r| {
+            r.get(0)
+        })
         .ok();
     if current.as_deref() != Some(SCHEMA_VERSION) {
         conn.execute(
@@ -195,10 +281,12 @@ fn ensure_schema_version(conn: &Connection) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::model::Facing;
     #[test]
     fn roundtrip() {
         let s = Store::open(":memory:").unwrap();
-        s.put_file("a.rs", "rs", "runtime-rs", 10, "deadbeef").unwrap();
+        s.put_file("a.rs", "rs", "runtime-rs", 10, "deadbeef")
+            .unwrap();
         s.put_symbol("a.rs", "list_head", "fn", 5, 0).unwrap();
         s.put_edge("a.rs", "b.rs", "import").unwrap();
         assert_eq!(s.count("files").unwrap(), 1);
@@ -242,11 +330,14 @@ mod tests {
     #[test]
     fn unit_roundtrip_dedups_by_uid() {
         let s = Store::open(":memory:").unwrap();
-        s.put_unit(&sample_unit("src/a.rs", "foo", "crate::foo")).unwrap();
-        s.put_unit(&sample_unit("src/a.rs", "foo", "crate::foo")).unwrap(); // same uid — replace
+        s.put_unit(&sample_unit("src/a.rs", "foo", "crate::foo"))
+            .unwrap();
+        s.put_unit(&sample_unit("src/a.rs", "foo", "crate::foo"))
+            .unwrap(); // same uid — replace
         assert_eq!(s.count("units").unwrap(), 1);
         // A different qualified name is a different unit.
-        s.put_unit(&sample_unit("src/a.rs", "bar", "crate::bar")).unwrap();
+        s.put_unit(&sample_unit("src/a.rs", "bar", "crate::bar"))
+            .unwrap();
         assert_eq!(s.count("units").unwrap(), 2);
     }
 
@@ -264,8 +355,17 @@ mod tests {
             .execute(
                 "INSERT INTO units VALUES (?,?,?,?,?,?,?,?,?,?,?)",
                 rusqlite::params![
-                    "uid", "p", "bogus", "n", "q", 1, 2, "internal", None::<String>,
-                    "h", "sha"
+                    "uid",
+                    "p",
+                    "bogus",
+                    "n",
+                    "q",
+                    1,
+                    2,
+                    "internal",
+                    None::<String>,
+                    "h",
+                    "sha"
                 ],
             )
             .unwrap_err();
@@ -276,9 +376,11 @@ mod tests {
     fn drop_file_removes_owned_rows() {
         let s = Store::open(":memory:").unwrap();
         s.put_file("src/a.rs", "rs", "compiler-rs", 10, "").unwrap();
-        s.put_unit(&sample_unit("src/a.rs", "foo", "crate::foo")).unwrap();
+        s.put_unit(&sample_unit("src/a.rs", "foo", "crate::foo"))
+            .unwrap();
         let uid = unit_uid("src/a.rs", Kind::Fn, "crate::foo");
-        s.put_link(&uid, "internal", Some(&uid), "crate::foo", 3).unwrap();
+        s.put_link(&uid, "internal", Some(&uid), "crate::foo", 3)
+            .unwrap();
         s.put_call(&uid, &uid).unwrap();
         assert_eq!(s.count("units").unwrap(), 1);
         assert_eq!(s.count("links").unwrap(), 1);

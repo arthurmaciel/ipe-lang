@@ -1,4 +1,5 @@
 mod coverage;
+mod diff;
 mod extract;
 mod model;
 mod pipeline;
@@ -79,6 +80,51 @@ enum Cmd {
         /// Also match submodules (e.g. `Ipe.Core.List` also matches `Ipe.Core.List.Foo`).
         #[arg(long)]
         subtree: bool,
+    },
+    /// Outgoing links + calls of a unit (by uid).
+    Links {
+        uid: String,
+        #[arg(long, default_value = ".ipe-index/index.db")]
+        db: String,
+    },
+    /// Links + callgraph neighbors of a unit in both directions (by uid).
+    Neighbors {
+        uid: String,
+        #[arg(long, default_value = ".ipe-index/index.db")]
+        db: String,
+    },
+    /// Change-queue rows as JSON lines. `--since <sha>` excludes rows enqueued
+    /// by that update run; `--limit N` caps the output.
+    Pending {
+        #[arg(long)]
+        since: Option<String>,
+        #[arg(long)]
+        limit: Option<i64>,
+        #[arg(long, default_value = ".ipe-index/index.db")]
+        db: String,
+    },
+    /// Find all edit sites for a path rename (whole-segment match). `--to <new>`
+    /// emits replacement paths. Read-only.
+    RenamePath {
+        old: String,
+        #[arg(long)]
+        to: Option<String>,
+        #[arg(long, default_value = ".ipe-index/index.db")]
+        db: String,
+    },
+    /// Find all resolved occurrences of a symbol name (units/links). `--to <new>`
+    /// emits replacements; `--preserve <regex>...` skips matches; `--map k=v,...`
+    /// correlates longest-key-first. Read-only.
+    RenameSymbol {
+        old: String,
+        #[arg(long)]
+        to: Option<String>,
+        #[arg(long)]
+        preserve: Vec<String>,
+        #[arg(long)]
+        map: Option<String>,
+        #[arg(long, default_value = ".ipe-index/index.db")]
+        db: String,
     },
 }
 
@@ -217,11 +263,22 @@ fn cmd_update(repo_specs: &[String], db: &str) -> Result<()> {
             }
         };
         let (ups, dels) = walk::changed(root, &since)?;
+        // One timestamp per repo so A6 events order stably within the run
+        // (enqueued_at is a tiebreaker in `pending`'s ORDER BY).
+        let now = diff::now_millis();
         for d in &dels {
-            store.drop_file(&format!("{tag}:{d}"))?;
+            let tagged = format!("{tag}:{d}");
+            // Snapshot the removed units BEFORE the drop so each one can be
+            // queued as `deleted` with its last-known body hash.
+            let old = store.units_for_path(&tagged)?;
+            store.drop_file(&tagged)?;
+            for (uid, h) in old {
+                store.enqueue_change(&uid, "deleted", Some(&h), None, &sha, now)?;
+            }
         }
         for f in &ups {
             let tagged = format!("{tag}:{}", f.path);
+            let old = store.units_for_path(&tagged)?;
             store.drop_file(&tagged)?;
             let Some(src) = read_capped(root, &f.path) else {
                 continue;
@@ -238,6 +295,19 @@ fn cmd_update(repo_specs: &[String], db: &str) -> Result<()> {
             pipeline::record_stage(&store, &tagged)?;
             if role == model::Role::Fixture || role == model::Role::Example {
                 coverage::record_coverage(&store, &tagged, &src)?;
+            }
+            // A6: hash-diff the pre-update vs post-extract unit snapshots into
+            // change_queue events (new / modified / deleted per unit).
+            let new = store.units_for_path(&tagged)?;
+            for ev in diff::diff_units(&old, &new) {
+                store.enqueue_change(
+                    &ev.uid,
+                    ev.change,
+                    ev.old_hash.as_deref(),
+                    ev.new_hash.as_deref(),
+                    &sha,
+                    now,
+                )?;
             }
         }
         if !sha.is_empty() {
@@ -271,5 +341,16 @@ fn main() -> Result<()> {
             count,
             subtree,
         } => query::cmd_rdeps(&db, &module, count, subtree),
+        Cmd::Links { uid, db } => query::cmd_links(&db, &uid),
+        Cmd::Neighbors { uid, db } => query::cmd_neighbors(&db, &uid),
+        Cmd::Pending { since, limit, db } => query::cmd_pending(&db, since.as_deref(), limit),
+        Cmd::RenamePath { old, to, db } => query::cmd_rename_path(&db, &old, to.as_deref()),
+        Cmd::RenameSymbol {
+            old,
+            to,
+            preserve,
+            map,
+            db,
+        } => query::cmd_rename_symbol(&db, &old, to.as_deref(), &preserve, map.as_deref()),
     }
 }
