@@ -1,0 +1,43 @@
+module Main exposing (main)
+
+import Ipe.Io as Io
+import Ipe.String
+
+
+-- A record whose field is a record whose field is a function. The function
+-- carrier must demote the derive posture TRANSITIVELY: the inner record loses
+-- `PartialEq`/`Debug` because its fn field is not derivably comparable, and the
+-- outer record must inherit that demotion (a shallow `is_derivable` would emit a
+-- `derive(PartialEq)` on the outer struct that fails to compile on the inner
+-- field). The whole graph gets a hand-written `Clone` via the `Arc<dyn Fn>`
+-- refcount bump, so the outer value is storable and reusable.
+type alias Inner =
+    { op : Int -> Int
+    , tag : Int
+    }
+
+
+type alias Outer =
+    { inner : Inner
+    , name : String
+    }
+
+
+outer : Outer
+outer =
+    { inner = { op = \n -> n * 2, tag = 7 }
+    , name = "dbl"
+    }
+
+
+run : Outer -> Int -> Int
+run o x =
+    let
+        dup =
+            o
+    in
+    o.inner.op x + dup.inner.op x + dup.inner.tag
+
+
+main =
+    Io.println (String.fromInt (run outer 5))

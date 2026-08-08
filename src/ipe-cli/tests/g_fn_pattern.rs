@@ -36,6 +36,8 @@ mod golden_firstclass;
 mod golden_fn_enum_payload;
 #[path = "g_fn_pattern/golden_fn_record_field.rs"]
 mod golden_fn_record_field;
+#[path = "g_fn_pattern/golden_fn_record_nested_transitive.rs"]
+mod golden_fn_record_nested_transitive;
 #[path = "g_fn_pattern/golden_fn_value_reify_typevar.rs"]
 mod golden_fn_value_reify_typevar;
 #[path = "g_fn_pattern/golden_fn_value_return_reify_typevar.rs"]
