@@ -34,6 +34,8 @@ mod golden_error_nominal_payload;
 mod golden_firstclass;
 #[path = "g_fn_pattern/golden_fn_enum_payload.rs"]
 mod golden_fn_enum_payload;
+#[path = "g_fn_pattern/golden_fn_pattern_binder_forward.rs"]
+mod golden_fn_pattern_binder_forward;
 #[path = "g_fn_pattern/golden_fn_record_field.rs"]
 mod golden_fn_record_field;
 #[path = "g_fn_pattern/golden_fn_record_nested_transitive.rs"]
