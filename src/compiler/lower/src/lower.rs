@@ -7921,14 +7921,17 @@ pub struct Lowerer<'a> {
     fn_is_async: Cell<bool>,
 
     /// Symbols whose BINDER kind can carry the `Arc<dyn Fn>` promotion: plain
-    /// `let` names (`PVar`) and def/lambda parameters — the binder sites that
-    /// run the fn-value promotion pass. The capture-clone classifier in
-    /// `lower_lambda` routes a captured pure-`Fun` symbol OUT of the IPE-L0126
-    /// fail-close only when its binder is registered here (the binder site will
-    /// see the capture on the LOWERED scope — eta-synthesized closures included
-    /// — and promote the binding's carrier). A fn-typed symbol bound by a
-    /// destructure / match-arm pattern is NOT registered, so its capture keeps
-    /// today's honest fail-close. Scoped save/restore per registering scope;
+    /// `let` names (`PVar`), def/lambda parameters, and match-arm pattern
+    /// binders — the binder sites that run the fn-value promotion pass. The
+    /// capture-clone classifier in `lower_lambda` routes a captured pure-`Fun`
+    /// symbol OUT of the IPE-L0126 fail-close only when its binder is registered
+    /// here (the binder site will see the capture on the LOWERED scope —
+    /// eta-synthesized closures included — and promote the binding's carrier).
+    /// This is what lets a function projected out of an enum variant by a
+    /// pattern (`Codec f -> …`) be forwarded into a higher-order function
+    /// instead of only called in place. A non-`Fun` binder registered here is a
+    /// no-op — the classifier's `fun_value_arc_promotable` filter decides which
+    /// binders actually promote. Scoped save/restore per registering scope;
     /// interior mutability so the lowering walk stays over a shared `&self`.
     promotable_fn_binders: std::cell::RefCell<BTreeSet<Symbol>>,
     /// Fail-close signal: pure-`Fun` captures the classifier routed AWAY from
@@ -19328,7 +19331,17 @@ impl<'a> Lowerer<'a> {
                         Some((pat, guard, bindings)) => (pat, guard, bindings),
                         None => (self.lower_arm_pat(&br.pat)?, None, Vec::new()),
                     };
-                let mut arm_body = self.lower_expr(&br.body)?;
+                // A pattern binder that binds a fn-typed value (the `varN`
+                // projection `Codec f -> …` case) is a promotable fn binder for
+                // the arm body's capture classifier, exactly as a def/lambda
+                // param is: a closure in the arm body that captures the bound
+                // function defers to the binder-site Arc promotion below instead
+                // of failing closed IPE-L0126. Registering every arm pvar is
+                // sound — the classifier's own `fun_value_arc_promotable` filter
+                // decides which actually promote; a non-fn binder is a no-op.
+                let arm_syms = collect_arm_pat_pvars(&br.pat.value);
+                let mut arm_body = self
+                    .with_promotable_fn_binders(arm_syms.clone(), || self.lower_expr(&br.body))?;
 
                 // Move-ownership discipline for arm-bound variables — each
                 // symbol the canon pattern introduces is owned in the arm body
@@ -19355,13 +19368,19 @@ impl<'a> Lowerer<'a> {
                 // unsupported / not-yet-modelled types — treat any error as
                 // "skip the discipline for this symbol" (documented `Unknown`
                 // residual, same as before).
-                for sym in collect_arm_pat_pvars(&br.pat.value) {
+                for sym in arm_syms {
                     if let Some(span) = find_first_varlocal_span(sym, &br.body)
                         && let Some(ty) = self.region_ty(span)
                         && let Ok(ir_ty) = self.ir_type_from_ty(ty, span)
                     {
-                        arm_body =
-                            apply_move_ownership(self.clone_env(), sym, &ir_ty, arm_body, span)?;
+                        // The param-side entry point: a pure-`Fun` arm binder
+                        // whose reads exceed a bare `Box` carrier (a capture the
+                        // classifier deferred, or a forward at closure depth ≥ 1)
+                        // is shadow-rebound to the `Clone` `Arc` carrier here,
+                        // consuming its `deferred_fun_captures` signal; every
+                        // other shape falls through to `apply_move_ownership`
+                        // unchanged (byte-identical to before for non-fn binders).
+                        arm_body = self.apply_param_move_ownership(sym, &ir_ty, arm_body, span)?;
                     }
                 }
 

@@ -1,0 +1,33 @@
+module Main exposing (main)
+
+import Ipe.Io as Io
+import Ipe.String
+import Ipe.List as List
+
+
+-- A function extracted from an enum variant by a MATCH-ARM PATTERN and then
+-- FORWARDED into a higher-order function. The mapper `\x -> applyTo x f`
+-- captures the pattern binder `f` and hands it onward to `applyTo` (not calling
+-- it in callee position), so a bare `Box` carrier would move `f` out of the
+-- mapper's env per call and collapse it to `FnOnce`. The variant payload is the
+-- `Arc<dyn Fn>` carrier, and the arm binder is promoted to that carrier on
+-- demand, so the forwarding closure clones the pointer and stays `Fn`. This is
+-- the `varN`-projection shape the codec combinators need.
+type Codec =
+    Codec (Int -> Int)
+
+
+applyTo : Int -> (Int -> Int) -> Int
+applyTo x g =
+    g x
+
+
+run : Codec -> List Int -> List Int
+run codec xs =
+    case codec of
+        Codec f ->
+            List.map (\x -> applyTo x f) xs
+
+
+main =
+    Io.println (String.fromInt (List.sum (run (Codec (\n -> n + 1)) [1, 2, 3])))
