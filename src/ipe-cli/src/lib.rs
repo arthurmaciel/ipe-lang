@@ -2906,18 +2906,25 @@ fn run_eject(rest: &[String]) -> Result<(), CliError> {
     Ok(())
 }
 
-/// Run a `cargo build` of an emitted project to completion, capturing its
-/// stderr. `cargo`'s output is forwarded to this process's stderr on every
-/// outcome (so progress and warnings are not swallowed); on a non-zero exit the
-/// captured text is returned inside a typed [`CliError::EmittedBuildFailed`] so
+/// Run a `cargo build` of an emitted project to completion, *streaming* its
+/// stderr to this process's stderr line by line as `cargo` emits it — so the
+/// user sees the live compile progress (which crate is building, warnings)
+/// rather than a silent wait that only reveals itself once `cargo` has already
+/// finished. The same lines are accumulated so that on a non-zero exit the
+/// captured text is returned inside a typed [`CliError::EmittedBuildFailed`]:
 /// the failure renders as a clean `ipe`-level diagnostic — a targeted
 /// runtime-feature line when `cargo` reports a missing feature, otherwise the
 /// trimmed `cargo` error under a plain header — and never the command's `--help`
 /// page. `what` names what was built; `runtime` is the crate the project linked
 /// against, when the caller resolved one.
 ///
+/// `cargo`'s stdout is inherited untouched (a `cargo build` writes only status
+/// to stderr; nothing on stdout needs capture), so any tool output stays on
+/// stdout while progress stays on stderr.
+///
 /// # Errors
-/// - [`CliError::Io`] if `cargo` cannot be spawned.
+/// - [`CliError::Io`] if `cargo` cannot be spawned or its stderr pipe cannot be
+///   opened.
 /// - [`CliError::EmittedBuildFailed`] if `cargo` exits non-zero.
 fn build_emitted_project(
     cargo: &mut std::process::Command,
@@ -2925,23 +2932,88 @@ fn build_emitted_project(
     runtime: Option<RuntimeContext>,
     io_path: &Path,
 ) -> Result<(), CliError> {
-    let output = cargo.output().map_err(|e| CliError::Io {
+    use std::io::BufReader;
+    use std::process::Stdio;
+
+    let io_err = |e: std::io::Error| CliError::Io {
         path: io_path.to_path_buf(),
         source: e,
-    })?;
-    // Forward cargo's own stderr so its progress and warnings still reach the
-    // terminal; on failure the same text is also carried in the typed error.
-    let stderr = String::from_utf8_lossy(&output.stderr).into_owned();
-    eprint!("{stderr}");
-    if output.status.success() {
+    };
+
+    // Pipe stderr so we can both forward it live AND capture it for the typed
+    // error; leave stdout inherited (a `cargo build` writes only to stderr).
+    let mut child = cargo
+        .stdout(Stdio::inherit())
+        .stderr(Stdio::piped())
+        .spawn()
+        .map_err(io_err)?;
+
+    // The pipe is present because we just set `Stdio::piped()`; the fallback
+    // keeps this panic-free rather than unwrapping the `Option`.
+    let mut captured = String::new();
+    if let Some(stderr) = child.stderr.take() {
+        let mut reader = BufReader::new(stderr);
+        let mut line = String::new();
+        // Read raw bytes per chunk so a carriage-return progress bar (which
+        // carries no newline) still surfaces; `read_line` alone would block on
+        // cargo's in-place progress line until the next newline.
+        loop {
+            line.clear();
+            let read = read_progress_chunk(&mut reader, &mut line).map_err(io_err)?;
+            if read == 0 {
+                break;
+            }
+            // Forward this chunk live so the user sees cargo's progress as it
+            // happens; also accumulate it for a failure diagnostic.
+            eprint!("{line}");
+            let _ = std::io::stderr().flush();
+            captured.push_str(&line);
+        }
+    }
+
+    let status = child.wait().map_err(io_err)?;
+    if status.success() {
         return Ok(());
     }
     Err(CliError::EmittedBuildFailed {
         what,
-        code: output.status.code().unwrap_or(1),
-        stderr,
+        code: status.code().unwrap_or(1),
+        stderr: captured,
         runtime,
     })
+}
+
+/// Read the next chunk of `cargo`'s stderr into `out`, stopping at either a
+/// newline (a completed message line) or a carriage return (the boundary of
+/// cargo's in-place progress bar, which carries no newline). Returns the number
+/// of bytes read; `0` marks end of stream. Reading to *either* terminator keeps
+/// the live progress bar flowing rather than buffering until the next `\n`.
+///
+/// Bytes are decoded lossily so a non-UTF-8 byte from a compiler message never
+/// aborts the build's progress relay.
+///
+/// # Errors
+/// Propagates the underlying read error from the `cargo` stderr pipe.
+fn read_progress_chunk<R: std::io::Read>(
+    reader: &mut R,
+    out: &mut String,
+) -> std::io::Result<usize> {
+    let mut bytes: Vec<u8> = Vec::new();
+    let mut total = 0usize;
+    loop {
+        let mut byte = [0u8; 1];
+        let n = reader.read(&mut byte)?;
+        if n == 0 {
+            break;
+        }
+        total += n;
+        bytes.push(byte[0]);
+        if byte[0] == b'\n' || byte[0] == b'\r' {
+            break;
+        }
+    }
+    out.push_str(&String::from_utf8_lossy(&bytes));
+    Ok(total)
 }
 
 /// The runtime crate the emit will link against, as a [`RuntimeContext`] for a
@@ -3152,6 +3224,23 @@ fn run_run(rest: &[String]) -> Result<(), CliError> {
         // (only `ipe eject` does).
         tree_shake_vendored: false,
     };
+
+    // Human-friendly progress: the compile+emit below is otherwise silent, so
+    // announce the running step. On a terminal only (piped / CI output stays
+    // clean); to stderr, so stdout carries only the program's own output. The
+    // cargo build that follows streams its own progress; the exec that ends
+    // `ipe run` leaves no room for a settled "done" line, so the run just starts
+    // producing the program's output.
+    let show_progress = {
+        use std::io::IsTerminal as _;
+        std::io::stderr().is_terminal()
+    };
+    if show_progress {
+        eprintln!(
+            "{}",
+            style::gutter(&format!("{} building {entry}", style::glyph::STEP))
+        );
+    }
 
     manifest.as_ref().map_or_else(
         || {
@@ -4948,6 +5037,40 @@ const fn diag_span(d: &Diagnostic) -> ipe_diagnostics::Span {
 mod tests {
     use super::*;
     use ipe_diagnostics::{NameError, Span};
+
+    /// `read_progress_chunk` stops at a newline OR a carriage return, so cargo's
+    /// in-place progress bar (which uses `\r` with no `\n`) surfaces live rather
+    /// than buffering until the next line, and it drains a stream with no final
+    /// terminator without dropping bytes.
+    #[test]
+    fn read_progress_chunk_stops_at_newline_or_carriage_return() {
+        use std::io::BufReader;
+        // A `\r` progress frame, then a `\n` message line, then a trailing chunk
+        // with no terminator at end of stream.
+        let input = "  Building [==>   ]\r   Compiling ipe-app\ndone";
+        let mut reader = BufReader::new(input.as_bytes());
+        let mut out = String::new();
+
+        let n1 = read_progress_chunk(&mut reader, &mut out).expect("read frame");
+        assert_eq!(out, "  Building [==>   ]\r");
+        assert_eq!(n1, out.len());
+
+        out.clear();
+        read_progress_chunk(&mut reader, &mut out).expect("read line");
+        assert_eq!(out, "   Compiling ipe-app\n");
+
+        out.clear();
+        read_progress_chunk(&mut reader, &mut out).expect("read tail");
+        assert_eq!(out, "done");
+
+        // End of stream returns zero and leaves `out` empty.
+        out.clear();
+        assert_eq!(
+            read_progress_chunk(&mut reader, &mut out).expect("read eof"),
+            0
+        );
+        assert!(out.is_empty());
+    }
 
     /// `missing_runtime_feature` pulls the feature name out of `cargo`'s
     /// feature-resolution error, whether the name is backtick- or single-quoted,
