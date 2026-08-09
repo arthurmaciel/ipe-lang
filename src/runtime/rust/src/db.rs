@@ -662,7 +662,7 @@ pub fn db_decode_required<E: From<String> + 'static, A: 'static + Send, B: 'stat
 /// Matches Go's `DbDec_optional`.
 pub fn db_decode_optional<
     E: From<String> + 'static,
-    A: Clone + 'static + Send,
+    A: Clone + 'static + Send + Sync,
     B: 'static + Send,
 >(
     col: String,

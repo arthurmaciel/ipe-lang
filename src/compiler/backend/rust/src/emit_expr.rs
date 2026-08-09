@@ -4561,18 +4561,22 @@ fn emit_json_decoder_call(
             }
         }
     }
-    // ── JsonDecList / ConfigList — wrap argument in factory closure ───────────
-    // `decode_list` expects `impl Fn() -> Decoder<E, T>`; Config shares the fn.
+    // ── JsonDecList / ConfigList — forward the element decoder by value ───────
+    // `decode_list` takes `Decoder<E, T>` by value and borrows it across every
+    // element of every document it runs (`Decoder::run` is `Fn`), so a stored
+    // bare decoder (`Codec a`'s `dec`) is passed straight through — no reuse
+    // factory closure that would have to move a non-`Copy` `Decoder` out of an
+    // `Fn` capture. Config shares the runtime fn.
     if matches!(
         callee,
         Callee::Kernel(ipe_ir::KernelFn::JsonDecList | ipe_ir::KernelFn::ConfigList)
     ) && let Some(inner) = args.first()
     {
         let inner_s = emit_expr_at(ctx, inner, indent, child, generics)?;
-        return Ok(Some(format!("decode_list(move || {{ {inner_s} }})")));
+        return Ok(Some(format!("decode_list({inner_s})")));
     }
-    // ── ConfigKeyValuePairs / ConfigDict — same factory-closure shape as
-    // `decode_list`; both expect `impl Fn() -> Decoder<E, T>`.
+    // ── ConfigKeyValuePairs / ConfigDict — same by-value element decoder as
+    // `decode_list`; both take `Decoder<E, T>` by value.
     if let Callee::Kernel(
         k @ (ipe_ir::KernelFn::ConfigKeyValuePairs | ipe_ir::KernelFn::ConfigDict),
     ) = callee
@@ -4580,7 +4584,7 @@ fn emit_json_decoder_call(
     {
         let inner_s = emit_expr_at(ctx, inner, indent, child, generics)?;
         let name = kernel_name(*k); // "decode_key_value_pairs" / "config_dict"
-        return Ok(Some(format!("{name}(move || {{ {inner_s} }})")));
+        return Ok(Some(format!("{name}({inner_s})")));
     }
     Ok(None)
 }

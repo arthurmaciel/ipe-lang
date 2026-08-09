@@ -1,0 +1,66 @@
+module Main exposing (main)
+
+import Ipe.Io as Io
+import Ipe.Result as Result
+import Ipe.Json.Decode as Decode
+import Ipe.String as String
+import Ipe.List as List
+
+
+-- A generic decoder box storing a BARE runtime `Decoder a` — a single-shot,
+-- non-`Copy` carrier — read back out and reused. Storing a bare decoder (rather
+-- than a `{} -> Decoder a` factory) and projecting it into `Decode.list` is the
+-- reuse shape that must stay sound: the stored decoder is cloned per use.
+type DecBox a
+    = DecBox { dec : Decoder a }
+
+
+intBox : DecBox Int
+intBox =
+    DecBox { dec = Decode.int }
+
+
+stringBox : DecBox String
+stringBox =
+    DecBox { dec = Decode.string }
+
+
+-- Decode a JSON array generically over `a`: the stored bare decoder is read out
+-- of the box and forwarded straight into `Decode.list`, which now takes the
+-- element decoder by value and borrows it across every element.
+decodeList : DecBox a -> String -> Result Error (List a)
+decodeList box s =
+    case box of
+        DecBox r ->
+            Decode.decodeString (Decode.list r.dec) s
+
+
+reportInts : Result Error (List Int) -> String
+reportInts res =
+    case res of
+        Ok xs ->
+            "ints=" ++ String.fromInt (List.length xs)
+
+        Err _ ->
+            "ints-err"
+
+
+reportStrings : Result Error (List String) -> String
+reportStrings res =
+    case res of
+        Ok xs ->
+            "strs=" ++ String.fromInt (List.length xs)
+
+        Err _ ->
+            "strs-err"
+
+
+main =
+    Io.println
+        (String.join " "
+            [ reportInts (decodeList intBox "[4,5,6]")
+            , reportInts (decodeList intBox "[7,8]")
+            , reportStrings (decodeList stringBox "[\"x\",\"y\",\"z\"]")
+            , reportStrings (decodeList stringBox "[\"p\"]")
+            ]
+        )
