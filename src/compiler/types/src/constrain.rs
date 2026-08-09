@@ -9453,6 +9453,36 @@ mod registry_phase_c_tests {
         }
     }
 
+    /// The interned `RetryPolicy` field symbols must resolve to exactly the
+    /// shared `RETRY_POLICY_FIELDS` set — that const is the single source of
+    /// truth the lowering gate matches against, so any drift between the two
+    /// (a renamed field, an added/removed field) is a build error here rather
+    /// than a silent gate mismatch (an over- or under-broad exemption).
+    #[test]
+    fn retry_policy_field_symbols_match_ssot() {
+        let mut interner = Interner::new();
+        let builtins = make_builder(&mut interner);
+        let mut field_names: Vec<&str> = [
+            builtins.retry_f_base_ms,
+            builtins.retry_f_jitter,
+            builtins.retry_f_kind,
+            builtins.retry_f_max_attempts,
+            builtins.retry_f_should_retry,
+        ]
+        .into_iter()
+        .filter_map(|s| interner.resolve(s))
+        .collect();
+        field_names.sort_unstable();
+        let mut expected: Vec<&str> = crate::RETRY_POLICY_FIELDS.to_vec();
+        expected.sort_unstable();
+        assert_eq!(
+            field_names, expected,
+            "the interned RetryPolicy field symbols drifted from \
+             RETRY_POLICY_FIELDS; update the shared const and the lowering gate \
+             together.",
+        );
+    }
+
     /// Condition 4 — monotone burndown. Scheme resolution returns `Some` for
     /// EXACTLY `RELOCATED ∪ FIRST_SCHEMED` and `None` for every other variant.
     /// Pins the migrated set so an accidental over- or under-migration is caught.

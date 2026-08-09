@@ -159,6 +159,20 @@ pub enum RowTail {
     Open(u32),
 }
 
+/// The field names of the kernel-managed `RetryPolicy e` record.
+///
+/// In [`BTreeMap`]/alphabetical order — the order the emitted Rust struct also
+/// uses: `{ baseMs : Int, jitter : Bool, kind : Int, maxAttempts : Int,
+/// shouldRetry : e -> Bool }`.
+///
+/// This is the single source of truth for the field-name set. The type
+/// checker interns exactly these strings for the `RetryPolicy` scheme, and the
+/// lowering gate recognises the closed record by matching this exact set — a
+/// record that is not exactly these five closed fields is not a `RetryPolicy`
+/// and must not take the kernel-struct exemption.
+pub const RETRY_POLICY_FIELDS: [&str; 5] =
+    ["baseMs", "jitter", "kind", "maxAttempts", "shouldRetry"];
+
 /// The super-type obligations a type variable carries: the operations a body
 /// performs on it that only *some* types support.
 ///

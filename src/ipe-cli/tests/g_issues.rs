@@ -36,5 +36,7 @@ mod golden_i178_fn_composite_reuse;
 mod golden_i217_stdlib_contract_drift;
 #[path = "g_issues/golden_i221_fn_value_carrier.rs"]
 mod golden_i221_fn_value_carrier;
+#[path = "g_issues/golden_i665_retry_policy_value_callee.rs"]
+mod golden_i665_retry_policy_value_callee;
 #[path = "g_issues/golden_i99_alias_match_arm.rs"]
 mod golden_i99_alias_match_arm;

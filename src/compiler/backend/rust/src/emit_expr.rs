@@ -1861,13 +1861,19 @@ fn emit_http_builder_call(
 ///
 /// Design rationale:
 /// - `RetryPolicy e` is a closed record with a function field `shouldRetry : e ->
-///   Bool`.  Because `Box<dyn Fn>` is not `Clone`, builders use MOVE semantics
-///   (`let mut __ipe_rec = (rec); __ipe_rec.field = val; __ipe_rec`) rather than
-///   `.clone()`.
+///   Bool`.  The synthesised struct stores that field on the record-field
+///   function carrier — `Arc<dyn Fn(E) -> bool + Send + Sync>` — so the struct
+///   derives `Clone`.  Every `shouldRetry` value this emitter constructs must
+///   therefore be produced ON that carrier (`Arc::new` for a literal predicate,
+///   `Arc::from` to promote an already-boxed predicate expression), or the field
+///   assignment is an `Arc`-vs-`Box` type mismatch (`E0308`).  The builder
+///   updates still MOVE the record (`let mut __ipe_rec = (rec); __ipe_rec.field =
+///   val; __ipe_rec`) — an `Arc<dyn Fn>` is `Clone`, but a move is cheaper and
+///   the record is single-use here.
 /// - `Task.retryWith` decomposes the policy and calls the runtime function
-///   `ipe_runtime::task::task_retry_with`, adapting the `Box<dyn Fn(E) -> bool>`
+///   `ipe_runtime::task::task_retry_with`, adapting the `Arc<dyn Fn(E) -> bool>`
 ///   field to the `impl Fn(&E) -> bool` expected by the runtime via a cloning
-///   adapter closure.
+///   adapter closure (an `Arc<dyn Fn>` is directly callable).
 fn emit_task_retry_call(
     ctx: &EmitCtx,
     callee: &Callee,
@@ -1922,7 +1928,7 @@ fn emit_task_retry_call(
             // 3 attempts, 500 ms, exponential (kind=1), no jitter, always-retry.
             Ok(Some(format!(
                 "{rp_name} {{ baseMs: 500i64, jitter: false, kind: 1i64, \
-                 maxAttempts: 3i64, shouldRetry: Box::new(|_: IpeError| true) }}"
+                 maxAttempts: 3i64, shouldRetry: ::std::sync::Arc::new(|_: IpeError| true) }}"
             )))
         }
         KernelFn::TaskLinearBackoff => {
@@ -1939,7 +1945,7 @@ fn emit_task_retry_call(
             let ms_s = emit_expr_at(ctx, ms, indent, child, generics)?;
             Ok(Some(format!(
                 "{rp_name} {{ baseMs: {ms_s}, jitter: false, kind: 0i64, \
-                 maxAttempts: {n_s}, shouldRetry: Box::new(|_: IpeError| true) }}"
+                 maxAttempts: {n_s}, shouldRetry: ::std::sync::Arc::new(|_: IpeError| true) }}"
             )))
         }
         KernelFn::TaskExponentialBackoff => {
@@ -1958,7 +1964,7 @@ fn emit_task_retry_call(
             let ms_s = emit_expr_at(ctx, ms, indent, child, generics)?;
             Ok(Some(format!(
                 "{rp_name} {{ baseMs: {ms_s}, jitter: false, kind: 1i64, \
-                 maxAttempts: {n_s}, shouldRetry: Box::new(|_: IpeError| true) }}"
+                 maxAttempts: {n_s}, shouldRetry: ::std::sync::Arc::new(|_: IpeError| true) }}"
             )))
         }
         KernelFn::TaskWithJitter => {
@@ -2032,16 +2038,23 @@ fn emit_task_retry_call(
             })?;
             let pred_s = emit_expr_at(ctx, pred, indent, child, generics)?;
             let policy_s = emit_expr_at(ctx, policy, indent, child, generics)?;
+            // The `shouldRetry` field carrier is `Arc<dyn Fn(IpeError) -> bool>`
+            // (record-field function carrier). Re-wrap the predicate — carried as
+            // a `Box<dyn Fn>` (or a bare closure) — in a fresh `Arc` closure of
+            // the field's exact signature so the move-update assigns the field's
+            // own carrier type, not a `Box` (which would be an `E0308`).
             Ok(Some(format!(
                 "{{ let mut __ipe_rec = ({policy_s}); \
-                 __ipe_rec.shouldRetry = {pred_s}; __ipe_rec }}"
+                 __ipe_rec.shouldRetry = ::std::sync::Arc::new(\
+                 move |__ipe_x: IpeError| ({pred_s})(__ipe_x)); __ipe_rec }}"
             )))
         }
         KernelFn::TaskRetryWith => {
             // `retryWith policy task` — decompose policy, call runtime.
-            // The `shouldRetry` field is `Box<dyn Fn(IpeError) -> bool>` but
-            // `task_retry_with` expects `impl Fn(&IpeError) -> bool`.  The adapter
-            // closure bridges the gap by cloning the (cheap String) error ref.
+            // The `shouldRetry` field is `Arc<dyn Fn(IpeError) -> bool>` (directly
+            // callable) but `task_retry_with` expects `impl Fn(&IpeError) -> bool`.
+            // The adapter closure bridges the gap by cloning the (cheap String)
+            // error ref.
             let policy = args.first().ok_or_else(|| Diagnostic::CompilerBug {
                 where_: "ipe_backend_rust::emit_task_retry_call",
                 detail: "TaskRetryWith expects 2 arguments (policy, task)".to_owned(),

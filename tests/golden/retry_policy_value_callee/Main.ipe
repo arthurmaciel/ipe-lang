@@ -1,0 +1,23 @@
+module Main exposing (main)
+
+import Ipe.Io as Io
+import Ipe.Task
+
+
+-- SEAL regression for the `RetryPolicy` value-callee path. `Task.retryOn`
+-- returns a `RetryPolicy e` — an anonymous record whose `shouldRetry` field is
+-- a predicate FUNCTION. Piping `Task.linearBackoff 5 1 |> Task.retryOn
+-- (\_ -> False)` lowers `retryOn` via the value-callee (Apply) arm, whose
+-- fn-in-carrier gate saw the fn-typed param plus the fn-carrying result record
+-- and rejected with IPE-L0107 — even though the frontend already type-checked
+-- the program (ipe exit 0). The `RetryPolicy` record is a kernel-managed struct
+-- the emitter owns (`shouldRetry: Box<dyn Fn>`, derives skipped), so the gate
+-- must exempt it, exactly as its sibling gates already do. The emitted crate
+-- must `cargo build` and print the retried Task's value `x`.
+main =
+    Task.andThen
+        (\s -> Io.println s)
+        (Task.retryWith
+            (Task.linearBackoff 5 1 |> Task.retryOn (\_ -> False))
+            (Task.succeed "x")
+        )

@@ -25,7 +25,7 @@ use ipe_ir::{
     KernelFn, Match, ModPath, Module, OnFormKind, Pat, Program, RowParam, RuntimeModule, TypeDef,
     UiCtor, UiPlain, Variant, fun_value_arc_promotable, is_dispatch_free, is_irrefutable,
 };
-use ipe_types::{SolvedTypes, Ty, TyBounds};
+use ipe_types::{RowTail, SolvedTypes, Ty, TyBounds};
 
 /// One lowered function parameter: its (possibly synthetic) binder name and its
 /// IR type.
@@ -1295,6 +1295,45 @@ fn is_enum_like_con_head(interner: &Interner, name: Symbol) -> bool {
 /// value nested INSIDE a real derive carrier is still caught by that outer
 /// carrier's own [`ty_contains_fun`] check (unchanged), so this only exempts the
 /// wrapper as the outermost shape.
+/// Is `ty` the anonymous `RetryPolicy e` record — the kernel-managed shape
+/// `{ baseMs : Int, jitter : Bool, kind : Int, maxAttempts : Int,
+///    shouldRetry : e -> Bool }`?
+///
+/// This record IS materialised as a runtime value passed to `task_retry_with`:
+/// its Rust struct is emitted by `emit_task_retry_call` with
+/// `shouldRetry: Arc<dyn Fn(…) -> …>` and the `Clone`/`PartialEq` derives
+/// skipped for that field. So although the record carries a function-typed
+/// field, it is not the generic derive-carrier the fn-in-carrier gates protect
+/// against — it is a dedicated non-derivable struct the emitter owns. The gates
+/// exempt exactly this shape.
+///
+/// The match is on the FULL closed shape — [`RowTail::Closed`] AND exactly the
+/// five [`ipe_types::RETRY_POLICY_FIELDS`] field-name symbols — never a lone
+/// `shouldRetry` key. A user record that merely names a `shouldRetry` field
+/// (`{ shouldRetry : Int -> Int }`), or any near-miss subset/superset or open
+/// row, is NOT this kernel record: it flows through the ordinary record-literal
+/// emitter, which lands its fn field on the generic derive carrier. Exempting
+/// it would open an accept-then-`cargo`-fail (E0308 `Box` vs `Arc`), so such a
+/// record must fail closed (IPE-L0107). Matching the exact set keeps the
+/// exemption load-bearing only for the genuine kernel value.
+///
+/// [`ipe_types::RETRY_POLICY_FIELDS`] is the single source of truth for the
+/// name set; the type checker interns exactly those strings for the
+/// `RetryPolicy` scheme and the shared interner guarantees symbol identity, so
+/// resolving each key and matching it against that set is equivalent to
+/// matching the checker's own `retry_f_*` symbols.
+fn is_retry_policy_record(interner: &Interner, ty: &Ty) -> bool {
+    let Ty::Record(fields, RowTail::Closed) = ty else {
+        return false;
+    };
+    fields.len() == ipe_types::RETRY_POLICY_FIELDS.len()
+        && fields.keys().all(|k| {
+            interner
+                .resolve(*k)
+                .is_some_and(|name| ipe_types::RETRY_POLICY_FIELDS.contains(&name))
+        })
+}
+
 fn embeds_nonderivable_function(interner: &Interner, ty: &Ty) -> bool {
     match ty {
         Ty::Var(_) | Ty::Unit => false,
@@ -1336,16 +1375,13 @@ fn embeds_nonderivable_function(interner: &Interner, ty: &Ty) -> bool {
             .iter()
             .any(|a| ty_contains_fun(a) || embeds_nonderivable_function(interner, a)),
         Ty::Record(fields, _) => {
-            // Exempt the anonymous `RetryPolicy e` record — a kernel-managed type
-            // whose emitter writes a dedicated non-derivable Rust struct.  Identified
-            // by the presence of a `shouldRetry` key: no other stdlib or user record
-            // carries that name.  A user record literal spelling out that field set
-            // takes the value-side carrier normalization (record literals skip this
-            // gate), so its fn field is stored on the `Arc` carrier regardless.
-            if fields
-                .keys()
-                .any(|k| interner.resolve(*k) == Some("shouldRetry"))
-            {
+            // Exempt only the exact closed `RetryPolicy e` record — a
+            // kernel-managed type whose emitter (`emit_task_retry_call`) writes a
+            // dedicated non-derivable Rust struct with an `Arc` `shouldRetry`
+            // field. A user record that merely names a `shouldRetry` field is NOT
+            // this shape (`is_retry_policy_record` matches the full closed
+            // five-field signature), so it is not exempted here.
+            if is_retry_policy_record(interner, ty) {
                 return false;
             }
             // Phase 1 (records): a function DIRECTLY in a record field is now a
@@ -9972,16 +10008,17 @@ impl<'a> Lowerer<'a> {
                     // materialised as a runtime value), so its IR struct is
                     // not needed.
                     //
-                    // EXCEPTION — `RetryPolicy e`: this anonymous record (identified
-                    // by a `shouldRetry` field) IS materialised as a runtime value
-                    // passed to `task_retry_with`.  Its Rust struct is emitted by
+                    // EXCEPTION — `RetryPolicy e`: this anonymous record (the exact
+                    // closed `{ baseMs, jitter, kind, maxAttempts, shouldRetry }`
+                    // shape) IS materialised as a runtime value passed to
+                    // `task_retry_with`.  Its Rust struct is emitted by
                     // `emit_task_retry_call` and MUST be registered here despite
                     // carrying a function-typed field.  The backend emits the struct
-                    // with `shouldRetry: Box<dyn Fn(…) -> …>` and skips the `Clone`
-                    // / `PartialEq` derives for that field.
-                    let is_retry_policy = fields
-                        .keys()
-                        .any(|k| self.interner.resolve(*k) == Some("shouldRetry"));
+                    // with `shouldRetry: Arc<dyn Fn(…) -> …>` (the `SharedFun`
+                    // carrier) and skips the `Clone` / `PartialEq` derives for that
+                    // field.  Matched on the full shape, never a lone `shouldRetry`
+                    // key, so a user fn-in-record never wrongly registers here.
+                    let is_retry_policy = is_retry_policy_record(self.interner, ty);
                     if (!ir_contains_fun(&ir) || is_retry_policy) && seen.insert(ir.clone()) {
                         out.push(ir);
                     }
@@ -13286,7 +13323,21 @@ impl<'a> Lowerer<'a> {
             takes_fn_param |= ty_contains_fun(p);
             result = r.as_ref();
         }
-        if takes_fn_param && ty_has_fun_in_derive_carrier(self.interner, result) {
+        // The `RetryPolicy e` result (the exact closed
+        // `{ baseMs, jitter, kind, maxAttempts, shouldRetry }` record, e.g. the
+        // result of `Task.retryOn`) is a kernel-managed struct the emitter owns,
+        // not a generic derive carrier — `emit_task_retry_call` writes its
+        // `shouldRetry: Arc<dyn Fn>` field on the `SharedFun` carrier and skips
+        // the offending derives. Its sibling gates already exempt this shape;
+        // without the same exemption here the value-callee arm (a piped
+        // `linearBackoff … |> retryOn …`) rejects a sound path with IPE-L0107.
+        // Scoped to exactly this closed shape: any other function-in-record
+        // result (a user `{ shouldRetry : Int -> Int }` or near-miss) still
+        // fails closed.
+        if takes_fn_param
+            && ty_has_fun_in_derive_carrier(self.interner, result)
+            && !is_retry_policy_record(self.interner, result)
+        {
             return Err(unsupported(callee.span, Feature::FirstClassFunctions));
         }
         Ok(())
