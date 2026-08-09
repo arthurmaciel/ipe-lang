@@ -45,23 +45,35 @@ fn ui_input_and_describe_ipec_and_cargo_zero() {
         built.err()
     );
 
-    // Verify the emitted source calls the new helpers.
+    // Verify the emitted source calls the new helpers. The per-module split
+    // relocates a user def's body into `src/ipe_mods/*.rs`, so scan `src/` AND
+    // that subdirectory — the Ui helper calls land wherever the view is emitted.
     let src = out.join("src");
     let mut emitted = String::new();
-    if let Ok(entries) = std::fs::read_dir(&src) {
-        for entry in entries.flatten() {
-            let path = entry.path();
-            if path.extension().is_none_or(|e| e != "rs") {
-                continue;
-            }
-            if let Ok(text) = std::fs::read_to_string(&path) {
-                emitted.push_str(&text);
-                emitted.push('\n');
+    let mut scan = |dir: &Path| {
+        if let Ok(entries) = std::fs::read_dir(dir) {
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if path.extension().is_none_or(|e| e != "rs") {
+                    continue;
+                }
+                if let Ok(text) = std::fs::read_to_string(&path) {
+                    emitted.push_str(&text);
+                    emitted.push('\n');
+                }
             }
         }
-    }
+    };
+    scan(&src);
+    scan(&src.join("ipe_mods"));
+    // `Ui.input` is a stdlib-source `.ipe` function (`Ipe/Ui.ipe`), so it lowers
+    // to the user-space `user_ipe_ui_input` call, not a `ui_input_` kernel helper.
+    assert!(
+        emitted.contains("user_ipe_ui_input"),
+        "emitted Rust must call the stdlib-source `Ui.input` (`user_ipe_ui_input`)"
+    );
+    // `Ui.describe` and the `desc*` constructors are kernel helpers.
     for helper in &[
-        "ui_input_",
         "ui_describe_",
         "ui_desc_main_",
         "ui_desc_navigation_",
