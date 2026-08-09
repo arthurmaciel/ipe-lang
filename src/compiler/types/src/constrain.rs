@@ -4868,6 +4868,10 @@ impl<'a> Builder<'a> {
             K::RandomSeededInt => fun(int(), fun(int(), fun(int(), tuple2(int(), int())))),
             // seededFloatRaw : Int -> (Float, Int)             seed → (value, nextSeed)
             K::RandomSeededFloat => fun(int(), tuple2(float(), int())),
+            // seededChoiceRaw : Int -> List a -> (Maybe a, Int)  (seed, list) → (choice, nextSeed)
+            K::RandomSeededChoice => {
+                fun(int(), fun(list(var(0)), tuple2(maybe(var(0)), int())))
+            }
 
             // ── Log ──
             // info/debug/warn/error : String -> Task Error (). The
@@ -5182,6 +5186,12 @@ impl<'a> Builder<'a> {
             K::RandomInt => fun(int(), fun(int(), task(int()))),
             K::RandomFloat => fun(float(), fun(float(), task(float()))),
             K::RandomChoice => fun(list(var(0)), task(var(0))),
+            // choice : List a -> Task Error (Maybe a)   (total; Nothing when empty)
+            K::RandomChoiceMaybe => fun(list(var(0)), task(maybe(var(0)))),
+            // shuffle : List a -> Task Error (List a)
+            K::RandomShuffle => fun(list(var(0)), task(list(var(0)))),
+            // weighted : List (Float, a) -> Task Error (Maybe a)   (total)
+            K::RandomWeighted => fun(list(tuple2(float(), var(0))), task(maybe(var(0)))),
 
             // ── Process ──
             // `run : String -> List String -> Task Error String`
@@ -8321,10 +8331,13 @@ mod registry_phase_c_tests {
             K::SystemCwd,
             K::SystemLoadEnv,
             K::SystemExit,
-            // Random (3)
+            // Random (6)
             K::RandomInt,
             K::RandomFloat,
             K::RandomChoice,
+            K::RandomChoiceMaybe,
+            K::RandomShuffle,
+            K::RandomWeighted,
             // File (15)
             K::FileReadFile,
             K::FileWriteFile,
@@ -8818,10 +8831,12 @@ mod registry_phase_c_tests {
             K::BitwiseShiftLeftBy,
             K::BitwiseShiftRightBy,
             K::BitwiseShiftRightZfBy,
-            // Random seeded (Generator primitives) — Ipê-new; pure/reproducible
-            // draws in `random.rs` (`random_seeded_int`/`random_seeded_float`).
+            // Random seeded (Generator primitives) — pure/reproducible draws in
+            // `random.rs` (`random_seeded_int`/`random_seeded_float`/
+            // `random_seeded_choice`).
             K::RandomSeededInt,
             K::RandomSeededFloat,
+            K::RandomSeededChoice,
             // Result combinators that are first-schemed holes; `withDefault` /
             // `map` are the RELOCATED pair, these two are first-schemed.
             K::ResultAndThen,

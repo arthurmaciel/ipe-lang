@@ -1,17 +1,19 @@
--- | Ipe.Random — entropy-driven random helpers (Layer 3 Ipe source).
+-- | Ipe.Random — entropy-driven and seeded random helpers (compiled-source
+-- Layer-3).
 --
--- Three tiers:
+-- Two tiers:
 --
 --   1. **Entropy-backed Task** — `int` / `float` / `range` / `choice` /
 --      `shuffle` / `weighted` consume entropy from the OS RNG and so
---      return `Task Error _`.
+--      return `Task Error _`.  Each is a point-free `Ffi.kernel "Random_*"`
+--      alias routed to its native kernel; `range` is pure Ipê over `int`.
 --
 --   2. **Seeded deterministic** — `seed` / `seededInt` / `seededFloat` /
 --      `seededChoice` are reproducible pure functions: they take a
 --      `Seed` and return `(value, nextSeed)`.  Use these for tests and
---      content generation that must reproduce across runs.
---
--- v0.15.47 added range / weighted / shuffle / seeded helpers.
+--      content generation that must reproduce across runs.  Their bodies are
+--      pure Ipê over the seeded raw kernels; the opaque `Seed` wrapper keeps
+--      the raw `Int` state from leaking into user code.
 module Ipe.Random exposing
     ( int, float
     , range
@@ -47,12 +49,13 @@ float = Ffi.kernel "Random_float"
 --     Random.range 1 6
 --         |> Task.andThen (\n -> Io.println (String.fromInt n))
 range : Int -> Int -> Task Error Int
-range lo hi = int lo hi
+range lo hi =
+    int lo hi
 
 
 -- | Pick one element from a list uniformly at random.  Returns
--- `Nothing` only when the list is empty (matches Ipe's
--- failure-as-Maybe convention for total functions).
+-- `Nothing` only when the list is empty (Ipê's failure-as-Maybe
+-- convention for total functions).
 choice : List a -> Task Error (Maybe a)
 choice = Ffi.kernel "Random_choiceMaybe"
 
@@ -86,12 +89,12 @@ type Seed
 -- | `seed n` -- construct a starting seed from an `Int`.  Identical
 -- inputs produce identical sequences across runs.
 seed : Int -> Seed
-seed n = Seed n
+seed n =
+    Seed n
 
 
--- | Internal kernel: pure (Int seed, lo, hi) -> (value, nextSeed).
 seededIntRaw : Int -> Int -> Int -> ( Int, Int )
-seededIntRaw = Ffi.kernel "Random_seededInt"
+seededIntRaw = Ffi.kernel "Random_seededIntRaw"
 
 
 -- | `seededInt s lo hi` -- uniform integer in `[lo, hi]` inclusive,
@@ -107,9 +110,8 @@ seededInt s lo hi =
                     ( v, Seed next )
 
 
--- | Internal kernel: pure Int seed -> (Float, nextSeed).
 seededFloatRaw : Int -> ( Float, Int )
-seededFloatRaw = Ffi.kernel "Random_seededFloat"
+seededFloatRaw = Ffi.kernel "Random_seededFloatRaw"
 
 
 -- | `seededFloat s` -- uniform float in `[0, 1)`, returning the value
@@ -125,9 +127,8 @@ seededFloat s =
                     ( v, Seed next )
 
 
--- | Internal kernel: pure (Int seed, list) -> (Maybe a, nextSeed).
 seededChoiceRaw : Int -> List a -> ( Maybe a, Int )
-seededChoiceRaw = Ffi.kernel "Random_seededChoice"
+seededChoiceRaw = Ffi.kernel "Random_seededChoiceRaw"
 
 
 -- | `seededChoice s list` -- pick one element from a list, returning

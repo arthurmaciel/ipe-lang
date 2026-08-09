@@ -1,0 +1,131 @@
+module Main exposing (main)
+
+-- Ipe.Random member SEAL fixture.
+--
+-- Exercises the whole compiled-source `Ipe.Random` surface — the entropy-Task
+-- tier (`int`/`float`/`range`/`choice`/`shuffle`/`weighted`) and the seeded
+-- deterministic tier (`seed`/`seededInt`/`seededFloat`/`seededChoice` over the
+-- opaque `Seed`). Proves ipe-0 ∧ cargo-0 ∧ run-0 (THE SEAL) for every member.
+--
+-- The entropy tier is RUN through `Cmd.perform` at init (its values are
+-- non-deterministic, so success — not an exact value — is observed). The seeded
+-- tier is asserted reproducible: two draws from the same `Seed` agree, so the
+-- rendered line is stable across runs.
+
+import Ipe.String as String
+import Ipe.Task as Task
+import Ipe.Tea.Terminal as Terminal
+import Ipe.Tea.Terminal.Cmd as Cmd
+import Ipe.Tea.Terminal.Sub as Sub
+import Ipe.Random as Random
+
+type Msg
+    = EntropyDone String
+    | GotLine String
+
+type alias Model =
+    { seeded : String
+    , entropy : String
+    }
+
+fst : ( a, b ) -> a
+fst pair =
+    case pair of
+
+        ( a, _ ) ->
+            a
+
+choiceLabel : Maybe String -> String
+choiceLabel m =
+    case m of
+
+        Just s ->
+            s
+
+        Nothing ->
+            "none"
+
+boolLabel : Bool -> String
+boolLabel b =
+    if b then
+        "ok"
+
+    else
+        "drift"
+
+-- Reproducibility of the seeded tier: two draws from the SAME seed agree.
+seededReport : String
+seededReport =
+    let
+        s0 =
+            Random.seed 12345
+
+        intStable =
+            fst (Random.seededInt s0 1 1000) == fst (Random.seededInt s0 1 1000)
+
+        floatStable =
+            fst (Random.seededFloat s0) == fst (Random.seededFloat s0)
+
+        choiceStable =
+            choiceLabel (fst (Random.seededChoice s0 [ "a", "b", "c" ]))
+                == choiceLabel (fst (Random.seededChoice s0 [ "a", "b", "c" ]))
+    in
+    "seeded:" ++ boolLabel (intStable && floatStable && choiceStable)
+
+-- The entropy tier is exercised (drawn) to prove it lowers + builds + runs.
+entropyDraw : Task Error String
+entropyDraw =
+    Random.int 1 6
+        |> Task.andThen (\_ -> Random.float 0.0 1.0)
+        |> Task.andThen (\_ -> Random.range 1 6)
+        |> Task.andThen (\_ -> Random.choice [ 10, 20, 30 ])
+        |> Task.andThen (\_ -> Random.shuffle [ 1, 2, 3 ])
+        |> Task.andThen (\_ -> Random.weighted [ ( 1.0, "x" ), ( 2.0, "y" ) ])
+        |> Task.map (\_ -> "entropy:ok")
+
+init : () -> ( Model, Cmd Msg )
+init _unit =
+    ( { seeded = seededReport, entropy = "entropy:pending" }
+    , Cmd.perform entropyDraw resultLabel
+    )
+
+resultLabel : Result Error String -> Msg
+resultLabel r =
+    case r of
+
+        Ok label ->
+            EntropyDone label
+
+        Err _ ->
+            EntropyDone "entropy:err"
+
+update : Msg -> Model -> ( Model, Cmd Msg )
+update msg model =
+    case msg of
+
+        EntropyDone label ->
+            ( { model | entropy = label }, Cmd.none )
+
+        GotLine _line ->
+            ( model, Cmd.none )
+
+view : Model -> String
+view model =
+    "random " ++ model.seeded ++ " " ++ model.entropy
+
+subscriptions : Model -> Sub Msg
+subscriptions _model =
+    Sub.none
+
+onLine : String -> Msg
+onLine line =
+    GotLine line
+
+main =
+    Terminal.appLines
+        { init = init
+        , update = update
+        , view = view
+        , subscriptions = subscriptions
+        , onLine = onLine
+        }

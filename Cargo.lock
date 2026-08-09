@@ -2304,6 +2304,7 @@ dependencies = [
  "ipe_canon",
  "ipe_intern",
  "ipe_parse",
+ "ipe_syntax",
 ]
 
 [[package]]

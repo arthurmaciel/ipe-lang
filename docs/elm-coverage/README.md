@@ -160,7 +160,10 @@ Elm is generator-based and pure: `Generator a`, `step`, `Seed`, `map`/`andThen`/
 `range`, `choice`, `shuffle`, `weighted`) and a **seeded pure** surface (`Seed`,
 `seed`, `seededInt`, `seededFloat`, `seededChoice`).
 
-- **Present (reshaped):** `int`, `float`, `weighted`, a `Seed` type, seeded draws.
+- **Present (reshaped):** the whole `Task` tier (`int`, `float`, `range`,
+  `choice`, `shuffle`, `weighted`) and the seeded pure tier (a `Seed` type,
+  `seed`, `seededInt`, `seededFloat`, `seededChoice`) — all resolvable and under
+  the emit seal.
 - **Missing:** the composable `Generator a` monad — `map`/`map2..5`/`andThen`/
   `constant`/`uniform`/`list`/`pair`/`lazy`, `initialSeed`/`independentSeed`,
   `minInt`/`maxInt`.

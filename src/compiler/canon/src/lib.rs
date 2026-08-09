@@ -1024,20 +1024,18 @@ mod tests {
     }
 
     #[test]
-    fn random_range_resolves_as_int_kernel() {
-        // `Random.range` is a source-level pipeline-readable spelling of
-        // `Random.int` (a `FUNC_ALIASES` entry). It must resolve to the same
-        // canonical `RandomInt` kernel — never an IPE-N0005 no-such-member miss
-        // (the reported drift) nor a `ReservedKernel` fail-closed. Its kernel
-        // body is (Random, int), identical to `Random.int`.
-        let src = "module Main exposing (main)\n\
-                   import Ipe.Random as Random\n\n\
-                   main = Random.range\n";
-        let Some((m, i)) = canon_module_src(src) else {
-            assert!(false_marker(), "Random import must canonicalise");
-            return;
-        };
-        assert_main_is_kernel(&m, &i, "Random", "int");
+    fn random_is_not_a_kernel_qualifier() {
+        // `Ipe.Random` is COMPILED-SOURCE (`ipe::stdlib::COMPILED_STD_MODULES`),
+        // so it must NOT appear in the kernel-qualifier catalog — the disjointness
+        // invariant. Its whole surface (`int`/`float`/`range`/`choice`/`shuffle`/
+        // `weighted`/the seeded helpers/the `Seed` ADT) resolves from
+        // `Ipe/Random.ipe`, exercised end-to-end by the `random_members` golden.
+        assert!(
+            !crate::env::STDLIB_MODULE_QUALIFIERS
+                .iter()
+                .any(|(path, canonical)| *path == ["Ipe", "Random"] || *canonical == "Random"),
+            "Ipe.Random must not be a kernel qualifier — it is compiled-source",
+        );
     }
 
     #[test]

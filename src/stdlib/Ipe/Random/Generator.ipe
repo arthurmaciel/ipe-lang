@@ -24,13 +24,23 @@ module Ipe.Random.Generator exposing
     )
 
 
+import Ipe.Ffi as Ffi
 import Ipe.List as List
-import Ipe.Random as Random
 
 
 -- | Opaque PRNG state, threaded through every draw.
 type Seed
     = Seed Int
+
+
+-- The seeded raw kernels this module draws through, aliased locally so the
+-- module is self-contained (no dependency on `Ipe.Random`'s internal surface).
+seededIntRaw : Int -> Int -> Int -> ( Int, Int )
+seededIntRaw = Ffi.kernel "Random_seededIntRaw"
+
+
+seededFloatRaw : Int -> ( Float, Int )
+seededFloatRaw = Ffi.kernel "Random_seededFloatRaw"
 
 
 -- | A recipe for a random value of type `a`: a pure step from one seed to a
@@ -56,7 +66,7 @@ int lo hi =
         case seed of
 
             Seed n ->
-                case Random.seededIntRaw n lo hi of
+                case seededIntRaw n lo hi of
 
                     ( v, next ) ->
                         ( v, Seed next )
@@ -69,7 +79,7 @@ float lo hi =
         case seed of
 
             Seed n ->
-                case Random.seededFloatRaw n of
+                case seededFloatRaw n of
 
                     ( unit, next ) ->
                         ( lo + unit * (hi - lo), Seed next )
