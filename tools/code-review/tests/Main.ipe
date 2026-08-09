@@ -1,0 +1,1289 @@
+module Main exposing (main)
+
+import Ipe.Db as Db
+import Ipe.Db.Sql as Sql
+import Ipe.Dict as Dict
+import Ipe.File as File
+import Ipe.Io as Io
+import Ipe.List as List
+import Ipe.Path as Path
+import Ipe.String as String
+import Ipe.System as System
+import Ipe.Task as Task
+import Lib.Db as LibDb exposing (Decision(..))
+import Lib.Format as Format
+import Lib.Highlight as Highlight exposing (Lang(..), Token(..))
+import Lib.Index as Index
+import Lib.Keys as Keys exposing (KeyAction(..))
+import Lib.Links as Links exposing (Link(..))
+import Lib.Queue as Queue
+
+
+tableExists : Db -> String -> Task.Task Error Bool
+tableExists db name =
+    Db.findWhere db
+        "sqlite_master"
+        (Sql.and
+            (Sql.eq (Sql.column "type") (Sql.string "table"))
+            (Sql.eq (Sql.column "name") (Sql.string name))
+        )
+        |> Task.map (\rows -> List.length rows == 1)
+
+
+countReviewRows : Db -> String -> String -> Task.Task Error Int
+countReviewRows db uid bodyHash =
+    Db.findWhere db
+        "review"
+        (Sql.and
+            (Sql.eq (Sql.column "uid") (Sql.string uid))
+            (Sql.eq (Sql.column "body_hash") (Sql.string bodyHash))
+        )
+        |> Task.map List.length
+
+
+expectErr : Task.Task Error Int -> Task.Task Error Bool
+expectErr t =
+    t
+        |> Task.map (\_ -> False)
+        |> Task.onError (\_ -> Task.succeed True)
+
+
+bothTablesExist : Db -> Task.Task Error Bool
+bothTablesExist db =
+    Task.map2
+        (\a b -> a && b)
+        (tableExists db "review")
+        (tableExists db "drain_cursor")
+
+
+idempotent : Db -> Task.Task Error Bool
+idempotent db =
+    LibDb.migrate db
+        |> Task.andThen (\_ -> tableExists db "review")
+
+
+duplicateInsertIsNoop : Db -> Task.Task Error Bool
+duplicateInsertIsNoop db =
+    LibDb.insertDecision db "dup-uid" "h1" Approved
+        |> Task.andThen
+            (\_ ->
+                LibDb.insertDecision db "dup-uid" "h1" (Refused "changed")
+            )
+        |> Task.andThen (\_ -> countReviewRows db "dup-uid" "h1")
+        |> Task.andThen
+            (\n ->
+                LibDb.findDecision db "dup-uid" "h1"
+                    |> Task.map (\m -> n == 1 && isApproved m)
+            )
+
+
+-- Re-reviewing the same pair must succeed (any Err here fails
+-- the check loudly) and must keep the first decision.
+isApproved : Maybe Decision -> Bool
+isApproved m =
+    case m of
+        Nothing ->
+            False
+
+        Just d ->
+            case d of
+                Approved ->
+                    True
+
+                Refused _ ->
+                    False
+
+
+refuseWithoutReasonRejected : Db -> Task.Task Error Bool
+refuseWithoutReasonRejected db =
+    LibDb.insertDecision db "bad-uid" "h2" (Refused "")
+        |> expectErr
+        |> Task.andThen
+            (\emptyRejected ->
+                LibDb.insertDecision db "bad-uid" "h3" (Refused "   ")
+                    |> expectErr
+                    |> Task.andThen
+                        (\blankRejected ->
+                            Task.map2
+                                (\n2 n3 -> emptyRejected && blankRejected && n2 == 0 && n3 == 0)
+                                (countReviewRows db "bad-uid" "h2")
+                                (countReviewRows db "bad-uid" "h3")
+                        )
+            )
+
+
+checkPair : Maybe Decision -> Maybe Decision -> Bool
+checkPair approved refused =
+    case approved of
+        Nothing ->
+            False
+
+        Just Approved ->
+            case refused of
+                Nothing ->
+                    False
+
+                Just d ->
+                    matchRefused d
+
+        Just (Refused _) ->
+            False
+
+
+matchRefused : Decision -> Bool
+matchRefused d =
+    case d of
+        Approved ->
+            False
+
+        Refused reason ->
+            reason == "too big"
+
+
+decisionRoundtrip : Db -> Task.Task Error Bool
+decisionRoundtrip db =
+    LibDb.insertDecision db "rt-uid" "h3" Approved
+        |> Task.andThen (\_ -> LibDb.insertDecision db "rt-uid" "h4" (Refused "too big"))
+        |> Task.andThen
+            (\_ ->
+                Task.map2 checkPair
+                    (LibDb.findDecision db "rt-uid" "h3")
+                    (LibDb.findDecision db "rt-uid" "h4")
+            )
+
+
+allChecks : Db -> Task.Task Error (List ( String, Bool ))
+allChecks db =
+    Task.sequence
+        [ Task.map (\ok -> ( "0001+0002 create tables", ok )) (bothTablesExist db)
+        , Task.map (\ok -> ( "re-migrate idempotent", ok )) (idempotent db)
+        , Task.map (\ok -> ( "duplicate (uid,body_hash) no-op", ok )) (duplicateInsertIsNoop db)
+        , Task.map (\ok -> ( "refuse without reason rejected", ok )) (refuseWithoutReasonRejected db)
+        , Task.map (\ok -> ( "decision roundtrip", ok )) (decisionRoundtrip db)
+        , Task.succeed
+            ( "formatReviewedAt renders UTC"
+            , Format.formatReviewedAt 0
+                == "1970-01-01 00:00:00"
+                && Format.formatReviewedAt 1700000000000
+                == "2023-11-14 22:13:20"
+            )
+        , Task.succeed
+            ( "numberedLines counts from line_start"
+            , Format.numberedLines 10 "a\nb\nc"
+                == [ ( 10, "a" ), ( 11, "b" ), ( 12, "c" ) ]
+            )
+        , Task.succeed
+            ( "highlight: rust keywords vs identifiers"
+            , List.any (isKeyword "fn") (Highlight.tokenize Highlight.Rust "fn answer() -> i32 { 42 }")
+                && List.any (isIdent "answer") (Highlight.tokenize Highlight.Rust "fn answer() -> i32 { 42 }")
+                && List.any (isNum "42") (Highlight.tokenize Highlight.Rust "fn answer() -> i32 { 42 }")
+                && List.any (isStr "\"hi\"") (Highlight.tokenize Highlight.Rust "let s = \"hi\";")
+                && List.any (isComment "// note") (Highlight.tokenize Highlight.Rust "// note\nfn f() {}")
+            )
+        , Task.succeed
+            ( "highlight: shell tokenizes"
+            , List.any (isKeyword "echo") (Highlight.tokenize Highlight.Shell "echo hi")
+                && List.any (isIdent "hi") (Highlight.tokenize Highlight.Shell "echo hi")
+                && isShell (Highlight.langFor "sh")
+            )
+        , Task.succeed
+            ( "highlight: malformed degrades to plain"
+            , List.any (isPlain "\"unterminated") (Highlight.tokenize Highlight.Rust "\"unterminated")
+                && List.any (isPlain "/* open") (Highlight.tokenize Highlight.Rust "/* open")
+                && List.any (isPlain "any old text") (Highlight.tokenize Highlight.Unknown "any old text")
+                && isUnknown (Highlight.langFor "weird")
+            )
+        , Task.succeed
+            ( "percent: decided over queued"
+            , Format.percent 3 4
+                == "75%"
+                && Format.percent 0 4
+                == "0%"
+                && Format.percent 4 4
+                == "100%"
+                && Format.percent 5 4
+                == "125%"
+                && Format.percent 0 0
+                == "0%"
+            )
+        ]
+
+
+isKeyword : String -> Token -> Bool
+isKeyword kw tok =
+    case tok of
+        Keyword k ->
+            k == kw
+
+        Str _ ->
+            False
+
+        Comment _ ->
+            False
+
+        Num _ ->
+            False
+
+        Ident _ ->
+            False
+
+        Plain _ ->
+            False
+
+
+isIdent : String -> Token -> Bool
+isIdent s tok =
+    case tok of
+        Ident t ->
+            t == s
+
+        Keyword _ ->
+            False
+
+        Str _ ->
+            False
+
+        Comment _ ->
+            False
+
+        Num _ ->
+            False
+
+        Plain _ ->
+            False
+
+
+isNum : String -> Token -> Bool
+isNum s tok =
+    case tok of
+        Num t ->
+            t == s
+
+        Keyword _ ->
+            False
+
+        Str _ ->
+            False
+
+        Comment _ ->
+            False
+
+        Ident _ ->
+            False
+
+        Plain _ ->
+            False
+
+
+isStr : String -> Token -> Bool
+isStr s tok =
+    case tok of
+        Str t ->
+            t == s
+
+        Keyword _ ->
+            False
+
+        Comment _ ->
+            False
+
+        Num _ ->
+            False
+
+        Ident _ ->
+            False
+
+        Plain _ ->
+            False
+
+
+isComment : String -> Token -> Bool
+isComment s tok =
+    case tok of
+        Comment t ->
+            t == s
+
+        Keyword _ ->
+            False
+
+        Str _ ->
+            False
+
+        Num _ ->
+            False
+
+        Ident _ ->
+            False
+
+        Plain _ ->
+            False
+
+
+isPlain : String -> Token -> Bool
+isPlain s tok =
+    case tok of
+        Plain t ->
+            t == s
+
+        Keyword _ ->
+            False
+
+        Str _ ->
+            False
+
+        Comment _ ->
+            False
+
+        Num _ ->
+            False
+
+        Ident _ ->
+            False
+
+
+isShell : Lang -> Bool
+isShell lang =
+    case lang of
+        Shell ->
+            True
+
+        Rust ->
+            False
+
+        Ipe ->
+            False
+
+        Unknown ->
+            False
+
+
+isUnknown : Lang -> Bool
+isUnknown lang =
+    case lang of
+        Unknown ->
+            True
+
+        Rust ->
+            False
+
+        Shell ->
+            False
+
+        Ipe ->
+            False
+
+
+-- ── B3: ipe-index bridge ───────────────────────────────────────────────────
+--
+-- Seeds a scratch ipe-index database (units + change_queue) plus two source
+-- files, then asks Lib.Index.loadPending for the queue and checks the loaded
+-- units' metadata and source slices.
+indexBridge : Task.Task Error Bool
+indexBridge =
+    let
+        base =
+            System.getenvOr "TMPDIR" "/tmp" ++ "/ipe-index-b3-test"
+
+        repo =
+            base ++ "/repo"
+
+        indexDb =
+            base ++ "/index.db"
+    in
+    Task.fromResult (Path.fromString indexDb)
+        |> Task.andThen File.remove
+        |> Task.onError (\_ -> Task.succeed ())
+        |> Task.andThen (\_ -> seedIndex indexDb repo)
+        |> Task.andThen (\_ -> Index.loadPending |> Task.map checkUnits)
+        |> Task.andThen (\ok -> cleanupIndex indexDb repo |> Task.map (\_ -> ok))
+
+
+seedIndex : String -> String -> Task.Task Error ()
+seedIndex indexDb repo =
+    Task.fromResult (Path.fromString (repo ++ "/src"))
+        |> Task.andThen File.mkdirAll
+        |> Task.andThen
+            (\_ ->
+                Task.map2
+                    (\_ _ -> ())
+                    (writeFileText (repo ++ "/src/Lib.rs") fixtureLibRs)
+                    (writeFileText (repo ++ "/src/Main.ipe") fixtureMainIpe)
+            )
+        |> Task.andThen (\_ -> seedIndexDb indexDb)
+        |> Task.andThen (\_ -> setIndexEnv indexDb repo)
+
+
+writeFileText : String -> String -> Task.Task Error ()
+writeFileText path text =
+    Task.fromResult (Path.fromString path)
+        |> Task.andThen (\p -> File.writeFile p text)
+
+
+fixtureLibRs : String
+fixtureLibRs =
+    "// fixture library\n\npub fn answer() -> i32 {\n    // the answer to everything\n    42\n}\n\npub fn other() -> i32 {\n    7\n}\n"
+
+
+fixtureMainIpe : String
+fixtureMainIpe =
+    "module Main exposing (main)\n\nmain = ()\n"
+
+
+unitsDdl : String
+unitsDdl =
+    "CREATE TABLE units (uid TEXT PRIMARY KEY, path TEXT NOT NULL, kind TEXT NOT NULL, name TEXT NOT NULL, qualified TEXT NOT NULL, line_start INTEGER NOT NULL, line_end INTEGER NOT NULL, facing TEXT NOT NULL, purpose TEXT, body_hash TEXT NOT NULL, updated_sha TEXT NOT NULL)"
+
+
+queueDdl : String
+queueDdl =
+    "CREATE TABLE change_queue (uid TEXT PRIMARY KEY, change TEXT NOT NULL, old_hash TEXT, new_hash TEXT, enqueued_sha TEXT NOT NULL, enqueued_at INTEGER NOT NULL)"
+
+
+seedIndexDb : String -> Task.Task Error ()
+seedIndexDb indexDb =
+    Db.open "sqlite" ("sqlite://" ++ indexDb ++ "?mode=rwc")
+        |> Task.andThen
+            (\conn ->
+                Db.exec conn unitsDdl []
+                    |> Task.andThen (\_ -> Db.exec conn queueDdl [])
+                    |> Task.andThen (\_ -> insertUnitRows conn)
+            )
+        |> Task.map (\_ -> ())
+
+
+insertUnitRows : Db -> Task.Task Error Int
+insertUnitRows conn =
+    Db.exec conn
+        "INSERT INTO units VALUES (?,?,?,?,?,?,?,?,?,?,?)"
+        [ SqlString "u-a"
+        , SqlString "ipe:src/Lib.rs"
+        , SqlString "fn"
+        , SqlString "answer"
+        , SqlString "Lib.answer"
+        , SqlInt 3
+        , SqlInt 6
+        , SqlString "internal"
+        , SqlString "purpose-A"
+        , SqlString "hashA"
+        , SqlString "shaA"
+        ]
+        |> Task.andThen
+            (\_ ->
+                Db.exec conn
+                    "INSERT INTO units VALUES (?,?,?,?,?,?,?,?,?,?,?)"
+                    [ SqlString "u-b"
+                    , SqlString "ipe:src/Main.ipe"
+                    , SqlString "module"
+                    , SqlString "Main"
+                    , SqlString "Main"
+                    , SqlInt 1
+                    , SqlInt 2
+                    , SqlString "user"
+                    , SqlNull (SqlString "")
+                    , SqlString "hashB"
+                    , SqlString "shaB"
+                    ]
+            )
+        |> Task.andThen
+            (\_ ->
+                Db.exec conn
+                    "INSERT INTO units VALUES (?,?,?,?,?,?,?,?,?,?,?)"
+                    [ SqlString "u-del"
+                    , SqlString "ipe:src/Gone.ipe"
+                    , SqlString "module"
+                    , SqlString "Gone"
+                    , SqlString "Gone"
+                    , SqlInt 1
+                    , SqlInt 1
+                    , SqlString "user"
+                    , SqlNull (SqlString "")
+                    , SqlString "hashC"
+                    , SqlString "shaC"
+                    ]
+            )
+        |> Task.andThen
+            (\_ ->
+                Db.exec conn
+                    "INSERT INTO change_queue VALUES (?,?,?,?,?,?)"
+                    [ SqlString "u-a", SqlString "new", SqlNull (SqlString ""), SqlNull (SqlString ""), SqlString "shaA", SqlInt 1 ]
+            )
+        |> Task.andThen
+            (\_ ->
+                Db.exec conn
+                    "INSERT INTO change_queue VALUES (?,?,?,?,?,?)"
+                    [ SqlString "u-b", SqlString "modified", SqlString "oldB", SqlString "hashB", SqlString "shaB", SqlInt 2 ]
+            )
+        |> Task.andThen
+            (\_ ->
+                Db.exec conn
+                    "INSERT INTO change_queue VALUES (?,?,?,?,?,?)"
+                    [ SqlString "u-del", SqlString "deleted", SqlString "hashC", SqlNull (SqlString ""), SqlString "shaC", SqlInt 3 ]
+            )
+
+
+setIndexEnv : String -> String -> Task.Task Error ()
+setIndexEnv indexDb repo =
+    System.setenv "IPE_INDEX_DB" indexDb
+        |> Task.andThen (\_ -> System.setenv "IPE_INDEX_ROOT" repo)
+
+
+checkUnits : List Index.Unit -> Bool
+checkUnits units =
+    if List.length units /= 2 then
+        False
+
+    else
+        case List.head units of
+            Nothing ->
+                False
+
+            Just a ->
+                case listSecond units of
+                    Nothing ->
+                        False
+
+                    Just b ->
+                        isUnitA a && isUnitB b
+
+
+listSecond : List a -> Maybe a
+listSecond items =
+    case items of
+        _ :: rest ->
+            List.head rest
+
+        [] ->
+            Nothing
+
+
+isUnitA : Index.Unit -> Bool
+isUnitA u =
+    u.uid
+        == "u-a"
+        && u.change
+        == "new"
+        && u.oldHash
+        == Nothing
+        && u.newHash
+        == Nothing
+        && u.path
+        == "ipe:src/Lib.rs"
+        && u.name
+        == "answer"
+        && u.qualified
+        == "Lib.answer"
+        && u.kind
+        == "fn"
+        && u.lineStart
+        == 3
+        && u.lineEnd
+        == 6
+        && u.facing
+        == "internal"
+        && u.purpose
+        == Just "purpose-A"
+        && u.bodyHash
+        == "hashA"
+        && u.updatedSha
+        == "shaA"
+        && u.source
+        == "pub fn answer() -> i32 {\n    // the answer to everything\n    42\n}"
+
+
+isUnitB : Index.Unit -> Bool
+isUnitB u =
+    u.uid
+        == "u-b"
+        && u.change
+        == "modified"
+        && u.newHash
+        == Just "hashB"
+        && u.path
+        == "ipe:src/Main.ipe"
+        && u.kind
+        == "module"
+        && u.facing
+        == "user"
+        && u.purpose
+        == Nothing
+        && u.source
+        == "module Main exposing (main)\n"
+
+
+cleanupIndex : String -> String -> Task.Task Error ()
+cleanupIndex indexDb repo =
+    Task.sequence
+        [ removeFileIfAny indexDb
+        , removeFileIfAny (indexDb ++ "-wal")
+        , removeFileIfAny (indexDb ++ "-shm")
+        , removeFileIfAny (repo ++ "/src/Lib.rs")
+        , removeFileIfAny (repo ++ "/src/Main.ipe")
+        ]
+        |> Task.map (\_ -> ())
+
+
+removeFileIfAny : String -> Task.Task Error ()
+removeFileIfAny path =
+    Task.fromResult (Path.fromString path)
+        |> Task.andThen File.remove
+        |> Task.onError (\_ -> Task.succeed ())
+
+
+-- ── B4: guard the path resolver ─────────────────────────────────────────────
+--
+-- A queued unit whose stored path escapes the index root (mid-path `..`
+-- segment) must fail the whole load closed, never read a file outside root.
+traversalPathsRejected : Task.Task Error Bool
+traversalPathsRejected =
+    let
+        base =
+            System.getenvOr "TMPDIR" "/tmp" ++ "/ipe-index-b3-traversal"
+    in
+    Task.fromResult (Path.fromString (base ++ "/index.db"))
+        |> Task.andThen File.remove
+        |> Task.onError (\_ -> Task.succeed ())
+        |> Task.andThen (\_ -> Task.fromResult (Path.fromString base) |> Task.andThen File.mkdirAll)
+        |> Task.andThen (\_ -> seedTraversalDb base)
+        |> Task.andThen
+            (\_ ->
+                Index.loadPending
+                    |> Task.map (\_ -> False)
+                    |> Task.onError (\_ -> Task.succeed True)
+            )
+        |> Task.andThen (\ok -> removeFileIfAny (base ++ "/index.db") |> Task.map (\_ -> ok))
+
+
+seedTraversalDb : String -> Task.Task Error ()
+seedTraversalDb base =
+    Db.open "sqlite" ("sqlite://" ++ base ++ "/index.db?mode=rwc")
+        |> Task.andThen
+            (\conn ->
+                Db.exec conn unitsDdl []
+                    |> Task.andThen (\_ -> Db.exec conn queueDdl [])
+                    |> Task.andThen
+                        (\_ ->
+                            Db.exec conn
+                                "INSERT INTO units VALUES (?,?,?,?,?,?,?,?,?,?,?)"
+                                [ SqlString "u-esc"
+                                , SqlString "ipe:a/../../escape"
+                                , SqlString "fn"
+                                , SqlString "x"
+                                , SqlString "x"
+                                , SqlInt 1
+                                , SqlInt 1
+                                , SqlString "user"
+                                , SqlNull (SqlString "")
+                                , SqlString "h"
+                                , SqlString "s"
+                                ]
+                        )
+                    |> Task.andThen
+                        (\_ ->
+                            Db.exec conn
+                                "INSERT INTO change_queue VALUES (?,?,?,?,?,?)"
+                                [ SqlString "u-esc", SqlString "new", SqlNull (SqlString ""), SqlNull (SqlString ""), SqlString "s", SqlInt 1 ]
+                        )
+            )
+        |> Task.andThen (\_ -> System.setenv "IPE_INDEX_DB" (base ++ "/index.db"))
+        |> Task.andThen (\_ -> System.setenv "IPE_INDEX_ROOT" base)
+        |> Task.map (\_ -> ())
+
+
+-- ── B5: decision drain loop ─────────────────────────────────────────────────
+--
+-- A decided unit leaves the index queue: recordDrain writes the drain cursor
+-- (idempotent on the same pair), drainUnit deletes the consumed change_queue
+-- row, and a subsequent loadPending no longer lists the unit.
+drainFlow : Task.Task Error Bool
+drainFlow =
+    let
+        base =
+            System.getenvOr "TMPDIR" "/tmp" ++ "/ipe-index-b5-drain"
+
+        repo =
+            base ++ "/repo"
+
+        indexDb =
+            base ++ "/index.db"
+
+        reviewDb =
+            base ++ "/review.db"
+    in
+    Task.fromResult (Path.fromString indexDb)
+        |> Task.andThen File.remove
+        |> Task.onError (\_ -> Task.succeed ())
+        |> Task.andThen (\_ -> Task.fromResult (Path.fromString base) |> Task.andThen File.mkdirAll)
+        |> Task.andThen (\_ -> Task.fromResult (Path.fromString (repo ++ "/src")) |> Task.andThen File.mkdirAll)
+        |> Task.andThen (\_ -> writeFileText (repo ++ "/src/D.ipe") fixtureMainIpe)
+        |> Task.andThen (\_ -> seedDrainDb indexDb)
+        |> Task.andThen (\_ -> System.setenv "IPE_INDEX_DB" indexDb)
+        |> Task.andThen (\_ -> System.setenv "IPE_INDEX_ROOT" repo)
+        |> Task.andThen (\_ -> Index.loadPending)
+        |> Task.map (\units -> List.length units == 1)
+        |> Task.andThen
+            (\queued ->
+                if not queued then
+                    Task.succeed False
+
+                else
+                    LibDb.openAt reviewDb
+                        |> Task.andThen (\db -> LibDb.migrate db |> Task.map (\_ -> db))
+                        |> Task.andThen
+                            (\db ->
+                                LibDb.recordDrain db "u-d" "hashD"
+                                    |> Task.andThen (\_ -> LibDb.recordDrain db "u-d" "hashD")
+                                    |> Task.andThen (\_ -> countDrainRows db "u-d" "hashD")
+                                    |> Task.map (\n -> n == 1)
+                            )
+            )
+        |> Task.andThen
+            (\drained ->
+                if not drained then
+                    Task.succeed False
+
+                else
+                    Index.drainUnit "u-d"
+                        |> Task.andThen (\_ -> Index.loadPending)
+                        |> Task.map (\units -> List.length units == 0)
+            )
+        |> Task.andThen
+            (\ok ->
+                Task.sequence
+                    [ removeFileIfAny indexDb
+                    , removeFileIfAny (indexDb ++ "-wal")
+                    , removeFileIfAny (indexDb ++ "-shm")
+                    , removeFileIfAny (repo ++ "/src/D.ipe")
+                    , removeFileIfAny reviewDb
+                    , removeFileIfAny (reviewDb ++ "-wal")
+                    , removeFileIfAny (reviewDb ++ "-shm")
+                    ]
+                    |> Task.map (\_ -> ok)
+            )
+
+
+countDrainRows : Db -> String -> String -> Task.Task Error Int
+countDrainRows db uid bodyHash =
+    Db.findWhere db
+        "drain_cursor"
+        (Sql.and
+            (Sql.eq (Sql.column "uid") (Sql.string uid))
+            (Sql.eq (Sql.column "body_hash") (Sql.string bodyHash))
+        )
+        |> Task.map List.length
+
+
+seedDrainDb : String -> Task.Task Error ()
+seedDrainDb indexDb =
+    Db.open "sqlite" ("sqlite://" ++ indexDb ++ "?mode=rwc")
+        |> Task.andThen
+            (\conn ->
+                Db.exec conn unitsDdl []
+                    |> Task.andThen (\_ -> Db.exec conn queueDdl [])
+                    |> Task.andThen
+                        (\_ ->
+                            Db.exec conn
+                                "INSERT INTO units VALUES (?,?,?,?,?,?,?,?,?,?,?)"
+                                [ SqlString "u-d"
+                                , SqlString "ipe:src/D.ipe"
+                                , SqlString "module"
+                                , SqlString "D"
+                                , SqlString "D"
+                                , SqlInt 1
+                                , SqlInt 2
+                                , SqlString "user"
+                                , SqlNull (SqlString "")
+                                , SqlString "hashD"
+                                , SqlString "shaD"
+                                ]
+                        )
+                    |> Task.andThen
+                        (\_ ->
+                            Db.exec conn
+                                "INSERT INTO change_queue VALUES (?,?,?,?,?,?)"
+                                [ SqlString "u-d", SqlString "new", SqlNull (SqlString ""), SqlNull (SqlString ""), SqlString "shaD", SqlInt 1 ]
+                        )
+            )
+        |> Task.map (\_ -> ())
+
+
+-- ── B6: review history ──────────────────────────────────────────────────────
+--
+-- Two decisions on a scratch review db must come back through findDecisions
+-- with their columns in order (descending reviewed_at, then uid).
+historyRoundtrip : Task.Task Error Bool
+historyRoundtrip =
+    let
+        base =
+            System.getenvOr "TMPDIR" "/tmp" ++ "/ipe-index-b6-history"
+
+        reviewDb =
+            base ++ "/review.db"
+    in
+    removeFileIfAny reviewDb
+        |> Task.andThen (\_ -> Task.fromResult (Path.fromString base))
+        |> Task.andThen File.mkdirAll
+        |> Task.andThen (\_ -> LibDb.openAt reviewDb)
+        |> Task.andThen
+            (\db ->
+                LibDb.migrate db
+                    |> Task.andThen (\_ -> insertBoth db)
+                    |> Task.map (\_ -> db)
+            )
+        |> Task.andThen
+            (\db ->
+                LibDb.findDecisions db
+                    |> Task.map
+                        (\rows ->
+                            List.length rows
+                                == 2
+                                && List.member ( "u-a", "approve" ) (List.map (\r -> ( r.uid, r.decision )) rows)
+                                && List.member ( "u-b", "refuse" ) (List.map (\r -> ( r.uid, r.decision )) rows)
+                                && List.member (Just "too big") (List.map (\r -> r.reason) rows)
+                        )
+            )
+        |> Task.andThen
+            (\ok ->
+                removeFileIfAny reviewDb
+                    |> Task.andThen (\_ -> removeFileIfAny (reviewDb ++ "-wal"))
+                    |> Task.andThen (\_ -> removeFileIfAny (reviewDb ++ "-shm"))
+                    |> Task.map (\_ -> ok)
+            )
+
+
+insertBoth : Db -> Task.Task Error Int
+insertBoth db =
+    LibDb.insertDecision db "u-a" "hashA" Approved
+        |> Task.andThen (\_ -> LibDb.insertDecision db "u-b" "hashB" (Refused "too big"))
+
+
+-- ── B8: change re-enqueue ─────────────────────────────────────────────────────
+--
+-- A unit already decided on its current hash stays hidden; a unit decided on an
+-- OLDER hash resurfaced at the queue head, flagged with the previous decision;
+-- never-seen units follow in their natural order.
+changeReenqueue : Task.Task Error Bool
+changeReenqueue =
+    let
+        base =
+            System.getenvOr "TMPDIR" "/tmp" ++ "/ipe-index-b8-reenqueue"
+
+        repo =
+            base ++ "/repo"
+
+        indexDb =
+            base ++ "/index.db"
+
+        reviewDb =
+            base ++ "/review.db"
+    in
+    Task.fromResult (Path.fromString indexDb)
+        |> Task.andThen File.remove
+        |> Task.onError (\_ -> Task.succeed ())
+        |> Task.andThen (\_ -> Task.fromResult (Path.fromString base) |> Task.andThen File.mkdirAll)
+        |> Task.andThen (\_ -> Task.fromResult (Path.fromString (repo ++ "/src")) |> Task.andThen File.mkdirAll)
+        |> Task.andThen (\_ -> writeFileText (repo ++ "/src/A.ipe") fixtureMainIpe)
+        |> Task.andThen (\_ -> writeFileText (repo ++ "/src/B.ipe") fixtureMainIpe)
+        |> Task.andThen (\_ -> writeFileText (repo ++ "/src/C.ipe") fixtureMainIpe)
+        |> Task.andThen (\_ -> seedB8Db indexDb)
+        |> Task.andThen (\_ -> System.setenv "IPE_INDEX_DB" indexDb)
+        |> Task.andThen (\_ -> System.setenv "IPE_INDEX_ROOT" repo)
+        |> Task.andThen
+            (\_ ->
+                LibDb.openAt reviewDb
+                    |> Task.andThen (\db -> LibDb.migrate db |> Task.map (\_ -> db))
+                    |> Task.andThen
+                        (\db ->
+                            LibDb.insertDecision db "u-a" "hashA" Approved
+                                |> Task.andThen (\_ -> LibDb.insertDecision db "u-b" "hashB" (Refused "too big"))
+                                |> Task.map (\_ -> db)
+                        )
+                    |> Task.andThen (\_ -> System.setenv "IPE_REVIEW_DB" reviewDb)
+                    |> Task.andThen (\_ -> Queue.load)
+            )
+        |> Task.map
+            (\units ->
+                changedHead units
+                    && freshSecond units
+                    && List.length units
+                    == 2
+            )
+        |> Task.andThen
+            (\ok ->
+                Task.sequence
+                    [ removeFileIfAny indexDb
+                    , removeFileIfAny (indexDb ++ "-wal")
+                    , removeFileIfAny (indexDb ++ "-shm")
+                    , removeFileIfAny (repo ++ "/src/A.ipe")
+                    , removeFileIfAny (repo ++ "/src/B.ipe")
+                    , removeFileIfAny (repo ++ "/src/C.ipe")
+                    , removeFileIfAny reviewDb
+                    , removeFileIfAny (reviewDb ++ "-wal")
+                    , removeFileIfAny (reviewDb ++ "-shm")
+                    ]
+                    |> Task.map (\_ -> ok)
+            )
+
+
+changedHead : List Queue.QueuedUnit -> Bool
+changedHead units =
+    case List.head units of
+        Just first ->
+            first.unit.uid == "u-a" && resurfaced first.changed
+
+        Nothing ->
+            False
+
+
+resurfaced : Maybe LibDb.ReviewRow -> Bool
+resurfaced old =
+    case old of
+        Just row ->
+            row.decision == "approve" && row.bodyHash == "hashA"
+
+        Nothing ->
+            False
+
+
+freshSecond : List Queue.QueuedUnit -> Bool
+freshSecond units =
+    case List.head (List.drop 1 units) of
+        Just second ->
+            second.unit.uid == "u-c" && neverSeen second.changed
+
+        Nothing ->
+            False
+
+
+neverSeen : Maybe LibDb.ReviewRow -> Bool
+neverSeen old =
+    case old of
+        Nothing ->
+            True
+
+        Just _ ->
+            False
+
+
+seedB8Db : String -> Task.Task Error ()
+seedB8Db indexDb =
+    Db.open "sqlite" ("sqlite://" ++ indexDb ++ "?mode=rwc")
+        |> Task.andThen
+            (\conn ->
+                Db.exec conn unitsDdl []
+                    |> Task.andThen (\_ -> Db.exec conn queueDdl [])
+                    |> Task.andThen (\_ -> insertB8Units conn)
+            )
+        |> Task.map (\_ -> ())
+
+
+insertB8Units : Db -> Task.Task Error Int
+insertB8Units conn =
+    Db.exec conn
+        "INSERT INTO units VALUES (?,?,?,?,?,?,?,?,?,?,?)"
+        [ SqlString "u-a"
+        , SqlString "ipe:src/A.ipe"
+        , SqlString "module"
+        , SqlString "A"
+        , SqlString "A"
+        , SqlInt 1
+        , SqlInt 2
+        , SqlString "user"
+        , SqlNull (SqlString "")
+        , SqlString "hashA2"
+        , SqlString "shaA2"
+        ]
+        |> Task.andThen
+            (\_ ->
+                Db.exec conn
+                    "INSERT INTO units VALUES (?,?,?,?,?,?,?,?,?,?,?)"
+                    [ SqlString "u-b"
+                    , SqlString "ipe:src/B.ipe"
+                    , SqlString "module"
+                    , SqlString "B"
+                    , SqlString "B"
+                    , SqlInt 1
+                    , SqlInt 2
+                    , SqlString "user"
+                    , SqlNull (SqlString "")
+                    , SqlString "hashB"
+                    , SqlString "shaB"
+                    ]
+            )
+        |> Task.andThen
+            (\_ ->
+                Db.exec conn
+                    "INSERT INTO units VALUES (?,?,?,?,?,?,?,?,?,?,?)"
+                    [ SqlString "u-c"
+                    , SqlString "ipe:src/C.ipe"
+                    , SqlString "module"
+                    , SqlString "C"
+                    , SqlString "C"
+                    , SqlInt 1
+                    , SqlInt 2
+                    , SqlString "user"
+                    , SqlNull (SqlString "")
+                    , SqlString "hashC"
+                    , SqlString "shaC"
+                    ]
+            )
+        |> Task.andThen
+            (\_ ->
+                Db.exec conn
+                    "INSERT INTO change_queue VALUES (?,?,?,?,?,?)"
+                    [ SqlString "u-a", SqlString "modified", SqlString "hashA", SqlString "hashA2", SqlString "shaA2", SqlInt 3 ]
+            )
+        |> Task.andThen
+            (\_ ->
+                Db.exec conn
+                    "INSERT INTO change_queue VALUES (?,?,?,?,?,?)"
+                    [ SqlString "u-b", SqlString "new", SqlNull (SqlString ""), SqlString "hashB", SqlString "shaB", SqlInt 2 ]
+            )
+        |> Task.andThen
+            (\_ ->
+                Db.exec conn
+                    "INSERT INTO change_queue VALUES (?,?,?,?,?,?)"
+                    [ SqlString "u-c", SqlString "new", SqlNull (SqlString ""), SqlString "hashC", SqlString "shaC", SqlInt 1 ]
+            )
+
+
+-- ── B9: internal/external linking ───────────────────────────────────────────
+--
+-- Identifier tokens in a unit's source resolve against the index's qualified
+-- names (internal) or http(s) URLs (external); the unit's own name never
+-- links to itself and punctuation is stripped from tokens.
+linksResolve : Bool
+linksResolve =
+    let
+        units =
+            [ ( "Lib.answer", "u-a" )
+            , ( "Lib.answer2", "u-b" )
+            , ( "Main.main", "u-m" )
+            ]
+
+        got =
+            Links.resolve
+                "Lib.answer"
+                units
+                "use Lib.answer();\nLib.answer2 helper https://docs.rs/serde\nMain.main() Main.main"
+
+        want =
+            [ Links.Internal "Lib.answer2" "u-b"
+            , Links.External "https://docs.rs/serde"
+            , Links.Internal "Main.main" "u-m"
+            ]
+    in
+    List.map Links.linkKey got == List.map Links.linkKey want
+
+
+linksSubstring : Bool
+linksSubstring =
+    let
+        noSelf =
+            List.isEmpty (Links.resolve "Main" [ ( "Main", "u-x" ) ] "Main.main()")
+
+        urlPunct =
+            Links.resolve "" [] "(https://a.io/b,)"
+                == [ Links.External "https://a.io/b" ]
+    in
+    noSelf && urlPunct
+
+
+-- The unit page's data path: a uid that exists loads with source and qualified
+-- name; a bogus uid loads Nothing; the qualified-name table lists every unit.
+unitPageLoad : Task.Task Error Bool
+unitPageLoad =
+    let
+        base =
+            System.getenvOr "TMPDIR" "/tmp" ++ "/ipe-index-b9-unit"
+
+        repo =
+            base ++ "/repo"
+
+        indexDb =
+            base ++ "/index.db"
+    in
+    Task.fromResult (Path.fromString indexDb)
+        |> Task.andThen File.remove
+        |> Task.onError (\_ -> Task.succeed ())
+        |> Task.andThen (\_ -> Task.fromResult (Path.fromString base) |> Task.andThen File.mkdirAll)
+        |> Task.andThen (\_ -> Task.fromResult (Path.fromString (repo ++ "/src")) |> Task.andThen File.mkdirAll)
+        |> Task.andThen (\_ -> writeFileText (repo ++ "/src/Lib.rs") fixtureLibRs)
+        |> Task.andThen (\_ -> writeFileText (repo ++ "/src/Main.ipe") fixtureMainIpe)
+        |> Task.andThen (\_ -> seedIndexDb indexDb)
+        |> Task.andThen (\_ -> setIndexEnv indexDb repo)
+        |> Task.andThen
+            (\_ ->
+                Index.loadUnitByUid "u-a"
+                    |> Task.andThen
+                        (\mb ->
+                            case mb of
+                                Just unit ->
+                                    Index.qualifiedUids
+                                        |> Task.map
+                                            (\qs ->
+                                                unit.qualified
+                                                    == "Lib.answer"
+                                                    && String.contains "answer" unit.source
+                                                    && List.length qs
+                                                    == 3
+                                                    && List.member ( "Lib.answer", "u-a" ) qs
+                                            )
+
+                                Nothing ->
+                                    Task.succeed False
+                        )
+            )
+        |> Task.andThen
+            (\ok ->
+                if not ok then
+                    Task.succeed False
+
+                else
+                    Index.loadUnitByUid "u-zz"
+                        |> Task.map
+                            (\mb ->
+                                case mb of
+                                    Nothing ->
+                                        True
+
+                                    Just _ ->
+                                        False
+                            )
+            )
+        |> Task.andThen
+            (\ok ->
+                Task.sequence
+                    [ removeFileIfAny indexDb
+                    , removeFileIfAny (indexDb ++ "-wal")
+                    , removeFileIfAny (indexDb ++ "-shm")
+                    , removeFileIfAny (repo ++ "/src/Lib.rs")
+                    , removeFileIfAny (repo ++ "/src/Main.ipe")
+                    ]
+                    |> Task.map (\_ -> ok)
+            )
+
+
+-- The keyboard shortcuts drive exactly the messages the buttons send: a/r
+-- act on the selected unit, j/k/g/1-5 move the selection, Enter/Escape
+-- confirm/cancel an open refuse panel, and every key is ignored while the
+-- refuse reason input is open (so typing a reason is not hijacked).
+testKeys : Bool
+testKeys =
+    List.all identity
+        [ Keys.label (Keys.keyAction False 3 0 "a") == "approve"
+        , Keys.label (Keys.keyAction False 3 0 "r") == "refuse"
+        , Keys.label (Keys.keyAction False 3 0 "j") == "select1"
+        , Keys.label (Keys.keyAction False 3 0 "k") == "select0"
+        , Keys.label (Keys.keyAction False 3 2 "g") == "select0"
+        , Keys.label (Keys.keyAction False 3 0 "2") == "select1"
+        , Keys.label (Keys.keyAction False 3 0 "5") == "select2"
+        , Keys.label (Keys.keyAction False 3 2 "j") == "select2"
+        , Keys.label (Keys.keyAction False 3 1 "Enter") == "ignore"
+        , Keys.label (Keys.keyAction False 0 0 "a") == "ignore"
+        , Keys.label (Keys.keyAction True 3 0 "a") == "ignore"
+        , Keys.label (Keys.keyAction True 3 0 "j") == "ignore"
+        , Keys.label (Keys.keyAction True 3 0 "Enter") == "confirm"
+        , Keys.label (Keys.keyAction True 3 0 "Escape") == "cancel"
+        ]
+
+
+report : List ( String, Bool ) -> String
+report results =
+    List.map
+        (\( name, ok ) ->
+            (if ok then
+                "PASS"
+
+            else
+                "FAIL"
+            )
+                ++ " "
+                ++ name
+        )
+        results
+        |> String.join "\n"
+
+
+finish : List ( String, Bool ) -> Task.Task Error ()
+finish results =
+    Io.println (report results)
+        |> Task.andThen
+            (\_ ->
+                if List.all (\( _, ok ) -> ok) results then
+                    Task.succeed ()
+
+                else
+                    System.exit 1
+            )
+
+
+main : Task.Task Error ()
+main =
+    let
+        dbPath =
+            System.getenvOr "TMPDIR" "/tmp" ++ "/ipe-review-b2-test.db"
+    in
+    Task.fromResult (Path.fromString dbPath)
+        |> Task.andThen File.remove
+        |> Task.onError (\_ -> Task.succeed ())
+        |> Task.andThen (\_ -> LibDb.openAt dbPath)
+        |> Task.andThen (\db -> LibDb.migrate db |> Task.andThen (\_ -> allChecks db))
+        |> Task.andThen
+            (\results ->
+                indexBridge
+                    |> Task.map (\ok -> results ++ [ ( "index bridge loads queued units", ok ) ])
+            )
+        |> Task.andThen
+            (\results ->
+                traversalPathsRejected
+                    |> Task.map (\ok -> results ++ [ ( "traversal paths rejected", ok ) ])
+            )
+        |> Task.andThen
+            (\results ->
+                drainFlow
+                    |> Task.map (\ok -> results ++ [ ( "decided unit drained from queue", ok ) ])
+            )
+        |> Task.andThen
+            (\results ->
+                historyRoundtrip
+                    |> Task.map (\ok -> results ++ [ ( "review history roundtrip", ok ) ])
+            )
+        |> Task.andThen
+            (\results ->
+                changeReenqueue
+                    |> Task.map (\ok -> results ++ [ ( "changed unit resurfaced at head, unchanged stays hidden", ok ) ])
+            )
+        |> Task.andThen
+            (\results ->
+                Task.succeed
+                    (results
+                        ++ [ ( "links resolve internal and external", linksResolve )
+                        , ( "link tokens: no self-links, urls strip punctuation", linksSubstring )
+                        ]
+                    )
+            )
+        |> Task.andThen
+            (\results ->
+                unitPageLoad
+                    |> Task.map (\ok -> results ++ [ ( "unit page loads by uid, names resolve", ok ) ])
+            )
+        |> Task.andThen
+            (\results ->
+                Task.succeed
+                    (results
+                        ++ [ ( "keyboard shortcuts map to the button msgs", testKeys ) ]
+                    )
+            )
+        |> Task.andThen
+            (\results ->
+                removeDbFile dbPath
+                    |> Task.map (\_ -> results)
+            )
+        |> Task.andThen finish
+
+
+removeDbFile : String -> Task.Task Error ()
+removeDbFile dbPath =
+    Task.fromResult (Path.fromString dbPath)
+        |> Task.andThen File.remove
+        |> Task.onError (\_ -> Task.succeed ())

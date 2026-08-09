@@ -1,0 +1,1002 @@
+module Main exposing (main)
+
+import Ipe.Db as Db
+import Ipe.Error as Error
+import Ipe.Html as Html
+import Ipe.Html.Attributes as Attr
+import Ipe.List as List
+import Ipe.String as String
+import Ipe.System as System
+import Ipe.Task as Task
+import Ipe.Tea.Web as Web
+import Ipe.Tea.Web.Cmd as Cmd
+import Ipe.Tea.Web.Sub as Sub
+import Ipe.Ui as Ui
+import Ipe.Ui.Background as Background
+import Ipe.Ui.Border as Border
+import Ipe.Ui.Font as Font
+import Ipe.Ui.Input as Input
+import Lib.Db as LibDb exposing (Decision(..))
+import Lib.Format as Format
+import Lib.Highlight as Highlight exposing (Token(..))
+import Lib.Index as Index
+import Lib.Keys as Keys exposing (KeyAction(..))
+import Lib.Links as Links exposing (Link(..))
+import Lib.Queue as Queue
+
+
+type Page
+    = QueuePage
+    | HistoryPage
+    | UnitPage String
+
+
+-- A decided unit as the History page shows it: the review row plus the unit's
+-- qualified name resolved from the index db (Nothing when the unit no longer
+-- exists there).
+type alias HistoryRow =
+    { uid : String
+    , bodyHash : String
+    , decision : String
+    , reason : Maybe String
+    , reviewedAt : Int
+    , name : Maybe String
+    }
+
+
+type alias Model =
+    { page : Page
+    , queue : List Queue.QueuedUnit
+    , queueError : Maybe String
+    , decidedThisPass : Int
+    , refusingUid : Maybe String
+    , refuseDraft : String
+    , refuseError : Maybe String
+    , history : List HistoryRow
+    , historyError : Maybe String
+    , unitPage : Maybe Index.Unit
+    , unitLinks : List Links.Link
+    , unitError : Maybe String
+    , selected : Int
+    }
+
+
+init : Web.WebReq -> ( Model, Cmd Msg )
+init req =
+    ( { page = pageFor req.path
+      , queue = []
+      , queueError = Nothing
+      , decidedThisPass = 0
+      , refusingUid = Nothing
+      , refuseDraft = ""
+      , refuseError = Nothing
+      , history = []
+      , historyError = Nothing
+      , unitPage = Nothing
+      , unitLinks = []
+      , unitError = Nothing
+      , selected = 0
+      }
+    , Cmd.batch
+        [ Cmd.perform Queue.load PendingLoaded
+        , pageCmd req.path
+        ]
+    )
+
+
+pageFor : String -> Page
+pageFor path =
+    if path == "/history" then
+        HistoryPage
+
+    else if String.startsWith "/unit/" path then
+        UnitPage (String.dropLeft 6 path)
+
+    else
+        QueuePage
+
+
+pageCmd : String -> Cmd Msg
+pageCmd path =
+    if path == "/history" then
+        Cmd.perform loadHistory HistoryLoaded
+
+    else if String.startsWith "/unit/" path then
+        Cmd.perform (loadUnitView (String.dropLeft 6 path)) UnitLoaded
+
+    else
+        Cmd.none
+
+
+reviewDb : Task Error Db.Db
+reviewDb =
+    Db.open "sqlite" (System.getenvOr "IPE_REVIEW_DB" "review.db")
+        |> Task.andThen (\db -> Task.map (\_ -> db) (LibDb.migrate db))
+
+
+type Msg
+    = PendingLoaded (Result Error (List Queue.QueuedUnit))
+    | ApproveUnit String
+    | RefuseStart String
+    | RefuseDraft String
+    | RefuseCancel
+    | RefuseSubmit String
+    | DecisionSaved String (Result Error Int)
+    | ShowQueue
+    | ShowHistory
+    | HistoryLoaded (Result Error (List HistoryRow))
+    | UnitLoaded (Result Error ( Maybe Index.Unit, List Links.Link ))
+    | KeyDown String
+    | SelectUnit Int
+
+
+update : Msg -> Model -> ( Model, Cmd Msg )
+update msg model =
+    case msg of
+        PendingLoaded result ->
+            case result of
+                Ok units ->
+                    ( { model | queue = units, refusingUid = Nothing, selected = clampIndex model.selected (List.length units) }, Cmd.none )
+
+                Err e ->
+                    ( { model | queue = [], queueError = Just (Error.toString e) }, Cmd.none )
+
+        ApproveUnit uid ->
+            ( model, saveDecision model uid Approved )
+
+        RefuseStart uid ->
+            ( { model | refusingUid = Just uid, refuseDraft = "", refuseError = Nothing }, Cmd.none )
+
+        RefuseDraft text ->
+            ( { model | refuseDraft = text, refuseError = Nothing }, Cmd.none )
+
+        RefuseCancel ->
+            ( { model | refusingUid = Nothing, refuseDraft = "", refuseError = Nothing }, Cmd.none )
+
+        RefuseSubmit uid ->
+            submitRefuse model uid
+
+        DecisionSaved uid result ->
+            case result of
+                Ok _ ->
+                    ( { model | decidedThisPass = model.decidedThisPass + 1 }, drainAndReload model uid )
+
+                Err e ->
+                    ( { model | queueError = Just ("Decision save failed: " ++ Error.toString e) }, Cmd.none )
+
+        ShowQueue ->
+            ( { model | page = QueuePage }, Cmd.none )
+
+        ShowHistory ->
+            ( { model | page = HistoryPage }, Cmd.perform loadHistory HistoryLoaded )
+
+        HistoryLoaded result ->
+            case result of
+                Ok rows ->
+                    ( { model | history = rows, historyError = Nothing }, Cmd.none )
+
+                Err e ->
+                    ( { model | historyError = Just ("History load failed: " ++ Error.toString e) }, Cmd.none )
+
+        UnitLoaded result ->
+            case result of
+                Ok ( mb, links ) ->
+                    ( { model | unitPage = mb, unitLinks = links, unitError = Nothing }, Cmd.none )
+
+                Err e ->
+                    ( { model | unitError = Just ("Unit load failed: " ++ Error.toString e) }, Cmd.none )
+
+        KeyDown key ->
+            keyActionMsg (Keys.keyAction (model.refusingUid /= Nothing) (List.length model.queue) model.selected key) model
+
+        SelectUnit i ->
+            ( { model | selected = clampIndex i (List.length model.queue) }, Cmd.none )
+
+
+-- B10: every KeyAction dispatches the same Msg the matching button sends —
+-- the buttons remain the single source of truth; the keys are a mirror.
+keyActionMsg : KeyAction -> Model -> ( Model, Cmd Msg )
+keyActionMsg action model =
+    case action of
+        ApproveSelected ->
+            case selectedUid model of
+                Just uid ->
+                    ( model, saveDecision model uid Approved )
+
+                Nothing ->
+                    ( model, Cmd.none )
+
+        RefuseSelected ->
+            case selectedUid model of
+                Just uid ->
+                    ( { model | refusingUid = Just uid, refuseDraft = "", refuseError = Nothing }, Cmd.none )
+
+                Nothing ->
+                    ( model, Cmd.none )
+
+        Select i ->
+            ( { model | selected = i }, Cmd.none )
+
+        ConfirmRefuse ->
+            case model.refusingUid of
+                Just uid ->
+                    submitRefuse model uid
+
+                Nothing ->
+                    ( model, Cmd.none )
+
+        CancelRefuse ->
+            ( { model | refusingUid = Nothing, refuseDraft = "", refuseError = Nothing }, Cmd.none )
+
+        Ignore ->
+            ( model, Cmd.none )
+
+
+submitRefuse : Model -> String -> ( Model, Cmd Msg )
+submitRefuse model uid =
+    if String.isEmpty (String.trim model.refuseDraft) then
+        ( { model | refuseError = Just "Reason is required" }, Cmd.none )
+
+    else
+        ( { model | refusingUid = Nothing, refuseDraft = "" }, saveDecision model uid (Refused model.refuseDraft) )
+
+
+selectedUid : Model -> Maybe String
+selectedUid model =
+    case List.head (List.drop model.selected model.queue) of
+        Just q ->
+            Just q.unit.uid
+
+        Nothing ->
+            Nothing
+
+
+clampIndex : Int -> Int -> Int
+clampIndex i len =
+    max 0 (min i (len - 1))
+
+
+saveDecision : Model -> String -> LibDb.Decision -> Cmd Msg
+saveDecision model uid decision =
+    Cmd.perform
+        (reviewDb
+            |> Task.andThen
+                (\db ->
+                    case bodyHashOf uid model.queue of
+                        Just bodyHash ->
+                            LibDb.insertDecision db uid bodyHash decision
+
+                        Nothing ->
+                            Task.fail (Error.unexpected "unit is no longer in the queue")
+                )
+        )
+        (DecisionSaved uid)
+
+
+-- The drain loop: the decision is already saved (DecisionSaved Ok), so the
+-- consumed queue entry leaves the index queue and the drain cursor records
+-- the hand-off. A failure anywhere fails closed with the queue unchanged —
+-- the unit stays visible with its badge and the next click retries.
+drainAndReload : Model -> String -> Cmd Msg
+drainAndReload model uid =
+    case bodyHashOf uid model.queue of
+        Nothing ->
+            Cmd.none
+
+        Just bodyHash ->
+            Cmd.perform
+                (reviewDb
+                    |> Task.andThen
+                        (\db ->
+                            LibDb.recordDrain db uid bodyHash
+                                |> Task.andThen (\_ -> Index.drainUnit uid)
+                                |> Task.andThen (\_ -> Queue.load)
+                        )
+                )
+                PendingLoaded
+
+
+bodyHashOf : String -> List Queue.QueuedUnit -> Maybe String
+bodyHashOf uid qs =
+    case List.find (\q -> q.unit.uid == uid) qs of
+        Just q ->
+            Just q.unit.bodyHash
+
+        Nothing ->
+            Nothing
+
+
+-- Review history: every decided row, newest first, with the unit's qualified
+-- name resolved from the index db (Nothing when the unit no longer exists).
+loadHistory : Task Error (List HistoryRow)
+loadHistory =
+    reviewDb
+        |> Task.andThen (\db -> LibDb.findDecisions db)
+        |> Task.andThen
+            (\rows ->
+                Db.open "sqlite" (Index.indexDbUrlFor (System.getenvOr "IPE_INDEX_DB" ".ipe-index/index.db"))
+                    |> Task.andThen
+                        (\conn ->
+                            Task.sequence (List.map (enrich conn) rows)
+                        )
+            )
+
+
+enrich : Db.Db -> LibDb.ReviewRow -> Task Error HistoryRow
+enrich conn row =
+    Task.map
+        (\name ->
+            { uid = row.uid
+            , bodyHash = row.bodyHash
+            , decision = row.decision
+            , reason = row.reason
+            , reviewedAt = row.reviewedAt
+            , name = name
+            }
+        )
+        (Index.nameFor conn row.uid)
+
+
+-- B9: the unit page loads the unit by uid (decided units have no change_queue
+-- row, so the page queries units directly) and resolves every identifier
+-- token of its source against the index's qualified names.
+loadUnitView : String -> Task Error ( Maybe Index.Unit, List Links.Link )
+loadUnitView uid =
+    Index.loadUnitByUid uid
+        |> Task.andThen
+            (\mb ->
+                case mb of
+                    Just unit ->
+                        Index.qualifiedUids
+                            |> Task.map
+                                (\qs ->
+                                    ( Just unit, Links.resolve unit.qualified qs unit.source )
+                                )
+
+                    Nothing ->
+                        Task.succeed ( Nothing, [] )
+            )
+
+
+header : Model -> Ui.Element Msg
+header model =
+    Ui.row
+        [ Ui.width Ui.fill
+        , Ui.paddingEach { top = 12, right = 16, bottom = 12, left = 16 }
+        , Ui.spacing 16
+        , Ui.centerY
+        , Background.color (Ui.rgb 24 24 32)
+        , Border.solid
+        , Border.color (Ui.rgb 60 60 72)
+        , Border.widthEach { top = 0, right = 0, bottom = 1, left = 0 }
+        ]
+        [ Ui.el [ Font.size 16, Font.bold, Font.color (Ui.rgb 235 235 240) ] (Ui.text "Code review")
+        , Ui.el [ Ui.width Ui.fill ] Ui.none
+        , navButton (model.page == QueuePage) "Queue" ShowQueue
+        , navButton (model.page == HistoryPage) "History" ShowHistory
+        , progressEl model
+        ]
+
+
+navButton : Bool -> String -> Msg -> Ui.Element Msg
+navButton active label msg =
+    Ui.button
+        [ Ui.paddingXY 10 5
+        , Border.rounded 4
+        , Font.size 12
+        , Font.bold
+        , if active then
+            Background.color (Ui.rgb 55 55 70)
+
+        else
+            Background.color (Ui.rgb 24 24 32)
+        , Font.color (Ui.rgb 200 200 210)
+        ]
+        { onPress = Just msg, label = Ui.text label }
+
+
+progressEl : Model -> Ui.Element Msg
+progressEl model =
+    let
+        k =
+            model.decidedThisPass
+
+        n =
+            k + List.length model.queue
+
+        pct =
+            Format.percent k n
+    in
+    Ui.column
+        [ Ui.width (Ui.px 220), Ui.spacing 4 ]
+        [ Ui.el
+            [ Font.size 12, Font.color (Ui.rgb 160 160 175) ]
+            (Ui.text (String.fromInt k ++ " of " ++ String.fromInt n ++ " reviewed (" ++ pct ++ ")"))
+        , progressBar k n
+        ]
+
+
+progressBar : Int -> Int -> Ui.Element Msg
+progressBar k n =
+    if n == 0 then
+        Ui.el
+            [ Ui.width (Ui.px 220), Ui.height (Ui.px 6), Border.rounded 3, Background.color (Ui.rgb 45 45 58) ]
+            Ui.none
+
+    else
+        Ui.row
+            [ Ui.width (Ui.px 220), Ui.height (Ui.px 6), Border.rounded 3, Background.color (Ui.rgb 45 45 58) ]
+            [ Ui.el
+                [ Ui.width (Ui.fillPortion k), Ui.height Ui.fill, Border.rounded 3, Background.color (Ui.rgb 102 187 106) ]
+                Ui.none
+            , Ui.el
+                [ Ui.width (Ui.fillPortion (n - k)), Ui.height Ui.fill ]
+                Ui.none
+            ]
+
+
+view : Model -> Ui.Element Msg
+view model =
+    Ui.column
+        [ Ui.width Ui.fill
+        , Ui.height Ui.fill
+        , Background.color (Ui.rgb 16 16 22)
+        , Ui.onKeyDown KeyDown
+        , Ui.htmlAttribute "tabindex" "0"
+        ]
+        [ header model
+        , Ui.el
+            [ Ui.width Ui.fill, Ui.height Ui.fill, Ui.padding 24, Font.color (Ui.rgb 190 190 200) ]
+            (pageBody model)
+        , urlSync model
+        ]
+
+
+pageBody : Model -> Ui.Element Msg
+pageBody model =
+    case model.page of
+        QueuePage ->
+            queueBody model
+
+        HistoryPage ->
+            historyBody model
+
+        UnitPage _ ->
+            unitPageBody model
+
+
+queueBody : Model -> Ui.Element Msg
+queueBody model =
+    case model.queueError of
+        Just err ->
+            Ui.text err
+
+        Nothing ->
+            if List.isEmpty model.queue then
+                Ui.text "No units queued yet."
+
+            else
+                Ui.row
+                    [ Ui.width Ui.fill, Ui.height Ui.fill, Ui.spacing 16 ]
+                    [ queueRail model
+                    , Ui.column
+                        [ Ui.width Ui.fill, Ui.height Ui.fill, Ui.spacing 16, Ui.scrollbars ]
+                        [ hintLine
+                        , case selectedUnit model of
+                            Just q ->
+                                unitCard model True q
+
+                            Nothing ->
+                                Ui.none
+                        ]
+                    ]
+
+
+-- B10: the left rail is the keyboard-first overview — one button per queued
+-- unit, the selected one highlighted; j/k, g and 1-5 move the selection.
+queueRail : Model -> Ui.Element Msg
+queueRail model =
+    Ui.column
+        [ Ui.width (Ui.px 280)
+        , Ui.height Ui.fill
+        , Ui.spacing 4
+        , Ui.scrollbars
+        ]
+        (List.indexedMap (railItem model) model.queue)
+
+
+railItem : Model -> Int -> Queue.QueuedUnit -> Ui.Element Msg
+railItem model i q =
+    let
+        selected =
+            i == model.selected
+    in
+    Ui.button
+        [ Ui.width Ui.fill
+        , Ui.paddingXY 10 7
+        , Border.rounded 4
+        , Border.solid
+        , Border.width 1
+        , if selected then
+            Border.color (Ui.rgb 130 170 240)
+
+        else
+            Border.color (Ui.rgb 40 40 52)
+        , if selected then
+            Background.color (Ui.rgb 34 34 46)
+
+        else
+            Background.color (Ui.rgb 24 24 32)
+        ]
+        { onPress = Just (SelectUnit i)
+        , label = Ui.row
+            [ Ui.width Ui.fill, Ui.spacing 6, Ui.centerY ]
+            [ Ui.el
+                [ Font.size 12, Font.bold, Font.color (Ui.rgb 220 220 230) ]
+                (Ui.text q.unit.qualified)
+            , changeBadge q.unit.change
+            ]
+        }
+
+
+selectedUnit : Model -> Maybe Queue.QueuedUnit
+selectedUnit model =
+    List.head (List.drop model.selected model.queue)
+
+
+hintLine : Ui.Element Msg
+hintLine =
+    Ui.el
+        [ Font.size 11, Font.color (Ui.rgb 140 140 155) ]
+        (Ui.text "a approve · r refuse · j/k move · g top · 1-5 jump · Enter confirm")
+
+
+historyBody : Model -> Ui.Element Msg
+historyBody model =
+    case model.historyError of
+        Just err ->
+            Ui.text err
+
+        Nothing ->
+            if List.isEmpty model.history then
+                Ui.text "No reviews yet."
+
+            else
+                Ui.column
+                    [ Ui.width Ui.fill, Ui.spacing 16, Ui.scrollbars ]
+                    (List.map historyCard model.history)
+
+
+historyCard : HistoryRow -> Ui.Element Msg
+historyCard row =
+    Ui.column
+        [ Ui.width Ui.fill
+        , Ui.padding 16
+        , Ui.spacing 10
+        , Background.color (Ui.rgb 24 24 32)
+        , Border.rounded 8
+        , Border.solid
+        , Border.width 1
+        , Border.color (Ui.rgb 50 50 62)
+        ]
+        [ Ui.row
+            [ Ui.width Ui.fill, Ui.spacing 10, Ui.centerY ]
+            [ decisionBadge row.decision
+            , Ui.el [ Font.size 14, Font.bold, Font.color (Ui.rgb 235 235 240) ] (Ui.text (nameOf row))
+            , Ui.el
+                [ Font.size 12, Font.family Font.monospace, Font.color (Ui.rgb 150 150 165) ]
+                (Ui.text (String.slice 0 8 row.bodyHash))
+            , Ui.el [ Ui.width Ui.fill ] Ui.none
+            , Ui.el
+                [ Font.size 12, Font.color (Ui.rgb 150 150 165) ]
+                (Ui.text (Format.formatReviewedAt row.reviewedAt))
+            ]
+        , case row.reason of
+            Just r ->
+                Ui.el [ Font.size 12, Font.color (Ui.rgb 200 120 120) ] (Ui.text r)
+
+            Nothing ->
+                Ui.none
+        ]
+
+
+nameOf : HistoryRow -> String
+nameOf row =
+    case row.name of
+        Just n ->
+            n
+
+        Nothing ->
+            row.uid
+
+
+-- B9: the unit page shows the source of one unit with its resolved links —
+-- no decision buttons, no change state; the unit is read-only here.
+unitPageBody : Model -> Ui.Element Msg
+unitPageBody model =
+    case model.unitError of
+        Just err ->
+            Ui.text err
+
+        Nothing ->
+            case model.unitPage of
+                Just unit ->
+                    Ui.column
+                        [ Ui.width Ui.fill, Ui.spacing 16, Ui.scrollbars ]
+                        [ unitPageCard model unit ]
+
+                Nothing ->
+                    Ui.text "Loading unit…"
+
+
+unitPageCard : Model -> Index.Unit -> Ui.Element Msg
+unitPageCard model unit =
+    Ui.column
+        [ Ui.width Ui.fill
+        , Ui.padding 16
+        , Ui.spacing 10
+        , Background.color (Ui.rgb 24 24 32)
+        , Border.rounded 8
+        , Border.solid
+        , Border.width 1
+        , Border.color (Ui.rgb 50 50 62)
+        ]
+        [ Ui.row
+            [ Ui.width Ui.fill, Ui.spacing 10, Ui.centerY ]
+            [ Ui.el [ Font.size 14, Font.bold, Font.color (Ui.rgb 235 235 240) ] (Ui.text unit.qualified)
+            , chip unit.facing
+            , chip unit.kind
+            ]
+        , Ui.el
+            [ Font.size 12, Font.family Font.monospace, Font.color (Ui.rgb 150 150 165) ]
+            (Ui.text (unit.path ++ " · lines " ++ String.fromInt unit.lineStart ++ "-" ++ String.fromInt unit.lineEnd))
+        , referencesRow model.unitLinks
+        , sourceBlock unit
+        ]
+
+
+referencesRow : List Links.Link -> Ui.Element Msg
+referencesRow links =
+    if List.isEmpty links then
+        Ui.none
+
+    else
+        Ui.wrappedRow
+            [ Ui.spacing 6, Ui.width Ui.fill ]
+            (List.map linkEl links)
+
+
+linkEl : Links.Link -> Ui.Element Msg
+linkEl link =
+    case link of
+        Internal qualified uid ->
+            Ui.link
+                [ Font.size 12
+                , Font.family Font.monospace
+                , Font.color (Ui.rgb 130 170 240)
+                , Ui.padding 4
+                ]
+                { url = "/unit/" ++ uid, label = Ui.text ("→ " ++ qualified) }
+
+        External url ->
+            Ui.link
+                [ Font.size 12
+                , Font.family Font.monospace
+                , Font.color (Ui.rgb 130 170 240)
+                , Ui.padding 4
+                ]
+                { url = url, label = Ui.text ("↗ " ++ url) }
+
+
+decisionBadge : String -> Ui.Element Msg
+decisionBadge d =
+    case d of
+        "approve" ->
+            chipColored "✓ Approved" (Ui.rgb 35 120 55)
+
+        "refuse" ->
+            chipColored "✗ Refused" (Ui.rgb 130 45 45)
+
+        _ ->
+            chipColored d (Ui.rgb 40 40 52)
+
+
+currentPath : Model -> String
+currentPath model =
+    case model.page of
+        QueuePage ->
+            "/"
+
+        HistoryPage ->
+            "/history"
+
+        UnitPage uid ->
+            "/unit/" ++ uid
+
+
+urlSync : Model -> Ui.Element Msg
+urlSync model =
+    Ui.html
+        (Html.node "div" [ Attr.attribute "data-ipe-path" (currentPath model) ] [])
+
+
+unitCard : Model -> Bool -> Queue.QueuedUnit -> Ui.Element Msg
+unitCard model selected q =
+    let
+        unit =
+            q.unit
+    in
+    Ui.column
+        [ Ui.width Ui.fill
+        , Ui.padding 16
+        , Ui.spacing 10
+        , Background.color (Ui.rgb 24 24 32)
+        , Border.rounded 8
+        , Border.solid
+        , if selected then
+            Border.width 2
+
+        else
+            Border.width 1
+        , if selected then
+            Border.color (Ui.rgb 130 170 240)
+
+        else
+            Border.color (Ui.rgb 50 50 62)
+        ]
+        [ Ui.row
+            [ Ui.width Ui.fill, Ui.spacing 10, Ui.centerY ]
+            [ Ui.el [ Font.size 14, Font.bold, Font.color (Ui.rgb 235 235 240) ] (Ui.text unit.qualified)
+            , changeBadge unit.change
+            , changedChip q
+            , chip unit.facing
+            , chip unit.kind
+            , Ui.el [ Ui.width Ui.fill ] Ui.none
+            , decisionButtons model unit
+            ]
+        , Ui.el
+            [ Font.size 12, Font.family Font.monospace, Font.color (Ui.rgb 150 150 165) ]
+            (Ui.text (unit.path ++ " · lines " ++ String.fromInt unit.lineStart ++ "-" ++ String.fromInt unit.lineEnd ++ maybePurpose unit))
+        , changedLine q
+        , sourceBlock unit
+        ]
+
+
+maybePurpose : Index.Unit -> String
+maybePurpose unit =
+    case unit.purpose of
+        Just p ->
+            " · purpose " ++ p
+
+        Nothing ->
+            ""
+
+
+changeBadge : String -> Ui.Element Msg
+changeBadge change =
+    case change of
+        "new" ->
+            chipColored "NEW" (Ui.rgb 35 120 55)
+
+        _ ->
+            chipColored "MODIFIED" (Ui.rgb 145 95 20)
+
+
+-- B8: a unit that was already reviewed on an older hash gets an amber
+-- "changed" chip at the queue head; unchanged re-queues are hidden entirely.
+changedChip : Queue.QueuedUnit -> Ui.Element Msg
+changedChip q =
+    case q.changed of
+        Just _ ->
+            chipColored "CHANGED" (Ui.rgb 145 95 20)
+
+        Nothing ->
+            Ui.none
+
+
+changedLine : Queue.QueuedUnit -> Ui.Element Msg
+changedLine q =
+    case q.changed of
+        Just old ->
+            Ui.el
+                [ Font.size 12, Font.color (Ui.rgb 200 160 90) ]
+                (Ui.text (previousLabel old ++ " on " ++ Format.formatReviewedAt old.reviewedAt))
+
+        Nothing ->
+            Ui.none
+
+
+previousLabel : LibDb.ReviewRow -> String
+previousLabel row =
+    case row.decision of
+        "approve" ->
+            "Previously Approved"
+
+        "refuse" ->
+            "Previously Refused"
+                ++ (case row.reason of
+                    Just r ->
+                        " (" ++ r ++ ")"
+
+                    Nothing ->
+                        ""
+                )
+
+        other ->
+            "Previously " ++ other
+
+
+chip : String -> Ui.Element Msg
+chip label =
+    chipColored label (Ui.rgb 40 40 52)
+
+
+chipColored : String -> Ui.Color -> Ui.Element Msg
+chipColored label bg =
+    Ui.el
+        [ Ui.paddingXY 8 3
+        , Background.color bg
+        , Border.rounded 4
+        , Font.size 11
+        , Font.bold
+        , Font.color (Ui.rgb 220 220 230)
+        ]
+        (Ui.text label)
+
+
+decisionButtons : Model -> Index.Unit -> Ui.Element Msg
+decisionButtons model unit =
+    if model.refusingUid == Just unit.uid then
+        refusePanel model unit.uid
+
+    else
+        Ui.row
+            [ Ui.spacing 8 ]
+            [ Ui.button
+                [ Ui.paddingXY 10 5
+                , Background.color (Ui.rgb 46 160 67)
+                , Border.rounded 4
+                , Font.size 12
+                , Font.bold
+                , Font.color (Ui.rgb 10 20 12)
+                ]
+                { onPress = Just (ApproveUnit unit.uid), label = Ui.text "Approve" }
+            , Ui.button
+                [ Ui.paddingXY 10 5
+                , Background.color (Ui.rgb 165 60 60)
+                , Border.rounded 4
+                , Font.size 12
+                , Font.bold
+                , Font.color (Ui.rgb 245 235 235)
+                ]
+                { onPress = Just (RefuseStart unit.uid), label = Ui.text "Refuse" }
+            ]
+
+
+refusePanel : Model -> String -> Ui.Element Msg
+refusePanel model uid =
+    Ui.column
+        [ Ui.width (Ui.px 240), Ui.spacing 6 ]
+        [ Input.text
+            [ Ui.width Ui.fill ]
+            { label = Input.labelAbove [ Font.size 11 ] (Ui.text "Reason")
+            , text = model.refuseDraft
+            , onChange = RefuseDraft
+            , placeholder = Just (Input.placeholder [ Font.size 12 ] (Ui.text "Why refuse?"))
+            }
+        , case model.refuseError of
+            Just err ->
+                Ui.el [ Font.size 11, Font.color (Ui.rgb 220 110 110) ] (Ui.text err)
+
+            Nothing ->
+                Ui.none
+        , Ui.row
+            [ Ui.spacing 8 ]
+            [ Ui.button
+                [ Ui.paddingXY 10 5
+                , Background.color (Ui.rgb 165 60 60)
+                , Border.rounded 4
+                , Font.size 12
+                , Font.bold
+                , Font.color (Ui.rgb 245 235 235)
+                ]
+                { onPress = Just (RefuseSubmit uid), label = Ui.text "Confirm" }
+            , Ui.button
+                [ Ui.paddingXY 10 5
+                , Background.color (Ui.rgb 55 55 70)
+                , Border.rounded 4
+                , Font.size 12
+                , Font.color (Ui.rgb 200 200 210)
+                ]
+                { onPress = Just RefuseCancel, label = Ui.text "Cancel" }
+            ]
+        ]
+
+
+sourceBlock : Index.Unit -> Ui.Element Msg
+sourceBlock unit =
+    Ui.el
+        [ Ui.width Ui.fill
+        , Ui.height (Ui.px 240)
+        , Ui.scrollbars
+        , Background.color (Ui.rgb 12 12 18)
+        , Border.rounded 4
+        , Ui.padding 12
+        ]
+        (Ui.column
+            [ Ui.width Ui.fill, Ui.spacing 2 ]
+            (List.map (numberedLine (Highlight.langFor unit.kind)) (Format.numberedLines unit.lineStart unit.source))
+        )
+
+
+numberedLine : Highlight.Lang -> ( Int, String ) -> Ui.Element Msg
+numberedLine lang ( n, line ) =
+    Ui.row
+        [ Ui.width Ui.fill, Ui.spacing 8 ]
+        [ Ui.el
+            [ Ui.width (Ui.px 40)
+            , Font.family Font.monospace
+            , Font.size 12
+            , Font.color (Ui.rgb 120 120 135)
+            , Ui.alignRight
+            ]
+            (Ui.text (String.fromInt n))
+        , Ui.el
+            [ Ui.width Ui.fill
+            , Font.family Font.monospace
+            , Font.size 12
+            ]
+            (Ui.wrappedRow
+                [ Ui.width Ui.fill, Ui.spacing 0 ]
+                (List.map tokenEl (Highlight.tokenize lang line))
+            )
+        ]
+
+
+tokenEl : Highlight.Token -> Ui.Element Msg
+tokenEl tok =
+    Ui.el
+        [ Font.family Font.monospace
+        , Font.size 12
+        , Font.color (tokenColor tok)
+        ]
+        (Ui.text (Highlight.tokenText tok))
+
+
+tokenColor : Highlight.Token -> Ui.Color
+tokenColor tok =
+    case tok of
+        Keyword _ ->
+            Ui.rgb 199 146 234
+
+        Str _ ->
+            Ui.rgb 152 195 121
+
+        Comment _ ->
+            Ui.rgb 110 110 125
+
+        Num _ ->
+            Ui.rgb 209 154 102
+
+        Ident _ ->
+            Ui.rgb 205 205 215
+
+        Plain _ ->
+            Ui.rgb 205 205 215
+
+
+subscriptions : Model -> Sub Msg
+subscriptions model =
+    Sub.none
+
+
+main : Task Error ()
+main =
+    Web.app
+        { init = init
+        , update = update
+        , view = view
+        , subscriptions = subscriptions
+        , routes = [ Web.route "/" QueuePage, Web.route "/history" HistoryPage, Web.route "/unit/:uid" UnitPage ]
+        , notFound = QueuePage
+        }

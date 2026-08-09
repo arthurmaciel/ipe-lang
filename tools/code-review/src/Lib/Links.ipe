@@ -1,0 +1,112 @@
+module Lib.Links exposing (Link(..), linkKey, resolve)
+
+import Ipe.List as List
+import Ipe.Maybe as Maybe
+import Ipe.String as String
+
+
+-- A link found in a unit's source, resolved against the index's unit table.
+-- Internal links jump to the /unit/<uid> page of the callee; external links
+-- open their URL. Resolution is purely lexical: identifier tokens are matched
+-- against the qualified names of every indexed unit.
+type Link
+    = Internal String String
+    | External String
+
+
+-- Resolve the identifier tokens of a unit's source into links. The source's
+-- own qualified name never links to itself; tokens that match no unit and are
+-- not URLs produce nothing. The first occurrence of a link wins.
+resolve : String -> List ( String, String ) -> String -> List Link
+resolve selfQualified units source =
+    source
+        |> String.words
+        |> List.map (stripPunct >> linkFor selfQualified units)
+        |> List.filterMap identity
+        |> dedup
+
+
+linkFor : String -> List ( String, String ) -> String -> Maybe Link
+linkFor selfQualified units token =
+    if isUrl token then
+        Just (External token)
+
+    else if token == selfQualified then
+        Nothing
+
+    else
+        case List.find (\( q, _ ) -> q == token) units of
+            Just ( _, uid ) ->
+                Just (Internal token uid)
+
+            Nothing ->
+                Nothing
+
+
+isUrl : String -> Bool
+isUrl token =
+    String.startsWith "http://" token || String.startsWith "https://" token
+
+
+-- Trailing/leading punctuation that lexers attach to identifiers: "foo();"
+-- and "(foo)" must both resolve to foo.
+stripPunct : String -> String
+stripPunct token =
+    String.fromList (List.reverse (dropPunct (List.reverse (dropPunct (String.toList token)))))
+
+
+dropPunct : List Char -> List Char
+dropPunct chars =
+    case chars of
+        c :: rest ->
+            if isPunct c then
+                dropPunct rest
+
+            else
+                chars
+
+        [] ->
+            []
+
+
+-- Char literals for quote/backslash escapes crash the formatter (IPE-I0001
+-- MalformedChar), so the punctuation set comes from a String instead.
+punctChars : List Char
+punctChars =
+    String.toList "'()[]{},;.!?<>\"`:-="
+
+
+isPunct : Char -> Bool
+isPunct c =
+    List.member c punctChars
+
+
+-- First occurrence wins; ADTs have no structural equality, so dedup keys on
+-- the link's payload via a string tag. Non-tail recursion is fine: a unit's
+-- source holds at most a few hundred tokens.
+dedup : List Link -> List Link
+dedup links =
+    case links of
+        [] ->
+            []
+
+        link :: rest ->
+            let
+                tail =
+                    dedup rest
+            in
+            if List.member (linkKey link) (List.map linkKey tail) then
+                tail
+
+            else
+                link :: tail
+
+
+linkKey : Link -> String
+linkKey link =
+    case link of
+        Internal _ uid ->
+            "i:" ++ uid
+
+        External url ->
+            "e:" ++ url

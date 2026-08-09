@@ -1,0 +1,215 @@
+module Lib.Db exposing (Decision(..), ReviewRow, findDecision, findDecisions, findLatestForUid, insertDecision, migrate, open, openAt, recordDrain)
+
+import Ipe.Db as Db
+import Ipe.Db.Decode
+import Ipe.Db.Sql as Sql
+import Ipe.Dict as Dict
+import Ipe.Error as Error
+import Ipe.List as List
+import Ipe.Maybe as Maybe
+import Ipe.String as String
+import Ipe.System as System
+import Ipe.Task as Task
+import Ipe.Time as Time
+import Migrations exposing (all)
+
+
+type Decision
+    = Approved
+    | Refused String
+
+
+-- One row of the review table, as stored: the raw decision string and an
+-- optional reason. The History page enriches it with the unit name.
+type alias ReviewRow =
+    { uid : String
+    , bodyHash : String
+    , decision : String
+    , reason : Maybe String
+    , reviewedAt : Int
+    }
+
+
+open : Task.Task Error Db
+open =
+    Db.open "sqlite" (System.getenvOr "IPE_REVIEW_DB" "review.db")
+
+
+openAt : String -> Task.Task Error Db
+openAt path =
+    Db.open "sqlite" path
+
+
+migrate : Db -> Task.Task Error (List String)
+migrate db =
+    Db.migrate db all
+
+
+insertDecision : Db -> String -> String -> Decision -> Task.Task Error Int
+insertDecision db uid bodyHash decision =
+    case decision of
+        Refused r ->
+            if String.length (String.trim r) == 0 then
+                Task.fail (Error.unexpected "a refused review needs a non-empty reason")
+
+            else
+                insertIfAbsent db uid bodyHash decision
+
+        Approved ->
+            insertIfAbsent db uid bodyHash decision
+
+
+-- Fail fast with a typed error; the SQL CHECK remains the
+-- backstop for other callers.
+-- A duplicate (uid, body_hash) pair is a no-op: the first review wins and
+-- re-reviewing the same pair never overwrites it. The pre-check keeps the
+-- DB layer strict — a real constraint violation still fails loudly.
+insertIfAbsent : Db -> String -> String -> Decision -> Task.Task Error Int
+insertIfAbsent db uid bodyHash decision =
+    findDecision db uid bodyHash
+        |> Task.andThen
+            (\existing ->
+                case existing of
+                    Just _ ->
+                        Task.succeed 0
+
+                    Nothing ->
+                        insertNew db uid bodyHash decision
+            )
+
+
+insertNew : Db -> String -> String -> Decision -> Task.Task Error Int
+insertNew db uid bodyHash decision =
+    Time.unixMillis ()
+        |> Task.andThen
+            (\now ->
+                let
+                    ( decisionText, reason ) =
+                        case decision of
+                            Approved ->
+                                ( "approve", Nothing )
+
+                            Refused r ->
+                                ( "refuse", Just r )
+                in
+                Db.insertFields db
+                    "review"
+                    [ ( "uid", SetField (SqlString uid) )
+                    , ( "body_hash", SetField (SqlString bodyHash) )
+                    , ( "decision", SetField (SqlString decisionText) )
+                    , ( "reason"
+                    , case reason of
+                        Just r ->
+                            SetField (SqlString r)
+
+                        Nothing ->
+                            SetField (SqlNull (SqlString ""))
+                    )
+                    , ( "reviewed_at", SetField (SqlTime now) )
+                    ]
+            )
+
+
+findDecision : Db -> String -> String -> Task.Task Error (Maybe Decision)
+findDecision db uid bodyHash =
+    Db.findWhere db
+        "review"
+        (Sql.and
+            (Sql.eq (Sql.column "uid") (Sql.param (SqlString uid)))
+            (Sql.eq (Sql.column "body_hash") (Sql.param (SqlString bodyHash)))
+        )
+        |> Task.map List.head
+        |> Task.andThen
+            (\mb ->
+                case mb of
+                    Nothing ->
+                        Task.succeed Nothing
+
+                    Just row ->
+                        case decodeDecision row of
+                            Ok d ->
+                                Task.succeed (Just d)
+
+                            Err e ->
+                                Task.fail e
+            )
+
+
+decodeDecision : Dict.Dict String String -> Result Error Decision
+decodeDecision row =
+    case Dict.get "decision" row of
+        Just d ->
+            case d of
+                "approve" ->
+                    Ok Approved
+
+                "refuse" ->
+                    case Dict.get "reason" row of
+                        Just r ->
+                            Ok (Refused r)
+
+                        Nothing ->
+                            Err (Error.unexpected "review row is refused but has no reason")
+
+                other ->
+                    Err (Error.unexpected ("malformed review decision: " ++ other))
+
+        Nothing ->
+            Err (Error.unexpected "review row has no decision column")
+
+
+-- The most recent review row for a uid across all hashes, if any. The change
+-- re-enqueue path (B8) uses it to tell "decided on this exact content" apart
+-- from "decided on an OLDER version of this unit": when the current
+-- (uid, body_hash) pair has no decision but an older hash does, the unit was
+-- edited after its review and must be reviewed again.
+findLatestForUid : Db -> String -> Task.Task Error (Maybe ReviewRow)
+findLatestForUid db uid =
+    Db.queryDecode db
+        "SELECT uid, body_hash, decision, reason, reviewed_at FROM review WHERE uid = ? ORDER BY reviewed_at DESC, body_hash LIMIT 1"
+        [ SqlString uid ]
+        reviewRowDecoder
+        |> Task.map List.head
+
+
+-- Bookkeeping for the drain loop: the (uid, body_hash) pair the review app
+-- has consumed from the index queue, and when. Re-draining the same pair is
+-- a no-op (INSERT OR REPLACE), so a re-queued unit that gets reviewed twice
+-- keeps a single cursor row.
+recordDrain : Db -> String -> String -> Task.Task Error Int
+recordDrain db uid bodyHash =
+    Time.unixMillis ()
+        |> Task.andThen
+            (\now ->
+                Db.exec db
+                    "INSERT OR REPLACE INTO drain_cursor VALUES (?, ?, ?)"
+                    [ SqlString uid, SqlString bodyHash, SqlTime now ]
+            )
+
+
+-- Every review row, newest first. The History page builds its list from this.
+findDecisions : Db -> Task.Task Error (List ReviewRow)
+findDecisions db =
+    Db.queryDecode db
+        "SELECT uid, body_hash, decision, reason, reviewed_at FROM review ORDER BY reviewed_at DESC, uid"
+        []
+        reviewRowDecoder
+
+
+reviewRowDecoder =
+    Db.Decode.succeed makeRow
+        |> Db.Decode.required "uid" (Db.Decode.string "uid")
+        |> Db.Decode.required "body_hash" (Db.Decode.string "body_hash")
+        |> Db.Decode.required "decision" (Db.Decode.string "decision")
+        |> Db.Decode.required "reason" (Db.Decode.nullable (Db.Decode.string "reason"))
+        |> Db.Decode.required "reviewed_at" (Db.Decode.int "reviewed_at")
+
+
+makeRow : String -> String -> String -> Maybe String -> Int -> ReviewRow
+makeRow uid bodyHash decision reason reviewedAt =
+    { uid = uid
+    , bodyHash = bodyHash
+    , decision = decision
+    , reason = reason
+    , reviewedAt = reviewedAt
+    }

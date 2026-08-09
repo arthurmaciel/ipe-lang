@@ -1,0 +1,30 @@
+module Migrations exposing (all)
+
+import Ipe.Db as Db
+
+
+all : List Db.Migration
+all =
+    [ { name = "0001_review"
+      , sql = """CREATE TABLE review (
+    uid         TEXT NOT NULL,
+    body_hash   TEXT NOT NULL,
+    decision    TEXT NOT NULL CHECK (
+                    decision IN ('approve', 'refuse')
+                    AND (decision = 'approve'
+                         OR (reason IS NOT NULL AND length(trim(reason)) > 0))
+                ),
+    reason      TEXT,
+    reviewed_at INTEGER NOT NULL,
+    PRIMARY KEY (uid, body_hash)
+);"""
+      }
+    , { name = "0002_drain_cursor"
+      , sql = """CREATE TABLE drain_cursor (
+    uid        TEXT NOT NULL,
+    body_hash  TEXT NOT NULL,
+    updated_at INTEGER NOT NULL,
+    PRIMARY KEY (uid, body_hash)
+);"""
+      }
+    ]
