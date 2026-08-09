@@ -30,21 +30,19 @@ type IpeString = String;
 // USER TYPES
 // ===========================================
 
-pub enum MainCodec {
-    Codec(::std::sync::Arc<dyn Fn(i64) -> i64 + Send + Sync + 'static>),
+pub struct RecRun {
+    run: ::std::sync::Arc<dyn Fn(i64) -> i64 + Send + Sync + 'static>,
 }
-impl Clone for MainCodec {
+impl Clone for RecRun {
     fn clone(&self) -> Self {
-        match self {
-            MainCodec::Codec(p0) => MainCodec::Codec(p0.clone()),
+        Self {
+            run: self.run.clone(),
         }
     }
 }
-impl IpeStringify for MainCodec {
+impl IpeStringify for RecRun {
     fn ipe_show(&self) -> String {
-        match self {
-            MainCodec::Codec(_) => format!("Codec {}", "<fn>"),
-        }
+        format!("{{{}}}", "<fn>")
     }
 }
 
@@ -214,60 +212,26 @@ pub fn file_rename(src: ipe_runtime::path::Path, dst: ipe_runtime::path::Path) -
     ipe_runtime::file::file_rename(src, dst)
 }
 
-pub fn main_apply_to<FN1: Fn(i64) -> i64 + Send + Sync + 'static>(x: i64, g: FN1) -> i64 {
+pub fn main_runner() -> RecRun {
     let _ipe_recursion_guard = crate::recursion_guard();
-    (g)(x)
-}
-pub fn main_run(codec: MainCodec, xs: Vec<i64>) -> Vec<i64> {
-    let _ipe_recursion_guard = crate::recursion_guard();
-    match codec {
-        MainCodec::Codec(f) => {
-            ({
-                let f = {
-                    let __ipe_fn: ::std::sync::Arc<dyn Fn(i64) -> i64 + Send + Sync + 'static> =
-                        ::std::sync::Arc::new(move |eta_0: i64| -> i64 { (f)(eta_0) });
-                    __ipe_fn
-                };
-                list_map_consume(
-                    ({
-                        let f = f.clone();
-                        {
-                            let __ipe_fn: Box<dyn Fn(i64) -> i64 + Send + Sync + 'static> =
-                                Box::new(move |x: i64| -> i64 {
-                                    crate::main_apply_to(
-                                        x,
-                                        ({
-                                            let f = f.clone();
-                                            {
-                                                let __ipe_fn: Box<
-                                                    dyn Fn(i64) -> i64 + Send + Sync + 'static,
-                                                > = Box::new(move |eta_0: i64| -> i64 {
-                                                    (f)(eta_0)
-                                                });
-                                                __ipe_fn
-                                            }
-                                        }),
-                                    )
-                                });
-                            __ipe_fn
-                        }
-                    }),
-                    xs,
-                )
-            })
-        }
-    }
-}
-pub fn ipe_main() -> IpeTask<()> {
-    let _ipe_recursion_guard = crate::recursion_guard();
-    io_println(string_from_int(list_sum(crate::main_run(
-        MainCodec::Codec({
+    RecRun {
+        run: {
             let __ipe_fn: ::std::sync::Arc<dyn Fn(i64) -> i64 + Send + Sync + 'static> =
                 ::std::sync::Arc::new(move |n: i64| -> i64 { (n + 1) });
             __ipe_fn
-        }),
-        vec![1, 2, 3],
-    ))))
+        },
+    }
+}
+pub fn main_apply_it<FN0: Fn(i64) -> i64 + Send + Sync + 'static>(f: FN0, x: i64) -> i64 {
+    let _ipe_recursion_guard = crate::recursion_guard();
+    (f)(x)
+}
+pub fn ipe_main() -> IpeTask<()> {
+    let _ipe_recursion_guard = crate::recursion_guard();
+    io_println(string_from_int(crate::main_apply_it(
+        move |eta_0: i64| -> i64 { (crate::main_runner()).run.clone()(eta_0) },
+        7,
+    )))
 }
 
 // Ffi.kernel polyfill — should be unreachable in Rust target;
