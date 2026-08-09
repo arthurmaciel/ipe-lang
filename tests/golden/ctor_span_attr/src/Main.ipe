@@ -1,7 +1,9 @@
 module Main exposing (main)
 
-import Dep exposing (Box)
+import Dep exposing (Box, mkBox, runBox)
 import Ipe.Io as Io
+import Ipe.String
+
 
 main =
-    Io.println "hello"
+    Io.println (String.fromInt (runBox mkBox 10))

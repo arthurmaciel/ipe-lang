@@ -1,0 +1,35 @@
+module Main exposing (main)
+
+-- A stored `List (Int -> Int)` of function values is `Clone` (each element is
+-- carried on the `Arc<dyn Fn>` carrier), so the list can be built, forwarded to
+-- a helper, and folded to apply every function in turn. Exercises the
+-- collection-element carrier flip: the element type is `SharedFun`, the literal
+-- constructs each element with `Arc::new`, and `applyAll` receives the list by a
+-- refcount-cheap clone rather than a move that would collapse the closure family.
+
+import Ipe.Io as Io
+import Ipe.List
+import Ipe.String
+
+
+-- Fold the list of functions over a seed, applying each to the accumulator.
+applyAll : List (Int -> Int) -> Int -> Int
+applyAll fns seed =
+    List.foldl (\f acc -> f acc) seed fns
+
+
+steps : List (Int -> Int)
+steps =
+    [ \n -> n + 1, \n -> n * 2, \n -> n - 3 ]
+
+
+main =
+    let
+        once =
+            applyAll steps 10
+
+        -- Reuse the SAME list a second time — proves it is `Clone`, not moved.
+        twice =
+            applyAll steps once
+    in
+    Io.println (String.fromInt twice)

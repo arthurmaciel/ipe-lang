@@ -471,7 +471,9 @@ fn and_map_forwarder_curried_is_ipe_t0014() {
 /// inside the lambda's own body. `lower_lambda` builds its own `ir_params`
 /// independently of the other four `reject_fn_value_reuse` call sites and must
 /// run them through the gate — otherwise this reaches `cargo build` as E0382
-/// instead of a clean IPE-L0127.
+/// instead of a clean IPE-L0127. A `Maybe (Int -> Int)` payload is consumed by
+/// the `andMap`/`map` kernels as an owned `FnOnce` (`Box`), so it stays on the
+/// non-`Clone` `Box` carrier — reuse has no sound rewrite and stays fail-closed.
 #[test]
 fn lambda_param_reuse_gated() {
     let root = repo_root();
@@ -518,9 +520,11 @@ fn lambda_param_call_twice_accepted() {
     assert_eq!(outcome.stdout.trim(), "5");
 }
 
-/// T4 residual gate: a fn-carrying, non-Clone `let`-binding used in two
-/// consuming (argument) positions has no sound rewrite (`Box<dyn Fn>` is not
-/// `Clone`) — must stay a clean IPE-L0127, never E0382 at `cargo build`.
+/// A fn-carrying, non-Clone `let`-binding used in two consuming (argument)
+/// positions has no sound rewrite: a `Maybe (Int -> Int)` payload is consumed by
+/// the `andMap`/`map` kernels as an owned `FnOnce` (`Box`), so it stays on the
+/// non-`Clone` `Box` carrier — reuse must stay a clean IPE-L0127, never E0382 at
+/// `cargo build`.
 #[test]
 fn fn_carrier_reuse_gated() {
     let root = repo_root();
@@ -765,4 +769,46 @@ fn map_annotated_forwarder_arity1_accepted() {
 #[test]
 fn and_then_fn_payload_accepted() {
     assert_accepted_runs("and_then_fn_payload_accepted", "42");
+}
+
+// ── collection-element carrier + element-capability gate ─────────────────────
+
+/// A stored `List (Int -> Int)` of functions is `Clone` (each element on the
+/// `Arc<dyn Fn>` carrier), so it can be built, forwarded to a helper, and folded
+/// to apply every function — then reused a second time. Builds and prints `37`.
+#[test]
+fn list_fn_reuse_accepted() {
+    assert_accepted_runs("list_fn_reuse", "37");
+}
+
+/// A `Dict String (Int -> Int)` dispatch table: the VALUE stores a function on
+/// the `Arc` carrier (the KEY stays a comparable `String`), so a looked-up
+/// function is projected out and applied. Builds and prints `42`.
+#[test]
+fn dict_fn_dispatch_accepted() {
+    assert_accepted_runs("dict_fn_dispatch", "42");
+}
+
+/// Narrowing regression: a function-carrying `List` element is `Clone`
+/// (storable), but not comparable — `List.member` needs `==` on the element, so
+/// it must fail closed at `ipe` time with the element-capability diagnostic
+/// (IPE-L0134), never emit Rust `cargo` rejects. Proves the storable-element
+/// carrier flip did NOT open an unsound equality path.
+#[test]
+fn list_fn_member_stays_gated() {
+    let root = repo_root();
+    if ipe::resolve_runtime().is_err() {
+        return;
+    }
+    let (built, _out) = built_code(&root, "list_fn_member_gated");
+    let code = match &built {
+        Err(CliError::Pipeline { diag, .. }) => Some(diag.code()),
+        _ => None,
+    };
+    assert_eq!(
+        code,
+        Some(ipe_diagnostics::IPE_L0134),
+        "`List.member` over a function-carrying element must fail closed with \
+         IPE-L0134 (a function is not comparable), got: {built:?}"
+    );
 }

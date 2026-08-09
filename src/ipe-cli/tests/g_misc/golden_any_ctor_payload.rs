@@ -31,8 +31,9 @@
 //! 2. `any_ctor_payload_fail_closed` — using the `any` payload as a `String`
 //!    must surface `IPE-T0001` at ipe, never silently cargo-fail.
 //!
-//! 3. `ctor_span_attr_dep_module` — a function-bearing ctor in a dep module
-//!    must surface `IPE-L0114` attributed to `Dep.ipe`, not `Main.ipe`.
+//! 3. `ctor_span_attr_dep_module` — a dep-module enum wrapping a
+//!    `List (Int -> Int)` lowers and runs: the collection element carries its
+//!    function on the `Arc<dyn Fn>` carrier, so the payload is a storable value.
 
 use std::path::{Path, PathBuf};
 
@@ -122,8 +123,9 @@ fn any_ctor_payload_fail_closed() {
     );
 }
 
-/// Misattribution seal: a function-bearing ctor in a dep module must surface
-/// IPE-L0114 attributed to `Dep.ipe`, not the entry `Main.ipe`.
+/// A user enum in a DEP module wrapping a `List (Int -> Int)`: the collection
+/// element carries its function on the `Clone` `Arc<dyn Fn>` carrier, so the enum
+/// is a storable value and the cross-module program lowers cleanly and runs.
 #[test]
 fn ctor_span_attr_dep_module() {
     let root = repo_root();
@@ -137,20 +139,20 @@ fn ctor_span_attr_dep_module() {
 
     let result = ipe::build_with_sibling_discovery(&entry, &out, &runtime);
     assert!(
-        result.is_err(),
-        "expected IPE-L0114 for function-bearing ctor in dep — success means the seal is broken"
+        result.is_ok(),
+        "a dep-module enum wrapping a `List (Int -> Int)` must lower and build: {:?}",
+        result.err()
     );
-    let err_str = result.err().map(|e| e.to_string()).unwrap_or_default();
-    assert!(
-        err_str.contains("IPE-L0114"),
-        "expected IPE-L0114 for function-bearing ctor, got:\n{err_str}"
+
+    if std::env::var("IPE_E2E").is_err() {
+        return;
+    }
+    let outcome = crate::support::build_and_run_emitted("ctor_span_attr", &out);
+    assert_eq!(
+        outcome.exit_code,
+        Some(0),
+        "binary must exit 0; stdout:\n{}",
+        outcome.stdout
     );
-    assert!(
-        err_str.contains("Dep.ipe"),
-        "IPE-L0114 must attribute to Dep.ipe (ctor-span attribution fix), got:\n{err_str}"
-    );
-    assert!(
-        !err_str.contains("Main.ipe"),
-        "IPE-L0114 must NOT mis-attribute to Main.ipe, got:\n{err_str}"
-    );
+    assert_eq!(outcome.stdout.trim(), "22");
 }

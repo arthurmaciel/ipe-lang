@@ -1,22 +1,24 @@
-module Dep exposing (Box, mkBox)
+module Dep exposing (Box, mkBox, runBox)
 
--- IPE-L0114 misattribution regression fixture.
---
--- #90 (2026-07-10) lifted the IPE-L0114 gate for a function DIRECTLY in an
--- enum-like (`Maybe`/`Result`/user-union) constructor payload — `Mk (Int ->
--- Int)` alone no longer trips this diagnostic (it lowers and runs; see
--- `docs/architecture/ctor-payload-function-design.md`). The residual gate
--- this fixture now exercises: a function inside a `List`/`Dict`/`Set`
--- COLLECTION element still trips IPE-L0114 (the emitted `Vec<T>` element is
--- a real Rust generic instantiation; collection kernels `.clone()` their
--- element, which `Box<dyn Fn>` cannot satisfy). The diagnostic span is the
--- list-literal construction site — which lives in Dep's byte-namespace.
--- Pre-fix (span attribution, independent of #90): `source_for_span` found no
--- enclosing def body → fell back to the entry file (Main.ipe). Post-fix: the
--- span is scanned and attributed correctly to Dep.ipe.
+-- A user enum wrapping a `List (Int -> Int)`: the collection element carries its
+-- function on the `Clone` `Arc<dyn Fn>` carrier, so the enum is storable and
+-- lowers cleanly (no longer IPE-L0114). `runBox` folds the stored functions over
+-- a seed to apply them.
 
-type Box a = Mk a
+import Ipe.List
+
+
+type Box a
+    = Mk a
+
 
 mkBox : Box (List (Int -> Int))
 mkBox =
-    Mk [ \n -> n + 1 ]
+    Mk [ \n -> n + 1, \n -> n * 2 ]
+
+
+runBox : Box (List (Int -> Int)) -> Int -> Int
+runBox box seed =
+    case box of
+        Mk fns ->
+            List.foldl (\f acc -> f acc) seed fns

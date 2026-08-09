@@ -957,11 +957,13 @@ const fn feature_label(f: Feature) -> &'static str {
              fields at once [feature: ctor-as-function]"
         }
         Feature::CtorPayloadFunction => {
-            "storing a function value in a `List`/`Dict`/`Set` constructor-payload \
-             element is not supported yet, and an `andMap` chain applying a curried \
-             (2-or-more-argument) function needs curried-payload support that is not \
-             implemented yet — this is a lowering-time backstop; the primary check is \
-             a type error (IPE-T0014) [feature: ctor-payload-function]"
+            "storing a function value in a `Set` element or a `Dict` KEY is not \
+             sound (a `Set` member / `Dict` key must be comparable/hashable, which a \
+             function is not — a `List` element or a `Dict` VALUE stores a function \
+             fine), and an `andMap` chain applying a curried (2-or-more-argument) \
+             function needs curried-payload support that is not implemented yet — \
+             this is a lowering-time backstop; the primary check is a type error \
+             (IPE-T0014) [feature: ctor-payload-function]"
         }
         Feature::TuplePatternMatch => {
             "a tuple pattern is supported only as a single irrefutable destructure \
@@ -1026,6 +1028,14 @@ const fn feature_label(f: Feature) -> &'static str {
              content-addressed custom-element tag, and the DOM-patch node — is not \
              emittable yet, so a program that builds one cannot be compiled to Rust \
              until that transport ships [feature: custom-element-transport]"
+        }
+        Feature::FunctionElementEquality => {
+            "a function value stored in a `List`/`Dict` is `Clone` (so it can be \
+             stored, mapped, folded, and forwarded), but it is not comparable — an \
+             equality- or ordering-requiring operation over a function-carrying \
+             element (`List.member`, `List.sort`, `List.unique`, `List.maximum`, \
+             `List.minimum`) has no sound Rust representation. Compare on a \
+             non-function key instead [feature: function-element-equality]"
         }
     }
 }
