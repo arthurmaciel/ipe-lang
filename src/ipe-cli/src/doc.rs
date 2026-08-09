@@ -11,9 +11,10 @@
 //! * `ipe doc [PATH] [--out DIR] [--write-format markdown|json|html|all]` — generate
 //!   `docs.json` plus the selected human-facing renderings. Includes all stdlib modules
 //!   (both compiled-source and kernel-backed) alongside the project's own modules.
-//! * `ipe doc --list [--plain|--json]` — list all stdlib modules (and project modules),
+//! * `ipe doc list [--plain|--json]` — list all stdlib modules (and project modules),
 //!   one per line. Default: guttered human output; `--plain`: bare names; `--json`:
-//!   `{"modules":[…]}`.
+//!   `{"modules":[…]}`. The former `--list` flag is a deprecated alias that still
+//!   works and prints a notice pointing at `list`.
 //! * `ipe doc <MODULE> [--plain|--json]` — dump one module's exposed types, values, and
 //!   functions with their type signatures (e.g. `ipe doc Ipe.List`). Default: human;
 //!   `--plain`: flush-left; `--json`: stable structured record.
@@ -190,20 +191,36 @@ struct ParsedFlags {
 
 /// Parse `ipe doc`'s argument tail into a [`DocMode`].
 ///
-/// The bare form is `generate`; a leading `serve`, `check`, or `--list` selects
-/// that subcommand; a leading non-flag positional that looks like a dotted
-/// module name (starts with an uppercase letter) selects `query`. Each
-/// subcommand accepts ONLY its own flags, so a flag meaningless for the chosen
-/// subcommand is rejected here rather than carried into an unrepresentable
-/// [`DocMode`].
+/// The bare form is `generate`; a leading bare word — `serve`, `check`, or
+/// `list` — selects that mode, and a leading non-flag positional that looks like
+/// a dotted module name (starts with an uppercase letter) selects `query`. The
+/// legacy `--list` flag is a deprecated alias for the `list` mode, kept
+/// dispatchable so it does not break existing invocations. Each mode accepts
+/// ONLY its own flags, so a flag meaningless for the chosen mode is rejected
+/// here rather than carried into an unrepresentable [`DocMode`].
 ///
 /// # Errors
 /// [`CliError::Usage`] / [`CliError::UsageOwned`] naming the exact problem.
 pub fn parse_doc(rest: &[String]) -> Result<DocMode, CliError> {
+    parse_doc_with(rest, &mut |msg| eprintln!("{msg}"))
+}
+
+/// The stderr notice emitted when the deprecated `--list` alias is used.
+const LIST_DEPRECATION_NOTICE: &str =
+    "note: `ipe doc --list` is deprecated; use `ipe doc list` instead";
+
+/// [`parse_doc`] with the deprecation-notice sink injected, so a test can
+/// observe the alias notice without inspecting a process's stderr.
+fn parse_doc_with(rest: &[String], notice: &mut dyn FnMut(&str)) -> Result<DocMode, CliError> {
     let mut it = rest.iter().peekable();
 
-    // Detect `--list` as a flag-style subcommand (before checking positionals).
+    // The deprecated `--list` flag still selects the `list` mode. It is a
+    // flag-style alias for the bare `list` word, detected before the positional
+    // scan so it works in any position.
     let has_list_flag = rest.iter().any(|s| s == "--list");
+    if has_list_flag {
+        notice(LIST_DEPRECATION_NOTICE);
+    }
 
     let sub = if has_list_flag {
         // Consume any `--list` flag found; the rest are positional/format flags.
@@ -217,6 +234,10 @@ pub fn parse_doc(rest: &[String]) -> Result<DocMode, CliError> {
             Some("check") => {
                 it.next();
                 Sub::Check
+            }
+            Some("list") => {
+                it.next();
+                Sub::List
             }
             // A dotted-path positional starting with uppercase is a module query.
             Some(first)
@@ -282,7 +303,7 @@ fn parse_doc_flags(
             }
             "--plain" | "--json" if !matches!(sub, Sub::List | Sub::Query(_)) => {
                 return Err(CliError::UsageOwned(format!(
-                    "ipe doc {}: {arg} applies only to `--list` and `<module>` queries",
+                    "ipe doc {}: {arg} applies only to `list` and `<module>` queries",
                     sub_name(sub)
                 )));
             }
@@ -363,7 +384,7 @@ const fn sub_name(sub: &Sub) -> &'static str {
         Sub::Generate => "generate",
         Sub::Serve => "serve",
         Sub::Check => "check",
-        Sub::List => "--list",
+        Sub::List => "list",
         Sub::Query(_) => "<module>",
     }
 }
@@ -906,7 +927,7 @@ fn query_module(module_name: &str, format: OutputFormat) -> Result<(), CliError>
     let Some(module) = found else {
         return Err(CliError::UsageOwned(format!(
             "ipe doc: unknown module `{module_name}` (IPE-N0004)\n\
-             Run `ipe doc --list` to see all available modules."
+             Run `ipe doc list` to see all available modules."
         )));
     };
 
@@ -2110,6 +2131,71 @@ mod tests {
                 ..
             }
         ));
+    }
+
+    #[test]
+    fn parse_bare_list_word_returns_list_mode() {
+        let m = parse_doc(&s(&["list"])).expect("list");
+        assert!(matches!(m, DocMode::List { .. }));
+    }
+
+    #[test]
+    fn parse_bare_list_word_with_plain_and_json() {
+        let plain = parse_doc(&s(&["list", "--plain"])).expect("list plain");
+        assert!(matches!(
+            plain,
+            DocMode::List {
+                format: OutputFormat::Plain,
+                ..
+            }
+        ));
+        let json = parse_doc(&s(&["list", "--json"])).expect("list json");
+        assert!(matches!(
+            json,
+            DocMode::List {
+                format: OutputFormat::Json,
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn deprecated_list_flag_still_dispatches_and_warns() {
+        // The `--list` alias must keep selecting `list` (never-break-users) while
+        // emitting a one-time notice steering the caller to the bare word.
+        let mut notices: Vec<String> = Vec::new();
+        let m = parse_doc_with(&s(&["--list", "--plain"]), &mut |msg| {
+            notices.push(msg.to_owned());
+        })
+        .expect("deprecated --list");
+        assert!(matches!(
+            m,
+            DocMode::List {
+                format: OutputFormat::Plain,
+                ..
+            }
+        ));
+        assert_eq!(
+            notices.len(),
+            1,
+            "exactly one deprecation notice: {notices:?}"
+        );
+        let note = notices.first().map(String::as_str).unwrap_or_default();
+        assert!(
+            note.contains("--list") && note.contains("deprecated") && note.contains("doc list"),
+            "the notice names the deprecated flag and its replacement: {note}"
+        );
+    }
+
+    #[test]
+    fn bare_list_word_emits_no_deprecation_notice() {
+        let mut notices: Vec<String> = Vec::new();
+        let _ = parse_doc_with(&s(&["list"]), &mut |msg| notices.push(msg.to_owned()))
+            .expect("bare list");
+        assert!(
+            notices.is_empty(),
+            "bare `list` is not deprecated: {notices:?}"
+        );
     }
 
     #[test]

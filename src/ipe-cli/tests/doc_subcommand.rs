@@ -237,8 +237,8 @@ fn serve_binds_a_free_port_and_serves_the_index() -> io::Result<()> {
 #[test]
 fn list_groups_project_modules_before_the_standard_library() -> io::Result<()> {
     let pkg = documented_package("list_grouping")?;
-    let (ok, stdout, stderr) = run(&["doc", "--list", as_str(&pkg)]);
-    assert!(ok, "`ipe doc --list` must succeed:\n{stdout}\n{stderr}");
+    let (ok, stdout, stderr) = run(&["doc", "list", as_str(&pkg)]);
+    assert!(ok, "`ipe doc list` must succeed:\n{stdout}\n{stderr}");
 
     // Both labelled sections are present, project first.
     let project = stdout
@@ -258,6 +258,27 @@ fn list_groups_project_modules_before_the_standard_library() -> io::Result<()> {
     assert!(
         shapes < stdlib,
         "the project module sorts before the standard library:\n{stdout}"
+    );
+    Ok(())
+}
+
+#[test]
+fn deprecated_list_flag_still_lists_and_warns() -> io::Result<()> {
+    // `--list` keeps working (never-break-users) but steers the caller to the
+    // bare `list` mode via a stderr notice; the listing itself is unchanged.
+    let pkg = documented_package("list_alias")?;
+    let (ok, stdout, stderr) = run(&["doc", "--list", as_str(&pkg)]);
+    assert!(
+        ok,
+        "the deprecated `--list` alias must still succeed:\n{stdout}\n{stderr}"
+    );
+    assert!(
+        stdout.contains("Shapes"),
+        "the alias lists the project module:\n{stdout}"
+    );
+    assert!(
+        stderr.contains("deprecated") && stderr.contains("doc list"),
+        "the alias prints a deprecation notice on stderr:\n{stderr}"
     );
     Ok(())
 }
@@ -434,10 +455,15 @@ fn help_page_describes_the_shipped_surface() {
         stdout.contains("--write-format") && stdout.contains("--port"),
         "help mentions the generate and serve flags, got:\n{stdout}"
     );
-    // The new --list and module-query surface is also advertised.
+    // The bare-word `list` mode and module-query surface are advertised, and the
+    // deprecated `--list` alias is noted (not silently dropped).
+    assert!(
+        stdout.contains("list"),
+        "help mentions list, got:\n{stdout}"
+    );
     assert!(
         stdout.contains("--list"),
-        "help mentions --list, got:\n{stdout}"
+        "help notes the deprecated --list alias, got:\n{stdout}"
     );
     assert!(
         stdout.contains("--plain") && stdout.contains("--json"),

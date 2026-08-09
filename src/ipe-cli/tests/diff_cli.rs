@@ -1,6 +1,7 @@
 #![forbid(unsafe_code)]
 //! End-to-end `ipe diff`: the gate primitive over two real package trees, and
-//! the CLI's exit behaviour in report and `--check` modes.
+//! the CLI's exit behaviour in report and `check` modes (including the
+//! deprecated `--check` alias).
 
 // Test fixture setup: a failed `expect`/`panic` IS the failure signal — the
 // harness reports it as the test failure, which is the intended behaviour here.
@@ -130,13 +131,13 @@ fn cli_diff_check_rejects_an_underbump() {
 
     let out = Command::new(support::ipe_bin())
         .arg("diff")
+        .arg("check")
         .arg(&old)
         .arg(&new)
-        .arg("--check")
         .arg("0.1.0")
         .arg("0.1.1")
         .output()
-        .expect("run ipe diff --check");
+        .expect("run ipe diff check");
     assert!(
         !out.status.success(),
         "an under-bump of a breaking change is rejected"
@@ -157,16 +158,49 @@ fn cli_diff_check_accepts_a_sufficient_bump() {
 
     let out = Command::new(support::ipe_bin())
         .arg("diff")
+        .arg("check")
         .arg(&old)
         .arg(&new)
-        .arg("--check")
         .arg("0.1.0")
         .arg("0.2.0")
         .output()
-        .expect("run ipe diff --check");
+        .expect("run ipe diff check");
     assert!(
         out.status.success(),
         "a minor bump clears a breaking change; stderr:\n{}",
         String::from_utf8_lossy(&out.stderr)
+    );
+}
+
+#[test]
+fn cli_diff_deprecated_check_flag_still_verifies_and_warns() {
+    // The `--check` alias must keep gating (never-break-users) while printing a
+    // notice that points at the bare `check` mode.
+    let old = temp_pkg("dep-old");
+    let new = temp_pkg("dep-new");
+    write_lib(&old, V1);
+    write_lib(&new, V2_BREAKING);
+
+    let out = Command::new(support::ipe_bin())
+        .arg("diff")
+        .arg(&old)
+        .arg(&new)
+        .arg("--check")
+        .arg("0.1.0")
+        .arg("0.1.1")
+        .output()
+        .expect("run ipe diff --check");
+    assert!(
+        !out.status.success(),
+        "the deprecated alias still rejects an under-bump"
+    );
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("0.2.0"),
+        "the alias still names the required floor; got:\n{stderr}"
+    );
+    assert!(
+        stderr.contains("deprecated") && stderr.contains("diff check"),
+        "the deprecation notice steers to the bare word; got:\n{stderr}"
     );
 }
