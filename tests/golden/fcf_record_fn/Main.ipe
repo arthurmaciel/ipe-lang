@@ -1,0 +1,45 @@
+module Main exposing (main)
+
+import Ipe.Io as Io
+import Ipe.String
+
+
+-- Bare functions stored in record literals via APPLICATIONS returning functions
+-- (`wrap (\n -> n)`), not literal lambdas. The field's `SharedFun` `Arc<dyn Fn>`
+-- carrier must accept the produced value: the value side eta-expands the
+-- non-literal fn onto `Arc`, so accept ⇒ cargo-build (THE SEAL).
+--
+-- A non-`RetryPolicy` `shouldRetry` field is exercised alongside `run` to prove
+-- the fix is general to ANY bare-fn record field, independent of the RetryPolicy
+-- kernel path.
+
+
+wrap : (Int -> Int) -> (Int -> Int)
+wrap f =
+    \n -> f n + 1
+
+
+type alias Runner =
+    { run : Int -> Int }
+
+
+type alias Guard =
+    { shouldRetry : Int -> Int }
+
+
+runner : Runner
+runner =
+    { run = wrap (\n -> n * 2) }
+
+
+guard : Guard
+guard =
+    { shouldRetry = wrap (\n -> n + 10) }
+
+
+main =
+    Io.println
+        (String.fromInt ((runner.run) 3)
+            ++ ","
+            ++ String.fromInt ((guard.shouldRetry) 3)
+        )

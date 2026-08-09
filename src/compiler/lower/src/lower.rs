@@ -11393,7 +11393,7 @@ impl<'a> Lowerer<'a> {
                             // carrier the decl-side flip
                             // ([`normalize_enum_payload_fun_carrier`]) stamps on a
                             // direct-function payload and the value-side flip
-                            // ([`promote_ctor_arg_fn_carrier`]) constructs with
+                            // ([`promote_stored_fn_carrier`]) constructs with
                             // `Arc::new`. Without it the type application spells the
                             // slot `Box<dyn Fn>` while the construction fills it with
                             // an `Arc`, an `Arc`-vs-`Box` E0308 (and the composite's
@@ -11980,7 +11980,7 @@ impl<'a> Lowerer<'a> {
         // When the element carrier is `SharedFun` (a stored `List` of functions),
         // each item VALUE must construct with `Arc::new` so it agrees with the
         // element type — the literal-side companion of the type-side element flip
-        // ([`flip_fun_in_storage_element`]). `promote_ctor_arg_fn_carrier` handles
+        // ([`flip_fun_in_storage_element`]). `promote_stored_fn_carrier` handles
         // both the literal leaves (inline lambda / top-level-fn reference) and a
         // non-literal fn leaf (eta-wrapped into an `Arc` `SharedLambda`); a
         // non-function item is returned unchanged.
@@ -11990,7 +11990,7 @@ impl<'a> Lowerer<'a> {
             .map(|e| {
                 let lowered = self.lower_expr(e)?;
                 if carries_fn {
-                    self.promote_ctor_arg_fn_carrier(e, lowered)
+                    self.promote_stored_fn_carrier(e, lowered)
                 } else {
                     Ok(lowered)
                 }
@@ -12500,7 +12500,7 @@ impl<'a> Lowerer<'a> {
                             // A generic payload slot instantiated to a function takes
                             // the `Arc<dyn Fn>` carrier, matching the decl-side flip
                             // ([`normalize_enum_payload_fun_carrier`]) and the
-                            // value-side construction ([`promote_ctor_arg_fn_carrier`]).
+                            // value-side construction ([`promote_stored_fn_carrier`]).
                             // Twin of the annotation-path flip in
                             // [`Self::ir_type_from_canon`]; both spellings of the enum
                             // type argument must agree or the emitted slot is an
@@ -13554,14 +13554,14 @@ impl<'a> Lowerer<'a> {
                 // A component whose solved type is a direct arrow is a stored
                 // function: promote its VALUE to the `Arc` carrier so it agrees
                 // with the `SharedFun` component type ([`flip_fun_in_storage_element`]).
-                // `promote_ctor_arg_fn_carrier` self-gates on the component's
+                // `promote_stored_fn_carrier` self-gates on the component's
                 // region type being a `Ty::Fun`, so a non-function component is
                 // returned unchanged.
                 let elems = elems
                     .iter()
                     .map(|e| {
                         let lowered = self.lower_expr(e)?;
-                        self.promote_ctor_arg_fn_carrier(e, lowered)
+                        self.promote_stored_fn_carrier(e, lowered)
                     })
                     .collect::<DResult<Vec<_>>>()?;
                 Ok(Expr::Tuple(elems))
@@ -13585,9 +13585,15 @@ impl<'a> Lowerer<'a> {
                 // field and field literal share one carrier. A syntactically
                 // fn-typed field is thus stored, not rejected: the synthesised
                 // struct is `Clone` (hand-written) and carries the fn slot soundly.
+                // The value may be a literal lambda / top-level ref OR a
+                // non-literal fn value (an `Access`/`Apply`/`Call` producing a
+                // function); [`Self::promote_stored_fn_carrier`] eta-expands the
+                // latter onto the `Arc` carrier so neither shape reaches emit as a
+                // `Box`-into-`Arc` `E0308`.
                 let mut lowered: Vec<(Symbol, Expr)> = Vec::with_capacity(fields.len());
                 for (name, value) in fields {
-                    let lowered_value = promote_fn_field_value_carrier(self.lower_expr(value)?);
+                    let lowered_value = self.lower_expr(value)?;
+                    let lowered_value = self.promote_stored_fn_carrier(value, lowered_value)?;
                     lowered.push((*name, lowered_value));
                 }
                 lowered.sort_by(|a, b| {
@@ -13799,11 +13805,13 @@ impl<'a> Lowerer<'a> {
             // Carrier normalization (value side): a function replacing a record
             // field is stored on the `Arc<dyn Fn>` carrier, matching the field's
             // `SharedFun` slot in the base's struct (see
-            // [`normalize_record_fun_carriers`]).
-            lowered.push((
-                *name,
-                promote_fn_field_value_carrier(self.lower_expr(value)?),
-            ));
+            // [`normalize_record_fun_carriers`]). A non-literal fn value (an
+            // `Access`/`Apply`/`Call` producing a function) is eta-expanded onto
+            // the `Arc` carrier by [`Self::promote_stored_fn_carrier`], not left
+            // on `Box`.
+            let lowered_value = self.lower_expr(value)?;
+            let lowered_value = self.promote_stored_fn_carrier(value, lowered_value)?;
+            lowered.push((*name, lowered_value));
         }
         lowered.sort_by(|a, b| {
             self.resolve(a.0)
@@ -14705,7 +14713,7 @@ impl<'a> Lowerer<'a> {
     ///
     /// A `Dict String (Int -> Int)` stores its value on `Arc<dyn Fn>`. Built from
     /// a `Dict.fromList` literal, each value is promoted by the list/tuple element
-    /// path ([`Self::promote_ctor_arg_fn_carrier`] via [`Self::lower_list`]); but
+    /// path ([`Self::promote_stored_fn_carrier`] via [`Self::lower_list`]); but
     /// `Dict.singleton k v` / `Dict.insert k v d` pass the value as a DIRECT
     /// kernel argument, which [`Self::lower_expr`] stamps on the `Box` carrier —
     /// the `Arc`-vs-`Box` frontier (`E0308`) at the emitted constructor call. The
@@ -14732,7 +14740,7 @@ impl<'a> Lowerer<'a> {
             return Ok(());
         };
         let promoted = self
-            .promote_ctor_arg_fn_carrier(value_arg, std::mem::replace(lowered_value, Expr::Unit))?;
+            .promote_stored_fn_carrier(value_arg, std::mem::replace(lowered_value, Expr::Unit))?;
         *lowered_value = promoted;
         Ok(())
     }
@@ -14805,7 +14813,7 @@ impl<'a> Lowerer<'a> {
                             .into_iter()
                             .zip(args.iter())
                             .map(|(value, canon_arg)| {
-                                self.promote_ctor_arg_fn_carrier(canon_arg, value)
+                                self.promote_stored_fn_carrier(canon_arg, value)
                             })
                             .collect::<DResult<Vec<_>>>()?
                     };
@@ -15005,25 +15013,28 @@ impl<'a> Lowerer<'a> {
         })
     }
 
-    /// Re-carrier a USER-enum constructor argument whose solved type is a direct
-    /// function arrow to the `Arc<dyn Fn>` carrier, matching the payload field's
-    /// type-side flip ([`normalize_enum_payload_fun_carrier`], which promotes a
-    /// direct-`Fun` payload to [`IrType::SharedFun`]). Without this the two ends
-    /// disagree — the field is `Arc<dyn Fn>` but a non-literal argument value (a
-    /// bare `Var` of a function-typed parameter, an `Access`/`Apply`/`Call`
-    /// producing a function value) stays on the `Box` carrier — and the emitted
-    /// constructor call is an `Arc`-vs-`Box` `E0308`.
+    /// Re-carrier a function value being STORED under a data constructor — a
+    /// record field, an enum-constructor payload, a tuple component, or a
+    /// collection element — whose solved type is a direct function arrow, onto
+    /// the `Arc<dyn Fn>` carrier, matching the storage slot's type-side flip
+    /// ([`normalize_record_fun_carriers`] / [`normalize_enum_payload_fun_carrier`]
+    /// / [`flip_fun_in_storage_element`], which all promote a direct-`Fun` stored
+    /// position to [`IrType::SharedFun`]). Without this the two ends disagree —
+    /// the slot is `Arc<dyn Fn>` but a non-literal value (a bare `Var` of a
+    /// function-typed parameter, an `Access`/`Apply`/`Call` producing a function
+    /// value) stays on the `Box` carrier — and the emitted construction is an
+    /// `Arc`-vs-`Box` `E0308`.
     ///
     /// An inline lambda / top-level-function reference already re-stamps to the
     /// `Arc` carrier through [`promote_fn_field_value_carrier`]; every other
     /// function-value leaf is eta-expanded to an `Expr::SharedLambda` over the
-    /// arrow's own params/ret via [`eta_expand_leaf_to_shared`] (constructed with
-    /// `Arc::new`), so a stored-under-a-constructor function is `Arc` on both the
-    /// field type and the construction expression by construction — the class the
-    /// literal-only promotion left open. A non-function argument, or one whose
-    /// solved type is not a direct arrow (a generic `a`, a collection/tuple of
-    /// functions — those stay on the `Box` carrier upstream), is left unchanged.
-    fn promote_ctor_arg_fn_carrier(&self, canon_arg: &canon::Expr, value: Expr) -> DResult<Expr> {
+    /// arrow's own params/ret (constructed with `Arc::new`), so a stored function
+    /// is `Arc` on both the slot type and the construction expression by
+    /// construction — the class the literal-only promotion left open. A
+    /// non-function value, or one whose solved type is not a direct arrow (a
+    /// generic `a`, a collection/tuple of functions — those stay on the `Box`
+    /// carrier upstream), is left unchanged.
+    fn promote_stored_fn_carrier(&self, canon_arg: &canon::Expr, value: Expr) -> DResult<Expr> {
         // The literal fast paths (inline lambda, top-level-function reference)
         // already carry the `Arc` decision; take them first so the eta wrapper is
         // reserved for the non-literal leaves that would otherwise stay `Box`.
@@ -15048,7 +15059,7 @@ impl<'a> Lowerer<'a> {
         }
         let solved = self.region_ty(canon_arg.span).ok_or_else(|| {
             bug(
-                "ipe_lower::promote_ctor_arg_fn_carrier",
+                "ipe_lower::promote_stored_fn_carrier",
                 "solved arrow type vanished between checks",
             )
         })?;
@@ -15072,7 +15083,7 @@ impl<'a> Lowerer<'a> {
         for (offset, pty) in params.iter().enumerate() {
             let sym = self.eta_params.get(offset).copied().ok_or_else(|| {
                 bug(
-                    "ipe_lower::promote_ctor_arg_fn_carrier",
+                    "ipe_lower::promote_stored_fn_carrier",
                     "eta-parameter pool smaller than the payload arrow's arity",
                 )
             })?;
