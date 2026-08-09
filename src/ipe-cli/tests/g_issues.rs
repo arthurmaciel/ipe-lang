@@ -48,5 +48,7 @@ mod golden_i793_record_fn_read;
 mod golden_i798_generic_combinator_seal;
 #[path = "g_issues/golden_i801_decoder_storage_reuse.rs"]
 mod golden_i801_decoder_storage_reuse;
+#[path = "g_issues/golden_i802_generic_optional_sync.rs"]
+mod golden_i802_generic_optional_sync;
 #[path = "g_issues/golden_i99_alias_match_arm.rs"]
 mod golden_i99_alias_match_arm;

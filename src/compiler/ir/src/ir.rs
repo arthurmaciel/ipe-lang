@@ -579,6 +579,20 @@ impl BoundSet {
     /// is also `'static`). Satisfied by every concrete Ipê type (emitted values
     /// own their data and never borrow), so no caller-side failure.
     const SEND: u16 = 1 << 14;
+    /// The `Sync` auto-trait bound: a generic type-param whose VALUE is captured
+    /// behind a `Send + Sync` shared carrier that itself requires the element
+    /// `Sync` — the optional-decoder runtime slots (`decode_pipeline_optional`,
+    /// `db_decode_optional`), whose first type parameter is bounded `Clone +
+    /// 'static + Send + Sync` because the decoded element's default rides a
+    /// thread-shareable closure. A generic optional-field combinator over a free
+    /// type var threads that var into the slot's element position, so the emitted
+    /// generic must carry `Sync` or the crate is `ipe`-accepted then `cargo`-fails
+    /// E0277 (`cannot be shared between threads safely`) — a SEAL violation.
+    /// Strictly narrower than [`Self::SEND`]: a var that reaches a `Send`-only
+    /// slot (`decode_list`) gains `Send` but NOT `Sync`. Satisfied by every
+    /// concrete Ipê type (emitted values own their data and are trivially `Sync`),
+    /// so no caller-side failure.
+    const SYNC: u16 = 1 << 15;
 
     /// The empty bound set: an unconstrained, structurally-parametric variable.
     pub const UNBOUNDED: Self = Self(0);
@@ -695,6 +709,20 @@ impl BoundSet {
     #[must_use]
     pub const fn has_send(self) -> bool {
         self.0 & Self::SEND != 0
+    }
+
+    /// This set with the `Sync` auto-trait bound (and its always-implied
+    /// companions `Send` + `'static`, since a value shared across threads is also
+    /// sendable and owned) — see [`Self::SYNC`].
+    #[must_use]
+    pub const fn with_sync(self) -> Self {
+        Self(self.0 | Self::SYNC | Self::SEND | Self::STATIC)
+    }
+
+    /// Whether the `Sync` bound is set — see [`Self::SYNC`].
+    #[must_use]
+    pub const fn has_sync(self) -> bool {
+        self.0 & Self::SYNC != 0
     }
 
     /// Whether the `Add` bound is set.

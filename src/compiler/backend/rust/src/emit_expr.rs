@@ -7130,6 +7130,17 @@ fn render_bounds(bounds: BoundSet, n: usize) -> String {
         // Satisfied by every concrete Ipê type (owned, never borrows).
         traits.push("Send".to_owned());
     }
+    if bounds.has_sync() {
+        // `Sync` auto-trait: a generic type-param whose value is captured behind
+        // a `Send + Sync` shared carrier that requires the element `Sync` — the
+        // optional-decoder runtime slots (`decode_pipeline_optional`,
+        // `db_decode_optional`), whose element param is bounded `Send + Sync`.
+        // Pushed right after `Send` (auto-traits precede the operator traits);
+        // fully qualified since `Sync` — like `Send` — is in the prelude, so the
+        // bare name is enough. Satisfied by every concrete Ipê type (owned data
+        // is trivially `Sync`).
+        traits.push("Sync".to_owned());
+    }
     if bounds.has_add() {
         traits.push(format!("::core::ops::Add<Output = T{n}>"));
     }

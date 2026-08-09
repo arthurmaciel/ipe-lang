@@ -5477,6 +5477,19 @@ fn apply_kernel_type_param_bounds(
     let ws_open_msg_matcher = |tracked: Symbol, k: KernelFn, args: &[Expr]| -> bool {
         matches!(k, KernelFn::SubSubscribeWebSocket) && arg_is_tracked_var(args, 2, tracked)
     };
+    // `Sync` — the optional-decoder slots (`JsonDecP.optional` /
+    // `Db.Decode.optional`) capture their element DEFAULT behind a thread-shared
+    // carrier, so their runtime slot bounds the decoded element `T: Send + Sync`
+    // (`decode_pipeline_optional` / `db_decode_optional`). Both kernels share the
+    // scheme `String -> Decoder a -> a -> Decoder (a -> b) -> Decoder b`: the
+    // `Sync`-obliged element `a` is the BARE default at arg index 2 (of type
+    // exactly `Generic(tv)`), while the result `b` never appears bare — it only
+    // sits under a `Decoder`/function — so tracking the arg-2 default selects `a`
+    // ALONE and never over-bounds `b`. Applies to wildcard `any` AND named tvars.
+    let optional_sync_matcher = |tracked: Symbol, k: KernelFn, args: &[Expr]| -> bool {
+        matches!(k, KernelFn::JsonDecPOptional | KernelFn::DbDecOptional)
+            && arg_is_tracked_var(args, 2, tracked)
+    };
 
     for (tv, bounds) in type_params.iter_mut() {
         let is_wildcard = is_wildcard_any_tv(interner, *tv);
@@ -5536,6 +5549,16 @@ fn apply_kernel_type_param_bounds(
             || body_materializes_generic_decoder(*tv, body)
         {
             *bounds = bounds.with_send();
+        }
+        // `Sync` — the tvar is the element `a` threaded through an optional
+        // decoder slot (`decode_pipeline_optional` / `db_decode_optional`), whose
+        // element param is bounded `Send + Sync`. Detected as the BARE arg-2
+        // default of the optional kernel call, so it fires on `a` only — a var
+        // that reaches only a `Send`-bounded slot (`decode_list`) keeps `Send`
+        // and gains no spurious `Sync`. Companion to the `Send` propagation above
+        // (`with_sync` re-implies `Send` + `'static`).
+        if fires_on(&optional_sync_matcher) {
+            *bounds = bounds.with_sync();
         }
     }
 }
@@ -21944,6 +21967,69 @@ mod tests {
         assert!(
             !id_bound.has_send(),
             "a plain `a -> a` must NOT gain a `Send` bound (no over-bounding)"
+        );
+    }
+
+    /// End-to-end of the `Sync` obligation: `apply_kernel_type_param_bounds`
+    /// stamps `Sync` (over the `Send`) on the element var of a generic helper
+    /// whose body applies `JsonDecP.optional` with the tvar's value binder as the
+    /// bare arg-2 default, and leaves the result var — which only reaches the same
+    /// call under a `Decoder`/function — with `Send` but NOT `Sync`.
+    #[test]
+    fn optional_default_stamps_sync_on_element_var_only() {
+        use ipe_ir::{CallPin, Callee, Expr, IrType, KernelFn, OnFormKind};
+
+        let mut interner = Interner::new();
+        let a = interner.intern("a").unwrap();
+        let b = interner.intern("b").unwrap();
+        // Value binders: `default : a` and `next : Decoder (a -> b)`.
+        let default = interner.intern("default").unwrap();
+        let next = interner.intern("next").unwrap();
+
+        // Body `JsonDecP.optional "f" dec default next`: the element `a` sits at
+        // the bare arg-2 default, the result `b` only under the arg-3 decoder.
+        let optional_call = Expr::Call {
+            callee: Callee::Kernel(KernelFn::JsonDecPOptional),
+            args: vec![
+                Expr::Str("f".to_owned()),
+                Expr::Unit, // `dec` — irrelevant to the arg-2 default matcher
+                Expr::Var(default),
+                Expr::Var(next),
+            ],
+            pin: CallPin::None,
+            on_form: OnFormKind::NotForm,
+        };
+        let mut params = vec![
+            (a, super::BoundSet::UNBOUNDED.with_clone()),
+            (b, super::BoundSet::UNBOUNDED.with_clone()),
+        ];
+        super::apply_kernel_type_param_bounds(
+            &interner,
+            &mut params,
+            &[
+                (default, IrType::Generic(a)),
+                (
+                    next,
+                    IrType::Decoder(Box::new(IrType::Fun(
+                        vec![IrType::Generic(a)],
+                        Box::new(IrType::Generic(b)),
+                    ))),
+                ),
+            ],
+            &IrType::Decoder(Box::new(IrType::Generic(b))),
+            &optional_call,
+        );
+        let a_bound = params.first().map(|(_, bd)| *bd).unwrap_or_default();
+        let b_bound = params.get(1).map(|(_, bd)| *bd).unwrap_or_default();
+        assert!(
+            a_bound.has_sync(),
+            "the optional element var must stamp `Sync` (its default rides a \
+             `Send + Sync` carrier)"
+        );
+        assert!(
+            b_bound.has_send() && !b_bound.has_sync(),
+            "the optional result var reaches only a `Decoder` slot: `Send` yes, \
+             `Sync` no — exactly-tight, no over-bounding, got: {b_bound:?}"
         );
     }
 
