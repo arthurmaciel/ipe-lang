@@ -1906,8 +1906,6 @@ pub fn ir_type_is_serde(ty: &IrType, enum_serde: &impl Fn(&ModPath, Symbol) -> b
 ///   `FnOnce` cannot be re-called, so it is never `Clone`.
 /// * [`IrType::Task`] / [`IrType::Cmd`] / [`IrType::Sub`] — pinned futures /
 ///   effect descriptors whose runtime carriers are not `Clone`.
-/// * [`IrType::Decoder`] — a runtime struct whose `run` field is a
-///   `Box<dyn Fn>`; the nominal carrier is not `Clone`.
 /// * [`IrType::Generic`] — a parametric type variable: its `Clone`-ness is
 ///   decided by the caller's instantiation and its emitted `T: Clone` bound, not
 ///   by the carrier here (`clone_class`'s bare-`Generic` admission handles the
@@ -1977,7 +1975,12 @@ pub fn carrier_is_clone(ty: &IrType) -> bool {
         | IrType::Locale
         // The promoted `Arc<dyn Fn>` fn carrier: `Arc` is `Clone` (a refcount
         // bump), so a `SharedFun` slot never poisons its enclosing composite.
-        | IrType::SharedFun(_, _) => true,
+        | IrType::SharedFun(_, _)
+        // The runtime `Decoder<E, T>` carries `run : Arc<dyn Fn + Send + Sync>`
+        // and a hand-written `Clone` that bounds neither `E` nor `T`, so a
+        // `Decoder` slot clones by refcount bump and never poisons its enclosing
+        // composite.
+        | IrType::Decoder(_) => true,
         // Non-`Clone` default carriers. `Fun`'s default carrier is `Box<dyn Fn>`
         // (position-typed model — the `Clone` `Arc` carrier exists only at
         // promoted binding sites, see [`fun_value_arc_promotable`]).
@@ -1986,7 +1989,6 @@ pub fn carrier_is_clone(ty: &IrType) -> bool {
         | IrType::Task(_)
         | IrType::Cmd(_)
         | IrType::Sub(_)
-        | IrType::Decoder(_)
         | IrType::Generic(_)
         // A row generic's `Clone`-ness rides its emitted `R: Clone` witness
         // bound, exactly as a plain generic's rides `T: Clone` — the carrier
@@ -2021,7 +2023,9 @@ pub fn carrier_is_clone(ty: &IrType) -> bool {
 /// * [`IrType::FnOnceChain`] — consume-once by type; an `Arc<dyn Fn>` cannot
 ///   satisfy the runtime's `Box<dyn FnOnce>` pipeline slots.
 /// * [`IrType::Decoder`] — a nominal runtime struct, not a first-class function
-///   value; its inner `Box<dyn Fn>` field is a runtime implementation detail.
+///   value; it carries its own `Clone` (an `Arc`-backed `run` field), so a
+///   captured/reused `Decoder` clones as an ordinary `CloneOk` value rather than
+///   taking this `Fun`-value promotion.
 ///
 /// A composite carrying a `Fun` (`Maybe (Int -> Int)`, a record-of-functions, …)
 /// is NOT a bare fn value and so is not this predicate's concern — its own

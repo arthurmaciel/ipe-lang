@@ -1,0 +1,61 @@
+module Main exposing (main)
+
+import Ipe.Io as Io
+import Ipe.String as String
+import Ipe.List as List
+import Ipe.Maybe as Maybe
+
+
+-- The `enum`-builder shape: a name lookup closes a `filter` predicate over a
+-- GENERIC value `v : a` and a `(a, String)` association list. The predicate
+-- captures `v` (bare `Generic`) into the closure. A bare generic capture is
+-- sound — the emitted closure bounds `a : Clone`, so the captured `v` clones at
+-- the boundary and a non-`Clone` instantiation is rejected at the caller.
+enumName : (a -> a -> Bool) -> List ( a, String ) -> a -> Maybe String
+enumName eq pairs v =
+    List.find (\pair -> case pair of ( c, _ ) -> eq c v) pairs
+        |> Maybe.map (\pair -> case pair of ( _, name ) -> name)
+
+
+type Medal
+    = Bronze
+    | Silver
+    | Gold
+
+
+medalEq : Medal -> Medal -> Bool
+medalEq a b =
+    case a of
+        Bronze ->
+            case b of
+                Bronze -> True
+                Silver -> False
+                Gold -> False
+
+        Silver ->
+            case b of
+                Bronze -> False
+                Silver -> True
+                Gold -> False
+
+        Gold ->
+            case b of
+                Bronze -> False
+                Silver -> False
+                Gold -> True
+
+
+medalPairs : List ( Medal, String )
+medalPairs =
+    [ ( Bronze, "bronze" ), ( Silver, "silver" ), ( Gold, "gold" ) ]
+
+
+report : Medal -> String
+report m =
+    case enumName medalEq medalPairs m of
+        Just name -> name
+        Nothing -> "?"
+
+
+main =
+    Io.println (String.join " " [ report Silver, report Gold, report Bronze ])

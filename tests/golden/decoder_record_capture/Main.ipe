@@ -1,0 +1,67 @@
+module Main exposing (main)
+
+import Ipe.Io as Io
+import Ipe.Result as Result
+import Ipe.Json.Decode as Decode
+import Ipe.String as String
+import Ipe.List as List
+
+
+-- A record carrying a BARE `Decoder a` field. Under the `Arc`-backed `Decoder`
+-- carrier the record is `Clone`, so it may be captured into a closure and the
+-- closure reused.
+type DecBox a
+    = DecBox { dec : Decoder a }
+
+
+intBox : DecBox Int
+intBox =
+    DecBox { dec = Decode.int }
+
+
+stringBox : DecBox String
+stringBox =
+    DecBox { dec = Decode.string }
+
+
+-- The P1 capture shape: project the record binder `r` (carrying `dec : Decoder
+-- a`) and CAPTURE the whole `r` into a returned closure. `r` is `Clone` because
+-- its only non-scalar field rides the clonable `Arc` decoder carrier, so the
+-- closure stays `Fn` and can be reused across calls.
+listDecoderOf : DecBox a -> (String -> Result Error (List a))
+listDecoderOf box =
+    case box of
+        DecBox r ->
+            \s -> Decode.decodeString (Decode.list r.dec) s
+
+
+reportInts : Result Error (List Int) -> String
+reportInts res =
+    case res of
+        Ok xs -> "ints=" ++ String.fromInt (List.length xs)
+        Err _ -> "ints-err"
+
+
+reportStrings : Result Error (List String) -> String
+reportStrings res =
+    case res of
+        Ok xs -> "strs=" ++ String.fromInt (List.length xs)
+        Err _ -> "strs-err"
+
+
+main =
+    let
+        decodeInts =
+            listDecoderOf intBox
+
+        decodeStrings =
+            listDecoderOf stringBox
+    in
+    Io.println
+        (String.join " "
+            [ reportInts (decodeInts "[1,2,3]")
+            , reportInts (decodeInts "[4,5]")
+            , reportStrings (decodeStrings "[\"a\",\"b\"]")
+            , reportStrings (decodeStrings "[\"c\"]")
+            ]
+        )

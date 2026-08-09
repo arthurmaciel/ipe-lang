@@ -25,42 +25,24 @@ type IpeInt = i64;
 type IpeFloat = f64;
 type IpeBool = bool;
 type IpeString = String;
-type Value = JsonVal;
 
 // ===========================================
 // USER TYPES
 // ===========================================
 
-pub enum MainDecBox<T1: 'static> {
-    DecBox(RecDec<T1>),
+#[derive(Clone, Debug, PartialEq)]
+pub enum MainMedal {
+    Bronze,
+    Silver,
+    Gold,
 }
-impl<T1: Clone + 'static> Clone for MainDecBox<T1> {
-    fn clone(&self) -> Self {
-        match self {
-            MainDecBox::DecBox(p0) => MainDecBox::DecBox(p0.clone()),
-        }
-    }
-}
-impl<T1: IpeStringify + std::fmt::Debug + 'static> IpeStringify for MainDecBox<T1> {
+impl IpeStringify for MainMedal {
     fn ipe_show(&self) -> String {
         match self {
-            MainDecBox::DecBox(_) => format!("DecBox {}", "<fn>"),
+            MainMedal::Bronze => "Bronze".to_string(),
+            MainMedal::Silver => "Silver".to_string(),
+            MainMedal::Gold => "Gold".to_string(),
         }
-    }
-}
-pub struct RecDec<T1> {
-    dec: Decoder<T1>,
-}
-impl<T1> Clone for RecDec<T1> {
-    fn clone(&self) -> Self {
-        Self {
-            dec: self.dec.clone(),
-        }
-    }
-}
-impl<T1: IpeStringify + std::fmt::Debug> IpeStringify for RecDec<T1> {
-    fn ipe_show(&self) -> String {
-        format!("{{{}}}", "<fn>")
     }
 }
 
@@ -75,7 +57,6 @@ pub fn recursion_guard() -> ipe_runtime::core::RecursionGuard {
 }
 
 pub type IpeTask<A> = ipe_runtime::IpeTask<IpeError, A>;
-pub type Decoder<T> = ipe_runtime::json::Decoder<IpeError, T>;
 
 pub fn ok_res<A>(a: A) -> IpeResult<IpeError, A> {
     ipe_runtime::core::ok_res(a)
@@ -231,60 +212,74 @@ pub fn file_rename(src: ipe_runtime::path::Path, dst: ipe_runtime::path::Path) -
     ipe_runtime::file::file_rename(src, dst)
 }
 
-pub fn main_int_box() -> MainDecBox<i64> {
+pub fn main_enum_name<T1: 'static + Send + Sync + Clone>(
+    eq: Box<dyn Fn(T1, T1) -> bool + Send + Sync + 'static>,
+    pairs: Vec<(T1, String)>,
+    v: T1,
+) -> IpeMaybe<String> {
     let _ipe_recursion_guard = crate::recursion_guard();
-    MainDecBox::DecBox(RecDec {
-        dec: json_decode_int::<IpeError>(),
+    ({
+        let eta_0: IpeMaybe<(T1, String)> = list_find({
+            let __ipe_fn: Box<dyn Fn((T1, String)) -> bool + Send + Sync + 'static> = Box::new(move |pair: (T1, String)| -> bool { ({
+                    let (c, _) = pair;
+                    (eq)(c, v.clone())
+                }) });
+            __ipe_fn
+        }, pairs);
+        ipe_maybe_map(eta_0, {
+            let __ipe_fn: Box<dyn Fn((T1, String)) -> String + Send + Sync + 'static> =
+                Box::new(move |pair: (T1, String)| -> String {
+                    ({
+                        let (_, name) = pair;
+                        name
+                    })
+                });
+            __ipe_fn
+        })
     })
 }
-pub fn main_string_box() -> MainDecBox<String> {
+pub fn main_medal_eq(a: MainMedal, b: MainMedal) -> bool {
     let _ipe_recursion_guard = crate::recursion_guard();
-    MainDecBox::DecBox(RecDec {
-        dec: json_decode_string::<IpeError>(),
-    })
-}
-pub fn main_decode_list<T1: 'static + Send + Clone>(
-    box_: MainDecBox<T1>,
-    s: String,
-) -> IpeResult<ipe_runtime::error::IpeError, Vec<T1>> {
-    let _ipe_recursion_guard = crate::recursion_guard();
-    match box_ {
-        MainDecBox::DecBox(r) => decode_from_json_string(decode_list((r).dec.clone()), s),
+    match a {
+        MainMedal::Bronze => match b {
+            MainMedal::Bronze => true,
+            MainMedal::Silver => false,
+            MainMedal::Gold => false,
+        },
+        MainMedal::Silver => match b {
+            MainMedal::Bronze => false,
+            MainMedal::Silver => true,
+            MainMedal::Gold => false,
+        },
+        MainMedal::Gold => match b {
+            MainMedal::Bronze => false,
+            MainMedal::Silver => false,
+            MainMedal::Gold => true,
+        },
     }
 }
-pub fn main_report_ints(res: IpeResult<ipe_runtime::error::IpeError, Vec<i64>>) -> String {
+pub fn main_medal_pairs() -> Vec<(MainMedal, String)> {
     let _ipe_recursion_guard = crate::recursion_guard();
-    match res {
-        IpeResult::Ok(xs) => format!("{}{}", "ints=".to_string(), string_from_int(list_length(xs))),
-        IpeResult::Err(_) => "ints-err".to_string(),
-    }
+    vec![
+        (MainMedal::Bronze, "bronze".to_string()),
+        (MainMedal::Silver, "silver".to_string()),
+        (MainMedal::Gold, "gold".to_string()),
+    ]
 }
-pub fn main_report_strings(res: IpeResult<ipe_runtime::error::IpeError, Vec<String>>) -> String {
+pub fn main_report(m: MainMedal) -> String {
     let _ipe_recursion_guard = crate::recursion_guard();
-    match res {
-        IpeResult::Ok(xs) => format!("{}{}", "strs=".to_string(), string_from_int(list_length(xs))),
-        IpeResult::Err(_) => "strs-err".to_string(),
+    match crate::main_enum_name({ let __ipe_fn: Box<dyn Fn(MainMedal, MainMedal) -> bool + Send + Sync + 'static> = Box::new(crate::main_medal_eq); __ipe_fn }, crate::main_medal_pairs(), m)
+    {
+        IpeMaybe::Just(name) => name,
+        IpeMaybe::Nothing => "?".to_string(),
     }
 }
 pub fn ipe_main() -> IpeTask<()> {
     let _ipe_recursion_guard = crate::recursion_guard();
     io_println(string_join(" ".to_string(), vec![
-        crate::main_report_ints(crate::main_decode_list(
-            crate::main_int_box(),
-            "[4,5,6]".to_string(),
-        )),
-        crate::main_report_ints(crate::main_decode_list(
-            crate::main_int_box(),
-            "[7,8]".to_string(),
-        )),
-        crate::main_report_strings(crate::main_decode_list(
-            crate::main_string_box(),
-            "[\"x\",\"y\",\"z\"]".to_string(),
-        )),
-        crate::main_report_strings(crate::main_decode_list(
-            crate::main_string_box(),
-            "[\"p\"]".to_string(),
-        )),
+        crate::main_report(MainMedal::Silver),
+        crate::main_report(MainMedal::Gold),
+        crate::main_report(MainMedal::Bronze),
     ]))
 }
 
