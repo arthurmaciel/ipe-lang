@@ -3757,6 +3757,67 @@ mod tests {
         assert_eq!(index, 0, "`Overview` is the first ctor");
     }
 
+    /// A qualified-home built-in union's constructors (`HttpMethod`'s verbs)
+    /// are registered qualified-only, so a bare `Post` with NO import of
+    /// `Ipe.Http` is unresolved — it must never resolve to the HTTP verb (and
+    /// so never shadow a user's own `Post`).
+    #[test]
+    fn http_verb_unqualified_without_import_is_unresolved() {
+        let err = canon_err(
+            "module Main exposing (main)\n\
+             main = Post\n",
+        );
+        assert!(
+            matches!(
+                err,
+                Some(Diagnostic::Name {
+                    msg: NameError::ValueNotFound { .. } | NameError::ConstructorNotFound { .. },
+                    ..
+                })
+            ),
+            "a bare `Post` with no `Ipe.Http` import must be unresolved; got {err:?}"
+        );
+    }
+
+    /// An explicit `import Ipe.Http exposing (HttpMethod(..))` brings the
+    /// union's constructors into UNQUALIFIED scope: a bare `Post` resolves to
+    /// the `HttpMethod` verb `VarCtor`, the whole meaning of open-import.
+    #[test]
+    fn http_verb_resolves_unqualified_when_type_is_exposed_open() {
+        let src = "module Main exposing (main)\n\
+                   import Ipe.Http as Http exposing (HttpMethod(..))\n\
+                   main = Post\n";
+        let mut i = Interner::new();
+        let parsed = ipe_parse::parse_module(src, &mut i);
+        assert!(parsed.is_ok(), "source must parse");
+        let Ok(parsed) = parsed else { return };
+        let m = canonicalise(&parsed, &mut i);
+        assert!(m.is_ok(), "must canonicalise cleanly; got {m:?}");
+        let Ok(m) = m else { return };
+        let Some(Def::Untyped { body, .. }) = find_def(&m, &i, "main") else {
+            assert!(false_marker(), "main is an untyped def");
+            return;
+        };
+        assert!(
+            matches!(body.value, Expr_::VarCtor { .. }),
+            "bare `Post` under `exposing (HttpMethod(..))` must resolve to the \
+             HttpMethod verb ctor; got {:?}",
+            body.value
+        );
+        let Expr_::VarCtor {
+            type_name, name, ..
+        } = body.value
+        else {
+            return;
+        };
+        assert_eq!(
+            i.resolve(type_name),
+            Some("HttpMethod"),
+            "ctor belongs to `HttpMethod`"
+        );
+        assert_eq!(i.resolve(name), Some("Post"), "ctor name is `Post`");
+    }
+
     // ─────────────────────────────────────────────────────────────────────────
     // Ipe.Ui.Lazy: module registration regression
     // ─────────────────────────────────────────────────────────────────────────

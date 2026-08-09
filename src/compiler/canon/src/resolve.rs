@@ -1432,7 +1432,9 @@ fn register_stdlib_import_aliases(
 ///   handled. Capitalized **TYPE** exposures (`exposing (Element)`,
 ///   `exposing (Error)`) are kernel-implicit built-in types resolved by a
 ///   separate mechanism and are deliberately left untouched — treating them as
-///   value members would spuriously reject every `exposing (SomeType)`.
+///   value members would spuriously reject every `exposing (SomeType)`. The
+///   CONSTRUCTORS a `Type(..)` exposure opens are injected separately by
+///   [`inject_stdlib_exposed_ctors`].
 /// * The registered [`VarHome::Kernel`] is **cloned verbatim** from the
 ///   canonical qualifier's member table, so the cloned entry carries the SAME
 ///   kernel id + canonical module + name a qualified `M.member` reference
@@ -1530,6 +1532,83 @@ fn inject_stdlib_exposed_values(
             }
             seen_values.insert(name, item.span);
             env.vars.insert(name, home);
+        }
+    }
+    Ok(())
+}
+
+/// Bring the CONSTRUCTORS of a built-in union with a `qualified_home`
+/// (e.g. `HttpMethod` under `Http`) into UNQUALIFIED scope for an explicit
+/// `import Ipê.*/Ipe.* exposing (Type(..))` (or `Type(A, B)`) list.
+///
+/// Such a union is registered by [`Env::install_builtin_ctors`] into
+/// [`Env::qual_ctors`] ONLY — never the ambient unqualified [`Env::ctors`] —
+/// so a bare `Post`/`Get` with no import does NOT resolve to the HTTP verb and
+/// cannot shadow a user's own same-spelled constructor. An **explicit** open
+/// import is the sanctioned request to unqualify them: it is the whole meaning
+/// of `exposing (Type(..))`. This is the constructor counterpart of
+/// [`inject_stdlib_exposed_values`] (which handles only lowercase VALUE members)
+/// and mirrors the user-dep path ([`inject_ctors_for_type`]).
+///
+/// Scope and soundness:
+///
+/// * The ctors are **cloned verbatim** from the canonical qualifier's
+///   [`Env::qual_ctors`] entry, so an unqualified `Post` carries the SAME
+///   [`CtorHome`] (type, index, arity) a qualified `Http.Post` resolves to;
+///   downstream lowering is identical either way.
+/// * Only a `Type(..)`/`Type(A, …)` exposure ([`src::Privacy::Public`] /
+///   [`src::Privacy::PublicCtors`]) opens the constructors; an opaque
+///   `Type` ([`src::Privacy::Private`]) exposes none — matching the user-dep
+///   privacy rule.
+/// * A path naming no known/ported stdlib module, or a type with no
+///   `qualified_home` constructors, injects nothing (fail-closed); the type
+///   name itself resolves through the kernel-implicit type mechanism as before.
+///
+/// # Errors
+/// [`Diagnostic::CompilerBug`] if interning `Ipe` or a type name exhausts the
+/// interner.
+fn inject_stdlib_exposed_ctors(
+    m: &src::Module,
+    env: &mut Env,
+    interner: &mut Interner,
+) -> DResult<()> {
+    let ipe_sym = interner.intern("Ipe")?;
+    for import in &m.imports {
+        let dep_path = &import.name.value;
+        if dep_path.first().copied().is_none_or(|s| s != ipe_sym) {
+            continue;
+        }
+        let src::Exposing::List(items) = &import.exposing.value else {
+            continue;
+        };
+        let Some(canonical) = env.canonical_stdlib_qualifier(dep_path, interner)? else {
+            continue;
+        };
+        for item in items {
+            let src::Exposed::Type(type_name, privacy) = &item.value else {
+                continue;
+            };
+            // An opaque `Type` exposure opens no constructors.
+            if matches!(privacy, src::Privacy::Private) {
+                continue;
+            }
+            let type_sym = *type_name;
+            // Copy every constructor of this type from the qualified table; a
+            // built-in union with no `qualified_home` contributes nothing here.
+            let ctors: Vec<CtorHome> = env
+                .qual_ctors
+                .get(&canonical)
+                .map(|members| {
+                    members
+                        .values()
+                        .filter(|home| home.type_name == type_sym)
+                        .cloned()
+                        .collect()
+                })
+                .unwrap_or_default();
+            for ctor_home in ctors {
+                std::rc::Rc::make_mut(&mut env.ctors).insert(ctor_home.name, ctor_home);
+            }
         }
     }
     Ok(())
@@ -2082,6 +2161,13 @@ fn canonicalise_with_env(
     // `type_home_map` first) sees the recorded home rather than the empty-home
     // sentinel that always mis-selects `UiAttribute`.
     inject_stdlib_exposed_type_homes(m, type_home_map, interner)?;
+    // Bring a qualified-home built-in union's CONSTRUCTORS (e.g. `HttpMethod`'s
+    // `Get`/`Post`/…) into UNQUALIFIED scope for an explicit
+    // `import Ipe.Http exposing (HttpMethod(..))`. Those ctors are registered
+    // qualified-only (`Http.Post`) so a bare `Post` with no import stays
+    // unresolved and never shadows a user's own ctor; an explicit `exposing
+    // (Type(..))` is the sanctioned request to unqualify them.
+    inject_stdlib_exposed_ctors(m, env, interner)?;
     // Flood every member of an `import Ipê.*/Ipe.* exposing (..)` stdlib
     // module into the LOW-PRIORITY wildcard tier. Deliberately does NOT touch
     // `seen_values` — a local / explicit-exposed / synth-ctor / built-in name of
