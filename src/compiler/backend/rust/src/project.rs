@@ -2007,7 +2007,7 @@ fn assemble_project_files(
     // moves to a user-crate module. Wasm never reaches here (its closed template
     // returned above).
     if let Some(dep) = ctx.runtime_dep.clone() {
-        let cargo_toml = dep_model_cargo_toml(ctx, &dep)?;
+        let mut cargo_toml = dep_model_cargo_toml(ctx, &dep)?;
         let mut files = BTreeMap::new();
         for (path, text) in rust_sources {
             files.insert(path, rewrite_runtime_paths_for_dep(&text));
@@ -2025,7 +2025,11 @@ fn assemble_project_files(
             relocate_env_public_to_user_crate(&mut files, &ctx.wasm_public_env)?;
         }
         // FFI wrappers are user-project code in BOTH models — the wrapper module
-        // + its `mod ffi;` declaration ride the emitted crate unchanged.
+        // + its `mod ffi;` declaration ride the emitted crate unchanged, and the
+        // bound crates' pinned `[dependencies]` lines join the manifest exactly
+        // as they do on the vendored path. Omitting them here would emit a crate
+        // whose `src/ffi.rs` references an external `::<crate>::…` the manifest
+        // never declares — an `ipe`-accept-then-cargo-fail the SEAL forbids.
         if ctx.uses_ffi {
             let ffi = ctx.ffi.as_ref().ok_or_else(|| Diagnostic::CompilerBug {
                 where_: "ipe_backend_rust::project::assemble_project_files",
@@ -2044,6 +2048,7 @@ fn assemble_project_files(
                     detail: "no src/main.rs in the assembled file set".to_owned(),
                 })?;
             main.push_str("\nmod ffi;\n");
+            cargo_toml = ffi_cargo_toml(&cargo_toml, ctx)?;
         }
         return Ok(EmittedProject { files, cargo_toml });
     }
