@@ -1,0 +1,33 @@
+module Main exposing (main)
+
+import Ipe.Cache as Cache
+import Ipe.Io as Io
+import Ipe.String
+import Ipe.Task
+
+-- SEAL regression for a non-Copy `Ipe.Cache` HANDLE reused across TWO Task
+-- steps. `Cache.put cache …` MOVES the `IpeCacheHandle` (it is not `Copy`); the
+-- `Task.andThen` continuation then reads the SAME `cache` again in `Cache.size
+-- cache`. The emitter renders `task_and_then(effect, cont)`, and Rust evaluates
+-- the effect (arg 0) before it builds the continuation closure — so the effect's
+-- move leaves the continuation borrowing a moved value (E0382) unless the effect
+-- clones the handle at its use site. This program type-checks (ipe exit 0) and
+-- the emitted crate must also `cargo build` and print the entry count `1`.
+cfg : Cache.CacheCfg
+cfg =
+    Cache.defaultCfg
+        |> Cache.withMaxEntries 64
+
+
+main =
+    Task.andThen
+        (\cache ->
+            Task.andThen
+                (\_ ->
+                    Task.andThen
+                        (\n -> Io.println (String.fromInt n))
+                        (Cache.size cache)
+                )
+                (Cache.put cache "k" 1)
+        )
+        (Cache.new cfg)

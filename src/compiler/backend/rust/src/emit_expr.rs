@@ -4855,8 +4855,42 @@ pub fn emit_expr_at(
             } else {
                 pin_turbofish
             };
+            // `Task.andThen cont effect` renders (after the `swaps_first_two`
+            // reverse below) as `task_and_then(effect, cont)`. Rust evaluates the
+            // args left-to-right, so `effect` runs BEFORE `cont`'s closure is
+            // built. A non-Copy handle that `effect` MOVES (e.g. an
+            // `IpeCacheHandle` passed by value into `Cache.put cache …`) is gone
+            // by the time `cont` tries to capture the same binding — the
+            // `let h = h.clone()` the lowerer inserts for `cont`'s capture then
+            // borrows a moved value (E0382). Clone every var `cont` captures at
+            // its `effect` use site so the original survives into the closure —
+            // the same IR-level `clone_targets_in_expr` rewrite the `TaskSeq` arm
+            // applies to its auto-forced continuation. `effect` (args[1] in Ipê
+            // order) is the only arg rewritten; a no-op when `cont` captures none
+            // of `effect`'s vars, so non-reusing chains stay byte-identical.
+            let rewritten_effect: Option<Expr> =
+                if matches!(callee, Callee::Kernel(KernelFn::TaskAndThen))
+                    && let [cont, effect] = args.as_slice()
+                {
+                    let cont_captures = free_vars(cont);
+                    let row_binders: std::collections::BTreeSet<Symbol> =
+                        generics.row_binders().iter().copied().collect();
+                    Some(clone_targets_in_expr(
+                        effect.clone(),
+                        &cont_captures,
+                        &row_binders,
+                    ))
+                } else {
+                    None
+                };
             let mut parts = Vec::with_capacity(args.len());
             for (i, arg) in args.iter().enumerate() {
+                // For a `Task.andThen`, substitute the clone-rewritten effect (the
+                // second Ipê arg) so its shared-handle reads clone rather than move.
+                let arg: &Expr = match (&rewritten_effect, i) {
+                    (Some(rw), 1) => rw,
+                    _ => arg,
+                };
                 // A `Fun` param this callee monomorphized to an `impl Fn`
                 // generic accepts the closure UNBOXED, so a lambda-literal
                 // argument skips the `Box::new(..)` wrapper and rustc inlines it
