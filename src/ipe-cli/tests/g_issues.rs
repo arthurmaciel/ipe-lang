@@ -44,5 +44,7 @@ mod golden_i672_random_members;
 mod golden_i789_record_fn_carrier;
 #[path = "g_issues/golden_i793_record_fn_read.rs"]
 mod golden_i793_record_fn_read;
+#[path = "g_issues/golden_i798_generic_combinator_seal.rs"]
+mod golden_i798_generic_combinator_seal;
 #[path = "g_issues/golden_i99_alias_match_arm.rs"]
 mod golden_i99_alias_match_arm;

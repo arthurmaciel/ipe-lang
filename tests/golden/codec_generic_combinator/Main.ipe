@@ -1,0 +1,85 @@
+module Main exposing (main)
+
+import Ipe.Io as Io
+import Ipe.Result as Result
+import Ipe.Json.Encode as Encode
+import Ipe.Json.Decode as Decode
+import Ipe.String as String
+import Ipe.List as List
+
+
+-- A generic codec bundles an element encoder and a decoder FACTORY. The factory
+-- (a reproducible `{} -> Decoder a`) rides the clonable shared-fn carrier, so a
+-- codec stays a reusable value even though the runtime `Decoder` it builds is
+-- single-shot.
+type Codec a
+    = Codec
+        { enc : a -> Value
+        , mkDec : {} -> Decoder a
+        }
+
+
+intCodec : Codec Int
+intCodec =
+    Codec
+        { enc = \n -> Encode.int n
+        , mkDec = \_ -> Decode.int
+        }
+
+
+stringCodec : Codec String
+stringCodec =
+    Codec
+        { enc = \s -> Encode.string s
+        , mkDec = \_ -> Decode.string
+        }
+
+
+-- Encode a list generically over `a`: the stored element encoder is a shared
+-- function value read out of the codec and forwarded into the `Encode.list`
+-- kernel, whose element-encoder parameter is a bare `impl Fn`.
+encodeList : Codec a -> List a -> String
+encodeList codec xs =
+    case codec of
+        Codec r ->
+            Encode.encode 0 (Encode.list r.enc xs)
+
+
+-- Decode a list generically over `a`: `Decode.list` builds a `Decoder (List a)`
+-- whose element type must be sendable across threads.
+decodeList : Codec a -> String -> Result Error (List a)
+decodeList codec s =
+    case codec of
+        Codec r ->
+            Decode.decodeString (Decode.list (r.mkDec {})) s
+
+
+reportInts : Result Error (List Int) -> String
+reportInts res =
+    case res of
+        Ok xs ->
+            "ints=" ++ String.fromInt (List.length xs)
+
+        Err _ ->
+            "ints-err"
+
+
+reportStrings : Result Error (List String) -> String
+reportStrings res =
+    case res of
+        Ok xs ->
+            "strs=" ++ String.fromInt (List.length xs)
+
+        Err _ ->
+            "strs-err"
+
+
+main =
+    Io.println
+        (String.join " "
+            [ encodeList intCodec [ 1, 2, 3 ]
+            , reportInts (decodeList intCodec "[4,5,6]")
+            , encodeList stringCodec [ "a", "b" ]
+            , reportStrings (decodeList stringCodec "[\"x\",\"y\",\"z\"]")
+            ]
+        )

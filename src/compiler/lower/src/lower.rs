@@ -5303,6 +5303,106 @@ fn body_boxes_generic_callback(tv: Symbol, expr: &Expr) -> bool {
     }
 }
 
+/// Does `expr` MATERIALIZE a runtime `Decoder<E, tv>` value anywhere in the body
+/// — a typed subexpression whose type mentions the type variable `tv` UNDER a
+/// [`IrType::Decoder`] node?
+///
+/// The runtime `Decoder<E, T>` holds `Box<dyn Fn(..) -> IpeResult<E, T> + Send>`,
+/// so it is `Send` only when `T: Send`; and every `Decoder`-combinator kernel
+/// (`decode_list`, `decode_map`, …) bounds its element `T: Send + 'static`.
+/// Whenever a generic helper's body produces or forwards a `Decoder tv` value —
+/// even when the `Decoder` is hidden inside a user ADT field (`Codec a`'s
+/// `dec : Decoder a`, invisible to the signature-level [`ir_type_generic_in_decoder`]
+/// walk, which only sees the ADT's `args`, not its variant fields) — the emitted
+/// generic needs `tv: Send + 'static`, or the crate is well-typed to `ipe` but
+/// fails `cargo build` (a SEAL violation).
+///
+/// This reads the TYPE carried on the body's typed leaves (`Lambda`/`SharedLambda`
+/// return, `FuncValue` type, `Access` field type, `List` element type), mirroring
+/// [`body_boxes_generic_callback`]'s structural walk but keyed on the
+/// `Decoder`-under-`tv` obligation rather than the boxed-callback one. It fires
+/// ONLY when a `Decoder tv` value actually appears, so a truly-parametric
+/// pass-through that never touches a `Decoder` stays unbounded and reusable —
+/// exactly as tight as the runtime requires, never over-bounding.
+fn body_materializes_generic_decoder(tv: Symbol, expr: &Expr) -> bool {
+    match expr {
+        Expr::FuncValue { ty, .. } => ir_type_generic_in_decoder(ty, tv),
+        Expr::Lambda { params, ret, body } | Expr::SharedLambda { params, ret, body } => {
+            params
+                .iter()
+                .any(|(_, t)| ir_type_generic_in_decoder(t, tv))
+                || ir_type_generic_in_decoder(ret, tv)
+                || body_materializes_generic_decoder(tv, body)
+        }
+        Expr::Access {
+            record, field_ty, ..
+        } => {
+            ir_type_generic_in_decoder(field_ty, tv)
+                || body_materializes_generic_decoder(tv, record)
+        }
+        Expr::List { elem, items } => {
+            ir_type_generic_in_decoder(elem, tv)
+                || items
+                    .iter()
+                    .any(|e| body_materializes_generic_decoder(tv, e))
+        }
+        Expr::Call { args, .. } | Expr::Ctor { args, .. } | Expr::TailRecur { args } => args
+            .iter()
+            .any(|a| body_materializes_generic_decoder(tv, a)),
+        Expr::Apply { func, args } => {
+            body_materializes_generic_decoder(tv, func)
+                || args
+                    .iter()
+                    .any(|a| body_materializes_generic_decoder(tv, a))
+        }
+        Expr::Let { value, body, .. } | Expr::Destructure { value, body, .. } => {
+            body_materializes_generic_decoder(tv, value)
+                || body_materializes_generic_decoder(tv, body)
+        }
+        Expr::If { cond, then_, else_ } => {
+            body_materializes_generic_decoder(tv, cond)
+                || body_materializes_generic_decoder(tv, then_)
+                || body_materializes_generic_decoder(tv, else_)
+        }
+        Expr::Match(m) => {
+            body_materializes_generic_decoder(tv, m.scrutinee())
+                || m.arms()
+                    .iter()
+                    .any(|arm| body_materializes_generic_decoder(tv, &arm.body))
+        }
+        Expr::BinOp { lhs, rhs, .. } => {
+            body_materializes_generic_decoder(tv, lhs) || body_materializes_generic_decoder(tv, rhs)
+        }
+        Expr::Tuple(items) => items
+            .iter()
+            .any(|e| body_materializes_generic_decoder(tv, e)),
+        Expr::Cons { head, tail } => {
+            body_materializes_generic_decoder(tv, head)
+                || body_materializes_generic_decoder(tv, tail)
+        }
+        Expr::ListIndexClone { list, .. } | Expr::ListLenCheck { list, .. } => {
+            body_materializes_generic_decoder(tv, list)
+        }
+        Expr::Record { fields, .. } | Expr::Update { fields, .. } => fields
+            .iter()
+            .any(|(_, e)| body_materializes_generic_decoder(tv, e)),
+        Expr::TaskSeq { effect, rest } | Expr::TaskSeqSync { effect, rest } => {
+            body_materializes_generic_decoder(tv, effect)
+                || body_materializes_generic_decoder(tv, rest)
+        }
+        Expr::TailLoop { body, .. } => body_materializes_generic_decoder(tv, body),
+        Expr::Int(_)
+        | Expr::Bool(_)
+        | Expr::Float(_)
+        | Expr::Str(_)
+        | Expr::PathLit(_)
+        | Expr::Char(_)
+        | Expr::Unit
+        | Expr::Var(_)
+        | Expr::CloneVar(_) => false,
+    }
+}
+
 /// GENERAL type-param-bound propagation for the emitted signature.
 ///
 /// Two families of obligation land here. Most are kernel-on-param
@@ -5422,10 +5522,18 @@ fn apply_kernel_type_param_bounds(
         // kernel-on-param matcher): the obligation reads the tvar's appearance
         // under a `Decoder` node, so it fires ONLY for the generic-`Decoder`
         // shape and never over-bounds an unrelated pass-through.
+        //
+        // The signature check catches a bare `Decoder tv` param/return; the body
+        // check ([`body_materializes_generic_decoder`]) catches a `Decoder tv`
+        // value HIDDEN inside a user ADT field (`Codec a`'s `dec : Decoder a`,
+        // read out and forwarded into `decode_list`) — the signature only exposes
+        // the ADT's `args`, never its variant fields, so the tvar-under-`Decoder`
+        // is invisible there. Both fire the same tight `Send + 'static`.
         if params
             .iter()
             .any(|(_, ty)| ir_type_generic_in_decoder(ty, *tv))
             || ir_type_generic_in_decoder(ret, *tv)
+            || body_materializes_generic_decoder(*tv, body)
         {
             *bounds = bounds.with_send();
         }
@@ -14901,6 +15009,15 @@ impl<'a> Lowerer<'a> {
                         // whose function VALUE argument is stored on the `Arc`
                         // carrier (see method doc).
                         self.promote_dict_ctor_value_carrier(&resolved, args, &mut lowered_args)?;
+                        // READ frontier at a KERNEL arg boundary: a function READ
+                        // out of a storage carrier (`Arc<dyn Fn>`) and passed into a
+                        // kernel parameter that wants a bare `impl Fn` (`json_enc_list`'s
+                        // element encoder) — an `Arc<dyn Fn>` does not `impl Fn`, so
+                        // it is eta-demoted onto the `Box` carrier the `impl Fn` slot
+                        // accepts. The kernel-arg sibling of the top-level-def read
+                        // demotion below (a kernel that STORES its fn argument keeps
+                        // the `Arc` carrier and is not listed here).
+                        self.demote_shared_fn_kernel_args(&resolved, args, &mut lowered_args)?;
                         // READ frontier (the dual of the fill promoters above): a
                         // function READ out of a storage carrier (`Arc<dyn Fn>`)
                         // and passed into a DIRECT higher-order parameter — a
@@ -15227,6 +15344,56 @@ impl<'a> Lowerer<'a> {
                 *slot = self.demote_shared_fn_read(read, &params, &ret)?;
             }
             cur = rest.as_ref();
+        }
+        Ok(())
+    }
+
+    /// Demote a `SharedFun`-carried argument that flows into a KERNEL parameter
+    /// wanting a bare `impl Fn` onto the `Box<dyn Fn>` carrier that `impl Fn`
+    /// accepts. `json_enc_list(f: impl Fn(A) -> Value, items)`'s element encoder
+    /// (argument 0) is such a slot: a `Codec a`'s stored encoder read
+    /// (`r.enc`, an `Arc<dyn Fn>`) does not `impl Fn`, so passing it directly is
+    /// `ipe`-accept-then-`cargo`-fail (E0277). The eta-demotion
+    /// ([`Self::demote_shared_fn_read`]) wraps the shared read in a fresh
+    /// `Box<dyn Fn>` (`move |eta_0, …| (read)(eta_0, …)`), which the `impl Fn`
+    /// bound accepts, mirroring the top-level-def read-frontier discipline.
+    ///
+    /// Only the enumerated bare-`impl Fn` kernel slots are demoted; a kernel that
+    /// STORES its fn argument on the `Arc` carrier (the fill promoters own those)
+    /// is not listed, so an argument reaching one is left on `Arc`. An argument
+    /// that is not a `SharedFun` read ([`Self::shared_fn_read_carrier`]) is
+    /// untouched, so a program with no stored-function read is byte-identical.
+    fn demote_shared_fn_kernel_args(
+        &self,
+        resolved: &Callee,
+        canon_args: &[canon::Expr],
+        lowered_args: &mut [Expr],
+    ) -> DResult<()> {
+        // The set of (kernel, arg index) whose Rust parameter is a bare `impl Fn`
+        // that rejects an `Arc<dyn Fn>` — the element encoder of `json_enc_list`.
+        // `json_enc_object` takes `Vec<(String, Value)>` (no fn param), so it is
+        // not here; the decoder-side factories store their `Fn` on the runtime
+        // `Decoder`'s own boxed carrier, not a bare `impl Fn`, so they are owned
+        // by their carrier path, not this demotion.
+        let fn_arg_index = match resolved {
+            Callee::Kernel(KernelFn::JsonEncList) => 0,
+            _ => return Ok(()),
+        };
+        let Some(slot) = lowered_args.get_mut(fn_arg_index) else {
+            return Ok(());
+        };
+        // A record-field read's `Access` carries the DIRECT (`Fun`) field type —
+        // the `SharedFun` flip lives on the STRUCT field, not the access — so the
+        // carrier is recovered from the record's own type via
+        // [`Self::canon_record_read_carrier`], with [`Self::shared_fn_read_carrier`]
+        // covering the `SharedLambda` / registered-binder shapes.
+        if let Some((params, ret)) = self.shared_fn_read_carrier(slot).or_else(|| {
+            canon_args
+                .get(fn_arg_index)
+                .and_then(|a| self.canon_record_read_carrier(a))
+        }) {
+            let read = std::mem::replace(slot, Expr::Unit);
+            *slot = self.demote_shared_fn_read(read, &params, &ret)?;
         }
         Ok(())
     }
