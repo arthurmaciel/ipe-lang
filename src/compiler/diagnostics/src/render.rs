@@ -1031,11 +1031,16 @@ const fn feature_label(f: Feature) -> &'static str {
         }
         Feature::FunctionElementEquality => {
             "a function value stored in a `List`/`Dict` is `Clone` (so it can be \
-             stored, mapped, folded, and forwarded), but it is not comparable — an \
-             equality- or ordering-requiring operation over a function-carrying \
-             element (`List.member`, `List.sort`, `List.unique`, `List.maximum`, \
-             `List.minimum`) has no sound Rust representation. Compare on a \
-             non-function key instead [feature: function-element-equality]"
+             stored and forwarded, and mapped/folded/filtered by the `List.map` \
+             family), but some collection operations cannot represent it: an \
+             equality- or ordering-requiring operation (`List.member`, \
+             `List.sort`, `List.unique`, `List.maximum`, `List.minimum`) has no \
+             comparison for a function, and a higher-order operation whose mapper \
+             carrier is not yet function-aware (`List.partition`, `List.map2`…`5`, \
+             `Dict.map`, `Dict.foldl`/`foldr`, `Dict.filter`) cannot pass a stored \
+             function to its closure. Compare on a non-function key, or move the \
+             function out of the collection, instead [feature: \
+             function-element-equality]"
         }
     }
 }

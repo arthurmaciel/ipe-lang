@@ -13017,19 +13017,22 @@ impl<'a> Lowerer<'a> {
     }
 
     /// Element-capability soundness gate: reject a `List`/`Dict`/`Set` kernel
-    /// whose ELEMENT bound is equality/ordering (`member`/`sort`/`unique`/…) when
-    /// any of its collection arguments carries a function element.
+    /// that cannot represent a function-carrying element when any of its
+    /// collection arguments carries one.
     ///
     /// A `List` element / `Dict`-value function is a storable value on the
-    /// `Clone` `Arc<dyn Fn>` carrier, so the region gate admits it — but
-    /// `Arc<dyn Fn>` is neither `PartialEq` nor `Ord`, so a kernel that compares
-    /// or orders its element would emit Rust `cargo` rejects. The registry's
-    /// [`StdlibKernel::element_capability`] records which kernels require the
-    /// equality/ordering bound (an explicit SSOT fact, coherence-tested); this
-    /// gate consults it and fails closed with IPE-L0134 at `ipe` time. A kernel
-    /// whose element capability is `CloneOk` (map/fold/filter/structural) is
-    /// sound over a function element and left through. A non-collection kernel
-    /// carries no element capability and is a no-op here.
+    /// `Clone` `Arc<dyn Fn>` carrier, so the region gate admits it — but that
+    /// carrier is neither `PartialEq` nor `Ord`, and the lowerer only aligns the
+    /// mapper-closure parameter to it for the kernels whose frontier it closes.
+    /// So a kernel that compares/orders its element, OR a higher-order kernel
+    /// whose mapper frontier is still open, would emit Rust `cargo` rejects. The
+    /// registry's [`StdlibKernel::element_capability`] records which kernels
+    /// forbid a function element and why (equality, ordering, or open frontier) —
+    /// an explicit exhaustive SSOT fact, coherence-tested; this gate consults it
+    /// and fails closed with IPE-L0134 at `ipe` time. A kernel whose element
+    /// capability is `CloneOk` (pure structural, or a frontier-closed
+    /// map/fold/filter) is sound over a function element and left through. A
+    /// non-collection kernel carries no element capability and is a no-op here.
     fn reject_fn_element_for_capability_kernel(
         &self,
         resolved: &Callee,
@@ -14604,6 +14607,45 @@ impl<'a> Lowerer<'a> {
         }
     }
 
+    /// Re-carrier the function-typed VALUE argument of a `Dict` constructor
+    /// (`Dict.singleton` / `Dict.insert`) to the `Arc<dyn Fn>` storage carrier,
+    /// the value-side companion of the `Dict`-value type-side flip
+    /// ([`flip_fun_in_storage_element`]).
+    ///
+    /// A `Dict String (Int -> Int)` stores its value on `Arc<dyn Fn>`. Built from
+    /// a `Dict.fromList` literal, each value is promoted by the list/tuple element
+    /// path ([`Self::promote_ctor_arg_fn_carrier`] via [`Self::lower_list`]); but
+    /// `Dict.singleton k v` / `Dict.insert k v d` pass the value as a DIRECT
+    /// kernel argument, which [`Self::lower_expr`] stamps on the `Box` carrier —
+    /// the `Arc`-vs-`Box` frontier (`E0308`) at the emitted constructor call. The
+    /// runtime `dict_singleton`/`dict_insert` place no `Clone` bound on the value,
+    /// so an `Arc` value is sound; aligning the argument carrier here closes the
+    /// frontier with no runtime change, matching the `fromList` literal path. The
+    /// value is argument index 1 for both. Fires only when the argument's solved
+    /// type is a direct function arrow; every other value is left unchanged, so a
+    /// non-function `Dict` is byte-identical.
+    fn promote_dict_ctor_value_carrier(
+        &self,
+        resolved: &Callee,
+        canon_args: &[canon::Expr],
+        lowered_args: &mut [Expr],
+    ) -> DResult<()> {
+        if !matches!(
+            resolved,
+            Callee::Kernel(KernelFn::DictSingleton | KernelFn::DictInsert)
+        ) {
+            return Ok(());
+        }
+        let (Some(value_arg), Some(lowered_value)) = (canon_args.get(1), lowered_args.get_mut(1))
+        else {
+            return Ok(());
+        };
+        let promoted = self
+            .promote_ctor_arg_fn_carrier(value_arg, std::mem::replace(lowered_value, Expr::Unit))?;
+        *lowered_value = promoted;
+        Ok(())
+    }
+
     // A single funnel that lowers ctor / kernel / top-level / value-callee
     // applications, each arm reshaping arity + carriers; splitting would scatter
     // the shared arg-lowering and gate sequence across helpers without clarity.
@@ -14712,9 +14754,10 @@ impl<'a> Lowerer<'a> {
                     Some(c) => c,
                     None => self.lower_callee(callee)?,
                 };
-                // Reject an equality/ordering `List`/`Dict`/`Set` kernel over a
-                // function-carrying element (fail-closed IPE-L0134 at `ipe` time;
-                // see the method doc).
+                // Reject a `List`/`Dict`/`Set` kernel that cannot represent a
+                // function-carrying element — an equality/ordering compare or an
+                // open mapper frontier (fail-closed IPE-L0134 at `ipe` time; see
+                // the method doc).
                 self.reject_fn_element_for_capability_kernel(&resolved, args)?;
                 let arity = self.callee_arity(&resolved)?;
                 match args.len().cmp(&arity) {
@@ -14739,6 +14782,10 @@ impl<'a> Lowerer<'a> {
                         // Close the `Arc`-vs-`Box` frontier at a `List` HOF
                         // mapper over a stored list of functions (see method doc).
                         self.retype_collection_element_param(&resolved, args, &mut lowered_args);
+                        // Close the same frontier at a `Dict.singleton`/`insert`
+                        // whose function VALUE argument is stored on the `Arc`
+                        // carrier (see method doc).
+                        self.promote_dict_ctor_value_carrier(&resolved, args, &mut lowered_args)?;
                         // Type-directed `onSubmit` handler classification. The
                         // decision (decode-the-form vs dispatch-a-fixed-value)
                         // is a property of the handler's SOLVED type — an arrow

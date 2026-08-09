@@ -913,15 +913,20 @@ pub enum Feature {
     /// ever reaches codegen. A `CustomElement`-typed binding is accepted at the
     /// type level but cannot be built until the transport ships. [IPE-L0133]
     CustomElementTransport,
-    /// A collection element that embeds a function reached an equality- or
-    /// ordering-requiring collection kernel (`List.member` / `List.sort` /
-    /// `List.unique` / `List.maximum` / `List.minimum`). A stored function value
-    /// is carried on the `Clone` `Arc<dyn Fn>` carrier, so it CAN live in a
-    /// `List`/`Dict` value; but it is neither `PartialEq` nor `PartialOrd`, so
-    /// comparing or ordering it has no sound Rust representation. Rejected here at
-    /// lowering — the storable-element carrier admits the value, the element
-    /// capability audit (`StdlibKernel::element_capability`) rejects the
-    /// comparison — rather than emitting Rust `cargo` rejects. [IPE-L0134]
+    /// A collection element that embeds a function reached a collection kernel
+    /// that cannot represent it: an equality-/ordering-requiring kernel
+    /// (`List.member` / `List.sort` / `List.unique` / `List.maximum` /
+    /// `List.minimum`), or a higher-order kernel whose mapper/comparator frontier
+    /// is not yet function-aware (`List.partition` / `List.map2`…`5` / `Dict.map`
+    /// / `Dict.foldl`/`foldr` / `Dict.filter` / `Dict.partition`). A stored
+    /// function value is carried on the `Clone` `Arc<dyn Fn>` carrier, so it CAN
+    /// live in a `List`/`Dict` value and flow through the frontier-closed
+    /// `List.map` family; but the equality/ordering kernels have no comparison for
+    /// it, and the open-frontier kernels would pass it to a `Box`-carrier closure
+    /// parameter (`Arc`-vs-`Box` mismatch). Rejected here at lowering — the
+    /// element capability audit (`StdlibKernel::element_capability`) forbids these
+    /// kernels over a function element — rather than emitting Rust `cargo`
+    /// rejects. [IPE-L0134]
     FunctionElementEquality,
 }
 

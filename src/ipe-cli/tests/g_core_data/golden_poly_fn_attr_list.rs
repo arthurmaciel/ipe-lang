@@ -60,21 +60,27 @@ fn poly_fn_attr_list_ipec_and_cargo_zero() {
     );
 
     // Regression guard: the emitted Rust must use `Attribute<T1>`, not
-    // `Attribute<()>`, in the polymorphic attribute lists.
+    // `Attribute<()>`, in the polymorphic attribute lists. The per-module split
+    // relocates a user def's body into `src/ipe_mods/*.rs`, so scan `src/` AND
+    // that subdirectory — `Attribute<T1>` lands wherever `counterView` is emitted.
     let src = out.join("src");
     let mut emitted = String::new();
-    if let Ok(entries) = std::fs::read_dir(&src) {
-        for entry in entries.flatten() {
-            let path = entry.path();
-            if path.extension().is_none_or(|e| e != "rs") {
-                continue;
-            }
-            if let Ok(text) = std::fs::read_to_string(&path) {
-                emitted.push_str(&text);
-                emitted.push('\n');
+    let mut scan = |dir: &Path| {
+        if let Ok(entries) = std::fs::read_dir(dir) {
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if path.extension().is_none_or(|e| e != "rs") {
+                    continue;
+                }
+                if let Ok(text) = std::fs::read_to_string(&path) {
+                    emitted.push_str(&text);
+                    emitted.push('\n');
+                }
             }
         }
-    }
+    };
+    scan(&src);
+    scan(&src.join("ipe_mods"));
     assert!(
         emitted.contains("Attribute<T1>"),
         "emitted Rust must contain Attribute<T1> (poly msg param) — \

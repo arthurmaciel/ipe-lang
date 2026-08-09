@@ -165,10 +165,25 @@ impl std::error::Error for UnknownCapability {}
 /// implicit property of the hand-written runtime signature
 /// (make-invalid-states-unrepresentable). Every `List`/`Dict`/`Set` kernel
 /// carries one, verified by a coherence test.
+///
+/// The three forbidding variants encode *why* a function element is unsound for
+/// a given kernel, so the set is exhaustive rather than an implicit allowlist of
+/// the kernels whose function-element frontier happens to be closed:
+///
+/// - [`Self::RequiresPartialEq`] / [`Self::RequiresOrd`]: the emitted Rust
+///   compares or orders the element — no `Arc<dyn Fn>` representation exists.
+/// - [`Self::MapperFrontierOpen`]: the kernel passes the element into a mapper
+///   closure whose parameter carrier the lowerer has NOT aligned to the stored
+///   `Arc<dyn Fn>`, so a function element would emit an `Arc`-vs-`Box` mismatch.
+///   [`Self::CloneOk`] is reserved for the higher-order kernels whose frontier
+///   IS closed plus the pure move/clone/structural kernels.
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Debug, Hash)]
 pub enum ElementCapability {
-    /// The element is only moved / cloned — sound for an `Arc<dyn Fn>` (function)
-    /// element. The default for the map/fold/filter/structural family.
+    /// The element is only moved / cloned, OR it is passed to a mapper closure
+    /// whose parameter carrier the lowerer aligns to the stored `Arc<dyn Fn>` —
+    /// sound for an `Arc<dyn Fn>` (function) element either way. Covers the pure
+    /// structural kernels and the higher-order kernels whose function-element
+    /// frontier is closed.
     CloneOk,
     /// The element is compared for equality (`==`) — requires `PartialEq`, which
     /// a function carrier does not satisfy. A function-embedding element is
@@ -178,14 +193,27 @@ pub enum ElementCapability {
     /// which a function carrier does not satisfy. A function-embedding element is
     /// rejected.
     RequiresOrd,
+    /// The element is passed into a mapper/comparator closure whose parameter
+    /// carrier the lowerer does NOT re-type to the stored `Arc<dyn Fn>` — the
+    /// higher-order frontier is open. A function carrier would emit an
+    /// `Arc`-vs-`Box` mismatch (`E0308`) or a `Box<dyn Fn>: Clone` failure
+    /// (`E0277`), so a function-embedding element is rejected fail-closed rather
+    /// than mis-emitted. This is the SSOT for "this map/fold/filter kernel is not
+    /// Arc-safe over a function element" — a kernel joins [`Self::CloneOk`] only
+    /// once its frontier is actually closed in the lowerer.
+    MapperFrontierOpen,
 }
 
 impl ElementCapability {
     /// Does this capability forbid a function-carrying element? `true` for the
-    /// equality/ordering requirements; `false` for [`Self::CloneOk`].
+    /// equality/ordering requirements and the open-frontier mapper family;
+    /// `false` only for [`Self::CloneOk`].
     #[must_use]
     pub const fn forbids_function_element(self) -> bool {
-        matches!(self, Self::RequiresPartialEq | Self::RequiresOrd)
+        matches!(
+            self,
+            Self::RequiresPartialEq | Self::RequiresOrd | Self::MapperFrontierOpen
+        )
     }
 }
 
