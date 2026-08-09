@@ -57,15 +57,34 @@ fn lazy_emit_seal_ipec_cargo_and_run_zero() {
     );
 
     // Emitted code must contain the lazy runtime helpers (not a generic fallback).
-    let emitted = std::fs::read_to_string(out.join("src").join("main.rs"))
-        .expect("emitted main.rs must exist");
+    // The per-module split relocates a user def's body into `src/ipe_mods/*.rs`,
+    // so scan `src/` AND that subdirectory — the lazy call sites land wherever
+    // the calling def is emitted.
+    let src = out.join("src");
+    let mut emitted = String::new();
+    let mut scan = |dir: &Path| {
+        if let Ok(entries) = std::fs::read_dir(dir) {
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if path.extension().is_none_or(|e| e != "rs") {
+                    continue;
+                }
+                if let Ok(text) = std::fs::read_to_string(&path) {
+                    emitted.push_str(&text);
+                    emitted.push('\n');
+                }
+            }
+        }
+    };
+    scan(&src);
+    scan(&src.join("ipe_mods"));
     assert!(
         emitted.contains("ipe_runtime::ui::lazy::lazy_lazy_("),
-        "emitted main.rs must call lazy_lazy_; got:\n{emitted}"
+        "emitted Rust must call lazy_lazy_; got:\n{emitted}"
     );
     assert!(
         emitted.contains("ipe_runtime::ui::lazy::lazy_lazy2_("),
-        "emitted main.rs must call lazy_lazy2_; got:\n{emitted}"
+        "emitted Rust must call lazy_lazy2_; got:\n{emitted}"
     );
 
     // cargo-0 ∧ run-0: seal — ipe exit 0 must NOT be followed by cargo fail.

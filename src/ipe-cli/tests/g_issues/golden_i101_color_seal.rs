@@ -33,25 +33,30 @@ fn repo_root() -> PathBuf {
     std::fs::canonicalize(&joined).unwrap_or(joined)
 }
 
-/// Concatenate every emitted Rust source directly under `out/src` (skipping the
-/// copied `ipe_runtime` subtree) so the test can assert on the generated program
-/// text regardless of how the backend splits modules across files.
+/// Concatenate every emitted Rust source under `out/src`, including the
+/// per-module-split bodies under `out/src/ipe_mods` (skipping the copied
+/// `ipe_runtime` subtree), so the test can assert on the generated program text
+/// regardless of how the backend splits modules across files.
 fn emitted_program_source(out: &Path) -> String {
-    let src = out.join("src");
     let mut acc = String::new();
-    let Ok(entries) = std::fs::read_dir(&src) else {
-        return acc;
+    let mut scan = |dir: &Path| {
+        let Ok(entries) = std::fs::read_dir(dir) else {
+            return;
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.extension().is_none_or(|e| e != "rs") {
+                continue;
+            }
+            if let Ok(text) = std::fs::read_to_string(&path) {
+                acc.push_str(&text);
+                acc.push('\n');
+            }
+        }
     };
-    for entry in entries.flatten() {
-        let path = entry.path();
-        if path.extension().is_none_or(|e| e != "rs") {
-            continue;
-        }
-        if let Ok(text) = std::fs::read_to_string(&path) {
-            acc.push_str(&text);
-            acc.push('\n');
-        }
-    }
+    let src = out.join("src");
+    scan(&src);
+    scan(&src.join("ipe_mods"));
     acc
 }
 
@@ -83,9 +88,11 @@ fn user_color_via_hof_resolves_to_own_enum() {
     );
 
     let program = emitted_program_source(&out);
-    // The user enum is emitted as its own `MainColor` type…
+    // The user enum is emitted as its own `MainColor` type. The per-module split
+    // relocates it into `src/ipe_mods/*.rs` with `pub(crate)` visibility, so match
+    // the declaration itself rather than any one visibility qualifier.
     assert!(
-        program.contains("pub enum MainColor"),
+        program.contains("enum MainColor"),
         "user `type Color` must emit its own `MainColor` enum"
     );
     // …and the HOF's boxed `Fn(Color)` argument now takes `MainColor` (THE fix);
