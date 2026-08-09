@@ -13,7 +13,12 @@
 use std::fmt::Write as _;
 use std::io::IsTerminal;
 
+use crate::CliError;
 use crate::style::{Palette, REPO_URL, gutter, report_bugs_footer};
+
+/// A command's dispatch handler: it receives the arguments after the command
+/// name and runs the command.
+pub(crate) type Handler = fn(&[String]) -> Result<(), CliError>;
 
 /// A single command option: the flag form (e.g. `[--out <dir>]`, keeping its
 /// `[]` optional syntax) and a one-line description.
@@ -25,11 +30,15 @@ struct Opt {
     desc: &'static str,
 }
 
-/// A command's help entry: the name, its positional-argument tail, a plain
-/// description of that argument, and the optional flags.
-struct Command {
+/// A command's registry entry: the single source of truth binding a command's
+/// name and help metadata to the handler that runs it. Because the dispatcher
+/// and the help renderer both read this one table, a command that is dispatched
+/// but undescribed — or described but undispatched — cannot exist.
+pub(crate) struct Command {
     /// The subcommand name (e.g. `build`).
     name: &'static str,
+    /// The handler that runs the command, given the arguments after its name.
+    run: Handler,
     /// A one-line description of the command, shown at the top of the command's
     /// own `--help` page.
     summary: &'static str,
@@ -57,6 +66,7 @@ struct Section {
 const COMMANDS: &[Command] = &[
     Command {
         name: "init",
+        run: crate::init::run_init,
         summary: "Scaffold a new Ipê project.",
         args: "[<name>]",
         args_desc: "The directory to create the project in (`.` for the current directory).",
@@ -67,6 +77,7 @@ const COMMANDS: &[Command] = &[
     },
     Command {
         name: "build",
+        run: crate::run_build,
         summary: "Compile a program to a native or WebAssembly artifact.",
         args: "[<path>]",
         args_desc: "A source file, a project directory, or an ipe.toml. Defaults to the current project.",
@@ -107,6 +118,7 @@ const COMMANDS: &[Command] = &[
     },
     Command {
         name: "eject",
+        run: crate::run_eject,
         summary: "Emit a self-contained Rust project with a tree-shaken runtime.",
         args: "[<path>]",
         args_desc: "A source file, a project directory, or an ipe.toml. Defaults to the current project.",
@@ -123,6 +135,7 @@ const COMMANDS: &[Command] = &[
     },
     Command {
         name: "type-check",
+        run: crate::run_type_check,
         summary: "Type-check a program without building or running it.",
         args: "[<path>]",
         args_desc: "A source file, a project directory, or an ipe.toml. Defaults to the current project.",
@@ -130,6 +143,7 @@ const COMMANDS: &[Command] = &[
     },
     Command {
         name: "test",
+        run: crate::run_test,
         summary: "Build and run the project's tests/Main.ipe, reporting pass/fail.",
         args: "[<path>]",
         args_desc: "A source file, a project directory, or an ipe.toml. Defaults to the current project.",
@@ -137,6 +151,7 @@ const COMMANDS: &[Command] = &[
     },
     Command {
         name: "verify",
+        run: crate::run_verify,
         summary: "Run the whole project gate: format, type-check, build, then test.",
         args: "[<path>]",
         args_desc: "A source file, a project directory, or an ipe.toml. Defaults to the current project.",
@@ -144,6 +159,7 @@ const COMMANDS: &[Command] = &[
     },
     Command {
         name: "run",
+        run: crate::run_run,
         summary: "Compile a program and run the resulting binary.",
         args: "[<path>]",
         args_desc: "A source file, a project directory, or an ipe.toml. Defaults to the current project.",
@@ -179,7 +195,21 @@ const COMMANDS: &[Command] = &[
         ],
     },
     Command {
+        name: "exec",
+        run: crate::run_exec,
+        summary: "Run a built artifact, jailing native-bearing code to its embedded capability floor.",
+        args: "[<artifact-dir>]",
+        args_desc: "The build output directory to run (defaults to out/rust). A native-bearing \
+                    artifact is confined to its embedded capability floor; a pure Ipê artifact runs \
+                    directly.",
+        options: &[Opt {
+            flag: "[-- <args>...]",
+            desc: "forward <args> to the artifact",
+        }],
+    },
+    Command {
         name: "watch",
+        run: crate::run_watch,
         summary: "Rebuild and re-run a program on every source change.",
         args: "[<path>]",
         args_desc: "A source file, a project directory, or an ipe.toml. Defaults to the current project.",
@@ -200,6 +230,7 @@ const COMMANDS: &[Command] = &[
     },
     Command {
         name: "fix",
+        run: crate::run_fix,
         summary: "Apply the compiler's machine-applicable fixes to a source file.",
         args: "<path>",
         args_desc: "The source file to fix.",
@@ -210,6 +241,7 @@ const COMMANDS: &[Command] = &[
     },
     Command {
         name: "fmt",
+        run: crate::fmt::run_fmt,
         summary: "Format Ipê source files.",
         args: "[<path>]",
         args_desc: "A file or directory to format (`.` for the current directory).",
@@ -226,6 +258,7 @@ const COMMANDS: &[Command] = &[
     },
     Command {
         name: "clean",
+        run: crate::clean::run_clean,
         summary: "Remove the project's build-generated output (out/, target/, .ipe/).",
         args: "",
         args_desc: "",
@@ -233,6 +266,7 @@ const COMMANDS: &[Command] = &[
     },
     Command {
         name: "add",
+        run: crate::pkg::run_add,
         summary: "Add an Ipê package dependency (resolution ships with the index).",
         args: "<package>",
         args_desc: "The package name, optionally `@version`.",
@@ -240,6 +274,7 @@ const COMMANDS: &[Command] = &[
     },
     Command {
         name: "remove",
+        run: crate::pkg::run_remove,
         summary: "Remove an Ipê package dependency.",
         args: "<package>",
         args_desc: "The package name.",
@@ -247,6 +282,7 @@ const COMMANDS: &[Command] = &[
     },
     Command {
         name: "rust",
+        run: crate::ffi::run_rust,
         summary: "Manage Rust crates as foreign-function dependencies.",
         args: "<add|remove|install> [<args>...]",
         args_desc: "The action to run (add / remove / install) and its arguments.",
@@ -267,6 +303,7 @@ const COMMANDS: &[Command] = &[
     },
     Command {
         name: "package",
+        run: crate::run_package,
         summary: "Audit a package against the Tier-1 quality gate, publish it to the index, or \
                   validate an index entry file.",
         args: "<audit|publish|validate-entry> [<path>]",
@@ -300,6 +337,7 @@ const COMMANDS: &[Command] = &[
     },
     Command {
         name: "login",
+        run: crate::login::run_login,
         summary: "Authorize ipe with GitHub (device flow) and store a publish token.",
         args: "",
         args_desc: "",
@@ -316,6 +354,7 @@ const COMMANDS: &[Command] = &[
     },
     Command {
         name: "explain",
+        run: crate::run_explain,
         summary: "Explain a diagnostic code, or list every code with no argument.",
         args: "[<code>]",
         args_desc: "A diagnostic code such as IPE-L0131. Omit to list every code.",
@@ -332,6 +371,7 @@ const COMMANDS: &[Command] = &[
     },
     Command {
         name: "capabilities",
+        run: crate::run_capabilities,
         summary: "Report the security capabilities a program exercises, inferred from its code.",
         args: "[<path>]",
         args_desc: "A source file, a project directory, or an ipe.toml. Defaults to the current project.",
@@ -348,6 +388,7 @@ const COMMANDS: &[Command] = &[
     },
     Command {
         name: "diff",
+        run: crate::diff::run_diff,
         summary: "Compare two package versions' public APIs and report the required semver bump.",
         args: "<old> <new>",
         args_desc: "The two package paths to compare — the old version first, then the new.",
@@ -368,6 +409,7 @@ const COMMANDS: &[Command] = &[
     },
     Command {
         name: "doc",
+        run: crate::doc::run_doc,
         summary: "Generate API documentation (docs.json + Markdown + HTML), query the stdlib, list modules, preview, or check coverage.",
         args: "[--list | <Module.Name> | serve | check] [<path>]",
         args_desc: "Without a subcommand: generate docs.json + renderings for the project and stdlib. \
@@ -400,6 +442,7 @@ const COMMANDS: &[Command] = &[
     },
     Command {
         name: "lsp",
+        run: crate::lsp::run_lsp,
         summary: "Run the language server over stdio.",
         args: "",
         args_desc: "",
@@ -407,6 +450,7 @@ const COMMANDS: &[Command] = &[
     },
     Command {
         name: "upgrade",
+        run: crate::run_upgrade,
         summary: "Self-update ipe to the latest release (re-runs the installer).",
         args: "",
         args_desc: "",
@@ -417,6 +461,7 @@ const COMMANDS: &[Command] = &[
     },
     Command {
         name: "health",
+        run: crate::health::run_health,
         summary: "Diagnose the build environment and offer consent-gated setup.",
         args: "",
         args_desc: "",
@@ -437,6 +482,7 @@ const COMMANDS: &[Command] = &[
     },
     Command {
         name: "version",
+        run: crate::run_version,
         summary: "Print the ipe version.",
         args: "",
         args_desc: "",
@@ -458,7 +504,7 @@ const COMMANDS: &[Command] = &[
 const SECTIONS: &[Section] = &[
     Section {
         title: "Development",
-        commands: &["init", "build", "run", "watch"],
+        commands: &["init", "build", "run", "exec", "watch"],
     },
     Section {
         title: "Quality",
@@ -512,6 +558,16 @@ pub fn is_command(name: &str) -> bool {
 #[must_use]
 pub fn command_names() -> Vec<&'static str> {
     COMMANDS.iter().map(|c| c.name).collect()
+}
+
+/// The canonical static name and handler that run `name`, or `None` when `name`
+/// is not a known command. The static name is what misuse output keys its
+/// `--help` page on.
+///
+/// Dispatch and help share this one table, so a command is dispatchable exactly
+/// when it is described — the two can never drift apart.
+pub(crate) fn handler(name: &str) -> Option<(&'static str, Handler)> {
+    find(name).map(|c| (c.name, c.run))
 }
 
 /// Render the top-level help screen for the given output stream.
@@ -721,5 +777,44 @@ mod tests {
                 assert!(is_command(name), "section lists unknown command {name}");
             }
         }
+    }
+
+    #[test]
+    fn every_command_appears_in_exactly_one_section() {
+        for cmd in COMMANDS {
+            let count = SECTIONS
+                .iter()
+                .flat_map(|s| s.commands)
+                .filter(|&&n| n == cmd.name)
+                .count();
+            assert_eq!(
+                count, 1,
+                "command {} must appear in exactly one section, found {count}",
+                cmd.name
+            );
+        }
+    }
+
+    // The single-source-of-truth invariant: dispatch and advertisement are the
+    // same table, so every advertised command is dispatchable and vice versa.
+    // A command described but unhandled — or handled but undescribed — is not
+    // representable, and this pins that the registry is the sole driver.
+    #[test]
+    fn every_advertised_command_is_dispatchable() {
+        for name in command_names() {
+            assert!(
+                handler(name).is_some(),
+                "advertised command {name} has no dispatch handler"
+            );
+        }
+    }
+
+    #[test]
+    fn exec_is_both_advertised_and_dispatchable() {
+        assert!(is_command("exec"), "exec must be an advertised command");
+        assert!(
+            handler("exec").is_some(),
+            "exec must resolve to a dispatch handler"
+        );
     }
 }
