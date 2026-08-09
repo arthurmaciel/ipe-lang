@@ -1867,6 +1867,21 @@ fn ir_type_mentions_secret(ty: &IrType) -> bool {
     ir_type_mentions(ty, &|t| matches!(t, IrType::Secret))
 }
 
+/// `true` when `ty` mentions the `Ipe.Decimal` opaque type `Decimal`, defined in
+/// the `decimal` runtime module (backed by `ipe_runtime::decimal::Decimal`). The
+/// `Ipe.Money` ADT carries a `Decimal` amount field, so a program that names a
+/// `Money` (or a bare `Decimal`) value in ANY emittable type position — a
+/// signature, a record field, or an enum-variant payload — emits a
+/// `ipe_runtime::decimal::Decimal` reference resolved through the module's
+/// `pub use decimal::*` glob, WITHOUT necessarily calling a `Decimal.*`/`Money.*`
+/// kernel (the `Money.parseCurrency` / `currencyCode` surface is pure Ipê source
+/// over the ADT). Dropping `decimal.rs` and `rust_decimal` on the call-site flag
+/// alone would emit that reference with no module in scope (E0433 — a SEAL
+/// breach). Mirrors [`ir_type_mentions_secret`].
+fn ir_type_mentions_decimal(ty: &IrType) -> bool {
+    ir_type_mentions(ty, &|t| matches!(t, IrType::Decimal))
+}
+
 /// `true` when `ty` mentions `Json` (`IrType::Json`, rendered `JsonVal`) or a
 /// `Decoder<T>` (`IrType::Decoder`, rendered `Decoder<…>`) anywhere in its
 /// structure — the two types the fixed prelude aliases against the `json` runtime
@@ -9396,10 +9411,18 @@ impl<'a> Lowerer<'a> {
         // `Debug.log` is excluded (its `debug.rs` body has no `chrono`).
         let uses_log = kernel_usage.log;
 
-        // detect `Ipe.Decimal`/`Ipe.Money` usage. The backend declares the
-        // `decimal.rs`/`money.rs` modules (the `decimal` feature) and adds
-        // `rust_decimal`. The Db surface implies it (`reaches_decimal`).
-        let uses_decimal = kernel_usage.decimal;
+        // detect `Ipe.Decimal`/`Ipe.Money` usage — any `Decimal.*`/`Money.*`
+        // kernel, OR any emittable type position that mentions the `Decimal` opaque
+        // type. The backend declares the `decimal.rs`/`money.rs` modules (the
+        // `decimal` feature) and adds `rust_decimal`. The Db surface implies it
+        // (`reaches_decimal`). The type-mention guard is REQUIRED: the `Ipe.Money`
+        // ADT carries a `Decimal` amount field, and its `parseCurrency` /
+        // `currencyCode` surface is pure Ipê source over that ADT (no kernel call),
+        // so a program that only names a `Money`/`Decimal` value still emits a
+        // `ipe_runtime::decimal::Decimal` reference — omitting the guard drops the
+        // module with the reference left dangling (E0433 — a SEAL breach).
+        let uses_decimal = kernel_usage.decimal
+            || program_type_mentions(&funcs, &records, &types_ir, &ir_type_mentions_decimal);
 
         // detect `Ipe.Char` General_Category-predicate usage. The backend declares
         // the `char_category.rs` module (the `char-category` feature) and adds
