@@ -53,8 +53,9 @@
 //! Two kinds of stdlib module exist:
 //!
 //! * **Compiled-source** (`ipe_stdlib::COMPILED_STD_MODULES`): modules with embedded Ipê
-//!   source (e.g. `Ipe.Css`, `Ipe.Test`). These are type-checked through the same
-//!   pipeline as project modules; their doc-comments are scanned from the embedded source.
+//!   source (e.g. `Ipe.Css`, `Ipe.Test`). These are type-checked as embedded stdlib
+//!   (so they may declare the reserved `Ipe.*` namespace a user module may not); their
+//!   doc-comments are scanned from the embedded source.
 //! * **Kernel-qualifier** (`ipe_canon::STDLIB_MODULE_QUALIFIERS`): modules backed by the
 //!   kernel registry (e.g. `Ipe.List`, `Ipe.String`). Type signatures come from
 //!   [`ipe_types::kernel_type_table`]; doc-comments are absent (signatures are the
@@ -621,16 +622,18 @@ fn build_stdlib_docs() -> Vec<ModuleDoc> {
     let mut modules: BTreeMap<String, ModuleDoc> = BTreeMap::new();
 
     // ── Compiled-source stdlib modules ────────────────────────────────────────
-    // Each compiled-source module is injected as a minimal single-module package
-    // and type-checked through the standard pipeline. Signatures and unions come
-    // from the type checker; doc-comments are scanned from the embedded source.
-    // A module that fails to type-check is silently omitted — it will still
-    // appear as a name in `--list`, but without signatures.
+    // Each compiled-source module is type-checked as embedded stdlib (so it may
+    // declare the reserved `Ipe.*` namespace); signatures and unions come from the
+    // type checker, doc-comments from the embedded source. Every module yields a
+    // ModuleDoc — a type-check failure degrades to a doc-comment-only entry rather
+    // than being dropped, so every `--list` name is queryable (see the invariant
+    // enforced by `stdlib_module_names`, reconciled below).
     for csm in ipe_stdlib::COMPILED_STD_MODULES {
         let segments: Vec<String> = csm.dotted.split('.').map(str::to_owned).collect();
-        if let Ok(module_doc) = build_compiled_std_module_doc(&segments, csm.source) {
-            modules.insert(csm.dotted.to_owned(), module_doc);
-        }
+        modules.insert(
+            csm.dotted.to_owned(),
+            build_compiled_std_module_doc(&segments, csm.source),
+        );
     }
 
     // ── Kernel-qualifier stdlib modules ───────────────────────────────────────
@@ -644,33 +647,52 @@ fn build_stdlib_docs() -> Vec<ModuleDoc> {
         }
     }
 
+    // ── SSOT reconciliation ───────────────────────────────────────────────────
+    // `stdlib_module_names` is the single source of truth for which stdlib modules
+    // exist — the same set `--list` advertises. Guarantee a queryable ModuleDoc
+    // for every one of those names, so a listed-but-unqueryable module (a `--list`
+    // entry that 404s on `ipe doc <name>`) is unrepresentable.
+    for name in stdlib_module_names() {
+        modules
+            .entry(name.clone())
+            .or_insert_with(|| empty_stdlib_module_doc(&name));
+    }
+
     modules.into_values().collect()
 }
 
-/// Build a [`ModuleDoc`] for one compiled-source stdlib module by type-checking
-/// its embedded source through the standard pipeline.
+/// A signature-less [`ModuleDoc`] carrying only the module name — the last-resort
+/// entry for a listed stdlib module the richer paths could not document, so a
+/// `--list` name is never unqueryable.
+fn empty_stdlib_module_doc(name: &str) -> ModuleDoc {
+    ModuleDoc {
+        name: name.to_owned(),
+        kind: ModuleKind::Stdlib,
+        comment: String::new(),
+        unions: Vec::new(),
+        values: Vec::new(),
+    }
+}
+
+/// Build a [`ModuleDoc`] for one compiled-source stdlib module.
 ///
-/// The module is presented as a minimal in-memory project so the type checker
-/// processes it identically to a user module with the same source.
-fn build_compiled_std_module_doc(segments: &[String], source: &str) -> Result<ModuleDoc, CliError> {
-    use crate::api_surface::extract_from_sources;
+/// Type-checks the embedded source as embedded stdlib (via
+/// [`crate::api_surface::extract_stdlib_module`], which grants the reserved-`Ipe.*`
+/// declaration a project's injected closure already grants it) to recover full
+/// signatures and unions, joining them to the doc-comments scanned from the
+/// source. Always yields a [`ModuleDoc`]: if the module cannot be type-checked,
+/// the result degrades to the scanned doc-comments over an empty API rather than
+/// disappearing, so the module stays queryable and `--list`/query agree.
+fn build_compiled_std_module_doc(segments: &[String], source: &str) -> ModuleDoc {
+    use crate::api_surface::extract_stdlib_module;
 
-    // Build a minimal in-memory source set: just this one module.
-    let mut sources: BTreeMap<Vec<String>, (PathBuf, String)> = BTreeMap::new();
-    let synth_path = PathBuf::from("<embedded-stdlib>").join(segments.join("."));
-    sources.insert(segments.to_vec(), (synth_path, source.to_owned()));
-
-    let api = extract_from_sources(&sources).map_err(CliError::from)?;
-
-    let module_api = api.modules.get(segments).cloned().unwrap_or_default();
     let comments = scan_doc_comments(source);
+    let module_api = extract_stdlib_module(segments, source)
+        .ok()
+        .and_then(|api| api.modules.get(segments).cloned())
+        .unwrap_or_default();
     let segments_vec: Vec<String> = segments.to_vec();
-    Ok(module_doc(
-        &segments_vec,
-        &module_api,
-        &comments,
-        ModuleKind::Stdlib,
-    ))
+    module_doc(&segments_vec, &module_api, &comments, ModuleKind::Stdlib)
 }
 
 /// Build [`ModuleDoc`]s for every kernel-qualifier stdlib module.

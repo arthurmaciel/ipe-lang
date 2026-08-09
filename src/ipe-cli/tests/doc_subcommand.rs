@@ -262,6 +262,60 @@ fn list_groups_project_modules_before_the_standard_library() -> io::Result<()> {
     Ok(())
 }
 
+/// Run `ipe <args>` with `cwd` as the working directory, returning
+/// `(exit_success, stdout, stderr)`. `ipe doc --list` / `<module>` resolve the
+/// project from the current directory, so running from an empty dir yields the
+/// stdlib set alone.
+fn run_in(cwd: &Path, args: &[&str]) -> (bool, String, String) {
+    match Command::new(support::ipe_bin())
+        .args(args)
+        .current_dir(cwd)
+        .env("NO_COLOR", "1")
+        .output()
+    {
+        Ok(o) => (
+            o.status.success(),
+            String::from_utf8_lossy(&o.stdout).into_owned(),
+            String::from_utf8_lossy(&o.stderr).into_owned(),
+        ),
+        Err(e) => (false, String::new(), format!("spawn failed: {e}")),
+    }
+}
+
+#[test]
+fn every_listed_module_is_queryable() -> io::Result<()> {
+    // The advertised==available invariant: every name `ipe doc --list` prints
+    // must resolve on `ipe doc <name>`. A listed-but-unqueryable module (a
+    // `--list` entry that 404s with IPE-N0004) is the exact list-vs-query
+    // registry drift this guards against. Run from an empty dir so the listing is
+    // stdlib only — no project modules to shadow it, and no path positional (a
+    // `<module>` query takes only the module name).
+    let dir = fresh_dir("listed_queryable");
+    fs::create_dir_all(&dir)?;
+
+    let (ok, listed, stderr) = run_in(&dir, &["doc", "--list", "--plain"]);
+    assert!(ok, "`ipe doc --list` must succeed:\n{listed}\n{stderr}");
+
+    let names: Vec<&str> = listed
+        .lines()
+        .map(str::trim)
+        .filter(|l| !l.is_empty())
+        .collect();
+    assert!(
+        !names.is_empty(),
+        "the stdlib listing is non-empty:\n{listed}"
+    );
+
+    for name in names {
+        let (q_ok, q_out, q_err) = run_in(&dir, &["doc", name, "--plain"]);
+        assert!(
+            q_ok,
+            "listed module `{name}` must be queryable (no IPE-N0004):\n{q_out}\n{q_err}"
+        );
+    }
+    Ok(())
+}
+
 #[test]
 fn generated_docs_json_is_local_first_and_tags_each_module_kind() -> io::Result<()> {
     let pkg = documented_package("json_kind")?;

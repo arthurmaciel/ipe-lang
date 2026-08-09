@@ -405,38 +405,43 @@ pub fn extract_tree(root: &Path) -> Result<PublicApi, DiffError> {
     extract_from_db(&db, source_root, &user_modules)
 }
 
-/// Extract the public API surface of a set of in-memory sources.
+/// Extract the public API surface of one compiled-source stdlib module.
 ///
-/// All entries in `sources` are treated as user modules; the stdlib closure is
-/// injected as dependencies. Used by `ipe doc` to type-check individual
-/// compiled-source stdlib modules (which have embedded Ipê source but live
-/// outside any project tree).
+/// The module declares into the reserved `Ipe.*` namespace, which a *user* module
+/// may not — so classifying it as a user module rejects it with a
+/// reserved-namespace error. Here the target carries
+/// [`ipe_canon::ModuleOrigin::EmbeddedStdlib`], the same origin it has inside a
+/// real project's injected stdlib closure, so name resolution accepts the
+/// reserved declaration and its interface projects with full signatures.
+///
+/// `segments` names the module (`["Ipe", "Url"]`); `source` is its embedded Ipê
+/// text. The module's own compiled-source imports are injected as dependencies.
 ///
 /// # Errors
-/// [`DiffError`] on a typecheck failure or open interface. Returns
-/// [`DiffError::Empty`] when `sources` is empty.
-pub fn extract_from_sources(
-    sources: &BTreeMap<Vec<String>, (PathBuf, String)>,
-) -> Result<PublicApi, DiffError> {
-    if sources.is_empty() {
-        return Err(DiffError::Empty {
-            path: PathBuf::from("<empty>"),
-        });
-    }
+/// [`DiffError`] on a typecheck failure or open interface.
+pub fn extract_stdlib_module(segments: &[String], source: &str) -> Result<PublicApi, DiffError> {
     let db = ipe_db::IpeDatabase::new();
-    let mut prepared = sources.clone();
-    let mut discovered: Vec<project::DiscoveredModule> = sources
-        .iter()
-        .map(|(p, (path, _))| project::DiscoveredModule {
-            path: path.clone(),
-            module_path: p.clone(),
-        })
-        .collect();
-    let injected = project::inject_compiled_std_closure(&mut prepared, &mut discovered);
+
+    let mut prepared: BTreeMap<Vec<String>, (PathBuf, String)> = BTreeMap::new();
+    let synth_path = PathBuf::from("<embedded-stdlib>").join(segments.join("."));
+    prepared.insert(segments.to_vec(), (synth_path.clone(), source.to_owned()));
+
+    let mut discovered = vec![project::DiscoveredModule {
+        path: synth_path,
+        module_path: segments.to_vec(),
+    }];
+
+    // Inject the module's compiled-source import closure, then mark the target
+    // itself as embedded stdlib so it may declare into the reserved namespace.
+    let mut injected = project::inject_compiled_std_closure(&mut prepared, &mut discovered);
+    injected.insert(segments.to_vec());
+
     let source_root = crate::create_source_root(&db, &prepared, &injected, &BTreeSet::new());
 
-    let user_modules: BTreeSet<Vec<String>> = sources.keys().cloned().collect();
-    extract_from_db(&db, source_root, &user_modules)
+    // Project only the target module — its injected dependencies are not part of
+    // the surface being documented.
+    let target: BTreeSet<Vec<String>> = std::iter::once(segments.to_vec()).collect();
+    extract_from_db(&db, source_root, &target)
 }
 
 /// Project the public API of `user_modules` out of an already-populated database.
