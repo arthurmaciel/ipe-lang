@@ -4,9 +4,9 @@ import Ipe.Json.Decode
 import Ipe.Json.Decode.Pipeline
 import Ipe.String
 
--- R4: let-bound decoder used twice (Decoder reuse → thunk).
--- Exercises Fix C: the decoder is thunked so each decodeString call
--- gets a fresh Decoder value rather than moving out of the binding.
+-- A let-bound `|>` pipeline decoder used twice (Decoder reuse → thunk): each
+-- `decodeString` call gets a fresh Decoder value rather than moving out of the
+-- binding.
 -- Expected:
 --   Alice|30
 --   Bob|25
@@ -14,10 +14,9 @@ import Ipe.String
 main =
     let
         d =
-            JsonDecP.required "age" JsonDec.int
-                (JsonDecP.required "name" JsonDec.string
-                    (JsonDec.succeed
-                        (\name age -> name ++ "|" ++ String.fromInt age)))
+            JsonDec.succeed (\name age -> name ++ "|" ++ String.fromInt age)
+                |> JsonDecP.required "name" JsonDec.string
+                |> JsonDecP.required "age" JsonDec.int
 
         r1 =
             JsonDec.decodeString d "{\"name\":\"Alice\",\"age\":30}"

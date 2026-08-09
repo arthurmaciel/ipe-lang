@@ -4,9 +4,7 @@ import Ipe.Json.Decode
 import Ipe.Json.Decode.Pipeline
 import Ipe.String
 
--- R9: named builder + required+optional record decoder (the task's literal ask).
--- Exercises Fix A case 1 (named function FuncValue — the existing passing shape).
--- Green control — should pass before and after the fix.
+-- Named builder + required+optional record decoder threaded with `|>`.
 -- Expected: ipedev 0
 
 type alias Profile =
@@ -27,9 +25,10 @@ main =
     let
         r1 =
             JsonDec.decodeString
-                (JsonDecP.optional "followers" JsonDec.int 0
-                    (JsonDecP.required "username" JsonDec.string
-                        (JsonDec.succeed makeProfile)))
+                (JsonDec.succeed makeProfile
+                    |> JsonDecP.required "username" JsonDec.string
+                    |> JsonDecP.optional "followers" JsonDec.int 0
+                )
                 "{\"username\":\"ipedev\"}"
     in
     case r1 of
