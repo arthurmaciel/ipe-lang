@@ -10,6 +10,21 @@ Entries below the header are maintained by
 section is generated from Conventional Commit messages and prepended when the
 standing release pull request is merged.
 
+## [0.1.41](https://github.com/arthurmaciel/ipe-lang/compare/ipe-v0.1.40...ipe-v0.1.41) (2026-08-09)
+
+
+### Features
+
+* **lower:** FCF Approach A slices 1+2 — Arc-carrier promotion for forwarded functions ([#767](https://github.com/arthurmaciel/ipe-lang/issues/767)) ([f0bf65c](https://github.com/arthurmaciel/ipe-lang/commit/f0bf65c074d70202f9a981adcdb75560ecde550f))
+
+
+### Bug Fixes
+
+* **cli:** single-source subcommand registry so dispatch and help cannot drift ([#701](https://github.com/arthurmaciel/ipe-lang/issues/701)) ([#770](https://github.com/arthurmaciel/ipe-lang/issues/770)) ([e1e1f9f](https://github.com/arthurmaciel/ipe-lang/commit/e1e1f9fae4e2f954342a9ad137a2e47491dfe243))
+* **cli:** stream emitted cargo build progress in ipe build/run ([#757](https://github.com/arthurmaciel/ipe-lang/issues/757)) ([#765](https://github.com/arthurmaciel/ipe-lang/issues/765)) ([5ee6986](https://github.com/arthurmaciel/ipe-lang/commit/5ee698649029e984252c1e715059a8c77de46bf1))
+* **codegen:** clone reused non-Copy cache handle across Task steps ([#676](https://github.com/arthurmaciel/ipe-lang/issues/676)) ([#768](https://github.com/arthurmaciel/ipe-lang/issues/768)) ([eb5226f](https://github.com/arthurmaciel/ipe-lang/commit/eb5226ff8dbaf772220354f825e7ca0c68accb07))
+* **doc:** single-source the documented-module registry so --list and query agree ([#698](https://github.com/arthurmaciel/ipe-lang/issues/698)) ([#771](https://github.com/arthurmaciel/ipe-lang/issues/771)) ([ad95865](https://github.com/arthurmaciel/ipe-lang/commit/ad958653dc4356fc4d1cb921d48af50e08af2cd7))
+
 ## [0.1.40](https://github.com/arthurmaciel/ipe-lang/compare/ipe-v0.1.39...ipe-v0.1.40) (2026-08-05)
 
 
