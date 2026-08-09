@@ -1295,6 +1295,27 @@ fn is_enum_like_con_head(interner: &Interner, name: Symbol) -> bool {
 /// value nested INSIDE a real derive carrier is still caught by that outer
 /// carrier's own [`ty_contains_fun`] check (unchanged), so this only exempts the
 /// wrapper as the outermost shape.
+/// Is `ty` the anonymous `RetryPolicy e` record — the kernel-managed shape
+/// identified by a `shouldRetry` field (no other stdlib or user record carries
+/// that name)?
+///
+/// This record IS materialised as a runtime value passed to `task_retry_with`:
+/// its Rust struct is emitted by `emit_task_retry_call` with
+/// `shouldRetry: Box<dyn Fn(…) -> …>` and the `Clone`/`PartialEq` derives
+/// skipped for that field. So although the record carries a function-typed
+/// field, it is not the generic derive-carrier the fn-in-carrier gates protect
+/// against — it is a dedicated non-derivable struct the emitter owns. The gates
+/// exempt exactly this shape.
+fn is_retry_policy_record(interner: &Interner, ty: &Ty) -> bool {
+    matches!(
+        ty,
+        Ty::Record(fields, _)
+            if fields
+                .keys()
+                .any(|k| interner.resolve(*k) == Some("shouldRetry"))
+    )
+}
+
 fn embeds_nonderivable_function(interner: &Interner, ty: &Ty) -> bool {
     match ty {
         Ty::Var(_) | Ty::Unit => false,
@@ -1337,15 +1358,11 @@ fn embeds_nonderivable_function(interner: &Interner, ty: &Ty) -> bool {
             .any(|a| ty_contains_fun(a) || embeds_nonderivable_function(interner, a)),
         Ty::Record(fields, _) => {
             // Exempt the anonymous `RetryPolicy e` record — a kernel-managed type
-            // whose emitter writes a dedicated non-derivable Rust struct.  Identified
-            // by the presence of a `shouldRetry` key: no other stdlib or user record
-            // carries that name.  A user record literal spelling out that field set
-            // takes the value-side carrier normalization (record literals skip this
-            // gate), so its fn field is stored on the `Arc` carrier regardless.
-            if fields
-                .keys()
-                .any(|k| interner.resolve(*k) == Some("shouldRetry"))
-            {
+            // whose emitter writes a dedicated non-derivable Rust struct.  A user
+            // record literal spelling out that field set takes the value-side carrier
+            // normalization (record literals skip this gate), so its fn field is
+            // stored on the `Arc` carrier regardless.
+            if is_retry_policy_record(interner, ty) {
                 return false;
             }
             // Phase 1 (records): a function DIRECTLY in a record field is now a
@@ -9979,9 +9996,7 @@ impl<'a> Lowerer<'a> {
                     // carrying a function-typed field.  The backend emits the struct
                     // with `shouldRetry: Box<dyn Fn(…) -> …>` and skips the `Clone`
                     // / `PartialEq` derives for that field.
-                    let is_retry_policy = fields
-                        .keys()
-                        .any(|k| self.interner.resolve(*k) == Some("shouldRetry"));
+                    let is_retry_policy = is_retry_policy_record(self.interner, ty);
                     if (!ir_contains_fun(&ir) || is_retry_policy) && seen.insert(ir.clone()) {
                         out.push(ir);
                     }
@@ -13286,7 +13301,18 @@ impl<'a> Lowerer<'a> {
             takes_fn_param |= ty_contains_fun(p);
             result = r.as_ref();
         }
-        if takes_fn_param && ty_has_fun_in_derive_carrier(self.interner, result) {
+        // The `RetryPolicy e` result (a `shouldRetry`-keyed record, e.g. the
+        // result of `Task.retryOn`) is a kernel-managed struct the emitter owns,
+        // not a generic derive carrier — `emit_task_retry_call` writes its
+        // `shouldRetry: Box<dyn Fn>` field and skips the offending derives. Its
+        // sibling gates already exempt this shape; without the same exemption
+        // here the value-callee arm (a piped `linearBackoff … |> retryOn …`)
+        // rejects a sound path with IPE-L0107. Scoped to exactly this shape: any
+        // other function-in-record result still fails closed.
+        if takes_fn_param
+            && ty_has_fun_in_derive_carrier(self.interner, result)
+            && !is_retry_policy_record(self.interner, result)
+        {
             return Err(unsupported(callee.span, Feature::FirstClassFunctions));
         }
         Ok(())
