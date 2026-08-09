@@ -4,18 +4,9 @@ import Ipe.Json.Decode
 import Ipe.Json.Decode.Pipeline
 import Ipe.String
 
--- Pipeline-style record decoding using `JsonDec.succeed` + `JsonDecP.required`
--- + `JsonDecP.optional`.
---
--- `makeLabel` is a 3-arg function returning a `String` summary; `succeed
--- makeLabel` lifts it into a `Decoder (String -> Int -> String -> String)`
--- factory via `curry3`.  Each pipeline step threads the accumulator decoder as
--- the last argument (desugared |> form).
---
--- The decoder is inlined at each `decodeString` call; top-level decoder
--- bindings produce an unresolved type variable in the current Rust port (a
--- known limitation of the M4h lowerer that does not affect correctness of the
--- emitted code — only top-level *value* references are affected).
+-- Pipeline-style record decoding: `JsonDec.succeed` lifts the 3-arg `makeLabel`
+-- into a decoder factory, then `JsonDecP.required` / `JsonDecP.optional` thread
+-- one field each with `|>` so the written order matches the binding order.
 --
 -- j1 has no "nickname" field: optional supplies the default "unknown".
 -- j2 has "nickname" "Bobby".
@@ -36,19 +27,19 @@ main =
 
         r1 =
             JsonDec.decodeString
-                (JsonDecP.optional "nickname" JsonDec.string "unknown"
-                    (JsonDecP.required "age" JsonDec.int
-                        (JsonDecP.required "name" JsonDec.string
-                            (JsonDec.succeed makeLabel)))
+                (JsonDec.succeed makeLabel
+                    |> JsonDecP.required "name" JsonDec.string
+                    |> JsonDecP.required "age" JsonDec.int
+                    |> JsonDecP.optional "nickname" JsonDec.string "unknown"
                 )
                 j1
 
         r2 =
             JsonDec.decodeString
-                (JsonDecP.optional "nickname" JsonDec.string "unknown"
-                    (JsonDecP.required "age" JsonDec.int
-                        (JsonDecP.required "name" JsonDec.string
-                            (JsonDec.succeed makeLabel)))
+                (JsonDec.succeed makeLabel
+                    |> JsonDecP.required "name" JsonDec.string
+                    |> JsonDecP.required "age" JsonDec.int
+                    |> JsonDecP.optional "nickname" JsonDec.string "unknown"
                 )
                 j2
     in
