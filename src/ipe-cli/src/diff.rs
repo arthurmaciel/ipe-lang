@@ -438,37 +438,73 @@ fn print_report(report: &SemverReport, format: crate::cli_args::OutputFormat) {
     }
 }
 
-/// `ipe diff <old> <new> [--check <old-version> <new-version>]`.
+/// `ipe diff <old> <new>` — the report mode — or
+/// `ipe diff check <old> <new> <old-version> <new-version>` — the verify mode.
 ///
-/// Without `--check`, prints the classified public-API changes and the required
-/// bump, exiting 0 (it is a report). With `--check <old-ver> <new-ver>`, also
-/// verifies the proposed new version clears the required floor, exiting non-zero
-/// (a typed [`CliError::SemverRejected`]) when it does not — the gate primitive
-/// in CLI form.
+/// The bare command prints the classified public-API changes and the required
+/// bump, exiting 0 (it is a report). The bare-word `check` mode also verifies the
+/// proposed new version clears the required floor, exiting non-zero (a typed
+/// [`CliError::SemverRejected`]) when it does not — the gate primitive in CLI
+/// form. The former `--check <old-version> <new-version>` flag is a deprecated
+/// alias for the `check` mode, kept dispatchable so it does not break existing
+/// invocations; it prints a notice pointing at the bare word.
 ///
 /// # Errors
 /// [`CliError::Usage`] on argument misuse, [`CliError::UsageOwned`] on a
 /// malformed version, [`CliError::Diff`] when a tree cannot be read/typechecked,
-/// or [`CliError::SemverRejected`] when `--check` finds an under-bump.
+/// or [`CliError::SemverRejected`] when the verify mode finds an under-bump.
 pub fn run_diff(rest: &[String]) -> Result<(), CliError> {
-    const USAGE: &str =
-        "usage: ipe diff <old-path> <new-path> [--check <old-version> <new-version>]";
+    run_diff_with(rest, &mut |msg| eprintln!("{msg}"))
+}
+
+/// The stderr notice emitted when the deprecated `--check` alias is used.
+const CHECK_DEPRECATION_NOTICE: &str =
+    "note: `ipe diff --check` is deprecated; use `ipe diff check` instead";
+
+/// [`run_diff`] with the deprecation-notice sink injected, so a test can observe
+/// the alias notice without inspecting a process's stderr.
+fn run_diff_with(rest: &[String], notice: &mut dyn FnMut(&str)) -> Result<(), CliError> {
+    const USAGE: &str = "usage: ipe diff <old-path> <new-path>\n   \
+         or: ipe diff check <old-path> <new-path> <old-version> <new-version>";
 
     // Peel the output-format flags first, so `--plain` / `--json` compose with
-    // the positional paths and the value-taking `--check` sub-flag.
+    // the positional paths and the verify-mode arguments.
     let (format, args) = crate::cli_args::split_format(rest, "diff")?;
 
     let mut positional: Vec<&str> = Vec::new();
     let mut check: Option<(String, String)> = None;
     let mut it = args.into_iter();
+
+    // A leading bare `check` selects the verify mode; its two version arguments
+    // follow the two package paths.
+    let verify_mode = matches!(it.clone().next(), Some("check"));
+    if verify_mode {
+        it.next();
+    }
+
     while let Some(arg) = it.next() {
         if arg == "--check" {
+            // Deprecated flag alias: still selects the verify mode.
+            notice(CHECK_DEPRECATION_NOTICE);
             let old_v = it.next().ok_or(CliError::Usage(USAGE))?.to_owned();
             let new_v = it.next().ok_or(CliError::Usage(USAGE))?.to_owned();
             check = Some((old_v, new_v));
         } else {
             positional.push(arg);
         }
+    }
+
+    // In bare `check` mode the two versions are the trailing positionals, after
+    // the two package paths.
+    if verify_mode {
+        if check.is_some() {
+            return Err(CliError::Usage(USAGE));
+        }
+        let [old_path, new_path, old_v, new_v] = positional.as_slice() else {
+            return Err(CliError::Usage(USAGE));
+        };
+        check = Some(((*old_v).to_owned(), (*new_v).to_owned()));
+        positional = vec![old_path, new_path];
     }
     let [old_path, new_path] = positional.as_slice() else {
         return Err(CliError::Usage(USAGE));

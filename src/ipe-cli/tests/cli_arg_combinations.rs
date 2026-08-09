@@ -241,10 +241,14 @@ fn diff_invalid_combinations_rejected() {
     // Too few positionals.
     dispatch_rejects(&["diff"]);
     dispatch_rejects(&["diff", "only-one"]);
-    // `--check` needs two version arguments.
+    // The deprecated `--check` alias needs two version arguments.
     dispatch_rejects(&["diff", "old", "new", "--check", "1.0.0"]);
     // A malformed version under `--check`.
     dispatch_rejects(&["diff", "old", "new", "--check", "notaversion", "1.0.0"]);
+    // The bare `check` mode needs two paths and two versions.
+    dispatch_rejects(&["diff", "check", "old", "new", "1.0.0"]);
+    // A malformed version under bare `check`.
+    dispatch_rejects(&["diff", "check", "old", "new", "notaversion", "1.0.0"]);
 }
 
 #[test]

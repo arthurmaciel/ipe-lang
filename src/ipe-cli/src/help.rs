@@ -390,13 +390,11 @@ const COMMANDS: &[Command] = &[
         name: "diff",
         run: crate::diff::run_diff,
         summary: "Compare two package versions' public APIs and report the required semver bump.",
-        args: "<old> <new>",
-        args_desc: "The two package paths to compare — the old version first, then the new.",
+        args: "<old> <new>  |  check <old> <new> <old-version> <new-version>",
+        args_desc: "The two package paths to compare — the old version first, then the new. \
+                    `check`: also reject a new version that does not clear the required bump \
+                    (`--check <old-version> <new-version>` is a deprecated alias).",
         options: &[
-            Opt {
-                flag: "[--check <old-version> <new-version>]",
-                desc: "reject a new version that does not clear the required bump",
-            },
             Opt {
                 flag: "[--plain]",
                 desc: "print flush-left change / bump records for grep/awk",
@@ -411,12 +409,12 @@ const COMMANDS: &[Command] = &[
         name: "doc",
         run: crate::doc::run_doc,
         summary: "Generate API documentation (docs.json + Markdown + HTML), query the stdlib, list modules, preview, or check coverage.",
-        args: "[--list | <Module.Name> | serve | check] [<path>]",
+        args: "[list | serve | check | <Module.Name>] [<path>]",
         args_desc: "Without a subcommand: generate docs.json + renderings for the project and stdlib. \
-                    `--list`: list all stdlib + project modules (one per line). \
-                    `<Module.Name>`: show one module's types and values with signatures (e.g. `ipe doc Ipe.List`). \
+                    `list`: list all stdlib + project modules (one per line; `--list` is a deprecated alias). \
                     `serve`: build the HTML site and preview it on loopback. \
-                    `check`: verify doc-comment coverage for project modules (stdlib is exempt).",
+                    `check`: verify doc-comment coverage for project modules (stdlib is exempt). \
+                    `<Module.Name>`: show one module's types and values with signatures (e.g. `ipe doc Ipe.List`).",
         options: &[
             Opt {
                 flag: "[--out <dir>]",
@@ -432,11 +430,11 @@ const COMMANDS: &[Command] = &[
             },
             Opt {
                 flag: "[--plain]",
-                desc: "bare output, one entry per line; --list and <module> only",
+                desc: "bare output, one entry per line; list and <module> only",
             },
             Opt {
                 flag: "[--json]",
-                desc: "machine-readable JSON output; --list and <module> only",
+                desc: "machine-readable JSON output; list and <module> only",
             },
         ],
     },
