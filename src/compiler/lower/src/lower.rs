@@ -5128,14 +5128,13 @@ fn ir_type_mentions_generic(ty: &IrType, tv: Symbol) -> bool {
 /// Does the type variable `tv` appear INSIDE a [`IrType::Decoder`] payload
 /// anywhere in `ty`?
 ///
-/// The runtime `Decoder<E, T>` (`ipe_runtime::json::Decoder`) holds a
-/// `Box<dyn Fn(..) -> IpeResult<E, T> + Send>`, so its auto-derived `Send` holds
-/// only when `T: Send`. A generic helper whose signature carries a `Decoder<_,
-/// tv>` — the `custom`/`enum`-style decoder factories, whose return type is
-/// `Decoder tv` built from a caller-supplied piece — therefore needs `tv: Send +
-/// 'static` for the emitted `Decoder` value to be `Send` wherever the runtime
-/// requires it. Without the bound the crate is well-typed to `ipe` but the
-/// emitted Rust fails `cargo build` (a SEAL violation).
+/// The `Decoder`-combinator kernels (`decode_list`, `decode_map`, …) bound their
+/// element `T: Send`, so a generic helper whose signature carries a `Decoder<_,
+/// tv>` — forwarded as a param or produced by a combinator — needs `tv: Send +
+/// 'static` for the emitted body to satisfy those kernel bounds. Without it the
+/// crate is well-typed to `ipe` but the emitted Rust fails `cargo build` (a SEAL
+/// violation). `Sync` is a strictly narrower obligation carried elsewhere (a
+/// captured bare-value slot), never by mere `Decoder`-carriage.
 ///
 /// This fires ONLY when the tvar sits UNDER a `Decoder` node: a bare
 /// `Generic(tv)` param or return, or a `tv` under any other carrier, is left
@@ -5307,9 +5306,9 @@ fn body_boxes_generic_callback(tv: Symbol, expr: &Expr) -> bool {
 /// — a typed subexpression whose type mentions the type variable `tv` UNDER a
 /// [`IrType::Decoder`] node?
 ///
-/// The runtime `Decoder<E, T>` holds `Box<dyn Fn(..) -> IpeResult<E, T> + Send>`,
-/// so it is `Send` only when `T: Send`; and every `Decoder`-combinator kernel
-/// (`decode_list`, `decode_map`, …) bounds its element `T: Send + 'static`.
+/// Every `Decoder`-combinator kernel (`decode_list`, `decode_map`, …) bounds its
+/// element `T: Send + 'static`, so a helper that forwards a `Decoder tv` value
+/// needs `tv: Send`.
 /// Whenever a generic helper's body produces or forwards a `Decoder tv` value —
 /// even when the `Decoder` is hidden inside a user ADT field (`Codec a`'s
 /// `dec : Decoder a`, invisible to the signature-level [`ir_type_generic_in_decoder`]
@@ -5490,6 +5489,23 @@ fn apply_kernel_type_param_bounds(
         matches!(k, KernelFn::JsonDecPOptional | KernelFn::DbDecOptional)
             && arg_is_tracked_var(args, 2, tracked)
     };
+    // `Sync` — `Config.succeed`/`JsonDec.succeed`/`Db.Decode.succeed` (all lower
+    // to `decode_succeed`) take their value at arg index 0 and MOVE it into the
+    // decoder's factory closure `Box<dyn Fn() -> A + Send + Sync>`, whose captured
+    // `A` must therefore be `Send + Sync`. When that value is a tracked
+    // `Generic(tv)` binder — `custom fallback = Config.succeed fallback`, emitting
+    // `fn custom<T>(fallback: T) -> Decoder<T>` — the tvar needs `Sync`, or the
+    // closure→trait-object cast fails E0277 (`T cannot be shared between threads`),
+    // an exit-0-then-cargo-fail SEAL break. The sibling `decode_list`/`decode_map`
+    // slots capture a pre-built `Decoder` (itself `Send + Sync` for free), not a
+    // bare `tv` value, so they oblige `Send` only — this arg-0 capture is the exact
+    // position that adds `Sync`, never over-bounding a run-through element.
+    let succeed_sync_matcher = |tracked: Symbol, k: KernelFn, args: &[Expr]| -> bool {
+        matches!(
+            k,
+            KernelFn::ConfigSucceed | KernelFn::JsonDecSucceed | KernelFn::DbDecSucceed
+        ) && arg_is_tracked_var(args, 0, tracked)
+    };
 
     for (tv, bounds) in type_params.iter_mut() {
         let is_wildcard = is_wildcard_any_tv(interner, *tv);
@@ -5527,14 +5543,18 @@ fn apply_kernel_type_param_bounds(
             *bounds = bounds.with_static();
         }
         // `Send + 'static` — a generic tvar carried inside a `Decoder<E, tv>` in
-        // the emitted SIGNATURE (a param type or the return type). The runtime
-        // `Decoder<E, T>` boxes `Box<dyn Fn(..) -> IpeResult<E, T> + Send>`, so
-        // its auto-`Send` needs `T: Send`; a generic `custom`/`enum` decoder
-        // helper emits `fn(..) -> Decoder<IpeError, A>` and would cargo-fail
-        // without `A: Send`. Wildcard OR named. A structural TYPE walk (not a
+        // the emitted SIGNATURE (a param type or the return type). The
+        // `Decoder`-combinator kernels (`decode_list`, `decode_map`, …) bound their
+        // element `T: Send`, so a helper that forwards a `Decoder tv` — as a param
+        // or a `decode_list`-produced return — needs `tv: Send`, or the emitted
+        // body cargo-fails E0277. Wildcard OR named. A structural TYPE walk (not a
         // kernel-on-param matcher): the obligation reads the tvar's appearance
         // under a `Decoder` node, so it fires ONLY for the generic-`Decoder`
-        // shape and never over-bounds an unrelated pass-through.
+        // shape and never over-bounds an unrelated pass-through. `Sync` is a
+        // STRICTLY NARROWER obligation, applied below only where a bare tvar VALUE
+        // is captured into the decoder's factory closure — not every
+        // `Decoder`-carried tvar (a run-through element rides a pre-built,
+        // already-`Send + Sync` `Decoder` and needs `Send` only).
         //
         // The signature check catches a bare `Decoder tv` param/return; the body
         // check ([`body_materializes_generic_decoder`]) catches a `Decoder tv`
@@ -5550,14 +5570,17 @@ fn apply_kernel_type_param_bounds(
         {
             *bounds = bounds.with_send();
         }
-        // `Sync` — the tvar is the element `a` threaded through an optional
-        // decoder slot (`decode_pipeline_optional` / `db_decode_optional`), whose
-        // element param is bounded `Send + Sync`. Detected as the BARE arg-2
-        // default of the optional kernel call, so it fires on `a` only — a var
-        // that reaches only a `Send`-bounded slot (`decode_list`) keeps `Send`
-        // and gains no spurious `Sync`. Companion to the `Send` propagation above
-        // (`with_sync` re-implies `Send` + `'static`).
-        if fires_on(&optional_sync_matcher) {
+        // `Sync` — the tvar's VALUE is captured into a decoder's factory closure
+        // `Box<dyn Fn(..) -> .. + Send + Sync>`, so it must be `Send + Sync`. Two
+        // capture positions oblige it: the BARE arg-2 default of an optional slot
+        // (`decode_pipeline_optional` / `db_decode_optional`), and the arg-0 value
+        // of `decode_succeed` (`Config`/`JsonDec`/`Db.Decode` `.succeed`). Detected
+        // as the exact captured-arg position, so it fires on that element ONLY — a
+        // var that reaches only a `Send`-bounded, non-capturing slot (`decode_list`
+        // running a pre-built `Decoder`, or an optional's produced result `b`)
+        // keeps `Send` and gains no spurious `Sync`. Companion to the `Send`
+        // propagation above (`with_sync` re-implies `Send` + `'static`).
+        if fires_on(&optional_sync_matcher) || fires_on(&succeed_sync_matcher) {
             *bounds = bounds.with_sync();
         }
     }
@@ -21952,6 +21975,12 @@ mod tests {
             decoder_bound.has_static(),
             "`Send` is always paired with its `'static` companion"
         );
+        assert!(
+            !decoder_bound.has_sync(),
+            "a mere `Decoder a` carriage (no captured bare value) must stay \
+             `Send`-only — `Sync` is the strictly narrower capture obligation, \
+             got: {decoder_bound:?}"
+        );
 
         // Control `identity : a -> a`: no `Decoder`, so the tvar stays as it was
         // (only its incoming `Clone`), proving the obligation cannot over-bound.
@@ -21967,6 +21996,60 @@ mod tests {
         assert!(
             !id_bound.has_send(),
             "a plain `a -> a` must NOT gain a `Send` bound (no over-bounding)"
+        );
+    }
+
+    /// The `Sync` capture obligation: a `Config.succeed fallback` helper (its bare
+    /// `fallback : a` value moved into the decoder's `Send + Sync` factory closure)
+    /// stamps `Sync` on the tvar, while a helper that merely CARRIES a `Decoder a`
+    /// element through a run-through combinator slot stays `Send`-only. Exactly
+    /// the red-main `custom fallback = Config.succeed fallback` shape.
+    #[test]
+    fn succeed_captured_value_stamps_sync_but_carriage_does_not() {
+        use ipe_ir::{CallPin, Callee, Expr, IrType, KernelFn, OnFormKind};
+
+        let mut interner = Interner::new();
+        let a = interner.intern("a").unwrap();
+        let fallback = interner.intern("fallback").unwrap();
+
+        // `custom fallback = Config.succeed fallback` — arg-0 is the tracked value.
+        let succeed_call = Expr::Call {
+            callee: Callee::Kernel(KernelFn::ConfigSucceed),
+            args: vec![Expr::Var(fallback)],
+            pin: CallPin::None,
+            on_form: OnFormKind::NotForm,
+        };
+        let mut params = vec![(a, super::BoundSet::UNBOUNDED.with_clone())];
+        super::apply_kernel_type_param_bounds(
+            &interner,
+            &mut params,
+            &[(fallback, IrType::Generic(a))],
+            &IrType::Decoder(Box::new(IrType::Generic(a))),
+            &succeed_call,
+        );
+        let bound = params.first().map(|(_, b)| *b).unwrap_or_default();
+        assert!(
+            bound.has_sync(),
+            "a `Config.succeed`-captured tvar rides a `Send + Sync` factory closure \
+             and must gain `Sync`, got: {bound:?}"
+        );
+
+        // Control: a `dec : Decoder a` param CARRIED through (no succeed capture)
+        // stays `Send`-only. `JsonDec.succeed` on an UNRELATED literal does not
+        // capture `a`, so the arg-0 matcher does not fire on it.
+        let mut carry_params = vec![(a, super::BoundSet::UNBOUNDED.with_clone())];
+        super::apply_kernel_type_param_bounds(
+            &interner,
+            &mut carry_params,
+            &[(fallback, IrType::Decoder(Box::new(IrType::Generic(a))))],
+            &IrType::Decoder(Box::new(IrType::Generic(a))),
+            &Expr::Var(fallback),
+        );
+        let carry_bound = carry_params.first().map(|(_, b)| *b).unwrap_or_default();
+        assert!(
+            carry_bound.has_send() && !carry_bound.has_sync(),
+            "a carried `Decoder a` element must stay `Send`-only (no capture), \
+             got: {carry_bound:?}"
         );
     }
 
