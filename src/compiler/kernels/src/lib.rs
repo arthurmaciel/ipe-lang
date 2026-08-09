@@ -15,7 +15,7 @@
 #![forbid(unsafe_code)]
 
 mod capability;
-pub use capability::{Capability, UnknownCapability};
+pub use capability::{Capability, ElementCapability, UnknownCapability};
 
 /// Classification of a kernel variant by which compiler / runtime subsystem
 /// owns its emission.
@@ -8887,6 +8887,79 @@ impl StdlibKernel {
         }
     }
 
+    /// The ELEMENT trait bound this kernel imposes, when it is a
+    /// `List`/`Dict`/`Set` kernel; `None` for every non-collection kernel.
+    ///
+    /// This is the soundness axis for storing a value in a collection: the
+    /// carrier for a stored function is `Arc<dyn Fn>` (`Clone` but not
+    /// `PartialEq`/`Ord`), so a kernel that only moves/clones its element
+    /// ([`ElementCapability::CloneOk`]) is sound over a function element, while a
+    /// kernel that compares ([`ElementCapability::RequiresPartialEq`]) or orders
+    /// ([`ElementCapability::RequiresOrd`]) it is not, and the lowerer rejects a
+    /// function-embedding element for the latter with the equality/ordering
+    /// diagnostic (fail-closed at `ipe` time).
+    ///
+    /// The three forbidding families are enumerated explicitly; every other
+    /// `List`/`Dict`/`Set` kernel defaults to `CloneOk`. A `Dict` KEY /`Set`
+    /// element function is separately rejected by the region gate
+    /// (`embeds_nonderivable_function`) before a kernel is even resolved, since
+    /// those positions are non-storable; this tag governs the storable-element
+    /// kernels (the `List` element and `Dict` value the carrier flip admits). The
+    /// `qualifier`-keyed default keeps a newly-added collection kernel tagged
+    /// without an omission — the coherence test asserts every `List`/`Dict`/`Set`
+    /// kernel returns `Some`.
+    #[must_use]
+    pub fn element_capability(self) -> Option<ElementCapability> {
+        match self {
+            // `PartialEq` on the element (`list.contains`, dedup): the emitted
+            // Rust compares the element, unsound over an `Arc<dyn Fn>` carrier.
+            Self::ListMember | Self::ListUnique => {
+                return Some(ElementCapability::RequiresPartialEq);
+            }
+            // `PartialOrd`/`Ord` on the element (sort / extremum).
+            Self::ListSort | Self::ListMaximum | Self::ListMinimum => {
+                return Some(ElementCapability::RequiresOrd);
+            }
+            // Higher-order kernels that pass the element into a mapper /
+            // comparator closure whose parameter carrier the lowerer does NOT
+            // align to the stored `Arc<dyn Fn>` — the frontier is open, so a
+            // function element is rejected fail-closed rather than mis-emitted.
+            // Aligned counterparts (`List.map`/`filter`/`foldl`/`foldr`/
+            // `concatMap`/`filterMap`/`any`/`all`/`find`/`indexedMap`, whose
+            // `retype_collection_element_param` closes the frontier) stay
+            // `CloneOk`; a kernel graduates here only when its frontier is
+            // actually closed in the lowerer.
+            Self::ListPartition
+            | Self::ListMap2
+            | Self::ListMap3
+            | Self::ListMap4
+            | Self::ListMap5
+            | Self::ListSortBy
+            | Self::ListSortWith
+            | Self::DictMap
+            | Self::DictFoldl
+            | Self::DictFoldr
+            | Self::DictFilter
+            | Self::DictPartition
+            | Self::DictUpdate
+            | Self::SetMap
+            | Self::SetFilter
+            | Self::SetFoldl
+            | Self::SetFoldr
+            | Self::SetPartition => {
+                return Some(ElementCapability::MapperFrontierOpen);
+            }
+            _ => {}
+        }
+        // Every remaining `List`/`Dict`/`Set` kernel operates on its element only
+        // by move/clone (pure structural), sound over an `Arc` element. A
+        // non-collection kernel carries no element capability.
+        match self.def().qualifier {
+            "List" | "Dict" | "Set" => Some(ElementCapability::CloneOk),
+            _ => None,
+        }
+    }
+
     /// `true` when this variant belongs to the TEA (`Cmd` / `Sub` /
     /// A development-only escape hatch (the `Ipe.Debug` family). Rejected in a
     /// PRODUCTION build (`ipe build --optimize`, IPE-L0140) rather than
@@ -10486,6 +10559,108 @@ mod tests {
         for k in StdlibKernel::ALL {
             let _ = k.capability();
         }
+    }
+
+    /// Coherence tripwire: EVERY wired `List`/`Dict`/`Set` kernel carries an
+    /// element-capability tag, and no non-collection kernel does. A collection
+    /// kernel added without a tag (or a non-collection kernel that accidentally
+    /// returns one) is a CI error, mirroring the scheme/arity coherence oracles —
+    /// so the storable-element soundness fact can never silently drift as the
+    /// stdlib grows.
+    #[test]
+    fn every_collection_kernel_carries_an_element_capability_tag() {
+        for k in StdlibKernel::ALL {
+            let is_collection = matches!(k.def().qualifier, "List" | "Dict" | "Set");
+            let tag = k.element_capability();
+            assert_eq!(
+                tag.is_some(),
+                is_collection,
+                "{k:?} (qualifier {:?}): a List/Dict/Set kernel MUST carry an \
+                 element-capability tag and no other kernel may — got tag {tag:?}",
+                k.def().qualifier,
+            );
+        }
+    }
+
+    /// The element-equality / element-ordering `List` kernels forbid a function
+    /// element; the FRONTIER-CLOSED map/fold/filter family admits it. Pins the
+    /// soundness classification so a future retag that would silently let
+    /// `Arc<dyn Fn>` reach a `==`/`sort` element bound (a cargo-fail) fails this
+    /// test instead.
+    #[test]
+    fn equality_and_ordering_kernels_forbid_a_function_element() {
+        use super::ElementCapability;
+        assert_eq!(
+            StdlibKernel::ListMember.element_capability(),
+            Some(ElementCapability::RequiresPartialEq)
+        );
+        assert_eq!(
+            StdlibKernel::ListUnique.element_capability(),
+            Some(ElementCapability::RequiresPartialEq)
+        );
+        assert_eq!(
+            StdlibKernel::ListSort.element_capability(),
+            Some(ElementCapability::RequiresOrd)
+        );
+        assert_eq!(
+            StdlibKernel::ListMaximum.element_capability(),
+            Some(ElementCapability::RequiresOrd)
+        );
+        // The frontier-closed map/fold/filter family is sound over a function
+        // element (`retype_collection_element_param` aligns the mapper carrier).
+        assert_eq!(
+            StdlibKernel::ListMap.element_capability(),
+            Some(ElementCapability::CloneOk)
+        );
+        assert_eq!(
+            StdlibKernel::ListFoldl.element_capability(),
+            Some(ElementCapability::CloneOk)
+        );
+        assert!(
+            ElementCapability::RequiresPartialEq.forbids_function_element()
+                && ElementCapability::RequiresOrd.forbids_function_element()
+                && !ElementCapability::CloneOk.forbids_function_element()
+        );
+    }
+
+    /// The higher-order kernels whose mapper/comparator frontier the lowerer does
+    /// NOT close over a stored function element carry `MapperFrontierOpen`, which
+    /// forbids a function element (fail-closed IPE-L0134) — so each one rejects at
+    /// `ipe` time rather than mis-emitting an `Arc`-vs-`Box` mismatch. Pins the
+    /// set the shipped frontier fix does not cover; a kernel leaves this set only
+    /// by having its frontier actually closed in the lowerer (moving it to
+    /// `CloneOk` there and here together).
+    #[test]
+    fn open_frontier_mapper_kernels_forbid_a_function_element() {
+        use super::ElementCapability;
+        let open = [
+            StdlibKernel::ListPartition,
+            StdlibKernel::ListMap2,
+            StdlibKernel::ListMap3,
+            StdlibKernel::ListMap4,
+            StdlibKernel::ListMap5,
+            StdlibKernel::ListSortBy,
+            StdlibKernel::ListSortWith,
+            StdlibKernel::DictMap,
+            StdlibKernel::DictFoldl,
+            StdlibKernel::DictFoldr,
+            StdlibKernel::DictFilter,
+            StdlibKernel::DictPartition,
+            StdlibKernel::DictUpdate,
+            StdlibKernel::SetMap,
+            StdlibKernel::SetFilter,
+            StdlibKernel::SetFoldl,
+            StdlibKernel::SetFoldr,
+            StdlibKernel::SetPartition,
+        ];
+        for k in open {
+            assert_eq!(
+                k.element_capability(),
+                Some(ElementCapability::MapperFrontierOpen),
+                "{k:?} must be tagged MapperFrontierOpen (open mapper frontier)"
+            );
+        }
+        assert!(ElementCapability::MapperFrontierOpen.forbids_function_element());
     }
 
     /// One representative kernel per effect family maps to the right capability,

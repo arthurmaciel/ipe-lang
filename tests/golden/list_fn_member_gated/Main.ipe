@@ -1,0 +1,24 @@
+module Main exposing (main)
+
+-- A stored `List (Int -> Int)` is `Clone` (storable, mappable, foldable), but a
+-- function value is not comparable: `Arc<dyn Fn>` is neither `PartialEq` nor
+-- `Ord`. `List.member` needs `==` on the element, so applying it to a
+-- function-carrying list must fail closed at `ipe` time with IPE-L0134 (the
+-- element-capability gate), never emit Rust `cargo` rejects.
+
+import Ipe.Io as Io
+import Ipe.List
+import Ipe.String
+
+
+steps : List (Int -> Int)
+steps =
+    [ \n -> n + 1, \n -> n * 2 ]
+
+
+main =
+    let
+        _ =
+            List.member (\n -> n + 1) steps
+    in
+    Io.println (String.fromInt 0)

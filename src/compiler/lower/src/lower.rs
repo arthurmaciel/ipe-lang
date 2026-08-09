@@ -1175,6 +1175,73 @@ fn is_builtin_collection(interner: &Interner, name: Symbol) -> bool {
     matches!(interner.resolve(name), Some("List" | "Dict" | "Set"))
 }
 
+/// Does a builtin collection (`List`/`Dict`/`Set`) type embed a function in a
+/// position its Rust backing cannot store?
+///
+/// A function value is carried on the `Clone` `Arc<dyn Fn>` carrier
+/// ([`IrType::SharedFun`]), which makes it storable in every position that needs
+/// only `Clone`:
+///
+/// - `List a` element / `Dict k v` VALUE: `Vec<Arc<dyn Fn>>` /
+///   `HashMap<K, Arc<dyn Fn>>` are `Clone` — a bare function there is SOUND, so
+///   it is not flagged; only a genuinely non-storable nested carrier under the
+///   element/value is (recursion via [`embeds_nonderivable_function`]).
+/// - `Dict k v` KEY / `Set a` element: the Rust backing (`HashMap` key,
+///   `BTreeSet` member) requires `Ord`/`Hash`, which `Arc<dyn Fn>` is NOT, so a
+///   function there is still a real gap — flagged with the full [`ty_contains_fun`]
+///   blanket check as before.
+///
+/// The head is one of `List`/`Dict`/`Set` (the caller's `is_builtin_collection`
+/// guard); an unexpected arity conservatively falls back to the blanket check.
+fn collection_embeds_nonstorable_function(interner: &Interner, name: Symbol, args: &[Ty]) -> bool {
+    let nested_nonstorable =
+        |a: &Ty| ty_contains_fun(a) || embeds_nonderivable_function(interner, a);
+    match interner.resolve(name) {
+        // `List a`: the element is a storable value position. A BARE function
+        // element is sound (Arc carrier); recurse for a nested non-storable
+        // carrier under it (e.g. a `Set (a -> b)` buried in the element).
+        Some("List") if args.len() == 1 => args
+            .first()
+            .is_some_and(|elem| embeds_nonderivable_function(interner, elem)),
+        // `Set a`: the element must be `Ord`; a function anywhere in it is
+        // non-storable — keep the blanket check.
+        Some("Set") if args.len() == 1 => args.iter().any(nested_nonstorable),
+        // `Dict k v`: the KEY must be `Ord`/`Hash` (blanket check); the VALUE is
+        // a storable position (Arc carrier), so a bare function value is sound.
+        Some("Dict") if args.len() == 2 => {
+            let key_bad = args.first().is_some_and(nested_nonstorable);
+            let val_bad = args
+                .get(1)
+                .is_some_and(|v| embeds_nonderivable_function(interner, v));
+            key_bad || val_bad
+        }
+        // Unexpected head/arity — conservative blanket check (never under-flag).
+        _ => args.iter().any(nested_nonstorable),
+    }
+}
+
+/// Does a builtin collection type carry a function in a STORABLE element
+/// position — a `List` element or a `Dict` VALUE?
+///
+/// This is the mirror of [`collection_embeds_nonstorable_function`] for the
+/// element-capability gate: the carrier flip made these positions storable
+/// (`Arc<dyn Fn>`), so an equality/ordering kernel over such a collection is the
+/// unsound case the gate must reject (a function is `Clone` but not
+/// `PartialEq`/`Ord`). A `Dict` KEY / `Set` element is not consulted here — those
+/// positions are already rejected by the region gate before a kernel resolves.
+fn collection_storable_element_carries_function(interner: &Interner, ty: &Ty) -> bool {
+    match ty {
+        Ty::Con { name, args, .. } if is_builtin_collection(interner, *name) => {
+            match interner.resolve(*name) {
+                Some("List") if args.len() == 1 => args.first().is_some_and(ty_contains_fun),
+                Some("Dict") if args.len() == 2 => args.get(1).is_some_and(ty_contains_fun),
+                _ => false,
+            }
+        }
+        _ => false,
+    }
+}
+
 /// Is this `Ty::Con` head an ENUM-LIKE constructor — the built-in `Maybe` /
 /// `Result` or a user-declared union — as opposed to a builtin COLLECTION
 /// (`List`/`Dict`/`Set`) or an opaque boxed wrapper?
@@ -1250,9 +1317,21 @@ fn embeds_nonderivable_function(interner: &Interner, ty: &Ty) -> bool {
         Ty::Con { name, args, .. } if is_enum_like_con_head(interner, *name) => args
             .iter()
             .any(|a| embeds_nonderivable_function(interner, a)),
-        // A builtin COLLECTION head (`List`/`Dict`/`Set`): unchanged blanket
-        // check — a function element/value type is still the real gap (the
-        // design doc §2, "collections of functions").
+        // A builtin COLLECTION head (`List`/`Dict`/`Set`): a function in a
+        // STORABLE element position is carried on the `Clone` `Arc<dyn Fn>`
+        // carrier ([`IrType::SharedFun`]) and is a legitimate value, not a
+        // non-derivable carrier. A `List` element and a `Dict` VALUE are storable;
+        // a `Dict` KEY and a `Set` element are NOT — a key/set-member must be
+        // `Ord`/`Hash`, which a function is not, so a function there is flagged. A
+        // function reached through a nested non-storable carrier under any
+        // position is flagged (recursion). See
+        // [`collection_embeds_nonstorable_function`].
+        Ty::Con { name, args, .. } if is_builtin_collection(interner, *name) => {
+            collection_embeds_nonstorable_function(interner, *name, args)
+        }
+        // Any other `Ty::Con` head (should not occur — the arms above cover
+        // opaque wrappers, enum-like heads, and collections): recurse
+        // conservatively.
         Ty::Con { args, .. } => args
             .iter()
             .any(|a| ty_contains_fun(a) || embeds_nonderivable_function(interner, a)),
@@ -7992,12 +8071,34 @@ fn normalize_record_fun_carriers(ty: IrType) -> IrType {
                 .collect();
             IrType::Record(flipped)
         }
+        // A COLLECTION element position (`List`/`Set` element, `Dict` value) and a
+        // `Tuple` component: a function stored there is carried on `Arc` too, so
+        // flip a bare `Fun` element after recursing. `flip_fun_in_storage_element`
+        // is the O(1) element analogue of the record-field flip above; `recur`
+        // first descends so a nested composite's own fields/elements are flipped
+        // identically. A `Dict` KEY is not a storage-carrier position a function
+        // can legitimately occupy (a function is neither `Ord` nor `Hash`), so its
+        // recursion never surfaces a storable `Fun` — leaving the flip on the
+        // VALUE alone.
+        //
+        // A `Maybe`/`Result` payload is NOT flipped: its runtime enum
+        // (`IpeMaybe`/`IpeResult`) has a fn payload consumed by the `andMap`/`map`
+        // kernels as an owned `FnOnce` (`Box`), so it stays on the `Box` carrier —
+        // recurse into a nested composite under the payload without flipping the
+        // payload arrow itself.
         IrType::Maybe(e) => IrType::Maybe(Box::new(recur(*e))),
-        IrType::List(e) => IrType::List(Box::new(recur(*e))),
-        IrType::Set(e) => IrType::Set(Box::new(recur(*e))),
+        IrType::List(e) => IrType::List(Box::new(flip_fun_in_storage_element(recur(*e)))),
+        IrType::Set(e) => IrType::Set(Box::new(flip_fun_in_storage_element(recur(*e)))),
         IrType::Result(a, b) => IrType::Result(Box::new(recur(*a)), Box::new(recur(*b))),
-        IrType::Dict(a, b) => IrType::Dict(Box::new(recur(*a)), Box::new(recur(*b))),
-        IrType::Tuple(es) => IrType::Tuple(es.into_iter().map(recur).collect()),
+        IrType::Dict(a, b) => IrType::Dict(
+            Box::new(recur(*a)),
+            Box::new(flip_fun_in_storage_element(recur(*b))),
+        ),
+        IrType::Tuple(es) => IrType::Tuple(
+            es.into_iter()
+                .map(|e| flip_fun_in_storage_element(recur(e)))
+                .collect(),
+        ),
         IrType::Enum { home, name, args } => IrType::Enum {
             home,
             name,
@@ -8031,11 +8132,34 @@ fn normalize_enum_payload_fun_carrier(ty: IrType) -> IrType {
         // A function DIRECTLY in the payload: flip to the `Arc` carrier. Its own
         // params/ret are direct positions and stay `Fun`.
         IrType::Fun(ps, r) => IrType::SharedFun(ps, r),
-        // A record under the payload takes the Phase-1 record flip.
-        IrType::Record(_) => normalize_record_fun_carriers(ty),
-        // Every other payload shape (a bare leaf, a collection/tuple, another
-        // enum) is left as lowered: a collection-of-functions payload stays on
-        // the `Box` carrier and gated (Phase 3).
+        // A record OR a composite payload (`List`/`Set`/`Dict`/`Tuple`/
+        // `Maybe`/`Result`/nested enum) takes the total carrier normalization:
+        // a function stored under any of those constructors is flipped to `Arc`
+        // exactly as it is when the same composite is a record field. The rule is
+        // a pure function of the type tree, so an enum-payload occurrence and a
+        // record-field occurrence of the same composite agree on the carrier.
+        _ => normalize_record_fun_carriers(ty),
+    }
+}
+
+/// Flip a bare function type sitting in a COLLECTION/composite ELEMENT position
+/// (a `List`/`Set` element, a `Dict` value, a `Maybe`/`Result` payload, a
+/// `Tuple` component) to the `Clone` `Arc<dyn Fn>` carrier ([`IrType::SharedFun`]).
+///
+/// This is the element-position analogue of the record-field flip
+/// ([`normalize_record_fun_carriers`]) and the enum-payload flip
+/// ([`normalize_enum_payload_fun_carrier`]): a function STORED under a data
+/// constructor is always carried on `Arc` so the collection is `Clone` and its
+/// elements can be forwarded by a refcount bump. A function in a DIRECT position
+/// (a parameter, a bare return) stays `Fun` — this only fires on the element
+/// type of a composite that is itself being constructed here. Applied to the
+/// already-lowered element [`IrType`], so it is a pure O(1) function of the
+/// carrier shape: a bare `Fun` becomes `SharedFun`; every other shape (including
+/// an already-flipped `SharedFun`, or a nested composite whose own elements were
+/// flipped when they were built) is returned unchanged. Idempotent.
+fn flip_fun_in_storage_element(elem: IrType) -> IrType {
+    match elem {
+        IrType::Fun(ps, r) => IrType::SharedFun(ps, r),
         other => other,
     }
 }
@@ -10888,14 +11012,19 @@ impl<'a> Lowerer<'a> {
                 "List" if args.len() == 1 => {
                     let elem =
                         self.ir_type_from_canon(args.first().ok_or_else(list_arg_bug)?, generics)?;
-                    Ok(IrType::List(Box::new(elem)))
+                    Ok(IrType::List(Box::new(flip_fun_in_storage_element(elem))))
                 }
                 "Dict" if args.len() == 2 => {
                     let k =
                         self.ir_type_from_canon(args.first().ok_or_else(dict_arg_bug)?, generics)?;
                     let v =
                         self.ir_type_from_canon(args.get(1).ok_or_else(dict_arg_bug)?, generics)?;
-                    Ok(IrType::Dict(Box::new(k), Box::new(v)))
+                    // A `Dict` VALUE is a storage position (Arc carrier); the KEY
+                    // must stay `Ord`/`Hash`, so it is left unflipped.
+                    Ok(IrType::Dict(
+                        Box::new(k),
+                        Box::new(flip_fun_in_storage_element(v)),
+                    ))
                 }
                 "Set" if args.len() == 1 => {
                     let elem =
@@ -11305,9 +11434,14 @@ impl<'a> Lowerer<'a> {
             // A tuple type in an annotation (`fst : (a, b) -> a`). Lower element-
             // wise; the invariant (arity ≥ 2) is upheld by the parser.
             canon::Type::Tuple(elems) => {
+                // A tuple COMPONENT is a storage position: flip a function there
+                // to the `Arc` carrier, matching the strict/JSON type paths and
+                // the value side.
                 let mut ir_elems = Vec::with_capacity(elems.len());
                 for e in elems {
-                    ir_elems.push(self.ir_type_from_canon(e, generics)?);
+                    ir_elems.push(flip_fun_in_storage_element(
+                        self.ir_type_from_canon(e, generics)?,
+                    ));
                 }
                 Ok(IrType::Tuple(ir_elems))
             }
@@ -11766,9 +11900,24 @@ impl<'a> Lowerer<'a> {
     /// element-wise.
     fn lower_list(&self, elems: &[canon::Expr], span: Span) -> DResult<Expr> {
         let elem = self.list_elem_ir(span)?;
+        // When the element carrier is `SharedFun` (a stored `List` of functions),
+        // each item VALUE must construct with `Arc::new` so it agrees with the
+        // element type — the literal-side companion of the type-side element flip
+        // ([`flip_fun_in_storage_element`]). `promote_ctor_arg_fn_carrier` handles
+        // both the literal leaves (inline lambda / top-level-fn reference) and a
+        // non-literal fn leaf (eta-wrapped into an `Arc` `SharedLambda`); a
+        // non-function item is returned unchanged.
+        let carries_fn = matches!(elem, IrType::SharedFun(_, _));
         let items = elems
             .iter()
-            .map(|e| self.lower_expr(e))
+            .map(|e| {
+                let lowered = self.lower_expr(e)?;
+                if carries_fn {
+                    self.promote_ctor_arg_fn_carrier(e, lowered)
+                } else {
+                    Ok(lowered)
+                }
+            })
             .collect::<DResult<Vec<_>>>()?;
         Ok(Expr::List { elem, items })
     }
@@ -11789,7 +11938,14 @@ impl<'a> Lowerer<'a> {
                 // Use the JSON-aware path: a `Value = any = Ty::Var` element
                 // type (e.g. `List (String, Value)` passed to `JsonEnc.object`)
                 // maps to `IrType::Json` rather than failing with Polymorphism.
-                self.ir_type_from_ty_json(args.first().ok_or_else(list_arg_bug)?, span)
+                // A `List` element is a storage position, so a bare function
+                // element is carried on the `Arc` `SharedFun` carrier — matching
+                // the annotated/strict `List` arms so the literal's element type
+                // agrees with the struct/param/return element type.
+                Ok(flip_fun_in_storage_element(self.ir_type_from_ty_json(
+                    args.first().ok_or_else(list_arg_bug)?,
+                    span,
+                )?))
             }
             _other => Err(bug(
                 "ipe_lower::list_elem_ir",
@@ -11966,7 +12122,7 @@ impl<'a> Lowerer<'a> {
                 "List" if args.len() == 1 => {
                     let elem =
                         self.ir_type_from_ty(args.first().ok_or_else(list_arg_bug)?, span)?;
-                    Ok(IrType::List(Box::new(elem)))
+                    Ok(IrType::List(Box::new(flip_fun_in_storage_element(elem))))
                 }
                 "Dict" if args.len() == 2 => {
                     let k = self.ir_type_from_ty(args.first().ok_or_else(dict_arg_bug)?, span)?;
@@ -11980,7 +12136,14 @@ impl<'a> Lowerer<'a> {
                     if matches!(k, IrType::Float) {
                         return Err(unsupported(span, Feature::FloatKeyedCollection));
                     }
-                    Ok(IrType::Dict(Box::new(k), Box::new(v)))
+                    // A `Dict` VALUE is a storage position: a function value is
+                    // carried on `Arc`. The KEY is not — a key must be `Ord`/`Hash`,
+                    // which a function is not, so a fn-embedding key never reaches a
+                    // sound program and is left on its own carrier for the gate.
+                    Ok(IrType::Dict(
+                        Box::new(k),
+                        Box::new(flip_fun_in_storage_element(v)),
+                    ))
                 }
                 "Set" if args.len() == 1 => {
                     let elem = self.ir_type_from_ty(args.first().ok_or_else(set_arg_bug)?, span)?;
@@ -12352,9 +12515,12 @@ impl<'a> Lowerer<'a> {
             // A tuple in value position (e.g. a binding whose body is a tuple
             // literal): lower element-wise to the IR tuple type.
             Ty::Tuple(elems) => {
+                // A tuple COMPONENT is a storage position: a function there is
+                // carried on `Arc` so the tuple is `Clone`, exactly as a record
+                // field or a `List` element is.
                 let lowered = elems
                     .iter()
-                    .map(|e| self.ir_type_from_ty(e, span))
+                    .map(|e| Ok(flip_fun_in_storage_element(self.ir_type_from_ty(e, span)?)))
                     .collect::<DResult<Vec<_>>>()?;
                 Ok(IrType::Tuple(lowered))
             }
@@ -12582,9 +12748,16 @@ impl<'a> Lowerer<'a> {
             // Recursively handle compound types so embedded `Ty::Var`s also
             // map to `IrType::Json`.
             Ty::Tuple(elems) => {
+                // Element/component storage positions carry a function on `Arc`,
+                // mirroring the strict [`ir_type_from_ty`] Tuple arm so the JSON
+                // and strict paths agree on the carrier.
                 let lowered = elems
                     .iter()
-                    .map(|e| self.ir_type_from_ty_json(e, span))
+                    .map(|e| {
+                        Ok(flip_fun_in_storage_element(
+                            self.ir_type_from_ty_json(e, span)?,
+                        ))
+                    })
                     .collect::<DResult<Vec<_>>>()?;
                 Ok(IrType::Tuple(lowered))
             }
@@ -12637,7 +12810,7 @@ impl<'a> Lowerer<'a> {
                     "List" if args.len() == 1 => {
                         let elem = self
                             .ir_type_from_ty_json(args.first().ok_or_else(list_arg_bug)?, span)?;
-                        Ok(IrType::List(Box::new(elem)))
+                        Ok(IrType::List(Box::new(flip_fun_in_storage_element(elem))))
                     }
                     "Task" if args.len() == 1 => {
                         let inner = self
@@ -12684,7 +12857,10 @@ impl<'a> Lowerer<'a> {
                         if matches!(k, IrType::Float) {
                             return Err(unsupported(span, Feature::FloatKeyedCollection));
                         }
-                        Ok(IrType::Dict(Box::new(k), Box::new(v)))
+                        Ok(IrType::Dict(
+                            Box::new(k),
+                            Box::new(flip_fun_in_storage_element(v)),
+                        ))
                     }
                     "Decoder" if args.len() == 1 => {
                         let inner = self.ir_type_from_ty_json(
@@ -12838,6 +13014,51 @@ impl<'a> Lowerer<'a> {
             }
             _ => return None,
         })
+    }
+
+    /// Element-capability soundness gate: reject a `List`/`Dict`/`Set` kernel
+    /// that cannot represent a function-carrying element when any of its
+    /// collection arguments carries one.
+    ///
+    /// A `List` element / `Dict`-value function is a storable value on the
+    /// `Clone` `Arc<dyn Fn>` carrier, so the region gate admits it — but that
+    /// carrier is neither `PartialEq` nor `Ord`, and the lowerer only aligns the
+    /// mapper-closure parameter to it for the kernels whose frontier it closes.
+    /// So a kernel that compares/orders its element, OR a higher-order kernel
+    /// whose mapper frontier is still open, would emit Rust `cargo` rejects. The
+    /// registry's [`StdlibKernel::element_capability`] records which kernels
+    /// forbid a function element and why (equality, ordering, or open frontier) —
+    /// an explicit exhaustive SSOT fact, coherence-tested; this gate consults it
+    /// and fails closed with IPE-L0134 at `ipe` time. A kernel whose element
+    /// capability is `CloneOk` (pure structural, or a frontier-closed
+    /// map/fold/filter) is sound over a function element and left through. A
+    /// non-collection kernel carries no element capability and is a no-op here.
+    fn reject_fn_element_for_capability_kernel(
+        &self,
+        resolved: &Callee,
+        args: &[canon::Expr],
+    ) -> DResult<()> {
+        let Callee::Kernel(k) = resolved else {
+            return Ok(());
+        };
+        let Some(cap) = k.element_capability() else {
+            return Ok(());
+        };
+        if !cap.forbids_function_element() {
+            return Ok(());
+        }
+        // A collection argument whose STORABLE element embeds a function is the
+        // unsound case. Check every argument's solved region type — the element
+        // that reaches the comparison is one of the args' collections (the
+        // `List`/`Dict` the kernel folds/searches).
+        for arg in args {
+            if let Some(ty) = self.region_ty(arg.span)
+                && collection_storable_element_carries_function(self.interner, ty)
+            {
+                return Err(unsupported(arg.span, Feature::FunctionElementEquality));
+            }
+        }
+        Ok(())
     }
 
     /// Soundness gate (region-based): reject a function value reaching a
@@ -13239,9 +13460,18 @@ impl<'a> Lowerer<'a> {
             canon::Expr_::Tuple(elems) => {
                 // A tuple value lowers element-wise to the IR tuple constructor.
                 // The parser guarantees arity ≥ 2, which is the IR invariant.
+                // A component whose solved type is a direct arrow is a stored
+                // function: promote its VALUE to the `Arc` carrier so it agrees
+                // with the `SharedFun` component type ([`flip_fun_in_storage_element`]).
+                // `promote_ctor_arg_fn_carrier` self-gates on the component's
+                // region type being a `Ty::Fun`, so a non-function component is
+                // returned unchanged.
                 let elems = elems
                     .iter()
-                    .map(|e| self.lower_expr(e))
+                    .map(|e| {
+                        let lowered = self.lower_expr(e)?;
+                        self.promote_ctor_arg_fn_carrier(e, lowered)
+                    })
                     .collect::<DResult<Vec<_>>>()?;
                 Ok(Expr::Tuple(elems))
             }
@@ -14317,6 +14547,109 @@ impl<'a> Lowerer<'a> {
         }
     }
 
+    /// Re-type a `List` higher-order kernel's mapper closure ELEMENT parameter
+    /// from the direct `Fun` carrier ([`IrType::Fun`], `Box`) to the storage
+    /// `SharedFun` carrier ([`IrType::SharedFun`], `Arc`) when the collection it
+    /// operates over is a stored `List` of functions.
+    ///
+    /// A `List (Int -> Int)` element is carried on `Arc<dyn Fn>` (the
+    /// element-carrier flip). When such a list flows into `List.map`/`foldl`/… the
+    /// runtime kernel monomorphises its element type `T0` to `Arc<dyn Fn>`, so the
+    /// mapper closure's element parameter must be `Arc<dyn Fn>` too — but
+    /// [`Self::lower_lambda`] stamps a function-typed parameter as the direct
+    /// `Fun` (`Box`) carrier, which is the `Arc`-vs-`Box` frontier
+    /// (design §8 risk 1). Aligning the closure's element parameter carrier with
+    /// the list's element carrier here closes the frontier at the producer's own
+    /// mapper, so no read-out adapter is needed.
+    ///
+    /// The mapper is the FIRST argument and the list is the LAST; the element
+    /// parameter is closure-param index 0 for the whole family except
+    /// `indexedMap`, whose element is param index 1 (the leading `Int` index is
+    /// the first). Only fires when the list arg's solved element is a function;
+    /// otherwise a no-op, so a non-function-element list is byte-identical.
+    fn retype_collection_element_param(
+        &self,
+        resolved: &Callee,
+        canon_args: &[canon::Expr],
+        lowered_args: &mut [Expr],
+    ) {
+        let elem_param_index = match resolved {
+            Callee::Kernel(
+                KernelFn::ListMap
+                | KernelFn::ListFilter
+                | KernelFn::ListFoldl
+                | KernelFn::ListFoldr
+                | KernelFn::ListConcatMap
+                | KernelFn::ListFilterMap
+                | KernelFn::ListAny
+                | KernelFn::ListAll
+                | KernelFn::ListFind,
+            ) => 0,
+            Callee::Kernel(KernelFn::ListIndexedMap) => 1,
+            _ => return,
+        };
+        // The list is the last argument; consult its solved element carrier.
+        let Some(list_arg) = canon_args.last() else {
+            return;
+        };
+        let list_stores_fn = self
+            .region_ty(list_arg.span)
+            .is_some_and(|ty| collection_storable_element_carries_function(self.interner, ty));
+        if !list_stores_fn {
+            return;
+        }
+        if let Some(Expr::Lambda { params, .. } | Expr::SharedLambda { params, .. }) =
+            lowered_args.first_mut()
+            && let Some((_, ty)) = params.get_mut(elem_param_index)
+            && let IrType::Fun(fn_params, ret) = ty
+        {
+            *ty = IrType::SharedFun(fn_params.clone(), ret.clone());
+        }
+    }
+
+    /// Re-carrier the function-typed VALUE argument of a `Dict` constructor
+    /// (`Dict.singleton` / `Dict.insert`) to the `Arc<dyn Fn>` storage carrier,
+    /// the value-side companion of the `Dict`-value type-side flip
+    /// ([`flip_fun_in_storage_element`]).
+    ///
+    /// A `Dict String (Int -> Int)` stores its value on `Arc<dyn Fn>`. Built from
+    /// a `Dict.fromList` literal, each value is promoted by the list/tuple element
+    /// path ([`Self::promote_ctor_arg_fn_carrier`] via [`Self::lower_list`]); but
+    /// `Dict.singleton k v` / `Dict.insert k v d` pass the value as a DIRECT
+    /// kernel argument, which [`Self::lower_expr`] stamps on the `Box` carrier —
+    /// the `Arc`-vs-`Box` frontier (`E0308`) at the emitted constructor call. The
+    /// runtime `dict_singleton`/`dict_insert` place no `Clone` bound on the value,
+    /// so an `Arc` value is sound; aligning the argument carrier here closes the
+    /// frontier with no runtime change, matching the `fromList` literal path. The
+    /// value is argument index 1 for both. Fires only when the argument's solved
+    /// type is a direct function arrow; every other value is left unchanged, so a
+    /// non-function `Dict` is byte-identical.
+    fn promote_dict_ctor_value_carrier(
+        &self,
+        resolved: &Callee,
+        canon_args: &[canon::Expr],
+        lowered_args: &mut [Expr],
+    ) -> DResult<()> {
+        if !matches!(
+            resolved,
+            Callee::Kernel(KernelFn::DictSingleton | KernelFn::DictInsert)
+        ) {
+            return Ok(());
+        }
+        let (Some(value_arg), Some(lowered_value)) = (canon_args.get(1), lowered_args.get_mut(1))
+        else {
+            return Ok(());
+        };
+        let promoted = self
+            .promote_ctor_arg_fn_carrier(value_arg, std::mem::replace(lowered_value, Expr::Unit))?;
+        *lowered_value = promoted;
+        Ok(())
+    }
+
+    // A single funnel that lowers ctor / kernel / top-level / value-callee
+    // applications, each arm reshaping arity + carriers; splitting would scatter
+    // the shared arg-lowering and gate sequence across helpers without clarity.
+    #[allow(clippy::too_many_lines)]
     fn lower_call_uniform(
         &self,
         callee: &canon::Expr,
@@ -14364,15 +14697,15 @@ impl<'a> Lowerer<'a> {
                             on_form: OnFormKind::NotForm,
                         });
                     }
-                    // Carrier normalization (value side, Phase 2 enum payloads):
-                    // a fn-valued argument to a USER-enum constructor fills a
+                    // Carrier normalization (value side, USER-enum payloads): a
+                    // fn-valued argument to a USER-enum constructor fills a
                     // payload field the type-side flip
                     // ([`normalize_enum_payload_fun_carrier`]) stored on the
                     // `Arc<dyn Fn>` carrier, so the argument constructs with
-                    // `Arc::new` to match. A built-in `Ok`/`Just`/`Err`/`Nothing`
-                    // routes to the runtime `IpeResult`/`IpeMaybe` enum, whose
-                    // generic payload is inferred from the argument (a `Box<dyn
-                    // Fn>` per `emit_lambda`'s trait-object pin) — left on the
+                    // `Arc::new` to match. A built-in `Ok`/`Just`/`Err` routes to
+                    // the runtime `IpeResult`/`IpeMaybe` enum whose fn payload is
+                    // consumed by the `andMap`/`map` kernels as an OWNED `FnOnce`
+                    // (`Box`), never a shared `Arc` — so its payload stays on the
                     // `Box` carrier, unchanged.
                     let args = if self.is_builtin_runtime_ctor(*name) {
                         lowered_args
@@ -14421,6 +14754,11 @@ impl<'a> Lowerer<'a> {
                     Some(c) => c,
                     None => self.lower_callee(callee)?,
                 };
+                // Reject a `List`/`Dict`/`Set` kernel that cannot represent a
+                // function-carrying element — an equality/ordering compare or an
+                // open mapper frontier (fail-closed IPE-L0134 at `ipe` time; see
+                // the method doc).
+                self.reject_fn_element_for_capability_kernel(&resolved, args)?;
                 let arity = self.callee_arity(&resolved)?;
                 match args.len().cmp(&arity) {
                     std::cmp::Ordering::Equal => {
@@ -14441,6 +14779,13 @@ impl<'a> Lowerer<'a> {
                         let mut lowered_args = lowered_args;
                         Self::retype_result_map_error_handler(&resolved, &mut lowered_args);
                         Self::retype_decoder_payload_mapper(&resolved, &mut lowered_args);
+                        // Close the `Arc`-vs-`Box` frontier at a `List` HOF
+                        // mapper over a stored list of functions (see method doc).
+                        self.retype_collection_element_param(&resolved, args, &mut lowered_args);
+                        // Close the same frontier at a `Dict.singleton`/`insert`
+                        // whose function VALUE argument is stored on the `Arc`
+                        // carrier (see method doc).
+                        self.promote_dict_ctor_value_carrier(&resolved, args, &mut lowered_args)?;
                         // Type-directed `onSubmit` handler classification. The
                         // decision (decode-the-form vs dispatch-a-fixed-value)
                         // is a property of the handler's SOLVED type — an arrow
@@ -17017,7 +17362,8 @@ impl<'a> Lowerer<'a> {
 
     /// Is `name` a built-in `Maybe` / `Result` constructor (`Just` / `Nothing` /
     /// `Ok` / `Err`)? These route to the runtime `IpeMaybe` / `IpeResult` enums,
-    /// whose fn payloads stay on the `Box` carrier — so the value-side carrier
+    /// whose fn payloads are consumed by the `andMap` / `map` kernels as an owned
+    /// `FnOnce` (`Box`) and so stay on the `Box` carrier — the value-side carrier
     /// promotion for user-enum payloads must skip them.
     fn is_builtin_runtime_ctor(&self, name: Symbol) -> bool {
         name == self.builtins.just

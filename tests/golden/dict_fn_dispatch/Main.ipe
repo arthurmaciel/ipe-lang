@@ -1,0 +1,35 @@
+module Main exposing (main)
+
+-- A `Dict String (Int -> Int)` dispatch table: the VALUE position stores a
+-- function on the `Arc<dyn Fn>` carrier, so the dict is `Clone` and a looked-up
+-- function can be projected out and called. The KEY stays a comparable `String`,
+-- so `Dict.get` / `Dict.member` remain sound. Exercises the Dict-value element
+-- carrier flip and the storable-value path.
+
+import Ipe.Io as Io
+import Ipe.Dict as Dict
+import Ipe.Maybe
+import Ipe.String
+
+
+table : Dict String (Int -> Int)
+table =
+    Dict.fromList
+        [ ( "inc", \n -> n + 1 )
+        , ( "double", \n -> n * 2 )
+        ]
+
+
+-- Look up a function by name and apply it, defaulting to identity when absent.
+applyNamed : String -> Int -> Int
+applyNamed name x =
+    case Dict.get name table of
+        Just f ->
+            f x
+
+        Nothing ->
+            x
+
+
+main =
+    Io.println (String.fromInt (applyNamed "double" (applyNamed "inc" 20)))

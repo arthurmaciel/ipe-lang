@@ -15,16 +15,16 @@ use crate::code::{
     IPE_L0105, IPE_L0106, IPE_L0107, IPE_L0108, IPE_L0110, IPE_L0111, IPE_L0112, IPE_L0113,
     IPE_L0114, IPE_L0115, IPE_L0116, IPE_L0117, IPE_L0118, IPE_L0119, IPE_L0120, IPE_L0121,
     IPE_L0122, IPE_L0123, IPE_L0124, IPE_L0125, IPE_L0126, IPE_L0127, IPE_L0128, IPE_L0129,
-    IPE_L0130, IPE_L0131, IPE_L0132, IPE_L0133, IPE_L0140, IPE_L0200, IPE_N0001, IPE_N0002,
-    IPE_N0003, IPE_N0004, IPE_N0005, IPE_N0010, IPE_N0011, IPE_N0012, IPE_N0013, IPE_N0020,
-    IPE_N0021, IPE_N0022, IPE_N0023, IPE_N0024, IPE_N0025, IPE_N0026, IPE_N0027, IPE_N0028,
-    IPE_N0029, IPE_N0030, IPE_N0031, IPE_N0032, IPE_N0033, IPE_N0034, IPE_N0035, IPE_N0036,
-    IPE_N0037, IPE_N0038, IPE_N0039, IPE_N0040, IPE_P0001, IPE_P0002, IPE_P0003, IPE_P0010,
-    IPE_P0011, IPE_P0012, IPE_P0013, IPE_P0014, IPE_P0015, IPE_P0016, IPE_P0017, IPE_P0018,
-    IPE_P0020, IPE_P0021, IPE_P0030, IPE_P0031, IPE_P0040, IPE_P0041, IPE_P0050, IPE_P0060,
-    IPE_P0061, IPE_P0062, IPE_P0063, IPE_T0001, IPE_T0002, IPE_T0003, IPE_T0004, IPE_T0010,
-    IPE_T0011, IPE_T0012, IPE_T0013, IPE_T0014, IPE_T0015, IPE_T0016, IPE_T0017, IPE_T0018,
-    IPE_T0019, IPE_T0020, Severity,
+    IPE_L0130, IPE_L0131, IPE_L0132, IPE_L0133, IPE_L0134, IPE_L0140, IPE_L0200, IPE_N0001,
+    IPE_N0002, IPE_N0003, IPE_N0004, IPE_N0005, IPE_N0010, IPE_N0011, IPE_N0012, IPE_N0013,
+    IPE_N0020, IPE_N0021, IPE_N0022, IPE_N0023, IPE_N0024, IPE_N0025, IPE_N0026, IPE_N0027,
+    IPE_N0028, IPE_N0029, IPE_N0030, IPE_N0031, IPE_N0032, IPE_N0033, IPE_N0034, IPE_N0035,
+    IPE_N0036, IPE_N0037, IPE_N0038, IPE_N0039, IPE_N0040, IPE_P0001, IPE_P0002, IPE_P0003,
+    IPE_P0010, IPE_P0011, IPE_P0012, IPE_P0013, IPE_P0014, IPE_P0015, IPE_P0016, IPE_P0017,
+    IPE_P0018, IPE_P0020, IPE_P0021, IPE_P0030, IPE_P0031, IPE_P0040, IPE_P0041, IPE_P0050,
+    IPE_P0060, IPE_P0061, IPE_P0062, IPE_P0063, IPE_T0001, IPE_T0002, IPE_T0003, IPE_T0004,
+    IPE_T0010, IPE_T0011, IPE_T0012, IPE_T0013, IPE_T0014, IPE_T0015, IPE_T0016, IPE_T0017,
+    IPE_T0018, IPE_T0019, IPE_T0020, Severity,
 };
 use crate::span::Span;
 
@@ -913,6 +913,21 @@ pub enum Feature {
     /// ever reaches codegen. A `CustomElement`-typed binding is accepted at the
     /// type level but cannot be built until the transport ships. [IPE-L0133]
     CustomElementTransport,
+    /// A collection element that embeds a function reached a collection kernel
+    /// that cannot represent it: an equality-/ordering-requiring kernel
+    /// (`List.member` / `List.sort` / `List.unique` / `List.maximum` /
+    /// `List.minimum`), or a higher-order kernel whose mapper/comparator frontier
+    /// is not yet function-aware (`List.partition` / `List.map2`…`5` / `Dict.map`
+    /// / `Dict.foldl`/`foldr` / `Dict.filter` / `Dict.partition`). A stored
+    /// function value is carried on the `Clone` `Arc<dyn Fn>` carrier, so it CAN
+    /// live in a `List`/`Dict` value and flow through the frontier-closed
+    /// `List.map` family; but the equality/ordering kernels have no comparison for
+    /// it, and the open-frontier kernels would pass it to a `Box`-carrier closure
+    /// parameter (`Arc`-vs-`Box` mismatch). Rejected here at lowering — the
+    /// element capability audit (`StdlibKernel::element_capability`) forbids these
+    /// kernels over a function element — rather than emitting Rust `cargo`
+    /// rejects. [IPE-L0134]
+    FunctionElementEquality,
 }
 
 /// The app shape whose entry point rejected an inadmissible Model. Drives the
@@ -1381,6 +1396,7 @@ const fn feature_code(f: Feature) -> Code {
         Feature::ForeignHandleReuse => IPE_L0130,
         Feature::RowPolyRecordAnnotation => IPE_L0131,
         Feature::CustomElementTransport => IPE_L0133,
+        Feature::FunctionElementEquality => IPE_L0134,
     }
 }
 

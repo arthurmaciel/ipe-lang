@@ -10,8 +10,8 @@ use std::collections::BTreeMap;
 
 use ipe_canon::ast as canon;
 use ipe_diagnostics::{
-    Code, DResult, Diagnostic, Feature, IPE_L0101, IPE_L0102, IPE_L0107, IPE_L0108, IPE_L0114,
-    IPE_L0119, Located, LowerError, Span,
+    Code, DResult, Diagnostic, Feature, IPE_L0101, IPE_L0102, IPE_L0107, IPE_L0108, IPE_L0119,
+    Located, LowerError, Span,
 };
 use ipe_intern::{Interner, Symbol};
 use ipe_ir::{BoundSet, Callee, Expr, FuncId, IrType, KernelFn};
@@ -1208,12 +1208,12 @@ fn function_inside_maybe_via_type_variable_is_accepted() -> DResult<()> {
 }
 
 #[test]
-fn function_inside_list_via_type_variable_is_still_unsupported() -> DResult<()> {
-    // #90's narrowing exempts ENUM-LIKE heads (`Maybe`/`Result`/user unions),
-    // not COLLECTION heads (`List`/`Dict`/`Set`) — a `List (a -> b)` renders
-    // to `Vec<Box<dyn Fn>>`, and collection kernels (e.g. `DictGet`)
-    // blanket-`.clone()` their element, which `Box<dyn Fn>` cannot satisfy.
-    // Must stay IPE-L0114 (no regression from the #90 lift).
+fn function_inside_list_via_type_variable_lowers() -> DResult<()> {
+    // A `List (a -> b)` stores its function element on the `Clone` `Arc<dyn Fn>`
+    // carrier (`Vec<Arc<dyn Fn>>` is `Clone`), so a function element is a storable
+    // value, not a non-derivable carrier — it lowers cleanly. An equality/ordering
+    // kernel over such a list is separately rejected (the element-capability gate,
+    // IPE-L0134); the bare storage lowering here must succeed.
     let mut i = Interner::new();
     let boxed = i.intern("boxed")?;
     let r = i.intern("r")?;
@@ -1235,8 +1235,8 @@ fn function_inside_list_via_type_variable_is_still_unsupported() -> DResult<()> 
         name,
         args: Vec::new(),
     };
-    // region type: `List (Int -> Int)` — a function inside the COLLECTION
-    // built-in `List`.
+    // region type: `List (Int -> Int)` — a function element of the COLLECTION
+    // built-in `List`, carried on the `Arc<dyn Fn>` `SharedFun` carrier.
     let mut regions = BTreeMap::new();
     regions.insert(
         body_span,
@@ -1246,11 +1246,12 @@ fn function_inside_list_via_type_variable_is_still_unsupported() -> DResult<()> 
             args: vec![Ty::Fun(Box::new(con(int_name)), Box::new(con(int_name)))],
         },
     );
-    assert_unsupported(
-        run_with_regions(Vec::new(), vec![def], BTreeMap::new(), regions, &mut i),
-        Feature::CtorPayloadFunction,
-        IPE_L0114,
-        body_span,
+    let res = run_with_regions(Vec::new(), vec![def], BTreeMap::new(), regions, &mut i);
+    assert!(
+        res.is_ok(),
+        "a function element of a `List` is storable on the `Arc` carrier and must \
+         lower cleanly: {:?}",
+        res.err()
     );
     Ok(())
 }

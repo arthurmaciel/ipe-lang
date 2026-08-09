@@ -372,6 +372,11 @@ code! {
     /// a `CustomElement` boundary value reached lowering — its typed JS-widget
     /// transport (generated glue + DOM-patch node) is not emittable yet
     IPE_L0133 = "IPE-L0133", "a CustomElement boundary value is not emittable yet (typed transport not shipped)", "IPE-L0133";
+    /// an equality/ordering collection op over a function-carrying element.
+    ///
+    /// `List.member`/`sort`/`unique`/… need `==`/`Ord` on the element; a stored
+    /// function is `Clone` but not comparable.
+    IPE_L0134 = "IPE-L0134", "an equality- or ordering-requiring collection operation over a function-carrying element is not sound (a function is not comparable)", "IPE-L0134";
     /// a `Debug.*` development-only escape hatch reached a production build
     /// (`ipe build --optimize`)
     IPE_L0140 = "IPE-L0140", "a Debug.* escape hatch was used in a production build", "IPE-L0140";

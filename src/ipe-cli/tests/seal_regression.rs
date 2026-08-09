@@ -315,3 +315,53 @@ fn qualified_dep_alias_expands_without_exposing() {
     ];
     assert_accepted_project("qualified_dep_alias", files, "10\n");
 }
+
+// ===========================================================================
+// A `Dict` VALUE stored as a function is carried on the `Arc<dyn Fn>` storage
+// carrier. Built through the `Dict.singleton` / `Dict.insert` CONSTRUCTORS (a
+// direct value argument, not a `fromList` literal), the value must be promoted
+// to that carrier so the emitted construction agrees with the field type —
+// otherwise ipe-accepts then `cargo` rejects (`Arc`-vs-`Box` `E0308`), a SEAL
+// break. The looked-up function is projected out and called.
+// ===========================================================================
+#[test]
+fn dict_singleton_function_value_builds_and_runs() {
+    let src = "module Main exposing (main)\n\
+        import Ipe.Io as Io\n\
+        import Ipe.Dict as Dict\n\
+        import Ipe.String\n\
+        handlers : Dict String (Int -> Int)\n\
+        handlers =\n\
+        \x20   Dict.singleton \"inc\" (\\n -> n + 1)\n\
+        apply : String -> Int -> Int\n\
+        apply name x =\n\
+        \x20   case Dict.get name handlers of\n\
+        \x20       Just f ->\n\
+        \x20           f x\n\
+        \n\
+        \x20       Nothing ->\n\
+        \x20           x\n\
+        main = Io.println (String.fromInt (apply \"inc\" 41))\n";
+    assert_accepted("dict_singleton_fn_value", src, "42\n");
+}
+
+#[test]
+fn dict_insert_function_value_builds_and_runs() {
+    let src = "module Main exposing (main)\n\
+        import Ipe.Io as Io\n\
+        import Ipe.Dict as Dict\n\
+        import Ipe.String\n\
+        handlers : Dict String (Int -> Int)\n\
+        handlers =\n\
+        \x20   Dict.insert \"double\" (\\n -> n * 2) (Dict.singleton \"inc\" (\\n -> n + 1))\n\
+        apply : String -> Int -> Int\n\
+        apply name x =\n\
+        \x20   case Dict.get name handlers of\n\
+        \x20       Just f ->\n\
+        \x20           f x\n\
+        \n\
+        \x20       Nothing ->\n\
+        \x20           x\n\
+        main = Io.println (String.fromInt (apply \"double\" (apply \"inc\" 20)))\n";
+    assert_accepted("dict_insert_fn_value", src, "42\n");
+}
