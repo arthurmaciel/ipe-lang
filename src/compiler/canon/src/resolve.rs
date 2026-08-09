@@ -2951,6 +2951,43 @@ fn inject_ctors_for_type(
 /// Only names declared in THIS module are considered as exportable; re-exporting
 /// an imported name is not yet supported (and would require a separate pass after
 /// imports are resolved, which the current design defers to a later milestone).
+/// The `type_home_map` home a compiled-source stdlib module records for a
+/// reserved builtin TYPE it re-exports (`Ipe.Ui exposing (Attribute)`,
+/// `Ipe.Html exposing (Attribute)`, `Ipe.Path exposing (Path)`).
+///
+/// A HOME-SENSITIVE builtin (`Attribute` / `Event`) has TWO distinct carriers:
+/// the Html one (`ipe_runtime::html::Attribute`, home `["Html"]`) and the Ui one
+/// (`ipe_runtime::ui::element::Attribute`, the empty-home sentinel the lowerer's
+/// `is_html` check reads as `UiAttribute`). The EXPORTING module picks the
+/// carrier: an Html-family module (`Ipe.Html`, `Ipe.Html.Attributes`) re-exports
+/// the Html one under `["Html"]`; the Ui module (`Ipe.Ui`) re-exports the Ui one
+/// under the empty home. Homing the Ui carrier to `["Html"]` would lower every
+/// `Ipe.Ui.Grid`/`Transition`/`Animation` builder's `Attribute` return type to
+/// `html::Attribute` while its `Ui.gridTracks`/`Ui.transition`/`Ui.animate` body
+/// produces `ui::Attribute` — an exit-0-then-cargo-fail E0308. `["Html"]` is also
+/// the home the HM constrainer uses for the Html carrier, so the emitted type
+/// unifies with `Html.node`'s parameter rather than minting a nominally-distinct
+/// `Attribute`. A home-INsensitive builtin (`Path`, …) keeps the exporting
+/// module's own path.
+fn reexported_builtin_type_home(
+    resolved: &str,
+    home: &[Symbol],
+    interner: &Interner,
+) -> Vec<Symbol> {
+    if !HOME_SENSITIVE_BUILTIN_TYPES.contains(&resolved) {
+        return home.to_owned();
+    }
+    let module_is_html = home.iter().any(|s| interner.resolve(*s) == Some("Html"));
+    if module_is_html {
+        interner
+            .lookup("Html")
+            .map_or_else(|| home.to_owned(), |html| vec![html])
+    } else {
+        // Ui carrier — the empty-home sentinel that lowers to `UiAttribute`.
+        Vec::new()
+    }
+}
+
 fn build_module_exports(
     home: &[Symbol],
     m: &src::Module,
@@ -3029,20 +3066,8 @@ fn build_module_exports(
                             // (Attribute)`. Record it so an importer's `exposing
                             // (T)` resolves instead of failing `NameNotExposed`; no
                             // constructors (a builtin carrier has none at source).
-                            //
-                            // A HOME-SENSITIVE builtin (`Attribute` / `Event`) is
-                            // recorded under `["Html"]`, the home the HM constrainer
-                            // and the lowerer's `is_html` check both expect — the
-                            // full module path would mint a nominally-distinct
-                            // `Attribute` that fails to unify with `Html.node`'s
-                            // parameter (an exit-0-then-cargo-fail E0308).
-                            let builtin_home = if HOME_SENSITIVE_BUILTIN_TYPES.contains(&resolved) {
-                                interner
-                                    .lookup("Html")
-                                    .map_or_else(|| home.to_owned(), |html| vec![html])
-                            } else {
-                                home.to_owned()
-                            };
+                            let builtin_home =
+                                reexported_builtin_type_home(resolved, home, interner);
                             exports.types.insert(*type_name, builtin_home);
                         } else if own_alias_names.contains(type_name) {
                             for a in &m.aliases {
