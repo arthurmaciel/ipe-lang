@@ -407,6 +407,12 @@ pub fn ipe_start() {
 /// convention name the record-alias emitter never produces — is what makes the
 /// emitted crate compile (issue #224).
 fn wasm_hydrate_entry(hydration_state_ty: &str) -> String {
+    // The app's `view : Model -> Element Msg` is adapted to the `Html` the wasm
+    // sink mounts through the SAME `ui_layout` wrap the regular Web entry uses —
+    // `wasm_adopt_app`'s `FView` bound is `Fn(Model) -> Html<Msg>`, and a raw
+    // `main_view` returns `Element<Msg>`. Sharing `wrap_view` keeps the hydrate
+    // takeover and the clean-init boot rendering one identical view.
+    let wrapped_view = crate::emit_web::wrap_view("crate::main_view");
     format!(
         "\
 #[wasm_bindgen::prelude::wasm_bindgen]
@@ -419,7 +425,7 @@ pub fn hydrate(model_json: &str) {{
             >(
                 model,
                 crate::main_update,
-                crate::main_view,
+                {wrapped_view},
                 crate::main_subscriptions,
             ));
         }}

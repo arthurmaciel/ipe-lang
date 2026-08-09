@@ -29,3 +29,11 @@ pub use ipe_kernels::Target;
 /// The security-capability vocabulary — re-exported so lowering/CLI consumers
 /// reach it through the IR crate like `KernelFn`.
 pub use ipe_kernels::Capability;
+
+/// The user function name of the wasm-hydration island projection.
+///
+/// It is invoked only by generated `hydrate` glue, never from user code, so it
+/// is an externally-invoked export root the frontend must keep past
+/// dead-function elimination and the backend resolves the island type from.
+/// Both sites share this one name so they cannot drift.
+pub const HYDRATION_PROJECTION_NAME: &str = "fromHydrationState";
