@@ -10,6 +10,27 @@ Entries below the header are maintained by
 section is generated from Conventional Commit messages and prepended when the
 standing release pull request is merged.
 
+## [0.1.42](https://github.com/arthurmaciel/ipe-lang/compare/ipe-v0.1.41...ipe-v0.1.42) (2026-08-09)
+
+
+### Features
+
+* **lower:** FCF Approach A slice 3 — collection-element Arc carrier (frontier total, fail-closed) ([#776](https://github.com/arthurmaciel/ipe-lang/issues/776)) ([83a2ab6](https://github.com/arthurmaciel/ipe-lang/commit/83a2ab6c84f304ec75273417117f15b3222866cc))
+
+
+### Bug Fixes
+
+* **backend:** normalize fn record/enum-literal fields onto the SharedFun Arc carrier ([#789](https://github.com/arthurmaciel/ipe-lang/issues/789)) ([#792](https://github.com/arthurmaciel/ipe-lang/issues/792)) ([1697e36](https://github.com/arthurmaciel/ipe-lang/commit/1697e362cc784afd97bbc050ca08ac63e5f3cda4))
+* **canon:** home Ipe.Ui's re-exported Attribute to the Ui carrier so stdui animation/grid/transition seals build ([#777](https://github.com/arthurmaciel/ipe-lang/issues/777)) ([#784](https://github.com/arthurmaciel/ipe-lang/issues/784)) ([9ba6609](https://github.com/arthurmaciel/ipe-lang/commit/9ba6609b113faaf62aecb4840c3e6f4d45bec131))
+* **canon:** honor explicit exposing(Type(..)) for qualified-home union constructors ([#653](https://github.com/arthurmaciel/ipe-lang/issues/653) follow-up) ([#779](https://github.com/arthurmaciel/ipe-lang/issues/779)) ([43be51f](https://github.com/arthurmaciel/ipe-lang/commit/43be51f9e7a6c582435a1484a1eb00f2f7081cd5))
+* **cli:** bare-word mode selectors (ipe doc list / ipe diff check) with deprecation shims ([#699](https://github.com/arthurmaciel/ipe-lang/issues/699)) ([#787](https://github.com/arthurmaciel/ipe-lang/issues/787)) ([b42b880](https://github.com/arthurmaciel/ipe-lang/commit/b42b88092a99f09452d5d1dfdf8b71a15503faa6))
+* **ffi:** pin externally-referenced crates in emitted FFI Cargo.toml ([#777](https://github.com/arthurmaciel/ipe-lang/issues/777)) ([#785](https://github.com/arthurmaciel/ipe-lang/issues/785)) ([1ccad89](https://github.com/arthurmaciel/ipe-lang/commit/1ccad896bf878eacc160d67c3e64eb77612978df))
+* **json-dec:** migrate pipeline fixtures so valid nested-decoder pipelines compile ([#777](https://github.com/arthurmaciel/ipe-lang/issues/777)) ([#783](https://github.com/arthurmaciel/ipe-lang/issues/783)) ([2810468](https://github.com/arthurmaciel/ipe-lang/commit/2810468ea11ece6ce1f4dac7161471262369de0d))
+* **lower:** narrow the RetryPolicy fn-carrier exemption to the closed 5-field shape ([#665](https://github.com/arthurmaciel/ipe-lang/issues/665)) ([#790](https://github.com/arthurmaciel/ipe-lang/issues/790)) ([303ddfe](https://github.com/arthurmaciel/ipe-lang/commit/303ddfeaf03b29376970089cd7b9ac49d9f54e7b))
+* **lower:** select the decimal feature on a Money/Decimal type-mention ([#777](https://github.com/arthurmaciel/ipe-lang/issues/777)) ([#781](https://github.com/arthurmaciel/ipe-lang/issues/781)) ([a755d44](https://github.com/arthurmaciel/ipe-lang/commit/a755d446826963522c2311edcf9b78bf85b47e30))
+* **random:** resolve Ipe.Random shuffle/weighted/seed/seeded* members ([#672](https://github.com/arthurmaciel/ipe-lang/issues/672)) ([#791](https://github.com/arthurmaciel/ipe-lang/issues/791)) ([37e0b7f](https://github.com/arthurmaciel/ipe-lang/commit/37e0b7f992798b055d69043eeca3bde942cc58b5))
+* **wasm:** emit named MainHydrationState so hydrate glue is generated for wasm ([#224](https://github.com/arthurmaciel/ipe-lang/issues/224)) ([#786](https://github.com/arthurmaciel/ipe-lang/issues/786)) ([8e0fa84](https://github.com/arthurmaciel/ipe-lang/commit/8e0fa84b03e88c8bba377a84610b381fb5a006c6))
+
 ## [0.1.41](https://github.com/arthurmaciel/ipe-lang/compare/ipe-v0.1.40...ipe-v0.1.41) (2026-08-09)
 
 
