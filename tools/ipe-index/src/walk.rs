@@ -1,10 +1,15 @@
-use crate::model::{lang_of, role_of, Lang, Role};
-use anyhow::{bail, Result};
+use crate::model::{Lang, Role, lang_of, role_of};
+use anyhow::{Result, bail};
 use std::process::{Command, Stdio};
 
 pub const MAX_FILE_BYTES: u64 = 2 * 1024 * 1024; // 2 MB cap (anti-OOM)
 
-pub struct Tracked { pub path: String, pub lang: Lang, #[allow(dead_code)] pub role: Role }
+pub struct Tracked {
+    pub path: String,
+    pub lang: Lang,
+    #[allow(dead_code)]
+    pub role: Role,
+}
 
 /// Build-output / VCS / generated path segments the index must NEVER touch, even
 /// when `.gitignore` hygiene is imperfect. The `--others` walk only respects
@@ -14,8 +19,17 @@ pub struct Tracked { pub path: String, pub lang: Lang, #[allow(dead_code)] pub r
 /// Matched as a WHOLE path segment and case-sensitively, so legitimate source
 /// dirs are never hit.
 const SKIP_SEGMENTS: &[&str] = &[
-    "target", "node_modules", "dist-newstyle",
-    "ipe-out", ".ipe-index", ".git",
+    "target",
+    "node_modules",
+    "dist-newstyle",
+    "ipe-out",
+    ".ipe-index",
+    ".git",
+    // Cargo build-directory internals. These appear even when a build ran with
+    // a non-`target/` output dir (a bare `debug/`), which the `target` segment
+    // above would miss; both names are cargo-only and never a source directory.
+    ".fingerprint",
+    "incremental",
 ];
 
 fn is_indexable(path: &str) -> bool {
@@ -32,17 +46,25 @@ fn is_indexable(path: &str) -> bool {
 ///     wedge the indexer; both make any such prompt fail fast instead.
 fn git_command(repo: &str) -> Command {
     let mut cmd = Command::new("git");
-    cmd.arg("-c").arg("core.quotePath=false")
-        .arg("-C").arg(repo)
+    cmd.arg("-c")
+        .arg("core.quotePath=false")
+        .arg("-C")
+        .arg(repo)
         .env("GIT_TERMINAL_PROMPT", "0")
         .stdin(Stdio::null());
     cmd
 }
 
 pub fn parse_tracked(ls_output: &str) -> Vec<Tracked> {
-    ls_output.lines().filter(|l| !l.is_empty())
+    ls_output
+        .lines()
+        .filter(|l| !l.is_empty())
         .filter(|p| is_indexable(p))
-        .map(|p| Tracked { path: p.to_string(), lang: lang_of(p), role: role_of(p) })
+        .map(|p| Tracked {
+            path: p.to_string(),
+            lang: lang_of(p),
+            role: role_of(p),
+        })
         .collect()
 }
 
@@ -62,11 +84,14 @@ pub fn tracked(repo: &str) -> Result<Vec<Tracked>> {
         // state): a failed `ls-files` yields empty stdout and would otherwise be
         // read as "0 files" silently.
         if !out.status.success() {
-            bail!("git ls-files failed in {repo}: {}", String::from_utf8_lossy(&out.stderr).trim());
+            bail!(
+                "git ls-files failed in {repo}: {}",
+                String::from_utf8_lossy(&out.stderr).trim()
+            );
         }
         Ok(String::from_utf8_lossy(&out.stdout).into_owned())
     };
-    let mut combined = run(&[])?;                                   // tracked
+    let mut combined = run(&[])?; // tracked
     combined.push_str(&run(&["--others", "--exclude-standard"])?); // untracked, not ignored
     Ok(parse_tracked(&combined))
 }
@@ -91,10 +116,18 @@ pub fn changed(repo: &str, since: &str) -> Result<(Vec<Tracked>, Vec<String>)> {
     // misread as `status=R100, path=old`, dropping the new path and indexing a
     // deleted one.
     let out = git_command(repo)
-        .args(["diff", "--no-renames", "--name-status", &format!("{since}..HEAD")])
+        .args([
+            "diff",
+            "--no-renames",
+            "--name-status",
+            &format!("{since}..HEAD"),
+        ])
         .output()?;
     if !out.status.success() {
-        bail!("git diff failed in {repo}: {}", String::from_utf8_lossy(&out.stderr).trim());
+        bail!(
+            "git diff failed in {repo}: {}",
+            String::from_utf8_lossy(&out.stderr).trim()
+        );
     }
     let text = String::from_utf8_lossy(&out.stdout);
     let mut upserts = Vec::new();
@@ -102,9 +135,18 @@ pub fn changed(repo: &str, since: &str) -> Result<(Vec<Tracked>, Vec<String>)> {
     for line in text.lines() {
         let mut it = line.split('\t');
         let (status, path) = (it.next().unwrap_or(""), it.next().unwrap_or(""));
-        if path.is_empty() || !is_indexable(path) { continue; }
-        if status.starts_with('D') { deletes.push(path.to_string()); }
-        else { upserts.push(Tracked { path: path.to_string(), lang: lang_of(path), role: role_of(path) }); }
+        if path.is_empty() || !is_indexable(path) {
+            continue;
+        }
+        if status.starts_with('D') {
+            deletes.push(path.to_string());
+        } else {
+            upserts.push(Tracked {
+                path: path.to_string(),
+                lang: lang_of(path),
+                role: role_of(path),
+            });
+        }
     }
     Ok((upserts, deletes))
 }
@@ -112,7 +154,10 @@ pub fn changed(repo: &str, since: &str) -> Result<(Vec<Tracked>, Vec<String>)> {
 pub fn head_sha(repo: &str) -> Result<String> {
     let out = git_command(repo).args(["rev-parse", "HEAD"]).output()?;
     if !out.status.success() {
-        bail!("git rev-parse HEAD failed in {repo}: {}", String::from_utf8_lossy(&out.stderr).trim());
+        bail!(
+            "git rev-parse HEAD failed in {repo}: {}",
+            String::from_utf8_lossy(&out.stderr).trim()
+        );
     }
     Ok(String::from_utf8_lossy(&out.stdout).trim().to_string())
 }

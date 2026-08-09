@@ -1,4 +1,5 @@
 mod coverage;
+mod diff;
 mod extract;
 mod model;
 mod pipeline;
@@ -63,9 +64,43 @@ enum Cmd {
         #[arg(long, default_value = ".ipe-index/index.db")]
         db: String,
     },
-    /// Find all occurrences of a symbol name across the index.
+    /// Find all occurrences of a symbol name across the index. Each site is
+    /// annotated with the unit's qualified name + uid so it feeds `callers` /
+    /// `callees` / `context` directly.
     Locate {
         name: String,
+        #[arg(long, default_value = ".ipe-index/index.db")]
+        db: String,
+    },
+    /// Inbound blast radius: every unit that calls the target (a symbol name,
+    /// qualified name, or uid). "Who breaks if this changes?"
+    Callers {
+        target: String,
+        #[arg(long, default_value = ".ipe-index/index.db")]
+        db: String,
+    },
+    /// Outbound dependencies: every unit the target calls (name/qualified/uid).
+    /// "What does this change rely on?"
+    Callees {
+        target: String,
+        #[arg(long, default_value = ".ipe-index/index.db")]
+        db: String,
+    },
+    /// Review card for a unit (name/qualified/uid): location, kind, facing,
+    /// purpose, and caller/callee counts — judge a change without opening it.
+    Context {
+        target: String,
+        #[arg(long, default_value = ".ipe-index/index.db")]
+        db: String,
+    },
+    /// Diff-scoped review entry point: the units a git range touches, as
+    /// clickable `file:line-line kind qualified uid` coordinates. `<range>` is
+    /// any git range, e.g. `main..HEAD`. Read-only.
+    Changed {
+        range: String,
+        /// Repo to run `git diff` in (default: current directory).
+        #[arg(long, default_value = ".")]
+        repo: String,
         #[arg(long, default_value = ".ipe-index/index.db")]
         db: String,
     },
@@ -79,6 +114,51 @@ enum Cmd {
         /// Also match submodules (e.g. `Ipe.Core.List` also matches `Ipe.Core.List.Foo`).
         #[arg(long)]
         subtree: bool,
+    },
+    /// Outgoing links + calls of a unit (by uid).
+    Links {
+        uid: String,
+        #[arg(long, default_value = ".ipe-index/index.db")]
+        db: String,
+    },
+    /// Links + callgraph neighbors of a unit in both directions (by uid).
+    Neighbors {
+        uid: String,
+        #[arg(long, default_value = ".ipe-index/index.db")]
+        db: String,
+    },
+    /// Change-queue rows as JSON lines. `--since <sha>` excludes rows enqueued
+    /// by that update run; `--limit N` caps the output.
+    Pending {
+        #[arg(long)]
+        since: Option<String>,
+        #[arg(long)]
+        limit: Option<i64>,
+        #[arg(long, default_value = ".ipe-index/index.db")]
+        db: String,
+    },
+    /// Find all edit sites for a path rename (whole-segment match). `--to <new>`
+    /// emits replacement paths. Read-only.
+    RenamePath {
+        old: String,
+        #[arg(long)]
+        to: Option<String>,
+        #[arg(long, default_value = ".ipe-index/index.db")]
+        db: String,
+    },
+    /// Find all resolved occurrences of a symbol name (units/links). `--to <new>`
+    /// emits replacements; `--preserve <regex>...` skips matches; `--map k=v,...`
+    /// correlates longest-key-first. Read-only.
+    RenameSymbol {
+        old: String,
+        #[arg(long)]
+        to: Option<String>,
+        #[arg(long)]
+        preserve: Vec<String>,
+        #[arg(long)]
+        map: Option<String>,
+        #[arg(long, default_value = ".ipe-index/index.db")]
+        db: String,
     },
 }
 
@@ -136,12 +216,19 @@ fn cmd_index(repo_specs: &[String], db: &str) -> Result<()> {
 
     for (tag, root) in &repos {
         let files = walk::tracked(root)?;
+        let sha = match walk::head_sha(root) {
+            Ok(s) => s,
+            Err(e) => {
+                eprintln!("ipe-index: no HEAD sha for {root}: {e}");
+                String::new()
+            }
+        };
         for f in &files {
             let Some(src) = read_capped(root, &f.path) else {
                 continue;
             };
             // Store every path prefixed with the repo tag so multiple repos never
-            // collide (each has Cargo.toml, README.md, tools/scripts/*, tools/*).
+            // collide (each has Cargo.toml, README.md, scripts/*, tools/*).
             let tagged = format!("{tag}:{}", f.path);
             // `walk` classified the role on the UNTAGGED path (before the tag is
             // known). Recompute the role on the tagged path so the tag-aware
@@ -154,14 +241,19 @@ fn cmd_index(repo_specs: &[String], db: &str) -> Result<()> {
                 src.len() as i64,
                 "",
             )?;
-            extract::extract_file(&store, &tagged, f.lang, &src)?;
+            extract::extract_file(&store, &tagged, f.lang, &src, &sha)?;
             pipeline::record_stage(&store, &tagged)?;
-            if role == model::Role::Fixture || role == model::Role::Example {
+            // Coverage is an Ipê-import relation, so it only applies to `.ipe`
+            // example/fixture sources — a `.edits`/`.md`/`.json` under
+            // `examples/` must not be Ipê-scanned for `import` lines.
+            if f.lang == model::Lang::Ipe
+                && (role == model::Role::Fixture || role == model::Role::Example)
+            {
                 coverage::record_coverage(&store, &tagged, &src)?;
             }
         }
         // Per-repo HEAD sha so an incremental `update` can diff each.
-        if let Ok(sha) = walk::head_sha(root) {
+        if !sha.is_empty() {
             store.set_meta(&format!("last_sha:{tag}"), &sha)?;
         }
         total_files += files.len();
@@ -202,14 +294,39 @@ fn cmd_update(repo_specs: &[String], db: &str) -> Result<()> {
         let since = store
             .get_meta(&format!("last_sha:{tag}"))?
             .unwrap_or_default();
+        let sha = match walk::head_sha(root) {
+            Ok(s) => s,
+            Err(e) => {
+                eprintln!("ipe-index: no HEAD sha for {root}: {e}");
+                String::new()
+            }
+        };
         let (ups, dels) = walk::changed(root, &since)?;
+        // One timestamp per repo so A6 events order stably within the run
+        // (enqueued_at is a tiebreaker in `pending`'s ORDER BY).
+        let now = diff::now_millis();
         for d in &dels {
-            store.drop_file(&format!("{tag}:{d}"))?;
+            let tagged = format!("{tag}:{d}");
+            // Snapshot the removed units BEFORE the drop so each one can be
+            // queued as `deleted` with its last-known body hash.
+            let old = store.units_for_path(&tagged)?;
+            store.drop_file(&tagged)?;
+            for (uid, h) in old {
+                store.enqueue_change(&uid, "deleted", Some(&h), None, &sha, now)?;
+            }
         }
         for f in &ups {
             let tagged = format!("{tag}:{}", f.path);
+            let old = store.units_for_path(&tagged)?;
+            // Read source BEFORE dropping — if the file is oversized/unreadable,
+            // we still need to enqueue `deleted` events for the old units.
+            let src = read_capped(root, &f.path);
             store.drop_file(&tagged)?;
-            let Some(src) = read_capped(root, &f.path) else {
+            let Some(src) = src else {
+                // File unreadable/oversized → all old units are deleted.
+                for (uid, h) in old {
+                    store.enqueue_change(&uid, "deleted", Some(&h), None, &sha, now)?;
+                }
                 continue;
             };
             let role = model::role_of(&tagged);
@@ -220,13 +337,28 @@ fn cmd_update(repo_specs: &[String], db: &str) -> Result<()> {
                 src.len() as i64,
                 "",
             )?;
-            extract::extract_file(&store, &tagged, f.lang, &src)?;
+            extract::extract_file(&store, &tagged, f.lang, &src, &sha)?;
             pipeline::record_stage(&store, &tagged)?;
-            if role == model::Role::Fixture || role == model::Role::Example {
+            if f.lang == model::Lang::Ipe
+                && (role == model::Role::Fixture || role == model::Role::Example)
+            {
                 coverage::record_coverage(&store, &tagged, &src)?;
             }
+            // A6: hash-diff the pre-update vs post-extract unit snapshots into
+            // change_queue events (new / modified / deleted per unit).
+            let new = store.units_for_path(&tagged)?;
+            for ev in diff::diff_units(&old, &new) {
+                store.enqueue_change(
+                    &ev.uid,
+                    ev.change,
+                    ev.old_hash.as_deref(),
+                    ev.new_hash.as_deref(),
+                    &sha,
+                    now,
+                )?;
+            }
         }
-        if let Ok(sha) = walk::head_sha(root) {
+        if !sha.is_empty() {
             store.set_meta(&format!("last_sha:{tag}"), &sha)?;
         }
         changed_count += ups.len() + dels.len();
@@ -251,11 +383,26 @@ fn main() -> Result<()> {
         Cmd::Covers { kernel, db } => query::cmd_covers(&db, &kernel),
         Cmd::Wakeup { db } => query::cmd_wakeup(&db),
         Cmd::Locate { name, db } => query::cmd_locate(&db, &name),
+        Cmd::Callers { target, db } => query::cmd_callers(&db, &target),
+        Cmd::Callees { target, db } => query::cmd_callees(&db, &target),
+        Cmd::Context { target, db } => query::cmd_context(&db, &target),
+        Cmd::Changed { range, repo, db } => query::cmd_changed(&db, &repo, &range),
         Cmd::Rdeps {
             module,
             db,
             count,
             subtree,
         } => query::cmd_rdeps(&db, &module, count, subtree),
+        Cmd::Links { uid, db } => query::cmd_links(&db, &uid),
+        Cmd::Neighbors { uid, db } => query::cmd_neighbors(&db, &uid),
+        Cmd::Pending { since, limit, db } => query::cmd_pending(&db, since.as_deref(), limit),
+        Cmd::RenamePath { old, to, db } => query::cmd_rename_path(&db, &old, to.as_deref()),
+        Cmd::RenameSymbol {
+            old,
+            to,
+            preserve,
+            map,
+            db,
+        } => query::cmd_rename_symbol(&db, &old, to.as_deref(), &preserve, map.as_deref()),
     }
 }

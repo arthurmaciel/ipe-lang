@@ -1,0 +1,92 @@
+module Lib.Queue exposing (QueuedUnit, load)
+
+import Ipe.Db as Db
+import Ipe.List as List
+import Ipe.Task as Task
+import Lib.Db as LibDb
+import Lib.Index as Index
+
+
+-- A pending unit plus its resurfacing state. `changed` is Just the previous
+-- review when this uid was already decided on an OLDER body hash: the author
+-- edited the code after the review, so the unit must be reviewed again.
+type alias QueuedUnit =
+    { unit : Index.Unit
+    , changed : Maybe LibDb.ReviewRow
+    }
+
+
+-- The queue as the review app sees it, one pass over both databases:
+--
+--   * a unit whose exact (uid, body_hash) pair was already decided is
+--     hidden — the first review of a pair is final (B6) and the drain loop
+--     already cleared it; a re-queued identical unit is a no-op;
+--   * a unit decided on an older hash resurfaced at the head, flagged with
+--     its previous review (B8 change re-enqueue);
+--   * never-seen units keep the index's enqueue order after resurfaced ones.
+load : Task.Task Error (List QueuedUnit)
+load =
+    LibDb.open
+        |> Task.andThen
+            (\db ->
+                Index.loadPending
+                    |> Task.andThen (classify db)
+            )
+
+
+classify : Db.Db -> List Index.Unit -> Task.Task Error (List QueuedUnit)
+classify db units =
+    units
+        |> List.map (classifyUnit db)
+        |> Task.sequence
+        |> Task.map prioritize
+
+
+classifyUnit : Db.Db -> Index.Unit -> Task.Task Error (Maybe QueuedUnit)
+classifyUnit db unit =
+    LibDb.findDecision db unit.uid unit.bodyHash
+        |> Task.andThen
+            (\decided ->
+                case decided of
+                    Just _ ->
+                        Task.succeed Nothing
+
+                    Nothing ->
+                        LibDb.findLatestForUid db unit.uid
+                            |> Task.map (\old -> Just { unit = unit, changed = old })
+            )
+
+
+prioritize : List (Maybe QueuedUnit) -> List QueuedUnit
+prioritize classified =
+    let
+        ( changed, fresh ) =
+            partition (List.concatMap collect classified)
+    in
+    changed ++ fresh
+
+
+collect : Maybe QueuedUnit -> List QueuedUnit
+collect mb =
+    case mb of
+        Just q ->
+            [ q ]
+
+        Nothing ->
+            []
+
+
+-- Stable partition: resurfaced (changed) units first, fresh units after,
+-- each group keeping the index's enqueue order.
+partition : List QueuedUnit -> ( List QueuedUnit, List QueuedUnit )
+partition qs =
+    List.foldr
+        (\q ( changed, fresh ) ->
+            if q.changed == Nothing then
+                ( changed, q :: fresh )
+
+            else
+                ( q :: changed, fresh )
+        )
+        ( [], [] )
+        qs

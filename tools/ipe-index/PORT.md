@@ -17,7 +17,7 @@ multi-repo setup without a schema change:
 
 | Tag  | Repo            | Roles indexed |
 |------|-----------------|---------------|
-| `ipe`| `.` (this repo) | `compiler-rs` (crates/), `runtime-rs` (runtime/), `tool-rs` (tools/), `stdlib-ipe` (*.ipe), `example`, `fixture`, `console-ts`, `script-sh` |
+| `ipe`| `.` (this repo) | `compiler-rs` (src/compiler/), `runtime-rs` (src/runtime/), `tool-rs` (tools/), `stdlib-ipe` (*.ipe), `example`, `fixture`, `console-ts`, `script-sh` |
 
 ### Languages
 
@@ -31,9 +31,16 @@ multi-repo setup without a schema change:
 ```
 ipe-index index                 # rebuild → .ipe-index/index.db
 ipe-index update                # incremental: git-diff last_sha..HEAD
-ipe-index locate <name>         # every def site (file:line:col)
+ipe-index locate <name>         # every def site (file:line:col + qualified + uid)
 ipe-index roles|pipeline|wakeup
 ipe-index deps <m> | rdeps <m> | covers <m>
+# review path — clickable file:line-line coordinates, name/qualified/uid accepted
+ipe-index changed <range>       # units a git range touched (the review scope)
+ipe-index context <unit>        # review card: location, kind/facing, purpose, blast counts
+ipe-index callers <unit> | callees <unit>   # inbound / outbound blast radius
+ipe-index links <uid> | neighbors <uid>     # per-unit links + callgraph edges
+ipe-index pending               # change-queue rows (JSON) — code-review's backlog
+ipe-index rename-path <old> | rename-symbol <old>   # read-only rename planning (JSON sites)
 ```
 
 Default repos: `ipe:.`. Override with repeatable `--repo tag:path`. DB defaults

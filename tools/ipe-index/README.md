@@ -36,7 +36,7 @@ and so a future multi-repo setup never collides:
 
 | Tag   | Repo | What lives there |
 |-------|------|------------------|
-| `ipe:`| `.`  | Rust compiler (`crates/`), runtime (`runtime/`), tooling (`tools/`), stdlib/examples (`*.ipe`) |
+| `ipe:`| `.`  | Rust compiler (`src/compiler/`), runtime (`src/runtime/`), tooling (`tools/`), stdlib/examples (`*.ipe`) |
 
 So a result reads `ipe:crates/ipe_lower/src/lower.rs:2518` — the prefix is the
 repo.
@@ -63,12 +63,13 @@ ipe-index rdeps <module>     # who imports <module> (exact; --subtree, --count)
 ipe-index covers <module>    # which examples/fixtures exercise a module
 ```
 
-`locate` example:
+`locate` example (each site carries the unit's qualified name + uid, so it
+feeds the review commands below directly):
 
 ```
 $ ipe-index locate Lowerer
-ipe:crates/ipe_lower/src/lib.rs:112:10  def
-ipe:crates/ipe_lower/src/lib.rs:1174:6  impl
+ipe:src/compiler/lower/src/lower.rs:7758:12  def   crate::Lowerer  4a6585e9…
+ipe:src/compiler/lower/src/lower.rs:8584:10  impl  crate::Lowerer  c8fdaf51…
 ```
 
 `rdeps` example (who depends on a module, exact — won't fold in `Data.List`):
@@ -76,6 +77,36 @@ ipe:crates/ipe_lower/src/lib.rs:1174:6  impl
 ```bash
 ipe-index rdeps Ipe.List --subtree   # also matches Ipe.List.*
 ipe-index rdeps ipe_ir --count       # just the number
+```
+
+### Reviewing a change
+
+The review path: start from what a diff touched, then follow each unit's blast
+radius. Every command takes a symbol name, qualified name, or uid, and prints
+clickable `file:line-line  kind  qualified  uid` coordinates.
+
+```bash
+ipe-index changed main..HEAD   # the units a git range touched (the review scope)
+ipe-index context <unit>       # review card: location, kind/facing, purpose, blast counts
+ipe-index callers <unit>       # who calls it — "what breaks if this changes?"
+ipe-index callees <unit>       # what it calls — "what does this rely on?"
+```
+
+`changed` example (drives a branch/PR review — each uid pipes into `context`):
+
+```
+$ ipe-index changed HEAD~3..HEAD
+ipe:src/compiler/lower/src/lower.rs:7758-7958   struct  crate::Lowerer     4a6585e9…
+ipe:src/compiler/lower/src/lower.rs:19232-19472 fn      crate::lower_case  eb30de67…
+```
+
+`--repo <path>` points `changed` at the git repo to diff (default: current dir).
+
+### Unit-level links (by uid)
+
+```bash
+ipe-index links <uid>        # outgoing links + calls of one unit
+ipe-index neighbors <uid>    # links + callgraph edges around a unit, both directions
 ```
 
 ### Situational awareness
@@ -97,6 +128,29 @@ ipe-index update     # incremental: git-diff last_sha..HEAD, re-extract only
 
 Both are wired into the `post-commit` hook, so the index stays fresh
 automatically.
+
+### The change queue (what the code-review app consumes)
+
+Each `update` records per-unit `new`/`modified`/`deleted` events in a
+`change_queue` table — the review backlog the sibling `code-review` app reads.
+
+```bash
+ipe-index pending                 # queued unit changes as JSON lines
+ipe-index pending --since <sha>   # exclude rows enqueued by that update run
+ipe-index pending --limit N       # cap the output
+```
+
+### Rename planning (read-only)
+
+```bash
+ipe-index rename-path <old> [--to <new>]      # every edit site for a path rename
+ipe-index rename-symbol <old> [--to <new>]    # every occurrence of a symbol name
+    # rename-symbol also: --preserve <regex>… (skip matches), --map k=v,… (correlated)
+```
+
+Both emit JSON-line edit sites (`{kind,path,line,col,context,replacement?}`) and
+never write. `<old>` for `rename-path` is the untagged repo-relative path
+(e.g. `tools/ipe-index`), matched whole-segment across any repo tag.
 
 ---
 

@@ -19,14 +19,14 @@ mod tests {
     #[test]
     fn stage_edge() {
         let s = Store::open(":memory:").unwrap();
-        record_stage(&s, "crates/ipe_types/src/solve.rs").unwrap();
+        record_stage(&s, "src/compiler/types/src/solve.rs").unwrap();
         assert_eq!(s.count("edges").unwrap(), 1);
     }
 
     #[test]
     fn no_stage_no_edge() {
         let s = Store::open(":memory:").unwrap();
-        record_stage(&s, "runtime/src/rt.rs").unwrap();
+        record_stage(&s, "src/runtime/rust/src/rt.rs").unwrap();
         assert_eq!(s.count("edges").unwrap(), 0);
     }
 }
