@@ -7219,21 +7219,29 @@ fn collect_func_edges(expr: &Expr, out: &mut BTreeSet<FuncId>) {
     }
 }
 
-/// The set of [`FuncId`]s transitively reachable from `entry` over the
-/// `Callee::Func`/[`Expr::FuncValue`] call graph of `funcs`.
+/// The set of [`FuncId`]s transitively reachable from `entry` and any
+/// `extra_roots` over the `Callee::Func`/[`Expr::FuncValue`] call graph of
+/// `funcs`. `extra_roots` are externally-invoked exports (e.g. the wasm-hydrate
+/// island projection) that user code never calls, so the call graph alone would
+/// prune them.
 ///
 /// Fail-closed: a program with no `entry` (a hand-built IR, or a future
 /// non-`main` entry shape) has no seed to fix-point from — every function is
 /// treated as reachable, so a dependency the program needs is never dropped.
 /// This is the same conservative fallback the salsa `program_metadata` seam
 /// uses, kept identical here on purpose.
-fn reachable_func_ids(funcs: &[Func], entry: Option<FuncId>) -> BTreeSet<FuncId> {
+fn reachable_func_ids(
+    funcs: &[Func],
+    entry: Option<FuncId>,
+    extra_roots: &[FuncId],
+) -> BTreeSet<FuncId> {
     let Some(entry) = entry else {
         return funcs.iter().map(|f| f.id).collect();
     };
     let by_id: BTreeMap<FuncId, &Func> = funcs.iter().map(|f| (f.id, f)).collect();
     let mut reachable: BTreeSet<FuncId> = BTreeSet::new();
     let mut worklist = vec![entry];
+    worklist.extend_from_slice(extra_roots);
     while let Some(id) = worklist.pop() {
         if !reachable.insert(id) {
             continue;
@@ -9143,6 +9151,12 @@ impl<'a> Lowerer<'a> {
 
         let mut funcs = Vec::with_capacity(self.m.defs.len());
         let mut entry = None;
+        // Externally-invoked export roots besides `main` that dead-function
+        // elimination must keep. The wasm-hydration island projection is called
+        // only by generated `hydrate` glue, never from user code, so the call
+        // graph alone would prune it and the glue would reference an absent
+        // function.
+        let mut export_roots: Vec<FuncId> = Vec::new();
         for (idx, def) in self.m.defs.iter().enumerate() {
             // Positional id: `func_ids` was assigned from this very
             // enumeration order in `new()` under the unique-`(home, name)`
@@ -9170,6 +9184,9 @@ impl<'a> Lowerer<'a> {
             func.body = clear_let_bound_task_fail_pins(func.body);
             if self.interner.resolve(func.name) == Some("main") {
                 entry = Some(func.id);
+            }
+            if self.interner.resolve(func.name) == Some(ipe_ir::HYDRATION_PROJECTION_NAME) {
+                export_roots.push(func.id);
             }
             funcs.push(func);
         }
@@ -9225,7 +9242,7 @@ impl<'a> Lowerer<'a> {
                 .is_some_and(|main_fn| main_fn.home == ModPath(self.m.name.clone()))
         });
         if prune_dead {
-            let reachable = reachable_func_ids(&funcs, entry);
+            let reachable = reachable_func_ids(&funcs, entry, &export_roots);
             funcs.retain(|f| reachable.contains(&f.id));
         }
 

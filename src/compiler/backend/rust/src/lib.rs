@@ -1619,7 +1619,7 @@ impl<'a> EmitCtx<'a> {
     fn resolve_hydration_state_rust_name(&self, program: &Program) -> DResult<Option<String>> {
         for module in &program.modules {
             for func in &module.funcs {
-                if self.interner.resolve(func.name) != Some("fromHydrationState") {
+                if self.interner.resolve(func.name) != Some(ipe_ir::HYDRATION_PROJECTION_NAME) {
                     continue;
                 }
                 let Some((_, param_ty)) = func.params.first() else {
