@@ -1029,7 +1029,49 @@ fn build_generic_call(
     } else {
         pin_turbofish
     };
-    let mut docs = build_call_args_with_impl_fn(ctx, callee, args, indent, child, generics)?;
+    // `Task.andThen cont effect` renders (after the swap-reverse below) as
+    // `task_and_then(effect, cont)`. Rust evaluates the args left-to-right, so
+    // `effect` runs BEFORE `cont`'s closure is built; a non-Copy handle that
+    // `effect` MOVES (an `IpeCacheHandle` passed by value into `Cache.put cache …`)
+    // is gone by the time `cont` captures the same binding, and the `let h =
+    // h.clone()` the lowerer inserts for `cont`'s capture then borrows a moved
+    // value (E0382). Clone every var `cont` captures at its `effect` use site so
+    // the original survives into the closure — the same rewrite `build_task_seq`
+    // applies to its auto-forced continuation. A no-op when `cont` captures none
+    // of `effect`'s vars, so non-reusing chains stay byte-identical.
+    let swapped_effect: Option<Expr> = if matches!(callee, Callee::Kernel(KernelFn::TaskAndThen))
+        && let [cont, effect] = args
+    {
+        let cont_captures = free_vars(cont);
+        let row_binders: std::collections::BTreeSet<Symbol> =
+            generics.row_binders().iter().copied().collect();
+        Some(clone_targets_in_expr(
+            effect.clone(),
+            &cont_captures,
+            &row_binders,
+        ))
+    } else {
+        None
+    };
+    let mut docs = match &swapped_effect {
+        Some(effect_rw) => {
+            let [cont, _] = args else {
+                return Err(Diagnostic::CompilerBug {
+                    where_: "ipe_backend_rust::build_generic_call",
+                    detail: "Task.andThen effect-clone rewrite lost its two args".to_owned(),
+                });
+            };
+            build_call_args_with_impl_fn(
+                ctx,
+                callee,
+                &[cont.clone(), effect_rw.clone()],
+                indent,
+                child,
+                generics,
+            )?
+        }
+        None => build_call_args_with_impl_fn(ctx, callee, args, indent, child, generics)?,
+    };
     // Container-first kernels take their two arguments in the opposite order to
     // the Ipê call; the string emitter reverses the rendered `parts`, so the Doc
     // builder reverses the built arg docs to carry the identical token sequence.
@@ -2304,6 +2346,29 @@ mod tests {
             Expr::Call {
                 callee: Callee::Kernel(KernelFn::CsvParse),
                 args: vec![var(fx, 0)],
+                pin: CallPin::None,
+                on_form: OnFormKind::NotForm,
+            },
+            // `Task.andThen cont effect` where `effect` MOVES a var `cont` also
+            // captures: the effect's `a` is rewritten to `a.clone()` so the
+            // continuation can still read it (the reused non-Copy handle SEAL).
+            // The args are also reversed to the runtime's effect-first order. The
+            // SEAL must match the string emitter's identical clone-and-reverse.
+            Expr::Call {
+                callee: Callee::Kernel(KernelFn::TaskAndThen),
+                args: vec![
+                    Expr::Lambda {
+                        params: vec![(sym(fx, 1), IrType::Unit)],
+                        ret: IrType::Int,
+                        body: Box::new(var(fx, 0)),
+                    },
+                    Expr::Call {
+                        callee: Callee::Func(FuncId::from_raw(0)),
+                        args: vec![var(fx, 0)],
+                        pin: CallPin::None,
+                        on_form: OnFormKind::NotForm,
+                    },
+                ],
                 pin: CallPin::None,
                 on_form: OnFormKind::NotForm,
             },
