@@ -46,5 +46,7 @@ mod golden_i789_record_fn_carrier;
 mod golden_i793_record_fn_read;
 #[path = "g_issues/golden_i798_generic_combinator_seal.rs"]
 mod golden_i798_generic_combinator_seal;
+#[path = "g_issues/golden_i801_decoder_storage_reuse.rs"]
+mod golden_i801_decoder_storage_reuse;
 #[path = "g_issues/golden_i99_alias_match_arm.rs"]
 mod golden_i99_alias_match_arm;

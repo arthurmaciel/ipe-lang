@@ -17,15 +17,38 @@ pub type JsonVal = serde_json::Value;
 ///     to determine whether ALL the fields the inner decoder reads are NULL/absent
 ///     before delegating to the inner run.
 ///
-/// The struct is `Send`:  `Box<dyn Fn + Send>` is Send; `Vec<String>` is Send.
+/// The carrier is `Arc`, not `Box`, so a `Decoder` is `Clone` (a refcount bump):
+/// a decoder stored in a value (a `Codec a`'s `dec` field) can be read back out
+/// and reused, which the `Box` carrier — non-`Clone`, non-`Copy` — could not
+/// support without a move-out-of-`Fn` (E0507). `run` is `Send + Sync` so the
+/// `Arc` is `Send + Sync`, keeping every `T: Send` kernel bound and the
+/// cross-thread decoder usage sound.
 pub struct Decoder<E, T> {
-    pub run: Box<dyn Fn(&JsonVal) -> IpeResult<E, T> + Send>,
+    pub run: std::sync::Arc<dyn Fn(&JsonVal) -> IpeResult<E, T> + Send + Sync>,
     pub fields: Vec<String>,
 }
 
+// Manual `Clone` (not derived): the carrier `Arc` and `Vec<String>` are always
+// `Clone` regardless of `E`/`T`, so a `Decoder` clones without bounding them —
+// a derived `impl` would spuriously require `E: Clone, T: Clone`.
+impl<E, T> Clone for Decoder<E, T> {
+    fn clone(&self) -> Self {
+        Decoder {
+            run: std::sync::Arc::clone(&self.run),
+            fields: self.fields.clone(),
+        }
+    }
+}
+
 impl<E, T> Decoder<E, T> {
-    pub fn new(run: Box<dyn Fn(&JsonVal) -> IpeResult<E, T> + Send>, fields: Vec<String>) -> Self {
-        Decoder { run, fields }
+    pub fn new(
+        run: Box<dyn Fn(&JsonVal) -> IpeResult<E, T> + Send + Sync>,
+        fields: Vec<String>,
+    ) -> Self {
+        Decoder {
+            run: std::sync::Arc::from(run),
+            fields,
+        }
     }
 }
 
@@ -504,16 +527,16 @@ pub fn decode_at<E: From<String> + 'static, T: 'static + Send>(
     )
 }
 pub fn decode_list<E: From<String> + 'static, T: 'static + Send>(
-    decoder: impl Fn() -> Decoder<E, T> + Send + 'static,
+    decoder: Decoder<E, T>,
 ) -> Decoder<E, Vec<T>> {
     Decoder::new(
         Box::new(move |v| match v.as_array() {
             Some(arr) => {
                 let mut out = Vec::with_capacity(arr.len());
-                // `Decoder::run` is a `Fn` — a single decoder instance decodes
-                // every element. Build it ONCE outside the loop (was O(N) Box
-                // allocations: one fresh Decoder + boxed closure per element).
-                let d = decoder();
+                // `Decoder::run` is a `Fn`, so one decoder instance decodes every
+                // element of every document this list-decoder runs against — the
+                // captured `decoder` is borrowed, never moved or rebuilt.
+                let d = &decoder;
                 for item in arr {
                     match (d.run)(item) {
                         IpeResult::Ok(t) => out.push(t),
@@ -531,7 +554,7 @@ pub fn decode_list<E: From<String> + 'static, T: 'static + Send>(
     )
 }
 pub fn decode_map<E: From<String> + 'static, A: 'static + Send, B: 'static + Send>(
-    f: impl Fn(A) -> B + Send + 'static,
+    f: impl Fn(A) -> B + Send + Sync + 'static,
     decoder: Decoder<E, A>,
 ) -> Decoder<E, B> {
     let inner_fields = decoder.fields.clone();
@@ -552,7 +575,7 @@ pub fn decode_map2<
     B: 'static + Send,
     C: 'static + Send,
 >(
-    f: impl Fn(A, B) -> C + Send + 'static,
+    f: impl Fn(A, B) -> C + Send + Sync + 'static,
     da: Decoder<E, A>,
     db: Decoder<E, B>,
 ) -> Decoder<E, C> {
@@ -580,7 +603,7 @@ pub fn decode_map3<
     C: 'static + Send,
     D: 'static + Send,
 >(
-    f: impl Fn(A, B, C) -> D + Send + 'static,
+    f: impl Fn(A, B, C) -> D + Send + Sync + 'static,
     da: Decoder<E, A>,
     db: Decoder<E, B>,
     dc: Decoder<E, C>,
@@ -615,7 +638,7 @@ pub fn decode_map4<
     D: 'static + Send,
     G: 'static + Send,
 >(
-    f: impl Fn(A, B, C, D) -> G + Send + 'static,
+    f: impl Fn(A, B, C, D) -> G + Send + Sync + 'static,
     da: Decoder<E, A>,
     db: Decoder<E, B>,
     dc: Decoder<E, C>,
@@ -659,7 +682,7 @@ pub fn decode_map5<
     G: 'static + Send,
     H: 'static + Send,
 >(
-    f: impl Fn(A, B, C, D, G) -> H + Send + 'static,
+    f: impl Fn(A, B, C, D, G) -> H + Send + Sync + 'static,
     da: Decoder<E, A>,
     db: Decoder<E, B>,
     dc: Decoder<E, C>,
@@ -713,7 +736,7 @@ pub fn decode_map6<
     H: 'static + Send,
     R: 'static + Send,
 >(
-    f: impl Fn(A, B, C, D, G, H) -> R + Send + 'static,
+    f: impl Fn(A, B, C, D, G, H) -> R + Send + Sync + 'static,
     da: Decoder<E, A>,
     db: Decoder<E, B>,
     dc: Decoder<E, C>,
@@ -770,7 +793,7 @@ pub fn decode_map7<
     I: 'static + Send,
     R: 'static + Send,
 >(
-    f: impl Fn(A, B, C, D, G, H, I) -> R + Send + 'static,
+    f: impl Fn(A, B, C, D, G, H, I) -> R + Send + Sync + 'static,
     da: Decoder<E, A>,
     db: Decoder<E, B>,
     dc: Decoder<E, C>,
@@ -834,7 +857,7 @@ pub fn decode_map8<
     J: 'static + Send,
     R: 'static + Send,
 >(
-    f: impl Fn(A, B, C, D, G, H, I, J) -> R + Send + 'static,
+    f: impl Fn(A, B, C, D, G, H, I, J) -> R + Send + Sync + 'static,
     da: Decoder<E, A>,
     db: Decoder<E, B>,
     dc: Decoder<E, C>,
@@ -921,7 +944,7 @@ pub fn decode_and_map<E: From<String> + 'static, A: 'static + Send, B: 'static +
 }
 pub fn decode_and_then<E: From<String> + 'static, A: 'static + Send, B: 'static + Send>(
     decoder: Decoder<E, A>,
-    f: impl Fn(A) -> Decoder<E, B> + Send + 'static,
+    f: impl Fn(A) -> Decoder<E, B> + Send + Sync + 'static,
 ) -> Decoder<E, B> {
     let inner_fields = decoder.fields.clone();
     Decoder::new(
@@ -950,7 +973,7 @@ pub fn decode_and_then<E: From<String> + 'static, A: 'static + Send, B: 'static 
 /// fresh `A`; the `FnOnce` chain is consumed exactly once per row by the
 /// enclosing pipeline combinators — correct by construction.
 pub fn decode_succeed<E: From<String> + 'static, A: 'static + Send>(
-    factory: Box<dyn Fn() -> A + Send>,
+    factory: Box<dyn Fn() -> A + Send + Sync>,
 ) -> Decoder<E, A> {
     Decoder::new(Box::new(move |_| decode_ok((factory)())), vec![])
 }
@@ -982,15 +1005,15 @@ pub fn decode_one_of<E: From<String> + 'static, T: 'static + Send>(
 /// `keyValuePairs : Decoder a -> Decoder (List (String, a))` — decode every
 /// entry of a JSON object, applying `decoder` to each value. Non-object input
 /// is `Err`; the first entry whose value fails to decode short-circuits with
-/// its real error. The single decoder instance is built once and reused across
-/// entries (like `decode_list`).
+/// its real error. The one decoder instance is borrowed across entries and
+/// across every document this decoder runs against (like `decode_list`).
 pub fn decode_key_value_pairs<E: From<String> + 'static, T: 'static + Send>(
-    decoder: impl Fn() -> Decoder<E, T> + Send + 'static,
+    decoder: Decoder<E, T>,
 ) -> Decoder<E, Vec<(String, T)>> {
     Decoder::new(
         Box::new(move |v| match v.as_object() {
             Some(obj) => {
-                let d = decoder();
+                let d = &decoder;
                 let mut out = Vec::with_capacity(obj.len());
                 for (key, val) in obj {
                     match (d.run)(val) {
@@ -1035,9 +1058,13 @@ pub fn decode_from_json_string<E: From<String> + 'static, T>(
 //
 // Bounds: `F: Fn(A1,..) -> R + Clone + Send` — fn pointers are Copy ⊆ Clone;
 // non-capturing closures in Rust are Copy ⊆ Clone.
-pub fn curry1<A: 'static + Send, R: 'static + Send, F: Fn(A) -> R + Clone + Send + 'static>(
+pub fn curry1<
+    A: 'static + Send,
+    R: 'static + Send,
+    F: Fn(A) -> R + Clone + Send + Sync + 'static,
+>(
     f: F,
-) -> Box<dyn Fn() -> Box<dyn FnOnce(A) -> R + Send> + Send> {
+) -> Box<dyn Fn() -> Box<dyn FnOnce(A) -> R + Send> + Send + Sync> {
     Box::new(move || {
         let f = f.clone();
         Box::new(f)
@@ -1047,10 +1074,10 @@ pub fn curry2<
     A1: 'static + Send,
     A2: 'static + Send,
     R: 'static + Send,
-    F: Fn(A1, A2) -> R + Clone + Send + 'static,
+    F: Fn(A1, A2) -> R + Clone + Send + Sync + 'static,
 >(
     f: F,
-) -> Box<dyn Fn() -> Box<dyn FnOnce(A1) -> Box<dyn FnOnce(A2) -> R + Send> + Send> + Send> {
+) -> Box<dyn Fn() -> Box<dyn FnOnce(A1) -> Box<dyn FnOnce(A2) -> R + Send> + Send> + Send + Sync> {
     Box::new(move || {
         let f = f.clone();
         Box::new(move |a1| {
@@ -1064,13 +1091,14 @@ pub fn curry3<
     A2: 'static + Send,
     A3: 'static + Send,
     R: 'static + Send,
-    F: Fn(A1, A2, A3) -> R + Clone + Send + 'static,
+    F: Fn(A1, A2, A3) -> R + Clone + Send + Sync + 'static,
 >(
     f: F,
 ) -> Box<
     dyn Fn() -> Box<
             dyn FnOnce(A1) -> Box<dyn FnOnce(A2) -> Box<dyn FnOnce(A3) -> R + Send> + Send> + Send,
-        > + Send,
+        > + Send
+        + Sync,
 > {
     Box::new(move || {
         let f = f.clone();
@@ -1089,7 +1117,7 @@ pub fn curry4<
     A3: 'static + Send,
     A4: 'static + Send,
     R: 'static + Send,
-    F: Fn(A1, A2, A3, A4) -> R + Clone + Send + 'static,
+    F: Fn(A1, A2, A3, A4) -> R + Clone + Send + Sync + 'static,
 >(
     f: F,
 ) -> Box<
@@ -1100,7 +1128,8 @@ pub fn curry4<
                     dyn FnOnce(A2) -> Box<dyn FnOnce(A3) -> Box<dyn FnOnce(A4) -> R + Send> + Send>
                         + Send,
                 > + Send,
-        > + Send,
+        > + Send
+        + Sync,
 > {
     Box::new(move || {
         let f = f.clone();
@@ -1123,7 +1152,7 @@ pub fn curry5<
     A4: 'static + Send,
     A5: 'static + Send,
     R: 'static + Send,
-    F: Fn(A1, A2, A3, A4, A5) -> R + Clone + Send + 'static,
+    F: Fn(A1, A2, A3, A4, A5) -> R + Clone + Send + Sync + 'static,
 >(
     f: F,
 ) -> Box<
@@ -1141,7 +1170,8 @@ pub fn curry5<
                                 > + Send,
                         > + Send,
                 > + Send,
-        > + Send,
+        > + Send
+        + Sync,
 > {
     Box::new(move || {
         let f = f.clone();
@@ -1168,7 +1198,7 @@ pub fn curry6<
     A5: 'static + Send,
     A6: 'static + Send,
     R: 'static + Send,
-    F: Fn(A1, A2, A3, A4, A5, A6) -> R + Clone + Send + 'static,
+    F: Fn(A1, A2, A3, A4, A5, A6) -> R + Clone + Send + Sync + 'static,
 >(
     f: F,
 ) -> Box<
@@ -1191,7 +1221,8 @@ pub fn curry6<
                                 > + Send,
                         > + Send,
                 > + Send,
-        > + Send,
+        > + Send
+        + Sync,
 > {
     Box::new(move || {
         let f = f.clone();
@@ -1222,7 +1253,7 @@ pub fn curry7<
     A6: 'static + Send,
     A7: 'static + Send,
     R: 'static + Send,
-    F: Fn(A1, A2, A3, A4, A5, A6, A7) -> R + Clone + Send + 'static,
+    F: Fn(A1, A2, A3, A4, A5, A6, A7) -> R + Clone + Send + Sync + 'static,
 >(
     f: F,
 ) -> Box<
@@ -1253,7 +1284,8 @@ pub fn curry7<
                                 > + Send,
                         > + Send,
                 > + Send,
-        > + Send,
+        > + Send
+        + Sync,
 > {
     Box::new(move || {
         let f = f.clone();
@@ -1288,7 +1320,7 @@ pub fn curry8<
     A7: 'static + Send,
     A8: 'static + Send,
     R: 'static + Send,
-    F: Fn(A1, A2, A3, A4, A5, A6, A7, A8) -> R + Clone + Send + 'static,
+    F: Fn(A1, A2, A3, A4, A5, A6, A7, A8) -> R + Clone + Send + Sync + 'static,
 >(
     f: F,
 ) -> Box<
@@ -1325,7 +1357,8 @@ pub fn curry8<
                                 > + Send,
                         > + Send,
                 > + Send,
-        > + Send,
+        > + Send
+        + Sync,
 > {
     Box::new(move || {
         let f = f.clone();
@@ -1368,7 +1401,7 @@ pub fn curry9<
     A8: 'static + Send,
     A9: 'static + Send,
     R: 'static + Send,
-    F: Fn(A1, A2, A3, A4, A5, A6, A7, A8, A9) -> R + Clone + Send + 'static,
+    F: Fn(A1, A2, A3, A4, A5, A6, A7, A8, A9) -> R + Clone + Send + Sync + 'static,
 >(
     f: F,
 ) -> Box<
@@ -1411,7 +1444,8 @@ pub fn curry9<
                                 > + Send,
                         > + Send,
                 > + Send,
-        > + Send,
+        > + Send
+        + Sync,
 > {
     Box::new(move || {
         let f = f.clone();
@@ -1458,7 +1492,7 @@ pub fn curry10<
     A9: 'static + Send,
     A10: 'static + Send,
     R: 'static + Send,
-    F: Fn(A1, A2, A3, A4, A5, A6, A7, A8, A9, A10) -> R + Clone + Send + 'static,
+    F: Fn(A1, A2, A3, A4, A5, A6, A7, A8, A9, A10) -> R + Clone + Send + Sync + 'static,
 >(
     f: F,
 ) -> Box<
@@ -1509,7 +1543,8 @@ pub fn curry10<
                                 > + Send,
                         > + Send,
                 > + Send,
-        > + Send,
+        > + Send
+        + Sync,
 > {
     Box::new(move || {
         let f = f.clone();
@@ -1585,7 +1620,7 @@ pub fn decode_pipeline_required<E: From<String> + 'static, T: 'static, F: 'stati
 }
 pub fn decode_pipeline_optional<
     E: From<String> + 'static,
-    T: Clone + 'static + Send,
+    T: Clone + 'static + Send + Sync,
     F: 'static,
 >(
     name: String,
@@ -1778,7 +1813,7 @@ mod key_value_pairs_tests {
 
     #[test]
     fn decodes_object_entries() {
-        let dec = decode_key_value_pairs::<String, i64>(json_decode_int);
+        let dec = decode_key_value_pairs::<String, i64>(json_decode_int());
         let v: JsonVal = serde_json::json!({ "a": 1, "b": 2 });
         match (dec.run)(&v) {
             IpeResult::Ok(mut pairs) => {
@@ -1792,21 +1827,21 @@ mod key_value_pairs_tests {
 
     #[test]
     fn non_object_is_err() {
-        let dec = decode_key_value_pairs::<String, i64>(json_decode_int);
+        let dec = decode_key_value_pairs::<String, i64>(json_decode_int());
         let v: JsonVal = serde_json::json!([1, 2, 3]);
         assert!(matches!((dec.run)(&v), IpeResult::Err(_)));
     }
 
     #[test]
     fn value_decode_error_propagates() {
-        let dec = decode_key_value_pairs::<String, i64>(json_decode_int);
+        let dec = decode_key_value_pairs::<String, i64>(json_decode_int());
         let v: JsonVal = serde_json::json!({ "a": "not-an-int" });
         assert!(matches!((dec.run)(&v), IpeResult::Err(_)));
     }
 
     #[test]
     fn empty_object_is_empty_list() {
-        let dec = decode_key_value_pairs::<String, i64>(json_decode_int);
+        let dec = decode_key_value_pairs::<String, i64>(json_decode_int());
         let v: JsonVal = serde_json::json!({});
         assert!(matches!((dec.run)(&v), IpeResult::Ok(ref p) if p.is_empty()));
     }

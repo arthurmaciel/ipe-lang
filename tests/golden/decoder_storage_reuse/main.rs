@@ -31,47 +31,22 @@ type Value = JsonVal;
 // USER TYPES
 // ===========================================
 
-pub enum MainCodec<T1: 'static> {
-    Codec(RecEncMkDec<T1>),
+pub enum MainDecBox<T1> {
+    DecBox(RecDec<T1>),
 }
-impl<T1: Clone + 'static> Clone for MainCodec<T1> {
-    fn clone(&self) -> Self {
-        match self {
-            MainCodec::Codec(p0) => MainCodec::Codec(p0.clone()),
-        }
-    }
-}
-impl<T1: IpeStringify + std::fmt::Debug + 'static> IpeStringify for MainCodec<T1> {
+impl<T1: IpeStringify + std::fmt::Debug> IpeStringify for MainDecBox<T1> {
     fn ipe_show(&self) -> String {
         match self {
-            MainCodec::Codec(_) => format!("Codec {}", "<fn>"),
+            MainDecBox::DecBox(_) => format!("DecBox {}", "<fn>"),
         }
     }
 }
-#[derive(Clone, Debug, PartialEq)]
-pub struct Rec_ {
-
+pub struct RecDec<T1> {
+    dec: Decoder<T1>,
 }
-impl IpeStringify for Rec_ {
+impl<T1: IpeStringify + std::fmt::Debug> IpeStringify for RecDec<T1> {
     fn ipe_show(&self) -> String {
-        "{}".to_string()
-    }
-}
-pub struct RecEncMkDec<T1> {
-    enc: ::std::sync::Arc<dyn Fn(T1) -> JsonVal + Send + Sync + 'static>,
-    mkDec: ::std::sync::Arc<dyn Fn(Rec_) -> Decoder<T1> + Send + Sync + 'static>,
-}
-impl<T1> Clone for RecEncMkDec<T1> {
-    fn clone(&self) -> Self {
-        Self {
-            enc: self.enc.clone(),
-            mkDec: self.mkDec.clone(),
-        }
-    }
-}
-impl<T1: IpeStringify + std::fmt::Debug> IpeStringify for RecEncMkDec<T1> {
-    fn ipe_show(&self) -> String {
-        format!("{{{} {}}}", "<fn>", "<fn>")
+        format!("{{{}}}", "<fn>")
     }
 }
 
@@ -242,59 +217,25 @@ pub fn file_rename(src: ipe_runtime::path::Path, dst: ipe_runtime::path::Path) -
     ipe_runtime::file::file_rename(src, dst)
 }
 
-pub fn main_int_codec() -> MainCodec<i64> {
+pub fn main_int_box() -> MainDecBox<i64> {
     let _ipe_recursion_guard = crate::recursion_guard();
-    MainCodec::Codec(RecEncMkDec {
-        enc: {
-            let __ipe_fn: ::std::sync::Arc<dyn Fn(i64) -> JsonVal + Send + Sync + 'static> =
-                ::std::sync::Arc::new(move |n: i64| -> JsonVal { json_enc_int(n) });
-            __ipe_fn
-        },
-        mkDec: {
-            let __ipe_fn: ::std::sync::Arc<dyn Fn(Rec_) -> Decoder<i64> + Send + Sync + 'static> =
-                ::std::sync::Arc::new(move |arg_0: Rec_| -> Decoder<i64> {
-                    json_decode_int::<IpeError>()
-                });
-            __ipe_fn
-        },
+    MainDecBox::DecBox(RecDec {
+        dec: json_decode_int::<IpeError>(),
     })
 }
-pub fn main_string_codec() -> MainCodec<String> {
+pub fn main_string_box() -> MainDecBox<String> {
     let _ipe_recursion_guard = crate::recursion_guard();
-    MainCodec::Codec(RecEncMkDec {
-        enc: {
-            let __ipe_fn: ::std::sync::Arc<dyn Fn(String) -> JsonVal + Send + Sync + 'static> =
-                ::std::sync::Arc::new(move |s: String| -> JsonVal { json_enc_string(s) });
-            __ipe_fn
-        },
-        mkDec: {
-            let __ipe_fn: ::std::sync::Arc<
-                dyn Fn(Rec_) -> Decoder<String> + Send + Sync + 'static,
-            > = ::std::sync::Arc::new(move |arg_1: Rec_| -> Decoder<String> {
-                json_decode_string::<IpeError>()
-            });
-            __ipe_fn
-        },
+    MainDecBox::DecBox(RecDec {
+        dec: json_decode_string::<IpeError>(),
     })
-}
-pub fn main_encode_list<T1: 'static + Clone>(codec: MainCodec<T1>, xs: Vec<T1>) -> String {
-    let _ipe_recursion_guard = crate::recursion_guard();
-    match codec {
-        MainCodec::Codec(r) => json_enc_encode(0, json_enc_list({
-            let __ipe_fn: Box<dyn Fn(T1) -> JsonVal + Send + Sync + 'static> = Box::new(move |eta_0: T1| -> JsonVal { (r).enc.clone()(eta_0) });
-            __ipe_fn
-        }, xs)),
-    }
 }
 pub fn main_decode_list<T1: 'static + Send + Clone>(
-    codec: MainCodec<T1>,
+    box_: MainDecBox<T1>,
     s: String,
 ) -> IpeResult<ipe_runtime::error::IpeError, Vec<T1>> {
     let _ipe_recursion_guard = crate::recursion_guard();
-    match codec {
-        MainCodec::Codec(r) => {
-            decode_from_json_string(decode_list(((r).mkDec.clone())(Rec_ {  })), s)
-        }
+    match box_ {
+        MainDecBox::DecBox(r) => decode_from_json_string(decode_list((r).dec.clone()), s),
     }
 }
 pub fn main_report_ints(res: IpeResult<ipe_runtime::error::IpeError, Vec<i64>>) -> String {
@@ -314,18 +255,21 @@ pub fn main_report_strings(res: IpeResult<ipe_runtime::error::IpeError, Vec<Stri
 pub fn ipe_main() -> IpeTask<()> {
     let _ipe_recursion_guard = crate::recursion_guard();
     io_println(string_join(" ".to_string(), vec![
-        crate::main_encode_list(crate::main_int_codec(), vec![1, 2, 3]),
         crate::main_report_ints(crate::main_decode_list(
-            crate::main_int_codec(),
+            crate::main_int_box(),
             "[4,5,6]".to_string(),
         )),
-        crate::main_encode_list(crate::main_string_codec(), vec![
-            "a".to_string(),
-            "b".to_string(),
-        ]),
+        crate::main_report_ints(crate::main_decode_list(
+            crate::main_int_box(),
+            "[7,8]".to_string(),
+        )),
         crate::main_report_strings(crate::main_decode_list(
-            crate::main_string_codec(),
+            crate::main_string_box(),
             "[\"x\",\"y\",\"z\"]".to_string(),
+        )),
+        crate::main_report_strings(crate::main_decode_list(
+            crate::main_string_box(),
+            "[\"p\"]".to_string(),
         )),
     ]))
 }

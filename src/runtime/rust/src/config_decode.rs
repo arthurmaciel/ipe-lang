@@ -52,12 +52,12 @@ pub fn config_maybe<E: From<String> + 'static, T: 'static + Send>(
 // applying `decoder` to each value. Non-object input is `Err`; the first entry
 // whose value fails short-circuits with its real error.
 pub fn config_dict<E: From<String> + 'static, T: 'static + Send>(
-    decoder: impl Fn() -> Decoder<E, T> + Send + 'static,
+    decoder: Decoder<E, T>,
 ) -> Decoder<E, IpeDict<T>> {
     Decoder::new(
         Box::new(move |v| match v.as_object() {
             Some(obj) => {
-                let d = decoder();
+                let d = &decoder;
                 let mut out: IpeDict<T> = IpeDict::new();
                 for (key, val) in obj {
                     match (d.run)(val) {
