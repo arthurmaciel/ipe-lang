@@ -1,0 +1,31 @@
+module Main exposing (main)
+
+import Ipe.Io as Io
+import Ipe.String
+
+
+-- A function READ out of a record field (a `SharedFun` `Arc<dyn Fn>` carrier)
+-- and passed into an ordinary monomorphized higher-order parameter
+-- (`FN0: Fn(..)`). The `Arc<dyn Fn>` read must be eta-demoted onto the direct
+-- `Box<dyn Fn>` carrier at the argument boundary, so accept ⇒ cargo-build
+-- (THE SEAL). This is the read-frontier dual of the fill-side normalization: a
+-- fn stored INTO a record field rides `Arc`, a fn passed as a DIRECT HOF
+-- argument rides `Box`, and the read edge converts between them.
+
+
+type alias Runner =
+    { run : Int -> Int }
+
+
+runner : Runner
+runner =
+    { run = \n -> n + 1 }
+
+
+applyIt : (Int -> Int) -> Int -> Int
+applyIt f x =
+    f x
+
+
+main =
+    Io.println (String.fromInt (applyIt runner.run 7))

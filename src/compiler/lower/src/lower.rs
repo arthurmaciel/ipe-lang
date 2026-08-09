@@ -8093,6 +8093,21 @@ pub struct Lowerer<'a> {
     /// template match. Scoped save/restore per registering `let`; interior
     /// mutability so the lowering walk stays over a shared `&self`.
     toplevel_fn_aliases: std::cell::RefCell<BTreeMap<Symbol, TopLevelKey>>,
+    /// Pattern binders that project a function value OUT of a storage carrier —
+    /// an enum-constructor payload, a tuple component, or a collection element —
+    /// whose carrier is therefore [`IrType::SharedFun`] (`Arc<dyn Fn>`), keyed to
+    /// the projected arrow's params/ret. The dual of the fill-side
+    /// [`Self::promote_stored_fn_carrier`]: when such a read flows into a DIRECT
+    /// higher-order-function parameter (a monomorphized `Fn`/generic slot, which
+    /// an `Arc<dyn Fn>` does not satisfy), the read is eta-demoted back onto the
+    /// direct `Box<dyn Fn>` carrier at the argument boundary
+    /// ([`Self::demote_shared_fn_read`]). A record-field read carries its
+    /// `SharedFun` carrier on its own [`Expr::Access`] `field_ty`, so it needs no
+    /// registry; only pattern binders — whose carrier is fixed by the scrutinee's
+    /// storage position, not the binder's own arrow — are recorded here. Scoped
+    /// save/restore per match arm; interior mutability so the lowering walk stays
+    /// over a shared `&self`.
+    shared_fn_reads: std::cell::RefCell<BTreeMap<Symbol, (Vec<IrType>, IrType)>>,
 }
 
 /// Normalize the fn-carrier of every function type that sits DIRECTLY under a
@@ -9001,6 +9016,7 @@ impl<'a> Lowerer<'a> {
             promotable_fn_binders: std::cell::RefCell::new(BTreeSet::new()),
             deferred_fun_captures: std::cell::RefCell::new(BTreeMap::new()),
             toplevel_fn_aliases: std::cell::RefCell::new(BTreeMap::new()),
+            shared_fn_reads: std::cell::RefCell::new(BTreeMap::new()),
         }
     }
 
@@ -14885,6 +14901,23 @@ impl<'a> Lowerer<'a> {
                         // whose function VALUE argument is stored on the `Arc`
                         // carrier (see method doc).
                         self.promote_dict_ctor_value_carrier(&resolved, args, &mut lowered_args)?;
+                        // READ frontier (the dual of the fill promoters above): a
+                        // function READ out of a storage carrier (`Arc<dyn Fn>`)
+                        // and passed into a DIRECT higher-order parameter — a
+                        // monomorphized `Fn`/generic slot the `Arc` does not
+                        // satisfy — is eta-demoted onto the `Box` carrier. Scoped
+                        // to a top-level user def's declared arrow params (the
+                        // generic-`Fn` slot class); a kernel's fn param that STORES
+                        // its argument stays on `Arc` (the fill promoters above own
+                        // those), so only the top-level arm demotes.
+                        if let canon::Expr_::VarTopLevel { module, name } = &callee.value {
+                            self.demote_shared_fn_read_args(
+                                module,
+                                *name,
+                                args,
+                                &mut lowered_args,
+                            )?;
+                        }
                         // Type-directed `onSubmit` handler classification. The
                         // decision (decode-the-form vs dispatch-a-fixed-value)
                         // is a property of the handler's SOLVED type — an arrow
@@ -15098,6 +15131,233 @@ impl<'a> Lowerer<'a> {
                 args: call_args,
             }),
         })
+    }
+
+    /// The READ-frontier dual of [`Self::promote_stored_fn_carrier`]. When a
+    /// function value read OUT of a storage carrier (`Arc<dyn Fn>`, an
+    /// [`IrType::SharedFun`]) flows into a DIRECT higher-order-function parameter
+    /// — a monomorphized `Fn`/generic slot or a bare `Box<dyn Fn>` param, neither
+    /// of which an `Arc<dyn Fn>` satisfies — the read is eta-demoted back onto the
+    /// direct `Box<dyn Fn>` carrier (`Box::new(move |eta_0, …| (read)(eta_0, …))`).
+    ///
+    /// This is the exact reverse of the fill side, and agrees with it by
+    /// construction: a stored slot carries `Arc`, a direct slot carries `Box`, and
+    /// wherever the two meet a total O(1) eta-adapter converts. An `Arc<dyn Fn>` is
+    /// callable by shared reference, so the wrapper calls the moved-in shared value
+    /// and IS itself a fresh `Box<dyn Fn>` — sound, no double-wrap, arity and
+    /// return preserved by construction. Only a genuine `SharedFun`-carried read
+    /// ([`Self::shared_fn_read_carrier`]) is demoted; every other argument
+    /// (including a value already on the `Box` carrier, or a fill into another
+    /// storage slot) is left untouched, so a program with no stored-function read
+    /// is byte-identical.
+    fn demote_shared_fn_read(&self, value: Expr, params: &[IrType], ret: &IrType) -> DResult<Expr> {
+        let mut fresh_params: Vec<(Symbol, IrType)> = Vec::with_capacity(params.len());
+        let mut call_args: Vec<Expr> = Vec::with_capacity(params.len());
+        for (offset, pty) in params.iter().enumerate() {
+            let sym = self.eta_params.get(offset).copied().ok_or_else(|| {
+                bug(
+                    "ipe_lower::demote_shared_fn_read",
+                    "eta-parameter pool smaller than the read arrow's arity",
+                )
+            })?;
+            fresh_params.push((sym, pty.clone()));
+            call_args.push(Expr::Var(sym));
+        }
+        // A `Var`/`CloneVar` leaf is MOVED into the `Box` closure and called by
+        // shared reference; the shared `Arc` clone-forwards fine, but moving keeps
+        // the wrapper lean and matches the fill side's leaf discipline.
+        let callee = match value {
+            Expr::Var(s) | Expr::CloneVar(s) => Expr::Var(s),
+            other => other,
+        };
+        Ok(Expr::Lambda {
+            params: fresh_params,
+            ret: ret.clone(),
+            body: Box::new(Expr::Apply {
+                func: Box::new(callee),
+                args: call_args,
+            }),
+        })
+    }
+
+    /// Demote every `SharedFun`-carried argument that flows into a DIRECT
+    /// higher-order parameter of a top-level user def onto the `Box<dyn Fn>`
+    /// carrier. A parameter is a direct fn position when the def's DECLARED
+    /// signature has an arrow (`Ty::Fun`) there — an ordinary `Box<dyn Fn>` param —
+    /// or a bare type variable (`Ty::Var`) there — a monomorphized `FN: Fn(..)`
+    /// generic slot; both reject an `Arc<dyn Fn>` (`E0277`). An argument whose
+    /// lowered carrier is `SharedFun` ([`Self::shared_fn_read_carrier`]) is
+    /// eta-demoted; every other argument is untouched, so a call with no
+    /// stored-function read is byte-identical. A missing declared template fails
+    /// open exactly as the sibling generic-slot gate does.
+    ///
+    /// A GENUINELY-generic slot bound to a function is already fail-closed upstream
+    /// by [`Self::reject_fn_through_generic_slot`] (the `Clone`-bounded `FN` a
+    /// boxed closure cannot satisfy), so in practice the demote lands on a
+    /// concrete-arrow `Box<dyn Fn>` param — which genuinely accepts the demoted
+    /// closure. The `Ty::Var` clause is a belt-and-suspenders guard for a generic
+    /// slot that the upstream gate leaves live.
+    fn demote_shared_fn_read_args(
+        &self,
+        module: &[Symbol],
+        name: Symbol,
+        canon_args: &[canon::Expr],
+        lowered_args: &mut [Expr],
+    ) -> DResult<()> {
+        let Some(declared) = self.types.env.get(&(module.to_vec(), name)) else {
+            return Ok(());
+        };
+        let mut cur = declared;
+        for (offset, slot) in lowered_args.iter_mut().enumerate() {
+            let Ty::Fun(param_tpl, rest) = cur else {
+                break;
+            };
+            // A declared arrow OR a bare type variable is a DIRECT fn position; a
+            // concrete non-arrow, non-var param (a record/enum that STORES the fn)
+            // is a fill slot the promoters own — never demoted.
+            let direct_fn_slot = matches!(param_tpl.as_ref(), Ty::Fun(_, _) | Ty::Var(_));
+            if direct_fn_slot
+                && let Some((params, ret)) = self.shared_fn_read_carrier(slot).or_else(|| {
+                    canon_args
+                        .get(offset)
+                        .and_then(|a| self.canon_record_read_carrier(a))
+                })
+            {
+                let read = std::mem::replace(slot, Expr::Unit);
+                *slot = self.demote_shared_fn_read(read, &params, &ret)?;
+            }
+            cur = rest.as_ref();
+        }
+        Ok(())
+    }
+
+    /// The `SharedFun` carrier of a RECORD-FIELD read argument, recovered from the
+    /// record's OWN type rather than the lowered access's `field_ty`. A field read
+    /// (`runner.run`) lowers to an [`Expr::Access`] whose `field_ty` is the
+    /// access's direct region type (`Fun`) — the record-field storage flip
+    /// ([`normalize_record_fun_carriers`]) lives on the STRUCT field, not on the
+    /// access — so the read emits `Arc<dyn Fn>` even though its `field_ty` is the
+    /// direct carrier. Consult the record's solved type, lower it (which applies
+    /// the flip), and read the field's carrier: a `SharedFun` field is an
+    /// `Arc`-carried read. A non-record-access argument, a non-`SharedFun` field,
+    /// or an unresolvable record type is `None` — never demoted.
+    fn canon_record_read_carrier(&self, arg: &canon::Expr) -> Option<(Vec<IrType>, IrType)> {
+        let canon::Expr_::Access(record, field) = &arg.value else {
+            return None;
+        };
+        let record_ty = self.region_ty(record.span)?;
+        let IrType::Record(fields) = self.ir_type_from_ty(record_ty, record.span).ok()? else {
+            return None;
+        };
+        match fields.get(field)? {
+            IrType::SharedFun(params, ret) => Some((params.clone(), (**ret).clone())),
+            _ => None,
+        }
+    }
+
+    /// Does the scrutinee PROJECT a function element out of a stored collection —
+    /// an application (`List.head fns`, `Dict.get k tbl`, …) whose collection
+    /// argument's solved element carries a function
+    /// ([`collection_storable_element_carries_function`])? The collection element
+    /// flip carries such an element onto `Arc`, and an element-projecting kernel's
+    /// `Maybe`/`Result` result inherits that `Arc` element through
+    /// monomorphization, so the projected `Just`/payload binder reads an
+    /// `Arc<dyn Fn>` — unlike a directly-built `Maybe (Int -> Int)`, whose payload
+    /// stays on `Box`. Conservative and structural: it fires only when an argument
+    /// is a fn-carrying collection, so a non-collection scrutinee is never
+    /// mis-registered.
+    fn scrutinee_projects_collection_fn(&self, scrutinee: &canon::Expr) -> bool {
+        let canon::Expr_::Call(_, args) = &scrutinee.value else {
+            return false;
+        };
+        let arg_slice = args.as_slice();
+        arg_slice.iter().any(|a| {
+            self.region_ty(a.span)
+                .is_some_and(|ty| collection_storable_element_carries_function(self.interner, ty))
+        })
+    }
+
+    /// The `SharedFun` (`Arc<dyn Fn>`) carrier of a lowered value, if it is a
+    /// storage-carrier read — the argument shapes that reach emit as `Arc<dyn Fn>`
+    /// rather than `Box<dyn Fn>`:
+    ///
+    /// * a record field read whose field type is `SharedFun`
+    ///   ([`Expr::Access`] carries the flipped `field_ty`);
+    /// * a value already constructed on the `Arc` carrier ([`Expr::SharedLambda`]);
+    /// * a pattern binder that projected a function out of an enum payload, tuple
+    ///   component, or collection element — recorded in [`Self::shared_fn_reads`]
+    ///   at its binding site, where the scrutinee's storage carrier is known.
+    ///
+    /// Every other shape (a direct `Box` lambda, a top-level fn reference, a plain
+    /// non-storage binder) returns `None`, so it is never demoted and stays
+    /// byte-identical.
+    fn shared_fn_read_carrier(&self, value: &Expr) -> Option<(Vec<IrType>, IrType)> {
+        match value {
+            Expr::Access {
+                field_ty: IrType::SharedFun(params, ret),
+                ..
+            } => Some((params.clone(), (**ret).clone())),
+            Expr::SharedLambda { params, ret, .. } => {
+                Some((params.iter().map(|(_, t)| t.clone()).collect(), ret.clone()))
+            }
+            Expr::Var(s) | Expr::CloneVar(s) => self.shared_fn_reads.borrow().get(s).cloned(),
+            _ => None,
+        }
+    }
+
+    /// Register every match-arm pattern binder that projects a function OUT of a
+    /// storage carrier into [`Self::shared_fn_reads`], so a later read of the
+    /// binder into a direct higher-order parameter is demoted onto the `Box`
+    /// carrier. A function payload is `Arc`-carried when EITHER:
+    ///
+    /// * the constructor is a USER enum — its payload arrow is flipped to
+    ///   `SharedFun` at type lowering ([`normalize_enum_payload_fun_carrier`]),
+    ///   so any fn-typed payload binder reads an `Arc`; or
+    /// * the scrutinee is itself a stored-function read
+    ///   ([`Self::shared_fn_read_carrier`]) — a `Maybe`/collection projection whose
+    ///   element the collection flip carried onto `Arc` through monomorphization
+    ///   (`List.head` over a stored `List` of functions yields
+    ///   `IpeMaybe<Arc<dyn Fn>>`), so its `Just`/payload binder reads an `Arc` even
+    ///   though a directly-built `Maybe (Int -> Int)` payload stays on `Box`.
+    ///
+    /// A whole-value catch-all binder (a bare `PVar` at the pattern root) is NOT a
+    /// storage read — it aliases the scrutinee, whose carrier the scrutinee's own
+    /// read already carries — so it is skipped. The caller saves and restores
+    /// [`Self::shared_fn_reads`] around the arm so a binder never outlives its
+    /// pattern scope.
+    fn register_shared_fn_arm_binders(
+        &self,
+        canon_scrutinee: &canon::Expr,
+        scrutinee: &Expr,
+        pat: &canon::Pattern,
+    ) {
+        let canon::Pattern_::PCtor { name, args, .. } = &pat.value else {
+            return;
+        };
+        // A runtime `Just`/`Ok` payload stays on `Box` UNLESS the scrutinee is a
+        // shared read (the element flip carried it onto `Arc`); a user ctor's
+        // payload always flips to `Arc`.
+        let payload_is_shared = !self.is_builtin_runtime_ctor(*name)
+            || self.shared_fn_read_carrier(scrutinee).is_some()
+            || self.scrutinee_projects_collection_fn(canon_scrutinee);
+        if !payload_is_shared {
+            return;
+        }
+        for arg in args {
+            let canon::Pattern_::PVar(sym) = &arg.value else {
+                continue;
+            };
+            // The binder's projected arrow — the solver records a type at the
+            // pattern-binder span. A missing / non-arrow / unlowerable type is not
+            // a stored fn read: skip it (fail-closed, byte-identical to before).
+            if let Some(ty @ Ty::Fun(_, _)) = self.region_ty(arg.span)
+                && let Ok(IrType::Fun(params, ret)) = self.ir_type_from_ty(ty, arg.span)
+            {
+                self.shared_fn_reads
+                    .borrow_mut()
+                    .insert(*sym, (params, *ret));
+            }
+        }
     }
 
     /// Normalize the single argument of a `succeed` decoder kernel
@@ -19799,8 +20059,17 @@ impl<'a> Lowerer<'a> {
                 // sound — the classifier's own `fun_value_arc_promotable` filter
                 // decides which actually promote; a non-fn binder is a no-op.
                 let arm_syms = collect_arm_pat_pvars(&br.pat.value);
+                // Read-frontier registration: a fn-typed pattern binder that
+                // projects a function OUT of a storage carrier (a user-enum
+                // payload, or a `Maybe`/collection projection whose element the
+                // flip carried onto `Arc`) reads an `Arc<dyn Fn>`. Record it so a
+                // read into a direct higher-order parameter demotes to `Box`
+                // ([`Self::demote_shared_fn_read`]). Scoped to this arm.
+                let shared_before = self.shared_fn_reads.borrow().clone();
+                self.register_shared_fn_arm_binders(scrut, &scrutinee, &br.pat);
                 let mut arm_body = self
                     .with_promotable_fn_binders(arm_syms.clone(), || self.lower_expr(&br.body))?;
+                *self.shared_fn_reads.borrow_mut() = shared_before;
 
                 // Move-ownership discipline for arm-bound variables — each
                 // symbol the canon pattern introduces is owned in the arm body
