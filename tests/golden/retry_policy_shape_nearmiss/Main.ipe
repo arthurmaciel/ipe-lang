@@ -1,0 +1,29 @@
+module Main exposing (main)
+
+import Ipe.Io as Io
+
+
+-- SEAL negative: a USER record that merely NAMES a `shouldRetry` field is NOT
+-- the kernel `RetryPolicy e` shape (the exact closed
+-- `{ baseMs, jitter, kind, maxAttempts, shouldRetry }`). The RetryPolicy gate
+-- exemption must match that FULL closed signature, never a lone `shouldRetry`
+-- key — otherwise this record takes the kernel-struct carrier and the emitted
+-- crate fails `cargo build` (E0308, `Box` vs `Arc`) after ipe accepted (a SEAL
+-- breach). `mk` is a runtime-selected function value (`pick True`), so its
+-- declared template is unrecoverable and the value-callee gate is the one that
+-- must fire. The fn-typed parameter `f` is threaded into the near-miss record's
+-- field, so this must fail closed with IPE-L0107.
+pick : Bool -> ((Int -> Int) -> { shouldRetry : Int -> Int })
+pick b =
+    if b then
+        (\f -> { shouldRetry = f })
+    else
+        (\f -> { shouldRetry = (\x -> f (x + 1)) })
+
+
+main =
+    let
+        mk = pick True
+        rec = mk (\n -> n)
+    in
+    Io.println "unreached"

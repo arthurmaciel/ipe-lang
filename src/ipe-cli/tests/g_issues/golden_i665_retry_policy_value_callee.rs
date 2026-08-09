@@ -9,16 +9,18 @@
 //! fn-in-derive-carrier gate saw a fn-typed parameter plus a fn-carrying result
 //! record and rejected the application. That gate lacked the `RetryPolicy`
 //! exemption its sibling gates already carry: the `RetryPolicy` struct is
-//! kernel-managed (`emit_task_retry_call` emits `shouldRetry` as a
-//! `Box<dyn Fn>` field and skips the `Clone`/`PartialEq` derives), so it is a
-//! sound end-to-end path, not a generic derive carrier. The gate now exempts
-//! exactly this shape; every other function-in-record result still fails
-//! closed.
+//! kernel-managed (`emit_task_retry_call` emits `shouldRetry` as an
+//! `Arc<dyn Fn>` field and skips the `Clone`/`PartialEq` derives), so it is a
+//! sound end-to-end path, not a generic derive carrier. The gate exempts
+//! exactly the closed five-field shape; a user record that merely names a
+//! `shouldRetry` field, or any near-miss, still fails closed.
 //!
 //! This golden is the end-to-end SEAL lock: the emitted crate must `cargo
 //! build` and print the retried Task's value `x`.
 
 use std::path::{Path, PathBuf};
+
+use ipe::CliError;
 
 use crate::support::repo_root;
 
@@ -26,6 +28,13 @@ fn fixture_entry(root: &Path) -> PathBuf {
     root.join("tests")
         .join("golden")
         .join("retry_policy_value_callee")
+        .join("Main.ipe")
+}
+
+fn fixture_entry_named(root: &Path, name: &str) -> PathBuf {
+    root.join("tests")
+        .join("golden")
+        .join(name)
         .join("Main.ipe")
 }
 
@@ -60,7 +69,7 @@ fn retry_policy_value_callee_emits() {
 
 /// The load-bearing SEAL proof: under `IPE_E2E=1`, actually `cargo build` the
 /// emitted crate and run it. The `RetryPolicy` struct's `shouldRetry:
-/// Box<dyn Fn>` field must emit soundly; the crate builds and prints `x` (the
+/// Arc<dyn Fn>` field must emit soundly; the crate builds and prints `x` (the
 /// value of the succeeding, non-retried Task).
 #[test]
 fn retry_policy_value_callee_builds_and_runs() {
@@ -82,7 +91,7 @@ fn retry_policy_value_callee_builds_and_runs() {
         outcome.exit_code,
         Some(0),
         "retry_policy_value_callee: emitted crate must build and exit 0 (the \
-         `RetryPolicy` `shouldRetry` fn field emits as a `Box<dyn Fn>` on a \
+         `RetryPolicy` `shouldRetry` fn field emits as an `Arc<dyn Fn>` on a \
          kernel-managed struct); stdout:\n{}",
         outcome.stdout
     );
@@ -90,5 +99,37 @@ fn retry_policy_value_callee_builds_and_runs() {
         outcome.stdout.trim(),
         "x",
         "wrong runtime output — the succeeding Task carries the value `x`"
+    );
+}
+
+/// SEAL negative: the `RetryPolicy` exemption must be scoped to the FULL closed
+/// `{ baseMs, jitter, kind, maxAttempts, shouldRetry }` shape, never a lone
+/// `shouldRetry` key. A USER record `{ shouldRetry : Int -> Int }` threaded
+/// through the value-callee path is NOT that kernel record — exempting it would
+/// route its fn field onto the kernel-struct `Arc` carrier while the ordinary
+/// record-literal emitter supplies a `Box` value, an `ipe`-accept-then-`cargo`-
+/// fail (E0308). The gate must fail closed with IPE-L0107 so the near-miss can
+/// never regress into a SEAL breach. Runs WITHOUT `IPE_E2E` — the assertion is
+/// the gate itself, not an emitted build.
+#[test]
+fn retry_policy_shape_nearmiss_rejects() {
+    let root = repo_root();
+    let entry = fixture_entry_named(&root, "retry_policy_shape_nearmiss");
+    let out = std::env::temp_dir().join("ipec_retry_policy_shape_nearmiss");
+    let _ = std::fs::remove_dir_all(&out);
+    let Ok(runtime) = ipe::resolve_runtime() else {
+        return; // resolver unavailable — skip, matches the other goldens
+    };
+    let built = ipe::build(&entry, &out, &runtime);
+    let got = match &built {
+        Err(CliError::Pipeline { diag, .. }) => Some(diag.code()),
+        _ => None,
+    };
+    assert_eq!(
+        got,
+        Some(ipe_diagnostics::IPE_L0107),
+        "a user `{{ shouldRetry : Int -> Int }}` record is NOT the closed \
+         RetryPolicy shape and must fail closed with IPE-L0107 (never accept + \
+         cargo-fail); got build result {built:?}"
     );
 }
