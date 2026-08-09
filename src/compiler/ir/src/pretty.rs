@@ -525,6 +525,7 @@ const fn kernel_name(kernel: KernelFn) -> &'static str {
         // ── Random seeded (Generator primitives) ─────────────────────────────
         KernelFn::RandomSeededInt => "Random.seededIntRaw",
         KernelFn::RandomSeededFloat => "Random.seededFloatRaw",
+        KernelFn::RandomSeededChoice => "Random.seededChoiceRaw",
         KernelFn::ResultOkDefault => "Result.Ok",
         // ── Dict kernels ─────────────────────────────────────────────────────
         KernelFn::DictEmpty => "Dict.empty",
@@ -706,6 +707,9 @@ const fn kernel_name(kernel: KernelFn) -> &'static str {
         KernelFn::RandomInt => "Random.int",
         KernelFn::RandomFloat => "Random.float",
         KernelFn::RandomChoice => "Random.choice",
+        KernelFn::RandomChoiceMaybe => "Random.choiceMaybe",
+        KernelFn::RandomShuffle => "Random.shuffle",
+        KernelFn::RandomWeighted => "Random.weighted",
         // ── File kernels ────────────────────────────────────────────────
         KernelFn::FileReadFile => "File.readFile",
         KernelFn::FileWriteFile => "File.writeFile",

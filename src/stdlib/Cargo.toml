@@ -18,6 +18,7 @@ path = "src/lib.rs"
 ipe_intern = { path = "../compiler/intern" }
 ipe_parse = { path = "../compiler/parse" }
 ipe_canon = { path = "../compiler/canon" }
+ipe_syntax = { path = "../compiler/syntax" }
 
 [lints]
 workspace = true

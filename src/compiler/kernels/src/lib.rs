@@ -928,6 +928,10 @@ pub enum StdlibKernel {
     /// `Random.seededFloatRaw : Int -> (Float, Int)` — pure seeded unit draw in
     /// `[0, 1)`, `(value, nextSeed)`. Backs the Generator `float` primitive.
     RandomSeededFloat,
+    /// `Random.seededChoiceRaw : Int -> List a -> (Maybe a, Int)` — pure seeded
+    /// element pick, `(choice, nextSeed)`; `Nothing` only for an empty list.
+    /// Backs the `Ipe.Random` `seededChoice` wrapper.
+    RandomSeededChoice,
     // ── Dict ────────────────────────────────────────────────────────────────
     DictEmpty,
     DictIsEmpty,
@@ -1172,6 +1176,15 @@ pub enum StdlibKernel {
     RandomInt,
     RandomFloat,
     RandomChoice,
+    /// `Random.choice : List a -> Task Error (Maybe a)` — entropy-backed uniform
+    /// pick over any element type; total (`Nothing` only for an empty list).
+    RandomChoiceMaybe,
+    /// `Random.shuffle : List a -> Task Error (List a)` — entropy-backed
+    /// Fisher-Yates; returns a new list, input unchanged.
+    RandomShuffle,
+    /// `Random.weighted : List (Float, a) -> Task Error (Maybe a)` —
+    /// entropy-backed pick proportional to non-negative weights; total.
+    RandomWeighted,
     // ── File ────────────────────────────────────────────────────────────────
     FileReadFile,
     FileWriteFile,
@@ -2515,6 +2528,9 @@ impl StdlibKernel {
             Self::RandomSeededFloat => {
                 d("Random", "seededFloatRaw", 1, Pure, "random_seeded_float")
             }
+            Self::RandomSeededChoice => {
+                d("Random", "seededChoiceRaw", 2, Pure, "random_seeded_choice")
+            }
             // ── Dict ────────────────────────────────────────────────────────
             Self::DictEmpty => d("Dict", "empty", 0, Pure, "dict_empty"),
             Self::DictIsEmpty => d("Dict", "isEmpty", 1, Pure, "dict_is_empty"),
@@ -2792,6 +2808,9 @@ impl StdlibKernel {
             Self::RandomInt => d("Random", "int", 2, Pure, "random_int"),
             Self::RandomFloat => d("Random", "float", 2, Pure, "random_float"),
             Self::RandomChoice => d("Random", "choice", 1, Pure, "random_choice"),
+            Self::RandomChoiceMaybe => d("Random", "choiceMaybe", 1, Pure, "random_choice_maybe"),
+            Self::RandomShuffle => d("Random", "shuffle", 1, Pure, "random_shuffle"),
+            Self::RandomWeighted => d("Random", "weighted", 1, Pure, "random_weighted"),
             // ── File ────────────────────────────────────────────────────────
             Self::FileReadFile => d("File", "readFile", 1, Pure, "file_read_file"),
             Self::FileWriteFile => d("File", "writeFile", 2, Pure, "file_write_file"),
@@ -4152,8 +4171,12 @@ impl StdlibKernel {
         Self::RandomInt,
         Self::RandomFloat,
         Self::RandomChoice,
+        Self::RandomChoiceMaybe,
+        Self::RandomShuffle,
+        Self::RandomWeighted,
         Self::RandomSeededInt,
         Self::RandomSeededFloat,
+        Self::RandomSeededChoice,
         // File
         Self::FileReadFile,
         Self::FileWriteFile,
@@ -5353,6 +5376,19 @@ impl StdlibKernel {
         // Random.seededFloat : Int -> (Float, Int)
         const TUPLE_FLOAT_INT: TyShape = TyShape::Tuple(&[FLOAT, INT]);
         const RANDOM_SEEDED_FLOAT: TyShape = TyShape::Fun(&INT, &TUPLE_FLOAT_INT);
+        // Random.seededChoiceRaw : Int -> List a -> (Maybe a, Int)
+        const TUPLE_MAYBE_A_INT: TyShape = TyShape::Tuple(&[MAYBE_A, INT]);
+        const LIST_A_TO_TUPLE_MAYBE_A_INT: TyShape = TyShape::Fun(&LIST_A, &TUPLE_MAYBE_A_INT);
+        const RANDOM_SEEDED_CHOICE: TyShape = TyShape::Fun(&INT, &LIST_A_TO_TUPLE_MAYBE_A_INT);
+        // Random.choice : List a -> Task Error (Maybe a)
+        const TASK_MAYBE_A: TyShape = TyShape::Con(BuiltinTag::Task, &[MAYBE_A]);
+        const RANDOM_CHOICE_MAYBE: TyShape = TyShape::Fun(&LIST_A, &TASK_MAYBE_A);
+        // Random.weighted : List (Float, a) -> Task Error (Maybe a)
+        const TUPLE_FLOAT_A: TyShape = TyShape::Tuple(&[FLOAT, A]);
+        const LIST_TUPLE_FLOAT_A: TyShape = TyShape::Con(BuiltinTag::List, &[TUPLE_FLOAT_A]);
+        const RANDOM_WEIGHTED: TyShape = TyShape::Fun(&LIST_TUPLE_FLOAT_A, &TASK_MAYBE_A);
+        // Random.shuffle : List a -> Task Error (List a)
+        const RANDOM_SHUFFLE: TyShape = TyShape::Fun(&LIST_A, &TASK_LIST_A);
 
         // ── List higher-arity mappers (arrow-only, rank-1 polymorphic). ──
         // indexedMap : (Int -> a -> b) -> List a -> List b
@@ -7181,9 +7217,10 @@ impl StdlibKernel {
             Self::DictFilter => Some(&DICT_FILTER),
             Self::DictUpdate => Some(&DICT_UPDATE),
 
-            // ── Random seeded generators (pure, reproducible; monomorphic). ──
+            // ── Random seeded generators (pure, reproducible). ──
             Self::RandomSeededInt => Some(&RANDOM_SEEDED_INT),
             Self::RandomSeededFloat => Some(&RANDOM_SEEDED_FLOAT),
+            Self::RandomSeededChoice => Some(&RANDOM_SEEDED_CHOICE),
 
             // ── Bytes decode / codec. ──
             Self::BytesToString => Some(&BYTES_TO_MAYBE_STRING),
@@ -7303,6 +7340,9 @@ impl StdlibKernel {
             Self::RandomInt => Some(&INT_TO_INT_TO_TASK_INT),
             Self::RandomFloat => Some(&FLOAT_TO_FLOAT_TO_TASK_FLOAT),
             Self::RandomChoice => Some(&LIST_A_TO_TASK_A),
+            Self::RandomChoiceMaybe => Some(&RANDOM_CHOICE_MAYBE),
+            Self::RandomShuffle => Some(&RANDOM_SHUFFLE),
+            Self::RandomWeighted => Some(&RANDOM_WEIGHTED),
             Self::ProcessRun => Some(&PROCESS_RUN),
 
             // ── Json.Decode / Db.Decode / Config — the shared `Decoder a`
@@ -7929,8 +7969,12 @@ impl StdlibKernel {
             Self::RandomInt
             | Self::RandomFloat
             | Self::RandomChoice
+            | Self::RandomChoiceMaybe
+            | Self::RandomShuffle
+            | Self::RandomWeighted
             | Self::RandomSeededInt
-            | Self::RandomSeededFloat => Some(RuntimeModule::Random),
+            | Self::RandomSeededFloat
+            | Self::RandomSeededChoice => Some(RuntimeModule::Random),
             _ => None,
         }
     }
@@ -8094,7 +8138,10 @@ impl StdlibKernel {
             | Self::UuidV7
             | Self::RandomInt
             | Self::RandomFloat
-            | Self::RandomChoice => Some(Capability::Random),
+            | Self::RandomChoice
+            | Self::RandomChoiceMaybe
+            | Self::RandomShuffle
+            | Self::RandomWeighted => Some(Capability::Random),
             Self::LogInfo
             | Self::LogDebug
             | Self::LogWarn
@@ -8314,6 +8361,7 @@ impl StdlibKernel {
             // `RandomInt`/`RandomFloat`/`RandomChoice` above.
             | Self::RandomSeededInt
             | Self::RandomSeededFloat
+            | Self::RandomSeededChoice
             | Self::DictEmpty
             | Self::DictIsEmpty
             | Self::DictSize
@@ -9393,8 +9441,12 @@ impl StdlibKernel {
             Self::RandomInt
                 | Self::RandomFloat
                 | Self::RandomChoice
+                | Self::RandomChoiceMaybe
+                | Self::RandomShuffle
+                | Self::RandomWeighted
                 | Self::RandomSeededInt
                 | Self::RandomSeededFloat
+                | Self::RandomSeededChoice
         )
     }
 

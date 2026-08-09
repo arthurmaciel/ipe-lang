@@ -16227,6 +16227,9 @@ impl<'a> Lowerer<'a> {
                 | KernelFn::SystemExit
                 // ── Random arity-1 ──────────────────────────────────────
                 | KernelFn::RandomChoice
+                | KernelFn::RandomChoiceMaybe
+                | KernelFn::RandomShuffle
+                | KernelFn::RandomWeighted
                 // `seededFloatRaw : Int -> (Float, Int)` — pure seeded draw
                 | KernelFn::RandomSeededFloat
                 // ── Bitwise arity-1 ─────────────────────────────────────
@@ -16501,6 +16504,8 @@ impl<'a> Lowerer<'a> {
                 // ── Random arity-2 ──────────────────────────────────────
                 | KernelFn::RandomInt
                 | KernelFn::RandomFloat
+                // `seededChoiceRaw : Int -> List a -> (Maybe a, Int)` — pure
+                | KernelFn::RandomSeededChoice
                 // ── File arity-2 ────────────────────────────────────────
                 | KernelFn::FileWriteFile
                 | KernelFn::FileReadFileLimit
@@ -17693,6 +17698,9 @@ impl<'a> Lowerer<'a> {
                     // ── Random Generator primitives ────────────────────
                     ("Random", "seededIntRaw") => Ok(Callee::Kernel(KernelFn::RandomSeededInt)),
                     ("Random", "seededFloatRaw") => Ok(Callee::Kernel(KernelFn::RandomSeededFloat)),
+                    ("Random", "seededChoiceRaw") => {
+                        Ok(Callee::Kernel(KernelFn::RandomSeededChoice))
+                    }
                     // ── Error kernels (Ipe.Error — minimal `Error = String`
                     //    slice) ─────────────────────────────────────────
                     ("Error", "unexpected") => Ok(Callee::Kernel(KernelFn::ErrorUnexpected)),
@@ -18031,6 +18039,9 @@ impl<'a> Lowerer<'a> {
                     ("Random", "int") => Ok(Callee::Kernel(KernelFn::RandomInt)),
                     ("Random", "float") => Ok(Callee::Kernel(KernelFn::RandomFloat)),
                     ("Random", "choice") => Ok(Callee::Kernel(KernelFn::RandomChoice)),
+                    ("Random", "choiceMaybe") => Ok(Callee::Kernel(KernelFn::RandomChoiceMaybe)),
+                    ("Random", "shuffle") => Ok(Callee::Kernel(KernelFn::RandomShuffle)),
+                    ("Random", "weighted") => Ok(Callee::Kernel(KernelFn::RandomWeighted)),
                     // ── File kernels ────────────────────────────────────
                     ("File", "readFile") => Ok(Callee::Kernel(KernelFn::FileReadFile)),
                     ("File", "writeFile") => Ok(Callee::Kernel(KernelFn::FileWriteFile)),

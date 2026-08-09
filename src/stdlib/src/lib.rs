@@ -58,7 +58,14 @@ const DEBUG: &str = include_str!("../Ipe/Debug.ipe");
 const TIME: &str = include_str!("../Ipe/Time.ipe");
 /// `Ipe.System` — process / environment effect kernels.
 const SYSTEM: &str = include_str!("../Ipe/System.ipe");
-/// `Ipe.Random` — entropy-backed randomness effect kernels.
+/// `Ipe.Random` — entropy-backed and seeded randomness, compiled-source Layer-3.
+///
+/// Every member is either a point-free `Ffi.kernel "Random_*"` alias resolved by
+/// `ipe_canon::resolve::detect_kernel_alias` to a registered `Random*`
+/// `StdlibKernel` variant (`ipe_runtime::random::*`), or pure Ipê over those
+/// aliases (`range`, the seeded wrappers, the opaque `Seed` ADT). Registered in
+/// [`COMPILED_STD_MODULES`] (NOT `MODULES`); NOT in `STDLIB_MODULE_QUALIFIERS`,
+/// so the disjointness invariant holds.
 const RANDOM: &str = include_str!("../Ipe/Random.ipe");
 /// `Ipe.File` — file-system effect kernels.
 const FILE: &str = include_str!("../Ipe/File.ipe");
@@ -265,10 +272,6 @@ pub const MODULES: &[StdModule] = &[
     StdModule {
         name: "Ipe.System",
         source: SYSTEM,
-    },
-    StdModule {
-        name: "Ipe.Random",
-        source: RANDOM,
     },
     StdModule {
         name: "Ipe.File",
@@ -603,6 +606,10 @@ pub const COMPILED_STD_MODULES: &[CompiledStdModule] = &[
         source: TUPLE,
     },
     CompiledStdModule {
+        dotted: "Ipe.Random",
+        source: RANDOM,
+    },
+    CompiledStdModule {
         dotted: "Ipe.Random.Generator",
         source: RANDOM_GENERATOR,
     },
@@ -880,6 +887,71 @@ mod tests {
                  the two tables must be disjoint",
                 m.dotted
             );
+        }
+    }
+
+    /// Anti-drift (parse-level floor): every EXPORTED VALUE of a compiled-source
+    /// stdlib module has a source home — either a local top-level binding (a pure
+    /// body OR an `Ffi.kernel "…"` alias) OR a name pulled in by an `import …
+    /// exposing (name)` re-export. An exported value that is neither is the
+    /// source-vs-kernel drift class: a member declared in `exposing (...)` with no
+    /// body, which fails name-resolution at every call site. Catching it here makes
+    /// a declared-but-homeless export a build-time (CI) failure, pre-cargo.
+    ///
+    /// Scope: VALUES only. An exported TYPE may legitimately be a kernel-provided
+    /// opaque (e.g. `Ipe.Path`'s `Path`) with no source declaration — its home is
+    /// the kernel registry, which this parse-only check cannot see. The deeper
+    /// "every export — types included — resolves through the real pipeline" guard
+    /// is `compiled_source_modules_resolve_all_exports` in the `ipe` crate, which
+    /// canonicalises each module against the kernel env. `exposing (..)` (export
+    /// all) has nothing to cross-check and is skipped.
+    #[test]
+    fn every_exported_value_has_a_home() {
+        use ipe_syntax::{Exposed, Exposing};
+
+        for m in COMPILED_STD_MODULES {
+            let mut interner = Interner::new();
+            let parsed = ipe_parse::parse_module(m.source, &mut interner);
+            assert!(
+                parsed.is_ok(),
+                "compiled-source module {} must parse before its exports \
+                 can be checked: {:?}",
+                m.dotted,
+                parsed.err(),
+            );
+            let Ok(parsed) = parsed else { continue };
+
+            let exposed = match &parsed.exposing.value {
+                Exposing::All => continue,
+                Exposing::List(items) => items,
+            };
+
+            // A name re-exported from an `import … exposing (name)` (or from an
+            // export-all import, which surfaces every name of the imported module)
+            // is a resolvable home even without a local declaration.
+            let imported = |name| {
+                parsed.imports.iter().any(|imp| match &imp.exposing.value {
+                    Exposing::All => true,
+                    Exposing::List(items) => items.iter().any(|e| match &e.value {
+                        Exposed::Value(n) | Exposed::Type(n, _) => *n == name,
+                    }),
+                })
+            };
+
+            for item in exposed {
+                if let Exposed::Value(name) = &item.value {
+                    let local = parsed.values.iter().any(|v| v.value.name.value == *name);
+                    let rendered = interner.resolve(*name).unwrap_or("<?>");
+                    assert!(
+                        local || imported(*name),
+                        "{}: exports value `{rendered}` but the module neither \
+                         defines a top-level binding for it nor re-exports it \
+                         from an import — a declared-but-homeless export \
+                         (source-vs-kernel drift)",
+                        m.dotted,
+                    );
+                }
+            }
         }
     }
 

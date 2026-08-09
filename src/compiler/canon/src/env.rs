@@ -77,7 +77,13 @@ pub const STDLIB_MODULE_QUALIFIERS: &[(&[&str], &str)] = &[
     (&["Ipe", "Debug"], "Debug"),
     (&["Ipe", "Time"], "Time"),
     (&["Ipe", "System"], "System"),
-    (&["Ipe", "Random"], "Random"),
+    // NOTE — `Ipe.Random` is DELIBERATELY absent: it is a COMPILED-SOURCE
+    // Layer-3 module (registered in `ipe::stdlib::COMPILED_STD_MODULES`). Its
+    // members are point-free `Ffi.kernel "Random_*"` aliases that
+    // `detect_kernel_alias` routes to the registered `Random*` `StdlibKernel`
+    // variants, plus pure Ipê wrappers (`range`, the seeded helpers, the opaque
+    // `Seed` ADT). A module is EITHER a kernel qualifier here OR compiled-source
+    // — never both (`compiled_vs_kernel_qualifier_disjoint`), so it stays out.
     (&["Ipe", "File"], "File"),
     (&["Ipe", "Process"], "Process"),
     (&["Ipe", "Http"], "Http"),
@@ -1147,13 +1153,10 @@ impl Env {
                     "exit",
                 ],
             ),
-            // `Ipe.Random` — random effects.
-            // `seededIntRaw`/`seededFloatRaw` are the pure deterministic
-            // primitives the compiled-source `Ipe.Random.Generator` builds on.
-            (
-                "Random",
-                &["int", "float", "choice", "seededIntRaw", "seededFloatRaw"],
-            ),
+            // `Ipe.Random` is DELIBERATELY absent: it is COMPILED-SOURCE
+            // (`ipe::stdlib::COMPILED_STD_MODULES`), so its whole surface resolves
+            // from `Ipe/Random.ipe` — the `Ffi.kernel "Random_*"` aliases and the
+            // pure Ipê wrappers — not from this kernel-qualifier catalog.
             // `Ipe.File` — file effects.
             (
                 "File",
@@ -1625,11 +1628,9 @@ impl Env {
             // DELIBERATELY absent: `Ipe.Html` is now COMPILED-SOURCE
             // (`COMPILED_STD_MODULES`), so those aliases live in `Ipe/Html.ipe`
             // as `Ffi.kernel "Html_*"` bindings, not the kernel-qualifier prelude.
-            // `Random.range lo hi` is the pipeline-readable spelling of
-            // `Random.int lo hi` — same type (`Int -> Int -> Task Error Int`)
-            // and same inclusive-both-ends semantics — so it resolves to the
-            // `RandomInt` kernel exactly like `int`.
-            ("Random", "range", "int"),
+            // `Random.range` is likewise DELIBERATELY absent: `Ipe.Random` is now
+            // COMPILED-SOURCE, so `range lo hi = int lo hi` lives in
+            // `Ipe/Random.ipe` as pure Ipê, not a kernel-qualifier alias.
         ];
 
         // ── Cross-qualifier member re-exports ────────────────────────────────
