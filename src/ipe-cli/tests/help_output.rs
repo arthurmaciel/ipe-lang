@@ -259,6 +259,33 @@ fn command_help_lists_that_commands_options() {
 }
 
 #[test]
+fn exec_is_advertised_and_intercepts_its_own_help() {
+    // `exec` must appear on the top-level screen (regression: it was
+    // dispatchable but unadvertised).
+    let top = run(&["--help"]);
+    assert!(top.ok);
+    assert!(
+        top.stdout.contains("ipe exec"),
+        "top-level help must advertise `ipe exec`"
+    );
+
+    // `ipe exec --help` must be intercepted as a help request — it prints the
+    // command page to stdout and exits 0, rather than treating `--help` as an
+    // artifact directory.
+    let r = run(&["exec", "--help"]);
+    assert!(r.ok, "`ipe exec --help` must exit 0");
+    assert!(
+        r.stdout.contains("ipe exec"),
+        "`ipe exec --help` must show the exec synopsis"
+    );
+    assert!(
+        r.stderr.is_empty(),
+        "`ipe exec --help` must not error, got:\n{}",
+        r.stderr
+    );
+}
+
+#[test]
 fn help_word_alone_and_help_of_unknown_both_succeed() {
     assert!(run(&["help"]).ok, "`ipe help` must exit 0");
     let r = run(&["help", "no-such-command"]);

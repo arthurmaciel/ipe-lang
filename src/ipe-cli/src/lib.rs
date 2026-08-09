@@ -2384,51 +2384,27 @@ pub fn run_cli(args: &[String]) -> Result<(), CliError> {
     if intercept_help(args).is_some() {
         return Ok(());
     }
-    match args.split_first() {
-        Some((cmd, rest)) if cmd == "init" => with_help_on_misuse("init", init::run_init(rest)),
-        Some((cmd, rest)) if cmd == "build" => with_help_on_misuse("build", run_build(rest)),
-        Some((cmd, rest)) if cmd == "eject" => with_help_on_misuse("eject", run_eject(rest)),
-        Some((cmd, rest)) if cmd == "type-check" => {
-            with_help_on_misuse("type-check", run_type_check(rest))
-        }
-        Some((cmd, rest)) if cmd == "test" => with_help_on_misuse("test", run_test(rest)),
-        Some((cmd, rest)) if cmd == "verify" => with_help_on_misuse("verify", run_verify(rest)),
-        Some((cmd, rest)) if cmd == "run" => with_help_on_misuse("run", run_run(rest)),
-        Some((cmd, rest)) if cmd == "exec" => with_help_on_misuse("exec", run_exec(rest)),
-        Some((cmd, rest)) if cmd == "watch" => with_help_on_misuse("watch", run_watch(rest)),
-        Some((cmd, rest)) if cmd == "explain" => with_help_on_misuse("explain", run_explain(rest)),
-        Some((cmd, rest)) if cmd == "capabilities" => {
-            with_help_on_misuse("capabilities", run_capabilities(rest))
-        }
-        Some((cmd, rest)) if cmd == "diff" => with_help_on_misuse("diff", diff::run_diff(rest)),
-        Some((cmd, rest)) if cmd == "doc" => with_help_on_misuse("doc", doc::run_doc(rest)),
-        Some((cmd, rest)) if cmd == "rust" => with_help_on_misuse("rust", ffi::run_rust(rest)),
-        Some((cmd, rest)) if cmd == "add" => with_help_on_misuse("add", pkg::run_add(rest)),
-        Some((cmd, rest)) if cmd == "remove" => {
-            with_help_on_misuse("remove", pkg::run_remove(rest))
-        }
-        Some((cmd, rest)) if cmd == "package" => with_help_on_misuse("package", run_package(rest)),
-        Some((cmd, rest)) if cmd == "login" => with_help_on_misuse("login", login::run_login(rest)),
-        Some((cmd, rest)) if cmd == "fix" => with_help_on_misuse("fix", run_fix(rest)),
-        Some((cmd, rest)) if cmd == "fmt" => with_help_on_misuse("fmt", fmt::run_fmt(rest)),
-        Some((cmd, rest)) if cmd == "clean" => with_help_on_misuse("clean", clean::run_clean(rest)),
-        Some((cmd, rest)) if cmd == "lsp" => with_help_on_misuse("lsp", lsp::run_lsp(rest)),
-        Some((cmd, rest)) if cmd == "upgrade" => with_help_on_misuse("upgrade", run_upgrade(rest)),
-        Some((cmd, rest)) if cmd == "health" => {
-            with_help_on_misuse("health", health::run_health(rest))
-        }
-        Some((cmd, rest)) if cmd == "version" || cmd == "--version" || cmd == "-V" => {
-            with_help_on_misuse("version", run_version(rest))
-        }
+    let Some((cmd, rest)) = args.split_first() else {
+        // A bare `ipe` (no command) carries an empty token and just shows help.
+        return Err(CliError::UnknownCommand {
+            attempted: String::new(),
+        });
+    };
+    // `--version` / `-V` are the conventional aliases for the `version` command.
+    let looked_up = match cmd.as_str() {
+        "--version" | "-V" => "version",
+        other => other,
+    };
+    // One registry drives both dispatch and help: a command runs exactly when it
+    // is described, so the two cannot drift. The looked-up handler carries the
+    // canonical static name its misuse `--help` page keys on.
+    match help::handler(looked_up) {
+        Some((name, run)) => with_help_on_misuse(name, run(rest)),
         // An unknown command is misuse: show the top-level help and fail. Unlike
         // an explicit `--help`, this is not a request, so it exits non-zero. The
-        // typed token is kept so a near-miss can be suggested; a bare `ipe`
-        // (no command) carries an empty token and just shows help.
-        Some((cmd, _)) => Err(CliError::UnknownCommand {
-            attempted: cmd.clone(),
-        }),
+        // typed token is kept so a near-miss can be suggested.
         None => Err(CliError::UnknownCommand {
-            attempted: String::new(),
+            attempted: cmd.clone(),
         }),
     }
 }
@@ -2475,7 +2451,7 @@ fn default_entry() -> Result<String, CliError> {
 /// (`crate::watch`). Never returns
 /// `Err` for a build failure (INV-3: a red build is logged, not fatal);
 /// only misuse / setup failures propagate.
-fn run_watch(rest: &[String]) -> Result<(), CliError> {
+pub(crate) fn run_watch(rest: &[String]) -> Result<(), CliError> {
     let args = cli_args::parse_watch(rest)?;
     let entry = match args.entry {
         Some(e) => e,
@@ -2577,7 +2553,7 @@ fn resolve_wasm_target(cli_wasm: bool, wasm_config: Option<&project::WasmConfig>
 }
 
 /// `ipe build [<path>]` — compile a program to a native or WebAssembly artifact.
-fn run_build(rest: &[String]) -> Result<(), CliError> {
+pub(crate) fn run_build(rest: &[String]) -> Result<(), CliError> {
     let args = cli_args::parse_build(rest)?;
     let entry = match args.entry {
         Some(e) => e,
@@ -2812,7 +2788,7 @@ fn compile_and_finalize_native_build(
 /// # Errors
 /// [`CliError::EjectUnsupported`] for an FFI-bearing program; the same
 /// pipeline / filesystem / runtime-resolution errors as [`build_project`].
-fn run_eject(rest: &[String]) -> Result<(), CliError> {
+pub(crate) fn run_eject(rest: &[String]) -> Result<(), CliError> {
     let args = cli_args::parse_eject(rest)?;
     let entry = match args.entry {
         Some(e) => e,
@@ -3161,7 +3137,7 @@ fn bundle_wasm(out_dir: &Path) -> Result<(), CliError> {
 // A linear pipeline (compile → cargo build → resolve capabilities → jail →
 // exec); the steps share enough locals that splitting reads worse than the whole.
 #[allow(clippy::too_many_lines)]
-fn run_run(rest: &[String]) -> Result<(), CliError> {
+pub(crate) fn run_run(rest: &[String]) -> Result<(), CliError> {
     let args = cli_args::parse_run(rest)?;
     let bin_args = args.bin_args;
     let cli_layer = args.static_layer;
@@ -3411,7 +3387,7 @@ fn run_run(rest: &[String]) -> Result<(), CliError> {
 /// # Errors
 /// [`CliError::UsageOwned`] on a missing binary, a native artifact whose profile
 /// is missing/tampered, a refused floor check, or a fail-closed jail refusal.
-fn run_exec(rest: &[String]) -> Result<(), CliError> {
+pub(crate) fn run_exec(rest: &[String]) -> Result<(), CliError> {
     // Split `<dir> [-- args…]`.
     let (dir_arg, app_args) = rest
         .iter()
@@ -3548,7 +3524,7 @@ fn cargo_target_directory(crate_dir: &Path) -> Result<PathBuf, CliError> {
 
 /// `ipe explain [<CODE>]`. No argument prints the one-line index of every code
 /// and its title; an argument prints that code's embedded explain page.
-fn run_explain(rest: &[String]) -> Result<(), CliError> {
+pub(crate) fn run_explain(rest: &[String]) -> Result<(), CliError> {
     // The format flags apply to the LIST (`ipe explain` with no code) — the
     // machine-consumable surface. Explaining a single code prints a human
     // teaching page, which carries no `--plain` / `--json` form.
@@ -3624,7 +3600,7 @@ fn render_code_index(format: cli_args::OutputFormat, stream: &impl std::io::IsTe
 /// `ipe fix <path>` — apply machine-applicable fixes to the source file.
 /// Default is interactive per-edit confirmation;
 /// `--yes` is durable authorization to apply every machine-applicable edit.
-fn run_fix(rest: &[String]) -> Result<(), CliError> {
+pub(crate) fn run_fix(rest: &[String]) -> Result<(), CliError> {
     let args = cli_args::parse_fix(rest)?;
     apply_fixes_cmd(
         &PathBuf::from(&args.entry),
@@ -3953,7 +3929,7 @@ fn typecheck_entry_via_graph(entry: &Path) -> Result<(), CliError> {
 /// [`CliError::UsageOwned`] on a missing or unknown subcommand; the subcommand's
 /// own errors (a build failure, a [`CliError::PackageAudit`] reject, or a
 /// [`CliError::Publish`] refusal) otherwise.
-fn run_package(rest: &[String]) -> Result<(), CliError> {
+pub(crate) fn run_package(rest: &[String]) -> Result<(), CliError> {
     match rest.split_first() {
         Some((sub, tail)) if sub == "audit" => audit::run_audit(tail),
         Some((sub, tail)) if sub == "publish" => publish::run_publish(tail),
@@ -4042,7 +4018,7 @@ fn resolve_analysis_entry(path: &Path) -> Result<PathBuf, CliError> {
 /// `typecheck` query: no IR lowering, no Rust emission, nothing written. Exits
 /// 0 with a friendly framed success line when the program type-checks, or
 /// non-zero carrying the first rendered diagnostic when it does not.
-fn run_type_check(rest: &[String]) -> Result<(), CliError> {
+pub(crate) fn run_type_check(rest: &[String]) -> Result<(), CliError> {
     let arg = match cli_args::single_positional(rest, "type-check")? {
         Some(e) => PathBuf::from(e),
         None => PathBuf::from(default_entry()?),
@@ -4302,7 +4278,7 @@ fn verify_test(path: Option<&str>) -> Result<(), CliError> {
 /// [`CliError::UsageOwned`] on an unexpected option or extra argument.
 /// [`CliError::TestFailed`] when a test case fails (the non-zero exit contract).
 /// Otherwise any build or toolchain error from compiling the runner.
-fn run_test(rest: &[String]) -> Result<(), CliError> {
+pub(crate) fn run_test(rest: &[String]) -> Result<(), CliError> {
     let path = cli_args::single_positional(rest, "test")?;
 
     // Wrap the runner in a progress stage so `ipe test` follows the same
@@ -4343,7 +4319,7 @@ fn run_test(rest: &[String]) -> Result<(), CliError> {
 /// [`CliError::UsageOwned`] on an unexpected option or extra argument. Otherwise
 /// the first failing stage's own error, which carries its diagnostic and drives
 /// the non-zero exit; a clean run exits 0.
-fn run_verify(rest: &[String]) -> Result<(), CliError> {
+pub(crate) fn run_verify(rest: &[String]) -> Result<(), CliError> {
     let path = cli_args::single_positional(rest, "verify")?;
     let total = VERIFY_STAGES.len();
 
@@ -4373,7 +4349,7 @@ fn run_verify(rest: &[String]) -> Result<(), CliError> {
     Ok(())
 }
 
-fn run_capabilities(rest: &[String]) -> Result<(), CliError> {
+pub(crate) fn run_capabilities(rest: &[String]) -> Result<(), CliError> {
     let (format, positional) = cli_args::split_format(rest, "capabilities")?;
     let arg = match positional.first() {
         Some(e) => PathBuf::from(e),
@@ -4459,7 +4435,7 @@ fn render_capabilities(
 }
 
 /// `ipe version` — print the ipe version in the requested format.
-fn run_version(rest: &[String]) -> Result<(), CliError> {
+pub(crate) fn run_version(rest: &[String]) -> Result<(), CliError> {
     let (format, positional) = cli_args::split_format(rest, "version")?;
     if let Some(extra) = positional.first() {
         return Err(CliError::UsageOwned(format!(
