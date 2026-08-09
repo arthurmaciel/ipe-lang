@@ -18,8 +18,8 @@
 //!   emits `eta_adapt_funcvalue` — a Lambda wrapper with N params whose body
 //!   is `Apply(Call(callee, [eta_0..eta_{k-1}]), [eta_k..eta_{N-1}])`.
 //!
-//! Gated: green fixtures (F1-F5, F7-F9) require `IPE_E2E=1` for the cargo
-//! build+run step; gate fixtures (F6, F10) run the diagnostic check always.
+//! Gated: green fixtures (F1-F5, F7-F10) require `IPE_E2E=1` for the cargo
+//! build+run step; gate fixture (F6) runs the diagnostic check always.
 //!
 //! ```text
 //! # green suite (cargo-0 required):
@@ -30,8 +30,6 @@
 //! ```
 
 use std::path::{Path, PathBuf};
-
-use ipe::CliError;
 
 fn repo_root() -> PathBuf {
     let joined = Path::new(env!("CARGO_MANIFEST_DIR")).join("..").join("..");
@@ -57,34 +55,6 @@ fn emitted_program_source(out: &Path) -> String {
         }
     }
     acc
-}
-
-/// Assert that `ipe::build(fixture)` surfaces `expected` as a
-/// `CliError::Pipeline` diagnostic.  Runs WITHOUT `IPE_E2E` so the gate
-/// checks remain fast in the default CI pass.
-fn assert_ipec_gate(fixture: &str, out_suffix: &str, expected: ipe_diagnostics::Code) {
-    let root = repo_root();
-    let entry = root
-        .join("tests")
-        .join("golden")
-        .join(fixture)
-        .join("Main.ipe");
-    let out = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join(out_suffix);
-    let _ = std::fs::remove_dir_all(&out);
-
-    let Ok(runtime) = ipe::resolve_runtime() else {
-        return; // runtime unavailable — skip silently rather than fail
-    };
-    let built = ipe::build(&entry, &out, &runtime);
-    let got = match &built {
-        Err(CliError::Pipeline { diag, .. }) => Some(diag.code()),
-        _ => None,
-    };
-    assert_eq!(
-        got,
-        Some(expected),
-        "fixture {fixture}: expected ipec-fail {expected:?}, got build result {built:?}"
-    );
 }
 
 // ── F1 — first-class curried fn + F11 shadow ─────────────────────────────────
@@ -509,29 +479,51 @@ fn f9_decoder_thunk_capture() {
     );
 }
 
-// ── F10 — generic curried fn → IPE-L0126 (T5 deferred) ───────────────────────
+// ── F10 — bare-`Generic` curried capture is admitted (clones under its bound) ──
 
-/// `pairWith : a -> b -> (a, b)`, def-arity 1.  `x`'s declared type `a` lowers
-/// cleanly at `pairWith`'s OWN def-head (the polymorphism gate,
-/// `current_poly_tvars`, is populated for `pairWith`'s own quantified vars
-/// before `lower_def` recurses into the body — `poly_tvar_symbol` closes a
-/// tagged/untagged solver-var-ID mismatch that would make this
-/// SAME lookup miss for a captured-site (zonked, tagged) region read,
-/// masking this gate behind a spurious `IPE-L0102`). With the def-head
-/// lookup succeeding, lowering reaches the lambda body `\y -> (x, y)`,
-/// where `x : a` is captured `NonClone` (`clone_class(Generic) => NonClone`)
-/// and read outside callee position (inside a `Tuple`) — T3's capture-clone
-/// gate fires `IPE-L0126` (`Feature::NonCloneCapture`). With T5 implemented,
-/// the generic `a` would gain a `Clone` bound and this gate would yield,
-/// allowing the lambda to compile cleanly. For now the expected diagnostic
-/// is `IPE-L0126` — still a clean error rather than a silent cargo-fail
-/// (E0507/E0525).
+/// `pairWith : a -> b -> (a, b)`, def-arity 1. Lowering reaches the lambda body
+/// `\y -> (x, y)`, where `x : a` is a bare `Generic` captured outside callee
+/// position (inside a `Tuple`). A bare `Generic` capture clones under the emitted
+/// `a : Clone` bound (`render_fn_generics`' unconditional `with_clone`, the same
+/// bound `param_is_multiuse_clonable` relies on), so the capture-clone gate
+/// yields and the crate builds and runs — a non-`Clone` instantiation is rejected
+/// at the caller by the bound, never a silent cargo-fail. Prints `hello,42`.
 #[test]
-fn f10_generic_curried_gate_l0126() {
-    assert_ipec_gate(
-        "generic_curried",
-        "i121_generic_curried_gate",
-        ipe_diagnostics::IPE_L0126,
+fn f10_generic_curried_capture_builds_and_runs() {
+    if std::env::var("IPE_E2E").is_err() {
+        return;
+    }
+    let root = repo_root();
+    let entry = root
+        .join("tests")
+        .join("golden")
+        .join("generic_curried")
+        .join("Main.ipe");
+    let out = std::env::temp_dir().join("ipec_i121_generic_curried_e2e");
+    let _ = std::fs::remove_dir_all(&out);
+
+    let Ok(runtime) = ipe::resolve_runtime() else {
+        return;
+    };
+    let built = ipe::build(&entry, &out, &runtime);
+    assert!(
+        built.is_ok(),
+        "a bare-`Generic` curried capture is admitted (clones under its `Clone` \
+         bound): {:?}",
+        built.err()
+    );
+
+    let outcome = crate::support::build_and_run_emitted("generic_curried", &out);
+    assert_eq!(
+        outcome.exit_code,
+        Some(0),
+        "must exit 0 (THE SEAL) — was IPE-L0126 before the bare-`Generic` capture \
+         admission; stdout:\n{}",
+        outcome.stdout
+    );
+    assert_eq!(
+        outcome.stdout, "hello,42\n",
+        "the captured generic pairs with its argument"
     );
 }
 

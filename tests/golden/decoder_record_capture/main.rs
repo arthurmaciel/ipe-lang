@@ -243,13 +243,22 @@ pub fn main_string_box() -> MainDecBox<String> {
         dec: json_decode_string::<IpeError>(),
     })
 }
-pub fn main_decode_list<T1: 'static + Send + Clone>(
+pub fn main_list_decoder_of<T1: 'static + Send + Clone>(
     box_: MainDecBox<T1>,
-    s: String,
-) -> IpeResult<ipe_runtime::error::IpeError, Vec<T1>> {
+) -> Box<dyn Fn(String) -> IpeResult<ipe_runtime::error::IpeError, Vec<T1>> + Send + Sync + 'static> {
     let _ipe_recursion_guard = crate::recursion_guard();
     match box_ {
-        MainDecBox::DecBox(r) => decode_from_json_string(decode_list((r).dec.clone()), s),
+        MainDecBox::DecBox(r) => {
+            let __ipe_fn: Box<
+                dyn Fn(String) -> IpeResult<ipe_runtime::error::IpeError, Vec<T1>>
+                    + Send
+                    + Sync
+                    + 'static,
+            > = Box::new(move |s: String| -> IpeResult<ipe_runtime::error::IpeError, Vec<T1>> {
+                decode_from_json_string(decode_list((r.clone()).dec.clone()), s)
+            });
+            __ipe_fn
+        },
     }
 }
 pub fn main_report_ints(res: IpeResult<ipe_runtime::error::IpeError, Vec<i64>>) -> String {
@@ -268,24 +277,18 @@ pub fn main_report_strings(res: IpeResult<ipe_runtime::error::IpeError, Vec<Stri
 }
 pub fn ipe_main() -> IpeTask<()> {
     let _ipe_recursion_guard = crate::recursion_guard();
-    io_println(string_join(" ".to_string(), vec![
-        crate::main_report_ints(crate::main_decode_list(
-            crate::main_int_box(),
-            "[4,5,6]".to_string(),
-        )),
-        crate::main_report_ints(crate::main_decode_list(
-            crate::main_int_box(),
-            "[7,8]".to_string(),
-        )),
-        crate::main_report_strings(crate::main_decode_list(
-            crate::main_string_box(),
-            "[\"x\",\"y\",\"z\"]".to_string(),
-        )),
-        crate::main_report_strings(crate::main_decode_list(
-            crate::main_string_box(),
-            "[\"p\"]".to_string(),
-        )),
-    ]))
+    ({
+        let decodeInts = crate::main_list_decoder_of(crate::main_int_box());
+        ({
+            let decodeStrings = crate::main_list_decoder_of(crate::main_string_box());
+            io_println(string_join(" ".to_string(), vec![
+                crate::main_report_ints((decodeInts)("[1,2,3]".to_string())),
+                crate::main_report_ints((decodeInts)("[4,5]".to_string())),
+                crate::main_report_strings((decodeStrings)("[\"a\",\"b\"]".to_string())),
+                crate::main_report_strings((decodeStrings)("[\"c\"]".to_string())),
+            ]))
+        })
+    })
 }
 
 // Ffi.kernel polyfill — should be unreachable in Rust target;

@@ -1,0 +1,15 @@
+module Main exposing (main)
+
+import Ipe.Io as Io
+
+
+-- Capture a record carrying a `Task` field into a returned closure and FORWARD
+-- the record (not call anything) — a `Task` has no `Clone` carrier, so the whole
+-- record is NonClone and the capture must stay rejected (IPE-L0126).
+forwardTaskRecord : { t : Task Error Int } -> ({} -> { t : Task Error Int })
+forwardTaskRecord c =
+    \_ -> { t = c.t }
+
+
+main =
+    Io.println "unreachable"

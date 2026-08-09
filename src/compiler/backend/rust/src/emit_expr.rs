@@ -167,7 +167,7 @@ fn pat_bound_symbols(pat: &Pat, out: &mut std::collections::BTreeSet<Symbol>) {
 ///
 /// Every binder (`Let`/`Destructure`/`Lambda`/`TailLoop`/`Match` arm
 /// patterns) removes its bound name(s) from the free set of the scope it
-/// introduces, exactly mirroring `ipe_lower::rewrite_var_to_apply`'s
+/// introduces, exactly mirroring `ipe_lower::rewrite_var_free_occurrences`'s
 /// shadow-aware recursion shape.
 pub fn free_vars(expr: &Expr) -> std::collections::BTreeSet<Symbol> {
     let mut out = std::collections::BTreeSet::new();
@@ -289,9 +289,9 @@ fn collect_free_vars(expr: &Expr, out: &mut std::collections::BTreeSet<Symbol>) 
 /// in `expr` with `Expr::CloneVar(target)`, stopping recursion into any subtree
 /// where a binder rebinds `target` (that occurrence is a different binding, not
 /// the captured one). Structurally identical shadow-skip shape to
-/// `ipe_lower::rewrite_var_to_apply` — the one existing precedent for a
+/// `ipe_lower::rewrite_var_free_occurrences` — the shared precedent for a
 /// single-target IR substitution in this codebase — with a `CloneVar` leaf
-/// action instead of an `Apply` wrap.
+/// action instead of the caller-supplied leaf.
 ///
 /// Cloning a `Copy` value (Int/Bool/…) compiles to a bitwise copy — harmless —
 /// so this never needs a Copy/non-Copy type check to stay sound; it only ever

@@ -7,9 +7,11 @@
 //! closure clones the pointer and stays `Fn`. This is the `varN`-projection
 //! shape the codec combinators depend on.
 //!
-//! The promotion is narrowed to FUNCTIONS: a non-function non-`Clone` pattern
-//! binder (a runtime `Decoder` value) forwarded the same way STILL fails closed
-//! IPE-L0126 — the gate is narrowed to functions, never removed.
+//! The gate stays closed for a genuinely non-`Clone` binder: a pattern binder
+//! carrying a `Task` (no `Clone` carrier) forwarded the same way STILL fails
+//! closed IPE-L0126. A `Decoder`-valued binder, by contrast, is now `Clone` (an
+//! `Arc`-backed carrier) and forwards soundly — the gate is narrowed to what
+//! genuinely lacks a `Clone` carrier, never removed.
 //!
 //! `List.sum (run (Codec (\n -> n+1)) [1,2,3])` = `2 + 3 + 4` = `9`.
 
@@ -89,11 +91,11 @@ fn build_source(name: &str, source: &str) -> Option<Result<(), CliError>> {
 }
 
 #[test]
-fn non_fn_non_clone_pattern_capture_forward_stays_fail_closed() {
-    // A `Decoder` VALUE (not a function) extracted by a match-arm pattern and
-    // forwarded into a closure has no `Arc` carrier promotion — it must STILL
-    // fail closed IPE-L0126. The capture-normalization change promotes only
-    // fn-typed pattern binders, never every non-`Clone` value.
+fn decoder_pattern_capture_forward_is_admitted() {
+    // A `Decoder` VALUE extracted by a match-arm pattern and forwarded into a
+    // closure is now sound: the runtime `Decoder<E, T>` is an `Arc`-backed
+    // `Clone` carrier, so the whole binder clones at the closure boundary. This
+    // is the exact P1 unblock — it must be accepted (and, under the SEAL, build).
     let src = "module Main exposing (main)\n\
                import Ipe.Io as Io\n\
                import Ipe.Json.Decode as Decode\n\
@@ -106,6 +108,33 @@ fn non_fn_non_clone_pattern_capture_forward_stays_fail_closed() {
                \x20           List.map (\\_ -> d) [1, 2]\n\
                main =\n\
                \x20   Io.println \"x\"\n";
+    let Some(built) = build_source("fn_pattern_binder_decoder_forward", src) else {
+        return;
+    };
+    assert!(
+        built.is_ok(),
+        "a `Decoder`-valued pattern binder forwarded through a closure is now \
+         `Clone` and must be accepted, got: {built:?}"
+    );
+}
+
+#[test]
+fn non_clone_pattern_capture_forward_stays_fail_closed() {
+    // A `Task` VALUE (genuinely non-`Clone`, no carrier) extracted by a match-arm
+    // pattern and forwarded into a closure has no `Clone` carrier — it must STILL
+    // fail closed IPE-L0126. The gate is narrowed to what has a `Clone` carrier,
+    // never removed.
+    let src = "module Main exposing (main)\n\
+               import Ipe.Io as Io\n\
+               import Ipe.List as List\n\
+               type Wrap = Wrap (Task Int)\n\
+               useTwice : Wrap -> List (Task Int)\n\
+               useTwice w =\n\
+               \x20   case w of\n\
+               \x20       Wrap t ->\n\
+               \x20           List.map (\\_ -> t) [1, 2]\n\
+               main =\n\
+               \x20   Io.println \"x\"\n";
     let Some(built) = build_source("fn_pattern_binder_noncl_forward_gate", src) else {
         return;
     };
@@ -116,6 +145,6 @@ fn non_fn_non_clone_pattern_capture_forward_stays_fail_closed() {
     assert_eq!(
         code,
         Some(ipe_diagnostics::IPE_L0126),
-        "a non-fn non-Clone pattern capture forward must stay IPE-L0126, got: {built:?}"
+        "a non-Clone (Task) pattern capture forward must stay IPE-L0126, got: {built:?}"
     );
 }

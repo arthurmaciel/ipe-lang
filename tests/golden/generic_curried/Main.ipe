@@ -1,23 +1,25 @@
 module Main exposing (main)
+
 import Ipe.Io as Io
-
--- F10 (#121 seal). `pairWith : a -> b -> (a, b)` has def-arity 1.
--- T6 fires for the first-class reify site (Fun([Str, Int], (Str, Int))).
--- But inside the def body `\y -> (x, y)`, `x` has generic type `a`.
--- With T5 deferred, `clone_class(Generic)` -> NonClone -> IPE-L0126 fired
--- by T3.  Expected outcome: ipec-fail IPE-L0126 (upgrade from cargo-fail
--- E0507/E0525).  Green requires T5 (injects `Clone` bound on `a`) + T6.
+import Ipe.String as String
 
 
-pairWith : a -> b -> (a, b)
+-- `pairWith : a -> b -> (a, b)` has def-arity 1; inside the def body
+-- `\y -> (x, y)` the binder `x : a` is a bare `Generic` captured into the
+-- returned closure. A bare `Generic` capture clones under the emitted
+-- `a : Clone` bound, so this is soundly admitted (the capture-clone gate yields)
+-- and the crate builds and runs.
+pairWith : a -> b -> ( a, b )
 pairWith x =
-    \y -> (x, y)
+    \y -> ( x, y )
 
 
-useFirst : (String -> Int -> (String, Int)) -> (String, Int)
+useFirst : (String -> Int -> ( String, Int )) -> ( String, Int )
 useFirst f =
     f "hello" 42
 
 
 main =
-    Io.println "unreachable"
+    case useFirst pairWith of
+        ( s, n ) ->
+            Io.println (s ++ "," ++ String.fromInt n)
