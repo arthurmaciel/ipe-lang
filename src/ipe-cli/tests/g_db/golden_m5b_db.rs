@@ -349,6 +349,32 @@ fn db_sql_combinators() {
     assert_runs_and_matches_oracle("db_sql_combinators");
 }
 
+/// `Ipe.Db.Dsn` parse-don't-validate surface, end-to-end and PURE (no connect,
+/// no I/O beyond stdout). Parses a valid Postgres DSN carrying a password and
+/// prints its `Driver`, host, default TLS mode, and REDACTED render — the
+/// password sentinel `hunter2SENTINEL` NEVER appears (it is a `Secret`, rendered
+/// as `[redacted]`). Also proves: `sslmode=disable` is a hard typed `Err`
+/// (fail-closed TLS); an omitted sslmode defaults to `require` (secure default);
+/// and `Dsn.build` from typed parts runs the same validators. This is the SEAL
+/// for the reserved `Dsn` type + the `Db.Dsn.*` parse kernels: the emitted crate
+/// must build and run, and the sentinel must be absent from stdout.
+///
+/// Sanctioned divergence: Ipê emits Rust+sqlx; `Ipe.Db.Dsn` is an Ipê-only
+/// addition with no reference counterpart; oracle is Ipê's own output.
+#[test]
+fn dsn_parse() {
+    assert_runs_and_matches_oracle("dsn_parse");
+    // Belt-and-suspenders Secret non-leak proof: the password sentinel must be
+    // absent from the emitted program's stdout even on the happy path.
+    if std::env::var("IPE_E2E").is_ok() {
+        let (_dir, outcome) = build_run("dsn_parse");
+        assert!(
+            !outcome.stdout.contains("hunter2SENTINEL"),
+            "dsn_parse: the password sentinel leaked into stdout"
+        );
+    }
+}
+
 // ── SqlDecimal + SqlMoney ctors ───────────────────────────────────────────────
 
 /// `Db.exec [SqlString "pi", SqlDecimal "3.14159", SqlMoney "USD 9.99"]` →

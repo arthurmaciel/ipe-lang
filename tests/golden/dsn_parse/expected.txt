@@ -1,0 +1,4 @@
+valid: postgres db.example.com require postgres://reader@db.example.com:5432/appdb (tls=require, password=[redacted])
+disable: rejected
+default-tls: require
+build: postgres metrics

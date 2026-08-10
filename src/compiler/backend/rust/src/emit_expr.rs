@@ -2485,6 +2485,18 @@ fn emit_db_call(
         KernelFn::DbConnect
         | KernelFn::DbOpen
         | KernelFn::DbClose
+        // `Db.Dsn.*` — the parse surface takes plain `String` / `Int` / `Secret`
+        // / `Dsn` scalar args (no `Db` handle, no List projection), so they route
+        // through the standard call path unchanged.
+        | KernelFn::DsnParse
+        | KernelFn::DsnBuild
+        | KernelFn::DsnDriverTag
+        | KernelFn::DsnHost
+        | KernelFn::DsnPort
+        | KernelFn::DsnDatabase
+        | KernelFn::DsnUser
+        | KernelFn::DsnTlsTag
+        | KernelFn::DsnRedacted
         | KernelFn::DbDecString
         | KernelFn::DbDecInt
         | KernelFn::DbDecFloat
@@ -4863,10 +4875,20 @@ pub fn emit_expr_at(
             // network kernels (`http_get::<IpeError>`) and the arity-0 JSON
             // decoders. Only the `E`-free parse entries need it; `encode`
             // returns a bare `String` (no `E`).
+            // `Ipe.Db.Dsn.parse` / `.build` are likewise generic over the error
+            // channel (`dsn_parse<E: From<String>>(...) -> IpeResult<E, Dsn>`) and
+            // are called in a PURE `Result Error Dsn` context whose `Err` arm is
+            // often discarded, leaving `E` unconstrained (E0283). Anchor `E` to
+            // `IpeError`, exactly like the Csv parse kernels above.
             let turbofish: &str = if pin_turbofish.is_empty()
                 && matches!(
                     callee,
-                    Callee::Kernel(KernelFn::CsvParse | KernelFn::CsvParseWithDelimiter)
+                    Callee::Kernel(
+                        KernelFn::CsvParse
+                            | KernelFn::CsvParseWithDelimiter
+                            | KernelFn::DsnParse
+                            | KernelFn::DsnBuild
+                    )
                 ) {
                 "::<IpeError>"
             } else {
