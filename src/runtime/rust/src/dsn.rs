@@ -234,11 +234,8 @@ pub fn dsn_parse<E: From<String>>(s: String) -> IpeResult<E, Dsn> {
             if !component_ok(host) {
                 return reject(DsnReject::InvalidComponent);
             }
-            let port = match parsed.port() {
-                Some(p) => p,
-                // Postgres' well-known default; an omitted port is not an error.
-                None => 5432,
-            };
+            // Postgres' well-known default; an omitted port is not an error.
+            let port = parsed.port().unwrap_or(5432);
             let database = parsed.path().trim_start_matches('/').to_owned();
             if !component_ok(&database) {
                 return reject(DsnReject::InvalidComponent);
