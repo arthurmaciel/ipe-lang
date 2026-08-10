@@ -12681,15 +12681,6 @@ impl<'a> Lowerer<'a> {
                 "PanicInfo" => Ok(IrType::PanicInfo),
                 "TypeInfo" => Ok(IrType::TypeInfo),
                 "Char" => Ok(IrType::Char),
-                // ── Kernel-implicit opaque server / Ipe.Web types ────────
-                // Mirror of the `ir_type_from_canon` arms added at the same
-                // time: these are the HM-solved-type counterparts that fire when
-                // the type is propagated via the region map rather than read from
-                // a user annotation.
-                // `Claims` maps to the same opaque JSON accumulator.
-                "Handler" | "Middleware" | "Session" | "Store" | "VNode" | "Claims" => {
-                    Ok(IrType::Json)
-                }
                 // `Bytes` is a built-in distinct primitive (Vec<u8> on Rust).
                 // Divergence from Ipê: Ipê aliases Bytes = String.
                 "Bytes" => Ok(IrType::Bytes),
@@ -13045,6 +13036,28 @@ impl<'a> Lowerer<'a> {
                         name: *name,
                         args: ir_args,
                     })
+                }
+                // ── Kernel-implicit opaque server / Ipe.Web types ────────
+                // Mirror of the `ir_type_from_canon` arms: these are the
+                // HM-solved-type counterparts that fire when the type is
+                // propagated via the region map rather than read from a user
+                // annotation. `Claims` maps to the same opaque JSON accumulator.
+                //
+                // Placed AFTER the `enum_variants` guard (matching the
+                // `ir_type_from_canon` twin, and the nullary `Length` / `Color`
+                // opaque arms below): a program-defined `type Store` — e.g. the
+                // compiled-source `Ipe.Db.Store.Store` ADT — is keyed in
+                // `enum_variants` under its own home and resolves to ITS OWN
+                // enum through the guard, never to the opaque JSON accumulator.
+                // Only a genuine kernel-implicit opaque (no `enum_variants`
+                // entry — the Ipe.Http.Server `Handler` / `Middleware`, the
+                // Ipe.Web session `Session` / `Store`, the virtual-DOM `VNode`)
+                // falls through to here. Above the guard this arm hijacked the
+                // concrete `Store` by bare name, erasing it to `JsonVal` and
+                // producing an ipe-accept-then-cargo-fail (E0308) when it flowed
+                // through a generic HOF's inferred type-variable slot.
+                "Handler" | "Middleware" | "Session" | "Store" | "VNode" | "Claims" => {
+                    Ok(IrType::Json)
                 }
                 // ── Nullary Ipe.Ui plain types (no message parameter) ─────
                 // Reached ONLY when `(home, name)` is NOT a program-defined enum

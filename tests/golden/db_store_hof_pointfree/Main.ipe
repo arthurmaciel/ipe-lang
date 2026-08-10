@@ -1,0 +1,69 @@
+module Main exposing (main)
+
+import Ipe.Io as Io
+import Ipe.Db.Store as Store exposing (Store)
+import Ipe.String as String
+import Ipe.Result as Result exposing (Result(..))
+import Ipe.Error as Error exposing (Error)
+import Ipe.Task as Task
+
+-- SEAL golden for #815: a generic HOF (`Result.map`) applied to a callee whose
+-- return type is a CROSS-MODULE concrete stdlib type (`Ipe.Db.Store.Store`).
+-- Before the fix the `Result.map` type variable erased to `JsonVal` in emitted
+-- Rust (ipe-accept then cargo-fail E0308); the concrete `Store` now threads
+-- through the HOF's instantiated slot.
+
+-- Point-free: the partial application `Store.primaryKey "id"` is passed
+-- directly as the mapper.
+pointFreeStore : Result Error Store
+pointFreeStore =
+    Store.fromColumns "users" [ Store.textColumn "id" ]
+        |> Result.map (Store.primaryKey "id")
+
+-- Eta-expanded: the same mapper spelled as an explicit lambda.
+etaStore : Result Error Store
+etaStore =
+    Store.fromColumns "orders" [ Store.textColumn "id" ]
+        |> Result.map (\s -> Store.primaryKey "id" s)
+
+-- Same-module control: `Result.map` over an in-module ADT still lowers to the
+-- concrete in-module type, never JsonVal.
+type Counter
+    = Counter Int
+
+setN : Int -> Counter -> Counter
+setN n _ =
+    Counter n
+
+controlCounter : Result Error Counter
+controlCounter =
+    Ok (Counter 0)
+        |> Result.map (setN 5)
+
+tableLine : String -> Result Error Store -> String
+tableLine label result =
+    case result of
+        Ok store ->
+            String.concat [ label, ":", Store.tableName store ]
+
+        Err _ ->
+            String.concat [ label, ":err" ]
+
+controlLine : String
+controlLine =
+    case controlCounter of
+        Ok (Counter n) ->
+            String.concat [ "control:", String.fromInt n ]
+
+        Err _ ->
+            "control:err"
+
+main : Task Error ()
+main =
+    Io.println
+        (String.join "\n"
+            [ tableLine "point-free" pointFreeStore
+            , tableLine "eta" etaStore
+            , controlLine
+            ]
+        )
