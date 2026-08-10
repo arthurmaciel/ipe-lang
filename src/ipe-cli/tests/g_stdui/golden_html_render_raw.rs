@@ -55,23 +55,24 @@ fn html_render_escapes_text_and_emits_raw_and_script() {
     // `<script>` tag from user content, and the quote/ampersand become entity
     // references. Built from parts so the entity spellings never look like a
     // task reference to the comment linter.
-    let esc_lt = "&lt;";
-    let esc_gt = "&gt;";
-    let esc_amp = "&amp;";
-    let esc_apos = format!("&{}39;", "#");
-    let hostile_escaped =
-        format!("{esc_lt}script{esc_gt}alert({esc_apos}xss{esc_apos}){esc_lt}/script{esc_gt}");
+    let less_than = "&lt;";
+    let greater_than = "&gt;";
+    let ampersand = "&amp;";
+    let apostrophe = format!("&{}39;", "#");
+    let hostile_escaped = format!(
+        "{less_than}script{greater_than}alert({apostrophe}xss{apostrophe}){less_than}/script{greater_than}"
+    );
     assert!(
         html.contains(&hostile_escaped),
         "render must escape a hostile text node (no XSS)\n--- actual ---\n{html}"
     );
     assert!(
-        html.contains(&format!("a {esc_amp} b")),
+        html.contains(&format!("a {ampersand} b")),
         "render must escape the ampersand in text content\n--- actual ---\n{html}"
     );
     // The ampersand inside the trusted `href` attribute value is attr-escaped.
     assert!(
-        html.contains(&format!("/x?q=1{esc_amp}y=2")),
+        html.contains(&format!("/x?q=1{ampersand}y=2")),
         "render must escape the ampersand in an attribute value\n--- actual ---\n{html}"
     );
 
