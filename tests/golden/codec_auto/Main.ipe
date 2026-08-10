@@ -1,0 +1,184 @@
+module Main exposing (main)
+
+-- Type-driven derive proof for `Codec.auto`: a representative record (scalar
+-- fields of every primitive type, a `List` field, and a nested record field) is
+-- given a codec two ways — `Codec.auto` on an annotated witness, and the same
+-- codec written by hand in the direct `Codec { enc, mkDec }` form. The two must
+-- agree: the auto-derived codec round-trips (`fromJson (toJson v) == Ok v`) AND
+-- encodes byte-identically to the hand-written one for every sample. A malformed
+-- document decodes to a typed `Err`, never a panic.
+
+import Ipe.Io as Io
+import Ipe.Codec as Codec exposing (Codec(..))
+import Ipe.Json.Encode as Encode
+import Ipe.Json.Decode as Decode
+import Ipe.Json.Decode.Pipeline as Pipeline
+import Ipe.List as List
+import Ipe.String as String
+
+
+type alias Address =
+    { street : String, zip : Int }
+
+
+type alias Person =
+    { name : String
+    , age : Int
+    , active : Bool
+    , score : Float
+    , tags : List String
+    , home : Address
+    }
+
+
+-- A witness whose only job is to name `Person` at the `Codec.auto` call site.
+blankPerson : Person
+blankPerson =
+    { name = ""
+    , age = 0
+    , active = False
+    , score = 0.0
+    , tags = []
+    , home = { street = "", zip = 0 }
+    }
+
+
+-- The derived codec: one line, no hand-written encode/decode.
+autoCodec : Codec Person
+autoCodec =
+    Codec.auto blankPerson
+
+
+-- The same codec written by hand in the direct form, for the equivalence proof.
+manualCodec : Codec Person
+manualCodec =
+    Codec
+        { enc =
+            \p ->
+                Encode.object
+                    [ ( "name", Encode.string p.name )
+                    , ( "age", Encode.int p.age )
+                    , ( "active", Encode.bool p.active )
+                    , ( "score", Encode.float p.score )
+                    , ( "tags", Encode.list Encode.string p.tags )
+                    , ( "home", encAddress p.home )
+                    ]
+        , mkDec =
+            \_ ->
+                Decode.succeed makePerson
+                    |> Pipeline.required "name" Decode.string
+                    |> Pipeline.required "age" Decode.int
+                    |> Pipeline.required "active" Decode.bool
+                    |> Pipeline.required "score" Decode.float
+                    |> Pipeline.required "tags" (Decode.list Decode.string)
+                    |> Pipeline.required "home" addressDecoder
+        }
+
+
+makePerson : String -> Int -> Bool -> Float -> List String -> Address -> Person
+makePerson name age active score tags home =
+    { name = name
+    , age = age
+    , active = active
+    , score = score
+    , tags = tags
+    , home = home
+    }
+
+
+encAddress : Address -> Value
+encAddress a =
+    Encode.object
+        [ ( "street", Encode.string a.street )
+        , ( "zip", Encode.int a.zip )
+        ]
+
+
+addressDecoder : Decoder Address
+addressDecoder =
+    Decode.succeed makeAddress
+        |> Pipeline.required "street" Decode.string
+        |> Pipeline.required "zip" Decode.int
+
+
+makeAddress : String -> Int -> Address
+makeAddress street zip =
+    { street = street, zip = zip }
+
+
+personEq : Person -> Person -> Bool
+personEq a b =
+    a.name
+        == b.name
+        && a.age
+        == b.age
+        && a.active
+        == b.active
+        && a.score
+        == b.score
+        && List.length a.tags
+        == List.length b.tags
+        && a.home.street
+        == b.home.street
+        && a.home.zip
+        == b.home.zip
+
+
+roundTrips : Person -> Bool
+roundTrips p =
+    case Codec.fromJson autoCodec (Codec.toJson autoCodec p) of
+        Ok back ->
+            personEq p back
+
+        Err _ ->
+            False
+
+
+autoMatchesManual : Person -> Bool
+autoMatchesManual p =
+    Codec.toJson autoCodec p == Codec.toJson manualCodec p
+
+
+sample1 : Person
+sample1 =
+    { name = "Ada"
+    , age = 36
+    , active = True
+    , score = 9.5
+    , tags = [ "math", "logic" ]
+    , home = { street = "1 Analytical Way", zip = 12345 }
+    }
+
+
+sample2 : Person
+sample2 =
+    { name = "Bo"
+    , age = 0
+    , active = False
+    , score = 0.0
+    , tags = []
+    , home = { street = "", zip = 0 }
+    }
+
+
+main =
+    let
+        allRoundTrip =
+            roundTrips sample1 && roundTrips sample2
+
+        allMatch =
+            autoMatchesManual sample1 && autoMatchesManual sample2
+
+        malformed =
+            case Codec.fromJson autoCodec "{not json" of
+                Ok _ ->
+                    False
+
+                Err _ ->
+                    True
+    in
+    if allRoundTrip && allMatch && malformed then
+        Io.println "codec-auto-ok"
+
+    else
+        Io.println "codec-auto-FAIL"

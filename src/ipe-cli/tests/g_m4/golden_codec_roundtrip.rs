@@ -60,3 +60,13 @@ fn assert_runs_and_matches_oracle(name: &str) {
 fn codec_roundtrip() {
     assert_runs_and_matches_oracle("codec_roundtrip");
 }
+
+/// `Codec.auto` derives a record codec (scalar fields, a `List` field, a nested
+/// record) that both round-trips AND encodes byte-identically to the equivalent
+/// hand-written direct-form codec — the type-driven derive adds no emit the
+/// hand-written codec does not already exercise (THE SEAL by construction).
+/// Output: `codec-auto-ok`.
+#[test]
+fn codec_auto() {
+    assert_runs_and_matches_oracle("codec_auto");
+}

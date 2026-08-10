@@ -2,10 +2,11 @@
 //! supported subset of `Ipe.Canonicalise.{Module,Expression,Pattern,Type}`.
 
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
+use std::rc::Rc;
 
 use ipe_diagnostics::{
-    AliasExpansionKind, CmdSubShapeMismatch, DResult, Diagnostic, Located, NameError, ParseError,
-    SealRejection, Span, TypeError,
+    AliasExpansionKind, CmdSubShapeMismatch, CodecAutoRejection, DResult, Diagnostic, Located,
+    NameError, ParseError, SealRejection, Span, TypeError,
 };
 use ipe_intern::{Interner, Symbol};
 use ipe_kernels::StdlibKernel;
@@ -2208,6 +2209,23 @@ fn canonicalise_with_env(
         }
     }
 
+    // Build the `Ipe.Codec.auto` derive context (the qualifiers naming the
+    // imported `Ipe.Codec` module + the record shape of every annotated witness
+    // value), so the derive can recognise `Codec.auto witness` and read the
+    // witness's fields at its call site by lookup alone. Built here — the single
+    // point where the module's values, aliases, imports, and type context all
+    // coexist — and stored on the env, which every value body's resolution clones.
+    let codec_auto = build_codec_auto_context(
+        m,
+        env,
+        type_home_map,
+        qualifier_paths,
+        &aliases,
+        interner,
+        ui_wildcard_msg,
+    )?;
+    env.codec_auto = Rc::new(codec_auto);
+
     // Canonicalise each value declaration. A kernel alias has no runtime body —
     // it lowers as its kernel at every call site — so it is skipped here, exactly
     // as a kernel-qualifier member is never a compiled def.
@@ -2380,6 +2398,594 @@ fn field_type_nonderivable(interner: &Interner, t: &canon::Type) -> bool {
             .any(|(_, f)| field_type_nonderivable(interner, f)),
         canon::Type::Var(_) | canon::Type::Unit => false,
     }
+}
+
+// ─── `Ipe.Codec.auto` derive ───────────────────────────────────────
+//
+// `Codec.auto witness` derives a record codec at compile time by rewriting the
+// call into the field-by-field `Codec { enc, mkDec }` a developer could have
+// written by hand (the direct form, not the applicative `object`/`field`
+// builder, whose generic constructor slot is not `Clone` in emitted Rust —
+// IPE-L0107). The rewrite re-enters the ordinary inference → lower → emit path,
+// so THE SEAL holds by construction: the derive emits no bespoke Rust, only an
+// expression the hand-written direct-form codec already exercises. A witness
+// with a non-derivable field is rejected fail-closed (IPE-N0041) at ipe time —
+// never an accept-then-cargo-fail.
+
+/// Build the per-module [`CodecAutoContext`] the `auto` recogniser reads: the
+/// qualifiers that name the imported `Ipe.Codec` module, and the record shape of
+/// every top-level value annotated with a record type.
+#[allow(clippy::too_many_arguments)]
+fn build_codec_auto_context(
+    m: &src::Module,
+    env: &Env,
+    type_home_map: &BTreeMap<Symbol, Vec<Symbol>>,
+    qualifier_paths: &BTreeMap<Symbol, Vec<Symbol>>,
+    aliases: &BTreeMap<Symbol, AliasDef>,
+    interner: &mut Interner,
+    ui_wildcard_msg: Symbol,
+) -> DResult<crate::env::CodecAutoContext> {
+    // Qualifiers bound to `Ipe.Codec`: any import qualifier whose resolved path
+    // is exactly `["Ipe", "Codec"]`. A compiled-source stdlib module is a build
+    // dep, so its import registers in `qualifier_paths` like a user module.
+    let ipe_seg = interner.intern("Ipe")?;
+    let codec_seg = interner.intern("Codec")?;
+    let codec_path = [ipe_seg, codec_seg];
+    let mut qualifiers: BTreeSet<Symbol> = BTreeSet::new();
+    for (&qual, path) in qualifier_paths {
+        if path.as_slice() == codec_path {
+            qualifiers.insert(qual);
+        }
+    }
+
+    // The record shape of every value whose annotation is a record type (an
+    // inline `{ … }` or a `type alias` naming one). Fields are canonicalised
+    // ONCE here, in declared order, exactly as `synthesize_record_alias_ctors`
+    // canonicalises an alias's fields — so the derived codec sees the same
+    // expanded field types a hand-written codec's annotation would.
+    let mut witness_records: BTreeMap<Symbol, Vec<(Symbol, canon::Type)>> = BTreeMap::new();
+    for v in &m.values {
+        let Some(ann) = &v.value.type_annotation else {
+            continue;
+        };
+        if let Some(fields) = witness_record_fields(
+            &ann.value,
+            env,
+            type_home_map,
+            qualifier_paths,
+            aliases,
+            interner,
+            ui_wildcard_msg,
+            ann.span,
+        )? {
+            witness_records.insert(v.value.name.value, fields);
+        }
+    }
+
+    Ok(crate::env::CodecAutoContext {
+        qualifiers,
+        witness_records,
+    })
+}
+
+/// Resolve an annotation to a closed record's canonical fields, when it names
+/// one. An inline `TRecord` or a `TType` naming a record `type alias` both
+/// qualify; anything else is `None` (not a witness the derive can read). A
+/// parametric or open record is declined (`None`) — the derive needs concrete,
+/// closed field types.
+#[allow(clippy::too_many_arguments)]
+fn witness_record_fields(
+    ann: &src::TypeAnnotation,
+    env: &Env,
+    type_home_map: &BTreeMap<Symbol, Vec<Symbol>>,
+    qualifier_paths: &BTreeMap<Symbol, Vec<Symbol>>,
+    aliases: &BTreeMap<Symbol, AliasDef>,
+    interner: &Interner,
+    ui_wildcard_msg: Symbol,
+    ann_span: Span,
+) -> DResult<Option<Vec<(Symbol, canon::Type)>>> {
+    // The source-level fields to canonicalise, and the alias name (if any) to
+    // seed `visited` for a self-referential field — mirroring the alias-ctor
+    // synthesis, so the two expand a record annotation identically.
+    let (src_fields, seed): (&Vec<(Symbol, src::TypeAnnotation)>, Vec<Symbol>) = match ann {
+        src::TypeAnnotation::TRecord(fields) => (fields, Vec::new()),
+        src::TypeAnnotation::TType(_, segments, args) if args.is_empty() => {
+            let Some(name) = segments.last().copied() else {
+                return Ok(None);
+            };
+            match aliases.get(&name) {
+                Some(def)
+                    if def.params.is_empty()
+                        && matches!(def.body, src::TypeAnnotation::TRecord(_)) =>
+                {
+                    let src::TypeAnnotation::TRecord(fields) = &def.body else {
+                        return Ok(None);
+                    };
+                    (fields, vec![name])
+                }
+                _ => return Ok(None),
+            }
+        }
+        _ => return Ok(None),
+    };
+
+    let ctx = TypeCtx {
+        env,
+        type_home_map,
+        qualifier_paths,
+        aliases,
+        interner,
+        ui_wildcard_msg,
+        ann_span,
+    };
+    let subst = BTreeMap::new();
+    let mut free_set = BTreeSet::new();
+    let mut visited = seed;
+    let mut can_fields = Vec::with_capacity(src_fields.len());
+    for (fname, fty) in src_fields {
+        let mut budget = TYPE_EXPANSION_NODE_LIMIT;
+        let cty = canonicalise_type(
+            fty,
+            &ctx,
+            &subst,
+            &mut free_set,
+            &mut visited,
+            &mut budget,
+            0,
+        )?;
+        can_fields.push((*fname, cty));
+    }
+    Ok(Some(can_fields))
+}
+
+/// Recognise `<Codec>.auto witness` at a call site and rewrite it into the
+/// derived codec. `Ok(None)` when the call is not a codec derive, so ordinary
+/// resolution proceeds unchanged.
+fn canonicalise_codec_auto(
+    callee: &src::Expr,
+    args: &[src::Expr],
+    span: Span,
+    env: &Env,
+    interner: &mut Interner,
+) -> DResult<Option<canon::Expr_>> {
+    let src::Expr_::VarQual(qualifier, member) = &callee.value else {
+        return Ok(None);
+    };
+    if env.codec_auto.qualifiers.is_empty() || !env.codec_auto.qualifiers.contains(qualifier) {
+        return Ok(None);
+    }
+    if interner.resolve(*member) != Some("auto") {
+        return Ok(None);
+    }
+
+    let reject = |reason: CodecAutoRejection, field: &str| Diagnostic::Name {
+        span,
+        msg: NameError::CodecAutoUnderivable {
+            reason,
+            field: field.into(),
+        },
+    };
+
+    // Exactly one witness argument, a bare reference to a top-level value.
+    let [witness] = args else {
+        return Err(reject(CodecAutoRejection::ArityMismatch, ""));
+    };
+    let witness_name = match &witness.value {
+        src::Expr_::VarLocal(name) | src::Expr_::VarQual(_, name) => *name,
+        _ => return Err(reject(CodecAutoRejection::WitnessNotRecordValue, "")),
+    };
+    let Some(fields) = env.codec_auto.witness_records.get(&witness_name) else {
+        return Err(reject(CodecAutoRejection::WitnessNotRecordValue, ""));
+    };
+
+    // Inference records one type per node span; lower reads it back the same way.
+    // Every synthesised node therefore needs its OWN span — sharing the call span
+    // across the many nodes the derive mints would collapse them to one region
+    // entry and mislower. `SynSpan` hands out fresh, unique spans in a high byte
+    // range that no real source offset reaches, seeded from the call site so two
+    // `auto` calls in one module never overlap.
+    let mut sg = SynSpan::seeded(span);
+    derive_record_codec(fields, &mut sg, env, interner).map(Some)
+}
+
+/// A generator of unique synthetic spans for the nodes a canon rewrite mints.
+///
+/// Inference keys `SolvedTypes::regions` by `(module, node.span)`, so two
+/// synthesised nodes sharing a span collide (only one type survives) and lower
+/// then reads the wrong arrow shape. Each fresh span is a distinct, zero-content
+/// byte range placed above `SYN_SPAN_BASE` — beyond any real file's length — so
+/// it cannot alias a source span. A per-call seed keeps distinct `auto` sites in
+/// disjoint ranges.
+struct SynSpan {
+    next: u32,
+    /// The real call-site span, used only as the location of a fail-closed
+    /// diagnostic (synthetic node spans are content-free and point at nothing).
+    diag: Span,
+}
+
+/// The floor for synthetic spans — above any plausible source-file byte length,
+/// so a synthetic span never collides with a real source offset.
+const SYN_SPAN_BASE: u32 = 0xF000_0000;
+
+impl SynSpan {
+    const fn seeded(call: Span) -> Self {
+        // Offset each call site into its own sub-range (bounded stride, saturating
+        // so it can never wrap below the base) to keep multiple derives disjoint.
+        let seed = SYN_SPAN_BASE.saturating_add((call.lo & 0x000F_FFFF).saturating_mul(64));
+        Self {
+            next: seed,
+            diag: call,
+        }
+    }
+
+    /// A fresh unique span. Content-free (`[n, n]`); its only role is to be a
+    /// distinct region key.
+    const fn fresh(&mut self) -> Span {
+        let n = self.next;
+        // Saturating: an exhausted generator reuses the ceiling rather than
+        // wrapping into the source range — a pathological many-node module would
+        // mislower, but that is unreachable in practice and stays above the base.
+        self.next = self.next.saturating_add(1);
+        Span::new(n, n)
+    }
+}
+
+/// A reference to a stdlib kernel by its registry variant, byte-identical to a
+/// normally-resolved `Qualifier.member` reference (same `module`/`name` symbols
+/// `kernel_home` stores).
+fn kernel_ref(k: StdlibKernel, span: Span, interner: &mut Interner) -> DResult<canon::Expr> {
+    let decl = k.decl();
+    let module = interner.intern(decl.qualifier)?;
+    let name = interner.intern(decl.name)?;
+    Ok(Located::new(
+        span,
+        canon::Expr_::VarKernel {
+            id: Some(k),
+            module,
+            name,
+        },
+    ))
+}
+
+/// The `snake_case` JSON/column key for a camelCase field name (`priceMinor` →
+/// `price_minor`), a pure compile-time transform. An underscore-boundary is
+/// inserted before each uppercase letter, which is then lowercased; runs of
+/// uppercase and existing underscores are preserved as single boundaries.
+fn to_snake_case(name: &str) -> String {
+    let mut out = String::with_capacity(name.len() + 4);
+    let mut prev_lower_or_digit = false;
+    for c in name.chars() {
+        if c.is_ascii_uppercase() {
+            if prev_lower_or_digit {
+                out.push('_');
+            }
+            out.push(c.to_ascii_lowercase());
+            prev_lower_or_digit = false;
+        } else {
+            out.push(c);
+            prev_lower_or_digit = c.is_ascii_lowercase() || c.is_ascii_digit();
+        }
+    }
+    out
+}
+
+/// The leaf encoder + decoder expressions for one field type — the codec the
+/// field's type selects, inlined as the raw `Json.Encode`/`Json.Decode`
+/// expressions a hand-written codec uses (never routed through `Codec.string`
+/// etc.), so the derived emit is byte-identical to the hand-written direct form.
+///
+/// `enc` is a bare `value -> Value` function expression; `dec` is a bare
+/// `Decoder field` expression. Returns the offending `(reason, field)` when the
+/// field type has no derivable leaf.
+fn field_leaf_codecs(
+    field: Symbol,
+    ty: &canon::Type,
+    sg: &mut SynSpan,
+    env: &Env,
+    interner: &mut Interner,
+) -> DResult<(canon::Expr, canon::Expr)> {
+    let field_name = || interner.resolve(field).unwrap_or("").to_owned();
+    let diag_span = sg.diag;
+    let bad = |reason: CodecAutoRejection, name: String| Diagnostic::Name {
+        span: diag_span,
+        msg: NameError::CodecAutoUnderivable {
+            reason,
+            field: name.into(),
+        },
+    };
+
+    // A `Secret` / reserved-sink field is unencodable by construction (Security).
+    if let canon::Type::Con { name, args, .. } = ty
+        && args.is_empty()
+        && let Some(text) = interner.resolve(*name)
+        && SEAL_SECRET_OR_SINK.contains(&text)
+    {
+        return Err(bad(CodecAutoRejection::SecretField, field_name()));
+    }
+    // A function field is not a serialisable value.
+    if matches!(ty, canon::Type::Lambda(_, _)) {
+        return Err(bad(CodecAutoRejection::FunctionField, field_name()));
+    }
+
+    match ty {
+        canon::Type::Con { name, args, .. } if args.is_empty() => {
+            let leaf = match interner.resolve(*name) {
+                Some("String") => Some((StdlibKernel::JsonEncString, StdlibKernel::JsonDecString)),
+                Some("Int") => Some((StdlibKernel::JsonEncInt, StdlibKernel::JsonDecInt)),
+                Some("Bool") => Some((StdlibKernel::JsonEncBool, StdlibKernel::JsonDecBool)),
+                Some("Float") => Some((StdlibKernel::JsonEncFloat, StdlibKernel::JsonDecFloat)),
+                _ => None,
+            };
+            match leaf {
+                Some((enc_k, dec_k)) => Ok((
+                    kernel_ref(enc_k, sg.fresh(), interner)?,
+                    kernel_ref(dec_k, sg.fresh(), interner)?,
+                )),
+                None => Err(bad(CodecAutoRejection::UnsupportedField, field_name())),
+            }
+        }
+        // `List t` — `Encode.list <encElem>` / `Decode.list <decElem>`, recursing
+        // on the element type. `Encode.list` takes the element encoder + the list;
+        // partially applied to the encoder it is the `List t -> Value` encoder.
+        canon::Type::Con { name, args, .. }
+            if interner.resolve(*name) == Some("List") && args.len() == 1 =>
+        {
+            let Some(elem) = args.first() else {
+                return Err(bad(CodecAutoRejection::UnsupportedField, field_name()));
+            };
+            let (enc_elem, dec_elem) = field_leaf_codecs(field, elem, sg, env, interner)?;
+            let enc = call_expr(
+                kernel_ref(StdlibKernel::JsonEncList, sg.fresh(), interner)?,
+                vec![enc_elem],
+                sg.fresh(),
+            );
+            let dec = call_expr(
+                kernel_ref(StdlibKernel::JsonDecList, sg.fresh(), interner)?,
+                vec![dec_elem],
+                sg.fresh(),
+            );
+            Ok((enc, dec))
+        }
+        // A nested closed record — derive its codec inline and project the enc/dec
+        // out of the `Codec { enc, mkDec }` it produces.
+        canon::Type::Record(fields) => {
+            let codec = derive_record_codec(fields, sg, env, interner)?;
+            project_codec_enc_dec(&codec, sg, env, interner)
+        }
+        _ => Err(bad(CodecAutoRejection::UnsupportedField, field_name())),
+    }
+}
+
+/// Build the direct-form record codec `Codec { enc, mkDec }` for a closed
+/// record's fields. The encoder is an `Encode.object` over the field encoders;
+/// the decoder factory a `Decode.succeed <ctorLambda> |> Pipeline.required key
+/// leafDec |> …` chain — each field appearing once on each side.
+fn derive_record_codec(
+    fields: &[(Symbol, canon::Type)],
+    sg: &mut SynSpan,
+    env: &Env,
+    interner: &mut Interner,
+) -> DResult<canon::Expr_> {
+    // Per-field leaf codecs (rejects a non-derivable field fail-closed).
+    let mut leaves: Vec<(Symbol, canon::Expr, canon::Expr)> = Vec::with_capacity(fields.len());
+    for (fname, fty) in fields {
+        let (enc, dec) = field_leaf_codecs(*fname, fty, sg, env, interner)?;
+        leaves.push((*fname, enc, dec));
+    }
+
+    // The record parameter of the encoder lambda, a fresh name that cannot alias
+    // a field or a user binding. Its span seeds a unique name per record.
+    let name_span = sg.fresh();
+    let rec_param = interner.intern(&format!("codec_rec_{}", name_span.lo))?;
+
+    // enc = \rec -> Encode.object [ (key, leafEnc rec.field), … ]
+    let mut pairs = Vec::with_capacity(leaves.len());
+    for (fname, enc, _) in &leaves {
+        let key = to_snake_case(interner.resolve(*fname).unwrap_or(""));
+        let access = Located::new(
+            sg.fresh(),
+            canon::Expr_::Access(
+                Box::new(Located::new(sg.fresh(), canon::Expr_::VarLocal(rec_param))),
+                *fname,
+            ),
+        );
+        let encoded = call_expr(enc.clone(), vec![access], sg.fresh());
+        pairs.push(Located::new(
+            sg.fresh(),
+            canon::Expr_::Tuple(vec![
+                Located::new(sg.fresh(), canon::Expr_::Str(key)),
+                encoded,
+            ]),
+        ));
+    }
+    let obj = call_expr(
+        kernel_ref(StdlibKernel::JsonEncObject, sg.fresh(), interner)?,
+        vec![Located::new(sg.fresh(), canon::Expr_::List(pairs))],
+        sg.fresh(),
+    );
+    let enc_lambda = Located::new(
+        sg.fresh(),
+        canon::Expr_::Lambda(
+            vec![Located::new(sg.fresh(), canon::Pattern_::PVar(rec_param))],
+            Box::new(obj),
+        ),
+    );
+
+    // The record-builder lambda `\f0 … fN -> { f0 = f0, … }` — the sanctioned
+    // direct constructor (a monomorphic record literal, not a bare constructor in
+    // a generic slot).
+    let ctor_patterns: Vec<canon::Pattern> = leaves
+        .iter()
+        .map(|(fname, _, _)| Located::new(sg.fresh(), canon::Pattern_::PVar(*fname)))
+        .collect();
+    let ctor_body_fields: Vec<(Symbol, canon::Expr)> = leaves
+        .iter()
+        .map(|(fname, _, _)| {
+            (
+                *fname,
+                Located::new(sg.fresh(), canon::Expr_::VarLocal(*fname)),
+            )
+        })
+        .collect();
+    let ctor_lambda = Located::new(
+        sg.fresh(),
+        canon::Expr_::Lambda(
+            ctor_patterns,
+            Box::new(Located::new(
+                sg.fresh(),
+                canon::Expr_::Record(ctor_body_fields),
+            )),
+        ),
+    );
+
+    // mkDec = \_ -> Decode.succeed ctor |> Pipeline.required key leafDec |> …
+    // `|>` desugars to `Call(rhs, [lhs])`; fold left over the fields, seeding with
+    // `Decode.succeed ctor`.
+    let mut decoder = call_expr(
+        kernel_ref(StdlibKernel::JsonDecSucceed, sg.fresh(), interner)?,
+        vec![ctor_lambda],
+        sg.fresh(),
+    );
+    for (fname, _, dec) in &leaves {
+        let key = to_snake_case(interner.resolve(*fname).unwrap_or(""));
+        let required = call_expr(
+            kernel_ref(StdlibKernel::JsonDecPRequired, sg.fresh(), interner)?,
+            vec![
+                Located::new(sg.fresh(), canon::Expr_::Str(key)),
+                dec.clone(),
+            ],
+            sg.fresh(),
+        );
+        decoder = call_expr(required, vec![decoder], sg.fresh());
+    }
+    let mkdec_lambda = Located::new(
+        sg.fresh(),
+        canon::Expr_::Lambda(
+            vec![Located::new(sg.fresh(), canon::Pattern_::PAnything)],
+            Box::new(decoder),
+        ),
+    );
+
+    codec_record_expr(enc_lambda, mkdec_lambda, sg, env, interner)
+}
+
+/// Wrap the encoder + decoder-factory into the `Codec { enc = …, mkDec = … }`
+/// value — the single-constructor `Ipe.Codec.Codec` applied to its record. The
+/// constructor resolves against the env (the module must import `Ipe.Codec`).
+fn codec_record_expr(
+    enc: canon::Expr,
+    mkdec: canon::Expr,
+    sg: &mut SynSpan,
+    env: &Env,
+    interner: &mut Interner,
+) -> DResult<canon::Expr_> {
+    let codec_ctor_sym = interner.intern("Codec")?;
+    let enc_field = interner.intern("enc")?;
+    let mkdec_field = interner.intern("mkDec")?;
+    let Some(ctor) = env.lookup_ctor(codec_ctor_sym) else {
+        return Err(Diagnostic::Name {
+            span: sg.diag,
+            msg: NameError::CodecAutoUnderivable {
+                reason: CodecAutoRejection::WitnessNotRecordValue,
+                field: String::new().into(),
+            },
+        });
+    };
+    let record = Located::new(
+        sg.fresh(),
+        canon::Expr_::Record(vec![(enc_field, enc), (mkdec_field, mkdec)]),
+    );
+    let ctor_ref = Located::new(
+        sg.fresh(),
+        canon::Expr_::VarCtor {
+            home: ctor.home.clone(),
+            type_name: ctor.type_name,
+            name: ctor.name,
+            index: ctor.index,
+        },
+    );
+    Ok(canon::Expr_::Call(Box::new(ctor_ref), vec![record]))
+}
+
+/// Project the `enc` and `mkDec {}` out of a derived nested-record codec, so a
+/// nested record field can be encoded/decoded inline. `enc` becomes a bare
+/// `value -> Value`; the decoder is `mkDec {}` (the factory run once), a bare
+/// `Decoder value`.
+fn project_codec_enc_dec(
+    codec: &canon::Expr_,
+    sg: &mut SynSpan,
+    env: &Env,
+    interner: &mut Interner,
+) -> DResult<(canon::Expr, canon::Expr)> {
+    // `case <codec> of Codec r -> r.enc` and `… -> r.mkDec {}`. Each projection
+    // holds its OWN `case` over a fresh copy of the codec and its own binder, so
+    // no node span is shared between the two.
+    let codec_ctor_sym = interner.intern("Codec")?;
+    let enc_field = interner.intern("enc")?;
+    let mkdec_field = interner.intern("mkDec")?;
+    let Some(ctor) = env.lookup_ctor(codec_ctor_sym) else {
+        return Err(Diagnostic::Name {
+            span: sg.diag,
+            msg: NameError::CodecAutoUnderivable {
+                reason: CodecAutoRejection::UnsupportedField,
+                field: String::new().into(),
+            },
+        });
+    };
+    let home = ctor.home.clone();
+    let type_name = ctor.type_name;
+    let ctor_name = ctor.name;
+    let ctor_index = ctor.index;
+
+    let mut make_projection = |proj_field: Symbol, run_unit: bool| -> canon::Expr {
+        let binder = interner
+            .intern(&format!("codec_r_{}", sg.fresh().lo))
+            .unwrap_or(proj_field);
+        let access = Located::new(
+            sg.fresh(),
+            canon::Expr_::Access(
+                Box::new(Located::new(sg.fresh(), canon::Expr_::VarLocal(binder))),
+                proj_field,
+            ),
+        );
+        let body = if run_unit {
+            // The decoder factory is `{} -> Decoder a` — run it with the empty
+            // record `{}`, not unit.
+            call_expr(
+                access,
+                vec![Located::new(sg.fresh(), canon::Expr_::Record(Vec::new()))],
+                sg.fresh(),
+            )
+        } else {
+            access
+        };
+        let pat = Located::new(
+            sg.fresh(),
+            canon::Pattern_::PCtor {
+                home: home.clone(),
+                type_name,
+                name: ctor_name,
+                index: ctor_index,
+                args: vec![Located::new(sg.fresh(), canon::Pattern_::PVar(binder))],
+            },
+        );
+        Located::new(
+            sg.fresh(),
+            canon::Expr_::Case(
+                Box::new(Located::new(sg.fresh(), codec.clone())),
+                vec![canon::CaseBranch { pat, body }],
+            ),
+        )
+    };
+
+    let enc = make_projection(enc_field, false);
+    let dec = make_projection(mkdec_field, true);
+    Ok((enc, dec))
+}
+
+/// A canonical function application node `f a0 a1 …`.
+fn call_expr(f: canon::Expr, args: Vec<canon::Expr>, span: Span) -> canon::Expr {
+    Located::new(span, canon::Expr_::Call(Box::new(f), args))
 }
 
 #[allow(clippy::too_many_arguments)] // qualifier_paths added to thread context; refactor tracked
@@ -3570,6 +4176,8 @@ fn canonicalise_expr(e: &src::Expr, env: &Env, interner: &mut Interner) -> DResu
             if let Some(node) = canonicalise_foreign_call(f, args, span, env, interner)? {
                 node
             } else if let Some(node) = canonicalise_asserted_call(f, args, span, env, interner)? {
+                node
+            } else if let Some(node) = canonicalise_codec_auto(f, args, span, env, interner)? {
                 node
             } else {
                 let callee = canonicalise_expr(f, env, interner)?;
@@ -5405,6 +6013,38 @@ mod alias_ctor_gate_tests {
         let i = Interner::new();
         // `{ handler : () -> () }` — a raw function lowers to `Box<dyn Fn>`.
         assert!(field_type_nonderivable(&i, &arrow()));
+    }
+
+    #[test]
+    fn snake_case_maps_camel_to_snake_for_codec_auto_keys() {
+        // The DB/column key convention `Codec.auto` emits.
+        assert_eq!(to_snake_case("priceMinor"), "price_minor");
+        assert_eq!(to_snake_case("id"), "id");
+        assert_eq!(to_snake_case("createdAt"), "created_at");
+        // An all-lowercase name and an existing underscore pass through.
+        assert_eq!(to_snake_case("name"), "name");
+        assert_eq!(to_snake_case("already_snake"), "already_snake");
+        // A run of capitals is one boundary, not one per letter.
+        assert_eq!(to_snake_case("httpURL"), "http_url");
+        // A trailing digit is a lowercase-like boundary source.
+        assert_eq!(to_snake_case("line1Item"), "line1_item");
+    }
+
+    #[test]
+    fn syn_span_hands_out_unique_high_spans() {
+        // Every synthesised node must get its OWN region key; two calls never
+        // collide, and every span sits above the source range.
+        let mut sg = SynSpan::seeded(Span::new(10, 20));
+        let a = sg.fresh();
+        let b = sg.fresh();
+        assert_ne!(a, b, "fresh spans must be distinct");
+        assert!(
+            a.lo >= SYN_SPAN_BASE,
+            "synthetic spans clear the source range"
+        );
+        assert!(b.lo > a.lo, "spans advance monotonically");
+        // The diagnostic span is the real call site, not a synthetic one.
+        assert_eq!(sg.diag, Span::new(10, 20));
     }
 
     #[test]

@@ -249,6 +249,10 @@ code! {
     /// `custom`) is hand-nested rather than threaded with `|>`, reversing
     /// field→constructor binding — rejected fail-closed with the `|>` rewrite
     IPE_N0040 = "IPE-N0040", "a decoder-pipeline combinator is hand-nested instead of threaded with |>", "IPE-N0040";
+    /// `Ipe.Codec.auto` cannot derive a codec: the witness is not an annotated
+    /// record value, or a field's type has no derivable leaf codec (a function, a
+    /// `Secret`, a data-carrying ADT, an opaque handle) — rejected fail-closed
+    IPE_N0041 = "IPE-N0041", "Ipe.Codec.auto cannot derive a codec for this type", "IPE-N0041";
 
     // -----------------------------------------------------------------------
     // Type (IPE-T####)

@@ -19,12 +19,12 @@ use crate::code::{
     IPE_N0002, IPE_N0003, IPE_N0004, IPE_N0005, IPE_N0010, IPE_N0011, IPE_N0012, IPE_N0013,
     IPE_N0020, IPE_N0021, IPE_N0022, IPE_N0023, IPE_N0024, IPE_N0025, IPE_N0026, IPE_N0027,
     IPE_N0028, IPE_N0029, IPE_N0030, IPE_N0031, IPE_N0032, IPE_N0033, IPE_N0034, IPE_N0035,
-    IPE_N0036, IPE_N0037, IPE_N0038, IPE_N0039, IPE_N0040, IPE_P0001, IPE_P0002, IPE_P0003,
-    IPE_P0010, IPE_P0011, IPE_P0012, IPE_P0013, IPE_P0014, IPE_P0015, IPE_P0016, IPE_P0017,
-    IPE_P0018, IPE_P0020, IPE_P0021, IPE_P0030, IPE_P0031, IPE_P0040, IPE_P0041, IPE_P0050,
-    IPE_P0060, IPE_P0061, IPE_P0062, IPE_P0063, IPE_T0001, IPE_T0002, IPE_T0003, IPE_T0004,
-    IPE_T0010, IPE_T0011, IPE_T0012, IPE_T0013, IPE_T0014, IPE_T0015, IPE_T0016, IPE_T0017,
-    IPE_T0018, IPE_T0019, IPE_T0020, Severity,
+    IPE_N0036, IPE_N0037, IPE_N0038, IPE_N0039, IPE_N0040, IPE_N0041, IPE_P0001, IPE_P0002,
+    IPE_P0003, IPE_P0010, IPE_P0011, IPE_P0012, IPE_P0013, IPE_P0014, IPE_P0015, IPE_P0016,
+    IPE_P0017, IPE_P0018, IPE_P0020, IPE_P0021, IPE_P0030, IPE_P0031, IPE_P0040, IPE_P0041,
+    IPE_P0050, IPE_P0060, IPE_P0061, IPE_P0062, IPE_P0063, IPE_T0001, IPE_T0002, IPE_T0003,
+    IPE_T0004, IPE_T0010, IPE_T0011, IPE_T0012, IPE_T0013, IPE_T0014, IPE_T0015, IPE_T0016,
+    IPE_T0017, IPE_T0018, IPE_T0019, IPE_T0020, Severity,
 };
 use crate::span::Span;
 
@@ -571,6 +571,43 @@ pub enum NameError {
     /// fields with no type error. Rejected fail-closed; the message shows the
     /// order-preserving `|>` rewrite. [IPE-N0040]
     NestedDecoderPipeline,
+    /// `Ipe.Codec.auto` cannot derive a codec for the witness it was applied to.
+    /// The derive elaborates a record type into the field-by-field `Codec` a
+    /// hand-written codec would build; a witness that is not an annotated record
+    /// value, or a record carrying a field whose type has no derivable leaf codec
+    /// (a function, a `Secret`, a data-carrying ADT, an opaque handle), has no
+    /// such elaboration. Rejected fail-closed at the call site — there is no
+    /// partial codec and no deferred emit failure. `reason` names the specific
+    /// rule; `field` names the offending field (empty when the witness itself is
+    /// wrong rather than one of its fields). [IPE-N0041]
+    CodecAutoUnderivable {
+        reason: CodecAutoRejection,
+        field: Box<str>,
+    },
+}
+
+/// Why `Ipe.Codec.auto` could not derive a codec.
+///
+/// Reported inside [`NameError::CodecAutoUnderivable`]. Each variant names a
+/// distinct non-derivable category so the diagnostic teaches the specific rule
+/// broken and points at the sanctioned explicit-codec escape.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum CodecAutoRejection {
+    /// The witness argument is not a bare reference to a top-level value carrying
+    /// a record-type annotation — the one form whose fields the derive can read.
+    WitnessNotRecordValue,
+    /// `auto` was applied to the wrong number of arguments (it takes exactly one
+    /// witness value).
+    ArityMismatch,
+    /// A field is a `Secret` or a reserved sink type — encoding it to JSON or a
+    /// column is exactly the leak the Security principle forbids.
+    SecretField,
+    /// A field is a function type — not a serialisable value.
+    FunctionField,
+    /// A field is a data-carrying ADT, an opaque handle, an effect/decoder
+    /// carrier, or otherwise has no derivable leaf codec. The escape is an
+    /// explicit `Codec` (`taggedUnion`/`varN` for a data ADT).
+    UnsupportedField,
 }
 
 /// Why a `CustomElement` boundary type parameter fails the SEAL.
@@ -1328,6 +1365,7 @@ const fn name_code(msg: &NameError) -> Code {
         NameError::AssertedCallMalformed { .. } => IPE_N0038,
         NameError::BoundarySealIllegal { .. } => IPE_N0039,
         NameError::NestedDecoderPipeline => IPE_N0040,
+        NameError::CodecAutoUnderivable { .. } => IPE_N0041,
     }
 }
 
@@ -1498,7 +1536,8 @@ fn name_help(msg: &NameError, span: Span) -> Vec<HelpLine> {
         | NameError::UnsupportedBoundaryType { .. }
         | NameError::AssertedCallMalformed { .. }
         | NameError::BoundarySealIllegal { .. }
-        | NameError::NestedDecoderPipeline => Vec::new(), // no span-based help
+        | NameError::NestedDecoderPipeline
+        | NameError::CodecAutoUnderivable { .. } => Vec::new(), // no span-based help
     }
 }
 
