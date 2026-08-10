@@ -177,6 +177,13 @@ pub use url::*;
 
 #[cfg(feature = "db")]
 pub mod db;
+// `dsn`: the typed, opaque `Ipe.Db.Dsn` connection descriptor
+// (parse-don't-validate). Behind `db` (a DSN is a database-domain type); it
+// parses with the `url` crate, which `db` now pulls.
+#[cfg(feature = "db")]
+pub mod dsn;
+#[cfg(feature = "db")]
+pub use dsn::*;
 #[cfg(feature = "json")]
 pub mod json;
 #[cfg(feature = "db")]

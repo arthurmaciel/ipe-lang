@@ -147,6 +147,12 @@ const RESERVED_BUILTIN_TYPES: &[&str] = &[
     // security-tier type (the scheme/SSRF parse boundary) must not be
     // shadowable by user code defeating `Url.fromString`'s parse guarantee.
     "Url",
+    // `Ipe.Db.Dsn`'s opaque validated connection descriptor — reserved for the
+    // same reason: a security-tier type (the DSN parse boundary, carrying a
+    // `Secret` password and a fail-closed TLS posture) must not be shadowable by
+    // user code, or a forged look-alike `Dsn` could smuggle a host/credential
+    // past the parser once a connect step consumes it.
+    "Dsn",
     // The JS-interop visual-widget boundary type. A binding typed
     // `CustomElement down up` names, in its two concrete type parameters, the
     // sealed down-state and up-event that cross the Ipê↔JS seam — every value
@@ -387,6 +393,7 @@ const SEAL_SECRET_OR_SINK: &[&str] = &[
     "Regex",
     "Path",
     "Url",
+    "Dsn",
     "Key",
     "Mac",
     "EmailAddress",

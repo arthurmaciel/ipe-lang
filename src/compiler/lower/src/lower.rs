@@ -1722,6 +1722,7 @@ fn ir_type_mentions(ty: &IrType, leaf: &impl Fn(&IrType) -> bool) -> bool {
         | IrType::Secret
         | IrType::Path
         | IrType::Url
+        | IrType::Dsn
         | IrType::Locale
         | IrType::CacheCfg
         | IrType::CacheStats
@@ -2175,6 +2176,7 @@ fn ir_contains_fun(ty: &IrType) -> bool {
         | IrType::Secret
         | IrType::Path
         | IrType::Url
+        | IrType::Dsn
         // Cache config / stats + Csv document are plain data records — no
         // function.
         | IrType::CacheCfg
@@ -2311,6 +2313,7 @@ fn clone_class(env: CloneEnv<'_>, t: &IrType) -> CloneClass {
         // `Url` is `#[derive(Clone)]` (no Copy — a newtype over `url::Url`,
         // itself a heap-`String`-backed type; `PartialEq`/`Eq` derived).
         | IrType::Url
+        | IrType::Dsn
         | IrType::ServerRequest
         | IrType::ServerResponse
         | IrType::ServerRoute
@@ -5151,6 +5154,8 @@ fn ir_type_mentions_generic(ty: &IrType, tv: Symbol) -> bool {
         | IrType::Path
         // `Url` is non-parametric — mentions no type var.
         | IrType::Url
+        // `Dsn` is non-parametric — mentions no type var.
+        | IrType::Dsn
         // Cache config / stats + Csv document are non-parametric — mention no
         // type var.
         | IrType::CacheCfg
@@ -5253,6 +5258,7 @@ fn ir_type_generic_in_decoder(ty: &IrType, tv: Symbol) -> bool {
         | IrType::Secret
         | IrType::Path
         | IrType::Url
+        | IrType::Dsn
         | IrType::CacheCfg
         | IrType::WebSocketClientCfg
         | IrType::CacheStats
@@ -5349,6 +5355,7 @@ fn ir_type_generic_reaches_bare(ty: &IrType, tv: Symbol) -> bool {
         | IrType::Secret
         | IrType::Path
         | IrType::Url
+        | IrType::Dsn
         | IrType::CacheCfg
         | IrType::WebSocketClientCfg
         | IrType::CacheStats
@@ -11559,6 +11566,9 @@ impl<'a> Lowerer<'a> {
                 // `Url` is `Ipe.Url`'s opaque validated URL type.
                 // Backed by `ipe_runtime::url::Url`.
                 "Url" => Ok(IrType::Url),
+                // `Dsn` is `Ipe.Db.Dsn`'s opaque validated connection descriptor.
+                // Backed by `ipe_runtime::dsn::Dsn`.
+                "Dsn" => Ok(IrType::Dsn),
                 // `Locale` is `Ipe.Locale`'s opaque BCP-47 locale handle.
                 // Backed by `ipe_runtime::locale::Locale`.
                 "Locale" => Ok(IrType::Locale),
@@ -12641,6 +12651,9 @@ impl<'a> Lowerer<'a> {
                 // `Url` is `Ipe.Url`'s opaque validated URL type.
                 // Backed by `ipe_runtime::url::Url`.
                 "Url" => Ok(IrType::Url),
+                // `Dsn` is `Ipe.Db.Dsn`'s opaque validated connection descriptor.
+                // Backed by `ipe_runtime::dsn::Dsn`.
+                "Dsn" => Ok(IrType::Dsn),
                 // `Locale` is `Ipe.Locale`'s opaque BCP-47 locale handle.
                 // Backed by `ipe_runtime::locale::Locale`.
                 "Locale" => Ok(IrType::Locale),
@@ -17098,6 +17111,18 @@ impl<'a> Lowerer<'a> {
                 | KernelFn::DbClose
                 // `DbDefaultMigration : String -> Migration` — pure record builder
                 | KernelFn::DbDefaultMigration
+                // ── Ipe.Db.Dsn arity-1 ───────────────────────────────
+                // `parse : String -> Result Error Dsn` and the accessors
+                // (`driverTag`/`host`/`port`/`database`/`user`/`tlsTag`/
+                // `redacted` : Dsn -> _) all take one argument.
+                | KernelFn::DsnParse
+                | KernelFn::DsnDriverTag
+                | KernelFn::DsnHost
+                | KernelFn::DsnPort
+                | KernelFn::DsnDatabase
+                | KernelFn::DsnUser
+                | KernelFn::DsnTlsTag
+                | KernelFn::DsnRedacted
                 // ── Db.Decode arity-1 ────────────────────────────────
                 // Primitive column decoders: `String -> Decoder T`
                 | KernelFn::DbDecString
@@ -17563,7 +17588,9 @@ impl<'a> Lowerer<'a> {
                 | KernelFn::ConfigMap5,
             ) => Ok(6),
             // `Config.map6`/`map7`/`map8` — arities 7/8/9
-            Callee::Kernel(KernelFn::ConfigMap6) => Ok(7),
+            // `Db.Dsn.build` — arity 7 (driverTag, host, port, database, user,
+            // password, tlsTag).
+            Callee::Kernel(KernelFn::ConfigMap6 | KernelFn::DsnBuild) => Ok(7),
             Callee::Kernel(KernelFn::ConfigMap7) => Ok(8),
             Callee::Kernel(KernelFn::ConfigMap8) => Ok(9),
             // ── Ipe.Ui / Ipe.Html render kernels ─────────────────────────
@@ -18945,6 +18972,16 @@ impl<'a> Lowerer<'a> {
                     ("Db", "connect") => Ok(Callee::Kernel(KernelFn::DbConnect)),
                     ("Db", "open") => Ok(Callee::Kernel(KernelFn::DbOpen)),
                     ("Db", "close") => Ok(Callee::Kernel(KernelFn::DbClose)),
+                    // Ipe.Db.Dsn — parse-don't-validate descriptor kernels.
+                    ("Db.Dsn", "parse") => Ok(Callee::Kernel(KernelFn::DsnParse)),
+                    ("Db.Dsn", "build") => Ok(Callee::Kernel(KernelFn::DsnBuild)),
+                    ("Db.Dsn", "driverTag") => Ok(Callee::Kernel(KernelFn::DsnDriverTag)),
+                    ("Db.Dsn", "host") => Ok(Callee::Kernel(KernelFn::DsnHost)),
+                    ("Db.Dsn", "port") => Ok(Callee::Kernel(KernelFn::DsnPort)),
+                    ("Db.Dsn", "database") => Ok(Callee::Kernel(KernelFn::DsnDatabase)),
+                    ("Db.Dsn", "user") => Ok(Callee::Kernel(KernelFn::DsnUser)),
+                    ("Db.Dsn", "tlsTag") => Ok(Callee::Kernel(KernelFn::DsnTlsTag)),
+                    ("Db.Dsn", "redacted") => Ok(Callee::Kernel(KernelFn::DsnRedacted)),
                     ("Db", "unsafeExecRaw") => Ok(Callee::Kernel(KernelFn::DbExecRaw)),
                     ("Db", "exec") => Ok(Callee::Kernel(KernelFn::DbExec)),
                     ("Db", "unsafeQuery") => Ok(Callee::Kernel(KernelFn::DbQuery)),
@@ -21215,6 +21252,8 @@ fn collect_ir_generic_syms(ty: &IrType, out: &mut BTreeSet<Symbol>) {
         | IrType::Path
         // `Url` is non-parametric — no generic syms.
         | IrType::Url
+        // `Dsn` is non-parametric — no generic syms.
+        | IrType::Dsn
         // Cache config / stats + Csv document are non-parametric — no generic
         // syms.
         | IrType::CacheCfg

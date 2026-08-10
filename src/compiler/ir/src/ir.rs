@@ -1466,6 +1466,17 @@ pub enum IrType {
     /// (a `Url` in a `Ipe.Web` Model field is a compile-time rejection, never a
     /// silent wrong behaviour — same posture as `Path`/`Regex`).
     Url,
+    // ── Ipe.Db.Dsn ─────────────────────────────────────────────────────────
+    /// Opaque validated database-connection descriptor
+    /// (`ipe_runtime::dsn::Dsn`).
+    ///
+    /// The ONLY constructors are `Db.Dsn.parse : String -> Result Error Dsn` and
+    /// `Db.Dsn.build`, both fail-closed parses; the descriptor's password is a
+    /// `Secret`, so a `Dsn` cannot leak a credential. Renders as
+    /// `ipe_runtime::dsn::Dsn`. `Clone` is safe; `Debug` is redacted; non-serde
+    /// (a `Dsn` in a Model field is a compile-time rejection, same posture as
+    /// `Secret`/`Url`).
+    Dsn,
     // ── Ipe.Locale ─────────────────────────────────────────────────────────
     /// Opaque validated BCP-47 locale handle (`ipe_runtime::locale::Locale`).
     ///
@@ -1616,6 +1627,9 @@ pub fn ir_type_is_derivable(
         | IrType::Path
         // `Url` derives Clone+Debug+PartialEq+Eq (a newtype over `url::Url`).
         | IrType::Url
+        // `Dsn` derives Clone; `Debug` is hand-written (redacting) — fully
+        // derivable, not serde (carries a `Secret`).
+        | IrType::Dsn
         // Cache config / stats + Csv document runtime structs derive
         // Clone+Debug+PartialEq.
         | IrType::CacheCfg
@@ -1833,6 +1847,11 @@ pub fn ir_type_is_serde(ty: &IrType, enum_serde: &impl Fn(&ModPath, Symbol) -> b
         // compile-time IPE-L0120 rather than a mismatch at emit, same posture
         // as `Path`.
         | IrType::Url
+        // `Dsn` is a connection-descriptor value carrying a `Secret`, never a
+        // serialisable Model field — derivable but NOT serde (the runtime
+        // `ipe_runtime::dsn::Dsn` has no serde impl), so a Model field of type
+        // `Dsn` is a compile-time IPE-L0120, same posture as `Url` / `Secret`.
+        | IrType::Dsn
         // Cache config / stats + Csv document are kernel-boundary data records
         // — derivable (see `ir_type_is_derivable`) but never persisted to a
         // session store, so not serde (the runtime structs carry no serde
@@ -1945,6 +1964,8 @@ pub fn carrier_is_clone(ty: &IrType) -> bool {
         | IrType::Path
         // `Url` is a newtype over `url::Url` — clone is a String clone.
         | IrType::Url
+        // `Dsn` clones its String fields + `Secret` (a String clone).
+        | IrType::Dsn
         | IrType::Db
         | IrType::ServerRequest
         | IrType::ServerResponse

@@ -268,6 +268,7 @@ fn ir_type_name_at(interner: &Interner, ty: &IrType, depth: u16) -> String {
         IrType::CryptoMac => "Mac".to_owned(),
         IrType::EmailAddress => "EmailAddress".to_owned(),
         IrType::Url => "Url".to_owned(),
+        IrType::Dsn => "Dsn".to_owned(),
         IrType::Locale => "Locale".to_owned(),
     }
 }
@@ -748,6 +749,15 @@ const fn kernel_name(kernel: KernelFn) -> &'static str {
         KernelFn::DbConnect => "Db.connect",
         KernelFn::DbOpen => "Db.open",
         KernelFn::DbClose => "Db.close",
+        KernelFn::DsnParse => "Db.Dsn.parse",
+        KernelFn::DsnBuild => "Db.Dsn.build",
+        KernelFn::DsnDriverTag => "Db.Dsn.driverTag",
+        KernelFn::DsnHost => "Db.Dsn.host",
+        KernelFn::DsnPort => "Db.Dsn.port",
+        KernelFn::DsnDatabase => "Db.Dsn.database",
+        KernelFn::DsnUser => "Db.Dsn.user",
+        KernelFn::DsnTlsTag => "Db.Dsn.tlsTag",
+        KernelFn::DsnRedacted => "Db.Dsn.redacted",
         KernelFn::DbExecRaw => "Db.Unsafe.unsafeExecRaw",
         KernelFn::DbExec => "Db.exec",
         KernelFn::DbQuery => "Db.Unsafe.unsafeQuery",

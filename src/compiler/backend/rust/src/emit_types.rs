@@ -435,6 +435,9 @@ pub fn render_type(ctx: &EmitCtx, ty: &IrType, generics: GenericScope) -> DResul
         // `Ipe.Url`'s opaque validated URL — fully-qualified to avoid ambiguity
         // with any user-defined `Url` type.
         IrType::Url => "ipe_runtime::url::Url".to_owned(),
+        // `Ipe.Db.Dsn`'s opaque validated connection descriptor — fully-qualified
+        // to avoid ambiguity with any user-defined `Dsn` type.
+        IrType::Dsn => "ipe_runtime::dsn::Dsn".to_owned(),
         // `Locale` is fully-qualified to avoid ambiguity with any user-defined
         // `Locale` type; the runtime module is always compiled (the struct is a
         // plain newtype; ICU4X parse/case bodies activate under `--features locale`).

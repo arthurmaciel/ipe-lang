@@ -572,6 +572,11 @@ struct Builtins {
     /// extracted via `Url.toString`. Zero type arguments. Lowered to
     /// `IrType::Url`.
     url: Symbol,
+    // ── Ipe.Db.Dsn ──────────────────────────────────────────────────────────
+    /// `"Dsn"` — `Ipe.Db.Dsn`'s opaque validated connection descriptor
+    /// (`ipe_runtime::dsn::Dsn`). Constructed only by `Db.Dsn.parse` /
+    /// `Db.Dsn.build`; zero type arguments. Lowered to `IrType::Dsn`.
+    dsn: Symbol,
     // ── Ipe.Locale ─────────────────────────────────────────────────────────
     /// `"Locale"` — opaque BCP-47 locale handle (`ipe_runtime::locale::Locale`).
     /// The ONLY constructor is `Locale.fromTag : String -> Maybe Locale`;
@@ -798,6 +803,8 @@ impl Builtins {
             email_address: interner.intern("EmailAddress")?,
             // ── Ipe.Url ───────────────────────────────────────────────────────────
             url: interner.intern("Url")?,
+            // ── Ipe.Db.Dsn ────────────────────────────────────────────────────────
+            dsn: interner.intern("Dsn")?,
             // ── Ipe.Locale ───────────────────────────────────────────────────────
             locale: interner.intern("Locale")?,
             // ── Ipe.PubSub.Topic ────────────────────────────────────────────────
@@ -3950,6 +3957,7 @@ impl<'a> Builder<'a> {
             BuiltinTag::Path => self.builtins.path,
             BuiltinTag::Regex => self.builtins.regex,
             BuiltinTag::Url => self.builtins.url,
+            BuiltinTag::Dsn => self.builtins.dsn,
             BuiltinTag::Locale => self.builtins.locale,
             BuiltinTag::HttpMethod => self.builtins.http_method,
             BuiltinTag::CryptoKey => self.builtins.crypto_key,
@@ -4462,6 +4470,14 @@ impl<'a> Builder<'a> {
         let url = || Ty::Con {
             module: Vec::new(),
             name: self.builtins.url,
+            args: Vec::new(),
+        };
+        // `Dsn` — opaque validated connection descriptor
+        // (`ipe_runtime::dsn::Dsn`). Constructed only by `Db.Dsn.parse` /
+        // `Db.Dsn.build`; lowered to `IrType::Dsn`.
+        let dsn = || Ty::Con {
+            module: Vec::new(),
+            name: self.builtins.dsn,
             args: Vec::new(),
         };
         // `Locale` — opaque BCP-47 locale handle
@@ -5310,6 +5326,31 @@ impl<'a> Builder<'a> {
             K::DbConnect => fun(Ty::Unit, task(db())),
             K::DbOpen => fun(string(), fun(string(), task(db()))),
             K::DbClose => fun(db(), task_unit()),
+
+            // ── Ipe.Db.Dsn — parse-don't-validate descriptor. ──
+            // parse : String -> Result Error Dsn
+            K::DsnParse => fun(string(), result(error_ty(), dsn())),
+            // build : Int -> String -> Int -> String -> String -> Secret -> Int
+            //   -> Result Error Dsn  (driverTag, host, port, database, user,
+            //   password, tlsTag)
+            K::DsnBuild => fun(
+                int(),
+                fun(
+                    string(),
+                    fun(
+                        int(),
+                        fun(
+                            string(),
+                            fun(
+                                string(),
+                                fun(secret(), fun(int(), result(error_ty(), dsn()))),
+                            ),
+                        ),
+                    ),
+                ),
+            ),
+            K::DsnDriverTag | K::DsnPort | K::DsnTlsTag => fun(dsn(), int()),
+            K::DsnHost | K::DsnDatabase | K::DsnUser | K::DsnRedacted => fun(dsn(), string()),
             K::DbExecRaw => fun(db(), fun(string(), task(int()))),
             // `exec`/`query`/`queryDecode` accept `List a` (polymorphic) — any
             // Ipê type that can be bound as a SQL parameter: `List String`,
@@ -8415,6 +8456,16 @@ mod registry_phase_c_tests {
             K::DbConnect,
             K::DbOpen,
             K::DbClose,
+            // Ipe.Db.Dsn — parse-don't-validate descriptor (9)
+            K::DsnParse,
+            K::DsnBuild,
+            K::DsnDriverTag,
+            K::DsnHost,
+            K::DsnPort,
+            K::DsnDatabase,
+            K::DsnUser,
+            K::DsnTlsTag,
+            K::DsnRedacted,
             K::DbExecRaw,
             K::DbExec,
             K::DbQuery,

@@ -347,7 +347,7 @@ json = ["dep:serde_json", "serde"]
 # the `Decimal` newtype.
 # `crypto-core`: `db.rs` SHA-256s the `_ipe_migrations` ledger checksum (a
 # cross-backend byte-exact contract).
-db = ["sqlx", "sqlx?/sqlite", "sqlx?/postgres", "tokio", "tokio/sync", "dep:serde_json", "json", "serde", "bincode", "encoding", "random", "time-core", "decimal", "crypto-core"]
+db = ["sqlx", "sqlx?/sqlite", "sqlx?/postgres", "tokio", "tokio/sync", "dep:serde_json", "json", "serde", "bincode", "encoding", "random", "time-core", "decimal", "crypto-core", "url", "secret"]
 # `db-sqlite` / `db-postgres`: config.rs alias selectors. Only the emitter ever
 # enables one, and it selects exactly one (SEAL-checked) — the standalone crate
 # links both sqlx drivers regardless (see `db`). The `compile_error!` in
