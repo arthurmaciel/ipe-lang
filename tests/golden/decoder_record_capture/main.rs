@@ -51,7 +51,7 @@ impl<T1: IpeStringify + std::fmt::Debug + 'static> IpeStringify for MainDecBox<T
 pub struct RecDec<T1> {
     dec: Decoder<T1>,
 }
-impl<T1> Clone for RecDec<T1> {
+impl<T1: Clone> Clone for RecDec<T1> {
     fn clone(&self) -> Self {
         Self {
             dec: self.dec.clone(),
