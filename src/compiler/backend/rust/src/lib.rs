@@ -993,6 +993,21 @@ fn enum_field_is_clone(ty: &IrType, enum_clone: &BTreeMap<(ModPath, Symbol), boo
     }
 }
 
+/// Is a record field type `Clone`, consulting the whole-program enum-`Clone`
+/// fixpoint for referenced user enums?
+///
+/// A record field and an enum-variant payload field share identical `Clone`
+/// semantics under the emitted `impl<Tn: Clone> Clone`: a bare type variable is
+/// `Clone` by that bound, a referenced enum consults the fixpoint, transparent
+/// carriers recurse, and every other leaf defers to
+/// [`ipe_ir::carrier_is_clone`] (whose OK set includes the `Arc<dyn Fn>`
+/// `SharedFun` carrier). So this delegates to [`enum_field_is_clone`] — one
+/// source of truth for both — and the record's hand-written `Clone` impl stamps
+/// `Tn: Clone` on every type parameter to make the bare-variable admission sound.
+fn record_field_is_clone(ty: &IrType, enum_clone: &BTreeMap<(ModPath, Symbol), bool>) -> bool {
+    enum_field_is_clone(ty, enum_clone)
+}
+
 impl<'a> EmitCtx<'a> {
     #[allow(clippy::too_many_lines)]
     #[allow(clippy::similar_names)] // `uses_ui` / `uses_tui` are intentionally similar
@@ -1342,7 +1357,19 @@ impl<'a> EmitCtx<'a> {
                 // `impl Clone` when it is not fully `CDPeq`-derivable — the property
                 // the fn-value-reuse promotion relies on to duplicate a reused
                 // record-of-functions.
-                let is_clone = fields.iter().all(|(_, ty)| ipe_ir::carrier_is_clone(ty));
+                //
+                // Consulted through `record_field_is_clone`, the record twin of
+                // `enum_field_is_clone`, NOT the bare `carrier_is_clone` leaf test:
+                // a bare type variable field is `Clone` under the emitted
+                // `impl<Tn: Clone> Clone` bound (a generic union's inner record may
+                // carry both a `SharedFun` slot keyed on `a` AND a bare-`a` field),
+                // and a referenced user enum consults the `enum_clone` fixpoint. The
+                // bare leaf test's `Generic ⇒ false` denied such a record its
+                // hand-written `Clone`, an accept-then-cargo-fail when the enclosing
+                // union was cloned.
+                let is_clone = fields
+                    .iter()
+                    .all(|(_, ty)| record_field_is_clone(ty, &enum_clone));
                 record_by_fieldset
                     .entry(key.clone())
                     .or_default()

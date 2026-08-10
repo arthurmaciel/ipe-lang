@@ -10,6 +10,8 @@ mod golden_captured_record_field_access_clone;
 mod golden_csv_record_nominal_fold_seal;
 #[path = "g_record_generic/golden_dotfield.rs"]
 mod golden_dotfield;
+#[path = "g_record_generic/golden_fncarrier_record_generic_clone.rs"]
+mod golden_fncarrier_record_generic_clone;
 #[path = "g_record_generic/golden_generic.rs"]
 mod golden_generic;
 #[path = "g_record_generic/golden_generic_records.rs"]

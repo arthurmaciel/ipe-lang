@@ -61,7 +61,7 @@ pub struct RecEncMkDec<T1> {
     enc: ::std::sync::Arc<dyn Fn(T1) -> JsonVal + Send + Sync + 'static>,
     mkDec: ::std::sync::Arc<dyn Fn(Rec_) -> Decoder<T1> + Send + Sync + 'static>,
 }
-impl<T1> Clone for RecEncMkDec<T1> {
+impl<T1: Clone> Clone for RecEncMkDec<T1> {
     fn clone(&self) -> Self {
         Self {
             enc: self.enc.clone(),

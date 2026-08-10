@@ -1,0 +1,70 @@
+module Main exposing (main)
+
+import Ipe.Io as Io
+import Ipe.String
+import Ipe.Result exposing (Result(..))
+
+
+-- A generic union whose inner record stores a first-class function keyed on the
+-- type's OWN generic parameter ALONGSIDE a bare generic field. Bound at a
+-- concrete type and reused across more than one closure, which forces a
+-- `.clone()` of the whole value.
+--
+-- Pre-fix: `ipe build` accepts, but the emitted crate fails `cargo build` with
+-- E0599 (`no method named clone`) on the synthesized `Rec…<T1>` struct. The
+-- record `is_clone` fixpoint consulted the bare `carrier_is_clone` leaf test,
+-- which returns false for a bare generic field (`seed : a`) even though the
+-- emitted hand-written `impl<T1: Clone> Clone` bounds `T1: Clone`. The record
+-- therefore got neither a derive nor a hand-written `Clone`, while the sibling
+-- function-carrier ENUM (whose `enum_field_is_clone` admits a bare generic under
+-- its `T: Clone` bound) did get one.
+type Box a
+    = Box { read : String -> Result Error a, seed : a }
+
+
+runBox : Box a -> String -> Result Error a
+runBox boxed input =
+    case boxed of
+        Box b ->
+            b.read input
+
+
+seedOf : Box a -> a
+seedOf boxed =
+    case boxed of
+        Box b ->
+            b.seed
+
+
+asText : Result Error Int -> String
+asText r =
+    case r of
+        Ok n ->
+            String.fromInt n
+
+        Err _ ->
+            "err"
+
+
+intBox : Box Int
+intBox =
+    Box { read = \s -> Ok (String.length s), seed = 0 }
+
+
+-- Reuse the SAME box value in two separate closures. Each use consumes the whole
+-- record by value, so the record is cloned; without a `Clone` impl the emitted
+-- Rust cannot compile.
+describe : Box Int -> String
+describe box =
+    let
+        first =
+            (\b -> asText (runBox b "7")) box
+
+        second =
+            (\b -> String.fromInt (seedOf b)) box
+    in
+    first ++ "," ++ second
+
+
+main =
+    Io.println (describe intBox)
