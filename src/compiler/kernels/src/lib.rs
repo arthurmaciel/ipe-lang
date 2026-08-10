@@ -7751,10 +7751,9 @@ impl StdlibKernel {
             // ── Ipe.Html serialise / element / attribute builders. ──
             Self::HtmlRender | Self::HtmlToString => Some(&HTML_A_TO_STRING),
             Self::HtmlAttrToString => Some(&HTML_ATTR_A_TO_STRING),
-            Self::HtmlTextNode
-            | Self::HtmlRawNode
-            | Self::HtmlTitleNode
-            | Self::HtmlScriptNode => Some(&STRING_TO_HTML_A),
+            Self::HtmlTextNode | Self::HtmlRawNode | Self::HtmlTitleNode | Self::HtmlScriptNode => {
+                Some(&STRING_TO_HTML_A)
+            }
             Self::HtmlNode => Some(&HTML_NODE),
             Self::HtmlVoidNode => Some(&STRING_TO_LIST_HTML_ATTR_A_TO_HTML_A),
             Self::HtmlDoctype => Some(&LIST_HTML_A_TO_HTML_A_TOP),

@@ -1594,3 +1594,50 @@ pub fn ui_breakpoint_<M: Clone>(
 ) -> Element<M> {
     ui_media_query_(query, attrs, el)
 }
+
+#[cfg(test)]
+mod script_node_tests {
+    use super::{html_script_node_, neutralise_script_close};
+    use crate::html::{Html, render_html};
+
+    #[test]
+    fn ordinary_script_body_passes_through_verbatim() {
+        // A normal JavaScript body with `<`/`>`/`&` is NOT entity-escaped — it
+        // is executable code, and escaping would corrupt it.
+        let node: Html<()> = html_script_node_("console.log(1 < 2 && 3 > 2);".to_owned());
+        let html = render_html(&node);
+        assert_eq!(html, "<script>console.log(1 < 2 && 3 > 2);</script>");
+    }
+
+    #[test]
+    fn close_tag_breakout_is_neutralised_case_insensitively() {
+        // SECURITY: a literal `</script` in the body would end the element early
+        // and let following bytes become live markup. It is split at
+        // construction so no `</script` byte run survives, case-insensitively.
+        assert_eq!(
+            neutralise_script_close("a</script><img src=x onerror=alert(1)>"),
+            "a<\\/script><img src=x onerror=alert(1)>"
+        );
+        // Case-insensitive match; the neutralised run is emitted as the fixed
+        // lowercase literal (the exact casing of the code text is irrelevant —
+        // only that no `</script` byte run of ANY case survives).
+        assert_eq!(neutralise_script_close("b</SCRIPT >"), "b<\\/script >");
+        // No surviving `</script` (any case) after neutralisation.
+        let out = neutralise_script_close("x</script>y</ScRiPt>z");
+        assert!(!out.to_ascii_lowercase().contains("</script"));
+
+        // Non-breakout text (incl. multibyte UTF-8) is untouched.
+        assert_eq!(neutralise_script_close("λ = 1; // ok"), "λ = 1; // ok");
+    }
+
+    #[test]
+    fn script_node_renders_neutralised_breakout() {
+        let node: Html<()> = html_script_node_("</script><b>x</b>".to_owned());
+        let html = render_html(&node);
+        assert!(
+            !html.to_ascii_lowercase().contains("</script><b>"),
+            "the breakout must not survive into the render: {html}"
+        );
+        assert!(html.starts_with("<script>") && html.ends_with("</script>"));
+    }
+}
