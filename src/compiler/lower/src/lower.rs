@@ -17769,8 +17769,10 @@ impl<'a> Lowerer<'a> {
                 // ── Html element builders — arity 1 ──────────────────────
                 // `Html.text : String -> Html msg`
                 | KernelFn::HtmlTextNode
-                // `Html.raw : String -> Html msg`
+                // `Html.unsafeRaw : String -> Html msg`
                 | KernelFn::HtmlRawNode
+                // `Html.Unsafe.unsafeScript : String -> Html msg`
+                | KernelFn::HtmlScriptNode
                 // ── event-attribute builders — arity 1 ──────────
                 // `Ui.onClick : msg -> Attribute msg`
                 | KernelFn::UiOnClick
@@ -19181,6 +19183,13 @@ impl<'a> Lowerer<'a> {
                     // its own kernel, NOT folded into the arity-3 `HtmlNode`. The
                     // dedicated kernel close-tag-neutralises the CSS body (F7).
                     ("Html", "styleNode") => Ok(Callee::Kernel(KernelFn::HtmlStyleNode)),
+                    // `unsafeScript : String -> Html msg` — an inline `<script>`
+                    // with a verbatim JavaScript body. Homed in `Ipe.Html.Unsafe`
+                    // (its import discloses the `unsafe` capability), named
+                    // `unsafe*`: a script body is trusted-code injection, never on
+                    // the safe `Ipe.Html` surface. The dedicated kernel
+                    // neutralises a `</script` breakout at construction.
+                    ("Html", "unsafeScript") => Ok(Callee::Kernel(KernelFn::HtmlScriptNode)),
                     ("Html", "node") => Ok(Callee::Kernel(KernelFn::HtmlNode)),
                     // Each of these 3 is its own dedicated `KernelFn` variant
                     // (distinct arity from the generic arity-3 `Html.node`);

@@ -420,6 +420,7 @@ pub const fn ui_call_shape(k: KernelFn) -> Option<UiEmitPlan> {
         KernelFn::HtmlDoctype => pos("ipe_runtime::ui::helpers::html_doctype_", 1),
         KernelFn::HtmlTitleNode => pos("ipe_runtime::ui::helpers::html_title_node_", 1),
         KernelFn::HtmlStyleNode => pos("ipe_runtime::ui::helpers::html_style_node_", 2),
+        KernelFn::HtmlScriptNode => pos("ipe_runtime::ui::helpers::html_script_node_", 1),
 
         // ── Plain-message event attrs ─────────────────────────────────────
         KernelFn::UiOnClick => pos("ipe_runtime::ui::helpers::ui_on_click_", 1),
