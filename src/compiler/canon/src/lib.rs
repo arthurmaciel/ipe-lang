@@ -3492,6 +3492,80 @@ mod tests {
         );
     }
 
+    /// A USER module minting an UNSAFE-tier kernel alias (`Ffi.kernel
+    /// "Html_unsafeScript"` — the raw-`<script>` XSS sink). No `.Unsafe` import,
+    /// so before the origin gate this canonicalised clean while `capabilities`
+    /// reported `pure`: the capability-model bypass the gate closes.
+    const USER_MINTS_UNSAFE_KERNEL_SRC: &str = "module Main exposing (main)\n\
+         import Ipe.Ffi as Ffi\n\
+         sneaky : String -> Html msg\n\
+         sneaky =\n    Ffi.kernel \"Html_unsafeScript\"\n\
+         main =\n    0\n";
+
+    /// A USER module minting an ORDINARY (safe-tier) kernel alias. Rejected too —
+    /// the privilege is denied by ORIGIN, not by which kernel is named, so there
+    /// is no "safe kernel" loophole for user source to mint through.
+    const USER_MINTS_PLAIN_KERNEL_SRC: &str = "module Main exposing (main)\n\
+         import Ipe.Ffi as Ffi\n\
+         shout : String -> String\n\
+         shout =\n    Ffi.kernel \"String_toUpper\"\n\
+         main =\n    0\n";
+
+    #[test]
+    fn user_origin_cannot_mint_an_unsafe_kernel_alias() {
+        // SECURITY: user source may not mint a kernel alias — an unsafe kernel
+        // must be reached only through its `.Unsafe` module, which discloses
+        // `unsafe`. The origin gate makes the bypass unrepresentable.
+        let err = canon_with_origin(USER_MINTS_UNSAFE_KERNEL_SRC, ModuleOrigin::User)
+            .expect_err("user source minting `Ffi.kernel` must be rejected");
+        assert!(
+            matches!(
+                &err,
+                Diagnostic::Name {
+                    msg: NameError::KernelAliasInUserSource { .. },
+                    ..
+                }
+            ),
+            "user-source kernel alias must be IPE-N0042, got {err:?}"
+        );
+    }
+
+    #[test]
+    fn user_origin_cannot_mint_even_a_plain_kernel_alias() {
+        // SECURITY: the gate is by ORIGIN, not by kernel tier — a user module
+        // cannot mint any kernel alias, safe-tier included.
+        let err = canon_with_origin(USER_MINTS_PLAIN_KERNEL_SRC, ModuleOrigin::User)
+            .expect_err("user source minting any `Ffi.kernel` must be rejected");
+        assert!(
+            matches!(
+                &err,
+                Diagnostic::Name {
+                    msg: NameError::KernelAliasInUserSource { .. },
+                    ..
+                }
+            ),
+            "user-source kernel alias must be IPE-N0042, got {err:?}"
+        );
+    }
+
+    #[test]
+    fn embedded_stdlib_origin_still_mints_the_unsafe_kernel_alias() {
+        // NON-REGRESS: the SAME `Ffi.kernel "Html_unsafeScript"` binding, in a
+        // driver-vouched EmbeddedStdlib module (this IS the body of the real
+        // `Ipe.Html.Unsafe` submodule), must still canonicalise — the legitimate
+        // kernel-alias surface is untouched by the origin gate.
+        let src = "module Ipe.Html.Unsafe exposing (unsafeScript)\n\
+             import Ipe.Ffi as Ffi\n\
+             unsafeScript : String -> Html msg\n\
+             unsafeScript =\n    Ffi.kernel \"Html_unsafeScript\"\n";
+        let res = canon_with_origin(src, ModuleOrigin::EmbeddedStdlib);
+        assert!(
+            res.is_ok(),
+            "EmbeddedStdlib kernel alias must still canonicalise: {:?}",
+            res.err()
+        );
+    }
+
     #[test]
     fn embedded_stdlib_unannotated_binding_fails_closed() {
         // The fail-closed annotation gate: an EmbeddedStdlib module with an

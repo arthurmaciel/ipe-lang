@@ -5546,9 +5546,24 @@ fn canonicalise_asserted_call(
 /// `(module, function)` pair (the `KernelMod_funcName` convention) and looked up
 /// in `env.stdlib_index`.
 ///
+/// ORIGIN GATE (capability-model integrity): minting a kernel is the exclusive
+/// privilege of driver-vouched [`ModuleOrigin::EmbeddedStdlib`] /
+/// [`ModuleOrigin::FfiInterface`] modules — the standard library and the
+/// generated FFI interface. A binding of this shape in a [`ModuleOrigin::User`]
+/// module is REJECTED (IPE-N0042), mirroring the `Ffi.binding` origin gate in
+/// [`canonicalise_foreign_call`]: user source could otherwise bind a name
+/// directly to any kernel — including an unsafe-tier kernel (a raw-`<script>`
+/// sink, a secret reveal, a raw SQL exec) — reaching the effect with no
+/// `unsafe` capability disclosed and no `.Unsafe` import to acknowledge. The
+/// only sanctioned path to an unsafe kernel is its `Ipe.<M>.Unsafe` module,
+/// which flips the `unsafe` capability. Make-invalid-states-unrepresentable:
+/// `Ffi.kernel` in user text is unrepresentable, not merely discouraged.
+///
 /// Returns:
 /// * `Ok(None)` — the binding is an ordinary value/function, not a kernel alias.
 /// * `Ok(Some(alias))` — a kernel alias whose target is a registered kernel.
+/// * `Err(IPE-N0042)` — the binding IS a kernel alias but the module origin is
+///   `User`, so it may not mint a kernel (the capability-model gate).
 /// * `Err(IPE-N0028)` — the binding IS a kernel alias but its string names no
 ///   registered kernel. This is the FAIL-CLOSED gate demanded by THE SEAL:
 ///   accepting it would let `ipe` emit a call to a non-existent kernel that
@@ -5557,6 +5572,8 @@ fn canonicalise_asserted_call(
 ///   representable-but-illegal state, rejected at compile time.
 ///
 /// # Errors
+/// [`NameError::KernelAliasInUserSource`] (IPE-N0042) when a kernel-alias shape
+/// appears in a `User`-origin module.
 /// [`NameError::UnknownKernelAlias`] (IPE-N0028) when the split `(module,
 /// function)` pair is absent from the kernel registry.
 pub fn detect_kernel_alias(
@@ -5591,6 +5608,26 @@ pub fn detect_kernel_alias(
     let src::Expr_::Str(raw) = &arg.value else {
         return Ok(None);
     };
+
+    // ORIGIN GATE: the binding is a genuine `Ffi.kernel "<raw>"` kernel alias.
+    // Only a driver-vouched EmbeddedStdlib / FfiInterface module may mint a
+    // kernel; the SAME shape in User source is rejected (IPE-N0042). Placed
+    // AFTER full shape confirmation so an ordinary user value is never touched,
+    // and BEFORE the registry lookup so the rejection does not depend on whether
+    // the named kernel happens to be registered. Mirrors the `Ffi.binding`
+    // origin gate in `canonicalise_foreign_call`; fail-closed for any origin
+    // that is not one of the two vouched kinds.
+    if !matches!(
+        env.origin,
+        ModuleOrigin::EmbeddedStdlib | ModuleOrigin::FfiInterface
+    ) {
+        return Err(Diagnostic::Name {
+            span: value.body.span,
+            msg: NameError::KernelAliasInUserSource {
+                alias: Box::<str>::from(raw.as_str()),
+            },
+        });
+    }
 
     // Split at the FIRST `_` — `"PubSub_publish"` → `("PubSub", "publish")`,
     // matching the runtime's `KernelMod_funcName` convention. A string with no
