@@ -9,7 +9,7 @@ The idea is *verify behaviour, not reputation*: rather than trusting that a
 dependency is well-behaved, you can see the precise set of things it is even
 *able* to do before you run it.
 
-## The nine capabilities
+## The ten capabilities
 
 | Capability | What it covers |
 |---|---|
@@ -22,6 +22,7 @@ dependency is well-behaved, you can see the precise set of things it is even
 | `random` | Drawing non-determinism — RNG, random tokens, UUIDs. |
 | `native-ffi` | Crossing into native `Rust.` code, which is opaque to inference (see below). |
 | `ffi-raw` | A native crossing whose signature the author asserted via `Rust.Ffi.call`, rather than derived from crate inspection. Always accompanies `native-ffi`; its presence discloses the assertion. |
+| `unsafe` | Importing an `Ipe.<M>.Unsafe` escape hatch — a member that mints a security-tier value by *assertion* instead of by *parse* (raw HTML, raw SQL, secret reveal). A provenance disclosure, not an OS-enforced resource axis. See [Acknowledging an unsafe escape hatch](#acknowledging-an-unsafe-escape-hatch). |
 
 The vocabulary is closed and coarse for now: `network` means *any* network, not
 per-host; `filesystem` means *any* file, not per-path. Finer, per-resource
@@ -109,6 +110,49 @@ refused unless its effects are containable).
   the binary — so `ipe exec` re-applies the jail wherever the artifact runs; a
   tampered profile that requests less isolation than the embedded floor is
   refused.
+
+## Acknowledging an unsafe escape hatch
+
+Ipê makes the safe path the easy one and reserves friction for real exposure.
+The type is a trust boundary: a `Path`, `SqlFragment`, `Secret`, or escaped
+`Html` value is a *proof* a check ran. The **escape hatch** is a trust boundary
+too — every parse-bypassing sink lives in a disclosed `Ipe.<M>.Unsafe` submodule
+(named `unsafe*`), and importing one infers the `unsafe` capability above.
+
+When your **own** program imports such a hatch, `ipe build` / `ipe run` surface
+the risk (which module, what risk) and ask you to take responsibility before
+building. A program that imports **no** `.Unsafe` module is untouched — no
+warning, no prompt, no flag. Consent has three forms:
+
+- **Interactively** (a real terminal) the build prints the risk and prompts; `y`
+  proceeds, anything else stops.
+- **The one-off flag** `--accept-risks`:
+
+  ```
+  ipe build --accept-risks
+  ipe run   --accept-risks
+  ```
+
+- **The durable manifest token** in `ipe.toml`, so a repeatedly-built project
+  never re-prompts and CI needs no flag:
+
+  ```toml
+  [capabilities]
+  accept = ["unsafe"]
+  ```
+
+  (`accept` is distinct from `declared`: `declared` names a package's *own*
+  effects; `accept` records that you have taken responsibility for a disclosed
+  risk.)
+
+A **non-interactive** build (CI, a pipe — no terminal) **never blocks on a
+prompt**: a build that hangs waiting for stdin is a worse failure than the risk
+it guards. Without pre-acceptance it **fails closed** with `IPE-S0001` and the
+remedy; with the flag or the manifest token it proceeds silently. Run
+`ipe explain IPE-S0001` for the full page.
+
+A deployment that wants a hard ban on the escape hatch gets it by declaring no
+`unsafe` acceptance and letting the fail-closed path reject any `.Unsafe` import.
 
 ## Not covered: resource quotas
 

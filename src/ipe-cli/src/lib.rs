@@ -42,6 +42,7 @@ pub mod run_sandbox;
 pub mod runtime_embed;
 pub mod style;
 pub mod toolchain;
+pub mod unsafe_ack;
 /// The embedded Ipê standard-library source now lives in the dependency-free
 /// [`ipe_stdlib`] leaf crate so the WebAssembly frontend can share one copy.
 /// Re-exported here so `crate::stdlib::…` call sites resolve unchanged.
@@ -2553,6 +2554,10 @@ fn resolve_wasm_target(cli_wasm: bool, wasm_config: Option<&project::WasmConfig>
 }
 
 /// `ipe build [<path>]` — compile a program to a native or WebAssembly artifact.
+// A linear pipeline (parse → discover manifest → acknowledge unsafe → resolve
+// target → emit → cargo build); the steps share enough locals that splitting
+// reads worse than the whole.
+#[allow(clippy::too_many_lines)]
 pub(crate) fn run_build(rest: &[String]) -> Result<(), CliError> {
     let args = cli_args::parse_build(rest)?;
     let entry = match args.entry {
@@ -2602,11 +2607,24 @@ pub(crate) fn run_build(rest: &[String]) -> Result<(), CliError> {
     // Parse the manifest early to read [wasm].mode for target inference.
     // build_project_with_options re-parses it later to fill in publicEnv /
     // hydrate-mode; the double parse is acceptable (manifests are small).
-    let manifest_wasm: Option<project::WasmConfig> = manifest
+    let manifest_parsed = manifest
         .as_deref()
         .map(project::parse_manifest)
-        .transpose()?
-        .map(|m| m.wasm);
+        .transpose()?;
+    let manifest_wasm: Option<project::WasmConfig> =
+        manifest_parsed.as_ref().map(|m| m.wasm.clone());
+
+    // Acknowledge any disclosed `.Unsafe` escape-hatch import BEFORE the (costly)
+    // emit + cargo build. The safe path (no `.Unsafe` import) returns silently;
+    // an exposed program requires `--accept-risks`, the manifest token, or an
+    // interactive yes, and a non-interactive build without consent fails closed
+    // rather than blocking on a prompt.
+    acknowledge_unsafe_imports(
+        manifest_parsed.as_ref(),
+        manifest.as_deref(),
+        &entry_path,
+        args.accept_risks,
+    )?;
 
     // Precedence: CLI --target wasm > IPE_TARGET=wasm > [wasm].mode != "off".
     let wasm_target = resolve_wasm_target(wasm_target, manifest_wasm.as_ref());
@@ -3155,11 +3173,23 @@ pub(crate) fn run_run(rest: &[String]) -> Result<(), CliError> {
     let manifest = discover_manifest(&entry_path)?;
 
     // Parse the manifest early to read [wasm].mode for target inference.
-    let manifest_wasm: Option<project::WasmConfig> = manifest
+    let manifest_parsed = manifest
         .as_deref()
         .map(project::parse_manifest)
-        .transpose()?
-        .map(|m| m.wasm);
+        .transpose()?;
+    let manifest_wasm: Option<project::WasmConfig> =
+        manifest_parsed.as_ref().map(|m| m.wasm.clone());
+
+    // Acknowledge any disclosed `.Unsafe` escape-hatch import BEFORE the (costly)
+    // emit + cargo build. Same gate as `ipe build`: the safe path is silent, an
+    // exposed program needs consent, and a non-interactive run without consent
+    // fails closed rather than blocking on a prompt.
+    acknowledge_unsafe_imports(
+        manifest_parsed.as_ref(),
+        manifest.as_deref(),
+        &entry_path,
+        args.accept_risks,
+    )?;
 
     // When the project declares [wasm].mode != "off", or IPE_TARGET=wasm is
     // set, treat `ipe run` as a wasm build-and-bundle (no native binary to
@@ -3893,6 +3923,78 @@ fn build_source_graph(entry: &Path) -> Result<SourceGraph, CliError> {
         sources: collected.sources,
         entry_module_path: collected.entry_module_path,
     })
+}
+
+/// Collect the USER `.ipe` source texts a build sees, for the `.Unsafe`-import
+/// scan. A manifest project reads every discovered module under its source root
+/// (the same whole-tree posture package-capability inference takes); a
+/// single-file entry reads the entry plus its imported siblings. Best-effort: a
+/// module that cannot be read is skipped — the authoritative "uses unsafe"
+/// decision is the inferred capability set, not this scan, which only supplies
+/// the human-facing `via …` detail.
+fn user_sources_for_unsafe_scan(manifest: Option<&Path>, entry: &Path) -> Vec<String> {
+    if let Some(mpath) = manifest
+        && let Ok(m) = project::parse_manifest(mpath)
+        && let Ok(discovered) = project::discover_modules(&m.src_root)
+    {
+        return discovered
+            .iter()
+            .filter_map(|d| fs::read_to_string(&d.path).ok())
+            .collect();
+    }
+    // Single file (or a manifest that failed to parse — the build will surface
+    // that error itself): the entry and its siblings.
+    match collect_entry_and_siblings(entry) {
+        Ok(collected) => collected
+            .sources
+            .into_values()
+            .map(|(_, src)| src)
+            .collect(),
+        Err(_) => fs::read_to_string(entry).ok().into_iter().collect(),
+    }
+}
+
+/// The build-time acknowledgment gate for `Ipe.<M>.Unsafe` escape-hatch imports,
+/// shared by `ipe build` and `ipe run`.
+///
+/// Resolves the program's inferred capabilities the same way the sandbox does,
+/// and — only when the disclosed `unsafe` capability is present — surfaces the
+/// risk and requires consent (the `--accept-risks` flag, a `[capabilities]
+/// accept = ["unsafe"]` manifest token, or an interactive `y`). A non-interactive
+/// build without pre-acceptance fails closed (`IPE-S0001`); it never blocks on a
+/// prompt. A program with no `.Unsafe` import is untouched.
+///
+/// # Errors
+/// [`CliError::UsageOwned`] (`IPE-S0001`) when consent is required but absent;
+/// the capability-resolution errors it composes.
+fn acknowledge_unsafe_imports(
+    manifest_parsed: Option<&project::ProjectManifest>,
+    manifest_path: Option<&Path>,
+    entry: &Path,
+    accept_risks_flag: bool,
+) -> Result<(), CliError> {
+    let resolved = run_sandbox::resolve_for_run(manifest_parsed, manifest_path, entry)?;
+    // Short-circuit before any source read when the disclosed capability is
+    // absent — the safe path does no work at all.
+    if !resolved.inferred.contains(&ipe_ir::Capability::Unsafe) {
+        return Ok(());
+    }
+    let sources = user_sources_for_unsafe_scan(manifest_path, entry);
+    let via = unsafe_ack::unsafe_modules_in_sources(sources.iter().map(String::as_str));
+    let manifest_accept = manifest_parsed
+        .map(|m| m.capabilities_accept.clone())
+        .unwrap_or_default();
+    let mut stdin = std::io::stdin().lock();
+    let mut stderr = std::io::stderr().lock();
+    unsafe_ack::gate(
+        &resolved.inferred,
+        accept_risks_flag,
+        &manifest_accept,
+        &via,
+        unsafe_ack::is_interactive(),
+        &mut stdin,
+        &mut stderr,
+    )
 }
 
 /// Type-check a single `.ipe` entry through the SAME injection-aware

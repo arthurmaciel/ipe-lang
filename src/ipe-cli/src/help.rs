@@ -99,6 +99,10 @@ const COMMANDS: &[Command] = &[
                 desc: "apply machine-applicable fixes before building",
             },
             Opt {
+                flag: "[--accept-risks]",
+                desc: "accept every disclosed .Unsafe escape-hatch import and proceed without prompting",
+            },
+            Opt {
                 flag: "[--static]",
                 desc: "produce a statically linked binary",
             },
@@ -187,6 +191,10 @@ const COMMANDS: &[Command] = &[
             Opt {
                 flag: "[--allow-slow-allocator]",
                 desc: "permit an allocator known to be slow for the target",
+            },
+            Opt {
+                flag: "[--accept-risks]",
+                desc: "accept every disclosed .Unsafe escape-hatch import and proceed without prompting",
             },
             Opt {
                 flag: "[-- <args>...]",

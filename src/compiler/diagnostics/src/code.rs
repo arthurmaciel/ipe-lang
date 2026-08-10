@@ -413,6 +413,15 @@ code! {
     IPE_F4414 = "IPE-F4414", "an author-asserted foreign call (Rust.Ffi.call) was refused", "IPE-F4414";
 
     // -----------------------------------------------------------------------
+    // Security consent (IPE-S####)
+    // -----------------------------------------------------------------------
+
+    /// a program imports an `Ipe.<M>.Unsafe` escape hatch and the risk was not
+    /// acknowledged (non-interactive build without `--accept-risks` / manifest
+    /// pre-acceptance, or an interactive "no")
+    IPE_S0001 = "IPE-S0001", "unsafe escape hatch imported without acknowledgment", "IPE-S0001";
+
+    // -----------------------------------------------------------------------
     // Internal (IPE-I####)
     // -----------------------------------------------------------------------
 
