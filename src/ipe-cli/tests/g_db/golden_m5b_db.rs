@@ -310,6 +310,32 @@ fn db_store() {
     assert_runs_and_matches_oracle("db_store");
 }
 
+/// SEAL regression: a generic HOF (`Result.map`) applied to a callee whose
+/// return type is a CROSS-MODULE concrete stdlib type (`Ipe.Db.Store.Store`).
+/// Before the fix the `Result.map` type variable erased to `JsonVal` in emitted
+/// Rust — `ipe build` accepted, then the emitted crate failed `cargo build`
+/// with `E0308` (expected `IpeResult<_, IpeDbStoreStore>`, found
+/// `IpeResult<_, serde_json::Value>`). The concrete `Store` now threads through
+/// the HOF's instantiated slot for BOTH the point-free
+/// `Result.map (Store.primaryKey "id")` and the eta-expanded
+/// `Result.map (\s -> Store.primaryKey "id" s)` forms. The same-module control
+/// (`Result.map (setN 5)` over the in-module `Counter` ADT) is exercised in the
+/// same program and must keep lowering to its concrete in-module type.
+///
+/// Prints one line per shape (`Store.tableName` for the two cross-module
+/// stores, the counter payload for the control):
+///
+///   point-free:users
+///   eta:orders
+///   control:5
+///
+/// No DB connection is opened — the golden observes the `Store` structurally, so
+/// it isolates the lowering fix from the sqlx runtime.
+#[test]
+fn db_store_hof_pointfree() {
+    assert_runs_and_matches_oracle("db_store_hof_pointfree");
+}
+
 /// `Db.findWhere` with an `Ipe.Db.Unsafe.unsafeFragment`-minted WHERE column:
 /// the un-validated anti-`Sql.column` mints a `SqlFragment` from the verbatim
 /// identifier `"qty"` WITHOUT the `valid_sql_ident` gate, then `Sql.gt (… ) 9`
