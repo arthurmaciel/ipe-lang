@@ -1349,14 +1349,18 @@ impl SqlIdent {
     /// The one and only SQL-identifier charset gate. `mode` selects whether a
     /// `.` separator is admitted; everything else about the policy (non-empty,
     /// ASCII-alphanumeric-or-underscore) is shared, so the `Plain` and
-    /// `Dotted` surfaces cannot drift.
+    /// `Dotted` surfaces cannot drift. In `Dotted` mode each dot-delimited
+    /// segment must itself be non-empty, so a leading dot, a trailing dot, and
+    /// consecutive dots are all rejected — a dotted reference is a sequence of
+    /// bare names, never a structurally-malformed dot string.
     fn parse(name: &str, mode: IdentMode) -> Option<SqlIdent> {
         let dot_ok = matches!(mode, IdentMode::Dotted);
-        if !name.is_empty()
+        let charset_ok = !name.is_empty()
             && name
                 .chars()
-                .all(|c| c.is_ascii_alphanumeric() || c == '_' || (dot_ok && c == '.'))
-        {
+                .all(|c| c.is_ascii_alphanumeric() || c == '_' || (dot_ok && c == '.'));
+        let segments_ok = !dot_ok || name.split('.').all(|seg| !seg.is_empty());
+        if charset_ok && segments_ok {
             Some(SqlIdent(name.to_string()))
         } else {
             None
@@ -4400,6 +4404,38 @@ mod tests {
             assert!(
                 SqlIdent::parse_dotted(h).is_none(),
                 "dotted parser must reject hostile {h:?}"
+            );
+        }
+    }
+
+    /// A dotted reference is a sequence of non-empty bare names: every
+    /// dot-delimited segment must be non-empty, so a leading dot, a trailing
+    /// dot, and consecutive dots are structurally malformed and rejected. A
+    /// legitimate single- or multi-segment reference still validates, and
+    /// `Plain` mode (which admits no dot at all) is unaffected.
+    #[test]
+    fn dotted_mode_rejects_empty_segments() {
+        // Structurally-malformed dot strings: leading, trailing, consecutive.
+        for bad in ["..", ".a", "a.", "a..b", ".", "a.b.", ".a.b"] {
+            assert!(
+                SqlIdent::parse_dotted(bad).is_none(),
+                "dotted parser must reject empty-segment {bad:?}"
+            );
+        }
+        // Well-formed references: a bare name and multi-segment qualified names.
+        for good in ["a", "a.b", "todos.title", "a.b.c"] {
+            assert!(
+                SqlIdent::parse_dotted(good).is_some(),
+                "dotted parser must accept well-formed {good:?}"
+            );
+        }
+        // `Plain` mode admits no dot, so its behavior is unchanged: a bare name
+        // is accepted, anything with a dot is rejected regardless of segments.
+        assert!(SqlIdent::parse_plain("a").is_some());
+        for dotted in ["a.b", ".a", "a.", ".."] {
+            assert!(
+                SqlIdent::parse_plain(dotted).is_none(),
+                "plain parser must reject dot-bearing {dotted:?}"
             );
         }
     }
