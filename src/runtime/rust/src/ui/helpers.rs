@@ -616,44 +616,10 @@ pub fn html_script_node_<M>(body: String) -> Html<M> {
     Html::HElement(
         "script".to_owned(),
         vec![],
-        vec![Html::HRaw(neutralise_script_close(&body))],
+        vec![Html::HRaw(crate::css_safety::neutralise_script_close(
+            &body,
+        ))],
     )
-}
-
-/// Split any ASCII-case-insensitive `</script` breakout in an inline-script body
-/// so it cannot terminate the enclosing `<script>` element early. The browser's
-/// HTML parser ends a script element only at a literal `</script` byte run;
-/// inserting a `\` after the `<` (`<\/script`) keeps the JavaScript semantically
-/// identical (a redundant escape inside a string/regex, inert outside one) while
-/// removing the exact byte run the parser scans for. Non-`</script` text is
-/// untouched, so ordinary script bodies pass through unchanged.
-fn neutralise_script_close(body: &str) -> String {
-    const NEEDLE: &[u8] = b"</script";
-    let bytes = body.as_bytes();
-    let mut out = String::with_capacity(body.len());
-    let mut i = 0;
-    while i < bytes.len() {
-        let matches_here = bytes
-            .get(i..i.saturating_add(NEEDLE.len()))
-            .is_some_and(|w| w.eq_ignore_ascii_case(NEEDLE));
-        if matches_here {
-            out.push_str("<\\/script");
-            i = i.saturating_add(NEEDLE.len());
-        } else {
-            // A multi-byte UTF-8 char never starts with `<`, so pushing the byte
-            // as a char here only runs on single-byte ASCII (`<` and the run that
-            // failed the needle match); the else-advance below re-syncs on the
-            // next iteration for any non-ASCII lead byte.
-            match body.get(i..).and_then(|s| s.chars().next()) {
-                Some(c) => {
-                    out.push(c);
-                    i = i.saturating_add(c.len_utf8());
-                }
-                None => break,
-            }
-        }
-    }
-    out
 }
 
 /// `Html.node : String -> List (Attribute msg) -> List (Html msg) -> Html msg`
@@ -1597,7 +1563,8 @@ pub fn ui_breakpoint_<M: Clone>(
 
 #[cfg(test)]
 mod script_node_tests {
-    use super::{html_script_node_, neutralise_script_close};
+    use super::html_script_node_;
+    use crate::css_safety::neutralise_script_close;
     use crate::html::{Html, render_html};
 
     #[test]
