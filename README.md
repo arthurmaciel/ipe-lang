@@ -144,8 +144,9 @@ a new effectful kernel gains the matching capability automatically. `native-ffi`
 appears whenever the program crosses into `Rust.` code, which is opaque to the
 inference and the one place effects can escape the model.
 
-See [**Capabilities**](docs/language/capabilities.md) for the full model — the eight
-capabilities, how inference works, and how native code declares and is sandboxed.
+See [**Capabilities**](docs/language/capabilities.md) for the full model — the ten
+capabilities, how inference works, how native code declares and is sandboxed, and
+the build-time acknowledgment for `.Unsafe` escape-hatch imports (`--accept-risks`).
 Every command is human-friendly by default; data commands take `--plain` and
 `--json` for scripts — see [**CLI output**](docs/cli-output.md).
 

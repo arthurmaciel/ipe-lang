@@ -272,6 +272,11 @@ pub struct BuildArgs {
     /// its own `Debug` module. Does not compose with `--emit-ir` (which stops
     /// before the emit demand the gate runs on).
     pub production: bool,
+    /// `--accept-risks` — take responsibility for every disclosed `.Unsafe`
+    /// escape-hatch import and proceed without the acknowledgment prompt. The
+    /// one-off, non-interactive form of consent (the durable form is
+    /// `[capabilities] accept = ["unsafe"]` in `ipe.toml`).
+    pub accept_risks: bool,
     /// The emit surface (IR dump vs project emit).
     pub mode: BuildMode,
 }
@@ -287,6 +292,7 @@ pub struct BuildArgs {
 ///
 /// # Errors
 /// [`CliError::Usage`] / [`CliError::UsageOwned`] naming the exact problem.
+#[allow(clippy::too_many_lines)] // one linear flag loop + the emit-compose rejection gate
 pub fn parse_build(rest: &[String]) -> Result<BuildArgs, CliError> {
     let mut it = rest.iter().peekable();
     let entry = take_leading_entry(&mut it);
@@ -296,6 +302,7 @@ pub fn parse_build(rest: &[String]) -> Result<BuildArgs, CliError> {
     let mut emit_ir = false;
     let mut fix = false;
     let mut production = false;
+    let mut accept_risks = false;
     let mut static_flags = StaticFlags::default();
     while let Some(flag) = it.next() {
         if static_flags.consume(flag, &mut it, "build")? {
@@ -317,6 +324,7 @@ pub fn parse_build(rest: &[String]) -> Result<BuildArgs, CliError> {
             "--emit-ir" => emit_ir = true,
             "--fix" => fix = true,
             "--optimize" => production = true,
+            "--accept-risks" => accept_risks = true,
             other => {
                 return Err(CliError::UsageOwned(format!(
                     "ipe build: unknown flag `{other}`"
@@ -397,6 +405,7 @@ pub fn parse_build(rest: &[String]) -> Result<BuildArgs, CliError> {
         runtime,
         fix,
         production,
+        accept_risks,
         mode,
     })
 }
@@ -411,6 +420,10 @@ pub struct RunArgs {
     pub runtime: Option<String>,
     /// The native static-request layer.
     pub static_layer: StaticRequestLayer,
+    /// `--accept-risks` — take responsibility for every disclosed `.Unsafe`
+    /// escape-hatch import and proceed without the acknowledgment prompt. Same
+    /// one-off consent as `ipe build --accept-risks`.
+    pub accept_risks: bool,
     /// Arguments after `--`, forwarded verbatim to the compiled binary.
     pub bin_args: Vec<String>,
 }
@@ -442,6 +455,7 @@ pub fn parse_run(rest: &[String]) -> Result<RunArgs, CliError> {
 
     let mut out: Option<String> = None;
     let mut runtime: Option<String> = None;
+    let mut accept_risks = false;
     let mut static_flags = StaticFlags::default();
     while let Some(flag) = it.next() {
         if static_flags.consume(flag, &mut it, "run")? {
@@ -460,6 +474,7 @@ pub fn parse_run(rest: &[String]) -> Result<RunArgs, CliError> {
                 "--runtime",
                 "run",
             )?,
+            "--accept-risks" => accept_risks = true,
             other => {
                 return Err(CliError::UsageOwned(format!(
                     "ipe run: unknown flag `{other}`"
@@ -480,6 +495,7 @@ pub fn parse_run(rest: &[String]) -> Result<RunArgs, CliError> {
         out,
         runtime,
         static_layer: static_flags.layer(),
+        accept_risks,
         bin_args,
     })
 }

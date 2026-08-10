@@ -77,6 +77,13 @@ pub struct ProjectManifest {
     /// author declares the program exercises. Empty when the section is absent.
     /// Verifying this against the compiler's inferred set is SP4.
     pub capabilities: BTreeSet<Capability>,
+    /// The `[capabilities] accept = […]` set: durable, reviewable pre-acceptance
+    /// of a disclosed risk. Distinct from `declared` (a package's *own* effects):
+    /// `accept` records that the author has taken responsibility for a hazard the
+    /// build would otherwise ask about. Only `unsafe` is meaningful today — its
+    /// presence pre-accepts the `.Unsafe`-import acknowledgment so a repeatedly
+    /// built project never re-prompts and CI needs no flag. Empty when absent.
+    pub capabilities_accept: BTreeSet<Capability>,
 }
 
 /// `[wasm]` `ipe.toml` section (spec: `docs/adr/0042-wasm-client-target.md` Q6
@@ -304,6 +311,7 @@ struct RawManifest {
     dependencies: BTreeMap<String, IpeDep>,
     rust_dependencies: BTreeMap<String, RustDep>,
     capabilities: BTreeSet<Capability>,
+    capabilities_accept: BTreeSet<Capability>,
 }
 
 /// Scan a `ipe.toml`'s lines once, collecting each recognised section's raw
@@ -364,6 +372,9 @@ fn scan_raw_manifest(text: &str) -> Result<RawManifest, CliError> {
             }
             ("[capabilities]", "declared") => {
                 raw.capabilities = parse_capabilities(raw_val)?;
+            }
+            ("[capabilities]", "accept") => {
+                raw.capabilities_accept = parse_capabilities(raw_val)?;
             }
             _ => {}
         }
@@ -486,6 +497,7 @@ pub fn parse_manifest(manifest_path: &Path) -> Result<ProjectManifest, CliError>
         dependencies: raw.dependencies,
         rust_dependencies: raw.rust_dependencies,
         capabilities: raw.capabilities,
+        capabilities_accept: raw.capabilities_accept,
     })
 }
 
@@ -1409,6 +1421,21 @@ import String
             m.capabilities,
             BTreeSet::from([Capability::Network, Capability::Clock])
         );
+        let _ = fs::remove_dir_all(toml_path.parent().expect("has parent"));
+    }
+
+    #[test]
+    fn parses_the_capabilities_accept_token_into_its_own_set() {
+        // `accept` is distinct from `declared`: it records durable pre-acceptance
+        // of a disclosed risk (the `.Unsafe`-import acknowledgment), not the
+        // package's own effects.
+        let toml_path = write_manifest(
+            "sp2_caps_accept",
+            "[capabilities]\ndeclared = [\"network\"]\naccept = [\"unsafe\"]\n",
+        );
+        let m = parse_manifest(&toml_path).expect("capabilities must parse");
+        assert_eq!(m.capabilities, BTreeSet::from([Capability::Network]));
+        assert_eq!(m.capabilities_accept, BTreeSet::from([Capability::Unsafe]));
         let _ = fs::remove_dir_all(toml_path.parent().expect("has parent"));
     }
 
