@@ -43,13 +43,18 @@
 --   * `list elem` — a JSON array of `elem`s ⇄ `List a`.
 --   * `maybe elem` — JSON `null` ⇄ `Nothing`, any other value ⇄ `Just`.
 --   * `dict value` — a JSON object of `value`s ⇄ `Dict String a`.
+--   * `enum eq pairs` — a nullary enum ⇄ a readable JSON string, driven by one
+--     `(constructor, wireName)` association list; fail-closed on an unknown tag.
+--   * `taggedUnion variants` with `var0`/`var1`/`var2`/`var3` — a data-carrying
+--     ADT ⇄ a tagged JSON array `["Tag", arg0, …]`; each `Variant` carries both
+--     directions, so the union is one source of truth.
 --   * `toValue` / `toJson` / `fromJson` — encode to a JSON `Value` / string,
 --     decode a JSON string back (a typed `Err` on malformed input, never a
 --     panic).
 --   * `fromJsonSafe maxChars` — decode, rejecting input over `maxChars` BEFORE
 --     parsing (the untrusted-input door).
 --
--- A minimal round-trip:
+-- Minimal round-trips:
 --
 --     import Ipe.Codec as Codec exposing (Codec)
 --
@@ -58,12 +63,24 @@
 --         Codec.dict Codec.int
 --
 --     -- Codec.fromJson scores (Codec.toJson scores d) == Ok d
+--
+--     type Rank = Bronze | Silver | Gold
+--
+--     rankCodec : Codec Rank
+--     rankCodec =
+--         Codec.enum rankEq
+--             [ ( Bronze, "bronze" ), ( Silver, "silver" ), ( Gold, "gold" ) ]
+--
+--     -- Codec.fromJson rankCodec (Codec.toJson rankCodec Gold) == Ok Gold
+--     -- Codec.fromJson rankCodec "\"platinum\"" == Err … (unknown tag)
 module Ipe.Codec exposing
     ( Codec(..)
     , toValue, toJson, fromJson, fromJsonSafe
     , string, int, bool, float
     , map
     , list, maybe, dict
+    , enum
+    , Variant(..), taggedUnion, var0, var1, var2, var3
     )
 
 
@@ -259,6 +276,233 @@ encodePair encVal pair =
             ( k, encVal v )
 
 
+-- ─── Nullary-enum combinator ───────────────────────────────────────
+
+
+-- | `enum eq pairs` — a nullary enum ⇄ a readable JSON string, driven by one
+-- association list of `(constructor, wireName)` pairs that is the SINGLE source
+-- of truth for both directions. `eq` is the constructor equality (a nullary
+-- enum has no derived `==`, so it is supplied). Encode looks up the value's wire
+-- name; decode reads a string and maps it back to the constructor.
+--
+-- Fail-closed on both sides. On decode an unknown tag is a typed decode failure,
+-- never a default constructor — the safe outcome is the only reachable one. On
+-- encode a value absent from `pairs` (a caller that omitted a constructor)
+-- encodes to `null`, which decode then rejects, so an incomplete map can never
+-- silently round-trip a wrong constructor.
+enum : (a -> a -> Bool) -> List ( a, String ) -> Codec a
+enum eq pairs =
+    Codec
+        { enc = enumEncode eq pairs
+        , mkDec = \_ -> Decode.andThen (enumDecodeName pairs) Decode.string
+        }
+
+
+enumEncode : (a -> a -> Bool) -> List ( a, String ) -> a -> Value
+enumEncode eq pairs x =
+    case List.find (\pair -> case pair of ( c, _ ) -> eq c x) pairs of
+        Just found ->
+            case found of
+                ( _, name ) ->
+                    Encode.string name
+
+        Nothing ->
+            Encode.null
+
+
+enumDecodeName : List ( a, String ) -> String -> Decoder a
+enumDecodeName pairs name =
+    case List.find (\pair -> case pair of ( _, n ) -> n == name) pairs of
+        Just found ->
+            case found of
+                ( c, _ ) ->
+                    Decode.succeed c
+
+        Nothing ->
+            Decode.fail (unknownTagMessage name)
+
+
+-- ─── Tagged-union combinator ───────────────────────────────────────
+
+
+-- | One arm of a `taggedUnion`: it carries BOTH directions for one constructor,
+-- so a variant list is a single source of truth — the encoder is derived from
+-- the same list the decoder reads, never written separately. A `Variant a`
+-- holds the wire tag, an encoder that (when the runtime value matches this arm)
+-- yields the JSON payload node list, and a decoder that reads those payload
+-- nodes back into the value.
+type Variant a
+    = Variant
+        { tag : String
+        , match : a -> Maybe (List Value)
+        , decode : Decoder a
+        }
+
+
+-- | `taggedUnion tag variants` — a data-carrying ADT ⇄ a tagged JSON array
+-- `["Tag", arg0, arg1, …]`. `tag` names the value's own constructor for the
+-- encode side (each `varN` supplies the projection that recognises its arm); the
+-- decode side reads element 0 as the tag string and dispatches to the matching
+-- variant's decoder.
+--
+-- Fail-closed: a JSON tag with no matching variant is a typed decode failure,
+-- never a default. The captured variant list is read (never consumed) per decode
+-- run, so a codec is reusable.
+taggedUnion : List (Variant a) -> Codec a
+taggedUnion variants =
+    Codec
+        { enc = taggedEncode variants
+        , mkDec = \_ -> Decode.andThen (taggedDecodeTag variants) (Decode.index 0 Decode.string)
+        }
+
+
+taggedEncode : List (Variant a) -> a -> Value
+taggedEncode variants x =
+    case List.filterMap (\v -> variantEncode v x) variants of
+        first :: _ ->
+            first
+
+        [] ->
+            Encode.null
+
+
+variantEncode : Variant a -> a -> Maybe Value
+variantEncode v x =
+    case v of
+        Variant r ->
+            Maybe.map (\payload -> Encode.list identityValue (Encode.string r.tag :: payload)) (r.match x)
+
+
+identityValue : Value -> Value
+identityValue value =
+    value
+
+
+taggedDecodeTag : List (Variant a) -> String -> Decoder a
+taggedDecodeTag variants t =
+    case List.find (\v -> variantTag v == t) variants of
+        Just found ->
+            variantDecoder found
+
+        Nothing ->
+            Decode.fail (unknownTagMessage t)
+
+
+variantTag : Variant a -> String
+variantTag v =
+    case v of
+        Variant r ->
+            r.tag
+
+
+variantDecoder : Variant a -> Decoder a
+variantDecoder v =
+    case v of
+        Variant r ->
+            r.decode
+
+
+-- | A nullary variant: the tag alone, no payload. Encodes to `["Tag"]`.
+var0 : String -> a -> (a -> Bool) -> Variant a
+var0 tag ctor isThis =
+    Variant
+        { tag = tag
+        , match = \x -> matchNullary isThis x
+        , decode = Decode.succeed ctor
+        }
+
+
+matchNullary : (a -> Bool) -> a -> Maybe (List Value)
+matchNullary isThis x =
+    if isThis x then
+        Just []
+
+    else
+        Nothing
+
+
+-- | A one-argument variant. `project` recognises this arm and yields its
+-- argument for encode; `ctor` rebuilds the value from a decoded argument.
+--
+-- The inner codec's encoder is extracted to a plain `arg -> Value` binding
+-- (`enc1`) OUTSIDE the `match` closure, so the closure CALLS the encoder rather
+-- than forwarding a non-`Clone` codec value into it — the same
+-- call-don't-forward shape the record encoder uses.
+var1 : String -> (arg -> a) -> (a -> Maybe arg) -> Codec arg -> Variant a
+var1 tag ctor project inner =
+    case inner of
+        Codec r ->
+            Variant
+                { tag = tag
+                , match = \x -> Maybe.map (\a -> [ r.enc a ]) (project x)
+                , decode = Decode.map ctor (Decode.index 1 (r.mkDec {}))
+                }
+
+
+-- | A two-argument variant.
+var2 :
+    String
+    -> (arg1 -> arg2 -> a)
+    -> (a -> Maybe ( arg1, arg2 ))
+    -> Codec arg1
+    -> Codec arg2
+    -> Variant a
+var2 tag ctor project inner1 inner2 =
+    case inner1 of
+        Codec r1 ->
+            case inner2 of
+                Codec r2 ->
+                    Variant
+                        { tag = tag
+                        , match = \x -> Maybe.map (\pair -> case pair of ( a, b ) -> [ r1.enc a, r2.enc b ]) (project x)
+                        , decode =
+                            Decode.map2 ctor
+                                (Decode.index 1 (r1.mkDec {}))
+                                (Decode.index 2 (r2.mkDec {}))
+                        }
+
+
+-- | A three-argument variant.
+var3 :
+    String
+    -> (arg1 -> arg2 -> arg3 -> a)
+    -> (a -> Maybe ( arg1, arg2, arg3 ))
+    -> Codec arg1
+    -> Codec arg2
+    -> Codec arg3
+    -> Variant a
+var3 tag ctor project inner1 inner2 inner3 =
+    case inner1 of
+        Codec r1 ->
+            case inner2 of
+                Codec r2 ->
+                    case inner3 of
+                        Codec r3 ->
+                            Variant
+                                { tag = tag
+                                , match = \x -> Maybe.map (\triple -> case triple of ( a, b, c ) -> [ r1.enc a, r2.enc b, r3.enc c ]) (project x)
+                                , decode =
+                                    Decode.map3 ctor
+                                        (Decode.index 1 (r1.mkDec {}))
+                                        (Decode.index 2 (r2.mkDec {}))
+                                        (Decode.index 3 (r3.mkDec {}))
+                                }
+
+
+-- ─── Records: the direct `Codec` + `Pipeline` form ─────────────────
+--
+-- A record codec is written as ONE `Codec` value directly — the encoder an
+-- `Encode.object` over the field encoders, the decoder factory a
+-- `Decode.succeed <constructor> |> Pipeline.required <key> <fieldDecoder> …`
+-- applicative chain over the field decoders — so each field appears once on each
+-- side (see the module header). A generic `object`/`field`/`buildObject` builder
+-- that threads the record constructor through a polymorphic slot is deliberately
+-- ABSENT: that slot binds a bare constructor function to a generic parameter,
+-- which is not `Clone` in the emitted Rust and so cannot lower (IPE-L0107,
+-- `first-class-functions`) — shipping it would advertise an API no real record
+-- can use. The direct form is fully monomorphic and always builds.
+
+
 -- ─── Errors ────────────────────────────────────────────────────────
 
 
@@ -267,3 +511,8 @@ encodePair encVal pair =
 tooLargeError : Error
 tooLargeError =
     Error.invalidInput "Ipe.Codec.fromJsonSafe: input exceeds the size limit"
+
+
+unknownTagMessage : String -> String
+unknownTagMessage tag =
+    String.concat [ "Ipe.Codec: unknown tag \"", tag, "\"" ]
