@@ -266,17 +266,25 @@ impl SandboxProfile {
 
     /// The launcher's floor check against a [`parse_capfloor`]-derived floor.
     ///
-    /// The embedded floor records only axis grants and an env *count* (the binary
-    /// does not carry the env var names — those live in the `ipe.profile`). So the
-    /// env axis is compared by count, not by name: the profile may not grant
-    /// *more* env vars than the floor allows. Every other axis is the same "at
-    /// least as isolated" per-axis check.
+    /// The embedded floor records the axis grants AND the exact set of granted env
+    /// var *names* ([`to_capfloor_line`] serializes them), so the env axis is
+    /// compared by name subset — identical to the other axes: every env var the
+    /// profile grants must be one the floor also grants. A tampered `ipe.profile`
+    /// that swaps *which* env vars it grants (even at the same count) is refused.
+    ///
+    /// [`to_capfloor_line`]: Self::to_capfloor_line
     #[must_use]
-    pub const fn satisfies_capfloor(&self, floor: &Self) -> bool {
+    pub fn satisfies_capfloor(&self, floor: &Self) -> bool {
         let network_ok = !self.network || floor.network;
         let subprocess_ok = !self.subprocess || floor.subprocess;
         let fs_ok = self.fs_at_least_as_isolated(floor);
-        let env_ok = self.env_allowlist.len() <= floor.env_allowlist.len();
+        // Every env var the profile grants must be in the floor's allowlist — the
+        // same ⊆ subset check the other axes get, now that the floor carries the
+        // names, not just a count.
+        let env_ok = self
+            .env_allowlist
+            .iter()
+            .all(|v| floor.env_allowlist.contains(v));
         network_ok && subprocess_ok && fs_ok && env_ok
     }
 
@@ -305,24 +313,32 @@ impl SandboxProfile {
     }
 
     /// The compact capability-floor token line embedded read-only in the binary's
-    /// `.rodata`. It records only the *axis* grants (not resource limits or env
-    /// names — the launcher rebuilds a comparison floor from these), so a tampered
-    /// `ipe.profile` cannot claim fewer axes than the binary was built for.
+    /// `.rodata`. It records the *axis* grants AND the exact set of granted env
+    /// var names (not resource limits — the launcher rebuilds a comparison floor
+    /// from these), so a tampered `ipe.profile` can neither claim fewer axes nor
+    /// swap *which* env vars it grants below what the binary was built for.
     ///
-    /// Format: `ipe-capfloor 1 net=<b> fs=<isolated|rw> sub=<b> env=<n>` where
-    /// `<n>` is the count of granted env names (the floor compares env by count
-    /// ⊇, since the names live in the profile, not the binary).
+    /// Format: `ipe-capfloor 1 net=<b> fs=<isolated|rw> sub=<b> env=<names>` where
+    /// `<names>` is the sorted, comma-joined set of granted env names (empty when
+    /// none). The names are bound by identity, so the floor compares env by the
+    /// SAME ⊆ subset check as the other axes — a same-count name swap no longer
+    /// passes. Env var names are POSIX identifiers (`[A-Za-z_][A-Za-z0-9_]*`), so
+    /// they never contain a comma or whitespace; [`parse_capfloor`] fails closed
+    /// on any name that does.
     #[must_use]
     pub fn to_capfloor_line(&self) -> String {
         let fs = match self.filesystem {
             FilesystemScope::Isolated => "isolated",
             FilesystemScope::WorkingTreeReadWrite => "rw",
         };
+        let mut names: Vec<&str> = self.env_allowlist.iter().map(String::as_str).collect();
+        names.sort_unstable();
+        names.dedup();
         format!(
             "ipe-capfloor 1 net={} fs={fs} sub={} env={}",
             self.network,
             self.subprocess,
-            self.env_allowlist.len()
+            names.join(",")
         )
     }
 }
@@ -416,16 +432,19 @@ pub fn parse_profile(text: &str) -> Result<SandboxProfile, ParseError> {
 
 /// Strictly parse a capfloor line into the *comparison floor*.
 ///
-/// The result is a [`SandboxProfile`] whose axes are the floor the binary was
-/// built with. The env allowlist is reconstructed as `n` placeholder names so
-/// the ⊇ check counts correctly (the launcher checks the profile's env count
-/// does not exceed the floor's; the concrete names are in the profile).
+/// The result is a [`SandboxProfile`] whose axes AND env allowlist are the floor
+/// the binary was built with. The env names are parsed from the sorted,
+/// comma-joined `env=<names>` field ([`SandboxProfile::to_capfloor_line`]), so
+/// the launcher can verify the profile grants only env vars the floor also
+/// grants — an exact name subset, not a count.
 ///
 /// # Errors
 ///
 /// [`ParseError::Malformed`] on any grammar violation — a floor that cannot be
 /// parsed means the binary's authoritative floor is unreadable, so the launcher
-/// must refuse (never treat an unreadable floor as "no floor").
+/// must refuse (never treat an unreadable floor as "no floor"). An env name that
+/// is empty or carries a comma/whitespace (impossible for a POSIX env name) is a
+/// malformed floor and refuses.
 pub fn parse_capfloor(line: &str) -> Result<SandboxProfile, ParseError> {
     let malformed = |detail: String| ParseError::Malformed { detail };
     let line = line.trim();
@@ -436,7 +455,7 @@ pub fn parse_capfloor(line: &str) -> Result<SandboxProfile, ParseError> {
     let mut network = false;
     let mut filesystem = FilesystemScope::Isolated;
     let mut subprocess = false;
-    let mut env_count: usize = 0;
+    let mut env_allowlist: Vec<String> = Vec::new();
     for field in parts {
         let (k, v) = field
             .split_once('=')
@@ -452,9 +471,7 @@ pub fn parse_capfloor(line: &str) -> Result<SandboxProfile, ParseError> {
             }
             "sub" => subprocess = v == "true",
             "env" => {
-                env_count = v
-                    .parse()
-                    .map_err(|_| malformed(format!("bad env count {v:?}")))?;
+                env_allowlist = parse_capfloor_env_names(v)?;
             }
             other => return Err(malformed(format!("unknown capfloor field {other:?}"))),
         }
@@ -463,9 +480,51 @@ pub fn parse_capfloor(line: &str) -> Result<SandboxProfile, ParseError> {
         network,
         filesystem,
         subprocess,
-        env_allowlist: (0..env_count).map(|i| format!("#{i}")).collect(),
+        env_allowlist,
         limits: RunResourceLimits::default(),
     })
+}
+
+/// Parse the `env=<names>` field of a capfloor line: a sorted, comma-joined set
+/// of env var names, empty when no env var is granted.
+///
+/// Fail-closed: each name must be a non-empty POSIX env identifier
+/// (`[A-Za-z_][A-Za-z0-9_]*`). An empty name (a stray/leading/trailing comma) or
+/// any name outside that charset — neither of which [`SandboxProfile::to_capfloor_line`]
+/// can emit — is a malformed floor and refuses. Since the writer already sorts
+/// and dedups, the parsed set is returned as-is.
+///
+/// # Errors
+///
+/// [`ParseError::Malformed`] on an empty or non-identifier name.
+fn parse_capfloor_env_names(v: &str) -> Result<Vec<String>, ParseError> {
+    if v.is_empty() {
+        return Ok(Vec::new());
+    }
+    let mut names = Vec::new();
+    for name in v.split(',') {
+        if !is_posix_env_name(name) {
+            return Err(ParseError::Malformed {
+                detail: format!("malformed env name {name:?} in capfloor"),
+            });
+        }
+        names.push(name.to_owned());
+    }
+    Ok(names)
+}
+
+/// Whether `name` is a non-empty POSIX environment-variable identifier: a first
+/// char of `[A-Za-z_]`, then `[A-Za-z0-9_]*`. This is the charset the capfloor
+/// `env=` field admits — anything else (a comma, whitespace, a digit-leading
+/// name) is rejected, so the comma-joined encoding is unambiguous and a tampered
+/// floor cannot smuggle a separator into a name.
+fn is_posix_env_name(name: &str) -> bool {
+    let mut chars = name.chars();
+    match chars.next() {
+        Some(c) if c.is_ascii_alphabetic() || c == '_' => {}
+        _ => return false,
+    }
+    chars.all(|c| c.is_ascii_alphanumeric() || c == '_')
 }
 
 /// Lower a capability set to a [`SandboxProfile`].
@@ -1752,7 +1811,8 @@ pub const CAPFLOOR_MARKER: &str = "ipe-capfloor 1 ";
 /// STRICTEST (least-granting) floor wins: an attacker who appends a more
 /// permissive floor line cannot raise the ceiling and relax the jail. Concretely
 /// the floors are intersected (an axis is in the merged floor only if EVERY
-/// occurrence grants it, and the env ceiling is the minimum count).
+/// occurrence grants it, and an env name survives only if EVERY occurrence grants
+/// it — the name-set intersection).
 #[must_use]
 pub fn scan_capfloor(bytes: &[u8]) -> Option<SandboxProfile> {
     let marker = CAPFLOOR_MARKER.as_bytes();
@@ -1777,10 +1837,11 @@ pub fn scan_capfloor(bytes: &[u8]) -> Option<SandboxProfile> {
     }
     let (first, rest) = floors.split_first()?;
     // Intersect to the strictest floor: an axis stays granted only if EVERY
-    // occurrence grants it; the env ceiling is the minimum count. A forged
-    // permissive copy cannot raise the ceiling.
+    // occurrence grants it; the env ceiling is the NAME-SET intersection (a name
+    // survives only if every occurrence grants it). A forged permissive copy
+    // cannot raise the ceiling nor swap in a name the legitimate floor omits.
     let mut merged = first.clone();
-    let mut min_env = first.env_allowlist.len();
+    let mut env_names: BTreeSet<&str> = first.env_allowlist.iter().map(String::as_str).collect();
     for f in rest {
         if !f.network {
             merged.network = false;
@@ -1791,9 +1852,10 @@ pub fn scan_capfloor(bytes: &[u8]) -> Option<SandboxProfile> {
         if !f.subprocess {
             merged.subprocess = false;
         }
-        min_env = min_env.min(f.env_allowlist.len());
+        let occurrence: BTreeSet<&str> = f.env_allowlist.iter().map(String::as_str).collect();
+        env_names.retain(|n| occurrence.contains(n));
     }
-    merged.env_allowlist = (0..min_env).map(|i| format!("#{i}")).collect();
+    merged.env_allowlist = env_names.into_iter().map(str::to_owned).collect();
     Some(merged)
 }
 
@@ -3186,7 +3248,35 @@ mod tests {
         let floor = scan_capfloor(&buf).expect("found");
         assert!(floor.network);
         assert_eq!(floor.filesystem, FilesystemScope::WorkingTreeReadWrite);
-        assert_eq!(floor.env_allowlist.len(), 2);
+        assert_eq!(floor.env_allowlist, vec!["A".to_owned(), "B".to_owned()]);
+    }
+
+    #[test]
+    fn scan_capfloor_intersects_env_names_of_multiple_copies() {
+        // A legitimate floor grants {A, B}; an appended forged copy grants {B, C}
+        // (same count, swapped name). The strictest merged floor is the name-set
+        // intersection {B}, so the forged copy cannot smuggle C into the ceiling.
+        let legit = SandboxProfile {
+            env_allowlist: vec!["A".to_owned(), "B".to_owned()],
+            ..SandboxProfile::maximally_isolated()
+        };
+        let forged = SandboxProfile {
+            env_allowlist: vec!["B".to_owned(), "C".to_owned()],
+            ..SandboxProfile::maximally_isolated()
+        };
+        let mut buf = Vec::new();
+        buf.extend_from_slice(legit.to_capfloor_line().as_bytes());
+        buf.push(b'\n');
+        buf.extend_from_slice(forged.to_capfloor_line().as_bytes());
+        buf.push(0);
+        let floor = scan_capfloor(&buf).expect("found");
+        assert_eq!(floor.env_allowlist, vec!["B".to_owned()]);
+        // A profile granting C is refused: C is not in the intersected floor.
+        let wants_c = SandboxProfile {
+            env_allowlist: vec!["C".to_owned()],
+            ..SandboxProfile::maximally_isolated()
+        };
+        assert!(!wants_c.satisfies_capfloor(&floor));
     }
 
     #[test]
@@ -3248,20 +3338,33 @@ mod tests {
     }
 
     #[test]
-    fn capfloor_line_round_trips_axes_and_env_count() {
+    fn capfloor_line_round_trips_axes_and_env_names() {
         let p = SandboxProfile {
             network: true,
             filesystem: FilesystemScope::WorkingTreeReadWrite,
-            env_allowlist: vec!["A".to_owned(), "B".to_owned()],
+            // Out of order on purpose: the line is sorted, so the round-trip is
+            // canonical regardless of the source order.
+            env_allowlist: vec!["B".to_owned(), "A".to_owned()],
             subprocess: false,
             limits: RunResourceLimits::default(),
         };
         let line = p.to_capfloor_line();
+        assert_eq!(line, "ipe-capfloor 1 net=true fs=rw sub=false env=A,B");
         let floor = parse_capfloor(&line).expect("round-trips");
         assert!(floor.network);
         assert_eq!(floor.filesystem, FilesystemScope::WorkingTreeReadWrite);
         assert!(!floor.subprocess);
-        assert_eq!(floor.env_allowlist.len(), 2);
+        // The names round-trip exactly (sorted), not merely their count.
+        assert_eq!(floor.env_allowlist, vec!["A".to_owned(), "B".to_owned()]);
+    }
+
+    #[test]
+    fn capfloor_line_empty_env_round_trips() {
+        let p = SandboxProfile::maximally_isolated();
+        let line = p.to_capfloor_line();
+        assert_eq!(line, "ipe-capfloor 1 net=false fs=isolated sub=false env=");
+        let floor = parse_capfloor(&line).expect("round-trips");
+        assert!(floor.env_allowlist.is_empty());
     }
 
     #[test]
@@ -3290,11 +3393,64 @@ mod tests {
             ..SandboxProfile::maximally_isolated()
         };
         assert!(!two_env.satisfies_capfloor(&floor));
-        let one_env = SandboxProfile {
-            env_allowlist: vec!["X".to_owned()],
+        // A profile granting exactly the floor's named var is accepted.
+        let same_env = SandboxProfile {
+            env_allowlist: vec!["A".to_owned()],
             ..SandboxProfile::maximally_isolated()
         };
-        assert!(one_env.satisfies_capfloor(&floor));
+        assert!(same_env.satisfies_capfloor(&floor));
+    }
+
+    #[test]
+    fn satisfies_capfloor_refuses_a_same_count_env_name_swap() {
+        // The env-swap attack: the source proves it needs {PATH, HOME}, so the
+        // floor records those two names. A doctored ipe.profile swaps in a
+        // DIFFERENT pair of the SAME count ({AWS_SECRET_ACCESS_KEY,
+        // SSH_AUTH_SOCK}). The count matches (2 == 2), so a count-only check would
+        // pass; the name subset check must REFUSE, because neither swapped name is
+        // in the floor.
+        let floor_profile = SandboxProfile {
+            env_allowlist: vec!["PATH".to_owned(), "HOME".to_owned()],
+            ..SandboxProfile::maximally_isolated()
+        };
+        let floor = parse_capfloor(&floor_profile.to_capfloor_line()).expect("floor");
+        let swapped = SandboxProfile {
+            env_allowlist: vec![
+                "AWS_SECRET_ACCESS_KEY".to_owned(),
+                "SSH_AUTH_SOCK".to_owned(),
+            ],
+            ..SandboxProfile::maximally_isolated()
+        };
+        assert!(
+            !swapped.satisfies_capfloor(&floor),
+            "a same-count env name swap must be refused"
+        );
+        // A single swapped name (one legitimate, one smuggled) is also refused —
+        // the smuggled one is not in the floor.
+        let partial_swap = SandboxProfile {
+            env_allowlist: vec!["PATH".to_owned(), "AWS_SECRET_ACCESS_KEY".to_owned()],
+            ..SandboxProfile::maximally_isolated()
+        };
+        assert!(!partial_swap.satisfies_capfloor(&floor));
+        // The legitimate subset (⊆ the floor's names) still passes.
+        let legit = SandboxProfile {
+            env_allowlist: vec!["HOME".to_owned()],
+            ..SandboxProfile::maximally_isolated()
+        };
+        assert!(legit.satisfies_capfloor(&floor));
+        // Granting exactly the floor's names passes.
+        assert!(floor_profile.satisfies_capfloor(&floor));
+    }
+
+    #[test]
+    fn parse_capfloor_refuses_a_malformed_env_name() {
+        // A name with a stray comma (empty element) or a non-POSIX char cannot be
+        // emitted by `to_capfloor_line`; if a tampered floor carries one, the
+        // launcher must refuse rather than silently parse a smuggled separator.
+        assert!(parse_capfloor("ipe-capfloor 1 net=false fs=isolated sub=false env=A,,B").is_err());
+        assert!(parse_capfloor("ipe-capfloor 1 net=false fs=isolated sub=false env=,A").is_err());
+        assert!(parse_capfloor("ipe-capfloor 1 net=false fs=isolated sub=false env=1BAD").is_err());
+        assert!(parse_capfloor("ipe-capfloor 1 net=false fs=isolated sub=false env=A-B").is_err());
     }
 
     #[test]
