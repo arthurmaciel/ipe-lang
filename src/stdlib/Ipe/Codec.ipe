@@ -28,12 +28,13 @@
 -- `Ipe.Json.Encode.object` over the field encoders, and the decoder factory is a
 -- `Decode.succeed <constructor> |> Pipeline.required <key> <fieldDecoder> …`
 -- applicative chain over the field decoders, so each field appears once on each
--- side. (A generic `object`/`field` builder that threaded the record
--- constructor through a polymorphic slot is deliberately absent: a bare
--- constructor function bound to a generic parameter is not `Clone` in the
--- emitted Rust, so it cannot lower without breaking the accept-implies-build
--- guarantee. The direct `Codec` + pipeline form is fully monomorphic and always
--- builds.)
+-- side. (A generic `object`/`field`/`buildObject` builder that threaded the
+-- record constructor through a polymorphic accumulator is deliberately absent:
+-- it binds a curried constructor to a generic parameter carried through a
+-- decoder field, which the backend rejects fail-closed as IPE-L0107 —
+-- applying the constructor one argument at a time across a generic carrier
+-- needs a curried-constructor lowering it does not yet emit. The direct `Codec`
+-- + pipeline form is fully monomorphic and always builds.)
 --
 -- The combinator surface:
 --
@@ -520,11 +521,13 @@ var3 tag ctor project inner1 inner2 inner3 =
 -- `Decode.succeed <constructor> |> Pipeline.required <key> <fieldDecoder> …`
 -- applicative chain over the field decoders — so each field appears once on each
 -- side (see the module header). A generic `object`/`field`/`buildObject` builder
--- that threads the record constructor through a polymorphic slot is deliberately
--- ABSENT: that slot binds a bare constructor function to a generic parameter,
--- which is not `Clone` in the emitted Rust and so cannot lower (IPE-L0107,
--- `first-class-functions`) — shipping it would advertise an API no real record
--- can use. The direct form is fully monomorphic and always builds.
+-- that threads the record constructor through a polymorphic accumulator is
+-- deliberately ABSENT: the accumulator carries a curried constructor through a
+-- decoder field by a type variable, and applying it one argument at a time
+-- across that generic carrier needs a curried-constructor lowering the backend
+-- does not yet emit, so it fails closed (IPE-L0107, `first-class-functions`) —
+-- shipping it would advertise an API no real record can use. The direct form is
+-- fully monomorphic and always builds.
 
 
 -- ─── Errors ────────────────────────────────────────────────────────

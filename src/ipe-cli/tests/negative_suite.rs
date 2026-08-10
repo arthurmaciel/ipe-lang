@@ -1156,6 +1156,110 @@ fn lower_dict_function_value_get_and_apply_compiles() {
     assert_compiles("lower_dict_fn_value_get_apply", &src);
 }
 
+/// The applicative record-codec builder seed — `object ctor` for a `Builder`
+/// wrapping a `{} -> Decoder ctor` factory — routes a curried constructor
+/// through a decoder field by a type variable. The generic accumulator emits a
+/// `Clone`-bounded carrier the boxed constructor cannot satisfy, so it must
+/// fail closed with IPE-L0107 (the sanctioned form is the direct
+/// `Decode.succeed ctor |> Pipeline.required …` pipeline, covered by the
+/// `lower_pipeline_curried_constructor_compiles` contrapositive below).
+#[test]
+fn lower_codec_builder_seed_fn_through_type_var_gated() {
+    let src = format!(
+        "{HEAD}import Ipe.Json.Encode as Encode\n\
+         import Ipe.Json.Decode as Decode\n\
+         type Builder a\n\
+         \x20   = Builder\n\
+         \x20       {{ enc : a -> Value\n\
+         \x20       , dec : Decoder a\n\
+         \x20       }}\n\
+         object : ctor -> Builder ctor\n\
+         object ctor =\n\
+         \x20   Builder\n\
+         \x20       {{ enc = \\_ -> Encode.null\n\
+         \x20       , dec = Decode.succeed ctor\n\
+         \x20       }}\n\
+         type alias Person =\n    {{ name : String, age : Int }}\n\
+         mkPerson : String -> Int -> Person\n\
+         mkPerson name age =\n    {{ name = name, age = age }}\n\
+         personBuilder : Builder (String -> Int -> Person)\n\
+         personBuilder =\n    object mkPerson\n\
+         main =\n    personBuilder\n"
+    );
+    assert_rejected("lower_codec_builder_seed", &src, "IPE-L0107");
+}
+
+/// The full applicative builder chain — `object ctor |> field … |> field …`
+/// applying the curried constructor one argument at a time through the
+/// accumulator's decoder — requires nested-closure lowering of a curried
+/// constructor across a generic carrier frontier that is not implemented (the
+/// `and_map_curried_stays_gated` boundary). It must fail closed with IPE-L0107,
+/// never a silent accept that later `cargo`-fails (probed: bypassing the gate
+/// emits a curry-arity `E0308` plus a `Box`/`Arc` decoder-payload frontier
+/// `E0308`).
+#[test]
+fn lower_codec_builder_field_chain_gated() {
+    let src = format!(
+        "{HEAD}import Ipe.Json.Encode as Encode\n\
+         import Ipe.Json.Decode as Decode\n\
+         type Codec a\n\
+         \x20   = Codec {{ enc : a -> Value, mkDec : {{}} -> Decoder a }}\n\
+         type ObjectCodec rec fn\n\
+         \x20   = ObjectCodec\n\
+         \x20       {{ encField : rec -> List ( String, Value )\n\
+         \x20       , mkDecPartial : {{}} -> Decoder fn\n\
+         \x20       }}\n\
+         object : fn -> ObjectCodec rec fn\n\
+         object ctor =\n\
+         \x20   ObjectCodec {{ encField = \\_ -> [], mkDecPartial = \\_ -> Decode.succeed ctor }}\n\
+         field : String -> (rec -> f) -> Codec f -> ObjectCodec rec (f -> fn) -> ObjectCodec rec fn\n\
+         field key get valueCodec acc =\n\
+         \x20   case acc of\n\
+         \x20       ObjectCodec a ->\n\
+         \x20           case valueCodec of\n\
+         \x20               Codec v ->\n\
+         \x20                   ObjectCodec\n\
+         \x20                       {{ encField = \\rec -> ( key, v.enc (get rec) ) :: a.encField rec\n\
+         \x20                       , mkDecPartial = \\_ -> Decode.map2 (\\fn x -> fn x) (a.mkDecPartial {{}}) (Decode.field key (v.mkDec {{}}))\n\
+         \x20                       }}\n\
+         intCodec : Codec Int\n\
+         intCodec =\n    Codec {{ enc = \\n -> Encode.int n, mkDec = \\_ -> Decode.int }}\n\
+         type alias P =\n    {{ a : Int, b : Int }}\n\
+         mkP : Int -> Int -> P\n\
+         mkP a b =\n    {{ a = a, b = b }}\n\
+         acc : ObjectCodec P P\n\
+         acc =\n\
+         \x20   object mkP\n\
+         \x20       |> field \"a\" .a intCodec\n\
+         \x20       |> field \"b\" .b intCodec\n\
+         main =\n    acc\n"
+    );
+    assert_rejected("lower_codec_builder_chain", &src, "IPE-L0107");
+}
+
+/// CONTRAPOSITIVE: the sanctioned record-codec decode form — a monomorphic
+/// `Decode.succeed ctor` threading a curried constructor through the
+/// `Pipeline.required` chain — must still compile. This is the working shape the
+/// `Ipe.Codec` module doc and the IPE-L0107 explain page point users to; the two
+/// gated cases above must reject WITHOUT closing this door.
+#[test]
+fn lower_pipeline_curried_constructor_compiles() {
+    let src = format!(
+        "{HEAD}import Ipe.Json.Decode as Decode\n\
+         import Ipe.Json.Decode.Pipeline as Pipeline\n\
+         type alias User =\n    {{ id : String, age : Int }}\n\
+         mkUser : String -> Int -> User\n\
+         mkUser id age =\n    {{ id = id, age = age }}\n\
+         userDecoder : Decoder User\n\
+         userDecoder =\n\
+         \x20   Decode.succeed mkUser\n\
+         \x20       |> Pipeline.required \"id\" Decode.string\n\
+         \x20       |> Pipeline.required \"age\" Decode.int\n\
+         main =\n    userDecoder\n"
+    );
+    assert_compiles("lower_pipeline_curried_constructor", &src);
+}
+
 /// An app-entry cfg must be an inline record literal, never a let-bound
 /// variable — IPE-L0119.
 #[test]
