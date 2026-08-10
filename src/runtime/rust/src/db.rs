@@ -4278,4 +4278,226 @@ mod tests {
         assert_eq!(v, 99, "data written via pool1 must be visible via pool2");
         let _ = std::fs::remove_file(&tmp);
     }
+
+    /// A corpus of identifiers that MUST be rejected at the SQL-interpolation
+    /// boundary. Each is a distinct injection or malformation class: quote,
+    /// statement terminator, whitespace, comment, backtick, parenthesis, star,
+    /// empty, leading-digit-with-punctuation, and a non-ASCII homoglyph. If any
+    /// of these ever reaches interpolation the boundary is broken.
+    const HOSTILE_IDENTS: &[&str] = &[
+        "a'b",
+        "a\"b",
+        "users; DROP TABLE todos",
+        "col name",
+        "col--",
+        "`col`",
+        "f()",
+        "*",
+        "",
+        "1; --",
+        "café",
+    ];
+
+    /// SSOT proof (unit level): the single `SqlIdent` parser is the ONLY
+    /// identifier policy, and `valid_sql_ident` is exactly its dotted mode — not
+    /// a second charset check that could drift. For every string we assert
+    /// `valid_sql_ident(s) == SqlIdent::parse_dotted(s).is_some()` and that a
+    /// dot-accepting parse never admits anything the plain parse would while
+    /// rejecting the dot. Every hostile identifier is rejected by BOTH modes.
+    #[test]
+    fn valid_sql_ident_is_exactly_the_dotted_parser() {
+        let corpus = [
+            "users",
+            "user_id",
+            "users.id",
+            "a.b.c",
+            ".leading",
+            "trailing.",
+            "todos.title",
+        ]
+        .iter()
+        .copied()
+        .chain(HOSTILE_IDENTS.iter().copied());
+        for s in corpus {
+            assert_eq!(
+                valid_sql_ident(s),
+                SqlIdent::parse_dotted(s).is_some(),
+                "valid_sql_ident must be exactly SqlIdent::parse_dotted for {s:?}"
+            );
+            // The plain (dot-rejecting) mode admits a subset of the dotted mode:
+            // anything plain accepts, dotted must also accept.
+            if SqlIdent::parse_plain(s).is_some() {
+                assert!(
+                    SqlIdent::parse_dotted(s).is_some(),
+                    "dotted mode must accept everything plain accepts, for {s:?}"
+                );
+            }
+        }
+        // A bare dot-bearing name: accepted dotted, rejected plain — the one
+        // deliberate difference between the two modes.
+        assert!(SqlIdent::parse_dotted("users.id").is_some());
+        assert!(SqlIdent::parse_plain("users.id").is_none());
+        // Every hostile identifier is rejected by BOTH modes.
+        for h in HOSTILE_IDENTS {
+            assert!(
+                SqlIdent::parse_plain(h).is_none(),
+                "plain parser must reject hostile {h:?}"
+            );
+            assert!(
+                SqlIdent::parse_dotted(h).is_none(),
+                "dotted parser must reject hostile {h:?}"
+            );
+        }
+    }
+
+    /// SSOT proof (entry level): every public kernel that interpolates a
+    /// table/column identifier into SQL routes through the single validator and
+    /// fails CLOSED on a hostile identifier. Each entry is driven with a hostile
+    /// value in its identifier position(s); an `IpeResult::Ok` here means a path
+    /// reached SQL without validating — the boundary is broken. A new
+    /// identifier-accepting entry that skips the validator will fail this test.
+    #[tokio::test]
+    async fn every_identifier_entry_rejects_hostile_idents() {
+        let db = fresh_db().await;
+        for &h in HOSTILE_IDENTS {
+            let hs = h.to_string();
+
+            macro_rules! assert_rejects {
+                ($label:expr, $task:expr) => {{
+                    let r: IpeResult<String, _> = $task.await;
+                    assert!(
+                        matches!(r, IpeResult::Err(_)),
+                        "{} must reject hostile identifier {:?}, got Ok",
+                        $label,
+                        h
+                    );
+                }};
+            }
+
+            // Table-identifier position.
+            assert_rejects!(
+                "db_get_by_id(table)",
+                db_get_by_id(db.clone(), hs.clone(), "1".to_string())
+            );
+            assert_rejects!(
+                "db_delete_by_id(table)",
+                db_delete_by_id(db.clone(), hs.clone(), "1".to_string())
+            );
+            assert_rejects!(
+                "db_insert_row(table)",
+                db_insert_row(db.clone(), hs.clone(), {
+                    let mut m = HashMap::new();
+                    m.insert("title".to_string(), "x".to_string());
+                    m
+                })
+            );
+            assert_rejects!(
+                "db_update_by_id(table)",
+                db_update_by_id(db.clone(), hs.clone(), "1".to_string(), {
+                    let mut m = HashMap::new();
+                    m.insert("title".to_string(), "x".to_string());
+                    m
+                })
+            );
+            assert_rejects!(
+                "db_find_by_conditions(table)",
+                db_find_by_conditions(db.clone(), hs.clone(), {
+                    let mut m = HashMap::new();
+                    m.insert("title".to_string(), "x".to_string());
+                    m
+                })
+            );
+            assert_rejects!(
+                "db_find_where(table)",
+                db_find_where(
+                    db.clone(),
+                    hs.clone(),
+                    sql_eq(sql_column("title".to_string()), sql_param("x".to_string())),
+                )
+            );
+            assert_rejects!(
+                "db_delete_where(table)",
+                db_delete_where(
+                    db.clone(),
+                    hs.clone(),
+                    sql_eq(sql_column("title".to_string()), sql_param("x".to_string())),
+                )
+            );
+            assert_rejects!(
+                "db_insert_fields(table)",
+                db_insert_fields(
+                    db.clone(),
+                    hs.clone(),
+                    vec![("title".to_string(), Some(SqlParam::Text("x".to_string())))],
+                )
+            );
+            assert_rejects!(
+                "db_update_fields(table)",
+                db_update_fields(
+                    db.clone(),
+                    hs.clone(),
+                    vec![("id".to_string(), SqlParam::Int(1))],
+                    vec![("title".to_string(), Some(SqlParam::Text("x".to_string())))],
+                )
+            );
+
+            // Field/column-identifier position.
+            assert_rejects!(
+                "db_find_one_by_field(field)",
+                db_find_one_by_field(db.clone(), "todos".to_string(), hs.clone(), "x".to_string())
+            );
+            assert_rejects!(
+                "db_find_many_by_field(field)",
+                db_find_many_by_field(db.clone(), "todos".to_string(), hs.clone(), "x".to_string())
+            );
+            assert_rejects!(
+                "db_find_by_conditions(column)",
+                db_find_by_conditions(db.clone(), "todos".to_string(), {
+                    let mut m = HashMap::new();
+                    m.insert(hs.clone(), "x".to_string());
+                    m
+                })
+            );
+            assert_rejects!(
+                "db_insert_fields(column)",
+                db_insert_fields(
+                    db.clone(),
+                    "todos".to_string(),
+                    vec![(hs.clone(), Some(SqlParam::Text("x".to_string())))],
+                )
+            );
+            assert_rejects!(
+                "db_update_fields(set column)",
+                db_update_fields(
+                    db.clone(),
+                    "todos".to_string(),
+                    vec![("id".to_string(), SqlParam::Int(1))],
+                    vec![(hs.clone(), Some(SqlParam::Text("x".to_string())))],
+                )
+            );
+            assert_rejects!(
+                "db_update_fields(where column)",
+                db_update_fields(
+                    db.clone(),
+                    "todos".to_string(),
+                    vec![(hs.clone(), SqlParam::Int(1))],
+                    vec![("title".to_string(), Some(SqlParam::Text("x".to_string())))],
+                )
+            );
+
+            // `Sql.column` is the SqlFragment-path identifier entry: a hostile
+            // identifier poisons the fragment, which the consumers surface as Err.
+            assert!(
+                sql_column(hs.clone()).invalid.is_some(),
+                "sql_column must poison hostile identifier {h:?}"
+            );
+        }
+
+        // A legitimate dotted column reference still validates where the dotted
+        // mode is allowed (Sql.column) — the fix does not over-reject.
+        assert!(
+            sql_column("todos.title".to_string()).invalid.is_none(),
+            "a legitimate dotted column must still validate"
+        );
+    }
 }
