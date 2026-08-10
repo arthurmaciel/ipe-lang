@@ -14,12 +14,15 @@
 //! * the surface qualifier (`Unsafe.unsafeGetField` off `import Ipe.Db.Unsafe`,
 //!   and — for the relocation — `Db.unsafeGetField` off plain `Ipe.Db` failing),
 //!   and
-//! * the `Ffi.kernel "Db_unsafeGetField"` string-alias route
-//!   (`detect_kernel_alias` splits the string into `(module, function)` and
-//!   looks the pair up in the kernel registry). The alias keys off the UNCHANGED
-//!   canonical `("Db", "unsafeGetField")` pair — only the SURFACE home moved —
-//!   so the alias still resolves; the old unmarked `("Db", "getField")` pair
-//!   does not. This mirrors `db_unsafe_exec_raw_marker.rs`.
+//! * the `Ffi.kernel "Db_unsafeGetField"` string-alias route. Minting a kernel
+//!   alias is the exclusive privilege of the driver-vouched standard library /
+//!   FFI interface: a `Ffi.kernel "…"` binding in USER source is rejected by the
+//!   origin gate (IPE-N0042) before the registry is even consulted. So the
+//!   string-alias route cannot smuggle a user program to the marked kernel at
+//!   all — the only path to the unsafe row read stays the disclosed
+//!   `Ipe.Db.Unsafe` surface. This closes the capability-model bypass whereby a
+//!   user `Ffi.kernel` alias reached an unsafe kernel with no `unsafe`
+//!   disclosure.
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -140,11 +143,14 @@ main =
 
 // ── Ffi.kernel string-alias route ─────────────────────────────────────────────
 
-/// The alias `Ffi.kernel "Db_unsafeGetField"` names the marked kernel by its
-/// registry `(module, function)` pair, so it resolves — the marked surface is
-/// reachable through the alias route too.
+/// A USER program cannot mint the marked kernel through a `Ffi.kernel
+/// "Db_unsafeGetField"` alias — minting a kernel is reserved to the vouched
+/// standard library / FFI interface, so the alias is rejected by the origin gate
+/// (IPE-N0042) regardless of whether the named kernel is registered. The unsafe
+/// row read is reachable ONLY through the disclosed `Ipe.Db.Unsafe` surface,
+/// never a hand-minted alias that would reach it with no `unsafe` disclosure.
 #[test]
-fn marked_kernel_alias_resolves() {
+fn user_kernel_alias_to_marked_kernel_is_rejected() {
     let dir = write_project(
         "marked_alias",
         "\
@@ -166,20 +172,32 @@ main =
 ",
     );
     let built = build(&dir, "marked_alias");
+    let is_user_alias = matches!(
+        &built,
+        Err(ipe::CliError::Pipeline { diag, .. })
+            if matches!(
+                &**diag,
+                ipe_diagnostics::Diagnostic::Name {
+                    msg: ipe_diagnostics::NameError::KernelAliasInUserSource { .. },
+                    ..
+                }
+            )
+    );
     assert!(
-        built.is_ok(),
-        "Ffi.kernel \"Db_unsafeGetField\" must resolve to the marked kernel: {:?}",
-        built.err()
+        is_user_alias,
+        "Ffi.kernel \"Db_unsafeGetField\" in user source must be rejected with \
+         IPE-N0042 — a user program may not mint a kernel alias: {built:?}"
     );
     let _ = fs::remove_dir_all(&dir);
 }
 
-/// The old unmarked alias `Ffi.kernel "Db_getField"` names no registered kernel
-/// (the `(Db, getField)` pair was renamed away), so it fails closed with
-/// `NameError::UnknownKernelAlias` — a smuggled string alias cannot reopen the
-/// unmarked row read.
+/// A user `Ffi.kernel "Db_getField"` alias is likewise rejected by the origin
+/// gate. The gate fires on the alias SHAPE in user source, before the registry
+/// is consulted, so the rejection is IPE-N0042 (user source may not mint a
+/// kernel) rather than IPE-N0028 (unknown kernel) — either way the smuggled row
+/// read is unrepresentable.
 #[test]
-fn unmarked_kernel_alias_fails_closed() {
+fn user_kernel_alias_to_unmarked_kernel_is_rejected() {
     let dir = write_project(
         "unmarked_alias",
         "\
@@ -201,21 +219,21 @@ main =
 ",
     );
     let built = build(&dir, "unmarked_alias");
-    let is_unknown_alias = matches!(
+    let is_user_alias = matches!(
         &built,
         Err(ipe::CliError::Pipeline { diag, .. })
             if matches!(
                 &**diag,
                 ipe_diagnostics::Diagnostic::Name {
-                    msg: ipe_diagnostics::NameError::UnknownKernelAlias { .. },
+                    msg: ipe_diagnostics::NameError::KernelAliasInUserSource { .. },
                     ..
                 }
             )
     );
     assert!(
-        is_unknown_alias,
-        "Ffi.kernel \"Db_getField\" must fail closed with IPE-N0028 — the unmarked \
-         stringly row read may not be reached through a smuggled kernel alias: {built:?}"
+        is_user_alias,
+        "Ffi.kernel \"Db_getField\" in user source must be rejected with IPE-N0042 — \
+         a user program may not mint a kernel alias: {built:?}"
     );
     let _ = fs::remove_dir_all(&dir);
 }

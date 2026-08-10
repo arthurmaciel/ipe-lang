@@ -19,12 +19,12 @@ use crate::code::{
     IPE_N0001, IPE_N0002, IPE_N0003, IPE_N0004, IPE_N0005, IPE_N0010, IPE_N0011, IPE_N0012,
     IPE_N0013, IPE_N0020, IPE_N0021, IPE_N0022, IPE_N0023, IPE_N0024, IPE_N0025, IPE_N0026,
     IPE_N0027, IPE_N0028, IPE_N0029, IPE_N0030, IPE_N0031, IPE_N0032, IPE_N0033, IPE_N0034,
-    IPE_N0035, IPE_N0036, IPE_N0037, IPE_N0038, IPE_N0039, IPE_N0040, IPE_N0041, IPE_P0001,
-    IPE_P0002, IPE_P0003, IPE_P0010, IPE_P0011, IPE_P0012, IPE_P0013, IPE_P0014, IPE_P0015,
-    IPE_P0016, IPE_P0017, IPE_P0018, IPE_P0020, IPE_P0021, IPE_P0030, IPE_P0031, IPE_P0040,
-    IPE_P0041, IPE_P0050, IPE_P0060, IPE_P0061, IPE_P0062, IPE_P0063, IPE_T0001, IPE_T0002,
-    IPE_T0003, IPE_T0004, IPE_T0010, IPE_T0011, IPE_T0012, IPE_T0013, IPE_T0014, IPE_T0015,
-    IPE_T0016, IPE_T0017, IPE_T0018, IPE_T0019, IPE_T0020, Severity,
+    IPE_N0035, IPE_N0036, IPE_N0037, IPE_N0038, IPE_N0039, IPE_N0040, IPE_N0041, IPE_N0042,
+    IPE_P0001, IPE_P0002, IPE_P0003, IPE_P0010, IPE_P0011, IPE_P0012, IPE_P0013, IPE_P0014,
+    IPE_P0015, IPE_P0016, IPE_P0017, IPE_P0018, IPE_P0020, IPE_P0021, IPE_P0030, IPE_P0031,
+    IPE_P0040, IPE_P0041, IPE_P0050, IPE_P0060, IPE_P0061, IPE_P0062, IPE_P0063, IPE_T0001,
+    IPE_T0002, IPE_T0003, IPE_T0004, IPE_T0010, IPE_T0011, IPE_T0012, IPE_T0013, IPE_T0014,
+    IPE_T0015, IPE_T0016, IPE_T0017, IPE_T0018, IPE_T0019, IPE_T0020, Severity,
 };
 use crate::span::Span;
 
@@ -584,6 +584,19 @@ pub enum NameError {
         reason: CodecAutoRejection,
         field: Box<str>,
     },
+    /// A `f = Ffi.kernel "Name"` kernel-alias binding appears in USER source. A
+    /// kernel alias binds a name directly to a built-in kernel, bypassing the
+    /// capability model: an unsafe-tier kernel (a raw-`<script>` sink, a secret
+    /// reveal, a raw SQL exec) is reachable through it with no `unsafe`
+    /// disclosure and no `.Unsafe` import to acknowledge. Minting a kernel is
+    /// therefore the sole privilege of driver-vouched
+    /// [`crate::resolve::ModuleOrigin::EmbeddedStdlib`] / `FfiInterface` modules
+    /// (the standard library and the generated FFI interface); user code reaches
+    /// a kernel only through the sanctioned surface that imports and discloses
+    /// it. Mirrors the `Ffi.binding` origin gate — `Ffi.kernel` in user source
+    /// is unrepresentable, not merely discouraged (Security #1, fail-closed).
+    /// `alias` is the raw kernel string the binding named. [IPE-N0042]
+    KernelAliasInUserSource { alias: Box<str> },
 }
 
 /// Why `Ipe.Codec.auto` could not derive a codec.
@@ -1374,6 +1387,7 @@ const fn name_code(msg: &NameError) -> Code {
         NameError::BoundarySealIllegal { .. } => IPE_N0039,
         NameError::NestedDecoderPipeline => IPE_N0040,
         NameError::CodecAutoUnderivable { .. } => IPE_N0041,
+        NameError::KernelAliasInUserSource { .. } => IPE_N0042,
     }
 }
 
@@ -1546,7 +1560,8 @@ fn name_help(msg: &NameError, span: Span) -> Vec<HelpLine> {
         | NameError::AssertedCallMalformed { .. }
         | NameError::BoundarySealIllegal { .. }
         | NameError::NestedDecoderPipeline
-        | NameError::CodecAutoUnderivable { .. } => Vec::new(), // no span-based help
+        | NameError::CodecAutoUnderivable { .. }
+        | NameError::KernelAliasInUserSource { .. } => Vec::new(), // no span-based help
     }
 }
 

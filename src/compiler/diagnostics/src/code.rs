@@ -253,6 +253,11 @@ code! {
     /// record value, or a field's type has no derivable leaf codec (a function, a
     /// `Secret`, a data-carrying ADT, an opaque handle) — rejected fail-closed
     IPE_N0041 = "IPE-N0041", "Ipe.Codec.auto cannot derive a codec for this type", "IPE-N0041";
+    /// a `Ffi.kernel "Name"` kernel-alias binding appears in user source — minting
+    /// a kernel is reserved to the driver-vouched standard library / FFI interface,
+    /// so user code cannot reach an unsafe kernel without a disclosing `.Unsafe`
+    /// import (capability-model integrity, fail-closed)
+    IPE_N0042 = "IPE-N0042", "a kernel alias (Ffi.kernel) may not be minted in user source", "IPE-N0042";
 
     // -----------------------------------------------------------------------
     // Type (IPE-T####)

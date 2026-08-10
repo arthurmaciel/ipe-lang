@@ -481,6 +481,12 @@ fn name_label(msg: &NameError) -> Option<String> {
         NameError::UnknownKernelAlias {
             module, function, ..
         } => Some(format!("no registered kernel `{module}.{function}`")),
+        NameError::KernelAliasInUserSource { alias } => Some(format!(
+            "`Ffi.kernel {alias:?}` mints a kernel — only the standard library \
+             and the generated FFI interface may do this; reach the effect \
+             through its published module (an unsafe kernel via its `Ipe.<M>.Unsafe` \
+             module, which discloses the `unsafe` capability)"
+        )),
         NameError::ServerOnlyKernelForWasm { qualifier, name } => Some(format!(
             "`{qualifier}.{name}` is server-only and has no denotation for target `wasm`; \
              run it behind a server route and call it from the client over HTTP"
