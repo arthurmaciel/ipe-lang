@@ -17,9 +17,9 @@
 //! - `taskseq_list`: multi-use Task-list `let`-inlining (two
 //!   plain-argument uses, not closure captures) must not touch a nearby
 //!   string literal.
-//! - `taskseqsync_move`: `Expr::TaskSeqSync`
-//!   needs the same clone-capture rewrite `Expr::TaskSeq` gets, or a
-//!   trailing use of the effect's own argument is a use-after-move (E0382).
+//! - `taskseqsync_move`: a discarded effect sequenced into a `Task` chain
+//!   needs the clone-capture rewrite, or a trailing use of the effect's own
+//!   argument is a use-after-move (E0382).
 //!
 //! ```text
 //! # compile-only check (fast, no IPE_E2E needed):
@@ -134,9 +134,9 @@ fn aud04_taskseq_list_inlining_not_corrupted() {
     assert_e2e_output("taskseq_list", "4");
 }
 
-/// Witness 4 — `TaskSeqSync` needs the same clone-capture rewrite as
-/// `TaskSeq`; without it the effect's own argument moves
-/// out from under the trailing read (E0382 use-after-move at `cargo build`).
+/// Witness 4 — a discarded effect whose own argument is read again after it
+/// needs the clone-capture rewrite; without it the argument moves out from
+/// under the trailing read (E0382 use-after-move at `cargo build`).
 #[test]
 fn aud04_taskseqsync_move_compiles_and_runs() {
     assert_ipec_ok("taskseqsync_move", "aud04_taskseqsync_move_emit");

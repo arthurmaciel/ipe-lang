@@ -1,26 +1,19 @@
 module Main exposing (main)
 
 import Ipe.Io as Io
+import Ipe.Task as Task
 
 
--- AUD-04 witness 4 (TaskSeqSync use-after-move — the one AUD-04 site with
--- NO prior clone-capture handling at all).
---
--- `helper` is a plain `String -> String` (sync, non-Task) function whose
--- body auto-forces the discarded `Io.writeStdout msg` effect, then returns
--- `msg` again. `writeStdout : String -> Task Error ()` takes its argument
--- BY VALUE, so without cloning `msg` into the effect, Rust would move it
--- there and the trailing `msg` read would be E0382 "use of moved value".
--- `Expr::TaskSeqSync` pre-fix had no clone-capture rewrite at all (unlike
--- `Expr::TaskSeq`, which at least tried, buggily, at the text level).
---
--- Expected: clean `cargo build`, and `msg` survives the effect — the
--- printed line is exactly "hello-msg".
-helper : String -> String
+-- A discarded effect (`let _ = Io.writeStdout msg`) followed by a trailing use
+-- of the effect's own argument (`msg`). The effect takes `msg` by value, so
+-- the clone-capture rewrite must copy it into the effect and leave the trailing
+-- read intact — without it, `cargo build` sees a use-after-move (E0382).
+-- `helper` returns a `Task`, so the discard sequences lawfully into the chain.
+helper : String -> Task Error String
 helper msg =
     let _ = Io.writeStdout msg in
-    msg
+    Task.succeed msg
 
 
 main =
-    Io.println (helper "hello-msg")
+    Task.andThen (\line -> Io.println line) (helper "hello-msg")

@@ -69,9 +69,9 @@ fn i199_ipec_accepts_and_hoists() {
     let emitted = std::fs::read_to_string(out.join("src").join("main.rs"))
         .expect("emitted main.rs must exist");
 
-    // Shape A (`recordAction`): `label` captured into the nested Task.map closure
-    // AND consumed by the outer by-value `fakeExec label` arg → at least one
-    // `.clone()`.
+    // Shape A (`recordAction`): `label` captured into the nested Task.andThen
+    // closure AND consumed by the outer by-value `fakeExec label` arg → at least
+    // one `.clone()`.
     assert!(
         emitted.contains("label.clone()"),
         "reused `label` must have at least one `.clone()`; got:\n{emitted}"
