@@ -1148,10 +1148,10 @@ ipe fmt src/Main.ipe               # opinionated formatter (run after editing .i
                                    #   test stage builds and runs it automatically
 ipe db status                      # Ipe.Db migrations: applied / pending / drift
 ipe db migrate                     # apply pending Ipe.Db migrations, then exit
-ipe doc Module                     # terminal docs
-ipe doc --serve [--port 8080]      # browsable HTTP doc server
-ipe doc --tui                      # interactive terminal doc browser
+ipe doc Ipe.List                   # one module's types + values in the terminal
 ipe doc list                       # list every documented module
+ipe doc serve [--port <n>]         # build the HTML site + preview it on loopback
+ipe doc check                      # gate: fail if an exposed binding lacks a doc-comment
 ipe health [--fix] [--verbose]     # project / environment health checks
 ipe console [--port 8025]          # standalone Ipe.Ui console (--tui for the Ipe.Tea.Terminal backend)
 ipe add <package>                  # add an FFI binding
