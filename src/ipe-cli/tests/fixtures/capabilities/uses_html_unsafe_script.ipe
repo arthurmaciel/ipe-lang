@@ -1,0 +1,10 @@
+module Main exposing (main)
+
+import Ipe.Html exposing (render, section)
+import Ipe.Html.Unsafe exposing (unsafeScript)
+import Ipe.Io as Io
+
+
+main =
+    Io.println
+        (render (section [] [ unsafeScript "console.log(1)" ]))

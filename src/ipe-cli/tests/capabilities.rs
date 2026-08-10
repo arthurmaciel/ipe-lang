@@ -59,6 +59,21 @@ fn reports_none_for_a_pure_program() -> TestResult {
 }
 
 #[test]
+fn reports_unsafe_for_an_html_unsafe_script_program() -> TestResult {
+    // Importing `Ipe.Html.Unsafe` (the inline-`<script>` / raw-HTML escape-hatch
+    // home) discloses the `unsafe` capability — the import itself is the signal,
+    // so a raw HTML/script sink cannot hide from `ipe capabilities`.
+    let (ok, stdout) = run_ipe(&[
+        "capabilities",
+        "--plain",
+        &fixture("uses_html_unsafe_script.ipe").to_string_lossy(),
+    ])?;
+    assert!(ok, "capabilities must exit 0");
+    assert_eq!(stdout.trim(), "unsafe");
+    Ok(())
+}
+
+#[test]
 fn capabilities_help_page_lists_the_command() -> TestResult {
     let (ok, stdout) = run_ipe(&["capabilities", "--help"])?;
     assert!(ok, "--help exits 0");
