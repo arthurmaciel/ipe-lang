@@ -6172,6 +6172,186 @@ fn reject_fn_value_reuse(
     Ok(())
 }
 
+/// Count the number of times `sym` is genuinely CONSUMED (moved, in emitted
+/// Rust) by `expr`, treating the borrow positions as non-consuming.
+///
+/// [`count_var_uses`] counts every textual occurrence (including a field
+/// [`Expr::Access`], whose `(record).field.clone()` BORROWS the record, and an
+/// [`Expr::Update`] base, whose `(record).clone()` also borrows) so the last-use
+/// clone rewrite keeps a later borrow alive. The reuse REJECT gates need the
+/// opposite: only a genuine second move double-moves a non-`Clone` value, so a
+/// borrow-only re-read is not a reuse. Excluding those two positions lets the
+/// more specific app-shape admissibility gate (`InadmissibleAppModel`,
+/// `IPE-L0120`) own an `update model`'s field read + record update, rather than
+/// this coarser reuse gate preempting it.
+fn count_value_consumes(sym: Symbol, expr: &Expr) -> usize {
+    match expr {
+        Expr::Var(s) | Expr::CloneVar(s) => usize::from(*s == sym),
+        Expr::Lambda { body, .. } | Expr::SharedLambda { body, .. } => {
+            usize::from(lambda_body_refs_sym(sym, body))
+        }
+        Expr::Let { name, value, body } => {
+            let in_value = count_value_consumes(sym, value);
+            let in_body = if *name == sym {
+                0
+            } else {
+                count_value_consumes(sym, body)
+            };
+            in_value + in_body
+        }
+        Expr::Destructure {
+            binder,
+            value,
+            body,
+        } => {
+            let in_value = count_value_consumes(sym, value);
+            let in_body = if pat_binds_symbol(binder, sym) {
+                0
+            } else {
+                count_value_consumes(sym, body)
+            };
+            in_value + in_body
+        }
+        Expr::If { cond, then_, else_ } => {
+            count_value_consumes(sym, cond)
+                + count_value_consumes(sym, then_).max(count_value_consumes(sym, else_))
+        }
+        Expr::Match(m) => {
+            let in_scrut = count_value_consumes(sym, m.scrutinee());
+            let arm_max: usize = m
+                .arms()
+                .iter()
+                .map(|arm| {
+                    if pat_binds_symbol(&arm.pat, sym) {
+                        0
+                    } else {
+                        count_value_consumes(sym, &arm.body)
+                    }
+                })
+                .max()
+                .unwrap_or(0);
+            in_scrut + arm_max
+        }
+        Expr::BinOp { lhs, rhs, .. } => {
+            count_value_consumes(sym, lhs) + count_value_consumes(sym, rhs)
+        }
+        Expr::Call { args, .. } => args.iter().map(|a| count_value_consumes(sym, a)).sum(),
+        Expr::Apply { func, args } => {
+            count_value_consumes(sym, func)
+                + args
+                    .iter()
+                    .map(|a| count_value_consumes(sym, a))
+                    .sum::<usize>()
+        }
+        Expr::Tuple(items) | Expr::List { items, .. } => {
+            items.iter().map(|e| count_value_consumes(sym, e)).sum()
+        }
+        Expr::Cons { head, tail } => {
+            count_value_consumes(sym, head) + count_value_consumes(sym, tail)
+        }
+        Expr::ListIndexClone { list, .. } | Expr::ListLenCheck { list, .. } => {
+            count_value_consumes(sym, list)
+        }
+        // A `Record` field is a consuming position; an `Update` base borrows
+        // (`(record).clone()`) so only its field expressions consume — both
+        // reduce to summing the field expressions.
+        Expr::Record { fields, .. } | Expr::Update { fields, .. } => fields
+            .iter()
+            .map(|(_, e)| count_value_consumes(sym, e))
+            .sum(),
+        Expr::Ctor { args, .. } => args.iter().map(|a| count_value_consumes(sym, a)).sum(),
+        Expr::TaskSeq { effect, rest } | Expr::TaskSeqSync { effect, rest } => {
+            count_value_consumes(sym, effect) + count_value_consumes(sym, rest)
+        }
+        Expr::TailLoop { params, body } => {
+            if params.iter().any(|(s, _)| *s == sym) {
+                0
+            } else {
+                count_value_consumes(sym, body)
+            }
+        }
+        Expr::TailRecur { args } => args.iter().map(|a| count_value_consumes(sym, a)).sum(),
+        // `Access` reads a field off a BORROW of the record — not a move — so it
+        // counts as no consumption, like the leaves below.
+        Expr::Access { .. }
+        | Expr::Int(_)
+        | Expr::Bool(_)
+        | Expr::Float(_)
+        | Expr::Str(_)
+        | Expr::PathLit(_)
+        | Expr::Char(_)
+        | Expr::Unit
+        | Expr::FuncValue { .. } => 0,
+    }
+}
+
+/// Fail-closed gate for a non-linear use of a non-`Clone` effect-carrier value.
+///
+/// A `Task`/`Cmd`/`Sub` renders to an opaque boxed future that is never `Clone`,
+/// so a binding embedding one — bare, or inside a `Maybe`/`Result`/tuple/record/
+/// user-union payload — has no sound duplicating rewrite. A generic user union
+/// derives `Clone where T: Clone` and instantiating `T` to such a payload makes
+/// that bound unsatisfiable, so a second value-consuming use double-moves in the
+/// emitted Rust (cargo E0382/E0277) AFTER `ipe` reported exit 0 — a SEAL break.
+/// Reject it with a typed diagnostic instead. A single (linear) use needs no
+/// clone and is left as a bare move.
+///
+/// Sibling to [`reject_foreign_handle_reuse`] (an FFI foreign handle) and
+/// [`reject_fn_value_reuse`] (an embedded function value): the same
+/// non-`Clone`-reuse gate for the effect-carrier payload those two do not cover.
+/// A bare/composite `Generic`/`RowGeneric` is out of scope — its emitted
+/// `T: Clone` / `R: … + Clone` witness bound makes an inserted `.clone()` sound,
+/// so it routes through the multi-use clone rewrite, never here. Consumption is
+/// counted by [`count_value_consumes`] (borrow-only re-reads excluded), so an app
+/// `update model`'s field read + record update stays owned by the more specific
+/// admissibility gate.
+///
+/// PARAM-scoped: invoked only from [`apply_param_move_ownership`], never for a
+/// `let`/`Destructure` binding. A `let`-bound effect value IS rescued — the
+/// backend's `Expr::Let` multi-use pass inlines the value expression at each use
+/// site (`scan_free_target` / `substitute_var`), reconstructing an independent
+/// value per use (issue approach (a)). A PARAM's value arrives from the caller,
+/// is not a reconstructible expression, and so cannot be inlined — its
+/// non-linear reuse has no sound rewrite and is the case this gate rejects.
+fn reject_nonclone_value_reuse(
+    env: CloneEnv<'_>,
+    sym: Symbol,
+    ir_ty: &IrType,
+    body: &Expr,
+    span: Span,
+) -> DResult<()> {
+    if !ir_type_has_effect_carrier(ir_ty)
+        || !matches!(clone_class(env, ir_ty), CloneClass::NonClone)
+    {
+        return Ok(());
+    }
+    if count_value_consumes(sym, body) > 1 {
+        return Err(unsupported(span, Feature::NonCloneValueReuse));
+    }
+    Ok(())
+}
+
+/// Does `ty` embed a `Task`/`Cmd`/`Sub` effect carrier anywhere — bare, or
+/// inside a `Maybe`/`Result`/tuple/record/collection/user-union payload? Such a
+/// carrier renders to an opaque boxed future and is never `Clone`, so a
+/// duplicating rewrite on a value carrying one is unsound. `Decoder` is excluded:
+/// it carries an `Arc<dyn Fn>` with a hand-written unconditional `Clone`.
+fn ir_type_has_effect_carrier(ty: &IrType) -> bool {
+    match ty {
+        IrType::Task(_) | IrType::Cmd(_) | IrType::Sub(_) => true,
+        IrType::Maybe(e) | IrType::List(e) | IrType::Set(e) => ir_type_has_effect_carrier(e),
+        IrType::Result(a, b) | IrType::Dict(a, b) => {
+            ir_type_has_effect_carrier(a) || ir_type_has_effect_carrier(b)
+        }
+        IrType::Tuple(es) => es.iter().any(ir_type_has_effect_carrier),
+        IrType::Record(fields) => fields.values().any(ir_type_has_effect_carrier),
+        IrType::Enum { args, .. } => args.iter().any(ir_type_has_effect_carrier),
+        IrType::Ui { msg, .. } => ir_type_has_effect_carrier(msg),
+        IrType::WebRoute(page) => ir_type_has_effect_carrier(page),
+        _ => false,
+    }
+}
+
 /// Fail-closed gate for a non-linear use of an FFI foreign opaque handle.
 ///
 /// The handle is the real foreign Rust type, whose `Clone`-ness the foreign
@@ -12291,6 +12471,7 @@ impl<'a> Lowerer<'a> {
                     body: Box::new(disciplined),
                 });
             }
+            reject_nonclone_value_reuse(self.clone_env(), sym, ir_ty, &body, span)?;
             return apply_move_ownership(self.clone_env(), sym, ir_ty, body, span);
         }
         if let Some(capture_span) = deferred_capture {
@@ -12299,6 +12480,7 @@ impl<'a> Lowerer<'a> {
             // bare `Box` capture.
             return Err(unsupported(capture_span, Feature::NonCloneCapture));
         }
+        reject_nonclone_value_reuse(self.clone_env(), sym, ir_ty, &body, span)?;
         apply_move_ownership(self.clone_env(), sym, ir_ty, body, span)
     }
 
@@ -22094,6 +22276,67 @@ mod tests {
         // Linear (single) use: accepted.
         let linear = Expr::Var(sym);
         assert!(reject_foreign_handle_reuse(env, sym, &world_ty, &linear, span).is_ok());
+    }
+
+    /// SEAL: reusing a non-`Clone` effect-carrier value — a `Task` bare, or one
+    /// held inside a union/`Maybe` payload — in two value-consuming positions
+    /// fails closed with IPE-L0135 instead of emitting a `.clone()` the emitted
+    /// crate cannot compile. A single (linear) use is accepted, and a `Clone`
+    /// payload never triggers the gate.
+    #[test]
+    fn nonclone_effect_carrier_reuse_fails_closed() {
+        use ipe_diagnostics::Feature;
+        use ipe_ir::{Expr, IrType, ModPath};
+
+        use super::{
+            CloneEnv, ir_type_has_effect_carrier, reject_nonclone_value_reuse, unsupported,
+        };
+
+        let mut interner = Interner::new();
+        let main = interner.intern("Main").expect("intern");
+        let wrap = interner.intern("Wrap").expect("intern");
+        let sym = interner.intern("w").expect("intern");
+        let span = Span::DUMMY;
+        let transparent = BTreeSet::new();
+        let env = CloneEnv {
+            interner: &interner,
+            transparent_ffi: &transparent,
+        };
+
+        // `Wrap (Task Error Int)` — a user union carrying a Task effect carrier.
+        let task_ty = IrType::Task(Box::new(IrType::Int));
+        let wrap_task = IrType::Enum {
+            home: ModPath(vec![main]),
+            name: wrap,
+            args: vec![task_ty.clone()],
+        };
+
+        // The predicate finds the carrier bare, in a union, and in a `Maybe`.
+        assert!(ir_type_has_effect_carrier(&task_ty));
+        assert!(ir_type_has_effect_carrier(&wrap_task));
+        assert!(ir_type_has_effect_carrier(&IrType::Maybe(Box::new(
+            task_ty
+        ))));
+        // A `Clone` payload carries no effect and is out of scope.
+        let wrap_int = IrType::Enum {
+            home: ModPath(vec![main]),
+            name: wrap,
+            args: vec![IrType::Int],
+        };
+        assert!(!ir_type_has_effect_carrier(&wrap_int));
+
+        // Reuse: `sym` appears twice → fail closed with IPE-L0135.
+        let reused = Expr::Tuple(vec![Expr::Var(sym), Expr::Var(sym)]);
+        let err = reject_nonclone_value_reuse(env, sym, &wrap_task, &reused, span)
+            .expect_err("reused effect carrier must be rejected");
+        assert_eq!(err, unsupported(span, Feature::NonCloneValueReuse));
+
+        // Linear (single) use: accepted — a bare move needs no clone.
+        let linear = Expr::Var(sym);
+        assert!(reject_nonclone_value_reuse(env, sym, &wrap_task, &linear, span).is_ok());
+
+        // A `Clone` payload reused twice is NOT this gate's concern.
+        assert!(reject_nonclone_value_reuse(env, sym, &wrap_int, &reused, span).is_ok());
     }
 
     /// The per-module eta/cap pool sizing must equal the whole-program
