@@ -210,7 +210,7 @@ pub enum CliError {
     /// read, did not typecheck, or exposed an open interface. Carries the typed
     /// [`api_surface::DiffError`] cause.
     Diff(api_surface::DiffError),
-    /// `ipe diff --check` found the proposed new version does not clear the
+    /// The verify mode found the proposed new version does not clear the
     /// required semver floor. Carries the required floor version and the
     /// human-readable required bump so the message is actionable.
     SemverRejected {
