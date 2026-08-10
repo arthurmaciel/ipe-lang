@@ -1023,6 +1023,30 @@ pub fn db_get_string<R: IpeRow>(field: String, row: &R) -> String {
     row.ipe_get(&field)
 }
 
+/// Truncate a float toward zero to an `Int`, rejecting a magnitude that would
+/// saturate under an `as i64` cast. Both bounds are exclusive because f64 cannot
+/// distinguish a boundary from its out-of-range neighbour (`i64::MAX as f64`
+/// rounds up to 2^63; an input just past `i64::MIN` rounds down to `i64::MIN as
+/// f64`), so `<=`/`>=` would admit an out-of-range magnitude and let `as i64`
+/// saturate to the limit — a wrong value that reads like a real row value. An
+/// exact `i64::MIN`/`i64::MAX` still round-trips. This is the total getter, so
+/// an out-of-range read is surfaced on the runtime's stderr anomaly channel and
+/// falls back to the contractual `0` default rather than saturating. The typed,
+/// fail-with-Err path is `db_decode_int`.
+fn float_to_i64_or_default(field: &str, f: f64) -> i64 {
+    let truncated = f.trunc();
+    if truncated > i64::MIN as f64 && truncated < 9_223_372_036_854_775_808.0 {
+        truncated as i64
+    } else {
+        eprintln!(
+            "db: unsafeGetInt(\"{field}\"): {f} is out of range for a 64-bit integer; \
+             returning 0 (default) instead of a saturated value"
+        );
+        let _ = std::io::Write::flush(&mut std::io::stderr());
+        0
+    }
+}
+
 pub fn db_get_int<R: IpeRow>(field: String, row: &R) -> i64 {
     // Align with db_decode_int / Go: accept "42" or a decimal string like
     // "3.0" (truncate to 3) before defaulting to 0.
@@ -1031,7 +1055,7 @@ pub fn db_get_int<R: IpeRow>(field: String, row: &R) -> i64 {
         return i;
     }
     if let Ok(f) = s.parse::<f64>() {
-        return f as i64;
+        return float_to_i64_or_default(&field, f);
     }
     0
 }
@@ -2678,6 +2702,36 @@ mod tests {
         assert_eq!(db_get_int("missing".into(), &m), 0);
         assert!(db_get_bool("flag".into(), &m));
         assert!(!db_get_bool("missing".into(), &m));
+    }
+
+    // The total getter truncates a decimal toward zero, round-trips an exact
+    // i64 boundary, and fails CLOSED to the `0` default for a magnitude that an
+    // `as i64` cast would silently saturate to the boundary (never surfacing a
+    // wrong value that reads like a real row value).
+    #[test]
+    fn db_get_int_rejects_out_of_range_float_no_saturation() {
+        let mut m: HashMap<String, String> = HashMap::new();
+
+        // Decimal string: truncate toward zero.
+        m.insert("pos".into(), "3.7".into());
+        m.insert("neg".into(), "-3.7".into());
+        assert_eq!(db_get_int("pos".into(), &m), 3);
+        assert_eq!(db_get_int("neg".into(), &m), -3);
+
+        // Exact i64 boundaries round-trip (they parse as i64 directly).
+        m.insert("max".into(), i64::MAX.to_string());
+        m.insert("min".into(), i64::MIN.to_string());
+        assert_eq!(db_get_int("max".into(), &m), i64::MAX);
+        assert_eq!(db_get_int("min".into(), &m), i64::MIN);
+
+        // A magnitude far past each boundary, expressed as a float string so it
+        // takes the float path: fall back to 0, NOT the saturated boundary.
+        m.insert("over".into(), "1e30".into());
+        m.insert("under".into(), "-1e30".into());
+        assert_eq!(db_get_int("over".into(), &m), 0);
+        assert_ne!(db_get_int("over".into(), &m), i64::MAX);
+        assert_eq!(db_get_int("under".into(), &m), 0);
+        assert_ne!(db_get_int("under".into(), &m), i64::MIN);
     }
 
     // `Db.getString "path" req` on an `init` handler's typed
