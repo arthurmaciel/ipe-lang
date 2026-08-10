@@ -10,6 +10,8 @@ mod golden_css_source;
 mod golden_html_attrs;
 #[path = "g_stdui/golden_html_elements.rs"]
 mod golden_html_elements;
+#[path = "g_stdui/golden_html_render_raw.rs"]
+mod golden_html_render_raw;
 #[path = "g_stdui/golden_input_arc_capture.rs"]
 mod golden_input_arc_capture;
 #[path = "g_stdui/golden_input_callback_maybe_field.rs"]

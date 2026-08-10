@@ -161,6 +161,42 @@ main =
     Html.renderStatic view model
 ```
 
+`Html.render` is **safe by construction**: text nodes (`Html.text`) and attribute
+values are HTML-escaped at the render sink, so a `<script>`, `&`, `'`, or `"` in
+model data comes out as inert entity references. The safe `Ipe.Html` surface has
+no way to inject raw, unescaped HTML — there is no `raw : String -> Html`.
+
+## `Ipe.Html.Unsafe` — the raw-HTML / inline-script escape hatch
+
+Some views must emit **trusted, verbatim** markup — a pre-sanitised HTML fragment
+or an inline `<script>`. That escape hatch lives in a separate, deliberately
+awkward submodule:
+
+```ipe
+Ipe.Html.Unsafe.unsafeRaw    : String -> Html msg
+Ipe.Html.Unsafe.unsafeScript : String -> Html msg
+```
+
+`unsafeRaw` injects its `String` into the DOM **un-escaped**; `unsafeScript`
+emits an inline `<script>` whose body is the JavaScript verbatim. Both are named
+`unsafe*` and homed in `Ipe.Html.Unsafe` because they bypass the XSS barrier: the
+caller owns the guarantee that the input is trusted, author-controlled content
+(user data belongs in `Html.text`, escaped by construction). Importing the
+submodule discloses the `unsafe` capability program-wide — `ipe capabilities`
+reports it, so a dependency's raw sink is visible before you run it.
+
+```ipe
+import Ipe.Html exposing (section, text)
+import Ipe.Html.Unsafe exposing (unsafeRaw, unsafeScript)
+
+view _ =
+    section []
+        [ text userInput                       -- escaped: cannot inject
+        , unsafeRaw "<b>trusted markup</b>"     -- verbatim: you own safety
+        , unsafeScript "console.log('ready');"  -- inline <script>, verbatim
+        ]
+```
+
 ## `Ipe.Markdown` — markdown to `Element msg`
 
 `Ipe.Markdown` is a pure Ipê compiled-source module that parses a markdown

@@ -387,6 +387,30 @@ fn security_html_unsafe_raw_compiles() {
     assert_compiles("security_html_unsafe_raw", src);
 }
 
+/// SECURITY: the inline-`<script>` hatch `unsafeScript` is homed ONLY in
+/// `Ipe.Html.Unsafe`, never on the plain `Ipe.Html` surface. A program that
+/// imports only `Ipe.Html` and reaches for `Html.unsafeScript` must be rejected,
+/// so the trusted-code injection surface cannot be used without the disclosing
+/// `Ipe.Html.Unsafe` import.
+#[test]
+fn security_html_unsafe_script_off_plain_html_is_rejected() {
+    let src = "module Main exposing (main)\n\
+               import Ipe.Html as Html\n\
+               main = Html.unsafeScript \"x\"\n";
+    assert_rejected("security_html_unsafe_script_off_plain", src, "IPE-N0005");
+}
+
+/// SECURITY (contrapositive): `unsafeScript`, homed in `Ipe.Html.Unsafe`, still
+/// compiles — the inline-`<script>` capability is preserved, reached only
+/// through the disclosing submodule that names the trusted-code risk.
+#[test]
+fn security_html_unsafe_script_compiles() {
+    let src = "module Main exposing (main)\n\
+               import Ipe.Html.Unsafe exposing (unsafeScript)\n\
+               main = unsafeScript \"console.log(1)\"\n";
+    assert_compiles("security_html_unsafe_script", src);
+}
+
 /// SECURITY (untouched bridge): `Ui.html` — the typed `Html msg -> Element msg`
 /// bridge — is NOT a raw-string hole and stays fully working. It carries a
 /// typed tree built from the escaped `Html.text` path, so tightening the raw

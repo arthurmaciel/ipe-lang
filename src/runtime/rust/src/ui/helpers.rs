@@ -597,6 +597,65 @@ pub fn html_style_node_<M>(attrs: Vec<crate::html::Attribute<M>>, css: String) -
     )
 }
 
+/// `Ipe.Html.Unsafe.unsafeScript : String -> Html msg` — an inline `<script>`
+/// element whose JavaScript body is emitted VERBATIM.
+///
+/// SECURITY: a script body is trusted-code injection, so this is an escape hatch
+/// homed in `Ipe.Html.Unsafe` (its import discloses the `unsafe` capability) and
+/// named `unsafe*` — never on the safe `Ipe.Html` surface. There is no escaping a
+/// script body admits: HTML-escaping it would corrupt the JavaScript, and the
+/// body is executable code regardless of value-escaping, so the caller owns the
+/// invariant that the body is trusted, author-controlled code. The one structural
+/// breakout — a literal `</script` closing the element early — is neutralised
+/// here at construction (parse, don't validate) by splitting the ASCII-case-
+/// insensitive `</script` sequence with a backslash, exactly the belt-and-braces
+/// shape `html_style_node_` uses for `</style`; the `<script>` render sink emits
+/// the resulting `HRaw` child verbatim.
+#[must_use]
+pub fn html_script_node_<M>(body: String) -> Html<M> {
+    Html::HElement(
+        "script".to_owned(),
+        vec![],
+        vec![Html::HRaw(neutralise_script_close(&body))],
+    )
+}
+
+/// Split any ASCII-case-insensitive `</script` breakout in an inline-script body
+/// so it cannot terminate the enclosing `<script>` element early. The browser's
+/// HTML parser ends a script element only at a literal `</script` byte run;
+/// inserting a `\` after the `<` (`<\/script`) keeps the JavaScript semantically
+/// identical (a redundant escape inside a string/regex, inert outside one) while
+/// removing the exact byte run the parser scans for. Non-`</script` text is
+/// untouched, so ordinary script bodies pass through unchanged.
+fn neutralise_script_close(body: &str) -> String {
+    const NEEDLE: &[u8] = b"</script";
+    let bytes = body.as_bytes();
+    let mut out = String::with_capacity(body.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        let matches_here = bytes
+            .get(i..i.saturating_add(NEEDLE.len()))
+            .is_some_and(|w| w.eq_ignore_ascii_case(NEEDLE));
+        if matches_here {
+            out.push_str("<\\/script");
+            i = i.saturating_add(NEEDLE.len());
+        } else {
+            // A multi-byte UTF-8 char never starts with `<`, so pushing the byte
+            // as a char here only runs on single-byte ASCII (`<` and the run that
+            // failed the needle match); the else-advance below re-syncs on the
+            // next iteration for any non-ASCII lead byte.
+            match body.get(i..).and_then(|s| s.chars().next()) {
+                Some(c) => {
+                    out.push(c);
+                    i = i.saturating_add(c.len_utf8());
+                }
+                None => break,
+            }
+        }
+    }
+    out
+}
+
 /// `Html.node : String -> List (Attribute msg) -> List (Html msg) -> Html msg`
 #[must_use]
 pub fn html_node_<M>(
@@ -1534,4 +1593,51 @@ pub fn ui_breakpoint_<M: Clone>(
     el: Element<M>,
 ) -> Element<M> {
     ui_media_query_(query, attrs, el)
+}
+
+#[cfg(test)]
+mod script_node_tests {
+    use super::{html_script_node_, neutralise_script_close};
+    use crate::html::{Html, render_html};
+
+    #[test]
+    fn ordinary_script_body_passes_through_verbatim() {
+        // A normal JavaScript body with `<`/`>`/`&` is NOT entity-escaped — it
+        // is executable code, and escaping would corrupt it.
+        let node: Html<()> = html_script_node_("console.log(1 < 2 && 3 > 2);".to_owned());
+        let html = render_html(&node);
+        assert_eq!(html, "<script>console.log(1 < 2 && 3 > 2);</script>");
+    }
+
+    #[test]
+    fn close_tag_breakout_is_neutralised_case_insensitively() {
+        // SECURITY: a literal `</script` in the body would end the element early
+        // and let following bytes become live markup. It is split at
+        // construction so no `</script` byte run survives, case-insensitively.
+        assert_eq!(
+            neutralise_script_close("a</script><img src=x onerror=alert(1)>"),
+            "a<\\/script><img src=x onerror=alert(1)>"
+        );
+        // Case-insensitive match; the neutralised run is emitted as the fixed
+        // lowercase literal (the exact casing of the code text is irrelevant —
+        // only that no `</script` byte run of ANY case survives).
+        assert_eq!(neutralise_script_close("b</SCRIPT >"), "b<\\/script >");
+        // No surviving `</script` (any case) after neutralisation.
+        let out = neutralise_script_close("x</script>y</ScRiPt>z");
+        assert!(!out.to_ascii_lowercase().contains("</script"));
+
+        // Non-breakout text (incl. multibyte UTF-8) is untouched.
+        assert_eq!(neutralise_script_close("λ = 1; // ok"), "λ = 1; // ok");
+    }
+
+    #[test]
+    fn script_node_renders_neutralised_breakout() {
+        let node: Html<()> = html_script_node_("</script><b>x</b>".to_owned());
+        let html = render_html(&node);
+        assert!(
+            !html.to_ascii_lowercase().contains("</script><b>"),
+            "the breakout must not survive into the render: {html}"
+        );
+        assert!(html.starts_with("<script>") && html.ends_with("</script>"));
+    }
 }

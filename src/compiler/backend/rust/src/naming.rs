@@ -1292,6 +1292,7 @@ pub const fn kernel_name(k: KernelFn) -> &'static str {
         KernelFn::HtmlDoctype => "html_doctype_",
         KernelFn::HtmlTitleNode => "html_title_node_",
         KernelFn::HtmlStyleNode => "html_style_node_",
+        KernelFn::HtmlScriptNode => "html_script_node_",
         // `Html.node` / `Html.voidNode` share the generic `html_node_` sink;
         // the wire tag is a real runtime arg, and `voidNode` bakes an empty
         // children vec at the emit site.

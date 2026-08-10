@@ -1,0 +1,35 @@
+module Main exposing (main)
+
+import Ipe.Html exposing (..)
+import Ipe.Html.Attributes exposing (class, href)
+import Ipe.Html.Unsafe exposing (unsafeRaw, unsafeScript)
+import Ipe.Io as Io
+
+
+-- End-to-end SEAL for the Ipe.Html render / raw / inline-script surface.
+--
+-- * `render` serialises an `Html` tree to a String, ESCAPING text and attribute
+--   values at the sink — a hostile `<script>`/`"`/`&` in a `text` node comes out
+--   entity-escaped, so the safe surface cannot express XSS.
+-- * `Ipe.Html.Unsafe.unsafeRaw` injects a TRUSTED, verbatim HTML fragment — it
+--   is emitted raw, and is reachable ONLY through the disclosing `.Unsafe`
+--   import (never a plain `Html.raw`).
+-- * `Ipe.Html.Unsafe.unsafeScript` emits an inline `<script>` body verbatim —
+--   the sanctioned trusted-code mechanism, also behind `.Unsafe`.
+
+
+hostile : String
+hostile =
+    "<script>alert('xss')</script> a & b"
+
+
+main =
+    Io.println
+        (render
+            (section
+                [ class "wrap" ]
+                [ p [] [ text hostile ]
+                , a [ href "/x?q=1&y=2" ] [ text "link" ]
+                , unsafeRaw "<b data-trusted=\"1\">trusted</b>"
+                , unsafeScript "console.log(1 < 2 && 3 > 2);"
+                ]))

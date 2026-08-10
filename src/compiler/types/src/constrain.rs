@@ -6205,6 +6205,12 @@ impl<'a> Builder<'a> {
             // html_t). `List (Ipe.Html.Attribute msg) -> String -> Html msg`.
             K::HtmlStyleNode => fun(list(html_attr(var(0))), fun(string(), html_t(var(0)))),
 
+            // `Html.Unsafe.unsafeScript : String -> Html msg` — an inline
+            // `<script>` with a verbatim JavaScript body (FIRST_SCHEMED, Ipê-new,
+            // no legacy oracle). The runtime kernel neutralises a `</script`
+            // breakout at construction.
+            K::HtmlScriptNode => fun(string(), html_t(var(0))),
+
             // ── Ipe.Html.Attributes retained primitives ─────────────────
             // The fixed-key builders are pure Ipê in `Ipe/Html/Attributes.ipe`
             // over these three `Attribute`-value constructors.
@@ -8984,6 +8990,9 @@ mod registry_phase_c_tests {
             K::HtmlOnKeyDown,
             K::HtmlOnKeyUp,
             K::HtmlOnBool,
+            // `Html.Unsafe.unsafeScript` — Ipê-new inline-`<script>` escape hatch,
+            // no legacy oracle, so it is FIRST_SCHEMED (schemed in `stdlib_scheme`).
+            K::HtmlScriptNode,
             // NB: HtmlStyleNode is NOT here — it is RELOCATED (`Html.styleNode`
             // is schemed in the legacy `kernel_ty` table, F7), so its parity is
             // checked by `stdlib_scheme_matches_legacy`.

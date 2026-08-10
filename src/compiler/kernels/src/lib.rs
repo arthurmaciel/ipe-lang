@@ -1500,6 +1500,13 @@ pub enum StdlibKernel {
     /// `html_style_node_` close-tag-neutralises the CSS body at construction
     /// (F7).
     HtmlStyleNode,
+    /// `Html.Unsafe.unsafeScript : String -> Html msg` — an inline `<script>`
+    /// with a verbatim JavaScript body. An escape hatch homed in
+    /// `Ipe.Html.Unsafe` (its import discloses the `unsafe` capability), named
+    /// `unsafe*`, never on the safe `Ipe.Html` surface: a script body is
+    /// trusted-code injection. Its kernel `html_script_node_` neutralises a
+    /// `</script` breakout at construction, mirroring `styleNode`.
+    HtmlScriptNode,
     // ── Ipe.Html.Attributes retained primitives ─────────────────────────
     // The three irreducible `Attribute`-value constructors. The fixed-key
     // builders (`class`/`checked`/…) are pure Ipê in `Ipe/Html/Attributes.ipe`
@@ -3144,6 +3151,7 @@ impl StdlibKernel {
             Self::HtmlTitleNode => d("Html", "titleNode", 1, Ui, "html_title_node_"),
             Self::HtmlToString => d("Html", "toString", 1, Ui, "html_render_"),
             Self::HtmlStyleNode => d("Html", "styleNode", 2, Ui, "html_style_node_"),
+            Self::HtmlScriptNode => d("Html", "unsafeScript", 1, Ui, "html_script_node_"),
             // ── Ipe.Html.Attributes builders ────────────────────────────
             // Qualifier "Attr" matches the `Ffi.kernel "Attr_*"` alias namespace
             // (the compiled-source `Ipe.Html.Attributes` reaches these three
@@ -4448,6 +4456,9 @@ impl StdlibKernel {
         // member absent from ALL is minted with id=None and rides the
         // `Ty::Var(u32::MAX)` fallback.
         Self::HtmlStyleNode,
+        // `Html.Unsafe.unsafeScript` — same registration rationale as
+        // `HtmlStyleNode` above (id=Some so its stdlib_scheme arm resolves).
+        Self::HtmlScriptNode,
         // Web
         Self::WebApp,
         Self::WebAppRouted,
@@ -7740,7 +7751,9 @@ impl StdlibKernel {
             // ── Ipe.Html serialise / element / attribute builders. ──
             Self::HtmlRender | Self::HtmlToString => Some(&HTML_A_TO_STRING),
             Self::HtmlAttrToString => Some(&HTML_ATTR_A_TO_STRING),
-            Self::HtmlTextNode | Self::HtmlRawNode | Self::HtmlTitleNode => Some(&STRING_TO_HTML_A),
+            Self::HtmlTextNode | Self::HtmlRawNode | Self::HtmlTitleNode | Self::HtmlScriptNode => {
+                Some(&STRING_TO_HTML_A)
+            }
             Self::HtmlNode => Some(&HTML_NODE),
             Self::HtmlVoidNode => Some(&STRING_TO_LIST_HTML_ATTR_A_TO_HTML_A),
             Self::HtmlDoctype => Some(&LIST_HTML_A_TO_HTML_A_TOP),
@@ -8712,6 +8725,7 @@ impl StdlibKernel {
             | Self::HtmlTitleNode
             | Self::HtmlToString
             | Self::HtmlStyleNode
+            | Self::HtmlScriptNode
             | Self::HtmlAttribute
             | Self::HtmlBoolAttribute
             | Self::HtmlNoAttr
@@ -10088,6 +10102,7 @@ impl StdlibKernel {
                 | Self::HtmlTitleNode
                 | Self::HtmlToString
                 | Self::HtmlStyleNode
+                | Self::HtmlScriptNode
                 | Self::HtmlAttribute
                 | Self::HtmlBoolAttribute
                 | Self::HtmlNoAttr

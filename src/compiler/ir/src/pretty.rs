@@ -1113,6 +1113,7 @@ const fn kernel_name(kernel: KernelFn) -> &'static str {
         KernelFn::HtmlTitleNode => "Html.titleNode",
         KernelFn::HtmlToString => "Html.toString",
         KernelFn::HtmlStyleNode => "Html.styleNode",
+        KernelFn::HtmlScriptNode => "Html.Unsafe.unsafeScript",
         // Ipe.Html.Attributes retained primitives (source-facing names).
         KernelFn::HtmlAttribute => "Attr.attribute",
         KernelFn::HtmlBoolAttribute => "Attr.boolAttribute",
