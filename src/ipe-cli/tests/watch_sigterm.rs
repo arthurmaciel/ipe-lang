@@ -24,6 +24,14 @@ mod support;
 
 type BoxError = Box<dyn std::error::Error + Send + Sync + 'static>;
 
+/// Budget for the initial COLD `ipe watch` build+spawn to start serving. The
+/// supervised child is a full server crate (axum/tokio) cargo-built from cold on
+/// the first cycle; under a loaded CI shard building many such crates in parallel
+/// this must be generous enough that scheduler contention is never read as a
+/// SIGTERM-handling regression. The functional guard is the assertion that
+/// follows, not this wait.
+const COLD_BUILD_SERVE_BUDGET: Duration = Duration::from_mins(6);
+
 /// The same minimal `Ipe.Http.Server` fixture `watch_integration.rs` uses:
 /// long-running (never exits on its own), reads its port from
 /// `IPE_SERVER_PORT` (what `watch::child_env` injects from `--port`).
@@ -194,7 +202,7 @@ fn watch_shuts_down_the_supervised_child_on_sigterm_to_only_the_ipe_process() ->
     let port = 19157;
     let mut ipe_proc = spawn_ipe_watch(&ipe_dir.join("Main.ipe"), &out_dir, port)?;
 
-    if !wait_for_body(port, "v1", Duration::from_mins(3)) {
+    if !wait_for_body(port, "v1", COLD_BUILD_SERVE_BUDGET) {
         let _ = ipe_proc.kill();
         let _ = ipe_proc.wait();
         return Err("initial cold build+spawn must serve v1 within budget".into());
@@ -327,7 +335,7 @@ fn double_sigterm_after_forwarder_consumed_is_silently_absorbed_use_sigkill() ->
     let port = 19158;
     let mut ipe_proc = spawn_ipe_watch(&ipe_dir.join("Main.ipe"), &out_dir, port)?;
 
-    if !wait_for_body(port, "v1", Duration::from_mins(3)) {
+    if !wait_for_body(port, "v1", COLD_BUILD_SERVE_BUDGET) {
         let _ = ipe_proc.kill();
         let _ = ipe_proc.wait();
         return Err("initial cold build+spawn must serve v1 within budget".into());
