@@ -44,12 +44,18 @@
 --
 --     userStore : Result Error Store
 --     userStore =
---         Store.fromColumns "users"
---             [ Store.textColumn "id"
---             , Store.textColumn "name"
---             , Store.intColumn "age"
---             ]
---             |> Result.map (Store.primaryKey "id")
+--         case
+--             Store.fromColumns "users"
+--                 [ Store.textColumn "id"
+--                 , Store.textColumn "name"
+--                 , Store.intColumn "age"
+--                 ]
+--         of
+--             Ok store ->
+--                 Ok (Store.primaryKey "id" store)
+--
+--             Err e ->
+--                 Err e
 --
 --     -- write: project a record to its column values (bound as parameters)
 --     writeUser : User -> List ( String, SqlValue )

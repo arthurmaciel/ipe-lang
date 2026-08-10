@@ -458,7 +458,7 @@ const STD_CODEC: &str = include_str!("../Ipe/Codec.ipe");
 
 /// `Ipe.Db.Store` — codec-driven typed persistence.
 ///
-/// Pure Ipê source: defines the `Store a` / `Column a` / `ColType` / `ColumnSpec`
+/// Pure Ipê source: defines the `Store` / `ColType` / `ColumnSpec`
 /// ADTs and pattern-matches them, driving reads and writes through the audited
 /// `Ipe.Db` / `Ipe.Db.Sql` kernel surface — no new kernel, no `Ffi.kernel` call.
 /// Injection-safe by construction: `validSqlIdent` is the only gate through which
