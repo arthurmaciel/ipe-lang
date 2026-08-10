@@ -1765,8 +1765,19 @@ where
                         let mut g = entry.lock().unwrap_or_else(|e| e.into_inner());
                         g.model = (st.route_resolver)(g.model.clone(), route_path);
                         // Keep last_view in sync with the reconciled model so the
-                        // resync render below reflects the correct page.
-                        g.last_view = (st.view)(g.model.clone());
+                        // resync render below reflects the correct page. The tree
+                        // MUST carry ipe-ids: the resync frame replaces the whole
+                        // DOM on the client, and an unstamped tree renders every
+                        // event element without `ipe-id`/`data-ipe-hid`, so each
+                        // click posts an empty handlerId the server can't resolve.
+                        // Stamp + rebuild the handler index exactly as the page and
+                        // update render paths do, so ids stay consistent across all
+                        // three render sites.
+                        let mut tree = (st.view)(g.model.clone());
+                        assign_ipe_ids(&mut tree, "r");
+                        style_inject::apply_style_injections(&mut tree);
+                        g.index = build_index(&tree);
+                        g.last_view = tree;
                     }
                 }
             }
@@ -2755,7 +2766,11 @@ mod sse_reconnect_reconcile_tests {
         if is_valid_path && route_matched(client_path) {
             let mut g = entry.lock().unwrap_or_else(|e| e.into_inner());
             g.model = route_resolver(g.model.clone(), client_path);
-            g.last_view = (view)(g.model.clone());
+            let mut tree = (view)(g.model.clone());
+            assign_ipe_ids(&mut tree, "r");
+            style_inject::apply_style_injections(&mut tree);
+            g.index = build_index(&tree);
+            g.last_view = tree;
         }
     }
 
@@ -2783,6 +2798,75 @@ mod sse_reconnect_reconcile_tests {
         assert!(
             rendered_text(&entry).contains("home-page"),
             "last_view must reflect the reconciled page"
+        );
+    }
+
+    /// Regression: the SSE reconnect reconciliation must leave `last_view` and
+    /// `index` in the same id-stamped state the page and update render paths
+    /// produce. A view rebuilt WITHOUT `assign_ipe_ids` renders every event
+    /// element with no `ipe-id` / `data-ipe-hid`, so the client posts an empty
+    /// handlerId that the server can't resolve — every click, link, and button
+    /// silently does nothing until the next full-page load.
+    #[test]
+    fn reconcile_stamps_ids_so_handlers_resolve() {
+        // Every live app's SSE connect sends `?path=/`, and `/` always matches a
+        // route, so this reconciliation runs on the first connect of an app with
+        // no explicit routes as well. A view with one clickable element is the
+        // minimal shape that exercises the event-id path.
+        let routes: Vec<Route<TestPage>> = vec![Route::new("/", |_| Some(TestPage::Home))];
+        let not_found = TestPage::Home;
+        let routes_arc = Arc::new(routes.clone());
+        let routes_arc2 = routes_arc.clone();
+        let nf = not_found.clone();
+        let route_resolver: RouteResolver<TestPage> =
+            Arc::new(move |_m, path| match_routes(&routes_arc, &nf, path));
+        let route_matched: RouteMatched = Arc::new(move |path| matches_any(&routes_arc2, path));
+
+        // A view whose single element carries a click handler — mirrors an
+        // `Ipe.Ui.el [ Ui.onClick msg ]` link in a real app.
+        let view: Arc<dyn Fn(TestPage) -> Html<()> + Send + Sync> = Arc::new(|_p| {
+            Html::HElement(
+                "div".into(),
+                vec![Attribute::EventAttr(Event::OnMsg("click".into(), ()))],
+                vec![Html::HText("go".into())],
+            )
+        });
+
+        // Seed the session with an UNSTAMPED last_view (the state right after
+        // the reconciliation block rebuilds the view from the model).
+        let model = TestPage::Home;
+        let last_view = (view)(model.clone());
+        let index = build_index(&last_view);
+        let (msg_tx, _rx) = channel::<()>(1);
+        let entry: SessionHandle<TestPage, ()> = Arc::new(Mutex::new(SessionEntry {
+            model,
+            last_view,
+            index,
+            seq: 0,
+            sse_tx: None,
+            msg_tx,
+        }));
+
+        reconcile(&entry, &route_matched, &route_resolver, &view, "/");
+
+        let g = entry.lock().unwrap();
+        // The rendered resync body the client applies must carry the id + hid,
+        // or the client can't tell the server which handler fired.
+        let body = render_html(&g.last_view);
+        assert!(
+            body.contains("data-ipe-hid=\"r\""),
+            "reconciled resync body must stamp data-ipe-hid: {body}"
+        );
+        assert!(
+            body.contains("ipe-id=\"r\""),
+            "reconciled resync body must stamp ipe-id: {body}"
+        );
+        // And the rebuilt index must resolve that hid + event back to the Msg,
+        // so the incoming click actually dispatches.
+        assert_eq!(
+            g.index.resolve("r", "click", &[]),
+            Some(()),
+            "reconciled handler index must resolve the stamped ipe-id"
         );
     }
 
