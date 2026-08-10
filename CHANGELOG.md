@@ -10,6 +10,29 @@ Entries below the header are maintained by
 section is generated from Conventional Commit messages and prepended when the
 standing release pull request is merged.
 
+## [0.1.43](https://github.com/arthurmaciel/ipe-lang/compare/ipe-v0.1.42...ipe-v0.1.43) (2026-08-10)
+
+
+### Features
+
+* **codec:** Codec.auto type-driven derive ([#663](https://github.com/arthurmaciel/ipe-lang/issues/663)) ([#811](https://github.com/arthurmaciel/ipe-lang/issues/811)) ([a76f6b3](https://github.com/arthurmaciel/ipe-lang/commit/a76f6b3428cc95ce6c242da4ea5362e07db346ea))
+* **codec:** full Ipe.Codec combinator surface — list/maybe/dict/enum/taggedUnion/record ([#663](https://github.com/arthurmaciel/ipe-lang/issues/663)) ([#808](https://github.com/arthurmaciel/ipe-lang/issues/808)) ([ca936c3](https://github.com/arthurmaciel/ipe-lang/commit/ca936c312ab80cd93f34e139623311b81cc79307))
+* **stdlib:** Ipe.Db.Store — codec-driven injection-safe persistence ([#680](https://github.com/arthurmaciel/ipe-lang/issues/680)) ([#816](https://github.com/arthurmaciel/ipe-lang/issues/816)) ([11d6425](https://github.com/arthurmaciel/ipe-lang/commit/11d64255d8c5ecc668c0b9083da8d0b6ffc84822))
+
+
+### Bug Fixes
+
+* **backend,codec:** propagate Sync through captured composites; complete enum/taggedUnion/varN ([#807](https://github.com/arthurmaciel/ipe-lang/issues/807), [#663](https://github.com/arthurmaciel/ipe-lang/issues/663)) ([#810](https://github.com/arthurmaciel/ipe-lang/issues/810)) ([fc69c91](https://github.com/arthurmaciel/ipe-lang/commit/fc69c91263a59345ebc781082aca5466f2e9e0c7))
+* **backend:** coerce SharedFun record/enum reads into higher-order-fn params ([#793](https://github.com/arthurmaciel/ipe-lang/issues/793)) ([#796](https://github.com/arthurmaciel/ipe-lang/issues/796)) ([a2626a5](https://github.com/arthurmaciel/ipe-lang/commit/a2626a564a86ad1ef23238c3231c06c1e05904c8))
+* **backend:** make stored Decoder reusable via clonable Arc carrier ([#801](https://github.com/arthurmaciel/ipe-lang/issues/801)) ([#803](https://github.com/arthurmaciel/ipe-lang/issues/803)) ([8a34f1c](https://github.com/arthurmaciel/ipe-lang/commit/8a34f1c997b2bb35560683ee6fdef959d27ad804))
+* **backend:** propagate Send bounds + coerce SharedFun into kernel-arg Fn for generic combinators ([#798](https://github.com/arthurmaciel/ipe-lang/issues/798)) ([#800](https://github.com/arthurmaciel/ipe-lang/issues/800)) ([90731a8](https://github.com/arthurmaciel/ipe-lang/commit/90731a8049136a05d245ada686a8aeebeafa46c7))
+* **backend:** propagate Sync on Decoder-materialized tvars via capture-site matcher ([#802](https://github.com/arthurmaciel/ipe-lang/issues/802)) ([#805](https://github.com/arthurmaciel/ipe-lang/issues/805)) ([0a71c58](https://github.com/arthurmaciel/ipe-lang/commit/0a71c589fea1ee381ce3963586cf75928268f0e1))
+* **cli-docs:** correct ipe doc surface in AGENTS template to match the CLI ([#812](https://github.com/arthurmaciel/ipe-lang/issues/812)) ([88b6406](https://github.com/arthurmaciel/ipe-lang/commit/88b64062c9fbc3ab9df7e81fa23a73b368360a70)), closes [#788](https://github.com/arthurmaciel/ipe-lang/issues/788)
+* **lower,ir:** narrow L0126/L0127 for the Decoder/SharedFun carriers ([#799](https://github.com/arthurmaciel/ipe-lang/issues/799)) ([#806](https://github.com/arthurmaciel/ipe-lang/issues/806)) ([2750749](https://github.com/arthurmaciel/ipe-lang/commit/2750749b76425fe1b81b4a0c7cd854a690939afa))
+* **runtime,db:** unsafeGetInt fails closed to 0, never saturates out-of-range float ([#745](https://github.com/arthurmaciel/ipe-lang/issues/745)) ([#820](https://github.com/arthurmaciel/ipe-lang/issues/820)) ([d55e2f4](https://github.com/arthurmaciel/ipe-lang/commit/d55e2f42256a263fbaf7f7b3d9b5a9921921337b))
+* **runtime:** one SQL-identifier validator SSOT on the db.rs injection boundary ([#679](https://github.com/arthurmaciel/ipe-lang/issues/679)) ([#817](https://github.com/arthurmaciel/ipe-lang/issues/817)) ([fb72db9](https://github.com/arthurmaciel/ipe-lang/commit/fb72db9b7311040aa013deb047a32f5e363d74b4))
+* **sandbox:** bind the capfloor env axis by name, not count ([#703](https://github.com/arthurmaciel/ipe-lang/issues/703)) ([#819](https://github.com/arthurmaciel/ipe-lang/issues/819)) ([e888dab](https://github.com/arthurmaciel/ipe-lang/commit/e888dab30c4006cbe4598254681670e079ad3f24))
+
 ## [0.1.42](https://github.com/arthurmaciel/ipe-lang/compare/ipe-v0.1.41...ipe-v0.1.42) (2026-08-09)
 
 
