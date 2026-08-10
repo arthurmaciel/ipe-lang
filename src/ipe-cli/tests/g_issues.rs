@@ -58,3 +58,5 @@ mod golden_i802_generic_optional_sync;
 mod golden_i807_codec_enum_taggedunion;
 #[path = "g_issues/golden_i99_alias_match_arm.rs"]
 mod golden_i99_alias_match_arm;
+#[path = "g_issues/golden_l0135_union_task_reuse_seal.rs"]
+mod golden_l0135_union_task_reuse_seal;

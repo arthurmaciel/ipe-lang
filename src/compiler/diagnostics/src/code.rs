@@ -386,6 +386,14 @@ code! {
     /// `List.member`/`sort`/`unique`/… need `==`/`Ord` on the element; a stored
     /// function is `Clone` but not comparable.
     IPE_L0134 = "IPE-L0134", "an equality- or ordering-requiring collection operation over a function-carrying element is not sound (a function is not comparable)", "IPE-L0134";
+    /// a non-`Clone` value (a `Task`/`Cmd`/`Sub` effect, bare or inside a
+    /// union/tuple/record payload) is used more than once in a value-consuming
+    /// position.
+    ///
+    /// A generic union derives `Clone where T: Clone`, but the concrete payload
+    /// here (e.g. `Task`) is not `Clone`, so the value-reuse rewrite has no sound
+    /// `.clone()` to insert. Thread the value linearly (use it once) instead.
+    IPE_L0135 = "IPE-L0135", "a non-Clone value (a Task/Cmd/Sub effect or a payload carrying one) is used more than once", "IPE-L0135";
     /// a `Debug.*` development-only escape hatch reached a production build
     /// (`ipe build --optimize`)
     IPE_L0140 = "IPE-L0140", "a Debug.* escape hatch was used in a production build", "IPE-L0140";

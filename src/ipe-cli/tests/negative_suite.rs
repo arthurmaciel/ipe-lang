@@ -1159,6 +1159,27 @@ fn lower_list_sort_by_over_function_element_gated() {
     assert_rejected("lower_list_sort_by_fn_elem", &src, "IPE-L0134");
 }
 
+/// A generic union `Wrap a` at a non-`Clone` concrete payload (`Task Error Int`)
+/// reused across two value-consuming positions: the union derives
+/// `Clone where T: Clone`, but a `Task` is never `Clone`, so the value-reuse
+/// rewrite cannot duplicate it — fail closed with IPE-L0135 rather than emit
+/// Rust that fails cargo (E0382/E0277) after `ipe` exit 0.
+#[test]
+fn lower_union_task_reuse_gated() {
+    let src = format!(
+        "{HEAD}import Ipe.Task as Task\n\
+         type Wrap a = Wrap a\n\
+         unwrap : Wrap a -> a\n\
+         unwrap w =\n\
+         \x20   case w of\n\
+         \x20       Wrap x -> x\n\
+         pair : Wrap (Task Error Int) -> ( Task Error Int, Task Error Int )\n\
+         pair w =\n    ( unwrap w, unwrap w )\n\
+         main =\n    pair (Wrap (Task.succeed 7))\n"
+    );
+    assert_rejected("lower_union_task_reuse", &src, "IPE-L0135");
+}
+
 /// CONTRAPOSITIVE: a function-valued `Dict` used only through move/clone kernels
 /// (`Dict.get`, projected out and applied) is sound over the `Arc` carrier and
 /// must still compile — the fail-closed gate rejects only the open-frontier
