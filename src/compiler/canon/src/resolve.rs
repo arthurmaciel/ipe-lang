@@ -1568,6 +1568,40 @@ fn inject_stdlib_exposed_values(
 /// # Errors
 /// [`Diagnostic::CompilerBug`] if interning `Ipe` or a type name exhausts the
 /// interner.
+/// Which of a type's constructors an `exposing` clause opens into unqualified
+/// scope. Derived once from a [`src::Privacy`] by [`exposed_ctor_filter`] so both
+/// the built-in and user-dep injectors select the same set by construction: a
+/// `Type(A, B)` subset opens exactly `A`/`B`, never a withheld sibling.
+enum CtorFilter {
+    /// `Type(..)` — every constructor of the type.
+    All,
+    /// `Type(A, B)` — only the named constructors.
+    Only(BTreeSet<Symbol>),
+    /// `Type` (opaque) — no constructors.
+    None,
+}
+
+impl CtorFilter {
+    /// Whether the constructor named `ctor` is opened by this filter.
+    fn admits(&self, ctor: Symbol) -> bool {
+        match self {
+            Self::All => true,
+            Self::Only(set) => set.contains(&ctor),
+            Self::None => false,
+        }
+    }
+}
+
+/// The constructor filter an `exposing` privacy opens. Fail-closed: an opaque
+/// exposure admits nothing; a subset admits only the named constructors.
+fn exposed_ctor_filter(privacy: &src::Privacy) -> CtorFilter {
+    match privacy {
+        src::Privacy::Public => CtorFilter::All,
+        src::Privacy::Private => CtorFilter::None,
+        src::Privacy::PublicCtors(names) => CtorFilter::Only(names.iter().copied().collect()),
+    }
+}
+
 fn inject_stdlib_exposed_ctors(
     m: &src::Module,
     env: &mut Env,
@@ -1589,20 +1623,22 @@ fn inject_stdlib_exposed_ctors(
             let src::Exposed::Type(type_name, privacy) = &item.value else {
                 continue;
             };
+            let filter = exposed_ctor_filter(privacy);
             // An opaque `Type` exposure opens no constructors.
-            if matches!(privacy, src::Privacy::Private) {
+            if matches!(filter, CtorFilter::None) {
                 continue;
             }
             let type_sym = *type_name;
-            // Copy every constructor of this type from the qualified table; a
-            // built-in union with no `qualified_home` contributes nothing here.
+            // Copy the exposed constructors of this type from the qualified table;
+            // a `Type(A, B)` subset copies only the named ones, and a built-in
+            // union with no `qualified_home` contributes nothing here.
             let ctors: Vec<CtorHome> = env
                 .qual_ctors
                 .get(&canonical)
                 .map(|members| {
                     members
                         .values()
-                        .filter(|home| home.type_name == type_sym)
+                        .filter(|home| home.type_name == type_sym && filter.admits(home.name))
                         .cloned()
                         .collect()
                 })
@@ -3254,6 +3290,7 @@ fn inject_dep_exports(
                 inject_dep_type(type_home_map, type_name, home, import.name.span, interner)?;
                 inject_ctors_for_type(
                     type_name,
+                    &CtorFilter::All,
                     dep,
                     env,
                     import.name.span,
@@ -3290,6 +3327,7 @@ fn inject_dep_exports(
                 inject_dep_type(type_home_map, type_name, home, import.name.span, interner)?;
                 inject_ctors_for_type(
                     type_name,
+                    &CtorFilter::All,
                     dep,
                     env,
                     import.name.span,
@@ -3366,10 +3404,11 @@ fn inject_dep_exports(
                                     interner,
                                 )?;
                             }
-                            let expose_ctors = !matches!(privacy, src::Privacy::Private);
-                            if expose_ctors {
+                            let filter = exposed_ctor_filter(privacy);
+                            if !matches!(filter, CtorFilter::None) {
                                 inject_ctors_for_type(
                                     *type_name,
+                                    &filter,
                                     dep,
                                     env,
                                     item.span,
@@ -3517,6 +3556,7 @@ fn check_and_inject_value(
 /// unqualified by a different dep module.
 fn inject_ctors_for_type(
     type_name: Symbol,
+    filter: &CtorFilter,
     dep: &crate::ModuleExports,
     env: &mut Env,
     span: ipe_diagnostics::Span,
@@ -3525,7 +3565,7 @@ fn inject_ctors_for_type(
 ) -> DResult<()> {
     let dep_path = &dep.path;
     for ctor_home in dep.ctors.values() {
-        if ctor_home.type_name == type_name {
+        if ctor_home.type_name == type_name && filter.admits(ctor_home.name) {
             if let Some(prior_path) = unqual_ctor_origins.get(&ctor_home.name) {
                 if prior_path.as_slice() != dep_path.as_slice() {
                     // Two different dep modules both expose this constructor
@@ -3653,10 +3693,13 @@ fn build_module_exports(
                     src::Exposed::Type(type_name, privacy) => {
                         if own_types.contains(type_name) {
                             exports.types.insert(*type_name, home.to_owned());
-                            let expose_ctors = !matches!(privacy, src::Privacy::Private);
-                            if expose_ctors {
+                            let filter = exposed_ctor_filter(privacy);
+                            if !matches!(filter, CtorFilter::None) {
                                 for ctor_home in env.ctors.values() {
-                                    if ctor_home.type_name == *type_name && ctor_home.home == home {
+                                    if ctor_home.type_name == *type_name
+                                        && ctor_home.home == home
+                                        && filter.admits(ctor_home.name)
+                                    {
                                         exports.ctors.insert(ctor_home.name, ctor_home.clone());
                                     }
                                 }
@@ -6233,6 +6276,171 @@ mod suggestion_ranking_tests {
         assert!(
             !got.iter().any(|s| s.as_ref() == "Foo"),
             "distance-0 self must not be suggested, got: {got:?}"
+        );
+    }
+}
+
+#[cfg(test)]
+mod exposed_ctor_subset_tests {
+    //! `exposing (Type(subset))` opens ONLY the named constructors unqualified.
+    //! Both constructor injectors ([`inject_ctors_for_type`], the user-dep path,
+    //! and [`inject_stdlib_exposed_ctors`], the built-in path) route their
+    //! selection through [`exposed_ctor_filter`], so a withheld sibling stays
+    //! out of unqualified scope by construction — it remains reachable only
+    //! through its qualifier.
+
+    use super::*;
+
+    fn sym(i: &mut Interner, s: &str) -> Symbol {
+        i.intern(s).expect("intern must succeed")
+    }
+
+    fn ctor(i: &mut Interner, ty: &str, name: &str, index: usize) -> CtorHome {
+        CtorHome {
+            home: vec![sym(i, "Dep")],
+            type_name: sym(i, ty),
+            name: sym(i, name),
+            index,
+            arity: 0,
+        }
+    }
+
+    #[test]
+    fn filter_all_admits_every_ctor() {
+        let mut i = Interner::new();
+        let a = ctor(&mut i, "T", "A", 0);
+        let b = ctor(&mut i, "T", "B", 1);
+        let filter = exposed_ctor_filter(&src::Privacy::Public);
+        assert!(filter.admits(a.name), "Type(..) opens A");
+        assert!(filter.admits(b.name), "Type(..) opens B");
+    }
+
+    #[test]
+    fn filter_subset_admits_only_named_ctors() {
+        let mut i = Interner::new();
+        let a = ctor(&mut i, "T", "A", 0);
+        let b = ctor(&mut i, "T", "B", 1);
+        let filter = exposed_ctor_filter(&src::Privacy::PublicCtors(vec![a.name]));
+        assert!(filter.admits(a.name), "Type(A) opens A");
+        assert!(
+            !filter.admits(b.name),
+            "Type(A) must NOT open the withheld sibling B"
+        );
+    }
+
+    #[test]
+    fn filter_opaque_admits_nothing() {
+        let mut i = Interner::new();
+        let a = ctor(&mut i, "T", "A", 0);
+        let filter = exposed_ctor_filter(&src::Privacy::Private);
+        assert!(
+            matches!(filter, CtorFilter::None),
+            "opaque is the None filter"
+        );
+        assert!(!filter.admits(a.name), "opaque Type opens no constructor");
+    }
+
+    /// Canonicalise a producer then an importer against it, returning the
+    /// importer's result. The producer exposes BOTH constructors so `dep.ctors`
+    /// carries A and B; the importer's `exposing` clause is the sole selector.
+    fn import_against_producer(importer_src: &str) -> (DResult<canon::Module>, Interner) {
+        let mut i = Interner::new();
+        let producer_src = "module Dep exposing (T(..))\n\ntype T = A | B\n";
+        let dep_path = vec![sym(&mut i, "Dep")];
+        let main_path = vec![sym(&mut i, "Main")];
+        let mut deps: BTreeMap<Vec<Symbol>, crate::ModuleExports> = BTreeMap::new();
+
+        let setup_err = |detail: &'static str| Diagnostic::CompilerBug {
+            where_: "exposed_ctor_subset_tests",
+            detail: detail.into(),
+        };
+        let Ok(parsed_dep) = ipe_parse::parse_module(producer_src, &mut i) else {
+            return (Err(setup_err("producer parse")), i);
+        };
+        let Ok((_, exports)) = canonicalise_module(&parsed_dep, &dep_path, &deps, &mut i) else {
+            return (Err(setup_err("producer canon")), i);
+        };
+        deps.insert(dep_path, exports);
+
+        let Ok(parsed_main) = ipe_parse::parse_module(importer_src, &mut i) else {
+            return (Err(setup_err("importer parse")), i);
+        };
+        let result = canonicalise_module(&parsed_main, &main_path, &deps, &mut i)
+            .map(|(module, _exports)| module);
+        (result, i)
+    }
+
+    #[test]
+    fn subset_exposes_named_ctor_unqualified() {
+        // `exposing (T(A))` — bare `A` resolves; bare `B` (a withheld sibling)
+        // does NOT; the qualified `Dep.B` still does.
+        let (ok_a, _) = import_against_producer(
+            "module Main exposing (x)\n\n\
+             import Dep exposing (T(A))\n\n\
+             x =\n    A\n",
+        );
+        assert!(
+            ok_a.is_ok(),
+            "bare A must resolve under exposing (T(A)): {ok_a:?}"
+        );
+
+        let (err_b, _) = import_against_producer(
+            "module Main exposing (x)\n\n\
+             import Dep exposing (T(A))\n\n\
+             x =\n    B\n",
+        );
+        assert!(
+            matches!(err_b, Err(Diagnostic::Name { .. })),
+            "bare B must NOT resolve under exposing (T(A)) — over-exposure regression: {err_b:?}"
+        );
+
+        let (ok_qual_b, _) = import_against_producer(
+            "module Main exposing (x)\n\n\
+             import Dep exposing (T(A))\n\n\
+             x =\n    Dep.B\n",
+        );
+        assert!(
+            ok_qual_b.is_ok(),
+            "qualified Dep.B stays reachable regardless of the exposing subset: {ok_qual_b:?}"
+        );
+    }
+
+    #[test]
+    fn all_ctors_exposed_under_double_dot() {
+        // `exposing (T(..))` — both A and B resolve unqualified.
+        let (ok_a, _) = import_against_producer(
+            "module Main exposing (x)\n\n\
+             import Dep exposing (T(..))\n\n\
+             x =\n    A\n",
+        );
+        let (ok_b, _) = import_against_producer(
+            "module Main exposing (x)\n\n\
+             import Dep exposing (T(..))\n\n\
+             x =\n    B\n",
+        );
+        assert!(ok_a.is_ok() && ok_b.is_ok(), "T(..) opens both A and B");
+    }
+
+    #[test]
+    fn opaque_type_exposes_no_ctor_unqualified() {
+        // `exposing (T)` — neither A nor B is unqualified; only `Dep.A` works.
+        let (err_a, _) = import_against_producer(
+            "module Main exposing (x)\n\n\
+             import Dep exposing (T)\n\n\
+             x =\n    A\n",
+        );
+        assert!(
+            matches!(err_a, Err(Diagnostic::Name { .. })),
+            "opaque exposing (T) must NOT open bare A: {err_a:?}"
+        );
+        let (ok_qual, _) = import_against_producer(
+            "module Main exposing (x)\n\n\
+             import Dep exposing (T)\n\n\
+             x =\n    Dep.A\n",
+        );
+        assert!(
+            ok_qual.is_ok(),
+            "qualified Dep.A stays reachable under opaque T"
         );
     }
 }
