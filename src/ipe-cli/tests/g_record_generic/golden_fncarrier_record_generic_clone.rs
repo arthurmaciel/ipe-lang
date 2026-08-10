@@ -8,7 +8,7 @@
 //! reuse across two closures) then autoref-cloned a `&Rec…<T1>` reference, an
 //! E0308 whose note reads `Rec…<T1> does not implement Clone`.
 //!
-//! Root cause: the record `is_clone` fixpoint (`crates/ipe_backend_rust/src/lib.rs`)
+//! Root cause: the record `is_clone` fixpoint (the backend's `lib.rs`)
 //! consulted the bare `ipe_ir::carrier_is_clone` leaf test, which returns `false`
 //! for a bare type-variable field — even though the emitted hand-written
 //! `impl<Tn: Clone> Clone` bounds every parameter `Tn: Clone`. The sibling
@@ -56,8 +56,8 @@ fn entry_path(root: &Path) -> PathBuf {
 fn fncarrier_record_generic_clone_ipec_accepts_and_impls_clone() {
     let root = repo_root();
     let entry = entry_path(&root);
-    let out = PathBuf::from(env!("CARGO_TARGET_TMPDIR"))
-        .join("fncarrier_record_generic_clone_ipec_out");
+    let out =
+        PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("fncarrier_record_generic_clone_ipec_out");
     let _ = std::fs::remove_dir_all(&out);
 
     let Ok(runtime) = ipe::resolve_runtime() else {
