@@ -7,48 +7,83 @@
 -- round-trip law `fromJson codec (toJson codec x) == Ok x` holds by
 -- construction for every codec built here.
 --
--- `map` is the load-bearing combinator and is a BIJECTION — it takes BOTH
+-- `map` is the load-bearing scalar combinator and is a BIJECTION — it takes BOTH
 -- directions (`a -> b` and `b -> a`). A one-way map could not encode a `b`,
 -- because the encoder needs `b -> a` to reach the underlying encoder. Requiring
 -- the inverse makes the drift a covariant map would permit impossible to write.
 --
--- Representation note (why the decoder is stored as a runner, not a bare
--- `Decoder a`): the runtime JSON `Decoder` is a single-shot, non-clonable
--- carrier, so it cannot be held in a value that is read back out and reused.
--- `Codec a` therefore stores the decode side as `String -> Result Error a` — a
--- clonable function that already closes over the underlying decoder and runs it.
--- Both fields are functions, which the backend stores on a shared, clonable
--- carrier, so a `Codec a` is an ordinary reusable value.
+-- Representation note (why the decoder is stored as a factory, not a bare
+-- `Decoder a`): the runtime JSON `Decoder` is a single-shot carrier — running it
+-- consumes it — so a codec that must be reused across encode/decode calls cannot
+-- hold one `Decoder a` value directly. `Codec a` stores the decode side as
+-- `{} -> Decoder a`: a reproducible factory that builds a fresh decoder on each
+-- run. Both fields are functions, which the backend stores on a shared, clonable
+-- carrier, so a `Codec a` is an ordinary reusable value that composes.
 --
--- Building object and union codecs: an object codec is written as one `Codec`
--- value whose encoder is an `Encode.object` over the field encoders and whose
--- decoder is a `Ipe.Json.Decode.Pipeline` chain over the field decoders — the
--- same field appears once on each side. A nullary enum maps to a readable TEXT
--- scalar (a queryable name, never an opaque blob or an empty string on an
--- unmapped value); a data-carrying union tags each variant and carries both its
--- encoder and its decoder in one place.
+-- Building composite codecs: `list`/`maybe`/`dict` lift an element codec over a
+-- container by lifting each side (the encoder over the container, the decoder
+-- factory through the matching JSON kernel).
+--
+-- A record codec is written as one `Codec` value directly: the encoder is an
+-- `Ipe.Json.Encode.object` over the field encoders, and the decoder factory is a
+-- `Decode.succeed <constructor> |> Pipeline.required <key> <fieldDecoder> …`
+-- applicative chain over the field decoders, so each field appears once on each
+-- side. (A generic `object`/`field` builder that threaded the record
+-- constructor through a polymorphic slot is deliberately absent: a bare
+-- constructor function bound to a generic parameter is not `Clone` in the
+-- emitted Rust, so it cannot lower without breaking the accept-implies-build
+-- guarantee. The direct `Codec` + pipeline form is fully monomorphic and always
+-- builds.)
+--
+-- The combinator surface:
+--
+--   * `string` / `int` / `bool` / `float` — the scalar codecs.
+--   * `map toB toA inner` — a bijection newtype wrapper (a `Codec a` to a
+--     `Codec b` given both directions).
+--   * `list elem` — a JSON array of `elem`s ⇄ `List a`.
+--   * `maybe elem` — JSON `null` ⇄ `Nothing`, any other value ⇄ `Just`.
+--   * `dict value` — a JSON object of `value`s ⇄ `Dict String a`.
+--   * `toValue` / `toJson` / `fromJson` — encode to a JSON `Value` / string,
+--     decode a JSON string back (a typed `Err` on malformed input, never a
+--     panic).
+--   * `fromJsonSafe maxChars` — decode, rejecting input over `maxChars` BEFORE
+--     parsing (the untrusted-input door).
+--
+-- A minimal round-trip:
+--
+--     import Ipe.Codec as Codec exposing (Codec)
+--
+--     scores : Codec (Dict String Int)
+--     scores =
+--         Codec.dict Codec.int
+--
+--     -- Codec.fromJson scores (Codec.toJson scores d) == Ok d
 module Ipe.Codec exposing
     ( Codec(..)
     , toValue, toJson, fromJson, fromJsonSafe
     , string, int, bool, float
     , map
+    , list, maybe, dict
     )
 
 
 import Ipe.Json.Encode as Encode
 import Ipe.Json.Decode as Decode
+import Ipe.Config as Config
 import Ipe.String as String
-import Ipe.Result as Result
+import Ipe.List as List
+import Ipe.Dict as Dict
+import Ipe.Maybe as Maybe exposing (Maybe(..))
 import Ipe.Error as Error exposing (Error)
 
 
--- | An invariant codec for `a`: an encoder to a JSON `Value` and a decoder that
--- runs a JSON string back to an `a`. Invariant in `a` — it both produces and
--- consumes `a`, which is what keeps the two directions in step.
+-- | An invariant codec for `a`: an encoder to a JSON `Value` and a decoder
+-- factory that builds a fresh decoder for `a`. Invariant in `a` — it both
+-- produces and consumes `a`, which is what keeps the two directions in step.
 type Codec a
     = Codec
         { enc : a -> Value
-        , dec : String -> Result Error a
+        , mkDec : {} -> Decoder a
         }
 
 
@@ -72,33 +107,36 @@ toJson codec x =
 
 
 -- | Decode a JSON string back to `a`, or a typed `Error` on malformed input or
--- a shape mismatch. Never panics: a bad document is an `Err`, not a crash.
+-- a shape mismatch. Never panics: a bad document is an `Err`, not a crash. A
+-- fresh decoder is built for this run, so a codec is safe to decode with
+-- repeatedly.
 fromJson : Codec a -> String -> Result Error a
 fromJson codec s =
     case codec of
         Codec r ->
-            r.dec s
+            Decode.decodeString (r.mkDec {}) s
 
 
 -- | The untrusted-input door: reject input longer than `maxChars` BEFORE
 -- decoding — a size guard for request bodies and webhooks — then decode. A
 -- payload over the limit is a typed `Err`, never parsed. Parser nesting depth
--- is separately bounded by the JSON decoder itself.
+-- is separately bounded by the JSON decoder itself, so this guard plus the
+-- parser's depth bound cover both adversarial size and adversarial nesting.
 fromJsonSafe : Int -> Codec a -> String -> Result Error a
 fromJsonSafe maxChars codec s =
-    if String.length s > maxChars then
-        Err tooLargeError
+    case codec of
+        Codec r ->
+            if String.length s > maxChars then
+                Err tooLargeError
 
-    else
-        fromJson codec s
+            else
+                Decode.decodeString (r.mkDec {}) s
 
 
 -- ─── Primitive codecs ──────────────────────────────────────────────
 --
 -- Each primitive is a self-contained `Codec` value that inlines its own encoder
--- and decoder. They are written as literals (rather than through a shared
--- `Decoder a -> Codec a` sealing helper) because the non-clonable runtime
--- decoder cannot be threaded through a helper argument and stored.
+-- and a factory that rebuilds its decoder on each run.
 
 
 -- | JSON string ⇄ `String`.
@@ -106,7 +144,7 @@ string : Codec String
 string =
     Codec
         { enc = \s -> Encode.string s
-        , dec = Decode.decodeString Decode.string
+        , mkDec = \_ -> Decode.string
         }
 
 
@@ -115,7 +153,7 @@ int : Codec Int
 int =
     Codec
         { enc = \n -> Encode.int n
-        , dec = Decode.decodeString Decode.int
+        , mkDec = \_ -> Decode.int
         }
 
 
@@ -124,21 +162,21 @@ bool : Codec Bool
 bool =
     Codec
         { enc = \b -> Encode.bool b
-        , dec = Decode.decodeString Decode.bool
+        , mkDec = \_ -> Decode.bool
         }
 
 
--- | JSON number ⇄ `Float`. Prefer `decimal`/`money` for exact quantities —
--- a `Float` round-trip is lossy for money.
+-- | JSON number ⇄ `Float`. Prefer an exact-decimal encoding for money —
+-- a `Float` round-trip is lossy for exact quantities.
 float : Codec Float
 float =
     Codec
         { enc = \x -> Encode.float x
-        , dec = Decode.decodeString Decode.float
+        , mkDec = \_ -> Decode.float
         }
 
 
--- ─── Combinators ───────────────────────────────────────────────────
+-- ─── Scalar combinator ─────────────────────────────────────────────
 
 
 -- | Adapt a `Codec a` to a `Codec b` given a BIJECTION `a <-> b`. Both
@@ -152,8 +190,73 @@ map toB toA inner =
         Codec r ->
             Codec
                 { enc = \x -> r.enc (toA x)
-                , dec = \s -> Result.map toB (r.dec s)
+                , mkDec = \_ -> Decode.map toB (r.mkDec {})
                 }
+
+
+-- ─── Container combinators ─────────────────────────────────────────
+
+
+-- | `list elem` — a JSON array of `elem`s ⇄ `List a`. The element encoder is
+-- lifted over the array; the element decoder is lifted through the array
+-- decoder, so a malformed element is a typed `Err`, never a partial list.
+list : Codec a -> Codec (List a)
+list elem =
+    case elem of
+        Codec r ->
+            Codec
+                { enc = \xs -> Encode.list r.enc xs
+                , mkDec = \_ -> Decode.list (r.mkDec {})
+                }
+
+
+-- | `maybe elem` — JSON `null` ⇄ `Nothing`, any other value ⇄ `Just`. On
+-- decode, only an explicit `null` becomes `Nothing`; a present-but-malformed
+-- value is an `Err`, so a required field cannot be silently dropped. `Nothing`
+-- encodes to `null`.
+maybe : Codec a -> Codec (Maybe a)
+maybe elem =
+    case elem of
+        Codec r ->
+            Codec
+                { enc = \m -> encodeMaybe r.enc m
+                , mkDec = \_ -> Config.nullable (r.mkDec {})
+                }
+
+
+encodeMaybe : (a -> Value) -> Maybe a -> Value
+encodeMaybe encElem m =
+    case m of
+        Just x ->
+            encElem x
+
+        Nothing ->
+            Encode.null
+
+
+-- | `dict value` — a JSON object whose values are `value`s ⇄ `Dict String a`.
+-- Keys are the object keys (strings); values run through the element codec. A
+-- malformed value is a typed `Err`, never a partial dictionary.
+dict : Codec a -> Codec (Dict String a)
+dict value =
+    case value of
+        Codec r ->
+            Codec
+                { enc = \d -> Encode.object (dictPairs r.enc d)
+                , mkDec = \_ -> Config.dict (r.mkDec {})
+                }
+
+
+dictPairs : (a -> Value) -> Dict String a -> List ( String, Value )
+dictPairs encVal d =
+    List.map (\pair -> encodePair encVal pair) (Dict.toList d)
+
+
+encodePair : (a -> Value) -> ( String, a ) -> ( String, Value )
+encodePair encVal pair =
+    case pair of
+        ( k, v ) ->
+            ( k, encVal v )
 
 
 -- ─── Errors ────────────────────────────────────────────────────────
