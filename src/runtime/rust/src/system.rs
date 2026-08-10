@@ -303,8 +303,21 @@ pub fn process_run<E: Send + From<String> + 'static>(
     cmd: String,
     args: Vec<String>,
 ) -> IpeTask<E, String> {
+    process_run_with_cap(cmd, args, process_output_ceiling())
+}
+
+/// `process_run` with the capture ceiling supplied explicitly rather than read
+/// from the environment. `process_run` reads `process_output_ceiling()` once and
+/// forwards it here; tests exercise a specific ceiling by passing it directly,
+/// so no test mutates the process-global environment (which would race a
+/// concurrent subprocess call reading the same var).
+#[must_use]
+fn process_run_with_cap<E: Send + From<String> + 'static>(
+    cmd: String,
+    args: Vec<String>,
+    cap: u64,
+) -> IpeTask<E, String> {
     Box::pin(async move {
-        let cap = process_output_ceiling();
         // `process_run_sync` folds `cmd` into every `Err` string, so the outer
         // `Err` arm (a `run_blocking` `JoinError`, i.e. the blocking task
         // panicked) doesn't need `cmd` — it's moved into the closure.
@@ -677,15 +690,13 @@ mod process_run_tests {
     /// silently truncate a returned success value.
     #[test]
     fn output_over_ceiling_errs() {
-        // SAFETY: test-only env mutation; `set_var`/`remove_var` are `unsafe` in
-        // Rust 2024 due to the reader/mutator `environ` race.
-        unsafe { std::env::set_var("IPE_PROCESS_OUTPUT_MAX", "8") };
-        let res: IpeResult<String, String> = block(process_run::<String>(
+        // The ceiling is passed explicitly (not via a process-global env var),
+        // so this runs safely in parallel with any other subprocess test.
+        let res: IpeResult<String, String> = block(process_run_with_cap::<String>(
             "printf".to_string(),
             vec!["%s".to_string(), "x".repeat(64)],
+            8,
         ));
-        // SAFETY: test-only env mutation; see above.
-        unsafe { std::env::remove_var("IPE_PROCESS_OUTPUT_MAX") };
         assert!(
             matches!(res, IpeResult::Err(_)),
             "64 bytes of output under an 8-byte ceiling must Err, not OOM/truncate"

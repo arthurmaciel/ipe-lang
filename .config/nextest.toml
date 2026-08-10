@@ -17,3 +17,23 @@ slow-timeout = { period = "60s", terminate-after = 2 }
 
 [profile.ci]
 slow-timeout = { period = "60s", terminate-after = 10 }
+
+# Serialized resource groups. A group caps how many of its members run at once;
+# use it only for tests that contend on a resource a code fix cannot isolate.
+#
+# `heavy-server-e2e` (max 1): each member spawns a REAL `ipe watch` / server
+# subprocess that cold-`cargo build`s a full axum/tokio crate into the one shared
+# emitted-crate target and then binds a real TCP port. Run in parallel these
+# starve each other's cold build (read as a spurious teardown/serve-budget
+# timeout) and fight over the shared target's cargo lock. Serializing them makes
+# the cold-build subprocess tests deterministic without loosening any assertion.
+[test-groups]
+heavy-server-e2e = { max-threads = 1 }
+
+[[profile.ci.overrides]]
+filter = 'binary(watch_sigterm) | binary(watch_integration) | binary(server_e2e) | binary(live_e2e) | binary(http_e2e) | binary(webview_e2e)'
+test-group = 'heavy-server-e2e'
+
+[[profile.default.overrides]]
+filter = 'binary(watch_sigterm) | binary(watch_integration) | binary(server_e2e) | binary(live_e2e) | binary(http_e2e) | binary(webview_e2e)'
+test-group = 'heavy-server-e2e'

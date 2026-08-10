@@ -174,15 +174,28 @@ requires):
 - `test` — the nextest unit/integration suite (E2E tests no-op without `IPE_E2E`).
 - `cargo-deny` — the supply-chain gate (below).
 - `seal-smoke` — build the compiler, then take one small example end to end
-  (`ipe build` → `cargo build` the emitted crate → run it → assert output). A fast
-  proxy for THE SEAL; the full multi-shard `e2e` runs post-merge.
+  (`ipe build` → `cargo build` the emitted crate → run it → assert output). It is
+  a fast PR PROXY for THE SEAL over a SINGLE example, **not** the SEAL gate: it
+  proves the emit→build→run floor still holds on that one example in a couple of
+  minutes, but it cannot catch a regression in any of the other goldens. The real
+  SEAL is the multi-shard `e2e` job aggregated by `e2e-all` (below).
 
-**Slow checks** run on push-to-`main` and a nightly `schedule`, never on a PR:
-the full multi-shard `e2e` (THE SEAL in full), `miri`, the runtime
-feature-combo / full-feature builds, and `examples-sweep`. `wasm-floor` is off
-the always-required PR path — on a PR it runs only when wasm-relevant files
-change (a `paths` filter), plus nightly. Triggers live in
+**Slow checks** run on push-to-`main`, in the merge queue, and on a nightly
+`schedule`, never on a plain PR: the full multi-shard `e2e` (THE SEAL in full,
+every golden's emitted crate built and run), `miri`, the runtime feature-combo /
+full-feature builds, and `examples-sweep`. `wasm-floor` is off the
+always-required PR path — on a PR it runs only when wasm-relevant files change (a
+`paths` filter), plus nightly. Triggers live in
 `.github/workflows/{ci,security,examples-sweep,static}.yml`.
+
+**`e2e-all` is the SEAL gate.** The `e2e` job shards THE SEAL across six runners
+(`fail-fast: false`), so no single shard name is a stable required-check target
+and a lone shard failure is easy to miss. The `e2e-all` job depends on every
+shard and is green only when all six pass — one stable context name that CAN be
+made a required status check so a SEAL regression blocks the merge queue. Making
+it required needs repo-admin and is done deliberately (see Branch protection
+below), not by CI. Until then `seal-smoke` remains the only SEAL-adjacent
+required PR check and the full SEAL gates only post-merge/merge-queue.
 
 **`cargo-deny`** is the one supply-chain gate. Its `advisories` check subsumes
 `cargo-audit` (the same RustSec DB), and it also covers `licenses` / `bans` /

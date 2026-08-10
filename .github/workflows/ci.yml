@@ -577,6 +577,40 @@ jobs:
           IPE_ORACLE_SHARED_TARGET: ${{ github.workspace }}/.cache/oracle-shared-target
         run: cargo nextest run --workspace --profile ci --no-fail-fast --partition count:${{ matrix.shard }}/6
 
+  # Stable aggregation gate for the sharded SEAL. The `e2e` matrix expands to six
+  # shard-named jobs, so no single shard name is a durable required-check target
+  # and a `fail-fast: false` shard failure is easy to miss. This job depends on
+  # every shard and is GREEN only when all six passed — one stable context name
+  # (`e2e-all`) branch protection can require so a SEAL regression blocks the
+  # merge queue. The `always()` guard makes a skipped/failed/cancelled shard a
+  # FAILURE here, never a false green; a legitimate skip (the `e2e` matrix itself
+  # self-skips on pull_request) passes vacuously so the PR path is unaffected.
+  # A bare, stable `name` so the required-check context is exactly `e2e-all`
+  # (branch protection matches the check name literally; a parenthetical would
+  # make the required-context string brittle).
+  e2e-all:
+    name: e2e-all
+    runs-on: ubuntu-latest
+    needs: e2e
+    if: always()
+    steps:
+      - name: Gate on every e2e shard result
+        run: |
+          result='${{ needs.e2e.result }}'
+          case "$result" in
+            success)
+              echo "e2e-all: every shard passed — THE SEAL holds."
+              ;;
+            skipped)
+              # The e2e matrix self-skips on pull_request (seal-smoke is the PR
+              # proxy); nothing to aggregate, so this passes vacuously.
+              echo "e2e-all: e2e shards skipped for this event — vacuously green."
+              ;;
+            *)
+              echo "e2e-all FAILED: e2e shards result=$result (a SEAL regression or an infra failure)" >&2
+              exit 1
+              ;;
+          esac
 
   # macOS Tier-2 native-code enforcement — the ONLY real verification of the
   # macOS jail's deny behaviour. The Rust unit tests prove the SBPL LOWERING on

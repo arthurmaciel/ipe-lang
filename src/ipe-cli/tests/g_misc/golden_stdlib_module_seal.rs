@@ -67,8 +67,14 @@ fn compile_module_probe(slug: &str, main: &str) -> Option<PathBuf> {
         "must write the {slug} fixture project"
     );
     let entry = tmp.join("src").join("Main.ipe");
-    let out =
-        PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join(format!("stdlib_seal_{slug}_{uid}_out"));
+    // Fold the PID into the emitted-project path too (as the source `tmp` above
+    // already does): a module's `_resolves_and_emits` and `_builds_and_runs`
+    // tests share a slug and the per-process `uid` counter both restart at 0, so
+    // without the PID two parallel test binaries collide on one `_out` path and
+    // one test's start-of-run teardown unlinks the cwd of the other's live
+    // `cargo build`, whose `rustc` then cannot locate its working directory.
+    let out = PathBuf::from(env!("CARGO_TARGET_TMPDIR"))
+        .join(format!("stdlib_seal_{slug}_{pid}_{uid}_out"));
     let _ = fs::remove_dir_all(&out);
 
     let built = ipe::build_with_sibling_discovery(&entry, &out, &runtime);

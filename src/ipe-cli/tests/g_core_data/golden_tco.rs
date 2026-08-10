@@ -29,10 +29,15 @@ fn golden_dir(root: &Path, name: &str) -> PathBuf {
 
 /// Compile `tests/golden/<name>/Main.ipe` into an emitted Rust project and return
 /// its directory. Fails the test loudly on a compile error.
-fn compile_golden(name: &str) -> PathBuf {
+///
+/// `scratch` names a per-CALLER scratch directory: several tests exercise the same
+/// golden `name` (constant-stack vs oracle-parity), and a shared emit path would
+/// let one test's start-of-run teardown wipe a sibling's live build under
+/// nextest's parallelism. A distinct `scratch` per test keeps each emit isolated.
+fn compile_golden(name: &str, scratch: &str) -> PathBuf {
     let root = repo_root();
     let entry = golden_dir(&root, name).join("Main.ipe");
-    let out = std::env::temp_dir().join(format!("ipec_{name}_e2e"));
+    let out = std::env::temp_dir().join(format!("ipec_{scratch}_e2e"));
     let _ = std::fs::remove_dir_all(&out);
 
     let runtime = ipe::resolve_runtime();
@@ -57,7 +62,7 @@ fn tco_count_runs_to_completion_constant_stack() {
     if !e2e_enabled() {
         return;
     }
-    let dir = compile_golden("tco_count");
+    let dir = compile_golden("tco_count", "tco_count_stack");
     let out = crate::support::build_and_run_stack_limited("tco_count", &dir, 512);
     assert_eq!(
         out.exit_code,
@@ -77,7 +82,7 @@ fn tco_arg_swap_uses_temporaries_first() {
     if !e2e_enabled() {
         return;
     }
-    let dir = compile_golden("tco_swap");
+    let dir = compile_golden("tco_swap", "tco_swap_temporaries");
     let out = crate::support::build_and_run_emitted("tco_swap", &dir);
     assert_eq!(out.exit_code, Some(0));
     assert_eq!(out.stdout.trim(), "2,1", "clobber would give 1,1 or 2,2");
@@ -91,7 +96,7 @@ fn tco_value_param_double_use_compiles_and_computes() {
     if !e2e_enabled() {
         return;
     }
-    let dir = compile_golden("tco_double_use");
+    let dir = compile_golden("tco_double_use", "tco_double_use_compute");
     let out = crate::support::build_and_run_emitted("tco_double_use", &dir);
     assert_eq!(out.exit_code, Some(0));
     assert_eq!(out.stdout.trim(), "13");
@@ -108,7 +113,7 @@ fn tco_count_small_matches_go_oracle() {
         return;
     }
     let root = repo_root();
-    let dir = compile_golden("tco_count_small");
+    let dir = compile_golden("tco_count_small", "tco_count_small_oracle");
     let out = crate::support::build_and_run_emitted("tco_count_small", &dir);
     assert_eq!(out.exit_code, Some(0));
     crate::support::assert_go_parity(
@@ -125,7 +130,7 @@ fn tco_swap_matches_go_oracle() {
         return;
     }
     let root = repo_root();
-    let dir = compile_golden("tco_swap");
+    let dir = compile_golden("tco_swap", "tco_swap_oracle");
     let out = crate::support::build_and_run_emitted("tco_swap", &dir);
     assert_eq!(out.exit_code, Some(0));
     crate::support::assert_go_parity("tco_swap", &golden_dir(&root, "tco_swap"), &out.stdout);
@@ -138,7 +143,7 @@ fn tco_double_use_matches_go_oracle() {
         return;
     }
     let root = repo_root();
-    let dir = compile_golden("tco_double_use");
+    let dir = compile_golden("tco_double_use", "tco_double_use_oracle");
     let out = crate::support::build_and_run_emitted("tco_double_use", &dir);
     assert_eq!(out.exit_code, Some(0));
     crate::support::assert_go_parity(

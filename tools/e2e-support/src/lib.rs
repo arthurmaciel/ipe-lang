@@ -111,8 +111,9 @@ fn resolve_emitted_target(shared: Option<&str>) -> Option<String> {
     Some(trimmed.to_owned())
 }
 
-/// Build the emitted Rust project at `emitted_dir` and run the resulting binary,
-/// returning its stdout + exit code.
+/// Build the emitted project at `emitted_dir` for `golden_name`, returning the
+/// located binary path. The shared core of [`build_and_run_rust`] and
+/// [`build_rust_binary`], so both drive `cargo build` identically.
 ///
 /// The emitted build's cargo target is chosen by [`resolve_emitted_target`] from
 /// `IPE_ORACLE_SHARED_TARGET`: when the harness opts in with an absolute path the
@@ -120,18 +121,29 @@ fn resolve_emitted_target(shared: Option<&str>) -> Option<String> {
 /// otherwise the ambient env is inherited untouched (isolate — the fail-safe
 /// default).
 ///
-/// # Errors
-/// Returns a message if the manifest cannot be retargeted, `cargo build` fails
-/// (the message carries cargo's stderr), the binary cannot be located in the
-/// JSON output, or the binary cannot be executed.
-pub fn build_and_run_rust(golden_name: &str, emitted_dir: &Path) -> Result<RunResult, String> {
+/// The compiler wrapper (sccache) is disabled for this build. Each emitted crate
+/// lives in a per-golden scratch directory the golden removes on its next run, so
+/// pinning rustc to a cwd-sensitive shared sccache server is unsound under
+/// parallelism: one golden's scratch teardown unlinks the very cwd the shared
+/// sccache server inherited, after which every sibling compile fails
+/// `sccache rustc -vV` with "couldn't determine current working directory".
+/// Running the emitted builds without the wrapper removes that shared, racy
+/// resource; the shared cargo target already caches the heavy runtime dep tree.
+///
+/// An EMPTY `CARGO_BUILD_RUSTC_WRAPPER` (not `env_remove`) is required: the
+/// wrapper is commonly configured in `~/.cargo/config.toml`'s `[build]
+/// rustc-wrapper`, which `env_remove` cannot override — only an empty env var,
+/// which takes precedence over the config value, actually disables it.
+fn build_emitted_binary(golden_name: &str, emitted_dir: &Path) -> Result<String, String> {
     let unique_pkg = rewrite_package_name(emitted_dir, golden_name)?;
 
     let shared = std::env::var("IPE_ORACLE_SHARED_TARGET").ok();
     let mut cmd = Command::new("cargo");
     cmd.arg("build")
         .arg("--message-format=json")
-        .current_dir(emitted_dir);
+        .current_dir(emitted_dir)
+        .env("CARGO_BUILD_RUSTC_WRAPPER", "")
+        .env("RUSTC_WRAPPER", "");
     if let Some(p) = resolve_emitted_target(shared.as_deref()) {
         cmd.env("CARGO_TARGET_DIR", p);
     }
@@ -146,9 +158,20 @@ pub fn build_and_run_rust(golden_name: &str, emitted_dir: &Path) -> Result<RunRe
     }
 
     let json_stdout = String::from_utf8_lossy(&build.stdout);
-    let exe = find_executable(&json_stdout, &unique_pkg).ok_or_else(|| {
+    find_executable(&json_stdout, &unique_pkg).ok_or_else(|| {
         format!("{golden_name}: no `executable` artifact for package `{unique_pkg}` in cargo JSON")
-    })?;
+    })
+}
+
+/// Build the emitted Rust project at `emitted_dir` and run the resulting binary,
+/// returning its stdout + exit code.
+///
+/// # Errors
+/// Returns a message if the manifest cannot be retargeted, `cargo build` fails
+/// (the message carries cargo's stderr), the binary cannot be located in the
+/// JSON output, or the binary cannot be executed.
+pub fn build_and_run_rust(golden_name: &str, emitted_dir: &Path) -> Result<RunResult, String> {
+    let exe = build_emitted_binary(golden_name, emitted_dir)?;
 
     let run = Command::new(&exe)
         .output()
@@ -170,30 +193,7 @@ pub fn build_and_run_rust(golden_name: &str, emitted_dir: &Path) -> Result<RunRe
 /// (carrying cargo's stderr), or the binary cannot be located in the JSON
 /// output.
 pub fn build_rust_binary(golden_name: &str, emitted_dir: &Path) -> Result<String, String> {
-    let unique_pkg = rewrite_package_name(emitted_dir, golden_name)?;
-
-    let shared = std::env::var("IPE_ORACLE_SHARED_TARGET").ok();
-    let mut cmd = Command::new("cargo");
-    cmd.arg("build")
-        .arg("--message-format=json")
-        .current_dir(emitted_dir);
-    if let Some(p) = resolve_emitted_target(shared.as_deref()) {
-        cmd.env("CARGO_TARGET_DIR", p);
-    }
-    let build = cmd
-        .output()
-        .map_err(|e| format!("{golden_name}: failed to spawn `cargo build`: {e}"))?;
-    if !build.status.success() {
-        return Err(format!(
-            "{golden_name}: emitted project must build\n--- cargo stderr ---\n{}",
-            String::from_utf8_lossy(&build.stderr)
-        ));
-    }
-
-    let json_stdout = String::from_utf8_lossy(&build.stdout);
-    find_executable(&json_stdout, &unique_pkg).ok_or_else(|| {
-        format!("{golden_name}: no `executable` artifact for package `{unique_pkg}` in cargo JSON")
-    })
+    build_emitted_binary(golden_name, emitted_dir)
 }
 
 /// Read the expected output for a golden from its `expected.txt` file.
