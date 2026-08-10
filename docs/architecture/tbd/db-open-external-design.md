@@ -18,10 +18,11 @@ restating them.
 ## The gap, precisely
 
 `Db.connect : () -> Task Error Db` opens exactly one thing: the application's own
-configured connection, whose backend (SQLite / Postgres / MySQL) is fixed **at
-build time** from `ipe.toml` and monomorphised into the runtime `Db` handle —
-`Db` is an alias for the single concrete pool type the build selected. There is
-one URL (`ipe_db_url`), one pool, one dialect.
+configured connection, whose backend (SQLite or Postgres — the two sqlx drivers
+the runtime links) is fixed **at build time** from `ipe.toml` and monomorphised
+into the runtime `Db` handle — `Db` is an alias (`pub type Db = DbPool`) for the
+single concrete pool type the build selected (`SqlitePool` by default, `PgPool`
+on a Postgres build). There is one URL (`ipe_db_url`), one pool, one dialect.
 
 A `Db.open` kernel already exists (`Db.open : String -> String -> Task Error Db`,
 `Database` capability), but it is a **near-alias of `connect`, not an external
@@ -171,8 +172,19 @@ to carry it.
 ### `Driver` — a closed ADT, not a free string
 
 ```elm
-type Driver = Postgres | MySql | Sqlite      -- exactly the backends sqlx supports
+type Driver = Postgres | Sqlite      -- exactly the sqlx drivers the runtime links
 ```
+
+The set is closed to **exactly the sqlx drivers the runtime actually links**:
+`sqlx` is compiled with the `sqlite` and `postgres` features (the `db` feature
+unions both so a postgres build still keeps a sqlite side table), and the
+concrete `DbPool` is monomorphised to one of `SqlitePool` / `PgPool` at build
+time. **MySQL is not linked** — there is no `mysql` sqlx feature in the runtime,
+so a `MySql` variant would be unrepresentable-in-the-runtime and must not appear
+in the safe ADT; a MySQL backend is a deliberate future kernel change (add the
+sqlx `mysql` feature + a `MySqlPool` arm) gated behind its own driver work, not a
+`Driver` variant the type promises today. Listing a driver the runtime cannot
+dial would be advertising an unimplemented capability.
 
 Parse-don't-validate: the current `driver : String` is an unparsed value the
 runtime string-compares (`driver == "sqlite"`). A closed ADT makes an unsupported
@@ -312,7 +324,84 @@ access-mode type. Raw arbitrary SQL against it remains the disclosed
   any, is the explicit opt-in `Store.migrate` on a `ReadWrite` connection —
   additive-only, human-gated for destructive change.
 
-## 6. Open questions for the user
+## 6. Minimal first slice + recommendation
+
+**Verdict: a minimal, SEAL-clean, security-reviewable first slice exists that
+closes the capability gap now — `Ipe.Db.Unsafe.unsafeOpen` (plus the safe typed
+`Ipe.Db.open`) for a `Postgres` external `Dsn`, deferring MySQL to a future
+driver kernel. Recommend implementing the first slice rather than leaving the
+tracked gap design-deferred.** The reason the tracker named ("no first-party
+need yet") is not a technical blocker — the design is settled, the driver is
+already linked, and the slice is small enough for a single security review.
+
+Why closeable-now rather than deferred:
+
+- **The runtime already links the driver.** `sqlx` is compiled with `postgres`
+  in the `db` feature; the missing piece is not a dependency but a *second pool
+  of a different dialect* alongside the build-fixed `DbPool`. That is a bounded
+  runtime change (a `Connection` handle wrapping an independently-built
+  `PgPool` / `SqlitePool`), not a new client integration.
+- **The type surface is fully specified above** — `Driver`, `Dsn`, `Connection
+  mode`, `Secret` password, `TlsMode` — and reuses reserved-type and
+  `.Unsafe`-disclosure machinery that already exists. No new language mechanism
+  is invented; the slice is an application of settled conventions.
+- **The injection barrier is unchanged** (§2): the same `valid_sql_ident` +
+  bound-parameter surface runs against the new pool, so the security surface to
+  review is narrow and self-contained — connection provenance, credential
+  handling, TLS default — not a new query path.
+
+### What the first slice ships
+
+The smallest slice that closes the gap and is worth reviewing as one unit:
+
+1. `Ipe.Db.open : Dsn -> Task Error (Connection ReadOnly)` — the safe member.
+2. `Ipe.Db.Unsafe.unsafeOpen : Driver -> String -> Task Error (Connection ReadOnly)`
+   — the disclosed raw-string escape.
+3. `Ipe.Db.Dsn.build` / `Ipe.Db.Dsn.parse` producing the opaque `Dsn`, with
+   `Secret` password and explicit `TlsMode` (secure default).
+4. `Ipe.Db.close : Connection mode -> Task Error ()`.
+5. `Driver = Postgres | Sqlite` — the two linked drivers only.
+6. Read paths of `Store`/`Cond`/`Codec` against `Connection ReadOnly`
+   (mutation and `openReadWrite` can be a fast follow, since the read-only
+   default is the safe posture and covers the monitoring/ETL case that surfaced
+   the gap).
+
+MySQL, `openReadWrite`, and any process-wide external pool cache are explicitly
+out of the first slice and each is its own follow-up.
+
+### Sequenced implementation plan
+
+Each step is independently SEAL-gatable; the security review sits between the
+type surface landing and any raw-string hatch being exposed.
+
+1. **`Dsn` + `Driver` + `TlsMode` + `Secret` password, parse-only, no connect.**
+   Pure typed constructors and the parse; a `Dsn` cannot be built from an
+   invalid string and cannot render its password. No I/O, no capability yet —
+   reviewable in isolation, and nothing external can be opened until it lands.
+2. **`Connection mode` reserved handle + `Ipe.Db.open` safe member + `close`.**
+   The kernel row that builds an independent pool from a typed `Dsn`, returns a
+   `Connection ReadOnly`, discloses `network + database`, and closes total /
+   idempotent. Failure is a typed `Err` that leaks no `Secret`. **Security
+   review gate here** — connection provenance, TLS default, credential
+   non-leak, fail-closed.
+3. **Read-path `Store`/`Cond`/`Codec` over `Connection ReadOnly`.** Wire the
+   existing typed read surface to accept an external connection; confirm
+   `valid_sql_ident` + bound parameters run unchanged against the new pool.
+   This is the step that makes the port's hand-rolled read-only gate a *type*.
+4. **`Ipe.Db.Unsafe.unsafeOpen` raw-string hatch.** Added last and only if the
+   open question below keeps it: the `unsafe`-disclosing raw form, behind
+   `Ipe.Db.Unsafe`, for the opaque-connection-string residue. Landing it after
+   the safe path exists means the safe member is always the path of least
+   resistance.
+5. **Follow-ups (separate tracker items):** `openReadWrite` +
+   write-path mode gating; a `MySql` driver (sqlx `mysql` feature + `MySqlPool`
+   arm); any caller-visible pool-size knob.
+
+Steps 1–3 alone close the gap: an external Postgres/SQLite source becomes typed,
+injection-safe, read-only-by-type, and composable with the codec stack. Step 4
+is optional per the open question; step 5 is future capability, not the gap.
+
+## 7. Open questions for the user
 
 1. **SQLite-file `Dsn` and the `network` axis.** A local-file SQLite external
    `Dsn` reaches no network host — should `Ipe.Db.open` of a file-backed `Dsn`
@@ -364,3 +453,12 @@ unless explicitly requested. The whole `Codec`/`Store`/`Cond` stack composes ove
 an external connection unchanged, the `valid_sql_ident` + bound-parameter
 injection barrier is preserved because `open` supplies a pool and never a new
 query path, and every failure is a typed `Err` that leaks no credential.
+
+**Recommendation: close the gap now, not deferred.** The runtime already links
+the Postgres driver, the type surface is settled, and the injection barrier is
+untouched, so a minimal read-only-by-type first slice (`Dsn`/`Driver`/`Secret`
+→ `Ipe.Db.open` → read-path `Store`, §6) is small enough for one security
+review and closes the capability gap. `Driver` is `Postgres | Sqlite` only — the
+two drivers the runtime actually links; MySQL, write-mode `openReadWrite`, and
+the raw `unsafeOpen` hatch are sequenced follow-ups (§6), not part of the closing
+slice.
