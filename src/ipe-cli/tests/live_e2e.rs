@@ -830,6 +830,111 @@ fn live_onclick_increments_counter() -> Result<(), BoxError> {
     Ok(())
 }
 
+/// Read the SSE stream until the `event: patch` resync frame arrives (or a byte
+/// cap / read timeout is hit), returning the accumulated stream text. The SSE
+/// endpoint never sends `Connection: close`, so a plain `read_to_end` would
+/// block until the socket's read timeout; instead we read in chunks and stop as
+/// soon as the resync frame's body is in hand.
+fn http_read_sse_until_patch(
+    test_name: &str,
+    addr: &str,
+    cookie_header: &str,
+) -> Result<String, BoxError> {
+    use std::io::Read;
+    let mut stream = TcpStream::connect(addr)
+        .map_err(|e| -> BoxError { format!("{test_name}: SSE connect failed: {e}").into() })?;
+    stream
+        .set_read_timeout(Some(Duration::from_secs(5)))
+        .map_err(|e| -> BoxError { format!("{test_name}: SSE set_read_timeout: {e}").into() })?;
+    let request = format!(
+        "GET /_ipe/sse?path=%2F HTTP/1.1\r\nHost: 127.0.0.1\r\n\
+         Accept: text/event-stream\r\nCookie: {cookie_header}\r\n\r\n"
+    );
+    stream
+        .write_all(request.as_bytes())
+        .map_err(|e| -> BoxError { format!("{test_name}: SSE write failed: {e}").into() })?;
+
+    let mut acc = String::new();
+    let mut chunk = [0u8; 8192];
+    // Cap total read so a misbehaving server can't spin us forever; the resync
+    // frame is the FIRST `event: patch` after `event: hello`, well within 256 KB.
+    while acc.len() < 256 * 1024 {
+        match stream.read(&mut chunk) {
+            Ok(0) => break,
+            Ok(n) => {
+                // `n <= chunk.len()` by the Read contract; `get(..n)` keeps the
+                // slice total (falls back to the whole buffer if ever violated).
+                let read = chunk.get(..n).unwrap_or(&chunk);
+                acc.push_str(&String::from_utf8_lossy(read));
+                if acc.contains("event: patch") && acc.contains("data-ipe-hid") {
+                    break;
+                }
+            }
+            // A timed-out read with data already in hand is the normal stop
+            // path: the heartbeat keepalive means the socket won't EOF, so we
+            // rely on the timeout once the resync frame is captured.
+            Err(ref e)
+                if e.kind() == std::io::ErrorKind::WouldBlock
+                    || e.kind() == std::io::ErrorKind::TimedOut =>
+            {
+                break;
+            }
+            Err(e) => return Err(format!("{test_name}: SSE read failed: {e}").into()),
+        }
+    }
+    Ok(acc)
+}
+
+/// The SSE resync frame the browser applies on connect must carry
+/// `data-ipe-hid` on event elements. When the reconnect reconciliation rebuilt
+/// the view without stamping ipe-ids, the resync body replaced the client DOM
+/// with id-less elements — every click then posted an empty handlerId the
+/// server dropped, so interactions silently did nothing until a full reload.
+///
+/// A page GET alone never exposes this: its body IS stamped. Only the SSE
+/// resync path (exercised here) surfaces the divergence.
+///
+/// # Errors
+///
+/// Propagates any pipeline, build, spawn, HTTP, or assertion error.
+#[test]
+fn live_sse_resync_body_carries_event_hids() -> Result<(), BoxError> {
+    if std::env::var("IPE_E2E").is_err() {
+        return Ok(());
+    }
+
+    let test_name = "live_sse_resync_hids";
+    let exe = compile_and_build(test_name, IPE_LIVE_COUNTER)?;
+    let port = pick_ephemeral_port()?;
+    let _guard = spawn_and_wait_ready(test_name, &exe, port)?;
+    let addr = format!("127.0.0.1:{port}");
+
+    // GET / to mint the session (the SSE endpoint authenticates by cookie).
+    let (raw_headers, _body) = http_send(test_name, &addr, "GET", "/", &[], None)?;
+    let sid = extract_cookie(&raw_headers, "ipe_sid").ok_or_else(|| -> BoxError {
+        format!("{test_name}: no ipe_sid cookie in GET / response").into()
+    })?;
+    let cookie_header = format!("ipe_sid={sid}");
+
+    // The resync frame the client applies on SSE connect must stamp ids, or
+    // the whole DOM the browser ends up with is un-clickable.
+    let sse = http_read_sse_until_patch(test_name, &addr, &cookie_header)?;
+    assert!(
+        sse.contains("event: patch"),
+        "{test_name}: no resync patch frame on SSE connect\n\
+         --- first 1000 bytes ---\n{}",
+        &sse[..sse.len().min(1000)]
+    );
+    assert!(
+        sse.contains("data-ipe-hid"),
+        "{test_name}: SSE resync body has no data-ipe-hid — event elements are \
+         un-clickable\n--- first 2000 bytes ---\n{}",
+        &sse[..sse.len().min(2000)]
+    );
+
+    Ok(())
+}
+
 /// T5 seal — BUILD-ONLY: a routed `Web.app` with a `page` field in the Model
 /// must compile and produce a Cargo project that links against
 /// `web_app_routed` rather than `web_app`.
