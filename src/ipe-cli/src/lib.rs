@@ -2614,6 +2614,13 @@ pub(crate) fn run_build(rest: &[String]) -> Result<(), CliError> {
     let manifest_wasm: Option<project::WasmConfig> =
         manifest_parsed.as_ref().map(|m| m.wasm.clone());
 
+    // Resolve the static plan FIRST: it is pure over the flag/env/manifest
+    // request layer and reads no source, so a flag-contradiction refusal
+    // (talc-without-arena, --target-without-static, cfree conflicts) fires
+    // before any filesystem read of the entry — a refused build produces no
+    // artifact and touches nothing.
+    let static_plan = resolve_static_plan(cli_layer, manifest.as_deref())?;
+
     // Acknowledge any disclosed `.Unsafe` escape-hatch import BEFORE the (costly)
     // emit + cargo build. The safe path (no `.Unsafe` import) returns silently;
     // an exposed program requires `--accept-risks`, the manifest token, or an
@@ -2633,8 +2640,6 @@ pub(crate) fn run_build(rest: &[String]) -> Result<(), CliError> {
     // is a path dependency. Only a dep-model-OFF build vendors the source subtree.
     let runtime_dep = runtime_dep_from_env();
     let runtime_dir = resolve_vendored_runtime_dir(args.runtime, !runtime_dep)?;
-
-    let static_plan = resolve_static_plan(cli_layer, manifest.as_deref())?;
 
     // Fail closed before emitting: `ipe build` compiles the emitted project so a
     // reported success means the crate actually built. A missing toolchain is a
@@ -3180,6 +3185,11 @@ pub(crate) fn run_run(rest: &[String]) -> Result<(), CliError> {
     let manifest_wasm: Option<project::WasmConfig> =
         manifest_parsed.as_ref().map(|m| m.wasm.clone());
 
+    // Resolve the static plan FIRST: it is pure over the flag/env/manifest
+    // request layer and reads no source, so a flag-contradiction refusal fires
+    // before any filesystem read of the entry — identical to `ipe build`.
+    let static_plan = resolve_static_plan(cli_layer, manifest.as_deref())?;
+
     // Acknowledge any disclosed `.Unsafe` escape-hatch import BEFORE the (costly)
     // emit + cargo build. Same gate as `ipe build`: the safe path is silent, an
     // exposed program needs consent, and a non-interactive run without consent
@@ -3212,7 +3222,6 @@ pub(crate) fn run_run(rest: &[String]) -> Result<(), CliError> {
         Some(toolchain::require_cargo(toolchain::ToolIntent::Run)?)
     };
 
-    let static_plan = resolve_static_plan(cli_layer, manifest.as_deref())?;
     // `ipe run` is a DEVELOPMENT execution, so `Debug.*` is allowed
     // (production = false).
     let options = BuildOptions {
