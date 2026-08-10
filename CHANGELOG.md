@@ -10,6 +10,25 @@ Entries below the header are maintained by
 section is generated from Conventional Commit messages and prepended when the
 standing release pull request is merged.
 
+## [0.1.44](https://github.com/arthurmaciel/ipe-lang/compare/ipe-v0.1.43...ipe-v0.1.44) (2026-08-10)
+
+
+### Features
+
+* **stdlib:** Ipe.Db.Dsn parse-don't-validate surface — step 1 of external Db.open ([#641](https://github.com/arthurmaciel/ipe-lang/issues/641)) ([#830](https://github.com/arthurmaciel/ipe-lang/issues/830)) ([f0dbf4c](https://github.com/arthurmaciel/ipe-lang/commit/f0dbf4c1676be76c298a68f9fd083fbb53a58aca))
+
+
+### Bug Fixes
+
+* **backend:** generic record-of-function gets Clone impl ([#814](https://github.com/arthurmaciel/ipe-lang/issues/814)) ([#823](https://github.com/arthurmaciel/ipe-lang/issues/823)) ([96be306](https://github.com/arthurmaciel/ipe-lang/commit/96be306fff770e2dd5354a011fe9d2cb9e15aaf1))
+* **canon:** exposing (Type(subset)) opens only the named constructors ([#821](https://github.com/arthurmaciel/ipe-lang/issues/821)) ([b3fecc5](https://github.com/arthurmaciel/ipe-lang/commit/b3fecc59b959f62753b037baee35abf77106c1f7)), closes [#780](https://github.com/arthurmaciel/ipe-lang/issues/780)
+* **effects:** Io.println is a lawful Task — reject the sync-context effect discard (IPE-L0141) ([#837](https://github.com/arthurmaciel/ipe-lang/issues/837)) ([d8ffd03](https://github.com/arthurmaciel/ipe-lang/commit/d8ffd03b80c10f4689bf148d1a40df82ab194fef))
+* **html:** neutralise `</script` breakout in safe-surface `<script>` bodies (XSS) ([#833](https://github.com/arthurmaciel/ipe-lang/issues/833)) ([55a40cd](https://github.com/arthurmaciel/ipe-lang/commit/55a40cd700548eed247c1b31c5ef6278d33c3ce7)), closes [#832](https://github.com/arthurmaciel/ipe-lang/issues/832)
+* **html:** render escaping guarantee + Ipe.Html.Unsafe.unsafeScript inline-script hatch ([#666](https://github.com/arthurmaciel/ipe-lang/issues/666)) ([#831](https://github.com/arthurmaciel/ipe-lang/issues/831)) ([9a97adc](https://github.com/arthurmaciel/ipe-lang/commit/9a97adc0bdca81025a4880043f071b0940e7e402))
+* **runtime/web:** stamp SSE-reconnect reconciled tree so click handlers resolve ([#760](https://github.com/arthurmaciel/ipe-lang/issues/760)) ([#839](https://github.com/arthurmaciel/ipe-lang/issues/839)) ([472ba26](https://github.com/arthurmaciel/ipe-lang/commit/472ba26194d0935a390748513cc339716d4b68a4))
+* **runtime:** one Length/Color CSS renderer for the Ui inline-style and stylesheet paths ([#688](https://github.com/arthurmaciel/ipe-lang/issues/688)) ([#835](https://github.com/arthurmaciel/ipe-lang/issues/835)) ([7443455](https://github.com/arthurmaciel/ipe-lang/commit/744345567733ba521787ccedfb6ba77742696276))
+* **runtime:** reject empty dotted-ident segments in SqlIdent SSOT ([#827](https://github.com/arthurmaciel/ipe-lang/issues/827)) ([650f6cc](https://github.com/arthurmaciel/ipe-lang/commit/650f6cc6827bb85cd92aeffbbbb2e50b5555e5ea)), closes [#818](https://github.com/arthurmaciel/ipe-lang/issues/818)
+
 ## [0.1.43](https://github.com/arthurmaciel/ipe-lang/compare/ipe-v0.1.42...ipe-v0.1.43) (2026-08-10)
 
 
