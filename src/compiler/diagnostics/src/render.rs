@@ -24,9 +24,9 @@ use core::fmt::Write as _;
 
 use crate::code::{ISSUE_TRACKER_URL, Severity, title};
 use crate::diagnostic::{
-    AppShape, CaseDefect, Diagnostic, Expected, ExpectedSet, ExposingDefect, Feature, HeaderDefect,
-    HelpLine, Hint, IfDefect, LetDefect, LowerError, NameError, ParseError, SealRejection,
-    SpanRole, Suggestion, TokenKind, TyDoc, TypeDeclDefect, TypeError,
+    AppShape, CaseDefect, CodecAutoRejection, Diagnostic, Expected, ExpectedSet, ExposingDefect,
+    Feature, HeaderDefect, HelpLine, Hint, IfDefect, LetDefect, LowerError, NameError, ParseError,
+    SealRejection, SpanRole, Suggestion, TokenKind, TyDoc, TypeDeclDefect, TypeError,
 };
 use crate::span::Span;
 
@@ -572,6 +572,36 @@ fn name_label(msg: &NameError) -> Option<String> {
              written"
                 .to_string(),
         ),
+        NameError::CodecAutoUnderivable { reason, field } => {
+            let why = match reason {
+                CodecAutoRejection::WitnessNotRecordValue => {
+                    "`Codec.auto` needs a witness that is a top-level value annotated with a \
+                     record type — `Codec.auto blankUser` where `blankUser : User` and `User` \
+                     is a record. It reads that record's fields to build the codec"
+                        .to_string()
+                }
+                CodecAutoRejection::ArityMismatch => {
+                    "`Codec.auto` takes exactly one argument: a witness value whose record type \
+                     names the codec to derive"
+                        .to_string()
+                }
+                CodecAutoRejection::SecretField => format!(
+                    "field `{field}` is a `Secret` (or a reserved sink type): encoding it to \
+                     JSON or a column is exactly the leak the Security principle forbids, so no \
+                     codec can serialise it"
+                ),
+                CodecAutoRejection::FunctionField => format!(
+                    "field `{field}` is a function, which is not a serialisable value — no leaf \
+                     codec derives for it"
+                ),
+                CodecAutoRejection::UnsupportedField => format!(
+                    "field `{field}` has no derivable leaf codec (a data-carrying ADT, an opaque \
+                     handle, or an effect/decoder carrier). Write the codec explicitly — use \
+                     `Codec.taggedUnion` / `varN` for a data ADT"
+                ),
+            };
+            Some(why)
+        }
         NameError::Unknown => None,
     }
 }

@@ -28,10 +28,11 @@ pub use code::{
     Severity, explain_page, title,
 };
 pub use diagnostic::{
-    AliasExpansionKind, AppShape, Applicability, CaseDefect, CmdSubShapeMismatch, Construct,
-    DResult, Diagnostic, Expected, ExpectedSet, ExposingDefect, Feature, HOF_KERNEL_RESULT_CLASS,
-    HeaderDefect, HelpLine, Hint, IfDefect, LetDefect, LowerError, ModelLeaf, NameError,
-    ParseError, SealRejection, SpanRole, Suggestion, TokenKind, TyDoc, TypeDeclDefect, TypeError,
+    AliasExpansionKind, AppShape, Applicability, CaseDefect, CmdSubShapeMismatch,
+    CodecAutoRejection, Construct, DResult, Diagnostic, Expected, ExpectedSet, ExposingDefect,
+    Feature, HOF_KERNEL_RESULT_CLASS, HeaderDefect, HelpLine, Hint, IfDefect, LetDefect,
+    LowerError, ModelLeaf, NameError, ParseError, SealRejection, SpanRole, Suggestion, TokenKind,
+    TyDoc, TypeDeclDefect, TypeError,
 };
 pub use render::{plain_message, render, render_ty};
 pub use span::{Located, Span};

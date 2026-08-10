@@ -53,6 +53,17 @@
 --     panic).
 --   * `fromJsonSafe maxChars` — decode, rejecting input over `maxChars` BEFORE
 --     parsing (the untrusted-input door).
+--   * `auto witness` — DERIVE a record codec from its type. Given a witness value
+--     whose type is a record (a top-level value annotated with a record type),
+--     the compiler reads that record's fields and writes the field-by-field codec
+--     for you — the same one you would write by hand. Each field's codec is chosen
+--     from its type: `String`/`Int`/`Bool`/`Float` scalars, a `List` of a
+--     derivable element, or a nested record (recursively). The keys are the field
+--     names in snake_case (the storage convention). A field with no derivable
+--     codec — a function, a `Secret`, a data-carrying ADT — is a compile error
+--     (write that part of the codec explicitly). The derive runs at compile time:
+--     it produces no reflection and no runtime cost, only the codec you could have
+--     written yourself.
 --
 -- Minimal round-trips:
 --
@@ -73,6 +84,19 @@
 --
 --     -- Codec.fromJson rankCodec (Codec.toJson rankCodec Gold) == Ok Gold
 --     -- Codec.fromJson rankCodec "\"platinum\"" == Err … (unknown tag)
+--
+--     type alias User =
+--         { id : String, age : Int, active : Bool }
+--
+--     blankUser : User
+--     blankUser =
+--         { id = "", age = 0, active = False }
+--
+--     userCodec : Codec User
+--     userCodec =
+--         Codec.auto blankUser
+--
+--     -- Codec.fromJson userCodec (Codec.toJson userCodec u) == Ok u
 module Ipe.Codec exposing
     ( Codec(..)
     , toValue, toJson, fromJson, fromJsonSafe

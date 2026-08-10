@@ -323,6 +323,33 @@ pub struct Env {
     /// falls through to ordinary qualified-name resolution (and fails there —
     /// `Ffi` is not an importable module).
     pub origin: ModuleOrigin,
+    /// The context the `Ipe.Codec.auto` derive reads at a call site: the record
+    /// shape of every annotated top-level value, plus the qualifier symbols that
+    /// name the imported `Ipe.Codec` module. Both are computed once per module and
+    /// carried on the env, which every value body's resolution already clones.
+    /// `Rc` so the per-scope `env.clone()` is a refcount bump, not a deep copy.
+    pub codec_auto: Rc<CodecAutoContext>,
+}
+
+/// Per-module context for the `Ipe.Codec.auto` derive.
+///
+/// `auto` is recognised at its call site (`<Codec>.auto witness`) and rewritten
+/// into the field-by-field codec a hand-written record codec would build. To do
+/// that it needs two facts computed where the module's values, aliases, and
+/// imports are all in view: which qualifiers name the `Ipe.Codec` module, and
+/// the record shape of each witness value.
+#[derive(Debug, Default)]
+pub struct CodecAutoContext {
+    /// Qualifier symbols bound to the imported `Ipe.Codec` module (its default
+    /// last-segment name and every `as` alias). A `<qual>.auto` call is a derive
+    /// only when `qual` is in this set — so an unrelated `Other.auto` is left to
+    /// ordinary resolution. Empty when the module does not import `Ipe.Codec`.
+    pub qualifiers: BTreeSet<Symbol>,
+    /// Record shape of every top-level value annotated with a record type, keyed
+    /// by the value name: the fields (name + canonical type) in declared order.
+    /// The witness a derive is applied to is looked up here. Empty for a module
+    /// that declares no such value.
+    pub witness_records: BTreeMap<Symbol, Vec<(Symbol, crate::ast::Type)>>,
 }
 
 impl Env {
