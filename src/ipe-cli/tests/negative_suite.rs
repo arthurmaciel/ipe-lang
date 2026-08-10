@@ -778,16 +778,19 @@ fn canon_duplicate_qualifier() {
     }
 }
 
-/// An `Ffi.kernel "Name"` alias naming a kernel that is not registered.
+/// An `Ffi.kernel "Name"` alias in USER source — minting a kernel is reserved to
+/// the vouched stdlib / FFI interface, so it is rejected by the origin gate
+/// (IPE-N0042) before the registry is consulted, whether or not the named kernel
+/// is registered.
 #[test]
-fn canon_unknown_kernel_alias() {
+fn canon_user_kernel_alias_is_rejected() {
     let src = format!(
         "{HEAD}import Ipe.Ffi as Ffi\n\
          bogus : Int -> Int\n\
          bogus = Ffi.kernel \"No_such_kernel_at_all\"\n\
          main = bogus 1\n"
     );
-    assert_rejected("canon_unknown_kernel_alias", &src, "IPE-N0028");
+    assert_rejected("canon_user_kernel_alias_is_rejected", &src, "IPE-N0042");
 }
 
 // ===========================================================================
