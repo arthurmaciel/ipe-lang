@@ -431,6 +431,50 @@ pub(crate) fn strip_style_close(s: &str) -> String {
     }
 }
 
+/// Split any ASCII-case-insensitive `</script` breakout in a `<script>` body so
+/// it cannot terminate the enclosing element early. The browser's HTML parser
+/// ends a script element only at a literal `</script` byte run; inserting a `\`
+/// after the `<` (`<\/script`) keeps the JavaScript semantically identical (a
+/// redundant escape inside a string/regex, inert outside one) while removing the
+/// exact byte run the parser scans for. Non-`</script` text is untouched, so
+/// ordinary script bodies pass through unchanged.
+///
+/// Sibling of `strip_style_close`: both neutralise a raw-text element's own
+/// close tag at the sink so no attacker-influenced body can break out. `<script>`
+/// splits rather than strips because a script body is executable code the author
+/// owns — dropping bytes could corrupt the program — whereas a `<style>` body is
+/// declarative CSS where deletion is safe.
+///
+/// Total (never panics; only ASCII single-byte characters are ever compared or
+/// emitted specially, and every multi-byte `char` is copied whole).
+pub(crate) fn neutralise_script_close(body: &str) -> String {
+    const NEEDLE: &[u8] = b"</script";
+    let bytes = body.as_bytes();
+    let mut out = String::with_capacity(body.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        let matches_here = bytes
+            .get(i..i.saturating_add(NEEDLE.len()))
+            .is_some_and(|w| w.eq_ignore_ascii_case(NEEDLE));
+        if matches_here {
+            out.push_str("<\\/script");
+            i = i.saturating_add(NEEDLE.len());
+        } else {
+            // A multi-byte UTF-8 char never starts with `<`, so the needle branch
+            // only fires on single-byte ASCII; here we copy the next whole char
+            // (ASCII or multi-byte) and advance past it.
+            match body.get(i..).and_then(|s| s.chars().next()) {
+                Some(c) => {
+                    out.push(c);
+                    i = i.saturating_add(c.len_utf8());
+                }
+                None => break,
+            }
+        }
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -600,5 +644,29 @@ mod tests {
                 .to_ascii_lowercase()
                 .contains("</style")
         );
+    }
+
+    #[test]
+    fn neutralise_script_close_splits_breakout_case_insensitively() {
+        // The exact XSS payload from the safe-surface `<script>` sink must not
+        // survive as a live `</script` byte run.
+        assert_eq!(
+            neutralise_script_close("a</script><img src=x onerror=alert(1)>"),
+            "a<\\/script><img src=x onerror=alert(1)>"
+        );
+        assert_eq!(neutralise_script_close("b</SCRIPT >"), "b<\\/script >");
+        let out = neutralise_script_close("x</script>y</ScRiPt>z");
+        assert!(!out.to_ascii_lowercase().contains("</script"));
+        // Non-breakout text (incl. multibyte UTF-8) is untouched.
+        assert_eq!(neutralise_script_close("λ = 1; // ok"), "λ = 1; // ok");
+    }
+
+    #[test]
+    fn neutralise_script_close_is_a_fixpoint() {
+        // Already-neutralised output (e.g. from `unsafeScript` at construction)
+        // passes through unchanged, so routing it through the sink again is a
+        // no-op — the capability-gated path keeps its exact bytes.
+        let once = neutralise_script_close("x</script>y");
+        assert_eq!(neutralise_script_close(&once), once);
     }
 }

@@ -202,16 +202,17 @@ fn render_into_ctx<M>(
         return;
     }
     match node {
-        // SECURITY: verbatim (un-escaped) text is reachable ONLY here, with
+        // SECURITY: verbatim (un-escaped) text is reachable here only with
         // raw_text=true, which is set ONLY when the parent tag is the literal
         // "script"/"style" (see the child loop below). Ipe.Ui never produces a
         // script/style ELEMENT — its styling flows through data-ipe-* markers
         // consumed server-side — so the "Ipe.Ui HTML-escapes everything" contract
-        // is NOT weakened. This path is the documented Ipe.Html raw escape hatch
-        // (`node "script" [] [text code]`): the author owns sanitisation of any
-        // interpolated value, exactly as on the Go backend (live.go:421-438,
-        // which likewise does NOT strip `</script>` here — matching it keeps the
-        // byte-for-byte equivalence gate green).
+        // is NOT weakened. A `<script>`/`<style>` body is NOT the last line of
+        // defence: the child loop renders it into a scratch buffer and runs
+        // `neutralise_script_close`/`strip_style_close` over the whole body, so a
+        // `</script`/`</style` breakout in verbatim text cannot terminate the
+        // element early. The only verbatim-into-`<script>` value that is trusted
+        // as code is the capability-disclosing `Ipe.Html.Unsafe.unsafeScript`.
         Html::HText(t) => {
             if raw_text {
                 s.push_str(t);
@@ -418,23 +419,38 @@ fn render_into_ctx<M>(
                 None
             };
             if tag == "style" {
-                // SECURITY (F7): every `<style>` body — from `Ipe.Html.styleNode`,
-                // a hand-built `Html.node "style" [] [Html.raw css]`, or a
-                // `Ipe.Css` stylesheet string — is close-tag-neutralised at THIS
-                // sink before it reaches the DOM. `styleNode` also pre-strips at
-                // construction (`html_style_node_`), so the body is gated twice
-                // (belt and braces). Rendered into a scratch buffer with
-                // raw_text=true (CSS is not HTML-decoded), then `strip_style_close`
-                // removes any `</style` breakout. Asymmetry with `<script>` is
-                // deliberate: `<style>` bodies are attacker-reachable via
-                // `Ipe.Css` values, whereas `<script>` is the documented,
-                // author-owned Go-parity raw escape hatch (see the HText comment
-                // above) and is NOT stripped.
+                // SECURITY: every `<style>` body — from `Ipe.Html.styleNode`, a
+                // hand-built `Html.node "style" [] [Html.raw css]`, or a `Ipe.Css`
+                // stylesheet string — is close-tag-neutralised at THIS sink before
+                // it reaches the DOM. `styleNode` also pre-strips at construction
+                // (`html_style_node_`), so the body is gated twice (belt and
+                // braces). Rendered into a scratch buffer with raw_text=true (CSS
+                // is not HTML-decoded), then `strip_style_close` removes any
+                // `</style` breakout.
                 let mut body = String::new();
                 for c in kids {
                     render_into_ctx(c, &mut body, None, true, depth.saturating_add(1));
                 }
                 s.push_str(&css_safety::strip_style_close(&body));
+            } else if raw_body {
+                // SECURITY: a `<script>` body reaches the browser as executable
+                // code with no HTML decoding, so verbatim text here is a breakout
+                // sink symmetric to `<style>`. The body is rendered into a scratch
+                // buffer with raw_text=true (script source is not entity-escaped)
+                // and close-tag-neutralised so no `</script` byte run survives to
+                // terminate the element early. `Ipe.Html.Unsafe.unsafeScript`
+                // already neutralises at construction, and the split is a fixpoint
+                // (`<\/script` no longer matches `</script`), so that
+                // capability-gated path is unchanged; the safe-surface
+                // `Html.script [] [ Html.text … ]` path is now closed too — the
+                // ONLY difference between the two is that `unsafeScript` discloses
+                // the `unsafe` capability, never that one can break out and the
+                // other cannot.
+                let mut body = String::new();
+                for c in kids {
+                    render_into_ctx(c, &mut body, None, true, depth.saturating_add(1));
+                }
+                s.push_str(&css_safety::neutralise_script_close(&body));
             } else {
                 for c in kids {
                     render_into_ctx(c, s, child_select_value, raw_body, depth.saturating_add(1));
@@ -1432,14 +1448,50 @@ mod tests {
 
     #[test]
     fn script_element_body_stays_verbatim() {
-        // Asymmetry contract: `<script>` is the documented author-owned raw
-        // escape hatch (Go parity) and is NOT stripped — only `<style>` is.
+        // An ordinary script body carrying `<`/`>`/`&` is emitted verbatim (never
+        // entity-escaped — that would corrupt executable code). Only a literal
+        // `</script` breakout run is neutralised, so this body is unchanged.
         let node: Html<()> = Html::HElement(
             "script".into(),
             vec![],
             vec![Html::HRaw("if (1 < 2) { x(); }".into())],
         );
         assert!(render_html(&node).contains("if (1 < 2)"));
+    }
+
+    fn script_close_count(out: &str) -> usize {
+        out.to_ascii_lowercase().matches("</script").count()
+    }
+
+    #[test]
+    fn safe_surface_script_text_breakout_is_neutralised() {
+        // SECURITY: the safe-surface `Html.script [] [ Html.text … ]` path (HText
+        // child, raw_text=true at the `<script>` sink) must NOT let an
+        // attacker-influenced `</script>` in the text break out of the element.
+        let node: Html<()> = Html::HElement(
+            "script".into(),
+            vec![],
+            vec![Html::HText("</script><img src=x onerror=alert(1)>".into())],
+        );
+        let out = render_html(&node);
+        // Exactly one `</script` survives: the element's own closing tag.
+        assert_eq!(script_close_count(&out), 1, "{out}");
+        // The would-be breakout is inert code text, not a live tag sequence.
+        assert!(out.contains("<\\/script>"), "{out}");
+    }
+
+    #[test]
+    fn safe_surface_script_raw_child_breakout_is_neutralised() {
+        // A hand-built `Html.node "script" [] [ Html.raw … ]` (HRaw child) is also
+        // close-tag-neutralised at the sink; the ONLY trusted-verbatim path is
+        // `Ipe.Html.Unsafe.unsafeScript`, which neutralises at construction.
+        let node: Html<()> = Html::HElement(
+            "script".into(),
+            vec![],
+            vec![Html::HRaw("x();</SCRIPT><b>y".into())],
+        );
+        let out = render_html(&node);
+        assert_eq!(script_close_count(&out), 1, "{out}");
     }
 
     // SECURITY: user content flows through `Html.text` (HText), which is
