@@ -1,0 +1,232 @@
+module Main exposing (main)
+
+-- SEAL + round-trip proof for the `Ipe.Codec` sum-type combinators: `enum`
+-- (nullary enum ⇄ TEXT) and `taggedUnion` + `var0`/`var1`/`var2`/`var3`
+-- (data-carrying ADT ⇄ a tagged JSON array). Both store their driving data — an
+-- `enum`'s `Vec<(a, String)>` pairs, a `taggedUnion`'s `Vec<Variant a>` — inside
+-- the decoder factory closure, the exact tvar-inside-a-captured-collection shape
+-- that was `ipe`-accept-then-`cargo`-fail (E0277 no-`Sync`, E0507 move-out-of-`Fn`)
+-- before the Sync-through-composite propagation + composite clone-carrier fixes.
+-- So the load-bearing proof is the E2E build-and-run, not accept alone. The
+-- round-trip law is checked as encode → decode → re-encode stability; the
+-- fail-closed paths (unknown enum tag, unknown union tag → typed `Err`; oversize
+-- input → `Err` before parsing) are checked too. Output: `codec-enum-tagged-ok`.
+
+import Ipe.Io as Io
+import Ipe.Codec as Codec exposing (Codec(..), Variant(..))
+import Ipe.Maybe exposing (Maybe(..))
+
+
+-- ── enum: a nullary enum ⇄ a readable JSON string ──
+type Rank
+    = Bronze
+    | Silver
+    | Gold
+
+
+rankEq : Rank -> Rank -> Bool
+rankEq a b =
+    case a of
+        Bronze ->
+            case b of
+                Bronze -> True
+                Silver -> False
+                Gold -> False
+
+        Silver ->
+            case b of
+                Bronze -> False
+                Silver -> True
+                Gold -> False
+
+        Gold ->
+            case b of
+                Bronze -> False
+                Silver -> False
+                Gold -> True
+
+
+rankCodec : Codec Rank
+rankCodec =
+    Codec.enum rankEq
+        [ ( Bronze, "bronze" ), ( Silver, "silver" ), ( Gold, "gold" ) ]
+
+
+-- ── taggedUnion: a data-carrying ADT ⇄ a tagged JSON array, spanning a
+-- nullary (var0), a one-arg (var1), a two-arg (var2), and a three-arg (var3)
+-- variant so every `varN` arm is exercised. ──
+type Shape
+    = Origin
+    | Circle Int
+    | Rect Int Int
+    | Box Int Int Int
+
+
+isOrigin : Shape -> Bool
+isOrigin s =
+    case s of
+        Origin -> True
+        Circle _ -> False
+        Rect _ _ -> False
+        Box _ _ _ -> False
+
+
+circleArg : Shape -> Maybe Int
+circleArg s =
+    case s of
+        Origin -> Nothing
+        Circle r -> Just r
+        Rect _ _ -> Nothing
+        Box _ _ _ -> Nothing
+
+
+rectArgs : Shape -> Maybe ( Int, Int )
+rectArgs s =
+    case s of
+        Origin -> Nothing
+        Circle _ -> Nothing
+        Rect w h -> Just ( w, h )
+        Box _ _ _ -> Nothing
+
+
+boxArgs : Shape -> Maybe ( Int, Int, Int )
+boxArgs s =
+    case s of
+        Origin -> Nothing
+        Circle _ -> Nothing
+        Rect _ _ -> Nothing
+        Box w h d -> Just ( w, h, d )
+
+
+shapeCodec : Codec Shape
+shapeCodec =
+    Codec.taggedUnion
+        [ Codec.var0 "Origin" Origin isOrigin
+        , Codec.var1 "Circle" Circle circleArg Codec.int
+        , Codec.var2 "Rect" Rect rectArgs Codec.int Codec.int
+        , Codec.var3 "Box" Box boxArgs Codec.int Codec.int Codec.int
+        ]
+
+
+-- ── round-trip stability, per variant (monomorphic call sites) ──
+rankReencodes : Rank -> Bool
+rankReencodes value =
+    let
+        once = Codec.toJson rankCodec value
+    in
+    case Codec.fromJson rankCodec once of
+        Ok back ->
+            Codec.toJson rankCodec back == once
+
+        Err _ ->
+            False
+
+
+rankStable : Bool
+rankStable =
+    rankReencodes Bronze && rankReencodes Silver && rankReencodes Gold
+
+
+shapeReencodes : Shape -> Bool
+shapeReencodes value =
+    let
+        once = Codec.toJson shapeCodec value
+    in
+    case Codec.fromJson shapeCodec once of
+        Ok back ->
+            Codec.toJson shapeCodec back == once
+
+        Err _ ->
+            False
+
+
+shapeStable : Bool
+shapeStable =
+    shapeReencodes Origin
+        && shapeReencodes (Circle 5)
+        && shapeReencodes (Rect 3 4)
+        && shapeReencodes (Box 1 2 3)
+
+
+-- ── nesting: enum + taggedUnion inside a list codec still round-trips ──
+nestedRanksStable : Bool
+nestedRanksStable =
+    let
+        ranks = Codec.list rankCodec
+
+        once = Codec.toJson ranks [ Bronze, Gold, Silver ]
+    in
+    case Codec.fromJson ranks once of
+        Ok r ->
+            Codec.toJson ranks r == once
+
+        Err _ ->
+            False
+
+
+nestedShapesStable : Bool
+nestedShapesStable =
+    let
+        shapes = Codec.list shapeCodec
+
+        once = Codec.toJson shapes [ Origin, Circle 7, Box 1 2 3 ]
+    in
+    case Codec.fromJson shapes once of
+        Ok s ->
+            Codec.toJson shapes s == once
+
+        Err _ ->
+            False
+
+
+nestedStable : Bool
+nestedStable =
+    nestedRanksStable && nestedShapesStable
+
+
+-- ── fail-closed: an unknown enum tag decodes to a typed Err, never a default ──
+unknownEnumIsErr : Bool
+unknownEnumIsErr =
+    case Codec.fromJson rankCodec "\"platinum\"" of
+        Ok _ ->
+            False
+
+        Err _ ->
+            True
+
+
+-- ── fail-closed: an unknown union tag decodes to a typed Err ──
+unknownUnionIsErr : Bool
+unknownUnionIsErr =
+    case Codec.fromJson shapeCodec "[\"Triangle\",1,2,3]" of
+        Ok _ ->
+            False
+
+        Err _ ->
+            True
+
+
+-- ── fail-closed: fromJsonSafe rejects oversize input BEFORE decoding ──
+oversizeRejected : Bool
+oversizeRejected =
+    case Codec.fromJsonSafe 8 (Codec.list shapeCodec) "[[\"Circle\",1],[\"Rect\",2,3]]" of
+        Ok _ ->
+            False
+
+        Err _ ->
+            True
+
+
+main =
+    if
+        rankStable
+            && shapeStable
+            && nestedStable
+            && unknownEnumIsErr
+            && unknownUnionIsErr
+            && oversizeRejected
+    then
+        Io.println "codec-enum-tagged-ok"
+
+    else
+        Io.println "codec-enum-tagged-FAIL"

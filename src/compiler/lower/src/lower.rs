@@ -2446,13 +2446,36 @@ fn classify_capture_clone(env: CloneEnv<'_>, ir_ty: Option<&IrType>) -> Option<b
     }
 }
 
+/// The clone class of one COMPOSITE PART.
+///
+/// A bare [`IrType::Generic`] part is `CloneOk`, not `NonClone`: every emitted
+/// generic fn stamps `T: Clone` unconditionally (`render_fn_generics`), so a
+/// composite carrying the tvar (`Vec<(T, String)>` for an `enum`'s pairs,
+/// `Vec<Variant<T>>` for a `taggedUnion`'s variants) is `Clone` whenever the
+/// composite's own shape is, and a `.clone()` inserted on it type-checks — a
+/// non-`Clone` instantiation is rejected at the CALLER by that same `T: Clone`
+/// bound before the clone is reached. This is the composite analogue of the
+/// bare-`Generic` special-cases in [`classify_capture_clone`] and
+/// [`param_is_multiuse_clonable`]; without it a composite move-captured by two
+/// sibling closures (a `Codec`'s `enc` + `mkDec`, both reading the same pairs /
+/// variants) is left un-cloned and the emitted Rust fails `cargo` with E0382 /
+/// E0507 — an `ipe`-accept-then-`cargo`-fail SEAL break. SINGLE SOURCE OF TRUTH
+/// with those two predicates: all three admit a bare `Generic` on the identical
+/// `with_clone` bound; if one changes the others must.
+fn clone_class_part(env: CloneEnv<'_>, p: &IrType) -> CloneClass {
+    match p {
+        IrType::Generic(_) => CloneClass::CloneOk,
+        other => clone_class(env, other),
+    }
+}
+
 fn clone_class_composite<'a>(
     env: CloneEnv<'_>,
     parts: impl Iterator<Item = &'a IrType>,
 ) -> CloneClass {
     let mut any_clone_ok = false;
     for p in parts {
-        match clone_class(env, p) {
+        match clone_class_part(env, p) {
             CloneClass::NonClone => return CloneClass::NonClone,
             CloneClass::CloneOk => any_clone_ok = true,
             CloneClass::CopyLeaf => {}
@@ -5247,6 +5270,182 @@ fn ir_type_generic_in_decoder(ty: &IrType, tv: Symbol) -> bool {
     }
 }
 
+/// Does the type variable `tv` appear as a BARE element inside `ty`, reachable
+/// through the TRANSPARENT value-containers (`List`/`Vec`, `Tuple`, `Record`,
+/// user `Enum`, `Maybe`, `Result`, `Dict`, `Set`) — and NOT solely behind an
+/// opaque, already-`Send + Sync` carrier (`Decoder`/`Task`/`Cmd`/`Sub`, a boxed
+/// `Fun`/`SharedFun`)?
+///
+/// A transparent container stores its element by value: when the container is
+/// captured into an emitted `Box/Arc<dyn Fn + Send + Sync>` closure (or its
+/// element is cloned out and moved into a decoder factory), the bare element
+/// `tv` must itself be `Send + Sync`, so a `Vec<(tv, String)>` / `Vec<Variant<tv>>`
+/// capture obliges `tv: Sync`. An opaque carrier already satisfies `Send + Sync`
+/// for every element (`Decoder<tv>` is `Arc<dyn Fn + Send + Sync>`), so a tvar
+/// that rides ONLY under such a carrier — the `decode_list` run-through element —
+/// obliges `Send` alone and MUST NOT gain a spurious `Sync`. Stopping the walk at
+/// those carriers is exactly what keeps this obligation as tight as the
+/// runtime requires (mirrors the `Send`-vs-`Sync` split the decoder obligations
+/// already draw).
+fn ir_type_generic_reaches_bare(ty: &IrType, tv: Symbol) -> bool {
+    match ty {
+        // A bare occurrence of the tracked tvar is the reach itself.
+        IrType::Generic(g) => *g == tv,
+        // Transparent value-containers: a bare element under them is reachable.
+        IrType::List(inner) | IrType::Maybe(inner) | IrType::Set(inner) => {
+            ir_type_generic_reaches_bare(inner, tv)
+        }
+        IrType::Result(a, b) | IrType::Dict(a, b) => {
+            ir_type_generic_reaches_bare(a, tv) || ir_type_generic_reaches_bare(b, tv)
+        }
+        IrType::Tuple(items) => items.iter().any(|t| ir_type_generic_reaches_bare(t, tv)),
+        IrType::Enum { args, .. } => args.iter().any(|t| ir_type_generic_reaches_bare(t, tv)),
+        IrType::Record(fields) => fields.values().any(|t| ir_type_generic_reaches_bare(t, tv)),
+        // Two families do NOT reach a bare tvar. First, the opaque `Send + Sync`
+        // carriers STOP the walk: an element under them is already
+        // thread-shareable, so it obliges no `Sync` on `tv` (the `decode_list`
+        // run-through discipline), and a boxed function value is its own
+        // `Send + Sync` carrier. Second, the nullary leaves + non-parametric
+        // carriers mention no tvar at all. Both yield `false`.
+        IrType::Decoder(_)
+        | IrType::Task(_)
+        | IrType::Cmd(_)
+        | IrType::Sub(_)
+        | IrType::WebRoute(_)
+        | IrType::Ui { .. }
+        | IrType::Fun(_, _)
+        | IrType::SharedFun(_, _)
+        | IrType::FnOnceChain(_, _)
+        | IrType::Int
+        | IrType::Float
+        | IrType::Bool
+        | IrType::Str
+        | IrType::Char
+        | IrType::Unit
+        | IrType::Bytes
+        | IrType::Json
+        | IrType::Db
+        | IrType::ServerRequest
+        | IrType::ServerResponse
+        | IrType::ServerRoute
+        | IrType::ServerCookie
+        | IrType::StreamWriter
+        | IrType::HttpRequest
+        | IrType::Regex
+        | IrType::WebSocketServer
+        | IrType::WebSocketServerCfg
+        | IrType::UiPlain(_)
+        | IrType::WebReq
+        | IrType::Order
+        | IrType::HttpMethod
+        | IrType::Decimal
+        | IrType::ErrorKind
+        | IrType::Error
+        | IrType::ErrorDetails
+        | IrType::ErrorInfo
+        | IrType::PanicInfo
+        | IrType::TypeInfo
+        | IrType::SqlFragment
+        | IrType::Secret
+        | IrType::Path
+        | IrType::Url
+        | IrType::CacheCfg
+        | IrType::WebSocketClientCfg
+        | IrType::CacheStats
+        | IrType::CsvDoc
+        | IrType::EmailMessage
+        | IrType::EmailAttachment
+        | IrType::EmailSesConfig
+        | IrType::EmailSmtpConfig
+        | IrType::EmailProvider
+        | IrType::CryptoKey
+        | IrType::CryptoMac
+        | IrType::EmailAddress
+        | IrType::Locale
+        | IrType::RowGeneric(_) => false,
+    }
+}
+
+/// Does `expr` apply a decoder-`succeed` kernel (`Config`/`JsonDec`/`Db.Decode`
+/// `.succeed`, all lowering to `decode_succeed`) to a BARE `Var`/`CloneVar`
+/// argument?
+///
+/// `decode_succeed` MOVES its value into a `Box<dyn Fn() -> A + Send + Sync>`
+/// factory closure, so a captured bare value forces `A: Send + Sync`. When that
+/// value is a bare tvar-typed local — the constructor `c` pulled out of an
+/// `enum`'s `Vec<(tv, String)>` pairs by a destructure, then fed to
+/// `decode_succeed` — the enclosing generic needs `tv: Sync`, or the
+/// closure→trait-object cast is `E0277` (an `ipe`-accept-then-`cargo`-fail SEAL
+/// break). The bare-`Var` argument is the exact capture position; the caller
+/// pairs this with a signature check ([`ir_type_generic_reaches_bare`]) that the
+/// tvar genuinely rides a transparent composite, so the obligation fires only on
+/// the real capture shape and never on a `decode_list`-style run-through.
+fn body_succeeds_on_bare_var(expr: &Expr) -> bool {
+    match expr {
+        Expr::Call { callee, args, .. } => {
+            let hit_here = matches!(
+                callee,
+                Callee::Kernel(
+                    KernelFn::ConfigSucceed | KernelFn::JsonDecSucceed | KernelFn::DbDecSucceed
+                )
+            ) && matches!(args.first(), Some(Expr::Var(_) | Expr::CloneVar(_)));
+            hit_here || args.iter().any(body_succeeds_on_bare_var)
+        }
+        Expr::Lambda { body, .. }
+        | Expr::SharedLambda { body, .. }
+        | Expr::TailLoop { body, .. }
+        | Expr::Access { record: body, .. } => body_succeeds_on_bare_var(body),
+        Expr::Let { value, body, .. } | Expr::Destructure { value, body, .. } => {
+            body_succeeds_on_bare_var(value) || body_succeeds_on_bare_var(body)
+        }
+        Expr::Match(m) => {
+            body_succeeds_on_bare_var(m.scrutinee())
+                || m.arms()
+                    .iter()
+                    .any(|arm| body_succeeds_on_bare_var(&arm.body))
+        }
+        Expr::If { cond, then_, else_ } => {
+            body_succeeds_on_bare_var(cond)
+                || body_succeeds_on_bare_var(then_)
+                || body_succeeds_on_bare_var(else_)
+        }
+        Expr::BinOp { lhs, rhs, .. } => {
+            body_succeeds_on_bare_var(lhs) || body_succeeds_on_bare_var(rhs)
+        }
+        Expr::Apply { func, args } => {
+            body_succeeds_on_bare_var(func) || args.iter().any(body_succeeds_on_bare_var)
+        }
+        Expr::Ctor { args, .. } | Expr::TailRecur { args } => {
+            args.iter().any(body_succeeds_on_bare_var)
+        }
+        Expr::Tuple(items) | Expr::List { items, .. } => {
+            items.iter().any(body_succeeds_on_bare_var)
+        }
+        Expr::Cons { head, tail } => {
+            body_succeeds_on_bare_var(head) || body_succeeds_on_bare_var(tail)
+        }
+        Expr::ListIndexClone { list, .. } | Expr::ListLenCheck { list, .. } => {
+            body_succeeds_on_bare_var(list)
+        }
+        Expr::Record { fields, .. } | Expr::Update { fields, .. } => {
+            fields.iter().any(|(_, e)| body_succeeds_on_bare_var(e))
+        }
+        Expr::TaskSeq { effect, rest } | Expr::TaskSeqSync { effect, rest } => {
+            body_succeeds_on_bare_var(effect) || body_succeeds_on_bare_var(rest)
+        }
+        Expr::Int(_)
+        | Expr::Bool(_)
+        | Expr::Float(_)
+        | Expr::Str(_)
+        | Expr::PathLit(_)
+        | Expr::Char(_)
+        | Expr::Unit
+        | Expr::Var(_)
+        | Expr::CloneVar(_)
+        | Expr::FuncValue { .. } => false,
+    }
+}
+
 /// Does `expr` contain a boxed CALLBACK value — a [`Expr::FuncValue`] or a
 /// [`Expr::Lambda`] / [`Expr::SharedLambda`] — whose OWN type still mentions the
 /// type variable `tv`?
@@ -5710,17 +5909,43 @@ fn apply_kernel_type_param_bounds(
         // `Sync` — GENERAL capture obligation: the tvar's VALUE binder is
         // move-captured into an emitted closure (a user `filter`/`map` predicate,
         // a builder's composing lambda, …). Every emitted closure is a
-        // `Box<dyn Fn(..) -> .. + Send + Sync + 'static>`, so a captured bare
-        // `Generic(tv)` value obliges `tv: Send + Sync + 'static` or the
-        // closure→trait-object cast is E0277. Fires on the exact captured binder,
-        // so a tvar that is only read at the top level (never crossing a closure
-        // boundary) stays unbounded and reusable. This generalizes the
-        // decoder-factory `succeed`/`optional` matchers above to any closure
-        // capture.
+        // `Box<dyn Fn(..) -> .. + Send + Sync + 'static>`, so a captured value
+        // whose type REACHES the tvar bare (a bare `Generic(tv)`, or a `tv`
+        // element inside a captured transparent composite — `Vec<(tv, String)>`
+        // for an `enum`'s pairs, `Vec<Variant<tv>>` for a `taggedUnion`'s
+        // variants) obliges `tv: Send + Sync + 'static`, or the
+        // closure→trait-object cast is E0277. [`ir_type_generic_reaches_bare`]
+        // stops at opaque `Send + Sync` carriers (`Decoder`/`Task`/…), so a tvar
+        // that rides ONLY under such a carrier (a `decode_list` run-through
+        // element) is NOT reached and gains no spurious `Sync`. Fires on the
+        // exact captured binder, so a tvar only read at the top level (never
+        // crossing a closure boundary) stays unbounded and reusable. This
+        // generalizes the decoder-factory `succeed`/`optional` matchers above to
+        // any closure capture of a value structurally carrying the tvar.
         if params.iter().any(|(binder, ty)| {
-            matches!(ty, IrType::Generic(g) if *g == *tv)
-                && binder_captured_in_move_closure(*binder, body)
+            ir_type_generic_reaches_bare(ty, *tv) && binder_captured_in_move_closure(*binder, body)
         }) {
+            *bounds = bounds.with_sync();
+        }
+        // `Sync` — a bare tvar VALUE pulled OUT of a captured transparent
+        // composite (not itself a param) and moved into a `decode_succeed`
+        // factory. An `enum`'s decode helper destructures the constructor `c`
+        // out of its `Vec<(tv, String)>` pairs and feeds it to `decode_succeed`,
+        // whose `Box<dyn Fn() -> tv + Send + Sync>` factory captures `c` by
+        // value — forcing `tv: Sync`. The bare-value binder here is a
+        // destructure/match local, invisible to the `params`-keyed matchers
+        // above, so it is detected by the pairing of a `decode_succeed` on a bare
+        // `Var` ([`body_succeeds_on_bare_var`]) with the structural fact that the
+        // signature genuinely carries the tvar bare through a transparent
+        // composite ([`ir_type_generic_reaches_bare`] over a param or the
+        // return). That second condition is what keeps this tight: a
+        // `decode_list` run-through carries the tvar only under a `Decoder` and
+        // never satisfies `reaches_bare`, so it gains no spurious `Sync`.
+        let sig_reaches_bare = params
+            .iter()
+            .any(|(_, ty)| ir_type_generic_reaches_bare(ty, *tv))
+            || ir_type_generic_reaches_bare(ret, *tv);
+        if sig_reaches_bare && body_succeeds_on_bare_var(body) {
             *bounds = bounds.with_sync();
         }
     }
