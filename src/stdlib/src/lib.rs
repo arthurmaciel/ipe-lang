@@ -123,6 +123,18 @@ const HTML_UNSAFE: &str = include_str!("../Ipe/Html/Unsafe.ipe");
 /// [`COMPILED_STD_MODULES`] (NOT `MODULES`); NOT in `STDLIB_MODULE_QUALIFIERS`,
 /// so the disjointness invariant holds.
 const DB_UNSAFE: &str = include_str!("../Ipe/Db/Unsafe.ipe");
+/// `Ipe.Db.Dsn` — the typed, opaque connection descriptor (parse-don't-validate),
+/// compiled-source Layer-3.
+///
+/// Defines the `Driver` / `TlsMode` ADTs and wraps the `Db.Dsn_*` parse-surface
+/// kernels (`parse` / `build` / accessors / `redacted`), resolved by
+/// `ipe_canon::resolve::detect_kernel_alias` to the retained `Dsn*` kernels
+/// (runtime: `ipe_runtime::dsn::*`). The descriptor's password is a `Secret`;
+/// there is no plain-`String` password accessor. Pure — constructing a `Dsn`
+/// discloses no capability. Registered in [`COMPILED_STD_MODULES`] (NOT
+/// `MODULES`); NOT in `STDLIB_MODULE_QUALIFIERS`, so the disjointness invariant
+/// holds.
+const DB_DSN: &str = include_str!("../Ipe/Db/Dsn.ipe");
 /// `Ipe.Secret.Unsafe` — the raw secret-reveal escape hatch for `Ipe.Secret`,
 /// compiled-source Layer-3.
 ///
@@ -766,6 +778,15 @@ pub const COMPILED_STD_MODULES: &[CompiledStdModule] = &[
     CompiledStdModule {
         dotted: "Ipe.Db.Unsafe",
         source: DB_UNSAFE,
+    },
+    // Ipe.Db.Dsn — Layer-3 source; the typed, opaque connection descriptor
+    // (parse-don't-validate). Defines the `Driver` / `TlsMode` ADTs and wraps the
+    // `Db.Dsn_*` parse-surface kernels, marshalling the ADTs to/from small-integer
+    // tags. Pure: constructing a `Dsn` performs no I/O and discloses no
+    // capability. NOT an `.Unsafe` submodule.
+    CompiledStdModule {
+        dotted: "Ipe.Db.Dsn",
+        source: DB_DSN,
     },
     // Ipe.Secret.Unsafe — Layer-3 source; the single `unsafeReveal` escape hatch
     // is a `Ffi.kernel "Secret_reveal"` alias to the unchanged `SecretReveal`

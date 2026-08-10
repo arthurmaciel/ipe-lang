@@ -2788,6 +2788,8 @@ fn collect_record_shapes(
         | IrType::Secret
         | IrType::Path
         | IrType::Url
+        // `Dsn` is an opaque wrapper — no record shape.
+        | IrType::Dsn
         // Cache config / stats + Csv document are folded to nominal runtime
         // structs — no structural record shape to synthesise.
         | IrType::CacheCfg
@@ -2949,6 +2951,8 @@ fn type_reaches_enum(
         | IrType::Path
         // `Url` is a monomorphic opaque wrapper — no reachable enum edge.
         | IrType::Url
+        // `Dsn` is a monomorphic opaque wrapper — no reachable enum edge.
+        | IrType::Dsn
         // Cache config / stats + Csv document are monomorphic runtime structs
         // — no reachable enum edge to `target`.
         | IrType::CacheCfg
@@ -3045,6 +3049,8 @@ fn contains_generic(ty: &IrType) -> bool {
         | IrType::Path
         // `Url` is a monomorphic opaque wrapper — no generic parameters.
         | IrType::Url
+        // `Dsn` is a monomorphic opaque wrapper — no generic parameters.
+        | IrType::Dsn
         // Cache config / stats + Csv document are monomorphic — no generic
         // parameters.
         | IrType::CacheCfg
@@ -3172,6 +3178,8 @@ fn collect_generics(ty: &IrType, out: &mut Vec<Symbol>) {
         | IrType::Path
         // `Url` is a monomorphic opaque wrapper — no generics to collect.
         | IrType::Url
+        // `Dsn` is a monomorphic opaque wrapper — no generics to collect.
+        | IrType::Dsn
         // Cache config / stats + Csv document are monomorphic — no generics to
         // collect.
         | IrType::CacheCfg
@@ -3510,6 +3518,8 @@ fn match_template(
         | IrType::Path
         // `Url` is a monomorphic opaque leaf — must equal exactly.
         | IrType::Url
+        // `Dsn` is a monomorphic opaque leaf — must equal exactly.
+        | IrType::Dsn
         // Cache config / stats + Csv document are monomorphic runtime-struct
         // leaves.
         | IrType::CacheCfg

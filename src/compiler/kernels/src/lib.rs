@@ -233,6 +233,8 @@ pub enum BuiltinTag {
     Regex,
     /// `Url` — the nullary opaque validated URL.
     Url,
+    /// `Dsn` — the nullary opaque validated database-connection descriptor.
+    Dsn,
     /// `Locale` — the nullary opaque BCP-47 locale handle.
     Locale,
     /// `HttpMethod` — the nullary closed HTTP-method ADT.
@@ -1238,6 +1240,34 @@ pub enum StdlibKernel {
     DbConnect,
     DbOpen,
     DbClose,
+    // ── Ipe.Db.Dsn — the typed, opaque connection descriptor (parse surface) ──
+    // Each returns/consumes primitives (`Int`/`String`/`Secret`) plus the opaque
+    // `Dsn`; the `Driver`/`TlsMode` ADTs are marshalled to/from small-integer tags
+    // by the compiled-source `Ipe.Db.Dsn` wrapper, so no ADT crosses the kernel
+    // boundary directly.
+    /// `Ipe.Db.Dsn.parse : String -> Result Error Dsn` — parse a full DSN URL
+    /// string into the opaque descriptor, fail-closed on every invalid shape.
+    DsnParse,
+    /// The typed-parts constructor `Ipe.Db.Dsn.build`, lowered to primitive args:
+    /// `Int(driverTag) -> String(host) -> Int(port) -> String(db) -> String(user)
+    /// -> Secret(password) -> Int(tlsTag) -> Result Error Dsn`.
+    DsnBuild,
+    /// `dsn_driver : Dsn -> Int` — the driver discriminant, re-tagged to the
+    /// `Driver` ADT in the wrapper.
+    DsnDriverTag,
+    /// `dsn_host : Dsn -> String`.
+    DsnHost,
+    /// `dsn_port : Dsn -> Int`.
+    DsnPort,
+    /// `dsn_database : Dsn -> String`.
+    DsnDatabase,
+    /// `dsn_user : Dsn -> String`.
+    DsnUser,
+    /// `dsn_tls : Dsn -> Int` — the TLS-mode discriminant, re-tagged to the
+    /// `TlsMode` ADT in the wrapper.
+    DsnTlsTag,
+    /// `Ipe.Db.Dsn.redacted : Dsn -> String` — the credential-free render.
+    DsnRedacted,
     DbExecRaw,
     DbExec,
     DbQuery,
@@ -2877,6 +2907,16 @@ impl StdlibKernel {
             Self::DbConnect => d("Db", "connect", 1, Db, "db_connect"),
             Self::DbOpen => d("Db", "open", 2, Db, "db_open"),
             Self::DbClose => d("Db", "close", 1, Db, "db_close"),
+            // ── Ipe.Db.Dsn — parse-don't-validate descriptor kernels ──
+            Self::DsnParse => d("Db.Dsn", "parse", 1, Db, "dsn_parse"),
+            Self::DsnBuild => d("Db.Dsn", "build", 7, Db, "dsn_build"),
+            Self::DsnDriverTag => d("Db.Dsn", "driverTag", 1, Db, "dsn_driver"),
+            Self::DsnHost => d("Db.Dsn", "host", 1, Db, "dsn_host"),
+            Self::DsnPort => d("Db.Dsn", "port", 1, Db, "dsn_port"),
+            Self::DsnDatabase => d("Db.Dsn", "database", 1, Db, "dsn_database"),
+            Self::DsnUser => d("Db.Dsn", "user", 1, Db, "dsn_user"),
+            Self::DsnTlsTag => d("Db.Dsn", "tlsTag", 1, Db, "dsn_tls"),
+            Self::DsnRedacted => d("Db.Dsn", "redacted", 1, Db, "dsn_redacted"),
             Self::DbExecRaw => d("Db", "unsafeExecRaw", 2, Db, "db_exec_raw"),
             Self::DbExec => d("Db", "exec", 3, Db, "db_exec_params"),
             Self::DbQuery => d("Db", "unsafeQuery", 3, Db, "db_query_params"),
@@ -4215,6 +4255,15 @@ impl StdlibKernel {
         Self::DbConnect,
         Self::DbOpen,
         Self::DbClose,
+        Self::DsnParse,
+        Self::DsnBuild,
+        Self::DsnDriverTag,
+        Self::DsnHost,
+        Self::DsnPort,
+        Self::DsnDatabase,
+        Self::DsnUser,
+        Self::DsnTlsTag,
+        Self::DsnRedacted,
         Self::DbExecRaw,
         Self::DbExec,
         Self::DbQuery,
@@ -4774,6 +4823,15 @@ impl StdlibKernel {
             Self::DbConnect
                 | Self::DbOpen
                 | Self::DbClose
+                | Self::DsnParse
+                | Self::DsnBuild
+                | Self::DsnDriverTag
+                | Self::DsnHost
+                | Self::DsnPort
+                | Self::DsnDatabase
+                | Self::DsnUser
+                | Self::DsnTlsTag
+                | Self::DsnRedacted
                 | Self::DbExecRaw
                 | Self::DbExec
                 | Self::DbQuery
@@ -5509,6 +5567,7 @@ impl StdlibKernel {
         const PATH: TyShape = TyShape::Con(BuiltinTag::Path, &[]);
         const REGEX: TyShape = TyShape::Con(BuiltinTag::Regex, &[]);
         const URL: TyShape = TyShape::Con(BuiltinTag::Url, &[]);
+        const DSN: TyShape = TyShape::Con(BuiltinTag::Dsn, &[]);
         const LOCALE: TyShape = TyShape::Con(BuiltinTag::Locale, &[]);
         const HTTP_METHOD: TyShape = TyShape::Con(BuiltinTag::HttpMethod, &[]);
         const CRYPTO_KEY: TyShape = TyShape::Con(BuiltinTag::CryptoKey, &[]);
@@ -5557,6 +5616,7 @@ impl StdlibKernel {
         const RESULT_ERR_REGEX: TyShape = TyShape::Con(BuiltinTag::Result, &[ERROR, REGEX]);
         const RESULT_ERR_PATH: TyShape = TyShape::Con(BuiltinTag::Result, &[ERROR, PATH]);
         const RESULT_ERR_URL: TyShape = TyShape::Con(BuiltinTag::Result, &[ERROR, URL]);
+        const RESULT_ERR_DSN: TyShape = TyShape::Con(BuiltinTag::Result, &[ERROR, DSN]);
         const RESULT_ERR_DICT_SS: TyShape =
             TyShape::Con(BuiltinTag::Result, &[ERROR, DICT_STRING_STRING]);
 
@@ -5996,6 +6056,32 @@ impl StdlibKernel {
         const LIST_TUPLE_STRING_STRING: TyShape =
             TyShape::Con(BuiltinTag::List, &[TUPLE_STRING_STRING]);
         const URL_BUILD_QUERY: TyShape = TyShape::Fun(&LIST_TUPLE_STRING_STRING, &STRING);
+        // Dsn — the parse-don't-validate descriptor. Accessors return primitive
+        // tags (`Int`) the compiled-source wrapper re-tags into the `Driver` /
+        // `TlsMode` ADTs; the descriptor itself is the opaque `DSN` leaf.
+        const STRING_TO_RESULT_ERR_DSN: TyShape = TyShape::Fun(&STRING, &RESULT_ERR_DSN);
+        const DSN_TO_STRING: TyShape = TyShape::Fun(&DSN, &STRING);
+        const DSN_TO_INT: TyShape = TyShape::Fun(&DSN, &INT);
+        // `build : Int -> String -> Int -> String -> String -> Secret -> Int
+        //   -> Result Error Dsn` (driverTag, host, port, database, user,
+        //   password, tlsTag).
+        const SECRET_TO_INT_TO_RESULT_ERR_DSN: TyShape =
+            TyShape::Fun(&SECRET, &TyShape::Fun(&INT, &RESULT_ERR_DSN));
+        const STRING_TO_SECRET_TO_INT_TO_RESULT_ERR_DSN: TyShape =
+            TyShape::Fun(&STRING, &SECRET_TO_INT_TO_RESULT_ERR_DSN);
+        const STRING_TO_STRING_TO_SECRET_TO_INT_TO_RESULT_ERR_DSN: TyShape =
+            TyShape::Fun(&STRING, &STRING_TO_SECRET_TO_INT_TO_RESULT_ERR_DSN);
+        const INT_TO_STRING_TO_STRING_TO_SECRET_TO_INT_TO_RESULT_ERR_DSN: TyShape =
+            TyShape::Fun(&INT, &STRING_TO_STRING_TO_SECRET_TO_INT_TO_RESULT_ERR_DSN);
+        const STRING_TO_INT_TO_STRING_TO_STRING_TO_SECRET_TO_INT_TO_RESULT_ERR_DSN: TyShape =
+            TyShape::Fun(
+                &STRING,
+                &INT_TO_STRING_TO_STRING_TO_SECRET_TO_INT_TO_RESULT_ERR_DSN,
+            );
+        const DSN_BUILD: TyShape = TyShape::Fun(
+            &INT,
+            &STRING_TO_INT_TO_STRING_TO_STRING_TO_SECRET_TO_INT_TO_RESULT_ERR_DSN,
+        );
         // Locale.
         const MAYBE_LOCALE: TyShape = TyShape::Con(BuiltinTag::Maybe, &[LOCALE]);
         const STRING_TO_MAYBE_LOCALE: TyShape = TyShape::Fun(&STRING, &MAYBE_LOCALE);
@@ -7450,6 +7536,14 @@ impl StdlibKernel {
             Self::UrlPort => Some(&URL_TO_MAYBE_INT),
             Self::UrlBuildQuery => Some(&URL_BUILD_QUERY),
 
+            // ── Ipe.Db.Dsn — parse-don't-validate descriptor. ──
+            Self::DsnParse => Some(&STRING_TO_RESULT_ERR_DSN),
+            Self::DsnBuild => Some(&DSN_BUILD),
+            Self::DsnDriverTag | Self::DsnPort | Self::DsnTlsTag => Some(&DSN_TO_INT),
+            Self::DsnHost | Self::DsnDatabase | Self::DsnUser | Self::DsnRedacted => {
+                Some(&DSN_TO_STRING)
+            }
+
             // ── Locale. ──
             Self::LocaleFromTag => Some(&STRING_TO_MAYBE_LOCALE),
             Self::LocaleToTag => Some(&LOCALE_TO_STRING),
@@ -8841,6 +8935,19 @@ impl StdlibKernel {
             | Self::SecretReveal
             | Self::SecretUse
             | Self::SecretRedacted
+            // `Ipe.Db.Dsn.*` — the parse surface is PURE: parsing/rendering a
+            // descriptor performs no I/O and discloses no capability. The
+            // network/database disclosure belongs to a future `open` that
+            // CONNECTS a `Dsn`, not to constructing one.
+            | Self::DsnParse
+            | Self::DsnBuild
+            | Self::DsnDriverTag
+            | Self::DsnHost
+            | Self::DsnPort
+            | Self::DsnDatabase
+            | Self::DsnUser
+            | Self::DsnTlsTag
+            | Self::DsnRedacted
             | Self::RegexCompile
             | Self::RegexMatch
             | Self::RegexFind

@@ -1,0 +1,209 @@
+-- | Ipe.Db.Dsn — a typed, opaque database connection descriptor
+-- (parse-don't-validate, Layer 3 Ipe source).
+--
+-- `Dsn` is opaque and reserved: the ONLY ways to obtain one are `parse` (from a
+-- full DSN URL string) and `build` (from typed parts). Both run the SAME
+-- fail-closed validators in the runtime kernel, so a `Dsn` value is a proof that
+-- the descriptor passed every check — an invalid DSN is a typed `Err`, never a
+-- silently-accepted, re-injectable value.
+--
+-- The descriptor's password is a `Secret`: it is never rendered, logged, or
+-- returned as a plain `String`. There is no password accessor; the only display
+-- path is `redacted`, which substitutes a placeholder.
+--
+-- This module owns the parse SURFACE only. Connecting a `Dsn` to a live database
+-- is a separate, separately-reviewed capability (it discloses `network`); a
+-- `Dsn` on its own performs no I/O and discloses no capability.
+module Ipe.Db.Dsn exposing
+    ( Dsn
+    , Driver(..)
+    , TlsMode(..)
+    , parse
+    , build
+    , driver
+    , host
+    , port
+    , database
+    , user
+    , tls
+    , redacted
+    )
+
+
+import Ipe.Ffi as Ffi
+import Ipe.Error exposing (Error)
+import Ipe.Result as Result
+
+
+-- ── Types ─────────────────────────────────────────────────────────────────────
+
+
+-- | The closed set of drivers the runtime can describe — exactly the two the
+-- runtime links. A driver the runtime cannot dial is unrepresentable here, not a
+-- free string.
+type Driver
+    = Postgres
+    | Sqlite
+
+
+-- | The transport-security posture. `Require` is the secure default when a DSN
+-- omits an explicit mode; `Disable` is rejected by every constructor (a `Dsn` is
+-- never a proof of a cleartext transport).
+type TlsMode
+    = Require
+    | Prefer
+    | Disable
+
+
+-- ── Construction ──────────────────────────────────────────────────────────────
+
+
+-- | `parse raw` — THE seal from a full DSN URL string. Returns `Err` on any
+-- invalid shape: an unparseable string, an unknown driver, a missing host for a
+-- network driver, an out-of-range port, an explicit `sslmode=disable`, an unknown
+-- `sslmode`, a smuggled/duplicated credential parameter, or a control-character
+-- component. The password is captured as a `Secret`.
+parse : String -> Result Error Dsn
+parse =
+    Ffi.kernel "Db.Dsn_parse"
+
+
+-- | `build parts` — THE seal from typed parts, running the SAME validators as
+-- `parse`. Preferred over `parse` when the parts are already structured (there is
+-- no string to mis-escape). The `password` is a `Secret` on the way in; `Disable`
+-- TLS and an out-of-range port are rejected.
+build :
+    { driver : Driver
+    , host : String
+    , port : Int
+    , database : String
+    , user : String
+    , password : Secret
+    , tls : TlsMode
+    }
+    -> Result Error Dsn
+build parts =
+    buildKernel
+        (driverTag parts.driver)
+        parts.host
+        parts.port
+        parts.database
+        parts.user
+        parts.password
+        (tlsTag parts.tls)
+
+
+-- The 7-arg runtime constructor over primitive tags. The `Driver` / `TlsMode`
+-- ADTs are marshalled to their small-integer discriminants by `driverTag` /
+-- `tlsTag` before the call, so no ADT crosses the kernel boundary.
+buildKernel : Int -> String -> Int -> String -> String -> Secret -> Int -> Result Error Dsn
+buildKernel =
+    Ffi.kernel "Db.Dsn_build"
+
+
+-- ── Accessors ─────────────────────────────────────────────────────────────────
+
+
+-- | `driver dsn` — the descriptor's driver.
+driver : Dsn -> Driver
+driver dsn =
+    driverFromTag (driverTagKernel dsn)
+
+
+-- | `host dsn` — the host component (`""` for a file-backed sqlite descriptor).
+host : Dsn -> String
+host =
+    Ffi.kernel "Db.Dsn_host"
+
+
+-- | `port dsn` — the port (`0` for sqlite).
+port : Dsn -> Int
+port =
+    Ffi.kernel "Db.Dsn_port"
+
+
+-- | `database dsn` — the database name (or file path, for sqlite).
+database : Dsn -> String
+database =
+    Ffi.kernel "Db.Dsn_database"
+
+
+-- | `user dsn` — the connection user (`""` when none).
+user : Dsn -> String
+user =
+    Ffi.kernel "Db.Dsn_user"
+
+
+-- | `tls dsn` — the descriptor's transport posture.
+tls : Dsn -> TlsMode
+tls dsn =
+    tlsFromTag (tlsTagKernel dsn)
+
+
+-- | `redacted dsn` — a credential-free, human-readable rendering. The password is
+-- NEVER included; this is the ONLY display path a `Dsn` has.
+redacted : Dsn -> String
+redacted =
+    Ffi.kernel "Db.Dsn_redacted"
+
+
+-- ── Tag marshalling (ADT ↔ runtime discriminant) ──────────────────────────────
+
+
+driverTagKernel : Dsn -> Int
+driverTagKernel =
+    Ffi.kernel "Db.Dsn_driverTag"
+
+
+tlsTagKernel : Dsn -> Int
+tlsTagKernel =
+    Ffi.kernel "Db.Dsn_tlsTag"
+
+
+driverTag : Driver -> Int
+driverTag d =
+    case d of
+        Postgres ->
+            0
+
+        Sqlite ->
+            1
+
+
+tlsTag : TlsMode -> Int
+tlsTag t =
+    case t of
+        Require ->
+            0
+
+        Prefer ->
+            1
+
+        Disable ->
+            2
+
+
+-- The runtime only ever hands back a valid driver discriminant (0 or 1); the
+-- `_` arm keeps the case total and defaults, conservatively, to the network
+-- driver rather than fabricating an impossible value.
+driverFromTag : Int -> Driver
+driverFromTag tag =
+    case tag of
+        1 ->
+            Sqlite
+
+        _ ->
+            Postgres
+
+
+-- The runtime only ever hands back an accepted TLS discriminant (0 or 1 — a
+-- `Dsn` never carries `Disable`); the `_` arm keeps the case total and defaults
+-- to the strongest posture.
+tlsFromTag : Int -> TlsMode
+tlsFromTag tag =
+    case tag of
+        1 ->
+            Prefer
+
+        _ ->
+            Require

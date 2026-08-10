@@ -2612,6 +2612,9 @@ fn ir_type_contains_non_serde(ty: &IrType) -> bool {
         // `Url` is a non-serde request-boundary value (like `Path`) — a `Url` in
         // a HydrationState record is rejected.
         | IrType::Url
+        // `Dsn` carries a `Secret` and is non-serde — a `Dsn` in a HydrationState
+        // record is rejected (same posture as `Url`/`Secret`).
+        | IrType::Dsn
         | IrType::SqlFragment
         | IrType::CacheCfg
         | IrType::CacheStats

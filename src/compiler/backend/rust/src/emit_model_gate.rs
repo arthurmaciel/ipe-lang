@@ -306,6 +306,10 @@ fn leaf_of_bounded(ctx: &EmitCtx, ty: &IrType, app: AppShape, fuel: u32) -> Mode
         // (via `ir_type_is_serde` = `false`) and this arm names it in the
         // resulting IPE-L0120.
         | IrType::Url
+        // `Dsn` is a connection-descriptor value carrying a `Secret`, not serde —
+        // same classification as `Url`/`Secret`: a Web Model field of type `Dsn`
+        // is rejected by `admissible()` and this arm names it in the IPE-L0120.
+        | IrType::Dsn
         // `Order` is a plain three-variant data enum — an admissible leaf.
         // `Decimal` is a Copy newtype — an admissible leaf.
         // `ErrorKind`/`Error`/`ErrorDetails` and the nominal error-payload
