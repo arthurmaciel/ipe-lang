@@ -25,6 +25,19 @@ pub enum Color {
     Rgba(i64, i64, i64, f64),
 }
 
+impl Color {
+    /// Render this colour to its CSS value string. The single renderer for the
+    /// `Ipe.Ui.Color` domain: the inline-style path, the stylesheet path, the
+    /// `Ui.colorCss` kernel, and the gradient/shadow/pseudo builders all route
+    /// here, so a colour formats identically wherever it lands.
+    #[must_use]
+    pub(crate) fn css(&self) -> String {
+        match self {
+            Self::Rgba(r, g, b, a) => format!("rgba({r},{g},{b},{a})"),
+        }
+    }
+}
+
 /// `Ipe.Ui.Length`. `Min`/`Max` are self-recursive → `Box` (E0072 otherwise).
 #[derive(Clone, Debug, PartialEq)]
 pub enum Length {
@@ -35,6 +48,27 @@ pub enum Length {
     Max(i64, Box<Length>),
     Vh(i64),
     Vw(i64),
+}
+
+impl Length {
+    /// Render this length to its CSS value string. The single renderer for the
+    /// `Ipe.Ui.Length` domain, shared by the inline-style and stylesheet paths.
+    ///
+    /// `Fill(n)` renders `100%`; the flex sizing (`flex-grow:n`, `flex-basis:0`)
+    /// that divides free space is emitted at the width/height attribute arms,
+    /// not here.
+    #[must_use]
+    pub(crate) fn css(&self) -> String {
+        match self {
+            Self::Px(n) => format!("{n}px"),
+            Self::Content => "auto".to_owned(),
+            Self::Fill(_) => "100%".to_owned(),
+            Self::Min(n, inner) => format!("min({}px,{})", n, inner.css()),
+            Self::Max(n, inner) => format!("max({}px,{})", n, inner.css()),
+            Self::Vh(n) => format!("{n}vh"),
+            Self::Vw(n) => format!("{n}vw"),
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -241,5 +275,43 @@ impl<M> crate::stringify::IpeStringify for Attribute<M> {
 impl<M> crate::stringify::IpeStringify for Element<M> {
     fn ipe_show(&self) -> String {
         "<element>".to_string()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // SSOT: the inline-style path, the `Ui.colorCss` kernel, and the direct
+    // `Color::css` renderer must format one colour byte-identically. A second
+    // renderer for the same value would break exactly this assertion.
+    #[test]
+    fn colour_renders_identically_across_paths() {
+        let c = Color::Rgba(18, 52, 86, 0.5);
+        let direct = c.css();
+        let kernel = super::super::helpers::ui_color_css_(c.clone());
+
+        enum Msg {}
+        let style =
+            super::super::render::build_style_string(&[Attribute::<Msg>::AttrBgColor(c.clone())]);
+
+        assert_eq!(direct, "rgba(18,52,86,0.5)");
+        assert_eq!(kernel, direct);
+        assert_eq!(style, format!("background-color:{direct}"));
+    }
+
+    // SSOT: a length formats identically through the inline-style path and the
+    // direct `Length::css` renderer, including the recursive `Min`/`Max` arms.
+    #[test]
+    fn length_renders_identically_across_paths() {
+        let len = Length::Max(320, Box::new(Length::Vh(80)));
+        let direct = len.css();
+
+        enum Msg {}
+        let style =
+            super::super::render::build_style_string(&[Attribute::<Msg>::AttrWidth(len.clone())]);
+
+        assert_eq!(direct, "max(320px,80vh)");
+        assert_eq!(style, format!("width:{direct}"));
     }
 }
