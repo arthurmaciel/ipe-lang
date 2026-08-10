@@ -21,7 +21,7 @@
 
 use super::super::css_safety::{SafeCssPropertyName, SafeCssValue};
 use super::super::html::{Attribute as HtmlAttribute, Html};
-use super::element::{Attribute, Color, Description, Element, HAlign, Length, Location, VAlign};
+use super::element::{Attribute, Description, Element, HAlign, Length, Location, VAlign};
 
 // ── CSS boundary smart constructors ───────────────────────────────────────────
 // `SafeCssPropertyName` / `SafeCssValue` moved to the shared `css_safety` module
@@ -37,29 +37,6 @@ fn is_dangerous_url_scheme(url: &str) -> bool {
         || lower.starts_with("vbscript:")
         || lower.starts_with("data:text/html")
         || lower.starts_with("data:application/")
-}
-
-// ── Length / Color → CSS ──────────────────────────────────────────────────────
-
-fn length_css(len: &Length) -> String {
-    match len {
-        Length::Px(n) => format!("{n}px"),
-        Length::Content => "auto".to_owned(),
-        // Fill(n) = "100%"; the flex sizing (flex-grow:n, flex-basis:0) that
-        // makes the portion divide free space is emitted at the AttrWidth /
-        // AttrHeight arms, not here.
-        Length::Fill(_) => "100%".to_owned(),
-        Length::Min(n, inner) => format!("min({}px,{})", n, length_css(inner)),
-        Length::Max(n, inner) => format!("max({}px,{})", n, length_css(inner)),
-        Length::Vh(n) => format!("{n}vh"),
-        Length::Vw(n) => format!("{n}vw"),
-    }
-}
-
-fn color_css(c: &Color) -> String {
-    match c {
-        Color::Rgba(r, g, b, a) => format!("rgba({r},{g},{b},{a})"),
-    }
 }
 
 // ── Attribute → (style entries, html attrs) ───────────────────────────────────
@@ -96,7 +73,7 @@ pub(crate) fn build_style_string<M>(attrs: &[Attribute<M>]) -> String {
     for attr in attrs {
         match attr {
             Attribute::AttrWidth(len) => {
-                decl!("width:{}", length_css(len));
+                decl!("width:{}", len.css());
                 if let Length::Fill(n) = len {
                     // elm-ui portion model: `fillPortion n` divides the row's
                     // free space, so the flex base size must be 0 and growth is
@@ -111,7 +88,7 @@ pub(crate) fn build_style_string<M>(attrs: &[Attribute<M>]) -> String {
                 }
             }
             Attribute::AttrHeight(len) => {
-                decl!("height:{}", length_css(len));
+                decl!("height:{}", len.css());
                 if let Length::Fill(n) = len {
                     // Column main-axis analogue of the width portion model above:
                     // `flex-basis:0` makes a portioned height divide the column's
@@ -199,7 +176,7 @@ pub(crate) fn build_style_string<M>(attrs: &[Attribute<M>]) -> String {
                 decl!("font-size:{n}px");
             }
             Attribute::AttrFontColor(c) => {
-                decl!("color:{}", color_css(c));
+                decl!("color:{}", c.css());
             }
             Attribute::AttrFontFamily(f) => {
                 // Value-as-data gate (UI CSS-escaping hardening): a raw Ipê
@@ -239,7 +216,7 @@ pub(crate) fn build_style_string<M>(attrs: &[Attribute<M>]) -> String {
                 }
             }
             Attribute::AttrBgColor(c) => {
-                decl!("background-color:{}", color_css(c));
+                decl!("background-color:{}", c.css());
             }
             Attribute::AttrBgImage(url) => {
                 // T3: check the raw URL scheme before wrapping in url().
@@ -281,7 +258,7 @@ pub(crate) fn build_style_string<M>(attrs: &[Attribute<M>]) -> String {
                 decl!("border-width:{t}px {r}px {b}px {l}px");
             }
             Attribute::AttrBorderColor(c) => {
-                decl!("border-color:{}", color_css(c));
+                decl!("border-color:{}", c.css());
             }
             Attribute::AttrBorderRounded(n) => {
                 decl!("border-radius:{n}px");
@@ -292,15 +269,12 @@ pub(crate) fn build_style_string<M>(attrs: &[Attribute<M>]) -> String {
                 }
             }
             Attribute::AttrBorderShadow(x, y, blur, spread, c) => {
-                decl!(
-                    "box-shadow:{x}px {y}px {blur}px {spread}px {}",
-                    color_css(c)
-                );
+                decl!("box-shadow:{x}px {y}px {blur}px {spread}px {}", c.css());
             }
             Attribute::AttrBorderInsetShadow(x, y, blur, spread, c) => {
                 decl!(
                     "box-shadow:inset {x}px {y}px {blur}px {spread}px {}",
-                    color_css(c)
+                    c.css()
                 );
             }
             Attribute::AttrPointer => {
@@ -696,6 +670,7 @@ pub fn ui_layout_with_vecs<M: Clone>(
 
 #[cfg(test)]
 mod tests {
+    use super::super::element::Color;
     use super::*;
     use crate::html::render_html;
 
@@ -779,7 +754,7 @@ mod tests {
     fn border_shadow_renders_box_shadow() {
         // `Border.shadow { offsetX = 0, offsetY = 1, blur = 2, spread = 0,
         //   color = Ui.rgb 0 0 0 }` must render the CSS box-shadow shape,
-        // routing the colour through the same `color_css` boundary as
+        // routing the colour through the same `Color::css` renderer as
         // `Border.color`. Exercises the `ui_border_shadow_` helper end to end.
         let attrs = vec![super::super::helpers::ui_border_shadow_(
             0,
@@ -821,7 +796,7 @@ mod tests {
     fn border_inner_shadow_renders_inset_box_shadow() {
         // `Border.innerShadow { offsetX = 0, offsetY = 1, blur = 2, spread = 0,
         //   color = Ui.rgb 0 0 0 }` must render the INSET CSS box-shadow shape,
-        // routing the colour through the same `color_css` boundary as
+        // routing the colour through the same `Color::css` renderer as
         // `Border.color`. Exercises the `ui_border_inner_shadow_` helper end to
         // end — identical to `Border.shadow` but prefixed with `inset`.
         let attrs = vec![super::super::helpers::ui_border_inner_shadow_(
