@@ -1298,18 +1298,53 @@ pub fn db_get_bool<R: IpeRow>(field: String, row: &R) -> bool {
     )
 }
 
-/// A validated SQL identifier (table/column name) — parse-don't-validate. The
-/// only constructor runs the `[A-Za-z0-9_]`, non-empty policy, so a value of
-/// this type is always safe to interpolate. No `""` sentinel to re-check; an
-/// unvalidated name is unrepresentable past the boundary.
+/// Whether a [`SqlIdent`] may contain `.` separators.
+///
+/// A `Plain` identifier is a bare table or column name (`users`, `email`); a
+/// `Dotted` identifier additionally admits a qualified reference (`users.id`).
+/// The two modes are the ONLY axis on which the single identifier parser
+/// varies — there is one charset check, not two hand-rolled ones that could
+/// drift apart on a security boundary.
+#[derive(Clone, Copy)]
+enum IdentMode {
+    /// `[A-Za-z0-9_]` — bare table/column name, dots rejected.
+    Plain,
+    /// `[A-Za-z0-9_.]` — bare name or a dotted qualified reference.
+    Dotted,
+}
+
+/// A validated SQL identifier (table/column name) — parse-don't-validate and
+/// the SINGLE source of truth for the identifier-interpolation boundary. Every
+/// path that interpolates a table/column name into SQL obtains one of these
+/// through [`SqlIdent::parse`] (or its mode helpers); there is no other
+/// charset check in this module. A value of this type is therefore always safe
+/// to interpolate — no `""` sentinel to re-check, and an unvalidated name is
+/// unrepresentable past the boundary.
 struct SqlIdent(String);
 impl SqlIdent {
-    fn parse(name: &str) -> Option<SqlIdent> {
-        if !name.is_empty() && name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_') {
+    /// The one and only SQL-identifier charset gate. `mode` selects whether a
+    /// `.` separator is admitted; everything else about the policy (non-empty,
+    /// ASCII-alphanumeric-or-underscore) is shared, so the `Plain` and
+    /// `Dotted` surfaces cannot drift.
+    fn parse(name: &str, mode: IdentMode) -> Option<SqlIdent> {
+        let dot_ok = matches!(mode, IdentMode::Dotted);
+        if !name.is_empty()
+            && name
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || c == '_' || (dot_ok && c == '.'))
+        {
             Some(SqlIdent(name.to_string()))
         } else {
             None
         }
+    }
+    /// Parse a bare (dot-rejecting) table or column name.
+    fn parse_plain(name: &str) -> Option<SqlIdent> {
+        Self::parse(name, IdentMode::Plain)
+    }
+    /// Parse a name that may be a dotted qualified reference (`table.column`).
+    fn parse_dotted(name: &str) -> Option<SqlIdent> {
+        Self::parse(name, IdentMode::Dotted)
     }
     fn as_str(&self) -> &str {
         &self.0
@@ -1343,7 +1378,7 @@ pub fn db_insert_row<E: Send + From<String> + 'static>(
     row: HashMap<String, String>,
 ) -> IpeTask<E, i64> {
     Box::pin(async move {
-        let qtable = match SqlIdent::parse(&table) {
+        let qtable = match SqlIdent::parse_plain(&table) {
             Some(t) => t,
             None => {
                 return IpeResult::Err(
@@ -1358,7 +1393,7 @@ pub fn db_insert_row<E: Send + From<String> + 'static>(
         keys.sort(); // deterministic column order
         let col_idents: Vec<SqlIdent> = match keys
             .iter()
-            .map(|k| SqlIdent::parse(k))
+            .map(|k| SqlIdent::parse_plain(k))
             .collect::<Option<Vec<_>>>()
         {
             Some(v) => v,
@@ -1412,7 +1447,7 @@ pub fn db_get_by_id<E: Send + From<String> + 'static>(
     id: String,
 ) -> IpeTask<E, IpeMaybe<HashMap<String, String>>> {
     Box::pin(async move {
-        let qtable = match SqlIdent::parse(&table) {
+        let qtable = match SqlIdent::parse_plain(&table) {
             Some(t) => t,
             None => {
                 return IpeResult::Err(
@@ -1441,7 +1476,7 @@ pub fn db_update_by_id<E: Send + From<String> + 'static>(
     row: HashMap<String, String>,
 ) -> IpeTask<E, i64> {
     Box::pin(async move {
-        let qtable = match SqlIdent::parse(&table) {
+        let qtable = match SqlIdent::parse_plain(&table) {
             Some(t) => t,
             None => {
                 return IpeResult::Err(
@@ -1456,7 +1491,7 @@ pub fn db_update_by_id<E: Send + From<String> + 'static>(
         keys.sort();
         let col_idents: Vec<SqlIdent> = match keys
             .iter()
-            .map(|k| SqlIdent::parse(k))
+            .map(|k| SqlIdent::parse_plain(k))
             .collect::<Option<Vec<_>>>()
         {
             Some(v) => v,
@@ -1489,7 +1524,7 @@ pub fn db_delete_by_id<E: Send + From<String> + 'static>(
     id: String,
 ) -> IpeTask<E, i64> {
     Box::pin(async move {
-        let qtable = match SqlIdent::parse(&table) {
+        let qtable = match SqlIdent::parse_plain(&table) {
             Some(t) => t,
             None => {
                 return IpeResult::Err(
@@ -1513,7 +1548,8 @@ pub fn db_find_one_by_field<E: Send + From<String> + 'static>(
     value: String,
 ) -> IpeTask<E, IpeMaybe<HashMap<String, String>>> {
     Box::pin(async move {
-        let (qtable, qfield) = match (SqlIdent::parse(&table), SqlIdent::parse(&field)) {
+        let (qtable, qfield) = match (SqlIdent::parse_plain(&table), SqlIdent::parse_plain(&field))
+        {
             (Some(t), Some(f)) => (t, f),
             _ => {
                 return IpeResult::Err(
@@ -1546,7 +1582,8 @@ pub fn db_find_many_by_field<E: Send + From<String> + 'static>(
     value: String,
 ) -> IpeTask<E, Vec<HashMap<String, String>>> {
     Box::pin(async move {
-        let (qtable, qfield) = match (SqlIdent::parse(&table), SqlIdent::parse(&field)) {
+        let (qtable, qfield) = match (SqlIdent::parse_plain(&table), SqlIdent::parse_plain(&field))
+        {
             (Some(t), Some(f)) => (t, f),
             _ => {
                 return IpeResult::Err(
@@ -1578,7 +1615,7 @@ pub fn db_find_by_conditions<E: Send + From<String> + 'static>(
     conditions: HashMap<String, String>,
 ) -> IpeTask<E, Vec<HashMap<String, String>>> {
     Box::pin(async move {
-        let qtable = match SqlIdent::parse(&table) {
+        let qtable = match SqlIdent::parse_plain(&table) {
             Some(t) => t,
             None => {
                 return IpeResult::Err(
@@ -1590,7 +1627,7 @@ pub fn db_find_by_conditions<E: Send + From<String> + 'static>(
         keys.sort();
         let qfield_idents: Vec<SqlIdent> = match keys
             .iter()
-            .map(|k| SqlIdent::parse(k))
+            .map(|k| SqlIdent::parse_plain(k))
             .collect::<Option<Vec<_>>>()
         {
             Some(v) => v,
@@ -1721,7 +1758,7 @@ pub fn db_get_by_id_decode<E: Send + From<String> + 'static, A: Send + 'static>(
     decoder: Decoder<E, A>,
 ) -> IpeTask<E, IpeMaybe<A>> {
     Box::pin(async move {
-        let qtable = match SqlIdent::parse(&table) {
+        let qtable = match SqlIdent::parse_plain(&table) {
             Some(t) => t,
             None => {
                 return IpeResult::Err(
@@ -1882,9 +1919,11 @@ pub fn db_with_transaction<E: Send + From<String> + 'static, A: Send + 'static>(
 // codegen cannot destructure Money (e.g. future Money redesign), the fallback is
 // SqlParam::Text(money_to_text) where money_to_text is emitted inline.
 //
-// Security: table/column names are validated by `valid_sql_ident` (ASCII
-// alphanumeric + `_` + `.`, rejects empty) before interpolation into SQL.
-// All VALUES are positional-bound (`?`), never interpolated.
+// Security: every table/column name that reaches SQL interpolation is
+// validated by the single `SqlIdent` parser (ASCII alphanumeric + `_`, plus
+// `.` in dotted mode, rejects empty) — see `SqlIdent::parse`. There is no
+// second charset check that could drift from it. All VALUES are
+// positional-bound (`?`), never interpolated.
 // Totality: no unwrap/panic anywhere in this module section.
 
 /// A runtime-nameable SQL parameter value, matching the Ipê `SqlValue` ADT.
@@ -1964,15 +2003,14 @@ impl From<bool> for SqlParam {
     }
 }
 
-/// Validate an SQL identifier (table or column name).
-/// Allows ASCII alphanumeric characters, underscore, and dot.
-/// Rejects empty strings and anything outside that character set.
-/// Mirrors Go's `validSqlIdent` function in db_auth.go.
+/// Predicate form of the DOT-ACCEPTING identifier gate, for the one caller that
+/// needs a bare `bool` over a split slice (the `RETURNING` projection check).
+/// It is NOT an independent charset check: it delegates to the single
+/// [`SqlIdent`] parser ([`IdentMode::Dotted`]), so it cannot drift from the
+/// typed boundary used everywhere else. Prefer [`SqlIdent::parse_dotted`] (the
+/// typed value) at any site that goes on to interpolate the identifier.
 pub fn valid_sql_ident(name: &str) -> bool {
-    !name.is_empty()
-        && name
-            .chars()
-            .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '.')
+    SqlIdent::parse_dotted(name).is_some()
 }
 
 /// Bind a `SqlParam` value onto a sqlx `Query` builder.
@@ -2059,20 +2097,20 @@ impl std::fmt::Debug for SqlFragment {
 }
 
 /// `Sql.column : String -> SqlFragment` — a validated column/table reference.
-/// Accepts dotted references (`users.id`) via [`valid_sql_ident`] (the
-/// DOT-ACCEPTING validator — [`SqlIdent::parse`] is the table/column-name-only
-/// validator used elsewhere in this module and rejects dots). An invalid
-/// identifier poisons the fragment instead of panicking or interpolating
-/// unchecked text.
+/// Accepts dotted references (`users.id`) via [`SqlIdent::parse_dotted`] — the
+/// dot-admitting mode of the single identifier parser ([`SqlIdent::parse_plain`]
+/// is the bare table/column-name-only mode used for the table argument itself,
+/// which rejects dots). An invalid identifier poisons the fragment instead of
+/// panicking or interpolating unchecked text.
 ///
 /// Takes an owned `String` (not `&str`) to match every other Ipê-`String`-
 /// typed kernel parameter in this module — the generic call-emission path
 /// (`ipe_backend_rust::emit_expr`'s standard-path fallback) always produces an
 /// owned `String` for a Ipê `String` argument, never a borrow.
 pub fn sql_column(name: String) -> SqlFragment {
-    if valid_sql_ident(&name) {
+    if let Some(ident) = SqlIdent::parse_dotted(&name) {
         SqlFragment {
-            sql: name,
+            sql: ident.as_str().to_string(),
             binds: Vec::new(),
             invalid: None,
         }
@@ -2241,7 +2279,7 @@ pub fn db_find_where<E: Send + From<String> + 'static>(
         if let Some(reason) = frag.invalid {
             return IpeResult::Err(format!("db.findWhere: {reason}").into());
         }
-        let qtable = match SqlIdent::parse(&table) {
+        let qtable = match SqlIdent::parse_plain(&table) {
             Some(t) => t,
             None => {
                 return IpeResult::Err(format!("db.findWhere: invalid table {:?}", table).into());
@@ -2274,7 +2312,7 @@ pub fn db_delete_where<E: Send + From<String> + 'static>(
         if let Some(reason) = frag.invalid {
             return IpeResult::Err(format!("db.deleteWhere: {reason}").into());
         }
-        let qtable = match SqlIdent::parse(&table) {
+        let qtable = match SqlIdent::parse_plain(&table) {
             Some(t) => t,
             None => {
                 return IpeResult::Err(format!("db.deleteWhere: invalid table {:?}", table).into());
@@ -2315,28 +2353,26 @@ fn build_insert_sql(
     table: &str,
     fields: Vec<(String, Option<SqlParam>)>,
 ) -> Result<(String, Vec<SqlParam>), String> {
-    if !valid_sql_ident(table) {
-        return Err(format!("{}: invalid table name {:?}", kernel, table));
-    }
+    let qtable = SqlIdent::parse_dotted(table)
+        .ok_or_else(|| format!("{}: invalid table name {:?}", kernel, table))?;
     let mut cols: Vec<String> = Vec::new();
     let mut args: Vec<SqlParam> = Vec::new();
     for (col, opt) in fields {
-        if !valid_sql_ident(&col) {
-            return Err(format!("{}: invalid column name {:?}", kernel, col));
-        }
+        let qcol = SqlIdent::parse_dotted(&col)
+            .ok_or_else(|| format!("{}: invalid column name {:?}", kernel, col))?;
         if let Some(p) = opt {
-            cols.push(col);
+            cols.push(qcol.as_str().to_string());
             args.push(p);
         }
         // None → OmitField: column dropped entirely, DB applies DEFAULT.
     }
     let sql = if cols.is_empty() {
-        format!("INSERT INTO {} DEFAULT VALUES", table)
+        format!("INSERT INTO {} DEFAULT VALUES", qtable.as_str())
     } else {
         let ph = vec!["?"; cols.len()].join(", ");
         format!(
             "INSERT INTO {} ({}) VALUES ({})",
-            table,
+            qtable.as_str(),
             cols.join(", "),
             ph
         )
@@ -2424,39 +2460,48 @@ pub fn db_update_fields<E: Send + From<String> + 'static>(
     set_fields: Vec<(String, Option<SqlParam>)>,
 ) -> IpeTask<E, i64> {
     Box::pin(async move {
-        if !valid_sql_ident(&table) {
-            return IpeResult::Err(
-                format!("db.updateFields: invalid table name {:?}", table).into(),
-            );
-        }
+        let qtable = match SqlIdent::parse_dotted(&table) {
+            Some(t) => t,
+            None => {
+                return IpeResult::Err(
+                    format!("db.updateFields: invalid table name {:?}", table).into(),
+                );
+            }
+        };
         // Build SET clause.
         let mut set_clauses: Vec<String> = Vec::new();
         let mut args: Vec<SqlParam> = Vec::new();
         for (col, opt) in set_fields {
-            if !valid_sql_ident(&col) {
-                return IpeResult::Err(
-                    format!("db.updateFields: invalid SET column name {:?}", col).into(),
-                );
-            }
+            let qcol = match SqlIdent::parse_dotted(&col) {
+                Some(c) => c,
+                None => {
+                    return IpeResult::Err(
+                        format!("db.updateFields: invalid SET column name {:?}", col).into(),
+                    );
+                }
+            };
             if let Some(p) = opt {
-                set_clauses.push(format!("{} = ?", col));
+                set_clauses.push(format!("{} = ?", qcol.as_str()));
                 args.push(p);
             }
             // None → OmitField: skip column.
         }
         if set_clauses.is_empty() {
-            // Every column was OmitField — nothing to update. Go parity: return 0.
+            // Every column was OmitField — nothing to update; report zero rows.
             return ok_res(0i64);
         }
         // Build WHERE clause.
         let mut where_clauses: Vec<String> = Vec::new();
         for (col, p) in where_cols {
-            if !valid_sql_ident(&col) {
-                return IpeResult::Err(
-                    format!("db.updateFields: invalid WHERE column name {:?}", col).into(),
-                );
-            }
-            where_clauses.push(format!("{} = ?", col));
+            let qcol = match SqlIdent::parse_dotted(&col) {
+                Some(c) => c,
+                None => {
+                    return IpeResult::Err(
+                        format!("db.updateFields: invalid WHERE column name {:?}", col).into(),
+                    );
+                }
+            };
+            where_clauses.push(format!("{} = ?", qcol.as_str()));
             args.push(p);
         }
         // Refuse an unscoped UPDATE: an empty WHERE-column set would emit
@@ -2472,7 +2517,7 @@ pub fn db_update_fields<E: Send + From<String> + 'static>(
         }
         let sql = format!(
             "UPDATE {} SET {} WHERE {}",
-            table,
+            qtable.as_str(),
             set_clauses.join(", "),
             where_clauses.join(" AND ")
         );
@@ -3932,8 +3977,8 @@ mod tests {
         }
     }
 
-    /// `Sql.column` accepts a dotted reference (`table.column`) via the
-    /// DOT-ACCEPTING `valid_sql_ident`, distinct from `SqlIdent::parse`
+    /// `Sql.column` accepts a dotted reference (`table.column`) via
+    /// `SqlIdent::parse_dotted`, distinct from `SqlIdent::parse_plain`
     /// (table-name-only, dot-rejecting) used for the table argument itself.
     #[tokio::test]
     async fn test_column_accepts_dotted_reference() {
@@ -4232,5 +4277,227 @@ mod tests {
             .expect("select");
         assert_eq!(v, 99, "data written via pool1 must be visible via pool2");
         let _ = std::fs::remove_file(&tmp);
+    }
+
+    /// A corpus of identifiers that MUST be rejected at the SQL-interpolation
+    /// boundary. Each is a distinct injection or malformation class: quote,
+    /// statement terminator, whitespace, comment, backtick, parenthesis, star,
+    /// empty, leading-digit-with-punctuation, and a non-ASCII homoglyph. If any
+    /// of these ever reaches interpolation the boundary is broken.
+    const HOSTILE_IDENTS: &[&str] = &[
+        "a'b",
+        "a\"b",
+        "users; DROP TABLE todos",
+        "col name",
+        "col--",
+        "`col`",
+        "f()",
+        "*",
+        "",
+        "1; --",
+        "café",
+    ];
+
+    /// SSOT proof (unit level): the single `SqlIdent` parser is the ONLY
+    /// identifier policy, and `valid_sql_ident` is exactly its dotted mode — not
+    /// a second charset check that could drift. For every string we assert
+    /// `valid_sql_ident(s) == SqlIdent::parse_dotted(s).is_some()` and that a
+    /// dot-accepting parse never admits anything the plain parse would while
+    /// rejecting the dot. Every hostile identifier is rejected by BOTH modes.
+    #[test]
+    fn valid_sql_ident_is_exactly_the_dotted_parser() {
+        let corpus = [
+            "users",
+            "user_id",
+            "users.id",
+            "a.b.c",
+            ".leading",
+            "trailing.",
+            "todos.title",
+        ]
+        .iter()
+        .copied()
+        .chain(HOSTILE_IDENTS.iter().copied());
+        for s in corpus {
+            assert_eq!(
+                valid_sql_ident(s),
+                SqlIdent::parse_dotted(s).is_some(),
+                "valid_sql_ident must be exactly SqlIdent::parse_dotted for {s:?}"
+            );
+            // The plain (dot-rejecting) mode admits a subset of the dotted mode:
+            // anything plain accepts, dotted must also accept.
+            if SqlIdent::parse_plain(s).is_some() {
+                assert!(
+                    SqlIdent::parse_dotted(s).is_some(),
+                    "dotted mode must accept everything plain accepts, for {s:?}"
+                );
+            }
+        }
+        // A bare dot-bearing name: accepted dotted, rejected plain — the one
+        // deliberate difference between the two modes.
+        assert!(SqlIdent::parse_dotted("users.id").is_some());
+        assert!(SqlIdent::parse_plain("users.id").is_none());
+        // Every hostile identifier is rejected by BOTH modes.
+        for h in HOSTILE_IDENTS {
+            assert!(
+                SqlIdent::parse_plain(h).is_none(),
+                "plain parser must reject hostile {h:?}"
+            );
+            assert!(
+                SqlIdent::parse_dotted(h).is_none(),
+                "dotted parser must reject hostile {h:?}"
+            );
+        }
+    }
+
+    /// SSOT proof (entry level): every public kernel that interpolates a
+    /// table/column identifier into SQL routes through the single validator and
+    /// fails CLOSED on a hostile identifier. Each entry is driven with a hostile
+    /// value in its identifier position(s); an `IpeResult::Ok` here means a path
+    /// reached SQL without validating — the boundary is broken. A new
+    /// identifier-accepting entry that skips the validator will fail this test.
+    #[tokio::test]
+    async fn every_identifier_entry_rejects_hostile_idents() {
+        let db = fresh_db().await;
+        for &h in HOSTILE_IDENTS {
+            let hs = h.to_string();
+
+            macro_rules! assert_rejects {
+                ($label:expr, $task:expr) => {{
+                    let r: IpeResult<String, _> = $task.await;
+                    assert!(
+                        matches!(r, IpeResult::Err(_)),
+                        "{} must reject hostile identifier {:?}, got Ok",
+                        $label,
+                        h
+                    );
+                }};
+            }
+
+            // Table-identifier position.
+            assert_rejects!(
+                "db_get_by_id(table)",
+                db_get_by_id(db.clone(), hs.clone(), "1".to_string())
+            );
+            assert_rejects!(
+                "db_delete_by_id(table)",
+                db_delete_by_id(db.clone(), hs.clone(), "1".to_string())
+            );
+            assert_rejects!(
+                "db_insert_row(table)",
+                db_insert_row(db.clone(), hs.clone(), {
+                    let mut m = HashMap::new();
+                    m.insert("title".to_string(), "x".to_string());
+                    m
+                })
+            );
+            assert_rejects!(
+                "db_update_by_id(table)",
+                db_update_by_id(db.clone(), hs.clone(), "1".to_string(), {
+                    let mut m = HashMap::new();
+                    m.insert("title".to_string(), "x".to_string());
+                    m
+                })
+            );
+            assert_rejects!(
+                "db_find_by_conditions(table)",
+                db_find_by_conditions(db.clone(), hs.clone(), {
+                    let mut m = HashMap::new();
+                    m.insert("title".to_string(), "x".to_string());
+                    m
+                })
+            );
+            assert_rejects!(
+                "db_find_where(table)",
+                db_find_where(
+                    db.clone(),
+                    hs.clone(),
+                    sql_eq(sql_column("title".to_string()), sql_param("x".to_string())),
+                )
+            );
+            assert_rejects!(
+                "db_delete_where(table)",
+                db_delete_where(
+                    db.clone(),
+                    hs.clone(),
+                    sql_eq(sql_column("title".to_string()), sql_param("x".to_string())),
+                )
+            );
+            assert_rejects!(
+                "db_insert_fields(table)",
+                db_insert_fields(
+                    db.clone(),
+                    hs.clone(),
+                    vec![("title".to_string(), Some(SqlParam::Text("x".to_string())))],
+                )
+            );
+            assert_rejects!(
+                "db_update_fields(table)",
+                db_update_fields(
+                    db.clone(),
+                    hs.clone(),
+                    vec![("id".to_string(), SqlParam::Int(1))],
+                    vec![("title".to_string(), Some(SqlParam::Text("x".to_string())))],
+                )
+            );
+
+            // Field/column-identifier position.
+            assert_rejects!(
+                "db_find_one_by_field(field)",
+                db_find_one_by_field(db.clone(), "todos".to_string(), hs.clone(), "x".to_string())
+            );
+            assert_rejects!(
+                "db_find_many_by_field(field)",
+                db_find_many_by_field(db.clone(), "todos".to_string(), hs.clone(), "x".to_string())
+            );
+            assert_rejects!(
+                "db_find_by_conditions(column)",
+                db_find_by_conditions(db.clone(), "todos".to_string(), {
+                    let mut m = HashMap::new();
+                    m.insert(hs.clone(), "x".to_string());
+                    m
+                })
+            );
+            assert_rejects!(
+                "db_insert_fields(column)",
+                db_insert_fields(
+                    db.clone(),
+                    "todos".to_string(),
+                    vec![(hs.clone(), Some(SqlParam::Text("x".to_string())))],
+                )
+            );
+            assert_rejects!(
+                "db_update_fields(set column)",
+                db_update_fields(
+                    db.clone(),
+                    "todos".to_string(),
+                    vec![("id".to_string(), SqlParam::Int(1))],
+                    vec![(hs.clone(), Some(SqlParam::Text("x".to_string())))],
+                )
+            );
+            assert_rejects!(
+                "db_update_fields(where column)",
+                db_update_fields(
+                    db.clone(),
+                    "todos".to_string(),
+                    vec![(hs.clone(), SqlParam::Int(1))],
+                    vec![("title".to_string(), Some(SqlParam::Text("x".to_string())))],
+                )
+            );
+
+            // `Sql.column` is the SqlFragment-path identifier entry: a hostile
+            // identifier poisons the fragment, which the consumers surface as Err.
+            assert!(
+                sql_column(hs.clone()).invalid.is_some(),
+                "sql_column must poison hostile identifier {h:?}"
+            );
+        }
+
+        // A legitimate dotted column reference still validates where the dotted
+        // mode is allowed (Sql.column) — the fix does not over-reject.
+        assert!(
+            sql_column("todos.title".to_string()).invalid.is_none(),
+            "a legitimate dotted column must still validate"
+        );
     }
 }
