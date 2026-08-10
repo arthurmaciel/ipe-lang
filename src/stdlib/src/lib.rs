@@ -456,6 +456,20 @@ const STD_UI_ANIMATION: &str = include_str!("../Ipe/Ui/Animation.ipe");
 /// disjointness invariant holds.
 const STD_CODEC: &str = include_str!("../Ipe/Codec.ipe");
 
+/// `Ipe.Db.Store` — codec-driven typed persistence.
+///
+/// Pure Ipê source: defines the `Store` / `ColType` / `ColumnSpec`
+/// ADTs and pattern-matches them, driving reads and writes through the audited
+/// `Ipe.Db` / `Ipe.Db.Sql` kernel surface — no new kernel, no `Ffi.kernel` call.
+/// Injection-safe by construction: `validSqlIdent` is the only gate through which
+/// a table/column identifier reaches SQL (mirroring the `valid_sql_ident` kernel
+/// gate), and every value binds as a `SqlValue`/`SqlField` parameter through
+/// `Db.insertFields`/`Db.updateFields`/`Db.findWhere`/`Db.deleteWhere`. The
+/// raw-SQL escape stays on `Ipe.Db.Unsafe`. Not in `STDLIB_MODULE_QUALIFIERS`
+/// (the `Ipe.Db` / `Ipe.Db.Sql` kernel qualifiers are the DISTINCT `["Ipe","Db"]`
+/// / `["Ipe","Db","Sql"]` paths), so the disjointness invariant holds.
+const STD_DB_STORE: &str = include_str!("../Ipe/Db/Store.ipe");
+
 /// `Ipe.Money` — currency-typed Money on `Ipe.Decimal` + ISO 4217 enum.
 ///
 /// Compiled pure-Ipê source: defines the `Money` / `Currency` ADTs and
@@ -664,6 +678,14 @@ pub const COMPILED_STD_MODULES: &[CompiledStdModule] = &[
     CompiledStdModule {
         dotted: "Ipe.Codec",
         source: STD_CODEC,
+    },
+    // Ipe.Db.Store — Layer-3 source; codec-driven typed persistence over the
+    // audited `Ipe.Db` / `Ipe.Db.Sql` kernels. Pure Ipê, no new kernel.
+    // Injection-safe by construction (`validSqlIdent` gate + parameterised
+    // binds). The raw-SQL escape stays on `Ipe.Db.Unsafe`.
+    CompiledStdModule {
+        dotted: "Ipe.Db.Store",
+        source: STD_DB_STORE,
     },
     CompiledStdModule {
         dotted: "Ipe.Money",

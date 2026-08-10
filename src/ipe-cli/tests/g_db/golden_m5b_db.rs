@@ -287,6 +287,29 @@ fn db_find_where() {
     assert_runs_and_matches_oracle("db_find_where");
 }
 
+/// `Ipe.Db.Store` end-to-end (THE SEAL golden for the store surface): derive a
+/// `Store` from a `User` record's typed columns, `Store.create` the table via
+/// the migration ledger, `Store.insert` two rows (one carrying the adversarial
+/// value `'; DROP TABLE users; --`), then `Store.get` by primary key and decode
+/// the row back through the per-column `read*` helpers. Prints three lines:
+///
+///   * `roundtrip:ok` — insert → query-by-pk → decode returns a record equal to
+///     the original, so the whole write/read path composes.
+///   * `injection-value:'; DROP TABLE users; --` — the adversarial value is
+///     BOUND as a positional parameter and stored + retrieved LITERALLY. The
+///     table is not dropped and the query still succeeds, proving the value
+///     channel is parameterised, not string-interpolated.
+///   * `reject-bad-ident:ok` — a `Store` declared with a column identifier
+///     containing a quote/semicolon/space fails to build (`fromColumns` returns
+///     `Err` through `validSqlIdent`), so the injection never reaches SQL.
+///
+/// Sanctioned divergence: Ipê emits Rust+sqlx; `Ipe.Db.Store` is an Ipê-only
+/// addition with no Go counterpart; oracle is Ipê's own output.
+#[test]
+fn db_store() {
+    assert_runs_and_matches_oracle("db_store");
+}
+
 /// `Db.findWhere` with an `Ipe.Db.Unsafe.unsafeFragment`-minted WHERE column:
 /// the un-validated anti-`Sql.column` mints a `SqlFragment` from the verbatim
 /// identifier `"qty"` WITHOUT the `valid_sql_ident` gate, then `Sql.gt (… ) 9`

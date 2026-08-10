@@ -1,0 +1,784 @@
+-- | Ipe.Db.Store — typed, injection-safe persistence over the audited `Ipe.Db`.
+--
+-- A `Store` is one table whose identifiers are declared once, validated once,
+-- and reused by every read and write. The safe surface cannot express SQL
+-- injection: every table and column identifier reaches SQL only after
+-- `validSqlIdent` accepts it, and every value binds as a parameter, never
+-- interpolated. A caller who wants raw SQL must reach for `Ipe.Db.Unsafe`,
+-- which discloses that capability program-wide.
+--
+-- The security argument, made structural:
+--
+--   * Identifiers are parsed, not validated. A `Store` is built through
+--     `fromColumns`, which runs `validSqlIdent` over the table name and every
+--     column name and returns `Err` on the first non-conforming identifier. A
+--     built `Store` therefore carries only accepted identifiers — no downstream
+--     operation re-checks, because an invalid one was unrepresentable past the
+--     constructor (parse-don't-validate).
+--   * Values never touch SQL text. `insert` routes through `Db.insertFields`
+--     (typed `SqlField` binds); `all` / `get` / `findWhere` route through
+--     `Db.findWhere` over a `SqlFragment` built from `Sql.column` (validated) +
+--     `Sql.param` (bound); `delete` routes through `Db.deleteWhere` the same
+--     way. Not one of them concatenates a caller value into SQL.
+--   * The by-key operations use the store's own validated primary key, never a
+--     caller-supplied identifier string.
+--   * `create` is fail-closed. It builds the `CREATE TABLE` DDL from the
+--     store's typed columns, re-validating every identifier through
+--     `validSqlIdent` before it can appear in the DDL string, and hands the
+--     result to the versioned `Db.migrate` ledger (idempotent, additive). A
+--     store whose columns do not all validate produces `Err` and issues no SQL.
+--
+-- `Store` is deliberately NOT parameterised over the row type: the row
+-- projection (a record to its column values) and the row reader (a decoded row
+-- back to a record) are supplied at the call site, as ordinary monomorphic
+-- functions. This keeps the handle a plain, always-reusable value and keeps the
+-- read/write pair for a table declared together at the use site.
+--
+-- Building and using a store:
+--
+--     import Ipe.Db.Store as Store exposing (Store)
+--     import Ipe.Result as Result exposing (Result(..))
+--
+--     type alias User =
+--         { id : String, name : String, age : Int }
+--
+--     userStore : Result Error Store
+--     userStore =
+--         case
+--             Store.fromColumns "users"
+--                 [ Store.textColumn "id"
+--                 , Store.textColumn "name"
+--                 , Store.intColumn "age"
+--                 ]
+--         of
+--             Ok store ->
+--                 Ok (Store.primaryKey "id" store)
+--
+--             Err e ->
+--                 Err e
+--
+--     -- write: project a record to its column values (bound as parameters)
+--     writeUser : User -> List ( String, SqlValue )
+--     writeUser u =
+--         [ ( "id", SqlString u.id )
+--         , ( "name", SqlString u.name )
+--         , ( "age", SqlInt u.age )
+--         ]
+--
+--     -- read: reassemble a record from a decoded row (fails closed per column)
+--     readUser : Store.Row -> Result Error User
+--     readUser row =
+--         Result.map3 (\i n a -> { id = i, name = n, age = a })
+--             (Store.readText "id" row)
+--             (Store.readText "name" row)
+--             (Store.readInt "age" row)
+--
+-- A misdeclared identifier — a table or column name with a quote, a semicolon,
+-- or a space — makes `fromColumns` return `Err`, so it never reaches SQL.
+module Ipe.Db.Store exposing
+    ( Store(..)
+    , Column(..)
+    , ColType(..)
+    , ColumnSpec(..)
+    , Row
+    , validSqlIdent
+    , column, textColumn, intColumn, floatColumn, boolColumn
+    , fromColumns
+    , primaryKey, serial, unique, defaultNow
+    , tableName, columnNames, createSql
+    , readText, readInt, readBool, readFloat
+    , insert, all, get, delete, findWhere, create
+    )
+
+
+import Ipe.Db as Db
+import Ipe.Db.Sql as Sql
+import Ipe.Char as Char
+import Ipe.String as String
+import Ipe.List as List
+import Ipe.Dict as Dict
+import Ipe.Maybe as Maybe exposing (Maybe(..))
+import Ipe.Result as Result exposing (Result(..))
+import Ipe.Task as Task
+import Ipe.Error as Error exposing (Error)
+
+
+-- ─── Types ─────────────────────────────────────────────────────────
+
+
+-- | A row read back from the database: every column keyed by its name, values
+-- as strings (the `Db.findWhere` representation). The typed `read*` helpers
+-- parse a column back into its Ipê type.
+type alias Row =
+    Dict String String
+
+
+-- | The abstract column type a store maps to. Dialect-neutral — the `Ipe.Db`
+-- kernels map these to the configured backend's concrete SQL types. Kept
+-- abstract so one store declaration works on every backend.
+type ColType
+    = CText
+    | CInt
+    | CReal
+    | CBool
+
+
+-- | One typed column: its (validated) name and its abstract type for the
+-- schema. The value projection is supplied to `insert` at the call site, so a
+-- `Column` is pure data — no stored function, so a `Store` is a plain reusable
+-- value.
+type Column
+    = Column
+        { name : String
+        , colType : ColType
+        }
+
+
+-- | A DB-only fact the record type cannot express: primary key, serial
+-- (DB-assigned) id, uniqueness, or a DB-stamped default. A typed ADT, not a
+-- stringly flag — an impossible spec (a flag typo, a malformed default) is
+-- unrepresentable.
+type ColumnSpec
+    = PrimaryKey String
+    | Serial String
+    | Unique String
+    | DefaultNow String
+
+
+-- | One table whose schema, reads, and writes derive from its declared
+-- columns. `specs` are the DB-only facts; `pk` is the validated primary-key
+-- column used by the by-key operations. Built only through `fromColumns`, so
+-- every identifier it holds has already been accepted by `validSqlIdent`.
+type Store
+    = Store
+        { table : String
+        , columns : List Column
+        , specs : List ColumnSpec
+        , pk : Maybe String
+        }
+
+
+-- ─── Identifier validation (parse-don't-validate) ──────────────────
+
+
+-- | `validSqlIdent name` — accept `name` as an SQL identifier, or reject it.
+-- The ONLY gate through which a table or column name reaches emitted SQL on the
+-- safe surface. Accepts a non-empty run of ASCII letters, digits, `_`, and `.`
+-- (a dotted `table.column` reference); rejects everything else — a space, a
+-- quote, a semicolon, a parenthesis. This mirrors the `valid_sql_ident` gate
+-- the `Ipe.Db` kernels apply, so the Ipê-level check and the runtime check
+-- agree: an identifier that passes here also passes the kernel, and one that
+-- fails here is rejected before any SQL is built.
+validSqlIdent : String -> Bool
+validSqlIdent name =
+    not (String.isEmpty name) && String.all validIdentChar name
+
+
+validIdentChar : Char -> Bool
+validIdentChar c =
+    let
+        code =
+            Char.toCode c
+    in
+    isAsciiDigit code
+        || isAsciiUpper code
+        || isAsciiLower code
+        || code == underscoreCode
+        || code == dotCode
+
+
+isAsciiDigit : Int -> Bool
+isAsciiDigit code =
+    code >= 48 && code <= 57
+
+
+isAsciiUpper : Int -> Bool
+isAsciiUpper code =
+    code >= 65 && code <= 90
+
+
+isAsciiLower : Int -> Bool
+isAsciiLower code =
+    code >= 97 && code <= 122
+
+
+underscoreCode : Int
+underscoreCode =
+    95
+
+
+dotCode : Int
+dotCode =
+    46
+
+
+-- ─── Column builders ───────────────────────────────────────────────
+
+
+-- | `column name colType` — a column of an explicit `ColType`. The name is
+-- validated when the store is built, not here, so a raw `Column` is inert until
+-- `fromColumns` accepts it.
+column : String -> ColType -> Column
+column name colType =
+    Column { name = name, colType = colType }
+
+
+-- | A `CText` column.
+textColumn : String -> Column
+textColumn name =
+    column name CText
+
+
+-- | A `CInt` column.
+intColumn : String -> Column
+intColumn name =
+    column name CInt
+
+
+-- | A `CReal` column.
+floatColumn : String -> Column
+floatColumn name =
+    column name CReal
+
+
+-- | A `CBool` column.
+boolColumn : String -> Column
+boolColumn name =
+    column name CBool
+
+
+-- ─── Store construction (fail-closed) ──────────────────────────────
+
+
+-- | `fromColumns table columns` — build a store, or fail closed. The table name
+-- and every column name are run through `validSqlIdent`; the first
+-- non-conforming identifier is an `Err`, and no store is produced. A returned
+-- `Store` therefore holds only accepted identifiers — the constructor is the
+-- single validation boundary (parse-don't-validate).
+fromColumns : String -> List Column -> Result Error Store
+fromColumns table columns =
+    if not (validSqlIdent table) then
+        Err (invalidIdentError "table" table)
+
+    else
+        case firstInvalidColumn columns of
+            Just bad ->
+                Err (invalidIdentError "column" bad)
+
+            Nothing ->
+                Ok
+                    (Store
+                        { table = table
+                        , columns = columns
+                        , specs = []
+                        , pk = Nothing
+                        }
+                    )
+
+
+firstInvalidColumn : List Column -> Maybe String
+firstInvalidColumn columns =
+    case columns of
+        [] ->
+            Nothing
+
+        first :: rest ->
+            let
+                name =
+                    columnName first
+            in
+            if validSqlIdent name then
+                firstInvalidColumn rest
+
+            else
+                Just name
+
+
+columnName : Column -> String
+columnName col =
+    case col of
+        Column r ->
+            r.name
+
+
+columnColType : Column -> ColType
+columnColType col =
+    case col of
+        Column r ->
+            r.colType
+
+
+-- ─── Column-spec builders ──────────────────────────────────────────
+--
+-- Each attaches one typed `ColumnSpec` to the store. `primaryKey` additionally
+-- records the validated key column the by-key operations read. The identifier
+-- was validated when the store was built, so no spec can smuggle an unchecked
+-- name into SQL.
+
+
+-- | Mark a column the primary key. Records it as the store's `pk`, so
+-- `get` / `delete` key on this validated column and never on a caller string.
+primaryKey : String -> Store -> Store
+primaryKey name store =
+    case store of
+        Store r ->
+            Store
+                { table = r.table
+                , columns = r.columns
+                , specs = PrimaryKey name :: r.specs
+                , pk = Just name
+                }
+
+
+-- | Mark a column DB-assigned (serial). `insert` omits it so the database
+-- generates it — a client value can never overwrite a serial column.
+serial : String -> Store -> Store
+serial name store =
+    addSpec (Serial name) store
+
+
+-- | Mark a column unique.
+unique : String -> Store -> Store
+unique name store =
+    addSpec (Unique name) store
+
+
+-- | Mark a column DB-stamped with the current time on insert. `insert` omits
+-- it so the database stamps it.
+defaultNow : String -> Store -> Store
+defaultNow name store =
+    addSpec (DefaultNow name) store
+
+
+addSpec : ColumnSpec -> Store -> Store
+addSpec spec store =
+    case store of
+        Store r ->
+            Store
+                { table = r.table
+                , columns = r.columns
+                , specs = spec :: r.specs
+                , pk = r.pk
+                }
+
+
+-- ─── Introspection ─────────────────────────────────────────────────
+
+
+-- | The store's validated table name.
+tableName : Store -> String
+tableName store =
+    case store of
+        Store r ->
+            r.table
+
+
+-- | The store's column names, in declaration order.
+columnNames : Store -> List String
+columnNames store =
+    case store of
+        Store r ->
+            List.map columnName r.columns
+
+
+-- ─── Write path ────────────────────────────────────────────────────
+
+
+-- | `insert conn store values` — insert one row and return its generated id.
+-- `values` is the record projected to `(column, SqlValue)` pairs at the call
+-- site; each binds as a typed parameter. Columns marked `Serial` or
+-- `DefaultNow` are OMITTED from the insert so the database fills them (a client
+-- value supplied for such a column is dropped, never written). Routes through
+-- the audited `Db.insertFields`, which re-validates every identifier and binds
+-- every value — no SQL text is built here.
+insert : Db -> Store -> List ( String, SqlValue ) -> Task Error Int
+insert conn store values =
+    case store of
+        Store r ->
+            Db.insertFields conn r.table (insertFields r.specs values)
+
+
+insertFields : List ColumnSpec -> List ( String, SqlValue ) -> List ( String, SqlField )
+insertFields specs values =
+    List.map (\pair -> insertField specs pair) values
+
+
+insertField : List ColumnSpec -> ( String, SqlValue ) -> ( String, SqlField )
+insertField specs pair =
+    case pair of
+        ( name, value ) ->
+            if dbFilledColumn specs name then
+                ( name, OmitField )
+
+            else
+                ( name, SetField value )
+
+
+dbFilledColumn : List ColumnSpec -> String -> Bool
+dbFilledColumn specs name =
+    List.any (\spec -> specOmitsColumn spec name) specs
+
+
+specOmitsColumn : ColumnSpec -> String -> Bool
+specOmitsColumn spec name =
+    case spec of
+        Serial c ->
+            c == name
+
+        DefaultNow c ->
+            c == name
+
+        PrimaryKey _ ->
+            False
+
+        Unique _ ->
+            False
+
+
+-- ─── Read path ─────────────────────────────────────────────────────
+
+
+-- | `all conn store read` — read every row and decode each through `read`.
+-- Routes through `Db.findWhere` with an always-true predicate, so the table
+-- name is kernel-validated and no raw SQL is built.
+all : Db -> Store -> (Row -> Result Error a) -> Task Error (List a)
+all conn store read =
+    case store of
+        Store r ->
+            Task.andThen
+                (\rows -> decodeRows read rows)
+                (Db.findWhere conn r.table alwaysTrue)
+
+
+-- | `findWhere conn store read cond` — read the rows matching `cond` and decode
+-- each through `read`. `cond` is a `SqlFragment` built from the `Ipe.Db.Sql`
+-- combinators: every column flows through `Sql.column` (validated), every value
+-- through `Sql.param` (bound). Store adds no injection surface over the audited
+-- fragment builder.
+findWhere : Db -> Store -> (Row -> Result Error a) -> SqlFragment -> Task Error (List a)
+findWhere conn store read cond =
+    case store of
+        Store r ->
+            Task.andThen
+                (\rows -> decodeRows read rows)
+                (Db.findWhere conn r.table cond)
+
+
+-- | `get conn store read keyValue` — read the single row whose primary key
+-- equals `keyValue`, or `Nothing`. Keys on the store's own validated `pk`
+-- column, never a caller identifier; the value binds as a parameter. A store
+-- with no primary key fails closed with a typed error.
+get : Db -> Store -> (Row -> Result Error a) -> SqlValue -> Task Error (Maybe a)
+get conn store read keyValue =
+    case store of
+        Store r ->
+            case r.pk of
+                Nothing ->
+                    Task.fail noPrimaryKeyError
+
+                Just keyCol ->
+                    Task.andThen
+                        (\rows -> firstDecoded read rows)
+                        (Db.findWhere conn r.table (keyEquals keyCol keyValue))
+
+
+-- | `delete conn store keyValue` — delete the row whose primary key equals
+-- `keyValue` and return the deleted-row count. Keys on the validated `pk`
+-- column; the value binds as a parameter. A store with no primary key fails
+-- closed.
+delete : Db -> Store -> SqlValue -> Task Error Int
+delete conn store keyValue =
+    case store of
+        Store r ->
+            case r.pk of
+                Nothing ->
+                    Task.fail noPrimaryKeyError
+
+                Just keyCol ->
+                    Db.deleteWhere conn r.table (keyEquals keyCol keyValue)
+
+
+keyEquals : String -> SqlValue -> SqlFragment
+keyEquals keyCol keyValue =
+    Sql.eq (Sql.column keyCol) (Sql.param keyValue)
+
+
+-- | An always-true fragment (`1 = 1`): the predicate for an unfiltered read. It
+-- names no caller identifier, so it introduces no injection surface.
+alwaysTrue : SqlFragment
+alwaysTrue =
+    Sql.eq (Sql.param (SqlInt 1)) (Sql.param (SqlInt 1))
+
+
+decodeRows : (Row -> Result Error a) -> List Row -> Task Error (List a)
+decodeRows read rows =
+    case rows of
+        [] ->
+            Task.succeed []
+
+        first :: rest ->
+            case read first of
+                Err e ->
+                    Task.fail e
+
+                Ok value ->
+                    Task.map (\more -> value :: more) (decodeRows read rest)
+
+
+firstDecoded : (Row -> Result Error a) -> List Row -> Task Error (Maybe a)
+firstDecoded read rows =
+    case rows of
+        [] ->
+            Task.succeed Nothing
+
+        first :: _ ->
+            case read first of
+                Err e ->
+                    Task.fail e
+
+                Ok value ->
+                    Task.succeed (Just value)
+
+
+-- ─── Typed column reads (row -> value) ─────────────────────────────
+--
+-- `Db.findWhere` returns each row as `Dict String String`. These helpers read
+-- one column back into its Ipê type, failing closed with a typed error when the
+-- column is absent or malformed — never a silent default.
+
+
+-- | Read a column as a `String`. A missing column is a typed `Err`.
+readText : String -> Row -> Result Error String
+readText name row =
+    case Dict.get name row of
+        Just s ->
+            Ok s
+
+        Nothing ->
+            Err (missingColumnError name)
+
+
+-- | Read a column as an `Int`. A missing or non-integer column is a typed `Err`.
+readInt : String -> Row -> Result Error Int
+readInt name row =
+    case Dict.get name row of
+        Just s ->
+            case String.toInt s of
+                Just n ->
+                    Ok n
+
+                Nothing ->
+                    Err (badColumnError name "Int" s)
+
+        Nothing ->
+            Err (missingColumnError name)
+
+
+-- | Read a column as a `Float`. A missing or non-numeric column is a typed
+-- `Err`.
+readFloat : String -> Row -> Result Error Float
+readFloat name row =
+    case Dict.get name row of
+        Just s ->
+            case String.toFloat s of
+                Just f ->
+                    Ok f
+
+                Nothing ->
+                    Err (badColumnError name "Float" s)
+
+        Nothing ->
+            Err (missingColumnError name)
+
+
+-- | Read a column as a `Bool`. The stored form is SQLite's `0` / `1` integer
+-- convention (and the literals `true` / `false`); anything else is a typed
+-- `Err`.
+readBool : String -> Row -> Result Error Bool
+readBool name row =
+    case Dict.get name row of
+        Just s ->
+            if s == "1" || s == "true" then
+                Ok True
+
+            else if s == "0" || s == "false" then
+                Ok False
+
+            else
+                Err (badColumnError name "Bool" s)
+
+        Nothing ->
+            Err (missingColumnError name)
+
+
+-- ─── Schema (create) ───────────────────────────────────────────────
+
+
+-- | `createSql store` — the `CREATE TABLE` DDL for the store, or `Err`. Every
+-- identifier that would appear in the DDL — the table name and each column name
+-- — is re-validated through `validSqlIdent` before it can reach the string, so
+-- a store built by `fromColumns` (whose identifiers already validate) always
+-- yields `Ok`, and any identifier that somehow does not validate fails closed
+-- with no DDL produced. This is the one place a Store builds SQL text; it builds
+-- only from validated identifiers and holds no values, so there is nothing to
+-- inject.
+createSql : Store -> Result Error String
+createSql store =
+    case store of
+        Store r ->
+            if not (validSqlIdent r.table) then
+                Err (invalidIdentError "table" r.table)
+
+            else
+                case columnDefs r.specs r.columns of
+                    Err e ->
+                        Err e
+
+                    Ok defs ->
+                        Ok
+                            (String.concat
+                                [ "CREATE TABLE IF NOT EXISTS "
+                                , r.table
+                                , " ("
+                                , String.join ", " defs
+                                , ")"
+                                ]
+                            )
+
+
+columnDefs : List ColumnSpec -> List Column -> Result Error (List String)
+columnDefs specs columns =
+    case columns of
+        [] ->
+            Ok []
+
+        first :: rest ->
+            case columnDef specs first of
+                Err e ->
+                    Err e
+
+                Ok def ->
+                    Result.map (\more -> def :: more) (columnDefs specs rest)
+
+
+columnDef : List ColumnSpec -> Column -> Result Error String
+columnDef specs col =
+    let
+        name =
+            columnName col
+    in
+    if not (validSqlIdent name) then
+        Err (invalidIdentError "column" name)
+
+    else
+        Ok
+            (String.concat
+                [ name
+                , " "
+                , sqlType (columnColType col)
+                , columnConstraints specs name
+                ]
+            )
+
+
+sqlType : ColType -> String
+sqlType colType =
+    case colType of
+        CText ->
+            "TEXT"
+
+        CInt ->
+            "INTEGER"
+
+        CReal ->
+            "REAL"
+
+        CBool ->
+            "INTEGER"
+
+
+columnConstraints : List ColumnSpec -> String -> String
+columnConstraints specs name =
+    String.concat (List.map (\spec -> constraintFor spec name) specs)
+
+
+constraintFor : ColumnSpec -> String -> String
+constraintFor spec name =
+    case spec of
+        PrimaryKey c ->
+            if c == name then
+                " PRIMARY KEY"
+
+            else
+                ""
+
+        Unique c ->
+            if c == name then
+                " UNIQUE"
+
+            else
+                ""
+
+        Serial c ->
+            if c == name then
+                " AUTOINCREMENT"
+
+            else
+                ""
+
+        DefaultNow c ->
+            if c == name then
+                " DEFAULT CURRENT_TIMESTAMP"
+
+            else
+                ""
+
+
+-- | `create conn store` — create the store's table if it does not exist, via
+-- the versioned `Db.migrate` ledger. Fails closed if the DDL cannot be built
+-- from validated identifiers (no SQL is issued in that case). Idempotent: the
+-- ledger applies the migration once and records it.
+create : Db -> Store -> Task Error (List String)
+create conn store =
+    case createSql store of
+        Err e ->
+            Task.fail e
+
+        Ok ddl ->
+            Db.migrate conn [ { name = migrationName (tableName store), sql = ddl } ]
+
+
+migrationName : String -> String
+migrationName table =
+    String.concat [ "create_", table ]
+
+
+-- ─── Errors ────────────────────────────────────────────────────────
+
+
+invalidIdentError : String -> String -> Error
+invalidIdentError kind name =
+    Error.invalidInput
+        (String.concat
+            [ "Ipe.Db.Store: rejected ", kind, " identifier \"", name, "\" — not a valid SQL identifier" ]
+        )
+
+
+noPrimaryKeyError : Error
+noPrimaryKeyError =
+    Error.invalidInput
+        "Ipe.Db.Store: this operation requires a primary key; declare one with Store.primaryKey"
+
+
+missingColumnError : String -> Error
+missingColumnError name =
+    Error.invalidInput
+        (String.concat [ "Ipe.Db.Store: row is missing column \"", name, "\"" ])
+
+
+badColumnError : String -> String -> String -> Error
+badColumnError name expected got =
+    Error.invalidInput
+        (String.concat
+            [ "Ipe.Db.Store: column \"", name, "\" is not a valid ", expected, ": \"", got, "\"" ]
+        )
