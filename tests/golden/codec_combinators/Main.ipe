@@ -1,0 +1,249 @@
+module Main exposing (main)
+
+-- SEAL + round-trip proof for the `Ipe.Codec` composite combinator surface that
+-- lowers accept-implies-build: `list`, `maybe`, `dict`, `map`, and a multi-field
+-- record codec written as one `Codec` value (encoder over the field encoders, a
+-- `Pipeline` decoder chain over the field decoders). The round-trip law is
+-- checked as encode → decode → re-encode stability, which needs no bespoke
+-- equality on each value type while still proving the two directions agree. The
+-- fail-closed paths are checked too: a decode into a value that violates the
+-- codec (a malformed nested value) is a typed `Err`, malformed JSON is an `Err`,
+-- and `fromJsonSafe` rejects oversize input before decoding.
+
+import Ipe.Io as Io
+import Ipe.Codec as Codec exposing (Codec(..))
+import Ipe.Json.Encode as Encode
+import Ipe.Json.Decode as Decode
+import Ipe.Json.Decode.Pipeline as Pipeline
+import Ipe.Config as Config
+import Ipe.Dict as Dict exposing (Dict)
+import Ipe.Maybe exposing (Maybe(..))
+
+
+-- ── map: a bijection newtype wrapper (UserId over String) ──
+type UserId
+    = UserId String
+
+
+unwrapUserId : UserId -> String
+unwrapUserId u =
+    case u of
+        UserId s ->
+            s
+
+
+userIdCodec : Codec UserId
+userIdCodec =
+    Codec.map UserId unwrapUserId Codec.string
+
+
+-- ── a multi-field record codec over every container field kind ──
+-- Written as one `Codec` value: the encoder is an `Encode.object` over the field
+-- encoders (reusing the composite codecs via `Codec.toValue`), the decoder is a
+-- `Pipeline` chain over the field decoders. Each field appears once per side.
+type alias Order =
+    { id : UserId
+    , qty : Int
+    , paid : Bool
+    , note : Maybe String
+    , tags : List String
+    , scores : Dict String Int
+    }
+
+
+makeOrder : UserId -> Int -> Bool -> Maybe String -> List String -> Dict String Int -> Order
+makeOrder id qty paid note tags scores =
+    { id = id
+    , qty = qty
+    , paid = paid
+    , note = note
+    , tags = tags
+    , scores = scores
+    }
+
+
+orderCodec : Codec Order
+orderCodec =
+    Codec
+        { enc =
+            \o ->
+                Encode.object
+                    [ ( "id", Codec.toValue userIdCodec o.id )
+                    , ( "qty", Codec.toValue Codec.int o.qty )
+                    , ( "paid", Codec.toValue Codec.bool o.paid )
+                    , ( "note", Codec.toValue (Codec.maybe Codec.string) o.note )
+                    , ( "tags", Codec.toValue (Codec.list Codec.string) o.tags )
+                    , ( "scores", Codec.toValue (Codec.dict Codec.int) o.scores )
+                    ]
+        , mkDec = \_ -> orderDecoder
+        }
+
+
+orderDecoder : Decoder Order
+orderDecoder =
+    Decode.succeed makeOrder
+        |> Pipeline.required "id" (Decode.map UserId Decode.string)
+        |> Pipeline.required "qty" Decode.int
+        |> Pipeline.required "paid" Decode.bool
+        |> Pipeline.required "note" (Config.nullable Decode.string)
+        |> Pipeline.required "tags" (Decode.list Decode.string)
+        |> Pipeline.required "scores" (Config.dict Decode.int)
+
+
+sampleOrder1 : Order
+sampleOrder1 =
+    { id = UserId "o-1"
+    , qty = 3
+    , paid = True
+    , note = Just "rush"
+    , tags = [ "a", "b" ]
+    , scores = Dict.fromList [ ( "alice", 10 ), ( "bob", 20 ) ]
+    }
+
+
+sampleOrder2 : Order
+sampleOrder2 =
+    { id = UserId "o-2"
+    , qty = 0
+    , paid = False
+    , note = Nothing
+    , tags = []
+    , scores = Dict.fromList []
+    }
+
+
+-- ── round-trip stability, per type (monomorphic call sites) ──
+listStable : Bool
+listStable =
+    let
+        c =
+            Codec.list Codec.int
+
+        once =
+            Codec.toJson c [ 1, 2, 3 ]
+    in
+    case Codec.fromJson c once of
+        Ok back ->
+            Codec.toJson c back == once
+
+        Err _ ->
+            False
+
+
+maybeStable : Bool
+maybeStable =
+    let
+        c =
+            Codec.maybe Codec.string
+
+        onceJust =
+            Codec.toJson c (Just "x")
+
+        onceNothing =
+            Codec.toJson c Nothing
+    in
+    case ( Codec.fromJson c onceJust, Codec.fromJson c onceNothing ) of
+        ( Ok j, Ok n ) ->
+            Codec.toJson c j == onceJust && Codec.toJson c n == onceNothing
+
+        _ ->
+            False
+
+
+dictStable : Bool
+dictStable =
+    let
+        c =
+            Codec.dict Codec.int
+
+        once =
+            Codec.toJson c sampleOrder1.scores
+    in
+    case Codec.fromJson c once of
+        Ok back ->
+            Codec.toJson c back == once
+
+        Err _ ->
+            False
+
+
+mapStable : Bool
+mapStable =
+    let
+        once =
+            Codec.toJson userIdCodec (UserId "u-7")
+    in
+    case Codec.fromJson userIdCodec once of
+        Ok back ->
+            Codec.toJson userIdCodec back == once
+
+        Err _ ->
+            False
+
+
+recordStable : Bool
+recordStable =
+    let
+        once1 =
+            Codec.toJson orderCodec sampleOrder1
+
+        once2 =
+            Codec.toJson orderCodec sampleOrder2
+    in
+    case ( Codec.fromJson orderCodec once1, Codec.fromJson orderCodec once2 ) of
+        ( Ok b1, Ok b2 ) ->
+            Codec.toJson orderCodec b1 == once1 && Codec.toJson orderCodec b2 == once2
+
+        _ ->
+            False
+
+
+-- ── fail-closed: a nested value of the wrong type is a typed Err ──
+wrongTypeIsErr : Bool
+wrongTypeIsErr =
+    case Codec.fromJson (Codec.list Codec.int) "[1,\"two\",3]" of
+        Ok _ ->
+            False
+
+        Err _ ->
+            True
+
+
+-- Malformed JSON is a typed Err, never a panic.
+malformedIsErr : Bool
+malformedIsErr =
+    case Codec.fromJson orderCodec "{not json" of
+        Ok _ ->
+            False
+
+        Err _ ->
+            True
+
+
+-- fromJsonSafe rejects oversize input BEFORE decoding: an adversarially large
+-- payload never reaches the parser.
+oversizeRejected : Bool
+oversizeRejected =
+    case Codec.fromJsonSafe 8 (Codec.list Codec.int) "[1,2,3,4,5,6,7,8,9,10]" of
+        Ok _ ->
+            False
+
+        Err _ ->
+            True
+
+
+main =
+    if
+        listStable
+            && maybeStable
+            && dictStable
+            && mapStable
+            && recordStable
+            && wrongTypeIsErr
+            && malformedIsErr
+            && oversizeRejected
+    then
+        Io.println "codec-combinators-ok"
+
+    else
+        Io.println "codec-combinators-FAIL"

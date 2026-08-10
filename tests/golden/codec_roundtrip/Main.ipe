@@ -198,7 +198,7 @@ cartCodec =
                     , ( "lines", Encode.list encLine c.lines )
                     , ( "pay", encPayment c.pay )
                     ]
-        , dec = Decode.decodeString cartDecoder
+        , mkDec = \_ -> cartDecoder
         }
 
 
