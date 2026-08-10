@@ -1100,10 +1100,16 @@ pub fn emit_record_struct(ctx: &EmitCtx, rec: &RecordStruct) -> DResult<String> 
                 format!("            {ident}: self.{ident}.clone(),")
             })
             .collect();
+        // Every type parameter carries a `Clone` bound: the bare-variable
+        // admission in the `is_clone` fixpoint (`record_field_is_clone`) is sound
+        // only under it — a record may carry a bare-`Tn` field (or a `SharedFun`
+        // slot keyed on `Tn`) whose per-`Tn` clone rides this bound, exactly as
+        // the sibling function-carrier enum's hand-written `impl<Tn: Clone> Clone`.
         let impl_clone_bounds = if params.is_empty() {
             String::new()
         } else {
-            format!("<{}>", params.join(", "))
+            let bounds: Vec<String> = params.iter().map(|p| format!("{p}: Clone")).collect();
+            format!("<{}>", bounds.join(", "))
         };
         let clone_head = impl_header(&impl_clone_bounds, "Clone", &format!("{name}{use_clause}"));
         format!(
