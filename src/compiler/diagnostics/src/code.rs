@@ -384,6 +384,10 @@ code! {
     /// a `Debug.*` development-only escape hatch reached a production build
     /// (`ipe build --optimize`)
     IPE_L0140 = "IPE-L0140", "a Debug.* escape hatch was used in a production build", "IPE-L0140";
+    /// a `Task`-typed value was discarded (`let _ = <task>`) in a non-`Task`
+    /// context, which would run its effect through an implicit `Task.run`
+    /// outside the effect discipline
+    IPE_L0141 = "IPE-L0141", "a Task effect was discarded in a non-Task context, escaping the Task effect discipline", "IPE-L0141";
     /// expression nests too deeply for the backend
     IPE_L0200 = "IPE-L0200", "expression nests too deeply for the backend", "IPE-L0200";
 

@@ -82,7 +82,7 @@ chartElement =
         [ Chart.series [(0.0, 10.0), (1.0, 20.0), (2.0, 15.0)] ]
 
 
-main : ()
+main : Task Error ()
 main =
     let
         rendered = Html.toString svgNode
@@ -90,6 +90,5 @@ main =
         -- Chart svgRootAttrs path is monomorphised + type-checked, not DCE'd.
         -- `Ui.layout` converts the `Element Msg` to `Html Msg`.
         chartHtml = Html.toString (Ui.layout [] chartElement)
-        _ = Io.println (rendered ++ "\n" ++ String.fromInt (String.length chartHtml))
     in
-        ()
+    Io.println (rendered ++ "\n" ++ String.fromInt (String.length chartHtml))

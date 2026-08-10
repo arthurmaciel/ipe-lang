@@ -20384,20 +20384,22 @@ impl<'a> Lowerer<'a> {
             let value = self.lower_expr(&b.body)?;
             acc = match &b.pat.value {
                 canon::Pattern_::PVar(name) => self.lower_let_pvar(*name, b, value, acc)?,
-                // F1 (auto-force): `let _ = <task>` — if the discarded value is
-                // Task-typed, sequence it so the future is awaited rather than
-                // silently dropped. Non-Task wildcards keep the plain
-                // `Destructure(Wildcard, …)` form (which lowers to `let _ = …;`).
-                //
-                // Context matters:
-                //   • Async function (returns Task): emit `TaskSeq` which lowers
-                //     to `task_and_then(effect, |_| rest)` — the whole chain is a
-                //     Task value.
-                //   • Sync function (non-Task return): emit `TaskSeqSync` which
-                //     lowers to `{ let _ = task_run(effect); rest }` — blocks on
-                //     the task and discards the result, then continues with rest
-                //     in a non-Task context.  This avoids E0308 (type mismatch:
-                //     expected Vec<...> / () / Db, found IpeTask<...>).
+                // `let _ = <task>` effect discard. A `Task` carries its effect
+                // in the `Task` discipline: it runs only through `Task.run`, or
+                // by being sequenced inside a function whose own return type is a
+                // `Task`.
+                //   • Async function (returns Task): sequence the discarded
+                //     effect into the chain — emit `TaskSeq`, which lowers to
+                //     `task_and_then(effect, |_| rest)`. The whole chain stays a
+                //     `Task` value, so the effect runs only when that `Task` is
+                //     itself run. This is lawful sequencing.
+                //   • Sync function (non-Task return): there is no enclosing
+                //     `Task` to sequence into. Emitting the effect here would run
+                //     it through a hidden `Task.run`, letting a plainly-typed
+                //     function (`String -> String`) silently perform I/O — an
+                //     effect escaping the discipline. Fail closed: IPE-L0141.
+                // A non-Task wildcard keeps the plain `Destructure(Wildcard, …)`
+                // form (which lowers to `let _ = …;`).
                 canon::Pattern_::PAnything => {
                     if self.is_task_typed(b.body.span) {
                         if self.fn_is_async.get() {
@@ -20406,10 +20408,10 @@ impl<'a> Lowerer<'a> {
                                 rest: Box::new(acc),
                             }
                         } else {
-                            Expr::TaskSeqSync {
-                                effect: Box::new(value),
-                                rest: Box::new(acc),
-                            }
+                            return Err(Diagnostic::Lower {
+                                span: b.body.span,
+                                msg: LowerError::LawlessEffectDiscard,
+                            });
                         }
                     } else {
                         Expr::Destructure {

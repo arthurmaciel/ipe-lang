@@ -764,6 +764,13 @@ fn lower_label(msg: &LowerError) -> String {
              Use it only under `Terminal.appScreen` / `Terminal.appLines`",
             web_shape_label(*app)
         ),
+        LowerError::LawlessEffectDiscard => {
+            "discarding this `Task` with `let _ = …` in a function that does not return \
+             a `Task` would run its effect through a hidden `Task.run` — a plainly-typed \
+             function would silently perform I/O. Give the function a `Task e ()` return \
+             type, or run the effect with `Task.run`"
+                .to_string()
+        }
     }
 }
 

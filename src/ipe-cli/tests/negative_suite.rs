@@ -1180,6 +1180,67 @@ fn lower_dict_function_value_get_and_apply_compiles() {
     assert_compiles("lower_dict_fn_value_get_apply", &src);
 }
 
+// An effect is a `Task`: it runs only through `Task.run`, or by being sequenced
+// inside a function whose own return type is a `Task`. Discarding a `Task` as
+// `let _ = <task>` inside a NON-`Task` function would run it through a hidden
+// `Task.run`, so a plainly-typed function would silently perform I/O — an effect
+// escaping the discipline. That must fail closed at `ipe` time with IPE-L0141,
+// never `ipe`-accept then perform a lawless out-of-band print (THE SEAL for the
+// `Task` effect discipline).
+
+/// A `Task`-typed effect (`Io.println`) discarded with `let _ = …` inside a
+/// function whose return type is NOT a `Task` (here `String -> String`) escapes
+/// the `Task` discipline and must be rejected with IPE-L0141.
+#[test]
+fn lower_effect_discard_in_sync_context_rejected() {
+    let src = format!(
+        "{HEAD}import Ipe.Io as Io\n\
+         shout : String -> String\n\
+         shout s =\n\
+         \x20   let _ = Io.println s\n\
+         \x20   in\n\
+         \x20   s\n\
+         main : Task Error ()\n\
+         main =\n    Io.println (shout \"hi\")\n"
+    );
+    assert_rejected("lower_effect_discard_sync", &src, "IPE-L0141");
+}
+
+/// CONTRAPOSITIVE: the same `let _ = <task>` discard is LAWFUL when the enclosing
+/// function returns a `Task` — the discarded effect is sequenced into the chain,
+/// which runs only when the returned `Task` is run. A `main : Task Error ()` that
+/// discards one print and returns another must still compile.
+#[test]
+fn lower_effect_discard_in_task_context_compiles() {
+    let src = format!(
+        "{HEAD}import Ipe.Io as Io\n\
+         main : Task Error ()\n\
+         main =\n\
+         \x20   let _ = Io.println \"step one\"\n\
+         \x20   in\n\
+         \x20   Io.println \"step two\"\n"
+    );
+    assert_compiles("lower_effect_discard_task", &src);
+}
+
+/// CONTRAPOSITIVE: `Debug.log` is the sanctioned debug print — it returns its
+/// value (`String -> a -> a`), not a `Task`, so it is usable inside a pure
+/// function without escaping the effect discipline. A development build accepts
+/// it (a production `--optimize` build rejects it with IPE-L0140, covered
+/// separately).
+#[test]
+fn lower_debug_log_in_sync_context_compiles() {
+    let src = format!(
+        "{HEAD}import Ipe.Io as Io\n\
+         import Ipe.Debug as Debug\n\
+         shout : String -> String\n\
+         shout s =\n    Debug.log \"shout\" s\n\
+         main : Task Error ()\n\
+         main =\n    Io.println (shout \"hi\")\n"
+    );
+    assert_compiles("lower_debug_log_sync", &src);
+}
+
 /// The applicative record-codec builder seed — `object ctor` for a `Builder`
 /// wrapping a `{} -> Decoder ctor` factory — routes a curried constructor
 /// through a decoder field by a type variable. The generic accumulator emits a

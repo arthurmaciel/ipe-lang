@@ -5,7 +5,8 @@
 -- SIMPLIFICATIONS vs the reference:
 --  - `filterMap` replaced by `concatMap` (both semantically equivalent
 --    for this use-case; the stdlib does not yet export `filterMap`).
---  - `summarise` is a pure function (no IO). All IO lives in `runMain`.
+--  - `summarise` returns a `Task` so its report print stays inside the Task
+--    discipline; `runMain` sequences it before exiting.
 --
 -- All top-level bindings are fully annotated (compiled-source
 -- discipline — annotation-driven generalisation; no whole-program
@@ -29,6 +30,7 @@ import Ipe.Ffi as Ffi
 import Ipe.List as List
 import Ipe.String as String
 import Ipe.System as System
+import Ipe.Task as Task
 
 
 -- ─── Types ───────────────────────────────────────────────────────────────────
@@ -198,7 +200,7 @@ println =
     Ffi.kernel "Io_println"
 
 
-summarise : List ( String, TestResult ) -> Bool
+summarise : List ( String, TestResult ) -> Task Error Bool
 summarise results =
     let
         total =
@@ -242,20 +244,17 @@ summarise results =
         _ =
             println (failureReport ++ summaryLine)
     in
-    failCount == 0
+    Task.succeed (failCount == 0)
 
 
 runMain : List Test -> Task Error ()
 runMain tests =
-    let
-        results =
-            run tests
+    Task.andThen
+        (\allPassed ->
+            if allPassed then
+                System.exit 0
 
-        allPassed =
-            summarise results
-    in
-    if allPassed then
-        System.exit 0
-
-    else
-        System.exit 1
+            else
+                System.exit 1
+        )
+        (summarise (run tests))
