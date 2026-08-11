@@ -59,26 +59,42 @@ fn module_source_files(module: RuntimeModule) -> Vec<PathBuf> {
     rel.iter().map(|r| root.join(r)).collect()
 }
 
-/// Whether `src` defines a `pub` item named `symbol` (fn, struct, enum, const,
-/// static, or type alias). A source-symbol scan, not a build: it looks for a
-/// `pub`-prefixed item declaration whose name is exactly `symbol`.
+/// Whether `src` defines a bare-`pub` item named `symbol` (fn, struct, enum,
+/// const, static, type alias, or trait). A source-symbol scan, not a build.
+///
+/// Only `pub` without a visibility restriction qualifies — `pub(crate)`,
+/// `pub(super)`, and similar restricted forms are rejected so a symbol that is
+/// not truly public cannot satisfy a caller that expects a crate-external item.
+/// `pub async fn` and `pub unsafe fn` are accepted alongside plain `pub fn`.
 fn defines_pub_symbol(src: &str, symbol: &str) -> bool {
+    // Item-kind prefixes that may follow `pub` (with an optional `async`/`unsafe`
+    // modifier before `fn`).
     const KINDS: &[&str] = &[
-        "fn ", "struct ", "enum ", "const ", "static ", "type ", "trait ",
+        "fn ",
+        "async fn ",
+        "unsafe fn ",
+        "struct ",
+        "enum ",
+        "const ",
+        "static ",
+        "type ",
+        "trait ",
     ];
     src.lines().any(|line| {
         let trimmed = line.trim_start();
-        let Some(rest) = trimmed.strip_prefix("pub") else {
+        let Some(after_pub) = trimmed.strip_prefix("pub") else {
             return false;
         };
-        // Skip visibility qualifiers like `pub(crate)` and the following space.
-        let rest = rest.trim_start_matches(|c: char| c == '(' || c == ')' || c.is_alphabetic());
-        let rest = rest.trim_start();
+        // A restricted visibility (`pub(crate)`, `pub(super)`, …) starts with `(`.
+        // Reject it: only bare `pub` (followed by whitespace or an item kind) counts.
+        if after_pub.starts_with('(') {
+            return false;
+        }
+        let rest = after_pub.trim_start();
         KINDS.iter().any(|kind| {
             rest.strip_prefix(kind).is_some_and(|after| {
-                // The item name is the leading identifier of `after`; it must be
-                // exactly `symbol` (followed by a non-identifier boundary such as
-                // `(`, `<`, `:`, `=`, `;`, or whitespace).
+                // The item name is the leading identifier; it must be exactly
+                // `symbol` (terminated by a non-identifier character).
                 after.strip_prefix(symbol).is_some_and(|tail| {
                     tail.chars()
                         .next()

@@ -10820,6 +10820,22 @@ mod tests {
         );
     }
 
+    /// Every excluded variant carries no runtime-module requirement, closing the
+    /// blind spot where a real wired kernel relocated from `ALL` to
+    /// `UNWIRED_VARIANTS` keeps the count equal and passes the count guard while
+    /// silently escaping the scheme/coherence suites.
+    #[test]
+    fn unwired_variants_carry_no_runtime_module() {
+        for &k in UNWIRED_VARIANTS {
+            assert!(
+                k.required_runtime_module().is_none(),
+                "{k:?} is listed as unwired but declares a runtime module — \
+                 it looks like a wired kernel; either add it to ALL or document \
+                 the exception explicitly in UNWIRED_VARIANTS",
+            );
+        }
+    }
+
     /// Every wired kernel is callable through `capability()` (the exhaustive
     /// match is total over the whole registry — no panic, no gap). The compile
     /// error on a missing arm is the real drift guarantee; this asserts the
