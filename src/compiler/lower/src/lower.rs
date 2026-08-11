@@ -6066,10 +6066,18 @@ fn count_fn_value_uses(sym: Symbol, expr: &Expr) -> usize {
             .iter()
             .map(|(_, e)| count_fn_value_uses(sym, e))
             .sum(),
-        Expr::Update { fields, .. } => fields
-            .iter()
-            .map(|(_, e)| count_fn_value_uses(sym, e))
-            .sum::<usize>(),
+        // Mirrors `Expr::Access` below: the base is a textual read of `sym`
+        // (`{ (record).clone() | .. }` borrows it) that the fn-value reuse gate
+        // counts — a second read of a `Box`-carried fn value cannot be served
+        // from a borrow. The under-count that skipped the base entirely let a
+        // reuse hidden in the base pass the gate.
+        Expr::Update { record, fields } => {
+            count_fn_value_uses(sym, record)
+                + fields
+                    .iter()
+                    .map(|(_, e)| count_fn_value_uses(sym, e))
+                    .sum::<usize>()
+        }
         Expr::Ctor { args, .. } => args.iter().map(|a| count_fn_value_uses(sym, a)).sum(),
         Expr::TaskSeq { effect, rest } | Expr::TaskSeqSync { effect, rest } => {
             count_fn_value_uses(sym, effect) + count_fn_value_uses(sym, rest)
@@ -6270,13 +6278,24 @@ fn count_value_consumes(sym: Symbol, expr: &Expr) -> usize {
         Expr::ListIndexClone { list, .. } | Expr::ListLenCheck { list, .. } => {
             count_value_consumes(sym, list)
         }
-        // A `Record` field is a consuming position; an `Update` base borrows
-        // (`(record).clone()`) so only its field expressions consume — both
-        // reduce to summing the field expressions.
-        Expr::Record { fields, .. } | Expr::Update { fields, .. } => fields
+        // A `Record` field is a consuming position.
+        Expr::Record { fields, .. } => fields
             .iter()
             .map(|(_, e)| count_value_consumes(sym, e))
             .sum(),
+        // An `Update` base emits `(record).clone()`, which BORROWS a bare
+        // `sym` base rather than moving it — that borrow-only field position is
+        // left to the more specific admissibility gate (`IPE-L0120`). But a
+        // COMPOUND base (`{ (mk sym) | .. }`) moves `sym` into its
+        // sub-expression, a genuine consume that must count, so the base is
+        // scanned unless it is exactly a bare `Var(sym)`/`CloneVar(sym)`.
+        Expr::Update { record, fields } => {
+            base_move_consumes(sym, record)
+                + fields
+                    .iter()
+                    .map(|(_, e)| count_value_consumes(sym, e))
+                    .sum::<usize>()
+        }
         Expr::Ctor { args, .. } => args.iter().map(|a| count_value_consumes(sym, a)).sum(),
         Expr::TaskSeq { effect, rest } | Expr::TaskSeqSync { effect, rest } => {
             count_value_consumes(sym, effect) + count_value_consumes(sym, rest)
@@ -6289,10 +6308,12 @@ fn count_value_consumes(sym: Symbol, expr: &Expr) -> usize {
             }
         }
         Expr::TailRecur { args } => args.iter().map(|a| count_value_consumes(sym, a)).sum(),
-        // `Access` reads a field off a BORROW of the record — not a move — so it
-        // counts as no consumption, like the leaves below.
-        Expr::Access { .. }
-        | Expr::Int(_)
+        // `Access` reads a field off a BORROW of the record base, so a bare
+        // `sym` base is not consumed (left to the `IPE-L0120` admissibility
+        // gate). A COMPOUND base (`(mk sym).field`) moves `sym` into its
+        // sub-expression — a genuine consume the base scan below counts.
+        Expr::Access { record, .. } => base_move_consumes(sym, record),
+        Expr::Int(_)
         | Expr::Bool(_)
         | Expr::Float(_)
         | Expr::Str(_)
@@ -6300,6 +6321,21 @@ fn count_value_consumes(sym: Symbol, expr: &Expr) -> usize {
         | Expr::Char(_)
         | Expr::Unit
         | Expr::FuncValue { .. } => 0,
+    }
+}
+
+/// Consumes of `sym` inside an `Access`/`Update` record BASE.
+///
+/// A bare `sym` base (`sym.field`, `{ sym | .. }`) is a field BORROW — the
+/// emitted `(record).field` / `(record).clone()` takes `&record` — so it is not
+/// a consume and is deferred to the `IPE-L0120` admissibility gate. Any other
+/// base is a compound expression that MOVES `sym` into a sub-expression (e.g.
+/// `(mk sym).field`), a genuine consume counted in full.
+fn base_move_consumes(sym: Symbol, record: &Expr) -> usize {
+    if matches!(record, Expr::Var(s) | Expr::CloneVar(s) if *s == sym) {
+        0
+    } else {
+        count_value_consumes(sym, record)
     }
 }
 
@@ -22394,6 +22430,84 @@ mod tests {
 
         // A `Clone` payload reused twice is NOT this gate's concern.
         assert!(reject_nonclone_value_reuse(env, sym, &wrap_int, &reused, span).is_ok());
+    }
+
+    /// A reuse HIDDEN inside an `Access`/`Update` record base must not slip past
+    /// the reuse gates. The two counters treat a BARE base differently by design:
+    ///
+    /// * [`count_value_consumes`] (IPE-L0135) skips a bare `sym` base — a field
+    ///   BORROW the `IPE-L0120` admissibility gate owns — but counts a genuine
+    ///   move inside a COMPOUND base (`(mk sym).field`), the hole that let a
+    ///   once-in-a-base + once-elsewhere reuse pass and cargo-fail E0382.
+    /// * [`count_fn_value_uses`] (IPE-L0127) counts EVERY base read: a second
+    ///   read of a `Box`-carried fn value cannot be served from a borrow, so a
+    ///   bare `sym.field` on a fn-carrying record is already a consuming use.
+    #[test]
+    fn reuse_hidden_in_access_or_update_base_is_counted() {
+        use ipe_ir::{Expr, IrType};
+
+        use super::{count_fn_value_uses, count_value_consumes};
+
+        let mut interner = Interner::new();
+        let w = interner.intern("w").expect("intern");
+        let tag = interner.intern("tag").expect("intern");
+        let mk = interner.intern("mk").expect("intern");
+        let other = interner.intern("other").expect("intern");
+
+        // A compound base `(mk w)` that MOVES `w`.
+        let compound_base = || Expr::Apply {
+            func: Box::new(Expr::Var(mk)),
+            args: vec![Expr::Var(w)],
+        };
+        let access_over = |base: Expr| Expr::Access {
+            record: Box::new(base),
+            field: tag,
+            field_ty: IrType::Int,
+        };
+        let update_over = |base: Expr| Expr::Update {
+            record: Box::new(base),
+            fields: vec![(tag, Expr::Int(9))],
+        };
+
+        // Bare base `w.tag` / `{ w | tag = 9 }`: a field borrow the effect-carrier
+        // gate defers to IPE-L0120 (0), but a genuine read the fn-value gate
+        // counts (1) — a `Box`-carried fn cannot be re-read from a borrow.
+        assert_eq!(count_value_consumes(w, &access_over(Expr::Var(w))), 0);
+        assert_eq!(count_value_consumes(w, &update_over(Expr::Var(w))), 0);
+        assert_eq!(count_fn_value_uses(w, &access_over(Expr::Var(w))), 1);
+        assert_eq!(count_fn_value_uses(w, &update_over(Expr::Var(w))), 1);
+
+        // Compound base `(mk w).tag` / `{ mk w | tag = 9 }`: a move of `w`, counted
+        // by both — the previously-skipped hole.
+        assert_eq!(count_value_consumes(w, &access_over(compound_base())), 1);
+        assert_eq!(count_value_consumes(w, &update_over(compound_base())), 1);
+        assert_eq!(count_fn_value_uses(w, &access_over(compound_base())), 1);
+        assert_eq!(count_fn_value_uses(w, &update_over(compound_base())), 1);
+
+        // The effect-carrier repro `((mk w).tag, w)`: compound base move + tuple
+        // slot = 2, the reuse IPE-L0135 must reject. `((mk other).tag, w)` moves
+        // `w` once.
+        let reuse = Expr::Tuple(vec![access_over(compound_base()), Expr::Var(w)]);
+        assert_eq!(count_value_consumes(w, &reuse), 2);
+        let unrelated_base = Expr::Apply {
+            func: Box::new(Expr::Var(mk)),
+            args: vec![Expr::Var(other)],
+        };
+        let linear = Expr::Tuple(vec![access_over(unrelated_base), Expr::Var(w)]);
+        assert_eq!(count_value_consumes(w, &linear), 1);
+
+        // The fn-value analogue `c.f 1 + c.f 2`: two bare-base reads = 2, the
+        // reuse IPE-L0127 must reject (a bare base is a genuine fn read here).
+        let call_field = |arg| Expr::Apply {
+            func: Box::new(access_over(Expr::Var(w))),
+            args: vec![Expr::Int(arg)],
+        };
+        let fn_reuse = Expr::BinOp {
+            op: ipe_ir::BinOp::Add,
+            lhs: Box::new(call_field(1)),
+            rhs: Box::new(call_field(2)),
+        };
+        assert_eq!(count_fn_value_uses(w, &fn_reuse), 2);
     }
 
     /// The per-module eta/cap pool sizing must equal the whole-program
