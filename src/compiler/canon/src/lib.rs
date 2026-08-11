@@ -25,7 +25,9 @@ use ipe_diagnostics::DResult;
 use ipe_intern::{Interner, Symbol};
 
 pub use env::{CtorHome, Env, STDLIB_MODULE_QUALIFIERS, VarHome};
-pub use resolve::{ModuleOrigin, is_reserved_builtin_type_name};
+pub use resolve::{
+    ModuleOrigin, is_reserved_builtin_type_name, is_user_type_declaration_forbidden,
+};
 
 /// A type alias exported by a module in its raw (unresolved) source form.
 ///
@@ -857,6 +859,102 @@ mod tests {
             return;
         };
         assert_eq!(&*name, "Html");
+    }
+
+    /// Kernel-implicit names (`Handler`, `Store`, …) are user-shadowable: their
+    /// lowerer arms sit below the `enum_variants` guard so the user ADT wins.
+    /// Both the resolve gate (`is_user_type_declaration_forbidden`) and the FFI
+    /// shadow gate call the same predicate — they must agree.
+    #[test]
+    fn kernel_implicit_type_names_are_user_shadowable_at_resolve_gate() {
+        let mut i = Interner::new();
+
+        // `type Store = Store` — a user ADT whose name is a kernel-implicit
+        // built-in; the lowerer arm for `Store` sits below `enum_variants`,
+        // so the user ADT wins by its real home (safe).
+        let m = canon_ok(
+            &mut i,
+            "module Main exposing (main)\n\ntype Store = Store\n\nmain = 0\n",
+        );
+        assert!(
+            m.is_some(),
+            "user `type Store` must canonicalise (kernel-implicit, user-shadowable)"
+        );
+
+        let mut i2 = Interner::new();
+        // `type Handler a` — parametric user ADT; same reasoning.
+        let m2 = canon_ok(
+            &mut i2,
+            "module Main exposing (main)\n\ntype Handler a = Wrap a\n\nmain = 0\n",
+        );
+        assert!(
+            m2.is_some(),
+            "user `type Handler a` must canonicalise (kernel-implicit, user-shadowable)"
+        );
+    }
+
+    /// A genuinely reserved name (`HttpMethod`, `Connection`) is rejected at
+    /// the resolve gate — its lowerer arm sits above `enum_variants`.
+    #[test]
+    fn genuinely_reserved_names_rejected_at_both_gates() {
+        // `HttpMethod` — closed ADT with a fixed `IrType::HttpMethod` mapping.
+        let err = canon_err("module Main exposing (main)\n\ntype HttpMethod = Get\n\nmain = 0\n");
+        assert!(
+            matches!(
+                err,
+                Some(Diagnostic::Name {
+                    msg: NameError::ReservedBuiltinType { .. },
+                    ..
+                })
+            ),
+            "`type HttpMethod` must be rejected (IPE-N0026), got: {err:?}"
+        );
+
+        // `Connection` — reserved because the read-only-by-type security property
+        // depends on canon rejecting user shadows.
+        let err2 =
+            canon_err("module Main exposing (main)\n\ntype Connection a = Conn a\n\nmain = 0\n");
+        assert!(
+            matches!(
+                err2,
+                Some(Diagnostic::Name {
+                    msg: NameError::ReservedBuiltinType { .. },
+                    ..
+                })
+            ),
+            "`type Connection` must be rejected (IPE-N0026), got: {err2:?}"
+        );
+    }
+
+    /// `is_user_type_declaration_forbidden` and `is_reserved_builtin_type_name`
+    /// agree on RESERVED names (both true) and differ on kernel-implicit
+    /// user-shadowable names (forbidden=false, reserved=true) — verifying the
+    /// SSOT split.
+    #[test]
+    fn ssot_predicates_agree_on_reserved_differ_on_kernel_implicit() {
+        // Reserved names: both predicates return true.
+        for name in &["HttpMethod", "Connection", "Int", "Bool", "SqlValue"] {
+            assert!(
+                is_user_type_declaration_forbidden(name),
+                "`{name}` must be user-declaration-forbidden"
+            );
+            assert!(
+                is_reserved_builtin_type_name(name),
+                "`{name}` must be a known builtin"
+            );
+        }
+
+        // Kernel-implicit user-shadowable names: forbidden=false, builtin=true.
+        for name in &["Handler", "Store", "Middleware", "Session", "VNode"] {
+            assert!(
+                !is_user_type_declaration_forbidden(name),
+                "`{name}` must NOT be user-declaration-forbidden (user-shadowable)"
+            );
+            assert!(
+                is_reserved_builtin_type_name(name),
+                "`{name}` must still be a known builtin name"
+            );
+        }
     }
 
     #[test]

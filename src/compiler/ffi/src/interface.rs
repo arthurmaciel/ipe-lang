@@ -311,7 +311,7 @@ fn foreign_reserved_collision(f: &FnInfo) -> Option<String> {
     foreign_nominal_bases(f.recv_rust_type(), &mut bases);
     bases
         .into_iter()
-        .find(|b| ipe_canon::is_reserved_builtin_type_name(b))
+        .find(|b| ipe_canon::is_user_type_declaration_forbidden(b))
 }
 
 /// `true` when `name` is a well-formed Ipê value identifier the generated
@@ -343,7 +343,7 @@ fn admitted_transparent(
                 reason,
             });
         };
-        if ipe_canon::is_reserved_builtin_type_name(name) {
+        if ipe_canon::is_user_type_declaration_forbidden(name) {
             drop(
                 format!("transparent type `{name}` shadows an Ipê reserved builtin type"),
                 skipped,
@@ -693,7 +693,7 @@ pub fn crate_interface(pkg: &PkgInfo) -> CrateInterface {
         opaques.retain(|n| !admitted.contains_key(n));
         if let Some(bad) = opaques
             .iter()
-            .find(|n| ipe_canon::is_reserved_builtin_type_name(n))
+            .find(|n| ipe_canon::is_user_type_declaration_forbidden(n))
         {
             skip(
                 &format!("foreign type `{bad}` shadows an Ipê reserved builtin type"),
@@ -1185,7 +1185,7 @@ fn claim_nominal(
     claimed: &mut BTreeSet<String>,
     transparent: &BTreeMap<String, TransparentType>,
 ) -> Result<(), String> {
-    if ipe_canon::is_reserved_builtin_type_name(nominal) {
+    if ipe_canon::is_user_type_declaration_forbidden(nominal) {
         return Err(format!(
             "{kind} type `{nominal}` shadows an Ipê reserved builtin type"
         ));
