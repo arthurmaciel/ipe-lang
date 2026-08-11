@@ -299,6 +299,13 @@ const EXTRA_BUILTIN_TYPE_NAMES: &[&str] = &[
 /// yet (`Handler` / `Middleware` / `Session` / `Store` /
 /// `VNode`). Registering them here is the canon-level fix; lowerer arms complete
 /// the end-to-end path.
+///
+/// **User-shadowable**: every name here may be declared by a user `.ipe` module
+/// without a canon error. The lowerer arm for each sits BELOW the
+/// `enum_variants` guard, so a user ADT wins via its real home — the same
+/// `Color`/`Length` precedent used by [`EXTRA_BUILTIN_TYPE_NAMES`]. Names
+/// whose lowerer arm sits ABOVE the guard with a fixed `IrType` mapping
+/// (`HttpMethod`, `Connection`, …) live in [`RESERVED_BUILTIN_TYPES`] instead.
 const KERNEL_IMPLICIT_BUILTIN_TYPE_NAMES: &[&str] = &[
     // `Request -> Task Error Response` alias from Ipe.Http.Server.
     "Handler",
@@ -320,22 +327,43 @@ const KERNEL_IMPLICIT_BUILTIN_TYPE_NAMES: &[&str] = &[
     "VNode",
 ];
 
-/// `true` when `name` is any Ipê built-in TYPE name a user (or a
-/// driver-generated FFI interface) module may NOT soundly declare as its own
-/// opaque type.
+/// `true` when `name` is any known Ipê built-in type name.
 ///
-/// The union of the reserved set (`IPE-N0026`), the lowerer's extra
-/// explicit-arm names, and the kernel-implicit built-in type names — the
-/// SINGLE source of truth for "is this a built-in type name". Downstream
-/// crates that must agree with canon's reservation — the FFI interface
-/// generator's shadow gate, notably — call THIS rather than re-listing the
-/// names, so a name added to any list above can never drift out of sync with
-/// a hand-copied duplicate elsewhere.
+/// Covers the union of the reserved set, the lowerer's extra explicit-arm
+/// names, and the kernel-implicit names. Answers "is this a known built-in
+/// at all?".
+///
+/// Used for annotation resolution (the empty-home sentinel in
+/// `resolve_unqualified_type_home`) and for re-export tracking in stdlib
+/// modules. NOT the right predicate for "may a user declare this name?" —
+/// use [`is_user_type_declaration_forbidden`] for that gate.
 #[must_use]
 pub fn is_reserved_builtin_type_name(name: &str) -> bool {
     RESERVED_BUILTIN_TYPES.contains(&name)
         || EXTRA_BUILTIN_TYPE_NAMES.contains(&name)
         || KERNEL_IMPLICIT_BUILTIN_TYPE_NAMES.contains(&name)
+}
+
+/// `true` when a user `.ipe` module (or an FFI-generated shadow module) may
+/// NOT soundly declare a type with this name.
+///
+/// Only [`RESERVED_BUILTIN_TYPES`] names are forbidden: those are types whose
+/// lowerer arm in `ir_type_from_ty` / `ir_type_from_canon` sits ABOVE the
+/// `enum_variants` guard with a fixed `IrType` mapping. A competing user ADT
+/// would be silently overridden and mis-lower — IPE-N0026 blocks it.
+///
+/// [`EXTRA_BUILTIN_TYPE_NAMES`] and [`KERNEL_IMPLICIT_BUILTIN_TYPE_NAMES`]
+/// names are explicitly NOT forbidden: their lowerer arms sit below the guard
+/// (the user ADT wins via its own home). A user `type Handler a`, `type Store`,
+/// or `type Color` is valid and lowers correctly. An FFI interface wrapping a
+/// foreign `struct Handler` or `struct Store` is equally sound.
+///
+/// Both [`reject_reserved_builtin_type`] (the canon resolve gate, IPE-N0026)
+/// and the FFI shadow gate call this predicate — it is the SSOT for "is this
+/// user-declaration forbidden?".
+#[must_use]
+pub fn is_user_type_declaration_forbidden(name: &str) -> bool {
+    RESERVED_BUILTIN_TYPES.contains(&name)
 }
 
 /// The fixed type-argument arity of a built-in type that resolves to the
@@ -589,7 +617,8 @@ const STDLIB_DEFINABLE_CARRIER_TYPES: &[&str] = &[
 ];
 
 /// Reject a `type` / `type alias` whose name shadows a reserved built-in type
-/// constructor. See [`RESERVED_BUILTIN_TYPES`].
+/// constructor. See [`RESERVED_BUILTIN_TYPES`] and
+/// [`is_user_type_declaration_forbidden`].
 ///
 /// A [`ModuleOrigin::EmbeddedStdlib`] module is exempt for the
 /// [`STDLIB_DEFINABLE_UI_TYPES`] subset (nullary Ipe.Ui plain names — `Ipe.Css`)
@@ -597,6 +626,9 @@ const STDLIB_DEFINABLE_CARRIER_TYPES: &[&str] = &[
 /// carriers — `Ipe.Config`'s `Decoder`). A [`ModuleOrigin::User`] module is gated
 /// against the full reserved set, so the default user-facing behaviour is
 /// byte-identical.
+///
+/// The forbidden predicate is [`is_user_type_declaration_forbidden`] — both
+/// this function and the FFI shadow gate call it as their single SSOT.
 fn reject_reserved_builtin_type(
     name: Symbol,
     span: Span,
@@ -605,7 +637,7 @@ fn reject_reserved_builtin_type(
 ) -> DResult<()> {
     match interner.resolve(name) {
         Some(resolved)
-            if RESERVED_BUILTIN_TYPES.contains(&resolved)
+            if is_user_type_declaration_forbidden(resolved)
                 && !(origin == ModuleOrigin::EmbeddedStdlib
                     && (STDLIB_DEFINABLE_UI_TYPES.contains(&resolved)
                         || STDLIB_DEFINABLE_CARRIER_TYPES.contains(&resolved))) =>
