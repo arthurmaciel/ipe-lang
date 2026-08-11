@@ -722,6 +722,24 @@ fn canon_custom_element_arity_too_many() {
     assert_rejected("canon_custom_element_arity3", &src, "IPE-N0031");
 }
 
+/// `Ipe.Db`'s external-connection handle is `Connection mode` — EXACTLY one
+/// phantom access-mode argument. A bare `Connection` (too few) is a clean arity
+/// error (IPE-N0031), NOT the empty-home lowerer ICE (IPE-I0001) it produced
+/// before the arity gate covered the parametric reserved builtin.
+#[test]
+fn canon_connection_arity_too_few() {
+    let src = format!("{HEAD}x : Connection\nx = x\nmain = 1\n");
+    assert_rejected("canon_connection_arity0", &src, "IPE-N0031");
+}
+
+/// Too MANY arguments (`Connection a b`) is the same clean arity rejection
+/// (IPE-N0031), again never the empty-home ICE.
+#[test]
+fn canon_connection_arity_too_many() {
+    let src = format!("{HEAD}x : Connection ReadOnly ReadWrite\nx = x\nmain = 1\n");
+    assert_rejected("canon_connection_arity2", &src, "IPE-N0031");
+}
+
 /// The SEAL rejects a function-carrying boundary parameter (IPE-N0039): a
 /// function is behaviour, not a serialisable value, and must never cross the
 /// Ipê↔JS seam. Fail-closed at the type level, before emission.
