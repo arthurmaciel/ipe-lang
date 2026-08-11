@@ -1,0 +1,55 @@
+module Main exposing (main)
+
+import Ipe.Css as Css
+import Ipe.Io as Io
+
+
+-- SSOT equivalence gate: `Ipe.Css.lengthToString` / `Ipe.Css.colorToString`
+-- must produce byte-for-byte the same CSS strings as the native
+-- `ui::element::Length::css` / `Color::css` renderers for every shared value
+-- shape.
+--
+-- Shared length shapes: Px, Vh, Vw.
+-- Out of scope (no Ipe.Css spelling): Fill / Content / Min / Max are
+-- layout-intent lengths in Ipe.Ui with no Ipe.Css counterpart.
+--
+-- Shared color shape: Rgba. Alpha uses the Go-'g'-format float rule:
+-- 1.0 -> "1", 0.5 -> "0.5", 0.0 -> "0".
+--
+-- The native-side assertions live in
+-- `src/runtime/rust/src/ui/element.rs` (the `css_ssot_equiv` test module).
+
+
+lengths : String
+lengths =
+    Css.lengthToString (Css.px 0)
+        ++ "\n"
+        ++ Css.lengthToString (Css.px 16)
+        ++ "\n"
+        ++ Css.lengthToString (Css.px 100)
+        ++ "\n"
+        ++ Css.lengthToString (Css.vh 50)
+        ++ "\n"
+        ++ Css.lengthToString (Css.vh 100)
+        ++ "\n"
+        ++ Css.lengthToString (Css.vw 50)
+        ++ "\n"
+        ++ Css.lengthToString (Css.vw 100)
+
+
+colors : String
+colors =
+    Css.colorToString (Css.rgba 0 0 0 1.0)
+        ++ "\n"
+        ++ Css.colorToString (Css.rgba 255 0 0 1.0)
+        ++ "\n"
+        ++ Css.colorToString (Css.rgba 0 128 255 1.0)
+        ++ "\n"
+        ++ Css.colorToString (Css.rgba 0 0 0 0.0)
+        ++ "\n"
+        ++ Css.colorToString (Css.rgba 255 128 0 0.5)
+
+
+main : Task Error ()
+main =
+    Io.println (lengths ++ "\n" ++ colors)
