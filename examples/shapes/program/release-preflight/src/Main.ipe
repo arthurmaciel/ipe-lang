@@ -25,14 +25,14 @@ main =
     do
         version = "1.4.0"                        -- `=`  : a pure value, no effect
         Io.println ("Preflight for v" ++ version)   -- bare : run for its effect, discard the ()
-        results <- parallelDo                    -- `<-` : run all three at once, bind the List
+        results <- doParallel                    -- `<-` : run all three at once, bind the List
             checkBuild
             checkChangelog
             checkGitClean
         Io.println (report version results)
 
 
--- Three independent checks. Each returns a status line; `parallelDo` needs them
+-- Three independent checks. Each returns a status line; `doParallel` needs them
 -- to share a type (here `Task Error String`), and awaits them all — latency is
 -- the slowest check, not their sum.
 checkBuild : Task Error String

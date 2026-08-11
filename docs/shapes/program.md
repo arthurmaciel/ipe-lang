@@ -13,7 +13,7 @@ An HTTP / JSON API is a Program too — its `main` builds routes with
 ## Entry point
 
 `main = <task>` — no `app` kernel. Sequence effects with a `do` block or
-`Task.andThen`; fan out with `parallelDo` / `Task.parallel`.
+`Task.andThen`; fan out with `doParallel` / `Task.parallel`.
 
 ## Minimal example
 
@@ -30,7 +30,7 @@ main =
     do
         version = "1.4.0"
         Io.println ("Preflight for v" ++ version)
-        results <- parallelDo
+        results <- doParallel
             checkBuild
             checkChangelog
             checkGitClean
@@ -73,7 +73,7 @@ v1.4.0 preflight passed:
   git       ok  — working tree clean
 ```
 
-It announces the run, fires the three checks concurrently with `parallelDo`,
+It announces the run, fires the three checks concurrently with `doParallel`,
 then prints the report and exits 0.
 
 ## Views as data: static rendering

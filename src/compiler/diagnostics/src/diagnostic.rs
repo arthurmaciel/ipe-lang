@@ -49,7 +49,7 @@ pub enum TokenKind {
     Then,
     Else,
     Do,
-    ParallelDo,
+    DoParallel,
     LParen,
     RParen,
     LBrace,

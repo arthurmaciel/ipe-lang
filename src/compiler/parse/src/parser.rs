@@ -82,7 +82,7 @@ const fn tok_kind(t: &Tok) -> TokenKind {
         Tok::Then => TokenKind::Then,
         Tok::Else => TokenKind::Else,
         Tok::Do => TokenKind::Do,
-        Tok::ParallelDo => TokenKind::ParallelDo,
+        Tok::DoParallel => TokenKind::DoParallel,
         Tok::LParen => TokenKind::LParen,
         Tok::RParen => TokenKind::RParen,
         Tok::LBrace => TokenKind::LBrace,
@@ -1220,8 +1220,8 @@ impl<'a> Parser<'a> {
         if self.peek_kind() == Some(&Tok::Do) {
             return self.parse_do(threshold, depth + 1);
         }
-        if self.peek_kind() == Some(&Tok::ParallelDo) {
-            return self.parse_parallel_do(threshold, depth + 1);
+        if self.peek_kind() == Some(&Tok::DoParallel) {
+            return self.parse_do_parallel(threshold, depth + 1);
         }
         if self.peek_kind() == Some(&Tok::Backslash) {
             return self.parse_lambda(threshold, depth + 1);
@@ -2260,12 +2260,12 @@ impl<'a> Parser<'a> {
         ))
     }
 
-    /// Parse a `parallelDo` block — aligned same-typed task expressions run
+    /// Parse a `doParallel` block — aligned same-typed task expressions run
     /// concurrently, their results collected in order. Desugars to
     /// `Task.parallel [e1, ..., eN] : Task Error (List a)`. Nest it in a `do`
-    /// (`results <- parallelDo …`) to consume the collected list. `Ipe.Task`
+    /// (`results <- doParallel …`) to consume the collected list. `Ipe.Task`
     /// must be in scope as `Task`.
-    fn parse_parallel_do(&mut self, _threshold: u32, depth: u32) -> DResult<Expr> {
+    fn parse_do_parallel(&mut self, _threshold: u32, depth: u32) -> DResult<Expr> {
         if depth > MAX_DEPTH {
             return Err(self.too_deep(Construct::Expression));
         }

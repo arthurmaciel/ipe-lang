@@ -373,10 +373,10 @@ mod tests {
 
     #[test]
     fn parallel_do_desugars_to_task_parallel_of_a_list() {
-        // `parallelDo` over aligned tasks becomes `Task.parallel [a, b, c]`.
+        // `doParallel` over aligned tasks becomes `Task.parallel [a, b, c]`.
         let mut i = Interner::new();
-        let src = format!("{HDR}main =\n    parallelDo\n        a\n        b\n        c\n");
-        let m = parse_module(&src, &mut i).expect("parallelDo block parses");
+        let src = format!("{HDR}main =\n    doParallel\n        a\n        b\n        c\n");
+        let m = parse_module(&src, &mut i).expect("doParallel block parses");
         let main = find_value(&m, &i, "main").expect("main present");
         assert!(
             is_task_call(&main.body.value, &i, "parallel"),
@@ -386,7 +386,7 @@ mod tests {
         if let Expr_::Call(_, args) = &main.body.value {
             assert!(
                 matches!(args.first().map(|a| &a.value), Some(Expr_::List(elems)) if elems.len() == 3),
-                "parallelDo must collect its lines into a 3-element list"
+                "doParallel must collect its lines into a 3-element list"
             );
         }
     }
