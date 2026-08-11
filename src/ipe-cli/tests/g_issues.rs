@@ -56,6 +56,8 @@ mod golden_i801_decoder_storage_reuse;
 mod golden_i802_generic_optional_sync;
 #[path = "g_issues/golden_i807_codec_enum_taggedunion.rs"]
 mod golden_i807_codec_enum_taggedunion;
+#[path = "g_issues/golden_i825_generic_decoder_send.rs"]
+mod golden_i825_generic_decoder_send;
 #[path = "g_issues/golden_i858_update_base_nonclone_reuse_seal.rs"]
 mod golden_i858_update_base_nonclone_reuse_seal;
 #[path = "g_issues/golden_i99_alias_match_arm.rs"]

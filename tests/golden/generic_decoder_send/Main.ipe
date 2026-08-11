@@ -1,0 +1,47 @@
+module Main exposing (main)
+
+import Ipe.Json.Decode as JsonDec exposing (Decoder)
+import Ipe.Io as Io
+import Ipe.Result as Result
+import Ipe.String as String
+
+
+-- A generic decoder combinator: the return type `Decoder a` carries the tvar
+-- `a` inside a `Decoder` node in the emitted signature. The runtime
+-- `Decoder<E, A>` requires `A: Send`, so the emitted generic must carry
+-- `Send + 'static` on `a`. Without the obligation matcher in lower.rs, the
+-- emitted crate fails `cargo build` E0277 — a SEAL violation.
+withDefault : a -> Decoder a -> Decoder a
+withDefault fallback dec =
+    JsonDec.oneOf [ dec, JsonDec.succeed fallback ]
+
+
+main : Task Error ()
+main =
+    let
+        intDec =
+            withDefault 0 JsonDec.int
+
+        strDec =
+            withDefault "none" JsonDec.string
+
+        r1 =
+            JsonDec.decodeString intDec "99"
+
+        r2 =
+            JsonDec.decodeString intDec "\"bad\""
+
+        r3 =
+            JsonDec.decodeString strDec "\"hello\""
+
+        r4 =
+            JsonDec.decodeString strDec "null"
+    in
+    Io.println
+        (String.join " "
+            [ String.fromInt (Result.withDefault 0 r1)
+            , String.fromInt (Result.withDefault 0 r2)
+            , Result.withDefault "none" r3
+            , Result.withDefault "none" r4
+            ]
+        )
