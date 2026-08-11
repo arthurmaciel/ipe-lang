@@ -1,21 +1,18 @@
-//! Regression — record-UPDATE base borrow ordered AFTER a consuming use.
+//! Regression — record-UPDATE base ordered AFTER a consuming use.
 //!
 //! **The bug (exposed by the MAX-seed change):** `count_var_uses` did NOT
-//! count the record-update BASE occurrence of `sym` (`{ rec | … }` lowers to
-//! `(rec).clone()` — a borrow, so it was deemed "not a move, don't count").
-//! Under the pre-SUM seed the over-count accidentally kept an earlier
-//! consuming use cloned; the MAX seed removed that slack, so the last *counted*
-//! use (a by-value function argument) was made a bare MOVE while the later
-//! update base still borrowed the (now moved) value → E0382.
+//! count the record-update BASE occurrence of `sym`, so the seed under-counted.
+//! The MAX-seed change then made the consuming argument the "last counted" use
+//! → bare move → the later update base read a moved value → E0382.
 //!
-//! This is the `16-ipehess` `selectIfWhite` shape reduced to one file:
+//! This is the `16-ipechess` `selectIfWhite` shape reduced to one file:
 //! a True `if` arm using `model` in an access, a consuming argument, and an
 //! update base (textually last), with the False arm moving `model` out once.
 //!
 //! **The fix:** `count_var_uses` now counts the update base (like `Expr::Access`)
 //! and `rewrite_multiuse_clones` recurses into it, keeping last-counted aligned
 //! with last-textual so the consuming argument is cloned and the update base
-//! borrows a live value.
+//! sees a live value.
 //!
 //! Run:
 //! ```text
@@ -38,8 +35,8 @@ fn entry_path(root: &Path) -> PathBuf {
 }
 
 /// ipe-0 + emit assertion: the consuming `describe model` argument in the True
-/// arm must be cloned (`model.clone()`) because the update base `{ model | … }`
-/// (a `(model).clone()` borrow) is textually later and needs `model` alive.
+/// arm must be cloned (`model.clone()`) because the update base is textually
+/// later and still needs `model` alive.
 #[test]
 fn i193_update_base_ipec_accepts_and_clones_consuming_use() {
     let root = repo_root();
@@ -63,28 +60,26 @@ fn i193_update_base_ipec_accepts_and_clones_consuming_use() {
     let emitted = std::fs::read_to_string(out.join("src").join("main.rs"))
         .expect("emitted main.rs must exist");
 
-    // The reduced `bump` must exist and the update base must borrow via clone.
+    // The reduced `bump` function must exist in the emitted output.
     assert!(
         emitted.contains("fn main_bump"),
         "emitted main.rs must contain the bump function; got:\n{emitted}"
     );
-    // The record update always emits a `.clone()` borrow of its base into
-    // `__ipe_rec` — its presence confirms the update shape is exercised.
+    // The record update block must be present.
     assert!(
-        emitted.contains("__ipe_rec") && emitted.contains(").clone();"),
-        "update base must borrow via `let mut __ipe_rec = (…).clone();`; \
-         got:\n{emitted}"
+        emitted.contains("__ipe_rec"),
+        "emitted main.rs must contain __ipe_rec (record update block); got:\n{emitted}"
     );
     // At least two `model.clone()` occurrences: the access `(model.clone()).tag`
     // AND the consuming `describe(model.clone())` argument.  A bare `model` move
-    // for the consuming argument (ordered before the update base borrow) would
-    // drop this count below 2 and cargo E0382.
+    // for either of those (ordered before the update base) would drop this count
+    // below 2 and cause E0382.
     let clone_hits = emitted.matches("model.clone()").count();
     assert!(
         clone_hits >= 2,
         "expected >= 2 `model.clone()` occurrences (access + consuming arg); \
-         found {clone_hits}. A regression makes the consuming `describe model` \
-         argument a bare move → E0382. Emitted:\n{emitted}"
+         found {clone_hits}. A regression makes an earlier use a bare move → E0382. \
+         Emitted:\n{emitted}"
     );
 }
 

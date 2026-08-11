@@ -4819,14 +4819,13 @@ fn count_var_uses(sym: Symbol, expr: &Expr) -> usize {
             count_var_uses(sym, list)
         }
         Expr::Record { fields, .. } => fields.iter().map(|(_, e)| count_var_uses(sym, e)).sum(),
-        // `Update.record` — `emit_update` wraps it as `(record).clone()`, which
-        // BORROWS the record (`.clone()` takes `&self`).  `sym` is NOT moved by
-        // the base position, but the base IS a textual OCCURRENCE of `sym` that
-        // reads it.  We MUST count it (exactly like `Expr::Access` below) so the
-        // "last use → bare move" optimisation never fires on an EARLIER consuming
-        // use while a later borrow of `sym` (this base) still needs it alive.
-        // Counting the base keeps last-counted == last-textual, preserving
-        // soundness (E0382 otherwise — a bare move ordered before this borrow).
+        // `Update.record` — `emit_update` emits the base as-is: a `Var` is
+        // moved into `__ipe_rec` (single use, last); a `CloneVar` is cloned by
+        // `emit_expr_at`.  Either way the base IS a textual OCCURRENCE of `sym`.
+        // We MUST count it (like `Expr::Access`) so the "last use → bare move"
+        // optimisation never fires on an EARLIER consuming use while a later
+        // base-position still needs `sym` alive.  Counting keeps last-counted
+        // == last-textual, preserving soundness.
         Expr::Update { record, fields } => {
             count_var_uses(sym, record)
                 + fields
@@ -7196,18 +7195,13 @@ fn rewrite_multiuse_clones(sym: Symbol, remaining: &mut usize, expr: Expr) -> Ex
             field,
             field_ty,
         },
-        // `Update.record` is always wrapped in `(record).clone()` by `emit_update`
-        // (a borrow via `Clone::clone(&self)`), so the base never MOVES `sym`.
-        // We still recurse into `record` (like `Expr::Access`) so the shared
-        // `remaining` counter advances through this occurrence — `count_var_uses`
-        // now counts it.  Whether the base lands as `Var` (last, stays bare — the
-        // borrow keeps `sym` alive) or `CloneVar` (non-last) is immaterial to the
-        // base's own soundness; recursing simply keeps last-counted aligned with
-        // last-textual so an EARLIER consuming use is not spuriously made bare.
+        // `Update.record` — `emit_update` moves (or clones, for `CloneVar`) the
+        // base into `__ipe_rec`.  We still recurse so `remaining` advances through
+        // this occurrence, keeping last-counted == last-textual.
         //
-        // NOTE ordering: `record` is the FIRST-emitted subexpression of an Update
-        // (`(base).clone()` precedes the field assignments), so it must be
-        // rewritten BEFORE the field values to match DFS/emit order.
+        // NOTE ordering: `record` is the first-emitted subexpression of an Update
+        // (it precedes the field assignments), so it must be rewritten BEFORE the
+        // field values to match DFS/emit order.
         Expr::Update { record, fields } => {
             let record = Box::new(rewrite_multiuse_clones(sym, remaining, *record));
             Expr::Update {

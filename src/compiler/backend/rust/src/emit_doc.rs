@@ -331,11 +331,13 @@ pub fn build_doc(
             build_record(ctx, fields, ty.as_ref(), indent, child, generics)
         }
 
-        // A functional record update `{ let mut __ipe_rec = (record).clone();
-        // __ipe_rec.f = v; … __ipe_rec }`: a statement block that ALWAYS breaks
-        // (it holds statements), each `let`/assignment/tail on its own `HardLine`
-        // inside the sole `Nest(4)`, matching rustfmt. The base and each field
-        // value are built recursively.
+        // A functional record update `{ let mut __ipe_rec = <base>; __ipe_rec.f =
+        // v; … __ipe_rec }`: a statement block that ALWAYS breaks (it holds
+        // statements), each `let`/assignment/tail on its own `HardLine` inside
+        // the sole `Nest(4)`, matching rustfmt. The base and each field value are
+        // built recursively. The base is moved into `__ipe_rec` directly; when it
+        // is a `CloneVar` the lowerer already inserted `.clone()` before this
+        // point, so no outer unconditional clone is needed.
         Expr::Update { record, fields } => {
             build_update(ctx, record, fields, indent, child, generics)
         }
@@ -1352,9 +1354,9 @@ fn build_update(
     let base_doc = build_doc(ctx, record, indent, child, generics)?;
     let mut inner = vec![
         Doc::HardLine,
-        Doc::text("let mut __ipe_rec = ("),
+        Doc::text("let mut __ipe_rec = "),
         base_doc,
-        Doc::text(").clone();"),
+        Doc::text(";"),
     ];
     for (sym, value) in fields {
         let field_ident = ctx.emit_ident(*sym)?;

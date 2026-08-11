@@ -6645,12 +6645,30 @@ pub fn record_struct_name(
     Ok((struct_name, is_server_response))
 }
 
-/// Emit a functional record update `{ record | f = v, ... }` as a clone-and-
-/// reassign block: `{ let mut __ipe_rec = (<record>).clone(); __ipe_rec.f = v;
-/// __ipe_rec }`. This needs no struct name and leaves the source record
-/// untouched; the block scope makes the temporary safe under nesting. Kept out
-/// of the match (`#[inline(never)]`) for the same frame-size reason as
-/// [`emit_record`].
+/// Emit a functional record update `{ record | f = v, ... }` as a move-and-
+/// reassign block: `{ let mut __ipe_rec = <base>; __ipe_rec.f = v; __ipe_rec }`.
+///
+/// The base expression is emitted by [`emit_expr_at`], which already inserts
+/// `.clone()` when the base variable appears in multiple positions — the reuse
+/// gate rewrites such variables to [`Expr::CloneVar`] before emission. No extra
+/// `.clone()` is added here:
+///
+/// * If the base is a bare [`Expr::Var`] (single use), moving it into
+///   `__ipe_rec` is correct for both `Clone`-able and non-`Clone` record types.
+///   A non-`Clone` effect-carrier (`Task`/`Cmd`/`Sub`-bearing record) can be
+///   moved but not cloned; a single-use `Clone`-able record is equally well
+///   moved.
+/// * If the base is a [`Expr::CloneVar`] (multi-use), `emit_expr_at` emits
+///   `base.clone()`, and the assignment binds that single clone.
+///
+/// The old form carried an unconditional outer `.clone()` on top of whatever
+/// `emit_expr_at` produced. This caused ipe-accept → cargo-fail (E0599
+/// "no method `clone`") for any record update whose base type is non-`Clone` —
+/// a SEAL break. The fix removes that outer `.clone()`: the reuse gate already
+/// handles the Clone-when-reused case, and a non-`Clone` single-use base is
+/// now correctly moved.
+///
+/// Kept `#[inline(never)]` for the same frame-size reason as [`emit_record`].
 #[inline(never)]
 fn emit_update(
     ctx: &EmitCtx,
@@ -6669,7 +6687,7 @@ fn emit_update(
         assigns.push(format!(" __ipe_rec.{field_ident} = {rendered};"));
     }
     Ok(format!(
-        "{{ let mut __ipe_rec = ({base}).clone();{} __ipe_rec }}",
+        "{{ let mut __ipe_rec = {base};{} __ipe_rec }}",
         assigns.concat()
     ))
 }
