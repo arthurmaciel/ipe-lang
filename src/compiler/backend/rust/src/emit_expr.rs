@@ -278,7 +278,7 @@ fn collect_free_vars(expr: &Expr, out: &mut std::collections::BTreeSet<Symbol>) 
                 collect_free_vars(a, out);
             }
         }
-        Expr::TaskSeq { effect, rest } | Expr::TaskSeqSync { effect, rest } => {
+        Expr::TaskSeq { effect, rest } => {
             collect_free_vars(effect, out);
             collect_free_vars(rest, out);
         }
@@ -494,10 +494,6 @@ fn clone_free_target(
             effect: Box::new(clone_free_target(*effect, target, row_binders)),
             rest: Box::new(clone_free_target(*rest, target, row_binders)),
         },
-        Expr::TaskSeqSync { effect, rest } => Expr::TaskSeqSync {
-            effect: Box::new(clone_free_target(*effect, target, row_binders)),
-            rest: Box::new(clone_free_target(*rest, target, row_binders)),
-        },
         Expr::Ctor {
             home,
             ty,
@@ -647,7 +643,7 @@ fn fn_binder_used_as_value(sym: Symbol, body: &Expr) -> bool {
         Expr::Record { fields, .. } | Expr::Update { fields, .. } => {
             fields.iter().any(|(_, e)| fn_binder_used_as_value(sym, e))
         }
-        Expr::TaskSeq { effect, rest } | Expr::TaskSeqSync { effect, rest } => {
+        Expr::TaskSeq { effect, rest } => {
             fn_binder_used_as_value(sym, effect) || fn_binder_used_as_value(sym, rest)
         }
         Expr::TailLoop { params, body } => {
@@ -713,7 +709,7 @@ fn expr_refs_symbol(sym: Symbol, expr: &Expr) -> bool {
         Expr::Record { fields, .. } | Expr::Update { fields, .. } => {
             fields.iter().any(|(_, e)| expr_refs_symbol(sym, e))
         }
-        Expr::TaskSeq { effect, rest } | Expr::TaskSeqSync { effect, rest } => {
+        Expr::TaskSeq { effect, rest } => {
             expr_refs_symbol(sym, effect) || expr_refs_symbol(sym, rest)
         }
         Expr::TailLoop { params, body } => {
@@ -877,7 +873,7 @@ fn scan_free_target_into(expr: &Expr, target: Symbol, count: &mut usize, has_clo
                 scan_free_target_into(a, target, count, has_clonevar);
             }
         }
-        Expr::TaskSeq { effect, rest } | Expr::TaskSeqSync { effect, rest } => {
+        Expr::TaskSeq { effect, rest } => {
             scan_free_target_into(effect, target, count, has_clonevar);
             scan_free_target_into(rest, target, count, has_clonevar);
         }
@@ -1063,10 +1059,6 @@ pub fn substitute_var(expr: Expr, target: Symbol, replacement: &Expr) -> Expr {
                 .collect(),
         },
         Expr::TaskSeq { effect, rest } => Expr::TaskSeq {
-            effect: Box::new(substitute_var(*effect, target, replacement)),
-            rest: Box::new(substitute_var(*rest, target, replacement)),
-        },
-        Expr::TaskSeqSync { effect, rest } => Expr::TaskSeqSync {
             effect: Box::new(substitute_var(*effect, target, replacement)),
             rest: Box::new(substitute_var(*rest, target, replacement)),
         },
@@ -2788,7 +2780,7 @@ fn emit_tea_call(
 /// So this returns a `let <v> = <v>.clone(); …` prologue for every free local
 /// `v` the handler captures, spliced INSIDE the wrapper body: the box moves the
 /// fresh shadowing clones, the wrapper keeps its originals for the next call.
-/// Same shape as the `TaskSeq`/`TaskSeqSync` clone-capture prologue, applied at
+/// Same shape as the `TaskSeq` clone-capture prologue, applied at
 /// an emit-synthesized closure. Every captured free local is `Clone`: an
 /// enclosing value (`Clone` by its carrier type), a `let`-bound handler
 /// promoted to `SharedLambda` (`Arc`, `Clone` — `StreamStream` is in
@@ -5117,23 +5109,6 @@ pub fn emit_expr_at(
         // e.g. a helper that returns Vec<Row> or () but still wants to fire a
         // logging side-effect. `task_run` is the blocking scheduler entry point
         // in ipe_runtime (`pub fn task_run<E,A>(task: IpeTask<E,A>) -> IpeResult<E,A>`).
-        //
-        // AUD-04: `effect` and `rest` share ONE scope here (no closure), but
-        // `effect`'s own evaluation can still move a variable `rest` needs next
-        // (`let _ = Io.writeStdout msg in msg` moves `msg` into `writeStdout`,
-        // then `rest` reads it again) — the same left-to-right move hazard as
-        // `TaskSeq`, so it gets the identical IR-level clone-capture rewrite.
-        // Pre-AUD-04 this arm had NO clone-capture handling at all.
-        Expr::TaskSeqSync { effect, rest } => {
-            let child = depth + 1;
-            let rest_captures = free_vars(rest);
-            let row_binders: std::collections::BTreeSet<Symbol> =
-                generics.row_binders().iter().copied().collect();
-            let effect_rw = clone_targets_in_expr((**effect).clone(), &rest_captures, &row_binders);
-            let effect_s = emit_expr_at(ctx, &effect_rw, indent, child, generics)?;
-            let rest_s = emit_expr_at(ctx, rest, indent, child, generics)?;
-            Ok(format!("{{ let _ = task_run({effect_s}); {rest_s} }}"))
-        }
         // TCO nodes are produced by the lowerer's rewrite and consumed by
         // `emit_func` / `emit_expr_tail`; reaching one on the ordinary value-emit
         // path means the rewrite left a jump/loop outside a tail context — a

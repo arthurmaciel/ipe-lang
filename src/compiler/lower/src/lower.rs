@@ -1112,10 +1112,6 @@ fn clear_let_bound_task_fail_pins(expr: Expr) -> Expr {
             effect: Box::new(recur(*effect)),
             rest: Box::new(recur(*rest)),
         },
-        Expr::TaskSeqSync { effect, rest } => Expr::TaskSeqSync {
-            effect: Box::new(recur(*effect)),
-            rest: Box::new(recur(*rest)),
-        },
         Expr::ListIndexClone { list, index } => Expr::ListIndexClone {
             list: Box::new(recur(*list)),
             index,
@@ -1659,7 +1655,7 @@ fn row_value_escapes_direct_access(body: &Expr, row_syms: &BTreeSet<Symbol>) -> 
                     .iter()
                     .any(|a| row_value_escapes_direct_access(a, row_syms))
         }
-        Expr::TaskSeq { effect, rest } | Expr::TaskSeqSync { effect, rest } => {
+        Expr::TaskSeq { effect, rest } => {
             row_value_escapes_direct_access(effect, row_syms)
                 || row_value_escapes_direct_access(rest, row_syms)
         }
@@ -1987,7 +1983,6 @@ fn expr_type_mentions(expr: &Expr, pred: &impl Fn(&IrType) -> bool) -> bool {
         | Expr::Update { .. }
         | Expr::Apply { .. }
         | Expr::TaskSeq { .. }
-        | Expr::TaskSeqSync { .. }
         | Expr::TailRecur { .. } => false,
     };
     if here {
@@ -2038,7 +2033,7 @@ fn expr_type_mentions(expr: &Expr, pred: &impl Fn(&IrType) -> bool) -> bool {
         Expr::Apply { func, args } => {
             expr_type_mentions(func, pred) || args.iter().any(|a| expr_type_mentions(a, pred))
         }
-        Expr::TaskSeq { effect, rest } | Expr::TaskSeqSync { effect, rest } => {
+        Expr::TaskSeq { effect, rest } => {
             expr_type_mentions(effect, pred) || expr_type_mentions(rest, pred)
         }
         Expr::Access { record, .. } => expr_type_mentions(record, pred),
@@ -3146,22 +3141,6 @@ fn rewrite_captured_clones(
                 depth,
             )?),
         }),
-        Expr::TaskSeqSync { effect, rest } => Ok(Expr::TaskSeqSync {
-            effect: Box::new(rewrite_captured_clones(
-                clone_set,
-                noncl_set,
-                lambda_span,
-                *effect,
-                depth,
-            )?),
-            rest: Box::new(rewrite_captured_clones(
-                clone_set,
-                noncl_set,
-                lambda_span,
-                *rest,
-                depth,
-            )?),
-        }),
         Expr::Ctor {
             home,
             ty,
@@ -3322,7 +3301,7 @@ fn lambda_body_refs_sym(sym: Symbol, expr: &Expr) -> bool {
         // Only the field value expressions are consuming captures.
         Expr::Update { fields, .. } => fields.iter().any(|(_, e)| lambda_body_refs_sym(sym, e)),
         Expr::Ctor { args, .. } => args.iter().any(|a| lambda_body_refs_sym(sym, a)),
-        Expr::TaskSeq { effect, rest } | Expr::TaskSeqSync { effect, rest } => {
+        Expr::TaskSeq { effect, rest } => {
             lambda_body_refs_sym(sym, effect) || lambda_body_refs_sym(sym, rest)
         }
         Expr::TailRecur { args } => args.iter().any(|a| lambda_body_refs_sym(sym, a)),
@@ -3469,7 +3448,7 @@ fn collect_lambda_capture_depths(sym: Symbol, expr: &Expr, cur_depth: u32, depth
                 collect_lambda_capture_depths(sym, e, cur_depth, depths);
             }
         }
-        Expr::TaskSeq { effect, rest } | Expr::TaskSeqSync { effect, rest } => {
+        Expr::TaskSeq { effect, rest } => {
             collect_lambda_capture_depths(sym, effect, cur_depth, depths);
             collect_lambda_capture_depths(sym, rest, cur_depth, depths);
         }
@@ -3636,7 +3615,7 @@ fn flows_into_sync_kernel_call(sym: Symbol, expr: &Expr) -> bool {
         Expr::Ctor { args, .. } | Expr::TailRecur { args } => {
             args.iter().any(|a| flows_into_sync_kernel_call(sym, a))
         }
-        Expr::TaskSeq { effect, rest } | Expr::TaskSeqSync { effect, rest } => {
+        Expr::TaskSeq { effect, rest } => {
             flows_into_sync_kernel_call(sym, effect) || flows_into_sync_kernel_call(sym, rest)
         }
         Expr::Access { record, .. } => flows_into_sync_kernel_call(sym, record),
@@ -3742,7 +3721,6 @@ fn branch_value_leaf_reads_sym(name: Symbol, branch: &Expr) -> bool {
         | Expr::Update { .. }
         | Expr::Ctor { .. }
         | Expr::TaskSeq { .. }
-        | Expr::TaskSeqSync { .. }
         | Expr::TailRecur { .. } => false,
     }
 }
@@ -3942,7 +3920,6 @@ fn unify_group_value_leaves(
         | Expr::Update { .. }
         | Expr::Ctor { .. }
         | Expr::TaskSeq { .. }
-        | Expr::TaskSeqSync { .. }
         | Expr::TailRecur { .. }) => eta_expand_leaf_to_shared(leaf, params, ret, eta_pool),
     }
 }
@@ -4202,10 +4179,6 @@ fn promote_unification_sibling_lambdas(
             effect: Box::new(recur(*effect)?),
             rest: Box::new(recur(*rest)?),
         }),
-        Expr::TaskSeqSync { effect, rest } => Ok(Expr::TaskSeqSync {
-            effect: Box::new(recur(*effect)?),
-            rest: Box::new(recur(*rest)?),
-        }),
         Expr::TailRecur { args } => Ok(Expr::TailRecur {
             args: args.into_iter().map(recur).collect::<DResult<Vec<_>>>()?,
         }),
@@ -4283,7 +4256,7 @@ fn sym_referenced_directly(sym: Symbol, expr: &Expr) -> bool {
                 || fields.iter().any(|(_, e)| sym_referenced_directly(sym, e))
         }
         Expr::Ctor { args, .. } => args.iter().any(|a| sym_referenced_directly(sym, a)),
-        Expr::TaskSeq { effect, rest } | Expr::TaskSeqSync { effect, rest } => {
+        Expr::TaskSeq { effect, rest } => {
             sym_referenced_directly(sym, effect) || sym_referenced_directly(sym, rest)
         }
         Expr::TailRecur { args } => args.iter().any(|a| sym_referenced_directly(sym, a)),
@@ -4460,15 +4433,6 @@ fn force_shared_capture_clones(sym: Symbol, expr: Expr) -> Expr {
             let node = Expr::TaskSeq { effect, rest };
             wrap_task_seq_rest_capture(sym, node)
         }
-        Expr::TaskSeqSync { effect, rest } => {
-            // The sync variant emits `{ let _ = task_run(effect); rest }` — `rest`
-            // shares ONE scope with `effect` (no synthetic closure), so no
-            // enclosing-closure move hazard exists here. Recurse only.
-            Expr::TaskSeqSync {
-                effect: Box::new(force_shared_capture_clones(sym, *effect)),
-                rest: Box::new(force_shared_capture_clones(sym, *rest)),
-            }
-        }
         Expr::TailRecur { args } => Expr::TailRecur {
             args: force_shared_capture_clones_all(sym, args),
         },
@@ -4487,7 +4451,7 @@ fn force_shared_capture_clones(sym: Symbol, expr: Expr) -> Expr {
 /// lambda's own concern (it already got its own wrap during recursion) and does
 /// not trigger a redundant `TaskSeq` wrap here.
 fn wrap_task_seq_rest_capture(sym: Symbol, node: Expr) -> Expr {
-    let (Expr::TaskSeq { rest, .. } | Expr::TaskSeqSync { rest, .. }) = &node else {
+    let Expr::TaskSeq { rest, .. } = &node else {
         return node;
     };
     if sym_referenced_directly(sym, rest) {
@@ -4871,9 +4835,7 @@ fn count_var_uses(sym: Symbol, expr: &Expr) -> usize {
                     .sum::<usize>()
         }
         Expr::Ctor { args, .. } => args.iter().map(|a| count_var_uses(sym, a)).sum(),
-        Expr::TaskSeq { effect, rest } | Expr::TaskSeqSync { effect, rest } => {
-            count_var_uses(sym, effect) + count_var_uses(sym, rest)
-        }
+        Expr::TaskSeq { effect, rest } => count_var_uses(sym, effect) + count_var_uses(sym, rest),
         Expr::TailLoop { params, body } => {
             if params.iter().any(|(s, _)| *s == sym) {
                 0
@@ -5051,7 +5013,7 @@ fn body_calls_kernel_on_param(
         Expr::Ctor { args, .. } => args
             .iter()
             .any(|a| body_calls_kernel_on_param(param, a, matcher)),
-        Expr::TaskSeq { effect, rest } | Expr::TaskSeqSync { effect, rest } => {
+        Expr::TaskSeq { effect, rest } => {
             body_calls_kernel_on_param(param, effect, matcher)
                 || body_calls_kernel_on_param(param, rest, matcher)
         }
@@ -5455,7 +5417,7 @@ fn body_succeeds_on_bare_var(expr: &Expr) -> bool {
         Expr::Record { fields, .. } | Expr::Update { fields, .. } => {
             fields.iter().any(|(_, e)| body_succeeds_on_bare_var(e))
         }
-        Expr::TaskSeq { effect, rest } | Expr::TaskSeqSync { effect, rest } => {
+        Expr::TaskSeq { effect, rest } => {
             body_succeeds_on_bare_var(effect) || body_succeeds_on_bare_var(rest)
         }
         Expr::Int(_)
@@ -5536,7 +5498,7 @@ fn body_boxes_generic_callback(tv: Symbol, expr: &Expr) -> bool {
         Expr::Record { fields, .. } | Expr::Update { fields, .. } => fields
             .iter()
             .any(|(_, e)| body_boxes_generic_callback(tv, e)),
-        Expr::TaskSeq { effect, rest } | Expr::TaskSeqSync { effect, rest } => {
+        Expr::TaskSeq { effect, rest } => {
             body_boxes_generic_callback(tv, effect) || body_boxes_generic_callback(tv, rest)
         }
         Expr::TailLoop { body, .. } => body_boxes_generic_callback(tv, body),
@@ -5636,7 +5598,7 @@ fn body_materializes_generic_decoder(tv: Symbol, expr: &Expr) -> bool {
         Expr::Record { fields, .. } | Expr::Update { fields, .. } => fields
             .iter()
             .any(|(_, e)| body_materializes_generic_decoder(tv, e)),
-        Expr::TaskSeq { effect, rest } | Expr::TaskSeqSync { effect, rest } => {
+        Expr::TaskSeq { effect, rest } => {
             body_materializes_generic_decoder(tv, effect)
                 || body_materializes_generic_decoder(tv, rest)
         }
@@ -5727,7 +5689,7 @@ fn binder_captured_in_move_closure(binder: Symbol, expr: &Expr) -> bool {
         Expr::Record { fields, .. } | Expr::Update { fields, .. } => fields
             .iter()
             .any(|(_, e)| binder_captured_in_move_closure(binder, e)),
-        Expr::TaskSeq { effect, rest } | Expr::TaskSeqSync { effect, rest } => {
+        Expr::TaskSeq { effect, rest } => {
             binder_captured_in_move_closure(binder, effect)
                 || binder_captured_in_move_closure(binder, rest)
         }
@@ -6079,7 +6041,7 @@ fn count_fn_value_uses(sym: Symbol, expr: &Expr) -> usize {
                     .sum::<usize>()
         }
         Expr::Ctor { args, .. } => args.iter().map(|a| count_fn_value_uses(sym, a)).sum(),
-        Expr::TaskSeq { effect, rest } | Expr::TaskSeqSync { effect, rest } => {
+        Expr::TaskSeq { effect, rest } => {
             count_fn_value_uses(sym, effect) + count_fn_value_uses(sym, rest)
         }
         Expr::TailLoop { params, body } => {
@@ -6297,7 +6259,7 @@ fn count_value_consumes(sym: Symbol, expr: &Expr) -> usize {
                     .sum::<usize>()
         }
         Expr::Ctor { args, .. } => args.iter().map(|a| count_value_consumes(sym, a)).sum(),
-        Expr::TaskSeq { effect, rest } | Expr::TaskSeqSync { effect, rest } => {
+        Expr::TaskSeq { effect, rest } => {
             count_value_consumes(sym, effect) + count_value_consumes(sym, rest)
         }
         Expr::TailLoop { params, body } => {
@@ -6620,7 +6582,7 @@ fn fn_value_read_flags_walk(sym: Symbol, expr: &Expr, depth: u32, flags: &mut Fn
                 fn_value_read_flags_walk(sym, e, depth, flags);
             }
         }
-        Expr::TaskSeq { effect, rest } | Expr::TaskSeqSync { effect, rest } => {
+        Expr::TaskSeq { effect, rest } => {
             fn_value_read_flags_walk(sym, effect, depth, flags);
             fn_value_read_flags_walk(sym, rest, depth, flags);
         }
@@ -6925,10 +6887,6 @@ fn shim_fn_value_reads(
             field_ty,
         }),
         Expr::TaskSeq { effect, rest } => Ok(Expr::TaskSeq {
-            effect: Box::new(recurse(*effect)?),
-            rest: Box::new(recurse(*rest)?),
-        }),
-        Expr::TaskSeqSync { effect, rest } => Ok(Expr::TaskSeqSync {
             effect: Box::new(recurse(*effect)?),
             rest: Box::new(recurse(*rest)?),
         }),
@@ -7278,10 +7236,6 @@ fn rewrite_multiuse_clones(sym: Symbol, remaining: &mut usize, expr: Expr) -> Ex
             effect: Box::new(rewrite_multiuse_clones(sym, remaining, *effect)),
             rest: Box::new(rewrite_multiuse_clones(sym, remaining, *rest)),
         },
-        Expr::TaskSeqSync { effect, rest } => Expr::TaskSeqSync {
-            effect: Box::new(rewrite_multiuse_clones(sym, remaining, *effect)),
-            rest: Box::new(rewrite_multiuse_clones(sym, remaining, *rest)),
-        },
         Expr::TailLoop { params, body } => {
             if params.iter().any(|(s, _)| *s == sym) {
                 Expr::TailLoop { params, body } // sym shadowed by loop var
@@ -7493,7 +7447,7 @@ fn count_self_calls(
         }
         // Task recursion excluded in v1: BOTH sub-terms non-tail (a Task-recursive
         // fn is simply not TCO'd = today's behaviour, no regression).
-        Expr::TaskSeq { effect, rest } | Expr::TaskSeqSync { effect, rest } => {
+        Expr::TaskSeq { effect, rest } => {
             count_self_calls(self_id, arity, effect, false, tail, non_tail);
             count_self_calls(self_id, arity, rest, false, tail, non_tail);
         }
@@ -7994,7 +7948,7 @@ fn collect_func_edges(expr: &Expr, out: &mut BTreeSet<FuncId>) {
             collect_func_edges(lhs, out);
             collect_func_edges(rhs, out);
         }
-        Expr::TaskSeq { effect, rest } | Expr::TaskSeqSync { effect, rest } => {
+        Expr::TaskSeq { effect, rest } => {
             collect_func_edges(effect, out);
             collect_func_edges(rest, out);
         }
@@ -8144,7 +8098,7 @@ fn scan_kernel_usage(expr: &Expr, usage: &mut KernelUsage) {
             scan_kernel_usage(lhs, usage);
             scan_kernel_usage(rhs, usage);
         }
-        Expr::TaskSeq { effect, rest } | Expr::TaskSeqSync { effect, rest } => {
+        Expr::TaskSeq { effect, rest } => {
             scan_kernel_usage(effect, usage);
             scan_kernel_usage(rest, usage);
         }
@@ -8444,10 +8398,6 @@ fn rewrite_var_free_occurrences(
                 .collect(),
         },
         Expr::TaskSeq { effect, rest } => Expr::TaskSeq {
-            effect: Box::new(rewrite_var_free_occurrences(target, *effect, on_hit)),
-            rest: Box::new(rewrite_var_free_occurrences(target, *rest, on_hit)),
-        },
-        Expr::TaskSeqSync { effect, rest } => Expr::TaskSeqSync {
             effect: Box::new(rewrite_var_free_occurrences(target, *effect, on_hit)),
             rest: Box::new(rewrite_var_free_occurrences(target, *rest, on_hit)),
         },
@@ -8793,10 +8743,10 @@ pub struct Lowerer<'a> {
     /// return type. Set to `true` when `lower_def` / `lower_lambda` detects that
     /// the inferred return type is `IrType::Task(_)`; reset to `false` on entry to
     /// each new def/lambda scope and restored on exit (save/set/restore pattern).
-    /// Read by `lower_let`'s `PAnything` arm to choose between `Expr::TaskSeq`
-    /// (async context — emit `task_and_then(...)`) and `Expr::TaskSeqSync`
-    /// (sync context — emit `{ let _ = task_run(...); rest }`).  Interior
-    /// mutability so the lowering walk stays over a shared `&self`.
+    /// Read by `lower_let`'s `PAnything` arm to emit `Expr::TaskSeq`
+    /// in an async context (`task_and_then(...)`), or diagnose a lawless
+    /// effect discard in a sync context.  Interior mutability so the
+    /// lowering walk stays over a shared `&self`.
     fn_is_async: Cell<bool>,
 
     /// Symbols whose BINDER kind can carry the `Arc<dyn Fn>` promotion: plain
@@ -12678,8 +12628,8 @@ impl<'a> Lowerer<'a> {
         // fail at the parameter step (line 4132 above) before reaching here;
         // the json fallback only affects the return-type slot.
         let ret = self.ir_type_from_ty_json(cur, span)?;
-        // Save/set/restore fn_is_async so `lower_let`'s PAnything arm chooses
-        // TaskSeqSync vs TaskSeq based on THIS lambda's return type, not the
+        // Save/set/restore fn_is_async so `lower_let`'s PAnything arm uses
+        // THIS lambda's return type (not the enclosing def's) to determine
         // enclosing def's. A pad-applied body's IMMEDIATE type is the residual
         // arrow (a function value), not the flattened `Task` return — the body
         // expression itself is not in an async position.

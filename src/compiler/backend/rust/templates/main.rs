@@ -130,7 +130,7 @@ pub fn file_write_file(path: ipe_runtime::path::Path, content: String) -> IpeTas
 pub fn file_delete(path: ipe_runtime::path::Path) -> IpeTask<()> {
     ipe_runtime::file::file_delete(path)
 }
-// ── Task combinators (M5a) ─────────────────────────────────────────────────
+// ── Task combinators ───────────────────────────────────────────────────────
 pub fn task_fail<A: Send + 'static>(e: IpeError) -> IpeTask<A> {
     ipe_runtime::task::task_fail(e)
 }
@@ -176,7 +176,7 @@ pub fn task_parallel<A: Send + 'static>(tasks: Vec<IpeTask<A>>) -> IpeTask<Vec<A
 pub fn task_run<A: Send + 'static>(t: IpeTask<A>) -> IpeResult<IpeError, A> {
     ipe_runtime::task::task_run(t)
 }
-// ── Io kernels (M5a) ───────────────────────────────────────────────────────
+// ── Io kernels ─────────────────────────────────────────────────────────────
 pub fn io_read_line(_: ()) -> IpeTask<String> {
     ipe_runtime::io::io_read_line(())
 }
@@ -195,7 +195,7 @@ pub fn io_println(msg: String) -> IpeTask<()> {
 pub fn io_eprintln(msg: String) -> IpeTask<()> {
     ipe_runtime::io::io_eprintln(msg)
 }
-// ── System kernels (M5a) ───────────────────────────────────────────────────
+// ── System kernels ─────────────────────────────────────────────────────────
 pub fn system_getenv(key: String) -> IpeTask<String> {
     ipe_runtime::system::system_getenv(key)
 }
@@ -220,7 +220,7 @@ pub fn system_load_env(_: ()) -> IpeTask<()> {
 pub fn system_exit(code: i64) -> ! {
     ipe_runtime::system::system_exit(code)
 }
-// ── File kernels (M5a) ─────────────────────────────────────────────────────
+// ── File kernels ───────────────────────────────────────────────────────────
 pub fn file_exists(path: ipe_runtime::path::Path) -> IpeTask<bool> {
     ipe_runtime::file::file_exists(path)
 }
@@ -264,7 +264,7 @@ pub fn crypto_random_bytes(n: i64) -> IpeTask<String> {
 pub fn crypto_random_token(n: i64) -> IpeTask<String> {
     ipe_runtime::crypto_core::crypto_random_token(n)
 }
-// ── Http kernels (M5b) ─────────────────────────────────────────────────────
+// ── Http kernels ───────────────────────────────────────────────────────────
 pub fn http_parse_query(raw: String) -> HashMap<String, String> {
     ipe_runtime::http_client::http_parse_query(raw)
 }

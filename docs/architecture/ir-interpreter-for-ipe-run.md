@@ -521,7 +521,7 @@ Failing test first: async goldens run under `--engine=interp` (they currently
 assert `Fallback`).
 Minimal impl: `Value::Task`; entry via the shared tokio `block_on` (webview
 shape via `block_on_current_thread`); Task-combinator shims instantiated at
-`Value`; `TaskSeq`/`TaskSeqSync` evaluation.
+`Value`; `TaskSeq` evaluation.
 Gate: async goldens differential-green in both tiers; ordering fixtures
 (sequenced effects, early-`Err` short-circuit) byte-identical.
 

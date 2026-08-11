@@ -1840,7 +1840,7 @@ doc: effect visibility is a first-class criterion (the block boundary marks
 the effect REGION, a per-line marker marks each effect), bind is built-in for
 the fixed effect types only (no user-facing Monad class), a bare effect line
 = run/discard (kills the `let _ = TaskExpr` auto-force wart). Shipped: `do`
-and `parallelDo` desugar in the parser to `Task.andThen` / `Task.parallel` —
+and `doParallel` desugar in the parser to `Task.andThen` / `Task.parallel` —
 decision recorded in `docs/adr/0050-do-block-task-sequencing-sugar.md`.
 
 ### 6.6 Record field-punning on construction

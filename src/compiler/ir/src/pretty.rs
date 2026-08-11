@@ -1777,9 +1777,6 @@ fn write_expr_at(out: &mut String, expr: &Expr, interner: &Interner, level: usiz
         Expr::TaskSeq { effect, rest } => {
             write_task_seq(out, effect, rest, interner, level, depth);
         }
-        Expr::TaskSeqSync { effect, rest } => {
-            write_task_seq_sync(out, effect, rest, interner, level, depth);
-        }
         Expr::TailLoop { params, body } => {
             write_tail_loop(out, params, body, interner, level, depth);
         }
@@ -1832,23 +1829,6 @@ fn write_task_seq(
     depth: u16,
 ) {
     line(out, level, "TaskSeq");
-    line(out, level + 1, "effect:");
-    write_expr_at(out, effect, interner, level + 2, depth);
-    line(out, level + 1, "rest:");
-    write_expr_at(out, rest, interner, level + 2, depth);
-}
-
-/// Render a [`Expr::TaskSeqSync`] node: identical layout to [`write_task_seq`]
-/// but labelled `TaskSeqSync` to distinguish it in IR dumps.
-fn write_task_seq_sync(
-    out: &mut String,
-    effect: &Expr,
-    rest: &Expr,
-    interner: &Interner,
-    level: usize,
-    depth: u16,
-) {
-    line(out, level, "TaskSeqSync");
     line(out, level + 1, "effect:");
     write_expr_at(out, effect, interner, level + 2, depth);
     line(out, level + 1, "rest:");

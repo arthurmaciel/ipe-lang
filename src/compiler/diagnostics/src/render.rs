@@ -1115,7 +1115,7 @@ const fn token_kind_str(t: TokenKind) -> &'static str {
         TokenKind::Then => "`then`",
         TokenKind::Else => "`else`",
         TokenKind::Do => "`do`",
-        TokenKind::ParallelDo => "`parallelDo`",
+        TokenKind::DoParallel => "`doParallel`",
         TokenKind::LParen => "`(`",
         TokenKind::RParen => "`)`",
         TokenKind::LBrace => "`{`",

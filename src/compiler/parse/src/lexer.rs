@@ -36,7 +36,7 @@ pub enum Tok {
     Then,
     Else,
     Do,
-    ParallelDo,
+    DoParallel,
     // Punctuation / operators.
     LParen,
     RParen,
@@ -289,7 +289,7 @@ fn keyword(text: &str) -> Option<Tok> {
         "then" => Some(Tok::Then),
         "else" => Some(Tok::Else),
         "do" => Some(Tok::Do),
-        "parallelDo" => Some(Tok::ParallelDo),
+        "doParallel" => Some(Tok::DoParallel),
         _ => None,
     }
 }

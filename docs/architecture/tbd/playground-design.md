@@ -283,7 +283,7 @@ statements, one list.
 
 ---
 
-## C. Server design (Ipê, `Ipe.Http.Server` + `do`/`parallelDo`)
+## C. Server design (Ipê, `Ipe.Http.Server` + `do`/`doParallel`)
 
 The Sky reference was a `Sky.Live` routed app (server-rendered TEA). Ipê's
 equivalent surface for a plain compile-and-run endpoint is **`Ipe.Http.Server`**
@@ -302,9 +302,9 @@ port as-is; their responsibilities move as follows:
 
 ### `Runner.ipe` — the build+run pipeline, `do`-notation (not an `andThen` pyramid)
 
-Per ADR 0050, `do` desugars to `Task.andThen`/`let`; `parallelDo` to `Task.parallel`.
+Per ADR 0050, `do` desugars to `Task.andThen`/`let`; `doParallel` to `Task.parallel`.
 The pipeline is inherently sequential (each step needs the previous step's dir),
-so it is a `do` block. `parallelDo` is used only where steps are genuinely
+so it is a `do` block. `doParallel` is used only where steps are genuinely
 independent — writing the several project files at once. Illustrative shape:
 
 ```elm
@@ -329,7 +329,7 @@ runEmittedRust rustProjectText =
 
         -- The emitted text is banner-delimited (`// ==== path ====`); split it
         -- back into files. Independent writes run together.
-        _ <- parallelDo
+        _ <- doParallel
             writeSplitFiles dir rustProjectText   -- expands to Task.parallel [ … ]
 
         build <- Process.exec "cargo"
@@ -350,7 +350,7 @@ runEmittedRust rustProjectText =
   `timeoutMs`) and formats build+run; on nonzero it formats the build failure and
   skips the run.
 - `writeSplitFiles` returns a `List (Task Error ())` (one `File.writeFile` per
-  emitted file); `parallelDo` over it is `Task.parallel`.
+  emitted file); `doParallel` over it is `Task.parallel`.
 - `cleanup dir = File.remove dir |> Task.onError (\_ -> Task.succeed ())` — a fresh
   Task per call site (a Task is one-shot; do not share the binding), matching the
   Sky `removeDir` note.
@@ -605,7 +605,7 @@ wiring + a flag.
   refusal path unchanged for the hosted posture.
 
 ### P3 — Ipê server (`Main.ipe` + `Runner.ipe`) · *blocks on P1*
-The `Ipe.Http.Server` app using `do`/`parallelDo` (§C). Resolve the static-serving
+The `Ipe.Http.Server` app using `do`/`doParallel` (§C). Resolve the static-serving
 decision (§C) — confirm the binary-body path or take `Server.static`.
 - **SEAL:** the example builds and runs via the examples sweep (server shape,
   headless); an e2e that `POST /run` with a known-good emitted-Rust project returns
@@ -653,7 +653,7 @@ sandbox CI matrix (§D).
    String`. No gap.
 5. **`Ipe.File` temp/dir surface — exists** (`mkdirAll`, `writeFile`,
    `readFile`/`readFileBytes`, `remove`, `tempDir`). No gap.
-6. **`do`/`parallelDo` — exists** (ADR 0050, parser desugar to
+6. **`do`/`doParallel` — exists** (ADR 0050, parser desugar to
    `Task.andThen`/`Task.parallel`). No gap.
 7. **Sandbox crate — exists** (`ipe_sandbox`, per-platform build+run jails,
    fail-closed IPE-F4410). Reused. The only new work is wiring it to the `Process`

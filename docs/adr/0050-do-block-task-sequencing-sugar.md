@@ -1,7 +1,7 @@
 Status: Accepted
 Date: 2026-07-28
 
-# 50. `do` / `parallelDo` notation desugars to `Task.andThen` / `Task.parallel`
+# 50. `do` / `doParallel` notation desugars to `Task.andThen` / `Task.parallel`
 
 ## Context
 
@@ -34,16 +34,16 @@ both pure syntactic sugar:
   bind (no `let … in`, reusing Ipê's existing definition-binding shape); a bare
   line runs a `Task` for effect and discards it. A required trailing expression is
   the block's result (auto-wrapped in `Task.succeed` when pure).
-- **`parallelDo`** — runs its aligned, same-typed tasks concurrently and collects
+- **`doParallel`** — runs its aligned, same-typed tasks concurrently and collects
   their results as a `List`, usable on its own or bound inside a `do`
-  (`results <- parallelDo …`).
+  (`results <- doParallel …`).
 
 Both desugar in the parser to existing nodes:
 
 - `⟦(p <- e); rest⟧ = e |> Task.andThen (\p -> ⟦rest⟧)`
 - `⟦(p = e); rest⟧ = let p = e in ⟦rest⟧`
 - `⟦e; rest⟧ = e |> Task.andThen (\_ -> ⟦rest⟧)` (bare discard)
-- a `parallelDo` of aligned tasks desugars to `Task.parallel`.
+- a `doParallel` of aligned tasks desugars to `Task.parallel`.
 
 Because the desugar targets today's `Task.andThen` / `Task.parallel` / `Let`
 nodes, canon, type inference, lowering, and emit are untouched — the whole
@@ -79,7 +79,7 @@ Alternatives rejected:
 - The `<-` / `=` / bare distinction keeps "effectful vs pure" legible at a glance
   and lets the compiler police the boundary (a pure value on a bare discard line,
   or a `Task` bound with `=`, is diagnosable).
-- The invariant that must keep holding: a `do` / `parallelDo` block is *only*
+- The invariant that must keep holding: a `do` / `doParallel` block is *only*
   sugar. Anything that would make it observably differ from its `Task.andThen` /
   `Task.parallel` expansion — new runtime behaviour, an error channel a plain
   chain lacks — is out of bounds.
