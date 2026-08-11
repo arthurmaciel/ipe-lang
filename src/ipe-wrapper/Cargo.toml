@@ -1,0 +1,18 @@
+[package]
+name = "ipe_wrapper"
+edition.workspace = true
+version.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "ipe-wrapper"
+path = "src/main.rs"
+
+[dependencies]
+ipe_sandbox = { path = "../compiler/sandbox" }
+
+[dev-dependencies]
+ipe_kernels = { path = "../compiler/kernels" }
+
+[lints]
+workspace = true

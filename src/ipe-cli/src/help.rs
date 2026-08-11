@@ -138,6 +138,31 @@ const COMMANDS: &[Command] = &[
         ],
     },
     Command {
+        name: "deploy",
+        run: crate::run_deploy,
+        summary: "Build a self-contained, toolchain-free jailed deploy bundle.",
+        args: "[<path>]",
+        args_desc: "A source file, a project directory, or an ipe.toml. Defaults to the current project.",
+        options: &[
+            Opt {
+                flag: "[--out <dir>]",
+                desc: "write the bundle to <dir> (default: deploy/)",
+            },
+            Opt {
+                flag: "[--target <triple>]",
+                desc: "the musl-static target triple (default: x86_64-unknown-linux-musl)",
+            },
+            Opt {
+                flag: "[--runtime <dir>]",
+                desc: "vendor the Ipê runtime source from <dir>",
+            },
+            Opt {
+                flag: "[--embed]",
+                desc: "fuse the app binary and profile into the wrapper for single-file scp",
+            },
+        ],
+    },
+    Command {
         name: "type-check",
         run: crate::run_type_check,
         summary: "Type-check a program without building or running it.",
@@ -510,7 +535,7 @@ const COMMANDS: &[Command] = &[
 const SECTIONS: &[Section] = &[
     Section {
         title: "Development",
-        commands: &["init", "build", "run", "exec", "watch"],
+        commands: &["init", "build", "run", "exec", "deploy", "watch"],
     },
     Section {
         title: "Quality",

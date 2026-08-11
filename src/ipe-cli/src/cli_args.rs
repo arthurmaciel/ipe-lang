@@ -560,6 +560,79 @@ pub fn parse_eject(rest: &[String]) -> Result<EjectArgs, CliError> {
     })
 }
 
+/// Fully-parsed `ipe deploy` arguments.
+#[derive(Debug)]
+pub struct DeployArgs {
+    /// The positional entry (`None` → project-aware default).
+    pub entry: Option<String>,
+    /// `--out <dir>` — where to write the bundle directory (optional; defaults
+    /// to `deploy/`).
+    pub out: Option<String>,
+    /// `--runtime <dir>` — vendor the Ipê runtime from here.
+    pub runtime: Option<String>,
+    /// `--target <triple>` — the musl-static rustc triple to build for.
+    /// Defaults to `x86_64-unknown-linux-musl`.
+    pub target: Option<String>,
+    /// `--embed` — fuse the app binary and profile into the wrapper for a
+    /// single-file deploy artifact.
+    pub embed: bool,
+}
+
+/// Parse `ipe deploy`'s argument tail.
+///
+/// `--out` is optional (default: `deploy/`). Each value flag is rejected on a
+/// second occurrence.
+///
+/// # Errors
+///
+/// [`CliError::Usage`] / [`CliError::UsageOwned`] naming the exact problem.
+pub fn parse_deploy(rest: &[String]) -> Result<DeployArgs, CliError> {
+    let mut it = rest.iter().peekable();
+    let entry = take_leading_entry(&mut it);
+
+    let mut out: Option<String> = None;
+    let mut runtime: Option<String> = None;
+    let mut target: Option<String> = None;
+    let mut embed = false;
+
+    while let Some(flag) = it.next() {
+        match flag.as_str() {
+            "--out" => set_once(
+                &mut out,
+                take_value(&mut it, "--out", "deploy")?,
+                "--out",
+                "deploy",
+            )?,
+            "--runtime" => set_once(
+                &mut runtime,
+                take_value(&mut it, "--runtime", "deploy")?,
+                "--runtime",
+                "deploy",
+            )?,
+            "--target" => set_once(
+                &mut target,
+                take_value(&mut it, "--target", "deploy")?,
+                "--target",
+                "deploy",
+            )?,
+            "--embed" => embed = true,
+            other => {
+                return Err(CliError::UsageOwned(format!(
+                    "ipe deploy: unknown flag `{other}`"
+                )));
+            }
+        }
+    }
+
+    Ok(DeployArgs {
+        entry,
+        out,
+        runtime,
+        target,
+        embed,
+    })
+}
+
 /// Fully-parsed `ipe watch` arguments.
 pub struct WatchArgs {
     /// The positional entry (`None` → project-aware default).
