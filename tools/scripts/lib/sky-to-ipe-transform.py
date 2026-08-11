@@ -228,6 +228,46 @@ def walk_code(text: str, code_fn) -> str:
     )
 
 
+# A leading `"…"` single-line string literal, used to peel a call's string-literal
+# first argument off the front of a verbatim span.
+_LEADING_STRING = re.compile(r'\A"[^"\n]*"')
+
+
+def pair_code_head_with_string(text: str, head_at_end, rewrite) -> str:
+    """Rewrite a call that straddles a code head and its string-literal argument.
+
+    `_lex_spans` places a `<A>.member "lit"` call in two adjacent spans — a CODE
+    span ending in the `<A>.member` head and the following VERBATIM string literal
+    — so a lone `code_fn` never sees both halves. This walks the spans and,
+    whenever a code span's tail matches `head_at_end` and the next span opens with
+    a `"…"` literal, calls `rewrite(before, head, literal, rest)` — where `before`
+    is the code span left of the matched head, `head` is the matched head text,
+    and `rest` is the string span after the literal — to produce the replacement
+    for the two spans. A `<A>.member "lit"` written inside a `--`/`{- -}` comment
+    or a string literal is a single verbatim span — never a code head — so such
+    mentions are copied untouched. Every other span passes through verbatim.
+    """
+    segments = list(_lex_spans(text))
+    out: list[str] = []
+    i = 0
+    n = len(segments)
+    while i < n:
+        seg, is_code = segments[i]
+        head_match = head_at_end.search(seg) if is_code else None
+        if head_match is not None and i + 1 < n and not segments[i + 1][1]:
+            literal = _LEADING_STRING.match(segments[i + 1][0])
+            if literal is not None:
+                before = seg[: head_match.start()]
+                head = seg[head_match.start() :]
+                rest = segments[i + 1][0][literal.end() :]
+                out.append(rewrite(before, head, literal.group(0), rest))
+                i += 2
+                continue
+        out.append(seg)
+        i += 1
+    return "".join(out)
+
+
 def transform(text: str, pairs: list[tuple[str, str]]) -> str:
     """Apply the qualifier-prefix rename to every code span (rename-map.tsv)."""
     return walk_code(text, lambda seg: rewrite_code(seg, pairs))
@@ -776,6 +816,12 @@ def rehome_kernel_alias(text: str) -> str:
     prefix rename, so the alias qualifier is already spelled `Ipe.Ffi`. A file
     without an `Ipe.Ffi` import, or whose aliases target no mapped module, is
     returned unchanged.
+
+    The call straddles a code head (`<A>.kernel`) and its string-literal kernel
+    name (`"<Mod>_<fn>"`), which `_lex_spans` places in adjacent spans, so
+    `pair_code_head_with_string` pairs the two: a `<A>.kernel "…"` written inside
+    a `--`/`{- -}` comment or a string literal is a single verbatim span, never a
+    code head, so it is copied untouched.
     """
     ffi_alias: str | None = None
     for line in text.split("\n"):
@@ -786,35 +832,32 @@ def rehome_kernel_alias(text: str) -> str:
     if ffi_alias is None:
         return text
 
-    # The `<A>.kernel "<Mod>_<fn>"` call spans a code token AND its string-literal
-    # argument, so it cannot be recognised inside a lone code span — the alias
-    # reference is code but the kernel name is a string. It is matched on the whole
-    # line instead: the `<A>.kernel` head must open a real call (only whitespace
-    # then the string on that line), which no `--`/`{- -}` comment reference (which
-    # writes the head in backticks with no trailing string) can satisfy. Line
-    # bindings are single-line RHS in the mirrored corpus.
     used_qualifiers: dict[str, str] = {}
-    alias_call = re.compile(
-        r"(?<![\w.])"
-        + re.escape(ffi_alias)
-        + r"\.kernel[ \t]+\"([A-Za-z0-9]+)_([A-Za-z0-9]+)\""
+    # A code span ending in `<A>.kernel` and trailing inline whitespace, anchored
+    # on a non-identifier boundary so a longer alias is not a match and `\Z` at the
+    # segment end so the following string-literal segment is the kernel name.
+    head_at_end = re.compile(
+        r"(?<![\w.])" + re.escape(ffi_alias) + r"\.kernel[ \t]+\Z"
     )
+    kernel_name = re.compile(r'\A"([A-Za-z0-9]+)_([A-Za-z0-9]+)"\Z')
 
-    def _repl(mm: "re.Match[str]") -> str:
-        mod, fn = mm.group(1), mm.group(2)
+    def _rewrite(before: str, head: str, literal: str, rest: str) -> str:
+        name = kernel_name.match(literal)
+        if name is None:
+            return before + head + literal + rest  # Not `<Mod>_<fn>` — leave as is.
+        mod, fn = name.group(1), name.group(2)
         qual_mod = _KERNEL_ALIAS_QUALIFIERS.get(mod)
         if qual_mod is None:
-            return mm.group(0)  # Unmapped module — leave the alias untouched.
+            return before + head + literal + rest  # Unmapped module — leave alias.
         qual_alias = qual_mod.rsplit(".", 1)[-1]
         used_qualifiers[qual_mod] = qual_alias
-        return f"{qual_alias}.{fn}"
+        # `head` (`<A>.kernel` + separating whitespace) and the kernel-name literal
+        # both fold into the point-free `<Qualifier>.<fn>` — the requalified form
+        # takes no argument. `before` (the code left of the head) and `rest` (any
+        # span text after the literal) are preserved.
+        return f"{before}{qual_alias}.{fn}{rest}"
 
-    new_lines: list[str] = []
-    for line in text.split("\n"):
-        # Skip `--` line comments: a code line's RHS is left of any trailing `--`,
-        # and the alias-call regex never matches a backticked comment reference.
-        new_lines.append(alias_call.sub(_repl, line))
-    new_text = "\n".join(new_lines)
+    new_text = pair_code_head_with_string(text, head_at_end, _rewrite)
     if not used_qualifiers:
         return text  # No mapped alias in this file — leave it untouched.
 
@@ -894,13 +937,10 @@ def wrap_pubsub_topic(text: str) -> str:
     unchanged.
 
     The call straddles a code token (`<A>.publish`) and its string-literal topic
-    argument, which `walk_code` places in adjacent segments — a lone `code_fn`
-    never sees the string. So the scan tracks a pending publish head: a code
-    segment ending in `<A>.<member>` plus trailing whitespace, immediately
-    followed by a string-literal segment, is the raw-topic call and the literal
-    is wrapped. A `PubSub.publish "…"` inside a `--`/`{- -}` comment or a string
-    literal is copied verbatim by `walk_code` and never becomes a pending head,
-    so comments and strings survive untouched (the #879 discipline).
+    argument, which `_lex_spans` places in adjacent spans, so
+    `pair_code_head_with_string` pairs the two. A `PubSub.publish "…"` inside a
+    `--`/`{- -}` comment or a string literal is a single verbatim span, never a
+    code head, so comments and strings survive untouched.
     """
     pubsub_alias: str | None = None
     for line in text.split("\n"):
@@ -912,48 +952,22 @@ def wrap_pubsub_topic(text: str) -> str:
         return text
 
     members = "|".join(re.escape(m) for m in sorted(_PUBSUB_TOPIC_MEMBERS))
-    # A code segment ending in `<A>.<member>` and trailing inline whitespace. The
-    # head is anchored on a non-identifier boundary so `MyPubSub.publish` (a
-    # different alias) is not a match. `$` anchors the head at the segment end so
-    # the following string-literal segment is its first argument.
+    # A code span ending in `<A>.<member>` and trailing inline whitespace. The head
+    # is anchored on a non-identifier boundary so `MyPubSub.publish` (a different
+    # alias) is not a match, and `\Z` anchors it at the span end so the following
+    # string-literal span is its first argument.
     head_at_end = re.compile(
-        r"(?<![\w.])"
-        + re.escape(pubsub_alias)
-        + r"\.(?:" + members + r")[ \t]+\Z"
+        r"(?<![\w.])" + re.escape(pubsub_alias) + r"\.(?:" + members + r")[ \t]+\Z"
     )
-    string_literal = re.compile(r"\A\"[^\"\n]*\"")
 
-    # Split into (segment, is_code) spans (comments/strings verbatim) so a code
-    # `<A>.publish` head can be paired with the string-literal segment that
-    # follows it, while comment/string mentions stay in their own verbatim spans.
-    segments = list(_lex_spans(text))
+    def _rewrite(before: str, head: str, topic: str, rest: str) -> str:
+        # `head` ends with the whitespace that separated the head from the topic
+        # string, so it already provides the space before `(`; `rest` carries the
+        # original whitespace before the payload — add neither. `before` (the code
+        # left of the head) is preserved.
+        return f"{before}{head}({pubsub_alias}.topic {topic}){rest}"
 
-    out: list[str] = []
-    i = 0
-    n = len(segments)
-    while i < n:
-        seg, is_code = segments[i]
-        if (
-            is_code
-            and i + 1 < n
-            and not segments[i + 1][1]
-            and head_at_end.search(seg)
-            and string_literal.match(segments[i + 1][0])
-        ):
-            literal = string_literal.match(segments[i + 1][0])
-            assert literal is not None
-            topic = literal.group(0)
-            rest = segments[i + 1][0][literal.end() :]
-            # `seg` ends with the whitespace that separated the head from the
-            # topic string, so it already provides the space before `(`; `rest`
-            # carries the original whitespace before the payload — add neither.
-            out.append(seg + f"({pubsub_alias}.topic {topic})")
-            out.append(rest)
-            i += 2
-            continue
-        out.append(seg)
-        i += 1
-    return "".join(out)
+    return pair_code_head_with_string(text, head_at_end, _rewrite)
 
 
 # ── Entry-boundary Task.run strip (`main = let … _ = Task.run r in ()`) ────────
