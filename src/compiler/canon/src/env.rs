@@ -159,7 +159,6 @@ pub const STDLIB_MODULE_QUALIFIERS: &[(&[&str], &str)] = &[
     (&["Ipe", "Tea", "WebView", "Sub"], "TeaWebViewSub"),
     // ── Effect stdlib modules ───────────────────────────────────────────────
     (&["Ipe", "Auth"], "Auth"),
-    (&["Ipe", "Auth"], "Auth"),
     (&["Ipe", "Http", "Server", "Stream"], "Stream"),
     (&["Ipe", "Http", "Stream"], "HttpStream"),
     // Ipe.Http.Server.WebSocket (12 kernels).
@@ -1902,6 +1901,52 @@ mod builtin_ctor_registration_tests {
             assert!(
                 env.lookup_ctor(sym).is_some(),
                 "`{ctor}` must stay an ambient unqualified constructor"
+            );
+        }
+    }
+}
+
+#[cfg(test)]
+mod stdlib_module_qualifier_distinctness_tests {
+    use super::STDLIB_MODULE_QUALIFIERS;
+
+    /// Every path in `STDLIB_MODULE_QUALIFIERS` must be distinct — a duplicate
+    /// path silently shadows the earlier entry in `canonical_stdlib_qualifier`
+    /// (linear scan, first-match wins), making the second entry unreachable.
+    #[test]
+    fn no_duplicate_paths() {
+        let mut seen: std::collections::BTreeSet<Vec<&str>> = std::collections::BTreeSet::new();
+        for (path, _canonical) in STDLIB_MODULE_QUALIFIERS {
+            let key: Vec<&str> = path.to_vec();
+            assert!(
+                seen.insert(key.clone()),
+                "duplicate path in STDLIB_MODULE_QUALIFIERS: {}",
+                key.join(".")
+            );
+        }
+    }
+
+    /// Every canonical qualifier in `STDLIB_MODULE_QUALIFIERS` must be distinct
+    /// across the rows that claim to be the primary mapping for that qualifier.
+    /// A qualifier that maps from two *different* paths is expected (alias rows),
+    /// but a qualifier that maps to *itself* more than once — the same path and
+    /// the same canonical string — is a copy-paste error.
+    ///
+    /// This guard targets the same-path/same-qualifier form of duplicate; the
+    /// `no_duplicate_paths` test catches same-path/different-qualifier.
+    #[test]
+    fn no_duplicate_qualifier_strings_for_same_path() {
+        // Build a (path, canonical) pair set — both fields must be jointly unique.
+        let mut seen: std::collections::BTreeSet<(Vec<&str>, &str)> =
+            std::collections::BTreeSet::new();
+        for (path, canonical) in STDLIB_MODULE_QUALIFIERS {
+            let key = (path.to_vec(), *canonical);
+            assert!(
+                seen.insert(key),
+                "fully-duplicate row (same path AND qualifier) in \
+                 STDLIB_MODULE_QUALIFIERS: {}.{}",
+                path.join("."),
+                canonical
             );
         }
     }
