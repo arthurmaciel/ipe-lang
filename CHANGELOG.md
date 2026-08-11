@@ -10,6 +10,24 @@ Entries below the header are maintained by
 section is generated from Conventional Commit messages and prepended when the
 standing release pull request is merged.
 
+## [0.1.46](https://github.com/arthurmaciel/ipe-lang/compare/ipe-v0.1.45...ipe-v0.1.46) (2026-08-11)
+
+
+### Features
+
+* **db,security:** typed read-only external Connection for Db.open ([#853](https://github.com/arthurmaciel/ipe-lang/issues/853)) ([62fd2b6](https://github.com/arthurmaciel/ipe-lang/commit/62fd2b68329f0cf965c2bd1568a718c539a9459a))
+
+
+### Bug Fixes
+
+* **backend:** record update on a non-Clone base must not emit unconditional clone ([#863](https://github.com/arthurmaciel/ipe-lang/issues/863)) ([e738578](https://github.com/arthurmaciel/ipe-lang/commit/e7385783717660ea5122ac76481979aba66f1d26))
+* **canon:** reject mis-arity Connection with IPE-N0031 instead of an ICE ([#857](https://github.com/arthurmaciel/ipe-lang/issues/857)) ([78a418e](https://github.com/arthurmaciel/ipe-lang/commit/78a418e6ac6e510ca51bf2e22853a0cc118b16d8))
+* **canon:** unify reserved-type-name gates into one SSOT ([#861](https://github.com/arthurmaciel/ipe-lang/issues/861)) ([ffe5846](https://github.com/arthurmaciel/ipe-lang/commit/ffe58461d0c9a52ecbde94ba375260e445e15421)), closes [#847](https://github.com/arthurmaciel/ipe-lang/issues/847)
+* **diagnostics,canon:** register IPE-N0030 + dedup STDLIB_MODULE_QUALIFIERS with distinctness guards ([#859](https://github.com/arthurmaciel/ipe-lang/issues/859)) ([e2022ff](https://github.com/arthurmaciel/ipe-lang/commit/e2022ffa7b4348a8a4a719c317727382b1b4af79))
+* **kernels:** add StdlibKernel::ALL completeness guard ([#686](https://github.com/arthurmaciel/ipe-lang/issues/686)) ([#865](https://github.com/arthurmaciel/ipe-lang/issues/865)) ([2423836](https://github.com/arthurmaciel/ipe-lang/commit/2423836f39af93ef714d21a31c774ec88877140e))
+* **lower:** count moves hidden in an Access/Update base (close residual E0382) ([#856](https://github.com/arthurmaciel/ipe-lang/issues/856)) ([8c9442d](https://github.com/arthurmaciel/ipe-lang/commit/8c9442d7a3e2bb48f9e4fa688e0f323c9c8f559c))
+* **test:** rewrite json_dec_pipeline_lambda1 to pipe form ([#864](https://github.com/arthurmaciel/ipe-lang/issues/864)) ([eee8b29](https://github.com/arthurmaciel/ipe-lang/commit/eee8b2919a36778820470944afb9f94a1c29b660))
+
 ## [0.1.45](https://github.com/arthurmaciel/ipe-lang/compare/ipe-v0.1.44...ipe-v0.1.45) (2026-08-10)
 
 
