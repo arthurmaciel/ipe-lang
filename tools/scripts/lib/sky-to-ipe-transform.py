@@ -720,6 +720,129 @@ def drop_removed_imports(text: str) -> str:
     return "\n".join(out_lines)
 
 
+# ── Kernel-alias re-home (Ffi.kernel "<Mod>_<fn>" -> its published module) ─────
+# A user module minting a kernel with `Ffi.kernel "<Mod>_<fn>"` is rejected by the
+# capability gate (IPE-N0042): only the standard library and the generated FFI
+# interface may mint a kernel, because a raw alias reaches the effect with no
+# capability disclosed. The published, driver-recognised surface for these kernels
+# is their kernel-qualifier module (`Ipe.Http.Middleware.withCors`, …) — a
+# reference through the qualifier resolves to the SAME registered kernel the alias
+# names, but as an ordinary member reference, not a user-minted alias. So this pass
+# turns each point-free `<name> = Ffi.kernel "<Mod>_<fn>"` binding into
+# `<name> = <Qualifier>.<fn>`, imports the qualifier module, and drops the now-dead
+# `Ipe.Ffi` import when it carried only the kernel alias.
+#
+# HONEST DISCLOSURE: the mapping targets ONLY safe (server-tier) kernels whose
+# published module is a plain qualifier — reaching them discloses the same
+# capability the qualifier's own use would (e.g. `network`), never a silent
+# `unsafe`. An unsafe-tier kernel has no plain qualifier here; its only sanctioned
+# path stays its `Ipe.<M>.Unsafe` module (handled by `mark_stdlib_db` +
+# `_needs_unsafe_capability`), so this pass never fabricates access to one.
+#
+# alias module prefix (before the first `_`) -> published qualifier module path.
+_KERNEL_ALIAS_QUALIFIERS: dict[str, str] = {
+    "Middleware": "Ipe.Http.Middleware",
+}
+
+
+def rehome_kernel_alias(text: str) -> str:
+    """Re-home `Ffi.kernel "<Mod>_<fn>"` bindings onto their published qualifier.
+
+    Finds the file's `import Ipe.Ffi as <A>` alias, rewrites every code-span
+    `<A>.kernel "<Mod>_<fn>"` whose `<Mod>` has a published qualifier into
+    `<Qualifier>.<fn>`, injects the qualifier imports, and — when the `Ipe.Ffi`
+    import is left with no remaining `<A>.` reference — drops it. Runs AFTER the
+    prefix rename, so the alias qualifier is already spelled `Ipe.Ffi`. A file
+    without an `Ipe.Ffi` import, or whose aliases target no mapped module, is
+    returned unchanged.
+    """
+    ffi_alias: str | None = None
+    for line in text.split("\n"):
+        stripped = line.lstrip()
+        if stripped.startswith("import ") and _import_module(stripped) == "Ipe.Ffi":
+            ffi_alias = _import_alias(stripped[len("import ") :])
+            break
+    if ffi_alias is None:
+        return text
+
+    # The `<A>.kernel "<Mod>_<fn>"` call spans a code token AND its string-literal
+    # argument, so it cannot be recognised inside a lone code span — the alias
+    # reference is code but the kernel name is a string. It is matched on the whole
+    # line instead: the `<A>.kernel` head must open a real call (only whitespace
+    # then the string on that line), which no `--`/`{- -}` comment reference (which
+    # writes the head in backticks with no trailing string) can satisfy. Line
+    # bindings are single-line RHS in the mirrored corpus.
+    used_qualifiers: dict[str, str] = {}
+    alias_call = re.compile(
+        r"(?<![\w.])"
+        + re.escape(ffi_alias)
+        + r"\.kernel[ \t]+\"([A-Za-z0-9]+)_([A-Za-z0-9]+)\""
+    )
+
+    def _repl(mm: "re.Match[str]") -> str:
+        mod, fn = mm.group(1), mm.group(2)
+        qual_mod = _KERNEL_ALIAS_QUALIFIERS.get(mod)
+        if qual_mod is None:
+            return mm.group(0)  # Unmapped module — leave the alias untouched.
+        qual_alias = qual_mod.rsplit(".", 1)[-1]
+        used_qualifiers[qual_mod] = qual_alias
+        return f"{qual_alias}.{fn}"
+
+    new_lines: list[str] = []
+    for line in text.split("\n"):
+        # Skip `--` line comments: a code line's RHS is left of any trailing `--`,
+        # and the alias-call regex never matches a backticked comment reference.
+        new_lines.append(alias_call.sub(_repl, line))
+    new_text = "\n".join(new_lines)
+    if not used_qualifiers:
+        return text  # No mapped alias in this file — leave it untouched.
+
+    # Inject the qualifier imports and drop the dead `Ipe.Ffi` import. The Ffi
+    # import is dropped only when no `<A>.` reference survives (a file that also
+    # used `Ffi` for something else keeps it). Both edits are line-oriented — an
+    # import is always at a line start, never inside a string or comment.
+    ffi_still_used = _alias_is_referenced(new_text, ffi_alias)
+    qualifier_imports = [
+        f"import {mod} as {alias}" for mod, alias in used_qualifiers.items()
+    ]
+    out_lines: list[str] = []
+    injected = False
+    for line in new_text.split("\n"):
+        stripped = line.lstrip()
+        if stripped.startswith("import ") and _import_module(stripped) == "Ipe.Ffi":
+            indent = line[: len(line) - len(stripped)]
+            if not injected:
+                out_lines.extend(f"{indent}{imp}" for imp in qualifier_imports)
+                injected = True
+            if ffi_still_used:
+                out_lines.append(line)  # keep — still referenced elsewhere.
+            continue  # drop the now-dead Ffi import.
+        out_lines.append(line)
+    return "\n".join(out_lines)
+
+
+def _alias_is_referenced(text: str, alias: str) -> bool:
+    """True if a code span references `<alias>.` (an import-alias member access)."""
+    needle = alias + "."
+    found = [False]
+
+    def on_code(seg: str) -> str:
+        i = 0
+        while True:
+            j = seg.find(needle, i)
+            if j == -1:
+                break
+            left_ok = j == 0 or not (seg[j - 1].isalnum() or seg[j - 1] == "_")
+            if left_ok:
+                found[0] = True
+                break
+            i = j + len(needle)
+        return seg
+
+    walk_code(text, on_code)
+    return found[0]
+
+
 def prefix_bare_imports(text: str, bare: frozenset[str]) -> str:
     """Prefix `import <Name>` -> `import Ipe.<Name>` for bare stdlib modules.
 
@@ -871,8 +994,10 @@ def main(argv: list[str]) -> int:
             text = fh.read()
         originals[path] = text
         transformed[path] = prefix_bare_imports(
-            drop_removed_imports(
-                transform(mark_stdlib_db(apply_member_moves(desugar_pure(text))), pairs)
+            rehome_kernel_alias(
+                drop_removed_imports(
+                    transform(mark_stdlib_db(apply_member_moves(desugar_pure(text))), pairs)
+                )
             ),
             bare,
         )

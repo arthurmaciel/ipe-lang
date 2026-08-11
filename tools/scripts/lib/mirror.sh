@@ -26,15 +26,15 @@
 #   sky_example_names             -> one in-scope example basename per line (from manifest).
 
 : "${REPO:?mirror.sh: REPO must be set (source lib/env.sh first)}"
-SKY_TRANSFORM="${SKY_TRANSFORM:-$REPO/tools/tools/scripts/lib/sky-to-ipe-transform.py}"
-SKY_EDITS_APPLY="${SKY_EDITS_APPLY:-$REPO/tools/tools/scripts/lib/apply-ipe-edits.py}"
+SKY_TRANSFORM="${SKY_TRANSFORM:-$REPO/tools/scripts/lib/sky-to-ipe-transform.py}"
+SKY_EDITS_APPLY="${SKY_EDITS_APPLY:-$REPO/tools/scripts/lib/apply-ipe-edits.py}"
 SKY_RENAME_MAP="${SKY_RENAME_MAP:-$REPO/examples/sky/rename-map.tsv}"
 # Go-package -> Rust-crate map + translator. Consulted only when
 # SKY_TRANSLATE_GO_DEPS=1 (the general converter, sky-to-ipe-project.sh) — the
 # committed-mirror regen keeps the raw `["go.dependencies"]` verbatim so its
 # ports (and `regen --check`) stay byte-stable.
-SKY_GODEPS_TRANSLATE="${SKY_GODEPS_TRANSLATE:-$REPO/tools/tools/scripts/lib/go-deps-to-rust.py}"
-SKY_GODEPS_MAP="${SKY_GODEPS_MAP:-$REPO/tools/tools/scripts/lib/go-to-rust-crates.tsv}"
+SKY_GODEPS_TRANSLATE="${SKY_GODEPS_TRANSLATE:-$REPO/tools/scripts/lib/go-deps-to-rust.py}"
+SKY_GODEPS_MAP="${SKY_GODEPS_MAP:-$REPO/tools/scripts/lib/go-to-rust-crates.tsv}"
 SKY_EDITS_DIR="${SKY_EDITS_DIR:-$REPO/examples/sky/ipe-edits}"
 # Per-example whole-port override trees (a structural rebuild that replaces the
 # transformed port; the edits/rename-map are skipped for an overridden example).

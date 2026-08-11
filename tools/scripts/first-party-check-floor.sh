@@ -23,7 +23,7 @@ set -uo pipefail
 source "$(dirname "$0")/lib/env.sh"
 source "$(dirname "$0")/lib/examples.sh"
 
-if [ -z "$REPO" ] || [ ! -f "$REPO/tools/tools/scripts/first-party-check-floor.sh" ]; then
+if [ -z "$REPO" ] || [ ! -f "$REPO/tools/scripts/first-party-check-floor.sh" ]; then
   echo "ERROR: can't locate the repo. cd into it, or set IPE_REPO=/path/to/sky-rust." >&2; exit 2
 fi
 cd "$REPO" || { echo "ERROR: could not cd into repo '$REPO'." >&2; exit 2; }

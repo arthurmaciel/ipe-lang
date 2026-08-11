@@ -7,3 +7,6 @@ root = "src"
 
 [live]
 port = 8000
+
+[capabilities]
+declared = ["unsafe"]

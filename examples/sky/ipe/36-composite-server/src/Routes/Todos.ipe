@@ -22,6 +22,7 @@ import Ipe.Crypto as Crypto
 import Ipe.Http.Server as Server
 import Ipe.Http.Server exposing (Request, Response)
 import Ipe.Db as Db
+import Ipe.Db.Unsafe as DbUnsafe
 import Ipe.Log as Log
 import Ipe.PubSub as PubSub
 import Auth
@@ -64,7 +65,7 @@ handleList cfg db req =
         cfg
         req
         (\claims ->
-            Db.unsafeQuery
+            DbUnsafe.unsafeQuery
                 db
                 "SELECT id, user_id, text, done, created_at FROM todos WHERE user_id = ? ORDER BY created_at DESC"
                 [ String.fromInt claims.userId ]

@@ -11,7 +11,7 @@ module Middleware exposing (withCors, withLogging, withRateLimit, withBasicAuth)
 -- the stdlib module exports a typed Handler alias, this re-binding
 -- via `Ffi.kernel` is the canonical workaround.)
 
-import Ipe.Ffi as Ffi
+import Ipe.Http.Middleware as Middleware
 import Ipe.Error exposing (Error)
 import Ipe.Http.Server exposing (Request, Response)
 
@@ -21,19 +21,19 @@ type alias Handler =
 
 withCors : List String -> Handler -> Handler
 withCors =
-    Ffi.kernel "Middleware_withCors"
+    Middleware.withCors
 
 
 withLogging : Handler -> Handler
 withLogging =
-    Ffi.kernel "Middleware_withLogging"
+    Middleware.withLogging
 
 
 withRateLimit : String -> Int -> Int -> Handler -> Handler
 withRateLimit =
-    Ffi.kernel "Middleware_withRateLimit"
+    Middleware.withRateLimit
 
 
 withBasicAuth : String -> String -> Handler -> Handler
 withBasicAuth =
-    Ffi.kernel "Middleware_withBasicAuth"
+    Middleware.withBasicAuth

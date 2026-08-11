@@ -4,3 +4,6 @@ entry = "src/Main.ipe"
 
 [source]
 root = "src"
+
+[capabilities]
+declared = ["unsafe"]
