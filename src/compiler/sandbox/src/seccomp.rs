@@ -737,6 +737,30 @@ mod tests {
     }
 
     #[test]
+    fn x86_64_syscall_numbers_are_the_unistd_64_values() {
+        // Pin the x86_64 numbers to the <asm/unistd_64.h> table so a wrong
+        // number (e.g. an accidental reuse of an aarch64 nr) is caught in review.
+        // Asserted through the table's public fields (the NR consts are private
+        // to the ABI module).
+        let a = X86_64_SYSCALLS;
+        assert_eq!(a.nr_clone, 56);
+        assert_eq!(a.never_denied, &[59, 322, 435], "execve/execveat/clone3");
+        // Baseline: ptrace(101), pvm_readv/writev(310/311), io_uring(425/426/427),
+        // pidfd_getfd(438), bpf(321), userfaultfd(323), keyctl(250),
+        // kexec_load(246)/kexec_file_load(320),
+        // mount(165)/umount2(166)/pivot_root(155)/setns(308)/unshare(272)/
+        // move_mount(429)/open_tree(428)/fsopen(430)/fsconfig(431)/fsmount(432)/
+        // mount_setattr(442) — the <asm/unistd_64.h> values, in table order.
+        assert_eq!(
+            a.baseline_denied,
+            &[
+                101, 310, 311, 425, 426, 427, 438, 321, 323, 250, 246, 320, 165, 166, 155, 308,
+                272, 429, 428, 430, 431, 432, 442
+            ],
+        );
+    }
+
+    #[test]
     fn active_abi_is_some_only_on_a_vetted_arch() {
         // The build-target selector must return a table iff the host arch is one
         // whose numbers are vetted; anything else is None → the caller refuses.
