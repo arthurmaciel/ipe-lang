@@ -338,18 +338,35 @@ pub fn is_reserved_builtin_type_name(name: &str) -> bool {
         || KERNEL_IMPLICIT_BUILTIN_TYPE_NAMES.contains(&name)
 }
 
-/// The fixed type-argument arity of a built-in CONTAINER constructor, or
-/// `None` for any other name. Drives the IPE-N0031 canon gate: these are the
-/// closed containers whose lowerer arm (`ir_type_from_canon`) matches on an
-/// exact `args.len()`, so a mis-arity application falls through to the
-/// empty-home ICE catch-all. The async carriers (`Task`/`Cmd`/`Sub`) are
-/// deliberately absent — they carry their own carrier-aware IPE-T0016 arity
-/// gate at the type stage (`ipe_types::constrain`), and duplicating it here
-/// would double-report.
-fn builtin_container_arity(name: Option<&str>) -> Option<usize> {
+/// The fixed type-argument arity of a built-in type that resolves to the
+/// empty-home sentinel and whose lowerer arm (`ir_type_from_canon`) matches on
+/// an exact `args.len()`, or `None` for any other name. Drives the IPE-N0031
+/// canon gate: a mis-arity application of one of these would otherwise fall
+/// through to the lowerer's empty-home ICE catch-all (IPE-I0001).
+///
+/// The single source of truth for the empty-home fixed-arity gate, so a
+/// future parametric reserved builtin added with an exact-arity lowerer arm
+/// cannot silently reintroduce that ICE — one table entry closes the gate for
+/// both the bare and (via the sentinel) any resolved spelling.
+///
+/// Members:
+/// * closed containers (`List`/`Maybe`/`Set`, `Dict`/`Result`);
+/// * `Connection mode` — `Ipe.Db`'s external-connection handle, exactly one
+///   phantom access-mode argument (`ReadOnly`/`ReadWrite`);
+/// * `ReadOnly`/`ReadWrite` — the nullary phantom access-mode markers, which
+///   may only appear standalone as `Connection`'s argument.
+///
+/// The async carriers (`Task`/`Cmd`/`Sub`) are deliberately absent — they
+/// carry their own carrier-aware IPE-T0016 arity gate at the type stage
+/// (`ipe_types::constrain`), and duplicating it here would double-report.
+/// `CustomElement` is also absent: its arity gate is NAME-based (checked
+/// regardless of home, so a qualified `Dep.CustomElement` is gated too) and is
+/// fused with its per-argument boundary SEAL.
+fn builtin_empty_home_arity(name: Option<&str>) -> Option<usize> {
     match name? {
-        "List" | "Maybe" | "Set" => Some(1),
+        "List" | "Maybe" | "Set" | "Connection" => Some(1),
         "Dict" | "Result" => Some(2),
+        "ReadOnly" | "ReadWrite" => Some(0),
         _ => None,
     }
 }
@@ -5250,16 +5267,18 @@ fn canonicalise_type(
                     .cloned()
                     .unwrap_or_else(|| ctx.type_home_map.get(&name).cloned().unwrap_or_default())
             };
-            // A built-in container constructor (empty-home sentinel) has a
-            // fixed arity: a mis-application (`Maybe List String` parsed as
-            // `Maybe` over two args, a bare `List`, `Dict String`) would
-            // otherwise reach the lowerer's `ir_type_from_canon` empty-home
-            // catch-all and ICE (IPE-I0001). Fail closed here with a clean
-            // IPE-N0031, the sibling of `AliasArity` for the closed table.
-            // Gating on the empty home keeps a user `type List a b` (which
-            // wins by its real home) unaffected.
+            // A fixed-arity built-in that resolves to the empty-home sentinel
+            // (a closed container, or `Ipe.Db`'s `Connection mode` handle and
+            // its nullary `ReadOnly`/`ReadWrite` markers) has an exact-`args.len()`
+            // lowerer arm: a mis-application (`Maybe List String` parsed as
+            // `Maybe` over two args, a bare `List`, `Dict String`, `Connection`,
+            // `Connection a b`) would otherwise reach the lowerer's
+            // `ir_type_from_canon` empty-home catch-all and ICE (IPE-I0001).
+            // Fail closed here with a clean IPE-N0031, the sibling of
+            // `AliasArity` for the closed table. Gating on the empty home keeps a
+            // user `type List a b` (which wins by its real home) unaffected.
             if home.is_empty()
-                && let Some(expected) = builtin_container_arity(ctx.interner.resolve(name))
+                && let Some(expected) = builtin_empty_home_arity(ctx.interner.resolve(name))
                 && can_args.len() != expected
             {
                 return Err(Diagnostic::Name {
