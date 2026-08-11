@@ -72,12 +72,18 @@ fn ipe_id<M>(n: &Html<M>) -> Option<&str> {
 }
 
 /// Emit a whole-subtree innerHTML replace at `id` (Go: `Patch{ID, HTML}`).
-fn push_html_replace<M>(id: &str, new_kids: &[Html<M>], out: &mut Vec<Patch>) {
+///
+/// `parent_tag` is the tag of the element whose children are being replaced.
+/// When it is `"script"` or `"style"`, the rendered body is passed through the
+/// same sink-neutralise that `render_into_ctx` applies on the first-paint path,
+/// so the SSE replace cannot smuggle a raw `</script>`/`</style>` into the DOM
+/// even if the `HRaw`-provenance invariant were to slip in a future change.
+fn push_html_replace<M>(id: &str, parent_tag: &str, new_kids: &[Html<M>], out: &mut Vec<Patch>) {
     if id.is_empty() {
         return;
     }
     let mut p = Patch::for_id(id);
-    p.html = Some(render_children(new_kids));
+    p.html = Some(render_children(parent_tag, new_kids));
     out.push(p);
 }
 
@@ -96,7 +102,6 @@ fn diff_node_depth<M>(old: &Html<M>, new: &Html<M>, out: &mut Vec<Patch>, depth:
         // A top-level mismatch has no parent to address, so nothing to emit.
         _ => return,
     };
-    let _ = ot;
     // Patch id targets the element currently in the DOM — the OLD tree's id
     // (Go parity: `old.IpeID`). Borrowed: `Patch::for_id` copies it only when
     // a Patch is actually built, so an unchanged element pair allocates
@@ -125,7 +130,7 @@ fn diff_node_depth<M>(old: &Html<M>, new: &Html<M>, out: &mut Vec<Patch>, depth:
 
     // Child-count change → replace the whole subtree.
     if ok.len() != nk.len() {
-        push_html_replace(id, nk, out);
+        push_html_replace(id, ot, nk, out);
         return;
     }
 
@@ -138,7 +143,7 @@ fn diff_node_depth<M>(old: &Html<M>, new: &Html<M>, out: &mut Vec<Patch>, depth:
                 // (Go parity: single-text is the fast path above; anything else is a
                 // parent html-replace).
                 if o != n {
-                    push_html_replace(id, nk, out);
+                    push_html_replace(id, ot, nk, out);
                     return;
                 }
             }
@@ -150,7 +155,7 @@ fn diff_node_depth<M>(old: &Html<M>, new: &Html<M>, out: &mut Vec<Patch>, depth:
             }
             // Tag / kind mismatch → replace the subtree at the parent.
             _ => {
-                push_html_replace(id, nk, out);
+                push_html_replace(id, ot, nk, out);
                 return;
             }
         }
@@ -257,16 +262,33 @@ fn diff_events<M>(old: &[Attribute<M>], new: &[Attribute<M>], p: &mut Patch) {
     }
 }
 
-fn render_children<M>(kids: &[Html<M>]) -> String {
+/// Render `kids` into an HTML string for an SSE innerHTML replace.
+///
+/// When `parent_tag` is `"script"` or `"style"`, the raw-text body is rendered
+/// into a scratch buffer (text verbatim, not HTML-escaped) then passed through
+/// `neutralise_script_close` / `strip_style_close` — the same sink-neutralise
+/// the first-paint renderer applies — before it is returned. All other tags use
+/// the normal element-level render path via `render_into`.
+fn render_children<M>(parent_tag: &str, kids: &[Html<M>]) -> String {
     // Write every child into ONE shared accumulator instead of allocating a
-    // throwaway String per child (efficiency-audit §6 medium). `render_html`
-    // is exactly `String::new()` + `render_into`, so concat order, content,
-    // recursion, and the `MAX_HTML_DEPTH` cap are unchanged.
+    // throwaway String per child (efficiency-audit §6 medium).
     let mut s = String::new();
-    for c in kids {
-        crate::html::render_into(c, &mut s);
+    if parent_tag == "script" {
+        for c in kids {
+            crate::html::render_into_raw_text(c, &mut s);
+        }
+        crate::css_safety::neutralise_script_close(&s)
+    } else if parent_tag == "style" {
+        for c in kids {
+            crate::html::render_into_raw_text(c, &mut s);
+        }
+        crate::css_safety::strip_style_close(&s)
+    } else {
+        for c in kids {
+            crate::html::render_into(c, &mut s);
+        }
+        s
     }
-    s
 }
 
 // ─── tests ────────────────────────────────────────────────────────────────────
@@ -526,5 +548,67 @@ mod tests {
         // Identical trees produce no patches (or only structural no-ops).
         // The exact count is less important than the call completing.
         let _ = patches;
+    }
+
+    // RT-SEC-001: SSE innerHTML-replace on a `<script>` element neutralises any
+    // `</script>` sequence in a text child — the injected close-tag cannot
+    // terminate the element early on the browser's HTML parser, even when the
+    // patch is applied via `innerHTML`.
+    #[test]
+    fn diff_sse_script_replace_neutralises_close_tag() {
+        // Old: <script> with one text child "// safe"
+        // New: <script> with one text child containing an injected `</script>`
+        // Child-count is 1→2, so a whole-subtree innerHTML replace fires.
+        let mut old: Html<()> =
+            Html::HElement("script".into(), vec![], vec![Html::HText("// safe".into())]);
+        let mut new: Html<()> = Html::HElement(
+            "script".into(),
+            vec![],
+            vec![
+                Html::HText("// safe".into()),
+                Html::HText("</script><img onerror=alert(1)>".into()),
+            ],
+        );
+        ids(&mut old);
+        ids(&mut new);
+        let p = diff(&old, &new);
+        assert_eq!(p.len(), 1, "expected exactly one html-replace patch");
+        let html = p[0].html.as_deref().expect("expected html field on patch");
+        assert!(
+            !html.contains("</script>"),
+            "`</script>` must not appear raw in the patch html; got: {html:?}"
+        );
+        assert!(
+            !html.contains("</script"),
+            "`</script` byte run must be neutralised; got: {html:?}"
+        );
+    }
+
+    // RT-SEC-002: SSE innerHTML-replace on a `<style>` element strips any
+    // `</style>` sequence in a text child.
+    #[test]
+    fn diff_sse_style_replace_strips_close_tag() {
+        let mut old: Html<()> = Html::HElement(
+            "style".into(),
+            vec![],
+            vec![Html::HText("body { color: red }".into())],
+        );
+        let mut new: Html<()> = Html::HElement(
+            "style".into(),
+            vec![],
+            vec![
+                Html::HText("body { color: red }".into()),
+                Html::HText("</style><script>alert(1)</script>".into()),
+            ],
+        );
+        ids(&mut old);
+        ids(&mut new);
+        let p = diff(&old, &new);
+        assert_eq!(p.len(), 1, "expected exactly one html-replace patch");
+        let html = p[0].html.as_deref().expect("expected html field on patch");
+        assert!(
+            !html.contains("</style"),
+            "`</style` byte run must be stripped; got: {html:?}"
+        );
     }
 }
