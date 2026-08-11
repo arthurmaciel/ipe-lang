@@ -4990,6 +4990,37 @@ impl StdlibKernel {
         }
     }
 
+    /// The user-facing qualified source name for this kernel, suitable for
+    /// diagnostics and IR pretty-printing.
+    ///
+    /// For almost every kernel this is `"{qualifier}.{name}"` derived from
+    /// [`Self::def`]. The handful of exceptions are kernels whose display path
+    /// differs from the canon-resolution qualifier — principally internal
+    /// kernels and those relocated into an `Unsafe` sub-module after their
+    /// canon entry was registered.
+    #[must_use]
+    pub fn source_display_name(self) -> String {
+        let d = self.def();
+        match self {
+            // Internal helper — surfaces as `Result.Ok` in diagnostics.
+            Self::ResultOkDefault => "Result.Ok".to_owned(),
+            // Kernels relocated into `Ipe.Db.Unsafe` after the canon qualifier
+            // `"Db"` was registered; the display path includes the sub-module.
+            Self::DbExecRaw => "Db.Unsafe.unsafeExecRaw".to_owned(),
+            Self::DbQuery => "Db.Unsafe.unsafeQuery".to_owned(),
+            Self::DbGetString => "Db.Unsafe.unsafeGetString".to_owned(),
+            Self::DbGetInt => "Db.Unsafe.unsafeGetInt".to_owned(),
+            Self::DbGetBool => "Db.Unsafe.unsafeGetBool".to_owned(),
+            Self::DbGetField => "Db.Unsafe.unsafeGetField".to_owned(),
+            // `Sql.unsafeFragment` surfaces under `Ipe.Db.Unsafe`.
+            Self::SqlUnsafeFragment => "Db.Unsafe.unsafeFragment".to_owned(),
+            // Relocated into `Ipe.Html.Unsafe` after canon registration.
+            Self::HtmlScriptNode => "Html.Unsafe.unsafeScript".to_owned(),
+            // Default: derive from the canonical qualifier + name.
+            _ => format!("{}.{}", d.qualifier, d.name),
+        }
+    }
+
     /// The structural [`TyShape`] encoding of this kernel's HM type scheme, when
     /// it has one.
     ///
