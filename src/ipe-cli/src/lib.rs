@@ -2905,6 +2905,333 @@ pub(crate) fn run_eject(rest: &[String]) -> Result<(), CliError> {
     Ok(())
 }
 
+/// `ipe deploy [<path>] [--out <dir>] [--target <triple>] [--embed]` — build a
+/// self-contained, toolchain-free jailed deploy bundle.
+///
+/// The bundle contains `ipe-wrapper` (the jailed launcher), `ipe-app` (the
+/// statically-linked app binary), and `ipe.profile` (the serialised capability
+/// profile). Copying the bundle dir to a server with no toolchain and running
+/// `./ipe-wrapper -- <args>` verifies the profile against the capability floor
+/// embedded in `ipe-app` and execs the app inside the sandbox jail.
+///
+/// The `--embed` flag fuses the app binary and profile into the wrapper binary
+/// itself for a single-file scp workflow; `--show-profile` on the embedded
+/// wrapper dumps the fused profile for auditability.
+///
+/// ## Honest limit
+///
+/// The inner `ipe-app` is a native ELF/Mach-O/PE binary — an operator can
+/// run it directly without the wrapper, bypassing the jail. The wrapper makes
+/// the sanctioned, jailed, profile-verified path the easy toolchain-free one;
+/// it does not make unjailed execution impossible for a sufficiently privileged
+/// local operator. This limit is documented, not a defect.
+///
+/// ## Security boundary
+///
+/// The jail enforcement is the SAME code path as `ipe exec` — both call into
+/// `ipe_sandbox::run_jail::{scan_capfloor, satisfies_capfloor, exec_in_run_jail}`.
+/// There is no second jail implementation; any future change to the jail
+/// mechanism automatically applies to both paths.
+///
+/// # Errors
+///
+/// Build, toolchain, manifest-parse, filesystem, and capability-resolution
+/// errors.
+#[allow(clippy::too_many_lines)]
+pub(crate) fn run_deploy(rest: &[String]) -> Result<(), CliError> {
+    let args = cli_args::parse_deploy(rest)?;
+    let entry = match args.entry {
+        Some(e) => e,
+        None => default_entry()?,
+    };
+    let entry_path = PathBuf::from(&entry);
+
+    // Bundle output directory: deploy/ by default.
+    let out_dir = args
+        .out
+        .as_deref()
+        .map_or_else(|| PathBuf::from("deploy"), PathBuf::from);
+
+    // Resolve the target triple. Default: x86_64 musl-static.
+    let triple = match &args.target {
+        Some(t) => ipe_backend_rust::static_build::StaticTriple::parse(t).ok_or_else(|| {
+            CliError::UsageOwned(format!(
+                "ipe deploy: unsupported target `{t}`; supported: {}",
+                ipe_backend_rust::static_build::StaticTriple::SUPPORTED.join(", ")
+            ))
+        })?,
+        None => ipe_backend_rust::static_build::StaticTriple::default(),
+    };
+
+    // Discover the manifest (same logic as build/eject).
+    let manifest = discover_manifest(&entry_path)?;
+
+    // Deploy is native-only and always static — refuse wasm configs.
+    let manifest_wasm: Option<project::WasmConfig> = manifest
+        .as_deref()
+        .map(project::parse_manifest)
+        .transpose()?
+        .map(|m| m.wasm);
+    if resolve_wasm_target(false, manifest_wasm.as_ref()) {
+        return Err(CliError::EjectUnsupported {
+            reason: "deploy produces a native static binary; the wasm target is not supported — \
+                     use `ipe build --target wasm` for browser apps"
+                .to_owned(),
+        });
+    }
+
+    let runtime_dir = resolve_vendored_runtime_dir(args.runtime, false)?;
+
+    // Static plan forced for the app binary: default allocator (dlmalloc, pure
+    // Rust), C-with-libc profile so the emitted project's C deps can link.
+    let app_static_plan = Some(ipe_backend_rust::static_build::StaticPlan {
+        triple,
+        c_profile: ipe_backend_rust::static_build::CProfile::WithLibc {
+            allocator: ipe_backend_rust::static_build::StaticAllocator::Dlmalloc,
+        },
+    });
+
+    let cargo_bin = toolchain::require_cargo(toolchain::ToolIntent::Build)?;
+
+    let show_progress = {
+        use std::io::IsTerminal as _;
+        std::io::stderr().is_terminal()
+    };
+    if show_progress {
+        eprintln!(
+            "{}",
+            style::gutter(&format!("{} deploying {entry}", style::glyph::STEP))
+        );
+    }
+
+    // Step 1: emit + build the app binary (static, musl).
+    let app_out = out_dir.join("app");
+    let options = BuildOptions {
+        static_plan: app_static_plan,
+        target: ipe_ir::Target::Native,
+        runtime_dep: runtime_dep_from_env(),
+        tree_shake_vendored: false,
+        ..BuildOptions::default()
+    };
+    manifest.as_ref().map_or_else(
+        || {
+            build_with_sibling_discovery_with_options(
+                &entry_path,
+                &app_out,
+                &runtime_dir,
+                options.clone(),
+            )
+        },
+        |m| build_project_with_options(m, &app_out, &runtime_dir, options.clone()),
+    )?;
+
+    // Compile the emitted crate and write the capability enforcement artifacts.
+    let manifest_parsed = match manifest.as_deref() {
+        Some(m) => Some(project::parse_manifest(m)?),
+        None => None,
+    };
+    let driver = manifest_parsed
+        .as_ref()
+        .map_or(ipe_backend_rust::DbDriver::Sqlite, |m| m.driver);
+    let resolved =
+        run_sandbox::resolve_for_run(manifest_parsed.as_ref(), manifest.as_deref(), &entry_path)?;
+
+    // Build the app binary.
+    let mut app_cargo = std::process::Command::new(cargo_bin.path());
+    app_cargo
+        .arg("build")
+        .arg("--release")
+        .args(["--target", triple.as_str()])
+        .current_dir(&app_out);
+    build_emitted_project(&mut app_cargo, "the deploy app", None, &app_out)?;
+
+    // Write the capability enforcement artifacts (ipe.profile + embedded floor).
+    if run_sandbox::is_native_bearing(&resolved.union()) {
+        let profile = run_sandbox::build_profile(&resolved, driver)?;
+        run_sandbox::write_build_artifacts(&app_out, &profile)?;
+    }
+
+    // Locate the compiled app binary. The target dir may be a global
+    // `CARGO_TARGET_DIR` (set by the user or the agent lane), so we resolve
+    // it via cargo metadata rather than assuming `app_out/target/`.
+    let app_target_dir = cargo_target_directory(&app_out)?;
+    let app_binary = app_target_dir
+        .join(triple.as_str())
+        .join("release")
+        .join("ipe-app");
+    if !app_binary.is_file() {
+        return Err(CliError::UsageOwned(format!(
+            "ipe deploy: expected app binary at {} — cargo build succeeded but binary is missing",
+            app_binary.display()
+        )));
+    }
+    let profile_src = app_out.join("ipe.profile");
+
+    // Step 2: build the wrapper binary (static, musl).
+    let wrapper_triple = triple;
+    let wrapper_static_plan = ipe_backend_rust::static_build::StaticPlan {
+        triple: wrapper_triple,
+        c_profile: ipe_backend_rust::static_build::CProfile::WithLibc {
+            allocator: ipe_backend_rust::static_build::StaticAllocator::Dlmalloc,
+        },
+    };
+
+    let mut wrapper_cargo = std::process::Command::new(cargo_bin.path());
+    wrapper_cargo
+        .arg("build")
+        .arg("--release")
+        .arg("--package")
+        .arg("ipe_wrapper")
+        .args(["--target", wrapper_static_plan.triple.as_str()]);
+
+    if args.embed {
+        // Embed mode: pass the app binary + profile as env vars so build.rs
+        // copies them into OUT_DIR and enables the embed_mode cfg.
+        wrapper_cargo
+            .env("IPE_EMBED_APP", &app_binary)
+            .env("IPE_EMBED_PROFILE", &profile_src);
+    }
+
+    // Run from the workspace root so cargo finds the workspace Cargo.toml.
+    let workspace_root = find_workspace_root()?;
+    wrapper_cargo.current_dir(&workspace_root);
+
+    build_emitted_project(
+        &mut wrapper_cargo,
+        "the deploy wrapper",
+        None,
+        &workspace_root,
+    )?;
+
+    // Step 3: lay out the bundle.
+    let bundle_dir = out_dir.join("bundle");
+    std::fs::create_dir_all(&bundle_dir).map_err(|e| CliError::Io {
+        path: bundle_dir.clone(),
+        source: e,
+    })?;
+
+    // Locate the wrapper binary. As with the app binary, the target dir may be
+    // a global CARGO_TARGET_DIR; resolve via cargo metadata.
+    let wrapper_target_dir = cargo_target_directory(&workspace_root)?;
+    let wrapper_src = wrapper_target_dir
+        .join(wrapper_static_plan.triple.as_str())
+        .join("release")
+        .join("ipe-wrapper");
+
+    if args.embed {
+        // Single-file embed: copy only the wrapper (app + profile are baked in).
+        let dest = bundle_dir.join("ipe-wrapper");
+        std::fs::copy(&wrapper_src, &dest).map_err(|e| CliError::Io {
+            path: dest.clone(),
+            source: e,
+        })?;
+        #[cfg(unix)]
+        set_executable(&dest)?;
+    } else {
+        // Bundle: wrapper + app + profile as siblings.
+        let wrapper_dest = bundle_dir.join("ipe-wrapper");
+        let app_dest = bundle_dir.join("ipe-app");
+        let profile_dest = bundle_dir.join("ipe.profile");
+        std::fs::copy(&wrapper_src, &wrapper_dest).map_err(|e| CliError::Io {
+            path: wrapper_dest.clone(),
+            source: e,
+        })?;
+        std::fs::copy(&app_binary, &app_dest).map_err(|e| CliError::Io {
+            path: app_dest.clone(),
+            source: e,
+        })?;
+        std::fs::copy(&profile_src, &profile_dest).map_err(|e| CliError::Io {
+            path: profile_dest.clone(),
+            source: e,
+        })?;
+        #[cfg(unix)]
+        {
+            set_executable(&wrapper_dest)?;
+            set_executable(&app_dest)?;
+        }
+    }
+
+    if show_progress {
+        if args.embed {
+            eprintln!(
+                "{}",
+                style::gutter(&format!(
+                    "{} deployed (embed) → {} (single-file; `--show-profile` for audit)",
+                    style::glyph::OK,
+                    bundle_dir.join("ipe-wrapper").display()
+                ))
+            );
+        } else {
+            eprintln!(
+                "{}",
+                style::gutter(&format!(
+                    "{} deployed → {} (scp the dir; run `./ipe-wrapper -- <args>`)",
+                    style::glyph::OK,
+                    bundle_dir.display()
+                ))
+            );
+        }
+    }
+    Ok(())
+}
+
+/// Walk parent directories from the current directory to find the workspace
+/// root (the directory containing the root `Cargo.toml` with `[workspace]`).
+///
+/// # Errors
+///
+/// [`CliError::UsageOwned`] if the workspace root cannot be found.
+fn find_workspace_root() -> Result<PathBuf, CliError> {
+    let cwd = std::env::current_dir().map_err(|e| CliError::Io {
+        path: PathBuf::from("."),
+        source: e,
+    })?;
+    let mut candidate = cwd.as_path();
+    loop {
+        let toml = candidate.join("Cargo.toml");
+        if toml.is_file() {
+            let text = std::fs::read_to_string(&toml).map_err(|e| CliError::Io {
+                path: toml.clone(),
+                source: e,
+            })?;
+            if text.contains("[workspace]") {
+                return Ok(candidate.to_path_buf());
+            }
+        }
+        match candidate.parent() {
+            Some(p) => candidate = p,
+            None => {
+                return Err(CliError::UsageOwned(
+                    "ipe deploy: cannot locate workspace root (no Cargo.toml with [workspace] \
+                     found in any parent directory)"
+                        .to_owned(),
+                ));
+            }
+        }
+    }
+}
+
+/// Set the executable bit on a file (Unix only; no-op on other platforms).
+///
+/// # Errors
+///
+/// [`CliError::Io`] when the permission cannot be set.
+#[cfg(unix)]
+fn set_executable(path: &Path) -> Result<(), CliError> {
+    use std::os::unix::fs::PermissionsExt as _;
+    let meta = std::fs::metadata(path).map_err(|e| CliError::Io {
+        path: path.to_path_buf(),
+        source: e,
+    })?;
+    let mut perms = meta.permissions();
+    let mode = perms.mode() | 0o111;
+    perms.set_mode(mode);
+    std::fs::set_permissions(path, perms).map_err(|e| CliError::Io {
+        path: path.to_path_buf(),
+        source: e,
+    })
+}
+
 /// Run a `cargo build` of an emitted project to completion, *streaming* its
 /// stderr to this process's stderr line by line as `cargo` emits it — so the
 /// user sees the live compile progress (which crate is building, warnings)
