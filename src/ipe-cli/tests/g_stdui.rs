@@ -4,6 +4,8 @@
 
 mod support;
 
+#[path = "g_stdui/golden_css_length_color_ssot.rs"]
+mod golden_css_length_color_ssot;
 #[path = "g_stdui/golden_css_source.rs"]
 mod golden_css_source;
 #[path = "g_stdui/golden_html_attrs.rs"]

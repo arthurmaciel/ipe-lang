@@ -30,6 +30,10 @@ impl Color {
     /// `Ipe.Ui.Color` domain: the inline-style path, the stylesheet path, the
     /// `Ui.colorCss` kernel, and the gradient/shadow/pseudo builders all route
     /// here, so a colour formats identically wherever it lands.
+    ///
+    /// The shared CSS spelling mirrors `Ipe.Css.colorToString`; byte-for-byte
+    /// equivalence for the shared `Rgba` shape is enforced by the
+    /// `css_length_color_ssot` equivalence test.
     #[must_use]
     pub(crate) fn css(&self) -> String {
         match self {
@@ -57,6 +61,10 @@ impl Length {
     /// `Fill(n)` renders `100%`; the flex sizing (`flex-grow:n`, `flex-basis:0`)
     /// that divides free space is emitted at the width/height attribute arms,
     /// not here.
+    ///
+    /// The shared CSS spelling for `Px`/`Vh`/`Vw` mirrors `Ipe.Css.lengthToString`;
+    /// byte-for-byte equivalence for those shapes is enforced by the
+    /// `css_length_color_ssot` equivalence test.
     #[must_use]
     pub(crate) fn css(&self) -> String {
         match self {
@@ -313,5 +321,40 @@ mod tests {
 
         assert_eq!(direct, "max(320px,80vh)");
         assert_eq!(style, format!("width:{direct}"));
+    }
+
+    // Cross-language SSOT equivalence: `Length::css` output must be byte-for-byte
+    // identical to `Ipe.Css.lengthToString` for every shared value shape.
+    //
+    // Shared shapes: `Px n`, `Vh n`, `Vw n`.
+    // Out of scope (no `Ipe.Css` spelling): `Fill`/`Content`/`Min`/`Max` are
+    // layout-intent lengths in `Ipe.Ui` with no counterpart in `Ipe.Css`.
+    // The `.ipe` side of this assertion is exercised by the
+    // `golden_css_length_color_ssot` fixture in the `g_stdui` integration suite.
+    #[test]
+    fn length_css_matches_ipe_css_length_to_string_for_shared_shapes() {
+        assert_eq!(Length::Px(0).css(), "0px");
+        assert_eq!(Length::Px(16).css(), "16px");
+        assert_eq!(Length::Px(100).css(), "100px");
+        assert_eq!(Length::Vh(50).css(), "50vh");
+        assert_eq!(Length::Vh(100).css(), "100vh");
+        assert_eq!(Length::Vw(50).css(), "50vw");
+        assert_eq!(Length::Vw(100).css(), "100vw");
+    }
+
+    // Cross-language SSOT equivalence: `Color::css` output must be byte-for-byte
+    // identical to `Ipe.Css.colorToString` for the shared `Rgba` shape.
+    //
+    // Alpha formatting: both sides use the Go-`'g'`-format float rule.
+    // For `1.0` that yields `"1"` (no trailing `.0`); for `0.5` it yields `"0.5"`.
+    // The `.ipe` side of this assertion is exercised by the
+    // `golden_css_length_color_ssot` fixture in the `g_stdui` integration suite.
+    #[test]
+    fn color_css_matches_ipe_css_color_to_string_for_rgba() {
+        assert_eq!(Color::Rgba(0, 0, 0, 1.0).css(), "rgba(0,0,0,1)");
+        assert_eq!(Color::Rgba(255, 0, 0, 1.0).css(), "rgba(255,0,0,1)");
+        assert_eq!(Color::Rgba(0, 128, 255, 1.0).css(), "rgba(0,128,255,1)");
+        assert_eq!(Color::Rgba(0, 0, 0, 0.0).css(), "rgba(0,0,0,0)");
+        assert_eq!(Color::Rgba(255, 128, 0, 0.5).css(), "rgba(255,128,0,0.5)");
     }
 }
