@@ -10,6 +10,22 @@ Entries below the header are maintained by
 section is generated from Conventional Commit messages and prepended when the
 standing release pull request is merged.
 
+## [0.1.45](https://github.com/arthurmaciel/ipe-lang/compare/ipe-v0.1.44...ipe-v0.1.45) (2026-08-10)
+
+
+### Features
+
+* **cli,security:** build-time acknowledgment for .Unsafe imports + --accept-risks ([#773](https://github.com/arthurmaciel/ipe-lang/issues/773)) ([#840](https://github.com/arthurmaciel/ipe-lang/issues/840)) ([8a228cf](https://github.com/arthurmaciel/ipe-lang/commit/8a228cfa81066a86e5dbc9baefe7fa13e96e8b96))
+
+
+### Bug Fixes
+
+* **canon,security:** origin-gate Ffi.kernel so user source cannot mint kernels ([#843](https://github.com/arthurmaciel/ipe-lang/issues/843)) ([1a22484](https://github.com/arthurmaciel/ipe-lang/commit/1a22484e707a07226a04b49667be6c7649f6f8fc))
+* **ci,test:** deterministic e2e shards + seal-smoke role + e2e-all gating job ([#850](https://github.com/arthurmaciel/ipe-lang/issues/850)) ([32c4ea9](https://github.com/arthurmaciel/ipe-lang/commit/32c4ea910d2ddf88de39662da797db2a65e2eb5c))
+* **cli:** resolve static build-plan refusals before the unsafe-import ack ([#846](https://github.com/arthurmaciel/ipe-lang/issues/846)) ([1f4fd2a](https://github.com/arthurmaciel/ipe-lang/commit/1f4fd2a43b35e951f520038cf724fd7868c3d14b))
+* **lower:** thread cross-module concrete return through a generic HOF's tyvar ([#845](https://github.com/arthurmaciel/ipe-lang/issues/845)) ([8565b48](https://github.com/arthurmaciel/ipe-lang/commit/8565b48be442e9c0fc199eac810c308570e5950d))
+* **lower:** value-reuse must not assume Clone for non-Clone union payloads ([#848](https://github.com/arthurmaciel/ipe-lang/issues/848)) ([7b885b2](https://github.com/arthurmaciel/ipe-lang/commit/7b885b2ba3374d91dd4a5f2a015e9ea61b6094b2))
+
 ## [0.1.44](https://github.com/arthurmaciel/ipe-lang/compare/ipe-v0.1.43...ipe-v0.1.44) (2026-08-10)
 
 
