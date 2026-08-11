@@ -28,6 +28,7 @@ members = [
     "tools/ipe-ffi-inspector",
     "tools/regen-goldens",
     "examples/wasm/language-playground/jail-runner",
+    "src/ipe-wrapper",
 ]
 # `tools/panic-scan` carries its own `[workspace]` so it builds standalone as a
 # pre-commit/CI hook without pulling the compiler crates. Excluding it here lets
