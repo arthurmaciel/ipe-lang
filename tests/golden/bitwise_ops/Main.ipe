@@ -1,0 +1,27 @@
+module Main exposing (main)
+
+import Ipe.Bitwise as Bitwise
+import Ipe.Io as Io
+import Ipe.String
+
+main =
+    let
+        a = Bitwise.and 12 10
+        o = Bitwise.or 12 10
+        x = Bitwise.xor 12 10
+        c = Bitwise.complement 0
+        sl = Bitwise.shiftLeftBy 2 3
+        sr = Bitwise.shiftRightBy 2 12
+        szf = Bitwise.shiftRightZfBy 2 12
+    in
+    Io.println
+        (String.join " "
+            [ String.fromInt a
+            , String.fromInt o
+            , String.fromInt x
+            , String.fromInt c
+            , String.fromInt sl
+            , String.fromInt sr
+            , String.fromInt szf
+            ]
+        )

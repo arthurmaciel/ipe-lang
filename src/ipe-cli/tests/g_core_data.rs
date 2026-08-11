@@ -10,6 +10,8 @@ mod golden_append;
 mod golden_append_number;
 #[path = "g_core_data/golden_binops.rs"]
 mod golden_binops;
+#[path = "g_core_data/golden_bitwise_ops.rs"]
+mod golden_bitwise_ops;
 #[path = "g_core_data/golden_bool_literal_patterns.rs"]
 mod golden_bool_literal_patterns;
 #[path = "g_core_data/golden_char_pattern.rs"]
