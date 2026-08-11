@@ -134,7 +134,7 @@ insertTodo db claims payload =
 -- publish failure is logged + swallowed via Task.onError.
 publishTodoCreated : Todo -> Task Error Response
 publishTodoCreated todo =
-    PubSub.publish "todos.created" (encodeTodo todo)
+    PubSub.publish (PubSub.topic "todos.created") (encodeTodo todo)
         |> Task.onError
                (\e ->
                    let

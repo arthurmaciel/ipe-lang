@@ -24,6 +24,13 @@ the prefix rename, but Ipê auto-imports its Tier-A `Ipe.Basics` surface (ADR
 0047), so `Ipe.Prelude` does not exist and the line is deleted rather than
 emitted as an unresolvable import.
 
+Three API-MIGRATION passes then bring the renamed source onto current Ipê APIs
+whose shape changed since the mirrored Sky vintage: a raw `PubSub.publish "t" x`
+is wrapped in the typed `Topic` handle (`PubSub.publish (PubSub.topic "t") x`); an
+entry-boundary `main = let … _ = Task.run r in ()` is rewritten to return its
+`Task Error ()` (the runtime is the single `Task.run` site); and a `Maybe.*` use
+left unqualified by the dropped Prelude gets an injected `import Ipe.Maybe`.
+
 The one hard rule: rewrite CODE only, never a string literal or a comment. Sky
 example prose ("Sky.Live Counter", the "Std.Ui showcase" label, a window title)
 must stay byte-identical — both because a syntactic patch may not change program
@@ -95,23 +102,25 @@ def rewrite_code(segment: str, pairs: list[tuple[str, str]]) -> str:
     return "".join(out)
 
 
-def walk_code(text: str, code_fn) -> str:
-    """Rebuild `text`, passing each CODE segment through `code_fn`.
+def _lex_spans(text: str):
+    """Yield `(segment, is_code)` spans: code vs verbatim (strings/comments).
 
-    `code_fn(segment) -> str` sees only code — never a string literal or a
-    comment, which are copied verbatim. This is the single place that knows Sky's
-    lexical spans, so every code-only rewrite (the qualifier prefix rename, the
-    stdlib member move) shares one correct string/comment skipper.
+    This is the single place that knows Sky's lexical spans. A `--` line comment,
+    a nested `{- -}` block comment, and `"…"` / `\"\"\"…\"\"\"` string literals are
+    verbatim (`is_code=False`); everything else is code. Inside a triple-quoted
+    string a `{{ expr }}` interpolation is real Ipê, so its `expr` is emitted as a
+    code span (the `{{`/`}}` markers stay verbatim); a `\\{{` escaped placeholder
+    is literal. Adjacent same-kind spans may be emitted separately; callers that
+    need whole code runs should treat consecutive code spans as contiguous.
     """
-    out: list[str] = []
     i = 0
     n = len(text)
-    code_start = 0  # start of the current un-flushed code run
+    code_start = 0
 
-    def flush_code(end: int) -> None:
+    def flush_code(end: int):
         nonlocal code_start
         if end > code_start:
-            out.append(code_fn(text[code_start:end]))
+            yield (text[code_start:end], True)
         code_start = end
 
     while i < n:
@@ -119,20 +128,20 @@ def walk_code(text: str, code_fn) -> str:
         two = text[i : i + 2]
         three = text[i : i + 3]
 
-        # `--` line comment (but not `-->`-style; Sky has no custom operators, so
-        # a bare `--` always starts a comment outside a string).
+        # `--` line comment (Sky has no custom operators, so a bare `--` outside a
+        # string always starts a comment).
         if two == "--":
-            flush_code(i)
+            yield from flush_code(i)
             j = text.find("\n", i)
             j = n if j == -1 else j
-            out.append(text[i:j])  # verbatim
+            yield (text[i:j], False)
             i = j
             code_start = i
             continue
 
         # `{- ... -}` block comment, nested.
         if two == "{-":
-            flush_code(i)
+            yield from flush_code(i)
             depth = 1
             j = i + 2
             while j < n and depth > 0:
@@ -144,15 +153,15 @@ def walk_code(text: str, code_fn) -> str:
                     j += 2
                 else:
                     j += 1
-            out.append(text[i:j])  # verbatim
+            yield (text[i:j], False)
             i = j
             code_start = i
             continue
 
         # Triple-quoted multiline string with `{{ }}` interpolation.
         if three == '"""':
-            flush_code(i)
-            out.append('"""')
+            yield from flush_code(i)
+            yield ('"""', False)
             j = i + 3
             seg_start = j
             while j < n:
@@ -164,19 +173,19 @@ def walk_code(text: str, code_fn) -> str:
                     continue
                 # Interpolation `{{ expr }}` — expr is CODE.
                 if text[j : j + 2] == "{{":
-                    out.append(text[seg_start:j])  # literal chunk, verbatim
+                    yield (text[seg_start:j], False)  # literal chunk
                     k = text.find("}}", j + 2)
                     k = n if k == -1 else k
-                    out.append("{{")
-                    out.append(code_fn(text[j + 2 : k]))
-                    out.append("}}")
+                    yield ("{{", False)
+                    yield (text[j + 2 : k], True)  # interpolation expr is code
+                    yield ("}}", False)
                     j = k + 2
                     seg_start = j
                     continue
                 j += 1
-            out.append(text[seg_start:j])  # trailing literal chunk
+            yield (text[seg_start:j], False)  # trailing literal chunk
             if j < n:
-                out.append('"""')
+                yield ('"""', False)
                 j += 3
             i = j
             code_start = i
@@ -184,7 +193,7 @@ def walk_code(text: str, code_fn) -> str:
 
         # `"..."` single-line string literal with `\` escapes.
         if c == '"':
-            flush_code(i)
+            yield from flush_code(i)
             j = i + 1
             while j < n:
                 if text[j] == "\\":
@@ -196,15 +205,27 @@ def walk_code(text: str, code_fn) -> str:
                 if text[j] == "\n":  # unterminated; bail at EOL
                     break
                 j += 1
-            out.append(text[i:j])  # verbatim
+            yield (text[i:j], False)
             i = j
             code_start = i
             continue
 
         i += 1
 
-    flush_code(n)
-    return "".join(out)
+    yield from flush_code(n)
+
+
+def walk_code(text: str, code_fn) -> str:
+    """Rebuild `text`, passing each CODE segment through `code_fn`.
+
+    `code_fn(segment) -> str` sees only code — never a string literal or a
+    comment, which are copied verbatim. Shares the one lexer (`_lex_spans`) so
+    every code-only rewrite (the qualifier prefix rename, the stdlib member move)
+    skips strings/comments identically.
+    """
+    return "".join(
+        code_fn(seg) if is_code else seg for seg, is_code in _lex_spans(text)
+    )
 
 
 def transform(text: str, pairs: list[tuple[str, str]]) -> str:
@@ -843,6 +864,193 @@ def _alias_is_referenced(text: str, alias: str) -> bool:
     return found[0]
 
 
+# ── PubSub raw-topic wrap (`PubSub.publish "t" x` -> typed `Topic` handle) ─────
+# `Ipe.PubSub.publish` / `publishNoEcho` take a typed `Topic a` first argument
+# (`publish : Topic a -> a -> Task Error Int`), constructed by `PubSub.topic`.
+# Upstream Sky's `PubSub.publish` took a raw `String` topic, so a mirrored call
+# reads `<A>.publish "todos.created" payload` and fails to type-check against the
+# `Topic a` parameter. This pass wraps the bare string-literal topic in a
+# `<A>.topic "…"` call: `<A>.publish "t" x` -> `<A>.publish (<A>.topic "t") x`.
+#
+# The call spans a code token (`<A>.publish`) AND its string-literal topic
+# argument, so — like `rehome_kernel_alias` — it is matched on the whole line
+# rather than inside a lone code span. `<A>` is the alias bound by
+# `import Ipe.PubSub as <A>` in this file; a file without that import is left
+# untouched. A call already passing a parenthesised handle (`<A>.topic …` or any
+# expression) is not a bare string literal, so it never matches — the pass is
+# idempotent and only rewrites the raw-String form.
+_PUBSUB_MODULE = "Ipe.PubSub"
+_PUBSUB_TOPIC_MEMBERS: frozenset[str] = frozenset({"publish", "publishNoEcho"})
+
+
+def wrap_pubsub_topic(text: str) -> str:
+    """Wrap a raw string topic: `<A>.publish "t" x` -> `<A>.publish (<A>.topic "t") x`.
+
+    Finds the `import Ipe.PubSub as <A>` alias, then rewrites every CODE
+    `<A>.publish "…"` / `<A>.publishNoEcho "…"` whose first argument is a bare
+    string literal into the typed-`Topic` form via `<A>.topic`. Runs AFTER the
+    prefix rename, so the alias qualifier is already `Ipe.PubSub`. A file without
+    the import, or whose publish already passes a non-literal handle, is
+    unchanged.
+
+    The call straddles a code token (`<A>.publish`) and its string-literal topic
+    argument, which `walk_code` places in adjacent segments — a lone `code_fn`
+    never sees the string. So the scan tracks a pending publish head: a code
+    segment ending in `<A>.<member>` plus trailing whitespace, immediately
+    followed by a string-literal segment, is the raw-topic call and the literal
+    is wrapped. A `PubSub.publish "…"` inside a `--`/`{- -}` comment or a string
+    literal is copied verbatim by `walk_code` and never becomes a pending head,
+    so comments and strings survive untouched (the #879 discipline).
+    """
+    pubsub_alias: str | None = None
+    for line in text.split("\n"):
+        stripped = line.lstrip()
+        if stripped.startswith("import ") and _import_module(stripped) == _PUBSUB_MODULE:
+            pubsub_alias = _import_alias(stripped[len("import ") :])
+            break
+    if pubsub_alias is None:
+        return text
+
+    members = "|".join(re.escape(m) for m in sorted(_PUBSUB_TOPIC_MEMBERS))
+    # A code segment ending in `<A>.<member>` and trailing inline whitespace. The
+    # head is anchored on a non-identifier boundary so `MyPubSub.publish` (a
+    # different alias) is not a match. `$` anchors the head at the segment end so
+    # the following string-literal segment is its first argument.
+    head_at_end = re.compile(
+        r"(?<![\w.])"
+        + re.escape(pubsub_alias)
+        + r"\.(?:" + members + r")[ \t]+\Z"
+    )
+    string_literal = re.compile(r"\A\"[^\"\n]*\"")
+
+    # Split into (segment, is_code) spans (comments/strings verbatim) so a code
+    # `<A>.publish` head can be paired with the string-literal segment that
+    # follows it, while comment/string mentions stay in their own verbatim spans.
+    segments = list(_lex_spans(text))
+
+    out: list[str] = []
+    i = 0
+    n = len(segments)
+    while i < n:
+        seg, is_code = segments[i]
+        if (
+            is_code
+            and i + 1 < n
+            and not segments[i + 1][1]
+            and head_at_end.search(seg)
+            and string_literal.match(segments[i + 1][0])
+        ):
+            literal = string_literal.match(segments[i + 1][0])
+            assert literal is not None
+            topic = literal.group(0)
+            rest = segments[i + 1][0][literal.end() :]
+            # `seg` ends with the whitespace that separated the head from the
+            # topic string, so it already provides the space before `(`; `rest`
+            # carries the original whitespace before the payload — add neither.
+            out.append(seg + f"({pubsub_alias}.topic {topic})")
+            out.append(rest)
+            i += 2
+            continue
+        out.append(seg)
+        i += 1
+    return "".join(out)
+
+
+# ── Entry-boundary Task.run strip (`main = let … _ = Task.run r in ()`) ────────
+# Ipê's runtime is the single `Task.run` site: an idiomatic entry point RETURNS
+# its `Task Error ()` and lets the runtime run it (IPE-N0036). Upstream Sky runs
+# the task itself at `main`, spelled:
+#
+#     main =
+#         let
+#             run = <entry expr>
+#             _ = Task.run run
+#         in
+#             ()
+#
+# This pass rewrites that exact entry idiom to `main = <entry expr>`, returning
+# the task. It is SCOPED to the `main` binding's own `let` whose body is `()` and
+# whose sole side-effecting binding is `_ = <TaskAlias>.run <var>` — it never
+# touches a `Task.run` in expression position (the synchronous-bridge use inside
+# a helper, e.g. `Result.withDefault "" (Task.run (System.getenv …))`), which Ipê
+# still supports. Runs AFTER the prefix rename, so the alias is already `Task`.
+_ENTRY_TASK_RUN = re.compile(
+    r"^main[ \t]*=\n"
+    r"[ \t]*let\n"
+    r"[ \t]*(?P<runvar>[A-Za-z_][A-Za-z0-9_]*)[ \t]*=[ \t]*(?P<expr>[^\n]+)\n"
+    r"[ \t]*_[ \t]*=[ \t]*(?P<taskalias>[A-Za-z_][A-Za-z0-9_.]*)\.run[ \t]+(?P=runvar)[ \t]*\n"
+    r"[ \t]*in\n"
+    r"[ \t]*\(\)[ \t]*$",
+    flags=re.MULTILINE,
+)
+
+
+def return_entry_task(text: str) -> str:
+    """Rewrite the entry `main = let run = e … _ = Task.run run in ()` to `main = e`.
+
+    Matches only the whole entry idiom — a top-level `main =` whose `let` binds
+    `run = <expr>`, discards `_ = <alias>.run run`, and returns `()` — and
+    replaces it with the idiomatic entry point:
+
+        main : Task Error ()
+        main =
+            <expr>
+
+    so the runtime becomes the single `Task.run` site and `main` returns its
+    `Task Error ()`. The signature is added because a Sky `main` is unsignatured;
+    a `Task.run` in any other position is untouched. The `<expr>` is a single-line
+    RHS in the mirrored corpus (the `entry () |> Task.onError …` pipe). Runs after
+    the prefix rename so `<alias>` is already `Task`.
+    """
+
+    def _repl(m: "re.Match[str]") -> str:
+        return f"main : Task Error ()\nmain =\n    {m.group('expr').rstrip()}"
+
+    return _ENTRY_TASK_RUN.sub(_repl, text)
+
+
+# ── Maybe-import injection (Prelude drop leaves `Maybe.*` unqualified) ─────────
+# Sky's open `Sky.Core.Prelude exposing (..)` re-exported `Ipe.Maybe`'s surface,
+# so upstream files reach `Maybe.withDefault` through the Prelude without a direct
+# `import Sky.Core.Maybe`. Ipê auto-imports only its Tier-A `Ipe.Basics` (ADR
+# 0047), which does NOT include `Maybe.*`; the Prelude import is dropped, so a
+# file that used `Maybe.<member>` via the Prelude now references an unimported
+# qualifier (IPE-N0034). This pass injects `import Ipe.Maybe as Maybe` when a file
+# uses `Maybe.` in code yet imports no `Ipe.Maybe`. A file that already imports it
+# (directly in upstream) is untouched. Runs AFTER the prefix rename and the
+# Prelude drop, so the missing import is observable.
+_MAYBE_MODULE = "Ipe.Maybe"
+
+
+def inject_maybe_import(text: str) -> str:
+    """Add `import Ipe.Maybe as Maybe` when `Maybe.*` is used with no such import.
+
+    Injects the import only when the file references `Maybe.` in a code span and
+    has no `import Ipe.Maybe` line. The new import is placed after the last
+    existing `import` line so it joins the import block. A file that already
+    imports `Ipe.Maybe`, or never references `Maybe.` in code, is unchanged.
+    """
+    for line in text.split("\n"):
+        stripped = line.lstrip()
+        if stripped.startswith("import ") and _import_module(stripped) == _MAYBE_MODULE:
+            return text  # already imported
+
+    if not _alias_is_referenced(text, "Maybe"):
+        return text  # no qualified `Maybe.` use to satisfy
+
+    lines = text.split("\n")
+    last_import = -1
+    for idx, line in enumerate(lines):
+        if line.lstrip().startswith("import "):
+            last_import = idx
+    if last_import == -1:
+        return text  # no import block to extend; leave it to the compiler
+
+    indent = lines[last_import][: len(lines[last_import]) - len(lines[last_import].lstrip())]
+    lines.insert(last_import + 1, f"{indent}import {_MAYBE_MODULE} as Maybe")
+    return "\n".join(lines)
+
+
 def prefix_bare_imports(text: str, bare: frozenset[str]) -> str:
     """Prefix `import <Name>` -> `import Ipe.<Name>` for bare stdlib modules.
 
@@ -993,14 +1201,17 @@ def main(argv: list[str]) -> int:
         with open(path, encoding="utf-8") as fh:
             text = fh.read()
         originals[path] = text
-        transformed[path] = prefix_bare_imports(
-            rehome_kernel_alias(
-                drop_removed_imports(
-                    transform(mark_stdlib_db(apply_member_moves(desugar_pure(text))), pairs)
-                )
-            ),
-            bare,
+        # After the prefix rename + Prelude drop, three API migrations run on the
+        # already-`Ipe.` form: wrap a raw PubSub topic string in a typed handle,
+        # strip an entry-boundary `Task.run` so `main` returns its task, and
+        # inject a missing `Ipe.Maybe` import left unqualified by the Prelude drop.
+        renamed = drop_removed_imports(
+            transform(mark_stdlib_db(apply_member_moves(desugar_pure(text))), pairs)
         )
+        migrated = inject_maybe_import(
+            return_entry_task(wrap_pubsub_topic(rehome_kernel_alias(renamed)))
+        )
+        transformed[path] = prefix_bare_imports(migrated, bare)
 
     # Phase 2 — shape-scoped Cmd/Sub re-home across the whole example. The shape
     # is proven from the entry kernel any file head-calls, so a multi-module
