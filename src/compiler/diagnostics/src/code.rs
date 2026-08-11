@@ -80,6 +80,7 @@ macro_rules! code {
         )*
     ) => {
         $(
+            #[allow(clippy::too_long_first_doc_paragraph)] // code-table doc strings are intentionally terse single lines
             $(#[$meta])*
             pub const $ident: Code = Code($wire);
         )*
@@ -544,6 +545,56 @@ mod tests {
         assert_eq!(
             ISSUE_TRACKER_URL,
             "https://github.com/arthurmaciel/ipe-lang/issues"
+        );
+    }
+
+    /// Every code in `ALL_CODES` must produce a non-default title and a `Some` explain page.
+    ///
+    /// Because the `code!` macro generates both the constants and `ALL_CODES`
+    /// from the same table, a code present as a constant but absent from
+    /// `ALL_CODES` is structurally impossible — this test is the observable
+    /// complement: it asserts that nothing in `ALL_CODES` silently falls through
+    /// to the generic fallback arms in `title` / `explain_page`.
+    ///
+    /// Any code that trips this assertion was added to the table without the
+    /// required explain page, or with an empty title string.
+    #[test]
+    fn every_code_in_all_codes_has_non_fallback_title_and_explain() {
+        for &c in ALL_CODES {
+            let t = title(c);
+            assert!(
+                t != "unknown error code" && !t.is_empty(),
+                "{} fell through to the fallback title arm — \
+                 its entry in the code! table is missing or malformed",
+                c.as_str()
+            );
+            assert!(
+                explain_page(c).is_some(),
+                "{} has no explain page — add explain/{}.md",
+                c.as_str(),
+                c.as_str()
+            );
+        }
+    }
+
+    /// `IPE-N0030` is a real, emitted diagnostic — its entry in `ALL_CODES` must
+    /// be reachable and its title must match the taxonomy declaration exactly.
+    ///
+    /// This pins the `ipe explain IPE-N0030` and did-you-mean surfaces against
+    /// silent omission.
+    #[test]
+    fn n0030_is_registered_and_explain_surface_finds_it() {
+        assert!(
+            ALL_CODES.contains(&IPE_N0030),
+            "IPE-N0030 is missing from ALL_CODES"
+        );
+        assert_eq!(
+            title(IPE_N0030),
+            "server module reachable from the wasm client entry"
+        );
+        assert!(
+            explain_page(IPE_N0030).is_some(),
+            "IPE-N0030 has no explain page"
         );
     }
 }
