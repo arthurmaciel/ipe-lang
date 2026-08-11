@@ -2788,8 +2788,8 @@ fn collect_record_shapes(
         | IrType::Secret
         | IrType::Path
         | IrType::Url
-        // `Dsn` is an opaque wrapper — no record shape.
-        | IrType::Dsn
+        // `Dsn` + the external `Connection`/markers are opaque wrappers — no shape.
+        | IrType::Dsn | IrType::Connection | IrType::ConnReadOnly | IrType::ConnReadWrite
         // Cache config / stats + Csv document are folded to nominal runtime
         // structs — no structural record shape to synthesise.
         | IrType::CacheCfg
@@ -2953,6 +2953,9 @@ fn type_reaches_enum(
         | IrType::Url
         // `Dsn` is a monomorphic opaque wrapper — no reachable enum edge.
         | IrType::Dsn
+        | IrType::Connection
+        | IrType::ConnReadOnly
+        | IrType::ConnReadWrite
         // Cache config / stats + Csv document are monomorphic runtime structs
         // — no reachable enum edge to `target`.
         | IrType::CacheCfg
@@ -3051,6 +3054,9 @@ fn contains_generic(ty: &IrType) -> bool {
         | IrType::Url
         // `Dsn` is a monomorphic opaque wrapper — no generic parameters.
         | IrType::Dsn
+        | IrType::Connection
+        | IrType::ConnReadOnly
+        | IrType::ConnReadWrite
         // Cache config / stats + Csv document are monomorphic — no generic
         // parameters.
         | IrType::CacheCfg
@@ -3180,6 +3186,9 @@ fn collect_generics(ty: &IrType, out: &mut Vec<Symbol>) {
         | IrType::Url
         // `Dsn` is a monomorphic opaque wrapper — no generics to collect.
         | IrType::Dsn
+        | IrType::Connection
+        | IrType::ConnReadOnly
+        | IrType::ConnReadWrite
         // Cache config / stats + Csv document are monomorphic — no generics to
         // collect.
         | IrType::CacheCfg
@@ -3520,6 +3529,9 @@ fn match_template(
         | IrType::Url
         // `Dsn` is a monomorphic opaque leaf — must equal exactly.
         | IrType::Dsn
+        | IrType::Connection
+        | IrType::ConnReadOnly
+        | IrType::ConnReadWrite
         // Cache config / stats + Csv document are monomorphic runtime-struct
         // leaves.
         | IrType::CacheCfg

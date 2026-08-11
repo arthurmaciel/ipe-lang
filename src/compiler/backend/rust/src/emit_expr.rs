@@ -2485,6 +2485,14 @@ fn emit_db_call(
         KernelFn::DbConnect
         | KernelFn::DbOpen
         | KernelFn::DbClose
+        // External Connection — `open`/`close`/`unsafeOpen`/`unsafeExecRawOn` take
+        // plain `Dsn` / `Connection` / `Int` / `String` scalar args (the phantom
+        // access mode is erased, so the `Connection` handle is one concrete type);
+        // no `Db` handle projection, no List projection — the standard call path.
+        | KernelFn::DbConnOpen
+        | KernelFn::DbConnClose
+        | KernelFn::DbConnUnsafeOpen
+        | KernelFn::DbConnUnsafeExecRawOn
         // `Db.Dsn.*` — the parse surface takes plain `String` / `Int` / `Secret`
         // / `Dsn` scalar args (no `Db` handle, no List projection), so they route
         // through the standard call path unchanged.

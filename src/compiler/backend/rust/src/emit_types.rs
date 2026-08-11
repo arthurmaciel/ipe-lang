@@ -438,6 +438,15 @@ pub fn render_type(ctx: &EmitCtx, ty: &IrType, generics: GenericScope) -> DResul
         // `Ipe.Db.Dsn`'s opaque validated connection descriptor — fully-qualified
         // to avoid ambiguity with any user-defined `Dsn` type.
         IrType::Dsn => "ipe_runtime::dsn::Dsn".to_owned(),
+        // `Ipe.Db`'s external-connection handle — the phantom access mode is
+        // already erased at lowering, so every `Connection ReadOnly` /
+        // `Connection ReadWrite` position renders to the one concrete pool type.
+        // The bare markers describe only that erased mode; they never stand as a
+        // value type, so rendering them names the same handle (a fail-safe, never
+        // a panic).
+        IrType::Connection | IrType::ConnReadOnly | IrType::ConnReadWrite => {
+            "ipe_runtime::external_conn::ExternalConnection".to_owned()
+        }
         // `Locale` is fully-qualified to avoid ambiguity with any user-defined
         // `Locale` type; the runtime module is always compiled (the struct is a
         // plain newtype; ICU4X parse/case bodies activate under `--features locale`).

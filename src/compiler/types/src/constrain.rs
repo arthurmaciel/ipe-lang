@@ -577,6 +577,21 @@ struct Builtins {
     /// (`ipe_runtime::dsn::Dsn`). Constructed only by `Db.Dsn.parse` /
     /// `Db.Dsn.build`; zero type arguments. Lowered to `IrType::Dsn`.
     dsn: Symbol,
+    // ── Ipe.Db external Connection ──────────────────────────────────────────
+    /// `"Connection"` — the external-DB connection handle constructor
+    /// `Connection mode` (`ipe_runtime::external_conn::ExternalConnection`).
+    /// Minted only by `Db.Dsn.open` / `Db.Unsafe.unsafeOpen`. The phantom
+    /// `mode` distinguishes `ReadOnly` from `ReadWrite` at inference and is
+    /// erased at emit. Lowered to `IrType::Connection`.
+    connection: Symbol,
+    /// `"ReadOnly"` — the phantom read-only access-mode marker. Appears only as
+    /// `Connection`'s argument; never a standalone value. Lowered to
+    /// `IrType::ConnReadOnly`.
+    conn_read_only: Symbol,
+    /// `"ReadWrite"` — the phantom mutable access-mode marker. Appears only as
+    /// `Connection`'s argument; never a standalone value. Lowered to
+    /// `IrType::ConnReadWrite`.
+    conn_read_write: Symbol,
     // ── Ipe.Locale ─────────────────────────────────────────────────────────
     /// `"Locale"` — opaque BCP-47 locale handle (`ipe_runtime::locale::Locale`).
     /// The ONLY constructor is `Locale.fromTag : String -> Maybe Locale`;
@@ -805,6 +820,9 @@ impl Builtins {
             url: interner.intern("Url")?,
             // ── Ipe.Db.Dsn ────────────────────────────────────────────────────────
             dsn: interner.intern("Dsn")?,
+            connection: interner.intern("Connection")?,
+            conn_read_only: interner.intern("ReadOnly")?,
+            conn_read_write: interner.intern("ReadWrite")?,
             // ── Ipe.Locale ───────────────────────────────────────────────────────
             locale: interner.intern("Locale")?,
             // ── Ipe.PubSub.Topic ────────────────────────────────────────────────
@@ -3958,6 +3976,9 @@ impl<'a> Builder<'a> {
             BuiltinTag::Regex => self.builtins.regex,
             BuiltinTag::Url => self.builtins.url,
             BuiltinTag::Dsn => self.builtins.dsn,
+            BuiltinTag::Connection => self.builtins.connection,
+            BuiltinTag::ConnReadOnly => self.builtins.conn_read_only,
+            BuiltinTag::ConnReadWrite => self.builtins.conn_read_write,
             BuiltinTag::Locale => self.builtins.locale,
             BuiltinTag::HttpMethod => self.builtins.http_method,
             BuiltinTag::CryptoKey => self.builtins.crypto_key,
@@ -4479,6 +4500,25 @@ impl<'a> Builder<'a> {
             module: Vec::new(),
             name: self.builtins.dsn,
             args: Vec::new(),
+        };
+        // External `Connection mode` — the read-only-by-type foreign-DB handle
+        // (`ipe_runtime::external_conn::ExternalConnection`). The phantom `mode`
+        // (`ReadOnly` / `ReadWrite`) is a real type at inference so a read-only
+        // value cannot unify into a write kernel; erased at emit.
+        let conn_read_only = || Ty::Con {
+            module: Vec::new(),
+            name: self.builtins.conn_read_only,
+            args: Vec::new(),
+        };
+        let conn_read_write = || Ty::Con {
+            module: Vec::new(),
+            name: self.builtins.conn_read_write,
+            args: Vec::new(),
+        };
+        let connection = |mode: Ty| Ty::Con {
+            module: Vec::new(),
+            name: self.builtins.connection,
+            args: vec![mode],
         };
         // `Locale` — opaque BCP-47 locale handle
         // (`ipe_runtime::locale::Locale`).  The ONLY constructor is
@@ -5351,6 +5391,20 @@ impl<'a> Builder<'a> {
             ),
             K::DsnDriverTag | K::DsnPort | K::DsnTlsTag => fun(dsn(), int()),
             K::DsnHost | K::DsnDatabase | K::DsnUser | K::DsnRedacted => fun(dsn(), string()),
+
+            // ── External Connection — read-only-by-type foreign-DB connect. ──
+            // open : Dsn -> Task Error (Connection ReadOnly)
+            K::DbConnOpen => fun(dsn(), task(connection(conn_read_only()))),
+            // close : Connection a -> Task Error ()  (polymorphic over the mode)
+            K::DbConnClose => fun(connection(var(0)), task_unit()),
+            // unsafeOpen : Int(driverTag) -> String -> Task Error (Connection ReadOnly)
+            K::DbConnUnsafeOpen => {
+                fun(int(), fun(string(), task(connection(conn_read_only()))))
+            }
+            // unsafeExecRawOn : Connection ReadWrite -> String -> Task Error Int
+            K::DbConnUnsafeExecRawOn => {
+                fun(connection(conn_read_write()), fun(string(), task(int())))
+            }
             K::DbExecRaw => fun(db(), fun(string(), task(int()))),
             // `exec`/`query`/`queryDecode` accept `List a` (polymorphic) — any
             // Ipê type that can be bound as a SQL parameter: `List String`,
@@ -8462,6 +8516,11 @@ mod registry_phase_c_tests {
             K::DbConnect,
             K::DbOpen,
             K::DbClose,
+            // External Connection — read-only-by-type foreign-DB connect (4)
+            K::DbConnOpen,
+            K::DbConnClose,
+            K::DbConnUnsafeOpen,
+            K::DbConnUnsafeExecRawOn,
             // Ipe.Db.Dsn — parse-don't-validate descriptor (9)
             K::DsnParse,
             K::DsnBuild,

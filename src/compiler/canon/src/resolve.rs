@@ -153,6 +153,15 @@ const RESERVED_BUILTIN_TYPES: &[&str] = &[
     // user code, or a forged look-alike `Dsn` could smuggle a host/credential
     // past the parser once a connect step consumes it.
     "Dsn",
+    // `Ipe.Db`'s external-connection handle `Connection mode` and its two phantom
+    // access-mode markers. Reserved because the read-only-by-type guarantee is the
+    // load-bearing security property: a user `type Connection …` or a shadowed
+    // `ReadOnly`/`ReadWrite` could forge a read-write handle to a foreign DB from a
+    // read-only one, defeating the compile-time write barrier. The markers appear
+    // only as `Connection`'s argument (phantom), never as a standalone value.
+    "Connection",
+    "ReadOnly",
+    "ReadWrite",
     // The JS-interop visual-widget boundary type. A binding typed
     // `CustomElement down up` names, in its two concrete type parameters, the
     // sealed down-state and up-event that cross the Ipê↔JS seam — every value

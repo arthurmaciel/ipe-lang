@@ -1723,6 +1723,9 @@ fn ir_type_mentions(ty: &IrType, leaf: &impl Fn(&IrType) -> bool) -> bool {
         | IrType::Path
         | IrType::Url
         | IrType::Dsn
+        | IrType::Connection
+        | IrType::ConnReadOnly
+        | IrType::ConnReadWrite
         | IrType::Locale
         | IrType::CacheCfg
         | IrType::CacheStats
@@ -2177,6 +2180,9 @@ fn ir_contains_fun(ty: &IrType) -> bool {
         | IrType::Path
         | IrType::Url
         | IrType::Dsn
+        | IrType::Connection
+        | IrType::ConnReadOnly
+        | IrType::ConnReadWrite
         // Cache config / stats + Csv document are plain data records — no
         // function.
         | IrType::CacheCfg
@@ -2314,6 +2320,9 @@ fn clone_class(env: CloneEnv<'_>, t: &IrType) -> CloneClass {
         // itself a heap-`String`-backed type; `PartialEq`/`Eq` derived).
         | IrType::Url
         | IrType::Dsn
+        | IrType::Connection
+        | IrType::ConnReadOnly
+        | IrType::ConnReadWrite
         | IrType::ServerRequest
         | IrType::ServerResponse
         | IrType::ServerRoute
@@ -5156,6 +5165,9 @@ fn ir_type_mentions_generic(ty: &IrType, tv: Symbol) -> bool {
         | IrType::Url
         // `Dsn` is non-parametric — mentions no type var.
         | IrType::Dsn
+        | IrType::Connection
+        | IrType::ConnReadOnly
+        | IrType::ConnReadWrite
         // Cache config / stats + Csv document are non-parametric — mention no
         // type var.
         | IrType::CacheCfg
@@ -5259,6 +5271,9 @@ fn ir_type_generic_in_decoder(ty: &IrType, tv: Symbol) -> bool {
         | IrType::Path
         | IrType::Url
         | IrType::Dsn
+        | IrType::Connection
+        | IrType::ConnReadOnly
+        | IrType::ConnReadWrite
         | IrType::CacheCfg
         | IrType::WebSocketClientCfg
         | IrType::CacheStats
@@ -5356,6 +5371,9 @@ fn ir_type_generic_reaches_bare(ty: &IrType, tv: Symbol) -> bool {
         | IrType::Path
         | IrType::Url
         | IrType::Dsn
+        | IrType::Connection
+        | IrType::ConnReadOnly
+        | IrType::ConnReadWrite
         | IrType::CacheCfg
         | IrType::WebSocketClientCfg
         | IrType::CacheStats
@@ -11749,6 +11767,15 @@ impl<'a> Lowerer<'a> {
                 // `Dsn` is `Ipe.Db.Dsn`'s opaque validated connection descriptor.
                 // Backed by `ipe_runtime::dsn::Dsn`.
                 "Dsn" => Ok(IrType::Dsn),
+                // `Connection mode` is `Ipe.Db`'s external-connection handle. The
+                // phantom access mode is erased here — the argument is dropped, so
+                // both `Connection ReadOnly` and `Connection ReadWrite` lower to the
+                // one concrete `ipe_runtime::external_conn::ExternalConnection`.
+                "Connection" if args.len() == 1 => Ok(IrType::Connection),
+                // The phantom markers, if ever reached standalone (they normally
+                // appear only as `Connection`'s erased argument).
+                "ReadOnly" => Ok(IrType::ConnReadOnly),
+                "ReadWrite" => Ok(IrType::ConnReadWrite),
                 // `Locale` is `Ipe.Locale`'s opaque BCP-47 locale handle.
                 // Backed by `ipe_runtime::locale::Locale`.
                 "Locale" => Ok(IrType::Locale),
@@ -12836,6 +12863,15 @@ impl<'a> Lowerer<'a> {
                 // `Dsn` is `Ipe.Db.Dsn`'s opaque validated connection descriptor.
                 // Backed by `ipe_runtime::dsn::Dsn`.
                 "Dsn" => Ok(IrType::Dsn),
+                // `Connection mode` is `Ipe.Db`'s external-connection handle. The
+                // phantom access mode is erased here — the argument is dropped, so
+                // both `Connection ReadOnly` and `Connection ReadWrite` lower to the
+                // one concrete `ipe_runtime::external_conn::ExternalConnection`.
+                "Connection" if args.len() == 1 => Ok(IrType::Connection),
+                // The phantom markers, if ever reached standalone (they normally
+                // appear only as `Connection`'s erased argument).
+                "ReadOnly" => Ok(IrType::ConnReadOnly),
+                "ReadWrite" => Ok(IrType::ConnReadWrite),
                 // `Locale` is `Ipe.Locale`'s opaque BCP-47 locale handle.
                 // Backed by `ipe_runtime::locale::Locale`.
                 "Locale" => Ok(IrType::Locale),
@@ -17318,6 +17354,11 @@ impl<'a> Lowerer<'a> {
                 | KernelFn::DsnUser
                 | KernelFn::DsnTlsTag
                 | KernelFn::DsnRedacted
+                // ── External Connection arity-1 ──────────────────────
+                // `open : Dsn -> Task Error (Connection ReadOnly)` and
+                // `close : Connection mode -> Task Error ()` each take one arg.
+                | KernelFn::DbConnOpen
+                | KernelFn::DbConnClose
                 // ── Db.Decode arity-1 ────────────────────────────────
                 // Primitive column decoders: `String -> Decoder T`
                 | KernelFn::DbDecString
@@ -17582,6 +17623,11 @@ impl<'a> Lowerer<'a> {
                 | KernelFn::DbOpen
                 // `DbExecRaw : Db -> String -> Task Error Int`
                 | KernelFn::DbExecRaw
+                // `unsafeOpen : Int(driverTag) -> String -> Task Error
+                //   (Connection ReadOnly)` and `unsafeExecRawOn :
+                //   Connection ReadWrite -> String -> Task Error Int`
+                | KernelFn::DbConnUnsafeOpen
+                | KernelFn::DbConnUnsafeExecRawOn
                 // pure row helpers: `String -> Dict String String -> T`
                 | KernelFn::DbGetString
                 | KernelFn::DbGetInt
@@ -19179,6 +19225,14 @@ impl<'a> Lowerer<'a> {
                     ("Db.Dsn", "user") => Ok(Callee::Kernel(KernelFn::DsnUser)),
                     ("Db.Dsn", "tlsTag") => Ok(Callee::Kernel(KernelFn::DsnTlsTag)),
                     ("Db.Dsn", "redacted") => Ok(Callee::Kernel(KernelFn::DsnRedacted)),
+                    // External Connection — connect a parsed `Dsn`, close it, and
+                    // the `Ipe.Db.Unsafe`-homed raw connect / raw exec hatches.
+                    ("Db.Dsn", "open") => Ok(Callee::Kernel(KernelFn::DbConnOpen)),
+                    ("Db.Dsn", "close") => Ok(Callee::Kernel(KernelFn::DbConnClose)),
+                    ("Db", "unsafeOpen") => Ok(Callee::Kernel(KernelFn::DbConnUnsafeOpen)),
+                    ("Db", "unsafeExecRawOn") => {
+                        Ok(Callee::Kernel(KernelFn::DbConnUnsafeExecRawOn))
+                    }
                     ("Db", "unsafeExecRaw") => Ok(Callee::Kernel(KernelFn::DbExecRaw)),
                     ("Db", "exec") => Ok(Callee::Kernel(KernelFn::DbExec)),
                     ("Db", "unsafeQuery") => Ok(Callee::Kernel(KernelFn::DbQuery)),
@@ -21460,6 +21514,9 @@ fn collect_ir_generic_syms(ty: &IrType, out: &mut BTreeSet<Symbol>) {
         | IrType::Url
         // `Dsn` is non-parametric — no generic syms.
         | IrType::Dsn
+        | IrType::Connection
+        | IrType::ConnReadOnly
+        | IrType::ConnReadWrite
         // Cache config / stats + Csv document are non-parametric — no generic
         // syms.
         | IrType::CacheCfg

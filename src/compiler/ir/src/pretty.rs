@@ -269,6 +269,11 @@ fn ir_type_name_at(interner: &Interner, ty: &IrType, depth: u16) -> String {
         IrType::EmailAddress => "EmailAddress".to_owned(),
         IrType::Url => "Url".to_owned(),
         IrType::Dsn => "Dsn".to_owned(),
+        // The phantom access mode is shown for a readable IR dump; it never
+        // renders to a standalone Rust type (erased at emit).
+        IrType::Connection => "Connection".to_owned(),
+        IrType::ConnReadOnly => "ReadOnly".to_owned(),
+        IrType::ConnReadWrite => "ReadWrite".to_owned(),
         IrType::Locale => "Locale".to_owned(),
     }
 }
@@ -758,6 +763,10 @@ const fn kernel_name(kernel: KernelFn) -> &'static str {
         KernelFn::DsnUser => "Db.Dsn.user",
         KernelFn::DsnTlsTag => "Db.Dsn.tlsTag",
         KernelFn::DsnRedacted => "Db.Dsn.redacted",
+        KernelFn::DbConnOpen => "Db.Dsn.open",
+        KernelFn::DbConnClose => "Db.Dsn.close",
+        KernelFn::DbConnUnsafeOpen => "Db.unsafeOpen",
+        KernelFn::DbConnUnsafeExecRawOn => "Db.unsafeExecRawOn",
         KernelFn::DbExecRaw => "Db.Unsafe.unsafeExecRaw",
         KernelFn::DbExec => "Db.exec",
         KernelFn::DbQuery => "Db.Unsafe.unsafeQuery",

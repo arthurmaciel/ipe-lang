@@ -310,6 +310,13 @@ fn leaf_of_bounded(ctx: &EmitCtx, ty: &IrType, app: AppShape, fuel: u32) -> Mode
         // same classification as `Url`/`Secret`: a Web Model field of type `Dsn`
         // is rejected by `admissible()` and this arm names it in the IPE-L0120.
         | IrType::Dsn
+        // An external `Connection` is a live pool handle, never serde — a Model
+        // field of this type is rejected by `admissible()`; these arms name it in
+        // the IPE-L0120. The phantom markers cannot appear in a Model field but
+        // stay listed for exhaustiveness.
+        | IrType::Connection
+        | IrType::ConnReadOnly
+        | IrType::ConnReadWrite
         // `Order` is a plain three-variant data enum — an admissible leaf.
         // `Decimal` is a Copy newtype — an admissible leaf.
         // `ErrorKind`/`Error`/`ErrorDetails` and the nominal error-payload
