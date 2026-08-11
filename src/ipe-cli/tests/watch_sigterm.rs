@@ -18,19 +18,23 @@
 use std::io::{Read, Write};
 use std::net::TcpStream;
 use std::path::{Path, PathBuf};
+use std::process::Command;
 use std::time::{Duration, Instant};
 
 mod support;
 
 type BoxError = Box<dyn std::error::Error + Send + Sync + 'static>;
 
-/// Budget for the initial COLD `ipe watch` build+spawn to start serving. The
-/// supervised child is a full server crate (axum/tokio) cargo-built from cold on
-/// the first cycle; under a loaded CI shard building many such crates in parallel
-/// this must be generous enough that scheduler contention is never read as a
-/// SIGTERM-handling regression. The functional guard is the assertion that
-/// follows, not this wait.
-const COLD_BUILD_SERVE_BUDGET: Duration = Duration::from_mins(6);
+/// Budget for `ipe watch` to build and serve after the dep graph has been
+/// pre-warmed by [`warm_server_fixture_deps`]. All deps are already compiled;
+/// the watch only pays a link step plus server startup — well under a minute on
+/// any loaded box. The functional guard is the SIGTERM assertion that follows,
+/// not this wait.
+const WATCH_SERVE_BUDGET: Duration = Duration::from_mins(2);
+
+/// Budget for the one-shot dep warm-up in [`warm_server_fixture_deps`]: a full
+/// cold cargo build of the axum/tokio server fixture on a sccache-off box.
+const DEP_WARM_BUDGET: Duration = Duration::from_mins(10);
 
 /// The same minimal `Ipe.Http.Server` fixture `watch_integration.rs` uses:
 /// long-running (never exits on its own), reads its port from
@@ -69,6 +73,76 @@ fn fresh_dirs(tag: &str) -> Result<(PathBuf, PathBuf), BoxError> {
     std::fs::create_dir_all(&ipe_dir)
         .map_err(|e| -> BoxError { format!("mkdir {}: {e}", ipe_dir.display()).into() })?;
     Ok((ipe_dir, out_dir))
+}
+
+/// Pre-compile the server fixture's cargo dependencies into the shared target
+/// so subsequent `ipe watch` cold builds pay only the link step.
+///
+/// `ipe watch` spawns its own `cargo build` subprocess in an emitted project
+/// directory. On a sccache-off box with a cold cargo target that full dep compile
+/// (axum, tokio, tower-http, …) can take many minutes, making the timed
+/// `wait_for_body` guard unreliable regardless of the budget. This function
+/// emits the same server fixture once and runs `cargo build` on it, warming
+/// every dependency in the shared target the global `~/.cargo/config.toml`
+/// points to. After this returns, `ipe watch`'s own build only needs to link —
+/// seconds, not minutes.
+///
+/// `RUSTC_WRAPPER` is cleared so sccache does not interfere with the warm-up
+/// build; the shared target's object cache is all that matters here.
+#[cfg(target_os = "linux")]
+fn warm_server_fixture_deps() -> Result<(), BoxError> {
+    let warm_dir = std::env::temp_dir().join(format!(
+        "watch_sigterm_warm_{}_{}",
+        std::process::id(),
+        Instant::now().elapsed().as_nanos()
+    ));
+    let ipe_dir = warm_dir.join("ipe");
+    let out_dir = warm_dir.join("out");
+    let _ = std::fs::remove_dir_all(&warm_dir);
+    std::fs::create_dir_all(&ipe_dir)
+        .map_err(|e| -> BoxError { format!("warm: mkdir {}: {e}", ipe_dir.display()).into() })?;
+
+    let entry = ipe_dir.join("Main.ipe");
+    std::fs::write(&entry, server_fixture("warm"))
+        .map_err(|e| -> BoxError { format!("warm: write Main.ipe: {e}").into() })?;
+
+    let runtime_dir = ipe::resolve_runtime()
+        .map_err(|e| -> BoxError { format!("warm: runtime must resolve: {e}").into() })?;
+
+    ipe::build(&entry, &out_dir, &runtime_dir)
+        .map_err(|e| -> BoxError { format!("warm: ipe build failed: {e}").into() })?;
+
+    // Non-zero cargo exit is intentionally ignored: warming is best-effort.
+    // A fluke build failure here means `ipe watch` pays the full cold build
+    // time itself — the SIGTERM assertion is unaffected.
+    //
+    // Run with the same environment the watch's own cargo build inherits (no
+    // RUSTC_WRAPPER override): cargo fingerprints include the wrapper, so a
+    // warm built without sccache produces artifacts with a different fingerprint
+    // than the watch's sccache-enabled build, forcing a full recompile and
+    // defeating the warm-up entirely.
+    let _cargo_status = Command::new("cargo")
+        .arg("build")
+        .current_dir(&out_dir)
+        .status()
+        .map_err(|e| -> BoxError { format!("warm: cargo build spawn: {e}").into() })?;
+
+    let _ = std::fs::remove_dir_all(&warm_dir);
+    Ok(())
+}
+
+/// Convenience wrapper: run [`warm_server_fixture_deps`] with a hard timeout.
+/// Returns `Ok(())` whether warming succeeded or not — a warm-up failure is
+/// not fatal; the E2E test just pays the full cold build time itself.
+#[cfg(target_os = "linux")]
+fn try_warm(timeout: Duration) -> Result<(), BoxError> {
+    // Run the warm-up on a background thread so we can enforce the timeout
+    // without blocking the test process indefinitely.
+    let (tx, rx) = std::sync::mpsc::channel::<Result<(), BoxError>>();
+    std::thread::spawn(move || {
+        let _ = tx.send(warm_server_fixture_deps());
+    });
+    rx.recv_timeout(timeout).unwrap_or_else(|_| Ok(()))
 }
 
 fn http_get_body(port: u16) -> Option<String> {
@@ -195,6 +269,12 @@ fn watch_shuts_down_the_supervised_child_on_sigterm_to_only_the_ipe_process() ->
         eprintln!("skipping (set IPE_E2E=1 to run)");
         return Ok(());
     }
+
+    // Pre-warm the shared cargo target so the watch's own build pays only a
+    // link step. Best-effort: if warm-up fails or times out the test still
+    // runs; it just takes longer.
+    let _ = try_warm(DEP_WARM_BUDGET);
+
     let (ipe_dir, out_dir) = fresh_dirs("term_reaps_child")?;
     std::fs::write(ipe_dir.join("Main.ipe"), server_fixture("v1"))
         .map_err(|e| -> BoxError { format!("write Main.ipe: {e}").into() })?;
@@ -202,7 +282,7 @@ fn watch_shuts_down_the_supervised_child_on_sigterm_to_only_the_ipe_process() ->
     let port = 19157;
     let mut ipe_proc = spawn_ipe_watch(&ipe_dir.join("Main.ipe"), &out_dir, port)?;
 
-    if !wait_for_body(port, "v1", COLD_BUILD_SERVE_BUDGET) {
+    if !wait_for_body(port, "v1", WATCH_SERVE_BUDGET) {
         let _ = ipe_proc.kill();
         let _ = ipe_proc.wait();
         return Err("initial cold build+spawn must serve v1 within budget".into());
@@ -328,6 +408,12 @@ fn double_sigterm_after_forwarder_consumed_is_silently_absorbed_use_sigkill() ->
         eprintln!("skipping (set IPE_E2E=1 to run)");
         return Ok(());
     }
+
+    // Pre-warm the shared cargo target so the watch's own build pays only a
+    // link step. Best-effort: if warm-up fails or times out the test still
+    // runs; it just takes longer.
+    let _ = try_warm(DEP_WARM_BUDGET);
+
     let (ipe_dir, out_dir) = fresh_dirs("double_term")?;
     std::fs::write(ipe_dir.join("Main.ipe"), server_fixture("v1"))
         .map_err(|e| -> BoxError { format!("write Main.ipe: {e}").into() })?;
@@ -335,7 +421,7 @@ fn double_sigterm_after_forwarder_consumed_is_silently_absorbed_use_sigkill() ->
     let port = 19158;
     let mut ipe_proc = spawn_ipe_watch(&ipe_dir.join("Main.ipe"), &out_dir, port)?;
 
-    if !wait_for_body(port, "v1", COLD_BUILD_SERVE_BUDGET) {
+    if !wait_for_body(port, "v1", WATCH_SERVE_BUDGET) {
         let _ = ipe_proc.kill();
         let _ = ipe_proc.wait();
         return Err("initial cold build+spawn must serve v1 within budget".into());

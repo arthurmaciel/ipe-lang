@@ -702,6 +702,12 @@ fn run_inner(
         });
     }
 
+    // Resolve the runtime crate root once, fail-closed, before the event loop
+    // starts. The path-dependency emit needs the CRATE ROOT (the directory
+    // holding the runtime `Cargo.toml`), not the source sub-tree. This
+    // mirrors how `ipe build` resolves it via `runtime_embed::resolve()`.
+    let runtime_dep_root = crate::runtime_embed::resolve()?.root().to_path_buf();
+
     let mut db_main = ipe_db::IpeDatabase::new();
     let mut source_root: Option<ipe_db::SourceRoot> = None;
     let mut config: Option<ipe_db::BuildConfig> = None;
@@ -833,8 +839,15 @@ fn run_inner(
                         false,
                         // `ipe watch` is a development loop — Debug.* is allowed.
                         false,
-                        // `ipe watch` keeps the vendored runtime for now.
-                        None,
+                        // Dependency-model emit: the project links the runtime as a
+                        // path dependency (what `ipe build` uses by default), so
+                        // no runtime source is vendored into `src/ipe_runtime/`.
+                        // `runtime_dep_root` is the verified crate root (holds
+                        // `Cargo.toml`), resolved once before the loop via
+                        // `runtime_embed::resolve()`, matching `ipe build`'s path.
+                        Some(ipe_backend_rust::RuntimeDep {
+                            root: runtime_dep_root.clone(),
+                        }),
                     );
                     config = Some(cfg);
                     cfg
