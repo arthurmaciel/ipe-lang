@@ -25,14 +25,12 @@ import Ipe.Cache as Cache
 import Migrations
 import Server as App
 import State exposing (Config)
+import Ipe.Maybe as Maybe
 
 
+main : Task Error ()
 main =
-    let
-        run = entry () |> Task.onError reportError
-        _ = Task.run run
-    in
-        ()
+    entry () |> Task.onError reportError
 
 
 entry : () -> Task Error ()

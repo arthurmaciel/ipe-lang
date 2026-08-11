@@ -2,13 +2,13 @@ module Main exposing (main)
 
 import Ipe.Task as Task
 import Ipe.String as String
-import Ipe.Maybe as Maybe
 import Ipe.System as System
 import Ipe.Time as Time
 import Ipe.Http.Server as Server
 import Ipe.Http.Server exposing (Request, Response)
 import Ipe.Http.Server.Stream as Stream
 import Ipe.Error exposing (Error)
+import Ipe.Maybe as Maybe
 
 
 -- | A canonical Server-Sent Events endpoint demonstrating

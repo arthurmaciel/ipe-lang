@@ -1,10 +1,8 @@
-# Make `main` the Task the entry boundary runs, and route the regex calls
-# through the compiled-`Regex` surface.
+# Route the regex calls through the compiled-`Regex` surface.
 #
-# The upstream demo forced its pipeline with `Task.run` at module load — a
-# removed surface (IPE-N0036). A Task-typed `main` is performed for you at the
-# entry boundary, so `main` is just the pipeline value; the `onError` reporter
-# still handles failure and `System.exit`s.
+# (The upstream `Task.run`-at-entry idiom, IPE-N0036, is now migrated by the
+# shared converter pass — `main` becomes the Task the entry boundary runs — so no
+# per-example edit is needed for it here.)
 #
 # Ipê's `Ipe.Regex` takes a compiled `Regex` (parse-don't-validate): a pattern
 # is `compile`d once into a typed value so an invalid pattern is an observable
@@ -12,24 +10,6 @@
 # `match`/`findAll`/`replace`; route each through small local helpers that
 # compile the literal pattern and fall closed (no match / identity) on the
 # `Err` branch, which the constant valid patterns here never take.
-
-[[edit]]
-file: src/Main.ipe
-find:
-"""
-main =
-    let
-        pipeline = runPipeline () |> Task.onError reportError
-        _ = Task.run pipeline
-    in
-        ()
-"""
-replace:
-"""
-main : Task Error ()
-main =
-    runPipeline () |> Task.onError reportError
-"""
 
 [[edit]]
 file: src/Compute.ipe
