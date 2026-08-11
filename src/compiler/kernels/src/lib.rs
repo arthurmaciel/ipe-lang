@@ -235,6 +235,19 @@ pub enum BuiltinTag {
     Url,
     /// `Dsn` — the nullary opaque validated database-connection descriptor.
     Dsn,
+    /// `Connection` — the external-database connection handle constructor
+    /// `Connection mode`, applied to its phantom access-mode tag
+    /// ([`Self::ConnReadOnly`] / [`Self::ConnReadWrite`]). Distinct from the app's
+    /// `Db`; the access mode is erased at emit (one concrete pool per position).
+    Connection,
+    /// `ReadOnly` — the nullary phantom access-mode marker for a read-only
+    /// external connection. Appears only as `Connection`'s parameter; never a
+    /// standalone runtime value (phantom, erased at emit).
+    ConnReadOnly,
+    /// `ReadWrite` — the nullary phantom access-mode marker for a mutable external
+    /// connection. Appears only as `Connection`'s parameter; never a standalone
+    /// runtime value (phantom, erased at emit).
+    ConnReadWrite,
     /// `Locale` — the nullary opaque BCP-47 locale handle.
     Locale,
     /// `HttpMethod` — the nullary closed HTTP-method ADT.
@@ -1268,6 +1281,26 @@ pub enum StdlibKernel {
     DsnTlsTag,
     /// `Ipe.Db.Dsn.redacted : Dsn -> String` — the credential-free render.
     DsnRedacted,
+    // ── Ipe.Db external Connection — connecting a parsed `Dsn` to a live,
+    // read-only-by-type foreign database (distinct from the app's `Db`). ──
+    /// `Ipe.Db.Dsn.open : Dsn -> Task Error (Connection ReadOnly)` — the SAFE
+    /// connector. Opens an independent pool of the driver the `Dsn` names;
+    /// discloses `network`. Read-only by phantom type — a write against the
+    /// returned connection is a compile-time type error.
+    DbConnOpen,
+    /// `Ipe.Db.Dsn.close : Connection mode -> Task Error ()` — return the pool.
+    /// Total and idempotent over either access mode.
+    DbConnClose,
+    /// `Ipe.Db.Unsafe.unsafeOpen : Driver -> String -> Task Error (Connection
+    /// ReadOnly)` — the RAW-string connector. The connection string is
+    /// caller-asserted, not parsed; importing `Ipe.Db.Unsafe` discloses `unsafe`.
+    /// The `Driver` ADT is marshalled to its small-integer tag in the wrapper.
+    DbConnUnsafeOpen,
+    /// `Ipe.Db.Unsafe.unsafeExecRawOn : Connection ReadWrite -> String -> Task
+    /// Error Int` — verbatim SQL against an external connection. Requires
+    /// `Connection ReadWrite`, so a `Connection ReadOnly` cannot type-check into
+    /// it (the read-only guarantee is a compile error, not a runtime check).
+    DbConnUnsafeExecRawOn,
     DbExecRaw,
     DbExec,
     DbQuery,
@@ -2924,6 +2957,17 @@ impl StdlibKernel {
             Self::DsnUser => d("Db.Dsn", "user", 1, Db, "dsn_user"),
             Self::DsnTlsTag => d("Db.Dsn", "tlsTag", 1, Db, "dsn_tls"),
             Self::DsnRedacted => d("Db.Dsn", "redacted", 1, Db, "dsn_redacted"),
+            // ── External Connection: connect a `Dsn`, close it, and the raw hatches. ──
+            Self::DbConnOpen => d("Db.Dsn", "open", 1, Db, "db_conn_open"),
+            Self::DbConnClose => d("Db.Dsn", "close", 1, Db, "db_conn_close"),
+            // Surface-homed in the `Ipe.Db.Unsafe` compiled-source wrapper (which
+            // discloses `unsafe` by import); the registry qualifier stays `Db`, so
+            // the `Ffi.kernel` alias key is `Db_unsafeOpen` / `Db_unsafeExecRawOn`,
+            // matching the existing raw-SQL hatch convention.
+            Self::DbConnUnsafeOpen => d("Db", "unsafeOpen", 2, Db, "db_conn_unsafe_open"),
+            Self::DbConnUnsafeExecRawOn => {
+                d("Db", "unsafeExecRawOn", 2, Db, "db_conn_unsafe_exec_raw_on")
+            }
             Self::DbExecRaw => d("Db", "unsafeExecRaw", 2, Db, "db_exec_raw"),
             Self::DbExec => d("Db", "exec", 3, Db, "db_exec_params"),
             Self::DbQuery => d("Db", "unsafeQuery", 3, Db, "db_query_params"),
@@ -4272,6 +4316,10 @@ impl StdlibKernel {
         Self::DsnUser,
         Self::DsnTlsTag,
         Self::DsnRedacted,
+        Self::DbConnOpen,
+        Self::DbConnClose,
+        Self::DbConnUnsafeOpen,
+        Self::DbConnUnsafeExecRawOn,
         Self::DbExecRaw,
         Self::DbExec,
         Self::DbQuery,
@@ -4843,6 +4891,10 @@ impl StdlibKernel {
                 | Self::DsnUser
                 | Self::DsnTlsTag
                 | Self::DsnRedacted
+                | Self::DbConnOpen
+                | Self::DbConnClose
+                | Self::DbConnUnsafeOpen
+                | Self::DbConnUnsafeExecRawOn
                 | Self::DbExecRaw
                 | Self::DbExec
                 | Self::DbQuery
@@ -6093,6 +6145,31 @@ impl StdlibKernel {
             &INT,
             &STRING_TO_INT_TO_STRING_TO_STRING_TO_SECRET_TO_INT_TO_RESULT_ERR_DSN,
         );
+        // ── External Connection — read-only-by-type foreign-DB handle. ──
+        // The phantom access mode is a real type at inference (so `ReadOnly` ≠
+        // `ReadWrite` and a read-only value cannot unify into a write kernel),
+        // erased at emit. `open` yields `Connection ReadOnly`; the raw
+        // `unsafeExecRawOn` REQUIRES `Connection ReadWrite`.
+        const CONN_READONLY: TyShape = TyShape::Con(BuiltinTag::ConnReadOnly, &[]);
+        const CONN_READWRITE: TyShape = TyShape::Con(BuiltinTag::ConnReadWrite, &[]);
+        const CONNECTION_READONLY: TyShape = TyShape::Con(BuiltinTag::Connection, &[CONN_READONLY]);
+        const CONNECTION_READWRITE: TyShape =
+            TyShape::Con(BuiltinTag::Connection, &[CONN_READWRITE]);
+        // `close` is polymorphic over the access mode — it accepts `Connection a`.
+        const CONNECTION_MODE: TyShape = TyShape::Con(BuiltinTag::Connection, &[A]);
+        const TASK_CONNECTION_READONLY: TyShape =
+            TyShape::Con(BuiltinTag::Task, &[CONNECTION_READONLY]);
+        // `open : Dsn -> Task Error (Connection ReadOnly)`.
+        const DSN_TO_TASK_CONN_RO: TyShape = TyShape::Fun(&DSN, &TASK_CONNECTION_READONLY);
+        // `close : Connection a -> Task Error ()`.
+        const CONN_MODE_TO_TASK_UNIT: TyShape = TyShape::Fun(&CONNECTION_MODE, &TASK_UNIT);
+        // `unsafeOpen : Int(driverTag) -> String -> Task Error (Connection ReadOnly)`.
+        const STRING_TO_TASK_CONN_RO: TyShape = TyShape::Fun(&STRING, &TASK_CONNECTION_READONLY);
+        const INT_TO_STRING_TO_TASK_CONN_RO: TyShape = TyShape::Fun(&INT, &STRING_TO_TASK_CONN_RO);
+        // `unsafeExecRawOn : Connection ReadWrite -> String -> Task Error Int`.
+        const STRING_TO_TASK_INT_CONN: TyShape = TyShape::Fun(&STRING, &TASK_INT);
+        const CONN_RW_TO_STRING_TO_TASK_INT: TyShape =
+            TyShape::Fun(&CONNECTION_READWRITE, &STRING_TO_TASK_INT_CONN);
         // Locale.
         const MAYBE_LOCALE: TyShape = TyShape::Con(BuiltinTag::Maybe, &[LOCALE]);
         const STRING_TO_MAYBE_LOCALE: TyShape = TyShape::Fun(&STRING, &MAYBE_LOCALE);
@@ -7555,6 +7632,12 @@ impl StdlibKernel {
                 Some(&DSN_TO_STRING)
             }
 
+            // ── External Connection — read-only-by-type foreign-DB connect. ──
+            Self::DbConnOpen => Some(&DSN_TO_TASK_CONN_RO),
+            Self::DbConnClose => Some(&CONN_MODE_TO_TASK_UNIT),
+            Self::DbConnUnsafeOpen => Some(&INT_TO_STRING_TO_TASK_CONN_RO),
+            Self::DbConnUnsafeExecRawOn => Some(&CONN_RW_TO_STRING_TO_TASK_INT),
+
             // ── Locale. ──
             Self::LocaleFromTag => Some(&STRING_TO_MAYBE_LOCALE),
             Self::LocaleToTag => Some(&LOCALE_TO_STRING),
@@ -8162,7 +8245,15 @@ impl StdlibKernel {
             | Self::WebSocketClose
             | Self::WebSocketCloseWithCode
             | Self::SubSubscribeWebSocket
-            | Self::EmailSend => Some(Capability::Network),
+            | Self::EmailSend
+            // Connecting a `Dsn` to a live EXTERNAL host reaches an arbitrary
+            // network endpoint of the program's choosing — the enforceable egress
+            // axis an OS jail isolates, the same `network` `Http` discloses.
+            // (`database` semantics come from the `Db` module residency; the
+            // capability model tags one enforceable axis per kernel, and the
+            // external act's isolatable resource is the network host.)
+            | Self::DbConnOpen
+            | Self::DbConnUnsafeOpen => Some(Capability::Network),
             Self::SystemCwd
             | Self::SystemLoadEnv
             | Self::FileReadFile
@@ -8223,7 +8314,12 @@ impl StdlibKernel {
             | Self::DbDecRequired
             | Self::DbDecOptional
             | Self::DbDecMoney
-            | Self::DbDecBytes => Some(Capability::Database),
+            | Self::DbDecBytes
+            // Closing an external pool and executing against an already-open one
+            // touch a database but reach no NEW network host — `database`, the
+            // same axis the app-connection query kernels disclose.
+            | Self::DbConnClose
+            | Self::DbConnUnsafeExecRawOn => Some(Capability::Database),
             Self::SystemArgs
             | Self::SystemGetenv
             | Self::SystemGetenvOr

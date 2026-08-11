@@ -1477,6 +1477,22 @@ pub enum IrType {
     /// (a `Dsn` in a Model field is a compile-time rejection, same posture as
     /// `Secret`/`Url`).
     Dsn,
+    // ── Ipe.Db external Connection ──────────────────────────────────────────
+    /// The external-database connection handle `Connection mode`
+    /// (`ipe_runtime::external_conn::ExternalConnection`), distinct from the app's
+    /// `Db`. The phantom access-mode argument (`ReadOnly` / `ReadWrite`) is erased
+    /// here: both modes render to the one concrete runtime type, so there is no
+    /// `dyn` and one concrete pool per position. Minted only by `Db.Dsn.open` /
+    /// `Db.Unsafe.unsafeOpen`; `Clone`; `Debug` redacted; non-serde.
+    Connection,
+    /// The phantom read-only access-mode marker. Never a standalone runtime value
+    /// — it appears only as [`Self::Connection`]'s erased argument. Present in the
+    /// IR only so the read-only-vs-read-write distinction survives to the point the
+    /// argument is dropped; it never renders to a Rust type on its own.
+    ConnReadOnly,
+    /// The phantom mutable access-mode marker. Same erasure as
+    /// [`Self::ConnReadOnly`]; never renders standalone.
+    ConnReadWrite,
     // ── Ipe.Locale ─────────────────────────────────────────────────────────
     /// Opaque validated BCP-47 locale handle (`ipe_runtime::locale::Locale`).
     ///
@@ -1670,6 +1686,11 @@ pub fn ir_type_is_derivable(
         | IrType::Sub(_)
         | IrType::Decoder(_)
         | IrType::Db
+        // External connection handle + its phantom access-mode markers — opaque
+        // runtime types, same posture as `Db` (not derivable, not serde).
+        | IrType::Connection
+        | IrType::ConnReadOnly
+        | IrType::ConnReadWrite
         | IrType::Fun(_, _)
         // The promoted `Arc<dyn Fn>` carrier is `Clone` but still lacks `Debug`
         // and `PartialEq`, so it is exactly as non-derivable as `Fun`.
@@ -1809,6 +1830,11 @@ pub fn ir_type_is_serde(ty: &IrType, enum_serde: &impl Fn(&ModPath, Symbol) -> b
         | IrType::Sub(_)
         | IrType::Decoder(_)
         | IrType::Db
+        // External connection handle + its phantom access-mode markers — opaque
+        // runtime types, same posture as `Db` (not derivable, not serde).
+        | IrType::Connection
+        | IrType::ConnReadOnly
+        | IrType::ConnReadWrite
         | IrType::Fun(_, _)
         // Same family as `Fun` — the `Arc<dyn Fn>` promoted carrier is never serde.
         | IrType::SharedFun(_, _)
@@ -1967,6 +1993,11 @@ pub fn carrier_is_clone(ty: &IrType) -> bool {
         // `Dsn` clones its String fields + `Secret` (a String clone).
         | IrType::Dsn
         | IrType::Db
+        // The external connection wraps `Clone` sqlx pools; the phantom markers
+        // never carry a runtime value but must stay exhaustive.
+        | IrType::Connection
+        | IrType::ConnReadOnly
+        | IrType::ConnReadWrite
         | IrType::ServerRequest
         | IrType::ServerResponse
         | IrType::ServerRoute

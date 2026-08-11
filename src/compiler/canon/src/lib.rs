@@ -2134,6 +2134,13 @@ mod tests {
             ("Db", "unsafeGetInt"),
             ("Db", "unsafeGetBool"),
             ("Db", "unsafeGetField"),
+            // The external-connection raw hatches: canonical `("Db", …)` keys for
+            // the `Ffi.kernel` aliases, surfaced only through `Ipe.Db.Unsafe`.
+            // `unsafeExecRawOn` is the shipped write hatch; `unsafeOpen` is wired
+            // for a deferred surface (its `Driver`-marshalling would otherwise
+            // pull the whole `Ipe.Db.Dsn` module into every raw-SQL program).
+            ("Db", "unsafeExecRawOn"),
+            ("Db", "unsafeOpen"),
             // The un-validated anti-`Sql.column`: canonical `("Sql", …)` key for
             // the alias, surfaced only through `Ipe.Db.Unsafe.unsafeFragment`.
             ("Sql", "unsafeFragment"),

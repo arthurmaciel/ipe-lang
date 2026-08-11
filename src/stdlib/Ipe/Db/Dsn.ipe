@@ -18,6 +18,9 @@ module Ipe.Db.Dsn exposing
     ( Dsn
     , Driver(..)
     , TlsMode(..)
+    , Connection
+    , ReadOnly
+    , ReadWrite
     , parse
     , build
     , driver
@@ -27,12 +30,15 @@ module Ipe.Db.Dsn exposing
     , user
     , tls
     , redacted
+    , open
+    , close
     )
 
 
 import Ipe.Ffi as Ffi
 import Ipe.Error exposing (Error)
 import Ipe.Result as Result
+import Ipe.Task exposing (Task)
 
 
 -- ── Types ─────────────────────────────────────────────────────────────────────
@@ -145,6 +151,35 @@ tls dsn =
 redacted : Dsn -> String
 redacted =
     Ffi.kernel "Db.Dsn_redacted"
+
+
+-- ── Connecting a Dsn — read-only by type ───────────────────────────────────────
+--
+-- `Connection mode` is a live connection to a database the application was NOT
+-- built against. Its phantom `mode` (`ReadOnly` / `ReadWrite`) is the access
+-- posture as a TYPE, not a runtime flag: a mutating kernel requires `Connection
+-- ReadWrite`, so a `Connection ReadOnly` from `open` CANNOT type-check into a
+-- write. The read-only guarantee is a compile error, never a caught runtime `Err`.
+-- The mode is erased at runtime — both are the one concrete connection handle.
+
+
+-- | `open dsn` — connect a parsed `Dsn` to a live, read-only external database.
+-- The `Dsn` arrived through a validating parse, so no unchecked string reaches the
+-- connector. Discloses `network` (it reaches an arbitrary host of the program's
+-- choosing). Fails closed: an unreachable host, a refused connection, or a bad
+-- credential is a typed `Err` that leaks no credential. Writing to the returned
+-- `Connection ReadOnly` is a COMPILE error — request a raw write only through the
+-- explicitly-disclosed `Ipe.Db.Unsafe.unsafeExecRawOn`.
+open : Dsn -> Task Error (Connection ReadOnly)
+open =
+    Ffi.kernel "Db.Dsn_open"
+
+
+-- | `close conn` — return the connection's pool. Total and idempotent over either
+-- access mode; a `Connection` dropped without `close` still releases its pool.
+close : Connection mode -> Task Error ()
+close =
+    Ffi.kernel "Db.Dsn_close"
 
 
 -- ── Tag marshalling (ADT ↔ runtime discriminant) ──────────────────────────────

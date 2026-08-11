@@ -33,10 +33,13 @@ module Ipe.Db.Unsafe exposing
     , unsafeGetBool
     , unsafeGetField
     , unsafeFragment
+    , unsafeExecRawOn
     )
 
 
 import Ipe.Ffi as Ffi
+import Ipe.Error exposing (Error)
+import Ipe.Task exposing (Task)
 
 
 -- | `unsafeExecRaw conn sql` — run verbatim, caller-authored SQL. No validator
@@ -83,3 +86,13 @@ unsafeGetField = Ffi.kernel "Db_unsafeGetField"
 -- or fragment; `Sql.column` is the safe, validated default.
 unsafeFragment : String -> SqlFragment
 unsafeFragment = Ffi.kernel "Sql_unsafeFragment"
+
+
+-- | `unsafeExecRawOn conn sql` — run verbatim, caller-authored SQL against an
+-- external connection. Requires a `Connection ReadWrite`, so a `Connection
+-- ReadOnly` from `Db.Dsn.open` cannot reach it (a compile error, not a runtime
+-- check). The caller owns the injection invariant; `sql` is issued verbatim.
+-- `Connection`/`ReadWrite` are reserved types — this hatch pulls in no other
+-- module, so a raw-SQL program stays lean.
+unsafeExecRawOn : Connection ReadWrite -> String -> Task Error Int
+unsafeExecRawOn = Ffi.kernel "Db_unsafeExecRawOn"

@@ -162,6 +162,9 @@ const TAG_URL: u8 = 62;
 const TAG_LOCALE: u8 = 63;
 const TAG_ROW_GENERIC: u8 = 64;
 const TAG_DSN: u8 = 65;
+const TAG_CONNECTION: u8 = 66;
+const TAG_CONN_READONLY: u8 = 67;
+const TAG_CONN_READWRITE: u8 = 68;
 /// Fuel exhaustion marker — distinct from every variant tag.
 const TAG_FUEL_EXHAUSTED: u8 = 0xFF;
 
@@ -226,6 +229,11 @@ fn hash_ty(ctx: &EmitCtx, ty: &IrType, h: &mut Sha256, fuel: u32) -> DResult<()>
         IrType::Url => h.update([TAG_URL]),
         // `Dsn` — non-serde opaque descriptor; present for exhaustiveness.
         IrType::Dsn => h.update([TAG_DSN]),
+        // External `Connection` + phantom access-mode markers — non-serde opaque
+        // handles; present for exhaustiveness.
+        IrType::Connection => h.update([TAG_CONNECTION]),
+        IrType::ConnReadOnly => h.update([TAG_CONN_READONLY]),
+        IrType::ConnReadWrite => h.update([TAG_CONN_READWRITE]),
         // `Locale` — non-serde opaque handle; present for exhaustiveness.
         IrType::Locale => h.update([TAG_LOCALE]),
 

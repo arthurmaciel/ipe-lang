@@ -2615,6 +2615,11 @@ fn ir_type_contains_non_serde(ty: &IrType) -> bool {
         // `Dsn` carries a `Secret` and is non-serde — a `Dsn` in a HydrationState
         // record is rejected (same posture as `Url`/`Secret`).
         | IrType::Dsn
+        // External `Connection` + phantom markers — opaque non-serde handles,
+        // rejected in a HydrationState record just like `Dsn`.
+        | IrType::Connection
+        | IrType::ConnReadOnly
+        | IrType::ConnReadWrite
         | IrType::SqlFragment
         | IrType::CacheCfg
         | IrType::CacheStats

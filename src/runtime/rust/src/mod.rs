@@ -184,6 +184,14 @@ pub mod db;
 pub mod dsn;
 #[cfg(feature = "db")]
 pub use dsn::*;
+// `external_conn`: the live `Ipe.Db.Connection` to a database the app was not
+// built against, opened from a parsed `Dsn`. Read-only by phantom type; an
+// independent pool of the driver the `Dsn` named. Behind `db` (both sqlx
+// drivers link under `db`, so either external dialect is buildable).
+#[cfg(feature = "db")]
+pub mod external_conn;
+#[cfg(feature = "db")]
+pub use external_conn::*;
 #[cfg(feature = "json")]
 pub mod json;
 #[cfg(feature = "db")]

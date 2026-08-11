@@ -840,6 +840,9 @@ const fn ir_type_display_name(ty: &IrType) -> &'static str {
         IrType::EmailAddress => "EmailAddress",
         IrType::Url => "Url",
         IrType::Dsn => "Dsn",
+        IrType::Connection => "Connection",
+        IrType::ConnReadOnly => "ReadOnly",
+        IrType::ConnReadWrite => "ReadWrite",
         IrType::Locale => "Locale",
     }
 }

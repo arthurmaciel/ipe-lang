@@ -354,6 +354,75 @@ pub fn dsn_build<E: From<String>>(
     })
 }
 
+impl Dsn {
+    /// The driver this descriptor names, for the connect step's dialect
+    /// selection. Crate-internal: only the external-connection module reads it.
+    pub(crate) fn driver(&self) -> DsnDriver {
+        self.driver
+    }
+
+    /// Reconstruct the connection URL the sqlx driver dials, consuming the
+    /// password `Secret` at the point of use (never stored back as plaintext).
+    /// The result is a live credential-bearing string; it is handed straight to
+    /// the sqlx connector and dropped, never logged or returned to Ipê.
+    ///
+    /// For Postgres the TLS posture is folded into an `sslmode` query so the
+    /// parsed secure default (`Require`/`Prefer`) survives the round-trip;
+    /// `Disable` is unrepresentable (the parse/build path rejected it). For
+    /// Sqlite the database field is the file path and `mode=rwc` is appended so a
+    /// missing file is created, matching the app-local opener's behaviour.
+    pub(crate) fn connection_url(&self) -> String {
+        match self.driver {
+            DsnDriver::Sqlite => {
+                if self.database.contains(':') {
+                    self.database.clone()
+                } else {
+                    format!("sqlite://{}?mode=rwc", self.database)
+                }
+            }
+            DsnDriver::Postgres => {
+                let password = crate::secret::secret_reveal(self.password.clone());
+                let sslmode = match self.tls {
+                    TlsMode::Require => "require",
+                    TlsMode::Prefer => "prefer",
+                    // Unreachable: a `Dsn` never carries `Disable`. Fall back to
+                    // the strongest posture rather than emitting a downgrade.
+                    TlsMode::Disable => "require",
+                };
+                let mut url = String::from("postgres://");
+                if !self.user.is_empty() {
+                    url.push_str(
+                        &percent_encoding::utf8_percent_encode(
+                            &self.user,
+                            percent_encoding::NON_ALPHANUMERIC,
+                        )
+                        .to_string(),
+                    );
+                    if !password.is_empty() {
+                        url.push(':');
+                        url.push_str(
+                            &percent_encoding::utf8_percent_encode(
+                                &password,
+                                percent_encoding::NON_ALPHANUMERIC,
+                            )
+                            .to_string(),
+                        );
+                    }
+                    url.push('@');
+                }
+                url.push_str(&self.host);
+                url.push(':');
+                url.push_str(&self.port.to_string());
+                url.push('/');
+                url.push_str(&self.database);
+                url.push_str("?sslmode=");
+                url.push_str(sslmode);
+                url
+            }
+        }
+    }
+}
+
 /// `Ipe.Db.Dsn.driver : Dsn -> Driver` — the driver tag as its discriminant
 /// (`0 = Postgres`, `1 = Sqlite`), which the emitted `Driver` ADT constructor
 /// re-tags. Non-secret; safe to read.
