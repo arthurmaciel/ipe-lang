@@ -27,13 +27,36 @@ slow-timeout = { period = "60s", terminate-after = 10 }
 # starve each other's cold build (read as a spurious teardown/serve-budget
 # timeout) and fight over the shared target's cargo lock. Serializing them makes
 # the cold-build subprocess tests deterministic without loosening any assertion.
+#
+# Also covers `test_command` and `verify` E2E tests: each spawns the `ipe`
+# binary which invokes `cargo build` into the same shared emitted-crate target.
+# Running them concurrently produces "Blocking waiting for file lock" on the
+# cargo target lock, which under the ci profile's 600 s ceiling is a real
+# flake vector rather than a hang. Serializing into this group is exact because
+# the contended resource is identical to the server-e2e group's shared target.
+#
+# `cwd-mutating` (max 1): each member calls `std::env::set_current_dir`, which
+# mutates the process-global working directory. Two such tests running
+# concurrently in the same nextest process interleave their cwd changes —
+# test A sets the cwd to its temp dir, test B immediately overwrites it, test A
+# then calls `default_entry()` which stats files relative to the wrong directory.
+# Serializing them eliminates the race without changing any assertion.
 [test-groups]
 heavy-server-e2e = { max-threads = 1 }
+cwd-mutating = { max-threads = 1 }
 
 [[profile.ci.overrides]]
-filter = 'binary(watch_sigterm) | binary(watch_integration) | binary(server_e2e) | binary(live_e2e) | binary(http_e2e) | binary(webview_e2e)'
+filter = 'binary(watch_sigterm) | binary(watch_integration) | binary(server_e2e) | binary(live_e2e) | binary(http_e2e) | binary(webview_e2e) | binary(test_command) | binary(verify)'
+test-group = 'heavy-server-e2e'
+
+[[profile.ci.overrides]]
+filter = 'binary(build_no_arg) | binary(deploy_subcommand)'
+test-group = 'cwd-mutating'
+
+[[profile.default.overrides]]
+filter = 'binary(watch_sigterm) | binary(watch_integration) | binary(server_e2e) | binary(live_e2e) | binary(http_e2e) | binary(webview_e2e) | binary(test_command) | binary(verify)'
 test-group = 'heavy-server-e2e'
 
 [[profile.default.overrides]]
-filter = 'binary(watch_sigterm) | binary(watch_integration) | binary(server_e2e) | binary(live_e2e) | binary(http_e2e) | binary(webview_e2e)'
-test-group = 'heavy-server-e2e'
+filter = 'binary(build_no_arg) | binary(deploy_subcommand)'
+test-group = 'cwd-mutating'
