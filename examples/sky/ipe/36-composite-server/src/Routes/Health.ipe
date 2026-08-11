@@ -21,6 +21,7 @@ import Ipe.Http.Server as Server
 import Ipe.Http.Server exposing (Request, Response)
 import Ipe.Http.Server.Stream as Stream
 import Ipe.Db as Db
+import Ipe.Db.Unsafe as DbUnsafe
 import Ipe.Cache as Cache
 import Ipe.Csv as Csv
 import Ipe.Log as Log
@@ -107,7 +108,7 @@ handleExport cfg db req =
 
 streamCsv : Db -> AuthClaims -> Task Error Response
 streamCsv db claims =
-    Db.unsafeQuery
+    DbUnsafe.unsafeQuery
         db
         "SELECT id, user_id, text, done, created_at FROM todos WHERE user_id = ? ORDER BY created_at DESC"
         [ String.fromInt claims.userId ]

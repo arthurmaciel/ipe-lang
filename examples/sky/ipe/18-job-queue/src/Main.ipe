@@ -10,6 +10,7 @@ import Ipe.Random as Random
 import Ipe.Crypto as Crypto
 import Ipe.Error as Error exposing (Error)
 import Ipe.Db as Db
+import Ipe.Db.Unsafe as DbUnsafe
 import Ipe.Tea.Web as Live exposing (app, route)
 import Ipe.Html exposing (..)
 import Ipe.Html.Events exposing (onClick)
@@ -155,7 +156,7 @@ saveSnapshot okCount failCount total =
                 "INSERT INTO snapshots (ok, failed, total, ts) VALUES (?, ?, ?, ?)"
                 [ okCount, failCount, total, ts ]
         writeAll db =
-            Db.unsafeExecRaw db createSnapshotTable
+            DbUnsafe.unsafeExecRaw db createSnapshotTable
                 |> Task.andThen (\_ -> Time.now ())
                 |> Task.andThen (\ts -> insertRow db ts)
         successMsg =
@@ -174,12 +175,12 @@ loadHistory : Task Error (List Snapshot)
 loadHistory =
     let
         selectRecent db =
-            Db.unsafeQuery
+            DbUnsafe.unsafeQuery
                 db
                 "SELECT ok, failed, total, ts FROM snapshots ORDER BY ts DESC LIMIT 5"
                 []
         readAll db =
-            Db.unsafeExecRaw db createSnapshotTable
+            DbUnsafe.unsafeExecRaw db createSnapshotTable
                 |> Task.andThen (\_ -> selectRecent db)
     in
         Db.open "sqlite" dbPath |> Task.andThen readAll

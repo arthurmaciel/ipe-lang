@@ -13,3 +13,6 @@ path = "todos.db"
 ["go.dependencies"]
 os = "latest"
 "log/slog" = "latest"
+
+[capabilities]
+declared = ["unsafe"]

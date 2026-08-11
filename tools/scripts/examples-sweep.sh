@@ -48,7 +48,7 @@ source "$(dirname "$0")/lib/mirror.sh"
 
 night_guard "examples-sweep"
 
-if [ -z "$REPO" ] || [ ! -f "$REPO/tools/tools/scripts/examples-sweep.sh" ]; then
+if [ -z "$REPO" ] || [ ! -f "$REPO/tools/scripts/examples-sweep.sh" ]; then
   echo "ERROR: can't locate the repo. cd into it, or set IPE_REPO=/path/to/sky-rust." >&2; exit 2
 fi
 cd "$REPO"
@@ -199,7 +199,7 @@ run_for() {
       if ! command -v "$node_bin" >/dev/null 2>&1; then
         printf 'skip\twasm RUN: node not found (install Node.js)\n'; return 0
       fi
-      local verify_mjs="$REPO/tools/tools/scripts/lib/wasm-verify.mjs"
+      local verify_mjs="$REPO/tools/scripts/lib/wasm-verify.mjs"
       if [ ! -f "$verify_mjs" ]; then
         printf 'skip\twasm RUN: wasm-verify.mjs not found\n'; return 0
       fi

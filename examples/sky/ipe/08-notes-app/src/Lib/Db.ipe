@@ -7,6 +7,7 @@ import Ipe.Task as Task
 import Ipe.Error as Error exposing (Error)
 import Ipe.Io as Io
 import Ipe.Db as Db
+import Ipe.Db.Unsafe as DbUnsafe
 
 
 -- Db.* now returns Task Error a per the effect-boundary doctrine.
@@ -47,7 +48,7 @@ exec queryStr args =
 
 -- query : Result Error (List Row). Same contract as exec.
 query queryStr args =
-    Task.run (Db.unsafeQuery conn queryStr args)
+    Task.run (DbUnsafe.unsafeQuery conn queryStr args)
 
 
 -- Missing columns are a Sky-side schema mismatch, not a runtime error.
