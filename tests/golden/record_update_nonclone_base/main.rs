@@ -219,8 +219,9 @@ pub fn ipe_main() -> IpeTask<()> {
         };
         ({
             let m2 = {
+                let __ipe_upd_0 = 1;
                 let mut __ipe_rec = m;
-                __ipe_rec.count = 1;
+                __ipe_rec.count = __ipe_upd_0;
                 __ipe_rec
             };
             io_println(string_from_int((m2).count))

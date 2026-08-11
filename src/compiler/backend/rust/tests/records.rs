@@ -245,13 +245,16 @@ fn synthesises_struct_literal_access_and_update() -> DResult<()> {
         out.contains("RecXY { x: a, y: 2 }"),
         "record literal not emitted as struct literal:\n{out}"
     );
-    // Update → clone-and-reassign block (no struct name needed).
-    // Rustfmt spreads the block across lines; assert the stable key fragments.
+    // Update → bind-then-move-and-reassign block (no struct name needed).
+    // Each field value binds to a positional temporary BEFORE the base is moved,
+    // so a field value may read the base. Rustfmt spreads the block across lines;
+    // assert the stable key fragments.
     assert!(
-        out.contains("let mut __ipe_rec = (p).clone();")
-            && out.contains("__ipe_rec.x = 5;")
+        out.contains("let __ipe_upd_0 = 5;")
+            && out.contains("let mut __ipe_rec = p;")
+            && out.contains("__ipe_rec.x = __ipe_upd_0;")
             && out.contains("__ipe_rec"),
-        "record update not emitted as clone-and-reassign:\n{out}"
+        "record update not emitted as bind-then-move-and-reassign:\n{out}"
     );
     // Access → parenthesised `.field`.
     assert!(

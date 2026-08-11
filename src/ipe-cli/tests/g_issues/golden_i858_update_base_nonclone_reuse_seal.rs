@@ -15,9 +15,17 @@
 //!
 //! | Fixture | Shape | Outcome |
 //! |---|---|---|
-//! | `update_base_nonclone_reuse` | non-Clone update base + field read of same var | fail-closed IPE-L0135 |
+//! | `update_base_nonclone_reuse` | non-Clone update base + field read of same var OUTSIDE the update | fail-closed IPE-L0135 |
+//! | `update_base_nonclone_field_read` | non-Clone update base whose updated field reads the base (`{ m \| c = m.c + 1 }`) | builds + emitted crate runs |
 //! | `update_base_nonclone_single` | non-Clone update base, single use (last) | builds + emitted crate runs |
 //! | `update_base_clone_reuse` | Clone record, update base + reuse | builds + clones correctly |
+//!
+//! The `field_read` fixture is the functional-update idiom: the base is read
+//! INSIDE the updated field's value and moved as the update base. `emit_update`
+//! binds the field value to a temporary BEFORE moving the base, so the in-field
+//! read observes the base while it is still owned — no use-after-move. Before
+//! that reorder the emit moved the base first, so this fixture was RED at cargo
+//! (E0382) after `ipe` exit 0.
 //!
 //! ```text
 //! # gate check only (fast):
@@ -172,6 +180,31 @@ main =
     bump { job = Task.succeed 7, tag = 3 }
 ";
 
+/// Functional-update idiom on a non-`Clone` record: the updated field's value
+/// reads the base (`{ w | tag = w.tag + 1 }`) and the base is moved by the
+/// update. `emit_update` binds the field value to a temporary BEFORE the move,
+/// so the in-field read is sound. `w` is not used outside the update — linear,
+/// no reject. Must build and run, printing `4` (`tag` 3 → 4).
+const UPDATE_BASE_NONCLONE_FIELD_READ: &str = r"module Main exposing (main)
+
+import Ipe.Io as Io
+import Ipe.String as String
+import Ipe.Task as Task
+
+
+bump : { job : Task Error Int, tag : Int } -> Task Error ()
+bump w =
+    let
+        w2 = { w | tag = w.tag + 1 }
+    in
+    Io.println (String.fromInt w2.tag)
+
+
+main : Task Error ()
+main =
+    bump { job = Task.succeed 7, tag = 3 }
+";
+
 /// Clone-reuse guard: a `Clone` record (`{ x : Int, y : Int }`) whose value
 /// is used as an update base AND read afterwards is sound — the reuse gate
 /// rewrites the base `Var(p)` to `CloneVar(p)` and emits `p.clone()`.
@@ -202,6 +235,15 @@ fn update_base_nonclone_reuse_fails_closed() {
         "update_base_nonclone_reuse",
         UPDATE_BASE_NONCLONE_REUSE,
         ipe_diagnostics::IPE_L0135,
+    );
+}
+
+#[test]
+fn update_base_nonclone_field_reads_base_builds() {
+    assert_accepted(
+        "update_base_nonclone_field_read",
+        UPDATE_BASE_NONCLONE_FIELD_READ,
+        "4",
     );
 }
 

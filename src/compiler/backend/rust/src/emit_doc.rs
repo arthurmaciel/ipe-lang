@@ -331,13 +331,13 @@ pub fn build_doc(
             build_record(ctx, fields, ty.as_ref(), indent, child, generics)
         }
 
-        // A functional record update `{ let mut __ipe_rec = <base>; __ipe_rec.f =
-        // v; … __ipe_rec }`: a statement block that ALWAYS breaks (it holds
-        // statements), each `let`/assignment/tail on its own `HardLine` inside
-        // the sole `Nest(4)`, matching rustfmt. The base and each field value are
-        // built recursively. The base is moved into `__ipe_rec` directly; when it
-        // is a `CloneVar` the lowerer already inserted `.clone()` before this
-        // point, so no outer unconditional clone is needed.
+        // A functional record update `{ let __ipe_upd_i = v; … let mut __ipe_rec
+        // = <base>; __ipe_rec.f = __ipe_upd_i; … __ipe_rec }`: a statement block
+        // that ALWAYS breaks (it holds statements), each `let`/assignment/tail on
+        // its own `HardLine` inside the sole `Nest(4)`, matching rustfmt. Each
+        // field value binds to a temporary BEFORE the base is moved, so a field
+        // value may read the base. The base is moved into `__ipe_rec` directly;
+        // when it is a `CloneVar` the lowerer already inserted `.clone()`.
         Expr::Update { record, fields } => {
             build_update(ctx, record, fields, indent, child, generics)
         }
@@ -1337,10 +1337,12 @@ fn build_record(
 
 /// Build the `Doc` for a functional record update, mirroring
 /// [`crate::emit_expr::emit_update`] token-for-token. The string emitter renders
-/// `{ let mut __ipe_rec = (<record>).clone(); __ipe_rec.f = v; … __ipe_rec }` — a
-/// clone-and-reassign statement block. Since it holds statements, it ALWAYS
-/// breaks: the `let mut` binding, each field assignment, and the `__ipe_rec` tail
-/// each land on their own `HardLine` inside the block's sole `Nest(4)`, matching
+/// `{ let __ipe_upd_0 = v0; … let mut __ipe_rec = <record>; __ipe_rec.f = __ipe_upd_0; … __ipe_rec }`
+/// — each field value is bound to a positional temporary BEFORE the base is
+/// moved, so a field value may read the base (`{ r | count = r.count + 1 }`) on
+/// a non-`Clone` record. Since it holds statements, it ALWAYS breaks: each field
+/// bind, the `let mut` binding, each field assignment, and the `__ipe_rec` tail
+/// land on their own `HardLine` inside the block's sole `Nest(4)`, matching
 /// rustfmt. The base record and each field value are built recursively; their
 /// leaves carry the string emitter's exact tokens, so the SEAL holds.
 fn build_update(
@@ -1351,20 +1353,25 @@ fn build_update(
     child: u16,
     generics: GenericScope,
 ) -> DResult<Doc> {
-    let base_doc = build_doc(ctx, record, indent, child, generics)?;
-    let mut inner = vec![
-        Doc::HardLine,
-        Doc::text("let mut __ipe_rec = "),
-        base_doc,
-        Doc::text(";"),
-    ];
-    for (sym, value) in fields {
-        let field_ident = ctx.emit_ident(*sym)?;
+    let mut inner = Vec::new();
+    for (i, (_sym, value)) in fields.iter().enumerate() {
         let value_doc = build_doc(ctx, value, indent, child, generics)?;
         inner.push(Doc::HardLine);
-        inner.push(Doc::owned(format!("__ipe_rec.{field_ident} = ")));
+        inner.push(Doc::owned(format!("let __ipe_upd_{i} = ")));
         inner.push(value_doc);
         inner.push(Doc::text(";"));
+    }
+    let base_doc = build_doc(ctx, record, indent, child, generics)?;
+    inner.push(Doc::HardLine);
+    inner.push(Doc::text("let mut __ipe_rec = "));
+    inner.push(base_doc);
+    inner.push(Doc::text(";"));
+    for (i, (sym, _value)) in fields.iter().enumerate() {
+        let field_ident = ctx.emit_ident(*sym)?;
+        inner.push(Doc::HardLine);
+        inner.push(Doc::owned(format!(
+            "__ipe_rec.{field_ident} = __ipe_upd_{i};"
+        )));
     }
     inner.push(Doc::HardLine);
     inner.push(Doc::text("__ipe_rec"));
@@ -3522,10 +3529,11 @@ mod tests {
 
     #[test]
     fn update_block_single_field_always_breaks() {
-        // A record update is a clone-and-reassign statement block: `{`, the
-        // `let mut __ipe_rec = (c).clone();`, the `__ipe_rec.a = 9;` assignment, the
-        // `__ipe_rec` tail, `}` — each on its own line. Always breaks. Golden
-        // captured from `rustfmt --edition 2024 --style-edition 2024`.
+        // A record update is a bind-then-reassign statement block: `{`, the field
+        // temporary `let __ipe_upd_0 = 9;`, the `let mut __ipe_rec = c;` base move,
+        // the `__ipe_rec.a = __ipe_upd_0;` assignment, the `__ipe_rec` tail, `}` —
+        // each on its own line. Always breaks. Golden captured from
+        // `rustfmt --edition 2024 --style-edition 2024`.
         let fx = fixture();
         with_ctx(&fx, |ctx| {
             let expr = Expr::Update {
@@ -3533,7 +3541,7 @@ mod tests {
                 fields: vec![(sym(&fx, 0), Expr::Int(9))],
             };
             let got = render_let_stmt(ctx, &expr);
-            let expected = "let z = {\n        let mut __ipe_rec = (c).clone();\n        __ipe_rec.a = 9;\n        __ipe_rec\n    }";
+            let expected = "let z = {\n        let __ipe_upd_0 = 9;\n        let mut __ipe_rec = c;\n        __ipe_rec.a = __ipe_upd_0;\n        __ipe_rec\n    }";
             assert_eq!(
                 got, expected,
                 "\n--- got ---\n{got}\n--- want ---\n{expected}"
@@ -3543,8 +3551,9 @@ mod tests {
 
     #[test]
     fn update_block_multiple_fields_emit_one_assignment_per_line() {
-        // Two reassigned fields → two assignment lines between the `let mut` binding
-        // and the `__ipe_rec` tail. Golden captured from rustfmt.
+        // Two fields → two `let __ipe_upd_i` binds before the base move and two
+        // assignment lines after it, before the `__ipe_rec` tail. Golden captured
+        // from rustfmt.
         let fx = fixture();
         with_ctx(&fx, |ctx| {
             let expr = Expr::Update {
@@ -3552,7 +3561,7 @@ mod tests {
                 fields: vec![(sym(&fx, 0), Expr::Int(9)), (sym(&fx, 1), Expr::Int(8))],
             };
             let got = render_let_stmt(ctx, &expr);
-            let expected = "let z = {\n        let mut __ipe_rec = (c).clone();\n        __ipe_rec.a = 9;\n        __ipe_rec.b = 8;\n        __ipe_rec\n    }";
+            let expected = "let z = {\n        let __ipe_upd_0 = 9;\n        let __ipe_upd_1 = 8;\n        let mut __ipe_rec = c;\n        __ipe_rec.a = __ipe_upd_0;\n        __ipe_rec.b = __ipe_upd_1;\n        __ipe_rec\n    }";
             assert_eq!(
                 got, expected,
                 "\n--- got ---\n{got}\n--- want ---\n{expected}"
