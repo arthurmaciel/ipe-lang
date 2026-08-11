@@ -155,6 +155,14 @@ fn source_display_name_matches_known_exceptions() {
         (DbGetField, "Db.Unsafe.unsafeGetField"),
         (SqlUnsafeFragment, "Db.Unsafe.unsafeFragment"),
         (HtmlScriptNode, "Html.Unsafe.unsafeScript"),
+        // `Cache.*` kernels bind the `*Raw` source functions; `def().name` is
+        // the pure Ipê wrapper, so the display name names the kernel node.
+        (CacheGet, "Cache.getRaw"),
+        (CachePut, "Cache.putRaw"),
+        (CacheRemove, "Cache.removeRaw"),
+        (CacheClear, "Cache.clearRaw"),
+        (CacheSize, "Cache.sizeRaw"),
+        (CacheStats, "Cache.statsRaw"),
     ];
     for &(k, expected) in cases {
         assert_eq!(
@@ -181,6 +189,12 @@ fn source_display_name_default_is_qualifier_dot_name() {
         DbGetField,
         SqlUnsafeFragment,
         HtmlScriptNode,
+        CacheGet,
+        CachePut,
+        CacheRemove,
+        CacheClear,
+        CacheSize,
+        CacheStats,
     ];
     for &k in StdlibKernel::ALL {
         if exceptions.contains(&k) {

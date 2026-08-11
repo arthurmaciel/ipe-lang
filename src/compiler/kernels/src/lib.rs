@@ -5016,6 +5016,16 @@ impl StdlibKernel {
             Self::SqlUnsafeFragment => "Db.Unsafe.unsafeFragment".to_owned(),
             // Relocated into `Ipe.Html.Unsafe` after canon registration.
             Self::HtmlScriptNode => "Html.Unsafe.unsafeScript".to_owned(),
+            // The `Cache.*` kernels are bound to the `*Raw` source functions
+            // (`Ffi.kernel "cache_get"` in `Cache.getRaw`); `def().name` is the
+            // pure Ipê wrapper (`get`), so the display name is spelled out to
+            // name the kernel node, not its wrapper.
+            Self::CacheGet => "Cache.getRaw".to_owned(),
+            Self::CachePut => "Cache.putRaw".to_owned(),
+            Self::CacheRemove => "Cache.removeRaw".to_owned(),
+            Self::CacheClear => "Cache.clearRaw".to_owned(),
+            Self::CacheSize => "Cache.sizeRaw".to_owned(),
+            Self::CacheStats => "Cache.statsRaw".to_owned(),
             // Default: derive from the canonical qualifier + name.
             _ => format!("{}.{}", d.qualifier, d.name),
         }
