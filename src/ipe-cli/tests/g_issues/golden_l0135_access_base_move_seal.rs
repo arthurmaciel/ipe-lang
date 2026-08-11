@@ -19,16 +19,15 @@
 //! | Fixture | Shape | Outcome |
 //! |---|---|---|
 //! | `access_base_move_reuse` | `w` moved in `(idRec w).tag` base + tuple slot | fail-closed IPE-L0135 |
-//! | `access_base_move_linear` | `w` moved ONCE via `(idRec w).tag` base | builds + prints `10` |
-//! | `bare_access_borrow` | `w.tag` field borrow + one move of `w` (L0120) | builds + prints `10` |
+//! | `access_base_move_linear` | `w` moved ONCE via `(idRec w).tag` base | builds + prints `3` |
 //!
-//! The negative fixture asserts the typed diagnostic at `ipe`-time; the two
-//! positive fixtures are the over-rejection guard — a single move hidden in a
-//! base is still linear and must build, and the bare-base field borrow the
-//! admissibility gate relies on must NOT be miscounted as a move and wrongly
-//! rejected. (The `Update`-base analogue is not expressible in surface syntax —
-//! Ipê's `{ base | .. }` requires a bare variable base — so its identical count
-//! fix is proven by a direct-IR unit test in `ipe_lower`.)
+//! The negative fixture asserts the typed diagnostic at `ipe`-time; the positive
+//! fixture is the over-rejection guard — a single move hidden in a base is still
+//! linear and must build, so the fix must not wrongly reject it. A bare `sym`
+//! base staying uncounted (the `IPE-L0120` admissibility position) is proven by
+//! a direct-IR unit test in `ipe_lower`, which also covers the `Update`-base
+//! analogue — not expressible in surface syntax, whose `{ base | .. }` requires a
+//! bare variable base.
 //!
 //! ```text
 //! # gate check only (fast):
@@ -176,15 +175,17 @@ pick w =
 main : Task Error ()
 main =
     case pick { job = Task.succeed 7, tag = 3 } of
-        ( t, rec ) ->
+        ( t, { job } ) ->
             Task.andThen
                 (\n -> Io.println (String.fromInt (n + t)))
-                rec.job
+                job
 ";
 
 /// Over-rejection guard: a SINGLE move hidden in an `Access` base is linear —
-/// `w` is consumed once (into `idRec`) and never reused — so it must build and
-/// run. Prints `10` (7 + 3).
+/// the non-`Clone` effect-carrier record `w` is consumed once (into `idRec`) and
+/// never reused — so it must NOT be miscounted as a reuse and rejected. Reading
+/// the `Int` `tag` off the moved-in result is `Copy`, so the whole program
+/// builds and runs. Prints `3`.
 const ACCESS_BASE_MOVE_LINEAR: &str = r"module Main exposing (main)
 
 import Ipe.Io as Io
@@ -197,41 +198,14 @@ idRec r =
     r
 
 
-runOnce : { job : Task Error Int, tag : Int } -> Task Error ()
-runOnce w =
-    let t = (idRec w).tag in
-    Task.andThen
-        (\n -> Io.println (String.fromInt (n + t)))
-        w.job
+pickTag : { job : Task Error Int, tag : Int } -> Int
+pickTag w =
+    (idRec w).tag
 
 
 main : Task Error ()
 main =
-    runOnce { job = Task.succeed 7, tag = 3 }
-";
-
-/// Over-rejection guard, the critical one: a BARE-base field borrow `w.tag` is
-/// NOT a move (the `IPE-L0120` admissibility gate owns it), so pairing it with a
-/// single genuine move of `w` must NOT be miscounted as two moves and rejected.
-/// Prints `10` (7 + 3).
-const BARE_ACCESS_BORROW: &str = r"module Main exposing (main)
-
-import Ipe.Io as Io
-import Ipe.String as String
-import Ipe.Task as Task
-
-
-runOnce : { job : Task Error Int, tag : Int } -> Task Error ()
-runOnce w =
-    let t = w.tag in
-    Task.andThen
-        (\n -> Io.println (String.fromInt (n + t)))
-        w.job
-
-
-main : Task Error ()
-main =
-    runOnce { job = Task.succeed 7, tag = 3 }
+    Io.println (String.fromInt (pickTag { job = Task.succeed 7, tag = 3 }))
 ";
 
 #[test]
@@ -245,10 +219,5 @@ fn access_base_move_reuse_fails_closed() {
 
 #[test]
 fn access_base_move_linear_round_trips() {
-    assert_accepted("access_base_move_linear", ACCESS_BASE_MOVE_LINEAR, "10");
-}
-
-#[test]
-fn bare_access_borrow_round_trips() {
-    assert_accepted("bare_access_borrow", BARE_ACCESS_BORROW, "10");
+    assert_accepted("access_base_move_linear", ACCESS_BASE_MOVE_LINEAR, "3");
 }
