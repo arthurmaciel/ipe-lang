@@ -134,3 +134,78 @@ fn every_declared_runtime_symbol_is_defined_in_its_module() {
         undefined.join("\n")
     );
 }
+
+/// `source_display_name` is the SSOT for the user-facing qualified source name
+/// used in diagnostics and IR pretty-printing. The default formula is
+/// `"{qualifier}.{name}"` from `def()`; the exception cases here are the
+/// kernels whose display path differs from the canon-resolution qualifier (e.g.
+/// kernels relocated into `Unsafe` sub-modules after the canon entry was
+/// registered). Pin them so a rename of the exception match in `lib.rs` does
+/// not silently change what a user sees in a diagnostic.
+#[test]
+fn source_display_name_matches_known_exceptions() {
+    use StdlibKernel::*;
+    let cases: &[(StdlibKernel, &str)] = &[
+        (ResultOkDefault, "Result.Ok"),
+        (DbExecRaw, "Db.Unsafe.unsafeExecRaw"),
+        (DbQuery, "Db.Unsafe.unsafeQuery"),
+        (DbGetString, "Db.Unsafe.unsafeGetString"),
+        (DbGetInt, "Db.Unsafe.unsafeGetInt"),
+        (DbGetBool, "Db.Unsafe.unsafeGetBool"),
+        (DbGetField, "Db.Unsafe.unsafeGetField"),
+        (SqlUnsafeFragment, "Db.Unsafe.unsafeFragment"),
+        (HtmlScriptNode, "Html.Unsafe.unsafeScript"),
+        // `Cache.*` kernels bind the `*Raw` source functions; `def().name` is
+        // the pure Ipê wrapper, so the display name names the kernel node.
+        (CacheGet, "Cache.getRaw"),
+        (CachePut, "Cache.putRaw"),
+        (CacheRemove, "Cache.removeRaw"),
+        (CacheClear, "Cache.clearRaw"),
+        (CacheSize, "Cache.sizeRaw"),
+        (CacheStats, "Cache.statsRaw"),
+    ];
+    for &(k, expected) in cases {
+        assert_eq!(
+            k.source_display_name(),
+            expected,
+            "{k:?}: source_display_name mismatch"
+        );
+    }
+}
+
+/// For every kernel NOT in the exception set, `source_display_name` equals
+/// `"{qualifier}.{name}"` derived from `def()`. This guards the default arm
+/// of the match in `source_display_name`.
+#[test]
+fn source_display_name_default_is_qualifier_dot_name() {
+    use StdlibKernel::*;
+    let exceptions = [
+        ResultOkDefault,
+        DbExecRaw,
+        DbQuery,
+        DbGetString,
+        DbGetInt,
+        DbGetBool,
+        DbGetField,
+        SqlUnsafeFragment,
+        HtmlScriptNode,
+        CacheGet,
+        CachePut,
+        CacheRemove,
+        CacheClear,
+        CacheSize,
+        CacheStats,
+    ];
+    for &k in StdlibKernel::ALL {
+        if exceptions.contains(&k) {
+            continue;
+        }
+        let def = k.def();
+        let expected = format!("{}.{}", def.qualifier, def.name);
+        assert_eq!(
+            k.source_display_name(),
+            expected,
+            "{k:?}: source_display_name should be qualifier.name for non-exception kernels"
+        );
+    }
+}
