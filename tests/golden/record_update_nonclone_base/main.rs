@@ -30,17 +30,16 @@ type IpeString = String;
 // USER TYPES
 // ===========================================
 
-#[derive(Clone, Debug, PartialEq)]
-pub struct RecXY {
-    x: i64,
-    y: i64,
+pub struct RecActionCount {
+    action: IpeTask<()>,
+    count: i64,
 }
-impl IpeStringify for RecXY {
+impl IpeStringify for RecActionCount {
     fn ipe_show(&self) -> String {
         format!(
             "{{{} {}}}",
-            (&ipe_runtime::stringify::Wrap(&self.x)).dispatch(),
-            (&ipe_runtime::stringify::Wrap(&self.y)).dispatch()
+            "<fn>",
+            (&ipe_runtime::stringify::Wrap(&self.count)).dispatch()
         )
     }
 }
@@ -214,15 +213,18 @@ pub fn file_rename(src: ipe_runtime::path::Path, dst: ipe_runtime::path::Path) -
 pub fn ipe_main() -> IpeTask<()> {
     let _ipe_recursion_guard = crate::recursion_guard();
     ({
-        let p = RecXY { x: 1, y: 2 };
+        let m = RecActionCount {
+            action: io_println("hello".to_string()),
+            count: 0,
+        };
         ({
-            let q = {
-                let __ipe_upd_0 = 41;
-                let mut __ipe_rec = p.clone();
-                __ipe_rec.x = __ipe_upd_0;
+            let m2 = {
+                let __ipe_upd_0 = 1;
+                let mut __ipe_rec = m;
+                __ipe_rec.count = __ipe_upd_0;
                 __ipe_rec
             };
-            io_println(string_from_int(((q).x + (p).y)))
+            io_println(string_from_int((m2).count))
         })
     })
 }

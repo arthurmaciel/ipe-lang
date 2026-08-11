@@ -1,0 +1,21 @@
+module Main exposing (main)
+import Ipe.Io as Io
+import Ipe.String as String
+
+-- A record whose `action` field carries a Task (non-Clone).
+-- The general update `{ m | count = 1 }` must not unconditionally clone the
+-- base; Task does not implement Clone, so an unconditional clone causes
+-- cargo E0599.  `m` is used exactly once (the base); the lowerer produces a
+-- bare `Var(m)` which emit_update must move directly into `__ipe_rec`.
+
+type alias Model =
+    { count : Int
+    , action : Task ()
+    }
+
+main =
+    let
+        m = { count = 0, action = Io.println "hello" }
+        m2 = { m | count = 1 }
+    in
+    Io.println (String.fromInt m2.count)

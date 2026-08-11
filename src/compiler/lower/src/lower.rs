@@ -4819,14 +4819,13 @@ fn count_var_uses(sym: Symbol, expr: &Expr) -> usize {
             count_var_uses(sym, list)
         }
         Expr::Record { fields, .. } => fields.iter().map(|(_, e)| count_var_uses(sym, e)).sum(),
-        // `Update.record` — `emit_update` wraps it as `(record).clone()`, which
-        // BORROWS the record (`.clone()` takes `&self`).  `sym` is NOT moved by
-        // the base position, but the base IS a textual OCCURRENCE of `sym` that
-        // reads it.  We MUST count it (exactly like `Expr::Access` below) so the
-        // "last use → bare move" optimisation never fires on an EARLIER consuming
-        // use while a later borrow of `sym` (this base) still needs it alive.
-        // Counting the base keeps last-counted == last-textual, preserving
-        // soundness (E0382 otherwise — a bare move ordered before this borrow).
+        // `Update.record` — `emit_update` emits the base as-is: a `Var` is
+        // moved into `__ipe_rec` (single use, last); a `CloneVar` is cloned by
+        // `emit_expr_at`.  Either way the base IS a textual OCCURRENCE of `sym`.
+        // We MUST count it (like `Expr::Access`) so the "last use → bare move"
+        // optimisation never fires on an EARLIER consuming use while a later
+        // base-position still needs `sym` alive.  Counting keeps last-counted
+        // == last-textual, preserving soundness.
         Expr::Update { record, fields } => {
             count_var_uses(sym, record)
                 + fields
@@ -6161,17 +6160,22 @@ fn reject_fn_value_reuse(
 }
 
 /// Count the number of times `sym` is genuinely CONSUMED (moved, in emitted
-/// Rust) by `expr`, treating the borrow positions as non-consuming.
+/// Rust) by `expr`, treating borrow positions as non-consuming.
 ///
 /// [`count_var_uses`] counts every textual occurrence (including a field
-/// [`Expr::Access`], whose `(record).field.clone()` BORROWS the record, and an
-/// [`Expr::Update`] base, whose `(record).clone()` also borrows) so the last-use
-/// clone rewrite keeps a later borrow alive. The reuse REJECT gates need the
-/// opposite: only a genuine second move double-moves a non-`Clone` value, so a
-/// borrow-only re-read is not a reuse. Excluding those two positions lets the
-/// more specific app-shape admissibility gate (`InadmissibleAppModel`,
-/// `IPE-L0120`) own an `update model`'s field read + record update, rather than
-/// this coarser reuse gate preempting it.
+/// [`Expr::Access`], whose `(record).field.clone()` BORROWS the record) so the
+/// last-use clone rewrite keeps a later borrow alive. The reuse REJECT gates
+/// need the opposite: only a genuine second move double-moves a non-`Clone`
+/// value, so a borrow-only re-read is not a reuse.
+///
+/// `Expr::Access`: a bare `sym` base is a field BORROW — excluded (0) —
+/// deferring to the `IPE-L0120` admissibility gate for the `update model`
+/// app-shape. Only a compound base (`(mk sym).field`) moves `sym` and counts.
+///
+/// `Expr::Update`: the emitted `let mut __ipe_rec = <base>;` MOVES the base,
+/// so a bare `sym` update base IS a genuine consume (1). A compound base
+/// (`{ (mk sym) | .. }`) also moves `sym` and counts via the full recursive
+/// scan.
 fn count_value_consumes(sym: Symbol, expr: &Expr) -> usize {
     match expr {
         Expr::Var(s) | Expr::CloneVar(s) => usize::from(*s == sym),
@@ -6245,14 +6249,12 @@ fn count_value_consumes(sym: Symbol, expr: &Expr) -> usize {
             .iter()
             .map(|(_, e)| count_value_consumes(sym, e))
             .sum(),
-        // An `Update` base emits `(record).clone()`, which BORROWS a bare
-        // `sym` base rather than moving it — that borrow-only field position is
-        // left to the more specific admissibility gate (`IPE-L0120`). But a
-        // COMPOUND base (`{ (mk sym) | .. }`) moves `sym` into its
-        // sub-expression, a genuine consume that must count, so the base is
-        // scanned unless it is exactly a bare `Var(sym)`/`CloneVar(sym)`.
+        // An `Update` base emits `let mut __ipe_rec = <base>;`, which MOVES
+        // the base, so a bare `sym` base is a genuine consume (counted in
+        // full). A compound base (`{ (mk sym) | .. }`) also moves `sym` into
+        // its sub-expression and counts via the recursive scan.
         Expr::Update { record, fields } => {
-            base_move_consumes(sym, record)
+            count_value_consumes(sym, record)
                 + fields
                     .iter()
                     .map(|(_, e)| count_value_consumes(sym, e))
@@ -6286,18 +6288,241 @@ fn count_value_consumes(sym: Symbol, expr: &Expr) -> usize {
     }
 }
 
-/// Consumes of `sym` inside an `Access`/`Update` record BASE.
+/// Consumes of `sym` inside an `Access` record BASE.
 ///
-/// A bare `sym` base (`sym.field`, `{ sym | .. }`) is a field BORROW — the
-/// emitted `(record).field` / `(record).clone()` takes `&record` — so it is not
-/// a consume and is deferred to the `IPE-L0120` admissibility gate. Any other
-/// base is a compound expression that MOVES `sym` into a sub-expression (e.g.
-/// `(mk sym).field`), a genuine consume counted in full.
+/// A bare `sym` base (`sym.field`) is a field BORROW — the emitted
+/// `(record).field.clone()` takes `&record` — so it is not a consume and is
+/// deferred to the `IPE-L0120` admissibility gate. Any other base is a compound
+/// expression that MOVES `sym` into a sub-expression (e.g. `(mk sym).field`), a
+/// genuine consume counted in full.
+///
+/// Note: `Expr::Update` does NOT use this helper — the emitted
+/// `let mut __ipe_rec = <base>;` MOVES the base unconditionally, so a bare
+/// `sym` update base counts as 1 via the standard recursive scan in
+/// [`count_value_consumes`].
 fn base_move_consumes(sym: Symbol, record: &Expr) -> usize {
     if matches!(record, Expr::Var(s) | Expr::CloneVar(s) if *s == sym) {
         0
     } else {
         count_value_consumes(sym, record)
+    }
+}
+
+/// Returns `true` if `sym` appears as a bare `Var(sym)` record-update base
+/// anywhere in `expr`. An `Expr::Update { record: Var(sym), .. }` emits
+/// `let mut __ipe_rec = sym;` which MOVES `sym`. Used by
+/// [`reject_nonclone_value_reuse`] as a prerequisite for the update-base
+/// use-after-move check.
+fn sym_is_bare_update_base(sym: Symbol, expr: &Expr) -> bool {
+    match expr {
+        Expr::Update { record, fields } => {
+            matches!(record.as_ref(), Expr::Var(s) if *s == sym)
+                || fields.iter().any(|(_, e)| sym_is_bare_update_base(sym, e))
+        }
+        Expr::Let { name, value, body } => {
+            sym_is_bare_update_base(sym, value)
+                || (*name != sym && sym_is_bare_update_base(sym, body))
+        }
+        Expr::Destructure {
+            binder,
+            value,
+            body,
+        } => {
+            sym_is_bare_update_base(sym, value)
+                || (!pat_binds_symbol(binder, sym) && sym_is_bare_update_base(sym, body))
+        }
+        Expr::If { cond, then_, else_ } => {
+            sym_is_bare_update_base(sym, cond)
+                || sym_is_bare_update_base(sym, then_)
+                || sym_is_bare_update_base(sym, else_)
+        }
+        Expr::Match(m) => {
+            sym_is_bare_update_base(sym, m.scrutinee())
+                || m.arms().iter().any(|arm| {
+                    !pat_binds_symbol(&arm.pat, sym) && sym_is_bare_update_base(sym, &arm.body)
+                })
+        }
+        Expr::BinOp { lhs, rhs, .. } => {
+            sym_is_bare_update_base(sym, lhs) || sym_is_bare_update_base(sym, rhs)
+        }
+        Expr::Call { args, .. } => args.iter().any(|a| sym_is_bare_update_base(sym, a)),
+        Expr::Apply { func, args } => {
+            sym_is_bare_update_base(sym, func)
+                || args.iter().any(|a| sym_is_bare_update_base(sym, a))
+        }
+        Expr::Tuple(items) | Expr::List { items, .. } => {
+            items.iter().any(|e| sym_is_bare_update_base(sym, e))
+        }
+        Expr::Cons { head, tail } => {
+            sym_is_bare_update_base(sym, head) || sym_is_bare_update_base(sym, tail)
+        }
+        Expr::ListIndexClone { list, .. } | Expr::ListLenCheck { list, .. } => {
+            sym_is_bare_update_base(sym, list)
+        }
+        Expr::Record { fields, .. } => fields.iter().any(|(_, e)| sym_is_bare_update_base(sym, e)),
+        Expr::Access { record, .. } => sym_is_bare_update_base(sym, record),
+        Expr::Ctor { args, .. } => args.iter().any(|a| sym_is_bare_update_base(sym, a)),
+        Expr::TaskSeq { effect, rest } => {
+            sym_is_bare_update_base(sym, effect) || sym_is_bare_update_base(sym, rest)
+        }
+        Expr::TailLoop { params, body } => {
+            !params.iter().any(|(s, _)| *s == sym) && sym_is_bare_update_base(sym, body)
+        }
+        Expr::TailRecur { args } => args.iter().any(|a| sym_is_bare_update_base(sym, a)),
+        Expr::Lambda { body, .. } | Expr::SharedLambda { body, .. } => {
+            sym_is_bare_update_base(sym, body)
+        }
+        Expr::Var(_)
+        | Expr::CloneVar(_)
+        | Expr::Int(_)
+        | Expr::Bool(_)
+        | Expr::Float(_)
+        | Expr::Str(_)
+        | Expr::PathLit(_)
+        | Expr::Char(_)
+        | Expr::Unit
+        | Expr::FuncValue { .. } => false,
+    }
+}
+
+/// Count uses of `sym` in `expr`, treating a bare `Var(sym)` record-update
+/// base as exactly 1 (the move) and NOT counting any `sym` appearances inside
+/// that same update's field values.
+///
+/// This is a refinement of [`count_var_uses`] used by the update-base reuse
+/// check in [`reject_nonclone_value_reuse`]. The distinction matters for the
+/// functional-update idiom `{ record | f = record.field + 1 }`: the bare base
+/// is a move (counted as 1), but `record.field` inside the field expression is
+/// NOT a competing use — `emit_update` binds each field value to a temporary
+/// BEFORE moving the base, so the in-field read observes `sym` while it is still
+/// owned. Only reads of `sym` OUTSIDE the update expression — in the body of a
+/// `let` or any peer expression — ARE counted, because those alone are
+/// use-after-move in emitted Rust.
+///
+/// For an `Access` base (`sym.field`), no special treatment is needed — the
+/// borrow-only position is counted by `count_var_uses` exactly as before.
+#[allow(clippy::too_many_lines)] // one arm per Expr variant; exhaustive by design
+fn count_var_uses_update_aware(sym: Symbol, expr: &Expr) -> usize {
+    match expr {
+        Expr::Var(s) | Expr::CloneVar(s) => usize::from(*s == sym),
+        Expr::Lambda { body, .. } | Expr::SharedLambda { body, .. } => {
+            usize::from(lambda_body_refs_sym(sym, body))
+        }
+        Expr::Let { name, value, body } => {
+            let in_value = count_var_uses_update_aware(sym, value);
+            let in_body = if *name == sym {
+                0
+            } else {
+                count_var_uses_update_aware(sym, body)
+            };
+            in_value + in_body
+        }
+        Expr::Destructure {
+            binder,
+            value,
+            body,
+        } => {
+            let in_value = count_var_uses_update_aware(sym, value);
+            let in_body = if pat_binds_symbol(binder, sym) {
+                0
+            } else {
+                count_var_uses_update_aware(sym, body)
+            };
+            in_value + in_body
+        }
+        Expr::If { cond, then_, else_ } => {
+            count_var_uses_update_aware(sym, cond)
+                + count_var_uses_update_aware(sym, then_)
+                    .max(count_var_uses_update_aware(sym, else_))
+        }
+        Expr::Match(m) => {
+            let in_scrut = count_var_uses_update_aware(sym, m.scrutinee());
+            let arm_max = m
+                .arms()
+                .iter()
+                .map(|arm| {
+                    if pat_binds_symbol(&arm.pat, sym) {
+                        0
+                    } else {
+                        count_var_uses_update_aware(sym, &arm.body)
+                    }
+                })
+                .max()
+                .unwrap_or(0);
+            in_scrut + arm_max
+        }
+        Expr::BinOp { lhs, rhs, .. } => {
+            count_var_uses_update_aware(sym, lhs) + count_var_uses_update_aware(sym, rhs)
+        }
+        Expr::Call { args, .. } => args
+            .iter()
+            .map(|a| count_var_uses_update_aware(sym, a))
+            .sum(),
+        Expr::Apply { func, args } => {
+            count_var_uses_update_aware(sym, func)
+                + args
+                    .iter()
+                    .map(|a| count_var_uses_update_aware(sym, a))
+                    .sum::<usize>()
+        }
+        Expr::Tuple(items) | Expr::List { items, .. } => items
+            .iter()
+            .map(|e| count_var_uses_update_aware(sym, e))
+            .sum(),
+        Expr::Cons { head, tail } => {
+            count_var_uses_update_aware(sym, head) + count_var_uses_update_aware(sym, tail)
+        }
+        Expr::ListIndexClone { list, .. } | Expr::ListLenCheck { list, .. } => {
+            count_var_uses_update_aware(sym, list)
+        }
+        Expr::Record { fields, .. } => fields
+            .iter()
+            .map(|(_, e)| count_var_uses_update_aware(sym, e))
+            .sum(),
+        // If this Update has a bare `Var(sym)` base, count the base as 1 (the
+        // move) but do NOT count sym inside the field expressions — those reads
+        // observe sym while it is still owned (each field value binds to a
+        // temporary before the base move), so they are not a competing use.
+        // Reads of sym OUTSIDE the update (in a let body, a peer argument, etc.)
+        // are counted via the recursive calls in the other arms.
+        Expr::Update { record, fields } => {
+            if matches!(record.as_ref(), Expr::Var(s) if *s == sym) {
+                1 // only the move; in-field reads of sym read before the move
+            } else {
+                count_var_uses_update_aware(sym, record)
+                    + fields
+                        .iter()
+                        .map(|(_, e)| count_var_uses_update_aware(sym, e))
+                        .sum::<usize>()
+            }
+        }
+        Expr::Ctor { args, .. } => args
+            .iter()
+            .map(|a| count_var_uses_update_aware(sym, a))
+            .sum(),
+        Expr::TaskSeq { effect, rest } => {
+            count_var_uses_update_aware(sym, effect) + count_var_uses_update_aware(sym, rest)
+        }
+        Expr::TailLoop { params, body } => {
+            if params.iter().any(|(s, _)| *s == sym) {
+                0
+            } else {
+                count_var_uses_update_aware(sym, body)
+            }
+        }
+        Expr::TailRecur { args } => args
+            .iter()
+            .map(|a| count_var_uses_update_aware(sym, a))
+            .sum(),
+        Expr::Access { record, .. } => count_var_uses_update_aware(sym, record),
+        Expr::Int(_)
+        | Expr::Bool(_)
+        | Expr::Float(_)
+        | Expr::Str(_)
+        | Expr::PathLit(_)
+        | Expr::Char(_)
+        | Expr::Unit
+        | Expr::FuncValue { .. } => 0,
     }
 }
 
@@ -6317,10 +6542,13 @@ fn base_move_consumes(sym: Symbol, record: &Expr) -> usize {
 /// non-`Clone`-reuse gate for the effect-carrier payload those two do not cover.
 /// A bare/composite `Generic`/`RowGeneric` is out of scope — its emitted
 /// `T: Clone` / `R: … + Clone` witness bound makes an inserted `.clone()` sound,
-/// so it routes through the multi-use clone rewrite, never here. Consumption is
-/// counted by [`count_value_consumes`] (borrow-only re-reads excluded), so an app
-/// `update model`'s field read + record update stays owned by the more specific
-/// admissibility gate.
+/// so it routes through the multi-use clone rewrite, never here.
+///
+/// Two rejection conditions:
+/// - Two or more genuine moves (`count_value_consumes > 1`): double-move in emitted Rust.
+/// - One genuine move via a bare `Var` record-update base AND any other use of `sym`
+///   (even a borrow-only `Access` read): the update emits `let mut __ipe_rec = sym;`
+///   which moves `sym`; any subsequent read is a use-after-move (E0382).
 ///
 /// PARAM-scoped: invoked only from [`apply_param_move_ownership`], never for a
 /// `let`/`Destructure` binding. A `let`-bound effect value IS rescued — the
@@ -6341,7 +6569,23 @@ fn reject_nonclone_value_reuse(
     {
         return Ok(());
     }
-    if count_value_consumes(sym, body) > 1 {
+    let consumes = count_value_consumes(sym, body);
+    if consumes > 1 {
+        return Err(unsupported(span, Feature::NonCloneValueReuse));
+    }
+    // A single consume that is a bare `Var` update base, combined with any use
+    // of `sym` OUTSIDE that update expression (in the let-body or a peer
+    // expression), is a use-after-move: the emitted `let mut __ipe_rec = sym;`
+    // moves sym, so a read of sym anywhere after that block is E0382 in Rust.
+    // Uses of sym INSIDE the update's own field values (e.g. `{ m | f = m.x }`)
+    // are NOT reuse: `emit_update` binds each field value to a temporary BEFORE
+    // moving the base, so the in-field read observes sym while it is still owned.
+    // `count_var_uses_update_aware` therefore counts only uses outside the
+    // update; more than one total (the base move plus an outside read) rejects.
+    if consumes == 1
+        && sym_is_bare_update_base(sym, body)
+        && count_var_uses_update_aware(sym, body) > 1
+    {
         return Err(unsupported(span, Feature::NonCloneValueReuse));
     }
     Ok(())
@@ -7196,27 +7440,22 @@ fn rewrite_multiuse_clones(sym: Symbol, remaining: &mut usize, expr: Expr) -> Ex
             field,
             field_ty,
         },
-        // `Update.record` is always wrapped in `(record).clone()` by `emit_update`
-        // (a borrow via `Clone::clone(&self)`), so the base never MOVES `sym`.
-        // We still recurse into `record` (like `Expr::Access`) so the shared
-        // `remaining` counter advances through this occurrence — `count_var_uses`
-        // now counts it.  Whether the base lands as `Var` (last, stays bare — the
-        // borrow keeps `sym` alive) or `CloneVar` (non-last) is immaterial to the
-        // base's own soundness; recursing simply keeps last-counted aligned with
-        // last-textual so an EARLIER consuming use is not spuriously made bare.
+        // `Update.record` — `emit_update` binds each field value to a temporary
+        // FIRST, then moves (or clones, for `CloneVar`) the base into
+        // `__ipe_rec`.  We recurse so `remaining` advances through every
+        // occurrence, keeping last-counted == last-textual.
         //
-        // NOTE ordering: `record` is the FIRST-emitted subexpression of an Update
-        // (`(base).clone()` precedes the field assignments), so it must be
-        // rewritten BEFORE the field values to match DFS/emit order.
+        // NOTE ordering: the field values are the first-emitted subexpressions
+        // (`let __ipe_upd_i = <value>;` precedes `let mut __ipe_rec = <base>;`),
+        // so they must be rewritten BEFORE the record base to match emit order —
+        // the last-emitted occurrence is the one left bare.
         Expr::Update { record, fields } => {
+            let fields = fields
+                .into_iter()
+                .map(|(k, v)| (k, rewrite_multiuse_clones(sym, remaining, v)))
+                .collect();
             let record = Box::new(rewrite_multiuse_clones(sym, remaining, *record));
-            Expr::Update {
-                record,
-                fields: fields
-                    .into_iter()
-                    .map(|(k, v)| (k, rewrite_multiuse_clones(sym, remaining, v)))
-                    .collect(),
-            }
+            Expr::Update { record, fields }
         }
         Expr::Ctor {
             home,
@@ -22339,6 +22578,8 @@ mod tests {
         let main = interner.intern("Main").expect("intern");
         let wrap = interner.intern("Wrap").expect("intern");
         let sym = interner.intern("w").expect("intern");
+        let tag = interner.intern("tag").expect("intern");
+        let w2 = interner.intern("w2").expect("intern");
         let span = Span::DUMMY;
         let transparent = BTreeSet::new();
         let env = CloneEnv {
@@ -22380,15 +22621,53 @@ mod tests {
 
         // A `Clone` payload reused twice is NOT this gate's concern.
         assert!(reject_nonclone_value_reuse(env, sym, &wrap_int, &reused, span).is_ok());
+
+        // Update-base move + Access read: `let w2 = {sym|tag=1} in sym.tag`
+        // The update MOVES sym (emits `let mut __ipe_rec = sym;`), then the
+        // Access reads sym — use-after-move. Must reject.
+        let update_then_read = Expr::Let {
+            name: w2,
+            value: Box::new(Expr::Update {
+                record: Box::new(Expr::Var(sym)),
+                fields: vec![(tag, Expr::Int(1))],
+            }),
+            body: Box::new(Expr::Access {
+                record: Box::new(Expr::Var(sym)),
+                field: tag,
+                field_ty: IrType::Int,
+            }),
+        };
+        let err2 = reject_nonclone_value_reuse(env, sym, &wrap_task, &update_then_read, span)
+            .expect_err("update-base move + access read must be rejected");
+        assert_eq!(err2, unsupported(span, Feature::NonCloneValueReuse));
+
+        // Update-base as the ONLY use: `let w2 = {sym|tag=1} in w2.tag`
+        // sym is moved once (into the update), then w2 (not sym) is read. Accepted.
+        let update_linear = Expr::Let {
+            name: w2,
+            value: Box::new(Expr::Update {
+                record: Box::new(Expr::Var(sym)),
+                fields: vec![(tag, Expr::Int(1))],
+            }),
+            body: Box::new(Expr::Access {
+                record: Box::new(Expr::Var(w2)),
+                field: tag,
+                field_ty: IrType::Int,
+            }),
+        };
+        assert!(
+            reject_nonclone_value_reuse(env, sym, &wrap_task, &update_linear, span).is_ok(),
+            "update-base linear use must be accepted"
+        );
     }
 
     /// A reuse HIDDEN inside an `Access`/`Update` record base must not slip past
     /// the reuse gates. The two counters treat a BARE base differently by design:
     ///
-    /// * [`count_value_consumes`] (IPE-L0135) skips a bare `sym` base — a field
-    ///   BORROW the `IPE-L0120` admissibility gate owns — but counts a genuine
-    ///   move inside a COMPOUND base (`(mk sym).field`), the hole that let a
-    ///   once-in-a-base + once-elsewhere reuse pass and cargo-fail E0382.
+    /// * [`count_value_consumes`] (IPE-L0135): bare `Access` base is a field
+    ///   BORROW — excluded (0) — owned by `IPE-L0120`. Bare `Update` base is a
+    ///   MOVE (`let mut __ipe_rec = <base>;`) — counted (1). Compound bases
+    ///   of either kind move `sym` into a sub-expression and count fully.
     /// * [`count_fn_value_uses`] (IPE-L0127) counts EVERY base read: a second
     ///   read of a `Box`-carried fn value cannot be served from a borrow, so a
     ///   bare `sym.field` on a fn-carrying record is already a consuming use.
@@ -22419,12 +22698,15 @@ mod tests {
             fields: vec![(tag, Expr::Int(9))],
         };
 
-        // Bare base `w.tag` / `{ w | tag = 9 }`: a field borrow the effect-carrier
-        // gate defers to IPE-L0120 (0), but a genuine read the fn-value gate
-        // counts (1) — a `Box`-carried fn cannot be re-read from a borrow.
+        // Bare Access base `w.tag`: a field BORROW — effect-carrier gate defers
+        // to IPE-L0120 (0); fn-value gate counts (1) since a Box-fn cannot be
+        // re-read from a borrow.
         assert_eq!(count_value_consumes(w, &access_over(Expr::Var(w))), 0);
-        assert_eq!(count_value_consumes(w, &update_over(Expr::Var(w))), 0);
         assert_eq!(count_fn_value_uses(w, &access_over(Expr::Var(w))), 1);
+
+        // Bare Update base `{ w | tag = 9 }`: a MOVE (`let mut __ipe_rec = w;`)
+        // — effect-carrier gate counts (1); fn-value gate also counts (1).
+        assert_eq!(count_value_consumes(w, &update_over(Expr::Var(w))), 1);
         assert_eq!(count_fn_value_uses(w, &update_over(Expr::Var(w))), 1);
 
         // Compound base `(mk w).tag` / `{ mk w | tag = 9 }`: a move of `w`, counted
@@ -22434,7 +22716,7 @@ mod tests {
         assert_eq!(count_fn_value_uses(w, &access_over(compound_base())), 1);
         assert_eq!(count_fn_value_uses(w, &update_over(compound_base())), 1);
 
-        // The effect-carrier repro `((mk w).tag, w)`: compound base move + tuple
+        // Access compound-base repro `((mk w).tag, w)`: compound base move + tuple
         // slot = 2, the reuse IPE-L0135 must reject. `((mk other).tag, w)` moves
         // `w` once.
         let reuse = Expr::Tuple(vec![access_over(compound_base()), Expr::Var(w)]);
@@ -22445,6 +22727,11 @@ mod tests {
         };
         let linear = Expr::Tuple(vec![access_over(unrelated_base), Expr::Var(w)]);
         assert_eq!(count_value_consumes(w, &linear), 1);
+
+        // Update bare-base repro `({ w | tag = 9 }, w)`: bare Update base (1)
+        // + tuple slot (1) = 2, the reuse IPE-L0135 must reject.
+        let update_reuse = Expr::Tuple(vec![update_over(Expr::Var(w)), Expr::Var(w)]);
+        assert_eq!(count_value_consumes(w, &update_reuse), 2);
 
         // The fn-value analogue `c.f 1 + c.f 2`: two bare-base reads = 2, the
         // reuse IPE-L0127 must reject (a bare base is a genuine fn read here).

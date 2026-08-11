@@ -1,0 +1,23 @@
+module Main exposing (main)
+
+import Ipe.Io as Io
+import Ipe.String as String
+
+-- A record whose `action` field carries a Task (non-Clone).
+-- The functional-update idiom `{ m | count = m.count + 1 }` reads the base `m`
+-- inside the updated field's value AND moves `m` as the update base. The emit
+-- must evaluate the field value (reading `m`) BEFORE moving `m`, so the emitted
+-- crate builds without a use-after-move (E0382). `m` is not used outside the
+-- update, so this is linear — no reject.
+
+type alias Model =
+    { count : Int
+    , action : Task ()
+    }
+
+main =
+    let
+        m = { count = 0, action = Io.println "hello" }
+        m2 = { m | count = m.count + 1 }
+    in
+    Io.println (String.fromInt m2.count)

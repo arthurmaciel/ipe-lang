@@ -26,6 +26,8 @@ mod golden_record_ctor;
 mod golden_record_self_edge;
 #[path = "g_record_generic/golden_record_update.rs"]
 mod golden_record_update;
+#[path = "g_record_generic/golden_record_update_nonclone_field_reads_base.rs"]
+mod golden_record_update_nonclone_field_reads_base;
 #[path = "g_record_generic/golden_records.rs"]
 mod golden_records;
 #[path = "g_record_generic/golden_reused_generic_clone.rs"]

@@ -6645,12 +6645,36 @@ pub fn record_struct_name(
     Ok((struct_name, is_server_response))
 }
 
-/// Emit a functional record update `{ record | f = v, ... }` as a clone-and-
-/// reassign block: `{ let mut __ipe_rec = (<record>).clone(); __ipe_rec.f = v;
-/// __ipe_rec }`. This needs no struct name and leaves the source record
-/// untouched; the block scope makes the temporary safe under nesting. Kept out
-/// of the match (`#[inline(never)]`) for the same frame-size reason as
-/// [`emit_record`].
+/// Emit a functional record update `{ record | f = v, ... }` as a
+/// bind-fields-then-move-and-reassign block:
+/// `{ let __ipe_upd_0 = v0; …; let mut __ipe_rec = <base>; __ipe_rec.f = __ipe_upd_0; …; __ipe_rec }`.
+///
+/// Each field value is bound to a positional temporary BEFORE the base is moved
+/// into `__ipe_rec`. This lets a field value read the base itself — the
+/// canonical functional-update idiom `{ record | count = record.count + 1 }` —
+/// on a non-`Clone` base: the read happens while the base is still owned, and
+/// the move follows. Evaluating the field values into `let` bindings in source
+/// order runs each value expression exactly once, in order, so a side-effecting
+/// value is not duplicated or reordered.
+///
+/// The base expression is emitted by [`emit_expr_at`], which already inserts
+/// `.clone()` when the base variable appears in multiple positions — the reuse
+/// gate rewrites such variables to [`Expr::CloneVar`] before emission. No extra
+/// `.clone()` is added here:
+///
+/// * If the base is a bare [`Expr::Var`] (single use), moving it into
+///   `__ipe_rec` is correct for both `Clone`-able and non-`Clone` record types.
+///   A non-`Clone` effect-carrier (`Task`/`Cmd`/`Sub`-bearing record) can be
+///   moved but not cloned; a single-use `Clone`-able record is equally well
+///   moved.
+/// * If the base is a [`Expr::CloneVar`] (multi-use), `emit_expr_at` emits
+///   `base.clone()`, and the assignment binds that single clone.
+///
+/// A base reused OUTSIDE the update (a later borrow or move of a non-`Clone`
+/// base) has no sound rewrite and is rejected fail-closed at lower time
+/// (`IPE-L0135`); it never reaches this emitter.
+///
+/// Kept `#[inline(never)]` for the same frame-size reason as [`emit_record`].
 #[inline(never)]
 fn emit_update(
     ctx: &EmitCtx,
@@ -6661,15 +6685,18 @@ fn emit_update(
     generics: GenericScope,
 ) -> DResult<String> {
     let child = depth + 1;
-    let base = emit_expr_at(ctx, record, indent, child, generics)?;
+    let mut binds = Vec::with_capacity(fields.len());
     let mut assigns = Vec::with_capacity(fields.len());
-    for (sym, value) in fields {
+    for (i, (sym, value)) in fields.iter().enumerate() {
         let field_ident = ctx.emit_ident(*sym)?;
         let rendered = emit_expr_at(ctx, value, indent, child, generics)?;
-        assigns.push(format!(" __ipe_rec.{field_ident} = {rendered};"));
+        binds.push(format!(" let __ipe_upd_{i} = {rendered};"));
+        assigns.push(format!(" __ipe_rec.{field_ident} = __ipe_upd_{i};"));
     }
+    let base = emit_expr_at(ctx, record, indent, child, generics)?;
     Ok(format!(
-        "{{ let mut __ipe_rec = ({base}).clone();{} __ipe_rec }}",
+        "{{{} let mut __ipe_rec = {base};{} __ipe_rec }}",
+        binds.concat(),
         assigns.concat()
     ))
 }
