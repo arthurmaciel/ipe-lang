@@ -92,6 +92,34 @@ class RehomeKernelAlias(unittest.TestCase):
         self.assertIn("-- this re-binding via `Ffi.kernel` is the workaround", out)
         self.assertIn("Middleware.withCors", out)
 
+    def test_line_comment_with_full_call_shape_survives_verbatim(self) -> None:
+        """A `-- example: Ffi.kernel "Middleware_withCors"` line comment writes the
+        WHOLE call shape — head AND kernel-name string — yet is prose, not a call:
+        span-pairing keeps it verbatim while the real code call below is rehomed."""
+        src = (
+            "import Ipe.Ffi as Ffi\n"
+            '-- example: Ffi.kernel "Middleware_withCors"\n'
+            'withCors =\n    Ffi.kernel "Middleware_withCors"\n'
+        )
+        out = _mod.rehome_kernel_alias(src)
+        self.assertIn('-- example: Ffi.kernel "Middleware_withCors"', out)
+        self.assertIn("withCors =\n    Middleware.withCors", out)
+        # Exactly one rehome: the comment head was not rewritten.
+        self.assertEqual(out.count("Middleware.withCors"), 1)
+
+    def test_block_comment_with_full_call_shape_survives_verbatim(self) -> None:
+        """The block-comment (`{- -}`) variant of the same full-call-shape mention
+        is likewise left untouched while the real call is rehomed."""
+        src = (
+            "import Ipe.Ffi as Ffi\n"
+            '{- see Ffi.kernel "Middleware_withCors" -}\n'
+            'withCors =\n    Ffi.kernel "Middleware_withCors"\n'
+        )
+        out = _mod.rehome_kernel_alias(src)
+        self.assertIn('{- see Ffi.kernel "Middleware_withCors" -}', out)
+        self.assertIn("withCors =\n    Middleware.withCors", out)
+        self.assertEqual(out.count("Middleware.withCors"), 1)
+
 
 class WrapPubSubTopic(unittest.TestCase):
     def test_raw_string_topic_is_wrapped_in_typed_handle(self) -> None:
