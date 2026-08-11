@@ -281,7 +281,7 @@ fn walk_expr(
         Expr::FuncValue { callee, ty: _ } => {
             walk_callee(callee, direct_calls);
         }
-        Expr::TaskSeq { effect, rest } | Expr::TaskSeqSync { effect, rest } => {
+        Expr::TaskSeq { effect, rest } => {
             walk_expr(effect, direct_calls, types);
             walk_expr(rest, direct_calls, types);
         }

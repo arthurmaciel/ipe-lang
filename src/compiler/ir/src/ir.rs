@@ -2409,17 +2409,6 @@ pub enum Expr {
         effect: Box<Self>,
         rest: Box<Self>,
     },
-    /// Sync variant of [`Self::TaskSeq`]: blocks on `effect` synchronously
-    /// (discarding its result), then continues with `rest`. Produced by
-    /// `lower_let` when a `let _ = <task>` binding discards a Task-typed value
-    /// inside a **non-Task** (sync) function. The backend emits
-    /// `{ let _ = task_run(effect); rest }`. This avoids the E0308 type-mismatch
-    /// that arises when `task_and_then(...)` (returning `IpeTask<E,B>`) is placed
-    /// in a context whose expected type is not a Task.
-    TaskSeqSync {
-        effect: Box<Self>,
-        rest: Box<Self>,
-    },
     /// A tail-recursive function body wrapped for loop emission. Produced ONLY by
     /// the lowerer's TCO rewrite (`ipe_lower::rewrite_tail_calls`); `params` are
     /// the enclosing [`Func`]'s parameters (name + type) so emission can shadow
