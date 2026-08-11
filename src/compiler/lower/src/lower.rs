@@ -6066,10 +6066,15 @@ fn count_fn_value_uses(sym: Symbol, expr: &Expr) -> usize {
             .iter()
             .map(|(_, e)| count_fn_value_uses(sym, e))
             .sum(),
-        Expr::Update { fields, .. } => fields
-            .iter()
-            .map(|(_, e)| count_fn_value_uses(sym, e))
-            .sum::<usize>(),
+        // Mirrors `Expr::Access` below: a bare `sym` base borrows (deferred to
+        // `IPE-L0120`), a compound base moves `sym` and is counted.
+        Expr::Update { record, fields } => {
+            fn_base_move_uses(sym, record)
+                + fields
+                    .iter()
+                    .map(|(_, e)| count_fn_value_uses(sym, e))
+                    .sum::<usize>()
+        }
         Expr::Ctor { args, .. } => args.iter().map(|a| count_fn_value_uses(sym, a)).sum(),
         Expr::TaskSeq { effect, rest } | Expr::TaskSeqSync { effect, rest } => {
             count_fn_value_uses(sym, effect) + count_fn_value_uses(sym, rest)
@@ -6082,7 +6087,7 @@ fn count_fn_value_uses(sym: Symbol, expr: &Expr) -> usize {
             }
         }
         Expr::TailRecur { args } => args.iter().map(|a| count_fn_value_uses(sym, a)).sum(),
-        Expr::Access { record, .. } => count_fn_value_uses(sym, record),
+        Expr::Access { record, .. } => fn_base_move_uses(sym, record),
         Expr::Int(_)
         | Expr::Bool(_)
         | Expr::Float(_)
@@ -6109,6 +6114,17 @@ fn count_fn_value_uses_apply(sym: Symbol, func: &Expr, args: &[Expr]) -> usize {
             .iter()
             .map(|a| count_fn_value_uses(sym, a))
             .sum::<usize>()
+}
+
+/// [`base_move_consumes`] for the fn-value gate: a bare `sym` `Access`/`Update`
+/// base borrows the record (deferred to `IPE-L0120`); any compound base moves
+/// `sym` into a sub-expression and is counted.
+fn fn_base_move_uses(sym: Symbol, record: &Expr) -> usize {
+    if matches!(record, Expr::Var(s) | Expr::CloneVar(s) if *s == sym) {
+        0
+    } else {
+        count_fn_value_uses(sym, record)
+    }
 }
 
 /// T4: fail closed with [`Feature::FunctionValueReuse`] (IPE-L0127) if
@@ -6270,13 +6286,24 @@ fn count_value_consumes(sym: Symbol, expr: &Expr) -> usize {
         Expr::ListIndexClone { list, .. } | Expr::ListLenCheck { list, .. } => {
             count_value_consumes(sym, list)
         }
-        // A `Record` field is a consuming position; an `Update` base borrows
-        // (`(record).clone()`) so only its field expressions consume — both
-        // reduce to summing the field expressions.
-        Expr::Record { fields, .. } | Expr::Update { fields, .. } => fields
+        // A `Record` field is a consuming position.
+        Expr::Record { fields, .. } => fields
             .iter()
             .map(|(_, e)| count_value_consumes(sym, e))
             .sum(),
+        // An `Update` base emits `(record).clone()`, which BORROWS a bare
+        // `sym` base rather than moving it — that borrow-only field position is
+        // left to the more specific admissibility gate (`IPE-L0120`). But a
+        // COMPOUND base (`{ (mk sym) | .. }`) moves `sym` into its
+        // sub-expression, a genuine consume that must count, so the base is
+        // scanned unless it is exactly a bare `Var(sym)`/`CloneVar(sym)`.
+        Expr::Update { record, fields } => {
+            base_move_consumes(sym, record)
+                + fields
+                    .iter()
+                    .map(|(_, e)| count_value_consumes(sym, e))
+                    .sum::<usize>()
+        }
         Expr::Ctor { args, .. } => args.iter().map(|a| count_value_consumes(sym, a)).sum(),
         Expr::TaskSeq { effect, rest } | Expr::TaskSeqSync { effect, rest } => {
             count_value_consumes(sym, effect) + count_value_consumes(sym, rest)
@@ -6289,10 +6316,12 @@ fn count_value_consumes(sym: Symbol, expr: &Expr) -> usize {
             }
         }
         Expr::TailRecur { args } => args.iter().map(|a| count_value_consumes(sym, a)).sum(),
-        // `Access` reads a field off a BORROW of the record — not a move — so it
-        // counts as no consumption, like the leaves below.
-        Expr::Access { .. }
-        | Expr::Int(_)
+        // `Access` reads a field off a BORROW of the record base, so a bare
+        // `sym` base is not consumed (left to the `IPE-L0120` admissibility
+        // gate). A COMPOUND base (`(mk sym).field`) moves `sym` into its
+        // sub-expression — a genuine consume the base scan below counts.
+        Expr::Access { record, .. } => base_move_consumes(sym, record),
+        Expr::Int(_)
         | Expr::Bool(_)
         | Expr::Float(_)
         | Expr::Str(_)
@@ -6300,6 +6329,21 @@ fn count_value_consumes(sym: Symbol, expr: &Expr) -> usize {
         | Expr::Char(_)
         | Expr::Unit
         | Expr::FuncValue { .. } => 0,
+    }
+}
+
+/// Consumes of `sym` inside an `Access`/`Update` record BASE.
+///
+/// A bare `sym` base (`sym.field`, `{ sym | .. }`) is a field BORROW — the
+/// emitted `(record).field` / `(record).clone()` takes `&record` — so it is not
+/// a consume and is deferred to the `IPE-L0120` admissibility gate. Any other
+/// base is a compound expression that MOVES `sym` into a sub-expression (e.g.
+/// `(mk sym).field`), a genuine consume counted in full.
+fn base_move_consumes(sym: Symbol, record: &Expr) -> usize {
+    if matches!(record, Expr::Var(s) | Expr::CloneVar(s) if *s == sym) {
+        0
+    } else {
+        count_value_consumes(sym, record)
     }
 }
 
@@ -22394,6 +22438,65 @@ mod tests {
 
         // A `Clone` payload reused twice is NOT this gate's concern.
         assert!(reject_nonclone_value_reuse(env, sym, &wrap_int, &reused, span).is_ok());
+    }
+
+    /// SEAL: a second move HIDDEN inside an `Access`/`Update` record base is a
+    /// genuine consume the reuse gates must count. A bare `sym` base is a field
+    /// borrow and stays uncounted (the `IPE-L0120` admissibility gate owns it),
+    /// but a compound base (`(mk sym).field`, `{ mk sym | .. }`) moves `sym` and
+    /// must count — otherwise a once-in-a-base + once-elsewhere reuse of a
+    /// non-`Clone` value passes the gate and cargo-fails E0382 after `ipe` exit 0.
+    #[test]
+    fn move_hidden_in_access_or_update_base_is_counted() {
+        use ipe_ir::{Expr, IrType};
+
+        use super::{count_fn_value_uses, count_value_consumes};
+
+        let mut interner = Interner::new();
+        let w = interner.intern("w").expect("intern");
+        let tag = interner.intern("tag").expect("intern");
+        let mk = interner.intern("mk").expect("intern");
+        let other = interner.intern("other").expect("intern");
+
+        // A compound base `(mk w)` that MOVES `w`.
+        let compound_base = || Expr::Apply {
+            func: Box::new(Expr::Var(mk)),
+            args: vec![Expr::Var(w)],
+        };
+        let access_over = |base: Expr| Expr::Access {
+            record: Box::new(base),
+            field: tag,
+            field_ty: IrType::Int,
+        };
+        let update_over = |base: Expr| Expr::Update {
+            record: Box::new(base),
+            fields: vec![(tag, Expr::Int(9))],
+        };
+
+        // Bare-base borrow: `w.tag` / `{ w | tag = 9 }` — NOT a move (0).
+        assert_eq!(count_value_consumes(w, &access_over(Expr::Var(w))), 0);
+        assert_eq!(count_value_consumes(w, &update_over(Expr::Var(w))), 0);
+        assert_eq!(count_fn_value_uses(w, &access_over(Expr::Var(w))), 0);
+        assert_eq!(count_fn_value_uses(w, &update_over(Expr::Var(w))), 0);
+
+        // Compound base: `(mk w).tag` / `{ mk w | tag = 9 }` — a move (1).
+        assert_eq!(count_value_consumes(w, &access_over(compound_base())), 1);
+        assert_eq!(count_value_consumes(w, &update_over(compound_base())), 1);
+        assert_eq!(count_fn_value_uses(w, &access_over(compound_base())), 1);
+        assert_eq!(count_fn_value_uses(w, &update_over(compound_base())), 1);
+
+        // The repro: `((mk w).tag, w)` — base move + tuple-slot move = 2, the
+        // reuse the gates must reject. `((mk other).tag, w)` moves `w` once.
+        let reuse = Expr::Tuple(vec![access_over(compound_base()), Expr::Var(w)]);
+        assert_eq!(count_value_consumes(w, &reuse), 2);
+        assert_eq!(count_fn_value_uses(w, &reuse), 2);
+        let unrelated_base = Expr::Apply {
+            func: Box::new(Expr::Var(mk)),
+            args: vec![Expr::Var(other)],
+        };
+        let linear = Expr::Tuple(vec![access_over(unrelated_base), Expr::Var(w)]);
+        assert_eq!(count_value_consumes(w, &linear), 1);
+        assert_eq!(count_fn_value_uses(w, &linear), 1);
     }
 
     /// The per-module eta/cap pool sizing must equal the whole-program
