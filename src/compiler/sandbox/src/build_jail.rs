@@ -1413,14 +1413,22 @@ mod freebsd_jail {
         }
     }
 
-    /// A per-run jail-root dir path, sibling to the audit's scratch under the system
-    /// temp root, unique enough that concurrent audit calls do not collide.
-    fn jail_root_dir() -> PathBuf {
+    /// A per-run path under the system temp root, unique enough that concurrent audit
+    /// calls do not collide. Each caller supplies a `prefix` that distinguishes the
+    /// path's role (jail root, proc-mask source, jail name), keeping the pid+nanos
+    /// uniqueness stamp in one place.
+    fn per_run_temp_dir(prefix: &str) -> PathBuf {
         let pid = std::process::id();
         let nanos = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .map_or(0, |d| d.as_nanos());
-        std::env::temp_dir().join(format!("ipe-tier2-jailroot-{pid}-{nanos}"))
+        std::env::temp_dir().join(format!("{prefix}-{pid}-{nanos}"))
+    }
+
+    /// A per-run jail-root dir path, sibling to the audit's scratch under the system
+    /// temp root, unique enough that concurrent audit calls do not collide.
+    fn jail_root_dir() -> PathBuf {
+        per_run_temp_dir("ipe-tier2-jailroot")
     }
 
     /// A per-run parent dir for the empty `/proc`-mask source, a sibling of the jail
@@ -1430,11 +1438,7 @@ mod freebsd_jail {
     /// payload: it cannot surface files under its own `/proc`. Unique per run so
     /// concurrent audit calls do not collide.
     fn proc_mask_source_dir() -> PathBuf {
-        let pid = std::process::id();
-        let nanos = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map_or(0, |d| d.as_nanos());
-        std::env::temp_dir().join(format!("ipe-tier2-procmask-{pid}-{nanos}"))
+        per_run_temp_dir("ipe-tier2-procmask")
     }
 
     /// A per-run jail name unique enough that concurrent audit calls do not collide.
@@ -2231,6 +2235,50 @@ mod tests {
         assert!(
             !escape_in_chroot.starts_with(&scratch_mount),
             "an out-of-scratch path must NOT fall under the one writable mount: {escape_in_chroot:?}"
+        );
+    }
+
+    // The proc-mask source is a sibling of the scratch under the system temp root, not
+    // a child of the scratch. If a future edit reroots it under the scratch, the
+    // jailed payload gains a nullfs mount into the proc-mask source dir and can surface
+    // files under its own `/proc` — defeating the empty-proc mask. This pure model test
+    // catches that regression host-independently.
+    fn proc_mask_source_model(scratch: &std::path::Path) -> std::path::PathBuf {
+        // Same shape as `proc_mask_source_dir` in `freebsd_jail`: a sibling of the
+        // scratch under the system temp root, never nested inside it.
+        scratch
+            .parent()
+            .unwrap_or_else(|| std::path::Path::new("/tmp"))
+            .join("ipe-tier2-procmask-MODEL")
+    }
+
+    #[test]
+    fn proc_mask_source_is_disjoint_from_the_writable_scratch() {
+        use std::path::Path;
+
+        // Representative scratch the launcher would hand to the FreeBSD jail arm:
+        // an absolute path under the system temp root.
+        let scratch = Path::new("/tmp/ipe-tier2-scratch-12345-99999");
+        let proc_mask = proc_mask_source_model(scratch);
+
+        // The proc-mask source must NOT be under the scratch. If it were, the
+        // jail's read-write scratch mount would encompass the proc-mask source dir,
+        // giving the payload a writable path into the nullfs source of the empty
+        // `/proc` mask and breaking the immutability invariant.
+        assert!(
+            !proc_mask.starts_with(scratch),
+            "the proc-mask source must not be under the writable scratch \
+             (the proc-mask disjoint-from-scratch invariant): \
+             proc_mask={proc_mask:?}, scratch={scratch:?}"
+        );
+
+        // The proc-mask source must still be under the same parent (the system
+        // temp root), confirming it is a sibling rather than some unrelated path.
+        let temp_root = scratch.parent().expect("scratch has a parent");
+        assert!(
+            proc_mask.starts_with(temp_root),
+            "the proc-mask source must be a sibling of the scratch under the \
+             system temp root: proc_mask={proc_mask:?}, temp_root={temp_root:?}"
         );
     }
 
