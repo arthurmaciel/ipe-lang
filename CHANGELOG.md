@@ -10,6 +10,23 @@ Entries below the header are maintained by
 section is generated from Conventional Commit messages and prepended when the
 standing release pull request is merged.
 
+## [0.1.47](https://github.com/arthurmaciel/ipe-lang/compare/ipe-v0.1.46...ipe-v0.1.47) (2026-08-11)
+
+
+### Features
+
+* **deploy:** ipe deploy — self-contained toolchain-free jailed bundle ([#870](https://github.com/arthurmaciel/ipe-lang/issues/870)) ([b5e7535](https://github.com/arthurmaciel/ipe-lang/commit/b5e7535fc60acdea48bbce023083d7d89fe6e57a))
+
+
+### Bug Fixes
+
+* **ci:** serialize cwd-mutating and cargo-building integration tests ([#877](https://github.com/arthurmaciel/ipe-lang/issues/877)) ([ac2ea72](https://github.com/arthurmaciel/ipe-lang/commit/ac2ea72946a107956f3fe5424cf34fc312ef822d))
+* **converter:** make rehome_kernel_alias comment/string-safe via span-pairing ([#885](https://github.com/arthurmaciel/ipe-lang/issues/885)) ([aec5ff2](https://github.com/arthurmaciel/ipe-lang/commit/aec5ff2f22bf8300e32f427ee13e1030285c1431))
+* **converter:** migrate three stale Sky-vintage APIs so 36-composite-server compiles ([#880](https://github.com/arthurmaciel/ipe-lang/issues/880)) ([#884](https://github.com/arthurmaciel/ipe-lang/issues/884)) ([3dc36ce](https://github.com/arthurmaciel/ipe-lang/commit/3dc36ce24cd653869a32c86e70806500fba3d57c))
+* **converter:** re-home user-source Ffi.kernel aliases onto their published qualifier ([#844](https://github.com/arthurmaciel/ipe-lang/issues/844)) ([#878](https://github.com/arthurmaciel/ipe-lang/issues/878)) ([9ebc4ec](https://github.com/arthurmaciel/ipe-lang/commit/9ebc4ec3a8aa42e59cc2e3fbdf94e1eb4640c706))
+* **deploy:** clear typed error for pure apps instead of raw Io error ([#881](https://github.com/arthurmaciel/ipe-lang/issues/881)) ([8727666](https://github.com/arthurmaciel/ipe-lang/commit/87276661d074091922554e8057aa3285118c37b0)), closes [#872](https://github.com/arthurmaciel/ipe-lang/issues/872)
+* **watch:** emit runtime as path-dep with correct crate root — closes [#851](https://github.com/arthurmaciel/ipe-lang/issues/851) ([#876](https://github.com/arthurmaciel/ipe-lang/issues/876)) ([3b5834b](https://github.com/arthurmaciel/ipe-lang/commit/3b5834b6099a61f51537227c7af31b9056d81398))
+
 ## [0.1.46](https://github.com/arthurmaciel/ipe-lang/compare/ipe-v0.1.45...ipe-v0.1.46) (2026-08-11)
 
 
