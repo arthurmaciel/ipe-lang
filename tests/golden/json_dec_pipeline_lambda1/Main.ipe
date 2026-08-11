@@ -3,16 +3,17 @@ import Ipe.Io as Io
 import Ipe.Json.Decode
 import Ipe.Json.Decode.Pipeline
 
--- R2: 1-arg lambda `JsonDec.succeed (\name -> name ++ "!")`.
--- Exercises Fix A case 2 with arity 1 (lambda → curry1).
+-- 1-arg lambda `JsonDec.succeed (\name -> name ++ "!")` threaded with `|>`
+-- through a single `required` step (arity-1 curry path).
 -- Expected: Alice!
 
 main =
     let
         r1 =
             JsonDec.decodeString
-                (JsonDecP.required "name" JsonDec.string
-                    (JsonDec.succeed (\name -> name ++ "!")))
+                (JsonDec.succeed (\name -> name ++ "!")
+                    |> JsonDecP.required "name" JsonDec.string
+                )
                 "{\"name\":\"Alice\"}"
     in
     case r1 of
