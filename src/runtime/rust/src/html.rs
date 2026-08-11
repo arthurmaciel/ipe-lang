@@ -183,6 +183,17 @@ pub(crate) fn render_into<M>(node: &Html<M>, s: &mut String) {
     render_into_ctx(node, s, None, false, 0);
 }
 
+/// Render `node` into `s` as raw text — `HText` verbatim (no HTML-escaping),
+/// `HRaw` verbatim. Used by the SSE diff when rendering the body of a
+/// `<script>` or `<style>` child list before the caller applies
+/// `neutralise_script_close` / `strip_style_close`.
+///
+/// Element nodes are rendered via the normal path (they carry their own open/close
+/// tags and their OWN children handle `<script>`/`<style>` internally).
+pub(crate) fn render_into_raw_text<M>(node: &Html<M>, s: &mut String) {
+    render_into_ctx(node, s, None, true, 0);
+}
+
 // `select_value`: when this node renders as a direct child of a `<select>` that
 // carries a value, the chosen value is threaded here so the matching `<option>`
 // flips `selected` (Go renderVNode, live.go:432-453). `raw_text`: set when the

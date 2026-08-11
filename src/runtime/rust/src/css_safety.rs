@@ -425,7 +425,7 @@ pub(crate) fn strip_style_close(s: &str) -> String {
                 // `</style` is ASCII, so byte index `idx` and the 7-byte length
                 // are valid char boundaries in `out` (same byte layout as the
                 // lowercased copy).
-                out.replace_range(idx..idx + "</style".len(), "");
+                out.replace_range(idx..idx.saturating_add("</style".len()), "");
             }
         }
     }
