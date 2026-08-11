@@ -3,6 +3,7 @@
 //! requires the musl target installed and is gated on `IPE_E2E=1`.
 
 use ipe::cli_args::parse_deploy;
+use std::path::PathBuf;
 
 // ── Argument parsing ─────────────────────────────────────────────────────────
 
@@ -162,5 +163,93 @@ fn deploy_unsupported_target_is_usage_error() {
     assert!(
         msg.contains("unsupported target") || msg.contains("bogus"),
         "error must mention the unsupported target, got: {msg}"
+    );
+}
+
+/// `ipe deploy` on a pure Ipê app (no native/FFI content, no `ipe.profile`)
+/// must return a clear typed error naming the entry, not a raw Io error about
+/// a missing source file. No partial bundle must be left on disk.
+///
+/// The test exercises the guard in `run_deploy` that detects the pure-app case
+/// via capability inference before any cargo build is attempted, so it runs
+/// fast without the musl target or `IPE_E2E=1`.
+#[test]
+fn deploy_pure_app_gives_clear_error_not_raw_io() {
+    // Write a minimal pure Ipê program (no Rust.* FFI, no NativeFfi capability).
+    // The module header is required for lower_entry to accept the file.
+    let dir = {
+        let d = std::env::temp_dir().join("ipe_deploy_test_pure_app");
+        let _ = std::fs::remove_dir_all(&d);
+        std::fs::create_dir_all(&d).unwrap();
+        std::fs::write(
+            d.join("Main.ipe"),
+            concat!(
+                "module Main exposing (main)\n\n",
+                "import Ipe.String as String\n",
+                "import Ipe.Io as Io\n\n",
+                "main : Task ()\n",
+                "main =\n",
+                "    Io.println (String.toUpper \"hello\")\n",
+            ),
+        )
+        .unwrap();
+        d
+    };
+    let entry = dir.join("Main.ipe");
+    let out_dir = dir.join("deploy");
+
+    let result = ipe::run_cli(&[
+        "deploy".to_owned(),
+        entry.to_string_lossy().into_owned(),
+        "--out".to_owned(),
+        out_dir.to_string_lossy().into_owned(),
+    ]);
+
+    // The result must be the typed pure-app refusal, not a raw Io error or a
+    // panic. No partial bundle directory must exist.
+    assert!(
+        matches!(result, Err(ipe::CliError::DeployPureApp { .. })),
+        "a pure Ipê app must yield DeployPureApp, got: {result:?}"
+    );
+
+    // The error message must name the entry and explain the situation clearly
+    // (not expose a raw "missing source file" Io error).
+    let msg = if let Err(e) = result {
+        e.to_string()
+    } else {
+        String::new()
+    };
+    assert!(
+        msg.contains("pure") || msg.contains("no native") || msg.contains("no capability"),
+        "error message must explain the pure-app condition, got: {msg}"
+    );
+    assert!(
+        !msg.contains("io error") && !msg.contains("missing source file"),
+        "error must not expose a raw Io message, got: {msg}"
+    );
+
+    // No partial bundle must have been written.
+    assert!(
+        !out_dir.join("bundle").exists(),
+        "no partial bundle dir must exist after a pure-app refusal"
+    );
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// The `DeployPureApp` error names the entry path in its Display output.
+#[test]
+fn deploy_pure_app_error_display_names_entry() {
+    let err = ipe::CliError::DeployPureApp {
+        entry: PathBuf::from("/some/project/Main.ipe"),
+    };
+    let msg = err.to_string();
+    assert!(
+        msg.contains("Main.ipe"),
+        "DeployPureApp Display must name the entry path, got: {msg}"
+    );
+    assert!(
+        !msg.contains("io error"),
+        "DeployPureApp Display must not expose a raw Io message, got: {msg}"
     );
 }

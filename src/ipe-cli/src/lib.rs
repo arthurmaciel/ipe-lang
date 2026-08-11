@@ -308,6 +308,19 @@ pub enum CliError {
         /// The specific reason the program cannot be ejected.
         reason: String,
     },
+    /// `ipe deploy` was asked to bundle a pure Ipê app — one with no native/FFI
+    /// content and therefore no capability profile. A jailed deploy bundle is
+    /// only meaningful for native-bearing programs (ones that cross into
+    /// `Rust.` FFI and carry an `ipe.profile`). A pure app is structurally
+    /// bounded to its inferred capabilities and needs no wrapper jail; deploy
+    /// the compiled binary directly.
+    ///
+    /// This is a hard, typed refusal — no partial bundle is produced. Carries
+    /// the entry path so the message can name the program.
+    DeployPureApp {
+        /// The entry file that was compiled as a pure app.
+        entry: PathBuf,
+    },
 }
 
 impl From<toolchain::ToolchainMissing> for CliError {
@@ -451,6 +464,7 @@ impl std::fmt::Display for CliError {
                 style::GUTTER
             ),
             Self::EjectUnsupported { reason } => write!(f, "{}eject: {reason}", style::GUTTER),
+            Self::DeployPureApp { entry } => fmt_deploy_pure_app(entry, f),
         }
     }
 }
@@ -466,6 +480,20 @@ fn fmt_unknown_command(attempted: &str, f: &mut std::fmt::Formatter<'_>) -> std:
         }
     }
     f.write_str(help::top_level(&std::io::stderr()).trim_start())
+}
+
+/// Render [`CliError::DeployPureApp`] for `Display`. Split out to keep the
+/// main `Display` match within the line-count limit.
+fn fmt_deploy_pure_app(entry: &Path, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    write!(
+        f,
+        "{}deploy: `{}` is a pure Ipê app (no native/FFI content, no capability \
+         profile) — a jailed deploy bundle is unnecessary.\n\
+         {}         Deploy the app binary directly instead of using `ipe deploy`.",
+        style::GUTTER,
+        entry.display(),
+        style::GUTTER,
+    )
 }
 
 /// Render the runtime-install error family (`RuntimeDirInvalid`,
@@ -2980,6 +3008,24 @@ pub(crate) fn run_deploy(rest: &[String]) -> Result<(), CliError> {
         });
     }
 
+    // Resolve capabilities up-front: a pure Ipê app (no NativeFfi / FfiRaw)
+    // emits no ipe.profile and needs no jailed wrapper — detect it before
+    // touching the toolchain or writing any output so the error is fast and
+    // no partial state is left on disk.
+    let manifest_parsed = match manifest.as_deref() {
+        Some(m) => Some(project::parse_manifest(m)?),
+        None => None,
+    };
+    let driver = manifest_parsed
+        .as_ref()
+        .map_or(ipe_backend_rust::DbDriver::Sqlite, |m| m.driver);
+    let resolved =
+        run_sandbox::resolve_for_run(manifest_parsed.as_ref(), manifest.as_deref(), &entry_path)?;
+
+    if !run_sandbox::is_native_bearing(&resolved.union()) {
+        return Err(CliError::DeployPureApp { entry: entry_path });
+    }
+
     let runtime_dir = resolve_vendored_runtime_dir(args.runtime, false)?;
 
     // Static plan forced for the app binary: default allocator (dlmalloc, pure
@@ -3025,17 +3071,6 @@ pub(crate) fn run_deploy(rest: &[String]) -> Result<(), CliError> {
         |m| build_project_with_options(m, &app_out, &runtime_dir, options.clone()),
     )?;
 
-    // Compile the emitted crate and write the capability enforcement artifacts.
-    let manifest_parsed = match manifest.as_deref() {
-        Some(m) => Some(project::parse_manifest(m)?),
-        None => None,
-    };
-    let driver = manifest_parsed
-        .as_ref()
-        .map_or(ipe_backend_rust::DbDriver::Sqlite, |m| m.driver);
-    let resolved =
-        run_sandbox::resolve_for_run(manifest_parsed.as_ref(), manifest.as_deref(), &entry_path)?;
-
     // Build the app binary.
     let mut app_cargo = std::process::Command::new(cargo_bin.path());
     app_cargo
@@ -3046,10 +3081,8 @@ pub(crate) fn run_deploy(rest: &[String]) -> Result<(), CliError> {
     build_emitted_project(&mut app_cargo, "the deploy app", None, &app_out)?;
 
     // Write the capability enforcement artifacts (ipe.profile + embedded floor).
-    if run_sandbox::is_native_bearing(&resolved.union()) {
-        let profile = run_sandbox::build_profile(&resolved, driver)?;
-        run_sandbox::write_build_artifacts(&app_out, &profile)?;
-    }
+    let profile = run_sandbox::build_profile(&resolved, driver)?;
+    run_sandbox::write_build_artifacts(&app_out, &profile)?;
 
     // Locate the compiled app binary. The target dir may be a global
     // `CARGO_TARGET_DIR` (set by the user or the agent lane), so we resolve
