@@ -1743,11 +1743,7 @@ fn build_applied_lambda(
 const fn arm_body_is_control(body: &Expr) -> bool {
     match body {
         // Parenthesized or block-shaped: wrapped in synthesized braces when broken.
-        Expr::If { .. }
-        | Expr::Let { .. }
-        | Expr::Destructure { .. }
-        | Expr::Update { .. }
-        => true,
+        Expr::If { .. } | Expr::Let { .. } | Expr::Destructure { .. } | Expr::Update { .. } => true,
         // A chain-eligible binary operator renders `(a + b)` and wraps when broken;
         // the call-shaped `Append` / `IntDiv` are leaves (delimited-tail).
         Expr::BinOp { op, .. } => chain_op_str(*op).is_some(),

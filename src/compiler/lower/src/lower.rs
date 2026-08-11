@@ -4835,9 +4835,7 @@ fn count_var_uses(sym: Symbol, expr: &Expr) -> usize {
                     .sum::<usize>()
         }
         Expr::Ctor { args, .. } => args.iter().map(|a| count_var_uses(sym, a)).sum(),
-        Expr::TaskSeq { effect, rest } => {
-            count_var_uses(sym, effect) + count_var_uses(sym, rest)
-        }
+        Expr::TaskSeq { effect, rest } => count_var_uses(sym, effect) + count_var_uses(sym, rest),
         Expr::TailLoop { params, body } => {
             if params.iter().any(|(s, _)| *s == sym) {
                 0
