@@ -11,11 +11,9 @@ import Ipe.Task as Task
 -- row stays generic.
 report : { r | name : String } -> Task Error ()
 report rec =
-    let
-        _ =
-            Io.println rec.name
-    in
-    Io.println rec.name
+    do
+        Io.println rec.name
+        Io.println rec.name
 
 
 ada : { name : String, age : Int }
