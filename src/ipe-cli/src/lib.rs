@@ -549,10 +549,20 @@ fn fmt_runtime_install_error(err: &CliError, f: &mut std::fmt::Formatter<'_>) ->
     }
 }
 
-/// Render [`CliError::EmittedBuildFailed`] for `Display`. When `cargo`'s stderr
-/// reveals a missing runtime feature, lead with a targeted line naming the
-/// out-of-date runtime; otherwise present the trimmed `cargo` error under a clean
-/// header. Neither form shows any command's `--help` page.
+/// Render [`CliError::EmittedBuildFailed`] for `Display`.
+///
+/// Two cases:
+///
+/// - **Attributable**: `cargo`'s stderr names a missing runtime feature — lead
+///   with a targeted line pointing at the stale runtime crate.
+/// - **Unattributable**: every other `cargo` failure after a successful Ipê
+///   compile. The front-end gate ensures only valid programs reach emit, so a
+///   `cargo` failure here means the emitted Rust is wrong — a miscompile in Ipê,
+///   not the user's source. Render it as a humble `CompilerBug` ICE so the user
+///   knows to file a report rather than try to fix their source. The full `cargo`
+///   stderr is embedded as the reportable detail.
+///
+/// Neither form shows any command's `--help` page.
 fn fmt_emitted_build_failed(err: &CliError, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
     let CliError::EmittedBuildFailed {
         what,
@@ -586,11 +596,22 @@ fn fmt_emitted_build_failed(err: &CliError, f: &mut std::fmt::Formatter<'_>) -> 
              matching runtime re-materializes automatically."
         );
     }
-    write!(f, "building {what} failed (cargo exited {code})")?;
-    if !trimmed.is_empty() {
-        write!(f, "\n{trimmed}")?;
-    }
-    Ok(())
+    // Unattributable: the emitted Rust crate failed to compile for a reason that
+    // is not a known runtime-feature gap. Because the front-end gate ensures only
+    // valid programs reach emit, this cargo failure reflects a bug in Ipê's own
+    // emission, not the user's source. Surface it as a humble ICE. The full cargo
+    // stderr is embedded as the reportable detail so a bug report contains
+    // everything needed to reproduce the miscompile.
+    let detail = if trimmed.is_empty() {
+        format!("cargo exited {code} with no output while compiling {what}")
+    } else {
+        format!("cargo exited {code} while compiling {what}:\n{trimmed}")
+    };
+    let ice = Diagnostic::CompilerBug {
+        where_: "emit.cargo_build",
+        detail,
+    };
+    f.write_str(&render(&ice, "", ""))
 }
 
 /// Extract the runtime feature name from a `cargo` feature-resolution error of
@@ -5562,10 +5583,14 @@ mod tests {
         );
     }
 
-    /// A cargo build failure that is not a feature gap renders the trimmed cargo
-    /// error under a plain header, still without any help page.
+    /// A cargo build failure that is not a feature gap is unattributable: the
+    /// front-end gate already rejected invalid programs, so a cargo failure here
+    /// is a miscompile in Ipê's own emission, not the user's fault. It renders as
+    /// a humble compiler-bug ICE that apologises, points at the issue tracker, and
+    /// still embeds the raw cargo stderr as the reportable detail — never a bare
+    /// rustc error presented as user error, and never any command's help page.
     #[test]
-    fn emitted_build_failure_reports_generic_cargo_error() {
+    fn emitted_build_failure_reports_unattributed_as_compiler_bug() {
         let err = CliError::EmittedBuildFailed {
             what: "the emitted program",
             code: 101,
@@ -5573,12 +5598,18 @@ mod tests {
             runtime: None,
         };
         let rendered = err.to_string();
+        // The humble ICE framing: this is the compiler's fault, please report it.
+        assert!(rendered.contains("please report"), "{rendered}");
+        assert!(rendered.contains("bug in Ipe"), "{rendered}");
+        // The raw cargo error is preserved for the bug report.
+        assert!(rendered.contains("cannot find value"), "{rendered}");
+        assert!(rendered.contains("E0425"), "{rendered}");
+        // Neither a help page nor the old plain-header user-error framing.
+        assert!(!rendered.contains("ipe run [<path>]"), "{rendered}");
         assert!(
-            rendered.contains("building the emitted program failed"),
+            !rendered.contains("building the emitted program failed (cargo exited"),
             "{rendered}"
         );
-        assert!(rendered.contains("cannot find value"), "{rendered}");
-        assert!(!rendered.contains("ipe run [<path>]"), "{rendered}");
     }
 
     /// The golden entry, located relative to this crate's manifest.
