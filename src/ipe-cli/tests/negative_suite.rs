@@ -1334,19 +1334,18 @@ fn lower_task_main_script_compiles() {
     assert_compiles("lower_task_main_script", &src);
 }
 
-// An effect is a `Task`: it runs only through `Task.run`, or by being sequenced
-// inside a function whose own return type is a `Task`. Discarding a `Task` as
-// `let _ = <task>` inside a NON-`Task` function would run it through a hidden
-// `Task.run`, so a plainly-typed function would silently perform I/O — an effect
-// escaping the discipline. That must fail closed at `ipe` time with IPE-L0141,
-// never `ipe`-accept then perform a lawless out-of-band print (THE SEAL for the
-// `Task` effect discipline).
+// `_` reserves an IGNORE slot INSIDE a larger pattern (`let (a, _) = …`), never
+// a whole binding of its own. A `let` whose entire bound pattern is a bare `_`
+// binds nothing — the value is computed only to be discarded — so it is rejected
+// fail-closed with IPE-N0043, in every context (a `Task` effect OR a pure value,
+// a `Task`-returning function OR a plain one). To run an effect and ignore its
+// result, sequence it with `|> Task.andThen (\_ -> rest)`; to drop a pure value,
+// delete the binding.
 
-/// A `Task`-typed effect (`Io.println`) discarded with `let _ = …` inside a
-/// function whose return type is NOT a `Task` (here `String -> String`) escapes
-/// the `Task` discipline and must be rejected with IPE-L0141.
+/// A bare `let _ = <task>` inside a plain (non-`Task`) function is rejected —
+/// there is no whole-binding wildcard. Rejected with IPE-N0043.
 #[test]
-fn lower_effect_discard_in_sync_context_rejected() {
+fn lower_bare_wildcard_let_in_sync_context_rejected() {
     let src = format!(
         "{HEAD}import Ipe.Io as Io\n\
          shout : String -> String\n\
@@ -1357,15 +1356,14 @@ fn lower_effect_discard_in_sync_context_rejected() {
          main : Task Error ()\n\
          main =\n    Io.println (shout \"hi\")\n"
     );
-    assert_rejected("lower_effect_discard_sync", &src, "IPE-L0141");
+    assert_rejected("lower_bare_wildcard_let_sync", &src, "IPE-N0043");
 }
 
-/// CONTRAPOSITIVE: the same `let _ = <task>` discard is LAWFUL when the enclosing
-/// function returns a `Task` — the discarded effect is sequenced into the chain,
-/// which runs only when the returned `Task` is run. A `main : Task Error ()` that
-/// discards one print and returns another must still compile.
+/// A bare `let _ = <task>` is ALSO rejected inside a `Task`-returning function —
+/// the auto-desugar to a sequenced `TaskSeq` is gone; a discarded effect must be
+/// threaded explicitly with `Task.andThen`. Rejected with IPE-N0043.
 #[test]
-fn lower_effect_discard_in_task_context_compiles() {
+fn lower_bare_wildcard_let_in_task_context_rejected() {
     let src = format!(
         "{HEAD}import Ipe.Io as Io\n\
          main : Task Error ()\n\
@@ -1374,7 +1372,39 @@ fn lower_effect_discard_in_task_context_compiles() {
          \x20   in\n\
          \x20   Io.println \"step two\"\n"
     );
-    assert_compiles("lower_effect_discard_task", &src);
+    assert_rejected("lower_bare_wildcard_let_task", &src, "IPE-N0043");
+}
+
+/// CONTRAPOSITIVE: the sanctioned rewrite — sequence the effect with
+/// `Task.andThen (\_ -> rest)` — compiles. A `main : Task Error ()` that runs
+/// one print, ignores its result, and returns another must still compile.
+#[test]
+fn lower_effect_sequenced_with_and_then_compiles() {
+    let src = format!(
+        "{HEAD}import Ipe.Io as Io\n\
+         import Ipe.Task as Task\n\
+         main : Task Error ()\n\
+         main =\n\
+         \x20   Io.println \"step one\"\n\
+         \x20       |> Task.andThen (\\_ -> Io.println \"step two\")\n"
+    );
+    assert_compiles("lower_effect_sequenced_and_then", &src);
+}
+
+/// CONTRAPOSITIVE: a `_` NESTED inside a larger let pattern is NOT a bare
+/// whole-binding wildcard and stays legal — `let (_, b) = (1, 2)` binds `b` and
+/// ignores the first component.
+#[test]
+fn lower_nested_wildcard_in_let_pattern_compiles() {
+    let src = format!(
+        "{HEAD}import Ipe.Io as Io\n\
+         main : Task Error ()\n\
+         main =\n\
+         \x20   let (_, b) = (\"one\", \"two\")\n\
+         \x20   in\n\
+         \x20   Io.println b\n"
+    );
+    assert_compiles("lower_nested_wildcard_let", &src);
 }
 
 /// CONTRAPOSITIVE: `Debug.log` is the sanctioned debug print — it returns its

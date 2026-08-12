@@ -1,10 +1,9 @@
 module Main exposing (main)
 import Ipe.Io as Io
+import Ipe.Task as Task
 
--- Effect sequencing: `let _ = task in rest` fires the F1 auto-force rule,
--- turning the discarded Task into a `task_and_then` chain so both effects run.
+-- Effect sequencing: two effects threaded with `Task.andThen`, ignoring the
+-- first task's result, so both effects run in order.
 main =
-    let
-        _ = Io.println "step 1"
-    in
-    Io.println "step 2"
+    Io.println "step 1"
+        |> Task.andThen (\_ -> Io.println "step 2")

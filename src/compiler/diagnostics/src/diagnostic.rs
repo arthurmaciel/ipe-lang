@@ -16,11 +16,12 @@ use crate::code::{
     IPE_L0114, IPE_L0115, IPE_L0116, IPE_L0117, IPE_L0118, IPE_L0119, IPE_L0120, IPE_L0121,
     IPE_L0122, IPE_L0123, IPE_L0124, IPE_L0125, IPE_L0126, IPE_L0127, IPE_L0128, IPE_L0129,
     IPE_L0130, IPE_L0131, IPE_L0132, IPE_L0133, IPE_L0134, IPE_L0135, IPE_L0136, IPE_L0140,
-    IPE_L0141, IPE_L0200, IPE_N0001, IPE_N0002, IPE_N0003, IPE_N0004, IPE_N0005, IPE_N0010,
+    IPE_L0200, IPE_N0001, IPE_N0002, IPE_N0003, IPE_N0004, IPE_N0005, IPE_N0010,
     IPE_N0011, IPE_N0012, IPE_N0013, IPE_N0020, IPE_N0021, IPE_N0022, IPE_N0023, IPE_N0024,
     IPE_N0025, IPE_N0026, IPE_N0027, IPE_N0028, IPE_N0029, IPE_N0030, IPE_N0031, IPE_N0032,
     IPE_N0033, IPE_N0034, IPE_N0035, IPE_N0036, IPE_N0037, IPE_N0038, IPE_N0039, IPE_N0040,
-    IPE_N0041, IPE_N0042, IPE_P0001, IPE_P0002, IPE_P0003, IPE_P0010, IPE_P0011, IPE_P0012,
+    IPE_N0041, IPE_N0042, IPE_N0043, IPE_P0001, IPE_P0002, IPE_P0003, IPE_P0010, IPE_P0011,
+    IPE_P0012,
     IPE_P0013, IPE_P0014, IPE_P0015, IPE_P0016, IPE_P0017, IPE_P0018, IPE_P0020, IPE_P0021,
     IPE_P0030, IPE_P0031, IPE_P0040, IPE_P0041, IPE_P0050, IPE_P0060, IPE_P0061, IPE_P0062,
     IPE_P0063, IPE_T0001, IPE_T0002, IPE_T0003, IPE_T0004, IPE_T0010, IPE_T0011, IPE_T0012,
@@ -598,6 +599,15 @@ pub enum NameError {
     /// is unrepresentable, not merely discouraged (Security #1, fail-closed).
     /// `alias` is the raw kernel string the binding named. [IPE-N0042]
     KernelAliasInUserSource { alias: Box<str> },
+    /// A `let` binding whose entire bound pattern is a bare `_` (`let _ = e in
+    /// rest`). The `_` wildcard names a value to IGNORE inside a larger pattern
+    /// (`let (a, _) = …`, `\_ ->`, `case … of _ ->`), not a binding on its own —
+    /// a whole-binding `_` binds nothing, so the value is computed only to be
+    /// thrown away. To run an effect and drop its result, sequence it with
+    /// `|> Task.andThen (\_ -> rest)`; to drop a pure value, delete the binding.
+    /// Rejected fail-closed at the binder rather than silently desugared. A `_`
+    /// nested inside a larger let pattern is unaffected. [IPE-N0043]
+    BareWildcardLet,
 }
 
 /// Why `Ipe.Codec.auto` could not derive a codec.
@@ -1115,14 +1125,6 @@ pub enum LowerError {
     /// the web-family shape that rejected it — the SECURITY-tier fail-closed
     /// gate converts a would-be wrong-render into an ipe-time error. [IPE-L0132]
     UiCellsInWebShape(AppShape),
-    /// A `Task`-typed value was discarded as `let _ = <task>` inside a
-    /// non-`Task` context (a function whose return type is not itself a
-    /// `Task`). Emitting this discard would run the effect through an implicit
-    /// `task_run`, so a plainly-typed function (e.g. `String -> String`) would
-    /// silently perform I/O — an effect escaping the `Task` discipline every
-    /// other effect obeys. A `Task` runs only through `Task.run`, or by being
-    /// sequenced inside a `Task`-returning function. [IPE-L0141]
-    LawlessEffectDiscard,
     /// The program's `main` is not an entry a runnable program can have. A
     /// `main` is the one effect a program runs, so it must be a `Task Error ()`
     /// — either written directly (a script, `main = Io.println "…"`) or produced
@@ -1412,6 +1414,7 @@ const fn name_code(msg: &NameError) -> Code {
         NameError::NestedDecoderPipeline => IPE_N0040,
         NameError::CodecAutoUnderivable { .. } => IPE_N0041,
         NameError::KernelAliasInUserSource { .. } => IPE_N0042,
+        NameError::BareWildcardLet => IPE_N0043,
     }
 }
 
@@ -1449,7 +1452,6 @@ const fn lower_code(msg: &LowerError) -> Code {
         }
         LowerError::DevOnlyKernelInProduction { .. } => IPE_L0140,
         LowerError::UiCellsInWebShape(_) => IPE_L0132,
-        LowerError::LawlessEffectDiscard => IPE_L0141,
         LowerError::NonEntryMain { .. } => IPE_L0136,
     }
 }
@@ -1587,7 +1589,8 @@ fn name_help(msg: &NameError, span: Span) -> Vec<HelpLine> {
         | NameError::BoundarySealIllegal { .. }
         | NameError::NestedDecoderPipeline
         | NameError::CodecAutoUnderivable { .. }
-        | NameError::KernelAliasInUserSource { .. } => Vec::new(), // no span-based help
+        | NameError::KernelAliasInUserSource { .. }
+        | NameError::BareWildcardLet => Vec::new(), // no span-based help
     }
 }
 
@@ -1799,16 +1802,6 @@ fn lower_help(msg: &LowerError) -> Vec<HelpLine> {
              cannot render. Use it only under `Terminal.appScreen` / `Terminal.appLines`; \
              for the same content in a Web/WebView view, render it with `Ui.text` (or a \
              `Ui.column` of rows) instead."
-                .into(),
-        )],
-        LowerError::LawlessEffectDiscard => vec![HelpLine::Note(
-            "a `Task` runs its effect only through `Task.run`, or by being sequenced \
-             inside a function whose own return type is a `Task`. Discarding it with \
-             `let _ = <task>` in a non-`Task` function would run it through a hidden \
-             `Task.run`. Give the enclosing function a `Task e ()` return type and let \
-             its result be the sequenced tasks, or run the effect explicitly with \
-             `Task.run`. To print a value while debugging, use `Debug.log` (rejected in \
-             production builds)."
                 .into(),
         )],
         LowerError::NonEntryMain { .. } => vec![HelpLine::Note(

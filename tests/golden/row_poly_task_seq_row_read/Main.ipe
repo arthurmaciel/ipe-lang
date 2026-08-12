@@ -4,19 +4,16 @@ import Ipe.Io as Io
 import Ipe.Task as Task
 
 
--- A row-polymorphic function that reads its row field inside a discarded Task
--- effect AND again in the continuation. The discarded `let _ = <task>` lowers to
--- a Task-sequencing tail whose continuation captures `rec`, so the effect's field
--- read `rec.name` must survive the emit-time capture-clone as a bare `Var`
--- receiver (routing through the borrowing witness getter), never a whole-row
--- clone. `report` is sequenced at two DIFFERENT shapes so the row stays generic.
+-- A row-polymorphic function that reads its row field inside a sequenced Task
+-- effect AND again in the continuation. `Task.andThen` builds a Task-sequencing
+-- tail whose continuation captures `rec`, so the effect's field read `rec.name`
+-- must survive the emit-time capture-clone as a bare `Var` receiver (routing
+-- through the borrowing witness getter), never a whole-row clone. `report` is
+-- sequenced at two DIFFERENT shapes so the row stays generic.
 report : { r | name : String } -> Task Error ()
 report rec =
-    let
-        _ =
-            Io.println rec.name
-    in
     Io.println rec.name
+        |> Task.andThen (\_ -> Io.println rec.name)
 
 
 ada : { name : String, age : Int }

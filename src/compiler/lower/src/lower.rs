@@ -20534,25 +20534,6 @@ impl<'a> Lowerer<'a> {
         Ok(Pat::Record(entries))
     }
 
-    /// Lower a `let … in body`. A multi-binding `let` becomes right-nested
-    /// single-binding IR nodes (`let a = …; b = … in body` → `Let a (Let b body)`),
-    /// matching the sequential (`let*`) scoping that canonicalisation and
-    /// inference established. A plain `name = value` binding stays the audited
-    /// single-symbol [`Expr::Let`]; an irrefutable destructure (`(a, b) = e`,
-    /// `{ x } = e`, `_ = e`) lowers to an [`Expr::Destructure`] whose binder is
-    /// built by [`Self::lower_binder_pat`] (a refutable binder is rejected there).
-    /// Return `true` if the expression at `span` has a `Task` type according to
-    /// the HM solver's region table. Used by [`lower_let`] to decide whether a
-    /// wildcard binding (`let _ = expr`) should auto-force the task via
-    /// [`Expr::TaskSeq`] rather than silently dropping the unawaited future (F1).
-    fn is_task_typed(&self, span: Span) -> bool {
-        matches!(
-            self.region_ty(span),
-            Some(Ty::Con { name, .. })
-                if self.interner.resolve(*name).is_some_and(|n| n == "Task")
-        )
-    }
-
     /// Build the [`Expr`] for a destructure-binder `let` / single-arm-`case`
     /// binding, applying the Decoder-thunk generalization when `value`'s
     /// aggregate type contains [`IrType::Decoder`] anywhere. Falls through to
@@ -20953,42 +20934,17 @@ impl<'a> Lowerer<'a> {
             let value = self.lower_expr(&b.body)?;
             acc = match &b.pat.value {
                 canon::Pattern_::PVar(name) => self.lower_let_pvar(*name, b, value, acc)?,
-                // `let _ = <task>` effect discard. A `Task` carries its effect
-                // in the `Task` discipline: it runs only through `Task.run`, or
-                // by being sequenced inside a function whose own return type is a
-                // `Task`.
-                //   • Async function (returns Task): sequence the discarded
-                //     effect into the chain — emit `TaskSeq`, which lowers to
-                //     `task_and_then(effect, |_| rest)`. The whole chain stays a
-                //     `Task` value, so the effect runs only when that `Task` is
-                //     itself run. This is lawful sequencing.
-                //   • Sync function (non-Task return): there is no enclosing
-                //     `Task` to sequence into. Emitting the effect here would run
-                //     it through a hidden `Task.run`, letting a plainly-typed
-                //     function (`String -> String`) silently perform I/O — an
-                //     effect escaping the discipline. Fail closed: IPE-L0141.
-                // A non-Task wildcard keeps the plain `Destructure(Wildcard, …)`
-                // form (which lowers to `let _ = …;`).
+                // A `let` whose whole pattern is a bare `_` binds nothing and is
+                // rejected fail-closed in canonicalisation (IPE-N0043) — `_`
+                // reserves an ignore slot inside a larger pattern, never a whole
+                // binding. No such binding reaches lowering, so this is a
+                // violated invariant.
                 canon::Pattern_::PAnything => {
-                    if self.is_task_typed(b.body.span) {
-                        if self.fn_is_async.get() {
-                            Expr::TaskSeq {
-                                effect: Box::new(value),
-                                rest: Box::new(acc),
-                            }
-                        } else {
-                            return Err(Diagnostic::Lower {
-                                span: b.body.span,
-                                msg: LowerError::LawlessEffectDiscard,
-                            });
-                        }
-                    } else {
-                        Expr::Destructure {
-                            binder: self.lower_binder_pat(&b.pat, &b.body)?,
-                            value: Box::new(value),
-                            body: Box::new(acc),
-                        }
-                    }
+                    return Err(bug(
+                        "ipe_lower::lower_let_inner",
+                        "bare `let _ =` binding reached lowering — canon should \
+                         reject it as IPE-N0043",
+                    ));
                 }
                 // a destructure binder (tuple / record / alias) whose
                 // bound value's type contains a Decoder anywhere gets the

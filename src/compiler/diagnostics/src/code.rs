@@ -259,6 +259,11 @@ code! {
     /// so user code cannot reach an unsafe kernel without a disclosing `.Unsafe`
     /// import (capability-model integrity, fail-closed)
     IPE_N0042 = "IPE-N0042", "a kernel alias (Ffi.kernel) may not be minted in user source", "IPE-N0042";
+    /// a `let` binding whose entire bound pattern is a bare `_` (`let _ = e in
+    /// rest`) — a whole-binding wildcard binds nothing, so the value is computed
+    /// only to be discarded; sequence an effect with `Task.andThen` or delete a
+    /// pure binding (a `_` nested inside a larger pattern is still fine)
+    IPE_N0043 = "IPE-N0043", "a bare `let _ =` binds nothing and isn't allowed", "IPE-N0043";
 
     // -----------------------------------------------------------------------
     // Type (IPE-T####)
@@ -408,10 +413,6 @@ code! {
     /// a `Debug.*` development-only escape hatch reached a production build
     /// (`ipe build --optimize`)
     IPE_L0140 = "IPE-L0140", "a Debug.* escape hatch was used in a production build", "IPE-L0140";
-    /// a `Task`-typed value was discarded (`let _ = <task>`) in a non-`Task`
-    /// context, which would run its effect through an implicit `Task.run`
-    /// outside the effect discipline
-    IPE_L0141 = "IPE-L0141", "a Task effect was discarded in a non-Task context, escaping the Task effect discipline", "IPE-L0141";
     /// expression nests too deeply for the backend
     IPE_L0200 = "IPE-L0200", "expression nests too deeply for the backend", "IPE-L0200";
 

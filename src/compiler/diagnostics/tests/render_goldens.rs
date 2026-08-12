@@ -359,14 +359,15 @@ fn golden_lower_unsupported_feature() -> Result<(), Box<dyn std::error::Error>> 
 }
 
 #[test]
-fn golden_lower_lawless_effect_discard() -> Result<(), Box<dyn std::error::Error>> {
-    // IPE-L0141: a Task value discarded with `let _ = …` in a non-Task context.
-    let source = "module Main exposing (main)\n\nmain : Int\nmain =\n    let _ = Http.get \"https://example.com\"\n    in 42\n";
-    let d = Diagnostic::Lower {
-        span: Span::new(51, 89), // the `let _ = Http.get "…"` discard.
-        msg: LowerError::LawlessEffectDiscard,
+fn golden_name_bare_wildcard_let() -> Result<(), Box<dyn std::error::Error>> {
+    // IPE-N0043: a `let` whose whole bound pattern is a bare `_` binds nothing.
+    // The caret points at the `_` binder.
+    let source = "module Main exposing (main)\n\nmain =\n    let _ = compute\n    in 42\n";
+    let d = Diagnostic::Name {
+        span: Span::new(44, 45), // the bare `_` binder.
+        msg: NameError::BareWildcardLet,
     };
-    check_golden("lower_lawless_effect_discard", &d, "test.ipe", source)
+    check_golden("name_bare_wildcard_let", &d, "test.ipe", source)
 }
 
 #[test]

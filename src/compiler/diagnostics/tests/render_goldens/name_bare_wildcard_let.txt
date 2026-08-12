@@ -1,0 +1,11 @@
+-- NAMING ERROR -------------------------------------------- test.ipe
+
+This `let _ =` names nothing to keep, so it just throws the value away.
+
+ --> test.ipe:4:9
+  |
+4 |     let _ = compute
+  |         ^ a `let _ =` binding binds nothing — the whole pattern is a bare `_`, so the value is computed only to be discarded. To run an effect and ignore its result, sequence it with `|> Task.andThen (\_ -> rest)` (or a `do` block); to drop a pure value, delete the binding. A `_` NESTED in a larger pattern (`let (a, _) = …`) is still fine
+  |
+
+IPE-N0043 · run `ipe explain IPE-N0043`

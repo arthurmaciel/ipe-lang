@@ -14,7 +14,7 @@ import Ipe.Io as Io
 -- impl), so the backend inlines the `let tasks = [...]` binding at both
 -- `List.length tasks` use sites rather than sharing it via a Rust `let`
 -- (a shared binding would move `tasks` into the first call and leave the
--- second a use-after-move). The auto-forced effect right after the binding
+-- second a use-after-move). The sequenced effect right after the binding
 -- logs the string "run tasks" — which contains the bound name "tasks" as
 -- its own word. The pre-fix textual
 -- `replace_word_all(&body_s, "tasks", replacement)` pass matched that
@@ -28,7 +28,10 @@ import Ipe.Io as Io
 -- — the log message and the two `tasks` uses never cross-contaminate.
 main =
     let tasks = [ Task.succeed "a", Task.succeed "b" ] in
-    let _ = Log.info "run tasks" in
-    let n1 = List.length tasks in
-    let n2 = List.length tasks in
-    Io.println (String.fromInt (n1 + n2))
+    Log.info "run tasks"
+        |> Task.andThen
+            (\_ ->
+                let n1 = List.length tasks in
+                let n2 = List.length tasks in
+                Io.println (String.fromInt (n1 + n2))
+            )

@@ -3,6 +3,7 @@ module Main exposing (main)
 import Ipe.String as String
 import Ipe.Log as Log
 import Ipe.Io as Io
+import Ipe.Task as Task
 
 
 type alias RecCount =
@@ -16,9 +17,10 @@ fieldOf r =
 
 -- AUD-04 witness 2 (record-field-name corruption — the "seal breach" case).
 --
--- `count` is captured free in `rest` (`Io.println (String.fromInt count)`) and
--- the auto-forced `effect` constructs a record LITERAL whose field is named
--- `count` too — same identifier text, unrelated binding.
+-- `count` is captured free in the continuation
+-- (`Io.println (String.fromInt count)`) and the sequenced `effect` constructs a
+-- record LITERAL whose field is named `count` too — same identifier text,
+-- unrelated binding.
 --
 -- The pre-fix textual pass rendered `effect_s` to Rust first
 -- (`RecCount_R { count: 99 }`), then scanned it for the bare word "count"
@@ -31,5 +33,5 @@ fieldOf r =
 -- captured `count` binding survive unmolested).
 main =
     let count = 3 in
-    let _ = Log.info (String.fromInt (fieldOf { count = 99 })) in
-    Io.println (String.fromInt count)
+    Log.info (String.fromInt (fieldOf { count = 99 }))
+        |> Task.andThen (\_ -> Io.println (String.fromInt count))

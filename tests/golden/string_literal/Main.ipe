@@ -2,13 +2,14 @@ module Main exposing (main)
 
 import Ipe.String as String
 import Ipe.Io as Io
+import Ipe.Task as Task
 
 
 -- AUD-04 witness 1 (string-literal corruption).
 --
--- `count` is captured free in `rest` (the second `String.fromInt count`
--- print) and the auto-forced `effect` prints a STRING LITERAL that happens
--- to contain the substring "count" as its own word ("the count is").
+-- `count` is captured free in the continuation (the second `String.fromInt
+-- count` print) and the sequenced `effect` prints a STRING LITERAL that
+-- happens to contain the substring "count" as its own word ("the count is").
 --
 -- The pre-fix textual `clone_captured_vars` pass scanned the RENDERED
 -- `effect_s` for the bare word "count" and added `.clone()` wherever it
@@ -20,5 +21,5 @@ import Ipe.Io as Io
 -- second (count is still usable after the effect).
 main =
     let count = 3 in
-    let _ = Io.println "the count is" in
-    Io.println (String.fromInt count)
+    Io.println "the count is"
+        |> Task.andThen (\_ -> Io.println (String.fromInt count))

@@ -411,6 +411,10 @@ fn name_prose(msg: &NameError) -> String {
         NameError::CodecAutoUnderivable { .. } => {
             "I can't derive a codec here automatically.".to_string()
         }
+        NameError::BareWildcardLet => {
+            "This `let _ =` names nothing to keep, so it just throws the value away."
+                .to_string()
+        }
         NameError::Unknown => "Something is off with a name in this code.".to_string(),
     }
 }
@@ -519,11 +523,6 @@ fn lower_prose(msg: &LowerError) -> String {
         }
         LowerError::UiCellsInWebShape(_) => {
             "`Ui.cells` paints a terminal character grid, so it has no meaning in a browser app."
-                .to_string()
-        }
-        LowerError::LawlessEffectDiscard => {
-            "Discarding this `Task` here would quietly run its effect from a function that isn't \
-             supposed to do any."
                 .to_string()
         }
         LowerError::NonEntryMain { found } => format!(
@@ -1149,6 +1148,14 @@ fn name_label(msg: &NameError) -> Option<String> {
             };
             Some(why)
         }
+        NameError::BareWildcardLet => Some(
+            "a `let _ =` binding binds nothing — the whole pattern is a bare `_`, so the \
+             value is computed only to be discarded. To run an effect and ignore its \
+             result, sequence it with `|> Task.andThen (\\_ -> rest)` (or a `do` block); \
+             to drop a pure value, delete the binding. A `_` NESTED in a larger pattern \
+             (`let (a, _) = …`) is still fine"
+                .to_string(),
+        ),
         NameError::Unknown => None,
     }
 }
@@ -1317,13 +1324,6 @@ fn lower_label(msg: &LowerError) -> String {
              Use it only under `Terminal.appScreen` / `Terminal.appLines`",
             web_shape_label(*app)
         ),
-        LowerError::LawlessEffectDiscard => {
-            "discarding this `Task` with `let _ = …` in a function that does not return \
-             a `Task` would run its effect through a hidden `Task.run` — a plainly-typed \
-             function would silently perform I/O. Give the function a `Task e ()` return \
-             type, or run the effect with `Task.run`"
-                .to_string()
-        }
         LowerError::NonEntryMain { found } => {
             format!(
                 "this `main` is {}, not a `Task Error ()`",

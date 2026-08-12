@@ -4339,6 +4339,19 @@ fn canonicalise_expr(e: &src::Expr, env: &Env, interner: &mut Interner) -> DResu
             let mut let_env = env.clone();
             let mut can_bindings = Vec::with_capacity(bindings.len());
             for b in bindings {
+                // A `let` whose ENTIRE bound pattern is a bare `_` binds nothing:
+                // the value is computed only to be discarded. `_` reserves an
+                // IGNORE slot INSIDE a larger pattern (`let (a, _) = …`), never a
+                // whole binding of its own. Reject fail-closed rather than
+                // silently discard — an effect must be sequenced with
+                // `Task.andThen`, a pure value deleted. A `_` nested in a larger
+                // pattern reaches `canonicalise_pattern` below, unaffected.
+                if matches!(b.pat.value, src::Pattern_::PAnything) {
+                    return Err(Diagnostic::Name {
+                        span: b.pat.span,
+                        msg: NameError::BareWildcardLet,
+                    });
+                }
                 let can_body = canonicalise_expr(&b.body, &let_env, interner)?;
                 // The binder's value is resolved against the scope so far; then
                 // every variable it introduces (a plain name, or each leaf of a
