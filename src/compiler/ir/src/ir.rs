@@ -1482,8 +1482,8 @@ pub enum IrType {
     /// (`ipe_runtime::external_conn::ExternalConnection`), distinct from the app's
     /// `Db`. The phantom access-mode argument (`ReadOnly` / `ReadWrite`) is erased
     /// here: both modes render to the one concrete runtime type, so there is no
-    /// `dyn` and one concrete pool per position. Minted only by `Db.Dsn.open` /
-    /// `Db.Unsafe.unsafeOpen`; `Clone`; `Debug` redacted; non-serde.
+    /// `dyn` and one concrete pool per position. Minted only by `Db.Dsn.open`;
+    /// `Clone`; `Debug` redacted; non-serde.
     Connection,
     /// The phantom read-only access-mode marker. Never a standalone runtime value
     /// — it appears only as [`Self::Connection`]'s erased argument. Present in the

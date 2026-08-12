@@ -1,14 +1,19 @@
-//! Regression test: every symbol name returned by `kernel_name()` in
-//! `crates/ipe_backend_rust/src/naming.rs` must resolve to a real `pub fn`
-//! in the runtime source (`src/ipe_runtime/**/*.rs`), OR appear in the
-//! explicit `KNOWN_DEAD_OR_EPILOGUE` allowlist.
+//! Regression test: every kernel's emit symbol must resolve to a real `pub fn`
+//! in the runtime source (`src/**/*.rs`), OR appear in the explicit
+//! `KNOWN_DEAD_OR_EPILOGUE` allowlist.
 //!
-//! **Why this matters.** `callee_name()` in `emit_expr.rs` calls `kernel_name(k)`
-//! and emits the returned string as a bare Rust identifier in generated code.  A
-//! wrong name compiles fine in the Ipê backend (it's just a string) but produces
-//! an `undefined` error when `cargo build` runs on the generated project.  This
-//! test makes that class of bug a compile-time-of-the-test-suite failure rather
-//! than a user-facing "cargo build failed" surprise.
+//! **The emit symbol's source.** A kernel's emitted runtime function name is
+//! defined once, in `ipe_kernels::StdlibKernel::def().runtime_fn` — the
+//! emit-symbol SSOT. The backend's `naming::kernel_name(k)` is a zero-cost
+//! projection of that field, so iterating `StdlibKernel::ALL` and reading
+//! `def().runtime_fn` yields exactly the strings the backend emits.
+//!
+//! **Why this matters.** `callee_name()` in `emit_expr.rs` emits that symbol as a
+//! bare Rust identifier in generated code.  A wrong name compiles fine in the Ipê
+//! backend (it's just a string) but produces an `undefined` error when `cargo
+//! build` runs on the generated project.  This test makes that class of bug a
+//! failure of the test suite rather than a user-facing "cargo build failed"
+//! surprise.
 //!
 //! **Allowlist rationale.**  Some `kernel_name()` entries are never reached by
 //! the generic `callee_name()` path because dedicated emit functions intercept
@@ -21,9 +26,9 @@
 use std::collections::HashSet;
 use std::path::PathBuf;
 
-/// Symbols present in `naming.rs` but never emitted via the generic
-/// `callee_name()` path, OR defined in the generated-code epilogue rather
-/// than the runtime.  See module-level docs for per-entry rationale.
+/// Emit symbols never reached via the generic `callee_name()` path (a dedicated
+/// emit function intercepts the variant first), OR defined in the generated-code
+/// epilogue rather than the runtime.  See per-entry rationale below.
 const KNOWN_DEAD_OR_EPILOGUE: &[&str] = &[
     // ── Build-time: env_public embeds the whitelisted public environment
     //         values into the emitted binary at compile time; there is no
@@ -96,27 +101,17 @@ fn walk(dir: &std::path::Path, fn_re: &regex::Regex, out: &mut HashSet<String>) 
 fn every_kernel_name_resolves_to_runtime_fn() {
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
 
-    // ── 1. Parse naming.rs: collect every string literal from kernel_name() ─
-    let naming_path = root
-        .join("..")
-        .join("..")
-        .join("compiler")
-        .join("backend")
-        .join("rust")
-        .join("src")
-        .join("naming.rs");
-    let naming_src = std::fs::read_to_string(&naming_path)
-        .unwrap_or_else(|e| panic!("cannot read {}: {e}", naming_path.display()));
-
-    // Match lines like:   KernelFn::Foo => "symbol_name",
-    let arm_re = regex::Regex::new(r#"=>\s*"([^"]+)""#).expect("arm_re");
-    let mut naming_symbols: HashSet<String> = HashSet::new();
-    for cap in arm_re.captures_iter(&naming_src) {
-        naming_symbols.insert(cap[1].to_string());
-    }
+    // ── 1. Collect every kernel's emit symbol from the SSOT ──────────────────
+    // `StdlibKernel::def().runtime_fn` is the single source the backend's
+    // `naming::kernel_name` projects; iterating `ALL` yields exactly the symbols
+    // the emitted code names.
+    let naming_symbols: HashSet<String> = ipe_kernels::StdlibKernel::ALL
+        .iter()
+        .map(|k| k.def().runtime_fn.to_string())
+        .collect();
     assert!(
         !naming_symbols.is_empty(),
-        "kernel_name regex found zero symbols — the naming.rs path or regex is broken"
+        "StdlibKernel::ALL is empty — the emit-symbol SSOT is broken"
     );
 
     // ── 2. Walk src/runtime/rust/src/**/*.rs: collect all `pub fn` names ─
@@ -133,7 +128,7 @@ fn every_kernel_name_resolves_to_runtime_fn() {
     // ── 3. Build the allowlist set ────────────────────────────────────────────
     let allowlist: HashSet<&str> = KNOWN_DEAD_OR_EPILOGUE.iter().copied().collect();
 
-    // ── 4. Assert every naming.rs symbol is reachable ────────────────────────
+    // ── 4. Assert every kernel emit symbol is reachable ──────────────────────
     let mut unresolved: Vec<String> = naming_symbols
         .iter()
         .filter(|sym| !runtime_fns.contains(*sym) && !allowlist.contains(sym.as_str()))
@@ -144,9 +139,10 @@ fn every_kernel_name_resolves_to_runtime_fn() {
     assert_eq!(
         unresolved,
         Vec::<String>::new(),
-        "kernel_name() returns symbol(s) that don't exist as `pub fn` in the runtime \
+        "kernel emit symbol(s) don't exist as `pub fn` in the runtime \
          AND aren't in KNOWN_DEAD_OR_EPILOGUE.\n\
-         Fix: either (a) add/rename the runtime function, (b) fix the string in naming.rs, \
+         Fix: either (a) add/rename the runtime function, (b) fix the \
+         `runtime_fn` in the kernel's `def()`, \
          or (c) add the symbol to KNOWN_DEAD_OR_EPILOGUE with a comment explaining why \
          the generic callee_name() path never reaches it.\n\
          Unresolved: {unresolved:?}"

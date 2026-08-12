@@ -126,43 +126,6 @@ pub fn db_conn_open<E: Send + From<String> + 'static>(dsn: Dsn) -> IpeTask<E, Ex
     Box::pin(open_external(dsn))
 }
 
-/// `Ipe.Db.Unsafe.unsafeOpen : Driver -> String -> Task Error (Connection ReadOnly)`
-/// — the RAW-string connector. The connection string is caller-asserted, not
-/// parsed; importing `Ipe.Db.Unsafe` discloses the `unsafe` capability. The
-/// `driver_tag` selects the dialect (`0 = Postgres`, `1 = Sqlite`); an
-/// out-of-set tag is a fail-closed typed `Err`, never a panic.
-///
-/// The raw string is dialed VERBATIM (the caller owns the descriptor invariant
-/// the safe `Dsn` parser would otherwise enforce). It is never logged or echoed
-/// into an error.
-#[must_use]
-pub fn db_conn_unsafe_open<E: Send + From<String> + 'static>(
-    driver_tag: i64,
-    raw: String,
-) -> IpeTask<E, ExternalConnection> {
-    Box::pin(async move {
-        match driver_tag {
-            0 => match sqlx::postgres::PgPoolOptions::new()
-                .max_connections(EXTERNAL_POOL_MAX_CONNECTIONS)
-                .connect(&raw)
-                .await
-            {
-                Ok(pool) => ok_res(ExternalConnection::Postgres(pool)),
-                Err(e) => IpeResult::Err(connect_err(&e)),
-            },
-            1 => match sqlx::sqlite::SqlitePoolOptions::new()
-                .max_connections(EXTERNAL_POOL_MAX_CONNECTIONS)
-                .connect(&raw)
-                .await
-            {
-                Ok(pool) => ok_res(ExternalConnection::Sqlite(pool)),
-                Err(e) => IpeResult::Err(connect_err(&e)),
-            },
-            _ => IpeResult::Err(str_err("external connect: unknown driver")),
-        }
-    })
-}
-
 /// `Ipe.Db.close : Connection mode -> Task Error ()` — return the pool. Total and
 /// idempotent: closing releases the sqlx pool; a value dropped without `close`
 /// still drops its pool via sqlx's `Drop`. Never panics.

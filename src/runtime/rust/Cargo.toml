@@ -508,6 +508,9 @@ sha2 = "0.10"
 # override (which would just re-litigate the SAME collision against whatever
 # version bcrypt/proptest ship next).
 [target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
+# `symbol_resolution` reads the emit-symbol SSOT (`StdlibKernel::def().runtime_fn`)
+# to check every kernel's runtime function exists — a native-only source-walk test.
+ipe_kernels = { path = "../../compiler/kernels" }
 proptest = "1"
 jsonwebtoken = "9"
 bcrypt = "0.17"

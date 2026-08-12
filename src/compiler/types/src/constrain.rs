@@ -580,7 +580,7 @@ struct Builtins {
     // ── Ipe.Db external Connection ──────────────────────────────────────────
     /// `"Connection"` — the external-DB connection handle constructor
     /// `Connection mode` (`ipe_runtime::external_conn::ExternalConnection`).
-    /// Minted only by `Db.Dsn.open` / `Db.Unsafe.unsafeOpen`. The phantom
+    /// Minted only by `Db.Dsn.open`. The phantom
     /// `mode` distinguishes `ReadOnly` from `ReadWrite` at inference and is
     /// erased at emit. Lowered to `IrType::Connection`.
     connection: Symbol,
@@ -5406,10 +5406,6 @@ impl<'a> Builder<'a> {
             K::DbConnOpen => fun(dsn(), task(connection(conn_read_only()))),
             // close : Connection a -> Task Error ()  (polymorphic over the mode)
             K::DbConnClose => fun(connection(var(0)), task_unit()),
-            // unsafeOpen : Int(driverTag) -> String -> Task Error (Connection ReadOnly)
-            K::DbConnUnsafeOpen => {
-                fun(int(), fun(string(), task(connection(conn_read_only()))))
-            }
             // unsafeExecRawOn : Connection ReadWrite -> String -> Task Error Int
             K::DbConnUnsafeExecRawOn => {
                 fun(connection(conn_read_write()), fun(string(), task(int())))
@@ -8555,10 +8551,9 @@ mod registry_phase_c_tests {
             K::DbConnect,
             K::DbOpen,
             K::DbClose,
-            // External Connection — read-only-by-type foreign-DB connect (4)
+            // External Connection — read-only-by-type foreign-DB connect (3)
             K::DbConnOpen,
             K::DbConnClose,
-            K::DbConnUnsafeOpen,
             K::DbConnUnsafeExecRawOn,
             // External read path — `…On` reads over a `Connection a` (3)
             K::DbConnFindWhere,
