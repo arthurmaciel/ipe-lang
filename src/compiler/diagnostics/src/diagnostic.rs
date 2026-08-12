@@ -23,9 +23,9 @@ use crate::code::{
     IPE_N0041, IPE_N0042, IPE_P0001, IPE_P0002, IPE_P0003, IPE_P0010, IPE_P0011, IPE_P0012,
     IPE_P0013, IPE_P0014, IPE_P0015, IPE_P0016, IPE_P0017, IPE_P0018, IPE_P0020, IPE_P0021,
     IPE_P0030, IPE_P0031, IPE_P0040, IPE_P0041, IPE_P0050, IPE_P0060, IPE_P0061, IPE_P0062,
-    IPE_P0063, IPE_T0001, IPE_T0002, IPE_T0003, IPE_T0004, IPE_T0010, IPE_T0011, IPE_T0012,
-    IPE_T0013, IPE_T0014, IPE_T0015, IPE_T0016, IPE_T0017, IPE_T0018, IPE_T0019, IPE_T0020,
-    Severity,
+    IPE_P0063, IPE_P0064, IPE_T0001, IPE_T0002, IPE_T0003, IPE_T0004, IPE_T0010, IPE_T0011,
+    IPE_T0012, IPE_T0013, IPE_T0014, IPE_T0015, IPE_T0016, IPE_T0017, IPE_T0018, IPE_T0019,
+    IPE_T0020, Severity,
 };
 use crate::span::Span;
 
@@ -224,6 +224,10 @@ pub enum LetDefect {
     MissingEquals,
     /// The `in` keyword is missing after the bindings.
     MissingIn,
+    /// The entire bound pattern is a bare `_` wildcard, which binds nothing
+    /// and silently discards the right-hand side. Use a `do` bare-run line or
+    /// `|> Task.andThen (\_ -> …)` to sequence an effect. [IPE-P0064]
+    BareWildcardBinding,
 }
 
 /// Which part of an `if … then … else …` expression is malformed.
@@ -1372,6 +1376,7 @@ const fn parse_code(msg: &ParseError) -> Code {
         ParseError::ExpectedType => IPE_P0041,
         ParseError::UnclosedDelimiter { .. } => IPE_P0050,
         ParseError::MalformedCase(_) => IPE_P0060,
+        ParseError::MalformedLet(LetDefect::BareWildcardBinding) => IPE_P0064,
         ParseError::MalformedLet(_) => IPE_P0061,
         ParseError::MalformedIf(_) => IPE_P0062,
         ParseError::InvalidPathLiteral { .. } => IPE_P0063,

@@ -294,6 +294,9 @@ fn parse_prose(msg: &ParseError) -> String {
         ParseError::ExpectedType => "I was expecting a type here.".to_string(),
         ParseError::UnclosedDelimiter { .. } => "This opening bracket is never closed.".to_string(),
         ParseError::MalformedCase(_) => "I couldn't read this `case` expression.".to_string(),
+        ParseError::MalformedLet(LetDefect::BareWildcardBinding) => {
+            "a bare `_` cannot be the whole binding pattern in a `let`.".to_string()
+        }
         ParseError::MalformedLet(_) => "I couldn't read this `let` expression.".to_string(),
         ParseError::MalformedIf(_) => "I couldn't read this `if` expression.".to_string(),
         ParseError::InvalidPathLiteral { .. } => {
@@ -1790,6 +1793,9 @@ const fn let_defect_str(d: LetDefect) -> &'static str {
         LetDefect::BindingNameNotLower => "a let binding name must be a lowercase identifier",
         LetDefect::MissingEquals => "expected `=` after the binding name",
         LetDefect::MissingIn => "expected `in` after the let bindings",
+        LetDefect::BareWildcardBinding => {
+            "`_` as the whole binding pattern binds nothing — use a `do` line or `|> Task.andThen (\\_ -> …)` to sequence an effect"
+        }
     }
 }
 

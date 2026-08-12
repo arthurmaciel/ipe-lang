@@ -100,6 +100,17 @@ fn ty_con1(name: &str, arg: TyDoc) -> TyDoc {
 // ---------------------------------------------------------------------------
 
 #[test]
+fn golden_parse_bare_wildcard_let_binding() -> Result<(), Box<dyn std::error::Error>> {
+    // IPE-P0064: `_` as the entire let binding pattern — binds nothing.
+    let source = "module Main exposing (main)\n\nmain =\n    let _ = Io.println \"a\" in\n    Io.println \"b\"\n";
+    let d = Diagnostic::Parse {
+        span: Span::new(44, 45), // the bare `_` token.
+        msg: ParseError::MalformedLet(ipe_diagnostics::LetDefect::BareWildcardBinding),
+    };
+    check_golden("parse_bare_wildcard_let_binding", &d, "test.ipe", source)
+}
+
+#[test]
 fn golden_parse_unexpected_token() -> Result<(), Box<dyn std::error::Error>> {
     // IPE-P0001: unexpected token — the parser found a number where an
     // identifier was expected.
