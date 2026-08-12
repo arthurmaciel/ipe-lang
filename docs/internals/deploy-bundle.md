@@ -1,10 +1,18 @@
 # Deploy bundle
 
-`ipe deploy` produces a **self-contained, toolchain-free jailed deploy bundle**:
-a small launcher binary (`ipe-wrapper`) that locates the app binary (`ipe-app`)
-and its capability profile (`ipe.profile`), verifies the profile against the
+`ipe deploy` produces a **single self-jailing binary**: a launcher
+(`ipe-wrapper`) with the app binary and its capability profile fused in at
+compile time. The launcher extracts the app, verifies the profile against the
 capability floor embedded in the app binary, and execs the app inside the
 sandbox jail — all without `ipe`, `cargo`, or any compiler on the target server.
+Because the app is reachable only through the launcher, the jailed path is the
+only path.
+
+`--bundle` opts out of fusion and lays the wrapper, app, and profile out as
+sibling files instead. That form is less safe: the `ipe-app` binary sits on
+disk beside the wrapper and an operator can run it directly, bypassing the
+sandbox. Prefer the default single-file form for production; reach for
+`--bundle` only when the pieces must be inspected or replaced independently.
 
 All command examples in this document are **illustrative** — `ipe deploy` is
 built by this crate and requires the musl toolchain and (on the target server)
@@ -58,9 +66,30 @@ automatically applies to both the `ipe exec` path and the wrapper.
 None of these conditions has a permissive fallback. The wrapper either execs
 the app under a verified jail or exits non-zero with a typed message.
 
-## Bundle layout (default mode)
+## Artifact layout (default: single self-jailing binary)
 
-The bundle directory layout (illustrative):
+The default artifact is one file, with `ipe-app` and `ipe.profile` fused into
+the wrapper at compile time (via `include_bytes!`):
+
+```text
+deploy/bundle/ipe-wrapper   # wrapper + app + profile, all baked in
+```
+
+The wrapper writes the app bytes to a temp file (owner-execute only, `0o700` on
+Unix), verifies them with the same floor scan, execs under the jail, and removes
+the temp file if exec fails. There is no separate app binary on disk, so the
+jailed launcher is the only way to run the app.
+
+On a target server with `bwrap` + `prlimit` installed, run the artifact as
+(illustrative):
+
+```text
+./ipe-wrapper -- <app-args>
+```
+
+## Multi-file layout (`--bundle`)
+
+`ipe deploy --bundle` lays the pieces out as siblings instead of fusing them:
 
 ```text
 deploy/bundle/
@@ -69,41 +98,28 @@ deploy/bundle/
 └── ipe.profile   # the capability manifest (plain text, auditable)
 ```
 
-On a target server with `bwrap` + `prlimit` installed, run the bundle as
-(illustrative):
+Running through `ipe-wrapper -- <app-args>` is jailed identically to the
+single-file form. The difference is a security one: `ipe-app` is a native
+ELF/Mach-O/PE binary sitting beside the wrapper, and an operator with local
+access can run it directly, bypassing the wrapper and the jail. That bypass is
+the reason the fused single-file form is the default — removing the standalone
+app binary removes the un-jailed path entirely. Choose `--bundle` only when the
+app and profile must be inspected or swapped independently, and treat the
+directory as capable of running the app un-jailed.
+
+## Inspecting the capability model (`--capabilities` / `--show-profile`)
+
+`ipe deploy --capabilities` (alias `--show-profile`) prints the capability model
+the app would enforce and exits without building or writing anything. It accepts
+`--plain` (bare names, one per line) and `--json` (a stable object) alongside the
+default human-readable report (illustrative):
 
 ```text
-./ipe-wrapper -- <app-args>
+ipe deploy --capabilities --json
 ```
 
-## Embed mode (`--embed`)
-
-`ipe deploy --embed` bakes `ipe-app` and `ipe.profile` into the wrapper binary
-at compile time (via `include_bytes!`). The bundle is a single file:
-
-```text
-deploy/bundle/ipe-wrapper   # wrapper + app + profile, all baked in
-```
-
-The embed-mode wrapper writes the app bytes to a temp file (owner-execute only,
-`0o700` on Unix), verifies them with the same floor scan, execs under the jail,
-and removes the temp file if exec fails.
-
-To audit the embedded profile without running the wrapper (illustrative):
-
-```text
-./ipe-wrapper --show-profile
-```
-
-## Honest limit
-
-The inner `ipe-app` is a native ELF/Mach-O/PE binary. An operator with
-sufficient local access can run it directly, bypassing the wrapper and the jail.
-This is inherent to native executables — the wrapper makes the sanctioned,
-jailed, profile-verified path the easy toolchain-free one; it does not prevent
-a sufficiently privileged local operator from running the binary bare. The
-security guarantee is: **any run through `ipe-wrapper` is jailed exactly as
-tightly as the embedded floor requires**.
+Once deployed, the running launcher exposes the same inspection via
+`./ipe-wrapper --show-profile`.
 
 ## Relationship to `ipe exec`
 
@@ -113,10 +129,10 @@ binary. `ipe deploy` extends that to a server with no toolchain by:
 
 1. Building statically-linked (`--static --target <musl-triple>`) binaries —
    zero runtime dynamic-library dependencies.
-2. Packaging the wrapper + app + profile into a directory (or single file)
-   designed to be `scp`'d.
-3. Having the wrapper locate the app by a FIXED RELATIVE PATH rather than via
-   `cargo metadata`.
+2. Fusing the wrapper + app + profile into a single binary designed to be
+   `scp`'d (or, under `--bundle`, a directory of the three files).
+3. Having the wrapper resolve the app from its fused-in bytes (or, under
+   `--bundle`, by a FIXED RELATIVE PATH) rather than via `cargo metadata`.
 
 The jail mechanics are identical.
 

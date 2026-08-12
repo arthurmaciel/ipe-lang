@@ -2,13 +2,13 @@
 //! checks. The full end-to-end deploy (compile + cargo build + bundle layout)
 //! requires the musl target installed and is gated on `IPE_E2E=1`.
 
-use ipe::cli_args::parse_deploy;
+use ipe::cli_args::{DeployMode, parse_deploy};
 use std::path::PathBuf;
 
 // ── Argument parsing ─────────────────────────────────────────────────────────
 
-/// No arguments: entry defaults to None (project-aware default) and embed is
-/// off.
+/// No arguments: entry defaults to None (project-aware default) and the mode is
+/// the single self-jailing binary.
 #[test]
 fn deploy_no_args_defaults() {
     let args: Vec<String> = vec![];
@@ -17,15 +17,42 @@ fn deploy_no_args_defaults() {
     assert!(parsed.out.is_none());
     assert!(parsed.target.is_none());
     assert!(parsed.runtime.is_none());
-    assert!(!parsed.embed);
+    assert_eq!(parsed.mode, DeployMode::Embed);
+    assert!(!parsed.capabilities_only);
 }
 
-/// `--embed` flag sets the embed field.
+/// `--embed` is a no-op alias for the default single-file mode.
 #[test]
 fn deploy_embed_flag() {
     let args: Vec<String> = vec!["--embed".into()];
     let parsed = parse_deploy(&args).expect("--embed parse must succeed");
-    assert!(parsed.embed);
+    assert_eq!(parsed.mode, DeployMode::Embed);
+}
+
+/// `--bundle` selects the multi-file opt-out.
+#[test]
+fn deploy_bundle_flag() {
+    let args: Vec<String> = vec!["--bundle".into()];
+    let parsed = parse_deploy(&args).expect("--bundle parse must succeed");
+    assert_eq!(parsed.mode, DeployMode::Bundle);
+}
+
+/// `--embed` and `--bundle` together is a usage error.
+#[test]
+fn deploy_embed_and_bundle_mutually_exclusive() {
+    let args: Vec<String> = vec!["--embed".into(), "--bundle".into()];
+    assert!(
+        parse_deploy(&args).is_err(),
+        "--embed with --bundle must be rejected"
+    );
+}
+
+/// `--capabilities` requests a dry capability inspection.
+#[test]
+fn deploy_capabilities_flag() {
+    let args: Vec<String> = vec!["--capabilities".into()];
+    let parsed = parse_deploy(&args).expect("--capabilities parse must succeed");
+    assert!(parsed.capabilities_only);
 }
 
 /// `--out <dir>` is accepted.

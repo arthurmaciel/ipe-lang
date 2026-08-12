@@ -2995,6 +2995,13 @@ pub(crate) fn run_deploy(rest: &[String]) -> Result<(), CliError> {
     };
     let entry_path = PathBuf::from(&entry);
 
+    // `--capabilities` / `--show-profile`: inspect the inferred capability
+    // model without building or writing anything.
+    if args.capabilities_only {
+        let manifest = discover_manifest(&entry_path)?;
+        return run_deploy_capabilities(&entry_path, manifest.as_deref(), args.format);
+    }
+
     // Bundle output directory: deploy/ by default.
     let out_dir = args
         .out
@@ -3138,7 +3145,7 @@ pub(crate) fn run_deploy(rest: &[String]) -> Result<(), CliError> {
         .arg("ipe_wrapper")
         .args(["--target", wrapper_static_plan.triple.as_str()]);
 
-    if args.embed {
+    if matches!(args.mode, cli_args::DeployMode::Embed) {
         // Embed mode: pass the app binary + profile as env vars so build.rs
         // copies them into OUT_DIR and enables the embed_mode cfg.
         wrapper_cargo
@@ -3172,61 +3179,114 @@ pub(crate) fn run_deploy(rest: &[String]) -> Result<(), CliError> {
         .join("release")
         .join("ipe-wrapper");
 
-    if args.embed {
-        // Single-file embed: copy only the wrapper (app + profile are baked in).
-        let dest = bundle_dir.join("ipe-wrapper");
-        std::fs::copy(&wrapper_src, &dest).map_err(|e| CliError::Io {
-            path: dest.clone(),
-            source: e,
-        })?;
-        #[cfg(unix)]
-        set_executable(&dest)?;
-    } else {
-        // Bundle: wrapper + app + profile as siblings.
-        let wrapper_dest = bundle_dir.join("ipe-wrapper");
-        let app_dest = bundle_dir.join("ipe-app");
-        let profile_dest = bundle_dir.join("ipe.profile");
-        std::fs::copy(&wrapper_src, &wrapper_dest).map_err(|e| CliError::Io {
-            path: wrapper_dest.clone(),
-            source: e,
-        })?;
-        std::fs::copy(&app_binary, &app_dest).map_err(|e| CliError::Io {
-            path: app_dest.clone(),
-            source: e,
-        })?;
-        std::fs::copy(&profile_src, &profile_dest).map_err(|e| CliError::Io {
-            path: profile_dest.clone(),
-            source: e,
-        })?;
-        #[cfg(unix)]
-        {
-            set_executable(&wrapper_dest)?;
-            set_executable(&app_dest)?;
+    let artifact = match args.mode {
+        cli_args::DeployMode::Embed => {
+            // Single-file embed: copy only the wrapper (app + profile baked in).
+            let dest = bundle_dir.join("ipe-wrapper");
+            std::fs::copy(&wrapper_src, &dest).map_err(|e| CliError::Io {
+                path: dest.clone(),
+                source: e,
+            })?;
+            #[cfg(unix)]
+            set_executable(&dest)?;
+            dest
         }
-    }
+        cli_args::DeployMode::Bundle => {
+            // Bundle: wrapper + app + profile as siblings.
+            let wrapper_dest = bundle_dir.join("ipe-wrapper");
+            let app_dest = bundle_dir.join("ipe-app");
+            let profile_dest = bundle_dir.join("ipe.profile");
+            std::fs::copy(&wrapper_src, &wrapper_dest).map_err(|e| CliError::Io {
+                path: wrapper_dest.clone(),
+                source: e,
+            })?;
+            std::fs::copy(&app_binary, &app_dest).map_err(|e| CliError::Io {
+                path: app_dest.clone(),
+                source: e,
+            })?;
+            std::fs::copy(&profile_src, &profile_dest).map_err(|e| CliError::Io {
+                path: profile_dest.clone(),
+                source: e,
+            })?;
+            #[cfg(unix)]
+            {
+                set_executable(&wrapper_dest)?;
+                set_executable(&app_dest)?;
+            }
+            bundle_dir
+        }
+    };
 
     if show_progress {
-        if args.embed {
-            eprintln!(
+        // Post-build report: how the binary is linked, where it landed, and the
+        // capability model it will enforce.
+        let cap_names: Vec<&'static str> = resolved.union().iter().map(|c| c.as_str()).collect();
+        eprint!("{}", deploy_report(&artifact, &cap_names, args.mode));
+        match args.mode {
+            cli_args::DeployMode::Embed => eprintln!(
                 "{}",
                 style::gutter(&format!(
-                    "{} deployed (embed) → {} (single-file; `--show-profile` for audit)",
+                    "{} deployed → {} (single self-jailing binary; \
+                     run `--capabilities` to audit)",
                     style::glyph::OK,
-                    bundle_dir.join("ipe-wrapper").display()
+                    artifact.display()
                 ))
-            );
-        } else {
-            eprintln!(
+            ),
+            cli_args::DeployMode::Bundle => eprintln!(
                 "{}",
                 style::gutter(&format!(
-                    "{} deployed → {} (scp the dir; run `./ipe-wrapper -- <args>`)",
+                    "{} deployed (bundle) → {} (run `./ipe-wrapper -- <args>`; \
+                     WARNING: ipe-app can be run directly, bypassing the sandbox — \
+                     prefer embed mode for production)",
                     style::glyph::OK,
-                    bundle_dir.display()
+                    artifact.display()
                 ))
-            );
+            ),
         }
     }
     Ok(())
+}
+
+/// Inspect the inferred capability model for `entry_path` without building or
+/// writing anything — the body of `ipe deploy --capabilities` / `--show-profile`.
+fn run_deploy_capabilities(
+    entry_path: &Path,
+    manifest: Option<&Path>,
+    format: cli_args::OutputFormat,
+) -> Result<(), CliError> {
+    let manifest_parsed = match manifest {
+        Some(m) => Some(project::parse_manifest(m)?),
+        None => None,
+    };
+    let resolved = run_sandbox::resolve_for_run(manifest_parsed.as_ref(), manifest, entry_path)?;
+    let names: Vec<&'static str> = resolved.union().iter().map(|c| c.as_str()).collect();
+    print!(
+        "{}",
+        render_capabilities(&names, format, &std::io::stdout())
+    );
+    Ok(())
+}
+
+/// The human-readable post-build deploy report: link kind, artifact path, and
+/// the enforced capability model. Deploy always links a static musl binary, so
+/// that fact is stated plainly rather than inferred.
+fn deploy_report(artifact: &Path, capabilities: &[&str], mode: cli_args::DeployMode) -> String {
+    use std::fmt::Write as _;
+
+    let kind = match mode {
+        cli_args::DeployMode::Embed => "single self-jailing binary",
+        cli_args::DeployMode::Bundle => "multi-file bundle (wrapper + app + profile)",
+    };
+    let mut body = String::new();
+    let _ = writeln!(body, "link: static (musl)");
+    let _ = writeln!(body, "shape: {kind}");
+    let _ = writeln!(body, "artifact: {}", artifact.display());
+    if capabilities.is_empty() {
+        let _ = writeln!(body, "capabilities: none");
+    } else {
+        let _ = writeln!(body, "capabilities: {}", capabilities.join(", "));
+    }
+    style::frame(&style::gutter(&body))
 }
 
 /// Walk parent directories from the current directory to find the workspace
