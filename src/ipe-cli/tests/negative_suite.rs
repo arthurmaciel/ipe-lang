@@ -1308,6 +1308,19 @@ fn lower_non_task_main_function_rejected() {
     assert_rejected("lower_non_task_main_function", &src, "IPE-L0136");
 }
 
+/// A `main` that TAKES a parameter is a function, not the single effect the
+/// program runs — the emitted entry calls `ipe_main()` with no arguments, so a
+/// parameterised `main` (even one that returns a `Task`) cannot build. IPE-L0136.
+#[test]
+fn lower_parameterised_main_rejected() {
+    let src = format!(
+        "{HEAD}import Ipe.Io as Io\n\
+         main : Int -> Task Error ()\n\
+         main n =\n    Io.println \"hi\"\n"
+    );
+    assert_rejected("lower_parameterised_main", &src, "IPE-L0136");
+}
+
 /// CONTRAPOSITIVE: a `main : Task Error ()` script is a runnable entry and must be
 /// accepted — the gate rejects only a `main` that is NOT a `Task` (nor an app
 /// entry, which is itself a `Task`), never a genuine effect entry.

@@ -99,7 +99,8 @@ fn compiled_source_modules_resolve_all_exports() {
     let mut failures: Vec<String> = Vec::new();
     for m in ipe_stdlib::COMPILED_STD_MODULES {
         let main = format!(
-            "module Main exposing (main)\nimport {} as M\n\nmain : String\nmain = \"ok\"\n",
+            "module Main exposing (main)\nimport Ipe.Io as Io\nimport {} as M\n\n\
+             main : Task Error ()\nmain =\n    Io.println \"ok\"\n",
             m.dotted,
         );
         if let Err(e) = compile_main(&main) {

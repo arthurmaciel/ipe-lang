@@ -33,8 +33,7 @@ use std::time::Duration;
 use ipe_db::{BuildConfig, IpeDatabase, ModuleOrigin, SourceFile, SourceRoot};
 
 const DEP_A: &str = "module A exposing (visible)\n\nvisible = 1\n";
-const ENTRY: &str =
-    "module Main exposing (main)\n\nimport A exposing (visible)\n\nmain = visible\n";
+const ENTRY: &str = "module Main exposing (main)\n\nimport Ipe.Io as Io\nimport Ipe.String as String\nimport A exposing (visible)\n\nmain : Task Error ()\nmain =\n    Io.println (String.fromInt visible)\n";
 
 #[test]
 fn compile_worker_is_cancelled_by_a_concurrent_input_edit() {

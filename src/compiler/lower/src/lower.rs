@@ -10285,20 +10285,28 @@ impl<'a> Lowerer<'a> {
             funcs.retain(|f| reachable.contains(&f.id));
         }
 
-        // Entry-admissibility gate (`IPE-L0136`): the emitted `fn main` wraps the
-        // program's `main` in the runtime's single run site, which needs a `Task`.
-        // A `main` whose type cannot reach that site as a `Task` (an `Int`, a
-        // `String`, a function, …) would ship a crate that cannot build — the
-        // cardinal SEAL breach. Reject it here, before emission, with a friendly
-        // teaching diagnostic. Applied only when this is the real demanded entry
-        // (`prune_dead` — `main`'s home is the module being built): the
-        // package-capability audit lowers sibling modules under a merged `main`
-        // that is not the demanded entry, and must not be gated on its type.
+        // Entry-admissibility gate (`IPE-L0136`): the emitted `fn main` calls the
+        // program's `main` with no arguments and wraps it in the runtime's single
+        // run site (`block_on(ipe_main())`), which needs a `Task`. A `main` that
+        // takes parameters (`block_on(ipe_main())` supplies none) or whose type
+        // cannot reach that site as a `Task` (an `Int`, a `String`, a function, …)
+        // would ship a crate that cannot build — the cardinal SEAL breach. Reject
+        // it here, before emission, with a friendly teaching diagnostic. Applied
+        // only when this is the real demanded entry (`prune_dead` — `main`'s home
+        // is the module being built): the package-capability audit lowers sibling
+        // modules under a merged `main` that is not the demanded entry, and must
+        // not be gated on its shape.
         if prune_dead
             && let Some(main_fn) = entry.and_then(|e| funcs.iter().find(|f| f.id == e))
-            && !main_ret_is_runnable_entry(&main_fn.ret)
+            && (!main_fn.params.is_empty() || !main_ret_is_runnable_entry(&main_fn.ret))
         {
-            let found = non_entry_main_type_name(&main_fn.ret);
+            // A `main` that takes arguments is a function, not the single effect a
+            // program runs — name it as such regardless of its result type.
+            let found = if main_fn.params.is_empty() {
+                non_entry_main_type_name(&main_fn.ret)
+            } else {
+                Box::from("function")
+            };
             return Err((
                 Diagnostic::Lower {
                     span: entry_span.unwrap_or(Span::DUMMY),
