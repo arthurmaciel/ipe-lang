@@ -4015,6 +4015,11 @@ fn emit_ui_plan(
         }
 
         // `Ui.onKeyDown : (String -> msg) -> Attribute msg`  (Arc-wrap)
+        //
+        // D5: route through `emit_arc_callback_field` so any lowerer-hoisted
+        // capture-clone `let`s are peeled OUTSIDE the synthesized Arc closure.
+        // Without this, a sibling attribute sharing the same capture hits E0382
+        // (use after move) — a SEAL break.
         NativeUiEmit::OnKeyDown => {
             let [f_e] = args else {
                 return Err(Diagnostic::CompilerBug {
@@ -4022,13 +4027,14 @@ fn emit_ui_plan(
                     detail: format!("Ui.onKeyDown requires 1 argument, got {}", args.len()),
                 });
             };
-            let f_s = emit_expr_at(ctx, f_e, indent, child, generics)?;
+            let peeled = emit_arc_callback_field(ctx, f_e, indent, child, generics)?;
             Ok(format!(
-                "ipe_runtime::ui::helpers::ui_on_key_down_(::std::sync::Arc::new(move |_x| ({f_s})(_x)))"
+                "ipe_runtime::ui::helpers::ui_on_key_down_({peeled})"
             ))
         }
 
         // `Ui.onKeyUp : (String -> msg) -> Attribute msg`  (Arc-wrap)
+        // D5: same peel-hoist as OnKeyDown above.
         NativeUiEmit::OnKeyUp => {
             let [f_e] = args else {
                 return Err(Diagnostic::CompilerBug {
@@ -4036,13 +4042,12 @@ fn emit_ui_plan(
                     detail: format!("Ui.onKeyUp requires 1 argument, got {}", args.len()),
                 });
             };
-            let f_s = emit_expr_at(ctx, f_e, indent, child, generics)?;
-            Ok(format!(
-                "ipe_runtime::ui::helpers::ui_on_key_up_(::std::sync::Arc::new(move |_x| ({f_s})(_x)))"
-            ))
+            let peeled = emit_arc_callback_field(ctx, f_e, indent, child, generics)?;
+            Ok(format!("ipe_runtime::ui::helpers::ui_on_key_up_({peeled})"))
         }
 
         // `Ui.onFile : (String -> msg) -> Attribute msg`  (Arc-wrap)
+        // D5: same peel-hoist as OnKeyDown above.
         NativeUiEmit::OnFile => {
             let [f_e] = args else {
                 return Err(Diagnostic::CompilerBug {
@@ -4050,13 +4055,12 @@ fn emit_ui_plan(
                     detail: format!("Ui.onFile requires 1 argument, got {}", args.len()),
                 });
             };
-            let f_s = emit_expr_at(ctx, f_e, indent, child, generics)?;
-            Ok(format!(
-                "ipe_runtime::ui::helpers::ui_on_file_(::std::sync::Arc::new(move |_x| ({f_s})(_x)))"
-            ))
+            let peeled = emit_arc_callback_field(ctx, f_e, indent, child, generics)?;
+            Ok(format!("ipe_runtime::ui::helpers::ui_on_file_({peeled})"))
         }
 
         // `Event.onBool : (Bool -> msg) -> Attribute msg`  (Arc-wrap, bool arg)
+        // D5: same peel-hoist as OnKeyDown above.
         NativeUiEmit::OnBool => {
             let [f_e] = args else {
                 return Err(Diagnostic::CompilerBug {
@@ -4064,10 +4068,8 @@ fn emit_ui_plan(
                     detail: format!("Event.onBool requires 1 argument, got {}", args.len()),
                 });
             };
-            let f_s = emit_expr_at(ctx, f_e, indent, child, generics)?;
-            Ok(format!(
-                "ipe_runtime::ui::helpers::ui_on_bool_(::std::sync::Arc::new(move |_x| ({f_s})(_x)))"
-            ))
+            let peeled = emit_arc_callback_field(ctx, f_e, indent, child, generics)?;
+            Ok(format!("ipe_runtime::ui::helpers::ui_on_bool_({peeled})"))
         }
 
         // `Ui.onSubmit : (a -> msg) -> Attribute msg`
