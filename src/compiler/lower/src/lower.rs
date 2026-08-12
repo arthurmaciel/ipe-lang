@@ -17848,10 +17848,8 @@ impl<'a> Lowerer<'a> {
                 | KernelFn::DbOpen
                 // `DbExecRaw : Db -> String -> Task Error Int`
                 | KernelFn::DbExecRaw
-                // `unsafeOpen : Int(driverTag) -> String -> Task Error
-                //   (Connection ReadOnly)` and `unsafeExecRawOn :
-                //   Connection ReadWrite -> String -> Task Error Int`
-                | KernelFn::DbConnUnsafeOpen
+                // `unsafeExecRawOn : Connection ReadWrite -> String
+                //   -> Task Error Int`
                 | KernelFn::DbConnUnsafeExecRawOn
                 // pure row helpers: `String -> Dict String String -> T`
                 | KernelFn::DbGetString
@@ -19457,10 +19455,9 @@ impl<'a> Lowerer<'a> {
                     ("Db.Dsn", "tlsTag") => Ok(Callee::Kernel(KernelFn::DsnTlsTag)),
                     ("Db.Dsn", "redacted") => Ok(Callee::Kernel(KernelFn::DsnRedacted)),
                     // External Connection — connect a parsed `Dsn`, close it, and
-                    // the `Ipe.Db.Unsafe`-homed raw connect / raw exec hatches.
+                    // the `Ipe.Db.Unsafe`-homed raw exec hatch.
                     ("Db.Dsn", "open") => Ok(Callee::Kernel(KernelFn::DbConnOpen)),
                     ("Db.Dsn", "close") => Ok(Callee::Kernel(KernelFn::DbConnClose)),
-                    ("Db", "unsafeOpen") => Ok(Callee::Kernel(KernelFn::DbConnUnsafeOpen)),
                     ("Db", "unsafeExecRawOn") => {
                         Ok(Callee::Kernel(KernelFn::DbConnUnsafeExecRawOn))
                     }

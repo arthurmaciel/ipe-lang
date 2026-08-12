@@ -1291,11 +1291,6 @@ pub enum StdlibKernel {
     /// `Ipe.Db.Dsn.close : Connection mode -> Task Error ()` — return the pool.
     /// Total and idempotent over either access mode.
     DbConnClose,
-    /// `Ipe.Db.Unsafe.unsafeOpen : Driver -> String -> Task Error (Connection
-    /// ReadOnly)` — the RAW-string connector. The connection string is
-    /// caller-asserted, not parsed; importing `Ipe.Db.Unsafe` discloses `unsafe`.
-    /// The `Driver` ADT is marshalled to its small-integer tag in the wrapper.
-    DbConnUnsafeOpen,
     /// `Ipe.Db.Unsafe.unsafeExecRawOn : Connection ReadWrite -> String -> Task
     /// Error Int` — verbatim SQL against an external connection. Requires
     /// `Connection ReadWrite`, so a `Connection ReadOnly` cannot type-check into
@@ -2977,9 +2972,8 @@ impl StdlibKernel {
             Self::DbConnClose => d("Db.Dsn", "close", 1, Db, "db_conn_close"),
             // Surface-homed in the `Ipe.Db.Unsafe` compiled-source wrapper (which
             // discloses `unsafe` by import); the registry qualifier stays `Db`, so
-            // the `Ffi.kernel` alias key is `Db_unsafeOpen` / `Db_unsafeExecRawOn`,
-            // matching the existing raw-SQL hatch convention.
-            Self::DbConnUnsafeOpen => d("Db", "unsafeOpen", 2, Db, "db_conn_unsafe_open"),
+            // the `Ffi.kernel` alias key is `Db_unsafeExecRawOn`, matching the
+            // existing raw-SQL hatch convention.
             Self::DbConnUnsafeExecRawOn => {
                 d("Db", "unsafeExecRawOn", 2, Db, "db_conn_unsafe_exec_raw_on")
             }
@@ -4340,7 +4334,6 @@ impl StdlibKernel {
         Self::DsnRedacted,
         Self::DbConnOpen,
         Self::DbConnClose,
-        Self::DbConnUnsafeOpen,
         Self::DbConnUnsafeExecRawOn,
         Self::DbConnFindWhere,
         Self::DbConnQueryDecode,
@@ -4918,7 +4911,6 @@ impl StdlibKernel {
                 | Self::DsnRedacted
                 | Self::DbConnOpen
                 | Self::DbConnClose
-                | Self::DbConnUnsafeOpen
                 | Self::DbConnUnsafeExecRawOn
                 | Self::DbConnFindWhere
                 | Self::DbConnQueryDecode
@@ -6232,9 +6224,6 @@ impl StdlibKernel {
         const DSN_TO_TASK_CONN_RO: TyShape = TyShape::Fun(&DSN, &TASK_CONNECTION_READONLY);
         // `close : Connection a -> Task Error ()`.
         const CONN_MODE_TO_TASK_UNIT: TyShape = TyShape::Fun(&CONNECTION_MODE, &TASK_UNIT);
-        // `unsafeOpen : Int(driverTag) -> String -> Task Error (Connection ReadOnly)`.
-        const STRING_TO_TASK_CONN_RO: TyShape = TyShape::Fun(&STRING, &TASK_CONNECTION_READONLY);
-        const INT_TO_STRING_TO_TASK_CONN_RO: TyShape = TyShape::Fun(&INT, &STRING_TO_TASK_CONN_RO);
         // `unsafeExecRawOn : Connection ReadWrite -> String -> Task Error Int`.
         const STRING_TO_TASK_INT_CONN: TyShape = TyShape::Fun(&STRING, &TASK_INT);
         const CONN_RW_TO_STRING_TO_TASK_INT: TyShape =
@@ -7723,7 +7712,6 @@ impl StdlibKernel {
             // ── External Connection — read-only-by-type foreign-DB connect. ──
             Self::DbConnOpen => Some(&DSN_TO_TASK_CONN_RO),
             Self::DbConnClose => Some(&CONN_MODE_TO_TASK_UNIT),
-            Self::DbConnUnsafeOpen => Some(&INT_TO_STRING_TO_TASK_CONN_RO),
             Self::DbConnUnsafeExecRawOn => Some(&CONN_RW_TO_STRING_TO_TASK_INT),
             Self::DbConnFindWhere => Some(&CONN_FIND_WHERE),
             Self::DbConnQueryDecode => Some(&CONN_QUERY_DECODE),
@@ -8343,8 +8331,7 @@ impl StdlibKernel {
             // (`database` semantics come from the `Db` module residency; the
             // capability model tags one enforceable axis per kernel, and the
             // external act's isolatable resource is the network host.)
-            | Self::DbConnOpen
-            | Self::DbConnUnsafeOpen => Some(Capability::Network),
+            | Self::DbConnOpen => Some(Capability::Network),
             Self::SystemCwd
             | Self::SystemLoadEnv
             | Self::FileReadFile
