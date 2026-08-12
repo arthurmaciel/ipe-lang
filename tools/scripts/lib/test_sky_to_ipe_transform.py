@@ -356,6 +356,41 @@ class RewriteDiscardBindings(unittest.TestCase):
         self.assertNotIn("_ =", out)
         self.assertIn("                   do\n", out)
 
+    def test_pure_value_discard_is_dropped_not_runified(self) -> None:
+        """`_ = list` (a pure value) is DROPPED, not turned into a `do` statement.
+
+        Runifying a non-Task value type-errors at emit (a `do` statement must be
+        a `Task`). The sibling effect `Io.println` still drives the conversion;
+        the dead marker just disappears.
+        """
+        src = (
+            "main =\n"
+            "    let\n"
+            "        list = [ 1, 2, 3 ]\n"
+            "        _ = list\n"
+            "    in\n"
+            '        Io.println "List ready"\n'
+        )
+        out = self._run(src)
+        self.assertNotIn("_ =", out)
+        self.assertIn("        list = [ 1, 2, 3 ]\n", out)
+        # The dropped discard must NOT survive as a bare `list` do-statement.
+        self.assertNotIn("        list\n", out)
+        self.assertIn("    do\n", out)
+
+    def test_effect_discard_still_runified(self) -> None:
+        """An application discard (`_ = Io.println …`) is still runified (has a space)."""
+        src = (
+            "main =\n"
+            "    let\n"
+            '        _ = Io.println "hi"\n'
+            "    in\n"
+            "        Task.succeed ()\n"
+        )
+        out = self._run(src)
+        self.assertNotIn("_ =", out)
+        self.assertIn('        Io.println "hi"\n', out)
+
 
 if __name__ == "__main__":
     unittest.main()

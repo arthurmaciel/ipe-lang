@@ -6,5 +6,4 @@ import Ipe.Io as Io
 main =
     do
         list = [ 1, 2, 3 ]
-        list
         Io.println "List ready"

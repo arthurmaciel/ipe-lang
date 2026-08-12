@@ -991,6 +991,12 @@ def wrap_pubsub_topic(text: str) -> str:
 
 # Matches `_ = rest` (inline) OR `_ =` alone at end of line (multi-line value).
 _DISCARD_BINDING = re.compile(r'^(?P<indent>[ \t]*)_[ \t]*=[ \t]*(?P<rest>.*)$')
+# A whole-pattern discard whose RHS is a bare local identifier or a literal is a
+# dead PURE-VALUE marker (`_ = list`), not an effect to run: dropping it is
+# behaviour-preserving, whereas runifying it as a `do` statement type-errors (a
+# `do` statement must be a `Task`). Effect discards (`_ = Io.println …`) are
+# function applications — they contain a space — and are runified normally.
+_PURE_VALUE_DISCARD = re.compile(r'^([a-z_][A-Za-z0-9_\']*|\[.*\]|\{.*\}|-?\d.*|".*")$')
 _LET_LINE = re.compile(r'^(?P<indent>[ \t]*)let[ \t]*$')
 _IN_LINE = re.compile(r'^(?P<indent>[ \t]*)in[ \t]*$')
 _BINDING_LINE = re.compile(r'^(?P<indent>[ \t]*)(?P<name>[A-Za-z_][A-Za-z0-9_]*)[ \t]*=[ \t]*(?P<rest>.*)$')
@@ -1136,7 +1142,11 @@ def _rewrite_discard_bindings_once(text: str) -> str:
             if disc_m is not None and disc_m.group("indent") == binding_indent:
                 # Bare expression: strip the `_ = ` prefix.
                 bare_rest = disc_m.group("rest")
-                if bare_rest:
+                if bare_rest and _PURE_VALUE_DISCARD.match(bare_rest.strip()):
+                    # Dead pure-value discard (`_ = list`): drop it — do NOT
+                    # runify a non-Task value into a `do` statement.
+                    out.extend(conts)
+                elif bare_rest:
                     # Inline: `_ = expr` → `expr` on the same line.
                     out.append(binding_indent + bare_rest)
                     out.extend(conts)

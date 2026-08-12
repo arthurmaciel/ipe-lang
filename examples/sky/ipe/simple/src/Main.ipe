@@ -21,6 +21,4 @@ main =
         parResults = Task.perform (Task.parallel tasks)
         Io.println "Sequential done"
         Io.println "Parallel done"
-        seqResults
-        parResults
         ()
