@@ -1,0 +1,7 @@
+error[IPE-T0002]: infinite type
+ --> test.ipe:4:8
+  |
+4 |     let f x = f
+  |        ^ `a` would have to equal List a
+  |
+  = note: run `ipe explain IPE-T0002` for more information

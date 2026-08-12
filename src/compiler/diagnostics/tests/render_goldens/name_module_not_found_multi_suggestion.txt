@@ -1,0 +1,10 @@
+error[IPE-N0020]: module not found
+ --> test.ipe:2:7
+  |
+2 | import Httpp
+  |       ^^^^^ module `Httpp` was not found
+  |
+  = help: did you mean one of:
+      `Http`
+      `Https`
+  = note: run `ipe explain IPE-N0020` for more information

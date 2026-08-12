@@ -1,0 +1,7 @@
+error[IPE-P0014]: unterminated string literal
+ --> test.ipe:3:7
+  |
+3 | main =
+  |       ^ this string is never closed
+  |
+  = note: run `ipe explain IPE-P0014` for more information

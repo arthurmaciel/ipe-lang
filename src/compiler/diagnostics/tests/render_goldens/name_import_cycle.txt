@@ -1,0 +1,2 @@
+error[IPE-N0021]: import cycle
+  = note: run `ipe explain IPE-N0021` for more information

@@ -1,0 +1,7 @@
+error[IPE-N0042]: a kernel alias (Ffi.kernel) may not be minted in user source
+ --> test.ipe:3:7
+  |
+3 | main =
+  |       ^ `Ffi.kernel "Http_get"` mints a kernel — only the standard library and the generated FFI interface may do this; reach the effect through its published module (an unsafe kernel via its `Ipe.<M>.Unsafe` module, which discloses the `unsafe` capability)
+  |
+  = note: run `ipe explain IPE-N0042` for more information

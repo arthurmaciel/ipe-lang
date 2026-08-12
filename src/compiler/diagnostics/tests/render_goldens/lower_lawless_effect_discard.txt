@@ -1,0 +1,8 @@
+error[IPE-L0141]: a Task effect was discarded in a non-Task context, escaping the Task effect discipline
+ --> test.ipe:5:5
+  |
+5 |     let _ = Http.get "https://example.com"
+  |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ discarding this `Task` with `let _ = …` in a function that does not return a `Task` would run its effect through a hidden `Task.run` — a plainly-typed function would silently perform I/O. Give the function a `Task e ()` return type, or run the effect with `Task.run`
+  |
+  = note: a `Task` runs its effect only through `Task.run`, or by being sequenced inside a function whose own return type is a `Task`. Discarding it with `let _ = <task>` in a non-`Task` function would run it through a hidden `Task.run`. Give the enclosing function a `Task e ()` return type and let its result be the sequenced tasks, or run the effect explicitly with `Task.run`. To print a value while debugging, use `Debug.log` (rejected in production builds).
+  = note: run `ipe explain IPE-L0141` for more information
