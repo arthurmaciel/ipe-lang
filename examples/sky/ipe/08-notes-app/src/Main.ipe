@@ -24,55 +24,49 @@ runInit label result =
             ()
 
         Err e ->
-            let
-                _ =
-                    Io.println
-                        ("[NOTES ERROR] initDb " ++ label ++ ": "
-                            ++ Error.toString e)
-            in
+            do
+                Io.println
+                    ("[NOTES ERROR] initDb " ++ label ++ ": "
+                        ++ Error.toString e)
                 ()
 
 
 initDb _ =
-    let
-        _ =
-            runInit
-                "users"
-                (Db.exec
-                    """CREATE TABLE IF NOT EXISTS users (
-                        id INTEGER PRIMARY KEY AUTOINCREMENT,
-                        email TEXT NOT NULL UNIQUE,
-                        password_hash TEXT NOT NULL,
-                        verified INTEGER DEFAULT 0,
-                        verification_token TEXT,
-                        created_at TEXT DEFAULT (datetime('now'))
-                    )"""
-                    [])
-        _ =
-            runInit
-                "sessions"
-                (Db.exec
-                    """CREATE TABLE IF NOT EXISTS sessions (
-                        id INTEGER PRIMARY KEY AUTOINCREMENT,
-                        user_id TEXT NOT NULL,
-                        token TEXT NOT NULL UNIQUE,
-                        created_at TEXT DEFAULT (datetime('now'))
-                    )"""
-                    [])
-        _ =
-            runInit
-                "notes"
-                (Db.exec
-                    """CREATE TABLE IF NOT EXISTS notes (
-                        id INTEGER PRIMARY KEY AUTOINCREMENT,
-                        user_id TEXT NOT NULL,
-                        title TEXT NOT NULL,
-                        content TEXT NOT NULL DEFAULT '',
-                        created_at TEXT DEFAULT (datetime('now')),
-                        updated_at TEXT DEFAULT ''
-                    )"""
-                    [])
-    in
+    do
+        runInit
+            "users"
+            (Db.exec
+                """CREATE TABLE IF NOT EXISTS users (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    email TEXT NOT NULL UNIQUE,
+                    password_hash TEXT NOT NULL,
+                    verified INTEGER DEFAULT 0,
+                    verification_token TEXT,
+                    created_at TEXT DEFAULT (datetime('now'))
+                )"""
+                [])
+        runInit
+            "sessions"
+            (Db.exec
+                """CREATE TABLE IF NOT EXISTS sessions (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    user_id TEXT NOT NULL,
+                    token TEXT NOT NULL UNIQUE,
+                    created_at TEXT DEFAULT (datetime('now'))
+                )"""
+                [])
+        runInit
+            "notes"
+            (Db.exec
+                """CREATE TABLE IF NOT EXISTS notes (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    user_id TEXT NOT NULL,
+                    title TEXT NOT NULL,
+                    content TEXT NOT NULL DEFAULT '',
+                    created_at TEXT DEFAULT (datetime('now')),
+                    updated_at TEXT DEFAULT ''
+                )"""
+                [])
         ()
 
 
@@ -98,12 +92,10 @@ requireAuth req onUser =
             case Auth.getSessionUser token of
 
                 Err e ->
-                    let
-                        _ =
-                            Io.println
-                                ("[NOTES ERROR] session lookup: "
-                                    ++ Error.toString e)
-                    in
+                    do
+                        Io.println
+                            ("[NOTES ERROR] session lookup: "
+                                ++ Error.toString e)
                         Server.redirect "/auth/sign-in"
 
                 Ok Nothing ->
@@ -162,22 +154,19 @@ handleSignIn req =
                                                "Path=/; HttpOnly; SameSite=Lax")
 
                             Err e ->
-                                let
-                                    _ =
-                                        Io.println
-                                            ("[NOTES ERROR] sign-in createSession: "
-                                                ++ Error.toString e)
+                                do
+                                    Io.println
+                                        ("[NOTES ERROR] sign-in createSession: "
+                                            ++ Error.toString e)
                                     userMsg =
                                         "Sign-in temporarily unavailable. Please try again."
-                                in
                                     Task.succeed
                                         (Server.html (View.signInPage userMsg))
 
                 Err e ->
-                    let
-                        _ =
-                            Io.println
-                                ("[NOTES ERROR] sign-in: " ++ Error.toString e)
+                    do
+                        Io.println
+                            ("[NOTES ERROR] sign-in: " ++ Error.toString e)
                         userMsg =
                             case e of
 
@@ -189,7 +178,6 @@ handleSignIn req =
 
                                         _ ->
                                             "Sign-in temporarily unavailable. Please try again."
-                    in
                         Task.succeed (Server.html (View.signInPage userMsg))
 
     else
@@ -223,13 +211,11 @@ handleSignUp req =
                         Task.succeed (Server.html (View.signUpSuccessPage ()))
 
                     Err e ->
-                        let
-                            _ =
-                                Io.println
-                                    ("[NOTES ERROR] sign-up: "
-                                        ++ Error.toString e)
+                        do
+                            Io.println
+                                ("[NOTES ERROR] sign-up: "
+                                    ++ Error.toString e)
                             userMsg = Error.toString e
-                        in
                             Task.succeed (Server.html (View.signUpPage userMsg))
 
     else
@@ -239,14 +225,12 @@ handleSignUp req =
 handleForgotPassword : Request -> Task Error Response
 handleForgotPassword req =
     if Server.method req == "POST" then
-        let
+        do
             email = Server.formValue "email" req
             resetToken = Auth.generateToken ()
-            _ =
-                Io.println
-                    ("[Email Service] Password reset for: " ++ email ++ " "
-                        ++ resetToken)
-        in
+            Io.println
+                ("[Email Service] Password reset for: " ++ email ++ " "
+                    ++ resetToken)
             Task.succeed (Server.html (View.forgotPasswordSentPage ()))
 
     else
@@ -272,11 +256,9 @@ handleVerify req =
                     Task.succeed (Server.html (View.verifyResultPage True msg))
 
                 Err e ->
-                    let
-                        _ =
-                            Io.println
-                                ("[NOTES ERROR] verify: " ++ Error.toString e)
-                    in
+                    do
+                        Io.println
+                            ("[NOTES ERROR] verify: " ++ Error.toString e)
                         Task.succeed
                             (Server.html
                                 (View.verifyResultPage
@@ -286,22 +268,18 @@ handleVerify req =
 
 handleSignOut : Request -> Task Error Response
 handleSignOut req =
-    let
+    do
         token = getSessionToken req
-        _ =
-            case Db.exec "DELETE FROM sessions WHERE token = ?" [ token ] of
+        case Db.exec "DELETE FROM sessions WHERE token = ?" [ token ] of
 
-                Ok _ ->
+            Ok _ ->
+                ()
+
+            Err e ->
+                do
+                    Io.println
+                        ("[NOTES ERROR] sign-out: " ++ Error.toString e)
                     ()
-
-                Err e ->
-                    let
-                        _ =
-                            Io.println
-                                ("[NOTES ERROR] sign-out: " ++ Error.toString e)
-                    in
-                        ()
-    in
         Task.succeed
             (Server.redirect "/"
                 |> Server.withCookie "session" "" "Path=/; HttpOnly; Max-Age=0")
@@ -328,12 +306,10 @@ handleNotesList req =
                             Server.html (View.notesListPage email notes)
 
                         Err e ->
-                            let
-                                _ =
-                                    Io.println
-                                        ("[NOTES ERROR] list: "
-                                            ++ Error.toString e)
-                            in
+                            do
+                                Io.println
+                                    ("[NOTES ERROR] list: "
+                                        ++ Error.toString e)
                                 Server.html
                                     (View.errorPage
                                         ("Failed to load notes: "
@@ -360,12 +336,10 @@ handleNewNote req =
                                     Server.redirect "/notes"
 
                                 Err e ->
-                                    let
-                                        _ =
-                                            Io.println
-                                                ("[NOTES ERROR] createNote: "
-                                                    ++ Error.toString e)
-                                    in
+                                    do
+                                        Io.println
+                                            ("[NOTES ERROR] createNote: "
+                                                ++ Error.toString e)
                                         Server.html
                                             (View.errorPage
                                                 ("Failed to save note: "
@@ -395,12 +369,10 @@ handleViewNote req =
                             Server.html (View.errorPage "Note not found.")
 
                         Err e ->
-                            let
-                                _ =
-                                    Io.println
-                                        ("[NOTES ERROR] getNote: "
-                                            ++ Error.toString e)
-                            in
+                            do
+                                Io.println
+                                    ("[NOTES ERROR] getNote: "
+                                        ++ Error.toString e)
                                 Server.html
                                     (View.errorPage
                                         ("Failed to load note: "
@@ -430,12 +402,10 @@ handleEditNote req =
                                         ("/notes/view?id=" ++ noteId)
 
                                 Err e ->
-                                    let
-                                        _ =
-                                            Io.println
-                                                ("[NOTES ERROR] updateNote: "
-                                                    ++ Error.toString e)
-                                    in
+                                    do
+                                        Io.println
+                                            ("[NOTES ERROR] updateNote: "
+                                                ++ Error.toString e)
                                         Server.html
                                             (View.errorPage
                                                 ("Failed to update note: "
@@ -461,12 +431,10 @@ handleEditNote req =
                                 Server.html (View.errorPage "Note not found.")
 
                             Err e ->
-                                let
-                                    _ =
-                                        Io.println
-                                            ("[NOTES ERROR] getNote (edit): "
-                                                ++ Error.toString e)
-                                in
+                                do
+                                    Io.println
+                                        ("[NOTES ERROR] getNote (edit): "
+                                            ++ Error.toString e)
                                     Server.html
                                         (View.errorPage
                                             ("Failed to load note: "
@@ -490,12 +458,10 @@ handleDeleteNote req =
                             Server.redirect "/notes"
 
                         Err e ->
-                            let
-                                _ =
-                                    Io.println
-                                        ("[NOTES ERROR] deleteNote: "
-                                            ++ Error.toString e)
-                            in
+                            do
+                                Io.println
+                                    ("[NOTES ERROR] deleteNote: "
+                                        ++ Error.toString e)
                                 Server.html
                                     (View.errorPage
                                         ("Failed to delete note: "
@@ -506,15 +472,14 @@ handleDeleteNote req =
 -- Server entry point
 -- ============================================================
 main =
-    let
-        _ = initDb ()
-        _ = Io.println ""
-        _ = Io.println "==========================================="
-        _ = Io.println " SkyNotes server running"
-        _ = Io.println " http://localhost:8000"
-        _ = Io.println "==========================================="
-        _ = Io.println ""
-    in
+    do
+        initDb ()
+        Io.println ""
+        Io.println "==========================================="
+        Io.println " SkyNotes server running"
+        Io.println " http://localhost:8000"
+        Io.println "==========================================="
+        Io.println ""
         Server.listen
             8000
             [ Server.any "/" handleLanding

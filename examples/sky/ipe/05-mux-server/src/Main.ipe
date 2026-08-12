@@ -24,9 +24,8 @@ pingHandler _req =
 
 main : Task Error ()
 main =
-    let
-        _ = Io.println "Server starting on port 8000"
-    in
+    do
+        Io.println "Server starting on port 8000"
         Server.listen
             8000
             [ Server.get "/" indexHandler

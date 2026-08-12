@@ -153,14 +153,12 @@ logAndFail op e =
     Crypto.randomToken 4
         |> Task.andThen
                (\errId ->
-                   let
-                       _ =
-                           Log.errorWith
-                               op
-                               [ ( "errId", errId )
-                               , ( "error", Error.toString e )
-                               ]
-                   in
+                   do
+                       Log.errorWith
+                           op
+                           [ ( "errId", errId )
+                           , ( "error", Error.toString e )
+                           ]
                        Task.succeed
                            (errorJson
                                500

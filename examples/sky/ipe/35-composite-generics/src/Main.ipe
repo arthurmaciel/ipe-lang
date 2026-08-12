@@ -51,14 +51,13 @@ runReport useJson nowStr =
     case loadTransactions useJson of
 
         Ok txs ->
-            let
+            do
                 enriched = List.map Compute.enrich txs
                 report = Report.buildReport nowStr enriched
-                _ = Io.println (Report.renderText report)
-                _ = Io.println ""
-                _ = Io.println "--- JSON ---"
-                _ = Io.println (Report.encodeReport report)
-            in
+                Io.println (Report.renderText report)
+                Io.println ""
+                Io.println "--- JSON ---"
+                Io.println (Report.encodeReport report)
                 Task.succeed ()
 
         Err e ->
@@ -85,7 +84,6 @@ sampleJson =
 
 reportError : Error -> Task Error ()
 reportError e =
-    let
-        _ = Io.println ("Error: " ++ Error.toString e)
-    in
+    do
+        Io.println ("Error: " ++ Error.toString e)
         System.exit 1

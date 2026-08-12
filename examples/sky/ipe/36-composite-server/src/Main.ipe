@@ -71,27 +71,23 @@ runMigrate cfg =
                    Db.migrate db Migrations.all
                        |> Task.andThen
                               (\applied ->
-                                  let
-                                      _ =
-                                          Io.println
-                                              ("Applied "
-                                                  ++ String.fromInt
-                                                         (List.length applied)
-                                                  ++ " migration(s)")
-                                      _ =
-                                          List.map
-                                              (\n -> Io.println ("  - " ++ n))
-                                              applied
-                                  in
+                                  do
+                                      Io.println
+                                          ("Applied "
+                                              ++ String.fromInt
+                                                     (List.length applied)
+                                              ++ " migration(s)")
+                                      List.map
+                                          (\n -> Io.println ("  - " ++ n))
+                                          applied
                                       Db.close db))
 
 
 runServer : Config -> Task Error ()
 runServer cfg =
     if String.length cfg.jwtSecret < 32 then
-        let
-            _ = Io.println "ERROR: IPE_AUTH_TOKEN_SECRET must be >= 32 bytes."
-        in
+        do
+            Io.println "ERROR: IPE_AUTH_TOKEN_SECRET must be >= 32 bytes."
             Task.fail
                 (Error.invalidInput "IPE_AUTH_TOKEN_SECRET must be >= 32 bytes")
 
@@ -122,18 +118,15 @@ startApp cfg db bootMs =
         Cache.new cacheCfg
             |> Task.andThen
                    (\cache ->
-                       let
-                           _ =
-                               Io.println
-                                   ("composite-server listening on :"
-                                       ++ String.fromInt cfg.port)
-                       in
+                       do
+                           Io.println
+                               ("composite-server listening on :"
+                                   ++ String.fromInt cfg.port)
                            App.run cfg bootMs db cache)
 
 
 reportError : Error -> Task Error ()
 reportError e =
-    let
-        _ = Io.println ("[fatal] " ++ Error.toString e)
-    in
+    do
+        Io.println ("[fatal] " ++ Error.toString e)
         System.exit 1

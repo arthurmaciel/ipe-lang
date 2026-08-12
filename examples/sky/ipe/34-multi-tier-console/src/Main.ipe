@@ -64,74 +64,64 @@ update msg model =
     case msg of
 
         Navigate page ->
-            let
-                _ =
-                    Log.infoWith
-                        "navigate"
-                        [ "from", pageLabel model.page, "to", pageLabel page ]
-            in
+            do
+                Log.infoWith
+                    "navigate"
+                    [ "from", pageLabel model.page, "to", pageLabel page ]
                 ( { model | page = page }, Cmd.none )
 
         EmitBillingLog ->
-            let
-                _ =
-                    Log.infoWith
-                        "billing.charge"
-                        [ "service.namespace"
-                        , "/billing"
-                        , "customer"
-                        , "cus_demo_42"
-                        , "amount_cents"
-                        , "1200"
-                        , "currency"
-                        , "usd"
-                        ]
-            in
+            do
+                Log.infoWith
+                    "billing.charge"
+                    [ "service.namespace"
+                    , "/billing"
+                    , "customer"
+                    , "cus_demo_42"
+                    , "amount_cents"
+                    , "1200"
+                    , "currency"
+                    , "usd"
+                    ]
                 ( { model | billingHits = model.billingHits + 1 }, Cmd.none )
 
         EmitJobsLog ->
-            let
-                _ =
-                    Log.infoWith
-                        "jobs.enqueue"
-                        [ "service.namespace"
-                        , "/jobs"
-                        , "queue"
-                        , "email-blast"
-                        , "job_id"
-                        , "job_demo_" ++ String.fromInt (model.jobsHits + 1)
-                        ]
-            in
+            do
+                Log.infoWith
+                    "jobs.enqueue"
+                    [ "service.namespace"
+                    , "/jobs"
+                    , "queue"
+                    , "email-blast"
+                    , "job_id"
+                    , "job_demo_" ++ String.fromInt (model.jobsHits + 1)
+                    ]
                 ( { model | jobsHits = model.jobsHits + 1 }, Cmd.none )
 
         EmitAuthLog ->
-            let
-                _ =
-                    Log.infoWith
-                        "auth.signin"
-                        [ "service.namespace"
-                        , "/auth"
-                        , "user_id"
-                        , "u_demo_99"
-                        , "method"
-                        , "oauth.google"
-                        ]
-            in
+            do
+                Log.infoWith
+                    "auth.signin"
+                    [ "service.namespace"
+                    , "/auth"
+                    , "user_id"
+                    , "u_demo_99"
+                    , "method"
+                    , "oauth.google"
+                    ]
                 ( { model | authHits = model.authHits + 1 }, Cmd.none )
 
         EmitErrorLog ->
-            let
-                _ =
-                    Log.errorWith
-                        "billing.charge.failed"
-                        [ "service.namespace"
-                        , "/billing"
-                        , "customer"
-                        , "cus_demo_42"
-                        , "stripe_error"
-                        , "card_declined"
-                        ]
-            in
+            do
+                Log.errorWith
+                    "billing.charge.failed"
+                    [ "service.namespace"
+                    , "/billing"
+                    , "customer"
+                    , "cus_demo_42"
+                    , "stripe_error"
+                    , "card_declined"
+                    ]
                 ( { model | billingHits = model.billingHits + 1 }, Cmd.none )
 
         Tick ->

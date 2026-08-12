@@ -22,8 +22,7 @@ makeAdder a =
 
 
 main =
-    let
-        _ = Io.println (String.fromInt (q 1 2 3 4))
-        _ = Io.println (String.fromInt (makeAdder 1 2 3))
-    in
+    do
+        Io.println (String.fromInt (q 1 2 3 4))
+        Io.println (String.fromInt (makeAdder 1 2 3))
         Io.println (String.fromInt (((makeAdder 1) 2) 3))

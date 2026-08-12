@@ -16,13 +16,12 @@ dbl x =
 
 
 main =
-    let
+    do
         -- `>>` = left-to-right (apply inc, then dbl → dbl (inc 3) = 8);
         -- `<<` = right-to-left (apply dbl, then inc → inc (dbl 3) = 7).
         forward = inc >> dbl
         backward = inc << dbl
         mapped = List.map (inc >> dbl) [ 1, 2, 3 ]
-        _ = Io.println (String.fromInt (forward 3))
-        _ = Io.println (String.fromInt (backward 3))
-    in
+        Io.println (String.fromInt (forward 3))
+        Io.println (String.fromInt (backward 3))
         Io.println (String.join "," (List.map String.fromInt mapped))

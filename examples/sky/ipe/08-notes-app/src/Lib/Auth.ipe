@@ -47,22 +47,21 @@ generateToken _ =
 -- the message inline.
 createUser : String -> String -> Result Error String
 createUser email password =
-    let
+    do
         passHash = hashPassword password
         token = generateToken ()
-        _ = Io.println ""
-        _ = Io.println "=========================================="
-        _ = Io.println "[Email Service] New user registration"
-        _ = Io.println ("[Email Service] To: " ++ email)
-        _ = Io.println "[Email Service] Verify your email at:"
-        _ = Io.println ("  http://localhost:8000/auth/verify?token=" ++ token)
-        _ = Io.println "=========================================="
-        _ = Io.println ""
+        Io.println ""
+        Io.println "=========================================="
+        Io.println "[Email Service] New user registration"
+        Io.println ("[Email Service] To: " ++ email)
+        Io.println "[Email Service] Verify your email at:"
+        Io.println ("  http://localhost:8000/auth/verify?token=" ++ token)
+        Io.println "=========================================="
+        Io.println ""
         result =
             Db.exec
                 "INSERT INTO users (email, password_hash, verification_token) VALUES (?, ?, ?)"
                 [ email, passHash, token ]
-    in
         case result of
 
             Ok _ ->
