@@ -1,2 +1,5 @@
-error[IPE-N0021]: import cycle
-  = note: run `ipe explain IPE-N0021` for more information
+-- NAMING ERROR -------------------------------------------- <no file>
+
+Import cycle.
+
+IPE-N0021 · run `ipe explain IPE-N0021`

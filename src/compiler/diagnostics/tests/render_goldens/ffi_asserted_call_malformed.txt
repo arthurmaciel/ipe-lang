@@ -1,7 +1,11 @@
-error[IPE-N0038]: an asserted foreign call (Rust.Ffi.call) is malformed
+-- NAMING ERROR -------------------------------------------- test.ipe
+
+An asserted foreign call (Rust.Ffi.call) is malformed.
+
  --> test.ipe:2:1
   |
 2 | 
   | ^ this `Rust.Ffi.call` is malformed: the body must be exactly `Rust.Ffi.call "<crate>::<fn>"`. The one accepted shape is a top-level annotated definition whose whole body is `Rust.Ffi.call "<crate>::<function>"`
   |
-  = note: run `ipe explain IPE-N0038` for more information
+
+IPE-N0038 · run `ipe explain IPE-N0038`

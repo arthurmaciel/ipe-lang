@@ -1,4 +1,7 @@
-error[IPE-T0010]: this case does not handle every possibility
+-- TYPE MISMATCH ------------------------------------------- test.ipe
+
+This case does not handle every possibility.
+
  --> test.ipe:6:2
   |
 6 |     case Red of
@@ -6,4 +9,5 @@ error[IPE-T0010]: this case does not handle every possibility
   |
   = help: this case does not handle `Green`
   = help: this case does not handle `Blue`
-  = note: run `ipe explain IPE-T0010` for more information
+
+IPE-T0010 · run `ipe explain IPE-T0010`

@@ -1,7 +1,11 @@
-error[IPE-P0014]: unterminated string literal
+-- PARSE ERROR --------------------------------------------- test.ipe
+
+Unterminated string literal.
+
  --> test.ipe:3:7
   |
 3 | main =
   |       ^ this string is never closed
   |
-  = note: run `ipe explain IPE-P0014` for more information
+
+IPE-P0014 · run `ipe explain IPE-P0014`

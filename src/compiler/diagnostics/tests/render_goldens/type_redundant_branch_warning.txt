@@ -1,7 +1,11 @@
-warning[IPE-T0011]: redundant case branch
+-- TYPE MISMATCH ------------------------------------------- test.ipe
+
+Redundant case branch.
+
  --> test.ipe:7:15
   |
 7 |         Red -> 1
   |               ^^ `Red` is already handled
   |
-  = note: run `ipe explain IPE-T0011` for more information
+
+IPE-T0011 · run `ipe explain IPE-T0011`
