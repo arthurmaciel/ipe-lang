@@ -100,12 +100,30 @@ fn build_propagates_a_failed_emitted_cargo_build() {
         String::from_utf8_lossy(&out.stderr),
     );
 
-    // The diagnostic must name the emitted-build failure and carry cargo's own
-    // error, not an opaque exit or the `build` command's `--help` page.
+    // An unattributable emitted-crate cargo failure must surface as a humble
+    // compiler-bug ICE — not as a bare rustc error presented as the user's
+    // fault — while still carrying cargo's stderr as the reportable detail.
     let stderr = String::from_utf8_lossy(&out.stderr);
+
+    // The ICE wording must be present.
     assert!(
-        stderr.contains("building the emitted program failed") || stderr.contains("E0609"),
-        "the failure must name the emitted-build step and surface cargo's error, got:\n{stderr}"
+        stderr.contains("bug in the Ipe")
+            || stderr.contains("bug in Ipe")
+            || stderr.contains("please report"),
+        "unattributed cargo failure must render as a humble compiler-bug ICE, got:\n{stderr}"
+    );
+
+    // The cargo stderr detail (the E0609 error) must remain visible for
+    // inclusion in a bug report — the ICE must not swallow it.
+    assert!(
+        stderr.contains("E0609"),
+        "cargo stderr must be embedded in the ICE detail for reporting, got:\n{stderr}"
+    );
+
+    // The failure must NOT be presented as if it were the user's mistake.
+    assert!(
+        !stderr.contains("building the emitted program failed (cargo exited"),
+        "unattributed cargo failure must not use the old plain-header form, got:\n{stderr}"
     );
 
     let _ = fs::remove_dir_all(&dir);
