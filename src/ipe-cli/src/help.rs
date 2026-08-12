@@ -140,13 +140,13 @@ const COMMANDS: &[Command] = &[
     Command {
         name: "deploy",
         run: crate::run_deploy,
-        summary: "Build a self-contained, toolchain-free jailed deploy bundle.",
+        summary: "Build a single self-jailing binary (app + profile fused into sandbox wrapper). Use --bundle for the multi-file opt-out.",
         args: "[<path>]",
         args_desc: "A source file, a project directory, or an ipe.toml. Defaults to the current project.",
         options: &[
             Opt {
                 flag: "[--out <dir>]",
-                desc: "write the bundle to <dir> (default: deploy/)",
+                desc: "write the artifact to <dir> (default: deploy/)",
             },
             Opt {
                 flag: "[--target <triple>]",
@@ -157,8 +157,16 @@ const COMMANDS: &[Command] = &[
                 desc: "vendor the Ipê runtime source from <dir>",
             },
             Opt {
+                flag: "[--bundle]",
+                desc: "multi-file opt-out: wrapper + app + profile as siblings (less safe; app binary can be run directly, bypassing the sandbox)",
+            },
+            Opt {
                 flag: "[--embed]",
-                desc: "fuse the app binary and profile into the wrapper for single-file scp",
+                desc: "no-op alias for the default single-file mode (kept for compatibility)",
+            },
+            Opt {
+                flag: "[--capabilities] [--plain|--json]",
+                desc: "print the embedded ipe.profile capability model for the app without deploying",
             },
         ],
     },

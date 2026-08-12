@@ -560,6 +560,19 @@ pub fn parse_eject(rest: &[String]) -> Result<EjectArgs, CliError> {
     })
 }
 
+/// How `ipe deploy` packages the artifact.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum DeployMode {
+    /// Default: fuse app binary and profile into the wrapper for a single
+    /// self-jailing binary — the only way to run it applies the sandbox.
+    #[default]
+    Embed,
+    /// `--bundle`: the multi-file opt-out — wrapper, app, and profile as
+    /// siblings in a directory. An operator can run the app binary directly,
+    /// bypassing the sandbox; prefer `Embed` for production.
+    Bundle,
+}
+
 /// Fully-parsed `ipe deploy` arguments.
 #[derive(Debug)]
 pub struct DeployArgs {
@@ -573,9 +586,13 @@ pub struct DeployArgs {
     /// `--target <triple>` — the musl-static rustc triple to build for.
     /// Defaults to `x86_64-unknown-linux-musl`.
     pub target: Option<String>,
-    /// `--embed` — fuse the app binary and profile into the wrapper for a
-    /// single-file deploy artifact.
-    pub embed: bool,
+    /// How to package the artifact (single self-jailing binary by default).
+    pub mode: DeployMode,
+    /// `--capabilities` / `--show-profile` — inspect the inferred capability
+    /// model without building or writing anything.
+    pub capabilities_only: bool,
+    /// Output format for the `--capabilities` inspection.
+    pub format: OutputFormat,
 }
 
 /// Parse `ipe deploy`'s argument tail.
@@ -593,9 +610,15 @@ pub fn parse_deploy(rest: &[String]) -> Result<DeployArgs, CliError> {
     let mut out: Option<String> = None;
     let mut runtime: Option<String> = None;
     let mut target: Option<String> = None;
-    let mut embed = false;
+    let mut format: Option<OutputFormat> = None;
+    let mut saw_embed = false;
+    let mut saw_bundle = false;
+    let mut capabilities_only = false;
 
     while let Some(flag) = it.next() {
+        if consume_format(&mut format, flag, "deploy")? {
+            continue;
+        }
         match flag.as_str() {
             "--out" => set_once(
                 &mut out,
@@ -615,7 +638,9 @@ pub fn parse_deploy(rest: &[String]) -> Result<DeployArgs, CliError> {
                 "--target",
                 "deploy",
             )?,
-            "--embed" => embed = true,
+            "--embed" => saw_embed = true,
+            "--bundle" => saw_bundle = true,
+            "--capabilities" | "--show-profile" => capabilities_only = true,
             other => {
                 return Err(CliError::UsageOwned(format!(
                     "ipe deploy: unknown flag `{other}`"
@@ -624,12 +649,28 @@ pub fn parse_deploy(rest: &[String]) -> Result<DeployArgs, CliError> {
         }
     }
 
+    if saw_embed && saw_bundle {
+        return Err(CliError::UsageOwned(
+            "ipe deploy: --embed and --bundle are mutually exclusive (embed is the default \
+             single self-jailing binary; --bundle is the multi-file opt-out)"
+                .to_owned(),
+        ));
+    }
+
+    let mode = if saw_bundle {
+        DeployMode::Bundle
+    } else {
+        DeployMode::Embed
+    };
+
     Ok(DeployArgs {
         entry,
         out,
         runtime,
         target,
-        embed,
+        mode,
+        capabilities_only,
+        format: format.unwrap_or_default(),
     })
 }
 
@@ -1227,5 +1268,60 @@ mod tests {
     #[test]
     fn format_rejects_a_repeated_flag() {
         assert!(split_format(&s(&["--plain", "--plain"]), "diff").is_err());
+    }
+
+    // ---- deploy -------------------------------------------------------------
+
+    #[test]
+    fn deploy_defaults_to_embed_mode() {
+        let a = parse_deploy(&[]).expect("empty deploy");
+        assert_eq!(a.mode, DeployMode::Embed);
+        assert!(!a.capabilities_only);
+        assert_eq!(a.format, OutputFormat::Human);
+    }
+
+    #[test]
+    fn deploy_embed_flag_is_default_mode() {
+        let a = parse_deploy(&s(&["--embed"])).expect("--embed");
+        assert_eq!(a.mode, DeployMode::Embed);
+    }
+
+    #[test]
+    fn deploy_bundle_flag_selects_bundle_mode() {
+        let a = parse_deploy(&s(&["--bundle"])).expect("--bundle");
+        assert_eq!(a.mode, DeployMode::Bundle);
+    }
+
+    #[test]
+    fn deploy_embed_and_bundle_together_rejected() {
+        assert!(matches!(
+            parse_deploy(&s(&["--embed", "--bundle"])),
+            Err(CliError::UsageOwned(_))
+        ));
+        assert!(parse_deploy(&s(&["--bundle", "--embed"])).is_err());
+    }
+
+    #[test]
+    fn deploy_capabilities_flag_sets_dry_inspect() {
+        let a = parse_deploy(&s(&["--capabilities"])).expect("--capabilities");
+        assert!(a.capabilities_only);
+    }
+
+    #[test]
+    fn deploy_show_profile_is_capabilities_alias() {
+        let a = parse_deploy(&s(&["--show-profile"])).expect("--show-profile");
+        assert!(a.capabilities_only);
+    }
+
+    #[test]
+    fn deploy_capabilities_takes_output_format() {
+        let a = parse_deploy(&s(&["--capabilities", "--json"])).expect("--capabilities --json");
+        assert!(a.capabilities_only);
+        assert_eq!(a.format, OutputFormat::Json);
+    }
+
+    #[test]
+    fn deploy_plain_and_json_together_rejected() {
+        assert!(parse_deploy(&s(&["--plain", "--json"])).is_err());
     }
 }
