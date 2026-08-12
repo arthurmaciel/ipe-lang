@@ -1,8 +1,10 @@
 # `Db.open` — connecting to an arbitrary external database
 
-Status: design proposal, no implementation yet. Every fenced Ipê block is
-**illustrative of the proposed surface**, not shipped API; every fenced Rust
-block illustrates an intended seam, not verified code. Tracker references belong
+Status: accepted; slices landing. The typed `Dsn`, the reserved `Connection`
+handle, `Ipe.Db.open`, and the read path over `Connection ReadOnly` have
+shipped; the `unsafeOpen` raw-string hatch is dropped (§7, resolved). Fenced
+Ipê blocks illustrate the surface and fenced Rust blocks an intended seam;
+neither is a verbatim transcript of the shipped code. Tracker references belong
 in the delivering pull request, not in this timeless doc.
 
 This design decides the placement, capability, typed surface, lifecycle, and
@@ -40,14 +42,15 @@ typed value at the boundary.
 So this is not a greenfield add: it is **replacing an under-designed alias** with
 a real, typed, capability-disclosed external connector.
 
-## 1. Placement — kernel row, behind `Ipe.Db.Unsafe`
+## 1. Placement — a native `Ipe.Db` kernel row
 
-**Verdict: a native Kernel Row, and its raw-string minting form lives behind
-`Ipe.Db.Unsafe`. The issue's suggested path is validated, with one refinement:
-the *unsafety* is not intrinsic to "connecting elsewhere" — it is intrinsic to
-one input shape (an unparsed DSN string) and one lost guarantee (the configured
-pool's read-only posture). The typed, parsed form can be a safe `Ipe.Db` member;
-only the raw-string form is `Unsafe`.**
+**Verdict: a native Kernel Row on the safe `Ipe.Db` surface. The issue's
+suggested path is validated, with one refinement: the *unsafety* is not
+intrinsic to "connecting elsewhere" — it is intrinsic to one input shape (an
+unparsed DSN string) and one lost guarantee (the configured pool's read-only
+posture). The typed, parsed form is the safe `Ipe.Db` member; a raw-string form
+*would* belong behind `Ipe.Db.Unsafe`, but that analysis resolves in its favour
+being dropped (§2, §7), leaving the typed member the whole connect surface.**
 
 Why native kernel, not compiled-source `.ipe` and not a package:
 
@@ -70,32 +73,36 @@ Why native kernel, not compiled-source `.ipe` and not a package:
   unbacked. The existing `Db.open` row is *reshaped*, not added: same enum
   variant, new signature and semantics.
 
-Why the raw-string form is `Ipe.Db.Unsafe`: by the escape convention's
-secure-before-you-mark gate, a hatch that a validator could remove must be fixed,
-not labelled. Applying that gate here **splits `open` into two members**:
+Why a raw-string form *would be* `Ipe.Db.Unsafe`, had one shipped: by the escape
+convention's secure-before-you-mark gate, a hatch that a validator could remove
+must be fixed, not labelled. Applying that gate here weighs **two candidate
+members**:
 
-- A **DSN string** is an irreducible raw sink in the same sense as
+- A **DSN string** would be an irreducible raw sink in the same sense as
   `unsafeFragment`: an arbitrary connection string can carry credentials, a
   `host` an SSRF target, driver-specific options (`sslmode=disable`, a local
   socket path, `options=-c...`) that no total parser can prove safe. Minting a
-  live external connection from an unchecked `String` is provenance-by-assertion.
-  That form is `Ipe.Db.Unsafe.unsafeOpen` and discloses `unsafe` (§2).
+  live external connection from an unchecked `String` is provenance-by-assertion
+  — the escape shape an `Ipe.Db.Unsafe.unsafeOpen` disclosing `unsafe` *would*
+  take.
 - A **typed, parsed `Dsn`** built through validating constructors (§3) *is*
   secure by construction — the parse ran, host/port/database are typed fields,
   no free-form option string is interpolated. That form is the safe
   `Ipe.Db.open` and discloses only `network` + `database`, never `unsafe`.
 
-This mirrors the SQL boundary exactly: `Sql.column` (validated) vs
-`Ipe.Db.Unsafe.unsafeFragment` (asserted) both return the reserved
-`SqlFragment`; here `Ipe.Db.open` (parsed `Dsn`) vs `Ipe.Db.Unsafe.unsafeOpen`
-(raw `String`) both return the reserved `Connection`. The type is the same; the
-**capability discloses which provenance minted it**.
+The gate resolves in favour of the typed member alone: the `Dsn` parse *is* the
+sanitizer, and no residual opaque-string need has been demonstrated, so the raw
+member is dropped (§7). The parallel to the SQL boundary — `Sql.column`
+(validated) vs `Ipe.Db.Unsafe.unsafeFragment` (asserted), both minting the
+reserved `SqlFragment` — is the shape a future raw member would take if a real
+opaque-string need appears, not a shipped second connector.
 
-## 2. Capability — `network`, and `unsafe` only for the raw form
+## 2. Capability — `network`, unioned with `database`
 
 **Verdict: the axis is `network` (new for this member's disclosure), unioned with
-the existing `database`. No new `externalDb` axis. The raw-string form
-additionally discloses `unsafe`; the typed-`Dsn` form does not.**
+the existing `database`. No new `externalDb` axis. The shipped connect surface
+is the typed-`Dsn` form and discloses `network` + `database`, never `unsafe`; a
+raw-string form would additionally disclose `unsafe`, but none ships (§7).**
 
 Reasoning, against the closed coarse vocabulary the capability model mandates:
 
@@ -114,22 +121,23 @@ Reasoning, against the closed coarse vocabulary the capability model mandates:
   reject `unsafe-html`/`unsafe-sql`. `network` already names the enforceable
   resource; "external DB" is recoverable, for free, as `database ∧ network` plus
   the disclosed import set. No vocabulary growth.
-- **The raw form discloses `unsafe`, import-derived.** `Ipe.Db.Unsafe.unsafeOpen`
-  lives in an `.Unsafe` submodule, so importing it infers the `unsafe`
+- **A raw form would disclose `unsafe`, import-derived.** Were one added, an
+  `Ipe.Db.Unsafe.unsafeOpen` in an `.Unsafe` submodule would infer the `unsafe`
   capability by the convention's import-derived rule — alias-proof, fail-loud,
-  disclosed by `ipe capabilities` and gated by the package manifest. A monitoring
-  app that reaches for a raw DSN is *visibly* an unsafe-escape user before it
-  runs. The typed `Ipe.Db.open` imports no `.Unsafe` module and so never
-  discloses `unsafe` — the incentive gradient the convention wants: the safe path
-  is terse and clean, the asserted path pays the disclosure tax.
+  disclosed by `ipe capabilities` and gated by the package manifest, so a
+  monitoring app reaching for a raw DSN would be *visibly* an unsafe-escape user
+  before it runs. The shipped typed `Ipe.Db.open` imports no `.Unsafe` module and
+  so never discloses `unsafe` — the incentive gradient the convention wants,
+  reached here by making the typed member the *only* member.
 
-**Can a sanitizer make the raw form safe-in-place?** Partially, and that partial
-is exactly the `Dsn` type (§3): parsing driver + host + port + database +
-typed options into a closed structure *is* the sanitizer, and it promotes the
-call to the safe member. What a sanitizer **cannot** neutralise is a fully
-opaque, free-form connection string with arbitrary driver options — that residue
-is the irreducible hatch `unsafeOpen` keeps. So the design is: sanitize what you
-can into `Dsn` (safe member), and disclose the rest as `unsafe` (raw member).
+**Can a sanitizer make a raw form safe-in-place?** Fully, for every demonstrated
+case: parsing driver + host + port + database + typed options into a closed
+`Dsn` (§3) *is* the sanitizer, and it *is* the safe member. What a sanitizer
+could not neutralise is a fully opaque, free-form connection string with
+arbitrary driver options — but no such need has surfaced, and the connect path
+is `Driver`-closed regardless, so that residual hatch is dropped rather than
+shipped (§7). The design is therefore: parse into `Dsn`, and there is no raw
+member to escape to.
 
 **Preserving the injection barrier across an external connection.** The
 external-DB path changes *which pool* runs a query, never *how* a query is built.
@@ -157,17 +165,14 @@ reserved builtin today.
 -- Safe path: the Dsn was parsed once, at its constructor, into a typed value.
 Ipe.Db.open        : Dsn -> Task Error Connection
 
--- Asserted path: an unchecked connection string, disclosed by `unsafe`.
-Ipe.Db.Unsafe.unsafeOpen : Driver -> String -> Task Error Connection
-
 Ipe.Db.close       : Connection -> Task Error ()
 ```
 
 `open` takes a `Dsn`, not `Driver -> String`: the driver is *inside* the parsed
 `Dsn` (a Postgres DSN is a Postgres driver — the pair cannot disagree), which
 kills a whole class of "driver says mysql, string is a postgres URL" mismatch.
-The raw `unsafeOpen` keeps the explicit `Driver` because there is nothing parsed
-to carry it.
+The typed `Dsn` is the sole connect path — there is no raw-string escape (§7,
+resolved).
 
 ### `Driver` — a closed ADT, not a free string
 
@@ -327,12 +332,12 @@ access-mode type. Raw arbitrary SQL against it remains the disclosed
 ## 6. Minimal first slice + recommendation
 
 **Verdict: a minimal, SEAL-clean, security-reviewable first slice exists that
-closes the capability gap now — `Ipe.Db.Unsafe.unsafeOpen` (plus the safe typed
-`Ipe.Db.open`) for a `Postgres` external `Dsn`, deferring MySQL to a future
-driver kernel. Recommend implementing the first slice rather than leaving the
-tracked gap design-deferred.** The reason the tracker named ("no first-party
-need yet") is not a technical blocker — the design is settled, the driver is
-already linked, and the slice is small enough for a single security review.
+closes the capability gap now — the safe typed `Ipe.Db.open` for a `Postgres`
+external `Dsn`, deferring MySQL to a future driver kernel. Recommend
+implementing the first slice rather than leaving the tracked gap
+design-deferred.** The reason the tracker named ("no first-party need yet") is
+not a technical blocker — the design is settled, the driver is already linked,
+and the slice is small enough for a single security review.
 
 Why closeable-now rather than deferred:
 
@@ -354,20 +359,20 @@ Why closeable-now rather than deferred:
 
 The smallest slice that closes the gap and is worth reviewing as one unit:
 
-1. `Ipe.Db.open : Dsn -> Task Error (Connection ReadOnly)` — the safe member.
-2. `Ipe.Db.Unsafe.unsafeOpen : Driver -> String -> Task Error (Connection ReadOnly)`
-   — the disclosed raw-string escape.
-3. `Ipe.Db.Dsn.build` / `Ipe.Db.Dsn.parse` producing the opaque `Dsn`, with
+1. `Ipe.Db.open : Dsn -> Task Error (Connection ReadOnly)` — the safe member,
+   the sole connect path.
+2. `Ipe.Db.Dsn.build` / `Ipe.Db.Dsn.parse` producing the opaque `Dsn`, with
    `Secret` password and explicit `TlsMode` (secure default).
-4. `Ipe.Db.close : Connection mode -> Task Error ()`.
-5. `Driver = Postgres | Sqlite` — the two linked drivers only.
-6. Read paths of `Store`/`Cond`/`Codec` against `Connection ReadOnly`
+3. `Ipe.Db.close : Connection mode -> Task Error ()`.
+4. `Driver = Postgres | Sqlite` — the two linked drivers only.
+5. Read paths of `Store`/`Cond`/`Codec` against `Connection ReadOnly`
    (mutation and `openReadWrite` can be a fast follow, since the read-only
    default is the safe posture and covers the monitoring/ETL case that surfaced
    the gap).
 
-MySQL, `openReadWrite`, and any process-wide external pool cache are explicitly
-out of the first slice and each is its own follow-up.
+MySQL, `openReadWrite`, a raw-string connect escape, and any process-wide
+external pool cache are all out of the slice; each is its own follow-up (the
+raw escape resolved as dropped — §7).
 
 ### Sequenced implementation plan
 
@@ -388,18 +393,13 @@ type surface landing and any raw-string hatch being exposed.
    existing typed read surface to accept an external connection; confirm
    `valid_sql_ident` + bound parameters run unchanged against the new pool.
    This is the step that makes the port's hand-rolled read-only gate a *type*.
-4. **`Ipe.Db.Unsafe.unsafeOpen` raw-string hatch.** Added last and only if the
-   open question below keeps it: the `unsafe`-disclosing raw form, behind
-   `Ipe.Db.Unsafe`, for the opaque-connection-string residue. Landing it after
-   the safe path exists means the safe member is always the path of least
-   resistance.
-5. **Follow-ups (separate tracker items):** `openReadWrite` +
+4. **Follow-ups (separate tracker items):** `openReadWrite` +
    write-path mode gating; a `MySql` driver (sqlx `mysql` feature + `MySqlPool`
    arm); any caller-visible pool-size knob.
 
 Steps 1–3 alone close the gap: an external Postgres/SQLite source becomes typed,
 injection-safe, read-only-by-type, and composable with the codec stack. Step 4
-is optional per the open question; step 5 is future capability, not the gap.
+is future capability, not the gap.
 
 ## 7. Open questions for the user
 
@@ -421,11 +421,17 @@ is optional per the open question; step 5 is future capability, not the gap.
    external connections (the app connection keeps its cache). A monitoring loop's
    open/close cadence may want a caller-visible pool-size knob on the `Dsn`
    builder.
-4. **Should `unsafeOpen` exist at all, or is typed-`Dsn`-only sufficient?** If
-   `Dsn.parse` can round-trip every real connection string, the raw
-   `unsafeOpen : Driver -> String -> …` may be unnecessary — dropping it removes
-   an `unsafe` disclosure entirely. Keep it only if a genuinely opaque
-   driver-option string (no total parser) is a real need.
+4. **Should `unsafeOpen` exist at all, or is typed-`Dsn`-only sufficient?**
+   *Resolved: dropped.* The connect surface is typed-`Dsn`-only. `unsafeOpen`
+   was `Driver`-constrained — a closed ADT of the two linked drivers — so it
+   could never reach a new engine the typed path cannot; its only added power
+   was a raw, unparsed option string. That is not a demonstrated need: `Dsn.build`
+   / `Dsn.parse` round-trip real Postgres/SQLite connection strings, so the raw
+   form buys nothing but an extra `unsafe` disclosure and the emit weight of a
+   second connector plus `Driver`-tag marshalling. Deferred, not foreclosed: if a
+   genuinely opaque driver-option string with no total parser becomes a real need,
+   reintroduce it then — most cleanly with `Driver` promoted to a reserved builtin
+   so the tag marshalling is a type, not a hand-rolled integer.
 
 ## Divergence ledger — prior art, with skepticism
 
@@ -437,7 +443,7 @@ PRINCIPLES.
 | The idea of a stdlib `open <driver> <dsn>` for an external source | **`driver : String`, `dsn : String`** (two unparsed strings) → closed `Driver` ADT + opaque parsed `Dsn` (parse-don't-validate; a mismatched driver/URL and a malformed DSN both unrepresentable) |
 | An external connection reads through the same SQL surface | **Routing external SELECTs through a read-only gate against the *app* connection** (the port's workaround) → a real second `Connection`, read-only by *type* (phantom access mode), not by a hand-rolled runtime gate |
 | Connecting elsewhere is a privileged act | **Disclosing it as `database` only** → `network + database` (the enforceable resource axis), with `unsafe` on the raw-string form only |
-| A raw connection-string escape may be irreducible | **Making raw string the *only* form** → typed `Dsn` is the secure default; raw `unsafeOpen` is the rare, disclosed hatch under `Ipe.Db.Unsafe` |
+| A raw connection-string escape may be irreducible | **Making raw string the *only* form** → typed `Dsn` is the secure default; and, since the connect path is `Driver`-closed and no opaque-string need was demonstrated, even the disclosed raw hatch is dropped (§7), not merely demoted |
 
 ## Summary
 
@@ -445,9 +451,10 @@ Reshape the existing under-designed `Db.open` alias into a real external
 connector authored as a Kernel Row: a **safe `Ipe.Db.open : Dsn -> Task Error
 (Connection ReadOnly)`** whose `Dsn` (closed `Driver`, `Secret` password,
 explicit `TlsMode`) is parsed once at the boundary and discloses `network +
-database`; and a rare **`Ipe.Db.Unsafe.unsafeOpen : Driver -> String -> …`** for
-the irreducible opaque-connection-string case, disclosing `unsafe` by import.
-The reserved `Connection mode` handle makes the external read-only posture a
+database` — the sole connect path, with no raw-string escape (a `Driver`-closed
+`unsafeOpen` was considered and dropped for want of a demonstrated
+opaque-string need, §7). The reserved `Connection mode` handle makes the
+external read-only posture a
 *type* rather than a runtime gate, so writes to a foreign DB are a compile error
 unless explicitly requested. The whole `Codec`/`Store`/`Cond` stack composes over
 an external connection unchanged, the `valid_sql_ident` + bound-parameter
@@ -459,6 +466,6 @@ the Postgres driver, the type surface is settled, and the injection barrier is
 untouched, so a minimal read-only-by-type first slice (`Dsn`/`Driver`/`Secret`
 → `Ipe.Db.open` → read-path `Store`, §6) is small enough for one security
 review and closes the capability gap. `Driver` is `Postgres | Sqlite` only — the
-two drivers the runtime actually links; MySQL, write-mode `openReadWrite`, and
-the raw `unsafeOpen` hatch are sequenced follow-ups (§6), not part of the closing
-slice.
+two drivers the runtime actually links; MySQL and write-mode `openReadWrite` are
+sequenced follow-ups (§6), not part of the closing slice. The raw-string
+`unsafeOpen` hatch is dropped (§7), not deferred as a follow-up.
