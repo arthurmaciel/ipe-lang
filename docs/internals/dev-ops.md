@@ -4,8 +4,8 @@ The operational HOW for working on the Ipê compiler: the guard daemons, the
 two-tier gate mechanics, end-of-mission cleanup, the timeout discipline, and the
 release pipeline. The *rules* these procedures implement live in `PRINCIPLES.md`
 (the enforcement source of truth); this file is the depth behind them. Day-to-day
-onboarding — the crate map, the fast gate, kernel registration — is in the root
-`AGENTS.md`.
+onboarding — the crate map, the fast gate — is in the root `AGENTS.md`; kernel
+registration details are in `docs/internals/kernel-registration.md`.
 
 ## Memory safety — the mem-guard daemon
 

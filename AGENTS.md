@@ -25,14 +25,11 @@ The pipeline is an acyclic chain of crates; a change usually lands in one stage.
 | IR | `src/compiler/ir` | the lowered `IrType`, pretty-printing |
 | Emit | `src/compiler/backend/rust` | the emitted Rust, `naming.rs` (runtime symbols) |
 
-Cross-cutting: `src/compiler/kernels` (the `KernelDef` registry — the SSOT for a
-kernel's scheme, arity, capability, and emitted symbol), `src/compiler/diagnostics`
+Cross-cutting: `src/compiler/kernels` (the `KernelDef` registry), `src/compiler/diagnostics`
 (IPE-N/IPE-L codes + `explain/*.md`), `src/compiler/db` + `src/compiler/intern`
-(salsa incremental), `src/compiler/sandbox` (the capability jail), `src/compiler/ffi`,
-`src/lsp/*`, `src/compiler/watch`. `src/stdlib` is the `.ipe` stdlib source (to
-edit it, read the language reference — `src/ipe-cli/templates/AGENTS.md.in`);
-`src/runtime/rust` is the runtime the backend emits calls into; `src/ipe-cli` is
-the `ipe` binary.
+(salsa incremental), `src/compiler/sandbox`, `src/compiler/ffi`, `src/lsp/*`,
+`src/compiler/watch`. `src/stdlib` is the `.ipe` stdlib source; `src/runtime/rust`
+is the runtime the backend emits calls into; `src/ipe-cli` is the `ipe` binary.
 
 **Four type representations, in pipeline order:** syntactic `TypeAnnotation`
 (parser) → canonical `Type` (canon) → `Ty` (inference term, interned symbols +
@@ -50,54 +47,31 @@ cargo nextest run -p ipe                 # CLI integration + goldens
 cargo nextest run -p <touched-crate>     # plus each crate you changed
 ```
 
-- **`--profile ci`** for the slow emit tests (`cargo nextest run --profile ci -p ipe`):
-  the default profile's 120s terminate false-times-out heavy emit tests; ci gives 600s.
-- **Goldens are byte-identical** emitted Rust (`tests/golden/<name>/…`).
-  After an emit-changing change, regenerate with `cargo run -p regen-goldens`
-  (or `-- <name>…`); it emits through the same library path the goldens assert
-  on, so on an unchanged compiler it is a no-op. Never hand-edit a golden.
-- **THE SEAL / E2E:** `IPE_E2E=1` (with `IPE_RUNTIME_DIR` set) makes the emit
-  tests build *and run* the emitted project — `ipe`-accepts ⇒ `cargo`-builds.
-  `-p ipe --test static_emit` covers the musl static path.
-- **Clippy gotcha:** `--all-targets` lints test code too, and the workspace bans
-  `panic!`/`unreachable!`/`todo!` even in `#[cfg(test)]`. Assert variants with
-  `assert!(matches!(x, Pat), "…{x:?}")`, never a `panic!` arm. Fix the code,
-  never the lint level — the lint set is the SSOT in root `Cargo.toml`
-  `[workspace.lints]`.
+- **`--profile ci`** for slow emit tests: the default 120 s terminate false-times-out
+  heavy emit tests; `--profile ci` gives 600 s.
+- **Goldens** are byte-identical emitted Rust (`tests/golden/<name>/…`). After an
+  emit-changing change, regenerate with `cargo run -p regen-goldens` (or `-- <name>…`).
+  Never hand-edit a golden.
+- **THE SEAL / E2E:** `IPE_E2E=1` makes emit tests build *and run* the emitted
+  project — `ipe`-accepts ⇒ `cargo`-builds. `-p ipe --test static_emit` covers musl.
+- **Clippy:** `--all-targets` lints test code; the workspace bans `panic!`/`unreachable!`/
+  `todo!` even in `#[cfg(test)]`. Fix the code, never the lint level.
 
-Deep ops — the mem-guard / disk-guard daemons and their tuning, the two-tier
-gate mechanics, end-of-mission cleanup, and the release-please / cargo-deny
-pipeline — live in **`docs/internals/dev-ops.md`**.
+Full gate mechanics, guard daemons, and the release pipeline: **`docs/internals/dev-ops.md`**.
 
-## Registering a kernel — update every anti-drift site
+## Registering a kernel
 
-This is the codebase's defining discipline: **a kernel's facts have one source,
-and drift is a compile-time or CI error, never a deferred cargo failure.** Adding
-or changing a kernel touches every mirrored site, and a tripwire catches a miss:
-
-- `src/compiler/kernels` — the `StdlibKernel` enum + `decl()` + `ALL`.
-- `src/compiler/types/constrain.rs` — the type scheme (as `const TyShape` data;
-  out of the `KNOWN_UNBACKED` bucket). A resolved-but-unschemed kernel is an
-  IPE-L0108 compile-time error, never a silent `_` catch-all.
-- `src/compiler/lower` — the arity table (+ `REGISTRY_ONLY_ALLOWLIST` for alias
-  kernels).
-- `src/compiler/backend/rust/naming.rs` — the emitted runtime symbol.
-- `src/compiler/ir` pretty-printing; `src/compiler/canon` (`STDLIB_MODULE_QUALIFIERS`) module registration.
-
-Tripwires that make a miss loud: the byte-identity scheme oracle, emit-symbol-defined,
-arity-vs-scheme coherence, and the module seals (`golden_stdlib_module_seal`).
-**When you add to a registry, add or keep its tripwire** — an unguarded table is
-where drift hides.
+A kernel's facts have one source; touching or adding a kernel requires updating every
+mirrored site (kernels enum, type scheme, arity table, emitted symbol, module
+registration). A tripwire makes a missed site a compile-time or CI error. Full
+site list and tripwire details: **`docs/internals/kernel-registration.md`**.
 
 ## Tooling — use first
 
 - **`tools/scripts/ipe-index locate|refs|parity|wakeup`** — a pre-built structural
-  index of the tree; use it before `rg` for "where is X / who calls Y / kernel
-  gaps". (`rg` pitfall: never `rg -r`/`-rn` — ripgrep's `-r` is `--replace` and
-  eats the pattern; use `rg -n`.)
-- **tokensave** MCP (if initialised) for code-graph questions.
-- **Backlog = GitHub issues** via `tools/scripts/github/issue-ticket.sh add|list|close`
-  — there is no tracked backlog file.
+  index; use it before `rg` for "where is X / who calls Y / kernel gaps".
+  (`rg` pitfall: never `rg -r`/`-rn` — ripgrep's `-r` is `--replace`; use `rg -n`.)
+- **Backlog = GitHub issues** via `tools/scripts/github/issue-ticket.sh add|list|close`.
 
 ## Governance
 
@@ -111,9 +85,7 @@ where drift hides.
   self-explain. A hook enforces this on docs.
 - **No public reference to the private reference implementation** — its name or
   its module namespace — anywhere in code, comments, issues, or docs, except
-  Attribution and the README intro. A mirrored feature is
-  prior-art-with-skepticism, re-implemented idiomatically to Rust and PRINCIPLES,
-  never transcribed.
+  Attribution and the README intro.
 - **`docs/adr/`** is the only place for history and rationale.
 
 ## PR workflow
@@ -123,8 +95,7 @@ where drift hides.
 is current. One PR per unit of functionality (check `gh pr list` first; extend an
 existing PR rather than opening a parallel one). Versions and `CHANGELOG.md` are
 automated by release-please from Conventional Commit messages — never bump by
-hand. Slow checks (full E2E shards, miri, examples-sweep) run post-merge and
-nightly; detail in `docs/internals/dev-ops.md`.
+hand. Slow checks run post-merge and nightly; detail in `docs/internals/dev-ops.md`.
 
 ## Non-regression invariants (the test suite enforces these)
 
