@@ -1,6 +1,6 @@
 -- PARSE ERROR --------------------------------------------- test.ipe
 
-Unexpected end of file.
+The file ended while I was still in the middle of reading something.
 
  --> test.ipe:4:11
   |

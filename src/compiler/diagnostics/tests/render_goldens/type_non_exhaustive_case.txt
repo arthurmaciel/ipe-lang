@@ -1,13 +1,13 @@
 -- TYPE MISMATCH ------------------------------------------- test.ipe
 
-This case does not handle every possibility.
+This `case` doesn't cover every possibility yet.
 
  --> test.ipe:6:2
   |
 6 |     case Red of
-  |  ^^^^^^^^ this case is not exhaustive
+  |  ^^^^^^^^ some possibilities aren't handled
   |
-  = help: this case does not handle `Green`
-  = help: this case does not handle `Blue`
+  = help: add a branch for `Green`
+  = help: add a branch for `Blue`
 
 IPE-T0010 · run `ipe explain IPE-T0010`

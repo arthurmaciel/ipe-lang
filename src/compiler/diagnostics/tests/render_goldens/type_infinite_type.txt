@@ -1,6 +1,6 @@
 -- TYPE MISMATCH ------------------------------------------- test.ipe
 
-Infinite type.
+This value's type would have to contain itself forever, so I can't pin it down.
 
  --> test.ipe:4:8
   |

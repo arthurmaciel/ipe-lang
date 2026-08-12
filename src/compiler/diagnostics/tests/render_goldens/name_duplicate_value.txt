@@ -1,6 +1,6 @@
 -- NAMING ERROR -------------------------------------------- test.ipe
 
-Value defined more than once.
+`x` is already defined, so I found two definitions with the same name.
 
  --> test.ipe:3:6
   |

@@ -1,6 +1,6 @@
 -- TYPE MISMATCH ------------------------------------------- test.ipe
 
-Type mismatch.
+I was expecting this to be an `Int`, but it's a `String`.
 
  --> test.ipe:5:2
   |

@@ -1,6 +1,6 @@
 -- NAMING ERROR -------------------------------------------- test.ipe
 
-Module not found.
+I couldn't find the module `Httpp` on disk.
 
  --> test.ipe:2:7
   |

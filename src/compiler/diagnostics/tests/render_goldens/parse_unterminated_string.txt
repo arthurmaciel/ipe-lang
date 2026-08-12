@@ -1,6 +1,6 @@
 -- PARSE ERROR --------------------------------------------- test.ipe
 
-Unterminated string literal.
+This string opens with a `"` but never closes.
 
  --> test.ipe:3:7
   |

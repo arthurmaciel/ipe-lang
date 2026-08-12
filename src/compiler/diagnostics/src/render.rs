@@ -66,10 +66,11 @@ pub fn render(d: &Diagnostic, file: &str, source: &str) -> String {
     ));
     out.push('\n');
 
-    // Band 2 — prose band. One plain sentence, above the snippet, describing what
-    // the compiler found or expected. The reader acts on this, not on the code.
+    // Band 2 — prose band. One second-person sentence, above the snippet, in
+    // which the compiler describes what it found or expected. The reader acts on
+    // this, not on the code — so it reads like a colleague, not a verdict.
     out.push('\n');
-    out.push_str(&prose_band(code));
+    out.push_str(&prose_band(d));
     out.push('\n');
 
     // Split the help lines: secondary spans belong to the snippet band, the
@@ -200,22 +201,328 @@ fn title_rule(code: crate::code::Code, file: &str) -> String {
     format!("-- {name} {} {file}", "-".repeat(dashes))
 }
 
-/// The prose band sentence: a plain, capitalised description of the code's
-/// meaning, ending with a period. Derived from the code's one-line title —
-/// the deep per-family second-person rewrite of each message is a later pass.
-fn prose_band(code: crate::code::Code) -> String {
-    let t = title(code);
-    let mut chars = t.chars();
-    let sentence = chars.next().map_or_else(String::new, |first| {
-        let mut s = first.to_uppercase().collect::<String>();
-        s.push_str(chars.as_str());
-        s
-    });
-    if sentence.ends_with(['.', '?', '!']) {
-        sentence
-    } else {
-        format!("{sentence}.")
+/// The prose band sentence: one second-person sentence, above the snippet, in
+/// which the compiler explains what it found or expected. It reads like a
+/// helpful colleague ("I was expecting an `Int`, but this is a `String`."), not
+/// a category label — the title rule already names the family, so the band
+/// never repeats it. The wording is derived from the payload so the reader gets
+/// the concrete detail (the two types, the missing branches, the name) up front.
+fn prose_band(d: &Diagnostic) -> String {
+    match d {
+        Diagnostic::Parse { msg, .. } => parse_prose(msg),
+        Diagnostic::Name { msg, .. } => name_prose(msg),
+        Diagnostic::Type { msg, .. } => type_prose(msg),
+        Diagnostic::Lower { msg, .. } => lower_prose(msg),
+        Diagnostic::CompilerBug { .. } => {
+            "Something went wrong inside the compiler while working on your code — this \
+             is my mistake, not yours."
+                .to_string()
+        }
     }
+}
+
+/// The prose band for a parse-family diagnostic.
+fn parse_prose(msg: &ParseError) -> String {
+    match msg {
+        ParseError::UnexpectedToken { found, expected } => format!(
+            "I found {} here, but I was expecting {}.",
+            token_kind_str(*found),
+            expected_set_str(expected)
+        ),
+        ParseError::UnexpectedEof { .. } => {
+            "The file ended while I was still in the middle of reading something.".to_string()
+        }
+        ParseError::NestingTooDeep { .. } | ParseError::TooDeep => {
+            "This expression nests deeper than I can follow.".to_string()
+        }
+        ParseError::UnknownChar(c) => {
+            format!("I don't recognise the character {} here.", char_repr(*c))
+        }
+        ParseError::StrayDot | ParseError::SpaceBeforeDot => {
+            "This `.` isn't attached to anything I can read as a field access.".to_string()
+        }
+        ParseError::NumberJoinedToName(_) => {
+            "This number runs straight into a name, so I can't tell where one ends and the \
+             other begins."
+                .to_string()
+        }
+        ParseError::IntLiteralOutOfRange => {
+            "This whole number is too big to fit in Ipê's `Int`.".to_string()
+        }
+        ParseError::FloatLiteralOutOfRange => {
+            "This number is too large for Ipê's `Float` to hold.".to_string()
+        }
+        ParseError::UnterminatedString => {
+            "This string opens with a `\"` but never closes.".to_string()
+        }
+        ParseError::MalformedChar => "I can't read this as a character literal.".to_string(),
+        ParseError::UnterminatedBlockComment => {
+            "This block comment opens with `{-` but never closes.".to_string()
+        }
+        ParseError::MalformedModuleHeader(_) => {
+            "I couldn't read the module header at the top of this file.".to_string()
+        }
+        ParseError::MalformedExposingList(_) => {
+            "I couldn't read this `exposing (...)` list.".to_string()
+        }
+        ParseError::MissingEquals { binding } => {
+            format!("`{binding}` looks like a definition, but I don't see the `=` yet.")
+        }
+        ParseError::MalformedTypeDeclaration(_) => {
+            "I couldn't read this `type` declaration.".to_string()
+        }
+        ParseError::TypeArgsOnNonConstructor => {
+            "Only a type constructor can take type arguments, and this isn't one.".to_string()
+        }
+        ParseError::ExpectedType => "I was expecting a type here.".to_string(),
+        ParseError::UnclosedDelimiter { .. } => "This opening bracket is never closed.".to_string(),
+        ParseError::MalformedCase(_) => "I couldn't read this `case` expression.".to_string(),
+        ParseError::MalformedLet(_) => "I couldn't read this `let` expression.".to_string(),
+        ParseError::MalformedIf(_) => "I couldn't read this `if` expression.".to_string(),
+        ParseError::InvalidPathLiteral { .. } => {
+            "I can't accept this path — it isn't safe to open.".to_string()
+        }
+        ParseError::Unexpected => "I couldn't make sense of this part of the file.".to_string(),
+    }
+}
+
+/// The prose band for a naming-family diagnostic.
+#[allow(clippy::too_many_lines)] // one arm per NameError variant — mechanical dispatch
+fn name_prose(msg: &NameError) -> String {
+    match msg {
+        NameError::ValueNotFound { name, .. } => format!("I can't find `{name}` in scope."),
+        NameError::TypeNotFound { .. } => "I can't find a type by this name in scope.".to_string(),
+        NameError::ConstructorNotFound { .. } => {
+            "I can't find a constructor by this name in scope.".to_string()
+        }
+        NameError::UnknownModule { qualifier, .. } => {
+            format!("I can't find a module called `{qualifier}`.")
+        }
+        NameError::StdlibImportRequired { qualifier, .. } => {
+            format!("`{qualifier}` is a standard-library module you haven't imported yet.")
+        }
+        NameError::NoSuchMember { module, member, .. } => {
+            format!("`{module}` doesn't have anything called `{member}`.")
+        }
+        NameError::DuplicateValue { name, .. }
+        | NameError::DuplicateConstructor { name, .. }
+        | NameError::DuplicateType { name, .. } => {
+            format!("`{name}` is already defined, so I found two definitions with the same name.")
+        }
+        NameError::AliasArity { name, .. } | NameError::BuiltinTypeArity { name, .. } => {
+            format!("`{name}` is applied to the wrong number of type arguments.")
+        }
+        NameError::ModuleNotFound { name, .. } => {
+            format!("I couldn't find the module `{name}` on disk.")
+        }
+        NameError::ImportCycle { .. } => {
+            "These modules import each other in a circle, so I can't decide which to compile first."
+                .to_string()
+        }
+        NameError::NameNotExposed { module, name, .. } => {
+            format!("`{module}` doesn't expose `{name}`, so you can't import it.")
+        }
+        NameError::ModulePathMismatch { .. } => {
+            "This module's declared name doesn't match its path on disk.".to_string()
+        }
+        NameError::AmbiguousImport { name, .. } => {
+            format!(
+                "`{name}` is imported from more than one place, so I don't know which you mean."
+            )
+        }
+        NameError::ReservedNamespace { name } | NameError::ReservedBuiltinType { name } => {
+            format!("`{name}` uses a name that Ipê reserves for itself.")
+        }
+        NameError::DuplicateQualifier { qualifier, .. } => {
+            format!("Two imports both claim the qualifier `{qualifier}`.")
+        }
+        NameError::UnknownKernelAlias {
+            module, function, ..
+        } => {
+            format!("There's no built-in effect called `{module}.{function}`.")
+        }
+        NameError::KernelAliasInUserSource { .. } => {
+            "This code tries to mint a built-in effect directly, which only the standard library \
+             may do."
+                .to_string()
+        }
+        NameError::ServerOnlyKernelForWasm { qualifier, name } => {
+            format!(
+                "`{qualifier}.{name}` only runs on the server, so it can't be part of a \
+                     browser build."
+            )
+        }
+        NameError::ServerModuleReachableFromWasmClient { .. } => {
+            "Your browser code can reach a server-only module, which can't be compiled into the \
+             browser bundle."
+                .to_string()
+        }
+        NameError::TypeExpansionTooDeep { .. } => {
+            "This type alias expands forever, so I can't work out what it finally stands for."
+                .to_string()
+        }
+        NameError::ProgramImportsTeaShape { .. } => {
+            "This looks like a plain program, but it imports an app module — so I can't tell \
+             which kind of `main` you meant."
+                .to_string()
+        }
+        NameError::WrongShapeCmdSub(_) => {
+            "This `Cmd` / `Sub` belongs to a different app shape than the one you're building."
+                .to_string()
+        }
+        NameError::RemovedSurface {
+            qualifier, name, ..
+        } => {
+            format!("`{qualifier}.{name}` is no longer part of Ipê.")
+        }
+        NameError::UnsupportedBoundaryType { name } => {
+            format!(
+                "`{name}` names a boundary type whose transport across the Ipê↔JS seam \
+                     isn't ready yet."
+            )
+        }
+        NameError::AssertedCallMalformed { .. } => {
+            "I can't read this `Rust.Ffi.call` — it isn't in the one shape I accept.".to_string()
+        }
+        NameError::BoundarySealIllegal { seal_type, .. } => {
+            format!("`{seal_type}` can't cross the boundary between Ipê and JavaScript.")
+        }
+        NameError::NestedDecoderPipeline => {
+            "These decoder steps are nested, which would bind your fields in the wrong order."
+                .to_string()
+        }
+        NameError::CodecAutoUnderivable { .. } => {
+            "I can't derive a codec here automatically.".to_string()
+        }
+        NameError::Unknown => "Something is off with a name in this code.".to_string(),
+    }
+}
+
+/// The prose band for a type-family diagnostic.
+fn type_prose(msg: &TypeError) -> String {
+    match msg {
+        TypeError::TypeMismatch {
+            expected, found, ..
+        } => format!(
+            "I was expecting this to be {}, but it's {}.",
+            an_article(&ty_to_string(expected)),
+            an_article(&ty_to_string(found))
+        ),
+        TypeError::Mismatch => {
+            "The type I inferred here isn't the type I was expecting.".to_string()
+        }
+        TypeError::InfiniteType { .. } => {
+            "This value's type would have to contain itself forever, so I can't pin it down."
+                .to_string()
+        }
+        TypeError::TooManyParameters { binding, .. } => {
+            format!("`{binding}` is given more arguments than its type allows.")
+        }
+        TypeError::NonExhaustiveCase { .. } => {
+            "This `case` doesn't cover every possibility yet.".to_string()
+        }
+        TypeError::RedundantCaseBranch { constructor } => {
+            format!(
+                "This branch for `{constructor}` can never run — an earlier branch already \
+                     handles it."
+            )
+        }
+        TypeError::NoSuchField { field, .. } => {
+            format!("This value has no field called `{field}`.")
+        }
+        TypeError::BuiltinRecordUpdate { name } => {
+            format!(
+                "`{name}` is a built-in type, so you can read its fields but not rebuild it \
+                     with record-update syntax."
+            )
+        }
+        TypeError::CtorPatternArity { ctor, .. } => {
+            format!("This pattern binds the wrong number of fields for `{ctor}`.")
+        }
+        TypeError::SuperTypeUnsatisfied { .. } => {
+            "This type doesn't support the operation you're using here.".to_string()
+        }
+        TypeError::RefutablePatternParameter => {
+            "This parameter pattern can fail to match, but a parameter has to match every time."
+                .to_string()
+        }
+        TypeError::OrPatternBindingMismatch { .. } => {
+            "Each option in a `|` pattern has to bind the same names, but these options don't \
+             agree on what they bind."
+                .to_string()
+        }
+        TypeError::TaskArity { carrier, .. } => {
+            format!("`{carrier}` is applied to the wrong number of type arguments.")
+        }
+        TypeError::WildcardCoversKnownConstructors { .. } => {
+            "This `_` arm quietly absorbs constructors you could handle by name.".to_string()
+        }
+        TypeError::RoutedAppMissingPageField { .. } => {
+            "You've declared routes, but your Model has no `page` field for them to update, so \
+             routing does nothing."
+                .to_string()
+        }
+        TypeError::WebViewReturnsHtml => {
+            "This returns `Html`, but an `Element` is what's needed here.".to_string()
+        }
+        TypeError::BudgetExceeded | TypeError::StepBudgetExceeded { .. } => {
+            "Type checking this took longer than I'm allowed to spend on it.".to_string()
+        }
+    }
+}
+
+/// The prose band for a lower-family (unsupported-feature) diagnostic. These are
+/// things Ipê can't compile yet; the band names the situation plainly and the
+/// label / help carry the workaround.
+fn lower_prose(msg: &LowerError) -> String {
+    match msg {
+        LowerError::Unsupported(_) => "This uses something I can't compile yet.".to_string(),
+        LowerError::InadmissibleAppModel { .. } | LowerError::InadmissibleAppMsg { .. } => {
+            "This app's Model or message type uses something I can't compile yet.".to_string()
+        }
+        LowerError::BackendNestingTooDeep { .. } => {
+            "This expression nests deeper than I can compile.".to_string()
+        }
+        LowerError::DecodeSucceedArityTooHigh { .. } => {
+            "This decoder builds a value with more fields than I can wire up at once.".to_string()
+        }
+        LowerError::RouteParamCountMismatch { .. } => {
+            "This route's `:param` segments don't line up with its page constructor.".to_string()
+        }
+        LowerError::RouteBuilderUnsupportedShape => {
+            "I can't read this route's page builder — it isn't in a shape I can compile."
+                .to_string()
+        }
+        LowerError::RouteParamUnsupportedType { .. } => {
+            "One of this route's fields has a type I can't read out of a URL.".to_string()
+        }
+        LowerError::DevOnlyKernelInProduction { .. } => {
+            "This uses a debugging-only helper that can't be part of a production build."
+                .to_string()
+        }
+        LowerError::UiCellsInWebShape(_) => {
+            "`Ui.cells` paints a terminal character grid, so it has no meaning in a browser app."
+                .to_string()
+        }
+        LowerError::LawlessEffectDiscard => {
+            "Discarding this `Task` here would quietly run its effect from a function that isn't \
+             supposed to do any."
+                .to_string()
+        }
+    }
+}
+
+/// Prefix a rendered type with the article a reader would say aloud — `an Int`,
+/// `a String`, `a List String`. Type variables and lowercase-leading renders
+/// still read naturally with `a`/`an`, so the same rule applies. Purely for the
+/// prose band; caret labels stay article-free.
+fn an_article(rendered: &str) -> String {
+    let first = rendered.chars().next().map(|c| c.to_ascii_lowercase());
+    let article = match first {
+        Some('a' | 'e' | 'i' | 'o' | 'u') => "an",
+        _ => "a",
+    };
+    format!("{article} `{rendered}`")
 }
 
 /// The uppercase family title shown in the rule, derived from the code's family
@@ -488,9 +795,9 @@ fn parse_label(msg: &ParseError) -> Option<String> {
 #[allow(clippy::too_many_lines)]
 fn name_label(msg: &NameError) -> Option<String> {
     match msg {
-        NameError::ValueNotFound { .. } => Some("not found in scope".to_string()),
-        NameError::TypeNotFound { .. } => Some("unknown type".to_string()),
-        NameError::ConstructorNotFound { .. } => Some("unknown constructor".to_string()),
+        NameError::ValueNotFound { .. } => Some("I don't know this name".to_string()),
+        NameError::TypeNotFound { .. } => Some("I don't know this type".to_string()),
+        NameError::ConstructorNotFound { .. } => Some("I don't know this constructor".to_string()),
         NameError::UnknownModule { qualifier, .. } => Some(format!("unknown module `{qualifier}`")),
         NameError::StdlibImportRequired {
             qualifier,
@@ -702,9 +1009,11 @@ fn type_label(msg: &TypeError) -> Option<String> {
         TypeError::TooManyParameters { binding, signature } => {
             Some(format!("`{binding}` has type {}", ty_to_string(signature)))
         }
-        TypeError::NonExhaustiveCase { .. } => Some("this case is not exhaustive".to_string()),
+        TypeError::NonExhaustiveCase { .. } => {
+            Some("some possibilities aren't handled".to_string())
+        }
         TypeError::RedundantCaseBranch { constructor } => {
-            Some(format!("`{constructor}` is already handled"))
+            Some(format!("`{constructor}` is already handled above"))
         }
         TypeError::NoSuchField { field, record } => Some(format!(
             "type {} has no field `{field}`",
@@ -741,13 +1050,17 @@ fn type_label(msg: &TypeError) -> Option<String> {
             Some("this parameter pattern can fail to match".to_string())
         }
         TypeError::OrPatternBindingMismatch { names } => {
+            // The payload carries only the *difference* — the names bound by some
+            // options but not all — so the label names exactly those, and the
+            // reader learns the rule from the prose band + the concrete list.
             let listed = names
                 .iter()
                 .map(|n| format!("`{n}`"))
                 .collect::<Vec<_>>()
                 .join(", ");
+            let subject = if names.len() == 1 { "isn't" } else { "aren't" };
             Some(format!(
-                "the alternatives of this or-pattern bind different variables ({listed})"
+                "{listed} {subject} bound by every option, so I wouldn't know what it is"
             ))
         }
         TypeError::TaskArity { carrier, found } => Some(if *carrier == "Task" {
@@ -929,9 +1242,7 @@ fn help_text(line: &HelpLine) -> Option<String> {
         HelpLine::DidYouMean(name) => Some(format!("help: did you mean `{name}`?")),
         HelpLine::Note(text) => Some(format!("note: {text}")),
         HelpLine::Hint(hint) => Some(format!("help: {}", hint_text(*hint))),
-        HelpLine::MissingConstructor(name) => {
-            Some(format!("help: this case does not handle `{name}`"))
-        }
+        HelpLine::MissingConstructor(name) => Some(format!("help: add a branch for `{name}`")),
         // Source-free fallback: the source-aware [`suggestion_text`] is used in
         // the render footer, but this arm keeps `help_text` total over `HelpLine`.
         HelpLine::Suggest(s) => Some(format!("help: replace with `{}`", s.replacement)),
@@ -1432,7 +1743,10 @@ mod tests {
             out.contains("test.ipe\n"),
             "title rule ends with the file:\n{out}"
         );
-        assert!(out.contains("\nType mismatch.\n"), "prose band:\n{out}");
+        assert!(
+            out.contains("\nI was expecting this to be an `Int`, but it's a `List String`.\n"),
+            "prose band:\n{out}"
+        );
         assert!(out.contains("--> test.ipe:4:5"), "location:\n{out}");
         assert!(out.contains("4 |     foo"), "source line:\n{out}");
         assert!(
@@ -1499,7 +1813,7 @@ mod tests {
             "title rule leads:\n{out}"
         );
         assert!(
-            out.contains("\nInternal compiler error.\n"),
+            out.contains("\nSomething went wrong inside the compiler"),
             "prose band:\n{out}"
         );
         // No location / snippet band for a DUMMY span.
@@ -1632,7 +1946,7 @@ mod tests {
         let out = render(&d, "w.ipe", "Red\n");
         assert!(out.starts_with("-- TYPE MISMATCH "), "title rule:\n{out}");
         assert!(
-            out.contains("\nRedundant case branch.\n"),
+            out.contains("\nThis branch for `Red` can never run"),
             "prose band:\n{out}"
         );
         assert!(
