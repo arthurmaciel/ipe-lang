@@ -2671,4 +2671,56 @@ mod tests {
             Some(Tok::Str("a\tb".to_owned()))
         );
     }
+
+    // -----------------------------------------------------------------------
+    // IPE-P0064: bare `_` as a whole `let` binding pattern
+    // -----------------------------------------------------------------------
+
+    /// A user-written `let _ = e in rest` is rejected at parse with IPE-P0064.
+    #[test]
+    fn bare_wildcard_let_binding_is_rejected() {
+        let src = format!("{HDR}main =\n    let _ = Io.println \"a\" in\n    Io.println \"b\"\n");
+        assert_eq!(
+            err_code(&src),
+            "IPE-P0064",
+            "bare `let _ = …` must yield IPE-P0064"
+        );
+    }
+
+    /// A multi-line `let\n    _ =\n        e\n` form is also rejected.
+    #[test]
+    fn bare_wildcard_let_binding_multiline_is_rejected() {
+        let src = format!(
+            "{HDR}main =\n    let\n        _ =\n            Io.println \"a\"\n    in\n    Io.println \"b\"\n"
+        );
+        assert_eq!(
+            err_code(&src),
+            "IPE-P0064",
+            "multi-line bare `let _ = …` must yield IPE-P0064"
+        );
+    }
+
+    /// A nested `_` inside a tuple pattern — `let (a, _) = pair` — is legal.
+    #[test]
+    fn nested_wildcard_in_tuple_pattern_is_accepted() {
+        let src = format!("{HDR}f pair =\n    let (a, _) = pair in\n    a\n");
+        assert_eq!(
+            err_code(&src),
+            "OK",
+            "nested `_` in a tuple destructure must parse without error"
+        );
+    }
+
+    /// A bare `do` run statement (the do-desugared `PAnything` path) must
+    /// still parse without triggering the gate.
+    #[test]
+    fn do_bare_run_is_not_gated() {
+        let src =
+            format!("{HDR}main =\n    do\n        Io.println \"a\"\n        Io.println \"b\"\n");
+        assert_eq!(
+            err_code(&src),
+            "OK",
+            "a `do` bare-run line must parse (the synthetic PAnything from desugar_do is not gated)"
+        );
+    }
 }
