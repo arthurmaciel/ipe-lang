@@ -124,6 +124,20 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - run: cargo clippy --all-targets --workspace -- -D warnings
 
+  # No compiler-internal jargon or raw Rust types leak into user-facing text
+  # (rendered diagnostic goldens + `ipe explain` pages). Pure git + ripgrep, no
+  # toolchain, so it stays on the fast required PR path. House style SSOT:
+  # docs/internals/diagnostic-tone.md.
+  diagnostic-tone:
+    runs-on: ubuntu-latest
+    needs: changes
+    # Change-gated like clippy: a PR that touches no code path skips it; it
+    # always runs on push/nightly/merge_group.
+    if: needs.changes.outputs.code == 'true' || github.event_name != 'pull_request'
+    steps:
+      - uses: actions/checkout@v7
+      - run: bash tools/scripts/lint-diagnostic-tone.sh
+
   # Fast fail-fast compile check. A non-compiling PR turns this red in ~a minute
   # (no test link, no emit), so the expensive downstream jobs (seal-smoke and the
   # push-only e2e/miri) never start behind broken code — they `needs: quick-check`.
