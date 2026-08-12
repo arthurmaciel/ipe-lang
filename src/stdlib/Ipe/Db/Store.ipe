@@ -88,10 +88,12 @@ module Ipe.Db.Store exposing
     , tableName, columnNames, createSql
     , readText, readInt, readBool, readFloat
     , insert, all, get, delete, findWhere, create
+    , allOn, getOn, findWhereOn
     )
 
 
 import Ipe.Db as Db
+import Ipe.Db.Dsn as Dsn exposing (Connection)
 import Ipe.Db.Sql as Sql
 import Ipe.Char as Char
 import Ipe.String as String
@@ -480,6 +482,58 @@ get conn store read keyValue =
                     Task.andThen
                         (\rows -> firstDecoded read rows)
                         (Db.findWhere conn r.table (keyEquals keyCol keyValue))
+
+
+-- ─── External-connection reads (foreign DB through one codec) ───────
+--
+-- The `…On` reads take an external `Connection a` (mode-polymorphic: a read is
+-- available on `ReadOnly` and `ReadWrite` alike) instead of the app's `Db`, so a
+-- monitoring/ETL job reads a foreign source of a DIFFERENT dialect through the
+-- SAME `read` codec. They route through `Db.findWhereOn` over a `Sql.*`-built
+-- `SqlFragment` — identical validated-identifier + bound-parameter barrier as the
+-- app reads, run against the external pool. There is no external write path: a
+-- foreign write is unrepresentable on `Connection ReadOnly` by type.
+
+
+-- | `allOn conn store read` — read every row from an external connection and
+-- decode each through `read`. The external counterpart to `all`.
+allOn : Connection a -> Store -> (Row -> Result Error b) -> Task Error (List b)
+allOn conn store read =
+    case store of
+        Store r ->
+            Task.andThen
+                (\rows -> decodeRows read rows)
+                (Db.findWhereOn conn r.table alwaysTrue)
+
+
+-- | `findWhereOn conn store read cond` — read the rows matching `cond` from an
+-- external connection and decode each through `read`. The external counterpart to
+-- `findWhere`; the same audited `SqlFragment` barrier applies.
+findWhereOn : Connection a -> Store -> (Row -> Result Error b) -> SqlFragment -> Task Error (List b)
+findWhereOn conn store read cond =
+    case store of
+        Store r ->
+            Task.andThen
+                (\rows -> decodeRows read rows)
+                (Db.findWhereOn conn r.table cond)
+
+
+-- | `getOn conn store read keyValue` — read the single row whose primary key
+-- equals `keyValue` from an external connection, or `Nothing`. The external
+-- counterpart to `get`; keys on the store's validated `pk`, binds the value as a
+-- parameter, and fails closed for a store with no primary key.
+getOn : Connection a -> Store -> (Row -> Result Error b) -> SqlValue -> Task Error (Maybe b)
+getOn conn store read keyValue =
+    case store of
+        Store r ->
+            case r.pk of
+                Nothing ->
+                    Task.fail noPrimaryKeyError
+
+                Just keyCol ->
+                    Task.andThen
+                        (\rows -> firstDecoded read rows)
+                        (Db.findWhereOn conn r.table (keyEquals keyCol keyValue))
 
 
 -- | `delete conn store keyValue` — delete the row whose primary key equals
