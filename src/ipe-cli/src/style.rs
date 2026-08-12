@@ -6,7 +6,7 @@
 //!
 //! Every visual fact lives here exactly once. The Rust help renderer, audit,
 //! and diff import these constants directly; the shell installer
-//! (`tools/scripts/install.sh`) cannot import Rust, so it hand-mirrors the same
+//! (`install.sh`) cannot import Rust, so it hand-mirrors the same
 //! values and a drift test (`tests/install_style_drift.rs`) asserts the two
 //! agree — an unmirrored change to either side fails CI.
 //!

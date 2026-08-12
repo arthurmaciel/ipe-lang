@@ -4998,15 +4998,18 @@ pub(crate) fn run_version(rest: &[String]) -> Result<(), CliError> {
     Ok(())
 }
 
-/// The one-liner installer URL — the same script the docs' `curl … | sh` install
-/// uses. `ipe upgrade` re-runs it to fetch the latest release binary and install
-/// it over the current one.
-const INSTALL_SH_URL: &str =
-    "https://raw.githubusercontent.com/arthurmaciel/ipe-lang/main/scripts/install.sh";
+/// The one-liner installer URL.
+///
+/// The same script the docs' `curl … | sh` install uses; `ipe upgrade` re-runs it
+/// to fetch the latest release binary and install it over the current one. `pub`
+/// so the install-drift test can assert the README `curl` one-liner and this
+/// self-updater URL stay in agreement.
+pub const INSTALL_SH_URL: &str =
+    "https://raw.githubusercontent.com/arthurmaciel/ipe-lang/main/install.sh";
 
 /// `ipe upgrade [--dry-run]` — self-update by re-running the release installer.
 ///
-/// Delegates to `tools/scripts/install.sh` (the documented install path): it detects
+/// Delegates to `install.sh` (the documented install path): it detects
 /// the platform, downloads the matching latest-release binary, and installs it
 /// over the current one — the same function and interface as a fresh install.
 /// Requires `sh` and `curl` (a POSIX host); `--dry-run` prints the command

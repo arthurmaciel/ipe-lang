@@ -142,7 +142,7 @@ jobs:
           mkdir -p release
           find artifacts -type f \( -name '*.tar.gz' -o -name '*.zip' \) -exec cp {} release/ \;
           # Ship the installer alongside the binaries so the one-liner is versioned.
-          cp tools/scripts/install.sh release/install.sh
+          cp install.sh release/install.sh
           # Checksum only over what is present — a missing leg is not a hole here.
           ( cd release && sha256sum * > SHA256SUMS )
           ls -la release/

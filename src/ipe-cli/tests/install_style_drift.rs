@@ -1,4 +1,4 @@
-//! Drift guard: the shell installer (`tools/scripts/install.sh`) cannot import the
+//! Drift guard: the shell installer (`install.sh`) cannot import the
 //! Rust `style` module, so it hand-mirrors the palette, the repository URL, and
 //! the "report bugs" footer. This test reads the script and asserts those
 //! mirrored values EQUAL the `style` SSOT constants — an unmirrored change to
@@ -7,15 +7,12 @@
 
 use ipe::style::{self, Palette};
 
-/// Read `tools/scripts/install.sh` from the repository root (two levels up from this
-/// crate's manifest). A read failure surfaces as a plain assertion carrying the
-/// path and error — the empty string it returns then fails every `contains`
-/// check with a clear message, never a silent pass.
+/// Read `install.sh` from the repository root (two levels up from this crate's
+/// manifest). A read failure surfaces as a plain assertion carrying the path and
+/// error — the empty string it returns then fails every `contains` check with a
+/// clear message, never a silent pass.
 fn install_script() -> String {
-    let path = concat!(
-        env!("CARGO_MANIFEST_DIR"),
-        "/../../tools/scripts/install.sh"
-    );
+    let path = concat!(env!("CARGO_MANIFEST_DIR"), "/../../install.sh");
     let read = std::fs::read_to_string(path);
     assert!(read.is_ok(), "could not read {path}: {read:?}");
     read.unwrap_or_default()
@@ -170,5 +167,48 @@ fn installer_banner_success_and_footer_use_the_two_space_gutter() {
         "install.sh report-bugs footer must be indented by the {}-space GUTTER; \
          expected `{footer_prefix}` in script",
         gutter.len()
+    );
+}
+
+/// The two install entry points must stay consistent: the README `curl … | sh`
+/// one-liner and the `ipe upgrade` self-updater (`INSTALL_SH_URL`) must reference
+/// the SAME URL, and it must point at the installer that actually exists at the
+/// repository root. When `install.sh` moved under `tools/scripts/`, the README and
+/// the upgrade URL kept pointing at the old path and silently 404'd — this test
+/// replicates both entry points and fails if they drift apart again.
+#[test]
+fn install_entrypoints_agree_on_the_root_installer() {
+    // 1. The installer lives at the repository root (short, easy-to-locate path).
+    let script_path = concat!(env!("CARGO_MANIFEST_DIR"), "/../../install.sh");
+    assert!(
+        std::path::Path::new(script_path).is_file(),
+        "install.sh must live at the repository root: {script_path}"
+    );
+
+    // 2. `ipe upgrade` curls exactly this URL — the real constant the command runs.
+    let upgrade_url = ipe::INSTALL_SH_URL;
+    assert!(
+        upgrade_url.ends_with("/main/install.sh"),
+        "ipe upgrade INSTALL_SH_URL must point at `main/install.sh`, got `{upgrade_url}`"
+    );
+
+    // 3. The README `curl … | sh` one-liner must curl that same URL — one source
+    //    of truth shared by the fresh-install and self-update paths.
+    let readme = std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/../../README.md"))
+        .expect("README.md is readable");
+    let curl_line = readme
+        .lines()
+        .find(|l| l.contains("curl") && l.contains("install.sh"))
+        .expect("README must document a `curl … install.sh | sh` install command");
+    assert!(
+        curl_line.contains(upgrade_url),
+        "the README curl one-liner must use the same URL as `ipe upgrade` (`{upgrade_url}`); \
+         README line: `{}`",
+        curl_line.trim()
+    );
+    assert!(
+        curl_line.contains("| sh"),
+        "the README install command must pipe the script into `sh`; line: `{}`",
+        curl_line.trim()
     );
 }
