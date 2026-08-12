@@ -93,9 +93,14 @@ okWrite : Connection ReadWrite -> Task Error Int
 okWrite conn =
     DbU.unsafeExecRawOn conn \"DELETE FROM t\"
 
-main : Dsn -> Task Error ()
-main dsn =
-    Task.map (\\_ -> ()) (connectAndClose dsn)
+main : Task Error ()
+main =
+    case Dsn.parse \"postgres://u:p@localhost:5432/db\" of
+        Ok dsn ->
+            Task.map (\\_ -> ()) (connectAndClose dsn)
+
+        Err e ->
+            Task.fail e
 ",
     );
     let built = build(&dir, "positive_modes");
@@ -212,9 +217,14 @@ import Ipe.Db.Dsn as Dsn exposing (Dsn)
 import Ipe.Task as Task
 import Ipe.Error exposing (Error)
 
-main : Dsn -> Task Error ()
-main dsn =
-    Task.andThen Dsn.close (Dsn.open dsn)
+main : Task Error ()
+main =
+    case Dsn.parse \"postgres://u:p@localhost:5432/db\" of
+        Ok dsn ->
+            Task.andThen Dsn.close (Dsn.open dsn)
+
+        Err e ->
+            Task.fail e
 ",
     );
     let built = build(&dir, "safe_open");
