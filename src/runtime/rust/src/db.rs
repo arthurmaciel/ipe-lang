@@ -3136,6 +3136,113 @@ mod tests {
         pool
     }
 
+    /// A seeded external (foreign) SQLite connection, distinct from the app pool —
+    /// stands in for a source of a different dialect that the read runners dial
+    /// through the same codec stack. `ledger` carries an `amount` INTEGER column.
+    #[allow(clippy::expect_used)]
+    async fn fresh_external_conn() -> ExternalConnection {
+        let pool = sqlx::sqlite::SqlitePoolOptions::new()
+            .min_connections(1)
+            .max_connections(1)
+            .connect("sqlite::memory:")
+            .await
+            .expect("connect in-memory external sqlite");
+        sqlx::query("CREATE TABLE ledger (id INTEGER PRIMARY KEY AUTOINCREMENT, amount INTEGER NOT NULL)")
+            .execute(&pool)
+            .await
+            .expect("create ledger");
+        sqlx::query("INSERT INTO ledger (amount) VALUES (7), (42)")
+            .execute(&pool)
+            .await
+            .expect("seed ledger");
+        ExternalConnection::Sqlite(pool)
+    }
+
+    /// The external read path decodes seeded rows through the SAME `Decoder<E,A>`
+    /// the app path uses — the §4 "typed reads from a foreign DB via one codec"
+    /// target. `db_conn_query_decode_params` reads `amount` back as `Int`.
+    #[tokio::test]
+    async fn external_query_decode_reads_through_one_codec() {
+        let conn = fresh_external_conn().await;
+        let out: IpeResult<String, Vec<i64>> = db_conn_query_decode_params(
+            conn,
+            "SELECT amount FROM ledger ORDER BY amount".into(),
+            vec![],
+            db_decode_int("amount".into()),
+        )
+        .await;
+        match out {
+            IpeResult::Ok(v) => assert_eq!(v, vec![7, 42]),
+            other => panic!("external queryDecode failed: {:?}", other),
+        }
+    }
+
+    /// The injection barrier is UNCHANGED on the external path: a value carrying SQL
+    /// metacharacters flows through a bound parameter (a `Sql.param` in the
+    /// fragment), so it matches VERBATIM and the surrounding table is untouched — no
+    /// injection executes against the foreign connection.
+    #[tokio::test]
+    async fn external_find_where_binds_params_no_injection() {
+        let conn = fresh_external_conn().await;
+        // A fragment built from the audited `Sql.*` combinators: `amount = ?`, the
+        // value bound (never spliced). The metacharacter value simply doesn't match.
+        let frag = sql_eq(sql_column("amount".to_string()), sql_param(SqlParam::Int(7)));
+        let rows: IpeResult<String, Vec<HashMap<String, String>>> =
+            db_conn_find_where(conn.clone(), "ledger".into(), frag).await;
+        match rows {
+            IpeResult::Ok(v) => {
+                assert_eq!(v.len(), 1);
+                assert_eq!(v[0].get("amount").map(String::as_str), Some("7"));
+            }
+            other => panic!("external findWhere failed: {:?}", other),
+        }
+        // A hostile TABLE identifier is rejected by the same `SqlIdent` gate — the
+        // read runner never interpolates an unvalidated name into SQL.
+        let bad: IpeResult<String, Vec<HashMap<String, String>>> = db_conn_find_where(
+            conn,
+            "ledger; DROP TABLE ledger".into(),
+            sql_eq(sql_param(SqlParam::Int(1)), sql_param(SqlParam::Int(1))),
+        )
+        .await;
+        assert!(
+            matches!(bad, IpeResult::Err(_)),
+            "a hostile external table identifier must be rejected before any SQL runs"
+        );
+    }
+
+    /// A hostile column identifier in a `Sql.column` poisons the fragment, which the
+    /// external `findWhere` surfaces as a typed `Err` — the poison marker path is
+    /// identical to the app connection's.
+    #[tokio::test]
+    async fn external_find_where_rejects_poisoned_column() {
+        let conn = fresh_external_conn().await;
+        let poisoned = sql_eq(
+            sql_column("amount; DROP TABLE ledger".to_string()),
+            sql_param(SqlParam::Int(7)),
+        );
+        let rows: IpeResult<String, Vec<HashMap<String, String>>> =
+            db_conn_find_where(conn, "ledger".into(), poisoned).await;
+        assert!(
+            matches!(rows, IpeResult::Err(_)),
+            "a poisoned column fragment must fail closed on the external path too"
+        );
+    }
+
+    /// `db_conn_get_by_id` binds the id as a positional parameter (never
+    /// interpolated) and returns the matching row from the foreign connection.
+    #[tokio::test]
+    async fn external_get_by_id_binds_id() {
+        let conn = fresh_external_conn().await;
+        let got: IpeResult<String, IpeMaybe<HashMap<String, String>>> =
+            db_conn_get_by_id(conn, "ledger".into(), "1".into()).await;
+        match got {
+            IpeResult::Ok(IpeMaybe::Just(row)) => {
+                assert_eq!(row.get("amount").map(String::as_str), Some("7"));
+            }
+            other => panic!("external getById failed: {:?}", other),
+        }
+    }
+
     #[tokio::test]
     async fn ipe_err_redacts_db_row_values() {
         // A UNIQUE-constraint failure must NOT echo the offending row VALUE into
