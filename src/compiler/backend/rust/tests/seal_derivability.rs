@@ -22,7 +22,8 @@ use ipe_backend_rust::RustBackend;
 use ipe_diagnostics::{DResult, Diagnostic};
 use ipe_intern::{Interner, Symbol};
 use ipe_ir::{
-    EnumDef, Expr, Func, FuncId, IrType, ModPath, Module, Program, TypeDef, UiCtor, Variant,
+    CallPin, Callee, EnumDef, Expr, Func, FuncId, IrType, KernelFn, ModPath, Module, OnFormKind,
+    Program, TypeDef, UiCtor, Variant,
 };
 
 fn program(name: Symbol, types: Vec<TypeDef>, funcs: Vec<Func>) -> Program {
@@ -373,6 +374,416 @@ fn web_html_helper_record_gets_cdpeq_without_serde() -> DResult<()> {
     assert!(
         model_serde,
         "plain-data record in a Web program must still get serde:\n{src}"
+    );
+    Ok(())
+}
+
+// ── SEAL regression: capture-clone peel for key/file/bool callbacks ───────────
+//
+// When a Lambda passed to `Ui.onKeyDown` / `Ui.onKeyUp` / `Ui.onFile` /
+// `Event.onBool` is preceded by a capture-clone `Let` (the lowerer hoists
+// `let sym = sym.clone()` before the lambda when `sym` is also used by a
+// sibling attribute on the same element), the emit must PEEL that let OUTSIDE
+// the synthesised `Arc::new(move |_x| …)`.
+//
+// Without the peel (the pre-fix code path), the outer `move` closure
+// move-captures the free binding and a sibling use of it hits E0382 at
+// `cargo build` — ipe exit-0 then cargo-fail, the cardinal SEAL breach.
+//
+// The fix routes these arms through `emit_arc_callback_field`, identical to
+// the already-correct `Ui.onInput` / `Ui.onChange` arms. The emitted text
+// must contain the peel `let pfx` BEFORE the `Arc::new(` that follows it,
+// proving the let was hoisted outside the closure boundary.
+
+/// Build:
+///   ```
+///   view pfx =
+///     let pfx = pfx.clone() in   -- lowerer's capture-clone alias
+///     Ui.onKeyDown (\k -> pfx ++ k)
+///   ```
+///
+/// This is the minimal IR the lowerer emits when `pfx` is used both by the
+/// `onKeyDown` handler AND by a sibling element attribute (the sibling forces
+/// the clone before the lambda so the outer `pfx` survives for the sibling).
+fn build_capture_clone_on_key_down(interner: &mut Interner) -> DResult<Program> {
+    let main_mod = interner.intern("Main")?;
+    let view = interner.intern("view")?;
+    let pfx = interner.intern("pfx")?;
+    let k = interner.intern("k")?;
+
+    // `Let { name: pfx, value: CloneVar(pfx), body: Call(UiOnKeyDown, [Lambda]) }`
+    // — the lowerer's canonical capture-clone shape.
+    let body = Expr::Let {
+        name: pfx,
+        value: Box::new(Expr::CloneVar(pfx)),
+        body: Box::new(Expr::Call {
+            callee: Callee::Kernel(KernelFn::UiOnKeyDown),
+            args: vec![Expr::Lambda {
+                params: vec![(k, IrType::Str)],
+                ret: IrType::Str,
+                body: Box::new(Expr::BinOp {
+                    op: ipe_ir::BinOp::Append,
+                    lhs: Box::new(Expr::CloneVar(pfx)),
+                    rhs: Box::new(Expr::Var(k)),
+                }),
+            }],
+            pin: CallPin::None,
+            on_form: OnFormKind::NotForm,
+        }),
+    };
+
+    let func = Func {
+        id: FuncId::from_raw(0),
+        name: view,
+        home: ModPath(vec![]),
+        type_params: vec![],
+        row_params: vec![],
+        params: vec![(pfx, IrType::Str)],
+        ret: IrType::Str,
+        body,
+    };
+
+    Ok(Program {
+        imports_unsafe_submodule: false,
+        modules: vec![Module {
+            name: ModPath(vec![main_mod]),
+            types: vec![],
+            funcs: vec![func],
+            entry: None,
+            records: vec![],
+            uses_tea: false,
+            uses_server: false,
+            uses_http: false,
+            uses_config: false,
+            uses_compression: false,
+            uses_csv: false,
+            uses_cache: false,
+            uses_encoding: false,
+            uses_regex: false,
+            uses_uuid: false,
+            uses_random: false,
+            uses_log: false,
+            uses_decimal: false,
+            uses_char_category: false,
+            uses_crypto_core: false,
+            uses_secret: false,
+            uses_json: false,
+            uses_crypto: false,
+            uses_jwt: false,
+            uses_url: false,
+            uses_ui: true,
+            uses_web: false,
+            uses_tui: false,
+            uses_webview: false,
+            uses_css: false,
+            uses_auth: false,
+            uses_websocket: false,
+            uses_email: false,
+            uses_time: false,
+            uses_env_public: false,
+            uses_debug: false,
+            uses_ffi: false,
+            uses_async_runtime: false,
+        }],
+    })
+}
+
+/// `Ui.onKeyDown` with a capture-clone-wrapped lambda: the peel let must appear
+/// OUTSIDE the Arc closure in the emitted text.
+///
+/// Without the fix, this program emits Rust that `ipe` accepts (exit 0) but
+/// `cargo build` rejects with E0382 because the outer `move` closure
+/// move-captures `pfx` and a sibling use of `pfx` triggers "use of moved value".
+#[test]
+fn on_key_down_capture_clone_peeled_outside_arc() -> DResult<()> {
+    let mut interner = Interner::new();
+    let src = {
+        let prog = build_capture_clone_on_key_down(&mut interner)?;
+        emit(&interner, &prog)?
+    };
+
+    // The peel produces `{ let pfx = pfx.clone(); <Arc expr> }` — the `let`
+    // must precede `Arc::new(` in the emitted text (not sit inside it).
+    let let_pos = src.find("let pfx = pfx.clone()");
+    let arc_pos = src.find("::std::sync::Arc::new(");
+    assert!(
+        let_pos.is_some(),
+        "capture-clone peel `let pfx = pfx.clone()` must appear in emitted text:\n{src}"
+    );
+    assert!(
+        arc_pos.is_some(),
+        "`Arc::new(` must appear in emitted text:\n{src}"
+    );
+    assert!(
+        let_pos.unwrap() < arc_pos.unwrap(),
+        "peel `let` must appear BEFORE `Arc::new(` (hoisted outside the closure):\n{src}"
+    );
+    Ok(())
+}
+
+/// Same shape, `Ui.onKeyUp`.
+#[test]
+fn on_key_up_capture_clone_peeled_outside_arc() -> DResult<()> {
+    let mut interner = Interner::new();
+    let main_mod = interner.intern("Main")?;
+    let view = interner.intern("view")?;
+    let pfx = interner.intern("pfx")?;
+    let k = interner.intern("k")?;
+
+    let body = Expr::Let {
+        name: pfx,
+        value: Box::new(Expr::CloneVar(pfx)),
+        body: Box::new(Expr::Call {
+            callee: Callee::Kernel(KernelFn::UiOnKeyUp),
+            args: vec![Expr::Lambda {
+                params: vec![(k, IrType::Str)],
+                ret: IrType::Str,
+                body: Box::new(Expr::Var(k)),
+            }],
+            pin: CallPin::None,
+            on_form: OnFormKind::NotForm,
+        }),
+    };
+    let func = Func {
+        id: FuncId::from_raw(0),
+        name: view,
+        home: ModPath(vec![]),
+        type_params: vec![],
+        row_params: vec![],
+        params: vec![(pfx, IrType::Str)],
+        ret: IrType::Str,
+        body,
+    };
+    let prog = Program {
+        imports_unsafe_submodule: false,
+        modules: vec![Module {
+            name: ModPath(vec![main_mod]),
+            types: vec![],
+            funcs: vec![func],
+            entry: None,
+            records: vec![],
+            uses_tea: false,
+            uses_server: false,
+            uses_http: false,
+            uses_config: false,
+            uses_compression: false,
+            uses_csv: false,
+            uses_cache: false,
+            uses_encoding: false,
+            uses_regex: false,
+            uses_uuid: false,
+            uses_random: false,
+            uses_log: false,
+            uses_decimal: false,
+            uses_char_category: false,
+            uses_crypto_core: false,
+            uses_secret: false,
+            uses_json: false,
+            uses_crypto: false,
+            uses_jwt: false,
+            uses_url: false,
+            uses_ui: true,
+            uses_web: false,
+            uses_tui: false,
+            uses_webview: false,
+            uses_css: false,
+            uses_auth: false,
+            uses_websocket: false,
+            uses_email: false,
+            uses_time: false,
+            uses_env_public: false,
+            uses_debug: false,
+            uses_ffi: false,
+            uses_async_runtime: false,
+        }],
+    };
+    let src = emit(&interner, &prog)?;
+
+    let let_pos = src.find("let pfx = pfx.clone()");
+    let arc_pos = src.find("::std::sync::Arc::new(");
+    assert!(let_pos.is_some(), "peel let must appear:\n{src}");
+    assert!(arc_pos.is_some(), "Arc::new must appear:\n{src}");
+    assert!(
+        let_pos.unwrap() < arc_pos.unwrap(),
+        "peel let must be BEFORE Arc::new:\n{src}"
+    );
+    Ok(())
+}
+
+/// Same shape, `Ui.onFile`.
+#[test]
+fn on_file_capture_clone_peeled_outside_arc() -> DResult<()> {
+    let mut interner = Interner::new();
+    let main_mod = interner.intern("Main")?;
+    let view = interner.intern("view")?;
+    let pfx = interner.intern("pfx")?;
+    let k = interner.intern("k")?;
+
+    let body = Expr::Let {
+        name: pfx,
+        value: Box::new(Expr::CloneVar(pfx)),
+        body: Box::new(Expr::Call {
+            callee: Callee::Kernel(KernelFn::UiOnFile),
+            args: vec![Expr::Lambda {
+                params: vec![(k, IrType::Str)],
+                ret: IrType::Str,
+                body: Box::new(Expr::Var(k)),
+            }],
+            pin: CallPin::None,
+            on_form: OnFormKind::NotForm,
+        }),
+    };
+    let func = Func {
+        id: FuncId::from_raw(0),
+        name: view,
+        home: ModPath(vec![]),
+        type_params: vec![],
+        row_params: vec![],
+        params: vec![(pfx, IrType::Str)],
+        ret: IrType::Str,
+        body,
+    };
+    let prog = Program {
+        imports_unsafe_submodule: false,
+        modules: vec![Module {
+            name: ModPath(vec![main_mod]),
+            types: vec![],
+            funcs: vec![func],
+            entry: None,
+            records: vec![],
+            uses_tea: false,
+            uses_server: false,
+            uses_http: false,
+            uses_config: false,
+            uses_compression: false,
+            uses_csv: false,
+            uses_cache: false,
+            uses_encoding: false,
+            uses_regex: false,
+            uses_uuid: false,
+            uses_random: false,
+            uses_log: false,
+            uses_decimal: false,
+            uses_char_category: false,
+            uses_crypto_core: false,
+            uses_secret: false,
+            uses_json: false,
+            uses_crypto: false,
+            uses_jwt: false,
+            uses_url: false,
+            uses_ui: true,
+            uses_web: false,
+            uses_tui: false,
+            uses_webview: false,
+            uses_css: false,
+            uses_auth: false,
+            uses_websocket: false,
+            uses_email: false,
+            uses_time: false,
+            uses_env_public: false,
+            uses_debug: false,
+            uses_ffi: false,
+            uses_async_runtime: false,
+        }],
+    };
+    let src = emit(&interner, &prog)?;
+
+    let let_pos = src.find("let pfx = pfx.clone()");
+    let arc_pos = src.find("::std::sync::Arc::new(");
+    assert!(let_pos.is_some(), "peel let must appear:\n{src}");
+    assert!(arc_pos.is_some(), "Arc::new must appear:\n{src}");
+    assert!(
+        let_pos.unwrap() < arc_pos.unwrap(),
+        "peel let must be BEFORE Arc::new:\n{src}"
+    );
+    Ok(())
+}
+
+/// Same shape, `Event.onBool`.
+#[test]
+fn on_bool_capture_clone_peeled_outside_arc() -> DResult<()> {
+    let mut interner = Interner::new();
+    let main_mod = interner.intern("Main")?;
+    let view = interner.intern("view")?;
+    let pfx = interner.intern("pfx")?;
+    let b = interner.intern("b")?;
+
+    let body = Expr::Let {
+        name: pfx,
+        value: Box::new(Expr::CloneVar(pfx)),
+        body: Box::new(Expr::Call {
+            callee: Callee::Kernel(KernelFn::UiOnBool),
+            args: vec![Expr::Lambda {
+                params: vec![(b, IrType::Bool)],
+                ret: IrType::Bool,
+                body: Box::new(Expr::Var(b)),
+            }],
+            pin: CallPin::None,
+            on_form: OnFormKind::NotForm,
+        }),
+    };
+    let func = Func {
+        id: FuncId::from_raw(0),
+        name: view,
+        home: ModPath(vec![]),
+        type_params: vec![],
+        row_params: vec![],
+        params: vec![(pfx, IrType::Str)],
+        ret: IrType::Bool,
+        body,
+    };
+    let prog = Program {
+        imports_unsafe_submodule: false,
+        modules: vec![Module {
+            name: ModPath(vec![main_mod]),
+            types: vec![],
+            funcs: vec![func],
+            entry: None,
+            records: vec![],
+            uses_tea: false,
+            uses_server: false,
+            uses_http: false,
+            uses_config: false,
+            uses_compression: false,
+            uses_csv: false,
+            uses_cache: false,
+            uses_encoding: false,
+            uses_regex: false,
+            uses_uuid: false,
+            uses_random: false,
+            uses_log: false,
+            uses_decimal: false,
+            uses_char_category: false,
+            uses_crypto_core: false,
+            uses_secret: false,
+            uses_json: false,
+            uses_crypto: false,
+            uses_jwt: false,
+            uses_url: false,
+            uses_ui: true,
+            uses_web: false,
+            uses_tui: false,
+            uses_webview: false,
+            uses_css: false,
+            uses_auth: false,
+            uses_websocket: false,
+            uses_email: false,
+            uses_time: false,
+            uses_env_public: false,
+            uses_debug: false,
+            uses_ffi: false,
+            uses_async_runtime: false,
+        }],
+    };
+    let src = emit(&interner, &prog)?;
+
+    let let_pos = src.find("let pfx = pfx.clone()");
+    let arc_pos = src.find("::std::sync::Arc::new(");
+    assert!(let_pos.is_some(), "peel let must appear:\n{src}");
+    assert!(arc_pos.is_some(), "Arc::new must appear:\n{src}");
+    assert!(
+        let_pos.unwrap() < arc_pos.unwrap(),
+        "peel let must be BEFORE Arc::new:\n{src}"
     );
     Ok(())
 }
