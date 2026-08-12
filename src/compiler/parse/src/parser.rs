@@ -2231,7 +2231,13 @@ impl<'a> Parser<'a> {
                     let wild = Located::new(task.span, Pattern_::PAnything);
                     Located::new(
                         task.span,
-                        Expr_::Let(vec![LetBinding { pat: wild, body: task }], Box::new(acc)),
+                        Expr_::Let(
+                            vec![LetBinding {
+                                pat: wild,
+                                body: task,
+                            }],
+                            Box::new(acc),
+                        ),
                     )
                 }
                 DoStmt::Let(pat, op_span, body) => Located::new(
