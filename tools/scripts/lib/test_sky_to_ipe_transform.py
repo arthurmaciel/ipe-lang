@@ -249,5 +249,113 @@ class InjectMaybeImport(unittest.TestCase):
         self.assertEqual(_mod.inject_maybe_import(src), src)
 
 
+class RewriteDiscardBindings(unittest.TestCase):
+    """Tests for `rewrite_discard_bindings` — `let _ = e` → `do` block."""
+
+    def _run(self, src: str) -> str:
+        return _mod.rewrite_discard_bindings(src)
+
+    def test_multi_discard_let_becomes_do(self) -> None:
+        """A `let` with multiple `_ = e` bindings is rewritten to a `do` block."""
+        src = (
+            "missingTool tool hint =\n"
+            "    let\n"
+            '        _ = Io.eprintln ""\n'
+            "        _ = Io.eprintln (tool ++ \" not found\")\n"
+            "        _ = Io.eprintln hint\n"
+            "    in\n"
+            "        Task.succeed (System.exit 1)\n"
+        )
+        out = self._run(src)
+        self.assertIn("    do\n", out)
+        self.assertNotIn("let\n", out)
+        self.assertNotIn("_ =", out)
+        self.assertIn('        Io.eprintln ""\n', out)
+        self.assertIn("        Task.succeed (System.exit 1)\n", out)
+
+    def test_pure_only_let_is_unchanged(self) -> None:
+        """A `let` with no `_ =` bindings is left untouched."""
+        src = (
+            "helper x =\n"
+            "    let\n"
+            "        y = x + 1\n"
+            "        z = y * 2\n"
+            "    in\n"
+            "        z\n"
+        )
+        self.assertEqual(self._run(src), src)
+
+    def test_mixed_pure_and_discard(self) -> None:
+        """A `let` with both named and discard bindings: named stay, discards become bare."""
+        src = (
+            "reportError e =\n"
+            "    let\n"
+            "        msg = Error.toString e\n"
+            '        _ = Log.errorWith "op" [ "error", msg ]\n'
+            '        _ = Io.println ("Error: " ++ msg)\n'
+            "    in\n"
+            "        System.exit 1\n"
+        )
+        out = self._run(src)
+        self.assertIn("    do\n", out)
+        self.assertIn("        msg = Error.toString e\n", out)
+        self.assertNotIn("_ =", out)
+        self.assertIn("        System.exit 1\n", out)
+
+    def test_multiline_discard_value(self) -> None:
+        """A `_ =` whose value spans continuation lines is emitted as a bare expression."""
+        src = (
+            "initDb _ =\n"
+            "    let\n"
+            "        _ =\n"
+            "            runInit\n"
+            '                "users"\n'
+            "                (Db.exec [] [])\n"
+            "    in\n"
+            "        ()\n"
+        )
+        out = self._run(src)
+        self.assertIn("    do\n", out)
+        # The binding `_ =` inside the let must be gone; only the function
+        # signature's `initDb _ =` may remain.
+        self.assertNotIn("        _ =\n", out)
+        self.assertIn("        runInit\n", out)
+        self.assertIn("        ()\n", out)
+
+    def test_nested_let_inside_continuation_is_also_rewritten(self) -> None:
+        """A `let _ = e` nested inside a continuation block is rewritten by the fixed point."""
+        src = (
+            "f x =\n"
+            "    let\n"
+            "        _ =\n"
+            "            case x of\n"
+            "                Err e ->\n"
+            "                    let\n"
+            '                        _ = Io.println ("err: " ++ e)\n'
+            "                    in\n"
+            "                        ()\n"
+            "    in\n"
+            "        Task.succeed ()\n"
+        )
+        out = self._run(src)
+        self.assertNotIn("_ =", out)
+
+    def test_discard_inside_task_map_lambda(self) -> None:
+        """A `let _ = e in ()` inside a `Task.map (\\_ -> …)` lambda is rewritten."""
+        src = (
+            "addTodo conn title =\n"
+            "    Db.exec conn \"INSERT\" [ title ]\n"
+            "        |> Task.map\n"
+            "               (\\_ ->\n"
+            "                   let\n"
+            '                       _ = Io.println ("Added: " ++ title)\n'
+            "                   in\n"
+            "                       ())\n"
+        )
+        out = self._run(src)
+        self.assertNotIn("_ =", out)
+        self.assertIn("                   do\n", out)
+
+
 if __name__ == "__main__":
     unittest.main()

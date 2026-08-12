@@ -970,6 +970,212 @@ def wrap_pubsub_topic(text: str) -> str:
     return pair_code_head_with_string(text, head_at_end, _rewrite)
 
 
+# ── Discard-binding → do-notation (`let _ = e … in body` → `do` block) ──────────
+# Wave-3 parse gate will reject whole-pattern `let _ = e` on the user surface.
+# Any `let` block that contains at least one `_ = expr` binding is rewritten to
+# an equivalent `do` block:
+#
+#     let               →   do
+#         x = pure          x = pure        (pure let-binding: unchanged)
+#         _ = effect        effect          (discard: bare expression)
+#     in                    body            (continuation: final line)
+#         body
+#
+# Evaluation order is identical — `do` desugars to the same flat TaskSeq chain.
+# Pure-only `let` blocks (no `_ =` binding at all) are left untouched.
+#
+# The scanner works line-by-line to respect Ipê's indentation-sensitive layout.
+# It is careful not to rewrite inside string literals or comments: it skips lines
+# that are part of a triple-quoted `"""…"""` span. Single-line `"…"` and `--`
+# comments within a single line are left as-is (they don't affect block structure).
+
+# Matches `_ = rest` (inline) OR `_ =` alone at end of line (multi-line value).
+_DISCARD_BINDING = re.compile(r'^(?P<indent>[ \t]*)_[ \t]*=[ \t]*(?P<rest>.*)$')
+_LET_LINE = re.compile(r'^(?P<indent>[ \t]*)let[ \t]*$')
+_IN_LINE = re.compile(r'^(?P<indent>[ \t]*)in[ \t]*$')
+_BINDING_LINE = re.compile(r'^(?P<indent>[ \t]*)(?P<name>[A-Za-z_][A-Za-z0-9_]*)[ \t]*=[ \t]*(?P<rest>.*)$')
+
+
+def _in_triple_quote_ranges(lines: list[str]) -> list[bool]:
+    """Return a parallel bool list: True when line i is inside a triple-quoted string."""
+    result = [False] * len(lines)
+    inside = False
+    for i, line in enumerate(lines):
+        j = 0
+        while j < len(line):
+            if line[j:j+3] == '"""':
+                inside = not inside
+                j += 3
+            else:
+                j += 1
+        if inside:
+            result[i] = True
+    return result
+
+
+def rewrite_discard_bindings(text: str) -> str:
+    """Rewrite `let` blocks with `_ = e` bindings to `do` blocks (fixed point).
+
+    Runs the single-pass rewriter to a fixed point so that nested `let` blocks
+    inside continuation lines (e.g., a discard whose value is a `case` expression
+    containing a further `let _ = e`) are also rewritten. Terminates because each
+    pass strictly reduces the number of `let _ =` blocks.
+    """
+    while True:
+        next_text = _rewrite_discard_bindings_once(text)
+        if next_text == text:
+            return text
+        text = next_text
+
+
+def _rewrite_discard_bindings_once(text: str) -> str:
+    """Single-pass rewrite of `let` blocks with `_ = e` to `do` blocks."""
+    lines = text.split("\n")
+    in_tq = _in_triple_quote_ranges(lines)
+    out: list[str] = []
+    i = 0
+    n = len(lines)
+
+    while i < n:
+        line = lines[i]
+
+        # Skip lines inside triple-quoted strings untouched.
+        if in_tq[i]:
+            out.append(line)
+            i += 1
+            continue
+
+        let_m = _LET_LINE.match(line)
+        if let_m is None or in_tq[i]:
+            out.append(line)
+            i += 1
+            continue
+
+        let_indent = let_m.group("indent")
+        binding_indent = let_indent + "    "
+
+        # Collect binding lines at binding_indent, then an `in` line at let_indent.
+        # A binding may span multiple lines: continuation lines are indented deeper
+        # than binding_indent. We collect all lines up to and including `in`.
+        j = i + 1
+        # Gather the binding block: lines until we see `in` at let_indent.
+        binding_lines: list[str] = []
+        found_in = False
+        in_line_idx = -1
+        while j < n:
+            if in_tq[j]:
+                binding_lines.append(lines[j])
+                j += 1
+                continue
+            in_m = _IN_LINE.match(lines[j])
+            if in_m is not None and in_m.group("indent") == let_indent:
+                found_in = True
+                in_line_idx = j
+                break
+            binding_lines.append(lines[j])
+            j += 1
+
+        if not found_in:
+            # No matching `in` at same indent — leave the `let` untouched.
+            out.append(line)
+            i += 1
+            continue
+
+        # Check whether any binding is a whole-pattern discard `_ = e`.
+        has_discard = any(
+            _DISCARD_BINDING.match(bl) is not None
+            and _DISCARD_BINDING.match(bl).group("indent") == binding_indent
+            and not in_tq[i + 1 + k]
+            for k, bl in enumerate(binding_lines)
+        )
+        if not has_discard:
+            out.append(line)
+            i += 1
+            continue
+
+        # Rewrite: `let` → `do`, discard bindings → bare exprs, `in` dropped.
+        out.append(let_indent + "do")
+
+        # Process binding_lines: group them into top-level bindings + their
+        # continuation lines. A top-level binding starts at exactly binding_indent;
+        # continuation lines are indented further.
+        k = 0
+        nb = len(binding_lines)
+        while k < nb:
+            bl = binding_lines[k]
+            # Triple-quoted interior: copy verbatim.
+            line_abs = i + 1 + k
+            if line_abs < len(in_tq) and in_tq[line_abs]:
+                out.append(bl)
+                k += 1
+                continue
+            # Blank or empty line inside binding block: preserve.
+            if bl.strip() == "":
+                out.append(bl)
+                k += 1
+                continue
+            # Collect continuation lines (deeper indent or blank).
+            conts: list[str] = []
+            m2 = k + 1
+            while m2 < nb:
+                nbl = binding_lines[m2]
+                if nbl.strip() == "":
+                    conts.append(nbl)
+                    m2 += 1
+                    continue
+                nbl_indent = len(nbl) - len(nbl.lstrip())
+                bind_len = len(binding_indent)
+                if nbl_indent > bind_len:
+                    conts.append(nbl)
+                    m2 += 1
+                else:
+                    break
+
+            # Is this a discard binding at the right indent?
+            disc_m = _DISCARD_BINDING.match(bl)
+            if disc_m is not None and disc_m.group("indent") == binding_indent:
+                # Bare expression: strip the `_ = ` prefix.
+                bare_rest = disc_m.group("rest")
+                if bare_rest:
+                    # Inline: `_ = expr` → `expr` on the same line.
+                    out.append(binding_indent + bare_rest)
+                    out.extend(conts)
+                else:
+                    # Multi-line: `_ =` alone; value is on continuation lines.
+                    # The continuation lines were indented relative to `_ =`
+                    # (deeper than binding_indent). Re-anchor them so the first
+                    # non-blank continuation starts at binding_indent.
+                    non_blank = [c for c in conts if c.strip()]
+                    if non_blank:
+                        first_ws = len(non_blank[0]) - len(non_blank[0].lstrip())
+                        shift = first_ws - len(binding_indent)
+                        for c in conts:
+                            if c.strip():
+                                out.append(c[shift:] if shift > 0 else c)
+                            else:
+                                out.append(c)
+                    else:
+                        out.extend(conts)
+            else:
+                # Pure let-binding or anything else: preserve as-is.
+                out.append(bl)
+                out.extend(conts)
+            k = m2
+
+        # The `in` line is consumed; the body lines (after `in`) become the final
+        # lines of the `do` block — just append them at the same indentation they
+        # already have (they were already indented relative to `let`).
+        # Skip the `in` line itself (in_line_idx), carry on from j+1.
+        i = in_line_idx + 1
+        # Append all remaining body lines (the `in` body may itself be multiple
+        # lines at deeper indent — they follow immediately after `in`).
+        # We do NOT consume them here: the outer loop will process them normally,
+        # which handles nested `let` blocks correctly.
+        continue
+
+    return "\n".join(out)
+
+
 # ── Entry-boundary Task.run strip (`main = let … _ = Task.run r in ()`) ────────
 # Ipê's runtime is the single `Task.run` site: an idiomatic entry point RETURNS
 # its `Task Error ()` and lets the runtime run it (IPE-N0036). Upstream Sky runs
@@ -1223,7 +1429,9 @@ def main(argv: list[str]) -> int:
             transform(mark_stdlib_db(apply_member_moves(desugar_pure(text))), pairs)
         )
         migrated = inject_maybe_import(
-            return_entry_task(wrap_pubsub_topic(rehome_kernel_alias(renamed)))
+            rewrite_discard_bindings(
+                return_entry_task(wrap_pubsub_topic(rehome_kernel_alias(renamed)))
+            )
         )
         transformed[path] = prefix_bare_imports(migrated, bare)
 
