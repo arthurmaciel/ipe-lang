@@ -14,8 +14,7 @@ use lsp_types::notification::{Notification as _, PublishDiagnostics};
 use ipe_lsp_server::{LoadError, LoadedFile, LoadedProject, ModuleOrigin, ProjectLoader};
 
 const VIRTUAL_PATH: &str = "/ipe-lsp-protocol-test/Main.ipe";
-const CLEAN: &str =
-    "module Main exposing (main)\n\nimport Ipe.Io as Io\nimport Ipe.String as String\n\nmain : Task Error ()\nmain =\n    Io.println (String.fromInt 1)\n";
+const CLEAN: &str = "module Main exposing (main)\n\nimport Ipe.Io as Io\nimport Ipe.String as String\n\nmain : Task Error ()\nmain =\n    Io.println (String.fromInt 1)\n";
 const TYPE_ERROR: &str = "module Main exposing (main)\n\nmain : Int\nmain = \"nope\"\n";
 
 /// Resolves a single-module virtual project from the open buffer — the

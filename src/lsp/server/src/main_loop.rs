@@ -958,8 +958,7 @@ mod tests {
     use crate::loader::LoadError;
     use lsp_types::notification::Notification as _;
 
-    const MAIN_TEXT: &str =
-        "module Main exposing (main)\n\nimport Ipe.Io as Io\n\nmain : Task Error ()\nmain =\n    Io.println \"ok\"\n";
+    const MAIN_TEXT: &str = "module Main exposing (main)\n\nimport Ipe.Io as Io\n\nmain : Task Error ()\nmain =\n    Io.println \"ok\"\n";
     const LIB_TEXT: &str = "module Lib exposing (bad)\n\nbad : Int\nbad = \"nope\"\n";
 
     /// A two-module loader (`Main` open buffer + a static `Lib` with a real
