@@ -1,4 +1,4 @@
--- TYPE MISMATCH ------------------------------------------- test.ipe
+-- INFINITE TYPE ------------------------------------------- test.ipe
 
 This value's type would have to contain itself forever, so I can't pin it down.
 

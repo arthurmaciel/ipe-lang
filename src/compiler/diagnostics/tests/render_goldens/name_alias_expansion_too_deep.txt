@@ -2,10 +2,10 @@
 
 This type alias expands forever, so I can't work out what it finally stands for.
 
- --> test.ipe:2:1
+ --> test.ipe:3:1
   |
-2 | 
-  | ^ alias expansion exceeded the recursion depth limit of 256
+3 | type alias A = B
+  | ^^^^^^^^^^^^^^^^ alias expansion exceeded the recursion depth limit of 256
   |
 
 IPE-N0032 · run `ipe explain IPE-N0032`

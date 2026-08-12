@@ -2,10 +2,10 @@
 
 This code tries to mint a built-in effect directly, which only the standard library may do.
 
- --> test.ipe:3:7
+ --> test.ipe:4:5
   |
-3 | main =
-  |       ^ `Ffi.kernel "Http_get"` mints a kernel — only the standard library and the generated FFI interface may do this; reach the effect through its published module (an unsafe kernel via its `Ipe.<M>.Unsafe` module, which discloses the `unsafe` capability)
+4 |     Ffi.kernel "Http_get"
+  |     ^^^^^^^^^^^^^^^^^^^^^ `Ffi.kernel "Http_get"` mints a kernel — only the standard library and the generated FFI interface may do this; reach the effect through its published module (an unsafe kernel via its `Ipe.<M>.Unsafe` module, which discloses the `unsafe` capability)
   |
 
 IPE-N0042 · run `ipe explain IPE-N0042`

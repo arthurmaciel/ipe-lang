@@ -1,11 +1,11 @@
--- PARSE ERROR --------------------------------------------- test.ipe
+-- UNTERMINATED STRING ------------------------------------- test.ipe
 
 This string opens with a `"` but never closes.
 
- --> test.ipe:3:7
+ --> test.ipe:4:5
   |
-3 | main =
-  |       ^ this string is never closed
+4 |     "hello
+  |     ^^^^^^ this string is never closed
   |
 
 IPE-P0014 · run `ipe explain IPE-P0014`

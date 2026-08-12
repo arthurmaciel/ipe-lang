@@ -1,4 +1,4 @@
--- NAMING ERROR -------------------------------------------- <no file>
+-- IMPORT CYCLE -------------------------------------------- <no file>
 
 These modules import each other in a circle, so I can't decide which to compile first.
 

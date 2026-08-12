@@ -1,4 +1,4 @@
--- TYPE MISMATCH ------------------------------------------- test.ipe
+-- MISSING PATTERNS ---------------------------------------- test.ipe
 
 This `case` doesn't cover every possibility yet.
 

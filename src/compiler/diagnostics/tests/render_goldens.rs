@@ -105,7 +105,7 @@ fn golden_parse_unexpected_token() -> Result<(), Box<dyn std::error::Error>> {
     // identifier was expected.
     let source = "module Main exposing (main)\n\nmain =\n    42 True\n";
     let d = Diagnostic::Parse {
-        span: Span::new(35, 37),
+        span: Span::new(40, 42), // the `42` literal.
         msg: ParseError::UnexpectedToken {
             found: TokenKind::Int,
             expected: ExpectedSet(Box::new([Expected::Identifier])),
@@ -119,7 +119,7 @@ fn golden_parse_unterminated_string() -> Result<(), Box<dyn std::error::Error>> 
     // IPE-P0014: string literal opened but never closed.
     let source = "module Main exposing (main)\n\nmain =\n    \"hello\n";
     let d = Diagnostic::Parse {
-        span: Span::new(35, 42),
+        span: Span::new(40, 46), // the unterminated `"hello` run.
         msg: ParseError::UnterminatedString,
     };
     check_golden("parse_unterminated_string", &d, "test.ipe", source)
@@ -147,8 +147,12 @@ fn golden_name_value_not_found_single_suggestion() -> Result<(), Box<dyn std::er
     // IPE-N0001: unknown value name with one close match — rendered as a
     // machine-applicable replacement suggestion.
     let source = "module Main exposing (main)\n\nmain =\n    lenght\n";
+    // The primary span must cover the identifier `lenght` (bytes 40..46), not the
+    // newline + indent before it — the single-suggestion `Suggest` reuses this
+    // span to read the replaced text, so a slack span made it read `replace `\n
+    //     l``. The resolver hands the identifier's own span here.
     let d = Diagnostic::Name {
-        span: Span::new(35, 41),
+        span: Span::new(40, 46),
         msg: NameError::ValueNotFound {
             name: "lenght".into(),
             suggestions: Box::new(["length".into()]),
@@ -188,10 +192,10 @@ fn golden_name_duplicate_value() -> Result<(), Box<dyn std::error::Error>> {
     // secondary underline with the "first defined here" role.
     let source = "module Main exposing (x)\n\nx = 1\n\nx = 2\n";
     let d = Diagnostic::Name {
-        span: Span::new(31, 32),
+        span: Span::new(33, 34), // the second `x`.
         msg: NameError::DuplicateValue {
             name: "x".into(),
-            first: Span::new(26, 27),
+            first: Span::new(26, 27), // the first `x`.
         },
     };
     check_golden("name_duplicate_value", &d, "test.ipe", source)
@@ -217,7 +221,7 @@ fn golden_name_kernel_alias_in_user_source() -> Result<(), Box<dyn std::error::E
     // diagnostic.
     let source = "module Main exposing (main)\n\nmain =\n    Ffi.kernel \"Http_get\"\n";
     let d = Diagnostic::Name {
-        span: Span::new(35, 59),
+        span: Span::new(40, 61), // the `Ffi.kernel "Http_get"` call.
         msg: NameError::KernelAliasInUserSource {
             alias: "Http_get".into(),
         },
@@ -234,11 +238,11 @@ fn golden_type_mismatch() -> Result<(), Box<dyn std::error::Error>> {
     // IPE-T0001: the inferred type does not match the expected type.
     let source = "module Main exposing (main)\n\nmain : Int\nmain =\n    \"hello\"\n";
     let d = Diagnostic::Type {
-        span: Span::new(48, 55),
+        span: Span::new(51, 58), // the `"hello"` literal.
         msg: TypeError::TypeMismatch {
             expected: Box::new(ty_con("Int")),
             found: Box::new(ty_con("String")),
-            definition: Some(Span::new(28, 31)),
+            definition: Some(Span::new(36, 39)), // the `Int` annotation.
             path: Box::new([]),
         },
     };
@@ -277,13 +281,66 @@ fn golden_type_infinite_type() -> Result<(), Box<dyn std::error::Error>> {
 fn golden_type_redundant_branch_warning() -> Result<(), Box<dyn std::error::Error>> {
     // IPE-T0011: a case branch is redundant — severity is Warning, not Error.
     let source = "module Main exposing (main)\n\ntype Color = Red | Green\n\nmain =\n    case Red of\n        Red -> 1\n        Red -> 2\n";
+    // Underline the redundant second `Red` pattern (bytes 103..106), not the
+    // tail of the first branch — the span names the branch that can never run.
     let d = Diagnostic::Type {
-        span: Span::new(92, 95),
+        span: Span::new(103, 106),
         msg: TypeError::RedundantCaseBranch {
             constructor: "Red".into(),
         },
     };
     check_golden("type_redundant_branch_warning", &d, "test.ipe", source)
+}
+
+#[test]
+fn golden_type_mismatch_multiline_span() -> Result<(), Box<dyn std::error::Error>> {
+    // A primary span that crosses lines: the offending expression spans an
+    // application written over three lines. Every covered line is underlined,
+    // and the label attaches to the last one.
+    let source =
+        "module Main exposing (main)\n\nmain : Int\nmain =\n    add\n        1\n        2\n";
+    let d = Diagnostic::Type {
+        span: Span::new(51, 74),
+        msg: TypeError::TypeMismatch {
+            expected: Box::new(ty_con("Int")),
+            found: Box::new(ty_con("String")),
+            definition: None,
+            path: Box::new([]),
+        },
+    };
+    check_golden("type_mismatch_multiline_span", &d, "test.ipe", source)
+}
+
+#[test]
+fn golden_name_value_not_found_tab_indented() -> Result<(), Box<dyn std::error::Error>> {
+    // The offending line is indented with a tab, not spaces. The caret must land
+    // under the identifier once the tab is expanded to a fixed stop, so the
+    // shown source line and the caret line agree on where the name begins.
+    let source = "module Main exposing (main)\n\nmain =\n\tlenght\n";
+    let d = Diagnostic::Name {
+        span: Span::new(37, 43),
+        msg: NameError::ValueNotFound {
+            name: "lenght".into(),
+            suggestions: Box::new(["length".into()]),
+        },
+    };
+    check_golden("name_value_not_found_tab_indented", &d, "test.ipe", source)
+}
+
+#[test]
+fn golden_name_value_not_found_wide_chars() -> Result<(), Box<dyn std::error::Error>> {
+    // The line holds full-width (CJK) characters before the underlined name.
+    // Each is two display cells, so the caret indent must count display width,
+    // not `char`s, or it would under-shoot the identifier.
+    let source = "module Main exposing (main)\n\nmain =\n    \"你好\" ++ x\n";
+    let d = Diagnostic::Name {
+        span: Span::new(48, 49),
+        msg: NameError::ValueNotFound {
+            name: "x".into(),
+            suggestions: Box::new([]),
+        },
+    };
+    check_golden("name_value_not_found_wide_chars", &d, "test.ipe", source)
 }
 
 // ---------------------------------------------------------------------------
@@ -306,7 +363,7 @@ fn golden_lower_lawless_effect_discard() -> Result<(), Box<dyn std::error::Error
     // IPE-L0141: a Task value discarded with `let _ = …` in a non-Task context.
     let source = "module Main exposing (main)\n\nmain : Int\nmain =\n    let _ = Http.get \"https://example.com\"\n    in 42\n";
     let d = Diagnostic::Lower {
-        span: Span::new(51, 90),
+        span: Span::new(51, 89), // the `let _ = Http.get "…"` discard.
         msg: LowerError::LawlessEffectDiscard,
     };
     check_golden("lower_lawless_effect_discard", &d, "test.ipe", source)
@@ -322,7 +379,7 @@ fn golden_ffi_asserted_call_malformed() -> Result<(), Box<dyn std::error::Error>
     // This is the FFI-adjacent name diagnostic reachable from user code.
     let source = "module Main exposing (main)\n\nmain = Rust.Ffi.call \"bad::shape\" 42\n";
     let d = Diagnostic::Name {
-        span: Span::new(28, 62),
+        span: Span::new(29, 65), // the whole `main = Rust.Ffi.call …` definition.
         msg: NameError::AssertedCallMalformed {
             detail: "the body must be exactly `Rust.Ffi.call \"<crate>::<fn>\"`".into(),
         },
@@ -367,7 +424,7 @@ fn golden_security_alias_expansion_too_deep() -> Result<(), Box<dyn std::error::
     let source =
         "module Main exposing (main)\n\ntype alias A = B\ntype alias B = A\n\nmain : A\nmain = 0\n";
     let d = Diagnostic::Name {
-        span: Span::new(28, 44),
+        span: Span::new(29, 45), // the `type alias A = B` declaration.
         msg: NameError::TypeExpansionTooDeep {
             kind: AliasExpansionKind::Depth,
             limit: 256,

@@ -2,7 +2,7 @@
 
 I can't find `lenght` in scope.
 
- --> test.ipe:4:5
+ --> test.ipe:4:2
   |
 4 |     lenght
   |     ^^^^^^ I don't know this name
