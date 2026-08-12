@@ -3084,9 +3084,18 @@ impl<'a> Builder<'a> {
             // `cargo` cannot infer.
             if matches!(
                 k,
-                StdlibKernel::DbExec | StdlibKernel::DbQuery | StdlibKernel::DbQueryDecode
+                StdlibKernel::DbExec
+                    | StdlibKernel::DbQuery
+                    | StdlibKernel::DbQueryDecode
+                    | StdlibKernel::DbConnQueryDecode
             ) {
-                let raw_idx = u32::from(matches!(k, StdlibKernel::DbQueryDecode));
+                // The params-list element var is index 1 for both `queryDecode`
+                // shapes (they carry a decoder var 0 ahead of it), index 0 for the
+                // bare `exec`/`query`.
+                let raw_idx = u32::from(matches!(
+                    k,
+                    StdlibKernel::DbQueryDecode | StdlibKernel::DbConnQueryDecode
+                ));
                 let ty = self.stdlib_scheme(k).ok_or(Diagnostic::Lower {
                     span,
                     msg: LowerError::Unsupported(Feature::Kernels),
@@ -5405,6 +5414,36 @@ impl<'a> Builder<'a> {
             K::DbConnUnsafeExecRawOn => {
                 fun(connection(conn_read_write()), fun(string(), task(int())))
             }
+            // ── External read path — mode-polymorphic `Connection a` first arg. ──
+            // A read is available on any access mode, so the mode is a free var.
+            // findWhereOn : Connection a -> String -> SqlFragment
+            //               -> Task Error (List Row)
+            K::DbConnFindWhere => fun(
+                connection(var(0)),
+                fun(
+                    string(),
+                    fun(sqlfragment(), task(list(dict(string(), string())))),
+                ),
+            ),
+            // getByIdOn : Connection a -> String -> String
+            //             -> Task Error (Maybe Row)
+            K::DbConnGetById => fun(
+                connection(var(0)),
+                fun(
+                    string(),
+                    fun(string(), task(maybe(dict(string(), string())))),
+                ),
+            ),
+            // queryDecodeOn : Connection a -> String -> List b -> Decoder c
+            //                 -> Task Error (List c). var(2) = access mode (free,
+            // never unifies with the decoder var(0) or the params-elem var(1)).
+            K::DbConnQueryDecode => fun(
+                connection(var(2)),
+                fun(
+                    string(),
+                    fun(list(var(1)), fun(dec(var(0)), task(list(var(0))))),
+                ),
+            ),
             K::DbExecRaw => fun(db(), fun(string(), task(int()))),
             // `exec`/`query`/`queryDecode` accept `List a` (polymorphic) — any
             // Ipê type that can be bound as a SQL parameter: `List String`,
@@ -8521,6 +8560,10 @@ mod registry_phase_c_tests {
             K::DbConnClose,
             K::DbConnUnsafeOpen,
             K::DbConnUnsafeExecRawOn,
+            // External read path — `…On` reads over a `Connection a` (3)
+            K::DbConnFindWhere,
+            K::DbConnQueryDecode,
+            K::DbConnGetById,
             // Ipe.Db.Dsn — parse-don't-validate descriptor (9)
             K::DsnParse,
             K::DsnBuild,

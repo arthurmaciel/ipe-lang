@@ -1301,6 +1301,21 @@ pub enum StdlibKernel {
     /// `Connection ReadWrite`, so a `Connection ReadOnly` cannot type-check into
     /// it (the read-only guarantee is a compile error, not a runtime check).
     DbConnUnsafeExecRawOn,
+    /// `Db.findWhereOn : Connection a -> String -> SqlFragment -> Task Error
+    /// (List (Dict String String))` — read the rows matching a `Sql.*`-built
+    /// fragment from an EXTERNAL connection. Mode-polymorphic in `a`: a read is
+    /// available on `Connection ReadOnly` and `ReadWrite` alike. Same validated
+    /// identifiers + bound params as the app-`Db` `findWhere`.
+    DbConnFindWhere,
+    /// `Db.queryDecodeOn : Connection a -> String -> List b -> Decoder c -> Task
+    /// Error (List c)` — typed query with a per-row decoder against an EXTERNAL
+    /// connection, so a foreign source of a different dialect reads through one
+    /// codec. Bound-parameter-only (the safe path); mode-polymorphic in `a`.
+    DbConnQueryDecode,
+    /// `Db.getByIdOn : Connection a -> String -> String -> Task Error (Maybe
+    /// (Dict String String))` — read a single row by id from an EXTERNAL
+    /// connection; the id binds as a parameter. Mode-polymorphic in `a`.
+    DbConnGetById,
     DbExecRaw,
     DbExec,
     DbQuery,
@@ -2968,6 +2983,13 @@ impl StdlibKernel {
             Self::DbConnUnsafeExecRawOn => {
                 d("Db", "unsafeExecRawOn", 2, Db, "db_conn_unsafe_exec_raw_on")
             }
+            // External read path: the app-`Db` read kernels' `…On` counterparts,
+            // taking a `Connection a` (mode-polymorphic read) instead of `Db`.
+            Self::DbConnFindWhere => d("Db", "findWhereOn", 3, Db, "db_conn_find_where"),
+            Self::DbConnQueryDecode => {
+                d("Db", "queryDecodeOn", 4, Db, "db_conn_query_decode_params")
+            }
+            Self::DbConnGetById => d("Db", "getByIdOn", 3, Db, "db_conn_get_by_id"),
             Self::DbExecRaw => d("Db", "unsafeExecRaw", 2, Db, "db_exec_raw"),
             Self::DbExec => d("Db", "exec", 3, Db, "db_exec_params"),
             Self::DbQuery => d("Db", "unsafeQuery", 3, Db, "db_query_params"),
@@ -4320,6 +4342,9 @@ impl StdlibKernel {
         Self::DbConnClose,
         Self::DbConnUnsafeOpen,
         Self::DbConnUnsafeExecRawOn,
+        Self::DbConnFindWhere,
+        Self::DbConnQueryDecode,
+        Self::DbConnGetById,
         Self::DbExecRaw,
         Self::DbExec,
         Self::DbQuery,
@@ -4895,6 +4920,9 @@ impl StdlibKernel {
                 | Self::DbConnClose
                 | Self::DbConnUnsafeOpen
                 | Self::DbConnUnsafeExecRawOn
+                | Self::DbConnFindWhere
+                | Self::DbConnQueryDecode
+                | Self::DbConnGetById
                 | Self::DbExecRaw
                 | Self::DbExec
                 | Self::DbQuery
@@ -6211,6 +6239,25 @@ impl StdlibKernel {
         const STRING_TO_TASK_INT_CONN: TyShape = TyShape::Fun(&STRING, &TASK_INT);
         const CONN_RW_TO_STRING_TO_TASK_INT: TyShape =
             TyShape::Fun(&CONNECTION_READWRITE, &STRING_TO_TASK_INT_CONN);
+        // ── External read path — mode-polymorphic `Connection a` first arg. ──
+        // A read is available on any access mode, so the mode is a free var (`a`
+        // for the single-var reads; `c` for `queryDecodeOn`, whose `a`/`b` are the
+        // decoder element and params element). The `Connection` handle is one
+        // concrete pool at emit — the phantom mode is erased.
+        //
+        // `findWhereOn : Connection a -> String -> SqlFragment
+        //                -> Task Error (List (Dict String String))`.
+        const CONN_FIND_WHERE: TyShape = TyShape::Fun(&CONNECTION_MODE, &STRING_TO_FIND_WHERE);
+        // `getByIdOn : Connection a -> String -> String
+        //              -> Task Error (Maybe (Dict String String))`.
+        const CONN_GET_BY_ID: TyShape =
+            TyShape::Fun(&CONNECTION_MODE, &STRING_TO_STRING_TO_TASK_MAYBE_DICT_SS);
+        // `queryDecodeOn : Connection c -> String -> List b -> Decoder a
+        //                  -> Task Error (List a)`. Mode var is `c` (Var 2) so it
+        // never unifies with the decoder's `a` or the params list's `b`.
+        const CONNECTION_MODE_C: TyShape = TyShape::Con(BuiltinTag::Connection, &[C]);
+        const CONN_QUERY_DECODE: TyShape =
+            TyShape::Fun(&CONNECTION_MODE_C, &STRING_TO_QUERY_DECODE);
         // Locale.
         const MAYBE_LOCALE: TyShape = TyShape::Con(BuiltinTag::Maybe, &[LOCALE]);
         const STRING_TO_MAYBE_LOCALE: TyShape = TyShape::Fun(&STRING, &MAYBE_LOCALE);
@@ -7678,6 +7725,9 @@ impl StdlibKernel {
             Self::DbConnClose => Some(&CONN_MODE_TO_TASK_UNIT),
             Self::DbConnUnsafeOpen => Some(&INT_TO_STRING_TO_TASK_CONN_RO),
             Self::DbConnUnsafeExecRawOn => Some(&CONN_RW_TO_STRING_TO_TASK_INT),
+            Self::DbConnFindWhere => Some(&CONN_FIND_WHERE),
+            Self::DbConnQueryDecode => Some(&CONN_QUERY_DECODE),
+            Self::DbConnGetById => Some(&CONN_GET_BY_ID),
 
             // ── Locale. ──
             Self::LocaleFromTag => Some(&STRING_TO_MAYBE_LOCALE),
@@ -8360,7 +8410,12 @@ impl StdlibKernel {
             // touch a database but reach no NEW network host — `database`, the
             // same axis the app-connection query kernels disclose.
             | Self::DbConnClose
-            | Self::DbConnUnsafeExecRawOn => Some(Capability::Database),
+            | Self::DbConnUnsafeExecRawOn
+            // External reads: the connection already disclosed `network` at
+            // `open`; a read against it is a database op (like every other read).
+            | Self::DbConnFindWhere
+            | Self::DbConnQueryDecode
+            | Self::DbConnGetById => Some(Capability::Database),
             Self::SystemArgs
             | Self::SystemGetenv
             | Self::SystemGetenvOr

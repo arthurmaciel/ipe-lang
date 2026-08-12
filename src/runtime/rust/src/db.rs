@@ -2362,6 +2362,353 @@ pub fn db_delete_where<E: Send + From<String> + 'static>(
     })
 }
 
+// ─── External-connection read path (foreign-DB reads through the codec stack) ──
+//
+// The app connection (`Db`) is one dialect fixed at build time; an external
+// `ExternalConnection` may be a DIFFERENT dialect selected at runtime by the
+// parsed `Dsn`. The read runners below therefore build and decode each query
+// keyed on the external connection's OWN dialect, never on the app-build's
+// `db_format_sql` / `DbRow`. They reuse the identical query builder every app
+// read uses — `SqlIdent` for identifiers, the `?`-placeholder text from the
+// `Sql.*` fragment combinators, `SqlParam` positional binds — so no new query
+// path or injection surface is introduced by reading elsewhere (design §2). Only
+// the placeholder-style rewrite and the row→value decode are dialect-selected,
+// per concrete match arm, so there is no `dyn`.
+
+/// Rewrite `?`-placeholder SQL to the placeholder style the external dialect
+/// expects: Postgres numbers them (`$1`, `$2`, …); SQLite keeps `?`. This mirrors
+/// the per-dialect `db_format_sql` the app path applies, but is selected from the
+/// EXTERNAL connection's dialect at runtime instead of the build-fixed one — the
+/// same sequential rewrite is correct because every value is bound as a
+/// parameter, never inlined into the SQL text.
+#[cfg(feature = "db")]
+fn external_format_sql_postgres(sql: &str) -> String {
+    let mut out = String::with_capacity(sql.len() + 8);
+    let mut n = 0u32;
+    for ch in sql.chars() {
+        if ch == '?' {
+            n += 1;
+            out.push('$');
+            out.push_str(&n.to_string());
+        } else {
+            out.push(ch);
+        }
+    }
+    out
+}
+
+/// Decode column `i` of an EXTERNAL row into a `String`, mirroring the app-path
+/// [`column_to_string`] probe order (bool → i64 → f64 → String → bytes-hex).
+/// Generic over the sqlx row type so a single body serves both external
+/// dialects; each caller monomorphises it to its concrete row (no `dyn`).
+#[cfg(feature = "db")]
+fn external_column_to_string<R>(row: &R, i: usize) -> String
+where
+    R: Row,
+    usize: sqlx::ColumnIndex<R>,
+    for<'a> Option<bool>: sqlx::Decode<'a, R::Database> + sqlx::Type<R::Database>,
+    for<'a> Option<i64>: sqlx::Decode<'a, R::Database> + sqlx::Type<R::Database>,
+    for<'a> Option<f64>: sqlx::Decode<'a, R::Database> + sqlx::Type<R::Database>,
+    for<'a> Option<String>: sqlx::Decode<'a, R::Database> + sqlx::Type<R::Database>,
+    for<'a> Option<Vec<u8>>: sqlx::Decode<'a, R::Database> + sqlx::Type<R::Database>,
+{
+    let is_bool = row
+        .columns()
+        .get(i)
+        .map(sqlx::Column::type_info)
+        .map(|ti| {
+            let name = ti.name().to_ascii_uppercase();
+            name == "BOOL" || name == "BOOLEAN"
+        })
+        .unwrap_or(false);
+    if is_bool && let Ok(opt) = row.try_get::<Option<bool>, _>(i) {
+        return opt.map_or_else(String::new, |b| b.to_string());
+    }
+    if let Ok(opt) = row.try_get::<Option<i64>, _>(i) {
+        return opt.map_or_else(String::new, |n| n.to_string());
+    }
+    if let Ok(opt) = row.try_get::<Option<f64>, _>(i) {
+        return opt.map_or_else(String::new, |f| f.to_string());
+    }
+    if let Ok(opt) = row.try_get::<Option<String>, _>(i) {
+        return opt.unwrap_or_default();
+    }
+    if let Ok(Some(bytes)) = row.try_get::<Option<Vec<u8>>, _>(i) {
+        return hex::encode(bytes);
+    }
+    String::new()
+}
+
+/// Decode an EXTERNAL row into the untyped `Dict String String` shape, mirroring
+/// the app-path [`row_to_map`]. Generic over the sqlx row type.
+#[cfg(feature = "db")]
+#[allow(clippy::needless_range_loop)]
+fn external_row_to_map<R>(row: &R) -> HashMap<String, String>
+where
+    R: Row,
+    usize: sqlx::ColumnIndex<R>,
+    for<'a> Option<bool>: sqlx::Decode<'a, R::Database> + sqlx::Type<R::Database>,
+    for<'a> Option<i64>: sqlx::Decode<'a, R::Database> + sqlx::Type<R::Database>,
+    for<'a> Option<f64>: sqlx::Decode<'a, R::Database> + sqlx::Type<R::Database>,
+    for<'a> Option<String>: sqlx::Decode<'a, R::Database> + sqlx::Type<R::Database>,
+    for<'a> Option<Vec<u8>>: sqlx::Decode<'a, R::Database> + sqlx::Type<R::Database>,
+{
+    let mut map = HashMap::new();
+    for (i, col) in row.columns().iter().enumerate() {
+        map.insert(col.name().to_string(), external_column_to_string(row, i));
+    }
+    map
+}
+
+/// Decode column `i` of an EXTERNAL row into a `JsonVal`, mirroring the app-path
+/// [`column_to_json`] probe order and its NULL-preserving semantics (so
+/// `db_decode_nullable` distinguishes NULL from empty on a foreign row too).
+#[cfg(feature = "db")]
+fn external_column_to_json<R>(row: &R, i: usize) -> Result<JsonVal, sqlx::Error>
+where
+    R: Row,
+    usize: sqlx::ColumnIndex<R>,
+    for<'a> Option<bool>: sqlx::Decode<'a, R::Database> + sqlx::Type<R::Database>,
+    for<'a> Option<i64>: sqlx::Decode<'a, R::Database> + sqlx::Type<R::Database>,
+    for<'a> Option<f64>: sqlx::Decode<'a, R::Database> + sqlx::Type<R::Database>,
+    for<'a> Option<String>: sqlx::Decode<'a, R::Database> + sqlx::Type<R::Database>,
+    for<'a> Option<Vec<u8>>: sqlx::Decode<'a, R::Database> + sqlx::Type<R::Database>,
+{
+    let is_bool = row
+        .columns()
+        .get(i)
+        .map(sqlx::Column::type_info)
+        .map(|ti| {
+            let name = ti.name().to_ascii_uppercase();
+            name == "BOOL" || name == "BOOLEAN"
+        })
+        .unwrap_or(false);
+    if is_bool && let Ok(opt) = row.try_get::<Option<bool>, _>(i) {
+        return Ok(opt.map_or(JsonVal::Null, JsonVal::Bool));
+    }
+    if let Ok(opt) = row.try_get::<Option<i64>, _>(i) {
+        return Ok(opt.map_or(JsonVal::Null, |n| {
+            JsonVal::Number(serde_json::Number::from(n))
+        }));
+    }
+    if let Ok(opt) = row.try_get::<Option<f64>, _>(i) {
+        return Ok(opt.map_or(JsonVal::Null, |f| {
+            serde_json::Number::from_f64(f).map_or(JsonVal::Null, JsonVal::Number)
+        }));
+    }
+    if let Ok(opt) = row.try_get::<Option<String>, _>(i) {
+        return Ok(opt.map_or(JsonVal::Null, JsonVal::String));
+    }
+    if let Ok(opt) = row.try_get::<Option<Vec<u8>>, _>(i) {
+        return Ok(opt.map_or(JsonVal::Null, |b| JsonVal::String(hex::encode(b))));
+    }
+    Err(sqlx::Error::ColumnDecode {
+        index: i.to_string(),
+        source: "unsupported column type (not bool/i64/f64/String/bytes)".into(),
+    })
+}
+
+/// Decode an EXTERNAL row into the NULL-preserving `JsonVal::Object` the typed
+/// decoder path consumes, mirroring the app-path [`row_to_json`].
+#[cfg(feature = "db")]
+fn external_row_to_json<R>(row: &R) -> Result<JsonVal, sqlx::Error>
+where
+    R: Row,
+    usize: sqlx::ColumnIndex<R>,
+    for<'a> Option<bool>: sqlx::Decode<'a, R::Database> + sqlx::Type<R::Database>,
+    for<'a> Option<i64>: sqlx::Decode<'a, R::Database> + sqlx::Type<R::Database>,
+    for<'a> Option<f64>: sqlx::Decode<'a, R::Database> + sqlx::Type<R::Database>,
+    for<'a> Option<String>: sqlx::Decode<'a, R::Database> + sqlx::Type<R::Database>,
+    for<'a> Option<Vec<u8>>: sqlx::Decode<'a, R::Database> + sqlx::Type<R::Database>,
+{
+    let cols = row.columns();
+    let mut map = serde_json::Map::with_capacity(cols.len());
+    for (i, col) in cols.iter().enumerate() {
+        map.insert(col.name().to_string(), external_column_to_json(row, i)?);
+    }
+    Ok(JsonVal::Object(map))
+}
+
+/// Bind a `SqlParam` onto a query builder for a SPECIFIC external dialect,
+/// generic over the sqlx database. Same total per-variant mapping as the
+/// app-path [`bind_sql_param`], including the typed-NULL witness that gives
+/// Postgres the correct per-parameter type OID.
+#[cfg(feature = "db")]
+fn external_bind_sql_param<'q, DB>(
+    q: sqlx::query::Query<'q, DB, <DB as sqlx::Database>::Arguments<'q>>,
+    p: SqlParam,
+) -> sqlx::query::Query<'q, DB, <DB as sqlx::Database>::Arguments<'q>>
+where
+    DB: sqlx::Database,
+    String: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
+    i64: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
+    f64: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
+    bool: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
+    Vec<u8>: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
+    Option<String>: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
+    Option<i64>: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
+    Option<f64>: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
+    Option<bool>: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
+    Option<Vec<u8>>: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
+{
+    match p {
+        SqlParam::Text(s) => q.bind(s),
+        SqlParam::Int(i) => q.bind(i),
+        SqlParam::Float(f) => q.bind(f),
+        SqlParam::Bool(b) => q.bind(b),
+        SqlParam::Bytes(v) => q.bind(v),
+        SqlParam::Null(witness) => match *witness {
+            SqlParam::Text(_) => q.bind(Option::<String>::None),
+            SqlParam::Int(_) => q.bind(Option::<i64>::None),
+            SqlParam::Float(_) => q.bind(Option::<f64>::None),
+            SqlParam::Bool(_) => q.bind(Option::<bool>::None),
+            SqlParam::Bytes(_) => q.bind(Option::<Vec<u8>>::None),
+            SqlParam::Null(_) => q.bind(Option::<String>::None),
+        },
+    }
+}
+
+/// `Db.findWhereOn : Connection a -> String -> SqlFragment -> Task Error (List Row)`
+/// — the external-connection counterpart to [`db_find_where`]. The `SqlFragment`
+/// arrives from the same `Sql.*` combinators (validated identifiers + bound
+/// params), the table name passes the same [`SqlIdent`] gate, and every value is
+/// bound positionally — identical injection barrier, run against a foreign pool.
+/// Accepts `Connection a` (any access mode: a read is available on read-only and
+/// read-write alike); the phantom mode is erased at emit.
+#[cfg(feature = "db")]
+pub fn db_conn_find_where<E: Send + From<String> + 'static>(
+    conn: ExternalConnection,
+    table: String,
+    frag: SqlFragment,
+) -> IpeTask<E, Vec<HashMap<String, String>>> {
+    Box::pin(async move {
+        if let Some(reason) = frag.invalid {
+            return IpeResult::Err(format!("db.findWhereOn: {reason}").into());
+        }
+        let qtable = match SqlIdent::parse_plain(&table) {
+            Some(t) => t,
+            None => {
+                return IpeResult::Err(format!("db.findWhereOn: invalid table {:?}", table).into());
+            }
+        };
+        let base = format!("SELECT * FROM {} WHERE {}", qtable.as_str(), frag.sql);
+        match conn {
+            ExternalConnection::Postgres(pool) => {
+                let sql = external_format_sql_postgres(&base);
+                let mut q = sqlx::query(&sql);
+                for p in frag.binds {
+                    q = external_bind_sql_param(q, p);
+                }
+                match q.fetch_all(&pool).await {
+                    Ok(rows) => ok_res(rows.iter().map(external_row_to_map).collect()),
+                    Err(e) => IpeResult::Err(ipe_err(&e)),
+                }
+            }
+            ExternalConnection::Sqlite(pool) => {
+                let mut q = sqlx::query(&base);
+                for p in frag.binds {
+                    q = external_bind_sql_param(q, p);
+                }
+                match q.fetch_all(&pool).await {
+                    Ok(rows) => ok_res(rows.iter().map(external_row_to_map).collect()),
+                    Err(e) => IpeResult::Err(ipe_err(&e)),
+                }
+            }
+        }
+    })
+}
+
+/// `Db.queryDecodeOn : Connection a -> String -> List SqlValue -> Decoder a2
+/// -> Task Error (List a2)` — the external counterpart to
+/// [`db_query_decode_params`]. Same positional binding and NULL-preserving
+/// row→JSON decode, keyed on the foreign dialect, fed to the same
+/// `Decoder<E, A>`. The caller-supplied SQL is bound-parameter-only (the safe
+/// path); verbatim external SQL remains the disclosed `unsafeExecRawOn` door.
+#[cfg(feature = "db")]
+pub fn db_conn_query_decode_params<E: Send + From<String> + 'static, A: Send + 'static>(
+    conn: ExternalConnection,
+    sql: String,
+    params: Vec<SqlParam>,
+    decoder: Decoder<E, A>,
+) -> IpeTask<E, Vec<A>> {
+    Box::pin(async move {
+        let rows_json: Result<Vec<JsonVal>, sqlx::Error> = match conn {
+            ExternalConnection::Postgres(pool) => {
+                let final_sql = external_format_sql_postgres(&sql);
+                let mut q = sqlx::query(&final_sql);
+                for p in params {
+                    q = external_bind_sql_param(q, p);
+                }
+                match q.fetch_all(&pool).await {
+                    Ok(rows) => rows.iter().map(external_row_to_json).collect(),
+                    Err(e) => Err(e),
+                }
+            }
+            ExternalConnection::Sqlite(pool) => {
+                let mut q = sqlx::query(&sql);
+                for p in params {
+                    q = external_bind_sql_param(q, p);
+                }
+                match q.fetch_all(&pool).await {
+                    Ok(rows) => rows.iter().map(external_row_to_json).collect(),
+                    Err(e) => Err(e),
+                }
+            }
+        };
+        let jsons = match rows_json {
+            Ok(v) => v,
+            Err(e) => return IpeResult::Err(ipe_err(&e)),
+        };
+        let mut out = Vec::with_capacity(jsons.len());
+        for jv in &jsons {
+            match (decoder.run)(jv) {
+                IpeResult::Ok(a) => out.push(a),
+                IpeResult::Err(e) => return IpeResult::Err(e),
+            }
+        }
+        ok_res(out)
+    })
+}
+
+/// `Db.getByIdOn : Connection a -> String -> String -> Task Error (Maybe Row)`
+/// — the external counterpart to [`db_get_by_id`]. The id binds as a positional
+/// parameter (never interpolated); the table passes the same [`SqlIdent`] gate.
+#[cfg(feature = "db")]
+pub fn db_conn_get_by_id<E: Send + From<String> + 'static>(
+    conn: ExternalConnection,
+    table: String,
+    id: String,
+) -> IpeTask<E, IpeMaybe<HashMap<String, String>>> {
+    Box::pin(async move {
+        let qtable = match SqlIdent::parse_plain(&table) {
+            Some(t) => t,
+            None => {
+                return IpeResult::Err(
+                    format!("db.getByIdOn: invalid table name {:?}", table).into(),
+                );
+            }
+        };
+        let base = format!("SELECT * FROM {} WHERE id = ? LIMIT 1", qtable.as_str());
+        match conn {
+            ExternalConnection::Postgres(pool) => {
+                let sql = external_format_sql_postgres(&base);
+                match sqlx::query(&sql).bind(id).fetch_optional(&pool).await {
+                    Ok(Some(r)) => ok_res(IpeMaybe::Just(external_row_to_map(&r))),
+                    Ok(None) => ok_res(IpeMaybe::Nothing),
+                    Err(e) => IpeResult::Err(ipe_err(&e)),
+                }
+            }
+            ExternalConnection::Sqlite(pool) => {
+                match sqlx::query(&base).bind(id).fetch_optional(&pool).await {
+                    Ok(Some(r)) => ok_res(IpeMaybe::Just(external_row_to_map(&r))),
+                    Ok(None) => ok_res(IpeMaybe::Nothing),
+                    Err(e) => IpeResult::Err(ipe_err(&e)),
+                }
+            }
+        }
+    })
+}
+
 /// Shared logic for `db_insert_fields` and `db_insert_fields_returning`:
 /// validates the table name and builds the INSERT SQL + bound-arg list.
 ///
@@ -2781,6 +3128,118 @@ mod tests {
         sqlx::query("CREATE TABLE todos (id INTEGER PRIMARY KEY AUTOINCREMENT, title TEXT NOT NULL, done INTEGER NOT NULL DEFAULT 0)")
             .execute(&pool).await.expect("create table");
         pool
+    }
+
+    /// A seeded external (foreign) SQLite connection, distinct from the app pool —
+    /// stands in for a source of a different dialect that the read runners dial
+    /// through the same codec stack. `ledger` carries an `amount` INTEGER column.
+    #[allow(clippy::expect_used)]
+    async fn fresh_external_conn() -> ExternalConnection {
+        let pool = sqlx::sqlite::SqlitePoolOptions::new()
+            .min_connections(1)
+            .max_connections(1)
+            .connect("sqlite::memory:")
+            .await
+            .expect("connect in-memory external sqlite");
+        sqlx::query(
+            "CREATE TABLE ledger (id INTEGER PRIMARY KEY AUTOINCREMENT, amount INTEGER NOT NULL)",
+        )
+        .execute(&pool)
+        .await
+        .expect("create ledger");
+        sqlx::query("INSERT INTO ledger (amount) VALUES (7), (42)")
+            .execute(&pool)
+            .await
+            .expect("seed ledger");
+        ExternalConnection::Sqlite(pool)
+    }
+
+    /// The external read path decodes seeded rows through the SAME `Decoder<E,A>`
+    /// the app path uses — the §4 "typed reads from a foreign DB via one codec"
+    /// target. `db_conn_query_decode_params` reads `amount` back as `Int`.
+    #[tokio::test]
+    async fn external_query_decode_reads_through_one_codec() {
+        let conn = fresh_external_conn().await;
+        let out: IpeResult<String, Vec<i64>> = db_conn_query_decode_params(
+            conn,
+            "SELECT amount FROM ledger ORDER BY amount".into(),
+            vec![],
+            db_decode_int("amount".into()),
+        )
+        .await;
+        match out {
+            IpeResult::Ok(v) => assert_eq!(v, vec![7, 42]),
+            other => panic!("external queryDecode failed: {:?}", other),
+        }
+    }
+
+    /// The injection barrier is UNCHANGED on the external path: a value carrying SQL
+    /// metacharacters flows through a bound parameter (a `Sql.param` in the
+    /// fragment), so it matches VERBATIM and the surrounding table is untouched — no
+    /// injection executes against the foreign connection.
+    #[tokio::test]
+    async fn external_find_where_binds_params_no_injection() {
+        let conn = fresh_external_conn().await;
+        // A fragment built from the audited `Sql.*` combinators: `amount = ?`, the
+        // value bound (never spliced). The metacharacter value simply doesn't match.
+        let frag = sql_eq(
+            sql_column("amount".to_string()),
+            sql_param(SqlParam::Int(7)),
+        );
+        let rows: IpeResult<String, Vec<HashMap<String, String>>> =
+            db_conn_find_where(conn.clone(), "ledger".into(), frag).await;
+        match rows {
+            IpeResult::Ok(v) => {
+                assert_eq!(v.len(), 1);
+                assert_eq!(v[0].get("amount").map(String::as_str), Some("7"));
+            }
+            other => panic!("external findWhere failed: {:?}", other),
+        }
+        // A hostile TABLE identifier is rejected by the same `SqlIdent` gate — the
+        // read runner never interpolates an unvalidated name into SQL.
+        let bad: IpeResult<String, Vec<HashMap<String, String>>> = db_conn_find_where(
+            conn,
+            "ledger; DROP TABLE ledger".into(),
+            sql_eq(sql_param(SqlParam::Int(1)), sql_param(SqlParam::Int(1))),
+        )
+        .await;
+        assert!(
+            matches!(bad, IpeResult::Err(_)),
+            "a hostile external table identifier must be rejected before any SQL runs"
+        );
+    }
+
+    /// A hostile column identifier in a `Sql.column` poisons the fragment, which the
+    /// external `findWhere` surfaces as a typed `Err` — the poison marker path is
+    /// identical to the app connection's.
+    #[tokio::test]
+    async fn external_find_where_rejects_poisoned_column() {
+        let conn = fresh_external_conn().await;
+        let poisoned = sql_eq(
+            sql_column("amount; DROP TABLE ledger".to_string()),
+            sql_param(SqlParam::Int(7)),
+        );
+        let rows: IpeResult<String, Vec<HashMap<String, String>>> =
+            db_conn_find_where(conn, "ledger".into(), poisoned).await;
+        assert!(
+            matches!(rows, IpeResult::Err(_)),
+            "a poisoned column fragment must fail closed on the external path too"
+        );
+    }
+
+    /// `db_conn_get_by_id` binds the id as a positional parameter (never
+    /// interpolated) and returns the matching row from the foreign connection.
+    #[tokio::test]
+    async fn external_get_by_id_binds_id() {
+        let conn = fresh_external_conn().await;
+        let got: IpeResult<String, IpeMaybe<HashMap<String, String>>> =
+            db_conn_get_by_id(conn, "ledger".into(), "1".into()).await;
+        match got {
+            IpeResult::Ok(IpeMaybe::Just(row)) => {
+                assert_eq!(row.get("amount").map(String::as_str), Some("7"));
+            }
+            other => panic!("external getById failed: {:?}", other),
+        }
     }
 
     #[tokio::test]

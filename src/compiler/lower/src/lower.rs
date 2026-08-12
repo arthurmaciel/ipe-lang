@@ -17963,6 +17963,10 @@ impl<'a> Lowerer<'a> {
                 | KernelFn::DbInsertRow
                 // `DbGetById : Db -> String -> String -> Task Error (Maybe Row)`
                 | KernelFn::DbGetById
+                // `DbConnGetById : Connection a -> String -> String -> Task Error (Maybe Row)`
+                | KernelFn::DbConnGetById
+                // `DbConnFindWhere : Connection a -> String -> SqlFragment -> Task Error (List Row)`
+                | KernelFn::DbConnFindWhere
                 // `DbDeleteById : Db -> String -> String -> Task Error Int`
                 | KernelFn::DbDeleteById
                 // `DbFindByConditions : Db -> String -> Dict String String -> Task Error (List Row)`. Arity 3.
@@ -18001,6 +18005,8 @@ impl<'a> Lowerer<'a> {
                 // ── Db arity-4 ───────────────────────────────────────
                 // `DbQueryDecode : Db -> String -> List SqlValue -> Decoder a -> Task Error (List a)`
                 | KernelFn::DbQueryDecode
+                // `DbConnQueryDecode : Connection a -> String -> List SqlValue -> Decoder c -> Task Error (List c)`
+                | KernelFn::DbConnQueryDecode
                 // `DbUpdateById : Db -> String -> String -> Dict String String -> Task Error Int`
                 | KernelFn::DbUpdateById
                 // `DbFindOneByField : Db -> String -> String -> String -> Task Error (Maybe Row)`
@@ -19458,6 +19464,10 @@ impl<'a> Lowerer<'a> {
                     ("Db", "unsafeExecRawOn") => {
                         Ok(Callee::Kernel(KernelFn::DbConnUnsafeExecRawOn))
                     }
+                    // External read path — the app-`Db` reads' `…On` counterparts.
+                    ("Db", "findWhereOn") => Ok(Callee::Kernel(KernelFn::DbConnFindWhere)),
+                    ("Db", "queryDecodeOn") => Ok(Callee::Kernel(KernelFn::DbConnQueryDecode)),
+                    ("Db", "getByIdOn") => Ok(Callee::Kernel(KernelFn::DbConnGetById)),
                     ("Db", "unsafeExecRaw") => Ok(Callee::Kernel(KernelFn::DbExecRaw)),
                     ("Db", "exec") => Ok(Callee::Kernel(KernelFn::DbExec)),
                     ("Db", "unsafeQuery") => Ok(Callee::Kernel(KernelFn::DbQuery)),
