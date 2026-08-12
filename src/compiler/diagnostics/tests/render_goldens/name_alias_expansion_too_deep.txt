@@ -1,7 +1,11 @@
-error[IPE-N0032]: type alias expansion too deep or too large
+-- NAMING ERROR -------------------------------------------- test.ipe
+
+Type alias expansion too deep or too large.
+
  --> test.ipe:2:1
   |
 2 | 
   | ^ alias expansion exceeded the recursion depth limit of 256
   |
-  = note: run `ipe explain IPE-N0032` for more information
+
+IPE-N0032 · run `ipe explain IPE-N0032`

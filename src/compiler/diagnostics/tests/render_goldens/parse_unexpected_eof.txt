@@ -1,7 +1,11 @@
-error[IPE-P0002]: unexpected end of file
+-- PARSE ERROR --------------------------------------------- test.ipe
+
+Unexpected end of file.
+
  --> test.ipe:4:11
   |
 4 |     let x =
   |           ^ input ended here
   |
-  = note: run `ipe explain IPE-P0002` for more information
+
+IPE-P0002 · run `ipe explain IPE-P0002`

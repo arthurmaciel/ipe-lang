@@ -1,4 +1,7 @@
-error[IPE-T0001]: type mismatch
+-- TYPE MISMATCH ------------------------------------------- test.ipe
+
+Type mismatch.
+
  --> test.ipe:5:2
   |
 5 |     "hello"
@@ -7,4 +10,5 @@ error[IPE-T0001]: type mismatch
 2 | 
   | - the type was fixed here
   |
-  = note: run `ipe explain IPE-T0001` for more information
+
+IPE-T0001 · run `ipe explain IPE-T0001`

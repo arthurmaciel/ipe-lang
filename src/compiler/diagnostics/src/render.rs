@@ -1,17 +1,23 @@
-//! Human-facing diagnostic rendering: the rustc/Elm 4-band layout.
+//! Human-facing diagnostic rendering: the prose-first, Elm-faithful layout.
 //!
-//! [`render`] turns a [`Diagnostic`] plus its source file into a string:
+//! [`render`] turns a [`Diagnostic`] plus its source file into a string. The
+//! reader meets a plain-English description first; the machine code is demoted
+//! to a single footer line, never the headline:
 //!
-//! 1. **header** — `error[CODE]: title` / `warning[CODE]: …` /
-//!    `internal compiler error[CODE]: …`.
-//! 2. **location** — ` --> file:line:col` derived from the primary span. A
+//! 1. **title rule** — `-- TYPE MISMATCH ------------------ file.ipe`: a family
+//!    title (derived from the diagnostic's category) padded with a dash rule to
+//!    a fixed width, then the source file. This is the reader's first glance.
+//! 2. **prose band** — one short sentence describing what the compiler found or
+//!    expected, in the compiler's second-person voice, above the snippet.
+//! 3. **location** — ` --> file:line:col` derived from the primary span. A
 //!    [`Span::DUMMY`] primary span (e.g. a [`Diagnostic::CompilerBug`]) suppresses
 //!    the location and the source snippet entirely.
-//! 3. **snippet** — the offending source line with a right-aligned line-number
+//! 4. **snippet** — the offending source line with a right-aligned line-number
 //!    gutter, the primary span underlined with `^` and an inline payload-derived
 //!    label, plus any secondary span underlined with `-` and its own label.
-//! 4. **help / note** — the structured [`Diagnostic::help`] lines, then a
-//!    `= note:` footer pointing at `ipe explain <CODE>`.
+//! 5. **help / note** — the structured [`Diagnostic::help`] lines.
+//! 6. **code footer** — the machine code and the `ipe explain` next step, last:
+//!    a reader reaches for the lookup key only after reading the message above.
 //!
 //! The function is pure and **deterministic**: every list is walked in producer
 //! order, there is no `HashMap` iteration, byte→line/col is a checked, clamped
@@ -50,11 +56,20 @@ pub fn render(d: &Diagnostic, file: &str, source: &str) -> String {
     let severity = d.severity();
     let mut out = String::new();
 
-    // Band 1 — header.
-    let header_core = format!("{}[{}]", severity_word(severity), code.as_str());
-    out.push_str(&paint(color, severity_color(severity), &header_core));
-    out.push_str(": ");
-    out.push_str(title(code));
+    // Band 1 — title rule. The family title leads, the source file trails, and a
+    // dash rule fills the gap: `-- TYPE MISMATCH --------------- app.ipe`. The
+    // machine code is not here — it lives in the footer.
+    out.push_str(&paint(
+        color,
+        severity_color(severity),
+        &title_rule(code, file),
+    ));
+    out.push('\n');
+
+    // Band 2 — prose band. One plain sentence, above the snippet, describing what
+    // the compiler found or expected. The reader acts on this, not on the code.
+    out.push('\n');
+    out.push_str(&prose_band(code));
     out.push('\n');
 
     // Split the help lines: secondary spans belong to the snippet band, the
@@ -87,12 +102,13 @@ pub fn render(d: &Diagnostic, file: &str, source: &str) -> String {
     let bar_pad = " ".repeat(gutter);
 
     if has_snippet {
-        // Band 2 — location.
+        // Band 3 — location.
+        out.push('\n');
         let ploc = locate(source, primary.lo);
         out.push_str(&bar_pad);
         let _ = writeln!(out, "--> {file}:{}:{}", ploc.line, ploc.col);
 
-        // Band 3 — snippet.
+        // Band 4 — snippet.
         out.push_str(&bar_pad);
         out.push_str(" |\n");
         let plabel = primary_label(d).unwrap_or_default();
@@ -116,7 +132,7 @@ pub fn render(d: &Diagnostic, file: &str, source: &str) -> String {
         }
     }
 
-    // Band 4 — help + note footer.
+    // Band 5 — help + note lines.
     let mut footer = build_help_footer(&other_help, source);
     // Humble messaging: an internal compiler error (every `IPE-I*`) is a gap in
     // Ipê, not the reader's fault. Apologise plainly, Elm-style, and point at
@@ -134,11 +150,6 @@ pub fn render(d: &Diagnostic, file: &str, source: &str) -> String {
              at: {ISSUE_TRACKER_URL}"
         ));
     }
-    // Every coded diagnostic keeps the explain-page pointer as its last note.
-    footer.push(format!(
-        "note: run `ipe explain {}` for more information",
-        code.as_str()
-    ));
 
     if has_snippet {
         out.push_str(&bar_pad);
@@ -161,7 +172,68 @@ pub fn render(d: &Diagnostic, file: &str, source: &str) -> String {
         }
     }
 
+    // Band 6 — code footer. The lookup key and the next step, last: a reader
+    // reaches for `ipe explain` only after reading the message above.
+    out.push('\n');
+    out.push_str(&paint(color, severity_color(severity), code.as_str()));
+    let _ = write!(out, " · run `ipe explain {}`", code.as_str());
+    out.push('\n');
+
     out
+}
+
+/// The width the title rule fills to before the trailing file path.
+const TITLE_RULE_WIDTH: usize = 60;
+
+/// Build the Elm-faithful title rule: `-- TYPE MISMATCH -------- app.ipe`.
+///
+/// A `-- ` lead, the family title in uppercase, a dash rule padding to
+/// [`TITLE_RULE_WIDTH`], then a space and the source file. When the title plus
+/// file already reach the width, at least one dash still separates them so the
+/// rule always reads as a rule.
+fn title_rule(code: crate::code::Code, file: &str) -> String {
+    let name = family_title(code);
+    // `-- ` + name + ` ` consumed so far; the dash run fills the remainder, then
+    // ` ` + file. Always at least one dash, even past the target width.
+    let prefix_len = 3 + name.chars().count() + 1;
+    let dashes = TITLE_RULE_WIDTH.saturating_sub(prefix_len).max(1);
+    format!("-- {name} {} {file}", "-".repeat(dashes))
+}
+
+/// The prose band sentence: a plain, capitalised description of the code's
+/// meaning, ending with a period. Derived from the code's one-line title —
+/// the deep per-family second-person rewrite of each message is a later pass.
+fn prose_band(code: crate::code::Code) -> String {
+    let t = title(code);
+    let mut chars = t.chars();
+    let sentence = chars.next().map_or_else(String::new, |first| {
+        let mut s = first.to_uppercase().collect::<String>();
+        s.push_str(chars.as_str());
+        s
+    });
+    if sentence.ends_with(['.', '?', '!']) {
+        sentence
+    } else {
+        format!("{sentence}.")
+    }
+}
+
+/// The uppercase family title shown in the rule, derived from the code's family
+/// letter (`IPE-<letter>####`). Total over the taxonomy; an unrecognised shape
+/// falls back to the generic error title rather than panicking.
+fn family_title(code: crate::code::Code) -> &'static str {
+    // The family letter is the fifth byte of `IPE-<L>####`. Read it through
+    // `get` so a shorter-than-expected code cannot index out of range.
+    match code.as_str().as_bytes().get(4) {
+        Some(b'P') => "PARSE ERROR",
+        Some(b'N') => "NAMING ERROR",
+        Some(b'T') => "TYPE MISMATCH",
+        Some(b'L') => "UNSUPPORTED",
+        Some(b'F') => "FOREIGN BINDING ERROR",
+        Some(b'S') => "SECURITY",
+        Some(b'I') => "INTERNAL COMPILER ERROR",
+        _ => "ERROR",
+    }
 }
 
 /// Render a diagnostic as a snippet-free, colour-free message.
@@ -328,14 +400,6 @@ fn paint(color: bool, seq: &str, text: &str) -> String {
         format!("{seq}{text}{RESET}")
     } else {
         text.to_string()
-    }
-}
-
-const fn severity_word(s: Severity) -> &'static str {
-    match s {
-        Severity::Error => "error",
-        Severity::Warning => "warning",
-        Severity::Bug => "internal compiler error",
     }
 }
 
@@ -1361,9 +1425,14 @@ mod tests {
         let out = render(&d, "test.ipe", src);
 
         assert!(
-            out.starts_with("error[IPE-T0001]: type mismatch\n"),
-            "header:\n{out}"
+            out.starts_with("-- TYPE MISMATCH "),
+            "title rule leads:\n{out}"
         );
+        assert!(
+            out.contains("test.ipe\n"),
+            "title rule ends with the file:\n{out}"
+        );
+        assert!(out.contains("\nType mismatch.\n"), "prose band:\n{out}");
         assert!(out.contains("--> test.ipe:4:5"), "location:\n{out}");
         assert!(out.contains("4 |     foo"), "source line:\n{out}");
         assert!(
@@ -1371,8 +1440,8 @@ mod tests {
             "underline:\n{out}"
         );
         assert!(
-            out.contains("= note: run `ipe explain IPE-T0001` for more information"),
-            "footer:\n{out}"
+            out.contains("IPE-T0001 · run `ipe explain IPE-T0001`"),
+            "code footer:\n{out}"
         );
         // No ANSI in the non-tty test environment.
         assert!(!out.contains('\x1b'), "must be plain in tests:\n{out}");
@@ -1425,7 +1494,14 @@ mod tests {
         };
         let out = render(&d, "test.ipe", "anything");
 
-        assert!(out.starts_with("internal compiler error[IPE-I0001]: internal compiler error\n"));
+        assert!(
+            out.starts_with("-- INTERNAL COMPILER ERROR "),
+            "title rule leads:\n{out}"
+        );
+        assert!(
+            out.contains("\nInternal compiler error.\n"),
+            "prose band:\n{out}"
+        );
         // No location / snippet band for a DUMMY span.
         assert!(!out.contains("-->"), "no location:\n{out}");
         assert!(!out.contains(" | "), "no snippet:\n{out}");
@@ -1434,7 +1510,7 @@ mod tests {
             "detail surfaced:\n{out}"
         );
         assert!(out.contains("= note: this is a bug in Ipe, please report it"));
-        assert!(out.contains("= note: run `ipe explain IPE-I0001` for more information"));
+        assert!(out.contains("IPE-I0001 · run `ipe explain IPE-I0001`"));
         let _ = IPE_I0001;
     }
 
@@ -1473,7 +1549,11 @@ mod tests {
             msg: TypeError::Mismatch,
         };
         let out = render(&d2, "empty.ipe", "");
-        assert!(out.contains("error[IPE-T0001]"));
+        assert!(out.starts_with("-- TYPE MISMATCH "), "{out}");
+        assert!(
+            out.contains("IPE-T0001 · run `ipe explain IPE-T0001`"),
+            "{out}"
+        );
     }
 
     #[test]
@@ -1539,7 +1619,10 @@ mod tests {
     }
 
     #[test]
-    fn warning_header_word_for_redundant_branch() {
+    fn warning_renders_title_rule_prose_and_code_footer() {
+        // A warning (redundant branch) renders in the same prose-first layout as
+        // an error; the severity distinction is carried by colour, not a header
+        // word. In the non-tty test environment the output stays plain.
         let d = Diagnostic::Type {
             span: Span::new(0, 3),
             msg: TypeError::RedundantCaseBranch {
@@ -1547,10 +1630,17 @@ mod tests {
             },
         };
         let out = render(&d, "w.ipe", "Red\n");
+        assert!(out.starts_with("-- TYPE MISMATCH "), "title rule:\n{out}");
         assert!(
-            out.starts_with("warning[IPE-T0011]: redundant case branch\n"),
-            "{out}"
+            out.contains("\nRedundant case branch.\n"),
+            "prose band:\n{out}"
         );
+        assert!(
+            out.trim_end()
+                .ends_with("IPE-T0011 · run `ipe explain IPE-T0011`"),
+            "code footer last:\n{out}"
+        );
+        assert!(!out.contains('\x1b'), "plain in tests:\n{out}");
         let _ = IPE_T0001;
     }
 
@@ -1649,11 +1739,11 @@ mod tests {
             out.contains(crate::code::ISSUE_TRACKER_URL),
             "tracker URL:\n{out}"
         );
-        // Footer still ends with the explain pointer.
+        // The demoted code footer, carrying the explain pointer, is last.
         assert!(
             out.trim_end()
-                .ends_with("note: run `ipe explain IPE-I0001` for more information"),
-            "explain pointer last:\n{out}"
+                .ends_with("IPE-I0001 · run `ipe explain IPE-I0001`"),
+            "code footer last:\n{out}"
         );
     }
 

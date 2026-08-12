@@ -1,4 +1,7 @@
-error[IPE-N0020]: module not found
+-- NAMING ERROR -------------------------------------------- test.ipe
+
+Module not found.
+
  --> test.ipe:2:7
   |
 2 | import Httpp
@@ -7,4 +10,5 @@ error[IPE-N0020]: module not found
   = help: did you mean one of:
       `Http`
       `Https`
-  = note: run `ipe explain IPE-N0020` for more information
+
+IPE-N0020 · run `ipe explain IPE-N0020`

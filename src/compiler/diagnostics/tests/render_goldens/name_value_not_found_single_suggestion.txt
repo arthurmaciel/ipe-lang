@@ -1,4 +1,7 @@
-error[IPE-N0001]: cannot find this value in scope
+-- NAMING ERROR -------------------------------------------- test.ipe
+
+Cannot find this value in scope.
+
  --> test.ipe:3:7
   |
 3 | main =
@@ -6,4 +9,5 @@ error[IPE-N0001]: cannot find this value in scope
   |
   = help: replace `
         l` with `length`
-  = note: run `ipe explain IPE-N0001` for more information
+
+IPE-N0001 · run `ipe explain IPE-N0001`

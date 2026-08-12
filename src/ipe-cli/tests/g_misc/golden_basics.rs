@@ -95,10 +95,10 @@ fn end_to_end_builds_and_prints_one() {
     assert_eq!(outcome.exit_code, Some(0), "exit 0, matching the Go oracle");
 }
 
-/// A `CliError::Pipeline` must render as a coded, rustc/Elm-style report — not a
+/// A `CliError::Pipeline` must render as a coded, prose-first report — not a
 /// `{:?}` debug dump. We feed `build` a deliberately ill-formed `.ipe` source and
-/// assert the displayed error carries an `error[IPE-…]` header and the
-/// `ipe explain` footer pointer.
+/// assert the displayed error carries a `-- … ERROR` title rule, its `IPE-…`
+/// code, and the `ipe explain` footer pointer.
 #[test]
 fn pipeline_error_renders_with_code_and_explain_pointer() {
     let dir = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("pipeline_err");
@@ -122,8 +122,12 @@ fn pipeline_error_renders_with_code_and_explain_pointer() {
 
     let rendered = err.to_string();
     assert!(
-        rendered.contains("error[IPE-"),
-        "rendered error must carry a coded header, got:\n{rendered}"
+        rendered.starts_with("-- ") && rendered.contains("ERROR"),
+        "rendered error must lead with a title rule, got:\n{rendered}"
+    );
+    assert!(
+        rendered.contains("IPE-"),
+        "rendered error must carry its code in the footer, got:\n{rendered}"
     );
     assert!(
         rendered.contains("ipe explain"),
