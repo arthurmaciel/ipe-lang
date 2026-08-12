@@ -27,7 +27,8 @@ import Rust.Bevy_ecs as Ecs
 step : String -> (Ecs.WorldWorld -> Result Error Ecs.WorldWorld) -> Ecs.WorldWorld -> Task Error Ecs.WorldWorld
 step label op world =
     op world
-        |> Result.andThenTask
+        |> Task.fromResult
+        |> Task.andThen
             (\next ->
                 Io.println ("[world] " ++ label)
                     |> Task.map (\_ -> next)
@@ -37,7 +38,8 @@ step label op world =
 play : Task Error Int
 play =
     Ecs.new_from_worldWorld ()
-        |> Result.andThenTask
+        |> Task.fromResult
+        |> Task.andThen
             (\world ->
                 Io.println "bevy_ecs World created."
                     |> Task.map (\_ -> world)
