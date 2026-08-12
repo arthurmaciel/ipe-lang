@@ -1,0 +1,11 @@
+-- PARSE ERROR --------------------------------------------- test.ipe
+
+a bare `_` cannot be the whole binding pattern in a `let`.
+
+ --> test.ipe:4:9
+  |
+4 |     let _ = Io.println "a" in
+  |         ^ `_` as the whole binding pattern binds nothing — use a `do` line or `|> Task.andThen (\_ -> …)` to sequence an effect
+  |
+
+IPE-P0064 · run `ipe explain IPE-P0064`

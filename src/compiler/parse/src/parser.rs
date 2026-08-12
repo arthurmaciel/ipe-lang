@@ -2062,6 +2062,19 @@ impl<'a> Parser<'a> {
             Located::new(name_tok.span, Pattern_::PVar(name_sym))
         };
 
+        // `let _ = e` at user source level binds nothing and is rejected. Only
+        // a whole-pattern `_` (bare PAnything) is disallowed here; a `_` nested
+        // inside a larger pattern such as `(a, _)` reaches `parse_pattern`
+        // recursively and is fine. The `desugar_do` path builds its synthetic
+        // `LetBinding { pat: PAnything, … }` directly — bypassing this function
+        // — so do-block bare-run statements are unaffected.
+        if matches!(pat.value, Pattern_::PAnything) {
+            return Err(Self::malformed_let(
+                pat.span,
+                LetDefect::BareWildcardBinding,
+            ));
+        }
+
         // Function-parameter sugar: `let f x y = body` desugars to
         // `let f = \x y -> body`. Parameters are collected only when the binder
         // is a simple `PVar` name (destructure binders like `{ x }` already

@@ -386,10 +386,9 @@ fn security_html_unsafe_raw_compiles() {
                import Ipe.Html.Unsafe exposing (unsafeRaw)\n\
                main : Task Error ()\n\
                main =\n\
-               \x20   let\n\
-               \x20       _ = unsafeRaw \"<b>x</b>\"\n\
-               \x20   in\n\
-               \x20   Io.println \"ok\"\n";
+               \x20   do\n\
+               \x20       unsafeRaw \"<b>x</b>\"\n\
+               \x20       Io.println \"ok\"\n";
     assert_compiles("security_html_unsafe_raw", src);
 }
 
@@ -416,10 +415,9 @@ fn security_html_unsafe_script_compiles() {
                import Ipe.Html.Unsafe exposing (unsafeScript)\n\
                main : Task Error ()\n\
                main =\n\
-               \x20   let\n\
-               \x20       _ = unsafeScript \"console.log(1)\"\n\
-               \x20   in\n\
-               \x20   Io.println \"ok\"\n";
+               \x20   do\n\
+               \x20       unsafeScript \"console.log(1)\"\n\
+               \x20       Io.println \"ok\"\n";
     assert_compiles("security_html_unsafe_script", src);
 }
 
@@ -435,10 +433,9 @@ fn security_ui_html_typed_bridge_compiles() {
                import Ipe.Html as Html\n\
                main : Task Error ()\n\
                main =\n\
-               \x20   let\n\
-               \x20       _ = Ui.html (Html.text \"hello\")\n\
-               \x20   in\n\
-               \x20   Io.println \"ok\"\n";
+               \x20   do\n\
+               \x20       Ui.html (Html.text \"hello\")\n\
+               \x20       Io.println \"ok\"\n";
     assert_compiles("security_ui_html_bridge", src);
 }
 
@@ -481,10 +478,9 @@ fn security_db_unsafe_members_compile_off_submodule() {
                import Ipe.Dict as Dict\n\
                main : Task Error ()\n\
                main =\n\
-               \x20   let\n\
-               \x20       _ = Unsafe.unsafeGetField \"k\" (Dict.fromList [ ( \"k\", \"v\" ) ])\n\
-               \x20   in\n\
-               \x20   Io.println \"ok\"\n";
+               \x20   do\n\
+               \x20       Unsafe.unsafeGetField \"k\" (Dict.fromList [ ( \"k\", \"v\" ) ])\n\
+               \x20       Io.println \"ok\"\n";
     assert_compiles("security_db_unsafe_members", src);
 }
 
@@ -500,10 +496,9 @@ fn security_db_unsafe_fragment_compiles_off_submodule() {
                import Ipe.Db.Unsafe as Unsafe\n\
                main : Task Error ()\n\
                main =\n\
-               \x20   let\n\
-               \x20       _ = Sql.eq (Unsafe.unsafeFragment \"users.id\") (Sql.int 1)\n\
-               \x20   in\n\
-               \x20   Io.println \"ok\"\n";
+               \x20   do\n\
+               \x20       Sql.eq (Unsafe.unsafeFragment \"users.id\") (Sql.int 1)\n\
+               \x20       Io.println \"ok\"\n";
     assert_compiles("security_db_unsafe_fragment", src);
 }
 
@@ -536,10 +531,9 @@ fn security_db_sql_column_still_validates_and_compiles() {
                import Ipe.Db.Sql as Sql\n\
                main : Task Error ()\n\
                main =\n\
-               \x20   let\n\
-               \x20       _ = Sql.eq (Sql.column \"users.id\") (Sql.int 1)\n\
-               \x20   in\n\
-               \x20   Io.println \"ok\"\n";
+               \x20   do\n\
+               \x20       Sql.eq (Sql.column \"users.id\") (Sql.int 1)\n\
+               \x20       Io.println \"ok\"\n";
     assert_compiles("security_db_sql_column_validates", src);
 }
 
@@ -570,10 +564,9 @@ fn security_web_head_unsafe_json_ld_compiles_off_submodule() {
                import Ipe.Web.Head.Unsafe as Unsafe\n\
                main : Task Error ()\n\
                main =\n\
-               \x20   let\n\
-               \x20       _ = Unsafe.unsafeJsonLd \"{}\"\n\
-               \x20   in\n\
-               \x20   Io.println \"ok\"\n";
+               \x20   do\n\
+               \x20       Unsafe.unsafeJsonLd \"{}\"\n\
+               \x20       Io.println \"ok\"\n";
     assert_compiles("security_web_head_unsafe_json_ld", src);
 }
 
@@ -602,10 +595,9 @@ fn security_secret_unsafe_reveal_compiles_off_submodule() {
                import Ipe.Secret.Unsafe as Unsafe\n\
                main : Task Error ()\n\
                main =\n\
-               \x20   let\n\
-               \x20       _ = Unsafe.unsafeReveal (Secret.fromString \"sk\")\n\
-               \x20   in\n\
-               \x20   Io.println \"ok\"\n";
+               \x20   do\n\
+               \x20       Unsafe.unsafeReveal (Secret.fromString \"sk\")\n\
+               \x20       Io.println \"ok\"\n";
     assert_compiles("security_secret_unsafe_reveal", src);
 }
 
@@ -622,10 +614,9 @@ fn security_secret_use_compiles_off_plain_secret() {
                import Ipe.Secret as Secret\n\
                main : Task Error ()\n\
                main =\n\
-               \x20   let\n\
-               \x20       _ = Secret.use (Secret.fromString \"sk\") (\\plain -> plain)\n\
-               \x20   in\n\
-               \x20   Io.println \"ok\"\n";
+               \x20   do\n\
+               \x20       Secret.use (Secret.fromString \"sk\") (\\plain -> plain)\n\
+               \x20       Io.println \"ok\"\n";
     assert_compiles("security_secret_use_scoped", src);
 }
 
@@ -1141,7 +1132,7 @@ fn lower_list_member_over_function_element_gated() {
          steps : List (Int -> Int)\n\
          steps =\n    [ \\n -> n + 1, \\n -> n * 2 ]\n\
          main =\n\
-         \x20   let _ = List.member (\\n -> n + 1) steps\n\
+         \x20   let found = List.member (\\n -> n + 1) steps\n\
          \x20   in\n\
          \x20   steps\n"
     );
@@ -1158,9 +1149,9 @@ fn lower_dict_map_over_function_value_gated() {
          table : Dict String (Int -> Int)\n\
          table =\n    Dict.fromList [ ( \"inc\", \\n -> n + 1 ) ]\n\
          main =\n\
-         \x20   let _ = Dict.map (\\_ f -> f) table\n\
+         \x20   let mapped = Dict.map (\\_ f -> f) table\n\
          \x20   in\n\
-         \x20   table\n"
+         \x20   mapped\n"
     );
     assert_rejected("lower_dict_map_fn_value", &src, "IPE-L0134");
 }
@@ -1174,9 +1165,9 @@ fn lower_dict_foldl_over_function_value_gated() {
          table : Dict String (Int -> Int)\n\
          table =\n    Dict.fromList [ ( \"inc\", \\n -> n + 1 ) ]\n\
          main =\n\
-         \x20   let _ = Dict.foldl (\\_ f acc -> f acc) 0 table\n\
+         \x20   let result = Dict.foldl (\\_ f acc -> f acc) 0 table\n\
          \x20   in\n\
-         \x20   table\n"
+         \x20   result\n"
     );
     assert_rejected("lower_dict_foldl_fn_value", &src, "IPE-L0134");
 }
@@ -1190,9 +1181,9 @@ fn lower_dict_filter_over_function_value_gated() {
          table : Dict String (Int -> Int)\n\
          table =\n    Dict.fromList [ ( \"inc\", \\n -> n + 1 ) ]\n\
          main =\n\
-         \x20   let _ = Dict.filter (\\_ _ -> True) table\n\
+         \x20   let filtered = Dict.filter (\\_ _ -> True) table\n\
          \x20   in\n\
-         \x20   table\n"
+         \x20   filtered\n"
     );
     assert_rejected("lower_dict_filter_fn_value", &src, "IPE-L0134");
 }
@@ -1206,9 +1197,9 @@ fn lower_dict_partition_over_function_value_gated() {
          table : Dict String (Int -> Int)\n\
          table =\n    Dict.fromList [ ( \"inc\", \\n -> n + 1 ) ]\n\
          main =\n\
-         \x20   let _ = Dict.partition (\\_ _ -> True) table\n\
+         \x20   let (trueTable, falseTable) = Dict.partition (\\_ _ -> True) table\n\
          \x20   in\n\
-         \x20   table\n"
+         \x20   trueTable\n"
     );
     assert_rejected("lower_dict_partition_fn_value", &src, "IPE-L0134");
 }
@@ -1222,9 +1213,9 @@ fn lower_list_sort_by_over_function_element_gated() {
          steps : List (Int -> Int)\n\
          steps =\n    [ \\n -> n + 1, \\n -> n * 2 ]\n\
          main =\n\
-         \x20   let _ = List.sortBy (\\f -> f 0) steps\n\
+         \x20   let sorted = List.sortBy (\\f -> f 0) steps\n\
          \x20   in\n\
-         \x20   steps\n"
+         \x20   sorted\n"
     );
     assert_rejected("lower_list_sort_by_fn_elem", &src, "IPE-L0134");
 }
@@ -1335,16 +1326,15 @@ fn lower_task_main_script_compiles() {
 }
 
 // An effect is a `Task`: it runs only through `Task.run`, or by being sequenced
-// inside a function whose own return type is a `Task`. Discarding a `Task` as
-// `let _ = <task>` inside a NON-`Task` function would run it through a hidden
-// `Task.run`, so a plainly-typed function would silently perform I/O — an effect
-// escaping the discipline. That must fail closed at `ipe` time with IPE-L0141,
-// never `ipe`-accept then perform a lawless out-of-band print (THE SEAL for the
-// `Task` effect discipline).
+// inside a function whose own return type is a `Task`. The parser now rejects
+// `let _ = e` at source level (IPE-P0064) — the whole-pattern bare `_` binding
+// is banned regardless of context. The old IPE-L0141 (lawless effect in sync
+// context) path in lower.rs is still reached by the do-desugared synthetic
+// `LetBinding { pat: PAnything }`, but user source `let _ = <task>` is gated
+// earlier at IPE-P0064. These tests are updated accordingly.
 
-/// A `Task`-typed effect (`Io.println`) discarded with `let _ = …` inside a
-/// function whose return type is NOT a `Task` (here `String -> String`) escapes
-/// the `Task` discipline and must be rejected with IPE-L0141.
+/// A `Task`-typed effect (`Io.println`) discarded with `let _ = …` is rejected
+/// at parse time (IPE-P0064) before lower can assess the sync/Task context.
 #[test]
 fn lower_effect_discard_in_sync_context_rejected() {
     let src = format!(
@@ -1357,22 +1347,22 @@ fn lower_effect_discard_in_sync_context_rejected() {
          main : Task Error ()\n\
          main =\n    Io.println (shout \"hi\")\n"
     );
-    assert_rejected("lower_effect_discard_sync", &src, "IPE-L0141");
+    assert_rejected("lower_effect_discard_sync", &src, "IPE-P0064");
 }
 
-/// CONTRAPOSITIVE: the same `let _ = <task>` discard is LAWFUL when the enclosing
-/// function returns a `Task` — the discarded effect is sequenced into the chain,
-/// which runs only when the returned `Task` is run. A `main : Task Error ()` that
-/// discards one print and returns another must still compile.
+/// CONTRAPOSITIVE: sequencing an effect via a `do` bare-run line (the sanctioned
+/// form) inside a `Task`-returning `main` still compiles. The do-desugared
+/// synthetic `LetBinding { pat: PAnything }` is not gated by IPE-P0064 — only
+/// user-written `let _ = e in rest` is.
 #[test]
 fn lower_effect_discard_in_task_context_compiles() {
     let src = format!(
         "{HEAD}import Ipe.Io as Io\n\
          main : Task Error ()\n\
          main =\n\
-         \x20   let _ = Io.println \"step one\"\n\
-         \x20   in\n\
-         \x20   Io.println \"step two\"\n"
+         \x20   do\n\
+         \x20       Io.println \"step one\"\n\
+         \x20       Io.println \"step two\"\n"
     );
     assert_compiles("lower_effect_discard_task", &src);
 }
@@ -1497,10 +1487,9 @@ fn lower_pipeline_curried_constructor_compiles() {
          \x20       |> Pipeline.required \"age\" Decode.int\n\
          main : Task Error ()\n\
          main =\n\
-         \x20   let\n\
-         \x20       _ = userDecoder\n\
-         \x20   in\n\
-         \x20   Io.println \"ok\"\n"
+         \x20   do\n\
+         \x20       userDecoder\n\
+         \x20       Io.println \"ok\"\n"
     );
     assert_compiles("lower_pipeline_curried_constructor", &src);
 }
