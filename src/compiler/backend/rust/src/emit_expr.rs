@@ -2205,8 +2205,11 @@ fn emit_db_call(
                 project_params(&params_s)
             )))
         }
-        // ── DbQueryDecode: (conn, sql, List SqlValue, decoder) ──────────────
-        KernelFn::DbQueryDecode => {
+        // ── DbQueryDecode / DbConnQueryDecode: (conn, sql, List SqlValue, decoder) ─
+        // The external `queryDecodeOn` takes a `Connection` handle instead of a
+        // `Db`, but both are `Clone` scalar values, so the projection is identical
+        // — `conn.clone()`, `sql`, projected params, decoder.
+        KernelFn::DbQueryDecode | KernelFn::DbConnQueryDecode => {
             let conn_e = arg!(0, "conn")?;
             let sql_e = arg!(1, "sql")?;
             let params_e = arg!(2, "params")?;
@@ -2348,10 +2351,11 @@ fn emit_db_call(
                 "{struct_name} {{ name: {name_s}, sql: String::new() }}"
             )))
         }
-        // ── DbGetById: (conn, table, id) ────────────────────────────────────
+        // ── DbGetById / DbConnGetById: (conn, table, id) ────────────────────
         // Conn must be cloned so subsequent Db calls in the same continuation
-        // chain can still capture it (Pool<Sqlite> is not Copy).
-        KernelFn::DbGetById => {
+        // chain can still capture it (Pool<Sqlite> is not Copy). `getByIdOn`'s
+        // external `Connection` handle is also `Clone`, so the arm is shared.
+        KernelFn::DbGetById | KernelFn::DbConnGetById => {
             let conn_e = arg!(0, "conn")?;
             let table_e = arg!(1, "table")?;
             let id_e = arg!(2, "id")?;
@@ -2441,7 +2445,9 @@ fn emit_db_call(
         // `frag` is a bare struct value (no `List` projection
         // needed) — only the `conn.clone()` treatment (shared by every other
         // Task-returning Db kernel here) is special-cased.
-        KernelFn::DbFindWhere | KernelFn::DbDeleteWhere => {
+        // `DbConnFindWhere` (`findWhereOn`) shares the arm: an external
+        // `Connection` handle is a `Clone` scalar, same as a `Db`.
+        KernelFn::DbFindWhere | KernelFn::DbDeleteWhere | KernelFn::DbConnFindWhere => {
             let conn_e = arg!(0, "conn")?;
             let table_e = arg!(1, "table")?;
             let frag_e = arg!(2, "frag")?;
