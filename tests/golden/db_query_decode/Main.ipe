@@ -15,28 +15,30 @@ main =
         (\conn ->
             Db.withTransaction conn
                 (\txconn ->
-                    let
-                        _ =
-                            Unsafe.unsafeExecRaw txconn
-                                "CREATE TABLE names (n TEXT)"
-
-                        _ =
-                            Db.exec txconn
-                                "INSERT INTO names VALUES (?)"
-                                [ SqlString "alice" ]
-
-                        _ =
-                            Db.exec txconn
-                                "INSERT INTO names VALUES (?)"
-                                [ SqlString "bob" ]
-                    in
-                    Task.andThen
-                        (\names -> Io.println (String.join "," names))
-                        (Db.queryDecode txconn
-                            "SELECT n FROM names ORDER BY n"
-                            []
-                            (Db.Decode.string "n")
-                        )
+                    Unsafe.unsafeExecRaw txconn
+                        "CREATE TABLE names (n TEXT)"
+                        |> Task.andThen
+                            (\_ ->
+                                Db.exec txconn
+                                    "INSERT INTO names VALUES (?)"
+                                    [ SqlString "alice" ]
+                            )
+                        |> Task.andThen
+                            (\_ ->
+                                Db.exec txconn
+                                    "INSERT INTO names VALUES (?)"
+                                    [ SqlString "bob" ]
+                            )
+                        |> Task.andThen
+                            (\_ ->
+                                Task.andThen
+                                    (\names -> Io.println (String.join "," names))
+                                    (Db.queryDecode txconn
+                                        "SELECT n FROM names ORDER BY n"
+                                        []
+                                        (Db.Decode.string "n")
+                                    )
+                            )
                 )
         )
         (Db.open "sqlite" "sqlite::memory:")

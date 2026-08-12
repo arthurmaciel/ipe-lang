@@ -4,6 +4,7 @@ import Ipe.Html as Html
 import Ipe.Ui as Ui
 import Ipe.Ui.Background as Background
 import Ipe.Io as Io
+import Ipe.Task as Task
 
 
 -- E2E smoke test for `Ui.mediaQuery` (the 1-of-20 kernel deferred from the
@@ -45,7 +46,5 @@ evilPage =
 
 
 main =
-    let
-        _ = Io.println mqPage
-    in
-    Io.println evilPage
+    Io.println mqPage
+        |> Task.andThen (\_ -> Io.println evilPage)

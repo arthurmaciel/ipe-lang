@@ -22,7 +22,7 @@ rec =
 
 main =
     let
-        _ =
+        m =
             pickMin rec rec
     in
-    Io.println (String.fromInt 0)
+    Io.println (String.fromInt m.x)

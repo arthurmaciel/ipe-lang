@@ -17,14 +17,11 @@ import Ipe.Task
 main =
     Task.andThen
         (\conn ->
-            let
-                _ =
-                    Unsafe.unsafeExecRaw conn
-                        "CREATE TABLE IF NOT EXISTS log (msg TEXT)"
-
-                _ =
-                    Unsafe.unsafeExecRaw conn "DELETE FROM log"
-            in
+            Unsafe.unsafeExecRaw conn
+                "CREATE TABLE IF NOT EXISTS log (msg TEXT)"
+                |> Task.andThen (\_ -> Unsafe.unsafeExecRaw conn "DELETE FROM log")
+                |> Task.andThen
+                    (\_ ->
             -- Transaction 1: INSERT "hello" + succeed → COMMIT → durable.
             Task.andThen
                 (\r1 ->
@@ -48,13 +45,11 @@ main =
                             (\err -> Task.succeed ())
                             (Db.withTransaction conn
                                 (\tx ->
-                                    let
-                                        _ =
-                                            Db.exec tx
-                                                "INSERT INTO log VALUES (?)"
-                                                [ SqlString "world" ]
-                                    in
-                                    Task.fail (Error.unexpected "rollback-test")
+                                    Db.exec tx
+                                        "INSERT INTO log VALUES (?)"
+                                        [ SqlString "world" ]
+                                        |> Task.andThen
+                                            (\_ -> Task.fail (Error.unexpected "rollback-test"))
                                 )
                             )
                         )
@@ -66,5 +61,6 @@ main =
                             [ SqlString "hello" ]
                     )
                 )
+                    )
         )
         (Db.open "sqlite" "/tmp/ipe_txn_golden.db")

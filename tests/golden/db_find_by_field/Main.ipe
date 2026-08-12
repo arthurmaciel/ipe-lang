@@ -78,26 +78,28 @@ main =
         (\conn ->
             Db.withTransaction conn
                 (\txconn ->
-                    let
-                        _ =
-                            Unsafe.unsafeExecRaw txconn
-                                "CREATE TABLE items (name TEXT NOT NULL, category TEXT NOT NULL, qty INTEGER NOT NULL)"
-
-                        _ =
-                            Db.exec txconn
-                                "INSERT INTO items (name, category, qty) VALUES (?, ?, ?)"
-                                [ SqlString "apple", SqlString "fruit", SqlInt 5 ]
-
-                        _ =
-                            Db.exec txconn
-                                "INSERT INTO items (name, category, qty) VALUES (?, ?, ?)"
-                                [ SqlString "banana", SqlString "fruit", SqlInt 3 ]
-
-                        _ =
-                            Db.exec txconn
-                                "INSERT INTO items (name, category, qty) VALUES (?, ?, ?)"
-                                [ SqlString "carrot", SqlString "veggie", SqlInt 8 ]
-                    in
+                    Unsafe.unsafeExecRaw txconn
+                        "CREATE TABLE items (name TEXT NOT NULL, category TEXT NOT NULL, qty INTEGER NOT NULL)"
+                        |> Task.andThen
+                            (\_ ->
+                                Db.exec txconn
+                                    "INSERT INTO items (name, category, qty) VALUES (?, ?, ?)"
+                                    [ SqlString "apple", SqlString "fruit", SqlInt 5 ]
+                            )
+                        |> Task.andThen
+                            (\_ ->
+                                Db.exec txconn
+                                    "INSERT INTO items (name, category, qty) VALUES (?, ?, ?)"
+                                    [ SqlString "banana", SqlString "fruit", SqlInt 3 ]
+                            )
+                        |> Task.andThen
+                            (\_ ->
+                                Db.exec txconn
+                                    "INSERT INTO items (name, category, qty) VALUES (?, ?, ?)"
+                                    [ SqlString "carrot", SqlString "veggie", SqlInt 8 ]
+                            )
+                        |> Task.andThen
+                            (\_ ->
                     Task.andThen
                         (\found ->
                             let
@@ -158,6 +160,7 @@ main =
                                 (Db.findOneByField txconn "items" "name" "durian")
                         )
                         (Db.findOneByField txconn "items" "name" "apple")
+                            )
                 )
         )
         (Db.open "sqlite" "sqlite::memory:")

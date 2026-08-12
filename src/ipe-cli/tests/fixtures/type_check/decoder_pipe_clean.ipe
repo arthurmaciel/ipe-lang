@@ -11,7 +11,4 @@ userDecoder =
         |> Pipeline.required "email" Decode.string
 
 main =
-    let
-        _ = userDecoder
-    in
     Io.println "pipe"

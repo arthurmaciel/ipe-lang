@@ -19,25 +19,6 @@ main =
             Db.withTransaction conn
                 (\txconn ->
                     let
-                        _ =
-                            Unsafe.unsafeExecRaw txconn
-                                "CREATE TABLE items (name TEXT NOT NULL, qty INTEGER NOT NULL, price REAL NOT NULL, active INTEGER NOT NULL, note TEXT)"
-
-                        _ =
-                            Db.exec txconn
-                                "INSERT INTO items (name, qty, price, active, note) VALUES (?, ?, ?, ?, ?)"
-                                [ SqlString "widget", SqlInt 10, SqlFloat 9.99, SqlBool True, SqlString "fast shipping" ]
-
-                        _ =
-                            Db.exec txconn
-                                "INSERT INTO items (name, qty, price, active, note) VALUES (?, ?, ?, ?, ?)"
-                                [ SqlString "gadget", SqlInt 7, SqlFloat 5.5, SqlBool False, SqlNull (SqlString "") ]
-
-                        _ =
-                            Db.exec txconn
-                                "INSERT INTO items (name, qty, price, active, note) VALUES (?, ?, ?, ?, ?)"
-                                [ SqlString "sprocket", SqlInt 3, SqlFloat 1.25, SqlBool True, SqlString "slow" ]
-
                         predicate =
                             Sql.and
                                 (Sql.or
@@ -73,6 +54,28 @@ main =
                         isNullPredicate =
                             Sql.isNull (Sql.column "note")
                     in
+                    Unsafe.unsafeExecRaw txconn
+                        "CREATE TABLE items (name TEXT NOT NULL, qty INTEGER NOT NULL, price REAL NOT NULL, active INTEGER NOT NULL, note TEXT)"
+                        |> Task.andThen
+                            (\_ ->
+                                Db.exec txconn
+                                    "INSERT INTO items (name, qty, price, active, note) VALUES (?, ?, ?, ?, ?)"
+                                    [ SqlString "widget", SqlInt 10, SqlFloat 9.99, SqlBool True, SqlString "fast shipping" ]
+                            )
+                        |> Task.andThen
+                            (\_ ->
+                                Db.exec txconn
+                                    "INSERT INTO items (name, qty, price, active, note) VALUES (?, ?, ?, ?, ?)"
+                                    [ SqlString "gadget", SqlInt 7, SqlFloat 5.5, SqlBool False, SqlNull (SqlString "") ]
+                            )
+                        |> Task.andThen
+                            (\_ ->
+                                Db.exec txconn
+                                    "INSERT INTO items (name, qty, price, active, note) VALUES (?, ?, ?, ?, ?)"
+                                    [ SqlString "sprocket", SqlInt 3, SqlFloat 1.25, SqlBool True, SqlString "slow" ]
+                            )
+                        |> Task.andThen
+                            (\_ ->
                     Task.andThen
                         (\matched ->
                             Task.andThen
@@ -100,6 +103,7 @@ main =
                                 (Db.findWhere txconn "items" emptyInListPredicate)
                         )
                         (Db.findWhere txconn "items" predicate)
+                            )
                 )
         )
         (Db.open "sqlite" "sqlite::memory:")

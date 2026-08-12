@@ -21,16 +21,16 @@ main =
         (\conn ->
             Db.withTransaction conn
                 (\txconn ->
-                    let
-                        _ =
-                            Unsafe.unsafeExecRaw txconn
-                                "CREATE TABLE people (full_name TEXT)"
-
-                        _ =
-                            Db.exec txconn
-                                "INSERT INTO people (full_name) VALUES (?)"
-                                [ SqlString "ada" ]
-                    in
+                    Unsafe.unsafeExecRaw txconn
+                        "CREATE TABLE people (full_name TEXT)"
+                        |> Task.andThen
+                            (\_ ->
+                                Db.exec txconn
+                                    "INSERT INTO people (full_name) VALUES (?)"
+                                    [ SqlString "ada" ]
+                            )
+                        |> Task.andThen
+                            (\_ ->
                     Task.andThen
                         (\line -> Io.println line)
                         (Task.onError
@@ -44,6 +44,7 @@ main =
                                 )
                             )
                         )
+                            )
                 )
         )
         (Db.open "sqlite" "sqlite::memory:")

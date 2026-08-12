@@ -20,21 +20,22 @@ main =
         (\conn ->
             Db.withTransaction conn
                 (\txconn ->
-                    let
-                        _ =
-                            Unsafe.unsafeExecRaw txconn
-                                "CREATE TABLE items (name TEXT NOT NULL, score INTEGER NOT NULL)"
-
-                        _ =
-                            Db.exec txconn
-                                "INSERT INTO items (name, score) VALUES (?, ?)"
-                                [ SqlString "apple", SqlInt 5 ]
-
-                        _ =
-                            Db.exec txconn
-                                "INSERT INTO items (name, score) VALUES (?, ?)"
-                                [ SqlString "banana", SqlInt 3 ]
-                    in
+                    Unsafe.unsafeExecRaw txconn
+                        "CREATE TABLE items (name TEXT NOT NULL, score INTEGER NOT NULL)"
+                        |> Task.andThen
+                            (\_ ->
+                                Db.exec txconn
+                                    "INSERT INTO items (name, score) VALUES (?, ?)"
+                                    [ SqlString "apple", SqlInt 5 ]
+                            )
+                        |> Task.andThen
+                            (\_ ->
+                                Db.exec txconn
+                                    "INSERT INTO items (name, score) VALUES (?, ?)"
+                                    [ SqlString "banana", SqlInt 3 ]
+                            )
+                        |> Task.andThen
+                            (\_ ->
                     Task.andThen
                         (\rows ->
                             let
@@ -50,6 +51,7 @@ main =
                             Io.println (name ++ ":" ++ String.fromInt score)
                         )
                         (Db.findByConditions txconn "items" (Dict.fromList [ ( "name", "apple" ) ]))
+                            )
                 )
         )
         (Db.open "sqlite" "sqlite::memory:")

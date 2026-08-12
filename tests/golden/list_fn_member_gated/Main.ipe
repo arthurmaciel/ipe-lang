@@ -18,7 +18,15 @@ steps =
 
 main =
     let
-        _ =
+        found =
             List.member (\n -> n + 1) steps
     in
-    Io.println (String.fromInt 0)
+    Io.println
+        (String.fromInt
+            (if found then
+                1
+
+             else
+                0
+            )
+        )

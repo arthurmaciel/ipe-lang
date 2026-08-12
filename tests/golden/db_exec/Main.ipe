@@ -17,21 +17,22 @@ main =
         (\conn ->
             Db.withTransaction conn
                 (\txconn ->
-                    let
-                        _ =
-                            Unsafe.unsafeExecRaw txconn
-                                "CREATE TABLE items (name TEXT, qty INTEGER)"
-
-                        _ =
-                            Db.exec txconn
-                                "INSERT INTO items (name, qty) VALUES (?, ?)"
-                                [ SqlString "apple", SqlInt 5 ]
-
-                        _ =
-                            Db.exec txconn
-                                "INSERT INTO items (name, qty) VALUES (?, ?)"
-                                [ SqlString "banana", SqlInt 3 ]
-                    in
+                    Unsafe.unsafeExecRaw txconn
+                        "CREATE TABLE items (name TEXT, qty INTEGER)"
+                        |> Task.andThen
+                            (\_ ->
+                                Db.exec txconn
+                                    "INSERT INTO items (name, qty) VALUES (?, ?)"
+                                    [ SqlString "apple", SqlInt 5 ]
+                            )
+                        |> Task.andThen
+                            (\_ ->
+                                Db.exec txconn
+                                    "INSERT INTO items (name, qty) VALUES (?, ?)"
+                                    [ SqlString "banana", SqlInt 3 ]
+                            )
+                        |> Task.andThen
+                            (\_ ->
                     Task.andThen
                         (\rows ->
                             Io.println
@@ -50,6 +51,7 @@ main =
                             "SELECT name, qty FROM items ORDER BY name"
                             []
                         )
+                            )
                 )
         )
         (Db.open "sqlite" "sqlite::memory:")

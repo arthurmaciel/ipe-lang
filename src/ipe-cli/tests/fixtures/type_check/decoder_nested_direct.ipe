@@ -12,7 +12,4 @@ userDecoder =
             (Decode.succeed (\name email -> { name = name, email = email })))
 
 main =
-    let
-        _ = userDecoder
-    in
     Io.println "nested"

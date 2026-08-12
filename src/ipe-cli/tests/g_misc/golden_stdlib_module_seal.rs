@@ -254,10 +254,7 @@ const NULLARY_KERNEL_MAIN: &str = "module Main exposing (main)\n\
     genId : Task Error String\n\
     genId = Uuid.v4 ()\n\n\
     main =\n\
-    \x20   let\n\
-    \x20       _ = genId\n\
-    \x20   in\n\
-    \x20   Io.println \"NULLARY_OK\"\n";
+    \x20   Task.andThen (\\_ -> Io.println \"NULLARY_OK\") genId\n";
 
 #[test]
 fn nullary_kernel_resolves_and_emits() {
@@ -278,12 +275,10 @@ const TRACE_MAIN: &str = "module Main exposing (main)\n\
     work : Task Error String\n\
     work = Trace.span \"unit\" (Task.succeed \"TRACE_OK\")\n\n\
     main =\n\
-    \x20   let\n\
-    \x20       _ = Trace.event \"start\"\n\
-    \x20       _ = Trace.attr \"k\" \"v\"\n\
-    \x20       _ = work\n\
-    \x20   in\n\
-    \x20   Io.println \"TRACE_OK\"\n";
+    \x20   Trace.event \"start\"\n\
+    \x20       |> Task.andThen (\\_ -> Trace.attr \"k\" \"v\")\n\
+    \x20       |> Task.andThen (\\_ -> work)\n\
+    \x20       |> Task.andThen (\\_ -> Io.println \"TRACE_OK\")\n";
 
 #[test]
 fn trace_resolves_and_emits() {
@@ -394,11 +389,9 @@ const PUBSUB_MAIN: &str = "module Main exposing (main)\n\
     import Ipe.PubSub as PubSub\n\
     import Ipe.Io as Io\n\n\
     main =\n\
-    \x20   let\n\
-    \x20       _ = PubSub.publish (PubSub.topic \"t\") (JsonEnc.string \"hi\")\n\
-    \x20               |> Task.onError (\\_ -> Task.succeed 0)\n\
-    \x20   in\n\
-    \x20   Io.println \"PUBSUB_OK\"\n";
+    \x20   PubSub.publish (PubSub.topic \"t\") (JsonEnc.string \"hi\")\n\
+    \x20       |> Task.onError (\\_ -> Task.succeed 0)\n\
+    \x20       |> Task.andThen (\\_ -> Io.println \"PUBSUB_OK\")\n";
 
 #[test]
 fn pubsub_resolves_and_emits() {

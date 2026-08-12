@@ -6,6 +6,7 @@ import Ipe.List
 import Ipe.Maybe
 import Ipe.Result
 import Ipe.String
+import Ipe.Task as Task
 
 
 -- Soundness fixture for the tail-recursive rewrite of `Result.combine` /
@@ -49,8 +50,5 @@ maybeLen m =
 
 
 main =
-    let
-        _ =
-            Io.println (String.fromInt (resultLen bigResult))
-    in
-    Io.println (String.fromInt (maybeLen bigMaybe))
+    Io.println (String.fromInt (resultLen bigResult))
+        |> Task.andThen (\_ -> Io.println (String.fromInt (maybeLen bigMaybe)))

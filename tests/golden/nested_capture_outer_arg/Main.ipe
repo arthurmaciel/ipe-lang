@@ -26,10 +26,8 @@ recordAction label =
     fakeExec label
         |> Task.andThen
                (\_ ->
-                   let
-                       _ = Io.println ("Added: " ++ label)
-                   in
-                       Io.println ("Confirmed: " ++ label))
+                   Io.println ("Added: " ++ label)
+                       |> Task.andThen (\_ -> Io.println ("Confirmed: " ++ label)))
 
 
 -- Shape B — param captured into a Task.andThen nested closure AND consumed
@@ -39,10 +37,8 @@ runPipeline conn =
     fakeConnect conn
         |> Task.andThen
                (\_ ->
-                   let
-                       _ = Io.println ("using " ++ conn)
-                   in
-                       recordAction conn)
+                   Io.println ("using " ++ conn)
+                       |> Task.andThen (\_ -> recordAction conn))
 
 
 -- Shape C — a LAMBDA PARAM (`rows`) used by value more than once across

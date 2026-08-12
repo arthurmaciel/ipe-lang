@@ -23,9 +23,12 @@ rec =
     { x = 1 }
 
 
+-- A fully polymorphic sink: its argument stays at `a`, so the forwarder
+-- instantiation is the only thing under test.
+gated : a -> String
+gated _ =
+    "gated"
+
+
 main =
-    let
-        _ =
-            singletonDict rec 42
-    in
-    Io.println (String.fromInt 0)
+    Io.println (gated (singletonDict rec 42))

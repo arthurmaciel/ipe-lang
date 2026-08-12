@@ -16,16 +16,16 @@ main =
         (\conn ->
             Db.withTransaction conn
                 (\txconn ->
-                    let
-                        _ =
-                            Unsafe.unsafeExecRaw txconn
-                                "CREATE TABLE prices (label TEXT, amount TEXT, money TEXT)"
-
-                        _ =
-                            Db.exec txconn
-                                "INSERT INTO prices (label, amount, money) VALUES (?, ?, ?)"
-                                [ SqlString "pi", SqlDecimal "3.14159", SqlMoney "USD 9.99" ]
-                    in
+                    Unsafe.unsafeExecRaw txconn
+                        "CREATE TABLE prices (label TEXT, amount TEXT, money TEXT)"
+                        |> Task.andThen
+                            (\_ ->
+                                Db.exec txconn
+                                    "INSERT INTO prices (label, amount, money) VALUES (?, ?, ?)"
+                                    [ SqlString "pi", SqlDecimal "3.14159", SqlMoney "USD 9.99" ]
+                            )
+                        |> Task.andThen
+                            (\_ ->
                     Task.andThen
                         (\rows ->
                             Io.println
@@ -46,6 +46,7 @@ main =
                             "SELECT label, amount, money FROM prices"
                             []
                         )
+                            )
                 )
         )
         (Db.open "sqlite" "sqlite::memory:")

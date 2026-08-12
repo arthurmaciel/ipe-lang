@@ -17,6 +17,7 @@ module Main exposing (main)
 import Ipe.Io as Io
 import Ipe.Error
 import Ipe.String
+import Ipe.Task as Task
 
 
 describeDetails : Maybe ErrorDetails -> String
@@ -62,16 +63,9 @@ main =
         withCustom =
             Error.withDetails (Custom "custom detail") base
 
-        _ =
-            Io.println (describe base)
-
-        _ =
-            Io.println (describe withHttp)
-
-        _ =
-            Io.println (describe withJson)
-
-        _ =
-            Io.println (describe withCustom)
     in
-    Io.println "done"
+    Io.println (describe base)
+        |> Task.andThen (\_ -> Io.println (describe withHttp))
+        |> Task.andThen (\_ -> Io.println (describe withJson))
+        |> Task.andThen (\_ -> Io.println (describe withCustom))
+        |> Task.andThen (\_ -> Io.println "done")

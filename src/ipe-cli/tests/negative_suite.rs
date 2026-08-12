@@ -384,11 +384,9 @@ fn security_html_unsafe_raw_compiles() {
     let src = "module Main exposing (main)\n\
                import Ipe.Io as Io\n\
                import Ipe.Html.Unsafe exposing (unsafeRaw)\n\
+               rawEl = unsafeRaw \"<b>x</b>\"\n\
                main : Task Error ()\n\
                main =\n\
-               \x20   let\n\
-               \x20       _ = unsafeRaw \"<b>x</b>\"\n\
-               \x20   in\n\
                \x20   Io.println \"ok\"\n";
     assert_compiles("security_html_unsafe_raw", src);
 }
@@ -414,11 +412,9 @@ fn security_html_unsafe_script_compiles() {
     let src = "module Main exposing (main)\n\
                import Ipe.Io as Io\n\
                import Ipe.Html.Unsafe exposing (unsafeScript)\n\
+               scriptEl = unsafeScript \"console.log(1)\"\n\
                main : Task Error ()\n\
                main =\n\
-               \x20   let\n\
-               \x20       _ = unsafeScript \"console.log(1)\"\n\
-               \x20   in\n\
                \x20   Io.println \"ok\"\n";
     assert_compiles("security_html_unsafe_script", src);
 }
@@ -433,11 +429,9 @@ fn security_ui_html_typed_bridge_compiles() {
                import Ipe.Io as Io\n\
                import Ipe.Ui as Ui\n\
                import Ipe.Html as Html\n\
+               bridgeEl = Ui.html (Html.text \"hello\")\n\
                main : Task Error ()\n\
                main =\n\
-               \x20   let\n\
-               \x20       _ = Ui.html (Html.text \"hello\")\n\
-               \x20   in\n\
                \x20   Io.println \"ok\"\n";
     assert_compiles("security_ui_html_bridge", src);
 }
@@ -479,11 +473,9 @@ fn security_db_unsafe_members_compile_off_submodule() {
                import Ipe.Io as Io\n\
                import Ipe.Db.Unsafe as Unsafe\n\
                import Ipe.Dict as Dict\n\
+               fieldVal = Unsafe.unsafeGetField \"k\" (Dict.fromList [ ( \"k\", \"v\" ) ])\n\
                main : Task Error ()\n\
                main =\n\
-               \x20   let\n\
-               \x20       _ = Unsafe.unsafeGetField \"k\" (Dict.fromList [ ( \"k\", \"v\" ) ])\n\
-               \x20   in\n\
                \x20   Io.println \"ok\"\n";
     assert_compiles("security_db_unsafe_members", src);
 }
@@ -498,11 +490,9 @@ fn security_db_unsafe_fragment_compiles_off_submodule() {
                import Ipe.Io as Io\n\
                import Ipe.Db.Sql as Sql\n\
                import Ipe.Db.Unsafe as Unsafe\n\
+               fragCond = Sql.eq (Unsafe.unsafeFragment \"users.id\") (Sql.int 1)\n\
                main : Task Error ()\n\
                main =\n\
-               \x20   let\n\
-               \x20       _ = Sql.eq (Unsafe.unsafeFragment \"users.id\") (Sql.int 1)\n\
-               \x20   in\n\
                \x20   Io.println \"ok\"\n";
     assert_compiles("security_db_unsafe_fragment", src);
 }
@@ -534,11 +524,9 @@ fn security_db_sql_column_still_validates_and_compiles() {
     let src = "module Main exposing (main)\n\
                import Ipe.Io as Io\n\
                import Ipe.Db.Sql as Sql\n\
+               colCond = Sql.eq (Sql.column \"users.id\") (Sql.int 1)\n\
                main : Task Error ()\n\
                main =\n\
-               \x20   let\n\
-               \x20       _ = Sql.eq (Sql.column \"users.id\") (Sql.int 1)\n\
-               \x20   in\n\
                \x20   Io.println \"ok\"\n";
     assert_compiles("security_db_sql_column_validates", src);
 }
@@ -568,11 +556,9 @@ fn security_web_head_unsafe_json_ld_compiles_off_submodule() {
     let src = "module Main exposing (main)\n\
                import Ipe.Io as Io\n\
                import Ipe.Web.Head.Unsafe as Unsafe\n\
+               jsonLdTag = Unsafe.unsafeJsonLd \"{}\"\n\
                main : Task Error ()\n\
                main =\n\
-               \x20   let\n\
-               \x20       _ = Unsafe.unsafeJsonLd \"{}\"\n\
-               \x20   in\n\
                \x20   Io.println \"ok\"\n";
     assert_compiles("security_web_head_unsafe_json_ld", src);
 }
@@ -600,12 +586,10 @@ fn security_secret_unsafe_reveal_compiles_off_submodule() {
                import Ipe.Io as Io\n\
                import Ipe.Secret as Secret\n\
                import Ipe.Secret.Unsafe as Unsafe\n\
+               revealed = Unsafe.unsafeReveal (Secret.fromString \"sk\")\n\
                main : Task Error ()\n\
                main =\n\
-               \x20   let\n\
-               \x20       _ = Unsafe.unsafeReveal (Secret.fromString \"sk\")\n\
-               \x20   in\n\
-               \x20   Io.println \"ok\"\n";
+               \x20   Io.println revealed\n";
     assert_compiles("security_secret_unsafe_reveal", src);
 }
 
@@ -622,10 +606,7 @@ fn security_secret_use_compiles_off_plain_secret() {
                import Ipe.Secret as Secret\n\
                main : Task Error ()\n\
                main =\n\
-               \x20   let\n\
-               \x20       _ = Secret.use (Secret.fromString \"sk\") (\\plain -> plain)\n\
-               \x20   in\n\
-               \x20   Io.println \"ok\"\n";
+               \x20   Io.println (Secret.use (Secret.fromString \"sk\") (\\plain -> plain))\n";
     assert_compiles("security_secret_use_scoped", src);
 }
 
@@ -1141,9 +1122,9 @@ fn lower_list_member_over_function_element_gated() {
          steps : List (Int -> Int)\n\
          steps =\n    [ \\n -> n + 1, \\n -> n * 2 ]\n\
          main =\n\
-         \x20   let _ = List.member (\\n -> n + 1) steps\n\
+         \x20   let result = List.member (\\n -> n + 1) steps\n\
          \x20   in\n\
-         \x20   steps\n"
+         \x20   result\n"
     );
     assert_rejected("lower_list_member_fn_elem", &src, "IPE-L0134");
 }
@@ -1158,9 +1139,9 @@ fn lower_dict_map_over_function_value_gated() {
          table : Dict String (Int -> Int)\n\
          table =\n    Dict.fromList [ ( \"inc\", \\n -> n + 1 ) ]\n\
          main =\n\
-         \x20   let _ = Dict.map (\\_ f -> f) table\n\
+         \x20   let result = Dict.map (\\_ f -> f) table\n\
          \x20   in\n\
-         \x20   table\n"
+         \x20   result\n"
     );
     assert_rejected("lower_dict_map_fn_value", &src, "IPE-L0134");
 }
@@ -1174,9 +1155,9 @@ fn lower_dict_foldl_over_function_value_gated() {
          table : Dict String (Int -> Int)\n\
          table =\n    Dict.fromList [ ( \"inc\", \\n -> n + 1 ) ]\n\
          main =\n\
-         \x20   let _ = Dict.foldl (\\_ f acc -> f acc) 0 table\n\
+         \x20   let result = Dict.foldl (\\_ f acc -> f acc) 0 table\n\
          \x20   in\n\
-         \x20   table\n"
+         \x20   result\n"
     );
     assert_rejected("lower_dict_foldl_fn_value", &src, "IPE-L0134");
 }
@@ -1190,9 +1171,9 @@ fn lower_dict_filter_over_function_value_gated() {
          table : Dict String (Int -> Int)\n\
          table =\n    Dict.fromList [ ( \"inc\", \\n -> n + 1 ) ]\n\
          main =\n\
-         \x20   let _ = Dict.filter (\\_ _ -> True) table\n\
+         \x20   let result = Dict.filter (\\_ _ -> True) table\n\
          \x20   in\n\
-         \x20   table\n"
+         \x20   result\n"
     );
     assert_rejected("lower_dict_filter_fn_value", &src, "IPE-L0134");
 }
@@ -1206,9 +1187,9 @@ fn lower_dict_partition_over_function_value_gated() {
          table : Dict String (Int -> Int)\n\
          table =\n    Dict.fromList [ ( \"inc\", \\n -> n + 1 ) ]\n\
          main =\n\
-         \x20   let _ = Dict.partition (\\_ _ -> True) table\n\
+         \x20   let result = Dict.partition (\\_ _ -> True) table\n\
          \x20   in\n\
-         \x20   table\n"
+         \x20   result\n"
     );
     assert_rejected("lower_dict_partition_fn_value", &src, "IPE-L0134");
 }
@@ -1222,9 +1203,9 @@ fn lower_list_sort_by_over_function_element_gated() {
          steps : List (Int -> Int)\n\
          steps =\n    [ \\n -> n + 1, \\n -> n * 2 ]\n\
          main =\n\
-         \x20   let _ = List.sortBy (\\f -> f 0) steps\n\
+         \x20   let result = List.sortBy (\\f -> f 0) steps\n\
          \x20   in\n\
-         \x20   steps\n"
+         \x20   result\n"
     );
     assert_rejected("lower_list_sort_by_fn_elem", &src, "IPE-L0134");
 }
@@ -1527,9 +1508,6 @@ fn lower_pipeline_curried_constructor_compiles() {
          \x20       |> Pipeline.required \"age\" Decode.int\n\
          main : Task Error ()\n\
          main =\n\
-         \x20   let\n\
-         \x20       _ = userDecoder\n\
-         \x20   in\n\
          \x20   Io.println \"ok\"\n"
     );
     assert_compiles("lower_pipeline_curried_constructor", &src);

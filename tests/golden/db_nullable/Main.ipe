@@ -18,21 +18,22 @@ main =
         (\conn ->
             Db.withTransaction conn
                 (\txconn ->
-                    let
-                        _ =
-                            Unsafe.unsafeExecRaw txconn
-                                "CREATE TABLE tags (id INTEGER, label TEXT)"
-
-                        _ =
-                            Db.exec txconn
-                                "INSERT INTO tags VALUES (?, ?)"
-                                [ SqlInt 1, SqlString "alpha" ]
-
-                        _ =
-                            Db.exec txconn
-                                "INSERT INTO tags (id) VALUES (?)"
-                                [ SqlInt 2 ]
-                    in
+                    Unsafe.unsafeExecRaw txconn
+                        "CREATE TABLE tags (id INTEGER, label TEXT)"
+                        |> Task.andThen
+                            (\_ ->
+                                Db.exec txconn
+                                    "INSERT INTO tags VALUES (?, ?)"
+                                    [ SqlInt 1, SqlString "alpha" ]
+                            )
+                        |> Task.andThen
+                            (\_ ->
+                                Db.exec txconn
+                                    "INSERT INTO tags (id) VALUES (?)"
+                                    [ SqlInt 2 ]
+                            )
+                        |> Task.andThen
+                            (\_ ->
                     Task.andThen
                         (\results ->
                             Io.println
@@ -55,6 +56,7 @@ main =
                             []
                             (Db.Decode.nullable (Db.Decode.string "label"))
                         )
+                            )
                 )
         )
         (Db.open "sqlite" "sqlite::memory:")

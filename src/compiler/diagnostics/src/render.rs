@@ -412,8 +412,7 @@ fn name_prose(msg: &NameError) -> String {
             "I can't derive a codec here automatically.".to_string()
         }
         NameError::BareWildcardLet => {
-            "This `let _ =` names nothing to keep, so it just throws the value away."
-                .to_string()
+            "This `let _ =` names nothing to keep, so it just throws the value away.".to_string()
         }
         NameError::Unknown => "Something is off with a name in this code.".to_string(),
     }

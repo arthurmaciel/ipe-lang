@@ -18,26 +18,28 @@ main =
         (\conn ->
             Db.withTransaction conn
                 (\txconn ->
-                    let
-                        _ =
-                            Unsafe.unsafeExecRaw txconn
-                                "CREATE TABLE products (name TEXT NOT NULL, qty INTEGER NOT NULL)"
-
-                        _ =
-                            Db.exec txconn
-                                "INSERT INTO products (name, qty) VALUES (?, ?)"
-                                [ SqlString "widget", SqlInt 10 ]
-
-                        _ =
-                            Db.exec txconn
-                                "INSERT INTO products (name, qty) VALUES (?, ?)"
-                                [ SqlString "gadget", SqlInt 7 ]
-
-                        _ =
-                            Db.exec txconn
-                                "INSERT INTO products (name, qty) VALUES (?, ?)"
-                                [ SqlString "sprocket", SqlInt 3 ]
-                    in
+                    Unsafe.unsafeExecRaw txconn
+                        "CREATE TABLE products (name TEXT NOT NULL, qty INTEGER NOT NULL)"
+                        |> Task.andThen
+                            (\_ ->
+                                Db.exec txconn
+                                    "INSERT INTO products (name, qty) VALUES (?, ?)"
+                                    [ SqlString "widget", SqlInt 10 ]
+                            )
+                        |> Task.andThen
+                            (\_ ->
+                                Db.exec txconn
+                                    "INSERT INTO products (name, qty) VALUES (?, ?)"
+                                    [ SqlString "gadget", SqlInt 7 ]
+                            )
+                        |> Task.andThen
+                            (\_ ->
+                                Db.exec txconn
+                                    "INSERT INTO products (name, qty) VALUES (?, ?)"
+                                    [ SqlString "sprocket", SqlInt 3 ]
+                            )
+                        |> Task.andThen
+                            (\_ ->
                     Task.andThen
                         (\deletedCount ->
                             Task.andThen
@@ -51,6 +53,7 @@ main =
                                 (Unsafe.unsafeQuery txconn "SELECT * FROM products ORDER BY name" [])
                         )
                         (Db.deleteWhere txconn "products" (Sql.eq (Sql.column "name") (Sql.string "gadget")))
+                            )
                 )
         )
         (Db.open "sqlite" "sqlite::memory:")

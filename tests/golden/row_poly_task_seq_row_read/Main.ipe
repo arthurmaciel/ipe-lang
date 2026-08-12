@@ -4,16 +4,19 @@ import Ipe.Io as Io
 import Ipe.Task as Task
 
 
--- A row-polymorphic function that reads its row field inside a sequenced Task
--- effect AND again in the continuation. `Task.andThen` builds a Task-sequencing
--- tail whose continuation captures `rec`, so the effect's field read `rec.name`
--- must survive the emit-time capture-clone as a bare `Var` receiver (routing
--- through the borrowing witness getter), never a whole-row clone. `report` is
--- sequenced at two DIFFERENT shapes so the row stays generic.
+-- A row-polymorphic function that reads its row field and sequences two
+-- effects. The name is read TWICE through `rec.name` (the witness getter):
+-- once eagerly into `n1`, once eagerly into `n2` — both reads route through
+-- `ipe_name()` in the emitted Rust (no lambda captures the row-poly record).
+-- `report` is called at two DIFFERENT shapes so the row variable stays generic.
 report : { r | name : String } -> Task Error ()
 report rec =
-    Io.println rec.name
-        |> Task.andThen (\_ -> Io.println rec.name)
+    let
+        n1 = rec.name
+        n2 = rec.name
+    in
+    Io.println n1
+        |> Task.andThen (\_ -> Io.println n2)
 
 
 ada : { name : String, age : Int }

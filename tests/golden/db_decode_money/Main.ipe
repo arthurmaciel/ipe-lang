@@ -38,21 +38,22 @@ main =
         (\conn ->
             Db.withTransaction conn
                 (\txconn ->
-                    let
-                        _ =
-                            Unsafe.unsafeExecRaw txconn
-                                "CREATE TABLE prices (label TEXT, amount TEXT)"
-
-                        _ =
-                            Db.exec txconn
-                                "INSERT INTO prices (label, amount) VALUES (?, ?)"
-                                [ SqlString "widget", SqlMoney "USD 12.34" ]
-
-                        _ =
-                            Db.exec txconn
-                                "INSERT INTO prices (label, amount) VALUES (?, ?)"
-                                [ SqlString "broken", SqlString "BADFORMAT" ]
-                    in
+                    Unsafe.unsafeExecRaw txconn
+                        "CREATE TABLE prices (label TEXT, amount TEXT)"
+                        |> Task.andThen
+                            (\_ ->
+                                Db.exec txconn
+                                    "INSERT INTO prices (label, amount) VALUES (?, ?)"
+                                    [ SqlString "widget", SqlMoney "USD 12.34" ]
+                            )
+                        |> Task.andThen
+                            (\_ ->
+                                Db.exec txconn
+                                    "INSERT INTO prices (label, amount) VALUES (?, ?)"
+                                    [ SqlString "broken", SqlString "BADFORMAT" ]
+                            )
+                        |> Task.andThen
+                            (\_ ->
                     Task.andThen
                         (\okLine ->
                             Task.andThen
@@ -99,6 +100,7 @@ main =
                                 (Db.Decode.money "amount")
                             )
                         )
+                            )
                 )
         )
         (Db.open "sqlite" "sqlite::memory:")

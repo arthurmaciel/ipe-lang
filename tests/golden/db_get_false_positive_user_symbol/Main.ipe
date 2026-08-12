@@ -13,11 +13,7 @@ dbGetLabel s =
 -- emitted symbol is `main_db_get_label` (contains db_get_) but is NOT a
 -- Db.get* kernel. No Ipe.Db import.
 render : any -> String
-render x =
-    let
-        _ =
-            x
-    in
+render _ =
     dbGetLabel "payload"
 
 

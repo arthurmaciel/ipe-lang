@@ -6,6 +6,7 @@ import Ipe.List
 import Ipe.Maybe
 import Ipe.Result
 import Ipe.String
+import Ipe.Task as Task
 
 
 -- A 3-arg builder passed to `Result.map3` / `Maybe.map3` as a MULTI-ARG
@@ -199,50 +200,19 @@ showMSummary m =
 
 
 main =
-    let
-        _ =
-            Io.println (showR m3ok)
-
-        _ =
-            Io.println (showR m3err)
-
-        _ =
-            Io.println (showRL combOk)
-
-        _ =
-            Io.println (showRL combErr)
-
-        _ =
-            Io.println (showRL travOk)
-
-        _ =
-            Io.println (showRL travErr)
-
-        _ =
-            Io.println (showM m3just)
-
-        _ =
-            Io.println (showM m3nothing)
-
-        _ =
-            Io.println (showML mcombOk)
-
-        _ =
-            Io.println (showML mcombNothing)
-
-        _ =
-            Io.println (showR m4ok)
-
-        _ =
-            Io.println (showR m5ok)
-
-        _ =
-            Io.println (showR m5err)
-
-        _ =
-            Io.println (showRSummary bigOk)
-
-        _ =
-            Io.println (showMSummary bigJust)
-    in
-    Io.println "done"
+    Io.println (showR m3ok)
+        |> Task.andThen (\_ -> Io.println (showR m3err))
+        |> Task.andThen (\_ -> Io.println (showRL combOk))
+        |> Task.andThen (\_ -> Io.println (showRL combErr))
+        |> Task.andThen (\_ -> Io.println (showRL travOk))
+        |> Task.andThen (\_ -> Io.println (showRL travErr))
+        |> Task.andThen (\_ -> Io.println (showM m3just))
+        |> Task.andThen (\_ -> Io.println (showM m3nothing))
+        |> Task.andThen (\_ -> Io.println (showML mcombOk))
+        |> Task.andThen (\_ -> Io.println (showML mcombNothing))
+        |> Task.andThen (\_ -> Io.println (showR m4ok))
+        |> Task.andThen (\_ -> Io.println (showR m5ok))
+        |> Task.andThen (\_ -> Io.println (showR m5err))
+        |> Task.andThen (\_ -> Io.println (showRSummary bigOk))
+        |> Task.andThen (\_ -> Io.println (showMSummary bigJust))
+        |> Task.andThen (\_ -> Io.println "done")

@@ -1,6 +1,7 @@
 module Main exposing (main)
 import Ipe.Io as Io
 import Ipe.Secret
+import Ipe.Task as Task
 
 -- golden: `Secret.fromString` is the seal; `Secret.use` is the scoped consume
 -- (apply a function to the plaintext, return its result); `Secret.redacted` is
@@ -16,7 +17,5 @@ secretVal =
     Secret.fromString "sk_live_zx9K3_MARKER"
 
 main =
-    let
-        _ = Io.println (Secret.redacted secretVal)
-    in
-    Secret.use secretVal Io.println
+    Io.println (Secret.redacted secretVal)
+        |> Task.andThen (\_ -> Secret.use secretVal Io.println)

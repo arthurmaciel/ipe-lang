@@ -16,7 +16,4 @@ userDecoder =
     Pipeline.required "name" Decode.string acc
 
 main =
-    let
-        _ = userDecoder
-    in
     Io.println "binder"

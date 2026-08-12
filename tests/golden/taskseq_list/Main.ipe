@@ -27,10 +27,10 @@ import Ipe.Io as Io
 -- Expected: clean `cargo build`, and the final print is exactly "4" (2 + 2)
 -- — the log message and the two `tasks` uses never cross-contaminate.
 main =
-    let tasks = [ Task.succeed "a", Task.succeed "b" ] in
     Log.info "run tasks"
         |> Task.andThen
             (\_ ->
+                let tasks = [ Task.succeed "a", Task.succeed "b" ] in
                 let n1 = List.length tasks in
                 let n2 = List.length tasks in
                 Io.println (String.fromInt (n1 + n2))

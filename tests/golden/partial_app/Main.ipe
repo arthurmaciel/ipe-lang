@@ -1,6 +1,7 @@
 module Main exposing (main)
 import Ipe.Io as Io
 import Ipe.String
+import Ipe.Task as Task
 
 -- IPE-L0110 (#216) seal: partial + over-application of a first-class function
 -- VALUE. The named-callee path already eta-expands (`add 2` -> `\n -> add(2,
@@ -39,8 +40,7 @@ main =
         overPartial = (f 10 20) 3
 
         pipePartial = 100 |> add3 1 2
-
-        _ = Io.println (String.fromInt boundPartial)
-        _ = Io.println (String.fromInt overPartial)
     in
-    Io.println (String.fromInt pipePartial)
+    Io.println (String.fromInt boundPartial)
+        |> Task.andThen (\_ -> Io.println (String.fromInt overPartial))
+        |> Task.andThen (\_ -> Io.println (String.fromInt pipePartial))

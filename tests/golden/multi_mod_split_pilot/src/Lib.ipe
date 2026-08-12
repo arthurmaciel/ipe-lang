@@ -37,24 +37,26 @@ seedAndCount =
         (\conn ->
             Db.withTransaction conn
                 (\txconn ->
-                    let
-                        _ =
-                            Unsafe.unsafeExecRaw txconn
-                                "CREATE TABLE widgets (name TEXT, qty INTEGER)"
-
-                        _ =
-                            Db.exec txconn
-                                "INSERT INTO widgets (name, qty) VALUES (?, ?)"
-                                [ SqlString "gear", SqlInt 4 ]
-
-                        _ =
-                            Db.exec txconn
-                                "INSERT INTO widgets (name, qty) VALUES (?, ?)"
-                                [ SqlString "cog", SqlInt 2 ]
-                    in
-                    Task.map
-                        (\rows -> List.length rows)
-                        (Unsafe.unsafeQuery txconn "SELECT name, qty FROM widgets" [])
+                    Unsafe.unsafeExecRaw txconn
+                        "CREATE TABLE widgets (name TEXT, qty INTEGER)"
+                        |> Task.andThen
+                            (\_ ->
+                                Db.exec txconn
+                                    "INSERT INTO widgets (name, qty) VALUES (?, ?)"
+                                    [ SqlString "gear", SqlInt 4 ]
+                            )
+                        |> Task.andThen
+                            (\_ ->
+                                Db.exec txconn
+                                    "INSERT INTO widgets (name, qty) VALUES (?, ?)"
+                                    [ SqlString "cog", SqlInt 2 ]
+                            )
+                        |> Task.andThen
+                            (\_ ->
+                                Task.map
+                                    (\rows -> List.length rows)
+                                    (Unsafe.unsafeQuery txconn "SELECT name, qty FROM widgets" [])
+                            )
                 )
         )
         (Db.open "sqlite" "sqlite::memory:")

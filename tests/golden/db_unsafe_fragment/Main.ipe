@@ -24,21 +24,22 @@ main =
         (\conn ->
             Db.withTransaction conn
                 (\txconn ->
-                    let
-                        _ =
-                            Unsafe.unsafeExecRaw txconn
-                                "CREATE TABLE products (name TEXT NOT NULL, qty INTEGER NOT NULL)"
-
-                        _ =
-                            Db.exec txconn
-                                "INSERT INTO products (name, qty) VALUES (?, ?)"
-                                [ SqlString "widget", SqlInt 10 ]
-
-                        _ =
-                            Db.exec txconn
-                                "INSERT INTO products (name, qty) VALUES (?, ?)"
-                                [ SqlString "gadget", SqlInt 7 ]
-                    in
+                    Unsafe.unsafeExecRaw txconn
+                        "CREATE TABLE products (name TEXT NOT NULL, qty INTEGER NOT NULL)"
+                        |> Task.andThen
+                            (\_ ->
+                                Db.exec txconn
+                                    "INSERT INTO products (name, qty) VALUES (?, ?)"
+                                    [ SqlString "widget", SqlInt 10 ]
+                            )
+                        |> Task.andThen
+                            (\_ ->
+                                Db.exec txconn
+                                    "INSERT INTO products (name, qty) VALUES (?, ?)"
+                                    [ SqlString "gadget", SqlInt 7 ]
+                            )
+                        |> Task.andThen
+                            (\_ ->
                     Task.andThen
                         (\rows ->
                             let
@@ -56,6 +57,7 @@ main =
                         -- The WHERE column is minted by unsafeFragment: no
                         -- valid_sql_ident runs, the caller asserts "qty" is safe.
                         (Db.findWhere txconn "products" (Sql.gt (Unsafe.unsafeFragment "qty") (Sql.int 9)))
+                            )
                 )
         )
         (Db.open "sqlite" "sqlite::memory:")

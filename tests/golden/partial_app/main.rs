@@ -58,6 +58,16 @@ pub fn system_setenv(key: String, val: String) -> IpeTask<()> {
 pub fn system_unsetenv(key: String) -> IpeTask<()> {
     ipe_runtime::system::system_unsetenv(key)
 }
+// ── Random kernels ─────────────────────────────────────────────────────────
+pub fn random_int(lo: i64, hi: i64) -> IpeTask<i64> {
+    ipe_runtime::random::random_int(lo, hi)
+}
+pub fn random_float(lo: f64, hi: f64) -> IpeTask<f64> {
+    ipe_runtime::random::random_float(lo, hi)
+}
+pub fn random_choice(items: Vec<String>) -> IpeTask<String> {
+    ipe_runtime::random::random_choice(items)
+}
 // ── File kernels ───────────────────────────────────────────────────────────
 pub fn file_read_file(path: ipe_runtime::path::Path) -> IpeTask<String> {
     ipe_runtime::file::file_read_file(path)
@@ -230,15 +240,27 @@ pub fn ipe_main() -> IpeTask<()> {
                             let eta_0: i64 = 100;
                             crate::main_add3(1, 2, eta_0)
                         });
-                        task_and_then(
-                            io_println(string_from_int(boundPartial)),
-                            Box::new(move |_| {
-                                task_and_then(
-                                    io_println(string_from_int(overPartial)),
-                                    Box::new(move |_| io_println(string_from_int(pipePartial))),
-                                )
-                            }),
-                        )
+                        ({
+                            let eta_0: IpeTask<()> = ({
+                                let eta_0: IpeTask<()> = io_println(string_from_int(boundPartial));
+                                task_and_then(eta_0, {
+                                    let __ipe_fn: Box<
+                                        dyn Fn(()) -> IpeTask<()> + Send + Sync + 'static,
+                                    > = Box::new(move |arg_0: ()| -> IpeTask<()> {
+                                        io_println(string_from_int(overPartial))
+                                    });
+                                    __ipe_fn
+                                })
+                            });
+                            task_and_then(eta_0, {
+                                let __ipe_fn: Box<
+                                    dyn Fn(()) -> IpeTask<()> + Send + Sync + 'static,
+                                > = Box::new(move |arg_1: ()| -> IpeTask<()> {
+                                    io_println(string_from_int(pipePartial))
+                                });
+                                __ipe_fn
+                            })
+                        })
                     })
                 })
             })

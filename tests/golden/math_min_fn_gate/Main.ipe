@@ -22,9 +22,12 @@ apply f x =
     f x
 
 
+-- A fully polymorphic sink: its argument stays at `a`, so the forwarder
+-- instantiation is the only thing under test.
+gated : a -> String
+gated _ =
+    "gated"
+
+
 main =
-    let
-        _ =
-            pickMin apply apply
-    in
-    Io.println (String.fromInt 0)
+    Io.println (gated (pickMin apply apply))

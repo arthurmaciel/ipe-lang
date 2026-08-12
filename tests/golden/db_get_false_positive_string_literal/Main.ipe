@@ -7,11 +7,7 @@ import Ipe.Db
 -- #177 false-positive probe C: wildcard-`any` param, body has the STRING
 -- LITERAL "db_get_string ..." but NO Db.get* kernel call and no Ipe.Db import.
 labelFor : any -> String
-labelFor x =
-    let
-        _ =
-            x
-    in
+labelFor _ =
     "db_get_string called on the payload"
 
 

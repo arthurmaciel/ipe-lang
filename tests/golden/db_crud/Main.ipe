@@ -15,33 +15,31 @@ main =
         (\conn ->
             Db.withTransaction conn
                 (\txconn ->
-                    let
-                        _ =
-                            Unsafe.unsafeExecRaw txconn
-                                "CREATE TABLE fruits (id TEXT PRIMARY KEY, name TEXT, qty TEXT)"
-
-                        _ =
-                            Db.insertRow txconn
-                                "fruits"
-                                (Dict.fromList
-                                    [ ( "id", "1" ), ( "name", "apple" ), ( "qty", "5" ) ]
-                                )
-                    in
+                    Unsafe.unsafeExecRaw txconn
+                        "CREATE TABLE fruits (id TEXT PRIMARY KEY, name TEXT, qty TEXT)"
+                        |> Task.andThen
+                            (\_ ->
+                                Db.insertRow txconn
+                                    "fruits"
+                                    (Dict.fromList
+                                        [ ( "id", "1" ), ( "name", "apple" ), ( "qty", "5" ) ]
+                                    )
+                            )
+                        |> Task.andThen
+                            (\_ ->
                     Task.andThen
                         (\before ->
-                            let
-                                _ =
-                                    Db.updateById txconn
-                                        "fruits"
-                                        "1"
-                                        (Dict.fromList [ ( "qty", "10" ) ])
-                            in
+                            Db.updateById txconn
+                                "fruits"
+                                "1"
+                                (Dict.fromList [ ( "qty", "10" ) ])
+                                |> Task.andThen
+                                    (\_ ->
                             Task.andThen
                                 (\after ->
-                                    let
-                                        _ =
-                                            Db.deleteById txconn "fruits" "1"
-                                    in
+                                    Db.deleteById txconn "fruits" "1"
+                                        |> Task.andThen
+                                            (\_ ->
                                     Task.andThen
                                         (\gone ->
                                             let
@@ -76,10 +74,13 @@ main =
                                             Io.println (r1 ++ "\n" ++ r2 ++ "\n" ++ r3)
                                         )
                                         (Db.getById txconn "fruits" "1")
+                                            )
                                 )
                                 (Db.getById txconn "fruits" "1")
+                                    )
                         )
                         (Db.getById txconn "fruits" "1")
+                            )
                 )
         )
         (Db.open "sqlite" "sqlite::memory:")

@@ -241,10 +241,11 @@ summarise results =
                 ++ String.fromInt total
                 ++ " total)"
 
-        _ =
-            println (failureReport ++ summaryLine)
+        passed =
+            failCount == 0
     in
-    Task.succeed (failCount == 0)
+    println (failureReport ++ summaryLine)
+        |> Task.andThen (\_ -> Task.succeed passed)
 
 
 runMain : List Test -> Task Error ()
