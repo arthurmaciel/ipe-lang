@@ -218,6 +218,15 @@ sky_transform_one() {
       return 2
     fi
   fi
+
+  # Step 3 — post-edits discard rewrite. Some ipe-edits patches introduce new
+  # `let _ = e` discards (they anchor on the pre-rewrite text so the Step-1
+  # pass never saw them). Rerunning rewrite_discard_bindings after the edits
+  # catches those residuals so the committed port is discard-free regardless
+  # of edit order.
+  find "$ipe" -type f -name '*.ipe' -print0 2>/dev/null \
+    | xargs -0 -r python3 "$SKY_TRANSFORM" --rewrite-discards-only
+
   return 0
 }
 

@@ -1391,6 +1391,7 @@ def main(argv: list[str]) -> int:
     args = argv[1:]
     bare: frozenset[str] = frozenset()
     manifest: str | None = None
+    rewrite_discards_only: bool = False
     rest: list[str] = []
     i = 0
     while i < len(args):
@@ -1402,8 +1403,29 @@ def main(argv: list[str]) -> int:
             manifest = args[i + 1]
             i += 2
             continue
+        if args[i] == "--rewrite-discards-only":
+            rewrite_discards_only = True
+            i += 1
+            continue
         rest.append(args[i])
         i += 1
+    if rewrite_discards_only:
+        # Post-edits pass: apply only rewrite_discard_bindings to the given files.
+        # No rename-map argument required; files are given directly.
+        paths = rest
+        if not paths:
+            sys.stderr.write(
+                "usage: sky-to-ipe-transform.py --rewrite-discards-only <file> [<file> ...]\n"
+            )
+            return 2
+        for path in paths:
+            with open(path, encoding="utf-8") as fh:
+                original = fh.read()
+            rewritten = rewrite_discard_bindings(original)
+            if rewritten != original:
+                with open(path, "w", encoding="utf-8") as fh:
+                    fh.write(rewritten)
+        return 0
     if len(rest) < 2:
         sys.stderr.write(
             "usage: sky-to-ipe-transform.py [--bare-stdlib N1,N2] "
@@ -1425,13 +1447,15 @@ def main(argv: list[str]) -> int:
         # already-`Ipe.` form: wrap a raw PubSub topic string in a typed handle,
         # strip an entry-boundary `Task.run` so `main` returns its task, and
         # inject a missing `Ipe.Maybe` import left unqualified by the Prelude drop.
+        # NOTE: rewrite_discard_bindings is intentionally NOT applied here. It
+        # runs after Step 2 (ipe-edits) via mirror.sh's Step 3 / --rewrite-discards-only
+        # so that edit `find` anchors can match against the un-converted text they
+        # were authored against before the `let _ = e` → `do` rewrite changes it.
         renamed = drop_removed_imports(
             transform(mark_stdlib_db(apply_member_moves(desugar_pure(text))), pairs)
         )
         migrated = inject_maybe_import(
-            rewrite_discard_bindings(
-                return_entry_task(wrap_pubsub_topic(rehome_kernel_alias(renamed)))
-            )
+            return_entry_task(wrap_pubsub_topic(rehome_kernel_alias(renamed)))
         )
         transformed[path] = prefix_bare_imports(migrated, bare)
 
