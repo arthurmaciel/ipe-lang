@@ -24,7 +24,7 @@ apply f x =
 
 main =
     let
-        _ =
+        _unused =
             pickMin apply apply
     in
     Io.println (String.fromInt 0)

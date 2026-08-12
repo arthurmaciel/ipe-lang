@@ -18,43 +18,37 @@ main =
         (\conn ->
             Db.withTransaction conn
                 (\txconn ->
-                    let
-                        _ =
-                            Unsafe.unsafeExecRaw txconn
-                                "CREATE TABLE tags (id INTEGER, label TEXT)"
+                    do
+                        Unsafe.unsafeExecRaw txconn
+                            "CREATE TABLE tags (id INTEGER, label TEXT)"
+                        Db.exec txconn
+                            "INSERT INTO tags VALUES (?, ?)"
+                            [ SqlInt 1, SqlString "alpha" ]
+                        Db.exec txconn
+                            "INSERT INTO tags (id) VALUES (?)"
+                            [ SqlInt 2 ]
+                        Task.andThen
+                            (\results ->
+                                Io.println
+                                    (String.join ","
+                                        (List.map
+                                            (\m ->
+                                                case m of
+                                                    Just s ->
+                                                        "just:" ++ s
 
-                        _ =
-                            Db.exec txconn
-                                "INSERT INTO tags VALUES (?, ?)"
-                                [ SqlInt 1, SqlString "alpha" ]
-
-                        _ =
-                            Db.exec txconn
-                                "INSERT INTO tags (id) VALUES (?)"
-                                [ SqlInt 2 ]
-                    in
-                    Task.andThen
-                        (\results ->
-                            Io.println
-                                (String.join ","
-                                    (List.map
-                                        (\m ->
-                                            case m of
-                                                Just s ->
-                                                    "just:" ++ s
-
-                                                Nothing ->
-                                                    "nothing"
+                                                    Nothing ->
+                                                        "nothing"
+                                            )
+                                            results
                                         )
-                                        results
                                     )
-                                )
-                        )
-                        (Db.queryDecode txconn
-                            "SELECT label FROM tags ORDER BY id"
-                            []
-                            (Db.Decode.nullable (Db.Decode.string "label"))
-                        )
+                            )
+                            (Db.queryDecode txconn
+                                "SELECT label FROM tags ORDER BY id"
+                                []
+                                (Db.Decode.nullable (Db.Decode.string "label"))
+                            )
                 )
         )
         (Db.open "sqlite" "sqlite::memory:")

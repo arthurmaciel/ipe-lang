@@ -37,24 +37,18 @@ seedAndCount =
         (\conn ->
             Db.withTransaction conn
                 (\txconn ->
-                    let
-                        _ =
-                            Unsafe.unsafeExecRaw txconn
-                                "CREATE TABLE widgets (name TEXT, qty INTEGER)"
-
-                        _ =
-                            Db.exec txconn
-                                "INSERT INTO widgets (name, qty) VALUES (?, ?)"
-                                [ SqlString "gear", SqlInt 4 ]
-
-                        _ =
-                            Db.exec txconn
-                                "INSERT INTO widgets (name, qty) VALUES (?, ?)"
-                                [ SqlString "cog", SqlInt 2 ]
-                    in
-                    Task.map
-                        (\rows -> List.length rows)
-                        (Unsafe.unsafeQuery txconn "SELECT name, qty FROM widgets" [])
+                    do
+                        Unsafe.unsafeExecRaw txconn
+                            "CREATE TABLE widgets (name TEXT, qty INTEGER)"
+                        Db.exec txconn
+                            "INSERT INTO widgets (name, qty) VALUES (?, ?)"
+                            [ SqlString "gear", SqlInt 4 ]
+                        Db.exec txconn
+                            "INSERT INTO widgets (name, qty) VALUES (?, ?)"
+                            [ SqlString "cog", SqlInt 2 ]
+                        Task.map
+                            (\rows -> List.length rows)
+                            (Unsafe.unsafeQuery txconn "SELECT name, qty FROM widgets" [])
                 )
         )
         (Db.open "sqlite" "sqlite::memory:")

@@ -2,6 +2,7 @@ module Main exposing (main)
 
 import Ipe.String as String
 import Ipe.Io as Io
+import Ipe.Task as Task
 
 
 -- AUD-04 witness 1 (string-literal corruption).
@@ -19,6 +20,7 @@ import Ipe.Io as Io
 -- Expected output: exactly "the count is" on the first line, "3" on the
 -- second (count is still usable after the effect).
 main =
-    let count = 3 in
-    let _ = Io.println "the count is" in
-    Io.println (String.fromInt count)
+    do
+        count = 3
+        Io.println "the count is"
+        Io.println (String.fromInt count)

@@ -1,6 +1,7 @@
 module Main exposing (main)
 
 import Ipe.Io as Io
+import Ipe.Task as Task
 import Ipe.Error
 
 
@@ -14,7 +15,7 @@ main =
     in
     case e1 of
         Error kind info ->
-            let
+            do
                 kindName =
                     case kind of
                         Io -> "Io"
@@ -28,12 +29,10 @@ main =
                         Conflict -> "Conflict"
                         Unavailable -> "Unavailable"
                         Unexpected -> "Unexpected"
-
-                _ = Io.println (Error.toString e1)
-                _ = Io.println info.message
-                _ = Io.println kindName
-                _ = Io.println (if Error.isRetryable e1 then "retryable" else "not-retryable")
-                _ = Io.println (if Error.isRetryable e2 then "retryable" else "not-retryable")
-                _ = Io.println (Error.toString e3)
-            in
-            Io.println "done"
+                Io.println (Error.toString e1)
+                Io.println info.message
+                Io.println kindName
+                Io.println (if Error.isRetryable e1 then "retryable" else "not-retryable")
+                Io.println (if Error.isRetryable e2 then "retryable" else "not-retryable")
+                Io.println (Error.toString e3)
+                Io.println "done"

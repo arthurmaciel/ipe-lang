@@ -23,7 +23,7 @@ singletonSet x =
 
 main =
     let
-        _ =
+        _unused =
             singletonSet Red
     in
     Io.println (String.fromInt 0)

@@ -24,32 +24,24 @@ main =
         (\conn ->
             Db.withTransaction conn
                 (\txconn ->
-                    let
-                        _ =
-                            Unsafe.unsafeExecRaw txconn
-                                "CREATE TABLE t (v TEXT)"
-
+                    do
+                        Unsafe.unsafeExecRaw txconn
+                            "CREATE TABLE t (v TEXT)"
                         -- (a) List Int params — T0001 regression
-                        _ =
-                            Db.exec txconn
-                                "INSERT INTO t (v) VALUES (CAST(? AS TEXT))"
-                                [ 1 ]
-
+                        Db.exec txconn
+                            "INSERT INTO t (v) VALUES (CAST(? AS TEXT))"
+                            [ 1 ]
                         -- (b) List String params — T0001 regression
-                        _ =
-                            Db.exec txconn
-                                "INSERT INTO t (v) VALUES (?)"
-                                [ "hello" ]
-
+                        Db.exec txconn
+                            "INSERT INTO t (v) VALUES (?)"
+                            [ "hello" ]
                         -- (c) mixed SqlValue params: SqlString + SqlInt + SqlBool + SqlNull
-                        _ =
-                            Db.exec txconn
-                                "INSERT INTO t (v) VALUES (COALESCE(?, CAST(? AS TEXT), CAST(? AS TEXT)))"
-                                [ SqlNull (SqlString ""), SqlInt 42, SqlBool True ]
-                    in
-                    Task.andThen
-                        (\rows -> Io.println (String.fromInt (List.length rows)))
-                        (Unsafe.unsafeQuery txconn "SELECT v FROM t" [])
+                        Db.exec txconn
+                            "INSERT INTO t (v) VALUES (COALESCE(?, CAST(? AS TEXT), CAST(? AS TEXT)))"
+                            [ SqlNull (SqlString ""), SqlInt 42, SqlBool True ]
+                        Task.andThen
+                            (\rows -> Io.println (String.fromInt (List.length rows)))
+                            (Unsafe.unsafeQuery txconn "SELECT v FROM t" [])
                 )
         )
         (Db.open "sqlite" "sqlite::memory:")

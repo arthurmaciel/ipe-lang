@@ -16,57 +16,51 @@ main =
         (\conn ->
             Db.withTransaction conn
                 (\txconn ->
-                    let
-                        _ =
-                            Unsafe.unsafeExecRaw txconn
-                                "CREATE TABLE items (id TEXT PRIMARY KEY, name TEXT, notes TEXT DEFAULT 'none')"
-
-                        _ =
-                            Db.insertFields txconn
-                                "items"
-                                [ ( "id", SetField (SqlString "1") )
-                                , ( "name", SetField (SqlString "widget") )
-                                , ( "notes", OmitField )
-                                ]
-                    in
-                    Task.andThen
-                        (\before ->
-                            let
-                                _ =
+                    do
+                        Unsafe.unsafeExecRaw txconn
+                            "CREATE TABLE items (id TEXT PRIMARY KEY, name TEXT, notes TEXT DEFAULT 'none')"
+                        Db.insertFields txconn
+                            "items"
+                            [ ( "id", SetField (SqlString "1") )
+                            , ( "name", SetField (SqlString "widget") )
+                            , ( "notes", OmitField )
+                            ]
+                        Task.andThen
+                            (\before ->
+                                do
                                     Db.updateFields txconn
                                         "items"
                                         [ ( "id", SqlString "1" ) ]
                                         [ ( "name", SetField (SqlString "gadget") )
                                         , ( "notes", OmitField )
                                         ]
-                            in
-                            Task.andThen
-                                (\after ->
-                                    Io.println
-                                        (String.join
-                                            ","
-                                            (List.map
-                                                (\r -> Unsafe.unsafeGetString "name" r ++ "/" ++ Unsafe.unsafeGetString "notes" r)
-                                                before
-                                            )
-                                            ++ "\n"
-                                            ++ String.join
-                                                ","
-                                                (List.map
-                                                    (\r -> Unsafe.unsafeGetString "name" r ++ "/" ++ Unsafe.unsafeGetString "notes" r)
-                                                    after
+                                    Task.andThen
+                                        (\after ->
+                                            Io.println
+                                                (String.join
+                                                    ","
+                                                    (List.map
+                                                        (\r -> Unsafe.unsafeGetString "name" r ++ "/" ++ Unsafe.unsafeGetString "notes" r)
+                                                        before
+                                                    )
+                                                    ++ "\n"
+                                                    ++ String.join
+                                                        ","
+                                                        (List.map
+                                                            (\r -> Unsafe.unsafeGetString "name" r ++ "/" ++ Unsafe.unsafeGetString "notes" r)
+                                                            after
+                                                        )
                                                 )
                                         )
-                                )
-                                (Unsafe.unsafeQuery txconn
-                                    "SELECT name, notes FROM items ORDER BY id"
-                                    []
-                                )
-                        )
-                        (Unsafe.unsafeQuery txconn
-                            "SELECT name, notes FROM items ORDER BY id"
-                            []
-                        )
+                                        (Unsafe.unsafeQuery txconn
+                                            "SELECT name, notes FROM items ORDER BY id"
+                                            []
+                                        )
+                            )
+                            (Unsafe.unsafeQuery txconn
+                                "SELECT name, notes FROM items ORDER BY id"
+                                []
+                            )
                 )
         )
         (Db.open "sqlite" "sqlite::memory:")

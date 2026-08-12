@@ -18,39 +18,31 @@ main =
         (\conn ->
             Db.withTransaction conn
                 (\txconn ->
-                    let
-                        _ =
-                            Unsafe.unsafeExecRaw txconn
-                                "CREATE TABLE products (name TEXT NOT NULL, qty INTEGER NOT NULL)"
-
-                        _ =
-                            Db.exec txconn
-                                "INSERT INTO products (name, qty) VALUES (?, ?)"
-                                [ SqlString "widget", SqlInt 10 ]
-
-                        _ =
-                            Db.exec txconn
-                                "INSERT INTO products (name, qty) VALUES (?, ?)"
-                                [ SqlString "gadget", SqlInt 7 ]
-
-                        _ =
-                            Db.exec txconn
-                                "INSERT INTO products (name, qty) VALUES (?, ?)"
-                                [ SqlString "sprocket", SqlInt 3 ]
-                    in
-                    Task.andThen
-                        (\deletedCount ->
-                            Task.andThen
-                                (\rows ->
-                                    let
-                                        names =
-                                            List.map (\r -> Unsafe.unsafeGetString "name" r) rows
-                                    in
-                                    Io.println (String.fromInt deletedCount ++ ":" ++ String.join "," names)
-                                )
-                                (Unsafe.unsafeQuery txconn "SELECT * FROM products ORDER BY name" [])
-                        )
-                        (Db.deleteWhere txconn "products" (Sql.eq (Sql.column "name") (Sql.string "gadget")))
+                    do
+                        Unsafe.unsafeExecRaw txconn
+                            "CREATE TABLE products (name TEXT NOT NULL, qty INTEGER NOT NULL)"
+                        Db.exec txconn
+                            "INSERT INTO products (name, qty) VALUES (?, ?)"
+                            [ SqlString "widget", SqlInt 10 ]
+                        Db.exec txconn
+                            "INSERT INTO products (name, qty) VALUES (?, ?)"
+                            [ SqlString "gadget", SqlInt 7 ]
+                        Db.exec txconn
+                            "INSERT INTO products (name, qty) VALUES (?, ?)"
+                            [ SqlString "sprocket", SqlInt 3 ]
+                        Task.andThen
+                            (\deletedCount ->
+                                Task.andThen
+                                    (\rows ->
+                                        let
+                                            names =
+                                                List.map (\r -> Unsafe.unsafeGetString "name" r) rows
+                                        in
+                                        Io.println (String.fromInt deletedCount ++ ":" ++ String.join "," names)
+                                    )
+                                    (Unsafe.unsafeQuery txconn "SELECT * FROM products ORDER BY name" [])
+                            )
+                            (Db.deleteWhere txconn "products" (Sql.eq (Sql.column "name") (Sql.string "gadget")))
                 )
         )
         (Db.open "sqlite" "sqlite::memory:")

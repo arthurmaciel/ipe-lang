@@ -22,7 +22,7 @@ rec =
 
 main =
     let
-        _ =
+        _unused =
             pickMin rec rec
     in
     Io.println (String.fromInt 0)

@@ -1,6 +1,7 @@
 module Main exposing (main)
 
 import Ipe.Io as Io
+import Ipe.Task as Task
 import Ipe.Error
 import Ipe.List
 import Ipe.Maybe
@@ -49,8 +50,6 @@ maybeLen m =
 
 
 main =
-    let
-        _ =
-            Io.println (String.fromInt (resultLen bigResult))
-    in
-    Io.println (String.fromInt (maybeLen bigMaybe))
+    do
+        Io.println (String.fromInt (resultLen bigResult))
+        Io.println (String.fromInt (maybeLen bigMaybe))

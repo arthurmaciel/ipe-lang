@@ -15,7 +15,7 @@ dbGetLabel s =
 render : any -> String
 render x =
     let
-        _ =
+        _unused =
             x
     in
     dbGetLabel "payload"

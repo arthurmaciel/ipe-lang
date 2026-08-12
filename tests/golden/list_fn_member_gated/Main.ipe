@@ -18,7 +18,7 @@ steps =
 
 main =
     let
-        _ =
+        _unused =
             List.member (\n -> n + 1) steps
     in
     Io.println (String.fromInt 0)

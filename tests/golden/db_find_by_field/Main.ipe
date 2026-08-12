@@ -78,86 +78,78 @@ main =
         (\conn ->
             Db.withTransaction conn
                 (\txconn ->
-                    let
-                        _ =
-                            Unsafe.unsafeExecRaw txconn
-                                "CREATE TABLE items (name TEXT NOT NULL, category TEXT NOT NULL, qty INTEGER NOT NULL)"
+                    do
+                        Unsafe.unsafeExecRaw txconn
+                            "CREATE TABLE items (name TEXT NOT NULL, category TEXT NOT NULL, qty INTEGER NOT NULL)"
+                        Db.exec txconn
+                            "INSERT INTO items (name, category, qty) VALUES (?, ?, ?)"
+                            [ SqlString "apple", SqlString "fruit", SqlInt 5 ]
+                        Db.exec txconn
+                            "INSERT INTO items (name, category, qty) VALUES (?, ?, ?)"
+                            [ SqlString "banana", SqlString "fruit", SqlInt 3 ]
+                        Db.exec txconn
+                            "INSERT INTO items (name, category, qty) VALUES (?, ?, ?)"
+                            [ SqlString "carrot", SqlString "veggie", SqlInt 8 ]
+                        Task.andThen
+                            (\found ->
+                                let
+                                    r1 =
+                                        case found of
+                                            Just row ->
+                                                formatRow row
 
-                        _ =
-                            Db.exec txconn
-                                "INSERT INTO items (name, category, qty) VALUES (?, ?, ?)"
-                                [ SqlString "apple", SqlString "fruit", SqlInt 5 ]
+                                            Nothing ->
+                                                "missing"
+                                in
+                                Task.andThen
+                                    (\notFound ->
+                                        let
+                                            r2 =
+                                                case notFound of
+                                                    Just row ->
+                                                        formatRow row
 
-                        _ =
-                            Db.exec txconn
-                                "INSERT INTO items (name, category, qty) VALUES (?, ?, ?)"
-                                [ SqlString "banana", SqlString "fruit", SqlInt 3 ]
+                                                    Nothing ->
+                                                        "missing"
+                                        in
+                                        Task.andThen
+                                            (\many ->
+                                                let
+                                                    sorted =
+                                                        List.sortBy (\r -> Unsafe.unsafeGetString "name" r) many
 
-                        _ =
-                            Db.exec txconn
-                                "INSERT INTO items (name, category, qty) VALUES (?, ?, ?)"
-                                [ SqlString "carrot", SqlString "veggie", SqlInt 8 ]
-                    in
-                    Task.andThen
-                        (\found ->
-                            let
-                                r1 =
-                                    case found of
-                                        Just row ->
-                                            formatRow row
+                                                    joined3 =
+                                                        formatRows sorted
 
-                                        Nothing ->
-                                            "missing"
-                            in
-                            Task.andThen
-                                (\notFound ->
-                                    let
-                                        r2 =
-                                            case notFound of
-                                                Just row ->
-                                                    formatRow row
+                                                    r3 =
+                                                        if String.isEmpty joined3 then
+                                                            "empty"
 
-                                                Nothing ->
-                                                    "missing"
-                                    in
-                                    Task.andThen
-                                        (\many ->
-                                            let
-                                                sorted =
-                                                    List.sortBy (\r -> Unsafe.unsafeGetString "name" r) many
+                                                        else
+                                                            joined3
+                                                in
+                                                Task.andThen
+                                                    (\none ->
+                                                        let
+                                                            joined4 =
+                                                                formatRows none
 
-                                                joined3 =
-                                                    formatRows sorted
+                                                            r4 =
+                                                                if String.isEmpty joined4 then
+                                                                    "empty"
 
-                                                r3 =
-                                                    if String.isEmpty joined3 then
-                                                        "empty"
-
-                                                    else
-                                                        joined3
-                                            in
-                                            Task.andThen
-                                                (\none ->
-                                                    let
-                                                        joined4 =
-                                                            formatRows none
-
-                                                        r4 =
-                                                            if String.isEmpty joined4 then
-                                                                "empty"
-
-                                                            else
-                                                                joined4
-                                                    in
-                                                    Io.println (r1 ++ "\n" ++ r2 ++ "\n" ++ r3 ++ "\n" ++ r4)
-                                                )
-                                                (Db.findManyByField txconn "items" "category" "mineral")
-                                        )
-                                        (Db.findManyByField txconn "items" "category" "fruit")
-                                )
-                                (Db.findOneByField txconn "items" "name" "durian")
-                        )
-                        (Db.findOneByField txconn "items" "name" "apple")
+                                                                else
+                                                                    joined4
+                                                        in
+                                                        Io.println (r1 ++ "\n" ++ r2 ++ "\n" ++ r3 ++ "\n" ++ r4)
+                                                    )
+                                                    (Db.findManyByField txconn "items" "category" "mineral")
+                                            )
+                                            (Db.findManyByField txconn "items" "category" "fruit")
+                                    )
+                                    (Db.findOneByField txconn "items" "name" "durian")
+                            )
+                            (Db.findOneByField txconn "items" "name" "apple")
                 )
         )
         (Db.open "sqlite" "sqlite::memory:")

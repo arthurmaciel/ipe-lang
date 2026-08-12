@@ -15,71 +15,63 @@ main =
         (\conn ->
             Db.withTransaction conn
                 (\txconn ->
-                    let
-                        _ =
-                            Unsafe.unsafeExecRaw txconn
-                                "CREATE TABLE fruits (id TEXT PRIMARY KEY, name TEXT, qty TEXT)"
-
-                        _ =
-                            Db.insertRow txconn
-                                "fruits"
-                                (Dict.fromList
-                                    [ ( "id", "1" ), ( "name", "apple" ), ( "qty", "5" ) ]
-                                )
-                    in
-                    Task.andThen
-                        (\before ->
-                            let
-                                _ =
+                    do
+                        Unsafe.unsafeExecRaw txconn
+                            "CREATE TABLE fruits (id TEXT PRIMARY KEY, name TEXT, qty TEXT)"
+                        Db.insertRow txconn
+                            "fruits"
+                            (Dict.fromList
+                                [ ( "id", "1" ), ( "name", "apple" ), ( "qty", "5" ) ]
+                            )
+                        Task.andThen
+                            (\before ->
+                                do
                                     Db.updateById txconn
                                         "fruits"
                                         "1"
                                         (Dict.fromList [ ( "qty", "10" ) ])
-                            in
-                            Task.andThen
-                                (\after ->
-                                    let
-                                        _ =
-                                            Db.deleteById txconn "fruits" "1"
-                                    in
                                     Task.andThen
-                                        (\gone ->
-                                            let
-                                                r1 =
-                                                    case before of
-                                                        Just row ->
-                                                            Unsafe.unsafeGetString "name" row
-                                                                ++ "/"
-                                                                ++ Unsafe.unsafeGetString "qty" row
+                                        (\after ->
+                                            do
+                                                Db.deleteById txconn "fruits" "1"
+                                                Task.andThen
+                                                    (\gone ->
+                                                        let
+                                                            r1 =
+                                                                case before of
+                                                                    Just row ->
+                                                                        Unsafe.unsafeGetString "name" row
+                                                                            ++ "/"
+                                                                            ++ Unsafe.unsafeGetString "qty" row
 
-                                                        Nothing ->
-                                                            "missing"
+                                                                    Nothing ->
+                                                                        "missing"
 
-                                                r2 =
-                                                    case after of
-                                                        Just row ->
-                                                            Unsafe.unsafeGetString "name" row
-                                                                ++ "/"
-                                                                ++ Unsafe.unsafeGetString "qty" row
+                                                            r2 =
+                                                                case after of
+                                                                    Just row ->
+                                                                        Unsafe.unsafeGetString "name" row
+                                                                            ++ "/"
+                                                                            ++ Unsafe.unsafeGetString "qty" row
 
-                                                        Nothing ->
-                                                            "missing"
+                                                                    Nothing ->
+                                                                        "missing"
 
-                                                r3 =
-                                                    case gone of
-                                                        Just _ ->
-                                                            "still-exists"
+                                                            r3 =
+                                                                case gone of
+                                                                    Just _ ->
+                                                                        "still-exists"
 
-                                                        Nothing ->
-                                                            "deleted"
-                                            in
-                                            Io.println (r1 ++ "\n" ++ r2 ++ "\n" ++ r3)
+                                                                    Nothing ->
+                                                                        "deleted"
+                                                        in
+                                                        Io.println (r1 ++ "\n" ++ r2 ++ "\n" ++ r3)
+                                                    )
+                                                    (Db.getById txconn "fruits" "1")
                                         )
                                         (Db.getById txconn "fruits" "1")
-                                )
-                                (Db.getById txconn "fruits" "1")
-                        )
-                        (Db.getById txconn "fruits" "1")
+                            )
+                            (Db.getById txconn "fruits" "1")
                 )
         )
         (Db.open "sqlite" "sqlite::memory:")

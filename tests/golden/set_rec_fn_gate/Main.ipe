@@ -27,7 +27,7 @@ rec =
 
 main =
     let
-        _ =
+        _unused =
             singletonSet rec
     in
     Io.println (String.fromInt 0)

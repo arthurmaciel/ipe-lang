@@ -21,29 +21,25 @@ main =
         (\conn ->
             Db.withTransaction conn
                 (\txconn ->
-                    let
-                        _ =
-                            Unsafe.unsafeExecRaw txconn
-                                "CREATE TABLE people (full_name TEXT)"
-
-                        _ =
-                            Db.exec txconn
-                                "INSERT INTO people (full_name) VALUES (?)"
-                                [ SqlString "ada" ]
-                    in
-                    Task.andThen
-                        (\line -> Io.println line)
-                        (Task.onError
-                            (\_ -> Task.succeed "drift:caught")
-                            (Task.andThen
-                                (\names -> Task.succeed (String.join "," names))
-                                (Db.queryDecode txconn
-                                    "SELECT full_name FROM people"
-                                    []
-                                    (Db.Decode.string "name")
+                    do
+                        Unsafe.unsafeExecRaw txconn
+                            "CREATE TABLE people (full_name TEXT)"
+                        Db.exec txconn
+                            "INSERT INTO people (full_name) VALUES (?)"
+                            [ SqlString "ada" ]
+                        Task.andThen
+                            (\line -> Io.println line)
+                            (Task.onError
+                                (\_ -> Task.succeed "drift:caught")
+                                (Task.andThen
+                                    (\names -> Task.succeed (String.join "," names))
+                                    (Db.queryDecode txconn
+                                        "SELECT full_name FROM people"
+                                        []
+                                        (Db.Decode.string "name")
+                                    )
                                 )
                             )
-                        )
                 )
         )
         (Db.open "sqlite" "sqlite::memory:")

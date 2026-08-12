@@ -9,7 +9,7 @@ import Ipe.Db
 labelFor : any -> String
 labelFor x =
     let
-        _ =
+        _unused =
             x
     in
     "db_get_string called on the payload"

@@ -38,67 +38,61 @@ main =
         (\conn ->
             Db.withTransaction conn
                 (\txconn ->
-                    let
-                        _ =
-                            Unsafe.unsafeExecRaw txconn
-                                "CREATE TABLE prices (label TEXT, amount TEXT)"
-
-                        _ =
-                            Db.exec txconn
-                                "INSERT INTO prices (label, amount) VALUES (?, ?)"
-                                [ SqlString "widget", SqlMoney "USD 12.34" ]
-
-                        _ =
-                            Db.exec txconn
-                                "INSERT INTO prices (label, amount) VALUES (?, ?)"
-                                [ SqlString "broken", SqlString "BADFORMAT" ]
-                    in
-                    Task.andThen
-                        (\okLine ->
-                            Task.andThen
-                                (\badLine ->
-                                    Io.println (okLine ++ "\n" ++ badLine)
-                                )
-                                (Task.onError
-                                    (\_ -> Task.succeed "malformed:caught")
-                                    (Task.andThen
-                                        (\rows ->
-                                            Task.succeed
-                                                (String.join ","
-                                                    (List.map
-                                                        (\( amount, code ) ->
-                                                            code ++ " " ++ Decimal.toString amount
+                    do
+                        Unsafe.unsafeExecRaw txconn
+                            "CREATE TABLE prices (label TEXT, amount TEXT)"
+                        Db.exec txconn
+                            "INSERT INTO prices (label, amount) VALUES (?, ?)"
+                            [ SqlString "widget", SqlMoney "USD 12.34" ]
+                        Db.exec txconn
+                            "INSERT INTO prices (label, amount) VALUES (?, ?)"
+                            [ SqlString "broken", SqlString "BADFORMAT" ]
+                        Task.andThen
+                            (\okLine ->
+                                Task.andThen
+                                    (\badLine ->
+                                        Io.println (okLine ++ "\n" ++ badLine)
+                                    )
+                                    (Task.onError
+                                        (\_ -> Task.succeed "malformed:caught")
+                                        (Task.andThen
+                                            (\rows ->
+                                                Task.succeed
+                                                    (String.join ","
+                                                        (List.map
+                                                            (\( amount, code ) ->
+                                                                code ++ " " ++ Decimal.toString amount
+                                                            )
+                                                            rows
                                                         )
-                                                        rows
                                                     )
-                                                )
-                                        )
-                                        (Db.queryDecode txconn
-                                            "SELECT amount FROM prices WHERE label = ?"
-                                            [ SqlString "broken" ]
-                                            (Db.Decode.money "amount")
-                                        )
-                                    )
-                                )
-                        )
-                        (Task.andThen
-                            (\rows ->
-                                Task.succeed
-                                    (String.join ","
-                                        (List.map
-                                            (\( amount, code ) ->
-                                                code ++ " " ++ Decimal.toString amount
                                             )
-                                            rows
+                                            (Db.queryDecode txconn
+                                                "SELECT amount FROM prices WHERE label = ?"
+                                                [ SqlString "broken" ]
+                                                (Db.Decode.money "amount")
+                                            )
                                         )
                                     )
                             )
-                            (Db.queryDecode txconn
-                                "SELECT amount FROM prices WHERE label = ?"
-                                [ SqlString "widget" ]
-                                (Db.Decode.money "amount")
+                            (Task.andThen
+                                (\rows ->
+                                    Task.succeed
+                                        (String.join ","
+                                            (List.map
+                                                (\( amount, code ) ->
+                                                    code ++ " " ++ Decimal.toString amount
+                                                )
+                                                rows
+                                            )
+                                        )
+                                )
+                                (Db.queryDecode txconn
+                                    "SELECT amount FROM prices WHERE label = ?"
+                                    [ SqlString "widget" ]
+                                    (Db.Decode.money "amount")
+                                )
                             )
-                        )
                 )
         )
         (Db.open "sqlite" "sqlite::memory:")

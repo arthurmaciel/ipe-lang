@@ -16,36 +16,32 @@ main =
         (\conn ->
             Db.withTransaction conn
                 (\txconn ->
-                    let
-                        _ =
-                            Unsafe.unsafeExecRaw txconn
-                                "CREATE TABLE prices (label TEXT, amount TEXT, money TEXT)"
-
-                        _ =
-                            Db.exec txconn
-                                "INSERT INTO prices (label, amount, money) VALUES (?, ?, ?)"
-                                [ SqlString "pi", SqlDecimal "3.14159", SqlMoney "USD 9.99" ]
-                    in
-                    Task.andThen
-                        (\rows ->
-                            Io.println
-                                (String.join "\n"
-                                    (List.map
-                                        (\row ->
-                                            Unsafe.unsafeGetString "label" row
-                                                ++ ":"
-                                                ++ Unsafe.unsafeGetString "amount" row
-                                                ++ ":"
-                                                ++ Unsafe.unsafeGetString "money" row
+                    do
+                        Unsafe.unsafeExecRaw txconn
+                            "CREATE TABLE prices (label TEXT, amount TEXT, money TEXT)"
+                        Db.exec txconn
+                            "INSERT INTO prices (label, amount, money) VALUES (?, ?, ?)"
+                            [ SqlString "pi", SqlDecimal "3.14159", SqlMoney "USD 9.99" ]
+                        Task.andThen
+                            (\rows ->
+                                Io.println
+                                    (String.join "\n"
+                                        (List.map
+                                            (\row ->
+                                                Unsafe.unsafeGetString "label" row
+                                                    ++ ":"
+                                                    ++ Unsafe.unsafeGetString "amount" row
+                                                    ++ ":"
+                                                    ++ Unsafe.unsafeGetString "money" row
+                                            )
+                                            rows
                                         )
-                                        rows
                                     )
-                                )
-                        )
-                        (Unsafe.unsafeQuery txconn
-                            "SELECT label, amount, money FROM prices"
-                            []
-                        )
+                            )
+                            (Unsafe.unsafeQuery txconn
+                                "SELECT label, amount, money FROM prices"
+                                []
+                            )
                 )
         )
         (Db.open "sqlite" "sqlite::memory:")
