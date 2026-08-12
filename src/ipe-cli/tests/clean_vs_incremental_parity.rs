@@ -304,8 +304,13 @@ fn probe_fixture(label: &str, state0: &UserSources) {
     );
 }
 
-/// Drive one quarter of the golden fixture population (split for nextest
-/// parallelism; the union of the four shards is the full set).
+/// The golden fixture population is split into this many shards so each shard's
+/// clean+incremental probe stays well under the per-test timeout; the union of
+/// all shards is the full set.
+const PARITY_SHARD_COUNT: usize = 8;
+
+/// Drive one shard of the golden fixture population (split for nextest
+/// parallelism; the union of all shards is the full set).
 fn probe_shard(shard: usize) {
     let dirs = golden_fixture_dirs();
     assert!(
@@ -315,7 +320,7 @@ fn probe_shard(shard: usize) {
     );
     let mut covered = 0usize;
     for (i, dir) in dirs.iter().enumerate() {
-        if i % 4 != shard {
+        if i % PARITY_SHARD_COUNT != shard {
             continue;
         }
         let Some(state0) = fixture_user_sources(dir) else {
@@ -349,6 +354,26 @@ fn parity_probe_golden_fixtures_shard2() {
 #[test]
 fn parity_probe_golden_fixtures_shard3() {
     probe_shard(3);
+}
+
+#[test]
+fn parity_probe_golden_fixtures_shard4() {
+    probe_shard(4);
+}
+
+#[test]
+fn parity_probe_golden_fixtures_shard5() {
+    probe_shard(5);
+}
+
+#[test]
+fn parity_probe_golden_fixtures_shard6() {
+    probe_shard(6);
+}
+
+#[test]
+fn parity_probe_golden_fixtures_shard7() {
+    probe_shard(7);
 }
 
 // ---------------------------------------------------------------------------
