@@ -170,9 +170,11 @@ fn program_metadata_short_circuits_on_lower_error() {
 #[test]
 fn program_metadata_excludes_unreached_function() {
     const ENTRY_WITH_DEAD_CODE: &str = "module Entry exposing (main)\n\n\
+        import Ipe.Io as Io\n\
+        import Ipe.String as String\n\n\
         live = 1\n\n\
         dead = 2\n\n\
-        main = live\n";
+        main = Io.println (String.fromInt live)\n";
     let (db, _log) = logged_db();
     let entry = file(&db, &["Entry"], ENTRY_WITH_DEAD_CODE);
     let root = root_of(&db, &[(&["Entry"], entry)]);

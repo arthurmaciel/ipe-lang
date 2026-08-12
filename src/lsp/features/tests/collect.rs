@@ -40,8 +40,7 @@ fn diags_for<'a>(all: &'a [ModuleDiagnostics], module: &[&str]) -> &'a ModuleDia
 }
 
 const DEP_A: &str = "module A exposing (visible)\n\nvisible = 1\n";
-const ENTRY_OK: &str =
-    "module Main exposing (main)\n\nimport A exposing (visible)\nimport Ipe.Io as Io\nimport Ipe.String as String\n\nmain : Task Error ()\nmain =\n    Io.println (String.fromInt visible)\n";
+const ENTRY_OK: &str = "module Main exposing (main)\n\nimport A exposing (visible)\nimport Ipe.Io as Io\nimport Ipe.String as String\n\nmain : Task Error ()\nmain =\n    Io.println (String.fromInt visible)\n";
 const ENTRY_TYPE_ERROR: &str = "module Main exposing (main)\n\nimport A exposing (visible)\n\n\
     main : Int\n\
     main = \"not an int\"\n";
