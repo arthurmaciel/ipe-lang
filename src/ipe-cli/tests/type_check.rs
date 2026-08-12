@@ -52,7 +52,7 @@ fn type_error_program_exits_nonzero_with_the_diagnostic() -> TestResult {
     let (ok, _, stderr) = run_ipe(&["type-check", &fixture("type_error.ipe").to_string_lossy()])?;
     assert!(!ok, "a type-error program must exit non-zero");
     assert!(
-        stderr.contains("IPE-T0001") && stderr.contains("type mismatch"),
+        stderr.contains("IPE-T0001") && stderr.contains("TYPE MISMATCH"),
         "the rendered type diagnostic must be shown, got:\n{stderr}"
     );
     Ok(())

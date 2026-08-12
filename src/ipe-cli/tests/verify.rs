@@ -69,7 +69,7 @@ fn type_error_project_stops_at_the_type_check_stage() -> TestResult {
     assert!(
         stderr.contains("the type-check stage failed")
             && stderr.contains("IPE-T0001")
-            && stderr.contains("type mismatch"),
+            && stderr.contains("TYPE MISMATCH"),
         "the type diagnostic must be shown, got stderr:\n{stderr}"
     );
     assert!(
