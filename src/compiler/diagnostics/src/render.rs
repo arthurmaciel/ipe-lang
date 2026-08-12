@@ -526,6 +526,11 @@ fn lower_prose(msg: &LowerError) -> String {
              supposed to do any."
                 .to_string()
         }
+        LowerError::NonEntryMain { found } => format!(
+            "`main` has to be a `Task Error ()` — the one effect your program runs. \
+             This `main` is {}.",
+            an_article(found)
+        ),
     }
 }
 
@@ -559,6 +564,7 @@ fn title_rule_name(code: crate::code::Code) -> &'static str {
         // are pulled out.
         code::IPE_P0002 => "UNEXPECTED END OF FILE",
         code::IPE_P0003 | code::IPE_L0200 => "NESTED TOO DEEPLY",
+        code::IPE_L0136 => "BAD MAIN",
         code::IPE_P0013 | code::IPE_P0016 => "NUMBER OUT OF RANGE",
         code::IPE_P0014 => "UNTERMINATED STRING",
         code::IPE_P0017 => "UNTERMINATED COMMENT",
@@ -1317,6 +1323,12 @@ fn lower_label(msg: &LowerError) -> String {
              function would silently perform I/O. Give the function a `Task e ()` return \
              type, or run the effect with `Task.run`"
                 .to_string()
+        }
+        LowerError::NonEntryMain { found } => {
+            format!(
+                "this `main` is {}, not a `Task Error ()`",
+                an_article(found)
+            )
         }
     }
 }

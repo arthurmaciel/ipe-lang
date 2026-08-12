@@ -8418,6 +8418,58 @@ const fn unsupported(span: Span, feature: Feature) -> Diagnostic {
     }
 }
 
+/// Whether `main`'s return type is a runnable program entry.
+///
+/// The emitted `fn main` wraps the entry in the runtime's single run site, which
+/// needs a `Task`. Three lowered return shapes reach that run site as a `Task`:
+///
+/// * `Task(_)` — a `Task Error a` written directly (a script `main = Io.println …`,
+///   or an app entry like `Web.app { … }` whose own result is a `Task Error ()`).
+///   The run site discards the produced value, so any `a` is admissible.
+/// * `Result(Error, _)` — a top-level `main = someTask |> Task.run`; the backend
+///   re-wraps the resolved `Result` into an already-settled `Task`.
+/// * `Unit` — a synchronous `Task.run`-calls idiom whose body evaluates to `()`;
+///   the backend wraps it as `task_succeed(())`.
+///
+/// Any other type (an `Int`, a `String`, a function, …) has no effect to run and
+/// cannot reach the run site as a `Task`, so it is rejected ([`LowerError::NonEntryMain`]).
+/// The set here is exactly the one the backend's entry emission can build, so
+/// acceptance fails closed at `ipe` time instead of open at `cargo` time.
+fn main_ret_is_runnable_entry(ret: &IrType) -> bool {
+    match ret {
+        IrType::Task(_) | IrType::Unit => true,
+        IrType::Result(err, _) => matches!(**err, IrType::Error),
+        _ => false,
+    }
+}
+
+/// A short, plain-English name for `main`'s inadmissible return type, for the
+/// [`LowerError::NonEntryMain`] message ("This `main` is an `Int`."). Only the
+/// shapes a reader can name plainly get a concrete word; anything else reads as
+/// "not a `Task`" so the message never leaks an internal type spelling.
+fn non_entry_main_type_name(ret: &IrType) -> Box<str> {
+    let word = match ret {
+        IrType::Int => "Int",
+        IrType::Float => "Float",
+        IrType::Bool => "Bool",
+        IrType::Str => "String",
+        IrType::Char => "Char",
+        IrType::Bytes => "Bytes",
+        IrType::List(_) => "List",
+        IrType::Maybe(_) => "Maybe",
+        IrType::Tuple(_) => "tuple",
+        IrType::Record(_) => "record",
+        IrType::Set(_) => "Set",
+        IrType::Dict(..) => "Dict",
+        IrType::Fun(..) | IrType::SharedFun(..) => "function",
+        IrType::Cmd(_) => "Cmd",
+        IrType::Sub(_) => "Sub",
+        IrType::Decoder(_) => "Decoder",
+        _ => "value that is not a `Task`",
+    };
+    Box::from(word)
+}
+
 /// Does this pattern bind the symbol `target`?
 ///
 /// Used by [`rewrite_var_free_occurrences`] to detect shadow bindings — when a
@@ -10133,6 +10185,10 @@ impl<'a> Lowerer<'a> {
 
         let mut funcs = Vec::with_capacity(self.m.defs.len());
         let mut entry = None;
+        // The `main` def's name span, for a source-anchored entry-admissibility
+        // diagnostic (`IPE-L0136`). Captured from the canonical def alongside the
+        // entry `FuncId`, since a lowered `Func` carries no span.
+        let mut entry_span: Option<Span> = None;
         // Externally-invoked export roots besides `main` that dead-function
         // elimination must keep. The wasm-hydration island projection is called
         // only by generated `hydrate` glue, never from user code, so the call
@@ -10166,6 +10222,7 @@ impl<'a> Lowerer<'a> {
             func.body = clear_let_bound_task_fail_pins(func.body);
             if self.interner.resolve(func.name) == Some("main") {
                 entry = Some(func.id);
+                entry_span = Some(def.name().span);
             }
             if self.interner.resolve(func.name) == Some(ipe_ir::HYDRATION_PROJECTION_NAME) {
                 export_roots.push(func.id);
@@ -10226,6 +10283,37 @@ impl<'a> Lowerer<'a> {
         if prune_dead {
             let reachable = reachable_func_ids(&funcs, entry, &export_roots);
             funcs.retain(|f| reachable.contains(&f.id));
+        }
+
+        // Entry-admissibility gate (`IPE-L0136`): the emitted `fn main` calls the
+        // program's `main` with no arguments and wraps it in the runtime's single
+        // run site (`block_on(ipe_main())`), which needs a `Task`. A `main` that
+        // takes parameters (`block_on(ipe_main())` supplies none) or whose type
+        // cannot reach that site as a `Task` (an `Int`, a `String`, a function, …)
+        // would ship a crate that cannot build — the cardinal SEAL breach. Reject
+        // it here, before emission, with a friendly teaching diagnostic. Applied
+        // only when this is the real demanded entry (`prune_dead` — `main`'s home
+        // is the module being built): the package-capability audit lowers sibling
+        // modules under a merged `main` that is not the demanded entry, and must
+        // not be gated on its shape.
+        if prune_dead
+            && let Some(main_fn) = entry.and_then(|e| funcs.iter().find(|f| f.id == e))
+            && (!main_fn.params.is_empty() || !main_ret_is_runnable_entry(&main_fn.ret))
+        {
+            // A `main` that takes arguments is a function, not the single effect a
+            // program runs — name it as such regardless of its result type.
+            let found = if main_fn.params.is_empty() {
+                non_entry_main_type_name(&main_fn.ret)
+            } else {
+                Box::from("function")
+            };
+            return Err((
+                Diagnostic::Lower {
+                    span: entry_span.unwrap_or(Span::DUMMY),
+                    msg: LowerError::NonEntryMain { found },
+                },
+                self.m.name.clone(),
+            ));
         }
 
         let mut kernel_usage = KernelUsage::default();

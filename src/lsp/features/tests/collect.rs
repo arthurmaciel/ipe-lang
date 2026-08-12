@@ -40,8 +40,7 @@ fn diags_for<'a>(all: &'a [ModuleDiagnostics], module: &[&str]) -> &'a ModuleDia
 }
 
 const DEP_A: &str = "module A exposing (visible)\n\nvisible = 1\n";
-const ENTRY_OK: &str =
-    "module Main exposing (main)\n\nimport A exposing (visible)\n\nmain = visible\n";
+const ENTRY_OK: &str = "module Main exposing (main)\n\nimport A exposing (visible)\nimport Ipe.Io as Io\nimport Ipe.String as String\n\nmain : Task Error ()\nmain =\n    Io.println (String.fromInt visible)\n";
 const ENTRY_TYPE_ERROR: &str = "module Main exposing (main)\n\nimport A exposing (visible)\n\n\
     main : Int\n\
     main = \"not an int\"\n";
@@ -149,7 +148,7 @@ fn apply_edit(text: &str, edit: &TextEdit) -> String {
 #[test]
 fn add_import_quick_fix_inserts_the_missing_import_and_clears_the_diagnostic() {
     // `String.fromInt` names the Tier-C `Ipe.String` module with no import.
-    let src = "module Main exposing (main)\n\nmain = String.fromInt 0\n";
+    let src = "module Main exposing (main)\n\nimport Ipe.Io as Io\n\nmain =\n    Io.println (String.fromInt 0)\n";
     let mut db = IpeDatabase::new();
     let entry = file(&db, &["Main"], src);
     let root = root_of(&db, &[(&["Main"], entry)]);
@@ -224,7 +223,7 @@ fn add_import_quick_fix_sorts_among_existing_imports() {
     let src = "module Main exposing (main)\n\n\
         import Ipe.List as List\n\
         import Ipe.Task as Task\n\n\
-        main = String.fromInt (List.length [])\n";
+        main = Task.succeed (String.fromInt (List.length []))\n";
     let mut db = IpeDatabase::new();
     let entry = file(&db, &["Main"], src);
     let root = root_of(&db, &[(&["Main"], entry)]);

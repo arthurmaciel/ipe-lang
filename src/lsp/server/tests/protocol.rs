@@ -14,7 +14,7 @@ use lsp_types::notification::{Notification as _, PublishDiagnostics};
 use ipe_lsp_server::{LoadError, LoadedFile, LoadedProject, ModuleOrigin, ProjectLoader};
 
 const VIRTUAL_PATH: &str = "/ipe-lsp-protocol-test/Main.ipe";
-const CLEAN: &str = "module Main exposing (main)\n\nmain : Int\nmain = 1\n";
+const CLEAN: &str = "module Main exposing (main)\n\nimport Ipe.Io as Io\nimport Ipe.String as String\n\nmain : Task Error ()\nmain =\n    Io.println (String.fromInt 1)\n";
 const TYPE_ERROR: &str = "module Main exposing (main)\n\nmain : Int\nmain = \"nope\"\n";
 
 /// Resolves a single-module virtual project from the open buffer — the
@@ -181,7 +181,7 @@ fn did_open_publishes_compiler_diagnostics_and_did_change_clears_them() {
     let cleared = await_diagnostics(&client, &uri, <[serde_json::Value]>::is_empty);
     assert!(cleared.is_empty());
 
-    // Hover over the `1` in `main = 1` (line 3, character 7) → `Int`.
+    // Hover over the `1` in `String.fromInt 1` (line 7, character 31) → `Int`.
     client
         .sender
         .send(Message::Request(Request::new(
@@ -189,7 +189,7 @@ fn did_open_publishes_compiler_diagnostics_and_did_change_clears_them() {
             "textDocument/hover".to_owned(),
             serde_json::json!({
                 "textDocument": { "uri": uri },
-                "position": { "line": 3, "character": 7 }
+                "position": { "line": 7, "character": 31 }
             }),
         )))
         .expect("send hover");
@@ -221,7 +221,7 @@ fn did_open_publishes_compiler_diagnostics_and_did_change_clears_them() {
     assert_eq!(names, vec!["main"], "{symbols}");
 
     // An incremental (ranged) edit re-introduces the error: replace `1`
-    // on line 3 (`main = 1`) with a string literal.
+    // on line 7 (`String.fromInt 1`) with a string literal.
     client
         .sender
         .send(Message::Notification(Notification::new(
@@ -230,8 +230,8 @@ fn did_open_publishes_compiler_diagnostics_and_did_change_clears_them() {
                 "textDocument": { "uri": uri, "version": 3 },
                 "contentChanges": [{
                     "range": {
-                        "start": { "line": 3, "character": 7 },
-                        "end": { "line": 3, "character": 8 }
+                        "start": { "line": 7, "character": 31 },
+                        "end": { "line": 7, "character": 32 }
                     },
                     "text": "\"nope\""
                 }]

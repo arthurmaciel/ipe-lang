@@ -933,7 +933,9 @@ fn point_free_alias_instantiating_a_clone_slot_lowers_cleanly() -> DResult<()> {
     // type whose bound is satisfiable — so it must lower cleanly, never a false
     // IPE-L0107. Only a fn-embedding binding is a real E0277.
     let mut i = Interner::new();
-    let main = i.intern("main")?;
+    // A non-`main` def name: this exercises point-free-alias clone-slot lowering,
+    // not the program-entry admissibility gate (which fires only for `main`).
+    let probe = i.intern("probe")?;
     let wrap = i.intern("wrap")?;
     let w = i.intern("w")?;
     let value = i.intern("value")?;
@@ -967,7 +969,7 @@ fn point_free_alias_instantiating_a_clone_slot_lowers_cleanly() -> DResult<()> {
     );
     let def = canon::Def::Typed {
         home: vec![],
-        name: Located::new(Span::new(20, 24), main),
+        name: Located::new(Span::new(20, 24), probe),
         free_vars: Vec::new(),
         patterns: Vec::new(),
         body,
@@ -1093,7 +1095,9 @@ fn hof_argument_matching_a_declared_arrow_stays_accepted() -> DResult<()> {
     // stays silent and the already-supported `Box<dyn Fn>` parameter emits. The
     // gate rejects ONLY a variable bound to a function, never a declared arrow.
     let mut i = Interner::new();
-    let main = i.intern("main")?;
+    // A non-`main` def name: this exercises higher-order-argument lowering, not
+    // the program-entry admissibility gate (which fires only for `main`).
+    let probe = i.intern("probe")?;
     let apply = i.intern("apply")?;
     let n = i.intern("n")?;
     let int_name = i.intern("Int")?;
@@ -1127,7 +1131,7 @@ fn hof_argument_matching_a_declared_arrow_stays_accepted() -> DResult<()> {
     );
     let def = canon::Def::Typed {
         home: vec![],
-        name: Located::new(Span::new(30, 34), main),
+        name: Located::new(Span::new(30, 34), probe),
         free_vars: Vec::new(),
         patterns: Vec::new(),
         body,

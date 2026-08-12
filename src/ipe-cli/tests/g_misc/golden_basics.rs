@@ -122,8 +122,8 @@ fn pipeline_error_renders_with_code_and_explain_pointer() {
 
     let rendered = err.to_string();
     assert!(
-        rendered.starts_with("-- ") && rendered.contains("ERROR"),
-        "rendered error must lead with a title rule, got:\n{rendered}"
+        rendered.starts_with("-- ") && !rendered.contains("(warning)"),
+        "rendered error must lead with an error title rule, got:\n{rendered}"
     );
     assert!(
         rendered.contains("IPE-"),

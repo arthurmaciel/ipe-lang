@@ -369,6 +369,20 @@ fn golden_lower_lawless_effect_discard() -> Result<(), Box<dyn std::error::Error
     check_golden("lower_lawless_effect_discard", &d, "test.ipe", source)
 }
 
+#[test]
+fn golden_lower_non_entry_main() -> Result<(), Box<dyn std::error::Error>> {
+    // IPE-L0136: `main` is a value, not the `Task Error ()` a runnable program
+    // entry must be. The caret points at the `main` def name.
+    let source = "module Main exposing (main)\n\nmain : Int\nmain = 42\n";
+    let d = Diagnostic::Lower {
+        span: Span::new(40, 44),
+        msg: LowerError::NonEntryMain {
+            found: Box::from("Int"),
+        },
+    };
+    check_golden("lower_non_entry_main", &d, "test.ipe", source)
+}
+
 // ---------------------------------------------------------------------------
 // FFI family (IPE-F* / FFI-adjacent name diagnostics)
 // ---------------------------------------------------------------------------

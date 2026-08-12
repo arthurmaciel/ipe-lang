@@ -286,7 +286,7 @@ mod tests {
 
     #[test]
     fn hello_world_compiles_and_emits_rust() {
-        let src = "module Main exposing (main)\n\nmain : Int\nmain = 1\n";
+        let src = "module Main exposing (main)\n\nimport Ipe.Io as Io\n\nmain : Task Error ()\nmain =\n    Io.println \"hello\"\n";
         let outcome = compile(src);
         assert!(
             outcome.ok,
