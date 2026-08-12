@@ -148,7 +148,7 @@ fn apply_edit(text: &str, edit: &TextEdit) -> String {
 #[test]
 fn add_import_quick_fix_inserts_the_missing_import_and_clears_the_diagnostic() {
     // `String.fromInt` names the Tier-C `Ipe.String` module with no import.
-    let src = "module Main exposing (main)\n\nmain = String.fromInt 0\n";
+    let src = "module Main exposing (main)\n\nimport Ipe.Io as Io\n\nmain =\n    Io.println (String.fromInt 0)\n";
     let mut db = IpeDatabase::new();
     let entry = file(&db, &["Main"], src);
     let root = root_of(&db, &[(&["Main"], entry)]);
