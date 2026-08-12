@@ -2,10 +2,10 @@
 
 I found a number here, but I was expecting an identifier.
 
- --> test.ipe:3:7
+ --> test.ipe:4:5
   |
-3 | main =
-  |       ^ found a number, expected an identifier
+4 |     42 True
+  |     ^^ found a number, expected an identifier
   |
 
 IPE-P0001 · run `ipe explain IPE-P0001`

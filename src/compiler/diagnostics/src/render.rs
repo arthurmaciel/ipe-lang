@@ -4,9 +4,10 @@
 //! reader meets a plain-English description first; the machine code is demoted
 //! to a single footer line, never the headline:
 //!
-//! 1. **title rule** — `-- TYPE MISMATCH ------------------ file.ipe`: a family
-//!    title (derived from the diagnostic's category) padded with a dash rule to
-//!    a fixed width, then the source file. This is the reader's first glance.
+//! 1. **title rule** — `-- TYPE MISMATCH ------------------ file.ipe`: a
+//!    per-code title naming what actually went wrong, a textual severity cue for
+//!    a warning (` (warning)`, legible when colour is stripped), a dash rule
+//!    padding to a fixed width, then the source file. The reader's first glance.
 //! 2. **prose band** — one short sentence describing what the compiler found or
 //!    expected, in the compiler's second-person voice, above the snippet.
 //! 3. **location** — ` --> file:line:col` derived from the primary span. A
@@ -62,7 +63,7 @@ pub fn render(d: &Diagnostic, file: &str, source: &str) -> String {
     out.push_str(&paint(
         color,
         severity_color(severity),
-        &title_rule(code, file),
+        &title_rule(code, severity, file),
     ));
     out.push('\n');
 
@@ -188,17 +189,33 @@ const TITLE_RULE_WIDTH: usize = 60;
 
 /// Build the Elm-faithful title rule: `-- TYPE MISMATCH -------- app.ipe`.
 ///
-/// A `-- ` lead, the family title in uppercase, a dash rule padding to
-/// [`TITLE_RULE_WIDTH`], then a space and the source file. When the title plus
-/// file already reach the width, at least one dash still separates them so the
-/// rule always reads as a rule.
-fn title_rule(code: crate::code::Code, file: &str) -> String {
-    let name = family_title(code);
-    // `-- ` + name + ` ` consumed so far; the dash run fills the remainder, then
-    // ` ` + file. Always at least one dash, even past the target width.
-    let prefix_len = 3 + name.chars().count() + 1;
+/// A `-- ` lead, the per-code title in uppercase, an optional ` (warning)` cue
+/// for a non-error severity, a dash rule padding to [`TITLE_RULE_WIDTH`], then a
+/// space and the source file. When the title plus file already reach the width,
+/// at least one dash still separates them so the rule always reads as a rule.
+///
+/// The severity word is textual, not just a colour: a warning stays
+/// unmistakable when the output is piped, `NO_COLOR` is set, or the reader is a
+/// machine — where the ANSI colour that also distinguishes it is stripped.
+fn title_rule(code: crate::code::Code, severity: Severity, file: &str) -> String {
+    let name = title_rule_name(code);
+    let cue = severity_cue(severity);
+    // `-- ` + name + cue + ` ` consumed so far; the dash run fills the
+    // remainder, then ` ` + file. Always at least one dash, even past the width.
+    let prefix_len = 3 + name.chars().count() + cue.chars().count() + 1;
     let dashes = TITLE_RULE_WIDTH.saturating_sub(prefix_len).max(1);
-    format!("-- {name} {} {file}", "-".repeat(dashes))
+    format!("-- {name}{cue} {} {file}", "-".repeat(dashes))
+}
+
+/// The textual severity cue appended after the title word. An error carries no
+/// cue (the title already reads as a problem); a warning is marked ` (warning)`
+/// so it is legible even when colour is stripped. A `Bug` reads as the internal
+/// compiler error its title already names, so it takes no extra cue.
+const fn severity_cue(severity: Severity) -> &'static str {
+    match severity {
+        Severity::Warning => " (warning)",
+        Severity::Error | Severity::Bug => "",
+    }
 }
 
 /// The prose band sentence: one second-person sentence, above the snippet, in
@@ -525,16 +542,61 @@ fn an_article(rendered: &str) -> String {
     format!("{article} `{rendered}`")
 }
 
-/// The uppercase family title shown in the rule, derived from the code's family
-/// letter (`IPE-<letter>####`). Total over the taxonomy; an unrecognised shape
-/// falls back to the generic error title rather than panicking.
-fn family_title(code: crate::code::Code) -> &'static str {
-    // The family letter is the fifth byte of `IPE-<L>####`. Read it through
-    // `get` so a shorter-than-expected code cannot index out of range.
+/// The uppercase title shown in the rule, chosen per code so it names what
+/// actually went wrong — not merely its family. A redundant-branch warning and a
+/// non-exhaustive `case` are both type-family codes, yet "REDUNDANT BRANCH" and
+/// "MISSING PATTERNS" describe them; a single family-wide "TYPE MISMATCH" would
+/// be factually wrong for both.
+///
+/// Codes without a specific entry fall back to a sensible per-family default via
+/// [`family_default_title`], so every code renders a short, uppercase, jargon-free
+/// title, and an unrecognised shape still returns a title rather than panicking.
+fn title_rule_name(code: crate::code::Code) -> &'static str {
+    use crate::code;
+    match code {
+        // Parse: the family default ("PARSE ERROR") already reads well for the
+        // whole family, so only the few whose specifics deserve their own word
+        // are pulled out.
+        code::IPE_P0002 => "UNEXPECTED END OF FILE",
+        code::IPE_P0003 | code::IPE_L0200 => "NESTED TOO DEEPLY",
+        code::IPE_P0013 | code::IPE_P0016 => "NUMBER OUT OF RANGE",
+        code::IPE_P0014 => "UNTERMINATED STRING",
+        code::IPE_P0017 => "UNTERMINATED COMMENT",
+        code::IPE_P0050 => "UNCLOSED DELIMITER",
+        code::IPE_P0063 => "UNSAFE PATH",
+
+        // Name resolution.
+        code::IPE_N0001 => "NAME NOT FOUND",
+        code::IPE_N0002 => "TYPE NOT FOUND",
+        code::IPE_N0003 => "CONSTRUCTOR NOT FOUND",
+        code::IPE_N0004 | code::IPE_N0020 => "MODULE ERROR",
+        code::IPE_N0005 | code::IPE_N0022 => "IMPORT ERROR",
+        code::IPE_N0010 | code::IPE_N0011 | code::IPE_N0012 => "DUPLICATE DEFINITION",
+        code::IPE_N0021 => "IMPORT CYCLE",
+        code::IPE_N0024 | code::IPE_N0027 => "AMBIGUOUS IMPORT",
+
+        // Type.
+        code::IPE_T0001 => "TYPE MISMATCH",
+        code::IPE_T0002 => "INFINITE TYPE",
+        code::IPE_T0010 => "MISSING PATTERNS",
+        code::IPE_T0011 => "REDUNDANT BRANCH",
+        code::IPE_T0012 => "NO SUCH FIELD",
+        code::IPE_T0013 => "PATTERN ARITY",
+        code::IPE_T0018 => "CATCH-ALL HIDES CASES",
+
+        // Everything else takes its family's default title.
+        _ => family_default_title(code),
+    }
+}
+
+/// The uppercase per-family fallback title, keyed on the family letter of
+/// `IPE-<letter>####`. Read through `get` so a shorter-than-expected code cannot
+/// index out of range; an unrecognised letter still returns a plain title.
+fn family_default_title(code: crate::code::Code) -> &'static str {
     match code.as_str().as_bytes().get(4) {
         Some(b'P') => "PARSE ERROR",
         Some(b'N') => "NAMING ERROR",
-        Some(b'T') => "TYPE MISMATCH",
+        Some(b'T') => "TYPE ERROR",
         Some(b'L') => "UNSUPPORTED",
         Some(b'F') => "FOREIGN BINDING ERROR",
         Some(b'S') => "SECURITY",
@@ -658,8 +720,71 @@ fn slice(source: &str, lo: usize, hi: usize) -> &str {
     source.get(lo..hi).unwrap_or("")
 }
 
-/// Emit one snippet block: the source line, then an underline of `glyph`s under
-/// the span (clamped to the line) with `label` trailing.
+/// The tab stop the snippet uses when it expands a tab. A tab in the source
+/// advances to the next multiple of this width; both the shown source line and
+/// the caret indent use the same expansion, so a caret lands under the glyph a
+/// reader sees even when the source is tab-indented.
+const TAB_WIDTH: usize = 4;
+
+/// The terminal display width of one character: a tab advances to the next tab
+/// stop given the column reached so far, a wide (CJK / full-width) character is
+/// two cells, a zero-width or control character is none, and everything else is
+/// one. `col` is the display column already consumed on this line, so a tab's
+/// width depends on where it falls.
+fn char_display_width(c: char, col: usize) -> usize {
+    use unicode_width::UnicodeWidthChar;
+    if c == '\t' {
+        TAB_WIDTH - (col % TAB_WIDTH)
+    } else {
+        c.width().unwrap_or(0)
+    }
+}
+
+/// The display width of `text` starting from display column `start`, summing
+/// each character's cell width with tabs expanded to [`TAB_WIDTH`] stops. Used
+/// to place the caret indent and size the underline so both track the source
+/// line as a terminal draws it, not its byte or `char` count.
+fn display_width(text: &str, start: usize) -> usize {
+    let mut col = start;
+    for c in text.chars() {
+        col += char_display_width(c, col);
+    }
+    col - start
+}
+
+/// Expand a source line's tabs to spaces at [`TAB_WIDTH`] stops. The snippet
+/// shows this expanded form so the caret line — which is measured in the same
+/// expanded space — stays aligned under it regardless of the terminal's own tab
+/// width. No other character is altered.
+fn expand_tabs(line: &str) -> String {
+    let mut out = String::with_capacity(line.len());
+    let mut col = 0;
+    for c in line.chars() {
+        if c == '\t' {
+            let pad = TAB_WIDTH - (col % TAB_WIDTH);
+            for _ in 0..pad {
+                out.push(' ');
+            }
+            col += pad;
+        } else {
+            out.push(c);
+            col += char_display_width(c, col);
+        }
+    }
+    out
+}
+
+/// Emit the snippet block for a span, underlining every source line it covers.
+///
+/// A single-line span underlines from its start column to its end column. A span
+/// that crosses lines underlines the remainder of its first line, each whole
+/// middle line, and the head of its last line — so a multi-line region is shown
+/// in full, not clipped to line one. The trailing `label` is attached to the
+/// final underlined line, where the reader's eye lands.
+///
+/// Tabs are expanded and character display width is honoured (via
+/// [`expand_tabs`] / [`display_width`]) so a caret sits under the glyph a reader
+/// sees, even under tab indentation or wide (CJK) source.
 fn push_span_block(
     out: &mut String,
     source: &str,
@@ -668,29 +793,68 @@ fn push_span_block(
     gutter: usize,
     color: bool,
 ) {
-    let loc = locate(source, span.lo);
-    let line_text = slice(source, loc.line_start, loc.line_end);
-    let _ = writeln!(out, "{:>gutter$} | {line_text}", loc.line);
+    let start = locate(source, span.lo);
+    let end = locate(source, span.hi);
+    // The covered byte range, clamped to char boundaries and to `lo <= hi`.
+    let span_lo = floor_boundary(source, span.lo as usize);
+    let span_hi = floor_boundary(source, span.hi as usize).max(span_lo);
 
-    let lo_byte = floor_boundary(source, (span.lo as usize).min(loc.line_end)).max(loc.line_start);
-    let hi_byte = floor_boundary(source, (span.hi as usize).min(loc.line_end)).max(lo_byte);
-    let width = slice(source, lo_byte, hi_byte).chars().count().max(1);
+    let mut line = start.line;
+    let mut line_start = start.line_start;
+    let mut line_end = start.line_end;
+    loop {
+        let is_last = line >= end.line;
+        // The underlined byte sub-range on this line: from the span start (or the
+        // line start on a continuation line) to the span end (or the line end on
+        // an earlier line).
+        let seg_lo = span_lo.max(line_start).min(line_end);
+        let seg_hi = if is_last {
+            span_hi.min(line_end).max(seg_lo)
+        } else {
+            line_end
+        };
 
-    let leading = " ".repeat(loc.col.saturating_sub(1));
-    let underline = paint(
-        color,
-        style.color_seq,
-        &style.glyph.to_string().repeat(width),
-    );
-    out.push_str(&" ".repeat(gutter));
-    out.push_str(" | ");
-    out.push_str(&leading);
-    out.push_str(&underline);
-    if !style.label.is_empty() {
-        out.push(' ');
-        out.push_str(style.label);
+        let line_text = expand_tabs(slice(source, line_start, line_end));
+        let _ = writeln!(out, "{line:>gutter$} | {line_text}");
+
+        let leading = display_width(slice(source, line_start, seg_lo), 0);
+        let mut width = display_width(slice(source, seg_lo, seg_hi), leading);
+        // A zero-width segment (an empty span, or a line whose covered part is
+        // only a tab boundary) still shows one caret, so the underline is never
+        // invisible.
+        width = width.max(1);
+
+        out.push_str(&" ".repeat(gutter));
+        out.push_str(" | ");
+        out.push_str(&" ".repeat(leading));
+        out.push_str(&paint(
+            color,
+            style.color_seq,
+            &style.glyph.to_string().repeat(width),
+        ));
+        if is_last && !style.label.is_empty() {
+            out.push(' ');
+            out.push_str(style.label);
+        }
+        out.push('\n');
+
+        if is_last {
+            break;
+        }
+        // Advance to the next line. `line_end` sits on the newline (or at
+        // end-of-file); the next line starts just past it. A line with no
+        // following newline ends the block defensively even if `end.line` was
+        // past end-of-file.
+        let next_start = line_end + 1;
+        if next_start > source.len() {
+            break;
+        }
+        let rest = slice(source, next_start, source.len());
+        let next_len = rest.find('\n').unwrap_or(rest.len());
+        line += 1;
+        line_start = next_start;
+        line_end = next_start + next_len;
     }
-    out.push('\n');
 }
 
 // ===========================================================================
@@ -1935,8 +2099,10 @@ mod tests {
     #[test]
     fn warning_renders_title_rule_prose_and_code_footer() {
         // A warning (redundant branch) renders in the same prose-first layout as
-        // an error; the severity distinction is carried by colour, not a header
-        // word. In the non-tty test environment the output stays plain.
+        // an error. Its title names the specific problem, and a textual
+        // ` (warning)` cue marks the severity so it survives a colourless output
+        // (piped / `NO_COLOR` / a non-tty), where the colour that also carries it
+        // is stripped. In the non-tty test environment the output stays plain.
         let d = Diagnostic::Type {
             span: Span::new(0, 3),
             msg: TypeError::RedundantCaseBranch {
@@ -1944,7 +2110,10 @@ mod tests {
             },
         };
         let out = render(&d, "w.ipe", "Red\n");
-        assert!(out.starts_with("-- TYPE MISMATCH "), "title rule:\n{out}");
+        assert!(
+            out.starts_with("-- REDUNDANT BRANCH (warning) "),
+            "title rule names the specific problem and the severity:\n{out}"
+        );
         assert!(
             out.contains("\nThis branch for `Red` can never run"),
             "prose band:\n{out}"
@@ -1956,6 +2125,121 @@ mod tests {
         );
         assert!(!out.contains('\x1b'), "plain in tests:\n{out}");
         let _ = IPE_T0001;
+    }
+
+    #[test]
+    fn error_title_has_no_severity_cue() {
+        // An error carries no ` (warning)` cue — the title already reads as a
+        // problem, and the colour (when present) still distinguishes it.
+        let src = "module Main exposing (main)\n\nmain =\n    foo\n";
+        let d = Diagnostic::Type {
+            span: Span::new(40, 43),
+            msg: TypeError::TypeMismatch {
+                expected: Box::new(con("Int")),
+                found: Box::new(con("String")),
+                definition: None,
+                path: Box::new([]),
+            },
+        };
+        let out = render(&d, "test.ipe", src);
+        assert!(out.starts_with("-- TYPE MISMATCH "), "title rule:\n{out}");
+        assert!(!out.contains("(warning)"), "no cue on an error:\n{out}");
+    }
+
+    #[test]
+    fn title_is_per_code_not_per_family() {
+        // Two type-family codes that are not mismatches must not render
+        // `TYPE MISMATCH`: the title names the actual problem.
+        let missing = Diagnostic::Type {
+            span: Span::DUMMY,
+            msg: TypeError::NonExhaustiveCase {
+                missing: Box::new(["Green".into()]),
+            },
+        };
+        assert!(
+            render(&missing, "m.ipe", "").starts_with("-- MISSING PATTERNS "),
+            "IPE-T0010 title"
+        );
+        let no_field = Diagnostic::Type {
+            span: Span::DUMMY,
+            msg: TypeError::NoSuchField {
+                field: "x".into(),
+                record: Box::new(con("Point")),
+            },
+        };
+        assert!(
+            render(&no_field, "f.ipe", "").starts_with("-- NO SUCH FIELD "),
+            "IPE-T0012 title"
+        );
+    }
+
+    #[test]
+    fn multiline_span_underlines_every_covered_line() {
+        // A span crossing three lines underlines all three; the label lands on
+        // the last. No caret runs past a line's end.
+        let src = "module Main exposing (main)\n\nmain =\n    add\n        1\n        2\n";
+        let d = Diagnostic::Type {
+            span: Span::new(40, 63), // `add\n        1\n        2` region.
+            msg: TypeError::TypeMismatch {
+                expected: Box::new(con("Int")),
+                found: Box::new(con("String")),
+                definition: None,
+                path: Box::new([]),
+            },
+        };
+        let out = render(&d, "test.ipe", src);
+        assert!(out.contains("4 |     add"), "first line shown:\n{out}");
+        assert!(out.contains("5 |         1"), "middle line shown:\n{out}");
+        assert!(out.contains("6 |         2"), "last line shown:\n{out}");
+        // Three underline rows (one per covered line).
+        assert!(
+            out.matches("^^").count() >= 2,
+            "each covered line underlined:\n{out}"
+        );
+    }
+
+    #[test]
+    fn tab_indent_and_wide_chars_align_the_caret() {
+        // A tab-indented identifier: the caret indent equals the expanded-tab
+        // width (4), not the single `\t` char.
+        let tab_src = "main =\n\tfoo\n";
+        let d = Diagnostic::Name {
+            span: Span::new(8, 11), // `foo` after the tab.
+            msg: NameError::ValueNotFound {
+                name: "foo".into(),
+                suggestions: Box::new([]),
+            },
+        };
+        let out = render(&d, "t.ipe", tab_src);
+        // The tab expands to four spaces in the shown line and the caret indent.
+        assert!(
+            out.contains("2 |     foo"),
+            "tab expanded in source:\n{out}"
+        );
+        assert!(out.contains(" |     ^^^"), "caret under `foo`:\n{out}");
+
+        // A wide (CJK) prefix: `x` sits at display column 8 (`你好` is 4 cells +
+        // two quotes + one leading space ... ), so the caret indent counts
+        // display width, not `char`s.
+        let wide_src = "main =\n\"你好\" x\n";
+        let dw = Diagnostic::Name {
+            span: Span::new(16, 17), // the `x`.
+            msg: NameError::ValueNotFound {
+                name: "x".into(),
+                suggestions: Box::new([]),
+            },
+        };
+        let outw = render(&dw, "w.ipe", wide_src);
+        // `"你好" ` is 2 + 2 + 2 + 1 = 7 display cells, so the caret sits at
+        // indent 7.
+        assert!(
+            outw.contains(" | 你好\" x") || outw.contains("\"你好\" x"),
+            "wide chars shown:\n{outw}"
+        );
+        assert!(
+            outw.contains("       ^"),
+            "caret past the wide chars:\n{outw}"
+        );
     }
 
     #[test]

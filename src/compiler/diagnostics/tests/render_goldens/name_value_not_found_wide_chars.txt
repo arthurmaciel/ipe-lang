@@ -1,0 +1,11 @@
+-- NAME NOT FOUND ------------------------------------------ test.ipe
+
+I can't find `x` in scope.
+
+ --> test.ipe:4:9
+  |
+4 |     "你好" ++ x
+  |           ^ I don't know this name
+  |
+
+IPE-N0001 · run `ipe explain IPE-N0001`

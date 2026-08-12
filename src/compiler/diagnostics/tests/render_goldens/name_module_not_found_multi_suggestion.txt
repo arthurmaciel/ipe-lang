@@ -1,4 +1,4 @@
--- NAMING ERROR -------------------------------------------- test.ipe
+-- MODULE ERROR -------------------------------------------- test.ipe
 
 I couldn't find the module `Httpp` on disk.
 

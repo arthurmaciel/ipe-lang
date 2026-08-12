@@ -1,11 +1,11 @@
--- TYPE MISMATCH ------------------------------------------- test.ipe
+-- REDUNDANT BRANCH (warning) ------------------------------ test.ipe
 
 This branch for `Red` can never run — an earlier branch already handles it.
 
- --> test.ipe:7:15
+ --> test.ipe:8:9
   |
-7 |         Red -> 1
-  |               ^^ `Red` is already handled above
+8 |         Red -> 2
+  |         ^^^ `Red` is already handled above
   |
 
 IPE-T0011 · run `ipe explain IPE-T0011`

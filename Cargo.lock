@@ -2192,6 +2192,7 @@ name = "ipe_diagnostics"
 version = "0.1.47"
 dependencies = [
  "ipe_path_core",
+ "unicode-width",
 ]
 
 [[package]]

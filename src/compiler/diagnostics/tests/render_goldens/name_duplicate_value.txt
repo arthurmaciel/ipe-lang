@@ -1,11 +1,11 @@
--- NAMING ERROR -------------------------------------------- test.ipe
+-- DUPLICATE DEFINITION ------------------------------------ test.ipe
 
 `x` is already defined, so I found two definitions with the same name.
 
- --> test.ipe:3:6
+ --> test.ipe:5:1
   |
-3 | x = 1
-  |      ^ `x` is redefined here
+5 | x = 2
+  | ^ `x` is redefined here
   |
 3 | x = 1
   | - first defined here

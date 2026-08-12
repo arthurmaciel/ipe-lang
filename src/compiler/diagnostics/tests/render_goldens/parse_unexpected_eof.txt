@@ -1,4 +1,4 @@
--- PARSE ERROR --------------------------------------------- test.ipe
+-- UNEXPECTED END OF FILE ---------------------------------- test.ipe
 
 The file ended while I was still in the middle of reading something.
 

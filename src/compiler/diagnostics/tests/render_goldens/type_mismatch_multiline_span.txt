@@ -4,11 +4,12 @@ I was expecting this to be an `Int`, but it's a `String`.
 
  --> test.ipe:5:5
   |
-5 |     "hello"
-  |     ^^^^^^^ expected Int, found String
-  |
-3 | main : Int
-  |        --- the type was fixed here
+5 |     add
+  |     ^^^
+6 |         1
+  | ^^^^^^^^^
+7 |         2
+  | ^^^^^^^^^ expected Int, found String
   |
 
 IPE-T0001 · run `ipe explain IPE-T0001`
