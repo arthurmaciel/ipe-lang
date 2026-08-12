@@ -25,7 +25,7 @@ rec =
 
 main =
     let
-        _ =
+        _unused =
             singletonDict rec 42
     in
     Io.println (String.fromInt 0)

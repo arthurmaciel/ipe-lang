@@ -15,6 +15,7 @@ module Main exposing (main)
 -- registration type-checks) without being constructed.
 
 import Ipe.Io as Io
+import Ipe.Task as Task
 import Ipe.Error
 import Ipe.String
 
@@ -49,29 +50,13 @@ describe err =
 
 
 main =
-    let
-        base =
-            Error.io "disk full"
-
-        withHttp =
-            Error.withDetails (HttpStatus 404) base
-
-        withJson =
-            Error.withDetails (JsonDecode "unexpected token") base
-
-        withCustom =
-            Error.withDetails (Custom "custom detail") base
-
-        _ =
-            Io.println (describe base)
-
-        _ =
-            Io.println (describe withHttp)
-
-        _ =
-            Io.println (describe withJson)
-
-        _ =
-            Io.println (describe withCustom)
-    in
-    Io.println "done"
+    do
+        base = Error.io "disk full"
+        withHttp = Error.withDetails (HttpStatus 404) base
+        withJson = Error.withDetails (JsonDecode "unexpected token") base
+        withCustom = Error.withDetails (Custom "custom detail") base
+        Io.println (describe base)
+        Io.println (describe withHttp)
+        Io.println (describe withJson)
+        Io.println (describe withCustom)
+        Io.println "done"

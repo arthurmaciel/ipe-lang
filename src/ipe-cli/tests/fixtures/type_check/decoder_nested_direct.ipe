@@ -13,6 +13,6 @@ userDecoder =
 
 main =
     let
-        _ = userDecoder
+        _unused = userDecoder
     in
     Io.println "nested"

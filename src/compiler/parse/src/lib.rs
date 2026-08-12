@@ -352,23 +352,27 @@ mod tests {
     }
 
     #[test]
-    fn do_bare_line_desugars_to_and_then_with_wildcard() {
-        // A bare effectful line chains via `Task.andThen` with a `\_ -> …` lambda.
+    fn do_bare_line_desugars_to_wildcard_let() {
+        // A bare effectful line sequences via `let _ = <effect> in <rest>`, not a
+        // `Task.andThen (\_ -> …)` closure: the `let _`/`TaskSeq` form lowers with
+        // no per-statement lambda, so a long `do` block stays a shallow chain
+        // instead of a deep nest of inference-scope-opening closures.
         let mut i = Interner::new();
         let src = format!("{HDR}main =\n    do\n        step\n        done\n");
         let m = parse_module(&src, &mut i).expect("do block parses");
         let main = find_value(&m, &i, "main").expect("main present");
-        assert!(is_task_call(&main.body.value, &i, "andThen"));
-        if let Expr_::Call(_, args) = &main.body.value {
-            assert!(
-                matches!(
-                    args.first().map(|a| &a.value),
-                    Some(Expr_::Lambda(pats, _))
-                        if matches!(pats.first().map(|p| &p.value), Some(Pattern_::PAnything))
-                ),
-                "a bare run must discard the result via a wildcard lambda"
-            );
-        }
+        assert!(
+            matches!(
+                &main.body.value,
+                Expr_::Let(bindings, _)
+                    if matches!(
+                        bindings.first().map(|b| &b.pat.value),
+                        Some(Pattern_::PAnything)
+                    )
+            ),
+            "a bare run must desugar to `let _ = <effect> in <rest>`, got {:?}",
+            main.body.value
+        );
     }
 
     #[test]

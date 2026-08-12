@@ -4,15 +4,14 @@ import Ipe.Io as Io
 import Ipe.Task as Task
 
 
--- A discarded effect (`let _ = Io.writeStdout msg`) followed by a trailing use
--- of the effect's own argument (`msg`). The effect takes `msg` by value, so
--- the clone-capture rewrite must copy it into the effect and leave the trailing
--- read intact — without it, `cargo build` sees a use-after-move (E0382).
--- `helper` returns a `Task`, so the discard sequences lawfully into the chain.
+-- A sequenced effect followed by a trailing use of the effect's own argument
+-- (`msg`). The effect takes `msg` by value, so the clone-capture rewrite must
+-- copy it into the effect and leave the trailing read intact — without it,
+-- `cargo build` sees a use-after-move (E0382).
+-- `helper` returns a `Task`, so the effect sequences lawfully into the chain.
 helper : String -> Task Error String
 helper msg =
-    let _ = Io.writeStdout msg in
-    Task.succeed msg
+    Io.writeStdout msg |> Task.andThen (\_ -> Task.succeed msg)
 
 
 main =

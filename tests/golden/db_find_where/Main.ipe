@@ -24,40 +24,34 @@ main =
         (\conn ->
             Db.withTransaction conn
                 (\txconn ->
-                    let
-                        _ =
-                            Unsafe.unsafeExecRaw txconn
-                                "CREATE TABLE products (name TEXT NOT NULL, qty INTEGER NOT NULL)"
+                    do
+                        Unsafe.unsafeExecRaw txconn
+                            "CREATE TABLE products (name TEXT NOT NULL, qty INTEGER NOT NULL)"
+                        Db.exec txconn
+                            "INSERT INTO products (name, qty) VALUES (?, ?)"
+                            [ SqlString "widget", SqlInt 10 ]
+                        Db.exec txconn
+                            "INSERT INTO products (name, qty) VALUES (?, ?)"
+                            [ SqlString "gadget", SqlInt 7 ]
+                        Task.andThen
+                            (\rows ->
+                                let
+                                    row =
+                                        Maybe.withDefault Dict.empty (List.head rows)
 
-                        _ =
-                            Db.exec txconn
-                                "INSERT INTO products (name, qty) VALUES (?, ?)"
-                                [ SqlString "widget", SqlInt 10 ]
+                                    name =
+                                        Unsafe.unsafeGetString "name" row
 
-                        _ =
-                            Db.exec txconn
-                                "INSERT INTO products (name, qty) VALUES (?, ?)"
-                                [ SqlString "gadget", SqlInt 7 ]
-                    in
-                    Task.andThen
-                        (\rows ->
-                            let
-                                row =
-                                    Maybe.withDefault Dict.empty (List.head rows)
-
-                                name =
-                                    Unsafe.unsafeGetString "name" row
-
-                                qty =
-                                    Unsafe.unsafeGetInt "qty" row
-                            in
-                            Io.println (name ++ ":" ++ String.fromInt qty)
-                        )
-                        -- Typed WHERE clause: SQL injection via a naive
-                        -- string-concatenated WHERE is a compile-time type
-                        -- error at this call site (String vs SqlFragment) —
-                        -- see the db_gate_findwhere_string negative golden.
-                        (Db.findWhere txconn "products" (Sql.gt (Sql.column "qty") (Sql.int 9)))
+                                    qty =
+                                        Unsafe.unsafeGetInt "qty" row
+                                in
+                                Io.println (name ++ ":" ++ String.fromInt qty)
+                            )
+                            -- Typed WHERE clause: SQL injection via a naive
+                            -- string-concatenated WHERE is a compile-time type
+                            -- error at this call site (String vs SqlFragment) —
+                            -- see the db_gate_findwhere_string negative golden.
+                            (Db.findWhere txconn "products" (Sql.gt (Sql.column "qty") (Sql.int 9)))
                 )
         )
         (Db.open "sqlite" "sqlite::memory:")

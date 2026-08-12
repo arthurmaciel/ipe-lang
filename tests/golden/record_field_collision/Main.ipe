@@ -3,6 +3,7 @@ module Main exposing (main)
 import Ipe.String as String
 import Ipe.Log as Log
 import Ipe.Io as Io
+import Ipe.Task as Task
 
 
 type alias RecCount =
@@ -30,6 +31,7 @@ fieldOf r =
 -- Expected output: "99" then "3" (both the record's field read and the
 -- captured `count` binding survive unmolested).
 main =
-    let count = 3 in
-    let _ = Log.info (String.fromInt (fieldOf { count = 99 })) in
-    Io.println (String.fromInt count)
+    do
+        count = 3
+        Log.info (String.fromInt (fieldOf { count = 99 }))
+        Io.println (String.fromInt count)

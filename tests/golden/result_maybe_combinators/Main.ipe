@@ -1,6 +1,7 @@
 module Main exposing (main)
 
 import Ipe.Io as Io
+import Ipe.Task as Task
 import Ipe.Error
 import Ipe.List
 import Ipe.Maybe
@@ -199,50 +200,20 @@ showMSummary m =
 
 
 main =
-    let
-        _ =
-            Io.println (showR m3ok)
-
-        _ =
-            Io.println (showR m3err)
-
-        _ =
-            Io.println (showRL combOk)
-
-        _ =
-            Io.println (showRL combErr)
-
-        _ =
-            Io.println (showRL travOk)
-
-        _ =
-            Io.println (showRL travErr)
-
-        _ =
-            Io.println (showM m3just)
-
-        _ =
-            Io.println (showM m3nothing)
-
-        _ =
-            Io.println (showML mcombOk)
-
-        _ =
-            Io.println (showML mcombNothing)
-
-        _ =
-            Io.println (showR m4ok)
-
-        _ =
-            Io.println (showR m5ok)
-
-        _ =
-            Io.println (showR m5err)
-
-        _ =
-            Io.println (showRSummary bigOk)
-
-        _ =
-            Io.println (showMSummary bigJust)
-    in
-    Io.println "done"
+    do
+        Io.println (showR m3ok)
+        Io.println (showR m3err)
+        Io.println (showRL combOk)
+        Io.println (showRL combErr)
+        Io.println (showRL travOk)
+        Io.println (showRL travErr)
+        Io.println (showM m3just)
+        Io.println (showM m3nothing)
+        Io.println (showML mcombOk)
+        Io.println (showML mcombNothing)
+        Io.println (showR m4ok)
+        Io.println (showR m5ok)
+        Io.println (showR m5err)
+        Io.println (showRSummary bigOk)
+        Io.println (showMSummary bigJust)
+        Io.println "done"

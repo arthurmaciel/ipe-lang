@@ -17,39 +17,33 @@ main =
         (\conn ->
             Db.withTransaction conn
                 (\txconn ->
-                    let
-                        _ =
-                            Unsafe.unsafeExecRaw txconn
-                                "CREATE TABLE items (name TEXT, qty INTEGER)"
-
-                        _ =
-                            Db.exec txconn
-                                "INSERT INTO items (name, qty) VALUES (?, ?)"
-                                [ SqlString "apple", SqlInt 5 ]
-
-                        _ =
-                            Db.exec txconn
-                                "INSERT INTO items (name, qty) VALUES (?, ?)"
-                                [ SqlString "banana", SqlInt 3 ]
-                    in
-                    Task.andThen
-                        (\rows ->
-                            Io.println
-                                (String.join "\n"
-                                    (List.map
-                                        (\row ->
-                                            Unsafe.unsafeGetString "name" row
-                                                ++ ":"
-                                                ++ String.fromInt (Unsafe.unsafeGetInt "qty" row)
+                    do
+                        Unsafe.unsafeExecRaw txconn
+                            "CREATE TABLE items (name TEXT, qty INTEGER)"
+                        Db.exec txconn
+                            "INSERT INTO items (name, qty) VALUES (?, ?)"
+                            [ SqlString "apple", SqlInt 5 ]
+                        Db.exec txconn
+                            "INSERT INTO items (name, qty) VALUES (?, ?)"
+                            [ SqlString "banana", SqlInt 3 ]
+                        Task.andThen
+                            (\rows ->
+                                Io.println
+                                    (String.join "\n"
+                                        (List.map
+                                            (\row ->
+                                                Unsafe.unsafeGetString "name" row
+                                                    ++ ":"
+                                                    ++ String.fromInt (Unsafe.unsafeGetInt "qty" row)
+                                            )
+                                            rows
                                         )
-                                        rows
                                     )
-                                )
-                        )
-                        (Unsafe.unsafeQuery txconn
-                            "SELECT name, qty FROM items ORDER BY name"
-                            []
-                        )
+                            )
+                            (Unsafe.unsafeQuery txconn
+                                "SELECT name, qty FROM items ORDER BY name"
+                                []
+                            )
                 )
         )
         (Db.open "sqlite" "sqlite::memory:")

@@ -16,6 +16,7 @@ module Main exposing (main)
 --     — every fixed field of the three nominal types is read somewhere.
 
 import Ipe.Io as Io
+import Ipe.Task as Task
 import Ipe.Error
 import Ipe.List
 import Ipe.String
@@ -55,17 +56,9 @@ describe err =
 
 
 main =
-    let
-        base =
-            Error.io "disk full"
-
-        withCustom =
-            Error.withDetails (Custom "custom detail") base
-
-        _ =
-            Io.println (describe base)
-
-        _ =
-            Io.println (describe withCustom)
-    in
-    Io.println "done"
+    do
+        base = Error.io "disk full"
+        withCustom = Error.withDetails (Custom "custom detail") base
+        Io.println (describe base)
+        Io.println (describe withCustom)
+        Io.println "done"

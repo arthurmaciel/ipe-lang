@@ -83,36 +83,28 @@ main =
         (\conn ->
             Db.withTransaction conn
                 (\txconn ->
-                    let
-                        _ =
-                            Unsafe.unsafeExecRaw txconn
-                                "CREATE TABLE people (name TEXT, age INT)"
-
-                        _ =
-                            Db.exec txconn
-                                "INSERT INTO people VALUES (?, ?)"
-                                [ SqlString "Alice", SqlInt 30 ]
-
+                    do
+                        Unsafe.unsafeExecRaw txconn
+                            "CREATE TABLE people (name TEXT, age INT)"
+                        Db.exec txconn
+                            "INSERT INTO people VALUES (?, ?)"
+                            [ SqlString "Alice", SqlInt 30 ]
                         j1 = reportJson (jsonIntResult "{\"name\":\"Bob\"}")
-
                         j2 = reportJson (jsonIntResult "{\"name\":\"Cara\",\"age\":25}")
-
                         j3 = reportJson (jsonStringResult "{\"name\":\"Dan\"}")
-
                         j4 = reportJson (jsonStringResult "{\"name\":\"Eve\",\"nick\":\"E\"}")
-                    in
-                    Task.andThen
-                        (\rows ->
-                            Io.println
-                                (String.join "\n"
-                                    [ j1, j2, j3, j4, String.join "," rows ]
-                                )
-                        )
-                        (Db.queryDecode txconn
-                            "SELECT name, age FROM people"
-                            []
-                            rowDecoder
-                        )
+                        Task.andThen
+                            (\rows ->
+                                Io.println
+                                    (String.join "\n"
+                                        [ j1, j2, j3, j4, String.join "," rows ]
+                                    )
+                            )
+                            (Db.queryDecode txconn
+                                "SELECT name, age FROM people"
+                                []
+                                rowDecoder
+                            )
                 )
         )
         (Db.open "sqlite" "sqlite::memory:")

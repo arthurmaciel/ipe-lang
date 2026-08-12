@@ -202,10 +202,8 @@ println =
 
 summarise : List ( String, TestResult ) -> Task Error Bool
 summarise results =
-    let
-        total =
-            List.length results
-
+    do
+        total = List.length results
         failures =
             List.concatMap
                 (\pair ->
@@ -217,13 +215,8 @@ summarise results =
                             [ ( name, reason ) ]
                 )
                 results
-
-        failCount =
-            List.length failures
-
-        passCount =
-            total - failCount
-
+        failCount = List.length failures
+        passCount = total - failCount
         failureReport =
             String.join ""
                 (List.map
@@ -232,7 +225,6 @@ summarise results =
                     )
                     failures
                 )
-
         summaryLine =
             String.fromInt passCount
                 ++ " passed, "
@@ -240,11 +232,8 @@ summarise results =
                 ++ " failed ("
                 ++ String.fromInt total
                 ++ " total)"
-
-        _ =
-            println (failureReport ++ summaryLine)
-    in
-    Task.succeed (failCount == 0)
+        println (failureReport ++ summaryLine)
+        Task.succeed (failCount == 0)
 
 
 runMain : List Test -> Task Error ()

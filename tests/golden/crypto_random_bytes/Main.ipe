@@ -1,11 +1,9 @@
 module Main exposing (main)
 import Ipe.Io as Io
+import Ipe.Task as Task
 import Ipe.Crypto
 
 -- Crypto.randomBytes: verify the call compiles and the program exits cleanly.
--- The result is discarded (auto-drop in Rust; auto-forced in Go — both print "ok").
+-- The result is discarded; the effect runs and sequences into the final print.
 main =
-    let
-        _ = Crypto.randomBytes 16
-    in
-    Io.println "ok"
+    Crypto.randomBytes 16 |> Task.andThen (\_ -> Io.println "ok")

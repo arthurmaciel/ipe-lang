@@ -2220,13 +2220,25 @@ impl<'a> Parser<'a> {
                     self.task_and_then(pat, lam_span, op_span, acc, task)?
                 }
                 DoStmt::Run(task) => {
-                    // A bare run has no operator token: the lambda takes a
-                    // zero-width span at the task's end, the call at its start —
-                    // distinct, and sharing no operand.
-                    let lam_span = Span::new(task.span.hi, task.span.hi);
-                    let call_span = Span::new(task.span.lo, task.span.lo);
-                    let wild = Located::new(lam_span, Pattern_::PAnything);
-                    self.task_and_then(wild, lam_span, call_span, acc, task)?
+                    // A bare run — "run this effect, discard its result, continue"
+                    // — is exactly `let _ = task in cont`, which lowers to the
+                    // compiler's flat effect-sequence node with no closure. Emit it
+                    // that way rather than `Task.andThen (\_ -> cont) task`: a long
+                    // run of statements then stays a shallow chain of `_`-lets
+                    // instead of a deep nest of lambdas, each of which would open its
+                    // own inference scope and make type-checking a long `do` block
+                    // super-linear.
+                    let wild = Located::new(task.span, Pattern_::PAnything);
+                    Located::new(
+                        task.span,
+                        Expr_::Let(
+                            vec![LetBinding {
+                                pat: wild,
+                                body: task,
+                            }],
+                            Box::new(acc),
+                        ),
+                    )
                 }
                 DoStmt::Let(pat, op_span, body) => Located::new(
                     op_span,

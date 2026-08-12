@@ -4,6 +4,7 @@ import Ipe.Html as Html
 import Ipe.Ui as Ui
 import Ipe.Ui.Background as Background
 import Ipe.Io as Io
+import Ipe.Task as Task
 
 
 -- E2E smoke test for the #76 20-kernel wiring batch (BACKLOG "Sweep to
@@ -60,7 +61,6 @@ uiPage =
 
 
 main =
-    let
-        _ = Io.println docPage
-    in
-    Io.println uiPage
+    do
+        Io.println docPage
+        Io.println uiPage
