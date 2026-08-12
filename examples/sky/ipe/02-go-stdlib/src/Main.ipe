@@ -15,31 +15,25 @@ main =
     Time.now ()
         |> Task.andThen
                (\nowMs ->
-                   let
+                   do
                        nowStr = Time.timeString nowMs
-                       _ = Io.println ("Current time: " ++ nowStr)
+                       Io.println ("Current time: " ++ nowStr)
                        data = "Hello, Sky!"
-                       _ =
-                           Io.println
-                               ("SHA256 of 'Hello, Sky!': " ++ Crypto.sha256 data)
-                       _ = Io.println "Sending HTTP request..."
-                   in
+                       Io.println
+                           ("SHA256 of 'Hello, Sky!': " ++ Crypto.sha256 data)
+                       Io.println "Sending HTTP request..."
                        Http.get "https://httpbin.org/get"
                            |> Task.andThen
                                   (\resp ->
-                                      let
-                                          _ =
-                                              Io.println
-                                                  ("HTTP response received, body length: "
-                                                      ++ String.fromInt
-                                                             (String.length resp.body))
-                                      in
+                                      do
+                                          Io.println
+                                              ("HTTP response received, body length: "
+                                                  ++ String.fromInt
+                                                         (String.length resp.body))
                                           Task.succeed ())
                            |> Task.onError
                                   (\e ->
-                                      let
-                                          _ =
-                                              Io.println
-                                                  ("HTTP error: " ++ Error.toString e)
-                                      in
+                                      do
+                                          Io.println
+                                              ("HTTP error: " ++ Error.toString e)
                                           Task.succeed ()))

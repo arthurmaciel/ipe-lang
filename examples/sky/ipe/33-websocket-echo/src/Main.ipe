@@ -72,9 +72,8 @@ onConnect _ =
 
 onMessage : Ws.WebSocketServer -> String -> Task Error ()
 onMessage sock msg =
-    let
-        _ = Io.println ("[ws] received: " ++ msg)
-    in
+    do
+        Io.println ("[ws] received: " ++ msg)
         Ws.sendToClient sock ("echo: " ++ msg)
 
 

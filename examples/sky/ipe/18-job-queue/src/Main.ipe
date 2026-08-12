@@ -202,12 +202,10 @@ withErrorReporting : String -> Task Error a -> Task Error a
 withErrorReporting opName task =
     let
         logAndFail e errId =
-            let
-                _ =
-                    Log.errorWith
-                        opName
-                        [ "errId", errId, "error", Error.toString e ]
-            in
+            do
+                Log.errorWith
+                    opName
+                    [ "errId", errId, "error", Error.toString e ]
                 Task.fail
                     (Error.unexpected ("Operation failed (ref " ++ errId ++ ")"))
         report e =

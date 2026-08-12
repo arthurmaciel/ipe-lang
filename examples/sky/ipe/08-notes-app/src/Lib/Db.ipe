@@ -26,11 +26,9 @@ conn =
             c
 
         Err e ->
-            let
-                _ =
-                    Io.println
-                        ("[FATAL] Cannot open skynotes.db: " ++ Error.toString e)
-            in
+            do
+                Io.println
+                    ("[FATAL] Cannot open skynotes.db: " ++ Error.toString e)
                 System.exit 1
 
 

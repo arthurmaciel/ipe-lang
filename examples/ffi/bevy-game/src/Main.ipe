@@ -19,58 +19,56 @@ import Ipe.Result as Result
 import Ipe.String as String
 import Ipe.Io as Io
 import Ipe.Error as Error exposing (Error)
+import Ipe.Task as Task
 import Rust.Bevy_ecs as Ecs
 
 
 -- One maintenance step: run `op` on the world, log `label`, hand the world on.
-step : String -> (Ecs.WorldWorld -> Result Error Ecs.WorldWorld) -> Ecs.WorldWorld -> Result Error Ecs.WorldWorld
+step : String -> (Ecs.WorldWorld -> Result Error Ecs.WorldWorld) -> Ecs.WorldWorld -> Task Error Ecs.WorldWorld
 step label op world =
     op world
-        |> Result.map
+        |> Task.fromResult
+        |> Task.andThen
             (\next ->
-                let
-                    _ =
-                        Io.println ("[world] " ++ label)
-                in
-                    next
+                Io.println ("[world] " ++ label)
+                    |> Task.map (\_ -> next)
             )
 
 
-play : Result Error Int
+play : Task Error Int
 play =
     Ecs.new_from_worldWorld ()
-        |> Result.map
+        |> Task.fromResult
+        |> Task.andThen
             (\world ->
-                let
-                    _ =
-                        Io.println "bevy_ecs World created."
-                in
-                    world
+                Io.println "bevy_ecs World created."
+                    |> Task.map (\_ -> world)
             )
-        |> Result.andThen (step "flush command queue" Ecs.flush_from_worldWorld)
-        |> Result.andThen (step "clear change trackers" Ecs.clear_trackers_from_worldWorld)
-        |> Result.andThen (step "clear all entities" Ecs.clear_entities_from_worldWorld)
-        |> Result.andThen (step "flush command queue" Ecs.flush_from_worldWorld)
+        |> Task.andThen (step "flush command queue" Ecs.flush_from_worldWorld)
+        |> Task.andThen (step "clear change trackers" Ecs.clear_trackers_from_worldWorld)
+        |> Task.andThen (step "clear all entities" Ecs.clear_entities_from_worldWorld)
+        |> Task.andThen (step "flush command queue" Ecs.flush_from_worldWorld)
         -- Two reads, threaded: a by-borrow `&self` reader returns
         -- `(value, world)`, so the world flows on to the next read without a
         -- clone or the IPE-L0130 gate. `entity_count` reads, hands the world
         -- back; `change_tick` reads the same threaded world; we combine both.
-        |> Result.andThen Ecs.entity_count_from_worldWorld
-        |> Result.andThen
+        |> Task.andThen (\w -> Ecs.entity_count_from_worldWorld w |> Task.fromResult)
+        |> Task.andThen
             (\( count, world ) ->
                 Ecs.change_tick_from_worldWorld world
                     |> Result.map (\( _, _ ) -> count)
+                    |> Task.fromResult
             )
 
 
+main : Task Error ()
 main =
-    case play of
-
-        Ok count ->
-            Io.println
-                ("headless bevy_ecs world tick finished; final entity count = "
-                    ++ String.fromInt count
-                )
-
-        Err err ->
-            Io.println ("bevy_ecs error: " ++ Error.toString err)
+    play
+        |> Task.andThen
+            (\count ->
+                Io.println
+                    ("headless bevy_ecs world tick finished; final entity count = "
+                        ++ String.fromInt count
+                    )
+            )
+        |> Task.onError (\err -> Io.println ("bevy_ecs error: " ++ Error.toString err))

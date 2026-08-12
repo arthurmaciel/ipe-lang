@@ -8,8 +8,7 @@ import Zipper exposing (Zipper)
 
 
 main =
-    let
+    do
         z = Zipper.singleton 42
-        _ = Io.println (String.fromInt (Zipper.current z))
-    in
+        Io.println (String.fromInt (Zipper.current z))
         ()

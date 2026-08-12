@@ -37,8 +37,6 @@ getInt b =
 
 
 main =
-    let
-        _ =
-            Io.println (String.fromInt (getInt (Filled { value = 9, tag = "x" })))
-    in
+    do
+        Io.println (String.fromInt (getInt (Filled { value = 9, tag = "x" })))
         Io.println (String.fromInt (getInt Empty))

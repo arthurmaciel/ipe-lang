@@ -137,12 +137,10 @@ publishTodoCreated todo =
     PubSub.publish (PubSub.topic "todos.created") (encodeTodo todo)
         |> Task.onError
                (\e ->
-                   let
-                       _ =
-                           Log.warnWith
-                               "publish.todoCreated"
-                               [ ( "error", Error.toString e ) ]
-                   in
+                   do
+                       Log.warnWith
+                           "publish.todoCreated"
+                           [ ( "error", Error.toString e ) ]
                        Task.succeed 0)
         |> Task.andThen
                (\_ ->

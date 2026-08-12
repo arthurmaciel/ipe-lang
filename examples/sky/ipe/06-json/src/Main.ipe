@@ -317,45 +317,44 @@ traverseExample =
 -- Main
 -- ============================================================
 main =
-    let
-        _ = Io.println "=== Sky JSON Examples ==="
-        _ = Io.println ""
-        _ = Io.println "1. Simple encoding:"
-        _ = Io.println encodeSimple
-        _ = Io.println ""
-        _ = Io.println "2. Complex encoding:"
-        _ = Io.println encodeComplex
-        _ = Io.println ""
-        _ = Io.println "3. Simple decoding (map2):"
-        _ = Io.println decodeSimpleExample
-        _ = Io.println ""
-        _ = Io.println "4. Pipeline decoding:"
-        _ = Io.println pipelineExample
-        _ = Io.println ""
-        _ = Io.println "5. Optional fields:"
-        _ = Io.println optionalExample
-        _ = Io.println ""
-        _ = Io.println "6. Nested at:"
-        _ = Io.println nestedExample
-        _ = Io.println ""
-        _ = Io.println "7. List of objects:"
-        _ = Io.println listExample
-        _ = Io.println ""
-        _ = Io.println "8. Roundtrip:"
-        _ = Io.println roundtrip
-        _ = Io.println ""
-        _ = Io.println "9. oneOf (flexible):"
-        _ = Io.println flexibleExample
-        _ = Io.println ""
-        _ = Io.println "10. Result.map3 (heterogeneous combine):"
-        _ = Io.println combineHeterogeneousExample
-        _ = Io.println ""
-        _ = Io.println "11. Result.combine (homogeneous list):"
-        _ = Io.println combineHomogeneousExample
-        _ = Io.println ""
-        _ = Io.println "12. Result.traverse:"
-        _ = Io.println traverseExample
-    in
+    do
+        Io.println "=== Sky JSON Examples ==="
+        Io.println ""
+        Io.println "1. Simple encoding:"
+        Io.println encodeSimple
+        Io.println ""
+        Io.println "2. Complex encoding:"
+        Io.println encodeComplex
+        Io.println ""
+        Io.println "3. Simple decoding (map2):"
+        Io.println decodeSimpleExample
+        Io.println ""
+        Io.println "4. Pipeline decoding:"
+        Io.println pipelineExample
+        Io.println ""
+        Io.println "5. Optional fields:"
+        Io.println optionalExample
+        Io.println ""
+        Io.println "6. Nested at:"
+        Io.println nestedExample
+        Io.println ""
+        Io.println "7. List of objects:"
+        Io.println listExample
+        Io.println ""
+        Io.println "8. Roundtrip:"
+        Io.println roundtrip
+        Io.println ""
+        Io.println "9. oneOf (flexible):"
+        Io.println flexibleExample
+        Io.println ""
+        Io.println "10. Result.map3 (heterogeneous combine):"
+        Io.println combineHeterogeneousExample
+        Io.println ""
+        Io.println "11. Result.combine (homogeneous list):"
+        Io.println combineHomogeneousExample
+        Io.println ""
+        Io.println "12. Result.traverse:"
+        Io.println traverseExample
         Io.println "Done!"
 
 

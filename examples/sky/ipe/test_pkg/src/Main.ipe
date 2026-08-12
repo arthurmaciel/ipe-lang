@@ -4,8 +4,6 @@ import Ipe.Io as Io
 
 
 main =
-    let
+    do
         list = [ 1, 2, 3 ]
-        _ = list
-    in
         Io.println "List ready"

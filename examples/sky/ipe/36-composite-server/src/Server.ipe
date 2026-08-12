@@ -26,7 +26,7 @@ import State exposing (Config)
 
 run : Config -> Int -> Db -> Cache.Cache String String -> Task Error ()
 run cfg bootMs db cache =
-    let
+    do
         -- Explicit lambdas around partial applications dodge defensive
         -- constraint #463 (3-arg typed FFI kernel partial-application
         -- miscompile) and keep the wrapping shape obvious.
@@ -44,12 +44,11 @@ run cfg bootMs db cache =
         -- shape that handlers emit under v0.15 type-directed lowering.
         guarded h =
             wrap (rateLimit "api" cfg.rateLimitCapacity cfg.rateLimitRefill h)
-        _ =
-            Log.infoWith
-                "server.starting"
-                [ ( "port", String.fromInt cfg.port )
-                , ( "rateLimitProbe", probeRateLimit )
-                ]
+        Log.infoWith
+            "server.starting"
+            [ ( "port", String.fromInt cfg.port )
+            , ( "rateLimitProbe", probeRateLimit )
+            ]
         -- Sky.Http.Server's net/http-based dispatcher routes by path
         -- only (Route.Method is captured but unused in Server_listen).
         -- We dispatch GET vs POST on the same /api/todos pathname here.
@@ -59,7 +58,6 @@ run cfg bootMs db cache =
 
             else
                 TodosRoutes.handleList cfg db req
-    in
         HttpServer.listen
             cfg.port
             [ HttpServer.api

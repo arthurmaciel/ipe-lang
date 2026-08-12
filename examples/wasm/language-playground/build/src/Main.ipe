@@ -43,12 +43,11 @@ probeTool tool installHint =
 
 missingTool : String -> String -> Task Error a
 missingTool tool installHint =
-    let
-        _ = Io.eprintln ""
-        _ = Io.eprintln (tool ++ " was not found on your PATH.")
-        _ = Io.eprintln installHint
-        _ = Io.eprintln ("Re-run this script once " ++ tool ++ " is installed.")
-    in
+    do
+        Io.eprintln ""
+        Io.eprintln (tool ++ " was not found on your PATH.")
+        Io.eprintln installHint
+        Io.eprintln ("Re-run this script once " ++ tool ++ " is installed.")
         Task.succeed (System.exit 1)
 
 
@@ -71,9 +70,8 @@ addWasmTarget root =
 
 buildCrate : String -> Task Error String
 buildCrate root =
-    let
-        _ = Io.println "Building ipe-wasm for wasm32-unknown-unknown (release)…"
-    in
+    do
+        Io.println "Building ipe-wasm for wasm32-unknown-unknown (release)…"
         Process.run "cargo"
             [ "build"
             , "-p", "ipe-wasm"
@@ -109,9 +107,8 @@ bindGen root =
     wasmPath root
         |> Task.andThen
             (\wasm ->
-                let
-                    _ = Io.println "Generating JS bindings with wasm-bindgen…"
-                in
+                do
+                    Io.println "Generating JS bindings with wasm-bindgen…"
                     Process.run "wasm-bindgen"
                         [ "--target", "web"
                         , "--no-typescript"
@@ -124,19 +121,17 @@ bindGen root =
 
 done : String -> Task Error ()
 done root =
-    let
-        _ = Io.println ""
-        _ = Io.println ("Done — pkg/ipe_wasm.js + pkg/ipe_wasm_bg.wasm generated under " ++ playgroundDir root ++ "/pkg")
-        _ = Io.println "Run the playground server:"
-        _ = Io.println ("  cd " ++ playgroundDir root ++ "/server && ipe run")
-    in
+    do
+        Io.println ""
+        Io.println ("Done — pkg/ipe_wasm.js + pkg/ipe_wasm_bg.wasm generated under " ++ playgroundDir root ++ "/pkg")
+        Io.println "Run the playground server:"
+        Io.println ("  cd " ++ playgroundDir root ++ "/server && ipe run")
         Task.succeed ()
 
 
 reportFailure : Error -> Task Error ()
 reportFailure err =
-    let
-        _ = Io.eprintln ""
-        _ = Io.eprintln ("Build failed: " ++ Error.toString err)
-    in
+    do
+        Io.eprintln ""
+        Io.eprintln ("Build failed: " ++ Error.toString err)
         Task.succeed (System.exit 1)

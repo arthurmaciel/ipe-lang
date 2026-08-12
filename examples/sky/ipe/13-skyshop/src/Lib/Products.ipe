@@ -37,21 +37,13 @@ listProducts =
 
 listAllProducts : List (Dict String String)
 listAllProducts =
-    let
-        result = Db.queryDocs "products"
-        _ =
-            case result of
+    case Db.queryDocs "products" of
 
-                Ok products ->
-                    Io.println
-                        ("[PRODUCTS] Loaded "
-                            ++ String.fromInt (List.length products)
-                            ++ " products")
+        Ok products ->
+            products
 
-                Err e ->
-                    Io.println ("[PRODUCTS] ERROR loading products: " ++ Error.toString e)
-    in
-        Result.withDefault [] result
+        Err _ ->
+            []
 
 
 getProduct : String -> Result Error (Maybe (Dict String String))
@@ -160,10 +152,7 @@ createProduct title summary category priceAmount priceCurrency priceDiscount sto
         case result of
 
             Ok _ ->
-                let
-                    _ = Io.println ("[PRODUCT] Created: " ++ title)
-                in
-                    Ok productId
+                Ok productId
 
             Err e ->
                 Err e
@@ -189,10 +178,7 @@ updateProduct productId title summary category priceAmount priceCurrency priceDi
         case result of
 
             Ok _ ->
-                let
-                    _ = Io.println ("[PRODUCT] Updated: " ++ productId)
-                in
-                    Ok productId
+                Ok productId
 
             Err e ->
                 Err e
@@ -202,7 +188,7 @@ deleteProduct : String -> Result Error ()
 deleteProduct productId =
     let
         images = listProductImages productId
-        _ =
+        _imageDelResults =
             List.map
                 (\img -> Db.deleteDoc "product_images" (Db.unsafeGetField "id" img))
                 images
@@ -213,12 +199,11 @@ deleteProduct productId =
                 "product_id"
                 "=="
                 productId
-        _ =
+        _cartItemDelResults =
             List.map
                 (\item -> Db.deleteDoc "cart_items" (Db.unsafeGetField "id" item))
                 cartItems
         result = Db.deleteDoc "products" productId
-        _ = Io.println ("[PRODUCT] Deleted: " ++ productId)
     in
         case result of
 
@@ -256,10 +241,7 @@ addProductImage productId imageData =
         case result of
 
             Ok _ ->
-                let
-                    _ = Io.println ("[IMAGE] Added to product: " ++ productId)
-                in
-                    Ok imageId
+                Ok imageId
 
             Err e ->
                 Err e
@@ -267,14 +249,4 @@ addProductImage productId imageData =
 
 deleteProductImage : String -> Result Error ()
 deleteProductImage imageId =
-    let
-        result = Db.deleteDoc "product_images" imageId
-        _ = Io.println ("[IMAGE] Deleted: " ++ imageId)
-    in
-        case result of
-
-            Ok v ->
-                Ok v
-
-            Err e ->
-                Err e
+    Db.deleteDoc "product_images" imageId
