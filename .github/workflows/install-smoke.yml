@@ -1,8 +1,9 @@
-# Proves tools/scripts/install.sh actually downloads, extracts, and installs a working
-# `ipe` on every platform it claims to support — Linux, macOS, Windows (Git
-# Bash), and FreeBSD. A published release must exist for the installer to fetch,
-# so this runs post-merge, on a weekly schedule, and on any PR that touches the
-# installer. Advisory (not a required gate); it guards the install path from
+# Proves install.sh actually downloads, extracts, and installs a working `ipe` on
+# every platform it claims to support — Linux, macOS, Windows (Git Bash), and
+# FreeBSD — using the documented `curl … | sh` delivery, then exercises the
+# `ipe upgrade` self-updater. A published release must exist for the installer to
+# fetch, so this runs post-merge, on a weekly schedule, and on any PR that touches
+# the installer. Advisory (not a required gate); it guards the install path from
 # silent rot across OSes.
 name: install-smoke
 
@@ -10,11 +11,11 @@ on:
   push:
     branches: [main, master]
     paths:
-      - 'tools/scripts/install.sh'
+      - 'install.sh'
       - '.github/workflows/install-smoke.yml'
   pull_request:
     paths:
-      - 'tools/scripts/install.sh'
+      - 'install.sh'
       - '.github/workflows/install-smoke.yml'
   schedule:
     - cron: '19 6 * * 1'      # Mondays, offset from the other scheduled jobs
@@ -39,17 +40,22 @@ jobs:
         os: [ubuntu-latest, macos-latest, windows-latest]
     steps:
       - uses: actions/checkout@v7
-      - name: Install ipe via install.sh and run it
+      - name: Install ipe via the documented `curl … | sh`, then verify `ipe upgrade`
         shell: bash
         env:
           IPE_INSTALL_DIR: ${{ runner.temp }}/ipe-smoke
         run: |
           set -eu
-          sh tools/scripts/install.sh
+          # Replicate the documented one-liner `curl -fsSL … | sh`: deliver the
+          # installer on stdin (no `$0` file), exactly as a real user runs it.
+          cat install.sh | sh
           # Git Bash on Windows installs ipe.exe; resolve either name.
           bin="$IPE_INSTALL_DIR/ipe"
           [ -x "$bin" ] || bin="$bin.exe"
           "$bin" --version
+          # Replicate the `ipe upgrade` self-updater: --dry-run must print the same
+          # one-liner, pointing at the root install.sh on main.
+          "$bin" upgrade --dry-run | grep -F "/main/install.sh"
 
   # No hosted FreeBSD runner exists, so drive the same installer inside a
   # FreeBSD VM on a Linux host — a real freebsd-x64 download + run, not a proxy.
@@ -58,7 +64,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
-      - name: Install ipe via install.sh inside a FreeBSD VM
+      - name: Install ipe via the documented `curl … | sh` inside a FreeBSD VM
         uses: vmactions/freebsd-vm@v1
         with:
           usesh: true
@@ -66,5 +72,6 @@ jobs:
           run: |
             set -eu
             export IPE_INSTALL_DIR="$HOME/ipe-smoke"
-            sh tools/scripts/install.sh
+            cat install.sh | sh
             "$IPE_INSTALL_DIR/ipe" --version
+            "$IPE_INSTALL_DIR/ipe" upgrade --dry-run | grep -F "/main/install.sh"
