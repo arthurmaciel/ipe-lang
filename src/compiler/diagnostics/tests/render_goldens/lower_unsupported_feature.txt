@@ -1,0 +1,8 @@
+error[IPE-L0101]: operator not supported yet
+ --> test.ipe:4:3
+  |
+4 |     3 * 4
+  |   ^^^^^ operators other than `+` and `-` are not supported yet [feature: binops]
+  |
+  = help: operators other than `+` and `-` are not supported yet [feature: binops]
+  = note: run `ipe explain IPE-L0101` for more information

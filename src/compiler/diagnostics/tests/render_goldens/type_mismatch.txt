@@ -1,0 +1,10 @@
+error[IPE-T0001]: type mismatch
+ --> test.ipe:5:2
+  |
+5 |     "hello"
+  |  ^^^^^^^ expected Int, found String
+  |
+2 | 
+  | - the type was fixed here
+  |
+  = note: run `ipe explain IPE-T0001` for more information

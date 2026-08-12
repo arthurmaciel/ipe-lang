@@ -1,0 +1,7 @@
+error[IPE-P0001]: unexpected token
+ --> test.ipe:3:7
+  |
+3 | main =
+  |       ^ found a number, expected an identifier
+  |
+  = note: run `ipe explain IPE-P0001` for more information

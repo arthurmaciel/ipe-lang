@@ -1,0 +1,10 @@
+error[IPE-N0010]: value defined more than once
+ --> test.ipe:3:6
+  |
+3 | x = 1
+  |      ^ `x` is redefined here
+  |
+3 | x = 1
+  | - first defined here
+  |
+  = note: run `ipe explain IPE-N0010` for more information

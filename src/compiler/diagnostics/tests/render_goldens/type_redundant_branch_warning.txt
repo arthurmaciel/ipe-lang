@@ -1,0 +1,7 @@
+warning[IPE-T0011]: redundant case branch
+ --> test.ipe:7:15
+  |
+7 |         Red -> 1
+  |               ^^ `Red` is already handled
+  |
+  = note: run `ipe explain IPE-T0011` for more information

@@ -1,0 +1,7 @@
+error[IPE-N0032]: type alias expansion too deep or too large
+ --> test.ipe:2:1
+  |
+2 | 
+  | ^ alias expansion exceeded the recursion depth limit of 256
+  |
+  = note: run `ipe explain IPE-N0032` for more information
