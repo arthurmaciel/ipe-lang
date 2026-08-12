@@ -53,6 +53,13 @@ test-group = 'heavy-server-e2e'
 filter = 'binary(build_no_arg) | binary(deploy_subcommand)'
 test-group = 'cwd-mutating'
 
+# The parity probes compile every golden fixture twice (clean + incremental),
+# per shard — a shard legitimately approaches the default 600s ceiling under CI
+# load, so give the parity binaries a wider terminate window.
+[[profile.ci.overrides]]
+filter = 'binary(clean_vs_incremental_parity) | binary(per_module_typecheck_parity)'
+slow-timeout = { period = "60s", terminate-after = 20 }
+
 [[profile.default.overrides]]
 filter = 'binary(watch_sigterm) | binary(watch_integration) | binary(server_e2e) | binary(live_e2e) | binary(http_e2e) | binary(webview_e2e) | binary(test_command) | binary(verify)'
 test-group = 'heavy-server-e2e'
