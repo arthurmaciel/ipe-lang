@@ -10,6 +10,19 @@ Entries below the header are maintained by
 section is generated from Conventional Commit messages and prepended when the
 standing release pull request is merged.
 
+## [0.1.49](https://github.com/arthurmaciel/ipe-lang/compare/ipe-v0.1.48...ipe-v0.1.49) (2026-08-12)
+
+
+### Features
+
+* **lang:** reserve _ for pattern positions — reject bare let _ = e at parse ([#869](https://github.com/arthurmaciel/ipe-lang/issues/869)) ([#926](https://github.com/arthurmaciel/ipe-lang/issues/926)) ([808cc98](https://github.com/arthurmaciel/ipe-lang/commit/808cc9834bf02783c4930f806a35eb59042243bd))
+
+
+### Bug Fixes
+
+* **emit:** route key/file/bool callbacks through capture-clone peel ([#922](https://github.com/arthurmaciel/ipe-lang/issues/922)) ([76dc975](https://github.com/arthurmaciel/ipe-lang/commit/76dc975f0ce00c2edabf73871e2ce86f19fd34f3))
+* **install:** move install.sh to repo root; fix stale curl + `ipe upgrade` URLs ([#927](https://github.com/arthurmaciel/ipe-lang/issues/927)) ([b6c44fd](https://github.com/arthurmaciel/ipe-lang/commit/b6c44fda78c4051a7903dca7962a720026673280))
+
 ## [0.1.48](https://github.com/arthurmaciel/ipe-lang/compare/ipe-v0.1.47...ipe-v0.1.48) (2026-08-12)
 
 
