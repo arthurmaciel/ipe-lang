@@ -1,6 +1,6 @@
 -- PARSE ERROR --------------------------------------------- test.ipe
 
-Unexpected token.
+I found a number here, but I was expecting an identifier.
 
  --> test.ipe:3:7
   |

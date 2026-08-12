@@ -1,6 +1,6 @@
 -- NAMING ERROR -------------------------------------------- test.ipe
 
-Type alias expansion too deep or too large.
+This type alias expands forever, so I can't work out what it finally stands for.
 
  --> test.ipe:2:1
   |

@@ -1,6 +1,6 @@
 -- NAMING ERROR -------------------------------------------- test.ipe
 
-A kernel alias (Ffi.kernel) may not be minted in user source.
+This code tries to mint a built-in effect directly, which only the standard library may do.
 
  --> test.ipe:3:7
   |

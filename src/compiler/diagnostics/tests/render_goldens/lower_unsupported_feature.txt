@@ -1,6 +1,6 @@
 -- UNSUPPORTED --------------------------------------------- test.ipe
 
-Operator not supported yet.
+This uses something I can't compile yet.
 
  --> test.ipe:4:3
   |

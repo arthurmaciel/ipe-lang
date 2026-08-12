@@ -1,6 +1,6 @@
 -- UNSUPPORTED --------------------------------------------- test.ipe
 
-A Task effect was discarded in a non-Task context, escaping the Task effect discipline.
+Discarding this `Task` here would quietly run its effect from a function that isn't supposed to do any.
 
  --> test.ipe:5:5
   |

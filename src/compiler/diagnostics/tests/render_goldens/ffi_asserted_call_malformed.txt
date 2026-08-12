@@ -1,6 +1,6 @@
 -- NAMING ERROR -------------------------------------------- test.ipe
 
-An asserted foreign call (Rust.Ffi.call) is malformed.
+I can't read this `Rust.Ffi.call` — it isn't in the one shape I accept.
 
  --> test.ipe:2:1
   |

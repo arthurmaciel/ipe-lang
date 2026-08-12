@@ -1,6 +1,6 @@
 -- INTERNAL COMPILER ERROR --------------------------------- test.ipe
 
-Internal compiler error.
+Something went wrong inside the compiler while working on your code — this is my mistake, not yours.
   = note: no lowering for this IR node
   = note: this is a bug in Ipe, please report it
   = note: I'm not sure what went wrong here — sorry about that. This is likely a gap in the Ipe Rust compiler. Please report it (with this source + `ipe --version`) at: https://github.com/arthurmaciel/ipe-lang/issues

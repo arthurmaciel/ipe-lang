@@ -1,11 +1,11 @@
 -- NAMING ERROR -------------------------------------------- test.ipe
 
-Cannot find this value in scope.
+I can't find `lenght` in scope.
 
  --> test.ipe:3:7
   |
 3 | main =
-  |       ^ not found in scope
+  |       ^ I don't know this name
   |
   = help: replace `
         l` with `length`
