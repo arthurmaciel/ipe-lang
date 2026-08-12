@@ -70,23 +70,14 @@ verifyToken idToken =
                 uid = claimField "sub" claims
                 email = claimField "email" claims
                 name = claimField "name" claims
-                _ =
-                    Io.println
-                        ("[AUTH] Firebase token verified for: " ++ email
-                            ++ " (uid: "
-                            ++ uid
-                            ++ ")")
             in
                 findOrCreateUser uid email name
 
         Err _ ->
-            let
-                _ = Io.println "[AUTH] Firebase token verification failed"
-            in
-                Err
-                    (Error.permissionDenied
-                        |> Error.withMessage
-                               "Authentication failed. Please try again.")
+            Err
+                (Error.permissionDenied
+                    |> Error.withMessage
+                           "Authentication failed. Please try again.")
 
 
 findOrCreateUser uid email name =
@@ -106,7 +97,7 @@ findOrCreateUser uid email name =
                 , ( "name", name )
                 , ( "is_admin", Db.boolVal isAdminUser )
                 ]
-        _ = Db.setDoc "users" uid upsertData
+        _setResult = Db.setDoc "users" uid upsertData
         result = Db.getDoc "users" uid
     in
         case result of
@@ -122,19 +113,11 @@ findOrCreateUser uid email name =
                                            "Account suspended. Please contact support.")
 
                         else
-                            let
-                                _ =
-                                    Io.println
-                                        ("[AUTH] Signed in: " ++ email
-                                            ++ " (admin: "
-                                            ++ adminStr
-                                            ++ ")")
-                                -- setDoc returns the doc id only (not the stored
-                                -- row), so the upsert fields are the canonical
-                                -- identity — return them directly (also avoids
-                                -- Dict.union, not yet on the Rust runtime).
-                            in
-                                Ok upsertData
+                            -- setDoc returns the doc id only (not the stored
+                            -- row), so the upsert fields are the canonical
+                            -- identity — return them directly (also avoids
+                            -- Dict.union, not yet on the Rust runtime).
+                            Ok upsertData
 
                     Nothing ->
                         Ok upsertData
@@ -144,10 +127,7 @@ findOrCreateUser uid email name =
 
 
 signOut =
-    let
-        _ = Io.println "[AUTH] User signed out"
-    in
-        ()
+    ()
 
 
 getUserById userId =

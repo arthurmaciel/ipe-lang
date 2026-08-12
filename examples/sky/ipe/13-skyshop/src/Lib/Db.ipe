@@ -104,10 +104,7 @@ withDb use =
         )
 
 initDb _ =
-    let
-        _ = Io.println "[DB] firestore client configured (shim-free auto-FFI)"
-    in
-        ()
+    ()
 
 -- ══════════════════════════════════════════════════════
 -- ROW CODEC (Dict String String <-> flat JSON object text)
@@ -335,38 +332,29 @@ queryWhereOrder collection field op value orderField dir =
 -- ══════════════════════════════════════════════════════
 -- LOGGING HELPERS (Result → list, logging Err instead of swallowing)
 -- ══════════════════════════════════════════════════════
-queryWhereOrLog label collection field op value =
+queryWhereOrLog _label collection field op value =
     case queryWhere collection field op value of
 
         Ok rows ->
             rows
 
-        Err e ->
-            let
-                _ = Io.println ("[DB ERROR] " ++ label ++ ": " ++ Error.toString e)
-            in
-                []
+        Err _ ->
+            []
 
-queryWhereOrderOrLog label collection field op value orderField dir =
+queryWhereOrderOrLog _label collection field op value orderField dir =
     case queryWhereOrder collection field op value orderField dir of
 
         Ok rows ->
             rows
 
-        Err e ->
-            let
-                _ = Io.println ("[DB ERROR] " ++ label ++ ": " ++ Error.toString e)
-            in
-                []
+        Err _ ->
+            []
 
-queryDocsOrLog label collection =
+queryDocsOrLog _label collection =
     case queryDocs collection of
 
         Ok rows ->
             rows
 
-        Err e ->
-            let
-                _ = Io.println ("[DB ERROR] " ++ label ++ ": " ++ Error.toString e)
-            in
-                []
+        Err _ ->
+            []

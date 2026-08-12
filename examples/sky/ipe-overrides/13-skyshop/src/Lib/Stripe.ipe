@@ -176,16 +176,10 @@ checkoutInfoFromSession session =
 
 
 createCheckoutSession : String -> List (Dict String String) -> String -> String -> String -> String -> Result Error CheckoutInfo
-createCheckoutSession cartId items userId userName userEmail remarks =
+createCheckoutSession cartId items _userId _userName userEmail _remarks =
     let
-        _ = userId
-        _ = userName
-        _ = remarks
         successUrl = domainUrl () ++ "/order/" ++ cartId ++ "/success"
         cancelUrl = domainUrl () ++ "/cart"
-        _ =
-            Io.println
-                ("[STRIPE] Creating checkout session for cart: " ++ cartId)
     in
         buildLineItems items
             |> Result.andThen
@@ -300,23 +294,18 @@ paymentStatusFromSession cartId session =
             Maybe.withDefault "" (Maybe.andThen get address)
     in
         if status == "complete" && paymentStatus == "paid" then
-            let
-                _ =
-                    Io.println
-                        ("[STRIPE] Payment verified for cart: " ++ cartId)
-            in
-                Ok
-                    { status = status
-                    , paymentStatus = paymentStatus
-                    , customerName = detailField Shared.name_field_from_paymentPagesCheckoutSessionCustomerDetails
-                    , customerEmail = detailField Shared.email_field_from_paymentPagesCheckoutSessionCustomerDetails
-                    , customerPhone = detailField Shared.phone_field_from_paymentPagesCheckoutSessionCustomerDetails
-                    , shippingLine1 = addressField Shared.line1_field_from_address
-                    , shippingLine2 = addressField Shared.line2_field_from_address
-                    , shippingCity = addressField Shared.city_field_from_address
-                    , shippingCountry = addressField Shared.country_field_from_address
-                    , shippingPostalCode = addressField Shared.postal_code_field_from_address
-                    }
+            Ok
+                { status = status
+                , paymentStatus = paymentStatus
+                , customerName = detailField Shared.name_field_from_paymentPagesCheckoutSessionCustomerDetails
+                , customerEmail = detailField Shared.email_field_from_paymentPagesCheckoutSessionCustomerDetails
+                , customerPhone = detailField Shared.phone_field_from_paymentPagesCheckoutSessionCustomerDetails
+                , shippingLine1 = addressField Shared.line1_field_from_address
+                , shippingLine2 = addressField Shared.line2_field_from_address
+                , shippingCity = addressField Shared.city_field_from_address
+                , shippingCountry = addressField Shared.country_field_from_address
+                , shippingPostalCode = addressField Shared.postal_code_field_from_address
+                }
 
         else
             Err (Error.invalidInput "Payment not complete.")
@@ -342,8 +331,7 @@ deductStock orderId =
 
             else
                 orderItems
-        _ = List.map deductItemStock items
-        _ = Io.println ("[STOCK] Deducted for order: " ++ orderId)
+        _deductResults = List.map deductItemStock items
     in
         ()
 
@@ -369,7 +357,7 @@ deductItemStock item =
                                     0
                             updatedProduct =
                                 Dict.insert "stock" (Db.intVal newStock) product
-                            _ =
+                            _setResult =
                                 Db.setDoc "products" productId updatedProduct
                         in
                             ()

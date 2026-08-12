@@ -176,8 +176,8 @@ addItem cartId productId quantity =
                     itemId = Db.unsafeGetField "id" existing
                     updatedItem =
                         Dict.insert "quantity" (Db.intVal newQty) existing
-                    _ = Db.setDoc "cart_items" itemId updatedItem
-                    _ = recalculateTotal cartId
+                    _setResult1 = Db.setDoc "cart_items" itemId updatedItem
+                    _totalResult1 = recalculateTotal cartId
                 in
                     Ok ()
 
@@ -191,8 +191,8 @@ addItem cartId productId quantity =
                             , ( "product_id", productId )
                             , ( "quantity", Db.intVal quantity )
                             ]
-                    _ = Db.setDoc "cart_items" itemId itemData
-                    _ = recalculateTotal cartId
+                    _setResult2 = Db.setDoc "cart_items" itemId itemData
+                    _totalResult2 = recalculateTotal cartId
                 in
                     Ok ()
 
@@ -209,8 +209,8 @@ updateItemQty itemId quantity =
                 let
                     updatedItem =
                         Dict.insert "quantity" (Db.intVal quantity) item
-                    _ = Db.setDoc "cart_items" itemId updatedItem
-                    _ = recalculateTotal (Db.unsafeGetField "cart_id" item)
+                    _setResult3 = Db.setDoc "cart_items" itemId updatedItem
+                    _totalResult3 = recalculateTotal (Db.unsafeGetField "cart_id" item)
                 in
                     Ok ()
 
@@ -225,11 +225,11 @@ removeItem itemId =
         Ok (Just item) ->
             let
                 cartId = Db.unsafeGetField "cart_id" item
-                _ = Db.deleteDoc "cart_items" itemId
+                _delResult = Db.deleteDoc "cart_items" itemId
             in
                 if cartId /= "" then
                     let
-                        _ = recalculateTotal cartId
+                        _totalResult4 = recalculateTotal cartId
                     in
                         Ok ()
 
@@ -279,7 +279,7 @@ recalculateTotal cartId =
                             "total_amount"
                             (Db.intVal total)
                             (Dict.insert "total_currency" currency cart)
-                    _ = Db.setDoc "carts" cartId updatedCart
+                    _setResult4 = Db.setDoc "carts" cartId updatedCart
                 in
                     total
 
@@ -314,18 +314,8 @@ setCartState docId newState =
         Ok ( collection, doc ) ->
             let
                 updatedDoc = Dict.insert "state" newState doc
-                result = Db.setDoc collection docId updatedDoc
-                _ =
-                    Io.println
-                        ("[ORDER] State changed: " ++ docId ++ " -> " ++ newState)
             in
-                case result of
-
-                    Ok v ->
-                        Ok v
-
-                    Err e ->
-                        Err e
+                Db.setDoc collection docId updatedDoc
 
         Err e ->
             Err e
@@ -402,7 +392,7 @@ checkoutToOrder cartId =
                             "id"
                             orderId
                             (Dict.insert "cart_id" cartId cart)
-                    _ = Db.setDoc "orders" orderId orderData
+                    _orderResult = Db.setDoc "orders" orderId orderData
                     cartItems =
                         Db.queryWhereOrLog
                             "Cart.checkoutToOrder"
@@ -410,7 +400,7 @@ checkoutToOrder cartId =
                             "cart_id"
                             "=="
                             cartId
-                    _ =
+                    _itemsResult =
                         List.map
                             (\item ->
                                 let
@@ -430,11 +420,6 @@ checkoutToOrder cartId =
                                 in
                                     Db.setDoc "order_items" itemId orderItem)
                             cartItems
-                    _ =
-                        Io.println
-                            ("[CHECKOUT] Created order " ++ orderId
-                                ++ " from cart "
-                                ++ cartId)
                 in
                     Ok orderId
 

@@ -185,9 +185,8 @@ fireAlert alert currentValue =
         recordAlertFired alertId metricId currentValue condition threshold notifyType
             |> Task.andThen
                 (\_ ->
-                    let
-                        _ = Io.println ("[ALERT] " ++ message)
-                    in
+                    do
+                        Io.println ("[ALERT] " ++ message)
                         deliver notifyType notifyTarget message
                 )
 
@@ -200,12 +199,10 @@ deliver notifyType target message =
             |> Task.map (\_ -> ())
             |> Task.onError
                 (\e ->
-                    let
-                        _ =
-                            Io.println
-                                ("[ALERT ERROR] " ++ notifyType ++ " " ++ target
-                                    ++ ": " ++ Error.toString e)
-                    in
+                    do
+                        Io.println
+                            ("[ALERT ERROR] " ++ notifyType ++ " " ++ target
+                                ++ ": " ++ Error.toString e)
                         Task.succeed ()
                 )
 
