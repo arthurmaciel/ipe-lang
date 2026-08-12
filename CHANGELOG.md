@@ -10,6 +10,24 @@ Entries below the header are maintained by
 section is generated from Conventional Commit messages and prepended when the
 standing release pull request is merged.
 
+## [0.1.48](https://github.com/arthurmaciel/ipe-lang/compare/ipe-v0.1.47...ipe-v0.1.48) (2026-08-12)
+
+
+### Features
+
+* **ci:** gate user-facing diagnostic text against internal jargon ([#916](https://github.com/arthurmaciel/ipe-lang/issues/916)) ([d9ee3ac](https://github.com/arthurmaciel/ipe-lang/commit/d9ee3ac241eaaffc7f556b5108fdad21bb89b065))
+* **db,runtime:** dialect-polymorphic external read-path for Db.open Connection ([#852](https://github.com/arthurmaciel/ipe-lang/issues/852) Part 1) ([#888](https://github.com/arthurmaciel/ipe-lang/issues/888)) ([07e0761](https://github.com/arthurmaciel/ipe-lang/commit/07e0761d21b041ea5919e94c7d1029c91af0dbf1))
+* **deploy:** single self-jailing binary by default; --bundle opt-out; --capabilities ([#874](https://github.com/arthurmaciel/ipe-lang/issues/874)) ([#917](https://github.com/arthurmaciel/ipe-lang/issues/917)) ([7927e4b](https://github.com/arthurmaciel/ipe-lang/commit/7927e4b87f654948004f1432a3614c54c52ea696))
+* **diagnostics:** conversational second-person voice per error family ([#561](https://github.com/arthurmaciel/ipe-lang/issues/561) Stage 4) ([#898](https://github.com/arthurmaciel/ipe-lang/issues/898)) ([cb54652](https://github.com/arthurmaciel/ipe-lang/commit/cb546524a98becddbc86db8b056cced4bfa9c727))
+* **diagnostics:** Elm-faithful layout — prose-first, code demoted ([#561](https://github.com/arthurmaciel/ipe-lang/issues/561) Stage 2) ([#895](https://github.com/arthurmaciel/ipe-lang/issues/895)) ([2529f88](https://github.com/arthurmaciel/ipe-lang/commit/2529f885dec7480f625c8e3c7be9a18c8c7edd7f))
+* **diagnostics:** humble Compiler-Bug ICE for an unattributed emitted-crate cargo failure ([#915](https://github.com/arthurmaciel/ipe-lang/issues/915)) ([018edd0](https://github.com/arthurmaciel/ipe-lang/commit/018edd08b59804c5866fb1970d536459f4322225))
+
+
+### Bug Fixes
+
+* **diagnostics:** accurate titles, textual severity, multi-line/tab/unicode spans, suggestion-span fix ([#561](https://github.com/arthurmaciel/ipe-lang/issues/561) Stage 3) ([#899](https://github.com/arthurmaciel/ipe-lang/issues/899)) ([f4c374f](https://github.com/arthurmaciel/ipe-lang/commit/f4c374f55054087ce7584df0b77829bec135b9b8))
+* **lower:** reject non-Task main at ipe time (IPE-L0136) — close a SEAL break ([#913](https://github.com/arthurmaciel/ipe-lang/issues/913)) ([2dab0fb](https://github.com/arthurmaciel/ipe-lang/commit/2dab0fb4c6fcbe0727b8caa2de54d48ca410e0e0))
+
 ## [0.1.47](https://github.com/arthurmaciel/ipe-lang/compare/ipe-v0.1.46...ipe-v0.1.47) (2026-08-11)
 
 
