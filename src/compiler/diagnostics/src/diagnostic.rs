@@ -15,16 +15,17 @@ use crate::code::{
     IPE_L0105, IPE_L0106, IPE_L0107, IPE_L0108, IPE_L0110, IPE_L0111, IPE_L0112, IPE_L0113,
     IPE_L0114, IPE_L0115, IPE_L0116, IPE_L0117, IPE_L0118, IPE_L0119, IPE_L0120, IPE_L0121,
     IPE_L0122, IPE_L0123, IPE_L0124, IPE_L0125, IPE_L0126, IPE_L0127, IPE_L0128, IPE_L0129,
-    IPE_L0130, IPE_L0131, IPE_L0132, IPE_L0133, IPE_L0134, IPE_L0135, IPE_L0140, IPE_L0141,
-    IPE_L0200, IPE_N0001, IPE_N0002, IPE_N0003, IPE_N0004, IPE_N0005, IPE_N0010, IPE_N0011,
-    IPE_N0012, IPE_N0013, IPE_N0020, IPE_N0021, IPE_N0022, IPE_N0023, IPE_N0024, IPE_N0025,
-    IPE_N0026, IPE_N0027, IPE_N0028, IPE_N0029, IPE_N0030, IPE_N0031, IPE_N0032, IPE_N0033,
-    IPE_N0034, IPE_N0035, IPE_N0036, IPE_N0037, IPE_N0038, IPE_N0039, IPE_N0040, IPE_N0041,
-    IPE_N0042, IPE_P0001, IPE_P0002, IPE_P0003, IPE_P0010, IPE_P0011, IPE_P0012, IPE_P0013,
-    IPE_P0014, IPE_P0015, IPE_P0016, IPE_P0017, IPE_P0018, IPE_P0020, IPE_P0021, IPE_P0030,
-    IPE_P0031, IPE_P0040, IPE_P0041, IPE_P0050, IPE_P0060, IPE_P0061, IPE_P0062, IPE_P0063,
-    IPE_T0001, IPE_T0002, IPE_T0003, IPE_T0004, IPE_T0010, IPE_T0011, IPE_T0012, IPE_T0013,
-    IPE_T0014, IPE_T0015, IPE_T0016, IPE_T0017, IPE_T0018, IPE_T0019, IPE_T0020, Severity,
+    IPE_L0130, IPE_L0131, IPE_L0132, IPE_L0133, IPE_L0134, IPE_L0135, IPE_L0136, IPE_L0140,
+    IPE_L0141, IPE_L0200, IPE_N0001, IPE_N0002, IPE_N0003, IPE_N0004, IPE_N0005, IPE_N0010,
+    IPE_N0011, IPE_N0012, IPE_N0013, IPE_N0020, IPE_N0021, IPE_N0022, IPE_N0023, IPE_N0024,
+    IPE_N0025, IPE_N0026, IPE_N0027, IPE_N0028, IPE_N0029, IPE_N0030, IPE_N0031, IPE_N0032,
+    IPE_N0033, IPE_N0034, IPE_N0035, IPE_N0036, IPE_N0037, IPE_N0038, IPE_N0039, IPE_N0040,
+    IPE_N0041, IPE_N0042, IPE_P0001, IPE_P0002, IPE_P0003, IPE_P0010, IPE_P0011, IPE_P0012,
+    IPE_P0013, IPE_P0014, IPE_P0015, IPE_P0016, IPE_P0017, IPE_P0018, IPE_P0020, IPE_P0021,
+    IPE_P0030, IPE_P0031, IPE_P0040, IPE_P0041, IPE_P0050, IPE_P0060, IPE_P0061, IPE_P0062,
+    IPE_P0063, IPE_T0001, IPE_T0002, IPE_T0003, IPE_T0004, IPE_T0010, IPE_T0011, IPE_T0012,
+    IPE_T0013, IPE_T0014, IPE_T0015, IPE_T0016, IPE_T0017, IPE_T0018, IPE_T0019, IPE_T0020,
+    Severity,
 };
 use crate::span::Span;
 
@@ -1122,6 +1123,17 @@ pub enum LowerError {
     /// other effect obeys. A `Task` runs only through `Task.run`, or by being
     /// sequenced inside a `Task`-returning function. [IPE-L0141]
     LawlessEffectDiscard,
+    /// The program's `main` is not an entry a runnable program can have. A
+    /// `main` is the one effect a program runs, so it must be a `Task Error ()`
+    /// — either written directly (a script, `main = Io.println "…"`) or produced
+    /// by an app entry (`Web.app`, `Terminal.appScreen`, `WebView.app`, whose
+    /// result is itself a `Task Error ()`). A `main` of any other type (an
+    /// `Int`, a `String`, a function, …) has no effect to run. `found` is a
+    /// short, plain-English name for what this `main`'s type is. Fails closed at
+    /// `ipe` time — the emitted entry wraps `main` in the runtime's single run
+    /// site, which needs a `Task`, so a non-`Task` `main` would otherwise ship a
+    /// crate that cannot build. [IPE-L0136]
+    NonEntryMain { found: Box<str> },
 }
 
 // ===========================================================================
@@ -1438,6 +1450,7 @@ const fn lower_code(msg: &LowerError) -> Code {
         LowerError::DevOnlyKernelInProduction { .. } => IPE_L0140,
         LowerError::UiCellsInWebShape(_) => IPE_L0132,
         LowerError::LawlessEffectDiscard => IPE_L0141,
+        LowerError::NonEntryMain { .. } => IPE_L0136,
     }
 }
 
@@ -1796,6 +1809,15 @@ fn lower_help(msg: &LowerError) -> Vec<HelpLine> {
              its result be the sequenced tasks, or run the effect explicitly with \
              `Task.run`. To print a value while debugging, use `Debug.log` (rejected in \
              production builds)."
+                .into(),
+        )],
+        LowerError::NonEntryMain { .. } => vec![HelpLine::Note(
+            "`main` is the one effect your whole program runs, so it has to be a \
+             `Task Error ()`. Write it directly — `main = Io.println \"hello\"` prints a \
+             line, `main = someTask` runs any task you built — or start an app with \
+             `Web.app { … }`, `Terminal.appScreen { … }`, or `WebView.app { … }`, each \
+             of which is itself a `Task Error ()`. To turn a plain value into an effect, \
+             do something with it: `main = Io.println (String.fromInt 42)`."
                 .into(),
         )],
     }

@@ -395,6 +395,16 @@ code! {
     /// here (e.g. `Task`) is not `Clone`, so the value-reuse rewrite has no sound
     /// `.clone()` to insert. Thread the value linearly (use it once) instead.
     IPE_L0135 = "IPE-L0135", "a non-Clone value (a Task/Cmd/Sub effect or a payload carrying one) is used more than once", "IPE-L0135";
+    /// `main` is not a runnable program entry.
+    ///
+    /// A program's `main` is the single effect it runs, so it must be a
+    /// `Task Error ()` — written directly (a script), or produced by an app
+    /// entry (`Web.app` / `Terminal.appScreen` / `WebView.app`, each of which
+    /// returns a `Task Error ()`). A `main` of any other type (an `Int`, a
+    /// `String`, a function, …) carries no effect to run; the runtime's single
+    /// run site needs a `Task`, so this fails closed at `ipe` time rather than
+    /// shipping a crate that cannot build.
+    IPE_L0136 = "IPE-L0136", "`main` is not a runnable program entry", "IPE-L0136";
     /// a `Debug.*` development-only escape hatch reached a production build
     /// (`ipe build --optimize`)
     IPE_L0140 = "IPE-L0140", "a Debug.* escape hatch was used in a production build", "IPE-L0140";

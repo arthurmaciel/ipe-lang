@@ -6442,7 +6442,7 @@ main =
             entry_path.clone(),
             (
                 PathBuf::from("<cache-e2e>/Main.ipe"),
-                "module Main exposing (main)\n\nmain = 1\n".to_owned(),
+                "module Main exposing (main)\n\nimport Ipe.Io as Io\nimport Ipe.String as String\n\nmain : Task Error ()\nmain =\n    Io.println (String.fromInt 1)\n".to_owned(),
             ),
         );
         let discovered = vec![project::DiscoveredModule {
@@ -6569,7 +6569,7 @@ main =
             entry_path.clone(),
             (
                 PathBuf::from("<p>/Main.ipe"),
-                "module Main exposing (main)\n\nmain = 1\n".to_owned(),
+                "module Main exposing (main)\n\nimport Ipe.Io as Io\nimport Ipe.String as String\n\nmain : Task Error ()\nmain =\n    Io.println (String.fromInt 1)\n".to_owned(),
             ),
         );
         let discovered = vec![project::DiscoveredModule {
@@ -6659,7 +6659,7 @@ main =
             entry_path.clone(),
             (
                 PathBuf::from("<p>/Main.ipe"),
-                "module Main exposing (main)\n\nmain = 1\n".to_owned(),
+                "module Main exposing (main)\n\nimport Ipe.Io as Io\nimport Ipe.String as String\n\nmain : Task Error ()\nmain =\n    Io.println (String.fromInt 1)\n".to_owned(),
             ),
         );
         let discovered = vec![project::DiscoveredModule {
@@ -6688,13 +6688,16 @@ main =
         let ir_json_path =
             find_single_ir_cache_entry(&cache_dir).expect("cold compile must write an IR entry");
         let stored = fs::read_to_string(&ir_json_path).expect("IR entry must be readable");
-        // Verified shape via a one-off print during development:
-        // `{"modules":[{"name":["Main"],...,"funcs":[{...,"body":{"Int":1}}],...}]}`.
+        // Verified shape via a one-off print during development: `main`'s body is
+        // `Io.println (String.fromInt 1)`, so the only integer literal in the IR is
+        // the `{"Int":1}` argument to `String.fromInt`. Tampering it to `42` makes
+        // the re-emitted program print `42` — a value no fresh compile of this
+        // source could produce.
         assert!(
-            stored.contains("\"body\":{\"Int\":1}"),
+            stored.contains("{\"Int\":1}"),
             "unexpected IR JSON shape, cannot safely tamper: {stored}"
         );
-        let tampered = stored.replace("\"body\":{\"Int\":1}", "\"body\":{\"Int\":42}");
+        let tampered = stored.replace("{\"Int\":1}", "{\"Int\":42}");
         fs::write(&ir_json_path, &tampered).expect("tamper write must succeed");
 
         // Force the EmittedProject tier to miss (driver flip) so the
@@ -6746,7 +6749,7 @@ main =
             entry_path.clone(),
             (
                 PathBuf::from("<cache-e2e>/Main.ipe"),
-                "module Main exposing (main)\n\nmain = 1\n".to_owned(),
+                "module Main exposing (main)\n\nimport Ipe.Io as Io\nimport Ipe.String as String\n\nmain : Task Error ()\nmain =\n    Io.println (String.fromInt 1)\n".to_owned(),
             ),
         );
         let discovered = vec![project::DiscoveredModule {

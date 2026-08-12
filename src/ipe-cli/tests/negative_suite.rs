@@ -382,8 +382,14 @@ fn security_html_unsafe_raw_off_plain_html_is_rejected() {
 #[test]
 fn security_html_unsafe_raw_compiles() {
     let src = "module Main exposing (main)\n\
+               import Ipe.Io as Io\n\
                import Ipe.Html.Unsafe exposing (unsafeRaw)\n\
-               main = unsafeRaw \"<b>x</b>\"\n";
+               main : Task Error ()\n\
+               main =\n\
+               \x20   let\n\
+               \x20       _ = unsafeRaw \"<b>x</b>\"\n\
+               \x20   in\n\
+               \x20   Io.println \"ok\"\n";
     assert_compiles("security_html_unsafe_raw", src);
 }
 
@@ -406,8 +412,14 @@ fn security_html_unsafe_script_off_plain_html_is_rejected() {
 #[test]
 fn security_html_unsafe_script_compiles() {
     let src = "module Main exposing (main)\n\
+               import Ipe.Io as Io\n\
                import Ipe.Html.Unsafe exposing (unsafeScript)\n\
-               main = unsafeScript \"console.log(1)\"\n";
+               main : Task Error ()\n\
+               main =\n\
+               \x20   let\n\
+               \x20       _ = unsafeScript \"console.log(1)\"\n\
+               \x20   in\n\
+               \x20   Io.println \"ok\"\n";
     assert_compiles("security_html_unsafe_script", src);
 }
 
@@ -418,9 +430,15 @@ fn security_html_unsafe_script_compiles() {
 #[test]
 fn security_ui_html_typed_bridge_compiles() {
     let src = "module Main exposing (main)\n\
+               import Ipe.Io as Io\n\
                import Ipe.Ui as Ui\n\
                import Ipe.Html as Html\n\
-               main = Ui.html (Html.text \"hello\")\n";
+               main : Task Error ()\n\
+               main =\n\
+               \x20   let\n\
+               \x20       _ = Ui.html (Html.text \"hello\")\n\
+               \x20   in\n\
+               \x20   Io.println \"ok\"\n";
     assert_compiles("security_ui_html_bridge", src);
 }
 
@@ -458,9 +476,15 @@ fn security_db_unsafe_get_field_off_plain_db_is_rejected() {
 #[test]
 fn security_db_unsafe_members_compile_off_submodule() {
     let src = "module Main exposing (main)\n\
+               import Ipe.Io as Io\n\
                import Ipe.Db.Unsafe as Unsafe\n\
                import Ipe.Dict as Dict\n\
-               main = Unsafe.unsafeGetField \"k\" (Dict.fromList [ ( \"k\", \"v\" ) ])\n";
+               main : Task Error ()\n\
+               main =\n\
+               \x20   let\n\
+               \x20       _ = Unsafe.unsafeGetField \"k\" (Dict.fromList [ ( \"k\", \"v\" ) ])\n\
+               \x20   in\n\
+               \x20   Io.println \"ok\"\n";
     assert_compiles("security_db_unsafe_members", src);
 }
 
@@ -471,9 +495,15 @@ fn security_db_unsafe_members_compile_off_submodule() {
 #[test]
 fn security_db_unsafe_fragment_compiles_off_submodule() {
     let src = "module Main exposing (main)\n\
+               import Ipe.Io as Io\n\
                import Ipe.Db.Sql as Sql\n\
                import Ipe.Db.Unsafe as Unsafe\n\
-               main = Sql.eq (Unsafe.unsafeFragment \"users.id\") (Sql.int 1)\n";
+               main : Task Error ()\n\
+               main =\n\
+               \x20   let\n\
+               \x20       _ = Sql.eq (Unsafe.unsafeFragment \"users.id\") (Sql.int 1)\n\
+               \x20   in\n\
+               \x20   Io.println \"ok\"\n";
     assert_compiles("security_db_unsafe_fragment", src);
 }
 
@@ -502,8 +532,14 @@ fn security_db_unsafe_fragment_off_plain_sql_is_rejected() {
 #[test]
 fn security_db_sql_column_still_validates_and_compiles() {
     let src = "module Main exposing (main)\n\
+               import Ipe.Io as Io\n\
                import Ipe.Db.Sql as Sql\n\
-               main = Sql.eq (Sql.column \"users.id\") (Sql.int 1)\n";
+               main : Task Error ()\n\
+               main =\n\
+               \x20   let\n\
+               \x20       _ = Sql.eq (Sql.column \"users.id\") (Sql.int 1)\n\
+               \x20   in\n\
+               \x20   Io.println \"ok\"\n";
     assert_compiles("security_db_sql_column_validates", src);
 }
 
@@ -530,8 +566,14 @@ fn security_web_head_unsafe_json_ld_off_plain_head_is_rejected() {
 #[test]
 fn security_web_head_unsafe_json_ld_compiles_off_submodule() {
     let src = "module Main exposing (main)\n\
+               import Ipe.Io as Io\n\
                import Ipe.Web.Head.Unsafe as Unsafe\n\
-               main = Unsafe.unsafeJsonLd \"{}\"\n";
+               main : Task Error ()\n\
+               main =\n\
+               \x20   let\n\
+               \x20       _ = Unsafe.unsafeJsonLd \"{}\"\n\
+               \x20   in\n\
+               \x20   Io.println \"ok\"\n";
     assert_compiles("security_web_head_unsafe_json_ld", src);
 }
 
@@ -555,10 +597,15 @@ fn security_secret_reveal_off_plain_secret_is_rejected() {
 #[test]
 fn security_secret_unsafe_reveal_compiles_off_submodule() {
     let src = "module Main exposing (main)\n\
+               import Ipe.Io as Io\n\
                import Ipe.Secret as Secret\n\
                import Ipe.Secret.Unsafe as Unsafe\n\
+               main : Task Error ()\n\
                main =\n\
-                   Unsafe.unsafeReveal (Secret.fromString \"sk\")\n";
+               \x20   let\n\
+               \x20       _ = Unsafe.unsafeReveal (Secret.fromString \"sk\")\n\
+               \x20   in\n\
+               \x20   Io.println \"ok\"\n";
     assert_compiles("security_secret_unsafe_reveal", src);
 }
 
@@ -571,9 +618,14 @@ fn security_secret_unsafe_reveal_compiles_off_submodule() {
 #[test]
 fn security_secret_use_compiles_off_plain_secret() {
     let src = "module Main exposing (main)\n\
+               import Ipe.Io as Io\n\
                import Ipe.Secret as Secret\n\
+               main : Task Error ()\n\
                main =\n\
-                   Secret.use (Secret.fromString \"sk\") (\\plain -> plain)\n";
+               \x20   let\n\
+               \x20       _ = Secret.use (Secret.fromString \"sk\") (\\plain -> plain)\n\
+               \x20   in\n\
+               \x20   Io.println \"ok\"\n";
     assert_compiles("security_secret_use_scoped", src);
 }
 
@@ -1207,6 +1259,8 @@ fn lower_union_task_reuse_gated() {
 fn lower_dict_function_value_get_and_apply_compiles() {
     let src = format!(
         "{HEAD}import Ipe.Dict as Dict\n\
+         import Ipe.Io as Io\n\
+         import Ipe.String as String\n\
          table : Dict String (Int -> Int)\n\
          table =\n    Dict.fromList [ ( \"inc\", \\n -> n + 1 ) ]\n\
          applyNamed : String -> Int -> Int\n\
@@ -1217,9 +1271,54 @@ fn lower_dict_function_value_get_and_apply_compiles() {
          \n\
          \x20       Nothing ->\n\
          \x20           x\n\
-         main =\n    applyNamed \"inc\" 41\n"
+         main : Task Error ()\n\
+         main =\n    Io.println (String.fromInt (applyNamed \"inc\" 41))\n"
     );
     assert_compiles("lower_dict_fn_value_get_apply", &src);
+}
+
+// A program's `main` is the single effect it runs, so it must be a `Task Error ()`
+// — written directly (a script) or produced by an app entry (`Web.app` /
+// `Terminal.appScreen` / `WebView.app`, each of which is itself a `Task Error ()`).
+// A `main` of any other type (an `Int`, a `String`, a function) has no effect to
+// run: the emitted entry wraps `main` in the runtime's single run site, which needs
+// a `Task`, so a non-`Task` `main` would ship a crate that cannot build. That must
+// fail closed at `ipe` time with IPE-L0136, never `ipe`-accept then cargo-fail on
+// `block_on(<non-task>)` (THE SEAL for the program entry).
+
+/// A `main` annotated `Int` is a value, not an effect — rejected with IPE-L0136
+/// rather than accepted and emitted as `block_on(i64)` (which cannot build).
+#[test]
+fn lower_non_task_main_int_rejected() {
+    let src = format!("{HEAD}main : Int\nmain = 42\n");
+    assert_rejected("lower_non_task_main_int", &src, "IPE-L0136");
+}
+
+/// A `main` annotated `String` is likewise a value, not an effect — IPE-L0136.
+#[test]
+fn lower_non_task_main_string_rejected() {
+    let src = format!("{HEAD}main : String\nmain = \"hello\"\n");
+    assert_rejected("lower_non_task_main_string", &src, "IPE-L0136");
+}
+
+/// A `main` that is a bare function has no effect to run — IPE-L0136.
+#[test]
+fn lower_non_task_main_function_rejected() {
+    let src = format!("{HEAD}main = \\x -> x\n");
+    assert_rejected("lower_non_task_main_function", &src, "IPE-L0136");
+}
+
+/// CONTRAPOSITIVE: a `main : Task Error ()` script is a runnable entry and must be
+/// accepted — the gate rejects only a `main` that is NOT a `Task` (nor an app
+/// entry, which is itself a `Task`), never a genuine effect entry.
+#[test]
+fn lower_task_main_script_compiles() {
+    let src = format!(
+        "{HEAD}import Ipe.Io as Io\n\
+         main : Task Error ()\n\
+         main =\n    Io.println \"hello\"\n"
+    );
+    assert_compiles("lower_task_main_script", &src);
 }
 
 // An effect is a `Task`: it runs only through `Task.run`, or by being sequenced
@@ -1372,7 +1471,8 @@ fn lower_codec_builder_field_chain_gated() {
 #[test]
 fn lower_pipeline_curried_constructor_compiles() {
     let src = format!(
-        "{HEAD}import Ipe.Json.Decode as Decode\n\
+        "{HEAD}import Ipe.Io as Io\n\
+         import Ipe.Json.Decode as Decode\n\
          import Ipe.Json.Decode.Pipeline as Pipeline\n\
          type alias User =\n    {{ id : String, age : Int }}\n\
          mkUser : String -> Int -> User\n\
@@ -1382,7 +1482,12 @@ fn lower_pipeline_curried_constructor_compiles() {
          \x20   Decode.succeed mkUser\n\
          \x20       |> Pipeline.required \"id\" Decode.string\n\
          \x20       |> Pipeline.required \"age\" Decode.int\n\
-         main =\n    userDecoder\n"
+         main : Task Error ()\n\
+         main =\n\
+         \x20   let\n\
+         \x20       _ = userDecoder\n\
+         \x20   in\n\
+         \x20   Io.println \"ok\"\n"
     );
     assert_compiles("lower_pipeline_curried_constructor", &src);
 }
