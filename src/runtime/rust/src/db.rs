@@ -2421,9 +2421,7 @@ where
             name == "BOOL" || name == "BOOLEAN"
         })
         .unwrap_or(false);
-    if is_bool
-        && let Ok(opt) = row.try_get::<Option<bool>, _>(i)
-    {
+    if is_bool && let Ok(opt) = row.try_get::<Option<bool>, _>(i) {
         return opt.map_or_else(String::new, |b| b.to_string());
     }
     if let Ok(opt) = row.try_get::<Option<i64>, _>(i) {
@@ -2485,9 +2483,7 @@ where
             name == "BOOL" || name == "BOOLEAN"
         })
         .unwrap_or(false);
-    if is_bool
-        && let Ok(opt) = row.try_get::<Option<bool>, _>(i)
-    {
+    if is_bool && let Ok(opt) = row.try_get::<Option<bool>, _>(i) {
         return Ok(opt.map_or(JsonVal::Null, JsonVal::Bool));
     }
     if let Ok(opt) = row.try_get::<Option<i64>, _>(i) {
@@ -2592,9 +2588,7 @@ pub fn db_conn_find_where<E: Send + From<String> + 'static>(
         let qtable = match SqlIdent::parse_plain(&table) {
             Some(t) => t,
             None => {
-                return IpeResult::Err(
-                    format!("db.findWhereOn: invalid table {:?}", table).into(),
-                );
+                return IpeResult::Err(format!("db.findWhereOn: invalid table {:?}", table).into());
             }
         };
         let base = format!("SELECT * FROM {} WHERE {}", qtable.as_str(), frag.sql);
@@ -3147,10 +3141,12 @@ mod tests {
             .connect("sqlite::memory:")
             .await
             .expect("connect in-memory external sqlite");
-        sqlx::query("CREATE TABLE ledger (id INTEGER PRIMARY KEY AUTOINCREMENT, amount INTEGER NOT NULL)")
-            .execute(&pool)
-            .await
-            .expect("create ledger");
+        sqlx::query(
+            "CREATE TABLE ledger (id INTEGER PRIMARY KEY AUTOINCREMENT, amount INTEGER NOT NULL)",
+        )
+        .execute(&pool)
+        .await
+        .expect("create ledger");
         sqlx::query("INSERT INTO ledger (amount) VALUES (7), (42)")
             .execute(&pool)
             .await
@@ -3186,7 +3182,10 @@ mod tests {
         let conn = fresh_external_conn().await;
         // A fragment built from the audited `Sql.*` combinators: `amount = ?`, the
         // value bound (never spliced). The metacharacter value simply doesn't match.
-        let frag = sql_eq(sql_column("amount".to_string()), sql_param(SqlParam::Int(7)));
+        let frag = sql_eq(
+            sql_column("amount".to_string()),
+            sql_param(SqlParam::Int(7)),
+        );
         let rows: IpeResult<String, Vec<HashMap<String, String>>> =
             db_conn_find_where(conn.clone(), "ledger".into(), frag).await;
         match rows {
