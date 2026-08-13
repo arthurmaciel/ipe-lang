@@ -198,12 +198,11 @@ status = "green"
 
 [[example]]
 name = "25-sky-console"
-patch = "rename-map"
+patch = "rename-map+ipe-edit"
 go_ffi = false
 shape  = "web"
 verify = "serve"
-status = "broken"
-blocked = "IPE-T0020: view returns Html but Element is required — Html/Element type mismatch"
+status = "green"
 
 [[example]]
 name = "26-ui-showcase"

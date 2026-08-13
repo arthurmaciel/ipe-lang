@@ -54,16 +54,11 @@ subscriptions _ =
     Sub.none
 
 
-viewWrapped : Model -> any
-viewWrapped model =
-    Ui.layout [] (view model)
-
-
 main =
     app
         { init = init
         , update = update
-        , view = viewWrapped
+        , view = view
         , subscriptions = subscriptions
         , routes = [ route "/" () ]
         , notFound = ()
