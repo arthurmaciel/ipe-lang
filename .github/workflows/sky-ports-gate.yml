@@ -1,0 +1,83 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# Sky-ports OFFLINE gate — fast, deterministic, no network.
+#
+# Runs tools/scripts/check-sky-ports.sh over the COMMITTED examples/sky/ipe/
+# ports when a PR touches examples/sky/, the compiler source, or the Sky→Ipê
+# converter.  No upstream fetch; pure offline verification that our committed
+# ports still build (and run, for program-shape examples) with the current
+# compiler and rename-map.
+#
+# This gate replaces the "re-mirror everything" behaviour that examples-sweep.yml
+# performed on PRs.  examples-sweep.yml now runs post-merge / nightly only.
+# ─────────────────────────────────────────────────────────────────────────────
+name: sky-ports offline gate
+
+on:
+  pull_request:
+    paths:
+      - 'examples/sky/**'
+      - 'src/**'
+      - 'tools/scripts/lib/sky-to-ipe-transform.py'
+      - 'tools/scripts/lib/apply-ipe-edits.py'
+      - 'tools/scripts/lib/mirror.sh'
+      - 'tools/scripts/regen-sky-examples.sh'
+      - 'tools/scripts/check-sky-ports.sh'
+      - 'tools/scripts/lib/checks.sh'
+      - 'tools/scripts/lib/examples.sh'
+
+concurrency:
+  group: sky-ports-gate-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  sky-ports-gate:
+    name: sky-ports offline gate
+    runs-on: ubuntu-latest
+
+    env:
+      CARGO_TARGET_DIR: ${{ github.workspace }}/.cache/ipe-target
+      IPE_NO_SCCACHE: '1'
+      IPE_SWEEP_BUILD_TIMEOUT: '300'
+      IPE_AUTH_TOKEN_SECRET: ipe-ci-sweep-test-secret-0123456789-abcdef
+      CARGO_HTTP_MULTIPLEXING: 'false'
+      CARGO_NET_RETRY: '5'
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Free disk space
+        run: |
+          df -h /
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /usr/share/swift || true
+          sudo rm -rf /opt/hostedtoolcache/CodeQL /opt/microsoft /opt/google/chrome /opt/az || true
+          sudo swapoff -a || true; sudo rm -f /swapfile /mnt/swapfile || true
+          sudo apt-get clean || true
+          df -h /
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo target
+        uses: actions/cache@v6
+        with:
+          path: |
+            ~/.cargo/registry
+            ${{ github.workspace }}/.cache/ipe-target
+          key: ${{ runner.os }}-sky-ports-cargo-${{ hashFiles('Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-sky-ports-cargo-
+            ${{ runner.os }}-sweep-cargo-
+
+      - name: Install ripgrep
+        run: sudo apt-get install -y ripgrep
+
+      - name: Build ipe
+        run: cargo build --release -p ipe
+
+      - name: Pre-warm runtime deps
+        run: cargo build -p ipe-runtime-rust || cargo build --workspace || true
+
+      - name: Offline ports gate (consistency + build + run)
+        run: bash tools/scripts/check-sky-ports.sh
