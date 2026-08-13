@@ -134,16 +134,12 @@ fn run_bundle(show_profile: bool, app_args: &[OsString]) -> ExitCode {
 /// statically known at compile time — no runtime path lookup, no toolchain.
 #[cfg(embed_mode)]
 fn run_embed(show_profile: bool, app_args: &[OsString]) -> ExitCode {
-    // The build.rs copies the files into OUT_DIR; include_bytes! bakes them
-    // in. The paths are compile-time constants produced by concat! + env!.
+    // The build.rs copies the files into OUT_DIR; the macros bake them in. The
+    // paths are compile-time constants produced by concat! + env!. `include_str!`
+    // embeds the profile as a `&str`, enforcing the UTF-8 invariant at compile
+    // time — an invalid-UTF-8 profile fails the build instead of reaching runtime.
     static APP_BYTES: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/embedded-app"));
-    static PROFILE_TEXT: &str = match std::str::from_utf8(include_bytes!(concat!(
-        env!("OUT_DIR"),
-        "/embedded-profile"
-    ))) {
-        Ok(s) => s,
-        Err(_) => panic!("embedded profile is not valid UTF-8 — build.rs invariant violated"),
-    };
+    static PROFILE_TEXT: &str = include_str!(concat!(env!("OUT_DIR"), "/embedded-profile"));
 
     let profile = match run_jail::parse_profile(PROFILE_TEXT) {
         Ok(p) => p,
