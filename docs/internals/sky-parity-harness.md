@@ -109,8 +109,10 @@ binary, disk under 5 GB).
 2. Builds ipe (`cargo build --release -p ipe`).
 3. Runs `check-sky-parity.sh` and reports the summary.
 
-The job is `continue-on-error: true` while the parity set stabilises. Flip that
-flag to `false` once all in-scope ports consistently pass.
+The job is a hard gate (`continue-on-error: false`): any sky-vs-ipe stdout or
+exit-code divergence on an in-scope port fails it. A newly-added port that does
+not yet match must be classified `parity = "skip"` (with a reason) until fixed,
+rather than left to redden the gate.
 
 ## Adding a new port to the parity set
 
