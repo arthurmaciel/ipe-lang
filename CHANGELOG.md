@@ -10,6 +10,20 @@ Entries below the header are maintained by
 section is generated from Conventional Commit messages and prepended when the
 standing release pull request is merged.
 
+## [0.1.50](https://github.com/arthurmaciel/ipe-lang/compare/ipe-v0.1.49...ipe-v0.1.50) (2026-08-13)
+
+
+### Features
+
+* **ci:** compile every explain/doc Ipê example — doctest-style gate ([#906](https://github.com/arthurmaciel/ipe-lang/issues/906)) ([#931](https://github.com/arthurmaciel/ipe-lang/issues/931)) ([a56d444](https://github.com/arthurmaciel/ipe-lang/commit/a56d4446c9f6846b8bcd14a059ce5831279c8084))
+
+
+### Bug Fixes
+
+* **canon:** reject unknown Ipe.* stdlib import at the import ([#911](https://github.com/arthurmaciel/ipe-lang/issues/911)) ([#930](https://github.com/arthurmaciel/ipe-lang/issues/930)) ([011efad](https://github.com/arthurmaciel/ipe-lang/commit/011efad5b758edcef320c7044f67c3ba72e93d49))
+* **emit:** peel capture-clone in onSubmit/HtmlEvent/lazy callbacks ([#923](https://github.com/arthurmaciel/ipe-lang/issues/923)) ([#929](https://github.com/arthurmaciel/ipe-lang/issues/929)) ([9bc4b97](https://github.com/arthurmaciel/ipe-lang/commit/9bc4b9749fc7c60fa25fcdc2d01b2d0578a8252c))
+* **wrapper:** embed profile via include_str! (compile-time UTF-8, drops the flagged panic) ([#935](https://github.com/arthurmaciel/ipe-lang/issues/935)) ([7fce53f](https://github.com/arthurmaciel/ipe-lang/commit/7fce53ff7dd348a56dea92bf6b4f3670743dafba))
+
 ## [0.1.49](https://github.com/arthurmaciel/ipe-lang/compare/ipe-v0.1.48...ipe-v0.1.49) (2026-08-12)
 
 
