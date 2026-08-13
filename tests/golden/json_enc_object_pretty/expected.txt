@@ -1,6 +1,6 @@
 {
-  "age": 30,
   "name": "Alice",
+  "age": 30,
   "tags": [
     "go",
     "rust"

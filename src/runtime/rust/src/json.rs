@@ -1946,21 +1946,34 @@ mod elm_behaviour_verdicts {
         ));
     }
 
-    // Verdict: keep-ours (documented divergence). JSON object keys are emitted
-    // in sorted (lexicographic) order — serde_json's `Map` is a `BTreeMap`
-    // (no `preserve_order`). Elm preserves the insertion order of the list
-    // given to `Encode.object`. Sorted output is deterministic and matches the
-    // Go oracle the example sweep diffs against; changing it would break Go
-    // parity and needs an ordered-map dependency.
+    // `Encode.object` takes an ordered `List (String, Value)` whose order is part
+    // of the contract, so keys are emitted in list order — not sorted. The keys
+    // here (`name`, `age`, `active`) are deliberately in reverse-alphabetical
+    // order so a regression to sorted output changes the bytes and fails.
     #[test]
-    fn encode_object_keys_are_sorted_not_insertion_order() {
+    fn encode_object_preserves_list_order() {
         let val = json_enc_object(vec![
             ("name".to_string(), json_enc_string("Alice".to_string())),
             ("age".to_string(), json_enc_int(30)),
             ("active".to_string(), json_enc_bool(true)),
         ]);
         let out = json_enc_encode(0, val);
-        assert_eq!(out, r#"{"active":true,"age":30,"name":"Alice"}"#);
+        assert_eq!(out, r#"{"name":"Alice","age":30,"active":true}"#);
+    }
+
+    // A nested object follows its own list order independently of the outer one.
+    #[test]
+    fn encode_nested_object_preserves_list_order() {
+        let inner = json_enc_object(vec![
+            ("zeta".to_string(), json_enc_int(1)),
+            ("alpha".to_string(), json_enc_int(2)),
+        ]);
+        let val = json_enc_object(vec![
+            ("second".to_string(), json_enc_bool(false)),
+            ("first".to_string(), inner),
+        ]);
+        let out = json_enc_encode(0, val);
+        assert_eq!(out, r#"{"second":false,"first":{"zeta":1,"alpha":2}}"#);
     }
 
     // Verdict: keep-Elm (already matches). `nullable` yields `Nothing` on JSON
