@@ -71,16 +71,20 @@ runMigrate cfg =
                    Db.migrate db Migrations.all
                        |> Task.andThen
                               (\applied ->
-                                  do
-                                      Io.println
-                                          ("Applied "
-                                              ++ String.fromInt
-                                                     (List.length applied)
-                                              ++ " migration(s)")
-                                      List.map
-                                          (\n -> Io.println ("  - " ++ n))
-                                          applied
-                                      Db.close db))
+                                  let
+                                      count = List.length applied
+                                  in
+                                      do
+                                          Io.println
+                                              ("Applied "
+                                                  ++ String.fromInt count
+                                                  ++ " migration(s)")
+                                          Task.sequence
+                                              (List.map
+                                                  (\n -> Io.println ("  - " ++ n))
+                                                  applied)
+                                              |> Task.map (\_ -> ())
+                                          Db.close db))
 
 
 runServer : Config -> Task Error ()

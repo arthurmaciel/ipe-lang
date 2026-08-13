@@ -498,8 +498,7 @@ patch = "rename-map+ipe-edit"
 go_ffi = false
 shape  = "server"
 verify = "serve"
-status = "broken"
-blocked = "IPE-P0001: parse error — `in` followed by `=` rejected (let-binding syntax gap)"
+status = "green"
 notes = "sky.toml has no go.dependencies; source imports Sky.Core.*/Sky.Http.*/Sky.Ffi/Std.* only — Sky.Ffi is stdlib, not a Go package. Edit renames the SKY_ config env vars to IPE_ so the server boots under the standard secret."
 
 [[example]]
