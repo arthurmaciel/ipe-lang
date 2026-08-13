@@ -73,7 +73,7 @@ const BARE: &str = "module Main exposing (main)\n\
 /// `web::pubsub`; the shape must pull in the `web` module (and, transitively,
 /// `tea`). Was E0425 `cmd_publish` before the fix.
 const CMD_PUBLISH: &str = "module Main exposing (main)\n\
-    import Ipe.Cmd as Cmd\n\
+    import Ipe.Tea.Web.Cmd as Cmd\n\
     import Ipe.Io as Io\n\
     import Ipe.PubSub as PubSub\n\
     pubCmd : Cmd msg\n\
@@ -83,7 +83,7 @@ const CMD_PUBLISH: &str = "module Main exposing (main)\n\
 /// `Sub.subscribeTopic` with no Web kernel. `sub_subscribe_topic` lives in
 /// `web::pubsub`. Was E0425 `sub_subscribe_topic` before the fix.
 const SUB_SUBSCRIBE: &str = "module Main exposing (main)\n\
-    import Ipe.Sub as Sub\n\
+    import Ipe.Tea.Web.Sub as Sub\n\
     import Ipe.Io as Io\n\
     import Ipe.PubSub as PubSub\n\
     type Msg = Got String\n\
