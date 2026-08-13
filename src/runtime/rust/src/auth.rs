@@ -152,13 +152,17 @@ pub fn auth_sign_token<E: From<String>>(
     // i64::MAX is a far-future timestamp (~292 billion years) — a safe floor.
     let exp = now.checked_add(expiry_seconds).unwrap_or(i64::MAX);
     let iat = now; // issued-at = current unix seconds (mirrors Go's Auth_signToken)
-    // Build a JSON object with string claims + exp + iat.
-    let mut payload = serde_json::Map::new();
-    for (k, v) in claims {
-        payload.insert(k, serde_json::Value::String(v));
-    }
-    payload.insert("exp".to_string(), serde_json::Value::Number(exp.into()));
-    payload.insert("iat".to_string(), serde_json::Value::Number(iat.into()));
+    // Build the claims object with keys in ascending order so the signed bytes are
+    // deterministic across runs. A `BTreeMap` fixes the key order explicitly,
+    // independent of both the source `HashMap` iteration order and the ambient
+    // object-order encoder setting, giving a byte-stable signature.
+    let mut sorted: std::collections::BTreeMap<String, serde_json::Value> = claims
+        .into_iter()
+        .map(|(k, v)| (k, serde_json::Value::String(v)))
+        .collect();
+    sorted.insert("exp".to_string(), serde_json::Value::Number(exp.into()));
+    sorted.insert("iat".to_string(), serde_json::Value::Number(iat.into()));
+    let payload: serde_json::Map<String, serde_json::Value> = sorted.into_iter().collect();
     let value = serde_json::Value::Object(payload);
     let header = jsonwebtoken::Header::new(jsonwebtoken::Algorithm::HS256);
     let key = jsonwebtoken::EncodingKey::from_secret(secret.as_bytes());
@@ -503,6 +507,72 @@ mod tests {
         let token: IpeResult<String, String> =
             auth_sign_token("short".into(), HashMap::new(), 3600);
         assert!(matches!(token, IpeResult::Err(_)));
+    }
+
+    // The signed payload must have its claim keys in ascending order, which makes
+    // the token byte-stable across runs regardless of the source-map iteration
+    // order. Keys are chosen so their alphabetical order (`role` < `sub` < `zzz`)
+    // differs from any insertion order, so dropping the sort changes the bytes and
+    // fails here.
+    #[test]
+    fn test_auth_sign_token_payload_keys_sorted() {
+        use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
+        let secret = "a-test-secret-of-32-bytes-padding".to_string();
+        let mut claims = HashMap::new();
+        claims.insert("sub".to_string(), "u".to_string());
+        claims.insert("zzz".to_string(), "z".to_string());
+        claims.insert("role".to_string(), "admin".to_string());
+        let token = match auth_sign_token::<String>(secret, claims, 3600) {
+            IpeResult::Ok(t) => t,
+            IpeResult::Err(e) => panic!("sign: {}", e),
+        };
+        let payload_seg = token.split('.').nth(1).expect("payload segment");
+        let bytes = URL_SAFE_NO_PAD.decode(payload_seg).expect("b64url payload");
+        let value: serde_json::Value = serde_json::from_slice(&bytes).expect("payload json");
+        let keys: Vec<&String> = value.as_object().expect("object").keys().collect();
+        let mut sorted = keys.clone();
+        sorted.sort();
+        assert_eq!(
+            keys, sorted,
+            "signed payload keys must be in ascending order for a byte-stable signature"
+        );
+        assert_eq!(keys, vec!["exp", "iat", "role", "sub", "zzz"]);
+    }
+
+    // Signing the same claims twice must yield byte-identical tokens (given the
+    // same `exp`/`iat`), locking out the `preserve_order` non-determinism where
+    // `HashMap` iteration order leaked into the signed bytes. `expiry_seconds = 0`
+    // pins `exp` to `iat = now`, so both signings share the same timestamp within a
+    // second; the retry loop tolerates the rare second-boundary crossing.
+    #[test]
+    fn test_auth_sign_token_is_deterministic() {
+        let secret = "a-test-secret-of-32-bytes-padding".to_string();
+        let make_claims = || {
+            let mut c = HashMap::new();
+            c.insert("sub".to_string(), "alice".to_string());
+            c.insert("role".to_string(), "admin".to_string());
+            c.insert("tenant".to_string(), "acme".to_string());
+            c
+        };
+        let mut matched = false;
+        for _ in 0..5 {
+            let a = match auth_sign_token::<String>(secret.clone(), make_claims(), 0) {
+                IpeResult::Ok(t) => t,
+                IpeResult::Err(e) => panic!("sign a: {}", e),
+            };
+            let b = match auth_sign_token::<String>(secret.clone(), make_claims(), 0) {
+                IpeResult::Ok(t) => t,
+                IpeResult::Err(e) => panic!("sign b: {}", e),
+            };
+            if a == b {
+                matched = true;
+                break;
+            }
+        }
+        assert!(
+            matched,
+            "auth_sign_token must produce identical bytes for identical claims"
+        );
     }
 
     fn now_unix() -> i64 {
