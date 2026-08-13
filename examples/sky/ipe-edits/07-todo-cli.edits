@@ -108,3 +108,160 @@ import Ipe.Task as Task
 import Ipe.Log as Log
 import Ipe.Db as Db
 """
+
+# addTodo: Task.map with two discarded Tasks in callback → Task.andThen with
+# a do block that properly sequences both effects.
+[[edit]]
+file: src/Main.ipe
+find:
+"""
+    Db.exec conn "INSERT INTO todos (title) VALUES (?)" [ todoTitle ]
+        |> Task.map
+               (\_ ->
+                   let
+                       _ = Log.infoWith "Action" [ "Added:", todoTitle ]
+                       _ = Io.println ("Added: " ++ todoTitle)
+                   in
+                       ())
+"""
+replace:
+"""
+    Db.exec conn "INSERT INTO todos (title) VALUES (?)" [ todoTitle ]
+        |> Task.andThen
+               (\_ ->
+                   do
+                       Log.infoWith "Action" [ "Added:", todoTitle ]
+                       Io.println ("Added: " ++ todoTitle))
+"""
+
+# listTodos: Task.map with I/O in both branches → Task.andThen so the effects
+# are sequenced in a Task context. Drops the intermediate `lines` binding by
+# inlining List.map into the String.join call.
+[[edit]]
+file: src/Main.ipe
+find:
+"""
+    DbUnsafe.unsafeQuery conn "SELECT id, title, done FROM todos ORDER BY id" []
+        |> Task.map
+               (\rows ->
+                   if List.isEmpty rows then
+                       let
+                           _ =
+                               Io.println
+                                   "No todos yet. Add one with: ./app add \"My task\""
+                       in
+                           ()
+
+                   else
+                       let
+                           _ = Io.println "Your TODOs:"
+                           -- v0.10.0: List.map over a Task discards
+                           -- the resulting list of thunks unforced.
+                           -- Fold the prints into a single String so a
+                           -- single `Io.println` call fires the side
+                           -- effect.
+                           lines = List.map formatTodo rows
+                           _ = Io.println (String.join "\n" lines)
+                           _ = Io.println ""
+                       in
+                           ())
+"""
+replace:
+"""
+    DbUnsafe.unsafeQuery conn "SELECT id, title, done FROM todos ORDER BY id" []
+        |> Task.andThen
+               (\rows ->
+                   if List.isEmpty rows then
+                       Io.println
+                           "No todos yet. Add one with: ./app add \"My task\""
+
+                   else
+                       do
+                           Io.println "Your TODOs:"
+                           -- Fold all row strings into one print call so
+                           -- a single Io.println fires the effect.
+                           Io.println (String.join "\n" (List.map formatTodo rows))
+                           Io.println "")
+"""
+
+# markDone / markUndone / removeTodo / clearDone: single Task.map callback
+# that discards one Io.println → Task.andThen returning the Task directly.
+[[edit]]
+file: src/Main.ipe
+find:
+"""
+    Db.exec conn "UPDATE todos SET done = 1 WHERE id = ?" [ idStr ]
+        |> Task.map
+               (\_ ->
+                   let
+                       _ = Io.println ("Marked as done: " ++ idStr)
+                   in
+                       ())
+"""
+replace:
+"""
+    Db.exec conn "UPDATE todos SET done = 1 WHERE id = ?" [ idStr ]
+        |> Task.andThen
+               (\_ ->
+                   Io.println ("Marked as done: " ++ idStr))
+"""
+
+[[edit]]
+file: src/Main.ipe
+find:
+"""
+    Db.exec conn "UPDATE todos SET done = 0 WHERE id = ?" [ idStr ]
+        |> Task.map
+               (\_ ->
+                   let
+                       _ = Io.println ("Marked as not done: " ++ idStr)
+                   in
+                       ())
+"""
+replace:
+"""
+    Db.exec conn "UPDATE todos SET done = 0 WHERE id = ?" [ idStr ]
+        |> Task.andThen
+               (\_ ->
+                   Io.println ("Marked as not done: " ++ idStr))
+"""
+
+[[edit]]
+file: src/Main.ipe
+find:
+"""
+    Db.exec conn "DELETE FROM todos WHERE id = ?" [ idStr ]
+        |> Task.map
+               (\_ ->
+                   let
+                       _ = Io.println ("Removed todo: " ++ idStr)
+                   in
+                       ())
+"""
+replace:
+"""
+    Db.exec conn "DELETE FROM todos WHERE id = ?" [ idStr ]
+        |> Task.andThen
+               (\_ ->
+                   Io.println ("Removed todo: " ++ idStr))
+"""
+
+[[edit]]
+file: src/Main.ipe
+find:
+"""
+    Db.exec conn "DELETE FROM todos WHERE done = 1" []
+        |> Task.map
+               (\_ ->
+                   let
+                       _ = Io.println "Cleared completed todos"
+                   in
+                       ())
+"""
+replace:
+"""
+    Db.exec conn "DELETE FROM todos WHERE done = 1" []
+        |> Task.andThen
+               (\_ ->
+                   Io.println "Cleared completed todos")
+"""

@@ -108,12 +108,13 @@ parity = "exact"
 
 [[example]]
 name = "07-todo-cli"
-patch = "rename-map"
+patch = "rename-map+ipe-edit"
 go_ffi = false
 shape  = "program"
 verify = "run"
-status = "broken"
-blocked = "IPE-L0141: Task discard inside Task.map callback — discarding Task in non-Task fn"
+status = "green"
+parity = "skip"
+parity_skip_reason = "depends on a SQLite database whose state varies between runs"
 
 [[example]]
 name = "09-live-counter"
@@ -273,12 +274,11 @@ status = "green"
 
 [[example]]
 name = "34-multi-tier-console"
-patch = "rename-map"
+patch = "rename-map+ipe-edit"
 go_ffi = false
 shape  = "web"
 verify = "serve"
-status = "broken"
-blocked = "IPE-L0141: Task discard inside non-Task function (Log.infoWith in update)"
+status = "green"
 
 [[example]]
 name = "35-composite-generics"

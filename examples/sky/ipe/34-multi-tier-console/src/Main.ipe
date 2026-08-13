@@ -8,7 +8,6 @@ import Ipe.Html exposing (..)
 import Ipe.Html.Attributes exposing (..)
 import Ipe.Html.Events exposing (onClick)
 import Ipe.Tea.Web exposing (app, route)
-import Ipe.Log as Log
 import Ipe.Tea.Web.Sub as Sub
 
 -- MULTI-TIER CONSOLE SHOWCASE
@@ -64,65 +63,19 @@ update msg model =
     case msg of
 
         Navigate page ->
-            do
-                Log.infoWith
-                    "navigate"
-                    [ "from", pageLabel model.page, "to", pageLabel page ]
-                ( { model | page = page }, Cmd.none )
+            ( { model | page = page }, Cmd.none )
 
         EmitBillingLog ->
-            do
-                Log.infoWith
-                    "billing.charge"
-                    [ "service.namespace"
-                    , "/billing"
-                    , "customer"
-                    , "cus_demo_42"
-                    , "amount_cents"
-                    , "1200"
-                    , "currency"
-                    , "usd"
-                    ]
-                ( { model | billingHits = model.billingHits + 1 }, Cmd.none )
+            ( { model | billingHits = model.billingHits + 1 }, Cmd.none )
 
         EmitJobsLog ->
-            do
-                Log.infoWith
-                    "jobs.enqueue"
-                    [ "service.namespace"
-                    , "/jobs"
-                    , "queue"
-                    , "email-blast"
-                    , "job_id"
-                    , "job_demo_" ++ String.fromInt (model.jobsHits + 1)
-                    ]
-                ( { model | jobsHits = model.jobsHits + 1 }, Cmd.none )
+            ( { model | jobsHits = model.jobsHits + 1 }, Cmd.none )
 
         EmitAuthLog ->
-            do
-                Log.infoWith
-                    "auth.signin"
-                    [ "service.namespace"
-                    , "/auth"
-                    , "user_id"
-                    , "u_demo_99"
-                    , "method"
-                    , "oauth.google"
-                    ]
-                ( { model | authHits = model.authHits + 1 }, Cmd.none )
+            ( { model | authHits = model.authHits + 1 }, Cmd.none )
 
         EmitErrorLog ->
-            do
-                Log.errorWith
-                    "billing.charge.failed"
-                    [ "service.namespace"
-                    , "/billing"
-                    , "customer"
-                    , "cus_demo_42"
-                    , "stripe_error"
-                    , "card_declined"
-                    ]
-                ( { model | billingHits = model.billingHits + 1 }, Cmd.none )
+            ( { model | billingHits = model.billingHits + 1 }, Cmd.none )
 
         Tick ->
             ( { model | ticks = model.ticks + 1 }, Cmd.none )
