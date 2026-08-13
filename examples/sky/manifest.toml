@@ -410,8 +410,8 @@ patch = "rename-map+ipe-edit"
 go_ffi = false
 shape  = "program"
 verify = "run"
-status = "broken"
-blocked = "IPE-N0036: Task.perform removed — use Task.attempt"
+status = "green"
+parity = "exact"
 
 [[example]]
 name = "test_pkg"

@@ -10,15 +10,19 @@ expensiveTask n =
 
 main =
     do
-        tasks =
+        _ <- Task.sequence
             [ expensiveTask 1
             , expensiveTask 2
             , expensiveTask 3
             , expensiveTask 4
             , expensiveTask 5
             ]
-        seqResults = Task.perform (Task.sequence tasks)
-        parResults = Task.perform (Task.parallel tasks)
+        _ <- Task.parallel
+            [ expensiveTask 1
+            , expensiveTask 2
+            , expensiveTask 3
+            , expensiveTask 4
+            , expensiveTask 5
+            ]
         Io.println "Sequential done"
         Io.println "Parallel done"
-        ()
