@@ -99,7 +99,6 @@ fn seed_transparent_ffi_cache(project_root: &Path) -> bool {
 /// exhaustively `case`d, struct-variant included), and CONSTRUCTS a union
 /// value Ipê-side (`Tm.Level 3`) that crosses into the foreign enum.
 const MAIN_IPE: &str = "module Main exposing (main)\n\
-    import Ipe.Prelude exposing (..)\n\
     import Ipe.Io as Io\n\
     import Ipe.String as String\n\
     import Rust.Tm as Tm exposing (Shade(..))\n\n\

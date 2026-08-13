@@ -66,7 +66,6 @@ fn seed_ffi_cache(project_root: &Path) -> bool {
 /// symbol, two against uninspected ones — threaded so the printed output
 /// proves the round-trip AND the panic→`Err` fold.
 const MAIN_IPE: &str = "module Main exposing (main)\n\
-    import Ipe.Prelude exposing (..)\n\
     import Ipe.Io as Io\n\
     import Ipe.String as String\n\
     import Rust.Ffi\n\n\
@@ -208,8 +207,7 @@ fn a_clamp_requiring_assertion_is_refused() {
         return;
     };
     let main = "module Main exposing (main)\n\
-        import Ipe.Prelude exposing (..)\n\
-        import Ipe.Io as Io\n\
+            import Ipe.Io as Io\n\
         import Rust.Ffi\n\n\
         clamped : Int -> Result Error Int\n\
         clamped =\n\
@@ -241,8 +239,7 @@ fn a_misplaced_asserted_call_is_refused() {
         return;
     };
     let main = "module Main exposing (main)\n\
-        import Ipe.Prelude exposing (..)\n\
-        import Ipe.Io as Io\n\
+            import Ipe.Io as Io\n\
         import Rust.Ffi\n\n\
         main =\n\
         \x20   case (Rust.Ffi.call \"tm::shift\") 1 of\n\

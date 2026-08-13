@@ -332,15 +332,15 @@ fn canon_unknown_constructor() {
 }
 
 /// A reference through a qualifier bound to a module that does not exist. The
-/// unknown-module diagnostic fires at the USE site (an unused import of a
-/// nonexistent module is not itself an error, matching Elm), so the qualifier
-/// must be referenced to trip the gate.
+/// An `import Ipe.NoSuchModule` names no kernel stdlib module and no compiled-source
+/// dep — the import itself is rejected with IPE-N0020 (`ModuleNotFound`) at the import
+/// boundary. The qualified reference `X.foo` never reaches name resolution.
 #[test]
 fn canon_unknown_module() {
     let src = "module Main exposing (main)\n\
                import Ipe.NoSuchModule as X\n\
                main = X.foo\n";
-    assert_rejected("canon_unknown_module", src, "IPE-N0004");
+    assert_rejected("canon_unknown_module", src, "IPE-N0020");
 }
 
 /// Importing a member a real module does not expose.
@@ -1020,8 +1020,8 @@ fn effect_secret_in_live_model() {
     let src = "module Main exposing (main)\n\
          import Ipe.Secret as Secret\n\
          import Ipe.Tea.Web exposing (app)\n\
-         import Ipe.Cmd as Cmd\n\
-         import Ipe.Sub as Sub\n\
+         import Ipe.Tea.Web.Cmd as Cmd\n\
+         import Ipe.Tea.Web.Sub as Sub\n\
          import Ipe.Ui as Ui\n\
          \n\
          type Page = HomePage\n\
@@ -1500,8 +1500,8 @@ fn lower_pipeline_curried_constructor_compiles() {
 fn lower_let_bound_app_cfg() {
     let src = "module Main exposing (main)\n\
          import Ipe.Tea.Web exposing (app)\n\
-         import Ipe.Cmd as Cmd\n\
-         import Ipe.Sub as Sub\n\
+         import Ipe.Tea.Web.Cmd as Cmd\n\
+         import Ipe.Tea.Web.Sub as Sub\n\
          import Ipe.Ui as Ui\n\
          \n\
          type Page = HomePage\n\

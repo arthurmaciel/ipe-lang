@@ -64,8 +64,8 @@ const IPE_WEBVIEW_COUNTER: &str = r#"module Main exposing (main)
 
 import Ipe.Tea.WebView as Webview
 import Ipe.Ui as Ui
-import Ipe.Cmd as Cmd
-import Ipe.Sub as Sub
+import Ipe.Tea.WebView.Cmd as Cmd
+import Ipe.Tea.WebView.Sub as Sub
 import Ipe.String
 
 type Msg
@@ -289,8 +289,8 @@ const IPE_WEBVIEW_LET_BOUND_WINDOW: &str = r#"module Main exposing (main)
 
 import Ipe.Tea.WebView as Webview
 import Ipe.Ui as Ui
-import Ipe.Cmd as Cmd
-import Ipe.Sub as Sub
+import Ipe.Tea.WebView.Cmd as Cmd
+import Ipe.Tea.WebView.Sub as Sub
 import Ipe.String
 
 type Msg

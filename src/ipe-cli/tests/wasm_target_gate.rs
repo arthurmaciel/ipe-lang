@@ -49,8 +49,8 @@ fn pure_ui_app_emits_wasm_project() {
         "module Main exposing (main)\n\
          import Ipe.String as String\n\
          import Ipe.Tea.Web exposing (app)\n\
-         import Ipe.Cmd as Cmd\n\
-         import Ipe.Sub as Sub\n\
+         import Ipe.Tea.Web.Cmd as Cmd\n\
+         import Ipe.Tea.Web.Sub as Sub\n\
          import Ipe.Ui as Ui\n\
          \n\
          type Page = CounterPage\n\
@@ -134,8 +134,8 @@ fn routed_web_app_emits_wasm_app_routed() {
         "module Main exposing (main)\n\
          import Ipe.String as String\n\
          import Ipe.Tea.Web exposing (app, route)\n\
-         import Ipe.Cmd as Cmd\n\
-         import Ipe.Sub as Sub\n\
+         import Ipe.Tea.Web.Cmd as Cmd\n\
+         import Ipe.Tea.Web.Sub as Sub\n\
          import Ipe.Ui as Ui\n\
          \n\
          type Page = Home | About\n\
