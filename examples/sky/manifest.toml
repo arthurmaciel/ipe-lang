@@ -490,7 +490,7 @@ patch = "rename-map"
 go_ffi = false
 shape  = "web"
 verify = "serve"
-status = "green"
+status = "deps-deferred"
 notes = "sky.toml has no go.dependencies; source imports Sky.Core.*/Std.* only — no Go FFI. go_ffi was set in error."
 
 # ── Go-FFI examples (excluded from Rust build by is_out_of_scope) ─────────────
