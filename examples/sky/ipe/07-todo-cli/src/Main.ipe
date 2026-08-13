@@ -85,37 +85,29 @@ initDb conn =
 addTodo : Db -> String -> Task Error ()
 addTodo conn todoTitle =
     Db.exec conn "INSERT INTO todos (title) VALUES (?)" [ todoTitle ]
-        |> Task.map
+        |> Task.andThen
                (\_ ->
                    do
                        Log.infoWith "Action" [ "Added:", todoTitle ]
-                       Io.println ("Added: " ++ todoTitle)
-                       ())
+                       Io.println ("Added: " ++ todoTitle))
 
 
 listTodos : Db -> Task Error ()
 listTodos conn =
     DbUnsafe.unsafeQuery conn "SELECT id, title, done FROM todos ORDER BY id" []
-        |> Task.map
+        |> Task.andThen
                (\rows ->
                    if List.isEmpty rows then
-                       do
-                           Io.println
-                               "No todos yet. Add one with: ./app add \"My task\""
-                           ()
+                       Io.println
+                           "No todos yet. Add one with: ./app add \"My task\""
 
                    else
                        do
                            Io.println "Your TODOs:"
-                           -- v0.10.0: List.map over a Task discards
-                           -- the resulting list of thunks unforced.
-                           -- Fold the prints into a single String so a
-                           -- single `Io.println` call fires the side
-                           -- effect.
-                           lines = List.map formatTodo rows
-                           Io.println (String.join "\n" lines)
-                           Io.println ""
-                           ())
+                           -- Fold all row strings into one print call so
+                           -- a single Io.println fires the effect.
+                           Io.println (String.join "\n" (List.map formatTodo rows))
+                           Io.println "")
 
 
 formatTodo row =
@@ -136,41 +128,33 @@ formatTodo row =
 markDone : Db -> String -> Task Error ()
 markDone conn idStr =
     Db.exec conn "UPDATE todos SET done = 1 WHERE id = ?" [ idStr ]
-        |> Task.map
+        |> Task.andThen
                (\_ ->
-                   do
-                       Io.println ("Marked as done: " ++ idStr)
-                       ())
+                   Io.println ("Marked as done: " ++ idStr))
 
 
 markUndone : Db -> String -> Task Error ()
 markUndone conn idStr =
     Db.exec conn "UPDATE todos SET done = 0 WHERE id = ?" [ idStr ]
-        |> Task.map
+        |> Task.andThen
                (\_ ->
-                   do
-                       Io.println ("Marked as not done: " ++ idStr)
-                       ())
+                   Io.println ("Marked as not done: " ++ idStr))
 
 
 removeTodo : Db -> String -> Task Error ()
 removeTodo conn idStr =
     Db.exec conn "DELETE FROM todos WHERE id = ?" [ idStr ]
-        |> Task.map
+        |> Task.andThen
                (\_ ->
-                   do
-                       Io.println ("Removed todo: " ++ idStr)
-                       ())
+                   Io.println ("Removed todo: " ++ idStr))
 
 
 clearDone : Db -> Task Error ()
 clearDone conn =
     Db.exec conn "DELETE FROM todos WHERE done = 1" []
-        |> Task.map
+        |> Task.andThen
                (\_ ->
-                   do
-                       Io.println "Cleared completed todos"
-                       ())
+                   Io.println "Cleared completed todos")
 
 
 showUsage : Task Error ()

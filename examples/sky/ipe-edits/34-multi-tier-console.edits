@@ -19,6 +19,151 @@ import Ipe.Ui as Ui
 import Ipe.Tea.Web.Cmd as Cmd
 """
 
+# Drop Log.* discards from the TEA update function.
+#
+# The upstream Sky source calls Log.infoWith / Log.errorWith inside `update`
+# branches, discarding the Task with `let _ = ... in result`. Sky's runtime
+# ran discarded Tasks eagerly; Ipê's TEA update returns (Model, Cmd Msg) —
+# not a Task — so a discarded Task here is IPE-L0141 (lawless effect discard).
+#
+# The fix drops the Log.* calls entirely. In Ipê's TEA architecture side-effects
+# in update are expressed through Cmd values, not direct Task execution.
+[[edit]]
+file: src/Main.ipe
+find:
+"""
+        Navigate page ->
+            let
+                _ =
+                    Log.infoWith
+                        "navigate"
+                        [ "from", pageLabel model.page, "to", pageLabel page ]
+            in
+                ( { model | page = page }, Cmd.none )
+"""
+replace:
+"""
+        Navigate page ->
+            ( { model | page = page }, Cmd.none )
+"""
+
+[[edit]]
+file: src/Main.ipe
+find:
+"""
+        EmitBillingLog ->
+            let
+                _ =
+                    Log.infoWith
+                        "billing.charge"
+                        [ "service.namespace"
+                        , "/billing"
+                        , "customer"
+                        , "cus_demo_42"
+                        , "amount_cents"
+                        , "1200"
+                        , "currency"
+                        , "usd"
+                        ]
+            in
+                ( { model | billingHits = model.billingHits + 1 }, Cmd.none )
+"""
+replace:
+"""
+        EmitBillingLog ->
+            ( { model | billingHits = model.billingHits + 1 }, Cmd.none )
+"""
+
+[[edit]]
+file: src/Main.ipe
+find:
+"""
+        EmitJobsLog ->
+            let
+                _ =
+                    Log.infoWith
+                        "jobs.enqueue"
+                        [ "service.namespace"
+                        , "/jobs"
+                        , "queue"
+                        , "email-blast"
+                        , "job_id"
+                        , "job_demo_" ++ String.fromInt (model.jobsHits + 1)
+                        ]
+            in
+                ( { model | jobsHits = model.jobsHits + 1 }, Cmd.none )
+"""
+replace:
+"""
+        EmitJobsLog ->
+            ( { model | jobsHits = model.jobsHits + 1 }, Cmd.none )
+"""
+
+[[edit]]
+file: src/Main.ipe
+find:
+"""
+        EmitAuthLog ->
+            let
+                _ =
+                    Log.infoWith
+                        "auth.signin"
+                        [ "service.namespace"
+                        , "/auth"
+                        , "user_id"
+                        , "u_demo_99"
+                        , "method"
+                        , "oauth.google"
+                        ]
+            in
+                ( { model | authHits = model.authHits + 1 }, Cmd.none )
+"""
+replace:
+"""
+        EmitAuthLog ->
+            ( { model | authHits = model.authHits + 1 }, Cmd.none )
+"""
+
+[[edit]]
+file: src/Main.ipe
+find:
+"""
+        EmitErrorLog ->
+            let
+                _ =
+                    Log.errorWith
+                        "billing.charge.failed"
+                        [ "service.namespace"
+                        , "/billing"
+                        , "customer"
+                        , "cus_demo_42"
+                        , "stripe_error"
+                        , "card_declined"
+                        ]
+            in
+                ( { model | billingHits = model.billingHits + 1 }, Cmd.none )
+"""
+replace:
+"""
+        EmitErrorLog ->
+            ( { model | billingHits = model.billingHits + 1 }, Cmd.none )
+"""
+
+# Remove the now-unused Ipe.Log import.
+[[edit]]
+file: src/Main.ipe
+find:
+"""
+import Ipe.Tea.Web exposing (app, route)
+import Ipe.Log as Log
+import Ipe.Tea.Web.Sub as Sub
+"""
+replace:
+"""
+import Ipe.Tea.Web exposing (app, route)
+import Ipe.Tea.Web.Sub as Sub
+"""
+
 [[edit]]
 file: src/Main.ipe
 find:
