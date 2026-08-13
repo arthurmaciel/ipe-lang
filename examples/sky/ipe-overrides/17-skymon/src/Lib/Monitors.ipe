@@ -13,6 +13,7 @@ import Ipe.Http as Http
 import Ipe.Task as Task
 import Ipe.Crypto as Crypto
 import Ipe.Db as Db
+import Ipe.Db.Unsafe as DbUnsafe
 import Lib.Db as LibDb
 import Ipe.Error as Error exposing (Error)
 
@@ -64,7 +65,7 @@ getMonitors : Task Error (List (Dict String String))
 getMonitors =
     LibDb.withConn
         (\conn ->
-            Db.unsafeQuery
+            DbUnsafe.unsafeQuery
                 conn
                 "SELECT * FROM monitors ORDER BY name"
                 [])
@@ -74,7 +75,7 @@ getMonitorHistory : String -> Int -> Task Error (List (Dict String String))
 getMonitorHistory monId limit =
     LibDb.withConn
         (\conn ->
-            Db.unsafeQuery
+            DbUnsafe.unsafeQuery
                 conn
                 "SELECT status, response_time, checked_at FROM monitor_history WHERE monitor_id = ? ORDER BY checked_at DESC LIMIT ?"
                 [ monId, String.fromInt limit ])

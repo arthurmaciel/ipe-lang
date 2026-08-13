@@ -14,6 +14,7 @@ import Ipe.Http as Http
 import Ipe.Task as Task
 import Ipe.Crypto as Crypto
 import Ipe.Db as Db
+import Ipe.Db.Unsafe as DbUnsafe
 import Lib.Db as LibDb
 import Lib.SafeQuery as SafeQuery
 import Ipe.Error as Error exposing (Error)
@@ -70,7 +71,7 @@ getMetrics : Task Error (List (Dict String String))
 getMetrics =
     LibDb.withConn
         (\conn ->
-            Db.unsafeQuery
+            DbUnsafe.unsafeQuery
                 conn
                 "SELECT * FROM metrics ORDER BY name"
                 [])
@@ -80,7 +81,7 @@ getMetricHistory : String -> Int -> Task Error (List (Dict String String))
 getMetricHistory metId limit =
     LibDb.withConn
         (\conn ->
-            Db.unsafeQuery
+            DbUnsafe.unsafeQuery
                 conn
                 "SELECT value, recorded_at FROM metric_history WHERE metric_id = ? ORDER BY recorded_at DESC LIMIT ?"
                 [ metId, String.fromInt limit ])

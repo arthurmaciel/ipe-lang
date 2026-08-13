@@ -6,6 +6,7 @@ import Ipe.Time as Time
 import Ipe.Dict as Dict
 import Ipe.Task as Task
 import Ipe.Db as Db
+import Ipe.Db.Unsafe as DbUnsafe
 import Ipe.Error as Error exposing (Error)
 import Lib.Db as LibDb
 
@@ -44,7 +45,7 @@ getComments : String -> Task Error (List (Dict String String))
 getComments ideaId =
     LibDb.withConn
         (\conn ->
-            Db.unsafeQuery
+            DbUnsafe.unsafeQuery
                 conn
                 "SELECT c.id, c.content, c.created_at, u.username as author_name FROM comments c LEFT JOIN users u ON c.author_id = u.id WHERE c.idea_id = ? ORDER BY c.created_at ASC"
                 [ ideaId ])

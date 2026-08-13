@@ -2,6 +2,7 @@ module Lib.Schema exposing (ensureSchema)
 
 import Ipe.Task as Task
 import Ipe.Db as Db
+import Ipe.Db.Unsafe as DbUnsafe
 import Ipe.Error as Error exposing (Error)
 
 
@@ -10,11 +11,11 @@ import Ipe.Error as Error exposing (Error)
 -- `Db.connect` (via `Lib.Db.withConn`), so the schema is guaranteed present
 -- before any read or write and the connection never escapes into the
 -- session-persisted Model. The same connection flows out so the caller can
--- keep building its Task pipeline. `Db.unsafeExecRaw` is arg-less DDL only —
+-- keep building its Task pipeline. `DbUnsafe.unsafeExecRaw` is arg-less DDL only —
 -- every runtime value reaches SQL through a bound `?` parameter elsewhere.
 ensureSchema : Db -> Task Error Db
 ensureSchema conn =
-    Db.unsafeExecRaw
+    DbUnsafe.unsafeExecRaw
         conn
         """CREATE TABLE IF NOT EXISTS monitors (
             id TEXT PRIMARY KEY,
@@ -29,7 +30,7 @@ ensureSchema conn =
         )"""
         |> Task.andThen
             (\_ ->
-                Db.unsafeExecRaw
+                DbUnsafe.unsafeExecRaw
                     conn
                     """CREATE TABLE IF NOT EXISTS metrics (
                         id TEXT PRIMARY KEY,
@@ -44,7 +45,7 @@ ensureSchema conn =
             )
         |> Task.andThen
             (\_ ->
-                Db.unsafeExecRaw
+                DbUnsafe.unsafeExecRaw
                     conn
                     """CREATE TABLE IF NOT EXISTS metric_history (
                         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -55,7 +56,7 @@ ensureSchema conn =
             )
         |> Task.andThen
             (\_ ->
-                Db.unsafeExecRaw
+                DbUnsafe.unsafeExecRaw
                     conn
                     """CREATE TABLE IF NOT EXISTS alerts (
                         id TEXT PRIMARY KEY,
@@ -70,7 +71,7 @@ ensureSchema conn =
             )
         |> Task.andThen
             (\_ ->
-                Db.unsafeExecRaw
+                DbUnsafe.unsafeExecRaw
                     conn
                     """CREATE TABLE IF NOT EXISTS sessions (
                         id TEXT PRIMARY KEY,
@@ -82,7 +83,7 @@ ensureSchema conn =
             )
         |> Task.andThen
             (\_ ->
-                Db.unsafeExecRaw
+                DbUnsafe.unsafeExecRaw
                     conn
                     """CREATE TABLE IF NOT EXISTS monitor_history (
                         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -94,7 +95,7 @@ ensureSchema conn =
             )
         |> Task.andThen
             (\_ ->
-                Db.unsafeExecRaw
+                DbUnsafe.unsafeExecRaw
                     conn
                     """CREATE TABLE IF NOT EXISTS alert_history (
                         id INTEGER PRIMARY KEY AUTOINCREMENT,

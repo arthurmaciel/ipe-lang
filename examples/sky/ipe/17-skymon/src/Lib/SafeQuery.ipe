@@ -4,6 +4,7 @@ import Ipe.String as String
 import Ipe.Dict as Dict
 import Ipe.Task as Task
 import Ipe.Db as Db
+import Ipe.Db.Unsafe as DbUnsafe
 import Ipe.Error as Error exposing (Error)
 
 
@@ -17,7 +18,7 @@ import Ipe.Error as Error exposing (Error)
 runReadOnly : Db -> String -> List String -> Task Error (List (Dict String String))
 runReadOnly conn query params =
     if isSelectOnly query then
-        Db.unsafeQuery conn query params
+        DbUnsafe.unsafeQuery conn query params
 
     else
         Task.fail

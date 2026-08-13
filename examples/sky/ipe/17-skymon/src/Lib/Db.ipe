@@ -5,6 +5,7 @@ import Ipe.String as String
 import Ipe.Dict as Dict
 import Ipe.Task as Task
 import Ipe.Db as Db
+import Ipe.Db.Unsafe as DbUnsafe
 import Ipe.Error as Error exposing (Error)
 import Lib.Schema as Schema
 
@@ -28,7 +29,7 @@ withConn op =
 -- empty-string default lets a display-only read degrade predictably.
 field : String -> Dict String String -> String
 field key row =
-    Db.unsafeGetField key row
+    DbUnsafe.unsafeGetField key row
 
 
 -- Read an integer column, defaulting to 0 for a missing or non-numeric
