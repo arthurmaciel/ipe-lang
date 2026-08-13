@@ -393,6 +393,37 @@ pub fn json_enc_object(pairs: Vec<(String, JsonVal)>) -> JsonVal {
     JsonVal::Object(pairs.into_iter().collect())
 }
 
+/// Recursively rebuild a value with every object's keys in ascending order,
+/// regardless of the ambient `serde_json` object-order behaviour (the
+/// `preserve_order` cargo feature makes `Value::Object` insertion-ordered, so a
+/// plain re-encode is not canonical on its own).
+fn sort_object_keys(val: &JsonVal) -> JsonVal {
+    match val {
+        JsonVal::Object(map) => {
+            let mut entries: Vec<(&String, &JsonVal)> = map.iter().collect();
+            entries.sort_by_key(|(k, _)| *k);
+            JsonVal::Object(
+                entries
+                    .into_iter()
+                    .map(|(k, v)| (k.clone(), sort_object_keys(v)))
+                    .collect(),
+            )
+        }
+        JsonVal::Array(items) => JsonVal::Array(items.iter().map(sort_object_keys).collect()),
+        other => other.clone(),
+    }
+}
+
+/// Serialize a value to deterministic sorted-key canonical JSON: object keys are
+/// sorted ascending at every nesting depth, then encoded through the standard
+/// compact encoder. Two values with the same key/value content always produce
+/// identical bytes, which signed payloads (JWT, auth tokens) depend on for a
+/// stable signature — a property proven here rather than inherited from a global
+/// encoder-ordering setting.
+pub fn json_enc_canonical(val: &JsonVal) -> String {
+    json_enc_encode(0, sort_object_keys(val))
+}
+
 // --- Decode primitives ---
 pub fn json_decode_string<E: From<String> + 'static>() -> Decoder<E, String> {
     Decoder::new(

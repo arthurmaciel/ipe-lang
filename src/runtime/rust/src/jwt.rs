@@ -62,14 +62,15 @@ fn header_json(alg: &str) -> String {
     super::json_enc_encode(0, value)
 }
 
-/// Re-encode a claims JSON string through the Go-parity JSON encoder so the
-/// payload bytes (sorted object keys, Go float/HTML-escape shape) match what the
-/// Go backend's `Json.Encode.encode 0 <claims>` emits. Returns the bad-claims
-/// error message on a parse failure.
+/// Re-encode a claims JSON string as deterministic sorted-key canonical JSON so
+/// the signed payload bytes (sorted object keys at every depth, Go float/HTML-escape
+/// shape) match what the Go backend's `Json.Encode.encode 0 <claims>` emits. Sorting
+/// is explicit here, independent of the ambient object-order encoder setting, so the
+/// signature is byte-stable. Returns the bad-claims error message on a parse failure.
 fn payload_json(claims_json: &str) -> Result<String, String> {
     let value: JsonValue =
         serde_json::from_str(claims_json).map_err(|e| format!("bad claims json: {}", e))?;
-    Ok(super::json_enc_encode(0, value))
+    Ok(super::json_enc_canonical(&value))
 }
 
 /// Read a NumericDate claim (RFC 7519 §2: any JSON number, may be fractional)
