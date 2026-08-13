@@ -184,12 +184,29 @@ for name in $all_names; do
     n_build_fail=$((n_build_fail+1)); continue
   }
 
-  # Run upstream sky run on the original source tree.
+  # Build + run upstream sky in an isolated copy of the project. sky resolves
+  # modules from the working directory (not a path argument) and its `run`
+  # interleaves build trace onto stdout, so build first, then execute the
+  # emitted binary for clean program output — symmetric with the ipe side.
   sky_out="$(mktemp /tmp/parity-sky.XXXXXX)"
   sky_run_dir="$(mktemp -d "${TMPDIR:-/tmp}/sky-run.XXXXXX")"
+  cp -R "$orig_dir/." "$sky_run_dir/" 2>/dev/null
   sky_rc=0
-  ( cd "$sky_run_dir" && exec timeout 30 "$SKY_BIN" run "$orig_dir" ) \
-    >"$sky_out" 2>/dev/null || sky_rc=$?
+  sky_build_log="$(mktemp /tmp/parity-sky-build.XXXXXX)"
+  if ( cd "$sky_run_dir" && exec timeout 300 "$SKY_BIN" build ) >"$sky_build_log" 2>&1; then
+    sky_app="$sky_run_dir/sky-out/app"
+    [ -x "$sky_app" ] || sky_app="$(find "$sky_run_dir/sky-out" -maxdepth 1 -type f -perm -u+x 2>/dev/null | head -1)"
+    if [ -n "$sky_app" ] && [ -x "$sky_app" ]; then
+      ( cd "$sky_run_dir" && exec timeout 30 "$sky_app" ) >"$sky_out" 2>/dev/null || sky_rc=$?
+    else
+      echo "  (sky build produced no runnable binary for $name)" >&2
+      sky_rc=127
+    fi
+  else
+    sky_rc=1
+    sed 's/^/    sky-build: /' "$sky_build_log" >&2
+  fi
+  rm -f "$sky_build_log"
   rm -rf "$sky_run_dir" 2>/dev/null
 
   # Run the built ipe binary.
