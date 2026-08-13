@@ -211,6 +211,117 @@ class ReturnEntryTask(unittest.TestCase):
         self.assertEqual(_mod.return_entry_task(src), src)
 
 
+class HoistEntryEffect(unittest.TestCase):
+    def test_trailing_effect_discard_becomes_body(self) -> None:
+        """`main = let x = pure … _ = <effect> in ()` hoists the effect to the
+        `let` body, so `main` returns the Task the runtime then runs."""
+        src = (
+            "main =\n"
+            "    let\n"
+            "        z = Zipper.singleton 42\n"
+            "        _ = Io.println (String.fromInt (Zipper.current z))\n"
+            "    in\n"
+            "        ()\n"
+        )
+        out = _mod.hoist_entry_effect(src)
+        self.assertEqual(
+            out,
+            "main =\n"
+            "    let\n"
+            "        z = Zipper.singleton 42\n"
+            "    in\n"
+            "    Io.println (String.fromInt (Zipper.current z))\n",
+        )
+
+    def test_sole_effect_discard_collapses_let(self) -> None:
+        """When the discard is the only binding, the `let` collapses to
+        `main = <effect>`."""
+        src = (
+            "main =\n"
+            "    let\n"
+            '        _ = Io.println "hi"\n'
+            "    in\n"
+            "        ()\n"
+        )
+        out = _mod.hoist_entry_effect(src)
+        self.assertEqual(out, 'main =\n    Io.println "hi"\n')
+
+    def test_task_run_bridge_discard_is_left_untouched(self) -> None:
+        """A `_ = <alias>.run <var>` discard is the entry bridge handled by
+        return_entry_task / ipe-edits, not a plain effect to hoist."""
+        src = (
+            "main =\n"
+            "    let\n"
+            "        pipeline = Db.connect () |> Task.andThen runApp\n"
+            "        _ = Task.run pipeline\n"
+            "    in\n"
+            "        ()\n"
+        )
+        self.assertEqual(_mod.hoist_entry_effect(src), src)
+
+    def test_pure_value_discard_is_left_untouched(self) -> None:
+        """A dead pure-value discard (`_ = xs`, no application) is not an effect
+        to hoist; it is left for the discard-dropping pass."""
+        src = (
+            "main =\n"
+            "    let\n"
+            "        _ = unusedValue\n"
+            "    in\n"
+            "        ()\n"
+        )
+        self.assertEqual(_mod.hoist_entry_effect(src), src)
+
+    def test_non_unit_body_is_a_noop(self) -> None:
+        """A `let` whose body is not `()` is a real value expression, untouched."""
+        src = (
+            "main =\n"
+            "    let\n"
+            "        _ = Io.println x\n"
+            "    in\n"
+            "        result\n"
+        )
+        self.assertEqual(_mod.hoist_entry_effect(src), src)
+
+    def test_non_main_binding_is_a_noop(self) -> None:
+        """Only the top-level `main` binding's own entry idiom is rewritten."""
+        src = (
+            "helper =\n"
+            "    let\n"
+            "        _ = Io.println x\n"
+            "    in\n"
+            "        ()\n"
+        )
+        self.assertEqual(_mod.hoist_entry_effect(src), src)
+
+
+class StripIssueRefComments(unittest.TestCase):
+    def test_leading_issue_ref_block_is_removed(self) -> None:
+        """A leading `--` block whose first line cites an upstream issue is dropped
+        in full."""
+        src = (
+            "-- anzellai/sky#153 — build + run must succeed with the\n"
+            "-- parametric `Zipper a` defined in a sibling module.\n"
+            "module Main exposing (main)\n"
+        )
+        self.assertEqual(
+            _mod.strip_issue_ref_comments(src),
+            "module Main exposing (main)\n",
+        )
+
+    def test_bare_sky_ref_is_also_recognised(self) -> None:
+        src = "-- Regression for sky#42: cross-module ADT.\ntype T = T\n"
+        self.assertEqual(_mod.strip_issue_ref_comments(src), "type T = T\n")
+
+    def test_comment_without_issue_ref_is_kept(self) -> None:
+        src = "-- A plain doc comment.\n-- Second line.\nmodule M exposing (x)\n"
+        self.assertEqual(_mod.strip_issue_ref_comments(src), src)
+
+    def test_ref_only_in_string_is_a_noop(self) -> None:
+        """`sky#N` inside a string literal is not a comment reference."""
+        src = 'msg = "see sky#7 for details"\n'
+        self.assertEqual(_mod.strip_issue_ref_comments(src), src)
+
+
 class InjectMaybeImport(unittest.TestCase):
     def test_missing_maybe_import_is_injected(self) -> None:
         """A file that reaches `Maybe.withDefault` (via the dropped Prelude) but

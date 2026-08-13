@@ -1239,6 +1239,176 @@ def return_entry_task(text: str) -> str:
     return _ENTRY_TASK_RUN.sub(_repl, text)
 
 
+# ── Entry effect-discard hoist (`main = let … _ = <effect> in ()` → effect) ────
+# Upstream Sky eagerly runs a discarded effect at the entry point and returns
+# unit, spelled as a `let` whose final binding discards a side-effecting call and
+# whose body is `()`:
+#
+#     main =
+#         let
+#             x = pure
+#             _ = <effect>
+#         in
+#             ()
+#
+# In Ipê a `main` that returns `()` never runs the effect — the runtime runs the
+# `Task` that `main` RETURNS. The idiomatic form hoists the effect out of the
+# discard and makes it the returned body, preserving any earlier pure bindings:
+#
+#     main =
+#         let
+#             x = pure
+#         in
+#         <effect>
+#
+# When the discard is the only binding, the `let` collapses to `main = <effect>`.
+# This pass is SCOPED to the top-level `main` binding whose `let` ends in a
+# `_ = <effect>` discard immediately before an `in ()` body; the effect must be a
+# function application (it contains inline whitespace after the head), so a dead
+# pure-value discard (`_ = someValue`) is left for the discard-dropping pass. A
+# non-`main` `let … _ = e in ()` is untouched. Runs BEFORE the discard→do rewrite
+# so the entry idiom is turned into an effect-valued body rather than a `do` block
+# that silently drops its trailing effect.
+_ENTRY_MAIN_HEAD = re.compile(r"^main[ \t]*=[ \t]*$")
+_ENTRY_LET_HEAD = re.compile(r"^(?P<indent>[ \t]+)let[ \t]*$")
+_ENTRY_IN_UNIT = re.compile(r"^(?P<indent>[ \t]*)in[ \t]*$")
+_ENTRY_UNIT_BODY = re.compile(r"^[ \t]*\(\)[ \t]*$")
+# An effect discard: `_ = <head> <arg…>` — the RHS is a function application, so it
+# carries inline whitespace after a non-space head. A bare value (`_ = xs`) does
+# not match and is left to the discard-dropping pass.
+_ENTRY_EFFECT_DISCARD = re.compile(
+    r"^(?P<indent>[ \t]+)_[ \t]*=[ \t]*(?P<effect>\S+[ \t]+\S.*)$"
+)
+# A `_ = <alias>.run <arg>` discard is the synchronous entry-boundary bridge, not
+# a plain effect to hoist — it is the domain of `return_entry_task` and the
+# content-anchored ipe-edits, which turn it into a Task-returning `main`. Leaving
+# it for them keeps `hoist_entry_effect` from disturbing those anchors.
+_ENTRY_TASK_RUN_DISCARD = re.compile(r"^[A-Za-z_][A-Za-z0-9_.]*\.run[ \t]")
+
+
+def hoist_entry_effect(text: str) -> str:
+    """Rewrite `main = let … _ = <effect> in ()` to return the effect as its body.
+
+    The discarded trailing effect becomes the `let` body (or the whole `main` RHS
+    when it was the sole binding), so the entry point returns the `Task` the
+    runtime then runs, instead of a `do`/`let` body of `()` that drops it. Only the
+    top-level `main` binding's own `let` is rewritten, and only when its final
+    binding is an effect discard directly before an `in ()`.
+    """
+    lines = text.split("\n")
+    in_tq = _in_triple_quote_ranges(lines)
+    n = len(lines)
+    i = 0
+    while i < n:
+        if in_tq[i] or _ENTRY_MAIN_HEAD.match(lines[i]) is None:
+            i += 1
+            continue
+        # `main =` followed by an indented `let`.
+        if i + 1 >= n or in_tq[i + 1]:
+            i += 1
+            continue
+        let_m = _ENTRY_LET_HEAD.match(lines[i + 1])
+        if let_m is None:
+            i += 1
+            continue
+        let_indent = let_m.group("indent")
+        binding_indent = let_indent + "    "
+
+        # Collect the binding lines up to the `in` at the `let`'s own indent.
+        j = i + 2
+        binding_lines: list[str] = []
+        in_idx = -1
+        while j < n and not in_tq[j]:
+            in_m = _ENTRY_IN_UNIT.match(lines[j])
+            if in_m is not None and in_m.group("indent") == let_indent:
+                in_idx = j
+                break
+            binding_lines.append(lines[j])
+            j += 1
+        if in_idx == -1:
+            i += 1
+            continue
+        # Body must be exactly `()`.
+        if in_idx + 1 >= n or in_tq[in_idx + 1] or _ENTRY_UNIT_BODY.match(lines[in_idx + 1]) is None:
+            i += 1
+            continue
+        # The last non-blank binding must be an effect discard at binding_indent.
+        last = len(binding_lines) - 1
+        while last >= 0 and binding_lines[last].strip() == "":
+            last -= 1
+        if last < 0:
+            i += 1
+            continue
+        disc_m = _ENTRY_EFFECT_DISCARD.match(binding_lines[last])
+        if disc_m is None or disc_m.group("indent") != binding_indent:
+            i += 1
+            continue
+        effect = disc_m.group("effect").rstrip()
+        # A `Task.run`-style bridge discard is left for return_entry_task / edits.
+        if _ENTRY_TASK_RUN_DISCARD.match(effect) is not None:
+            i += 1
+            continue
+        kept = binding_lines[:last]  # bindings before the discard
+        kept_nonblank = [b for b in kept if b.strip() != ""]
+
+        rebuilt: list[str] = [lines[i]]  # `main =`
+        if kept_nonblank:
+            rebuilt.append(lines[i + 1])  # `let`
+            rebuilt.extend(kept)
+            rebuilt.append(f"{let_indent}in")
+            rebuilt.append(f"{let_indent}{effect}")
+        else:
+            # Sole binding was the effect: collapse to `main = <effect>`, the
+            # effect re-anchored to the `let`'s own (body) indent.
+            rebuilt.append(f"{let_indent}{effect}")
+        # Splice: replace lines[i .. in_idx+1] with the rebuilt block.
+        lines = lines[:i] + rebuilt + lines[in_idx + 2 :]
+        n = len(lines)
+        in_tq = _in_triple_quote_ranges(lines)
+        i += len(rebuilt)
+    return "\n".join(lines)
+
+
+# ── Upstream issue-reference comment strip (`sky#NNN` annotations) ─────────────
+# Some upstream files carry a leading `--` comment block that annotates the file
+# against an upstream tracker issue (`sky#NNN` / `anzellai/sky#NNN`), e.g. a
+# regression note. That reference is meaningless in the port, so the whole
+# contiguous `--` comment block introduced by such a reference is dropped. A
+# comment block whose first line carries no issue reference is kept verbatim.
+_ISSUE_REF = re.compile(r"(?:[A-Za-z0-9_.-]+/)?sky#\d+")
+_LINE_COMMENT = re.compile(r"^[ \t]*--")
+
+
+def strip_issue_ref_comments(text: str) -> str:
+    """Drop contiguous leading `--` comment blocks that cite an upstream issue.
+
+    A run of consecutive `--` comment lines whose FIRST line contains an
+    `(<owner>/)?sky#<n>` reference is removed in full; the reference introduces an
+    upstream-tracker annotation that does not belong in the port. Comment blocks
+    with no such reference on their opening line are left untouched, as are `--`
+    comments that trail code (only whole-line comment blocks are considered).
+    """
+    lines = text.split("\n")
+    in_tq = _in_triple_quote_ranges(lines)
+    out: list[str] = []
+    i = 0
+    n = len(lines)
+    while i < n:
+        if (
+            not in_tq[i]
+            and _LINE_COMMENT.match(lines[i]) is not None
+            and _ISSUE_REF.search(lines[i]) is not None
+        ):
+            # Drop this comment line and any immediately-following comment lines.
+            i += 1
+            while i < n and not in_tq[i] and _LINE_COMMENT.match(lines[i]) is not None:
+                i += 1
+            continue
+        out.append(lines[i])
+        i += 1
+    return "\n".join(out)
+
+
 # ── Maybe-import injection (Prelude drop leaves `Maybe.*` unqualified) ─────────
 # Sky's open `Sky.Core.Prelude exposing (..)` re-exported `Ipe.Maybe`'s surface,
 # so upstream files reach `Maybe.withDefault` through the Prelude without a direct
@@ -1462,10 +1632,17 @@ def main(argv: list[str]) -> int:
         # so that edit `find` anchors can match against the un-converted text they
         # were authored against before the `let _ = e` → `do` rewrite changes it.
         renamed = drop_removed_imports(
-            transform(mark_stdlib_db(apply_member_moves(desugar_pure(text))), pairs)
+            transform(
+                mark_stdlib_db(
+                    apply_member_moves(desugar_pure(strip_issue_ref_comments(text)))
+                ),
+                pairs,
+            )
         )
         migrated = inject_maybe_import(
-            return_entry_task(wrap_pubsub_topic(rehome_kernel_alias(renamed)))
+            hoist_entry_effect(
+                return_entry_task(wrap_pubsub_topic(rehome_kernel_alias(renamed)))
+            )
         )
         transformed[path] = prefix_bare_imports(migrated, bare)
 
