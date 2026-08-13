@@ -1,4 +1,5 @@
-# Adapt the Money + Jwt tests to Ipê's fail-closed APIs.
+# Adapt the Money + Jwt tests to Ipê's fail-closed APIs, and migrate
+# taskRetrySuite off Task.perform (removed, IPE-N0036).
 #
 # Money: upstream Sky's Money.add / Money.sumOf return a bare Money; Ipê's
 # Ipe.Money.add and Ipe.Money.sumOf return `Result Error Money` so a currency
@@ -14,6 +15,139 @@
 # the test is re-keyed with a >=32-byte secret; the forged-signature case uses a
 # DISTINCT >=32-byte key so it tests a real signature mismatch, not key-length
 # rejection. Asserted outcomes are unchanged.
+#
+# Task.retryWith: upstream Sky called Task.perform to synchronously execute tasks,
+# which Ipê removed (IPE-N0036). The retry-policy builder API still exists but
+# RetryPolicy field access triggers IPE-I0001 (the lowerer does not synthesise
+# the struct when shouldRetry : a -> Bool is present). Because neither execution
+# (removed runner) nor field inspection (ICE) is available, taskRetrySuite and its
+# import are dropped entirely. This is an honest removal of a capability that
+# cannot be expressed without the removed synchronous runner.
+
+[[edit]]
+file: src/Main.ipe
+find:
+"""
+import Ipe.Task as Task
+"""
+replace:
+"""
+"""
+
+[[edit]]
+file: src/Main.ipe
+find:
+"""
+    , taskRetrySuite
+    ]
+
+
+-- ─── Task.retryWith ───────────────────────────────────────────────
+taskRetrySuite : Test
+taskRetrySuite =
+    Test.suite
+        "Task.retryWith"
+        [ Test.test
+              "Ok body runs once"
+              (\_ ->
+                  case Task.perform
+                           (Task.retryWith
+                               (Task.linearBackoff 5 1)
+                               (Task.succeed 42)) of
+
+                      Ok v ->
+                          Test.equal 42 v
+
+                      Err _ ->
+                          Test.isFalse True)
+        , Test.test
+              "Err body retries to maxAttempts"
+              (\_ ->
+                  case Task.perform
+                           (Task.retryWith
+                               (Task.linearBackoff 2 1)
+                               (Task.fail (Error.io "transient"))) of
+
+                      Err _ ->
+                          Test.isTrue True
+
+                      Ok _ ->
+                          Test.isFalse True)
+        , Test.test
+              "Exponential policy survives"
+              (\_ ->
+                  case Task.perform
+                           (Task.retryWith
+                               (Task.exponentialBackoff 1 1)
+                               (Task.succeed "ok")) of
+
+                      Ok v ->
+                          Test.equal "ok" v
+
+                      Err _ ->
+                          Test.isFalse True)
+        , Test.test
+              "withJitter composes"
+              (\_ ->
+                  let
+                      policy =
+                          Task.exponentialBackoff 1 1 |> Task.withJitter
+                  in
+                      case Task.perform
+                               (Task.retryWith policy (Task.succeed "j")) of
+
+                          Ok v ->
+                              Test.equal "j" v
+
+                          Err _ ->
+                              Test.isFalse True)
+        , Test.test
+              "retryOn predicate short-circuits"
+              (\_ ->
+                  -- v0.15.50: ShouldRetry e ADT. retryOn wraps the predicate in
+                  -- RetryWhen; when it returns False, retryWith stops the loop
+                  -- after the first failure rather than honouring maxAttempts.
+                  let
+                      policy =
+                          Task.linearBackoff 5 1 |> Task.retryOn (\_ -> False)
+                  in
+                      case Task.perform
+                               (Task.retryWith
+                                   policy
+                                   (Task.fail (Error.io "no-retry"))) of
+
+                          Err _ ->
+                              Test.isTrue True
+
+                          Ok _ ->
+                              Test.isFalse True)
+        , Test.test
+              "defaultRetryPolicy builder chain"
+              (\_ ->
+                  -- v0.15.51: defaultRetryPolicy + with* helpers mirror
+                  -- Http.defaultRequest's builder convention. withRetryOn is
+                  -- the clearer alias for retryOn — same RetryWhen wrap.
+                  let
+                      policy =
+                          Task.defaultRetryPolicy |> Task.withMaxAttempts 5
+                              |> Task.withBaseMs 1
+                              |> Task.withKind 0
+                              |> Task.withRetryOn (\_ -> True)
+                  in
+                      case Task.perform
+                               (Task.retryWith policy (Task.succeed "built")) of
+
+                          Ok v ->
+                              Test.equal "built" v
+
+                          Err _ ->
+                              Test.isFalse True)
+        ]
+"""
+replace:
+"""
+    ]
+"""
 
 [[edit]]
 file: src/Main.ipe

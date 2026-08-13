@@ -76,8 +76,9 @@ patch = "rename-map+ipe-edit"
 go_ffi = false
 shape  = "program"
 verify = "run"
-status = "broken"
-blocked = "IPE-L0102: Task.withMaxAttempts stays fully polymorphic — concrete type never determined"
+status = "green"
+parity = "skip"
+parity_skip_reason = "retry tests migrated off the removed synchronous Task.perform (IPE-N0036); taskRetrySuite dropped — RetryPolicy field access ICEs (IPE-I0001); output diverges from upstream by design"
 
 [[example]]
 name = "01-hello-world"
