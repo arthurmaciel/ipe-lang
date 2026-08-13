@@ -5762,7 +5762,7 @@ fn emit_ctor_arm_pat(
     // byte-identical `render_pat` fast path inside.
     let mut alias_counter: usize = 0;
     for (sub, field_ty) in args.iter().zip(fields.iter()) {
-        let selhandler_exprdge = ctx.is_cyclic_self_field(field_ty, home, ty);
+        let self_edge = ctx.is_cyclic_self_field(field_ty, home, ty);
         // self-edge fix: an ALIAS over a cyclic-self-edge (recursive)
         // field is boxed in the enum (`Box<Self>`), so the clone-rebuild
         // path must re-derive its binders from the UNBOXED temp — otherwise
@@ -5770,7 +5770,7 @@ fn emit_ctor_arm_pat(
         // `T` is required (ipe-0-then-cargo-E0308). Bind the field to a fresh
         // raw temp, then re-derive the whole alias shape via the
         // `emit_binding_stmts` machinery against `*temp`.
-        if selhandler_exprdge && pat_contains_alias_in_arm(sub) {
+        if self_edge && pat_contains_alias_in_arm(sub) {
             let temp = format!("__ipe_selfedge_alias_{alias_counter}");
             alias_counter += 1;
             for stmt in emit_binding_stmts(ctx, sub, &format!("*{temp}"))? {
@@ -5789,7 +5789,7 @@ fn emit_ctor_arm_pat(
         )?);
         // A variable bound to a boxed self-edge field is unboxed so the body
         // sees the payload's own type, not `Box<…>`.
-        if selhandler_exprdge && let Pat::Var(s) = sub {
+        if self_edge && let Pat::Var(s) = sub {
             let binder = ctx.emit_ident(*s)?;
             write!(unbox_lines, "let {binder} = *{binder}; ").map_err(|e| {
                 Diagnostic::CompilerBug {
