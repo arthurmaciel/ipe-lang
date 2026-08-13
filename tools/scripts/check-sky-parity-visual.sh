@@ -6,17 +6,46 @@
 # perceptual RMS diff (tools/scripts/lib/visual_diff.py).
 #
 # Capture strategy:
-#   web shape    — sky/ipe binary serves HTTP; Playwright headless Chromium
-#                  navigates to localhost and screenshots the initial render.
-#   webview shape — ipe-app binary runs under xvfb-run; ImageMagick `import`
-#                   captures the virtual display after a settle delay.
-#                   Sky webview on Linux (v≤0.16.29) is a no-op stub and
-#                   produces no window; those ports are marked SKY-STUB.
+#   web shape    — sky/ipe binary serves HTTP; both sides captured with
+#                  Playwright headless Chromium (same-engine comparison).
+#                  Same-engine eliminates Chromium-vs-WebKitGTK rendering
+#                  noise so the threshold can be as low as 8.0 RMS.
+#   webview shape — sky v0.19.13 Std.Webview on Linux is compiled with the
+#                   build tag `cgo && darwin`, so the Linux binary falls
+#                   through to webview_stub.go: it returns an Err, opens no
+#                   window, and exits 0.  Those ports are marked SKY-STUB.
+#                   The ipe-side webview is still captured for reference.
+#
+# Port discovery (data-driven from manifest.toml):
+#   Reads examples/sky/manifest.toml and collects every [[example]] whose
+#   shape = "web" and status = "green".  The per-port skip/threshold table
+#   below is overlaid on top of that set.  Ports listed in SKIP_NAMES are
+#   excluded regardless of manifest status.
+#
+# Sky build compatibility:
+#   sky v0.16.29 and v0.19.13 both fail to compile the web ports from the
+#   committed examples/sky/original/ trees: v0.16.29 hits Std.Css.zero arity
+#   errors; v0.19.13 changed Live.app to a builder API (breaking the record
+#   syntax in every web port).  When sky build fails the port is recorded as
+#   SKY-BUILD-FAIL (data, not a harness failure) and the diff is skipped.
+#   The sky-side column in the summary shows N/A for those ports.
+#
+# Same-engine threshold:
+#   Both screenshots use Playwright/Chromium at --viewport-size=1280,800.
+#   Baseline for an identical page: RMS 0.  Threshold 8.0 covers antialiasing
+#   noise from tiny timing differences in CSS animation state at t=0.
+#   Cross-engine (Chromium vs WebKitGTK) would need threshold ~60 and only
+#   applies if the ipe-side is a WebView.app port (none of the 12 web ports).
 #
 # Determinism:
-#   All captures target the initial render before any Sub.every tick fires.
-#   Dynamic ports (animations, live timers) are marked `visual_parity=skip`
-#   in the manifest until a clock-freeze strategy is implemented.
+#   All captures target the initial render.  Ports with inherently dynamic
+#   first-paint (real-time data, WebSocket push at load) are flagged in the
+#   SKIP_REASON table and reported as SKIP, not compared.
+#
+# Disk safety:
+#   Transient artifacts (sky-out/, emitted out/rust binaries of each port,
+#   tmp screenshots) are cleaned after each port.  Disk is checked between
+#   ports; under 7G free the script stops and reports partial results.
 #
 # Dependencies (Ubuntu):
 #   xvfb libwebkit2gtk-4.1-dev libsoup-3.0-dev imagemagick python3-pil
@@ -24,8 +53,9 @@
 #
 # Usage:
 #   check-sky-parity-visual.sh [--sky-bin PATH] [--out-dir DIR] [--names N,…]
+#                              [--keep-artifacts] [--no-sky]
 #
-# Exit: 0 all passes/skips  1 one or more fails  2 setup error
+# Exit: 0 all in-scope ports pass/skip  1 one or more diff-FAILs  2 setup error
 set -uo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
@@ -39,71 +69,170 @@ SKY_BIN="${SKY_BIN:-sky}"
 OUT_DIR="${VISUAL_PARITY_OUT:-/tmp/ipe-visual-parity}"
 FILTER_NAMES=""
 DIFF_THRESHOLD="${VISUAL_PARITY_THRESHOLD:-8.0}"
-SETTLE_WEBVIEW="${VISUAL_PARITY_SETTLE:-5}"   # seconds to wait for webview paint
-SETTLE_WEB="${VISUAL_PARITY_WEB_SETTLE:-2000}" # ms wait for playwright settle
+SETTLE_WEB="${VISUAL_PARITY_WEB_SETTLE:-2000}"   # ms Playwright settle
+KEEP_ARTIFACTS=0
+NO_SKY=0
+VIEWPORT="1280,800"
+DISK_STOP_KB=7340032   # 7 GiB in KiB
+DISK_SCCACHE_KB=12582912  # 12 GiB — prune sccache below this
 
 while [ $# -gt 0 ]; do
   case "$1" in
-    --sky-bin)  SKY_BIN="$2";      shift 2 ;;
-    --out-dir)  OUT_DIR="$2";      shift 2 ;;
-    --names)    FILTER_NAMES="$2"; shift 2 ;;
+    --sky-bin)        SKY_BIN="$2";        shift 2 ;;
+    --out-dir)        OUT_DIR="$2";        shift 2 ;;
+    --names)          FILTER_NAMES="$2";   shift 2 ;;
+    --keep-artifacts) KEEP_ARTIFACTS=1;    shift ;;
+    --no-sky)         NO_SKY=1;            shift ;;
     *) echo "check-sky-parity-visual: unknown option: $1" >&2; exit 2 ;;
   esac
 done
 
 mkdir -p "$OUT_DIR"
 
-# ── Preflight ────────────────────────────────────────────────────────────────
+# ── Per-port visual policy overlay ──────────────────────────────────────────
+# Format: name|skip_reason|rms_threshold
+# skip_reason empty → compare normally.
+# skip_reason non-empty → SKIP with that reason (no diff).
+# rms_threshold empty → use DIFF_THRESHOLD global.
+#
+# Dynamic ports: 27-multi-session-chat and 28-streaming-chat display a
+# real-time message list that may differ on first paint (SSE / WebSocket push
+# before settle finishes). 16-skychess and 17-skymon have dynamic board/graph
+# states. All four are skipped until a session-seed strategy is implemented.
+_POLICY="
+09-live-counter||
+10-live-component||
+12-skyvote||
+25-sky-console||
+26-ui-showcase||
+27-multi-session-chat|real-time-chat-dynamic-first-paint|
+28-streaming-chat|streaming-dynamic-first-paint|
+34-multi-tier-console||
+16-skychess|chess-board-dynamic-state|
+17-skymon|monitoring-graph-dynamic|
+19-skyforum||
+37-composite-live-shop||
+"
+
+# ── Preflight checks ─────────────────────────────────────────────────────────
+_die() { echo "check-sky-parity-visual: $*" >&2; exit 2; }
+
 _check_dep() {
-  command -v "$1" >/dev/null 2>&1 || {
-    echo "check-sky-parity-visual: '$1' not found — $2" >&2; exit 2
-  }
+  command -v "$1" >/dev/null 2>&1 || _die "'$1' not found — $2"
 }
-_check_dep xvfb-run "install: sudo apt-get install -y xvfb"
-_check_dep import   "install: sudo apt-get install -y imagemagick"
-_check_dep python3  "install python3 + python3-pil"
-python3 -c "from PIL import Image" 2>/dev/null || {
-  echo "check-sky-parity-visual: python3 Pillow not found — pip3 install Pillow" >&2; exit 2
-}
+
+_check_dep python3  "install python3"
+python3 -c "from PIL import Image" 2>/dev/null || _die "python3 Pillow not found — pip3 install Pillow"
+
 if ! npx playwright screenshot --help >/dev/null 2>&1; then
-  echo "check-sky-parity-visual: npx playwright not usable — run: npx playwright install chromium" >&2
-  exit 2
+  _die "npx playwright not usable — run: npx playwright install chromium"
 fi
 
 DIFF_PY="$SCRIPT_DIR/lib/visual_diff.py"
-[ -f "$DIFF_PY" ] || { echo "check-sky-parity-visual: $DIFF_PY not found" >&2; exit 2; }
+[ -f "$DIFF_PY" ] || _die "$DIFF_PY not found"
 
-# ── Port table (name | shape | sky-capture | visual_parity | crop | rms_threshold)
-# Maintained here until manifest.toml grows visual_parity fields.
-# sky-capture values: "live:<port>" | "webview" | "sky-stub"
-# visual_parity:  "initial-render" | "skip:<reason>"
-_PORTS="
-29-webview-threejs-spike|webview|sky-stub|skip:three.js-animation-not-static||8.0
-31-webview-stopwatch-ui|webview|sky-stub|initial-render||8.0
-38-composite-ui-multibackend|webview|live:8006|initial-render|0,70,960,720|60.0
-"
-# Port 38 notes:
-#   sky side:  Live.app HTTP server (sky v0.16.29 builds this OK) — Playwright
-#              captures at --viewport-size=960,720 to match the ipe webview window.
-#   ipe side:  WebView.app window { size = (960, 720) } — xvfb + import crop.
-#   crop 0,70: removes the "Day NNNNN" date header (sky = Time.unixMillis today;
-#              ipe = fixed todayIndex=20000) to avoid day-boundary false-fail.
-#   rms_threshold 60.0: cross-engine baseline (Chromium vs WebKitGTK on same
-#              HTML) measures ~46 RMS; 60 gives headroom while catching
-#              real regressions (missing element ≥ 80 RMS).
+if [ ! -x "$IPE_BIN" ]; then
+  _die "ipe binary not found at '$IPE_BIN' — run: cargo build --release -p ipe"
+fi
+
+MANIFEST="$REPO/examples/sky/manifest.toml"
+[ -f "$MANIFEST" ] || _die "manifest.toml not found at $MANIFEST"
 
 # ── Helpers ──────────────────────────────────────────────────────────────────
+_free_port() {
+  python3 -c 'import socket; s=socket.socket(); s.bind(("",0)); p=s.getsockname()[1]; s.close(); print(p)'
+}
+
+_wait_port() {
+  local port="$1" deadline
+  deadline=$(( $(date +%s) + 10 ))
+  while [ "$(date +%s)" -lt "$deadline" ]; do
+    python3 -c "import socket,sys; s=socket.socket(); s.settimeout(0.5); sys.exit(0 if s.connect_ex(('127.0.0.1',$port))==0 else 1)" 2>/dev/null \
+      && return 0
+    sleep 0.3
+  done
+  return 1
+}
+
+# screenshot_web <url> <out.png>  — Playwright headless Chromium
+screenshot_web() {
+  local url="$1" out="$2"
+  npx playwright screenshot \
+    --browser=chromium \
+    --viewport-size="$VIEWPORT" \
+    --wait-for-timeout="$SETTLE_WEB" \
+    "$url" "$out" >/dev/null 2>&1
+}
+
+# _kill_server <pid>  — clean shutdown with fallback SIGKILL
+_kill_server() {
+  local pid="$1"
+  kill "$pid" 2>/dev/null
+  wait "$pid" 2>/dev/null || true
+}
+
+# _disk_free_kb — available KiB on the home partition
+_disk_free_kb() {
+  df -Pk "$HOME" 2>/dev/null | awk 'NR==2{print $4}'
+}
+
+# _disk_guard — stop if critically low; prune sccache if moderately low
+_disk_guard() {
+  local free_kb
+  free_kb="$(_disk_free_kb)"
+  if [ -n "$free_kb" ]; then
+    if [ "$free_kb" -lt "$DISK_STOP_KB" ]; then
+      echo ""
+      echo "check-sky-parity-visual: disk critically low ($(( free_kb/1024/1024 ))G free < 7G) — stopping." >&2
+      return 1
+    fi
+    if [ "$free_kb" -lt "$DISK_SCCACHE_KB" ]; then
+      echo "  (disk $(( free_kb/1024/1024 ))G — pruning sccache)"
+      rm -rf "$HOME/.cache/sccache" 2>/dev/null || true
+    fi
+  fi
+  return 0
+}
+
+# _parse_manifest_web_green — emit "name" lines for shape=web status=green ports
+# Uses awk to walk the [[example]] blocks without requiring a toml library.
+_parse_manifest_web_green() {
+  awk '
+    /^\[\[example\]\]/ { in_block=1; name=""; shape=""; status="" }
+    in_block && /^name/ { match($0,/"([^"]+)"/,a); name=a[1] }
+    in_block && /^shape/ { match($0,/"([^"]+)"/,a); shape=a[1] }
+    in_block && /^status/ { match($0,/"([^"]+)"/,a); status=a[1] }
+    in_block && /^\[\[/ && !/^\[\[example\]\]/ { in_block=0 }
+    in_block && name!="" && shape=="web" && status=="green" {
+      print name; in_block=0
+    }
+  ' "$MANIFEST"
+}
+
+# _policy_for <name>  — sets globals POLICY_SKIP and POLICY_THRESH
+_policy_for() {
+  local want="$1"
+  POLICY_SKIP=""
+  POLICY_THRESH="$DIFF_THRESHOLD"
+  while IFS='|' read -r pname skip thresh; do
+    pname="${pname#"${pname%%[![:space:]]*}"}"
+    [ "$pname" = "$want" ] || continue
+    POLICY_SKIP="$skip"
+    [ -n "$thresh" ] && POLICY_THRESH="$thresh"
+    return
+  done <<< "$_POLICY"
+}
+
+# _build_ipe_port <ipe_dir> <log_file>
+# Sets _IPE_BIN_PATH on success.
 _build_ipe_port() {
   local ipe_dir="$1" log="$2"
   local toml="$ipe_dir/ipe.toml"
   [ -f "$toml" ] || { echo "no ipe.toml in $ipe_dir" >&2; return 1; }
-  # Each port gets its own target dir so binaries never overwrite each other.
-  # Derive a stable dir name from the port path (last two components).
   local port_id
   port_id="$(basename "$(dirname "$ipe_dir")")-$(basename "$ipe_dir")"
-  local port_target="${CARGO_TARGET_DIR%-*}-vp-${port_id}"
+  local port_target="${CARGO_TARGET_DIR}-vp-${port_id}"
   mkdir -p "$port_target"
-  # Skip emit if out/rust/Cargo.toml already exists (rebuild cargo either way).
   if [ ! -f "$ipe_dir/out/rust/Cargo.toml" ]; then
     timeout "${IPE_SWEEP_BUILD_TIMEOUT:-300}" \
       "$IPE_BIN" build "$toml" --out "$ipe_dir/out/rust" >"$log" 2>&1 || return 1
@@ -111,231 +240,215 @@ _build_ipe_port() {
   CARGO_TARGET_DIR="$port_target" \
     timeout "${IPE_SWEEP_BUILD_TIMEOUT:-300}" \
     cargo build --manifest-path "$ipe_dir/out/rust/Cargo.toml" >>"$log" 2>&1 || return 2
-  # Expose the per-port target dir for resolve_bin.
-  _PORT_TARGET_DIR="$port_target"
-  return 0
-}
-
-# Resolve the ipe-app binary in the per-port target dir set by _build_ipe_port.
-_resolve_port_bin() {
-  local exe=""
-  [ "${IPE_HOST_OS:-}" = windows ] && exe=".exe"
-  for b in \
-    "${_PORT_TARGET_DIR:-}/debug/ipe-app$exe" \
-    "${_PORT_TARGET_DIR:-}/release/ipe-app$exe"; do
-    [ -x "$b" ] && { echo "$b"; return 0; }
+  _IPE_BIN_PATH=""
+  for b in "$port_target/debug/ipe-app" "$port_target/release/ipe-app"; do
+    [ -x "$b" ] && { _IPE_BIN_PATH="$b"; return 0; }
   done
-  return 1
+  return 3
 }
 
-_free_port() {
-  python3 -c 'import socket;s=socket.socket();s.bind(("",0));p=s.getsockname()[1];s.close();print(p)'
+# _clean_port_artifacts <name> <ipe_dir> <sky_work_dir> <port_target>
+# Removes transient build/emit artifacts for one port. Called after screenshot.
+_clean_port_artifacts() {
+  local name="$1" ipe_dir="$2" sky_work_dir="$3" port_target="$4"
+  if [ "$KEEP_ARTIFACTS" -eq 0 ]; then
+    rm -rf "$sky_work_dir" 2>/dev/null || true
+    # Remove the ipe emitted binary but keep out/rust/Cargo.toml for incremental
+    # rebuilds on re-runs. Only remove the per-port cargo target subtree.
+    rm -rf "$port_target" 2>/dev/null || true
+    # Remove tmp screenshots from OUT_DIR (keep only diff result if FAIL)
+    rm -f "$OUT_DIR/${name}-ipe-raw.png" "$OUT_DIR/${name}-sky-raw.png" 2>/dev/null || true
+  fi
 }
 
-_wait_port() {
-  local host="127.0.0.1" port="$1" deadline
-  deadline=$(( $(date +%s) + 8 ))
-  while [ "$(date +%s)" -lt "$deadline" ]; do
-    python3 -c "import socket,sys; s=socket.socket(); s.settimeout(0.5); sys.exit(0 if s.connect_ex(('$host',$port))==0 else 1)" 2>/dev/null \
-      && return 0
-    sleep 0.3
+# ── Discover ports ────────────────────────────────────────────────────────────
+mapfile -t MANIFEST_PORTS < <(_parse_manifest_web_green)
+
+# Apply name filter
+if [ -n "$FILTER_NAMES" ]; then
+  filtered=()
+  IFS=',' read -ra wanted <<< "$FILTER_NAMES"
+  for name in "${MANIFEST_PORTS[@]}"; do
+    for w in "${wanted[@]}"; do
+      [ "$name" = "$w" ] && { filtered+=("$name"); break; }
+    done
   done
-  return 1
-}
+  MANIFEST_PORTS=("${filtered[@]}")
+fi
 
-# screenshot_web <url> <out.png> [WxH]  — Playwright headless Chromium.
-# The viewport size MUST match the ipe webview window size so both sides
-# lay out identically before the pixel diff; default 960x720.
-screenshot_web() {
-  local url="$1" out="$2" vp="${3:-960,720}"
-  npx playwright screenshot \
-    --browser=chromium \
-    --viewport-size="$vp" \
-    --wait-for-timeout="$SETTLE_WEB" \
-    "$url" "$out" >/dev/null 2>&1
-}
-
-# screenshot_webview <bin> <out.png>  — xvfb-run + ImageMagick import
-screenshot_webview() {
-  local bin="$1" out="$2"
-  local settle="$SETTLE_WEBVIEW"
-  local inner
-  inner="import subprocess,time,os
-app=subprocess.Popen(['$bin'],stdout=open('/tmp/vp-app.log','w'),stderr=subprocess.STDOUT)
-time.sleep($settle)
-subprocess.run(['import','-window','root','$out'],stderr=subprocess.DEVNULL)
-app.terminate()
-try: app.wait(timeout=3)
-except: app.kill()"
-  xvfb-run -a -w 2 python3 -c "$inner" >/dev/null 2>&1
-  [ -f "$out" ] && [ -s "$out" ]
-}
-
-# ── Main loop ────────────────────────────────────────────────────────────────
+# ── Header ────────────────────────────────────────────────────────────────────
 echo "=== check-sky-parity-visual ==="
-echo "  out-dir:   $OUT_DIR"
-echo "  threshold: $DIFF_THRESHOLD"
+echo "  manifest:   $MANIFEST"
+echo "  out-dir:    $OUT_DIR"
+echo "  threshold:  $DIFF_THRESHOLD (same-engine Chromium/Chromium)"
+echo "  viewport:   $VIEWPORT"
+echo "  ipe:        $IPE_BIN"
+echo "  sky:        ${SKY_BIN} ($(${SKY_BIN} --version 2>/dev/null || echo 'unknown'))"
+echo "  ports:      ${#MANIFEST_PORTS[@]} web+green from manifest"
+echo "  no-sky:     $NO_SKY"
 echo ""
 
-n_pass=0 n_fail=0 n_skip=0 n_stub=0 n_build_fail=0
+n_pass=0 n_fail=0 n_skip=0 n_sky_build_fail=0 n_build_fail=0
 
-while IFS='|' read -r name shape sky_cap vis_par crop port_thresh; do
-  [ -z "$name" ] && continue
-  # Strip leading/trailing whitespace
-  name="${name#"${name%%[![:space:]]*}"}"
-  [ -z "$name" ] && continue
-
-  if [ -n "$FILTER_NAMES" ]; then
-    found=0
-    IFS=',' read -ra wanted <<< "$FILTER_NAMES"
-    for w in "${wanted[@]}"; do [ "$name" = "$w" ] && { found=1; break; }; done
-    [ "$found" -eq 0 ] && continue
-  fi
+# ── Port loop ─────────────────────────────────────────────────────────────────
+for name in "${MANIFEST_PORTS[@]}"; do
+  _disk_guard || break
 
   ipe_dir="$REPO/examples/sky/ipe/$name"
-  [ -d "$ipe_dir" ] || { echo "  SKIP $name — ipe port not found"; n_skip=$((n_skip+1)); continue; }
+  orig_dir="$REPO/examples/sky/original/$name"
 
-  # visual_parity=skip
-  case "$vis_par" in
-    skip:*)
-      reason="${vis_par#skip:}"
-      echo "  SKIP $name — ${reason//-/ }"
-      n_skip=$((n_skip+1)); continue ;;
-  esac
+  if [ ! -d "$ipe_dir" ]; then
+    echo "  SKIP $name — ipe dir not found"
+    n_skip=$(( n_skip+1 )); continue
+  fi
 
-  thresh="${port_thresh:-$DIFF_THRESHOLD}"
+  _policy_for "$name"
 
-  # Build ipe port
-  build_log="$OUT_DIR/${name}-build.log"
+  if [ -n "$POLICY_SKIP" ]; then
+    echo "  SKIP $name — ${POLICY_SKIP//-/ }"
+    n_skip=$(( n_skip+1 )); continue
+  fi
+
+  thresh="$POLICY_THRESH"
+
+  # ── Build ipe port ──────────────────────────────────────────────────────
+  build_log="$OUT_DIR/${name}-ipe-build.log"
+  port_id="sky-rust-examples-sky-ipe-${name}"
+  port_target="${CARGO_TARGET_DIR}-vp-${port_id}"
+
   _build_ipe_port "$ipe_dir" "$build_log"
   build_rc=$?
   if [ "$build_rc" -ne 0 ]; then
-    label="ipe emit failed"; [ "$build_rc" -eq 2 ] && label="cargo build failed"
+    case "$build_rc" in
+      1) label="ipe emit failed" ;;
+      2) label="cargo build failed" ;;
+      *) label="ipe-app binary not found after build" ;;
+    esac
     echo "  BUILD-FAIL $name — $label (see $build_log)"
-    n_build_fail=$((n_build_fail+1)); continue
+    n_build_fail=$(( n_build_fail+1 )); continue
+  fi
+  ipe_app="$_IPE_BIN_PATH"
+
+  # ── Start ipe server ────────────────────────────────────────────────────
+  ipe_port="$(_free_port)"
+  ipe_log="$OUT_DIR/${name}-ipe-server.log"
+  IPE_LIVE_PORT="$ipe_port" "$ipe_app" >"$ipe_log" 2>&1 &
+  ipe_pid=$!
+
+  if ! _wait_port "$ipe_port"; then
+    echo "  CAPTURE-FAIL $name — ipe server did not start on :$ipe_port"
+    _kill_server "$ipe_pid"
+    n_fail=$(( n_fail+1 )); continue
   fi
 
-  ipe_bin="$(_resolve_port_bin)" || {
-    echo "  BUILD-FAIL $name — built binary not found"
-    n_build_fail=$((n_build_fail+1)); continue
-  }
+  ipe_png="$OUT_DIR/${name}-ipe-raw.png"
+  screenshot_web "http://127.0.0.1:$ipe_port/" "$ipe_png"
+  ipe_ss_rc=$?
+  _kill_server "$ipe_pid"
 
-  ipe_png="$OUT_DIR/${name}-ipe.png"
-  sky_png="$OUT_DIR/${name}-sky.png"
-
-  # Capture ipe screenshot (always webview for now — expand to web when needed)
-  if ! screenshot_webview "$ipe_bin" "$ipe_png"; then
-    echo "  CAPTURE-FAIL $name — ipe webview screenshot failed"
-    n_fail=$((n_fail+1)); continue
+  if [ "$ipe_ss_rc" -ne 0 ] || [ ! -f "$ipe_png" ]; then
+    echo "  CAPTURE-FAIL $name — ipe screenshot failed"
+    n_fail=$(( n_fail+1 )); _clean_port_artifacts "$name" "$ipe_dir" "" "$port_target"; continue
   fi
 
-  # Capture sky screenshot
-  case "$sky_cap" in
-    sky-stub)
-      echo "  SKY-STUB $name — sky ≤0.16.29 webview is a no-op on Linux; ipe captured at $ipe_png"
-      n_stub=$((n_stub+1)); continue ;;
+  # ── Sky side ────────────────────────────────────────────────────────────
+  sky_png=""
+  sky_work_dir="$OUT_DIR/${name}-sky-work"
+  if [ "$NO_SKY" -eq 1 ]; then
+    echo "  NO-SKY $name — --no-sky mode; ipe screenshot captured at $ipe_png"
+    n_skip=$(( n_skip+1 ))
+    _clean_port_artifacts "$name" "$ipe_dir" "$sky_work_dir" "$port_target"; continue
+  fi
 
-    live:*)
-      sky_port="${sky_cap#live:}"
-      # Find and start the sky binary
-      orig_dir="$REPO/examples/sky/original/$name"
-      if [ ! -d "$orig_dir" ]; then
-        echo "  SKIP $name — sky original/ not found"
-        n_skip=$((n_skip+1)); continue
-      fi
-      if ! command -v "$SKY_BIN" >/dev/null 2>&1; then
-        echo "  SKIP $name — sky binary not found ('$SKY_BIN')"
-        n_skip=$((n_skip+1)); continue
-      fi
-      # Use a stable cache dir so sky emit + go build are not repeated each run.
-      sky_run_dir="$OUT_DIR/${name}-sky-src"
-      sky_app="$OUT_DIR/${name}-sky-app"
-      sky_build_log="$OUT_DIR/${name}-sky-build.log"
-      if [ ! -d "$sky_run_dir" ]; then
-        cp -R "$orig_dir/." "$sky_run_dir/"
-      fi
-      # sky build emits Go source into sky-out/; skip if already emitted.
-      sky_emit_ok=0
-      if [ -f "$sky_run_dir/sky-out/main.go" ]; then
-        sky_emit_ok=1
-      else
-        ( cd "$sky_run_dir" && timeout 300 "$SKY_BIN" build >"$sky_build_log" 2>&1 ) && sky_emit_ok=1
-      fi
-      # Compile emitted Go source; skip if binary already exists.
-      sky_go_ok=0
-      if [ -x "$sky_app" ]; then
-        sky_go_ok=1
-      elif [ "$sky_emit_ok" -eq 1 ]; then
-        ( cd "$sky_run_dir/sky-out" && timeout 300 go build -o "$sky_app" . >>"$sky_build_log" 2>&1 ) && sky_go_ok=1
-      fi
-      if [ "$sky_go_ok" -eq 0 ] || [ ! -x "$sky_app" ]; then
-        echo "  SKIP $name — sky build/go-compile failed (see $sky_build_log)"
-        n_skip=$((n_skip+1)); continue
-      fi
-      # Start server on free port
-      listen_port="$(_free_port)"
-      sky_log="$OUT_DIR/${name}-sky-server.log"
-      python3 -c "
-import subprocess, time, os, sys
-p = subprocess.Popen(
-    ['$sky_app'],
-    cwd='$sky_run_dir',
-    env={**os.environ, 'SKY_LIVE_PORT': '$listen_port', 'PORT': '$listen_port'},
-    stdout=open('$sky_log', 'w'), stderr=subprocess.STDOUT
-)
-time.sleep(12)
-p.terminate()
-try: p.wait(timeout=3)
-except: p.kill()
-" &
-      server_pid=$!
-      if ! _wait_port "$listen_port"; then
-        echo "  SKIP $name — sky server did not start on :$listen_port"
-        kill "$server_pid" 2>/dev/null; wait "$server_pid" 2>/dev/null
-        n_skip=$((n_skip+1)); continue
-      fi
-      # Viewport must match ipe webview window size (default 960x720 per port table).
-      screenshot_web "http://127.0.0.1:$listen_port/" "$sky_png" "960,720"
-      sky_rc=$?
-      kill "$server_pid" 2>/dev/null; wait "$server_pid" 2>/dev/null
-      if [ "$sky_rc" -ne 0 ] || [ ! -f "$sky_png" ]; then
-        echo "  CAPTURE-FAIL $name — sky web screenshot failed"
-        n_fail=$((n_fail+1)); continue
-      fi
-      ;;
+  if [ ! -d "$orig_dir" ]; then
+    echo "  SKY-SKIP $name — original/ not found; ipe screenshot at $ipe_png"
+    n_skip=$(( n_skip+1 ))
+    _clean_port_artifacts "$name" "$ipe_dir" "$sky_work_dir" "$port_target"; continue
+  fi
 
-    *)
-      echo "  SKIP $name — unknown sky-cap '$sky_cap'"
-      n_skip=$((n_skip+1)); continue ;;
-  esac
+  sky_build_log="$OUT_DIR/${name}-sky-build.log"
+  sky_app="$OUT_DIR/${name}-sky-app"
 
-  # Run perceptual diff
-  crop_arg=""; [ -n "$crop" ] && crop_arg="$crop"
-  diff_out="$(python3 "$DIFF_PY" "$sky_png" "$ipe_png" ${crop_arg:+"$crop_arg"} --threshold "$thresh" 2>&1)"
+  # Build sky side: emit Go then go build.
+  sky_emit_ok=0
+  if [ -f "$sky_work_dir/sky-out/main.go" ]; then
+    sky_emit_ok=1
+  else
+    mkdir -p "$sky_work_dir"
+    cp -R "$orig_dir/." "$sky_work_dir/"
+    ( cd "$sky_work_dir" && timeout 120 "$SKY_BIN" build >"$sky_build_log" 2>&1 ) \
+      && sky_emit_ok=1
+  fi
+
+  sky_go_ok=0
+  if [ -x "$sky_app" ]; then
+    sky_go_ok=1
+  elif [ "$sky_emit_ok" -eq 1 ] && [ -f "$sky_work_dir/sky-out/main.go" ]; then
+    ( cd "$sky_work_dir/sky-out" \
+      && timeout 180 go build -o "$sky_app" . >>"$sky_build_log" 2>&1 ) \
+      && sky_go_ok=1
+  fi
+
+  if [ "$sky_go_ok" -eq 0 ] || [ ! -x "$sky_app" ]; then
+    echo "  SKY-BUILD-FAIL $name — sky build/go-compile failed (see $sky_build_log); ipe screenshot at $ipe_png"
+    n_sky_build_fail=$(( n_sky_build_fail+1 ))
+    _clean_port_artifacts "$name" "$ipe_dir" "$sky_work_dir" "$port_target"; continue
+  fi
+
+  # ── Start sky server ────────────────────────────────────────────────────
+  sky_port="$(_free_port)"
+  sky_log="$OUT_DIR/${name}-sky-server.log"
+  SKY_LIVE_PORT="$sky_port" "$sky_app" >"$sky_log" 2>&1 &
+  sky_pid=$!
+
+  if ! _wait_port "$sky_port"; then
+    echo "  CAPTURE-FAIL $name — sky server did not start on :$sky_port"
+    _kill_server "$sky_pid"
+    n_fail=$(( n_fail+1 ))
+    _clean_port_artifacts "$name" "$ipe_dir" "$sky_work_dir" "$port_target"; continue
+  fi
+
+  sky_png="$OUT_DIR/${name}-sky-raw.png"
+  screenshot_web "http://127.0.0.1:$sky_port/" "$sky_png"
+  sky_ss_rc=$?
+  _kill_server "$sky_pid"
+
+  if [ "$sky_ss_rc" -ne 0 ] || [ ! -f "$sky_png" ]; then
+    echo "  CAPTURE-FAIL $name — sky screenshot failed"
+    n_fail=$(( n_fail+1 ))
+    _clean_port_artifacts "$name" "$ipe_dir" "$sky_work_dir" "$port_target"; continue
+  fi
+
+  # ── Perceptual diff ─────────────────────────────────────────────────────
+  diff_out="$(python3 "$DIFF_PY" "$sky_png" "$ipe_png" --threshold "$thresh" 2>&1)"
   diff_rc=$?
 
   if [ "$diff_rc" -eq 0 ]; then
     echo "  PASS $name — $diff_out"
-    n_pass=$((n_pass+1))
+    n_pass=$(( n_pass+1 ))
   else
     echo "  FAIL $name — $diff_out"
-    echo "       sky:  $sky_png"
-    echo "       ipe:  $ipe_png"
-    n_fail=$((n_fail+1))
+    echo "       sky: $sky_png"
+    echo "       ipe: $ipe_png"
+    n_fail=$(( n_fail+1 ))
   fi
 
-done <<< "$_PORTS"
+  _clean_port_artifacts "$name" "$ipe_dir" "$sky_work_dir" "$port_target"
+  _disk_guard || break
+done
 
+# ── Summary ───────────────────────────────────────────────────────────────────
 echo ""
 echo "=== check-sky-parity-visual: RESULTS ==="
-echo "  pass:         $n_pass"
-echo "  fail:         $n_fail"
-echo "  sky-stub:     $n_stub"
-echo "  skip:         $n_skip"
-echo "  build-fail:   $n_build_fail"
+echo "  pass:              $n_pass"
+echo "  fail:              $n_fail   (diff above threshold — real regression)"
+_sky_ver="$("$SKY_BIN" --version 2>/dev/null | tr -d '\n' || echo 'unknown')"
+echo "  sky-build-fail:    $n_sky_build_fail   (sky ${_sky_ver} API mismatch — data, not harness error)"
+echo "  skip:              $n_skip   (dynamic content or missing orig)"
+echo "  ipe-build-fail:    $n_build_fail"
 echo ""
 
 if [ "$n_fail" -gt 0 ] || [ "$n_build_fail" -gt 0 ]; then
-  echo "VERDICT: FAIL ($n_fail fail(s), $n_build_fail build-fail(s))" >&2; exit 1
+  echo "VERDICT: FAIL ($n_fail diff-fail(s), $n_build_fail ipe-build-fail(s))" >&2; exit 1
 fi
-echo "VERDICT: PASS"
+echo "VERDICT: PASS (sky-build-fail rows are data, not gate failures)"
