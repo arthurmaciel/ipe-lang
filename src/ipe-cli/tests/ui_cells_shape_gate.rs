@@ -64,8 +64,8 @@ const WEB_UI_CELLS: &str = r"module Main exposing (main)
 
 import Ipe.Tea.Web as Web
 import Ipe.Ui as Ui
-import Ipe.Cmd
-import Ipe.Sub
+import Ipe.Tea.Web.Cmd
+import Ipe.Tea.Web.Sub
 
 type Msg = Tick
 
@@ -101,8 +101,8 @@ const WEBVIEW_UI_CELLS: &str = r#"module Main exposing (main)
 
 import Ipe.Tea.WebView as Webview
 import Ipe.Ui as Ui
-import Ipe.Cmd as Cmd
-import Ipe.Sub as Sub
+import Ipe.Tea.WebView.Cmd as Cmd
+import Ipe.Tea.WebView.Sub as Sub
 
 type Msg = Increment
 
@@ -142,8 +142,8 @@ const TERMINAL_UI_CELLS: &str = r#"module Main exposing (main)
 
 import Ipe.Tea.Terminal as Terminal
 import Ipe.Ui as Ui
-import Ipe.Cmd
-import Ipe.Sub
+import Ipe.Tea.Terminal.Cmd
+import Ipe.Tea.Terminal.Sub
 
 type Msg = NoOp
 

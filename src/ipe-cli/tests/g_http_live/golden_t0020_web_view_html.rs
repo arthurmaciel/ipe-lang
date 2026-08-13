@@ -29,8 +29,8 @@ use ipe::CliError;
 const ANY_VIEW_RETURNS_HTML: &str = r#"module Main exposing (main)
 import Ipe.Tea.Web as Web
 import Ipe.Ui as Ui
-import Ipe.Cmd
-import Ipe.Sub
+import Ipe.Tea.Web.Cmd
+import Ipe.Tea.Web.Sub
 type Msg = Bump | Ignored
 type alias Model = { count : Int }
 init _req = ( { count = 0 }, Cmd.none )
@@ -54,8 +54,8 @@ main =
 const ANY_VIEW_RETURNS_ELEMENT: &str = r#"module Main exposing (main)
 import Ipe.Tea.Web as Web
 import Ipe.Ui as Ui
-import Ipe.Cmd
-import Ipe.Sub
+import Ipe.Tea.Web.Cmd
+import Ipe.Tea.Web.Sub
 type Msg = Bump | Ignored
 type alias Model = { count : Int }
 init _req = ( { count = 0 }, Cmd.none )
@@ -79,8 +79,8 @@ main =
 const ANY_VIEW_WRAPS_WITH_UI_HTML: &str = r#"module Main exposing (main)
 import Ipe.Tea.Web as Web
 import Ipe.Ui as Ui
-import Ipe.Cmd
-import Ipe.Sub
+import Ipe.Tea.Web.Cmd
+import Ipe.Tea.Web.Sub
 type Msg = Bump | Ignored
 type alias Model = { count : Int }
 init _req = ( { count = 0 }, Cmd.none )
@@ -104,8 +104,8 @@ main =
 const ELEMENT_VIEW_OK: &str = r#"module Main exposing (main)
 import Ipe.Tea.Web as Web
 import Ipe.Ui as Ui
-import Ipe.Cmd
-import Ipe.Sub
+import Ipe.Tea.Web.Cmd
+import Ipe.Tea.Web.Sub
 type Msg = Bump | Ignored
 type alias Model = { count : Int }
 init _req = ( { count = 0 }, Cmd.none )
@@ -131,8 +131,8 @@ main =
 const ANY_VIEW_HTML_MAIN_FIRST: &str = r#"module Main exposing (main)
 import Ipe.Tea.Web as Web
 import Ipe.Ui as Ui
-import Ipe.Cmd
-import Ipe.Sub
+import Ipe.Tea.Web.Cmd
+import Ipe.Tea.Web.Sub
 type Msg = Bump | Ignored
 type alias Model = { count : Int }
 init _req = ( { count = 0 }, Cmd.none )
@@ -157,8 +157,8 @@ view model =
 const ANY_VIEW_HTML_LET_ALIAS: &str = r#"module Main exposing (main)
 import Ipe.Tea.Web as Web
 import Ipe.Ui as Ui
-import Ipe.Cmd
-import Ipe.Sub
+import Ipe.Tea.Web.Cmd
+import Ipe.Tea.Web.Sub
 type Msg = Bump | Ignored
 type alias Model = { count : Int }
 init _req = ( { count = 0 }, Cmd.none )
@@ -185,8 +185,8 @@ main =
 const ANY_VIEW_HTML_CHAINED_ALIAS: &str = r#"module Main exposing (main)
 import Ipe.Tea.Web as Web
 import Ipe.Ui as Ui
-import Ipe.Cmd
-import Ipe.Sub
+import Ipe.Tea.Web.Cmd
+import Ipe.Tea.Web.Sub
 type Msg = Bump | Ignored
 type alias Model = { count : Int }
 init _req = ( { count = 0 }, Cmd.none )
@@ -213,8 +213,8 @@ main =
 const ANY_VIEW_HTML_ETA_LAMBDA: &str = r#"module Main exposing (main)
 import Ipe.Tea.Web as Web
 import Ipe.Ui as Ui
-import Ipe.Cmd
-import Ipe.Sub
+import Ipe.Tea.Web.Cmd
+import Ipe.Tea.Web.Sub
 type Msg = Bump | Ignored
 type alias Model = { count : Int }
 init _req = ( { count = 0 }, Cmd.none )
@@ -239,8 +239,8 @@ main =
 const ELEMENT_VIEW_HTML_BODY: &str = r#"module Main exposing (main)
 import Ipe.Tea.Web as Web
 import Ipe.Ui as Ui
-import Ipe.Cmd
-import Ipe.Sub
+import Ipe.Tea.Web.Cmd
+import Ipe.Tea.Web.Sub
 type Msg = Bump | Ignored
 type alias Model = { count : Int }
 init _req = ( { count = 0 }, Cmd.none )
@@ -266,8 +266,8 @@ main =
 const ANY_VIEW_HTML_POINT_FREE: &str = r#"module Main exposing (main)
 import Ipe.Tea.Web as Web
 import Ipe.Ui as Ui
-import Ipe.Cmd
-import Ipe.Sub
+import Ipe.Tea.Web.Cmd
+import Ipe.Tea.Web.Sub
 type Msg = Bump | Ignored
 type alias Model = { count : Int }
 init _req = ( { count = 0 }, Cmd.none )
@@ -295,8 +295,8 @@ main =
 const ANY_VIEW_HTML_POINT_FREE_ALIAS: &str = r#"module Main exposing (main)
 import Ipe.Tea.Web as Web
 import Ipe.Ui as Ui
-import Ipe.Cmd
-import Ipe.Sub
+import Ipe.Tea.Web.Cmd
+import Ipe.Tea.Web.Sub
 type Msg = Bump | Ignored
 type alias Model = { count : Int }
 init _req = ( { count = 0 }, Cmd.none )

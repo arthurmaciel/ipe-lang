@@ -25,8 +25,8 @@ use std::path::{Path, PathBuf};
 /// solve to `Html<MainMsg>`.
 const BARE_HTML_VIEW_APP: &str = r#"module Main exposing (main)
 import Ipe.Tea.WebView as WebView
-import Ipe.Cmd as Cmd
-import Ipe.Sub as Sub
+import Ipe.Tea.WebView.Cmd as Cmd
+import Ipe.Tea.WebView.Sub as Sub
 import Ipe.Ui as Ui
 import Ipe.Html as Html
 type alias Model = { n : Int }

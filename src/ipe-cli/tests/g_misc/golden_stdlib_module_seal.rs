@@ -417,8 +417,8 @@ fn pubsub_builds_and_runs() {
 // Must be rejected as IPE-T0001.
 
 const PUBSUB_TYPED_SHARED_TOPIC: &str = "module Main exposing (main)\n\
-    import Ipe.Cmd as Cmd\n\
-    import Ipe.Sub as Sub\n\
+    import Ipe.Tea.Web.Cmd as Cmd\n\
+    import Ipe.Tea.Web.Sub as Sub\n\
     import Ipe.PubSub as PubSub exposing (Topic)\n\
     import Ipe.Tea.Web as Web\n\
     import Ipe.Ui as Ui\n\
@@ -458,8 +458,8 @@ fn pubsub_typed_shared_topic_builds() {
 // the payload type on both sides, so `Int` (publish) and `String` (handler)
 // cannot unify → IPE-T0001.
 const PUBSUB_TOPIC_MISMATCH: &str = "module Main exposing (main)\n\
-    import Ipe.Cmd as Cmd\n\
-    import Ipe.Sub as Sub\n\
+    import Ipe.Tea.Web.Cmd as Cmd\n\
+    import Ipe.Tea.Web.Sub as Sub\n\
     import Ipe.PubSub as PubSub exposing (Topic)\n\
     import Ipe.Tea.Web as Web\n\
     import Ipe.Ui as Ui\n\

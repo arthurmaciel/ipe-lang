@@ -61,9 +61,9 @@ const IPE_TUI_COUNTER: &str = r"module Main exposing (main)
 
 import Ipe.Tea.Terminal as Terminal
 import Ipe.Ui as Ui
-import Ipe.Cmd
+import Ipe.Tea.Terminal.Cmd
 import Ipe.String
-import Ipe.Sub
+import Ipe.Tea.Terminal.Sub
 
 type alias KeyEvent = { kind : String, value : String }
 

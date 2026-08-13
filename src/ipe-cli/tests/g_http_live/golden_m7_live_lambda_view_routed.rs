@@ -30,9 +30,9 @@ use std::path::{Path, PathBuf};
 const LIVE_LAMBDA_VIEW_ROUTED: &str = r#"module Main exposing (main)
 import Ipe.Tea.Web as Web
 import Ipe.Ui as Ui
-import Ipe.Cmd
+import Ipe.Tea.Web.Cmd
 import Ipe.String
-import Ipe.Sub
+import Ipe.Tea.Web.Sub
 type Page = CounterPage | AboutPage
 type Msg = Increment
 type alias Model = { page : Page, count : Int }

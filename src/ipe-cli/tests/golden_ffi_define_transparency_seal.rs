@@ -62,7 +62,6 @@ fn seed_define_ffi_cache(project_root: &Path) -> bool {
 /// and the payload forwarders, constructs a union value NATIVELY
 /// (`Increment`), and exhaustively `case`s all of them.
 const MAIN_IPE: &str = "module Main exposing (main)\n\
-    import Ipe.Prelude exposing (..)\n\
     import Ipe.Io as Io\n\
     import Ipe.String as String\n\
     import Rust.Demo as Demo exposing (Message(..))\n\n\
