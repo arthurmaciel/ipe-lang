@@ -1,0 +1,86 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# Sky behavior-parity check — nightly + manual dispatch.
+#
+# For each green, run-verify, program/console port:
+#   1. Builds + runs the committed ipe/ port via ipe build + cargo build.
+#   2. Runs the same example via the upstream sky binary.
+#   3. Compares stdout and exit code per the port's parity field:
+#        exact      — byte-identical required
+#        normalized — ISO timestamp / epoch-ms tokens stripped before compare
+#        skip       — nondeterministic by design; printed with reason, not failed
+#
+# This is NOT a required PR gate (it needs a live sky install). The fast offline
+# PR gate is sky-ports-gate.yml.
+#
+# The pinned upstream version is encoded in install-sky-toolchain.sh.
+# Update that script's PINNED_VERSION when the example corpus moves to a new
+# upstream release.
+# ─────────────────────────────────────────────────────────────────────────────
+name: sky behavior parity
+
+on:
+  schedule:
+    - cron: '47 5 * * *'    # nightly at 05:47 UTC (offset from other nightly jobs)
+  workflow_dispatch: {}
+
+concurrency:
+  group: sky-parity-${{ github.ref }}
+  cancel-in-progress: true
+
+# Read-only: this job does not push or open PRs.
+permissions:
+  contents: read
+
+jobs:
+  sky-parity:
+    name: sky behavior parity
+    runs-on: ubuntu-latest
+    # Informational while the parity set stabilises.
+    continue-on-error: true
+
+    env:
+      CARGO_TARGET_DIR: ${{ github.workspace }}/.cache/ipe-target
+      IPE_NO_SCCACHE: '1'
+      IPE_SWEEP_BUILD_TIMEOUT: '300'
+      CARGO_HTTP_MULTIPLEXING: 'false'
+      CARGO_NET_RETRY: '5'
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Free disk space
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /usr/share/swift || true
+          sudo apt-get clean || true
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo target
+        uses: actions/cache@v6
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            .cache/ipe-target
+          key: sky-parity-${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            sky-parity-${{ runner.os }}-cargo-
+
+      - name: Build ipe
+        run: |
+          export CARGO_TARGET_DIR="${{ github.workspace }}/.cache/ipe-target"
+          cargo build --release -p ipe
+
+      - name: Install sky toolchain
+        run: |
+          mkdir -p ~/.local/bin
+          bash tools/scripts/install-sky-toolchain.sh
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+
+      - name: Verify sky binary
+        run: sky --version
+
+      - name: Run behavior-parity check
+        run: |
+          export CARGO_TARGET_DIR="${{ github.workspace }}/.cache/ipe-target"
+          bash tools/scripts/check-sky-parity.sh

@@ -52,6 +52,17 @@
 #                                  (glib/webkit); builds in a later increment
 #                  broken        — emit-ok but cargo-fail (non-syslib) or run-fail
 #                                  on a compiler/API gap; tracked, not gated
+#   parity       = "exact" | "normalized" | "skip"  (OPTIONAL; default "exact")
+#                  Applies only to green run-verify program/console ports that
+#                  check-sky-parity.sh compares against upstream sky run output.
+#                  exact      — byte-identical stdout expected (pure, deterministic)
+#                  normalized — stdout is compared after stripping known
+#                               nondeterministic tokens (e.g. ISO timestamps);
+#                               the normalization rule is documented inline
+#                  skip       — output is intrinsically nondeterministic (random
+#                               tokens, UUIDs, timing-dependent values); parity
+#                               check is skipped with a printed reason
+#   parity_skip_reason = one-line explanation required when parity = "skip"
 #   blocked      = OPTIONAL reason string when the example exercises an Ipê
 #                  feature not yet implemented (a tracked compiler gap). The
 #                  sweep marks it a documented SKIP, never a surprise RED.
@@ -75,6 +86,7 @@ go_ffi = false
 shape  = "program"
 verify = "run"
 status = "green"
+parity = "exact"
 
 [[example]]
 name = "04-local-pkg"
@@ -83,6 +95,7 @@ go_ffi = false
 shape  = "program"
 verify = "run"
 status = "green"
+parity = "exact"
 
 [[example]]
 name = "06-json"
@@ -91,6 +104,7 @@ go_ffi = false
 shape  = "program"
 verify = "run"
 status = "green"
+parity = "exact"
 
 [[example]]
 name = "07-todo-cli"
@@ -133,6 +147,7 @@ go_ffi = false
 shape  = "program"
 verify = "run"
 status = "green"
+parity = "exact"
 
 [[example]]
 name = "15-http-server"
@@ -275,6 +290,8 @@ go_ffi = false
 shape  = "program"
 verify = "run"
 status = "green"
+parity = "skip"
+parity_skip_reason = "embeds the current Unix millisecond timestamp in the report output"
 
 [[example]]
 name = "39-hub-demo"
@@ -297,6 +314,7 @@ go_ffi = false
 shape  = "program"
 verify = "run"
 status = "green"
+parity = "exact"
 
 [[example]]
 name = "41-nested-curry"
@@ -305,6 +323,7 @@ go_ffi = false
 shape  = "program"
 verify = "run"
 status = "green"
+parity = "exact"
 
 [[example]]
 name = "42-poly-record"
@@ -313,6 +332,7 @@ go_ffi = false
 shape  = "program"
 verify = "run"
 status = "green"
+parity = "exact"
 
 [[example]]
 name = "43-composition"
@@ -321,6 +341,7 @@ go_ffi = false
 shape  = "program"
 verify = "run"
 status = "green"
+parity = "exact"
 
 [[example]]
 name = "44-record-update"
@@ -329,6 +350,7 @@ go_ffi = false
 shape  = "program"
 verify = "run"
 status = "green"
+parity = "exact"
 
 [[example]]
 name = "45-record-update-anon"
@@ -337,6 +359,7 @@ go_ffi = false
 shape  = "program"
 verify = "run"
 status = "green"
+parity = "exact"
 
 [[example]]
 name = "46-row-poly-result"
@@ -345,6 +368,7 @@ go_ffi = false
 shape  = "program"
 verify = "run"
 status = "green"
+parity = "exact"
 
 [[example]]
 name = "47-func-field-record"
@@ -353,6 +377,7 @@ go_ffi = false
 shape  = "program"
 verify = "run"
 status = "green"
+parity = "exact"
 
 [[example]]
 name = "48-tuple-unused-binding"
@@ -361,6 +386,7 @@ go_ffi = false
 shape  = "program"
 verify = "run"
 status = "green"
+parity = "exact"
 
 [[example]]
 name = "49-xmodule-adt"
@@ -369,6 +395,7 @@ go_ffi = false
 shape  = "program"
 verify = "run"
 status = "green"
+parity = "exact"
 
 [[example]]
 name = "50-open-row-closure"
@@ -377,6 +404,7 @@ go_ffi = false
 shape  = "program"
 verify = "run"
 status = "green"
+parity = "exact"
 
 [[example]]
 name = "simple"
@@ -394,6 +422,7 @@ go_ffi = false
 shape  = "program"
 verify = "run"
 status = "green"
+parity = "exact"
 
 # ── Ported from Go-FFI: pure-Ipê replacements for Go dependencies ─────────────
 # These examples previously used Go packages; they now use Ipê stdlib or
@@ -415,6 +444,8 @@ go_ffi = false
 shape  = "program"
 verify = "run"
 status = "green"
+parity = "skip"
+parity_skip_reason = "generates a random token per run; output differs by design"
 notes = "Go uuid → Ipe.Crypto.randomToken (sanctioned divergence: same randomness guarantee, different format)"
 
 [[example]]
