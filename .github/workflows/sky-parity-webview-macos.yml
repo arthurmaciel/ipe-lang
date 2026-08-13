@@ -91,6 +91,12 @@ jobs:
       - name: Verify sky binary
         run: sky --version
 
+      - name: Install coreutils (GNU timeout)
+        run: |
+          # macOS ships no GNU `timeout`; coreutils' gnubin provides it unprefixed.
+          brew install coreutils
+          echo "$(brew --prefix)/opt/coreutils/libexec/gnubin" >> "$GITHUB_PATH"
+
       - name: Prepare capture output dir
         run: mkdir -p "$CAPTURE_OUT"
 
@@ -140,6 +146,7 @@ jobs:
           IPE_RUNTIME_DIR: ${{ github.workspace }}/src/runtime/rust/src
 
       - name: Build + capture — Ipê 29-webview-threejs-spike
+        if: always()
         run: |
           set -euo pipefail
           EXAMPLE_DIR="${{ github.workspace }}/examples/sky/ipe/29-webview-threejs-spike"
@@ -181,6 +188,7 @@ jobs:
       # build artifacts into the source tree.
 
       - name: Build + capture — Sky 31-webview-stopwatch-ui
+        if: always()
         run: |
           set -euo pipefail
           ORIG_DIR="${{ github.workspace }}/examples/sky/original/31-webview-stopwatch-ui"
@@ -201,6 +209,7 @@ jobs:
           echo "Captured: $(ls -lh "${CAPTURE_OUT}/sky-31-stopwatch.png" 2>/dev/null || echo 'MISSING')"
 
       - name: Build + capture — Sky 29-webview-threejs-spike
+        if: always()
         run: |
           set -euo pipefail
           ORIG_DIR="${{ github.workspace }}/examples/sky/original/29-webview-threejs-spike"
