@@ -1,0 +1,311 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# Webview capture spike — proves that macOS CI can screenshot a native webview
+# window for both Sky and Ipê webview apps.
+#
+# WHY macOS only: Sky's webview is gated `cgo && darwin`; on Linux and Windows
+# it falls through to a stub that opens no window and exits immediately.  Ipê's
+# webview (wry/tao, WKWebView on macOS) works on all three platforms but a true
+# Sky-vs-Ipê visual comparison requires the Sky side to open a real window, so
+# macOS is the only viable platform for that future parity job.
+#
+# Scope: the two Sky-mirrored webview examples:
+#   29-webview-threejs-spike  — Three.js WebGL2 scene via Ipê.Tea.WebView
+#   31-webview-stopwatch-ui   — TEA stopwatch via Ipê.Tea.WebView
+#
+# What this job proves (spike verdict):
+#   PASS  — screencapture produced a non-blank image for each app
+#   FAIL  — no window appeared / capture was blank / image stddev below threshold
+#
+# This is NOT a required PR gate.  It is a data-collection spike; the diff-
+# wiring (Sky screenshot vs Ipê screenshot comparison) is a future step.
+# ─────────────────────────────────────────────────────────────────────────────
+name: sky webview capture spike (macOS)
+
+on:
+  schedule:
+    - cron: '23 7 * * *'    # nightly at 07:23 UTC (offset from other nightly jobs)
+  workflow_dispatch: {}
+  push:
+    branches:
+      - 'parity/webview-**'
+
+concurrency:
+  group: sky-webview-macos-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  webview-capture:
+    name: webview capture (macOS)
+    runs-on: macos-latest
+    # Non-gating: spike data collection only.
+    continue-on-error: true
+
+    env:
+      CARGO_TARGET_DIR: ${{ github.workspace }}/.cache/ipe-target
+      IPE_NO_SCCACHE: '1'
+      IPE_SWEEP_BUILD_TIMEOUT: '300'
+      CARGO_HTTP_MULTIPLEXING: 'false'
+      CARGO_NET_RETRY: '5'
+      CAPTURE_OUT: /tmp/ipe-webview-capture
+      # Seconds to wait after launching a webview app before screencapture.
+      # WKWebView on macOS renders synchronously from the event loop; 5 s is
+      # enough for first paint on both the Three.js scene and the stopwatch UI.
+      WEBVIEW_SETTLE_SECS: '5'
+      # Minimum PNG file size (bytes) and minimum pixel-channel stddev that a
+      # capture must exceed to be counted non-blank.  A solid-colour window
+      # (e.g. a blank WKWebView showing the default white background before
+      # content loads) has stddev ≈ 0; a rendered UI stddev is typically > 10.
+      CAPTURE_MIN_BYTES: '20000'
+      CAPTURE_MIN_STDDEV: '5.0'
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo target
+        uses: actions/cache@v6
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            ${{ github.workspace }}/.cache/ipe-target
+          key: webview-macos-cargo-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            webview-macos-cargo-
+
+      - name: Build ipe
+        run: |
+          export CARGO_TARGET_DIR="${{ github.workspace }}/.cache/ipe-target"
+          cargo build --release -p ipe
+
+      - name: Install sky toolchain
+        run: |
+          mkdir -p ~/.local/bin
+          bash tools/scripts/install-sky-toolchain.sh
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+
+      - name: Verify sky binary
+        run: sky --version
+
+      - name: Install Python Pillow (for capture sanity check)
+        run: pip3 install --quiet Pillow
+
+      - name: Prepare capture output dir
+        run: mkdir -p "$CAPTURE_OUT"
+
+      # ── Ipê webview captures ──────────────────────────────────────────────
+      #
+      # For each Ipê webview port:
+      #   1. Re-emit the Rust crate (the committed out/rust/ has a hardcoded
+      #      local path for the runtime dep — always re-emit on CI).
+      #   2. cargo build the emitted crate (webview feature is baked into the
+      #      emit; no extra --features flag needed).
+      #   3. Launch ipe-app in the background, wait for first paint, capture,
+      #      kill.
+      #
+      # The emitted binary is always named `ipe-app` and lands in
+      # $CARGO_TARGET_DIR/debug/ipe-app (the shared target dir).  Because the
+      # two examples are built sequentially, the second build overwrites the
+      # first — each example is captured immediately after its own build.
+
+      - name: Build + capture — Ipê 31-webview-stopwatch-ui
+        run: |
+          set -euo pipefail
+          EXAMPLE_DIR="${{ github.workspace }}/examples/sky/ipe/31-webview-stopwatch-ui"
+          IPE_BIN="${{ github.workspace }}/.cache/ipe-target/release/ipe"
+          OUT_DIR="${EXAMPLE_DIR}/out/rust"
+          APP_BIN="${{ github.workspace }}/.cache/ipe-target/debug/ipe-app"
+
+          # Re-emit (always: runtime path must match this machine).
+          rm -rf "${OUT_DIR}"
+          timeout "${IPE_SWEEP_BUILD_TIMEOUT}" \
+            "${IPE_BIN}" build "${EXAMPLE_DIR}/ipe.toml" --out "${OUT_DIR}"
+
+          # Build the emitted crate (webview feature already in emitted Cargo.toml).
+          export CARGO_TARGET_DIR="${{ github.workspace }}/.cache/ipe-target"
+          timeout "${IPE_SWEEP_BUILD_TIMEOUT}" \
+            cargo build --manifest-path "${OUT_DIR}/Cargo.toml"
+
+          # Launch the webview app in the background, capture, kill.
+          "${APP_BIN}" &
+          APP_PID=$!
+          sleep "${WEBVIEW_SETTLE_SECS}"
+          screencapture -x "${CAPTURE_OUT}/ipe-31-stopwatch.png" || true
+          kill "${APP_PID}" 2>/dev/null || true
+          wait "${APP_PID}" 2>/dev/null || true
+
+          echo "Captured: $(ls -lh "${CAPTURE_OUT}/ipe-31-stopwatch.png" 2>/dev/null || echo 'MISSING')"
+        env:
+          IPE_RUNTIME_DIR: ${{ github.workspace }}/src/runtime/rust/src
+
+      - name: Build + capture — Ipê 29-webview-threejs-spike
+        run: |
+          set -euo pipefail
+          EXAMPLE_DIR="${{ github.workspace }}/examples/sky/ipe/29-webview-threejs-spike"
+          IPE_BIN="${{ github.workspace }}/.cache/ipe-target/release/ipe"
+          OUT_DIR="${EXAMPLE_DIR}/out/rust"
+          APP_BIN="${{ github.workspace }}/.cache/ipe-target/debug/ipe-app"
+
+          # Re-emit.
+          rm -rf "${OUT_DIR}"
+          timeout "${IPE_SWEEP_BUILD_TIMEOUT}" \
+            "${IPE_BIN}" build "${EXAMPLE_DIR}/ipe.toml" --out "${OUT_DIR}"
+
+          # Build the emitted crate.
+          export CARGO_TARGET_DIR="${{ github.workspace }}/.cache/ipe-target"
+          timeout "${IPE_SWEEP_BUILD_TIMEOUT}" \
+            cargo build --manifest-path "${OUT_DIR}/Cargo.toml"
+
+          # Launch, wait, capture, kill.  The Three.js spike opens port 8765
+          # for static assets; the webview window appears regardless.
+          "${APP_BIN}" &
+          APP_PID=$!
+          sleep "${WEBVIEW_SETTLE_SECS}"
+          screencapture -x "${CAPTURE_OUT}/ipe-29-threejs.png" || true
+          kill "${APP_PID}" 2>/dev/null || true
+          wait "${APP_PID}" 2>/dev/null || true
+
+          echo "Captured: $(ls -lh "${CAPTURE_OUT}/ipe-29-threejs.png" 2>/dev/null || echo 'MISSING')"
+        env:
+          IPE_RUNTIME_DIR: ${{ github.workspace }}/src/runtime/rust/src
+
+      # ── Sky webview captures ──────────────────────────────────────────────
+      #
+      # sky build emits Go source; go build (CGO on by default on macOS)
+      # produces a native binary.  The Sky webview is `cgo && darwin` — so
+      # a real WKWebView window opens.
+      #
+      # sky build must run from the example directory (sky.toml is the entry
+      # point).  We copy the original/ tree to a temp dir to avoid writing
+      # build artifacts into the source tree.
+
+      - name: Build + capture — Sky 31-webview-stopwatch-ui
+        run: |
+          set -euo pipefail
+          ORIG_DIR="${{ github.workspace }}/examples/sky/original/31-webview-stopwatch-ui"
+          WORK_DIR="/tmp/sky-31-stopwatch"
+          SKY_APP="/tmp/sky-31-stopwatch-app"
+
+          cp -R "${ORIG_DIR}" "${WORK_DIR}"
+          ( cd "${WORK_DIR}" && timeout 120 sky build )
+          ( cd "${WORK_DIR}/sky-out" && timeout 180 go build -o "${SKY_APP}" . )
+
+          "${SKY_APP}" &
+          APP_PID=$!
+          sleep "${WEBVIEW_SETTLE_SECS}"
+          screencapture -x "${CAPTURE_OUT}/sky-31-stopwatch.png" || true
+          kill "${APP_PID}" 2>/dev/null || true
+          wait "${APP_PID}" 2>/dev/null || true
+
+          echo "Captured: $(ls -lh "${CAPTURE_OUT}/sky-31-stopwatch.png" 2>/dev/null || echo 'MISSING')"
+
+      - name: Build + capture — Sky 29-webview-threejs-spike
+        run: |
+          set -euo pipefail
+          ORIG_DIR="${{ github.workspace }}/examples/sky/original/29-webview-threejs-spike"
+          WORK_DIR="/tmp/sky-29-threejs"
+          SKY_APP="/tmp/sky-29-threejs-app"
+
+          cp -R "${ORIG_DIR}" "${WORK_DIR}"
+          ( cd "${WORK_DIR}" && timeout 120 sky build )
+          ( cd "${WORK_DIR}/sky-out" && timeout 180 go build -o "${SKY_APP}" . )
+
+          "${SKY_APP}" &
+          APP_PID=$!
+          sleep "${WEBVIEW_SETTLE_SECS}"
+          screencapture -x "${CAPTURE_OUT}/sky-29-threejs.png" || true
+          kill "${APP_PID}" 2>/dev/null || true
+          wait "${APP_PID}" 2>/dev/null || true
+
+          echo "Captured: $(ls -lh "${CAPTURE_OUT}/sky-29-threejs.png" 2>/dev/null || echo 'MISSING')"
+
+      # ── Sanity check: non-blank captures ─────────────────────────────────
+      #
+      # Each PNG must be:
+      #   a) larger than CAPTURE_MIN_BYTES (rules out empty/truncated files)
+      #   b) have pixel-channel stddev > CAPTURE_MIN_STDDEV (rules out a
+      #      solid-colour window — e.g. a blank WKWebView before content loads)
+      #
+      # A failure here means the capture mechanism does NOT work on this runner
+      # configuration — the spike failed.  A pass means screenshots can be taken
+      # and the future diff-wiring step is unblocked.
+
+      - name: Sanity check — captures are non-blank
+        if: always()
+        run: |
+          set -euo pipefail
+          PASS=0
+          FAIL=0
+
+          check_png() {
+            local label="$1" path="$2"
+            if [ ! -f "${path}" ]; then
+              echo "  MISSING  ${label} — file not found: ${path}"
+              FAIL=$(( FAIL + 1 ))
+              return
+            fi
+            local size
+            size="$(wc -c < "${path}")"
+            if [ "${size}" -lt "${CAPTURE_MIN_BYTES}" ]; then
+              echo "  BLANK    ${label} — file too small (${size} bytes < ${CAPTURE_MIN_BYTES})"
+              FAIL=$(( FAIL + 1 ))
+              return
+            fi
+            local stddev
+            stddev="$(python3 - "${path}" "${CAPTURE_MIN_STDDEV}" <<'PYEOF'
+          import sys, statistics
+          from PIL import Image
+          path, threshold = sys.argv[1], float(sys.argv[2])
+          img = Image.open(path).convert("RGB")
+          pixels = list(img.getdata())
+          flat = [ch for px in pixels for ch in px]
+          sd = statistics.stdev(flat) if len(flat) > 1 else 0.0
+          print(f"{sd:.2f}")
+          sys.exit(0 if sd >= threshold else 1)
+          PYEOF
+            )" || { echo "  BLANK    ${label} — stddev below threshold (${stddev} < ${CAPTURE_MIN_STDDEV})"; FAIL=$(( FAIL + 1 )); return; }
+            echo "  PASS     ${label} — ${size} bytes, stddev ${stddev}"
+            PASS=$(( PASS + 1 ))
+          }
+
+          check_png "ipe-31-stopwatch" "${CAPTURE_OUT}/ipe-31-stopwatch.png"
+          check_png "ipe-29-threejs"   "${CAPTURE_OUT}/ipe-29-threejs.png"
+          check_png "sky-31-stopwatch" "${CAPTURE_OUT}/sky-31-stopwatch.png"
+          check_png "sky-29-threejs"   "${CAPTURE_OUT}/sky-29-threejs.png"
+
+          echo ""
+          echo "capture check: ${PASS} pass, ${FAIL} fail"
+
+          if [ "${FAIL}" -gt 0 ]; then
+            echo "VERDICT: FAIL — ${FAIL} capture(s) blank or missing; screencapture does not work on this runner" >&2
+            exit 1
+          fi
+          echo "VERDICT: PASS — all captures non-blank; screencapture works on macOS CI"
+
+      - name: Upload captures
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: webview-captures-macos
+          path: /tmp/ipe-webview-capture/
+          retention-days: 14
+
+      - name: Job summary
+        if: always()
+        run: |
+          {
+            echo "## sky webview capture spike (macOS)"
+            echo ""
+            echo "See the \`webview-captures-macos\` artifact for eyeball inspection."
+            echo ""
+            echo "| File | Size |"
+            echo "|------|------|"
+            find /tmp/ipe-webview-capture -maxdepth 1 -name "*.png" 2>/dev/null \
+              | sort | while read -r f; do
+              echo "| $(basename "$f") | $(du -sh "$f" 2>/dev/null | cut -f1) |"
+            done
+          } >> "$GITHUB_STEP_SUMMARY" || true
