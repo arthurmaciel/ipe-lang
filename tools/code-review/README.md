@@ -4,6 +4,21 @@ A small Ipê/TEA web app that reads an `ipe-index` `index.db` as its review
 backlog: it lists the units the index has queued for review, shows each unit's
 source slice and context, and drains a unit's `change_queue` row once decided.
 
+## Prerequisites
+
+This app is written in Ipê, so the `ipe` compiler must be installed and on your
+`PATH`. Install it from the repo root with `./install.sh` — it builds and installs
+`ipe` to a bin dir on your `PATH`. Confirm with `ipe --version`.
+
+The app reviews an `ipe-index` database, so you also need one. Build it once from
+the repo root:
+
+```bash
+tools/scripts/ipe-index index      # → .ipe-index/index.db
+```
+
+See `tools/ipe-index/README.md` for that tool.
+
 ## Building and running
 
 ```bash

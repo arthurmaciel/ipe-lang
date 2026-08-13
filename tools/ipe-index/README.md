@@ -27,6 +27,37 @@ rarely run `index`/`update` by hand.
 
 ---
 
+## Build & install
+
+**Prerequisite:** a Rust toolchain (`cargo`). The crate is edition 2024, so use a
+recent stable Rust (`rustup update`).
+
+`ipe-index` is a standalone crate — its own `target/`, detached from the compiler
+workspace. You don't have to build it by hand: the `tools/scripts/ipe-index`
+wrapper compiles it on first run and execs the release binary. To build it
+explicitly:
+
+```bash
+cd tools/ipe-index && cargo build --release
+# → tools/ipe-index/target/release/ipe-index
+```
+
+Nothing installs to your `PATH`: invoke the wrapper `tools/scripts/ipe-index`
+(which finds the repo root and execs the binary) or run the binary directly.
+
+**Auto-refresh (recommended):** a local git `post-commit` hook runs
+`ipe-index index` after each commit so the index never drifts. Hooks live in
+`.git/hooks/` and are not tracked, so after a fresh clone seed the index once:
+
+```bash
+tools/scripts/ipe-index index      # builds the binary + indexes the repo
+```
+
+To keep it fresh automatically, add a `.git/hooks/post-commit` that runs
+`tools/scripts/ipe-index index` (and make it executable).
+
+---
+
 ## The mental model
 
 ### One repo, tag-prefixed paths
