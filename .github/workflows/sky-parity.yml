@@ -35,8 +35,8 @@ jobs:
   sky-parity:
     name: sky behavior parity
     runs-on: ubuntu-latest
-    # Informational while the parity set stabilises.
-    continue-on-error: true
+    # A sky-vs-ipe behavior divergence fails the job.
+    continue-on-error: false
 
     env:
       CARGO_TARGET_DIR: ${{ github.workspace }}/.cache/ipe-target
