@@ -36,6 +36,15 @@
 #                  examples/sky/ipe-overrides/<name>/; the transform is skipped)
 #   go_ffi       = true if the example imports Go packages (excluded from Rust
 #                  build; checked by is_out_of_scope in lib/examples.sh)
+#   shape        = "program" | "console" | "tui" | "web" | "webview" | "server"
+#                  Inferred from the ipe/ source imports; used by check-sky-ports.sh
+#                  to dispatch the correct run strategy.
+#   verify       = "run" | "build" | "serve"
+#                  Selects how check-sky-ports.sh exercises the port:
+#                    run   — run to exit 0 (CLI / program shape)
+#                    build — build only (tui/webview/composite; needs infra to run)
+#                    serve — build + bounded HTTP smoke (web/server; smoke deferred
+#                            to a later increment; treated as build-only for now)
 #   blocked      = OPTIONAL reason string when the example exercises an Ipê
 #                  feature not yet implemented (a tracked compiler gap). The
 #                  sweep marks it a documented SKIP, never a surprise RED.
@@ -47,137 +56,191 @@
 name = "00-standard-libs"
 patch = "rename-map+ipe-edit"
 go_ffi = false
+shape  = "program"
+verify = "run"
 
 [[example]]
 name = "01-hello-world"
 patch = "rename-map"
 go_ffi = false
+shape  = "program"
+verify = "run"
 
 [[example]]
 name = "04-local-pkg"
 patch = "rename-map"
 go_ffi = false
+shape  = "program"
+verify = "run"
 
 [[example]]
 name = "06-json"
 patch = "rename-map"
 go_ffi = false
+shape  = "program"
+verify = "run"
 
 [[example]]
 name = "07-todo-cli"
 patch = "rename-map"
 go_ffi = false
+shape  = "program"
+verify = "run"
 
 [[example]]
 name = "09-live-counter"
 patch = "rename-map"
 go_ffi = false
+shape  = "web"
+verify = "serve"
 
 [[example]]
 name = "10-live-component"
 patch = "rename-map"
 go_ffi = false
+shape  = "web"
+verify = "serve"
 
 [[example]]
 name = "12-skyvote"
 patch = "rename-map"
 go_ffi = false
+shape  = "web"
+verify = "serve"
 
 [[example]]
 name = "14-task-demo"
 patch = "rename-map"
 go_ffi = false
+shape  = "program"
+verify = "run"
 
 [[example]]
 name = "15-http-server"
 patch = "rename-map"
 go_ffi = false
+shape  = "server"
+verify = "serve"
 
 [[example]]
 name = "20-cli-counter"
 patch = "rename-map"
 go_ffi = false
+shape  = "tui"
+verify = "build"
 
 [[example]]
 name = "21-tui-stopwatch"
 patch = "rename-map"
 go_ffi = false
+shape  = "tui"
+verify = "build"
 
 [[example]]
 name = "22-tui-stopwatch-ui"
 patch = "rename-map"
 go_ffi = false
+shape  = "tui"
+verify = "build"
 
 [[example]]
 name = "23-tui-todo"
 patch = "rename-map"
 go_ffi = false
+shape  = "tui"
+verify = "build"
 
 [[example]]
 name = "24-tui-kitchen-sink"
 patch = "rename-map"
 go_ffi = false
+shape  = "tui"
+verify = "build"
 
 [[example]]
 name = "25-sky-console"
 patch = "rename-map"
 go_ffi = false
+shape  = "web"
+verify = "serve"
 
 [[example]]
 name = "26-ui-showcase"
 patch = "rename-map+ipe-edit"
 go_ffi = false
+shape  = "web"
+verify = "serve"
 notes = "Live.app init pinned to LiveReq (make-invalid-states-unrepresentable divergence, B24 / ADR 0021)"
 
 [[example]]
 name = "27-multi-session-chat"
 patch = "rename-map"
 go_ffi = false
+shape  = "web"
+verify = "serve"
 
 [[example]]
 name = "28-streaming-chat"
 patch = "rename-map"
 go_ffi = false
+shape  = "web"
+verify = "serve"
 
 [[example]]
 name = "29-webview-threejs-spike"
 patch = "rename-map"
 go_ffi = false
+shape  = "webview"
+verify = "build"
 
 [[example]]
 name = "30-sse-server-demo"
 patch = "rename-map"
 go_ffi = false
+shape  = "server"
+verify = "serve"
 
 [[example]]
 name = "31-webview-stopwatch-ui"
 patch = "rename-map"
 go_ffi = false
+shape  = "webview"
+verify = "build"
 
 [[example]]
 name = "32-sse-relay"
 patch = "rename-map"
 go_ffi = false
+shape  = "server"
+verify = "serve"
 
 [[example]]
 name = "33-websocket-echo"
 patch = "rename-map"
 go_ffi = false
+shape  = "server"
+verify = "serve"
 
 [[example]]
 name = "34-multi-tier-console"
 patch = "rename-map"
 go_ffi = false
+shape  = "web"
+verify = "serve"
 
 [[example]]
 name = "35-composite-generics"
 patch = "rename-map"
 go_ffi = false
+shape  = "program"
+verify = "run"
 
 [[example]]
 name = "39-hub-demo"
 patch = "rename-map"
 go_ffi = false
+shape  = "program"
+verify = "build"
 notes = "composite (billing-app + frontend-app); no top-level src/Main — the sweep's per-dir Main.ipe check skips the composite root"
 
 # ── Type-system regression locks (pure Ipê; token rewrite only) ──────────────
@@ -189,66 +252,92 @@ notes = "composite (billing-app + frontend-app); no top-level src/Main — the s
 name = "40-generic-adt-field"
 patch = "rename-map"
 go_ffi = false
+shape  = "program"
+verify = "run"
 
 [[example]]
 name = "41-nested-curry"
 patch = "rename-map"
 go_ffi = false
+shape  = "program"
+verify = "run"
 
 [[example]]
 name = "42-poly-record"
 patch = "rename-map"
 go_ffi = false
+shape  = "program"
+verify = "run"
 
 [[example]]
 name = "43-composition"
 patch = "rename-map"
 go_ffi = false
+shape  = "program"
+verify = "run"
 
 [[example]]
 name = "44-record-update"
 patch = "rename-map"
 go_ffi = false
+shape  = "program"
+verify = "run"
 
 [[example]]
 name = "45-record-update-anon"
 patch = "rename-map"
 go_ffi = false
+shape  = "program"
+verify = "run"
 
 [[example]]
 name = "46-row-poly-result"
 patch = "rename-map"
 go_ffi = false
+shape  = "program"
+verify = "run"
 
 [[example]]
 name = "47-func-field-record"
 patch = "rename-map"
 go_ffi = false
+shape  = "program"
+verify = "run"
 
 [[example]]
 name = "48-tuple-unused-binding"
 patch = "rename-map"
 go_ffi = false
+shape  = "program"
+verify = "run"
 
 [[example]]
 name = "49-xmodule-adt"
 patch = "rename-map"
 go_ffi = false
+shape  = "program"
+verify = "run"
 
 [[example]]
 name = "50-open-row-closure"
 patch = "rename-map"
 go_ffi = false
+shape  = "program"
+verify = "run"
 
 [[example]]
 name = "simple"
 patch = "rename-map"
 go_ffi = false
+shape  = "program"
+verify = "run"
 
 [[example]]
 name = "test_pkg"
 patch = "rename-map"
 go_ffi = false
+shape  = "program"
+verify = "run"
 
 # ── Ported from Go-FFI: pure-Ipê replacements for Go dependencies ─────────────
 # These examples previously used Go packages; they now use Ipê stdlib or
@@ -258,59 +347,79 @@ go_ffi = false
 name = "02-go-stdlib"
 patch = "rename-map"
 go_ffi = false
+shape  = "program"
+verify = "run"
 
 [[example]]
 name = "03-tea-external"
 patch = "rename-map+ipe-edit"
 go_ffi = false
+shape  = "program"
+verify = "run"
 notes = "Go uuid → Ipe.Crypto.randomToken (sanctioned divergence: same randomness guarantee, different format)"
 
 [[example]]
 name = "05-mux-server"
 patch = "rename-map+ipe-edit"
 go_ffi = false
+shape  = "server"
+verify = "serve"
 notes = "Go net/http + gorilla/mux → Ipe.Http.Server (behaviour-equivalent route dispatch)"
 
 [[example]]
 name = "16-skychess"
 patch = "rename-map+ipe-edit"
 go_ffi = false
+shape  = "web"
+verify = "serve"
 notes = "go.dependencies were crypto/sha256+hex only (Go backend internal); source imports only local Chess.* modules — no Go FFI in Ipê source. Patch adds missing State import to annotation sites."
 
 [[example]]
 name = "17-skymon"
 patch = "rename-map+ipe-edit"
 go_ffi = false
+shape  = "web"
+verify = "serve"
 notes = "go.dependencies were crypto/sha256+hex only; source imports only local Lib.*/Page.* — no Go FFI. Patch: State.Msg import for Ui.Charts annotations; System.loadEnv → System.getenv in Lib.Auth."
 
 [[example]]
 name = "18-job-queue"
 patch = "rename-map+ipe-edit"
 go_ffi = false
+shape  = "web"
+verify = "serve"
 notes = "sky.toml had no go.dependencies; manifest go_ffi was set in error. Patch adds type annotations for viewJob/viewSnapshot."
 
 [[example]]
 name = "19-skyforum"
 patch = "rename-map"
 go_ffi = false
+shape  = "web"
+verify = "serve"
 notes = "sky.toml listed no go.dependencies; Gorilla/Websocket was never used in the Ipê source. Full .ipe set already committed."
 
 [[example]]
 name = "36-composite-server"
 patch = "rename-map+ipe-edit"
 go_ffi = false
+shape  = "server"
+verify = "serve"
 notes = "sky.toml has no go.dependencies; source imports Sky.Core.*/Sky.Http.*/Sky.Ffi/Std.* only — Sky.Ffi is stdlib, not a Go package. Edit renames the SKY_ config env vars to IPE_ so the server boots under the standard secret."
 
 [[example]]
 name = "37-composite-live-shop"
 patch = "rename-map"
 go_ffi = false
+shape  = "web"
+verify = "serve"
 notes = "sky.toml has no go.dependencies; source imports Sky.Core.*/Std.* only — no Go FFI. go_ffi was set in error."
 
 [[example]]
 name = "38-composite-ui-multibackend"
 patch = "rename-map"
 go_ffi = false
+shape  = "web"
+verify = "serve"
 notes = "sky.toml has no go.dependencies; source imports Sky.Core.*/Std.* only — no Go FFI. go_ffi was set in error."
 
 # ── Go-FFI examples (excluded from Rust build by is_out_of_scope) ─────────────
@@ -321,17 +430,23 @@ notes = "sky.toml has no go.dependencies; source imports Sky.Core.*/Std.* only �
 name = "08-notes-app"
 patch = "rename-map"
 go_ffi = true
+shape  = "server"
+verify = "build"
 notes = "imports Github.Com.Google.Uuid + gorilla/mux — Go FFI; no clean Rust-crate path without a multi-file rewrite of the auth layer; deferred"
 
 [[example]]
 name = "11-fyne-stopwatch"
 patch = "rename-map"
 go_ffi = true
+shape  = "program"
+verify = "build"
 notes = "imports Fyne.Io.Fyne.V2 — Go GUI FFI; no portable Rust-native GUI equivalent; skip"
 
 [[example]]
 name = "13-skyshop"
 patch = "override"
 go_ffi = true
+shape  = "web"
+verify = "serve"
 notes = "upstream is a Go-FFI storefront; the Ipê port is a whole-port override at examples/sky/ipe-overrides/13-skyshop/ (firestore+stripe via Rust-crate FFI), skipped by needs_ffi_install until an ipe install cache is populated"
 
