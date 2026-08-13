@@ -367,6 +367,43 @@ pub fn build_emitted(golden_name: &str, emitted_dir: &Path) -> Result<(), String
     e2e_support::build_rust_binary(golden_name, emitted_dir).map(|_| ())
 }
 
+/// Assert the SEAL for a positive-acceptance test: the program was accepted by
+/// `ipe` (callers pass an already-asserted `Ok(())` from `ipe::build`) AND,
+/// under `IPE_E2E=1`, the emitted crate at `emitted_dir` must `cargo build`.
+///
+/// This is the mandatory routing point for every test that claims
+/// "ipe-accept ⇒ the emitted crate `cargo build`s" (THE SEAL). A test that
+/// only asserts `ipe::build(…).is_ok()` proves only that the frontend accepts
+/// the program — it gives no evidence that the emitted Rust compiles. Routing
+/// through this helper closes that gap: without `IPE_E2E` it is a fast emit
+/// assertion; with it, the cargo build step runs and a cargo failure fails the
+/// test loudly.
+///
+/// Convention: every test whose doc or assertion claims THE SEAL / "ipe-accept
+/// ⇒ cargo-builds" MUST call this helper or [`build_and_run_emitted`] /
+/// [`build_emitted`] directly. A SEAL assertion satisfied by `is_ok()` alone
+/// is a false green.
+///
+/// # Panics
+///
+/// Fails the calling test (via `assert!`) if `cargo build` fails under
+/// `IPE_E2E=1`, surfacing cargo's stderr so the accept-then-cargo-fail is
+/// immediately visible.
+#[track_caller]
+#[allow(dead_code)] // not every test binary exercises this helper
+pub fn assert_seal_builds(seal_name: &str, emitted_dir: &Path) {
+    if std::env::var("IPE_E2E").is_err() {
+        return; // fast default gate: emit-only pass
+    }
+    let outcome = build_emitted(seal_name, emitted_dir);
+    assert!(
+        outcome.is_ok(),
+        "{seal_name}: ipe accepted (exit 0) but the emitted crate FAILED to \
+         `cargo build` — a SEAL break (ipe-accept ⇒ cargo-builds violated):\n{}",
+        outcome.err().unwrap_or_default()
+    );
+}
+
 /// Build the emitted project at `emitted_dir` into the shared target and run the
 /// resulting binary, returning its captured stdout and exit code.
 ///

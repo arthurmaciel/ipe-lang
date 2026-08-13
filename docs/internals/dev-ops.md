@@ -126,6 +126,27 @@ clean) and touches only the emitted artifacts, never the Ipê sources. The emit
 templates the codegen embeds live in `src/compiler/backend/rust/templates/` — a
 hand-maintained source, not a golden — so no golden is ever an input to codegen.
 
+**SEAL-labelled tests — mandatory cargo build.** A test that asserts THE SEAL
+("ipe-accept ⇒ the emitted crate `cargo build`s") MUST route its positive
+acceptance through one of the three build helpers in
+`src/ipe-cli/tests/support/mod.rs`:
+
+- `support::assert_seal_builds(name, emitted_dir)` — build only; for tests
+  where the program is network-effectful or otherwise has no deterministic
+  stdout.
+- `support::build_and_run_emitted(name, emitted_dir)` — build and run; for
+  tests that also assert stdout.
+- `support::build_emitted(name, emitted_dir)` — the underlying `Result`-
+  returning variant for callers that need to inspect the error themselves.
+
+All three are gated: without `IPE_E2E=1` they return immediately (fast default
+pass); with it, `cargo build` runs and a failure fails the test loudly with
+cargo's stderr. A SEAL test that only asserts `ipe::build(…).is_ok()` gives no
+evidence that the emitted Rust compiles — it is a false green on the cardinal
+violation class (ipe-exit-0 then cargo-fail). The `seal_modset` test suite and
+`seal_regression` both follow this convention and serve as reference
+implementations.
+
 ## Build & cache tuning
 
 On an 8-core / 15 GB-RAM host the build is RAM-bound, not core-bound.

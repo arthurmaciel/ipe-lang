@@ -20,6 +20,8 @@ use std::path::{Path, PathBuf};
 
 use ipe_ffi::driver::{FfiCache, install_from_inspection};
 
+use crate::support;
+
 /// A runtime `false` the optimiser cannot fold — a deliberate failure marker.
 const fn false_marker() -> bool {
     std::hint::black_box(false)
@@ -147,7 +149,9 @@ fn nonclone_handle_reused_fails_closed_before_cargo() {
 /// ERGONOMIC PATH: a by-borrow reader threads its receiver back, so the handle
 /// flows on linearly with NO clone and NO IPE-L0130 gate. Destructuring the
 /// `(Int, Widget)` result and feeding the returned handle to the next call
-/// builds and compiles clean — the whole point of receiver borrow-threading.
+/// must both ipe-accept AND the emitted crate must `cargo build` (THE SEAL).
+/// Routed through `support::assert_seal_builds` so the cargo build step runs
+/// under `IPE_E2E=1`.
 #[test]
 fn nonclone_handle_threaded_linearly_builds() {
     let Ok(runtime) = ipe::resolve_runtime() else {
@@ -188,9 +192,13 @@ fn nonclone_handle_threaded_linearly_builds() {
 
     match ipe::build_with_sibling_discovery(&entry, &out, &runtime) {
         Ok(()) => {}
-        Err(err) => assert!(
-            false_marker(),
-            "linear borrow-threaded handle use must build, got: {err}"
-        ),
+        Err(err) => {
+            assert!(
+                false_marker(),
+                "linear borrow-threaded handle use must ipe-accept, got: {err}"
+            );
+            return;
+        }
     }
+    support::assert_seal_builds("ffi_nonclone_handle_thread", &out);
 }
