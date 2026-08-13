@@ -1,5 +1,3 @@
--- anzellai/sky#153 — build + run must succeed (no `undefined: T1`) with the
--- parametric `Zipper a` defined in a sibling module and used here.
 module Main exposing (main)
 
 import Ipe.String as String
@@ -8,7 +6,7 @@ import Zipper exposing (Zipper)
 
 
 main =
-    do
+    let
         z = Zipper.singleton 42
-        Io.println (String.fromInt (Zipper.current z))
-        ()
+    in
+    Io.println (String.fromInt (Zipper.current z))
