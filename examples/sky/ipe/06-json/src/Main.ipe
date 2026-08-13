@@ -7,6 +7,7 @@ import Ipe.List as List
 import Ipe.Result as Result
 import Ipe.String as String
 import Ipe.Error as Error exposing (Error)
+import Ipe.Task as Task
 import Ipe.Io as Io
 
 -- 5. Pipeline with optional fields
