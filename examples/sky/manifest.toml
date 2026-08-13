@@ -307,7 +307,7 @@ notes = "composite (billing-app + frontend-app); no top-level src/Main — the s
 
 [[example]]
 name = "40-generic-adt-field"
-patch = "rename-map"
+patch = "rename-map+ipe-edit"
 go_ffi = false
 shape  = "program"
 verify = "run"

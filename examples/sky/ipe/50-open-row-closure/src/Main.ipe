@@ -22,6 +22,7 @@ module Main exposing (main)
 -- sky-lang.org and skydeploy control-plane builds.
 
 import Ipe.List as List
+import Ipe.Task as Task
 import Ipe.Io as Io
 
 type alias Contact =
