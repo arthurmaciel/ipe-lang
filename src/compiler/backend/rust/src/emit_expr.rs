@@ -3128,14 +3128,24 @@ fn arc_callback_wrap(f_s: &str) -> String {
 /// widening of a capture's scope can occur. When there are no such leading
 /// `let`s the output is byte-identical to the previous
 /// `arc_callback_wrap(&emit_expr_at(..))`.
-fn emit_arc_callback_field(
-    ctx: &EmitCtx,
-    field: &Expr,
-    indent: usize,
-    child: u16,
-    generics: GenericScope,
-) -> DResult<String> {
-    // Peel leading pure-alias `let`s (`let n = Var(v)` / `let n = CloneVar(v)`).
+/// Peel the leading pure-alias capture-clone `let`s off a synthesised callback
+/// expression, returning the hoisted bindings and the innermost expression.
+///
+/// The lowerer's multi-use-capture rewrite ([`rewrite_multiuse_clones`]) wraps a
+/// callback lambda that captures a non-`Copy` binding also read by a sibling in
+/// a pre-clone `let sym = sym.clone() in Lambda { … }`. Every synthesised event
+/// arm emits its handler inside a `move` closure; if that pre-clone `let` is
+/// rendered INSIDE the `move`, the closure move-captures the outer binding while
+/// the `.clone()` also reads it, and a sibling field/arg reading the same
+/// binding then hits use-after-move (E0382 — an accept-then-cargo-fail SEAL
+/// break). Peeling the `let` here lets each arm emit it OUTSIDE its `move`
+/// closure, so the closure owns the pre-made clone and the original survives.
+///
+/// Only a `let` whose value is a bare `Var`/`CloneVar` is peeled — a pure
+/// alias/clone of an outer symbol whose hoist out of the `move` closure is
+/// always semantics-preserving (Ipê values are immutable). A `let` binding a
+/// COMPUTED value stays inside, so no re-ordering of effects can occur.
+fn peel_callback_capture_clones(field: &Expr) -> (Vec<(Symbol, &Expr)>, &Expr) {
     let mut hoisted: Vec<(Symbol, &Expr)> = Vec::new();
     let mut inner = field;
     while let Expr::Let { name, value, body } = inner {
@@ -3146,6 +3156,41 @@ fn emit_arc_callback_field(
             break;
         }
     }
+    (hoisted, inner)
+}
+
+/// Render the peeled capture-clone `let`s ([`peel_callback_capture_clones`]) as
+/// a `let n = <value>; ` prefix. Empty when there are no leading pure-alias
+/// `let`s, so a capture-free callback's emitted text is byte-identical to the
+/// un-peeled form.
+fn render_hoisted_clone_prefix(
+    ctx: &EmitCtx,
+    hoisted: &[(Symbol, &Expr)],
+    indent: usize,
+    child: u16,
+    generics: GenericScope,
+) -> DResult<String> {
+    let mut prefix = String::new();
+    for &(name, value) in hoisted {
+        let name_s = ctx.emit_ident(name)?;
+        let value_s = emit_expr_at(ctx, value, indent, child, generics)?;
+        write!(prefix, "let {name_s} = {value_s}; ").map_err(|e| Diagnostic::CompilerBug {
+            where_: "ipe_backend_rust::render_hoisted_clone_prefix",
+            detail: format!("fmt::Write into String failed: {e}"),
+        })?;
+    }
+    Ok(prefix)
+}
+
+fn emit_arc_callback_field(
+    ctx: &EmitCtx,
+    field: &Expr,
+    indent: usize,
+    child: u16,
+    generics: GenericScope,
+) -> DResult<String> {
+    // Peel leading pure-alias `let`s (`let n = Var(v)` / `let n = CloneVar(v)`).
+    let (hoisted, inner) = peel_callback_capture_clones(field);
     // An inline lambda literal goes STRAIGHT into the `Arc` — one closure
     // boundary. The generic wrap-and-redispatch below builds a fresh boxed
     // closure per call of the `Arc` closure, so a callee-position capture of
@@ -3164,15 +3209,7 @@ fn emit_arc_callback_field(
     if hoisted.is_empty() {
         return Ok(arc);
     }
-    let mut prefix = String::new();
-    for (name, value) in hoisted {
-        let name_s = ctx.emit_ident(name)?;
-        let value_s = emit_expr_at(ctx, value, indent, child, generics)?;
-        write!(prefix, "let {name_s} = {value_s}; ").map_err(|e| Diagnostic::CompilerBug {
-            where_: "ipe_backend_rust::emit_arc_callback_field",
-            detail: format!("fmt::Write into String failed: {e}"),
-        })?;
-    }
+    let prefix = render_hoisted_clone_prefix(ctx, &hoisted, indent, child, generics)?;
     Ok(format!("{{ {prefix}{arc} }}"))
 }
 
@@ -4112,7 +4149,13 @@ fn emit_ui_plan(
                     detail: format!("Ui.onSubmit requires 1 argument, got {}", args.len()),
                 });
             };
-            let f_s = emit_expr_at(ctx, f_e, indent, child, generics)?;
+            // Peel any lowerer-hoisted capture-clone `let`s OUT of the `move`
+            // closure so a sibling attribute reading the same captured binding
+            // survives (E0382 — accept-then-cargo-fail SEAL break). The FixedValue
+            // handler is a bare value, not a `move` closure, so it never needs the
+            // hoist; only the Decoder path wraps in `move |_x| …`.
+            let (hoisted, f_inner) = peel_callback_capture_clones(f_e);
+            let f_s = emit_expr_at(ctx, f_inner, indent, child, generics)?;
             // Type-directed dispatch. The lowerer classified the handler
             // by its SOLVED type; a non-arrow value routes to the fixed-dispatch
             // runtime helper (no `(m)(_x)` call against a non-callable value —
@@ -4121,9 +4164,18 @@ fn emit_ui_plan(
             // onSubmit kernel and fails closed rather than guessing.
             let call = match on_form {
                 ipe_ir::OnFormKind::Decoder => {
-                    format!("ipe_runtime::ui::helpers::ui_on_submit_(move |_x| ({f_s})(_x))")
+                    let prefix =
+                        render_hoisted_clone_prefix(ctx, &hoisted, indent, child, generics)?;
+                    let inner =
+                        format!("ipe_runtime::ui::helpers::ui_on_submit_(move |_x| ({f_s})(_x))");
+                    if prefix.is_empty() {
+                        inner
+                    } else {
+                        format!("{{ {prefix}{inner} }}")
+                    }
                 }
                 ipe_ir::OnFormKind::FixedValue => {
+                    let f_s = emit_expr_at(ctx, f_e, indent, child, generics)?;
                     format!("ipe_runtime::ui::helpers::ui_on_submit_fixed_({f_s})")
                 }
                 ipe_ir::OnFormKind::NotForm => {
@@ -4161,18 +4213,35 @@ fn emit_ui_plan(
                 });
             };
             let payload_s = emit_expr_at(ctx, payload_e, indent, child, generics)?;
+            // The `String`/`Bool` (and `Raw` decoder) forms wrap the handler in a
+            // `move |_x| …` closure; peel any lowerer-hoisted capture-clone `let`s
+            // OUT of that closure so a sibling attribute reading the same captured
+            // binding survives (E0382 — accept-then-cargo-fail SEAL break). The
+            // `Msg` and `Raw` fixed-value forms pass the payload as a plain value,
+            // never a `move` closure, so they need no peel and keep `payload_s`.
+            let (payload_hoisted, payload_inner) = peel_callback_capture_clones(payload_e);
+            let payload_inner_s = emit_expr_at(ctx, payload_inner, indent, child, generics)?;
+            let payload_prefix =
+                render_hoisted_clone_prefix(ctx, &payload_hoisted, indent, child, generics)?;
+            let wrap_hoisted = |wrapped: String| {
+                if payload_prefix.is_empty() {
+                    wrapped
+                } else {
+                    format!("{{ {payload_prefix}{wrapped} }}")
+                }
+            };
             let call = match shape {
                 ipe_ir::HtmlEventShape::Msg => {
                     format!("ipe_runtime::html::html_on_msg_({name:?}.to_owned(), {payload_s})")
                 }
-                ipe_ir::HtmlEventShape::String => format!(
+                ipe_ir::HtmlEventShape::String => wrap_hoisted(format!(
                     "ipe_runtime::html::html_on_string_({name:?}.to_owned(), \
-                     ::std::sync::Arc::new(move |_x| ({payload_s})(_x)))"
-                ),
-                ipe_ir::HtmlEventShape::Bool => format!(
+                     ::std::sync::Arc::new(move |_x| ({payload_inner_s})(_x)))"
+                )),
+                ipe_ir::HtmlEventShape::Bool => wrap_hoisted(format!(
                     "ipe_runtime::html::html_on_bool_({name:?}.to_owned(), \
-                     ::std::sync::Arc::new(move |_x| ({payload_s})(_x)))"
-                ),
+                     ::std::sync::Arc::new(move |_x| ({payload_inner_s})(_x)))"
+                )),
                 // `html_on_raw_`'s own signature requires
                 // `F: Fn(T) -> M + Send + Sync + 'static` (the runtime's
                 // `Event::OnForm` slot is `Arc<dyn Fn(FormData) -> Option<M> +
@@ -4249,9 +4318,9 @@ fn emit_ui_plan(
                     ipe_ir::OnFormKind::FixedValue => format!(
                         "ipe_runtime::html::html_on_raw_fixed_({name:?}.to_owned(), {payload_s})"
                     ),
-                    ipe_ir::OnFormKind::Decoder => format!(
-                        "ipe_runtime::html::html_on_raw_({name:?}.to_owned(), move |_x| ({payload_s})(_x))"
-                    ),
+                    ipe_ir::OnFormKind::Decoder => wrap_hoisted(format!(
+                        "ipe_runtime::html::html_on_raw_({name:?}.to_owned(), move |_x| ({payload_inner_s})(_x))"
+                    )),
                     ipe_ir::OnFormKind::NotForm => {
                         return Err(Diagnostic::CompilerBug {
                             where_: "ipe_backend_rust::emit_ui_call::HtmlOnSubmit",
@@ -4269,6 +4338,12 @@ fn emit_ui_plan(
         // we eta-wrap it so any callable shape (fn item, Box<dyn Fn>, closure)
         // is accepted by the `impl Fn` bound without Arc overhead.
         // Arg order MUST match the runtime signature; a swap is a silent bug.
+        //
+        // The eta-wrap is a `move |_a…| …` thunk closure; peel any lowerer-hoisted
+        // capture-clone `let`s OUT of it ([`peel_callback_capture_clones`]) so a
+        // positional key arg (`a..e`) that legitimately `.clone()`s the same
+        // captured binding survives (E0382 — accept-then-cargo-fail SEAL break).
+        // The key args are emitted from their ORIGINAL exprs, untouched.
         NativeUiEmit::LazyLazy => {
             let [f_e, a_e] = args else {
                 return Err(Diagnostic::CompilerBug {
@@ -4276,11 +4351,16 @@ fn emit_ui_plan(
                     detail: format!("Lazy.lazy requires 2 arguments, got {}", args.len()),
                 });
             };
-            let f_s = emit_expr_at(ctx, f_e, indent, child, generics)?;
+            let (hoisted, f_inner) = peel_callback_capture_clones(f_e);
+            let f_s = emit_expr_at(ctx, f_inner, indent, child, generics)?;
             let a_s = emit_expr_at(ctx, a_e, indent, child, generics)?;
-            Ok(format!(
-                "ipe_runtime::ui::lazy::lazy_lazy_(move |_a| ({f_s})(_a), {a_s})"
-            ))
+            let prefix = render_hoisted_clone_prefix(ctx, &hoisted, indent, child, generics)?;
+            let call = format!("ipe_runtime::ui::lazy::lazy_lazy_(move |_a| ({f_s})(_a), {a_s})");
+            Ok(if prefix.is_empty() {
+                call
+            } else {
+                format!("{{ {prefix}{call} }}")
+            })
         }
 
         NativeUiEmit::LazyLazy2 => {
@@ -4290,12 +4370,19 @@ fn emit_ui_plan(
                     detail: format!("Lazy.lazy2 requires 3 arguments, got {}", args.len()),
                 });
             };
-            let f_s = emit_expr_at(ctx, f_e, indent, child, generics)?;
+            let (hoisted, f_inner) = peel_callback_capture_clones(f_e);
+            let f_s = emit_expr_at(ctx, f_inner, indent, child, generics)?;
             let a_s = emit_expr_at(ctx, a_e, indent, child, generics)?;
             let b_s = emit_expr_at(ctx, b_e, indent, child, generics)?;
-            Ok(format!(
+            let prefix = render_hoisted_clone_prefix(ctx, &hoisted, indent, child, generics)?;
+            let call = format!(
                 "ipe_runtime::ui::lazy::lazy_lazy2_(move |_a, _b| ({f_s})(_a, _b), {a_s}, {b_s})"
-            ))
+            );
+            Ok(if prefix.is_empty() {
+                call
+            } else {
+                format!("{{ {prefix}{call} }}")
+            })
         }
 
         NativeUiEmit::LazyLazy3 => {
@@ -4305,13 +4392,20 @@ fn emit_ui_plan(
                     detail: format!("Lazy.lazy3 requires 4 arguments, got {}", args.len()),
                 });
             };
-            let f_s = emit_expr_at(ctx, f_e, indent, child, generics)?;
+            let (hoisted, f_inner) = peel_callback_capture_clones(f_e);
+            let f_s = emit_expr_at(ctx, f_inner, indent, child, generics)?;
             let a_s = emit_expr_at(ctx, a_e, indent, child, generics)?;
             let b_s = emit_expr_at(ctx, b_e, indent, child, generics)?;
             let c_s = emit_expr_at(ctx, c_e, indent, child, generics)?;
-            Ok(format!(
+            let prefix = render_hoisted_clone_prefix(ctx, &hoisted, indent, child, generics)?;
+            let call = format!(
                 "ipe_runtime::ui::lazy::lazy_lazy3_(move |_a, _b, _c| ({f_s})(_a, _b, _c), {a_s}, {b_s}, {c_s})"
-            ))
+            );
+            Ok(if prefix.is_empty() {
+                call
+            } else {
+                format!("{{ {prefix}{call} }}")
+            })
         }
 
         NativeUiEmit::LazyLazy4 => {
@@ -4321,14 +4415,21 @@ fn emit_ui_plan(
                     detail: format!("Lazy.lazy4 requires 5 arguments, got {}", args.len()),
                 });
             };
-            let f_s = emit_expr_at(ctx, f_e, indent, child, generics)?;
+            let (hoisted, f_inner) = peel_callback_capture_clones(f_e);
+            let f_s = emit_expr_at(ctx, f_inner, indent, child, generics)?;
             let a_s = emit_expr_at(ctx, a_e, indent, child, generics)?;
             let b_s = emit_expr_at(ctx, b_e, indent, child, generics)?;
             let c_s = emit_expr_at(ctx, c_e, indent, child, generics)?;
             let d_s = emit_expr_at(ctx, d_e, indent, child, generics)?;
-            Ok(format!(
+            let prefix = render_hoisted_clone_prefix(ctx, &hoisted, indent, child, generics)?;
+            let call = format!(
                 "ipe_runtime::ui::lazy::lazy_lazy4_(move |_a, _b, _c, _d| ({f_s})(_a, _b, _c, _d), {a_s}, {b_s}, {c_s}, {d_s})"
-            ))
+            );
+            Ok(if prefix.is_empty() {
+                call
+            } else {
+                format!("{{ {prefix}{call} }}")
+            })
         }
 
         NativeUiEmit::LazyLazy5 => {
@@ -4338,15 +4439,22 @@ fn emit_ui_plan(
                     detail: format!("Lazy.lazy5 requires 6 arguments, got {}", args.len()),
                 });
             };
-            let f_s = emit_expr_at(ctx, f_e, indent, child, generics)?;
+            let (hoisted, f_inner) = peel_callback_capture_clones(f_e);
+            let f_s = emit_expr_at(ctx, f_inner, indent, child, generics)?;
             let a_s = emit_expr_at(ctx, a_e, indent, child, generics)?;
             let b_s = emit_expr_at(ctx, b_e, indent, child, generics)?;
             let c_s = emit_expr_at(ctx, c_e, indent, child, generics)?;
             let d_s = emit_expr_at(ctx, d_e, indent, child, generics)?;
             let e_s = emit_expr_at(ctx, e_e, indent, child, generics)?;
-            Ok(format!(
+            let prefix = render_hoisted_clone_prefix(ctx, &hoisted, indent, child, generics)?;
+            let call = format!(
                 "ipe_runtime::ui::lazy::lazy_lazy5_(move |_a, _b, _c, _d, _e| ({f_s})(_a, _b, _c, _d, _e), {a_s}, {b_s}, {c_s}, {d_s}, {e_s})"
-            ))
+            );
+            Ok(if prefix.is_empty() {
+                call
+            } else {
+                format!("{{ {prefix}{call} }}")
+            })
         }
 
         // ── Ipe.PubSub.publish / publishNoEcho ────────────────────────────

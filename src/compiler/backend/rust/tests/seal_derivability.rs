@@ -787,3 +787,253 @@ fn on_bool_capture_clone_peeled_outside_arc() -> DResult<()> {
     );
     Ok(())
 }
+
+// ── capture-clone peel on the event-callback emit arms ───────────────────────
+//
+// The sibling class of the onKeyDown/onKeyUp/onFile/onBool peel above. When a
+// synthesised callback arm emits its handler inside a `move |…| …` closure and
+// the handler is preceded by a lowerer-hoisted capture-clone `Let`
+// (`let pfx = pfx.clone() in Lambda …`), the peel MUST hoist that `let` OUTSIDE
+// the `move` closure. Otherwise the closure move-captures the free `pfx` while
+// the `.clone()` also reads it, and a sibling field/arg reading `pfx` hits
+// E0382 at `cargo build` — ipe exit-0 then cargo-fail, the cardinal SEAL breach.
+//
+// These build the capture-clone `Let` NESTED DIRECTLY IN THE CALLBACK ARG (not
+// at the function-body top — a top-level `Let` emits its `let` at function
+// scope regardless of whether the ARM peels, so it cannot detect an arm-local
+// regression). A single-arm revert (dropping that arm's peel) leaves the
+// `let pfx = pfx.clone()` INSIDE the arm's `move |` closure, and the assertion
+// below — the peel `let` must precede the arm's `move |` — fails exactly there.
+
+/// A single-`view`-func UI program whose body is `call_body`. `view` takes a
+/// `String` param `pfx` so a nested `CloneVar(pfx)` resolves.
+fn ui_view_program(interner: &mut Interner, ret: IrType, call_body: Expr) -> DResult<Program> {
+    let main_mod = interner.intern("Main")?;
+    let view = interner.intern("view")?;
+    let pfx = interner.intern("pfx")?;
+    let func = Func {
+        id: FuncId::from_raw(0),
+        name: view,
+        home: ModPath(vec![]),
+        type_params: vec![],
+        row_params: vec![],
+        params: vec![(pfx, IrType::Str)],
+        ret,
+        body: call_body,
+    };
+    let mut prog = program(main_mod, vec![], vec![func]);
+    if let Some(module) = prog.modules.first_mut() {
+        module.uses_ui = true;
+    }
+    Ok(prog)
+}
+
+/// Build `Call(kernel, [ Let{pfx = pfx.clone(); Lambda(param -> body)} ] ++ tail)`
+/// — the capture-clone `Let` sits DIRECTLY in the first (callback) arg, so
+/// peeling it is the ARM's responsibility, not the outer let-lowering's.
+#[allow(clippy::too_many_arguments)] // one call-shape builder threading the IR pieces
+fn capture_clone_callback_call(
+    interner: &mut Interner,
+    kernel: KernelFn,
+    param: Symbol,
+    param_ty: IrType,
+    lambda_ret: IrType,
+    lambda_body: Expr,
+    on_form: OnFormKind,
+    tail_args: Vec<Expr>,
+) -> DResult<Expr> {
+    let pfx = interner.intern("pfx")?;
+    let callback = Expr::Let {
+        name: pfx,
+        value: Box::new(Expr::CloneVar(pfx)),
+        body: Box::new(Expr::Lambda {
+            params: vec![(param, param_ty)],
+            ret: lambda_ret,
+            body: Box::new(lambda_body),
+        }),
+    };
+    let mut args = vec![callback];
+    args.extend(tail_args);
+    Ok(Expr::Call {
+        callee: Callee::Kernel(kernel),
+        args,
+        pin: CallPin::None,
+        on_form,
+    })
+}
+
+/// Assert the capture-clone peel `let pfx = pfx.clone();` appears in `src`
+/// BEFORE the FIRST `move |` that follows `runtime_path` — i.e. the peel was
+/// hoisted OUTSIDE the arm's `move` closure. On a single-arm revert the `let`
+/// lands INSIDE that `move` (after `move |`), so this fails exactly there.
+fn assert_peeled_before_move(src: &str, runtime_path: &str) {
+    // Split the emit at the arm's runtime path. `after` starts just past the
+    // path, so the arm's `move |` is the first `move |` in `after`; the peeled
+    // clone-let (if hoisted OUTSIDE the closure) lands in `before` or in the
+    // call head between the path and `move |`, never in the closure-body tail.
+    // All lookups are `Option`-driven — no unwrap/indexing.
+    assert!(
+        src.contains(runtime_path),
+        "runtime path {runtime_path:?} must appear in emitted text:\n{src}"
+    );
+    let (before, after) = src.split_once(runtime_path).unwrap_or(("", ""));
+    assert!(
+        after.contains("move |"),
+        "a `move |` closure must follow {runtime_path:?}:\n{src}"
+    );
+    let (call_head, move_tail) = after.split_once("move |").unwrap_or(("", ""));
+    // The clone-let must sit BEFORE the arm's `move |` — either in `before` (the
+    // common hoist point) or in the call head between the path and `move |`
+    // (e.g. `{ let pfx = pfx.clone(); path(Arc::new(move |…`). It must NEVER sit
+    // in `move_tail` (the closure body), which is where a reverted arm nests it.
+    let peeled_outside =
+        before.contains("let pfx = pfx.clone()") || call_head.contains("let pfx = pfx.clone()");
+    assert!(
+        peeled_outside,
+        "capture-clone peel `let pfx = pfx.clone()` must appear BEFORE the \
+         `move |` of {runtime_path:?} (hoisted OUTSIDE the closure):\n{src}"
+    );
+    assert!(
+        !move_tail.contains("let pfx = pfx.clone()"),
+        "no capture-clone `let` may appear INSIDE the arm's `move` closure \
+         (a reverted arm nests it there — E0382):\n{src}"
+    );
+}
+
+/// `Ui.onSubmit` (bare, non-Arc `ui_on_submit_(move |_x| …)`).
+#[test]
+fn on_submit_capture_clone_peeled_outside_closure() -> DResult<()> {
+    let mut interner = Interner::new();
+    let x = interner.intern("x")?;
+    let pfx = interner.intern("pfx")?;
+    let body = capture_clone_callback_call(
+        &mut interner,
+        KernelFn::UiOnSubmit,
+        x,
+        IrType::Str,
+        IrType::Str,
+        Expr::BinOp {
+            op: ipe_ir::BinOp::Append,
+            lhs: Box::new(Expr::CloneVar(pfx)),
+            rhs: Box::new(Expr::Var(x)),
+        },
+        OnFormKind::Decoder,
+        vec![],
+    )?;
+    let prog = ui_view_program(&mut interner, IrType::Str, body)?;
+    let src = emit(&interner, &prog)?;
+    assert_peeled_before_move(&src, "ipe_runtime::ui::helpers::ui_on_submit_(");
+    Ok(())
+}
+
+/// `Event.onKeyDown` / String shape
+/// (`html_on_string_(…, Arc::new(move |_x| …))`).
+#[test]
+fn html_on_string_capture_clone_peeled_outside_closure() -> DResult<()> {
+    let mut interner = Interner::new();
+    let x = interner.intern("x")?;
+    let pfx = interner.intern("pfx")?;
+    let body = capture_clone_callback_call(
+        &mut interner,
+        KernelFn::HtmlOnKeyDown,
+        x,
+        IrType::Str,
+        IrType::Str,
+        Expr::BinOp {
+            op: ipe_ir::BinOp::Append,
+            lhs: Box::new(Expr::CloneVar(pfx)),
+            rhs: Box::new(Expr::Var(x)),
+        },
+        OnFormKind::NotForm,
+        vec![],
+    )?;
+    let prog = ui_view_program(&mut interner, IrType::Str, body)?;
+    let src = emit(&interner, &prog)?;
+    assert_peeled_before_move(&src, "ipe_runtime::html::html_on_string_(");
+    Ok(())
+}
+
+/// `Event.onBool` / Bool shape
+/// (`html_on_bool_(…, Arc::new(move |_x| …))`).
+#[test]
+fn html_on_bool_capture_clone_peeled_outside_closure() -> DResult<()> {
+    let mut interner = Interner::new();
+    let b = interner.intern("b")?;
+    let pfx = interner.intern("pfx")?;
+    // `\b -> (pfx, b)` — reads the captured `pfx` in the Bool handler.
+    let body = capture_clone_callback_call(
+        &mut interner,
+        KernelFn::HtmlOnBool,
+        b,
+        IrType::Bool,
+        IrType::Tuple(vec![IrType::Str, IrType::Bool]),
+        Expr::Tuple(vec![Expr::CloneVar(pfx), Expr::Var(b)]),
+        OnFormKind::NotForm,
+        vec![],
+    )?;
+    let prog = ui_view_program(
+        &mut interner,
+        IrType::Tuple(vec![IrType::Str, IrType::Bool]),
+        body,
+    )?;
+    let src = emit(&interner, &prog)?;
+    assert_peeled_before_move(&src, "ipe_runtime::html::html_on_bool_(");
+    Ok(())
+}
+
+/// `Event.onSubmit` / Raw decoder shape
+/// (bare, non-Arc `html_on_raw_(…, move |_x| …)`).
+#[test]
+fn html_on_raw_capture_clone_peeled_outside_closure() -> DResult<()> {
+    let mut interner = Interner::new();
+    let x = interner.intern("x")?;
+    let pfx = interner.intern("pfx")?;
+    let body = capture_clone_callback_call(
+        &mut interner,
+        KernelFn::HtmlOnSubmit,
+        x,
+        IrType::Str,
+        IrType::Str,
+        Expr::BinOp {
+            op: ipe_ir::BinOp::Append,
+            lhs: Box::new(Expr::CloneVar(pfx)),
+            rhs: Box::new(Expr::Var(x)),
+        },
+        OnFormKind::Decoder,
+        vec![],
+    )?;
+    let prog = ui_view_program(&mut interner, IrType::Str, body)?;
+    let src = emit(&interner, &prog)?;
+    assert_peeled_before_move(&src, "ipe_runtime::html::html_on_raw_(");
+    Ok(())
+}
+
+/// `Lazy.lazy` (bare, non-Arc, MULTI-ARG `lazy_lazy_(move |_a| …, key)`). The
+/// captured `pfx` is shared with the POSITIONAL key arg — the peel must hoist
+/// the clone-let OUTSIDE the thunk `move` closure while leaving the key arg
+/// (which reads `pfx`) intact.
+#[test]
+fn lazy_capture_clone_peeled_outside_closure() -> DResult<()> {
+    let mut interner = Interner::new();
+    let a = interner.intern("a")?;
+    let pfx = interner.intern("pfx")?;
+    // f = \a -> pfx ++ a ; key arg = pfx (positional sibling reading pfx).
+    let body = capture_clone_callback_call(
+        &mut interner,
+        KernelFn::LazyLazy,
+        a,
+        IrType::Str,
+        IrType::Str,
+        Expr::BinOp {
+            op: ipe_ir::BinOp::Append,
+            lhs: Box::new(Expr::CloneVar(pfx)),
+            rhs: Box::new(Expr::Var(a)),
+        },
+        OnFormKind::NotForm,
+        vec![Expr::Var(pfx)],
+    )?;
+    let prog = ui_view_program(&mut interner, IrType::Str, body)?;
+    let src = emit(&interner, &prog)?;
+    assert_peeled_before_move(&src, "ipe_runtime::ui::lazy::lazy_lazy_(");
+    Ok(())
+}
