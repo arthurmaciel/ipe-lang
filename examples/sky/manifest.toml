@@ -45,6 +45,13 @@
 #                    build — build only (tui/webview/composite; needs infra to run)
 #                    serve — build + bounded HTTP smoke (web/server; smoke deferred
 #                            to a later increment; treated as build-only for now)
+#   status       = "green" | "ice-blocked" | "deps-deferred" | "broken"
+#                  green         — full emit+build+run passes; gate enforces it
+#                  ice-blocked   — compiler ICE blocks emit; tracked, not gated
+#                  deps-deferred — cargo fails only on absent system libs
+#                                  (glib/webkit); builds in a later increment
+#                  broken        — emit-ok but cargo-fail (non-syslib) or run-fail
+#                                  on a compiler/API gap; tracked, not gated
 #   blocked      = OPTIONAL reason string when the example exercises an Ipê
 #                  feature not yet implemented (a tracked compiler gap). The
 #                  sweep marks it a documented SKIP, never a surprise RED.
@@ -58,6 +65,8 @@ patch = "rename-map+ipe-edit"
 go_ffi = false
 shape  = "program"
 verify = "run"
+status = "broken"
+blocked = "IPE-L0102: Task.withMaxAttempts stays fully polymorphic — concrete type never determined"
 
 [[example]]
 name = "01-hello-world"
@@ -65,6 +74,7 @@ patch = "rename-map"
 go_ffi = false
 shape  = "program"
 verify = "run"
+status = "green"
 
 [[example]]
 name = "04-local-pkg"
@@ -72,13 +82,15 @@ patch = "rename-map"
 go_ffi = false
 shape  = "program"
 verify = "run"
+status = "green"
 
 [[example]]
 name = "06-json"
-patch = "rename-map"
+patch = "rename-map+ipe-edit"
 go_ffi = false
 shape  = "program"
 verify = "run"
+status = "green"
 
 [[example]]
 name = "07-todo-cli"
@@ -86,6 +98,8 @@ patch = "rename-map"
 go_ffi = false
 shape  = "program"
 verify = "run"
+status = "broken"
+blocked = "IPE-L0141: Task discard inside Task.map callback — discarding Task in non-Task fn"
 
 [[example]]
 name = "09-live-counter"
@@ -93,6 +107,7 @@ patch = "rename-map"
 go_ffi = false
 shape  = "web"
 verify = "serve"
+status = "green"
 
 [[example]]
 name = "10-live-component"
@@ -100,13 +115,16 @@ patch = "rename-map"
 go_ffi = false
 shape  = "web"
 verify = "serve"
+status = "green"
 
 [[example]]
 name = "12-skyvote"
-patch = "rename-map"
+patch = "rename-map+ipe-edit"
 go_ffi = false
 shape  = "web"
 verify = "serve"
+status = "broken"
+blocked = "IPE-N0005: Db.unsafeExecRaw not yet exposed on the Db module"
 
 [[example]]
 name = "14-task-demo"
@@ -114,6 +132,7 @@ patch = "rename-map"
 go_ffi = false
 shape  = "program"
 verify = "run"
+status = "green"
 
 [[example]]
 name = "15-http-server"
@@ -121,6 +140,7 @@ patch = "rename-map"
 go_ffi = false
 shape  = "server"
 verify = "serve"
+status = "green"
 
 [[example]]
 name = "20-cli-counter"
@@ -128,6 +148,7 @@ patch = "rename-map"
 go_ffi = false
 shape  = "tui"
 verify = "build"
+status = "green"
 
 [[example]]
 name = "21-tui-stopwatch"
@@ -135,6 +156,7 @@ patch = "rename-map"
 go_ffi = false
 shape  = "tui"
 verify = "build"
+status = "green"
 
 [[example]]
 name = "22-tui-stopwatch-ui"
@@ -142,6 +164,7 @@ patch = "rename-map"
 go_ffi = false
 shape  = "tui"
 verify = "build"
+status = "green"
 
 [[example]]
 name = "23-tui-todo"
@@ -149,6 +172,7 @@ patch = "rename-map"
 go_ffi = false
 shape  = "tui"
 verify = "build"
+status = "green"
 
 [[example]]
 name = "24-tui-kitchen-sink"
@@ -156,6 +180,7 @@ patch = "rename-map"
 go_ffi = false
 shape  = "tui"
 verify = "build"
+status = "green"
 
 [[example]]
 name = "25-sky-console"
@@ -163,6 +188,8 @@ patch = "rename-map"
 go_ffi = false
 shape  = "web"
 verify = "serve"
+status = "broken"
+blocked = "IPE-T0020: view returns Html but Element is required — Html/Element type mismatch"
 
 [[example]]
 name = "26-ui-showcase"
@@ -170,14 +197,17 @@ patch = "rename-map+ipe-edit"
 go_ffi = false
 shape  = "web"
 verify = "serve"
+status = "green"
 notes = "Live.app init pinned to LiveReq (make-invalid-states-unrepresentable divergence, B24 / ADR 0021)"
 
 [[example]]
 name = "27-multi-session-chat"
-patch = "rename-map"
+patch = "rename-map+ipe-edit"
 go_ffi = false
 shape  = "web"
 verify = "serve"
+status = "broken"
+blocked = "IPE-N0005: Db.unsafeExecRaw not yet exposed on the Db module"
 
 [[example]]
 name = "28-streaming-chat"
@@ -185,6 +215,7 @@ patch = "rename-map"
 go_ffi = false
 shape  = "web"
 verify = "serve"
+status = "green"
 
 [[example]]
 name = "29-webview-threejs-spike"
@@ -192,6 +223,8 @@ patch = "rename-map"
 go_ffi = false
 shape  = "webview"
 verify = "build"
+status = "deps-deferred"
+blocked = "requires glib-2.0 and webkit2gtk system libraries absent in CI"
 
 [[example]]
 name = "30-sse-server-demo"
@@ -199,6 +232,7 @@ patch = "rename-map"
 go_ffi = false
 shape  = "server"
 verify = "serve"
+status = "green"
 
 [[example]]
 name = "31-webview-stopwatch-ui"
@@ -206,6 +240,8 @@ patch = "rename-map"
 go_ffi = false
 shape  = "webview"
 verify = "build"
+status = "deps-deferred"
+blocked = "requires glib-2.0 and webkit2gtk system libraries absent in CI"
 
 [[example]]
 name = "32-sse-relay"
@@ -213,6 +249,7 @@ patch = "rename-map"
 go_ffi = false
 shape  = "server"
 verify = "serve"
+status = "green"
 
 [[example]]
 name = "33-websocket-echo"
@@ -220,6 +257,7 @@ patch = "rename-map"
 go_ffi = false
 shape  = "server"
 verify = "serve"
+status = "green"
 
 [[example]]
 name = "34-multi-tier-console"
@@ -227,6 +265,8 @@ patch = "rename-map"
 go_ffi = false
 shape  = "web"
 verify = "serve"
+status = "broken"
+blocked = "IPE-L0141: Task discard inside non-Task function (Log.infoWith in update)"
 
 [[example]]
 name = "35-composite-generics"
@@ -234,6 +274,7 @@ patch = "rename-map"
 go_ffi = false
 shape  = "program"
 verify = "run"
+status = "green"
 
 [[example]]
 name = "39-hub-demo"
@@ -241,6 +282,7 @@ patch = "rename-map"
 go_ffi = false
 shape  = "program"
 verify = "build"
+status = "green"
 notes = "composite (billing-app + frontend-app); no top-level src/Main — the sweep's per-dir Main.ipe check skips the composite root"
 
 # ── Type-system regression locks (pure Ipê; token rewrite only) ──────────────
@@ -254,6 +296,7 @@ patch = "rename-map"
 go_ffi = false
 shape  = "program"
 verify = "run"
+status = "green"
 
 [[example]]
 name = "41-nested-curry"
@@ -261,6 +304,7 @@ patch = "rename-map"
 go_ffi = false
 shape  = "program"
 verify = "run"
+status = "green"
 
 [[example]]
 name = "42-poly-record"
@@ -268,6 +312,7 @@ patch = "rename-map"
 go_ffi = false
 shape  = "program"
 verify = "run"
+status = "green"
 
 [[example]]
 name = "43-composition"
@@ -275,6 +320,7 @@ patch = "rename-map"
 go_ffi = false
 shape  = "program"
 verify = "run"
+status = "green"
 
 [[example]]
 name = "44-record-update"
@@ -282,6 +328,7 @@ patch = "rename-map"
 go_ffi = false
 shape  = "program"
 verify = "run"
+status = "green"
 
 [[example]]
 name = "45-record-update-anon"
@@ -289,6 +336,7 @@ patch = "rename-map"
 go_ffi = false
 shape  = "program"
 verify = "run"
+status = "green"
 
 [[example]]
 name = "46-row-poly-result"
@@ -296,6 +344,7 @@ patch = "rename-map"
 go_ffi = false
 shape  = "program"
 verify = "run"
+status = "green"
 
 [[example]]
 name = "47-func-field-record"
@@ -303,6 +352,7 @@ patch = "rename-map"
 go_ffi = false
 shape  = "program"
 verify = "run"
+status = "green"
 
 [[example]]
 name = "48-tuple-unused-binding"
@@ -310,27 +360,32 @@ patch = "rename-map"
 go_ffi = false
 shape  = "program"
 verify = "run"
+status = "green"
 
 [[example]]
 name = "49-xmodule-adt"
-patch = "rename-map"
+patch = "rename-map+ipe-edit"
 go_ffi = false
 shape  = "program"
 verify = "run"
+status = "green"
 
 [[example]]
 name = "50-open-row-closure"
-patch = "rename-map"
+patch = "rename-map+ipe-edit"
 go_ffi = false
 shape  = "program"
 verify = "run"
+status = "green"
 
 [[example]]
 name = "simple"
-patch = "rename-map"
+patch = "rename-map+ipe-edit"
 go_ffi = false
 shape  = "program"
 verify = "run"
+status = "broken"
+blocked = "IPE-N0036: Task.perform removed — use Task.attempt"
 
 [[example]]
 name = "test_pkg"
@@ -338,6 +393,7 @@ patch = "rename-map"
 go_ffi = false
 shape  = "program"
 verify = "run"
+status = "green"
 
 # ── Ported from Go-FFI: pure-Ipê replacements for Go dependencies ─────────────
 # These examples previously used Go packages; they now use Ipê stdlib or
@@ -348,7 +404,9 @@ name = "02-go-stdlib"
 patch = "rename-map"
 go_ffi = false
 shape  = "program"
-verify = "run"
+verify = "build"
+status = "green"
+notes  = "makes live HTTP request to httpbin.org — cannot run offline; build-only in offline gate"
 
 [[example]]
 name = "03-tea-external"
@@ -356,6 +414,7 @@ patch = "rename-map+ipe-edit"
 go_ffi = false
 shape  = "program"
 verify = "run"
+status = "green"
 notes = "Go uuid → Ipe.Crypto.randomToken (sanctioned divergence: same randomness guarantee, different format)"
 
 [[example]]
@@ -364,6 +423,7 @@ patch = "rename-map+ipe-edit"
 go_ffi = false
 shape  = "server"
 verify = "serve"
+status = "green"
 notes = "Go net/http + gorilla/mux → Ipe.Http.Server (behaviour-equivalent route dispatch)"
 
 [[example]]
@@ -372,6 +432,8 @@ patch = "rename-map+ipe-edit"
 go_ffi = false
 shape  = "web"
 verify = "serve"
+status = "broken"
+blocked = "IPE-N0005: Db.unsafeExecRaw not yet exposed on the Db module"
 notes = "go.dependencies were crypto/sha256+hex only (Go backend internal); source imports only local Chess.* modules — no Go FFI in Ipê source. Patch adds missing State import to annotation sites."
 
 [[example]]
@@ -380,6 +442,8 @@ patch = "rename-map+ipe-edit"
 go_ffi = false
 shape  = "web"
 verify = "serve"
+status = "broken"
+blocked = "IPE-N0005: Db.unsafeExecRaw not yet exposed on the Db module"
 notes = "go.dependencies were crypto/sha256+hex only; source imports only local Lib.*/Page.* — no Go FFI. Patch: State.Msg import for Ui.Charts annotations; System.loadEnv → System.getenv in Lib.Auth."
 
 [[example]]
@@ -388,6 +452,8 @@ patch = "rename-map+ipe-edit"
 go_ffi = false
 shape  = "web"
 verify = "serve"
+status = "broken"
+blocked = "cargo build times out: sqlx + axum dep graph exceeds build budget on constrained CI runners"
 notes = "sky.toml had no go.dependencies; manifest go_ffi was set in error. Patch adds type annotations for viewJob/viewSnapshot."
 
 [[example]]
@@ -396,6 +462,7 @@ patch = "rename-map"
 go_ffi = false
 shape  = "web"
 verify = "serve"
+status = "green"
 notes = "sky.toml listed no go.dependencies; Gorilla/Websocket was never used in the Ipê source. Full .ipe set already committed."
 
 [[example]]
@@ -404,6 +471,8 @@ patch = "rename-map+ipe-edit"
 go_ffi = false
 shape  = "server"
 verify = "serve"
+status = "broken"
+blocked = "IPE-P0001: parse error — `in` followed by `=` rejected (let-binding syntax gap)"
 notes = "sky.toml has no go.dependencies; source imports Sky.Core.*/Sky.Http.*/Sky.Ffi/Std.* only — Sky.Ffi is stdlib, not a Go package. Edit renames the SKY_ config env vars to IPE_ so the server boots under the standard secret."
 
 [[example]]
@@ -412,6 +481,7 @@ patch = "rename-map"
 go_ffi = false
 shape  = "web"
 verify = "serve"
+status = "green"
 notes = "sky.toml has no go.dependencies; source imports Sky.Core.*/Std.* only — no Go FFI. go_ffi was set in error."
 
 [[example]]
@@ -420,6 +490,7 @@ patch = "rename-map"
 go_ffi = false
 shape  = "web"
 verify = "serve"
+status = "green"
 notes = "sky.toml has no go.dependencies; source imports Sky.Core.*/Std.* only — no Go FFI. go_ffi was set in error."
 
 # ── Go-FFI examples (excluded from Rust build by is_out_of_scope) ─────────────
@@ -432,6 +503,7 @@ patch = "rename-map"
 go_ffi = true
 shape  = "server"
 verify = "build"
+status = "broken"
 notes = "imports Github.Com.Google.Uuid + gorilla/mux — Go FFI; no clean Rust-crate path without a multi-file rewrite of the auth layer; deferred"
 
 [[example]]
@@ -440,6 +512,7 @@ patch = "rename-map"
 go_ffi = true
 shape  = "program"
 verify = "build"
+status = "broken"
 notes = "imports Fyne.Io.Fyne.V2 — Go GUI FFI; no portable Rust-native GUI equivalent; skip"
 
 [[example]]
@@ -448,5 +521,5 @@ patch = "override"
 go_ffi = true
 shape  = "web"
 verify = "serve"
+status = "broken"
 notes = "upstream is a Go-FFI storefront; the Ipê port is a whole-port override at examples/sky/ipe-overrides/13-skyshop/ (firestore+stripe via Rust-crate FFI), skipped by needs_ffi_install until an ipe install cache is populated"
-

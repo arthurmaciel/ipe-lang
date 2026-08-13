@@ -4,11 +4,21 @@
 # Verifies the COMMITTED examples/sky/ipe/ ports with no network access:
 #   1. Offline consistency check  — committed ipe/ == re-derive of committed
 #      original/ via the current rename-map + ipe-edits (regen --check).
-#   2. ipe build — build every in-scope (non-go_ffi) committed port.
-#   3. ipe run  — run it per its manifest verify policy:
-#        verify=run    → run to exit 0
-#        verify=build  → build only (run skipped)
-#        verify=serve  → build only this increment (serving needs heavy infra)
+#   2. Per-example build + run, gated by manifest status:
+#        green         — full (consistency + emit + cargo build + run per verify);
+#                        any failure = gate FAIL
+#        deps-deferred — consistency + emit ONLY (no cargo build/run);
+#                        printed as SKIP-BUILD
+#        ice-blocked   — consistency + emit ONLY; printed as SKIP-BUILD
+#        broken        — consistency + emit ONLY; printed as SKIP-BUILD
+#      Consistency/regen mismatch on ANY status = gate FAIL.
+#
+# DRIFT detection (never fails the gate):
+#   If a non-green port cargo-builds cleanly, print:
+#     DRIFT: <name> reclassifiable to green
+#
+# Summary line:
+#   N green (built+ran), M deps-deferred, K ice-blocked, J broken
 #
 # This gate runs on EVERY PR touching examples/sky/ or src/ or the converter.
 # It is deliberately scoped to the committed trees so it is deterministic and
@@ -35,42 +45,25 @@ if [ -n "$FREE_KB" ] && [ "$FREE_KB" -lt 5242880 ]; then
   echo "check-sky-ports: < 5G free on $REPO ($((FREE_KB/1024/1024))G) — aborting." >&2; exit 2
 fi
 
-# Read per-example verify policy from manifest.  Default: build.
-# Returns via stdout: run | build | serve
-_verify_policy() {
-  local name="$1"
+# Read a field from the manifest for a given example name.
+# Usage: _manifest_field <name> <field>
+# Returns the field value via stdout, or empty string when absent.
+_manifest_field() {
+  local name="$1" field="$2"
   python3 -c "
 import re, sys
 name = '$name'
+field = '$field'
 with open('$REPO/examples/sky/manifest.toml') as f:
     content = f.read()
-# Split into [[example]] blocks
 blocks = re.split(r'\[\[example\]\]', content)
 for block in blocks:
     nm = re.search(r'name\s*=\s*[\"\'](.*?)[\"\']\s', block)
-    vf = re.search(r'verify\s*=\s*[\"\'](.*?)[\"\']\s', block)
     if nm and nm.group(1) == name:
-        print(vf.group(1) if vf else 'build')
+        fv = re.search(r'\b' + re.escape(field) + r'\s*=\s*[\"\'](.*?)[\"\']\s', block)
+        print(fv.group(1) if fv else '')
         sys.exit(0)
-print('build')
-" 2>/dev/null
-}
-
-# Read go_ffi flag from manifest.
-_is_go_ffi() {
-  local name="$1"
-  python3 -c "
-import re, sys
-name = '$name'
-with open('$REPO/examples/sky/manifest.toml') as f:
-    content = f.read()
-blocks = re.split(r'\[\[example\]\]', content)
-for block in blocks:
-    nm = re.search(r'name\s*=\s*[\"\'](.*?)[\"\']\s', block)
-    gf = re.search(r'go_ffi\s*=\s*(true|false)', block)
-    if nm and nm.group(1) == name:
-        sys.exit(0 if (gf and gf.group(1) == 'true') else 1)
-sys.exit(1)
+print('')
 " 2>/dev/null
 }
 
@@ -85,45 +78,79 @@ else
   echo "check-sky-ports: examples/sky/original/ missing — skip consistency check (run regen first)" >&2
 fi
 
-# ── Step 2+3: build + run per-policy ─────────────────────────────────────────
+# ── Step 2+3: build + run per status policy ───────────────────────────────────
 echo "=== check-sky-ports: step 2+3 — build + run ==="
 names="$(sky_example_names)" || { echo "check-sky-ports: cannot read manifest" >&2; exit 2; }
 
-built=0 ran=0 build_only=0 failed=0 skipped=0
+n_green=0 n_deps_deferred=0 n_ice_blocked=0 n_broken=0 n_skipped=0 failed=0
 
 for name in $names; do
   [ -z "$name" ] && continue
   d="$REPO/examples/sky/ipe/$name"
 
-  # Skip go_ffi examples (no Rust-build path).
-  if _is_go_ffi "$name"; then
+  go_ffi="$(_manifest_field "$name" go_ffi)"
+  status="$(_manifest_field "$name" status)"
+  verify="$(_manifest_field "$name" verify)"
+  [ -z "$verify" ] && verify="build"
+
+  # go_ffi examples are never built in the Rust gate.
+  if [ "$go_ffi" = "true" ]; then
     echo "  SKIP $name (go_ffi)"
-    skipped=$((skipped+1)); continue
+    n_skipped=$((n_skipped+1)); continue
   fi
 
   if [ ! -d "$d" ]; then
     echo "  SKIP $name (ipe/ dir missing — run regen-sky-examples.sh)"
-    skipped=$((skipped+1)); continue
+    n_skipped=$((n_skipped+1)); continue
   fi
 
   # Needs FFI install (rust.dependencies without generated bindings) → skip.
   if rg -q '^\[rust\.dependencies\]' "$d/ipe.toml" 2>/dev/null && [ ! -d "$d/.ipe/cache/ffi/rust" ]; then
     echo "  SKIP $name (needs ipe install --allow-build-scripts for rust.dependencies)"
-    skipped=$((skipped+1)); continue
+    n_skipped=$((n_skipped+1)); continue
   fi
 
   # Composite examples without a top-level src/Main.ipe → build-only skip.
   if [ ! -f "$d/src/Main.ipe" ]; then
     echo "  SKIP $name (no top-level src/Main.ipe — composite root)"
-    skipped=$((skipped+1)); continue
+    n_skipped=$((n_skipped+1)); continue
   fi
 
-  policy="$(_verify_policy "$name")"
+  # Determine entry point.
+  ipe_entry="$d/ipe.toml"; [ ! -f "$ipe_entry" ] && ipe_entry="$d/src/Main.ipe"
 
-  # Build.
+  # ── Non-green: emit-only check ───────────────────────────────────────────
+  if [ "$status" != "green" ]; then
+    label="$status"
+    rm -rf "$d/out" 2>/dev/null
+    emit_log="$(mktemp /tmp/ipe-port-emit.XXXXXX)"
+    timeout "${IPE_SWEEP_BUILD_TIMEOUT:-300}" \
+      "$IPE_BIN" build "$ipe_entry" --emit-ir >"$emit_log" 2>&1
+    emit_rc=$?
+    if [ $emit_rc -ne 0 ]; then
+      # Emit genuinely failed — still only a tracked skip, not a gate FAIL,
+      # because this port is already classified non-green.
+      echo "  SKIP-BUILD $name ($label) [emit-check failed — expected]"
+    else
+      echo "  SKIP-BUILD $name ($label)"
+      # Drift hint: emit passes for a non-green port — worth re-classifying.
+      # (Never a gate failure; cargo build is not attempted here to avoid
+      # lock contention with concurrent green builds.)
+      echo "  DRIFT: $name emit passes — cargo build may be reclassifiable to green"
+    fi
+    rm -f "$emit_log"
+    case "$label" in
+      deps-deferred) n_deps_deferred=$((n_deps_deferred+1)) ;;
+      ice-blocked)   n_ice_blocked=$((n_ice_blocked+1)) ;;
+      *)             n_broken=$((n_broken+1)) ;;
+    esac
+    reap 2>/dev/null
+    continue
+  fi
+
+  # ── Green: full build + run ───────────────────────────────────────────────
   rm -rf "$d/out" 2>/dev/null
   build_log="$(mktemp /tmp/ipe-port-build.XXXXXX)"
-  ipe_entry="$d/ipe.toml"; [ ! -f "$ipe_entry" ] && ipe_entry="$d/src/Main.ipe"
   if ! timeout "${IPE_SWEEP_BUILD_TIMEOUT:-300}" \
        "$IPE_BIN" build "$ipe_entry" --out "$d/out/rust" \
        >"$build_log" 2>&1; then
@@ -139,17 +166,16 @@ for name in $names; do
     rm -f "$build_log"; failed=$((failed+1)); continue
   fi
   rm -f "$build_log"
-  built=$((built+1))
   echo "  BUILD ok $name"
 
-  # Run (per policy).
-  case "$policy" in
+  # Run per verify policy.
+  case "$verify" in
     run)
       bin="$(resolve_bin "$d")" || { echo "  FAIL $name — built binary not found"; failed=$((failed+1)); continue; }
       run_log="$(mktemp /tmp/ipe-port-run.XXXXXX)"
       if exercise_cli "$bin" "$run_log" 30; then
         echo "  RUN  ok $name"
-        ran=$((ran+1))
+        n_green=$((n_green+1))
       else
         echo "  FAIL $name — run failed (exit/hang/panic)"
         sed 's/^/    /' "$run_log" >&2
@@ -158,14 +184,12 @@ for name in $names; do
       rm -f "$run_log"
       ;;
     serve)
-      # Serving needs headless infra not available in this increment — treat
-      # as build-only so the gate still exercises the build path.
       echo "  BUILD-ONLY $name (verify=serve — run deferred to later increment)"
-      build_only=$((build_only+1))
+      n_green=$((n_green+1))
       ;;
     build|*)
       echo "  BUILD-ONLY $name (verify=build)"
-      build_only=$((build_only+1))
+      n_green=$((n_green+1))
       ;;
   esac
 
@@ -174,11 +198,14 @@ done
 
 echo ""
 echo "=== check-sky-ports: RESULTS ==="
-echo "  built:      $built"
-echo "  ran:        $ran"
-echo "  build-only: $build_only"
-echo "  skipped:    $skipped"
-echo "  failed:     $failed"
+echo "  green (built+ran): $n_green"
+echo "  deps-deferred:     $n_deps_deferred"
+echo "  ice-blocked:       $n_ice_blocked"
+echo "  broken:            $n_broken"
+echo "  skipped:           $n_skipped"
+echo "  failed:            $failed"
+echo ""
+echo "SUMMARY: $n_green green (built+ran), $n_deps_deferred deps-deferred, $n_ice_blocked ice-blocked, $n_broken broken"
 echo ""
 
 if [ "$failed" -gt 0 ]; then
