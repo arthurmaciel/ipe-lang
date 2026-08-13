@@ -516,6 +516,18 @@ mod tests {
         canonicalise(&src, &mut i).err()
     }
 
+    /// Parse `src_text` and canonicalise it through the multi-module project
+    /// entry with an empty dep universe, returning the diagnostic (if any).
+    /// Exercises the import-existence gate that classifies `Ipe.*` imports
+    /// against the kernel table + `deps` — the path the real build driver uses.
+    fn canon_module_err(src_text: &str) -> Option<Diagnostic> {
+        let mut i = Interner::new();
+        let src = ipe_parse::parse_module(src_text, &mut i).ok()?;
+        let deps: BTreeMap<Vec<Symbol>, ModuleExports> = BTreeMap::new();
+        let expected = src.name.value.clone();
+        canonicalise_module(&src, &expected, &deps, &mut i).err()
+    }
+
     #[test]
     fn unknown_name_is_a_value_not_found() {
         let err = canon_err("module Main exposing (main)\n\nmain = nope\n");
@@ -648,6 +660,61 @@ mod tests {
         assert!(
             suggestions.iter().any(|s| &**s == "fromInt"),
             "should suggest `fromInt`, got {suggestions:?}"
+        );
+    }
+
+    /// A bare `import Ipe.Strng` names no stdlib module. It must be rejected AT
+    /// the import with IPE-N0020 (`ModuleNotFound`) and a did-you-mean to
+    /// `Ipe.String`, never silently dropped — even though the typo'd name is
+    /// otherwise unused. Reverting the import-existence gate makes this program
+    /// canonicalise clean, so the test fails on mutation.
+    #[test]
+    fn unknown_ipe_stdlib_import_is_module_not_found() {
+        // The body is a plain literal so the ONLY possible diagnostic is the
+        // bogus import — with the gate reverted the program canonicalises clean.
+        let err = canon_module_err("module Main exposing (main)\nimport Ipe.Strng\n\nmain = 0\n");
+        let Some(Diagnostic::Name {
+            msg: NameError::ModuleNotFound { name, suggestions },
+            ..
+        }) = err
+        else {
+            assert!(
+                false_marker(),
+                "expected ModuleNotFound (IPE-N0020), got {err:?}"
+            );
+            return;
+        };
+        assert_eq!(&*name, "Ipe.Strng");
+        assert!(
+            suggestions.iter().any(|s| &**s == "Ipe.String"),
+            "should suggest `Ipe.String`, got {suggestions:?}"
+        );
+    }
+
+    /// The `exposing`-list form of a typo'd stdlib import must fail the SAME way
+    /// — at the import with IPE-N0020 — and NOT defer to a use-site IPE-N0001 for
+    /// the exposed name. Reverting the fix leaves this accepted (the exposed name
+    /// is unused), so the test fails on mutation.
+    #[test]
+    fn unknown_ipe_stdlib_exposing_import_is_module_not_found() {
+        let err = canon_module_err(
+            "module Main exposing (main)\nimport Ipe.Strng exposing (toUpper)\n\nmain = 0\n",
+        );
+        let Some(Diagnostic::Name {
+            msg: NameError::ModuleNotFound { name, suggestions },
+            ..
+        }) = err
+        else {
+            assert!(
+                false_marker(),
+                "expected ModuleNotFound (IPE-N0020) at the import, got {err:?}"
+            );
+            return;
+        };
+        assert_eq!(&*name, "Ipe.Strng");
+        assert!(
+            suggestions.iter().any(|s| &**s == "Ipe.String"),
+            "should suggest `Ipe.String`, got {suggestions:?}"
         );
     }
 
@@ -1138,8 +1205,9 @@ mod tests {
 
     #[test]
     fn unknown_stdlib_alias_stays_fail_closed() {
-        // A `Ipê.*` path with no registered canonical qualifier must NOT invent
-        // one: the alias reference surfaces UnknownModule at its use site.
+        // A `Ipê.*` path that names no kernel module and no dep is rejected AT
+        // the import with ModuleNotFound (IPE-N0020) — the fail-closed boundary,
+        // never a silently-dropped import deferred to a use-site error.
         let src = "module Main exposing (main)\n\
                    import Ipe.Nonexistent as N\n\n\
                    main = N.foo\n";
@@ -1155,20 +1223,20 @@ mod tests {
             matches!(
                 err,
                 Some(Diagnostic::Name {
-                    msg: NameError::UnknownModule { .. },
+                    msg: NameError::ModuleNotFound { .. },
                     ..
                 })
             ),
-            "unknown stdlib alias must fail closed with UnknownModule, got {err:?}"
+            "unknown stdlib import must fail closed with ModuleNotFound, got {err:?}"
         );
     }
 
     #[test]
     fn prelude_module_alias_is_removed() {
         // ADR 0047: `Ipe.Prelude` is REMOVED — not a retained alias for
-        // `Ipe.Basics`. It names no kernel qualifier and no embedded source, so a
-        // reference through it fails closed with UnknownModule at the use site,
-        // exactly like any other nonexistent `Ipe.*` module. This proves the old
+        // `Ipe.Basics`. It names no kernel qualifier and no embedded source, so
+        // the import itself fails closed with ModuleNotFound (IPE-N0020), exactly
+        // like any other nonexistent `Ipe.*` module. This proves the old
         // value-flood alias no longer resolves.
         let src = "module Main exposing (main)\n\
                    import Ipe.Prelude as P\n\n\
@@ -1185,11 +1253,11 @@ mod tests {
             matches!(
                 err,
                 Some(Diagnostic::Name {
-                    msg: NameError::UnknownModule { .. },
+                    msg: NameError::ModuleNotFound { .. },
                     ..
                 })
             ),
-            "removed `Ipe.Prelude` must fail closed with UnknownModule, got {err:?}"
+            "removed `Ipe.Prelude` must fail closed with ModuleNotFound, got {err:?}"
         );
     }
 

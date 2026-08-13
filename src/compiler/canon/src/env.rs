@@ -165,6 +165,49 @@ pub const STDLIB_MODULE_QUALIFIERS: &[(&[&str], &str)] = &[
     (&["Ipe", "Http", "Server", "WebSocket"], "Ws"),
 ];
 
+/// The dot-joined import paths of every kernel stdlib module (e.g. `Ipe.String`,
+/// `Ipe.Json.Decode`), derived from [`STDLIB_MODULE_QUALIFIERS`] — the single
+/// source of truth. Feeds the did-you-mean candidate set when an `Ipe.*` import
+/// names no known kernel module. Builds strings directly off the `&'static str`
+/// segments, so it never touches the interner.
+#[must_use]
+pub fn stdlib_module_dot_paths() -> Vec<Box<str>> {
+    STDLIB_MODULE_QUALIFIERS
+        .iter()
+        .map(|(segments, _)| segments.join(".").into_boxed_str())
+        .collect()
+}
+
+/// The reserved kernel-alias qualifier path. `import Ipe.Ffi as Ffi` brings the
+/// `Ffi.kernel "…"` alias surface into scope for a driver-vouched
+/// stdlib / FFI-interface source. It is a compiler-internal qualifier, not a
+/// member-bearing stdlib module, so it lives outside [`STDLIB_MODULE_QUALIFIERS`]
+/// yet must be accepted at the import boundary.
+const RESERVED_FFI_QUALIFIER_PATH: &[&str] = &["Ipe", "Ffi"];
+
+/// Whether `path` (segment symbols) names a known importable `Ipe.*` module that
+/// needs no dep injection: a kernel stdlib module registered in
+/// [`STDLIB_MODULE_QUALIFIERS`], or the reserved `Ipe.Ffi` kernel-alias
+/// qualifier. An un-interned segment cannot match a known module, so it answers
+/// `false`. Purely immutable — no interning.
+#[must_use]
+pub fn is_kernel_stdlib_module(path: &[Symbol], interner: &Interner) -> bool {
+    let mut segments: Vec<&str> = Vec::with_capacity(path.len());
+    for &symbol in path {
+        match interner.resolve(symbol) {
+            Some(segment) => segments.push(segment),
+            None => return false,
+        }
+    }
+    let matches = |candidate: &[&str]| {
+        candidate.len() == segments.len() && candidate.iter().zip(&segments).all(|(a, b)| a == b)
+    };
+    matches(RESERVED_FFI_QUALIFIER_PATH)
+        || STDLIB_MODULE_QUALIFIERS
+            .iter()
+            .any(|(candidate, _)| matches(candidate))
+}
+
 /// Where a (possibly qualified) variable resolves to.
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub enum VarHome {

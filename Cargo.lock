@@ -976,7 +976,7 @@ checksum = "92773504d58c093f6de2459af4af33faa518c13451eb8f2b5698ed3d36e7c813"
 
 [[package]]
 name = "e2e-support"
-version = "0.1.48"
+version = "0.1.49"
 dependencies = [
  "serde_json",
 ]
@@ -2007,7 +2007,7 @@ dependencies = [
 
 [[package]]
 name = "ipe"
-version = "0.1.48"
+version = "0.1.49"
 dependencies = [
  "e2e-support",
  "hex",
@@ -2051,7 +2051,7 @@ dependencies = [
 
 [[package]]
 name = "ipe-runtime-rust"
-version = "0.1.48"
+version = "0.1.49"
 dependencies = [
  "aes-gcm",
  "async-trait",
@@ -2116,7 +2116,7 @@ dependencies = [
 
 [[package]]
 name = "ipe-wasm"
-version = "0.1.48"
+version = "0.1.49"
 dependencies = [
  "ipe_backend",
  "ipe_backend_rust",
@@ -2134,7 +2134,7 @@ dependencies = [
 
 [[package]]
 name = "ipe_backend"
-version = "0.1.48"
+version = "0.1.49"
 dependencies = [
  "ipe_diagnostics",
  "ipe_ir",
@@ -2144,7 +2144,7 @@ dependencies = [
 
 [[package]]
 name = "ipe_backend_rust"
-version = "0.1.48"
+version = "0.1.49"
 dependencies = [
  "ipe_backend",
  "ipe_diagnostics",
@@ -2156,11 +2156,11 @@ dependencies = [
 
 [[package]]
 name = "ipe_bindgen"
-version = "0.1.48"
+version = "0.1.49"
 
 [[package]]
 name = "ipe_canon"
-version = "0.1.48"
+version = "0.1.49"
 dependencies = [
  "ipe_diagnostics",
  "ipe_intern",
@@ -2171,7 +2171,7 @@ dependencies = [
 
 [[package]]
 name = "ipe_db"
-version = "0.1.48"
+version = "0.1.49"
 dependencies = [
  "ipe_backend",
  "ipe_backend_rust",
@@ -2189,7 +2189,7 @@ dependencies = [
 
 [[package]]
 name = "ipe_diagnostics"
-version = "0.1.48"
+version = "0.1.49"
 dependencies = [
  "ipe_path_core",
  "unicode-width",
@@ -2197,7 +2197,7 @@ dependencies = [
 
 [[package]]
 name = "ipe_ffi"
-version = "0.1.48"
+version = "0.1.49"
 dependencies = [
  "ipe_canon",
  "ipe_diagnostics",
@@ -2211,7 +2211,7 @@ dependencies = [
 
 [[package]]
 name = "ipe_intern"
-version = "0.1.48"
+version = "0.1.49"
 dependencies = [
  "ipe_diagnostics",
  "serde",
@@ -2220,7 +2220,7 @@ dependencies = [
 
 [[package]]
 name = "ipe_ir"
-version = "0.1.48"
+version = "0.1.49"
 dependencies = [
  "ipe_diagnostics",
  "ipe_intern",
@@ -2231,7 +2231,7 @@ dependencies = [
 
 [[package]]
 name = "ipe_kernels"
-version = "0.1.48"
+version = "0.1.49"
 dependencies = [
  "serde",
  "strum",
@@ -2239,7 +2239,7 @@ dependencies = [
 
 [[package]]
 name = "ipe_lower"
-version = "0.1.48"
+version = "0.1.49"
 dependencies = [
  "ipe_canon",
  "ipe_diagnostics",
@@ -2251,7 +2251,7 @@ dependencies = [
 
 [[package]]
 name = "ipe_lsp_features"
-version = "0.1.48"
+version = "0.1.49"
 dependencies = [
  "ipe_canon",
  "ipe_db",
@@ -2264,7 +2264,7 @@ dependencies = [
 
 [[package]]
 name = "ipe_lsp_server"
-version = "0.1.48"
+version = "0.1.49"
 dependencies = [
  "crossbeam-channel",
  "ipe_db",
@@ -2278,7 +2278,7 @@ dependencies = [
 
 [[package]]
 name = "ipe_parse"
-version = "0.1.48"
+version = "0.1.49"
 dependencies = [
  "ipe_diagnostics",
  "ipe_intern",
@@ -2287,11 +2287,11 @@ dependencies = [
 
 [[package]]
 name = "ipe_path_core"
-version = "0.1.48"
+version = "0.1.49"
 
 [[package]]
 name = "ipe_sandbox"
-version = "0.1.48"
+version = "0.1.49"
 dependencies = [
  "ipe_diagnostics",
  "ipe_kernels",
@@ -2301,7 +2301,7 @@ dependencies = [
 
 [[package]]
 name = "ipe_stdlib"
-version = "0.1.48"
+version = "0.1.49"
 dependencies = [
  "ipe_canon",
  "ipe_intern",
@@ -2311,7 +2311,7 @@ dependencies = [
 
 [[package]]
 name = "ipe_syntax"
-version = "0.1.48"
+version = "0.1.49"
 dependencies = [
  "ipe_diagnostics",
  "ipe_intern",
@@ -2319,7 +2319,7 @@ dependencies = [
 
 [[package]]
 name = "ipe_types"
-version = "0.1.48"
+version = "0.1.49"
 dependencies = [
  "ipe_canon",
  "ipe_diagnostics",
@@ -2330,7 +2330,7 @@ dependencies = [
 
 [[package]]
 name = "ipe_watch"
-version = "0.1.48"
+version = "0.1.49"
 dependencies = [
  "notify",
  "sha2",
@@ -2339,7 +2339,7 @@ dependencies = [
 
 [[package]]
 name = "ipe_wrapper"
-version = "0.1.48"
+version = "0.1.49"
 dependencies = [
  "ipe_kernels",
  "ipe_sandbox",
@@ -3309,7 +3309,7 @@ checksum = "b4596b6d070b27117e987119b4dac604f3c58cfb0b191112e24771b2faeac1a6"
 
 [[package]]
 name = "playground-jail-runner"
-version = "0.1.48"
+version = "0.1.49"
 dependencies = [
  "ipe_sandbox",
  "serde",
@@ -3721,7 +3721,7 @@ dependencies = [
 
 [[package]]
 name = "regen-goldens"
-version = "0.1.48"
+version = "0.1.49"
 dependencies = [
  "ipe",
 ]

@@ -932,6 +932,17 @@ pub fn canonicalise_module_in_project(
 
     let mut env = Env::initial(home.clone(), interner)?;
     env.origin = origin;
+    // Fail closed at the boundary on an `Ipe.*` import that names neither a
+    // kernel stdlib module nor a compiled-source dep (a typo such as
+    // `Ipe.Strng`), before alias registration and the dep loop silently skip it.
+    // Runs first so the did-you-mean can rank over the project's known modules.
+    let known_module_pool: Vec<Box<str>> = known_modules.iter().cloned().collect();
+    reject_unknown_ipe_import_with_candidates(
+        &m.imports,
+        |p| deps.contains_key(p),
+        &known_module_pool,
+        interner,
+    )?;
     // Register user import aliases for stdlib (`Ipê.*` / `Ipe.*`) modules BEFORE
     // the dep-injection loop below. The loop bare-`continue`s for stdlib imports
     // (they need no dep injection), so alias registration is a separate,
@@ -964,6 +975,10 @@ pub fn canonicalise_module_in_project(
         // to a user dependency. Presence in `deps` is the single discriminator:
         // a genuine kernel is never in `deps`, a compiled-source module always is.
         if dep_path.first().copied().is_some_and(|s| s == ipe_sym) && !deps.contains_key(dep_path) {
+            // A kernel path needs no dep injection — its qualifiers are
+            // pre-installed. A non-kernel `Ipe.*` path absent from `deps` was
+            // already rejected by `reject_unknown_ipe_import_with_candidates`
+            // above, so anything reaching here is a genuine kernel module.
             continue;
         }
         // IPE-N0020: dep module must have been discovered + canonicalised before
@@ -1404,6 +1419,55 @@ fn check_cross_shape_cmd_sub_gate(
     Ok(())
 }
 
+/// Reject any `Ipe.*` import that names no importable module, at the import
+/// span, with IPE-N0020 (`ModuleNotFound`) and a did-you-mean.
+///
+/// An `Ipe.*` import is importable when it is a kernel stdlib module
+/// ([`crate::env::is_kernel_stdlib_module`]) or a compiled-source module the
+/// build driver supplied as a dep (`is_known_dep`). Anything else is a typo
+/// (`Ipe.Strng`) that must fail closed at the boundary rather than being
+/// silently dropped. Suggestions are ranked over the kernel dot-paths plus
+/// `extra_candidates` (the project's known user + compiled-source module
+/// dot-paths), strings only — never interning.
+///
+/// Only the project entry (which carries the resolved `deps` universe) can
+/// classify a compiled-source `Ipe.*` module, so this runs there. The bare
+/// single-module entry injects no deps and cannot distinguish a compiled-source
+/// module from a typo, so it does not gate imports.
+///
+/// # Errors
+/// [`NameError::ModuleNotFound`] for an unknown `Ipe.*` import; or
+/// [`Diagnostic::CompilerBug`] if interning `Ipe` exhausts the interner.
+fn reject_unknown_ipe_import_with_candidates(
+    imports: &[src::Import],
+    is_known_dep: impl Fn(&[Symbol]) -> bool,
+    extra_candidates: &[Box<str>],
+    interner: &mut Interner,
+) -> DResult<()> {
+    let ipe_sym = interner.intern("Ipe")?;
+    for import in imports {
+        let dep_path = &import.name.value;
+        if dep_path.first().copied().is_none_or(|s| s != ipe_sym) {
+            continue;
+        }
+        if is_known_dep(dep_path) || crate::env::is_kernel_stdlib_module(dep_path, interner) {
+            continue;
+        }
+        let name = path_to_dot_string(interner, dep_path);
+        let mut candidates: Vec<Box<str>> = crate::env::stdlib_module_dot_paths();
+        candidates.extend(extra_candidates.iter().cloned());
+        let sugg = rank_suggestions(&name, candidates.iter().map(Box::as_ref));
+        return Err(Diagnostic::Name {
+            span: import.name.span,
+            msg: NameError::ModuleNotFound {
+                name,
+                suggestions: sugg,
+            },
+        });
+    }
+    Ok(())
+}
+
 /// Register user import aliases for stdlib (`Ipê.*` / `Ipe.*`) modules.
 ///
 /// For every stdlib import, resolve its full path to the canonical qualifier
@@ -1550,7 +1614,12 @@ fn inject_stdlib_exposed_values(
             continue;
         };
         let Some(canonical) = env.canonical_stdlib_qualifier(dep_path, interner)? else {
-            // Unknown / unported stdlib path: register nothing (fail-closed).
+            // No kernel qualifier for this `Ipe.*` path. In a project build this
+            // is a COMPILED-SOURCE stdlib module (`Ipe.Palette`, `Ipe.Css`, …)
+            // whose `exposing` members were already injected by the dep loop —
+            // and a typo'd `Ipe.*` import was already rejected with IPE-N0020 by
+            // `reject_unknown_ipe_import_with_candidates`. Either way this pass
+            // registers nothing.
             continue;
         };
         for item in items {
