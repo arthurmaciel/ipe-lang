@@ -15,6 +15,7 @@ import Ipe.Http as Http
 import Ipe.Task as Task
 import Ipe.Crypto as Crypto
 import Ipe.Db as Db
+import Ipe.Db.Unsafe as DbUnsafe
 import Ipe.Io as Io
 import Lib.Db as LibDb
 import Ipe.Error as Error exposing (Error)
@@ -57,7 +58,7 @@ getAlerts : Task Error (List (Dict String String))
 getAlerts =
     LibDb.withConn
         (\conn ->
-            Db.unsafeQuery
+            DbUnsafe.unsafeQuery
                 conn
                 "SELECT * FROM alerts ORDER BY created_at DESC"
                 [])
@@ -67,7 +68,7 @@ getAlertHistory : Int -> Task Error (List (Dict String String))
 getAlertHistory limit =
     LibDb.withConn
         (\conn ->
-            Db.unsafeQuery
+            DbUnsafe.unsafeQuery
                 conn
                 "SELECT * FROM alert_history ORDER BY fired_at DESC LIMIT ?"
                 [ String.fromInt limit ])
@@ -77,7 +78,7 @@ getAlertHistoryForMetric : String -> Int -> Task Error (List (Dict String String
 getAlertHistoryForMetric metricId limit =
     LibDb.withConn
         (\conn ->
-            Db.unsafeQuery
+            DbUnsafe.unsafeQuery
                 conn
                 "SELECT * FROM alert_history WHERE metric_id = ? ORDER BY fired_at DESC LIMIT ?"
                 [ metricId, String.fromInt limit ])

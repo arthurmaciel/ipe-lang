@@ -12,3 +12,6 @@ store = "memory"
 [database]
 driver = "sqlite"
 path = "skymon.db"
+
+[capabilities]
+accept = ["unsafe"]

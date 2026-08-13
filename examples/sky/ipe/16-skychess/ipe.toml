@@ -12,3 +12,6 @@ store = "memory"
 [database]
 driver = "sqlite"
 path = "skychess.db"
+
+[capabilities]
+accept = ["unsafe"]

@@ -42,6 +42,7 @@ import Ipe.Tea.Web exposing (app, route)
 import Ipe.Tea.Web.Cmd as Cmd
 import Ipe.Tea.Web.Sub as Sub
 import Ipe.Db as Db
+import Ipe.Db.Unsafe as DbUnsafe
 
 -- ─── Model ───────────────────────────────────────────────────────
 type Page
@@ -90,7 +91,7 @@ type Msg
 -- building the Task pipeline.
 ensureSchema : Db -> Task Error Db
 ensureSchema conn =
-    Db.unsafeExecRaw
+    DbUnsafe.unsafeExecRaw
         conn
         """CREATE TABLE IF NOT EXISTS messages (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -104,9 +105,9 @@ ensureSchema conn =
 
 rowToMessage : Dict String String -> ChatMessage
 rowToMessage row =
-    { author = Db.unsafeGetString "author" row
-    , text = Db.unsafeGetString "text" row
-    , at = Db.unsafeGetString "at" row
+    { author = DbUnsafe.unsafeGetString "author" row
+    , text = DbUnsafe.unsafeGetString "text" row
+    , at = DbUnsafe.unsafeGetString "at" row
     }
 
 
@@ -119,7 +120,7 @@ loadRoomHistory room =
         |> Task.andThen ensureSchema
         |> Task.andThen
             (\conn ->
-                Db.unsafeQuery
+                DbUnsafe.unsafeQuery
                     conn
                     "SELECT author, text, at FROM messages WHERE room = ? ORDER BY id ASC LIMIT 200"
                     [ room ]
@@ -162,9 +163,9 @@ roomTopic room =
 -- shape.
 decodeChatMessage : Dict String String -> ChatMessage
 decodeChatMessage payload =
-    { author = Db.unsafeGetString "author" payload
-    , text = Db.unsafeGetString "text" payload
-    , at = Db.unsafeGetString "at" payload
+    { author = DbUnsafe.unsafeGetString "author" payload
+    , text = DbUnsafe.unsafeGetString "text" payload
+    , at = DbUnsafe.unsafeGetString "at" payload
     }
 
 

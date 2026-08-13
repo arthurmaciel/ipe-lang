@@ -12,3 +12,6 @@ store = "memory"
 [database]
 driver = "sqlite"
 path = "chat.db"
+
+[capabilities]
+accept = ["unsafe"]

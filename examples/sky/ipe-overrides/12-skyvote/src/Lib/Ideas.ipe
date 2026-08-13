@@ -13,6 +13,7 @@ import Ipe.Crypto as Crypto
 import Ipe.Dict as Dict
 import Ipe.Task as Task
 import Ipe.Db as Db
+import Ipe.Db.Unsafe as DbUnsafe
 import Ipe.Error as Error exposing (Error)
 import Lib.Db as LibDb
 
@@ -54,12 +55,12 @@ getIdeas sortBy filterCategory searchQuery =
             if searchQuery == "" then
                 LibDb.withConn
                     (\conn ->
-                        Db.unsafeQuery conn (selectColumns ++ orderClause) [])
+                        DbUnsafe.unsafeQuery conn (selectColumns ++ orderClause) [])
 
             else
                 LibDb.withConn
                     (\conn ->
-                        Db.unsafeQuery
+                        DbUnsafe.unsafeQuery
                             conn
                             (selectColumns
                                 ++ " WHERE (i.title LIKE ? OR i.description LIKE ?)"
@@ -69,7 +70,7 @@ getIdeas sortBy filterCategory searchQuery =
         else if searchQuery == "" then
             LibDb.withConn
                 (\conn ->
-                    Db.unsafeQuery
+                    DbUnsafe.unsafeQuery
                         conn
                         (selectColumns ++ " WHERE i.category = ?" ++ orderClause)
                         [ filterCategory ])
@@ -77,7 +78,7 @@ getIdeas sortBy filterCategory searchQuery =
         else
             LibDb.withConn
                 (\conn ->
-                    Db.unsafeQuery
+                    DbUnsafe.unsafeQuery
                         conn
                         (selectColumns
                             ++ " WHERE i.category = ? AND (i.title LIKE ? OR i.description LIKE ?)"
@@ -103,7 +104,7 @@ getIdea : String -> Task Error (Maybe (Dict String String))
 getIdea ideaId =
     LibDb.withConn
         (\conn ->
-            Db.unsafeQuery
+            DbUnsafe.unsafeQuery
                 conn
                 (selectColumns ++ " WHERE i.id = ? LIMIT 1")
                 [ ideaId ])
@@ -114,7 +115,7 @@ getIdeasByStatus : String -> Task Error (List (Dict String String))
 getIdeasByStatus status =
     LibDb.withConn
         (\conn ->
-            Db.unsafeQuery
+            DbUnsafe.unsafeQuery
                 conn
                 "SELECT i.id, i.title, i.description, i.category, i.status, i.author_id, i.created_at, u.username as author_name, (SELECT COUNT(*) FROM votes v WHERE v.idea_id = i.id) as vote_count FROM ideas i LEFT JOIN users u ON i.author_id = u.id WHERE i.status = ? ORDER BY vote_count DESC"
                 [ status ])
@@ -126,7 +127,7 @@ toggleVote : String -> String -> Task Error ()
 toggleVote ideaId userId =
     LibDb.withConn
         (\conn ->
-            Db.unsafeQuery
+            DbUnsafe.unsafeQuery
                 conn
                 "SELECT id FROM votes WHERE idea_id = ? AND user_id = ?"
                 [ ideaId, userId ]

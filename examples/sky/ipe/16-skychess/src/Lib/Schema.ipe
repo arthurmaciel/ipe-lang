@@ -2,6 +2,7 @@ module Lib.Schema exposing (ensureSchema)
 
 import Ipe.Task as Task
 import Ipe.Db as Db
+import Ipe.Db.Unsafe as DbUnsafe
 import Ipe.Error as Error exposing (Error)
 
 
@@ -13,7 +14,7 @@ import Ipe.Error as Error exposing (Error)
 -- so the caller can keep building its Task pipeline.
 ensureSchema : Db -> Task Error Db
 ensureSchema conn =
-    Db.unsafeExecRaw
+    DbUnsafe.unsafeExecRaw
         conn
         """CREATE TABLE IF NOT EXISTS games (
             id TEXT PRIMARY KEY,
@@ -26,7 +27,7 @@ ensureSchema conn =
         )"""
         |> Task.andThen
             (\_ ->
-                Db.unsafeExecRaw
+                DbUnsafe.unsafeExecRaw
                     conn
                     """CREATE TABLE IF NOT EXISTS moves (
                         id INTEGER PRIMARY KEY AUTOINCREMENT,

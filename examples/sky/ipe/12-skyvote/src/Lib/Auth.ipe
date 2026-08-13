@@ -9,6 +9,7 @@ import Ipe.Auth as Auth
 import Ipe.Dict as Dict
 import Ipe.Task as Task
 import Ipe.Db as Db
+import Ipe.Db.Unsafe as DbUnsafe
 import Ipe.Error as Error exposing (Error)
 import Lib.Db as LibDb
 
@@ -62,7 +63,7 @@ authenticateUser : String -> String -> Task Error (Dict String String)
 authenticateUser email password =
     LibDb.withConn
         (\conn ->
-            Db.unsafeQuery
+            DbUnsafe.unsafeQuery
                 conn
                 "SELECT id, username, email, password_hash FROM users WHERE email = ? LIMIT 1"
                 [ email ])
@@ -80,7 +81,7 @@ checkCredentials password userRows =
 
         Just user ->
             let
-                storedHash = Db.unsafeGetField "password_hash" user
+                storedHash = DbUnsafe.unsafeGetField "password_hash" user
             in
                 if verifyPassword password storedHash then
                     Task.succeed user
@@ -97,7 +98,7 @@ getUserById : String -> Task Error (Maybe (Dict String String))
 getUserById userId =
     LibDb.withConn
         (\conn ->
-            Db.unsafeQuery
+            DbUnsafe.unsafeQuery
                 conn
                 "SELECT id, username, email FROM users WHERE id = ? LIMIT 1"
                 [ userId ])

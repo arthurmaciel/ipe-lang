@@ -2,6 +2,7 @@ module Lib.Schema exposing (ensureSchema)
 
 import Ipe.Task as Task
 import Ipe.Db as Db
+import Ipe.Db.Unsafe as DbUnsafe
 import Ipe.Error as Error exposing (Error)
 
 
@@ -13,7 +14,7 @@ import Ipe.Error as Error exposing (Error)
 -- can keep building its Task pipeline.
 ensureSchema : Db -> Task Error Db
 ensureSchema conn =
-    Db.unsafeExecRaw
+    DbUnsafe.unsafeExecRaw
         conn
         """CREATE TABLE IF NOT EXISTS users (
             id TEXT PRIMARY KEY,
@@ -24,7 +25,7 @@ ensureSchema conn =
         )"""
         |> Task.andThen
             (\_ ->
-                Db.unsafeExecRaw
+                DbUnsafe.unsafeExecRaw
                     conn
                     """CREATE TABLE IF NOT EXISTS ideas (
                         id TEXT PRIMARY KEY,
@@ -39,7 +40,7 @@ ensureSchema conn =
             )
         |> Task.andThen
             (\_ ->
-                Db.unsafeExecRaw
+                DbUnsafe.unsafeExecRaw
                     conn
                     """CREATE TABLE IF NOT EXISTS votes (
                         id TEXT PRIMARY KEY,
@@ -51,7 +52,7 @@ ensureSchema conn =
             )
         |> Task.andThen
             (\_ ->
-                Db.unsafeExecRaw
+                DbUnsafe.unsafeExecRaw
                     conn
                     """CREATE TABLE IF NOT EXISTS comments (
                         id TEXT PRIMARY KEY,
@@ -63,7 +64,7 @@ ensureSchema conn =
             )
         |> Task.andThen
             (\_ ->
-                Db.unsafeExecRaw
+                DbUnsafe.unsafeExecRaw
                     conn
                     """CREATE TABLE IF NOT EXISTS activity_log (
                         id TEXT PRIMARY KEY,

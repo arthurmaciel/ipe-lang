@@ -17,3 +17,6 @@ path = "skyvote.db"
 method = "password"
 secret = "skyvote-dev-secret-change-in-prod"
 session_ttl = "24h"
+
+[capabilities]
+accept = ["unsafe"]
