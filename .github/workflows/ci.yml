@@ -497,7 +497,12 @@ jobs:
   # in sync with this job.
   runtime-full-features:
     runs-on: ubuntu-latest
-    if: github.event_name != 'pull_request'   # off the PR gate; runs on push, nightly, and merge_group (merge-time gate)
+    needs: changes
+    # Runs on code PRs (so it can be a required status check), plus push and
+    # nightly. `full` ⊇ `live`, so a default-only PR gate goes green while
+    # feature-gated regressions (e.g. a workspace-wide serde_json flag flip
+    # changing signed-token bytes) stay red here — that class must block a PR.
+    if: needs.changes.outputs.code == 'true' || github.event_name != 'pull_request'
     steps:
       - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
