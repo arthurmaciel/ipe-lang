@@ -3,8 +3,7 @@ import Ipe.Io as Io
 import Ipe.Json.Encode
 
 -- Nested object: { name, age, tags:[...] } encoded at indent=0 (compact).
--- Go: json.Marshal(map[string]any{}) sorts keys alphabetically →
--- "age" < "name" < "tags".
+-- Keys are emitted in the list order given to `object`: name, age, tags.
 main =
     let
         v =

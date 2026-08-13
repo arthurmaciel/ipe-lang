@@ -24,7 +24,10 @@ path = "src/mod.rs"
 # `server`/`web`/`websocket_client` surface features. `full` is deliberately
 # NOT used here so depending on the crate does not pull all of tokio.
 tokio = { version = "1", features = ["rt", "rt-multi-thread", "macros", "time", "sync"], optional = true }
-serde_json = { version = "1", optional = true }
+# `preserve_order`: `Json.Encode.object` takes an ordered `List (String, Value)`
+# whose order is part of the contract; the `Map` must keep insertion order rather
+# than sort keys, so serialization emits keys in the order given.
+serde_json = { version = "1", features = ["preserve_order"], optional = true }
 jsonwebtoken = { version = "9", optional = true }
 # `crypto_core.rs` (the cryptographic floor: SHA-2 hash + HMAC family + typed
 # Key/Mac + entropy pair + constant-time compare) is behind the `crypto-core`

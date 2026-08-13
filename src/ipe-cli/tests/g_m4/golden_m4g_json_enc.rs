@@ -5,12 +5,11 @@
 //!
 //! * `JsonEnc.object` + `JsonEnc.string` + `JsonEnc.int` + `JsonEnc.list` +
 //!   `JsonEnc.encode 0` — a nested `{name, age, tags:[…]}` object at compact
-//!   (indent=0) output.  Go: `json.Marshal(map[string]any{})` sorts keys
-//!   alphabetically → `"age" < "name" < "tags"`.
+//!   (indent=0) output.  Keys are emitted in the list order given to `object`:
+//!   `name, age, tags`.
 //!   (`json_enc_object_compact`)
 //!
-//! * Same object at `encode 2` — 2-space pretty-print matching Go's
-//!   `json.MarshalIndent(val, "", "  ")`.
+//! * Same object at `encode 2` — 2-space pretty-print, keys in list order.
 //!   (`json_enc_object_pretty`)
 //!
 //! * Float encoding across Go's floatEncoder thresholds — `1.5`, `1e20`,
@@ -70,7 +69,7 @@ fn assert_runs_and_matches_oracle(name: &str) {
 // ── compact object (indent 0) ────────────────────────────────────────────────
 
 /// `JsonEnc.object [{name,age,tags}]` encoded at `indent=0`.
-/// Keys sorted: `"age" < "name" < "tags"`.  Output: compact JSON line.
+/// Keys in list order: `name, age, tags`.  Output: compact JSON line.
 #[test]
 fn json_enc_object_compact() {
     assert_runs_and_matches_oracle("json_enc_object_compact");
@@ -78,8 +77,7 @@ fn json_enc_object_compact() {
 
 // ── pretty object (indent 2) ─────────────────────────────────────────────────
 
-/// Same object encoded at `indent=2`.  Mirrors Go's `json.MarshalIndent`
-/// 2-space indentation.
+/// Same object encoded at `indent=2` — 2-space indentation, keys in list order.
 #[test]
 fn json_enc_object_pretty() {
     assert_runs_and_matches_oracle("json_enc_object_pretty");

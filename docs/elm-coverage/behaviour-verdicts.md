@@ -52,19 +52,16 @@ output show the rejection explicitly (`"3.5" -> Err _`, printed as `reject`)
 rather than a truncated value. The rejection is a typed `Err`, never a panic
 (Soundness).
 
-### 2. JSON object key order — keep-ours (divergence)
+### 2. JSON object key order — keep-Elm (matches)
 
-`Encode.object` emits keys in sorted (lexicographic) order because the runtime
-`JsonVal` is `serde_json::Value`, whose `Map` is a `BTreeMap` (the crate is built
-without `preserve_order`). Elm preserves the insertion order of the list passed
-to `Json.Encode.object`.
+`Encode.object` takes an ordered `List (String, Value)` whose order is part of
+the contract, and emits keys in that list order. The runtime `JsonVal` is
+`serde_json::Value` with the `preserve_order` feature, so its `Map` keeps
+insertion order rather than sorting keys. This matches Elm's
+`Json.Encode.object`, which preserves the insertion order of the given list.
 
-Both orders are deterministic. Sorted output additionally matches Go's
-`encoding/json` (which sorts map keys) — the oracle the example sweep diffs
-byte-for-byte. Switching to insertion order would break Go parity (Correctness)
-and require an ordered-map dependency. The higher principle (Correctness against
-the oracle) is kept; the divergence is documented. Recorded here as an extension
-option, not a bug.
+The order is deterministic and reproduces the input list, so round-tripping a
+list of pairs through `Encode.object` and back is order-preserving (Correctness).
 
 ### 3. Float formatting — keep-ours (divergence)
 

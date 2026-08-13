@@ -11,8 +11,8 @@
 //! * `Ui.minimum 40 Ui.fill` (a `Length`)         → `height:min(40px,100%)`
 //! * `Ui.rgb 0 128 255` (a `Color`) fed to
 //!   `Background.color`                            → `background-color:rgba(0,128,255,1)`
-//! * `JsonEnc.object`/`string`/`int`/`encode`      → `{"age":36,"name":"ada"}`
-//!   (keys sorted alphabetically — Go `encoding/json` parity)
+//! * `JsonEnc.object`/`string`/`int`/`encode`      → `{"name":"ada","age":36}`
+//!   (keys in the list order given to `object`)
 //!
 //! Asserts on semantic substrings rather than an exact HTML oracle: the Ipe.Ui
 //! HTML skeleton is a sanctioned Go-divergence (see `tests/golden/stdui`),
@@ -79,9 +79,9 @@ fn ui_length_color_and_json_value_render_end_to_end() {
         stdout.contains("background-color:rgba(0,128,255,1)"),
         "Ui.rgb 0 128 255 (Color) must render `background-color:rgba(0,128,255,1)`; got:\n{stdout}"
     );
-    // `Value` program (JsonEnc.object/string/int/encode). Keys sorted A→Z.
+    // `Value` program (JsonEnc.object/string/int/encode). Keys in list order.
     assert!(
-        stdout.contains(r#"{"age":36,"name":"ada"}"#),
-        "JsonEnc program must encode `{{\"age\":36,\"name\":\"ada\"}}`; got:\n{stdout}"
+        stdout.contains(r#"{"name":"ada","age":36}"#),
+        "JsonEnc program must encode `{{\"name\":\"ada\",\"age\":36}}`; got:\n{stdout}"
     );
 }
