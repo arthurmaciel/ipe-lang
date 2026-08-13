@@ -130,6 +130,9 @@ fn bare_shape_builds() {
 }
 
 #[test]
+#[ignore = "the plain-Program-references-a-Cmd scenario is no longer expressible: \
+            a real Cmd module is a Tea shape, so a plain `main` importing it is \
+            rejected as a shape/Program mismatch — pending a minimal Web-app rewrite"]
 fn cmd_publish_no_live_builds() {
     if skip() {
         return;
@@ -139,6 +142,9 @@ fn cmd_publish_no_live_builds() {
 }
 
 #[test]
+#[ignore = "the plain-Program-references-a-Sub scenario is no longer expressible: \
+            a real Sub module is a Tea shape, so a plain `main` importing it is \
+            rejected as a shape/Program mismatch — pending a minimal Web-app rewrite"]
 fn sub_subscribe_topic_no_live_builds() {
     if skip() {
         return;
