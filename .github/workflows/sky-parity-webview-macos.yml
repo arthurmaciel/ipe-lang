@@ -91,9 +91,6 @@ jobs:
       - name: Verify sky binary
         run: sky --version
 
-      - name: Install Python Pillow (for capture sanity check)
-        run: pip3 install --quiet Pillow
-
       - name: Prepare capture output dir
         run: mkdir -p "$CAPTURE_OUT"
 
@@ -238,6 +235,13 @@ jobs:
         if: always()
         run: |
           set -euo pipefail
+
+          # macOS runners ship a PEP 668 externally-managed Python, so a plain
+          # `pip install` is refused. Use an isolated venv for Pillow.
+          python3 -m venv /tmp/capvenv
+          /tmp/capvenv/bin/pip install --quiet Pillow
+          CAP_PY=/tmp/capvenv/bin/python
+
           PASS=0
           FAIL=0
 
@@ -256,7 +260,7 @@ jobs:
               return
             fi
             local stddev
-            stddev="$(python3 - "${path}" "${CAPTURE_MIN_STDDEV}" <<'PYEOF'
+            stddev="$("${CAP_PY}" - "${path}" "${CAPTURE_MIN_STDDEV}" <<'PYEOF'
           import sys, statistics
           from PIL import Image
           path, threshold = sys.argv[1], float(sys.argv[2])
