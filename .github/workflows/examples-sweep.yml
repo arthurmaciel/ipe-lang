@@ -20,6 +20,17 @@
 # prints the table, uploads the artifact, and surfaces the verdict WITHOUT
 # failing the workflow). FLIP `continue-on-error` to false once ipe reaches
 # example parity.
+#
+# ── TWO-JOB SPLIT ────────────────────────────────────────────────────────────
+# PR gate (fast, offline, deterministic): sky-ports-gate.yml runs
+#   check-sky-ports.sh over the COMMITTED ipe/ ports — no network, no upstream
+#   fetch.  Catches regressions in OUR tree (compiler or converter change that
+#   breaks a port) without flaking on upstream movement.
+# Drift detection (nightly, network): sky-drift.yml runs check-sky-drift.sh —
+#   fetches upstream, compares to upstream.lock, flags changed examples and
+#   auto-converts new ones into a bot PR.
+# This sweep is the FULL parity proof (mirror + BUILD + RUN all shapes);
+# sky-ports-gate.yml is the fast subset that gates every PR.
 # ─────────────────────────────────────────────────────────────────────────────
 name: examples sweep
 
