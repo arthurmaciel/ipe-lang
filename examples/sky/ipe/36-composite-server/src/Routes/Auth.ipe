@@ -153,16 +153,17 @@ logAndFail op e =
     Crypto.randomToken 4
         |> Task.andThen
                (\errId ->
-                   do
-                       Log.errorWith
-                           op
-                           [ ( "errId", errId )
-                           , ( "error", Error.toString e )
-                           ]
-                       Task.succeed
-                           (errorJson
-                               500
-                               ("internal error (ref " ++ errId ++ ")")))
+                   Log.errorWith
+                       op
+                       [ ( "errId", errId )
+                       , ( "error", Error.toString e )
+                       ]
+                       |> Task.andThen
+                              (\_ ->
+                                   Task.succeed
+                                       (errorJson
+                                           500
+                                           ("internal error (ref " ++ errId ++ ")"))))
 
 
 -- v0.16.3 #467 fix verification — the canonical `|>` chain (per
