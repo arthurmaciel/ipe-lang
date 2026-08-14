@@ -122,6 +122,37 @@ const BASE_CSS: &str = concat!(
 
 // ─── Page renders ─────────────────────────────────────────────────────────────
 
+/// Shared HTML page scaffold used by every render path.
+///
+/// Emits, in order:
+///   1. Standard HTML5 boilerplate (`<!DOCTYPE html><html>`).
+///   2. A `<head>` containing:
+///      - `<meta charset="utf-8">` (character encoding, always first).
+///      - `<meta name="viewport" …>` (full-bleed on mobile and native webview).
+///      - `<style>{BASE_CSS}</style>` (the compile-time reset; no user data).
+///      - `head_extra` — any additional per-backend head content (empty string
+///        for backends that need none).
+///   3. `<body>{body_inner}</body>` — the pre-rendered HTML body.
+///   4. `tail_scripts` — `<script>` tags appended after `</body>` (empty string
+///      for backends that carry no scripts).
+///
+/// `body_inner` must already be HTML-escaped (produced by `render_html`).
+/// `head_extra` and `tail_scripts` are compile-time or session-derived
+/// literals assembled by the caller; no user-controlled text reaches them.
+pub fn page_shell(head_extra: &str, body_inner: &str, tail_scripts: &str) -> String {
+    format!(
+        "<!DOCTYPE html><html><head>\
+         <meta charset=\"utf-8\">\
+         <meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">\
+         <style>{BASE_CSS}</style>\
+         {head_extra}\
+         </head>\
+         <body>{body_inner}</body>\
+         {tail_scripts}\
+         </html>"
+    )
+}
+
 /// Render `view(model)` to a full HTML page and print it — the static
 /// render path (the interactive server is `web_app`).
 pub fn web_render_static<E, Model, Msg, FView>(view: FView, model: Model) -> IpeTask<E, ()>
@@ -140,12 +171,9 @@ where
     })
 }
 
-/// Minimal page wrap. Kept byte-identical so example 27-live-static
-/// continues to pass. The full client-bearing wrap is `render_page_full`.
+/// Static SSR page: body only, no client JS.
 pub fn render_page(body: &str) -> String {
-    format!(
-        "<!DOCTYPE html><html><head><meta charset=\"utf-8\"></head><body><div id=\"ipe-root\">{body}</div></body></html>"
-    )
+    page_shell("", &format!("<div id=\"ipe-root\">{body}</div>"), "")
 }
 
 /// Escape a serde-serialised JSON string for safe embedding inside a
@@ -202,13 +230,9 @@ pub fn island_escape(json: &str) -> String {
 /// `pkg_base`    — URL prefix for the WASM bundle assets, e.g. `/pkg` or `./pkg`.
 pub fn render_page_hydrate(body: &str, island_json: &str, pkg_base: &str) -> String {
     let escaped = island_escape(island_json);
-    format!(
-        "<!DOCTYPE html>\
-<html>\
-<head><meta charset=\"utf-8\"></head>\
-<body>\
-<div id=\"ipe-root\">{body}</div>\
-<script type=\"application/ipe-model+json\">{escaped}</script>\
+    let body_inner = format!("<div id=\"ipe-root\">{body}</div>");
+    let tail_scripts = format!(
+        "<script type=\"application/ipe-model+json\">{escaped}</script>\
 <script type=\"module\">\
 import init, {{ hydrate }} from '{pkg_base}/ipe_app.js';\
 async function boot() {{\
@@ -217,10 +241,9 @@ async function boot() {{\
   hydrate(island ? island.textContent : '');\
 }}\
 boot();\
-</script>\
-</body>\
-</html>"
-    )
+</script>"
+    );
+    page_shell("", &body_inner, &tail_scripts)
 }
 
 #[cfg(test)]
@@ -342,18 +365,13 @@ pub fn render_page_full(sid: &str, base: &str, body: &str, csrf_token: &str) -> 
     let client_src = format!("{base}/_ipe/client.{hex16}.js");
     let integrity = format!("sha256-{b64}");
     let config_js = web_client_config_js();
-    format!(
-        "<!DOCTYPE html><html><head>\
-         <meta charset=\"utf-8\">\
-         <meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">\
-         <meta name=\"ipe-base\" content=\"{base}\">\
-         <style>{BASE_CSS}</style>\
-         </head>\
-         <body><div id=\"ipe-root\">{body}</div>{dev_banner}\
-         <script>window.__IPE_SID={sid_js};window.__IPE_BASE={base_js};window.__IPE_CSRF_TOKEN={csrf_js};{config_js}</script>\
-         <script src=\"{client_src}\" integrity=\"{integrity}\" crossorigin=\"anonymous\"></script>\
-         </body></html>"
-    )
+    let head_extra = format!("<meta name=\"ipe-base\" content=\"{base}\">");
+    let body_inner = format!("<div id=\"ipe-root\">{body}</div>{dev_banner}");
+    let tail_scripts = format!(
+        "<script>window.__IPE_SID={sid_js};window.__IPE_BASE={base_js};window.__IPE_CSRF_TOKEN={csrf_js};{config_js}</script>\
+         <script src=\"{client_src}\" integrity=\"{integrity}\" crossorigin=\"anonymous\"></script>"
+    );
+    page_shell(&head_extra, &body_inner, &tail_scripts)
 }
 
 /// Floating "🔍 Console" link injected into every dev-mode page. The
