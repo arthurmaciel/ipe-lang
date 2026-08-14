@@ -76,7 +76,7 @@ originals. When sky build fails the port is recorded as `SKY-BUILD-FAIL` (data;
 does not fail the harness) and the diff is skipped. The ipe screenshot is still
 captured for reference.
 
-Port env override: `IPE_LIVE_PORT=<N>` for the Ipê binary; `SKY_LIVE_PORT=<N>`
+Port env override: `IPE_WEB_PORT=<N>` for the Ipê binary; `SKY_LIVE_PORT=<N>`
 for the sky binary (sky runtime's default prefix is `SKY_`).
 
 The server is started by `check-sky-parity-visual.sh` itself; the script finds
@@ -205,7 +205,7 @@ The harness lives in `tools/scripts/check-sky-parity-visual.sh`. It:
 4. For each port:
    a. Builds the ipe port (`ipe build` + `cargo build`) with a per-port
       `CARGO_TARGET_DIR` suffix to avoid collisions across ports.
-   b. Starts the ipe HTTP server (`IPE_LIVE_PORT=<free-port>`) and captures
+   b. Starts the ipe HTTP server (`IPE_WEB_PORT=<free-port>`) and captures
       a Playwright/Chromium screenshot.
    c. Attempts to build the sky port (`sky build` + `go build`); on failure,
       records `SKY-BUILD-FAIL` (data, not a harness error) and skips the diff.

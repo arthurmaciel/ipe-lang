@@ -300,7 +300,7 @@ where
             .await;
     }
     async fn sweep(&self) {
-        // Total cutoff: an absurd `IPE_LIVE_TTL` (u64 near 2^63) would make a bare
+        // Total cutoff: an absurd `IPE_WEB_TTL` (u64 near 2^63) would make a bare
         // `now_secs() - (ttl as i64)` debug-panic / wrap-to-negative (caller-controlled
         // arithmetic). `try_from` → i64::MAX on overflow, then saturating_sub clamps,
         // so an oversized TTL degrades to "never expire" instead of faulting. For all
@@ -450,7 +450,7 @@ where
             .await;
     }
     async fn sweep(&self) {
-        // Total cutoff: an absurd `IPE_LIVE_TTL` (u64 near 2^63) would make a bare
+        // Total cutoff: an absurd `IPE_WEB_TTL` (u64 near 2^63) would make a bare
         // `now_secs() - (ttl as i64)` debug-panic / wrap-to-negative (caller-controlled
         // arithmetic). `try_from` → i64::MAX on overflow, then saturating_sub clamps,
         // so an oversized TTL degrades to "never expire" instead of faulting. For all
@@ -704,7 +704,7 @@ fn go_log_timestamp() -> String {
 
 /// Render a whole-second `Duration` the way Go's `time.Duration.String()` does
 /// for our TTL granularity: `1h0m0s`, `30m0s`, `45s`, `0s`. Sub-second remainder
-/// is dropped (TTLs are whole seconds — `IPE_LIVE_TTL` parses to `u64` seconds).
+/// is dropped (TTLs are whole seconds — `IPE_WEB_TTL` parses to `u64` seconds).
 fn go_duration_string(d: Duration) -> String {
     let total = d.as_secs();
     if total == 0 {

@@ -239,7 +239,7 @@ enforcement sink:
 | # | Edge | Threat | Enforcement (fail-closed) |
 | --- | --- | --- | --- |
 | 1 | down-state → page | XSS via state serialisation | state crosses only as an entity-escaped attribute value or decoded property — never spliced into a script/`HRaw` position; the island precedent (`island_escape`, `src/runtime/rust/src/web/mod.rs:197`) governs any future inline carrier |
-| 2 | up-event → server | forged/malformed browser input | existing session + CSRF gates (`src/runtime/rust/src/web/csrf.rs`, sid authorisation `mod.rs:817`) unchanged; then the generated total decoder — mismatch drops the event, no partial value, body size already capped (`IPE_LIVE_MAX_BODY_BYTES`, `mod.rs:1000`) |
+| 2 | up-event → server | forged/malformed browser input | existing session + CSRF gates (`src/runtime/rust/src/web/csrf.rs`, sid authorisation `mod.rs:817`) unchanged; then the generated total decoder — mismatch drops the event, no partial value, body size already capped (`IPE_WEB_MAX_BODY_BYTES`, `mod.rs:1000`) |
 | 3 | widget JS itself | arbitrary code with DOM authority | SRI content-addressing (tamper fails to load), build-time hash from the package index (§4.2), CSP `script-src 'self'`; NOT sandboxed — declared trust, documented |
 | 4 | element registration | user string into `customElements.define` | impossible by construction: tag names are compiler-generated |
 | 5 | `customElement "path"` literal | path traversal at build | path-seal clean + in-project check at compile time |

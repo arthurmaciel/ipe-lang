@@ -311,22 +311,20 @@ mod island_escape_tests {
 /// (already needed for same-origin resource loading). Adding a nonce to the
 /// inline script to tighten CSP is deferred; it requires threading the nonce
 /// through the response pipeline and is outside the scope of this change.
-/// Server-side client-config templating (Go parity, live.go ~5993): read the
-/// `IPE_LIVE_*` tuning env vars and emit the `window.__IPE_*` assignments the
-/// client (`client.js`) reads with a hardcoded fallback. Without this the Rust
-/// client ignored every `IPE_LIVE_RETRY_*` / `QUEUE_MAX` / `HELLO_TIMEOUT_MS` /
-/// `HEARTBEAT_TTL_MS` / `BANNER` override. Totally parsed: a malformed value
-/// falls back to Go's default; never panics.
+/// Server-side client-config templating: read the `IPE_WEB_*` tuning env vars
+/// and emit the `window.__IPE_*` assignments the client (`client.js`) reads
+/// with a hardcoded fallback. `IPE_LIVE_*` names are accepted as deprecated
+/// aliases. Malformed values fall back to the default; never panics.
 fn web_client_config_js() -> String {
-    fn num(var: &str, default: u64) -> u64 {
-        crate::system::read_env_var(var)
+    fn num(new_var: &str, old_var: &str, default: u64) -> u64 {
+        crate::system::read_env_var_renamed(new_var, old_var)
             .ok()
             .and_then(|s| s.trim().parse::<u64>().ok())
             .unwrap_or(default)
     }
-    // IPE_LIVE_BANNER: off/0/false → disabled (Go parity); anything else → on.
+    // IPE_WEB_BANNER / IPE_LIVE_BANNER: off/0/false → disabled; anything else → on.
     let banner = !matches!(
-        crate::system::read_env_var("IPE_LIVE_BANNER")
+        crate::system::read_env_var_renamed("IPE_WEB_BANNER", "IPE_LIVE_BANNER")
             .ok()
             .map(|s| s.trim().to_ascii_lowercase()),
         Some(ref v) if v == "off" || v == "0" || v == "false"
@@ -341,12 +339,24 @@ fn web_client_config_js() -> String {
          window.__IPE_HEARTBEAT_TTL_MS={};\
          window.__IPE_MSG_RECONNECTING=\"Reconnecting…\";\
          window.__IPE_MSG_OFFLINE=\"Connection lost — refresh to retry\";",
-        num("IPE_LIVE_RETRY_BASE_MS", 500),
-        num("IPE_LIVE_RETRY_MAX_MS", 16000),
-        num("IPE_LIVE_RETRY_MAX_ATTEMPTS", 10),
-        num("IPE_LIVE_QUEUE_MAX", 50),
-        num("IPE_LIVE_HELLO_TIMEOUT_MS", 8000),
-        num("IPE_LIVE_HEARTBEAT_TTL_MS", 35000),
+        num("IPE_WEB_RETRY_BASE_MS", "IPE_LIVE_RETRY_BASE_MS", 500),
+        num("IPE_WEB_RETRY_MAX_MS", "IPE_LIVE_RETRY_MAX_MS", 16000),
+        num(
+            "IPE_WEB_RETRY_MAX_ATTEMPTS",
+            "IPE_LIVE_RETRY_MAX_ATTEMPTS",
+            10
+        ),
+        num("IPE_WEB_QUEUE_MAX", "IPE_LIVE_QUEUE_MAX", 50),
+        num(
+            "IPE_WEB_HELLO_TIMEOUT_MS",
+            "IPE_LIVE_HELLO_TIMEOUT_MS",
+            8000
+        ),
+        num(
+            "IPE_WEB_HEARTBEAT_TTL_MS",
+            "IPE_LIVE_HEARTBEAT_TTL_MS",
+            35000
+        ),
     )
 }
 
@@ -514,11 +524,12 @@ impl<Model, Msg, FInit, FUpdate, FView, FSubs> Clone
     }
 }
 
-/// Max concurrent live-session drivers (admission control). 0 = unlimited
+/// Max concurrent Web-session drivers (admission control). 0 = unlimited
 /// (opt-out). Default 50_000 — far above any single-instance real load, low
-/// enough to bound memory under a session-creation flood. Env IPE_LIVE_MAX_SESSIONS.
+/// enough to bound memory under a session-creation flood.
+/// Env `IPE_WEB_MAX_SESSIONS` (deprecated alias: `IPE_LIVE_MAX_SESSIONS`).
 fn max_sessions() -> usize {
-    crate::system::read_env_var("IPE_LIVE_MAX_SESSIONS")
+    crate::system::read_env_var_renamed("IPE_WEB_MAX_SESSIONS", "IPE_LIVE_MAX_SESSIONS")
         .ok()
         .and_then(|v| v.parse::<usize>().ok())
         .unwrap_or(50_000)
@@ -810,9 +821,9 @@ fn new_sid() -> String {
     uuid::Uuid::new_v4().simple().to_string()
 }
 
-/// Normalise a raw `IPE_LIVE_BASE_PATH` value: trim, drop a trailing slash,
+/// Normalise a raw `IPE_WEB_BASE_PATH` value: trim, drop a trailing slash,
 /// ensure a single leading slash. `""` / `"/"` collapse to `""` (root-mounted —
-/// no prefix). Mirrors Go's `normaliseBasePath` (runtime-go/rt/live.go:5901).
+/// no prefix).
 fn normalise_base_path(raw: &str) -> String {
     let t = raw.trim().trim_end_matches('/');
     if t.is_empty() {
@@ -869,15 +880,18 @@ fn cookie_path_for(base: &str) -> String {
     }
 }
 
-/// Normalised sub-app base path, read from `IPE_LIVE_BASE_PATH`. Empty when
-/// unset (root-mounted app → byte-identical to a standalone Web server). When
-/// set (this app runs as a reverse-proxied sub-app — e.g. the bundled console
+/// Normalised sub-app base path, read from `IPE_WEB_BASE_PATH` (deprecated
+/// alias: `IPE_LIVE_BASE_PATH`). Empty when unset (root-mounted app). When set
+/// (this app runs as a reverse-proxied sub-app — e.g. the bundled console
 /// mounted at `/_ipe/console`), the value is threaded into `render_page_full`
 /// so the client JS prefixes `/_ipe/event` + `/_ipe/sse` with it. The browser
 /// reaches this child only through the parent proxy, which strips the prefix
 /// before forwarding — so the child's own router stays root-relative.
 fn web_base_path() -> String {
-    normalise_base_path(&crate::system::read_env_var("IPE_LIVE_BASE_PATH").unwrap_or_default())
+    normalise_base_path(
+        &crate::system::read_env_var_renamed("IPE_WEB_BASE_PATH", "IPE_LIVE_BASE_PATH")
+            .unwrap_or_default(),
+    )
 }
 
 /// The active session cookie name (read AND write must agree, so both
@@ -969,8 +983,8 @@ fn page_response(
     } else {
         ""
     };
-    // SameSite (Go parity, live.go ~5653): a deploy opted into cross-origin
-    // embedding via IPE_LIVE_FRAME_ANCESTORS needs `SameSite=None; Secure` so the
+    // SameSite: a deploy opted into cross-origin embedding via
+    // IPE_WEB_FRAME_ANCESTORS needs `SameSite=None; Secure` so the
     // session cookie survives inside a third-party iframe; otherwise `Lax`
     // (top-level navigations keep the session). `cookies_secure()` is already true
     // in frame-ancestors mode, so `None` always pairs with `Secure`.
@@ -1015,12 +1029,12 @@ fn page_response(
     resp
 }
 
-/// Maximum request body bytes for `/_ipe/event`: `IPE_LIVE_MAX_BODY_BYTES`,
-/// default 5 MiB (5 << 20 = 5 242 880). Mirrors Go's `handleEvent` body cap
-/// (runtime-go/rt/live.go ~l3911). The default covers `Event.onFile` /
+/// Maximum request body bytes for `/_ipe/event`: `IPE_WEB_MAX_BODY_BYTES`
+/// (deprecated alias: `IPE_LIVE_MAX_BODY_BYTES`), default 5 MiB
+/// (5 << 20 = 5 242 880). The default covers `Event.onFile` /
 /// `Event.onImage` data-URL payloads; override for larger file uploads.
 fn web_max_body_bytes() -> usize {
-    crate::system::read_env_var("IPE_LIVE_MAX_BODY_BYTES")
+    crate::system::read_env_var_renamed("IPE_WEB_MAX_BODY_BYTES", "IPE_LIVE_MAX_BODY_BYTES")
         .ok()
         .and_then(|s| s.trim().parse::<usize>().ok())
         .filter(|&n| n > 0)
@@ -1029,13 +1043,13 @@ fn web_max_body_bytes() -> usize {
 
 #[cfg(test)]
 mod web_max_body_bytes_tests {
-    // IPE_LIVE_MAX_BODY_BYTES=0 must floor at the default, not disable the
+    // IPE_WEB_MAX_BODY_BYTES=0 must floor at the default, not disable the
     // body (matching server::max_body's `.filter(|&n| n > 0)`). Without the
     // floor a 0 value would 413 every /_ipe/event POST.
     //
     // This tests the parsing/filtering formula directly rather than mutating
     // the real env var: `std::env::set_var` is not thread-safe under a
-    // parallel test harness, and `IPE_LIVE_MAX_BODY_BYTES` already has an
+    // parallel test harness, and `IPE_WEB_MAX_BODY_BYTES` already has an
     // env-mutating test in server.rs (`max_body_env_override`) — a second
     // unsynchronized mutator of the same key would make both tests
     // intermittently flaky. Mirrors the established convention documented at
@@ -1054,17 +1068,17 @@ mod web_max_body_bytes_tests {
     }
 }
 
-/// Session idle-TTL: `IPE_LIVE_TTL` seconds, default 1800 (30 min) — matches the
-/// Go `[live] ttl` default.
+/// Session idle-TTL: `IPE_WEB_TTL` seconds, default 1800 (30 min).
+/// Deprecated alias: `IPE_LIVE_TTL`.
 fn web_ttl() -> std::time::Duration {
-    let secs = crate::system::read_env_var("IPE_LIVE_TTL")
+    let secs = crate::system::read_env_var_renamed("IPE_WEB_TTL", "IPE_LIVE_TTL")
         .ok()
         .and_then(|s| parse_duration_secs(&s))
         .unwrap_or(1800u64);
     std::time::Duration::from_secs(secs)
 }
 
-/// Parse a Go-style duration (Go parity for `IPE_LIVE_TTL` / `[live] ttl`): a bare
+/// Parse a Go-style duration (Go parity for `IPE_WEB_TTL` / `[web] ttl`): a bare
 /// integer is seconds (legacy), otherwise one or more `<number><unit>` segments
 /// with units `h` / `m` / `s` (e.g. `30m`, `1h`, `24h`, `90s`, `1h30m`). Total: any
 /// malformed input returns `None` (caller falls back to the default) — never panics.
@@ -1117,12 +1131,16 @@ fn parse_duration_secs(raw: &str) -> Option<u64> {
 /// completes) would hang the drain forever. This window lets ordinary in-flight
 /// requests finish, then force-exits 0 so SSE clients are dropped exactly as Go
 /// drops them (the browser banner flips to "Reconnecting…", same UX as a deploy).
-/// Tunable via `IPE_LIVE_SHUTDOWN_GRACE_MS` (default 1500 ms; 0 = exit at once).
+/// Tunable via `IPE_WEB_SHUTDOWN_GRACE_MS` (deprecated alias:
+/// `IPE_LIVE_SHUTDOWN_GRACE_MS`; default 1500 ms; 0 = exit at once).
 fn shutdown_grace() -> std::time::Duration {
-    let ms = crate::system::read_env_var("IPE_LIVE_SHUTDOWN_GRACE_MS")
-        .ok()
-        .and_then(|s| s.parse::<u64>().ok())
-        .unwrap_or(1500);
+    let ms = crate::system::read_env_var_renamed(
+        "IPE_WEB_SHUTDOWN_GRACE_MS",
+        "IPE_LIVE_SHUTDOWN_GRACE_MS",
+    )
+    .ok()
+    .and_then(|s| s.parse::<u64>().ok())
+    .unwrap_or(1500);
     std::time::Duration::from_millis(ms)
 }
 
@@ -1465,7 +1483,8 @@ fn is_browser_noise_path(p: &str) -> bool {
 /// as `Err` → `None` → 404.
 async fn serve_noise_from_static_root(path: &str) -> Option<axum::response::Response> {
     use axum::response::IntoResponse;
-    let dir = crate::system::read_env_var("IPE_LIVE_STATIC_DIR")
+    // IPE_WEB_STATIC_DIR (deprecated alias: IPE_LIVE_STATIC_DIR).
+    let dir = crate::system::read_env_var_renamed("IPE_WEB_STATIC_DIR", "IPE_LIVE_STATIC_DIR")
         .ok()
         .filter(|d| !d.is_empty())?;
     let rel = path.trim_start_matches('/');
@@ -2161,18 +2180,19 @@ where
                 )
         };
 
-        // ipe.toml `[live] static` (baked as IPE_LIVE_STATIC_DIR) → serve files at
-        // /static/* via ServeDir (Go parity: live.go staticURL "/static"). MUST be
-        // added before the `/*path` page catch-all so a /static/<file> request hits
-        // ServeDir, not the page handler (which would return HTML). ServeDir blocks
-        // `..` path traversal by construction (percent-decodes first, so `%2e%2e` is
-        // caught too). NOTE: like Go's http.FileServer it FOLLOWS symlinks inside the
-        // dir — the dir is author-controlled (ipe.toml [live] static), so that is the
-        // intended contract + Go-parity, NOT a confinement guarantee. Absent/empty →
-        // no static mount.
-        if let Some(dir) = crate::system::read_env_var("IPE_LIVE_STATIC_DIR")
-            .ok()
-            .filter(|d| !d.is_empty())
+        // ipe.toml `[web] static` (baked as IPE_WEB_STATIC_DIR) → serve files at
+        // /static/* via ServeDir. MUST be added before the `/*path` page catch-all
+        // so a /static/<file> request hits ServeDir, not the page handler (which
+        // would return HTML). ServeDir blocks `..` path traversal by construction
+        // (percent-decodes first, so `%2e%2e` is caught too). NOTE: like Go's
+        // http.FileServer it FOLLOWS symlinks inside the dir — the dir is
+        // author-controlled (ipe.toml [web] static), so that is the intended
+        // contract, NOT a confinement guarantee. Absent/empty → no static mount.
+        // IPE_WEB_STATIC_DIR (deprecated alias: IPE_LIVE_STATIC_DIR).
+        if let Some(dir) =
+            crate::system::read_env_var_renamed("IPE_WEB_STATIC_DIR", "IPE_LIVE_STATIC_DIR")
+                .ok()
+                .filter(|d| !d.is_empty())
         {
             router = router.nest_service("/static", tower_http::services::ServeDir::new(dir));
         }
@@ -2221,7 +2241,8 @@ where
 
         pubsub::mark_web_running();
 
-        let port: i64 = crate::system::read_env_var("IPE_LIVE_PORT")
+        // IPE_WEB_PORT (deprecated alias: IPE_LIVE_PORT); default 8000.
+        let port: i64 = crate::system::read_env_var_renamed("IPE_WEB_PORT", "IPE_LIVE_PORT")
             .ok()
             .and_then(|s| s.parse().ok())
             .unwrap_or(8000);
@@ -2400,7 +2421,7 @@ mod duration_parse_tests {
         assert_eq!(parse_duration_secs("24h"), Some(86400));
         assert_eq!(parse_duration_secs("90s"), Some(90));
         assert_eq!(parse_duration_secs("1h30m"), Some(5400));
-        assert_eq!(parse_duration_secs("45m"), Some(2700)); // the e2e check (IPE_LIVE_TTL=45m)
+        assert_eq!(parse_duration_secs("45m"), Some(2700)); // the e2e check (IPE_WEB_TTL=45m)
         assert_eq!(parse_duration_secs("  1h  "), Some(3600));
     }
 
@@ -2670,19 +2691,21 @@ mod admission_control_tests {
     #[test]
     fn max_sessions_parsing() {
         // SAFETY: test-only env mutation; `std::env::set_var`/`remove_var` are `unsafe` in Rust 2024 due to the reader/mutator `environ` race.
+        unsafe { std::env::remove_var("IPE_WEB_MAX_SESSIONS") };
+        // SAFETY: test-only env mutation.
         unsafe { std::env::remove_var("IPE_LIVE_MAX_SESSIONS") };
         assert_eq!(max_sessions(), 50_000);
-        // SAFETY: test-only env mutation; `std::env::set_var`/`remove_var` are `unsafe` in Rust 2024 due to the reader/mutator `environ` race.
-        unsafe { std::env::set_var("IPE_LIVE_MAX_SESSIONS", "7") };
+        // SAFETY: test-only env mutation.
+        unsafe { std::env::set_var("IPE_WEB_MAX_SESSIONS", "7") };
         assert_eq!(max_sessions(), 7);
-        // SAFETY: test-only env mutation; `std::env::set_var`/`remove_var` are `unsafe` in Rust 2024 due to the reader/mutator `environ` race.
-        unsafe { std::env::set_var("IPE_LIVE_MAX_SESSIONS", "0") };
+        // SAFETY: test-only env mutation.
+        unsafe { std::env::set_var("IPE_WEB_MAX_SESSIONS", "0") };
         assert_eq!(max_sessions(), 0, "0 = unlimited opt-out");
-        // SAFETY: test-only env mutation; `std::env::set_var`/`remove_var` are `unsafe` in Rust 2024 due to the reader/mutator `environ` race.
-        unsafe { std::env::set_var("IPE_LIVE_MAX_SESSIONS", "garbage") };
+        // SAFETY: test-only env mutation.
+        unsafe { std::env::set_var("IPE_WEB_MAX_SESSIONS", "garbage") };
         assert_eq!(max_sessions(), 50_000, "unparseable falls back to default");
-        // SAFETY: test-only env mutation; `std::env::set_var`/`remove_var` are `unsafe` in Rust 2024 due to the reader/mutator `environ` race.
-        unsafe { std::env::remove_var("IPE_LIVE_MAX_SESSIONS") };
+        // SAFETY: test-only env mutation.
+        unsafe { std::env::remove_var("IPE_WEB_MAX_SESSIONS") };
     }
 }
 
@@ -2776,7 +2799,7 @@ mod sse_reconnect_reconcile_tests {
         view: &Arc<dyn Fn(TestPage) -> Html<()> + Send + Sync>,
         client_path: &str,
     ) {
-        // Mirrors sse_handler's reconciliation block (IPE_LIVE_BASE_PATH is
+        // Mirrors sse_handler's reconciliation block (IPE_WEB_BASE_PATH is
         // empty in tests so base = "").
         let is_valid_path = client_path.starts_with('/')
             && !client_path.contains('?')
@@ -3082,5 +3105,178 @@ mod recursion_session_isolation_tests {
             42,
             "a concurrent session is unaffected by another session's trip"
         );
+    }
+}
+
+/// Alias and default preservation for the three security-critical env vars.
+///
+/// Each test covers three cases:
+///   (a) new `IPE_WEB_*` name takes effect,
+///   (b) deprecated `IPE_LIVE_*` alias still takes effect when new name is absent,
+///   (c) unset → unchanged default behavior.
+///
+/// These are env-mutating tests and must not run in parallel — they use
+/// `std::env::set_var`/`remove_var` which are unsafe in Rust 2024 (see the
+/// ENV_LOCK rationale in system.rs). Each test cleans up after itself.
+#[cfg(test)]
+mod security_env_alias_tests {
+
+    // ── IPE_WEB_CSRF_ORIGIN_CHECK ─────────────────────────────────────────────
+    //
+    // `origin_check_enabled()` is memoized in a `OnceLock`, so we cannot test
+    // it via the production `origin_mismatch` path in the same process run. We
+    // instead test the env-read layer directly: `read_env_var_renamed` returns
+    // the new name first, falls back to the old name, and returns `Err` when
+    // neither is set.
+
+    #[test]
+    fn csrf_origin_check_new_name_takes_effect() {
+        // SAFETY: test-only env mutation.
+        unsafe { std::env::remove_var("IPE_WEB_CSRF_ORIGIN_CHECK") };
+        // SAFETY: test-only env mutation.
+        unsafe { std::env::remove_var("IPE_LIVE_CSRF_ORIGIN_CHECK") };
+
+        // (a) new name → "on"
+        // SAFETY: test-only env mutation.
+        unsafe { std::env::set_var("IPE_WEB_CSRF_ORIGIN_CHECK", "on") };
+        assert_eq!(
+            crate::system::read_env_var_renamed(
+                "IPE_WEB_CSRF_ORIGIN_CHECK",
+                "IPE_LIVE_CSRF_ORIGIN_CHECK",
+            )
+            .as_deref(),
+            Ok("on"),
+            "IPE_WEB_CSRF_ORIGIN_CHECK must be read"
+        );
+        // SAFETY: test-only env mutation.
+        unsafe { std::env::remove_var("IPE_WEB_CSRF_ORIGIN_CHECK") };
+
+        // (b) deprecated alias → "on" (new name absent)
+        // SAFETY: test-only env mutation.
+        unsafe { std::env::set_var("IPE_LIVE_CSRF_ORIGIN_CHECK", "on") };
+        assert_eq!(
+            crate::system::read_env_var_renamed(
+                "IPE_WEB_CSRF_ORIGIN_CHECK",
+                "IPE_LIVE_CSRF_ORIGIN_CHECK",
+            )
+            .as_deref(),
+            Ok("on"),
+            "IPE_LIVE_CSRF_ORIGIN_CHECK alias must still work"
+        );
+        // SAFETY: test-only env mutation.
+        unsafe { std::env::remove_var("IPE_LIVE_CSRF_ORIGIN_CHECK") };
+
+        // (c) neither set → Err (origin check stays OFF — secure default)
+        assert!(
+            crate::system::read_env_var_renamed(
+                "IPE_WEB_CSRF_ORIGIN_CHECK",
+                "IPE_LIVE_CSRF_ORIGIN_CHECK",
+            )
+            .is_err(),
+            "unset → Err; origin check defaults to OFF"
+        );
+    }
+
+    // ── IPE_WEB_FRAME_ANCESTORS ───────────────────────────────────────────────
+    //
+    // `frame_ancestors()` is also memoized in a `OnceLock`. We test the env-read
+    // layer: new name wins, alias works, unset → empty (→ `None` in production).
+
+    #[test]
+    fn frame_ancestors_new_name_takes_effect() {
+        // SAFETY: test-only env mutation.
+        unsafe { std::env::remove_var("IPE_WEB_FRAME_ANCESTORS") };
+        // SAFETY: test-only env mutation.
+        unsafe { std::env::remove_var("IPE_LIVE_FRAME_ANCESTORS") };
+
+        // (a) new name
+        // SAFETY: test-only env mutation.
+        unsafe { std::env::set_var("IPE_WEB_FRAME_ANCESTORS", "https://app.example.com") };
+        assert_eq!(
+            crate::system::read_env_var_renamed(
+                "IPE_WEB_FRAME_ANCESTORS",
+                "IPE_LIVE_FRAME_ANCESTORS",
+            )
+            .as_deref(),
+            Ok("https://app.example.com"),
+            "IPE_WEB_FRAME_ANCESTORS must be read"
+        );
+        // SAFETY: test-only env mutation.
+        unsafe { std::env::remove_var("IPE_WEB_FRAME_ANCESTORS") };
+
+        // (b) deprecated alias
+        // SAFETY: test-only env mutation.
+        unsafe { std::env::set_var("IPE_LIVE_FRAME_ANCESTORS", "https://app.example.com") };
+        assert_eq!(
+            crate::system::read_env_var_renamed(
+                "IPE_WEB_FRAME_ANCESTORS",
+                "IPE_LIVE_FRAME_ANCESTORS",
+            )
+            .as_deref(),
+            Ok("https://app.example.com"),
+            "IPE_LIVE_FRAME_ANCESTORS alias must still work"
+        );
+        // SAFETY: test-only env mutation.
+        unsafe { std::env::remove_var("IPE_LIVE_FRAME_ANCESTORS") };
+
+        // (c) neither set → Err; frame_ancestors() would return None (no CSP
+        // change, cookies stay SameSite=Lax — the secure default for same-origin).
+        assert!(
+            crate::system::read_env_var_renamed(
+                "IPE_WEB_FRAME_ANCESTORS",
+                "IPE_LIVE_FRAME_ANCESTORS",
+            )
+            .is_err(),
+            "unset → Err; frame_ancestors defaults to None (same-origin mode)"
+        );
+    }
+
+    // ── IPE_WEB_MAX_BODY_BYTES (Web path) ────────────────────────────────────
+    //
+    // `web_max_body_bytes()` reads live from env each call (not memoized), so
+    // we can test the production function directly.
+
+    #[test]
+    fn web_max_body_bytes_new_name_alias_and_default() {
+        use super::web_max_body_bytes;
+        const DEFAULT: usize = 5 << 20;
+
+        // SAFETY: test-only env mutation.
+        unsafe { std::env::remove_var("IPE_WEB_MAX_BODY_BYTES") };
+        // SAFETY: test-only env mutation.
+        unsafe { std::env::remove_var("IPE_LIVE_MAX_BODY_BYTES") };
+
+        // (c) unset → default (5 MiB); a rename bug that silently zeros this
+        // would reject all /_ipe/event POSTs.
+        assert_eq!(
+            web_max_body_bytes(),
+            DEFAULT,
+            "unset → 5 MiB default must be preserved"
+        );
+
+        // (a) new name takes effect
+        // SAFETY: test-only env mutation.
+        unsafe { std::env::set_var("IPE_WEB_MAX_BODY_BYTES", "8192") };
+        assert_eq!(
+            web_max_body_bytes(),
+            8192,
+            "IPE_WEB_MAX_BODY_BYTES must take effect"
+        );
+        // SAFETY: test-only env mutation.
+        unsafe { std::env::remove_var("IPE_WEB_MAX_BODY_BYTES") };
+
+        // (b) deprecated alias still works when new name is absent
+        // SAFETY: test-only env mutation.
+        unsafe { std::env::set_var("IPE_LIVE_MAX_BODY_BYTES", "4096") };
+        assert_eq!(
+            web_max_body_bytes(),
+            4096,
+            "deprecated alias IPE_LIVE_MAX_BODY_BYTES must still work"
+        );
+        // SAFETY: test-only env mutation.
+        unsafe { std::env::remove_var("IPE_LIVE_MAX_BODY_BYTES") };
+
+        // Restore default.
+        assert_eq!(web_max_body_bytes(), DEFAULT);
     }
 }
