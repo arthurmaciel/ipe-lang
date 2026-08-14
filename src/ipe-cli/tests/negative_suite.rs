@@ -1326,12 +1326,11 @@ fn lower_task_main_script_compiles() {
 }
 
 // An effect is a `Task`: it runs only through `Task.run`, or by being sequenced
-// inside a function whose own return type is a `Task`. The parser now rejects
-// `let _ = e` at source level (IPE-P0064) — the whole-pattern bare `_` binding
-// is banned regardless of context. The old IPE-L0141 (lawless effect in sync
-// context) path in lower.rs is still reached by the do-desugared synthetic
-// `LetBinding { pat: PAnything }`, but user source `let _ = <task>` is gated
-// earlier at IPE-P0064. These tests are updated accordingly.
+// inside a function whose own return type is a `Task`. The parser rejects
+// user-written `let _ = e` at source level (IPE-P0064). The do-desugared
+// synthetic `LetBinding { pat: PAnything }` bypasses IPE-P0064, so the
+// IPE-L0141 gate in the lowerer is the last line of defence for bare-run
+// effects in a sync `do` block. Both paths are covered below.
 
 /// A `Task`-typed effect (`Io.println`) discarded with `let _ = …` is rejected
 /// at parse time (IPE-P0064) before lower can assess the sync/Task context.
@@ -1365,6 +1364,62 @@ fn lower_effect_discard_in_task_context_compiles() {
          \x20       Io.println \"step two\"\n"
     );
     assert_compiles("lower_effect_discard_task", &src);
+}
+
+/// A bare-run effect in a `do` block whose result is pure (no `Task Error ()`
+/// annotation, body evaluates to `()`) must be rejected as IPE-L0141. The
+/// do-desugar produces a synthetic `LetBinding { pat: PAnything, body: task }`
+/// that bypasses IPE-P0064, so the L0141 gate in the lowerer is the last
+/// line of defence.
+///
+/// Regression guard: previously the synthetic outer `Let` node shared its span
+/// with the inner task expression, causing the type-checker's region table to
+/// overwrite the task's `Task`-typed region entry with the continuation type
+/// (`()`). `is_task_typed` then returned `false` and the effect was silently
+/// dropped instead of raising L0141.
+#[test]
+fn lower_sync_do_bare_effect_run_rejected() {
+    let src = format!(
+        "{HEAD}import Ipe.Io as Io\n\
+         main =\n\
+         \x20   do\n\
+         \x20       Io.println \"hello\"\n\
+         \x20       ()\n"
+    );
+    assert_rejected("lower_sync_do_bare_effect_run", &src, "IPE-L0141");
+}
+
+/// CONTRAPOSITIVE: a `do` block whose non-final statements are PURE lets
+/// (no Task type) followed by a pure result must still compile cleanly —
+/// the L0141 gate must not fire on pure discards.
+#[test]
+fn lower_sync_do_pure_lets_compiles() {
+    let src = format!(
+        "{HEAD}import Ipe.Io as Io\n\
+         import Ipe.String\n\
+         main : Task Error ()\n\
+         main =\n\
+         \x20   do\n\
+         \x20       x = String.fromInt 42\n\
+         \x20       Io.println x\n"
+    );
+    assert_compiles("lower_sync_do_pure_lets", &src);
+}
+
+/// CONTRAPOSITIVE: a `do` block with a Task-annotated `main` where the final
+/// statement IS the effect compiles cleanly — the effect is the body, not
+/// a discarded non-final statement.
+#[test]
+fn lower_task_do_effect_as_body_compiles() {
+    let src = format!(
+        "{HEAD}import Ipe.Io as Io\n\
+         main : Task Error ()\n\
+         main =\n\
+         \x20   do\n\
+         \x20       Io.println \"first\"\n\
+         \x20       Io.println \"second\"\n"
+    );
+    assert_compiles("lower_task_do_effect_as_body", &src);
 }
 
 /// CONTRAPOSITIVE: `Debug.log` is the sanctioned debug print — it returns its

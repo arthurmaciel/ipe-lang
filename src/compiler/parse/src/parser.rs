@@ -2241,9 +2241,21 @@ impl<'a> Parser<'a> {
                     // instead of a deep nest of lambdas, each of which would open its
                     // own inference scope and make type-checking a long `do` block
                     // super-linear.
+                    //
+                    // The synthetic outer `Let` node gets a zero-width span at the
+                    // start of the task expression. The type checker records region
+                    // types keyed by span: giving the wrapper `Let` a span distinct
+                    // from the inner task expression ensures the wrapper's result
+                    // type (the continuation type) cannot overwrite the task
+                    // expression's own region entry. Without this, both nodes share
+                    // `task.span` and the second insertion (the `Let`, typed as the
+                    // continuation) stomps the first (the task, typed as `Task …`),
+                    // causing `is_task_typed` to return `false` and silently drop
+                    // the effect instead of raising IPE-L0141 in a sync context.
+                    let let_span = Span::new(task.span.lo, task.span.lo);
                     let wild = Located::new(task.span, Pattern_::PAnything);
                     Located::new(
-                        task.span,
+                        let_span,
                         Expr_::Let(
                             vec![LetBinding {
                                 pat: wild,
