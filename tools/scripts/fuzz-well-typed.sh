@@ -6,7 +6,7 @@
 #
 #   BUILD: ipe build src/Main.ipe --out out/rust
 #          cargo build --manifest-path out/rust/Cargo.toml
-#          (binary: $CARGO_TARGET_DIR/debug/ipe-app)
+#          (binary: $CARGO_TARGET_DIR/debug/<name-from-emitted-Cargo.toml>, default ipe-app)
 #
 #   PANIC DETECTION: Rust/Ipê runtime installs a classify-and-log panic hook
 #   (ipe_runtime::core::install_panic_classifier). A runtime fault emits to
@@ -797,7 +797,7 @@ run_iter() {
         return 1
     fi
 
-    # ── Step 2: cargo build → ipe-app binary ───────────────────────────────
+    # ── Step 2: cargo build ─────────────────────────────────────────────────
     local cargo_rc=0
     if ! ( cd "$iterdir" && timeout "$BUILD_TIMEOUT" \
            cargo build --manifest-path out/rust/Cargo.toml >>"$buildlog" 2>&1 ); then
@@ -811,11 +811,14 @@ run_iter() {
     fi
 
     # ── Step 3: find binary ─────────────────────────────────────────────────
+    local _fuzz_bin_name
+    _fuzz_bin_name="$(sed -n 's/^name = "\(.*\)"/\1/p' "$iterdir/out/rust/Cargo.toml" 2>/dev/null | head -1)"
+    _fuzz_bin_name="${_fuzz_bin_name:-ipe-app}"
     local bin=""
     for _cand in \
-        "$CARGO_TARGET_DIR/debug/ipe-app" \
-        "$CARGO_TARGET_DIR/release/ipe-app" \
-        "$iterdir/out/rust/target/debug/ipe-app"; do
+        "$CARGO_TARGET_DIR/debug/$_fuzz_bin_name" \
+        "$CARGO_TARGET_DIR/release/$_fuzz_bin_name" \
+        "$iterdir/out/rust/target/debug/$_fuzz_bin_name"; do
         [[ -x "$_cand" ]] && { bin="$_cand"; break; }
     done
     if [[ -z "$bin" ]]; then
@@ -911,10 +914,13 @@ EOF
     fi
     echo "      OK"
 
+    local _tp_bin_name
+    _tp_bin_name="$(sed -n 's/^name = "\(.*\)"/\1/p' "$tp_dir/out/rust/Cargo.toml" 2>/dev/null | head -1)"
+    _tp_bin_name="${_tp_bin_name:-ipe-app}"
     local bin=""
     for _cand in \
-        "$CARGO_TARGET_DIR/debug/ipe-app" \
-        "$CARGO_TARGET_DIR/release/ipe-app"; do
+        "$CARGO_TARGET_DIR/debug/$_tp_bin_name" \
+        "$CARGO_TARGET_DIR/release/$_tp_bin_name"; do
         [[ -x "$_cand" ]] && { bin="$_cand"; break; }
     done
     if [[ -z "$bin" ]]; then echo "RESULT: FAIL — binary not found"; rm -rf "$tp_dir"; return 1; fi

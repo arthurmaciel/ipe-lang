@@ -67,7 +67,7 @@ every jailed build after that is fully offline.)
    `jail-runner run <project-dir> --wall 300 --warm <warm>` — a direct argv
    vector, no shell.
 3. `jail-runner` builds the crate (`cargo build --offline`) **and** runs the
-   resulting `ipe-app` binary inside a bubblewrap jail: network denied
+   resulting app binary inside a bubblewrap jail: network denied
    (`--unshare-net`), host filesystem read-only, `prlimit` caps, wall-clock
    kill, and — for the run phase — a seccomp filter that denies subprocess
    creation. The jail is the `ipe_sandbox` crate the compiler SEAL uses.

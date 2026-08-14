@@ -68,7 +68,7 @@ JSON), `2` on usage errors or harness wall-clock expiry.
    the jail. Building runs dependency build scripts + proc-macros, so it is
    confined; subprocess creation is *allowed* here (rustc + the linker
    legitimately spawn), but network/filesystem/resource confinement apply.
-3. **Run** (jailed, hardened) — the emitted `ipe-app` binary runs inside the
+3. **Run** (jailed, hardened) — the emitted app binary runs inside the
    jail **plus** a seccomp filter that denies subprocess creation. This is
    where the user's own program executes.
 

@@ -6,8 +6,8 @@
 # The exercise_* contract is backend-agnostic: it drives a built binary and asks
 # "did it work?" per shape (cli/server/live/tui/webview/wasm). night_guard is
 # OPT-IN (IPE_SWEEP_NIGHT_GATE=1) so it NEVER blocks GitHub CI. resolve_bin looks
-# under out/rust/target and the shared CARGO_TARGET_DIR for ipe's emitted
-# `ipe-app` binary.
+# under out/rust/target and the shared CARGO_TARGET_DIR for the emitted binary,
+# using the name from the project's emitted Cargo.toml (default: ipe-app).
 #
 # Depends on lib/env.sh being sourced first (CARGO_TARGET_DIR, PATH, REPO). It is
 # idempotent and side-effect-light at source time (a few exports).
@@ -67,10 +67,14 @@ http_responds() { case "$1" in [1-5][0-9][0-9]) return 0;; *) return 1;; esac; }
 # ── free_port: an ephemeral free TCP port. FAIL-CLOSED (no fixed fallback) ───
 free_port() { python3 -c 'import socket;s=socket.socket();s.bind(("127.0.0.1",0));print(s.getsockname()[1]);s.close()' 2>/dev/null; }
 
-# ── reap: kill stray app / driver / Xvfb processes between examples ──────────
+# ── reap [bin-name]: kill stray app / driver / Xvfb processes between examples ─
+# Optional first arg: the manifest-derived binary name for this example (kills it
+# by exact name in addition to the ipe-app default and the out/-path pattern).
 reap() {
   command -v pkill >/dev/null 2>&1 || return 0
-  for p in ipe-app app; do pkill -x "$p" 2>/dev/null; done
+  local names=("ipe-app" "app")
+  [ -n "${1:-}" ] && names+=("$1")
+  for p in "${names[@]}"; do pkill -x "$p" 2>/dev/null; done
   pkill -f "examples/.*/out/" 2>/dev/null; pkill -f wasm-verify.mjs 2>/dev/null
   pkill -x Xvfb 2>/dev/null
 }
@@ -91,35 +95,32 @@ scenario_for() {
 }
 
 # ── resolve_bin <example-dir>: the freshest Rust binary ipe just built ──────
-# ipe emits a Cargo project whose package/binary is `ipe-app` (src/ipe-cli emits
-# a fixed `ipe-app` bin). Because ~/.cargo/config.toml pins a shared target-dir,
-# each example's `cargo build` writes $CARGO_TARGET_DIR/{debug,release}/ipe-app;
-# the sweep builds+runs one example at a time (rm -rf between), so overwrite is
-# fine. Probe the shared target first, then the per-example target. The ipe.toml
-# `name` is tried too (harmless first probe; ipe names the bin ipe-app regardless).
+# The binary name matches the `[package] name` in the emitted out/rust/Cargo.toml
+# (which the compiler sanitizes from ipe.toml's `name`). Projects with no `name`
+# emit the default `ipe-app`. Probe the shared CARGO_TARGET_DIR first (fastest),
+# then the per-example target, then fall back to the newest executable found.
 resolve_bin() {
-  local d="$1" name b exe=""
-  # On Windows the emitted binary is `ipe-app.exe`; elsewhere `ipe-app`.
+  local d="$1" bin_name b exe=""
+  # On Windows the emitted binary carries the .exe suffix; elsewhere it does not.
   [ "${IPE_HOST_OS:-}" = windows ] && exe=".exe"
+  bin_name="$(sed -n 's/^name = "\(.*\)"/\1/p' "$d/out/rust/Cargo.toml" 2>/dev/null | head -1)"
+  bin_name="${bin_name:-ipe-app}"
   # Static sweep (IPE_SWEEP_STATIC=1): the artifact lives under the target
   # triple's subdir. NEVER fall through to the dynamic probes — a stale
-  # dynamic ipe-app would silently substitute for the static one.
+  # dynamic artifact would silently substitute for the static one.
   if [ "${IPE_SWEEP_STATIC:-0}" = 1 ]; then
     local triple="${IPE_STATIC_TRIPLE:-x86_64-unknown-linux-musl}"
     for b in \
-      "$CARGO_TARGET_DIR/$triple/debug/ipe-app$exe" \
-      "$d/out/rust/target/$triple/debug/ipe-app$exe"; do
+      "$CARGO_TARGET_DIR/$triple/debug/$bin_name$exe" \
+      "$d/out/rust/target/$triple/debug/$bin_name$exe"; do
       [ -x "$b" ] && [ ! -d "$b" ] && { echo "$b"; return 0; }
     done
     return 1
   fi
-  name="$(rg -No '^name\s*=\s*"([^"]+)"' -r '$1' "$d/ipe.toml" 2>/dev/null | head -1)"
   for b in \
-    "$CARGO_TARGET_DIR/debug/ipe-app$exe" \
-    "$CARGO_TARGET_DIR/release/ipe-app$exe" \
-    "$CARGO_TARGET_DIR/debug/$name$exe" \
-    "$d/out/rust/target/debug/ipe-app$exe" \
-    "$d/out/rust/target/debug/$name$exe"; do
+    "$CARGO_TARGET_DIR/debug/$bin_name$exe" \
+    "$CARGO_TARGET_DIR/release/$bin_name$exe" \
+    "$d/out/rust/target/debug/$bin_name$exe"; do
     [ -n "$b" ] && [ -x "$b" ] && [ ! -d "$b" ] && { echo "$b"; return 0; }
   done
   b="$(find "$CARGO_TARGET_DIR/debug" "$d/out/rust/target/debug" -maxdepth 1 -type f -executable 2>/dev/null \

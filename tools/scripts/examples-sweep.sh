@@ -21,7 +21,8 @@
 #   ( cd <example> && ipe build <ipe.toml | src/Main.ipe> --out out/rust )
 #   cargo build --manifest-path <example>/out/rust/Cargo.toml
 # ipe emits a self-contained Cargo project under out/rust/ with the runtime
-# vendored into src/ipe_runtime, whose default binary is `ipe-app`.
+# vendored into src/ipe_runtime. The binary name matches the project's ipe.toml
+# `name` (sanitized); projects with no name use the default `ipe-app`.
 #
 # GREEN row  = BUILD ok AND RUN ok.
 # RED row    = BUILD/RUN failure (ipe-fail / cargo-fail / panic / hang / noserve /
@@ -316,9 +317,8 @@ if [ "$MIRROR_OK" = 1 ]; then
 fi
 
 # ── Cross-invocation build serialization ─────────────────────────────────────
-# ipe emits a FIXED `ipe-app` binary into the shared $CARGO_TARGET_DIR. flock the
-# build→resolve→run span per example so two concurrent sweeps sharing one target
-# dir interleave safely instead of racing on ipe-app.
+# flock the build→resolve→run span per example so two concurrent sweeps sharing
+# one $CARGO_TARGET_DIR interleave safely instead of racing on the emitted binary.
 SWEEP_LOCK_FILE="$CARGO_TARGET_DIR/.examples-sweep-build.lock"
 if [ "$SWEEP_FLOCK_REAL" = 1 ]; then
   exec {SWEEP_LOCK_FD}>"$SWEEP_LOCK_FILE"
@@ -385,7 +385,7 @@ for d in "${EXAMPLES[@]}"; do
 
   note="$run_note"
   printf '%s\t%s\t%s\t%s\n' "$n" "$build_cell" "$run_cell" "$note" >>"$ROWS"
-  reap
+  reap "$(basename "$rbin" 2>/dev/null || true)"
   ( cd "$d" && rm -rf out .ipe .ipecache .ipedeps )
 done
 
