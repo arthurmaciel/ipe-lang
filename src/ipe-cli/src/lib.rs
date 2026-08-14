@@ -720,6 +720,13 @@ pub struct BuildOptions {
     /// (rustc drops the undeclared files itself, so the emitted binary is
     /// identical either way — trimming only changes what source lands on disk).
     pub tree_shake_vendored: bool,
+    /// The sanitized Cargo package name for the emitted crate, derived from
+    /// `ipe.toml`'s `name` field via
+    /// [`ipe_backend_rust::sanitize_cargo_name`]. The emitted `Cargo.toml`
+    /// carries `[package] name = "<cargo_name>"` and the built binary is
+    /// named accordingly. Empty string uses the safe `"ipe-app"` default
+    /// (single-file builds with no `ipe.toml`).
+    pub cargo_name: String,
 }
 
 /// Select the emit model from the environment.
@@ -1323,6 +1330,7 @@ fn compile_modules_observed(
                     .with_wasm_public_env(options.wasm_public_env.clone())
                     .with_wasm_hydrate_mode(options.wasm_hydrate_mode)
                     .with_runtime_dep(runtime_dep.clone())
+                    .with_project_name(&options.cargo_name)
                     .emit(&program)
             };
             if let Ok(emitted) = emit_result {
@@ -1374,6 +1382,7 @@ fn compile_modules_observed(
         options.wasm_hydrate_mode,
         options.production,
         runtime_dep,
+        options.cargo_name.clone(),
     );
 
     let emitted = match compile_prepared(&db, source_root, &sources, entry_path, blame_path, config)
@@ -2275,13 +2284,15 @@ pub fn build_project_with_options(
 
     let entry_path = vec!["Main".to_owned()];
 
-    // Fold in the `[wasm] publicEnv` allowlist this manifest declares — the
-    // caller's `options` carries no manifest-derived data (it is built before
-    // the manifest is parsed), so it is completed here, the same way
-    // `manifest.driver` bypasses `options` entirely as its own positional arg.
+    // Fold in the manifest-derived fields: `[wasm] publicEnv`, hydrate mode,
+    // and the project name (sanitized to a valid Cargo package name). The
+    // caller's `options` carries no manifest-derived data — it is built before
+    // the manifest is parsed — so these three fields are completed here, the
+    // same way `manifest.driver` bypasses `options` as its own positional arg.
     let options = BuildOptions {
         wasm_public_env: manifest.wasm.public_env.clone(),
         wasm_hydrate_mode: manifest.wasm.mode.as_deref() == Some("hydrate"),
+        cargo_name: ipe_backend_rust::sanitize_cargo_name(&manifest.name),
         ..options
     };
 
@@ -2718,6 +2729,8 @@ pub(crate) fn run_build(rest: &[String]) -> Result<(), CliError> {
         // build keeps the full tree so rustc, not the driver, drops the unreached
         // files. Only `ipe eject` sets this.
         tree_shake_vendored: false,
+        // Filled in by build_project_with_options once the manifest is parsed.
+        cargo_name: String::new(),
     };
 
     // Human-friendly progress: the compile+emit below is otherwise silent, so
@@ -3116,10 +3129,11 @@ pub(crate) fn run_deploy(rest: &[String]) -> Result<(), CliError> {
     // `CARGO_TARGET_DIR` (set by the user or the agent lane), so we resolve
     // it via cargo metadata rather than assuming `app_out/target/`.
     let app_target_dir = cargo_target_directory(&app_out)?;
+    let deploy_bin_name = emitted_bin_name(&app_out);
     let app_binary = app_target_dir
         .join(triple.as_str())
         .join("release")
-        .join("ipe-app");
+        .join(&deploy_bin_name);
     if !app_binary.is_file() {
         return Err(CliError::UsageOwned(format!(
             "ipe deploy: expected app binary at {} — cargo build succeeded but binary is missing",
@@ -3679,6 +3693,8 @@ pub(crate) fn run_run(rest: &[String]) -> Result<(), CliError> {
         // `ipe run` builds and executes; it never tree-shakes the vendored tree
         // (only `ipe eject` does).
         tree_shake_vendored: false,
+        // Filled in by build_project_with_options once the manifest is parsed.
+        cargo_name: String::new(),
     };
 
     // Human-friendly progress: the compile+emit below is otherwise silent, so
@@ -3743,18 +3759,25 @@ pub(crate) fn run_run(rest: &[String]) -> Result<(), CliError> {
     build_emitted_project(&mut cargo, "the emitted program", runtime_ctx, &out_dir)?;
 
     // --- Step 3: exec the emitted binary, forwarding args and exit code ---
-    // The binary name is always `ipe-app` (the default package name used by
-    // `write_emitted_project`; see `ipe_backend_rust::EmittedProject`). The
-    // target directory is asked of cargo itself (`cargo metadata`) — a
-    // `CARGO_TARGET_DIR` env or a user-level `[build] target-dir` pin
-    // relocates the artifact, so a hardcoded `<out>/target` would exec a
-    // missing or stale binary.
+    // The binary name matches the emitted crate's package name, derived from
+    // the project's `ipe.toml` `name` field via `sanitize_cargo_name`. When
+    // no manifest is present (sibling-discovery single-file path) the name
+    // falls back to `ipe-app`. The target directory is asked of cargo itself
+    // (`cargo metadata`) — a `CARGO_TARGET_DIR` env or a user-level
+    // `[build] target-dir` pin relocates the artifact, so a hardcoded
+    // `<out>/target` would exec a missing or stale binary.
+    let bin_name = manifest_parsed
+        .as_ref()
+        .map_or_else(
+            || "ipe-app".to_owned(),
+            |m| ipe_backend_rust::sanitize_cargo_name(&m.name),
+        );
     let mut bin = cargo_target_directory(&out_dir)?;
     if let Some(plan) = &static_plan {
         bin.push(plan.triple.as_str());
     }
     bin.push("debug");
-    bin.push("ipe-app");
+    bin.push(&bin_name);
 
     // --- Step 3a: resolve the capability set and, for native code, the jail ---
     // The jail confines the emitted app to `inferred ∪ declared`. It is scoped to
@@ -3845,7 +3868,7 @@ pub(crate) fn run_run(rest: &[String]) -> Result<(), CliError> {
         if !status.success() {
             let code = status.code().unwrap_or(1);
             return Err(CliError::UsageOwned(format!(
-                "ipe-app exited with code {code}"
+                "{bin_name} exited with code {code}"
             )));
         }
         Ok(())
@@ -3889,9 +3912,13 @@ pub(crate) fn run_exec(rest: &[String]) -> Result<(), CliError> {
     }
 
     // Locate the emitted binary (cargo metadata honours a relocated target dir).
+    // The binary name matches the emitted crate's `[package] name`, read from
+    // the artifact dir's `Cargo.toml`. Falls back to `"ipe-app"` when the
+    // manifest is absent or the name cannot be parsed.
+    let exec_bin_name = emitted_bin_name(&dir);
     let mut bin = cargo_target_directory(&dir)?;
     bin.push("debug");
-    bin.push("ipe-app");
+    bin.push(&exec_bin_name);
     if !bin.is_file() {
         return Err(CliError::UsageOwned(format!(
             "ipe exec: no built binary at {} — run `ipe build` first",
@@ -3963,12 +3990,35 @@ pub(crate) fn run_exec(rest: &[String]) -> Result<(), CliError> {
             })?;
         if !status.success() {
             return Err(CliError::UsageOwned(format!(
-                "ipe-app exited with code {}",
+                "{exec_bin_name} exited with code {}",
                 status.code().unwrap_or(1)
             )));
         }
         Ok(())
     }
+}
+
+/// Read the `[package] name` from an emitted project's `Cargo.toml` so
+/// `ipe run` / `ipe exec` / `ipe test` locate the correct binary. Falls back
+/// to `"ipe-app"` when the manifest is absent or unparseable — never panics.
+fn emitted_bin_name(crate_dir: &Path) -> String {
+    let manifest = crate_dir.join("Cargo.toml");
+    let Ok(text) = std::fs::read_to_string(&manifest) else {
+        return "ipe-app".to_owned();
+    };
+    for line in text.lines() {
+        let trimmed = line.trim();
+        if let Some(rest) = trimmed.strip_prefix("name") {
+            let rest = rest.trim_start();
+            if let Some(rest) = rest.strip_prefix('=') {
+                let value = rest.trim().trim_matches('"');
+                if !value.is_empty() {
+                    return value.to_owned();
+                }
+            }
+        }
+    }
+    "ipe-app".to_owned()
 }
 
 /// The target directory cargo will use for a build with CWD = `crate_dir`,
@@ -4779,10 +4829,12 @@ fn build_and_run_test_entry(
     )?;
 
     // Locate the compiled binary via `cargo metadata` so a user-level
-    // `CARGO_TARGET_DIR` pin or workspace override is respected.
+    // `CARGO_TARGET_DIR` pin or workspace override is respected. The binary
+    // name matches the emitted crate's package name (read from `Cargo.toml`).
+    let test_bin_name = emitted_bin_name(out_dir);
     let mut bin = cargo_target_directory(out_dir)?;
     bin.push("debug");
-    bin.push("ipe-app");
+    bin.push(&test_bin_name);
 
     // Run the test binary. `Ipe.Test.runMain` exits 0 on all-pass, 1 on any
     // failure — propagate that as a stage error.

@@ -203,6 +203,10 @@ pub(crate) struct ResolvedProject {
     /// The `[wasm] publicEnv` allowlist (empty for the no-manifest / sibling-
     /// discovery path — there is no `ipe.toml` to declare one).
     pub(crate) wasm_public_env: Vec<String>,
+    /// The sanitized Cargo package name for the emitted crate (from `ipe.toml`
+    /// `name` via [`ipe_backend_rust::sanitize_cargo_name`]). Empty string
+    /// when no manifest is present (sibling-discovery path uses `"ipe-app"`).
+    pub(crate) cargo_name: String,
 }
 
 /// Resolve `entry` (a `.ipe` file, a `ipe.toml`, or a project directory)
@@ -247,6 +251,7 @@ pub(crate) fn resolve_project_sources(
             let src = std::fs::read_to_string(&m.path).map_err(|e| io_err(&m.path, e))?;
             sources.insert(m.module_path.clone(), (m.path.clone(), src));
         }
+        let cargo_name = ipe_backend_rust::sanitize_cargo_name(&manifest.name);
         return Ok(ResolvedProject {
             sources,
             discovered,
@@ -254,6 +259,7 @@ pub(crate) fn resolve_project_sources(
             blame_path: manifest_path,
             db_driver: manifest.driver,
             wasm_public_env: manifest.wasm.public_env,
+            cargo_name,
         });
     }
 
@@ -309,6 +315,7 @@ pub(crate) fn resolve_project_sources(
         blame_path: entry.to_path_buf(),
         db_driver: ipe_backend_rust::DbDriver::Sqlite,
         wasm_public_env: Vec::new(),
+        cargo_name: String::new(),
     })
 }
 
@@ -848,6 +855,7 @@ fn run_inner(
                         Some(ipe_backend_rust::RuntimeDep {
                             root: runtime_dep_root.clone(),
                         }),
+                        resolved.cargo_name.clone(),
                     );
                     config = Some(cfg);
                     cfg

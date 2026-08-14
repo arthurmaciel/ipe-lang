@@ -1140,6 +1140,13 @@ pub struct BuildConfig {
     /// project. Threaded to [`ipe_backend_rust::RustBackend::with_runtime_dep`].
     #[returns(ref)]
     pub runtime_dep: Option<ipe_backend_rust::RuntimeDep>,
+    /// The project name from `ipe.toml`, already sanitized via
+    /// [`ipe_backend_rust::sanitize_cargo_name`] by the driver before storage.
+    /// Threaded to [`ipe_backend_rust::RustBackend::with_project_name`] so the
+    /// emitted crate carries `[package] name = "<cargo_name>"` rather than the
+    /// fixed `"ipe-app"`. An empty string signals "use the `ipe-app` default".
+    #[returns(ref)]
+    pub cargo_name: String,
 }
 
 /// The memoized result of emitting the linked, lowered program to Rust
@@ -1204,6 +1211,7 @@ pub fn emit_project(
     let wasm_public_env = config.wasm_public_env(db).clone();
     let wasm_hydrate_mode = config.wasm_hydrate_mode(db);
     let runtime_dep = config.runtime_dep(db).clone();
+    let cargo_name = config.cargo_name(db).clone();
     let interner = db.interner().lock();
     ipe_backend_rust::RustBackend::new(&interner)
         .with_db_driver(driver)
@@ -1212,6 +1220,7 @@ pub fn emit_project(
         .with_wasm_public_env(wasm_public_env)
         .with_wasm_hydrate_mode(wasm_hydrate_mode)
         .with_runtime_dep(runtime_dep)
+        .with_project_name(&cargo_name)
         .emit(&program)
         .map(Arc::new)
         .map_err(|d| (d, Vec::new()))

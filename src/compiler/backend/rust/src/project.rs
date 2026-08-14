@@ -1923,11 +1923,35 @@ fn relocate_env_public_to_user_crate(
     Ok(())
 }
 
+/// Replace the `name = "ipe-app"` line in an emitted `Cargo.toml` with the
+/// project-configured name. The replacement is a single `replacen(…, 1)` on the
+/// one canonical `[package] name` line, so no feature or dependency `name` key
+/// is touched. When the anchor is absent (template drift), the manifest is
+/// returned unchanged — a missing anchor is never a hard error here because the
+/// name is cosmetic to emit correctness; the SEAL build catches a broken manifest
+/// if it somehow lands.
+fn apply_cargo_name(cargo_toml: &str, cargo_name: &str) -> String {
+    const ANCHOR: &str = "name = \"ipe-app\"";
+    if cargo_toml.contains(ANCHOR) {
+        cargo_toml.replacen(ANCHOR, &format!("name = \"{cargo_name}\""), 1)
+    } else {
+        cargo_toml.to_owned()
+    }
+}
+
 #[allow(clippy::too_many_lines)] // one linear manifest/runtime assembly pass
 fn assemble_project_files(
     ctx: &EmitCtx,
     rust_sources: Vec<(RelPath, String)>,
 ) -> DResult<EmittedProject> {
+    // The emitted crate's package name: the caller-supplied sanitized project
+    // name, or the safe default when no name was configured.
+    let effective_name: &str = if ctx.cargo_name.is_empty() {
+        "ipe-app"
+    } else {
+        &ctx.cargo_name
+    };
+
     // ── Browser-WASM branch ──────────────────────────────────────────────────
     // Both wasm models share the closed Layer-3 security floor (no
     // tokio/axum/sqlx/TLS to link a credential through) and the static browser
@@ -1963,6 +1987,7 @@ fn assemble_project_files(
             if ctx.uses_env_public {
                 relocate_env_public_to_user_crate(&mut files, &ctx.wasm_public_env)?;
             }
+            let cargo_toml = apply_cargo_name(&cargo_toml, effective_name);
             return Ok(EmittedProject { files, cargo_toml });
         }
 
@@ -1996,6 +2021,7 @@ fn assemble_project_files(
         } else {
             WASM_CARGO_TOML.to_owned()
         };
+        let wasm_cargo_toml = apply_cargo_name(&wasm_cargo_toml, effective_name);
         return Ok(EmittedProject {
             files,
             cargo_toml: wasm_cargo_toml,
@@ -2056,6 +2082,7 @@ fn assemble_project_files(
             main.push_str("\nmod ffi;\n");
             cargo_toml = ffi_cargo_toml(&cargo_toml, ctx)?;
         }
+        let cargo_toml = apply_cargo_name(&cargo_toml, effective_name);
         return Ok(EmittedProject { files, cargo_toml });
     }
 
@@ -2536,6 +2563,7 @@ fn assemble_project_files(
             })?;
         main.push_str("\nmod ffi;\n");
     }
+    let cargo_toml = apply_cargo_name(&cargo_toml, effective_name);
     Ok(EmittedProject { files, cargo_toml })
 }
 

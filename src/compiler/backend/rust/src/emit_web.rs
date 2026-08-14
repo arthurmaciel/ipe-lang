@@ -997,6 +997,7 @@ mod schema_tag_tests {
             Vec::new(),
             false,
             None,
+            String::new(),
         )?;
 
         // Model = { count : Int } (no `page` field → the single-page branch).

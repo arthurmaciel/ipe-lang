@@ -187,6 +187,98 @@ pub struct RustBackend<'a> {
     wasm_public_env: Vec<String>,
     wasm_hydrate_mode: bool,
     runtime_dep: Option<RuntimeDep>,
+    /// The project name from `ipe.toml`, sanitized into a valid Cargo package
+    /// name via [`sanitize_cargo_name`]. Becomes the emitted crate's
+    /// `[package] name`. Empty string signals "use the safe fallback
+    /// `ipe-app`" — set via [`Self::with_project_name`].
+    cargo_name: String,
+}
+
+/// Convert an arbitrary `ipe.toml` `name` value into a valid Cargo package
+/// name and binary name.
+///
+/// Cargo package names must be non-empty, start with a letter or `_`, contain
+/// only ASCII alphanumerics, `-`, and `_`, and must not be a
+/// [reserved Rust identifier][reserved]. This function applies a total,
+/// deterministic sanitization that never panics and never produces an invalid
+/// name:
+///
+/// 1. Lowercase the input.
+/// 2. Replace every run of characters that are not `[a-z0-9_-]` with `-`.
+/// 3. Strip leading and trailing `-`.
+/// 4. If the result starts with a digit, prepend `app-`.
+/// 5. If the result is empty (input was all-invalid chars, or was the empty
+///    string), use the fallback `ipe-app`.
+/// 6. If the result is a [reserved Rust keyword][reserved] or the fixed name
+///    `ipe` (the toolchain binary), append `-app`.
+/// 7. Truncate to 64 characters (Cargo's practical limit).
+///
+/// Examples: `"my-app"` → `"my-app"`, `"My App"` → `"my-app"`,
+/// `"1game"` → `"app-1game"`, `""` → `"ipe-app"`, `"mod"` → `"mod-app"`.
+///
+/// [reserved]: https://doc.rust-lang.org/reference/keywords.html
+#[must_use]
+pub fn sanitize_cargo_name(name: &str) -> String {
+    const RESERVED: &[&str] = &[
+        "abstract", "as", "async", "await", "become", "box", "break", "const", "continue",
+        "crate", "do", "dyn", "else", "enum", "extern", "false", "final", "fn", "for", "if",
+        "impl", "in", "let", "loop", "macro", "match", "mod", "move", "mut", "override",
+        "priv", "pub", "ref", "return", "self", "Self", "static", "struct", "super", "trait",
+        "true", "try", "type", "typeof", "union", "unsafe", "unsized", "use", "virtual",
+        "where", "while", "yield",
+        // Toolchain binary name.
+        "ipe",
+    ];
+
+    // Step 1: lowercase.
+    let lower = name.to_ascii_lowercase();
+
+    // Step 2: replace runs of invalid chars with `-`.
+    let mut out = String::with_capacity(lower.len());
+    let mut in_run = false;
+    for ch in lower.chars() {
+        if ch.is_ascii_alphanumeric() || ch == '-' || ch == '_' {
+            out.push(ch);
+            in_run = false;
+        } else if !in_run {
+            out.push('-');
+            in_run = true;
+        }
+    }
+
+    // Step 3: strip leading/trailing `-`.
+    let trimmed = out.trim_matches('-');
+
+    // Step 4: if the first char is a digit, prepend `app-`.
+    let mut result = if trimmed.starts_with(|c: char| c.is_ascii_digit()) {
+        format!("app-{trimmed}")
+    } else {
+        trimmed.to_owned()
+    };
+
+    // Step 5: empty → fallback.
+    if result.is_empty() {
+        return "ipe-app".to_owned();
+    }
+
+    // Step 6: reserved Rust keywords and the `ipe` toolchain name get
+    // `-app` appended to avoid shadowing.
+    if RESERVED.contains(&result.as_str()) {
+        result.push_str("-app");
+    }
+
+    // Step 7: truncate to 64 chars at an ASCII boundary.
+    if result.len() > 64 {
+        result.truncate(64);
+        // Ensure we don't end on a `-` after truncation.
+        let trimmed_len = result.trim_end_matches('-').len();
+        result.truncate(trimmed_len);
+        if result.is_empty() {
+            return "ipe-app".to_owned();
+        }
+    }
+
+    result
 }
 
 /// The dependency-model emit selector.
@@ -213,7 +305,8 @@ impl<'a> RustBackend<'a> {
     /// Defaults to [`DbDriver::Sqlite`] — call [`Self::with_db_driver`] to
     /// target Postgres.
     #[must_use]
-    pub const fn new(interner: &'a Interner) -> Self {
+    #[allow(clippy::missing_const_for_fn)] // String::new() is not const-stable
+    pub fn new(interner: &'a Interner) -> Self {
         Self {
             interner,
             db_driver: DbDriver::Sqlite,
@@ -222,7 +315,19 @@ impl<'a> RustBackend<'a> {
             wasm_public_env: Vec::new(),
             wasm_hydrate_mode: false,
             runtime_dep: None,
+            cargo_name: String::new(),
         }
+    }
+
+    /// Set the emitted crate's package name from the `ipe.toml` `name` field.
+    /// The value is sanitized via [`sanitize_cargo_name`] before use, so any
+    /// valid (or invalid) `ipe.toml` name produces a valid Cargo package name.
+    /// When not called (or called with an empty string), the emitted crate is
+    /// named `ipe-app` — the safe default.
+    #[must_use]
+    pub fn with_project_name(mut self, name: &str) -> Self {
+        self.cargo_name = sanitize_cargo_name(name);
+        self
     }
 
     /// Select the dependency-model emit: the emitted project declares the runtime
@@ -310,6 +415,7 @@ impl<'a> RustBackend<'a> {
             self.wasm_public_env.clone(),
             self.wasm_hydrate_mode,
             self.runtime_dep.clone(),
+            self.cargo_name.clone(),
         )?;
         project::emit_spine(&ctx, program)
     }
@@ -333,6 +439,7 @@ impl<'a> RustBackend<'a> {
             self.wasm_public_env.clone(),
             self.wasm_hydrate_mode,
             self.runtime_dep.clone(),
+            self.cargo_name.clone(),
         )
     }
 
@@ -356,6 +463,7 @@ impl<'a> RustBackend<'a> {
             self.wasm_public_env.clone(),
             self.wasm_hydrate_mode,
             self.runtime_dep.clone(),
+            self.cargo_name.clone(),
         )?;
         Ok(runtime_features::runtime_features(&ctx).as_feature_names())
     }
@@ -379,6 +487,7 @@ impl<'a> RustBackend<'a> {
             self.wasm_public_env.clone(),
             self.wasm_hydrate_mode,
             self.runtime_dep.clone(),
+            self.cargo_name.clone(),
         )?;
         project::emit_module_file(
             &ctx,
@@ -417,6 +526,7 @@ impl<'a> RustBackend<'a> {
             self.wasm_public_env.clone(),
             self.wasm_hydrate_mode,
             self.runtime_dep.clone(),
+            self.cargo_name.clone(),
         )?;
         project::assemble_split_manifest(&ctx, program, spine_text, module_texts)
     }
@@ -462,6 +572,7 @@ impl Backend for RustBackend<'_> {
             self.wasm_public_env.clone(),
             self.wasm_hydrate_mode,
             self.runtime_dep.clone(),
+            self.cargo_name.clone(),
         )?;
         project::emit_program(&ctx, program)
     }
@@ -952,6 +1063,13 @@ pub(crate) struct EmitCtx<'a> {
     /// field names; the resolver then disambiguates by the record's full shape.
     /// Every `IrType::Record` and every record literal resolves through this map.
     record_by_fieldset: BTreeMap<Vec<String>, Vec<usize>>,
+    /// The sanitized Cargo package name for the emitted crate. Derived from
+    /// the `ipe.toml` `name` field via [`sanitize_cargo_name`] and threaded in
+    /// through [`RustBackend::with_project_name`]. Used by
+    /// [`crate::project::assemble_project_files`] to write `[package] name =
+    /// "<cargo_name>"` into the emitted `Cargo.toml`. Defaults to `"ipe-app"`
+    /// when no project name is supplied.
+    pub(crate) cargo_name: String,
 }
 
 /// Is an enum variant payload field type `Clone`, consulting the whole-program
@@ -1011,7 +1129,7 @@ fn record_field_is_clone(ty: &IrType, enum_clone: &BTreeMap<(ModPath, Symbol), b
 impl<'a> EmitCtx<'a> {
     #[allow(clippy::too_many_lines)]
     #[allow(clippy::similar_names)] // `uses_ui` / `uses_tui` are intentionally similar
-    #[allow(clippy::too_many_arguments)] // the backend-config thread-through (driver, ffi, target, wasm, runtime-dep)
+    #[allow(clippy::too_many_arguments)] // the backend-config thread-through (driver, ffi, target, wasm, runtime-dep, cargo_name)
     fn build(
         interner: &'a Interner,
         program: &Program,
@@ -1021,6 +1139,7 @@ impl<'a> EmitCtx<'a> {
         wasm_public_env: Vec<String>,
         wasm_hydrate_mode: bool,
         runtime_dep: Option<RuntimeDep>,
+        cargo_name: String,
     ) -> DResult<Self> {
         let mut enum_names: BTreeMap<(ModPath, Symbol), String> = BTreeMap::new();
         let mut variant_fields: BTreeMap<(ModPath, Symbol, Symbol), Vec<IrType>> = BTreeMap::new();
@@ -1624,6 +1743,7 @@ impl<'a> EmitCtx<'a> {
             impl_fn_params,
             record_structs,
             record_by_fieldset,
+            cargo_name,
         };
         // Resolve the `HydrationState` type name through the same renderer the
         // emitted `main_from_hydration_state` signature uses, so the wasm-hydrate
@@ -3848,6 +3968,7 @@ mod record_struct_namespace_tests {
             Vec::new(),
             false,
             None,
+            String::new(),
         )?;
         assert_eq!(ctx.record_structs().len(), 1);
         assert_eq!(
@@ -3945,6 +4066,7 @@ mod record_struct_namespace_tests {
             Vec::new(),
             false,
             None,
+            String::new(),
         )?;
         ctx.assert_record_structs_disjoint_from_type_namespace(&BTreeSet::new())
     }
@@ -4025,6 +4147,7 @@ mod record_struct_namespace_tests {
             Vec::new(),
             false,
             None,
+            String::new(),
         )?;
 
         let colliding: BTreeSet<Symbol> = [snake, camel].into_iter().collect();
@@ -4049,5 +4172,84 @@ mod record_struct_namespace_tests {
             "a single field name has no collision to report"
         );
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod sanitize_cargo_name_tests {
+    use super::sanitize_cargo_name;
+
+    #[test]
+    fn normal_name_passes_through() {
+        assert_eq!(sanitize_cargo_name("my-app"), "my-app");
+    }
+
+    #[test]
+    fn uppercase_is_lowercased() {
+        assert_eq!(sanitize_cargo_name("MyApp"), "myapp");
+    }
+
+    #[test]
+    fn spaces_become_hyphens() {
+        assert_eq!(sanitize_cargo_name("my app"), "my-app");
+    }
+
+    #[test]
+    fn unicode_chars_are_replaced_and_stripped() {
+        // é is non-ASCII → replaced with `-`, then trailing `-` stripped
+        assert_eq!(sanitize_cargo_name("café"), "caf");
+        // ü is non-ASCII → replaced with `-`, then leading `-` stripped
+        assert_eq!(sanitize_cargo_name("üapp"), "app");
+    }
+
+    #[test]
+    fn leading_digit_gets_prefix() {
+        assert_eq!(sanitize_cargo_name("1game"), "app-1game");
+        assert_eq!(sanitize_cargo_name("42"), "app-42");
+    }
+
+    #[test]
+    fn empty_input_returns_fallback() {
+        assert_eq!(sanitize_cargo_name(""), "ipe-app");
+    }
+
+    #[test]
+    fn all_invalid_chars_returns_fallback() {
+        assert_eq!(sanitize_cargo_name("!!!"), "ipe-app");
+        assert_eq!(sanitize_cargo_name("   "), "ipe-app");
+    }
+
+    #[test]
+    fn reserved_keyword_gets_suffix() {
+        assert_eq!(sanitize_cargo_name("mod"), "mod-app");
+        assert_eq!(sanitize_cargo_name("fn"), "fn-app");
+        assert_eq!(sanitize_cargo_name("ipe"), "ipe-app");
+    }
+
+    #[test]
+    fn long_name_is_truncated_to_64_chars() {
+        let long = "a".repeat(100);
+        let result = sanitize_cargo_name(&long);
+        assert!(result.len() <= 64, "name must be at most 64 chars, got {}", result.len());
+    }
+
+    #[test]
+    fn truncation_does_not_leave_trailing_hyphen() {
+        // 63 'a's then a unicode char that becomes a hyphen at position 64
+        let input = format!("{}é", "a".repeat(63));
+        let result = sanitize_cargo_name(&input);
+        assert!(!result.ends_with('-'), "truncated name must not end with hyphen");
+        assert!(result.len() <= 64);
+    }
+
+    #[test]
+    fn valid_name_with_underscores() {
+        assert_eq!(sanitize_cargo_name("my_app"), "my_app");
+    }
+
+    #[test]
+    fn consecutive_invalid_chars_become_one_hyphen() {
+        assert_eq!(sanitize_cargo_name("a  b"), "a-b");
+        assert_eq!(sanitize_cargo_name("a!!b"), "a-b");
     }
 }
