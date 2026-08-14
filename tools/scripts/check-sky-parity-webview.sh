@@ -165,9 +165,11 @@ PYEOF
 # crop: x0,y0,x1,y1 applied to both images before diff (pixel coords, 0-indexed)
 # empty crop means full image
 
+# ipe_owner is the emitted binary name (macOS window owner), which the compiler
+# derives from each project's ipe.toml `name`.
 EXAMPLES=(
-  "31-webview-stopwatch-ui|examples/sky/ipe/31-webview-stopwatch-ui|examples/sky/original/31-webview-stopwatch-ui|ipe-app|sky-31-stopwatch-app|8.0|"
-  "29-webview-threejs-spike|examples/sky/ipe/29-webview-threejs-spike|examples/sky/original/29-webview-threejs-spike|ipe-app|sky-29-threejs-app|15.0|"
+  "31-webview-stopwatch-ui|examples/sky/ipe/31-webview-stopwatch-ui|examples/sky/original/31-webview-stopwatch-ui|webview-stopwatch-ui|sky-31-stopwatch-app|8.0|"
+  "29-webview-threejs-spike|examples/sky/ipe/29-webview-threejs-spike|examples/sky/original/29-webview-threejs-spike|webview-threejs-spike|sky-29-threejs-app|15.0|"
 )
 
 PASS=0
@@ -183,7 +185,7 @@ for entry in "${EXAMPLES[@]}"; do
   IPE_EXAMPLE="${REPO}/${ipe_dir}"
   SKY_EXAMPLE="${REPO}/${sky_dir}"
   IPE_OUT_DIR="${IPE_EXAMPLE}/out/rust"
-  APP_BIN="${CARGO_TARGET_DIR}/debug/ipe-app"
+  APP_BIN="${CARGO_TARGET_DIR}/debug/${ipe_owner}"
 
   # ── Build + capture: Ipê ──────────────────────────────────────────────────
   echo "  build: Ipê ${slug}"
