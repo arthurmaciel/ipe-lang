@@ -5,9 +5,10 @@
 //!   - the `__ipe_csrf` cookie is `SameSite=Strict` + `Secure` (in production /
 //!     frame-ancestors mode) — SameSite=Strict is itself a strong CSRF defense,
 //!     the double-submit token is belt-and-suspenders;
-//!   - an OPT-IN `Origin`/`Host` same-origin check (`IPE_LIVE_CSRF_ORIGIN_CHECK=on`)
-//!     for same-origin deployments that want a third layer (off by default so it
-//!     can't break reverse-proxied setups where the proxy rewrites `Host`);
+//!   - an OPT-IN `Origin`/`Host` same-origin check (`IPE_WEB_CSRF_ORIGIN_CHECK=on`;
+//!     deprecated alias: `IPE_LIVE_CSRF_ORIGIN_CHECK`) for same-origin deployments
+//!     that want a third layer (off by default so it can't break reverse-proxied
+//!     setups where the proxy rewrites `Host`);
 //!   - `X-Content-Type-Options: nosniff` + a restrictive `Permissions-Policy`
 //!     beyond Go's header set.
 //!
@@ -149,10 +150,10 @@ pub fn is_exempt_path(path: &str) -> bool {
 }
 
 /// Optional same-origin `Origin`/`Host` check (opt-in via
-/// `IPE_LIVE_CSRF_ORIGIN_CHECK=on`; off by default so a reverse proxy that
-/// rewrites `Host` can't break legitimate POSTs). Skipped entirely in
-/// frame-ancestors mode (cross-origin embedding is intentional there). Returns
-/// `true` when the request should be REJECTED.
+/// `IPE_WEB_CSRF_ORIGIN_CHECK=on`; deprecated alias: `IPE_LIVE_CSRF_ORIGIN_CHECK`;
+/// off by default so a reverse proxy that rewrites `Host` can't break legitimate
+/// POSTs). Skipped entirely in frame-ancestors mode (cross-origin embedding is
+/// intentional there). Returns `true` when the request should be REJECTED.
 fn origin_mismatch(headers: &HeaderMap) -> bool {
     // Snapshotted once (env is stable at process start; same rationale as
     // `cookies_secure()` — no per-request global env-lock acquisition).
@@ -160,7 +161,12 @@ fn origin_mismatch(headers: &HeaderMap) -> bool {
         use std::sync::OnceLock;
         static CHECK: OnceLock<bool> = OnceLock::new();
         *CHECK.get_or_init(|| {
-            crate::system::read_env_var("IPE_LIVE_CSRF_ORIGIN_CHECK").as_deref() == Ok("on")
+            crate::system::read_env_var_renamed(
+                "IPE_WEB_CSRF_ORIGIN_CHECK",
+                "IPE_LIVE_CSRF_ORIGIN_CHECK",
+            )
+            .as_deref()
+                == Ok("on")
         })
     }
     if !origin_check_enabled() {

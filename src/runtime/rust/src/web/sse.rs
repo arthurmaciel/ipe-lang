@@ -7,21 +7,21 @@ pub struct SsePatch(pub String);
 pub type SseTx = mpsc::Sender<SsePatch>;
 pub type SseRx = mpsc::Receiver<SsePatch>;
 
-/// Buffer capacity, honouring `IPE_LIVE_SSE_BUFFER` (clamped to `[1, 1024]`,
-/// default 16) to match the Go runtime's configurable bound. Parse failures
+/// Buffer capacity, honouring `IPE_WEB_SSE_BUFFER` (deprecated alias:
+/// `IPE_LIVE_SSE_BUFFER`; clamped to `[1, 1024]`, default 16). Parse failures
 /// and out-of-range values fall back to the clamp/default.
 fn buffer_capacity() -> usize {
     const DEFAULT: usize = 16;
     const MIN: usize = 1;
     const MAX: usize = 1024;
-    crate::system::read_env_var("IPE_LIVE_SSE_BUFFER")
+    crate::system::read_env_var_renamed("IPE_WEB_SSE_BUFFER", "IPE_LIVE_SSE_BUFFER")
         .ok()
         .and_then(|s| s.trim().parse::<usize>().ok())
         .map(|n| n.clamp(MIN, MAX))
         .unwrap_or(DEFAULT)
 }
 
-/// Bounded buffer (Go default 16, configurable via `IPE_LIVE_SSE_BUFFER`). The
+/// Bounded buffer (Go default 16, configurable via `IPE_WEB_SSE_BUFFER`). The
 /// current caller in mod.rs `.await`s on send, so this channel BLOCKS (applies
 /// TCP backpressure) when full rather than dropping — it does not implement the
 /// drop-oldest + `ipe_web_sse_drops_total` behaviour. hello/heartbeat framing

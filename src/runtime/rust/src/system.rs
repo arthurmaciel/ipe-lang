@@ -25,6 +25,48 @@ pub(crate) fn read_env_var(key: &str) -> Result<String, std::env::VarError> {
     std::env::var(key)
 }
 
+/// Read a renamed environment variable with a deprecated-alias fallback.
+/// Checks `new_key` first; if absent or empty, tries `old_key`. Both reads
+/// share the same lock acquisition, so the check-then-fallback is atomic with
+/// respect to other Ipê-originated env mutations.
+///
+/// Use this for every env var that was renamed: the new name takes full effect
+/// while the old name keeps working as a deprecated alias. Callers that need
+/// to distinguish "unset" from "set to empty" should treat `VarError::NotFound`
+/// on the return as "neither set".
+pub(crate) fn read_env_var_renamed(
+    new_key: &str,
+    old_key: &str,
+) -> Result<String, std::env::VarError> {
+    let _guard = ENV_LOCK
+        .read()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    match std::env::var(new_key) {
+        Ok(v) => Ok(v),
+        Err(_) => std::env::var(old_key),
+    }
+}
+
+/// Three-level fallback for a renamed env var that also has a plain fallback.
+/// Checks `new_key`, then `old_key`, then `fallback_key`, all under one lock
+/// acquisition. Returns `Err(VarError::NotFound)` when none are set.
+pub(crate) fn read_env_var_renamed_with_fallback(
+    new_key: &str,
+    old_key: &str,
+    fallback_key: &str,
+) -> Result<String, std::env::VarError> {
+    let _guard = ENV_LOCK
+        .read()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    match std::env::var(new_key) {
+        Ok(v) => Ok(v),
+        Err(_) => match std::env::var(old_key) {
+            Ok(v) => Ok(v),
+            Err(_) => std::env::var(fallback_key),
+        },
+    }
+}
+
 /// Read an environment variable as an `OsString` under the shared env read lock —
 /// the `var_os` companion of `read_env_var` (same poison handling, same race
 /// guarantee). `None` when unset or — unlike `read_env_var` — when the value is

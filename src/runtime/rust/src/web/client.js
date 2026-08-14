@@ -1,10 +1,10 @@
 var __ipeSid = window.__IPE_SID;
 var __ipeBase = window.__IPE_BASE || "";
 var __ipeCsrfToken = window.__IPE_CSRF_TOKEN || "";
-// Server-templated config (mod.rs render_page_full → window.__IPE_* ; Go parity
-// live.go ~5993). Each reads the injected window global when present, else the
-// hardcoded default — so IPE_LIVE_RETRY_* / QUEUE_MAX / HELLO_TIMEOUT_MS /
-// HEARTBEAT_TTL_MS / BANNER overrides reach the client. CSP-safe (no eval).
+// Server-templated config (mod.rs render_page_full → window.__IPE_*). Each
+// reads the injected window global when present, else the hardcoded default —
+// so IPE_WEB_RETRY_* / QUEUE_MAX / HELLO_TIMEOUT_MS / HEARTBEAT_TTL_MS /
+// BANNER overrides reach the client. CSP-safe (no eval).
 var __ipeBannerEnabled = (window.__IPE_BANNER_ENABLED != null) ? window.__IPE_BANNER_ENABLED : true;
 var __ipeRetryBaseMs = (window.__IPE_RETRY_BASE_MS != null) ? window.__IPE_RETRY_BASE_MS : 500;
 var __ipeRetryMaxMs = (window.__IPE_RETRY_MAX_MS != null) ? window.__IPE_RETRY_MAX_MS : 16000;
@@ -713,8 +713,7 @@ var __ipeRetryTimer = null;
 var __ipeRetryAttempts = 0;
 // __ipeRetryBaseMs / __ipeRetryMaxMs / __ipeRetryMaxAttempts /
 // __ipeEventQueueMax are templated at the top of this script from
-// the IPE_LIVE_RETRY_* / IPE_LIVE_QUEUE_MAX env vars (see
-// loadLiveBannerConfig).
+// the IPE_WEB_RETRY_* / IPE_WEB_QUEUE_MAX env vars.
 function __ipePostEvent(body) {
   // Phase 1.2 — attach the per-session CSRF token. The server-side
   // middleware (runtime-go/rt/csrf_middleware.go) rejects POSTs
@@ -1282,7 +1281,7 @@ function __ipeSetStatus(state, msg) {
 }
 function __ipeInjectStatusBanner() {
   if (__ipeStatusEl) return;            // idempotent
-  if (!__ipeBannerEnabled) return;      // IPE_LIVE_BANNER=off
+  if (!__ipeBannerEnabled) return;      // IPE_WEB_BANNER=off
   var el = document.createElement("div");
   el.id = "__ipe-status";
   el.className = "ipe-status ipe-status--connected";

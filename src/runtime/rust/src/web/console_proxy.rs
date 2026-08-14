@@ -24,13 +24,13 @@ const CONSOLE_BIN_ENV: &str = "IPE_CONSOLE_BIN";
 /// The mount prefix. The parent proxies everything under this path to the child
 /// and STRIPS the prefix before forwarding (the strip convention — see the
 /// module doc): the child's router stays root-relative, identical to a
-/// standalone Web app. The child only learns the prefix via `IPE_LIVE_BASE_PATH`
+/// standalone Web app. The child only learns the prefix via `IPE_WEB_BASE_PATH`
 /// (so its rendered `/_ipe/event` / `/_ipe/sse` URLs come back prefixed and we
 /// strip them again on the way in).
 const CONSOLE_BASE: &str = "/_ipe/console";
 
 /// Request-body buffer cap for the proxy (16 MiB). Event POST bodies are far
-/// smaller (`IPE_LIVE_MAX_BODY_BYTES` defaults to 5 MiB); this is the hard
+/// smaller (`IPE_WEB_MAX_BODY_BYTES` defaults to 5 MiB); this is the hard
 /// ceiling above which we 502 rather than buffer unboundedly. Responses are
 /// STREAMED, never buffered, so SSE is unaffected by this cap.
 const MAX_PROXY_BODY: usize = 16 * 1024 * 1024;
@@ -76,8 +76,8 @@ pub fn console_bin_path() -> Option<std::path::PathBuf> {
 /// nothing, per its own gate).
 pub fn gate_allows() -> bool {
     // Sub-app context: the parent owns its own console; a nested app must not
-    // recursively mount one.
-    if crate::system::read_env_var("IPE_LIVE_BASE_PATH")
+    // recursively mount one. IPE_WEB_BASE_PATH (deprecated alias: IPE_LIVE_BASE_PATH).
+    if crate::system::read_env_var_renamed("IPE_WEB_BASE_PATH", "IPE_LIVE_BASE_PATH")
         .map(|v| !v.is_empty())
         .unwrap_or(false)
     {
@@ -130,7 +130,11 @@ pub fn gate_allows() -> bool {
 pub fn spawn_console(child_port: u16, store: &str, child_collects: bool) -> Option<()> {
     let bin = console_bin_path()?;
     let mut cmd = Command::new(&bin);
-    cmd.env("IPE_LIVE_PORT", child_port.to_string())
+    // Set both new and deprecated names so older pre-built console binaries
+    // (which may only know the IPE_LIVE_* names) still work.
+    cmd.env("IPE_WEB_PORT", child_port.to_string())
+        .env("IPE_LIVE_PORT", child_port.to_string())
+        .env("IPE_WEB_BASE_PATH", "/_ipe/console")
         .env("IPE_LIVE_BASE_PATH", "/_ipe/console")
         // Belt-and-braces: suppress the child's own console auto-mount + banner.
         .env("IPE_CONSOLE_EMBED", "off")
@@ -523,10 +527,10 @@ mod tests {
     #[test]
     fn gate_skips_in_subapp_context() {
         // SAFETY: test-only env mutation; `std::env::set_var`/`remove_var` are `unsafe` in Rust 2024 due to the reader/mutator `environ` race.
-        unsafe { std::env::set_var("IPE_LIVE_BASE_PATH", "/billing") };
+        unsafe { std::env::set_var("IPE_WEB_BASE_PATH", "/billing") };
         assert!(!gate_allows());
         // SAFETY: test-only env mutation; `std::env::set_var`/`remove_var` are `unsafe` in Rust 2024 due to the reader/mutator `environ` race.
-        unsafe { std::env::remove_var("IPE_LIVE_BASE_PATH") };
+        unsafe { std::env::remove_var("IPE_WEB_BASE_PATH") };
     }
 
     #[test]

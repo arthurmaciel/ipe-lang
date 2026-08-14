@@ -273,7 +273,7 @@ enforcement sink:
 | # | Edge | Threat | Enforcement (fail-closed) |
 | --- | --- | --- | --- |
 | 1 | down-state → page | XSS via state serialisation | state crosses only as an entity-escaped attribute or decoded property — never spliced into a script / `HRaw`; the `island_escape` precedent governs any future inline carrier |
-| 2 | up-event → server | forged / malformed browser input | existing session + CSRF gates unchanged; then the generated total decoder — mismatch drops the event, no partial value; body size already capped (`IPE_LIVE_MAX_BODY_BYTES`) |
+| 2 | up-event → server | forged / malformed browser input | existing session + CSRF gates unchanged; then the generated total decoder — mismatch drops the event, no partial value; body size already capped (`IPE_WEB_MAX_BODY_BYTES`) |
 | 3 | widget JS itself | arbitrary code with DOM authority | SRI content-addressing (tamper fails to load), build-time hash from the index (§7.2), CSP `script-src 'self'`; NOT sandboxed — declared trust, documented (§7.3) |
 | 4 | element registration | user string into `customElements.define` | impossible by construction: tag names are compiler-generated |
 | 5 | `customElement "path"` literal | path traversal at build | path-seal clean + in-project check at compile time (reuse `path_core.rs`) |
