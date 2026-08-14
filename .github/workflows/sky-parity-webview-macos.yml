@@ -82,6 +82,12 @@ jobs:
           export CARGO_TARGET_DIR="${{ github.workspace }}/.cache/ipe-target"
           cargo build --release -p ipe
 
+      # sky build shells out to `go build` (CGO) — macOS runners do not expose a
+      # `go` on PATH for that spawn, so install one explicitly.
+      - uses: actions/setup-go@v5
+        with:
+          go-version: stable
+
       - name: Install sky toolchain
         run: |
           mkdir -p ~/.local/bin
