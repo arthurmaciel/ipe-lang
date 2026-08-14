@@ -281,7 +281,7 @@ lands, so users receive it under a version rather than only on `main`.
    tools/scripts/lib/env.sh` exports `IPEC_BIN` + `IPE_RUNTIME_DIR`.
 2. Full gate green — one authoritative run (the two-tier gate above).
 3. Example sweep green — `tools/scripts/examples-sweep.sh` (per example: `ipe build` →
-   `cargo build` the emitted crate → run `ipe-app`). VERDICT PASS iff zero red
+   `cargo build` the emitted crate → run the emitted binary). VERDICT PASS iff zero red
    rows (THE SEAL end to end).
 4. CI parity — `.github/workflows/{ci,examples-sweep,security}.yml` runs the same
    gate; cancel superseded in-progress `main` runs before pushing.

@@ -240,8 +240,11 @@ _build_ipe_port() {
   CARGO_TARGET_DIR="$port_target" \
     timeout "${IPE_SWEEP_BUILD_TIMEOUT:-300}" \
     cargo build --manifest-path "$ipe_dir/out/rust/Cargo.toml" >>"$log" 2>&1 || return 2
+  local bin_name
+  bin_name="$(sed -n 's/^name = "\(.*\)"/\1/p' "$ipe_dir/out/rust/Cargo.toml" 2>/dev/null | head -1)"
+  bin_name="${bin_name:-ipe-app}"
   _IPE_BIN_PATH=""
-  for b in "$port_target/debug/ipe-app" "$port_target/release/ipe-app"; do
+  for b in "$port_target/debug/$bin_name" "$port_target/release/$bin_name"; do
     [ -x "$b" ] && { _IPE_BIN_PATH="$b"; return 0; }
   done
   return 3
@@ -322,7 +325,7 @@ for name in "${MANIFEST_PORTS[@]}"; do
     case "$build_rc" in
       1) label="ipe emit failed" ;;
       2) label="cargo build failed" ;;
-      *) label="ipe-app binary not found after build" ;;
+      *) label="app binary not found after build" ;;
     esac
     echo "  BUILD-FAIL $name — $label (see $build_log)"
     n_build_fail=$(( n_build_fail+1 )); continue

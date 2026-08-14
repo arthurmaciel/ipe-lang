@@ -455,6 +455,7 @@ pub fn native_vs_legacy_sweep(
         Vec::new(),
         false,
         None,
+        String::new(),
     )?;
     let mut divergences = Vec::new();
     let mut compared = 0usize;
@@ -2098,6 +2099,7 @@ mod tests {
             Vec::new(),
             false,
             None,
+            String::new(),
         )
         .expect("EmitCtx::build");
         f(&ctx)
@@ -2666,6 +2668,7 @@ mod tests {
             Vec::new(),
             false,
             None,
+            String::new(),
         )
         .expect("EmitCtx::build");
         let scope = GenericScope::new(&[]);
@@ -3283,6 +3286,7 @@ mod tests {
             Vec::new(),
             false,
             None,
+            String::new(),
         )
         .expect("EmitCtx::build");
         let expr = Expr::Lambda {
@@ -3673,6 +3677,7 @@ mod tests {
             Vec::new(),
             false,
             None,
+            String::new(),
         )
         .expect("EmitCtx::build");
         let scope = GenericScope::new(&[]);
