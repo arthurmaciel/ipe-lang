@@ -5055,19 +5055,39 @@ pub fn emit_expr_at(
                 // partial application) is left as-is: those already produce a
                 // value that itself implements `Fn`, so it fills the generic
                 // slot with no change and no risk.
-                let unboxed = if let Callee::Func(id) = callee
-                    && ctx.call_arg_is_impl_fn(*id, i)
+                //
+                // `Task.andThen cont effect` — the continuation lambda (Ipê arg
+                // index 0) must still be boxed because the preamble wrapper takes
+                // `Box<dyn FnOnce(A) -> IpeTask<B> + Send + 'static>`. Emitting
+                // `Box::new(move |x| -> R { body })` directly (without the
+                // `let __ipe_fn: Box<dyn Fn...> = Box::new(...)` type-annotation
+                // wrapper that `emit_lambda` produces) is sufficient: rustc infers
+                // the trait-object coercion from the parameter position, and the
+                // absence of the explicit annotation is what keeps rustc's
+                // type-checking linear in the number of chained `Task.andThen`
+                // calls (the annotation form causes super-linear work at depth).
+                let rendered = if matches!(callee, Callee::Kernel(KernelFn::TaskAndThen))
+                    && i == 0
                     && let Expr::Lambda { params, ret, body }
                     | Expr::SharedLambda { params, ret, body } = arg
                 {
-                    Some(emit_lambda_unboxed(
-                        ctx, params, ret, body, indent, child, generics,
-                    )?)
+                    let inner =
+                        emit_lambda_unboxed(ctx, params, ret, body, indent, child, generics)?;
+                    format!("Box::new({inner})")
                 } else {
-                    None
+                    let unboxed = if let Callee::Func(id) = callee
+                        && ctx.call_arg_is_impl_fn(*id, i)
+                        && let Expr::Lambda { params, ret, body }
+                        | Expr::SharedLambda { params, ret, body } = arg
+                    {
+                        Some(emit_lambda_unboxed(
+                            ctx, params, ret, body, indent, child, generics,
+                        )?)
+                    } else {
+                        None
+                    };
+                    unboxed.map_or_else(|| emit_expr_at(ctx, arg, indent, child, generics), Ok)?
                 };
-                let rendered =
-                    unboxed.map_or_else(|| emit_expr_at(ctx, arg, indent, child, generics), Ok)?;
                 parts.push(rendered);
             }
             // A handful of Maybe/Result kernels take the container BEFORE the

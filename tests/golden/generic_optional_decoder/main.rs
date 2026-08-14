@@ -512,43 +512,88 @@ pub fn ipe_main() -> IpeTask<()> {
     let _ipe_recursion_guard = crate::recursion_guard();
     task_and_then(
         db_open("sqlite".to_string(), "sqlite::memory:".to_string()),
-        {
-            let __ipe_fn: Box<dyn Fn(Db) -> IpeTask<()> + Send + Sync + 'static> = Box::new(
-                move |conn: Db| -> IpeTask<()> {
-                    db_with_transaction(conn.clone(), {
-                        let __ipe_fn: Box<dyn Fn(Db) -> IpeTask<()> + Send + Sync + 'static> =
-                            Box::new(move |txconn: Db| -> IpeTask<()> {
+        Box::new(move |conn: Db| -> IpeTask<()> {
+            db_with_transaction(conn.clone(), {
+                let __ipe_fn: Box<dyn Fn(Db) -> IpeTask<()> + Send + Sync + 'static> = Box::new(
+                    move |txconn: Db| -> IpeTask<()> {
+                        task_and_then(
+                            db_exec_raw(
+                                txconn.clone().clone(),
+                                "CREATE TABLE people (name TEXT, age INT)".to_string(),
+                            ),
+                            Box::new(move |_| {
                                 task_and_then(
-                                    db_exec_raw(
+                                    db_exec_params(
                                         txconn.clone().clone(),
-                                        "CREATE TABLE people (name TEXT, age INT)".to_string(),
+                                        "INSERT INTO people VALUES (?, ?)".to_string(),
+                                        (vec![
+                                            MainSqlValue::SqlString("Alice".to_string()),
+                                            MainSqlValue::SqlInt(30),
+                                        ])
+                                        .into_iter()
+                                        .map(::core::convert::Into::into)
+                                        .collect::<Vec<ipe_runtime::db::SqlParam>>(),
                                     ),
                                     Box::new(move |_| {
-                                        task_and_then(
-                                            db_exec_params(
-                                                txconn.clone().clone(),
-                                                "INSERT INTO people VALUES (?, ?)".to_string(),
-                                                (vec![
-                                                    MainSqlValue::SqlString("Alice".to_string()),
-                                                    MainSqlValue::SqlInt(30),
-                                                ])
-                                                .into_iter()
-                                                .map(::core::convert::Into::into)
-                                                .collect::<Vec<ipe_runtime::db::SqlParam>>(),
-                                            ),
-                                            Box::new(move |_| {
-                                                ({ let j1 = crate::main_report_json(crate::main_json_int_result("{\"name\":\"Bob\"}".to_string())); ({ let j2 = crate::main_report_json(crate::main_json_int_result("{\"name\":\"Cara\",\"age\":25}".to_string())); ({ let j3 = crate::main_report_json(crate::main_json_string_result("{\"name\":\"Dan\"}".to_string())); ({ let j4 = crate::main_report_json(crate::main_json_string_result("{\"name\":\"Eve\",\"nick\":\"E\"}".to_string())); task_and_then(db_query_decode_params(txconn.clone(), "SELECT name, age FROM people".to_string(), (Vec::<MainSqlValue>::new()).into_iter().map(::core::convert::Into::into).collect::<Vec<ipe_runtime::db::SqlParam>>(), crate::main_row_decoder()), { let __ipe_fn: Box<dyn Fn(Vec<String>) -> IpeTask<()> + Send + Sync + 'static> = Box::new(move |rows: Vec<String>| -> IpeTask<()> { io_println(string_join("\n".to_string(), vec![j1.clone(), j2.clone(), j3.clone(), j4.clone(), string_join(",".to_string(), rows)])) }); __ipe_fn }) }) }) }) })
-                                            }),
-                                        )
+                                        ({
+                                            let j1 = crate::main_report_json(
+                                                crate::main_json_int_result(
+                                                    "{\"name\":\"Bob\"}"
+                                                        .to_string(),
+                                                ),
+                                            );
+                                            ({
+                                                let j2 = crate::main_report_json(
+                                                    crate::main_json_int_result(
+                                                        "{\"name\":\"Cara\",\"age\":25}"
+                                                            .to_string(),
+                                                    ),
+                                                );
+                                                ({
+                                                    let j3 = crate::main_report_json(
+                                                        crate::main_json_string_result(
+                                                            "{\"name\":\"Dan\"}"
+                                                                .to_string(),
+                                                        ),
+                                                    );
+                                                    ({
+                                                        let j4 = crate::main_report_json(
+                                                            crate::main_json_string_result(
+                                                                "{\"name\":\"Eve\",\"nick\":\"E\"}"
+                                                                    .to_string(),
+                                                            ),
+                                                        );
+                                                        task_and_then(
+                                                            db_query_decode_params(txconn.clone(), "SELECT name, age FROM people".to_string(), (Vec::<MainSqlValue>::new()).into_iter().map(::core::convert::Into::into).collect::<Vec<ipe_runtime::db::SqlParam>>(), crate::main_row_decoder()),
+                                                            Box::new(move |rows: Vec<String>| -> IpeTask<()> {
+                                                                io_println(string_join(
+                                                                    "\n".to_string(),
+                                                                    vec![
+                                                                        j1.clone(),
+                                                                        j2.clone(),
+                                                                        j3.clone(),
+                                                                        j4.clone(),
+                                                                        string_join(
+                                                                            ",".to_string(),
+                                                                            rows,
+                                                                        ),
+                                                                    ],
+                                                                ))
+                                                            }),
+                                                        )
+                                                    })
+                                                })
+                                            })
+                                        })
                                     }),
                                 )
-                            });
-                        __ipe_fn
-                    })
-                },
-            );
-            __ipe_fn
-        },
+                            }),
+                        )
+                    },
+                );
+                __ipe_fn
+            })
+        }),
     )
 }
 
