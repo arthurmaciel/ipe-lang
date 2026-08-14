@@ -1,0 +1,27 @@
+module Main exposing (main)
+
+import Ipe.Io as Io
+import Ipe.String
+import Ipe.List as List
+
+
+-- A fn-typed binding rebound in an inner scope (shadowing) and then both MOVED
+-- (passed as the `List.map` argument, a consuming position) and CALLED
+-- afterwards (`g 42`). The call borrows (`Fn::call(&self, ..)`), but it reads
+-- `g` after the map already moved it — a use-after-move (E0382) on the default
+-- `Box<dyn Fn>` carrier. The move-then-use promotion flips `g` to the `Clone`
+-- `Arc<dyn Fn>` carrier so the map takes an `Arc::clone` and the later call
+-- reads the still-live value: `(42 + 1) + (2 + 3 + 4)` = `52`.
+main =
+    let
+        f n = n + 1
+        items = [1, 2, 3]
+        result =
+            let
+                g = f
+                mapped = List.map g items
+                applied = g 42
+            in
+                applied + List.sum mapped
+    in
+        Io.println (String.fromInt result)
