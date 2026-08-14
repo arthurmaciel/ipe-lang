@@ -1330,6 +1330,56 @@ fn is_retry_policy_record(interner: &Interner, ty: &Ty) -> bool {
         })
 }
 
+/// Build the concrete `IrType::Record` for `RetryPolicy e` with `e` fixed to
+/// `IrType::Error`.
+///
+/// `RetryPolicy e` is the kernel-managed record
+/// `{ baseMs : Int, jitter : Bool, kind : Int, maxAttempts : Int,
+///    shouldRetry : e -> Bool }`.
+/// The type parameter `e` is the error type; at the Ipê stdlib level it stays
+/// polymorphic, but at codegen the only ever-constructed value is
+/// `RetryPolicy Error` (all builders hardcode `IpeError` in their emitted Rust).
+/// Concretising `e` to `IrType::Error` here lets the struct be registered in the
+/// synthesis table so `record_struct_by_key` can find it for field-access and
+/// builder calls even when the solver left `e` as a free `Ty::Var`.
+///
+/// The `shouldRetry` field is a record-field function and is carried on the
+/// `Arc<dyn Fn>` carrier (`IrType::SharedFun`) — matching what
+/// `normalize_record_fun_carriers` would produce for a concretely-typed field.
+fn retry_policy_concrete_ir(interner: &Interner, ty: &Ty) -> Option<IrType> {
+    let Ty::Record(fields, RowTail::Closed) = ty else {
+        return None;
+    };
+    if !is_retry_policy_record(interner, ty) {
+        return None;
+    }
+    // Reuse the Symbol keys already present in the solved record so the IR field
+    // map uses the same interned symbols the type checker produced — symbol
+    // identity is the key used by `record_struct_by_key`.
+    let mut ir_fields = BTreeMap::new();
+    for (sym, field_ty) in fields {
+        let name = interner.resolve(*sym)?;
+        let ir = match name {
+            "baseMs" | "kind" | "maxAttempts" => IrType::Int,
+            "jitter" => IrType::Bool,
+            // `shouldRetry : e -> Bool` — fix `e` to `IrType::Error` and carry
+            // the field on the `Arc<dyn Fn>` carrier (record-field function
+            // carrier), matching what `normalize_record_fun_carriers` produces
+            // for a concrete arrow field.
+            "shouldRetry" => {
+                // Verify field_ty is a function shape (or a Ty::Var for `e` that
+                // the solver left unresolved). Either way the concrete carrier is
+                // `SharedFun([Error], Bool)` — the only runtime instantiation.
+                let _ = field_ty;
+                IrType::SharedFun(vec![IrType::Error], Box::new(IrType::Bool))
+            }
+            _ => return None,
+        };
+        ir_fields.insert(*sym, ir);
+    }
+    Some(IrType::Record(ir_fields))
+}
+
 fn embeds_nonderivable_function(interner: &Interner, ty: &Ty) -> bool {
     match ty {
         Ty::Var(_) | Ty::Unit => false,
@@ -11019,6 +11069,24 @@ impl<'a> Lowerer<'a> {
                 for field_ty in fields.values() {
                     self.collect_records_in_ty(field_ty, out, seen)?;
                 }
+                // `RetryPolicy e` is the one stdlib record whose type parameter
+                // `e` may remain a free `Ty::Var` (the solver leaves it
+                // unresolved when the error channel is not further constrained).
+                // The `!ty_contains_var` guard below would skip it, but the
+                // backend MUST have a registered struct to call
+                // `record_struct_by_key` — otherwise field access and retry
+                // builders ICE (IPE-I0001). Detect this exact shape first and
+                // register the concrete IR (with `e` fixed to `IrType::Error`,
+                // the only runtime instantiation) before falling through to the
+                // general guard. Scoped to the full 5-field closed shape — a
+                // user record that merely has a `shouldRetry` field is not this
+                // shape and is not registered here.
+                if let Some(rp_ir) = retry_policy_concrete_ir(self.interner, ty) {
+                    if seen.insert(rp_ir.clone()) {
+                        out.push(rp_ir);
+                    }
+                    return Ok(());
+                }
                 // Only a FULLY-CONCRETE record shape is surfaced here. A record
                 // carrying a type variable is a generic shape that necessarily
                 // appears in a (polymorphic) signature — the backend synthesises
@@ -11041,19 +11109,7 @@ impl<'a> Lowerer<'a> {
                     // consumed structurally by `emit_web_app_inner` (never
                     // materialised as a runtime value), so its IR struct is
                     // not needed.
-                    //
-                    // EXCEPTION — `RetryPolicy e`: this anonymous record (the exact
-                    // closed `{ baseMs, jitter, kind, maxAttempts, shouldRetry }`
-                    // shape) IS materialised as a runtime value passed to
-                    // `task_retry_with`.  Its Rust struct is emitted by
-                    // `emit_task_retry_call` and MUST be registered here despite
-                    // carrying a function-typed field.  The backend emits the struct
-                    // with `shouldRetry: Arc<dyn Fn(…) -> …>` (the `SharedFun`
-                    // carrier) and skips the `Clone` / `PartialEq` derives for that
-                    // field.  Matched on the full shape, never a lone `shouldRetry`
-                    // key, so a user fn-in-record never wrongly registers here.
-                    let is_retry_policy = is_retry_policy_record(self.interner, ty);
-                    if (!ir_contains_fun(&ir) || is_retry_policy) && seen.insert(ir.clone()) {
+                    if !ir_contains_fun(&ir) && seen.insert(ir.clone()) {
                         out.push(ir);
                     }
                 }
