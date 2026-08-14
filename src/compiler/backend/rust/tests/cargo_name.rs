@@ -23,13 +23,10 @@ fn io_bug(p: &Path, e: &std::io::Error) -> ipe_diagnostics::Diagnostic {
 
 fn resolve_runtime() -> Option<PathBuf> {
     let manifest = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-    let candidate = manifest
-        .ancestors()
-        .find_map(|a| {
-            let p = a.join("src/runtime/rust/src/ipe_runtime");
-            p.is_dir().then_some(p)
-        });
-    candidate
+    manifest.ancestors().find_map(|a| {
+        let p = a.join("src/runtime/rust/src/ipe_runtime");
+        p.is_dir().then_some(p)
+    })
 }
 
 fn copy_dir(src: &Path, dst: &Path) -> DResult<()> {
@@ -136,23 +133,25 @@ fn sanitized_name_project_cargo_builds() -> DResult<()> {
         // The `[package] name` in the emitted Cargo.toml must match the
         // sanitized form, not the raw ipe.toml value.
         assert!(
-            emitted.cargo_toml.contains(&format!("name = \"{expected_cargo_name}\"")),
+            emitted
+                .cargo_toml
+                .contains(&format!("name = \"{expected_cargo_name}\"")),
             "raw name {raw_name:?}: expected Cargo.toml to contain \
              `name = \"{expected_cargo_name}\"`, got:\n{}",
             emitted.cargo_toml,
         );
 
         // Full build gate: the renamed crate must cargo build without error.
-        let out = std::env::temp_dir()
-            .join(format!("ipe_cargo_name_seal_{expected_cargo_name}"));
+        let out = std::env::temp_dir().join(format!("ipe_cargo_name_seal_{expected_cargo_name}"));
         let _ = std::fs::remove_dir_all(&out);
         let src = out.join("src");
         std::fs::create_dir_all(&src).map_err(|e| io_bug(&src, &e))?;
 
-        let runtime = resolve_runtime().ok_or_else(|| ipe_diagnostics::Diagnostic::CompilerBug {
-            where_: "cargo_name seal",
-            detail: "could not locate the ipe_runtime tree".to_owned(),
-        })?;
+        let runtime =
+            resolve_runtime().ok_or_else(|| ipe_diagnostics::Diagnostic::CompilerBug {
+                where_: "cargo_name seal",
+                detail: "could not locate the ipe_runtime tree".to_owned(),
+            })?;
         copy_dir(&runtime, &src.join("ipe_runtime"))?;
 
         let cargo_toml_path = out.join("Cargo.toml");

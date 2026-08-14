@@ -3766,12 +3766,10 @@ pub(crate) fn run_run(rest: &[String]) -> Result<(), CliError> {
     // (`cargo metadata`) — a `CARGO_TARGET_DIR` env or a user-level
     // `[build] target-dir` pin relocates the artifact, so a hardcoded
     // `<out>/target` would exec a missing or stale binary.
-    let bin_name = manifest_parsed
-        .as_ref()
-        .map_or_else(
-            || "ipe-app".to_owned(),
-            |m| ipe_backend_rust::sanitize_cargo_name(&m.name),
-        );
+    let bin_name = manifest_parsed.as_ref().map_or_else(
+        || "ipe-app".to_owned(),
+        |m| ipe_backend_rust::sanitize_cargo_name(&m.name),
+    );
     let mut bin = cargo_target_directory(&out_dir)?;
     if let Some(plan) = &static_plan {
         bin.push(plan.triple.as_str());

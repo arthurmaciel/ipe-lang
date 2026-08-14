@@ -220,12 +220,11 @@ pub struct RustBackend<'a> {
 #[must_use]
 pub fn sanitize_cargo_name(name: &str) -> String {
     const RESERVED: &[&str] = &[
-        "abstract", "as", "async", "await", "become", "box", "break", "const", "continue",
-        "crate", "do", "dyn", "else", "enum", "extern", "false", "final", "fn", "for", "if",
-        "impl", "in", "let", "loop", "macro", "match", "mod", "move", "mut", "override",
-        "priv", "pub", "ref", "return", "self", "Self", "static", "struct", "super", "trait",
-        "true", "try", "type", "typeof", "union", "unsafe", "unsized", "use", "virtual",
-        "where", "while", "yield",
+        "abstract", "as", "async", "await", "become", "box", "break", "const", "continue", "crate",
+        "do", "dyn", "else", "enum", "extern", "false", "final", "fn", "for", "if", "impl", "in",
+        "let", "loop", "macro", "match", "mod", "move", "mut", "override", "priv", "pub", "ref",
+        "return", "self", "Self", "static", "struct", "super", "trait", "true", "try", "type",
+        "typeof", "union", "unsafe", "unsized", "use", "virtual", "where", "while", "yield",
         // Toolchain binary name.
         "ipe",
     ];
@@ -4230,7 +4229,11 @@ mod sanitize_cargo_name_tests {
     fn long_name_is_truncated_to_64_chars() {
         let long = "a".repeat(100);
         let result = sanitize_cargo_name(&long);
-        assert!(result.len() <= 64, "name must be at most 64 chars, got {}", result.len());
+        assert!(
+            result.len() <= 64,
+            "name must be at most 64 chars, got {}",
+            result.len()
+        );
     }
 
     #[test]
@@ -4238,7 +4241,10 @@ mod sanitize_cargo_name_tests {
         // 63 'a's then a unicode char that becomes a hyphen at position 64
         let input = format!("{}é", "a".repeat(63));
         let result = sanitize_cargo_name(&input);
-        assert!(!result.ends_with('-'), "truncated name must not end with hyphen");
+        assert!(
+            !result.ends_with('-'),
+            "truncated name must not end with hyphen"
+        );
         assert!(result.len() <= 64);
     }
 
