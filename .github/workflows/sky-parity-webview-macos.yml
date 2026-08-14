@@ -1,0 +1,238 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# Sky-vs-Ipê visual parity — native webview examples on macOS.
+#
+# WHY macOS only: Sky's webview is gated `cgo && darwin`; on Linux and Windows
+# it falls through to a stub that opens no window and exits immediately.  Ipê's
+# webview (wry/tao, WKWebView on macOS) works on all three platforms but a true
+# Sky-vs-Ipê visual comparison requires the Sky side to open a real window, so
+# macOS is the only viable platform for this job.
+#
+# Scope: the two Sky-mirrored webview examples:
+#   29-webview-threejs-spike  — Three.js WebGL2 scene via Ipê.Tea.WebView
+#   31-webview-stopwatch-ui   — TEA stopwatch via Ipê.Tea.WebView
+#
+# Both engines are WKWebView on the same macOS image, so same-engine thresholds
+# apply (modest RMS budget for antialiasing noise only):
+#   31-webview-stopwatch-ui   threshold 8.0  (static first frame at 00:00.0)
+#   29-webview-threejs-spike  threshold 15.0 (WebGL canvas frame timing varies)
+#
+# TCC screen-recording grant:
+#   GitHub-hosted macOS runners have no pre-authorized screen-recording
+#   permission.  This job writes a grant directly into the user TCC database
+#   (~/Library/Application Support/com.apple.TCC/TCC.db) before any capture
+#   step, authorizing /usr/sbin/screencapture (client_type=0, auth_value=2).
+#   The runner has passwordless sudo, but the system TCC DB is SIP-protected;
+#   the user DB is writable without sudo.
+#
+# Window-only capture:
+#   Each webview binary is launched, then a Python+Quartz CGWindowListCopy-
+#   WindowInfo snippet locates its CGWindowID and passes it to
+#   screencapture -l <id> -o <out>.png (no drop shadow, window bounds only).
+#   Fallback: full-screen capture if the window is not found.
+#
+# This is NOT a required PR gate.  Continue-on-error is set so a regression
+# here does not block merges.
+# ─────────────────────────────────────────────────────────────────────────────
+name: sky webview visual parity (macOS)
+
+on:
+  schedule:
+    - cron: '23 7 * * *'    # nightly at 07:23 UTC (offset from other nightly jobs)
+  workflow_dispatch: {}
+  push:
+    branches:
+      - 'parity/webview-**'
+
+concurrency:
+  group: sky-webview-macos-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  webview-parity:
+    name: webview visual parity (macOS)
+    runs-on: macos-latest
+    # Non-gating: visual data collection and regression tracking.
+    continue-on-error: true
+
+    env:
+      CARGO_TARGET_DIR: ${{ github.workspace }}/.cache/ipe-target
+      IPE_NO_SCCACHE: '1'
+      IPE_SWEEP_BUILD_TIMEOUT: '300'
+      CARGO_HTTP_MULTIPLEXING: 'false'
+      CARGO_NET_RETRY: '5'
+      CAPTURE_OUT: /tmp/ipe-webview-capture
+      PARITY_OUT: /tmp/ipe-webview-parity
+      # Seconds to wait after launching a webview app before screencapture.
+      # WKWebView renders synchronously from the event loop; 5 s is sufficient
+      # for first paint on both the Three.js scene and the stopwatch UI.
+      WEBVIEW_SETTLE_SECS: '5'
+      # Non-blank thresholds applied before the RMS diff.
+      CAPTURE_MIN_BYTES: '20000'
+      CAPTURE_MIN_STDDEV: '5.0'
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo target
+        uses: actions/cache@v6
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            ${{ github.workspace }}/.cache/ipe-target
+          key: webview-macos-cargo-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            webview-macos-cargo-
+
+      - name: Build ipe
+        run: |
+          export CARGO_TARGET_DIR="${{ github.workspace }}/.cache/ipe-target"
+          cargo build --release -p ipe
+
+      # sky build shells out to `go build` (CGO) — macOS runners do not expose a
+      # `go` on PATH for that spawn, so install one explicitly.
+      - uses: actions/setup-go@v5
+        with:
+          go-version: stable
+
+      - name: Install sky toolchain
+        run: |
+          mkdir -p ~/.local/bin
+          bash tools/scripts/install-sky-toolchain.sh
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+
+      - name: Verify sky binary
+        run: sky --version
+
+      - name: Install coreutils (GNU timeout)
+        run: |
+          # macOS ships no GNU `timeout`; coreutils' gnubin provides it unprefixed.
+          brew install coreutils
+          echo "$(brew --prefix)/opt/coreutils/libexec/gnubin" >> "$GITHUB_PATH"
+
+      - name: Prepare output directories
+        run: |
+          mkdir -p "$CAPTURE_OUT" "$PARITY_OUT"
+
+      # ── TCC screen-recording grant ────────────────────────────────────────
+      #
+      # The macOS TCC subsystem gates screencapture on kTCCServiceScreenCapture.
+      # GitHub-hosted runners do not pre-authorize this, so the first capture
+      # attempt triggers a consent dialog that overlays the screen and makes
+      # captures nondeterministic.
+      #
+      # We insert a permanent allow grant directly into the user TCC database
+      # (not the system DB — that is SIP-protected) for /usr/sbin/screencapture.
+      # The user DB is writable by the runner account without sudo.
+      #
+      # Schema (macOS 14 Sonoma, 17-column access table):
+      #   service, client, client_type (0=path), auth_value (2=allow),
+      #   auth_reason (4=user grant), auth_version, csreq, policy_id,
+      #   indirect_object_identifier_type, indirect_object_identifier,
+      #   indirect_object_code_identity, flags, last_modified,
+      #   pid, pid_version, boot_uuid, last_reminded
+      #
+      # After the INSERT we re-open screencapture's entitlement by killing and
+      # restarting tccd so the running daemon picks up the new row.
+      - name: Grant screen-recording permission (TCC)
+        run: |
+          TCC_DB="$HOME/Library/Application Support/com.apple.TCC/TCC.db"
+
+          # Confirm the DB exists and is reachable.
+          if [ ! -f "${TCC_DB}" ]; then
+            echo "TCC user DB not found at '${TCC_DB}'" >&2
+            echo "Listing parent dir for debugging:" >&2
+            ls -la "$HOME/Library/Application Support/com.apple.TCC/" 2>&1 || true
+            exit 1
+          fi
+
+          # Print current schema to the log for diagnosis if the INSERT fails.
+          sqlite3 "${TCC_DB}" ".schema access" || true
+
+          # Insert allow grants for screencapture (path-based client, type=0).
+          # INSERT OR REPLACE ensures idempotency across reruns.
+          sqlite3 "${TCC_DB}" \
+            "INSERT OR REPLACE INTO access
+               (service, client, client_type, auth_value, auth_reason,
+                auth_version, csreq, policy_id,
+                indirect_object_identifier_type, indirect_object_identifier,
+                indirect_object_code_identity, flags, last_modified,
+                pid, pid_version, boot_uuid, last_reminded)
+             VALUES
+               ('kTCCServiceScreenCapture', '/usr/sbin/screencapture', 0, 2, 4,
+                1, NULL, NULL,
+                0, 'UNUSED',
+                NULL, 0, CAST(strftime('%s','now') AS INT),
+                NULL, NULL, 'UNUSED', 0);"
+
+          # Confirm the row landed.
+          sqlite3 "${TCC_DB}" \
+            "SELECT service,client,auth_value FROM access WHERE service='kTCCServiceScreenCapture';"
+
+          # Restart tccd so the live daemon sees the new grant.
+          # On GitHub-hosted runners passwordless sudo is available.
+          sudo pkill -HUP tccd 2>/dev/null || true
+          sleep 1
+
+          # Smoke-test: take a capture; if the dialog still appears it writes
+          # a warning to stderr but does NOT exit non-zero (screencapture -x
+          # always exits 0 on macOS even without TCC permission — the dialog
+          # fires asynchronously).  The non-blank check later confirms success.
+          screencapture -x /tmp/tcc-smoke.png 2>/dev/null || true
+          if [ -f /tmp/tcc-smoke.png ]; then
+            SIZE=$(wc -c < /tmp/tcc-smoke.png)
+            echo "TCC smoke capture: ${SIZE} bytes"
+          else
+            echo "TCC smoke capture: file missing (capture may require settle time)"
+          fi
+
+      # ── Parity check script ───────────────────────────────────────────────
+      #
+      # check-sky-parity-webview.sh builds both the Sky and Ipê versions of
+      # each example, captures a window-specific screenshot (CGWindowList lookup
+      # → screencapture -l <id>), and runs the RMS diff.
+      - name: Run webview visual parity check
+        run: |
+          export CARGO_TARGET_DIR="${{ github.workspace }}/.cache/ipe-target"
+          bash tools/scripts/check-sky-parity-webview.sh \
+            --ipe-bin "${{ github.workspace }}/.cache/ipe-target/release/ipe" \
+            --out-dir "$PARITY_OUT" \
+            --capture-out "$CAPTURE_OUT" \
+            --settle-secs "$WEBVIEW_SETTLE_SECS"
+        env:
+          IPE_RUNTIME_DIR: ${{ github.workspace }}/src/runtime/rust/src
+
+      # ── Upload artifacts ──────────────────────────────────────────────────
+
+      - name: Upload captures and diff logs
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: webview-parity-macos
+          path: |
+            /tmp/ipe-webview-capture/
+            /tmp/ipe-webview-parity/
+          retention-days: 14
+
+      - name: Job summary
+        if: always()
+        run: |
+          {
+            echo "## sky webview visual parity (macOS)"
+            echo ""
+            echo "Screenshots and diff logs: see the \`webview-parity-macos\` artifact."
+            echo ""
+            echo "| File | Size |"
+            echo "|------|------|"
+            {
+              find /tmp/ipe-webview-capture -maxdepth 1 -name "*.png" 2>/dev/null
+              find /tmp/ipe-webview-parity  -maxdepth 1 -name "*.log" 2>/dev/null
+            } | sort | while read -r f; do
+              echo "| $(basename "$f") | $(du -sh "$f" 2>/dev/null | cut -f1) |"
+            done
+          } >> "$GITHUB_STEP_SUMMARY" || true
