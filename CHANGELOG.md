@@ -10,6 +10,43 @@ Entries below the header are maintained by
 section is generated from Conventional Commit messages and prepended when the
 standing release pull request is merged.
 
+## [0.1.51](https://github.com/arthurmaciel/ipe-lang/compare/ipe-v0.1.50...ipe-v0.1.51) (2026-08-14)
+
+
+### Features
+
+* **cli,backend:** emit binary named from ipe.toml name field ([#974](https://github.com/arthurmaciel/ipe-lang/issues/974)) ([b468236](https://github.com/arthurmaciel/ipe-lang/commit/b4682362c05c6a555ffa9ff84af4420517aed765))
+* **examples:** sky behavior-parity harness — increment 1 ([#945](https://github.com/arthurmaciel/ipe-lang/issues/945)) ([e05df28](https://github.com/arthurmaciel/ipe-lang/commit/e05df28dfad56d3fbc92954cbe11cda7bf7e93ea))
+* **examples:** sky-ports offline gate + upstream-drift lock (part of the examples/sky parity harness) ([#936](https://github.com/arthurmaciel/ipe-lang/issues/936)) ([8eaa71b](https://github.com/arthurmaciel/ipe-lang/commit/8eaa71b9413ddb87a904e9a272faf8ad7d1f5b2f))
+* **parity:** generalize web visual-parity to all web ports + nightly CI ([#965](https://github.com/arthurmaciel/ipe-lang/issues/965)) ([d4a902f](https://github.com/arthurmaciel/ipe-lang/commit/d4a902fe46b651a17a75ebf70a9a5810fc496ff2))
+* **parity:** visual parity PoC — harness + PIL diff tool + design doc ([#964](https://github.com/arthurmaciel/ipe-lang/issues/964)) ([b82f6ad](https://github.com/arthurmaciel/ipe-lang/commit/b82f6adefcd21ca9e8cc2301329b2b0200651d54))
+* **runtime:** rename IPE_LIVE_* env vars to IPE_WEB_* with back-compat aliases ([#972](https://github.com/arthurmaciel/ipe-lang/issues/972)) ([75fa27b](https://github.com/arthurmaciel/ipe-lang/commit/75fa27bd80d00df9407c4a7fe2f06476545bcf7f))
+* **runtime:** unify web page shell — viewport meta + BASE_CSS on all render paths ([#970](https://github.com/arthurmaciel/ipe-lang/issues/970)) ([0737dfe](https://github.com/arthurmaciel/ipe-lang/commit/0737dfea233e5c7505562513248d31b25197c4fd))
+
+
+### Bug Fixes
+
+* **converter:** render sync effect-discard entry as effect-valued main ([#952](https://github.com/arthurmaciel/ipe-lang/issues/952)) ([3bb07f2](https://github.com/arthurmaciel/ipe-lang/commit/3bb07f2f9755b164ce6eb7020509a4a01e79301e)), closes [#947](https://github.com/arthurmaciel/ipe-lang/issues/947)
+* **examples:** commit missing ipe-edits + regenerate ipe/ ports (fixes [#957](https://github.com/arthurmaciel/ipe-lang/issues/957)) ([#958](https://github.com/arthurmaciel/ipe-lang/issues/958)) ([e4ac340](https://github.com/arthurmaciel/ipe-lang/commit/e4ac3404834c8e79873b63069e1b5a4f1befff94))
+* **examples:** flip 07-todo-cli + 34-multi-tier-console broken→green (IPE-L0141) ([#960](https://github.com/arthurmaciel/ipe-lang/issues/960)) ([ecd7e76](https://github.com/arthurmaciel/ipe-lang/commit/ecd7e763a8a68a8473f2745fb5c9850faff7bafb)), closes [#940](https://github.com/arthurmaciel/ipe-lang/issues/940)
+* **examples:** flip 25-sky-console broken→green (IPE-T0020) ([#959](https://github.com/arthurmaciel/ipe-lang/issues/959)) ([73d1459](https://github.com/arthurmaciel/ipe-lang/commit/73d1459fdf159477fecdb9ee0ecfa82f5f97b2b8)), closes [#942](https://github.com/arthurmaciel/ipe-lang/issues/942)
+* **examples:** migrate 00-standard-libs off removed Task.perform (Fixes [#941](https://github.com/arthurmaciel/ipe-lang/issues/941)) ([#962](https://github.com/arthurmaciel/ipe-lang/issues/962)) ([5494644](https://github.com/arthurmaciel/ipe-lang/commit/54946448ec3b163b627e1ef40d4672995c72e99e))
+* **examples:** port 36-composite-server from broken to green ([#956](https://github.com/arthurmaciel/ipe-lang/issues/956)) ([17882c6](https://github.com/arthurmaciel/ipe-lang/commit/17882c6eb718f6d8664de6f8b15710ab39b32cb1)), closes [#943](https://github.com/arthurmaciel/ipe-lang/issues/943)
+* **examples:** port simple from broken to green — replace Task.perform with do/&lt;- ([#955](https://github.com/arthurmaciel/ipe-lang/issues/955)) ([7b4609f](https://github.com/arthurmaciel/ipe-lang/commit/7b4609f2aa4f23a64e0d43cab7401c355450855a)), closes [#938](https://github.com/arthurmaciel/ipe-lang/issues/938)
+* **examples:** route ported Db.unsafe* calls to Ipe.Db.Unsafe ([#939](https://github.com/arthurmaciel/ipe-lang/issues/939)) ([#954](https://github.com/arthurmaciel/ipe-lang/issues/954)) ([ebf3658](https://github.com/arthurmaciel/ipe-lang/commit/ebf3658eb06d2125edfee29b1acc07cb2067e2e4))
+* **examples:** sky-parity builds+runs the emitted binary in an isolated copy ([#948](https://github.com/arthurmaciel/ipe-lang/issues/948)) ([90d2fa6](https://github.com/arthurmaciel/ipe-lang/commit/90d2fa65fa38b86ee25d157f3d9281edcedbf40e))
+* **lower:** Arc-promote a fn value moved then called (SEAL) ([#981](https://github.com/arthurmaciel/ipe-lang/issues/981)) ([#983](https://github.com/arthurmaciel/ipe-lang/issues/983)) ([5e57afb](https://github.com/arthurmaciel/ipe-lang/commit/5e57afb1349f5a8afce98c89e387f9849ba255bd))
+* **lower:** raise IPE-L0141 for Task-typed bare-run in sync do block ([#950](https://github.com/arthurmaciel/ipe-lang/issues/950)) ([#973](https://github.com/arthurmaciel/ipe-lang/issues/973)) ([779eccb](https://github.com/arthurmaciel/ipe-lang/commit/779eccbfe5707fe3e751bbef1401bc9626c8fb6f))
+* **lower:** register RetryPolicy concrete IR before ty_contains_var guard ([#978](https://github.com/arthurmaciel/ipe-lang/issues/978)) ([4e0c2d8](https://github.com/arthurmaciel/ipe-lang/commit/4e0c2d87b3191aa9db525ae201207f3dd6661d1f))
+* **runtime:** explicit sorted-key canonical JSON for signed JWT/Auth payloads ([#951](https://github.com/arthurmaciel/ipe-lang/issues/951)) ([0150454](https://github.com/arthurmaciel/ipe-lang/commit/0150454ee0e60bc0dc67ddb7132d72fd3f4e482d))
+* **runtime:** preserve Json.Encode.object key order ([#949](https://github.com/arthurmaciel/ipe-lang/issues/949)) ([9ff34b4](https://github.com/arthurmaciel/ipe-lang/commit/9ff34b4b14104c99ec694a52bfda68d9b3080678))
+
+
+### Performance Improvements
+
+* **emit:** emit Task.andThen continuations as Box::new(closure) without __ipe_fn annotation ([#985](https://github.com/arthurmaciel/ipe-lang/issues/985)) ([3fdae80](https://github.com/arthurmaciel/ipe-lang/commit/3fdae80b39fe368bc0e6e0f95ec37c3dbf7514b7))
+* **lower:** O(n²)→O(n) let-chain analysis via threaded LetAccum ([#980](https://github.com/arthurmaciel/ipe-lang/issues/980)) ([ee5b902](https://github.com/arthurmaciel/ipe-lang/commit/ee5b9028a17408c21b26408086c2905acb8893f0)), closes [#921](https://github.com/arthurmaciel/ipe-lang/issues/921)
+
 ## [0.1.50](https://github.com/arthurmaciel/ipe-lang/compare/ipe-v0.1.49...ipe-v0.1.50) (2026-08-13)
 
 
