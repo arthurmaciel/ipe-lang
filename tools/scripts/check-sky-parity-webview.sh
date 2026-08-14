@@ -7,13 +7,16 @@
 # This is a macOS-only harness: Sky's webview is gated `cgo && darwin`; on
 # other platforms Sky opens no window.  Both sides use WKWebView, so the
 # threshold can be kept tight (same engine, same OS, minor AA noise only).
+# The captures are cropped to their common top-left region before the diff, so
+# a difference in native-window height (frame vs content sizing) does not
+# squash the taller image out of alignment.
 #
 # Per-example thresholds:
 #   31-webview-stopwatch-ui  — static at 00:00.0 [paused]; threshold 8.0 RMS
 #   29-webview-threejs-spike — WebGL canvas timing varies; threshold 15.0 RMS
-#     (the full-frame threshold is intentionally modest: both sides are
-#     WKWebView on the same macOS image, but the 3-D canvas frame captured
-#     may differ by timing.  Tighten once a stable baseline is confirmed.)
+#     (the threshold is intentionally modest: both sides are WKWebView on the
+#     same macOS image, but the 3-D canvas frame captured may differ by
+#     timing.  Tighten once a stable baseline is confirmed.)
 #
 # Usage:
 #   check-sky-parity-webview.sh \
@@ -251,6 +254,25 @@ for entry in "${EXAMPLES[@]}"; do
     PASS=$(( PASS + 1 ))
     continue
   fi
+
+  # The two engines can size the native window differently (frame vs content
+  # height), leaving a strip of trailing background on the taller capture.
+  # Crop both to their common top-left region so the diff compares the shared
+  # visible area rather than resize-squashing the taller image out of alignment.
+  "${PY}" - "${IPE_PNG}" "${SKY_PNG}" <<'PYEOF'
+import sys
+from PIL import Image
+
+a_path, b_path = sys.argv[1], sys.argv[2]
+a = Image.open(a_path)
+b = Image.open(b_path)
+w = min(a.width, b.width)
+h = min(a.height, b.height)
+if a.size != (w, h):
+    a.crop((0, 0, w, h)).save(a_path)
+if b.size != (w, h):
+    b.crop((0, 0, w, h)).save(b_path)
+PYEOF
 
   # ── RMS diff ──────────────────────────────────────────────────────────────
   DIFF_LOG="${OUT_DIR}/diff-${slug}.log"
