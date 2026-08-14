@@ -69,27 +69,49 @@ const BARE: &str = "module Main exposing (main)\n\
     import Ipe.Io as Io\n\
     main = Io.println \"bare\"\n";
 
-/// `Cmd.publish` with NO Web/server/TEA-app kernel. `cmd_publish` lives in
-/// `web::pubsub`; the shape must pull in the `web` module (and, transitively,
-/// `tea`). Was E0425 `cmd_publish` before the fix.
+/// Minimal Web TEA app that fires `Cmd.publish` from `update`. `cmd_publish`
+/// lives in `web::pubsub`; the Web shape must append the `web` runtime module
+/// (and, transitively, `tea`). A missing append surfaces as E0425 `cmd_publish`
+/// at `cargo build`.
 const CMD_PUBLISH: &str = "module Main exposing (main)\n\
+    import Ipe.Tea.Web as Web\n\
     import Ipe.Tea.Web.Cmd as Cmd\n\
-    import Ipe.Io as Io\n\
-    import Ipe.PubSub as PubSub\n\
-    pubCmd : Cmd msg\n\
-    pubCmd = Cmd.publish (PubSub.topic \"topic\") \"hello\"\n\
-    main = Io.println \"cmdpublish\"\n";
-
-/// `Sub.subscribeTopic` with no Web kernel. `sub_subscribe_topic` lives in
-/// `web::pubsub`. Was E0425 `sub_subscribe_topic` before the fix.
-const SUB_SUBSCRIBE: &str = "module Main exposing (main)\n\
     import Ipe.Tea.Web.Sub as Sub\n\
-    import Ipe.Io as Io\n\
     import Ipe.PubSub as PubSub\n\
-    type Msg = Got String\n\
-    subFor : Sub Msg\n\
-    subFor = Sub.subscribeTopic (PubSub.topic \"topic\") Got\n\
-    main = Io.println \"subtopic\"\n";
+    import Ipe.Ui as Ui\n\
+    type Msg = Publish | Ignored\n\
+    type alias Model = {}\n\
+    topic = PubSub.topic \"seal-cmd\"\n\
+    init _req = ( {}, Cmd.none )\n\
+    update msg model = case msg of\n\
+    \x20   Publish -> ( model, Cmd.publish topic \"ping\" )\n\
+    \x20   Ignored -> ( model, Cmd.none )\n\
+    subscriptions _model = Sub.none\n\
+    view _model = Ui.html (Ui.layout [] (Ui.text \"ok\"))\n\
+    main = Web.app { init = init, update = update, view = view\n\
+    \x20            , subscriptions = subscriptions, routes = [], notFound = Ignored }\n";
+
+/// Minimal Web TEA app that registers `Sub.subscribeTopic` in `subscriptions`.
+/// `sub_subscribe_topic` lives in `web::pubsub`; the Web shape must append the
+/// `web` runtime module. A missing append surfaces as E0425 `sub_subscribe_topic`
+/// at `cargo build`.
+const SUB_SUBSCRIBE: &str = "module Main exposing (main)\n\
+    import Ipe.Tea.Web as Web\n\
+    import Ipe.Tea.Web.Cmd as Cmd\n\
+    import Ipe.Tea.Web.Sub as Sub\n\
+    import Ipe.PubSub as PubSub\n\
+    import Ipe.Ui as Ui\n\
+    type Msg = Got String | Ignored\n\
+    type alias Model = {}\n\
+    topic = PubSub.topic \"seal-sub\"\n\
+    init _req = ( {}, Cmd.none )\n\
+    update msg model = case msg of\n\
+    \x20   Got _ -> ( model, Cmd.none )\n\
+    \x20   Ignored -> ( model, Cmd.none )\n\
+    subscriptions _model = Sub.subscribeTopic topic Got\n\
+    view _model = Ui.html (Ui.layout [] (Ui.text \"ok\"))\n\
+    main = Web.app { init = init, update = update, view = view\n\
+    \x20            , subscriptions = subscriptions, routes = [], notFound = Ignored }\n";
 
 /// `Html.renderStatic` from a CLI `main` (web WITHOUT any TEA/server kernel).
 /// The `web` module's `use crate::tea::{IpeCmd, IpeSub}` is unconditional, so
@@ -130,9 +152,6 @@ fn bare_shape_builds() {
 }
 
 #[test]
-#[ignore = "the plain-Program-references-a-Cmd scenario is no longer expressible: \
-            a real Cmd module is a Tea shape, so a plain `main` importing it is \
-            rejected as a shape/Program mismatch — pending a minimal Web-app rewrite"]
 fn cmd_publish_no_live_builds() {
     if skip() {
         return;
@@ -142,9 +161,6 @@ fn cmd_publish_no_live_builds() {
 }
 
 #[test]
-#[ignore = "the plain-Program-references-a-Sub scenario is no longer expressible: \
-            a real Sub module is a Tea shape, so a plain `main` importing it is \
-            rejected as a shape/Program mismatch — pending a minimal Web-app rewrite"]
 fn sub_subscribe_topic_no_live_builds() {
     if skip() {
         return;
