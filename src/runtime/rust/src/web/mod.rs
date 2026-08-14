@@ -1483,14 +1483,10 @@ fn is_browser_noise_path(p: &str) -> bool {
 /// as `Err` → `None` → 404.
 async fn serve_noise_from_static_root(path: &str) -> Option<axum::response::Response> {
     use axum::response::IntoResponse;
-    // Three-level fallback: IPE_WEB_STATIC_DIR → IPE_LIVE_STATIC_DIR (deprecated) → STATIC_DIR.
-    let dir = crate::system::read_env_var_renamed_with_fallback(
-        "IPE_WEB_STATIC_DIR",
-        "IPE_LIVE_STATIC_DIR",
-        "STATIC_DIR",
-    )
-    .ok()
-    .filter(|d| !d.is_empty())?;
+    // IPE_WEB_STATIC_DIR (deprecated alias: IPE_LIVE_STATIC_DIR).
+    let dir = crate::system::read_env_var_renamed("IPE_WEB_STATIC_DIR", "IPE_LIVE_STATIC_DIR")
+        .ok()
+        .filter(|d| !d.is_empty())?;
     let rel = path.trim_start_matches('/');
     if rel.is_empty()
         || rel
@@ -2192,14 +2188,10 @@ where
         // http.FileServer it FOLLOWS symlinks inside the dir — the dir is
         // author-controlled (ipe.toml [web] static), so that is the intended
         // contract, NOT a confinement guarantee. Absent/empty → no static mount.
-        // Fallback chain: IPE_WEB_STATIC_DIR → IPE_LIVE_STATIC_DIR (deprecated) → STATIC_DIR.
-        if let Some(dir) = crate::system::read_env_var_renamed_with_fallback(
-            "IPE_WEB_STATIC_DIR",
-            "IPE_LIVE_STATIC_DIR",
-            "STATIC_DIR",
-        )
-        .ok()
-        .filter(|d| !d.is_empty())
+        // IPE_WEB_STATIC_DIR (deprecated alias: IPE_LIVE_STATIC_DIR).
+        if let Some(dir) = crate::system::read_env_var_renamed("IPE_WEB_STATIC_DIR", "IPE_LIVE_STATIC_DIR")
+            .ok()
+            .filter(|d| !d.is_empty())
         {
             router = router.nest_service("/static", tower_http::services::ServeDir::new(dir));
         }
