@@ -6130,6 +6130,180 @@ fn count_fn_value_uses_apply(sym: Symbol, func: &Expr, args: &[Expr]) -> usize {
             .sum::<usize>()
 }
 
+/// Evaluation-order state for [`fn_value_use_after_consume`]: whether `sym` has
+/// already been MOVED by a position evaluated so far, and whether a later read
+/// of `sym` was reached while it was already moved.
+#[derive(Clone, Copy, Default)]
+struct FnValueMoveState {
+    consumed: bool,
+    hazard: bool,
+}
+
+impl FnValueMoveState {
+    /// A read of `sym` at the current point. A read while already `consumed` is
+    /// a use-after-move (E0382) regardless of whether the read itself is a
+    /// borrowing call (`Fn::call(&self, ..)`) or a further move — the value is
+    /// already gone. `moves` marks a consuming (moving) position, which arms the
+    /// hazard for every subsequent read.
+    const fn read(&mut self, moves: bool) {
+        if self.consumed {
+            self.hazard = true;
+        }
+        if moves {
+            self.consumed = true;
+        }
+    }
+}
+
+/// Does a use of the fn-value binding `sym` occur, in evaluation order, AFTER
+/// `sym` has been MOVED by an earlier consuming position of `expr`?
+///
+/// [`count_fn_value_uses`] exempts a direct-callee `Apply` position because a
+/// `Box<dyn Fn>` call borrows (`Fn::call(&self, ..)`) rather than moves — sound
+/// in isolation. That exemption is invalid once an EARLIER position has already
+/// moved the value: the borrowing call then reads a moved value (E0382). This
+/// walk models the emitted left-to-right evaluation to catch a move-then-use of
+/// a bare-`Box`-carried fn binding — exactly the reads the `Arc` carrier
+/// promotion must serve. A conservative branch merge (any branch's move marks
+/// the post-branch state consumed) fails toward promotion, which is always
+/// sound.
+fn fn_value_use_after_consume(sym: Symbol, expr: &Expr) -> bool {
+    let mut state = FnValueMoveState::default();
+    fn_value_move_walk(sym, expr, &mut state);
+    state.hazard
+}
+
+/// Walk `expr` in emitted evaluation order, threading [`FnValueMoveState`].
+/// A read of `sym` in a consuming (moving) position sets `consumed`; a direct
+/// `Apply` callee position is a borrowing read (does not consume). Branch
+/// alternatives (`If`/`Match`) each continue from the pre-branch state; their
+/// hazards OR and their moves OR into the post-branch `consumed`.
+#[allow(clippy::too_many_lines)]
+fn fn_value_move_walk(sym: Symbol, expr: &Expr, state: &mut FnValueMoveState) {
+    match expr {
+        Expr::Var(s) | Expr::CloneVar(s) => {
+            if *s == sym {
+                state.read(true);
+            }
+        }
+        // A lambda captures `sym` by move at construction; the whole lambda is
+        // one consuming read of `sym` at this point.
+        Expr::Lambda { body, .. } | Expr::SharedLambda { body, .. } => {
+            if lambda_body_refs_sym(sym, body) {
+                state.read(true);
+            }
+        }
+        Expr::Apply { func, args } => {
+            match func.as_ref() {
+                // Direct callee: a borrowing read, not a move.
+                Expr::Var(s) | Expr::CloneVar(s) if *s == sym => state.read(false),
+                other => fn_value_move_walk(sym, other, state),
+            }
+            for a in args {
+                fn_value_move_walk(sym, a, state);
+            }
+        }
+        Expr::Call { args, .. } | Expr::Ctor { args, .. } | Expr::TailRecur { args } => {
+            for a in args {
+                fn_value_move_walk(sym, a, state);
+            }
+        }
+        Expr::Let { name, value, body } => {
+            fn_value_move_walk(sym, value, state);
+            if *name != sym {
+                fn_value_move_walk(sym, body, state);
+            }
+        }
+        Expr::Destructure {
+            binder,
+            value,
+            body,
+        } => {
+            fn_value_move_walk(sym, value, state);
+            if !pat_binds_symbol(binder, sym) {
+                fn_value_move_walk(sym, body, state);
+            }
+        }
+        Expr::If { cond, then_, else_ } => {
+            fn_value_move_walk(sym, cond, state);
+            *state = branch_merge(sym, *state, &[then_, else_]);
+        }
+        Expr::Match(m) => {
+            fn_value_move_walk(sym, m.scrutinee(), state);
+            let bodies: Vec<&Expr> = m
+                .arms()
+                .iter()
+                .filter(|arm| !pat_binds_symbol(&arm.pat, sym))
+                .map(|arm| &arm.body)
+                .collect();
+            *state = branch_merge(sym, *state, &bodies);
+        }
+        Expr::BinOp { lhs, rhs, .. } => {
+            fn_value_move_walk(sym, lhs, state);
+            fn_value_move_walk(sym, rhs, state);
+        }
+        Expr::Tuple(items) | Expr::List { items, .. } => {
+            for e in items {
+                fn_value_move_walk(sym, e, state);
+            }
+        }
+        Expr::Cons { head, tail } => {
+            fn_value_move_walk(sym, head, state);
+            fn_value_move_walk(sym, tail, state);
+        }
+        Expr::ListIndexClone { list, .. } | Expr::ListLenCheck { list, .. } => {
+            fn_value_move_walk(sym, list, state);
+        }
+        Expr::Record { fields, .. } => {
+            for (_, e) in fields {
+                fn_value_move_walk(sym, e, state);
+            }
+        }
+        Expr::Update { record, fields } => {
+            fn_value_move_walk(sym, record, state);
+            for (_, e) in fields {
+                fn_value_move_walk(sym, e, state);
+            }
+        }
+        Expr::TaskSeq { effect, rest } => {
+            fn_value_move_walk(sym, effect, state);
+            fn_value_move_walk(sym, rest, state);
+        }
+        Expr::TailLoop { params, body } => {
+            if !params.iter().any(|(s, _)| *s == sym) {
+                fn_value_move_walk(sym, body, state);
+            }
+        }
+        Expr::Access { record, .. } => {
+            fn_value_move_walk(sym, record, state);
+        }
+        Expr::Int(_)
+        | Expr::Bool(_)
+        | Expr::Float(_)
+        | Expr::Str(_)
+        | Expr::PathLit(_)
+        | Expr::Char(_)
+        | Expr::Unit
+        | Expr::FuncValue { .. } => {}
+    }
+}
+
+/// Merge the move-state across the alternative `branches` of an `If`/`Match`.
+/// Each branch continues independently from the shared `pre` state; a branch
+/// hazard propagates (OR), and the post-branch `consumed` is the OR of the
+/// branches' moves (a value moved in ANY branch is treated as possibly-moved
+/// afterward — the conservative direction, which only ever promotes more).
+fn branch_merge(sym: Symbol, pre: FnValueMoveState, branches: &[&Expr]) -> FnValueMoveState {
+    let mut merged = pre;
+    for branch in branches {
+        let mut s = pre;
+        fn_value_move_walk(sym, branch, &mut s);
+        merged.hazard |= s.hazard;
+        merged.consumed |= s.consumed;
+    }
+    merged
+}
+
 /// T4: fail closed with [`Feature::FunctionValueReuse`] (IPE-L0127) if
 /// `sym` — a binding whose IR type embeds a function ([`ir_contains_fun`])
 /// and does not derive `Clone` ([`CloneClass::NonClone`]) — is CONSUMED more
@@ -21042,14 +21216,25 @@ impl<'a> Lowerer<'a> {
         // Use threaded counts from the accumulator when available (O(1)),
         // falling back to fresh walks of `acc` (O(|acc|)) only when called
         // without a precomputed summary.
+        //
+        // A move-then-use of the bare `Box` carrier — a consuming read
+        // (a kernel/ctor argument, a list/record element, a capture) followed
+        // in evaluation order by ANY further read, including a borrowing
+        // direct-callee call — is the third unsound shape. It is invisible to
+        // `count_fn_value_uses` (which exempts the callee position) and to
+        // `non_callee_ge1` (the reuse can be two depth-0 reads), so it is
+        // detected order-aware here. Like `flows_into_sync_kernel_call` it is
+        // not additively threadable across `Let` siblings (a move in one
+        // binding and a use in the next cross the boundary), so it is a full
+        // walk on `acc` — reached only on the narrow fn-shaped path.
         let new_trigger = fun_shape.is_some()
-            && precomputed.map_or_else(
+            && (precomputed.map_or_else(
                 || {
                     fn_value_read_flags(name, &acc).non_callee_ge1
                         || count_fn_value_uses(name, &acc) > 1
                 },
                 |a| a.fn_flags.non_callee_ge1 || a.fn_value_uses > 1,
-            );
+            ) || fn_value_use_after_consume(name, &acc));
         let mut acc = match (&fun_shape, new_trigger) {
             (Some((ps, r)), true) => {
                 // `shim_fn_value_reads` rewrites non-callee Var(name) reads
