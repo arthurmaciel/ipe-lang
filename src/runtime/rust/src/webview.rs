@@ -87,6 +87,7 @@ mod imp {
     use crate::core::{IpeResult, ok_res};
     use crate::html::{assign_ipe_ids, render_html};
     use crate::web::dispatch::build_index;
+    use crate::web::page_shell;
 
     // Bridge JS: delegated event listeners on the document forward DOM events on
     // `[ipe-id]` elements to the IPC channel as `{ipeId, event, args}`. Re-bound
@@ -235,9 +236,8 @@ mod imp {
             let (mut model, _cmd0) = init(());
             warn_dropped_cmd_if_real(&_cmd0);
             let (body0, mut index) = render::<Model, Msg, _>(&view, &model);
-            let html = format!(
-                "<!doctype html><html><head><meta charset=\"utf-8\"></head><body>{body0}</body><script>{BRIDGE_JS}</script></html>"
-            );
+            let tail = format!("<script>{BRIDGE_JS}</script>");
+            let html = page_shell("", &body0, &tail);
 
             let proxy = event_loop.create_proxy();
             // Modern wry: `WebViewBuilder::new()` is no-arg; the window is supplied
