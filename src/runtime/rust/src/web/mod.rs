@@ -2189,9 +2189,10 @@ where
         // author-controlled (ipe.toml [web] static), so that is the intended
         // contract, NOT a confinement guarantee. Absent/empty → no static mount.
         // IPE_WEB_STATIC_DIR (deprecated alias: IPE_LIVE_STATIC_DIR).
-        if let Some(dir) = crate::system::read_env_var_renamed("IPE_WEB_STATIC_DIR", "IPE_LIVE_STATIC_DIR")
-            .ok()
-            .filter(|d| !d.is_empty())
+        if let Some(dir) =
+            crate::system::read_env_var_renamed("IPE_WEB_STATIC_DIR", "IPE_LIVE_STATIC_DIR")
+                .ok()
+                .filter(|d| !d.is_empty())
         {
             router = router.nest_service("/static", tower_http::services::ServeDir::new(dir));
         }
