@@ -209,12 +209,14 @@ pub struct RustBackend<'a> {
 /// 4. If the result starts with a digit, prepend `app-`.
 /// 5. If the result is empty (input was all-invalid chars, or was the empty
 ///    string), use the fallback `ipe-app`.
-/// 6. If the result is a [reserved Rust keyword][reserved] or the fixed name
-///    `ipe` (the toolchain binary), append `-app`.
+/// 6. If the result is a [reserved Rust keyword][reserved], the fixed name
+///    `ipe` (the toolchain binary), or a name Cargo forbids as a binary target
+///    (`build`, `deps`, `examples`, `incremental`), append `-app`.
 /// 7. Truncate to 64 characters (Cargo's practical limit).
 ///
 /// Examples: `"my-app"` → `"my-app"`, `"My App"` → `"my-app"`,
-/// `"1game"` → `"app-1game"`, `""` → `"ipe-app"`, `"mod"` → `"mod-app"`.
+/// `"1game"` → `"app-1game"`, `""` → `"ipe-app"`, `"mod"` → `"mod-app"`,
+/// `"build"` → `"build-app"`.
 ///
 /// [reserved]: https://doc.rust-lang.org/reference/keywords.html
 #[must_use]
@@ -228,6 +230,11 @@ pub fn sanitize_cargo_name(name: &str) -> String {
         // Toolchain binary name.
         "ipe",
     ];
+
+    // Names Cargo forbids as a binary target because they collide with its
+    // build-directory names — the emitted crate has no `[[bin]]` override, so
+    // the bin target is inferred from the package name and would fail to parse.
+    const CARGO_FORBIDDEN_BIN: &[&str] = &["build", "deps", "examples", "incremental"];
 
     // Step 1: lowercase.
     let lower = name.to_ascii_lowercase();
@@ -260,9 +267,10 @@ pub fn sanitize_cargo_name(name: &str) -> String {
         return "ipe-app".to_owned();
     }
 
-    // Step 6: reserved Rust keywords and the `ipe` toolchain name get
-    // `-app` appended to avoid shadowing.
-    if RESERVED.contains(&result.as_str()) {
+    // Step 6: reserved Rust keywords, the `ipe` toolchain name, and Cargo's
+    // forbidden binary-target names get `-app` appended to keep the emitted
+    // crate buildable.
+    if RESERVED.contains(&result.as_str()) || CARGO_FORBIDDEN_BIN.contains(&result.as_str()) {
         result.push_str("-app");
     }
 
@@ -4223,6 +4231,16 @@ mod sanitize_cargo_name_tests {
         assert_eq!(sanitize_cargo_name("mod"), "mod-app");
         assert_eq!(sanitize_cargo_name("fn"), "fn-app");
         assert_eq!(sanitize_cargo_name("ipe"), "ipe-app");
+    }
+
+    #[test]
+    fn cargo_forbidden_bin_name_gets_suffix() {
+        // These would be inferred as the emitted crate's binary target and
+        // collide with Cargo's build-directory names, failing manifest parse.
+        assert_eq!(sanitize_cargo_name("build"), "build-app");
+        assert_eq!(sanitize_cargo_name("deps"), "deps-app");
+        assert_eq!(sanitize_cargo_name("examples"), "examples-app");
+        assert_eq!(sanitize_cargo_name("incremental"), "incremental-app");
     }
 
     #[test]
