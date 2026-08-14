@@ -1,20 +1,20 @@
-//! Regression for the RetryPolicy struct-synthesis ICE (IPE-I0001).
+//! Regression for the `RetryPolicy` struct-synthesis ICE (IPE-I0001).
 //!
 //! Accessing a `RetryPolicy` field (`policy.maxAttempts`, `.kind`, `.jitter`,
 //! ...) or passing a predicate lambda to `retryOn` / `withRetryOn` triggered
 //! IPE-I0001 when the solver left the type parameter `e` of `RetryPolicy e` as
 //! a free `Ty::Var`.  The root cause: `collect_records_in_ty`'s
-//! `!ty_contains_var` guard skipped the RetryPolicy record entirely (because
+//! `!ty_contains_var` guard skipped the `RetryPolicy` record entirely (because
 //! `shouldRetry : e -> Bool` contains `e`), so no struct was registered in
 //! the synthesis table.  The backend's `record_struct_by_key` then could not
 //! find it and raised a `CompilerBug` ICE.
 //!
 //! Fix: before the `ty_contains_var` guard, detect the exact 5-field closed
-//! RetryPolicy shape and register its concrete IR with `e` fixed to
+//! `RetryPolicy` shape and register its concrete IR with `e` fixed to
 //! `IrType::Error` (the only runtime instantiation).  The struct is then
 //! found by all retry-kernel paths in `emit_task_retry_call`.
 //!
-//! Scoped to the builtin RetryPolicy: user records with a `shouldRetry` field
+//! Scoped to the builtin `RetryPolicy`: user records with a `shouldRetry` field
 //! do NOT match the 5-field closed shape and still fail closed with IPE-L0107.
 
 use std::path::{Path, PathBuf};
@@ -31,7 +31,10 @@ fn fixture(root: &Path) -> PathBuf {
 }
 
 fn fixture_named(root: &Path, name: &str) -> PathBuf {
-    root.join("tests").join("golden").join(name).join("Main.ipe")
+    root.join("tests")
+        .join("golden")
+        .join(name)
+        .join("Main.ipe")
 }
 
 fn built(root: &Path, out: &Path) -> Option<Result<(), CliError>> {
@@ -41,7 +44,7 @@ fn built(root: &Path, out: &Path) -> Option<Result<(), CliError>> {
 }
 
 /// The fix must not regress: a user record with a lone `shouldRetry` field is
-/// NOT the RetryPolicy shape and must still fail closed with IPE-L0107.
+/// NOT the `RetryPolicy` shape and must still fail closed with IPE-L0107.
 #[test]
 fn retry_policy_nearmiss_still_rejects() {
     let root = repo_root();
@@ -100,8 +103,7 @@ fn retry_policy_field_access_ice_builds_and_runs() {
         return;
     }
 
-    let outcome =
-        crate::support::build_and_run_emitted("retry_policy_field_access_ice", &out);
+    let outcome = crate::support::build_and_run_emitted("retry_policy_field_access_ice", &out);
     assert_eq!(
         outcome.exit_code,
         Some(0),
