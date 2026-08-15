@@ -64,6 +64,8 @@ mod golden_i858_update_base_nonclone_reuse_seal;
 mod golden_i963_retry_policy_field_access_ice;
 #[path = "g_issues/golden_i981_fn_value_move_then_call.rs"]
 mod golden_i981_fn_value_move_then_call;
+#[path = "g_issues/golden_i984_cons_fn_value_arc_carrier.rs"]
+mod golden_i984_cons_fn_value_arc_carrier;
 #[path = "g_issues/golden_i99_alias_match_arm.rs"]
 mod golden_i99_alias_match_arm;
 #[path = "g_issues/golden_l0135_access_base_move_seal.rs"]

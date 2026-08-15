@@ -1,0 +1,28 @@
+module Main exposing (main)
+
+import Ipe.Io as Io
+import Ipe.String
+import Ipe.List as List
+
+
+-- A fn-typed binding `g` is Arc-promoted (moved into `List.map`, then called),
+-- so its list-element carrier is flipped to `Arc<dyn Fn>` (`SharedFun`). CONSing
+-- `g` onto a list (`g :: []`) must emit the head fn-value on that same `Arc`
+-- carrier — the empty-tail turbofish is `Vec::<Arc<dyn Fn…>>::new()`, so a `Box`
+-- head would mismatch `ipe_list_cons<T>(x: T, xs: Vec<T>)` (E0308). Head,
+-- non-empty items, and empty-tail turbofish all agree on the `Arc` carrier.
+-- `(42 + 1) + (2 + 3 + 4) + 1` = `53`.
+main =
+    let
+        f n = n + 1
+        items = [1, 2, 3]
+        result =
+            let
+                g = f
+                mapped = List.map g items
+                gs = g :: []
+                applied = g 42
+            in
+                applied + List.sum mapped + List.length gs
+    in
+        Io.println (String.fromInt result)
