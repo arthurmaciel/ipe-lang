@@ -7428,9 +7428,10 @@ fn shim_fn_value_reads(
     param_tys: &[IrType],
     ret: &IrType,
     eta_pool: &[Symbol],
+    builtin_ctors: &[Symbol],
     expr: Expr,
 ) -> DResult<Expr> {
-    shim_fn_value_reads_at(sym, param_tys, ret, eta_pool, expr, false)
+    shim_fn_value_reads_at(sym, param_tys, ret, eta_pool, builtin_ctors, expr, false)
 }
 
 /// Worker for [`shim_fn_value_reads`], threading `in_storage`: `true` while the
@@ -7447,23 +7448,26 @@ fn shim_fn_value_reads_at(
     param_tys: &[IrType],
     ret: &IrType,
     eta_pool: &[Symbol],
+    builtin_ctors: &[Symbol],
     expr: Expr,
     in_storage: bool,
 ) -> DResult<Expr> {
     // Most positions are NOT storage-element positions: recursing through them
     // resets the flag. Only the storable-element arms below re-enter with it set.
-    let recurse = |e: Expr| shim_fn_value_reads_at(sym, param_tys, ret, eta_pool, e, false);
+    let recurse =
+        |e: Expr| shim_fn_value_reads_at(sym, param_tys, ret, eta_pool, builtin_ctors, e, false);
     let recurse_all = |items: Vec<Expr>| {
         items
             .into_iter()
-            .map(|e| shim_fn_value_reads_at(sym, param_tys, ret, eta_pool, e, false))
+            .map(|e| shim_fn_value_reads_at(sym, param_tys, ret, eta_pool, builtin_ctors, e, false))
             .collect::<DResult<Vec<Expr>>>()
     };
-    let recurse_storage = |e: Expr| shim_fn_value_reads_at(sym, param_tys, ret, eta_pool, e, true);
+    let recurse_storage =
+        |e: Expr| shim_fn_value_reads_at(sym, param_tys, ret, eta_pool, builtin_ctors, e, true);
     let recurse_all_storage = |items: Vec<Expr>| {
         items
             .into_iter()
-            .map(|e| shim_fn_value_reads_at(sym, param_tys, ret, eta_pool, e, true))
+            .map(|e| shim_fn_value_reads_at(sym, param_tys, ret, eta_pool, builtin_ctors, e, true))
             .collect::<DResult<Vec<Expr>>>()
     };
     match expr {
@@ -7584,12 +7588,14 @@ fn shim_fn_value_reads_at(
             })
         }
         Expr::Match(m) => Ok(Expr::Match(m.try_map_bodies(
-            |scrutinee| shim_fn_value_reads(sym, param_tys, ret, eta_pool, scrutinee),
+            |scrutinee| {
+                shim_fn_value_reads(sym, param_tys, ret, eta_pool, builtin_ctors, scrutinee)
+            },
             |pat, body, guard| {
                 let body = if pat_binds_symbol(pat, sym) {
                     body
                 } else {
-                    shim_fn_value_reads(sym, param_tys, ret, eta_pool, body)?
+                    shim_fn_value_reads(sym, param_tys, ret, eta_pool, builtin_ctors, body)?
                 };
                 Ok((body, guard))
             },
@@ -7612,19 +7618,30 @@ fn shim_fn_value_reads_at(
             then_: Box::new(recurse(*then_)?),
             else_: Box::new(recurse(*else_)?),
         }),
-        // A constructor payload is a storage-element position: a fn directly in
-        // the payload is carried on `Arc` (`SharedFun`) by the enum-payload flip.
+        // A USER-ADT constructor payload is a storage-element position: a fn
+        // directly in the payload is carried on `Arc` (`SharedFun`) by the
+        // enum-payload flip. A BUILT-IN `Maybe`/`Result` payload is NOT flipped —
+        // its runtime enum (`IpeMaybe`/`IpeResult`) consumes the fn payload as an
+        // owned `Box<dyn FnOnce>` — so it keeps the `Box` carrier, mirroring the
+        // value-side `is_builtin_runtime_ctor` gate.
         Expr::Ctor {
             home,
             ty,
             variant,
             args,
-        } => Ok(Expr::Ctor {
-            home,
-            ty,
-            variant,
-            args: recurse_all_storage(args)?,
-        }),
+        } => {
+            let args = if builtin_ctors.contains(&variant) {
+                recurse_all(args)?
+            } else {
+                recurse_all_storage(args)?
+            };
+            Ok(Expr::Ctor {
+                home,
+                ty,
+                variant,
+                args,
+            })
+        }
         // A `Tuple` component, a `List` element, and a `Cons` head/tail are all
         // storage-element positions: a fn read there is carried on `Arc`
         // (`SharedFun`), so recurse with the storage flag set.
@@ -13347,7 +13364,14 @@ impl<'a> Lowerer<'a> {
                 || count_fn_value_uses(sym, &body) > 1
                 || flows_into_sync_kernel_call(sym, &body)
             {
-                let shimmed = shim_fn_value_reads(sym, ps, r, &self.eta_params, body)?;
+                let shimmed = shim_fn_value_reads(
+                    sym,
+                    ps,
+                    r,
+                    &self.eta_params,
+                    &self.builtin_runtime_ctors(),
+                    body,
+                )?;
                 let mut remaining = count_var_uses(sym, &shimmed);
                 let disciplined = rewrite_multiuse_clones(sym, &mut remaining, shimmed);
                 let disciplined = force_shared_capture_clones(sym, disciplined);
@@ -19425,11 +19449,20 @@ impl<'a> Lowerer<'a> {
     /// whose fn payloads are consumed by the `andMap` / `map` kernels as an owned
     /// `FnOnce` (`Box`) and so stay on the `Box` carrier — the value-side carrier
     /// promotion for user-enum payloads must skip them.
+    /// The built-in `Maybe`/`Result` constructors, whose runtime enums consume a
+    /// fn payload as an owned `Box<dyn FnOnce>` — so a fn directly in their
+    /// payload keeps the `Box` carrier rather than the `Arc` storage-element flip.
+    const fn builtin_runtime_ctors(&self) -> [Symbol; 4] {
+        [
+            self.builtins.just,
+            self.builtins.nothing,
+            self.builtins.ok,
+            self.builtins.err,
+        ]
+    }
+
     fn is_builtin_runtime_ctor(&self, name: Symbol) -> bool {
-        name == self.builtins.just
-            || name == self.builtins.nothing
-            || name == self.builtins.ok
-            || name == self.builtins.err
+        self.builtin_runtime_ctors().contains(&name)
     }
 
     /// The declared payload arity of a constructor. Name resolution guarantees
@@ -21324,7 +21357,14 @@ impl<'a> Lowerer<'a> {
                 // into fresh closure shims.  The subsequent count is on the
                 // SHIMMED tree — not predictable from the pre-shim accum, so
                 // the full walk here is unavoidable.
-                let shimmed = shim_fn_value_reads(name, ps, r, &self.eta_params, acc)?;
+                let shimmed = shim_fn_value_reads(
+                    name,
+                    ps,
+                    r,
+                    &self.eta_params,
+                    &self.builtin_runtime_ctors(),
+                    acc,
+                )?;
                 let mut remaining = count_var_uses(name, &shimmed);
                 rewrite_multiuse_clones(name, &mut remaining, shimmed)
             }

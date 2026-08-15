@@ -17,6 +17,13 @@ use crate::support::repo_root;
 
 const NAME: &str = "i984_cons_fn_value_arc_carrier";
 
+/// A fn value directly in a built-in `Maybe`/`Result` payload keeps the `Box`
+/// carrier its runtime enum consumes — the storage-element `Arc` flip that
+/// covers user-ADT payloads must NOT reach it, or the same carrier mismatch
+/// re-opens in the opposite direction (a `Box`-consuming `ipe_maybe_map` fed an
+/// `Arc` shim).
+const NAME_MAYBE: &str = "i984_maybe_payload_box_carrier";
+
 fn entry_of(root: &Path, name: &str) -> PathBuf {
     root.join("tests")
         .join("golden")
@@ -115,4 +122,37 @@ fn cons_head_and_tail_share_the_arc_carrier() {
 #[test]
 fn cons_fn_value_end_to_end() {
     assert_e2e_prints(NAME, "53\n");
+}
+
+/// The `Just g` payload must ride the `Box` carrier `ipe_maybe_map` consumes —
+/// no `Arc` fn shim may sit in a built-in `Maybe`/`Result` payload position.
+fn assert_maybe_payload_box_carrier(name: &str) {
+    let root = repo_root();
+    let golden = root.join("tests").join("golden").join(name).join("main.rs");
+    let read = std::fs::read_to_string(&golden);
+    assert!(read.is_ok(), "golden main.rs readable: {:?}", read.err());
+    let Ok(src) = read else { return };
+    // The Arc-promoted binding is still emitted `Arc::new` at its own site, but
+    // its `Just` payload read must be the plain boxed `Box<dyn Fn…>` carrier the
+    // maybe-map kernel expects — the storage flip must not reach a built-in
+    // payload.
+    assert!(
+        src.contains("Box<dyn Fn(i64) -> i64"),
+        "the Maybe payload fn-value must ride the Box carrier"
+    );
+}
+
+#[test]
+fn maybe_payload_keeps_box_carrier() {
+    assert_maybe_payload_box_carrier(NAME_MAYBE);
+}
+
+#[test]
+fn maybe_payload_emits_byte_identical_main_rs() {
+    assert_byte_identical(NAME_MAYBE);
+}
+
+#[test]
+fn maybe_payload_end_to_end() {
+    assert_e2e_prints(NAME_MAYBE, "153\n");
 }

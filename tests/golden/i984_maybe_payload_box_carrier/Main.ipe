@@ -1,0 +1,28 @@
+module Main exposing (main)
+
+-- An Arc-promoted fn value placed DIRECTLY in a built-in `Maybe` payload must
+-- keep the `Box` carrier its runtime enum (`IpeMaybe`) consumes as an owned
+-- `FnOnce` — NOT the `Arc` storage-element flip a user-ADT payload gets. `g` is
+-- Arc-promoted (moved into `List.map`, then called), so the storage-aware
+-- fn-value shim fires; the `Just g` payload must nonetheless emit on `Box`, or
+-- `ipe_maybe_map` (which takes `Box<dyn FnOnce>`) fails to type-check.
+--
+-- `(42 + 1) + (2 + 3 + 4) + (100 + 1)` = `153`.
+
+import Ipe.Io as Io
+import Ipe.String
+import Ipe.List as List
+import Ipe.Maybe as Maybe
+
+
+main =
+    let
+        f n = n + 1
+        items = [1, 2, 3]
+        g = f
+        mapped = List.map g items
+        maybeG = Just g
+        got = Maybe.map (\fn -> fn 100) maybeG
+        applied = g 42
+    in
+        Io.println (String.fromInt (applied + List.sum mapped + Maybe.withDefault 0 got))
