@@ -1482,8 +1482,9 @@ def prefix_bare_imports(text: str, bare: frozenset[str]) -> str:
 
 
 # ── Unsafe modules whose import discloses the `unsafe` capability ─────────────
-# Any Ipê source file that imports one of these modules causes the whole program
-# to require `unsafe` in its manifest `[capabilities] declared` list. The set is
+# Any Ipê source file that imports one of these modules trips the build-time
+# `.Unsafe`-import acknowledgment (IPE-S0001); the durable, non-interactive
+# consent is `[capabilities] accept = ["unsafe"]`. The set is
 # checked AFTER the full per-file transform (when the imports are already in Ipê
 # form), so the strings here use the post-rename Ipê module paths.
 _UNSAFE_IMPORT_MODULES: frozenset[str] = frozenset({
@@ -1505,13 +1506,14 @@ def _needs_unsafe_capability(texts: list[str]) -> bool:
 
 
 def _inject_unsafe_capability(manifest_path: str) -> None:
-    """Add `unsafe` to the `[capabilities] declared` list in ipe.toml if absent.
+    """Add `unsafe` to the `[capabilities] accept` list in ipe.toml if absent.
 
     Reads the manifest, finds or creates the `[capabilities]` section, and
-    ensures `"unsafe"` is in the `declared` list. A manifest that already
-    declares `unsafe` is left byte-identical. Non-fatal: a missing or
-    unparseable manifest is silently skipped (the capability gate in `ipe check`
-    will surface the omission at build time).
+    ensures `"unsafe"` is in the `accept` list — the durable, reviewable consent
+    the build-time `.Unsafe`-import gate (IPE-S0001) requires for a
+    non-interactive build. A manifest that already accepts `unsafe` is left
+    byte-identical. Non-fatal: a missing or unparseable manifest is silently
+    skipped (the gate surfaces the omission at build time).
     """
     import os
     import re as _re
@@ -1523,42 +1525,42 @@ def _inject_unsafe_capability(manifest_path: str) -> None:
     except OSError:
         return
 
-    # Already declares unsafe — nothing to do.
+    # Already accepts unsafe — nothing to do.
     if '"unsafe"' in content or "'unsafe'" in content:
         return
 
-    # Find an existing `declared = [...]` line inside a `[capabilities]` section.
+    # Find an existing `accept = [...]` line inside a `[capabilities]` section.
     # We support single-line arrays only (the format used by the transform output
-    # and the fixture corpus). A multi-line array is left untouched; `ipe check`
-    # will surface the missing capability at build time.
+    # and the fixture corpus). A multi-line array is left untouched; the gate
+    # surfaces the missing consent at build time.
     cap_section = _re.search(r'^\[capabilities\]', content, flags=_re.MULTILINE)
-    declared_line = _re.search(
-        r'^(\s*declared\s*=\s*\[)([^\]]*?)(\])',
+    accept_line = _re.search(
+        r'^(\s*accept\s*=\s*\[)([^\]]*?)(\])',
         content,
         flags=_re.MULTILINE,
     )
 
-    if declared_line is not None:
-        # Append `"unsafe"` to the existing declared list.
-        before = content[: declared_line.start(2)]
-        inner = declared_line.group(2).strip()
-        after = content[declared_line.end(2) :]
+    if accept_line is not None:
+        # Append `"unsafe"` to the existing accept list.
+        before = content[: accept_line.start(2)]
+        inner = accept_line.group(2).strip()
+        after = content[accept_line.end(2) :]
         sep = ", " if inner else ""
         new_inner = f'{inner}{sep}"unsafe"'
         content = before + new_inner + after
     elif cap_section is not None:
-        # `[capabilities]` section exists but no `declared` line — add one.
+        # `[capabilities]` section exists but no `accept` line — add one.
         insert_at = cap_section.end()
         # Skip to end of the section header line.
         nl = content.find("\n", insert_at)
         if nl == -1:
             nl = len(content)
-        content = content[: nl + 1] + 'declared = ["unsafe"]\n' + content[nl + 1 :]
+        content = content[: nl + 1] + 'accept = ["unsafe"]\n' + content[nl + 1 :]
     else:
         # No `[capabilities]` section at all — append one.
         if not content.endswith("\n"):
             content += "\n"
-        content += '\n[capabilities]\ndeclared = ["unsafe"]\n'
+        content += '\n[capabilities]\naccept = ["unsafe"]\n'
 
     try:
         with open(manifest_path, "w", encoding="utf-8") as fh:
@@ -1663,7 +1665,8 @@ def main(argv: list[str]) -> int:
 
     # Phase 3 — manifest unsafe-capability injection. When any source file now
     # imports an unsafe-disclosing module, add `"unsafe"` to the manifest's
-    # `[capabilities] declared` list so `ipe check` can gate on it.
+    # `[capabilities] accept` list — the durable consent the build-time
+    # `.Unsafe`-import gate (IPE-S0001) requires for a non-interactive build.
     if manifest is not None and _needs_unsafe_capability(list(transformed.values())):
         _inject_unsafe_capability(manifest)
 

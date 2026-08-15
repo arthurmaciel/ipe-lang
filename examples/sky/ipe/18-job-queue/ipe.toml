@@ -9,4 +9,4 @@ root = "src"
 port = 8000
 
 [capabilities]
-declared = ["unsafe"]
+accept = ["unsafe"]

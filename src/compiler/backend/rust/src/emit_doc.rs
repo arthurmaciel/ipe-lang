@@ -1055,7 +1055,7 @@ fn build_generic_call(
                     detail: "Task.andThen effect-clone rewrite lost its two args".to_owned(),
                 });
             };
-            build_call_args_with_impl_fn(
+            build_call_args_task_and_then(
                 ctx,
                 callee,
                 &[cont.clone(), effect_rw.clone()],
@@ -1064,7 +1064,7 @@ fn build_generic_call(
                 generics,
             )?
         }
-        None => build_call_args_with_impl_fn(ctx, callee, args, indent, child, generics)?,
+        None => build_call_args_task_and_then(ctx, callee, args, indent, child, generics)?,
     };
     // Container-first kernels take their two arguments in the opposite order to
     // the Ipê call; the string emitter reverses the rendered `parts`, so the Doc
@@ -1077,6 +1077,36 @@ fn build_generic_call(
         docs,
         Doc::text(")"),
     ))
+}
+
+/// Build a positional argument list for a `Task.andThen` call, handling the
+/// continuation lambda (Ipê arg index 0) specially: instead of the full
+/// `{ let __ipe_fn: Box<dyn Fn...> = Box::new(...); __ipe_fn }` block that
+/// [`build_lambda`] produces, emit `Box::new(move |x: T| -> R { body })` directly.
+/// The preamble wrapper takes `Box<dyn FnOnce(A) -> IpeTask<B> + Send + 'static>`,
+/// so the `Box::new` is still required; dropping the `let __ipe_fn` type-annotation
+/// is sufficient because rustc infers the coercion from the parameter position.
+/// Removing the explicit annotation is what keeps rustc type-checking linear in the
+/// number of chained `Task.andThen` calls (the annotation form causes super-linear
+/// work at depth). All other args fall through to [`build_call_args_with_impl_fn`].
+fn build_call_args_task_and_then(
+    ctx: &EmitCtx,
+    callee: &Callee,
+    args: &[Expr],
+    indent: usize,
+    child: u16,
+    generics: GenericScope,
+) -> DResult<Vec<Doc>> {
+    if matches!(callee, Callee::Kernel(KernelFn::TaskAndThen))
+        && let [cont, effect] = args
+        && let Expr::Lambda { params, ret, body } | Expr::SharedLambda { params, ret, body } = cont
+    {
+        let closure = build_closure(ctx, params, ret, body, indent, child, generics)?;
+        let cont_doc = Doc::concat(vec![Doc::text("Box::new("), closure, Doc::text(")")]);
+        let effect_doc = build_doc(ctx, effect, indent, child, generics)?;
+        return Ok(vec![cont_doc, effect_doc]);
+    }
+    build_call_args_with_impl_fn(ctx, callee, args, indent, child, generics)
 }
 
 /// Build a positional argument list, passing a lambda-literal argument UNBOXED

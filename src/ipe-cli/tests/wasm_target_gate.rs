@@ -18,6 +18,21 @@ fn scratch(name: &str) -> PathBuf {
     dir
 }
 
+/// Like [`scratch`] but appends the process id so concurrent or back-to-back
+/// test invocations never share the same output tree.
+///
+/// Used for tests that spawn an external process (e.g. `cargo check`) that
+/// reads from the scratch directory: without isolation a previous invocation's
+/// subprocess can still be reading files while a new `scratch` call wipes and
+/// rewrites the directory, producing a window where `mod.rs` declares modules
+/// whose source files do not yet exist.
+fn scratch_isolated(name: &str) -> PathBuf {
+    let dir =
+        PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join(format!("{name}_{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    dir
+}
+
 #[allow(clippy::expect_used)] // test helper: a failed scratch-dir setup IS the failure
 fn write_entry(dir: &Path, source: &str) -> PathBuf {
     std::fs::create_dir_all(dir).expect("mkdir scratch");
@@ -385,7 +400,7 @@ fn hydrate_glue_type_name_matches_emitted_struct_and_compiles_for_wasm() {
     // hydrate mode its `ipe.toml` declares.
     let entry =
         Path::new(env!("CARGO_MANIFEST_DIR")).join("../../examples/wasm/hydration/src/Main.ipe");
-    let out = scratch("wasm_hydrate_seal").join("out");
+    let out = scratch_isolated("wasm_hydrate_seal").join("out");
     let options = BuildOptions {
         target: ipe_ir::Target::WasmClient,
         wasm_hydrate_mode: true,

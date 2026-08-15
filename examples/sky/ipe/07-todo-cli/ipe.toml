@@ -15,4 +15,4 @@ os = "latest"
 "log/slog" = "latest"
 
 [capabilities]
-declared = ["unsafe"]
+accept = ["unsafe"]

@@ -1,9 +1,6 @@
-name = "composite-server"
+name = "kernel-variadic-arity"
 version = "0.1.0"
 entry = "src/Main.ipe"
 
 [source]
 root = "src"
-
-[capabilities]
-accept = ["unsafe"]

@@ -1,0 +1,43 @@
+module Main exposing (main)
+
+import Ipe.Io as Io
+import Ipe.Task
+
+
+-- Regression for the RetryPolicy struct-synthesis ICE (IPE-I0001).
+--
+-- When the solver leaves the `e` type parameter of `RetryPolicy e` as a free
+-- variable, collect_records_in_ty skipped the record entirely (the
+-- !ty_contains_var guard) so no struct was registered. Accessing a field or
+-- calling retryOn / withRetryOn with a predicate lambda then hit IPE-I0001
+-- from the backend record_struct_by_key lookup.
+--
+-- The fix: detect the exact 5-field closed RetryPolicy shape before the
+-- ty_contains_var guard and register its concrete IR with `e` fixed to
+-- IrType::Error (the only runtime instantiation).
+--
+-- Note: `retryOn (\_ -> False)` requires the error type to be resolved in
+-- context. Placing the policy directly inside `retryWith` (as done here)
+-- lets the solver unify `e = Error` from the retryWith constraint.
+main =
+    Task.andThen
+        (\_ ->
+            Task.andThen
+                (\_ -> Io.println "ok")
+                (Task.retryWith
+                    (Task.linearBackoff 3 100
+                        |> Task.withMaxAttempts 5
+                        |> Task.retryOn (\_ -> False)
+                    )
+                    (Task.succeed "done")
+                )
+        )
+        (Task.andThen
+            (\_ -> Io.println "withRetryOn ok")
+            (Task.retryWith
+                (Task.exponentialBackoff 2 200
+                    |> Task.withRetryOn (\_ -> True)
+                )
+                (Task.succeed "x")
+            )
+        )

@@ -25,18 +25,15 @@
 
 The Ipê programming language aims to be a community-centered programming language.  Check out our [principles](https://github.com/arthurmaciel/ipe-lang/blob/main/PRINCIPLES.md) to understand more about our social and technical values.
 
-It pairs [Elm](https://elm-lang.org/)'s syntax with [Sky](https://sky-lang.org/)'s batteries-included runtime — the
-standard library, effect system, and application framework (web, API, CLI,
+It pairs [Elm](https://elm-lang.org/)'s syntax with [Sky](https://sky-lang.org/)'s batteries-included
+standard library - effect system, and application framework (web, API, CLI,
 terminal, desktop) that turn a pure-functional language into a full-stack one.
-It compiles to readable, `rustfmt`-clean Rust.
+It compiles to readable Rust.
 
 Installation:
 ```sh
 curl -fsSL https://raw.githubusercontent.com/arthurmaciel/ipe-lang/main/install.sh | sh
 ```
-
-Scaffold a new project — `ipe init` writes an `ipe.toml`, a `README.md`, and a
-working `Ipe.Tea.Web` counter in `src/Main.ipe`:
 
 ```sh
 ipe init counter          # or `ipe init .` to scaffold in the current directory
@@ -52,7 +49,8 @@ module Main exposing (main)
 import Ipe.Io as Io
 
 main =
-    Io.println "Hello from Ipê!"
+    do
+      Io.println "Hello from Ipê!"
 ```
 
 ```sh
@@ -66,7 +64,7 @@ Prefer building from source?
 ```sh
 git clone https://github.com/arthurmaciel/ipe-lang
 cd ipe-lang
-cargo build --release<img width="512" height="512" alt="android-chrome-512x512" src="https://github.com/user-attachments/assets/6683d11b-9eb1-440b-82fa-17a67c6b8a4a" />
+cargo build --release
 
 ```
 
@@ -74,8 +72,8 @@ cargo build --release<img width="512" height="512" alt="android-chrome-512x512" 
 
 - [Features](#features)
 - [Code shapes](#code-shapes)
-<!-- - [Capabilities](#capabilities)
-- [Dependencies](#dependencies)-->
+- [Capabilities](#capabilities)
+<!-- - [Dependencies](#dependencies)-->
 - [Editor setup (LSP)](#editor-setup-lsp)
 - [Static compilation](#static-compilation)
 - [Support](#support)
@@ -84,8 +82,8 @@ cargo build --release<img width="512" height="512" alt="android-chrome-512x512" 
 
 - **Elm syntax** — pure functions, Hindley–Milner type inference, exhaustive
   `case`, immutable data. No `null`, no runtime exceptions.
-- **Sky's batteries-included runtime** — Live applications (SSR + real-time), typed HTTP, 
-  SQL databases, auth, email, cache, pub/sub, and WebSockets, all behind a
+- **Sky's batteries-included standard library** — Web live applications (SSR + real-time), typed HTTP, 
+  typed SQL, auth, email, cache, pub/sub, and WebSockets, all behind a
   single `Task Error a` effect boundary. `Error` is a typed, classified value
   you construct and inspect — see [Errors](docs/language/error-handling.md).
 - **Rust compiler** — the compiler itself is written in Rust: fast, parallel,
@@ -122,15 +120,16 @@ and the raw-DOM `Ipe.Html` — plus the security-gated `Ipe.Css`. See
 [Views: Ui, Html, and Css](docs/language/ui.md) for how they relate, how to intermix
 them, and static rendering.
 
-For the details of the language itself — strings, errors, capabilities, and
-views — see [`docs/language/`](docs/language/README.md), the language book.
+Check [language documentation](docs/language/README.md).
 
 ## Capabilities
 
 Every effect in Ipê flows through a capability-tagged kernel, so the compiler can
 tell you exactly what a program is allowed to do — network, filesystem, env,
 subprocess, clock, random, native-ffi — from its code alone, with nothing to
-declare. `ipe capabilities <entry>` prints that inferred set as a human report by
+declare. 
+
+`ipe capabilities <entry>` prints that inferred set as a human report by
 default; `--plain` gives the bare names, one per line, for a script:
 
 ```
@@ -140,15 +139,13 @@ clock
 ```
 
 The set is generated, not hand-written, and cannot drift: a program that reaches
-a new effectful kernel gains the matching capability automatically. `native-ffi`
+a new effectful kernel gains the matching capability automatically. 
+
+`native-ffi`
 appears whenever the program crosses into `Rust.` code, which is opaque to the
 inference and the one place effects can escape the model.
 
-See [**Capabilities**](docs/language/capabilities.md) for the full model — the ten
-capabilities, how inference works, how native code declares and is sandboxed, and
-the build-time acknowledgment for `.Unsafe` escape-hatch imports (`--accept-risks`).
-Every command is human-friendly by default; data commands take `--plain` and
-`--json` for scripts — see [**CLI output**](docs/cli-output.md).
+See [**Capabilities**](docs/language/capabilities.md) for the full model.
 
 <!--
 ## Dependencies
@@ -241,15 +238,9 @@ and the offending line, capability, version, or dependency.
 ## Documenting a package
 
 `ipe doc` generates reference documentation for a package from its own source.
-Each exposed binding is documented with its checker-inferred type signature (the
-exact type the compiler sees, never re-parsed), its `-- |` doc-comment, and the
-module it belongs to. The machine-readable `docs.json` is the source of truth —
-one record per exposed module — and the per-module Markdown and the
-self-contained HTML site are both views over it.
 
 Your own project modules come first, under a **Project modules** heading, ahead
-of the **Standard library** — so you see your API before the stdlib. The HTML
-site is a soft-dark theme with a type-to-filter search box over the module list.
+of the **Standard library** — so you see your API before the stdlib.
 
 ```
 $ ipe doc                          # write doc/ (docs.json + Markdown + HTML) for the current project
@@ -259,64 +250,11 @@ $ ipe doc serve                    # build the HTML site and preview it on loopb
 $ ipe doc check                    # a CI gate: exit non-zero if a binding is undocumented
 ```
 
-For a small package the generator reports what it wrote and `docs.json` carries
-the versioned surface, including the cross-references each signature resolves to:
-
-```
-$ ipe doc path/to/shapes --out doc
-documented 1 module to doc
-$ cat doc/docs.json
-{
-  "version": 1,
-  "modules": [
-    {
-      "name": "Shapes",
-      "kind": "local",
-      "comment": "Shapes — a tiny geometry library.",
-      "unions": [ … ],
-      "values": [
-        {
-          "name": "area",
-          "signature": "Shapes.Shape -> Float",
-          "comment": "`area shape` — the area of `shape`.",
-          "references": [
-            { "module": "Shapes", "name": "Shape", "anchor": "Shapes#Shape" }
-          ]
-        }
-      ]
-    }
-  ]
-}
-```
-
-Every type name in a rendered signature that resolves — via the canonicaliser's
-own resolved identity, never a text guess — to a type documented in the package
-becomes a link to that entry's stable anchor (`Shapes#Shape`, identical across
-`docs.json`, Markdown, and HTML). A built-in with no in-package definition (like
-`Float`) stays plain text. The HTML site is fully self-contained (an index page,
-one page per module, and a bundled `style.css`), so it opens straight from the
-filesystem over `file://` — no server needed.
-
-`ipe doc serve` is a local preview of that same HTML site, served read-only on
-loopback only. The port defaults to an auto-selected free one, so it never fails
-on a busy fixed port; `--port N` pins one and errors if it is taken:
-
-```
-$ ipe doc serve path/to/shapes
-serving docs at http://127.0.0.1:42121/ (read-only, loopback; Ctrl-C to stop)
-```
-
-`ipe doc check` writes nothing and exits non-zero when an exposed value or type
-lacks a doc-comment, naming each gap — a coverage gate you can wire into CI.
-
-Still tracked for later: inter-*package* linking (needs the package index),
-full-text search, and remote hosting.
-
 ## Editor setup (LSP)
 
 `ipe lsp` speaks JSON-RPC over stdio — type-directed completion, go-to-definition,
 find-references, rename, formatting, code actions, semantic tokens, and more.
-See [`docs/editor-integration.md`](docs/editor-integration.md) for setup
+See [editor integration documentation](docs/editor-integration.md) for setup
 instructions covering Helix, Neovim, VS Code, Emacs (lsp-mode and Doom Emacs),
 and Zed.
 
@@ -324,9 +262,13 @@ and Zed.
 
 `ipe eject` emits a self-contained Rust Cargo project you can `cargo build` with
 no `ipe` toolchain installed — the escape hatch from the runtime-crate model.
+
+
 Unlike `ipe build`, which emits a project that names the Ipê runtime as a
-dependency, eject **vendors** the runtime source into the output and **tree-shakes**
-it to only the modules your program reaches. The result is small, offline-buildable,
+dependency, `ipe eject` **vendors** the runtime source into the output and **tree-shakes**
+it to only the modules your program reaches. 
+
+The result is small, offline-buildable,
 and auditable: plain, reviewable Rust with no external runtime path — ideal for a
 Rust-only shop that must comply with a "Rust only" rule.
 
@@ -339,12 +281,9 @@ cd /tmp/eject-demo
 cargo build --release
 ```
 
-The vendored runtime under `src/ipe_runtime/` contains only the modules the
-program reaches — a program that touches no database, web, or crypto surface
-carries none of those runtime modules. A program that binds a foreign Rust crate
-(FFI) cannot be ejected (its external crates would need a registry fetch, which
-the source-only contract forbids); eject refuses such a program with a clear
-message rather than emitting a project that would not build offline.
+A program that binds a foreign Rust crate
+(FFI) **cannot** be ejected (its external crates would need a registry fetch, which
+the source-only contract forbids).
 
 ## Static compilation
 
@@ -381,35 +320,32 @@ The emitted `.cargo/config.toml` sets `+crt-static` automatically; no extra
 | `x86_64-unknown-linux-musl` | fully supported, CI-verified |
 | `aarch64-unknown-linux-musl` | wired, pending toolchain confirmation (CI: `continue-on-error`) |
 
-The aarch64 target is structurally complete — the variant exists, the CI job
-runs, and cross-verification via `qemu-user-static` is scripted — but the CI
-job is marked `continue-on-error` until a musl-capable AArch64 C linker is
-confirmed available on the runner. Remove `continue-on-error` from
-`.github/workflows/static.yml` `linux-static-arm64` once the job turns green.
-
 ## Faster builds
 
 `ipe build` / `ipe run` compile an emitted Rust project, so most of the time is
-`rustc` + linking. A failed emitted-crate compile is a non-zero `ipe` exit with a
-named build-failure diagnostic, never a silent success. Optional per-machine tools — a compilation cache
+`rustc` + linking. 
+
+A failed emitted-crate compile is a non-zero `ipe` exit with a
+named build-failure diagnostic, never a silent success. 
+
+Optional per-machine tools — a compilation cache
 ([sccache](https://github.com/mozilla/sccache)), a fast linker
 ([mold](https://github.com/rui314/mold) / [lld](https://lld.llvm.org/)), and a
 fast debug codegen backend
 ([cranelift](https://github.com/rust-lang/rustc_codegen_cranelift)) — cut that
-substantially. See [docs/rust-perf-improvement.md](docs/rust-perf-improvement.md)
+substantially. See [rust performance improvement](docs/rust-perf-improvement.md)
 for per-platform install and `~/.cargo/config.toml` recipes.
 
 ## Support
 
 Contributions are **very** welcome!
 
-There are 4 main forms to support our project. They are listed in order
+There are 3 main forms to support our project. They are listed in order
 of need at the current moment:
 
 ### Donations
 
-I'd love to spend more time developing Ipê and also buying AI tokens
-to test battle the code. If you like these idea, please 
+I'd love to spend more time developing and battle testing Ipê. If you like the project, please 
 [support Ipê's development](https://ko-fi.com/arthur_maciel??g=1). Thank you!
 
 
@@ -418,8 +354,8 @@ The most valuable [pull requests](https://github.com/arthurmaciel/ipe-lang/pulls
 **security/soundness fixes** — a mis-compilation, 
 a panic on valid input, an unsound emit or security brech. 
 
-Every `PR` must be human-reviewed. Unfortunately there is not enough time to 
-review AI-only reviewed code. Sorry for that!
+Every `PR` must be human-reviewed before submitted please! Unfortunately there is not enough time to 
+review unsupervised AI code :/
 
 ### Bug reports
 Even if you can't propose any code yet, please [report](https://github.com/arthurmaciel/ipe-lang/issues)

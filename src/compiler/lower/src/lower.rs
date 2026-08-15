@@ -1330,6 +1330,56 @@ fn is_retry_policy_record(interner: &Interner, ty: &Ty) -> bool {
         })
 }
 
+/// Build the concrete `IrType::Record` for `RetryPolicy e` with `e` fixed to
+/// `IrType::Error`.
+///
+/// `RetryPolicy e` is the kernel-managed record
+/// `{ baseMs : Int, jitter : Bool, kind : Int, maxAttempts : Int,
+///    shouldRetry : e -> Bool }`.
+/// The type parameter `e` is the error type; at the Ipê stdlib level it stays
+/// polymorphic, but at codegen the only ever-constructed value is
+/// `RetryPolicy Error` (all builders hardcode `IpeError` in their emitted Rust).
+/// Concretising `e` to `IrType::Error` here lets the struct be registered in the
+/// synthesis table so `record_struct_by_key` can find it for field-access and
+/// builder calls even when the solver left `e` as a free `Ty::Var`.
+///
+/// The `shouldRetry` field is a record-field function and is carried on the
+/// `Arc<dyn Fn>` carrier (`IrType::SharedFun`) — matching what
+/// `normalize_record_fun_carriers` would produce for a concretely-typed field.
+fn retry_policy_concrete_ir(interner: &Interner, ty: &Ty) -> Option<IrType> {
+    let Ty::Record(fields, RowTail::Closed) = ty else {
+        return None;
+    };
+    if !is_retry_policy_record(interner, ty) {
+        return None;
+    }
+    // Reuse the Symbol keys already present in the solved record so the IR field
+    // map uses the same interned symbols the type checker produced — symbol
+    // identity is the key used by `record_struct_by_key`.
+    let mut ir_fields = BTreeMap::new();
+    for (sym, field_ty) in fields {
+        let name = interner.resolve(*sym)?;
+        let ir = match name {
+            "baseMs" | "kind" | "maxAttempts" => IrType::Int,
+            "jitter" => IrType::Bool,
+            // `shouldRetry : e -> Bool` — fix `e` to `IrType::Error` and carry
+            // the field on the `Arc<dyn Fn>` carrier (record-field function
+            // carrier), matching what `normalize_record_fun_carriers` produces
+            // for a concrete arrow field.
+            "shouldRetry" => {
+                // Verify field_ty is a function shape (or a Ty::Var for `e` that
+                // the solver left unresolved). Either way the concrete carrier is
+                // `SharedFun([Error], Bool)` — the only runtime instantiation.
+                let _ = field_ty;
+                IrType::SharedFun(vec![IrType::Error], Box::new(IrType::Bool))
+            }
+            _ => return None,
+        };
+        ir_fields.insert(*sym, ir);
+    }
+    Some(IrType::Record(ir_fields))
+}
+
 fn embeds_nonderivable_function(interner: &Interner, ty: &Ty) -> bool {
     match ty {
         Ty::Var(_) | Ty::Unit => false,
@@ -6080,6 +6130,180 @@ fn count_fn_value_uses_apply(sym: Symbol, func: &Expr, args: &[Expr]) -> usize {
             .sum::<usize>()
 }
 
+/// Evaluation-order state for [`fn_value_use_after_consume`]: whether `sym` has
+/// already been MOVED by a position evaluated so far, and whether a later read
+/// of `sym` was reached while it was already moved.
+#[derive(Clone, Copy, Default)]
+struct FnValueMoveState {
+    consumed: bool,
+    hazard: bool,
+}
+
+impl FnValueMoveState {
+    /// A read of `sym` at the current point. A read while already `consumed` is
+    /// a use-after-move (E0382) regardless of whether the read itself is a
+    /// borrowing call (`Fn::call(&self, ..)`) or a further move — the value is
+    /// already gone. `moves` marks a consuming (moving) position, which arms the
+    /// hazard for every subsequent read.
+    const fn read(&mut self, moves: bool) {
+        if self.consumed {
+            self.hazard = true;
+        }
+        if moves {
+            self.consumed = true;
+        }
+    }
+}
+
+/// Does a use of the fn-value binding `sym` occur, in evaluation order, AFTER
+/// `sym` has been MOVED by an earlier consuming position of `expr`?
+///
+/// [`count_fn_value_uses`] exempts a direct-callee `Apply` position because a
+/// `Box<dyn Fn>` call borrows (`Fn::call(&self, ..)`) rather than moves — sound
+/// in isolation. That exemption is invalid once an EARLIER position has already
+/// moved the value: the borrowing call then reads a moved value (E0382). This
+/// walk models the emitted left-to-right evaluation to catch a move-then-use of
+/// a bare-`Box`-carried fn binding — exactly the reads the `Arc` carrier
+/// promotion must serve. A conservative branch merge (any branch's move marks
+/// the post-branch state consumed) fails toward promotion, which is always
+/// sound.
+fn fn_value_use_after_consume(sym: Symbol, expr: &Expr) -> bool {
+    let mut state = FnValueMoveState::default();
+    fn_value_move_walk(sym, expr, &mut state);
+    state.hazard
+}
+
+/// Walk `expr` in emitted evaluation order, threading [`FnValueMoveState`].
+/// A read of `sym` in a consuming (moving) position sets `consumed`; a direct
+/// `Apply` callee position is a borrowing read (does not consume). Branch
+/// alternatives (`If`/`Match`) each continue from the pre-branch state; their
+/// hazards OR and their moves OR into the post-branch `consumed`.
+#[allow(clippy::too_many_lines)]
+fn fn_value_move_walk(sym: Symbol, expr: &Expr, state: &mut FnValueMoveState) {
+    match expr {
+        Expr::Var(s) | Expr::CloneVar(s) => {
+            if *s == sym {
+                state.read(true);
+            }
+        }
+        // A lambda captures `sym` by move at construction; the whole lambda is
+        // one consuming read of `sym` at this point.
+        Expr::Lambda { body, .. } | Expr::SharedLambda { body, .. } => {
+            if lambda_body_refs_sym(sym, body) {
+                state.read(true);
+            }
+        }
+        Expr::Apply { func, args } => {
+            match func.as_ref() {
+                // Direct callee: a borrowing read, not a move.
+                Expr::Var(s) | Expr::CloneVar(s) if *s == sym => state.read(false),
+                other => fn_value_move_walk(sym, other, state),
+            }
+            for a in args {
+                fn_value_move_walk(sym, a, state);
+            }
+        }
+        Expr::Call { args, .. } | Expr::Ctor { args, .. } | Expr::TailRecur { args } => {
+            for a in args {
+                fn_value_move_walk(sym, a, state);
+            }
+        }
+        Expr::Let { name, value, body } => {
+            fn_value_move_walk(sym, value, state);
+            if *name != sym {
+                fn_value_move_walk(sym, body, state);
+            }
+        }
+        Expr::Destructure {
+            binder,
+            value,
+            body,
+        } => {
+            fn_value_move_walk(sym, value, state);
+            if !pat_binds_symbol(binder, sym) {
+                fn_value_move_walk(sym, body, state);
+            }
+        }
+        Expr::If { cond, then_, else_ } => {
+            fn_value_move_walk(sym, cond, state);
+            *state = branch_merge(sym, *state, &[then_, else_]);
+        }
+        Expr::Match(m) => {
+            fn_value_move_walk(sym, m.scrutinee(), state);
+            let bodies: Vec<&Expr> = m
+                .arms()
+                .iter()
+                .filter(|arm| !pat_binds_symbol(&arm.pat, sym))
+                .map(|arm| &arm.body)
+                .collect();
+            *state = branch_merge(sym, *state, &bodies);
+        }
+        Expr::BinOp { lhs, rhs, .. } => {
+            fn_value_move_walk(sym, lhs, state);
+            fn_value_move_walk(sym, rhs, state);
+        }
+        Expr::Tuple(items) | Expr::List { items, .. } => {
+            for e in items {
+                fn_value_move_walk(sym, e, state);
+            }
+        }
+        Expr::Cons { head, tail } => {
+            fn_value_move_walk(sym, head, state);
+            fn_value_move_walk(sym, tail, state);
+        }
+        Expr::ListIndexClone { list, .. } | Expr::ListLenCheck { list, .. } => {
+            fn_value_move_walk(sym, list, state);
+        }
+        Expr::Record { fields, .. } => {
+            for (_, e) in fields {
+                fn_value_move_walk(sym, e, state);
+            }
+        }
+        Expr::Update { record, fields } => {
+            fn_value_move_walk(sym, record, state);
+            for (_, e) in fields {
+                fn_value_move_walk(sym, e, state);
+            }
+        }
+        Expr::TaskSeq { effect, rest } => {
+            fn_value_move_walk(sym, effect, state);
+            fn_value_move_walk(sym, rest, state);
+        }
+        Expr::TailLoop { params, body } => {
+            if !params.iter().any(|(s, _)| *s == sym) {
+                fn_value_move_walk(sym, body, state);
+            }
+        }
+        Expr::Access { record, .. } => {
+            fn_value_move_walk(sym, record, state);
+        }
+        Expr::Int(_)
+        | Expr::Bool(_)
+        | Expr::Float(_)
+        | Expr::Str(_)
+        | Expr::PathLit(_)
+        | Expr::Char(_)
+        | Expr::Unit
+        | Expr::FuncValue { .. } => {}
+    }
+}
+
+/// Merge the move-state across the alternative `branches` of an `If`/`Match`.
+/// Each branch continues independently from the shared `pre` state; a branch
+/// hazard propagates (OR), and the post-branch `consumed` is the OR of the
+/// branches' moves (a value moved in ANY branch is treated as possibly-moved
+/// afterward — the conservative direction, which only ever promotes more).
+fn branch_merge(sym: Symbol, pre: FnValueMoveState, branches: &[&Expr]) -> FnValueMoveState {
+    let mut merged = pre;
+    for branch in branches {
+        let mut s = pre;
+        fn_value_move_walk(sym, branch, &mut s);
+        merged.hazard |= s.hazard;
+        merged.consumed |= s.consumed;
+    }
+    merged
+}
+
 /// T4: fail closed with [`Feature::FunctionValueReuse`] (IPE-L0127) if
 /// `sym` — a binding whose IR type embeds a function ([`ir_contains_fun`])
 /// and does not derive `Clone` ([`CloneClass::NonClone`]) — is CONSUMED more
@@ -6139,6 +6363,37 @@ fn apply_move_ownership(
     } else {
         reject_foreign_handle_reuse(env, sym, ir_ty, &scope, span)?;
         reject_fn_value_reuse(env, sym, ir_ty, &scope, span)?;
+        Ok(scope)
+    }
+}
+
+/// [`apply_move_ownership`] with precomputed counts from a [`LetAccum`].
+/// Skips the `count_var_uses` and `count_fn_value_uses` walks (both O(|acc|))
+/// and uses the threaded values directly.  The rewrite walks
+/// (`rewrite_multiuse_clones`) remain — they are unavoidable.
+fn apply_move_ownership_precomputed(
+    env: CloneEnv<'_>,
+    sym: Symbol,
+    ir_ty: &IrType,
+    scope: Expr,
+    span: Span,
+    accum: &LetAccum,
+) -> DResult<Expr> {
+    if param_is_multiuse_clonable(env, ir_ty) {
+        let mut remaining = accum.var_uses;
+        Ok(rewrite_multiuse_clones(sym, &mut remaining, scope))
+    } else {
+        // `reject_foreign_handle_reuse` uses `count_var_uses`; use accum.
+        if ir_type_has_ffi_foreign_handle(env, ir_ty) && accum.var_uses > 1 {
+            return Err(unsupported(span, Feature::ForeignHandleReuse));
+        }
+        // `reject_fn_value_reuse` uses `count_fn_value_uses`; use accum.
+        if ir_contains_fun(ir_ty)
+            && matches!(clone_class(env, ir_ty), CloneClass::NonClone)
+            && accum.fn_value_uses > 1
+        {
+            return Err(unsupported(span, Feature::FunctionValueReuse));
+        }
         Ok(scope)
     }
 }
@@ -6710,6 +6965,209 @@ struct FnValueReadFlags {
     /// Any read at closure depth ≥ 2 exists — an intermediate closure's
     /// construction would move the `Box` out of its enclosing env (E0525).
     any_ge2: bool,
+}
+
+/// Threaded per-symbol summary maintained across the reverse fold in
+/// [`lower_let_inner`].  Each field aggregates, over all sub-expressions of
+/// the current continuation `acc` that have already been walked, exactly what
+/// the individual analysis functions would compute over the full `acc`.  When
+/// a new binding value `v` is folded in, each field is updated by calling the
+/// corresponding function on `v` alone (small, fixed-size) rather than
+/// re-walking the entire growing `acc`.
+///
+/// The fields reproduce these results exactly:
+/// - `var_uses`             ← `count_var_uses(sym, acc)`
+/// - `fn_value_uses`        ← `count_fn_value_uses(sym, acc)`
+/// - `fn_flags`             ← `fn_value_read_flags(sym, acc)`
+/// - `depth1_capture_count` ← count of depth-≥1 entries in
+///   `collect_lambda_capture_depths(sym, acc, 0, ..)`
+/// - `any_depth2_capture`   ← any depth-≥2 entry in the same collection
+///
+/// From those last two: `needs_shared_capture(sym, acc)` =
+/// `any_depth2_capture || depth1_capture_count >= 2`.
+///
+/// `flows_into_sync_kernel_call` is intentionally NOT threaded: its
+/// alias-chain resolution (`let g = f in Ui.onSubmit g` propagating `f`'s
+/// promotion through `g`) crosses Let boundaries in a way that is not safely
+/// additive.  It remains a full walk of `acc`, called only on the narrow
+/// `fun_shape && !new_trigger` path where it can fire.
+#[derive(Clone, Copy, Default)]
+struct LetAccum {
+    var_uses: usize,
+    fn_value_uses: usize,
+    fn_flags: FnValueReadFlags,
+    depth1_capture_count: usize,
+    any_depth2_capture: bool,
+}
+
+impl LetAccum {
+    /// Compute the accumulated summary for `sym` over a SINGLE expression
+    /// `expr` (typically a just-lowered binding value — small and fixed-size).
+    /// Called when a new binding is folded into the continuation so future
+    /// symbols' accumulators can be updated without re-walking the whole chain.
+    fn from_expr(sym: Symbol, expr: &Expr) -> Self {
+        let var_uses = count_var_uses(sym, expr);
+        let fn_value_uses = count_fn_value_uses(sym, expr);
+        let fn_flags = {
+            let mut f = FnValueReadFlags::default();
+            fn_value_read_flags_walk(sym, expr, 0, &mut f);
+            f
+        };
+        let mut depths: Vec<u32> = Vec::new();
+        collect_lambda_capture_depths(sym, expr, 0, &mut depths);
+        let depth1_capture_count = depths.iter().filter(|&&d| d >= 1).count();
+        let any_depth2_capture = depths.iter().any(|&d| d >= 2);
+        Self {
+            var_uses,
+            fn_value_uses,
+            fn_flags,
+            depth1_capture_count,
+            any_depth2_capture,
+        }
+    }
+
+    /// Fold `other` (computed over a fresh sub-expression) into `self`
+    /// (accumulated over all previously folded sub-expressions).  Correct
+    /// because the sub-expressions are at the SAME lambda-nesting depth —
+    /// they are sibling Let-value sub-trees separated by Let nodes, and a
+    /// `Let` node does not increment depth.  Counts add; boolean flags OR.
+    const fn merge(&mut self, other: Self) {
+        // `count_var_uses` is additive across Let-separated sub-expressions
+        // at the same depth.  The MAX semantics within If/Match are already
+        // captured by `count_var_uses` when called on each individual
+        // sub-expression; merging across disjoint sub-trees is always SUM.
+        self.var_uses += other.var_uses;
+        self.fn_value_uses += other.fn_value_uses;
+        self.fn_flags.non_callee_ge1 |= other.fn_flags.non_callee_ge1;
+        self.fn_flags.any_ge2 |= other.fn_flags.any_ge2;
+        // Depth-counts add: two distinct depth-1 captures in different
+        // sub-expressions each contribute one slot; their SUM determines
+        // whether `needs_shared_capture` fires (>= 2 depth-1 captures).
+        self.depth1_capture_count += other.depth1_capture_count;
+        self.any_depth2_capture |= other.any_depth2_capture;
+    }
+
+    /// Reconstruct the `needs_shared_capture` boolean from the threaded
+    /// depth-count summary.  Mirrors `needs_shared_capture`'s own condition.
+    const fn needs_shared(&self) -> bool {
+        self.any_depth2_capture || self.depth1_capture_count >= 2
+    }
+}
+
+/// Collect the set of [`Symbol`]s that appear as live `Var`/`CloneVar` leaves
+/// in `expr`, including inside lambda bodies (needed for the deep-walk fields
+/// of [`LetAccum`]).  A single O(|expr|) scan; used by [`batch_accum_update`]
+/// to skip per-symbol analysis for symbols that do not appear at all.
+fn collect_mentioned_syms(expr: &Expr, out: &mut BTreeSet<Symbol>) {
+    match expr {
+        Expr::Var(s) | Expr::CloneVar(s) => {
+            out.insert(*s);
+        }
+        Expr::Lambda { body, .. } | Expr::SharedLambda { body, .. } => {
+            // Recurse into body; params bind new symbols (not tracked here).
+            collect_mentioned_syms(body, out);
+        }
+        Expr::Let {
+            name: _,
+            value,
+            body,
+        }
+        | Expr::Destructure { value, body, .. } => {
+            collect_mentioned_syms(value, out);
+            collect_mentioned_syms(body, out);
+        }
+        Expr::If { cond, then_, else_ } => {
+            collect_mentioned_syms(cond, out);
+            collect_mentioned_syms(then_, out);
+            collect_mentioned_syms(else_, out);
+        }
+        Expr::Match(m) => {
+            collect_mentioned_syms(m.scrutinee(), out);
+            for arm in m.arms() {
+                collect_mentioned_syms(&arm.body, out);
+            }
+        }
+        Expr::Apply { func, args } => {
+            collect_mentioned_syms(func, out);
+            for a in args {
+                collect_mentioned_syms(a, out);
+            }
+        }
+        Expr::BinOp { lhs, rhs, .. } => {
+            collect_mentioned_syms(lhs, out);
+            collect_mentioned_syms(rhs, out);
+        }
+        Expr::Call { args, .. } | Expr::Ctor { args, .. } | Expr::TailRecur { args } => {
+            for a in args {
+                collect_mentioned_syms(a, out);
+            }
+        }
+        Expr::Tuple(items) | Expr::List { items, .. } => {
+            for e in items {
+                collect_mentioned_syms(e, out);
+            }
+        }
+        Expr::Cons { head, tail } => {
+            collect_mentioned_syms(head, out);
+            collect_mentioned_syms(tail, out);
+        }
+        Expr::ListIndexClone { list, .. } | Expr::ListLenCheck { list, .. } => {
+            collect_mentioned_syms(list, out);
+        }
+        Expr::Record { fields, .. } => {
+            for (_, e) in fields {
+                collect_mentioned_syms(e, out);
+            }
+        }
+        Expr::Update { record, fields } => {
+            collect_mentioned_syms(record, out);
+            for (_, e) in fields {
+                collect_mentioned_syms(e, out);
+            }
+        }
+        Expr::TaskSeq { effect, rest } => {
+            collect_mentioned_syms(effect, out);
+            collect_mentioned_syms(rest, out);
+        }
+        Expr::TailLoop { body, .. } => {
+            collect_mentioned_syms(body, out);
+        }
+        Expr::Access { record, .. } => {
+            collect_mentioned_syms(record, out);
+        }
+        Expr::Int(_)
+        | Expr::Bool(_)
+        | Expr::Float(_)
+        | Expr::Str(_)
+        | Expr::PathLit(_)
+        | Expr::Char(_)
+        | Expr::Unit
+        | Expr::FuncValue { .. } => {}
+    }
+}
+
+/// Update every symbol in `accum` with its contributions from `expr`.
+///
+/// First scans `expr` once (O(|expr|)) to find which symbols are mentioned,
+/// then calls [`LetAccum::from_expr`] only for those symbols — which in turn
+/// calls the existing single-symbol analysis functions.  This avoids calling
+/// `from_expr` for symbols absent from `expr` entirely.
+///
+/// Complexity per call: O(|expr| × |mentioned ∩ accum|).  For the sequential
+/// let/do stress case the intersection is small (each value typically mentions
+/// 0–2 other symbols), so the total cost across all n bindings stays close to
+/// O(n × max\_value\_size) rather than O(n² × max\_value\_size).
+fn batch_accum_update(accum: &mut BTreeMap<Symbol, LetAccum>, expr: &Expr) {
+    if accum.is_empty() {
+        return;
+    }
+    let mut mentioned = BTreeSet::new();
+    collect_mentioned_syms(expr, &mut mentioned);
+    for sym in &mentioned {
+        if let Some(a) = accum.get_mut(sym) {
+            a.merge(LetAccum::from_expr(*sym, expr));
+        }
+    }
 }
 
 /// Gather [`FnValueReadFlags`] for `sym` over `expr`. Shadow discipline and
@@ -11019,6 +11477,24 @@ impl<'a> Lowerer<'a> {
                 for field_ty in fields.values() {
                     self.collect_records_in_ty(field_ty, out, seen)?;
                 }
+                // `RetryPolicy e` is the one stdlib record whose type parameter
+                // `e` may remain a free `Ty::Var` (the solver leaves it
+                // unresolved when the error channel is not further constrained).
+                // The `!ty_contains_var` guard below would skip it, but the
+                // backend MUST have a registered struct to call
+                // `record_struct_by_key` — otherwise field access and retry
+                // builders ICE (IPE-I0001). Detect this exact shape first and
+                // register the concrete IR (with `e` fixed to `IrType::Error`,
+                // the only runtime instantiation) before falling through to the
+                // general guard. Scoped to the full 5-field closed shape — a
+                // user record that merely has a `shouldRetry` field is not this
+                // shape and is not registered here.
+                if let Some(rp_ir) = retry_policy_concrete_ir(self.interner, ty) {
+                    if seen.insert(rp_ir.clone()) {
+                        out.push(rp_ir);
+                    }
+                    return Ok(());
+                }
                 // Only a FULLY-CONCRETE record shape is surfaced here. A record
                 // carrying a type variable is a generic shape that necessarily
                 // appears in a (polymorphic) signature — the backend synthesises
@@ -11041,19 +11517,7 @@ impl<'a> Lowerer<'a> {
                     // consumed structurally by `emit_web_app_inner` (never
                     // materialised as a runtime value), so its IR struct is
                     // not needed.
-                    //
-                    // EXCEPTION — `RetryPolicy e`: this anonymous record (the exact
-                    // closed `{ baseMs, jitter, kind, maxAttempts, shouldRetry }`
-                    // shape) IS materialised as a runtime value passed to
-                    // `task_retry_with`.  Its Rust struct is emitted by
-                    // `emit_task_retry_call` and MUST be registered here despite
-                    // carrying a function-typed field.  The backend emits the struct
-                    // with `shouldRetry: Arc<dyn Fn(…) -> …>` (the `SharedFun`
-                    // carrier) and skips the `Clone` / `PartialEq` derives for that
-                    // field.  Matched on the full shape, never a lone `shouldRetry`
-                    // key, so a user fn-in-record never wrongly registers here.
-                    let is_retry_policy = is_retry_policy_record(self.interner, ty);
-                    if (!ir_contains_fun(&ir) || is_retry_policy) && seen.insert(ir.clone()) {
+                    if !ir_contains_fun(&ir) && seen.insert(ir.clone()) {
                         out.push(ir);
                     }
                 }
@@ -20671,12 +21135,23 @@ impl<'a> Lowerer<'a> {
         })
     }
 
+    /// Process one `PVar` let-binding.
+    ///
+    /// `precomputed` carries the [`LetAccum`] summary for `name` over `acc`
+    /// when the caller has already threaded those counts through the fold
+    /// (see [`lower_let_inner`]).  When `Some`, the five analysis walks of
+    /// `acc` (`fn_value_read_flags`, `count_fn_value_uses`, `count_var_uses`,
+    /// the depth-count collection for `needs_shared_capture`) are skipped;
+    /// `flows_into_sync_kernel_call` is always a full walk for alias-chain
+    /// safety (see [`LetAccum`] doc).  When `None`, every walk runs as
+    /// before — used by any call site that does not maintain an accumulator.
     fn lower_let_pvar(
         &self,
         name: Symbol,
         b: &canon::LetBinding,
         value: Expr,
         acc: Expr,
+        precomputed: Option<&LetAccum>,
     ) -> DResult<Expr> {
         // Consume this binder's deferred fn-capture signal (if any): the capture
         // classifier routed a pure-`Fun` capture of `name` away from IPE-L0126 on
@@ -20738,11 +21213,34 @@ impl<'a> Lowerer<'a> {
         // the read patterns a `Box` cannot serve; `needs_shared_capture`
         // (depth ≥ 2 / 2+ closure captures) joins in the carrier-flip
         // condition further down.
+        // Use threaded counts from the accumulator when available (O(1)),
+        // falling back to fresh walks of `acc` (O(|acc|)) only when called
+        // without a precomputed summary.
+        //
+        // A move-then-use of the bare `Box` carrier — a consuming read
+        // (a kernel/ctor argument, a list/record element, a capture) followed
+        // in evaluation order by ANY further read, including a borrowing
+        // direct-callee call — is the third unsound shape. It is invisible to
+        // `count_fn_value_uses` (which exempts the callee position) and to
+        // `non_callee_ge1` (the reuse can be two depth-0 reads), so it is
+        // detected order-aware here. Like `flows_into_sync_kernel_call` it is
+        // not additively threadable across `Let` siblings (a move in one
+        // binding and a use in the next cross the boundary), so it is a full
+        // walk on `acc` — reached only on the narrow fn-shaped path.
         let new_trigger = fun_shape.is_some()
-            && (fn_value_read_flags(name, &acc).non_callee_ge1
-                || count_fn_value_uses(name, &acc) > 1);
+            && (precomputed.map_or_else(
+                || {
+                    fn_value_read_flags(name, &acc).non_callee_ge1
+                        || count_fn_value_uses(name, &acc) > 1
+                },
+                |a| a.fn_flags.non_callee_ge1 || a.fn_value_uses > 1,
+            ) || fn_value_use_after_consume(name, &acc));
         let mut acc = match (&fun_shape, new_trigger) {
             (Some((ps, r)), true) => {
+                // `shim_fn_value_reads` rewrites non-callee Var(name) reads
+                // into fresh closure shims.  The subsequent count is on the
+                // SHIMMED tree — not predictable from the pre-shim accum, so
+                // the full walk here is unavoidable.
                 let shimmed = shim_fn_value_reads(name, ps, r, &self.eta_params, acc)?;
                 let mut remaining = count_var_uses(name, &shimmed);
                 rewrite_multiuse_clones(name, &mut remaining, shimmed)
@@ -20759,7 +21257,18 @@ impl<'a> Lowerer<'a> {
                     // `Arc`-promotion path below (`needs_shared_capture` /
                     // `flows_into_sync_kernel_call`) is orthogonal and
                     // untouched.
-                    apply_move_ownership(self.clone_env(), name, ir_ty, acc, b.body.span)?
+                    if let Some(a) = precomputed {
+                        apply_move_ownership_precomputed(
+                            self.clone_env(),
+                            name,
+                            ir_ty,
+                            acc,
+                            b.body.span,
+                            a,
+                        )?
+                    } else {
+                        apply_move_ownership(self.clone_env(), name, ir_ty, acc, b.body.span)?
+                    }
                 } else {
                     acc
                 }
@@ -20799,10 +21308,20 @@ impl<'a> Lowerer<'a> {
         // the carrier here or the inserted `.clone()`s hit E0599 on a `Box`.
         // OR it into the promotion alongside the existing nesting /
         // sync-kernel heuristics.
+        // `needs_shared_capture` is derived from the threaded depth-count
+        // summary when available.  `apply_move_ownership_precomputed` (the
+        // non-new-trigger path) converts Var→CloneVar but preserves capture
+        // depths, so the threaded value remains correct post-rewrite.
+        //
+        // `flows_into_sync_kernel_call` is always a full walk: its
+        // alias-chain resolution cannot be accumulated incrementally across
+        // Let boundaries (see LetAccum doc).  It is only reached when
+        // `new_trigger` is false (short-circuit OR) and only for fun-shaped
+        // bindings, so its cost is bounded to that narrow path.
+        let needs_shared_val =
+            precomputed.map_or_else(|| needs_shared_capture(name, &acc), LetAccum::needs_shared);
         if let Some((ps, r)) = fun_shape
-            && (new_trigger
-                || needs_shared_capture(name, &acc)
-                || flows_into_sync_kernel_call(name, &acc))
+            && (new_trigger || needs_shared_val || flows_into_sync_kernel_call(name, &acc))
         {
             acc = force_shared_capture_clones(name, acc);
             match value {
@@ -20941,7 +21460,42 @@ impl<'a> Lowerer<'a> {
     }
 
     fn lower_let_inner(&self, bindings: &[canon::LetBinding], body: &canon::Expr) -> DResult<Expr> {
-        let mut acc = self.lower_expr(body)?;
+        let lowered_body = self.lower_expr(body)?;
+
+        // Seed the accumulator with each PVar symbol's counts over the
+        // lowered body.  As bindings are folded in reverse order, the
+        // accumulator is updated with each new binding value so that when
+        // a binding is processed its entry already reflects the full
+        // continuation `acc` without requiring a re-walk of that growing
+        // tree.  Non-PVar symbols are not tracked (they don't reach
+        // lower_let_pvar) but their values still update PVar entries that
+        // may appear in them.
+        //
+        // O(n) to seed (one LetAccum::from_expr per PVar per initial body
+        // scan, but collect_mentioned_syms is called once on the body first
+        // to avoid calling from_expr for absent symbols).
+        let mut accum: BTreeMap<Symbol, LetAccum> = {
+            let pvar_names: Vec<Symbol> = bindings
+                .iter()
+                .filter_map(|b| match &b.pat.value {
+                    canon::Pattern_::PVar(n) => Some(*n),
+                    _ => None,
+                })
+                .collect();
+            let mut mentioned = BTreeSet::new();
+            collect_mentioned_syms(&lowered_body, &mut mentioned);
+            let mut map = BTreeMap::new();
+            for &sym in &pvar_names {
+                if mentioned.contains(&sym) {
+                    map.insert(sym, LetAccum::from_expr(sym, &lowered_body));
+                } else {
+                    map.insert(sym, LetAccum::default());
+                }
+            }
+            map
+        };
+
+        let mut acc = lowered_body;
         for (rev_i, b) in bindings.iter().rev().enumerate() {
             // Scope the binder is visible over, in source order: the let body
             // plus the values of every binding that appears AFTER `b`. `rev_i`
@@ -20951,8 +21505,31 @@ impl<'a> Lowerer<'a> {
             // to find each component symbol's first use-site type.
             let b_src_idx = bindings.len() - 1 - rev_i;
             let value = self.lower_expr(&b.body)?;
+            // Snapshot the lowered value for accumulator updates.  `value`
+            // is moved into the match arm; a clone is needed for the update
+            // when future PVar symbols remain.  Clone only when the accum is
+            // non-empty — i.e., at least one future PVar symbol exists.
+            // (For the PVar arm we pop one entry first, so the actual check
+            // is done per-arm after the pop.)
+            let value_for_update = if accum.is_empty() {
+                None
+            } else {
+                Some(value.clone())
+            };
             acc = match &b.pat.value {
-                canon::Pattern_::PVar(name) => self.lower_let_pvar(*name, b, value, acc)?,
+                canon::Pattern_::PVar(name) => {
+                    // Pop this binding's precomputed summary before passing it.
+                    let precomputed = accum.remove(name);
+                    let new_acc =
+                        self.lower_let_pvar(*name, b, value, acc, precomputed.as_ref())?;
+                    // Update remaining future symbols with contributions from
+                    // this binding's lowered value (the ORIGINAL pre-rewrite
+                    // value — rewrites of `name` leave other symbols unchanged).
+                    if let Some(ref v) = value_for_update {
+                        batch_accum_update(&mut accum, v);
+                    }
+                    new_acc
+                }
                 // `let _ = <task>` effect discard. A `Task` carries its effect
                 // in the `Task` discipline: it runs only through `Task.run`, or
                 // by being sequenced inside a function whose own return type is a
@@ -20970,7 +21547,7 @@ impl<'a> Lowerer<'a> {
                 // A non-Task wildcard keeps the plain `Destructure(Wildcard, …)`
                 // form (which lowers to `let _ = …;`).
                 canon::Pattern_::PAnything => {
-                    if self.is_task_typed(b.body.span) {
+                    let new_acc = if self.is_task_typed(b.body.span) {
                         if self.fn_is_async.get() {
                             Expr::TaskSeq {
                                 effect: Box::new(value),
@@ -20988,7 +21565,11 @@ impl<'a> Lowerer<'a> {
                             value: Box::new(value),
                             body: Box::new(acc),
                         }
+                    };
+                    if let Some(ref v) = value_for_update {
+                        batch_accum_update(&mut accum, v);
                     }
+                    new_acc
                 }
                 // a destructure binder (tuple / record / alias) whose
                 // bound value's type contains a Decoder anywhere gets the
@@ -21003,14 +21584,18 @@ impl<'a> Lowerer<'a> {
                     if let Some(later) = bindings.get(b_src_idx + 1..) {
                         scope.extend(later.iter().map(|lb| &lb.body));
                     }
-                    self.build_destructure_or_decoder_thunk(
+                    let new_acc = self.build_destructure_or_decoder_thunk(
                         binder,
                         value,
                         b.body.span,
                         acc,
                         &b.body,
                         &scope,
-                    )?
+                    )?;
+                    if let Some(ref v) = value_for_update {
+                        batch_accum_update(&mut accum, v);
+                    }
+                    new_acc
                 }
             };
         }
