@@ -405,6 +405,15 @@ status = "green"
 parity = "exact"
 
 [[example]]
+name = "53-record-update-map"
+patch = "rename-map"
+go_ffi = false
+shape  = "program"
+verify = "run"
+status = "green"
+parity = "exact"
+
+[[example]]
 name = "simple"
 patch = "rename-map+ipe-edit"
 go_ffi = false
