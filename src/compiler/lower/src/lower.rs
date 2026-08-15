@@ -7338,6 +7338,47 @@ fn fn_read_shim(
     })
 }
 
+/// The `Arc`-carrier analogue of [`fn_read_shim`]: re-dispatch a non-callee read
+/// of the promoted `sym` sitting in a STORAGE ELEMENT position (a `List`/`Cons`
+/// element, a `Tuple` component, a constructor payload, a record field, a `Dict`
+/// value) as `SharedLambda { f0.., Apply(CloneVar(sym), [f0..]) }`, emitted as
+/// `Arc::new(move |f0..| (sym.clone())(f0..))`. The element TYPE at such a
+/// position was flipped to [`IrType::SharedFun`] (`Arc<dyn Fn>`) by
+/// [`normalize_record_fun_carriers`] / [`flip_fun_in_storage_element`], and the
+/// same collection's empty-tail turbofish (`Vec::<Arc<dyn Fn…>>::new()`) anchors
+/// that `Arc` element type — so a Box shim here would put a `Box` head onto an
+/// `Arc` tail and break `ipe_list_cons<T>(x: T, xs: Vec<T>)` (`E0308`). Minting
+/// the shim on the `Arc` carrier keeps head, non-empty items, and empty-tail
+/// turbofish all on one element type. Fresh parameter symbols come positionally
+/// from the eta pool, exactly as [`fn_read_shim`].
+fn fn_read_shim_shared(
+    sym: Symbol,
+    param_tys: &[IrType],
+    ret: &IrType,
+    eta_pool: &[Symbol],
+) -> DResult<Expr> {
+    let mut params: Vec<(Symbol, IrType)> = Vec::with_capacity(param_tys.len());
+    let mut args: Vec<Expr> = Vec::with_capacity(param_tys.len());
+    for (offset, ty) in param_tys.iter().enumerate() {
+        let fresh = *eta_pool.get(offset).ok_or_else(|| {
+            bug(
+                "ipe_lower::fn_read_shim_shared",
+                "eta-parameter pool smaller than the promoted binding's arity",
+            )
+        })?;
+        params.push((fresh, ty.clone()));
+        args.push(Expr::Var(fresh));
+    }
+    Ok(Expr::SharedLambda {
+        params,
+        ret: ret.clone(),
+        body: Box::new(Expr::Apply {
+            func: Box::new(Expr::CloneVar(sym)),
+            args,
+        }),
+    })
+}
+
 /// Mint the `Arc` carrier for a promoted binding whose value is NOT a lambda
 /// literal (a partial-application residual, an alias `Var`, a `FuncValue`, a
 /// record-field access, …), or for a fn-typed PARAM being shadow-rebound:
@@ -7389,15 +7430,50 @@ fn shim_fn_value_reads(
     eta_pool: &[Symbol],
     expr: Expr,
 ) -> DResult<Expr> {
-    let recurse = |e: Expr| shim_fn_value_reads(sym, param_tys, ret, eta_pool, e);
+    shim_fn_value_reads_at(sym, param_tys, ret, eta_pool, expr, false)
+}
+
+/// Worker for [`shim_fn_value_reads`], threading `in_storage`: `true` while the
+/// current position is a STORAGE ELEMENT (a `List`/`Cons` element, a `Tuple`
+/// component, a constructor payload, a record field, a `Dict` value) whose fn
+/// carrier was flipped to `Arc` (`SharedFun`) by the type-side normalization. A
+/// direct read of `sym` there is shimmed on the `Arc` carrier
+/// ([`fn_read_shim_shared`]) so it agrees with the element type and the
+/// empty-tail turbofish; every other position (a direct call arg, a return, a
+/// binding value) keeps the `Box` carrier ([`fn_read_shim`]) and resets the flag.
+#[allow(clippy::too_many_lines)]
+fn shim_fn_value_reads_at(
+    sym: Symbol,
+    param_tys: &[IrType],
+    ret: &IrType,
+    eta_pool: &[Symbol],
+    expr: Expr,
+    in_storage: bool,
+) -> DResult<Expr> {
+    // Most positions are NOT storage-element positions: recursing through them
+    // resets the flag. Only the storable-element arms below re-enter with it set.
+    let recurse = |e: Expr| shim_fn_value_reads_at(sym, param_tys, ret, eta_pool, e, false);
     let recurse_all = |items: Vec<Expr>| {
         items
             .into_iter()
-            .map(|e| shim_fn_value_reads(sym, param_tys, ret, eta_pool, e))
+            .map(|e| shim_fn_value_reads_at(sym, param_tys, ret, eta_pool, e, false))
+            .collect::<DResult<Vec<Expr>>>()
+    };
+    let recurse_storage = |e: Expr| shim_fn_value_reads_at(sym, param_tys, ret, eta_pool, e, true);
+    let recurse_all_storage = |items: Vec<Expr>| {
+        items
+            .into_iter()
+            .map(|e| shim_fn_value_reads_at(sym, param_tys, ret, eta_pool, e, true))
             .collect::<DResult<Vec<Expr>>>()
     };
     match expr {
-        Expr::Var(s) | Expr::CloneVar(s) if s == sym => fn_read_shim(sym, param_tys, ret, eta_pool),
+        Expr::Var(s) | Expr::CloneVar(s) if s == sym => {
+            if in_storage {
+                fn_read_shim_shared(sym, param_tys, ret, eta_pool)
+            } else {
+                fn_read_shim(sym, param_tys, ret, eta_pool)
+            }
+        }
         Expr::Var(_)
         | Expr::CloneVar(_)
         | Expr::Int(_)
@@ -7536,6 +7612,8 @@ fn shim_fn_value_reads(
             then_: Box::new(recurse(*then_)?),
             else_: Box::new(recurse(*else_)?),
         }),
+        // A constructor payload is a storage-element position: a fn directly in
+        // the payload is carried on `Arc` (`SharedFun`) by the enum-payload flip.
         Expr::Ctor {
             home,
             ty,
@@ -7545,16 +7623,19 @@ fn shim_fn_value_reads(
             home,
             ty,
             variant,
-            args: recurse_all(args)?,
+            args: recurse_all_storage(args)?,
         }),
-        Expr::Tuple(items) => Ok(Expr::Tuple(recurse_all(items)?)),
+        // A `Tuple` component, a `List` element, and a `Cons` head/tail are all
+        // storage-element positions: a fn read there is carried on `Arc`
+        // (`SharedFun`), so recurse with the storage flag set.
+        Expr::Tuple(items) => Ok(Expr::Tuple(recurse_all_storage(items)?)),
         Expr::List { elem, items } => Ok(Expr::List {
             elem,
-            items: recurse_all(items)?,
+            items: recurse_all_storage(items)?,
         }),
         Expr::Cons { head, tail } => Ok(Expr::Cons {
-            head: Box::new(recurse(*head)?),
-            tail: Box::new(recurse(*tail)?),
+            head: Box::new(recurse_storage(*head)?),
+            tail: Box::new(recurse_storage(*tail)?),
         }),
         Expr::ListIndexClone { list, index } => Ok(Expr::ListIndexClone {
             list: Box::new(recurse(*list)?),
@@ -7565,10 +7646,12 @@ fn shim_fn_value_reads(
             len,
             exact,
         }),
+        // A record field value is a storage-element position: a fn-valued field
+        // is carried on `Arc` (`SharedFun`) by the record-field flip.
         Expr::Record { fields, ty } => Ok(Expr::Record {
             fields: fields
                 .into_iter()
-                .map(|(name, e)| recurse(e).map(|e| (name, e)))
+                .map(|(name, e)| recurse_storage(e).map(|e| (name, e)))
                 .collect::<DResult<Vec<_>>>()?,
             ty,
         }),
@@ -7576,7 +7659,7 @@ fn shim_fn_value_reads(
             record: Box::new(recurse(*record)?),
             fields: fields
                 .into_iter()
-                .map(|(name, e)| recurse(e).map(|e| (name, e)))
+                .map(|(name, e)| recurse_storage(e).map(|e| (name, e)))
                 .collect::<DResult<Vec<_>>>()?,
         }),
         Expr::Access {
