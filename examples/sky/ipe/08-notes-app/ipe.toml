@@ -26,4 +26,4 @@ email_verification = true
 "os" = "latest"
 
 [capabilities]
-declared = ["unsafe"]
+accept = ["unsafe"]
