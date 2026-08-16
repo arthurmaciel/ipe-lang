@@ -8,6 +8,8 @@ import Sky.Core.String as String
 import Sky.Http.Server as Server
 import Sky.Http.Server exposing (Request, Response)
 import Std.Log exposing (println)
+import Std.Db exposing (SqlValue(..))
+import Std.Db.Store as Store
 import Lib.Db as Db
 import Lib.Auth as Auth
 import Lib.Notes as Notes
@@ -34,45 +36,14 @@ runInit label result =
                 ()
 
 
+-- Schema is derived from the codecs — one `Store.create` per store emits the
+-- dialect-correct DDL (serial PK, UNIQUE, DEFAULTs) for the connection's backend.
 initDb _ =
     let
+        _ = runInit "users" (Task.run (Store.create Db.conn Db.userStore))
         _ =
-            runInit
-                "users"
-                (Db.exec
-                    """CREATE TABLE IF NOT EXISTS users (
-                        id INTEGER PRIMARY KEY AUTOINCREMENT,
-                        email TEXT NOT NULL UNIQUE,
-                        password_hash TEXT NOT NULL,
-                        verified INTEGER DEFAULT 0,
-                        verification_token TEXT,
-                        created_at TEXT DEFAULT (datetime('now'))
-                    )"""
-                    [])
-        _ =
-            runInit
-                "sessions"
-                (Db.exec
-                    """CREATE TABLE IF NOT EXISTS sessions (
-                        id INTEGER PRIMARY KEY AUTOINCREMENT,
-                        user_id TEXT NOT NULL,
-                        token TEXT NOT NULL UNIQUE,
-                        created_at TEXT DEFAULT (datetime('now'))
-                    )"""
-                    [])
-        _ =
-            runInit
-                "notes"
-                (Db.exec
-                    """CREATE TABLE IF NOT EXISTS notes (
-                        id INTEGER PRIMARY KEY AUTOINCREMENT,
-                        user_id TEXT NOT NULL,
-                        title TEXT NOT NULL,
-                        content TEXT NOT NULL DEFAULT '',
-                        created_at TEXT DEFAULT (datetime('now')),
-                        updated_at TEXT DEFAULT ''
-                    )"""
-                    [])
+            runInit "sessions" (Task.run (Store.create Db.conn Db.sessionStore))
+        _ = runInit "notes" (Task.run (Store.create Db.conn Db.noteStore))
     in
         ()
 
@@ -116,7 +87,7 @@ requireAuth req onUser =
 
                 Ok (Just user) ->
                     let
-                        email = Db.getField "email" user
+                        email = user.email
                     in
                         onUser user email
 
@@ -150,7 +121,7 @@ handleSignIn req =
 
                 Ok user ->
                     let
-                        userId = Db.getField "id" user
+                        userId = user.id
                     in
                         case Auth.createSession userId of
 
@@ -290,7 +261,11 @@ handleSignOut req =
     let
         token = getSessionToken req
         _ =
-            case Db.exec "DELETE FROM sessions WHERE token = ?" [ token ] of
+            case Task.run
+                     (Store.deleteWhere
+                         Db.conn
+                         Db.sessionStore
+                         (Store.eq "token" (SqlString token))) of
 
                 Ok _ ->
                     ()
@@ -321,7 +296,7 @@ handleNotesList req =
             req
             (\user email ->
                 let
-                    userId = Db.getField "id" user
+                    userId = user.id
                 in
                     case Notes.getNotes userId of
 
@@ -348,7 +323,7 @@ handleNewNote req =
             req
             (\user email ->
                 let
-                    userId = Db.getField "id" user
+                    userId = user.id
                 in
                     if Server.method req == "POST" then
                         let
@@ -383,7 +358,7 @@ handleViewNote req =
             req
             (\user email ->
                 let
-                    userId = Db.getField "id" user
+                    userId = user.id
                     noteId =
                         Maybe.withDefault "" (Server.queryParam "id" req)
                 in
@@ -415,7 +390,7 @@ handleEditNote req =
             req
             (\user email ->
                 let
-                    userId = Db.getField "id" user
+                    userId = user.id
                     noteId =
                         Maybe.withDefault "" (Server.queryParam "id" req)
                 in
@@ -447,8 +422,8 @@ handleEditNote req =
 
                             Ok (Just note) ->
                                 let
-                                    title = Db.getField "title" note
-                                    content = Db.getField "content" note
+                                    title = note.title
+                                    content = note.content
                                 in
                                     Server.html
                                         (View.noteFormPage
@@ -481,7 +456,7 @@ handleDeleteNote req =
             req
             (\user email ->
                 let
-                    userId = Db.getField "id" user
+                    userId = user.id
                     noteId =
                         Maybe.withDefault "" (Server.queryParam "id" req)
                 in
