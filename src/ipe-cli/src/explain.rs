@@ -301,11 +301,16 @@ fn parse_inline_array(s: &str) -> Vec<String> {
 
 fn unquote(s: &str) -> &str {
     let s = s.trim();
-    if (s.starts_with('"') && s.ends_with('"')) || (s.starts_with('\'') && s.ends_with('\'')) {
-        &s[1..s.len() - 1]
-    } else {
-        s
+    // Strip a matched surrounding quote pair. `strip_prefix`/`strip_suffix` on
+    // the char is total — a lone quote (`"`) leaves nothing to strip on the
+    // suffix step and falls through, where a byte range `[1..len-1]` would panic
+    // (`[1..0]`).
+    for q in ['"', '\''] {
+        if let Some(inner) = s.strip_prefix(q).and_then(|rest| rest.strip_suffix(q)) {
+            return inner;
+        }
     }
+    s
 }
 
 // ---------------------------------------------------------------------------
@@ -1111,5 +1116,18 @@ mod tests {
                 "anti-pattern `{key}` → topic `{topic}` must resolve exactly"
             );
         }
+    }
+
+    #[test]
+    fn unquote_is_total_on_lone_and_unbalanced_quotes() {
+        // A lone quote must fall through, not panic on a `[1..0]` byte range.
+        assert_eq!(unquote("\""), "\"");
+        assert_eq!(unquote("'"), "'");
+        // A matched pair is stripped; an unbalanced or bare value passes through.
+        assert_eq!(unquote("\"hi\""), "hi");
+        assert_eq!(unquote("'hi'"), "hi");
+        assert_eq!(unquote("\"hi"), "\"hi");
+        assert_eq!(unquote("bare"), "bare");
+        assert_eq!(unquote(""), "");
     }
 }
