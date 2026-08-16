@@ -10,6 +10,13 @@ Entries below the header are maintained by
 section is generated from Conventional Commit messages and prepended when the
 standing release pull request is merged.
 
+## [0.1.53](https://github.com/arthurmaciel/ipe-lang/compare/ipe-v0.1.52...ipe-v0.1.53) (2026-08-16)
+
+
+### Features
+
+* **cli:** add `ipe package audit-entry` — index CI receiving gate ([#1010](https://github.com/arthurmaciel/ipe-lang/issues/1010)) ([24ec11c](https://github.com/arthurmaciel/ipe-lang/commit/24ec11c511851201819d0af53c26de18eba24d9a))
+
 ## [0.1.52](https://github.com/arthurmaciel/ipe-lang/compare/ipe-v0.1.51...ipe-v0.1.52) (2026-08-16)
 
 
