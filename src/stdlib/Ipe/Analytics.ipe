@@ -1,0 +1,424 @@
+-- | Ipe.Analytics — typed, consent-gated product analytics.
+--
+-- This module provides a structured surface for emitting analytics events with
+-- three security properties enforced by the type system:
+--
+--   1. Consent is fail-closed. `track` and `trackEvent` DROP the event and
+--      return `Task.succeed ()` when consent is `Pending` or `Denied`. There
+--      is no branch where an event is emitted without proof of `Granted`
+--      consent — the safe outcome is the only reachable one.
+--
+--   2. PII is a distinct type, never a bare `String`. `Pii` wraps an opaque
+--      `Secret`; the `Secret` field's runtime `IpeStringify` and `Debug` impls
+--      always return the fixed redacted placeholder regardless of the wrapped
+--      value — `Basics.toString`, string interpolation, and `Debug.log` are
+--      all fail-closed by construction. The only JSON serialization path for a
+--      `PPii` prop value produces `"[redacted]"` unconditionally.
+--
+--   3. Money is lossless. A `PMoney` prop value encodes as a JSON object
+--      `{"amount":"<decimal-string>","currency":"<code>"}` — no floating-point
+--      truncation.
+--
+-- Event union / codec:
+--
+-- Events are encoded via `Ipe.Codec.taggedUnion` — a single source of truth
+-- for both encode and decode directions. The caller defines their event ADT
+-- and supplies a `Codec Event` built with `Codec.taggedUnion`; `trackEvent`
+-- routes that codec through the active sink.
+--
+-- Pluggable sinks:
+--
+-- Two concrete sinks ship: `Stderr` (development) and `Jsonl Path` (append a
+-- JSONL line to a file). The custom-sink seam (a caller-supplied emit
+-- function) is deferred: it requires function-in-union-ctor support (IPE-L0107
+-- residual); see the tracking issue. Each sink receives the fully serialised
+-- JSON line; PII is already redacted before the line reaches the sink.
+--
+-- Session and identity:
+--
+-- `Config` carries the session's consent state and optional identity. Build a
+-- `Config` with `defaultConfig`, set consent with `setConsent`, record
+-- identity with `identify`. All functions take a `Config` explicitly — there
+-- is no mutable global; the caller threads the config value through their
+-- program.
+--
+-- Minimal usage:
+--
+--     import Ipe.Analytics as Analytics exposing (Config, ConsentState(..))
+--     import Ipe.Path as Path
+--
+--     cfg : Config
+--     cfg =
+--         Analytics.defaultConfig (Analytics.Jsonl (Path.fromString "/var/log/events.jsonl"))
+--             |> Analytics.setConsent Granted
+--             |> Analytics.identify "user-42" Analytics.noTraits
+--
+--     main =
+--         Analytics.track cfg "button_click"
+--             (Analytics.props
+--                 [ ( "label", Analytics.PText "Sign up" )
+--                 , ( "plan", Analytics.PText "pro" )
+--                 ]
+--             )
+module Ipe.Analytics exposing
+    ( -- Types
+      Config
+    , ConsentState(..)
+    , Sink(..)
+    , PropValue(..)
+    , Props
+    , Pii
+      -- Pii constructors (no reveal — redact is the only serialisation path)
+    , pii
+    , redactedText
+      -- Props
+    , noProps
+    , props
+    , prop
+      -- Traits alias
+    , noTraits
+      -- Config builders
+    , defaultConfig
+    , setConsent
+    , identify
+    , consentState
+      -- Event emission
+    , track
+    , trackEvent
+      -- Low-level serialisation (exposed for testing; not a Pii leak — Pii
+      -- is already redacted before this returns)
+    , encodePropValue
+    )
+
+
+import Ipe.Codec as Codec exposing (Codec(..))
+import Ipe.Json.Encode as Encode
+import Ipe.Io as Io
+import Ipe.File as File
+import Ipe.Task as Task
+import Ipe.Path as Path exposing (Path)
+import Ipe.Money as Money exposing (Money(..))
+import Ipe.Decimal as Dec
+import Ipe.Secret as Secret
+import Ipe.String as String
+import Ipe.List as List
+import Ipe.Dict as Dict
+import Ipe.Maybe as Maybe exposing (Maybe(..))
+import Ipe.Error as Error exposing (Error)
+
+
+-- ─── Pii ──────────────────────────────────────────────────────────────────────
+--
+-- An opaque wrapper around a PII-bearing string. `Pii` wraps an `Ipe.Secret`
+-- so every stringification path — `Basics.toString`, string interpolation,
+-- `Debug.log`, and the JSON encode path — is closed by construction. The
+-- `Secret` field's runtime `IpeStringify` and `Debug` impls always return the
+-- fixed placeholder `"<redacted>"`, never the wrapped value. `pii` is the
+-- single seal (constructs a `Secret` under the cover); there is no reveal.
+
+
+-- | An opaque PII-tagged string. Cannot be serialised directly — the sink
+-- layer always emits `"[redacted]"` in place of the raw plaintext.
+type Pii
+    = Pii Secret
+
+
+-- | Wrap a plaintext string as a `Pii` value. The wrapped string is sealed
+-- inside the opaque constructor; no API on this module reveals it back.
+pii : String -> Pii
+pii s =
+    Pii (Secret.fromString s)
+
+
+-- | The only text this module emits for a `Pii` value: the literal string
+-- `"[redacted]"`. Calling this does NOT reveal the plaintext — the result is
+-- the redacted sentinel, not the wrapped string.
+redactedText : Pii -> String
+redactedText _ =
+    "[redacted]"
+
+
+-- ─── ConsentState ─────────────────────────────────────────────────────────────
+
+
+-- | The three possible consent states. `track` / `trackEvent` are
+-- fail-closed: any state other than `Granted` drops the event silently.
+type ConsentState
+    = Granted
+    | Denied
+    | Pending
+
+
+-- ─── Sink ─────────────────────────────────────────────────────────────────────
+
+
+-- | Where serialised event lines go.
+--
+-- `Stderr` — emit to stderr, one JSON line per event; useful for local
+-- development without any persistent store.
+--
+-- `Jsonl Path` — append one JSON line per event to the file at `path`,
+-- creating it if absent. All bytes are flushed before the Task resolves.
+--
+-- A custom-sink variant (caller-supplied emit function) is deferred; it
+-- requires function-in-union-ctor support (IPE-L0107 residual).
+type Sink
+    = Stderr
+    | Jsonl Path
+
+
+-- ─── PropValue ────────────────────────────────────────────────────────────────
+
+
+-- | A typed analytics property value. Every branch serialises safely:
+--
+--   * `PText`  — a plain string (non-PII).
+--   * `PInt`   — an integer.
+--   * `PFloat` — a floating-point number.
+--   * `PBool`  — a boolean.
+--   * `PMoney` — encodes as `{"amount":"<decimal>","currency":"<code>"}`;
+--                lossless across all ISO-4217 currencies.
+--   * `PPii`   — always serialises as `"[redacted]"`; the plaintext is sealed.
+type PropValue
+    = PText String
+    | PInt Int
+    | PFloat Float
+    | PBool Bool
+    | PMoney Money
+    | PPii Pii
+
+
+-- ─── Props ────────────────────────────────────────────────────────────────────
+
+
+-- | A bag of named property values for an event or identity.
+type alias Props =
+    Dict String PropValue
+
+
+-- | An empty `Props`.
+noProps : Props
+noProps =
+    Dict.empty
+
+
+-- | Build a `Props` from a list of `(name, value)` pairs.
+props : List ( String, PropValue ) -> Props
+props pairs =
+    List.foldl insertProp Dict.empty pairs
+
+
+insertProp : ( String, PropValue ) -> Props -> Props
+insertProp pair acc =
+    case pair of
+        ( k, v ) ->
+            Dict.insert k v acc
+
+
+-- | Insert one property into an existing `Props`.
+prop : String -> PropValue -> Props -> Props
+prop k v existing =
+    Dict.insert k v existing
+
+
+-- | Synonym for `noProps` used in the identity position.
+noTraits : Props
+noTraits =
+    noProps
+
+
+-- ─── Config ───────────────────────────────────────────────────────────────────
+
+
+-- | Session configuration: which sink to use, the current consent state, and
+-- an optional identity (`userId` + trait `Props`).
+--
+-- Build with `defaultConfig`, then thread through `setConsent` / `identify`.
+type alias Config =
+    { sink : Sink
+    , consent : ConsentState
+    , userId : Maybe String
+    , traits : Props
+    }
+
+
+-- | A `Config` starting in the `Pending` state (fail-closed default) with no
+-- identity. Call `setConsent Granted` before any `track*` calls, or those
+-- calls will drop silently.
+defaultConfig : Sink -> Config
+defaultConfig sink =
+    { sink = sink
+    , consent = Pending
+    , userId = Nothing
+    , traits = noTraits
+    }
+
+
+-- | Replace the consent state in a `Config`.
+setConsent : ConsentState -> Config -> Config
+setConsent state cfg =
+    { cfg | consent = state }
+
+
+-- | Record the user's identity and optional trait properties.
+identify : String -> Props -> Config -> Config
+identify userId traits cfg =
+    { cfg | userId = Just userId, traits = traits }
+
+
+-- | Read the current consent state from a `Config`.
+consentState : Config -> ConsentState
+consentState cfg =
+    cfg.consent
+
+
+-- ─── Serialisation ────────────────────────────────────────────────────────────
+--
+-- `encodePropValue` converts a `PropValue` to a JSON `Value`. The critical
+-- invariant: `PPii` always encodes as the literal string `"[redacted]"`,
+-- never as its wrapped plaintext. `PMoney` encodes losslessly as a
+-- two-field object (decimal string + currency code).
+
+
+-- | Encode one `PropValue` to a JSON `Value`. `PPii` → `"[redacted]"`,
+-- `PMoney` → `{"amount":"…","currency":"…"}`, all others as expected.
+encodePropValue : PropValue -> Value
+encodePropValue v =
+    case v of
+        PText s ->
+            Encode.string s
+
+        PInt n ->
+            Encode.int n
+
+        PFloat x ->
+            Encode.float x
+
+        PBool b ->
+            Encode.bool b
+
+        PMoney m ->
+            Encode.object
+                [ ( "amount", Encode.string (Dec.toString (Money.amount m)) )
+                , ( "currency", Encode.string (Money.currencyCode (Money.currency m)) )
+                ]
+
+        PPii _ ->
+            Encode.string "[redacted]"
+
+
+encodeProps : Props -> Value
+encodeProps p =
+    Encode.object (List.map encodePropPair (Dict.toList p))
+
+
+encodePropPair : ( String, PropValue ) -> ( String, Value )
+encodePropPair pair =
+    case pair of
+        ( k, v ) ->
+            ( k, encodePropValue v )
+
+
+-- | Build the JSON line for a named event: a JSON object with `event`, `userId`
+-- (when present), and `props` fields.
+encodeEvent : Config -> String -> Props -> String
+encodeEvent cfg eventName eventProps =
+    let
+        base =
+            [ ( "event", Encode.string eventName )
+            , ( "props", encodeProps eventProps )
+            ]
+
+        withUser =
+            case cfg.userId of
+                Just uid ->
+                    ( "userId", Encode.string uid ) :: base
+
+                Nothing ->
+                    base
+    in
+    Encode.encode 0 (Encode.object withUser)
+
+
+-- | Build the JSON line for a codec-encoded event. The codec encodes the event
+-- value to a JSON `Value`; this function wraps it with the session envelope
+-- (`userId`, `props`).
+encodeEventValue : Config -> Value -> Props -> String
+encodeEventValue cfg eventValue eventProps =
+    let
+        base =
+            [ ( "event", eventValue )
+            , ( "props", encodeProps eventProps )
+            ]
+
+        withUser =
+            case cfg.userId of
+                Just uid ->
+                    ( "userId", Encode.string uid ) :: base
+
+                Nothing ->
+                    base
+    in
+    Encode.encode 0 (Encode.object withUser)
+
+
+-- ─── Sink dispatch ────────────────────────────────────────────────────────────
+
+
+-- | Write one serialised JSON line to the configured sink.
+emitLine : Config -> String -> Task Error ()
+emitLine cfg line =
+    case cfg.sink of
+        Stderr ->
+            Io.eprintln line
+
+        Jsonl path ->
+            File.append path (line ++ "\n")
+
+
+-- ─── Event emission (fail-closed) ─────────────────────────────────────────────
+
+
+-- | `track cfg eventName eventProps` — emit a named event with a property bag.
+--
+-- Fail-closed: when consent is `Pending` or `Denied` the event is dropped and
+-- `Task.succeed ()` is returned. The event only reaches the sink when consent
+-- is `Granted`.
+track : Config -> String -> Props -> Task Error ()
+track cfg eventName eventProps =
+    case cfg.consent of
+        Granted ->
+            emitLine cfg (encodeEvent cfg eventName eventProps)
+
+        Denied ->
+            Task.succeed ()
+
+        Pending ->
+            Task.succeed ()
+
+
+-- | `trackEvent cfg codec event eventProps` — emit an event encoded by the
+-- caller's `Codec`, plus a supplementary `Props` bag.
+--
+-- The caller constructs their event ADT and supplies a `Codec Event` built
+-- with `Codec.taggedUnion` (or any other `Codec`). The codec encodes the
+-- event value to a JSON `Value`; this function wraps it in the session
+-- envelope and dispatches to the sink.
+--
+-- Fail-closed: when consent is `Pending` or `Denied` the event is dropped and
+-- `Task.succeed ()` is returned. No codec encoding and no sink write happen.
+trackEvent : Config -> Codec a -> a -> Props -> Task Error ()
+trackEvent cfg codec event eventProps =
+    case cfg.consent of
+        Granted ->
+            let
+                eventValue =
+                    Codec.toValue codec event
+            in
+            emitLine cfg (encodeEventValue cfg eventValue eventProps)
+
+        Denied ->
+            Task.succeed ()
+
+        Pending ->
+            Task.succeed ()

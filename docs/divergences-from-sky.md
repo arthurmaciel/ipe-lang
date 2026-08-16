@@ -1999,3 +1999,34 @@ session checkpoints stay compatible.
   the space including OS chrome, whose height varies by platform/theme).
 - **Sanctioned:** yes (`sanctioned:` — Ipê is deliberately more correct). No
   soundness impact; the size-application is a total, guarded `LogicalSize` cast.
+
+### B-Analytics — `Ipe.Analytics`: Ipê-native typed consent-gated analytics
+
+- **Differs:** The reference has an analytics module with a similar surface.
+  Ipê's `Ipe.Analytics` is an independent Ipê-native implementation validated
+  against `PRINCIPLES.md`, not a transcription.
+- **Structural differences from the reference surface:**
+  - `Pii` is an opaque type wrapping an `Ipe.Secret`. The `Secret` field's
+    hand-written `IpeStringify` and `Debug` impls ALWAYS return a fixed
+    `"<redacted>"` placeholder — plaintext leakage through `Basics.toString`,
+    string interpolation, or `Debug.log` is structurally impossible in the
+    emitted Rust (Security principle, §0 root-cause). The only encode path the
+    module exposes, `encodePropValue (PPii _)`, produces `"[redacted]"` by
+    ignoring the payload entirely. There is no reveal accessor on `Pii`.
+  - `ConsentState` is a three-way ADT (`Granted | Denied | Pending`); consent
+    gating is enforced in pure Ipê (`track`/`trackEvent` pattern-match on state
+    and return `Task.succeed ()` on non-`Granted` — fail-closed by construction).
+  - `PMoney` serialises as `{"amount":"<decimal-string>","currency":"<code>"}` —
+    lossless across all ISO-4217 currencies; the reference may use `Float`.
+  - The custom-sink variant (a caller-supplied emit function in a union ctor)
+    is deferred; it requires function-in-union-ctor support (IPE-L0107 residual).
+    Shipped sinks: `Stderr` and `Jsonl Path`.
+  - The SQLite/Postgres `eventsStore`, right-to-erasure `erase`, and aggregate
+    queries are deferred to a follow-up issue (depend on `Ipe.Db.Store` patterns
+    already established).
+- **Go-oracle relationship:** the reference's analytics module has no byte-exact
+  oracle target in the Ipê test corpus (no golden comparison defined); the
+  surface is tested by the `analytics_consent_gate` golden (invariants include
+  the ambient-stringify side-channel closure, proven by the E2E run).
+- **Sanctioned:** yes (`divergence:` — Ipê-native design, PRINCIPLES-conformant).
+  Reference consulted for behavioural parity only; no code transcribed.

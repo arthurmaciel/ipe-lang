@@ -12,6 +12,8 @@ mod golden_alias_move_seal;
 mod golden_aliases;
 #[path = "g_misc/golden_ambiguous_kernel_turbofish.rs"]
 mod golden_ambiguous_kernel_turbofish;
+#[path = "g_misc/golden_analytics_consent_gate.rs"]
+mod golden_analytics_consent_gate;
 #[path = "g_misc/golden_any_ctor_payload.rs"]
 mod golden_any_ctor_payload;
 #[path = "g_misc/golden_attribute_home_disambiguation_179.rs"]
