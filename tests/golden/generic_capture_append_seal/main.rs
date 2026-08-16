@@ -206,7 +206,7 @@ pub fn file_rename(src: ipe_runtime::path::Path, dst: ipe_runtime::path::Path) -
     ipe_runtime::file::file_rename(src, dst)
 }
 
-pub fn main_collect_rows<T1: 'static + Send + Sync + Clone, T2: 'static + Send + Clone>(
+pub fn main_collect_rows<T1: 'static + Send + Sync + Clone, T2: 'static + Send + Sync + Clone>(
     read: Box<dyn Fn(T2) -> IpeResult<ipe_runtime::error::IpeError, T1> + Send + Sync + 'static>,
     rows: Vec<T2>,
 ) -> IpeTask<Vec<T1>> {
