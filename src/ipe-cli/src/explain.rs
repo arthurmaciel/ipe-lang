@@ -1118,6 +1118,120 @@ mod tests {
         }
     }
 
+    // -- diagnostic SeeExplain wiring --
+    //
+    // These tests verify that the three wired diagnostics produce a
+    // `HelpLine::SeeExplain` carrying a topic that actually resolves to a page,
+    // closing the loop between the diagnostics crate and the explain module.
+
+    #[test]
+    fn wired_diagnostic_l0141_topic_resolves() {
+        use ipe_diagnostics::{Diagnostic, HelpLine, LowerError, Span};
+        let d = Diagnostic::Lower {
+            span: Span::DUMMY,
+            msg: LowerError::LawlessEffectDiscard,
+        };
+        let topics: Vec<&'static str> = d
+            .help()
+            .into_iter()
+            .filter_map(|h| {
+                if let HelpLine::SeeExplain(t) = h {
+                    Some(t)
+                } else {
+                    None
+                }
+            })
+            .collect();
+        assert_eq!(
+            topics,
+            ["effects"],
+            "IPE-L0141 must nudge to the effects topic"
+        );
+        let (exact, _) = resolve("effects");
+        assert!(exact.is_some(), "effects topic must resolve to a page");
+    }
+
+    #[test]
+    fn wired_diagnostic_l0136_topic_resolves() {
+        use ipe_diagnostics::{Diagnostic, HelpLine, LowerError, Span};
+        let d = Diagnostic::Lower {
+            span: Span::DUMMY,
+            msg: LowerError::NonEntryMain {
+                found: "a String".into(),
+            },
+        };
+        let topics: Vec<&'static str> = d
+            .help()
+            .into_iter()
+            .filter_map(|h| {
+                if let HelpLine::SeeExplain(t) = h {
+                    Some(t)
+                } else {
+                    None
+                }
+            })
+            .collect();
+        assert_eq!(topics, ["main"], "IPE-L0136 must nudge to the main topic");
+        let (exact, _) = resolve("main");
+        assert!(exact.is_some(), "main topic must resolve to a page");
+    }
+
+    #[test]
+    fn wired_diagnostic_l0107_topic_resolves() {
+        use ipe_diagnostics::{Diagnostic, Feature, HelpLine, LowerError, Span};
+        let d = Diagnostic::Lower {
+            span: Span::DUMMY,
+            msg: LowerError::Unsupported(Feature::FirstClassFunctions),
+        };
+        let topics: Vec<&'static str> = d
+            .help()
+            .into_iter()
+            .filter_map(|h| {
+                if let HelpLine::SeeExplain(t) = h {
+                    Some(t)
+                } else {
+                    None
+                }
+            })
+            .collect();
+        assert_eq!(topics, ["state"], "IPE-L0107 must nudge to the state topic");
+        let (exact, _) = resolve("state");
+        assert!(exact.is_some(), "state topic must resolve to a page");
+    }
+
+    #[test]
+    fn see_explain_human_render_appends_topic_nudge() {
+        // The human renderer for a wired diagnostic must contain
+        // "ipe explain <topic>" in its output.
+        use ipe_diagnostics::{Diagnostic, LowerError, Span, render};
+        let d = Diagnostic::Lower {
+            span: Span::DUMMY,
+            msg: LowerError::LawlessEffectDiscard,
+        };
+        let rendered = render(&d, "test.ipe", "");
+        assert!(
+            rendered.contains("ipe explain effects"),
+            "human render for IPE-L0141 must contain 'ipe explain effects'; got: {rendered:?}"
+        );
+    }
+
+    #[test]
+    fn see_explain_json_schema_snapshot_for_error_code_page_unchanged() {
+        // The explain --json page schema has not changed: existing fields still
+        // present after adding SeeExplain wiring (additive guarantee).
+        let (exact, _) = resolve("IPE-L0141");
+        let page = exact.expect("IPE-L0141 must resolve");
+        let json = page.to_json();
+        assert!(json.contains("\"kind\""), "schema has kind");
+        assert!(json.contains("\"id\""), "schema has id");
+        assert!(json.contains("\"IPE-L0141\""), "id is IPE-L0141");
+        assert!(json.contains("\"explain_ref\""), "schema has explain_ref");
+        assert!(
+            json.contains("ipe explain IPE-L0141"),
+            "explain_ref carries the command"
+        );
+    }
+
     #[test]
     fn unquote_is_total_on_lone_and_unbalanced_quotes() {
         // A lone quote must fall through, not panic on a `[1..0]` byte range.
