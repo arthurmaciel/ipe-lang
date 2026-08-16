@@ -4730,24 +4730,47 @@ fn run_audit_entry(rest: &[String]) -> Result<(), CliError> {
     // Step 1 — schema: parse + validate the submitted entry file.
     let submitted = index::validate_entry_file(&entry_path)?;
 
-    // Step 2 — baseline: read the previously-published entry (if any) and compute
-    // the set of version strings already in the index.
+    // Step 2 — baseline: read the previously-published entry (if any).
     let index_root = index_root_opt.clone().unwrap_or_else(resolve::index_root);
-    let baseline_versions: std::collections::BTreeSet<semver::Version> =
+    let baseline: Option<index::IndexEntry> =
         if index::entry_file_exists(&index_root, &submitted.name) {
-            index::read_entry(&index_root, &submitted.name)
-                .map(|e| e.versions.into_iter().map(|v| v.version).collect())
-                .unwrap_or_default()
+            index::read_entry(&index_root, &submitted.name).ok()
         } else {
-            std::collections::BTreeSet::new()
+            None
         };
+    let baseline_by_version: std::collections::BTreeMap<&semver::Version, &index::EntryVersion> =
+        baseline
+            .as_ref()
+            .map(|e| e.versions.iter().map(|v| (&v.version, v)).collect())
+            .unwrap_or_default();
+
+    // Immutability — a published version is immutable. A submitted version whose
+    // NUMBER already exists in the baseline must be byte-for-byte identical to the
+    // published row; rewriting its `source`/`rev`/`sha256`/`capabilities` is a
+    // supply-chain mutation and is rejected here, never silently skipped. This gate
+    // is the authoritative wall (ADR 0044): it enforces immutability even for an
+    // entry hand-edited around the author-side `ipe publish`, whose own immutability
+    // check an attacker opening the index PR directly would bypass.
+    for version in &submitted.versions {
+        if let Some(&prior) = baseline_by_version.get(&version.version)
+            && prior != version
+        {
+            return Err(CliError::UsageOwned(format!(
+                "ipe package audit-entry: `{}` version {} is already published and immutable, \
+                 but the submitted entry rewrites it (source, rev, sha256, or capabilities \
+                 differ). A published version must never be rewritten — publish a new version.",
+                submitted.name, version.version
+            )));
+        }
+    }
 
     // The new versions are those present in the submitted entry but absent from
-    // the baseline. A PR normally adds exactly one.
+    // the baseline. A PR normally adds exactly one. Each is fetched, hash-verified,
+    // and audited below; an existing-number row is only the immutability check above.
     let new_versions: Vec<&index::EntryVersion> = submitted
         .versions
         .iter()
-        .filter(|v| !baseline_versions.contains(&v.version))
+        .filter(|v| !baseline_by_version.contains_key(&v.version))
         .collect();
 
     if new_versions.is_empty() {
@@ -7587,6 +7610,48 @@ pub mod web {
         assert!(
             matches!(err, CliError::UsageOwned(_)),
             "no new versions must be a UsageOwned error: {err:?}"
+        );
+        let _ = std::fs::remove_dir_all(&submitted_root);
+        let _ = std::fs::remove_dir_all(&baseline_root);
+    }
+
+    /// `run_audit_entry` — a published version is immutable. Re-submitting an
+    /// existing version number with a *different* row (here a changed `sha256`)
+    /// must be a hard reject naming immutability, never a silent skip. This closes
+    /// the version-delta bypass: were the delta keyed on version number alone, a
+    /// rewritten `source`/`rev`/`sha256`/`capabilities` on an already-published
+    /// version would slip past both hash-verify and audit (ADR 0044, §receiving-gate).
+    #[test]
+    fn audit_entry_rejects_rewriting_a_published_version() {
+        let submitted_root = temp_dir_unique("ae-immutable-sub");
+        let baseline_root = temp_dir_unique("ae-immutable-idx");
+        // Baseline published 1.0.0 with sha "00"; the submission keeps the same
+        // version number but rewrites its sha256 to "11".
+        write_entry(
+            &baseline_root,
+            "mylib",
+            &[("1.0.0", "https://x.invalid/mylib", "abc", "00")],
+        );
+        write_entry(
+            &submitted_root,
+            "mylib",
+            &[("1.0.0", "https://x.invalid/mylib", "abc", "11")],
+        );
+        let args: Vec<String> = [
+            submitted_root
+                .join("packages")
+                .join("mylib.toml")
+                .to_string_lossy()
+                .into_owned(),
+            "--index".to_owned(),
+            baseline_root.to_string_lossy().into_owned(),
+        ]
+        .into_iter()
+        .collect();
+        let err = run_audit_entry(&args).unwrap_err();
+        assert!(
+            matches!(&err, CliError::UsageOwned(msg) if msg.contains("immutable")),
+            "rewriting a published version must be a UsageOwned reject naming immutability: {err:?}"
         );
         let _ = std::fs::remove_dir_all(&submitted_root);
         let _ = std::fs::remove_dir_all(&baseline_root);
