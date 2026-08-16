@@ -546,6 +546,25 @@ pub struct MissingSystemLib {
     pub crate_name: String,
 }
 
+/// Trim and strip control characters from a name extracted out of raw
+/// build-script stderr. A system-library or crate name is rendered into a styled
+/// diagnostic; an ANSI escape or other control byte carried in the raw stderr
+/// must not reach the terminal and forge markup, so it is removed at the parse
+/// boundary (the typed value downstream is always terminal-safe).
+fn sanitize_extracted_name(raw: &str) -> String {
+    raw.trim().chars().filter(|c| !c.is_control()).collect()
+}
+
+/// The raw inspector error channel from an inspection document, best-effort.
+///
+/// The `--verbose` escape hatch behind the summarised [`Diagnostic`]. A document
+/// that does not decode yields no lines rather than an error — verbose output is
+/// advisory, never a second failure path.
+#[must_use]
+pub fn inspection_error_log(inspection_json: &str) -> Vec<String> {
+    PkgInfo::decode_json(inspection_json).map_or_else(|_| Vec::new(), |pkg| pkg.errors().to_vec())
+}
+
 /// Scan the inspector's captured error strings for the pkg-config
 /// "not found" signature and return the first match as a [`MissingSystemLib`].
 ///
@@ -566,8 +585,8 @@ pub fn detect_missing_system_lib(errors: &[String]) -> Option<MissingSystemLib> 
             && let Some((crate_name, _)) = rest.split_once("` was not found")
         {
             return Some(MissingSystemLib {
-                system_lib: sys_lib.trim().to_owned(),
-                crate_name: crate_name.trim().to_owned(),
+                system_lib: sanitize_extracted_name(sys_lib),
+                crate_name: sanitize_extracted_name(crate_name),
             });
         }
         // Secondary form from pkg-config itself:
@@ -579,7 +598,7 @@ pub fn detect_missing_system_lib(errors: &[String]) -> Option<MissingSystemLib> 
             && let Some((sys_lib, _)) = rest.split_once('\'')
         {
             return Some(MissingSystemLib {
-                system_lib: sys_lib.trim().to_owned(),
+                system_lib: sanitize_extracted_name(sys_lib),
                 // No crate name in this form — leave empty; the caller
                 // fills it from context when available.
                 crate_name: String::new(),
@@ -739,9 +758,13 @@ pub fn summarise_inspector_errors(errors: &[String]) -> String {
         },
         |line| {
             let line = line.trim();
-            // Truncate very long lines so the diagnostic stays readable.
-            if line.len() > 200 {
-                format!("{}…", &line[..200])
+            // Truncate very long lines so the diagnostic stays readable. Count and
+            // slice by characters, never by byte index — cargo/build-script stderr
+            // carries non-ASCII (unicode identifiers, non-ASCII paths), and a byte
+            // slice that lands inside a multibyte char panics.
+            if line.chars().count() > 200 {
+                let head: String = line.chars().take(200).collect();
+                format!("{head}…")
             } else {
                 line.to_owned()
             }
@@ -2251,5 +2274,43 @@ mod tests {
             }
             other => panic!("expected SystemLibraryNotFound, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn summarise_truncates_a_long_root_line_at_a_char_boundary_without_panicking() {
+        // A root-cause line past the 200-char cap whose multibyte chars straddle
+        // the byte-200 boundary — a byte slice at 200 would panic mid-`€`.
+        let long = format!("error: {}{}", "x".repeat(190), "€".repeat(20));
+        let out = summarise_inspector_errors(&[long]);
+        assert!(out.ends_with('…'), "long line is truncated: {out}");
+        assert_eq!(out.chars().count(), 201, "200 chars plus the ellipsis");
+    }
+
+    #[test]
+    fn detect_missing_system_lib_strips_control_bytes_from_extracted_names() {
+        // Raw build-script stderr could carry an ANSI escape (0x1b) or DEL (0x7f)
+        // inside a name; these must be gone before the name reaches the terminal.
+        let line =
+            "The system library `way\u{1b}land` required by crate `wl\u{7f}sys` was not found."
+                .to_owned();
+        let got = detect_missing_system_lib(&[line]).expect("signature matches");
+        assert_eq!(got.system_lib, "wayland");
+        assert_eq!(got.crate_name, "wlsys");
+        assert!(!got.system_lib.contains('\u{1b}'));
+    }
+
+    #[test]
+    fn inspection_error_log_returns_the_channel_and_tolerates_garbage() {
+        let json = serde_json::json!({
+            "pkg": "demo", "name": "demo", "version": "0.1.0",
+            "functions": [],
+            "errors": ["error: boom", "note: detail"]
+        })
+        .to_string();
+        assert_eq!(
+            inspection_error_log(&json),
+            vec!["error: boom".to_owned(), "note: detail".to_owned()]
+        );
+        assert!(inspection_error_log("not json at all").is_empty());
     }
 }

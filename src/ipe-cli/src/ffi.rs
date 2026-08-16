@@ -1577,9 +1577,10 @@ fn collect_dependency_tables(value: &toml::Value, out: &mut BTreeSet<String>) {
 /// `Resolve` passes through `with_help_on_misuse` unchanged and renders via
 /// the normal `ipe: {msg}` path.
 ///
-/// When `verbose` is true the raw inspector output is appended; otherwise only
-/// the summarised diagnostic is shown.
-fn ffi_build_error(diag: ipe_ffi::diag::Diagnostic, verbose: bool) -> CliError {
+/// Render an inspector diagnostic as a `CliError`. The raw log escape hatch is
+/// the caller's concern (it holds the inspection document): under `--verbose` a
+/// caller emits the raw log via [`emit_raw_inspector_log`] before this summary.
+fn ffi_build_error(diag: ipe_ffi::diag::Diagnostic) -> CliError {
     use ipe_ffi::diag::Diagnostic as D;
     match diag {
         // Pkg-config missing system library: emit a formatted message that
@@ -1602,13 +1603,28 @@ fn ffi_build_error(diag: ipe_ffi::diag::Diagnostic, verbose: bool) -> CliError {
              \n\
              Run `ipe explain IPE-F4415` for more detail."
         )),
-        // All other failures: show the summarised diagnostic. With --verbose,
-        // the caller's run_inspector path already dumped the raw log to stderr,
-        // so there is no need to repeat it here.
-        other => {
-            let _ = verbose; // verbose raw-log is surfaced at the run_inspector layer
-            CliError::Resolve(other.to_string())
-        }
+        // All other failures: show the summarised diagnostic. The full raw log is
+        // available via `emit_raw_inspector_log` under `--verbose` at the caller.
+        other => CliError::Resolve(other.to_string()),
+    }
+}
+
+/// Emit the raw inspector error log to stderr — the `--verbose` escape hatch
+/// behind the summarised build diagnostic. Each line is stripped of control
+/// characters (except tab) so raw build-script stderr cannot forge terminal
+/// markup. A document with no error channel prints nothing.
+fn emit_raw_inspector_log(inspection_json: &str) {
+    let log = ipe_ffi::driver::inspection_error_log(inspection_json);
+    if log.is_empty() {
+        return;
+    }
+    eprint!("{}", crate::style::gutter("raw inspector log (--verbose):"));
+    for line in &log {
+        let clean: String = line
+            .chars()
+            .filter(|c| *c == '\t' || !c.is_control())
+            .collect();
+        eprintln!("  {clean}");
     }
 }
 
@@ -1734,7 +1750,10 @@ fn add_one(
         }
         Err(diag) => {
             build_stage.failure(format!("build failed for {crate_label}"));
-            Err(ffi_build_error(diag, verbose))
+            if verbose {
+                emit_raw_inspector_log(&doc_text);
+            }
+            Err(ffi_build_error(diag))
         }
     }
 }
@@ -1991,8 +2010,13 @@ pub fn run_install(rest: &[String]) -> Result<(), CliError> {
             &enums,
             sole_dep,
         )?;
-        let (pkg, paths) = ipe_ffi::driver::install_from_inspection(&cache, &merged)
-            .map_err(|diag| ffi_build_error(diag, verbose))?;
+        let (pkg, paths) =
+            ipe_ffi::driver::install_from_inspection(&cache, &merged).map_err(|diag| {
+                if verbose {
+                    emit_raw_inspector_log(&merged);
+                }
+                ffi_build_error(diag)
+            })?;
         let iface = ipe_ffi::interface::crate_interface(&pkg);
         eprintln!(
             "{}",
@@ -3676,7 +3700,7 @@ version = \"1\"
                 detail: "the inspector failed: error[E0412]: cannot find type".to_owned(),
             },
         };
-        let err = ffi_build_error(diag, false);
+        let err = ffi_build_error(diag);
         assert!(
             matches!(err, CliError::Resolve(_)),
             "build failure must produce CliError::Resolve, got {err:?}"
