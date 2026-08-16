@@ -532,11 +532,254 @@ impl FfiCache {
     }
 }
 
+// ── pkg-config missing-library detection ────────────────────────────────────
+
+/// A parsed pkg-config "not found" failure: the missing system library and
+/// the Rust crate whose build script reported it.
+///
+/// Parse-don't-validate: callers receive a typed value, never a raw string.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MissingSystemLib {
+    /// The `pkg-config` library name (e.g. `wayland-client`).
+    pub system_lib: String,
+    /// The Rust `-sys` crate that required it (e.g. `wayland-sys`).
+    pub crate_name: String,
+}
+
+/// Trim and strip control characters from a name extracted out of raw
+/// build-script stderr. A system-library or crate name is rendered into a styled
+/// diagnostic; an ANSI escape or other control byte carried in the raw stderr
+/// must not reach the terminal and forge markup, so it is removed at the parse
+/// boundary (the typed value downstream is always terminal-safe).
+fn sanitize_extracted_name(raw: &str) -> String {
+    raw.trim().chars().filter(|c| !c.is_control()).collect()
+}
+
+/// The raw inspector error channel from an inspection document, best-effort.
+///
+/// The `--verbose` escape hatch behind the summarised [`Diagnostic`]. A document
+/// that does not decode yields no lines rather than an error — verbose output is
+/// advisory, never a second failure path.
+#[must_use]
+pub fn inspection_error_log(inspection_json: &str) -> Vec<String> {
+    PkgInfo::decode_json(inspection_json).map_or_else(|_| Vec::new(), |pkg| pkg.errors().to_vec())
+}
+
+/// Scan the inspector's captured error strings for the pkg-config
+/// "not found" signature and return the first match as a [`MissingSystemLib`].
+///
+/// Recognises two forms that appear in cargo/build-script stderr:
+///
+/// - The system library `<lib>` required by crate `<crate>` was not found.
+/// - Package `<lib>` was not found (or not found in the pkg-config search path)
+///
+/// Returns `None` when no pkg-config signature is present (the failure has a
+/// different cause).
+#[must_use]
+pub fn detect_missing_system_lib(errors: &[String]) -> Option<MissingSystemLib> {
+    for line in errors {
+        // Primary form emitted by `pkg_config` crate build scripts:
+        // "The system library `<lib>` required by crate `<crate>` was not found."
+        if let Some(rest) = line.strip_prefix("The system library `")
+            && let Some((sys_lib, rest)) = rest.split_once("` required by crate `")
+            && let Some((crate_name, _)) = rest.split_once("` was not found")
+        {
+            return Some(MissingSystemLib {
+                system_lib: sanitize_extracted_name(sys_lib),
+                crate_name: sanitize_extracted_name(crate_name),
+            });
+        }
+        // Secondary form from pkg-config itself:
+        // "Package '<lib>' was not found in the pkg-config search path."
+        // or "Package '<lib>', required by 'virtual:world', not found"
+        if (line.contains("was not found in the pkg-config search path")
+            || (line.contains("not found") && line.starts_with("Package '")))
+            && let Some(rest) = line.strip_prefix("Package '")
+            && let Some((sys_lib, _)) = rest.split_once('\'')
+        {
+            return Some(MissingSystemLib {
+                system_lib: sanitize_extracted_name(sys_lib),
+                // No crate name in this form — leave empty; the caller
+                // fills it from context when available.
+                crate_name: String::new(),
+            });
+        }
+    }
+    None
+}
+
+/// A curated map from well-known `pkg-config` library names to the
+/// distribution package that provides their development files.
+///
+/// Single source of truth: the CLI install-hint message is derived entirely
+/// from this table, so adding a row here extends coverage everywhere.
+/// Format: `(pkg_config_name, debian_pkg, fedora_pkg, brew_formula)`.
+/// An empty string means "same as the pkg-config name" (use the generic
+/// `-dev` / `-devel` / direct formula name fallback).
+const PKG_CONFIG_INSTALL_HINTS: &[(&str, &str, &str, &str)] = &[
+    // Wayland
+    (
+        "wayland-client",
+        "libwayland-dev",
+        "wayland-devel",
+        "wayland",
+    ),
+    (
+        "wayland-server",
+        "libwayland-dev",
+        "wayland-devel",
+        "wayland",
+    ),
+    (
+        "wayland-cursor",
+        "libwayland-dev",
+        "wayland-devel",
+        "wayland",
+    ),
+    ("wayland-egl", "libwayland-dev", "wayland-devel", "wayland"),
+    // OpenSSL / TLS
+    ("openssl", "libssl-dev", "openssl-devel", "openssl"),
+    ("libssl", "libssl-dev", "openssl-devel", "openssl"),
+    // D-Bus
+    ("dbus-1", "libdbus-1-dev", "dbus-devel", "dbus"),
+    // SQLite
+    ("sqlite3", "libsqlite3-dev", "sqlite-devel", "sqlite"),
+    // zlib
+    ("zlib", "zlib1g-dev", "zlib-devel", "zlib"),
+    // libpng
+    ("libpng", "libpng-dev", "libpng-devel", "libpng"),
+    // libjpeg
+    ("libjpeg", "libjpeg-dev", "libjpeg-devel", "jpeg"),
+    // freetype
+    ("freetype2", "libfreetype-dev", "freetype-devel", "freetype"),
+    // fontconfig
+    (
+        "fontconfig",
+        "libfontconfig-dev",
+        "fontconfig-devel",
+        "fontconfig",
+    ),
+    // X11 / XCB
+    ("x11", "libx11-dev", "libX11-devel", "libx11"),
+    ("xcb", "libxcb-dev", "libxcb-devel", "libxcb"),
+    (
+        "xkbcommon",
+        "libxkbcommon-dev",
+        "libxkbcommon-devel",
+        "libxkbcommon",
+    ),
+    // GTK
+    ("gtk+-3.0", "libgtk-3-dev", "gtk3-devel", "gtk+3"),
+    ("gtk4", "libgtk-4-dev", "gtk4-devel", "gtk4"),
+    // GLib / GObject
+    ("glib-2.0", "libglib2.0-dev", "glib2-devel", "glib"),
+    // Vulkan
+    (
+        "vulkan",
+        "libvulkan-dev",
+        "vulkan-headers",
+        "vulkan-headers",
+    ),
+    // libcurl
+    ("libcurl", "libcurl4-openssl-dev", "libcurl-devel", "curl"),
+    // libudev
+    ("libudev", "libudev-dev", "systemd-devel", ""),
+    // alsa
+    ("alsa", "libasound2-dev", "alsa-lib-devel", ""),
+    // pipewire
+    (
+        "libpipewire-0.3",
+        "libpipewire-0.3-dev",
+        "pipewire-devel",
+        "pipewire",
+    ),
+];
+
+/// Build a human-readable install hint for a `pkg-config` library name.
+///
+/// Looks up `sys_lib` in the curated table first; falls back to a generic
+/// "install the `-dev` package that provides `<lib>.pc`" message when the
+/// library is not in the table.
+#[must_use]
+pub fn install_hint_for(sys_lib: &str) -> String {
+    for &(key, deb, fed, brew) in PKG_CONFIG_INSTALL_HINTS {
+        if key == sys_lib {
+            let mut parts: Vec<String> = Vec::new();
+            if !deb.is_empty() {
+                parts.push(format!("Debian/Ubuntu: `apt install {deb}`"));
+            }
+            if !fed.is_empty() {
+                parts.push(format!("Fedora/RHEL: `dnf install {fed}`"));
+            }
+            if !brew.is_empty() {
+                parts.push(format!("macOS: `brew install {brew}`"));
+            }
+            if parts.is_empty() {
+                break;
+            }
+            return parts.join("; ");
+        }
+    }
+    format!(
+        "install the `-dev` / `-devel` package that provides `{sys_lib}.pc` \
+         (e.g. Debian/Ubuntu: `apt install lib{sys_lib}-dev`)"
+    )
+}
+
+/// Summarise the raw inspector error strings into a short human-readable
+/// message for the `--verbose`-less case.
+///
+/// Keeps at most a few lines of context from the raw log. The full log is
+/// available under `--verbose` (the CLI layer adds that escape hatch around
+/// the call site).
+#[must_use]
+pub fn summarise_inspector_errors(errors: &[String]) -> String {
+    // Look for the first `error[` or `error:` line from rustc/cargo — that is
+    // the root-cause line, not the noise of `cargo:rerun-if-env-changed=…`.
+    let root = errors
+        .iter()
+        .find(|l| {
+            let t = l.trim_start();
+            t.starts_with("error[") || t.starts_with("error:") || t.starts_with("panicked at")
+        })
+        .map(String::as_str);
+
+    root.map_or_else(
+        || {
+            // No recognised root-cause line: show the last non-empty error string as
+            // a last resort rather than nothing.
+            errors
+                .iter()
+                .rev()
+                .find(|l| !l.trim().is_empty())
+                .map_or("the inspector did not emit a diagnostic", String::as_str)
+                .trim()
+                .to_owned()
+        },
+        |line| {
+            let line = line.trim();
+            // Truncate very long lines so the diagnostic stays readable. Count and
+            // slice by characters, never by byte index — cargo/build-script stderr
+            // carries non-ASCII (unicode identifiers, non-ASCII paths), and a byte
+            // slice that lands inside a multibyte char panics.
+            if line.chars().count() > 200 {
+                let head: String = line.chars().take(200).collect();
+                format!("{head}…")
+            } else {
+                line.to_owned()
+            }
+        },
+    )
+}
+
 /// Decode one inspection document and write its artifacts — the shared
 /// tail of `ipe add` and `ipe install`.
 ///
 /// A package whose inspector error channel is non-empty is refused: an
-/// unusable inspection must never seed a cache.
+/// unusable inspection must never seed a cache. The error is parsed at the
+/// boundary: a pkg-config missing-library signature becomes a typed
+/// [`Diagnostic::SystemLibraryNotFound`] carrying an actionable install hint;
+/// all other failures become a summarised [`Diagnostic::WireMalformed`].
 ///
 /// # Errors
 ///
@@ -548,10 +791,26 @@ pub fn install_from_inspection(
 ) -> Result<(PkgInfo, ArtifactPaths), Diagnostic> {
     let pkg = PkgInfo::decode_json(inspection_json)?;
     if !pkg.errors().is_empty() {
+        // Parse the error channel at the boundary — the typed value is what the
+        // caller and the CLI act on, not the raw string.
+        if let Some(missing) = detect_missing_system_lib(pkg.errors()) {
+            let install_hint = install_hint_for(&missing.system_lib);
+            let crate_name = if missing.crate_name.is_empty() {
+                pkg.name().to_owned()
+            } else {
+                missing.crate_name
+            };
+            return Err(Diagnostic::SystemLibraryNotFound {
+                system_lib: missing.system_lib,
+                crate_name,
+                install_hint,
+            });
+        }
+        let summary = summarise_inspector_errors(pkg.errors());
         return Err(Diagnostic::WireMalformed {
             context: format!("crate `{}`", pkg.name()),
             defect: crate::diag::WireDefect::Json {
-                detail: format!("the inspector failed closed: {}", pkg.errors().join("; ")),
+                detail: format!("the inspector failed: {summary}"),
             },
         });
     }
@@ -1914,5 +2173,144 @@ mod tests {
         assert!(s.contains("1.0.26"), "{s}");
         assert!(s.contains("12"), "{s}");
         assert!(s.contains("COMPILE"), "{s}");
+    }
+
+    #[test]
+    fn detect_missing_system_lib_parses_primary_form() {
+        // The primary form emitted by `pkg_config` build scripts:
+        // "The system library `<lib>` required by crate `<crate>` was not found."
+        let errors = vec![
+            "cargo:rerun-if-env-changed=WAYLAND_SYS_STATIC".to_owned(),
+            "The system library `wayland-client` required by crate `wayland-sys` was not found."
+                .to_owned(),
+        ];
+        let got = detect_missing_system_lib(&errors).expect("must detect");
+        assert_eq!(got.system_lib, "wayland-client");
+        assert_eq!(got.crate_name, "wayland-sys");
+    }
+
+    #[test]
+    fn detect_missing_system_lib_parses_pkg_config_form() {
+        // The secondary form from pkg-config itself.
+        let errors = vec![
+            "Package 'wayland-client' was not found in the pkg-config search path.".to_owned(),
+        ];
+        let got = detect_missing_system_lib(&errors).expect("must detect");
+        assert_eq!(got.system_lib, "wayland-client");
+    }
+
+    #[test]
+    fn detect_missing_system_lib_returns_none_for_unrelated_errors() {
+        let errors = vec![
+            "error[E0277]: the trait bound `Foo: Bar` is not satisfied".to_owned(),
+            "panicked at 'called `Option::unwrap()` on a `None` value'".to_owned(),
+        ];
+        assert!(
+            detect_missing_system_lib(&errors).is_none(),
+            "unrelated errors must not be misidentified as a missing system lib"
+        );
+    }
+
+    #[test]
+    fn install_hint_for_returns_curated_hint_for_known_lib() {
+        let hint = install_hint_for("wayland-client");
+        assert!(hint.contains("wayland"), "{hint}");
+        assert!(hint.contains("apt"), "{hint}");
+    }
+
+    #[test]
+    fn install_hint_for_returns_generic_fallback_for_unknown_lib() {
+        let hint = install_hint_for("some-obscure-lib-xyz");
+        assert!(
+            hint.contains("some-obscure-lib-xyz"),
+            "fallback must mention the lib name: {hint}"
+        );
+        assert!(hint.contains("-dev"), "fallback must mention -dev: {hint}");
+    }
+
+    #[test]
+    fn summarise_inspector_errors_extracts_root_cause_line() {
+        let errors = vec![
+            "cargo:rerun-if-env-changed=PKG_CONFIG_ALLOW_SYSTEM_LIBS".to_owned(),
+            "cargo:rerun-if-env-changed=PKG_CONFIG_PATH".to_owned(),
+            "error[E0277]: the trait bound is not satisfied".to_owned(),
+            "  --> src/lib.rs:10:5".to_owned(),
+        ];
+        let summary = summarise_inspector_errors(&errors);
+        assert!(
+            summary.contains("E0277"),
+            "must extract the rustc error line: {summary}"
+        );
+        assert!(
+            !summary.contains("cargo:rerun"),
+            "noise lines must be dropped: {summary}"
+        );
+    }
+
+    #[test]
+    #[allow(clippy::panic)]
+    fn install_from_inspection_returns_typed_system_lib_diagnostic() {
+        let json = serde_json::json!({
+            "pkg": "wayland",
+            "name": "wayland",
+            "version": "0.31.0",
+            "functions": [],
+            "errors": [
+                "The system library `wayland-client` required by crate `wayland-sys` was not found."
+            ]
+        })
+        .to_string();
+        let tmp = std::env::temp_dir().join(format!("ipe-ffi-syslib-test-{}", std::process::id()));
+        let cache = FfiCache::at_project_root(&tmp);
+        let err = install_from_inspection(&cache, &json).expect_err("must fail");
+        match err {
+            crate::diag::Diagnostic::SystemLibraryNotFound {
+                system_lib,
+                crate_name,
+                ..
+            } => {
+                assert_eq!(system_lib, "wayland-client");
+                assert_eq!(crate_name, "wayland-sys");
+            }
+            other => panic!("expected SystemLibraryNotFound, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn summarise_truncates_a_long_root_line_at_a_char_boundary_without_panicking() {
+        // A root-cause line past the 200-char cap whose multibyte chars straddle
+        // the byte-200 boundary — a byte slice at 200 would panic mid-`€`.
+        let long = format!("error: {}{}", "x".repeat(190), "€".repeat(20));
+        let out = summarise_inspector_errors(&[long]);
+        assert!(out.ends_with('…'), "long line is truncated: {out}");
+        assert_eq!(out.chars().count(), 201, "200 chars plus the ellipsis");
+    }
+
+    #[test]
+    fn detect_missing_system_lib_strips_control_bytes_from_extracted_names() {
+        // Raw build-script stderr could carry an ANSI escape (0x1b) or DEL (0x7f)
+        // inside a name; these must be gone before the name reaches the terminal.
+        let line =
+            "The system library `way\u{1b}land` required by crate `wl\u{7f}sys` was not found."
+                .to_owned();
+        let got = detect_missing_system_lib(&[line]).expect("signature matches");
+        assert_eq!(got.system_lib, "wayland");
+        assert_eq!(got.crate_name, "wlsys");
+        assert!(!got.system_lib.contains('\u{1b}'));
+    }
+
+    #[test]
+    fn inspection_error_log_returns_the_channel_and_tolerates_garbage() {
+        let json = serde_json::json!({
+            "pkg": "demo", "name": "demo", "version": "0.1.0",
+            "functions": [],
+            "errors": ["error: boom", "note: detail"]
+        })
+        .to_string();
+        assert_eq!(
+            inspection_error_log(&json),
+            vec!["error: boom".to_owned(), "note: detail".to_owned()]
+        );
+        assert!(inspection_error_log("not json at all").is_empty());
     }
 }

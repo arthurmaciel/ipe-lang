@@ -340,6 +340,10 @@ const COMMANDS: &[Command] = &[
                 flag: "[--allow-build-scripts]",
                 desc: "add/install: permit the crates' build scripts to run",
             },
+            Opt {
+                flag: "[--verbose]",
+                desc: "add/install: show the full raw inspector log on failure",
+            },
         ],
     },
     Command {

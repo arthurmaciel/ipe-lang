@@ -8,7 +8,9 @@
 
 use std::fmt;
 
-use ipe_diagnostics::{Code, IPE_F4400, IPE_F4401, IPE_F4402, IPE_F4411, IPE_F4412, IPE_F4414};
+use ipe_diagnostics::{
+    Code, IPE_F4400, IPE_F4401, IPE_F4402, IPE_F4411, IPE_F4412, IPE_F4414, IPE_F4415,
+};
 
 /// One FFI-generator diagnostic: the failure class plus enough context to
 /// name the offending binding.
@@ -75,6 +77,18 @@ pub enum Diagnostic {
         /// Which rule refused it.
         defect: AssertedDefect,
     },
+    /// `IPE-F4415` — the inspector's build failed because a required system
+    /// library is not installed on the host. Parsed from the inspector's
+    /// captured stderr at the `pkg-config`-not-found signature boundary, so the
+    /// CLI can surface a targeted install hint instead of a raw cargo dump.
+    SystemLibraryNotFound {
+        /// The `pkg-config` library name that was not found (e.g. `wayland-client`).
+        system_lib: String,
+        /// The Rust crate whose `build.rs` required the library (e.g. `wayland-sys`).
+        crate_name: String,
+        /// A short OS-aware install hint, or a generic `-dev`/`.pc` fallback.
+        install_hint: String,
+    },
 }
 
 impl Diagnostic {
@@ -88,6 +102,7 @@ impl Diagnostic {
             Self::SourceRejected { .. } => IPE_F4411,
             Self::ArtifactIo { .. } => IPE_F4412,
             Self::AssertedRefused { .. } => IPE_F4414,
+            Self::SystemLibraryNotFound { .. } => IPE_F4415,
         }
     }
 }
@@ -134,6 +149,21 @@ impl fmt::Display for Diagnostic {
                 write!(
                     f,
                     "{}: asserted call `{path}` refused: {defect}",
+                    self.code().as_str()
+                )
+            }
+            Self::SystemLibraryNotFound {
+                system_lib,
+                crate_name,
+                install_hint,
+            } => {
+                write!(
+                    f,
+                    "{}: crate `{crate_name}` needs the system library `{system_lib}`, \
+                     which pkg-config cannot find.\n\
+                     Install hint: {install_hint}\n\
+                     If the library is in a non-standard location, set PKG_CONFIG_PATH \
+                     before re-running `ipe rust add`.",
                     self.code().as_str()
                 )
             }
