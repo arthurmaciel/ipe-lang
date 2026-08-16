@@ -331,7 +331,7 @@ pub fn crypto_random_token(n: i64) -> IpeTask<String> {
     ipe_runtime::crypto_core::crypto_random_token(n)
 }
 
-pub fn main_json_optional<T1: 'static + Send + Sync + Clone, T2: 'static + Send + Sync + Clone>(
+pub fn main_json_optional<T1: 'static + Send + Sync + Clone, T2: 'static + Send + Clone>(
     field: String,
     dec: Decoder<T1>,
     default: T1,
@@ -340,7 +340,7 @@ pub fn main_json_optional<T1: 'static + Send + Sync + Clone, T2: 'static + Send 
     let _ipe_recursion_guard = crate::recursion_guard();
     decode_pipeline_optional(field, dec, default, next)
 }
-pub fn main_db_optional<T1: 'static + Send + Sync + Clone, T2: 'static + Send + Sync + Clone>(
+pub fn main_db_optional<T1: 'static + Send + Sync + Clone, T2: 'static + Send + Clone>(
     col: String,
     dec: Decoder<T1>,
     fallback: T1,

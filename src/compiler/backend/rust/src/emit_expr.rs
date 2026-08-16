@@ -7985,17 +7985,12 @@ fn render_fn_generics(
             let mut bounds = bounds.with_clone();
             // A task return, or a type var inside a first-class-function-value
             // PARAMETER, moves the value into a spawned / boxed
-            // `Box<dyn Fn(..) -> R + Send + Sync + 'static>` consumer.
-            // That consumer requires the captured value to be `Sync` (the
-            // `+ Sync` on the trait object propagates to every capture).
-            // `with_sync` implies `Send + 'static` so nothing is lost.
-            // Example: a generic-over-`msg` helper taking an
-            // `onEdit : String -> msg` callback and forwarding it into
-            // `input_multiline_`, or a task-returning function whose body
-            // builds a `Task.map (\more -> value :: more)` where `value`
-            // has the generic type and is captured in the map closure.
+            // `Box<dyn Fn(..) -> R + Send + Sync + 'static>` consumer, so it
+            // needs `Send + 'static` (`with_send` sets both). Example: a
+            // generic-over-`msg` helper taking an `onEdit : String -> msg`
+            // callback and forwarding it into `input_multiline_`.
             if ret_is_task || type_var_in_fn_param(func, *sym) {
-                bounds = bounds.with_sync();
+                bounds = bounds.with_send();
             }
             // A type var that is the `msg` of a `Ipe.Ui` / `Ipe.Html` carrier in
             // the RETURN type needs only `'static`: such a function is a leaf
