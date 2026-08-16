@@ -1330,6 +1330,30 @@ fn is_retry_policy_record(interner: &Interner, ty: &Ty) -> bool {
         })
 }
 
+/// Is `field_ty` the `shouldRetry` type of the KERNEL `RetryPolicy e` record —
+/// either `Ty::Var -> _` (the solver left `e` free) or `Error -> _` (`e` unified
+/// to the built-in error type)?
+///
+/// A user record that shares the five field names but provides a concrete,
+/// non-Error predicate (e.g. `Int -> Bool`) is NOT the kernel type: `shouldRetry`
+/// would be `Ty::Fun(Ty::Con{Int}, _)`, which neither case matches.  Returning
+/// `false` for that shape causes [`retry_policy_concrete_ir`] to return `None`,
+/// so the concretised `RetryPolicy Error` struct is not inserted into
+/// `module.records` for a user path where it is dead.
+fn is_kernel_shouldretry_ty(interner: &Interner, field_ty: &Ty) -> bool {
+    // Solver left `e` as a free variable anywhere in the field type.
+    if ty_contains_var(field_ty) {
+        return true;
+    }
+    // `e` was unified to the built-in `Error` type: `field_ty = Error -> Bool`.
+    if let Ty::Fun(domain, _) = field_ty
+        && let Ty::Con { name, args, .. } = domain.as_ref()
+    {
+        return args.is_empty() && interner.resolve(*name).is_some_and(|s| s == "Error");
+    }
+    false
+}
+
 /// Build the concrete `IrType::Record` for `RetryPolicy e` with `e` fixed to
 /// `IrType::Error`.
 ///
@@ -1346,6 +1370,9 @@ fn is_retry_policy_record(interner: &Interner, ty: &Ty) -> bool {
 /// The `shouldRetry` field is a record-field function and is carried on the
 /// `Arc<dyn Fn>` carrier (`IrType::SharedFun`) — matching what
 /// `normalize_record_fun_carriers` would produce for a concretely-typed field.
+/// Returns `None` when the record is not the kernel shape (see
+/// [`is_kernel_shouldretry_ty`]), so a user record that merely shares the field
+/// names does not get a dead concretised struct.
 fn retry_policy_concrete_ir(interner: &Interner, ty: &Ty) -> Option<IrType> {
     let Ty::Record(fields, RowTail::Closed) = ty else {
         return None;
@@ -1367,10 +1394,20 @@ fn retry_policy_concrete_ir(interner: &Interner, ty: &Ty) -> Option<IrType> {
             // carrier), matching what `normalize_record_fun_carriers` produces
             // for a concrete arrow field.
             "shouldRetry" => {
-                // Verify field_ty is a function shape (or a Ty::Var for `e` that
-                // the solver left unresolved). Either way the concrete carrier is
-                // `SharedFun([Error], Bool)` — the only runtime instantiation.
-                let _ = field_ty;
+                // Only take the RetryPolicy concretisation path for the KERNEL
+                // instantiation: `e` is a free solver variable, or `e` was
+                // unified to `Error`.  A user record aliasing the five-field
+                // shape but supplying a concrete non-Error predicate (e.g.
+                // `Int -> Bool`) is NOT the kernel type — returning `None` here
+                // lets the normal record-collection path handle it, which
+                // correctly skips it via the G-b `ir_contains_fun` gate (the
+                // struct comes from the user's function signatures instead).
+                // Without this guard the concretised `RetryPolicy Error` struct
+                // ends up as a dead `_2` duplicate alongside the user's struct,
+                // drawing a `non_camel_case_types` warning in the emitted crate.
+                if !is_kernel_shouldretry_ty(interner, field_ty) {
+                    return None;
+                }
                 IrType::SharedFun(vec![IrType::Error], Box::new(IrType::Bool))
             }
             _ => return None,
@@ -11586,9 +11623,13 @@ impl<'a> Lowerer<'a> {
                 // builders ICE (IPE-I0001). Detect this exact shape first and
                 // register the concrete IR (with `e` fixed to `IrType::Error`,
                 // the only runtime instantiation) before falling through to the
-                // general guard. Scoped to the full 5-field closed shape — a
-                // user record that merely has a `shouldRetry` field is not this
-                // shape and is not registered here.
+                // general guard. Scoped to the KERNEL instantiation — the
+                // `shouldRetry` type must be `Ty::Var` (unsolved) or
+                // `Error -> Bool` (solved); a user record with the same five
+                // field names but a different concrete predicate type returns
+                // `None` and falls through to the normal path, where the G-b
+                // `ir_contains_fun` gate skips it (the user's struct comes from
+                // function signatures instead, so no dead duplicate is emitted).
                 if let Some(rp_ir) = retry_policy_concrete_ir(self.interner, ty) {
                     if seen.insert(rp_ir.clone()) {
                         out.push(rp_ir);
