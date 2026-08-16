@@ -1,0 +1,98 @@
+module Main exposing (main)
+
+-- Regression anchor: a `serial` column with no matching `primaryKey` spec is
+-- rejected by `createSql` with a typed `Err` — SQLite forbids `AUTOINCREMENT`
+-- on a column that is not `PRIMARY KEY`, so emitting that DDL would produce a
+-- store that compiles but fails at `Store.create` runtime.
+--
+-- Three checks (pure, no DB connection):
+--   1. serial-without-pk: `createSql` returns `Err` (invalid state rejected).
+--   2. serial-with-pk:    `createSql` returns `Ok` with
+--                         `INTEGER PRIMARY KEY AUTOINCREMENT`.
+--   3. no-serial:         a plain store is unaffected.
+
+import Ipe.Io as Io
+import Ipe.Db.Store as Store exposing (Store)
+import Ipe.String as String
+import Ipe.Result as Result exposing (Result(..))
+import Ipe.Error as Error exposing (Error)
+import Ipe.Task as Task
+
+
+-- serial without a matching primaryKey spec — createSql must return Err.
+serialNoPkDdl : Result Error String
+serialNoPkDdl =
+    case Store.fromColumns "events" [ Store.intColumn "id", Store.textColumn "name" ] of
+        Err e ->
+            Err e
+
+        Ok s ->
+            Store.createSql (Store.serial "id" s)
+
+
+-- serial WITH a matching primaryKey spec — createSql must return Ok with the
+-- correct constraint tokens.
+serialWithPkDdl : Result Error String
+serialWithPkDdl =
+    case Store.fromColumns "events" [ Store.intColumn "id", Store.textColumn "name" ] of
+        Err e ->
+            Err e
+
+        Ok s ->
+            Store.createSql (Store.primaryKey "id" (Store.serial "id" s))
+
+
+-- A plain store with no serial column: createSql is unaffected.
+plainDdl : Result Error String
+plainDdl =
+    case Store.fromColumns "tags" [ Store.textColumn "slug" ] of
+        Err e ->
+            Err e
+
+        Ok s ->
+            Store.createSql s
+
+
+serialNoPkLine : String
+serialNoPkLine =
+    case serialNoPkDdl of
+        Err _ ->
+            "serial-without-pk:rejected"
+
+        Ok _ ->
+            "serial-without-pk:FAIL-accepted"
+
+
+serialWithPkLine : String
+serialWithPkLine =
+    case serialWithPkDdl of
+        Err _ ->
+            "serial-with-pk:FAIL-rejected"
+
+        Ok ddl ->
+            if String.contains "PRIMARY KEY" ddl && String.contains "AUTOINCREMENT" ddl then
+                "serial-with-pk:ok"
+
+            else
+                String.concat [ "serial-with-pk:FAIL-bad-ddl:", ddl ]
+
+
+plainLine : String
+plainLine =
+    case plainDdl of
+        Err _ ->
+            "plain:FAIL-rejected"
+
+        Ok _ ->
+            "plain:ok"
+
+
+main : Task Error ()
+main =
+    Io.println
+        (String.join "\n"
+            [ serialNoPkLine
+            , serialWithPkLine
+            , plainLine
+            ]
+        )
