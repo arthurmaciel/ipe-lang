@@ -4625,8 +4625,9 @@ fn typecheck_entry_via_graph(entry: &Path) -> Result<(), CliError> {
 /// capabilities, one per line in sorted order, or `none` when the program is
 /// pure. Read-only analysis: nothing is emitted or written.
 /// `ipe package <subcommand>` — package-authoring commands: `audit` (the SP4
-/// Tier-1 package gate) and `publish` (run the gate, compute the index entry, and
-/// open the index PR).
+/// Tier-1 package gate), `publish` (run the gate, compute the index entry, and
+/// open the index PR), `validate-entry` (schema-check an entry file), and
+/// `audit-entry` (the index CI's authoritative receiving gate).
 ///
 /// # Errors
 /// [`CliError::UsageOwned`] on a missing or unknown subcommand; the subcommand's
@@ -4637,12 +4638,13 @@ pub(crate) fn run_package(rest: &[String]) -> Result<(), CliError> {
         Some((sub, tail)) if sub == "audit" => audit::run_audit(tail),
         Some((sub, tail)) if sub == "publish" => publish::run_publish(tail),
         Some((sub, tail)) if sub == "validate-entry" => run_validate_entry(tail),
+        Some((sub, tail)) if sub == "audit-entry" => run_audit_entry(tail),
         Some((sub, _)) => Err(CliError::UsageOwned(format!(
-            "ipe package: unknown subcommand `{sub}` (expected `audit`, `publish`, or \
-             `validate-entry`)"
+            "ipe package: unknown subcommand `{sub}` (expected `audit`, `audit-entry`, \
+             `publish`, or `validate-entry`)"
         ))),
         None => Err(CliError::Usage(
-            "usage: ipe package <audit|publish|validate-entry> [<path>]",
+            "usage: ipe package <audit|audit-entry|publish|validate-entry> [<path>]",
         )),
     }
 }
@@ -4690,6 +4692,205 @@ fn run_validate_entry(rest: &[String]) -> Result<(), CliError> {
     );
     print!("{}", style::frame(&style::gutter(&body)));
     Ok(())
+}
+
+/// `ipe package audit-entry <packages/<name>.toml> [--index <root>]` — the index
+/// CI's authoritative receiving gate for a submitted entry.
+///
+/// Composes the existing pieces in a fixed, fail-closed order so the CI cannot
+/// diverge from `ipe package audit`:
+///
+/// 1. **Schema** — validate the entry via [`index::validate_entry_file`] (the same
+///    parser `validate-entry` uses); reject on any malformation.
+/// 2. **New versions** — compare against the baseline entry at
+///    `<index-root>/packages/<name>.toml` (if it exists) and identify every
+///    `[[version]]` that is not already in the baseline. When there is no baseline,
+///    all versions are audited. A PR normally adds exactly one new version.
+/// 3. **Fetch + verify** — for each new version, `git`-fetch the source at the
+///    pinned revision and verify the fetched tree's `sha256` equals the entry's pin
+///    via [`resolve::fetch_and_verify_index_version`] (verify-before-trust; a
+///    mismatch is [`CliError::HashMismatch`], never a warning).
+/// 4. **Audit** — run the full [`audit::run_audit`] gate (Tier-1 provenance,
+///    capability consistency, enforced semver, supply-chain; Tier-2 for
+///    native-bearing packages) on each verified source tree. Reject on the first
+///    failing check.
+///
+/// Exits 0 with a per-version passing summary only when ALL steps pass for ALL new
+/// versions. Any failure is a typed [`CliError`] + non-zero exit; no step is
+/// warn-and-pass.
+///
+/// # Errors
+/// [`CliError::Usage`] when no entry file is given; [`CliError::UsageOwned`] on
+/// argument misuse; [`CliError::Resolve`] / [`CliError::Io`] on a schema or read
+/// failure; [`CliError::HashMismatch`] on an integrity mismatch; and
+/// [`CliError::PackageAudit`] when a Tier-1 check rejects a version.
+fn run_audit_entry(rest: &[String]) -> Result<(), CliError> {
+    let (entry_path, index_root_opt) = parse_audit_entry_args(rest)?;
+
+    // Step 1 — schema: parse + validate the submitted entry file.
+    let submitted = index::validate_entry_file(&entry_path)?;
+
+    // Step 2 — baseline: read the previously-published entry (if any).
+    let index_root = index_root_opt.clone().unwrap_or_else(resolve::index_root);
+    let baseline: Option<index::IndexEntry> =
+        if index::entry_file_exists(&index_root, &submitted.name) {
+            index::read_entry(&index_root, &submitted.name).ok()
+        } else {
+            None
+        };
+    let baseline_by_version: std::collections::BTreeMap<&semver::Version, &index::EntryVersion> =
+        baseline
+            .as_ref()
+            .map(|e| e.versions.iter().map(|v| (&v.version, v)).collect())
+            .unwrap_or_default();
+
+    // Immutability — a published version is immutable. A submitted version whose
+    // NUMBER already exists in the baseline must be byte-for-byte identical to the
+    // published row; rewriting its `source`/`rev`/`sha256`/`capabilities` is a
+    // supply-chain mutation and is rejected here, never silently skipped. This gate
+    // is the authoritative wall (ADR 0044): it enforces immutability even for an
+    // entry hand-edited around the author-side `ipe publish`, whose own immutability
+    // check an attacker opening the index PR directly would bypass.
+    for version in &submitted.versions {
+        if let Some(&prior) = baseline_by_version.get(&version.version)
+            && prior != version
+        {
+            return Err(CliError::UsageOwned(format!(
+                "ipe package audit-entry: `{}` version {} is already published and immutable, \
+                 but the submitted entry rewrites it (source, rev, sha256, or capabilities \
+                 differ). A published version must never be rewritten — publish a new version.",
+                submitted.name, version.version
+            )));
+        }
+    }
+
+    // The new versions are those present in the submitted entry but absent from
+    // the baseline. A PR normally adds exactly one. Each is fetched, hash-verified,
+    // and audited below; an existing-number row is only the immutability check above.
+    let new_versions: Vec<&index::EntryVersion> = submitted
+        .versions
+        .iter()
+        .filter(|v| !baseline_by_version.contains_key(&v.version))
+        .collect();
+
+    if new_versions.is_empty() {
+        return Err(CliError::UsageOwned(format!(
+            "ipe package audit-entry: `{}` — every version in the submitted entry is already in \
+             the baseline index; nothing new to audit",
+            submitted.name
+        )));
+    }
+
+    // A scratch root for fetch caches under the standard per-user cache root
+    // (the write-boundary from PRINCIPLES.md), isolated per process so concurrent
+    // audit-entry runs never share a cache directory.
+    let cache_base = std::env::var_os("XDG_CACHE_HOME")
+        .map(PathBuf::from)
+        .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".cache")))
+        .unwrap_or_else(|| PathBuf::from(".ipe"));
+    let scratch_root = cache_base
+        .join("ipe")
+        .join(format!("audit-entry-{}", std::process::id()));
+    std::fs::create_dir_all(&scratch_root).map_err(|e| CliError::Io {
+        path: scratch_root.clone(),
+        source: e,
+    })?;
+
+    let mut passing: Vec<String> = Vec::new();
+
+    for version in new_versions {
+        let ver_str = version.version.to_string();
+
+        // Step 3 — fetch + verify: git-clone the source at the pinned revision and
+        // assert the fetched tree's sha256 equals the index pin. A mismatch is a
+        // CliError::HashMismatch — the fetched bytes are not the source the
+        // publisher registered, so nothing derived from them is trusted.
+        let checkout =
+            resolve::fetch_and_verify_index_version(&scratch_root, &submitted.name, version)?;
+
+        // Step 4 — audit: run the full Tier-1 (+ Tier-2 where applicable) gate on
+        // the verified source tree. Pass --index so the enforced-semver check reads
+        // the right baseline. Reject on the first failing check.
+        let checkout_str = checkout.to_string_lossy().into_owned();
+        let audit_args: Vec<String> = match &index_root_opt {
+            Some(ir) => vec![
+                checkout_str,
+                "--index".to_owned(),
+                ir.to_string_lossy().into_owned(),
+            ],
+            None => vec![checkout_str],
+        };
+        // Propagate typed errors directly — run_audit already produces a
+        // descriptive typed CliError (PackageAudit / HashMismatch / etc.) whose
+        // Display names the failing check; the version context is clear from
+        // the eprintln below and the structured error kind.
+        if let Err(e) = audit::run_audit(&audit_args) {
+            eprintln!(
+                "audit-entry: `{}` version {} rejected",
+                submitted.name, ver_str
+            );
+            return Err(e);
+        }
+
+        passing.push(ver_str);
+    }
+
+    // All new versions passed — print the certified summary.
+    let versions_list = passing.join(", ");
+    let body = format!(
+        "audit-entry: {} — {} new version(s) certified: {versions_list}",
+        submitted.name,
+        passing.len()
+    );
+    print!("{}", style::frame(&style::gutter(&body)));
+
+    // Remove the per-run scratch directory (best-effort; a leftover is harmless).
+    let _ = std::fs::remove_dir_all(&scratch_root);
+    Ok(())
+}
+
+/// Parse `ipe package audit-entry`'s tail: a required positional entry-file path
+/// and an optional `--index <dir>`.
+///
+/// # Errors
+/// [`CliError::Usage`] when the entry file is missing; [`CliError::UsageOwned`] on
+/// an unknown flag, a missing `--index` value, or a duplicate flag/positional.
+fn parse_audit_entry_args(rest: &[String]) -> Result<(PathBuf, Option<PathBuf>), CliError> {
+    let mut entry_path: Option<PathBuf> = None;
+    let mut index_root: Option<PathBuf> = None;
+    let mut it = rest.iter();
+    while let Some(arg) = it.next() {
+        match arg.as_str() {
+            "--index" => {
+                let value = it.next().ok_or(CliError::Usage(
+                    "ipe package audit-entry: --index needs a value",
+                ))?;
+                if index_root.is_some() {
+                    return Err(CliError::Usage(
+                        "ipe package audit-entry: --index given more than once",
+                    ));
+                }
+                index_root = Some(PathBuf::from(value));
+            }
+            flag if flag.starts_with('-') => {
+                return Err(CliError::UsageOwned(format!(
+                    "ipe package audit-entry: unknown flag `{flag}`"
+                )));
+            }
+            positional => {
+                if entry_path.is_some() {
+                    return Err(CliError::Usage(
+                        "ipe package audit-entry: expected a single entry-file path",
+                    ));
+                }
+                entry_path = Some(PathBuf::from(positional));
+            }
+        }
+    }
+    let path = entry_path.ok_or(CliError::Usage(
+        "usage: ipe package audit-entry <packages/<name>.toml> [--index <root>]",
+    ))?;
+    Ok((path, index_root))
 }
 
 /// Resolve a `check`/analysis `<path>` argument to the entry `.ipe` file the
@@ -7254,5 +7455,274 @@ pub mod web {
             "the refusal must fire before any project tree is written"
         );
         let _ = fs::remove_dir_all(&tmp);
+    }
+
+    // =========================================================================
+    // `ipe package audit-entry` — argument parsing and fail-closed schema gate
+    // =========================================================================
+
+    fn temp_dir_unique(tag: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!(
+            "ipe-audit-entry-test-{tag}-{}-{:?}",
+            std::process::id(),
+            std::thread::current().id()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("create temp dir");
+        dir
+    }
+
+    /// Write a minimal well-formed `packages/<name>.toml` entry into `root`.
+    fn write_entry(root: &Path, name: &str, versions: &[(&str, &str, &str, &str)]) {
+        use std::fmt::Write as _;
+        let pkgs = root.join("packages");
+        std::fs::create_dir_all(&pkgs).expect("packages dir");
+        let mut text = format!("name = \"{name}\"\npublisher = \"tester\"\n");
+        for (ver, source, rev, sha) in versions {
+            let _ = write!(
+                text,
+                "\n[[version]]\nversion = \"{ver}\"\nsource = \"{source}\"\n\
+                 rev = \"{rev}\"\nsha256 = \"{sha}\"\ncapabilities = []\n"
+            );
+        }
+        std::fs::write(pkgs.join(format!("{name}.toml")), text).expect("write entry");
+    }
+
+    /// `parse_audit_entry_args` — missing positional yields a `Usage` error.
+    #[test]
+    fn parse_audit_entry_args_requires_entry_file() {
+        let err = parse_audit_entry_args(&[]).unwrap_err();
+        assert!(
+            matches!(err, CliError::Usage(_)),
+            "missing entry-file must be a Usage error: {err:?}"
+        );
+    }
+
+    /// `parse_audit_entry_args` — unknown flag yields `UsageOwned`.
+    #[test]
+    fn parse_audit_entry_args_rejects_unknown_flag() {
+        let args: Vec<String> = ["packages/foo.toml", "--unknown"]
+            .iter()
+            .map(ToString::to_string)
+            .collect();
+        let err = parse_audit_entry_args(&args).unwrap_err();
+        assert!(
+            matches!(err, CliError::UsageOwned(_)),
+            "unknown flag must be a UsageOwned error: {err:?}"
+        );
+    }
+
+    /// `parse_audit_entry_args` — `--index` without a value yields `Usage`.
+    #[test]
+    fn parse_audit_entry_args_rejects_index_without_value() {
+        let args: Vec<String> = ["packages/foo.toml", "--index"]
+            .iter()
+            .map(ToString::to_string)
+            .collect();
+        let err = parse_audit_entry_args(&args).unwrap_err();
+        assert!(
+            matches!(err, CliError::Usage(_)),
+            "--index without value must be a Usage error: {err:?}"
+        );
+    }
+
+    /// `parse_audit_entry_args` — two positionals yields `Usage`.
+    #[test]
+    fn parse_audit_entry_args_rejects_two_positionals() {
+        let args: Vec<String> = ["packages/foo.toml", "extra"]
+            .iter()
+            .map(ToString::to_string)
+            .collect();
+        let err = parse_audit_entry_args(&args).unwrap_err();
+        assert!(
+            matches!(err, CliError::Usage(_)),
+            "two positionals must be a Usage error: {err:?}"
+        );
+    }
+
+    /// `parse_audit_entry_args` — valid path + `--index` round-trips correctly.
+    #[test]
+    fn parse_audit_entry_args_parses_path_and_index() {
+        let args: Vec<String> = ["packages/foo.toml", "--index", "/some/index"]
+            .iter()
+            .map(ToString::to_string)
+            .collect();
+        let (path, index) = parse_audit_entry_args(&args).expect("parses");
+        assert_eq!(path, PathBuf::from("packages/foo.toml"));
+        assert_eq!(index, Some(PathBuf::from("/some/index")));
+    }
+
+    /// `run_audit_entry` — a malformed entry file (missing `sha256`) is a hard
+    /// schema reject, never a warn-and-pass (§0 fail-closed).
+    #[test]
+    fn audit_entry_rejects_malformed_entry_schema() {
+        let root = temp_dir_unique("ae-bad-schema");
+        let pkgs = root.join("packages");
+        std::fs::create_dir_all(&pkgs).expect("packages dir");
+        // No `sha256` — the integrity anchor is mandatory; parse must reject.
+        std::fs::write(
+            pkgs.join("nohash.toml"),
+            "publisher = \"tester\"\n\n[[version]]\nversion = \"1.0.0\"\n\
+             source = \"https://example.invalid/nohash\"\nrev = \"abc\"\n",
+        )
+        .expect("write entry");
+        let args: Vec<String> =
+            std::iter::once(pkgs.join("nohash.toml").to_string_lossy().into_owned()).collect();
+        let err = run_audit_entry(&args).unwrap_err();
+        // Must be a Resolve or Io error from the schema parse — never Ok.
+        assert!(
+            matches!(err, CliError::Resolve(_) | CliError::Io { .. }),
+            "malformed entry must be rejected at schema step: {err:?}"
+        );
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// `run_audit_entry` — an entry whose every `[[version]]` is already in the
+    /// baseline index is rejected: nothing new to audit (§0 fail-closed; the gate
+    /// must not silently pass with no work done).
+    #[test]
+    fn audit_entry_rejects_when_all_versions_are_already_in_baseline() {
+        let submitted_root = temp_dir_unique("ae-all-baseline-sub");
+        let baseline_root = temp_dir_unique("ae-all-baseline-idx");
+        // Both the submitted and the baseline have exactly version 1.0.0.
+        write_entry(
+            &submitted_root,
+            "mylib",
+            &[("1.0.0", "https://x.invalid/mylib", "abc", "00")],
+        );
+        write_entry(
+            &baseline_root,
+            "mylib",
+            &[("1.0.0", "https://x.invalid/mylib", "abc", "00")],
+        );
+        let args: Vec<String> = [
+            submitted_root
+                .join("packages")
+                .join("mylib.toml")
+                .to_string_lossy()
+                .into_owned(),
+            "--index".to_owned(),
+            baseline_root.to_string_lossy().into_owned(),
+        ]
+        .into_iter()
+        .collect();
+        let err = run_audit_entry(&args).unwrap_err();
+        assert!(
+            matches!(err, CliError::UsageOwned(_)),
+            "no new versions must be a UsageOwned error: {err:?}"
+        );
+        let _ = std::fs::remove_dir_all(&submitted_root);
+        let _ = std::fs::remove_dir_all(&baseline_root);
+    }
+
+    /// `run_audit_entry` — a published version is immutable. Re-submitting an
+    /// existing version number with a *different* row (here a changed `sha256`)
+    /// must be a hard reject naming immutability, never a silent skip. This closes
+    /// the version-delta bypass: were the delta keyed on version number alone, a
+    /// rewritten `source`/`rev`/`sha256`/`capabilities` on an already-published
+    /// version would slip past both hash-verify and audit (ADR 0044, §receiving-gate).
+    #[test]
+    fn audit_entry_rejects_rewriting_a_published_version() {
+        let submitted_root = temp_dir_unique("ae-immutable-sub");
+        let baseline_root = temp_dir_unique("ae-immutable-idx");
+        // Baseline published 1.0.0 with sha "00"; the submission keeps the same
+        // version number but rewrites its sha256 to "11".
+        write_entry(
+            &baseline_root,
+            "mylib",
+            &[("1.0.0", "https://x.invalid/mylib", "abc", "00")],
+        );
+        write_entry(
+            &submitted_root,
+            "mylib",
+            &[("1.0.0", "https://x.invalid/mylib", "abc", "11")],
+        );
+        let args: Vec<String> = [
+            submitted_root
+                .join("packages")
+                .join("mylib.toml")
+                .to_string_lossy()
+                .into_owned(),
+            "--index".to_owned(),
+            baseline_root.to_string_lossy().into_owned(),
+        ]
+        .into_iter()
+        .collect();
+        let err = run_audit_entry(&args).unwrap_err();
+        assert!(
+            matches!(&err, CliError::UsageOwned(msg) if msg.contains("immutable")),
+            "rewriting a published version must be a UsageOwned reject naming immutability: {err:?}"
+        );
+        let _ = std::fs::remove_dir_all(&submitted_root);
+        let _ = std::fs::remove_dir_all(&baseline_root);
+    }
+
+    /// `run_audit_entry` — a new version whose `sha256` does not match the fetched
+    /// tree is a hard [`CliError::HashMismatch`] (verify-before-trust, §0).
+    ///
+    /// Uses a local git repo as the source so the test runs offline.
+    #[test]
+    fn audit_entry_rejects_on_hash_mismatch() {
+        // Build a tiny local git repo.
+        let repo = temp_dir_unique("ae-mismatch-repo");
+        let git = |args: &[&str]| {
+            let ok = std::process::Command::new("git")
+                .args(args)
+                .current_dir(&repo)
+                .env("GIT_AUTHOR_NAME", "t")
+                .env("GIT_AUTHOR_EMAIL", "t@t")
+                .env("GIT_COMMITTER_NAME", "t")
+                .env("GIT_COMMITTER_EMAIL", "t@t")
+                .output()
+                .expect("git runs")
+                .status
+                .success();
+            assert!(ok, "git {args:?} must succeed");
+        };
+        git(&["init", "--quiet"]);
+        std::fs::write(repo.join("lib.ipe"), "module Lib\n").expect("write");
+        git(&["add", "."]);
+        git(&["commit", "--quiet", "-m", "seed"]);
+        // Get the HEAD commit hash.
+        let rev_out = std::process::Command::new("git")
+            .args(["rev-parse", "HEAD"])
+            .current_dir(&repo)
+            .output()
+            .expect("git rev-parse");
+        let rev = String::from_utf8_lossy(&rev_out.stdout).trim().to_owned();
+
+        // Write an entry that points at this repo but with a deliberately wrong sha256.
+        let entry_root = temp_dir_unique("ae-mismatch-entry");
+        let pkgs = entry_root.join("packages");
+        std::fs::create_dir_all(&pkgs).expect("packages dir");
+        let entry_text = format!(
+            "name = \"testlib\"\npublisher = \"tester\"\n\n[[version]]\n\
+             version = \"1.0.0\"\nsource = \"{}\"\nrev = \"{rev}\"\n\
+             sha256 = \"000000000000000000000000000000000000000000000000000000000000wrong\"\n\
+             capabilities = []\n",
+            repo.display()
+        );
+        std::fs::write(pkgs.join("testlib.toml"), entry_text).expect("write entry");
+
+        // Point --index at a root with no baseline so all versions are "new".
+        let idx_root = temp_dir_unique("ae-mismatch-idx");
+        std::fs::create_dir_all(idx_root.join("packages")).expect("packages dir");
+
+        let args: Vec<String> = [
+            pkgs.join("testlib.toml").to_string_lossy().into_owned(),
+            "--index".to_owned(),
+            idx_root.to_string_lossy().into_owned(),
+        ]
+        .into_iter()
+        .collect();
+        let err = run_audit_entry(&args).unwrap_err();
+        assert!(
+            matches!(err, CliError::HashMismatch { .. }),
+            "a wrong sha256 must be a HashMismatch error, not: {err:?}"
+        );
+
+        let _ = std::fs::remove_dir_all(&repo);
+        let _ = std::fs::remove_dir_all(&entry_root);
+        let _ = std::fs::remove_dir_all(&idx_root);
     }
 }
