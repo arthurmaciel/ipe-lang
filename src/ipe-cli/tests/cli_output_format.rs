@@ -237,69 +237,123 @@ fn emit_ir_in_a_project_dir_resolves_the_entry() {
     );
 }
 
-// ---- explain (the code list) ----------------------------------------------
+// ---- explain (overview + list + query) ------------------------------------
 
-/// The `explain` code list's human default is framed (a blank line opens and
-/// closes) and guttered — a browsable page, not the flush `--plain` dump.
+/// Bare `ipe explain` shows the friendly overview — framed, guttered.
 #[test]
-fn explain_list_human_default_is_framed_and_guttered() {
+fn explain_overview_human_is_framed_and_guttered() {
     let r = run(&["explain"]);
     assert!(r.ok);
     assert!(
         r.stdout.starts_with('\n') && r.stdout.ends_with('\n'),
-        "the human code list must be framed, got: {:?}",
+        "the overview must be framed, got: {:?}",
         &r.stdout[..r.stdout.len().min(40)]
     );
     for line in r.stdout.lines().filter(|l| !l.trim().is_empty()) {
         assert!(
             line.starts_with("  "),
-            "the human code list must be guttered, got: {line:?}"
+            "the overview must be guttered, got: {line:?}"
         );
     }
-    // The list still carries the codes themselves.
     assert!(
-        r.stdout.contains("IPE-"),
-        "the human code list must list the diagnostic codes"
+        r.stdout.contains("ipe explain"),
+        "the overview must mention ipe explain"
     );
 }
 
+/// `ipe explain --plain` emits the plain overview — flush-left, no ANSI.
+#[test]
+fn explain_overview_plain_is_ansi_free_and_flush_left() {
+    let r = run(&["explain", "--plain"]);
+    assert!(r.ok);
+    assert!(!r.stdout.contains('\x1b'), "--plain must not contain ANSI");
+    // Plain overview starts flush-left (no leading spaces).
+    let first = r.stdout.lines().next().unwrap_or_default();
+    assert!(
+        !first.starts_with(' '),
+        "--plain overview must be flush-left, got: {first:?}"
+    );
+    assert!(
+        r.stdout.contains("ipe explain"),
+        "--plain overview must mention ipe explain"
+    );
+}
+
+/// `ipe explain --json` emits the overview JSON envelope.
+#[test]
+fn explain_overview_json_envelope() {
+    let r = run(&["explain", "--json"]);
+    assert!(r.ok);
+    let out = r.stdout.trim();
+    assert!(
+        out.starts_with("{\"overview\":"),
+        "json overview must start with {{\"overview\":, got: {out:?}"
+    );
+}
+
+/// `ipe explain list` — human output is framed, guttered, and contains codes.
+#[test]
+fn explain_list_human_is_framed_guttered_and_contains_codes() {
+    let r = run(&["explain", "list"]);
+    assert!(r.ok);
+    assert!(
+        r.stdout.starts_with('\n') && r.stdout.ends_with('\n'),
+        "the list must be framed, got: {:?}",
+        &r.stdout[..r.stdout.len().min(40)]
+    );
+    assert!(
+        r.stdout.contains("IPE-"),
+        "the human list must list diagnostic codes"
+    );
+}
+
+/// `ipe explain list --plain` emits tab-separated rows, flush-left.
 #[test]
 fn explain_list_plain_is_tab_separated_flush_left() {
-    let r = run(&["explain", "--plain"]);
+    let r = run(&["explain", "list", "--plain"]);
     assert!(r.ok);
     let first = r.stdout.lines().next().unwrap_or_default();
     assert!(!first.starts_with(' '), "--plain rows must be flush-left");
     assert!(
         first.contains('\t'),
-        "--plain rows must be tab-separated (code<TAB>title): {first:?}"
+        "--plain rows must be tab-separated (id<TAB>kind<TAB>title): {first:?}"
     );
 }
 
+/// `ipe explain list --json` emits the `{"pages":[...]}` envelope.
 #[test]
-fn explain_list_json_is_a_codes_array() {
-    let r = run(&["explain", "--json"]);
+fn explain_list_json_is_a_pages_array() {
+    let r = run(&["explain", "list", "--json"]);
     assert!(r.ok);
     let out = r.stdout.trim();
     assert!(
-        out.starts_with("{\"codes\":["),
-        "json must open the codes array"
+        out.starts_with("{\"pages\":["),
+        "json must open the pages array, got: {out:?}"
     );
-    assert!(out.contains("\"code\":") && out.contains("\"title\":"));
+    assert!(
+        out.contains("\"id\":") && out.contains("\"kind\":") && out.contains("\"title\":"),
+        "pages array must carry id, kind, and title"
+    );
 }
 
+/// `ipe explain --json IPE-L0131` emits the query envelope, not an error.
 #[test]
-fn explain_of_a_single_code_rejects_the_format_flags() {
-    // The machine forms apply to the list, not to a single code's teaching page.
+fn explain_query_json_emits_envelope() {
     let r = run(&["explain", "--json", "IPE-L0131"]);
-    assert!(!r.ok, "explaining a code with --json must be a usage error");
-    assert!(r.stdout.is_empty());
     assert!(
-        r.stderr.contains("--plain / --json apply to the code list"),
-        "the reason must name the misuse: {}",
+        r.ok,
+        "explaining a code with --json must succeed: {}",
         r.stderr
     );
-    // Error-shows-help: the explain command's page appears on stderr.
-    assert!(r.stderr.contains("ipe explain"));
+    let out = r.stdout.trim();
+    assert!(
+        out.starts_with("{\"query\":"),
+        "json query must emit the {{query,resolved,matches}} envelope, got: {out:?}"
+    );
+    assert!(
+        out.contains("\"resolved\":") && out.contains("\"matches\":"),
+        "envelope must have resolved and matches"
+    );
 }
 
 // ---- reject both flags -----------------------------------------------------

@@ -24,6 +24,7 @@ pub mod clean;
 pub mod cli_args;
 pub mod diff;
 pub mod doc;
+pub mod explain;
 pub mod ffi;
 pub mod fmt;
 pub mod health;
@@ -4050,79 +4051,123 @@ fn cargo_target_directory(crate_dir: &Path) -> Result<PathBuf, CliError> {
         })
 }
 
-/// `ipe explain [<CODE>]`. No argument prints the one-line index of every code
-/// and its title; an argument prints that code's embedded explain page.
-pub(crate) fn run_explain(rest: &[String]) -> Result<(), CliError> {
-    // The format flags apply to the LIST (`ipe explain` with no code) — the
-    // machine-consumable surface. Explaining a single code prints a human
-    // teaching page, which carries no `--plain` / `--json` form.
-    let (format, positional) = cli_args::split_format(rest, "explain")?;
-    match positional.first() {
-        None => {
-            print!("{}", render_code_index(format, &std::io::stdout()));
-            Ok(())
-        }
-        Some(arg) => {
-            if format != cli_args::OutputFormat::Human {
-                return Err(CliError::Usage(
-                    "--plain / --json apply to the code list (`ipe explain` with no code), \
-                     not to a single code's explanation",
-                ));
-            }
-            let page = explain_lookup(arg)?;
-            print!("{}", style::frame(&style::gutter(page)));
-            Ok(())
-        }
-    }
-}
-
-/// Render the diagnostic-code list in the requested [`OutputFormat`].
+/// `ipe explain [list|<query>]` — unified teaching interface.
 ///
-/// - Human (default): a guttered `<CODE>  <title>` table, one code per line.
-/// - `--plain`: the same `<CODE>\t<title>` rows, flush-left and tab-separated so
-///   `cut -f1` yields the codes and `grep`/`awk` slice the table.
-/// - `--json`: `{"codes": [{"code": "IPE-…", "title": "…"}, …]}`, a stable array
-///   of `{code, title}` objects in taxonomy order.
-fn render_code_index(format: cli_args::OutputFormat, stream: &impl std::io::IsTerminal) -> String {
-    use std::fmt::Write as _;
+/// Three entry shapes, all accepting `--json` / `--plain`:
+/// - `ipe explain` — friendly overview.
+/// - `ipe explain list [kind]` — browse the page index; `--list` is a
+///   deprecated alias that still works.
+/// - `ipe explain <query>` — exact or fuzzy lookup across all kinds.
+pub(crate) fn run_explain(rest: &[String]) -> Result<(), CliError> {
+    let stdout = std::io::stdout();
 
-    use cli_args::OutputFormat::{Human, Json, Plain};
+    // Strip `--list` deprecated alias before format parsing so it does not
+    // confuse the positional parser.
+    let rest_no_list_flag: Vec<String>;
+    let (rest_to_parse, legacy_list) = if rest.iter().any(|a| a == "--list") {
+        rest_no_list_flag = rest
+            .iter()
+            .filter(|a| a.as_str() != "--list")
+            .cloned()
+            .collect();
+        (&rest_no_list_flag[..], true)
+    } else {
+        (rest, false)
+    };
+
+    let (format, positional) = cli_args::split_format(rest_to_parse, "explain")?;
+
+    // `ipe explain list [kind]` — both via subcommand and `--list` alias.
+    let is_list_cmd = positional.first().is_some_and(|a| *a == "list");
+    if is_list_cmd || legacy_list {
+        if legacy_list {
+            // Deprecation notice on stderr; does not fail.
+            eprintln!("note: `ipe explain --list` is deprecated — use `ipe explain list` instead");
+        }
+        // Optional kind filter as second positional after `list`.
+        let kind_arg = if is_list_cmd {
+            positional.get(1).copied()
+        } else {
+            positional.first().copied()
+        };
+        let kind_filter = match kind_arg {
+            None => None,
+            Some("error-codes" | "error-code") => Some(explain::PageKind::ErrorCode),
+            Some("syntax") => Some(explain::PageKind::Syntax),
+            Some("topics" | "topic") => Some(explain::PageKind::Topic),
+            Some(other) => {
+                return Err(CliError::UsageOwned(format!(
+                    "ipe explain list: unknown kind `{other}` \
+                     (valid: error-codes, syntax, topics)"
+                )));
+            }
+        };
+        print!(
+            "{}",
+            explain::render_list(format, kind_filter.as_ref(), &stdout)
+        );
+        return Ok(());
+    }
+
+    // `ipe explain` with no positional — overview.
+    if positional.is_empty() {
+        print!("{}", explain::render_overview(format, &stdout));
+        return Ok(());
+    }
+
+    // `ipe explain <query>` — resolve across all kinds.
+    let query = positional.first().copied().unwrap_or("");
+
+    // Extra positional tokens are not allowed.
+    if positional.len() > 1 {
+        let extra = positional.get(1).copied().unwrap_or("");
+        return Err(CliError::UsageOwned(format!(
+            "ipe explain: unexpected extra argument `{extra}`"
+        )));
+    }
+
+    let (exact, matches) = explain::resolve(query);
+
     match format {
-        Plain => {
-            let mut out = String::new();
-            for &c in ALL_CODES {
-                let _ = writeln!(out, "{}\t{}", c.as_str(), title(c));
-            }
-            out
-        }
-        Json => {
-            let rows: Vec<String> = ALL_CODES
-                .iter()
-                .map(|&c| format!("{{\"code\":{:?},\"title\":{:?}}}", c.as_str(), title(c)))
-                .collect();
-            format!("{{\"codes\":[{}]}}\n", rows.join(","))
-        }
-        Human => {
-            let p = style::Palette::for_stream(stream);
-            let mut body = String::new();
-            let _ = writeln!(
-                body,
-                "{}Diagnostic codes{} — run {}ipe explain <CODE>{} for the full teaching page:\n",
-                p.bold, p.reset, p.yellow, p.reset,
+        cli_args::OutputFormat::Json => {
+            print!(
+                "{}",
+                explain::render_query_json(query, exact.as_ref(), &matches)
             );
-            for &c in ALL_CODES {
-                let _ = writeln!(
-                    body,
-                    "  {}{}{}  {}",
-                    p.yellow,
-                    c.as_str(),
-                    p.reset,
-                    title(c),
-                );
+        }
+        cli_args::OutputFormat::Plain => {
+            if let Some(page) = &exact {
+                // Plain rendering: body without ANSI, no gutter/frame.
+                print!("{}", page.body);
+                if !page.body.ends_with('\n') {
+                    println!();
+                }
+            } else if matches.is_empty() {
+                eprintln!("ipe explain: no page found for `{query}`");
+                return Err(CliError::UsageOwned(format!(
+                    "no explain page found for `{query}`"
+                )));
+            } else {
+                // Plain chooser: one candidate per line.
+                for m in &matches {
+                    println!("{}\t{}\t{}", m.id, m.kind.label(), m.title);
+                }
             }
-            style::frame(&style::gutter(&body))
+        }
+        cli_args::OutputFormat::Human => {
+            let p = style::Palette::for_stream(&stdout);
+            if let Some(page) = &exact {
+                print!("{}", style::frame(&style::gutter(&page.render_human(p))));
+            } else if matches.is_empty() {
+                return Err(CliError::UsageOwned(format!(
+                    "no explain page found for `{query}`"
+                )));
+            } else {
+                print!("{}", explain::render_chooser(query, &matches, p));
+            }
         }
     }
+    Ok(())
 }
 
 /// `ipe fix <path>` — apply machine-applicable fixes to the source file.

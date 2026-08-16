@@ -400,17 +400,19 @@ const COMMANDS: &[Command] = &[
     Command {
         name: "explain",
         run: crate::run_explain,
-        summary: "Explain a diagnostic code, or list every code with no argument.",
-        args: "[<code>]",
-        args_desc: "A diagnostic code such as IPE-L0131. Omit to list every code.",
+        summary: "Teaching reference: look up a diagnostic code, syntax form, or topic.",
+        args: "[list [kind] | <query>]",
+        args_desc: "A diagnostic code (IPE-T0001), syntax form (case), or topic (effects). \
+                    Omit for an overview. `list` browses all pages; `list syntax|topics|error-codes` \
+                    filters to one kind.",
         options: &[
             Opt {
                 flag: "[--plain]",
-                desc: "list codes flush-left, tab-separated (code<TAB>title), for grep/awk",
+                desc: "ANSI-free output for piping/scripting",
             },
             Opt {
                 flag: "[--json]",
-                desc: "list codes as {\"codes\":[{\"code\",\"title\"}]} for jq",
+                desc: "machine-readable {kind,id,title,summary,…} schema",
             },
         ],
     },
