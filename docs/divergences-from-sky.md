@@ -1978,3 +1978,24 @@ runtime through re-exports; no golden `main.rs` embeds these names). The model
 schema-tag domain-separator const is renamed (`IPE_WEB_MODEL_SCHEMA_TAG`,
 `WEB_MODEL_SCHEMA_WIRE_VERSION`); its string value is unchanged so persisted
 session checkpoints stay compatible.
+
+### B-WebviewWindowSize — webview `window.size` is the content/inner area (reference uses outer frame)
+
+- **Differs:** A webview app's `window.size` (width × height) is applied as the
+  window's **content/inner** size — `tao`'s `with_inner_size`, which on macOS
+  builds the window with `initWithContentRect:`, so the requested height is the
+  drawable content height and the title bar is additive. The reference backend
+  sizes the **outer** frame (its `webview_go` binding calls an `NSWindow`
+  frame-set API), so the same `size` yields a window whose content is shorter by
+  one title-bar height (~28–32 px). For `31-webview-stopwatch-ui` the reference
+  window captures at 800×500 total while Ipê captures at 800×532 total (800×500
+  of content plus the title bar).
+- **Go-oracle relationship:** the reference succeeds and renders correctly; the
+  rendered content is pixel-identical once the captures are aligned to their
+  common top-left region (the parity harness crops to that region). The
+  divergence is window-chrome sizing only.
+- **Rationale:** correctness — honouring a requested size as the content area is
+  the semantically precise reading (an app asks for the space it draws into, not
+  the space including OS chrome, whose height varies by platform/theme).
+- **Sanctioned:** yes (`sanctioned:` — Ipê is deliberately more correct). No
+  soundness impact; the size-application is a total, guarded `LogicalSize` cast.
