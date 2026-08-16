@@ -10,6 +10,32 @@ Entries below the header are maintained by
 section is generated from Conventional Commit messages and prepended when the
 standing release pull request is merged.
 
+## [0.1.52](https://github.com/arthurmaciel/ipe-lang/compare/ipe-v0.1.51...ipe-v0.1.52) (2026-08-16)
+
+
+### Features
+
+* **ci:** non-visual Sky↔Ipê parity harness — Increment 2 ([#1009](https://github.com/arthurmaciel/ipe-lang/issues/1009)) ([3992f7b](https://github.com/arthurmaciel/ipe-lang/commit/3992f7b41690221fda31fa5e1abeec580e57bd48))
+* **cli:** add --json diagnostic output for build, run, and type-check ([#1001](https://github.com/arthurmaciel/ipe-lang/issues/1001)) ([8ca0982](https://github.com/arthurmaciel/ipe-lang/commit/8ca09828eef1079a3730101545c9360781da63e9))
+* **cli:** ipe explain unified teaching interface ([#992](https://github.com/arthurmaciel/ipe-lang/issues/992)) ([#994](https://github.com/arthurmaciel/ipe-lang/issues/994)) ([c821402](https://github.com/arthurmaciel/ipe-lang/commit/c821402fc42154c30105b6cbc2df0062cf3e8199))
+* **diagnostics:** teaching nudges linking ipe explain topics ([#992](https://github.com/arthurmaciel/ipe-lang/issues/992) stage 6) ([#1003](https://github.com/arthurmaciel/ipe-lang/issues/1003)) ([e711a95](https://github.com/arthurmaciel/ipe-lang/commit/e711a95e2be5815b359a6147387014fa72cc79c1))
+* **ffi,cli:** teach `ipe rust add` — progress, warning banner, and a pkg-config missing-system-library diagnostic ([#993](https://github.com/arthurmaciel/ipe-lang/issues/993)) ([5b697c2](https://github.com/arthurmaciel/ipe-lang/commit/5b697c26bb673e518e45b361290908c44607309b))
+* **stdlib:** Ipe.Analytics — typed, consent-gated product analytics ([#1002](https://github.com/arthurmaciel/ipe-lang/issues/1002)) ([213c492](https://github.com/arthurmaciel/ipe-lang/commit/213c49278c1c612deb768b2b0d48d5607ef34859))
+* **stdlib:** Ipe.Analytics store-backed residuals — eventsStore, persist, erase, aggregates ([#1004](https://github.com/arthurmaciel/ipe-lang/issues/1004)) ([0d85d68](https://github.com/arthurmaciel/ipe-lang/commit/0d85d68eef8ef7f89abb254a8a4adbbcccde1f41))
+
+
+### Bug Fixes
+
+* **cli:** make explain frontmatter unquote total on a lone quote ([#996](https://github.com/arthurmaciel/ipe-lang/issues/996)) ([6b751b1](https://github.com/arthurmaciel/ipe-lang/commit/6b751b179bd7cb1f7f2358ac6539360927aad935))
+* **converter:** accept, not declare, the unsafe capability for .Unsafe imports ([#987](https://github.com/arthurmaciel/ipe-lang/issues/987)) ([3dbf7d2](https://github.com/arthurmaciel/ipe-lang/commit/3dbf7d25a58504e381abbbee13b436c354b6e9f6))
+* **emit:** unify Cons/list fn-value element carrier with the storable Arc element type ([#989](https://github.com/arthurmaciel/ipe-lang/issues/989)) ([cfa2309](https://github.com/arthurmaciel/ipe-lang/commit/cfa2309078eea2e37c1f56b1a05b1dad75f37185))
+* **examples:** drop lawless Io.println discards from 08-notes-app (IPE-L0141) ([#1000](https://github.com/arthurmaciel/ipe-lang/issues/1000)) ([7ac1089](https://github.com/arthurmaciel/ipe-lang/commit/7ac10891f0b647a70a4710ad2190681fdb94bfad)), closes [#836](https://github.com/arthurmaciel/ipe-lang/issues/836)
+* **lower:** gate RetryPolicy concretisation on kernel shouldRetry type ([#997](https://github.com/arthurmaciel/ipe-lang/issues/997)) ([6655aeb](https://github.com/arthurmaciel/ipe-lang/commit/6655aebc8098681691aa131d51e6f520639b4881))
+* **lower:** propagate Sync bound on generic captured by list-cons lambda ([#1006](https://github.com/arthurmaciel/ipe-lang/issues/1006)) ([afd03d3](https://github.com/arthurmaciel/ipe-lang/commit/afd03d304c981ce5408488fb1411fd582eb844af))
+* **stdlib:** reject serial-without-primaryKey at createSql time (Fixes [#1007](https://github.com/arthurmaciel/ipe-lang/issues/1007)) ([#1008](https://github.com/arthurmaciel/ipe-lang/issues/1008)) ([f2882f8](https://github.com/arthurmaciel/ipe-lang/commit/f2882f85271b04da92576aa97b757d854f78ab5e))
+* **test:** correct stale runtime path in cargo_name SEAL; factor shared e2e helpers ([#998](https://github.com/arthurmaciel/ipe-lang/issues/998)) ([4198fb1](https://github.com/arthurmaciel/ipe-lang/commit/4198fb167c525c851055e9d732e972b258403f38)), closes [#990](https://github.com/arthurmaciel/ipe-lang/issues/990)
+* **tui:** batch clear+frame into one write to eliminate cursor-move flicker ([#999](https://github.com/arthurmaciel/ipe-lang/issues/999)) ([0e63d3a](https://github.com/arthurmaciel/ipe-lang/commit/0e63d3aa177dc96e957dd524ebfa37a0d6bc74d3)), closes [#758](https://github.com/arthurmaciel/ipe-lang/issues/758)
+
 ## [0.1.51](https://github.com/arthurmaciel/ipe-lang/compare/ipe-v0.1.50...ipe-v0.1.51) (2026-08-14)
 
 
