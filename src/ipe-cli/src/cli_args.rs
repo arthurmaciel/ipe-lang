@@ -279,6 +279,9 @@ pub struct BuildArgs {
     pub accept_risks: bool,
     /// The emit surface (IR dump vs project emit).
     pub mode: BuildMode,
+    /// `--json` — emit each diagnostic as a stable JSON object instead of the
+    /// human-readable, decorated layout.
+    pub format: OutputFormat,
 }
 
 /// Parse `ipe build`'s argument tail.
@@ -304,8 +307,12 @@ pub fn parse_build(rest: &[String]) -> Result<BuildArgs, CliError> {
     let mut production = false;
     let mut accept_risks = false;
     let mut static_flags = StaticFlags::default();
+    let mut format: Option<OutputFormat> = None;
     while let Some(flag) = it.next() {
         if static_flags.consume(flag, &mut it, "build")? {
+            continue;
+        }
+        if consume_format(&mut format, flag, "build")? {
             continue;
         }
         match flag.as_str() {
@@ -407,6 +414,7 @@ pub fn parse_build(rest: &[String]) -> Result<BuildArgs, CliError> {
         production,
         accept_risks,
         mode,
+        format: format.unwrap_or_default(),
     })
 }
 
@@ -426,6 +434,9 @@ pub struct RunArgs {
     pub accept_risks: bool,
     /// Arguments after `--`, forwarded verbatim to the compiled binary.
     pub bin_args: Vec<String>,
+    /// `--json` — emit each diagnostic as a stable JSON object instead of the
+    /// human-readable, decorated layout.
+    pub format: OutputFormat,
 }
 
 /// Parse `ipe run`'s argument tail.
@@ -457,8 +468,12 @@ pub fn parse_run(rest: &[String]) -> Result<RunArgs, CliError> {
     let mut runtime: Option<String> = None;
     let mut accept_risks = false;
     let mut static_flags = StaticFlags::default();
+    let mut format: Option<OutputFormat> = None;
     while let Some(flag) = it.next() {
         if static_flags.consume(flag, &mut it, "run")? {
+            continue;
+        }
+        if consume_format(&mut format, flag, "run")? {
             continue;
         }
         match flag.as_str() {
@@ -497,6 +512,7 @@ pub fn parse_run(rest: &[String]) -> Result<RunArgs, CliError> {
         static_layer: static_flags.layer(),
         accept_risks,
         bin_args,
+        format: format.unwrap_or_default(),
     })
 }
 
@@ -764,6 +780,39 @@ pub fn parse_fix(rest: &[String]) -> Result<FixArgs, CliError> {
     }
     let entry = entry.ok_or(CliError::Usage("usage: ipe fix <path> [--yes]"))?;
     Ok(FixArgs { entry, auto })
+}
+
+/// Fully-parsed `ipe type-check` arguments.
+pub struct TypeCheckArgs {
+    /// The positional entry (`None` → project-aware default).
+    pub entry: Option<String>,
+    /// `--json` / `--plain` — machine output format (default: human).
+    pub format: OutputFormat,
+}
+
+/// Parse `ipe type-check`'s argument tail: an optional single positional path,
+/// plus the shared `--plain` / `--json` format flags.
+///
+/// # Errors
+/// [`CliError::UsageOwned`] on an unknown flag or a second positional argument.
+pub fn parse_type_check(rest: &[String]) -> Result<TypeCheckArgs, CliError> {
+    let mut entry: Option<String> = None;
+    let mut format: Option<OutputFormat> = None;
+    for arg in rest {
+        if consume_format(&mut format, arg, "type-check")? {
+            continue;
+        }
+        if arg.starts_with('-') {
+            return Err(CliError::UsageOwned(format!(
+                "ipe type-check: unknown flag `{arg}`"
+            )));
+        }
+        set_once(&mut entry, arg.clone(), "<path>", "type-check")?;
+    }
+    Ok(TypeCheckArgs {
+        entry,
+        format: format.unwrap_or_default(),
+    })
 }
 
 /// Fully-parsed `ipe health` arguments.

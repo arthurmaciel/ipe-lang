@@ -35,7 +35,7 @@ pub use diagnostic::{
     LowerError, ModelLeaf, NameError, ParseError, SealRejection, SpanRole, Suggestion, TokenKind,
     TyDoc, TypeDeclDefect, TypeError,
 };
-pub use render::{plain_message, render, render_ty};
+pub use render::{plain_message, render, render_json, render_ty};
 pub use span::{Located, Span};
 
 #[cfg(test)]

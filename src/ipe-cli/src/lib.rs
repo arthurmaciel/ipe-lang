@@ -56,7 +56,8 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 
 use ipe_diagnostics::{
-    ALL_CODES, Applicability, Diagnostic, HelpLine, Suggestion, explain_page, render, title,
+    ALL_CODES, Applicability, Diagnostic, HelpLine, Suggestion, explain_page, render, render_json,
+    title,
 };
 use ipe_intern::Interner;
 
@@ -322,6 +323,10 @@ pub enum CliError {
         /// The entry file that was compiled as a pure app.
         entry: PathBuf,
     },
+    /// A `Pipeline` diagnostic was already rendered as JSON and written to
+    /// stderr by the caller. The process must exit non-zero, but there is
+    /// nothing left to print — the JSON line is the complete machine output.
+    DiagnosticJsonEmitted,
 }
 
 impl From<toolchain::ToolchainMissing> for CliError {
@@ -340,6 +345,26 @@ impl From<build_plan::Refusal> for CliError {
     fn from(refusal: build_plan::Refusal) -> Self {
         Self::StaticRefusal(refusal)
     }
+}
+
+/// Emit a `Pipeline` diagnostic as a JSON object on stderr, then return
+/// [`CliError::DiagnosticJsonEmitted`] so the caller exits non-zero without
+/// printing the human-readable layout a second time.
+///
+/// Any non-`Pipeline` error is returned as-is (the human path continues for it).
+fn emit_pipeline_json(err: CliError) -> CliError {
+    if let CliError::Pipeline {
+        ref file,
+        ref src,
+        ref diag,
+    } = err
+    {
+        let json = render_json(diag, &file.to_string_lossy(), src);
+        // Best-effort write; if stderr is closed we still exit non-zero.
+        let _ = std::io::stderr().write_all(json.as_bytes());
+        return CliError::DiagnosticJsonEmitted;
+    }
+    err
 }
 
 /// The one-line stderr verdict for a failed test run, guttered and glyphed so
@@ -466,6 +491,8 @@ impl std::fmt::Display for CliError {
             ),
             Self::EjectUnsupported { reason } => write!(f, "{}eject: {reason}", style::GUTTER),
             Self::DeployPureApp { entry } => fmt_deploy_pure_app(entry, f),
+            // The JSON line was already written; nothing more to print.
+            Self::DiagnosticJsonEmitted => Ok(()),
         }
     }
 }
@@ -2620,6 +2647,22 @@ fn resolve_wasm_target(cli_wasm: bool, wasm_config: Option<&project::WasmConfig>
 // reads worse than the whole.
 #[allow(clippy::too_many_lines)]
 pub(crate) fn run_build(rest: &[String]) -> Result<(), CliError> {
+    // Parse args once to learn the format before running the body.
+    let format = cli_args::parse_build(rest)
+        .map(|a| a.format)
+        .unwrap_or_default();
+    run_build_body(rest).map_err(|e| {
+        if format == cli_args::OutputFormat::Json {
+            emit_pipeline_json(e)
+        } else {
+            e
+        }
+    })
+}
+
+/// Inner implementation of `run_build`, unaware of JSON formatting.
+#[allow(clippy::too_many_lines)]
+fn run_build_body(rest: &[String]) -> Result<(), CliError> {
     let args = cli_args::parse_build(rest)?;
     let entry = match args.entry {
         Some(e) => e,
@@ -3617,6 +3660,21 @@ fn bundle_wasm(out_dir: &Path) -> Result<(), CliError> {
 // exec); the steps share enough locals that splitting reads worse than the whole.
 #[allow(clippy::too_many_lines)]
 pub(crate) fn run_run(rest: &[String]) -> Result<(), CliError> {
+    let format = cli_args::parse_run(rest)
+        .map(|a| a.format)
+        .unwrap_or_default();
+    run_run_body(rest).map_err(|e| {
+        if format == cli_args::OutputFormat::Json {
+            emit_pipeline_json(e)
+        } else {
+            e
+        }
+    })
+}
+
+/// Inner implementation of `run_run`, unaware of JSON formatting.
+#[allow(clippy::too_many_lines)]
+fn run_run_body(rest: &[String]) -> Result<(), CliError> {
     let args = cli_args::parse_run(rest)?;
     let bin_args = args.bin_args;
     let cli_layer = args.static_layer;
@@ -4663,23 +4721,43 @@ fn resolve_analysis_entry(path: &Path) -> Result<PathBuf, CliError> {
 /// `typecheck` query: no IR lowering, no Rust emission, nothing written. Exits
 /// 0 with a friendly framed success line when the program type-checks, or
 /// non-zero carrying the first rendered diagnostic when it does not.
+///
+/// With `--json`, each diagnostic is a JSON object on stderr, and success
+/// is `{"status":"ok"}` on stdout — both machine-parseable.
 pub(crate) fn run_type_check(rest: &[String]) -> Result<(), CliError> {
-    let arg = match cli_args::single_positional(rest, "type-check")? {
+    let args = cli_args::parse_type_check(rest)?;
+    let arg = match args.entry {
         Some(e) => PathBuf::from(e),
         None => PathBuf::from(default_entry()?),
     };
     let entry = resolve_analysis_entry(&arg)?;
-    typecheck_entry_via_graph(&entry)?;
-    let p = style::Palette::for_stream(&std::io::stdout());
-    print!(
-        "{}",
-        style::frame(&style::gutter(&format!(
-            "{}{} No type errors — this program type-checks.{}",
-            p.green,
-            style::glyph::OK,
-            p.reset,
-        )))
-    );
+    typecheck_entry_via_graph(&entry).map_err(|e| {
+        if args.format == cli_args::OutputFormat::Json {
+            emit_pipeline_json(e)
+        } else {
+            e
+        }
+    })?;
+    match args.format {
+        cli_args::OutputFormat::Json => {
+            println!("{{\"status\":\"ok\"}}");
+        }
+        cli_args::OutputFormat::Plain => {
+            println!("ok");
+        }
+        cli_args::OutputFormat::Human => {
+            let p = style::Palette::for_stream(&std::io::stdout());
+            print!(
+                "{}",
+                style::frame(&style::gutter(&format!(
+                    "{}{} No type errors — this program type-checks.{}",
+                    p.green,
+                    style::glyph::OK,
+                    p.reset,
+                )))
+            );
+        }
+    }
     Ok(())
 }
 
