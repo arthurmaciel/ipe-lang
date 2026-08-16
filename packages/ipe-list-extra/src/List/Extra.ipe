@@ -1,0 +1,432 @@
+-- | List.Extra — extra list combinators not covered by Ipe.List core.
+--
+-- All functions are pure (no effects, no Task). Partial operations return
+-- Maybe instead of crashing on empty input.
+module List.Extra exposing
+    ( last
+    , init
+    , uncons
+    , unconsLast
+    , getAt
+    , findIndex
+    , count
+    , groupWhile
+    , intercalate
+    , interweave
+    , zip3
+    , splitAt
+    , span
+    , scanl1
+    , foldl1
+    , maximumBy
+    , minimumBy
+    )
+
+import Ipe.List as List
+import Ipe.Maybe as Maybe
+import Ipe.Tuple as Tuple
+
+
+-- ---------------------------------------------------------------------------
+-- Indexing and structural access
+-- ---------------------------------------------------------------------------
+
+-- | `last list` — the last element, or `Nothing` on the empty list.
+last : List a -> Maybe a
+last list =
+    case list of
+        [] ->
+            Nothing
+
+        x :: [] ->
+            Just x
+
+        _ :: rest ->
+            last rest
+
+
+-- | `init list` — all elements except the last, or `Nothing` on the empty list.
+--
+-- Returns `Just []` for a singleton.
+init : List a -> Maybe (List a)
+init list =
+    case list of
+        [] ->
+            Nothing
+
+        _ :: [] ->
+            Just []
+
+        x :: rest ->
+            case init rest of
+                Nothing ->
+                    Nothing
+
+                Just initRest ->
+                    Just (x :: initRest)
+
+
+-- | `uncons list` — split a list into its head and tail, or `Nothing` when empty.
+uncons : List a -> Maybe ( a, List a )
+uncons list =
+    case list of
+        [] ->
+            Nothing
+
+        x :: rest ->
+            Just ( x, rest )
+
+
+-- | `unconsLast list` — split a list into its init and last element,
+-- or `Nothing` when empty.
+unconsLast : List a -> Maybe ( List a, a )
+unconsLast list =
+    case list of
+        [] ->
+            Nothing
+
+        _ ->
+            case last list of
+                Nothing ->
+                    Nothing
+
+                Just l ->
+                    case init list of
+                        Nothing ->
+                            Nothing
+
+                        Just i ->
+                            Just ( i, l )
+
+
+-- | `getAt n list` — the element at zero-based index `n`,
+-- or `Nothing` when `n` is out of bounds or negative.
+getAt : Int -> List a -> Maybe a
+getAt n list =
+    if n < 0 then
+        Nothing
+
+    else
+        case list of
+            [] ->
+                Nothing
+
+            x :: rest ->
+                if n == 0 then
+                    Just x
+
+                else
+                    getAt (n - 1) rest
+
+
+-- ---------------------------------------------------------------------------
+-- Searching
+-- ---------------------------------------------------------------------------
+
+-- | `findIndex pred list` — the zero-based index of the first element
+-- satisfying `pred`, or `Nothing` when none does.
+findIndex : (a -> Bool) -> List a -> Maybe Int
+findIndex pred list =
+    findIndexFold pred 0 list
+
+
+-- Tail-recursive scan carrying the index in the accumulator.
+-- Written as a direct recursive call (not a closure-passing helper) to stay
+-- within the emitter's supported TCO shape.
+findIndexFold : (a -> Bool) -> Int -> List a -> Maybe Int
+findIndexFold pred i list =
+    case list of
+        [] ->
+            Nothing
+
+        x :: rest ->
+            if pred x then
+                Just i
+
+            else
+                findIndexFold pred (i + 1) rest
+
+
+-- NOTE: elemIndex and notMember require (==) on a generic type variable,
+-- which the current Ipê HM solver cannot express in user code (only kernel
+-- functions bypass this check). They are omitted until the compiler gains
+-- an Equatable constraint syntax.
+
+
+-- ---------------------------------------------------------------------------
+-- Counting
+-- ---------------------------------------------------------------------------
+
+-- | `count pred list` — number of elements satisfying `pred`.
+count : (a -> Bool) -> List a -> Int
+count pred list =
+    List.foldl
+        (\x acc ->
+            if pred x then
+                acc + 1
+
+            else
+                acc)
+        0
+        list
+
+
+-- ---------------------------------------------------------------------------
+-- Deduplication
+-- ---------------------------------------------------------------------------
+
+
+-- ---------------------------------------------------------------------------
+-- Grouping
+-- ---------------------------------------------------------------------------
+
+-- | `groupWhile pred list` — partition `list` into maximal contiguous groups
+-- where consecutive elements satisfy `pred`.
+--
+-- `pred a b` returns `True` when `a` and `b` belong in the same group.
+-- Each group is non-empty; the result list is empty iff the input is empty.
+--
+-- State threaded through foldl: `( currentGroup, doneGroups )` where
+-- `currentGroup` is built in reverse and flipped when a boundary is hit.
+groupWhile : (a -> a -> Bool) -> List a -> List (List a)
+groupWhile pred list =
+    case list of
+        [] ->
+            []
+
+        first_ :: rest ->
+            let
+                finalState =
+                    List.foldl
+                        (\x state ->
+                            let
+                                current = Tuple.first state
+                                done = Tuple.second state
+                            in
+                                case current of
+                                    [] ->
+                                        ( [ x ], done )
+
+                                    pivot :: _ ->
+                                        if pred pivot x then
+                                            ( x :: current, done )
+
+                                        else
+                                            ( [ x ], List.reverse current :: done ))
+                        ( [ first_ ], [] )
+                        rest
+
+                lastGroup = Tuple.first finalState
+                finishedGroups = Tuple.second finalState
+            in
+                List.reverse (List.reverse lastGroup :: finishedGroups)
+
+
+-- ---------------------------------------------------------------------------
+-- Interleaving and intercalation
+-- ---------------------------------------------------------------------------
+
+-- | `intercalate sep lists` — insert `sep` between each consecutive pair of
+-- lists, then flatten into a single list.
+intercalate : List a -> List (List a) -> List a
+intercalate sep lists =
+    List.concat (intercalateInsert sep lists)
+
+
+intercalateInsert : List a -> List (List a) -> List (List a)
+intercalateInsert sep lists =
+    case lists of
+        [] ->
+            []
+
+        x :: [] ->
+            [ x ]
+
+        x :: rest ->
+            x :: sep :: intercalateInsert sep rest
+
+
+-- | `interweave xs ys` — interleave `xs` and `ys` element by element,
+-- appending any surplus from the longer list at the end.
+--
+-- `interweave [1,2,3] [4,5] == [1,4,2,5,3]`
+interweave : List a -> List a -> List a
+interweave xs ys =
+    interweaveAcc xs ys []
+
+
+interweaveAcc : List a -> List a -> List a -> List a
+interweaveAcc xs ys acc =
+    case xs of
+        [] ->
+            List.append (List.reverse acc) ys
+
+        x :: xRest ->
+            case ys of
+                [] ->
+                    List.append (List.reverse acc) xs
+
+                y :: yRest ->
+                    interweaveAcc xRest yRest (y :: x :: acc)
+
+
+-- ---------------------------------------------------------------------------
+-- Zipping
+-- ---------------------------------------------------------------------------
+
+-- | `zip3 xs ys zs` — zip three lists into a list of triples,
+-- truncating to the shortest list's length.
+zip3 : List a -> List b -> List c -> List ( a, b, c )
+zip3 xs ys zs =
+    List.reverse (zip3Acc xs ys zs [])
+
+
+zip3Acc : List a -> List b -> List c -> List ( a, b, c ) -> List ( a, b, c )
+zip3Acc xs ys zs acc =
+    case xs of
+        [] ->
+            acc
+
+        x :: xRest ->
+            case ys of
+                [] ->
+                    acc
+
+                y :: yRest ->
+                    case zs of
+                        [] ->
+                            acc
+
+                        z :: zRest ->
+                            zip3Acc xRest yRest zRest (( x, y, z ) :: acc)
+
+
+-- ---------------------------------------------------------------------------
+-- Splitting
+-- ---------------------------------------------------------------------------
+
+-- | `splitAt n list` — split `list` into `(take n list, drop n list)`.
+splitAt : Int -> List a -> ( List a, List a )
+splitAt n list =
+    ( List.take n list, List.drop n list )
+
+
+-- | `span pred list` — the longest prefix satisfying `pred`, and the rest.
+--
+-- Uses foldl with a (done, prefix) state; avoids passing pred through
+-- a tail-recursive helper (which triggers an Arc/Box TCO mismatch in the
+-- current emitter).
+span : (a -> Bool) -> List a -> ( List a, List a )
+span pred list =
+    let
+        state =
+            List.foldl
+                (\x st ->
+                    let
+                        done = Tuple.first st
+                        acc = Tuple.second st
+                    in
+                        if done then
+                            st
+
+                        else if pred x then
+                            ( False, List.append acc [ x ] )
+
+                        else
+                            ( True, acc ))
+                ( False, [] )
+                list
+
+        prefix = Tuple.second state
+        prefixLen = List.length prefix
+    in
+        ( prefix, List.drop prefixLen list )
+
+
+-- ---------------------------------------------------------------------------
+-- Folds
+-- ---------------------------------------------------------------------------
+
+-- | `foldl1 fn list` — fold from the left seeded with the first element.
+-- Returns `Nothing` on the empty list.
+foldl1 : (a -> a -> a) -> List a -> Maybe a
+foldl1 fn list =
+    case list of
+        [] ->
+            Nothing
+
+        x :: rest ->
+            Just (List.foldl fn x rest)
+
+
+-- | `scanl1 fn list` — scan from the left seeded with the first element.
+-- Returns `[]` on the empty list.
+--
+-- `scanl1 f [a, b, c] == [a, f a b, f (f a b) c]`
+scanl1 : (a -> a -> a) -> List a -> List a
+scanl1 fn list =
+    case list of
+        [] ->
+            []
+
+        x :: rest ->
+            List.reverse (scanlAcc fn x rest [ x ])
+
+
+scanlAcc : (a -> a -> a) -> a -> List a -> List a -> List a
+scanlAcc fn acc rest out =
+    case rest of
+        [] ->
+            out
+
+        x :: remaining ->
+            let
+                next = fn acc x
+            in
+                scanlAcc fn next remaining (next :: out)
+
+
+-- ---------------------------------------------------------------------------
+-- Order by
+-- ---------------------------------------------------------------------------
+
+-- | `maximumBy keyFn list` — the element with the largest key, or `Nothing`
+-- on the empty list. Returns the first maximum when keys tie.
+maximumBy : (a -> comparable) -> List a -> Maybe a
+maximumBy keyFn list =
+    case list of
+        [] ->
+            Nothing
+
+        x :: rest ->
+            Just
+                (List.foldl
+                    (\y best ->
+                        if keyFn y > keyFn best then
+                            y
+
+                        else
+                            best)
+                    x
+                    rest)
+
+
+-- | `minimumBy keyFn list` — the element with the smallest key, or `Nothing`
+-- on the empty list. Returns the first minimum when keys tie.
+minimumBy : (a -> comparable) -> List a -> Maybe a
+minimumBy keyFn list =
+    case list of
+        [] ->
+            Nothing
+
+        x :: rest ->
+            Just
+                (List.foldl
+                    (\y best ->
+                        if keyFn y < keyFn best then
+                            y
+
+                        else
+                            best)
+                    x
+                    rest)
