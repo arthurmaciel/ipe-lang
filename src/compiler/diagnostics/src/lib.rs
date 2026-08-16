@@ -17,16 +17,16 @@ pub use code::{
     IPE_L0112, IPE_L0113, IPE_L0114, IPE_L0115, IPE_L0116, IPE_L0117, IPE_L0118, IPE_L0119,
     IPE_L0120, IPE_L0121, IPE_L0122, IPE_L0123, IPE_L0124, IPE_L0125, IPE_L0126, IPE_L0127,
     IPE_L0128, IPE_L0129, IPE_L0130, IPE_L0131, IPE_L0132, IPE_L0133, IPE_L0134, IPE_L0135,
-    IPE_L0140, IPE_L0141, IPE_L0200, IPE_N0001, IPE_N0002, IPE_N0003, IPE_N0004, IPE_N0005,
-    IPE_N0010, IPE_N0011, IPE_N0012, IPE_N0013, IPE_N0020, IPE_N0021, IPE_N0022, IPE_N0023,
-    IPE_N0024, IPE_N0025, IPE_N0026, IPE_N0027, IPE_N0028, IPE_N0029, IPE_N0030, IPE_N0031,
-    IPE_N0032, IPE_N0033, IPE_N0034, IPE_N0035, IPE_N0036, IPE_N0037, IPE_N0038, IPE_N0039,
-    IPE_N0040, IPE_N0041, IPE_N0042, IPE_P0001, IPE_P0002, IPE_P0003, IPE_P0010, IPE_P0011,
-    IPE_P0012, IPE_P0013, IPE_P0014, IPE_P0015, IPE_P0016, IPE_P0017, IPE_P0018, IPE_P0020,
-    IPE_P0021, IPE_P0030, IPE_P0031, IPE_P0040, IPE_P0041, IPE_P0050, IPE_P0060, IPE_P0061,
-    IPE_P0062, IPE_P0063, IPE_P0064, IPE_S0001, IPE_T0001, IPE_T0002, IPE_T0003, IPE_T0004,
-    IPE_T0010, IPE_T0011, IPE_T0012, IPE_T0013, IPE_T0014, IPE_T0015, IPE_T0016, IPE_T0017,
-    IPE_T0018, IPE_T0019, IPE_T0020, ISSUE_TRACKER_URL, Severity, explain_page, title,
+    IPE_L0136, IPE_L0140, IPE_L0141, IPE_L0200, IPE_N0001, IPE_N0002, IPE_N0003, IPE_N0004,
+    IPE_N0005, IPE_N0010, IPE_N0011, IPE_N0012, IPE_N0013, IPE_N0020, IPE_N0021, IPE_N0022,
+    IPE_N0023, IPE_N0024, IPE_N0025, IPE_N0026, IPE_N0027, IPE_N0028, IPE_N0029, IPE_N0030,
+    IPE_N0031, IPE_N0032, IPE_N0033, IPE_N0034, IPE_N0035, IPE_N0036, IPE_N0037, IPE_N0038,
+    IPE_N0039, IPE_N0040, IPE_N0041, IPE_N0042, IPE_P0001, IPE_P0002, IPE_P0003, IPE_P0010,
+    IPE_P0011, IPE_P0012, IPE_P0013, IPE_P0014, IPE_P0015, IPE_P0016, IPE_P0017, IPE_P0018,
+    IPE_P0020, IPE_P0021, IPE_P0030, IPE_P0031, IPE_P0040, IPE_P0041, IPE_P0050, IPE_P0060,
+    IPE_P0061, IPE_P0062, IPE_P0063, IPE_P0064, IPE_S0001, IPE_T0001, IPE_T0002, IPE_T0003,
+    IPE_T0004, IPE_T0010, IPE_T0011, IPE_T0012, IPE_T0013, IPE_T0014, IPE_T0015, IPE_T0016,
+    IPE_T0017, IPE_T0018, IPE_T0019, IPE_T0020, ISSUE_TRACKER_URL, Severity, explain_page, title,
 };
 pub use diagnostic::{
     AliasExpansionKind, AppShape, Applicability, CaseDefect, CmdSubShapeMismatch,
@@ -245,6 +245,80 @@ mod tests {
                 HelpLine::MissingConstructor("Green".into()),
                 HelpLine::MissingConstructor("Blue".into()),
             ]
+        );
+    }
+
+    // -- teaching nudges (SeeExplain) --
+
+    #[test]
+    fn lawless_effect_discard_carries_see_explain_effects() {
+        let d = Diagnostic::Lower {
+            span: Span::DUMMY,
+            msg: LowerError::LawlessEffectDiscard,
+        };
+        assert_eq!(d.code(), IPE_L0141);
+        let help = d.help();
+        assert!(
+            help.iter().any(|h| h == &HelpLine::SeeExplain("effects")),
+            "IPE-L0141 must carry SeeExplain(\"effects\"); got: {help:?}"
+        );
+    }
+
+    #[test]
+    fn non_entry_main_carries_see_explain_main() {
+        let d = Diagnostic::Lower {
+            span: Span::DUMMY,
+            msg: LowerError::NonEntryMain {
+                found: "an Int".into(),
+            },
+        };
+        assert_eq!(d.code(), IPE_L0136);
+        let help = d.help();
+        assert!(
+            help.iter().any(|h| h == &HelpLine::SeeExplain("main")),
+            "IPE-L0136 must carry SeeExplain(\"main\"); got: {help:?}"
+        );
+    }
+
+    #[test]
+    fn function_in_record_carries_see_explain_state() {
+        let d = Diagnostic::Lower {
+            span: Span::DUMMY,
+            msg: LowerError::Unsupported(Feature::FirstClassFunctions),
+        };
+        assert_eq!(d.code(), IPE_L0107);
+        let help = d.help();
+        assert!(
+            help.iter().any(|h| h == &HelpLine::SeeExplain("state")),
+            "IPE-L0107 must carry SeeExplain(\"state\"); got: {help:?}"
+        );
+    }
+
+    #[test]
+    fn see_explain_renders_hint_text_in_plain_message() {
+        let d = Diagnostic::Lower {
+            span: Span::DUMMY,
+            msg: LowerError::LawlessEffectDiscard,
+        };
+        let msg = plain_message(&d, "");
+        assert!(
+            msg.contains("ipe explain effects"),
+            "plain_message for IPE-L0141 must contain 'ipe explain effects'; got: {msg:?}"
+        );
+    }
+
+    #[test]
+    fn see_explain_human_render_contains_topic_nudge() {
+        let d = Diagnostic::Lower {
+            span: Span::DUMMY,
+            msg: LowerError::NonEntryMain {
+                found: "a String".into(),
+            },
+        };
+        let rendered = render(&d, "main.ipe", "");
+        assert!(
+            rendered.contains("ipe explain main"),
+            "human render for IPE-L0136 must contain 'ipe explain main'; got: {rendered:?}"
         );
     }
 }
