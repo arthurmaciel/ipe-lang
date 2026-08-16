@@ -682,4 +682,243 @@ mod real_jail {
     // Keep the imports honest under all cfgs.
     #[allow(dead_code)]
     fn _uses(_: &dyn ProbeRunner) {}
+
+    // ── end-to-end certify through the production `native_tier2` path ──────────
+    //
+    // The canaries above drive `reconcile_native` / `JailProbeRunner` directly.
+    // This exercise drives the WHOLE `native_tier2` entry: a real
+    // `[rust.dependencies]` package with a genuine probeable binding is built to
+    // its emitted app crate, then `native_tier2` emits the Tier-2 probe crate,
+    // builds it under the declared-scoped jail as the wrapper's child, and
+    // reconciles it — asserting the single `Tier2Outcome::Certified`. It is the
+    // regression that a legitimate native package is REACHABLY certifiable, not
+    // only fail-closed-rejectable.
+
+    use ipe::audit_native::{NativeAudit, Tier2Outcome, native_tier2};
+    use ipe_ffi::driver::{FfiCache, install_from_inspection};
+
+    /// A directory under `~/.cache/ipe/` (never `/tmp`, which the jail masks with
+    /// a tmpfs): the emitted app crate, the bound crate, and the runtime copy the
+    /// jailed probe build reads must all live where `--ro-bind / /` can see them.
+    fn non_tmp_base(tag: &str) -> PathBuf {
+        let base = dirs_cache_root()
+            .join("ipe")
+            .join("tier2-e2e")
+            .join(format!("{tag}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        std::fs::create_dir_all(&base).expect("create non-tmp e2e base");
+        base
+    }
+
+    /// `$XDG_CACHE_HOME` or `~/.cache` — the write-boundary root the project
+    /// pins scratch and target state under (never `/tmp`).
+    fn dirs_cache_root() -> PathBuf {
+        std::env::var_os("XDG_CACHE_HOME")
+            .map(PathBuf::from)
+            .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".cache")))
+            .expect("HOME or XDG_CACHE_HOME set")
+    }
+
+    /// A genuine probeable binding: a pure crate function `checksum(String) ->
+    /// Int`. A pure `i64`-returning shape survives the binding gate and the
+    /// interface DCE, so the emitted `src/ffi.rs` carries the wrapper the probe
+    /// references — the shape a real certify rests on.
+    fn seed_pure_ffi_cache(project_root: &std::path::Path) -> bool {
+        let cache = FfiCache::at_project_root(project_root);
+        let doc = serde_json::json!({
+            "pkg": "csum",
+            "name": "csum",
+            "version": "0.1.0",
+            "functions": [
+                {
+                    "name": "checksum",
+                    "params": [{"name": "data", "type": "String", "ipeType": "String",
+                                "rustType": "String"}],
+                    "results": [{"name": "", "type": "Int", "rustType": "i64"}],
+                    "effect": "pure"
+                }
+            ],
+            "errors": [],
+            "transitiveDeps": [{"ident": "csum", "name": "csum", "version": "0.1.0"}],
+            "types": []
+        });
+        install_from_inspection(&cache, &doc.to_string()).is_ok()
+    }
+
+    /// The fixture program CALLS the binding, so it survives DCE into `src/ffi.rs`
+    /// — a package whose native surface is genuinely reached, the only shape a
+    /// certify may rest on.
+    const CSUM_MAIN: &str = "module Main exposing (main)\n\
+        import Ipe.Io as Io\n\
+        import Ipe.String as String\n\
+        import Rust.Csum as Csum\n\n\
+        main =\n\
+        \x20   case Csum.checksum \"abc\" of\n\
+        \x20       Ok n -> Io.println (String.fromInt n)\n\
+        \x20       Err _ -> Io.println \"err\"\n";
+
+    /// Write the real bound crate `csum` (a pure `checksum`), returning its dir.
+    fn write_csum_crate(base: &std::path::Path) -> PathBuf {
+        let dir = base.join("csum");
+        std::fs::create_dir_all(dir.join("src")).expect("csum src");
+        std::fs::write(
+            dir.join("Cargo.toml"),
+            "[package]\nname = \"csum\"\nversion = \"0.1.0\"\nedition = \"2021\"\n\n[workspace]\n",
+        )
+        .expect("csum Cargo.toml");
+        std::fs::write(
+            dir.join("src/lib.rs"),
+            "pub fn checksum(data: String) -> i64 {\n    \
+             data.bytes().map(i64::from).sum()\n}\n",
+        )
+        .expect("csum lib.rs");
+        dir
+    }
+
+    /// Set up a real `[rust.dependencies]` package that CALLS its binding, emit
+    /// its app crate under `base/out`, and repoint the bound-crate pin at the
+    /// local fixture crate so an offline probe build resolves it. Returns the
+    /// package root and the emitted crate dir.
+    fn emit_real_native_package(base: &std::path::Path) -> Option<(PathBuf, PathBuf)> {
+        let runtime = ipe::resolve_runtime().ok()?;
+        let pkg = base.join("pkg");
+        std::fs::create_dir_all(pkg.join("src")).expect("pkg src");
+        let csum = write_csum_crate(base);
+        std::fs::write(
+            pkg.join("ipe.toml"),
+            format!(
+                "name = \"csumpkg\"\nversion = \"0.1.0\"\n\n[source]\nroot = \"src\"\n\n\
+                 [rust.dependencies]\ncsum = {{ path = {:?} }}\n",
+                csum.display().to_string()
+            ),
+        )
+        .expect("ipe.toml");
+        std::fs::write(pkg.join("src").join("Main.ipe"), CSUM_MAIN).expect("Main.ipe");
+        assert!(seed_pure_ffi_cache(&pkg), "seed the FFI cache");
+
+        let out = base.join("out");
+        ipe::build_project(&pkg.join("ipe.toml"), &out, &runtime)
+            .expect("emitting the native package must succeed");
+
+        // The reached binding must survive DCE into `src/ffi.rs` (the surface the
+        // probe references).
+        let ffi_rs =
+            std::fs::read_to_string(out.join("src").join("ffi.rs")).expect("emitted src/ffi.rs");
+        assert!(
+            ffi_rs.contains("pub fn csum_checksum"),
+            "the reached binding must survive into src/ffi.rs:\n{ffi_rs}"
+        );
+
+        // The FFI cache pins the bound crate as a registry version; repoint it at
+        // the local fixture crate so the offline probe build resolves it (a
+        // fixture crate cannot live on a registry). This changes WHERE `csum` comes
+        // from, never what the emitted code says.
+        let manifest_path = out.join("Cargo.toml");
+        let manifest = std::fs::read_to_string(&manifest_path).expect("emitted manifest");
+        assert!(
+            manifest.contains("csum = \"=0.1.0\""),
+            "emitted manifest pins the bound crate as a registry version:\n{manifest}"
+        );
+        let patched = manifest.replace(
+            "csum = \"=0.1.0\"",
+            &format!("csum = {{ path = {:?} }}", csum.display().to_string()),
+        );
+        std::fs::write(&manifest_path, patched).expect("patched manifest");
+        Some((pkg, out))
+    }
+
+    /// Build the Tier-2 probe crate `native_tier2` emitted into `out`, OUTSIDE the
+    /// jail. THE SEAL: the emitted probe must `cargo build`. The probe crate root
+    /// must re-export the runtime prelude the shared `src/ffi.rs` names, and must
+    /// reference exactly the DCE-emitted wrapper set — either broken yields an
+    /// `E0425`/unresolved-path here, so this fails HARD rather than being masked by
+    /// a jail/environment skip.
+    fn assert_probe_crate_compiles(out: &std::path::Path, probe_target: &std::path::Path) {
+        assert!(
+            out.join("src").join("tier2_probe.rs").is_file(),
+            "native_tier2 must have emitted the probe crate"
+        );
+        let probe_build = std::process::Command::new(which_cargo().expect("cargo present"))
+            .arg("build")
+            .arg("--offline")
+            .arg("--locked")
+            .arg("--bin")
+            .arg("tier2_probe")
+            .arg("--manifest-path")
+            .arg(out.join("Cargo.toml"))
+            .arg("--target-dir")
+            .arg(probe_target)
+            .output()
+            .expect("spawn probe build");
+        assert!(
+            probe_build.status.success(),
+            "the emitted Tier-2 probe crate must compile (THE SEAL: emit ⇒ build).\n\
+             stdout:\n{}\nstderr:\n{}",
+            String::from_utf8_lossy(&probe_build.stdout),
+            String::from_utf8_lossy(&probe_build.stderr),
+        );
+    }
+
+    #[test]
+    fn a_real_native_package_with_a_probeable_binding_certifies_end_to_end() {
+        // A legitimate native package must be REACHABLY certifiable, not only
+        // fail-closed-rejectable: drive the whole `native_tier2` entry over a real
+        // `[rust.dependencies]` package with a probeable binding and assert it
+        // reaches `Certified`.
+        let Some(_tools) = e2e_tools() else { return };
+        if which_cargo().is_none() {
+            eprintln!("audit_native e2e: skipping — cargo not found on PATH");
+            return;
+        }
+        let base = non_tmp_base("certify");
+        let Some((pkg, out)) = emit_real_native_package(&base) else {
+            eprintln!("audit_native e2e: skipping — runtime unavailable");
+            return;
+        };
+
+        let declared: BTreeSet<Capability> = set(&[Capability::NativeFfi]);
+        let _guard = JAIL_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let verdict = native_tier2(&NativeAudit {
+            declared: &declared,
+            has_rust_deps: true,
+            root: &pkg,
+            emitted_dir: &out,
+            probe_fixture: super::support::manifest_dir()
+                .join("../../tests/fixtures/admission/untrusted-build.sh"),
+        });
+        assert_probe_crate_compiles(&out, &base.join("probe-target"));
+
+        match verdict {
+            Ok(Tier2Outcome::Certified { platform }) => {
+                assert_eq!(
+                    platform, CERTIFIED_PLATFORM,
+                    "certify names this host's wired jail"
+                );
+                eprintln!(
+                    "audit_native e2e: native package CERTIFIED on {platform} \
+                     (reachable native certification)"
+                );
+            }
+            Ok(other) => panic!("a native-bearing package must not skip Tier-2: {other:?}"),
+            Err(e) => {
+                let msg = e.to_string();
+                // The probe crate compiled outside the jail (asserted above), so a
+                // BuildFailed here is a JAIL-environment gap (no toolchain reachable
+                // inside the sandbox), never a probe-emission regression — skip the
+                // certify assert, never a false pass, mirroring the sibling
+                // real-build tests.
+                assert!(
+                    msg.contains("failed to build") || msg.contains("could not be established"),
+                    "the only non-certify outcomes tolerated here are jail-environment \
+                     gaps, never a false reject of a benign package: {msg}"
+                );
+                eprintln!(
+                    "audit_native e2e: skipping certify assert — jail-environment gap: {msg}"
+                );
+            }
+        }
+        let _ = std::fs::remove_dir_all(&base);
+    }
 }

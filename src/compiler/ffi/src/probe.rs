@@ -18,12 +18,18 @@
 //!
 //! ## Single source of the exercised surface
 //!
-//! The referenced set is exactly [`crate::bindings::surviving_ref_names`] — the
-//! SAME survivor gate the interface emitter keys off — mapped through the SAME
-//! [`crate::naming::wrapper_fn_ident`] the emitted `_bindings.rs` names its
-//! `pub fn`s with. So the probe's surface cannot drift from the package's real
-//! emitted surface, and the package cannot author a narrower probe: it does not
-//! write the probe at all.
+//! The probe references exactly the wrappers the app crate actually emitted into
+//! `src/ffi.rs` — the DCE-trimmed foreign surface the artifact ships. The caller
+//! (`audit_native`) reads that emitted set and passes it to [`emit_probe_main`],
+//! so the probe's surface is the shipped surface by construction: never wider (a
+//! phantom reference would fail to link) and never narrower (an omitted wrapper
+//! would let its build-time reach go un-exercised). The package cannot author a
+//! narrower probe — it does not write the probe at all.
+//!
+//! [`surviving_wrapper_paths`] maps the binding-DCE survivor set through the SAME
+//! [`crate::naming::wrapper_fn_ident`] the emitter names its `pub fn`s with; it is
+//! the reference computation of a bound crate's full wrapper path set, kept for
+//! callers that need the untrimmed surface.
 
 use crate::pkginfo::PkgInfo;
 
@@ -58,23 +64,33 @@ pub fn surviving_wrapper_paths(pkg: &PkgInfo, slug: &str) -> Vec<String> {
 /// Emit the probe `main.rs` that references every wrapper in `wrapper_paths` so
 /// the linker retains the whole foreign surface.
 ///
-/// The references live in a `#[used] static` array of function addresses. `#[used]`
-/// is a CONTRACTUAL retention: it forbids the compiler and linker from dropping
-/// the static (and, transitively, the wrapper bodies whose addresses it holds),
-/// where a mere local binding fed to [`std::hint::black_box`] retains only by
-/// optimiser happenstance. So each wrapper's transitive foreign call — and its
-/// bound crate's link-time reach — is genuinely built and linked. The probe
-/// still NEVER invokes a wrapper: taking an address runs no author logic, so the
-/// only observable capability demand is whatever *building and linking* the
-/// referenced surface demands. `black_box` in `main` additionally forbids
-/// whole-program stripping of the static.
+/// `main` takes each wrapper's address at runtime and feeds the array to
+/// [`std::hint::black_box`]. Taking a function's address forces the compiler to
+/// codegen and the linker to keep that function (and its transitive foreign
+/// call), and `black_box` bars the optimiser from proving the value unused, so
+/// each wrapper's bound crate is genuinely built and linked. The address-taking
+/// is in `main` (runtime), not a `static` initialiser: a function pointer cannot
+/// be cast to an integer during const evaluation, and a raw-pointer `static` is
+/// not `Sync` without an `unsafe impl` the probe must not carry. The probe still
+/// NEVER invokes a wrapper: taking an address runs no author logic, so the only
+/// observable capability demand is whatever *building and linking* the referenced
+/// surface demands.
+///
+/// `crate_prelude` is emitted at the probe crate root right after the inner
+/// attributes and before the `mod ffi;` items the caller appends around this
+/// output — the probe bin is its own crate root, so it does not inherit the app
+/// `main.rs`'s crate-root runtime prelude, yet the shared `src/ffi.rs` names
+/// runtime items unqualified through `use crate::*;`. Emitting the prelude here
+/// keeps the whole probe crate-root shape (inner attributes first, then prelude,
+/// then items) owned by one emitter, so an item can never precede an inner
+/// attribute. Pass an empty string for no prelude.
 ///
 /// `wrapper_paths` MUST be non-empty; an empty surface is un-exercisable and the
 /// caller rejects it (fail-closed) rather than emit a vacuous probe that would
 /// link clean without exercising anything.
 ///
 #[must_use]
-pub fn emit_probe_main(wrapper_paths: &[String]) -> String {
+pub fn emit_probe_main(wrapper_paths: &[String], crate_prelude: &str) -> String {
     use std::fmt::Write as _;
     // The caller rejects an empty survivor set, so `wrapper_paths` is non-empty
     // here; an empty slice would merely emit a probe that references nothing.
@@ -87,18 +103,37 @@ pub fn emit_probe_main(wrapper_paths: &[String]) -> String {
          // retains the package's whole foreign surface under the declared-scoped jail.\n\
          #![allow(unused_imports)]\n\n",
     );
-    // The addresses are stored as `usize` (not `*const ()`): a `static` must be
-    // `Sync`, which a raw pointer is not, but the numeric address value still
-    // names each wrapper symbol, so `#[used]` on the static contractually
-    // retains the wrapper bodies whose addresses it holds.
+    // The crate-root prelude (the app `main.rs`'s runtime re-exports, or the
+    // `mod ffi;` declaration) sits after the inner attributes so no item precedes
+    // them, and before the `main` that references the wrappers.
+    if !crate_prelude.is_empty() {
+        out.push_str(crate_prelude);
+        if !crate_prelude.ends_with('\n') {
+            out.push('\n');
+        }
+        out.push('\n');
+    }
+    // Each wrapper's address is taken at RUNTIME inside `main` and fed to
+    // [`std::hint::black_box`]. Taking a function's address forces the compiler to
+    // codegen and the linker to keep that function (and its transitive foreign
+    // call), and `black_box` bars the optimiser from proving the value unused and
+    // stripping it — so every wrapper's bound crate is genuinely built and linked.
+    // The cast lives in `main`, not a `static` initialiser: a function pointer
+    // cannot be cast to an integer during const evaluation, and a `static` holding
+    // a raw pointer is not `Sync` without an `unsafe impl` the probe must not
+    // carry — so the retention is expressed as runtime address-taking, the one
+    // form that is both sound and free of `unsafe`. The probe still NEVER invokes
+    // a wrapper: taking an address runs no author logic, so the only observable
+    // capability demand is whatever building and linking the surface demands.
     // Writing into a String is infallible.
-    let _ = writeln!(out, "#[used]\nstatic TIER2_KEEP: [usize; {count}] = [");
+    let _ = writeln!(out, "fn main() {{");
+    let _ = writeln!(out, "    let keep: [*const (); {count}] = [");
     for path in wrapper_paths {
         out.push_str("        ");
         out.push_str(path);
-        out.push_str(" as *const () as usize,\n");
+        out.push_str(" as *const (),\n");
     }
-    out.push_str("];\n\nfn main() {\n    std::hint::black_box(&TIER2_KEEP);\n}\n");
+    out.push_str("    ];\n    std::hint::black_box(&keep);\n}\n");
     out
 }
 
@@ -143,12 +178,12 @@ mod tests {
             paths.iter().all(|p| p.starts_with("crate::ffi::semver::")),
             "every path is app-crate-absolute under the slug's module: {paths:?}"
         );
-        let src = emit_probe_main(&paths);
-        // Address-of into a #[used] static — never an invocation (no `(` after a
+        let src = emit_probe_main(&paths, "pub use ipe_runtime::*;\nmod ffi;");
+        // Address-of into a black-box sink — never an invocation (no `(` after a
         // path that would be a call).
         for p in &paths {
             assert!(
-                src.contains(&format!("{p} as *const () as usize")),
+                src.contains(&format!("{p} as *const ()")),
                 "the probe references `{p}` by address:\n{src}"
             );
             assert!(
@@ -157,10 +192,42 @@ mod tests {
             );
         }
         assert!(
-            src.contains("#[used]") && src.contains("static TIER2_KEEP"),
-            "the probe contractually retains the surface via a #[used] static:\n{src}"
+            src.contains("std::hint::black_box(&keep)"),
+            "the probe feeds the address array to black_box:\n{src}"
         );
-        assert!(src.contains("std::hint::black_box(&TIER2_KEEP)"), "{src}");
+        assert!(src.contains("fn main()"), "{src}");
+    }
+
+    #[test]
+    fn the_crate_prelude_precedes_every_item_and_follows_the_inner_attribute() {
+        // The probe bin is its own crate root: the runtime re-exports the shared
+        // `src/ffi.rs` names through `use crate::*;` must land at the crate root,
+        // AFTER the inner `#![allow(unused_imports)]` (an item before an inner
+        // attribute is a hard rustc error) and BEFORE `main`.
+        let paths = vec!["crate::ffi::semver::semver_parse".to_owned()];
+        let prelude = "pub use ipe_runtime::*;\npub use ipe_runtime::error::IpeError;\nmod ffi;";
+        let src = emit_probe_main(&paths, prelude);
+        let attr = src
+            .find("#![allow(unused_imports)]")
+            .expect("inner attribute");
+        let prelude_at = src
+            .find("pub use ipe_runtime::*;")
+            .expect("prelude present");
+        let main_at = src.find("fn main()").expect("probe main");
+        assert!(
+            attr < prelude_at && prelude_at < main_at,
+            "inner attribute, then the crate prelude, then the items:\n{src}"
+        );
+    }
+
+    #[test]
+    fn an_empty_crate_prelude_emits_no_prelude_lines() {
+        let paths = vec!["crate::ffi::semver::semver_parse".to_owned()];
+        let src = emit_probe_main(&paths, "");
+        assert!(
+            !src.contains("pub use ipe_runtime"),
+            "an empty prelude emits nothing extra:\n{src}"
+        );
         assert!(src.contains("fn main()"), "{src}");
     }
 
