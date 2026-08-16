@@ -10,6 +10,13 @@ Entries below the header are maintained by
 section is generated from Conventional Commit messages and prepended when the
 standing release pull request is merged.
 
+## [0.1.54](https://github.com/arthurmaciel/ipe-lang/compare/ipe-v0.1.53...ipe-v0.1.54) (2026-08-16)
+
+
+### Bug Fixes
+
+* **audit:** make Tier-2 native-package certification reachable ([#1016](https://github.com/arthurmaciel/ipe-lang/issues/1016)) ([28599b5](https://github.com/arthurmaciel/ipe-lang/commit/28599b5f5f606e7a0002305ea5a10c34e1cc5fa3))
+
 ## [0.1.53](https://github.com/arthurmaciel/ipe-lang/compare/ipe-v0.1.52...ipe-v0.1.53) (2026-08-16)
 
 
