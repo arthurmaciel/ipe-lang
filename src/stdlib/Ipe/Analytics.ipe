@@ -8,10 +8,12 @@
 --      is no branch where an event is emitted without proof of `Granted`
 --      consent — the safe outcome is the only reachable one.
 --
---   2. PII is a distinct type, never a bare `String`. `Pii` has no
---      `ToString`/`toJson` instance. The only serialization path for a `PPii`
---      prop value produces `"[redacted]"` unconditionally — the raw plaintext
---      cannot reach a sink, a log, or a JSONL file through this module.
+--   2. PII is a distinct type, never a bare `String`. `Pii` wraps an opaque
+--      `Secret`; the `Secret` field's runtime `IpeStringify` and `Debug` impls
+--      always return the fixed redacted placeholder regardless of the wrapped
+--      value — `Basics.toString`, string interpolation, and `Debug.log` are
+--      all fail-closed by construction. The only JSON serialization path for a
+--      `PPii` prop value produces `"[redacted]"` unconditionally.
 --
 --   3. Money is lossless. A `PMoney` prop value encodes as a JSON object
 --      `{"amount":"<decimal-string>","currency":"<code>"}` — no floating-point
@@ -97,6 +99,7 @@ import Ipe.Task as Task
 import Ipe.Path as Path exposing (Path)
 import Ipe.Money as Money exposing (Money(..))
 import Ipe.Decimal as Dec
+import Ipe.Secret as Secret
 import Ipe.String as String
 import Ipe.List as List
 import Ipe.Dict as Dict
@@ -106,23 +109,25 @@ import Ipe.Error as Error exposing (Error)
 
 -- ─── Pii ──────────────────────────────────────────────────────────────────────
 --
--- An opaque wrapper around a plaintext string that carries PII. There is NO
--- `toString`, `toJson`, or `Display` instance on this type — the ONLY thing
--- the module exposes is `pii` (to construct one) and `redactedText` (to get
--- back `"[redacted]"`, never the plaintext). The plaintext reaches no sink.
+-- An opaque wrapper around a PII-bearing string. `Pii` wraps an `Ipe.Secret`
+-- so every stringification path — `Basics.toString`, string interpolation,
+-- `Debug.log`, and the JSON encode path — is closed by construction. The
+-- `Secret` field's runtime `IpeStringify` and `Debug` impls always return the
+-- fixed placeholder `"<redacted>"`, never the wrapped value. `pii` is the
+-- single seal (constructs a `Secret` under the cover); there is no reveal.
 
 
 -- | An opaque PII-tagged string. Cannot be serialised directly — the sink
 -- layer always emits `"[redacted]"` in place of the raw plaintext.
 type Pii
-    = Pii String
+    = Pii Secret
 
 
 -- | Wrap a plaintext string as a `Pii` value. The wrapped string is sealed
 -- inside the opaque constructor; no API on this module reveals it back.
 pii : String -> Pii
 pii s =
-    Pii s
+    Pii (Secret.fromString s)
 
 
 -- | The only text this module emits for a `Pii` value: the literal string

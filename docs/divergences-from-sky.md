@@ -2006,10 +2006,13 @@ session checkpoints stay compatible.
   Ipê's `Ipe.Analytics` is an independent Ipê-native implementation validated
   against `PRINCIPLES.md`, not a transcription.
 - **Structural differences from the reference surface:**
-  - `Pii` is an opaque type with no `toString`/`toJson` instance; the only
-    serialisation path produces `"[redacted]"`. The reference uses a wrapper
-    type with an explicit reveal path; Ipê makes the reveal structurally
-    impossible through the module's public API.
+  - `Pii` is an opaque type wrapping an `Ipe.Secret`. The `Secret` field's
+    hand-written `IpeStringify` and `Debug` impls ALWAYS return a fixed
+    `"<redacted>"` placeholder — plaintext leakage through `Basics.toString`,
+    string interpolation, or `Debug.log` is structurally impossible in the
+    emitted Rust (Security principle, §0 root-cause). The only encode path the
+    module exposes, `encodePropValue (PPii _)`, produces `"[redacted]"` by
+    ignoring the payload entirely. There is no reveal accessor on `Pii`.
   - `ConsentState` is a three-way ADT (`Granted | Denied | Pending`); consent
     gating is enforced in pure Ipê (`track`/`trackEvent` pattern-match on state
     and return `Task.succeed ()` on non-`Granted` — fail-closed by construction).
@@ -2023,6 +2026,7 @@ session checkpoints stay compatible.
     already established).
 - **Go-oracle relationship:** the reference's analytics module has no byte-exact
   oracle target in the Ipê test corpus (no golden comparison defined); the
-  surface is tested by the `analytics_consent_gate` golden.
+  surface is tested by the `analytics_consent_gate` golden (invariants include
+  the ambient-stringify side-channel closure, proven by the E2E run).
 - **Sanctioned:** yes (`divergence:` — Ipê-native design, PRINCIPLES-conformant).
   Reference consulted for behavioural parity only; no code transcribed.

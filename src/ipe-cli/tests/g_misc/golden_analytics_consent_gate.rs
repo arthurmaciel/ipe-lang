@@ -1,4 +1,5 @@
-//! `Ipe.Analytics` consent-gate and `Pii`-redaction gate.
+//! `Ipe.Analytics` consent-gate, `Pii`-redaction gate, and ambient-stringify
+//! side-channel closure proof.
 //!
 //! Proves:
 //!
@@ -6,12 +7,23 @@
 //!      succeeds, sentinel line printed to stdout).
 //!   2. `track` with `Denied` or `Pending` consent is fail-closed — the event
 //!      is dropped silently; the task still succeeds.
-//!   3. `Pii` serialises as `"[redacted]"` — the raw plaintext is never
-//!      reachable through the encode path exposed by the module.
+//!   3. `Pii` serialises as `"[redacted]"` through the explicit encode path
+//!      (`encodePropValue`) — the raw plaintext is never reachable through the
+//!      module's public API.
 //!   4. `PMoney` serialises losslessly as `{"amount":"…","currency":"…"}`.
+//!   5. `Basics.toString (Analytics.pii "…")` does NOT contain the plaintext —
+//!      the ambient `toString` / string-interpolation side channel is closed.
+//!      `Pii` wraps a `Secret`; the `Secret` field's `IpeStringify` impl always
+//!      returns the redacted placeholder, making plaintext leakage structurally
+//!      impossible in the emitted Rust.
+//!   6. `Basics.toString (PPii (Analytics.pii "…"))` likewise does NOT expose
+//!      the plaintext — the `PPii` constructor's `IpeStringify` auto-derive
+//!      recurses into the `Secret` field's redacting impl.
 //!
-//! The pure invariants (3)–(4) are checked inside `Main.ipe` by reproducing
-//! the encoding inline; the task chain covers the consent-gate behaviour.
+//! Invariants (3)–(6) are checked inside `Main.ipe`; `allPure` must be `true`
+//! for the task chain to reach the sentinel stdout line. The E2E test is the
+//! key evidence that the plaintext no longer appears: any stringification leak
+//! causes `allPure = false` → stdout `analytics-FAIL-pure` → assertion fails.
 //! Expected stdout: `analytics-consent-gate-ok` (one line).
 
 use std::path::{Path, PathBuf};
