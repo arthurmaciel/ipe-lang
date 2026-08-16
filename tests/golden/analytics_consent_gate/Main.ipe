@@ -14,6 +14,8 @@ module Main exposing (main)
 -- printing the sentinel line.
 
 import Ipe.Analytics as Analytics exposing (ConsentState(..), Sink(..), PropValue(..))
+import Ipe.Basics as Basics
+import Ipe.String as String
 import Ipe.Io as Io
 import Ipe.Task as Task
 import Ipe.Json.Encode as Encode
@@ -35,6 +37,31 @@ encodedProp v =
 piiIsRedacted : Bool
 piiIsRedacted =
     encodedProp (PPii (Analytics.pii "alice@example.com")) == "\"[redacted]\""
+
+
+-- `Basics.toString` on a `Pii` value must NOT expose the plaintext.
+-- The `Pii` constructor wraps a `Secret`; the `Secret` field's `IpeStringify`
+-- impl always returns the redacted placeholder regardless of the wrapped value,
+-- so the ambient `toString` / string-interpolation side channel is closed.
+piiToStringIsRedacted : Bool
+piiToStringIsRedacted =
+    let
+        p =
+            Analytics.pii "alice@example.com"
+    in
+    not (String.contains "alice@example.com" (Basics.toString p))
+
+
+-- `Basics.toString` on the `PPii` constructor must also NOT expose the plaintext.
+ppiiToStringIsRedacted : Bool
+ppiiToStringIsRedacted =
+    let
+        p =
+            PPii (Analytics.pii "alice@example.com")
+    in
+    not (String.contains "alice@example.com" (Basics.toString p))
+
+
 
 
 -- `PMoney` encodes as a two-field object (lossless).
@@ -75,7 +102,7 @@ grantedCfg =
 main =
     let
         allPure =
-            piiIsRedacted && moneyIsLossless && textPropOk
+            piiIsRedacted && moneyIsLossless && textPropOk && piiToStringIsRedacted && ppiiToStringIsRedacted
     in
     if not allPure then
         Io.println "analytics-FAIL-pure"
