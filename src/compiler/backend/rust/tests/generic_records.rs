@@ -27,9 +27,9 @@
 //! test (gated on `IPE_E2E=1`) drives the hand-built IR through the Rust backend,
 //! builds the emitted crate, and asserts the identical `42`.
 
+mod seal_e2e;
+
 use std::collections::BTreeMap;
-use std::path::{Path, PathBuf};
-use std::process::Command;
 
 use ipe_backend::Backend;
 use ipe_backend_rust::RustBackend;
@@ -408,6 +408,9 @@ fn end_to_end_builds_and_prints_forty_two() -> DResult<()> {
     if std::env::var("IPE_E2E").is_err() {
         return Ok(());
     }
+    let Some(runtime) = seal_e2e::resolve_runtime() else {
+        return Ok(());
+    };
 
     let mut interner = Interner::new();
     let prog = wrap_unwrap_program(&mut interner)?;
@@ -416,25 +419,21 @@ fn end_to_end_builds_and_prints_forty_two() -> DResult<()> {
     let out = std::env::temp_dir().join("ipe_backend_generic_records_e2e");
     let _ = std::fs::remove_dir_all(&out);
     let src = out.join("src");
-    std::fs::create_dir_all(&src).map_err(|e| io_bug(&src, &e))?;
-
-    let runtime = resolve_runtime().ok_or_else(|| Diagnostic::CompilerBug {
-        where_: "generic_records e2e",
-        detail: "could not locate src/runtime/rust/src/ipe_runtime".to_owned(),
-    })?;
-    copy_dir(&runtime, &src.join("ipe_runtime"))?;
+    std::fs::create_dir_all(&src).map_err(|e| seal_e2e::io_bug(&src, &e))?;
+    seal_e2e::copy_dir(&runtime, &src.join("ipe_runtime"))?;
 
     let cargo_toml = out.join("Cargo.toml");
-    std::fs::write(&cargo_toml, &emitted.cargo_toml).map_err(|e| io_bug(&cargo_toml, &e))?;
+    std::fs::write(&cargo_toml, &emitted.cargo_toml)
+        .map_err(|e| seal_e2e::io_bug(&cargo_toml, &e))?;
     for (rel, contents) in &emitted.files {
         let path = out.join(rel.as_str());
         if let Some(parent) = path.parent() {
-            std::fs::create_dir_all(parent).map_err(|e| io_bug(parent, &e))?;
+            std::fs::create_dir_all(parent).map_err(|e| seal_e2e::io_bug(parent, &e))?;
         }
-        std::fs::write(&path, contents).map_err(|e| io_bug(&path, &e))?;
+        std::fs::write(&path, contents).map_err(|e| seal_e2e::io_bug(&path, &e))?;
     }
 
-    let status = Command::new("cargo")
+    let status = std::process::Command::new("cargo")
         .arg("build")
         .current_dir(&out)
         .env("CARGO_TARGET_DIR", out.join("target"))
@@ -445,7 +444,9 @@ fn end_to_end_builds_and_prints_forty_two() -> DResult<()> {
     );
 
     let bin = out.join("target").join("debug").join("ipe-app");
-    let output = Command::new(&bin).output().map_err(|e| io_bug(&bin, &e))?;
+    let output = std::process::Command::new(&bin)
+        .output()
+        .map_err(|e| seal_e2e::io_bug(&bin, &e))?;
     assert_eq!(
         String::from_utf8_lossy(&output.stdout),
         "42\n",
@@ -453,62 +454,5 @@ fn end_to_end_builds_and_prints_forty_two() -> DResult<()> {
     );
     assert!(output.status.success(), "exit 0, matching the Go oracle");
     let _ = std::fs::remove_dir_all(out.join("target"));
-    Ok(())
-}
-
-/// Wrap a filesystem error as a `CompilerBug` (the E2E test's `DResult` currency).
-fn io_bug(path: &Path, e: &std::io::Error) -> Diagnostic {
-    Diagnostic::CompilerBug {
-        where_: "generic_records e2e io",
-        detail: format!("{}: {e}", path.display()),
-    }
-}
-
-/// Locate the Ipê runtime module tree (`src/runtime/rust/src/ipe_runtime`), via
-/// `IPE_RUNTIME_DIR` or an upward search from the current directory.
-fn resolve_runtime() -> Option<PathBuf> {
-    if let Ok(dir) = std::env::var("IPE_RUNTIME_DIR") {
-        let p = PathBuf::from(dir);
-        if p.is_dir() {
-            return Some(p);
-        }
-    }
-    let cwd = std::env::current_dir().ok()?;
-    let mut here: Option<&Path> = Some(cwd.as_path());
-    while let Some(dir) = here {
-        for candidate in [
-            // In-repo runtime (ipe-lang monorepo).
-            dir.join("src").join("runtime").join("rust").join("src"),
-            // Legacy: sibling `ipe` checkout.
-            dir.join("ipe")
-                .join("runtime-rust")
-                .join("src")
-                .join("ipe_runtime"),
-            // Legacy: sibling `runtime-rust` directory.
-            dir.join("runtime-rust").join("src").join("ipe_runtime"),
-        ] {
-            if candidate.is_dir() {
-                return Some(candidate);
-            }
-        }
-        here = dir.parent();
-    }
-    None
-}
-
-/// Recursively copy the (trusted, bounded-depth) runtime tree into the crate.
-fn copy_dir(src: &Path, dst: &Path) -> DResult<()> {
-    std::fs::create_dir_all(dst).map_err(|e| io_bug(dst, &e))?;
-    for entry in std::fs::read_dir(src).map_err(|e| io_bug(src, &e))? {
-        let entry = entry.map_err(|e| io_bug(src, &e))?;
-        let from = entry.path();
-        let to = dst.join(entry.file_name());
-        let file_type = entry.file_type().map_err(|e| io_bug(&from, &e))?;
-        if file_type.is_dir() {
-            copy_dir(&from, &to)?;
-        } else {
-            std::fs::copy(&from, &to).map_err(|e| io_bug(&from, &e))?;
-        }
-    }
     Ok(())
 }
