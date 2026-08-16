@@ -361,12 +361,16 @@ const COMMANDS: &[Command] = &[
     Command {
         name: "package",
         run: crate::run_package,
-        summary: "Audit a package against the Tier-1 quality gate, publish it to the index, or \
-                  validate an index entry file.",
-        args: "<audit|publish|validate-entry> [<path>]",
-        args_desc: "The subcommand and its path: audit/publish take the project directory or \
-                    ipe.toml (defaults to the current project); validate-entry takes a \
-                    packages/<name>.toml index entry file.",
+        summary: "Audit a package against the Tier-1 quality gate, publish it to the index, \
+                  validate an index entry file, or run the index CI's authoritative \
+                  receiving gate on a submitted entry.",
+        args: "<audit|audit-entry|publish|validate-entry> [<path>]",
+        args_desc: "The subcommand and its path: `audit`/`publish` take the project directory \
+                    or `ipe.toml` (defaults to the current project); `validate-entry` takes a \
+                    `packages/<name>.toml` entry file (schema check only); `audit-entry` takes \
+                    the same entry file and runs the full index CI receiving gate: schema, \
+                    fetch+integrity-verify, and the complete Tier-1 (+ Tier-2) audit for every \
+                    new version.",
         options: &[
             Opt {
                 flag: "[--index <dir|repo>]",
