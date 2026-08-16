@@ -42,9 +42,24 @@
 -- is no mutable global; the caller threads the config value through their
 -- program.
 --
--- Minimal usage:
+-- Store-backed persistence:
+--
+-- `eventsStore` is the typed `Ipe.Db.Store` for `AnalyticsEvent` rows. Every
+-- row carries a redacted `props_json` (PII serialised as `"[redacted]"` before
+-- the string reaches the database — the store never sees plaintext). Persisting
+-- an event is CONSENT-GATED: `persist` drops silently on `Pending` / `Denied`.
+-- `erase` deletes all rows for a user (right-to-erasure; consent-state
+-- independent — deletion is the safe outcome regardless of current state).
+--
+-- Aggregate queries (`totals`, `uniqueUsers`, `eventCounts`, `recent`) run
+-- read-only paths over the same injection-safe `Store.all` / `Store.findWhere`
+-- surface. Every column flows through `Store.readText` / `Store.readInt` (typed
+-- decode, fail-closed on a missing or malformed column).
+--
+-- Minimal store usage:
 --
 --     import Ipe.Analytics as Analytics exposing (Config, ConsentState(..))
+--     import Ipe.Db.Store as Store
 --     import Ipe.Path as Path
 --
 --     cfg : Config
@@ -53,13 +68,18 @@
 --             |> Analytics.setConsent Granted
 --             |> Analytics.identify "user-42" Analytics.noTraits
 --
+--     main : Task Error ()
 --     main =
---         Analytics.track cfg "button_click"
---             (Analytics.props
---                 [ ( "label", Analytics.PText "Sign up" )
---                 , ( "plan", Analytics.PText "pro" )
---                 ]
---             )
+--         case Analytics.eventsStore of
+--             Err e ->
+--                 Task.fail e
+--
+--             Ok store ->
+--                 Store.create db store
+--                     |> Task.andThen (\_ ->
+--                         Analytics.persist db store cfg "button_click"
+--                             (Analytics.props [ ( "label", Analytics.PText "Sign up" ) ])
+--                     )
 module Ipe.Analytics exposing
     ( -- Types
       Config
@@ -68,6 +88,7 @@ module Ipe.Analytics exposing
     , PropValue(..)
     , Props
     , Pii
+    , AnalyticsEvent
       -- Pii constructors (no reveal — redact is the only serialisation path)
     , pii
     , redactedText
@@ -85,6 +106,16 @@ module Ipe.Analytics exposing
       -- Event emission
     , track
     , trackEvent
+      -- Store-backed persistence
+    , eventsStore
+    , persist
+    , persistEvent
+    , erase
+      -- Aggregate queries
+    , totals
+    , uniqueUsers
+    , eventCounts
+    , recent
       -- Low-level serialisation (exposed for testing; not a Pii leak — Pii
       -- is already redacted before this returns)
     , encodePropValue
@@ -93,6 +124,9 @@ module Ipe.Analytics exposing
 
 import Ipe.Codec as Codec exposing (Codec(..))
 import Ipe.Json.Encode as Encode
+import Ipe.Db as Db
+import Ipe.Db.Store as Store exposing (Store)
+import Ipe.Db.Sql as Sql
 import Ipe.Io as Io
 import Ipe.File as File
 import Ipe.Task as Task
@@ -104,6 +138,7 @@ import Ipe.String as String
 import Ipe.List as List
 import Ipe.Dict as Dict
 import Ipe.Maybe as Maybe exposing (Maybe(..))
+import Ipe.Result as Result exposing (Result(..))
 import Ipe.Error as Error exposing (Error)
 
 
@@ -422,3 +457,321 @@ trackEvent cfg codec event eventProps =
 
         Pending ->
             Task.succeed ()
+
+
+-- ─── Store-backed persistence ──────────────────────────────────────────────────
+--
+-- `AnalyticsEvent` is the concrete row type stored in the `ipe_analytics_events`
+-- table. The `props_json` column holds the already-redacted JSON string produced
+-- by `encodeProps` — PII is serialised as `"[redacted]"` BEFORE this string
+-- reaches the database. The store never sees plaintext PII.
+--
+-- Schema:
+--   id           INTEGER  PRIMARY KEY AUTOINCREMENT (db-assigned)
+--   event_name   TEXT     the event name
+--   user_id      TEXT     the userId from Config, or "" when absent
+--   props_json   TEXT     JSON object of prop values, PII already redacted
+--   recorded_at  INTEGER  unix milliseconds at persist time (db-stamped DEFAULT)
+--
+-- Security argument:
+--   * PII-safe: `props_json` is built by `encodeProps`, which routes every
+--     `PPii` branch through `encodePropValue`, which returns `"[redacted]"`.
+--     No path from `pii s` back to `s` exists on this module's surface.
+--   * Consent-gated: `persist` and `persistEvent` pattern-match on
+--     `cfg.consent` and return `Task.succeed ()` on `Pending` / `Denied`.
+--   * Injection-safe: all writes route through `Store.insert` (typed
+--     `SqlValue` params, no interpolation); all reads through `Store.all` /
+--     `Store.findWhere` over `SqlFragment`s built from `Sql.column` +
+--     `Sql.param`.
+
+
+-- | A persisted analytics event row.
+--
+-- `recordedAt` is a DB-stamped ISO-8601 timestamp string (SQLite
+-- `CURRENT_TIMESTAMP`). The column is read back as text; ordering in `recent`
+-- uses lexicographic order, which matches temporal order for ISO-8601 strings.
+type alias AnalyticsEvent =
+    { id : Int
+    , eventName : String
+    , userId : String
+    , propsJson : String
+    , recordedAt : String
+    }
+
+
+-- | The typed store for `AnalyticsEvent` rows. Returns `Err` only if an
+-- identifier is rejected by `Store.validSqlIdent` — which cannot happen for
+-- the hard-coded names below. Call `Store.create conn eventsStore` once at
+-- startup to ensure the table exists.
+eventsStore : Result Error Store
+eventsStore =
+    case
+        Store.fromColumns "ipe_analytics_events"
+            [ Store.intColumn "id"
+            , Store.textColumn "event_name"
+            , Store.textColumn "user_id"
+            , Store.textColumn "props_json"
+            , Store.textColumn "recorded_at"
+            ]
+    of
+        Err e ->
+            Err e
+
+        Ok s ->
+            Ok
+                (Store.serial "id"
+                    (Store.primaryKey "id"
+                        (Store.defaultNow "recorded_at" s)
+                    )
+                )
+
+
+-- | Read an `AnalyticsEvent` row from a `Store.Row`. Fails closed with a typed
+-- error if any expected column is absent or malformed.
+readEvent : Store.Row -> Result Error AnalyticsEvent
+readEvent row =
+    case Store.readInt "id" row of
+        Err e ->
+            Err e
+
+        Ok rowId ->
+            case Store.readText "event_name" row of
+                Err e ->
+                    Err e
+
+                Ok name ->
+                    case Store.readText "user_id" row of
+                        Err e ->
+                            Err e
+
+                        Ok uid ->
+                            case Store.readText "props_json" row of
+                                Err e ->
+                                    Err e
+
+                                Ok pj ->
+                                    case Store.readText "recorded_at" row of
+                                        Err e ->
+                                            Err e
+
+                                        Ok ts ->
+                                            Ok
+                                                { id = rowId
+                                                , eventName = name
+                                                , userId = uid
+                                                , propsJson = pj
+                                                , recordedAt = ts
+                                                }
+
+
+-- | Project an `AnalyticsEvent` to its `(column, SqlValue)` pairs for insert.
+-- The `id` (serial) and `recorded_at` (defaultNow) columns are DB-assigned and
+-- are OMITTED here — `Store.insert` drops them automatically via the `Serial`
+-- and `DefaultNow` specs.
+writeEvent : AnalyticsEvent -> List ( String, SqlValue )
+writeEvent ev =
+    [ ( "event_name", SqlString ev.eventName )
+    , ( "user_id", SqlString ev.userId )
+    , ( "props_json", SqlString ev.propsJson )
+    ]
+
+
+-- | `persist db store cfg eventName eventProps` — persist a named event with a
+-- property bag.
+--
+-- Consent-gated: returns `Task.succeed ()` without any DB write when consent
+-- is `Pending` or `Denied`.
+--
+-- PII-safe: `eventProps` is serialised by `encodeProps`, which routes every
+-- `PPii` branch to `"[redacted]"`. The stored `props_json` string never
+-- contains plaintext PII.
+persist : Db -> Store -> Config -> String -> Props -> Task Error ()
+persist db store cfg eventName eventProps =
+    case cfg.consent of
+        Granted ->
+            let
+                uid =
+                    case cfg.userId of
+                        Just u ->
+                            u
+
+                        Nothing ->
+                            ""
+
+                pj =
+                    Encode.encode 0 (encodeProps eventProps)
+
+                ev =
+                    { id = 0
+                    , eventName = eventName
+                    , userId = uid
+                    , propsJson = pj
+                    , recordedAt = ""
+                    }
+            in
+            Task.map (\_ -> ()) (Store.insert db store (writeEvent ev))
+
+        Denied ->
+            Task.succeed ()
+
+        Pending ->
+            Task.succeed ()
+
+
+-- | `persistEvent db store cfg codec event eventProps` — persist an event
+-- encoded by the caller's `Codec`, plus a supplementary `Props` bag.
+--
+-- Consent-gated and PII-safe: same guarantees as `persist`.
+persistEvent : Db -> Store -> Config -> Codec a -> a -> Props -> Task Error ()
+persistEvent db store cfg codec event eventProps =
+    case cfg.consent of
+        Granted ->
+            let
+                uid =
+                    case cfg.userId of
+                        Just u ->
+                            u
+
+                        Nothing ->
+                            ""
+
+                eventName =
+                    Encode.encode 0 (Codec.toValue codec event)
+
+                pj =
+                    Encode.encode 0 (encodeProps eventProps)
+
+                ev =
+                    { id = 0
+                    , eventName = eventName
+                    , userId = uid
+                    , propsJson = pj
+                    , recordedAt = ""
+                    }
+            in
+            Task.map (\_ -> ()) (Store.insert db store (writeEvent ev))
+
+        Denied ->
+            Task.succeed ()
+
+        Pending ->
+            Task.succeed ()
+
+
+-- | `erase db store cfg` — delete all persisted rows for the `Config`'s
+-- `userId`. Consent-state independent: GDPR right-to-erasure must succeed
+-- regardless of whether consent is currently `Granted`. Returns `Task.fail`
+-- when `cfg.userId` is `Nothing` (no identity to erase).
+erase : Db -> Store -> Config -> Task Error Int
+erase db store cfg =
+    case cfg.userId of
+        Nothing ->
+            Task.fail noUserIdError
+
+        Just uid ->
+            Db.deleteWhere db (Store.tableName store)
+                (Sql.eq (Sql.column "user_id") (Sql.param (SqlString uid)))
+
+
+-- ─── Aggregate queries ─────────────────────────────────────────────────────────
+--
+-- All read paths route through `Store.all` / `Store.findWhere`, which use the
+-- audited `Db.findWhere` kernel — every identifier through `Sql.column`
+-- (validated), every value through `Sql.param` (bound). No raw SQL is built.
+
+
+-- | `totals db store` — the total count of persisted events.
+totals : Db -> Store -> Task Error Int
+totals db store =
+    Task.map List.length (Store.all db store readEvent)
+
+
+-- | `uniqueUsers db store` — the count of distinct `user_id` values in the
+-- store (excludes the empty-string sentinel used for anonymous events).
+uniqueUsers : Db -> Store -> Task Error Int
+uniqueUsers db store =
+    Task.map countDistinctUsers (Store.all db store readEvent)
+
+
+countDistinctUsers : List AnalyticsEvent -> Int
+countDistinctUsers events =
+    let
+        ids =
+            List.filterMap nonEmpty (List.map (\ev -> ev.userId) events)
+    in
+    List.length (List.foldl addUnique [] ids)
+
+
+nonEmpty : String -> Maybe String
+nonEmpty s =
+    if String.isEmpty s then
+        Nothing
+
+    else
+        Just s
+
+
+addUnique : String -> List String -> List String
+addUnique s acc =
+    if List.member s acc then
+        acc
+
+    else
+        s :: acc
+
+
+-- | `eventCounts db store` — a dictionary mapping each event name to the
+-- number of times it appears in the store.
+eventCounts : Db -> Store -> Task Error (Dict String Int)
+eventCounts db store =
+    Task.map tallyNames (Store.all db store readEvent)
+
+
+tallyNames : List AnalyticsEvent -> Dict String Int
+tallyNames events =
+    List.foldl countName Dict.empty events
+
+
+countName : AnalyticsEvent -> Dict String Int -> Dict String Int
+countName ev acc =
+    case Dict.get ev.eventName acc of
+        Just n ->
+            Dict.insert ev.eventName (n + 1) acc
+
+        Nothing ->
+            Dict.insert ev.eventName 1 acc
+
+
+-- | `recent db store limit` — the `limit` most-recently recorded events,
+-- ordered newest-first by `recorded_at`. All columns read and decoded; PII was
+-- already redacted at persist time, so the returned `propsJson` field holds
+-- only redacted values.
+recent : Db -> Store -> Int -> Task Error (List AnalyticsEvent)
+recent db store limit =
+    Task.map (\evs -> List.take limit (sortByRecent evs)) (Store.all db store readEvent)
+
+
+sortByRecent : List AnalyticsEvent -> List AnalyticsEvent
+sortByRecent events =
+    List.sortWith compareByTs events
+
+
+compareByTs : AnalyticsEvent -> AnalyticsEvent -> Order
+compareByTs a b =
+    if b.recordedAt > a.recordedAt then
+        LT
+
+    else if b.recordedAt < a.recordedAt then
+        GT
+
+    else
+        EQ
+
+
+-- ─── Errors ────────────────────────────────────────────────────────────────────
+
+
+noUserIdError : Error
+noUserIdError =
+    Error.invalidInput
+        "Ipe.Analytics.erase: Config has no userId — call Analytics.identify first"
