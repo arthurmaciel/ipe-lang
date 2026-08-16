@@ -1330,22 +1330,6 @@ fn is_retry_policy_record(interner: &Interner, ty: &Ty) -> bool {
         })
 }
 
-/// Build the concrete `IrType::Record` for `RetryPolicy e` with `e` fixed to
-/// `IrType::Error`.
-///
-/// `RetryPolicy e` is the kernel-managed record
-/// `{ baseMs : Int, jitter : Bool, kind : Int, maxAttempts : Int,
-///    shouldRetry : e -> Bool }`.
-/// The type parameter `e` is the error type; at the Ipê stdlib level it stays
-/// polymorphic, but at codegen the only ever-constructed value is
-/// `RetryPolicy Error` (all builders hardcode `IpeError` in their emitted Rust).
-/// Concretising `e` to `IrType::Error` here lets the struct be registered in the
-/// synthesis table so `record_struct_by_key` can find it for field-access and
-/// builder calls even when the solver left `e` as a free `Ty::Var`.
-///
-/// The `shouldRetry` field is a record-field function and is carried on the
-/// `Arc<dyn Fn>` carrier (`IrType::SharedFun`) — matching what
-/// `normalize_record_fun_carriers` would produce for a concretely-typed field.
 /// Is `field_ty` the `shouldRetry` type of the KERNEL `RetryPolicy e` record —
 /// either `Ty::Var -> _` (the solver left `e` free) or `Error -> _` (`e` unified
 /// to the built-in error type)?
@@ -1370,6 +1354,25 @@ fn is_kernel_shouldretry_ty(interner: &Interner, field_ty: &Ty) -> bool {
     false
 }
 
+/// Build the concrete `IrType::Record` for `RetryPolicy e` with `e` fixed to
+/// `IrType::Error`.
+///
+/// `RetryPolicy e` is the kernel-managed record
+/// `{ baseMs : Int, jitter : Bool, kind : Int, maxAttempts : Int,
+///    shouldRetry : e -> Bool }`.
+/// The type parameter `e` is the error type; at the Ipê stdlib level it stays
+/// polymorphic, but at codegen the only ever-constructed value is
+/// `RetryPolicy Error` (all builders hardcode `IpeError` in their emitted Rust).
+/// Concretising `e` to `IrType::Error` here lets the struct be registered in the
+/// synthesis table so `record_struct_by_key` can find it for field-access and
+/// builder calls even when the solver left `e` as a free `Ty::Var`.
+///
+/// The `shouldRetry` field is a record-field function and is carried on the
+/// `Arc<dyn Fn>` carrier (`IrType::SharedFun`) — matching what
+/// `normalize_record_fun_carriers` would produce for a concretely-typed field.
+/// Returns `None` when the record is not the kernel shape (see
+/// [`is_kernel_shouldretry_ty`]), so a user record that merely shares the field
+/// names does not get a dead concretised struct.
 fn retry_policy_concrete_ir(interner: &Interner, ty: &Ty) -> Option<IrType> {
     let Ty::Record(fields, RowTail::Closed) = ty else {
         return None;
