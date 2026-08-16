@@ -35,8 +35,7 @@
 //!
 //! (hand-verified in a temp dir → stdout `7\n`, exit 0).
 
-use std::path::{Path, PathBuf};
-use std::process::Command;
+mod seal_e2e;
 
 use ipe_backend::Backend;
 use ipe_backend_rust::RustBackend;
@@ -455,31 +454,30 @@ fn build_and_assert(
     if std::env::var("IPE_E2E").is_err() {
         return Ok(());
     }
+    let Some(runtime) = seal_e2e::resolve_runtime() else {
+        return Ok(());
+    };
 
     let emitted = RustBackend::new(interner).emit(prog)?;
 
     let out = std::env::temp_dir().join(slot);
     let _ = std::fs::remove_dir_all(&out);
     let src = out.join("src");
-    std::fs::create_dir_all(&src).map_err(|e| io_bug(&src, &e))?;
-
-    let runtime = resolve_runtime().ok_or_else(|| Diagnostic::CompilerBug {
-        where_: "literal_patterns e2e",
-        detail: "could not locate src/runtime/rust/src/ipe_runtime".to_owned(),
-    })?;
-    copy_dir(&runtime, &src.join("ipe_runtime"))?;
+    std::fs::create_dir_all(&src).map_err(|e| seal_e2e::io_bug(&src, &e))?;
+    seal_e2e::copy_dir(&runtime, &src.join("ipe_runtime"))?;
 
     let cargo_toml = out.join("Cargo.toml");
-    std::fs::write(&cargo_toml, &emitted.cargo_toml).map_err(|e| io_bug(&cargo_toml, &e))?;
+    std::fs::write(&cargo_toml, &emitted.cargo_toml)
+        .map_err(|e| seal_e2e::io_bug(&cargo_toml, &e))?;
     for (rel, contents) in &emitted.files {
         let path = out.join(rel.as_str());
         if let Some(parent) = path.parent() {
-            std::fs::create_dir_all(parent).map_err(|e| io_bug(parent, &e))?;
+            std::fs::create_dir_all(parent).map_err(|e| seal_e2e::io_bug(parent, &e))?;
         }
-        std::fs::write(&path, contents).map_err(|e| io_bug(&path, &e))?;
+        std::fs::write(&path, contents).map_err(|e| seal_e2e::io_bug(&path, &e))?;
     }
 
-    let status = Command::new("cargo")
+    let status = std::process::Command::new("cargo")
         .arg("build")
         .current_dir(&out)
         .env("CARGO_TARGET_DIR", out.join("target"))
@@ -490,7 +488,9 @@ fn build_and_assert(
     );
 
     let bin = out.join("target").join("debug").join("ipe-app");
-    let output = Command::new(&bin).output().map_err(|e| io_bug(&bin, &e))?;
+    let output = std::process::Command::new(&bin)
+        .output()
+        .map_err(|e| seal_e2e::io_bug(&bin, &e))?;
     assert_eq!(
         String::from_utf8_lossy(&output.stdout),
         expected,
@@ -498,58 +498,5 @@ fn build_and_assert(
     );
     assert!(output.status.success(), "exit 0, matching the Go oracle");
     let _ = std::fs::remove_dir_all(out.join("target"));
-    Ok(())
-}
-
-fn io_bug(path: &Path, e: &std::io::Error) -> Diagnostic {
-    Diagnostic::CompilerBug {
-        where_: "literal_patterns e2e io",
-        detail: format!("{}: {e}", path.display()),
-    }
-}
-
-fn resolve_runtime() -> Option<PathBuf> {
-    if let Ok(dir) = std::env::var("IPE_RUNTIME_DIR") {
-        let p = PathBuf::from(dir);
-        if p.is_dir() {
-            return Some(p);
-        }
-    }
-    let cwd = std::env::current_dir().ok()?;
-    let mut here: Option<&Path> = Some(cwd.as_path());
-    while let Some(dir) = here {
-        for candidate in [
-            // In-repo runtime (ipe-lang monorepo).
-            dir.join("src").join("runtime").join("rust").join("src"),
-            // Legacy: sibling `ipe` checkout.
-            dir.join("ipe")
-                .join("runtime-rust")
-                .join("src")
-                .join("ipe_runtime"),
-            // Legacy: sibling `runtime-rust` directory.
-            dir.join("runtime-rust").join("src").join("ipe_runtime"),
-        ] {
-            if candidate.is_dir() {
-                return Some(candidate);
-            }
-        }
-        here = dir.parent();
-    }
-    None
-}
-
-fn copy_dir(src: &Path, dst: &Path) -> DResult<()> {
-    std::fs::create_dir_all(dst).map_err(|e| io_bug(dst, &e))?;
-    for entry in std::fs::read_dir(src).map_err(|e| io_bug(src, &e))? {
-        let entry = entry.map_err(|e| io_bug(src, &e))?;
-        let from = entry.path();
-        let to = dst.join(entry.file_name());
-        let file_type = entry.file_type().map_err(|e| io_bug(&from, &e))?;
-        if file_type.is_dir() {
-            copy_dir(&from, &to)?;
-        } else {
-            std::fs::copy(&from, &to).map_err(|e| io_bug(&from, &e))?;
-        }
-    }
     Ok(())
 }
