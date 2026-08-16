@@ -1,0 +1,48 @@
+module Main exposing (main)
+
+-- SEAL repro: a generic recursive helper whose continuation lambda builds its
+-- `List a` result with `List.append [ value ] more` — NO `Cons` node at all —
+-- from a captured match-arm local `value : a`.  The emitter writes a
+-- `Box<dyn Fn(Vec<T1>) -> Vec<T1> + Send + Sync + 'static>` closure that
+-- move-captures `value`, so the enclosing generic must carry
+-- `T1: Send + Sync`.
+--
+-- This is the no-`Cons` shape the earlier cons-head special-case missed: the
+-- closure body is a `List.append` call, not an `Expr::Cons`, yet the capture
+-- obligation is identical.  Keying the `Sync` obligation on the CLOSURE's own
+-- signature (`Vec<T1>` reaches bare `T1`) catches it regardless of return form.
+--
+-- The SEAL proof is a `cargo build` of the emitted project under `IPE_E2E=1`.
+
+import Ipe.Io as Io
+import Ipe.List as List
+import Ipe.Result exposing (Result(..))
+import Ipe.Error exposing (Error)
+import Ipe.Task as Task exposing (Task)
+
+
+collectRows : (i -> Result Error a) -> List i -> Task Error (List a)
+collectRows read rows =
+    case rows of
+        [] ->
+            Task.succeed []
+
+        first :: rest ->
+            case read first of
+                Err e ->
+                    Task.fail e
+
+                Ok value ->
+                    Task.map (\more -> List.append [ value ] more) (collectRows read rest)
+
+
+readInt : Int -> Result Error Int
+readInt n =
+    Ok n
+
+
+main : Task Error ()
+main =
+    Task.andThen
+        (\_ -> Io.println "generic-capture-append-seal")
+        (Task.map (\_ -> ()) (collectRows readInt [ 1, 2, 3 ]))
