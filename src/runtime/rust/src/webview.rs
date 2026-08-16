@@ -33,6 +33,13 @@ use super::html::Html;
 use super::tea::{IpeCmd, IpeSub};
 
 /// Window configuration — mirrors Ipê's closed `WindowCfg { title, size }`.
+///
+/// `size` is the logical **content/inner** area in CSS pixels: the drawable
+/// region the Ipê view occupies, not the outer OS frame (title bar + border).
+/// Tao's `with_inner_size` honours this: on macOS it calls `initWithContentRect:`
+/// with the content rect (the same Cocoa API that backs `NSWindow.contentView`),
+/// so a `size = (800, 500)` config gives exactly 800×500 px of content regardless
+/// of the native title-bar height.
 #[allow(non_snake_case)]
 #[derive(Clone, Debug)]
 pub struct WebViewWindowCfg {
@@ -224,6 +231,12 @@ mod imp {
             // thread, which no longer happens).
             let event_loop = EventLoopBuilder::<UserEvent>::with_user_event().build();
             let (w, h) = window.size;
+            // `with_inner_size` maps `size` to the content/inner area — the
+            // drawable region — not the outer OS frame. On macOS this calls
+            // `initWithContentRect:` so the content rect is exactly (w, h) in
+            // CSS-logical pixels; the title bar is additive on top. This is
+            // the correct semantic for an app-specified window size: the app
+            // controls its content area, not the platform chrome.
             let win = match WindowBuilder::new()
                 .with_title(&window.title)
                 .with_inner_size(LogicalSize::new(w.max(1) as f64, h.max(1) as f64))

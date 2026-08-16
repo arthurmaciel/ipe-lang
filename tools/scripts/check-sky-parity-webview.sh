@@ -257,10 +257,15 @@ for entry in "${EXAMPLES[@]}"; do
     continue
   fi
 
-  # The two engines can size the native window differently (frame vs content
-  # height), leaving a strip of trailing background on the taller capture.
-  # Crop both to their common top-left region so the diff compares the shared
-  # visible area rather than resize-squashing the taller image out of alignment.
+  # Sizing semantics differ by design: Ipê honours window.size as the
+  # content/inner area (tao with_inner_size → initWithContentRect: on macOS),
+  # so the outer frame = content + title-bar height (≈28-32 px on macOS).
+  # The reference uses the webview_go SetSize API which calls [NSWindow setFrame:]
+  # (outer frame), so its outer frame equals the requested size and its content
+  # area is ~28-32 px shorter. Both are deliberate: Ipê's semantic ("size" = what
+  # the app draws) is the more correct abstraction for app authors.
+  # Crop both captures to their common top-left region so the diff compares
+  # the shared visible content rather than penalising the taller Ipê capture.
   "${PY}" - "${IPE_PNG}" "${SKY_PNG}" <<'PYEOF'
 import sys
 from PIL import Image
