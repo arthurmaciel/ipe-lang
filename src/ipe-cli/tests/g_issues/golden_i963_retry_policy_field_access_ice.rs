@@ -14,8 +14,12 @@
 //! `IrType::Error` (the only runtime instantiation).  The struct is then
 //! found by all retry-kernel paths in `emit_task_retry_call`.
 //!
-//! Scoped to the builtin `RetryPolicy`: user records with a `shouldRetry` field
-//! do NOT match the 5-field closed shape and still fail closed with IPE-L0107.
+//! The guard is scoped to the KERNEL instantiation (`shouldRetry` type is a
+//! free `Ty::Var` or `Error -> Bool`).  A user record with a different concrete
+//! predicate type (e.g. `Int -> Bool`) is not the kernel type and does not take
+//! this path; see `golden_i979_retry_policy_exact_shape_user_record` for the
+//! positive boundary.  A near-miss subset (lone `shouldRetry` field only) still
+//! fails closed with IPE-L0107; see `retry_policy_nearmiss_still_rejects`.
 
 use std::path::{Path, PathBuf};
 
