@@ -5798,6 +5798,302 @@ fn binder_captured_in_move_closure(binder: Symbol, expr: &Expr) -> bool {
     }
 }
 
+/// Does a closure body `expr` move-capture a free value whose TYPE reaches a
+/// bare `tv` — i.e. a capture that, coerced into the closure's `+ Sync`
+/// trait-object carrier, forces `tv: Sync` on the enclosing generic?
+///
+/// `locally_bound` holds the symbols already bound WITHIN the closure (its
+/// params plus every inner binder), so a `Var`/`CloneVar` outside that set is a
+/// genuine capture from the enclosing scope. Two capture positions carry `tv`
+/// bare:
+///
+/// * A free var used **as a bare value** — cons head, tuple/list element, call
+///   or constructor argument, `Task.map` continuation payload. The captured
+///   binder's own type carries the element (`Ipe.Db.Store.decodeRows` captures
+///   the `Ok value ->` arm local `value : a` and conses it), so `tv: Sync` is
+///   obliged.
+/// * A field read `record.field` whose `field_ty` [`ir_type_generic_reaches_bare`]
+///   the tvar — the captured record's `tv` rides in a TRANSPARENT field, read
+///   out into a bare-`tv` value inside the closure.
+///
+/// A free var used SOLELY as the base of an [`Expr::Access`] into an OPAQUE
+/// field (`field_ty` a `Fun`/`Decoder`/…, which `reaches_bare` stops at) is NOT
+/// a bare-`tv` capture: the captured record carries `tv` only behind an already
+/// `Send + Sync` carrier (a `Codec`'s `enc : a -> JsonVal`, a `DecBox`'s
+/// `dec : Decoder a`), read out as a whole thread-shareable value, so it obliges
+/// no `Sync`. Excluding that position is what keeps the `eta_0`-eta-lambda and
+/// record-wrapped-carrier classes (`codec_generic_combinator`,
+/// `decoder_record_capture`) unbounded and reusable.
+fn closure_captures_bare_generic(
+    tv: Symbol,
+    locally_bound: &BTreeSet<Symbol>,
+    expr: &Expr,
+) -> bool {
+    match expr {
+        // A bare free var IS a bare-value capture.
+        Expr::Var(s) | Expr::CloneVar(s) => !locally_bound.contains(s),
+        // A field read: the projected value carries `tv` bare only when the
+        // field's own type reaches it. If it does, this Access is a bare-`tv`
+        // capture regardless of the record base's shape; if it does not, the
+        // record base is used solely under an opaque carrier here, so descend
+        // into the record ONLY to catch a bare capture nested deeper (a
+        // computed record expression), never counting the base var itself.
+        Expr::Access {
+            record, field_ty, ..
+        } => {
+            if ir_type_generic_reaches_bare(field_ty, tv) {
+                return true;
+            }
+            match record.as_ref() {
+                Expr::Var(_) | Expr::CloneVar(_) => false,
+                other => closure_captures_bare_generic(tv, locally_bound, other),
+            }
+        }
+        Expr::Lambda { params, body, .. } | Expr::SharedLambda { params, body, .. } => {
+            let mut inner = locally_bound.clone();
+            inner.extend(params.iter().map(|(s, _)| *s));
+            closure_captures_bare_generic(tv, &inner, body)
+        }
+        Expr::Let { name, value, body } => {
+            closure_captures_bare_generic(tv, locally_bound, value) || {
+                let mut inner = locally_bound.clone();
+                inner.insert(*name);
+                closure_captures_bare_generic(tv, &inner, body)
+            }
+        }
+        Expr::Destructure {
+            binder,
+            value,
+            body,
+        } => {
+            closure_captures_bare_generic(tv, locally_bound, value) || {
+                let mut inner = locally_bound.clone();
+                collect_ir_pat_syms(binder, &mut inner);
+                closure_captures_bare_generic(tv, &inner, body)
+            }
+        }
+        Expr::Match(m) => {
+            closure_captures_bare_generic(tv, locally_bound, m.scrutinee())
+                || m.arms().iter().any(|arm| {
+                    let mut inner = locally_bound.clone();
+                    collect_ir_pat_syms(&arm.pat, &mut inner);
+                    arm.guard
+                        .as_ref()
+                        .is_some_and(|g| closure_captures_bare_generic(tv, &inner, g))
+                        || closure_captures_bare_generic(tv, &inner, &arm.body)
+                })
+        }
+        Expr::TailLoop { params, body } => {
+            let mut inner = locally_bound.clone();
+            inner.extend(params.iter().map(|(s, _)| *s));
+            closure_captures_bare_generic(tv, &inner, body)
+        }
+        Expr::If { cond, then_, else_ } => {
+            closure_captures_bare_generic(tv, locally_bound, cond)
+                || closure_captures_bare_generic(tv, locally_bound, then_)
+                || closure_captures_bare_generic(tv, locally_bound, else_)
+        }
+        Expr::BinOp { lhs, rhs, .. } => {
+            closure_captures_bare_generic(tv, locally_bound, lhs)
+                || closure_captures_bare_generic(tv, locally_bound, rhs)
+        }
+        Expr::Call { args, .. } | Expr::Ctor { args, .. } | Expr::TailRecur { args } => args
+            .iter()
+            .any(|a| closure_captures_bare_generic(tv, locally_bound, a)),
+        Expr::Apply { func, args } => {
+            closure_captures_bare_generic(tv, locally_bound, func)
+                || args
+                    .iter()
+                    .any(|a| closure_captures_bare_generic(tv, locally_bound, a))
+        }
+        Expr::Tuple(items) | Expr::List { items, .. } => items
+            .iter()
+            .any(|e| closure_captures_bare_generic(tv, locally_bound, e)),
+        Expr::Cons { head, tail } => {
+            closure_captures_bare_generic(tv, locally_bound, head)
+                || closure_captures_bare_generic(tv, locally_bound, tail)
+        }
+        Expr::ListIndexClone { list, .. } | Expr::ListLenCheck { list, .. } => {
+            closure_captures_bare_generic(tv, locally_bound, list)
+        }
+        Expr::Record { fields, .. } | Expr::Update { fields, .. } => fields
+            .iter()
+            .any(|(_, e)| closure_captures_bare_generic(tv, locally_bound, e)),
+        Expr::TaskSeq { effect, rest } => {
+            closure_captures_bare_generic(tv, locally_bound, effect)
+                || closure_captures_bare_generic(tv, locally_bound, rest)
+        }
+        Expr::FuncValue { .. }
+        | Expr::Int(_)
+        | Expr::Bool(_)
+        | Expr::Float(_)
+        | Expr::Str(_)
+        | Expr::PathLit(_)
+        | Expr::Char(_)
+        | Expr::Unit => false,
+    }
+}
+
+/// Collect all variable-binding symbols from an IR [`Pat`] into `out`.
+///
+/// Only [`Pat::Var`] and [`Pat::Alias`] introduce new bindings; structural
+/// patterns ([`Pat::Ctor`], [`Pat::Tuple`], [`Pat::Record`]) recurse into their
+/// sub-patterns. Used by [`closure_captures_bare_generic`] to track which
+/// symbols a match-arm pattern binds, so the arm body's references to those
+/// symbols are not counted as free captures.
+fn collect_ir_pat_syms(pat: &Pat, out: &mut BTreeSet<Symbol>) {
+    match pat {
+        Pat::Var(s) => {
+            out.insert(*s);
+        }
+        Pat::Alias(inner, name) => {
+            out.insert(*name);
+            collect_ir_pat_syms(inner, out);
+        }
+        Pat::Ctor { args, .. } => {
+            for a in args {
+                collect_ir_pat_syms(a, out);
+            }
+        }
+        Pat::Tuple(items) | Pat::Or(items) => {
+            for item in items {
+                collect_ir_pat_syms(item, out);
+            }
+        }
+        Pat::Record(fields) => {
+            for (_, p) in fields {
+                collect_ir_pat_syms(p, out);
+            }
+        }
+        Pat::Slice { prefix, rest } => {
+            for h in prefix {
+                collect_ir_pat_syms(h, out);
+            }
+            if let Some(t) = rest {
+                collect_ir_pat_syms(t, out);
+            }
+        }
+        Pat::Wildcard | Pat::Int(_) | Pat::Bool(_) | Pat::Char(_) | Pat::Str(_) => {}
+    }
+}
+
+/// Does `expr` contain an emitted move-closure ([`Expr::Lambda`] or
+/// [`Expr::SharedLambda`], both rendered `Box`/`Arc<dyn Fn(..) -> .. + Send +
+/// Sync + 'static>`) that move-captures a free value whose TYPE reaches a bare
+/// `tv` ([`closure_captures_bare_generic`])?
+///
+/// A closure that captures such a value coerces it into the `+ Sync`
+/// trait-object carrier, forcing `tv: Sync` on the enclosing generic function.
+/// Without the bound the emitted Rust is `ipe`-accepted then `cargo`-fails
+/// E0277 (`tv cannot be shared between threads`) — a SEAL violation.
+///
+/// This is the GENERAL capture-site obligation for in-BODY binders: the value a
+/// closure captures is frequently NOT one of the enclosing function's `params`
+/// but a match-arm / destructure / `let` local (`Ipe.Db.Store.decodeRows`
+/// cons-prepends the `Ok value ->` arm local `value : a` inside a continuation
+/// lambda). Those locals are invisible to the `params`-keyed capture check, but
+/// the capture walk sees them regardless of the closure's return form — a direct
+/// cons, a `List.append` call, a tuple cons head (`(first, 0) :: more`), a
+/// `Maybe` wrap, a record build.
+///
+/// The bound is tight because [`closure_captures_bare_generic`] counts only a
+/// capture that carries `tv` BARE: a free var used as a bare value, or a field
+/// read whose `field_ty` reaches bare `tv`. A record captured only for a read
+/// into an OPAQUE `Send + Sync` field (a `Codec`'s `enc`, a `DecBox`'s `dec`)
+/// carries `tv` behind an already-shareable carrier and obliges no `Sync`, so
+/// the `eta_0`-eta-lambda and record-wrapped-carrier classes stay unbounded. A
+/// structurally recursive walk descends into every sub-expression, so a
+/// qualifying closure nested inside a match arm, `let` chain, or another closure
+/// is also detected.
+fn body_move_closure_captures_generic(tv: Symbol, expr: &Expr) -> bool {
+    match expr {
+        Expr::Lambda { params, ret, body } | Expr::SharedLambda { params, ret, body } => {
+            // A closure can oblige `tv: Sync` only if its OWN signature carries
+            // `tv` bare — the captured value flows into a bare-`tv` position the
+            // signature exposes. This scopes the obligation to the RIGHT tvar: a
+            // continuation lambda `Vec<(T1, Int)> -> Vec<(T1, Int)>` reaches only
+            // `T1`, never the input `T2`, so a bare capture inside it obliges
+            // `T1: Sync` alone. Paired with the bare-capture walk below, which
+            // confirms a captured value actually carries `tv` bare (not merely
+            // rides an opaque `Send + Sync` field), the two conditions together
+            // fire on the real capture shape and never over-bound.
+            let signature_reaches_tv = params
+                .iter()
+                .any(|(_, t)| ir_type_generic_reaches_bare(t, tv))
+                || ir_type_generic_reaches_bare(ret, tv);
+            if signature_reaches_tv {
+                let closure_bound: BTreeSet<Symbol> = params.iter().map(|(s, _)| *s).collect();
+                if closure_captures_bare_generic(tv, &closure_bound, body) {
+                    return true;
+                }
+            }
+            // Recurse regardless: a nested closure inside this body may qualify
+            // even when this one does not.
+            body_move_closure_captures_generic(tv, body)
+        }
+        Expr::TailLoop { body, .. } => body_move_closure_captures_generic(tv, body),
+        Expr::Let { value, body, .. } | Expr::Destructure { value, body, .. } => {
+            body_move_closure_captures_generic(tv, value)
+                || body_move_closure_captures_generic(tv, body)
+        }
+        Expr::If { cond, then_, else_ } => {
+            body_move_closure_captures_generic(tv, cond)
+                || body_move_closure_captures_generic(tv, then_)
+                || body_move_closure_captures_generic(tv, else_)
+        }
+        Expr::Match(m) => {
+            body_move_closure_captures_generic(tv, m.scrutinee())
+                || m.arms().iter().any(|arm| {
+                    arm.guard
+                        .as_ref()
+                        .is_some_and(|g| body_move_closure_captures_generic(tv, g))
+                        || body_move_closure_captures_generic(tv, &arm.body)
+                })
+        }
+        Expr::BinOp { lhs, rhs, .. } => {
+            body_move_closure_captures_generic(tv, lhs)
+                || body_move_closure_captures_generic(tv, rhs)
+        }
+        Expr::Call { args, .. } | Expr::Ctor { args, .. } | Expr::TailRecur { args } => args
+            .iter()
+            .any(|a| body_move_closure_captures_generic(tv, a)),
+        Expr::Apply { func, args } => {
+            body_move_closure_captures_generic(tv, func)
+                || args
+                    .iter()
+                    .any(|a| body_move_closure_captures_generic(tv, a))
+        }
+        Expr::Tuple(items) | Expr::List { items, .. } => items
+            .iter()
+            .any(|e| body_move_closure_captures_generic(tv, e)),
+        Expr::Cons { head, tail } => {
+            body_move_closure_captures_generic(tv, head)
+                || body_move_closure_captures_generic(tv, tail)
+        }
+        Expr::ListIndexClone { list, .. } | Expr::ListLenCheck { list, .. } => {
+            body_move_closure_captures_generic(tv, list)
+        }
+        Expr::Record { fields, .. } | Expr::Update { fields, .. } => fields
+            .iter()
+            .any(|(_, e)| body_move_closure_captures_generic(tv, e)),
+        Expr::TaskSeq { effect, rest } => {
+            body_move_closure_captures_generic(tv, effect)
+                || body_move_closure_captures_generic(tv, rest)
+        }
+        Expr::Access { record, .. } => body_move_closure_captures_generic(tv, record),
+        Expr::FuncValue { .. }
+        | Expr::Int(_)
+        | Expr::Bool(_)
+        | Expr::Float(_)
+        | Expr::Str(_)
+        | Expr::PathLit(_)
+        | Expr::Char(_)
+        | Expr::Unit
+        | Expr::Var(_)
+        | Expr::CloneVar(_) => false,
+    }
+}
+
 /// GENERAL type-param-bound propagation for the emitted signature.
 ///
 /// Two families of obligation land here. Most are kernel-on-param
@@ -6019,6 +6315,24 @@ fn apply_kernel_type_param_bounds(
             .any(|(_, ty)| ir_type_generic_reaches_bare(ty, *tv))
             || ir_type_generic_reaches_bare(ret, *tv);
         if sig_reaches_bare && body_succeeds_on_bare_var(body) {
+            *bounds = bounds.with_sync();
+        }
+        // `Sync` — GENERAL in-body-capture obligation: an emitted move-closure
+        // (`Lambda` or `SharedLambda`, both `Box`/`Arc<dyn Fn(..) + Send + Sync
+        // + 'static>`) whose OWN signature [`ir_type_generic_reaches_bare`] the
+        // tvar AND whose body move-captures a free variable. The captured value
+        // is often an in-body binder — a match-arm / destructure / `let` local
+        // (`Ipe.Db.Store.decodeRows` cons-prepends the `Ok value ->` arm local
+        // `value : a` inside a continuation lambda) — invisible to the
+        // `params`-keyed capture check above, but the closure's own type
+        // annotation still exposes the bare `tv`, so keying on the CLOSURE
+        // signature fires regardless of the closure's return shape (a direct
+        // cons, a `List.append` call, a `(first, 0) :: more` tuple head, a
+        // `Maybe` wrap, a record build). [`ir_type_generic_reaches_bare`] stops
+        // at opaque `Send + Sync` carriers, so an eta-lambda over a `tv`-taking
+        // param, a `Decoder tv` forwarder, or a record-wrapped generic does NOT
+        // reach bare and gains no spurious `Sync`.
+        if body_move_closure_captures_generic(*tv, body) {
             *bounds = bounds.with_sync();
         }
     }

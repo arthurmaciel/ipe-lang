@@ -1,0 +1,47 @@
+module Main exposing (main)
+
+-- SEAL repro: a generic recursive helper whose continuation lambda
+-- cons-prepends a TUPLE head `(value, 0)` built from a captured match-arm
+-- local `value : a` onto the `List (a, Int)` result.  The emitter writes a
+-- `Box<dyn Fn(Vec<(T1, i64)>) -> Vec<(T1, i64)> + Send + Sync + 'static>`
+-- closure that move-captures `value`, so the enclosing generic must carry
+-- `T1: Send + Sync`.
+--
+-- This is the tuple-cons-head shape the earlier list-cons-head special-case
+-- missed: the closure body's `Cons` head is a `Tuple`, not a bare `Var`, yet
+-- the capture obligation is identical.  Keying the `Sync` obligation on the
+-- CLOSURE's own signature (`Vec<(T1, i64)>` reaches bare `T1`) catches it.
+--
+-- The SEAL proof is a `cargo build` of the emitted project under `IPE_E2E=1`.
+
+import Ipe.Io as Io
+import Ipe.Result exposing (Result(..))
+import Ipe.Error exposing (Error)
+import Ipe.Task as Task exposing (Task)
+
+
+tagRows : (i -> Result Error a) -> List i -> Task Error (List ( a, Int ))
+tagRows read rows =
+    case rows of
+        [] ->
+            Task.succeed []
+
+        first :: rest ->
+            case read first of
+                Err e ->
+                    Task.fail e
+
+                Ok value ->
+                    Task.map (\more -> ( value, 0 ) :: more) (tagRows read rest)
+
+
+readInt : Int -> Result Error Int
+readInt n =
+    Ok n
+
+
+main : Task Error ()
+main =
+    Task.andThen
+        (\_ -> Io.println "generic-capture-tuple-cons-seal")
+        (Task.map (\_ -> ()) (tagRows readInt [ 1, 2, 3 ]))

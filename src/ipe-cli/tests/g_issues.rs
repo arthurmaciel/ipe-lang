@@ -4,6 +4,12 @@
 
 mod support;
 
+#[path = "g_issues/golden_i1005_generic_capture_append_seal.rs"]
+mod golden_i1005_generic_capture_append_seal;
+#[path = "g_issues/golden_i1005_generic_capture_tuple_cons_seal.rs"]
+mod golden_i1005_generic_capture_tuple_cons_seal;
+#[path = "g_issues/golden_i1005_store_list_query_seal.rs"]
+mod golden_i1005_store_list_query_seal;
 #[path = "g_issues/golden_i101_color_seal.rs"]
 mod golden_i101_color_seal;
 #[path = "g_issues/golden_i104_seal.rs"]

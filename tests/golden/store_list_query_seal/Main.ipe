@@ -1,0 +1,60 @@
+module Main exposing (main)
+
+-- Minimal repro: a `Store.all` call whose row-decoder returns a `List a`
+-- triggers emission of `decodeRows`, a generic helper over the row type
+-- variable `a`.  The emitted helper builds a
+-- `Box<dyn Fn(Vec<T1>) -> Vec<T1> + Send + Sync + 'static>` closure
+-- capturing a `T1` value, so the enclosing generic function must carry
+-- `T1: Send + Sync`.  Without the propagated bound the emitted crate is
+-- accepted by ipe (exit 0) but fails `cargo build` with E0277 — a SEAL
+-- violation.
+--
+-- The fixture wires `Store.all` into a real call chain so the code generator
+-- emits `decodeRows`.  No live database is needed: the `Task.onError`
+-- wrapper catches the connection failure and the program exits cleanly.
+-- The SEAL proof is a `cargo build` of the emitted project under
+-- `IPE_E2E=1`.
+
+import Ipe.Db as Db exposing (Db)
+import Ipe.Db.Store as Store exposing (Store, Row)
+import Ipe.Error exposing (Error)
+import Ipe.Io as Io
+import Ipe.Result as Result
+import Ipe.Task as Task exposing (Task)
+
+
+type alias Name =
+    String
+
+
+readName : Row -> Result Error Name
+readName row =
+    Store.readText "name" row
+
+
+fetchNames : Db -> Store -> Task Error (List Name)
+fetchNames db store =
+    Store.all db store readName
+
+
+main : Task Error ()
+main =
+    Task.andThen
+        (\_ -> Io.println "store-list-query-seal")
+        (Task.onError
+            (\_ -> Task.succeed ())
+            (Task.andThen
+                (\db ->
+                    Task.andThen
+                        (\store ->
+                            Task.andThen
+                                (\_ -> Task.succeed ())
+                                (fetchNames db store)
+                        )
+                        (Task.fromResult
+                            (Store.fromColumns "names" [ Store.textColumn "name" ])
+                        )
+                )
+                (Db.connect ())
+            )
+        )
