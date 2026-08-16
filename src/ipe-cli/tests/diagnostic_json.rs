@@ -66,8 +66,13 @@ fn fixture(name: &str) -> String {
 /// Assert that `json` is a single well-formed JSON object carrying every field
 /// in the stable schema. A field disappearing or changing type fails here.
 fn assert_diagnostic_schema(json: &str) {
+    // Parse as real JSON first, so a future invalid-escape regression in the
+    // hand-rolled writer fails here — the substring checks below would not catch
+    // malformed escaping.
+    let parsed: serde_json::Value =
+        serde_json::from_str(json).expect("diagnostic JSON must be well-formed JSON");
     assert!(
-        json.trim_start().starts_with('{') && json.trim_end().ends_with('}'),
+        parsed.is_object(),
         "diagnostic JSON must be a single object, got: {json:?}"
     );
 
