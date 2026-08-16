@@ -1426,6 +1426,9 @@ fn help_text(line: &HelpLine) -> Option<String> {
         // the render footer, but this arm keeps `help_text` total over `HelpLine`.
         HelpLine::Suggest(s) => Some(format!("help: replace with `{}`", s.replacement)),
         HelpLine::SecondarySpan { .. } => None,
+        HelpLine::SeeExplain(topic) => {
+            Some(format!("help: → run `ipe explain {topic}` to learn more"))
+        }
     }
 }
 

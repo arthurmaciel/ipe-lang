@@ -247,4 +247,78 @@ mod tests {
             ]
         );
     }
+
+    // -- teaching nudges (SeeExplain) --
+
+    #[test]
+    fn lawless_effect_discard_carries_see_explain_effects() {
+        let d = Diagnostic::Lower {
+            span: Span::DUMMY,
+            msg: LowerError::LawlessEffectDiscard,
+        };
+        assert_eq!(d.code(), IPE_L0141);
+        let help = d.help();
+        assert!(
+            help.iter().any(|h| h == &HelpLine::SeeExplain("effects")),
+            "IPE-L0141 must carry SeeExplain(\"effects\"); got: {help:?}"
+        );
+    }
+
+    #[test]
+    fn non_entry_main_carries_see_explain_main() {
+        let d = Diagnostic::Lower {
+            span: Span::DUMMY,
+            msg: LowerError::NonEntryMain {
+                found: "an Int".into(),
+            },
+        };
+        assert_eq!(d.code(), IPE_L0136);
+        let help = d.help();
+        assert!(
+            help.iter().any(|h| h == &HelpLine::SeeExplain("main")),
+            "IPE-L0136 must carry SeeExplain(\"main\"); got: {help:?}"
+        );
+    }
+
+    #[test]
+    fn function_in_record_carries_see_explain_state() {
+        let d = Diagnostic::Lower {
+            span: Span::DUMMY,
+            msg: LowerError::Unsupported(Feature::FirstClassFunctions),
+        };
+        assert_eq!(d.code(), IPE_L0107);
+        let help = d.help();
+        assert!(
+            help.iter().any(|h| h == &HelpLine::SeeExplain("state")),
+            "IPE-L0107 must carry SeeExplain(\"state\"); got: {help:?}"
+        );
+    }
+
+    #[test]
+    fn see_explain_renders_hint_text_in_plain_message() {
+        let d = Diagnostic::Lower {
+            span: Span::DUMMY,
+            msg: LowerError::LawlessEffectDiscard,
+        };
+        let msg = plain_message(&d, "");
+        assert!(
+            msg.contains("ipe explain effects"),
+            "plain_message for IPE-L0141 must contain 'ipe explain effects'; got: {msg:?}"
+        );
+    }
+
+    #[test]
+    fn see_explain_human_render_contains_topic_nudge() {
+        let d = Diagnostic::Lower {
+            span: Span::DUMMY,
+            msg: LowerError::NonEntryMain {
+                found: "a String".into(),
+            },
+        };
+        let rendered = render(&d, "main.ipe", "");
+        assert!(
+            rendered.contains("ipe explain main"),
+            "human render for IPE-L0136 must contain 'ipe explain main'; got: {rendered:?}"
+        );
+    }
 }

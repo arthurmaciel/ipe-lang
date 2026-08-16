@@ -1272,6 +1272,17 @@ pub enum HelpLine {
     /// A concrete, span-scoped fix the reader can apply (and `ipe fix` may
     /// auto-apply when [`Applicability::MachineApplicable`]).
     Suggest(Suggestion),
+    /// Nudge toward an `ipe explain <topic>` teaching page.
+    ///
+    /// The topic string is one of the curated topic-page identifiers registered
+    /// in `ipe-cli`'s `explain::ANTI_PATTERN_TOPICS` SSOT map (e.g. `"effects"`,
+    /// `"state"`, `"main"`). The renderer appends a hint like
+    /// `→ run ipe explain <topic>` to the diagnostic's help output. The
+    /// `ipe-cli` explain module validates at test time that every referenced
+    /// topic has a live page; the diagnostics crate carries only the static
+    /// string, keeping the dependency direction clean (diagnostics → cli would
+    /// be a cycle).
+    SeeExplain(&'static str),
 }
 
 // ===========================================================================
@@ -1737,6 +1748,12 @@ fn lower_help(msg: &LowerError) -> Vec<HelpLine> {
         LowerError::Unsupported(Feature::UntypedFunctions) => {
             vec![HelpLine::Hint(Hint::AddTypeSignature)]
         }
+        // Function-in-record-field: direct the reader to the state topic, which
+        // covers TEA-only state and why functions do not belong in records.
+        LowerError::Unsupported(Feature::FirstClassFunctions) => vec![
+            HelpLine::Hint(Hint::FeatureNotSupported(Feature::FirstClassFunctions)),
+            HelpLine::SeeExplain("state"),
+        ],
         LowerError::Unsupported(f) => vec![HelpLine::Hint(Hint::FeatureNotSupported(*f))],
         // The Model gate has no source span (the IR is span-free at emit), so the
         // field-naming message is carried as a `note:` line here — the caret
@@ -1806,25 +1823,31 @@ fn lower_help(msg: &LowerError) -> Vec<HelpLine> {
              `Ui.column` of rows) instead."
                 .into(),
         )],
-        LowerError::LawlessEffectDiscard => vec![HelpLine::Note(
-            "a `Task` runs its effect only through `Task.run`, or by being sequenced \
-             inside a function whose own return type is a `Task`. Discarding it with \
-             `let _ = <task>` in a non-`Task` function would run it through a hidden \
-             `Task.run`. Give the enclosing function a `Task e ()` return type and let \
-             its result be the sequenced tasks, or run the effect explicitly with \
-             `Task.run`. To print a value while debugging, use `Debug.log` (rejected in \
-             production builds)."
-                .into(),
-        )],
-        LowerError::NonEntryMain { .. } => vec![HelpLine::Note(
-            "`main` is the one effect your whole program runs, so it has to be a \
-             `Task Error ()`. Write it directly — `main = Io.println \"hello\"` prints a \
-             line, `main = someTask` runs any task you built — or start an app with \
-             `Web.app { … }`, `Terminal.appScreen { … }`, or `WebView.app { … }`, each \
-             of which is itself a `Task Error ()`. To turn a plain value into an effect, \
-             do something with it: `main = Io.println (String.fromInt 42)`."
-                .into(),
-        )],
+        LowerError::LawlessEffectDiscard => vec![
+            HelpLine::Note(
+                "a `Task` runs its effect only through `Task.run`, or by being sequenced \
+                 inside a function whose own return type is a `Task`. Discarding it with \
+                 `let _ = <task>` in a non-`Task` function would run it through a hidden \
+                 `Task.run`. Give the enclosing function a `Task e ()` return type and let \
+                 its result be the sequenced tasks, or run the effect explicitly with \
+                 `Task.run`. To print a value while debugging, use `Debug.log` (rejected in \
+                 production builds)."
+                    .into(),
+            ),
+            HelpLine::SeeExplain("effects"),
+        ],
+        LowerError::NonEntryMain { .. } => vec![
+            HelpLine::Note(
+                "`main` is the one effect your whole program runs, so it has to be a \
+                 `Task Error ()`. Write it directly — `main = Io.println \"hello\"` prints a \
+                 line, `main = someTask` runs any task you built — or start an app with \
+                 `Web.app { … }`, `Terminal.appScreen { … }`, or `WebView.app { … }`, each \
+                 of which is itself a `Task Error ()`. To turn a plain value into an effect, \
+                 do something with it: `main = Io.println (String.fromInt 42)`."
+                    .into(),
+            ),
+            HelpLine::SeeExplain("main"),
+        ],
     }
 }
 
