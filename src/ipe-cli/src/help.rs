@@ -118,6 +118,10 @@ const COMMANDS: &[Command] = &[
                 flag: "[--allow-slow-allocator]",
                 desc: "permit an allocator known to be slow for the target",
             },
+            Opt {
+                flag: "[--json]",
+                desc: "emit each diagnostic as a stable JSON object (one per line) instead of the human layout",
+            },
         ],
     },
     Command {
@@ -176,7 +180,11 @@ const COMMANDS: &[Command] = &[
         summary: "Type-check a program without building or running it.",
         args: "[<path>]",
         args_desc: "A source file, a project directory, or an ipe.toml. Defaults to the current project.",
-        options: &[],
+        options: &[Opt {
+            flag: "[--json]",
+            desc: "emit each diagnostic as a stable JSON object (one per line) on stderr; \
+                   success is {\"status\":\"ok\"} on stdout",
+        }],
     },
     Command {
         name: "test",
@@ -228,6 +236,10 @@ const COMMANDS: &[Command] = &[
             Opt {
                 flag: "[--accept-risks]",
                 desc: "accept every disclosed .Unsafe escape-hatch import and proceed without prompting",
+            },
+            Opt {
+                flag: "[--json]",
+                desc: "emit each diagnostic as a stable JSON object (one per line) instead of the human layout",
             },
             Opt {
                 flag: "[-- <args>...]",
