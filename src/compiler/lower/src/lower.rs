@@ -5798,6 +5798,422 @@ fn binder_captured_in_move_closure(binder: Symbol, expr: &Expr) -> bool {
     }
 }
 
+/// Does `expr` contain a [`Expr::Var`] or [`Expr::CloneVar`] referencing a
+/// symbol NOT in `locally_bound`, descending into sub-expressions and extending
+/// `locally_bound` whenever a new binder is introduced (a `let`/`Destructure`
+/// name, a lambda/`TailLoop` param, a match-arm pattern variable)?
+///
+/// A `true` result means at least one reference in `expr` is a free variable
+/// captured from outside the tracked scope — exactly the condition that makes a
+/// `Box<dyn Fn + Send + Sync>` closure a genuine closure (not a pure function
+/// reference), so the closure's captured values must satisfy `Sync`.
+fn expr_has_free_var(locally_bound: &BTreeSet<Symbol>, expr: &Expr) -> bool {
+    match expr {
+        Expr::Var(s) | Expr::CloneVar(s) => !locally_bound.contains(s),
+        Expr::Lambda { params, body, .. } | Expr::SharedLambda { params, body, .. } => {
+            let mut inner = locally_bound.clone();
+            inner.extend(params.iter().map(|(s, _)| *s));
+            expr_has_free_var(&inner, body)
+        }
+        Expr::Let { name, value, body } => {
+            expr_has_free_var(locally_bound, value) || {
+                let mut inner = locally_bound.clone();
+                inner.insert(*name);
+                expr_has_free_var(&inner, body)
+            }
+        }
+        Expr::Destructure {
+            binder,
+            value,
+            body,
+        } => {
+            expr_has_free_var(locally_bound, value) || {
+                let mut inner = locally_bound.clone();
+                collect_ir_pat_syms(binder, &mut inner);
+                expr_has_free_var(&inner, body)
+            }
+        }
+        Expr::Match(m) => {
+            expr_has_free_var(locally_bound, m.scrutinee())
+                || m.arms().iter().any(|arm| {
+                    let mut inner = locally_bound.clone();
+                    collect_ir_pat_syms(&arm.pat, &mut inner);
+                    if let Some(g) = &arm.guard
+                        && expr_has_free_var(&inner, g)
+                    {
+                        return true;
+                    }
+                    expr_has_free_var(&inner, &arm.body)
+                })
+        }
+        Expr::TailLoop { params, body } => {
+            let mut inner = locally_bound.clone();
+            inner.extend(params.iter().map(|(s, _)| *s));
+            expr_has_free_var(&inner, body)
+        }
+        Expr::If { cond, then_, else_ } => {
+            expr_has_free_var(locally_bound, cond)
+                || expr_has_free_var(locally_bound, then_)
+                || expr_has_free_var(locally_bound, else_)
+        }
+        Expr::BinOp { lhs, rhs, .. } => {
+            expr_has_free_var(locally_bound, lhs) || expr_has_free_var(locally_bound, rhs)
+        }
+        Expr::Call { args, .. } | Expr::Ctor { args, .. } | Expr::TailRecur { args } => {
+            args.iter().any(|a| expr_has_free_var(locally_bound, a))
+        }
+        Expr::Apply { func, args } => {
+            expr_has_free_var(locally_bound, func)
+                || args.iter().any(|a| expr_has_free_var(locally_bound, a))
+        }
+        Expr::Tuple(items) | Expr::List { items, .. } => {
+            items.iter().any(|e| expr_has_free_var(locally_bound, e))
+        }
+        Expr::Cons { head, tail } => {
+            expr_has_free_var(locally_bound, head) || expr_has_free_var(locally_bound, tail)
+        }
+        Expr::ListIndexClone { list, .. } | Expr::ListLenCheck { list, .. } => {
+            expr_has_free_var(locally_bound, list)
+        }
+        Expr::Record { fields, .. } | Expr::Update { fields, .. } => fields
+            .iter()
+            .any(|(_, e)| expr_has_free_var(locally_bound, e)),
+        Expr::TaskSeq { effect, rest } => {
+            expr_has_free_var(locally_bound, effect) || expr_has_free_var(locally_bound, rest)
+        }
+        Expr::Access { record, .. } => expr_has_free_var(locally_bound, record),
+        Expr::FuncValue { .. }
+        | Expr::Int(_)
+        | Expr::Bool(_)
+        | Expr::Float(_)
+        | Expr::Str(_)
+        | Expr::PathLit(_)
+        | Expr::Char(_)
+        | Expr::Unit => false,
+    }
+}
+
+/// Collect all variable-binding symbols from an IR [`Pat`] into `out`.
+///
+/// Only [`Pat::Var`] and [`Pat::Alias`] introduce new bindings; structural
+/// patterns ([`Pat::Ctor`], [`Pat::Tuple`], [`Pat::Record`]) recurse into their
+/// sub-patterns. Used by [`expr_has_free_var`] to track which symbols a
+/// match-arm pattern binds, so the arm body's references to those symbols are
+/// not counted as free captures.
+fn collect_ir_pat_syms(pat: &Pat, out: &mut BTreeSet<Symbol>) {
+    match pat {
+        Pat::Var(s) => {
+            out.insert(*s);
+        }
+        Pat::Alias(inner, name) => {
+            out.insert(*name);
+            collect_ir_pat_syms(inner, out);
+        }
+        Pat::Ctor { args, .. } => {
+            for a in args {
+                collect_ir_pat_syms(a, out);
+            }
+        }
+        Pat::Tuple(items) | Pat::Or(items) => {
+            for item in items {
+                collect_ir_pat_syms(item, out);
+            }
+        }
+        Pat::Record(fields) => {
+            for (_, p) in fields {
+                collect_ir_pat_syms(p, out);
+            }
+        }
+        Pat::Slice { prefix, rest } => {
+            for h in prefix {
+                collect_ir_pat_syms(h, out);
+            }
+            if let Some(t) = rest {
+                collect_ir_pat_syms(t, out);
+            }
+        }
+        Pat::Wildcard | Pat::Int(_) | Pat::Bool(_) | Pat::Char(_) | Pat::Str(_) => {}
+    }
+}
+
+/// Does `expr` contain a [`Expr::Lambda`] whose return type is
+/// `List(Generic(tv))` and whose body (recursively) contains
+/// [`Expr::Cons`] with a head that is a free variable (a `Var`/`CloneVar`
+/// not bound by the lambda's own params)?
+///
+/// When both hold, the free head variable must be of type `Generic(tv)` (it is
+/// consed onto the `List(tv)` result), so it is move-captured by value into a
+/// `Box<dyn Fn(..) + Send + Sync + 'static>` closure — forcing `tv: Sync` on
+/// the enclosing generic function. Without the bound the emitted Rust is
+/// `ipe`-accepted then `cargo`-fails E0277.
+///
+/// This complements [`body_shared_lambda_with_generic_captures`] for the `Lambda`
+/// (non-Arc) case: a lambda that cons-prepends a captured generic value onto a
+/// list return is the class of pattern emitted by `Ipe.Db.Store.decodeRows` and
+/// any similar list-accumulating recursive helper over a generic element type.
+fn body_lambda_cons_head_free_generic(tv: Symbol, expr: &Expr) -> bool {
+    match expr {
+        Expr::Lambda { params, ret, body } => {
+            if matches!(ret, IrType::List(inner) if ir_type_generic_reaches_bare(inner, tv)) {
+                let lambda_bound: BTreeSet<Symbol> = params.iter().map(|(s, _)| *s).collect();
+                if expr_cons_head_is_free_var(&lambda_bound, body) {
+                    return true;
+                }
+            }
+            body_lambda_cons_head_free_generic(tv, body)
+        }
+        Expr::SharedLambda { body, .. } | Expr::TailLoop { body, .. } => {
+            body_lambda_cons_head_free_generic(tv, body)
+        }
+        Expr::Let { value, body, .. } | Expr::Destructure { value, body, .. } => {
+            body_lambda_cons_head_free_generic(tv, value)
+                || body_lambda_cons_head_free_generic(tv, body)
+        }
+        Expr::If { cond, then_, else_ } => {
+            body_lambda_cons_head_free_generic(tv, cond)
+                || body_lambda_cons_head_free_generic(tv, then_)
+                || body_lambda_cons_head_free_generic(tv, else_)
+        }
+        Expr::Match(m) => {
+            body_lambda_cons_head_free_generic(tv, m.scrutinee())
+                || m.arms()
+                    .iter()
+                    .any(|arm| body_lambda_cons_head_free_generic(tv, &arm.body))
+        }
+        Expr::BinOp { lhs, rhs, .. } => {
+            body_lambda_cons_head_free_generic(tv, lhs)
+                || body_lambda_cons_head_free_generic(tv, rhs)
+        }
+        Expr::Call { args, .. } | Expr::Ctor { args, .. } | Expr::TailRecur { args } => args
+            .iter()
+            .any(|a| body_lambda_cons_head_free_generic(tv, a)),
+        Expr::Apply { func, args } => {
+            body_lambda_cons_head_free_generic(tv, func)
+                || args
+                    .iter()
+                    .any(|a| body_lambda_cons_head_free_generic(tv, a))
+        }
+        Expr::Tuple(items) | Expr::List { items, .. } => items
+            .iter()
+            .any(|e| body_lambda_cons_head_free_generic(tv, e)),
+        Expr::Cons { head, tail } => {
+            body_lambda_cons_head_free_generic(tv, head)
+                || body_lambda_cons_head_free_generic(tv, tail)
+        }
+        Expr::ListIndexClone { list, .. } | Expr::ListLenCheck { list, .. } => {
+            body_lambda_cons_head_free_generic(tv, list)
+        }
+        Expr::Record { fields, .. } | Expr::Update { fields, .. } => fields
+            .iter()
+            .any(|(_, e)| body_lambda_cons_head_free_generic(tv, e)),
+        Expr::TaskSeq { effect, rest } => {
+            body_lambda_cons_head_free_generic(tv, effect)
+                || body_lambda_cons_head_free_generic(tv, rest)
+        }
+        Expr::Access { record, .. } => body_lambda_cons_head_free_generic(tv, record),
+        Expr::FuncValue { .. }
+        | Expr::Int(_)
+        | Expr::Bool(_)
+        | Expr::Float(_)
+        | Expr::Str(_)
+        | Expr::PathLit(_)
+        | Expr::Char(_)
+        | Expr::Unit
+        | Expr::Var(_)
+        | Expr::CloneVar(_) => false,
+    }
+}
+
+/// Does `expr` contain an [`Expr::Cons`] whose head is a `Var`/`CloneVar` not
+/// found in `locally_bound`? Used by [`body_lambda_cons_head_free_generic`] to
+/// check whether a lambda body directly cons-prepends a captured generic value.
+fn expr_cons_head_is_free_var(locally_bound: &BTreeSet<Symbol>, expr: &Expr) -> bool {
+    match expr {
+        Expr::Cons { head, tail } => {
+            let head_is_free = matches!(head.as_ref(), Expr::Var(s) | Expr::CloneVar(s) if !locally_bound.contains(s));
+            head_is_free || expr_cons_head_is_free_var(locally_bound, tail)
+        }
+        Expr::Lambda { params, body, .. } | Expr::SharedLambda { params, body, .. } => {
+            let mut inner = locally_bound.clone();
+            inner.extend(params.iter().map(|(s, _)| *s));
+            expr_cons_head_is_free_var(&inner, body)
+        }
+        Expr::Let { name, value, body } => {
+            expr_cons_head_is_free_var(locally_bound, value) || {
+                let mut inner = locally_bound.clone();
+                inner.insert(*name);
+                expr_cons_head_is_free_var(&inner, body)
+            }
+        }
+        Expr::Destructure {
+            binder,
+            value,
+            body,
+        } => {
+            expr_cons_head_is_free_var(locally_bound, value) || {
+                let mut inner = locally_bound.clone();
+                collect_ir_pat_syms(binder, &mut inner);
+                expr_cons_head_is_free_var(&inner, body)
+            }
+        }
+        Expr::Match(m) => {
+            expr_cons_head_is_free_var(locally_bound, m.scrutinee())
+                || m.arms().iter().any(|arm| {
+                    let mut inner = locally_bound.clone();
+                    collect_ir_pat_syms(&arm.pat, &mut inner);
+                    expr_cons_head_is_free_var(&inner, &arm.body)
+                })
+        }
+        Expr::TailLoop { params, body } => {
+            let mut inner = locally_bound.clone();
+            inner.extend(params.iter().map(|(s, _)| *s));
+            expr_cons_head_is_free_var(&inner, body)
+        }
+        Expr::If { cond, then_, else_ } => {
+            expr_cons_head_is_free_var(locally_bound, cond)
+                || expr_cons_head_is_free_var(locally_bound, then_)
+                || expr_cons_head_is_free_var(locally_bound, else_)
+        }
+        Expr::BinOp { lhs, rhs, .. } => {
+            expr_cons_head_is_free_var(locally_bound, lhs)
+                || expr_cons_head_is_free_var(locally_bound, rhs)
+        }
+        Expr::Call { args, .. } | Expr::Ctor { args, .. } | Expr::TailRecur { args } => args
+            .iter()
+            .any(|a| expr_cons_head_is_free_var(locally_bound, a)),
+        Expr::Apply { func, args } => {
+            expr_cons_head_is_free_var(locally_bound, func)
+                || args
+                    .iter()
+                    .any(|a| expr_cons_head_is_free_var(locally_bound, a))
+        }
+        Expr::Tuple(items) | Expr::List { items, .. } => items
+            .iter()
+            .any(|e| expr_cons_head_is_free_var(locally_bound, e)),
+        Expr::ListIndexClone { list, .. } | Expr::ListLenCheck { list, .. } => {
+            expr_cons_head_is_free_var(locally_bound, list)
+        }
+        Expr::Record { fields, .. } | Expr::Update { fields, .. } => fields
+            .iter()
+            .any(|(_, e)| expr_cons_head_is_free_var(locally_bound, e)),
+        Expr::TaskSeq { effect, rest } => {
+            expr_cons_head_is_free_var(locally_bound, effect)
+                || expr_cons_head_is_free_var(locally_bound, rest)
+        }
+        Expr::Access { record, .. } => expr_cons_head_is_free_var(locally_bound, record),
+        Expr::FuncValue { .. }
+        | Expr::Int(_)
+        | Expr::Bool(_)
+        | Expr::Float(_)
+        | Expr::Str(_)
+        | Expr::PathLit(_)
+        | Expr::Char(_)
+        | Expr::Unit
+        | Expr::Var(_)
+        | Expr::CloneVar(_) => false,
+    }
+}
+
+/// Does `expr` contain a [`Expr::SharedLambda`] — a `Box<dyn Fn(..) + Send +
+/// Sync + 'static>` closure carrier — whose param types or return type
+/// [`ir_type_generic_reaches_bare`] the type variable `tv`, AND whose body
+/// references at least one free variable (a `Var`/`CloneVar` not bound by the
+/// lambda's own parameters or any inner binder)?
+///
+/// When both conditions hold, the lambda captures some value whose type carries
+/// `tv` bare and coerces it into a `+ Sync` trait object, forcing `tv: Sync` on
+/// the enclosing generic function. Without the bound the emitted Rust is
+/// `ipe`-accepted then `cargo`-fails E0277 (a SEAL violation).
+///
+/// The free-variable condition prevents false positives on pure function
+/// references (no captures → Rust derives `Sync` for free from the function
+/// item, no `tv: Sync` needed). A structurally recursive walk descends into all
+/// sub-expressions, so a lambda nested inside a match arm or `let`-chain is
+/// also detected.
+fn body_shared_lambda_with_generic_captures(tv: Symbol, expr: &Expr) -> bool {
+    match expr {
+        Expr::SharedLambda { params, ret, body } => {
+            let type_reaches_tv = params
+                .iter()
+                .any(|(_, t)| ir_type_generic_reaches_bare(t, tv))
+                || ir_type_generic_reaches_bare(ret, tv);
+            if type_reaches_tv {
+                // Check for free captures: any Var/CloneVar in the body whose
+                // symbol is not bound by the lambda's own params or inner
+                // binders.
+                let lambda_bound: BTreeSet<Symbol> = params.iter().map(|(s, _)| *s).collect();
+                if expr_has_free_var(&lambda_bound, body) {
+                    return true;
+                }
+            }
+            // Whether or not this SharedLambda triggered, recurse into the body
+            // in case a nested SharedLambda inside it also qualifies.
+            body_shared_lambda_with_generic_captures(tv, body)
+        }
+        // Lambda and TailLoop: descend only (Lambda case is handled separately
+        // by `body_lambda_cons_head_is_free_generic`).
+        Expr::Lambda { body, .. } | Expr::TailLoop { body, .. } => {
+            body_shared_lambda_with_generic_captures(tv, body)
+        }
+        Expr::Let { value, body, .. } | Expr::Destructure { value, body, .. } => {
+            body_shared_lambda_with_generic_captures(tv, value)
+                || body_shared_lambda_with_generic_captures(tv, body)
+        }
+        Expr::If { cond, then_, else_ } => {
+            body_shared_lambda_with_generic_captures(tv, cond)
+                || body_shared_lambda_with_generic_captures(tv, then_)
+                || body_shared_lambda_with_generic_captures(tv, else_)
+        }
+        Expr::Match(m) => {
+            body_shared_lambda_with_generic_captures(tv, m.scrutinee())
+                || m.arms()
+                    .iter()
+                    .any(|arm| body_shared_lambda_with_generic_captures(tv, &arm.body))
+        }
+        Expr::BinOp { lhs, rhs, .. } => {
+            body_shared_lambda_with_generic_captures(tv, lhs)
+                || body_shared_lambda_with_generic_captures(tv, rhs)
+        }
+        Expr::Call { args, .. } | Expr::Ctor { args, .. } | Expr::TailRecur { args } => args
+            .iter()
+            .any(|a| body_shared_lambda_with_generic_captures(tv, a)),
+        Expr::Apply { func, args } => {
+            body_shared_lambda_with_generic_captures(tv, func)
+                || args
+                    .iter()
+                    .any(|a| body_shared_lambda_with_generic_captures(tv, a))
+        }
+        Expr::Tuple(items) | Expr::List { items, .. } => items
+            .iter()
+            .any(|e| body_shared_lambda_with_generic_captures(tv, e)),
+        Expr::Cons { head, tail } => {
+            body_shared_lambda_with_generic_captures(tv, head)
+                || body_shared_lambda_with_generic_captures(tv, tail)
+        }
+        Expr::ListIndexClone { list, .. } | Expr::ListLenCheck { list, .. } => {
+            body_shared_lambda_with_generic_captures(tv, list)
+        }
+        Expr::Record { fields, .. } | Expr::Update { fields, .. } => fields
+            .iter()
+            .any(|(_, e)| body_shared_lambda_with_generic_captures(tv, e)),
+        Expr::TaskSeq { effect, rest } => {
+            body_shared_lambda_with_generic_captures(tv, effect)
+                || body_shared_lambda_with_generic_captures(tv, rest)
+        }
+        Expr::Access { record, .. } => body_shared_lambda_with_generic_captures(tv, record),
+        Expr::FuncValue { .. }
+        | Expr::Int(_)
+        | Expr::Bool(_)
+        | Expr::Float(_)
+        | Expr::Str(_)
+        | Expr::PathLit(_)
+        | Expr::Char(_)
+        | Expr::Unit
+        | Expr::Var(_)
+        | Expr::CloneVar(_) => false,
+    }
+}
+
 /// GENERAL type-param-bound propagation for the emitted signature.
 ///
 /// Two families of obligation land here. Most are kernel-on-param
@@ -6019,6 +6435,39 @@ fn apply_kernel_type_param_bounds(
             .any(|(_, ty)| ir_type_generic_reaches_bare(ty, *tv))
             || ir_type_generic_reaches_bare(ret, *tv);
         if sig_reaches_bare && body_succeeds_on_bare_var(body) {
+            *bounds = bounds.with_sync();
+        }
+        // `Sync` — a `SharedLambda` (`Box<dyn Fn(..) + Send + Sync + 'static>`)
+        // in the body whose param/return type [`ir_type_generic_reaches_bare`]
+        // the tvar AND whose body captures at least one free variable (a
+        // `Var`/`CloneVar` not bound by the lambda's own params). When both
+        // hold, the closure captures a value whose type carries `tv` bare and
+        // coerces it into the `+ Sync` trait-object carrier, forcing `tv: Sync`
+        // on the enclosing generic. Without the bound the emitted Rust is
+        // `ipe`-accepted then `cargo`-fails E0277 (a SEAL violation).
+        //
+        // This closes the gap left by the `params`-keyed capture check above
+        // for the `SharedLambda` (Arc-backed) variant: a match-arm local of
+        // type `Generic(tv)` is NOT in `params`, but it can be captured into an
+        // `Arc`-backed `SharedLambda` in the arm body. The `Lambda` (Box-backed)
+        // variant of this gap is handled by `body_lambda_cons_head_free_generic`
+        // below.
+        if body_shared_lambda_with_generic_captures(*tv, body) {
+            *bounds = bounds.with_sync();
+        }
+        // `Sync` — a `Lambda` in the body that returns `List(tv)` and
+        // cons-prepends a free captured variable as the head. The captured head
+        // must be of type `Generic(tv)` (the list element), and the lambda is
+        // annotated `Box<dyn Fn + Send + Sync + 'static>`, so the capture
+        // forces `tv: Sync`. This covers list-accumulating recursive helpers
+        // (e.g. `Ipe.Db.Store.decodeRows`) where a match-arm local (`Ok value
+        // ->`) of type `tv` is cons-prepended inside a continuation lambda: the
+        // match local is invisible to the `params`-keyed checks above and not a
+        // `SharedLambda` capture, but its bare-typed capture still obliges
+        // `tv: Sync`. [`body_lambda_cons_head_free_generic`] detects this
+        // class of pattern precisely, avoiding false positives on lambdas that
+        // capture only record-field-wrapped generics.
+        if body_lambda_cons_head_free_generic(*tv, body) {
             *bounds = bounds.with_sync();
         }
     }

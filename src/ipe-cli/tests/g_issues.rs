@@ -70,6 +70,8 @@ mod golden_i981_fn_value_move_then_call;
 mod golden_i984_cons_fn_value_arc_carrier;
 #[path = "g_issues/golden_i99_alias_match_arm.rs"]
 mod golden_i99_alias_match_arm;
+#[path = "g_issues/golden_i1005_store_list_query_seal.rs"]
+mod golden_i1005_store_list_query_seal;
 #[path = "g_issues/golden_l0135_access_base_move_seal.rs"]
 mod golden_l0135_access_base_move_seal;
 #[path = "g_issues/golden_l0135_union_task_reuse_seal.rs"]
