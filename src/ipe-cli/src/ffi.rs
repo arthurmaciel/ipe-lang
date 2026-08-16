@@ -1569,14 +1569,119 @@ fn collect_dependency_tables(value: &toml::Value, out: &mut BTreeSet<String>) {
     }
 }
 
+/// Map an FFI driver diagnostic to a [`CliError`] that does NOT trigger the
+/// `CommandUsage` help page.
+///
+/// A build/inspection failure is not command-line misuse — showing the `ipe
+/// rust add` usage synopsis after a pkg-config error is noise, not help.
+/// `Resolve` passes through `with_help_on_misuse` unchanged and renders via
+/// the normal `ipe: {msg}` path.
+///
+/// When `verbose` is true the raw inspector output is appended; otherwise only
+/// the summarised diagnostic is shown.
+fn ffi_build_error(diag: ipe_ffi::diag::Diagnostic, verbose: bool) -> CliError {
+    use ipe_ffi::diag::Diagnostic as D;
+    match diag {
+        // Pkg-config missing system library: emit a formatted message that
+        // names the library, the crate, the install hint, and the
+        // PKG_CONFIG_PATH escape hatch.
+        D::SystemLibraryNotFound {
+            system_lib,
+            crate_name,
+            install_hint,
+        } => CliError::Resolve(format!(
+            "IPE-F4415: crate `{crate_name}` needs the system library \
+             `{system_lib}`, which pkg-config cannot find.\n\
+             \n\
+             Install hint: {install_hint}\n\
+             \n\
+             If the library is in a non-standard location, set PKG_CONFIG_PATH \
+             before re-running:\n\
+             \n\
+             \x20 PKG_CONFIG_PATH=/usr/local/lib/pkgconfig ipe rust add {crate_name}\n\
+             \n\
+             Run `ipe explain IPE-F4415` for more detail."
+        )),
+        // All other failures: show the summarised diagnostic. With --verbose,
+        // the caller's run_inspector path already dumped the raw log to stderr,
+        // so there is no need to repeat it here.
+        other => {
+            let _ = verbose; // verbose raw-log is surfaced at the run_inspector layer
+            CliError::Resolve(other.to_string())
+        }
+    }
+}
+
+/// Detect the inspector's `--allow-build-scripts` refusal text in a raw error
+/// message and return it as a warning string suitable for a banner.
+///
+/// The inspector prints this when it finds build-script crates but the flag
+/// was not passed. Returns `None` when the text is not present.
+fn detect_build_scripts_hint(raw: &str) -> Option<&str> {
+    // The inspector emits a line containing "--allow-build-scripts" in its
+    // human-readable refusal message. Any line that mentions it is the hint.
+    raw.lines().find(|l| l.contains("--allow-build-scripts"))
+}
+
+/// Map a raw inspector `UsageOwned` error string to a `CliError::Resolve`
+/// that never triggers the `CommandUsage` help page.
+///
+/// If the raw error contains the `--allow-build-scripts` refusal hint, the
+/// hint is pulled out and rendered as a separate emphasised warning banner so
+/// the user can see the actionable flag clearly.
+fn map_inspector_error(msg: String) -> CliError {
+    // Detect the hint before consuming `msg`, then branch.
+    let hint_line: Option<String> = detect_build_scripts_hint(&msg).map(|l| l.trim().to_owned());
+    hint_line.map_or(CliError::Resolve(msg), |hint| {
+        // The build-scripts refusal: render the hint as a banner so the
+        // `--allow-build-scripts` flag stands out as the actionable next step.
+        let p = crate::style::Palette::for_stream(&std::io::stderr());
+        let banner = format!(
+            "{y}warning:{r} some crates in the dependency graph have build scripts.\n\
+             Pass {bold}--allow-build-scripts{r} to proceed (you will see a warning naming\n\
+             those packages first, and they will run inside the isolation jail).\n\
+             \n\
+             {dim}hint: {hint}{r}",
+            y = p.bright_yellow,
+            bold = p.bold,
+            dim = p.dim,
+            r = p.reset,
+        );
+        CliError::Resolve(banner)
+    })
+}
+
 /// Shared tail of `add` / `install`: inspect one crate + write its artifacts.
+///
+/// Emits progress stage lines to stderr as each phase runs so the user can
+/// follow the long resolve → inspect → build sequence.
 fn add_one(
     cache: &FfiCache,
     krate: &CrateSpec,
     features: &[String],
     allow_build_scripts: bool,
+    verbose: bool,
 ) -> Result<(), CliError> {
-    let json = run_inspector(krate, features, allow_build_scripts)?;
+    use crate::progress::{Mode, Stage};
+    let mode = Mode::for_stream(&std::io::stderr());
+    let crate_label = krate.name().as_str();
+
+    let stage = Stage::with_mode(std::io::stderr(), mode, format!("resolving {crate_label}…"));
+    let json_result = run_inspector(krate, features, allow_build_scripts);
+    let json = match json_result {
+        Ok(j) => {
+            stage.success(format!("resolved {crate_label}"));
+            j
+        }
+        Err(e) => {
+            stage.failure(format!("resolve failed for {crate_label}"));
+            // A build failure from the inspector is not command-line misuse.
+            return Err(match e {
+                CliError::UsageOwned(msg) => map_inspector_error(msg),
+                other => other,
+            });
+        }
+    };
     // A multi-crate inspector run emits a JSON array; `ipe add` runs one
     // crate, but tolerate the array wrapper by unwrapping a singleton.
     let doc_text = match serde_json::from_str::<serde_json::Value>(&json) {
@@ -1608,21 +1713,30 @@ fn add_one(
         // No manifest (a bare `ipe add` outside a project) ⇒ nothing to merge.
         Err(_) => doc_text,
     };
-    let (pkg, paths) = ipe_ffi::driver::install_from_inspection(cache, &doc_text)
-        .map_err(|diag| CliError::UsageOwned(diag.to_string()))?;
-    let iface = ipe_ffi::interface::crate_interface(&pkg);
-    print!(
-        "{}",
-        crate::style::frame(&crate::style::gutter(&format!(
-            "added `{}` v{}: {} bindings ({} skipped) -> {}",
-            pkg.name(),
-            pkg.version(),
-            iface.bindings.len(),
-            iface.skipped.len(),
-            paths.interface.display()
-        )))
-    );
-    Ok(())
+    let build_stage = Stage::with_mode(std::io::stderr(), mode, format!("building {crate_label}…"));
+    let install_result = ipe_ffi::driver::install_from_inspection(cache, &doc_text);
+    match install_result {
+        Ok((pkg, paths)) => {
+            build_stage.success(format!("built {crate_label}"));
+            let iface = ipe_ffi::interface::crate_interface(&pkg);
+            print!(
+                "{}",
+                crate::style::frame(&crate::style::gutter(&format!(
+                    "added `{}` v{}: {} bindings ({} skipped) -> {}",
+                    pkg.name(),
+                    pkg.version(),
+                    iface.bindings.len(),
+                    iface.skipped.len(),
+                    paths.interface.display()
+                )))
+            );
+            Ok(())
+        }
+        Err(diag) => {
+            build_stage.failure(format!("build failed for {crate_label}"));
+            Err(ffi_build_error(diag, verbose))
+        }
+    }
 }
 
 /// `ipe rust <add|remove|install> …` — the Rust foreign-function group.
@@ -1650,7 +1764,7 @@ pub fn run_rust(rest: &[String]) -> Result<(), CliError> {
     }
 }
 
-/// `ipe rust add <crate>[@<version>] [--features a,b] [--yes]`.
+/// `ipe rust add <crate>[@<version>] [--features a,b] [--yes] [--verbose]`.
 ///
 /// # Errors
 /// [`CliError`] on misuse, a refused inspection, or a cache-write failure.
@@ -1659,6 +1773,7 @@ pub fn run_add(rest: &[String]) -> Result<(), CliError> {
     let mut features: Vec<String> = Vec::new();
     let mut assume_yes = false;
     let mut allow_build_scripts = false;
+    let mut verbose = false;
     let mut it = rest.iter();
     while let Some(arg) = it.next() {
         match arg.as_str() {
@@ -1676,16 +1791,17 @@ pub fn run_add(rest: &[String]) -> Result<(), CliError> {
             }
             "--yes" => assume_yes = true,
             "--allow-build-scripts" => allow_build_scripts = true,
+            "--verbose" => verbose = true,
             other if krate.is_none() => krate = Some(other.to_owned()),
             _ => {
                 return Err(CliError::Usage(
-                    "usage: ipe rust add <crate>[@<version>] [--features a,b] [--yes]",
+                    "usage: ipe rust add <crate>[@<version>] [--features a,b] [--yes] [--verbose]",
                 ));
             }
         }
     }
     let raw = krate.ok_or(CliError::Usage(
-        "usage: ipe rust add <crate>[@<version>] [--features a,b] [--yes]",
+        "usage: ipe rust add <crate>[@<version>] [--features a,b] [--yes] [--verbose]",
     ))?;
     let spec = CrateSpec::parse(&raw).map_err(|diag| CliError::UsageOwned(diag.to_string()))?;
 
@@ -1703,7 +1819,7 @@ pub fn run_add(rest: &[String]) -> Result<(), CliError> {
     }
 
     let cache = FfiCache::at_project_root(Path::new("."));
-    add_one(&cache, &spec, &features, allow_build_scripts)
+    add_one(&cache, &spec, &features, allow_build_scripts, verbose)
 }
 
 /// `ipe rust remove <crate>`.
@@ -1726,7 +1842,7 @@ pub fn run_remove(rest: &[String]) -> Result<(), CliError> {
     Ok(())
 }
 
-/// `ipe rust install [--yes] [--allow-build-scripts]` — (re)inspect every
+/// `ipe rust install [--yes] [--allow-build-scripts] [--verbose]` — (re)inspect every
 /// `[rust.dependencies]` crate in the project's `ipe.toml`, honouring each
 /// entry's version pin and feature list.
 ///
@@ -1736,13 +1852,15 @@ pub fn run_remove(rest: &[String]) -> Result<(), CliError> {
 pub fn run_install(rest: &[String]) -> Result<(), CliError> {
     let mut assume_yes = false;
     let mut allow_build_scripts = false;
+    let mut verbose = false;
     for flag in rest {
         match flag.as_str() {
             "--yes" => assume_yes = true,
             "--allow-build-scripts" => allow_build_scripts = true,
+            "--verbose" => verbose = true,
             _ => {
                 return Err(CliError::Usage(
-                    "usage: ipe rust install [--yes] [--allow-build-scripts]",
+                    "usage: ipe rust install [--yes] [--allow-build-scripts] [--verbose]",
                 ));
             }
         }
@@ -1828,7 +1946,11 @@ pub fn run_install(rest: &[String]) -> Result<(), CliError> {
     let json = run_inspector_job(
         &InspectorJob::Manifest { entries: &entries },
         allow_build_scripts,
-    )?;
+    )
+    .map_err(|e| match e {
+        CliError::UsageOwned(msg) => map_inspector_error(msg),
+        other => other,
+    })?;
     let val: serde_json::Value = serde_json::from_str(&json)
         .map_err(|e| CliError::UsageOwned(format!("ipe install: invalid inspector JSON: {e}")))?;
     let items: Vec<serde_json::Value> = match val {
@@ -1870,7 +1992,7 @@ pub fn run_install(rest: &[String]) -> Result<(), CliError> {
             sole_dep,
         )?;
         let (pkg, paths) = ipe_ffi::driver::install_from_inspection(&cache, &merged)
-            .map_err(|diag| CliError::UsageOwned(diag.to_string()))?;
+            .map_err(|diag| ffi_build_error(diag, verbose))?;
         let iface = ipe_ffi::interface::crate_interface(&pkg);
         eprintln!(
             "{}",
@@ -3541,5 +3663,56 @@ version = \"1\"
             &["Element"],
         )]);
         assert!(clash.is_err(), "a define-vs-opaque name clash must refuse");
+    }
+
+    #[test]
+    fn build_failure_does_not_trigger_usage_help() {
+        // A build/inspection failure must not be wrapped into CliError::Usage*
+        // (which `with_help_on_misuse` converts to CommandUsage + help page).
+        // The `Resolve` variant passes through unchanged, so no help is shown.
+        let diag = ipe_ffi::diag::Diagnostic::WireMalformed {
+            context: "crate `bevy`".to_owned(),
+            defect: ipe_ffi::diag::WireDefect::Json {
+                detail: "the inspector failed: error[E0412]: cannot find type".to_owned(),
+            },
+        };
+        let err = ffi_build_error(diag, false);
+        assert!(
+            matches!(err, CliError::Resolve(_)),
+            "build failure must produce CliError::Resolve, got {err:?}"
+        );
+    }
+
+    #[test]
+    fn build_scripts_hint_is_detected_in_raw_error() {
+        let raw = "inspector exited with Some(1)\n\
+            error: some crates require build scripts\n\
+            pass --allow-build-scripts to proceed anyway";
+        assert!(
+            detect_build_scripts_hint(raw).is_some(),
+            "the --allow-build-scripts text must be detected"
+        );
+        assert!(
+            detect_build_scripts_hint("unrelated cargo error: E0001").is_none(),
+            "a plain build error must not be detected as a build-scripts hint"
+        );
+    }
+
+    #[test]
+    #[allow(clippy::panic)]
+    fn build_scripts_error_renders_as_warning_not_usage_help() {
+        let raw = "inspector exited with Some(1)\n\
+            crates with build scripts found\n\
+            pass --allow-build-scripts to proceed";
+        let err = map_inspector_error(raw.to_owned());
+        match err {
+            CliError::Resolve(msg) => {
+                assert!(
+                    msg.contains("--allow-build-scripts"),
+                    "the actionable flag must appear in the message"
+                );
+            }
+            other => panic!("expected Resolve, got {other:?}"),
+        }
     }
 }

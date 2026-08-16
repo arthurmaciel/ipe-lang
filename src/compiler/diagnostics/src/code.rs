@@ -437,6 +437,8 @@ code! {
     IPE_F4413 = "IPE-F4413", "no runtime jail can be established around the emitted app", "IPE-F4413";
     /// an author-asserted foreign call (`Rust.Ffi.call`) was refused
     IPE_F4414 = "IPE-F4414", "an author-asserted foreign call (Rust.Ffi.call) was refused", "IPE-F4414";
+    /// a crate being added needs a system library that is not installed
+    IPE_F4415 = "IPE-F4415", "a crate being added needs a system library that is not installed", "IPE-F4415";
 
     // -----------------------------------------------------------------------
     // Security consent (IPE-S####)
