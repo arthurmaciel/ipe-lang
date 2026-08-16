@@ -1,0 +1,3 @@
+serial-without-pk:rejected
+serial-with-pk:ok
+plain:ok

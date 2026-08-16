@@ -724,6 +724,9 @@ columnDef specs col =
     if not (validSqlIdent name) then
         Err (invalidIdentError "column" name)
 
+    else if isSerial specs name && not (hasPrimaryKey specs name) then
+        Err (serialWithoutPkError name)
+
     else
         Ok
             (String.concat
@@ -749,6 +752,20 @@ sqlType colType =
 
         CBool ->
             "INTEGER"
+
+
+isSerial : List ColumnSpec -> String -> Bool
+isSerial specs name =
+    List.any (\spec -> case spec of
+        Serial c -> c == name
+        _ -> False) specs
+
+
+hasPrimaryKey : List ColumnSpec -> String -> Bool
+hasPrimaryKey specs name =
+    List.any (\spec -> case spec of
+        PrimaryKey c -> c == name
+        _ -> False) specs
 
 
 columnConstraints : List ColumnSpec -> String -> String
@@ -822,6 +839,19 @@ noPrimaryKeyError : Error
 noPrimaryKeyError =
     Error.invalidInput
         "Ipe.Db.Store: this operation requires a primary key; declare one with Store.primaryKey"
+
+
+serialWithoutPkError : String -> Error
+serialWithoutPkError name =
+    Error.invalidInput
+        (String.concat
+            [ "Ipe.Db.Store: column \""
+            , name
+            , "\" is marked serial but has no primary key — SQLite requires AUTOINCREMENT on a PRIMARY KEY column; add Store.primaryKey \""
+            , name
+            , "\" to the store"
+            ]
+        )
 
 
 missingColumnError : String -> Error

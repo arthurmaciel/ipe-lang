@@ -520,3 +520,22 @@ fn db_decode_money() {
 fn db_decode_drift_fails_closed() {
     assert_runs_and_matches_oracle("db_decode_drift");
 }
+
+// ── serial-without-primaryKey guard ──────────────────────────────────────────
+
+/// `Store.createSql` rejects a `serial` column that has no matching `primaryKey`
+/// spec with a typed `Err` before emitting any DDL. `SQLite` requires
+/// `AUTOINCREMENT` only on `INTEGER PRIMARY KEY` columns; emitting it without
+/// `PRIMARY KEY` would produce DDL that fails at `Store.create` runtime.
+///
+/// Three pure checks (no DB connection):
+///
+/// * `serial-without-pk:rejected` — `createSql` returns `Err` for a store where
+///   `serial "id"` is present but `primaryKey "id"` is absent.
+/// * `serial-with-pk:ok` — `createSql` returns `Ok` with both
+///   `PRIMARY KEY` and `AUTOINCREMENT` when both specs are present.
+/// * `plain:ok` — a store with no serial column is unaffected.
+#[test]
+fn db_store_serial_pk_guard() {
+    assert_runs_and_matches_oracle("db_store_serial_pk_guard");
+}
