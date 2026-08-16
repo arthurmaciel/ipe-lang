@@ -709,13 +709,16 @@ fn collect_bindings(dir: &Path, out: &mut Vec<PathBuf>) -> Result<(), CliError> 
 /// A native-bearing package is reconciled by differential confinement over its
 /// declared set on the certified platform:
 ///
-/// 1. Gather the DCE-survivor wrapper set over the package's own inspected
-///    bindings (the SAME survivor gate the interface emitter uses). An empty set
-///    is un-exercisable ⇒ reject (`no_probeable_entrypoint`, kept). An
-///    unenumerable / opaque binding is read fail-closed.
-/// 2. Emit a link-reachability probe crate that references every surviving
-///    wrapper (never invokes one) into the emitted app crate, so building it
-///    links the package's whole foreign surface.
+/// 1. Read the wrapper set the app crate actually emitted into `src/ffi.rs`
+///    (the DCE-trimmed foreign surface). This is the reachability contract the
+///    probe must prove: the probe references exactly the wrappers the app crate
+///    contains, so building it links every wrapper that ships, and each bound
+///    crate's build-time reach is exercised by that build (the manifest declares
+///    every bound crate, so cargo compiles each one's `build.rs`). An empty set
+///    is un-exercisable ⇒ reject (`no_probeable_entrypoint`, kept).
+/// 2. Emit a link-reachability probe crate that references every emitted wrapper
+///    (never invokes one) into the emitted app crate, so building it links the
+///    package's whole shipped foreign surface.
 /// 3. Establish the declared-scoped jail and run [`reconcile_native`] with the
 ///    probe crate's REAL `cargo build` as the untrusted, wrapper-owned exercise.
 ///
@@ -880,10 +883,11 @@ fn which_on_path(bin: &str) -> Option<PathBuf> {
     target_os = "windows"
 ))]
 fn native_tier2_on_platform(audit: &NativeAudit) -> Result<Tier2Outcome, CliError> {
-    // 1. The DCE-survivor surface. Empty ⇒ un-exercisable ⇒ reject (never a
-    //    vacuous clean). The package cannot narrow it — it is derived from the
-    //    package's own inspected bindings, not authored by the package.
-    let wrapper_paths = gather_survivor_paths(audit.root)?;
+    // 1. The wrappers the app crate actually emitted into `src/ffi.rs` — the
+    //    DCE-trimmed foreign surface the artifact ships. Empty ⇒ un-exercisable ⇒
+    //    reject (never a vacuous clean). The package cannot narrow it — it is
+    //    read from the compiler's own emitted output, not authored by the package.
+    let wrapper_paths = emitted_wrapper_paths(audit.emitted_dir)?;
     if wrapper_paths.is_empty() {
         return Err(CliError::PackageAudit(no_probeable_entrypoint()));
     }
@@ -929,6 +933,13 @@ fn native_tier2_on_platform(audit: &NativeAudit) -> Result<Tier2Outcome, CliErro
     // on this path (it drives only the wrapper-probe-only shape's full run).
     let mut ro_binds = default_ro_binds();
     ro_binds.extend(toolchain_ro_binds());
+    // The jailed `cargo build` reads the emitted app crate (which carries the
+    // probe bin) and every crate its manifest pins by absolute path (the runtime
+    // and each bound Rust dependency). Re-expose them read-only so the build can
+    // read but never write them. Under the jail's `--ro-bind / /`, a crate under
+    // an unmasked path is already readable and re-binding is idempotent; the
+    // re-bind only matters when a crate lives under a masked tree (`/tmp`, home).
+    ro_binds.extend(emitted_crate_ro_binds(audit.emitted_dir));
     let runner = JailProbeRunner::new(
         &tools,
         wrapper,
@@ -1017,17 +1028,30 @@ fn probe_scratch_dir(root: &Path) -> PathBuf {
     std::env::temp_dir().join(format!("ipe-tier2-probe-{slug}-{}", std::process::id()))
 }
 
-/// The union of every installed crate's DCE-survivor wrapper paths, re-derived
-/// from the TRUSTED `<slug>.pkg.json` source of record (never the on-disk
-/// `_bindings.rs` text, which the loader does not trust).
+/// The fully-qualified path of every wrapper `pub fn` the compiler emitted into
+/// the app crate's `src/ffi.rs`, in the app crate's module tree
+/// (`crate::ffi::<slug>::<ident>`).
 ///
-/// A package binding a Rust dependency whose cache is present but decodes to no
-/// survivors returns an empty set (the caller rejects it). A cache that cannot be
-/// read fails closed as an IO error.
+/// This is the reachability contract's source of truth: the probe must reference
+/// exactly the wrappers the shipped artifact CONTAINS, never a wider set. The
+/// emitter DCE-trims `src/ffi.rs` to the wrappers the program reaches, so reading
+/// the pkg.json survivor set instead (every binding-survivor, reached or not)
+/// would reference wrappers the app crate never emitted — a phantom symbol the
+/// probe cannot link. Reading the emitted file aligns the probe's referenced set
+/// with the emitter's DCE gate by construction. The build-time reach of every
+/// bound crate is still exercised: the manifest declares each bound crate, so
+/// cargo compiles each one's `build.rs` regardless of which wrappers link.
+///
+/// `src/ffi.rs` nests each crate's wrappers under `pub mod <slug> { … }`; a
+/// wrapper is a `pub fn <ident>(` inside the current module. A returned path is
+/// `crate::ffi::<slug>::<ident>`.
+///
+/// A package whose emitted `src/ffi.rs` is absent or carries no wrapper returns
+/// an empty set (the caller rejects it). Returned sorted and deduplicated for a
+/// deterministic probe.
 ///
 /// # Errors
-/// [`CliError::Io`] on a cache read failure; [`CliError::PackageAudit`] when a
-/// `pkg.json` cannot be decoded (an unusable inspection must never seed a certify).
+/// [`CliError::Io`] when `src/ffi.rs` exists but cannot be read.
 #[cfg(any(
     all(
         target_os = "linux",
@@ -1037,49 +1061,36 @@ fn probe_scratch_dir(root: &Path) -> PathBuf {
     target_os = "freebsd",
     target_os = "windows"
 ))]
-fn gather_survivor_paths(root: &Path) -> Result<Vec<String>, CliError> {
-    let cache_root = root.join(".ipe/cache/ffi/rust");
-    if !cache_root.is_dir() {
+fn emitted_wrapper_paths(emitted_dir: &Path) -> Result<Vec<String>, CliError> {
+    let ffi_rs = emitted_dir.join("src").join("ffi.rs");
+    if !ffi_rs.is_file() {
         return Ok(Vec::new());
     }
-    let entries = std::fs::read_dir(&cache_root).map_err(|e| CliError::Io {
-        path: cache_root.clone(),
+    let text = std::fs::read_to_string(&ffi_rs).map_err(|e| CliError::Io {
+        path: ffi_rs.clone(),
         source: e,
     })?;
-    let mut pkg_jsons: Vec<PathBuf> = Vec::new();
-    for entry in entries {
-        let entry = entry.map_err(|e| CliError::Io {
-            path: cache_root.clone(),
-            source: e,
-        })?;
-        let path = entry.path();
-        if path
-            .file_name()
-            .and_then(|n| n.to_str())
-            .is_some_and(|n| n.ends_with(".pkg.json"))
-        {
-            pkg_jsons.push(path);
-        }
-    }
-    pkg_jsons.sort();
     let mut paths: BTreeSet<String> = BTreeSet::new();
-    for pkg_json in pkg_jsons {
-        let text = std::fs::read_to_string(&pkg_json).map_err(|e| CliError::Io {
-            path: pkg_json.clone(),
-            source: e,
-        })?;
-        let pkg = ipe_ffi::pkginfo::PkgInfo::decode_json(&text).map_err(|e| {
-            CliError::PackageAudit(Rejection {
-                check: Check::NativeTier2,
-                message: format!(
-                    "the FFI inspection `{}` could not be decoded ({e}); Tier-2 refuses to certify \
-                     a package whose native surface it cannot enumerate (fail-closed)",
-                    pkg_json.display()
-                ),
-            })
-        })?;
-        let slug = ipe_ffi::driver::slugify(pkg.name());
-        paths.extend(ipe_ffi::probe::surviving_wrapper_paths(&pkg, &slug));
+    let mut current_slug: Option<String> = None;
+    for line in text.lines() {
+        let trimmed = line.trim_start();
+        if let Some(rest) = trimmed.strip_prefix("pub mod ") {
+            let slug: String = rest
+                .chars()
+                .take_while(|c| c.is_alphanumeric() || *c == '_')
+                .collect();
+            if !slug.is_empty() {
+                current_slug = Some(slug);
+            }
+        } else if let Some(rest) = trimmed.strip_prefix("pub fn ") {
+            let ident: String = rest
+                .chars()
+                .take_while(|c| c.is_alphanumeric() || *c == '_')
+                .collect();
+            if let (Some(slug), false) = (current_slug.as_ref(), ident.is_empty()) {
+                paths.insert(format!("crate::ffi::{slug}::{ident}"));
+            }
+        }
     }
     Ok(paths.into_iter().collect())
 }
@@ -1116,10 +1127,17 @@ fn emit_probe_and_build_argv(
         path: scratch.to_path_buf(),
         source: e,
     })?;
-    // The probe bin's crate root declares `mod ffi;` (a bin is its own crate root,
-    // so it re-reads the SSOT `src/ffi.rs`) then references the survivors.
-    let mut probe_src = String::from("mod ffi;\n");
-    probe_src.push_str(&ipe_ffi::probe::emit_probe_main(wrapper_paths));
+    // The probe bin is its own crate root, so it does not inherit `main.rs`'s
+    // crate-root runtime prelude. `src/ffi.rs` opens with `use crate::*;` and
+    // names `IpeResult` / `IpeError` / `ok_res` / `ipe_error_from_panic`
+    // unqualified, expecting the crate root to re-export the runtime — exactly
+    // what `main.rs` provides. Re-export the SAME runtime prelude here (then
+    // `mod ffi;`, which re-reads the SSOT `src/ffi.rs`) so the shared wrappers
+    // resolve against the probe crate root too. The runtime is an extern crate in
+    // the emitted app crate (the dep-model emit the audit build produces), so the
+    // glob resolves against it directly.
+    let crate_prelude = "pub use ipe_runtime::*;\npub use ipe_runtime::error::IpeError;\nmod ffi;";
+    let probe_src = ipe_ffi::probe::emit_probe_main(wrapper_paths, crate_prelude);
     let probe_file = emitted_dir.join("src").join("tier2_probe.rs");
     std::fs::write(&probe_file, &probe_src).map_err(|e| CliError::Io {
         path: probe_file.clone(),
@@ -1144,10 +1162,27 @@ fn emit_probe_and_build_argv(
 
     let target_dir = scratch.join("target");
     let cargo = absolute_cargo().unwrap_or_else(|| PathBuf::from("cargo"));
+
+    // Resolve the dependency graph to a `Cargo.lock` in the emitted crate BEFORE
+    // the jailed build runs. The jail binds the emitted crate read-only, so a
+    // build that had to write the lock in-place would fail on the read-only mount.
+    // Generating the lock here (outside the jail, from the toolchain's pre-fetched
+    // registry cache) lets the jailed build run `--locked --offline`: it reads the
+    // resolved graph and writes nothing but its own scratch-local target dir. A
+    // lock-generation failure is not itself a jail verdict; the jailed `--locked`
+    // build surfaces any residual resolution gap as a build failure, fail-closed.
+    let _ = std::process::Command::new(&cargo)
+        .arg("generate-lockfile")
+        .arg("--offline")
+        .arg("--manifest-path")
+        .arg(&manifest_path)
+        .output();
+
     Ok(vec![
         cargo.into_os_string(),
         OsString::from("build"),
         OsString::from("--offline"),
+        OsString::from("--locked"),
         OsString::from("--bin"),
         OsString::from("tier2_probe"),
         OsString::from("--manifest-path"),
@@ -1267,6 +1302,124 @@ pub fn toolchain_ro_binds() -> Vec<PathBuf> {
 #[must_use]
 pub const fn toolchain_ro_binds() -> Vec<PathBuf> {
     Vec::new()
+}
+
+/// The read-only binds the emitted app crate (carrying the probe bin) and every
+/// crate its manifest pins by absolute `path = "…"` need inside the jail.
+///
+/// The jailed `cargo build` reads `emitted_dir` (the probe crate's manifest and
+/// `src/`) and each absolute path dependency the emitted `Cargo.toml` declares —
+/// the vendored runtime and any bound Rust crate pinned to a local path. Each is
+/// re-exposed read-only so the build can read but never write it. A `path = "…"`
+/// value that is not absolute, or that does not exist, is skipped: only a
+/// resolvable directory is bound.
+#[cfg(any(
+    all(
+        target_os = "linux",
+        any(target_arch = "x86_64", target_arch = "aarch64")
+    ),
+    target_os = "macos",
+    target_os = "freebsd"
+))]
+fn emitted_crate_ro_binds(emitted_dir: &Path) -> Vec<PathBuf> {
+    let mut binds: Vec<PathBuf> = Vec::new();
+    if emitted_dir.is_dir() {
+        binds.push(emitted_dir.to_path_buf());
+    }
+    let manifest = emitted_dir.join("Cargo.toml");
+    if let Ok(text) = std::fs::read_to_string(&manifest) {
+        for path in manifest_path_dependencies(&text) {
+            if path.is_absolute() && path.exists() {
+                if let Some(root) = cargo_workspace_root(&path) {
+                    binds.push(root);
+                } else {
+                    binds.push(path);
+                }
+            }
+        }
+    }
+    binds
+}
+
+/// The Cargo workspace root that governs the crate at `crate_dir`, or `None` when
+/// the crate is standalone (its own `Cargo.toml` declares `[workspace]`, or no
+/// ancestor does).
+///
+/// A path dependency whose `Cargo.toml` inherits a field from the workspace
+/// (`version.workspace = true`) fails to build unless the workspace root manifest
+/// is also readable. Binding the workspace root instead of the bare crate dir
+/// re-exposes both the crate and the root manifest it inherits from.
+#[cfg(any(
+    all(
+        target_os = "linux",
+        any(target_arch = "x86_64", target_arch = "aarch64")
+    ),
+    target_os = "macos",
+    target_os = "freebsd"
+))]
+fn cargo_workspace_root(crate_dir: &Path) -> Option<PathBuf> {
+    let declares_workspace = |dir: &Path| -> bool {
+        std::fs::read_to_string(dir.join("Cargo.toml"))
+            .is_ok_and(|t| t.lines().any(|l| l.trim_start().starts_with("[workspace]")))
+    };
+    if declares_workspace(crate_dir) {
+        return None;
+    }
+    let mut dir = crate_dir.parent();
+    while let Some(candidate) = dir {
+        if declares_workspace(candidate) {
+            return Some(candidate.to_path_buf());
+        }
+        dir = candidate.parent();
+    }
+    None
+}
+
+/// Windows: the jail ACL-grants an existing view of the real filesystem rather
+/// than building a bind-mount namespace, so no path re-binds are needed.
+#[cfg(target_os = "windows")]
+fn emitted_crate_ro_binds(_emitted_dir: &Path) -> Vec<PathBuf> {
+    Vec::new()
+}
+
+/// Every `path = "<value>"` under a `[…dependencies]` table in a `Cargo.toml`,
+/// as a [`PathBuf`]. A parse-free scan: a manifest line whose trimmed form is
+/// `path = "…"`, or that carries an inline `path = "…"` key, yields the quoted
+/// value. Values are returned in manifest order; the caller filters to absolute,
+/// existing directories.
+#[cfg(any(
+    all(
+        target_os = "linux",
+        any(target_arch = "x86_64", target_arch = "aarch64")
+    ),
+    target_os = "macos",
+    target_os = "freebsd"
+))]
+fn manifest_path_dependencies(manifest: &str) -> Vec<PathBuf> {
+    let mut out: Vec<PathBuf> = Vec::new();
+    for line in manifest.lines() {
+        let mut rest = line;
+        while let Some(pos) = rest.find("path") {
+            let after = &rest[pos + "path".len()..];
+            let after = after.trim_start();
+            let Some(after) = after.strip_prefix('=') else {
+                rest = &rest[pos + "path".len()..];
+                continue;
+            };
+            let after = after.trim_start();
+            let Some(after) = after.strip_prefix('"') else {
+                rest = after;
+                continue;
+            };
+            if let Some(end) = after.find('"') {
+                out.push(PathBuf::from(&after[..end]));
+                rest = &after[end + 1..];
+            } else {
+                break;
+            }
+        }
+    }
+    out
 }
 
 /// The Cargo/Rustup home env the jailed `cargo build` needs to resolve its
@@ -1904,6 +2057,98 @@ mod tests {
         assert!(
             wrapper_idx < axis_idx && axis_idx < sep_idx && sep_idx < cargo_idx,
             "wrapper, then flags, then `--`, then the untrusted build: {argv:?}"
+        );
+    }
+
+    #[cfg(any(
+        all(
+            target_os = "linux",
+            any(target_arch = "x86_64", target_arch = "aarch64")
+        ),
+        target_os = "macos",
+        target_os = "freebsd",
+        target_os = "windows"
+    ))]
+    #[test]
+    fn emitted_wrapper_paths_reads_exactly_the_pub_fns_under_each_module() {
+        // The probe references exactly what `src/ffi.rs` emitted: one path per
+        // `pub fn` under its `pub mod <slug>`, sorted and deduplicated. A wrapper
+        // the emitter DCE-trimmed away is absent from the emitted file, so it is
+        // absent from the referenced set — the probe surface is the shipped one.
+        let dir = std::env::temp_dir().join(format!("ipe-emitted-paths-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join("src")).expect("src dir");
+        std::fs::write(
+            dir.join("src").join("ffi.rs"),
+            "pub mod tm {\n\
+             use crate::*;\n\
+             // IPE-FFI-WRAPPER BEGIN shift\n\
+             pub fn tm_shift(a: i64) -> i64 { a }\n\
+             // IPE-FFI-WRAPPER END\n\
+             pub fn tm_classify(a: i64) -> i64 { a }\n\
+             }\n\
+             pub use tm::*;\n\
+             pub mod other {\n\
+             pub fn other_go() {}\n\
+             }\n\
+             pub use other::*;\n",
+        )
+        .expect("write ffi.rs");
+        let paths = emitted_wrapper_paths(&dir).expect("read emitted paths");
+        assert_eq!(
+            paths,
+            vec![
+                "crate::ffi::other::other_go".to_owned(),
+                "crate::ffi::tm::tm_classify".to_owned(),
+                "crate::ffi::tm::tm_shift".to_owned(),
+            ],
+            "one sorted path per emitted `pub fn` under its module"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[cfg(any(
+        all(
+            target_os = "linux",
+            any(target_arch = "x86_64", target_arch = "aarch64")
+        ),
+        target_os = "macos",
+        target_os = "freebsd",
+        target_os = "windows"
+    ))]
+    #[test]
+    fn emitted_wrapper_paths_is_empty_when_no_ffi_rs() {
+        let dir = std::env::temp_dir().join(format!("ipe-emitted-none-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("dir");
+        assert!(
+            emitted_wrapper_paths(&dir)
+                .expect("no ffi.rs is empty")
+                .is_empty(),
+            "a package with no emitted src/ffi.rs has no probeable surface"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[cfg(any(
+        all(
+            target_os = "linux",
+            any(target_arch = "x86_64", target_arch = "aarch64")
+        ),
+        target_os = "macos",
+        target_os = "freebsd"
+    ))]
+    #[test]
+    fn manifest_path_dependencies_extracts_absolute_and_inline_paths() {
+        let manifest = "[dependencies]\n\
+             ipe_runtime = { package = \"ipe-runtime-rust\", path = \"/abs/runtime\" }\n\
+             csum = { path = \"/abs/csum\" }\n\
+             serde = \"1\"\n";
+        let deps = manifest_path_dependencies(manifest);
+        assert_eq!(
+            deps,
+            vec![PathBuf::from("/abs/runtime"), PathBuf::from("/abs/csum")],
+            "every `path = \"…\"` value, in manifest order"
         );
     }
 }
