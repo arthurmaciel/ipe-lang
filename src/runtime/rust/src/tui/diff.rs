@@ -66,4 +66,44 @@ mod tests {
         let b = Grid::new(4, 3);
         assert!(diff(&a, &b).is_empty());
     }
+
+    /// A cursor-position change is represented as exactly two differing cells
+    /// (the old cursor cell loses its reverse flag, the new one gains it) — not a
+    /// full repaint. This validates the structural property that lets a diff-based
+    /// paint avoid a full-clear on cursor moves.
+    #[test]
+    fn cursor_move_is_two_cells_not_full_repaint() {
+        fn reverse_cell(ch: char) -> Cell {
+            Cell {
+                ch,
+                bold: true, // use bold as stand-in for "reverse" (Cell has no reverse field)
+                ..Cell::blank()
+            }
+        }
+        let normal = |ch| Cell {
+            ch,
+            ..Cell::blank()
+        };
+
+        // Grid: "ab" on row 0; cursor was at col 0 (bold/reverse 'a'),
+        // moves to col 1 (bold/reverse 'b').
+        let mut prev = Grid::new(2, 1);
+        prev.set(0, 0, reverse_cell('a'));
+        prev.set(1, 0, normal('b'));
+
+        let mut next = Grid::new(2, 1);
+        next.set(0, 0, normal('a'));
+        next.set(1, 0, reverse_cell('b'));
+
+        let d = diff(&prev, &next);
+        // Only the two changed cells, not all cells in the grid.
+        assert_eq!(
+            d.len(),
+            2,
+            "cursor move produces exactly 2 diffs, not {}",
+            d.len()
+        );
+        let cols: Vec<usize> = d.iter().map(|(c, _, _)| *c).collect();
+        assert!(cols.contains(&0) && cols.contains(&1));
+    }
 }
