@@ -534,7 +534,7 @@ notes = "sky.toml has no go.dependencies; source imports Sky.Core.*/Std.* only â
 
 [[example]]
 name = "08-notes-app"
-patch = "rename-map"
+patch = "rename-map+ipe-edit"
 go_ffi = true
 shape  = "server"
 verify = "build"

@@ -351,11 +351,12 @@ fn check_help_page_names_the_command() -> TestResult {
 
 #[test]
 fn check_rejects_an_unexpected_option() -> TestResult {
-    let (ok, _, stderr) = run_ipe(&["type-check", "--json"])?;
+    // `--json` is now a valid flag; use a genuinely unknown flag here.
+    let (ok, _, stderr) = run_ipe(&["type-check", "--definitely-unknown-flag-xyz"])?;
     assert!(!ok, "an unknown flag is misuse");
     assert!(
-        stderr.contains("unexpected option"),
-        "the misuse reason must name the option, got:\n{stderr}"
+        stderr.contains("unknown flag"),
+        "the misuse reason must name the flag, got:\n{stderr}"
     );
     Ok(())
 }

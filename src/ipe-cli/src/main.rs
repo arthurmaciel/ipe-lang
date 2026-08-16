@@ -22,7 +22,9 @@ fn main() -> ExitCode {
             | ipe::CliError::ToolchainMissing(_)
             | ipe::CliError::EmittedBuildFailed { .. }
             | ipe::CliError::HealthCritical
-            | ipe::CliError::EjectUnsupported { .. }),
+            | ipe::CliError::EjectUnsupported { .. }
+            // The JSON was already written to stderr; nothing more to print.
+            | ipe::CliError::DiagnosticJsonEmitted),
         ) => {
             eprintln!("{err}");
             ExitCode::FAILURE

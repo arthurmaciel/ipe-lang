@@ -31,9 +31,10 @@ use core::fmt::Write as _;
 
 use crate::code::{ISSUE_TRACKER_URL, Severity, title};
 use crate::diagnostic::{
-    AppShape, CaseDefect, CodecAutoRejection, Diagnostic, Expected, ExpectedSet, ExposingDefect,
-    Feature, HeaderDefect, HelpLine, Hint, IfDefect, LetDefect, LowerError, NameError, ParseError,
-    SealRejection, SpanRole, Suggestion, TokenKind, TyDoc, TypeDeclDefect, TypeError,
+    AppShape, Applicability, CaseDefect, CodecAutoRejection, Diagnostic, Expected, ExpectedSet,
+    ExposingDefect, Feature, HeaderDefect, HelpLine, Hint, IfDefect, LetDefect, LowerError,
+    NameError, ParseError, SealRejection, SpanRole, Suggestion, TokenKind, TyDoc, TypeDeclDefect,
+    TypeError,
 };
 use crate::span::Span;
 
@@ -669,6 +670,185 @@ pub fn plain_message(d: &Diagnostic, source: &str) -> String {
         "\nnote: run `ipe explain {}` for more information",
         code.as_str()
     );
+    out
+}
+
+/// Render a diagnostic as a stable JSON object for machine consumers.
+///
+/// Schema (every field always present, `null` only when structurally absent):
+///
+/// ```text
+/// {
+///   "code": "IPE-T0001",
+///   "severity": "error" | "warning" | "bug",
+///   "title": "TYPE MISMATCH",
+///   "message": "I was expecting…",
+///   "primary_span": {
+///     "file": "src/Main.ipe",
+///     "byte_lo": 42, "byte_hi": 48,
+///     "line": 3, "col": 5,
+///     "line_end": 3, "col_end": 11
+///   } | null,
+///   "secondary_spans": [
+///     { "file": "…", "byte_lo": …, "byte_hi": …,
+///       "line": …, "col": …, "line_end": …, "col_end": …,
+///       "role": "first_definition" | "expected_here" }
+///   ],
+///   "hints": ["…"],
+///   "suggestions": [
+///     { "byte_lo": …, "byte_hi": …,
+///       "replacement": "…",
+///       "applicability": "machine-applicable" | "maybe-incorrect" | "has-placeholders" }
+///   ],
+///   "explain_ref": "ipe explain IPE-T0001"
+/// }
+/// ```
+///
+/// The object ends with a newline so callers can concatenate records (one per
+/// line) without inserting separators. Escaping follows RFC 8259: `\n`, `\r`,
+/// `\t`, `\\`, `\"`, and `\uXXXX` for other ASCII control characters — no
+/// other escaping is needed for UTF-8 content.
+#[allow(clippy::too_many_lines)] // one linear pass over help lines plus the JSON assembly — splitting reads worse
+#[must_use]
+pub fn render_json(d: &Diagnostic, file: &str, source: &str) -> String {
+    let code = d.code();
+    let severity_str = match d.severity() {
+        Severity::Error => "error",
+        Severity::Warning => "warning",
+        Severity::Bug => "bug",
+    };
+    let title_str = title(code);
+
+    // prose_band gives the human-readable message sentence.
+    let message_str = prose_band(d);
+
+    // Primary span.
+    let primary = d.primary_span();
+    let primary_json = if primary == crate::span::Span::DUMMY {
+        "null".to_owned()
+    } else {
+        let lo = locate(source, primary.lo);
+        let hi = locate(source, primary.hi);
+        format!(
+            "{{\"file\":{},\"byte_lo\":{},\"byte_hi\":{},\
+             \"line\":{},\"col\":{},\"line_end\":{},\"col_end\":{}}}",
+            json_str(file),
+            primary.lo,
+            primary.hi,
+            lo.line,
+            lo.col,
+            hi.line,
+            hi.col,
+        )
+    };
+
+    // Split help lines into secondary-spans, hints, and suggestions.
+    let help = d.help();
+    let mut secondary_json_parts: Vec<String> = Vec::new();
+    let mut hint_json_parts: Vec<String> = Vec::new();
+    let mut suggestion_json_parts: Vec<String> = Vec::new();
+
+    for line in &help {
+        match line {
+            HelpLine::SecondarySpan { span, role } => {
+                if *span != crate::span::Span::DUMMY {
+                    let lo = locate(source, span.lo);
+                    let hi = locate(source, span.hi);
+                    let role_str = match role {
+                        SpanRole::FirstDefinition => "first_definition",
+                        SpanRole::Opener => "opener",
+                        SpanRole::Definition => "definition",
+                    };
+                    secondary_json_parts.push(format!(
+                        "{{\"file\":{},\"byte_lo\":{},\"byte_hi\":{},\
+                         \"line\":{},\"col\":{},\"line_end\":{},\"col_end\":{},\
+                         \"role\":{}}}",
+                        json_str(file),
+                        span.lo,
+                        span.hi,
+                        lo.line,
+                        lo.col,
+                        hi.line,
+                        hi.col,
+                        json_str(role_str),
+                    ));
+                }
+            }
+            HelpLine::Suggest(s) => {
+                let applicability_str = match s.applicability {
+                    Applicability::MachineApplicable => "machine-applicable",
+                    Applicability::MaybeIncorrect => "maybe-incorrect",
+                    Applicability::HasPlaceholders => "has-placeholders",
+                };
+                suggestion_json_parts.push(format!(
+                    "{{\"byte_lo\":{},\"byte_hi\":{},\"replacement\":{},\"applicability\":{}}}",
+                    s.span.lo,
+                    s.span.hi,
+                    json_str(&s.replacement),
+                    json_str(applicability_str),
+                ));
+            }
+            // Flatten all other help lines (note/hint/did-you-mean/missing-constructor)
+            // into a plain hint string.
+            other => {
+                if let Some(text) = help_text(other) {
+                    hint_json_parts.push(json_str(&text));
+                }
+            }
+        }
+    }
+
+    // For CompilerBug, add its detail + the tracker URL as hints.
+    if d.severity() == Severity::Bug {
+        if let Diagnostic::CompilerBug { detail, .. } = d
+            && !detail.is_empty()
+        {
+            hint_json_parts.push(json_str(detail));
+        }
+        hint_json_parts.push(json_str("this is a bug in the compiler, please report it"));
+        hint_json_parts.push(json_str(&format!("report at: {ISSUE_TRACKER_URL}")));
+    }
+
+    let secondaries_json = format!("[{}]", secondary_json_parts.join(","));
+    let hints_json = format!("[{}]", hint_json_parts.join(","));
+    let suggestions_json = format!("[{}]", suggestion_json_parts.join(","));
+    let explain_ref = json_str(&format!("ipe explain {}", code.as_str()));
+
+    format!(
+        "{{\"code\":{},\"severity\":{},\"title\":{},\"message\":{},\
+         \"primary_span\":{},\"secondary_spans\":{},\
+         \"hints\":{},\"suggestions\":{},\"explain_ref\":{}}}\n",
+        json_str(code.as_str()),
+        json_str(severity_str),
+        json_str(title_str),
+        json_str(&message_str),
+        primary_json,
+        secondaries_json,
+        hints_json,
+        suggestions_json,
+        explain_ref,
+    )
+}
+
+/// Escape a string for JSON: `\\`, `"`, and ASCII control characters.
+fn json_str(s: &str) -> String {
+    let mut out = String::with_capacity(s.len() + 2);
+    out.push('"');
+    for ch in s.chars() {
+        match ch {
+            '"' => out.push_str("\\\""),
+            '\\' => out.push_str("\\\\"),
+            '\n' => out.push_str("\\n"),
+            '\r' => out.push_str("\\r"),
+            '\t' => out.push_str("\\t"),
+            c if (c as u32) < 0x20 => {
+                // Other ASCII control characters — encode as \uXXXX.
+                let _ = core::fmt::write(&mut out, format_args!("\\u{:04X}", c as u32));
+            }
+            c => out.push(c),
+        }
+    }
+    out.push('"');
     out
 }
 
@@ -2382,5 +2562,116 @@ mod tests {
         let f = TyDoc::Fun(Box::new(con("Int")), Box::new(con("Bool")));
         let g = TyDoc::Fun(Box::new(f), Box::new(con("Char")));
         assert_eq!(ty_to_string(&g), "(Int -> Bool) -> Char");
+    }
+
+    // -------------------------------------------------------------------------
+    // render_json unit tests
+    // -------------------------------------------------------------------------
+
+    #[test]
+    fn render_json_schema_shape() {
+        let diag = Diagnostic::Type {
+            span: Span::new(10, 15),
+            msg: TypeError::TypeMismatch {
+                expected: Box::new(TyDoc::Unit),
+                found: Box::new(TyDoc::Var("a".into())),
+                definition: None,
+                path: Box::new([]),
+            },
+        };
+        let source = "module Main exposing (main)\nmain = 42\n";
+        let json = render_json(&diag, "Main.ipe", source);
+
+        // Must end with a newline for line-oriented consumers.
+        assert!(json.ends_with('\n'), "render_json must end with newline");
+
+        let trimmed = json.trim();
+        assert!(
+            trimmed.starts_with('{') && trimmed.ends_with('}'),
+            "render_json must produce a JSON object: {json:?}"
+        );
+
+        // Required fields.
+        for field in &[
+            "code",
+            "severity",
+            "title",
+            "message",
+            "primary_span",
+            "secondary_spans",
+            "hints",
+            "suggestions",
+            "explain_ref",
+        ] {
+            assert!(
+                trimmed.contains(&format!("\"{field}\":")),
+                "missing {field:?} in: {json:?}"
+            );
+        }
+
+        assert!(
+            trimmed.contains("\"IPE-T0001\""),
+            "code must be IPE-T0001: {json:?}"
+        );
+        assert!(
+            trimmed.contains("\"severity\":\"error\""),
+            "severity must be error: {json:?}"
+        );
+        assert!(
+            trimmed.contains("\"primary_span\":{"),
+            "primary_span must be an object: {json:?}"
+        );
+        assert!(
+            trimmed.contains("\"byte_lo\":10"),
+            "byte_lo must be 10: {json:?}"
+        );
+        assert!(
+            trimmed.contains("\"byte_hi\":15"),
+            "byte_hi must be 15: {json:?}"
+        );
+        assert!(
+            trimmed.contains("\"explain_ref\":\"ipe explain IPE-T0001\""),
+            "explain_ref must name the code: {json:?}"
+        );
+    }
+
+    #[test]
+    fn render_json_escapes_special_chars() {
+        let diag = Diagnostic::CompilerBug {
+            where_: "lower",
+            detail: "detail with \"quotes\" and\nnewlines".into(),
+        };
+        let json = render_json(&diag, "src/Main.ipe", "");
+        let trimmed = json.trim();
+
+        assert!(
+            trimmed.contains("\\\"quotes\\\""),
+            "double quotes must be escaped: {json:?}"
+        );
+        assert!(
+            trimmed.contains("\\n"),
+            "newlines must be escaped: {json:?}"
+        );
+        assert!(
+            trimmed.starts_with('{') && trimmed.ends_with('}'),
+            "escaped JSON must still be a valid object shape: {json:?}"
+        );
+    }
+
+    #[test]
+    fn render_json_compiler_bug_has_null_primary_span() {
+        let diag = Diagnostic::CompilerBug {
+            where_: "lower",
+            detail: "oops".into(),
+        };
+        let json = render_json(&diag, "src/Main.ipe", "");
+        assert!(
+            json.contains("\"primary_span\":null"),
+            "CompilerBug must have null primary_span: {json:?}"
+        );
+        assert!(
+            json.contains("\"severity\":\"bug\""),
+            "CompilerBug severity must be 'bug': {json:?}"
+        );
     }
 }

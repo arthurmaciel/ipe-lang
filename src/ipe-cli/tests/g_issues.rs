@@ -62,6 +62,8 @@ mod golden_i825_generic_decoder_send;
 mod golden_i858_update_base_nonclone_reuse_seal;
 #[path = "g_issues/golden_i963_retry_policy_field_access_ice.rs"]
 mod golden_i963_retry_policy_field_access_ice;
+#[path = "g_issues/golden_i979_retry_policy_exact_shape_user_record.rs"]
+mod golden_i979_retry_policy_exact_shape_user_record;
 #[path = "g_issues/golden_i981_fn_value_move_then_call.rs"]
 mod golden_i981_fn_value_move_then_call;
 #[path = "g_issues/golden_i984_cons_fn_value_arc_carrier.rs"]

@@ -1,0 +1,57 @@
+module Main exposing (main)
+
+import Ipe.Io as Io
+import Ipe.String
+
+
+-- A USER record that shares the exact five RetryPolicy field names
+-- (`baseMs`, `jitter`, `kind`, `maxAttempts`, `shouldRetry`) but carries a
+-- concrete non-Error predicate type (`Int -> Bool`) for `shouldRetry`.
+--
+-- This is the boundary the RetryPolicy exemption guards: the five-field closed
+-- shape with a function-typed `shouldRetry` is a VALID user record — it is NOT
+-- a bypass of IPE-L0107 because the fn-value-reuse carrier (not the derive
+-- carrier) handles the `shouldRetry` field.  L0107 protects the generic DERIVE
+-- path; this record never touches that path.  The test documents the intended
+-- boundary by exercising it: ipe must accept, emit, and run the program.
+
+
+type alias Policy =
+    { baseMs : Int
+    , jitter : Bool
+    , kind : Int
+    , maxAttempts : Int
+    , shouldRetry : Int -> Bool
+    }
+
+
+makePolicy : Int -> Bool -> Policy
+makePolicy attempts useJitter =
+    { baseMs = 100
+    , jitter = useJitter
+    , kind = 1
+    , maxAttempts = attempts
+    , shouldRetry = \n -> n < attempts
+    }
+
+
+applyPolicy : Policy -> Int -> String
+applyPolicy p attempt =
+    if (p.shouldRetry) attempt then
+        "retry"
+
+    else
+        "done"
+
+
+main =
+    let
+        p = makePolicy 3 True
+    in
+    Io.println
+        (applyPolicy p 1
+            ++ ","
+            ++ applyPolicy p 5
+            ++ ","
+            ++ String.fromInt p.maxAttempts
+        )
