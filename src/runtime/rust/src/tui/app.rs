@@ -101,9 +101,17 @@ impl Drop for TuiGuard {
 }
 
 fn paint(frame: &str) {
+    // Clear and frame content are concatenated into one buffer so the terminal
+    // emulator receives a single write: the prior content disappears and the new
+    // frame appears in one step, never leaving a visible blank between them.
+    // Two separate write_all calls (clear then frame) would each flush to the tty
+    // independently, letting the emulator render the blank clear before the content
+    // arrives — the structural cause of the cursor-move flicker.
+    let mut buf = String::with_capacity(CLEAR_HOME.len() + frame.len());
+    buf.push_str(CLEAR_HOME);
+    buf.push_str(frame);
     let mut out = std::io::stdout();
-    let _ = out.write_all(CLEAR_HOME.as_bytes());
-    let _ = out.write_all(frame.as_bytes());
+    let _ = out.write_all(buf.as_bytes());
     let _ = out.flush();
 }
 
