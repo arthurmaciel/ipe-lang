@@ -472,14 +472,17 @@ const STD_CODEC: &str = include_str!("../Ipe/Codec.ipe");
 ///
 /// Pure Ipê source: defines the `Pii` opaque type (no `ToString`/`toJson`
 /// instance — serialises only as `"[redacted]"`), `ConsentState`, `Sink`,
-/// `PropValue`, `Props`, and `Config` ADTs. Routes I/O through `Ipe.Io`
-/// (`Stderr` sink) and `Ipe.File` (`Jsonl` sink). Consent gating is
-/// fail-closed in pure Ipê: `track` / `trackEvent` drop the event and
-/// return `Task.succeed ()` when consent is `Pending` or `Denied`. Money
-/// values encode losslessly as `{"amount":"<decimal>","currency":"<code>"}`.
-/// No new kernel — all I/O routes through existing `Io_eprintln` and
-/// `File_append` kernels. Not in `STDLIB_MODULE_QUALIFIERS` so the
-/// disjointness invariant holds.
+/// `PropValue`, `Props`, `Config`, and `AnalyticsEvent` ADTs. Routes I/O
+/// through `Ipe.Io` (`Stderr` sink), `Ipe.File` (`Jsonl` sink), and
+/// `Ipe.Db` / `Ipe.Db.Store` / `Ipe.Db.Sql` (store-backed persistence).
+/// Consent gating is fail-closed in pure Ipê: `track` / `trackEvent` /
+/// `persist` / `persistEvent` drop the event and return `Task.succeed ()`
+/// on `Pending` or `Denied`. Money values encode losslessly as
+/// `{"amount":"<decimal>","currency":"<code>"}`. PII is redacted before
+/// any string reaches the database — `PPii` serialises to `"[redacted]"`
+/// in the `props_json` column. No new kernel; all I/O routes through
+/// existing `Io_eprintln`, `File_append`, and `Db_*` / `Sql_*` kernels.
+/// Not in `STDLIB_MODULE_QUALIFIERS` so the disjointness invariant holds.
 const STD_ANALYTICS: &str = include_str!("../Ipe/Analytics.ipe");
 
 /// `Ipe.Db.Store` — codec-driven typed persistence.
