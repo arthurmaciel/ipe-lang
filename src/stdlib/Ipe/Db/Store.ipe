@@ -724,7 +724,7 @@ columnDef specs col =
     if not (validSqlIdent name) then
         Err (invalidIdentError "column" name)
 
-    else if isSerial specs name && not (hasPrimaryKey specs name) then
+    else if List.any (\s -> specIsSerial s name) specs && not (List.any (\s -> specIsPrimaryKey s name) specs) then
         Err (serialWithoutPkError name)
 
     else
@@ -754,55 +754,121 @@ sqlType colType =
             "INTEGER"
 
 
-isSerial : List ColumnSpec -> String -> Bool
-isSerial specs name =
-    List.any (\spec -> case spec of
-        Serial c -> c == name
-        _ -> False) specs
-
-
-hasPrimaryKey : List ColumnSpec -> String -> Bool
-hasPrimaryKey specs name =
-    List.any (\spec -> case spec of
-        PrimaryKey c -> c == name
-        _ -> False) specs
-
-
+-- | Build the SQL constraint suffix for `name` from the store's specs.
+--
+-- SQLite requires `PRIMARY KEY AUTOINCREMENT` in exactly that order; emitting
+-- `AUTOINCREMENT` before `PRIMARY KEY` is a syntax error (SQLITE_ERROR).
+-- Instead of concatenating each spec's fragment in arbitrary list order, we
+-- emit in the canonical SQL constraint order:
+--   PRIMARY KEY  →  AUTOINCREMENT  →  UNIQUE  →  DEFAULT …
+-- A column that is both `Serial` and `PrimaryKey` therefore always gets
+-- `PRIMARY KEY AUTOINCREMENT`, regardless of the order the caller applied
+-- those specs.
 columnConstraints : List ColumnSpec -> String -> String
 columnConstraints specs name =
-    String.concat (List.map (\spec -> constraintFor spec name) specs)
+    let
+        isPk =
+            List.any (\s -> specIsPrimaryKey s name) specs
 
+        isSerial =
+            List.any (\s -> specIsSerial s name) specs
 
-constraintFor : ColumnSpec -> String -> String
-constraintFor spec name =
-    case spec of
-        PrimaryKey c ->
-            if c == name then
+        isUnique =
+            List.any (\s -> specIsUnique s name) specs
+
+        defaultNowFragment =
+            if List.any (\s -> specIsDefaultNow s name) specs then
+                " DEFAULT CURRENT_TIMESTAMP"
+
+            else
+                ""
+
+        pkFragment =
+            if isPk then
                 " PRIMARY KEY"
 
             else
                 ""
 
-        Unique c ->
-            if c == name then
-                " UNIQUE"
-
-            else
-                ""
-
-        Serial c ->
-            if c == name then
+        autoincFragment =
+            if isSerial then
                 " AUTOINCREMENT"
 
             else
                 ""
 
-        DefaultNow c ->
-            if c == name then
-                " DEFAULT CURRENT_TIMESTAMP"
+        uniqueFragment =
+            if isUnique && not isPk then
+                " UNIQUE"
 
             else
                 ""
+    in
+    String.concat [ pkFragment, autoincFragment, uniqueFragment, defaultNowFragment ]
+
+
+specIsPrimaryKey : ColumnSpec -> String -> Bool
+specIsPrimaryKey spec name =
+    case spec of
+        PrimaryKey c ->
+            c == name
+
+        Serial _ ->
+            False
+
+        Unique _ ->
+            False
+
+        DefaultNow _ ->
+            False
+
+
+specIsSerial : ColumnSpec -> String -> Bool
+specIsSerial spec name =
+    case spec of
+        Serial c ->
+            c == name
+
+        PrimaryKey _ ->
+            False
+
+        Unique _ ->
+            False
+
+        DefaultNow _ ->
+            False
+
+
+specIsUnique : ColumnSpec -> String -> Bool
+specIsUnique spec name =
+    case spec of
+        Unique c ->
+            c == name
+
+        PrimaryKey _ ->
+            False
+
+        Serial _ ->
+            False
+
+        DefaultNow _ ->
+            False
+
+
+specIsDefaultNow : ColumnSpec -> String -> Bool
+specIsDefaultNow spec name =
+    case spec of
+        DefaultNow c ->
+            c == name
+
+        PrimaryKey _ ->
+            False
+
+        Serial _ ->
+            False
+
+        Unique _ ->
+            False
 
 
 -- | `create conn store` — create the store's table if it does not exist, via

@@ -2021,12 +2021,19 @@ session checkpoints stay compatible.
   - The custom-sink variant (a caller-supplied emit function in a union ctor)
     is deferred; it requires function-in-union-ctor support (IPE-L0107 residual).
     Shipped sinks: `Stderr` and `Jsonl Path`.
-  - The SQLite/Postgres `eventsStore`, right-to-erasure `erase`, and aggregate
-    queries are deferred to a follow-up issue (depend on `Ipe.Db.Store` patterns
-    already established).
+  - `eventsStore : Result Error Store` — typed `Ipe.Db.Store` for
+    `AnalyticsEvent` rows (`ipe_analytics_events` table). PII is redacted by
+    `encodeProps` before any string reaches the database; `persist` /
+    `persistEvent` are consent-gated (fail-closed: `Pending` / `Denied` → no
+    write). `erase` deletes all rows for a `userId` regardless of current
+    consent state (GDPR right-to-erasure). Aggregate queries (`totals`,
+    `uniqueUsers`, `eventCounts`, `recent`) route through the audited
+    `Store.all` / `Store.findWhere` surface (injection-safe by construction).
+    Proved by `analytics_store_gate` golden (consent-gate, PII-in-DB, erase,
+    aggregates — compile + E2E under `IPE_E2E=1`).
 - **Go-oracle relationship:** the reference's analytics module has no byte-exact
   oracle target in the Ipê test corpus (no golden comparison defined); the
-  surface is tested by the `analytics_consent_gate` golden (invariants include
-  the ambient-stringify side-channel closure, proven by the E2E run).
+  surface is tested by the `analytics_consent_gate` and `analytics_store_gate`
+  goldens.
 - **Sanctioned:** yes (`divergence:` — Ipê-native design, PRINCIPLES-conformant).
   Reference consulted for behavioural parity only; no code transcribed.

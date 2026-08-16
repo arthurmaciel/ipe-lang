@@ -1,0 +1,9 @@
+store:ok
+totals-after-granted:1
+totals-after-pending:1
+pii-in-db:[redacted]
+unique-users:1
+erase-count:2
+totals-after-erase:1
+event-count-purchase:1
+event-count-login:0
