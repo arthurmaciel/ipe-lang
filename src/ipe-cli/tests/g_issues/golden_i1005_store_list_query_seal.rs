@@ -7,13 +7,14 @@
 //! violation affecting every `Store.all` / `Store.findWhere` call site.
 //!
 //! Root cause: the bound-propagation pass in the lowerer walked only
-//! function-level *params* for the capture-of-generic-by-SharedLambda
-//! check; it did not see the `Ok value ->` match-arm local whose type is
-//! `Generic(a)` — that local is captured by the `\more -> value :: more`
-//! lambda passed to `Task.map`.  The fix adds
-//! `body_shared_lambda_with_generic_captures` which walks the full body and
-//! detects any `SharedLambda` with a type that `reaches_bare` the tvar AND
-//! that has at least one free captured variable.
+//! function-level *params* for the capture-of-generic-by-closure check; it
+//! did not see the `Ok value ->` match-arm local whose type is `Generic(a)`
+//! — that local is captured by the `\more -> value :: more` lambda passed to
+//! `Task.map`.  The fix keys the `Sync` obligation on the CLOSURE's own
+//! signature: `body_move_closure_captures_generic` fires on any
+//! `Lambda`/`SharedLambda` whose param/return type `reaches_bare` the tvar AND
+//! that move-captures a free value carrying the tvar bare (a bare-value
+//! capture, or a read of a transparent field whose type reaches the tvar).
 //!
 //! The load-bearing proof is the SEAL check: under `IPE_E2E=1` the emitted
 //! crate must `cargo build` (no database connection required — the fixture
@@ -35,7 +36,8 @@ fn fixture_entry(root: &Path) -> PathBuf {
 /// Emit gate + byte-identity golden: the frontend must accept a `Store.all`
 /// call and emit the checked-in `main.rs` byte-for-byte (the
 /// `T1: 'static + Send + Sync + Clone` bound on the row-type var — set by
-/// `decodeRows`'s SharedLambda capture of a match-arm local — is locked in).
+/// `decodeRows`'s continuation-lambda capture of a match-arm local — is
+/// locked in).
 #[test]
 fn store_list_query_emits_byte_identical() {
     let root = repo_root();
@@ -67,7 +69,7 @@ fn store_list_query_emits_byte_identical() {
 
 /// THE SEAL: under `IPE_E2E=1`, actually `cargo build` the emitted crate.
 /// Before the fix this was ipe-accept then `cargo` E0277 (`T1 cannot be
-/// shared between threads safely`) — the SharedLambda capturing the
+/// shared between threads safely`) — the continuation lambda capturing the
 /// match-arm `Ok value` local forced `T1: Sync` but the generic carried no
 /// such bound.
 #[test]
