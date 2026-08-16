@@ -1,22 +1,28 @@
 # ─────────────────────────────────────────────────────────────────────────────
-# Sky behavior-parity check — nightly + manual dispatch.
+# Sky non-visual behavior-parity check — nightly + manual dispatch.
 #
-# For each green, run-verify, program/console port:
-#   1. Builds + runs the committed ipe/ port via ipe build + cargo build.
-#   2. Runs the same example via the upstream sky binary.
-#   3. Compares stdout and exit code per the port's parity field:
-#        exact      — byte-identical required
-#        normalized — ISO timestamp / epoch-ms tokens stripped before compare
-#        skip       — nondeterministic by design; printed with reason, not failed
+# For each green, non-go_ffi example with shape in {program, console, server}:
+#   1. Builds + exercises the committed ipe/ port (ipe build + cargo build).
+#   2. Builds + exercises the same example via the upstream sky binary.
+#   3. Compares output per shape:
+#        program/console — stdout + exit code per the port's parity field:
+#          exact         — byte-identical required
+#          normalized    — ISO timestamp / epoch-ms tokens stripped before compare
+#          skip          — nondeterministic by design; printed with reason
+#        server          — HTTP status code + normalized response body per
+#                          scripted request set (verify.json or e2e.json).
+#                          Sky↔Ipê brand tokens stripped before body compare.
 #
-# This is NOT a required PR gate (it needs a live sky install). The fast offline
-# PR gate is sky-ports-gate.yml.
-#
-# The pinned upstream version is encoded in install-sky-toolchain.sh.
-# Update that script's PINNED_VERSION when the example corpus moves to a new
+# Sky toolchain: prebuilt per-OS release binary from github.com/anzellai/sky.
+# The binary is downloaded by install-sky-toolchain.sh (prefers the tagged release
+# asset; no Haskell/Stack build required). The pinned version is encoded in that
+# script; update PINNED_VERSION there when the example corpus moves to a new
 # upstream release.
+#
+# This job is NOT a required PR gate (it requires a live sky install and network).
+# The fast offline PR gate is sky-ports-gate.yml.
 # ─────────────────────────────────────────────────────────────────────────────
-name: sky behavior parity
+name: sky behavior parity (non-visual)
 
 on:
   schedule:
@@ -24,7 +30,7 @@ on:
   workflow_dispatch: {}
 
 concurrency:
-  group: sky-parity-${{ github.ref }}
+  group: sky-parity-nonvisual-${{ github.ref }}
   cancel-in-progress: true
 
 # Read-only: this job does not push or open PRs.
@@ -32,8 +38,8 @@ permissions:
   contents: read
 
 jobs:
-  sky-parity:
-    name: sky behavior parity
+  sky-parity-nonvisual:
+    name: sky non-visual behavior parity
     runs-on: ubuntu-latest
     # A sky-vs-ipe behavior divergence fails the job.
     continue-on-error: false
@@ -42,6 +48,7 @@ jobs:
       CARGO_TARGET_DIR: ${{ github.workspace }}/.cache/ipe-target
       IPE_NO_SCCACHE: '1'
       IPE_SWEEP_BUILD_TIMEOUT: '300'
+      IPE_AUTH_TOKEN_SECRET: ipe-ci-parity-test-secret-0123456789-abcdef
       CARGO_HTTP_MULTIPLEXING: 'false'
       CARGO_NET_RETRY: '5'
 
@@ -62,8 +69,9 @@ jobs:
             ~/.cargo/registry
             ~/.cargo/git
             .cache/ipe-target
-          key: sky-parity-${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+          key: sky-parity-nonvisual-${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
           restore-keys: |
+            sky-parity-nonvisual-${{ runner.os }}-cargo-
             sky-parity-${{ runner.os }}-cargo-
 
       - name: Build ipe
@@ -80,7 +88,17 @@ jobs:
       - name: Verify sky binary
         run: sky --version
 
-      - name: Run behavior-parity check
+      - name: Run non-visual parity check
         run: |
           export CARGO_TARGET_DIR="${{ github.workspace }}/.cache/ipe-target"
-          bash tools/scripts/check-sky-parity.sh
+          mkdir -p /tmp/parity-diffs
+          bash tools/scripts/check-sky-parity-nonvisual.sh \
+            --diff-dir /tmp/parity-diffs
+
+      - name: Upload diff artifacts
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: sky-parity-diffs-${{ github.run_id }}
+          path: /tmp/parity-diffs/
+          retention-days: 7

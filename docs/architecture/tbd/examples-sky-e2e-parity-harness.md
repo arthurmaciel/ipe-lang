@@ -58,9 +58,14 @@ Fetch upstream, recompute each example's hash, compare to `upstream.lock`:
 For each example the harness runs BOTH the real `sky` toolchain and `ipe`, captures
 output identically, and asserts a match. Dispatch by `shape`:
 
-- **program / console / server-oneshot** — run to exit; byte-compare stdout+stderr
-  and exit code. A server that stays up gets a scripted request set; compare the
-  response bodies.
+- **program / console** — run to exit; byte-compare stdout and exit code per the
+  port's `parity` field (exact | normalized | skip). Normalized strips ISO 8601
+  timestamps and 13-digit epoch-ms tokens before compare.
+- **server** — start each toolchain on its own free port; send the scripted request
+  set from `ipe/<name>/verify.json` (preferred) or `ipe/<name>/e2e.json`; compare
+  HTTP status code and normalized response body per request. Sky↔Ipê brand tokens
+  ("Sky " / "Ipe ") are stripped before body compare so sanctioned renames do not
+  produce spurious diffs. Diffs are uploaded as CI artifacts on failure.
 - **tui** — run in a pty (headless terminal), drive the `.script` key sequence,
   capture the rendered screen, and byte-compare the screen dump (fall back to a
   screenshot of the terminal when a byte dump is unstable).
@@ -74,6 +79,11 @@ Both sides render under the **same** harness (identical fonts, DPI, browser,
 window size), so "must match" is a tight perceptual threshold rather than an exact
 pixel identity across machines. Failing screenshots/diffs upload as CI artifacts.
 
+The non-visual check (`check-sky-parity-nonvisual.sh`) runs locally without the
+sky binary: the `--ipe-only` flag (or absent `sky` on PATH) exercises the ipe half
+and the compare/diff logic and prints `IPE-ONLY` per example. The sky-vs-ipe
+comparison requires the sky toolchain (install with `install-sky-toolchain.sh`).
+
 ## Machine-setup guide
 
 The exact packages and steps the harness installs to run every shape — the `sky`
@@ -83,13 +93,19 @@ your machine to run any Ipê program" guide, kept honest because CI runs it.
 
 ## Open infra questions
 
-- **Sky in CI:** whether a prebuilt per-OS `sky` release binary exists, or CI must
-  build anzellai/sky (Haskell/Stack). Prefer a prebuilt binary; a scheduled-only
-  build is the fallback.
+- **Sky in CI:** RESOLVED — `github.com/anzellai/sky` publishes prebuilt per-OS
+  release binaries (e.g. `sky-linux-x64.tar.gz`, `sky-darwin-arm64.tar.gz`).
+  `tools/scripts/install-sky-toolchain.sh` downloads the tarball for the current
+  OS/arch, extracts the binary, and places it on PATH. No Haskell/Stack build is
+  required. The pinned version is `PINNED_VERSION` in that script; update it when
+  the example corpus moves to a new upstream release. The scheduled `sky-parity.yml`
+  job uses this mechanism exclusively.
 - **Screenshot conditions:** pin fonts/DPI/browser/window so Sky and Ipê render
   identically; the match threshold is tight but nonzero to absorb sub-pixel AA.
 - **Interaction scripts:** each interactive example needs a committed `.script` so
-  both toolchains are driven identically.
+  both toolchains are driven identically. For non-visual server parity (Increment 2),
+  the committed `verify.json` (or `e2e.json`) in each `ipe/<name>/` port serves as
+  the scripted request set; both toolchains receive identical requests.
 
 ## Delivery
 
