@@ -1,0 +1,105 @@
+module Main exposing (main)
+
+-- Consent-gate proof for `Ipe.Analytics`:
+--
+--   1. A consented `track` reaches the sink (Task succeeds, no crash).
+--   2. An unconsented `track` (Pending or Denied) drops silently — Task.succeed ().
+--   3. A `Pii` prop value serialises as `"[redacted]"`, never as the raw text.
+--   4. A `PMoney` prop value serialises losslessly as a two-field object.
+--
+-- Pure invariants (1)-(4) are checked by encoding prop values and comparing
+-- to expected JSON strings. The task chain proves the fail-closed contract:
+-- denied and pending `track` calls return `Task.succeed ()` without crashing,
+-- and the consented call emits to stderr (not captured by stdout checks) before
+-- printing the sentinel line.
+
+import Ipe.Analytics as Analytics exposing (ConsentState(..), Sink(..), PropValue(..))
+import Ipe.Io as Io
+import Ipe.Task as Task
+import Ipe.Json.Encode as Encode
+import Ipe.Money as Money
+
+
+-- ── Helpers ──────────────────────────────────────────────────────────────────
+
+
+encodedProp : PropValue -> String
+encodedProp v =
+    Encode.encode 0 (Analytics.encodePropValue v)
+
+
+-- ── Invariant checks (pure) ───────────────────────────────────────────────────
+
+
+-- `Pii` always encodes as `"[redacted]"`, never as its wrapped text.
+piiIsRedacted : Bool
+piiIsRedacted =
+    encodedProp (PPii (Analytics.pii "alice@example.com")) == "\"[redacted]\""
+
+
+-- `PMoney` encodes as a two-field object (lossless).
+moneyIsLossless : Bool
+moneyIsLossless =
+    let
+        usd =
+            Money.fromMajor Money.USD 1099
+    in
+    encodedProp (PMoney usd)
+        == "{\"amount\":\"1099\",\"currency\":\"USD\"}"
+
+
+-- `PText` encodes as a plain JSON string.
+textPropOk : Bool
+textPropOk =
+    encodedProp (PText "hello") == "\"hello\""
+
+
+-- ── Configs (type is inferred — type alias annotations not needed) ────────────
+
+
+deniedCfg =
+    Analytics.defaultConfig Stderr
+        |> Analytics.setConsent Denied
+
+
+pendingCfg =
+    Analytics.defaultConfig Stderr
+
+
+grantedCfg =
+    Analytics.defaultConfig Stderr
+        |> Analytics.setConsent Granted
+        |> Analytics.identify "user-1" Analytics.noTraits
+
+
+main =
+    let
+        allPure =
+            piiIsRedacted && moneyIsLossless && textPropOk
+    in
+    if not allPure then
+        Io.println "analytics-FAIL-pure"
+
+    else
+        -- Denied drops silently (fail-closed).
+        Analytics.track deniedCfg "ignored" Analytics.noProps
+            |> Task.andThen
+                (\_ ->
+                    -- Pending drops silently (fail-closed).
+                    Analytics.track pendingCfg "ignored" Analytics.noProps
+                )
+            |> Task.andThen
+                (\_ ->
+                    -- Consented track with a Pii prop — emits to stderr (not
+                    -- captured by the stdout check; the invariant is no crash).
+                    Analytics.track grantedCfg
+                        "signed_up"
+                        (Analytics.props
+                            [ ( "email", PPii (Analytics.pii "alice@example.com") )
+                            , ( "plan", PText "pro" )
+                            ]
+                        )
+                )
+            |> Task.andThen
+                (\_ -> Io.println "analytics-consent-gate-ok")
+            |> Task.onError (\_ -> Io.println "analytics-FAIL-task")

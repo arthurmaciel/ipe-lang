@@ -468,6 +468,20 @@ const STD_UI_ANIMATION: &str = include_str!("../Ipe/Ui/Animation.ipe");
 /// disjointness invariant holds.
 const STD_CODEC: &str = include_str!("../Ipe/Codec.ipe");
 
+/// `Ipe.Analytics` — typed, consent-gated product analytics.
+///
+/// Pure Ipê source: defines the `Pii` opaque type (no `ToString`/`toJson`
+/// instance — serialises only as `"[redacted]"`), `ConsentState`, `Sink`,
+/// `PropValue`, `Props`, and `Config` ADTs. Routes I/O through `Ipe.Io`
+/// (`Stderr` sink) and `Ipe.File` (`Jsonl` sink). Consent gating is
+/// fail-closed in pure Ipê: `track` / `trackEvent` drop the event and
+/// return `Task.succeed ()` when consent is `Pending` or `Denied`. Money
+/// values encode losslessly as `{"amount":"<decimal>","currency":"<code>"}`.
+/// No new kernel — all I/O routes through existing `Io_eprintln` and
+/// `File_append` kernels. Not in `STDLIB_MODULE_QUALIFIERS` so the
+/// disjointness invariant holds.
+const STD_ANALYTICS: &str = include_str!("../Ipe/Analytics.ipe");
+
 /// `Ipe.Db.Store` — codec-driven typed persistence.
 ///
 /// Pure Ipê source: defines the `Store` / `ColType` / `ColumnSpec`
@@ -690,6 +704,14 @@ pub const COMPILED_STD_MODULES: &[CompiledStdModule] = &[
     CompiledStdModule {
         dotted: "Ipe.Codec",
         source: STD_CODEC,
+    },
+    // Ipe.Analytics — consent-gated typed analytics. `Pii` is opaque with no
+    // reveal path; `PPii` always serialises as `"[redacted]"`. Consent is
+    // fail-closed in pure Ipê (drop on Pending/Denied). Two concrete sinks:
+    // `Stderr` (via `Io_eprintln`) and `Jsonl Path` (via `File_append`).
+    CompiledStdModule {
+        dotted: "Ipe.Analytics",
+        source: STD_ANALYTICS,
     },
     // Ipe.Db.Store — Layer-3 source; codec-driven typed persistence over the
     // audited `Ipe.Db` / `Ipe.Db.Sql` kernels. Pure Ipê, no new kernel.
