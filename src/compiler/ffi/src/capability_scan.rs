@@ -120,6 +120,18 @@ const PATH_RULES: &[PathRule] = &[
         second: "SystemTime",
         cap: Capability::Clock,
     },
+    // Inline assembly via `std::arch` / `core::arch` — raw syscall capability;
+    // treated as NativeFfi opacity because its effects are unenumerable.
+    PathRule {
+        first: "std",
+        second: "arch",
+        cap: Capability::NativeFfi,
+    },
+    PathRule {
+        first: "core",
+        second: "arch",
+        cap: Capability::NativeFfi,
+    },
 ];
 
 /// Bare capability-bearing type/const identifiers a wrapper reaches after a
@@ -127,6 +139,9 @@ const PATH_RULES: &[PathRule] = &[
 /// These are ONE identifier, so they are matched by name alone — imprecise (a
 /// user type coincidentally named `File` would over-flag), which is the safe
 /// direction: over-flagging refuses, it never admits.
+///
+/// Note: `asm` / `global_asm` are NOT listed here — they must be followed by
+/// `!` to be macro invocations; the `scan_ident` match handles them exactly.
 const BARE_IDENTS: &[(&str, Capability)] = &[
     ("TcpStream", Capability::Network),
     ("TcpListener", Capability::Network),
@@ -389,8 +404,9 @@ impl std::fmt::Display for Opacity {
             ),
             Self::NativeFfi { file, line } => write!(
                 f,
-                "{file}:{line}: native FFI (`extern` / `#[link]` / `libc`) — the wrapper crosses \
-                 into opaque native code whose effects cannot be inferred or contained"
+                "{file}:{line}: native FFI (`extern` / `#[link]` / `libc` / `asm!` / \
+                 `global_asm!` / `core::arch` / `std::arch`) — the wrapper crosses into \
+                 opaque native code whose effects cannot be inferred or contained"
             ),
             Self::UnenumerableModule {
                 file,
@@ -564,6 +580,16 @@ fn scan_ident(
                 line,
                 construct: "include!",
             });
+            return;
+        }
+        // `asm!(…)` / `global_asm!(…)` — inline assembly issues raw syscalls
+        // whose effects the scan cannot enumerate: NativeFfi opacity.
+        "asm" | "global_asm" if next_is_bang(toks, i) => {
+            out.opacities.push(Opacity::NativeFfi {
+                file: file.to_owned(),
+                line,
+            });
+            out.proposed.insert(Capability::NativeFfi);
             return;
         }
         _ => {}
