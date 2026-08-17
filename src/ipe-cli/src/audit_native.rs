@@ -884,18 +884,40 @@ fn which_on_path(bin: &str) -> Option<PathBuf> {
 ))]
 fn native_tier2_on_platform(audit: &NativeAudit) -> Result<Tier2Outcome, CliError> {
     // 1. The wrappers the app crate actually emitted into `src/ffi.rs` — the
-    //    DCE-trimmed foreign surface the artifact ships. Empty ⇒ un-exercisable ⇒
-    //    reject (never a vacuous clean). The package cannot narrow it — it is
-    //    read from the compiler's own emitted output, not authored by the package.
-    let wrapper_paths = emitted_wrapper_paths(audit.emitted_dir)?;
-    if wrapper_paths.is_empty() {
+    //    DCE-trimmed foreign surface the artifact ships. Read from the structured
+    //    sidecar (`src/ffi-wrappers.json`) the emitter writes after DCE: this is
+    //    the SSOT, decoupled from the text layout of the pretty-printed Rust.
+    //    Empty ⇒ un-exercisable ⇒ reject (never a vacuous clean). The package
+    //    cannot narrow the sidecar — it is written by the compiler, not the package.
+    let wrapper_entries = emitted_wrapper_paths(audit.emitted_dir)?;
+    if wrapper_entries.is_empty() {
+        return Err(CliError::PackageAudit(no_probeable_entrypoint()));
+    }
+    // The link-reference set: non-generic wrappers only. A generic wrapper
+    // (`pub fn <ident><T>(…)`, flagged in the sidecar) cannot have its address
+    // taken without a turbofish — `ident as *const ()` is a hard rustc error.
+    // Excluding it from the probe reference set lets a package with a generic
+    // wrapper certify, while the crate compile still exercises the wrapper's
+    // build-time reach (the manifest declares the bound crate, so cargo compiles
+    // its `build.rs`). No false-certify is opened: a generic wrapper genuinely
+    // cannot be link-forced by address-of; the crate-compile reach is the
+    // strongest proof available for that shape.
+    let link_paths: Vec<String> = wrapper_entries
+        .iter()
+        .filter(|e| !e.generic)
+        .map(|e| e.path.clone())
+        .collect();
+    // A non-empty sidecar that contains ONLY generic wrappers still has no
+    // link-provable surface — the crate compile exercises them, but there is
+    // no probeable entrypoint. Reject rather than certify on a vacuous link run.
+    if link_paths.is_empty() {
         return Err(CliError::PackageAudit(no_probeable_entrypoint()));
     }
 
     // 2. Emit the link-reachability probe crate into the emitted app crate and
     //    build its `cargo build` argv (the untrusted, wrapper-owned exercise).
     let scratch = probe_scratch_dir(audit.root);
-    let build_argv = emit_probe_and_build_argv(audit.emitted_dir, &wrapper_paths, &scratch)?;
+    let build_argv = emit_probe_and_build_argv(audit.emitted_dir, &link_paths, &scratch)?;
     let Some(exercise) = ProbeExercise::real_build(build_argv) else {
         // A non-empty survivor set always yields a non-empty build argv, so this
         // is unreachable; fail-closed rather than certify a vacuous run.
@@ -1028,30 +1050,12 @@ fn probe_scratch_dir(root: &Path) -> PathBuf {
     std::env::temp_dir().join(format!("ipe-tier2-probe-{slug}-{}", std::process::id()))
 }
 
-/// The fully-qualified path of every wrapper `pub fn` the compiler emitted into
-/// the app crate's `src/ffi.rs`, in the app crate's module tree
-/// (`crate::ffi::<slug>::<ident>`).
+/// One wrapper entry from the structured FFI sidecar.
 ///
-/// This is the reachability contract's source of truth: the probe must reference
-/// exactly the wrappers the shipped artifact CONTAINS, never a wider set. The
-/// emitter DCE-trims `src/ffi.rs` to the wrappers the program reaches, so reading
-/// the pkg.json survivor set instead (every binding-survivor, reached or not)
-/// would reference wrappers the app crate never emitted — a phantom symbol the
-/// probe cannot link. Reading the emitted file aligns the probe's referenced set
-/// with the emitter's DCE gate by construction. The build-time reach of every
-/// bound crate is still exercised: the manifest declares each bound crate, so
-/// cargo compiles each one's `build.rs` regardless of which wrappers link.
-///
-/// `src/ffi.rs` nests each crate's wrappers under `pub mod <slug> { … }`; a
-/// wrapper is a `pub fn <ident>(` inside the current module. A returned path is
-/// `crate::ffi::<slug>::<ident>`.
-///
-/// A package whose emitted `src/ffi.rs` is absent or carries no wrapper returns
-/// an empty set (the caller rejects it). Returned sorted and deduplicated for a
-/// deterministic probe.
-///
-/// # Errors
-/// [`CliError::Io`] when `src/ffi.rs` exists but cannot be read.
+/// The sidecar records both the fully-qualified probe path and whether the
+/// wrapper is generic. A generic wrapper's address cannot be taken without a
+/// turbofish, so it is excluded from the link-reference set in the probe while
+/// the crate compile still exercises its build-time reach.
 #[cfg(any(
     all(
         target_os = "linux",
@@ -1061,38 +1065,220 @@ fn probe_scratch_dir(root: &Path) -> PathBuf {
     target_os = "freebsd",
     target_os = "windows"
 ))]
-fn emitted_wrapper_paths(emitted_dir: &Path) -> Result<Vec<String>, CliError> {
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct WrapperEntry {
+    /// Fully-qualified path: `crate::ffi::<slug>::<ident>`.
+    path: String,
+    /// Whether the wrapper is generic (`pub fn <ident><T: …>(…)`). A generic
+    /// wrapper's build-time reach is exercised by the crate compile; its
+    /// link-reach is not provable by address-of without a turbofish, so it is
+    /// excluded from the probe's link-reference set.
+    generic: bool,
+}
+
+/// Read the structured FFI sidecar (`src/ffi-wrappers.json`) emitted alongside
+/// `src/ffi.rs` and return the full wrapper entry set.
+///
+/// The sidecar is the SSOT the emitter writes after DCE: it carries exactly
+/// the surviving wrapper paths and their generic flags, so Tier-2 does not
+/// re-parse the pretty-printed Rust text. Fail-closed on every parse failure:
+/// a missing sidecar (the emitted crate was built without this hardening) or
+/// a malformed entry → typed reject, never a false certify. An absent sidecar
+/// alongside an absent `src/ffi.rs` → empty set (no surface to probe).
+///
+/// # Errors
+/// [`CliError::PackageAudit`] with [`Check::NativeTier2`] when the sidecar
+/// exists but is missing, unreadable, or structurally malformed — fail-closed,
+/// the same typed reject the empty-survivor path produces.
+#[cfg(any(
+    all(
+        target_os = "linux",
+        any(target_arch = "x86_64", target_arch = "aarch64")
+    ),
+    target_os = "macos",
+    target_os = "freebsd",
+    target_os = "windows"
+))]
+fn emitted_wrapper_paths(emitted_dir: &Path) -> Result<Vec<WrapperEntry>, CliError> {
+    let sidecar_path = emitted_dir.join("src").join("ffi-wrappers.json");
+    // When neither the sidecar nor `src/ffi.rs` exists the package has no FFI
+    // surface — an empty set, not a parse error.
     let ffi_rs = emitted_dir.join("src").join("ffi.rs");
-    if !ffi_rs.is_file() {
+    if !sidecar_path.is_file() && !ffi_rs.is_file() {
         return Ok(Vec::new());
     }
-    let text = std::fs::read_to_string(&ffi_rs).map_err(|e| CliError::Io {
-        path: ffi_rs.clone(),
+    // A present `src/ffi.rs` with no sidecar means the emitted crate predates
+    // this hardening: fail-closed rather than fall back to the line-scan.
+    if !sidecar_path.is_file() {
+        return Err(CliError::PackageAudit(Rejection {
+            check: Check::NativeTier2,
+            message: "the emitted crate carries `src/ffi.rs` but no `src/ffi-wrappers.json` \
+                      sidecar — re-build the package with the current compiler to generate the \
+                      structured sidecar Tier-2 reads (fail-closed)"
+                .to_owned(),
+        }));
+    }
+    let text = std::fs::read_to_string(&sidecar_path).map_err(|e| CliError::Io {
+        path: sidecar_path.clone(),
         source: e,
     })?;
-    let mut paths: BTreeSet<String> = BTreeSet::new();
-    let mut current_slug: Option<String> = None;
-    for line in text.lines() {
-        let trimmed = line.trim_start();
-        if let Some(rest) = trimmed.strip_prefix("pub mod ") {
-            let slug: String = rest
-                .chars()
-                .take_while(|c| c.is_alphanumeric() || *c == '_')
-                .collect();
-            if !slug.is_empty() {
-                current_slug = Some(slug);
+    parse_ffi_wrappers_sidecar(&text, &sidecar_path)
+}
+
+/// Parse the JSON sidecar text into wrapper entries. Fail-closed: any
+/// structural deviation — not a JSON object, missing `wrappers` array, a
+/// wrapper entry that is not an object with `path` (string) and `generic`
+/// (bool) — is a typed reject, never a vacuous clean.
+///
+/// Parsing is done without an external JSON library: the sidecar is compact,
+/// one-line, machine-generated JSON with a fixed structure, so a hand-written
+/// extractor is simpler than a full serde dependency and keeps the audit path
+/// dependency-free.
+#[cfg(any(
+    all(
+        target_os = "linux",
+        any(target_arch = "x86_64", target_arch = "aarch64")
+    ),
+    target_os = "macos",
+    target_os = "freebsd",
+    target_os = "windows"
+))]
+fn parse_ffi_wrappers_sidecar(text: &str, path: &Path) -> Result<Vec<WrapperEntry>, CliError> {
+    let malformed = |detail: &str| {
+        CliError::PackageAudit(Rejection {
+            check: Check::NativeTier2,
+            message: format!(
+                "the FFI wrapper sidecar `{}` is malformed: {detail} — \
+                 re-build the package with the current compiler (fail-closed)",
+                path.display()
+            ),
+        })
+    };
+    // The sidecar is compact one-line JSON produced by the emitter; extract
+    // entries via a simple state machine rather than a full parser.
+    // Expected shape: {"wrappers":[{"path":"…","generic":true/false},…]}
+    let text = text.trim();
+    let inner = text
+        .strip_prefix("{\"wrappers\":[")
+        .and_then(|s| {
+            s.strip_suffix("]}\n")
+                .or_else(|| s.strip_suffix("]}"))
+                .or_else(|| s.strip_suffix("]}\r\n"))
+        })
+        .ok_or_else(|| malformed("outer envelope `{\"wrappers\":[…]}` not found"))?;
+    if inner.is_empty() {
+        return Ok(Vec::new());
+    }
+    let mut entries: Vec<WrapperEntry> = Vec::new();
+    // Split on `},{` to iterate raw entry objects; each is `{"path":"…","generic":bool}`.
+    let raw_entries: Vec<&str> = split_json_objects(inner);
+    for raw in raw_entries {
+        let raw = raw.trim_start_matches('{').trim_end_matches('}');
+        let path_val = extract_json_string(raw, "path")
+            .ok_or_else(|| malformed("wrapper entry missing `path` string"))?;
+        let generic_val = extract_json_bool(raw, "generic")
+            .ok_or_else(|| malformed("wrapper entry missing `generic` boolean"))?;
+        // The path must be a valid Rust module path segment: letters, digits,
+        // underscores, and `::`. Reject any path that does not start with
+        // `crate::ffi::` — a tampered sidecar cannot forge a path the probe
+        // would reference if the emitter never wrote it.
+        if !path_val.starts_with("crate::ffi::") {
+            return Err(malformed("wrapper path does not start with `crate::ffi::`"));
+        }
+        if path_val
+            .chars()
+            .any(|c| !c.is_alphanumeric() && c != '_' && c != ':')
+        {
+            return Err(malformed("wrapper path contains illegal characters"));
+        }
+        entries.push(WrapperEntry {
+            path: path_val,
+            generic: generic_val,
+        });
+    }
+    Ok(entries)
+}
+
+/// Split a JSON array body (no outer `[…]`) into individual raw object strings
+/// by tracking brace depth, so `},{` within a string value does not falsely
+/// split. The sidecar's string values are Rust paths (`crate::ffi::…`) which
+/// never contain `{` or `}`, so a simpler depth-tracker is sufficient.
+#[cfg(any(
+    all(
+        target_os = "linux",
+        any(target_arch = "x86_64", target_arch = "aarch64")
+    ),
+    target_os = "macos",
+    target_os = "freebsd",
+    target_os = "windows"
+))]
+fn split_json_objects(s: &str) -> Vec<&str> {
+    let mut out = Vec::new();
+    let mut depth: usize = 0;
+    let mut start = 0;
+    for (i, c) in s.char_indices() {
+        match c {
+            '{' => depth += 1,
+            '}' => {
+                depth = depth.saturating_sub(1);
+                if depth == 0 {
+                    out.push(&s[start..=i]);
+                    start = i + 1;
+                    // Skip a leading `,` between entries.
+                    if s[start..].starts_with(',') {
+                        start += 1;
+                    }
+                }
             }
-        } else if let Some(rest) = trimmed.strip_prefix("pub fn ") {
-            let ident: String = rest
-                .chars()
-                .take_while(|c| c.is_alphanumeric() || *c == '_')
-                .collect();
-            if let (Some(slug), false) = (current_slug.as_ref(), ident.is_empty()) {
-                paths.insert(format!("crate::ffi::{slug}::{ident}"));
-            }
+            _ => {}
         }
     }
-    Ok(paths.into_iter().collect())
+    out
+}
+
+/// Extract a JSON string value for `key` from a flat key-value sequence.
+/// Returns `None` when the key is absent or the value is not a JSON string.
+/// Does not handle escaped quotes in values (not needed for Rust paths).
+#[cfg(any(
+    all(
+        target_os = "linux",
+        any(target_arch = "x86_64", target_arch = "aarch64")
+    ),
+    target_os = "macos",
+    target_os = "freebsd",
+    target_os = "windows"
+))]
+fn extract_json_string(obj: &str, key: &str) -> Option<String> {
+    let needle = format!("\"{key}\":\"");
+    let start = obj.find(&needle)? + needle.len();
+    let rest = &obj[start..];
+    // The sidecar's string values are Rust paths — no embedded `"` or `\`.
+    let end = rest.find('"')?;
+    Some(rest[..end].to_owned())
+}
+
+/// Extract a JSON boolean value for `key` from a flat key-value sequence.
+/// Returns `None` when the key is absent or the value is not `true`/`false`.
+#[cfg(any(
+    all(
+        target_os = "linux",
+        any(target_arch = "x86_64", target_arch = "aarch64")
+    ),
+    target_os = "macos",
+    target_os = "freebsd",
+    target_os = "windows"
+))]
+fn extract_json_bool(obj: &str, key: &str) -> Option<bool> {
+    let needle = format!("\"{key}\":");
+    let start = obj.find(&needle)? + needle.len();
+    let rest = obj[start..].trim_start();
+    if rest.starts_with("true") {
+        Some(true)
+    } else if rest.starts_with("false") {
+        Some(false)
+    } else {
+        None
+    }
 }
 
 /// Emit the link-reachability probe crate into the emitted app crate and return
@@ -2070,39 +2256,39 @@ mod tests {
         target_os = "windows"
     ))]
     #[test]
-    fn emitted_wrapper_paths_reads_exactly_the_pub_fns_under_each_module() {
-        // The probe references exactly what `src/ffi.rs` emitted: one path per
-        // `pub fn` under its `pub mod <slug>`, sorted and deduplicated. A wrapper
-        // the emitter DCE-trimmed away is absent from the emitted file, so it is
-        // absent from the referenced set — the probe surface is the shipped one.
-        let dir = std::env::temp_dir().join(format!("ipe-emitted-paths-{}", std::process::id()));
+    fn emitted_wrapper_paths_reads_sidecar_not_ffi_rs_text() {
+        // Tier-2 reads the structured sidecar (`src/ffi-wrappers.json`) emitted
+        // alongside `src/ffi.rs`, not the pretty-printed Rust text. The sidecar
+        // is the SSOT: it carries the DCE-shaken set as structured data, decoupled
+        // from Rust formatting.
+        let dir = std::env::temp_dir().join(format!("ipe-sidecar-read-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(dir.join("src")).expect("src dir");
+        // Write a sidecar with two non-generic and one generic wrapper.
         std::fs::write(
-            dir.join("src").join("ffi.rs"),
-            "pub mod tm {\n\
-             use crate::*;\n\
-             // IPE-FFI-WRAPPER BEGIN shift\n\
-             pub fn tm_shift(a: i64) -> i64 { a }\n\
-             // IPE-FFI-WRAPPER END\n\
-             pub fn tm_classify(a: i64) -> i64 { a }\n\
-             }\n\
-             pub use tm::*;\n\
-             pub mod other {\n\
-             pub fn other_go() {}\n\
-             }\n\
-             pub use other::*;\n",
+            dir.join("src").join("ffi-wrappers.json"),
+            "{\"wrappers\":[\
+             {\"path\":\"crate::ffi::other::other_go\",\"generic\":false},\
+             {\"path\":\"crate::ffi::tm::tm_classify\",\"generic\":false},\
+             {\"path\":\"crate::ffi::tm::tm_shift\",\"generic\":false}]}\n",
         )
-        .expect("write ffi.rs");
-        let paths = emitted_wrapper_paths(&dir).expect("read emitted paths");
+        .expect("write ffi-wrappers.json");
+        // Also write ffi.rs so the sidecar-absent guard does not fire.
+        std::fs::write(dir.join("src").join("ffi.rs"), "// placeholder\n").expect("write ffi.rs");
+        let entries = emitted_wrapper_paths(&dir).expect("read sidecar");
+        let paths: Vec<&str> = entries.iter().map(|e| e.path.as_str()).collect();
         assert_eq!(
             paths,
             vec![
-                "crate::ffi::other::other_go".to_owned(),
-                "crate::ffi::tm::tm_classify".to_owned(),
-                "crate::ffi::tm::tm_shift".to_owned(),
+                "crate::ffi::other::other_go",
+                "crate::ffi::tm::tm_classify",
+                "crate::ffi::tm::tm_shift",
             ],
-            "one sorted path per emitted `pub fn` under its module"
+            "sidecar yields one sorted entry per wrapper"
+        );
+        assert!(
+            entries.iter().all(|e| !e.generic),
+            "all entries are non-generic"
         );
         let _ = std::fs::remove_dir_all(&dir);
     }
@@ -2117,15 +2303,122 @@ mod tests {
         target_os = "windows"
     ))]
     #[test]
-    fn emitted_wrapper_paths_is_empty_when_no_ffi_rs() {
+    fn missing_sidecar_when_ffi_rs_present_rejects_fail_closed() {
+        // A present `src/ffi.rs` with no sidecar → typed reject (fail-closed).
+        // This guards against an emitted crate that predates the sidecar or a
+        // sidecar that was manually deleted: never fall back to text-scan.
+        let dir = std::env::temp_dir().join(format!("ipe-no-sidecar-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join("src")).expect("src dir");
+        std::fs::write(
+            dir.join("src").join("ffi.rs"),
+            "pub mod tm { pub fn f() {} }\n",
+        )
+        .expect("write ffi.rs");
+        let err = emitted_wrapper_paths(&dir).expect_err("missing sidecar must reject");
+        assert!(
+            matches!(err, crate::CliError::PackageAudit(ref r) if r.check == Check::NativeTier2),
+            "a missing sidecar is a Tier-2 typed reject: {err:?}"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[cfg(any(
+        all(
+            target_os = "linux",
+            any(target_arch = "x86_64", target_arch = "aarch64")
+        ),
+        target_os = "macos",
+        target_os = "freebsd",
+        target_os = "windows"
+    ))]
+    #[test]
+    fn corrupt_sidecar_rejects_fail_closed() {
+        // A sidecar with malformed JSON → typed reject (fail-closed), never a
+        // vacuous clean.
+        let dir = std::env::temp_dir().join(format!("ipe-corrupt-sidecar-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join("src")).expect("src dir");
+        std::fs::write(dir.join("src").join("ffi.rs"), "// placeholder\n").expect("write ffi.rs");
+        std::fs::write(
+            dir.join("src").join("ffi-wrappers.json"),
+            "NOT VALID JSON\n",
+        )
+        .expect("write corrupt sidecar");
+        let err = emitted_wrapper_paths(&dir).expect_err("corrupt sidecar must reject");
+        assert!(
+            matches!(err, crate::CliError::PackageAudit(ref r) if r.check == Check::NativeTier2),
+            "a corrupt sidecar is a Tier-2 typed reject: {err:?}"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[cfg(any(
+        all(
+            target_os = "linux",
+            any(target_arch = "x86_64", target_arch = "aarch64")
+        ),
+        target_os = "macos",
+        target_os = "freebsd",
+        target_os = "windows"
+    ))]
+    #[test]
+    fn generic_wrappers_are_flagged_in_sidecar_and_excluded_from_link_set() {
+        // A sidecar with one generic and one non-generic wrapper: the generic
+        // wrapper is read correctly (flagged `generic: true`) and would be
+        // excluded from the probe's link-reference set. The non-generic is
+        // included. Both are returned from `emitted_wrapper_paths`.
+        let dir = std::env::temp_dir().join(format!("ipe-generic-sidecar-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join("src")).expect("src dir");
+        std::fs::write(
+            dir.join("src").join("ffi-wrappers.json"),
+            "{\"wrappers\":[\
+             {\"path\":\"crate::ffi::box1::box1_make\",\"generic\":true},\
+             {\"path\":\"crate::ffi::box1::box1_drop\",\"generic\":false}]}\n",
+        )
+        .expect("write ffi-wrappers.json");
+        std::fs::write(dir.join("src").join("ffi.rs"), "// placeholder\n").expect("write ffi.rs");
+        let entries = emitted_wrapper_paths(&dir).expect("read sidecar");
+        assert_eq!(entries.len(), 2, "both entries returned");
+        let generic_entry = entries.iter().find(|e| e.generic).expect("generic entry");
+        assert_eq!(generic_entry.path, "crate::ffi::box1::box1_make");
+        let non_generic = entries
+            .iter()
+            .find(|e| !e.generic)
+            .expect("non-generic entry");
+        assert_eq!(non_generic.path, "crate::ffi::box1::box1_drop");
+        // The link-reference set (what the probe would use) excludes generic wrappers.
+        let link_paths: Vec<&str> = entries
+            .iter()
+            .filter(|e| !e.generic)
+            .map(|e| e.path.as_str())
+            .collect();
+        assert_eq!(link_paths, vec!["crate::ffi::box1::box1_drop"]);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[cfg(any(
+        all(
+            target_os = "linux",
+            any(target_arch = "x86_64", target_arch = "aarch64")
+        ),
+        target_os = "macos",
+        target_os = "freebsd",
+        target_os = "windows"
+    ))]
+    #[test]
+    fn emitted_wrapper_paths_is_empty_when_neither_sidecar_nor_ffi_rs() {
+        // When neither `src/ffi-wrappers.json` nor `src/ffi.rs` exists the
+        // package has no FFI surface → empty set (not an error).
         let dir = std::env::temp_dir().join(format!("ipe-emitted-none-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).expect("dir");
+        std::fs::create_dir_all(dir.join("src")).expect("src dir");
         assert!(
             emitted_wrapper_paths(&dir)
-                .expect("no ffi.rs is empty")
+                .expect("no sidecar and no ffi.rs is empty")
                 .is_empty(),
-            "a package with no emitted src/ffi.rs has no probeable surface"
+            "a package with no emitted src/ffi.rs or sidecar has no probeable surface"
         );
         let _ = std::fs::remove_dir_all(&dir);
     }

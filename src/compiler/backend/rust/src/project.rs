@@ -2072,7 +2072,9 @@ fn assemble_project_files(
             shake_interface_forwarder_files(&mut files, &ffi.interface_modules);
             let reached = reached_ffi_idents(&files);
             let shaken = shake_ffi_by_fn_ident(&ffi.bindings_source, &reached);
+            let sidecar = ffi_wrappers_sidecar(&shaken);
             files.insert(RelPath::new("src/ffi.rs")?, shaken);
+            files.insert(RelPath::new("src/ffi-wrappers.json")?, sidecar);
             let main = files
                 .get_mut("src/main.rs")
                 .ok_or_else(|| Diagnostic::CompilerBug {
@@ -2554,7 +2556,9 @@ fn assemble_project_files(
         shake_interface_forwarder_files(&mut files, &ffi.interface_modules);
         let reached = reached_ffi_idents(&files);
         let shaken = shake_ffi_by_fn_ident(&ffi.bindings_source, &reached);
+        let sidecar = ffi_wrappers_sidecar(&shaken);
         files.insert(RelPath::new("src/ffi.rs")?, shaken);
+        files.insert(RelPath::new("src/ffi-wrappers.json")?, sidecar);
         let main = files
             .get_mut("src/main.rs")
             .ok_or_else(|| Diagnostic::CompilerBug {
@@ -4378,6 +4382,96 @@ fn shake_ffi_by_fn_ident(source: &str, reached: &std::collections::BTreeSet<Stri
     if let Some((buf, _)) = region {
         out.push_str(&buf);
     }
+    out
+}
+
+/// Build the structured sidecar that records every surviving wrapper path in
+/// the DCE-shaken `ffi_rs` text, together with whether each wrapper is generic.
+///
+/// The sidecar is the SSOT Tier-2 reads: it eliminates the text-layout coupling
+/// that a line-scan of the emitted Rust carries. The format is a JSON object:
+///
+/// ```text
+/// {"wrappers":[{"path":"crate::ffi::<slug>::<ident>","generic":<bool>},...]}
+/// ```
+///
+/// Entries are sorted by path for a deterministic artifact. The `generic` flag
+/// is set when the wrapper's BEGIN sentinel carries `// [ffi-generic]`: a
+/// generic wrapper cannot have its address taken without a turbofish, so Tier-2
+/// excludes it from the link-reference set while still exercising its build-time
+/// reach through the crate compile.
+///
+/// A `pub mod <slug>` line sets the current module; a `pub fn <ident>` inside
+/// it records the entry. Lines outside any `pub mod` block are skipped.
+#[must_use]
+fn ffi_wrappers_sidecar(ffi_rs: &str) -> String {
+    use std::fmt::Write as _;
+    let mut entries: Vec<(String, bool)> = Vec::new();
+    let mut current_slug: Option<String> = None;
+    let mut pending_generic = false;
+    for line in ffi_rs.lines() {
+        let trimmed = line.trim_start();
+        if let Some(rest) = trimmed.strip_prefix("pub mod ") {
+            let slug: String = rest
+                .chars()
+                .take_while(|c| c.is_alphanumeric() || *c == '_')
+                .collect();
+            if !slug.is_empty() {
+                current_slug = Some(slug);
+                pending_generic = false;
+            }
+        } else if trimmed.starts_with("// [ffi-generic]") {
+            // The next `pub fn` in this region is a generic wrapper.
+            pending_generic = true;
+        } else if let Some(rest) = trimmed.strip_prefix("pub fn ") {
+            let ident: String = rest
+                .chars()
+                .take_while(|c| c.is_alphanumeric() || *c == '_')
+                .collect();
+            if let (Some(slug), false) = (current_slug.as_ref(), ident.is_empty()) {
+                entries.push((format!("crate::ffi::{slug}::{ident}"), pending_generic));
+            }
+            pending_generic = false;
+        }
+    }
+    entries.sort_by(|a, b| a.0.cmp(&b.0));
+    entries.dedup_by(|a, b| a.0 == b.0);
+    let mut out = String::from("{\"wrappers\":[");
+    for (i, (path, generic)) in entries.iter().enumerate() {
+        if i > 0 {
+            out.push(',');
+        }
+        // Writing into a String is infallible.
+        let _ = write!(
+            out,
+            "{{\"path\":{path_json},\"generic\":{generic}}}",
+            path_json = json_string(path),
+            generic = generic,
+        );
+    }
+    out.push_str("]}\n");
+    out
+}
+
+/// Minimal JSON string encoder: wraps `s` in double quotes and escapes the
+/// characters JSON requires (`"`, `\`, and ASCII control characters). Wrapper
+/// paths are ASCII identifiers joined by `::`, so only `"` and `\` are
+/// plausible in practice, but the full ASCII-control sweep is included for
+/// correctness at the boundary.
+fn json_string(s: &str) -> String {
+    let mut out = String::with_capacity(s.len() + 2);
+    out.push('"');
+    for c in s.chars() {
+        match c {
+            '"' => out.push_str("\\\""),
+            '\\' => out.push_str("\\\\"),
+            c if (c as u32) < 0x20 => {
+                let _ = std::fmt::Write::write_fmt(&mut out, format_args!("\\u{:04x}", c as u32));
+            }
+            c => out.push(c),
+        }
+    }
+    out.push('"');
     out
 }
 
