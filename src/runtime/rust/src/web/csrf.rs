@@ -75,24 +75,23 @@ pub fn cookies_secure() -> bool {
 }
 
 /// ~244 random bits (two concatenated UUIDv4s) as 64 lowercase-hex chars —
-/// comfortably above the 128-bit CSRF-token floor, same shape as the prior
-/// 32-byte scheme. `uuid::Uuid::new_v4` draws from the OS CSPRNG (the approved
-/// security-randomness source per `random.rs`, mirroring `server.rs`'s
-/// `csrf_gen_token`), so the token needs no `aes-gcm` dependency. Never panics.
-pub fn gen_token() -> String {
-    format!(
-        "{}{}",
-        uuid::Uuid::new_v4().simple(),
-        uuid::Uuid::new_v4().simple()
-    )
-}
+/// comfortably above the 128-bit CSRF-token floor. Single definition shared with
+/// `server.rs`; re-exported here under the `gen_token` name the `web` surface uses.
+pub use crate::server::csrf_gen_token as gen_token;
 
-/// A token "looks valid" if it's the expected 64 lowercase-hex shape — used to
+/// A token "looks valid" if it is the expected 64 lowercase-hex shape — used to
 /// decide whether to reuse the browser's existing cookie token vs mint a fresh
-/// one (a malformed/forged cookie value is replaced, never trusted).
-pub fn token_is_well_formed(t: &str) -> bool {
-    t.len() == 64 && t.bytes().all(|b| b.is_ascii_hexdigit())
-}
+/// one (a malformed/forged cookie value is replaced, never trusted). Single
+/// definition shared with `server.rs`; re-exported here under the
+/// `token_is_well_formed` name the `web` surface uses.
+pub use crate::server::csrf_token_well_formed as token_is_well_formed;
+
+/// Returns `true` iff BOTH tokens are well-formed AND compare equal in constant
+/// time. The structural gate runs before the secret compare — that ordering does
+/// not reveal the secret value because well-formedness checks only length and
+/// character class. Fail-closed: any malformed, missing, or mismatched pair
+/// returns `false`. Delegates to the shared `server::csrf_pair_valid`.
+pub use crate::server::csrf_pair_valid;
 
 /// Read a named cookie value from the `Cookie:` header (generic; the session
 /// cookie has its own base-path-aware reader in `mod.rs`).
@@ -201,8 +200,6 @@ pub async fn csrf_middleware(
     req: axum::extract::Request,
     next: axum::middleware::Next,
 ) -> Response {
-    use subtle::ConstantTimeEq;
-
     if !csrf_enabled() {
         return next.run(req).await;
     }
@@ -229,14 +226,13 @@ pub async fn csrf_middleware(
     let header_tok = headers
         .get(CSRF_HEADER)
         .and_then(|h| h.to_str().ok())
-        .unwrap_or("");
-    if cookie_tok.is_empty() || header_tok.is_empty() {
-        telemetry::record_log("warn", "csrf.rejected reason=missing");
-        return (StatusCode::FORBIDDEN, "{\"status\":\"csrf_missing\"}").into_response();
-    }
-    // Constant-time equality of the double-submit pair.
-    if !bool::from(cookie_tok.as_bytes().ct_eq(header_tok.as_bytes())) {
-        telemetry::record_log("warn", "csrf.rejected reason=mismatch");
+        .unwrap_or_default();
+    // csrf_pair_valid: well-formedness of BOTH tokens (structural gate) then
+    // constant-time equality. Fail-closed — any malformed, missing, or
+    // mismatched pair is rejected. See `server::csrf_pair_valid` for the
+    // ordering rationale.
+    if !csrf_pair_valid(&cookie_tok, &header_tok) {
+        telemetry::record_log("warn", "csrf.rejected reason=invalid");
         return (StatusCode::FORBIDDEN, "{\"status\":\"csrf_invalid\"}").into_response();
     }
     next.run(req).await
@@ -244,3 +240,76 @@ pub async fn csrf_middleware(
 
 // `security_headers` now lives in `telemetry` (re-exported at the top of this
 // module) so the Ipe.Http.Server path can share it.
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn well_formed_tok() -> String {
+        // 64 lowercase hex chars — the exact shape gen_token() produces.
+        "a".repeat(64)
+    }
+
+    // csrf_pair_valid: matching well-formed pair → accepted.
+    #[test]
+    fn pair_valid_matching_well_formed_accepted() {
+        let tok = well_formed_tok();
+        assert!(csrf_pair_valid(&tok, &tok));
+    }
+
+    // csrf_pair_valid: matching but malformed pair (too short, not 64-hex) → rejected.
+    // This is the regression case from csrf-1: before the fix, an equal pair of
+    // arbitrary bytes passed the constant-time compare because only non-emptiness
+    // was checked, not well-formedness.
+    #[test]
+    fn pair_valid_matching_malformed_too_short_rejected() {
+        assert!(!csrf_pair_valid("x", "x"));
+    }
+
+    #[test]
+    fn pair_valid_matching_malformed_wrong_length_rejected() {
+        let tok = "a".repeat(63);
+        assert!(!csrf_pair_valid(&tok, &tok));
+    }
+
+    #[test]
+    fn pair_valid_matching_malformed_non_hex_rejected() {
+        // 64 chars but contains non-hex characters.
+        let tok = "g".repeat(64);
+        assert!(!csrf_pair_valid(&tok, &tok));
+    }
+
+    // csrf_pair_valid: well-formed but mismatched pair → rejected.
+    #[test]
+    fn pair_valid_well_formed_mismatched_rejected() {
+        let a = "a".repeat(64);
+        let b = "b".repeat(64);
+        assert!(!csrf_pair_valid(&a, &b));
+    }
+
+    // csrf_pair_valid: empty tokens → rejected.
+    #[test]
+    fn pair_valid_empty_rejected() {
+        assert!(!csrf_pair_valid("", ""));
+        assert!(!csrf_pair_valid("", &well_formed_tok()));
+        assert!(!csrf_pair_valid(&well_formed_tok(), ""));
+    }
+
+    // SSOT: gen_token() produces a token that passes token_is_well_formed.
+    #[test]
+    fn gen_token_passes_well_formed() {
+        let tok = gen_token();
+        assert!(
+            token_is_well_formed(&tok),
+            "gen_token() must produce a well-formed token; got: {tok}"
+        );
+    }
+
+    // SSOT: the single gen_token/token_is_well_formed definition is shared;
+    // verify gen_token and csrf_pair_valid agree (a freshly generated pair passes).
+    #[test]
+    fn gen_token_csrf_pair_valid_agree() {
+        let tok = gen_token();
+        assert!(csrf_pair_valid(&tok, &tok));
+    }
+}

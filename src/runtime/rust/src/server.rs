@@ -1719,13 +1719,10 @@ fn csrf_cookie_name() -> &'static str {
 }
 
 /// 64 lowercase-hex chars (two concatenated UUIDv4s, ~244 combined random
-/// bits — comfortably above the 128-bit CSRF-token floor). Does NOT use
-/// `aes_gcm::aead::OsRng` (unlike `live/csrf.rs::gen_token`) because this
-/// function must compile under `--features server` alone, which does not
-/// pull in the `aes-gcm` crate (see `Cargo.toml`'s `server` vs `live`
-/// feature sets). `uuid::Uuid::new_v4` is an approved CSPRNG source per
-/// `random.rs`'s documented security-bearing-randomness convention.
-fn csrf_gen_token() -> String {
+/// bits — comfortably above the 128-bit CSRF-token floor). `uuid::Uuid::new_v4`
+/// draws from the OS CSPRNG, the approved security-bearing-randomness source
+/// per `random.rs`. Re-exported from `web/csrf.rs` as `gen_token`.
+pub fn csrf_gen_token() -> String {
     format!(
         "{}{}",
         uuid::Uuid::new_v4().simple(),
@@ -1733,8 +1730,25 @@ fn csrf_gen_token() -> String {
     )
 }
 
-fn csrf_token_well_formed(t: &str) -> bool {
+/// A token "looks valid" if it is the expected 64 lowercase-hex shape — used
+/// both to decide whether to reuse a browser cookie token vs mint a fresh one,
+/// and as the well-formedness half of `csrf_pair_valid`. Re-exported from
+/// `web/csrf.rs` as `token_is_well_formed`.
+pub fn csrf_token_well_formed(t: &str) -> bool {
     t.len() == 64 && t.bytes().all(|b| b.is_ascii_hexdigit())
+}
+
+/// Returns `true` iff BOTH tokens pass the well-formedness gate AND compare
+/// equal in constant time. The structural check runs before the secret compare —
+/// this ordering is standard and does not create a timing side-channel on the
+/// secret (the well-formedness predicate observes only length and character
+/// class, not the secret value). Fail-closed: any malformed, missing, or
+/// mismatched pair returns `false`. Re-exported from `web/csrf.rs`.
+pub fn csrf_pair_valid(cookie_tok: &str, header_tok: &str) -> bool {
+    use subtle::ConstantTimeEq;
+    csrf_token_well_formed(cookie_tok)
+        && csrf_token_well_formed(header_tok)
+        && bool::from(cookie_tok.as_bytes().ct_eq(header_tok.as_bytes()))
 }
 
 /// NOT HttpOnly — client JS must be able to read this to echo it into
@@ -1784,7 +1798,6 @@ where
 {
     let h = h.into_server_handler();
     Arc::new(move |req: ServerRequest| {
-        use subtle::ConstantTimeEq;
         let safe = matches!(
             req.method.to_ascii_uppercase().as_str(),
             "GET" | "HEAD" | "OPTIONS"
@@ -1800,14 +1813,7 @@ where
             let header_tok = header_ci(&req.headers, "x-csrf-token")
                 .unwrap_or("")
                 .to_string();
-            // Require both sides to be a genuine server-minted token, not just
-            // a matching pair of arbitrary bytes — without this, two equal
-            // malformed values (e.g. "x" cookie + "x" header) would pass the
-            // compare below even though neither is a real CSRF token.
-            let ok = csrf_token_well_formed(&cookie_tok)
-                && csrf_token_well_formed(&header_tok)
-                && bool::from(cookie_tok.as_bytes().ct_eq(header_tok.as_bytes()));
-            if !ok {
+            if !csrf_pair_valid(&cookie_tok, &header_tok) {
                 return Box::pin(async move {
                     ok_res(plain_resp(403, "csrf token invalid or missing", &[]))
                 });
