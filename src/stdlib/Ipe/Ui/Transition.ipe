@@ -260,8 +260,11 @@ buildShorthand steps =
         _ :: valParts ->
             String.join ":" valParts
 
+        -- Unreachable: `String.split` never yields an empty list. Return the
+        -- empty value rather than the unscanned input so the fail-closed
+        -- property holds by construction, not just by the sink downstream.
         [] ->
-            shorthandVal
+            ""
 
 
 -- ─── Attribute entry points ──────────────────────────────────────
