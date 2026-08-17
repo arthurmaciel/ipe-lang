@@ -292,3 +292,43 @@ main =
         let _ = fs::remove_dir_all(parent);
     }
 }
+
+/// A record param the body BOTH threads to an `any` return AND directly
+/// field-reads must concretize (not stay a bare generic): `p.name` on a bare
+/// `T{n}` is `E0609 no field`. A caller passing exactly the read fields built
+/// on base; keeping the param generic here regressed it to exit-0-then-cargo-
+/// fail. It must build again.
+#[test]
+fn record_threaded_and_field_read_builds() {
+    let entry = write_entry(
+        "record_thread_read",
+        "\
+module Main exposing (main)
+import Ipe.Io as Io
+
+tag : any -> any
+tag p =
+    let n = p.name in
+    p
+
+main : Task Error ()
+main =
+  let
+    u = { name = \"alice\" }
+    v = tag u
+  in
+  Io.println v.name
+",
+    );
+    let (built, out) = emit(&entry, "record_thread_read");
+    assert!(
+        built.is_ok(),
+        "a record param the body threads AND field-reads must be accepted and \
+         concretized (a bare generic has no field to read): {:?}",
+        built.err()
+    );
+    support::assert_seal_builds("param_any_seal_record_thread_read", &out);
+    if let Some(parent) = entry.parent() {
+        let _ = fs::remove_dir_all(parent);
+    }
+}

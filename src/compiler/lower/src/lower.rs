@@ -5170,6 +5170,100 @@ fn body_calls_kernel_on_param(
     }
 }
 
+/// Whether `expr` reads a field of `param` directly — a `record.field` whose
+/// receiver is `param` (as a bare `Var` or a `CloneVar`), including through a
+/// value-preserving `let` alias. A parameter whose fields the body reads must
+/// carry a concrete record type: a bare generic `T{n}` has no field to read
+/// (E0609), so it cannot be kept generic even when the body also threads it.
+/// Alias and shadow discipline mirrors [`body_calls_kernel_on_param`] arm for
+/// arm; the match is exhaustive so a new [`Expr`] node is a compile error, not
+/// a silently missed read.
+fn body_reads_field_of_param(param: Symbol, expr: &Expr) -> bool {
+    match expr {
+        Expr::Access { record, .. } => {
+            matches!(record.as_ref(), Expr::Var(s) | Expr::CloneVar(s) if *s == param)
+                || body_reads_field_of_param(param, record)
+        }
+        Expr::Call { args, .. } => args.iter().any(|a| body_reads_field_of_param(param, a)),
+        Expr::Lambda { params, body, .. } | Expr::SharedLambda { params, body, .. } => {
+            if params.iter().any(|(s, _)| *s == param) {
+                false
+            } else {
+                body_reads_field_of_param(param, body)
+            }
+        }
+        Expr::Let { name, value, body } => {
+            let is_alias_of_param = *name != param
+                && matches!(value.as_ref(), Expr::Var(v) | Expr::CloneVar(v) if *v == param);
+            body_reads_field_of_param(param, value)
+                || (*name != param
+                    && (body_reads_field_of_param(param, body)
+                        || (is_alias_of_param && body_reads_field_of_param(*name, body))))
+        }
+        Expr::Destructure {
+            binder,
+            value,
+            body,
+        } => {
+            body_reads_field_of_param(param, value)
+                || (!pat_binds_symbol(binder, param) && body_reads_field_of_param(param, body))
+        }
+        Expr::If { cond, then_, else_ } => {
+            body_reads_field_of_param(param, cond)
+                || body_reads_field_of_param(param, then_)
+                || body_reads_field_of_param(param, else_)
+        }
+        Expr::Match(m) => {
+            body_reads_field_of_param(param, m.scrutinee())
+                || m.arms().iter().any(|arm| {
+                    !pat_binds_symbol(&arm.pat, param)
+                        && body_reads_field_of_param(param, &arm.body)
+                })
+        }
+        Expr::BinOp { lhs, rhs, .. } => {
+            body_reads_field_of_param(param, lhs) || body_reads_field_of_param(param, rhs)
+        }
+        Expr::Apply { func, args } => {
+            body_reads_field_of_param(param, func)
+                || args.iter().any(|a| body_reads_field_of_param(param, a))
+        }
+        Expr::Tuple(items) | Expr::List { items, .. } => {
+            items.iter().any(|e| body_reads_field_of_param(param, e))
+        }
+        Expr::Cons { head, tail } => {
+            body_reads_field_of_param(param, head) || body_reads_field_of_param(param, tail)
+        }
+        Expr::ListIndexClone { list, .. } | Expr::ListLenCheck { list, .. } => {
+            body_reads_field_of_param(param, list)
+        }
+        Expr::Record { fields, .. } | Expr::Update { fields, .. } => fields
+            .iter()
+            .any(|(_, e)| body_reads_field_of_param(param, e)),
+        Expr::Ctor { args, .. } => args.iter().any(|a| body_reads_field_of_param(param, a)),
+        Expr::TaskSeq { effect, rest } => {
+            body_reads_field_of_param(param, effect) || body_reads_field_of_param(param, rest)
+        }
+        Expr::TailLoop { params, body } => {
+            if params.iter().any(|(s, _)| *s == param) {
+                false
+            } else {
+                body_reads_field_of_param(param, body)
+            }
+        }
+        Expr::TailRecur { args } => args.iter().any(|a| body_reads_field_of_param(param, a)),
+        Expr::Int(_)
+        | Expr::Bool(_)
+        | Expr::Float(_)
+        | Expr::Str(_)
+        | Expr::PathLit(_)
+        | Expr::Char(_)
+        | Expr::Unit
+        | Expr::Var(_)
+        | Expr::CloneVar(_)
+        | Expr::FuncValue { .. } => false,
+    }
+}
+
 /// Is `args[idx]` a direct `Var`/`CloneVar` reference to `tracked`? The shared
 /// "the param sits in the bound-obliging arg position" test for every
 /// direct-arg-position kernel→bound matcher (Shape A: `IpeRow` at arg 1,
@@ -12670,11 +12764,15 @@ impl<'a> Lowerer<'a> {
                         // caller passing the full record mismatch (E0308,
                         // exit-0-then-cargo-fail). Keep such a threaded param a generic
                         // `T{n}` so it monomorphises to the caller's own record; the
-                        // return follows it (below). A NON-threaded record param is
-                        // still concretized — the body reads its fields directly
-                        // (`p.name`), which a bare generic `T{n}` cannot (E0609), so
-                        // it must carry the concrete record type.
-                        if Some(*binder) == tail_param && matches!(region_ty, Ty::Record(..)) {
+                        // return follows it (below). This holds only when the body
+                        // does NOT also field-read the parameter: a bare generic
+                        // `T{n}` has no field to read (E0609), so a param the body
+                        // both threads AND reads (`tag p = let n = p.name in p`) must
+                        // still concretize — as must a plain NON-threaded record param.
+                        if Some(*binder) == tail_param
+                            && matches!(region_ty, Ty::Record(..))
+                            && !body_reads_field_of_param(*binder, &lowered_body)
+                        {
                             continue;
                         }
                         let concrete = self.ir_type_from_ty(region_ty, sig_span)?;
