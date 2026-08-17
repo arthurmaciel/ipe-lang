@@ -334,8 +334,10 @@ pub struct CompiledStdModule {
     pub source: &'static str,
 }
 
-/// `Ipe.Palette` — a Std-namespace module that defines `Shade`
-/// and pattern-matches its own constructors in `toHex`.
+/// `Ipe.Palette` — a Std-namespace spike module that defines `Shade` / `Spacing`
+/// and pattern-matches their constructors in `toHex` / `spacingPx`. Neither
+/// type name collides with the `Length` / `Color` vocabulary that `Ipe.Css`
+/// owns; `Spacing` / `Sp` are unique to this module.
 const PALETTE: &str = include_str!("../Ipe/Palette.ipe");
 
 /// `Ipe.Tuple` — pure pair helpers (elm/core `Tuple` parity).

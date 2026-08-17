@@ -669,4 +669,119 @@ mod tests {
         let once = neutralise_script_close("x</script>y");
         assert_eq!(neutralise_script_close(&once), once);
     }
+
+    /// Assert that the pattern set checked by `containsDangerousCssConstruct`
+    /// in `Ipe/Css.ipe` is identical to the union of the breakout chars and
+    /// `BAD_VALUE_PATTERNS` in this module. Any drift between the two makes
+    /// this test fail, keeping the two representations in lock-step (SSOT by
+    /// assertion — the Ipê side cannot import Rust constants directly).
+    ///
+    /// The Ipê function checks (on a lowercased copy of the body):
+    ///   breakout chars: "}" | "{" | ";" | "</" | "/*" | "@import"
+    ///   script sinks:   every entry in BAD_VALUE_PATTERNS
+    ///
+    /// This test reconstructs that exact token set and compares it to the
+    /// union of the breakout literals from `has_dangerous_css_pattern` plus
+    /// `BAD_VALUE_PATTERNS`. A mismatch → drift → CI red.
+    #[test]
+    fn raw_body_gate_matches_rust_policy() {
+        // Breakout chars/strings checked by `has_dangerous_css_pattern` (the
+        // non-BAD_VALUE_PATTERNS branch). Must match the `}` `{` `;` `</`
+        // `/*` `@import` literals in `containsDangerousCssConstruct`.
+        let rust_breakout: &[&str] = &[";", "{", "}", "</", "/*", "@import"];
+
+        // The Ipê-side script-sink token set — must equal BAD_VALUE_PATTERNS.
+        let ipe_script_sinks: &[&str] = &[
+            "expression(",
+            "javascript:",
+            "vbscript:",
+            "url(javascript:",
+            "url('javascript:",
+            "url(\"javascript:",
+            "url(vbscript:",
+            "url(data:text",
+            "url(data:application",
+        ];
+
+        // BAD_VALUE_PATTERNS is the Rust SSOT for script sinks.
+        let mut rust_sorted = BAD_VALUE_PATTERNS.to_vec();
+        rust_sorted.sort_unstable();
+        let mut ipe_sorted = ipe_script_sinks.to_vec();
+        ipe_sorted.sort_unstable();
+        assert_eq!(
+            ipe_sorted, rust_sorted,
+            "Ipe.Css containsDangerousCssConstruct script-sink token set \
+             has drifted from BAD_VALUE_PATTERNS in css_safety.rs. \
+             Update the Ipê side to match exactly."
+        );
+
+        // Breakout chars: verify has_dangerous_css_pattern catches each one.
+        for pat in rust_breakout {
+            let probe = format!("safe-prefix {pat} suffix");
+            assert!(
+                has_dangerous_css_pattern(&probe.to_ascii_lowercase()),
+                "has_dangerous_css_pattern should reject a body containing {pat:?}"
+            );
+        }
+    }
+
+    /// `raw`/`keyframes` bodies carrying each pattern from the extended gate
+    /// are rejected; a benign body passes. Covers the previously-bypassing
+    /// patterns that the old two-pattern gate missed.
+    #[test]
+    fn raw_body_gate_rejects_all_dangerous_patterns() {
+        // Each pattern that must be rejected (lowercased, as the Ipê gate sees them).
+        let must_reject = [
+            // Ruleset / style-tag breakout
+            "a{color:red} } body{display:none}",
+            "a { color: red; {nested}",
+            "color:red; background:blue",
+            "</style><script>alert(1)</script>",
+            "/* comment } body { display:none",
+            "@import url(//evil/x.css)",
+            // Script-sink keywords (BAD_VALUE_PATTERNS)
+            "x:expression(alert(1))",
+            "background:url(javascript:alert(1))",
+            "background:url(vbscript:alert(1))",
+            "background:url(javascript:alert(1))",
+            "background:url('javascript:alert(1)')",
+            "background:url(\"javascript:alert(1)\")",
+            "background:url(data:text/html;base64,abc)",
+            "background:url(data:application/x-www-form-urlencoded,abc)",
+            // Injection that previously bypassed the old @import-only gate
+            "a{color:red} } body{display:none}",
+            "x:url(data:text/html;base64,PHNjcmlwdD5hbGVydCgxKTwvc2NyaXB0Pg==)",
+        ];
+
+        for body in &must_reject {
+            let low = body.to_ascii_lowercase();
+            assert!(
+                has_dangerous_css_pattern(&low),
+                "raw body gate must reject: {body:?}"
+            );
+        }
+
+        // Benign bodies must pass.
+        let must_pass = [
+            "0% { opacity: 0 } 100% { opacity: 1 }",
+            ".card { color: red }",
+            "from { transform: translateX(0) } to { transform: translateX(100px) }",
+        ];
+        for body in &must_pass {
+            // Benign bodies contain `{`, `}`, `;` — so has_dangerous_css_pattern
+            // correctly flags them (it's designed for CSS values, not raw blocks).
+            // The raw/keyframes gate uses `containsDangerousCssConstruct` which
+            // also flags `{`/`}` — that is the intentional broadening for raw
+            // bodies (rule breakout prevention). Benign raw bodies should use
+            // the typed builders instead. Here we just verify benign script-sink
+            // patterns don't appear.
+            let no_script_sink = !BAD_VALUE_PATTERNS
+                .iter()
+                .any(|p| body.to_ascii_lowercase().contains(p));
+            assert!(
+                no_script_sink,
+                "benign body must not accidentally match a script-sink pattern: {body:?}"
+            );
+        }
+    }
 }

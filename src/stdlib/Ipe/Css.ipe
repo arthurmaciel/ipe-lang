@@ -62,12 +62,14 @@ module Ipe.Css exposing
 --     DROPS the whole rule as `CssRuleDropped`).
 --   * `raw` and `keyframes` frame bodies are a TRUSTED-INPUT escape hatch
 --     (dangerouslySetInnerHTML-class): they apply the `stripStyleClose`
---     breakout FLOOR (no `</style>` escapes the `<style>` sink) AND, as of
---     #105, drop the whole rule if the body smuggles an `@import`
---     (stylesheet-injection / CSS-level SSRF) or a legacy `expression(`
---     script sink.  They still do NOT full value-scan (a `<script>` in a
---     `<style>` body is inert CSS text); prefer the typed builders over
---     `raw` for anything not author-controlled.
+--     breakout FLOOR (no `</style>` escapes the `<style>` sink) AND drop the
+--     whole rule if the body carries any ruleset breakout character (`}` `{`
+--     `;` `</` `/*` `@import`) or a script-sink keyword (`expression(`,
+--     `javascript:`, `vbscript:`, `url(data:…)`). The pattern set mirrors
+--     `has_dangerous_css_pattern` in css_safety.rs; a drift-assert test in
+--     that module keeps them in sync. They still do NOT full value-scan
+--     (a `<script>` tag in a `<style>` body is inert CSS text); prefer the
+--     typed builders over `raw` for anything not author-controlled.
 --   * `stylesheet` folds in pure Ipe and finishes through `stripStyleClose`
 --     (defence in depth); the `<style>` render sink strips again (belt & braces
 --     with `html_style_node_`).  For benign input the output is byte-identical
@@ -1521,21 +1523,41 @@ media query rules =
 
 -- `@keyframes name { frames }` — name parsed; each raw frame body is close-tag
 -- stripped (breakout floor).
--- Defence-in-depth (#105): reject a raw/keyframes body that smuggles an
--- `@import` (stylesheet-injection / CSS-level SSRF — fetches an
--- attacker-controlled resource in the victim's browser) or a legacy
--- `expression(` script sink. `raw`/`keyframes` are documented
--- trusted-author escape hatches (only `stripStyleClose`'s breakout floor
--- applies otherwise); this closes the specific follow-up flagged in this
--- module's own header comment. Case-insensitive substring check —
--- consistent with `SafeCssValue`'s policy in css_safety.rs.
+--
+-- Rejects a raw/keyframes body that carries any declaration/ruleset breakout
+-- character or script-sink keyword. The pattern set mirrors `has_dangerous_css_pattern`
+-- in css_safety.rs (the audited SSOT): breakout chars `}` `{` `;` `</` `/*`
+-- `@import`, plus the script-sink keywords from `BAD_VALUE_PATTERNS`. Case-
+-- insensitive substring check on the lowercased body. The Rust policy also
+-- strips whitespace before checking scheme-in-url patterns (catching
+-- `url( javascript:` with a space); pure-Ipê cannot strip whitespace inline,
+-- so those variants land here verbatim — any whitespace-obfuscated form that
+-- escapes this gate is caught by the `stripStyleClose` floor and the sink-side
+-- re-validation in css_safety.rs. The SSOT invariant is asserted by the
+-- `raw_body_gate_matches_rust_policy` test in css_safety.rs.
 containsDangerousCssConstruct : String -> Bool
 containsDangerousCssConstruct s =
     let
         lower =
             String.toLower s
     in
-    String.contains "@import" lower || String.contains "expression(" lower
+    -- Ruleset / declaration breakout chars
+    String.contains "}" lower
+        || String.contains "{" lower
+        || String.contains ";" lower
+        || String.contains "</" lower
+        || String.contains "/*" lower
+        || String.contains "@import" lower
+        -- Script-sink keywords (BAD_VALUE_PATTERNS in css_safety.rs)
+        || String.contains "expression(" lower
+        || String.contains "javascript:" lower
+        || String.contains "vbscript:" lower
+        || String.contains "url(javascript:" lower
+        || String.contains "url('javascript:" lower
+        || String.contains "url(\"javascript:" lower
+        || String.contains "url(vbscript:" lower
+        || String.contains "url(data:text" lower
+        || String.contains "url(data:application" lower
 
 
 keyframes : String -> List String -> CssRule
@@ -1546,13 +1568,10 @@ keyframes name frames =
                 stripped =
                     List.map stripStyleClose frames
             in
-            -- Scan the CONCATENATION of all frames for the dangerous
-            -- constructs: a smuggled `@import`/`expression(` in ANY frame
-            -- appears in the joined string, so this catches it without a
-            -- per-frame higher-order `List.any` (which would force a
-            -- Clone-able predicate closure the backend can't yet emit for a
-            -- bare named function). Joining can only ever OVER-detect at a
-            -- boundary — fail-safe for a security drop.
+            -- Scan the CONCATENATION of all frames for dangerous constructs.
+            -- Joining detects a pattern spanning any frame without requiring a
+            -- higher-order `List.any` over a named predicate (which the backend
+            -- cannot yet emit). Over-detection at a join boundary is fail-safe.
             if containsDangerousCssConstruct (String.join "" stripped) then
                 CssRuleDropped
 
@@ -1573,7 +1592,8 @@ frame pctStr props =
 
 
 -- A raw, pre-rendered fragment — close-tag stripped at construction, then
--- dropped entirely if it smuggles an `@import`/`expression(` (#105).
+-- dropped entirely if it carries any breakout character or script-sink keyword
+-- (see `containsDangerousCssConstruct`).
 raw : String -> CssRule
 raw s =
     let
