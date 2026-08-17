@@ -11118,6 +11118,20 @@ impl<'a> Lowerer<'a> {
                     args: out,
                 })
             }
+            // A UI carrier's message slot can embed a nested `any`
+            // (`Html (List any)`), so it must freshen like any other container
+            // — otherwise two independent Ui-nested `any`s in return position
+            // collapse onto the shared interned `"any"` symbol and emit one
+            // generic where two are required (SEAL break, E0308).
+            IrType::Ui { ctor, msg } => Ok(IrType::Ui {
+                ctor,
+                msg: Box::new(self.freshen_any_generics(*msg, minted)?),
+            }),
+            // `WebRoute page` is parametric on its page type, which can itself
+            // embed a nested `any` — freshen it for the same reason as `Ui`.
+            IrType::WebRoute(page) => Ok(IrType::WebRoute(Box::new(
+                self.freshen_any_generics(*page, minted)?,
+            ))),
             // Leaf types that never contain a Generic — pass through.
             other => Ok(other),
         }
