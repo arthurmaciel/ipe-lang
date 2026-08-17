@@ -10035,6 +10035,27 @@ fn type_to_typeref(
                     .unwrap_or_else(|_| TypeRef::Prim("String".to_string()));
                 return Ok(TypeRef::Ctor(path, vec![ok_tref, err_tref]));
             }
+            // Result alias with fewer than 2 type args: rustdoc did not expand the
+            // alias at this use site.  `io::Result<T>` carries 1 arg (the Ok type);
+            // `fmt::Result` carries 0 args (it is `Result<(), fmt::Error>`).
+            // Build the canonical 2-arg TypeRef to match the 2-arg check in
+            // `ipe_of_typeref`, using `String` as the error sentinel (the same
+            // fallback the 2-arg branch uses for unnameable error types).
+            if types.len() == 1 {
+                let ok_tref = type_to_typeref(types[0], param_idx)?;
+                return Ok(TypeRef::Ctor(
+                    path,
+                    vec![ok_tref, TypeRef::Prim("String".to_string())],
+                ));
+            }
+            // 0-arg alias (fmt::Result = Result<(), fmt::Error>): bind as `Result<(), String>`.
+            return Ok(TypeRef::Ctor(
+                path,
+                vec![
+                    TypeRef::Ctor("()".to_string(), vec![]),
+                    TypeRef::Prim("String".to_string()),
+                ],
+            ));
         }
         let mut trefs: Vec<TypeRef> = Vec::new();
         if let Some(arr) = args {
@@ -11594,6 +11615,11 @@ fn self_is_closed_monomorphic(for_val: &serde_json::Value) -> bool {
     // bare non-empty last segment ("Private"). Gate with type_is_nameable — the same
     // string-check the sibling ufcs_trait_path_with_args uses.
     for arg in ab_args {
+        // A const-generic arg (e.g. `const CAP: usize`) has no associated type
+        // node: the impl block is NOT fully concrete — reject it.
+        if arg.get("const").is_some() {
+            return false;
+        }
         if let Some(t) = arg.get("type") {
             let rendered = rustdoc_type_to_rust_str(t);
             if rendered.is_empty() || !type_is_nameable(&rendered) {
@@ -21467,6 +21493,157 @@ mod tests {
                 .collect::<Vec<_>>(),
             vec!["Red", "Code"],
             "the unnameable variant must not be listed"
+        );
+    }
+
+    // ── #1013: const-generic Self is not closed-monomorphic ────────────────
+
+    fn path_with_angle_args_raw(name: &str, args: Vec<serde_json::Value>) -> serde_json::Value {
+        serde_json::json!({
+            "resolved_path": {
+                "name": name,
+                "path": name,
+                "id": 0,
+                "args": {
+                    "angle_bracketed": {
+                        "args": args,
+                        "bindings": []
+                    }
+                }
+            }
+        })
+    }
+
+    // A const-generic arg in the angle-bracket list must make
+    // `self_is_closed_monomorphic` return false: a const param (e.g.
+    // `ArrayString<CAP>`) is not a fully concrete monomorphic type because the
+    // wrapper cannot name `CAP` — it would emit `::arrayvec::ArrayString` (bare,
+    // no `<CAP>`) which fails `cargo build` with E0107 (missing generics).
+    #[test]
+    fn const_generic_arg_is_not_closed_monomorphic() {
+        let const_arg = serde_json::json!({ "const": { "value": "CAP", "expr": "CAP" } });
+        let for_val = path_with_angle_args_raw("::arrayvec::ArrayString", vec![const_arg]);
+        assert!(
+            !self_is_closed_monomorphic(&for_val),
+            "a const-generic arg must not be treated as closed-monomorphic"
+        );
+    }
+
+    // A regular monomorphic type arg (concrete primitive) still returns true.
+    #[test]
+    fn concrete_type_arg_is_closed_monomorphic() {
+        let type_arg = serde_json::json!({ "type": { "primitive": "u8" } });
+        let for_val = path_with_angle_args_raw("::bytes::Bytes", vec![type_arg]);
+        assert!(
+            self_is_closed_monomorphic(&for_val),
+            "a concrete type arg must still be treated as closed-monomorphic"
+        );
+    }
+
+    // A mixed list (one type arg + one const arg) must also return false.
+    #[test]
+    fn mixed_type_and_const_args_not_closed_monomorphic() {
+        let type_arg = serde_json::json!({ "type": { "primitive": "u8" } });
+        let const_arg = serde_json::json!({ "const": { "value": "N", "expr": "N" } });
+        let for_val = path_with_angle_args_raw("::arrayvec::ArrayVec", vec![type_arg, const_arg]);
+        assert!(
+            !self_is_closed_monomorphic(&for_val),
+            "a const arg among type args must make the whole impl non-monomorphic"
+        );
+    }
+
+    // ── #1014: Result alias mapping in the parametric (type_to_typeref) path ──
+
+    fn path_with_type_args(name: &str, args: Vec<serde_json::Value>) -> serde_json::Value {
+        let type_args: Vec<serde_json::Value> = args
+            .into_iter()
+            .map(|t| serde_json::json!({ "type": t }))
+            .collect();
+        serde_json::json!({
+            "resolved_path": {
+                "name": name,
+                "path": name,
+                "id": 0,
+                "args": {
+                    "angle_bracketed": {
+                        "args": type_args,
+                        "bindings": []
+                    }
+                }
+            }
+        })
+    }
+
+    fn path_no_angle_args(name: &str) -> serde_json::Value {
+        serde_json::json!({
+            "resolved_path": {
+                "name": name,
+                "path": name,
+                "id": 0,
+                "args": { "angle_bracketed": { "args": [], "bindings": [] } }
+            }
+        })
+    }
+
+    fn unit_tuple() -> serde_json::Value {
+        serde_json::json!({ "tuple": [] })
+    }
+
+    // Helper: run type_to_typeref + ipe_of_typeref with empty param_idx and
+    // no receiver name — exactly the parametric-stub rendering pipeline.
+    fn typeref_to_ipe_str(val: &serde_json::Value) -> Option<String> {
+        let pidx: HashMap<String, usize> = HashMap::new();
+        let tr = type_to_typeref(val, &pidx).ok()?;
+        Some(ipe_of_typeref(&tr, &[], ""))
+    }
+
+    // `fmt::Result` in the parametric path — 0-arg alias for `Result<(), _>`.
+    // `type_to_typeref` must build a 2-arg TypeRef so `ipe_of_typeref` emits
+    // `"Result String ()"` (error-first, matching the non-parametric path).
+    // The outer `peel_result_layer` + `Result Error` wrap then yields the
+    // correct `"Result Error ()"` surface.  Before the fix the 0-arg path fell
+    // through to the general loop, producing a 0-arg TypeRef → `ipe_of_typeref`
+    // returned bare `"Result"` → peel failed → outer became `"Result Error Result"`.
+    #[test]
+    fn fmt_result_zero_arg_maps_to_two_arg_typeref() {
+        let fmt_result = path_no_angle_args("fmt::Result");
+        let rendered =
+            typeref_to_ipe_str(&fmt_result).expect("fmt::Result must convert to a TypeRef");
+        // The 2-arg Result TypeRef renders error-first: `Result <err> <ok>`.
+        // err = String (sentinel), ok = () → "Result String ()".
+        assert_eq!(
+            rendered, "Result String ()",
+            "fmt::Result (0-arg alias) must produce a 2-arg Result TypeRef"
+        );
+        // Qualified stdlib path behaves identically.
+        let std_fmt = path_no_angle_args("std::fmt::Result");
+        assert_eq!(
+            typeref_to_ipe_str(&std_fmt).as_deref(),
+            Some("Result String ()"),
+            "std::fmt::Result must produce a 2-arg Result TypeRef"
+        );
+    }
+
+    // `io::Result<()>` in the parametric path — 1-arg alias.
+    // Must produce a 2-arg TypeRef → renders as `"Result String ()"`.
+    // Before the fix the 1-arg path fell through to the general loop,
+    // producing `TypeRef::Ctor(path, [Ctor("()", [])])` → `"Result ()"` →
+    // `peel_result_layer` failed → outer became `"Result Error (Result ())"`.
+    #[test]
+    fn io_result_one_arg_maps_to_two_arg_typeref() {
+        let io_result_unit = path_with_type_args("io::Result", vec![unit_tuple()]);
+        let rendered =
+            typeref_to_ipe_str(&io_result_unit).expect("io::Result<()> must convert to a TypeRef");
+        assert_eq!(
+            rendered, "Result String ()",
+            "io::Result<()> (1-arg alias) must produce a 2-arg Result TypeRef"
+        );
+        // io::Result<usize> — Ok payload carries through as Int.
+        let io_result_usize = path_with_type_args("std::io::Result", vec![prim("usize")]);
+        assert_eq!(
+            typeref_to_ipe_str(&io_result_usize).as_deref(),
+            Some("Result String Int"),
+            "io::Result<usize> must produce a 2-arg Result TypeRef with Int ok"
         );
     }
 }
