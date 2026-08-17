@@ -134,28 +134,53 @@ struct Prepared {
     emitted_dir: PathBuf,
 }
 
-/// The absolute path to the wrapper-owned Tier-2 admission probe fixture, from
-/// this crate's location in the workspace. Tier-2 copies it into the jail's
-/// scratch and runs it as the exit-owning wrapper (ADR 0046).
+/// The wrapper-owned Tier-2 admission probe fixture, embedded in the binary and
+/// materialized to a runtime scratch path on use. Tier-2 copies it into the
+/// jail's scratch and runs it as the exit-owning wrapper (ADR 0046).
+///
+/// The fixture SOURCE is embedded at build time (the tracked fixture files stay
+/// the single source of truth); a shipped binary can find it with no source
+/// checkout beside it. Nothing depends on a compile-time source path at runtime.
 ///
 /// The wrapper is platform-native: a POSIX `/bin/sh` script on Linux/macOS/
 /// FreeBSD (driven via a `/usr/bin/env … /bin/sh` invocation prefix), and a
 /// PowerShell `.ps1` on Windows (the Windows jail runs `payload[0]` directly
 /// through `CreateProcessW` with no shell, so `powershell.exe -File` is the
 /// interpreter). Both implement the SAME wrapper-owned per-axis exit contract
-/// the decoder reads.
-fn tier2_probe_fixture() -> PathBuf {
-    // `CARGO_MANIFEST_DIR` is `.../src/ipe-cli`; the fixtures live at the repo
-    // root under `tests/fixtures/admission/`.
-    let base = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/fixtures/admission");
-    #[cfg(target_os = "windows")]
-    {
-        base.join("untrusted-build.ps1")
-    }
-    #[cfg(not(target_os = "windows"))]
-    {
-        base.join("untrusted-build.sh")
-    }
+/// the decoder reads. The platform-appropriate one is materialized with the
+/// file name Tier-2's jail expects, so the extension it resolves by is preserved.
+const TIER2_PROBE_POSIX: &[u8] = include_bytes!(concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/../../tests/fixtures/admission/untrusted-build.sh"
+));
+const TIER2_PROBE_WINDOWS: &[u8] = include_bytes!(concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/../../tests/fixtures/admission/untrusted-build.ps1"
+));
+
+/// Materialize the platform-appropriate embedded Tier-2 probe fixture to a
+/// per-process scratch file and return its path.
+///
+/// # Errors
+/// [`CliError::Io`] when the scratch directory or the fixture file cannot be
+/// written — a fail-closed refusal, never a run against a missing wrapper.
+fn tier2_probe_fixture() -> Result<PathBuf, CliError> {
+    let (name, bytes): (&str, &[u8]) = if cfg!(target_os = "windows") {
+        ("untrusted-build.ps1", TIER2_PROBE_WINDOWS)
+    } else {
+        ("untrusted-build.sh", TIER2_PROBE_POSIX)
+    };
+    let dir = std::env::temp_dir().join(format!("ipe-tier2-fixture-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).map_err(|e| CliError::Io {
+        path: dir.clone(),
+        source: e,
+    })?;
+    let path = dir.join(name);
+    std::fs::write(&path, bytes).map_err(|e| CliError::Io {
+        path: path.clone(),
+        source: e,
+    })?;
+    Ok(path)
 }
 
 /// `ipe package audit [<path>]` — run the full Tier-1 gate on the working
@@ -193,7 +218,7 @@ pub fn run_audit(rest: &[String]) -> Result<(), CliError> {
         has_rust_deps: !prepared.manifest.rust_dependencies.is_empty(),
         root: &prepared.manifest.root,
         emitted_dir: &prepared.emitted_dir,
-        probe_fixture: tier2_probe_fixture(),
+        probe_fixture: tier2_probe_fixture()?,
     })?;
 
     let version = prepared
@@ -298,7 +323,15 @@ fn prepare(path: &Path) -> Result<Prepared, CliError> {
             source: e,
         })?;
     }
-    let runtime_dir = crate::resolve_runtime()?;
+    // Resolve the runtime exactly as `ipe build` does — one resolver for every
+    // command. Under the default dependency model the emitted project names the
+    // runtime as a path dependency, which the build materializes from the
+    // embedded source under `IPE_HOME`; no vendored module tree is needed, so an
+    // empty sentinel is passed and `build_project` never reads it. Only the
+    // vendored/wasm shape needs a concrete module tree. Resolving here through a
+    // separate walk-up (that never materialized) is what made `audit` fail on a
+    // clean machine while `build` succeeded.
+    let runtime_dir = crate::resolve_vendored_runtime_dir(None, !crate::runtime_dep_from_env())?;
     crate::build_project(&manifest_path, &emitted_dir, &runtime_dir)?;
 
     Ok(Prepared {
@@ -848,4 +881,101 @@ fn derive_deny_config(emitted_dir: &Path) -> Result<Option<PathBuf>, CliError> {
 /// Build a [`CliError::PackageAudit`] for `check` carrying `message`.
 const fn reject(check: Check, message: String) -> CliError {
     CliError::PackageAudit(Rejection { check, message })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The Tier-2 probe fixture the gate runs is materialized from the embedded
+    /// bytes, NOT read from a compile-time source path — so a shipped binary with
+    /// no source checkout beside it still finds the wrapper. The returned path
+    /// exists on disk (a runtime scratch file, never the `CARGO_MANIFEST_DIR`
+    /// source tree) and its bytes equal the embedded copy exactly.
+    #[test]
+    fn tier2_probe_fixture_materializes_from_the_embedded_copy() {
+        let path = tier2_probe_fixture().expect("materialize the embedded probe fixture");
+        assert!(
+            path.is_file(),
+            "the materialized probe fixture must exist on disk at {}",
+            path.display()
+        );
+        assert!(
+            !path.starts_with(env!("CARGO_MANIFEST_DIR")),
+            "the materialized fixture must live under a runtime scratch path, not the source tree"
+        );
+        let expected: &[u8] = if cfg!(target_os = "windows") {
+            TIER2_PROBE_WINDOWS
+        } else {
+            TIER2_PROBE_POSIX
+        };
+        let on_disk = std::fs::read(&path).expect("read the materialized probe fixture");
+        assert_eq!(
+            on_disk, expected,
+            "the materialized fixture bytes must equal the embedded copy"
+        );
+        let name = path
+            .file_name()
+            .and_then(|n| n.to_str())
+            .expect("the fixture path has a file name");
+        let expected_name = if cfg!(target_os = "windows") {
+            "untrusted-build.ps1"
+        } else {
+            "untrusted-build.sh"
+        };
+        assert_eq!(
+            name, expected_name,
+            "the fixture keeps the platform-native file name the jail resolves by"
+        );
+        let _ = std::fs::remove_dir_all(path.parent().expect("the fixture has a parent dir"));
+    }
+
+    /// The embedded probe fixtures are the byte-exact contents of the tracked
+    /// fixture files: the tracked files are the single source of truth, embedded
+    /// (not duplicated inline). If a fixture is edited, this equality asserts the
+    /// binary carries the new bytes — no hand-sync, no drift.
+    #[test]
+    fn embedded_probe_fixtures_match_the_tracked_files() {
+        let base = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/fixtures/admission");
+        let posix = std::fs::read(base.join("untrusted-build.sh"))
+            .expect("read the tracked POSIX probe fixture");
+        assert_eq!(
+            posix, TIER2_PROBE_POSIX,
+            "the embedded POSIX fixture must equal the tracked file"
+        );
+        let windows = std::fs::read(base.join("untrusted-build.ps1"))
+            .expect("read the tracked Windows probe fixture");
+        assert_eq!(
+            windows, TIER2_PROBE_WINDOWS,
+            "the embedded Windows fixture must equal the tracked file"
+        );
+    }
+
+    /// `prepare` resolves the runtime through the SAME path `ipe build` uses — the
+    /// materialize-capable resolver — never a separate walk-up that cannot
+    /// materialize. Under the default dependency model no vendored module tree is
+    /// needed, so with `IPE_RUNTIME_DIR` unset the resolution succeeds with an
+    /// empty sentinel (the emitted project names the runtime as a path dependency
+    /// the build materializes). This is the property whose absence made `audit`
+    /// fail on a clean machine where `build` succeeded; a regression that re-splits
+    /// the path (calling `resolve_runtime`, which walks up for an in-repo tree and
+    /// errors when none is found) fails here.
+    #[test]
+    fn audit_runtime_resolution_needs_no_in_repo_tree_under_the_dep_model() {
+        // The dependency model is the default. Only the vendored/wasm shape needs a
+        // concrete module tree; the default does not, so resolution yields the
+        // empty sentinel with no `IPE_RUNTIME_DIR` and no in-repo walk-up.
+        let needs_vendored = !crate::runtime_dep_from_env();
+        assert!(
+            !needs_vendored,
+            "the default dependency model must not require a vendored runtime tree"
+        );
+        let resolved = crate::resolve_vendored_runtime_dir(None, needs_vendored)
+            .expect("the dep-model runtime resolution must not require an in-repo tree");
+        assert_eq!(
+            resolved,
+            PathBuf::new(),
+            "the dep-model path returns the empty sentinel; the build materializes the runtime"
+        );
+    }
 }
