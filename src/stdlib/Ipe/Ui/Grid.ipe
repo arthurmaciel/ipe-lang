@@ -32,7 +32,7 @@ import Ipe.Ui as Ui exposing (Attribute)
 -- `grid-template-columns` / `grid-template-rows` value by
 -- `trackToCss`.
 type Track
-    = Fr Int
+    = TrackFr Int
     | TrackPx Int
     | Auto
     | MinContent
@@ -46,7 +46,7 @@ type Track
 -- N flexible units (`<N>fr`).
 fr : Int -> Track
 fr n =
-    Fr n
+    TrackFr n
 
 
 -- A fixed pixel-width track.
@@ -102,7 +102,7 @@ trackToCss : Track -> String
 trackToCss t =
     case t of
 
-        Fr n ->
+        TrackFr n ->
             String.fromInt n ++ "fr"
 
         TrackPx n ->
