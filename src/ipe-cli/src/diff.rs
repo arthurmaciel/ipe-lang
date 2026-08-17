@@ -467,12 +467,29 @@ fn run_diff_with(rest: &[String], notice: &mut dyn FnMut(&str)) -> Result<(), Cl
     const USAGE: &str = "usage: ipe diff <old-path> <new-path>\n   \
          or: ipe diff check <old-path> <new-path> <old-version> <new-version>";
 
-    // Peel the output-format flags first, so `--plain` / `--json` compose with
-    // the positional paths and the verify-mode arguments.
-    let (format, args) = crate::cli_args::split_format(rest, "diff")?;
+    // Peel the deprecated `--check <old-version> <new-version>` alias FIRST, so
+    // the shared format parse (which rejects any other unknown `-`-leading flag)
+    // never sees `diff`'s own alias flag. The two version arguments follow it.
+    let mut check: Option<(String, String)> = None;
+    let deflagged: Vec<String> = if let Some(pos) = rest.iter().position(|a| a == "--check") {
+        notice(CHECK_DEPRECATION_NOTICE);
+        let old_v = rest.get(pos + 1).ok_or(CliError::Usage(USAGE))?.clone();
+        let new_v = rest.get(pos + 2).ok_or(CliError::Usage(USAGE))?.clone();
+        check = Some((old_v, new_v));
+        rest.iter()
+            .enumerate()
+            .filter(|(i, _)| *i != pos && *i != pos + 1 && *i != pos + 2)
+            .map(|(_, a)| a.clone())
+            .collect()
+    } else {
+        rest.to_vec()
+    };
+
+    // Peel the output-format flags, so `--plain` / `--json` compose with the
+    // positional paths and the verify-mode arguments.
+    let (format, args) = crate::cli_args::split_format(&deflagged, "diff")?;
 
     let mut positional: Vec<&str> = Vec::new();
-    let mut check: Option<(String, String)> = None;
     let mut it = args.into_iter();
 
     // A leading bare `check` selects the verify mode; its two version arguments
@@ -482,16 +499,8 @@ fn run_diff_with(rest: &[String], notice: &mut dyn FnMut(&str)) -> Result<(), Cl
         it.next();
     }
 
-    while let Some(arg) = it.next() {
-        if arg == "--check" {
-            // Deprecated flag alias: still selects the verify mode.
-            notice(CHECK_DEPRECATION_NOTICE);
-            let old_v = it.next().ok_or(CliError::Usage(USAGE))?.to_owned();
-            let new_v = it.next().ok_or(CliError::Usage(USAGE))?.to_owned();
-            check = Some((old_v, new_v));
-        } else {
-            positional.push(arg);
-        }
+    for arg in it {
+        positional.push(arg);
     }
 
     // In bare `check` mode the two versions are the trailing positionals, after

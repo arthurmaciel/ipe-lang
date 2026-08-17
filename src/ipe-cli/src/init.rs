@@ -77,15 +77,11 @@ pub fn run_init(rest: &[String]) -> Result<(), CliError> {
         match arg.as_str() {
             "--force" => force = true,
             flag if flag.starts_with('-') => {
-                return Err(CliError::UsageOwned(format!(
-                    "ipe init: unknown flag {flag:?}"
-                )));
+                return Err(crate::cli_args::usage_unknown_flag("init", flag));
             }
             positional if target_arg.is_none() => target_arg = Some(positional.to_owned()),
             other => {
-                return Err(CliError::UsageOwned(format!(
-                    "ipe init: unexpected argument {other:?}"
-                )));
+                return Err(crate::cli_args::usage_unexpected_argument("init", other));
             }
         }
     }

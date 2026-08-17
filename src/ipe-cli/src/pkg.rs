@@ -84,12 +84,17 @@ fn parse_add_arg(rest: &[String]) -> Result<(&str, semver::VersionReq), CliError
 }
 
 /// The single positional package argument shared by `add` and `remove`. Extra
-/// positionals or none at all are misuse.
+/// positionals or none at all are misuse, and a leading-`-` token is an unknown
+/// flag (rejected as such rather than accepted as a package name) so a flag typo
+/// cannot masquerade as a dependency name and slip past with an exit-0 "nothing
+/// to remove".
 ///
 /// # Errors
-/// [`CliError::UsageOwned`] naming the command's usage.
+/// [`CliError::UsageOwned`] naming the command's usage, or the shared
+/// unknown-flag phrasing on a leading-`-` token.
 fn package_arg<'a>(rest: &'a [String], command: &str) -> Result<&'a str, CliError> {
     match rest {
+        [one] if one.starts_with('-') => Err(crate::cli_args::usage_unknown_flag(command, one)),
         [one] => Ok(one.as_str()),
         _ => Err(CliError::UsageOwned(format!(
             "usage: ipe {command} <package>[@<version>]"

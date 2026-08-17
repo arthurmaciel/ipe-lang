@@ -23,16 +23,23 @@ fn run(args: &[&str]) -> (bool, String, String) {
 }
 
 #[test]
-fn bare_rust_prints_group_help_and_succeeds() {
-    let (bare_ok, bare_stdout, _) = run(&["rust"]);
+fn bare_rust_is_misuse_and_shows_help() {
+    // A bare `ipe rust` (no subcommand) is misuse, not a help request: it exits
+    // non-zero and shows its `--help` page — the uniform misuse discipline every
+    // subcommand-parent shares (matching bare `ipe package`).
+    let (bare_ok, _, bare_stderr) = run(&["rust"]);
+    assert!(!bare_ok, "bare `ipe rust` must exit non-zero (misuse)");
+    assert!(
+        bare_stderr.contains("ipe rust") && bare_stderr.contains("add"),
+        "bare `ipe rust` must show its usage/help naming its subcommands, got:\n{bare_stderr}"
+    );
+
+    // An explicit `ipe rust --help` is still a help request: exit 0, page to stdout.
     let (help_ok, help_stdout, _) = run(&["rust", "--help"]);
-    assert!(bare_ok, "`ipe rust` alone must exit 0");
     assert!(help_ok, "`ipe rust --help` must exit 0");
-    // Single source of truth: bare `ipe rust` emits exactly its `--help` page,
-    // never a separate group-help string that can drift from it.
-    assert_eq!(
-        bare_stdout, help_stdout,
-        "bare `ipe rust` output must equal `ipe rust --help` byte-for-byte"
+    assert!(
+        help_stdout.contains("ipe rust"),
+        "`ipe rust --help` prints the page to stdout, got:\n{help_stdout}"
     );
 }
 

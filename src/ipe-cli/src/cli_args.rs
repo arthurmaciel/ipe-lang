@@ -16,6 +16,33 @@
 use crate::CliError;
 use crate::build_plan::{AllocatorChoice, StaticRequestLayer};
 
+/// The one phrasing for "a command was given a flag it does not recognise".
+///
+/// Every misuse site routes through here so the wording, the `` `backtick` ``
+/// quoting of the offending token, and the `ipe <command>:` prefix have a single
+/// source — a flag typo reads the same regardless of which command caught it.
+/// Always backticks (never `Debug`/`{:?}` straight quotes), always the prefix.
+#[must_use]
+pub fn usage_unknown_flag(command: &str, flag: &str) -> CliError {
+    CliError::UsageOwned(format!("ipe {command}: unknown flag `{flag}`"))
+}
+
+/// The one phrasing for "a parent command was given a subcommand it does not
+/// recognise", naming the accepted set so the fix is obvious.
+#[must_use]
+pub fn usage_unknown_subcommand(command: &str, sub: &str, expected: &str) -> CliError {
+    CliError::UsageOwned(format!(
+        "ipe {command}: unknown subcommand `{sub}` (expected {expected})"
+    ))
+}
+
+/// The one phrasing for "a command that takes no positional was given one, or a
+/// single-positional command was given a second".
+#[must_use]
+pub fn usage_unexpected_argument(command: &str, arg: &str) -> CliError {
+    CliError::UsageOwned(format!("ipe {command}: unexpected argument `{arg}`"))
+}
+
 /// How a data-producing command renders its result.
 ///
 /// The default is the human-friendly form; `--plain` and `--json` are the two
@@ -35,6 +62,68 @@ pub enum OutputFormat {
     Plain,
     /// `--json` — a stable documented schema (machine-parseable).
     Json,
+}
+
+/// Compact single-line JSON building — the SSOT for every machine `--json`
+/// verdict.
+///
+/// The verdicts are byte-uniform: no space after a comma or colon, one escaping
+/// rule for strings. A command builds its verdict from these and never
+/// hand-writes JSON punctuation.
+pub mod json {
+    use std::fmt::Write as _;
+
+    /// Encode a string as a JSON string literal, escaping the characters JSON
+    /// requires (`"`, `\`, and the C0 control set, with the short escapes for the
+    /// common ones).
+    #[must_use]
+    pub fn string(s: &str) -> String {
+        let mut out = String::with_capacity(s.len() + 2);
+        out.push('"');
+        for c in s.chars() {
+            match c {
+                '"' => out.push_str("\\\""),
+                '\\' => out.push_str("\\\\"),
+                '\n' => out.push_str("\\n"),
+                '\r' => out.push_str("\\r"),
+                '\t' => out.push_str("\\t"),
+                c if (c as u32) < 0x20 => {
+                    let _ = write!(out, "\\u{:04x}", c as u32);
+                }
+                c => out.push(c),
+            }
+        }
+        out.push('"');
+        out
+    }
+
+    /// A compact JSON array of already-encoded values — `[a,b,c]`, no spaces.
+    #[must_use]
+    pub fn array(values: &[String]) -> String {
+        format!("[{}]", values.join(","))
+    }
+
+    /// A compact JSON array of strings — each element is [`string`]-encoded.
+    #[must_use]
+    pub fn string_array(items: &[&str]) -> String {
+        let encoded: Vec<String> = items.iter().map(|s| string(s)).collect();
+        array(&encoded)
+    }
+
+    /// A compact JSON object from `(key, already-encoded-value)` pairs —
+    /// `{"k":v,...}`, no spaces.
+    ///
+    /// Each key is [`string`]-encoded; each value is a caller-supplied JSON
+    /// fragment ([`string`] for text, a bare `true`/number literal, or a nested
+    /// [`array`]/[`object`]).
+    #[must_use]
+    pub fn object(fields: &[(&str, String)]) -> String {
+        let body: Vec<String> = fields
+            .iter()
+            .map(|(k, v)| format!("{}:{v}", string(k)))
+            .collect();
+        format!("{{{}}}", body.join(","))
+    }
 }
 
 /// Recognise `--plain` / `--json` in `flag`, folding the choice into `slot`.
@@ -77,9 +166,14 @@ fn consume_format(
 /// Returns the chosen [`OutputFormat`] (defaulting to [`OutputFormat::Human`])
 /// and the positional tokens with the format flags removed.
 ///
+/// A token that is neither a recognised format flag nor a positional — any other
+/// `-`-leading token — is an unknown flag, rejected here so it can never be
+/// silently swallowed into the positional list and exit 0. This mirrors
+/// [`single_positional`]'s rejection of `-`-leading tokens.
+///
 /// # Errors
-/// [`CliError::UsageOwned`] on `--plain --json` together, or a repeated format
-/// flag.
+/// [`CliError::UsageOwned`] on `--plain --json` together, a repeated format flag,
+/// or an unrecognised `-`-leading flag.
 pub fn split_format<'a>(
     rest: &'a [String],
     command: &str,
@@ -87,9 +181,13 @@ pub fn split_format<'a>(
     let mut format: Option<OutputFormat> = None;
     let mut positional: Vec<&'a str> = Vec::new();
     for arg in rest {
-        if !consume_format(&mut format, arg, command)? {
-            positional.push(arg);
+        if consume_format(&mut format, arg, command)? {
+            continue;
         }
+        if arg.starts_with('-') {
+            return Err(usage_unknown_flag(command, arg));
+        }
+        positional.push(arg);
     }
     Ok((format.unwrap_or_default(), positional))
 }
@@ -109,18 +207,34 @@ pub fn single_positional<'a>(
     let mut positional: Option<&'a str> = None;
     for arg in rest {
         if arg.starts_with('-') {
-            return Err(CliError::UsageOwned(format!(
-                "ipe {command}: unexpected option `{arg}`"
-            )));
+            return Err(usage_unknown_flag(command, arg));
         }
         if positional.is_some() {
-            return Err(CliError::UsageOwned(format!(
-                "ipe {command}: unexpected extra argument `{arg}`"
-            )));
+            return Err(usage_unexpected_argument(command, arg));
         }
         positional = Some(arg);
     }
     Ok(positional)
+}
+
+/// The machine-flag form of [`single_positional`]: an optional single positional
+/// path plus the shared `--plain` / `--json` format flags.
+///
+/// Returns the positional (or `None`) and the chosen [`OutputFormat`].
+///
+/// # Errors
+/// [`CliError::UsageOwned`] on an unknown flag, a second positional, or
+/// `--plain --json` together.
+pub fn single_positional_with_format<'a>(
+    rest: &'a [String],
+    command: &str,
+) -> Result<(Option<&'a str>, OutputFormat), CliError> {
+    let (format, positional) = split_format(rest, command)?;
+    match positional.split_first() {
+        None => Ok((None, format)),
+        Some((one, [])) => Ok((Some(*one), format)),
+        Some((_, [extra, ..])) => Err(usage_unexpected_argument(command, extra)),
+    }
 }
 
 /// Set a value option that may appear at most once, rejecting a duplicate with a
@@ -333,9 +447,7 @@ pub fn parse_build(rest: &[String]) -> Result<BuildArgs, CliError> {
             "--optimize" => production = true,
             "--accept-risks" => accept_risks = true,
             other => {
-                return Err(CliError::UsageOwned(format!(
-                    "ipe build: unknown flag `{other}`"
-                )));
+                return Err(usage_unknown_flag("build", other));
             }
         }
     }
@@ -491,9 +603,7 @@ pub fn parse_run(rest: &[String]) -> Result<RunArgs, CliError> {
             )?,
             "--accept-risks" => accept_risks = true,
             other => {
-                return Err(CliError::UsageOwned(format!(
-                    "ipe run: unknown flag `{other}`"
-                )));
+                return Err(usage_unknown_flag("run", other));
             }
         }
     }
@@ -558,9 +668,7 @@ pub fn parse_eject(rest: &[String]) -> Result<EjectArgs, CliError> {
                 "eject",
             )?,
             other => {
-                return Err(CliError::UsageOwned(format!(
-                    "ipe eject: unknown flag `{other}`"
-                )));
+                return Err(usage_unknown_flag("eject", other));
             }
         }
     }
@@ -658,9 +766,7 @@ pub fn parse_deploy(rest: &[String]) -> Result<DeployArgs, CliError> {
             "--bundle" => saw_bundle = true,
             "--capabilities" | "--show-profile" => capabilities_only = true,
             other => {
-                return Err(CliError::UsageOwned(format!(
-                    "ipe deploy: unknown flag `{other}`"
-                )));
+                return Err(usage_unknown_flag("deploy", other));
             }
         }
     }
@@ -736,9 +842,7 @@ pub fn parse_watch(rest: &[String]) -> Result<WatchArgs, CliError> {
                 set_once(&mut port, parsed, "--port", "watch")?;
             }
             other => {
-                return Err(CliError::UsageOwned(format!(
-                    "ipe watch: unknown flag `{other}`"
-                )));
+                return Err(usage_unknown_flag("watch", other));
             }
         }
     }
@@ -771,9 +875,7 @@ pub fn parse_fix(rest: &[String]) -> Result<FixArgs, CliError> {
         match arg.as_str() {
             "--yes" => auto = true,
             flag if flag.starts_with("--") => {
-                return Err(CliError::UsageOwned(format!(
-                    "ipe fix: unknown flag `{flag}`"
-                )));
+                return Err(usage_unknown_flag("fix", flag));
             }
             positional => set_once(&mut entry, positional.to_owned(), "<path>", "fix")?,
         }
@@ -803,9 +905,7 @@ pub fn parse_type_check(rest: &[String]) -> Result<TypeCheckArgs, CliError> {
             continue;
         }
         if arg.starts_with('-') {
-            return Err(CliError::UsageOwned(format!(
-                "ipe type-check: unknown flag `{arg}`"
-            )));
+            return Err(usage_unknown_flag("type-check", arg));
         }
         set_once(&mut entry, arg.clone(), "<path>", "type-check")?;
     }
@@ -845,14 +945,10 @@ pub fn parse_health(rest: &[String]) -> Result<HealthArgs, CliError> {
         match arg.as_str() {
             "--yes" | "-y" => assume_yes = true,
             flag if flag.starts_with('-') => {
-                return Err(CliError::UsageOwned(format!(
-                    "ipe health: unknown flag `{flag}`"
-                )));
+                return Err(usage_unknown_flag("health", flag));
             }
             other => {
-                return Err(CliError::UsageOwned(format!(
-                    "ipe health: unexpected argument `{other}`"
-                )));
+                return Err(usage_unexpected_argument("health", other));
             }
         }
     }
@@ -871,8 +967,14 @@ pub fn parse_health(rest: &[String]) -> Result<HealthArgs, CliError> {
 /// at the boundary (parse, don't validate).
 pub enum FmtMode {
     /// Format (or check) every `.ipe` file under `path` in place.
-    /// `None` means the current directory `.`.
-    InPlace { path: Option<String>, check: bool },
+    /// `None` means the current directory `.`. `format` selects how a `--check`
+    /// run reports the unformatted set (human list, or a machine `--json`/`--plain`
+    /// file list); it is [`OutputFormat::Human`] for a plain in-place format.
+    InPlace {
+        path: Option<String>,
+        check: bool,
+        format: OutputFormat,
+    },
     /// Read from stdin, write formatted result to stdout.
     Stdin,
     /// Read from stdin, print diff to stdout without writing.
@@ -884,9 +986,15 @@ pub enum FmtMode {
 /// * No flags, no path → `InPlace { path: None, check: false }`
 /// * One path → `InPlace { path: Some(…), check: false }`
 /// * `--check` → `InPlace { …, check: true }`
+/// * `--check --json` / `--check --plain` → machine list of unformatted files
 /// * `--stdin` → `Stdin`
 /// * `--stdin --check` → `StdinCheck`
 /// * `--stdin` + positional path → error (mutually exclusive)
+///
+/// A machine output format (`--json` / `--plain`) is meaningful only for a
+/// `--check` scan (it reports which files are unformatted), and never with
+/// `--stdin` (that path already writes the formatted text or a diff to stdout);
+/// both misuses are rejected here.
 ///
 /// # Errors
 /// [`CliError::Usage`] / [`CliError::UsageOwned`] naming the exact problem.
@@ -894,14 +1002,16 @@ pub fn parse_fmt(rest: &[String]) -> Result<FmtMode, CliError> {
     let mut path: Option<String> = None;
     let mut check = false;
     let mut stdin = false;
+    let mut format: Option<OutputFormat> = None;
     for arg in rest {
+        if consume_format(&mut format, arg, "fmt")? {
+            continue;
+        }
         match arg.as_str() {
             "--check" => check = true,
             "--stdin" => stdin = true,
             flag if flag.starts_with('-') => {
-                return Err(CliError::UsageOwned(format!(
-                    "ipe fmt: unknown flag `{flag}`"
-                )));
+                return Err(usage_unknown_flag("fmt", flag));
             }
             positional => {
                 if path.is_some() {
@@ -916,6 +1026,17 @@ pub fn parse_fmt(rest: &[String]) -> Result<FmtMode, CliError> {
             "fmt: --stdin and a <path> argument are mutually exclusive",
         ));
     }
+    let format = format.unwrap_or_default();
+    if format != OutputFormat::Human && stdin {
+        return Err(CliError::Usage(
+            "fmt: --plain / --json do not compose with --stdin (it already writes to stdout)",
+        ));
+    }
+    if format != OutputFormat::Human && !check {
+        return Err(CliError::Usage(
+            "fmt: --plain / --json report the unformatted files of a --check scan; pass --check",
+        ));
+    }
     if stdin {
         if check {
             Ok(FmtMode::StdinCheck)
@@ -923,7 +1044,11 @@ pub fn parse_fmt(rest: &[String]) -> Result<FmtMode, CliError> {
             Ok(FmtMode::Stdin)
         }
     } else {
-        Ok(FmtMode::InPlace { path, check })
+        Ok(FmtMode::InPlace {
+            path,
+            check,
+            format,
+        })
     }
 }
 
@@ -1188,7 +1313,8 @@ mod tests {
             m,
             FmtMode::InPlace {
                 path: None,
-                check: false
+                check: false,
+                ..
             }
         ));
     }
@@ -1196,13 +1322,13 @@ mod tests {
     #[test]
     fn fmt_path_sets_in_place() {
         let m = parse_fmt(&s(&["src"])).expect("fmt src");
-        assert!(matches!(m, FmtMode::InPlace { path: Some(p), check: false } if p == "src"));
+        assert!(matches!(m, FmtMode::InPlace { path: Some(p), check: false, .. } if p == "src"));
     }
 
     #[test]
     fn fmt_check_and_path() {
         let m = parse_fmt(&s(&["src", "--check"])).expect("fmt");
-        assert!(matches!(m, FmtMode::InPlace { path: Some(p), check: true } if p == "src"));
+        assert!(matches!(m, FmtMode::InPlace { path: Some(p), check: true, .. } if p == "src"));
     }
 
     #[test]
@@ -1224,7 +1350,8 @@ mod tests {
             m,
             FmtMode::InPlace {
                 path: None,
-                check: true
+                check: true,
+                ..
             }
         ));
     }
@@ -1282,6 +1409,101 @@ mod tests {
     fn health_positional_and_unknown_flag_rejected() {
         assert!(parse_health(&s(&["somefile"])).is_err());
         assert!(parse_health(&s(&["--bogus"])).is_err());
+    }
+
+    // ---- misuse discipline (unknown flags) ----------------------------------
+
+    #[test]
+    fn split_format_rejects_unknown_leading_dash_flag() {
+        // A `-`-leading token that is not a format flag is an unknown flag, never
+        // swallowed into the positional list.
+        let err = split_format(&s(&["--nope"]), "capabilities").expect_err("must reject");
+        assert!(
+            matches!(err, CliError::UsageOwned(m) if m == "ipe capabilities: unknown flag `--nope`")
+        );
+    }
+
+    #[test]
+    fn split_format_keeps_plain_positionals() {
+        let a = s(&["file.ipe"]);
+        let (_fmt, pos) = split_format(&a, "diff").expect("positional ok");
+        assert_eq!(pos, vec!["file.ipe"]);
+    }
+
+    #[test]
+    fn single_positional_with_format_parses_path_and_json() {
+        let a = s(&["proj", "--json"]);
+        let (path, fmt) = single_positional_with_format(&a, "test").expect("ok");
+        assert_eq!(path, Some("proj"));
+        assert_eq!(fmt, OutputFormat::Json);
+    }
+
+    #[test]
+    fn single_positional_with_format_rejects_unknown_flag_and_extra() {
+        assert!(single_positional_with_format(&s(&["--nope"]), "test").is_err());
+        assert!(single_positional_with_format(&s(&["a", "b"]), "test").is_err());
+        assert!(single_positional_with_format(&s(&["--plain", "--json"]), "verify").is_err());
+    }
+
+    #[test]
+    fn misuse_helpers_have_one_phrasing() {
+        // Always backticked, always the `ipe <command>:` prefix.
+        assert_eq!(
+            usage_unknown_flag("build", "--nope").to_string(),
+            "ipe build: unknown flag `--nope`"
+        );
+        assert_eq!(
+            usage_unknown_subcommand("rust", "bogus", "add, remove, or install").to_string(),
+            "ipe rust: unknown subcommand `bogus` (expected add, remove, or install)"
+        );
+        assert_eq!(
+            usage_unexpected_argument("clean", "x").to_string(),
+            "ipe clean: unexpected argument `x`"
+        );
+    }
+
+    // ---- fmt machine flags --------------------------------------------------
+
+    #[test]
+    fn fmt_check_json_and_plain_recognised() {
+        assert!(matches!(
+            parse_fmt(&s(&["--check", "--json"])).expect("check json"),
+            FmtMode::InPlace {
+                check: true,
+                format: OutputFormat::Json,
+                ..
+            }
+        ));
+        assert!(matches!(
+            parse_fmt(&s(&["--check", "--plain"])).expect("check plain"),
+            FmtMode::InPlace {
+                check: true,
+                format: OutputFormat::Plain,
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn fmt_format_without_check_or_with_stdin_rejected() {
+        assert!(parse_fmt(&s(&["--json"])).is_err());
+        assert!(parse_fmt(&s(&["--stdin", "--json"])).is_err());
+        assert!(parse_fmt(&s(&["--check", "--plain", "--json"])).is_err());
+    }
+
+    // ---- compact JSON SSOT --------------------------------------------------
+
+    #[test]
+    fn json_helpers_are_compact_and_escaped() {
+        assert_eq!(json::string("a\"b\\c"), "\"a\\\"b\\\\c\"");
+        // No space after a comma — byte-uniform with capabilities/version.
+        assert_eq!(json::string_array(&["A", "B"]), "[\"A\",\"B\"]");
+        assert_eq!(
+            json::object(&[("k", json::string("v")), ("n", "true".to_owned())]),
+            "{\"k\":\"v\",\"n\":true}"
+        );
+        // The doc-list array shape is compact — no comma-space.
+        assert!(!json::string_array(&["Main", "Ipe.List"]).contains(", "));
     }
 
     // ---- output format ------------------------------------------------------

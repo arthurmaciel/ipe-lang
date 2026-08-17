@@ -1768,18 +1768,21 @@ fn add_one(
 /// [`CliError`] on an unknown subcommand or any subcommand failure.
 pub fn run_rust(rest: &[String]) -> Result<(), CliError> {
     match rest.split_first() {
-        None => {
-            if let Some(page) = crate::help::command("rust", &std::io::stdout()) {
-                print!("{page}");
-            }
-            Ok(())
-        }
+        // A bare `ipe rust` is misuse, not a help request: fail closed with the
+        // usage hint so the dispatcher shows the `--help` page and exits
+        // non-zero — matching bare `ipe package`. An explicit `ipe rust --help`
+        // is still honoured as a help request upstream.
+        None => Err(CliError::Usage(
+            "usage: ipe rust <add|remove|install> <crate>[@<version>] [flags]",
+        )),
         Some((sub, args)) if sub == "add" => run_add(args),
         Some((sub, args)) if sub == "remove" => run_remove(args),
         Some((sub, args)) if sub == "install" => run_install(args),
-        Some((sub, _)) => Err(CliError::UsageOwned(format!(
-            "ipe rust: unknown subcommand {sub:?} (expected add, remove, or install)"
-        ))),
+        Some((sub, _)) => Err(crate::cli_args::usage_unknown_subcommand(
+            "rust",
+            sub,
+            "add, remove, or install",
+        )),
     }
 }
 

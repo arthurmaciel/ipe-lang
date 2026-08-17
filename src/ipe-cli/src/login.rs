@@ -62,9 +62,10 @@ pub fn run_login(rest: &[String]) -> Result<(), CliError> {
             Ok(())
         }
         Some("--logout") if rest.len() == 1 => logout(),
-        Some(other) => Err(CliError::UsageOwned(format!(
-            "login: unexpected argument `{other}` (usage: ipe login [--status | --logout])"
-        ))),
+        Some(other) if other.starts_with('-') => {
+            Err(crate::cli_args::usage_unknown_flag("login", other))
+        }
+        Some(other) => Err(crate::cli_args::usage_unexpected_argument("login", other)),
     }
 }
 
