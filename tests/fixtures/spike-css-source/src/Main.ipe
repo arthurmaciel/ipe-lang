@@ -40,16 +40,24 @@ attackSelector =
         [ rule "body{}</style><script>alert(1)</script>" [ color (hex "000") ] ]
 
 
--- #105: a `raw` body smuggling an `@import` (CSS-level SSRF) is DROPPED
--- entirely (`CssRuleDropped`), not just `</style`-stripped.
+-- A `raw` body smuggling an `@import` (CSS-level SSRF) is DROPPED entirely
+-- (`CssRuleDropped`), not just `</style`-stripped.
 attackRawImport : String
 attackRawImport =
     stylesheet
         [ raw "@import url(https://evil.example/x.css);" ]
 
 
--- #105: a `keyframes` frame smuggling `@import` drops the whole rule
--- (`List.any` — ANY frame poisons it).
+-- A CSS-escaped `@import` (`\40 ` decodes to `@`) that a raw substring check
+-- misses is DROPPED by the `sanitizeRawBody` kernel's `css_unescape` re-scan.
+attackRawEscapedImport : String
+attackRawEscapedImport =
+    stylesheet
+        [ raw "\\40 import url(https://evil.example/x.css)" ]
+
+
+-- A `keyframes` frame smuggling `@import` drops the whole rule (ANY frame
+-- poisons the joined scan).
 attackKeyframesImport : String
 attackKeyframesImport =
     stylesheet
@@ -60,7 +68,7 @@ attackKeyframesImport =
         ]
 
 
--- #105 non-regression: a benign `keyframes` still renders.
+-- Non-regression: a benign `keyframes` still renders (block structure is legal).
 benignKeyframes : String
 benignKeyframes =
     stylesheet
@@ -80,6 +88,8 @@ main =
             ++ attackSelector
             ++ "\n---\n"
             ++ attackRawImport
+            ++ "\n---\n"
+            ++ attackRawEscapedImport
             ++ "\n---\n"
             ++ attackKeyframesImport
             ++ "\n---\n"

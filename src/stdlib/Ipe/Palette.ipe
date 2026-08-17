@@ -1,6 +1,6 @@
-module Ipe.Palette exposing (Shade(..), toHex, Length(..), lengthPx)
+module Ipe.Palette exposing (Shade(..), toHex, Spacing(..), spacingPx)
 
--- Spike module for the compiled-source stdlib subsystem (#98, extended #103).
+-- Spike module for the compiled-source stdlib subsystem.
 --
 -- The load-bearing property this exercises — impossible for a kernel — is a
 -- module in the reserved `Ipe.` namespace that DEFINES its own data type AND
@@ -8,15 +8,11 @@ module Ipe.Palette exposing (Shade(..), toHex, Length(..), lengthPx)
 -- built-in type name, so it validates the injection + N0025 exemption seam
 -- independently of the reserved-name gate.
 --
--- `Length` (#103) is the opposite: it IS a reserved built-in type name (in the
--- nullary-Ipe.Ui set). A USER module declaring `type Length` is still rejected
--- by IPE-N0026, but an `EmbeddedStdlib` module — the canonical definer, tagged
--- via the unforgeable `ModuleOrigin` — is exempt for that subset. This proves
--- an `EmbeddedStdlib` module can define a reserved type end-to-end (the last
--- prereq before compiled-source `Ipe.Css`, which defines `Length` / `Color` /
--- … for real). The lowerer keys this `Length` under its real home
--- (`Ipe.Palette`), so it becomes its own enum and never collides with the
--- genuine Ipe.Ui `UiPlain::Length` (empty home).
+-- `Spacing` exercises the complementary path: a type name unique to this
+-- module, avoiding collision with the `Length` opaque that `Ipe.Css` defines
+-- and owns. No shipped module reuses another module's opaque type vocabulary.
+-- The lowerer keys `Spacing` under its real home (`Ipe.Palette`), so it becomes
+-- its own enum and never collides with any `Ipe.Css` or `Ipe.Ui` type.
 --
 -- Every top-level binding is fully annotated: the compiled-source stdlib
 -- discipline (annotation-driven generalisation, no whole-program let-gen) is
@@ -38,12 +34,12 @@ toHex shade =
             "#fff"
 
 
-type Length
-    = Px Int
+type Spacing
+    = Sp Int
 
 
-lengthPx : Length -> Int
-lengthPx len =
-    case len of
-        Px n ->
+spacingPx : Spacing -> Int
+spacingPx s =
+    case s of
+        Sp n ->
             n

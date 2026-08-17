@@ -852,6 +852,12 @@ pub enum StdlibKernel {
     CssSafetySafePropName,
     CssSafetySafeSelector,
     CssSafetyStripStyleClose,
+    // `sanitizeRawBody : String -> Maybe String` — the authoritative gate for a
+    // raw `<style>`-body fragment (`Css.raw` / `Css.keyframes`). Runs the audited
+    // `css_safety` raw-body policy (`css_unescape` normalization + whitespace
+    // strip), so a CSS-escaped `@import`/script-sink payload a substring check
+    // misses is dropped. `Nothing` => the Ipê side drops the rule.
+    CssSafetySanitizeRawBody,
     // ── Maybe ───────────────────────────────────────────────────────────────
     MaybeWithDefault,
     MaybeMap,
@@ -2523,6 +2529,9 @@ impl StdlibKernel {
                 Pure,
                 "strip_style_close_kernel",
             ),
+            Self::CssSafetySanitizeRawBody => {
+                d("CssSafety", "sanitizeRawBody", 1, Pure, "safe_raw_body")
+            }
             // ── Maybe ───────────────────────────────────────────────────────
             Self::MaybeWithDefault => d("Maybe", "withDefault", 2, Pure, "maybe_with_default"),
             Self::MaybeMap => d("Maybe", "map", 2, Pure, "ipe_maybe_map"),
@@ -4020,6 +4029,7 @@ impl StdlibKernel {
         Self::CssSafetySafePropName,
         Self::CssSafetySafeSelector,
         Self::CssSafetyStripStyleClose,
+        Self::CssSafetySanitizeRawBody,
         // Maybe
         Self::MaybeWithDefault,
         Self::MaybeMap,
@@ -7508,6 +7518,7 @@ impl StdlibKernel {
             Self::CssSafetySafeValue
             | Self::CssSafetySafePropName
             | Self::CssSafetySafeSelector
+            | Self::CssSafetySanitizeRawBody
             | Self::UuidParse => Some(&STRING_TO_MAYBE_STRING),
 
             // ── Miscellaneous arrow-only schemes. `Debug.log` / `Error.toString`
@@ -8577,6 +8588,7 @@ impl StdlibKernel {
             | Self::CssSafetySafeValue
             | Self::CssSafetySafePropName
             | Self::CssSafetySafeSelector
+            | Self::CssSafetySanitizeRawBody
             | Self::CssSafetyStripStyleClose
             | Self::MaybeWithDefault
             | Self::MaybeMap
@@ -10650,6 +10662,7 @@ impl StdlibKernel {
             Self::CssSafetySafeValue
                 | Self::CssSafetySafePropName
                 | Self::CssSafetySafeSelector
+                | Self::CssSafetySanitizeRawBody
                 | Self::CssSafetyStripStyleClose
         )
     }

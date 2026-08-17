@@ -5,14 +5,10 @@ module Main exposing (main)
 -- source). Both must resolve — the resolve.rs `!deps.contains_key` conjunct keeps
 -- the genuine kernel on the continue path while routing Ipe.Palette through the
 -- normal dep-injection path.
---
--- #103: Ipe.Palette now also defines `type Length` (a reserved built-in name),
--- proving an EmbeddedStdlib module can define + export a reserved type that a
--- user module could not. `Px` / `lengthPx` exercise it end-to-end.
 import Ipe.String as String
-import Ipe.Palette exposing (Shade(..), toHex, Length(..), lengthPx)
+import Ipe.Palette exposing (Shade(..), toHex, Spacing(..), spacingPx)
 import Ipe.Io as Io
 
 
 main =
-    Io.println (toHex Dark ++ " " ++ String.fromInt (lengthPx (Px 42)))
+    Io.println (toHex Dark ++ " " ++ String.fromInt (spacingPx (Sp 42)))

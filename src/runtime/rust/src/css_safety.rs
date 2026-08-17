@@ -98,6 +98,71 @@ fn has_dangerous_css_pattern(low: &str) -> bool {
     BAD_VALUE_PATTERNS.iter().any(|bad| low_nows.contains(bad))
 }
 
+/// At-rule / style-tag / comment / script-sink patterns that must never survive
+/// in a raw `<style>`-body fragment (`Css.raw` / `Css.keyframes`). A raw body is
+/// a full stylesheet fragment, so block-structure characters (`{` `}` `;`) are
+/// LEGAL here (unlike a single declaration value) — the danger is an at-rule
+/// (`@import` CSS-level SSRF, `@charset`), a style-tag / comment breakout
+/// (`</` `/*`), or a script-sink URL scheme. Checked against BOTH the raw
+/// fragment and its CSS-escape-decoded form so a hex-escaped payload
+/// (`\40 import`, `x:e\78 pression(…)`) cannot slip past.
+const BAD_RAW_BODY_PATTERNS: &[&str] = &[
+    "@import",
+    "@charset",
+    "@namespace",
+    "</",
+    "/*",
+    "*/",
+    "expression(",
+    "javascript:",
+    "vbscript:",
+    "url(javascript:",
+    "url('javascript:",
+    "url(\"javascript:",
+    "url(vbscript:",
+    "url(data:text",
+    "url(data:application",
+];
+
+/// True when `low` (already lowercased) carries a raw-`<style>`-body breakout —
+/// an at-rule, a style-tag / comment breakout, or a script-sink scheme. Shared
+/// by the raw and CSS-escape-decoded passes of [`sink_safe_raw_body`] so they
+/// cannot drift. Whitespace is stripped before the scan so `@ import`,
+/// `url( javascript:`, and `expression (` cannot evade by inserting spaces.
+fn raw_body_has_dangerous_pattern(low: &str) -> bool {
+    let low_nows: String = low.chars().filter(|c| !c.is_whitespace()).collect();
+    BAD_RAW_BODY_PATTERNS
+        .iter()
+        .any(|bad| low_nows.contains(bad))
+}
+
+/// Sink-side validation of a raw `<style>`-body fragment — the body carried by
+/// `Css.raw` and (per-frame-joined) `Css.keyframes`. A raw fragment is a
+/// TRUSTED-INPUT escape hatch (`dangerouslySetInnerHTML`-class): block structure
+/// (`{` `}` `;`) is legitimate, so this does NOT reuse the flat declaration-value
+/// policy. It rejects an at-rule (`@import` CSS-level SSRF), a `<style>`/comment
+/// breakout (`</` `/*` `*/`), or a script-sink URL scheme — in BOTH the raw and
+/// CSS-escape-decoded (`css_unescape`) forms, with whitespace stripped for the
+/// scan. This is the faithful counterpart to `Ipe.Css`'s `.ipe` gate: the same
+/// normalization the `<style>` sink relies on runs at the `raw`/`keyframes`
+/// boundary, so a CSS-escaped payload that a raw substring check would miss
+/// (`\40 import`, `x:e\78 pression(…)`) is dropped here.
+///
+/// Returns `Just(())` when the body carries no dangerous construct (the Ipê side
+/// keeps its ORIGINAL, unmodified bytes — no reformat), `Nothing` (fail-closed)
+/// the moment a breakout is detected.
+#[must_use]
+pub(crate) fn sink_safe_raw_body(body: &str) -> bool {
+    let low = body.to_ascii_lowercase();
+    if raw_body_has_dangerous_pattern(&low) {
+        return false;
+    }
+    // Defence-in-depth: decode CSS backslash escapes and re-scan so a
+    // hex-escaped bypass (`\40 import`, `x:e\78 pression(…)`) is caught too.
+    let decoded_low = css_unescape(&low);
+    !raw_body_has_dangerous_pattern(&decoded_low)
+}
+
 /// Decode CSS backslash escapes (CSS Syntax Level 3 §4.3.7) for DETECTION
 /// purposes only — the decoded string is never emitted; [`SafeCssValue`]
 /// keeps the caller's ORIGINAL string on success. A value that hides a
@@ -668,5 +733,57 @@ mod tests {
         // no-op — the capability-gated path keeps its exact bytes.
         let once = neutralise_script_close("x</script>y");
         assert_eq!(neutralise_script_close(&once), once);
+    }
+
+    /// `sink_safe_raw_body` — the authoritative raw/keyframes-body gate — drops
+    /// every at-rule / breakout / script-sink construct, INCLUDING the
+    /// CSS-escape-decoded and whitespace-obfuscated forms a raw substring check
+    /// misses, while keeping a benign block-structured body (`{` `}` `;` are
+    /// legal in a stylesheet fragment).
+    #[test]
+    fn raw_body_gate_drops_dangerous_keeps_benign() {
+        let must_reject = [
+            // At-rule injection (`@import` = CSS-level SSRF), plain form.
+            "@import url(//evil/x.css)",
+            "0% { transform: rotate(0deg) } @import url(x)",
+            "@charset \"utf-8\"; body { display:none }",
+            // Style-tag / comment breakout.
+            "a { color: red } </style><script>alert(1)</script>",
+            "/* comment */ body { display:none }",
+            // Script-sink URL schemes.
+            "a { x: expression(alert(1)) }",
+            "a { background: url(javascript:alert(1)) }",
+            "a { background: url(vbscript:alert(1)) }",
+            "a { background: url(data:text/html;base64,abc) }",
+            "a { background: url(data:application/x-www-form-urlencoded,abc) }",
+            // Whitespace-obfuscated (whitespace stripped before the scan).
+            "a { background: url( javascript:alert(1)) }",
+            "a { x: expression (alert(1)) }",
+            // CSS-hex-escaped payloads a raw substring scan MISSES — caught by
+            // the css_unescape re-scan. `\40 `='@', `\78 `='x', `\69 `='i'.
+            "\\40 import url(//evil/x.css)",
+            "x:e\\78 pression(alert(1))",
+            "@\\69 mport url(x)",
+        ];
+        for body in &must_reject {
+            assert!(
+                !sink_safe_raw_body(body),
+                "raw body gate must drop: {body:?}"
+            );
+        }
+
+        // Benign block-structured bodies pass — block chars `{` `}` `;` are legal
+        // in a raw stylesheet / keyframes fragment.
+        let must_pass = [
+            "0% { opacity: 0 } 100% { opacity: 1 }",
+            ".card { color: red; padding: 8px }",
+            "from { transform: translateX(0) } to { transform: translateX(100px) }",
+        ];
+        for body in &must_pass {
+            assert!(
+                sink_safe_raw_body(body),
+                "benign raw body must pass: {body:?}"
+            );
+        }
     }
 }

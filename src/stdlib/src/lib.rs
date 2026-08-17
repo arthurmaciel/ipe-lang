@@ -334,8 +334,10 @@ pub struct CompiledStdModule {
     pub source: &'static str,
 }
 
-/// `Ipe.Palette` — a Std-namespace module that defines `Shade`
-/// and pattern-matches its own constructors in `toHex`.
+/// `Ipe.Palette` — a Std-namespace spike module that defines `Shade` / `Spacing`
+/// and pattern-matches their constructors in `toHex` / `spacingPx`. Neither
+/// type name collides with the `Length` / `Color` vocabulary that `Ipe.Css`
+/// owns; `Spacing` / `Sp` are unique to this module.
 const PALETTE: &str = include_str!("../Ipe/Palette.ipe");
 
 /// `Ipe.Tuple` — pure pair helpers (elm/core `Tuple` parity).
@@ -360,7 +362,7 @@ const RANDOM_GENERATOR: &str = include_str!("../Ipe/Random/Generator.ipe");
 /// `Ipe.Css` — the typed stylesheet DSL, compiled pure Ipê source: it
 /// defines AND pattern-matches its own `CssProp` / `CssRule` / `Length` /
 /// `Color` / keyword-enum ADTs and folds them to a CSS string.  Its only Rust
-/// surface is the four leaf security kernels under the `Ipe.CssSafety`
+/// surface is the leaf security kernels under the `Ipe.CssSafety`
 /// kernel qualifier (NOT under `Ipe.Css`, so the disjointness invariant holds).
 const CSS: &str = include_str!("../Ipe/Css.ipe");
 
