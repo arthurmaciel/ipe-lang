@@ -29,24 +29,33 @@ pub fn foreign_to_ipe(t: &str) -> String {
     if let Some(inner) = strip_container(t, "Vec") {
         return format!("List {}", paren_multi(&foreign_to_ipe(inner)));
     }
-    if let Some(inner) = strip_container(t, "Result") {
+    // Unqualified `Result<T, E>`: only the 2-arg standard form maps to
+    // `Result Error T`. A crate-local newtype with a different arity falls
+    // through to the nominal opaque arm.
+    // Only the 2-arg form maps to `Result Error T`; wrong arity falls through
+    // to the nominal opaque arm so extra type arguments are not silently dropped.
+    if let Some(inner) = strip_container(t, "Result")
+        && let [ok, _err] = split_top_level_args(inner).as_slice()
+    {
         // The foreign error arm folds into the typed Ipê `Error` at the
         // boundary — never a type param, never a `String` error.
-        let ok = inner.split(',').next().unwrap_or(inner).trim();
-        return format!("Result Error {}", paren_multi(&foreign_to_ipe(ok)));
+        return format!("Result Error {}", paren_multi(&foreign_to_ipe(ok.trim())));
     }
-    // Qualified Result alias: `fmt::Result`, `io::Result<T>`, etc.  The
-    // module-path prefix prevents the direct strip above from matching; check
-    // the last `::` segment separately.
-    if let Some((_, last_seg)) = t.rsplit_once("::") {
+    // Qualified Result alias: restrict to the known standard library paths
+    // (`std|core::result::Result`, `std|core::fmt::Result`,
+    // `std|core::io::Result`). A crate-local `mycrate::Result<A, B, C>`
+    // whose module prefix is not a std path falls through to the generic
+    // nominal-opaque arm so its extra type arguments are not silently dropped.
+    if let Some((prefix, last_seg)) = t.rsplit_once("::") {
         let last_base = last_seg.split('<').next().unwrap_or(last_seg).trim();
-        if last_base == "Result" {
+        if last_base == "Result" && is_std_result_module(prefix) {
             if let Some(inner) = strip_container(last_seg, "Result") {
-                // `io::Result<T>`: extract the Ok payload.
+                // `io::Result<T>` / `result::Result<T, E>`: Ok payload is
+                // the first comma-delimited argument.
                 let ok = inner.split(',').next().unwrap_or(inner).trim();
                 return format!("Result Error {}", paren_multi(&foreign_to_ipe(ok)));
             }
-            // `fmt::Result` — bare alias for `Result<(), _>`.
+            // `fmt::Result` — bare alias for `Result<(), fmt::Error>`.
             return "Result Error ()".to_owned();
         }
     }
@@ -78,6 +87,48 @@ fn strip_container<'a>(t: &'a str, ctor: &str) -> Option<&'a str> {
     t.strip_prefix(ctor)
         .and_then(|rest| rest.trim().strip_prefix('<'))
         .and_then(|rest| rest.strip_suffix('>'))
+}
+
+/// True when `module` is one of the known standard-library module paths that
+/// define a `Result` alias: `result`, `fmt`, `io` (with optional `std::` or
+/// `core::` prefix). Unknown module paths are rejected so a crate-local
+/// `mycrate::Result` is never coerced into the std mapping.
+fn is_std_result_module(module: &str) -> bool {
+    // Strip one optional leading `std::` or `core::` qualifier, then check the
+    // leaf module name.
+    let leaf = module
+        .strip_prefix("std::")
+        .or_else(|| module.strip_prefix("core::"))
+        .unwrap_or(module);
+    matches!(leaf, "result" | "fmt" | "io")
+}
+
+/// Split the comma-separated arguments of a generic parameter list at the
+/// TOP level only — commas inside nested `<…>` groups do not split.
+///
+/// Returns the argument strings in declaration order. The caller receives an
+/// empty `Vec` for an empty string (i.e. a bare `Result` with no angle
+/// brackets).
+fn split_top_level_args(inner: &str) -> Vec<&str> {
+    let mut args = Vec::new();
+    let mut depth: u32 = 0;
+    let mut start = 0;
+    for (i, b) in inner.bytes().enumerate() {
+        match b {
+            b'<' => depth = depth.saturating_add(1),
+            b'>' => depth = depth.saturating_sub(1),
+            b',' if depth == 0 => {
+                args.push(inner[start..i].trim());
+                start = i + 1;
+            }
+            _ => {}
+        }
+    }
+    let tail = inner[start..].trim();
+    if !tail.is_empty() {
+        args.push(tail);
+    }
+    args
 }
 
 /// Parenthesise a multi-word type when it nests under another constructor.
@@ -858,6 +909,73 @@ mod tests {
         assert_eq!(
             redecoded.render_body(&["a".to_owned()]),
             "::box1::Box1::<A>::make(arg0)"
+        );
+    }
+
+    // --- Result alias restriction tests ---
+
+    #[test]
+    fn crate_local_result_with_three_args_maps_by_generic_ctor_not_std_result() {
+        // A crate-local `mycrate::Result<A, B, C>` has an unknown module prefix
+        // and 3 type args — neither criterion matches std Result. The mapping
+        // must fall through to the nominal opaque arm, not emit `Result Error A`
+        // (which would silently drop B and C).
+        let mapped = foreign_to_ipe("mycrate::Result<A, B, C>");
+        // The nominal opaque arm strips the module path and generic args,
+        // yielding the bare constructor name.
+        assert_eq!(mapped, "Result");
+        // Critically, the extra type args B and C are not silently dropped.
+        assert!(
+            !mapped.contains("Error"),
+            "must not be coerced to Result Error"
+        );
+    }
+
+    #[test]
+    fn unqualified_result_with_wrong_arity_falls_through_to_nominal_opaque() {
+        // An unqualified `Result<A, B, C>` has 3 args — not the 2-arg standard
+        // form; it must not be mapped as `Result Error A`.
+        let three = foreign_to_ipe("Result<A, B, C>");
+        assert!(
+            !three.contains("Error"),
+            "3-arg Result must not be std-mapped"
+        );
+
+        // A 1-arg `Result<T>` is equally non-standard.
+        let one = foreign_to_ipe("Result<T>");
+        assert!(
+            !one.contains("Error"),
+            "1-arg Result must not be std-mapped"
+        );
+    }
+
+    #[test]
+    fn std_result_aliases_still_map_correctly_after_restriction() {
+        // The known std aliases must be unaffected by the restriction.
+        assert_eq!(
+            foreign_to_ipe("std::result::Result<T, E>"),
+            "Result Error T"
+        );
+        assert_eq!(
+            foreign_to_ipe("core::result::Result<T, E>"),
+            "Result Error T"
+        );
+        assert_eq!(foreign_to_ipe("std::fmt::Result"), "Result Error ()");
+        assert_eq!(foreign_to_ipe("core::fmt::Result"), "Result Error ()");
+        assert_eq!(
+            foreign_to_ipe("std::io::Result<String>"),
+            "Result Error String"
+        );
+        assert_eq!(
+            foreign_to_ipe("core::io::Result<usize>"),
+            "Result Error Int"
+        );
+        assert_eq!(foreign_to_ipe("io::Result<()>"), "Result Error ()");
+        assert_eq!(foreign_to_ipe("fmt::Result"), "Result Error ()");
+        // Standard 2-arg unqualified Result still maps.
+        assert_eq!(
+            foreign_to_ipe("Result<Version, Error>"),
+            "Result Error Version"
         );
     }
 }
