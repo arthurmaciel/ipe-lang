@@ -1189,8 +1189,28 @@ pub fn callee_name(ctx: &EmitCtx, callee: &Callee) -> DResult<String> {
         Callee::Kernel(k) => Ok(kernel_name(*k).to_owned()),
         // A foreign wrapper lives in the emitted `src/ffi.rs` module; the
         // absolute `crate::ffi::` path keeps it unambiguous from every
-        // emitted file. The identifier was validated at canonicalisation.
-        Callee::Ffi { ident, .. } => Ok(format!("crate::ffi::{}", ctx.resolve_ident(*ident)?)),
+        // emitted file. The identifier must be a legal Rust identifier
+        // (ascii alpha/underscore start, then alphanumeric/underscore) — an
+        // illegal name here is a compiler invariant failure, not a user error.
+        Callee::Ffi { ident, .. } => {
+            let name = ctx.resolve_ident(*ident)?;
+            let mut chars = name.chars();
+            let head_ok = chars
+                .next()
+                .is_some_and(|c| c.is_ascii_alphabetic() || c == '_');
+            if head_ok && chars.all(|c| c.is_ascii_alphanumeric() || c == '_') {
+                Ok(format!("crate::ffi::{name}"))
+            } else {
+                Err(Diagnostic::CompilerBug {
+                    where_: "ipe_backend_rust::callee_name(Callee::Ffi)",
+                    detail: format!(
+                        "FFI callee ident {name:?} is not a legal Rust identifier; \
+                         it must contain only ascii alphanumeric characters and \
+                         underscores, starting with a letter or underscore"
+                    ),
+                })
+            }
+        }
     }
 }
 
@@ -6042,13 +6062,22 @@ fn render_pat(ctx: &EmitCtx, pat: &Pat) -> DResult<String> {
         Pat::Int(n) => Ok(n.to_string()),
         Pat::Bool(b) => Ok(if *b { "true" } else { "false" }.to_owned()),
         // A well-formed Char pattern carries exactly one character → Rust char
-        // literal. A malformed (multi-char / empty) carried string falls back to
-        // a string literal rather than emitting invalid Rust, staying total.
+        // literal. A non-single-scalar value fails closed as a `CompilerBug`:
+        // emitting a string literal in char-pattern position produces invalid
+        // Rust (E0308, cargo-fails), violating THE SEAL. Symmetric with
+        // `Expr::Char`, which applies the same fail-closed policy.
         Pat::Char(c) => {
             let mut chars = c.chars();
             match (chars.next(), chars.next()) {
                 (Some(ch), None) => Ok(format!("{ch:?}")),
-                _ => Ok(format!("{c:?}")),
+                _ => Err(Diagnostic::CompilerBug {
+                    where_: "ipe_backend_rust::emit_pat(Pat::Char)",
+                    detail: format!(
+                        "Pat::Char carried {} characters ({c:?}), not the single \
+                         character the lexer's char-literal invariant guarantees",
+                        c.chars().count()
+                    ),
+                }),
             }
         }
         Pat::Str(s) => Ok(format!("{s:?}")),
