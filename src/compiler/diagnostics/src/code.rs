@@ -414,6 +414,9 @@ code! {
     /// context, which would run its effect through an implicit `Task.run`
     /// outside the effect discipline
     IPE_L0141 = "IPE-L0141", "a Task effect was discarded in a non-Task context, escaping the Task effect discipline", "IPE-L0141";
+    /// a wildcard `any` in return position is carried by no parameter and pinned
+    /// by no body, so no caller can determine its single concrete type
+    IPE_L0142 = "IPE-L0142", "a return-position wildcard `any` cannot be determined", "IPE-L0142";
     /// expression nests too deeply for the backend
     IPE_L0200 = "IPE-L0200", "expression nests too deeply for the backend", "IPE-L0200";
 

@@ -16,16 +16,16 @@ use crate::code::{
     IPE_L0114, IPE_L0115, IPE_L0116, IPE_L0117, IPE_L0118, IPE_L0119, IPE_L0120, IPE_L0121,
     IPE_L0122, IPE_L0123, IPE_L0124, IPE_L0125, IPE_L0126, IPE_L0127, IPE_L0128, IPE_L0129,
     IPE_L0130, IPE_L0131, IPE_L0132, IPE_L0133, IPE_L0134, IPE_L0135, IPE_L0136, IPE_L0140,
-    IPE_L0141, IPE_L0200, IPE_N0001, IPE_N0002, IPE_N0003, IPE_N0004, IPE_N0005, IPE_N0010,
-    IPE_N0011, IPE_N0012, IPE_N0013, IPE_N0020, IPE_N0021, IPE_N0022, IPE_N0023, IPE_N0024,
-    IPE_N0025, IPE_N0026, IPE_N0027, IPE_N0028, IPE_N0029, IPE_N0030, IPE_N0031, IPE_N0032,
-    IPE_N0033, IPE_N0034, IPE_N0035, IPE_N0036, IPE_N0037, IPE_N0038, IPE_N0039, IPE_N0040,
-    IPE_N0041, IPE_N0042, IPE_P0001, IPE_P0002, IPE_P0003, IPE_P0010, IPE_P0011, IPE_P0012,
-    IPE_P0013, IPE_P0014, IPE_P0015, IPE_P0016, IPE_P0017, IPE_P0018, IPE_P0020, IPE_P0021,
-    IPE_P0030, IPE_P0031, IPE_P0040, IPE_P0041, IPE_P0050, IPE_P0060, IPE_P0061, IPE_P0062,
-    IPE_P0063, IPE_P0064, IPE_T0001, IPE_T0002, IPE_T0003, IPE_T0004, IPE_T0010, IPE_T0011,
-    IPE_T0012, IPE_T0013, IPE_T0014, IPE_T0015, IPE_T0016, IPE_T0017, IPE_T0018, IPE_T0019,
-    IPE_T0020, Severity,
+    IPE_L0141, IPE_L0142, IPE_L0200, IPE_N0001, IPE_N0002, IPE_N0003, IPE_N0004, IPE_N0005,
+    IPE_N0010, IPE_N0011, IPE_N0012, IPE_N0013, IPE_N0020, IPE_N0021, IPE_N0022, IPE_N0023,
+    IPE_N0024, IPE_N0025, IPE_N0026, IPE_N0027, IPE_N0028, IPE_N0029, IPE_N0030, IPE_N0031,
+    IPE_N0032, IPE_N0033, IPE_N0034, IPE_N0035, IPE_N0036, IPE_N0037, IPE_N0038, IPE_N0039,
+    IPE_N0040, IPE_N0041, IPE_N0042, IPE_P0001, IPE_P0002, IPE_P0003, IPE_P0010, IPE_P0011,
+    IPE_P0012, IPE_P0013, IPE_P0014, IPE_P0015, IPE_P0016, IPE_P0017, IPE_P0018, IPE_P0020,
+    IPE_P0021, IPE_P0030, IPE_P0031, IPE_P0040, IPE_P0041, IPE_P0050, IPE_P0060, IPE_P0061,
+    IPE_P0062, IPE_P0063, IPE_P0064, IPE_T0001, IPE_T0002, IPE_T0003, IPE_T0004, IPE_T0010,
+    IPE_T0011, IPE_T0012, IPE_T0013, IPE_T0014, IPE_T0015, IPE_T0016, IPE_T0017, IPE_T0018,
+    IPE_T0019, IPE_T0020, Severity,
 };
 use crate::span::Span;
 
@@ -1139,6 +1139,16 @@ pub enum LowerError {
     /// site, which needs a `Task`, so a non-`Task` `main` would otherwise ship a
     /// crate that cannot build. [IPE-L0136]
     NonEntryMain { found: Box<str> },
+    /// A wildcard `any` in the RETURN type of a signature contributes a generic
+    /// that no parameter type carries and the body does not pin to a concrete
+    /// type. A wildcard `any` promises exactly one concrete type per position,
+    /// so it must be *determinable* — read off the body, or shared with a
+    /// parameter a caller supplies. A return-only `any` is determinable by
+    /// neither: the emitted function would carry a type parameter that appears
+    /// only in its result, which no call site can fix. Rejected fail-closed at
+    /// `ipe` time rather than emitting Rust a caller can never satisfy.
+    /// [IPE-L0142]
+    UndeterminableReturnAny,
 }
 
 // ===========================================================================
@@ -1468,6 +1478,7 @@ const fn lower_code(msg: &LowerError) -> Code {
         LowerError::UiCellsInWebShape(_) => IPE_L0132,
         LowerError::LawlessEffectDiscard => IPE_L0141,
         LowerError::NonEntryMain { .. } => IPE_L0136,
+        LowerError::UndeterminableReturnAny => IPE_L0142,
     }
 }
 
@@ -1849,7 +1860,26 @@ fn lower_help(msg: &LowerError) -> Vec<HelpLine> {
             ),
             HelpLine::SeeExplain("main"),
         ],
+        LowerError::UndeterminableReturnAny => undeterminable_return_any_help(),
     }
+}
+
+/// The help lines for [`LowerError::UndeterminableReturnAny`], factored out so
+/// [`lower_help`] stays a thin per-variant dispatcher.
+fn undeterminable_return_any_help() -> Vec<HelpLine> {
+    vec![
+        HelpLine::Note(
+            "a wildcard `any` stands for one concrete type the compiler must be able to \
+             work out. In the return type it can only be worked out from the body (make \
+             the body produce a concrete value) or from a parameter that also uses it (so \
+             the caller's argument fixes it). Here it is neither, so no caller could ever \
+             pin it. Annotate a concrete return type, return a concrete value from the \
+             body, or add a parameter that carries the same `any`. To keep it genuinely \
+             polymorphic instead, use a named type variable such as `a`."
+                .into(),
+        ),
+        HelpLine::SeeExplain("IPE-L0142"),
+    ]
 }
 
 /// Turns already-sorted suggestion names into help lines. A single candidate is

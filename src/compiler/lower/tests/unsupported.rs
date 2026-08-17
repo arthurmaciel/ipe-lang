@@ -345,6 +345,128 @@ fn parametric_annotation_lowers_to_generic_func() -> DResult<()> {
     Ok(())
 }
 
+/// A wildcard `any` nested in the RETURN type that no parameter carries and the
+/// body does not pin is not determinable — the emitted function would carry a
+/// type parameter appearing only in its result, which no caller can fix (a
+/// downstream inference failure). It is rejected fail-closed with `IPE-L0142`,
+/// carrying the signature span, never a `CompilerBug`. `foo : Int -> List any`
+/// with body `[]` is the canonical case: the return `any` is neither shared with
+/// the `Int` parameter nor pinned to a concrete element type by the body.
+#[test]
+fn return_only_wildcard_any_is_rejected() -> DResult<()> {
+    let mut i = Interner::new();
+    let foo = i.intern("foo")?;
+    let any = i.intern("any")?;
+    let list = i.intern("List")?;
+    let sig_span = Span::new(10, 13);
+    // foo : Int -> List any ; foo _ = []
+    let list_any = canon::Type::Con {
+        home: vec![],
+        name: list,
+        args: vec![canon::Type::Var(any)],
+    };
+    let ty = canon::Type::Lambda(Box::new(con_int(&mut i)?), Box::new(list_any));
+    let def = canon::Def::Typed {
+        home: vec![],
+        name: Located::new(sig_span, foo),
+        free_vars: vec![any],
+        patterns: vec![Located::new(Span::new(14, 15), canon::Pattern_::PAnything)],
+        body: Located::new(Span::new(20, 22), canon::Expr_::List(Vec::new())),
+        ty,
+    };
+    let res = run(Vec::new(), vec![def], BTreeMap::new(), &mut i);
+    assert!(
+        res.is_err(),
+        "return-only `List any` must be rejected, got a successful lowering: {res:?}"
+    );
+    let Err(d) = res else { return Ok(()) };
+    assert!(
+        matches!(
+            d,
+            Diagnostic::Lower {
+                msg: LowerError::UndeterminableReturnAny,
+                ..
+            }
+        ),
+        "expected Lower/UndeterminableReturnAny, got {d:?}"
+    );
+    assert_eq!(d.primary_span(), sig_span, "blame the signature: {d:?}");
+    Ok(())
+}
+
+/// A NAMED type variable in a `List`-nested return position (`mk : a -> List a`)
+/// is genuine rank-1 polymorphism, not a wildcard `any` — every caller
+/// instantiates it independently, and it is carried by a parameter. It must
+/// lower cleanly to a generic function quantifying `[a]`, never tripping the
+/// return-`any` gate (which fires only on the interned `any` symbol, never a
+/// named variable).
+#[test]
+fn named_type_var_in_nested_return_lowers_cleanly() -> DResult<()> {
+    let mut i = Interner::new();
+    let mk = i.intern("mk")?;
+    let a = i.intern("a")?;
+    let x = i.intern("x")?;
+    let list = i.intern("List")?;
+    // mk : a -> List a ; mk x = [x]
+    let list_a = canon::Type::Con {
+        home: vec![],
+        name: list,
+        args: vec![canon::Type::Var(a)],
+    };
+    let ty = canon::Type::Lambda(Box::new(canon::Type::Var(a)), Box::new(list_a));
+    let def = canon::Def::Typed {
+        home: vec![],
+        name: Located::new(Span::new(40, 42), mk),
+        free_vars: vec![a],
+        patterns: vec![Located::new(Span::new(43, 44), canon::Pattern_::PVar(x))],
+        body: Located::new(
+            Span::new(48, 51),
+            canon::Expr_::List(vec![Located::new(
+                Span::new(49, 50),
+                canon::Expr_::VarLocal(x),
+            )]),
+        ),
+        ty,
+    };
+    // The list-element region is needed to lower `[x]` fully; supply it so the
+    // binding reaches a complete, generic-quantifying lowering.
+    let mut regions = BTreeMap::new();
+    regions.insert(
+        Span::new(48, 51),
+        Ty::Con {
+            module: vec![],
+            name: list,
+            args: vec![Ty::Var(0)],
+        },
+    );
+    regions.insert(Span::new(49, 50), Ty::Var(0));
+    let res = run_with_regions(Vec::new(), vec![def], BTreeMap::new(), regions, &mut i);
+    // The named-var return must NOT trip the wildcard-`any` gate — that gate keys
+    // on the interned `any` symbol, which a named variable is not.
+    assert!(
+        !matches!(
+            res,
+            Err(Diagnostic::Lower {
+                msg: LowerError::UndeterminableReturnAny,
+                ..
+            })
+        ),
+        "a named type variable in return position must never trip the return-`any` gate: {res:?}"
+    );
+    let func = single_func(&res).expect("`mk : a -> List a` must lower cleanly");
+    assert_eq!(
+        func.ret,
+        IrType::List(Box::new(IrType::Generic(a))),
+        "return type lowers to List(Generic(a)): {res:?}"
+    );
+    assert_eq!(
+        func.type_params,
+        vec![(a, BoundSet::UNBOUNDED)],
+        "quantifies exactly the named var [a]: {res:?}"
+    );
+    Ok(())
+}
+
 /// A type variable left unresolved in *value* position (the solver never pinned
 /// it to a concrete instance — e.g. an under-determined polymorphic value) is an
 /// polymorphism feature gap, not an invariant violation: it surfaces as `IPE-L0102`

@@ -535,6 +535,11 @@ fn lower_prose(msg: &LowerError) -> String {
              This `main` is {}.",
             an_article(found)
         ),
+        LowerError::UndeterminableReturnAny => {
+            "This signature's return `any` can't be worked out — nothing pins it to a \
+             concrete type."
+                .to_string()
+        }
     }
 }
 
@@ -1461,6 +1466,13 @@ fn lower_label(msg: &LowerError) -> String {
                 "this `main` is {}, not a `Task Error ()`",
                 an_article(found)
             )
+        }
+        LowerError::UndeterminableReturnAny => {
+            "a wildcard `any` in the return type is carried by no parameter and pinned by \
+             no body — a caller could never determine its concrete type. Return a concrete \
+             value, annotate a concrete return type, share the `any` with a parameter, or \
+             use a named type variable such as `a` for genuine polymorphism"
+                .to_string()
         }
     }
 }

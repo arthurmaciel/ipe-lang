@@ -12484,10 +12484,35 @@ impl<'a> Lowerer<'a> {
                     // is not covered by the bare-wildcard region substitution above.
                     // Freshen every `Generic("any")` node in the return type so each
                     // occurrence becomes a distinct fresh symbol — the same treatment
-                    // `split_typed_sig` applies to param-position `any`s. The minted
-                    // symbols are added to `any_syms_minted` so they appear in
-                    // `type_params` and the emitted Rust generic is valid.
-                    self.freshen_any_generics(ret, &mut any_syms_minted)?
+                    // `split_typed_sig` applies to param-position `any`s.
+                    //
+                    // A wildcard `any` promises one concrete type per position, so a
+                    // return `any` must be determinable: pinned by the body (handled by
+                    // the region substitution above), or carried by a parameter whose
+                    // argument the caller supplies. A freshened return `any` that no
+                    // parameter carries is determinable by neither — it would surface as
+                    // a type parameter appearing only in the result, which no call site
+                    // can fix. Reject it here rather than emit Rust a caller can never
+                    // satisfy.
+                    let mut ret_any_mints: Vec<Symbol> = Vec::new();
+                    let freshened_ret = self.freshen_any_generics(ret, &mut ret_any_mints)?;
+                    if !ret_any_mints.is_empty() {
+                        let param_generics: BTreeSet<Symbol> = {
+                            let mut s = BTreeSet::new();
+                            for (_, ty) in &params {
+                                collect_ir_generic_syms(ty, &mut s);
+                            }
+                            s
+                        };
+                        if ret_any_mints.iter().any(|m| !param_generics.contains(m)) {
+                            return Err(Diagnostic::Lower {
+                                span: sig_span,
+                                msg: LowerError::UndeterminableReturnAny,
+                            });
+                        }
+                    }
+                    any_syms_minted.extend(ret_any_mints);
+                    freshened_ret
                 };
                 // A tuple-destructuring parameter binds its synthetic name to the
                 // tuple, then the body opens it with a `Destructure`. Fold the
