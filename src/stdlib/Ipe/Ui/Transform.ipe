@@ -11,7 +11,6 @@ module Ipe.Ui.Transform exposing
     , Prop
     , propsToCss
     , propsToCssProps
-    , propToCssPair
     )
 
 -- Ipe.Ui.Transform — typed transform / opacity properties for
@@ -120,19 +119,43 @@ opacity a =
 -- ─── CSS lowering ────────────────────────────────────────────────
 
 
--- Map one Prop to a (cssKey, cssValue) pair. `TransformPart` is
--- pre-stringified — the renderer joins multiple TransformParts
--- into a single `transform: ...` rule, so the "key" portion is the
--- placeholder string the joiner recognises.
-propToCssPair : Prop -> ( String, String )
-propToCssPair p =
+-- Extract the transform function string from a `TransformPart`, if any.
+-- Used to collect all transform parts for merging into one declaration.
+pickTransformPart : Prop -> Maybe String
+pickTransformPart p =
     case p of
 
         TransformPart part ->
-            ( "transform", part )
+            Just part
+
+        OpacityProp _ ->
+            Nothing
+
+
+-- True when a Prop is NOT a TransformPart — used to collect standalone
+-- declarations (opacity and any future non-transform variants).
+isStandaloneProp : Prop -> Bool
+isStandaloneProp p =
+    case p of
+
+        TransformPart _ ->
+            False
+
+        OpacityProp _ ->
+            True
+
+
+-- Map a standalone (non-transform) Prop to its `Css.CssProp`. Only call
+-- on props for which `isStandaloneProp` is True.
+standaloneToCssProp : Prop -> Css.CssProp
+standaloneToCssProp p =
+    case p of
+
+        TransformPart _ ->
+            Css.property "transform" ""
 
         OpacityProp a ->
-            ( "opacity", String.fromFloat a )
+            Css.property "opacity" (String.fromFloat a)
 
 
 -- Lower a list of Props to a list of `Css.CssProp` values, suitable
@@ -142,9 +165,8 @@ propToCssPair p =
 propsToCssProps : List Prop -> List Css.CssProp
 propsToCssProps props =
     let
-        pairs = List.map propToCssPair props
-        transformParts = List.filterMap pickTransformPart pairs
-        otherPairs = List.filter isNotTransform pairs
+        transformParts = List.filterMap pickTransformPart props
+        standaloneProps = List.filter isStandaloneProp props
         transformProp =
             if List.isEmpty transformParts then
                 []
@@ -152,7 +174,7 @@ propsToCssProps props =
             else
                 [ Css.property "transform" (String.join " " transformParts) ]
         otherProps =
-            List.map (\pair -> case pair of ( k, v ) -> Css.property k v) otherPairs
+            List.map standaloneToCssProp standaloneProps
     in
     transformProp ++ otherProps
 
@@ -164,25 +186,3 @@ propsToCssProps props =
 propsToCss : List Prop -> String
 propsToCss props =
     String.join "; " (List.map Css.renderProp (propsToCssProps props))
-
-
-pickTransformPart : ( String, String ) -> Maybe String
-pickTransformPart pair =
-    case pair of
-
-        ( "transform", v ) ->
-            Just v
-
-        _ ->
-            Nothing
-
-
-isNotTransform : ( String, String ) -> Bool
-isNotTransform pair =
-    case pair of
-
-        ( "transform", _ ) ->
-            False
-
-        _ ->
-            True
