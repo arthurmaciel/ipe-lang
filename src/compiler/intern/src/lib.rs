@@ -284,6 +284,29 @@ pub fn is_valid_symbol_text(s: &str) -> bool {
     })
 }
 
+/// Whether `s` is a legal Rust identifier that can be emitted verbatim.
+///
+/// Strictly STRICTER than [`is_valid_symbol_text`]: dots are NOT allowed,
+/// because `ipe_backend_rust` emits interned strings verbatim as Rust
+/// identifiers — a dot in that position produces field-access syntax (`foo.bar`)
+/// instead of an identifier, breaking the emitted Rust without any injection.
+///
+/// Use this predicate wherever a resolved symbol is about to be written as a
+/// bare Rust identifier (value names, variant names, parameter names, etc.).
+/// Use [`is_valid_symbol_text`] at the deserialize boundary where dot-joined
+/// qualified names (e.g. `"Db.Decode"`) are legitimately stored as symbols.
+#[must_use]
+pub fn is_valid_ident_text(s: &str) -> bool {
+    if s.is_empty() {
+        return false;
+    }
+    let mut chars = s.chars();
+    let first_ok = chars
+        .next()
+        .is_some_and(|c| c.is_ascii_alphabetic() || c == '_');
+    first_ok && chars.all(|c| c.is_ascii_alphanumeric() || c == '_')
+}
+
 /// RAII guard installing an ambient interner for [`Symbol`]'s `serde` impls.
 ///
 /// Installs `interner` as the ambient context [`Symbol`]'s
@@ -709,6 +732,52 @@ mod serde_persistence_tests {
         ] {
             let err: Result<Symbol, _> = serde_json::from_str(poisoned);
             assert!(err.is_err(), "must reject poisoned payload {poisoned}");
+        }
+    }
+
+    /// `is_valid_ident_text` rejects dot-joined strings that `is_valid_symbol_text`
+    /// accepts — a dot-joined symbol that passes the deserialize gate must still
+    /// be rejected when used as a bare Rust identifier in emission.
+    #[test]
+    fn is_valid_ident_text_rejects_dotted_symbols() {
+        // These pass the deserialize gate (legitimately dot-qualified names).
+        assert!(is_valid_symbol_text("Module.Sub.name"));
+        assert!(is_valid_symbol_text("Db.Decode"));
+        // But they are NOT safe for verbatim identifier emission.
+        assert!(
+            !is_valid_ident_text("Module.Sub.name"),
+            "dot-joined symbol rejected by ident gate"
+        );
+        assert!(
+            !is_valid_ident_text("Db.Decode"),
+            "dot-joined symbol rejected by ident gate"
+        );
+        assert!(
+            !is_valid_ident_text("foo.bar"),
+            "dot-joined symbol rejected by ident gate"
+        );
+    }
+
+    /// Plain single-segment names that are legal Rust identifiers pass both gates.
+    #[test]
+    fn is_valid_ident_text_accepts_plain_identifiers() {
+        for name in [
+            "Increment",
+            "count",
+            "_private",
+            "eta_0",
+            "cap_12",
+            "a",
+            "z12",
+        ] {
+            assert!(
+                is_valid_ident_text(name),
+                "plain ident {name:?} must pass ident gate"
+            );
+            assert!(
+                is_valid_symbol_text(name),
+                "plain ident {name:?} must pass symbol gate"
+            );
         }
     }
 

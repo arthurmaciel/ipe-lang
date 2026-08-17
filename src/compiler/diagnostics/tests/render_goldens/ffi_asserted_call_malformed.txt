@@ -1,4 +1,4 @@
--- NAMING ERROR -------------------------------------------- test.ipe
+-- AN ASSERTED FOREIGN CALL (RUST.FFI.CALL) IS MALFORMED --- test.ipe
 
 I can't read this `Rust.Ffi.call` — it isn't in the one shape I accept.
 

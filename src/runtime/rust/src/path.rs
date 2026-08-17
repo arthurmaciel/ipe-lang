@@ -630,7 +630,7 @@ mod tests {
         for vector in ["..\\secret", "C:..\\x", ".. \\x", "...", "a\\..\\..\\b"] {
             assert_eq!(
                 super::super::path_core::validate(vector),
-                Err("traversal"),
+                Err(super::super::path_core::PathRejection::Traversal),
                 "compile-time gate must reject the Windows traversal vector {vector:?}"
             );
         }

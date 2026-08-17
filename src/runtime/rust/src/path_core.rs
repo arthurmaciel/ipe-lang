@@ -27,6 +27,21 @@
 //   host separator regime (`clean_with(s, cfg!(windows))`), keeping the runtime
 //   behaviour byte-identical per platform.
 
+/// Why a `path "…"` literal was rejected by [`validate`].
+///
+/// Each variant names one distinct rejection class; an exhaustive `match` on
+/// this type forces every consumer to handle every class explicitly — a new
+/// variant is a compile-time error at every call site, never a silent catch-all.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum PathRejection {
+    /// The string contains a NUL byte — a C-string terminator that truncates a
+    /// path at the syscall boundary, enabling a poisoned-NUL bypass.
+    Nul,
+    /// The path escapes its root via `..` traversal (under Unix or Windows
+    /// separators), or carries a Windows trailing-dot/space `..` disguise.
+    Traversal,
+}
+
 /// Does `s` contain a NUL byte?
 ///
 /// A NUL is a C-string terminator that truncates a path at the syscall boundary
@@ -49,36 +64,34 @@ pub fn has_nul(s: &str) -> bool {
 ///
 /// Returns the Unix-cleaned path string on success (the Rust backend's
 /// equivalence target is Linux, so the emitted literal is the Unix form), or a
-/// `&'static str` reason code on failure:
-/// - `"nul"` — the string contains a NUL byte.
-/// - `"traversal"` — the path escapes its root via `..` under some regime, or
-///   carries a Windows trailing-dot/space `..` disguise.
+/// [`PathRejection`] on failure.
 ///
 /// # Errors
 ///
-/// Returns `Err("nul")` for a NUL byte, or `Err("traversal")` for any `..`
-/// escape (either separator regime) or Windows dot/space disguise.
+/// Returns `Err(PathRejection::Nul)` for a NUL byte, or
+/// `Err(PathRejection::Traversal)` for any `..` escape (either separator
+/// regime) or Windows dot/space disguise.
 ///
 /// # Examples (illustrative only — `text`, not a compiled doctest)
 ///
 /// ```text
 /// validate("src/Main.ipe")   // Ok("src/Main.ipe")
-/// validate("../etc/passwd")  // Err("traversal")
-/// validate("..\secret")      // Err("traversal") — Windows separator
-/// validate("a\0b")           // Err("nul")
+/// validate("../etc/passwd")  // Err(PathRejection::Traversal)
+/// validate("..\secret")      // Err(PathRejection::Traversal) — Windows separator
+/// validate("a\0b")           // Err(PathRejection::Nul)
 /// ```
-pub fn validate(s: &str) -> Result<String, &'static str> {
+pub fn validate(s: &str) -> Result<String, PathRejection> {
     if has_nul(s) {
-        return Err("nul");
+        return Err(PathRejection::Nul);
     }
     if has_disguised_dotdot(s) {
-        return Err("traversal");
+        return Err(PathRejection::Traversal);
     }
     // Reject if the path escapes under EITHER separator regime: a Windows target
     // honours `\` as a separator, so a `..\` climb Unix cleaning would miss must
     // still fail the compile-time gate.
     if escapes_root(&clean_with(s, false), false) || escapes_root(&clean_with(s, true), true) {
-        return Err("traversal");
+        return Err(PathRejection::Traversal);
     }
     Ok(clean_with(s, false))
 }
@@ -356,23 +369,23 @@ mod tests {
 
     #[test]
     fn nul_byte_rejected() {
-        assert_eq!(validate("safe\0bad"), Err("nul"));
+        assert_eq!(validate("safe\0bad"), Err(PathRejection::Nul));
     }
 
     #[test]
     fn leading_dotdot_rejected() {
-        assert_eq!(validate("../secret"), Err("traversal"));
+        assert_eq!(validate("../secret"), Err(PathRejection::Traversal));
     }
 
     #[test]
     fn bare_dotdot_rejected() {
-        assert_eq!(validate(".."), Err("traversal"));
+        assert_eq!(validate(".."), Err(PathRejection::Traversal));
     }
 
     #[test]
     fn dotdot_that_resolves_to_escape_rejected() {
         // "a/../../etc" cleans to "../etc"
-        assert_eq!(validate("a/../../etc"), Err("traversal"));
+        assert_eq!(validate("a/../../etc"), Err(PathRejection::Traversal));
     }
 
     // ── validate: rejected under the Windows regime (the all-targets guarantee) ─
@@ -382,27 +395,27 @@ mod tests {
 
     #[test]
     fn win_backslash_traversal_rejected() {
-        assert_eq!(validate("..\\secret"), Err("traversal"));
+        assert_eq!(validate("..\\secret"), Err(PathRejection::Traversal));
     }
 
     #[test]
     fn win_drive_relative_dotdot_rejected() {
-        assert_eq!(validate("C:..\\x"), Err("traversal"));
+        assert_eq!(validate("C:..\\x"), Err(PathRejection::Traversal));
     }
 
     #[test]
     fn win_trailing_dot_space_disguise_rejected() {
-        assert_eq!(validate(".. \\x"), Err("traversal"));
+        assert_eq!(validate(".. \\x"), Err(PathRejection::Traversal));
     }
 
     #[test]
     fn win_triple_dot_disguise_rejected() {
-        assert_eq!(validate("..."), Err("traversal"));
+        assert_eq!(validate("..."), Err(PathRejection::Traversal));
     }
 
     #[test]
     fn win_mixed_separator_traversal_rejected() {
-        assert_eq!(validate("a\\..\\..\\b"), Err("traversal"));
+        assert_eq!(validate("a\\..\\..\\b"), Err(PathRejection::Traversal));
     }
 
     #[test]

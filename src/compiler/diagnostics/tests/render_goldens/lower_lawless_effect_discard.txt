@@ -1,4 +1,4 @@
--- UNSUPPORTED --------------------------------------------- test.ipe
+-- A TASK EFFECT WAS DISCARDED IN A NON-TASK CONTEXT, ESCAPING THE TASK EFFECT DISCIPLINE - test.ipe
 
 Discarding this `Task` here would quietly run its effect from a function that isn't supposed to do any.
 

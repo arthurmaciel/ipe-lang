@@ -15,15 +15,15 @@
 /// Compile-time validation for a `path "…"` literal — the all-targets gate.
 ///
 /// Delegates to [`ipe_path_core::validate`]. Returns the cleaned path string on
-/// success, or a `&'static str` reason code (`"nul"` / `"traversal"`) that the
-/// canon stage renders into an `InvalidPathLiteral` diagnostic.
+/// success, or a [`ipe_path_core::PathRejection`] that the canon stage renders
+/// into an `InvalidPathLiteral` diagnostic.
 ///
 /// # Errors
 ///
-/// Returns `Err("nul")` for a NUL byte, or `Err("traversal")` for any `..`
-/// escape (under either separator regime) or Windows trailing-dot/space `..`
-/// disguise.
-pub fn validate(s: &str) -> Result<String, &'static str> {
+/// Returns `Err(PathRejection::Nul)` for a NUL byte, or
+/// `Err(PathRejection::Traversal)` for any `..` escape (under either separator
+/// regime) or Windows trailing-dot/space `..` disguise.
+pub fn validate(s: &str) -> Result<String, ipe_path_core::PathRejection> {
     ipe_path_core::validate(s)
 }
 
@@ -65,22 +65,31 @@ mod tests {
 
     #[test]
     fn nul_byte_rejected() {
-        assert_eq!(validate("safe\0bad"), Err("nul"));
+        assert_eq!(
+            validate("safe\0bad"),
+            Err(ipe_path_core::PathRejection::Nul)
+        );
     }
 
     #[test]
     fn leading_dotdot_rejected() {
-        assert_eq!(validate("../secret"), Err("traversal"));
+        assert_eq!(
+            validate("../secret"),
+            Err(ipe_path_core::PathRejection::Traversal)
+        );
     }
 
     #[test]
     fn bare_dotdot_rejected() {
-        assert_eq!(validate(".."), Err("traversal"));
+        assert_eq!(validate(".."), Err(ipe_path_core::PathRejection::Traversal));
     }
 
     #[test]
     fn dotdot_that_resolves_to_escape_rejected() {
-        assert_eq!(validate("a/../../etc"), Err("traversal"));
+        assert_eq!(
+            validate("a/../../etc"),
+            Err(ipe_path_core::PathRejection::Traversal)
+        );
     }
 
     // ── rejected under the Windows regime — the all-targets guarantee ─────────
@@ -90,26 +99,41 @@ mod tests {
 
     #[test]
     fn win_backslash_traversal_rejected() {
-        assert_eq!(validate("..\\secret"), Err("traversal"));
+        assert_eq!(
+            validate("..\\secret"),
+            Err(ipe_path_core::PathRejection::Traversal)
+        );
     }
 
     #[test]
     fn win_drive_relative_dotdot_rejected() {
-        assert_eq!(validate("C:..\\x"), Err("traversal"));
+        assert_eq!(
+            validate("C:..\\x"),
+            Err(ipe_path_core::PathRejection::Traversal)
+        );
     }
 
     #[test]
     fn win_trailing_dot_space_disguise_rejected() {
-        assert_eq!(validate(".. \\x"), Err("traversal"));
+        assert_eq!(
+            validate(".. \\x"),
+            Err(ipe_path_core::PathRejection::Traversal)
+        );
     }
 
     #[test]
     fn win_triple_dot_disguise_rejected() {
-        assert_eq!(validate("..."), Err("traversal"));
+        assert_eq!(
+            validate("..."),
+            Err(ipe_path_core::PathRejection::Traversal)
+        );
     }
 
     #[test]
     fn win_mixed_separator_traversal_rejected() {
-        assert_eq!(validate("a\\..\\..\\b"), Err("traversal"));
+        assert_eq!(
+            validate("a\\..\\..\\b"),
+            Err(ipe_path_core::PathRejection::Traversal)
+        );
     }
 }

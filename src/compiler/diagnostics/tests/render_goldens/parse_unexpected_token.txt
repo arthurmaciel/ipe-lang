@@ -1,4 +1,4 @@
--- PARSE ERROR --------------------------------------------- test.ipe
+-- UNEXPECTED TOKEN ---------------------------------------- test.ipe
 
 I found a number here, but I was expecting an identifier.
 

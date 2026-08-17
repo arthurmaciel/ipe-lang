@@ -1,4 +1,4 @@
--- NAMING ERROR -------------------------------------------- test.ipe
+-- A KERNEL ALIAS (FFI.KERNEL) MAY NOT BE MINTED IN USER SOURCE - test.ipe
 
 This code tries to mint a built-in effect directly, which only the standard library may do.
 

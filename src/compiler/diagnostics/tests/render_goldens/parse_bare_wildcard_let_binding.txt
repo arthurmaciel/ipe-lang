@@ -1,4 +1,4 @@
--- PARSE ERROR --------------------------------------------- test.ipe
+-- BARE `_` AS A WHOLE `LET` BINDING PATTERN IS NOT ALLOWED - test.ipe
 
 a bare `_` cannot be the whole binding pattern in a `let`.
 

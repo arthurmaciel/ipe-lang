@@ -1,4 +1,4 @@
--- MISSING PATTERNS ---------------------------------------- test.ipe
+-- THIS CASE DOES NOT HANDLE EVERY POSSIBILITY ------------- test.ipe
 
 This `case` doesn't cover every possibility yet.
 
