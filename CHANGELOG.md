@@ -10,6 +10,13 @@ Entries below the header are maintained by
 section is generated from Conventional Commit messages and prepended when the
 standing release pull request is merged.
 
+## [0.1.55](https://github.com/arthurmaciel/ipe-lang/compare/ipe-v0.1.54...ipe-v0.1.55) (2026-08-17)
+
+
+### Bug Fixes
+
+* **cli:** route package audit/publish through the build runtime resolver and embed the Tier-2 probe fixture ([#1023](https://github.com/arthurmaciel/ipe-lang/issues/1023)) ([fde36d7](https://github.com/arthurmaciel/ipe-lang/commit/fde36d7e500785492f0a2ada43d07201bec7d7f4))
+
 ## [0.1.54](https://github.com/arthurmaciel/ipe-lang/compare/ipe-v0.1.53...ipe-v0.1.54) (2026-08-16)
 
 
