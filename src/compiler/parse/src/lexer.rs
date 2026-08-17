@@ -394,7 +394,7 @@ fn lex_number(lx: &mut Lexer, lo: u32) -> DResult<Tok> {
     {
         let at = lx.offset();
         return Err(Diagnostic::Parse {
-            span: Span::new(at, at + char_width(c)),
+            span: Span::from_start_width(at, char_width(c)),
             msg: ParseError::NumberJoinedToName(c),
         });
     }
@@ -776,7 +776,7 @@ fn lex_symbol(lx: &mut Lexer, c: char, lo: u32) -> DResult<Tok> {
         '.' => return lex_dot(lx, lo),
         other => {
             return Err(Diagnostic::Parse {
-                span: Span::new(lo, lo + char_width(other)),
+                span: Span::from_start_width(lo, char_width(other)),
                 msg: ParseError::UnknownChar(other),
             });
         }
