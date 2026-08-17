@@ -24988,8 +24988,14 @@ mod tests {
         // Each occurrence must mint exactly one distinct symbol.
         assert_eq!(minted_list.len(), 1, "List any must mint 1 fresh generic");
         assert_eq!(minted_maybe.len(), 1, "Maybe any must mint 1 fresh generic");
-        let g0 = minted_list.first().copied().expect("minted_list has 1 entry");
-        let g1 = minted_maybe.first().copied().expect("minted_maybe has 1 entry");
+        let g0 = minted_list
+            .first()
+            .copied()
+            .expect("minted_list has 1 entry");
+        let g1 = minted_maybe
+            .first()
+            .copied()
+            .expect("minted_maybe has 1 entry");
         assert_ne!(
             g0, g1,
             "nested `any` occurrences must receive distinct generics — \
