@@ -18,7 +18,7 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use crate::CliError;
-use crate::index::{self, EntryVersion, IndexEntry};
+use crate::index::{self, CommitId, EntryVersion, IndexEntry, SourceUrl};
 use crate::project::{self, ProjectManifest};
 
 /// A publish refusal: a typed reason publish declined to proceed.
@@ -126,7 +126,7 @@ pub fn run_publish(rest: &[String]) -> Result<(), CliError> {
     let entry_version =
         compute_entry_version(&manifest, args.source.as_deref(), args.rev.as_deref())?;
 
-    let publisher = infer_publisher(&entry_version.source);
+    let publisher = infer_publisher(entry_version.source.as_str());
 
     // 3. Merge into the existing entry (append; refuse a duplicate version).
     let index_root = crate::resolve::index_root();
@@ -149,7 +149,7 @@ pub fn run_publish(rest: &[String]) -> Result<(), CliError> {
     // publishes its own package would fork the index under the same name.
     let fork_owner = args
         .fork
-        .unwrap_or_else(|| infer_publisher(&entry_version.source));
+        .unwrap_or_else(|| infer_publisher(entry_version.source.as_str()));
     if fork_owner == "unknown" {
         return Err(CliError::UsageOwned(
             "ipe package publish: could not infer your GitHub fork owner from the source URL — \
@@ -265,18 +265,31 @@ fn compute_entry_version(
     })?;
 
     let source_root = &manifest.root;
-    let source = match source_override {
+    let raw_source = match source_override {
         Some(s) => s.to_owned(),
         None => git_remote_url(source_root)?.ok_or_else(|| refuse(Refusal::NoSource))?,
     };
+    // Parse-don't-validate: the typed constructor rejects any value outside the
+    // transport allow-list. Publish uses the same gate as the resolver so an
+    // entry written by `publish` round-trips through `read_entry` without error.
+    let source = SourceUrl::parse(&manifest.name, &raw_source).map_err(|e| {
+        CliError::UsageOwned(format!(
+            "ipe package publish: the source URL is not accepted — {e}"
+        ))
+    })?;
 
     // The revision is pinned exactly. An explicit `--rev` is taken as-is (the
     // caller asserts it is immutable); otherwise it is the committed HEAD, which
     // publish insists is clean and pushed so the pinned bytes are reproducible.
-    let rev = match rev_override {
+    let raw_rev = match rev_override {
         Some(r) => r.to_owned(),
         None => committed_pushed_head(source_root)?,
     };
+    let rev = CommitId::parse(&manifest.name, &raw_rev).map_err(|e| {
+        CliError::UsageOwned(format!(
+            "ipe package publish: the revision is not accepted — {e}"
+        ))
+    })?;
 
     let sha256 = crate::resolve::hash_source_tree(source_root)?;
     let capabilities = crate::infer_package_capabilities(&manifest_path_of(source_root))?;
@@ -325,8 +338,8 @@ fn manifest_path_of(root: &Path) -> PathBuf {
 pub fn render_entry_version(version: &EntryVersion) -> String {
     let mut out = String::from("[[version]]\n");
     let _ = writeln!(out, "version = \"{}\"", version.version);
-    let _ = writeln!(out, "source = \"{}\"", version.source);
-    let _ = writeln!(out, "rev = \"{}\"", version.rev);
+    let _ = writeln!(out, "source = \"{}\"", version.source.as_str());
+    let _ = writeln!(out, "rev = \"{}\"", version.rev.as_str());
     let _ = writeln!(out, "sha256 = \"{}\"", version.sha256);
     let caps: Vec<String> = version
         .capabilities
@@ -849,8 +862,10 @@ mod tests {
     fn sample_version(v: &str, caps_set: BTreeSet<Capability>) -> EntryVersion {
         EntryVersion {
             version: semver::Version::parse(v).expect("valid version"),
-            source: "https://github.com/arthurmaciel/http-extras".to_owned(),
-            rev: "9f2c7b1e0a4d5c6f8b2a1e3d4c5b6a7f8e9d0c1b".to_owned(),
+            source: SourceUrl::parse("http-extras", "https://github.com/arthurmaciel/http-extras")
+                .expect("valid source url"),
+            rev: CommitId::parse("http-extras", "9f2c7b1e0a4d5c6f8b2a1e3d4c5b6a7f8e9d0c1b")
+                .expect("valid commit id"),
             sha256: "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855".to_owned(),
             capabilities: caps_set,
         }
