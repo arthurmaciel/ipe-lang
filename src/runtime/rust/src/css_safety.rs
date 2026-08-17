@@ -70,6 +70,12 @@ const BAD_VALUE_PATTERNS: &[&str] = &[
     "expression(",
     "javascript:",
     "vbscript:",
+    // Legacy script-execution properties: Firefox XBL (`-moz-binding:`) and
+    // IE HTC (`behavior:`). Neither appears in valid modern CSS; block both
+    // as defence-in-depth for contexts that must defend legacy engines.
+    "-moz-binding:",
+    "behavior:",
+    "url(-moz-binding:",
     "url(javascript:",
     "url('javascript:",
     "url(\"javascript:",
@@ -116,6 +122,12 @@ const BAD_RAW_BODY_PATTERNS: &[&str] = &[
     "expression(",
     "javascript:",
     "vbscript:",
+    // Legacy script-execution properties: Firefox XBL (`-moz-binding:`) and
+    // IE HTC (`behavior:`). Neither appears in valid modern CSS; block both
+    // as defence-in-depth for contexts that must defend legacy engines.
+    "-moz-binding:",
+    "behavior:",
+    "url(-moz-binding:",
     "url(javascript:",
     "url('javascript:",
     "url(\"javascript:",
@@ -733,6 +745,30 @@ mod tests {
         // no-op — the capability-gated path keeps its exact bytes.
         let once = neutralise_script_close("x</script>y");
         assert_eq!(neutralise_script_close(&once), once);
+    }
+
+    /// Legacy script-execution CSS properties are blocked in both the value
+    /// and raw-body scanners. These properties (`-moz-binding:` / Firefox XBL;
+    /// `behavior:` / IE HTC) never appear in valid modern CSS, so blocking them
+    /// is zero-false-positive defence-in-depth.
+    #[test]
+    fn legacy_script_execution_properties_are_rejected() {
+        // Declaration-value gate rejects both plain and url-wrapped forms.
+        assert!(SafeCssValue::parse("-moz-binding: url(x.xml)").is_none());
+        assert!(SafeCssValue::parse("behavior: url(x.htc)").is_none());
+        assert!(SafeCssValue::parse("url(-moz-binding: url(x))").is_none());
+        // Benign values still pass.
+        assert!(SafeCssValue::parse("red").is_some());
+        assert!(SafeCssValue::parse("1px solid blue").is_some());
+
+        // Raw-body gate rejects a stylesheet fragment that carries either property.
+        assert!(!sink_safe_raw_body("a { -moz-binding: url(x.xml#foo) }"));
+        assert!(!sink_safe_raw_body("a { behavior: url(x.htc) }"));
+        // Whitespace-obfuscated form (whitespace stripped before scan).
+        assert!(!sink_safe_raw_body("a { -moz-binding : url(x.xml) }"));
+        assert!(!sink_safe_raw_body("a { behavior : url(x.htc) }"));
+        // Benign block-structured body still passes.
+        assert!(sink_safe_raw_body(".card { color: red; padding: 8px }"));
     }
 
     /// `sink_safe_raw_body` — the authoritative raw/keyframes-body gate — drops

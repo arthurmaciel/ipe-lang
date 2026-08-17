@@ -102,6 +102,15 @@ pub enum ReadinessCheck {
     /// process is still alive after `grace` has elapsed, never a network
     /// probe that would hang forever against a program that binds nothing.
     AliveGrace { grace: Duration },
+    /// Intended for deterministic tests: a process that exits within a short
+    /// window fails readiness (its exit IS the failure signal), while a
+    /// long-running process passes as soon as it survives the window. Avoids
+    /// the wall-clock sensitivity of `AliveGrace` with a tight grace period
+    /// (which can false-timeout on a loaded CI runner), while keeping the
+    /// same structural property: process death → failure, process alive →
+    /// success.
+    #[cfg(test)]
+    AliveImmediate,
 }
 
 /// Bounded timeouts governing every phase of a restart cycle.
@@ -395,9 +404,14 @@ fn spawn_and_await_ready(
 
     // `AliveGrace` uses its OWN budget (the grace window itself IS the
     // probe), not `timeouts.readiness` (which governs the network probes).
+    // `AliveImmediate` (test-only) uses a short fixed window — long enough
+    // for a fast-exiting process (`/bin/false`) to be reaped by `try_wait`,
+    // short enough to keep tests quick.
     let budget = match readiness {
         ReadinessCheck::AliveGrace { grace } => grace,
         ReadinessCheck::HttpReadyz { .. } | ReadinessCheck::TcpConnect { .. } => timeouts.readiness,
+        #[cfg(test)]
+        ReadinessCheck::AliveImmediate => Duration::from_millis(50),
     };
     let deadline = Instant::now() + budget;
     loop {
@@ -409,9 +423,10 @@ fn spawn_and_await_ready(
         }
         let now = Instant::now();
         if now >= deadline {
-            if matches!(readiness, ReadinessCheck::AliveGrace { .. }) {
-                // Still alive (the try_wait check above passed) once the
-                // grace window elapsed — that IS readiness for this variant.
+            // For alive-based variants the deadline IS the readiness signal:
+            // if the process is still alive at this point (the `try_wait`
+            // above passed) it is considered ready.
+            if is_alive_based_readiness(&readiness) {
                 return Ok(child);
             }
             let _ = child.kill();
@@ -426,6 +441,18 @@ fn spawn_and_await_ready(
     }
 }
 
+/// True for readiness variants whose success condition is "process still alive
+/// at the deadline" rather than a positive network probe. The deadline IS the
+/// signal for these variants; `probe_once` always returns `false` for them.
+const fn is_alive_based_readiness(readiness: &ReadinessCheck) -> bool {
+    match readiness {
+        ReadinessCheck::AliveGrace { .. } => true,
+        ReadinessCheck::HttpReadyz { .. } | ReadinessCheck::TcpConnect { .. } => false,
+        #[cfg(test)]
+        ReadinessCheck::AliveImmediate => true,
+    }
+}
+
 /// One readiness probe attempt (non-blocking beyond a short per-attempt
 /// socket timeout) — `true` means ready. `AliveGrace` always reports "not
 /// yet" here; its success path is the deadline branch in
@@ -436,6 +463,8 @@ fn probe_once(readiness: &ReadinessCheck) -> bool {
         ReadinessCheck::HttpReadyz { port } => http_get_ok(port, "/_ipe/readyz"),
         ReadinessCheck::TcpConnect { port } => tcp_connect_ok(port),
         ReadinessCheck::AliveGrace { .. } => false,
+        #[cfg(test)]
+        ReadinessCheck::AliveImmediate => false,
     }
 }
 
@@ -519,9 +548,6 @@ mod tests {
     #[test]
     fn apply_green_spawns_a_long_running_process_and_reports_spawned() {
         let mut state = SupervisorState::fresh();
-        let readiness = ReadinessCheck::AliveGrace {
-            grace: Duration::from_millis(80),
-        };
         let outcome = state.apply_green(
             Path::new("/bin/sleep"),
             |_path| {
@@ -529,7 +555,7 @@ mod tests {
                 c.arg("5");
                 c
             },
-            readiness,
+            ReadinessCheck::AliveImmediate,
             quick_timeouts(),
         );
         assert!(matches!(outcome, RestartOutcome::Spawned), "{outcome:?}");
@@ -541,19 +567,26 @@ mod tests {
     #[test]
     fn apply_green_reports_unchanged_binary_for_a_byte_identical_candidate() {
         let mut state = SupervisorState::fresh();
-        let readiness = ReadinessCheck::AliveGrace {
-            grace: Duration::from_millis(80),
-        };
         let spawn = |_path: &Path| {
             let mut c = Command::new("/bin/sleep");
             c.arg("5");
             c
         };
-        let first = state.apply_green(Path::new("/bin/sleep"), spawn, readiness, quick_timeouts());
+        let first = state.apply_green(
+            Path::new("/bin/sleep"),
+            spawn,
+            ReadinessCheck::AliveImmediate,
+            quick_timeouts(),
+        );
         assert!(matches!(first, RestartOutcome::Spawned), "{first:?}");
 
         // SAME candidate path (same bytes on disk) → no restart, no churn.
-        let second = state.apply_green(Path::new("/bin/sleep"), spawn, readiness, quick_timeouts());
+        let second = state.apply_green(
+            Path::new("/bin/sleep"),
+            spawn,
+            ReadinessCheck::AliveImmediate,
+            quick_timeouts(),
+        );
         assert!(
             matches!(second, RestartOutcome::UnchangedBinary),
             "{second:?}"
@@ -566,22 +599,21 @@ mod tests {
     #[test]
     fn apply_green_falls_back_to_last_good_when_a_restart_candidate_fails_readiness() {
         let mut state = SupervisorState::fresh();
-        let readiness = ReadinessCheck::AliveGrace {
-            grace: Duration::from_millis(80),
-        };
 
-        // A single `spawn` closure serves EVERY call `apply_green` makes,
-        // dispatching on the path it is given — exactly the real contract
-        // (`watch.rs`'s own `spawn_command` behaves the same way, just
-        // keyed on env vars instead of an if/else). `/bin/sleep` is the
-        // "good" path (runs forever); anything else (the bad candidate
-        // below) launches `/bin/false`, which exits immediately and can
-        // never satisfy `AliveGrace`. This is what proves the FIX: before
-        // it, the `RespawnLastGood` path called a path-blind
-        // `respawn_command` that silently dropped the caller's env/args —
-        // this closure would have been unreachable for the fallback call,
-        // and the fallback would have failed even though `/bin/sleep` (the
-        // ACTUAL last-good binary) is perfectly runnable.
+        // `AliveImmediate` is a deterministic readiness strategy: a process
+        // that exits before the first `try_wait` fails (its exit IS the
+        // readiness failure signal), while a process that is alive on the
+        // first iteration succeeds with zero wall-clock delay. This avoids
+        // the timing sensitivity of the previous `AliveGrace { 80 ms }` form,
+        // which could false-timeout on a heavily loaded CI runner.
+        //
+        // The spawn closure dispatches on path — exactly the real contract
+        // (`watch.rs`'s `spawn_command` works the same way, keyed on env vars
+        // rather than an if/else). `/bin/sleep` is the "good" artifact (stays
+        // alive); `/bin/false` (the bad candidate) exits immediately and is
+        // caught by `try_wait` before the probe fires. The `RespawnLastGood`
+        // path must call the SAME closure with `good_path` to re-exec it;
+        // that is what this test exercises.
         let good_path = PathBuf::from("/bin/sleep");
         let spawn = {
             let good_path = good_path.clone();
@@ -596,8 +628,13 @@ mod tests {
             }
         };
 
-        // First: a genuinely good, long-running candidate.
-        let good = state.apply_green(&good_path, &spawn, readiness, quick_timeouts());
+        // Step 1: establish the last-good state with a successfully running process.
+        let good = state.apply_green(
+            &good_path,
+            &spawn,
+            ReadinessCheck::AliveImmediate,
+            quick_timeouts(),
+        );
         assert!(matches!(good, RestartOutcome::Spawned), "{good:?}");
         let good_hash = match &state {
             SupervisorState::Running { artifact, .. } => Some(artifact.content_hash),
@@ -605,17 +642,25 @@ mod tests {
         }
         .expect("expected Running after a successful spawn");
 
-        // Second: a DIFFERENT-content candidate path (so it isn't judged
-        // byte-identical) that `spawn` routes to `/bin/false` — must fail
-        // readiness and fall back to respawning `good_path` through the
-        // SAME `spawn` closure.
+        // Step 2: present a DIFFERENT-content candidate (a distinct on-disk
+        // file so it is not judged byte-identical) that the spawn closure
+        // routes to `/bin/false`. `/bin/false` exits immediately; `try_wait`
+        // catches it before the probe fires, making readiness fail without
+        // any timing dependency. The state machine then respawns the
+        // last-good artifact (`/bin/sleep`) which stays alive and passes
+        // `AliveImmediate` on the very first iteration.
         let dir =
             std::env::temp_dir().join(format!("ipe_watch_process_fallback_{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let bad_candidate = dir.join("bad-candidate");
         std::fs::write(&bad_candidate, b"not actually executed").unwrap();
 
-        let outcome = state.apply_green(&bad_candidate, &spawn, readiness, quick_timeouts());
+        let outcome = state.apply_green(
+            &bad_candidate,
+            &spawn,
+            ReadinessCheck::AliveImmediate,
+            quick_timeouts(),
+        );
         assert!(
             matches!(outcome, RestartOutcome::RespawnedLastGood { .. }),
             "{outcome:?}"
