@@ -1761,19 +1761,17 @@ fn add_one(
 /// Install the registry FFI dependencies declared in `manifest_path`'s
 /// `[rust.dependencies]` into the project root's `.ipe/cache/ffi/rust`.
 ///
-/// This is the shared entry point for `ipe rust install` and for the package
-/// audit gate, which regenerates bindings from the pinned crates rather than
-/// trusting any committed cache. The generated artifacts are written into the
-/// project's own `.ipe/cache/ffi/rust` directory, so the audit gate's ownership
-/// check (`is_trusted_cache_dir`) passes — the directory is created by the
-/// invoking process under the invoking uid, not world-writable.
+/// Used by the package audit gate to regenerate bindings from the pinned crates
+/// rather than trusting any committed cache. The generated artifacts are written
+/// into the project's own `.ipe/cache/ffi/rust` directory, so the audit gate's
+/// ownership check (`is_trusted_cache_dir`) passes — the directory is created by
+/// the invoking process under the invoking uid, not world-writable.
 ///
-/// `allow_build_scripts` mirrors the `--allow-build-scripts` flag of `ipe rust
-/// install`: the jailed inspector runs each crate's build scripts only when the
-/// caller explicitly opts in. The audit gate always passes `true` because a
-/// native package's crates are pinned and hash-verified — the gate is the trust
-/// boundary, and regenerating bindings from a pinned, verified crate without
-/// build scripts would silently skip crates that require them.
+/// `allow_build_scripts` controls whether the bwrap-jailed inspector runs each
+/// crate's build scripts. The audit gate always passes `true` because build
+/// scripts run inside the bwrap jail with network access denied; skipping them
+/// would silently omit bindings for crates that require them to generate their
+/// API surface. The jail, not pre-verification, is the confinement boundary.
 ///
 /// Pure-Ipê manifests (no `[rust.dependencies]` and no `[rust.wrapper]`) are a
 /// no-op: the function returns `Ok(())` immediately.
