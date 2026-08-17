@@ -187,3 +187,108 @@ main = Io.println (String.concat (thread \"hi\") (thread (String.fromInt 3)))
         let _ = fs::remove_dir_all(parent);
     }
 }
+
+/// A wildcard-`any` parameter that the body BOTH reads via a `Db.get*` ROW
+/// accessor AND returns, with signature `any -> any`. The parameter's correct
+/// lowering is the `<R: IpeRow>` bounded generic — it must NOT concretize to the
+/// row carrier. The return, threaded from that same parameter, must FOLLOW the
+/// parameter's bounded generic, never an independently-concretized carrier
+/// (`HashMap<String, String>`) that diverges from it — the E0308 that was an
+/// accept-then-`cargo`-fail (THE SEAL).
+#[test]
+fn row_accessor_param_threaded_to_return_builds() {
+    let entry = write_entry(
+        "row_thread",
+        "\
+module Main exposing (main)
+import Ipe.Dict as Dict
+import Ipe.Db.Unsafe
+import Ipe.Io as Io
+
+thread : any -> any
+thread payload =
+  let
+    name = Unsafe.unsafeGetString \"name\" payload
+  in
+  payload
+
+main : Task Error ()
+main =
+  let
+    p = Dict.fromList [ ( \"name\", \"ada\" ) ]
+    r = thread p
+  in
+  Io.println (Unsafe.unsafeGetString \"name\" r)
+",
+    );
+    let (built, out) = emit(&entry, "row_thread");
+    assert!(
+        built.is_ok(),
+        "a row-accessor param threaded into an `any` return must be accepted \
+         (the return follows the param's `<R: IpeRow>` generic): {:?}",
+        built.err()
+    );
+    let emitted = support::read_all_emitted_src(&out);
+    assert!(
+        emitted.contains("fn main_thread<T1: Clone + ipe_runtime::db::IpeRow>(payload: T1) -> T1"),
+        "the return must follow the row-accessor param's bounded generic \
+         (`fn main_thread<T1: … + IpeRow>(payload: T1) -> T1`), never the \
+         independently-concretized row carrier:\n{emitted}"
+    );
+    support::assert_seal_builds("param_any_seal_row_thread", &out);
+    if let Some(parent) = entry.parent() {
+        let _ = fs::remove_dir_all(parent);
+    }
+}
+
+/// A record threaded through a wildcard-`any` `any -> any` (`useIt p = p`,
+/// called on a full record). The parameter's solved region is a STRUCTURAL
+/// record — narrowed to only the fields the body reads — which is NOT the same
+/// identity as the caller's full nominal record. Concretizing the parameter to
+/// that narrowed record makes the caller's full record mismatch (E0308,
+/// accept-then-`cargo`-fail). The parameter must stay a generic `T{n}` so it
+/// monomorphises to the caller's own record, and the return must follow it.
+#[test]
+fn record_threaded_through_any_builds() {
+    let entry = write_entry(
+        "record_thread",
+        "\
+module Main exposing (main)
+import Ipe.Io as Io
+
+type alias Person =
+  { name : String
+  , age : Int
+  }
+
+useIt : any -> any
+useIt p = p
+
+main : Task Error ()
+main =
+  let
+    person = { name = \"ada\", age = 3 }
+    r = useIt person
+  in
+  Io.println r.name
+",
+    );
+    let (built, out) = emit(&entry, "record_thread");
+    assert!(
+        built.is_ok(),
+        "a record threaded through `any -> any` must be accepted (the param \
+         stays generic, the return follows it): {:?}",
+        built.err()
+    );
+    let emitted = support::read_all_emitted_src(&out);
+    assert!(
+        emitted.contains("fn main_use_it<T1: Clone>(p: T1) -> T1"),
+        "a record threaded through `any -> any` keeps the param generic and the \
+         return follows it (`fn main_use_it<T1: Clone>(p: T1) -> T1`), never a \
+         narrowed structural record that a full-record caller mismatches:\n{emitted}"
+    );
+    support::assert_seal_builds("param_any_seal_record_thread", &out);
+    if let Some(parent) = entry.parent() {
+        let _ = fs::remove_dir_all(parent);
+    }
+}
