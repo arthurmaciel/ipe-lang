@@ -182,6 +182,12 @@ pub fn hash_tree(root: &Path) -> Result<String, (PathBuf, std::io::Error)> {
 /// directories. Excluding them keeps the content hash a function of the source
 /// alone, so a fetched checkout hashes identically no matter what local tools
 /// have dropped a scratch directory into it.
+///
+/// Symlinks are rejected with an `InvalidInput` error. A published package
+/// source must contain only plain files and directories; symlinks cannot be
+/// integrity-checked safely without following them (which opens TOCTOU and
+/// path-escape hazards), so we fail-closed rather than silently omitting them
+/// from the hash (which would leave them invisible to the integrity check).
 fn collect_files(
     base: &Path,
     dir: &Path,
@@ -192,7 +198,15 @@ fn collect_files(
         let entry = entry.map_err(|e| (dir.to_path_buf(), e))?;
         let path = entry.path();
         let file_type = entry.file_type().map_err(|e| (path.clone(), e))?;
-        if file_type.is_dir() {
+        if file_type.is_symlink() {
+            return Err((
+                path,
+                std::io::Error::new(
+                    std::io::ErrorKind::InvalidInput,
+                    "symlinks are not permitted in a published package source tree",
+                ),
+            ));
+        } else if file_type.is_dir() {
             if path
                 .file_name()
                 .and_then(|n| n.to_str())
@@ -1259,5 +1273,57 @@ mod tests {
             a, b,
             "the EmittedProject and lowered-IR tiers must use distinct file paths"
         );
+    }
+
+    /// A fetched tree containing a symlink must be rejected — the integrity
+    /// hash must never silently omit a tree entry.
+    #[test]
+    #[cfg(unix)]
+    fn hash_tree_rejects_symlink() {
+        use std::os::unix::fs::symlink;
+
+        let base = std::env::temp_dir().join(format!(
+            "ipe-cache-test-symlink-{}-{:?}",
+            std::process::id(),
+            std::thread::current().id()
+        ));
+        let _ = std::fs::remove_dir_all(&base);
+        std::fs::create_dir_all(&base).expect("create base");
+        std::fs::write(base.join("file.ipe"), b"hello").expect("write file");
+        symlink("/etc/passwd", base.join("link.ipe")).expect("create symlink");
+
+        let result = hash_tree(&base);
+        let _ = std::fs::remove_dir_all(&base);
+
+        assert!(
+            result.is_err(),
+            "hash_tree must reject a tree containing a symlink"
+        );
+        let (_, err) = result.unwrap_err();
+        assert_eq!(
+            err.kind(),
+            std::io::ErrorKind::InvalidInput,
+            "symlink rejection must use InvalidInput"
+        );
+    }
+
+    /// A tree with only plain files hashes normally and produces the same
+    /// result on a second call (deterministic, no symlinks → no rejection).
+    #[test]
+    fn hash_tree_plain_tree_is_deterministic() {
+        let base = std::env::temp_dir().join(format!(
+            "ipe-cache-test-plain-{}-{:?}",
+            std::process::id(),
+            std::thread::current().id()
+        ));
+        let _ = std::fs::remove_dir_all(&base);
+        std::fs::create_dir_all(&base).expect("create base");
+        std::fs::write(base.join("Main.ipe"), b"module Main").expect("write file");
+
+        let h1 = hash_tree(&base).expect("plain tree hashes ok");
+        let h2 = hash_tree(&base).expect("plain tree hashes ok second time");
+        let _ = std::fs::remove_dir_all(&base);
+
+        assert_eq!(h1, h2, "hash_tree must be deterministic for plain trees");
     }
 }

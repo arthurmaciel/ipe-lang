@@ -2251,7 +2251,7 @@ fn rust_wrapper_from_manifest(text: &str) -> Option<RawWrapperTable> {
     for line in text.lines() {
         let line = line.trim();
         if line.starts_with('[') {
-            in_table = line == "[rust.wrapper]" || line == "[\"rust.wrapper\"]";
+            in_table = crate::project::is_rust_wrapper_header(line);
             if in_table {
                 found = true;
             }
@@ -2839,6 +2839,13 @@ fn merge_provides(
     };
     functions.extend(synthetic);
     Ok(doc.to_string())
+}
+
+#[cfg(test)]
+/// Test-only re-export so `project.rs` tests can verify that the ffi.rs
+/// wrapper-header reader uses the same predicate as `is_rust_wrapper_header`.
+pub(crate) fn rust_wrapper_header_accepted_by_ffi_reader(line: &str) -> bool {
+    crate::project::is_rust_wrapper_header(line)
 }
 
 #[cfg(test)]
