@@ -1049,7 +1049,25 @@ fn load_installed_crate(cache_root: &Path, slug: String) -> Result<InstalledCrat
                 })
                 .unwrap_or_default()
         };
-        let opaque_types = decode_str_map("opaqueTypes");
+        // Opaque-type paths reach the wrapper emitter verbatim; parse each
+        // through the validated newtype at the cache boundary so an un-renderable
+        // path is unrepresentable past decode.
+        let opaque_types: std::collections::BTreeMap<String, String> = {
+            let raw = doc
+                .get("opaqueTypes")
+                .and_then(serde_json::Value::as_object);
+            let mut out = std::collections::BTreeMap::new();
+            for (k, v) in raw.into_iter().flatten() {
+                let s = v
+                    .as_str()
+                    .ok_or_else(|| malformed(format!("opaqueTypes[{k:?}]: not a string")))?;
+                crate::naming::RustPathSegment::parse(s).map_err(|e| {
+                    malformed(format!("opaqueTypes[{k:?}]: invalid Rust path: {e:?}"))
+                })?;
+                out.insert(k.clone(), s.to_owned());
+            }
+            out
+        };
         let opaque_type_ids = decode_str_map("opaqueTypeIds");
         let define_types: BTreeSet<String> = doc
             .get("defineTypes")
@@ -2312,5 +2330,35 @@ mod tests {
             vec!["error: boom".to_owned(), "note: detail".to_owned()]
         );
         assert!(inspection_error_log("not json at all").is_empty());
+    }
+
+    // ── opaque-type cache boundary ───────────────────────────────────────
+
+    /// The guard added at the `opaqueTypes` cache boundary: valid Rust paths
+    /// are accepted; injection-bearing or structurally illegal paths are
+    /// rejected as `WireMalformed` before reaching the emitter.
+    #[test]
+    fn opaque_types_decode_rejects_injection_bearing_paths() {
+        // Verify the exact parse gate the decode loop applies.
+        let good = ["::semver::Version", "::crate_name::Type", "MyType"];
+        for s in good {
+            assert!(
+                crate::naming::RustPathSegment::parse(s).is_ok(),
+                "valid path `{s}` must parse"
+            );
+        }
+        let bad = [
+            "::semver::Version; std::process::exit(0)",
+            "a b",
+            "",
+            "a\nb",
+            "a{b}",
+        ];
+        for s in bad {
+            assert!(
+                crate::naming::RustPathSegment::parse(s).is_err(),
+                "injection-bearing path `{s}` must be rejected at decode"
+            );
+        }
     }
 }

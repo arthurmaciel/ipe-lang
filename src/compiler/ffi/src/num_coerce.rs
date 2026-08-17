@@ -56,8 +56,8 @@ pub fn num_carrier(width: &str) -> Option<&'static str> {
 /// Render the expression that coerces an Ipê scalar (`i64` for `Int`, `f64`
 /// for `Float`) INTO a foreign numeric param of Rust width `raw`, saturating.
 ///
-/// `expr` must be a side-effect-free expression (a bound local) — the `isize`
-/// arm evaluates it more than once.
+/// `expr` must be a side-effect-free expression (a bound local) — both the
+/// `isize` and `usize` arms evaluate it more than once in the generated code.
 #[must_use]
 pub fn num_saturate(raw: &str, expr: &str) -> String {
     let par = format!("({expr})");
@@ -101,6 +101,9 @@ pub struct WidenedScalar {
 /// Widen a foreign scalar return of Rust width `raw` to its Ipê carrier,
 /// total + saturating for widths that exceed `i64`. `None` for a non-numeric
 /// type (the caller leaves the return unchanged).
+///
+/// `expr` may be any Rust expression, including a side-effecting foreign call.
+/// Every generated form evaluates `expr` exactly once.
 #[must_use]
 pub fn num_widen_scalar(raw: &str, expr: &str) -> Option<WidenedScalar> {
     match raw {
@@ -115,11 +118,12 @@ pub fn num_widen_scalar(raw: &str, expr: &str) -> Option<WidenedScalar> {
             carrier: "i64",
             expr: format!("({expr}).min(i64::MAX as {raw}) as i64"),
         }),
-        // Signed wide: try_from, saturate to i64::MIN / i64::MAX on overflow.
+        // Signed wide: bind once to avoid evaluating a potentially
+        // side-effecting expression twice in the unwrap_or branch.
         "i128" => Some(WidenedScalar {
             carrier: "i64",
             expr: format!(
-                "i64::try_from({expr}).unwrap_or(if ({expr}) < 0 {{ i64::MIN }} else {{ i64::MAX }})"
+                "{{ let __w = {expr}; i64::try_from(__w).unwrap_or(if __w < 0 {{ i64::MIN }} else {{ i64::MAX }}) }}"
             ),
         }),
         "f32" | "f64" => Some(WidenedScalar {
@@ -212,7 +216,22 @@ mod tests {
         assert_eq!(ws.carrier, "i64");
         assert_eq!(
             ws.expr,
-            "i64::try_from(r).unwrap_or(if (r) < 0 { i64::MIN } else { i64::MAX })"
+            "{ let __w = r; i64::try_from(__w).unwrap_or(if __w < 0 { i64::MIN } else { i64::MAX }) }"
+        );
+    }
+
+    #[test]
+    fn widen_i128_expr_appears_once_in_emitted_form() {
+        // A side-effecting foreign call passed as expr must not be duplicated
+        // in the generated code — each evaluation would invoke the foreign fn
+        // again, producing a different value in the overflow branch.
+        let call = "some_foreign_fn()";
+        let ws = num_widen_scalar("i128", call).expect("numeric");
+        let occurrences = ws.expr.matches(call).count();
+        assert_eq!(
+            occurrences, 1,
+            "expr `{call}` appears {occurrences} times in emitted i128 widen — must be exactly once: {}",
+            ws.expr
         );
     }
 
@@ -245,8 +264,9 @@ mod tests {
         let r: u64 = u64::MAX;
         assert_eq!((r).min(i64::MAX as u64) as i64, i64::MAX);
         let r128: i128 = i128::MIN;
+        let __w = r128;
         assert_eq!(
-            i64::try_from(r128).unwrap_or(if r128 < 0 { i64::MIN } else { i64::MAX }),
+            i64::try_from(__w).unwrap_or(if __w < 0 { i64::MIN } else { i64::MAX }),
             i64::MIN
         );
     }

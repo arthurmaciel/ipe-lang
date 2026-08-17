@@ -91,6 +91,88 @@ fn a_clock_wrapper_whose_declaration_matches_is_admitted() {
     );
 }
 
+/// A wrapper that uses `asm!` — raw syscall capability, unenumerable effects.
+const ASM_WRAPPER: &str = "\
+pub fn raw_syscall(nr: i64) -> i64 {
+    let ret: i64;
+    unsafe { core::arch::asm!(\"syscall\", inlateout(\"rax\") nr => ret) };
+    ret
+}
+";
+
+/// A wrapper that uses `global_asm!` at crate root — same opacity class.
+const GLOBAL_ASM_WRAPPER: &str = "\
+global_asm!(\"
+.globl _start
+_start:
+    xor %edi, %edi
+    call exit
+\");
+pub fn entry() {}
+";
+
+/// A wrapper that imports via `std::arch::asm` path — same opacity class.
+const STD_ARCH_WRAPPER: &str = "\
+use std::arch::asm;
+pub fn nop_loop(n: u64) {
+    for _ in 0..n { unsafe { asm!(\"nop\") } }
+}
+";
+
+#[test]
+fn asm_macro_wrapper_is_refused_as_native_ffi() {
+    let scan = scan_sources([("src/lib.rs", ASM_WRAPPER)]);
+    assert!(
+        scan.must_refuse(),
+        "a wrapper containing `asm!` must refuse (NativeFfi opacity): {scan:?}"
+    );
+    assert!(
+        scan.proposed.contains(&Capability::NativeFfi),
+        "NativeFfi capability must be in the proposed set: {scan:?}"
+    );
+    assert!(
+        !scan.opacities.is_empty(),
+        "at least one NativeFfi opacity must be recorded: {scan:?}"
+    );
+}
+
+#[test]
+fn global_asm_wrapper_is_refused_as_native_ffi() {
+    let scan = scan_sources([("src/lib.rs", GLOBAL_ASM_WRAPPER)]);
+    assert!(
+        scan.must_refuse(),
+        "a wrapper containing `global_asm!` must refuse (NativeFfi opacity): {scan:?}"
+    );
+    assert!(
+        scan.proposed.contains(&Capability::NativeFfi),
+        "NativeFfi capability must be in the proposed set: {scan:?}"
+    );
+}
+
+#[test]
+fn std_arch_path_wrapper_is_refused_as_native_ffi() {
+    let scan = scan_sources([("src/lib.rs", STD_ARCH_WRAPPER)]);
+    assert!(
+        scan.must_refuse(),
+        "a wrapper naming `std::arch` must refuse (NativeFfi): {scan:?}"
+    );
+    assert!(
+        scan.proposed.contains(&Capability::NativeFfi),
+        "NativeFfi capability must be in the proposed set: {scan:?}"
+    );
+}
+
+#[test]
+fn a_benign_pure_wrapper_is_not_flagged_by_asm_rules() {
+    // The pure-compute wrapper has no asm, no arch paths, no syscalls.
+    let scan = scan_sources([("src/lib.rs", PURE_WRAPPER)]);
+    let verdict = reconcile(&BTreeSet::new(), &scan, &[]);
+    assert!(
+        matches!(verdict, Verdict::Admit { .. }),
+        "a benign pure wrapper must still be admitted after the asm rules: {verdict:?}"
+    );
+}
+
 #[test]
 fn a_wrapper_with_a_non_std_dependency_is_refused_even_if_its_source_looks_pure() {
     // A capability can hide entirely in a dependency (`reqwest::get` is Network
