@@ -1758,6 +1758,109 @@ fn add_one(
     }
 }
 
+/// Install the registry FFI dependencies declared in `manifest_path`'s
+/// `[rust.dependencies]` into the project root's `.ipe/cache/ffi/rust`.
+///
+/// Used by the package audit gate to regenerate bindings from the pinned crates
+/// rather than trusting any committed cache. The generated artifacts are written
+/// into the project's own `.ipe/cache/ffi/rust` directory, so the audit gate's
+/// ownership check (`is_trusted_cache_dir`) passes — the directory is created by
+/// the invoking process under the invoking uid, not world-writable.
+///
+/// `allow_build_scripts` controls whether the bwrap-jailed inspector runs each
+/// crate's build scripts. The audit gate always passes `true` because build
+/// scripts run inside the bwrap jail with network access denied; skipping them
+/// would silently omit bindings for crates that require them to generate their
+/// API surface. The jail, not pre-verification, is the confinement boundary.
+///
+/// Pure-Ipê manifests (no `[rust.dependencies]` and no `[rust.wrapper]`) are a
+/// no-op: the function returns `Ok(())` immediately.
+///
+/// # Errors
+/// [`CliError::Io`] when the manifest cannot be read; [`CliError::UsageOwned`]
+/// when the jailed inspector fails or produces an undecodable result.
+pub fn install_registry_deps_for_project(
+    manifest_path: &Path,
+    allow_build_scripts: bool,
+) -> Result<(), CliError> {
+    let project_root = manifest_path.parent().unwrap_or_else(|| Path::new("."));
+    let manifest_abs = manifest_path;
+    let text = std::fs::read_to_string(manifest_abs).map_err(|e| CliError::Io {
+        path: manifest_abs.to_path_buf(),
+        source: e,
+    })?;
+    let deps = rust_dependencies_from_manifest(&text);
+    if deps.is_empty() {
+        return Ok(());
+    }
+    let cache = FfiCache::at_project_root(project_root);
+    let mut entries: Vec<(CrateSpec, Vec<String>)> = Vec::with_capacity(deps.len());
+    for dep in &deps {
+        let name =
+            CrateName::parse(&dep.name).map_err(|diag| CliError::UsageOwned(diag.to_string()))?;
+        let version = match dep.version.trim() {
+            "" | "*" => None,
+            pin => Some(
+                VersionPin::parse(pin).map_err(|diag| CliError::UsageOwned(diag.to_string()))?,
+            ),
+        };
+        let mut features = Vec::with_capacity(dep.features.len());
+        for feat in &dep.features {
+            features.push(
+                FeatureName::parse(feat)
+                    .map_err(|defect| CliError::UsageOwned(defect.to_string()))?,
+            );
+        }
+        let features: Vec<String> = features.iter().map(|f| f.as_str().to_owned()).collect();
+        entries.push((CrateSpec::new(name, version), features));
+    }
+    let json = run_inspector_job(
+        &InspectorJob::Manifest { entries: &entries },
+        allow_build_scripts,
+    )
+    .map_err(|e| match e {
+        CliError::UsageOwned(msg) => map_inspector_error(msg),
+        other => other,
+    })?;
+    let val: serde_json::Value = serde_json::from_str(&json)
+        .map_err(|e| CliError::UsageOwned(format!("ffi regen: invalid inspector JSON: {e}")))?;
+    let items: Vec<serde_json::Value> = match val {
+        serde_json::Value::Array(items) => items,
+        one @ serde_json::Value::Object(_) => vec![one],
+        other => {
+            return Err(CliError::UsageOwned(format!(
+                "ffi regen: unexpected inspector output shape: {other}"
+            )));
+        }
+    };
+    let closures = rust_define_closures_from_manifest(&text);
+    let structs = rust_define_structs_from_manifest(&text);
+    let enums = rust_define_enums_from_manifest(&text);
+    let sole_dep = deps.len() <= 1;
+    for item in &items {
+        let item_crate = item
+            .get("name")
+            .or_else(|| item.get("pkg"))
+            .and_then(serde_json::Value::as_str)
+            .ok_or_else(|| {
+                CliError::UsageOwned(format!(
+                    "ffi regen: inspector item has no `name` or `pkg` field: {item}"
+                ))
+            })?
+            .to_owned();
+        let merged = merge_provides(
+            &item.to_string(),
+            &item_crate,
+            &closures,
+            &structs,
+            &enums,
+            sole_dep,
+        )?;
+        ipe_ffi::driver::install_from_inspection(&cache, &merged).map_err(ffi_build_error)?;
+    }
+    Ok(())
+}
+
 /// `ipe rust <add|remove|install> …` — the Rust foreign-function group.
 ///
 /// Bare `ipe rust` prints the group's own `--help` page (the single source of

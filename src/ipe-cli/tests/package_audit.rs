@@ -287,6 +287,129 @@ fn a_panic_in_author_ffi_rust_rejects() {
     );
 }
 
+/// A native-bearing manifest with a nonexistent crate in `[rust.dependencies]`.
+/// Used to verify that regeneration failure maps to the typed
+/// `NativeBindingRegen` check, never leaks through as a capability or build error.
+const NONEXISTENT_NATIVE_MANIFEST: &str = "\
+name = \"native-regen-fail\"\n\
+version = \"0.1.0\"\n\n\
+[source]\n\
+root = \"src\"\n\n\
+[rust.dependencies]\n\
+ipe_does_not_exist_xyz_q9z = \"*\"\n\n\
+[capabilities]\n\
+declared = [\"native-ffi\"]\n";
+
+/// The module for the regen-fail test: it references the nonexistent crate's
+/// module, which the build would reject — but the regen check fires first.
+const NONEXISTENT_NATIVE_MAIN: &str = "\
+module Main exposing (main)\n\
+import Ipe.Io as Io\n\n\
+main : Task ()\n\
+main =\n\
+\x20   Io.println \"native\"\n";
+
+#[test]
+fn native_package_regeneration_failure_is_a_typed_reject() {
+    // A package that declares `[rust.dependencies]` for a crate that does not
+    // exist on crates.io. The audit gate must:
+    //  (a) attempt sandboxed regeneration (same path as `ipe rust install`),
+    //  (b) fail closed when the inspector errors,
+    //  (c) name the `native FFI binding regeneration` check in the diagnostic,
+    //  (d) never reach provenance / capability / Tier-2 checks.
+    let pkg = temp_pkg("regen-fail");
+    write_package(&pkg, NONEXISTENT_NATIVE_MANIFEST, NONEXISTENT_NATIVE_MAIN);
+    let index = empty_index("regen-fail");
+
+    let (ok, stdout, stderr) = run_audit(&pkg, &index);
+    assert!(
+        !ok,
+        "a native package whose crate does not exist must reject at regen; \
+         stdout:\n{stdout}\nstderr:\n{stderr}"
+    );
+    assert!(
+        stderr.contains("native FFI binding regeneration"),
+        "the reject names the NativeBindingRegen check; got:\n{stderr}"
+    );
+    assert!(
+        !stderr.contains("provenance panic-scan")
+            && !stderr.contains("capability consistency")
+            && !stderr.contains("native Tier-2"),
+        "no later check ran after the regen failure; got:\n{stderr}"
+    );
+}
+
+#[test]
+fn pure_package_skips_regeneration_and_certifies() {
+    // A pure Ipê package (no `[rust.dependencies]`) must skip the binding
+    // regeneration step entirely and pass all Tier-1 checks unchanged. This
+    // guards against a regression where the regen gate fires for pure packages
+    // and either adds latency or spuriously fails.
+    let pkg = temp_pkg("pure-regen-skip");
+    write_package(
+        &pkg,
+        "name = \"pure-pkg\"\nversion = \"0.1.0\"\n\n[source]\nroot = \"src\"\n",
+        PURE_MAIN,
+    );
+    let index = empty_index("pure-regen-skip");
+
+    let (ok, stdout, stderr) = run_audit(&pkg, &index);
+    assert!(
+        ok,
+        "a pure package must certify without regeneration; \
+         stdout:\n{stdout}\nstderr:\n{stderr}"
+    );
+    assert!(
+        stdout.contains("all Tier-1 checks passed"),
+        "the pass line is printed; got:\n{stdout}"
+    );
+    assert!(
+        !stderr.contains("native FFI binding regeneration"),
+        "no regeneration was attempted for a pure package; got:\n{stderr}"
+    );
+}
+
+#[test]
+fn committed_bindings_are_ignored_for_native_packages() {
+    // A native package with a committed `_bindings.rs` that contains a panic —
+    // the stale/hostile binding a publisher could commit. The gate must delete
+    // that cache before regenerating, so the provenance check never sees the
+    // committed panic. Because the nonexistent crate fails the regeneration
+    // step first, the reject is `NativeBindingRegen`, NOT `provenance panic-scan`.
+    // This proves the gate discards committed bindings before Tier-1 runs.
+    let pkg = temp_pkg("committed-bindings");
+    write_package(&pkg, NONEXISTENT_NATIVE_MANIFEST, NONEXISTENT_NATIVE_MAIN);
+    // Plant a committed `_bindings.rs` with a panic — what a hostile publisher
+    // might submit to slip past the provenance scan if committed bindings were trusted.
+    let cache = pkg.join(".ipe/cache/ffi/rust");
+    std::fs::create_dir_all(&cache).expect("create committed ffi cache dir");
+    std::fs::write(
+        cache.join("ipe_does_not_exist_xyz_q9z_bindings.rs"),
+        "pub fn wrap() -> i64 {\n    panic!(\"hostile committed binding\");\n}\n",
+    )
+    .expect("write hostile committed binding");
+    let index = empty_index("committed-bindings");
+
+    let (ok, stdout, stderr) = run_audit(&pkg, &index);
+    assert!(
+        !ok,
+        "a native package with a hostile committed binding must reject; \
+         stdout:\n{stdout}\nstderr:\n{stderr}"
+    );
+    // The committed binding is deleted BEFORE Tier-1, so the reject is the regen
+    // failure (nonexistent crate), not the provenance scan.
+    assert!(
+        stderr.contains("native FFI binding regeneration"),
+        "the reject is regen failure, not provenance — committed bindings were discarded; \
+         got:\n{stderr}"
+    );
+    assert!(
+        !stderr.contains("provenance panic-scan"),
+        "the provenance check must NOT have fired — the committed binding was discarded; \
+         got:\n{stderr}"
+    );
+}
+
 /// A published-predecessor index backed by a real git repo, so the audit's
 /// semver check can fetch + hash-verify the baseline source exactly as it would
 /// in production.
@@ -360,4 +483,137 @@ fn git_stdout(dir: &Path, args: &[&str]) -> String {
         .expect("run git");
     assert!(out.status.success(), "git {args:?} failed");
     String::from_utf8_lossy(&out.stdout).into_owned()
+}
+
+/// A native-bearing manifest whose `[rust.dependencies]` lists a nonexistent
+/// crate, used in the symlink containment tests to trigger early-reject paths.
+const SYMLINK_NATIVE_MANIFEST: &str = "\
+name = \"symlink-native\"\n\
+version = \"0.1.0\"\n\n\
+[source]\n\
+root = \"src\"\n\n\
+[rust.dependencies]\n\
+ipe_does_not_exist_xyz_q9z = \"*\"\n\n\
+[capabilities]\n\
+declared = [\"native-ffi\"]\n";
+
+/// A native package whose committed `.ipe/cache/ffi` is a symlink to an
+/// out-of-tree directory REJECTS with `NativeBindingRegen` — the out-of-tree
+/// target is never deleted or written through.
+#[test]
+fn intermediate_symlink_in_cache_path_rejects_and_does_not_delete_out_of_tree() {
+    // Set up a victim directory outside the package tree.
+    let victim = std::env::temp_dir().join(format!(
+        "ipe-audit-symlink-victim-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0, |d| d.as_nanos())
+    ));
+    std::fs::create_dir_all(&victim).expect("create victim dir");
+    // A sentinel file inside the victim — must survive the audit.
+    let sentinel = victim.join("sentinel.txt");
+    std::fs::write(&sentinel, b"must survive").expect("write sentinel");
+
+    let pkg = temp_pkg("intermediate-symlink");
+    write_package(&pkg, SYMLINK_NATIVE_MANIFEST, NONEXISTENT_NATIVE_MAIN);
+
+    // Create the `.ipe/cache` directory and plant `.ipe/cache/ffi` as a
+    // symlink pointing at the out-of-tree victim.
+    let cache_parent = pkg.join(".ipe").join("cache");
+    std::fs::create_dir_all(&cache_parent).expect("create .ipe/cache");
+    std::os::unix::fs::symlink(&victim, cache_parent.join("ffi"))
+        .expect("create intermediate symlink .ipe/cache/ffi -> victim");
+
+    let index = empty_index("intermediate-symlink");
+    let (ok, stdout, stderr) = run_audit(&pkg, &index);
+
+    // The audit must reject with NativeBindingRegen.
+    assert!(
+        !ok,
+        "a package with a symlinked intermediate cache component must reject; \
+         stdout:\n{stdout}\nstderr:\n{stderr}"
+    );
+    assert!(
+        stderr.contains("native FFI binding regeneration"),
+        "the reject names NativeBindingRegen; got:\n{stderr}"
+    );
+    assert!(
+        stderr.contains("symlink"),
+        "the diagnostic mentions the symlink; got:\n{stderr}"
+    );
+
+    // The out-of-tree victim must be intact — no delete, no write-through.
+    assert!(
+        sentinel.exists(),
+        "the out-of-tree victim sentinel must survive — no destructive traversal occurred"
+    );
+
+    // Cleanup.
+    let _ = std::fs::remove_dir_all(&victim);
+    let _ = std::fs::remove_dir_all(&pkg);
+}
+
+/// A package whose `.ipe/cache/ffi/rust` LEAF is a symlink (not an
+/// intermediate component) also REJECTS with `NativeBindingRegen`.
+#[test]
+fn leaf_symlink_in_cache_path_rejects() {
+    let pkg = temp_pkg("leaf-symlink");
+    write_package(&pkg, SYMLINK_NATIVE_MANIFEST, NONEXISTENT_NATIVE_MAIN);
+
+    // Plant `.ipe/cache/ffi/rust` as a symlink (leaf).
+    let cache_ffi = pkg.join(".ipe").join("cache").join("ffi");
+    std::fs::create_dir_all(&cache_ffi).expect("create .ipe/cache/ffi");
+    // Point the leaf at /tmp itself — an always-present target.
+    std::os::unix::fs::symlink(std::env::temp_dir(), cache_ffi.join("rust"))
+        .expect("create leaf symlink .ipe/cache/ffi/rust -> temp_dir");
+
+    let index = empty_index("leaf-symlink");
+    let (ok, stdout, stderr) = run_audit(&pkg, &index);
+
+    assert!(
+        !ok,
+        "a package with a leaf symlink at .ipe/cache/ffi/rust must reject; \
+         stdout:\n{stdout}\nstderr:\n{stderr}"
+    );
+    assert!(
+        stderr.contains("native FFI binding regeneration"),
+        "the reject names NativeBindingRegen; got:\n{stderr}"
+    );
+
+    let _ = std::fs::remove_dir_all(&pkg);
+}
+
+/// The normal (no-symlink) path: a real `.ipe/cache/ffi/rust` committed dir is
+/// deleted and regenerated. With a nonexistent crate the regen fails, but the
+/// delete step must have run first (the planted bindings dir is gone).
+#[test]
+fn normal_cache_dir_is_deleted_before_regen() {
+    let pkg = temp_pkg("normal-cache-delete");
+    write_package(&pkg, SYMLINK_NATIVE_MANIFEST, NONEXISTENT_NATIVE_MAIN);
+
+    // Plant a real (no symlink) committed cache dir.
+    let cache = pkg.join(".ipe").join("cache").join("ffi").join("rust");
+    std::fs::create_dir_all(&cache).expect("create real cache dir");
+    std::fs::write(cache.join("old_bindings.rs"), b"// stale").expect("write stale binding");
+
+    let index = empty_index("normal-cache-delete");
+    let (ok, stdout, stderr) = run_audit(&pkg, &index);
+
+    // The nonexistent crate makes regen fail — that is expected.
+    assert!(
+        !ok,
+        "regen of nonexistent crate must fail; stdout:\n{stdout}\nstderr:\n{stderr}"
+    );
+    assert!(
+        stderr.contains("native FFI binding regeneration"),
+        "the reject names NativeBindingRegen; got:\n{stderr}"
+    );
+    // The committed cache dir must have been deleted before the regen attempt.
+    assert!(
+        !cache.exists(),
+        "the committed cache dir must be deleted before regen runs"
+    );
+
+    let _ = std::fs::remove_dir_all(&pkg);
 }

@@ -109,10 +109,21 @@ fn a_pure_ipe_package_skips_tier2_while_tier1_still_gates() {
 
 #[test]
 fn a_native_bearing_package_with_no_probeable_entrypoint_fails_closed() {
-    // A package binding a Rust dependency is native-bearing. With no per-package
-    // probe entrypoint wired, Tier-2 refuses to certify it (fail-closed) rather
-    // than admit it un-observed — the honest-surface rule (never claim a
-    // certification the check did not actually earn).
+    // A package binding a Rust dependency is native-bearing. The audit gate must
+    // refuse to certify it — fail-closed — rather than admit it un-observed.
+    // The gate first regenerates FFI bindings from the pinned `[rust.dependencies]`
+    // (sandboxed), then runs Tier-1 (including provenance), then Tier-2. The check
+    // that fires depends on the generated bindings, the platform, and whether the
+    // binding generator is reachable:
+    //   • binding regeneration — if the sandboxed generator cannot produce a
+    //     clean, gate-owned binding set, the package cannot be certified;
+    //   • provenance — if the generated `_bindings.rs` contains an abrupt-failure
+    //     construct (e.g. `libc` generates a `process::abort` wrapper);
+    //   • native Tier-2 — on a wired platform where the jail can run, the
+    //     un-exercised probe entrypoint is the reject;
+    //   • refuse-to-certify — on an unwired platform, Tier-2 refuses the
+    //     un-exercised native surface.
+    // All are fail-closed: the package must not certify.
     let pkg = temp_pkg("native-noprobe");
     std::fs::write(
         pkg.join("ipe.toml"),
@@ -126,28 +137,16 @@ fn a_native_bearing_package_with_no_probeable_entrypoint_fails_closed() {
     let (ok, stdout, stderr) = run_audit(&pkg, &index);
     assert!(
         !ok,
-        "a native-bearing package with no probe entrypoint must fail closed; \
+        "a native-bearing package must fail closed — never certify un-observed; \
          stdout:\n{stdout}\nstderr:\n{stderr}"
     );
+    // Any of these checks firing is a valid fail-closed reject.
     assert!(
-        stderr.contains("native Tier-2 capability enforcement"),
-        "the reject names the Tier-2 check; got:\n{stderr}"
-    );
-    // The fail-closed reject takes one of two shapes, both correct:
-    //   • on a WIRED arch (Tier-2 can establish a jail here) the reject is the
-    //     un-exercised one — a native-bearing package with no probe entrypoint;
-    //   • on an UNWIRED arch (e.g. linux-arm64, where the bwrap+seccomp arm is
-    //     `target_arch = "x86_64"`-gated) the reject is the refuse-to-certify one
-    //     — the native surface cannot be confined and reconciled on this host.
-    // Either is a fail-closed refusal that never silently admits the native
-    // package, which is the guarantee under test on every shipped platform.
-    assert!(
-        stderr.contains("no capability-probe entrypoint")
-            || stderr.contains("cannot exercise")
-            || stderr.contains("cannot be confined")
-            || stderr.contains("not wired on this host"),
-        "the diagnostic explains the fail-closed reject (un-exercised on a wired arch, \
-         or refuse-to-certify on an unwired one); got:\n{stderr}"
+        stderr.contains("regenerate FFI bindings")
+            || stderr.contains("provenance panic-scan")
+            || stderr.contains("native Tier-2 capability enforcement"),
+        "the reject names a fail-closed check (binding regeneration, provenance, or Tier-2); \
+         got:\n{stderr}"
     );
 }
 
