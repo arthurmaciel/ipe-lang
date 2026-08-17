@@ -10,6 +10,7 @@ module Ipe.Ui.Transform exposing
     , opacity
     , Prop
     , propsToCss
+    , propsToCssProps
     , propToCssPair
     )
 
@@ -39,6 +40,7 @@ module Ipe.Ui.Transform exposing
 -- Use these helpers ONLY inside `Ui.animate` keyframes — they're
 -- not `Attribute msg` values and won't apply to a plain element
 -- without an animation wrapper.
+import Ipe.Css as Css
 import Ipe.List as List
 import Ipe.String as String
 
@@ -133,26 +135,35 @@ propToCssPair p =
             ( "opacity", String.fromFloat a )
 
 
--- Lower a list of Props to a CSS property block string
--- ("transform: …; opacity: …;"). Multiple TransformParts are
--- joined into ONE transform rule (CSS only honours the last
--- transform declaration on an element).
-propsToCss : List Prop -> String
-propsToCss props =
+-- Lower a list of Props to a list of `Css.CssProp` values, suitable
+-- for passing to `Css.frame`. Multiple `TransformPart`s are merged
+-- into ONE `transform` declaration (CSS only honours the last
+-- `transform` on an element); each `OpacityProp` becomes its own.
+propsToCssProps : List Prop -> List Css.CssProp
+propsToCssProps props =
     let
         pairs = List.map propToCssPair props
         transformParts = List.filterMap pickTransformPart pairs
         otherPairs = List.filter isNotTransform pairs
-        transformRule =
+        transformProp =
             if List.isEmpty transformParts then
-                ""
+                []
 
             else
-                "transform: " ++ String.join " " transformParts ++ ";"
-        otherRules =
-            List.foldl appendPair "" otherPairs
+                [ Css.property "transform" (String.join " " transformParts) ]
+        otherProps =
+            List.map (\pair -> case pair of ( k, v ) -> Css.property k v) otherPairs
     in
-        transformRule ++ otherRules
+    transformProp ++ otherProps
+
+
+-- Lower a list of Props to a CSS property block string
+-- ("transform:…; opacity:…"). Multiple TransformParts are
+-- joined into ONE transform rule (CSS only honours the last
+-- transform declaration on an element).
+propsToCss : List Prop -> String
+propsToCss props =
+    String.join "; " (List.map Css.renderProp (propsToCssProps props))
 
 
 pickTransformPart : ( String, String ) -> Maybe String
@@ -175,11 +186,3 @@ isNotTransform pair =
 
         _ ->
             True
-
-
-appendPair : ( String, String ) -> String -> String
-appendPair pair acc =
-    case pair of
-
-        ( k, v ) ->
-            acc ++ k ++ ": " ++ v ++ ";"

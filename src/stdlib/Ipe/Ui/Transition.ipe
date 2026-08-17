@@ -31,6 +31,7 @@ module Ipe.Ui.Transition exposing
     , attributeUnsafe
     )
 
+import Ipe.Css as Css
 import Ipe.List as List
 import Ipe.String as String
 import Ipe.Ui as Ui exposing (Attribute)
@@ -229,24 +230,38 @@ extractEasing steps =
             extractEasing rest
 
 
--- Lower a list of steps to the CSS `transition` shorthand:
+-- Lower a list of steps to the CSS `transition` shorthand value:
 -- "<prop> <dur>ms <easing> <delay>ms". The delay segment is only
--- emitted when non-zero (kept short for common case).
+-- emitted when non-zero (common case stays short).
+--
+-- Routes through `Css.transition` so the `"transition"` property
+-- name has a single owner. `Css.prop` scans the value at the Ipê
+-- boundary (defence-in-depth; the native render sink re-scans).
+-- A rejected value yields "" — fail-closed.
 buildShorthand : List Step -> String
 buildShorthand steps =
     let
-        prop = extractProperty steps
+        cssProperty = extractProperty steps
         dur = extractDuration steps
         ease = extractEasing steps
         del = extractDelay steps
-        base =
-            prop ++ " " ++ String.fromInt dur ++ "ms " ++ easingToCss ease
-    in
-        if del > 0 then
-            base ++ " " ++ String.fromInt del ++ "ms"
+        baseVal =
+            cssProperty ++ " " ++ String.fromInt dur ++ "ms " ++ easingToCss ease
+        shorthandVal =
+            if del > 0 then
+                baseVal ++ " " ++ String.fromInt del ++ "ms"
 
-        else
-            base
+            else
+                baseVal
+        rendered =
+            Css.renderProp (Css.transition shorthandVal)
+    in
+    case String.split ":" rendered of
+        _ :: valParts ->
+            String.join ":" valParts
+
+        [] ->
+            shorthandVal
 
 
 -- ─── Attribute entry points ──────────────────────────────────────

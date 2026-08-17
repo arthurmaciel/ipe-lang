@@ -63,6 +63,7 @@ module Ipe.Ui.Animation exposing
 -- This is non-negotiable for a11y. Opt OUT explicitly via the
 -- `respectReducedMotion = False` knob on a Spec when the animation is
 -- semantically required (loading spinner, progress indicator).
+import Ipe.Css as Css
 import Ipe.List as List
 import Ipe.String as String
 import Ipe.Ui as Ui exposing (Attribute)
@@ -328,12 +329,15 @@ buildKeyframesBody frames =
     String.join " " (List.map renderFrame frames)
 
 
+-- Produce one keyframe block: `"<pct>% { prop:val; prop:val }"`.
+-- Delegates property rendering to `Css.frame` so the frame
+-- grammar has a single source.
 renderFrame : ( Int, List Prop ) -> String
 renderFrame frame =
     case frame of
 
         ( pct, props ) ->
-            String.fromInt pct ++ "% { " ++ Transform.propsToCss props ++ " }"
+            Css.frame (String.fromInt pct ++ "%") (Transform.propsToCssProps props)
 
 
 -- Construct an animation Attribute from a Spec. The runtime
