@@ -84,6 +84,11 @@ pub struct ProjectManifest {
     /// presence pre-accepts the `.Unsafe`-import acknowledgment so a repeatedly
     /// built project never re-prompts and CI needs no flag. Empty when absent.
     pub capabilities_accept: BTreeSet<Capability>,
+    /// Whether the manifest contains a `[rust.wrapper]` section. The audit gate
+    /// reads this to detect author-asserted wrapper bindings that it cannot
+    /// regenerate from an independent pinned source (there is no registry pin,
+    /// rev, or hash for a local wrapper path — only the author's local source).
+    pub has_rust_wrapper: bool,
 }
 
 /// `[wasm]` `ipe.toml` section (spec: `docs/adr/0042-wasm-client-target.md` Q6
@@ -310,6 +315,10 @@ struct RawManifest {
     wasm_opt_level: Option<String>,
     dependencies: BTreeMap<String, IpeDep>,
     rust_dependencies: BTreeMap<String, RustDep>,
+    /// `true` when the manifest contains a `[rust.wrapper]` section, regardless
+    /// of what keys the section holds. Set by the scanner on the section header
+    /// itself — no key is required.
+    has_rust_wrapper: bool,
     capabilities: BTreeSet<Capability>,
     capabilities_accept: BTreeSet<Capability>,
 }
@@ -332,9 +341,13 @@ fn scan_raw_manifest(text: &str) -> Result<RawManifest, CliError> {
             section = match line {
                 "[project]" | "[source]" | "[database]" | "[rust]" | "[wasm]"
                 | "[dependencies]" | "[capabilities]" => line,
-                // Both spellings of the FFI crate table are accepted, the same
+                // Both spellings of the FFI crate tables are accepted, the same
                 // as the `ipe rust install` reader.
                 "[rust.dependencies]" | "[\"rust.dependencies\"]" => "[rust.dependencies]",
+                "[rust.wrapper]" | "[\"rust.wrapper\"]" => {
+                    raw.has_rust_wrapper = true;
+                    "other"
+                }
                 _ => "other",
             };
             continue;
@@ -498,6 +511,7 @@ pub fn parse_manifest(manifest_path: &Path) -> Result<ProjectManifest, CliError>
         rust_dependencies: raw.rust_dependencies,
         capabilities: raw.capabilities,
         capabilities_accept: raw.capabilities_accept,
+        has_rust_wrapper: raw.has_rust_wrapper,
     })
 }
 

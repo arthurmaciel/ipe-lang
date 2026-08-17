@@ -74,6 +74,11 @@ pub enum Check {
     /// same jailed generator as `ipe rust install` does against the pinned
     /// `[rust.dependencies]`, writing gate-owned bindings the Tier-1 checks
     /// then read. Absent or committed bindings are never trusted.
+    ///
+    /// Also fires when a manifest declares `[rust.wrapper]` bindings: wrapper
+    /// bindings are author-asserted (a local path with no registry pin, rev, or
+    /// content hash), so the gate has no independent source to regenerate from
+    /// and rejects the package at admission.
     NativeBindingRegen,
     /// 1a — abrupt-failure token scan over author-supplied FFI wrapper Rust.
     Provenance,
@@ -133,6 +138,7 @@ impl std::fmt::Display for Rejection {
 /// `ipe.toml` path, and the directory it was emitted into. Preparing these once
 /// keeps each check a pure function of a ready package rather than re-deriving
 /// paths and re-building.
+#[derive(Debug)]
 struct Prepared {
     /// The parsed manifest (name, version, declared capabilities, deps).
     manifest: ProjectManifest,
@@ -430,13 +436,39 @@ fn set_format(slot: &mut Option<OutputFormat>, requested: OutputFormat) -> Resul
 /// audit never reads publisher-supplied bindings — only the gate-owned,
 /// freshly-generated ones pass the ownership check that follows.
 ///
+/// A `[rust.wrapper]`-only package is rejected before the build: wrapper
+/// bindings are author-asserted (a local source path, no registry pin, rev, or
+/// hash), so the gate has no independent pinned source to regenerate from. The
+/// only fail-closed option is rejection — committing author-written wrapper
+/// `_bindings.rs` that the gate cannot re-derive must never reach a certified
+/// build.
+///
 /// # Errors
-/// [`CliError::UsageOwned`] when `path` names no `ipe.toml`; the build errors
+/// [`CliError::UsageOwned`] when `path` names no `ipe.toml`;
+/// [`CliError::PackageAudit`] with [`Check::NativeBindingRegen`] when the
+/// manifest contains a `[rust.wrapper]` section; the build errors
 /// ([`CliError::Pipeline`] / [`CliError::Io`] / [`CliError::StaticRefusal`])
 /// otherwise.
 fn prepare(path: &Path) -> Result<Prepared, CliError> {
     let manifest_path = locate_manifest(path)?;
     let manifest = project::parse_manifest(&manifest_path)?;
+
+    // Reject wrapper-only packages: the gate cannot regenerate wrapper bindings
+    // from an independent pinned source, so a committed `_bindings.rs` must
+    // never be trusted. Fail closed here rather than reading author-supplied
+    // wrapper Rust that was never gate-owned.
+    if manifest.has_rust_wrapper {
+        return Err(reject(
+            Check::NativeBindingRegen,
+            "this package contains a `[rust.wrapper]` section whose bindings are \
+             author-asserted (a local source path with no registry pin, rev, or \
+             content hash). The audit gate has no independent pinned source to \
+             regenerate wrapper bindings from, so it cannot vouch for them. \
+             A `[rust.wrapper]`-bearing package cannot be certified until the \
+             gate gains a regenerable, pinned wrapper source."
+                .to_owned(),
+        ));
+    }
 
     // Regenerate FFI bindings for native-bearing packages before the build so
     // the compiler finds `Rust.<Crate>` interface modules.
@@ -1267,6 +1299,171 @@ mod tests {
             "fixture file was written at {fixture_path:?}"
         );
         let _ = std::fs::remove_dir_all(dir);
+    }
+
+    /// Build a unique throwaway directory under the OS temp root for a test.
+    /// Returns the path; the caller must remove it when done.
+    fn make_test_dir(tag: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!(
+            "ipe-audit-test-{tag}-{}-{}",
+            std::process::id(),
+            // A per-call counter keeps multiple calls in the same test from
+            // colliding.  A static is fine here — tests run in the same process.
+            {
+                use std::sync::atomic::{AtomicU64, Ordering};
+                static N: AtomicU64 = AtomicU64::new(0);
+                N.fetch_add(1, Ordering::Relaxed)
+            }
+        ));
+        std::fs::create_dir_all(&dir).expect("create test scratch dir");
+        dir
+    }
+
+    /// A manifest that carries a `[rust.wrapper]` section is rejected at the
+    /// `prepare` step with a [`Check::NativeBindingRegen`] rejection.
+    ///
+    /// Wrapper bindings are author-asserted (local path, no registry pin, rev, or
+    /// hash); the gate has no independent source to regenerate from, so it must
+    /// refuse rather than read committed author-written `_bindings.rs`.
+    #[test]
+    fn prepare_rejects_rust_wrapper_at_admission() {
+        use std::io::Write as _;
+
+        let dir = make_test_dir("wrapper-reject");
+        let src = dir.join("src");
+        std::fs::create_dir(&src).expect("create src/");
+        // A minimal main module so the project looks structurally valid.
+        std::fs::write(src.join("Main.ipe"), "module Main exposing (..)\n")
+            .expect("write Main.ipe");
+
+        let toml = dir.join("ipe.toml");
+        let mut f = std::fs::File::create(&toml).expect("create ipe.toml");
+        writeln!(
+            f,
+            "[project]\nname = \"wrapper-pkg\"\nversion = \"0.1.0\"\n\n\
+             [rust.wrapper]\npath = \"./my-crate\"\nexpose = [\"some_fn\"]\ncapabilities = []\n"
+        )
+        .expect("write ipe.toml");
+
+        let err = prepare(&dir).expect_err("prepare must reject a wrapper-only package");
+        let _ = std::fs::remove_dir_all(&dir);
+        assert!(
+            matches!(err, CliError::PackageAudit(_)),
+            "expected PackageAudit, got: {err:?}"
+        );
+        if let CliError::PackageAudit(ref r) = err {
+            assert_eq!(
+                r.check,
+                Check::NativeBindingRegen,
+                "wrong check: must be NativeBindingRegen, got {:?}",
+                r.check
+            );
+            assert!(
+                r.message.contains("[rust.wrapper]"),
+                "rejection message must name [rust.wrapper]: {}",
+                r.message
+            );
+        }
+    }
+
+    /// A manifest with only `[rust.dependencies]` (no `[rust.wrapper]`) must NOT
+    /// be rejected by the wrapper admission guard — the `[rust.dependencies]` path
+    /// still proceeds to the regeneration step unchanged.
+    ///
+    /// This test exercises only the admission predicate through manifest parsing
+    /// (not the full `prepare` which requires a sandboxed inspector), confirming
+    /// that the new wrapper guard does not perturb the existing
+    /// `[rust.dependencies]` path.
+    #[test]
+    fn prepare_does_not_reject_rust_dependencies_only_manifest() {
+        use std::io::Write as _;
+
+        let dir = make_test_dir("dep-only");
+        let src = dir.join("src");
+        std::fs::create_dir(&src).expect("create src/");
+        std::fs::write(src.join("Main.ipe"), "module Main exposing (..)\n")
+            .expect("write Main.ipe");
+
+        let toml = dir.join("ipe.toml");
+        let mut f = std::fs::File::create(&toml).expect("create ipe.toml");
+        writeln!(
+            f,
+            "[project]\nname = \"dep-pkg\"\nversion = \"0.1.0\"\n\n\
+             [rust.dependencies]\nuuid = \"1\"\n\n\
+             [capabilities]\ndeclared = [\"native-ffi\"]\n"
+        )
+        .expect("write ipe.toml");
+
+        let manifest = crate::project::parse_manifest(&toml)
+            .expect("manifest with [rust.dependencies] must parse");
+        let _ = std::fs::remove_dir_all(&dir);
+        assert!(
+            !manifest.has_rust_wrapper,
+            "has_rust_wrapper must be false for a [rust.dependencies]-only manifest"
+        );
+    }
+
+    /// A manifest with no FFI sections (pure Ipê) is not affected by the wrapper
+    /// guard and must parse with `has_rust_wrapper = false`.
+    #[test]
+    fn pure_ipe_manifest_has_rust_wrapper_is_false() {
+        use std::io::Write as _;
+
+        let dir = make_test_dir("pure-ipe");
+        let src = dir.join("src");
+        std::fs::create_dir(&src).expect("create src/");
+        std::fs::write(src.join("Main.ipe"), "module Main exposing (..)\n")
+            .expect("write Main.ipe");
+
+        let toml = dir.join("ipe.toml");
+        let mut f = std::fs::File::create(&toml).expect("create ipe.toml");
+        writeln!(f, "[project]\nname = \"pure-pkg\"\nversion = \"0.1.0\"\n")
+            .expect("write ipe.toml");
+
+        let manifest = crate::project::parse_manifest(&toml).expect("pure manifest must parse");
+        let _ = std::fs::remove_dir_all(&dir);
+        assert!(
+            !manifest.has_rust_wrapper,
+            "has_rust_wrapper must be false for a pure-Ipê manifest"
+        );
+    }
+
+    /// `ffi_cache_path_or_reject` refuses a cache path whose `.ipe` component
+    /// is a symlink, preventing a delete-through-symlink attack — the same
+    /// containment that guards `[rust.dependencies]` regeneration.
+    #[test]
+    #[cfg(unix)]
+    fn ffi_cache_path_or_reject_refuses_symlinked_cache_component() {
+        use std::os::unix::fs::symlink;
+
+        let dir = make_test_dir("symlink-reject");
+        let target = make_test_dir("symlink-target");
+
+        // Plant `.ipe` as a symlink pointing outside the project root.
+        let ipe_link = dir.join(".ipe");
+        symlink(&target, &ipe_link).expect("create .ipe symlink");
+
+        let err =
+            ffi_cache_path_or_reject(&dir).expect_err("must reject a symlinked .ipe component");
+        let _ = std::fs::remove_dir_all(&dir);
+        let _ = std::fs::remove_dir_all(&target);
+        assert!(
+            matches!(err, CliError::PackageAudit(_)),
+            "expected PackageAudit, got: {err:?}"
+        );
+        if let CliError::PackageAudit(ref r) = err {
+            assert_eq!(
+                r.check,
+                Check::NativeBindingRegen,
+                "wrong check on symlink reject: {:?}",
+                r.check
+            );
+            assert!(
+                r.message.contains("symlink"),
+                "rejection message must mention symlink: {}",
+                r.message
+            );
+        }
     }
 
     /// `prepare` resolves the runtime through the SAME path `ipe build` uses — the
