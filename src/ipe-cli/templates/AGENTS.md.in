@@ -1160,7 +1160,7 @@ ipe install                        # regen missing FFI + deps
 ipe update                         # update deps
 ipe clean                          # remove out/ dist/
 ipe lsp                            # JSON-RPC LSP server (stdio)
-ipe --version
+ipe version
 ```
 
 **Run `ipe build` from the project directory** — `--out out/rust` and `out/`

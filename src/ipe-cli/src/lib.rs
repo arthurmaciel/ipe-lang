@@ -2520,15 +2520,11 @@ pub fn run_cli(args: &[String]) -> Result<(), CliError> {
             attempted: String::new(),
         });
     };
-    // `--version` / `-V` are the conventional aliases for the `version` command.
-    let looked_up = match cmd.as_str() {
-        "--version" | "-V" => "version",
-        other => other,
-    };
     // One registry drives both dispatch and help: a command runs exactly when it
-    // is described, so the two cannot drift. The looked-up handler carries the
-    // canonical static name its misuse `--help` page keys on.
-    match help::handler(looked_up) {
+    // is described, so the two cannot drift. The handler carries the canonical
+    // static name its misuse `--help` page keys on. Version is the `version`
+    // command only — there is no `--version`/`-V` flag alias.
+    match help::handler(cmd.as_str()) {
         Some((name, run)) => with_help_on_misuse(name, run(rest)),
         // An unknown command is misuse: show the top-level help and fail. Unlike
         // an explicit `--help`, this is not a request, so it exits non-zero. The

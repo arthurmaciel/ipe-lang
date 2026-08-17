@@ -86,7 +86,7 @@ SKY_VER="${SKY_BIN:-sky}"
 if [ "$SKY_AVAILABLE" -eq 1 ]; then
   SKY_VER="$("$SKY_BIN" --version 2>/dev/null || true)"
 fi
-IPE_VER="$("$IPE_BIN" --version 2>/dev/null || true)"
+IPE_VER="$("$IPE_BIN" version 2>/dev/null || true)"
 
 echo "=== check-sky-parity-nonvisual ==="
 echo "  ipe: ${IPE_VER:-unknown}"
