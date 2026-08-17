@@ -10404,8 +10404,8 @@ pub fn count_destructure_param_sites(m: &canon::Module) -> usize {
 }
 
 /// Count every `any`-wildcard occurrence (bare OR nested inside a container)
-/// in PARAM position across every [`canon::Def::Typed`] annotation in the
-/// module — the pre-sizing pass for [`Lowerer::any_param_binders`].
+/// in PARAM and RETURN position across every [`canon::Def::Typed`] annotation
+/// in the module — the pre-sizing pass for [`Lowerer::any_param_binders`].
 ///
 /// Each `any` occurrence — whether a bare `any` param or an `any` nested
 /// inside `List any`, `Maybe any`, `Result e any`, a tuple/record/fn field,
@@ -10413,10 +10413,12 @@ pub fn count_destructure_param_sites(m: &canon::Module) -> usize {
 /// distinct generics (see AUD-01 and [`Lowerer::split_typed_sig`]).
 ///
 /// Only `any` gets a fresh UV per occurrence in the checker; genuine named
-/// type variables share one symbol and are fine. Counts only PARAM positions
-/// of the top-level annotation's arrow chain — the return position is handled
-/// by the region-based return-`any` substitution; lambdas never carry their
-/// own annotation in Ipê.
+/// type variables share one symbol and are fine. Bare or `Ui`-wrapped `any`
+/// in return position is handled by the region-based substitution in
+/// `lower_def` (which replaces the whole return with the body's solved type).
+/// Nested `any` in return position (e.g. `List any`, `Maybe any`) falls
+/// through that region gate and is freshened by `split_typed_sig`'s return
+/// path, so those sites also need entries in the pool.
 ///
 /// Over-counting is harmless (a few unused interned symbols); under-counting
 /// would let [`Lowerer::fresh_any_param_symbol`]'s cursor overrun, which
@@ -10449,12 +10451,19 @@ pub fn count_any_param_sites(m: &canon::Module, interner: &Interner) -> usize {
             let canon::Def::Typed { ty, .. } = d else {
                 return 0;
             };
+            // Count param-position `any`s (every arg across the arrow chain).
+            // Also count return-position `any`s: bare/Ui-wrapped cases are
+            // handled by the region substitution in `lower_def`, but nested
+            // cases (`List any`, `Maybe any`, etc.) are freshened by
+            // `split_typed_sig`'s return path and consume pool entries too.
             let mut cur = ty;
             let mut n = 0;
             while let canon::Type::Lambda(arg, rest) = cur {
                 n += count_any_in_type(arg, interner);
                 cur = rest.as_ref();
             }
+            // `cur` is now the trailing return type; count its `any`s.
+            n += count_any_in_type(cur, interner);
             n
         })
         .sum()
@@ -11109,6 +11118,20 @@ impl<'a> Lowerer<'a> {
                     args: out,
                 })
             }
+            // A UI carrier's message slot can embed a nested `any`
+            // (`Html (List any)`), so it must freshen like any other container
+            // — otherwise two independent Ui-nested `any`s in return position
+            // collapse onto the shared interned `"any"` symbol and emit one
+            // generic where two are required (SEAL break, E0308).
+            IrType::Ui { ctor, msg } => Ok(IrType::Ui {
+                ctor,
+                msg: Box::new(self.freshen_any_generics(*msg, minted)?),
+            }),
+            // `WebRoute page` is parametric on its page type, which can itself
+            // embed a nested `any` — freshen it for the same reason as `Ui`.
+            IrType::WebRoute(page) => Ok(IrType::WebRoute(Box::new(
+                self.freshen_any_generics(*page, minted)?,
+            ))),
             // Leaf types that never contain a Generic — pass through.
             other => Ok(other),
         }
@@ -12218,41 +12241,41 @@ impl<'a> Lowerer<'a> {
                 // unannotated path). Only whole-annotation aliases are unfolded
                 // here; a `Handler` in argument position (`withCors : … -> Handler
                 // -> Handler`) still lowers via `split_typed_sig` unchanged.
-                let (params, prologue, ret, any_syms_minted, row_params) = if !patterns.is_empty()
-                    && self.annotation_is_function_alias(ty)
-                {
-                    let solved_ty = self
-                        .types
-                        .env
-                        .get(&(def.home().to_vec(), name))
-                        .ok_or_else(|| {
-                            bug(
-                                "ipe_lower::lower_def",
-                                "no inferred type for function-alias binding",
-                            )
-                        })?;
-                    // The solved-type path never encounters a bare `any`-wildcard
-                    // Generic (a solved type is either concrete or a free
-                    // `Ty::Var`, never carrying the annotation-only `any` marker)
-                    // — nothing minted here.
-                    let (p, pr, r) = self.split_unannotated_sig(solved_ty, patterns, sig_span)?;
-                    (p, pr, r, Vec::new(), Vec::new())
-                } else {
-                    // A row-polymorphic record annotation in a SUPPORTED position
-                    // (a top-level argument-position open row of one or more
-                    // closed-typed fields) erases to a witness-bounded
-                    // `IrType::RowGeneric` in `split_typed_sig` and monomorphises
-                    // per call-site shape in the backend. Every UNSUPPORTED
-                    // open-row form — return position, nested under a
-                    // container/record, or a field type embedding a further open
-                    // row — has no emission yet, so it is failed closed here
-                    // (IPE-L0131) rather than emitting Rust that misses the A7
-                    // exact-key struct registry.
-                    if canon_sig_has_unsupported_open_row(ty) {
-                        return Err(unsupported(sig_span, Feature::RowPolyRecordAnnotation));
-                    }
-                    self.split_typed_sig(ty, patterns, free_vars, sig_span)?
-                };
+                let (params, prologue, ret, mut any_syms_minted, row_params) =
+                    if !patterns.is_empty() && self.annotation_is_function_alias(ty) {
+                        let solved_ty = self
+                            .types
+                            .env
+                            .get(&(def.home().to_vec(), name))
+                            .ok_or_else(|| {
+                                bug(
+                                    "ipe_lower::lower_def",
+                                    "no inferred type for function-alias binding",
+                                )
+                            })?;
+                        // The solved-type path never encounters a bare `any`-wildcard
+                        // Generic (a solved type is either concrete or a free
+                        // `Ty::Var`, never carrying the annotation-only `any` marker)
+                        // — nothing minted here.
+                        let (p, pr, r) =
+                            self.split_unannotated_sig(solved_ty, patterns, sig_span)?;
+                        (p, pr, r, Vec::new(), Vec::new())
+                    } else {
+                        // A row-polymorphic record annotation in a SUPPORTED position
+                        // (a top-level argument-position open row of one or more
+                        // closed-typed fields) erases to a witness-bounded
+                        // `IrType::RowGeneric` in `split_typed_sig` and monomorphises
+                        // per call-site shape in the backend. Every UNSUPPORTED
+                        // open-row form — return position, nested under a
+                        // container/record, or a field type embedding a further open
+                        // row — has no emission yet, so it is failed closed here
+                        // (IPE-L0131) rather than emitting Rust that misses the A7
+                        // exact-key struct registry.
+                        if canon_sig_has_unsupported_open_row(ty) {
+                            return Err(unsupported(sig_span, Feature::RowPolyRecordAnnotation));
+                        }
+                        self.split_typed_sig(ty, patterns, free_vars, sig_span)?
+                    };
                 // Bug-29 fix: `view : Model -> any` where the body region is a UI
                 // type `Html<Ty::Var(uv)>`.  We need to inject `(uv_rep →
                 // any_sym)` into the poly_tvars map so that
@@ -12381,7 +12404,14 @@ impl<'a> Lowerer<'a> {
                         })?;
                     self.ir_type_from_ty(body_ty, sig_span)?
                 } else {
-                    ret
+                    // A nested `any` in return position (e.g. `foo : X -> List any`)
+                    // is not covered by the bare-wildcard region substitution above.
+                    // Freshen every `Generic("any")` node in the return type so each
+                    // occurrence becomes a distinct fresh symbol — the same treatment
+                    // `split_typed_sig` applies to param-position `any`s. The minted
+                    // symbols are added to `any_syms_minted` so they appear in
+                    // `type_params` and the emitted Rust generic is valid.
+                    self.freshen_any_generics(ret, &mut any_syms_minted)?
                 };
                 // A tuple-destructuring parameter binds its synthetic name to the
                 // tuple, then the body opens it with a `Destructure`. Fold the
@@ -25049,6 +25079,60 @@ mod tests {
         assert_ne!(
             g_list, g_maybe,
             "Generic symbols inside freshened List<any> and Maybe<any> must differ"
+        );
+    }
+
+    /// `count_any_param_sites` counts return-position `any` occurrences so the
+    /// pool is large enough when `split_typed_sig` freshens the return type.
+    ///
+    /// A signature like `foo : Int -> List any` has zero param-position `any`s
+    /// and one return-position `any`. Before the fix the counter stopped at the
+    /// last arrow (param positions only), leaving the pool one entry short and
+    /// causing `fresh_any_param_symbol` to ICE on the return-path freshen.
+    #[test]
+    fn count_any_param_sites_includes_return_position() {
+        let mut interner = Interner::new();
+        let any_sym = interner.intern("any").unwrap();
+        let list_sym = interner.intern("List").unwrap();
+        let int_sym = interner.intern("Int").unwrap();
+
+        // Canonical type for `foo : Int -> List any`:
+        //   Lambda(Con { name: Int, args: [] }, Con { name: List, args: [Var(any)] })
+        let list_any = ipe_canon::ast::Type::Con {
+            home: vec![],
+            name: list_sym,
+            args: vec![ipe_canon::ast::Type::Var(any_sym)],
+        };
+        let ty = ipe_canon::ast::Type::Lambda(
+            Box::new(ipe_canon::ast::Type::Con {
+                home: vec![],
+                name: int_sym,
+                args: vec![],
+            }),
+            Box::new(list_any),
+        );
+        let module = ipe_canon::ast::Module {
+            imports_unsafe_submodule: false,
+            name: vec![],
+            unions: vec![],
+            defs: vec![ipe_canon::ast::Def::Typed {
+                name: ipe_diagnostics::Located::new(ipe_diagnostics::Span::DUMMY, int_sym),
+                ty,
+                patterns: vec![],
+                body: ipe_diagnostics::Located::new(
+                    ipe_diagnostics::Span::DUMMY,
+                    ipe_canon::ast::Expr_::Unit,
+                ),
+                free_vars: vec![any_sym],
+                home: vec![],
+            }],
+        };
+
+        let count = super::count_any_param_sites(&module, &interner);
+        assert_eq!(
+            count, 1,
+            "return-position `any` in `Int -> List any` must be counted \
+             so the pool has room for the return-type freshen"
         );
     }
 

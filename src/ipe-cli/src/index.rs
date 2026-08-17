@@ -124,7 +124,11 @@ impl CommitId {
         Ok(Self(raw.to_owned()))
     }
 
-    /// The validated commit-id string, safe to pass to `git checkout -- <rev>`.
+    /// The validated commit-id string, safe to pass to `git checkout <rev>`.
+    ///
+    /// The `CommitId` parse boundary guarantees this value cannot start with
+    /// `-`, so passing it without `--` is safe — `--` in `git checkout` means
+    /// "treat as a path, not a ref", which is wrong for a commit id.
     #[must_use]
     pub fn as_str(&self) -> &str {
         &self.0

@@ -22,7 +22,7 @@ use std::process::Command;
 
 use ipe_ir::Capability;
 
-use crate::index::{self, EntryVersion};
+use crate::index::{self, CommitId, EntryVersion, SourceUrl};
 use crate::lockfile::{LockedDep, Lockfile};
 use crate::project::{self, IpeDep};
 use crate::{CliError, cache};
@@ -83,9 +83,14 @@ pub fn resolve_and_add(
 pub fn resolve_escape(project_root: &Path, name: &str, dep: &IpeDep) -> Result<(), CliError> {
     let (source, rev, checkout) = match dep {
         IpeDep::Git { url, rev } => {
-            let rev = rev.clone().unwrap_or_else(|| "HEAD".to_owned());
-            let checkout = fetch_git(project_root, name, url, &rev)?;
-            (url.clone(), rev, checkout)
+            // Parse-don't-validate: convert the raw manifest strings to typed
+            // newtypes at this escape-path boundary before they reach the git
+            // sink, so the sink cannot be called with an unvalidated value.
+            let typed_url = SourceUrl::parse(name, url)?;
+            let raw_rev = rev.as_deref().unwrap_or("HEAD");
+            let typed_rev = CommitId::parse(name, raw_rev)?;
+            let checkout = fetch_git(project_root, name, &typed_url, &typed_rev)?;
+            (url.clone(), typed_rev.to_string(), checkout)
         }
         IpeDep::Path(path) => {
             let resolved = if path.is_absolute() {
@@ -260,16 +265,19 @@ fn fetch_source(
     entry: &EntryVersion,
 ) -> Result<PathBuf, CliError> {
     let dest = package_cache_dir(project_root, name, version);
-    // `.as_str()` on the typed newtypes: the index parse boundary already
-    // rejected any value outside the transport allow-list and non-hex revs.
-    fetch_git_into(name, entry.source.as_str(), entry.rev.as_str(), &dest)?;
+    fetch_git_into(name, &entry.source, &entry.rev, &dest)?;
     Ok(dest)
 }
 
 /// Fetch a git escape's source at `rev` into the package cache, keyed by the
 /// revision so distinct revisions do not collide.
-fn fetch_git(project_root: &Path, name: &str, url: &str, rev: &str) -> Result<PathBuf, CliError> {
-    let dest = package_cache_dir(project_root, name, rev);
+fn fetch_git(
+    project_root: &Path,
+    name: &str,
+    url: &SourceUrl,
+    rev: &CommitId,
+) -> Result<PathBuf, CliError> {
+    let dest = package_cache_dir(project_root, name, rev.as_str());
     fetch_git_into(name, url, rev, &dest)?;
     Ok(dest)
 }
@@ -281,13 +289,19 @@ fn fetch_git(project_root: &Path, name: &str, url: &str, rev: &str) -> Result<Pa
 /// bare-ish clone plus an explicit `checkout` of the pinned revision, so the
 /// resolved tree is exactly that commit, never a moving branch tip.
 ///
-/// `url` and `rev` must already be validated typed values (from [`SourceUrl`] /
-/// [`CommitId`]). Defense-in-depth: `GIT_ALLOW_PROTOCOL` restricts transports
-/// (network + `file`) even if a value somehow bypassed the parse boundary.
-/// `--` is used for clone's URL positional; checkout omits it because `--`
-/// in checkout means "treat as a path, not a ref" — the `CommitId` boundary
-/// already guarantees `rev` cannot start with `-`.
-fn fetch_git_into(name: &str, url: &str, rev: &str, dest: &Path) -> Result<(), CliError> {
+/// Both `url` and `rev` are typed newtypes — a raw unvalidated string cannot
+/// reach this function. Defense-in-depth: `GIT_ALLOW_PROTOCOL` restricts
+/// transports (network + `file`) even if a value somehow bypassed the parse
+/// boundary. `--` terminates git's option list for clone so the URL is always
+/// a positional; checkout omits `--` because in checkout it means "treat as a
+/// path, not a ref" — the `CommitId` boundary already guarantees `rev` cannot
+/// start with `-`.
+fn fetch_git_into(
+    name: &str,
+    url: &SourceUrl,
+    rev: &CommitId,
+    dest: &Path,
+) -> Result<(), CliError> {
     if dest.exists() {
         std::fs::remove_dir_all(dest).map_err(|e| CliError::Io {
             path: dest.to_path_buf(),
@@ -300,12 +314,20 @@ fn fetch_git_into(name: &str, url: &str, rev: &str, dest: &Path) -> Result<(), C
             source: e,
         })?;
     }
+    // Extract raw strings at the last moment before handing them to the
+    // subprocess: the typed newtypes carry the validation guarantee through to
+    // this point; `.as_str()` is the only site that converts back to `&str`.
     // `--` terminates git's option list for clone: the URL that follows is a
     // positional, never a flag. For checkout, `--` would make git treat the
     // rev as a file path instead of a ref, so it is omitted — the
     // `CommitId` parse boundary already ensures `rev` cannot start with `-`.
-    run_git(name, &["clone", "--quiet", "--", url], dest, None)?;
-    run_git(name, &["checkout", "--quiet", rev], dest, Some(dest))?;
+    run_git(name, &["clone", "--quiet", "--", url.as_str()], dest, None)?;
+    run_git(
+        name,
+        &["checkout", "--quiet", rev.as_str()],
+        dest,
+        Some(dest),
+    )?;
     Ok(())
 }
 
@@ -579,10 +601,14 @@ mod tests {
         // Exercises the `git clone -- <url> <dest>` path: `--` terminates git's
         // option list so the URL is always a positional. The checkout uses the
         // validated rev without `--` (checkout's `--` means "path, not ref").
+        // Both url and rev must be typed newtypes — raw strings cannot reach
+        // `fetch_git_into` directly, enforcing parse-don't-validate at the sink.
         let src = git_source("dash-url-clone", "module Lib\n");
         let dest = temp_dir("dash-url-dest");
-        fetch_git_into("p", &src.display().to_string(), "HEAD", &dest)
-            .expect("clone succeeds for a valid local repo");
+        let url = SourceUrl::parse("p", &src.display().to_string())
+            .expect("local path is a valid source URL");
+        let rev = CommitId::parse("p", "HEAD").expect("HEAD is a valid commit id");
+        fetch_git_into("p", &url, &rev, &dest).expect("clone succeeds for a valid local repo");
         assert!(dest.is_dir(), "destination was populated");
         let _ = std::fs::remove_dir_all(&src);
         let _ = std::fs::remove_dir_all(&dest);
@@ -626,5 +652,40 @@ mod tests {
         let err = CommitId::parse("evil", "-S injected").unwrap_err();
         let msg = format!("{err}");
         assert!(msg.contains("rev"), "{msg}");
+    }
+
+    #[test]
+    fn git_escape_with_injection_shaped_url_is_rejected_before_fetch() {
+        // The `{git=}` manifest-escape path parses `url` through `SourceUrl::parse`
+        // before calling the git sink, so an injection-shaped value is caught at
+        // the escape boundary, not silently forwarded to the subprocess.
+        let proj = temp_dir("escape-bad-url");
+        scaffold_project(&proj);
+        let dep = IpeDep::Git {
+            url: "ext::sh -c 'id > /tmp/pwned'".to_owned(),
+            rev: None,
+        };
+        let err = resolve_escape(&proj, "evil", &dep).unwrap_err();
+        let msg = format!("{err}");
+        assert!(msg.contains("source"), "bad url rejected: {msg}");
+        let _ = std::fs::remove_dir_all(&proj);
+    }
+
+    #[test]
+    fn git_escape_with_injection_shaped_rev_is_rejected_before_fetch() {
+        // The `{git=}` manifest-escape path also parses `rev` through
+        // `CommitId::parse`, so a leading-dash rev is caught before git runs.
+        let src = git_source("escape-rev-src", "module Lib\n");
+        let proj = temp_dir("escape-bad-rev");
+        scaffold_project(&proj);
+        let dep = IpeDep::Git {
+            url: src.display().to_string(),
+            rev: Some("-S injected".to_owned()),
+        };
+        let err = resolve_escape(&proj, "evil", &dep).unwrap_err();
+        let msg = format!("{err}");
+        assert!(msg.contains("rev"), "bad rev rejected: {msg}");
+        let _ = std::fs::remove_dir_all(&proj);
+        let _ = std::fs::remove_dir_all(&src);
     }
 }
