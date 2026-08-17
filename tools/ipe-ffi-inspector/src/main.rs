@@ -8320,19 +8320,25 @@ fn rustdoc_type_to_rust_str(val: &serde_json::Value) -> String {
             .and_then(|a| a.as_array())
             .map(|arr| {
                 arr.iter()
-                    .filter_map(|arg| {
+                    .map(|arg| {
                         if let Some(t) = arg.get("type") {
-                            Some(rustdoc_type_to_rust_str(t))
+                            rustdoc_type_to_rust_str(t)
                         } else if let Some(l) = arg.get("lifetime") {
                             // rustdoc JSON already includes the leading apostrophe
                             let s = l.as_str().unwrap_or("'a");
-                            Some(if s.starts_with('\'') {
+                            if s.starts_with('\'') {
                                 s.to_string()
                             } else {
                                 format!("'{s}")
-                            })
+                            }
                         } else {
-                            None
+                            // A const generic arg (e.g. `const CAP: usize`) cannot be
+                            // reproduced in emitted Rust: the wrapper has no way to
+                            // supply the const value. Poison the arg list so the
+                            // enclosing type fails `type_is_nameable` — dropping the
+                            // binding uniformly instead of emitting a bare unparameterized
+                            // type that cargo rejects with E0107.
+                            "ConstGenericArg".to_string()
                         }
                     })
                     .collect()
@@ -21549,6 +21555,85 @@ mod tests {
         assert!(
             !self_is_closed_monomorphic(&for_val),
             "a const arg among type args must make the whole impl non-monomorphic"
+        );
+    }
+
+    // ── Inherent const-generic SEAL: rustdoc_type_to_rust_str poison ──
+    //
+    // `rustdoc_type_to_rust_str` must render a resolved_path whose angle-bracket
+    // list contains a const arg as an un-nameable type string — any const arg
+    // poisons the result so `type_is_nameable` returns false and the binding is
+    // dropped uniformly.  This closes the inherent-impl hole that the trait-path
+    // fix did not reach: an `impl<const CAP: usize> ArrayString<CAP>` would
+    // otherwise render as bare `::arrayvec::ArrayString` (no `<CAP>`) and emit
+    // an E0107 at cargo build time.
+
+    fn resolved_path_with_const_arg(name: &str) -> serde_json::Value {
+        serde_json::json!({
+            "resolved_path": {
+                "name": name,
+                "path": name,
+                "id": 0,
+                "args": {
+                    "angle_bracketed": {
+                        "args": [{ "const": { "value": "CAP", "expr": "CAP" } }],
+                        "bindings": []
+                    }
+                }
+            }
+        })
+    }
+
+    fn resolved_path_with_type_arg(name: &str, prim: &str) -> serde_json::Value {
+        serde_json::json!({
+            "resolved_path": {
+                "name": name,
+                "path": name,
+                "id": 0,
+                "args": {
+                    "angle_bracketed": {
+                        "args": [{ "type": { "primitive": prim } }],
+                        "bindings": []
+                    }
+                }
+            }
+        })
+    }
+
+    // A resolved_path with a const arg must render to a string that
+    // `type_is_nameable` rejects — the poison token `ConstGenericArg` is
+    // injected into the angle-bracket list, making the whole type un-nameable.
+    #[test]
+    fn const_arg_in_resolved_path_renders_un_nameable() {
+        let val = resolved_path_with_const_arg("::arrayvec::ArrayString");
+        let rendered = rustdoc_type_to_rust_str(&val);
+        assert!(
+            rendered.contains("ConstGenericArg"),
+            "const arg must poison the rendered type: got {rendered:?}"
+        );
+        assert!(
+            !type_is_nameable(&rendered),
+            "a type with a const arg must not be nameable: {rendered:?}"
+        );
+    }
+
+    // A resolved_path with a concrete type arg (primitive) must still render
+    // nameably — the poison path must not affect legitimate generics.
+    #[test]
+    fn type_arg_in_resolved_path_renders_nameable() {
+        // Use a path that doesn't need id-based resolution so REACHABLE_PATHS
+        // is not consulted — raw_name fallback renders the last segment.
+        let val = resolved_path_with_type_arg("Option", "i64");
+        let rendered = rustdoc_type_to_rust_str(&val);
+        // The primitive `i64` is lowercase — type_is_nameable accepts it.
+        // The outer `Option` is in ALWAYS_NAMEABLE.
+        assert!(
+            type_is_nameable(&rendered),
+            "a type arg (primitive) must still be nameable: {rendered:?}"
+        );
+        assert!(
+            !rendered.contains("ConstGenericArg"),
+            "no poison for a plain type arg: {rendered:?}"
         );
     }
 
