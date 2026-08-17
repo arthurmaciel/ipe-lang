@@ -113,14 +113,17 @@ fn a_native_bearing_package_with_no_probeable_entrypoint_fails_closed() {
     // refuse to certify it — fail-closed — rather than admit it un-observed.
     // The gate first regenerates FFI bindings from the pinned `[rust.dependencies]`
     // (sandboxed), then runs Tier-1 (including provenance), then Tier-2. The check
-    // that fires depends on the generated bindings and platform:
+    // that fires depends on the generated bindings, the platform, and whether the
+    // binding generator is reachable:
+    //   • binding regeneration — if the sandboxed generator cannot produce a
+    //     clean, gate-owned binding set, the package cannot be certified;
     //   • provenance — if the generated `_bindings.rs` contains an abrupt-failure
     //     construct (e.g. `libc` generates a `process::abort` wrapper);
     //   • native Tier-2 — on a wired platform where the jail can run, the
     //     un-exercised probe entrypoint is the reject;
     //   • refuse-to-certify — on an unwired platform, Tier-2 refuses the
     //     un-exercised native surface.
-    // All three are fail-closed: the package must not certify.
+    // All are fail-closed: the package must not certify.
     let pkg = temp_pkg("native-noprobe");
     std::fs::write(
         pkg.join("ipe.toml"),
@@ -139,9 +142,11 @@ fn a_native_bearing_package_with_no_probeable_entrypoint_fails_closed() {
     );
     // Any of these checks firing is a valid fail-closed reject.
     assert!(
-        stderr.contains("provenance panic-scan")
+        stderr.contains("regenerate FFI bindings")
+            || stderr.contains("provenance panic-scan")
             || stderr.contains("native Tier-2 capability enforcement"),
-        "the reject names a fail-closed check (provenance or Tier-2); got:\n{stderr}"
+        "the reject names a fail-closed check (binding regeneration, provenance, or Tier-2); \
+         got:\n{stderr}"
     );
 }
 
