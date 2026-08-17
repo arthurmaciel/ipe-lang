@@ -1870,12 +1870,11 @@ fn undeterminable_return_any_help() -> Vec<HelpLine> {
     vec![
         HelpLine::Note(
             "a wildcard `any` stands for one concrete type the compiler must be able to \
-             work out. In the return type it can only be worked out from the body (make \
-             the body produce a concrete value) or from a parameter that also uses it (so \
-             the caller's argument fixes it). Here it is neither, so no caller could ever \
-             pin it. Annotate a concrete return type, return a concrete value from the \
-             body, or add a parameter that carries the same `any`. To keep it genuinely \
-             polymorphic instead, use a named type variable such as `a`."
+             work out. In the return type it can only be worked out from the body — the \
+             body must produce a concrete value. Here it does not, so no caller could ever \
+             pin it. Annotate a concrete return type, or return a concrete value from the \
+             body. To keep it genuinely polymorphic instead — letting each caller choose \
+             the type — use a named type variable such as `a`, not a wildcard `any`."
                 .into(),
         ),
         HelpLine::SeeExplain("IPE-L0142"),

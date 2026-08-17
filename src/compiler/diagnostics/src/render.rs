@@ -1468,10 +1468,10 @@ fn lower_label(msg: &LowerError) -> String {
             )
         }
         LowerError::UndeterminableReturnAny => {
-            "a wildcard `any` in the return type is carried by no parameter and pinned by \
-             no body — a caller could never determine its concrete type. Return a concrete \
-             value, annotate a concrete return type, share the `any` with a parameter, or \
-             use a named type variable such as `a` for genuine polymorphism"
+            "a wildcard `any` in the return type is pinned by no body — a caller could \
+             never determine its concrete type. Return a concrete value, annotate a \
+             concrete return type, or use a named type variable such as `a` for genuine \
+             polymorphism"
                 .to_string()
         }
     }
