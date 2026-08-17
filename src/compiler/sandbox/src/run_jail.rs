@@ -233,28 +233,6 @@ impl SandboxProfile {
         }
     }
 
-    /// Whether `self` isolates *at least* as much as `floor` on every axis — the
-    /// launcher's tamper check. A profile that grants an axis the floor does not
-    /// is weaker and MUST be refused (a doctored `ipe.profile` cannot widen the
-    /// jail below what the binary was built for).
-    ///
-    /// "At least as isolated" is per-axis: `self` may not grant `network`,
-    /// `subprocess`, a wider filesystem, or any env var the `floor` does not
-    /// also grant. (Resource limits are not a confinement axis and are not
-    /// compared here.)
-    #[must_use]
-    pub fn is_at_least_as_isolated_as(&self, floor: &Self) -> bool {
-        let network_ok = !self.network || floor.network;
-        let subprocess_ok = !self.subprocess || floor.subprocess;
-        let fs_ok = self.fs_at_least_as_isolated(floor);
-        // Every env var self grants must be in the floor's allowlist.
-        let env_ok = self
-            .env_allowlist
-            .iter()
-            .all(|v| floor.env_allowlist.contains(v));
-        network_ok && subprocess_ok && fs_ok && env_ok
-    }
-
     /// Whether `self`'s filesystem scope isolates at least as much as `floor`'s:
     /// `Isolated` isolates more than (or equal to) any scope; a read-write tree
     /// is only OK if the floor also grants a read-write tree.
@@ -266,11 +244,14 @@ impl SandboxProfile {
 
     /// The launcher's floor check against a [`parse_capfloor`]-derived floor.
     ///
-    /// The embedded floor records the axis grants AND the exact set of granted env
-    /// var *names* ([`to_capfloor_line`] serializes them), so the env axis is
-    /// compared by name subset — identical to the other axes: every env var the
-    /// profile grants must be one the floor also grants. A tampered `ipe.profile`
-    /// that swaps *which* env vars it grants (even at the same count) is refused.
+    /// This is the single implementation of the profile-vs-floor anti-tamper
+    /// predicate. Every axis comparison lives here; adding a new axis forces every
+    /// call site to see the change. The embedded floor records the axis grants AND
+    /// the exact set of granted env var *names* ([`to_capfloor_line`] serializes
+    /// them), so the env axis is compared by name subset — identical to the other
+    /// axes: every env var the profile grants must be one the floor also grants. A
+    /// tampered `ipe.profile` that swaps *which* env vars it grants (even at the
+    /// same count) is refused.
     ///
     /// [`to_capfloor_line`]: Self::to_capfloor_line
     #[must_use]
@@ -286,6 +267,17 @@ impl SandboxProfile {
             .iter()
             .all(|v| floor.env_allowlist.contains(v));
         network_ok && subprocess_ok && fs_ok && env_ok
+    }
+
+    /// Whether `self` isolates *at least* as much as `floor` on every axis.
+    ///
+    /// Delegates to [`satisfies_capfloor`] — the single implementation of the
+    /// per-axis tamper check — so the two cannot diverge.
+    ///
+    /// [`satisfies_capfloor`]: Self::satisfies_capfloor
+    #[must_use]
+    pub fn is_at_least_as_isolated_as(&self, floor: &Self) -> bool {
+        self.satisfies_capfloor(floor)
     }
 
     /// Serialize the profile to the strict, line-oriented `ipe.profile` text.

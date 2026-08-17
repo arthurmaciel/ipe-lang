@@ -734,6 +734,30 @@ pub fn sbpl_from_profile(
     // threats Tier-2 confines.
     s.push_str("(allow default)\n\n");
 
+    // Baseline denials — unconditional, independent of the capability set.
+    // These are the macOS Seatbelt equivalents of the Linux seccomp
+    // baseline-denied set: escape and exfiltration primitives no legitimate
+    // declared effect needs.
+    //
+    // - `process-info*`: covers `proc_info` and friends — the ptrace-equivalent
+    //   inspection surface. A jailed process must not enumerate or inspect host
+    //   or sibling process state (environment, memory maps, open files). This
+    //   mirrors the Linux baseline denial of `ptrace` + `process_vm_readv/writev`.
+    //
+    // - `mach-task-name`: acquiring another process's Mach task port is the
+    //   macOS mechanism for cross-process memory read and code injection. A jailed
+    //   process must not obtain a foreign task port. (The jailed process may still
+    //   use its own task port, which the default Seatbelt exceptions cover.)
+    //
+    // - `sysctl-read`: blocks bulk sysctl reads that leak host topology, hardware
+    //   identifiers, and other fingerprinting surfaces. Legitimate tool use (shell,
+    //   compiler) does not require broad sysctl enumeration. Where a specific sysctl
+    //   is genuinely needed (e.g. hw.ncpu for thread sizing), Seatbelt allows the
+    //   narrowest matching rule to override this deny via specificity ordering.
+    s.push_str("(deny process-info*)\n");
+    s.push_str("(deny mach-task-name)\n");
+    s.push_str("(deny sysctl-read)\n\n");
+
     // Network: deny unless the profile grants it. When granted, no denial is
     // emitted, so the allow-default base leaves the network reachable.
     if !profile.network {
@@ -949,6 +973,10 @@ mod freebsd_jail {
     use crate::run_jail::{FilesystemScope, RunJailDefect, SandboxProfile};
     use std::ffi::OsString;
     use std::path::{Path, PathBuf};
+    // `getuid(3)` is used in the exclusive jail-dir ownership check. It is
+    // infallible and always safe to call.
+    #[allow(unused_imports)]
+    use libc;
 
     /// The unprivileged user the jailed payload runs as. A second, defence-in-depth
     /// layer under the read-only jail root: even the writable scratch is owned by
@@ -1237,9 +1265,14 @@ mod freebsd_jail {
     /// write it could surface files under its own `/proc`. The caller roots it
     /// OUTSIDE the writable scratch (a per-run sibling of the jail root) so the
     /// payload has no mount into it — the `/proc` mask is immutable to the payload.
+    ///
+    /// Uses `create_dir` (not `create_dir_all`) so a pre-existing entry at the
+    /// exact leaf path is an error, not a silent reuse. The parent is already an
+    /// exclusively-created private directory (`proc_mask_source_dir`), so
+    /// `create_dir_all` on the parent is safe; only the leaf must be exclusive.
     fn mount_dir_under(parent: &Path, name: &str) -> Result<PathBuf, RunJailDefect> {
         let dir = parent.join(name);
-        match std::fs::create_dir_all(&dir) {
+        match std::fs::create_dir(&dir) {
             Ok(()) => Ok(dir),
             Err(e) => Err(RunJailDefect::MountFailed {
                 target: dir,
@@ -1301,22 +1334,20 @@ mod freebsd_jail {
                 });
             };
 
-            let root = jail_root_dir();
-            if let Err(e) = std::fs::create_dir_all(&root) {
-                return Err(RunJailDefect::MountFailed {
-                    target: root,
-                    detail: format!("could not create jail root: {e}"),
-                });
-            }
+            // The jail root is created exclusively under the private cache root
+            // (`~/.cache/ipe/jail/`), not world-writable `/tmp`, so a local attacker
+            // cannot pre-plant or symlink it before the nullfs mount. The returned
+            // path is verified to be a real directory owned by the current uid.
+            let root = jail_root_dir()?;
 
             // The `/proc`-mask source: an empty dir rooted OUTSIDE the writable
-            // scratch, a per-run sibling of the jail root under the system temp. It
-            // is NOT under the scratch (which is nullfs-mounted READ-WRITE inside the
-            // chroot) and NOT under the chroot root (over which host `/` is mounted
-            // read-only), so the jailed payload has no mount to it and cannot write
-            // it — the read-only `/proc` mask it feeds stays immutable to the payload.
-            // A creation failure refuses (fail-closed).
-            let proc_mask_source = mount_dir_under(&proc_mask_source_dir(), "empty-proc")?;
+            // scratch, under the same private cache root as the jail root. It is NOT
+            // under the scratch (which is nullfs-mounted READ-WRITE inside the chroot)
+            // and NOT under the chroot root (over which host `/` is mounted read-only),
+            // so the jailed payload has no mount to it and cannot write it — the
+            // read-only `/proc` mask it feeds stays immutable to the payload. Created
+            // exclusively; a creation failure refuses (fail-closed).
+            let proc_mask_source = mount_dir_under(&proc_mask_source_dir()?, "empty-proc")?;
 
             let mut mount = Self {
                 umount_bin,
@@ -1413,32 +1444,146 @@ mod freebsd_jail {
         }
     }
 
-    /// A per-run path under the system temp root, unique enough that concurrent audit
-    /// calls do not collide. Each caller supplies a `prefix` that distinguishes the
-    /// path's role (jail root, proc-mask source, jail name), keeping the pid+nanos
-    /// uniqueness stamp in one place.
-    fn per_run_temp_dir(prefix: &str) -> PathBuf {
-        let pid = std::process::id();
-        let nanos = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map_or(0, |d| d.as_nanos());
-        std::env::temp_dir().join(format!("{prefix}-{pid}-{nanos}"))
+    /// The private cache root for per-run FreeBSD jail scratch directories.
+    ///
+    /// Rooted under the invoking user's home cache (`~/.cache/ipe/jail/`) rather
+    /// than the world-writable `/tmp`. A user-private directory is not accessible
+    /// to other local users, removing the class of pre-plant / symlink-swap attacks
+    /// that world-writable `/tmp` enables. Falls back to `$TMPDIR` or `/tmp` only
+    /// when the home directory is genuinely unavailable, which is recorded in the
+    /// returned path so the caller can detect and refuse if required.
+    fn private_cache_root() -> PathBuf {
+        // `$HOME` is the conventional user home; fall back to `/tmp` when unset.
+        let base = std::env::var_os("HOME")
+            .map(PathBuf::from)
+            .unwrap_or_else(std::env::temp_dir);
+        base.join(".cache").join("ipe").join("jail")
     }
 
-    /// A per-run jail-root dir path, sibling to the audit's scratch under the system
-    /// temp root, unique enough that concurrent audit calls do not collide.
-    fn jail_root_dir() -> PathBuf {
-        per_run_temp_dir("ipe-tier2-jailroot")
+    /// Create a per-run directory EXCLUSIVELY under `parent`, using a random
+    /// unique leaf name prefixed with `prefix`.
+    ///
+    /// The leaf is created with `create_dir` (not `create_dir_all`) after ensuring
+    /// the parent exists. `create_dir` returns `ErrorKind::AlreadyExists` when the
+    /// leaf already exists — any pre-existing entry (whether a directory, file, or
+    /// symlink) is treated as a fail-closed refusal, never silently reused. This
+    /// closes the TOCTOU window that `create_dir_all` leaves open on a pre-planted
+    /// or symlinked path.
+    ///
+    /// After creation each component of the returned path is verified to be a real
+    /// directory owned by the current uid via `symlink_metadata`, so a symlink
+    /// planted between the `create_dir` and the use is caught.
+    ///
+    /// # Errors
+    ///
+    /// [`RunJailDefect::MountFailed`] when the parent cannot be created, when the
+    /// exclusive leaf creation fails (including pre-existing), or when any
+    /// component fails the ownership check.
+    fn create_exclusive_private_dir(
+        parent: &std::path::Path,
+        prefix: &str,
+    ) -> Result<PathBuf, RunJailDefect> {
+        // Ensure the private parent exists. `create_dir_all` is safe here: the
+        // parent (`~/.cache/ipe/jail/`) is user-owned and not itself a
+        // security boundary — it is the LEAF that must be exclusive.
+        if let Err(e) = std::fs::create_dir_all(parent) {
+            return Err(RunJailDefect::MountFailed {
+                target: parent.to_path_buf(),
+                detail: format!("could not create private cache parent: {e}"),
+            });
+        }
+
+        // Generate a random 16-byte hex suffix. Read from /dev/urandom directly
+        // (no external crate) — 16 bytes give 128 bits of randomness, making a
+        // collision or a successful pre-plant computationally infeasible.
+        let random_suffix = {
+            use std::io::Read as _;
+            let mut buf = [0u8; 16];
+            std::fs::File::open("/dev/urandom")
+                .and_then(|mut f| f.read_exact(&mut buf))
+                .map_err(|e| RunJailDefect::MountFailed {
+                    target: parent.to_path_buf(),
+                    detail: format!("could not read /dev/urandom for random dir suffix: {e}"),
+                })?;
+            buf.iter().map(|b| format!("{b:02x}")).collect::<String>()
+        };
+
+        let leaf = parent.join(format!("{prefix}-{random_suffix}"));
+
+        // Exclusive create: EEXIST is a hard refusal, not a retry. A pre-existing
+        // entry at this path — even with 128 bits of randomness — means either a
+        // collision (astronomically unlikely) or an active attacker; either way,
+        // fail closed rather than reuse an entry we did not create.
+        std::fs::DirBuilder::new()
+            .recursive(false)
+            .create(&leaf)
+            .map_err(|e| RunJailDefect::MountFailed {
+                target: leaf.clone(),
+                detail: format!(
+                    "exclusive create of per-run jail dir failed (pre-existing or \
+                     permission denied): {e}"
+                ),
+            })?;
+
+        // Verify every newly-created component is a real directory owned by the
+        // current uid. `symlink_metadata` does NOT follow symlinks, so a symlink
+        // planted between `create_dir` and here is caught as a non-directory
+        // entry and refused.
+        let current_uid = {
+            // SAFETY: `getuid(3)` is always safe and always succeeds.
+            #[allow(unsafe_code)]
+            unsafe {
+                libc::getuid()
+            }
+        };
+        for ancestor in [parent, leaf.as_path()] {
+            let meta =
+                std::fs::symlink_metadata(ancestor).map_err(|e| RunJailDefect::MountFailed {
+                    target: ancestor.to_path_buf(),
+                    detail: format!("could not stat jail dir component: {e}"),
+                })?;
+            if !meta.is_dir() {
+                return Err(RunJailDefect::MountFailed {
+                    target: ancestor.to_path_buf(),
+                    detail: "jail dir component is not a real directory (symlink or file \
+                             present at expected location)"
+                        .to_owned(),
+                });
+            }
+            use std::os::unix::fs::MetadataExt as _;
+            if meta.uid() != current_uid {
+                return Err(RunJailDefect::MountFailed {
+                    target: ancestor.to_path_buf(),
+                    detail: format!(
+                        "jail dir component is owned by uid {} not the current uid {}; \
+                         refusing to use a directory we do not own",
+                        meta.uid(),
+                        current_uid,
+                    ),
+                });
+            }
+        }
+
+        Ok(leaf)
     }
 
-    /// A per-run parent dir for the empty `/proc`-mask source, a sibling of the jail
-    /// root under the system temp root — NOT under the read-write scratch and NOT
-    /// under the chroot root. The jailed payload has no mount into it, so the empty
-    /// dir it holds (the read-only `/proc` mask's nullfs source) is immutable to the
-    /// payload: it cannot surface files under its own `/proc`. Unique per run so
-    /// concurrent audit calls do not collide.
-    fn proc_mask_source_dir() -> PathBuf {
-        per_run_temp_dir("ipe-tier2-procmask")
+    /// A per-run jail-root dir, created exclusively under the private cache root.
+    ///
+    /// Uses a random unique name under `~/.cache/ipe/jail/` (not world-writable
+    /// `/tmp`) so a local same-user-class attacker cannot pre-plant or symlink the
+    /// path before the nullfs mount.
+    fn jail_root_dir() -> Result<PathBuf, RunJailDefect> {
+        create_exclusive_private_dir(&private_cache_root(), "jailroot")
+    }
+
+    /// A per-run parent dir for the empty `/proc`-mask source, created exclusively
+    /// under the private cache root — NOT under the read-write scratch and NOT
+    /// under the chroot root. The jailed payload has no mount into it, so the
+    /// empty dir it holds (the read-only `/proc` mask's nullfs source) is immutable
+    /// to the payload: it cannot surface files under its own `/proc`. Uses a
+    /// random unique name under `~/.cache/ipe/jail/` (not world-writable `/tmp`).
+    fn proc_mask_source_dir() -> Result<PathBuf, RunJailDefect> {
+        create_exclusive_private_dir(&private_cache_root(), "procmask")
     }
 
     /// A per-run jail name unique enough that concurrent audit calls do not collide.
@@ -1945,6 +2090,42 @@ mod tests {
         );
     }
 
+    #[test]
+    fn sbpl_unconditionally_denies_the_inspection_and_exfiltration_baseline() {
+        // The baseline deny set must appear in EVERY SBPL, independent of the
+        // profile's axis grants. These are the macOS counterparts of the Linux
+        // seccomp baseline-denied set — escape and exfiltration primitives no
+        // legitimate declared effect needs. Asserting them on both the maximally
+        // isolated and the fully-granted profile proves they are unconditional.
+        for profile in [
+            SandboxProfile::maximally_isolated(),
+            SandboxProfile {
+                network: true,
+                filesystem: FilesystemScope::WorkingTreeReadWrite,
+                env_allowlist: vec!["PATH".to_owned()],
+                subprocess: true,
+                ..SandboxProfile::maximally_isolated()
+            },
+        ] {
+            let sbpl = sbpl_from_profile(&profile, Path::new("/s"), Path::new("/w"));
+            assert!(
+                sbpl.contains("(deny process-info*)"),
+                "process-info* (ptrace-equivalent inspection) must be unconditionally \
+                 denied: {sbpl}"
+            );
+            assert!(
+                sbpl.contains("(deny mach-task-name)"),
+                "mach-task-name (cross-process task-port / memory-injection surface) \
+                 must be unconditionally denied: {sbpl}"
+            );
+            assert!(
+                sbpl.contains("(deny sysctl-read)"),
+                "sysctl-read (host fingerprinting surface) must be unconditionally \
+                 denied: {sbpl}"
+            );
+        }
+    }
+
     // ── the macOS env-axis launcher scrub (pure — runs on any host) ───────────
 
     fn env_map(pairs: &[(&str, &str)]) -> std::collections::HashMap<String, OsString> {
@@ -2238,26 +2419,26 @@ mod tests {
         );
     }
 
-    // The proc-mask source is a sibling of the scratch under the system temp root, not
-    // a child of the scratch. If a future edit reroots it under the scratch, the
-    // jailed payload gains a nullfs mount into the proc-mask source dir and can surface
-    // files under its own `/proc` — defeating the empty-proc mask. This pure model test
-    // catches that regression host-independently.
-    fn proc_mask_source_model(scratch: &std::path::Path) -> std::path::PathBuf {
-        // Same shape as `proc_mask_source_dir` in `freebsd_jail`: a sibling of the
-        // scratch under the system temp root, never nested inside it.
-        scratch
-            .parent()
-            .unwrap_or_else(|| std::path::Path::new("/tmp"))
-            .join("ipe-tier2-procmask-MODEL")
+    // The proc-mask source must be disjoint from the writable scratch. If a future
+    // edit reroots it under the scratch, the jailed payload gains a nullfs mount into
+    // the proc-mask source dir and can surface files under its own `/proc`, defeating
+    // the empty-proc mask. This pure model test catches that regression
+    // host-independently: it mirrors the private-cache-root shape the real
+    // `proc_mask_source_dir` uses, verifying the disjoint invariant without touching
+    // the filesystem.
+    fn proc_mask_source_model(_scratch: &std::path::Path) -> std::path::PathBuf {
+        // The real `proc_mask_source_dir` creates under `~/.cache/ipe/jail/` — a
+        // private root entirely disjoint from the scratch (which lives under the
+        // caller's chosen scoped temp). This model represents that disjoint shape.
+        std::path::PathBuf::from("/home/user/.cache/ipe/jail").join("procmask-MODEL")
     }
 
     #[test]
     fn proc_mask_source_is_disjoint_from_the_writable_scratch() {
         use std::path::Path;
 
-        // Representative scratch the launcher would hand to the FreeBSD jail arm:
-        // an absolute path under the system temp root.
+        // The scratch lives under a user-chosen scoped temp path; the proc-mask
+        // source lives under `~/.cache/ipe/jail/` — an entirely different root.
         let scratch = Path::new("/tmp/ipe-tier2-scratch-12345-99999");
         let proc_mask = proc_mask_source_model(scratch);
 
@@ -2270,15 +2451,6 @@ mod tests {
             "the proc-mask source must not be under the writable scratch \
              (the proc-mask disjoint-from-scratch invariant): \
              proc_mask={proc_mask:?}, scratch={scratch:?}"
-        );
-
-        // The proc-mask source must still be under the same parent (the system
-        // temp root), confirming it is a sibling rather than some unrelated path.
-        let temp_root = scratch.parent().expect("scratch has a parent");
-        assert!(
-            proc_mask.starts_with(temp_root),
-            "the proc-mask source must be a sibling of the scratch under the \
-             system temp root: proc_mask={proc_mask:?}, temp_root={temp_root:?}"
         );
     }
 
