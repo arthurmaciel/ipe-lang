@@ -1175,6 +1175,38 @@ fn float_literal(f: f64) -> String {
     }
 }
 
+/// Resolve an FFI wrapper symbol to its fully-qualified `crate::ffi::<name>`
+/// path, rejecting any resolved string that is not a legal Rust identifier.
+///
+/// Both [`callee_name`] (for direct FFI calls) and [`emit_ffi_glued_call`]
+/// (for transparent-conversion calls) splice the wrapper name into emitted
+/// Rust source via `crate::ffi::{name}`.  A shared validation point ensures
+/// neither site can silently emit an illegal identifier regardless of how the
+/// symbol was originally interned.
+///
+/// An illegal name is a compiler invariant failure (the lowerer must have
+/// admitted a bad wrapper ident), so this returns [`Diagnostic::CompilerBug`]
+/// rather than a user-facing error.
+fn ffi_path(ctx: &EmitCtx, sym: Symbol) -> DResult<String> {
+    let name = ctx.resolve_ident(sym)?;
+    let mut chars = name.chars();
+    let head_ok = chars
+        .next()
+        .is_some_and(|c| c.is_ascii_alphabetic() || c == '_');
+    if head_ok && chars.all(|c| c.is_ascii_alphanumeric() || c == '_') {
+        Ok(format!("crate::ffi::{name}"))
+    } else {
+        Err(Diagnostic::CompilerBug {
+            where_: "ipe_backend_rust::ffi_path",
+            detail: format!(
+                "FFI wrapper ident {name:?} is not a legal Rust identifier; \
+                 it must contain only ascii alphanumeric characters and \
+                 underscores, starting with a letter or underscore"
+            ),
+        })
+    }
+}
+
 /// The Rust name of a call target.
 pub fn callee_name(ctx: &EmitCtx, callee: &Callee) -> DResult<String> {
     match callee {
@@ -1187,10 +1219,10 @@ pub fn callee_name(ctx: &EmitCtx, callee: &Callee) -> DResult<String> {
         // FFI wrappers are already crate-root, so this is uniform.
         Callee::Func(id) => Ok(format!("crate::{}", ctx.func_name(*id)?)),
         Callee::Kernel(k) => Ok(kernel_name(*k).to_owned()),
-        // A foreign wrapper lives in the emitted `src/ffi.rs` module; the
-        // absolute `crate::ffi::` path keeps it unambiguous from every
-        // emitted file. The identifier was validated at canonicalisation.
-        Callee::Ffi { ident, .. } => Ok(format!("crate::ffi::{}", ctx.resolve_ident(*ident)?)),
+        // A foreign wrapper lives in the emitted `src/ffi.rs` module. The
+        // shared `ffi_path` helper validates the identifier and constructs the
+        // absolute path — an illegal name is a compiler invariant failure.
+        Callee::Ffi { ident, .. } => ffi_path(ctx, *ident),
     }
 }
 
@@ -1220,7 +1252,7 @@ fn emit_ffi_glued_call(
     depth: u16,
     generics: GenericScope,
 ) -> DResult<String> {
-    let name = format!("crate::ffi::{}", ctx.resolve_ident(wrapper)?);
+    let name = ffi_path(ctx, wrapper)?;
     let mut parts = Vec::with_capacity(args.len());
     for (i, arg) in args.iter().enumerate() {
         let rendered = emit_expr_at(ctx, arg, indent, depth, generics)?;
@@ -6042,13 +6074,22 @@ fn render_pat(ctx: &EmitCtx, pat: &Pat) -> DResult<String> {
         Pat::Int(n) => Ok(n.to_string()),
         Pat::Bool(b) => Ok(if *b { "true" } else { "false" }.to_owned()),
         // A well-formed Char pattern carries exactly one character → Rust char
-        // literal. A malformed (multi-char / empty) carried string falls back to
-        // a string literal rather than emitting invalid Rust, staying total.
+        // literal. A non-single-scalar value fails closed as a `CompilerBug`:
+        // emitting a string literal in char-pattern position produces invalid
+        // Rust (E0308, cargo-fails), violating THE SEAL. Symmetric with
+        // `Expr::Char`, which applies the same fail-closed policy.
         Pat::Char(c) => {
             let mut chars = c.chars();
             match (chars.next(), chars.next()) {
                 (Some(ch), None) => Ok(format!("{ch:?}")),
-                _ => Ok(format!("{c:?}")),
+                _ => Err(Diagnostic::CompilerBug {
+                    where_: "ipe_backend_rust::emit_pat(Pat::Char)",
+                    detail: format!(
+                        "Pat::Char carried {} characters ({c:?}), not the single \
+                         character the lexer's char-literal invariant guarantees",
+                        c.chars().count()
+                    ),
+                }),
             }
         }
         Pat::Str(s) => Ok(format!("{s:?}")),

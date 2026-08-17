@@ -12,13 +12,15 @@
 //!
 //! The golden byte-equality contract itself lives in `golden.rs`.
 
+use std::collections::BTreeMap;
+
 use ipe_backend::Backend;
-use ipe_backend_rust::RustBackend;
+use ipe_backend_rust::{FfiEmit, FfiWrapperGlue, RustBackend};
 use ipe_diagnostics::{DResult, Diagnostic, IPE_I0201, IPE_L0200, IPE_N0012};
 use ipe_intern::{Interner, Symbol};
 use ipe_ir::{
-    Arm, BinOp, EnumDef, Expr, Func, FuncId, IrType, Match, ModPath, Module, Pat, Program, TypeDef,
-    Variant,
+    Arm, BinOp, CallPin, Callee, EnumDef, Expr, Func, FuncId, IrType, Match, ModPath, Module,
+    OnFormKind, Pat, Program, TypeDef, Variant,
 };
 
 /// A single-module program with the given types and funcs (no entry needed:
@@ -492,6 +494,322 @@ fn malformed_char_literal_fails_closed_not_invalid_rust() -> DResult<()> {
     assert!(
         res.is_err(),
         "a malformed char literal must fail closed, got {res:?}"
+    );
+    if let Err(err) = res {
+        assert!(
+            matches!(err, Diagnostic::CompilerBug { .. }),
+            "expected a CompilerBug, got {err:?}"
+        );
+    }
+    Ok(())
+}
+
+/// `Pat::Char` carrying anything but exactly one character fails closed as
+/// a `CompilerBug` — the same policy `Expr::Char` applies. A string literal
+/// in char-pattern position is invalid Rust (E0308, cargo-fails), the exact
+/// exit-0-then-cargo-fail shape THE SEAL forbids.
+#[test]
+fn malformed_char_pattern_fails_closed_not_invalid_rust() -> DResult<()> {
+    let mut interner = Interner::new();
+    let main_mod = interner.intern("Main")?;
+    let tag_sym = interner.intern("Tag")?;
+    let a_sym = interner.intern("A")?;
+    let b_sym = interner.intern("B")?;
+    let f_sym = interner.intern("f")?;
+    let w_sym = interner.intern("w")?;
+
+    let def = EnumDef {
+        name: tag_sym,
+        type_params: vec![],
+        variants: vec![
+            Variant {
+                name: a_sym,
+                fields: vec![IrType::Char],
+            },
+            Variant {
+                name: b_sym,
+                fields: vec![],
+            },
+        ],
+        home: ModPath(vec![]),
+    };
+    let arms = vec![
+        Arm {
+            // A malformed char pattern — two characters, built directly to
+            // reach the pattern emitter's guard.
+            pat: Pat::Ctor {
+                home: ModPath(vec![]),
+                ty: tag_sym,
+                variant: a_sym,
+                args: vec![Pat::Char("xy".to_owned())],
+            },
+            body: Expr::Int(1),
+            guard: None,
+        },
+        Arm {
+            pat: Pat::Ctor {
+                home: ModPath(vec![]),
+                ty: tag_sym,
+                variant: b_sym,
+                args: vec![],
+            },
+            body: Expr::Int(0),
+            guard: None,
+        },
+    ];
+    let f_fn = Func {
+        id: FuncId::from_raw(0),
+        name: f_sym,
+        home: ModPath(vec![]),
+        type_params: vec![],
+        row_params: vec![],
+        params: vec![(
+            w_sym,
+            IrType::Enum {
+                home: ModPath(vec![]),
+                name: tag_sym,
+                args: vec![],
+            },
+        )],
+        ret: IrType::Int,
+        body: Expr::Match(Match::new(Expr::Var(w_sym), arms, &[a_sym, b_sym])?),
+    };
+
+    let res = emit(
+        &interner,
+        &program(main_mod, vec![TypeDef::Enum(def)], vec![f_fn]),
+    );
+    assert!(
+        res.is_err(),
+        "a malformed char pattern must fail closed, got {res:?}"
+    );
+    if let Err(err) = res {
+        assert!(
+            matches!(err, Diagnostic::CompilerBug { .. }),
+            "expected a CompilerBug, got {err:?}"
+        );
+    }
+    Ok(())
+}
+
+/// A valid single-char `Pat::Char` renders as the Rust char literal — the
+/// positive counterpart to `malformed_char_pattern_fails_closed_not_invalid_rust`.
+#[test]
+fn valid_char_pattern_emits_char_literal() -> DResult<()> {
+    let mut interner = Interner::new();
+    let main_mod = interner.intern("Main")?;
+    let tag_sym = interner.intern("Tag")?;
+    let a_sym = interner.intern("A")?;
+    let b_sym = interner.intern("B")?;
+    let f_sym = interner.intern("f")?;
+    let w_sym = interner.intern("w")?;
+
+    let def = EnumDef {
+        name: tag_sym,
+        type_params: vec![],
+        variants: vec![
+            Variant {
+                name: a_sym,
+                fields: vec![IrType::Char],
+            },
+            Variant {
+                name: b_sym,
+                fields: vec![],
+            },
+        ],
+        home: ModPath(vec![]),
+    };
+    let arms = vec![
+        Arm {
+            pat: Pat::Ctor {
+                home: ModPath(vec![]),
+                ty: tag_sym,
+                variant: a_sym,
+                args: vec![Pat::Char("z".to_owned())],
+            },
+            body: Expr::Int(1),
+            guard: None,
+        },
+        Arm {
+            pat: Pat::Ctor {
+                home: ModPath(vec![]),
+                ty: tag_sym,
+                variant: b_sym,
+                args: vec![],
+            },
+            body: Expr::Int(0),
+            guard: None,
+        },
+    ];
+    let f_fn = Func {
+        id: FuncId::from_raw(0),
+        name: f_sym,
+        home: ModPath(vec![]),
+        type_params: vec![],
+        row_params: vec![],
+        params: vec![(
+            w_sym,
+            IrType::Enum {
+                home: ModPath(vec![]),
+                name: tag_sym,
+                args: vec![],
+            },
+        )],
+        ret: IrType::Int,
+        body: Expr::Match(Match::new(Expr::Var(w_sym), arms, &[a_sym, b_sym])?),
+    };
+
+    let src = emit(
+        &interner,
+        &program(main_mod, vec![TypeDef::Enum(def)], vec![f_fn]),
+    )?;
+    assert!(
+        src.contains("'z'"),
+        "single-char pattern must render as a Rust char literal; got:\n{src}"
+    );
+    Ok(())
+}
+
+/// An FFI callee ident that is not a legal Rust identifier fails closed as a
+/// `CompilerBug` — it must never splice an unchecked string into `crate::ffi::<ident>`.
+#[test]
+fn ffi_callee_illegal_ident_fails_closed() -> DResult<()> {
+    let mut interner = Interner::new();
+    let main_mod = interner.intern("Main")?;
+    let f_sym = interner.intern("f")?;
+    // A shell-injection-shaped string that is not a valid Rust identifier.
+    let bad_ident = interner.intern("; std::process::exit(1)")?;
+
+    let f_fn = Func {
+        id: FuncId::from_raw(0),
+        name: f_sym,
+        home: ModPath(vec![]),
+        type_params: vec![],
+        row_params: vec![],
+        params: vec![],
+        ret: IrType::Int,
+        body: Expr::Call {
+            callee: Callee::Ffi {
+                ident: bad_ident,
+                asserted: false,
+            },
+            args: vec![],
+            pin: CallPin::None,
+            on_form: OnFormKind::NotForm,
+        },
+    };
+
+    let res = emit(&interner, &program(main_mod, vec![], vec![f_fn]));
+    assert!(
+        res.is_err(),
+        "an illegal FFI callee ident must fail closed, got {res:?}"
+    );
+    if let Err(err) = res {
+        assert!(
+            matches!(err, Diagnostic::CompilerBug { .. }),
+            "expected a CompilerBug, got {err:?}"
+        );
+    }
+    Ok(())
+}
+
+/// A valid FFI callee ident emits `crate::ffi::<ident>` — the positive
+/// counterpart to `ffi_callee_illegal_ident_fails_closed`.
+#[test]
+fn ffi_callee_valid_ident_emits_crate_ffi_path() -> DResult<()> {
+    let mut interner = Interner::new();
+    let main_mod = interner.intern("Main")?;
+    let f_sym = interner.intern("f")?;
+    let good_ident = interner.intern("semver_parse")?;
+
+    let f_fn = Func {
+        id: FuncId::from_raw(0),
+        name: f_sym,
+        home: ModPath(vec![]),
+        type_params: vec![],
+        row_params: vec![],
+        params: vec![],
+        ret: IrType::Int,
+        body: Expr::Call {
+            callee: Callee::Ffi {
+                ident: good_ident,
+                asserted: false,
+            },
+            args: vec![],
+            pin: CallPin::None,
+            on_form: OnFormKind::NotForm,
+        },
+    };
+
+    let src = emit(&interner, &program(main_mod, vec![], vec![f_fn]))?;
+    assert!(
+        src.contains("crate::ffi::semver_parse"),
+        "valid FFI callee must emit `crate::ffi::semver_parse`; got:\n{src}"
+    );
+    Ok(())
+}
+
+/// CO-BACKEND-004: a glued FFI wrapper whose interned ident string is not a
+/// legal Rust identifier must fail closed as a `CompilerBug` — never silently
+/// splice the raw string into `crate::ffi::{name}` and produce emitted Rust
+/// that fails to compile (the SEAL-violating exit-0-then-cargo-fail class).
+///
+/// This exercises the `emit_ffi_glued_call` path specifically: the
+/// `wrapper_glue` map contains the illegal ident, so `ffi_call_has_glue`
+/// returns `true` and the glued code path fires.  The shared `ffi_path`
+/// helper must intercept the bad name and surface `Diagnostic::CompilerBug`
+/// rather than forwarding it to Rustc.
+#[test]
+fn glued_ffi_wrapper_with_illegal_ident_fails_closed() -> DResult<()> {
+    let mut interner = Interner::new();
+    let main_mod = interner.intern("Main")?;
+    let func_name = interner.intern("call_bad_ffi")?;
+    // An ident that starts with a digit is never a legal Rust identifier.
+    let bad_ident_str = "2bad";
+    let bad_ident = interner.intern(bad_ident_str)?;
+
+    // Wire glue for the illegal ident so `ffi_call_has_glue` returns `true`
+    // and `emit_ffi_glued_call` is reached.  The simplest glue: no argument
+    // conversions, no result conversion (infallible, opaque pass-through
+    // shape) — just enough to trigger the glued code path.
+    let mut wrapper_glue = BTreeMap::new();
+    wrapper_glue.insert(
+        bad_ident_str.to_owned(),
+        FfiWrapperGlue {
+            params: vec![],
+            result: None,
+        },
+    );
+    let ffi = FfiEmit {
+        wrapper_glue,
+        ..FfiEmit::default()
+    };
+
+    let f_fn = Func {
+        id: FuncId::from_raw(0),
+        name: func_name,
+        home: ModPath(vec![]),
+        type_params: vec![],
+        row_params: vec![],
+        params: vec![],
+        ret: IrType::Int,
+        body: Expr::Call {
+            callee: Callee::Ffi {
+                ident: bad_ident,
+                asserted: false,
+            },
+            args: vec![],
+            pin: CallPin::None,
+            on_form: OnFormKind::NotForm,
+        },
+    };
+
+    let prog = program(main_mod, vec![], vec![f_fn]);
+    let res = RustBackend::new(&interner).with_ffi(Some(ffi)).emit(&prog);
+
+    assert!(
+        res.is_err(),
+        "a glued FFI wrapper with an illegal ident must fail closed, got {res:?}"
     );
     if let Err(err) = res {
         assert!(
