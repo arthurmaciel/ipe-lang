@@ -35,16 +35,18 @@ module Ipe.Css exposing
     , renderProp, renderRule, stylesheet, styles
     )
 
--- | Ipe.Css — the typed stylesheet DSL (Layer 3, compiled Ipe source #47).
+-- | Ipe.Css — the typed stylesheet DSL, compiled pure Ipê source.
 --
 -- 100% pure Ipe.  CSS generation is string building; the only Rust surface is
--- the four *leaf* security kernels imported from `Ipe.CssSafety`
--- (`safeValue` / `safePropName` / `safeSelector` / `stripStyleClose`).  Those
--- gate every free-string entry point at CONSTRUCTION (PARSE, DON'T VALIDATE),
--- and `stripStyleClose` is the breakout floor for any raw body.
+-- the *leaf* security kernels imported from `Ipe.CssSafety`
+-- (`safeValue` / `safePropName` / `safeSelector` / `sanitizeRawBody` /
+-- `stripStyleClose`).  Those gate every free-string entry point at CONSTRUCTION
+-- (PARSE, DON'T VALIDATE); `sanitizeRawBody` is the authoritative gate for a raw
+-- `<style>`-body fragment (`raw` / `keyframes`), and `stripStyleClose` is the
+-- breakout floor for any raw body.
 --
--- Security posture (ratified 2026-07-03, principle order security > correctness
--- > soundness > efficiency > completeness > readability):
+-- Security posture (principle order security > correctness > soundness >
+-- efficiency > completeness > readability):
 --
 --   * `CssProp` / `CssRule` are exported OPAQUE (type without constructor).
 --     The SOLE way to build a `CssProp` is the internal `prop` smart
@@ -62,14 +64,17 @@ module Ipe.Css exposing
 --     DROPS the whole rule as `CssRuleDropped`).
 --   * `raw` and `keyframes` frame bodies are a TRUSTED-INPUT escape hatch
 --     (dangerouslySetInnerHTML-class): they apply the `stripStyleClose`
---     breakout FLOOR (no `</style>` escapes the `<style>` sink) AND drop the
---     whole rule if the body carries any ruleset breakout character (`}` `{`
---     `;` `</` `/*` `@import`) or a script-sink keyword (`expression(`,
---     `javascript:`, `vbscript:`, `url(data:…)`). The pattern set mirrors
---     `has_dangerous_css_pattern` in css_safety.rs; a drift-assert test in
---     that module keeps them in sync. They still do NOT full value-scan
---     (a `<script>` tag in a `<style>` body is inert CSS text); prefer the
---     typed builders over `raw` for anything not author-controlled.
+--     breakout FLOOR (no `</style>` escapes the `<style>` sink) AND route the
+--     body through `sanitizeRawBody` — the authoritative kernel over the audited
+--     `css_safety` raw-body policy, which drops the whole rule if the body
+--     carries an at-rule (`@import` SSRF), a `<style>`/comment breakout
+--     (`</` `/*`), or a script-sink URL scheme (`expression(`, `javascript:`,
+--     `vbscript:`, `url(data:…)`). Because the kernel runs `css_unescape` +
+--     whitespace-strip, an escaped payload a substring check would miss
+--     (`\40 import`, `url( javascript:`) is dropped by the same normalization
+--     the `<style>` sink relies on. Block structure (`{` `}` `;`) is legal in a
+--     raw fragment, so a benign stylesheet / keyframes body still renders.
+--     Prefer the typed builders over `raw` for anything not author-controlled.
 --   * `stylesheet` folds in pure Ipe and finishes through `stripStyleClose`
 --     (defence in depth); the `<style>` render sink strips again (belt & braces
 --     with `html_style_node_`).  For benign input the output is byte-identical
@@ -78,7 +83,7 @@ module Ipe.Css exposing
 
 import Ipe.String as String
 import Ipe.List as List
-import Ipe.CssSafety exposing (safeValue, safePropName, safeSelector, stripStyleClose)
+import Ipe.CssSafety exposing (safeValue, safePropName, safeSelector, sanitizeRawBody, stripStyleClose)
 
 
 -- ─── Core types ─────────────────────────────────────────────────
@@ -1522,44 +1527,8 @@ media query rules =
 
 
 -- `@keyframes name { frames }` — name parsed; each raw frame body is close-tag
--- stripped (breakout floor).
---
--- Rejects a raw/keyframes body that carries any declaration/ruleset breakout
--- character or script-sink keyword. The pattern set mirrors `has_dangerous_css_pattern`
--- in css_safety.rs (the audited SSOT): breakout chars `}` `{` `;` `</` `/*`
--- `@import`, plus the script-sink keywords from `BAD_VALUE_PATTERNS`. Case-
--- insensitive substring check on the lowercased body. The Rust policy also
--- strips whitespace before checking scheme-in-url patterns (catching
--- `url( javascript:` with a space); pure-Ipê cannot strip whitespace inline,
--- so those variants land here verbatim — any whitespace-obfuscated form that
--- escapes this gate is caught by the `stripStyleClose` floor and the sink-side
--- re-validation in css_safety.rs. The SSOT invariant is asserted by the
--- `raw_body_gate_matches_rust_policy` test in css_safety.rs.
-containsDangerousCssConstruct : String -> Bool
-containsDangerousCssConstruct s =
-    let
-        lower =
-            String.toLower s
-    in
-    -- Ruleset / declaration breakout chars
-    String.contains "}" lower
-        || String.contains "{" lower
-        || String.contains ";" lower
-        || String.contains "</" lower
-        || String.contains "/*" lower
-        || String.contains "@import" lower
-        -- Script-sink keywords (BAD_VALUE_PATTERNS in css_safety.rs)
-        || String.contains "expression(" lower
-        || String.contains "javascript:" lower
-        || String.contains "vbscript:" lower
-        || String.contains "url(javascript:" lower
-        || String.contains "url('javascript:" lower
-        || String.contains "url(\"javascript:" lower
-        || String.contains "url(vbscript:" lower
-        || String.contains "url(data:text" lower
-        || String.contains "url(data:application" lower
-
-
+-- stripped (breakout floor) then gated by `sanitizeRawBody` (the authoritative
+-- kernel over the audited `css_safety` raw-body policy).
 keyframes : String -> List String -> CssRule
 keyframes name frames =
     case safeSelector name of
@@ -1568,15 +1537,18 @@ keyframes name frames =
                 stripped =
                     List.map stripStyleClose frames
             in
-            -- Scan the CONCATENATION of all frames for dangerous constructs.
-            -- Joining detects a pattern spanning any frame without requiring a
-            -- higher-order `List.any` over a named predicate (which the backend
-            -- cannot yet emit). Over-detection at a join boundary is fail-safe.
-            if containsDangerousCssConstruct (String.join "" stripped) then
-                CssRuleDropped
+            -- Gate the CONCATENATION of all frames through the authoritative
+            -- `sanitizeRawBody` kernel. Joining scans a pattern spanning any
+            -- frame without a higher-order `List.any` over a named predicate
+            -- (which the backend cannot yet emit); over-detection at a join
+            -- boundary is fail-safe. The kernel decodes CSS escapes, so an
+            -- escaped `@import`/script-sink in any frame drops the whole rule.
+            case sanitizeRawBody (String.join "" stripped) of
+                Just _ ->
+                    CssKeyframes n stripped
 
-            else
-                CssKeyframes n stripped
+                Nothing ->
+                    CssRuleDropped
 
         Nothing ->
             CssRuleDropped
@@ -1592,19 +1564,24 @@ frame pctStr props =
 
 
 -- A raw, pre-rendered fragment — close-tag stripped at construction, then
--- dropped entirely if it carries any breakout character or script-sink keyword
--- (see `containsDangerousCssConstruct`).
+-- gated by the authoritative `sanitizeRawBody` kernel over the audited
+-- `css_safety` policy: a body carrying an at-rule (`@import` SSRF), a
+-- `<style>`/comment breakout, or a script-sink URL scheme — in either its raw
+-- or CSS-escape-decoded form — is DROPPED entirely (`CssRuleDropped`). The
+-- kernel runs `css_unescape` + whitespace-strip, so an escaped payload a raw
+-- substring check would miss (`\40 import`, `x:e\78 pression(…)`) is dropped.
 raw : String -> CssRule
 raw s =
     let
         stripped =
             stripStyleClose s
     in
-    if containsDangerousCssConstruct stripped then
-        CssRuleDropped
+    case sanitizeRawBody stripped of
+        Just safe ->
+            CssRaw safe
 
-    else
-        CssRaw stripped
+        Nothing ->
+            CssRuleDropped
 
 
 renderProp : CssProp -> String

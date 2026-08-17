@@ -104,8 +104,11 @@ fn css_e2e_neutralises_injection() {
     );
 
     // Security: NONE of the injection payloads survive in any form —
-    // including the `@import` (CSS-level SSRF) vector newly gated on
-    // `raw` / `keyframes` bodies.
+    // including the `@import` (CSS-level SSRF) vector gated on `raw` /
+    // `keyframes` bodies, AND its CSS-escaped form (`\40 import`) which the
+    // `sanitizeRawBody` kernel decodes and drops (a raw substring check would
+    // miss it). The dropped rule emits nothing, so neither the decoded `@import`
+    // nor the literal escape byte run survives.
     for needle in [
         "</style",
         "<script",
@@ -113,6 +116,8 @@ fn css_e2e_neutralises_injection() {
         "expression(",
         "alert",
         "@import",
+        "import url(https://evil.example",
+        "\\40 import",
     ] {
         assert!(
             !low.contains(needle),

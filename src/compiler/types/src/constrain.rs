@@ -6913,9 +6913,10 @@ impl<'a> Builder<'a> {
             //    breakout floor. Runtime `safe_value` / `safe_prop_name` /
             //    `safe_selector` return `IpeMaybe<String>` (mirrors `uuid_parse`);
             //    `strip_style_close_kernel` returns `String`.
-            K::CssSafetySafeValue | K::CssSafetySafePropName | K::CssSafetySafeSelector => {
-                fun(string(), maybe(string()))
-            }
+            K::CssSafetySafeValue
+            | K::CssSafetySafePropName
+            | K::CssSafetySafeSelector
+            | K::CssSafetySanitizeRawBody => fun(string(), maybe(string())),
 
             // ── Ipe.Uuid (3) — ENTROPY IS AN EFFECT ──
             //    `v4`/`v7` draw fresh entropy per call, so they are typed on the
@@ -9090,6 +9091,10 @@ mod registry_phase_c_tests {
             // `Html.Unsafe.unsafeScript` — Ipê-new inline-`<script>` escape hatch,
             // no legacy oracle, so it is FIRST_SCHEMED (schemed in `stdlib_scheme`).
             K::HtmlScriptNode,
+            // `CssSafety.sanitizeRawBody` — Ipê-new raw/keyframes-body gate over
+            // the audited `css_safety` policy (`css_unescape` + whitespace-strip),
+            // no legacy oracle, so it is FIRST_SCHEMED (schemed in `stdlib_scheme`).
+            K::CssSafetySanitizeRawBody,
             // NB: HtmlStyleNode is NOT here — it is RELOCATED (`Html.styleNode`
             // is schemed in the legacy `kernel_ty` table, F7), so its parity is
             // checked by `stdlib_scheme_matches_legacy`.

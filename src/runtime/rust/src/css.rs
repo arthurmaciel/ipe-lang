@@ -3,7 +3,7 @@
 //! `Ipe.Css` is compiled **pure Ipê source** (`crates/ipe/stdlib/Std/Css.ipe`):
 //! the ADTs (`CssProp` / `CssRule` / `Length` / `Color` / keyword enums), the
 //! typed builders, and the render fold all live in Ipê.  The ONLY Rust surface
-//! is the four *leaf* security kernels below — thin `pub` shims over the shared,
+//! is the *leaf* security kernels below — thin `pub` shims over the shared,
 //! audited `css_safety` policy.  The compiled `Ipe.Css` imports them via
 //! `Ipe.CssSafety` and funnels every free-string entry point through them
 //! at construction (PARSE, DON'T VALIDATE):
@@ -13,6 +13,10 @@
 //! * `safe_selector`   — `Css.safeSelector : String -> Maybe String`
 //! * `strip_style_close_kernel` — `Css.stripStyleClose : String -> String`
 //!   (the `<style>`-body breakout floor for raw fragments)
+//! * `safe_raw_body`  — `Css.sanitizeRawBody : String -> Maybe String`
+//!   (the authoritative raw/keyframes-body gate: runs the audited `css_safety`
+//!   raw-body policy with `css_unescape` normalization, so a CSS-escaped
+//!   `@import`/script-sink payload is dropped where a substring check misses it)
 //!
 //! Policy is single-sourced in `css_safety.rs` (unchanged, audited).  A value /
 //! name / selector that fails policy yields `None`, which the Ipê side turns
@@ -22,7 +26,9 @@
 //! then `cargo`-fail.
 
 use crate::core::IpeMaybe;
-use crate::css_safety::{SafeCssPropertyName, SafeCssSelector, SafeCssValue, strip_style_close};
+use crate::css_safety::{
+    SafeCssPropertyName, SafeCssSelector, SafeCssValue, sink_safe_raw_body, strip_style_close,
+};
 
 /// Lift a policy `Option<String>` into the Ipê `Maybe String` runtime
 /// representation (`IpeMaybe<String>`), matching every other `String -> Maybe
@@ -68,6 +74,25 @@ pub fn safe_selector(sel: String) -> IpeMaybe<String> {
 #[must_use]
 pub fn strip_style_close_kernel(s: String) -> String {
     strip_style_close(&s)
+}
+
+/// `Css.sanitizeRawBody : String -> Maybe String`.  The authoritative gate for a
+/// raw `<style>`-body fragment (`Css.raw` / `Css.keyframes`): runs the audited
+/// `css_safety` raw-body policy — an at-rule (`@import` SSRF), a `<style>` /
+/// comment breakout, or a script-sink URL scheme is rejected in BOTH the raw and
+/// CSS-escape-decoded forms (whitespace stripped).  `Just(body)` (the ORIGINAL,
+/// unmodified bytes) iff the fragment is safe, else `Nothing` (the Ipê side drops
+/// the whole rule as `CssRuleDropped`).  A pure-`.ipe` substring check cannot
+/// replicate the `css_unescape` normalization, so an escaped payload
+/// (`\40 import`, `x:e\78 pression(…)`) that a raw scan would miss is dropped
+/// here — the same policy the `<style>` sink relies on runs at the boundary.
+#[must_use]
+pub fn safe_raw_body(body: String) -> IpeMaybe<String> {
+    if sink_safe_raw_body(&body) {
+        IpeMaybe::Just(body)
+    } else {
+        IpeMaybe::Nothing
+    }
 }
 
 #[cfg(test)]
@@ -142,6 +167,54 @@ mod tests {
         assert_eq!(
             opt(&safe_selector(".card:hover > a".into())),
             Some(".card:hover > a")
+        );
+    }
+
+    #[test]
+    fn safe_raw_body_drops_escaped_and_plain_bypasses_keeps_blocks() {
+        // Plain at-rule / breakout / script-sink — dropped.
+        assert!(matches!(
+            safe_raw_body("@import url(//evil/x.css);".into()),
+            IpeMaybe::Nothing
+        ));
+        assert!(matches!(
+            safe_raw_body("0% { transform: rotate(0) } @import url(x)".into()),
+            IpeMaybe::Nothing
+        ));
+        // CSS-hex-escaped payloads a raw substring check MISSES — dropped by the
+        // css_unescape re-scan. `\40 ` → '@', `\78 ` → 'x', `\69 ` → 'i'.
+        assert!(matches!(
+            safe_raw_body("\\40 import url(//evil/x.css)".into()),
+            IpeMaybe::Nothing
+        ));
+        assert!(matches!(
+            safe_raw_body("x:e\\78 pression(alert(1))".into()),
+            IpeMaybe::Nothing
+        ));
+        assert!(matches!(
+            safe_raw_body("@\\69 mport url(x)".into()),
+            IpeMaybe::Nothing
+        ));
+        // Whitespace-obfuscated script sink — dropped (whitespace stripped).
+        assert!(matches!(
+            safe_raw_body("a { background: url( javascript:alert(1)) }".into()),
+            IpeMaybe::Nothing
+        ));
+        assert!(matches!(
+            safe_raw_body("a { x: expression (alert(1)) }".into()),
+            IpeMaybe::Nothing
+        ));
+        // A benign stylesheet / keyframes fragment keeps its `{` `}` `;` blocks
+        // (block structure is legal in a raw body) and passes unchanged.
+        assert_eq!(
+            opt(&safe_raw_body(
+                "0% { opacity: 0 } 100% { opacity: 1 }".into()
+            )),
+            Some("0% { opacity: 0 } 100% { opacity: 1 }")
+        );
+        assert_eq!(
+            opt(&safe_raw_body(".x { color: red; padding: 8px }".into())),
+            Some(".x { color: red; padding: 8px }")
         );
     }
 

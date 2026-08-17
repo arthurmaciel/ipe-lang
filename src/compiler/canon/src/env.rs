@@ -61,7 +61,7 @@ pub const STDLIB_MODULE_QUALIFIERS: &[(&[&str], &str)] = &[
     (&["Ipe", "Uuid"], "Uuid"),
     // `Ipe.Secret` — opaque secret-string wrapper.
     (&["Ipe", "Secret"], "Secret"),
-    // `Ipe.CssSafety` — the four Ipe.Css leaf security kernels. This
+    // `Ipe.CssSafety` — the Ipe.Css leaf security kernels. This
     // is a KERNEL qualifier (imported by the compiled-source `Ipe.Css`); `Ipe.Css`
     // itself stays OUT of this table (it is compiled source, registered in ipe's
     // `COMPILED_STD_MODULES`), so the `compiled_vs_kernel_qualifier_disjoint`
@@ -851,8 +851,11 @@ impl Env {
                     "kindName",
                 ],
             ),
-            // `Ipe.CssSafety` — the four Ipe.Css leaf security kernels:
-            // three `String -> Maybe String` parsers + the `String -> String`
+            // `Ipe.CssSafety` — the Ipe.Css leaf security kernels: four
+            // `String -> Maybe String` parsers (`safeValue`/`safePropName`/
+            // `safeSelector` gate declarations/selectors at construction;
+            // `sanitizeRawBody` is the authoritative raw/keyframes-body gate over
+            // the audited `css_safety` policy) + the `String -> String`
             // `<style>`-breakout floor. Imported (and called unqualified) by the
             // compiled-source `Ipe.Css`.
             (
@@ -861,6 +864,7 @@ impl Env {
                     "safeValue",
                     "safePropName",
                     "safeSelector",
+                    "sanitizeRawBody",
                     "stripStyleClose",
                 ],
             ),

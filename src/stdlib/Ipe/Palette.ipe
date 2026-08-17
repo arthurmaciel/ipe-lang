@@ -8,12 +8,11 @@ module Ipe.Palette exposing (Shade(..), toHex, Spacing(..), spacingPx)
 -- built-in type name, so it validates the injection + N0025 exemption seam
 -- independently of the reserved-name gate.
 --
--- `Spacing` (formerly `Length`) exercises the complementary path: a type
--- name unique to this module, avoiding collision with the `Length` opaque that
--- `Ipe.Css` defines and owns. No shipped module reuses another module's opaque
--- type vocabulary. The lowerer keys `Spacing` under its real home
--- (`Ipe.Palette`), so it becomes its own enum and never collides with any
--- `Ipe.Css` or `Ipe.Ui` type.
+-- `Spacing` exercises the complementary path: a type name unique to this
+-- module, avoiding collision with the `Length` opaque that `Ipe.Css` defines
+-- and owns. No shipped module reuses another module's opaque type vocabulary.
+-- The lowerer keys `Spacing` under its real home (`Ipe.Palette`), so it becomes
+-- its own enum and never collides with any `Ipe.Css` or `Ipe.Ui` type.
 --
 -- Every top-level binding is fully annotated: the compiled-source stdlib
 -- discipline (annotation-driven generalisation, no whole-program let-gen) is

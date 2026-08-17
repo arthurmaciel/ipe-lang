@@ -362,7 +362,7 @@ const RANDOM_GENERATOR: &str = include_str!("../Ipe/Random/Generator.ipe");
 /// `Ipe.Css` — the typed stylesheet DSL, compiled pure Ipê source: it
 /// defines AND pattern-matches its own `CssProp` / `CssRule` / `Length` /
 /// `Color` / keyword-enum ADTs and folds them to a CSS string.  Its only Rust
-/// surface is the four leaf security kernels under the `Ipe.CssSafety`
+/// surface is the leaf security kernels under the `Ipe.CssSafety`
 /// kernel qualifier (NOT under `Ipe.Css`, so the disjointness invariant holds).
 const CSS: &str = include_str!("../Ipe/Css.ipe");
 

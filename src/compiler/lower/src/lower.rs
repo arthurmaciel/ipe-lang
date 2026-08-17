@@ -18653,10 +18653,12 @@ impl<'a> Lowerer<'a> {
                 | KernelFn::ErrorKindName
                 // ── CssSafety arity-1 (Ipe.Css leaf kernels) ─────────────
                 // `safeValue`/`safePropName`/`safeSelector : String -> Maybe String`
+                // `sanitizeRawBody : String -> Maybe String`
                 // `stripStyleClose : String -> String`
                 | KernelFn::CssSafetySafeValue
                 | KernelFn::CssSafetySafePropName
                 | KernelFn::CssSafetySafeSelector
+                | KernelFn::CssSafetySanitizeRawBody
                 | KernelFn::CssSafetyStripStyleClose
                 // ── Jwt builder arity-1 ─────────────────────────
                 // `hs256 : String -> Algorithm`
@@ -20090,6 +20092,9 @@ impl<'a> Lowerer<'a> {
                     }
                     ("CssSafety", "stripStyleClose") => {
                         Ok(Callee::Kernel(KernelFn::CssSafetyStripStyleClose))
+                    }
+                    ("CssSafety", "sanitizeRawBody") => {
+                        Ok(Callee::Kernel(KernelFn::CssSafetySanitizeRawBody))
                     }
                     // ── Maybe kernels ──────────────────────────────────────
                     ("Maybe", "withDefault") => Ok(Callee::Kernel(KernelFn::MaybeWithDefault)),
