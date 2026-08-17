@@ -12486,30 +12486,22 @@ impl<'a> Lowerer<'a> {
                     // occurrence becomes a distinct fresh symbol — the same treatment
                     // `split_typed_sig` applies to param-position `any`s.
                     //
-                    // A wildcard `any` promises one concrete type per position, so a
-                    // return `any` must be determinable: pinned by the body (handled by
-                    // the region substitution above), or carried by a parameter whose
-                    // argument the caller supplies. A freshened return `any` that no
-                    // parameter carries is determinable by neither — it would surface as
-                    // a type parameter appearing only in the result, which no call site
-                    // can fix. Reject it here rather than emit Rust a caller can never
+                    // A wildcard `any` promises one concrete type per position. Each
+                    // `any` freshens to its own distinct symbol, so a return `any` and a
+                    // param `any` never denote the same type — the only thing that can
+                    // determine a return `any` is the body pinning it to a concrete
+                    // value, handled by the region substitution above. Reaching here with
+                    // a freshened return `any` means the body did not pin it: it would
+                    // surface as a type parameter appearing only in the result, which no
+                    // call site can fix. Reject it rather than emit Rust no caller can
                     // satisfy.
                     let mut ret_any_mints: Vec<Symbol> = Vec::new();
                     let freshened_ret = self.freshen_any_generics(ret, &mut ret_any_mints)?;
                     if !ret_any_mints.is_empty() {
-                        let param_generics: BTreeSet<Symbol> = {
-                            let mut s = BTreeSet::new();
-                            for (_, ty) in &params {
-                                collect_ir_generic_syms(ty, &mut s);
-                            }
-                            s
-                        };
-                        if ret_any_mints.iter().any(|m| !param_generics.contains(m)) {
-                            return Err(Diagnostic::Lower {
-                                span: sig_span,
-                                msg: LowerError::UndeterminableReturnAny,
-                            });
-                        }
+                        return Err(Diagnostic::Lower {
+                            span: sig_span,
+                            msg: LowerError::UndeterminableReturnAny,
+                        });
                     }
                     any_syms_minted.extend(ret_any_mints);
                     freshened_ret
