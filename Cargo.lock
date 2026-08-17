@@ -2295,6 +2295,7 @@ version = "0.1.55"
 dependencies = [
  "ipe_diagnostics",
  "ipe_kernels",
+ "libc",
  "serde",
  "windows-sys 0.61.2",
 ]

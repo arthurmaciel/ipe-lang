@@ -10,6 +10,12 @@ ipe_diagnostics = { path = "../diagnostics" }
 ipe_kernels = { path = "../kernels" }
 serde = { version = "1", features = ["derive"] }
 
+# Used on Unix (FreeBSD, macOS, Linux) for `getuid(3)` in the exclusive jail-dir
+# ownership verification — the only way to obtain the current uid without
+# shelling out or reading a non-authoritative file.
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
 # The Windows run-jail arm builds its confinement primitives directly through the
 # Win32 kernel API (Job Object, AppContainer lowbox token, capability SIDs, ACLs,
 # CreateProcess with an extended startup-info attribute list). `windows-sys` is
