@@ -17,6 +17,8 @@
 //! [`TyDoc`](ipe_diagnostics::TyDoc)s here (via [`crate::doc`]), so the reporter
 //! never touches the interner or the arena.
 
+use std::collections::BTreeMap;
+
 use ipe_diagnostics::{DResult, Diagnostic, Span, TypeError};
 use ipe_intern::Interner;
 
@@ -374,20 +376,11 @@ fn unify_flat(
                 uf.union(ra, rb, Content::Structure(FlatType::Record(fs1, ext1)))?;
                 unify(uf, budget, interner, span, ext1, ext2)?;
             } else {
-                // Step 4 — both open, differing extras: mint a fresh flex tail
-                // that absorbs any still-unspecified optional fields.
-                let new_ext = uf.fresh(Content::Flex)?;
-                // Build the merged field map (union of both sides).
-                // Move `fs1` into `merged`; no clone needed since this branch
-                // is mutually exclusive with step 3.
-                let mut merged = fs1;
-                for (k, v) in only2 {
-                    merged.insert(k, v);
-                }
-                uf.union(
-                    ra,
-                    rb,
-                    Content::Structure(FlatType::Record(merged, new_ext)),
+                // Step 4 — differing extras: absorb each side's unique fields
+                // into the other's extension so both original tails carry the
+                // full field union and stay live for later constraints.
+                unify_open_record_rows(
+                    uf, budget, interner, span, ra, rb, fs1, ext1, ext2, only1, only2,
                 )?;
             }
             Ok(())
@@ -402,6 +395,93 @@ fn unify_flat(
             uf.union(ra, rb, Content::Structure(FlatType::EmptyRecord))
         }
         _ => Err(mismatch(uf, budget, interner, span, ra, rb)),
+    }
+}
+
+/// Unify two open records whose field sets differ, so that after the merge each
+/// original extension variable resolves to the full field union under a shared
+/// tail — keeping both tails live for any later row constraint.
+///
+/// `only1` / `only2` are the fields unique to each side (the shared fields were
+/// already unified). The construction absorbs each side's unique fields into the
+/// *other* side's extension:
+///
+/// - Only one side has extras → that side's tail absorbs them under the OTHER
+///   side's actual extension variable, preserving its openness or closedness.
+///   Reusing the real tail (rather than a fresh flex) is what lets a closed
+///   record stay closed: `{ a | ext1 }` unified with `{ | closed }` binds
+///   `ext1 ← { a | closed }`, never a spurious `{ a | fresh }`.
+/// - Both sides have extras → mint one shared fresh tail and bind
+///   `ext1 ← { only2 | new_ext }`, `ext2 ← { only1 | new_ext }`; the two records
+///   become equal, both open on `new_ext`.
+///
+/// The recursive `unify` calls run the occurs check (the Flex-vs-Structure arm),
+/// so no cycle can form; fresh extension nodes are minted before the call to
+/// keep a single mutable borrow of `uf` per `unify`.
+#[allow(clippy::too_many_arguments)]
+fn unify_open_record_rows(
+    uf: &mut UnionFind<Content>,
+    budget: &mut Budget,
+    interner: &Interner,
+    span: Span,
+    ra: VarId,
+    rb: VarId,
+    fs1: BTreeMap<ipe_intern::Symbol, VarId>,
+    ext1: VarId,
+    ext2: VarId,
+    only1: Vec<(ipe_intern::Symbol, VarId)>,
+    only2: Vec<(ipe_intern::Symbol, VarId)>,
+) -> DResult<()> {
+    // Merged field map: the union of both sides' fields, used as the merged
+    // record's structure. `fs1` is moved in; `only2` supplies the right-unique
+    // fields. Its extension is chosen below to match each asymmetric case.
+    let mut merged = fs1;
+    for &(k, v) in &only2 {
+        merged.insert(k, v);
+    }
+
+    match (only1.is_empty(), only2.is_empty()) {
+        // Only side 2 carries extras: side 1's tail absorbs them, keeping side
+        // 2's actual extension (open flex or closed sentinel) as the shared tail.
+        (true, false) => {
+            uf.union(ra, rb, Content::Structure(FlatType::Record(merged, ext2)))?;
+            let only2_map: BTreeMap<_, _> = only2.into_iter().collect();
+            let ext1_target = uf.fresh(Content::Structure(FlatType::Record(only2_map, ext2)))?;
+            unify(uf, budget, interner, span, ext1, ext1_target)
+        }
+        // Only side 1 carries extras: symmetric to the case above.
+        (false, true) => {
+            uf.union(ra, rb, Content::Structure(FlatType::Record(merged, ext1)))?;
+            let only1_map: BTreeMap<_, _> = only1.into_iter().collect();
+            let ext2_target = uf.fresh(Content::Structure(FlatType::Record(only1_map, ext1)))?;
+            unify(uf, budget, interner, span, ext2, ext2_target)
+        }
+        // Both sides carry unique fields: a shared fresh tail closes the union,
+        // and each original tail absorbs the other side's extras onto it.
+        // (Step 2 guaranteed neither side is closed here, since a closed side
+        // rejects any of the other's extras.)
+        (false, false) => {
+            let new_ext = uf.fresh(Content::Flex)?;
+            uf.union(
+                ra,
+                rb,
+                Content::Structure(FlatType::Record(merged, new_ext)),
+            )?;
+
+            let only2_map: BTreeMap<_, _> = only2.into_iter().collect();
+            let ext1_target = uf.fresh(Content::Structure(FlatType::Record(only2_map, new_ext)))?;
+            unify(uf, budget, interner, span, ext1, ext1_target)?;
+
+            let only1_map: BTreeMap<_, _> = only1.into_iter().collect();
+            let ext2_target = uf.fresh(Content::Structure(FlatType::Record(only1_map, new_ext)))?;
+            unify(uf, budget, interner, span, ext2, ext2_target)
+        }
+        // Unreachable: the caller only enters step 4 when at least one side has
+        // extras. Handle it as the identical-field-set merge for total safety.
+        (true, true) => {
+            uf.union(ra, rb, Content::Structure(FlatType::Record(merged, ext1)))?;
+            unify(uf, budget, interner, span, ext1, ext2)
+        }
     }
 }
 
@@ -693,6 +773,177 @@ mod tests {
                 rigid: false,
                 bounds: TyBounds::eq().union(TyBounds::ord()),
             },
+        );
+    }
+
+    // ── Open-record tail-propagation tests ──────────────────────────────────
+
+    /// Build a fresh `Unit` solver variable (a concrete leaf with no children,
+    /// used as a stand-in for a field's type in record tests).
+    fn unit_var(uf: &mut UnionFind<Content>) -> VarId {
+        uf.fresh(Content::Structure(FlatType::Unit))
+            .expect("fresh unit var")
+    }
+
+    /// Build an open `Record` node with the given field→var pairs and a fresh
+    /// flex extension variable; return `(record_var, ext_var)`.
+    fn open_record(
+        uf: &mut UnionFind<Content>,
+        fields: BTreeMap<ipe_intern::Symbol, VarId>,
+    ) -> (VarId, VarId) {
+        let ext = uf.fresh(Content::Flex).expect("fresh ext");
+        let rec = uf
+            .fresh(Content::Structure(FlatType::Record(fields, ext)))
+            .expect("fresh record");
+        (rec, ext)
+    }
+
+    /// Build a CLOSED `Record` node (`EmptyRecord` extension) with the given
+    /// fields; return the record var.
+    fn closed_record(
+        uf: &mut UnionFind<Content>,
+        fields: BTreeMap<ipe_intern::Symbol, VarId>,
+    ) -> VarId {
+        let closed = uf
+            .fresh(Content::Structure(FlatType::EmptyRecord))
+            .expect("fresh empty-record sentinel");
+        uf.fresh(Content::Structure(FlatType::Record(fields, closed)))
+            .expect("fresh closed record")
+    }
+
+    /// A constraint routed through an original extension variable after the
+    /// merge must reach the merged record's fields.
+    ///
+    /// `{ x : Unit | ext1 }` unified with `{ y : Unit | ext2 }` (both open,
+    /// disjoint fields) merges to `{ x : Unit, y : Unit | new_ext }`, with
+    /// `ext1` bound to `{ y : Unit | new_ext }`. A later `unify(ext1, { y : Unit
+    /// })` therefore meets the absorbed `y` field and succeeds — the tail stayed
+    /// connected to the merged record rather than pointing at an orphan.
+    #[test]
+    fn open_record_merge_tail_constraint_propagates() {
+        let mut uf = UnionFind::new();
+        let mut interner = Interner::new();
+
+        let sx = interner.intern("x").expect("intern x");
+        let sy = interner.intern("y").expect("intern y");
+
+        let vx = unit_var(&mut uf);
+        let vy1 = unit_var(&mut uf);
+        let vy2 = unit_var(&mut uf);
+
+        // R1 = { x : Unit | ext1 },  R2 = { y : Unit | ext2 }
+        let (r1, ext1) = open_record(&mut uf, BTreeMap::from([(sx, vx)]));
+        let (r2, _ext2) = open_record(&mut uf, BTreeMap::from([(sy, vy1)]));
+
+        // Merge the two open records.
+        let mut budget = Budget::unbounded();
+        unify(&mut uf, &mut budget, &interner, Span::DUMMY, r1, r2)
+            .expect("open-record merge must succeed");
+
+        // Constrain ext1 further by closing it as `{ y : Unit }`. ext1 already
+        // carries the absorbed `y` field, so this compatible constraint succeeds.
+        let constraint = closed_record(&mut uf, BTreeMap::from([(sy, vy2)]));
+        unify(
+            &mut uf,
+            &mut budget,
+            &interner,
+            Span::DUMMY,
+            ext1,
+            constraint,
+        )
+        .expect("tail constraint must reach the merged record and succeed");
+    }
+
+    /// A post-merge constraint routed through an original tail that *conflicts*
+    /// with an already-merged field must be rejected (soundness).
+    ///
+    /// After merging `{ x : Unit | ext1 }` with `{ y : Unit | ext2 }`, `ext2` is
+    /// bound to `{ x : Unit | new_ext }`. Sending `unify(ext2, { x : Unit -> Unit
+    /// })` then forces `x`'s type to disagree (`Unit` vs a function), so the
+    /// unifier fails instead of silently accepting the incompatible constraint.
+    #[test]
+    fn open_record_merge_conflicting_tail_constraint_is_rejected() {
+        let mut uf = UnionFind::new();
+        let mut interner = Interner::new();
+
+        let sx = interner.intern("x").expect("intern x");
+        let sy = interner.intern("y").expect("intern y");
+
+        let vx = unit_var(&mut uf);
+        let vy = unit_var(&mut uf);
+
+        // R1 = { x : Unit | ext1 },  R2 = { y : Unit | ext2 }
+        let (r1, _ext1) = open_record(&mut uf, BTreeMap::from([(sx, vx)]));
+        let (r2, ext2) = open_record(&mut uf, BTreeMap::from([(sy, vy)]));
+
+        let mut budget = Budget::unbounded();
+        unify(&mut uf, &mut budget, &interner, Span::DUMMY, r1, r2)
+            .expect("open-record merge must succeed");
+
+        // Send a constraint through ext2 claiming `x : Unit -> Unit`. ext2
+        // carries the absorbed `x : Unit`, so the field types disagree and the
+        // constraint must fail.
+        let arg = unit_var(&mut uf);
+        let ret = unit_var(&mut uf);
+        let fun_type = uf
+            .fresh(Content::Structure(FlatType::Fun(arg, ret)))
+            .expect("fresh fun type");
+        // `x` field carries a Fun type — conflicts with the Unit already merged.
+        let conflicting = closed_record(&mut uf, BTreeMap::from([(sx, fun_type)]));
+
+        let result = unify(
+            &mut uf,
+            &mut budget,
+            &interner,
+            Span::DUMMY,
+            ext2,
+            conflicting,
+        );
+        assert!(
+            result.is_err(),
+            "conflicting type for already-merged field must be rejected (soundness)"
+        );
+    }
+
+    /// An OPEN record with fewer fields unifies with a CLOSED record carrying an
+    /// extra field: the open tail absorbs the extra and the record closes.
+    ///
+    /// This is the optional-config-field shape (an open kernel cfg record meeting
+    /// a fully-specified literal). Only the closed side has a unique field, so the
+    /// open tail must absorb it under the *closed* sentinel — never a fresh open
+    /// tail, which would wrongly reject the program by pitting the closed tail
+    /// against an empty open record.
+    #[test]
+    fn open_record_absorbs_closed_side_extra_field() {
+        let mut uf = UnionFind::new();
+        let mut interner = Interner::new();
+
+        let sa = interner.intern("a").expect("intern a");
+        let sb = interner.intern("b").expect("intern b");
+
+        let va = unit_var(&mut uf);
+        let vb = unit_var(&mut uf);
+        let va2 = unit_var(&mut uf);
+
+        // Open `{ a : Unit | ext }` vs closed `{ a : Unit, b : Unit }`.
+        let (open, ext) = open_record(&mut uf, BTreeMap::from([(sa, va)]));
+        let closed = closed_record(&mut uf, BTreeMap::from([(sa, va2), (sb, vb)]));
+
+        let mut budget = Budget::unbounded();
+        unify(&mut uf, &mut budget, &interner, Span::DUMMY, open, closed)
+            .expect("open record must absorb the closed side's extra field");
+
+        // The open tail became `{ b : Unit }` closed. A further closed record
+        // that adds an unknown field `c` cannot be absorbed, proving the tail
+        // closed rather than staying open.
+        let sc = interner.intern("c").expect("intern c");
+        let vb2 = unit_var(&mut uf);
+        let vc = unit_var(&mut uf);
+        let extra = closed_record(&mut uf, BTreeMap::from([(sb, vb2), (sc, vc)]));
+        let result = unify(&mut uf, &mut budget, &interner, Span::DUMMY, ext, extra);
+        assert!(
+            result.is_err(),
+            "the absorbed tail must be closed, rejecting a further field (soundness)"
         );
     }
 }
