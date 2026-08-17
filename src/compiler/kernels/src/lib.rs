@@ -125,11 +125,15 @@ pub struct StdlibDecl {
     pub arity: u8,
     /// Which subsystem owns emission of this kernel.
     pub class: KernelClass,
-    /// Name of the Rust runtime symbol that implements this kernel. The
-    /// emit-time ground truth is `ipe_backend_rust::naming::kernel_name`, which
-    /// lives on the far side of the crate DAG (`ipe_kernels` is a leaf and may
-    /// not depend on the backend), so this field mirrors it rather than reading
-    /// it; for a small set of variants the two currently differ.
+    /// Name of the Rust runtime symbol that implements this kernel.
+    ///
+    /// This field is the single source of truth for the emitted symbol.
+    /// It is copied verbatim into [`KernelDef::runtime_fn`] at construction.
+    /// `ipe_backend_rust::naming::kernel_name` is then a zero-cost projection
+    /// that reads `k.def().runtime_fn` — pinned equal to this field for every
+    /// kernel by the `kernel_name_delegates_to_def_runtime_fn` test in that
+    /// crate. (`ipe_kernels` is a leaf crate and may not depend on the backend,
+    /// so the delegation flows from kernel → backend, never the reverse.)
     pub emit: &'static str,
 }
 

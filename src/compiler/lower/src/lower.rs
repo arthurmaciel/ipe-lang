@@ -3490,6 +3490,7 @@ fn lambda_body_refs_sym(sym: Symbol, expr: &Expr) -> bool {
 /// question) -- a false positive here only costs an unneeded (but harmless)
 /// `Arc`/`.clone()`, whereas a false negative would leave a real E0507/E0382
 /// unfixed, so this walker is deliberately the more conservative of the two.
+#[allow(clippy::too_many_lines)] // exhaustive IR match; every arm is structurally required
 fn collect_lambda_capture_depths(sym: Symbol, expr: &Expr, cur_depth: u32, depths: &mut Vec<u32>) {
     match expr {
         Expr::Var(s) | Expr::CloneVar(s) => {
@@ -3522,7 +3523,9 @@ fn collect_lambda_capture_depths(sym: Symbol, expr: &Expr, cur_depth: u32, depth
             collect_lambda_capture_depths(sym, m.scrutinee(), cur_depth, depths);
             for arm in m.arms() {
                 if !pat_binds_symbol(&arm.pat, sym) {
-                    collect_lambda_capture_depths(sym, &arm.body, cur_depth, depths);
+                    for e in arm.guard.iter().chain([&arm.body]) {
+                        collect_lambda_capture_depths(sym, e, cur_depth, depths);
+                    }
                 }
             }
         }
@@ -4926,7 +4929,8 @@ fn count_var_uses(sym: Symbol, expr: &Expr) -> usize {
                     if pat_binds_symbol(&arm.pat, sym) {
                         0
                     } else {
-                        count_var_uses(sym, &arm.body)
+                        let in_guard = arm.guard.as_ref().map_or(0, |g| count_var_uses(sym, g));
+                        in_guard + count_var_uses(sym, &arm.body)
                     }
                 })
                 .max()
@@ -6773,19 +6777,45 @@ fn apply_move_ownership_precomputed(
         let mut remaining = accum.var_uses;
         Ok(rewrite_multiuse_clones(sym, &mut remaining, scope))
     } else {
-        // `reject_foreign_handle_reuse` uses `count_var_uses`; use accum.
-        if ir_type_has_ffi_foreign_handle(env, ir_ty) && accum.var_uses > 1 {
-            return Err(unsupported(span, Feature::ForeignHandleReuse));
-        }
-        // `reject_fn_value_reuse` uses `count_fn_value_uses`; use accum.
-        if ir_contains_fun(ir_ty)
-            && matches!(clone_class(env, ir_ty), CloneClass::NonClone)
-            && accum.fn_value_uses > 1
-        {
-            return Err(unsupported(span, Feature::FunctionValueReuse));
-        }
+        reject_foreign_handle_reuse_for_count(env, ir_ty, accum.var_uses, span)?;
+        reject_fn_value_reuse_for_count(env, ir_ty, accum.fn_value_uses, span)?;
         Ok(scope)
     }
+}
+
+/// Shared predicate body for the foreign-handle reuse gate: rejects when
+/// `var_count` exceeds 1 for a type that embeds an FFI foreign handle.
+/// Both the live path (count derived from a walk) and the precomputed path
+/// (count from [`LetAccum`]) route through here so the condition lives once.
+fn reject_foreign_handle_reuse_for_count(
+    env: CloneEnv<'_>,
+    ir_ty: &IrType,
+    var_count: usize,
+    span: Span,
+) -> DResult<()> {
+    if ir_type_has_ffi_foreign_handle(env, ir_ty) && var_count > 1 {
+        return Err(unsupported(span, Feature::ForeignHandleReuse));
+    }
+    Ok(())
+}
+
+/// Shared predicate body for the fn-value reuse gate: rejects when
+/// `fn_count` exceeds 1 for a non-`Clone` fn-carrying type.
+/// Both the live path (count derived from a walk) and the precomputed path
+/// (count from [`LetAccum`]) route through here so the condition lives once.
+fn reject_fn_value_reuse_for_count(
+    env: CloneEnv<'_>,
+    ir_ty: &IrType,
+    fn_count: usize,
+    span: Span,
+) -> DResult<()> {
+    if ir_contains_fun(ir_ty)
+        && matches!(clone_class(env, ir_ty), CloneClass::NonClone)
+        && fn_count > 1
+    {
+        return Err(unsupported(span, Feature::FunctionValueReuse));
+    }
+    Ok(())
 }
 
 fn reject_fn_value_reuse(
@@ -6795,13 +6825,7 @@ fn reject_fn_value_reuse(
     body: &Expr,
     span: Span,
 ) -> DResult<()> {
-    if !ir_contains_fun(ir_ty) || !matches!(clone_class(env, ir_ty), CloneClass::NonClone) {
-        return Ok(());
-    }
-    if count_fn_value_uses(sym, body) > 1 {
-        return Err(unsupported(span, Feature::FunctionValueReuse));
-    }
-    Ok(())
+    reject_fn_value_reuse_for_count(env, ir_ty, count_fn_value_uses(sym, body), span)
 }
 
 /// Count the number of times `sym` is genuinely CONSUMED (moved, in emitted
@@ -6821,6 +6845,7 @@ fn reject_fn_value_reuse(
 /// so a bare `sym` update base IS a genuine consume (1). A compound base
 /// (`{ (mk sym) | .. }`) also moves `sym` and counts via the full recursive
 /// scan.
+#[allow(clippy::too_many_lines)] // exhaustive IR match; every arm is structurally required
 fn count_value_consumes(sym: Symbol, expr: &Expr) -> usize {
     match expr {
         Expr::Var(s) | Expr::CloneVar(s) => usize::from(*s == sym),
@@ -6862,7 +6887,11 @@ fn count_value_consumes(sym: Symbol, expr: &Expr) -> usize {
                     if pat_binds_symbol(&arm.pat, sym) {
                         0
                     } else {
-                        count_value_consumes(sym, &arm.body)
+                        let in_guard = arm
+                            .guard
+                            .as_ref()
+                            .map_or(0, |g| count_value_consumes(sym, g));
+                        in_guard + count_value_consumes(sym, &arm.body)
                     }
                 })
                 .max()
@@ -7274,13 +7303,7 @@ fn reject_foreign_handle_reuse(
     body: &Expr,
     span: Span,
 ) -> DResult<()> {
-    if !ir_type_has_ffi_foreign_handle(env, ir_ty) {
-        return Ok(());
-    }
-    if count_var_uses(sym, body) > 1 {
-        return Err(unsupported(span, Feature::ForeignHandleReuse));
-    }
-    Ok(())
+    reject_foreign_handle_reuse_for_count(env, ir_ty, count_var_uses(sym, body), span)
 }
 
 /// Does `ty` embed an FFI foreign-interface opaque handle (a `Rust.*`-homed
@@ -7474,6 +7497,9 @@ fn collect_mentioned_syms(expr: &Expr, out: &mut BTreeSet<Symbol>) {
         Expr::Match(m) => {
             collect_mentioned_syms(m.scrutinee(), out);
             for arm in m.arms() {
+                if let Some(g) = &arm.guard {
+                    collect_mentioned_syms(g, out);
+                }
                 collect_mentioned_syms(&arm.body, out);
             }
         }
@@ -25019,5 +25045,103 @@ mod tests {
             g_list, g_maybe,
             "Generic symbols inside freshened List<any> and Maybe<any> must differ"
         );
+    }
+
+    // ── Guard-scanning tests ──────────────────────────────────────────────────
+
+    /// A symbol referenced only in an `Arm::guard` is counted by
+    /// `count_var_uses`.  Without guard scanning the count would be 0 (the
+    /// symbol never appears in a body), causing a spurious last-use-move
+    /// optimisation for any consuming sibling.
+    #[test]
+    fn count_var_uses_sees_guard_reference() {
+        let mut interner = Interner::new();
+        let sym = interner.intern("x").unwrap();
+
+        // Arm: `true if x -> false`; catch-all: `_ -> false`.
+        let arm_guard_only = ipe_ir::Arm {
+            pat: ipe_ir::Pat::Bool(true),
+            body: ipe_ir::Expr::Bool(false),
+            guard: Some(ipe_ir::Expr::Var(sym)),
+        };
+        let catch = ipe_ir::Arm::new(ipe_ir::Pat::Wildcard, ipe_ir::Expr::Bool(false));
+        let m = ipe_ir::Match::new_flat(ipe_ir::Expr::Bool(true), vec![arm_guard_only, catch])
+            .expect("valid bool+wildcard match");
+        let expr = ipe_ir::Expr::Match(m);
+
+        // Guard-only reference: count must be 1.
+        assert_eq!(super::count_var_uses(sym, &expr), 1);
+
+        // Body-only reference (no guard): count is still 1.
+        let arm_body_only = ipe_ir::Arm::new(ipe_ir::Pat::Bool(true), ipe_ir::Expr::Var(sym));
+        let catch2 = ipe_ir::Arm::new(ipe_ir::Pat::Wildcard, ipe_ir::Expr::Bool(false));
+        let m2 = ipe_ir::Match::new_flat(ipe_ir::Expr::Bool(true), vec![arm_body_only, catch2])
+            .expect("valid bool+wildcard match");
+        assert_eq!(super::count_var_uses(sym, &ipe_ir::Expr::Match(m2)), 1);
+
+        // Guard AND body in the same arm: count is 2.
+        let arm_both = ipe_ir::Arm {
+            pat: ipe_ir::Pat::Bool(true),
+            body: ipe_ir::Expr::Var(sym),
+            guard: Some(ipe_ir::Expr::Var(sym)),
+        };
+        let catch3 = ipe_ir::Arm::new(ipe_ir::Pat::Wildcard, ipe_ir::Expr::Bool(false));
+        let m3 = ipe_ir::Match::new_flat(ipe_ir::Expr::Bool(true), vec![arm_both, catch3])
+            .expect("valid bool+wildcard match");
+        assert_eq!(super::count_var_uses(sym, &ipe_ir::Expr::Match(m3)), 2);
+
+        // A symbol absent from both guard and body contributes 0.
+        let absent = interner.intern("absent").unwrap();
+        let arm_unrelated = ipe_ir::Arm {
+            pat: ipe_ir::Pat::Bool(true),
+            body: ipe_ir::Expr::Bool(false),
+            guard: Some(ipe_ir::Expr::Bool(true)),
+        };
+        let catch4 = ipe_ir::Arm::new(ipe_ir::Pat::Wildcard, ipe_ir::Expr::Bool(false));
+        let m4 = ipe_ir::Match::new_flat(ipe_ir::Expr::Bool(true), vec![arm_unrelated, catch4])
+            .expect("valid bool+wildcard match");
+        assert_eq!(super::count_var_uses(absent, &ipe_ir::Expr::Match(m4)), 0);
+    }
+
+    /// `reject_foreign_handle_reuse_for_count` and `reject_fn_value_reuse_for_count`
+    /// are the shared predicate bodies called by both the live path
+    /// (`reject_foreign_handle_reuse` / `reject_fn_value_reuse`) and the
+    /// precomputed path (`apply_move_ownership_precomputed`).  Verify that the
+    /// shared counting path fires: a guard-only use registers as count 1, and
+    /// guard+body registers as count 2 (which would trip the reuse reject for a
+    /// non-clone type).
+    #[test]
+    fn precomputed_and_live_paths_share_reject_predicate() {
+        let mut interner = Interner::new();
+        let sym = interner.intern("y").unwrap();
+
+        // guard-only → count_var_uses == 1
+        let arm_guard_only = ipe_ir::Arm {
+            pat: ipe_ir::Pat::Bool(true),
+            body: ipe_ir::Expr::Bool(false),
+            guard: Some(ipe_ir::Expr::Var(sym)),
+        };
+        let catch = ipe_ir::Arm::new(ipe_ir::Pat::Wildcard, ipe_ir::Expr::Bool(false));
+        let m = ipe_ir::Match::new_flat(ipe_ir::Expr::Bool(true), vec![arm_guard_only, catch])
+            .expect("valid match");
+        let expr = ipe_ir::Expr::Match(m);
+
+        let count_guard_only = super::count_var_uses(sym, &expr);
+        assert_eq!(count_guard_only, 1, "guard-only use must count as 1");
+
+        // guard+body → count_var_uses == 2; the reject predicate for a
+        // non-clone fn-value type would fire at count > 1.
+        let arm_both = ipe_ir::Arm {
+            pat: ipe_ir::Pat::Bool(true),
+            body: ipe_ir::Expr::Var(sym),
+            guard: Some(ipe_ir::Expr::Var(sym)),
+        };
+        let catch2 = ipe_ir::Arm::new(ipe_ir::Pat::Wildcard, ipe_ir::Expr::Bool(false));
+        let m2 = ipe_ir::Match::new_flat(ipe_ir::Expr::Bool(true), vec![arm_both, catch2])
+            .expect("valid match");
+        let expr2 = ipe_ir::Expr::Match(m2);
+
+        let count_both = super::count_var_uses(sym, &expr2);
+        assert_eq!(count_both, 2, "guard+body in same arm must count as 2");
     }
 }
