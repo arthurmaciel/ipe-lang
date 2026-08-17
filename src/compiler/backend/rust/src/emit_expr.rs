@@ -1175,6 +1175,38 @@ fn float_literal(f: f64) -> String {
     }
 }
 
+/// Resolve an FFI wrapper symbol to its fully-qualified `crate::ffi::<name>`
+/// path, rejecting any resolved string that is not a legal Rust identifier.
+///
+/// Both [`callee_name`] (for direct FFI calls) and [`emit_ffi_glued_call`]
+/// (for transparent-conversion calls) splice the wrapper name into emitted
+/// Rust source via `crate::ffi::{name}`.  A shared validation point ensures
+/// neither site can silently emit an illegal identifier regardless of how the
+/// symbol was originally interned.
+///
+/// An illegal name is a compiler invariant failure (the lowerer must have
+/// admitted a bad wrapper ident), so this returns [`Diagnostic::CompilerBug`]
+/// rather than a user-facing error.
+fn ffi_path(ctx: &EmitCtx, sym: Symbol) -> DResult<String> {
+    let name = ctx.resolve_ident(sym)?;
+    let mut chars = name.chars();
+    let head_ok = chars
+        .next()
+        .is_some_and(|c| c.is_ascii_alphabetic() || c == '_');
+    if head_ok && chars.all(|c| c.is_ascii_alphanumeric() || c == '_') {
+        Ok(format!("crate::ffi::{name}"))
+    } else {
+        Err(Diagnostic::CompilerBug {
+            where_: "ipe_backend_rust::ffi_path",
+            detail: format!(
+                "FFI wrapper ident {name:?} is not a legal Rust identifier; \
+                 it must contain only ascii alphanumeric characters and \
+                 underscores, starting with a letter or underscore"
+            ),
+        })
+    }
+}
+
 /// The Rust name of a call target.
 pub fn callee_name(ctx: &EmitCtx, callee: &Callee) -> DResult<String> {
     match callee {
@@ -1187,30 +1219,10 @@ pub fn callee_name(ctx: &EmitCtx, callee: &Callee) -> DResult<String> {
         // FFI wrappers are already crate-root, so this is uniform.
         Callee::Func(id) => Ok(format!("crate::{}", ctx.func_name(*id)?)),
         Callee::Kernel(k) => Ok(kernel_name(*k).to_owned()),
-        // A foreign wrapper lives in the emitted `src/ffi.rs` module; the
-        // absolute `crate::ffi::` path keeps it unambiguous from every
-        // emitted file. The identifier must be a legal Rust identifier
-        // (ascii alpha/underscore start, then alphanumeric/underscore) — an
-        // illegal name here is a compiler invariant failure, not a user error.
-        Callee::Ffi { ident, .. } => {
-            let name = ctx.resolve_ident(*ident)?;
-            let mut chars = name.chars();
-            let head_ok = chars
-                .next()
-                .is_some_and(|c| c.is_ascii_alphabetic() || c == '_');
-            if head_ok && chars.all(|c| c.is_ascii_alphanumeric() || c == '_') {
-                Ok(format!("crate::ffi::{name}"))
-            } else {
-                Err(Diagnostic::CompilerBug {
-                    where_: "ipe_backend_rust::callee_name(Callee::Ffi)",
-                    detail: format!(
-                        "FFI callee ident {name:?} is not a legal Rust identifier; \
-                         it must contain only ascii alphanumeric characters and \
-                         underscores, starting with a letter or underscore"
-                    ),
-                })
-            }
-        }
+        // A foreign wrapper lives in the emitted `src/ffi.rs` module. The
+        // shared `ffi_path` helper validates the identifier and constructs the
+        // absolute path — an illegal name is a compiler invariant failure.
+        Callee::Ffi { ident, .. } => ffi_path(ctx, *ident),
     }
 }
 
@@ -1240,7 +1252,7 @@ fn emit_ffi_glued_call(
     depth: u16,
     generics: GenericScope,
 ) -> DResult<String> {
-    let name = format!("crate::ffi::{}", ctx.resolve_ident(wrapper)?);
+    let name = ffi_path(ctx, wrapper)?;
     let mut parts = Vec::with_capacity(args.len());
     for (i, arg) in args.iter().enumerate() {
         let rendered = emit_expr_at(ctx, arg, indent, depth, generics)?;

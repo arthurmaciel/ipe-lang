@@ -12,8 +12,10 @@
 //!
 //! The golden byte-equality contract itself lives in `golden.rs`.
 
+use std::collections::BTreeMap;
+
 use ipe_backend::Backend;
-use ipe_backend_rust::RustBackend;
+use ipe_backend_rust::{FfiEmit, FfiWrapperGlue, RustBackend};
 use ipe_diagnostics::{DResult, Diagnostic, IPE_I0201, IPE_L0200, IPE_N0012};
 use ipe_intern::{Interner, Symbol};
 use ipe_ir::{
@@ -744,6 +746,77 @@ fn ffi_callee_valid_ident_emits_crate_ffi_path() -> DResult<()> {
         src.contains("crate::ffi::semver_parse"),
         "valid FFI callee must emit `crate::ffi::semver_parse`; got:\n{src}"
     );
+    Ok(())
+}
+
+/// CO-BACKEND-004: a glued FFI wrapper whose interned ident string is not a
+/// legal Rust identifier must fail closed as a `CompilerBug` — never silently
+/// splice the raw string into `crate::ffi::{name}` and produce emitted Rust
+/// that fails to compile (the SEAL-violating exit-0-then-cargo-fail class).
+///
+/// This exercises the `emit_ffi_glued_call` path specifically: the
+/// `wrapper_glue` map contains the illegal ident, so `ffi_call_has_glue`
+/// returns `true` and the glued code path fires.  The shared `ffi_path`
+/// helper must intercept the bad name and surface `Diagnostic::CompilerBug`
+/// rather than forwarding it to Rustc.
+#[test]
+fn glued_ffi_wrapper_with_illegal_ident_fails_closed() -> DResult<()> {
+    let mut interner = Interner::new();
+    let main_mod = interner.intern("Main")?;
+    let func_name = interner.intern("call_bad_ffi")?;
+    // An ident that starts with a digit is never a legal Rust identifier.
+    let bad_ident_str = "2bad";
+    let bad_ident = interner.intern(bad_ident_str)?;
+
+    // Wire glue for the illegal ident so `ffi_call_has_glue` returns `true`
+    // and `emit_ffi_glued_call` is reached.  The simplest glue: no argument
+    // conversions, no result conversion (infallible, opaque pass-through
+    // shape) — just enough to trigger the glued code path.
+    let mut wrapper_glue = BTreeMap::new();
+    wrapper_glue.insert(
+        bad_ident_str.to_owned(),
+        FfiWrapperGlue {
+            params: vec![],
+            result: None,
+        },
+    );
+    let ffi = FfiEmit {
+        wrapper_glue,
+        ..FfiEmit::default()
+    };
+
+    let f_fn = Func {
+        id: FuncId::from_raw(0),
+        name: func_name,
+        home: ModPath(vec![]),
+        type_params: vec![],
+        row_params: vec![],
+        params: vec![],
+        ret: IrType::Int,
+        body: Expr::Call {
+            callee: Callee::Ffi {
+                ident: bad_ident,
+                asserted: false,
+            },
+            args: vec![],
+            pin: CallPin::None,
+            on_form: OnFormKind::NotForm,
+        },
+    };
+
+    let prog = program(main_mod, vec![], vec![f_fn]);
+    let res = RustBackend::new(&interner).with_ffi(Some(ffi)).emit(&prog);
+
+    assert!(
+        res.is_err(),
+        "a glued FFI wrapper with an illegal ident must fail closed, got {res:?}"
+    );
+    if let Err(err) = res {
+        assert!(
+            matches!(err, Diagnostic::CompilerBug { .. }),
+            "expected a CompilerBug, got {err:?}"
+        );
+    }
     Ok(())
 }
 
