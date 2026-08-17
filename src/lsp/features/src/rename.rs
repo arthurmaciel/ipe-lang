@@ -8,6 +8,11 @@
 //! Scope: top-level bindings only — the same scope `navigation` tracks.
 //! Rename returns `None` (refuse) for any position that is not on a top-level
 //! reference or definition.
+//!
+//! The `new_name` string from the LSP client is untrusted input: it is parsed
+//! into a [`ValidatedIdentifier`] at the request boundary before any edits are
+//! built. Downstream code only ever receives the validated form — invalid names
+//! are unrepresentable past that point.
 
 use std::collections::BTreeMap;
 
@@ -17,6 +22,112 @@ use lsp_types::{TextEdit, Url, WorkspaceEdit};
 
 use crate::navigation::{Definition, NameRef, find_references, goto_definition};
 use crate::offset::{PositionEncoding, span_to_range};
+
+// ── Identifier grammar ───────────────────────────────────────────────────────
+//
+// These predicates mirror `ipe_parse`'s lexer
+// (`src/compiler/parse/src/lexer.rs`: `is_ident_start` / `is_ident_continue`).
+// If those rules change, update here in lockstep — SSOT is the lexer.
+
+const fn ident_start(c: char) -> bool {
+    c.is_ascii_alphabetic() || c == '_'
+}
+
+const fn ident_continue(c: char) -> bool {
+    c.is_ascii_alphanumeric() || c == '_'
+}
+
+/// Keywords the lexer recognises — a lexically valid identifier that matches
+/// one of these is still rejected because renaming to a keyword produces
+/// un-parseable source.
+const KEYWORDS: &[&str] = &[
+    "module",
+    "import",
+    "exposing",
+    "as",
+    "type",
+    "case",
+    "of",
+    "let",
+    "in",
+    "if",
+    "then",
+    "else",
+    "do",
+    "doParallel",
+];
+
+// ── Case class ───────────────────────────────────────────────────────────────
+
+/// Whether a renamed symbol is a type/constructor (uppercase) or a value
+/// (lowercase / `_`). Mirrors the lexer's `Tok::UpperIdent` / `Tok::LowerIdent`
+/// split.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum SymbolKind {
+    /// Type alias, custom type, or constructor — first char must be uppercase.
+    Type,
+    /// Value binding or function — first char must be lowercase or `_`.
+    Value,
+}
+
+// ── ValidatedIdentifier ──────────────────────────────────────────────────────
+
+/// A single well-formed Ipê identifier that passed all rename guards: correct
+/// lexical shape, not a keyword, and matching case class for the renamed symbol.
+///
+/// Only constructible via [`ValidatedIdentifier::parse`] — invalid names cannot
+/// be represented by this type.
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub struct ValidatedIdentifier(String);
+
+impl ValidatedIdentifier {
+    /// Parse `raw` into a validated identifier for a rename of `kind`.
+    ///
+    /// Returns `None` when `raw` is empty, contains spaces or non-ASCII chars,
+    /// is not a single `[A-Za-z_][A-Za-z0-9_]*` token, is a keyword, or has
+    /// the wrong case class for `kind`.
+    #[must_use]
+    pub fn parse(raw: &str, kind: SymbolKind) -> Option<Self> {
+        let mut chars = raw.chars();
+        let first = chars.next()?;
+        if !ident_start(first) {
+            return None;
+        }
+        if !chars.all(ident_continue) {
+            return None;
+        }
+        if KEYWORDS.contains(&raw) {
+            return None;
+        }
+        match kind {
+            SymbolKind::Type => {
+                if !first.is_ascii_uppercase() {
+                    return None;
+                }
+            }
+            SymbolKind::Value => {
+                if first.is_ascii_uppercase() {
+                    return None;
+                }
+            }
+        }
+        Some(Self(raw.to_owned()))
+    }
+
+    /// The validated identifier text.
+    #[must_use]
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+/// Infer the [`SymbolKind`] of an identifier from its first character.
+fn symbol_kind_of(name: &str) -> SymbolKind {
+    match name.chars().next() {
+        Some(c) if c.is_ascii_uppercase() => SymbolKind::Type,
+        _ => SymbolKind::Value,
+    }
+}
 
 /// The identifier and its span at a position, returned by `prepare_rename`.
 ///
@@ -89,10 +200,14 @@ pub struct ModuleResolver<'a> {
 }
 
 /// The cursor position and replacement text for a rename request.
+///
+/// `new_name` is the raw string from the LSP client. [`rename`] parses it
+/// into a [`ValidatedIdentifier`] at the boundary — if validation fails,
+/// `rename` returns `None` and no edits are emitted.
 pub struct RenameRequest<'a> {
     /// Cursor byte offset within `module`.
     pub byte: u32,
-    /// The replacement name the user typed.
+    /// The replacement name the user typed (validated inside [`rename`]).
     pub new_name: &'a str,
     /// Position encoding in use for the session.
     pub encoding: PositionEncoding,
@@ -126,6 +241,13 @@ pub fn rename(
     let hi = def_span.hi as usize;
     let current_name = def_text.get(lo..hi)?;
 
+    // Validate the new name at the boundary: it must be a single well-formed
+    // Ipê identifier with the correct case class for the symbol being renamed.
+    // No edits are built until this gate passes — invalid names are
+    // unrepresentable in the edit builder.
+    let kind = symbol_kind_of(current_name);
+    let new_ident = ValidatedIdentifier::parse(req.new_name, kind)?;
+
     // Collect all reference spans.
     let refs: Vec<NameRef> = find_references(db, root, entry, &def_module, current_name);
 
@@ -137,7 +259,7 @@ pub fn rename(
         let range = span_to_range(&def_text, def_span, req.encoding);
         edits_by_uri.entry(def_uri).or_default().push(TextEdit {
             range,
-            new_text: req.new_name.to_owned(),
+            new_text: new_ident.as_str().to_owned(),
         });
     }
 
@@ -152,7 +274,7 @@ pub fn rename(
         let range = span_to_range(&ref_text, r.span, req.encoding);
         edits_by_uri.entry(ref_uri).or_default().push(TextEdit {
             range,
-            new_text: req.new_name.to_owned(),
+            new_text: new_ident.as_str().to_owned(),
         });
     }
 
@@ -174,7 +296,7 @@ mod tests {
 
     use crate::offset::PositionEncoding;
 
-    use super::{prepare_rename, rename};
+    use super::{SymbolKind, ValidatedIdentifier, prepare_rename, rename};
 
     fn file(db: &IpeDatabase, path: &[&str], text: &str) -> SourceFile {
         SourceFile::new(
@@ -215,6 +337,106 @@ mod tests {
         }
     }
 
+    // ── ValidatedIdentifier boundary tests ───────────────────────────────────
+
+    #[test]
+    fn valid_value_identifiers_are_accepted() {
+        for name in ["foo", "bar_baz", "_private", "x1", "camelCase"] {
+            assert!(
+                ValidatedIdentifier::parse(name, SymbolKind::Value).is_some(),
+                "{name:?} should be a valid value identifier"
+            );
+        }
+    }
+
+    #[test]
+    fn valid_type_identifiers_are_accepted() {
+        for name in ["Foo", "MyType", "A1"] {
+            assert!(
+                ValidatedIdentifier::parse(name, SymbolKind::Type).is_some(),
+                "{name:?} should be a valid type identifier"
+            );
+        }
+    }
+
+    #[test]
+    fn illegal_names_are_rejected_for_value_rename() {
+        // Spaces, leading digit, empty, operator chars, non-ASCII
+        for name in ["foo bar", "1x", "", "foo.bar", "foo;drop", "café"] {
+            assert!(
+                ValidatedIdentifier::parse(name, SymbolKind::Value).is_none(),
+                "{name:?} should be rejected for value rename"
+            );
+        }
+    }
+
+    #[test]
+    fn keywords_are_rejected() {
+        for kw in [
+            "let", "if", "then", "else", "type", "case", "of", "in", "module", "import",
+        ] {
+            assert!(
+                ValidatedIdentifier::parse(kw, SymbolKind::Value).is_none(),
+                "keyword {kw:?} must be rejected"
+            );
+        }
+    }
+
+    #[test]
+    fn wrong_case_class_is_rejected() {
+        // Uppercase name for a value rename
+        assert!(
+            ValidatedIdentifier::parse("Foo", SymbolKind::Value).is_none(),
+            "uppercase name must be rejected for value rename"
+        );
+        // Lowercase name for a type rename
+        assert!(
+            ValidatedIdentifier::parse("foo", SymbolKind::Type).is_none(),
+            "lowercase name must be rejected for type rename"
+        );
+        // Wrong-case for mixed: "Foo bar" is doubly wrong
+        assert!(
+            ValidatedIdentifier::parse("Foo bar", SymbolKind::Value).is_none(),
+            "Foo bar must be rejected for value rename"
+        );
+    }
+
+    // ── Integration: rename with illegal names emits no edits ─────────────────
+
+    fn do_rename(new_name: &str) -> Option<lsp_types::WorkspaceEdit> {
+        let db = IpeDatabase::new();
+        let helper = file(&db, &["Helper"], HELPER);
+        let entry = file(&db, &["Main"], MAIN);
+        let root = root_of(&db, &[(&["Helper"], helper), (&["Main"], entry)]);
+        rename(
+            &db,
+            root,
+            entry,
+            &["Main".to_owned()],
+            &super::RenameRequest {
+                byte: ref_byte(),
+                new_name,
+                encoding: PositionEncoding::Utf16,
+            },
+            &super::ModuleResolver {
+                uri_of_module: &make_uri,
+                text_of_module: &make_text,
+            },
+        )
+    }
+
+    #[test]
+    fn rename_with_illegal_name_returns_none() {
+        for bad in ["foo bar", "1x", "", "Uppercase", "let"] {
+            assert!(
+                do_rename(bad).is_none(),
+                "rename to {bad:?} must return None (no edits)"
+            );
+        }
+    }
+
+    // ── Existing integration tests ─────────────────────────────────────────────
+
     #[test]
     fn prepare_rename_finds_identifier_at_reference_site() {
         let db = IpeDatabase::new();
@@ -229,27 +451,7 @@ mod tests {
 
     #[test]
     fn rename_produces_edits_for_definition_and_all_references() {
-        let db = IpeDatabase::new();
-        let helper = file(&db, &["Helper"], HELPER);
-        let entry = file(&db, &["Main"], MAIN);
-        let root = root_of(&db, &[(&["Helper"], helper), (&["Main"], entry)]);
-
-        let ws_edit = rename(
-            &db,
-            root,
-            entry,
-            &["Main".to_owned()],
-            &super::RenameRequest {
-                byte: ref_byte(),
-                new_name: "four",
-                encoding: PositionEncoding::Utf16,
-            },
-            &super::ModuleResolver {
-                uri_of_module: &make_uri,
-                text_of_module: &make_text,
-            },
-        )
-        .expect("rename returned Some");
+        let ws_edit = do_rename("four").expect("rename returned Some");
 
         let changes = ws_edit.changes.expect("has changes");
         // Two files should have edits: Helper (definition) and Main (reference).

@@ -42,6 +42,10 @@ struct State {
     /// (project resolution failed — retry a full load on the next edit).
     fallback: bool,
     generation: u64,
+    /// The single in-flight diagnostics worker. At most one exists at a time:
+    /// a new `recompute` call joins (cancels) the previous one before spawning
+    /// its replacement.
+    worker: Option<thread::JoinHandle<()>>,
     /// Last non-empty payload per URI, for change-suppression and clearing.
     last_published: BTreeMap<Url, Vec<lsp_types::Diagnostic>>,
 }
@@ -78,6 +82,7 @@ impl State {
             module_of_path: BTreeMap::new(),
             fallback: false,
             generation: 0,
+            worker: None,
             last_published: BTreeMap::new(),
         }
     }
@@ -698,15 +703,34 @@ fn apply_content_change(
     }
 }
 
-/// Spawn a diagnostics worker against the current inputs. A later edit
-/// cancels it (salsa `Cancelled` unwinds out of the query demand); only a
-/// batch matching the loop's current generation is published.
+/// Spawn a diagnostics worker against the current inputs, enforcing a
+/// single-slot latest-wins discipline.
+///
+/// Any previously running worker is cancelled by mutating `state.db` (which
+/// triggers salsa's `Cancelled` unwind in the worker's cloned snapshot) and
+/// then joining the handle before the new worker is spawned. This guarantees
+/// at most one live worker at any time, so fast edits cannot accumulate
+/// unbounded threads or memory.
 fn recompute(state: &mut State, diag_tx: &Sender<DiagnosticsBatch>) {
     let Some(root) = state.root else { return };
     let Some(entry_file) = root.files(&state.db).get(&state.entry_module).copied() else {
         return;
     };
+
+    // Bump the generation first so the outgoing worker's batch is stale.
     state.generation = state.generation.wrapping_add(1);
+
+    // Cancel the previous worker by joining it. The worker holds a cloned
+    // `IpeDatabase`; `sync_source_root` (called on every edit before
+    // `recompute`) already mutates the shared salsa storage, causing the
+    // cloned snapshot's next query to unwind with `Cancelled`. Joining here
+    // ensures the old thread has exited and released its resources before we
+    // allocate the next clone.
+    if let Some(prev) = state.worker.take() {
+        // Ignore join errors — a panicking worker is already logged inside.
+        let _ = prev.join();
+    }
+
     let generation = state.generation;
     let db = state.db.clone();
     let encoding = state.encoding;
@@ -718,7 +742,7 @@ fn recompute(state: &mut State, diag_tx: &Sender<DiagnosticsBatch>) {
         }
     }
     let tx = diag_tx.clone();
-    thread::spawn(move || {
+    state.worker = Some(thread::spawn(move || {
         let outcome = std::panic::catch_unwind(AssertUnwindSafe(|| {
             salsa::Cancelled::catch(AssertUnwindSafe(|| {
                 compute_batch(&db, root, entry_file, &uri_of, &entry_module, encoding)
@@ -736,7 +760,7 @@ fn recompute(state: &mut State, diag_tx: &Sender<DiagnosticsBatch>) {
                 eprintln!("[ipe lsp] internal error: diagnostics worker panicked");
             }
         }
-    });
+    }));
 }
 
 /// Pure worker body: collect, attribute, and map diagnostics to URIs.
@@ -1086,5 +1110,121 @@ mod tests {
                 Ok(_) => {}
             }
         }
+    }
+
+    /// Rapid successive `recompute` calls must not accumulate live worker
+    /// threads, and stale batches must not reach the editor.
+    ///
+    /// Properties verified:
+    /// (a) The worker slot holds at most one `JoinHandle` after each `recompute`
+    ///     (bounded-threads invariant).
+    /// (b) Every batch that arrives in the channel has a generation number no
+    ///     greater than the final state generation (no generation can exceed the
+    ///     current counter).
+    /// (c) The consumer-side filter in `publish` rejects every batch whose
+    ///     generation is less than the final state generation — only the latest
+    ///     batch is ever applied.
+    #[test]
+    fn recompute_holds_at_most_one_live_worker() {
+        let main_path = normalize(Path::new("/lsp-single-worker-test/Main.ipe"));
+        let lib_path = normalize(Path::new("/lsp-single-worker-test/Lib.ipe"));
+        let loader = TwoModuleLoader {
+            fail_next: Arc::new(AtomicBool::new(false)),
+            lib_path,
+        };
+
+        let mut state = State::new(None, PositionEncoding::Utf16);
+        state
+            .overlays
+            .insert(main_path.clone(), MAIN_TEXT.to_owned());
+
+        ensure_project_fresh(&mut state, &loader, &main_path);
+        sync_inputs(&mut state);
+
+        let (diag_tx, diag_rx) = crossbeam_channel::unbounded::<DiagnosticsBatch>();
+
+        // Fire several recompute calls in quick succession. Each call joins the
+        // previous worker before spawning, so the slot holds at most one handle.
+        for _ in 0..5 {
+            recompute(&mut state, &diag_tx);
+            // (a) Worker slot must be occupied — never accumulates.
+            assert!(
+                state.worker.is_some(),
+                "worker slot must be occupied after recompute"
+            );
+        }
+
+        // Wait for the final generation's batch to arrive (the last worker was
+        // just spawned so it may still be running). Then drain any further batches
+        // that arrive in quick succession.
+        let final_generation = state.generation;
+        let (server_side, client) = Connection::memory();
+        let mut delivered_count = 0usize;
+
+        // Block until the final-generation batch arrives.
+        let mut current_generation_seen = false;
+        loop {
+            let batch = diag_rx
+                .recv_timeout(Duration::from_secs(10))
+                .expect("diagnostics batch must arrive within timeout");
+
+            // (b) No batch may claim a generation beyond the current counter.
+            assert!(
+                batch.generation <= final_generation,
+                "batch generation {} exceeds final generation {}",
+                batch.generation,
+                final_generation,
+            );
+            delivered_count += 1;
+            if batch.generation == final_generation {
+                current_generation_seen = true;
+            }
+            // (c) Pass every batch through the consumer-side filter: stale batches
+            // must be silently dropped; only the batch matching the final generation
+            // is applied and forwarded to the editor.
+            publish(&mut state, &server_side, batch);
+
+            if current_generation_seen {
+                break;
+            }
+        }
+
+        // Drain any trailing batches that land within a short window.
+        while let Ok(batch) = diag_rx.recv_timeout(Duration::from_millis(200)) {
+            assert!(
+                batch.generation <= final_generation,
+                "late batch generation {} exceeds final generation {}",
+                batch.generation,
+                final_generation,
+            );
+            delivered_count += 1;
+            publish(&mut state, &server_side, batch);
+        }
+
+        // The final generation must have been delivered.
+        assert!(
+            current_generation_seen,
+            "the latest generation batch must be delivered"
+        );
+
+        // Verify publish suppressed stale notifications. The client receives
+        // notifications only from the final-generation batch; superseded batches
+        // are silently filtered and produce no output.
+        let mut notification_count = 0usize;
+        while let Ok(msg) = client.receiver.recv_timeout(Duration::from_millis(50)) {
+            if let Message::Notification(note) = msg
+                && note.method == PublishDiagnostics::METHOD
+            {
+                notification_count += 1;
+            }
+        }
+        // With two URIs in the test layout, the final batch produces at most 2
+        // notifications. Stale batches must have produced none — so total
+        // notifications must be bounded by the number of URIs, not by the number
+        // of delivered batches.
+        assert!(
+            notification_count <= 2,
+            "stale batches must not produce notifications; got {notification_count} notifications from {delivered_count} total batches"
+        );
     }
 }
