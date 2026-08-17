@@ -9257,7 +9257,7 @@ impl StdlibKernel {
     /// without an omission — the coherence test asserts every `List`/`Dict`/`Set`
     /// kernel returns `Some`.
     #[must_use]
-    pub fn element_capability(self) -> Option<ElementCapability> {
+    pub const fn element_capability(self) -> Option<ElementCapability> {
         match self {
             // `PartialEq` on the element (`list.contains`, dedup): the emitted
             // Rust compares the element, unsound over an `Arc<dyn Fn>` carrier.
@@ -9297,15 +9297,75 @@ impl StdlibKernel {
             | Self::SetPartition => {
                 return Some(ElementCapability::MapperFrontierOpen);
             }
+            // Collection kernels that only move/clone the element: sound over an
+            // `Arc<dyn Fn>` carrier.  Listed EXHAUSTIVELY — no wildcard — so a
+            // newly added List/Dict/Set kernel that does NOT fit in any of the
+            // three existing capability buckets above causes a compile error here
+            // rather than silently inheriting the wrong (permissive) default.
+            // The non-collection tail arm below returns `None`; the intentional
+            // design invariant is: collection kernel ⇒ explicit capability,
+            // non-collection kernel ⇒ `None`.
+            Self::ListMap
+            | Self::ListFilter
+            | Self::ListFoldl
+            | Self::ListFoldr
+            | Self::ListLength
+            | Self::ListHead
+            | Self::ListTail
+            | Self::ListRange
+            | Self::ListReverse
+            | Self::ListAppend
+            | Self::ListConcat
+            | Self::ListTake
+            | Self::ListDrop
+            | Self::ListZip
+            | Self::ListCons
+            | Self::ListIsEmpty
+            | Self::ListConcatMap
+            | Self::ListIndexedMap
+            | Self::ListAny
+            | Self::ListAll
+            | Self::ListFind
+            | Self::ListFilterMap
+            | Self::ListSingleton
+            | Self::ListRepeat
+            | Self::ListSum
+            | Self::ListProduct
+            | Self::ListIntersperse
+            | Self::ListUnzip
+            | Self::DictEmpty
+            | Self::DictIsEmpty
+            | Self::DictSize
+            | Self::DictKeys
+            | Self::DictValues
+            | Self::DictToList
+            | Self::DictFromList
+            | Self::DictGet
+            | Self::DictMember
+            | Self::DictRemove
+            | Self::DictUnion
+            | Self::DictInsert
+            | Self::DictSingleton
+            | Self::DictIntersect
+            | Self::DictDiff
+            | Self::SetEmpty
+            | Self::SetSize
+            | Self::SetToList
+            | Self::SetFromList
+            | Self::SetMember
+            | Self::SetInsert
+            | Self::SetRemove
+            | Self::SetUnion
+            | Self::SetIntersect
+            | Self::SetDiff
+            | Self::SetIsEmpty
+            | Self::SetSingleton => {
+                return Some(ElementCapability::CloneOk);
+            }
             _ => {}
         }
-        // Every remaining `List`/`Dict`/`Set` kernel operates on its element only
-        // by move/clone (pure structural), sound over an `Arc` element. A
-        // non-collection kernel carries no element capability.
-        match self.def().qualifier {
-            "List" | "Dict" | "Set" => Some(ElementCapability::CloneOk),
-            _ => None,
-        }
+        // Non-collection kernels carry no element capability.
+        None
     }
 
     /// `true` when this variant belongs to the TEA (`Cmd` / `Sub` /
@@ -11763,5 +11823,79 @@ mod tests {
             "PubSubPublishNoEcho must map to RuntimeModule::Web — \
              pubsub_publish_no_echo is defined in ipe_runtime::web::pubsub"
         );
+    }
+
+    /// Fail-closed classification invariant (kernels-1): the `CloneOk` arm in
+    /// `element_capability` is now an EXPLICIT exhaustive list, not a
+    /// qualifier-wildcard default.  This test pins the soundness classification
+    /// of every wired `List`/`Dict`/`Set` kernel so a newly added collection
+    /// kernel that is NOT added to any explicit arm causes a compile error in
+    /// `element_capability` rather than silently defaulting to `CloneOk`
+    /// (which could let an unsound fn-element kernel emit `Arc<dyn Fn>`-
+    /// incompatible Rust).
+    ///
+    /// The test asserts that:
+    /// * Every `List`/`Dict`/`Set` kernel returns `Some(_)` (the existing
+    ///   coherence test already asserts this for all kernels; this pins it
+    ///   for the `CloneOk` family specifically).
+    /// * No non-collection kernel returns `Some(_)`.
+    /// * The kernels known to require ordering/equality/open-frontier do NOT
+    ///   return `CloneOk` (they are in the other explicit arms; `CloneOk` is
+    ///   for pure structural move/clone access only).
+    #[test]
+    fn collection_kernel_capability_is_never_implicitly_permissive() {
+        use super::ElementCapability;
+
+        // Kernels that must NOT be CloneOk — they require eq/ord or have an
+        // open mapper frontier.  Any other capability is fine for them.
+        let non_clone_ok = [
+            StdlibKernel::ListMember,
+            StdlibKernel::ListUnique,
+            StdlibKernel::ListSort,
+            StdlibKernel::ListMaximum,
+            StdlibKernel::ListMinimum,
+            StdlibKernel::ListPartition,
+            StdlibKernel::ListSortBy,
+            StdlibKernel::ListSortWith,
+            StdlibKernel::ListMap2,
+            StdlibKernel::ListMap3,
+            StdlibKernel::ListMap4,
+            StdlibKernel::ListMap5,
+            StdlibKernel::DictMap,
+            StdlibKernel::DictFoldl,
+            StdlibKernel::DictFoldr,
+            StdlibKernel::DictFilter,
+            StdlibKernel::DictPartition,
+            StdlibKernel::DictUpdate,
+            StdlibKernel::SetMap,
+            StdlibKernel::SetFilter,
+            StdlibKernel::SetFoldl,
+            StdlibKernel::SetFoldr,
+            StdlibKernel::SetPartition,
+        ];
+
+        for k in StdlibKernel::ALL {
+            let is_collection = matches!(k.def().qualifier, "List" | "Dict" | "Set");
+            let cap = k.element_capability();
+
+            // Every collection kernel must return Some (the exhaustive explicit
+            // match is the compile-time guarantee; this is the runtime check).
+            assert_eq!(
+                cap.is_some(),
+                is_collection,
+                "{k:?}: collection kernel must have Some capability, \
+                 non-collection must have None"
+            );
+
+            // A kernel in the non-CloneOk set must NOT be CloneOk.
+            if non_clone_ok.contains(k) {
+                assert_ne!(
+                    cap,
+                    Some(ElementCapability::CloneOk),
+                    "{k:?} is in the non-CloneOk set but returned CloneOk — \
+                     it requires ordering/equality or has an open mapper frontier"
+                );
+            }
+        }
     }
 }
