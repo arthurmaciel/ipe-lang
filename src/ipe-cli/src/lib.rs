@@ -2400,7 +2400,7 @@ pub fn resolve_runtime() -> Result<PathBuf, CliError> {
 /// # Errors
 /// [`CliError::RuntimeNotFound`] / [`CliError::Io`] from [`resolve_runtime`] when
 /// a vendored tree is required but cannot be located.
-fn resolve_vendored_runtime_dir(
+pub(crate) fn resolve_vendored_runtime_dir(
     cli_override: Option<String>,
     needs_vendored: bool,
 ) -> Result<PathBuf, CliError> {
