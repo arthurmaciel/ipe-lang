@@ -11,6 +11,10 @@
 //! versions are [`semver::Version`] and whose capabilities are [`Capability`], so
 //! a malformed version or an unknown capability name is a hard error at read
 //! time, never a resolution-time surprise.
+//!
+//! [`SourceUrl`] and [`CommitId`] are typed newtypes that gate the two
+//! publisher-controlled fields. An unvalidated string can never reach the `git`
+//! subprocess — it must first pass through one of these constructors.
 
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
@@ -19,6 +23,119 @@ use std::str::FromStr as _;
 use ipe_ir::Capability;
 
 use crate::CliError;
+
+/// A validated source-repository URL accepted by the package index.
+///
+/// The accept set covers the network transports (`https://`, `git://`, `ssh://`,
+/// `file://`) and bare absolute paths (a leading `/`). Any value that begins
+/// with `-` (option injection) or contains `::` (git transport helpers such as
+/// `ext::` or `fd::`, the real RCE vector) is rejected at parse time so a
+/// malicious index entry can never reach the `git` subprocess.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SourceUrl(String);
+
+impl SourceUrl {
+    /// Parse a raw string from the index into a [`SourceUrl`], rejecting
+    /// injection-shaped values.
+    ///
+    /// Accepted: `https://`, `git://`, `ssh://`, `file://`, and bare absolute
+    /// paths (starting with `/`). Rejected: a leading `-` (git flag injection)
+    /// or `::` anywhere (transport-helper execution, the RCE vector).
+    ///
+    /// # Errors
+    /// [`CliError::Resolve`] when the value is not an accepted source form.
+    pub fn parse(pkg: &str, raw: &str) -> Result<Self, CliError> {
+        let allowed = raw.starts_with("https://")
+            || raw.starts_with("git://")
+            || raw.starts_with("ssh://")
+            || raw.starts_with("file://")
+            || raw.starts_with('/');
+        // Fail closed: absent proof the transport is safe, reject.
+        // `-`-leading values would be parsed as git flags; `::` introduces
+        // transport helpers (e.g. `ext::`) that execute arbitrary commands.
+        if !allowed || raw.starts_with('-') || raw.contains("::") {
+            return Err(CliError::Resolve(format!(
+                "package `{pkg}`: `source` must be an https://, git://, ssh://, or file:// URL \
+                 (or a bare absolute path), got: {raw:?}"
+            )));
+        }
+        Ok(Self(raw.to_owned()))
+    }
+
+    /// The validated URL string, safe to pass to `git clone -- <url> <dest>`.
+    #[must_use]
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl std::fmt::Display for SourceUrl {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
+/// A validated commit identifier accepted by the package index.
+///
+/// Accepts full commit hashes, abbreviated hashes, ref names, and `HEAD` —
+/// anything git itself accepts — as long as the value is not injection-shaped.
+/// Rejected: a leading `-` (git flag injection), `::` anywhere (transport
+/// helper), whitespace or control characters, git refspec metacharacters
+/// (`..`, `~`, `^`, `:`, `?`, `*`, `[`, `\`, `@{`), and a trailing `/` or
+/// `.lock` (path-confusion vectors).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct CommitId(String);
+
+impl CommitId {
+    /// Parse a raw string into a [`CommitId`], rejecting injection-shaped values.
+    ///
+    /// Accepts any non-injection ref name, including full/abbreviated hashes,
+    /// branch names, and `HEAD`. Rejected: a leading `-`, `::`, whitespace,
+    /// control chars, git refspec metacharacters (`..`, `~`, `^`, `:`, `?`,
+    /// `*`, `[`, `\`, `@{`), trailing `/`, and `.lock` suffix.
+    ///
+    /// # Errors
+    /// [`CliError::Resolve`] when the value is injection-shaped.
+    pub fn parse(pkg: &str, raw: &str) -> Result<Self, CliError> {
+        let injection = raw.is_empty()
+            || raw.starts_with('-')
+            || raw.contains("::")
+            || raw
+                .chars()
+                .any(|c| c.is_ascii_whitespace() || c.is_ascii_control())
+            || raw.contains("..")
+            || raw.contains('~')
+            || raw.contains('^')
+            || raw.contains(':')
+            || raw.contains('?')
+            || raw.contains('*')
+            || raw.contains('[')
+            || raw.contains('\\')
+            || raw.contains("@{")
+            || raw.ends_with('/')
+            || std::path::Path::new(raw)
+                .extension()
+                .is_some_and(|ext| ext.eq_ignore_ascii_case("lock"));
+        if injection {
+            return Err(CliError::Resolve(format!(
+                "package `{pkg}`: `rev` contains an injection-shaped value, got: {raw:?}"
+            )));
+        }
+        Ok(Self(raw.to_owned()))
+    }
+
+    /// The validated commit-id string, safe to pass to `git checkout -- <rev>`.
+    #[must_use]
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl std::fmt::Display for CommitId {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.0)
+    }
+}
 
 /// A parsed index entry: one package and every version published for it.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -35,15 +152,17 @@ pub struct IndexEntry {
 /// One published version of a package: where its source lives, exactly which
 /// revision, the content hash to verify the fetched tree against, and the
 /// capabilities the publisher declared.
+///
+/// `source` and `rev` are typed ([`SourceUrl`] and [`CommitId`]) so an
+/// unvalidated publisher-controlled string can never reach the `git` subprocess.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct EntryVersion {
     /// The exact published version.
     pub version: semver::Version,
-    /// The source repository URL, fetched with `git`.
-    pub source: String,
-    /// The exact revision (commit) fetched — a version is pinned, never a
-    /// moving branch.
-    pub rev: String,
+    /// The source repository URL, validated at parse time.
+    pub source: SourceUrl,
+    /// The pinned commit hash, validated at parse time.
+    pub rev: CommitId,
     /// The sha256 of the source tree at `rev`. A fetched tree is trusted only
     /// when its hash equals this (verify-before-trust, in `crate::resolve`).
     pub sha256: String,
@@ -271,9 +390,13 @@ impl RawVersion {
                 "package `{name}`: `{version_str}` is not a valid version: {e}"
             ))
         })?;
-        let source = self.source.ok_or_else(|| missing("source"))?;
-        let rev = self.rev.ok_or_else(|| missing("rev"))?;
+        let raw_source = self.source.ok_or_else(|| missing("source"))?;
+        let raw_rev = self.rev.ok_or_else(|| missing("rev"))?;
         let sha256 = self.sha256.ok_or_else(|| missing("sha256"))?;
+        // Parse-don't-validate: the typed constructors reject any value outside
+        // the allow-list before it can reach `git`.
+        let source = SourceUrl::parse(name, &raw_source)?;
+        let rev = CommitId::parse(name, &raw_rev)?;
         let capabilities = parse_capabilities(name, self.capabilities.as_deref())?;
         Ok(EntryVersion {
             version,
@@ -325,9 +448,13 @@ fn unquote(value: &str) -> &str {
 
 #[cfg(test)]
 mod tests {
-    use super::{IndexEntry, read_entry, resolve_version};
+    use super::{CommitId, IndexEntry, SourceUrl, read_entry, resolve_version};
     use ipe_ir::Capability;
     use std::path::{Path, PathBuf};
+
+    /// A 40-char lowercase hex placeholder rev used across fixtures. Full-length
+    /// SHA-1 format, as required by [`CommitId`].
+    const FIXTURE_REV: &str = "a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2";
 
     /// Write a minimal fixture index with one package publishing the given
     /// versions, and return the index root. Every version shares one placeholder
@@ -341,7 +468,7 @@ mod tests {
             let _ = write!(
                 text,
                 "\n[[version]]\nversion = \"{v}\"\nsource = \"https://example.invalid/{name}\"\n\
-                 rev = \"deadbeef\"\nsha256 = \"00\"\ncapabilities = [\"network\"]\n"
+                 rev = \"{FIXTURE_REV}\"\nsha256 = \"00\"\ncapabilities = [\"network\"]\n"
             );
         }
         std::fs::write(packages.join(format!("{name}.toml")), text).expect("write entry");
@@ -401,9 +528,11 @@ mod tests {
         std::fs::create_dir_all(root.join("packages")).expect("packages dir");
         std::fs::write(
             root.join("packages").join("weird.toml"),
-            "publisher = \"tester\"\n\n[[version]]\nversion = \"1.0.0\"\n\
-             source = \"https://example.invalid/weird\"\nrev = \"ab\"\nsha256 = \"00\"\n\
-             capabilities = [\"telepathy\"]\n",
+            format!(
+                "publisher = \"tester\"\n\n[[version]]\nversion = \"1.0.0\"\n\
+                 source = \"https://example.invalid/weird\"\nrev = \"{FIXTURE_REV}\"\n\
+                 sha256 = \"00\"\ncapabilities = [\"telepathy\"]\n"
+            ),
         )
         .expect("write entry");
         let err = read_entry(&root, "weird").unwrap_err();
@@ -415,11 +544,14 @@ mod tests {
     fn a_missing_per_version_field_is_rejected() {
         let root = temp_dir("missing-field");
         std::fs::create_dir_all(root.join("packages")).expect("packages dir");
-        // No `sha256` — the integrity anchor is mandatory.
+        // No `sha256` — the integrity anchor is mandatory, so validation rejects
+        // on the missing field before even reaching transport/commit validation.
         std::fs::write(
             root.join("packages").join("nohash.toml"),
-            "publisher = \"tester\"\n\n[[version]]\nversion = \"1.0.0\"\n\
-             source = \"https://example.invalid/nohash\"\nrev = \"ab\"\n",
+            format!(
+                "publisher = \"tester\"\n\n[[version]]\nversion = \"1.0.0\"\n\
+                 source = \"https://example.invalid/nohash\"\nrev = \"{FIXTURE_REV}\"\n"
+            ),
         )
         .expect("write entry");
         let err = read_entry(&root, "nohash").unwrap_err();
@@ -450,9 +582,11 @@ mod tests {
         let path = packages.join("weird.toml");
         std::fs::write(
             &path,
-            "publisher = \"tester\"\n\n[[version]]\nversion = \"1.0.0\"\n\
-             source = \"https://example.invalid/weird\"\nrev = \"ab\"\nsha256 = \"00\"\n\
-             capabilities = [\"telepathy\"]\n",
+            format!(
+                "publisher = \"tester\"\n\n[[version]]\nversion = \"1.0.0\"\n\
+                 source = \"https://example.invalid/weird\"\nrev = \"{FIXTURE_REV}\"\n\
+                 sha256 = \"00\"\ncapabilities = [\"telepathy\"]\n"
+            ),
         )
         .expect("write entry");
         let err = validate_entry_file(&path).unwrap_err();
@@ -467,11 +601,14 @@ mod tests {
         let packages = root.join("packages");
         std::fs::create_dir_all(&packages).expect("packages dir");
         let path = packages.join("nohash.toml");
-        // No `sha256` — the integrity anchor is mandatory, so validation rejects.
+        // No `sha256` — the integrity anchor is mandatory, so validation rejects
+        // on the missing field before reaching transport/commit validation.
         std::fs::write(
             &path,
-            "publisher = \"tester\"\n\n[[version]]\nversion = \"1.0.0\"\n\
-             source = \"https://example.invalid/nohash\"\nrev = \"ab\"\n",
+            format!(
+                "publisher = \"tester\"\n\n[[version]]\nversion = \"1.0.0\"\n\
+                 source = \"https://example.invalid/nohash\"\nrev = \"{FIXTURE_REV}\"\n"
+            ),
         )
         .expect("write entry");
         let err = validate_entry_file(&path).unwrap_err();
@@ -492,6 +629,154 @@ mod tests {
             .map(|v| v.version.to_string())
             .collect();
         assert_eq!(versions, vec!["0.1.0", "0.2.0", "0.3.0"]);
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    // --- SourceUrl parse-boundary tests ---
+
+    #[test]
+    fn source_url_accepts_https() {
+        assert!(SourceUrl::parse("p", "https://github.com/user/repo").is_ok());
+    }
+
+    #[test]
+    fn source_url_accepts_git_and_ssh() {
+        assert!(SourceUrl::parse("p", "git://github.com/user/repo").is_ok());
+        assert!(SourceUrl::parse("p", "ssh://git@github.com/user/repo").is_ok());
+    }
+
+    #[test]
+    fn source_url_rejects_ext_transport_helper() {
+        // `ext::` spawns an arbitrary shell command at clone time — RCE vector.
+        let err = SourceUrl::parse("p", "ext::sh -c 'id > /tmp/pwned'").unwrap_err();
+        assert!(format!("{err}").contains("https://"), "{err}");
+    }
+
+    #[test]
+    fn source_url_rejects_dash_leading_value() {
+        // A value starting with `-` would be parsed by git as a flag.
+        let err = SourceUrl::parse("p", "--upload-pack=evil").unwrap_err();
+        assert!(format!("{err}").contains("https://"), "{err}");
+    }
+
+    #[test]
+    fn source_url_accepts_file_scheme() {
+        // `file://` is on the allow-list so local and test-fixture repos work.
+        assert!(SourceUrl::parse("p", "file:///home/user/repo").is_ok());
+    }
+
+    #[test]
+    fn source_url_accepts_bare_absolute_path() {
+        assert!(SourceUrl::parse("p", "/home/user/repo").is_ok());
+    }
+
+    #[test]
+    fn source_url_rejects_fd_transport() {
+        let err = SourceUrl::parse("p", "fd::4").unwrap_err();
+        assert!(format!("{err}").contains("https://"), "{err}");
+    }
+
+    // --- CommitId parse-boundary tests ---
+
+    #[test]
+    fn commit_id_accepts_40_char_lowercase_hex() {
+        assert!(CommitId::parse("p", FIXTURE_REV).is_ok());
+    }
+
+    #[test]
+    fn commit_id_accepts_64_char_sha256() {
+        let sha256_rev = "a".repeat(64);
+        assert!(CommitId::parse("p", &sha256_rev).is_ok());
+    }
+
+    #[test]
+    fn commit_id_accepts_short_hex() {
+        // Abbreviated hashes are valid ref names with no injection shape.
+        assert!(CommitId::parse("p", "deadbeef").is_ok());
+        assert!(CommitId::parse("p", "abc").is_ok());
+        assert!(CommitId::parse("p", "00").is_ok());
+    }
+
+    #[test]
+    fn commit_id_accepts_branch_name() {
+        // Branch names are valid ref names with no injection shape.
+        assert!(CommitId::parse("p", "main").is_ok());
+        assert!(CommitId::parse("p", "HEAD").is_ok());
+    }
+
+    #[test]
+    fn commit_id_accepts_uppercase_hex() {
+        // Mixed-case is not injection-shaped.
+        assert!(CommitId::parse("p", "A1B2C3D4E5F6A1B2C3D4E5F6A1B2C3D4E5F6A1B2").is_ok());
+    }
+
+    #[test]
+    fn commit_id_rejects_dash_leading_value() {
+        // A `-`-leading rev would be parsed by git as a flag — injection shape.
+        let err = CommitId::parse("p", "-S injected").unwrap_err();
+        assert!(format!("{err}").contains("rev"), "{err}");
+    }
+
+    #[test]
+    fn commit_id_rejects_double_dot() {
+        // `..` is a refspec metacharacter — injection shape.
+        let err = CommitId::parse("p", "HEAD..main").unwrap_err();
+        assert!(format!("{err}").contains("rev"), "{err}");
+    }
+
+    #[test]
+    fn commit_id_rejects_transport_helper_colons() {
+        // `::` is the transport-helper separator — RCE vector.
+        let err = CommitId::parse("p", "ext::evil").unwrap_err();
+        assert!(format!("{err}").contains("rev"), "{err}");
+    }
+
+    #[test]
+    fn commit_id_rejects_at_brace() {
+        // `@{` is a git reflog selector — injection shape.
+        let err = CommitId::parse("p", "HEAD@{0}").unwrap_err();
+        assert!(format!("{err}").contains("rev"), "{err}");
+    }
+
+    #[test]
+    fn malicious_index_entry_is_rejected_at_parse_time() {
+        // An entry with `source = "ext::sh -c …"` must be rejected by
+        // `read_entry` before any git invocation is possible.
+        let root = temp_dir("malicious");
+        let packages = root.join("packages");
+        std::fs::create_dir_all(&packages).expect("packages dir");
+        std::fs::write(
+            packages.join("evil.toml"),
+            format!(
+                "publisher = \"attacker\"\n\n[[version]]\nversion = \"1.0.0\"\n\
+                 source = \"ext::sh -c 'id > /tmp/pwned'\"\nrev = \"{FIXTURE_REV}\"\n\
+                 sha256 = \"00\"\ncapabilities = []\n"
+            ),
+        )
+        .expect("write entry");
+        let err = read_entry(&root, "evil").unwrap_err();
+        let msg = format!("{err}");
+        assert!(msg.contains("source"), "{msg}");
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn injection_shaped_rev_in_index_entry_is_rejected_at_parse_time() {
+        // A `-`-leading `rev` must be rejected by `read_entry` before any git
+        // invocation — flag injection is the real threat, not plain ref names.
+        let root = temp_dir("bad-rev");
+        let packages = root.join("packages");
+        std::fs::create_dir_all(&packages).expect("packages dir");
+        std::fs::write(
+            packages.join("badrev.toml"),
+            "publisher = \"tester\"\n\n[[version]]\nversion = \"1.0.0\"\n\
+             source = \"https://example.invalid/badrev\"\nrev = \"-S injected\"\n\
+             sha256 = \"00\"\ncapabilities = []\n",
+        )
+        .expect("write entry");
+        let err = read_entry(&root, "badrev").unwrap_err();
+        let msg = format!("{err}");
+        assert!(msg.contains("rev"), "{msg}");
         let _ = std::fs::remove_dir_all(&root);
     }
 }
