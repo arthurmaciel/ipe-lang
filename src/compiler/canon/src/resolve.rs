@@ -107,7 +107,7 @@ const TYPE_EXPANSION_NODE_LIMIT: u32 = 100_000;
 ///     builtin resolving to `UiPlain`. Multiple shipped `.ipe` fixtures
 ///     (`dict_adt_gate`, `set_adt_fn_gate`, `mm_local_pkg`, …) already
 ///     declare `type Color` as a benign sample ADT and now lower correctly.
-const RESERVED_BUILTIN_TYPES: &[&str] = &[
+pub const RESERVED_BUILTIN_TYPES: &[&str] = &[
     "Int",
     "Float",
     "Bool",
@@ -135,6 +135,12 @@ const RESERVED_BUILTIN_TYPES: &[&str] = &[
     // reserved for the same reason as `SqlFragment`: a security-tier type
     // must not be shadowable by user code.
     "Secret",
+    // `Ipe.Jwt`'s opaque signing-algorithm descriptor — shares the `Secret`
+    // runtime representation (sealed, no Debug/Display surface on key material).
+    // Reserved because its lowerer arm sits above the `enum_variants` guard
+    // in both `ir_type_from_canon` and `ir_type_from_ty`, fixing a silent
+    // SEAL break where a user `type Algorithm` would be mis-lowered.
+    "Algorithm",
     // `Ipe.Path`'s opaque validated filesystem-path type — reserved for the
     // same reason: a security-tier type (the traversal/NUL-rejection boundary)
     // must not be shadowable by user code.
@@ -153,6 +159,21 @@ const RESERVED_BUILTIN_TYPES: &[&str] = &[
     // user code, or a forged look-alike `Dsn` could smuggle a host/credential
     // past the parser once a connect step consumes it.
     "Dsn",
+    // `Ipe.Crypto`'s opaque role-typed crypto key — reserved because a user
+    // `type Key` would be silently mis-lowered to `IrType::CryptoKey` (the
+    // lowerer arm sits above the `enum_variants` guard), causing SEAL breaks
+    // wherever the user's ADT constructors are used.
+    "Key",
+    // `Ipe.Crypto`'s opaque HMAC output — reserved for the same reason as `Key`.
+    "Mac",
+    // `Ipe.Email`'s opaque validated email address — reserved because its lowerer
+    // arm sits above the `enum_variants` guard; a user `type EmailAddress` would
+    // be silently mis-lowered to `IrType::EmailAddress`, breaking the SEAL.
+    "EmailAddress",
+    // `Ipe.Locale`'s opaque BCP-47 locale handle — reserved for the same reason:
+    // its lowerer arm sits above the `enum_variants` guard and a user
+    // `type Locale` would be mis-lowered.
+    "Locale",
     // `Ipe.Db`'s external-connection handle `Connection mode` and its two phantom
     // access-mode markers. Reserved because the read-only-by-type guarantee is the
     // load-bearing security property: a user `type Connection …` or a shadowed
@@ -614,6 +635,15 @@ const STDLIB_DEFINABLE_CARRIER_TYPES: &[&str] = &[
     // in its export set. User modules cannot shadow it (IPE-N0026 still
     // applies to `ModuleOrigin::User`).
     "Topic",
+    // Opaque crypto primitives (`Ipe.Crypto`). Each arm sits above the
+    // `enum_variants` guard, so the stdlib module must re-declare the name to
+    // export it. User modules cannot shadow these (IPE-N0026).
+    "Key",
+    "Mac",
+    // Opaque validated e-mail address (`Ipe.Email`). Same pattern as `Key`.
+    "EmailAddress",
+    // Opaque BCP-47 locale handle (`Ipe.Locale`). Same pattern as `Key`.
+    "Locale",
 ];
 
 /// Reject a `type` / `type alias` whose name shadows a reserved built-in type

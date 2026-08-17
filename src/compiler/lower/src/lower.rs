@@ -131,6 +131,45 @@ fn task_arg_bug() -> Diagnostic {
     )
 }
 
+/// The security-tier and SEAL-critical opaque builtin names whose lowerer arm
+/// sits ABOVE the `enum_variants` guard AND whose reservation in
+/// `ipe_canon::RESERVED_BUILTIN_TYPES` is the structural guarantee preventing
+/// a user `type <Name>` from being silently mis-lowered.
+///
+/// Invariant (tested by `reserved_opaque_names_above_guard_are_reserved_in_canon`):
+/// every name here MUST be present in `ipe_canon::RESERVED_BUILTIN_TYPES`.
+/// When adding a new opaque builtin with an above-guard fixed-IrType arm,
+/// add its name to BOTH `RESERVED_BUILTIN_TYPES` (resolve.rs) AND this list —
+/// the test then prevents future drift between the two.
+///
+/// Names with above-guard arms that are intentionally NOT reserved (e.g.
+/// `Order`, `Decimal`, `ErrorKind` — whose arms are user-shadowable via the
+/// program-enum path) are deliberately excluded; fixing those is a separate
+/// concern from the four issues this change addresses.
+#[cfg(test)]
+pub const OPAQUE_NAMES_ABOVE_GUARD: &[&str] = &[
+    // Security-tier sealed handles added to RESERVED_BUILTIN_TYPES by
+    // canon-1 / canon-2 fixes (issues #1047 and #1048).
+    "SqlFragment",
+    "Secret",
+    "Algorithm",
+    "Path",
+    "Regex",
+    "Url",
+    "Dsn",
+    "Key",
+    "Mac",
+    "EmailAddress",
+    "Locale",
+    "Connection",
+    "ReadOnly",
+    "ReadWrite",
+    "Topic",
+    "StreamId",
+    "ChunkEvent",
+    "HttpMethod",
+];
+
 /// The expected TYPE shape of one field of the canonical `HttpRequest`
 /// record — `String` / `Bool` / `Int` / `List (String, String)` (the
 /// header-pair list). Ground truth mirrors
@@ -10338,27 +10377,45 @@ pub fn count_destructure_param_sites(m: &canon::Module) -> usize {
         .sum()
 }
 
-/// Count every bare `any`-wildcard occurrence in PARAM position across every
-/// [`canon::Def::Typed`] annotation in the module — the pre-sizing pass for
-/// [`Lowerer::any_param_binders`] (AUD-01 seal fix: each occurrence needs its
-/// OWN fresh symbol so it doesn't collapse onto every other `any` occurrence's
-/// shared interned Symbol; see [`Lowerer::split_typed_sig`]).
+/// Count every `any`-wildcard occurrence (bare OR nested inside a container)
+/// in PARAM position across every [`canon::Def::Typed`] annotation in the
+/// module — the pre-sizing pass for [`Lowerer::any_param_binders`].
 ///
-/// Only `any` can appear as a bare param-position type variable without being
-/// quantified by the def (a genuine type parameter is fine to share — only
-/// `any` gets a fresh flex UV per occurrence in the checker). Only walks the
-/// PARAM positions of the top-level annotation's arrow chain — the return
-/// position is handled separately (the existing region-based return-`any`
-/// substitution) and lambdas never carry their own annotation in Ipê, so no
-/// body/lambda recursion is needed here (unlike
-/// [`count_destructure_param_sites`]).
+/// Each `any` occurrence — whether a bare `any` param or an `any` nested
+/// inside `List any`, `Maybe any`, `Result e any`, a tuple/record/fn field,
+/// etc. — needs its OWN fresh symbol so independent occurrences lower to
+/// distinct generics (see AUD-01 and [`Lowerer::split_typed_sig`]).
+///
+/// Only `any` gets a fresh UV per occurrence in the checker; genuine named
+/// type variables share one symbol and are fine. Counts only PARAM positions
+/// of the top-level annotation's arrow chain — the return position is handled
+/// by the region-based return-`any` substitution; lambdas never carry their
+/// own annotation in Ipê.
 ///
 /// Over-counting is harmless (a few unused interned symbols); under-counting
-/// would let [`Lowerer::fresh_any_param_symbol`]'s cursor overrun, which fails
-/// closed as a [`bug`] — never an index panic, never a silent reuse.
+/// would let [`Lowerer::fresh_any_param_symbol`]'s cursor overrun, which
+/// fails closed as a [`bug`] — never an index panic, never a silent reuse.
 pub fn count_any_param_sites(m: &canon::Module, interner: &Interner) -> usize {
-    fn is_any_var(t: &canon::Type, interner: &Interner) -> bool {
-        matches!(t, canon::Type::Var(v) if interner.resolve(*v) == Some("any"))
+    fn count_any_in_type(t: &canon::Type, interner: &Interner) -> usize {
+        match t {
+            canon::Type::Var(v) => usize::from(interner.resolve(*v) == Some("any")),
+            canon::Type::Con { args, .. } => {
+                args.iter().map(|a| count_any_in_type(a, interner)).sum()
+            }
+            canon::Type::Lambda(arg, rest) => {
+                count_any_in_type(arg, interner) + count_any_in_type(rest, interner)
+            }
+            canon::Type::Tuple(elems) => elems.iter().map(|e| count_any_in_type(e, interner)).sum(),
+            canon::Type::Record(fields) => fields
+                .iter()
+                .map(|(_, f)| count_any_in_type(f, interner))
+                .sum(),
+            canon::Type::RecordOpen(_, fields) => fields
+                .iter()
+                .map(|(_, f)| count_any_in_type(f, interner))
+                .sum(),
+            canon::Type::Unit => 0,
+        }
     }
     m.defs
         .iter()
@@ -10369,9 +10426,7 @@ pub fn count_any_param_sites(m: &canon::Module, interner: &Interner) -> usize {
             let mut cur = ty;
             let mut n = 0;
             while let canon::Type::Lambda(arg, rest) = cur {
-                if is_any_var(arg, interner) {
-                    n += 1;
-                }
+                n += count_any_in_type(arg, interner);
                 cur = rest.as_ref();
             }
             n
@@ -10944,6 +10999,93 @@ impl<'a> Lowerer<'a> {
         })?;
         self.any_param_cursor.set(i + 1);
         Ok(sym)
+    }
+
+    /// Walk `ty` and replace every `IrType::Generic(s)` where `s` resolves to
+    /// `"any"` with a fresh, distinct symbol from the `any_param_binders` pool.
+    /// Push each minted symbol into `minted` so the caller can extend
+    /// `any_syms_minted` and surface the new generics in the function's
+    /// `type_params`.
+    ///
+    /// This closes the AUD-01 class for NESTED `any` occurrences (e.g.
+    /// `List any`, `Maybe any`, `Result e any`, a tuple/record/fn with `any`).
+    /// The top-level bare-`any` case is the same structural form, so the walk
+    /// handles both uniformly — `split_typed_sig` no longer needs a separate
+    /// outer-only check.
+    fn freshen_any_generics(&self, ty: IrType, minted: &mut Vec<Symbol>) -> DResult<IrType> {
+        match ty {
+            IrType::Generic(sym) if self.interner.resolve(sym) == Some("any") => {
+                let fresh = self.fresh_any_param_symbol()?;
+                minted.push(fresh);
+                Ok(IrType::Generic(fresh))
+            }
+            IrType::List(elem) => Ok(IrType::List(Box::new(
+                self.freshen_any_generics(*elem, minted)?,
+            ))),
+            IrType::Dict(k, v) => Ok(IrType::Dict(
+                Box::new(self.freshen_any_generics(*k, minted)?),
+                Box::new(self.freshen_any_generics(*v, minted)?),
+            )),
+            IrType::Set(elem) => Ok(IrType::Set(Box::new(
+                self.freshen_any_generics(*elem, minted)?,
+            ))),
+            IrType::Maybe(inner) => Ok(IrType::Maybe(Box::new(
+                self.freshen_any_generics(*inner, minted)?,
+            ))),
+            IrType::Result(e, a) => Ok(IrType::Result(
+                Box::new(self.freshen_any_generics(*e, minted)?),
+                Box::new(self.freshen_any_generics(*a, minted)?),
+            )),
+            IrType::Task(inner) => Ok(IrType::Task(Box::new(
+                self.freshen_any_generics(*inner, minted)?,
+            ))),
+            IrType::Tuple(elems) => {
+                let mut out = Vec::with_capacity(elems.len());
+                for e in elems {
+                    out.push(self.freshen_any_generics(e, minted)?);
+                }
+                Ok(IrType::Tuple(out))
+            }
+            IrType::Record(fields) => {
+                let mut out = BTreeMap::new();
+                for (k, v) in fields {
+                    out.insert(k, self.freshen_any_generics(v, minted)?);
+                }
+                Ok(IrType::Record(out))
+            }
+            IrType::Fun(params, ret) => {
+                let mut out = Vec::with_capacity(params.len());
+                for p in params {
+                    out.push(self.freshen_any_generics(p, minted)?);
+                }
+                Ok(IrType::Fun(
+                    out,
+                    Box::new(self.freshen_any_generics(*ret, minted)?),
+                ))
+            }
+            IrType::Decoder(inner) => Ok(IrType::Decoder(Box::new(
+                self.freshen_any_generics(*inner, minted)?,
+            ))),
+            IrType::Cmd(inner) => Ok(IrType::Cmd(Box::new(
+                self.freshen_any_generics(*inner, minted)?,
+            ))),
+            IrType::Sub(inner) => Ok(IrType::Sub(Box::new(
+                self.freshen_any_generics(*inner, minted)?,
+            ))),
+            IrType::Enum { home, name, args } => {
+                let mut out = Vec::with_capacity(args.len());
+                for a in args {
+                    out.push(self.freshen_any_generics(a, minted)?);
+                }
+                Ok(IrType::Enum {
+                    home,
+                    name,
+                    args: out,
+                })
+            }
+            // Leaf types that never contain a Generic — pass through.
+            other => Ok(other),
+        }
     }
 
     /// Hand out the next globally-unique destructure-thunk binder from
@@ -12760,32 +12902,25 @@ impl<'a> Lowerer<'a> {
             } else {
                 self.ir_type_from_canon(arg, generics)?
             };
-            // Per-occurrence `any` seal fix (AUD-01): a bare param-position `any`
-            // lowers to `IrType::Generic(any_sym)` above — the SAME interned
-            // Symbol for EVERY occurrence, so `f : any -> any -> Int` emits
-            // `fn f<T1>(a:T1,b:T1)`, and a well-typed call `f "x" 3` (the checker
-            // gives each `any` occurrence its own fresh flex UV, so this program
-            // IS well-typed) fails cargo E0308 (exit-0-then-cargo-fail).
+            // Per-occurrence `any` seal fix (AUD-01 — structural fix): every
+            // `any` occurrence — bare (`any`) OR nested inside a container
+            // (`List any`, `Maybe any`, `Result e any`, a tuple/record/fn
+            // argument with `any`) — lowers to `IrType::Generic(any_sym)` with
+            // the SAME interned Symbol for every occurrence.  Two independent
+            // `any` occurrences collapsing to one generic means
+            // `f : List any -> Maybe any` emits `fn f<T>(a:Vec<T>) -> Option<T>`
+            // instead of `fn f<T0,T1>(a:Vec<T0>) -> Option<T1>`, making a
+            // well-typed call fail cargo E0308 (SEAL break).
             //
-            // Fix: give THIS occurrence a distinct fresh symbol from the
-            // `any_param_binders` pool (pre-sized by `count_any_param_sites`,
-            // pre-interned in `ipe_lower::lower` alongside `param_binders` — the
-            // interner is frozen by this point in the pipeline, so a symbol
-            // cannot be minted here). The backend renders `IrType::Generic` by
-            // the variable's POSITION in `Func::type_params`, not by the
-            // symbol's spelling (see the `Generic` doc comment in
-            // `ipe_ir::ir`), so a fresh, distinctly-named symbol per occurrence
-            // is sufficient — no concrete-type resolution needed, and each
-            // occurrence behaves exactly like genuine independent polymorphism
-            // (which is precisely what the checker's fresh-UV-per-occurrence
-            // semantics already grants it).
-            if let IrType::Generic(sym) = ir_ty
-                && self.interner.resolve(sym) == Some("any")
-            {
-                let fresh = self.fresh_any_param_symbol()?;
-                any_syms_minted.push(fresh);
-                ir_ty = IrType::Generic(fresh);
-            }
+            // Fix (structural — closes the whole class): walk the full `IrType`
+            // tree and replace every `Generic("any")` node with a fresh, distinct
+            // symbol from the `any_param_binders` pool.  `count_any_param_sites`
+            // now recursively counts ALL `any` occurrences (bare and nested), so
+            // the pool is always large enough.  The backend positions each
+            // `Generic` by its index in `Func::type_params`, not by spelling, so
+            // a distinctly-named symbol per occurrence gives the correct
+            // independent-polymorphism semantics.
+            ir_ty = self.freshen_any_generics(ir_ty, &mut any_syms_minted)?;
             // One shared path for every parameter shape (see `lower_param`): a
             // plain-var param contributes its name directly; a tuple / record /
             // alias / wildcard param takes a fresh synthetic binder and (for the
@@ -12977,7 +13112,10 @@ impl<'a> Lowerer<'a> {
                 "SqlFragment" => Ok(IrType::SqlFragment),
                 // `Secret` is `Ipe.Secret`'s opaque sealed secret-string
                 // type. Backed by `ipe_runtime::secret::Secret`.
-                "Secret" => Ok(IrType::Secret),
+                // `Algorithm` (the `Ipe.Jwt` signing-key descriptor) shares the
+                // same sealed representation — key material gets the same
+                // no-stringify treatment and maps to `IrType::Secret`.
+                "Secret" | "Algorithm" => Ok(IrType::Secret),
                 // `Path` is `Ipe.Path`'s opaque validated filesystem-path
                 // type. Backed by `ipe_runtime::path::Path`.
                 "Path" => Ok(IrType::Path),
@@ -13396,11 +13534,6 @@ impl<'a> Lowerer<'a> {
                 "Value" | "Claims" | "Handler" | "Middleware" | "Session" | "Store" | "VNode" => {
                     Ok(IrType::Json)
                 }
-                // ── JWT builder types ─────────────────────────────
-                // `Algorithm` — JWT signing algorithm descriptor, sealed in a
-                // `Secret` wrapping "HS256:<secret>" or "RS256:<pem>" (no
-                // Debug/Display/stringify surface on the key material).
-                "Algorithm" => Ok(IrType::Secret),
                 // ── Nullary Ipe.Ui plain types (no message parameter) ─────
                 // Mirror of the `ir_type_from_ty` arms below.  Reached when a
                 // type annotation writes `Color`, `Length`, etc. at a position
@@ -24763,6 +24896,122 @@ mod tests {
         assert!(
             !super::row_value_escapes_direct_access(&body, &syms),
             "a symbol outside the row set flows freely"
+        );
+    }
+
+    /// Structural invariant (canon-1 / canon-2): every name in
+    /// `OPAQUE_NAMES_ABOVE_GUARD` must also appear in canon's
+    /// `RESERVED_BUILTIN_TYPES`.  An above-guard arm with a fixed `IrType`
+    /// mapping that is NOT reserved means a user `type <Name>` is silently
+    /// mis-lowered — a direct SEAL break.  Adding an above-guard arm without
+    /// also adding the name to `RESERVED_BUILTIN_TYPES` now fails this test.
+    #[test]
+    fn reserved_opaque_names_above_guard_are_reserved_in_canon() {
+        for &name in super::OPAQUE_NAMES_ABOVE_GUARD {
+            assert!(
+                ipe_canon::RESERVED_BUILTIN_TYPES.contains(&name),
+                "OPAQUE_NAMES_ABOVE_GUARD contains `{name}` but \
+                 ipe_canon::RESERVED_BUILTIN_TYPES does not — \
+                 a user `type {name}` would be silently mis-lowered (SEAL break); \
+                 add `{name}` to RESERVED_BUILTIN_TYPES in resolve.rs",
+            );
+        }
+    }
+
+    /// Per-occurrence `any` freshening covers NESTED occurrences (lower-1):
+    /// `freshen_any_generics` must replace EVERY `Generic("any")` in a tree
+    /// with a distinct fresh symbol, not just the outermost one.
+    ///
+    /// Two independent `List any` / `Maybe any` param types share the same
+    /// interned `any_sym` before freshening — after freshening each must
+    /// carry a distinct generic, or the emitted Rust would collapse them to
+    /// one type parameter (SEAL break: E0308).
+    #[test]
+    #[allow(clippy::panic)] // let-else in test code; panic on unexpected shape is intentional
+    fn nested_any_produces_distinct_generics() {
+        let mut interner = Interner::new();
+        let builtins = build_test_builtin_ctors(&mut interner);
+
+        // Intern the two fresh symbols the pool will hand out.
+        let fresh0 = interner.intern("__any_test0").unwrap();
+        let fresh1 = interner.intern("__any_test1").unwrap();
+
+        // `any_sym` is the shared interned symbol that both `List any` and
+        // `Maybe any` carry before freshening.
+        let any_sym = interner.intern("any").unwrap();
+
+        let shared = ipe_canon::builtins::intern_builtins(&mut interner)
+            .expect("intern shared built-in table");
+        let _ = shared;
+
+        let module = ipe_canon::ast::Module {
+            imports_unsafe_submodule: false,
+            name: vec![],
+            unions: vec![],
+            defs: vec![],
+        };
+        let types = empty_solved_types();
+        let lowerer = super::Lowerer::new(
+            &module,
+            &types,
+            &interner,
+            super::SymbolPools {
+                eta_params: vec![],
+                cap_params: vec![],
+                param_binders: vec![],
+                // Two slots: one for each `any` occurrence.
+                any_param_binders: vec![fresh0, fresh1],
+                destructure_thunk_binders: vec![],
+                nested_cons_binders: vec![],
+                nested_strlit_binders: vec![],
+            },
+            &builtins,
+        );
+
+        // Build the two IR types that would come from lowering:
+        //   `List any` → List(Generic(any_sym))
+        //   `Maybe any` → Maybe(Generic(any_sym))
+        // Both carry the SAME any_sym before freshening.
+        let list_ir = ipe_ir::IrType::List(Box::new(ipe_ir::IrType::Generic(any_sym)));
+        let maybe_ir = ipe_ir::IrType::Maybe(Box::new(ipe_ir::IrType::Generic(any_sym)));
+
+        let mut minted_list: Vec<ipe_intern::Symbol> = Vec::new();
+        let freshened_list = lowerer
+            .freshen_any_generics(list_ir, &mut minted_list)
+            .expect("freshen List any");
+
+        let mut minted_maybe: Vec<ipe_intern::Symbol> = Vec::new();
+        let freshened_maybe = lowerer
+            .freshen_any_generics(maybe_ir, &mut minted_maybe)
+            .expect("freshen Maybe any");
+
+        // Each occurrence must mint exactly one distinct symbol.
+        assert_eq!(minted_list.len(), 1, "List any must mint 1 fresh generic");
+        assert_eq!(minted_maybe.len(), 1, "Maybe any must mint 1 fresh generic");
+        let g0 = minted_list.first().copied().expect("minted_list has 1 entry");
+        let g1 = minted_maybe.first().copied().expect("minted_maybe has 1 entry");
+        assert_ne!(
+            g0, g1,
+            "nested `any` occurrences must receive distinct generics — \
+             same symbol would collapse them to one type parameter (E0308)"
+        );
+
+        // The freshened containers must embed the distinct symbols.
+        let ipe_ir::IrType::List(inner_list) = freshened_list else {
+            panic!("expected IrType::List after freshening");
+        };
+        let ipe_ir::IrType::Maybe(inner_maybe) = freshened_maybe else {
+            panic!("expected IrType::Maybe after freshening");
+        };
+        let ipe_ir::IrType::Generic(g_list) = *inner_list else {
+            panic!("expected Generic inside freshened List");
+        };
+        let ipe_ir::IrType::Generic(g_maybe) = *inner_maybe else {
+            panic!("expected Generic inside freshened Maybe");
+        };
+        assert_ne!(
+            g_list, g_maybe,
+            "Generic symbols inside freshened List<any> and Maybe<any> must differ"
         );
     }
 }
