@@ -394,6 +394,18 @@ fn golden_lower_non_entry_main() -> Result<(), Box<dyn std::error::Error>> {
     check_golden("lower_non_entry_main", &d, "test.ipe", source)
 }
 
+#[test]
+fn golden_lower_undeterminable_return_any() -> Result<(), Box<dyn std::error::Error>> {
+    // IPE-L0142: a wildcard `any` in return position that no parameter carries
+    // and no body pins. The caret points at the signature.
+    let source = "module Main exposing (main)\n\nfoo : Int -> List any\nfoo _ = []\n";
+    let d = Diagnostic::Lower {
+        span: Span::new(29, 50), // the `foo : Int -> List any` signature.
+        msg: LowerError::UndeterminableReturnAny,
+    };
+    check_golden("lower_undeterminable_return_any", &d, "test.ipe", source)
+}
+
 // ---------------------------------------------------------------------------
 // FFI family (IPE-F* / FFI-adjacent name diagnostics)
 // ---------------------------------------------------------------------------
