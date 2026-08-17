@@ -323,6 +323,15 @@ struct RawManifest {
     capabilities_accept: BTreeSet<Capability>,
 }
 
+/// Whether a manifest section-header line names the `[rust.wrapper]` table.
+///
+/// Both the bare and the quoted spellings are accepted. This is the single
+/// source of truth for the accepted header spellings — used by every reader
+/// that needs to detect the wrapper table, so the two cannot drift apart.
+pub(crate) fn is_rust_wrapper_header(line: &str) -> bool {
+    line == "[rust.wrapper]" || line == "[\"rust.wrapper\"]"
+}
+
 /// Scan a `ipe.toml`'s lines once, collecting each recognised section's raw
 /// values. `name` may sit at the top level (Ipê's own examples) or under
 /// `[project]`; unrecognised sections and keys are ignored (forward-compatible).
@@ -344,7 +353,7 @@ fn scan_raw_manifest(text: &str) -> Result<RawManifest, CliError> {
                 // Both spellings of the FFI crate tables are accepted, the same
                 // as the `ipe rust install` reader.
                 "[rust.dependencies]" | "[\"rust.dependencies\"]" => "[rust.dependencies]",
-                "[rust.wrapper]" | "[\"rust.wrapper\"]" => {
+                h if is_rust_wrapper_header(h) => {
                     raw.has_rust_wrapper = true;
                     "other"
                 }
@@ -1511,5 +1520,59 @@ import String
             !WasmConfig::default().implies_wasm_target(),
             "absent mode (None) must not imply wasm target"
         );
+    }
+
+    /// `is_rust_wrapper_header` is the single source of truth for accepted
+    /// `[rust.wrapper]` spellings. This test pins the full acceptance corpus
+    /// so any change to accepted spellings is explicit and reviewed here.
+    #[test]
+    fn rust_wrapper_header_spelling_corpus() {
+        let accepted = ["[rust.wrapper]", "[\"rust.wrapper\"]"];
+        let rejected = [
+            "[rust]",
+            "[rust.dependencies]",
+            "[\"rust.dependencies\"]",
+            "[project]",
+            "",
+            "rust.wrapper",
+            "[RUST.WRAPPER]",
+            "[rust.wrapper] ",
+        ];
+        for s in &accepted {
+            assert!(
+                is_rust_wrapper_header(s),
+                "expected {s:?} to be accepted as a rust.wrapper header"
+            );
+        }
+        for s in &rejected {
+            assert!(
+                !is_rust_wrapper_header(s),
+                "expected {s:?} to be rejected as a rust.wrapper header"
+            );
+        }
+    }
+
+    /// Both readers (`scan_raw_manifest` in project.rs, `rust_wrapper_from_manifest`
+    /// in ffi.rs) must agree on every spelling in the corpus. This test fails if
+    /// ffi.rs's reader drifts from the shared predicate.
+    #[test]
+    fn rust_wrapper_header_ssot_both_readers_agree() {
+        use crate::ffi::rust_wrapper_header_accepted_by_ffi_reader;
+
+        let corpus = [
+            "[rust.wrapper]",
+            "[\"rust.wrapper\"]",
+            "[rust.dependencies]",
+            "[project]",
+            "",
+            "[RUST.WRAPPER]",
+        ];
+        for s in &corpus {
+            assert_eq!(
+                is_rust_wrapper_header(s),
+                rust_wrapper_header_accepted_by_ffi_reader(s),
+                "project.rs and ffi.rs disagree on spelling {s:?}"
+            );
+        }
     }
 }

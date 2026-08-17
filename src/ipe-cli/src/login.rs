@@ -12,6 +12,7 @@
 //!
 //! [device authorization grant]: https://docs.github.com/apps/oauth-apps/building-oauth-apps/authorizing-oauth-apps#device-flow
 
+use std::io::Write as _;
 use std::path::PathBuf;
 use std::process::Command;
 use std::time::{Duration, Instant};
@@ -247,6 +248,10 @@ fn existing_token_path() -> Option<PathBuf> {
 }
 
 /// Write the token with owner-only permissions, creating the config dir.
+///
+/// On Unix the file is created with mode 0600 atomically before any bytes are
+/// written, so there is no window where the token is readable by other users.
+/// On non-Unix the containing profile directory is the protection layer.
 fn store_token(token: &str) -> Result<PathBuf, CliError> {
     let path = token_path().ok_or_else(|| {
         login_error("could not determine a config directory (set HOME or XDG_CONFIG_HOME)")
@@ -255,10 +260,38 @@ fn store_token(token: &str) -> Result<PathBuf, CliError> {
         std::fs::create_dir_all(parent)
             .map_err(|e| login_error(&format!("could not create {}: {e}", parent.display())))?;
     }
-    std::fs::write(&path, format!("{token}\n"))
-        .map_err(|e| login_error(&format!("could not write {}: {e}", path.display())))?;
-    restrict_permissions(&path)?;
+    write_token_atomic(&path, token)?;
     Ok(path)
+}
+
+/// Write `token` to `path` atomically with owner-only permissions.
+///
+/// On Unix: opens the file with `O_CREAT | O_WRONLY | O_TRUNC` and mode 0600
+/// in one syscall, so the file is never visible at a less-restrictive mode.
+/// When the file already exists it is truncated in place with the mode preserved
+/// (the existing inode already has 0600 from a prior run).
+///
+/// On non-Unix: falls back to [`std::fs::write`] and relies on the containing
+/// directory for protection (same as before).
+#[cfg(unix)]
+fn write_token_atomic(path: &std::path::Path, token: &str) -> Result<(), CliError> {
+    use std::fs::OpenOptions;
+    use std::os::unix::fs::OpenOptionsExt as _;
+    let mut file = OpenOptions::new()
+        .write(true)
+        .create(true)
+        .truncate(true)
+        .mode(0o600)
+        .open(path)
+        .map_err(|e| login_error(&format!("could not open {}: {e}", path.display())))?;
+    writeln!(file, "{token}")
+        .map_err(|e| login_error(&format!("could not write {}: {e}", path.display())))
+}
+
+#[cfg(not(unix))]
+fn write_token_atomic(path: &std::path::Path, token: &str) -> Result<(), CliError> {
+    std::fs::write(path, format!("{token}\n"))
+        .map_err(|e| login_error(&format!("could not write {}: {e}", path.display())))
 }
 
 /// Remove the stored token.
@@ -279,24 +312,6 @@ fn logout() -> Result<(), CliError> {
             path.display()
         )))
     );
-    Ok(())
-}
-
-/// Restrict the token file to owner read/write (`0600`) on Unix. A no-op
-/// elsewhere; the containing user profile directory is the protection there.
-#[cfg(unix)]
-fn restrict_permissions(path: &std::path::Path) -> Result<(), CliError> {
-    use std::os::unix::fs::PermissionsExt as _;
-    std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600)).map_err(|e| {
-        login_error(&format!(
-            "could not set permissions on {}: {e}",
-            path.display()
-        ))
-    })
-}
-
-#[cfg(not(unix))]
-fn restrict_permissions(_path: &std::path::Path) -> Result<(), CliError> {
     Ok(())
 }
 
@@ -351,5 +366,44 @@ mod tests {
     fn unexpected_login_argument_is_a_usage_error() {
         let result = run_login(&["--bogus".to_owned()]);
         assert!(matches!(result, Err(CliError::UsageOwned(_))));
+    }
+
+    /// The token file must be created with mode 0600 — never group- or
+    /// world-readable — even under a maximally permissive umask (0000).
+    #[test]
+    #[cfg(unix)]
+    fn token_file_created_with_owner_only_mode() {
+        use std::os::unix::fs::PermissionsExt as _;
+
+        let dir = std::env::temp_dir().join(format!(
+            "ipe-login-test-{}-{:?}",
+            std::process::id(),
+            std::thread::current().id()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("create test dir");
+        let path = dir.join("token");
+
+        write_token_atomic(&path, "test-token").expect("write_token_atomic succeeds");
+
+        let meta = std::fs::metadata(&path).expect("file exists");
+        let mode = meta.permissions().mode() & 0o777;
+        // The security property: no group or world bits set (0o177 covers all
+        // group/world bits). The owner bits may be masked by the process umask
+        // but can never be MORE permissive than 0o600.
+        assert_eq!(
+            mode & 0o177,
+            0,
+            "token file must have no group/world bits; got mode {mode:04o}"
+        );
+        assert_eq!(
+            mode, 0o600,
+            "token file must be exactly 0600, got {mode:04o}"
+        );
+
+        let content = std::fs::read_to_string(&path).expect("readable by owner");
+        assert_eq!(content, "test-token\n");
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

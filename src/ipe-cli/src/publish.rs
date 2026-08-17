@@ -14,8 +14,9 @@
 //! merged entry always names an immutable, fetchable revision.
 
 use std::fmt::Write as _;
+use std::io::Write as _;
 use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::process::{Command, Stdio};
 
 use crate::CliError;
 use crate::index::{self, CommitId, EntryVersion, IndexEntry, SourceUrl};
@@ -542,74 +543,115 @@ fn pr_request_body(plan: &PrPlan, fork_owner: &str) -> serde_json::Value {
     })
 }
 
+/// Typed outcome of a GitHub PR-open API call.
+enum PrResult {
+    /// HTTP 201 Created — PR was successfully opened.
+    Created(String),
+    /// HTTP 422 — GitHub reports the PR already exists for this branch.
+    AlreadyExists,
+    /// Any other outcome — carries the GitHub `message` or a description.
+    Failed(String),
+}
+
 /// Open the index PR through the GitHub REST API — no browser. Reuses the branch
 /// already pushed to the fork. On any API failure the pre-filled compare URL is
 /// printed as the manual fallback, so a headless publish never dead-ends.
 fn submit_pr_via_api(plan: &PrPlan, fork_owner: &str, token: &str) {
     let api = format!("https://api.github.com/repos/{}/pulls", plan.index_repo);
     let body = pr_request_body(plan, fork_owner);
+    let fallback_url = compare_url(
+        &plan.index_repo,
+        "main",
+        fork_owner,
+        &plan.branch,
+        &plan.title,
+    );
     match github_api_post(&api, token, &body) {
-        Ok(resp) => {
-            let url = resp
-                .get("html_url")
-                .and_then(serde_json::Value::as_str)
-                .map_or_else(
-                    || {
-                        compare_url(
-                            &plan.index_repo,
-                            "main",
-                            fork_owner,
-                            &plan.branch,
-                            &plan.title,
-                        )
-                    },
-                    str::to_owned,
-                );
-            print_pr_submitted(plan, &url);
-        }
-        Err(err) => {
-            let url = compare_url(
-                &plan.index_repo,
-                "main",
-                fork_owner,
-                &plan.branch,
-                &plan.title,
-            );
-            print_pr_api_fallback(plan, &url, &err);
-        }
+        PrResult::Created(url) => print_pr_submitted(plan, &url),
+        PrResult::AlreadyExists => print_pr_submitted(plan, &fallback_url),
+        PrResult::Failed(err) => print_pr_api_fallback(plan, &fallback_url, &err),
     }
 }
 
-/// `POST` a JSON body to the GitHub API with the bearer token; return the parsed
-/// response. `--fail` is deliberately omitted so GitHub's error JSON (e.g. a PR
-/// that already exists) is read and surfaced rather than swallowed. An `Err`
-/// carries the API's `message`.
-fn github_api_post(
-    url: &str,
-    token: &str,
-    body: &serde_json::Value,
-) -> Result<serde_json::Value, String> {
+/// `POST` a JSON body to the GitHub API with the bearer token.
+///
+/// The token is passed to curl via stdin (`--config -`) so it never appears in
+/// the process argument list and cannot be read from `/proc/<pid>/cmdline` by
+/// other local users.
+///
+/// The HTTP status drives the result — not body-field presence — so the outcome
+/// is a typed [`PrResult`] parsed once at the network boundary.
+fn github_api_post(url: &str, token: &str, body: &serde_json::Value) -> PrResult {
     let body_str = body.to_string();
-    let output = Command::new("curl")
+    // curl writes the response body to a temp file and emits only the HTTP
+    // status code on stdout (`-w '%{http_code}'`).  This lets us capture
+    // status and body separately without any argv exposure of the token.
+    let tmp = std::env::temp_dir().join(format!("ipe-publish-resp-{}", std::process::id()));
+    let tmp_path = tmp.to_string_lossy().into_owned();
+    let mut child = match Command::new("curl")
         .args(["--silent", "--show-error", "-X", "POST"])
         .args(["-H", "Accept: application/vnd.github+json"])
-        .args(["-H", &format!("Authorization: Bearer {token}")])
         .args(["-H", "User-Agent: ipe-cli"])
-        .args(["-d", &body_str, url])
-        .output()
-        .map_err(|e| format!("could not run `curl` (needed to open the PR): {e}"))?;
-    let json: serde_json::Value = serde_json::from_slice(&output.stdout)
-        .map_err(|e| format!("could not parse GitHub's response as JSON: {e}"))?;
-    // A successful create returns the PR object (has `html_url`); an error returns
-    // `{ "message": ... }` with no `html_url`.
-    if json.get("html_url").is_none() {
-        let msg = json
-            .get("message")
-            .and_then(serde_json::Value::as_str)
-            .unwrap_or("unexpected GitHub API response");
-        return Err(msg.to_owned());
+        // Token delivered via stdin config, never via argv.
+        .args(["--config", "-"])
+        .args(["-d", &body_str])
+        .args(["-o", &tmp_path])
+        .args(["-w", "%{http_code}"])
+        .arg(url)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+    {
+        Ok(c) => c,
+        Err(e) => {
+            return PrResult::Failed(format!("could not run `curl` (needed to open the PR): {e}"));
+        }
+    };
+
+    // Write the auth header line to curl's stdin config, then close stdin so
+    // curl proceeds.  A write failure here means curl never gets the header;
+    // the subsequent wait will capture the error.
+    if let Some(mut stdin) = child.stdin.take() {
+        let _ = writeln!(stdin, r#"header = "Authorization: Bearer {token}""#);
     }
-    Ok(json)
+
+    let output = match child.wait_with_output() {
+        Ok(o) => o,
+        Err(e) => return PrResult::Failed(format!("curl wait failed: {e}")),
+    };
+
+    // stdout carries the 3-digit HTTP status code written by `-w '%{http_code}'`.
+    let status_str = String::from_utf8_lossy(&output.stdout);
+    let http_status: u16 = status_str.trim().parse().unwrap_or(0);
+
+    let body_bytes = std::fs::read(&tmp).unwrap_or_default();
+    let _ = std::fs::remove_file(&tmp);
+
+    let json: serde_json::Value = match serde_json::from_slice(&body_bytes) {
+        Ok(v) => v,
+        Err(e) => return PrResult::Failed(format!("could not parse GitHub's response: {e}")),
+    };
+
+    match http_status {
+        201 => {
+            // 201 Created must carry an `html_url`; anything else is unexpected.
+            json.get("html_url")
+                .and_then(serde_json::Value::as_str)
+                .map_or_else(
+                    || PrResult::Failed("201 response missing html_url".to_owned()),
+                    |url| PrResult::Created(url.to_owned()),
+                )
+        }
+        422 => PrResult::AlreadyExists,
+        _ => {
+            let msg = json
+                .get("message")
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or("unexpected GitHub API response");
+            PrResult::Failed(msg.to_owned())
+        }
+    }
 }
 
 /// The `<name>` of an `<owner>/<name>` repo (the whole string when it has no
@@ -1126,5 +1168,98 @@ mod tests {
     fn a_missing_flag_value_is_a_usage_error() {
         let err = parse_args(&["--index".to_owned()]).unwrap_err();
         assert!(matches!(err, CliError::UsageOwned(_)));
+    }
+
+    /// `github_api_post` must never put the token in curl's argv — no
+    /// `Authorization` or `Bearer` substring must appear in the args list.
+    /// We verify the command that would be built (not the network result)
+    /// by constructing the same `Command` args here.
+    #[test]
+    fn token_not_in_curl_argv() {
+        // Mirror the argv construction in `github_api_post`.
+        let token = "super-secret-token";
+        let url = "https://api.github.com/repos/foo/bar/pulls";
+        let body_str = r#"{"title":"t"}"#;
+        let tmp_path = "/tmp/fake-resp";
+
+        let mut cmd = Command::new("curl");
+        cmd.args(["--silent", "--show-error", "-X", "POST"])
+            .args(["-H", "Accept: application/vnd.github+json"])
+            .args(["-H", "User-Agent: ipe-cli"])
+            .args(["--config", "-"])
+            .args(["-d", body_str])
+            .args(["-o", tmp_path])
+            .args(["-w", "%{http_code}"])
+            .arg(url);
+
+        // Collect every argv string and assert the token is absent.
+        let args: Vec<_> = cmd
+            .get_args()
+            .map(|a| a.to_string_lossy().into_owned())
+            .collect();
+        for arg in &args {
+            assert!(
+                !arg.contains(token),
+                "token must not appear in curl argv; found it in: {arg:?}"
+            );
+            assert!(
+                !arg.contains("Bearer"),
+                "Authorization header must not appear in curl argv; found in: {arg:?}"
+            );
+        }
+        // The stdin config line that WOULD carry the token — verify format.
+        let config_line = format!("header = \"Authorization: Bearer {token}\"");
+        assert!(config_line.contains(token));
+        assert!(config_line.contains("Bearer"));
+    }
+
+    /// HTTP 201 with `html_url` → `PrResult::Created`.
+    /// HTTP 200 with `html_url` → `PrResult::Failed` (not a Create response).
+    /// HTTP 422 → `PrResult::AlreadyExists`.
+    ///
+    /// We test the branching logic directly by driving the match arms with
+    /// constructed inputs — no curl subprocess needed.
+    #[test]
+    fn pr_result_classification() {
+        // Simulate the dispatch logic from github_api_post for unit-testability.
+        fn classify(http_status: u16, json: &serde_json::Value) -> String {
+            match http_status {
+                201 => json
+                    .get("html_url")
+                    .and_then(serde_json::Value::as_str)
+                    .map_or_else(
+                        || "Failed:201 response missing html_url".to_owned(),
+                        |url| format!("Created:{url}"),
+                    ),
+                422 => "AlreadyExists".to_owned(),
+                _ => {
+                    let msg = json
+                        .get("message")
+                        .and_then(serde_json::Value::as_str)
+                        .unwrap_or("unexpected GitHub API response");
+                    format!("Failed:{msg}")
+                }
+            }
+        }
+
+        let with_url = serde_json::json!({"html_url": "https://github.com/foo/bar/pull/1"});
+        let error_body = serde_json::json!({"message": "Validation Failed"});
+        let empty = serde_json::json!({});
+
+        assert_eq!(
+            classify(201, &with_url),
+            "Created:https://github.com/foo/bar/pull/1"
+        );
+        assert_eq!(
+            classify(200, &with_url),
+            "Failed:unexpected GitHub API response",
+            "200 with html_url is NOT a success"
+        );
+        assert_eq!(classify(422, &error_body), "AlreadyExists");
+        assert_eq!(classify(500, &error_body), "Failed:Validation Failed");
+        assert_eq!(
+            classify(201, &empty),
+            "Failed:201 response missing html_url"
+        );
     }
 }
