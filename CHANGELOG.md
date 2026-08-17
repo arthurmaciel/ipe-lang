@@ -10,6 +10,43 @@ Entries below the header are maintained by
 section is generated from Conventional Commit messages and prepended when the
 standing release pull request is merged.
 
+## [0.1.56](https://github.com/arthurmaciel/ipe-lang/compare/ipe-v0.1.55...ipe-v0.1.56) (2026-08-17)
+
+
+### Features
+
+* **audit:** sidecar-based wrapper SSOT, generic exclusion, exclusive scratch dir ([#1034](https://github.com/arthurmaciel/ipe-lang/issues/1034)) ([21a59ca](https://github.com/arthurmaciel/ipe-lang/commit/21a59ca5e74389d40aaaecdb86521d7d9a73b588))
+
+
+### Bug Fixes
+
+* **audit:** regenerate FFI bindings from pinned crates before gate checks ([#1039](https://github.com/arthurmaciel/ipe-lang/issues/1039)) ([2a9bd92](https://github.com/arthurmaciel/ipe-lang/commit/2a9bd92bbea2a09543030ad19b25d8bac9f8355b))
+* **audit:** reject [rust.wrapper]-only packages at admission (fail-closed) ([#1043](https://github.com/arthurmaciel/ipe-lang/issues/1043)) ([9c5cad7](https://github.com/arthurmaciel/ipe-lang/commit/9c5cad7c80ec4e0e7b15873fd81a13aa7a3238b4))
+* **backend:** fail-closed Pat::Char and validate FFI callee ident ([#1086](https://github.com/arthurmaciel/ipe-lang/issues/1086)) ([aca7990](https://github.com/arthurmaciel/ipe-lang/commit/aca7990b6445cb41d5ccd5b37fccb766a1494bcc))
+* **cli:** harden cache symlink, token argv, PR status, token file mode, wrapper SSOT ([#1085](https://github.com/arthurmaciel/ipe-lang/issues/1085)) ([d058e2d](https://github.com/arthurmaciel/ipe-lang/commit/d058e2de1e89655640710651b040d18610531083))
+* **cli:** unify misuse discipline, style IO errors, and broaden machine flags ([#1032](https://github.com/arthurmaciel/ipe-lang/issues/1032)) ([2c92f69](https://github.com/arthurmaciel/ipe-lang/commit/2c92f69fa34ccb27cbacb5a36c6d1b4619282ecd))
+* **css,watch:** block legacy script-execution CSS properties; deterministic watch test ([#1097](https://github.com/arthurmaciel/ipe-lang/issues/1097)) ([9d55b55](https://github.com/arthurmaciel/ipe-lang/commit/9d55b55c71d36614816ecbc006eb5d188488f911))
+* **diagnostics,intern:** PathRejection enum, SSOT title, strict ident gate ([#1094](https://github.com/arthurmaciel/ipe-lang/issues/1094)) ([28c96fa](https://github.com/arthurmaciel/ipe-lang/commit/28c96fa6083e2a96e9efb61e4248687470d49a1d))
+* **diagnostics:** correct IPE-L0142 remedies to honest set ([#1104](https://github.com/arthurmaciel/ipe-lang/issues/1104)) ([4ea075b](https://github.com/arthurmaciel/ipe-lang/commit/4ea075be422d63de44df64317391641d8f8bef13))
+* **ffi:** close capscan asm hole, validate opaque-type decode, fix i128 double-eval ([#1084](https://github.com/arthurmaciel/ipe-lang/issues/1084)) ([9626cb6](https://github.com/arthurmaciel/ipe-lang/commit/9626cb6db1175d3b03c5129d3f4e98e2fbf0ddda))
+* **ffi:** reject const-generic impls and expand Result aliases in parametric path ([#1035](https://github.com/arthurmaciel/ipe-lang/issues/1035)) ([0fa3bb3](https://github.com/arthurmaciel/ipe-lang/commit/0fa3bb33e9df7126fceb862a2c8e9a90cfe89153))
+* **ffi:** restrict Result alias mapping to known std paths only ([#1038](https://github.com/arthurmaciel/ipe-lang/issues/1038)) ([8f1b596](https://github.com/arthurmaciel/ipe-lang/commit/8f1b5962278579d035636207236622b423c2a685))
+* **lower,kernels:** close four SEAL/SSOT soundness gaps ([#1047](https://github.com/arthurmaciel/ipe-lang/issues/1047), [#1048](https://github.com/arthurmaciel/ipe-lang/issues/1048), [#1052](https://github.com/arthurmaciel/ipe-lang/issues/1052), [#1053](https://github.com/arthurmaciel/ipe-lang/issues/1053)) ([#1087](https://github.com/arthurmaciel/ipe-lang/issues/1087)) ([df8123c](https://github.com/arthurmaciel/ipe-lang/commit/df8123c79cb92e0c6613f2b027de8ccdd7799f4c))
+* **lower:** close freshen_any_generics missing-arm class for SharedFun/FnOnceChain ([#1101](https://github.com/arthurmaciel/ipe-lang/issues/1101)) ([80c17e1](https://github.com/arthurmaciel/ipe-lang/commit/80c17e1f7cdb26f6290674621ffa213dfcb4e2d7))
+* **lower:** link param-shared wildcard any to close E0308 SEAL ([#1103](https://github.com/arthurmaciel/ipe-lang/issues/1103)) ([#1105](https://github.com/arthurmaciel/ipe-lang/issues/1105)) ([47ddf26](https://github.com/arthurmaciel/ipe-lang/commit/47ddf26c1030f8092491bf89c142beb99d221346))
+* **lower:** reject an undeterminable return-position wildcard `any` at ipe time ([#1102](https://github.com/arthurmaciel/ipe-lang/issues/1102)) ([0bd66ed](https://github.com/arthurmaciel/ipe-lang/commit/0bd66ed65e40183bdf34074e4b18886ea7b0a3d0))
+* **lower:** unify reuse-reject predicates, scan arm guards in 4 walkers, fix kernel doc ([#1095](https://github.com/arthurmaciel/ipe-lang/issues/1095)) ([10d75b3](https://github.com/arthurmaciel/ipe-lang/commit/10d75b32fe07415867c48c97b4624ea5fdf9e8c8))
+* **lsp:** validate rename identifier and filter stale diagnostic batches ([#1089](https://github.com/arthurmaciel/ipe-lang/issues/1089)) ([d313443](https://github.com/arthurmaciel/ipe-lang/commit/d313443b3104f5d41c5cdcaebb837df991077db8))
+* **parse:** harden Span invariant and fix chained-access span collision ([#1080](https://github.com/arthurmaciel/ipe-lang/issues/1080)) ([d134baf](https://github.com/arthurmaciel/ipe-lang/commit/d134baf8bbfef962b4bb20a7add29169445eba73))
+* **resolve:** allow file:// sources and relax CommitId to injection-shape rejection ([#1081](https://github.com/arthurmaciel/ipe-lang/issues/1081)) ([3b82f16](https://github.com/arthurmaciel/ipe-lang/commit/3b82f16eced558ad68f348feffec5e2756e756e9))
+* **run:** read binary name from emitted Cargo.toml (SSOT) for native packages ([#1037](https://github.com/arthurmaciel/ipe-lang/issues/1037)) ([e5288c0](https://github.com/arthurmaciel/ipe-lang/commit/e5288c0a64ea3882483c1471e28f6226bd762952))
+* **sandbox:** harden jail confinement — SBPL baseline denies, FreeBSD exclusive-create, SSOT tamper-check ([#1082](https://github.com/arthurmaciel/ipe-lang/issues/1082)) ([5238ee3](https://github.com/arthurmaciel/ipe-lang/commit/5238ee3d1e86512f5fc9c55834293d42e7c60c92))
+* **security,lower:** type git sink with newtypes; freshen nested-any in return position ([#1098](https://github.com/arthurmaciel/ipe-lang/issues/1098)) ([3c4eec3](https://github.com/arthurmaciel/ipe-lang/commit/3c4eec38c1304f68b657f8728e29b0d12f12d79c))
+* **security:** add csrf_pair_valid and hoist CSRF predicates to single SSOT ([#1093](https://github.com/arthurmaciel/ipe-lang/issues/1093)) ([32ecea1](https://github.com/arthurmaciel/ipe-lang/commit/32ecea11ca31bd865439f78aa89c59e491bbdd97))
+* **stdlib:** close CSS raw/keyframes injection bypass and fix Palette name collision ([#1092](https://github.com/arthurmaciel/ipe-lang/issues/1092)) ([9254e34](https://github.com/arthurmaciel/ipe-lang/commit/9254e34744645dc5928038131d5def83ab1f25f9))
+* **stdlib:** rename Track.Fr to TrackFr to avoid Ipe.Css.Length constructor clash ([#1042](https://github.com/arthurmaciel/ipe-lang/issues/1042)) ([ad6d945](https://github.com/arthurmaciel/ipe-lang/commit/ad6d94501258266264f0d8b1ea44cb15311d4ec5))
+* **types:** sound open-record row merge preserving both extension tails ([#1090](https://github.com/arthurmaciel/ipe-lang/issues/1090)) ([7956071](https://github.com/arthurmaciel/ipe-lang/commit/79560712434e73b12ce0eba0bb2a5789d0da9614))
+
 ## [0.1.55](https://github.com/arthurmaciel/ipe-lang/compare/ipe-v0.1.54...ipe-v0.1.55) (2026-08-17)
 
 
