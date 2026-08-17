@@ -266,17 +266,18 @@ fn store_token(token: &str) -> Result<PathBuf, CliError> {
 
 /// Write `token` to `path` atomically with owner-only permissions.
 ///
-/// On Unix: opens the file with `O_CREAT | O_WRONLY | O_TRUNC` and mode 0600
-/// in one syscall, so the file is never visible at a less-restrictive mode.
-/// When the file already exists it is truncated in place with the mode preserved
-/// (the existing inode already has 0600 from a prior run).
+/// On Unix: opens the file with `O_CREAT | O_WRONLY | O_TRUNC` and mode 0600,
+/// then enforces 0600 on the open handle before writing. The create-mode covers
+/// a fresh file; the explicit `fchmod` covers an already-existing file (whose
+/// mode `O_TRUNC` would otherwise preserve), so the token bytes are never
+/// written into a less-restrictive file — regardless of a prior mode.
 ///
 /// On non-Unix: falls back to [`std::fs::write`] and relies on the containing
 /// directory for protection (same as before).
 #[cfg(unix)]
 fn write_token_atomic(path: &std::path::Path, token: &str) -> Result<(), CliError> {
     use std::fs::OpenOptions;
-    use std::os::unix::fs::OpenOptionsExt as _;
+    use std::os::unix::fs::{OpenOptionsExt as _, PermissionsExt as _};
     let mut file = OpenOptions::new()
         .write(true)
         .create(true)
@@ -284,6 +285,10 @@ fn write_token_atomic(path: &std::path::Path, token: &str) -> Result<(), CliErro
         .mode(0o600)
         .open(path)
         .map_err(|e| login_error(&format!("could not open {}: {e}", path.display())))?;
+    // fchmod on the open fd (no path re-resolution, no TOCTOU) before the secret
+    // is written, so an existing file's looser mode cannot survive.
+    file.set_permissions(std::fs::Permissions::from_mode(0o600))
+        .map_err(|e| login_error(&format!("could not set mode on {}: {e}", path.display())))?;
     writeln!(file, "{token}")
         .map_err(|e| login_error(&format!("could not write {}: {e}", path.display())))
 }
@@ -403,6 +408,45 @@ mod tests {
 
         let content = std::fs::read_to_string(&path).expect("readable by owner");
         assert_eq!(content, "test-token\n");
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn existing_loose_mode_token_file_is_tightened_before_write() {
+        use std::os::unix::fs::PermissionsExt as _;
+
+        let dir = std::env::temp_dir().join(format!(
+            "ipe-login-relogin-{}-{:?}",
+            std::process::id(),
+            std::thread::current().id()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("create test dir");
+        let path = dir.join("token");
+
+        // A stale token file left group/world-readable by an older writer, a bad
+        // first-write umask, or a backup restore. Re-login must NOT write the new
+        // secret into it at the loose mode.
+        std::fs::write(&path, "old\n").expect("plant file");
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o644)).expect("chmod 644");
+
+        write_token_atomic(&path, "new-token").expect("write_token_atomic succeeds");
+
+        let mode = std::fs::metadata(&path)
+            .expect("file exists")
+            .permissions()
+            .mode()
+            & 0o777;
+        assert_eq!(
+            mode, 0o600,
+            "an existing looser-mode token file must be tightened to 0600, got {mode:04o}"
+        );
+        assert_eq!(
+            std::fs::read_to_string(&path).expect("readable"),
+            "new-token\n"
+        );
 
         let _ = std::fs::remove_dir_all(&dir);
     }
