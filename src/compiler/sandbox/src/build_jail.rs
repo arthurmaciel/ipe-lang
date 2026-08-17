@@ -1452,12 +1452,16 @@ mod freebsd_jail {
     /// that world-writable `/tmp` enables. Falls back to `$TMPDIR` or `/tmp` only
     /// when the home directory is genuinely unavailable, which is recorded in the
     /// returned path so the caller can detect and refuse if required.
-    fn private_cache_root() -> PathBuf {
-        // `$HOME` is the conventional user home; fall back to `/tmp` when unset.
-        let base = std::env::var_os("HOME")
-            .map(PathBuf::from)
-            .unwrap_or_else(std::env::temp_dir);
-        base.join(".cache").join("ipe").join("jail")
+    fn private_cache_root() -> Result<PathBuf, RunJailDefect> {
+        // The jail scratch must live under a user-private root. `$HOME` is that
+        // root; when it is unset we refuse rather than fall back to a
+        // world-writable `/tmp`, which under a root-run jail is a cross-user
+        // symlink-plant vector at an intermediate ancestor.
+        let home = std::env::var_os("HOME").ok_or_else(|| RunJailDefect::MountFailed {
+            target: PathBuf::from(".cache/ipe/jail"),
+            detail: "HOME is unset; refusing a world-writable jail scratch root".to_owned(),
+        })?;
+        Ok(PathBuf::from(home).join(".cache").join("ipe").join("jail"))
     }
 
     /// Create a per-run directory EXCLUSIVELY under `parent`, using a random
@@ -1573,7 +1577,7 @@ mod freebsd_jail {
     /// `/tmp`) so a local same-user-class attacker cannot pre-plant or symlink the
     /// path before the nullfs mount.
     fn jail_root_dir() -> Result<PathBuf, RunJailDefect> {
-        create_exclusive_private_dir(&private_cache_root(), "jailroot")
+        create_exclusive_private_dir(&private_cache_root()?, "jailroot")
     }
 
     /// A per-run parent dir for the empty `/proc`-mask source, created exclusively
@@ -1583,7 +1587,7 @@ mod freebsd_jail {
     /// to the payload: it cannot surface files under its own `/proc`. Uses a
     /// random unique name under `~/.cache/ipe/jail/` (not world-writable `/tmp`).
     fn proc_mask_source_dir() -> Result<PathBuf, RunJailDefect> {
-        create_exclusive_private_dir(&private_cache_root(), "procmask")
+        create_exclusive_private_dir(&private_cache_root()?, "procmask")
     }
 
     /// A per-run jail name unique enough that concurrent audit calls do not collide.
