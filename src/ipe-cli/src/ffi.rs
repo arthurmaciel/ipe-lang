@@ -1837,12 +1837,16 @@ pub fn install_registry_deps_for_project(
     let structs = rust_define_structs_from_manifest(&text);
     let enums = rust_define_enums_from_manifest(&text);
     let sole_dep = deps.len() <= 1;
-    for item in items {
+    for item in &items {
         let item_crate = item
             .get("name")
             .or_else(|| item.get("pkg"))
             .and_then(serde_json::Value::as_str)
-            .unwrap_or("")
+            .ok_or_else(|| {
+                CliError::UsageOwned(format!(
+                    "ffi regen: inspector item has no `name` or `pkg` field: {item}"
+                ))
+            })?
             .to_owned();
         let merged = merge_provides(
             &item.to_string(),

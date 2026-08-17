@@ -481,9 +481,9 @@ fn prepare(path: &Path) -> Result<Prepared, CliError> {
 /// `ffi::find_cache_root` ownership check passes for all subsequent reads.
 ///
 /// Build scripts are always enabled here (equivalent to `--allow-build-scripts`)
-/// because a native package's crates are already hash-verified through the
-/// fetch + sha256-verify step before `prepare` is called; regenerating without
-/// build scripts would silently skip crates that require them.
+/// because the bwrap jail (network-denied) is the sole confinement boundary;
+/// skipping build scripts would silently omit crates that require them to
+/// generate their API surface.
 ///
 /// Failure is fail-closed: a regeneration error maps to a typed
 /// [`Check::NativeBindingRegen`] rejection rather than letting the audit
@@ -491,14 +491,25 @@ fn prepare(path: &Path) -> Result<Prepared, CliError> {
 ///
 /// # Errors
 /// [`CliError::PackageAudit`] with [`Check::NativeBindingRegen`] when the
-/// jailed regeneration fails; [`CliError::Io`] when the existing committed
-/// cache cannot be removed.
+/// jailed regeneration fails or the cache path escapes the project root via a
+/// symlinked component; [`CliError::Io`] when the existing committed cache
+/// cannot be removed.
 fn regenerate_ffi_bindings(manifest_path: &Path) -> Result<(), CliError> {
     let project_root = manifest_path.parent().unwrap_or_else(|| Path::new("."));
-    let committed_cache = project_root.join(".ipe/cache/ffi/rust");
-    if committed_cache.exists() {
-        std::fs::remove_dir_all(&committed_cache).map_err(|e| CliError::Io {
-            path: committed_cache.clone(),
+
+    // Resolve the cache path once and assert it stays inside the project root.
+    // An attacker-authored package tree can ship `.ipe/cache/ffi` as a symlink
+    // to an out-of-tree target (committed via `git add -f`). `remove_dir_all`
+    // traverses intermediate symlinks and would delete the target; the
+    // subsequent write would go through the surviving symlink. We walk every
+    // path component between `project_root` and the intended cache dir with
+    // `symlink_metadata` (no-follow) and reject on the first symlink found,
+    // before any delete or write occurs.
+    let safe_cache = ffi_cache_path_or_reject(project_root)?;
+
+    if safe_cache.exists() {
+        std::fs::remove_dir_all(&safe_cache).map_err(|e| CliError::Io {
+            path: safe_cache.clone(),
             source: e,
         })?;
     }
@@ -513,6 +524,49 @@ fn regenerate_ffi_bindings(manifest_path: &Path) -> Result<(), CliError> {
             ),
         )
     })
+}
+
+/// Resolve the `.ipe/cache/ffi/rust` path under `project_root` and verify that
+/// no component of the relative suffix is a symlink (no-follow check).
+///
+/// Returns the resolved path on success, or a [`Check::NativeBindingRegen`]
+/// rejection when any component is a symlink or the resolved path escapes the
+/// canonical project root. The check uses [`std::fs::symlink_metadata`] so it
+/// never follows symlinks.
+fn ffi_cache_path_or_reject(project_root: &Path) -> Result<PathBuf, CliError> {
+    // The relative components we walk: `.ipe`, `cache`, `ffi`, `rust`.
+    const CACHE_COMPONENTS: &[&str] = &[".ipe", "cache", "ffi", "rust"];
+
+    let mut current = project_root.to_path_buf();
+    for component in CACHE_COMPONENTS {
+        current.push(component);
+        // Check this component without following the symlink.
+        match std::fs::symlink_metadata(&current) {
+            Ok(meta) if meta.file_type().is_symlink() => {
+                return Err(reject(
+                    Check::NativeBindingRegen,
+                    format!(
+                        "the package's cache path `{}` contains a symlink at `{}`; \
+                         the audit rejects this to prevent out-of-tree writes through \
+                         a symlinked intermediate path component",
+                        project_root.join(".ipe/cache/ffi/rust").display(),
+                        current.display(),
+                    ),
+                ));
+            }
+            // Not present yet — the delete is a no-op and the write will create it.
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+            // Exists and is a real directory or file — continue walking.
+            Ok(_) => {}
+            Err(e) => {
+                return Err(CliError::Io {
+                    path: current,
+                    source: e,
+                });
+            }
+        }
+    }
+    Ok(current)
 }
 
 /// Resolve `path` (a directory or an `ipe.toml`) to its manifest file.
