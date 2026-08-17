@@ -102,6 +102,18 @@ runtime jail's per-target posture).
 - A native package that exposes no probeable entrypoint is under-observed. It is
   never silently admitted as clean; Tier-2 certifies only what it exercised.
 
+## Same-user trust of the materialized runtime tree
+
+The audit gate builds the Tier-2 probe crate against the runtime tree
+materialized under `IPE_HOME` by `runtime_embed::materialize`. That tree is
+same-user-trusted: the materialize fast path accepts an already-present,
+verifying `<IPE_HOME>/runtime/<version>/rust` without re-hashing its content.
+This is within the local-same-user threat model (an adversary who can tamper
+with `IPE_HOME` already owns the user's home directory and is outside the
+package-adversary scope this gate targets). The gate itself runs the build
+inside the declared-scoped jail, so even a tampered runtime tree cannot forge a
+`Certified` verdict for a package whose native code demands an undeclared axis.
+
 ## Conventions
 
 ADRs describe Ipê on its own terms. Do not reference any prior or external
