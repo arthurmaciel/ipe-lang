@@ -467,6 +467,130 @@ fn named_type_var_in_nested_return_lowers_cleanly() -> DResult<()> {
     Ok(())
 }
 
+/// A wildcard `any` PARAMETER the body threads into an `any` return
+/// (`thread : any -> any; thread x = x`) must concretize the parameter to the
+/// return's solved type, not emit a generic beside a concrete return. The two
+/// independent `any` occurrences unify through the body, so the parameter's
+/// solved region is the single call-site-pinned concrete type (`String` here).
+/// Emitting the parameter as a generic `T{n}` while the return is `String` makes
+/// the body return `x: T{n}` where `String` is expected — E0308, an
+/// accept-then-`cargo`-fail (THE SEAL). The parameter must lower to `Str`, the
+/// return to `Str`, and the function must quantify NO type parameters.
+#[test]
+fn threaded_param_wildcard_any_concretizes_from_region() -> DResult<()> {
+    let mut i = Interner::new();
+    let thread = i.intern("thread")?;
+    let any = i.intern("any")?;
+    let x = i.intern("x")?;
+    let string = i.intern("String")?;
+    let sig_span = Span::new(10, 16);
+    let param_span = Span::new(20, 21);
+    let body_span = Span::new(24, 25);
+    // thread : any -> any ; thread x = x
+    let ty = canon::Type::Lambda(
+        Box::new(canon::Type::Var(any)),
+        Box::new(canon::Type::Var(any)),
+    );
+    let def = canon::Def::Typed {
+        home: vec![],
+        name: Located::new(sig_span, thread),
+        free_vars: vec![any],
+        patterns: vec![Located::new(param_span, canon::Pattern_::PVar(x))],
+        body: Located::new(body_span, canon::Expr_::VarLocal(x)),
+        ty,
+    };
+    // The call site `thread "hi"` pins both the parameter and the body-threaded
+    // return `any` to `String`; the solver records that on the param and body
+    // regions.
+    let string_ty = Ty::Con {
+        module: vec![],
+        name: string,
+        args: vec![],
+    };
+    let mut regions = BTreeMap::new();
+    regions.insert(param_span, string_ty.clone());
+    regions.insert(body_span, string_ty);
+    let res = run_with_regions(Vec::new(), vec![def], BTreeMap::new(), regions, &mut i);
+    let func = single_func(&res).expect("`thread : any -> any` must lower cleanly");
+    assert_eq!(
+        func.params,
+        vec![(x, IrType::Str)],
+        "the threaded parameter concretizes to the return's type (`String`): {res:?}"
+    );
+    assert_eq!(
+        func.ret,
+        IrType::Str,
+        "the return concretizes to the body's solved type (`String`): {res:?}"
+    );
+    assert!(
+        func.type_params.is_empty(),
+        "a concretized threaded `any` quantifies NO type parameter — no generic \
+         beside a concrete return: {res:?}"
+    );
+    Ok(())
+}
+
+/// A wildcard `any` PARAMETER the body does NOT thread into the return
+/// (`constFn : any -> any; constFn x = "hi"`) leaves the parameter's region a
+/// bare solver var. It must stay a generic — sound, because the parameter never
+/// flows into the concrete return. This pins that the fix distinguishes
+/// threading from non-threading, never blanket-concretizing every parameter.
+#[test]
+fn unthreaded_param_wildcard_any_stays_generic() -> DResult<()> {
+    let mut i = Interner::new();
+    let const_fn = i.intern("constFn")?;
+    let any = i.intern("any")?;
+    let x = i.intern("x")?;
+    let sig_span = Span::new(10, 17);
+    let param_span = Span::new(20, 21);
+    let body_span = Span::new(24, 28);
+    // constFn : any -> any ; constFn x = "hi"
+    let ty = canon::Type::Lambda(
+        Box::new(canon::Type::Var(any)),
+        Box::new(canon::Type::Var(any)),
+    );
+    let def = canon::Def::Typed {
+        home: vec![],
+        name: Located::new(sig_span, const_fn),
+        free_vars: vec![any],
+        patterns: vec![Located::new(param_span, canon::Pattern_::PVar(x))],
+        body: Located::new(body_span, canon::Expr_::Str("hi".to_string())),
+        ty,
+    };
+    // The parameter is unused by the body: its region stays a bare solver var
+    // (nothing pinned it). The body region is the concrete `String` literal.
+    let mut regions = BTreeMap::new();
+    regions.insert(param_span, Ty::Var(0));
+    regions.insert(
+        body_span,
+        Ty::Con {
+            module: vec![],
+            name: i.intern("String")?,
+            args: vec![],
+        },
+    );
+    let res = run_with_regions(Vec::new(), vec![def], BTreeMap::new(), regions, &mut i);
+    let func = single_func(&res).expect("`constFn : any -> any` must lower cleanly");
+    // The parameter stays a generic (its own minted `any` symbol); the return is
+    // the concrete body type.
+    let (_, param_ty) = func.params.first().expect("one parameter");
+    assert!(
+        matches!(param_ty, IrType::Generic(_)),
+        "an unthreaded parameter `any` stays generic: {res:?}"
+    );
+    assert_eq!(
+        func.ret,
+        IrType::Str,
+        "the return concretizes to the body's `String` literal: {res:?}"
+    );
+    assert_eq!(
+        func.type_params.len(),
+        1,
+        "the surviving generic parameter is quantified exactly once: {res:?}"
+    );
+    Ok(())
+}
+
 /// A type variable left unresolved in *value* position (the solver never pinned
 /// it to a concrete instance — e.g. an under-determined polymorphic value) is an
 /// polymorphism feature gap, not an invariant violation: it surfaces as `IPE-L0102`
