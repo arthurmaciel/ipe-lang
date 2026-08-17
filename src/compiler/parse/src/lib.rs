@@ -2723,4 +2723,80 @@ mod tests {
             "a `do` bare-run line must parse (the synthetic PAnything from desugar_do is not gated)"
         );
     }
+
+    // -----------------------------------------------------------------------
+    // #1066/#1067 — lexer boundary: unknown char at near-max offset
+    // -----------------------------------------------------------------------
+
+    /// Verify that the lexer's `from_start_width` path at extreme offsets
+    /// yields a valid (non-inverted) span without panicking.
+    ///
+    /// The lexer clamps byte offsets to `u32::MAX`; the span construction then
+    /// uses `from_start_width` so `hi` saturates rather than wrapping.
+    /// We cannot actually feed 4 GB of source, but we can check that a
+    /// Span built from an extreme lo is always valid.
+    #[test]
+    fn span_from_start_width_at_max_is_non_inverted() {
+        use ipe_diagnostics::Span;
+        let s = Span::from_start_width(u32::MAX, 1);
+        assert!(
+            s.hi >= s.lo,
+            "Span at u32::MAX boundary must not invert: lo={} hi={}",
+            s.lo,
+            s.hi
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // #1054 — chained postfix field access on a parenthesised atom
+    // -----------------------------------------------------------------------
+
+    /// `(r).a.b` must produce two Access nodes with DISTINCT spans so that no
+    /// two nodes collide on the same `(module, span)` type-region key.
+    #[test]
+    fn chained_postfix_access_has_distinct_spans() {
+        let mut i = Interner::new();
+        let src = format!("{HDR}f r =\n    (r).a.b\n");
+        let m = parse_module(&src, &mut i).expect("(r).a.b must parse");
+        let body = find_value(&m, &i, "f")
+            .map(|v| &v.body)
+            .expect("f has a body");
+        // Outer: Access(<inner>, b) — inner: Access((r), a).
+        let spans: Option<(_, _)> = match &body.value {
+            Expr_::Access(inner, _outer_field) => match &inner.value {
+                Expr_::Access(_base, _inner_field) => Some((body.span, inner.span)),
+                _ => None,
+            },
+            _ => None,
+        };
+        assert!(
+            spans.is_some(),
+            "expected nested Access chain for (r).a.b, got {:?}",
+            body.value
+        );
+        if let Some((outer_span, inner_span)) = spans {
+            assert_ne!(
+                outer_span, inner_span,
+                "the two Access nodes must have distinct spans; both were {outer_span:?}"
+            );
+        }
+    }
+
+    // -----------------------------------------------------------------------
+    // #1079 — qualified-type split with a multibyte char near the dot
+    // -----------------------------------------------------------------------
+
+    /// A qualified type whose qualifier contains a multibyte Unicode character
+    /// before the dot must not panic. The checked `.get(..dot)` path degrades
+    /// gracefully rather than panicking on a non-char-boundary index.
+    #[test]
+    fn qualified_type_with_multibyte_qualifier_does_not_panic() {
+        // `Résumé` has multibyte chars but an ASCII dot separator — the rfind
+        // lands on a char boundary; the checked slice never fails.
+        let src = format!("{HDR}x : Résumé.T\nx = x\n");
+        // The result may be OK or a parse/canonicalisation error; what it must
+        // NOT do is panic.
+        let mut i = Interner::new();
+        let _ = parse_module(&src, &mut i);
+    }
 }
