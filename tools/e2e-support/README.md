@@ -16,7 +16,7 @@ Place the reference compiler here:
 
 Current pin: **v0.17.3** (`ipe-linux-x64.tar.gz` GitHub release asset).
 `tools/oracle/bin/` is `.gitignore`d — the ~40 MB binaries are fetched, not
-committed. `ipe --version` must print the pinned version.
+committed. `ipe version` must print the pinned version.
 
 ## Resolution order (build_go)
 

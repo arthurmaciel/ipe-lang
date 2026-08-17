@@ -149,7 +149,7 @@ pub fn render(d: &Diagnostic, file: &str, source: &str) -> String {
         footer.push("note: this is a bug in Ipe, please report it".to_string());
         footer.push(format!(
             "note: I'm not sure what went wrong here — sorry about that. This is likely a gap \
-             in the Ipe Rust compiler. Please report it (with this source + `ipe --version`) \
+             in the Ipe Rust compiler. Please report it (with this source + `ipe version`) \
              at: {ISSUE_TRACKER_URL}"
         ));
     }

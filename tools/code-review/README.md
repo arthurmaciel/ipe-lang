@@ -8,7 +8,7 @@ source slice and context, and drains a unit's `change_queue` row once decided.
 
 This app is written in Ipê, so the `ipe` compiler must be installed and on your
 `PATH`. Install it from the repo root with `./install.sh` — it builds and installs
-`ipe` to a bin dir on your `PATH`. Confirm with `ipe --version`.
+`ipe` to a bin dir on your `PATH`. Confirm with `ipe version`.
 
 The app reviews an `ipe-index` database, so you also need one. Build it once from
 the repo root:
@@ -47,11 +47,11 @@ ipe: the Ipe runtime at .../src/runtime/rust is version A, but this compiler is 
 Point the build at the installed compiler's own runtime to avoid the skew:
 
 ```bash
-ver=$(ipe --version | awk '{for(i=1;i<=NF;i++) if($i ~ /^[0-9]+\.[0-9]+\.[0-9]+$/) print $i}')
+ver=$(ipe version | awk '{for(i=1;i<=NF;i++) if($i ~ /^[0-9]+\.[0-9]+\.[0-9]+$/) print $i}')
 IPE_RUNTIME_DIR="$HOME/.ipe/runtime/$ver/rust" ipe build
 ```
 
-`ipe --version` reports the installed compiler version; the runtime under
+`ipe version` reports the installed compiler version; the runtime under
 `~/.ipe/runtime/<that version>/rust` is its guaranteed match.
 
 ## Configuration

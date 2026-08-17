@@ -58,7 +58,7 @@ if [ ! -x "$IPE_BIN" ]; then
 fi
 
 SKY_VER="$("$SKY_BIN" --version 2>/dev/null || true)"
-IPE_VER="$("$IPE_BIN"  --version 2>/dev/null || true)"
+IPE_VER="$("$IPE_BIN"  version 2>/dev/null || true)"
 echo "=== check-sky-parity ==="
 echo "  sky: ${SKY_VER:-unknown}"
 echo "  ipe: ${IPE_VER:-unknown}"
