@@ -12317,7 +12317,7 @@ impl<'a> Lowerer<'a> {
                 // unannotated path). Only whole-annotation aliases are unfolded
                 // here; a `Handler` in argument position (`withCors : … -> Handler
                 // -> Handler`) still lowers via `split_typed_sig` unchanged.
-                let (params, prologue, ret, mut any_syms_minted, row_params) =
+                let (mut params, prologue, ret, mut any_syms_minted, row_params) =
                     if !patterns.is_empty() && self.annotation_is_function_alias(ty) {
                         let solved_ty = self
                             .types
@@ -12549,6 +12549,71 @@ impl<'a> Lowerer<'a> {
                     if row_value_escapes_direct_access(&lowered_body, &row_syms) {
                         return Err(unsupported(sig_span, Feature::RowPolyRecordAnnotation));
                     }
+                }
+                // Param-position wildcard-`any` region substitution — the SEAL
+                // dual of the return substitution above. A bare-`any` parameter
+                // freshens to `IrType::Generic(any_sym)` in `split_typed_sig`.
+                // When the body THREADS that parameter into an `any` return
+                // (`thread x = x`), the checker unifies the two independent `any`
+                // flex vars, so the parameter's solved region type is the single
+                // call-site-pinned concrete type — while the return substitution
+                // already concretized `ret` to that same type. Emitting the
+                // parameter as a generic `T{n}` while the return is concrete makes
+                // the body return `x: T{n}` where the concrete type is expected
+                // (E0308, exit-0-then-cargo-fail). A wildcard `any` has ONE
+                // concrete lowering per position: source the concretely-pinned
+                // parameter from its solved type, exactly as the return does.
+                //
+                // A parameter the body does NOT thread to the return leaves its
+                // region a bare solver var (`ty_contains_var`) — those keep the
+                // generic lowering (`constFn x = "hi"`, `use x = 1`), which is
+                // sound because the parameter never flows into a concrete return.
+                // The check keys on `any_syms_minted`, so a genuine named type
+                // variable (`id x = x`) is never concretized — it stays rank-1
+                // polymorphic. Two call sites at different concrete types cannot
+                // reach here: the body-threaded unification forces one concrete
+                // type, so a second differing call site is a type error at ipe
+                // time (one concrete lowering, as `any` requires).
+                //
+                // A parameter that flows into a `Db.get*` ROW accessor is the one
+                // exception: its correct lowering is the `<R: IpeRow>` bounded
+                // generic (monomorphised per row shape by `rustc`), so even though
+                // the call site pins its region to one concrete row carrier, it
+                // stays generic. That obligation is applied by
+                // `apply_kernel_type_param_bounds` below; concretizing here would
+                // strip the very generic the bound attaches to.
+                {
+                    let minted: BTreeSet<Symbol> = any_syms_minted.iter().copied().collect();
+                    let row_accessor = |tracked: Symbol, k: KernelFn, args: &[Expr]| -> bool {
+                        is_db_row_accessor(k) && arg_is_tracked_var(args, 1, tracked)
+                    };
+                    let mut param_pinned: BTreeSet<Symbol> = BTreeSet::new();
+                    for (pat, (binder, ir_ty)) in patterns.iter().zip(params.iter_mut()) {
+                        let IrType::Generic(sym) = ir_ty else {
+                            continue;
+                        };
+                        if !minted.contains(sym) {
+                            continue;
+                        }
+                        let Some(region_ty) =
+                            self.types.regions.get(&(def.home().to_vec(), pat.span))
+                        else {
+                            continue;
+                        };
+                        if ty_contains_var(region_ty) {
+                            continue;
+                        }
+                        if body_calls_kernel_on_param(*binder, &lowered_body, &row_accessor) {
+                            continue;
+                        }
+                        let concrete = self.ir_type_from_ty(region_ty, sig_span)?;
+                        param_pinned.insert(*sym);
+                        *ir_ty = concrete;
+                    }
+                    // A parameter concretized from its region is no longer a
+                    // generic; drop its minted symbol so it is not declared as an
+                    // undeclared-then-unused Rust type parameter.
+                    any_syms_minted.retain(|s| !param_pinned.contains(s));
                 }
                 // Each quantified variable carries the Rust trait bound its
                 // body-imposed super-type obligations require (empty for a

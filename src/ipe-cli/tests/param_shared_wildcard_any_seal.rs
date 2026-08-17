@@ -1,0 +1,189 @@
+//! A wildcard `any` in PARAMETER position that the body THREADS into an `any`
+//! return (`thread : any -> any; thread x = x`) must not emit a generic
+//! parameter beside a concrete return. The checker unifies the two independent
+//! `any` occurrences through the body, so the parameter's solved type is the
+//! single call-site-pinned concrete type; emitting the parameter as a generic
+//! `T{n}` while the return is that concrete type makes the body return the
+//! generic where the concrete is expected (E0308) — an accept-then-`cargo`-fail
+//! (THE SEAL). A wildcard `any` has ONE concrete lowering per position: the
+//! threaded parameter concretizes to the same type as the return.
+//!
+//! The positive cases route through [`support::assert_seal_builds`] so the SEAL
+//! claim is backed by an actual `cargo build` under `IPE_E2E=1`.
+
+mod support;
+
+use std::fs;
+use std::path::{Path, PathBuf};
+
+#[allow(clippy::expect_used)]
+fn runtime() -> PathBuf {
+    ipe::resolve_runtime().expect("runtime must resolve for this test")
+}
+
+#[allow(clippy::expect_used)]
+fn write_entry(test_name: &str, main_ipe: &str) -> PathBuf {
+    let dir = std::env::temp_dir().join(format!("ipe_param_any_seal_{test_name}"));
+    let _ = fs::remove_dir_all(&dir);
+    fs::create_dir_all(&dir).expect("create source dir");
+    let entry = dir.join("Main.ipe");
+    fs::write(&entry, main_ipe).expect("write Main.ipe");
+    entry
+}
+
+#[allow(clippy::expect_used)]
+fn emit(entry: &Path, test_name: &str) -> (Result<(), ipe::CliError>, PathBuf) {
+    let out =
+        PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join(format!("param_any_seal_{test_name}"));
+    let _ = fs::remove_dir_all(&out);
+    // The single-entry path emits a crate named `ipe-app`, the anchor
+    // `support::assert_seal_builds` retargets under `IPE_E2E=1`.
+    let result = ipe::build(entry, &out, &runtime());
+    (result, out)
+}
+
+/// The repro: `thread : any -> any` threaded through the body, called at one
+/// concrete type. `ipe` accepts it AND the emitted crate builds — the parameter
+/// concretizes to the return's type (`fn(x: String) -> String`), never a generic
+/// `T{n}` returned where `String` is expected.
+#[test]
+fn threaded_param_any_concretizes_and_builds() {
+    let entry = write_entry(
+        "threaded",
+        "\
+module Main exposing (main)
+import Ipe.Io as Io
+
+thread : any -> any
+thread x = x
+
+main : Task Error ()
+main = Io.println (thread \"hi\")
+",
+    );
+    let (built, out) = emit(&entry, "threaded");
+    assert!(
+        built.is_ok(),
+        "`thread : any -> any; thread x = x` called at a concrete type must be \
+         accepted (ipe-accept): {:?}",
+        built.err()
+    );
+    let emitted = support::read_all_emitted_src(&out);
+    assert!(
+        emitted.contains("fn main_thread(x: String) -> String"),
+        "the threaded parameter must concretize to the return type \
+         (`fn main_thread(x: String) -> String`), never a generic beside a \
+         concrete return:\n{emitted}"
+    );
+    support::assert_seal_builds("param_any_seal_threaded", &out);
+    if let Some(parent) = entry.parent() {
+        let _ = fs::remove_dir_all(parent);
+    }
+}
+
+/// A parameter `any` the body does NOT thread into the `any` return
+/// (`constFn x = "hi"`) leaves its region a bare solver var — it stays a generic
+/// `T{n}`, which is sound because the parameter never flows into the concrete
+/// return. This proves the fix distinguishes threading from non-threading rather
+/// than blanket-rejecting or blanket-concretizing every param-any + return-any.
+#[test]
+fn unthreaded_param_any_stays_generic_and_builds() {
+    let entry = write_entry(
+        "unthreaded",
+        "\
+module Main exposing (main)
+import Ipe.Io as Io
+
+constFn : any -> any
+constFn x = \"hi\"
+
+main : Task Error ()
+main = Io.println (constFn \"yo\")
+",
+    );
+    let (built, out) = emit(&entry, "unthreaded");
+    assert!(
+        built.is_ok(),
+        "`constFn : any -> any; constFn x = \"hi\"` must be accepted (the param is \
+         not threaded into the return): {:?}",
+        built.err()
+    );
+    let emitted = support::read_all_emitted_src(&out);
+    assert!(
+        emitted.contains("fn main_const_fn<T1: Clone>(x: T1) -> String"),
+        "an unthreaded parameter `any` stays generic (`fn main_const_fn<T1>(x: T1) \
+         -> String`):\n{emitted}"
+    );
+    support::assert_seal_builds("param_any_seal_unthreaded", &out);
+    if let Some(parent) = entry.parent() {
+        let _ = fs::remove_dir_all(parent);
+    }
+}
+
+/// A genuine NAMED type variable threaded through the body (`id2 : a -> a`) is
+/// rank-1 polymorphism, not a wildcard — it must stay generic (`fn id2<T>(x: T)
+/// -> T`), never be concretized by the param-`any` substitution (which keys on
+/// the minted `any` symbols, not a named variable).
+#[test]
+fn named_type_var_stays_generic_and_builds() {
+    let entry = write_entry(
+        "namedvar",
+        "\
+module Main exposing (main)
+import Ipe.Io as Io
+
+id2 : a -> a
+id2 x = x
+
+main : Task Error ()
+main = Io.println (id2 \"hey\")
+",
+    );
+    let (built, out) = emit(&entry, "namedvar");
+    assert!(
+        built.is_ok(),
+        "`id2 : a -> a; id2 x = x` is genuine rank-1 polymorphism and must be \
+         accepted: {:?}",
+        built.err()
+    );
+    let emitted = support::read_all_emitted_src(&out);
+    assert!(
+        emitted.contains("fn main_id2<T1: Clone>(x: T1) -> T1"),
+        "a named type variable stays generic (`fn main_id2<T1>(x: T1) -> T1`):\n{emitted}"
+    );
+    support::assert_seal_builds("param_any_seal_namedvar", &out);
+    if let Some(parent) = entry.parent() {
+        let _ = fs::remove_dir_all(parent);
+    }
+}
+
+/// Calling a threaded `any -> any` at two DIFFERENT concrete types is a type
+/// error at `ipe` time, not an accept-then-`cargo`-fail: the body-threaded
+/// unification forces ONE concrete type, so a second differing call site cannot
+/// unify. One concrete lowering per wildcard position, exactly as `any` requires.
+#[test]
+fn threaded_param_any_at_two_types_is_rejected() {
+    let entry = write_entry(
+        "two_types",
+        "\
+module Main exposing (main)
+import Ipe.Io as Io
+import Ipe.String as String
+
+thread : any -> any
+thread x = x
+
+main : Task Error ()
+main = Io.println (String.concat (thread \"hi\") (thread (String.fromInt 3)))
+",
+    );
+    let (built, _out) = emit(&entry, "two_types");
+    assert!(
+        built.is_err(),
+        "a threaded `any -> any` used at two different concrete types must be an \
+         `ipe`-time type error (one concrete lowering), never an accept-then-cargo-fail"
+    );
+    if let Some(parent) = entry.parent() {
+        let _ = fs::remove_dir_all(parent);
+    }
+}
