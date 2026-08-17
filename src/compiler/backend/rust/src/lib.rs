@@ -2578,7 +2578,17 @@ impl<'a> EmitCtx<'a> {
     /// uncompilable) Rust identifier.
     pub(crate) fn resolve_ident(&self, sym: Symbol) -> DResult<&str> {
         match self.interner.resolve(sym) {
-            Some(s) if !s.is_empty() => Ok(s),
+            Some(s) if ipe_intern::is_valid_ident_text(s) => Ok(s),
+            Some(s) if !s.is_empty() => Err(Diagnostic::CompilerBug {
+                where_: "backend.invalid_ident_symbol",
+                detail: format!(
+                    "symbol {} resolved to {:?}, which is not a valid Rust identifier \
+                     (contains dots or non-ASCII characters); a dot-joined qualified \
+                     name must not reach identifier emission",
+                    sym.as_raw(),
+                    s
+                ),
+            }),
             _ => Err(Diagnostic::CompilerBug {
                 where_: "backend.dangling_symbol",
                 detail: format!(

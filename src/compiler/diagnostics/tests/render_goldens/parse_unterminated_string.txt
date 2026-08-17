@@ -1,4 +1,4 @@
--- UNTERMINATED STRING ------------------------------------- test.ipe
+-- UNTERMINATED STRING LITERAL ----------------------------- test.ipe
 
 This string opens with a `"` but never closes.
 

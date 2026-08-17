@@ -552,67 +552,14 @@ fn an_article(rendered: &str) -> String {
 }
 
 /// The uppercase title shown in the rule, chosen per code so it names what
-/// actually went wrong — not merely its family. A redundant-branch warning and a
-/// non-exhaustive `case` are both type-family codes, yet "REDUNDANT BRANCH" and
-/// "MISSING PATTERNS" describe them; a single family-wide "TYPE MISMATCH" would
-/// be factually wrong for both.
+/// The uppercase title for the human-facing header rule.
 ///
-/// Codes without a specific entry fall back to a sensible per-family default via
-/// [`family_default_title`], so every code renders a short, uppercase, jargon-free
-/// title, and an unrecognised shape still returns a title rather than panicking.
-fn title_rule_name(code: crate::code::Code) -> &'static str {
-    use crate::code;
-    match code {
-        // Parse: the family default ("PARSE ERROR") already reads well for the
-        // whole family, so only the few whose specifics deserve their own word
-        // are pulled out.
-        code::IPE_P0002 => "UNEXPECTED END OF FILE",
-        code::IPE_P0003 | code::IPE_L0200 => "NESTED TOO DEEPLY",
-        code::IPE_L0136 => "BAD MAIN",
-        code::IPE_P0013 | code::IPE_P0016 => "NUMBER OUT OF RANGE",
-        code::IPE_P0014 => "UNTERMINATED STRING",
-        code::IPE_P0017 => "UNTERMINATED COMMENT",
-        code::IPE_P0050 => "UNCLOSED DELIMITER",
-        code::IPE_P0063 => "UNSAFE PATH",
-
-        // Name resolution.
-        code::IPE_N0001 => "NAME NOT FOUND",
-        code::IPE_N0002 => "TYPE NOT FOUND",
-        code::IPE_N0003 => "CONSTRUCTOR NOT FOUND",
-        code::IPE_N0004 | code::IPE_N0020 => "MODULE ERROR",
-        code::IPE_N0005 | code::IPE_N0022 => "IMPORT ERROR",
-        code::IPE_N0010 | code::IPE_N0011 | code::IPE_N0012 => "DUPLICATE DEFINITION",
-        code::IPE_N0021 => "IMPORT CYCLE",
-        code::IPE_N0024 | code::IPE_N0027 => "AMBIGUOUS IMPORT",
-
-        // Type.
-        code::IPE_T0001 => "TYPE MISMATCH",
-        code::IPE_T0002 => "INFINITE TYPE",
-        code::IPE_T0010 => "MISSING PATTERNS",
-        code::IPE_T0011 => "REDUNDANT BRANCH",
-        code::IPE_T0012 => "NO SUCH FIELD",
-        code::IPE_T0013 => "PATTERN ARITY",
-        code::IPE_T0018 => "CATCH-ALL HIDES CASES",
-
-        // Everything else takes its family's default title.
-        _ => family_default_title(code),
-    }
-}
-
-/// The uppercase per-family fallback title, keyed on the family letter of
-/// `IPE-<letter>####`. Read through `get` so a shorter-than-expected code cannot
-/// index out of range; an unrecognised letter still returns a plain title.
-fn family_default_title(code: crate::code::Code) -> &'static str {
-    match code.as_str().as_bytes().get(4) {
-        Some(b'P') => "PARSE ERROR",
-        Some(b'N') => "NAMING ERROR",
-        Some(b'T') => "TYPE ERROR",
-        Some(b'L') => "UNSUPPORTED",
-        Some(b'F') => "FOREIGN BINDING ERROR",
-        Some(b'S') => "SECURITY",
-        Some(b'I') => "INTERNAL COMPILER ERROR",
-        _ => "ERROR",
-    }
+/// Derives mechanically from the [`crate::code::title`] SSOT: every code's
+/// human header is its lowercase taxonomy title uppercased. This keeps the
+/// JSON `title` field and the rendered rule header in sync from a single
+/// declaration — adding a code row in `code.rs` automatically updates both.
+fn title_rule_name(code: crate::code::Code) -> String {
+    title(code).to_ascii_uppercase()
 }
 
 /// Render a diagnostic as a snippet-free, colour-free message.
@@ -1131,13 +1078,15 @@ fn parse_label(msg: &ParseError) -> Option<String> {
         ParseError::MalformedLet(defect) => Some(let_defect_str(*defect).to_string()),
         ParseError::MalformedIf(defect) => Some(if_defect_str(*defect).to_string()),
         ParseError::InvalidPathLiteral { literal, reason } => {
-            let detail = match *reason {
-                "nul" => {
+            use ipe_path_core::PathRejection;
+            let detail = match reason {
+                PathRejection::Nul => {
                     "the path contains a NUL byte (a syscall-boundary truncation / traversal risk)"
                         .to_string()
                 }
-                "traversal" => format!("the path escapes its root via `..` traversal: {literal:?}"),
-                other => format!("invalid path: {other}"),
+                PathRejection::Traversal => {
+                    format!("the path escapes its root via `..` traversal: {literal:?}")
+                }
             };
             Some(detail)
         }
@@ -2312,7 +2261,7 @@ mod tests {
         };
         let out = render(&d, "w.ipe", "Red\n");
         assert!(
-            out.starts_with("-- REDUNDANT BRANCH (warning) "),
+            out.starts_with("-- REDUNDANT CASE BRANCH (warning) "),
             "title rule names the specific problem and the severity:\n{out}"
         );
         assert!(
@@ -2358,7 +2307,8 @@ mod tests {
             },
         };
         assert!(
-            render(&missing, "m.ipe", "").starts_with("-- MISSING PATTERNS "),
+            render(&missing, "m.ipe", "")
+                .starts_with("-- THIS CASE DOES NOT HANDLE EVERY POSSIBILITY "),
             "IPE-T0010 title"
         );
         let no_field = Diagnostic::Type {
@@ -2369,7 +2319,7 @@ mod tests {
             },
         };
         assert!(
-            render(&no_field, "f.ipe", "").starts_with("-- NO SUCH FIELD "),
+            render(&no_field, "f.ipe", "").starts_with("-- THIS RECORD HAS NO SUCH FIELD "),
             "IPE-T0012 title"
         );
     }
@@ -2672,6 +2622,62 @@ mod tests {
         assert!(
             json.contains("\"severity\":\"bug\""),
             "CompilerBug severity must be 'bug': {json:?}"
+        );
+    }
+
+    /// The human header title and the JSON `title` field both derive from the
+    /// `code::title()` SSOT. This asserts they cannot drift: for every code in
+    /// the taxonomy the uppercased SSOT title matches what `title_rule_name`
+    /// would produce, and equals what `render_json` emits in the `"title"` field.
+    #[test]
+    fn human_header_and_json_title_derive_from_one_ssot() {
+        use crate::code::{ALL_CODES, title};
+        for &code in ALL_CODES {
+            let ssot = title(code);
+            let header = title_rule_name(code);
+            assert_eq!(
+                header,
+                ssot.to_ascii_uppercase(),
+                "human header for {} must be the SSOT title uppercased",
+                code.as_str()
+            );
+        }
+    }
+
+    /// A `path "…"` literal containing a NUL byte renders its specific detail message.
+    ///
+    /// Uses `plain_message` (which includes the label from `parse_label`) because
+    /// `render` with a `Span::DUMMY` suppresses the snippet+label band.
+    #[test]
+    fn path_rejection_nul_renders_nul_message() {
+        let diag = Diagnostic::Parse {
+            span: crate::span::Span::DUMMY,
+            msg: ParseError::InvalidPathLiteral {
+                literal: "safe\0bad".into(),
+                reason: ipe_path_core::PathRejection::Nul,
+            },
+        };
+        let out = plain_message(&diag, "");
+        assert!(
+            out.to_ascii_lowercase().contains("nul"),
+            "Nul rejection must mention NUL in plain_message output:\n{out}"
+        );
+    }
+
+    /// A `path "…"` literal with a traversal renders its specific detail message.
+    #[test]
+    fn path_rejection_traversal_renders_traversal_message() {
+        let diag = Diagnostic::Parse {
+            span: crate::span::Span::DUMMY,
+            msg: ParseError::InvalidPathLiteral {
+                literal: "../secret".into(),
+                reason: ipe_path_core::PathRejection::Traversal,
+            },
+        };
+        let out = plain_message(&diag, "");
+        assert!(
+            out.contains("traversal") || out.contains(".."),
+            "Traversal rejection must mention traversal in plain_message output:\n{out}"
         );
     }
 }

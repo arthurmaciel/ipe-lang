@@ -1,4 +1,4 @@
--- INTERNAL COMPILER ERROR --------------------------------- test.ipe
+-- INTERN: UNRESOLVED SYMBOL ------------------------------- test.ipe
 
 Something went wrong inside the compiler while working on your code — this is my mistake, not yours.
   = note: symbol 42 has no entry

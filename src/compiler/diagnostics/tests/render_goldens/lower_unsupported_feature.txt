@@ -1,4 +1,4 @@
--- UNSUPPORTED --------------------------------------------- test.ipe
+-- OPERATOR NOT SUPPORTED YET ------------------------------ test.ipe
 
 This uses something I can't compile yet.
 

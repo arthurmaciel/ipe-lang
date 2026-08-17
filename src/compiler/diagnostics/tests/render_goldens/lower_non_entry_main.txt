@@ -1,4 +1,4 @@
--- BAD MAIN ------------------------------------------------ test.ipe
+-- `MAIN` IS NOT A RUNNABLE PROGRAM ENTRY ------------------ test.ipe
 
 `main` has to be a `Task Error ()` — the one effect your program runs. This `main` is an `Int`.
 

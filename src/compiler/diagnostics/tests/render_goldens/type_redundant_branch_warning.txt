@@ -1,4 +1,4 @@
--- REDUNDANT BRANCH (warning) ------------------------------ test.ipe
+-- REDUNDANT CASE BRANCH (warning) ------------------------- test.ipe
 
 This branch for `Red` can never run — an earlier branch already handles it.
 

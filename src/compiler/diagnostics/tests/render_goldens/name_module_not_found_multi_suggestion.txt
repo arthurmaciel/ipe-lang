@@ -1,4 +1,4 @@
--- MODULE ERROR -------------------------------------------- test.ipe
+-- MODULE NOT FOUND ---------------------------------------- test.ipe
 
 I couldn't find the module `Httpp` on disk.
 

@@ -1,4 +1,4 @@
--- NAMING ERROR -------------------------------------------- test.ipe
+-- TYPE ALIAS EXPANSION TOO DEEP OR TOO LARGE -------------- test.ipe
 
 This type alias expands forever, so I can't work out what it finally stands for.
 

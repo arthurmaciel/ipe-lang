@@ -1,4 +1,4 @@
--- DUPLICATE DEFINITION ------------------------------------ test.ipe
+-- VALUE DEFINED MORE THAN ONCE ---------------------------- test.ipe
 
 `x` is already defined, so I found two definitions with the same name.
 
