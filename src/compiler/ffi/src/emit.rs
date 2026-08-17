@@ -35,6 +35,21 @@ pub fn foreign_to_ipe(t: &str) -> String {
         let ok = inner.split(',').next().unwrap_or(inner).trim();
         return format!("Result Error {}", paren_multi(&foreign_to_ipe(ok)));
     }
+    // Qualified Result alias: `fmt::Result`, `io::Result<T>`, etc.  The
+    // module-path prefix prevents the direct strip above from matching; check
+    // the last `::` segment separately.
+    if let Some((_, last_seg)) = t.rsplit_once("::") {
+        let last_base = last_seg.split('<').next().unwrap_or(last_seg).trim();
+        if last_base == "Result" {
+            if let Some(inner) = strip_container(last_seg, "Result") {
+                // `io::Result<T>`: extract the Ok payload.
+                let ok = inner.split(',').next().unwrap_or(inner).trim();
+                return format!("Result Error {}", paren_multi(&foreign_to_ipe(ok)));
+            }
+            // `fmt::Result` — bare alias for `Result<(), _>`.
+            return "Result Error ()".to_owned();
+        }
+    }
     match t {
         "str" | "String" | "OsStr" | "OsString" | "Path" | "PathBuf" | "CStr" | "CString" => {
             "String".to_owned()
@@ -496,6 +511,20 @@ mod tests {
         );
         assert_eq!(foreign_to_ipe("semver::Version"), "Version");
         assert_eq!(foreign_to_ipe("Vec<Option<i32>>"), "List (Maybe Int)");
+    }
+
+    #[test]
+    fn qualified_result_aliases_map_correctly() {
+        // `fmt::Result` is `Result<(), fmt::Error>` — Ok payload is `()`.
+        assert_eq!(foreign_to_ipe("fmt::Result"), "Result Error ()");
+        assert_eq!(foreign_to_ipe("std::fmt::Result"), "Result Error ()");
+        // `io::Result<T>` carries an explicit Ok type arg; error is absorbed.
+        assert_eq!(foreign_to_ipe("io::Result<()>"), "Result Error ()");
+        assert_eq!(
+            foreign_to_ipe("std::io::Result<String>"),
+            "Result Error String"
+        );
+        assert_eq!(foreign_to_ipe("std::io::Result<usize>"), "Result Error Int");
     }
 
     #[test]
