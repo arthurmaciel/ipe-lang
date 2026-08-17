@@ -818,12 +818,14 @@ fn list_modules(path: &Path, format: OutputFormat) {
             }
         }
         OutputFormat::Json => {
-            let list = ordered
-                .iter()
-                .map(|n| json_string(n))
-                .collect::<Vec<_>>()
-                .join(", ");
-            println!("{{\"modules\":[{list}]}}");
+            let names: Vec<&str> = ordered.iter().map(|n| n.as_str()).collect();
+            println!(
+                "{}",
+                crate::cli_args::json::object(&[(
+                    "modules",
+                    crate::cli_args::json::string_array(&names),
+                )])
+            );
         }
         OutputFormat::Human => {
             let mut body = String::new();
@@ -1584,27 +1586,11 @@ fn render_module_json(out: &mut String, module: &ModuleDoc, index: &AnchorIndex)
     out.push_str("    }");
 }
 
-/// Encode a string as a JSON string literal, escaping the characters JSON
-/// requires (`"`, `\`, and the C0 control set, with the short escapes for the
-/// common ones).
+/// Encode a string as a JSON string literal via the CLI's one JSON-string SSOT
+/// ([`crate::cli_args::json::string`]) so the multi-line `docs.json` and the
+/// compact `--json` verdicts escape identically.
 fn json_string(s: &str) -> String {
-    let mut out = String::with_capacity(s.len() + 2);
-    out.push('"');
-    for c in s.chars() {
-        match c {
-            '"' => out.push_str("\\\""),
-            '\\' => out.push_str("\\\\"),
-            '\n' => out.push_str("\\n"),
-            '\r' => out.push_str("\\r"),
-            '\t' => out.push_str("\\t"),
-            c if (c as u32) < 0x20 => {
-                let _ = write!(out, "\\u{:04x}", c as u32);
-            }
-            c => out.push(c),
-        }
-    }
-    out.push('"');
-    out
+    crate::cli_args::json::string(s)
 }
 
 /// The type-parameter suffix a union type displays (`Maybe` at arity 1 → ` a`).

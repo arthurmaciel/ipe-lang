@@ -56,6 +56,7 @@ use std::process::Command;
 use ipe_ir::Capability;
 
 use crate::CliError;
+use crate::cli_args::OutputFormat;
 use crate::project::{self, ProjectManifest};
 
 /// The package-gate checks, in the fixed order [`run_audit`] runs them. Naming
@@ -197,44 +198,119 @@ fn tier2_probe_fixture() -> Result<PathBuf, CliError> {
 /// package cannot be built or read; [`CliError::PackageAudit`] when a Tier-1
 /// check rejects the package (the gate's hard reject).
 pub fn run_audit(rest: &[String]) -> Result<(), CliError> {
-    let (path, index_root) = parse_audit_args(rest)?;
+    let (path, index_root, format) = parse_audit_args(rest)?;
     let prepared = prepare(&path)?;
-
-    // Run every check in order; the FIRST rejection is the verdict. Ordered
-    // Security-first: the provenance scan (an authored abrupt-failure construct
-    // in author Rust is a soundness hole in the SHIPPED artifact) and the
-    // capability honesty check run before the semver and supply-chain checks.
-    provenance_panic_scan(&prepared)?;
-    capability_consistency(&prepared)?;
-    enforced_semver(&prepared, index_root.as_deref())?;
-    supply_chain(&prepared)?;
-
-    // Tier-2 (native-bearing packages only): build + exercise the native code
-    // under a declared-scoped jail and reconcile observed-vs-declared,
-    // fail-closed (ADR 0046). A pure Ipê package skips it; Tier-1 already gated
-    // it exactly.
-    let tier2 = crate::audit_native::native_tier2(&crate::audit_native::NativeAudit {
-        declared: &prepared.manifest.capabilities,
-        has_rust_deps: !prepared.manifest.rust_dependencies.is_empty(),
-        root: &prepared.manifest.root,
-        emitted_dir: &prepared.emitted_dir,
-        probe_fixture: tier2_probe_fixture()?,
-    })?;
-
+    let name = prepared.manifest.name.clone();
     let version = prepared
         .manifest
         .version
         .as_ref()
         .map_or_else(|| "(unversioned)".to_owned(), ToString::to_string);
-    print!(
-        "{}",
-        crate::style::frame(&crate::style::gutter(&passing_summary(
-            &prepared.manifest.name,
-            &version,
-            &tier2
-        )))
-    );
-    Ok(())
+
+    let outcome = audit_gate(&prepared, index_root.as_deref());
+
+    match format {
+        OutputFormat::Json => emit_audit_json(&name, &version, &outcome),
+        // `--plain` and the default share the human renderer; the audit verdict
+        // has no separate flush-left line form, so `--plain` is the human report
+        // (the format parse already rejected `--plain --json` together).
+        OutputFormat::Human | OutputFormat::Plain => match outcome {
+            Ok(tier2) => {
+                print!(
+                    "{}",
+                    crate::style::frame(&crate::style::gutter(&passing_summary(
+                        &name, &version, &tier2
+                    )))
+                );
+                Ok(())
+            }
+            Err(err) => Err(err),
+        },
+    }
+}
+
+/// Run the full Tier-1 gate, then Tier-2 for native-bearing packages, returning
+/// the first rejection or the Tier-2 outcome on a clean pass.
+///
+/// The checks run Security-first: the provenance scan (an authored abrupt-failure
+/// construct in author Rust is a soundness hole in the SHIPPED artifact) and the
+/// capability honesty check run before the semver and supply-chain checks; the
+/// FIRST rejection is the verdict. A pure Ipê package skips Tier-2 (Tier-1 already
+/// gated it exactly); a native package builds and exercises its native code under
+/// a declared-scoped jail and reconciles observed-vs-declared, fail-closed
+/// (ADR 0046).
+fn audit_gate(
+    prepared: &Prepared,
+    index_root: Option<&Path>,
+) -> Result<crate::audit_native::Tier2Outcome, CliError> {
+    provenance_panic_scan(prepared)?;
+    capability_consistency(prepared)?;
+    enforced_semver(prepared, index_root)?;
+    supply_chain(prepared)?;
+
+    crate::audit_native::native_tier2(&crate::audit_native::NativeAudit {
+        declared: &prepared.manifest.capabilities,
+        has_rust_deps: !prepared.manifest.rust_dependencies.is_empty(),
+        root: &prepared.manifest.root,
+        emitted_dir: &prepared.emitted_dir,
+        probe_fixture: tier2_probe_fixture()?,
+    })
+}
+
+/// Emit the compact JSON audit verdict to stdout, then map a rejection to the
+/// already-emitted sentinel so the process still exits non-zero without printing
+/// a second human message. On a pass, the object records the certified verdict
+/// and the Tier-2 disposition; on a reject, `certified` is `false` and `reason`
+/// carries the failing check's one-line message.
+fn emit_audit_json(
+    name: &str,
+    version: &str,
+    outcome: &Result<crate::audit_native::Tier2Outcome, CliError>,
+) -> Result<(), CliError> {
+    println!("{}", audit_verdict_json(name, version, outcome));
+
+    match outcome {
+        Ok(_) => Ok(()),
+        // The verdict object was already written to stdout; return the sentinel
+        // so the exit is non-zero with nothing more printed.
+        Err(_) => Err(CliError::DiagnosticJsonEmitted),
+    }
+}
+
+/// Build the compact JSON audit verdict object (the pure core of
+/// [`emit_audit_json`]): a certified pass with its Tier-2 disposition, or a
+/// `certified:false` object carrying the failing check's one-line reason.
+fn audit_verdict_json(
+    name: &str,
+    version: &str,
+    outcome: &Result<crate::audit_native::Tier2Outcome, CliError>,
+) -> String {
+    use crate::audit_native::Tier2Outcome;
+    use crate::cli_args::json;
+
+    match outcome {
+        Ok(Tier2Outcome::SkippedPureIpe) => json::object(&[
+            ("package", json::string(name)),
+            ("version", json::string(version)),
+            ("tier1", json::string("pass")),
+            ("tier2", json::string("skipped")),
+            ("certified", "true".to_owned()),
+        ]),
+        Ok(Tier2Outcome::Certified { platform }) => json::object(&[
+            ("package", json::string(name)),
+            ("version", json::string(version)),
+            ("tier1", json::string("pass")),
+            ("tier2", json::string("pass")),
+            ("platform", json::string(platform)),
+            ("certified", "true".to_owned()),
+        ]),
+        Err(err) => json::object(&[
+            ("package", json::string(name)),
+            ("version", json::string(version)),
+            ("certified", "false".to_owned()),
+            ("reason", json::string(&err.to_string())),
+        ]),
+    }
 }
 
 /// Compose the passing summary, advertising Tier-2 ONLY for what genuinely ran
@@ -260,16 +336,18 @@ fn passing_summary(name: &str, version: &str, tier2: &crate::audit_native::Tier2
     }
 }
 
-/// Parse `ipe package audit`'s tail: an optional positional `<path>` and an
+/// Parse `ipe package audit`'s tail: an optional positional `<path>`, an
 /// optional `--index <dir>` (the curated index checkout the semver check reads
-/// the previous published version from; defaults to the resolver's index root).
+/// the previous published version from; defaults to the resolver's index root),
+/// and the shared `--plain` / `--json` output-format flags.
 ///
 /// # Errors
-/// [`CliError::UsageOwned`] on an unknown flag, a missing `--index` value, or a
-/// second positional.
-fn parse_audit_args(rest: &[String]) -> Result<(PathBuf, Option<PathBuf>), CliError> {
+/// [`CliError::UsageOwned`] on an unknown flag, a missing `--index` value, a
+/// second positional, or `--plain --json` together.
+fn parse_audit_args(rest: &[String]) -> Result<(PathBuf, Option<PathBuf>, OutputFormat), CliError> {
     let mut path: Option<PathBuf> = None;
     let mut index: Option<PathBuf> = None;
+    let mut format: Option<OutputFormat> = None;
     let mut it = rest.iter();
     while let Some(arg) = it.next() {
         match arg.as_str() {
@@ -284,10 +362,10 @@ fn parse_audit_args(rest: &[String]) -> Result<(PathBuf, Option<PathBuf>), CliEr
                 }
                 index = Some(PathBuf::from(value));
             }
+            "--plain" => set_format(&mut format, OutputFormat::Plain)?,
+            "--json" => set_format(&mut format, OutputFormat::Json)?,
             flag if flag.starts_with('-') => {
-                return Err(CliError::UsageOwned(format!(
-                    "ipe package audit: unknown flag `{flag}`"
-                )));
+                return Err(crate::cli_args::usage_unknown_flag("package audit", flag));
             }
             positional => {
                 if path.is_some() {
@@ -299,7 +377,29 @@ fn parse_audit_args(rest: &[String]) -> Result<(PathBuf, Option<PathBuf>), CliEr
             }
         }
     }
-    Ok((path.unwrap_or_else(|| PathBuf::from(".")), index))
+    Ok((
+        path.unwrap_or_else(|| PathBuf::from(".")),
+        index,
+        format.unwrap_or_default(),
+    ))
+}
+
+/// Fold a requested output format into `slot`, rejecting `--plain --json`
+/// together (or a repeat) so a machine consumer never gets a silently-chosen
+/// winner — the same mutual-exclusion the shared format parse enforces.
+fn set_format(slot: &mut Option<OutputFormat>, requested: OutputFormat) -> Result<(), CliError> {
+    match slot {
+        None => {
+            *slot = Some(requested);
+            Ok(())
+        }
+        Some(existing) if *existing == requested => Err(CliError::Usage(
+            "ipe package audit: an output-format flag was given more than once",
+        )),
+        Some(_) => Err(CliError::Usage(
+            "ipe package audit: --plain and --json are mutually exclusive",
+        )),
+    }
 }
 
 /// Locate the package's `ipe.toml`, parse the manifest, and build the package to
@@ -886,6 +986,50 @@ const fn reject(check: Check, message: String) -> CliError {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn args(v: &[&str]) -> Vec<String> {
+        v.iter().map(|x| (*x).to_owned()).collect()
+    }
+
+    #[test]
+    fn audit_parses_output_format_flags() {
+        let (_, _, fmt) = parse_audit_args(&args(&["--json"])).expect("json");
+        assert_eq!(fmt, OutputFormat::Json);
+        let (_, _, fmt) = parse_audit_args(&args(&["--plain"])).expect("plain");
+        assert_eq!(fmt, OutputFormat::Plain);
+        let (_, _, fmt) = parse_audit_args(&args(&[])).expect("default");
+        assert_eq!(fmt, OutputFormat::Human);
+    }
+
+    #[test]
+    fn audit_rejects_plain_and_json_together() {
+        assert!(parse_audit_args(&args(&["--plain", "--json"])).is_err());
+        assert!(parse_audit_args(&args(&["--json", "--json"])).is_err());
+    }
+
+    #[test]
+    fn audit_verdict_json_is_compact_pass_and_fail() {
+        use crate::audit_native::Tier2Outcome;
+
+        let pass = audit_verdict_json("http", "1.2.0", &Ok(Tier2Outcome::SkippedPureIpe));
+        assert_eq!(
+            pass,
+            "{\"package\":\"http\",\"version\":\"1.2.0\",\"tier1\":\"pass\",\"tier2\":\"skipped\",\"certified\":true}"
+        );
+
+        let fail = audit_verdict_json(
+            "http",
+            "1.2.0",
+            &Err(reject(
+                Check::Capability,
+                "used but not declared".to_owned(),
+            )),
+        );
+        assert!(fail.contains("\"certified\":false"), "fail verdict: {fail}");
+        assert!(fail.contains("\"reason\":"), "carries a reason: {fail}");
+        // Byte-uniform compact: no space after a comma.
+        assert!(!fail.contains(", "), "compact: {fail}");
+    }
 
     /// The Tier-2 probe fixture the gate runs is materialized from the embedded
     /// bytes, NOT read from a compile-time source path — so a shipped binary with

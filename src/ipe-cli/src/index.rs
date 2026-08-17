@@ -76,13 +76,27 @@ pub fn entry_file_exists(index_root: &Path, name: &str) -> bool {
 /// unknown capability name).
 pub fn read_entry(index_root: &Path, name: &str) -> Result<IndexEntry, CliError> {
     let path = entry_path(index_root, name);
-    let text = std::fs::read_to_string(&path).map_err(|e| {
-        CliError::Resolve(format!(
-            "package `{name}` is not in the index (could not read {}: {e})",
-            path.display()
-        ))
-    })?;
+    let text = std::fs::read_to_string(&path).map_err(|e| read_entry_error(name, &e))?;
     parse_entry(name, &text)
+}
+
+/// The typed diagnostic when an index entry cannot be read. A missing entry is
+/// the ordinary "unknown package" case: the message names the package and points
+/// the user at the index, WITHOUT leaking the internal cache path or the errno
+/// tail. Any other read failure (a permission or corruption problem the user can
+/// act on) keeps a readable kind description, still errno-free.
+fn read_entry_error(name: &str, e: &std::io::Error) -> CliError {
+    if e.kind() == std::io::ErrorKind::NotFound {
+        CliError::Resolve(format!(
+            "add: package `{name}` is not in the index — check the name, or run \
+             `ipe rust add` for a Rust crate"
+        ))
+    } else {
+        CliError::Resolve(format!(
+            "add: could not read the index entry for `{name}` — {}",
+            e.kind()
+        ))
+    }
 }
 
 /// Validate a single `packages/<name>.toml` entry file by its own path, the way

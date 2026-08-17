@@ -144,7 +144,7 @@ const COMMANDS: &[Command] = &[
     Command {
         name: "deploy",
         run: crate::run_deploy,
-        summary: "Build a single self-jailing binary (app + profile fused into sandbox wrapper). Use --bundle for the multi-file opt-out.",
+        summary: "Build a single self-jailing binary (app + profile fused into sandbox wrapper); a multi-file opt-out is available.",
         args: "[<path>]",
         args_desc: "A source file, a project directory, or an ipe.toml. Defaults to the current project.",
         options: &[
@@ -192,7 +192,10 @@ const COMMANDS: &[Command] = &[
         summary: "Build and run the project's tests/Main.ipe, reporting pass/fail.",
         args: "[<path>]",
         args_desc: "A source file, a project directory, or an ipe.toml. Defaults to the current project.",
-        options: &[],
+        options: &[Opt {
+            flag: "[--json]",
+            desc: "emit a compact {\"result\":…} verdict on stdout (non-zero exit on a failing case)",
+        }],
     },
     Command {
         name: "verify",
@@ -200,7 +203,10 @@ const COMMANDS: &[Command] = &[
         summary: "Run the whole project gate: format, type-check, build, then test.",
         args: "[<path>]",
         args_desc: "A source file, a project directory, or an ipe.toml. Defaults to the current project.",
-        options: &[],
+        options: &[Opt {
+            flag: "[--json]",
+            desc: "emit a compact gate verdict on stdout ({\"result\":…}; non-zero exit at the first failing stage)",
+        }],
     },
     Command {
         name: "run",
@@ -304,6 +310,10 @@ const COMMANDS: &[Command] = &[
                 desc: "report unformatted files without rewriting them",
             },
             Opt {
+                flag: "[--check --json|--plain]",
+                desc: "with --check, emit the unformatted file list as JSON ({\"unformatted\":[…]}) or one path per line",
+            },
+            Opt {
                 flag: "[--stdin]",
                 desc: "format stdin to stdout (for editors and pipes); excludes <path>",
             },
@@ -376,6 +386,11 @@ const COMMANDS: &[Command] = &[
                 flag: "[--index <dir|repo>]",
                 desc: "audit: read the previous published version from this index checkout; \
                        publish: the index repo the PR targets",
+            },
+            Opt {
+                flag: "[--json|--plain]",
+                desc: "audit: emit a compact certify verdict on stdout ({\"package\":…,\"certified\":…}; \
+                       non-zero exit on a failing audit)",
             },
             Opt {
                 flag: "[--dry-run]",

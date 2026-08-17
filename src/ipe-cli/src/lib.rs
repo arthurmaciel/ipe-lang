@@ -385,7 +385,7 @@ impl std::fmt::Display for CliError {
             Self::Usage(hint) => write!(f, "{hint}"),
             Self::UsageOwned(hint) => write!(f, "{hint}"),
             Self::UnknownCommand { attempted } => fmt_unknown_command(attempted, f),
-            Self::Io { path, source } => write!(f, "io error at {}: {source}", path.display()),
+            Self::Io { path, source } => fmt_io_error(path, source, f),
             Self::Pipeline { file, src, diag } => {
                 f.write_str(&render(diag, &file.to_string_lossy(), src))
             }
@@ -500,14 +500,55 @@ impl std::fmt::Display for CliError {
 /// Render [`CliError::UnknownCommand`] for `Display`: an optional "unknown
 /// command" line with a near-miss suggestion, then the top-level help screen
 /// (coloured for a terminal). Output goes to stderr, where misuse output belongs.
+///
+/// The whole block is guttered as one unit so the "unknown command" lines and
+/// the help header share the same left gutter — the screen reads identically to
+/// the plain top-level page, only with the leading advice. The top-level page
+/// already carries its own gutter, so an unknown-command entry re-gutters only
+/// its own advice lines and leaves the page as-is.
 fn fmt_unknown_command(attempted: &str, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
     if !attempted.is_empty() {
-        writeln!(f, "unknown command `{attempted}`")?;
+        writeln!(
+            f,
+            "{}",
+            style::gutter(&format!("unknown command `{attempted}`"))
+        )?;
         if let Some(sugg) = nearest_command(attempted) {
-            writeln!(f, "  = help: maybe `{sugg}`?")?;
+            writeln!(f, "{}", style::gutter(&format!("= help: maybe `{sugg}`?")))?;
         }
     }
-    f.write_str(help::top_level(&std::io::stderr()).trim_start())
+    f.write_str(&help::top_level(&std::io::stderr()))
+}
+
+/// Render [`CliError::Io`] for `Display`, styled and actionable rather than a
+/// raw OS string. A missing file is the common case a first-time user hits, so
+/// it gets a plain-language message with no `os error N` tail and no `io error`
+/// jargon; every other kind keeps the readable OS description under the same
+/// guttered, path-naming frame. Never leaks an errno.
+fn fmt_io_error(
+    path: &Path,
+    source: &std::io::Error,
+    f: &mut std::fmt::Formatter<'_>,
+) -> std::fmt::Result {
+    // The generic error path in the binary already frames and gutters this
+    // (`ipe: <message>`); render only the message body, styled and errno-free.
+    if source.kind() == std::io::ErrorKind::NotFound {
+        write!(
+            f,
+            "no such file `{}` — pass a source file, or run inside an Ipê project \
+             (a directory with an ipe.toml, or a src/Main.ipe)",
+            path.display()
+        )
+    } else {
+        // A readable kind description, never the `(os error N)` tail. `ErrorKind`
+        // renders as a short human phrase (e.g. "permission denied").
+        write!(
+            f,
+            "could not access `{}` — {}",
+            path.display(),
+            source.kind()
+        )
+    }
 }
 
 /// Render [`CliError::DeployPureApp`] for `Display`. Split out to keep the
@@ -4179,9 +4220,7 @@ pub(crate) fn run_explain(rest: &[String]) -> Result<(), CliError> {
     // Extra positional tokens are not allowed.
     if positional.len() > 1 {
         let extra = positional.get(1).copied().unwrap_or("");
-        return Err(CliError::UsageOwned(format!(
-            "ipe explain: unexpected extra argument `{extra}`"
-        )));
+        return Err(cli_args::usage_unexpected_argument("explain", extra));
     }
 
     let (exact, matches) = explain::resolve(query);
@@ -4639,10 +4678,11 @@ pub(crate) fn run_package(rest: &[String]) -> Result<(), CliError> {
         Some((sub, tail)) if sub == "publish" => publish::run_publish(tail),
         Some((sub, tail)) if sub == "validate-entry" => run_validate_entry(tail),
         Some((sub, tail)) if sub == "audit-entry" => run_audit_entry(tail),
-        Some((sub, _)) => Err(CliError::UsageOwned(format!(
-            "ipe package: unknown subcommand `{sub}` (expected `audit`, `audit-entry`, \
-             `publish`, or `validate-entry`)"
-        ))),
+        Some((sub, _)) => Err(cli_args::usage_unknown_subcommand(
+            "package",
+            sub,
+            "`audit`, `audit-entry`, `publish`, or `validate-entry`",
+        )),
         None => Err(CliError::Usage(
             "usage: ipe package <audit|audit-entry|publish|validate-entry> [<path>]",
         )),
@@ -4873,9 +4913,7 @@ fn parse_audit_entry_args(rest: &[String]) -> Result<(PathBuf, Option<PathBuf>),
                 index_root = Some(PathBuf::from(value));
             }
             flag if flag.starts_with('-') => {
-                return Err(CliError::UsageOwned(format!(
-                    "ipe package audit-entry: unknown flag `{flag}`"
-                )));
+                return Err(cli_args::usage_unknown_flag("package audit-entry", flag));
             }
             positional => {
                 if entry_path.is_some() {
@@ -5020,6 +5058,19 @@ enum TestOutcome {
     AllPassed,
 }
 
+/// Where the test binary's own `N passed, M failed` summary goes.
+///
+/// The default human path inherits stdout so the summary appears inline between
+/// the progress lines; the `--json` path routes it to stderr so stdout carries
+/// exactly the one JSON verdict line a consumer parses.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum TestStdio {
+    /// Inherit stdout — the child's summary prints where the user sees it.
+    Inherit,
+    /// Redirect the child's stdout to stderr — keep our stdout machine-clean.
+    Quiet,
+}
+
 /// Build and run a project's `tests/Main.ipe`, the single test runner shared by
 /// `ipe test` and `ipe verify`'s final stage.
 ///
@@ -5041,6 +5092,15 @@ enum TestOutcome {
 /// cases failed) — the binary's own output is the report. Otherwise any build
 /// or toolchain error encountered while compiling the runner.
 fn run_project_tests(path: Option<&str>) -> Result<TestOutcome, CliError> {
+    run_project_tests_with(path, TestStdio::Inherit)
+}
+
+/// The shared test runner, parameterised by where the test binary's own summary
+/// goes ([`TestStdio`]). See [`run_project_tests`] for the resolution rules.
+///
+/// # Errors
+/// As [`run_project_tests`].
+fn run_project_tests_with(path: Option<&str>, stdio: TestStdio) -> Result<TestOutcome, CliError> {
     // Resolve the project root from the supplied path (or cwd defaults).
     let entry_path = match path {
         Some(p) => PathBuf::from(p),
@@ -5109,6 +5169,7 @@ fn run_project_tests(path: Option<&str>) -> Result<TestOutcome, CliError> {
         &out_dir,
         &runtime_dir,
         cargo_bin.path(),
+        stdio,
     );
 
     // Clean up the temp output regardless of the outcome.
@@ -5133,6 +5194,7 @@ fn build_and_run_test_entry(
     out_dir: &Path,
     runtime_dir: &Path,
     cargo_bin: &Path,
+    stdio: TestStdio,
 ) -> Result<TestOutcome, CliError> {
     if project_src_root.is_dir() {
         build_test_with_project_sources(project_src_root, test_entry, out_dir, runtime_dir)?;
@@ -5159,13 +5221,30 @@ fn build_and_run_test_entry(
     bin.push(&test_bin_name);
 
     // Run the test binary. `Ipe.Test.runMain` exits 0 on all-pass, 1 on any
-    // failure — propagate that as a stage error.
-    let run_status = std::process::Command::new(&bin)
-        .status()
-        .map_err(|e| CliError::Io {
-            path: bin.clone(),
-            source: e,
-        })?;
+    // failure — propagate that as a stage error. Under `--json` the child's own
+    // human summary is captured and re-emitted on OUR stderr, so our stdout stays
+    // a single JSON line a consumer can parse.
+    let run_status = match stdio {
+        TestStdio::Inherit => {
+            std::process::Command::new(&bin)
+                .status()
+                .map_err(|e| CliError::Io {
+                    path: bin.clone(),
+                    source: e,
+                })?
+        }
+        TestStdio::Quiet => {
+            let output = std::process::Command::new(&bin)
+                .stdout(std::process::Stdio::piped())
+                .output()
+                .map_err(|e| CliError::Io {
+                    path: bin.clone(),
+                    source: e,
+                })?;
+            let _ = std::io::stderr().write_all(&output.stdout);
+            output.status
+        }
+    };
 
     if run_status.success() {
         Ok(TestOutcome::AllPassed)
@@ -5205,7 +5284,11 @@ fn verify_test(path: Option<&str>) -> Result<(), CliError> {
 /// [`CliError::TestFailed`] when a test case fails (the non-zero exit contract).
 /// Otherwise any build or toolchain error from compiling the runner.
 pub(crate) fn run_test(rest: &[String]) -> Result<(), CliError> {
-    let path = cli_args::single_positional(rest, "test")?;
+    let (path, format) = cli_args::single_positional_with_format(rest, "test")?;
+
+    if format == cli_args::OutputFormat::Json {
+        return run_test_json(path);
+    }
 
     // Wrap the runner in a progress stage so `ipe test` follows the same
     // running → ✓/✗ shape every other multi-step command uses. The stage writes
@@ -5230,6 +5313,40 @@ pub(crate) fn run_test(rest: &[String]) -> Result<(), CliError> {
     }
 }
 
+/// `ipe test --json`: run the tests and emit a compact verdict object to stdout.
+///
+/// The test binary's own human `N passed, M failed` summary is routed to stderr
+/// (via [`TestStdio::Quiet`]) so stdout carries exactly one JSON line a consumer
+/// can parse. A failing case still exits non-zero: the verdict object is written,
+/// then the already-emitted sentinel drives the exit without a second message.
+fn run_test_json(path: Option<&str>) -> Result<(), CliError> {
+    use cli_args::json;
+
+    let verdict = |result: &str| json::object(&[("result", json::string(result))]);
+    match run_project_tests_with(path, TestStdio::Quiet) {
+        Ok(TestOutcome::AllPassed) => {
+            println!("{}", verdict("passed"));
+            Ok(())
+        }
+        Ok(TestOutcome::NoTestEntry) => {
+            println!("{}", verdict("no-tests"));
+            Ok(())
+        }
+        Err(CliError::TestFailed { code }) => {
+            println!(
+                "{}",
+                json::object(&[
+                    ("result", json::string("failed")),
+                    ("exitCode", code.to_string()),
+                ])
+            );
+            Err(CliError::DiagnosticJsonEmitted)
+        }
+        // A build/toolchain error is not a test verdict — surface it as itself.
+        Err(other) => Err(other),
+    }
+}
+
 /// `ipe verify [<path>]` — the one-command project gate.
 ///
 /// Runs the project's checks in order — format, type-check, build, test —
@@ -5246,7 +5363,12 @@ pub(crate) fn run_test(rest: &[String]) -> Result<(), CliError> {
 /// the first failing stage's own error, which carries its diagnostic and drives
 /// the non-zero exit; a clean run exits 0.
 pub(crate) fn run_verify(rest: &[String]) -> Result<(), CliError> {
-    let path = cli_args::single_positional(rest, "verify")?;
+    let (path, format) = cli_args::single_positional_with_format(rest, "verify")?;
+
+    if format == cli_args::OutputFormat::Json {
+        return run_verify_json(path);
+    }
+
     let total = VERIFY_STAGES.len();
 
     for (index, (name, stage)) in VERIFY_STAGES.iter().enumerate() {
@@ -5273,6 +5395,64 @@ pub(crate) fn run_verify(rest: &[String]) -> Result<(), CliError> {
     let summary = progress::Stage::start(std::io::stdout(), "gate");
     summary.success(format!("all {total} stages passed"));
     Ok(())
+}
+
+/// `ipe verify --json`: run the gate and emit a single compact verdict object to
+/// stdout — `{"result":"passed","stages":N}` on a clean run, or
+/// `{"result":"failed","stage":"<name>"}` at the first failing stage (then a
+/// non-zero exit via the already-emitted sentinel).
+///
+/// Each stage runs in a machine-quiet form so stdout carries EXACTLY the verdict
+/// line: the type-check core prints nothing, the build banner and any stage
+/// diagnostic go to stderr, and the test binary's summary is captured to stderr.
+fn run_verify_json(path: Option<&str>) -> Result<(), CliError> {
+    use cli_args::json;
+
+    let stages: &[(&str, VerifyStage)] = &[
+        ("format", verify_fmt),
+        ("type-check", verify_check_quiet),
+        ("build", verify_build),
+        ("test", verify_test_quiet),
+    ];
+
+    for (name, stage) in stages {
+        if stage(path).is_err() {
+            println!(
+                "{}",
+                json::object(&[
+                    ("result", json::string("failed")),
+                    ("stage", json::string(name)),
+                ])
+            );
+            return Err(CliError::DiagnosticJsonEmitted);
+        }
+    }
+    println!(
+        "{}",
+        json::object(&[
+            ("result", json::string("passed")),
+            ("stages", stages.len().to_string()),
+        ])
+    );
+    Ok(())
+}
+
+/// The type-check stage in machine-quiet form: the same source-graph type-check
+/// as [`verify_check`], but through the non-printing core so stdout stays clean
+/// for the JSON verdict (a diagnostic still renders through the error channel).
+fn verify_check_quiet(path: Option<&str>) -> Result<(), CliError> {
+    let arg = match path {
+        Some(e) => PathBuf::from(e),
+        None => PathBuf::from(default_entry()?),
+    };
+    let entry = resolve_analysis_entry(&arg)?;
+    typecheck_entry_via_graph(&entry)
+}
+
+/// The test stage in machine-quiet form: the shared runner with the test
+/// binary's own summary routed to stderr, so stdout stays the JSON verdict alone.
+fn verify_test_quiet(path: Option<&str>) -> Result<(), CliError> {
+    run_project_tests_with(path, TestStdio::Quiet).map(|_| ())
 }
 
 pub(crate) fn run_capabilities(rest: &[String]) -> Result<(), CliError> {
@@ -5324,8 +5504,10 @@ fn render_capabilities(
             out
         }
         Json => {
-            let quoted: Vec<String> = names.iter().map(|n| format!("{n:?}")).collect();
-            format!("{{\"capabilities\":[{}]}}\n", quoted.join(","))
+            format!(
+                "{}\n",
+                cli_args::json::object(&[("capabilities", cli_args::json::string_array(names),)])
+            )
         }
         Human => {
             let p = style::Palette::for_stream(stream);
@@ -5364,9 +5546,7 @@ fn render_capabilities(
 pub(crate) fn run_version(rest: &[String]) -> Result<(), CliError> {
     let (format, positional) = cli_args::split_format(rest, "version")?;
     if let Some(extra) = positional.first() {
-        return Err(CliError::UsageOwned(format!(
-            "ipe version: unexpected argument `{extra}`"
-        )));
+        return Err(cli_args::usage_unexpected_argument("version", extra));
     }
     print!("{}", render_version(format, &std::io::stdout()));
     Ok(())
@@ -5404,10 +5584,11 @@ pub fn run_upgrade(rest: &[String]) -> Result<(), CliError> {
     for arg in rest {
         match arg.as_str() {
             "--dry-run" => dry_run = true,
+            other if other.starts_with('-') => {
+                return Err(cli_args::usage_unknown_flag("upgrade", other));
+            }
             other => {
-                return Err(CliError::UsageOwned(format!(
-                    "upgrade: unexpected argument `{other}` (usage: ipe upgrade [--dry-run])"
-                )));
+                return Err(cli_args::usage_unexpected_argument("upgrade", other));
             }
         }
     }
@@ -5942,6 +6123,53 @@ const fn diag_span(d: &Diagnostic) -> ipe_diagnostics::Span {
 mod tests {
     use super::*;
     use ipe_diagnostics::{NameError, Span};
+
+    #[test]
+    fn io_not_found_renders_styled_without_os_error() {
+        let err = CliError::Io {
+            path: PathBuf::from("/no/such.ipe"),
+            source: std::io::Error::from(std::io::ErrorKind::NotFound),
+        };
+        let rendered = err.to_string();
+        assert!(
+            rendered.contains("no such file `/no/such.ipe`"),
+            "styled NotFound message, got: {rendered}"
+        );
+        // No jargon: never the raw `io error` prefix, never an `os error N` tail.
+        assert!(!rendered.contains("os error"), "leaks errno: {rendered}");
+        assert!(!rendered.contains("io error"), "leaks jargon: {rendered}");
+    }
+
+    #[test]
+    fn io_other_kind_stays_readable_without_errno() {
+        let err = CliError::Io {
+            path: PathBuf::from("/x"),
+            source: std::io::Error::from(std::io::ErrorKind::PermissionDenied),
+        };
+        let rendered = err.to_string();
+        assert!(!rendered.contains("os error"), "leaks errno: {rendered}");
+        assert!(rendered.contains("/x"), "names the path: {rendered}");
+    }
+
+    #[test]
+    fn unknown_command_screen_is_fully_guttered() {
+        let err = CliError::UnknownCommand {
+            attempted: "frobnicate".to_owned(),
+        };
+        let rendered = err.to_string();
+        // The advice line and the help header both carry the shared gutter — no
+        // flush-left line breaks the screen the way the trim_start header did.
+        assert!(
+            rendered.starts_with("  unknown command `frobnicate`"),
+            "advice guttered, got: {rendered:?}"
+        );
+        for line in rendered.lines().filter(|l| !l.is_empty()) {
+            assert!(
+                line.starts_with(style::GUTTER),
+                "every non-empty line is guttered, offending: {line:?}"
+            );
+        }
+    }
 
     /// `read_progress_chunk` stops at a newline OR a carriage return, so cargo's
     /// in-place progress bar (which uses `\r` with no `\n`) surfaces live rather

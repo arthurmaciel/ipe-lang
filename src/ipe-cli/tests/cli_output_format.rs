@@ -683,3 +683,137 @@ fn upgrade_no_prebuilt_renders_message_without_help() {
         );
     }
 }
+
+// ---- misuse discipline -----------------------------------------------------
+
+/// A representative set of commands whose unknown-flag path must exit non-zero
+/// and show that command's `--help` page — never swallow the flag and exit 0.
+#[test]
+fn unknown_flag_shows_help_and_exits_nonzero() {
+    for name in ["capabilities", "explain", "diff", "doc"] {
+        let r = run(&[name, "--nope"]);
+        assert!(
+            !r.ok,
+            "`ipe {name} --nope` must exit non-zero, not swallow the flag"
+        );
+        assert!(
+            r.stderr
+                .contains(&format!("ipe {name}: unknown flag `--nope`")),
+            "`ipe {name} --nope` must use the shared misuse phrasing, got:\n{}",
+            r.stderr
+        );
+    }
+}
+
+/// `ipe remove --nope` must reject the flag, not treat it as a package name and
+/// exit 0 with "nothing to remove".
+#[test]
+fn remove_unknown_flag_is_rejected() {
+    let r = run(&["remove", "--nope"]);
+    assert!(!r.ok, "`ipe remove --nope` must exit non-zero");
+    assert!(
+        r.stderr.contains("ipe remove: unknown flag `--nope`"),
+        "got:\n{}",
+        r.stderr
+    );
+}
+
+/// The top-level unknown-command screen renders fully guttered — every line,
+/// header included, carries the shared gutter, so it reads identically to the
+/// plain top-level page.
+#[test]
+fn unknown_command_screen_is_fully_guttered() {
+    let r = run(&["frobnicate"]);
+    assert!(!r.ok, "an unknown command must exit non-zero");
+    assert!(
+        r.stderr.starts_with("  unknown command `frobnicate`"),
+        "the advice line must be guttered, got:\n{}",
+        r.stderr
+    );
+    for line in r.stderr.lines().filter(|l| !l.is_empty()) {
+        assert!(
+            line.starts_with("  "),
+            "every non-empty line of the unknown-command screen must be guttered, offending: {line:?}"
+        );
+    }
+}
+
+/// A missing source file renders a styled, actionable message — no `os error N`
+/// errno tail, no `io error` jargon.
+#[test]
+fn missing_file_error_is_styled_without_errno() {
+    let r = run(&["type-check", "/no/such/file.ipe"]);
+    assert!(!r.ok, "a missing entry must exit non-zero");
+    assert!(
+        r.stderr.contains("no such file `/no/such/file.ipe`"),
+        "styled NotFound message, got:\n{}",
+        r.stderr
+    );
+    assert!(!r.stderr.contains("os error"), "leaks errno:\n{}", r.stderr);
+    assert!(
+        !r.stderr.contains("io error"),
+        "leaks jargon:\n{}",
+        r.stderr
+    );
+}
+
+// ---- JSON uniformity -------------------------------------------------------
+
+/// `ipe doc list --json` is byte-compact — no space after a comma — matching the
+/// `capabilities` / `version` compact form.
+#[test]
+fn doc_list_json_is_compact() {
+    let r = run(&["doc", "list", "--json"]);
+    assert!(r.ok, "doc list --json must succeed, got:\n{}", r.stderr);
+    let line = r.stdout.trim();
+    assert!(line.starts_with("{\"modules\":["), "shape, got:\n{line}");
+    assert!(
+        !line.contains(", "),
+        "the JSON array must be compact (no comma-space), got:\n{line}"
+    );
+}
+
+// ---- machine-flag breadth --------------------------------------------------
+
+/// `ipe fmt --check --json` emits a compact `{"unformatted":[…]}` verdict. A
+/// freshly-formatted file is a clean empty array (exit 0); an unformatted file
+/// is listed (exit non-zero). Both are byte-compact.
+#[test]
+fn fmt_check_json_emits_compact_verdict() {
+    let dir = std::env::temp_dir().join(format!("ipe-fmt-json-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).expect("scratch dir");
+    let file = dir.join("Main.ipe");
+
+    // Format a copy in place first, so the subsequent --check is a clean scan.
+    std::fs::copy(sample_entry(), &file).expect("seed the fixture");
+    let fmt = run(&["fmt", file.to_str().expect("utf8")]);
+    assert!(fmt.ok, "seeding format must succeed, got:\n{}", fmt.stderr);
+
+    let clean = run(&["fmt", "--check", "--json", file.to_str().expect("utf8")]);
+    assert!(
+        clean.ok,
+        "a formatted file passes --check, got:\n{}",
+        clean.stderr
+    );
+    assert_eq!(clean.stdout.trim(), "{\"unformatted\":[]}");
+
+    // Now restore the raw (unformatted) fixture and confirm the verdict lists
+    // the file, compact, exit non-zero.
+    std::fs::copy(sample_entry(), &file).expect("restore the unformatted fixture");
+    let dirty = run(&["fmt", "--check", "--json", file.to_str().expect("utf8")]);
+    assert!(!dirty.ok, "an unformatted file fails --check");
+    let line = dirty.stdout.trim();
+    assert!(
+        line.starts_with("{\"unformatted\":[\"") && !line.contains(", "),
+        "dirty verdict lists the file, compact, got:\n{line}"
+    );
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// `--plain --json` together is still rejected on a machine-flag command.
+#[test]
+fn fmt_check_rejects_plain_and_json_together() {
+    let r = run(&["fmt", "--check", "--plain", "--json"]);
+    assert!(!r.ok, "`--plain --json` together must be a usage error");
+}

@@ -32,9 +32,7 @@ const GENERATED_DIRS: &[&str] = &["out", "target", ".ipe"];
 /// filesystem failure while removing a directory.
 pub fn run_clean(rest: &[String]) -> Result<(), CliError> {
     if let Some(arg) = rest.first() {
-        return Err(CliError::UsageOwned(format!(
-            "clean: unexpected argument `{arg}` (it takes none)"
-        )));
+        return Err(crate::cli_args::usage_unexpected_argument("clean", arg));
     }
 
     let root = project_root()?;

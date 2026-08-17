@@ -118,16 +118,24 @@ pub fn run_fmt(rest: &[String]) -> Result<(), CliError> {
     match mode {
         crate::cli_args::FmtMode::Stdin => run_fmt_stdin(false),
         crate::cli_args::FmtMode::StdinCheck => run_fmt_stdin(true),
-        crate::cli_args::FmtMode::InPlace { path, check } => {
-            run_fmt_inplace(path.as_deref(), check)
-        }
+        crate::cli_args::FmtMode::InPlace {
+            path,
+            check,
+            format,
+        } => run_fmt_inplace(path.as_deref(), check, format),
     }
 }
 
 /// Format every `.ipe` under `root` in place.
 ///
-/// `None` means the current directory `.`.
-fn run_fmt_inplace(path: Option<&str>, check: bool) -> Result<(), CliError> {
+/// `None` means the current directory `.`. Under `--check`, `format` selects how
+/// the unformatted set is reported: the human list (default), or a machine
+/// `--json` / `--plain` file list.
+fn run_fmt_inplace(
+    path: Option<&str>,
+    check: bool,
+    format: crate::cli_args::OutputFormat,
+) -> Result<(), CliError> {
     let root = PathBuf::from(path.unwrap_or("."));
     let files = collect_ipe_files(&root)?;
     if files.is_empty() {
@@ -157,18 +165,67 @@ fn run_fmt_inplace(path: Option<&str>, check: bool) -> Result<(), CliError> {
         }
     }
 
-    if check && !unformatted.is_empty() {
-        let list = unformatted
-            .iter()
-            .map(|p| format!("  {}", p.display()))
-            .collect::<Vec<_>>()
-            .join("\n");
-        return Err(CliError::UsageOwned(format!(
-            "the following files are not formatted (run `ipe fmt` to fix):\n{list}"
-        )));
+    if check {
+        return report_check(&unformatted, format);
     }
 
     Ok(())
+}
+
+/// Report a `--check` scan's result in the requested [`OutputFormat`].
+///
+/// A machine form (`--json` / `--plain`) always emits its list to stdout — empty
+/// on a clean scan (exit 0), or the unformatted paths on a dirty one — then, when
+/// non-empty, returns the already-emitted sentinel so the exit is non-zero with
+/// no second message. The human form prints nothing on a clean scan and the
+/// actionable list on a dirty one.
+fn report_check(
+    unformatted: &[PathBuf],
+    format: crate::cli_args::OutputFormat,
+) -> Result<(), CliError> {
+    use crate::cli_args::{OutputFormat, json};
+
+    match format {
+        OutputFormat::Json => {
+            let paths: Vec<String> = unformatted
+                .iter()
+                .map(|p| p.display().to_string())
+                .collect();
+            let refs: Vec<&str> = paths.iter().map(String::as_str).collect();
+            println!(
+                "{}",
+                json::object(&[("unformatted", json::string_array(&refs))])
+            );
+            if unformatted.is_empty() {
+                Ok(())
+            } else {
+                Err(CliError::DiagnosticJsonEmitted)
+            }
+        }
+        OutputFormat::Plain => {
+            for p in unformatted {
+                println!("{}", p.display());
+            }
+            if unformatted.is_empty() {
+                Ok(())
+            } else {
+                Err(CliError::DiagnosticJsonEmitted)
+            }
+        }
+        OutputFormat::Human => {
+            if unformatted.is_empty() {
+                return Ok(());
+            }
+            let list = unformatted
+                .iter()
+                .map(|p| format!("  {}", p.display()))
+                .collect::<Vec<_>>()
+                .join("\n");
+            Err(CliError::UsageOwned(format!(
+                "the following files are not formatted (run `ipe fmt` to fix):\n{list}"
+            )))
+        }
+    }
 }
 
 /// Format stdin to stdout. When `check` is true, print a diff instead.
