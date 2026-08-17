@@ -64,9 +64,17 @@ use crate::project::{self, ProjectManifest};
 ///
 /// The first four are the universal Tier-1 checks; [`Self::NativeTier2`] is the
 /// native-code capability-enforcement check, appended only for native-bearing
-/// packages (ADR 0046).
+/// packages (ADR 0046). [`Self::NativeBindingRegen`] is the prerequisite step
+/// that runs before Tier-1 for native-bearing packages: it regenerates the FFI
+/// bindings from the pinned `[rust.dependencies]` inside the sandbox so the
+/// gate never trusts committed or absent bindings.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Check {
+    /// 0 — sandboxed FFI binding regeneration for native packages: runs the
+    /// same jailed generator as `ipe rust install` does against the pinned
+    /// `[rust.dependencies]`, writing gate-owned bindings the Tier-1 checks
+    /// then read. Absent or committed bindings are never trusted.
+    NativeBindingRegen,
     /// 1a — abrupt-failure token scan over author-supplied FFI wrapper Rust.
     Provenance,
     /// 1b — inferred vs declared capability set.
@@ -85,6 +93,7 @@ impl Check {
     /// A short label for the check, shown in a passing line and a reject header.
     const fn label(self) -> &'static str {
         match self {
+            Self::NativeBindingRegen => "native FFI binding regeneration",
             Self::Provenance => "provenance panic-scan",
             Self::Capability => "capability consistency",
             Self::Semver => "enforced semver",
@@ -415,6 +424,12 @@ fn set_format(slot: &mut Option<OutputFormat>, requested: OutputFormat) -> Resul
 /// its emitted Rust in a fresh temp directory (never the project's own `out/`, so
 /// the audit leaves no artifact behind and cannot race a concurrent build).
 ///
+/// For native-bearing packages (those with `[rust.dependencies]`), the FFI
+/// bindings are regenerated from the pinned crates before the build. Any
+/// committed `.ipe/cache/ffi/rust` in the fetched tree is removed first so the
+/// audit never reads publisher-supplied bindings — only the gate-owned,
+/// freshly-generated ones pass the ownership check that follows.
+///
 /// # Errors
 /// [`CliError::UsageOwned`] when `path` names no `ipe.toml`; the build errors
 /// ([`CliError::Pipeline`] / [`CliError::Io`] / [`CliError::StaticRefusal`])
@@ -422,6 +437,12 @@ fn set_format(slot: &mut Option<OutputFormat>, requested: OutputFormat) -> Resul
 fn prepare(path: &Path) -> Result<Prepared, CliError> {
     let manifest_path = locate_manifest(path)?;
     let manifest = project::parse_manifest(&manifest_path)?;
+
+    // Regenerate FFI bindings for native-bearing packages before the build so
+    // the compiler finds `Rust.<Crate>` interface modules.
+    if !manifest.rust_dependencies.is_empty() {
+        regenerate_ffi_bindings(&manifest_path)?;
+    }
 
     let emitted_dir = audit_scratch_dir(&manifest.name);
     // A stale scratch dir from a previous audit must not leak old emitted files
@@ -447,6 +468,50 @@ fn prepare(path: &Path) -> Result<Prepared, CliError> {
         manifest,
         manifest_path,
         emitted_dir,
+    })
+}
+
+/// Regenerate FFI bindings for a native-bearing package into the project's own
+/// `.ipe/cache/ffi/rust`, so the gate audits bindings it derived from the pinned
+/// crate rather than any the publisher may have committed.
+///
+/// Any committed cache in the fetched source tree is removed first — the gate
+/// never reads publisher-supplied bindings. The freshly generated cache is
+/// owned by the invoking process's uid and not world-writable, so the
+/// `ffi::find_cache_root` ownership check passes for all subsequent reads.
+///
+/// Build scripts are always enabled here (equivalent to `--allow-build-scripts`)
+/// because a native package's crates are already hash-verified through the
+/// fetch + sha256-verify step before `prepare` is called; regenerating without
+/// build scripts would silently skip crates that require them.
+///
+/// Failure is fail-closed: a regeneration error maps to a typed
+/// [`Check::NativeBindingRegen`] rejection rather than letting the audit
+/// continue with an absent or incomplete cache.
+///
+/// # Errors
+/// [`CliError::PackageAudit`] with [`Check::NativeBindingRegen`] when the
+/// jailed regeneration fails; [`CliError::Io`] when the existing committed
+/// cache cannot be removed.
+fn regenerate_ffi_bindings(manifest_path: &Path) -> Result<(), CliError> {
+    let project_root = manifest_path.parent().unwrap_or_else(|| Path::new("."));
+    let committed_cache = project_root.join(".ipe/cache/ffi/rust");
+    if committed_cache.exists() {
+        std::fs::remove_dir_all(&committed_cache).map_err(|e| CliError::Io {
+            path: committed_cache.clone(),
+            source: e,
+        })?;
+    }
+    crate::ffi::install_registry_deps_for_project(manifest_path, true).map_err(|e| {
+        reject(
+            Check::NativeBindingRegen,
+            format!(
+                "failed to regenerate FFI bindings from the package's \
+                 `[rust.dependencies]` inside the sandbox: {e}\n\
+                 The audit requires a clean, gate-owned binding generation; \
+                 a failure here means the native package cannot be certified."
+            ),
+        )
     })
 }
 
