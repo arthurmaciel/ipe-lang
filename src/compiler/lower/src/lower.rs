@@ -11047,6 +11047,7 @@ impl<'a> Lowerer<'a> {
     /// The top-level bare-`any` case is the same structural form, so the walk
     /// handles both uniformly — `split_typed_sig` no longer needs a separate
     /// outer-only check.
+    #[allow(clippy::too_many_lines)] // exhaustive per-IrType-variant arms; every arm is structurally required
     fn freshen_any_generics(&self, ty: IrType, minted: &mut Vec<Symbol>) -> DResult<IrType> {
         match ty {
             IrType::Generic(sym) if self.interner.resolve(sym) == Some("any") => {
@@ -11132,8 +11133,83 @@ impl<'a> Lowerer<'a> {
             IrType::WebRoute(page) => Ok(IrType::WebRoute(Box::new(
                 self.freshen_any_generics(*page, minted)?,
             ))),
-            // Leaf types that never contain a Generic — pass through.
-            other => Ok(other),
+            // `SharedFun` and `FnOnceChain` carry the same param/ret structure
+            // as `Fun` and can hold nested `any` generics — freshen each slot.
+            IrType::SharedFun(params, ret) => {
+                let mut out = Vec::with_capacity(params.len());
+                for p in params {
+                    out.push(self.freshen_any_generics(p, minted)?);
+                }
+                Ok(IrType::SharedFun(
+                    out,
+                    Box::new(self.freshen_any_generics(*ret, minted)?),
+                ))
+            }
+            IrType::FnOnceChain(params, ret) => {
+                let mut out = Vec::with_capacity(params.len());
+                for p in params {
+                    out.push(self.freshen_any_generics(p, minted)?);
+                }
+                Ok(IrType::FnOnceChain(
+                    out,
+                    Box::new(self.freshen_any_generics(*ret, minted)?),
+                ))
+            }
+            // Leaf types — monomorphic, never contain a `Generic`. Listed
+            // exhaustively (no wildcard) so adding a new container variant
+            // without a freshen arm is a compile error.
+            IrType::Generic(_)
+            | IrType::RowGeneric(_)
+            | IrType::Int
+            | IrType::Float
+            | IrType::Bool
+            | IrType::Str
+            | IrType::Char
+            | IrType::Unit
+            | IrType::Bytes
+            | IrType::Json
+            | IrType::Db
+            | IrType::Order
+            | IrType::HttpMethod
+            | IrType::Decimal
+            | IrType::ErrorKind
+            | IrType::Error
+            | IrType::ErrorDetails
+            | IrType::ErrorInfo
+            | IrType::PanicInfo
+            | IrType::TypeInfo
+            | IrType::ServerRequest
+            | IrType::ServerResponse
+            | IrType::ServerRoute
+            | IrType::ServerCookie
+            | IrType::StreamWriter
+            | IrType::HttpRequest
+            | IrType::Regex
+            | IrType::WebSocketServer
+            | IrType::WebSocketServerCfg
+            | IrType::UiPlain(_)
+            | IrType::WebReq
+            | IrType::SqlFragment
+            | IrType::Secret
+            | IrType::Path
+            | IrType::Url
+            | IrType::Dsn
+            | IrType::Connection
+            | IrType::ConnReadOnly
+            | IrType::ConnReadWrite
+            | IrType::CacheCfg
+            | IrType::WebSocketClientCfg
+            | IrType::CacheStats
+            | IrType::CsvDoc
+            | IrType::EmailMessage
+            | IrType::EmailAttachment
+            | IrType::EmailSesConfig
+            | IrType::EmailSmtpConfig
+            | IrType::EmailProvider
+            | IrType::CryptoKey
+            | IrType::CryptoMac
+            | IrType::EmailAddress
+            | IrType::Locale => Ok(ty),
         }
     }
 
@@ -25232,5 +25308,204 @@ mod tests {
 
         let count_both = super::count_var_uses(sym, &expr2);
         assert_eq!(count_both, 2, "guard+body in same arm must count as 2");
+    }
+
+    /// Every `IrType` container variant — one that can structurally hold a
+    /// `Generic` — must be walked by `freshen_any_generics`.  A variant that
+    /// is silently swallowed by a catch-all causes two independent `any`
+    /// occurrences to share one interned symbol, collapsing them to one Rust
+    /// generic (SEAL break, E0308).
+    ///
+    /// This test constructs, for each container variant, the shallowest tree
+    /// that holds exactly one `Generic("any")` under that variant, runs
+    /// `freshen_any_generics`, and asserts it mints exactly one fresh symbol.
+    ///
+    /// The exhaustive `match` below has NO wildcard arm, so adding a new
+    /// container variant to `IrType` without updating this test is a compile
+    /// error.  Combined with the exhaustive leaf-list in `freshen_any_generics`
+    /// itself, adding a container variant silently is impossible: at least one
+    /// of the two sites is a compile error.
+    #[test]
+    #[allow(clippy::too_many_lines)] // exhaustive per-container-variant setup, unavoidable
+    fn freshen_any_generics_covers_every_container_variant() {
+        let mut interner = Interner::new();
+        let builtins = build_test_builtin_ctors(&mut interner);
+
+        // Pre-intern the "any" symbol and one fresh pool symbol per container
+        // variant under test — each freshen call consumes exactly one slot.
+        let any_sym = interner.intern("any").unwrap();
+        // 17 container variants: List, Dict, Set, Maybe, Result, Task,
+        // Tuple, Record, Fun, SharedFun, FnOnceChain, Decoder, Cmd, Sub,
+        // Enum, Ui, WebRoute.
+        let pool_syms: Vec<ipe_intern::Symbol> = (0..17_usize)
+            .map(|i| interner.intern(&format!("__fa_pool{i}")).unwrap())
+            .collect();
+
+        // `enum_name` and `enum_home_seg` are needed to construct the Enum
+        // variant; intern them before the immutable `Lowerer` borrow.
+        let enum_name = interner.intern("Wrap").unwrap();
+        let enum_home_seg = interner.intern("Main").unwrap();
+
+        let shared = ipe_canon::builtins::intern_builtins(&mut interner)
+            .expect("intern shared built-in table");
+        let _ = shared;
+
+        let module = ipe_canon::ast::Module {
+            imports_unsafe_submodule: false,
+            name: vec![],
+            unions: vec![],
+            defs: vec![],
+        };
+        let types = empty_solved_types();
+        let lowerer = super::Lowerer::new(
+            &module,
+            &types,
+            &interner,
+            super::SymbolPools {
+                eta_params: vec![],
+                cap_params: vec![],
+                param_binders: vec![],
+                any_param_binders: pool_syms,
+                destructure_thunk_binders: vec![],
+                nested_cons_binders: vec![],
+                nested_strlit_binders: vec![],
+            },
+            &builtins,
+        );
+
+        let any = || ipe_ir::IrType::Generic(any_sym);
+
+        // Exhaustive sentinel match — covers EVERY IrType variant with no
+        // wildcard so adding a variant is a compile error here.  All arms
+        // produce `()` (clippy merges them into one `|` chain, which is still
+        // exhaustive and still enforces the compile-time guard).
+        let sentinel: ipe_ir::IrType = ipe_ir::IrType::Int;
+        match sentinel {
+            ipe_ir::IrType::List(_)
+            | ipe_ir::IrType::Dict(_, _)
+            | ipe_ir::IrType::Set(_)
+            | ipe_ir::IrType::Maybe(_)
+            | ipe_ir::IrType::Result(_, _)
+            | ipe_ir::IrType::Task(_)
+            | ipe_ir::IrType::Tuple(_)
+            | ipe_ir::IrType::Record(_)
+            | ipe_ir::IrType::Fun(_, _)
+            | ipe_ir::IrType::SharedFun(_, _)
+            | ipe_ir::IrType::FnOnceChain(_, _)
+            | ipe_ir::IrType::Decoder(_)
+            | ipe_ir::IrType::Cmd(_)
+            | ipe_ir::IrType::Sub(_)
+            | ipe_ir::IrType::Enum { .. }
+            | ipe_ir::IrType::Ui { .. }
+            | ipe_ir::IrType::WebRoute(_)
+            | ipe_ir::IrType::Generic(_)
+            | ipe_ir::IrType::RowGeneric(_)
+            | ipe_ir::IrType::Int
+            | ipe_ir::IrType::Float
+            | ipe_ir::IrType::Bool
+            | ipe_ir::IrType::Str
+            | ipe_ir::IrType::Char
+            | ipe_ir::IrType::Unit
+            | ipe_ir::IrType::Bytes
+            | ipe_ir::IrType::Json
+            | ipe_ir::IrType::Db
+            | ipe_ir::IrType::Order
+            | ipe_ir::IrType::HttpMethod
+            | ipe_ir::IrType::Decimal
+            | ipe_ir::IrType::ErrorKind
+            | ipe_ir::IrType::Error
+            | ipe_ir::IrType::ErrorDetails
+            | ipe_ir::IrType::ErrorInfo
+            | ipe_ir::IrType::PanicInfo
+            | ipe_ir::IrType::TypeInfo
+            | ipe_ir::IrType::ServerRequest
+            | ipe_ir::IrType::ServerResponse
+            | ipe_ir::IrType::ServerRoute
+            | ipe_ir::IrType::ServerCookie
+            | ipe_ir::IrType::StreamWriter
+            | ipe_ir::IrType::HttpRequest
+            | ipe_ir::IrType::Regex
+            | ipe_ir::IrType::WebSocketServer
+            | ipe_ir::IrType::WebSocketServerCfg
+            | ipe_ir::IrType::UiPlain(_)
+            | ipe_ir::IrType::WebReq
+            | ipe_ir::IrType::SqlFragment
+            | ipe_ir::IrType::Secret
+            | ipe_ir::IrType::Path
+            | ipe_ir::IrType::Url
+            | ipe_ir::IrType::Dsn
+            | ipe_ir::IrType::Connection
+            | ipe_ir::IrType::ConnReadOnly
+            | ipe_ir::IrType::ConnReadWrite
+            | ipe_ir::IrType::CacheCfg
+            | ipe_ir::IrType::WebSocketClientCfg
+            | ipe_ir::IrType::CacheStats
+            | ipe_ir::IrType::CsvDoc
+            | ipe_ir::IrType::EmailMessage
+            | ipe_ir::IrType::EmailAttachment
+            | ipe_ir::IrType::EmailSesConfig
+            | ipe_ir::IrType::EmailSmtpConfig
+            | ipe_ir::IrType::EmailProvider
+            | ipe_ir::IrType::CryptoKey
+            | ipe_ir::IrType::CryptoMac
+            | ipe_ir::IrType::EmailAddress
+            | ipe_ir::IrType::Locale => {}
+        }
+
+        // One representative per container variant: the shallowest tree
+        // embedding exactly one `Generic("any")`.
+        let containers: Vec<ipe_ir::IrType> = vec![
+            ipe_ir::IrType::List(Box::new(any())),
+            ipe_ir::IrType::Dict(Box::new(any()), Box::new(ipe_ir::IrType::Int)),
+            ipe_ir::IrType::Set(Box::new(any())),
+            ipe_ir::IrType::Maybe(Box::new(any())),
+            ipe_ir::IrType::Result(Box::new(any()), Box::new(ipe_ir::IrType::Int)),
+            ipe_ir::IrType::Task(Box::new(any())),
+            ipe_ir::IrType::Tuple(vec![any(), ipe_ir::IrType::Int]),
+            ipe_ir::IrType::Record({
+                let mut m = BTreeMap::new();
+                m.insert(any_sym, any());
+                m
+            }),
+            ipe_ir::IrType::Fun(vec![any()], Box::new(ipe_ir::IrType::Int)),
+            ipe_ir::IrType::SharedFun(vec![any()], Box::new(ipe_ir::IrType::Int)),
+            ipe_ir::IrType::FnOnceChain(vec![any()], Box::new(ipe_ir::IrType::Int)),
+            ipe_ir::IrType::Decoder(Box::new(any())),
+            ipe_ir::IrType::Cmd(Box::new(any())),
+            ipe_ir::IrType::Sub(Box::new(any())),
+            ipe_ir::IrType::Enum {
+                home: ipe_ir::ModPath(vec![enum_home_seg]),
+                name: enum_name,
+                args: vec![any()],
+            },
+            ipe_ir::IrType::Ui {
+                ctor: ipe_ir::UiCtor::Html,
+                msg: Box::new(any()),
+            },
+            ipe_ir::IrType::WebRoute(Box::new(any())),
+        ];
+
+        assert_eq!(
+            containers.len(),
+            17,
+            "container count mismatch: update the pool_syms size and this assert together"
+        );
+
+        for (i, ty) in containers.into_iter().enumerate() {
+            let label = format!("container[{i}] = {ty:?}");
+            let mut minted: Vec<ipe_intern::Symbol> = Vec::new();
+            let result = lowerer.freshen_any_generics(ty, &mut minted);
+            assert!(
+                result.is_ok(),
+                "freshen_any_generics failed for {label}: {result:?}"
+            );
+            assert_eq!(
+                minted.len(),
+                1,
+                "freshen_any_generics must mint exactly 1 fresh symbol for {label} — \
+                 0 means the container arm is missing (SEAL break class); \
+                 >1 means double-freshening"
+            );
+        }
     }
 }
