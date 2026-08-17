@@ -3859,17 +3859,15 @@ fn run_run_body(rest: &[String]) -> Result<(), CliError> {
     build_emitted_project(&mut cargo, "the emitted program", runtime_ctx, &out_dir)?;
 
     // --- Step 3: exec the emitted binary, forwarding args and exit code ---
-    // The binary name matches the emitted crate's package name, derived from
-    // the project's `ipe.toml` `name` field via `sanitize_cargo_name`. When
-    // no manifest is present (sibling-discovery single-file path) the name
-    // falls back to `ipe-app`. The target directory is asked of cargo itself
-    // (`cargo metadata`) — a `CARGO_TARGET_DIR` env or a user-level
-    // `[build] target-dir` pin relocates the artifact, so a hardcoded
-    // `<out>/target` would exec a missing or stale binary.
-    let bin_name = manifest_parsed.as_ref().map_or_else(
-        || "ipe-app".to_owned(),
-        |m| ipe_backend_rust::sanitize_cargo_name(&m.name),
-    );
+    // The binary name is read from the emitted crate's `Cargo.toml` — the
+    // same file cargo just built from, so there is ONE source of truth and
+    // no independent re-derivation can drift. Falls back to `"ipe-app"` when
+    // the manifest is absent or unparseable (same guarantee as `run_exec`).
+    // The target directory is asked of cargo itself (`cargo metadata`) — a
+    // `CARGO_TARGET_DIR` env or a user-level `[build] target-dir` pin
+    // relocates the artifact, so a hardcoded `<out>/target` would exec a
+    // missing or stale binary.
+    let bin_name = emitted_bin_name(&out_dir);
     let mut bin = cargo_target_directory(&out_dir)?;
     if let Some(plan) = &static_plan {
         bin.push(plan.triple.as_str());

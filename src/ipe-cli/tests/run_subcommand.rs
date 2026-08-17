@@ -138,6 +138,84 @@ fn run_subcommand_builds_and_executes_hello_program() {
     let _ = fs::remove_dir_all(out_dir.join("target"));
 }
 
+/// After `ipe build` on a single-file program (no manifest) the emitted
+/// `Cargo.toml` must carry `name = "ipe-app"`, and after `ipe build_project`
+/// on a manifest whose `name` field sanitizes to a different slug the emitted
+/// `Cargo.toml` must carry that slug — not `"ipe-app"`.
+///
+/// This is the structural guarantee that `ipe run` relies on: it reads the
+/// binary name from the emitted `Cargo.toml` (the same file cargo just built
+/// from) rather than re-deriving it from the manifest, so both sides can never
+/// disagree.
+#[test]
+fn emitted_cargo_toml_name_matches_binary_ipe_run_will_exec() {
+    const SRC: &str = "module Main exposing (main)\n\nimport Ipe.Io\n\nmain = Io.println \"ok\"\n";
+
+    if std::env::var("IPE_E2E").is_err() {
+        return;
+    }
+
+    let Ok(runtime_dir) = ipe::resolve_runtime() else {
+        return;
+    };
+
+    // --- Case 1: single-file build (no manifest) → name must be "ipe-app" ---
+    let dir = std::env::temp_dir().join("ipe_run_bin_name_e2e");
+    let _ = fs::remove_dir_all(&dir);
+    let entry = dir.join("Main.ipe");
+    let created = fs::create_dir_all(&dir).and_then(|()| fs::write(&entry, SRC));
+    assert!(created.is_ok(), "write source: {created:?}");
+
+    let out_single = dir.join("out_single");
+    let built = ipe::build(&entry, &out_single, &runtime_dir);
+    assert!(built.is_ok(), "single-file build must succeed: {built:?}");
+
+    let cargo_toml_text =
+        fs::read_to_string(out_single.join("Cargo.toml")).expect("emitted Cargo.toml must exist");
+    assert!(
+        cargo_toml_text.contains("name = \"ipe-app\""),
+        "single-file build must emit name = \"ipe-app\", got:\n{cargo_toml_text}"
+    );
+
+    // --- Case 2: manifest build with a project name that sanitizes to a slug ---
+    // The manifest name "Crc32 Checksum" sanitizes to "crc32-checksum".
+    // After build_project the emitted Cargo.toml must carry that slug, and
+    // ipe run's binary lookup must find a file named "crc32-checksum" — not
+    // "ipe-app".
+    let pkg_dir = dir.join("pkg");
+    let src_dir = pkg_dir.join("src");
+    let _ = fs::create_dir_all(&src_dir);
+    fs::write(
+        pkg_dir.join("ipe.toml"),
+        "name = \"Crc32 Checksum\"\nversion = \"0.1.0\"\n\n[source]\nroot = \"src\"\n",
+    )
+    .expect("write ipe.toml");
+    fs::write(src_dir.join("Main.ipe"), SRC).expect("write Main.ipe");
+
+    let out_pkg = dir.join("out_pkg");
+    let built = ipe::build_project(&pkg_dir.join("ipe.toml"), &out_pkg, &runtime_dir);
+    assert!(built.is_ok(), "project build must succeed: {built:?}");
+
+    let cargo_toml_text =
+        fs::read_to_string(out_pkg.join("Cargo.toml")).expect("emitted Cargo.toml must exist");
+    assert!(
+        cargo_toml_text.contains("name = \"crc32-checksum\""),
+        "project build must emit name = \"crc32-checksum\" (sanitized from \
+         \"Crc32 Checksum\"), got:\n{cargo_toml_text}"
+    );
+    // The SSOT guarantee: the name the binary-resolution reads equals the name
+    // cargo will produce as a binary artifact.  "ipe-app" must NOT appear as
+    // the package name — that would be the pre-fix bug.
+    assert!(
+        !cargo_toml_text
+            .lines()
+            .any(|l| l.trim() == "name = \"ipe-app\""),
+        "project build must NOT emit name = \"ipe-app\" as the package name"
+    );
+
+    let _ = fs::remove_dir_all(&dir);
+}
+
 // ---------------------------------------------------------------------------
 // Toolchain-absence tests (unconditional — the whole point is NO cargo)
 // ---------------------------------------------------------------------------
