@@ -1,0 +1,15 @@
+# Rename the project to "ipe-app" so the emitted binary path matches the name
+# expected by the static gate and its tests (binary is always derived from
+# ipe.toml `name`). The upstream sky.toml carries "sky-project"; rename it here
+# so the transform stays byte-stable and regen --check stays consistent.
+
+[[edit]]
+file: ipe.toml
+find:
+"""
+name = "sky-project"
+"""
+replace:
+"""
+name = "ipe-app"
+"""
