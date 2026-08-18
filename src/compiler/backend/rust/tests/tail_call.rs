@@ -39,12 +39,12 @@ fn emit_count_main_rs(tco: bool) -> DResult<String> {
 
     // The two next-iteration argument expressions: `n - 1`, `acc + 1`.
     let next_n = Expr::BinOp {
-        op: BinOp::Sub,
+        op: BinOp::IntSub,
         lhs: Box::new(Expr::Var(n)),
         rhs: Box::new(Expr::Int(1)),
     };
     let next_acc = Expr::BinOp {
-        op: BinOp::Add,
+        op: BinOp::IntAdd,
         lhs: Box::new(Expr::Var(acc)),
         rhs: Box::new(Expr::Int(1)),
     };

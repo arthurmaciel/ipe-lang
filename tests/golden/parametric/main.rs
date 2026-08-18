@@ -225,8 +225,12 @@ pub fn ipe_main() -> IpeTask<()> {
                 let c = crate::main_const(2, (5 == 5));
                 ({
                     let r = crate::main_apply(
-                        move |k: i64| -> i64 { (k + 0) },
-                        (if flag { (n + c) } else { n }),
+                        move |k: i64| -> i64 { ipe_runtime::math::ipe_int_add(k, 0) },
+                        (if flag {
+                            ipe_runtime::math::ipe_int_add(n, c)
+                        } else {
+                            n
+                        }),
                     );
                     io_println(string_from_int(r))
                 })

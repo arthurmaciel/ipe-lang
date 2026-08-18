@@ -1106,23 +1106,20 @@ fn ir_type_contains_task(ty: &IrType) -> bool {
     }
 }
 
-/// The Rust spelling of a binary operator for use in infix emission.
+/// The Rust infix spelling for float and generic binary operators.
 ///
-/// Every Ipê core arithmetic/comparison/boolean operator maps to the
-/// identically-spelled Rust operator except `/=` (Ipê inequality → Rust `!=`).
-///
-/// `IntDiv` and `Append` are listed here only to keep the match exhaustive
-/// (a compiler requirement when a new `BinOp` variant is added); they MUST
-/// NOT reach the infix branch:
-/// - `BinOp::IntDiv` emits as a helper call, never as infix — `//` is a Rust
-///   line comment, so reaching this arm is a codegen bug, caught at compile time
-///   by the exhaustive `match op` in `Expr::BinOp`.
-/// - `BinOp::Append` emits as `format!`, similarly intercepted before this arm.
+/// Integer arithmetic (`IntAdd`/`IntSub`/`IntMul`) and `IntDiv`/`Append`
+/// are routed through helpers or `format!` before reaching any infix path.
+/// The generic `Add`/`Sub`/`Mul` variants (polymorphic `Number a` functions)
+/// use the same Rust infix tokens — their overflow behaviour is governed by
+/// the concrete monomorphised type at the call site.
+/// All variants are listed so adding a new `BinOp` without wiring it is a
+/// compile error rather than a silent gap.
 const fn op_str(op: BinOp) -> &'static str {
     match op {
-        BinOp::Add => "+",
-        BinOp::Sub => "-",
-        BinOp::Mul => "*",
+        BinOp::FloatAdd | BinOp::Add => "+",
+        BinOp::FloatSub | BinOp::Sub => "-",
+        BinOp::FloatMul | BinOp::Mul => "*",
         BinOp::Div => "/",
         BinOp::Eq => "==",
         BinOp::Neq => "!=",
@@ -1132,15 +1129,15 @@ const fn op_str(op: BinOp) -> &'static str {
         BinOp::Ge => ">=",
         BinOp::And => "&&",
         BinOp::Or => "||",
-        // `IntDiv` is routed through ipe_runtime::math::ipe_int_div in the
-        // Expr::BinOp handler — it must never reach the infix `op_str` path.
-        // `//` here is a Rust line comment, making silent corruption impossible:
-        // any accidental infix emit would comment out the rest of the expression.
-        // Listed for exhaustiveness so adding a future BinOp variant is a
-        // compile error here, not a silent gap.
+        // `Int{Add,Sub,Mul}` route through total wrapping helpers before
+        // this function is reached — they must never arrive here.
+        BinOp::IntAdd => "wrapping_add",
+        BinOp::IntSub => "wrapping_sub",
+        BinOp::IntMul => "wrapping_mul",
+        // `IntDiv` routes through `ipe_runtime::math::ipe_int_div` — `//`
+        // would be a Rust line comment, making corruption impossible to miss.
         BinOp::IntDiv => "//",
-        // `Append` has no infix Rust form; the `BinOp` arm routes it to
-        // `format!` before reaching here. Listed for exhaustiveness.
+        // `Append` routes through `format!` before reaching here.
         BinOp::Append => "++",
     }
 }
@@ -4839,11 +4836,28 @@ pub fn emit_expr_at(
                 // b==0 → panic("attempt to divide by zero") (abort, exit 101);
                 // i64::MIN / -1 → i64::MIN (wrapping, no abort).
                 BinOp::IntDiv => Ok(format!("ipe_runtime::math::ipe_int_div({l}, {r})")),
-                // Every remaining operator has a sound Rust infix form.
-                BinOp::Add
+                // Integer `+`/`-`/`*` on `i64`: raw Rust infix panics on
+                // overflow when `overflow-checks = true`. Route through total
+                // wrapping helpers so the two's-complement wrap contract holds
+                // regardless of any Cargo profile flag.
+                BinOp::IntAdd => Ok(format!("ipe_runtime::math::ipe_int_add({l}, {r})")),
+                BinOp::IntSub => Ok(format!("ipe_runtime::math::ipe_int_sub({l}, {r})")),
+                BinOp::IntMul => Ok(format!("ipe_runtime::math::ipe_int_mul({l}, {r})")),
+                // Float `+`/`-`/`*` on `f64`: IEEE 754, total (overflow → ±∞,
+                // never panics). Safe Rust infix.
+                BinOp::FloatAdd
+                | BinOp::FloatSub
+                | BinOp::FloatMul
+                // Generic (polymorphic `Number a`) `+`/`-`/`*`: emitted as
+                // Rust infix using the `Add`/`Sub`/`Mul` trait bounds on the
+                // generic type parameter. Only reached for functions whose
+                // result type was still a type variable at lowering time.
+                | BinOp::Add
                 | BinOp::Sub
                 | BinOp::Mul
+                // Float `/` on `f64`: total (x/0.0 = ±∞, never panics).
                 | BinOp::Div
+                // Comparison and boolean operators are total on all types.
                 | BinOp::Eq
                 | BinOp::Neq
                 | BinOp::Lt

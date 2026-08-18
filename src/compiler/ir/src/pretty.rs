@@ -283,9 +283,9 @@ fn ir_type_name_at(interner: &Interner, ty: &IrType, depth: u16) -> String {
 /// Render a binary operator's surface (Ipê source) token.
 const fn binop_token(op: BinOp) -> &'static str {
     match op {
-        BinOp::Add => "+",
-        BinOp::Sub => "-",
-        BinOp::Mul => "*",
+        BinOp::IntAdd | BinOp::FloatAdd | BinOp::Add => "+",
+        BinOp::IntSub | BinOp::FloatSub | BinOp::Sub => "-",
+        BinOp::IntMul | BinOp::FloatMul | BinOp::Mul => "*",
         BinOp::Div => "/",
         BinOp::Eq => "==",
         BinOp::Neq => "/=",
@@ -1007,7 +1007,7 @@ mod tests {
                     args: vec![],
                 },
                 body: Expr::BinOp {
-                    op: BinOp::Add,
+                    op: BinOp::IntAdd,
                     lhs: Box::new(Expr::Var(count)),
                     rhs: Box::new(Expr::Int(1)),
                 },
@@ -1021,7 +1021,7 @@ mod tests {
                     args: vec![],
                 },
                 body: Expr::BinOp {
-                    op: BinOp::Sub,
+                    op: BinOp::IntSub,
                     lhs: Box::new(Expr::Var(count)),
                     rhs: Box::new(Expr::Int(1)),
                 },
@@ -1161,7 +1161,7 @@ program
         let body = Expr::Let {
             name: x,
             value: Box::new(Expr::BinOp {
-                op: BinOp::Mul,
+                op: BinOp::IntMul,
                 lhs: Box::new(Expr::Var(n)),
                 rhs: Box::new(Expr::Int(2)),
             }),
@@ -1177,7 +1177,7 @@ program
                     rhs: Box::new(Expr::Int(2)),
                 }),
                 else_: Box::new(Expr::BinOp {
-                    op: BinOp::Add,
+                    op: BinOp::IntAdd,
                     lhs: Box::new(Expr::Var(x)),
                     rhs: Box::new(Expr::Int(1)),
                 }),
@@ -1987,7 +1987,7 @@ program
         let mut body = Expr::Int(0);
         for _ in 0..levels {
             body = Expr::BinOp {
-                op: BinOp::Add,
+                op: BinOp::IntAdd,
                 lhs: Box::new(body),
                 rhs: Box::new(Expr::Int(1)),
             };

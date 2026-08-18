@@ -213,8 +213,8 @@ pub fn file_rename(src: ipe_runtime::path::Path, dst: ipe_runtime::path::Path) -
 pub fn main_update(msg: MainMsg, count: i64) -> i64 {
     let _ipe_recursion_guard = crate::recursion_guard();
     match msg {
-        MainMsg::Increment => (count + 1),
-        MainMsg::Decrement => (count - 1),
+        MainMsg::Increment => ipe_runtime::math::ipe_int_add(count, 1),
+        MainMsg::Decrement => ipe_runtime::math::ipe_int_sub(count, 1),
     }
 }
 pub fn ipe_main() -> IpeTask<()> {

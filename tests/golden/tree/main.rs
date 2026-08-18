@@ -222,7 +222,10 @@ pub fn main_sum_tree(t: MainTree) -> i64 {
         MainTree::Node(l, n, r) => {
             let l = *l;
             let r = *r;
-            ((crate::main_sum_tree(l) + n) + crate::main_sum_tree(r))
+            ipe_runtime::math::ipe_int_add(
+                ipe_runtime::math::ipe_int_add(crate::main_sum_tree(l), n),
+                crate::main_sum_tree(r),
+            )
         }
     }
 }

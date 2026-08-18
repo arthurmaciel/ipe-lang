@@ -63,13 +63,14 @@ use crate::emit_expr::{
 };
 use crate::emit_types::{GenericScope, render_type};
 
-/// The infix spelling of a chain-eligible operator (never `Append` / `IntDiv`,
-/// which are call-shaped). Kept in step with `emit_expr::op_str`.
+/// The infix spelling of a chain-eligible operator (never `Append` / `IntDiv`
+/// / `Int{Add,Sub,Mul}`, which are call-shaped). Kept in step with
+/// `emit_expr::op_str`.
 const fn chain_op_str(op: BinOp) -> Option<&'static str> {
     match op {
-        BinOp::Add => Some("+"),
-        BinOp::Sub => Some("-"),
-        BinOp::Mul => Some("*"),
+        BinOp::FloatAdd | BinOp::Add => Some("+"),
+        BinOp::FloatSub | BinOp::Sub => Some("-"),
+        BinOp::FloatMul | BinOp::Mul => Some("*"),
         BinOp::Div => Some("/"),
         BinOp::Eq => Some("=="),
         BinOp::Neq => Some("!="),
@@ -80,7 +81,7 @@ const fn chain_op_str(op: BinOp) -> Option<&'static str> {
         BinOp::And => Some("&&"),
         BinOp::Or => Some("||"),
         // Call-shaped: never an infix chain operator.
-        BinOp::Append | BinOp::IntDiv => None,
+        BinOp::Append | BinOp::IntDiv | BinOp::IntAdd | BinOp::IntSub | BinOp::IntMul => None,
     }
 }
 
@@ -121,12 +122,17 @@ pub fn build_doc(
             build_binop_chain(ctx, *op, lhs, rhs, indent, child, generics)
         }
 
-        // The two call-shaped binops. `++` lowers to `format!("{}{}", l, r)` (a
-        // MACRO — its broken form carries NO trailing comma) and `//` to
-        // `ipe_runtime::math::ipe_int_div(l, r)` (a plain function call — trailing
-        // comma kept). Both are two-argument delimited groups over their built
-        // operands; `build_call_binop` picks the trailing-comma rule by kind.
-        Expr::BinOp { op, lhs, rhs } if matches!(op, BinOp::Append | BinOp::IntDiv) => {
+        // Call-shaped binops: `++` → `format!("{}{}", l, r)` (macro, no
+        // trailing comma), `//` → `ipe_int_div(l, r)`, and the integer
+        // arithmetic helpers `ipe_int_{add,sub,mul}(l, r)` (plain function
+        // calls — trailing comma kept). All are two-argument delimited groups;
+        // `build_call_binop` picks the trailing-comma rule and prefix by kind.
+        Expr::BinOp { op, lhs, rhs }
+            if matches!(
+                op,
+                BinOp::Append | BinOp::IntDiv | BinOp::IntAdd | BinOp::IntSub | BinOp::IntMul
+            ) =>
+        {
             build_call_binop(ctx, *op, lhs, rhs, indent, child, generics)
         }
 
@@ -674,7 +680,22 @@ fn build_call_binop(
             vec![l, r],
             Doc::text(")"),
         )),
-        // The caller's guard restricts `op` to the two call-shaped binops; any
+        BinOp::IntAdd => Ok(delimited(
+            Doc::text("ipe_runtime::math::ipe_int_add("),
+            vec![l, r],
+            Doc::text(")"),
+        )),
+        BinOp::IntSub => Ok(delimited(
+            Doc::text("ipe_runtime::math::ipe_int_sub("),
+            vec![l, r],
+            Doc::text(")"),
+        )),
+        BinOp::IntMul => Ok(delimited(
+            Doc::text("ipe_runtime::math::ipe_int_mul("),
+            vec![l, r],
+            Doc::text(")"),
+        )),
+        // The caller's guard restricts `op` to the call-shaped binops; any
         // other operator is a chain operator built elsewhere. Fail closed rather
         // than emit a wrong shape.
         _ => Err(Diagnostic::CompilerBug {
@@ -2166,7 +2187,8 @@ mod tests {
             Expr::Unit,
             var(fx, 0),
             Expr::CloneVar(sym(fx, 0)),
-            // Chain-eligible binops (structured).
+            // Chain-eligible binops (structured): generic `Add`/`Mul` use Rust
+            // infix via trait bounds and participate in the chain layout.
             binop(BinOp::Add, var(fx, 0), var(fx, 1)),
             binop(
                 BinOp::Add,
@@ -2181,14 +2203,19 @@ mod tests {
             binop(BinOp::Eq, var(fx, 0), var(fx, 1)),
             binop(BinOp::And, var(fx, 0), var(fx, 1)),
             // Call-shaped binops (structured): `++` → `format!("{}{}", a, b)` (a
-            // macro, no trailing comma), `//` → `ipe_int_div(a, b)` (a plain call).
+            // macro, no trailing comma), `//` → `ipe_int_div(a, b)`, and the
+            // integer arithmetic helpers (plain function calls, trailing comma kept).
             binop(BinOp::Append, var(fx, 0), var(fx, 1)),
             binop(BinOp::IntDiv, var(fx, 0), var(fx, 1)),
+            binop(BinOp::IntAdd, var(fx, 0), var(fx, 1)),
+            binop(BinOp::IntSub, var(fx, 0), var(fx, 1)),
+            binop(BinOp::IntMul, var(fx, 0), var(fx, 1)),
             // Call-shaped binops, wide → break. The SEAL must hold across the
             // break/flat boundary; the append macro drops its trailing comma while
-            // the int-div call keeps one.
+            // function calls keep one.
             binop(BinOp::Append, var(fx, 7), var(fx, 8)),
             binop(BinOp::IntDiv, var(fx, 7), var(fx, 8)),
+            binop(BinOp::IntAdd, var(fx, 7), var(fx, 8)),
             // If (structured) — narrow, stays inline.
             Expr::If {
                 cond: Box::new(var(fx, 0)),
@@ -2204,7 +2231,7 @@ mod tests {
             },
             // Composite: a chain-eligible binop whose operands are themselves
             // `if` expressions — exercises the structured `if` builder nested
-            // inside the structured `Chain` builder.
+            // inside the structured `Chain` builder. Uses generic `Add` (infix).
             binop(
                 BinOp::Add,
                 Expr::If {
@@ -2386,7 +2413,8 @@ mod tests {
                 body: Box::new(var(fx, 3)),
             },
             // Boxed lambda whose body is a chain-eligible binop — the closure body
-            // is a structured `Chain` inside the braces-always block.
+            // is a structured `Chain` inside the braces-always block. Uses generic
+            // `Add` (infix) to exercise the chain path.
             Expr::Lambda {
                 params: vec![(sym(fx, 3), IrType::Int)],
                 ret: IrType::Int,
@@ -2416,6 +2444,7 @@ mod tests {
             },
             // `let` with a body that uses the binding (still normal path — the
             // value `b` is a plain Clone `Var`, so `needs_inline` is false).
+            // Uses generic `Add` (infix) to exercise the body-is-chain path.
             Expr::Let {
                 name: sym(fx, 0),
                 value: Box::new(var(fx, 1)),
@@ -2549,6 +2578,8 @@ mod tests {
     fn chain_builder_carries_every_paren() {
         // `((a + b) + c)` — the string emitter wraps each level; the chain
         // builder must carry both `(` and both `)` as leaves so the SEAL holds.
+        // Uses the generic `BinOp::Add` variant (infix/chain-eligible) to
+        // exercise the chain layout path independently of Int vs Float dispatch.
         let fx = fixture();
         with_ctx(&fx, |ctx| {
             let expr = binop(
@@ -3839,6 +3870,8 @@ mod tests {
         let fx = fixture();
         with_ctx(&fx, |ctx| {
             // `(…_x + …_y + …_z)` — a three-operand chain wide enough to break.
+            // Uses generic `Add` (infix/chain-eligible) to exercise the
+            // synthesized-braces path for a wide control-flow body.
             let wide_chain = binop(
                 BinOp::Add,
                 binop(BinOp::Add, var(&fx, 7), var(&fx, 8)),

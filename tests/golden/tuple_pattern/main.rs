@@ -216,16 +216,17 @@ pub fn main_pair_sum() -> i64 {
     CELL.get_or_init(|| {
         ({
             let (a, b) = (1, 2);
-            (a + b)
+            ipe_runtime::math::ipe_int_add(a, b)
         })
     })
     .clone()
 }
 pub fn ipe_main() -> IpeTask<()> {
     let _ipe_recursion_guard = crate::recursion_guard();
-    io_println(string_from_int(
-        ((crate::main_fst((41, 99)) + crate::main_snd((7, 2))) + crate::main_pair_sum()),
-    ))
+    io_println(string_from_int(ipe_runtime::math::ipe_int_add(
+        ipe_runtime::math::ipe_int_add(crate::main_fst((41, 99)), crate::main_snd((7, 2))),
+        crate::main_pair_sum(),
+    )))
 }
 
 // Ffi.kernel polyfill — should be unreachable in Rust target;

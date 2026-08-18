@@ -232,9 +232,10 @@ pub fn main_apply(c: RecCountFormatLabelOnChange) -> String {
         format!(
             "{}{}",
             ": ".to_string(),
-            (c.clone()).format.clone()(
-                ((c.clone()).onChange.clone()("hello".to_string()) + (c).count),
-            )
+            (c.clone()).format.clone()(ipe_runtime::math::ipe_int_add(
+                (c.clone()).onChange.clone()("hello".to_string()),
+                (c).count,
+            ))
         )
     )
 }

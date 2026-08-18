@@ -2571,11 +2571,44 @@ pub use ipe_kernels::RuntimeModule;
 ///
 /// Covers the arithmetic, comparison, and boolean operators. `Append` (`++`)
 /// carries string concatenation.
+///
+/// For concrete `Int` or `Float` operands the lowering emits a type-split
+/// variant (`Int{Add,Sub,Mul}` / `Float{Add,Sub,Mul}`) so the backend routes
+/// each to the correct implementation without re-inspecting types:
+///
+/// - `Int{Add,Sub,Mul}` → total wrapping helpers in `ipe_runtime::math`
+///   (two's-complement wrap, no panic regardless of Cargo `overflow-checks`).
+/// - `Float{Add,Sub,Mul}` → raw Rust infix (IEEE 754, total: overflow → ±∞).
+/// - `Add`/`Sub`/`Mul` (generic) → raw Rust infix via the `Add`/`Sub`/`Mul`
+///   trait bounds; used only for still-polymorphic `Number a` functions whose
+///   result type is not yet resolved to `Int` or `Float` at lowering time.
+///
+/// The type-split at the lowering site makes an unsound `i64` infix-emit path
+/// unrepresentable for all concrete integer call sites, mirroring the existing
+/// `IntDiv`/`Div` split.
 #[derive(Clone, Copy, PartialEq, Eq, Debug, serde::Serialize, serde::Deserialize)]
 pub enum BinOp {
+    /// Integer addition — emitted via `ipe_runtime::math::ipe_int_add` (wrapping).
+    IntAdd,
+    /// Integer subtraction — emitted via `ipe_runtime::math::ipe_int_sub` (wrapping).
+    IntSub,
+    /// Integer multiplication — emitted via `ipe_runtime::math::ipe_int_mul` (wrapping).
+    IntMul,
+    /// Float addition — safe Rust infix `+` (IEEE 754, total).
+    FloatAdd,
+    /// Float subtraction — safe Rust infix `-` (IEEE 754, total).
+    FloatSub,
+    /// Float multiplication — safe Rust infix `*` (IEEE 754, total).
+    FloatMul,
+    /// Generic (polymorphic `Number a`) addition — Rust infix `+` via trait bound.
+    /// Only emitted when the result type is a still-unresolved type variable.
     Add,
+    /// Generic subtraction — Rust infix `-` via trait bound.
     Sub,
+    /// Generic multiplication — Rust infix `*` via trait bound.
     Mul,
+    /// Float division `/`. Raw Rust `/` on `f64` is total (`x/0.0 = ±∞`,
+    /// never panics), so the infix form is sound.
     Div,
     Eq,
     Neq,
@@ -3267,7 +3300,7 @@ mod tests {
                     args: vec![],
                 },
                 body: Expr::BinOp {
-                    op: BinOp::Add,
+                    op: BinOp::IntAdd,
                     lhs: Box::new(Expr::Var(count)),
                     rhs: Box::new(Expr::Int(1)),
                 },
@@ -3281,7 +3314,7 @@ mod tests {
                     args: vec![],
                 },
                 body: Expr::BinOp {
-                    op: BinOp::Sub,
+                    op: BinOp::IntSub,
                     lhs: Box::new(Expr::Var(count)),
                     rhs: Box::new(Expr::Int(1)),
                 },
@@ -3795,7 +3828,7 @@ mod tests {
         // ( x + 1, 2, "three"-as-Var ) — a 3-tuple expression.
         let expr = Expr::Tuple(vec![
             Expr::BinOp {
-                op: BinOp::Add,
+                op: BinOp::IntAdd,
                 lhs: Box::new(Expr::Var(x)),
                 rhs: Box::new(Expr::Int(1)),
             },
@@ -3880,7 +3913,7 @@ mod tests {
             params: vec![(x, IrType::Int)],
             ret: IrType::Int,
             body: Box::new(Expr::BinOp {
-                op: BinOp::Add,
+                op: BinOp::IntAdd,
                 lhs: Box::new(Expr::Var(x)),
                 rhs: Box::new(Expr::Int(1)),
             }),
@@ -4106,12 +4139,12 @@ mod tests {
                     }),
                 }),
                 then_: Box::new(Expr::BinOp {
-                    op: BinOp::Mul,
+                    op: BinOp::IntMul,
                     lhs: Box::new(Expr::Var(x)),
                     rhs: Box::new(Expr::Int(10)),
                 }),
                 else_: Box::new(Expr::BinOp {
-                    op: BinOp::Sub,
+                    op: BinOp::IntSub,
                     lhs: Box::new(Expr::Var(x)),
                     rhs: Box::new(Expr::Int(1)),
                 }),
@@ -4124,13 +4157,16 @@ mod tests {
         assert!(rendered.contains("Let"));
         assert!(rendered.contains("If"));
 
-        // Every extended BinOp is a distinct, Copy, comparable value: the full
+        // Every BinOp variant is a distinct, Copy, comparable value: the full
         // set has no duplicates and the Copy bound holds (the array is consumed
         // by value below without moving out of `all`).
         let all = [
-            BinOp::Add,
-            BinOp::Sub,
-            BinOp::Mul,
+            BinOp::IntAdd,
+            BinOp::IntSub,
+            BinOp::IntMul,
+            BinOp::FloatAdd,
+            BinOp::FloatSub,
+            BinOp::FloatMul,
             BinOp::Div,
             BinOp::IntDiv,
             BinOp::Eq,

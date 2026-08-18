@@ -230,7 +230,7 @@ pub fn main_count_odd(o: MainOdd) -> i64 {
     match o {
         MainOdd::OSucc(e) => {
             let e = *e;
-            (1 + crate::main_count_even(e))
+            ipe_runtime::math::ipe_int_add(1, crate::main_count_even(e))
         }
     }
 }
@@ -240,7 +240,7 @@ pub fn main_count_even(e: MainEven) -> i64 {
         MainEven::EZero => 0,
         MainEven::ESucc(o) => {
             let o = *o;
-            (1 + crate::main_count_odd(o))
+            ipe_runtime::math::ipe_int_add(1, crate::main_count_odd(o))
         }
     }
 }

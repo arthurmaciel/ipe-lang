@@ -359,11 +359,23 @@ mod tests {
             return;
         };
         assert_eq!(i.resolve(*variant), Some("Increment"));
-        assert!(matches!(&arm0.body, Expr::BinOp { op: BinOp::Add, .. }));
+        assert!(matches!(
+            &arm0.body,
+            Expr::BinOp {
+                op: BinOp::IntAdd,
+                ..
+            }
+        ));
 
         // second arm: Decrement -> (count - 1).
         let Some(arm1) = m.arms().get(1) else { return };
-        assert!(matches!(&arm1.body, Expr::BinOp { op: BinOp::Sub, .. }));
+        assert!(matches!(
+            &arm1.body,
+            Expr::BinOp {
+                op: BinOp::IntSub,
+                ..
+            }
+        ));
     }
 
     #[test]
@@ -519,7 +531,13 @@ mod tests {
             "destructured value is the `(1, 2)` tuple"
         );
         assert!(
-            matches!(body.as_ref(), Expr::BinOp { op: BinOp::Add, .. }),
+            matches!(
+                body.as_ref(),
+                Expr::BinOp {
+                    op: BinOp::IntAdd,
+                    ..
+                }
+            ),
             "body is `a + b`"
         );
     }
@@ -659,7 +677,13 @@ mod tests {
         assert!(opt.is_some(), "v must lower");
         let Some((body, _)) = opt else { return };
         assert!(
-            matches!(&body, Expr::BinOp { op: BinOp::Add, .. }),
+            matches!(
+                &body,
+                Expr::BinOp {
+                    op: BinOp::IntAdd,
+                    ..
+                }
+            ),
             "body is Add(_, _)"
         );
         let Expr::BinOp { lhs, rhs, .. } = &body else {
@@ -667,7 +691,13 @@ mod tests {
         };
         assert!(matches!(lhs.as_ref(), Expr::Int(2)));
         assert!(
-            matches!(rhs.as_ref(), Expr::BinOp { op: BinOp::Mul, .. }),
+            matches!(
+                rhs.as_ref(),
+                Expr::BinOp {
+                    op: BinOp::IntMul,
+                    ..
+                }
+            ),
             "rhs is Mul(3, 4)"
         );
     }
@@ -723,7 +753,13 @@ mod tests {
             "b = a"
         );
         assert!(
-            matches!(b2.as_ref(), Expr::BinOp { op: BinOp::Add, .. }),
+            matches!(
+                b2.as_ref(),
+                Expr::BinOp {
+                    op: BinOp::IntAdd,
+                    ..
+                }
+            ),
             "in-body is a + b"
         );
     }
@@ -851,7 +887,7 @@ mod tests {
     fn lowers_remaining_operators() {
         // Cover Sub, Div, Eq, Neq, Le, Ge, Or paths through `binop`.
         for (src_op, want) in [
-            ("a - b", BinOp::Sub),
+            ("a - b", BinOp::IntSub),
             ("a / b", BinOp::Div),
             ("a == b", BinOp::Eq),
             ("a /= b", BinOp::Neq),
@@ -862,7 +898,7 @@ mod tests {
             // Annotate to keep operand/result types concrete for each operator.
             // `/` (fdiv) is Float-typed, matching the Go backend.
             let sig = match want {
-                BinOp::Sub => "f : Int -> Int -> Int",
+                BinOp::IntSub => "f : Int -> Int -> Int",
                 BinOp::Div => "f : Float -> Float -> Float",
                 BinOp::Or => "f : Bool -> Bool -> Bool",
                 _ => "f : Int -> Int -> Bool",
@@ -877,6 +913,47 @@ mod tests {
                 continue;
             };
             assert_eq!(op, want, "operator {src_op}");
+        }
+    }
+
+    #[test]
+    fn lowers_int_and_float_arithmetic_to_typed_binop_variants() {
+        // Int-typed `+`, `-`, `*` must lower to Int-specific wrapping variants.
+        for (src_op, want) in [
+            ("a + b", BinOp::IntAdd),
+            ("a - b", BinOp::IntSub),
+            ("a * b", BinOp::IntMul),
+        ] {
+            let source =
+                format!("module Main exposing (f)\nf : Int -> Int -> Int\nf a b =\n    {src_op}\n");
+            let opt = lower_body(&source, "f");
+            assert!(
+                matches!(&opt, Some((Expr::BinOp { .. }, _))),
+                "{src_op} must lower to a binop"
+            );
+            let Some((Expr::BinOp { op, .. }, _)) = opt else {
+                continue;
+            };
+            assert_eq!(op, want, "Int operator {src_op}");
+        }
+        // Float-typed `+`, `-`, `*` must lower to Float-specific infix variants.
+        for (src_op, want) in [
+            ("a + b", BinOp::FloatAdd),
+            ("a - b", BinOp::FloatSub),
+            ("a * b", BinOp::FloatMul),
+        ] {
+            let source = format!(
+                "module Main exposing (f)\nf : Float -> Float -> Float\nf a b =\n    {src_op}\n"
+            );
+            let opt = lower_body(&source, "f");
+            assert!(
+                matches!(&opt, Some((Expr::BinOp { .. }, _))),
+                "{src_op} must lower to a binop"
+            );
+            let Some((Expr::BinOp { op, .. }, _)) = opt else {
+                continue;
+            };
+            assert_eq!(op, want, "Float operator {src_op}");
         }
     }
 

@@ -286,9 +286,9 @@ fn tree_sum_fn(interner: &mut Interner, syms: &TreeSyms) -> DResult<Func> {
                 args: vec![Pat::Var(left), Pat::Var(val), Pat::Var(right)],
             },
             body: Expr::BinOp {
-                op: BinOp::Add,
+                op: BinOp::IntAdd,
                 lhs: Box::new(Expr::BinOp {
-                    op: BinOp::Add,
+                    op: BinOp::IntAdd,
                     lhs: Box::new(call_sum(left)),
                     rhs: Box::new(Expr::Var(val)),
                 }),

@@ -201,7 +201,7 @@ pub fn ipe_main() -> IpeTask<()> {
     ({
         let inc = {
             let __ipe_fn: Box<dyn Fn(i64) -> i64 + Send + Sync + 'static> =
-                Box::new(move |x: i64| -> i64 { (x + 1) });
+                Box::new(move |x: i64| -> i64 { ipe_runtime::math::ipe_int_add(x, 1) });
             __ipe_fn
         };
         ({
@@ -209,16 +209,22 @@ pub fn ipe_main() -> IpeTask<()> {
             ({
                 let add = {
                     let __ipe_fn: Box<dyn Fn(i64, i64) -> i64 + Send + Sync + 'static> =
-                        Box::new(move |a: i64, b: i64| -> i64 { (a + b) });
+                        Box::new(move |a: i64, b: i64| -> i64 {
+                            ipe_runtime::math::ipe_int_add(a, b)
+                        });
                     __ipe_fn
                 };
                 ({
-                    let r = (((inc)(41)
-                        + ({
-                            let x: i64 = 5;
-                            (x + n)
-                        }))
-                        + (add)(2, 3));
+                    let r = ipe_runtime::math::ipe_int_add(
+                        ipe_runtime::math::ipe_int_add(
+                            (inc)(41),
+                            ({
+                                let x: i64 = 5;
+                                ipe_runtime::math::ipe_int_add(x, n)
+                            }),
+                        ),
+                        (add)(2, 3),
+                    );
                     io_println(string_from_int(r))
                 })
             })

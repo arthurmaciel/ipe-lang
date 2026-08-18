@@ -203,7 +203,7 @@ pub fn main_f(n: i64) -> i64 {
         __ipe_arm_alias_0 => {
             let k = __ipe_arm_alias_0;
             let m = k.clone();
-            (k + m)
+            ipe_runtime::math::ipe_int_add(k, m)
         }
     }
 }

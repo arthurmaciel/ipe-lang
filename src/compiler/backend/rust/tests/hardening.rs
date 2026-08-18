@@ -147,7 +147,7 @@ fn deeply_nested_expr_fails_fast_not_stack_overflow() -> DResult<()> {
     let mut body = Expr::Int(0);
     for _ in 0..4096 {
         body = Expr::BinOp {
-            op: BinOp::Add,
+            op: BinOp::IntAdd,
             lhs: Box::new(body),
             rhs: Box::new(Expr::Int(1)),
         };
@@ -188,7 +188,7 @@ fn nesting_at_the_bound_still_emits() -> DResult<()> {
     let mut body = Expr::Int(0);
     for _ in 0..64 {
         body = Expr::BinOp {
-            op: BinOp::Add,
+            op: BinOp::IntAdd,
             lhs: Box::new(body),
             rhs: Box::new(Expr::Int(1)),
         };
@@ -377,7 +377,7 @@ fn let_if_and_extended_binops_emit_total_rust() -> DResult<()> {
     let body = Expr::Let {
         name: x,
         value: Box::new(Expr::BinOp {
-            op: BinOp::Mul,
+            op: BinOp::IntMul,
             lhs: Box::new(Expr::Var(n)),
             rhs: Box::new(Expr::Int(2)),
         }),
@@ -401,7 +401,7 @@ fn let_if_and_extended_binops_emit_total_rust() -> DResult<()> {
                 rhs: Box::new(Expr::Int(2)),
             }),
             else_: Box::new(Expr::BinOp {
-                op: BinOp::Add,
+                op: BinOp::IntAdd,
                 lhs: Box::new(Expr::Var(x)),
                 rhs: Box::new(Expr::Int(1)),
             }),
@@ -421,8 +421,9 @@ fn let_if_and_extended_binops_emit_total_rust() -> DResult<()> {
     let out = emit(&interner, &program(main_mod, vec![], vec![f_fn]))?;
     // Rustfmt reformats the emitted let/if block onto multiple lines; assert the
     // key semantic fragments rather than a single-line snapshot.
+    // Int `*` emits via the wrapping helper; Float `/` stays infix.
     assert!(
-        out.contains("let x = (n * 2);"),
+        out.contains("let x = ipe_runtime::math::ipe_int_mul(n, 2);"),
         "let binding not emitted:\n{out}"
     );
     assert!(
@@ -430,7 +431,7 @@ fn let_if_and_extended_binops_emit_total_rust() -> DResult<()> {
         "if condition not emitted:\n{out}"
     );
     assert!(
-        out.contains("(x / 2)") && out.contains("(x + 1)"),
+        out.contains("(x / 2)") && out.contains("ipe_runtime::math::ipe_int_add(x, 1)"),
         "if branches not emitted:\n{out}"
     );
     Ok(())

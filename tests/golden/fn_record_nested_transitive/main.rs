@@ -245,7 +245,9 @@ pub fn main_outer() -> RecInnerName {
         inner: RecOpTag {
             op: {
                 let __ipe_fn: ::std::sync::Arc<dyn Fn(i64) -> i64 + Send + Sync + 'static> =
-                    ::std::sync::Arc::new(move |n: i64| -> i64 { (n * 2) });
+                    ::std::sync::Arc::new(move |n: i64| -> i64 {
+                        ipe_runtime::math::ipe_int_mul(n, 2)
+                    });
                 __ipe_fn
             },
             tag: 7,
@@ -257,8 +259,13 @@ pub fn main_run(o: RecInnerName, x: i64) -> i64 {
     let _ipe_recursion_guard = crate::recursion_guard();
     ({
         let dup = o.clone();
-        ((((o).inner.clone()).op.clone()(x) + ((dup.clone()).inner.clone()).op.clone()(x))
-            + ((dup).inner.clone()).tag)
+        ipe_runtime::math::ipe_int_add(
+            ipe_runtime::math::ipe_int_add(
+                ((o).inner.clone()).op.clone()(x),
+                ((dup.clone()).inner.clone()).op.clone()(x),
+            ),
+            ((dup).inner.clone()).tag,
+        )
     })
 }
 pub fn ipe_main() -> IpeTask<()> {

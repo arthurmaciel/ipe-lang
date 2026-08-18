@@ -201,7 +201,7 @@ pub fn ipe_main() -> IpeTask<()> {
     ({
         let f = {
             let __ipe_fn: Box<dyn Fn(i64) -> i64 + Send + Sync + 'static> =
-                Box::new(move |n: i64| -> i64 { (n + 1) });
+                Box::new(move |n: i64| -> i64 { ipe_runtime::math::ipe_int_add(n, 1) });
             __ipe_fn
         };
         ({
@@ -228,7 +228,7 @@ pub fn ipe_main() -> IpeTask<()> {
                         );
                         ({
                             let applied = (g)(42);
-                            (applied + list_sum(mapped))
+                            ipe_runtime::math::ipe_int_add(applied, list_sum(mapped))
                         })
                     })
                 });

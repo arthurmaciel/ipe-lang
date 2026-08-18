@@ -202,14 +202,15 @@ pub fn main_apply<FN0: Fn(i64) -> i64 + Send + Sync + 'static>(f: FN0, x: i64) -
 }
 pub fn main_add(a: i64, b: i64) -> i64 {
     let _ipe_recursion_guard = crate::recursion_guard();
-    (a + b)
+    ipe_runtime::math::ipe_int_add(a, b)
 }
 pub fn ipe_main() -> IpeTask<()> {
     let _ipe_recursion_guard = crate::recursion_guard();
     ({
         let double = {
-            let __ipe_fn: ::std::sync::Arc<dyn Fn(i64) -> i64 + Send + Sync + 'static> =
-                ::std::sync::Arc::new(move |n: i64| -> i64 { (n * 2) });
+            let __ipe_fn: ::std::sync::Arc<dyn Fn(i64) -> i64 + Send + Sync + 'static> = ::std::sync::Arc::new(
+                move |n: i64| -> i64 { ipe_runtime::math::ipe_int_mul(n, 2) },
+            );
             __ipe_fn
         };
         ({
@@ -250,7 +251,13 @@ pub fn ipe_main() -> IpeTask<()> {
                             }),
                             4,
                         );
-                        io_println(string_from_int((((a + b) + (h1)(10)) + (h2)(20))))
+                        io_println(string_from_int(ipe_runtime::math::ipe_int_add(
+                            ipe_runtime::math::ipe_int_add(
+                                ipe_runtime::math::ipe_int_add(a, b),
+                                (h1)(10),
+                            ),
+                            (h2)(20),
+                        )))
                     })
                 })
             })
