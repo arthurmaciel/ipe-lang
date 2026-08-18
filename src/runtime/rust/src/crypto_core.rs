@@ -724,52 +724,70 @@ TsgxkiXH9sjXrPHT1hXn2tKCv9MkR8MD1Ndh6jo7inBZUK0YG7H6Jx0CAwEAAQ==
         assert_ne!(k1, k3, "different-content keys must be unequal");
     }
 
-    /// CI grep guard: no secret/tag/key newtype in the runtime may carry a
-    /// derived `PartialEq`. This test encodes the rule as a fast, deterministic
-    /// check that runs on every `cargo test`.
-    ///
-    /// The structural seal (E0119 conflicting impl) is the primary guarantee;
-    /// this test is belt-and-suspenders for source readability and CI.
+    /// Source guard: a secret/tag/key newtype — a tuple struct wrapping a single
+    /// `String` or `Vec<u8>` — must never `#[derive(PartialEq)]`, whose
+    /// early-exit compare is a timing oracle; the family opts into `impl_ct_eq!`
+    /// instead. The E0119 conflicting-impl is the structural seal that makes the
+    /// leaky derive unrepresentable; this test is a source-level tripwire that
+    /// the family stays on the constant-time path. Non-newtype types (C-like
+    /// enums, multi-field structs) are out of scope and may derive `PartialEq`.
     #[test]
-    fn grep_guard_no_derived_partial_eq_on_secret_family() {
-        // Each file is read once; we scan for the pattern that would indicate
-        // a derived PartialEq on a struct in the secret family. An empty match
-        // set is the passing condition.
+    fn grep_guard_no_derived_partial_eq_on_secret_newtype() {
         let files = [
-            include_str!("secret.rs"),
-            include_str!("crypto_core.rs"),
-            include_str!("crypto.rs"),
-            include_str!("dsn.rs"),
+            ("secret.rs", include_str!("secret.rs")),
+            ("crypto_core.rs", include_str!("crypto_core.rs")),
+            ("crypto.rs", include_str!("crypto.rs")),
+            ("dsn.rs", include_str!("dsn.rs")),
         ];
-        // Simple line-oriented scan: a line matching BOTH `#[derive(` AND
-        // `PartialEq` is a failure unless it is inside a `#[cfg(test)]` block
-        // (test helpers are allowed). We do a conservative scan that flags any
-        // non-test occurrence.
-        let mut violations: Vec<String> = Vec::new();
-        for (file_content, file_name) in files
+        let is_secret_newtype = |t: &str| {
+            t.contains("struct ")
+                && ["(String)", "(String);", "(Vec<u8>)", "(Vec<u8>);"]
+                    .iter()
+                    .any(|shape| t.contains(shape))
+        };
+        let starts_item = |t: &str| {
+            [
+                "struct ", "enum ", "fn ", "impl ", "trait ", "type ", "mod ", "union ",
+            ]
             .iter()
-            .zip(["secret.rs", "crypto_core.rs", "crypto.rs", "dsn.rs"].iter())
-        {
-            let mut in_test_block: u32 = 0;
-            for line in file_content.lines() {
-                let trimmed = line.trim();
-                if trimmed.starts_with("#[cfg(test)]") {
-                    in_test_block = in_test_block.saturating_add(1);
-                }
-                if trimmed == "}" && in_test_block > 0 {
-                    in_test_block = in_test_block.saturating_sub(1);
-                }
-                if in_test_block > 0 {
+            .any(|kw| {
+                t.starts_with(kw) || t.strip_prefix("pub ").is_some_and(|r| r.starts_with(kw))
+            })
+        };
+        let mut violations: Vec<String> = Vec::new();
+        for (name, content) in files {
+            // `pending_partial_eq` carries a just-seen `#[derive(… PartialEq …)]`
+            // forward across intervening attributes/doc-comments to the item it
+            // decorates; `in_derive` folds a multi-line derive so a `PartialEq`
+            // on a continuation line is not missed.
+            let mut pending_partial_eq = false;
+            let mut in_derive = false;
+            for line in content.lines() {
+                let t = line.trim();
+                if in_derive {
+                    pending_partial_eq |= t.contains("PartialEq");
+                    in_derive = !t.contains(")]");
                     continue;
                 }
-                if trimmed.starts_with("#[derive(") && trimmed.contains("PartialEq") {
-                    violations.push(format!("{file_name}: {trimmed}"));
+                if t.starts_with("#[derive(") {
+                    pending_partial_eq = t.contains("PartialEq");
+                    in_derive = !t.contains(")]");
+                    continue;
+                }
+                if t.starts_with('#') || t.starts_with("//") || t.is_empty() {
+                    continue;
+                }
+                if pending_partial_eq && is_secret_newtype(t) {
+                    violations.push(format!("{name}: {t}"));
+                }
+                if starts_item(t) {
+                    pending_partial_eq = false;
                 }
             }
         }
         assert!(
             violations.is_empty(),
-            "derived PartialEq found on secret-family type(s) — use impl_ct_eq! instead:\n{}",
+            "derived PartialEq on secret-family newtype(s) — use impl_ct_eq! instead:\n{}",
             violations.join("\n")
         );
     }
@@ -786,18 +804,6 @@ TsgxkiXH9sjXrPHT1hXn2tKCv9MkR8MD1Ndh6jo7inBZUK0YG7H6Jx0CAwEAAQ==
     fn mac_eq_timing_shape_smoke() {
         use std::time::Instant;
         let raw: String = (0..32).map(|i| char::from(b'a' + (i % 26) as u8)).collect();
-        let key_ref = crypto_key_from_string(raw.clone());
-        let reference_mac = crypto_hmac_sha256_key(key_ref, "msg".to_string());
-        let hex_ref = crypto_mac_to_hex(reference_mac);
-
-        // Build two comparison targets: all-wrong and prefix-matching.
-        let all_wrong: String = (0..hex_ref.len()).map(|_| 'x').collect();
-        let mut prefix_match = hex_ref.clone();
-        // Flip just the last character.
-        let last = prefix_match.len() - 1;
-        let orig = prefix_match.as_bytes()[last];
-        let replacement = if orig == b'a' { b'b' } else { b'a' };
-        prefix_match.replace_range(last..=last, &(replacement as char).to_string());
 
         let n: u64 = 50_000;
         let mac_ref_1: crate::crypto_core::Mac = {
