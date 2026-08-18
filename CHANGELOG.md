@@ -10,6 +10,14 @@ Entries below the header are maintained by
 section is generated from Conventional Commit messages and prepended when the
 standing release pull request is merged.
 
+## [0.1.59](https://github.com/arthurmaciel/ipe-lang/compare/ipe-v0.1.58...ipe-v0.1.59) (2026-08-18)
+
+
+### Bug Fixes
+
+* **emit:** close unescaped-splice-into-manifest class in TOML path/name emission ([#1157](https://github.com/arthurmaciel/ipe-lang/issues/1157)) ([b8750d5](https://github.com/arthurmaciel/ipe-lang/commit/b8750d5259de75836c6db18de5e3904d08b5114b)), closes [#1129](https://github.com/arthurmaciel/ipe-lang/issues/1129)
+* **runtime:** constant-time equality for Mac/Key/Secret via SSOT ct_bytes_eq (closes [#1130](https://github.com/arthurmaciel/ipe-lang/issues/1130)) ([#1160](https://github.com/arthurmaciel/ipe-lang/issues/1160)) ([afd6573](https://github.com/arthurmaciel/ipe-lang/commit/afd6573f4442a9ed19d458fde8c07ee778cf3992))
+
 ## [0.1.58](https://github.com/arthurmaciel/ipe-lang/compare/ipe-v0.1.57...ipe-v0.1.58) (2026-08-18)
 
 
