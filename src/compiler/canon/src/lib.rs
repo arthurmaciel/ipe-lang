@@ -3330,11 +3330,45 @@ mod tests {
             return;
         };
         assert_eq!(&**name, "color");
-        assert!(
-            modules.iter().any(|m| &**m == "Ipe.Ui.Background")
-                && modules.iter().any(|m| &**m == "Ipe.Ui.Font"),
-            "both origins named, got {modules:?}"
+        // The origins render in canonical string order regardless of import
+        // order — `Background` precedes `Font` because the diagnostic newtype
+        // sorts the resolved dot-strings, not the interner-allocation sequence.
+        let rendered: Vec<&str> = modules.iter().map(AsRef::as_ref).collect();
+        assert_eq!(rendered, vec!["Ipe.Ui.Background", "Ipe.Ui.Font"]);
+    }
+
+    /// The ambiguous-origin list orders by resolved module dot-string, not by
+    /// import order — swapping the two `import` lines yields byte-identical
+    /// origins. Two imports whose dot-strings sort OPPOSITE to their source
+    /// order would, without the newtype, render in interner-allocation order.
+    #[test]
+    fn ambiguous_import_origins_are_string_ordered_not_import_ordered() {
+        let font_first = canon_err(
+            "module Main exposing (main)\n\
+             import Ipe.Ui.Font exposing (..)\n\
+             import Ipe.Ui.Background exposing (..)\n\
+             main = color\n",
         );
+        let background_first = canon_err(
+            "module Main exposing (main)\n\
+             import Ipe.Ui.Background exposing (..)\n\
+             import Ipe.Ui.Font exposing (..)\n\
+             main = color\n",
+        );
+        let origins = |err: &Option<Diagnostic>| -> Vec<String> {
+            let Some(Diagnostic::Name {
+                msg: NameError::AmbiguousImport { modules, .. },
+                ..
+            }) = err
+            else {
+                return Vec::new();
+            };
+            modules.iter().map(|m| (**m).to_owned()).collect()
+        };
+        let ordered = vec!["Ipe.Ui.Background".to_owned(), "Ipe.Ui.Font".to_owned()];
+        assert_eq!(origins(&font_first), ordered);
+        assert_eq!(origins(&background_first), ordered);
+        assert_eq!(origins(&font_first), origins(&background_first));
     }
 
     #[test]

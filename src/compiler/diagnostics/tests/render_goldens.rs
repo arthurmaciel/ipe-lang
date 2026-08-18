@@ -18,7 +18,7 @@ use std::path::PathBuf;
 
 use ipe_diagnostics::{
     AliasExpansionKind, Construct, Diagnostic, Expected, ExpectedSet, Feature, LowerError,
-    NameError, ParseError, Span, TokenKind, TyDoc, TypeError,
+    NameError, ParseError, SortedNames, Span, TokenKind, TyDoc, TypeError,
 };
 
 // ---------------------------------------------------------------------------
@@ -267,7 +267,7 @@ fn golden_type_non_exhaustive_case() -> Result<(), Box<dyn std::error::Error>> {
     let d = Diagnostic::Type {
         span: Span::new(70, 78),
         msg: TypeError::NonExhaustiveCase {
-            missing: Box::new(["Green".into(), "Blue".into()]),
+            missing: SortedNames::new(["Green".into(), "Blue".into()]),
         },
     };
     check_golden("type_non_exhaustive_case", &d, "test.ipe", source)

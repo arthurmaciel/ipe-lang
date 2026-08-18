@@ -3439,6 +3439,40 @@ mod tests {
         }
     }
 
+    #[test]
+    fn or_pattern_binding_mismatch_names_are_string_ordered_not_interner_ordered() {
+        // `Pair z a | Dot -> …`: the left alternative binds `z` and `a`, the
+        // right binds neither, so BOTH diverge. `z` is written (and interned)
+        // before `a`, so an interner-id sort would render `["z","a"]`. The
+        // diagnostic newtype must render the diverging binders in canonical
+        // string order: `["a","z"]`.
+        let src = "module Main exposing (main)\n\
+                   type Shape = Pair Int Int | Dot\n\
+                   bad : Shape -> Int\n\
+                   bad s =\n        case s of\n            Pair z a | Dot -> z + a\n\
+                   main =\n    Io.println (String.fromInt 0)\n";
+        let mut i = Interner::new();
+        let parsed = ipe_parse::parse_module(src, &mut i).expect("source parses");
+        let r = ipe_canon::canonicalise(&parsed, &mut i);
+        let Err(Diagnostic::Type {
+            msg: TypeError::OrPatternBindingMismatch { names },
+            ..
+        }) = r
+        else {
+            assert!(
+                matches!(r, Err(Diagnostic::Type { .. })),
+                "expected IPE-T0019 OrPatternBindingMismatch, got {r:?}"
+            );
+            return;
+        };
+        let rendered: Vec<&str> = names.iter().map(AsRef::as_ref).collect();
+        assert_eq!(
+            rendered,
+            vec!["a", "z"],
+            "diverging binders render in canonical string order"
+        );
+    }
+
     // -----------------------------------------------------------------------
     // IPE-T0018: wildcard covers known constructors
     // -----------------------------------------------------------------------
@@ -3491,8 +3525,8 @@ mod tests {
             let names: Vec<&str> = constructors.iter().map(AsRef::as_ref).collect();
             assert_eq!(
                 names,
-                vec!["Green", "Blue"],
-                "the error must name the absorbed ctors in declaration order"
+                vec!["Blue", "Green"],
+                "the error names the absorbed ctors in canonical string order"
             );
         }
     }

@@ -38,7 +38,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use ipe_canon::ast as canon;
-use ipe_diagnostics::{DResult, Diagnostic, Span, TypeError};
+use ipe_diagnostics::{DResult, Diagnostic, SortedNames, Span, TypeError};
 use ipe_intern::{Interner, Symbol};
 
 /// `where_` tag for any internal-invariant bug raised while checking.
@@ -618,11 +618,10 @@ fn check_case(
             let head = w.first().unwrap_or(&UPat::Wild);
             missing.push(render_upat(head, interner, false)?.into_boxed_str());
         }
-        missing.dedup();
         return Err(Diagnostic::Type {
             span: scrut.span,
             msg: TypeError::NonExhaustiveCase {
-                missing: missing.into_boxed_slice(),
+                missing: SortedNames::new(missing),
             },
         });
     }
@@ -686,7 +685,7 @@ fn check_case(
         warnings.push(Diagnostic::Type {
             span,
             msg: TypeError::WildcardCoversKnownConstructors {
-                constructors: ctors.into_boxed_slice(),
+                constructors: SortedNames::new(ctors),
             },
         });
     }
