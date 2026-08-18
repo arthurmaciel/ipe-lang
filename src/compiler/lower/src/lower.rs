@@ -474,6 +474,14 @@ fn ty_is_int(ty: &Ty, interner: &Interner) -> bool {
         if module.is_empty() && args.is_empty() && interner.resolve(*name) == Some("Int"))
 }
 
+/// Is `ty` the built-in `Bool` — an empty-module, arg-less `Con` named `Bool`?
+/// Mirrors [`ty_is_int`]; used by the `RetryPolicy` shape check for the `jitter`
+/// field.
+fn ty_is_bool(ty: &Ty, interner: &Interner) -> bool {
+    matches!(ty, Ty::Con { module, name, args }
+        if module.is_empty() && args.is_empty() && interner.resolve(*name) == Some("Bool"))
+}
+
 /// The [`canon::Type`] twin of [`ty_is_int`].
 fn canon_ty_is_int(ty: &canon::Type, interner: &Interner) -> bool {
     matches!(ty, canon::Type::Con { home, name, args }
@@ -1330,11 +1338,11 @@ fn is_enum_like_con_head(interner: &Interner, name: Symbol) -> bool {
 /// value nested INSIDE a real derive carrier is still caught by that outer
 /// carrier's own [`ty_contains_fun`] check (unchanged), so this only exempts the
 /// wrapper as the outermost shape.
-/// Is `ty` the anonymous `RetryPolicy e` record — the kernel-managed shape
+/// Is `ty` the anonymous `RetryPolicy e` record — the kernel-managed FULL shape
 /// `{ baseMs : Int, jitter : Bool, kind : Int, maxAttempts : Int,
-///    shouldRetry : e -> Bool }`?
+///    shouldRetry : e -> Bool }` (names AND types)?
 ///
-/// This record IS materialised as a runtime value passed to `task_retry_with`:
+/// This record is materialised as a runtime value passed to `task_retry_with`:
 /// its Rust struct is emitted by `emit_task_retry_call` with
 /// `shouldRetry: Arc<dyn Fn(…) -> …>` and the `Clone`/`PartialEq` derives
 /// skipped for that field. So although the record carries a function-typed
@@ -1342,43 +1350,46 @@ fn is_enum_like_con_head(interner: &Interner, name: Symbol) -> bool {
 /// against — it is a dedicated non-derivable struct the emitter owns. The gates
 /// exempt exactly this shape.
 ///
-/// The match is on the FULL closed shape — [`RowTail::Closed`] AND exactly the
-/// five [`ipe_types::RETRY_POLICY_FIELDS`] field-name symbols — never a lone
-/// `shouldRetry` key. A user record that merely names a `shouldRetry` field
-/// (`{ shouldRetry : Int -> Int }`), or any near-miss subset/superset or open
-/// row, is NOT this kernel record: it flows through the ordinary record-literal
-/// emitter, which lands its fn field on the generic derive carrier. Exempting
-/// it would open an accept-then-`cargo`-fail (E0308 `Box` vs `Arc`), so such a
-/// record must fail closed (IPE-L0107). Matching the exact set keeps the
-/// exemption load-bearing only for the genuine kernel value.
+/// The match is on the FULL closed shape: [`RowTail::Closed`], exactly the five
+/// [`ipe_types::RETRY_POLICY_FIELDS`] field-name symbols, AND the required type
+/// for each field (`Int` / `Bool` / kernel `shouldRetry` arrow). A user record
+/// that shares the five names but supplies a wrong field type (e.g.
+/// `baseMs : String`, `jitter : Int`, `shouldRetry : Int -> Int`) is NOT this
+/// kernel shape and is not exempted. This makes the fold to the opaque runtime
+/// type unrepresentable for type-mismatched inputs — accept ⇒ the concretised
+/// struct's fields are type-matched ⇒ cargo builds.
 ///
 /// [`ipe_types::RETRY_POLICY_FIELDS`] is the single source of truth for the
-/// name set; the type checker interns exactly those strings for the
-/// `RetryPolicy` scheme and the shared interner guarantees symbol identity, so
-/// resolving each key and matching it against that set is equivalent to
-/// matching the checker's own `retry_f_*` symbols.
+/// name set; field types are checked here (the single source for the type
+/// mapping), consumed by both the concretise path and the fn-in-carrier gates.
 fn is_retry_policy_record(interner: &Interner, ty: &Ty) -> bool {
     let Ty::Record(fields, RowTail::Closed) = ty else {
         return false;
     };
-    fields.len() == ipe_types::RETRY_POLICY_FIELDS.len()
-        && fields.keys().all(|k| {
-            interner
-                .resolve(*k)
-                .is_some_and(|name| ipe_types::RETRY_POLICY_FIELDS.contains(&name))
-        })
+    if fields.len() != ipe_types::RETRY_POLICY_FIELDS.len() {
+        return false;
+    }
+    fields.iter().all(|(k, field_ty)| {
+        let Some(name) = interner.resolve(*k) else {
+            return false;
+        };
+        match name {
+            "baseMs" | "kind" | "maxAttempts" => ty_is_int(field_ty, interner),
+            "jitter" => ty_is_bool(field_ty, interner),
+            "shouldRetry" => is_kernel_shouldretry_ty(interner, field_ty),
+            _ => false,
+        }
+    })
 }
 
-/// Is `field_ty` the `shouldRetry` type of the KERNEL `RetryPolicy e` record —
+/// Is `field_ty` the `shouldRetry` arrow of the KERNEL `RetryPolicy e` record —
 /// either `Ty::Var -> _` (the solver left `e` free) or `Error -> _` (`e` unified
 /// to the built-in error type)?
 ///
-/// A user record that shares the five field names but provides a concrete,
-/// non-Error predicate (e.g. `Int -> Bool`) is NOT the kernel type: `shouldRetry`
-/// would be `Ty::Fun(Ty::Con{Int}, _)`, which neither case matches.  Returning
-/// `false` for that shape causes [`retry_policy_concrete_ir`] to return `None`,
-/// so the concretised `RetryPolicy Error` struct is not inserted into
-/// `module.records` for a user path where it is dead.
+/// A concrete, non-Error predicate (e.g. `Int -> Bool`) is NOT the kernel type:
+/// `shouldRetry` would be `Ty::Fun(Ty::Con{Int}, _)`, which neither case
+/// matches. Used exclusively by [`is_retry_policy_record`] — the single source
+/// for the name+type gate — so the type check lives in exactly one place.
 fn is_kernel_shouldretry_ty(interner: &Interner, field_ty: &Ty) -> bool {
     // Solver left `e` as a free variable anywhere in the field type.
     if ty_contains_var(field_ty) {
@@ -1409,9 +1420,9 @@ fn is_kernel_shouldretry_ty(interner: &Interner, field_ty: &Ty) -> bool {
 /// The `shouldRetry` field is a record-field function and is carried on the
 /// `Arc<dyn Fn>` carrier (`IrType::SharedFun`) — matching what
 /// `normalize_record_fun_carriers` would produce for a concretely-typed field.
-/// Returns `None` when the record is not the kernel shape (see
-/// [`is_kernel_shouldretry_ty`]), so a user record that merely shares the field
-/// names does not get a dead concretised struct.
+/// Returns `None` when the record is not the kernel shape
+/// ([`is_retry_policy_record`] verifies names AND types), so a user record
+/// that shares the field names but has mismatched types does not fold here.
 fn retry_policy_concrete_ir(interner: &Interner, ty: &Ty) -> Option<IrType> {
     let Ty::Record(fields, RowTail::Closed) = ty else {
         return None;
@@ -1423,32 +1434,18 @@ fn retry_policy_concrete_ir(interner: &Interner, ty: &Ty) -> Option<IrType> {
     // map uses the same interned symbols the type checker produced — symbol
     // identity is the key used by `record_struct_by_key`.
     let mut ir_fields = BTreeMap::new();
-    for (sym, field_ty) in fields {
+    for sym in fields.keys() {
         let name = interner.resolve(*sym)?;
         let ir = match name {
             "baseMs" | "kind" | "maxAttempts" => IrType::Int,
             "jitter" => IrType::Bool,
             // `shouldRetry : e -> Bool` — fix `e` to `IrType::Error` and carry
-            // the field on the `Arc<dyn Fn>` carrier (record-field function
-            // carrier), matching what `normalize_record_fun_carriers` produces
-            // for a concrete arrow field.
-            "shouldRetry" => {
-                // Only take the RetryPolicy concretisation path for the KERNEL
-                // instantiation: `e` is a free solver variable, or `e` was
-                // unified to `Error`.  A user record aliasing the five-field
-                // shape but supplying a concrete non-Error predicate (e.g.
-                // `Int -> Bool`) is NOT the kernel type — returning `None` here
-                // lets the normal record-collection path handle it, which
-                // correctly skips it via the G-b `ir_contains_fun` gate (the
-                // struct comes from the user's function signatures instead).
-                // Without this guard the concretised `RetryPolicy Error` struct
-                // ends up as a dead `_2` duplicate alongside the user's struct,
-                // drawing a `non_camel_case_types` warning in the emitted crate.
-                if !is_kernel_shouldretry_ty(interner, field_ty) {
-                    return None;
-                }
-                IrType::SharedFun(vec![IrType::Error], Box::new(IrType::Bool))
-            }
+            // the field on the `Arc<dyn Fn>` carrier, matching what
+            // `normalize_record_fun_carriers` produces for a concrete arrow
+            // field. The kernel arrow type is already verified by
+            // `is_retry_policy_record` (the gate above), so no re-guard is
+            // needed here.
+            "shouldRetry" => IrType::SharedFun(vec![IrType::Error], Box::new(IrType::Bool)),
             _ => return None,
         };
         ir_fields.insert(*sym, ir);
@@ -23496,7 +23493,7 @@ mod tests {
     use ipe_diagnostics::{Located, Span};
     use ipe_intern::Interner;
     use ipe_ir::{Callee, KernelFn};
-    use ipe_types::SolvedTypes;
+    use ipe_types::{SolvedTypes, Ty};
 
     use super::{BuiltinCtors, Lowerer, SymbolPools};
 
@@ -25856,5 +25853,317 @@ mod tests {
                  >1 means double-freshening"
             );
         }
+    }
+
+    // ── RetryPolicy name+type predicate tests ────────────────────────────────
+
+    /// Build a `Ty::Con` for a built-in type name (empty module, no args).
+    fn builtin_con(interner: &mut Interner, name: &str) -> Ty {
+        let sym = interner.intern(name).expect("intern builtin con");
+        Ty::Con {
+            module: vec![],
+            name: sym,
+            args: vec![],
+        }
+    }
+
+    /// Build a `Ty::Record` (closed) from a list of (field-name, Ty) pairs.
+    fn closed_record(interner: &mut Interner, fields: &[(&str, Ty)]) -> Ty {
+        let map: std::collections::BTreeMap<ipe_intern::Symbol, Ty> = fields
+            .iter()
+            .map(|(name, ty)| {
+                let sym = interner.intern(name).expect("intern field name");
+                (sym, ty.clone())
+            })
+            .collect();
+        Ty::Record(map, ipe_types::RowTail::Closed)
+    }
+
+    /// Build a `Ty::Record` (open) from a list of (field-name, Ty) pairs.
+    fn open_record(interner: &mut Interner, fields: &[(&str, Ty)]) -> Ty {
+        let map: std::collections::BTreeMap<ipe_intern::Symbol, Ty> = fields
+            .iter()
+            .map(|(name, ty)| {
+                let sym = interner.intern(name).expect("intern field name");
+                (sym, ty.clone())
+            })
+            .collect();
+        // Use a tagged solver-var as the open-row tail variable.
+        Ty::Record(map, ipe_types::RowTail::Open(ipe_types::tag_solver_var(0)))
+    }
+
+    /// Build the canonical `shouldRetry` arrow type with `e` as a free solver
+    /// variable — the kernel-genuine form (`Ty::Var -> Bool`).
+    fn shouldretry_var_arrow(interner: &mut Interner) -> Ty {
+        let bool_ty = builtin_con(interner, "Bool");
+        // A fresh free solver-var (tagged) for `e`.
+        let var = Ty::Var(ipe_types::tag_solver_var(42));
+        Ty::Fun(Box::new(var), Box::new(bool_ty))
+    }
+
+    /// Build the concrete `shouldRetry` arrow `Error -> Bool` — the form after
+    /// `e` is unified to the built-in `Error`.
+    fn shouldretry_error_arrow(interner: &mut Interner) -> Ty {
+        let error_ty = builtin_con(interner, "Error");
+        let bool_ty = builtin_con(interner, "Bool");
+        Ty::Fun(Box::new(error_ty), Box::new(bool_ty))
+    }
+
+    /// Build the genuine kernel `RetryPolicy e` closed record with `e` as a
+    /// free solver variable.
+    fn genuine_retry_policy_var(interner: &mut Interner) -> Ty {
+        let int_ty = builtin_con(interner, "Int");
+        let bool_ty = builtin_con(interner, "Bool");
+        let should_retry = shouldretry_var_arrow(interner);
+        closed_record(
+            interner,
+            &[
+                ("baseMs", int_ty.clone()),
+                ("jitter", bool_ty),
+                ("kind", int_ty.clone()),
+                ("maxAttempts", int_ty),
+                ("shouldRetry", should_retry),
+            ],
+        )
+    }
+
+    /// Build the genuine kernel `RetryPolicy Error` closed record with `e`
+    /// fixed to `Error`.
+    fn genuine_retry_policy_error(interner: &mut Interner) -> Ty {
+        let int_ty = builtin_con(interner, "Int");
+        let bool_ty = builtin_con(interner, "Bool");
+        let should_retry = shouldretry_error_arrow(interner);
+        closed_record(
+            interner,
+            &[
+                ("baseMs", int_ty.clone()),
+                ("jitter", bool_ty),
+                ("kind", int_ty.clone()),
+                ("maxAttempts", int_ty),
+                ("shouldRetry", should_retry),
+            ],
+        )
+    }
+
+    /// `is_retry_policy_record` must accept the genuine kernel shape with a
+    /// free solver-var `e` (pre-unification) and with `e` unified to `Error`.
+    #[test]
+    fn retry_policy_predicate_accepts_genuine_kernel_shape() {
+        let mut interner = Interner::new();
+
+        let ty_var = genuine_retry_policy_var(&mut interner);
+        assert!(
+            super::is_retry_policy_record(&interner, &ty_var),
+            "genuine RetryPolicy e (Var shouldRetry) must be accepted"
+        );
+
+        let ty_err = genuine_retry_policy_error(&mut interner);
+        assert!(
+            super::is_retry_policy_record(&interner, &ty_err),
+            "genuine RetryPolicy Error (Error shouldRetry) must be accepted"
+        );
+    }
+
+    /// Each of the five field-type corruptions must make `is_retry_policy_record`
+    /// return false — one type-mismatched field per case.
+    #[test]
+    fn retry_policy_predicate_rejects_each_field_type_corruption() {
+        let mut interner = Interner::new();
+        let int_ty = builtin_con(&mut interner, "Int");
+        let bool_ty = builtin_con(&mut interner, "Bool");
+        let string_ty = builtin_con(&mut interner, "String");
+        let should_retry_good = shouldretry_var_arrow(&mut interner);
+        let should_retry_bad = Ty::Fun(Box::new(int_ty.clone()), Box::new(int_ty.clone()));
+
+        // baseMs : String (should be Int)
+        let ty = closed_record(
+            &mut interner,
+            &[
+                ("baseMs", string_ty.clone()),
+                ("jitter", bool_ty.clone()),
+                ("kind", int_ty.clone()),
+                ("maxAttempts", int_ty.clone()),
+                ("shouldRetry", should_retry_good.clone()),
+            ],
+        );
+        assert!(
+            !super::is_retry_policy_record(&interner, &ty),
+            "baseMs:String must be rejected"
+        );
+
+        // jitter : Int (should be Bool)
+        let ty = closed_record(
+            &mut interner,
+            &[
+                ("baseMs", int_ty.clone()),
+                ("jitter", int_ty.clone()),
+                ("kind", int_ty.clone()),
+                ("maxAttempts", int_ty.clone()),
+                ("shouldRetry", should_retry_good.clone()),
+            ],
+        );
+        assert!(
+            !super::is_retry_policy_record(&interner, &ty),
+            "jitter:Int must be rejected"
+        );
+
+        // kind : Bool (should be Int)
+        let ty = closed_record(
+            &mut interner,
+            &[
+                ("baseMs", int_ty.clone()),
+                ("jitter", bool_ty.clone()),
+                ("kind", bool_ty.clone()),
+                ("maxAttempts", int_ty.clone()),
+                ("shouldRetry", should_retry_good.clone()),
+            ],
+        );
+        assert!(
+            !super::is_retry_policy_record(&interner, &ty),
+            "kind:Bool must be rejected"
+        );
+
+        // maxAttempts : String (should be Int)
+        let ty = closed_record(
+            &mut interner,
+            &[
+                ("baseMs", int_ty.clone()),
+                ("jitter", bool_ty.clone()),
+                ("kind", int_ty.clone()),
+                ("maxAttempts", string_ty),
+                ("shouldRetry", should_retry_good),
+            ],
+        );
+        assert!(
+            !super::is_retry_policy_record(&interner, &ty),
+            "maxAttempts:String must be rejected"
+        );
+
+        // shouldRetry : Int -> Int (should be kernel arrow)
+        let ty = closed_record(
+            &mut interner,
+            &[
+                ("baseMs", int_ty.clone()),
+                ("jitter", bool_ty),
+                ("kind", int_ty.clone()),
+                ("maxAttempts", int_ty),
+                ("shouldRetry", should_retry_bad),
+            ],
+        );
+        assert!(
+            !super::is_retry_policy_record(&interner, &ty),
+            "shouldRetry:Int->Int must be rejected"
+        );
+    }
+
+    /// An open-row record with the correct field names and types must be
+    /// rejected — only a closed row is the kernel shape.
+    #[test]
+    fn retry_policy_predicate_rejects_open_row() {
+        let mut interner = Interner::new();
+        let int_ty = builtin_con(&mut interner, "Int");
+        let bool_ty = builtin_con(&mut interner, "Bool");
+        let should_retry = shouldretry_var_arrow(&mut interner);
+
+        let ty = open_record(
+            &mut interner,
+            &[
+                ("baseMs", int_ty.clone()),
+                ("jitter", bool_ty),
+                ("kind", int_ty.clone()),
+                ("maxAttempts", int_ty),
+                ("shouldRetry", should_retry),
+            ],
+        );
+        assert!(
+            !super::is_retry_policy_record(&interner, &ty),
+            "open-row RetryPolicy must be rejected"
+        );
+    }
+
+    /// Wrong arity (four fields instead of five) must be rejected.
+    #[test]
+    fn retry_policy_predicate_rejects_wrong_arity() {
+        let mut interner = Interner::new();
+        let int_ty = builtin_con(&mut interner, "Int");
+        let bool_ty = builtin_con(&mut interner, "Bool");
+
+        let ty = closed_record(
+            &mut interner,
+            &[
+                ("baseMs", int_ty.clone()),
+                ("jitter", bool_ty),
+                ("kind", int_ty.clone()),
+                ("maxAttempts", int_ty),
+            ],
+        );
+        assert!(
+            !super::is_retry_policy_record(&interner, &ty),
+            "four-field record must be rejected"
+        );
+    }
+
+    /// A renamed field (`baseMsX` instead of `baseMs`) must be rejected.
+    #[test]
+    fn retry_policy_predicate_rejects_renamed_field() {
+        let mut interner = Interner::new();
+        let int_ty = builtin_con(&mut interner, "Int");
+        let bool_ty = builtin_con(&mut interner, "Bool");
+        let should_retry = shouldretry_var_arrow(&mut interner);
+
+        let ty = closed_record(
+            &mut interner,
+            &[
+                ("baseMsX", int_ty.clone()),
+                ("jitter", bool_ty),
+                ("kind", int_ty.clone()),
+                ("maxAttempts", int_ty),
+                ("shouldRetry", should_retry),
+            ],
+        );
+        assert!(
+            !super::is_retry_policy_record(&interner, &ty),
+            "record with a renamed field must be rejected"
+        );
+    }
+
+    /// A closed record with correct names but `shouldRetry : Int -> Int`
+    /// (non-kernel arrow) must make `retry_policy_concrete_ir` return `None`
+    /// — no concretisation for a type-mismatched shape.
+    #[test]
+    fn retry_policy_concrete_ir_rejects_non_kernel_shouldretry() {
+        let mut interner = Interner::new();
+        let int_ty = builtin_con(&mut interner, "Int");
+        let bool_ty = builtin_con(&mut interner, "Bool");
+        let bad_should_retry = Ty::Fun(Box::new(int_ty.clone()), Box::new(int_ty.clone()));
+
+        let ty = closed_record(
+            &mut interner,
+            &[
+                ("baseMs", int_ty.clone()),
+                ("jitter", bool_ty),
+                ("kind", int_ty.clone()),
+                ("maxAttempts", int_ty),
+                ("shouldRetry", bad_should_retry),
+            ],
+        );
+        let result = super::retry_policy_concrete_ir(&interner, &ty);
+        assert!(
+            result.is_none(),
+            "retry_policy_concrete_ir must return None for shouldRetry:Int->Int"
+        );
+    }
+
+    /// The genuine kernel shape must produce a concrete `IrType::Record` from
+    /// `retry_policy_concrete_ir` — guards against over-tightening.
+    #[test]
+    fn retry_policy_concrete_ir_accepts_genuine_kernel_shape() {
+        let mut interner = Interner::new();
+        let ty = genuine_retry_policy_var(&mut interner);
+        let result = super::retry_policy_concrete_ir(&interner, &ty);
+        assert!(
+            result.is_some(),
+            "retry_policy_concrete_ir must return Some for the genuine kernel shape"
+        );
     }
 }
