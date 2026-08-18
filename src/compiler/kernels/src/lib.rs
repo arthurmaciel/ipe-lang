@@ -11915,4 +11915,275 @@ mod tests {
             }
         }
     }
+
+    /// `is_server()` MUST be true for exactly the kernels whose emitted symbols
+    /// live in the `server` runtime module set. The oracle is:
+    /// `class == Server` (which already implies server-module residency) OR
+    /// `required_runtime_module() == Some(RuntimeModule::Server)` (the cross-class
+    /// carve-outs — `HttpStreamOpen`/`ForEachChunk`/`Close` are `class = Pure`
+    /// but their symbols live in `http_stream`, which the server append declares).
+    /// `HttpStreamChunks` has `required_runtime_module() == Some(Server)` and is
+    /// intentionally NOT `is_server` — it is covered via the `required_runtime_module`
+    /// path in the lowerer directly. Both directions are asserted, so a new
+    /// `class = Server` kernel the predicate forgets → emitted crate references
+    /// `server::*` with no module (E0425/E0412).
+    #[test]
+    fn server_predicate_tracks_server_module_residency() {
+        use super::{KernelClass, RuntimeModule};
+        for k in StdlibKernel::ALL {
+            let decl = k.decl();
+            // Primary oracle: class=Server (all server-dispatch kernels) or
+            // required_runtime_module=Some(Server) (cross-class kernels whose
+            // symbols live in the server module set).
+            let server_resident = decl.class == KernelClass::Server
+                || k.required_runtime_module() == Some(RuntimeModule::Server);
+            // Carve-outs that require an explicit `matches!` in the predicate:
+            //
+            // `HttpStreamOpen`/`ForEachChunk`/`Close` are `class=Pure` and
+            // `required_runtime_module()=None` yet `is_server=true` — their
+            // symbols live in `http_stream`, which the server append declares,
+            // but they predate `required_runtime_module` and the divergence is
+            // not yet reflected there. They are the legitimate cross-class
+            // entries that keep the predicate a hand list.
+            let extra_server = matches!(
+                k,
+                StdlibKernel::HttpStreamOpen
+                    | StdlibKernel::HttpStreamForEachChunk
+                    | StdlibKernel::HttpStreamClose
+            );
+            // `HttpStreamChunks` returns `Some(Server)` from
+            // `required_runtime_module` but is explicitly NOT `is_server` —
+            // it is handled by the lowerer's `required_runtime_module` scan
+            // directly, not via the `is_server` predicate path.
+            let expected =
+                (server_resident || extra_server) && !matches!(k, StdlibKernel::HttpStreamChunks);
+            assert_eq!(
+                k.is_server(),
+                expected,
+                "{k:?} (class={:?}, required_runtime_module={:?}): is_server()={} \
+                 but server-module residency oracle={} — a forgotten class=Server \
+                 kernel causes the emitted crate to reference server::* with no \
+                 module declaration (E0425/E0412)",
+                decl.class,
+                k.required_runtime_module(),
+                k.is_server(),
+                expected,
+            );
+        }
+    }
+
+    /// `is_web()` MUST be true for exactly the kernels whose emitted symbols live
+    /// in the `web` runtime module. The oracle is: `class == Web` OR
+    /// `required_runtime_module() == Some(RuntimeModule::Web)`.
+    /// `PubSubPublish` / `PubSubPublishNoEcho` are `class = Tea` but their symbols
+    /// live in `ipe_runtime::web::pubsub` — both the predicate and
+    /// `required_runtime_module` cover them, so the oracle naturally includes them.
+    /// Both directions are asserted: a forgotten `class = Web` kernel → the `live`
+    /// feature-module append never fires → `web::*` out of scope (E0425).
+    #[test]
+    fn web_predicate_tracks_web_module_residency() {
+        use super::KernelClass;
+        for k in StdlibKernel::ALL {
+            let decl = k.decl();
+            // Primary oracle: class=Web (the Ipe.Web app-entry family).
+            // Additional carve-outs: `PubSubPublish` / `PubSubPublishNoEcho`
+            // have `class=Tea` but their symbols live in `ipe_runtime::web::pubsub`
+            // — they are listed in `is_web` so the `live` append fires, and they
+            // also carry `required_runtime_module=Some(Web)` so both paths agree.
+            // `CmdPublish` / `CmdPublishNoEcho` / `SubSubscribeTopic` also carry
+            // `required_runtime_module=Some(Web)` but are NOT `is_web` — the
+            // lowerer sets `uses_web` for them through the `required_runtime_module`
+            // scan, not via `is_web`. Both directions are asserted so a new
+            // class=Web kernel forgotten in the predicate fails RED.
+            let expected = decl.class == KernelClass::Web
+                || matches!(
+                    k,
+                    StdlibKernel::PubSubPublish | StdlibKernel::PubSubPublishNoEcho
+                );
+            assert_eq!(
+                k.is_web(),
+                expected,
+                "{k:?} (class={:?}): is_web()={} but web-module residency oracle={} \
+                 — a forgotten class=Web kernel causes the emitted crate to reference \
+                 web::* with no module declaration (E0425)",
+                decl.class,
+                k.is_web(),
+                expected,
+            );
+        }
+    }
+
+    /// `is_css()` MUST be true for exactly the kernels under the `"CssSafety"`
+    /// qualifier. Those kernels emit bare names (`safe_value` / `safe_prop_name` /
+    /// …) into `ipe_runtime::css` — declared only when `uses_css` is set. A
+    /// program that uses `Ipe.Css` without any `Ipe.Ui`/`Ipe.Html` kernel does
+    /// not trigger `uses_ui`, so only `is_css()` gates the `css`/`css_safety`
+    /// append. A forgotten `CssSafety` kernel → bare name out of scope (E0425).
+    /// Both directions are asserted.
+    #[test]
+    fn css_predicate_tracks_css_safety_qualifier() {
+        for k in StdlibKernel::ALL {
+            let expected = k.decl().qualifier == "CssSafety";
+            assert_eq!(
+                k.is_css(),
+                expected,
+                "{k:?} (qualifier={:?}): is_css()={} but qualifier==\"CssSafety\" \
+                 is {} — a forgotten CssSafety kernel causes the emitted crate to \
+                 reference safe_value/safe_prop_name/… with no css module (E0425)",
+                k.decl().qualifier,
+                k.is_css(),
+                expected,
+            );
+        }
+    }
+
+    /// `is_websocket_client()` MUST be true for exactly the kernels that gate the
+    /// `websocket_client` Cargo feature and `ws_client` runtime module. The oracle
+    /// is: `qualifier == "WebSocket"` (the six Task-tier connect/send/close
+    /// kernels) OR the variant is `SubSubscribeWebSocket` (the Sub-tier entry,
+    /// qualifier `"Sub"`). A forgotten member → the `ws_client` module is not
+    /// declared and/or the `websocket_client` feature not enabled → runtime
+    /// symbols out of scope (E0425). Both directions are asserted.
+    #[test]
+    fn websocket_client_predicate_tracks_ws_client_residency() {
+        for k in StdlibKernel::ALL {
+            let expected = k.decl().qualifier == "WebSocket"
+                || matches!(k, StdlibKernel::SubSubscribeWebSocket);
+            assert_eq!(
+                k.is_websocket_client(),
+                expected,
+                "{k:?} (qualifier={:?}): is_websocket_client()={} but ws-client \
+                 residency oracle={} — a forgotten WebSocket kernel causes the \
+                 emitted crate to omit the websocket_client feature/module, leaving \
+                 ws_client::* out of scope (E0425)",
+                k.decl().qualifier,
+                k.is_websocket_client(),
+                expected,
+            );
+        }
+    }
+
+    /// `is_webview()` MUST be true for exactly the kernels with `class == WebView`.
+    /// Currently a single variant (`WebViewApp`), but the test is exhaustive over
+    /// `ALL` so any future `class = WebView` addition that forgets the predicate
+    /// → `uses_webview` never set → `webview` module not declared (E0425).
+    /// Both directions are asserted.
+    #[test]
+    fn webview_predicate_tracks_webview_class() {
+        use super::KernelClass;
+        for k in StdlibKernel::ALL {
+            let expected = k.decl().class == KernelClass::WebView;
+            assert_eq!(
+                k.is_webview(),
+                expected,
+                "{k:?} (class={:?}): is_webview()={} but class==WebView is {} — \
+                 a forgotten class=WebView kernel causes the emitted crate to omit \
+                 the webview module declaration (E0425)",
+                k.decl().class,
+                k.is_webview(),
+                expected,
+            );
+        }
+    }
+
+    /// Every `class = Terminal` kernel must be reported by EXACTLY ONE of
+    /// `is_tui()` or `is_console()` — never both, never neither.
+    /// Every non-Terminal kernel must report false for both.
+    ///
+    /// `TerminalAppScreen` → `is_tui`; `TerminalAppLines` → `is_console`.
+    /// The XOR condition ensures: (a) a new Terminal app-entry forgotten in BOTH
+    /// predicates → RED (neither true); (b) a kernel wrongly added to BOTH →
+    /// RED (XOR fails); (c) a non-Terminal kernel accidentally claimed → RED.
+    /// Failure message cites the SEAL consequence (missing tui/console runtime
+    /// symbols).
+    #[test]
+    fn terminal_predicates_partition_terminal_class() {
+        use super::KernelClass;
+        for k in StdlibKernel::ALL {
+            let is_terminal = k.decl().class == KernelClass::Terminal;
+            let tui = k.is_tui();
+            let console = k.is_console();
+
+            if is_terminal {
+                assert!(
+                    tui ^ console,
+                    "{k:?} has class=Terminal but is_tui()={tui} and is_console()={console} \
+                     — every Terminal kernel must be assigned to exactly one of tui or console \
+                     (XOR); a kernel in neither means tui/console runtime symbols are never \
+                     declared for it (E0425); a kernel in both would double-declare"
+                );
+            } else {
+                assert!(
+                    !tui,
+                    "{k:?} (class={:?}): is_tui()=true but class != Terminal — \
+                     would incorrectly set uses_tui for a non-Terminal kernel",
+                    k.decl().class
+                );
+                assert!(
+                    !console,
+                    "{k:?} (class={:?}): is_console()=true but class != Terminal — \
+                     would incorrectly set uses_console for a non-Terminal kernel",
+                    k.decl().class
+                );
+            }
+        }
+    }
+
+    /// `requires_sync_capture()` MUST be true for exactly the kernels whose
+    /// runtime callback slot demands `+ Send + Sync` — where an already-built
+    /// `let`-bound closure must be promoted to `Arc<dyn Fn + Send + Sync>`.
+    ///
+    /// The oracle is derived from production data, not a copy of the predicate:
+    /// - `Ipe.Ui` on-event builders whose emit name is one of the sync-slot set
+    ///   (input / change / key-down / key-up / file / bool / submit — NOT the
+    ///   zero-arg Msg-slot ones: click / focus / blur / mouse-over / mouse-out /
+    ///   left / right / pseudo).
+    /// - `Ipe.Html.Events` builders whose `html_event_shape()` returns `Some`
+    ///   with a payload that is NOT `Msg` (i.e. `String` / `Bool` / `Raw`) —
+    ///   these runtime constructors (`html_on_string_`, `html_on_bool_`,
+    ///   `html_on_raw_`) take a callback stored in an `Arc<dyn Fn + Sync>` slot.
+    ///   The Msg-shape constructors (`html_on_msg_`) take the message VALUE
+    ///   directly, no callback slot, so they are excluded.
+    /// - `StreamStream` (emit `server_stream_stream`) whose runtime generic bound
+    ///   is `F: Fn + Send + Sync + 'static`.
+    ///
+    /// A forgotten sync-callback kernel → a `let`-bound closure is lowered as
+    /// `Box<dyn Fn + Send>`, which the runtime's `+ Sync` slot rejects (E0277).
+    /// Both directions are asserted.
+    #[test]
+    fn sync_capture_predicate_tracks_sync_bound_slots() {
+        use super::HtmlEventShape;
+        // Emit names of Ipe.Ui on-event builders whose runtime slot is +Sync.
+        const UI_SYNC_EMITS: &[&str] = &[
+            "ui_on_input_",
+            "ui_on_change_",
+            "ui_on_key_down_",
+            "ui_on_key_up_",
+            "ui_on_file_",
+            "ui_on_bool_",
+            "ui_on_submit_",
+        ];
+        for k in StdlibKernel::ALL {
+            let emit = k.decl().emit;
+            let ui_sync = UI_SYNC_EMITS.contains(&emit);
+            // Html.Events: non-Msg shapes use a +Sync callback slot.
+            let html_sync = matches!(
+                k.html_event_shape(),
+                Some(HtmlEventShape::String | HtmlEventShape::Bool | HtmlEventShape::Raw)
+            );
+            // Stream.stream generic bound is F: Fn + Send + Sync + 'static.
+            let stream_sync = emit == "server_stream_stream";
+            let expected = ui_sync || html_sync || stream_sync;
+            assert_eq!(
+                k.requires_sync_capture(),
+                expected,
+                "{k:?} (emit={emit:?}): requires_sync_capture()={} but sync-slot \
+                 oracle={} — a forgotten +Sync callback kernel causes an already-built \
+                 let-bound closure to be lowered as Box<dyn Fn+Send>, which the \
+                 runtime's +Sync slot rejects (E0277)",
+                k.requires_sync_capture(),
+                expected,
+            );
+        }
+    }
 }
