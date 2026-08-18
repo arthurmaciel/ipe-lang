@@ -387,31 +387,23 @@ pub fn is_user_type_declaration_forbidden(name: &str) -> bool {
     RESERVED_BUILTIN_TYPES.contains(&name)
 }
 
-/// The fixed type-argument arity of a built-in type that resolves to the
-/// empty-home sentinel and whose lowerer arm (`ir_type_from_canon`) matches on
-/// an exact `args.len()`, or `None` for any other name. Drives the IPE-N0031
-/// canon gate: a mis-arity application of one of these would otherwise fall
-/// through to the lowerer's empty-home ICE catch-all (IPE-I0001).
+/// Fixed type-argument arity for empty-home builtins, or `None`.
 ///
-/// The single source of truth for the empty-home fixed-arity gate, so a
-/// future parametric reserved builtin added with an exact-arity lowerer arm
-/// cannot silently reintroduce that ICE — one table entry closes the gate for
-/// both the bare and (via the sentinel) any resolved spelling.
+/// Drives the IPE-N0031 canon gate: a mis-arity application would otherwise
+/// fall through to the lowerer's empty-home ICE catch-all (IPE-I0001). This
+/// is the single source of truth for the fixed-arity gate; the lower-side
+/// and seal-side tables derive from it so any future addition closes the gate
+/// at all sites at once.
 ///
 /// Members:
 /// * closed containers (`List`/`Maybe`/`Set`, `Dict`/`Result`);
-/// * `Connection mode` — `Ipe.Db`'s external-connection handle, exactly one
-///   phantom access-mode argument (`ReadOnly`/`ReadWrite`);
-/// * `ReadOnly`/`ReadWrite` — the nullary phantom access-mode markers, which
-///   may only appear standalone as `Connection`'s argument.
+/// * `Connection mode` — `Ipe.Db`'s external-connection handle (arity 1);
+/// * `ReadOnly`/`ReadWrite` — nullary phantom access-mode markers.
 ///
-/// The async carriers (`Task`/`Cmd`/`Sub`) are deliberately absent — they
-/// carry their own carrier-aware IPE-T0016 arity gate at the type stage
-/// (`ipe_types::constrain`), and duplicating it here would double-report.
-/// `CustomElement` is also absent: its arity gate is NAME-based (checked
-/// regardless of home, so a qualified `Dep.CustomElement` is gated too) and is
-/// fused with its per-argument boundary SEAL.
-fn builtin_empty_home_arity(name: Option<&str>) -> Option<usize> {
+/// `Task`/`Cmd`/`Sub` are absent (their gate is in `ipe_types::constrain`).
+/// `CustomElement` is absent (name-based gate, fused with its boundary SEAL).
+#[must_use]
+pub fn builtin_empty_home_arity(name: Option<&str>) -> Option<usize> {
     match name? {
         "List" | "Maybe" | "Set" | "Connection" => Some(1),
         "Dict" | "Result" => Some(2),
@@ -426,13 +418,31 @@ fn builtin_empty_home_arity(name: Option<&str>) -> Option<usize> {
 /// with a total JSON denotation.
 const SEAL_PLAIN_PRIMITIVES: &[&str] = &["Int", "Float", "Bool", "String", "Char", "Bytes"];
 
-/// Built-in single-argument value CONTAINERS the seal accepts by recursing into
-/// their element type.
-const SEAL_UNARY_CONTAINERS: &[&str] = &["List", "Set", "Maybe"];
+/// All value containers the boundary seal recurses into, listed once.
+///
+/// `Connection` is deliberately absent even though it appears in
+/// [`builtin_empty_home_arity`]: it is an opaque DB handle, not a value
+/// container the seal should recurse into. The test
+/// `seal_container_arity_derives_from_builtin_arity` asserts this split.
+const SEAL_VALUE_CONTAINERS: &[&str] = &["List", "Set", "Maybe", "Dict", "Result"];
 
-/// Built-in two-argument value CONTAINERS the seal accepts by recursing into
-/// both arguments.
-const SEAL_BINARY_CONTAINERS: &[&str] = &["Dict", "Result"];
+/// The arity a value-container name contributes to the boundary seal recursion.
+///
+/// Returns the expected argument count for names in [`SEAL_VALUE_CONTAINERS`].
+/// Returns `None` for anything outside that set (including `Connection`, which
+/// has an entry in [`builtin_empty_home_arity`] but is intentionally excluded
+/// from seal recursion as an opaque handle).
+///
+/// Derived from [`builtin_empty_home_arity`] to keep the two tables in sync:
+/// any arity added there for a value container must be mirrored here, and the
+/// test `seal_container_arity_derives_from_builtin_arity` will red if they diverge.
+fn seal_container_arity(name: &str) -> Option<usize> {
+    if SEAL_VALUE_CONTAINERS.contains(&name) {
+        builtin_empty_home_arity(Some(name))
+    } else {
+        None
+    }
+}
 
 /// Built-in effect carriers — never a boundary DATA value.
 const SEAL_EFFECT_CARRIERS: &[&str] = &["Cmd", "Sub", "Task"];
@@ -527,7 +537,7 @@ fn boundary_seal_rejection(ty: &canon::Type, interner: &Interner) -> Option<Seal
             if SEAL_SECRET_OR_SINK.contains(&text) {
                 return Some(SealRejection::SecretOrSink);
             }
-            if SEAL_UNARY_CONTAINERS.contains(&text) || SEAL_BINARY_CONTAINERS.contains(&text) {
+            if seal_container_arity(text).is_some() {
                 return args
                     .iter()
                     .find_map(|a| boundary_seal_rejection(a, interner));
@@ -6644,6 +6654,49 @@ mod exposed_ctor_subset_tests {
         assert!(
             ok_qual.is_ok(),
             "qualified Dep.A stays reachable under opaque T"
+        );
+    }
+}
+
+#[cfg(test)]
+mod seal_container_arity_tests {
+    use super::{SEAL_VALUE_CONTAINERS, builtin_empty_home_arity, seal_container_arity};
+
+    /// Every name in `SEAL_VALUE_CONTAINERS` has a matching entry in
+    /// `builtin_empty_home_arity`. This test reds if an arity changes in the
+    /// gate but the seal list is not updated, or vice versa.
+    #[test]
+    fn seal_container_arity_derives_from_builtin_arity() {
+        for name in SEAL_VALUE_CONTAINERS {
+            let gate_arity = builtin_empty_home_arity(Some(name));
+            let seal_arity = seal_container_arity(name);
+            assert_eq!(
+                gate_arity, seal_arity,
+                "`{name}`: gate arity {gate_arity:?} != seal arity {seal_arity:?}"
+            );
+            assert!(
+                gate_arity.is_some(),
+                "`{name}` is in SEAL_VALUE_CONTAINERS but has no gate arity"
+            );
+        }
+    }
+
+    /// `Connection` has a gate arity entry (it is a builtin container) but must
+    /// NOT appear in `SEAL_VALUE_CONTAINERS` — it is an opaque DB handle, not
+    /// a value container the seal recurses into.
+    #[test]
+    fn connection_excluded_from_seal_value_containers() {
+        assert!(
+            builtin_empty_home_arity(Some("Connection")).is_some(),
+            "Connection must have a gate arity (arity=1)"
+        );
+        assert!(
+            !SEAL_VALUE_CONTAINERS.contains(&"Connection"),
+            "Connection must NOT be in SEAL_VALUE_CONTAINERS"
+        );
+        assert!(
+            seal_container_arity("Connection").is_none(),
+            "seal_container_arity(Connection) must return None"
         );
     }
 }

@@ -131,6 +131,27 @@ pub fn money_is_known_currency(code: String) -> bool {
     is_known(&code)
 }
 
+/// Every ISO 4217 / crypto code the runtime currency table recognises.
+///
+/// This is the canonical enumeration of the `lookup_currency` match arms.
+/// External consumers (tests, the `Money_allCodes` kernel) use this function
+/// as the single source of truth for the full code set — asserting that the
+/// Ipê-side enum, `currencyCode`, `parseCurrency`, and `knownCurrency` all
+/// cover exactly this set.
+#[must_use]
+pub fn money_all_codes() -> Vec<String> {
+    [
+        "USD", "EUR", "GBP", "JPY", "CNY", "AUD", "CAD", "CHF", "HKD", "SGD", "NZD", "SEK", "NOK",
+        "DKK", "PLN", "CZK", "HUF", "RON", "BGN", "TRY", "ZAR", "BRL", "MXN", "ARS", "CLP", "INR",
+        "PKR", "BDT", "LKR", "NPR", "KRW", "TWD", "THB", "VND", "PHP", "IDR", "MYR", "AED", "SAR",
+        "QAR", "KWD", "BHD", "OMR", "JOD", "ILS", "EGP", "NGN", "KES", "GHS", "MAD", "TND", "DZD",
+        "RUB", "UAH", "BTC", "ETH", "USDT", "USDC",
+    ]
+    .iter()
+    .map(|s| s.to_string())
+    .collect()
+}
+
 // ── Format kernels ─────────────────────────────────────────────────
 
 /// `format : Code -> Decimal -> String` — "$12.34" / "-$12.34".
@@ -542,5 +563,36 @@ mod tests {
     #[test]
     fn test_money_allocate_zero_parts() {
         assert!(money_allocate(2, 0, d("100")).is_empty());
+    }
+
+    /// `money_all_codes` is the SSOT for the runtime currency table.
+    /// Every code must round-trip through `is_known` and be free of duplicates.
+    #[test]
+    fn money_all_codes_complete_and_unique() {
+        let codes = money_all_codes();
+        assert_eq!(codes.len(), 58, "expected 58 known currency codes");
+
+        // No duplicates.
+        let mut seen = std::collections::HashSet::new();
+        for code in &codes {
+            assert!(seen.insert(code.as_str()), "duplicate code: {code}");
+        }
+
+        // Every listed code is recognised by `is_known`.
+        for code in &codes {
+            assert!(
+                is_known(code),
+                "code {code} in money_all_codes but not in lookup_currency"
+            );
+        }
+    }
+
+    /// An unrecognised code is rejected at every gate.
+    #[test]
+    fn money_unknown_code_rejected() {
+        let unknown = "XYZ";
+        assert!(!is_known(unknown));
+        assert!(!money_is_known_currency(unknown.to_string()));
+        assert!(lookup_currency(unknown).is_none());
     }
 }
