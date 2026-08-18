@@ -730,21 +730,33 @@ fn scan_author_ffi_rust(prepared: &Prepared) -> Result<Option<LocatedHit>, CliEr
 }
 
 /// Run the shared [`panic_scan`] token scanner over one file, returning its first
-/// hit (lowest line) if any. A file that does not lex as Rust tokens is treated
-/// as having no hit — a malformed emitted/author file surfaces at `cargo` build
-/// time, not here, and the scan attests only what it can tokenise (its documented
-/// boundary).
+/// hit (lowest line) if any.
+///
+/// Fail closed on a non-lexing file: a `_bindings.rs` the scanner cannot
+/// tokenise is opaque — the no-panic audit cannot attest its content. The
+/// scanner refuses rather than admits (the same posture `capability_scan`
+/// takes for a non-lexing source). A `cargo build` of a non-lexing file would
+/// fail, but that is a separate later step; this gate must refuse eagerly,
+/// before the file reaches `cargo`.
 ///
 /// # Errors
-/// [`CliError::Io`] on a read failure.
+/// [`CliError::Io`] on a file-read failure; [`CliError::PackageAudit`] when
+/// the file does not lex as Rust tokens.
 fn first_hit(file: &Path) -> Result<Option<LocatedHit>, CliError> {
     let src = std::fs::read_to_string(file).map_err(|e| CliError::Io {
         path: file.to_path_buf(),
         source: e,
     })?;
-    let Ok(hits) = panic_scan::scan_str(&src) else {
-        return Ok(None);
-    };
+    let hits = panic_scan::scan_str(&src).map_err(|_| {
+        reject(
+            Check::Provenance,
+            format!(
+                "emitted `{}` does not lex as Rust tokens — the no-panic audit cannot attest \
+                 its content; the file is refused rather than admitted",
+                file.display()
+            ),
+        )
+    })?;
     Ok(hits.into_iter().next().map(|h| LocatedHit {
         file: file.to_path_buf(),
         line: h.line,
@@ -878,8 +890,12 @@ fn enforced_semver(prepared: &Prepared, index_root: Option<&Path>) -> Result<(),
     };
 
     let index_root = index_root.map_or_else(crate::resolve::index_root, Path::to_path_buf);
-    // Not in the index ⇒ a first submission; no predecessor to enforce.
-    let Ok(entry) = crate::index::read_entry(&index_root, &prepared.manifest.name) else {
+    // Absent ⇒ a first submission; no predecessor to enforce.
+    // Unreadable ⇒ fail closed: a corrupt predecessor must not silently pass
+    // as "first version" — propagate the error so the gate refuses.
+    let Some(entry) =
+        crate::index::read_entry_lookup(&index_root, &prepared.manifest.name).absent_or_err()?
+    else {
         print!(
             "{}",
             crate::style::frame(&crate::style::gutter(&format!(
@@ -1464,6 +1480,59 @@ mod tests {
                 r.message
             );
         }
+    }
+
+    // -----------------------------------------------------------------------
+    // first_hit — non-lexing source must refuse (instance #3 regression)
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn first_hit_non_lexing_source_is_refused_not_admitted() {
+        // A `_bindings.rs` that does not lex as Rust tokens must produce Err,
+        // not Ok(None). Returning Ok(None) would silently pass the no-panic
+        // gate for a file whose content cannot be attested.
+        let dir = make_test_dir("first-hit-nonlex");
+        let file = dir.join("x_bindings.rs");
+        // Unterminated raw string — proc-macro2 cannot tokenise this.
+        std::fs::write(&file, r#"fn f() { let x = r##"unterminated"#)
+            .expect("write non-lexing fixture");
+        let result = super::first_hit(&file);
+        assert!(
+            result.is_err(),
+            "a non-lexing _bindings.rs must return Err (refuse), not Ok(None)"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn first_hit_clean_lexing_source_is_ok_none() {
+        // A well-formed, panic-free file must still return Ok(None).
+        let dir = make_test_dir("first-hit-clean");
+        let file = dir.join("x_bindings.rs");
+        std::fs::write(&file, "pub fn add(a: i64, b: i64) -> i64 { a + b }")
+            .expect("write clean fixture");
+        let result = super::first_hit(&file);
+        assert!(result.is_ok(), "a clean file must return Ok(_)");
+        assert!(
+            result.unwrap().is_none(),
+            "a panic-free file must return Ok(None)"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn first_hit_file_with_panic_is_ok_some() {
+        // A file with a panic! must produce Ok(Some(hit)), unchanged.
+        let dir = make_test_dir("first-hit-panic");
+        let file = dir.join("x_bindings.rs");
+        std::fs::write(&file, "pub fn f() { panic!(\"oops\"); }").expect("write panic fixture");
+        let result = super::first_hit(&file);
+        assert!(result.is_ok(), "a lexing file must return Ok(_)");
+        assert!(
+            result.unwrap().is_some(),
+            "a panic-bearing file must return Ok(Some(_))"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     /// `prepare` resolves the runtime through the SAME path `ipe build` uses — the

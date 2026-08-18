@@ -190,13 +190,90 @@ pub fn entry_file_exists(index_root: &Path, name: &str) -> bool {
     entry_path(index_root, name).is_file()
 }
 
+/// The three-way outcome of looking up a package entry in the index.
+///
+/// This split prevents callers from collapsing "genuinely absent" and
+/// "present-but-unreadable" into the same value — the fused form that lets
+/// security gates fail open. Use [`EntryLookup::require_present`] for
+/// integrity gates (Unreadable → propagate error → refuse) and
+/// [`EntryLookup::absent_or_err`] where the first-version skip must survive a
+/// true absence but still refuse on corruption.
+#[must_use]
+pub enum EntryLookup {
+    /// The entry file does not exist — the package has never been published.
+    Absent,
+    /// The entry file exists and parsed successfully.
+    Present(IndexEntry),
+    /// The entry file exists but could not be read or parsed.
+    Unreadable(CliError),
+}
+
+impl EntryLookup {
+    /// Fail-closed accessor for integrity gates.
+    ///
+    /// `Absent` → `Ok(None)` (no published baseline; a new submission is
+    /// allowed through). `Present` → `Ok(Some(entry))`. `Unreadable` → `Err`
+    /// (propagate the error; the gate refuses rather than treating corruption
+    /// as "no baseline").
+    ///
+    /// # Errors
+    /// The [`CliError`] carried by the `Unreadable` variant.
+    pub fn require_present(self) -> Result<Option<IndexEntry>, CliError> {
+        match self {
+            Self::Absent => Ok(None),
+            Self::Present(e) => Ok(Some(e)),
+            Self::Unreadable(err) => Err(err),
+        }
+    }
+
+    /// Fail-closed accessor for the semver-bump gate.
+    ///
+    /// Semantically identical to [`require_present`](Self::require_present):
+    /// `Absent` → `Ok(None)` (first version; skip preserved), `Present` →
+    /// `Ok(Some(entry))`, `Unreadable` → `Err` (refuse; a corrupt predecessor
+    /// cannot be treated as "no predecessor").
+    ///
+    /// # Errors
+    /// The [`CliError`] carried by the `Unreadable` variant.
+    pub fn absent_or_err(self) -> Result<Option<IndexEntry>, CliError> {
+        self.require_present()
+    }
+}
+
+/// Read and parse the index entry for `name` as a [`EntryLookup`].
+///
+/// Returns the three-way outcome (Absent / Present / Unreadable) that
+/// distinguishes genuinely absent from present-but-unreadable. Use this in
+/// every integrity gate so an unreadable baseline propagates as an error (fail
+/// closed) rather than collapsing to "absent → skip".
+pub fn read_entry_lookup(index_root: &Path, name: &str) -> EntryLookup {
+    let path = entry_path(index_root, name);
+    let text = match std::fs::read_to_string(&path) {
+        Ok(t) => t,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return EntryLookup::Absent,
+        Err(e) => {
+            return EntryLookup::Unreadable(CliError::Resolve(format!(
+                "index entry for `{name}` exists but could not be read — {}",
+                e.kind()
+            )));
+        }
+    };
+    match parse_entry(name, &text) {
+        Ok(entry) => EntryLookup::Present(entry),
+        Err(err) => EntryLookup::Unreadable(err),
+    }
+}
+
 /// Read and parse the index entry for `name` from an index checkout rooted at
 /// `index_root` (which holds `packages/<name>.toml`).
 ///
+/// For non-security callers that treat both absence and corruption as errors
+/// (e.g. the resolver, publish). Security/integrity gates must use
+/// [`read_entry_lookup`] instead so they cannot accidentally collapse
+/// "unreadable" to "absent → skip".
+///
 /// # Errors
-/// [`CliError::Resolve`] when the entry file is absent (the package is not in
-/// the index) or malformed (a bad version, a missing per-version field, or an
-/// unknown capability name).
+/// [`CliError::Resolve`] when the entry file is absent or malformed.
 pub fn read_entry(index_root: &Path, name: &str) -> Result<IndexEntry, CliError> {
     let path = entry_path(index_root, name);
     let text = std::fs::read_to_string(&path).map_err(|e| read_entry_error(name, &e))?;
@@ -782,5 +859,167 @@ mod tests {
         let msg = format!("{err}");
         assert!(msg.contains("rev"), "{msg}");
         let _ = std::fs::remove_dir_all(&root);
+    }
+
+    // -----------------------------------------------------------------------
+    // EntryLookup / read_entry_lookup — fail-closed integrity gate regression
+    // -----------------------------------------------------------------------
+
+    fn write_corrupt_entry(packages: &std::path::Path, name: &str) {
+        // A file that exists but is not valid TOML / missing required fields.
+        std::fs::write(
+            packages.join(format!("{name}.toml")),
+            "publisher = \"tester\"\n\n[[version]]\nversion = \"NOT_SEMVER\"\n\
+             source = \"https://example.invalid/x\"\nrev = \"aabbcc\"\nsha256 = \"00\"\n",
+        )
+        .expect("write corrupt entry");
+    }
+
+    #[test]
+    fn lookup_absent_is_absent_variant() {
+        let root = temp_dir("lookup-absent");
+        std::fs::create_dir_all(root.join("packages")).expect("packages dir");
+        let result = super::read_entry_lookup(&root, "nosuchpkg");
+        assert!(
+            matches!(result, super::EntryLookup::Absent),
+            "a missing file must produce Absent, not Unreadable"
+        );
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn lookup_present_is_present_variant() {
+        let root = temp_dir("lookup-present");
+        write_fixture_index(&root, "mypkg", &["1.0.0"]);
+        let result = super::read_entry_lookup(&root, "mypkg");
+        assert!(
+            matches!(result, super::EntryLookup::Present(_)),
+            "a well-formed entry must produce Present"
+        );
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn lookup_corrupt_is_unreadable_variant() {
+        let root = temp_dir("lookup-corrupt");
+        let packages = root.join("packages");
+        std::fs::create_dir_all(&packages).expect("packages dir");
+        write_corrupt_entry(&packages, "broken");
+        let result = super::read_entry_lookup(&root, "broken");
+        assert!(
+            matches!(result, super::EntryLookup::Unreadable(_)),
+            "a present-but-malformed entry must produce Unreadable, not Absent"
+        );
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn require_present_absent_yields_ok_none() {
+        let root = temp_dir("rp-absent");
+        std::fs::create_dir_all(root.join("packages")).expect("packages dir");
+        let got = super::read_entry_lookup(&root, "nosuchpkg")
+            .require_present()
+            .expect("Absent must be Ok(None)");
+        assert!(got.is_none(), "Absent must map to Ok(None), got Some");
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn require_present_present_yields_ok_some() {
+        let root = temp_dir("rp-present");
+        write_fixture_index(&root, "mypkg", &["2.0.0"]);
+        let got = super::read_entry_lookup(&root, "mypkg")
+            .require_present()
+            .expect("Present must be Ok(Some(_))")
+            .expect("inner Option must be Some");
+        assert_eq!(got.name, "mypkg");
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn require_present_unreadable_yields_err() {
+        // Regression for #1: a present-but-corrupt baseline must NOT produce
+        // Ok(None) — that would let the immutability wall treat every submitted
+        // version as "new" and skip the mutation check.
+        let root = temp_dir("rp-corrupt");
+        let packages = root.join("packages");
+        std::fs::create_dir_all(&packages).expect("packages dir");
+        write_corrupt_entry(&packages, "broken");
+        let result = super::read_entry_lookup(&root, "broken").require_present();
+        assert!(
+            result.is_err(),
+            "Unreadable must map to Err (fail closed), got Ok"
+        );
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn absent_or_err_unreadable_yields_err() {
+        // Regression for #2: a corrupt predecessor must NOT produce Ok(None)
+        // (which the semver gate treats as "first version → skip").
+        let root = temp_dir("aoe-corrupt");
+        let packages = root.join("packages");
+        std::fs::create_dir_all(&packages).expect("packages dir");
+        write_corrupt_entry(&packages, "broken");
+        let result = super::read_entry_lookup(&root, "broken").absent_or_err();
+        assert!(
+            result.is_err(),
+            "Unreadable must map to Err (fail closed) in absent_or_err, got Ok"
+        );
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn ssot_guardrail_no_read_entry_ok_in_ipe_cli_src() {
+        // Assert that no future edit re-introduces a fail-open collapse of
+        // `read_entry` at an integrity gate. The pattern `read_entry(…).ok()`
+        // fuses "absent" and "unreadable" into None; every integrity gate must
+        // use `read_entry_lookup` + `require_present` / `absent_or_err` instead.
+        let src_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+        let mut violations = Vec::new();
+        collect_ssot_violations(&src_dir, &mut violations);
+        assert!(
+            violations.is_empty(),
+            "fail-open read_entry collapse detected — use read_entry_lookup instead:\n{}",
+            violations.join("\n")
+        );
+    }
+
+    fn collect_ssot_violations(dir: &std::path::Path, out: &mut Vec<String>) {
+        let Ok(entries) = std::fs::read_dir(dir) else {
+            return;
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                collect_ssot_violations(&path, out);
+            } else if path.extension().and_then(|e| e.to_str()) == Some("rs") {
+                // Skip this file itself: the guardrail helper body contains
+                // the banned pattern strings as string literals, which would
+                // self-trigger. The absence of the collapse pattern in index.rs
+                // is verified by the structural fix (read_entry_lookup replaces
+                // read_entry at both security call sites above).
+                let stem = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
+                if stem == "index.rs" {
+                    continue;
+                }
+                let Ok(text) = std::fs::read_to_string(&path) else {
+                    continue;
+                };
+                for (i, line) in text.lines().enumerate() {
+                    let trimmed = line.trim();
+                    // Skip pure comment lines.
+                    if trimmed.starts_with("//") {
+                        continue;
+                    }
+                    if trimmed.contains("read_entry(") && trimmed.contains(".ok()") {
+                        out.push(format!("{}:{}: {}", path.display(), i + 1, trimmed));
+                    }
+                    if trimmed.contains("let Ok(") && trimmed.contains("read_entry(") {
+                        out.push(format!("{}:{}: {}", path.display(), i + 1, trimmed));
+                    }
+                }
+            }
+        }
     }
 }
