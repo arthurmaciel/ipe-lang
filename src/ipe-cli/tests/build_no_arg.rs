@@ -6,12 +6,43 @@
 
 use std::fs;
 use std::path::PathBuf;
+use std::sync::Mutex;
+use std::sync::atomic::{AtomicU32, Ordering};
 
-/// A fresh, unique temp directory for one test (removed first if present).
+/// A fresh temp directory unique to this process and call (removed first if
+/// present). The process id plus a per-call counter keep two concurrent test
+/// processes that share `/tmp` from ever colliding on the same fixture path.
 fn fresh_dir(tag: &str) -> PathBuf {
-    let dir = std::env::temp_dir().join(format!("ipe_noarg_test_{tag}"));
+    static COUNTER: AtomicU32 = AtomicU32::new(0);
+    let n = COUNTER.fetch_add(1, Ordering::Relaxed);
+    let dir = std::env::temp_dir().join(format!("ipe_noarg_test_{tag}_{}_{n}", std::process::id()));
     let _ = fs::remove_dir_all(&dir);
     dir
+}
+
+/// Serializes the tests that mutate the process-global current directory so a
+/// threaded `cargo test` run cannot interleave two `set_current_dir` calls.
+/// (`cargo nextest` isolates each test in its own process; this keeps the suite
+/// correct under `cargo test` too.) Poison-tolerant so a failing test does not
+/// wedge the rest.
+static CWD_GUARD: Mutex<()> = Mutex::new(());
+
+/// Run `$body` with the process current directory set to `$dir`, restoring the
+/// previous directory afterward, serialized against other CWD-mutating tests
+/// via [`CWD_GUARD`]. A macro rather than a fn so the fallible calls expand
+/// inside the `#[test]` body, where `unwrap` is permitted (a plain helper fn
+/// would trip the workspace `unwrap_used`/`expect_used`/`panic` denies).
+macro_rules! in_dir {
+    ($dir:expr, $body:expr) => {{
+        let _cwd_guard = CWD_GUARD
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let prev = std::env::current_dir().unwrap();
+        std::env::set_current_dir($dir).unwrap();
+        let out = $body;
+        std::env::set_current_dir(&prev).unwrap();
+        out
+    }};
 }
 
 // ---------------------------------------------------------------------------
@@ -24,12 +55,9 @@ fn fresh_dir(tag: &str) -> PathBuf {
 fn build_no_arg_empty_dir_returns_usage_error() {
     let dir = fresh_dir("build_empty");
     fs::create_dir_all(&dir).unwrap();
-    let prev = std::env::current_dir().unwrap();
-    std::env::set_current_dir(&dir).unwrap();
 
-    let result = ipe::run_cli(&["build".to_owned()]);
+    let result = in_dir!(&dir, ipe::run_cli(&["build".to_owned()]));
 
-    std::env::set_current_dir(&prev).unwrap();
     let _ = fs::remove_dir_all(&dir);
 
     assert!(
@@ -50,12 +78,9 @@ fn build_no_arg_empty_dir_returns_usage_error() {
 fn run_no_arg_empty_dir_returns_usage_error() {
     let dir = fresh_dir("run_empty");
     fs::create_dir_all(&dir).unwrap();
-    let prev = std::env::current_dir().unwrap();
-    std::env::set_current_dir(&dir).unwrap();
 
-    let result = ipe::run_cli(&["run".to_owned()]);
+    let result = in_dir!(&dir, ipe::run_cli(&["run".to_owned()]));
 
-    std::env::set_current_dir(&prev).unwrap();
     let _ = fs::remove_dir_all(&dir);
 
     assert!(
@@ -93,13 +118,8 @@ fn build_no_arg_in_project_dir_succeeds() {
     assert!(init.is_ok(), "ipe init must succeed: {init:?}");
 
     // Switch into the project directory and call `ipe build` with no entry.
-    let prev = std::env::current_dir().unwrap();
-    std::env::set_current_dir(&project).unwrap();
-
     let out_dir = project.join("out").join("rust");
-    let build_result = ipe::run_cli(&["build".to_owned()]);
-
-    std::env::set_current_dir(&prev).unwrap();
+    let build_result = in_dir!(&project, ipe::run_cli(&["build".to_owned()]));
 
     assert!(
         build_result.is_ok(),
@@ -143,16 +163,14 @@ fn build_flag_first_no_entry_resolves_default() {
     let init = ipe::run_cli(&["init".to_owned(), project.to_string_lossy().into_owned()]);
     assert!(init.is_ok(), "ipe init must succeed: {init:?}");
 
-    let prev = std::env::current_dir().unwrap();
-    std::env::set_current_dir(&project).unwrap();
-
-    let build_result = ipe::run_cli(&[
-        "build".to_owned(),
-        "--out".to_owned(),
-        out_dir.to_string_lossy().into_owned(),
-    ]);
-
-    std::env::set_current_dir(&prev).unwrap();
+    let build_result = in_dir!(
+        &project,
+        ipe::run_cli(&[
+            "build".to_owned(),
+            "--out".to_owned(),
+            out_dir.to_string_lossy().into_owned(),
+        ])
+    );
 
     assert!(
         build_result.is_ok(),
