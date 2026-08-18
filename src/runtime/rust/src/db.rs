@@ -788,6 +788,20 @@ fn max_db_pools() -> usize {
 /// naive cache-only change regressed). The PRAGMAs are a no-op for other drivers
 /// (guarded by the url scheme).
 async fn build_pool<E: Send + From<String> + 'static>(url: &str) -> IpeResult<E, Db> {
+    // Apply the SSRF host gate for any network-scheme URL before dialing.
+    // SQLite (file/sqlite/`:memory:`) carries no host and is exempt.
+    // `url::Url::parse` is the same parser sqlx uses internally, so the host
+    // extracted here is the host sqlx would dial.
+    if !url.starts_with("sqlite") && !url.starts_with("file") && !url.starts_with(':') {
+        if let Ok(parsed) = ::url::Url::parse(url) {
+            if let Some(host) = parsed.host_str() {
+                let port = parsed.port_or_known_default().unwrap_or(5432);
+                if let Err(e) = crate::ssrf::VettedDial::for_host(host, port) {
+                    return IpeResult::Err(str_err(&format!("db: {e}")));
+                }
+            }
+        }
+    }
     let pool: Db = match sqlx::pool::PoolOptions::new()
         .max_connections(max_pool_connections())
         .connect(url)
@@ -5048,5 +5062,70 @@ mod tests {
             sql_column("todos.title".to_string()).invalid.is_none(),
             "a legitimate dotted column must still validate"
         );
+    }
+
+    // ── build_pool SSRF guard tests ──────────────────────────────────────────
+    //
+    // The guard logic in `build_pool` uses `VettedDial::for_host` when the url
+    // scheme is a network driver.  These tests exercise the same gate at the
+    // `VettedDial` layer — no actual DB dial is attempted.
+
+    /// Returns true when the `build_pool` SSRF pre-check would block `url`
+    /// under the current deny-private setting.  Mirrors the guard logic exactly.
+    fn pool_ssrf_blocked(url: &str) -> bool {
+        if url.starts_with("sqlite") || url.starts_with("file") || url.starts_with(':') {
+            return false;
+        }
+        if let Ok(parsed) = ::url::Url::parse(url) {
+            if let Some(host) = parsed.host_str() {
+                let port = parsed.port_or_known_default().unwrap_or(5432);
+                return crate::ssrf::VettedDial::for_host(host, port).is_err();
+            }
+        }
+        false
+    }
+
+    #[test]
+    fn build_pool_ssrf_blocks_loopback_postgres_when_deny_private_on() {
+        unsafe { std::env::set_var("IPE_HTTP_DENY_PRIVATE", "1") };
+        assert!(
+            pool_ssrf_blocked("postgres://127.0.0.1:5432/x"),
+            "loopback postgres URL must be blocked by the SSRF gate"
+        );
+        unsafe { std::env::remove_var("IPE_HTTP_DENY_PRIVATE") };
+    }
+
+    #[test]
+    fn build_pool_ssrf_blocks_link_local_postgres_when_deny_private_on() {
+        unsafe { std::env::set_var("IPE_HTTP_DENY_PRIVATE", "1") };
+        assert!(
+            pool_ssrf_blocked("postgres://169.254.169.254:5432/x"),
+            "link-local postgres URL must be blocked by the SSRF gate"
+        );
+        unsafe { std::env::remove_var("IPE_HTTP_DENY_PRIVATE") };
+    }
+
+    #[test]
+    fn build_pool_ssrf_does_not_block_sqlite_url() {
+        unsafe { std::env::set_var("IPE_HTTP_DENY_PRIVATE", "1") };
+        assert!(
+            !pool_ssrf_blocked("sqlite:///app.db"),
+            "sqlite URL must bypass the network SSRF gate"
+        );
+        assert!(
+            !pool_ssrf_blocked("sqlite://:memory:"),
+            "in-memory sqlite must bypass the network SSRF gate"
+        );
+        unsafe { std::env::remove_var("IPE_HTTP_DENY_PRIVATE") };
+    }
+
+    #[test]
+    fn build_pool_ssrf_passes_private_when_deny_private_off() {
+        unsafe { std::env::set_var("IPE_HTTP_DENY_PRIVATE", "0") };
+        assert!(
+            !pool_ssrf_blocked("postgres://127.0.0.1:5432/x"),
+            "guard off must not block private host (dev workflow)"
+        );
+        unsafe { std::env::remove_var("IPE_HTTP_DENY_PRIVATE") };
     }
 }

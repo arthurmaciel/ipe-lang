@@ -361,6 +361,19 @@ impl Dsn {
         self.driver
     }
 
+    /// The network host this descriptor names. Empty string for file-backed
+    /// SQLite (no network host). Crate-internal: used by the connect step to
+    /// apply the SSRF host gate before dialing.
+    pub(crate) fn host(&self) -> &str {
+        &self.host
+    }
+
+    /// The port this descriptor names. Zero for file-backed SQLite (no port).
+    /// Crate-internal: used alongside [`Dsn::host`] for the SSRF host gate.
+    pub(crate) fn port(&self) -> u16 {
+        self.port
+    }
+
     /// Reconstruct the connection URL the sqlx driver dials, consuming the
     /// password `Secret` at the point of use (never stored back as plaintext).
     /// The result is a live credential-bearing string; it is handed straight to

@@ -290,6 +290,13 @@ pub fn bwrap_argv(
     argv.push("--ro-bind".into());
     argv.push("/".into());
     argv.push("/".into());
+    // Fresh proc mask AFTER the ro-bind of root, same ordering as the run jail.
+    // `--ro-bind / /` exposes the host `/proc` (leaks sibling env via
+    // `/proc/<pid>/environ`, defeating `--clearenv`, and is a user-namespace
+    // escape lever); `--proc /proc` masks it with a fresh minimal procfs.
+    // bwrap applies mount ops in argv order, so proc-after-robind wins.
+    argv.push("--proc".into());
+    argv.push("/proc".into());
     // A fresh minimal devtmpfs: the ro-bound host `/dev` nodes carry no device
     // permissions inside the user namespace, so `/dev/null` opens fail EACCES
     // — which cargo hits when wiring child stdio.
@@ -825,5 +832,37 @@ mod tests {
         assert_eq!(d.code().as_str(), "IPE-F4410");
         assert!(d.to_string().contains("IPE-F4410"));
         assert!(d.to_string().contains("refusing"));
+    }
+
+    // ── /proc mask tests ─────────────────────────────────────────────────────
+
+    #[test]
+    fn build_argv_contains_proc_mask() {
+        let argv = rendered_argv(&spec());
+        let joined = argv.join(" ");
+        assert!(
+            joined.contains("--proc /proc"),
+            "--proc /proc must be present in build jail argv: {joined}"
+        );
+    }
+
+    #[test]
+    fn build_argv_proc_mask_follows_ro_bind_root_and_precedes_dev() {
+        let argv = rendered_argv(&spec());
+        let joined = argv.join(" ");
+        let ro_root = joined
+            .find("--ro-bind / /")
+            .expect("ro-bind root must be present");
+        let proc = joined
+            .find("--proc /proc")
+            .expect("--proc /proc must be present");
+        let dev = joined
+            .find("--dev /dev")
+            .expect("--dev /dev must be present");
+        assert!(
+            proc > ro_root,
+            "--proc /proc must follow --ro-bind / / (bwrap order is load-bearing): {joined}"
+        );
+        assert!(dev > proc, "--dev /dev must follow --proc /proc: {joined}");
     }
 }
