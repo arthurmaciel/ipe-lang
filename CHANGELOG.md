@@ -10,6 +10,14 @@ Entries below the header are maintained by
 section is generated from Conventional Commit messages and prepended when the
 standing release pull request is merged.
 
+## [0.1.57](https://github.com/arthurmaciel/ipe-lang/compare/ipe-v0.1.56...ipe-v0.1.57) (2026-08-18)
+
+
+### Bug Fixes
+
+* **cli:** make `ipe version` the sole version command; drop the `--version`/`-V` flag ([#1108](https://github.com/arthurmaciel/ipe-lang/issues/1108)) ([f904ea5](https://github.com/arthurmaciel/ipe-lang/commit/f904ea58f9d2459559e6e42d2001d95a4726f85e))
+* **lower:** tie wildcard-any return to threaded param, close E0308 SEAL ([#1106](https://github.com/arthurmaciel/ipe-lang/issues/1106), [#1107](https://github.com/arthurmaciel/ipe-lang/issues/1107)) ([#1111](https://github.com/arthurmaciel/ipe-lang/issues/1111)) ([9c0f520](https://github.com/arthurmaciel/ipe-lang/commit/9c0f5208224e3e92a219569bbc4896872cf2dc7a))
+
 ## [0.1.56](https://github.com/arthurmaciel/ipe-lang/compare/ipe-v0.1.55...ipe-v0.1.56) (2026-08-17)
 
 
