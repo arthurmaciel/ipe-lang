@@ -41,7 +41,7 @@ use std::sync::Arc;
 
 use ipe_canon::ModuleExports;
 use ipe_canon::ast as canon;
-use ipe_diagnostics::{DResult, Diagnostic, Span, TypeError};
+use ipe_diagnostics::{DResult, Diagnostic, LowerError, Span, TypeError};
 use ipe_intern::{Interner, Symbol};
 
 pub use constrain::{kernel_type_table, resolve_scheme};
@@ -1924,9 +1924,9 @@ fn resolve_routed_web_checks(
             // equals this app's route count exactly; the rare multi-app case
             // (only sub-apps, which are separate binaries in practice) could
             // over-count, but the warning stays advisory — the build proceeds.
-            warnings.push(Diagnostic::Type {
+            warnings.push(Diagnostic::Lower {
                 span: check.span,
-                msg: TypeError::RoutedAppMissingPageField { route_count },
+                msg: LowerError::RoutedAppMissingPageField { route_count },
             });
         }
         // Non-routed with no routes → genuinely non-routed → silently skip.
@@ -2000,7 +2000,7 @@ fn no_such_field(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use ipe_diagnostics::{Diagnostic, TypeError};
+    use ipe_diagnostics::{Diagnostic, LowerError, TypeError};
 
     const GOLDEN: &str = include_str!("../../../../tests/golden/basics/Main.ipe");
 
@@ -3931,8 +3931,8 @@ mod tests {
         assert!(
             matches!(
                 w,
-                Diagnostic::Type {
-                    msg: TypeError::RoutedAppMissingPageField { route_count: 2 },
+                Diagnostic::Lower {
+                    msg: LowerError::RoutedAppMissingPageField { route_count: 2 },
                     ..
                 }
             ),

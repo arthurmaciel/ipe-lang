@@ -1153,11 +1153,11 @@ mod tests {
 
     #[test]
     fn wired_diagnostic_l0136_topic_resolves() {
-        use ipe_diagnostics::{Diagnostic, HelpLine, LowerError, Span};
+        use ipe_diagnostics::{Diagnostic, HelpLine, LowerError, MainRetName, Span};
         let d = Diagnostic::Lower {
             span: Span::DUMMY,
             msg: LowerError::NonEntryMain {
-                found: "a String".into(),
+                found: MainRetName::Bare("String"),
             },
         };
         let topics: Vec<&'static str> = d

@@ -32,8 +32,8 @@ pub use diagnostic::{
     AliasExpansionKind, AppShape, Applicability, CaseDefect, CmdSubShapeMismatch,
     CodecAutoRejection, Construct, DResult, Diagnostic, Expected, ExpectedSet, ExposingDefect,
     Feature, HOF_KERNEL_RESULT_CLASS, HeaderDefect, HelpLine, Hint, IfDefect, LetDefect,
-    LowerError, ModelLeaf, NameError, ParseError, SealRejection, SortedNames, SpanRole, Suggestion,
-    TokenKind, TyDoc, TypeDeclDefect, TypeError,
+    LowerError, MainRetName, ModelLeaf, NameError, ParseError, SealRejection, SortedNames,
+    SpanRole, Suggestion, TokenKind, TyDoc, TypeDeclDefect, TypeError,
 };
 pub use render::{plain_message, render, render_json, render_ty};
 pub use span::{Located, Span};
@@ -271,7 +271,7 @@ mod tests {
         let d = Diagnostic::Lower {
             span: Span::DUMMY,
             msg: LowerError::NonEntryMain {
-                found: "an Int".into(),
+                found: MainRetName::Bare("Int"),
             },
         };
         assert_eq!(d.code(), IPE_L0136);
@@ -314,7 +314,7 @@ mod tests {
         let d = Diagnostic::Lower {
             span: Span::DUMMY,
             msg: LowerError::NonEntryMain {
-                found: "a String".into(),
+                found: MainRetName::Bare("String"),
             },
         };
         let rendered = render(&d, "main.ipe", "");
@@ -322,5 +322,93 @@ mod tests {
             rendered.contains("ipe explain main"),
             "human render for IPE-L0136 must contain 'ipe explain main'; got: {rendered:?}"
         );
+    }
+
+    /// Every code's 5th character (index 4) must be the family letter of the
+    /// `Diagnostic` variant that produces it: P for Parse, N for Name, T for
+    /// Type, L for Lower, I for `CompilerBug`. This turns the prose contract into
+    /// a mechanically-checked predicate — the previously offending case
+    /// (`RoutedAppMissingPageField`, relocated to `LowerError`) is covered
+    /// explicitly.
+    #[test]
+    fn code_prefix_matches_diagnostic_family() {
+        // One representative per family.
+        let cases: &[(Diagnostic, char)] = &[
+            (
+                Diagnostic::Parse {
+                    span: Span::DUMMY,
+                    msg: ParseError::Unexpected,
+                },
+                'P',
+            ),
+            (
+                Diagnostic::Name {
+                    span: Span::DUMMY,
+                    msg: NameError::Unknown,
+                },
+                'N',
+            ),
+            (
+                Diagnostic::Type {
+                    span: Span::DUMMY,
+                    msg: TypeError::Mismatch,
+                },
+                'T',
+            ),
+            (
+                Diagnostic::Type {
+                    span: Span::DUMMY,
+                    msg: TypeError::RedundantCaseBranch {
+                        constructor: "Red".into(),
+                    },
+                },
+                'T',
+            ),
+            (
+                Diagnostic::Lower {
+                    span: Span::DUMMY,
+                    msg: LowerError::Unsupported(Feature::BinOps),
+                },
+                'L',
+            ),
+            // Formerly cross-stamped as L under the Type family — must now be L under Lower.
+            (
+                Diagnostic::Lower {
+                    span: Span::DUMMY,
+                    msg: LowerError::RoutedAppMissingPageField { route_count: 2 },
+                },
+                'L',
+            ),
+            (
+                Diagnostic::CompilerBug {
+                    where_: "lower",
+                    detail: "invariant".into(),
+                },
+                'I',
+            ),
+        ];
+        for (diag, expected_letter) in cases {
+            let code_str = diag.code().as_str();
+            let actual = code_str
+                .chars()
+                .nth(4)
+                .expect("code string must have at least 5 characters");
+            assert_eq!(
+                actual, *expected_letter,
+                "code {code_str} has family letter '{actual}' but the variant belongs to the '{expected_letter}' family"
+            );
+        }
+    }
+
+    /// `RoutedAppMissingPageField` relocated to `LowerError` retains Warning
+    /// severity and its IPE-L0124 code.
+    #[test]
+    fn routed_app_missing_page_field_is_lower_warning() {
+        let d = Diagnostic::Lower {
+            span: Span::DUMMY,
+            msg: LowerError::RoutedAppMissingPageField { route_count: 3 },
+        };
+        assert_eq!(d.code(), IPE_L0124);
+        assert_eq!(d.severity(), Severity::Warning);
     }
 }

@@ -18,7 +18,7 @@ use std::cell::Cell;
 use std::collections::{BTreeMap, BTreeSet};
 
 use ipe_canon::ast as canon;
-use ipe_diagnostics::{DResult, Diagnostic, Feature, Located, LowerError, Span};
+use ipe_diagnostics::{DResult, Diagnostic, Feature, Located, LowerError, MainRetName, Span};
 use ipe_intern::{Interner, Symbol};
 use ipe_ir::{
     Arm, BinOp, BoundSet, CallPin, Callee, Capability, EnumDef, Expr, Func, FuncId, IrType,
@@ -9566,31 +9566,32 @@ fn main_ret_is_runnable_entry(ret: &IrType) -> bool {
     }
 }
 
-/// A short, plain-English name for `main`'s inadmissible return type, for the
-/// [`LowerError::NonEntryMain`] message ("This `main` is an `Int`."). Only the
-/// shapes a reader can name plainly get a concrete word; anything else reads as
-/// "not a `Task`" so the message never leaks an internal type spelling.
-fn non_entry_main_type_name(ret: &IrType) -> Box<str> {
-    let word = match ret {
-        IrType::Int => "Int",
-        IrType::Float => "Float",
-        IrType::Bool => "Bool",
-        IrType::Str => "String",
-        IrType::Char => "Char",
-        IrType::Bytes => "Bytes",
-        IrType::List(_) => "List",
-        IrType::Maybe(_) => "Maybe",
-        IrType::Tuple(_) => "tuple",
-        IrType::Record(_) => "record",
-        IrType::Set(_) => "Set",
-        IrType::Dict(..) => "Dict",
-        IrType::Fun(..) | IrType::SharedFun(..) => "function",
-        IrType::Cmd(_) => "Cmd",
-        IrType::Sub(_) => "Sub",
-        IrType::Decoder(_) => "Decoder",
-        _ => "value that is not a `Task`",
-    };
-    Box::from(word)
+/// A short, plain-English description of `main`'s inadmissible return type.
+///
+/// Named types with a reader-friendly single word return [`MainRetName::Bare`]
+/// so the renderer can article-wrap them (`` an `Int` ``). Anything else
+/// returns [`MainRetName::Phrase`] — a complete noun phrase with embedded
+/// backticks that the renderer emits verbatim, without article or extra wrapping.
+const fn non_entry_main_type_name(ret: &IrType) -> MainRetName {
+    match ret {
+        IrType::Int => MainRetName::Bare("Int"),
+        IrType::Float => MainRetName::Bare("Float"),
+        IrType::Bool => MainRetName::Bare("Bool"),
+        IrType::Str => MainRetName::Bare("String"),
+        IrType::Char => MainRetName::Bare("Char"),
+        IrType::Bytes => MainRetName::Bare("Bytes"),
+        IrType::List(_) => MainRetName::Bare("List"),
+        IrType::Maybe(_) => MainRetName::Bare("Maybe"),
+        IrType::Tuple(_) => MainRetName::Bare("tuple"),
+        IrType::Record(_) => MainRetName::Bare("record"),
+        IrType::Set(_) => MainRetName::Bare("Set"),
+        IrType::Dict(..) => MainRetName::Bare("Dict"),
+        IrType::Fun(..) | IrType::SharedFun(..) => MainRetName::Bare("function"),
+        IrType::Cmd(_) => MainRetName::Bare("Cmd"),
+        IrType::Sub(_) => MainRetName::Bare("Sub"),
+        IrType::Decoder(_) => MainRetName::Bare("Decoder"),
+        _ => MainRetName::Phrase("value that is not a `Task`"),
+    }
 }
 
 /// Does this pattern bind the symbol `target`?
@@ -11630,7 +11631,7 @@ impl<'a> Lowerer<'a> {
             let found = if main_fn.params.is_empty() {
                 non_entry_main_type_name(&main_fn.ret)
             } else {
-                Box::from("function")
+                ipe_diagnostics::MainRetName::Bare("function")
             };
             return Err((
                 Diagnostic::Lower {
