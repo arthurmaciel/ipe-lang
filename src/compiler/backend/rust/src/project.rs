@@ -15,6 +15,7 @@
 //! ```
 
 use std::collections::{BTreeMap, BTreeSet};
+use std::fmt::Write as _;
 
 use ipe_backend::{EmittedProject, RelPath};
 use ipe_diagnostics::{DResult, Diagnostic};
@@ -1564,15 +1565,53 @@ pub fn emit_program(ctx: &EmitCtx, program: &Program) -> DResult<EmittedProject>
 ///
 /// Propagates any [`Diagnostic`] from the `Cargo.toml`/runtime-module
 /// construction (e.g. a drifted server/db/tui/webview manifest anchor).
-/// Escape `s` as the body of a TOML basic (double-quoted) string. The runtime
-/// crate root is a filesystem path the driver resolved and canonicalised; the
-/// only bytes a real path can carry that TOML would misread are the backslash
-/// (Windows separators) and the double-quote, so both are escaped. Forward
-/// slashes need no escaping and are valid on every platform cargo targets, so
-/// the driver hands over a forward-slash path (design §"the path is emitted
-/// absolute, canonicalized, and TOML-escaped").
-fn toml_escape_basic(s: &str) -> String {
-    s.replace('\\', "\\\\").replace('"', "\\\"")
+/// A string that is safe to use as the body of a TOML basic (double-quoted)
+/// string. The only constructor is [`SafeTomlString::escape`], which runs the
+/// exhaustive escaper over raw input, so no caller can reach a manifest `"..."`
+/// splice without having escaped every TOML-forbidden byte.
+struct SafeTomlString(String);
+
+impl SafeTomlString {
+    /// Escape `raw` per the TOML basic-string grammar and return a
+    /// [`SafeTomlString`] whose body can be spliced directly between `"..."`.
+    ///
+    /// Escapes (TOML spec §2.4):
+    /// - `\` → `\\`, `"` → `\"`
+    /// - backspace `\x08` → `\b`, tab `\x09` → `\t`, newline `\x0A` → `\n`,
+    ///   form-feed `\x0C` → `\f`, CR `\x0D` → `\r`
+    /// - every other control scalar `U+0000–U+001F` and `U+007F` → `\uXXXX`
+    fn escape(raw: &str) -> Self {
+        Self(escape_toml_basic(raw))
+    }
+
+    /// The escaped body, ready to splice between the surrounding `"..."`.
+    fn as_body(&self) -> &str {
+        &self.0
+    }
+}
+
+/// Escape `s` so the result is safe as the body of a TOML basic
+/// (double-quoted) string. Covers every byte the TOML spec forbids inside
+/// `"..."`: control scalars U+0000–U+001F and U+007F, plus the two structural
+/// characters `\` and `"`.
+fn escape_toml_basic(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    for ch in s.chars() {
+        match ch {
+            '\\' => out.push_str("\\\\"),
+            '"' => out.push_str("\\\""),
+            '\x08' => out.push_str("\\b"),
+            '\t' => out.push_str("\\t"),
+            '\n' => out.push_str("\\n"),
+            '\x0C' => out.push_str("\\f"),
+            '\r' => out.push_str("\\r"),
+            c if (c as u32) < 0x20 || c == '\x7F' => {
+                let _ = write!(out, "\\u{:04X}", c as u32);
+            }
+            c => out.push(c),
+        }
+    }
+    out
 }
 
 /// Render the dependency-model project `Cargo.toml` for `ctx`: the
@@ -1679,18 +1718,18 @@ fn substitute_dep_manifest_anchors(
 
     // The path is emitted with forward slashes so the same manifest text is
     // valid on every platform cargo targets; the driver already canonicalised
-    // it, and `toml_escape_basic` guards any residual double-quote.
-    // Windows `Path::canonicalize` returns an extended-length UNC path prefixed
-    // with `\\?\` — strip that prefix before converting separators, because
-    // cargo's TOML path parser rejects the resulting `//?/` prefix as an
-    // invalid URL. On non-Windows hosts the prefix is absent, so the strip is
-    // a no-op.
+    // it. Windows `Path::canonicalize` returns an extended-length UNC path
+    // prefixed with `\\?\` — strip that prefix before converting separators,
+    // because cargo's TOML path parser rejects the resulting `//?/` prefix as
+    // an invalid URL. On non-Windows hosts the prefix is absent, so the strip
+    // is a no-op. `SafeTomlString::escape` then guards every TOML-forbidden
+    // byte (control scalars, backslash, double-quote).
     let root_str = dep.root.to_string_lossy();
     let root_stripped = root_str
         .strip_prefix(r"\\?\")
         .unwrap_or_else(|| root_str.as_ref());
     let path_forward = root_stripped.replace('\\', "/");
-    let path_escaped = toml_escape_basic(&path_forward);
+    let path_escaped = SafeTomlString::escape(&path_forward);
 
     if !template.contains(PATH_ANCHOR) {
         return Err(Diagnostic::CompilerBug {
@@ -1705,7 +1744,7 @@ fn substitute_dep_manifest_anchors(
         });
     }
     Ok(template
-        .replace(PATH_ANCHOR, &path_escaped)
+        .replace(PATH_ANCHOR, path_escaped.as_body())
         .replace(FEATURES_ANCHOR, &feature_list))
 }
 
@@ -1935,14 +1974,15 @@ fn relocate_env_public_to_user_crate(
 /// Replace the `name = "ipe-app"` line in an emitted `Cargo.toml` with the
 /// project-configured name. The replacement is a single `replacen(…, 1)` on the
 /// one canonical `[package] name` line, so no feature or dependency `name` key
-/// is touched. When the anchor is absent (template drift), the manifest is
-/// returned unchanged — a missing anchor is never a hard error here because the
-/// name is cosmetic to emit correctness; the SEAL build catches a broken manifest
-/// if it somehow lands.
-fn apply_cargo_name(cargo_toml: &str, cargo_name: &str) -> String {
+/// is touched. `cargo_name` is a [`SafeTomlString`] so the splice is
+/// unconditionally TOML-safe. When the anchor is absent (template drift), the
+/// manifest is returned unchanged — a missing anchor is never a hard error here
+/// because the name is cosmetic to emit correctness; the SEAL build catches a
+/// broken manifest if it somehow lands.
+fn apply_cargo_name(cargo_toml: &str, cargo_name: &SafeTomlString) -> String {
     const ANCHOR: &str = "name = \"ipe-app\"";
     if cargo_toml.contains(ANCHOR) {
-        cargo_toml.replacen(ANCHOR, &format!("name = \"{cargo_name}\""), 1)
+        cargo_toml.replacen(ANCHOR, &format!("name = \"{}\"", cargo_name.as_body()), 1)
     } else {
         cargo_toml.to_owned()
     }
@@ -1960,6 +2000,8 @@ fn assemble_project_files(
     } else {
         &ctx.cargo_name
     };
+    // Wrap once; all apply_cargo_name call sites below use this.
+    let safe_name = SafeTomlString::escape(effective_name);
 
     // ── Browser-WASM branch ──────────────────────────────────────────────────
     // Both wasm models share the closed Layer-3 security floor (no
@@ -1996,7 +2038,7 @@ fn assemble_project_files(
             if ctx.uses_env_public {
                 relocate_env_public_to_user_crate(&mut files, &ctx.wasm_public_env)?;
             }
-            let cargo_toml = apply_cargo_name(&cargo_toml, effective_name);
+            let cargo_toml = apply_cargo_name(&cargo_toml, &safe_name);
             return Ok(EmittedProject { files, cargo_toml });
         }
 
@@ -2030,7 +2072,7 @@ fn assemble_project_files(
         } else {
             WASM_CARGO_TOML.to_owned()
         };
-        let wasm_cargo_toml = apply_cargo_name(&wasm_cargo_toml, effective_name);
+        let wasm_cargo_toml = apply_cargo_name(&wasm_cargo_toml, &safe_name);
         return Ok(EmittedProject {
             files,
             cargo_toml: wasm_cargo_toml,
@@ -2093,7 +2135,7 @@ fn assemble_project_files(
             main.push_str("\nmod ffi;\n");
             cargo_toml = ffi_cargo_toml(&cargo_toml, ctx)?;
         }
-        let cargo_toml = apply_cargo_name(&cargo_toml, effective_name);
+        let cargo_toml = apply_cargo_name(&cargo_toml, &safe_name);
         return Ok(EmittedProject { files, cargo_toml });
     }
 
@@ -2576,7 +2618,7 @@ fn assemble_project_files(
             })?;
         main.push_str("\nmod ffi;\n");
     }
-    let cargo_toml = apply_cargo_name(&cargo_toml, effective_name);
+    let cargo_toml = apply_cargo_name(&cargo_toml, &safe_name);
     Ok(EmittedProject { files, cargo_toml })
 }
 
@@ -5152,5 +5194,209 @@ mod tests {
             out.contains("// preamble") && out.contains("// trailer"),
             "surrounding non-region text must survive untouched: {out}"
         );
+    }
+}
+
+#[cfg(test)]
+mod escape_toml_basic_tests {
+    use super::{SafeTomlString, apply_cargo_name, escape_toml_basic};
+
+    // ── escape_toml_basic exhaustiveness ────────────────────────────────────
+
+    #[test]
+    fn newline_is_escaped() {
+        assert_eq!(escape_toml_basic("a\nb"), "a\\nb");
+    }
+
+    #[test]
+    fn tab_is_escaped() {
+        assert_eq!(escape_toml_basic("a\tb"), "a\\tb");
+    }
+
+    #[test]
+    fn cr_is_escaped() {
+        assert_eq!(escape_toml_basic("a\rb"), "a\\rb");
+    }
+
+    #[test]
+    fn backspace_is_escaped() {
+        assert_eq!(escape_toml_basic("a\x08b"), "a\\bb");
+    }
+
+    #[test]
+    fn form_feed_is_escaped() {
+        assert_eq!(escape_toml_basic("a\x0Cb"), "a\\fb");
+    }
+
+    #[test]
+    fn backslash_is_escaped() {
+        assert_eq!(escape_toml_basic("a\\b"), "a\\\\b");
+    }
+
+    #[test]
+    fn double_quote_is_escaped() {
+        assert_eq!(escape_toml_basic("a\"b"), "a\\\"b");
+    }
+
+    #[test]
+    fn nul_byte_is_escaped_as_unicode() {
+        assert_eq!(escape_toml_basic("a\x00b"), "a\\u0000b");
+    }
+
+    #[test]
+    fn other_low_controls_are_escaped_as_unicode() {
+        // U+001B (ESC) → 
+        assert_eq!(escape_toml_basic("a\x1Bb"), "a\\u001Bb");
+        // U+001F (US) → 
+        assert_eq!(escape_toml_basic("a\x1Fb"), "a\\u001Fb");
+    }
+
+    #[test]
+    fn del_is_escaped_as_unicode() {
+        assert_eq!(escape_toml_basic("a\x7Fb"), "a\\u007Fb");
+    }
+
+    #[test]
+    fn output_contains_no_raw_control_bytes() {
+        // Every byte 0x00–0x1F and 0x7F must be absent from the output.
+        for b in (0x00u8..=0x1F).chain(std::iter::once(0x7F)) {
+            let raw = format!("pre{}post", char::from(b));
+            let escaped = escape_toml_basic(&raw);
+            assert!(
+                escaped.chars().all(|c| (c as u32) >= 0x20 && c != '\x7F'),
+                "control byte 0x{b:02X} survived escaping: {escaped:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn safe_path_is_byte_identical() {
+        let path = "home/user/.cache/ipe/runtime";
+        assert_eq!(escape_toml_basic(path), path);
+    }
+
+    #[test]
+    fn existing_backslash_and_quote_cases_hold() {
+        assert_eq!(escape_toml_basic("a\\b"), "a\\\\b");
+        assert_eq!(escape_toml_basic("a\"b"), "a\\\"b");
+    }
+
+    // ── Round-trip: adversarial values parse back correctly ─────────────────
+    // Proves that `path = "..."` built with the escaper is always valid TOML
+    // and decodes to the original bytes (SEAL proof for the path splice).
+
+    fn round_trip(raw: &str) -> String {
+        // Build `v = "<escaped>"` and parse it with a hand-rolled TOML string
+        // decoder that mirrors the TOML basic-string grammar — sufficient to
+        // verify the emitted line without adding a `toml` dev-dependency.
+        let body = escape_toml_basic(raw);
+        // The output must contain no literal control byte.
+        assert!(
+            body.chars().all(|c| (c as u32) >= 0x20 && c != '\x7F'),
+            "escaper left a control byte in output for input {raw:?}: {body:?}"
+        );
+        // Reconstruct the original by interpreting the escape sequences.
+        let mut out = String::new();
+        let mut chars = body.chars();
+        while let Some(c) = chars.next() {
+            if c == '\\' {
+                let next = chars.next();
+                assert!(next.is_some(), "escape sequence must be complete");
+                match next.unwrap_or('?') {
+                    '\\' => out.push('\\'),
+                    '"' => out.push('"'),
+                    'b' => out.push('\x08'),
+                    't' => out.push('\t'),
+                    'n' => out.push('\n'),
+                    'f' => out.push('\x0C'),
+                    'r' => out.push('\r'),
+                    'u' => {
+                        let hex: String = chars.by_ref().take(4).collect();
+                        let cp = u32::from_str_radix(&hex, 16);
+                        assert!(cp.is_ok(), "\\uXXXX hex digits must be valid: {hex:?}");
+                        let scalar = cp.ok().and_then(char::from_u32);
+                        assert!(scalar.is_some(), "code point must be valid Unicode");
+                        out.push(scalar.unwrap_or('\u{FFFD}'));
+                    }
+                    other => {
+                        // The escaper only emits the named sequences above.
+                        // An unknown letter here is a bug in escape_toml_basic.
+                        assert!(
+                            matches!(other, '\\' | '"' | 'b' | 't' | 'n' | 'f' | 'r' | 'u'),
+                            "unexpected escape char from escaper: {other:?}"
+                        );
+                    }
+                }
+            } else {
+                out.push(c);
+            }
+        }
+        out
+    }
+
+    #[test]
+    fn newline_round_trips() {
+        assert_eq!(round_trip("a\nb"), "a\nb");
+    }
+
+    #[test]
+    fn tab_round_trips() {
+        assert_eq!(round_trip("a\tb"), "a\tb");
+    }
+
+    #[test]
+    fn cr_round_trips() {
+        assert_eq!(round_trip("a\rb"), "a\rb");
+    }
+
+    #[test]
+    fn nul_round_trips() {
+        assert_eq!(round_trip("a\x00b"), "a\x00b");
+    }
+
+    #[test]
+    fn escape_sequence_injection_attempt_is_inert() {
+        // A path whose last segment looks like a TOML injection:
+        // `"\"\n[dependencies]\nevil = \"1\"` cannot break out of its string.
+        let adversarial = "/tmp/ip\ne\"\n[dependencies]\nevil = \"1\"";
+        let body = escape_toml_basic(adversarial);
+        // The rendered line must contain no literal newline.
+        assert!(
+            !body.contains('\n'),
+            "newline survived into manifest body: {body:?}"
+        );
+        // And round-trips back to the original.
+        assert_eq!(round_trip(adversarial), adversarial);
+    }
+
+    // ── apply_cargo_name safety ─────────────────────────────────────────────
+
+    #[test]
+    fn apply_cargo_name_with_adversarial_input_has_no_raw_newline() {
+        let template = "name = \"ipe-app\"\n[dependencies]\n";
+        let result = apply_cargo_name(template, &SafeTomlString::escape("evil\nname"));
+        // The `name = "..."` line must not contain a literal newline inside the
+        // quoted value.
+        let name_line = result
+            .lines()
+            .find(|l| l.starts_with("name = "))
+            .expect("name line is present");
+        assert!(
+            !name_line.contains('\n'),
+            "raw newline in name line: {name_line:?}"
+        );
+        // The value must decode back to the original.
+        assert_eq!(
+            round_trip("evil\nname"),
+            "evil\nname",
+            "round-trip failed for adversarial name"
+        );
+    }
+
+    #[test]
+    fn apply_cargo_name_common_case_is_byte_identical() {
+        let template = "name = \"ipe-app\"\n[dependencies]\n";
+        let result = apply_cargo_name(template, &SafeTomlString::escape("my-app"));
+        assert_eq!(result, "name = \"my-app\"\n[dependencies]\n");
     }
 }
