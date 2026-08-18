@@ -12456,7 +12456,7 @@ impl<'a> Lowerer<'a> {
                 // unannotated path). Only whole-annotation aliases are unfolded
                 // here; a `Handler` in argument position (`withCors : … -> Handler
                 // -> Handler`) still lowers via `split_typed_sig` unchanged.
-                let (mut params, prologue, ret, mut any_syms_minted, row_params) =
+                let (mut params, prologue, ret, mut any_syms_minted, mut row_params) =
                     if !patterns.is_empty() && self.annotation_is_function_alias(ty) {
                         let solved_ty = self
                             .types
@@ -12756,23 +12756,46 @@ impl<'a> Lowerer<'a> {
                         ) {
                             continue;
                         }
-                        // A parameter the body THREADS into the return, whose solved
-                        // region is a RECORD, is a structural record identity: the
-                        // region narrows to only the fields the body reads (`{name}`),
-                        // not the caller's full nominal record (`{name, age}`).
-                        // Concretizing the parameter to that narrowed record makes a
-                        // caller passing the full record mismatch (E0308,
-                        // exit-0-then-cargo-fail). Keep such a threaded param a generic
-                        // `T{n}` so it monomorphises to the caller's own record; the
-                        // return follows it (below). This holds only when the body
-                        // does NOT also field-read the parameter: a bare generic
-                        // `T{n}` has no field to read (E0609), so a param the body
-                        // both threads AND reads (`tag p = let n = p.name in p`) must
-                        // still concretize — as must a plain NON-threaded record param.
-                        if Some(*binder) == tail_param
-                            && matches!(region_ty, Ty::Record(..))
-                            && !body_reads_field_of_param(*binder, &lowered_body)
-                        {
+                        // A wildcard-`any` parameter whose solved region is a
+                        // RECORD is a structural record identity: the region
+                        // narrows to only the fields the body touches (`{name}`),
+                        // never the caller's full nominal record (`{name, age}`).
+                        // Concretizing the parameter to that narrowed record makes
+                        // a caller passing a wider record mismatch (E0308,
+                        // exit-0-then-cargo-fail).
+                        if let Ty::Record(fields, _) = region_ty {
+                            // A parameter the body THREADS into the return but does
+                            // NOT field-read stays a bare generic `T{n}` so it
+                            // monomorphises to the caller's own record; the return
+                            // follows it (below).
+                            if Some(*binder) == tail_param
+                                && !body_reads_field_of_param(*binder, &lowered_body)
+                            {
+                                continue;
+                            }
+                            // The body reads the parameter's fields, so a bare
+                            // generic `T{n}` cannot carry them (E0609). Erase the
+                            // parameter to a row generic bounded by one witness
+                            // trait per read field — the exact shape an explicit
+                            // `{ r | name : String }` annotation lowers to. Rustc
+                            // monomorphises it to the caller's own record, so a
+                            // wider caller record (`{name, age}`) satisfies the
+                            // witnesses and builds. `*sym` is already a fresh
+                            // per-occurrence symbol; it renders as the positional
+                            // `R{n}` and drops out of `type_params` below (moved
+                            // into `row_params`).
+                            let row_fields = fields
+                                .iter()
+                                .map(|(fname, fty)| {
+                                    Ok((*fname, self.ir_type_from_ty(fty, sig_span)?))
+                                })
+                                .collect::<DResult<BTreeMap<Symbol, IrType>>>()?;
+                            row_params.push(RowParam {
+                                var: *sym,
+                                fields: row_fields,
+                            });
+                            param_pinned.insert(*sym);
+                            *ir_ty = IrType::RowGeneric(*sym);
                             continue;
                         }
                         let concrete = self.ir_type_from_ty(region_ty, sig_span)?;

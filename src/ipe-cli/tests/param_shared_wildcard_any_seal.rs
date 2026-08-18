@@ -294,10 +294,10 @@ main =
 }
 
 /// A record param the body BOTH threads to an `any` return AND directly
-/// field-reads must concretize (not stay a bare generic): `p.name` on a bare
-/// `T{n}` is `E0609 no field`. A caller passing exactly the read fields built
-/// on base; keeping the param generic here regressed it to exit-0-then-cargo-
-/// fail. It must build again.
+/// field-reads cannot stay a bare generic (`p.name` on a bare `T{n}` is
+/// `E0609 no field`). It erases to a row generic bounded by one witness trait
+/// per read field, so it accepts the caller's own record and the threaded
+/// return follows it. It must build.
 #[test]
 fn record_threaded_and_field_read_builds() {
     let entry = write_entry(
@@ -328,6 +328,91 @@ main =
         built.err()
     );
     support::assert_seal_builds("param_any_seal_record_thread_read", &out);
+    if let Some(parent) = entry.parent() {
+        let _ = fs::remove_dir_all(parent);
+    }
+}
+
+/// A wildcard-`any` parameter used ONLY via direct field access, called with a
+/// record carrying MORE fields than the body reads. The parameter's solved
+/// region narrows to just the read field (`{name}`); concretizing to that
+/// narrowed nominal record makes the wider caller record (`{name, age}`)
+/// mismatch (E0308, accept-then-`cargo`-fail — THE SEAL). The parameter must
+/// erase to a witness-bounded row generic (`<R: IpeHasName<Name = String> +
+/// Clone>`) that rustc monomorphises to the caller's own record, so the wider
+/// record satisfies the witness and builds.
+#[test]
+fn field_read_param_accepts_wider_caller_record() {
+    let entry = write_entry(
+        "field_read_wider",
+        "\
+module Main exposing (main)
+import Ipe.Io as Io
+
+getName : any -> String
+getName p =
+    p.name
+
+main : Task Error ()
+main =
+    let
+        u = { name = \"ada\", age = 3 }
+    in
+    Io.println (getName u)
+",
+    );
+    let (built, out) = emit(&entry, "field_read_wider");
+    assert!(
+        built.is_ok(),
+        "a field-read `any` param must accept a caller record wider than the \
+         read fields (the param erases to a row generic): {:?}",
+        built.err()
+    );
+    let emitted = support::read_all_emitted_src(&out);
+    assert!(
+        emitted
+            .contains("fn main_get_name<R1: IpeHasName<Name = String> + Clone>(p: R1) -> String"),
+        "a field-read `any` param erases to a witness-bounded row generic that \
+         monomorphises to the caller's own record, never a narrowed structural \
+         record a wider caller mismatches:\n{emitted}"
+    );
+    support::assert_seal_builds("param_any_seal_field_read_wider", &out);
+    if let Some(parent) = entry.parent() {
+        let _ = fs::remove_dir_all(parent);
+    }
+}
+
+/// The same field-read `any` param called with a record carrying EXACTLY the
+/// read fields (`{name}`) still builds — the row-generic erasure is a superset
+/// of the exact-match case, so no shape is regressed.
+#[test]
+fn field_read_param_accepts_exact_caller_record() {
+    let entry = write_entry(
+        "field_read_exact",
+        "\
+module Main exposing (main)
+import Ipe.Io as Io
+
+getName : any -> String
+getName p =
+    p.name
+
+main : Task Error ()
+main =
+    let
+        u = { name = \"ada\" }
+    in
+    Io.println (getName u)
+",
+    );
+    let (built, out) = emit(&entry, "field_read_exact");
+    assert!(
+        built.is_ok(),
+        "a field-read `any` param must still accept a caller record of exactly \
+         the read fields: {:?}",
+        built.err()
+    );
+    support::assert_seal_builds("param_any_seal_field_read_exact", &out);
     if let Some(parent) = entry.parent() {
         let _ = fs::remove_dir_all(parent);
     }
