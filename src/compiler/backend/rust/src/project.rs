@@ -1679,8 +1679,17 @@ fn substitute_dep_manifest_anchors(
 
     // The path is emitted with forward slashes so the same manifest text is
     // valid on every platform cargo targets; the driver already canonicalised
-    // it, and `toml_escape_basic` guards the double-quote / residual backslash.
-    let path_forward = dep.root.to_string_lossy().replace('\\', "/");
+    // it, and `toml_escape_basic` guards any residual double-quote.
+    // Windows `Path::canonicalize` returns an extended-length UNC path prefixed
+    // with `\\?\` — strip that prefix before converting separators, because
+    // cargo's TOML path parser rejects the resulting `//?/` prefix as an
+    // invalid URL. On non-Windows hosts the prefix is absent, so the strip is
+    // a no-op.
+    let root_str = dep.root.to_string_lossy();
+    let root_stripped = root_str
+        .strip_prefix(r"\\?\")
+        .unwrap_or_else(|| root_str.as_ref());
+    let path_forward = root_stripped.replace('\\', "/");
     let path_escaped = toml_escape_basic(&path_forward);
 
     if !template.contains(PATH_ANCHOR) {
