@@ -2799,4 +2799,164 @@ mod tests {
         let mut i = Interner::new();
         let _ = parse_module(&src, &mut i);
     }
+
+    // -----------------------------------------------------------------------
+    // Leading-minus adjacency rule parity: same in expression and pattern
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn neg_literal_pattern_adjacent_accepted() {
+        // `-3` with no space: byte-span adjacent, so the pattern arm accepts it
+        // and produces `PInt(-3)`.
+        let mut i = Interner::new();
+        let src = format!("{HDR}v : Int\nv =\n    case n of\n        -3 -> 1\n        _ -> 0\n");
+        let m = parse_module(&src, &mut i);
+        assert!(m.is_ok(), "adjacent `-3` pattern must parse: {m:?}");
+        let Ok(m) = m else { return };
+        let Some(Expr_::Case(_, arms)) = find_value(&m, &i, "v").map(|v| &v.body.value) else {
+            assert!(black_box_false(), "v body is a Case");
+            return;
+        };
+        assert!(
+            arms.first()
+                .is_some_and(|(p, _)| matches!(p.value, Pattern_::PInt(-3))),
+            "first arm head is `PInt(-3)`, got {:?}",
+            arms.first().map(|(p, _)| &p.value)
+        );
+    }
+
+    #[test]
+    fn neg_literal_pattern_spaced_rejected() {
+        // `- 3` (space between `-` and `3`): the same token stream the
+        // expression grammar rejects must also be rejected in pattern position.
+        assert_ne!(
+            err_code(&format!(
+                "{HDR}v : Int\nv =\n    case n of\n        - 3 -> 1\n        _ -> 0\n"
+            )),
+            "OK",
+            "`- 3` (spaced) must be a parse error in pattern position"
+        );
+    }
+
+    #[test]
+    fn neg_literal_expr_adjacent_accepted() {
+        // `-3` in expression position still folds to `Expr_::Int(-3)`.
+        let mut i = Interner::new();
+        let src = format!("{HDR}v : Int\nv =\n    -3\n");
+        let m = parse_module(&src, &mut i);
+        assert!(m.is_ok(), "adjacent `-3` expression must parse: {m:?}");
+        let Ok(m) = m else { return };
+        assert!(
+            find_value(&m, &i, "v").is_some_and(|v| matches!(v.body.value, Expr_::Int(-3))),
+            "v body is `Int(-3)`"
+        );
+    }
+
+    #[test]
+    fn neg_literal_expr_spaced_is_not_literal() {
+        // `- 3` in expression position does NOT fold to `Int(-3)`; it desugars
+        // to `Call(negate, [3])` when adjacent to a following atom, or errors.
+        // Either way the result is not `Expr_::Int(-3)`.
+        let mut i = Interner::new();
+        let src = format!("{HDR}f x = x\nv =\n    f (- 3)\n");
+        let m = parse_module(&src, &mut i);
+        if let Ok(m) = m {
+            let body = find_value(&m, &i, "v").map(|v| &v.body.value);
+            assert!(
+                !matches!(body, Some(Expr_::Int(-3))),
+                "`- 3` (spaced) must not fold to `Int(-3)`, got {body:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn leading_minus_grammar_parity() {
+        // The adjacency rule must be identical in expression and pattern
+        // positions: adjacent → accepted as negative literal, spaced → rejected.
+
+        // Adjacent `-3`: accepted in expression.
+        assert_eq!(
+            err_code(&format!("{HDR}v =\n    -3\n")),
+            "OK",
+            "adjacent `-3` must parse in expression"
+        );
+        // Adjacent `-3`: accepted in pattern.
+        assert_eq!(
+            err_code(&format!(
+                "{HDR}v : Int\nv =\n    case n of\n        -3 -> 1\n        _ -> 0\n"
+            )),
+            "OK",
+            "adjacent `-3` must parse in pattern"
+        );
+
+        // Spaced `- 3`: error in expression (bare body, cannot desugar).
+        assert_ne!(
+            err_code(&format!("{HDR}v =\n    - 3\n")),
+            "OK",
+            "`- 3` (spaced, bare body) must error in expression"
+        );
+        // Spaced `- 3`: error in pattern.
+        assert_ne!(
+            err_code(&format!(
+                "{HDR}v : Int\nv =\n    case n of\n        - 3 -> 1\n        _ -> 0\n"
+            )),
+            "OK",
+            "`- 3` (spaced) must error in pattern"
+        );
+    }
+
+    #[test]
+    fn neg_float_pattern_rejected() {
+        // Float patterns are unsound (f64 equality is not well-defined for
+        // pattern matching); `-`+float in pattern position must error regardless
+        // of adjacency.
+        assert_ne!(
+            err_code(&format!(
+                "{HDR}v : Int\nv =\n    case n of\n        -3.0 -> 1\n        _ -> 0\n"
+            )),
+            "OK",
+            "`-3.0` must be rejected in pattern position"
+        );
+    }
+
+    #[test]
+    fn neg_int_max_magnitude_pattern_accepted() {
+        // `-9223372036854775807` (i64::MIN + 1) is in range and must parse to
+        // `PInt(i64::MIN + 1)` in pattern position.
+        let mut i = Interner::new();
+        let src = format!(
+            "{HDR}v : Int\nv =\n    case n of\n        -9223372036854775807 -> 1\n        _ -> 0\n"
+        );
+        let m = parse_module(&src, &mut i);
+        assert!(m.is_ok(), "-9223372036854775807 pattern must parse: {m:?}");
+        let Ok(m) = m else { return };
+        let Some(Expr_::Case(_, arms)) = find_value(&m, &i, "v").map(|v| &v.body.value) else {
+            assert!(black_box_false(), "v body is a Case");
+            return;
+        };
+        assert!(
+            arms.first()
+                .is_some_and(|(p, _)| matches!(p.value, Pattern_::PInt(v) if v == i64::MIN + 1)),
+            "first arm head is `PInt(i64::MIN + 1)`"
+        );
+    }
+
+    #[test]
+    fn neg_int_min_magnitude_is_lex_error() {
+        // `9223372036854775808` (i64::MIN's absolute value) overflows `i64` at
+        // lex time (IPE-P0013), so the parser's `checked_neg` path is never
+        // reached — in both expression and pattern position.
+        assert_eq!(
+            err_code(&format!("{HDR}v =\n    -9223372036854775808\n")),
+            "IPE-P0013",
+            "magnitude overflowing i64 must lex as IPE-P0013 in expression"
+        );
+        assert_eq!(
+            err_code(&format!(
+                "{HDR}v : Int\nv =\n    case n of\n        -9223372036854775808 -> 1\n        _ -> 0\n"
+            )),
+            "IPE-P0013",
+            "magnitude overflowing i64 must lex as IPE-P0013 in pattern"
+        );
+    }
 }

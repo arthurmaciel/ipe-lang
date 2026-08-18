@@ -142,6 +142,18 @@ enum DoStmt {
     Run(Expr),
 }
 
+/// Result of `peek_adjacent_neg_literal`: the raw (positive) magnitude from
+/// the token immediately after the `-`, together with its span. The caller
+/// is responsible for negating the value and for consuming the token.
+enum NegLeaf {
+    /// Raw `i64` magnitude from an adjacent `Int` token. `checked_neg()` on
+    /// this value produces the final negative integer; if it returns `None`
+    /// the caller emits `IntLiteralOutOfRange`.
+    Int(i64, Span),
+    /// Raw `f64` magnitude from an adjacent `Float` token. Caller negates it.
+    Float(f64, Span),
+}
+
 impl<'a> Parser<'a> {
     pub const fn new(toks: Vec<Token>, interner: &'a mut Interner) -> Self {
         Self {
@@ -1382,24 +1394,8 @@ impl<'a> Parser<'a> {
         depth: u32,
     ) -> DResult<Expr> {
         // ── Attempt 1: adjacent numeric literal ──────────────────────────────
-        // Snapshot the Copy payload of the following token, then drop the borrow
-        // before consuming it.
-        enum NegLit {
-            Int(i64, Span),
-            Float(f64, Span),
-        }
-        let lit = self.peek().and_then(|t| {
-            if t.span.lo != minus_span.hi {
-                return None; // whitespace between `-` and the token
-            }
-            match &t.kind {
-                Tok::Int(n) => Some(NegLit::Int(*n, t.span)),
-                Tok::Float(f) => Some(NegLit::Float(*f, t.span)),
-                _ => None,
-            }
-        });
-        match lit {
-            Some(NegLit::Int(n, lit_span)) => {
+        match self.peek_adjacent_neg_literal(minus_span) {
+            Some(NegLeaf::Int(n, lit_span)) => {
                 self.bump(Construct::Expression)?;
                 // A positive `Int` token is bounded to [0, i64::MAX] at lex
                 // time (the lexer parses as `i64`, so the magnitude
@@ -1417,7 +1413,7 @@ impl<'a> Parser<'a> {
                     Expr_::Int(value),
                 ));
             }
-            Some(NegLit::Float(f, lit_span)) => {
+            Some(NegLeaf::Float(f, lit_span)) => {
                 self.bump(Construct::Expression)?;
                 return Ok(Located::new(
                     Self::span_merge(minus_span, lit_span),
@@ -2457,22 +2453,31 @@ impl<'a> Parser<'a> {
                 Pattern_::PStr(ipe_syntax::strip_anchor_margin(raw, *anchor)),
             )),
             Tok::Char(c) => Ok(Located::new(tok.span, Pattern_::PChar(c.clone()))),
-            // A negative integer literal pattern `-3`. The `-` lexes as
-            // [`Tok::Minus`]; the digit must follow immediately. Anything else
-            // after `-` is not a pattern.
-            Tok::Minus => {
-                let neg = self.bump(Construct::Pattern)?;
-                if let Tok::Int(n) = &neg.kind {
-                    let span = Self::span_merge(tok.span, neg.span);
-                    // `n` is in [0, i64::MAX] (lexer bound), so `checked_neg`
-                    // always returns `Some`. The fallback to i64::MIN keeps the
-                    // pattern total if the lexer bound widens to allow u64 magnitudes.
-                    let value = n.checked_neg().unwrap_or(i64::MIN);
-                    Ok(Located::new(span, Pattern_::PInt(value)))
-                } else {
-                    Err(Self::unexpected_token(&neg, &[Expected::Pattern]))
+            // A negative integer literal pattern `-3`. The digit must be
+            // byte-span adjacent to the `-` (no intervening whitespace); a gap
+            // or a non-integer token is a parse error, matching the expression
+            // grammar enforced by `peek_adjacent_neg_literal`.
+            Tok::Minus => match self.peek_adjacent_neg_literal(tok.span) {
+                Some(NegLeaf::Int(n, lit_span)) => {
+                    self.bump(Construct::Pattern)?;
+                    // `n` is in [0, i64::MAX] at lex time; `checked_neg` is
+                    // the fail-closed guard in case that bound ever widens.
+                    let value = n.checked_neg().ok_or_else(|| Diagnostic::Parse {
+                        span: Self::span_merge(tok.span, lit_span),
+                        msg: ParseError::IntLiteralOutOfRange,
+                    })?;
+                    Ok(Located::new(
+                        Self::span_merge(tok.span, lit_span),
+                        Pattern_::PInt(value),
+                    ))
                 }
-            }
+                // Float patterns are unsound (f64 equality is not well-defined
+                // for pattern matching), so a `-`+float is rejected.
+                _ => Err(Self::unexpected_token(
+                    self.peek().unwrap_or(&tok),
+                    &[Expected::Pattern],
+                )),
+            },
             Tok::LParen => {
                 let opener = tok.span;
                 let inner = self.parse_pattern(depth + 1)?;
@@ -2611,6 +2616,28 @@ impl<'a> Parser<'a> {
             self.peek_kind(),
             Some(&(Tok::Underscore | Tok::LParen | Tok::LBrace | Tok::Ident(_)))
         )
+    }
+
+    // ---- leading-minus rule (single source of truth) ---------------------
+
+    /// The shared leading-`-`-binds-a-numeric-literal rule used by both
+    /// expression and pattern parsing.
+    ///
+    /// Returns the raw (positive) magnitude and its span when the next token
+    /// is a numeric literal byte-span adjacent to `minus_span` (no whitespace
+    /// gap). A gap, a non-numeric token, or end-of-input yields `None`; the
+    /// caller then takes its own fail-closed error path. The caller is
+    /// responsible for consuming the token (`bump`) and negating the value.
+    fn peek_adjacent_neg_literal(&self, minus_span: Span) -> Option<NegLeaf> {
+        let t = self.peek()?;
+        if t.span.lo != minus_span.hi {
+            return None; // whitespace between `-` and the token
+        }
+        match &t.kind {
+            Tok::Int(n) => Some(NegLeaf::Int(*n, t.span)),
+            Tok::Float(f) => Some(NegLeaf::Float(*f, t.span)),
+            _ => None,
+        }
     }
 
     // ---- span helper ------------------------------------------------------
