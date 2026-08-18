@@ -58,6 +58,7 @@ use ipe_ir::Capability;
 use crate::CliError;
 use crate::cli_args::OutputFormat;
 use crate::project::{self, ProjectManifest};
+use crate::scratch::ScratchDir;
 
 /// The package-gate checks, in the fixed order [`run_audit`] runs them. Naming
 /// the check that rejected lets the diagnostic say exactly which gate failed.
@@ -186,25 +187,17 @@ fn tier2_probe_fixture() -> Result<PathBuf, CliError> {
     } else {
         ("untrusted-build.sh", TIER2_PROBE_POSIX)
     };
-    let dir = std::env::temp_dir().join(format!("ipe-tier2-fixture-{}", std::process::id()));
-    // Best-effort removal of a stale same-pid leftover (e.g. a prior crashed run).
-    // The subsequent exclusive create is the real defense: if the remove races with
-    // a same-user pre-seed, the create will still error and we fail closed.
-    let _ = std::fs::remove_dir_all(&dir);
-    // Exclusive create: errors if the directory already exists, so a same-user
-    // pre-seeded or symlinked path is rejected rather than written into.
-    std::fs::DirBuilder::new()
-        .recursive(false)
-        .create(&dir)
-        .map_err(|e| CliError::Io {
-            path: dir.clone(),
-            source: e,
-        })?;
-    let path = dir.join(name);
+    let scratch = ScratchDir::new("ipe-tier2-fixture").map_err(|e| CliError::Io {
+        path: PathBuf::from("ipe-tier2-fixture"),
+        source: e,
+    })?;
+    let path = scratch.child(name);
     std::fs::write(&path, bytes).map_err(|e| CliError::Io {
         path: path.clone(),
         source: e,
     })?;
+    // Caller cleans up via `remove_dir_all` after use; Drop is skipped here.
+    std::mem::forget(scratch);
     Ok(path)
 }
 
@@ -476,15 +469,9 @@ fn prepare(path: &Path) -> Result<Prepared, CliError> {
         regenerate_ffi_bindings(&manifest_path)?;
     }
 
-    let emitted_dir = audit_scratch_dir(&manifest.name);
-    // A stale scratch dir from a previous audit must not leak old emitted files
-    // into this scan; remove it first so the emitted set is exactly this build's.
-    if emitted_dir.exists() {
-        std::fs::remove_dir_all(&emitted_dir).map_err(|e| CliError::Io {
-            path: emitted_dir.clone(),
-            source: e,
-        })?;
-    }
+    // `audit_scratch_dir` creates the directory exclusively with 128-bit OS
+    // entropy — no stale-dir removal needed; a fresh exclusive dir is always empty.
+    let emitted_dir = audit_scratch_dir(&manifest.name)?;
     // Resolve the runtime exactly as `ipe build` does — one resolver for every
     // command. Under the default dependency model the emitted project names the
     // runtime as a path dependency, which the build materializes from the
@@ -627,10 +614,20 @@ fn locate_manifest(path: &Path) -> Result<PathBuf, CliError> {
     )))
 }
 
-/// The per-package audit scratch directory under the OS temp root, keyed by the
-/// package name and this process so concurrent audits never collide.
-fn audit_scratch_dir(package: &str) -> PathBuf {
-    std::env::temp_dir().join(format!("ipe-audit-{package}-{}", std::process::id()))
+/// Create and return an exclusive per-package audit scratch directory under the
+/// OS temp root. The name is unpredictable (128-bit OS entropy) so a same-user
+/// attacker cannot pre-seed or symlink it.
+fn audit_scratch_dir(package: &str) -> Result<PathBuf, CliError> {
+    let prefix = format!("ipe-audit-{package}");
+    let scratch = ScratchDir::new(&prefix).map_err(|e| CliError::Io {
+        path: PathBuf::from(&prefix),
+        source: e,
+    })?;
+    let path = scratch.path().to_path_buf();
+    // The directory is cleaned up by the caller's best-effort `remove_dir_all`;
+    // we transfer ownership of the path and skip Drop here.
+    std::mem::forget(scratch);
+    Ok(path)
 }
 
 // ===========================================================================

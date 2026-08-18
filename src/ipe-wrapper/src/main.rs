@@ -153,61 +153,194 @@ fn run_embed(show_profile: bool, app_args: &[OsString]) -> ExitCode {
         return ExitCode::SUCCESS;
     }
 
-    // In embed mode the app binary is never written to disk for exec — it
-    // must be extracted to a temp file, verified, and exec'd. The temp file
-    // is written to the system temp dir, mode 0o700 (owner-execute only), so
-    // no other user on the host can exec it.
-    let tmp_app = match write_embed_binary(APP_BYTES) {
-        Ok(p) => p,
+    // Write the embedded binary to an exclusively-created temp file and retain
+    // the file handle.  After writing, the capfloor is scanned by re-reading
+    // through the RETAINED handle — not from APP_BYTES and not by re-opening
+    // the path — so the bytes verified are the bytes on the inode that will be
+    // exec'd.  On Unix the exec goes through the fd-path (/proc/self/fd/<n> on
+    // Linux, /dev/fd/<n> on macOS) so the file that is verified and the file
+    // that is executed are the same kernel object; a same-uid process that
+    // renames something over the path cannot change what is exec'd.
+    let embed = match write_embed_binary(APP_BYTES) {
+        Ok(e) => e,
         Err(e) => fatal!("cannot write embedded binary to temp file: {e}"),
     };
 
-    let result = exec_after_verify(APP_BYTES, &profile, &tmp_app, app_args);
+    let result = exec_embed_after_verify(&profile, embed, app_args);
 
-    // Clean up the temp file only when exec failed (on success exec replaces
-    // the process and this line is never reached). Best-effort: if removal
-    // fails we still propagate the exec failure.
-    let _ = std::fs::remove_file(&tmp_app);
+    // `exec_after_verify` only returns on failure (on success the process is
+    // replaced).  The EmbedBinary RAII guard removes the temp file when it
+    // drops at the end of this scope.
     result
 }
 
-/// Write the embedded app bytes to a temp file and return its path.
-/// The file is created with owner-execute permissions (`0o700` on Unix).
+/// An exclusively-created, owner-execute-only temp file holding the embedded
+/// app binary.  Removed on drop (best-effort).
+#[cfg(embed_mode)]
+struct EmbedBinary {
+    path: PathBuf,
+    file: std::fs::File,
+}
+
+#[cfg(embed_mode)]
+impl Drop for EmbedBinary {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_file(&self.path);
+    }
+}
+
+/// Write `bytes` to an exclusively-created, unpredictably-named temp file with
+/// owner-execute permissions, and return the open [`EmbedBinary`] holding both
+/// the path and the retained file handle.
+///
+/// Uses 128 bits of OS entropy in the name so the path cannot be predicted or
+/// pre-seeded by a local attacker.  `create_new` (O_EXCL) ensures that a
+/// collision fails rather than following a symlink or reusing an existing file.
 ///
 /// # Errors
 ///
-/// Returns an `io::Error` on any filesystem failure.
+/// Returns an [`io::Error`] on any filesystem or entropy failure.
 #[cfg(embed_mode)]
-fn write_embed_binary(bytes: &[u8]) -> std::io::Result<PathBuf> {
+fn write_embed_binary(bytes: &[u8]) -> std::io::Result<EmbedBinary> {
     use std::io::Write as _;
 
-    let dir = std::env::temp_dir();
-    let name = format!(
-        "ipe-wrapper-embed-{}-{}",
-        std::process::id(),
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map_or(0, |d| d.as_secs())
-    );
-    let path = dir.join(name);
+    let hex = os_entropy_hex()?;
+    let name = format!("ipe-wrapper-embed-{}-{hex}", std::process::id());
+    let path = std::env::temp_dir().join(name);
 
     #[cfg(unix)]
-    {
+    let mut file = {
         use std::os::unix::fs::OpenOptionsExt as _;
-        let mut file = std::fs::OpenOptions::new()
+        std::fs::OpenOptions::new()
+            .read(true)
             .write(true)
             .create_new(true)
             .mode(0o700)
-            .open(&path)?;
-        file.write_all(bytes)?;
+            .open(&path)?
+    };
+    #[cfg(not(unix))]
+    let mut file = std::fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create_new(true)
+        .open(&path)?;
+
+    file.write_all(bytes)?;
+
+    Ok(EmbedBinary { path, file })
+}
+
+/// Read 128 bits of OS entropy and return them as a 32-char lowercase hex string.
+///
+/// On Unix this reads from `/dev/urandom`; on other platforms it falls back to
+/// a combination of the system time and the process ID (weaker, but still
+/// substantially harder to predict than pid alone — embed mode on non-Unix is
+/// an unsupported configuration).
+#[cfg(embed_mode)]
+fn os_entropy_hex() -> std::io::Result<String> {
+    #[cfg(unix)]
+    {
+        use std::fmt::Write as _;
+        use std::io::Read as _;
+        let mut entropy = [0u8; 16];
+        std::fs::File::open("/dev/urandom")
+            .and_then(|mut f| f.read_exact(&mut entropy))
+            .map_err(|e| {
+                std::io::Error::new(
+                    std::io::ErrorKind::Other,
+                    format!("cannot read OS entropy from /dev/urandom: {e}"),
+                )
+            })?;
+        let mut hex = String::with_capacity(32);
+        for b in entropy {
+            let _ = write!(hex, "{b:02x}");
+        }
+        Ok(hex)
     }
     #[cfg(not(unix))]
     {
-        let mut file = std::fs::File::create_new(&path)?;
-        std::io::Write::write_all(&mut file, bytes)?;
+        // Non-Unix fallback: combine wall time (nanoseconds) with process ID.
+        // Embed mode on non-Unix is unsupported; this provides a best-effort
+        // improvement over a bare pid-only name.
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0u128, |d| d.as_nanos());
+        Ok(format!(
+            "{:016x}{:016x}",
+            nanos,
+            u128::from(std::process::id())
+        ))
+    }
+}
+
+// ── Embed-mode verify + exec ─────────────────────────────────────────────────
+
+/// Verify the capability floor and exec the embedded app binary using the same
+/// file handle — closing the verify/exec identity gap.
+///
+/// The capfloor is scanned from bytes read through the RETAINED handle in
+/// `embed`, not from the compile-time `APP_BYTES` slice.  On Unix the exec
+/// target is the fd-path (`/proc/self/fd/<n>` on Linux, `/dev/fd/<n>` on
+/// macOS) which resolves to the same kernel inode as the retained handle — a
+/// same-uid overwrite of the path name after the read cannot change what is
+/// exec'd.
+///
+/// Fail-closed on:
+/// - read or seek failure on the retained handle
+/// - no capfloor marker in the read bytes (missing floor → refuse)
+/// - profile does not satisfy the floor (widened profile → refuse)
+/// - jail primitive unavailable on this platform
+/// - jail establishment failure
+#[cfg(embed_mode)]
+fn exec_embed_after_verify(
+    profile: &SandboxProfile,
+    mut embed: EmbedBinary,
+    app_args: &[OsString],
+) -> ExitCode {
+    use std::io::{Read as _, Seek as _, SeekFrom};
+
+    // Re-read the binary through the retained handle so the bytes scanned for
+    // the capfloor are the bytes on the inode we are about to exec — not the
+    // compile-time slice, which a write race could have diverged from.
+    if let Err(e) = embed.file.seek(SeekFrom::Start(0)) {
+        fatal!("cannot rewind embedded binary handle: {e}");
+    }
+    let mut on_disk_bytes = Vec::new();
+    if let Err(e) = embed.file.read_to_end(&mut on_disk_bytes) {
+        fatal!("cannot read embedded binary from retained handle: {e}");
     }
 
-    Ok(path)
+    // Build the exec path that resolves to the same kernel inode as the
+    // retained handle: a rename over `embed.path` after the read cannot
+    // affect what is exec'd because the fd-path bypasses the name lookup.
+    let exec_path = fd_exec_path(&embed);
+
+    exec_after_verify(&on_disk_bytes, profile, &exec_path, app_args)
+}
+
+/// Return the exec path for the retained [`EmbedBinary`] handle.
+///
+/// On Linux and macOS this resolves to the fd directly (bypassing the name),
+/// so renaming over `embed.path` after this call cannot affect the exec target.
+/// On other platforms the on-disk path is returned as a best-effort fallback
+/// (the retained-handle read still ensures the floor was verified against the
+/// written bytes).
+#[cfg(embed_mode)]
+fn fd_exec_path(embed: &EmbedBinary) -> std::path::PathBuf {
+    #[cfg(target_os = "linux")]
+    {
+        use std::os::unix::io::AsRawFd as _;
+        std::path::PathBuf::from(format!("/proc/self/fd/{}", embed.file.as_raw_fd()))
+    }
+    #[cfg(target_os = "macos")]
+    {
+        use std::os::unix::io::AsRawFd as _;
+        std::path::PathBuf::from(format!("/dev/fd/{}", embed.file.as_raw_fd()))
+    }
+    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
+    {
+        embed.path.clone()
+    }
 }
 
 // ── Shared verify + exec ─────────────────────────────────────────────────────

@@ -41,6 +41,7 @@ pub mod publish;
 pub mod resolve;
 pub mod run_sandbox;
 pub mod runtime_embed;
+pub mod scratch;
 pub mod style;
 pub mod toolchain;
 pub mod unsafe_ack;
@@ -5141,9 +5142,14 @@ fn run_project_tests_with(path: Option<&str>, stdio: TestStdio) -> Result<TestOu
 
     let runtime_dir = resolve_runtime()?;
 
-    // Emit into a unique temp directory so concurrent verify runs do not
-    // collide and the output is never confused with the project's own `out/`.
-    let out_dir = std::env::temp_dir().join(format!("ipe_verify_test_{}", std::process::id()));
+    // Emit into an exclusively-created, unpredictably-named temp directory so
+    // concurrent verify runs cannot collide and an attacker cannot pre-seed the
+    // path.
+    let out_scratch = scratch::ScratchDir::new("ipe-verify-test").map_err(|e| CliError::Io {
+        path: PathBuf::from("ipe-verify-test"),
+        source: e,
+    })?;
+    let out_dir = out_scratch.path().to_path_buf();
 
     // Build the test entry. When the project has a `src/` tree, the test entry
     // is built against BOTH it (the code under test) and the `tests/` tree (its
@@ -5165,9 +5171,9 @@ fn run_project_tests_with(path: Option<&str>, stdio: TestStdio) -> Result<TestOu
         stdio,
     );
 
-    // Clean up the temp output regardless of the outcome.
-    let _ = std::fs::remove_dir_all(&out_dir);
-
+    // `out_scratch` drops here, removing the temp directory on every exit path
+    // (compile failure, cargo error, spawn error, or normal completion).
+    drop(out_scratch);
     outcome
 }
 
