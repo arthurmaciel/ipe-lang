@@ -3913,7 +3913,7 @@ fn run_run_body(rest: &[String]) -> Result<(), CliError> {
             run_sandbox::jail_and_exec(
                 &profile,
                 &union,
-                &scoped_tmp,
+                scoped_tmp.path(),
                 &working_tree,
                 &bin,
                 &bin_args_os,
@@ -3943,7 +3943,7 @@ fn run_run_body(rest: &[String]) -> Result<(), CliError> {
             run_sandbox::jail_and_exec(
                 &profile,
                 &union,
-                &scoped_tmp,
+                scoped_tmp.path(),
                 &working_tree,
                 &bin,
                 &bin_args_os,
@@ -4050,7 +4050,7 @@ pub(crate) fn run_exec(rest: &[String]) -> Result<(), CliError> {
         run_sandbox::jail_and_exec(
             &profile,
             &union,
-            &scoped_tmp,
+            scoped_tmp.path(),
             &working_tree,
             &bin,
             &app_args_os,

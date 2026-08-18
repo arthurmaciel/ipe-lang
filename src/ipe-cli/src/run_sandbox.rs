@@ -22,13 +22,14 @@
 
 use std::collections::BTreeSet;
 use std::ffi::OsString;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 use ipe_ir::Capability;
 use ipe_sandbox::run_jail::{self, DatabaseAxis, RunJailDefect, SandboxProfile};
 
 use crate::CliError;
 use crate::project::ProjectManifest;
+use crate::scratch::ScratchDir;
 
 /// The narrow, run-jail-specific unsandboxed override — the recorded consent
 /// that lets a native-bearing program run on a platform with no jail primitive.
@@ -216,27 +217,22 @@ pub fn jail_and_exec(
 }
 
 /// Create the per-run scoped writable tempdir (the jail's only writable mount
-/// when `filesystem` is absent). Placed under the system temp dir, uniquely
-/// named.
+/// when `filesystem` is absent).
+///
+/// The name carries 128 bits of OS entropy and is created exclusively
+/// (`O_EXCL`-style, mode 0700) via [`ScratchDir`], so a pre-seeded symlink at a
+/// predictable path cannot be followed into the jail's writable mount. The
+/// returned guard removes the directory on drop; the caller keeps it alive
+/// across the jail exec (which replaces the process on success).
 ///
 /// # Errors
 ///
 /// [`CliError::Io`] when the directory cannot be created.
-pub fn make_scoped_tmp() -> Result<PathBuf, CliError> {
-    let base = std::env::temp_dir();
-    let unique = format!(
-        "ipe-run-{}-{}",
-        std::process::id(),
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map_or(0, |d| d.as_nanos())
-    );
-    let dir = base.join(unique);
-    std::fs::create_dir_all(&dir).map_err(|e| CliError::Io {
-        path: dir.clone(),
+pub fn make_scoped_tmp() -> Result<ScratchDir, CliError> {
+    ScratchDir::new("ipe-run").map_err(|e| CliError::Io {
+        path: std::env::temp_dir(),
         source: e,
-    })?;
-    Ok(dir)
+    })
 }
 
 /// Reconstruct the capability axes a profile grants, as a `Capability` set.

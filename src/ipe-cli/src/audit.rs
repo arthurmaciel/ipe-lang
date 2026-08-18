@@ -1270,42 +1270,36 @@ mod tests {
 
     #[test]
     fn tier2_probe_fixture_dir_is_created_exclusively() {
-        // `tier2_probe_fixture` must create its scratch dir exclusively so a
-        // same-user pre-seeded dir at the predictable `ipe-tier2-fixture-<pid>`
-        // path is detected and rejected, not silently re-used.
-        //
-        // Simulate: pre-create the dir before calling `tier2_probe_fixture`.
-        // The function first does a best-effort `remove_dir_all` to clear stale
-        // same-pid leftovers, then tries an exclusive create. Since we recreate
-        // the dir between the remove and the exclusive create in this test we
-        // verify the exclusive-create logic is present by testing the other
-        // observable contract: that `tier2_probe_fixture` writes the correct
-        // fixture bytes into a fresh dir (it neither fails nor silently reuses a
-        // dir whose content we control).
-        //
-        // The race-simulation variant (pre-seed then call) is inherently racy in
-        // a unit test, so we validate the properties we can: the returned path
-        // exists, is in a dir named `ipe-tier2-fixture-<pid>`, and the fixture
-        // bytes match the embedded constant.
+        // `tier2_probe_fixture` creates its scratch dir through `ScratchDir`, so
+        // the name is unpredictable — `ipe-tier2-fixture-<pid>-<32 hex entropy>` —
+        // and the dir is created exclusively (a pre-seeded entry is not followed).
+        // A predictable pid-only name would let a same-user attacker pre-seed the
+        // path; the entropy component is what closes that.
         let fixture_path =
             tier2_probe_fixture().expect("tier2_probe_fixture must succeed on a clean temp dir");
         let dir = fixture_path.parent().expect("fixture path has parent");
         let dir_name = dir.file_name().unwrap_or_default().to_string_lossy();
-        assert!(
-            dir_name.starts_with("ipe-tier2-fixture-"),
-            "scratch dir is named ipe-tier2-fixture-<pid>, got: {dir_name}"
-        );
-        let pid_suffix = dir_name
+        let suffix = dir_name
             .strip_prefix("ipe-tier2-fixture-")
-            .expect("prefix present");
+            .expect("scratch dir uses the ipe-tier2-fixture- prefix");
+        // The suffix is `<pid>-<32 hex entropy>`: the pid, a dash, then 32 hex
+        // chars. The entropy makes the name unpredictable (not the bare pid).
+        let (pid_part, hex_part) = suffix
+            .split_once('-')
+            .expect("suffix is <pid>-<hex entropy>");
         assert!(
-            pid_suffix.chars().all(|c| c.is_ascii_digit()),
-            "suffix is the decimal pid: {pid_suffix}"
+            pid_part.chars().all(|c| c.is_ascii_digit()),
+            "pid component is decimal: {pid_part}"
         );
         assert_eq!(
-            pid_suffix,
+            pid_part,
             std::process::id().to_string(),
             "pid in dir name matches the current process"
+        );
+        assert_eq!(hex_part.len(), 32, "128 bits of entropy as 32 hex chars");
+        assert!(
+            hex_part.chars().all(|c| c.is_ascii_hexdigit()),
+            "entropy component is hex: {hex_part}"
         );
         assert!(
             fixture_path.exists(),

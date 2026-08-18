@@ -364,71 +364,130 @@ mod tests {
         let _ = std::fs::remove_file(&canary);
     }
 
-    /// No PRODUCTION code in `src/ipe-cli/src` (outside `scratch.rs`) constructs
-    /// a temp path using `temp_dir().join` — all such paths must go through the
-    /// `scratch` module's exclusively-created constructors.
+    /// No PRODUCTION code in the `ipe-cli` or `ipe-wrapper` crates (outside the
+    /// sanctioned `scratch` modules) derives a temp path from `temp_dir()` — all
+    /// such paths must go through a `scratch` module's exclusively-created
+    /// constructors.
     ///
-    /// Test-only code (`#[cfg(test)]` / `mod tests` blocks) is exempt: test helpers
-    /// that use predictable names in isolated temp dirs do not expose the
+    /// Both the single-line form (`temp_dir().join(name)`) and the split form
+    /// (`let base = temp_dir(); base.join(name)`) are caught: a bare
+    /// `temp_dir()` binding in production is flagged the moment its value is
+    /// `.join`-ed to build a path.
+    ///
+    /// Test-only code (`#[cfg(test)]` / `mod tests` blocks) is exempt: test
+    /// helpers that use predictable names in isolated temp dirs do not expose the
     /// verify/exec or verify/read identity gap that the production paths do.
     ///
     /// This is the class gate: it keeps the `toctou-verify-one-exec-other-scratch`
-    /// class closed against future PRODUCTION regressions.
+    /// class closed against future PRODUCTION regressions across both crates.
     #[test]
     fn no_predictable_temp_names_in_production_code() {
+        // ipe-cli src, and the sibling ipe-wrapper src (the two crates that
+        // construct jail scratch / embedded-app temp paths).
         let cli_src = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+        let wrapper_src = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .map(|p| p.join("ipe-wrapper").join("src"));
 
-        // Collect all .rs files under the cli src directory.
         let mut rs_files: Vec<std::path::PathBuf> = Vec::new();
         collect_rs_files(&cli_src, &mut rs_files);
+        if let Some(w) = &wrapper_src {
+            collect_rs_files(w, &mut rs_files);
+        }
 
         for path in &rs_files {
-            // scratch.rs is the one sanctioned location.
+            // The sanctioned scratch modules are the one place `temp_dir()` may
+            // be joined (behind exclusive-create + entropy).
             if path.file_name().and_then(|n| n.to_str()) == Some("scratch.rs") {
                 continue;
             }
             let Ok(source) = std::fs::read_to_string(path) else {
                 continue;
             };
-            // Check each line: if it contains `temp_dir().join`, it must be
-            // inside a test context.  We track whether we are inside a
-            // `#[cfg(test)]` or `mod tests` block by a simple heuristic: the
-            // line or a recent preceding line contains one of those markers.
-            // This is an approximation sufficient to catch production-code
-            // additions while excluding test-module helpers.
-            let lines: Vec<&str> = source.lines().collect();
-            let mut in_test_region = false;
-            let mut brace_depth_at_test_entry: Option<usize> = None;
-            let mut brace_depth: usize = 0;
+            assert_predictable_temp_free(path, &source);
+        }
+    }
 
-            for (i, &line) in lines.iter().enumerate() {
-                // Track `#[cfg(test)]` and `mod tests` as test-region markers.
-                if line.contains("#[cfg(test)]") || line.contains("mod tests") {
-                    in_test_region = true;
-                    brace_depth_at_test_entry = Some(brace_depth);
-                }
-                // Count brace depth to detect when we leave the test block.
-                brace_depth += line.chars().filter(|&c| c == '{').count();
-                brace_depth =
-                    brace_depth.saturating_sub(line.chars().filter(|&c| c == '}').count());
-                if in_test_region
-                    && let Some(entry_depth) = brace_depth_at_test_entry
-                    && brace_depth < entry_depth
-                {
-                    in_test_region = false;
-                    brace_depth_at_test_entry = None;
-                }
+    /// Assert `source` derives no temp path from `temp_dir()` in production code.
+    ///
+    /// Tracks `#[cfg(test)]`/`mod tests` regions by brace depth to exempt test
+    /// helpers, and tracks production `let <ident> = ...temp_dir();` bindings so a
+    /// later `<ident>.join(` (the split form) is caught as well as the inline
+    /// `temp_dir().join(` form.
+    fn assert_predictable_temp_free(path: &std::path::Path, source: &str) {
+        let lines: Vec<&str> = source.lines().collect();
+        let mut in_test_region = false;
+        let mut brace_depth_at_test_entry: Option<usize> = None;
+        let mut brace_depth: usize = 0;
+        // Production idents currently bound to a `temp_dir()` value.
+        let mut temp_bindings: std::collections::HashSet<String> = std::collections::HashSet::new();
 
+        for (i, &line) in lines.iter().enumerate() {
+            if line.contains("#[cfg(test)]") || line.contains("mod tests") {
+                in_test_region = true;
+                brace_depth_at_test_entry = Some(brace_depth);
+            }
+            brace_depth += line.chars().filter(|&c| c == '{').count();
+            brace_depth = brace_depth.saturating_sub(line.chars().filter(|&c| c == '}').count());
+            if in_test_region
+                && let Some(entry_depth) = brace_depth_at_test_entry
+                && brace_depth < entry_depth
+            {
+                in_test_region = false;
+                brace_depth_at_test_entry = None;
+                temp_bindings.clear();
+            }
+
+            if in_test_region {
+                continue;
+            }
+
+            // Inline form: `temp_dir().join(...)` on one line.
+            assert!(
+                !line.contains("temp_dir().join"),
+                "predictable temp_dir().join in production code at {}:{} — \
+                 use ScratchDir or ScratchFile instead.\n  line: {}",
+                path.display(),
+                i + 1,
+                line.trim()
+            );
+
+            // Split form, part 1: record a `let <ident> = ...temp_dir();` binding
+            // (that does not itself `.join`).
+            if line.contains("temp_dir()")
+                && !line.contains(".join")
+                && let Some(ident) = binding_ident(line)
+            {
+                temp_bindings.insert(ident);
+            }
+
+            // Split form, part 2: a `.join(` on a recorded temp-derived binding.
+            for ident in &temp_bindings {
+                let joined = format!("{ident}.join(");
                 assert!(
-                    !line.contains("temp_dir().join") || in_test_region,
-                    "predictable temp_dir().join in production code at {}:{} — \
-                     use crate::scratch::ScratchDir or ScratchFile instead.\n  line: {}",
+                    !line.contains(&joined),
+                    "predictable split-form temp path (`{ident} = temp_dir(); {ident}.join(...)`) \
+                     in production code at {}:{} — use ScratchDir or ScratchFile instead.\n  line: {}",
                     path.display(),
                     i + 1,
                     line.trim()
                 );
             }
         }
+    }
+
+    /// Extract the bound identifier from a `let <ident> = ...;` line, if any.
+    fn binding_ident(line: &str) -> Option<String> {
+        let after_let = line.trim_start().strip_prefix("let ")?;
+        let name = after_let
+            .trim_start_matches("mut ")
+            .split([' ', ':', '='])
+            .next()?
+            .trim();
+        if name.is_empty() || !name.chars().all(|c| c.is_alphanumeric() || c == '_') {
+            return None;
+        }
+        Some(name.to_owned())
     }
 
     fn collect_rs_files(dir: &std::path::Path, out: &mut Vec<std::path::PathBuf>) {
@@ -443,5 +502,51 @@ mod tests {
                 out.push(path);
             }
         }
+    }
+
+    /// The class gate flags the inline predictable-temp form in production code.
+    #[test]
+    fn class_gate_flags_inline_predictable_temp() {
+        let injected = "fn make() -> std::path::PathBuf {\n    \
+            std::env::temp_dir().join(\"predictable-name\")\n}\n";
+        let caught = std::panic::catch_unwind(|| {
+            assert_predictable_temp_free(std::path::Path::new("injected.rs"), injected);
+        })
+        .is_err();
+        assert!(
+            caught,
+            "gate must flag inline temp_dir().join in production"
+        );
+    }
+
+    /// The class gate flags the split predictable-temp form in production code.
+    #[test]
+    fn class_gate_flags_split_predictable_temp() {
+        let injected = "fn make() -> std::path::PathBuf {\n    \
+            let base = std::env::temp_dir();\n    \
+            base.join(\"predictable-name\")\n}\n";
+        let caught = std::panic::catch_unwind(|| {
+            assert_predictable_temp_free(std::path::Path::new("injected.rs"), injected);
+        })
+        .is_err();
+        assert!(
+            caught,
+            "gate must flag split-form temp_dir()+join in production"
+        );
+    }
+
+    /// The class gate passes on clean production code (a `ScratchDir`-based
+    /// construction and a bare non-joined `temp_dir()` value) and on test-region
+    /// predictable temps.
+    #[test]
+    fn class_gate_passes_clean_code() {
+        let clean = "fn make() -> std::io::Result<()> {\n    \
+            let _dir = ScratchDir::new(\"ipe-run\")?;\n    \
+            let _base = std::env::temp_dir();\n    \
+            Ok(())\n}\n\
+            #[cfg(test)]\nmod tests {\n    \
+            fn helper() { let _ = std::env::temp_dir().join(\"ok-in-test\"); }\n}\n";
+        // Must not panic.
+        assert_predictable_temp_free(std::path::Path::new("clean.rs"), clean);
     }
 }
