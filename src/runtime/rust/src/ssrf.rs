@@ -206,6 +206,34 @@ pub(crate) fn resolve_first_non_private_addr_with_port(
     })
 }
 
+/// A proof that `host:port` passed the private-IP/SSRF gate. The ONLY constructor
+/// is [`VettedDial::for_host`]; no raw `VettedDial(())` literal is reachable
+/// outside this module.  A caller holding a `VettedDial` has proof the host is
+/// not loopback, private, link-local, or otherwise blocked under the current
+/// deny-private policy — the gate ran, and it passed.
+///
+/// When `ssrf_deny_private_enabled()` is false (dev / explicit opt-out) the
+/// constructor still returns `Ok(VettedDial(()))` so callers are not broken
+/// in dev; the invariant is "passed the policy in effect," not "is always public."
+#[derive(Debug)]
+pub(crate) struct VettedDial(());
+
+impl VettedDial {
+    /// Verify `host:port` against the SSRF deny-private policy and return a proof
+    /// token on success.  Returns `Err(message)` if the guard is on and the host
+    /// resolves to a private/loopback/link-local address.
+    ///
+    /// Callers pass the resolved token straight to the dial step; they do not re-
+    /// validate it — the token IS the validation evidence.
+    pub(crate) fn for_host(host: &str, port: u16) -> Result<Self, String> {
+        if ssrf_deny_private_enabled() {
+            resolve_first_non_private_addr_with_port(host, port).map(|_| VettedDial(()))
+        } else {
+            Ok(VettedDial(()))
+        }
+    }
+}
+
 /// WebSocket SSRF pin: when `IPE_HTTP_DENY_PRIVATE` is on, resolve `url`'s host to
 /// a vetted non-private `SocketAddr` (with the real ws/wss port) so the caller can
 /// dial THAT addr — closing the DNS-rebinding TOCTOU that an unpinned
@@ -315,6 +343,70 @@ mod tests {
     // -----------------------------------------------------------------------
     // SSRF guard unit tests (no network — purely local logic)
     // -----------------------------------------------------------------------
+
+    // -----------------------------------------------------------------------
+    // VettedDial constructor tests (guard on via env override)
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn vetted_dial_blocks_loopback_when_deny_private_on() {
+        // Force the guard on for this test via env.
+        unsafe {
+            std::env::set_var("IPE_HTTP_DENY_PRIVATE", "1");
+        }
+        assert!(VettedDial::for_host("127.0.0.1", 5432).is_err());
+        assert!(VettedDial::for_host("::1", 5432).is_err());
+        unsafe {
+            std::env::remove_var("IPE_HTTP_DENY_PRIVATE");
+        }
+    }
+
+    #[test]
+    fn vetted_dial_blocks_link_local_when_deny_private_on() {
+        unsafe {
+            std::env::set_var("IPE_HTTP_DENY_PRIVATE", "1");
+        }
+        assert!(VettedDial::for_host("169.254.169.254", 5432).is_err());
+        unsafe {
+            std::env::remove_var("IPE_HTTP_DENY_PRIVATE");
+        }
+    }
+
+    #[test]
+    fn vetted_dial_blocks_rfc1918_when_deny_private_on() {
+        unsafe {
+            std::env::set_var("IPE_HTTP_DENY_PRIVATE", "1");
+        }
+        assert!(VettedDial::for_host("10.0.0.5", 5432).is_err());
+        unsafe {
+            std::env::remove_var("IPE_HTTP_DENY_PRIVATE");
+        }
+    }
+
+    #[test]
+    fn vetted_dial_allows_public_ip_when_deny_private_on() {
+        unsafe {
+            std::env::set_var("IPE_HTTP_DENY_PRIVATE", "1");
+        }
+        // 1.1.1.1 is public — passes the gate (dial not attempted here).
+        assert!(VettedDial::for_host("1.1.1.1", 5432).is_ok());
+        unsafe {
+            std::env::remove_var("IPE_HTTP_DENY_PRIVATE");
+        }
+    }
+
+    #[test]
+    fn vetted_dial_passes_private_when_deny_private_off() {
+        unsafe {
+            std::env::set_var("IPE_HTTP_DENY_PRIVATE", "0");
+        }
+        // Guard explicitly off: private host is a pass (dev workflow).
+        assert!(VettedDial::for_host("127.0.0.1", 5432).is_ok());
+        assert!(VettedDial::for_host("10.0.0.1", 5432).is_ok());
+        unsafe {
+            std::env::remove_var("IPE_HTTP_DENY_PRIVATE");
+        }
+    }
 
     #[test]
     fn is_private_ip_loopback_v4() {

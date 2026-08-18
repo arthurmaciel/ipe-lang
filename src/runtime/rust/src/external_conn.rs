@@ -31,6 +31,7 @@
 use super::IpeResult;
 use crate::core::{IpeTask, ok_res, str_err};
 use crate::dsn::{Dsn, DsnDriver};
+use crate::ssrf::VettedDial;
 
 /// A live external database connection: an independent pool of the dialect the
 /// [`Dsn`] named, distinct from the app's monomorphised `Db`.
@@ -96,6 +97,15 @@ async fn open_external<E: Send + From<String> + 'static>(
     let url = dsn.connection_url();
     match driver {
         DsnDriver::Postgres => {
+            // The `Dsn` parse boundary enforces syntax and TLS; the connect step
+            // owns the SSRF host policy. Gate the host:port before dialing so a
+            // `postgres://169.254.169.254/db` or loopback DSN is denied here, not
+            // allowed to reach the network driver.
+            let host = dsn.host().to_owned();
+            let port = dsn.port();
+            if let Err(e) = VettedDial::for_host(&host, port) {
+                return IpeResult::Err(str_err(&format!("external connect: {e}")));
+            }
             match sqlx::postgres::PgPoolOptions::new()
                 .max_connections(EXTERNAL_POOL_MAX_CONNECTIONS)
                 .connect(&url)
@@ -177,4 +187,83 @@ pub fn db_conn_unsafe_exec_raw_on<E: Send + From<String> + 'static>(
             ))),
         }
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::dsn::dsn_parse;
+
+    /// Parse a Postgres DSN and check the SSRF gate that `open_external` would
+    /// apply — without attempting any real network dial.  Mirrors the guard
+    /// logic inserted before `PgPoolOptions::connect`.
+    fn pg_ssrf_blocked(dsn_str: &str) -> bool {
+        match dsn_parse::<String>(dsn_str.to_string()) {
+            IpeResult::Ok(dsn) if dsn.driver() == DsnDriver::Postgres => {
+                VettedDial::for_host(dsn.host(), dsn.port()).is_err()
+            }
+            _ => false,
+        }
+    }
+
+    #[test]
+    fn open_external_ssrf_blocks_loopback_postgres_when_deny_private_on() {
+        unsafe { std::env::set_var("IPE_HTTP_DENY_PRIVATE", "1") };
+        assert!(
+            pg_ssrf_blocked("postgres://127.0.0.1:5432/db"),
+            "loopback Postgres DSN must be blocked by the SSRF gate"
+        );
+        unsafe { std::env::remove_var("IPE_HTTP_DENY_PRIVATE") };
+    }
+
+    #[test]
+    fn open_external_ssrf_blocks_link_local_postgres_when_deny_private_on() {
+        unsafe { std::env::set_var("IPE_HTTP_DENY_PRIVATE", "1") };
+        assert!(
+            pg_ssrf_blocked("postgres://169.254.169.254:5432/db"),
+            "link-local Postgres DSN must be blocked by the SSRF gate"
+        );
+        unsafe { std::env::remove_var("IPE_HTTP_DENY_PRIVATE") };
+    }
+
+    #[test]
+    fn open_external_ssrf_error_is_not_a_connect_or_timeout_error_for_loopback() {
+        unsafe { std::env::set_var("IPE_HTTP_DENY_PRIVATE", "1") };
+        let dsn = match dsn_parse::<String>("postgres://127.0.0.1:5432/db".to_string()) {
+            IpeResult::Ok(d) => d,
+            IpeResult::Err(e) => panic!("DSN parse failed: {e}"),
+        };
+        let err =
+            VettedDial::for_host(dsn.host(), dsn.port()).expect_err("loopback must be blocked");
+        assert!(
+            err.contains("blocked"),
+            "SSRF block must identify as 'blocked', not a connect/TLS error: {err}"
+        );
+        unsafe { std::env::remove_var("IPE_HTTP_DENY_PRIVATE") };
+    }
+
+    #[test]
+    fn open_external_sqlite_dsn_bypasses_ssrf_gate() {
+        unsafe { std::env::set_var("IPE_HTTP_DENY_PRIVATE", "1") };
+        // A SQLite DSN has no host — the gate is not applied in `open_external`.
+        // Verify the driver discriminant correctly skips the gate path.
+        let dsn = match dsn_parse::<String>("sqlite://data/app.db".to_string()) {
+            IpeResult::Ok(d) => d,
+            IpeResult::Err(e) => panic!("SQLite DSN parse failed: {e}"),
+        };
+        assert_eq!(dsn.driver(), DsnDriver::Sqlite);
+        // SQLite host is empty; VettedDial is only called for Postgres — gate not applied.
+        assert!(dsn.host().is_empty(), "sqlite DSN must have empty host");
+        unsafe { std::env::remove_var("IPE_HTTP_DENY_PRIVATE") };
+    }
+
+    #[test]
+    fn open_external_ssrf_passes_private_when_deny_private_off() {
+        unsafe { std::env::set_var("IPE_HTTP_DENY_PRIVATE", "0") };
+        assert!(
+            !pg_ssrf_blocked("postgres://127.0.0.1:5432/db"),
+            "guard off must not block private host (dev workflow)"
+        );
+        unsafe { std::env::remove_var("IPE_HTTP_DENY_PRIVATE") };
+    }
 }

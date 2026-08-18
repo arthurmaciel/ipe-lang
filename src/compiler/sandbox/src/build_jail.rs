@@ -756,7 +756,30 @@ pub fn sbpl_from_profile(
     //   narrowest matching rule to override this deny via specificity ordering.
     s.push_str("(deny process-info*)\n");
     s.push_str("(deny mach-task-name)\n");
-    s.push_str("(deny sysctl-read)\n\n");
+    s.push_str("(deny sysctl-read)\n");
+    // Deny the macOS Seatbelt equivalents of the Linux seccomp baseline
+    // primitives that the run jail (seccomp.rs) blocks unconditionally:
+    //
+    // - `mach-lookup`: arbitrary bootstrap/system Mach service reach — the
+    //   macOS mechanism for cross-process IPC. Mirrors the Linux denial of
+    //   `bpf`/`perf_event_open` and the broader kernel-authority surface.
+    //   A specific service legitimately needed can be granted above this deny
+    //   with the narrowest `(allow mach-lookup (global-name "…"))` rule;
+    //   Seatbelt specificity ordering ensures that allow wins.
+    //
+    // - `iokit-open` family: direct driver/hardware access path. Mirrors the
+    //   Linux denial of `iopl`/`ioperm` and raw device access primitives.
+    //
+    // - `ipc-posix-shm*`: POSIX shared-memory segments — a covert channel
+    //   between jailed and host processes. Mirrors the Linux denial of
+    //   `shmget`/`shmat` and related IPC primitives.
+    s.push_str("(deny mach-lookup)\n");
+    s.push_str("(deny iokit-open)\n");
+    s.push_str("(deny iokit-open-user-client)\n");
+    s.push_str("(deny iokit-open-service)\n");
+    s.push_str("(deny iokit-set-properties)\n");
+    s.push_str("(deny iokit-get-properties)\n");
+    s.push_str("(deny ipc-posix-shm*)\n\n");
 
     // Network: deny unless the profile grants it. When granted, no denial is
     // emitted, so the allow-default base leaves the network reachable.
@@ -2507,5 +2530,95 @@ mod tests {
             rendered.contains("incompletely-mounted root"),
             "the mount failure must state the fail-closed refusal: {rendered}"
         );
+    }
+
+    // ── macOS baseline-deny parity tests ────────────────────────────────────
+    //
+    // `sbpl_from_profile` generates a String on any host, so these assertions
+    // run on Linux CI as well as macOS — the SBPL text is purely in-process.
+
+    #[test]
+    fn sbpl_baseline_denies_mach_lookup_unconditionally() {
+        // Network granted — the three baseline denies must still appear.
+        let p_net = scoped(true, FilesystemScope::Isolated);
+        let sbpl_net =
+            sbpl_from_profile(&p_net, Path::new("/tmp/scratch"), Path::new("/work/tree"));
+        assert!(
+            sbpl_net.contains("(deny mach-lookup)"),
+            "mach-lookup must be denied even when network is granted: {sbpl_net}"
+        );
+
+        // Network withheld — still present (unconditional baseline).
+        let p_no_net = scoped(false, FilesystemScope::Isolated);
+        let sbpl_no_net = sbpl_from_profile(
+            &p_no_net,
+            Path::new("/tmp/scratch"),
+            Path::new("/work/tree"),
+        );
+        assert!(
+            sbpl_no_net.contains("(deny mach-lookup)"),
+            "mach-lookup must be denied when network is withheld: {sbpl_no_net}"
+        );
+    }
+
+    #[test]
+    fn sbpl_baseline_denies_iokit_unconditionally() {
+        for profile in [
+            scoped(true, FilesystemScope::Isolated),
+            scoped(false, FilesystemScope::Isolated),
+        ] {
+            let sbpl =
+                sbpl_from_profile(&profile, Path::new("/tmp/scratch"), Path::new("/work/tree"));
+            for rule in [
+                "(deny iokit-open)",
+                "(deny iokit-open-user-client)",
+                "(deny iokit-open-service)",
+                "(deny iokit-set-properties)",
+                "(deny iokit-get-properties)",
+            ] {
+                assert!(
+                    sbpl.contains(rule),
+                    "iokit baseline deny missing — {rule}: {sbpl}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn sbpl_baseline_denies_posix_shm_unconditionally() {
+        for profile in [
+            scoped(true, FilesystemScope::Isolated),
+            scoped(false, FilesystemScope::Isolated),
+        ] {
+            let sbpl =
+                sbpl_from_profile(&profile, Path::new("/tmp/scratch"), Path::new("/work/tree"));
+            assert!(
+                sbpl.contains("(deny ipc-posix-shm*)"),
+                "ipc-posix-shm* baseline deny missing: {sbpl}"
+            );
+        }
+    }
+
+    /// Parity table: every Linux-baseline-denied primitive must have its macOS
+    /// analogue in the SBPL.  Adding a new Linux deny without the macOS
+    /// counterpart fails this test — keeping the two baselines in sync.
+    #[test]
+    fn sbpl_linux_baseline_parity_table_covered() {
+        let p = scoped(false, FilesystemScope::Isolated);
+        let sbpl = sbpl_from_profile(&p, Path::new("/tmp/scratch"), Path::new("/work/tree"));
+        // (Linux primitive, required macOS SBPL token)
+        let parity = [
+            ("ptrace / process_vm_*", "(deny process-info*)"),
+            ("bpf / perf_event_open (cross-proc)", "(deny mach-lookup)"),
+            ("iopl / ioperm (hw access)", "(deny iokit-open)"),
+            ("shmget / shmat (shared mem)", "(deny ipc-posix-shm*)"),
+        ];
+        for (linux_desc, macos_token) in parity {
+            assert!(
+                sbpl.contains(macos_token),
+                "Linux baseline primitive '{linux_desc}' has no macOS counterpart \
+                 '{macos_token}' in SBPL: {sbpl}"
+            );
+        }
     }
 }

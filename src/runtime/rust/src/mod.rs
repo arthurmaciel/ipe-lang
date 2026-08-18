@@ -344,14 +344,19 @@ pub mod server_stream;
 #[cfg(feature = "server")]
 pub use server_stream::*;
 
-// ssrf: reqwest-free SSRF deny-private validators, shared by http_client (reqwest)
-// and ws_client (no reqwest). Present whenever either compiles. Consumers import
-// via the full `super::ssrf::…` path; the fns are `pub(crate)`, so a
-// `pub use ssrf::*;` glob would reexport nothing — intentionally omitted.
-// wasm32: NOT pulled in — the browser fetch/WebSocket substitutes have no SSRF
-// surface of their own (the sandboxed tab, not app code, owns DNS/socket
-// access; see `http_client.rs`'s wasm32 doc comment for the full rationale).
-#[cfg(any(feature = "http_client", feature = "websocket_client"))]
+// ssrf: reqwest-free SSRF deny-private validators. Also enabled when any
+// feature that dials a network host is active — db (postgres dial), http_client
+// (reqwest), websocket_client — so `VettedDial` is available at every outbound
+// network boundary regardless of which transport stack is linked.
+// wasm32: NOT pulled in — the browser sandbox, not app code, owns DNS/socket
+// access; see `http_client.rs`'s wasm32 doc comment for the full rationale.
+#[cfg(any(
+    feature = "http_client",
+    feature = "websocket_client",
+    feature = "db",
+    feature = "db-sqlite",
+    feature = "db-postgres",
+))]
 pub mod ssrf;
 
 // wasm32: `Http.get`/`post`/`request` route to `fetch` (see `http_client.rs`'s
