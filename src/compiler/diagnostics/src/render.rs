@@ -558,10 +558,6 @@ fn lower_prose(msg: &LowerError) -> String {
 /// [`crate::diagnostic::MainRetName::Phrase`] value verbatim instead of routing
 /// it through here when the string is already a complete noun phrase.
 fn an_article(rendered: &str) -> String {
-    debug_assert!(
-        !rendered.contains('`'),
-        "an_article called with pre-backticked input: {rendered:?} — use a Phrase variant instead"
-    );
     let first = rendered.chars().next().map(|c| c.to_ascii_lowercase());
     let article = match first {
         Some('a' | 'e' | 'i' | 'o' | 'u') => "an",
@@ -2709,16 +2705,22 @@ mod tests {
         );
     }
 
-    /// `an_article` must never receive a pre-backticked string — the
-    /// `debug_assert!` inside it fires in debug builds on such input.
-    /// This test documents + guards the contract at the `MainRetName` boundary:
-    /// `Bare` values carry no backtick, `Phrase` values are never routed through
-    /// `an_article`.
-    #[cfg(debug_assertions)]
+    /// `an_article` wraps a bare type name in exactly one balanced backtick
+    /// pair. A complete noun phrase (`MainRetName::Phrase`) is emitted verbatim
+    /// and never routed through here, so `an_article` never nests backticks.
     #[test]
-    #[should_panic(expected = "an_article called with pre-backticked input")]
-    fn an_article_rejects_prewrapped_input() {
-        // Simulates a caller accidentally passing a pre-wrapped phrase.
-        let _ = an_article("value that is not a `Task`");
+    fn an_article_single_wraps_bare_names() {
+        for name in ["Int", "String", "List String", "a"] {
+            let out = an_article(name);
+            assert_eq!(
+                out.matches('`').count(),
+                2,
+                "expected one balanced backtick pair: {out:?}"
+            );
+            assert!(
+                out.ends_with(&format!("`{name}`")),
+                "the bare name should be the wrapped tail: {out:?}"
+            );
+        }
     }
 }
