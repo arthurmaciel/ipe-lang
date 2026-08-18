@@ -111,7 +111,15 @@ pub fn check_client_reachability(
             ModuleClass::Shared
         };
         infos.insert(home.clone(), ModuleInfo { class, cause });
-        edges.insert(home.clone(), deps.into_iter().collect());
+        // Order the neighbour list by resolved dot-string so the BFS reaches
+        // equal-depth siblings in a fixed order — which sibling wins the
+        // shortest-chain tie-break is decided by the module name, not by
+        // `HashSet` iteration order.
+        let mut deps: Vec<Vec<Symbol>> = deps.into_iter().collect();
+        deps.sort_by(|a, b| {
+            module_display_name(a, interner).cmp(&module_display_name(b, interner))
+        });
+        edges.insert(home.clone(), deps);
     }
 
     // BFS from `entry`, tracking the path so far — gives the SHORTEST chain
@@ -407,5 +415,113 @@ mod tests {
         };
 
         check_client_reachability(&linked, &main, &interner).expect("all-shared closure is fine");
+    }
+
+    /// Two shared modules sit at equal BFS depth from the entry, each importing
+    /// a distinct server module one hop deeper, so two shortest chains of equal
+    /// length exist. The reported chain must be the one through the
+    /// lexicographically-FIRST shared module, deterministically — never
+    /// whichever `HashSet` iteration happened to dequeue first. The shared
+    /// modules are declared in the order OPPOSITE to their dot-string sort, so
+    /// a source-order (or hash-order) tie-break would pick the wrong one.
+    #[test]
+    fn equal_depth_sibling_chain_is_string_deterministic() {
+        // Declared order: `Zeta` before `Alpha`; expected chain goes through
+        // `Alpha` (lexicographically first). Rebuild and re-walk many times: a
+        // per-process `RandomState` would otherwise flip the result run to run.
+        for _ in 0..50 {
+            let mut interner = Interner::new();
+            let main = path(&mut interner, "Main");
+            let zeta = path(&mut interner, "Zeta");
+            let alpha = path(&mut interner, "Alpha");
+            let server_z = path(&mut interner, "ServerZ");
+            let server_a = path(&mut interner, "ServerA");
+            let ipe_db = sym(&mut interner, "Ipe.Db");
+            let query = sym(&mut interner, "query");
+            let entry_fn = sym(&mut interner, "main");
+            let call_z = sym(&mut interner, "callZ");
+            let call_a = sym(&mut interner, "callA");
+            let touch_z = sym(&mut interner, "touchZ");
+            let touch_a = sym(&mut interner, "touchA");
+            let load = sym(&mut interner, "load");
+
+            let defs = vec![
+                top_level(
+                    main.clone(),
+                    entry_fn,
+                    Expr_::Tuple(vec![
+                        Located::new(Span::DUMMY, var_top(zeta.clone(), call_z)),
+                        Located::new(Span::DUMMY, var_top(alpha.clone(), call_a)),
+                    ]),
+                ),
+                top_level(
+                    zeta,
+                    call_z,
+                    Expr_::Call(
+                        Box::new(Located::new(
+                            Span::DUMMY,
+                            var_top(server_z.clone(), touch_z),
+                        )),
+                        vec![],
+                    ),
+                ),
+                top_level(
+                    alpha,
+                    call_a,
+                    Expr_::Call(
+                        Box::new(Located::new(
+                            Span::DUMMY,
+                            var_top(server_a.clone(), touch_a),
+                        )),
+                        vec![],
+                    ),
+                ),
+                top_level(
+                    server_z,
+                    touch_z,
+                    Expr_::VarKernel {
+                        id: None,
+                        module: ipe_db,
+                        name: query,
+                    },
+                ),
+                top_level(
+                    server_a,
+                    touch_a,
+                    Expr_::VarKernel {
+                        id: None,
+                        module: ipe_db,
+                        name: load,
+                    },
+                ),
+            ];
+            let linked = Module {
+                imports_unsafe_submodule: false,
+                name: main.clone(),
+                unions: Vec::new(),
+                defs,
+            };
+
+            let err = check_client_reachability(&linked, &main, &interner)
+                .expect_err("both siblings reach a server module");
+            let chain = match err {
+                Diagnostic::Name {
+                    msg: NameError::ServerModuleReachableFromWasmClient { chain },
+                    ..
+                } => chain,
+                other => {
+                    return assert_eq!(
+                        format!("{other:?}"),
+                        "ServerModuleReachableFromWasmClient",
+                        "expected ServerModuleReachableFromWasmClient"
+                    );
+                }
+            };
+            assert_eq!(
+                chain.as_ref(),
+                "Main(client) -> Alpha(shared) -> ServerA(server: imports Ipe.Db.load)",
+                "the shortest chain must go through the lexicographically-first sibling"
+            );
+        }
     }
 }

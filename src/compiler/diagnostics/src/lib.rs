@@ -32,8 +32,8 @@ pub use diagnostic::{
     AliasExpansionKind, AppShape, Applicability, CaseDefect, CmdSubShapeMismatch,
     CodecAutoRejection, Construct, DResult, Diagnostic, Expected, ExpectedSet, ExposingDefect,
     Feature, HOF_KERNEL_RESULT_CLASS, HeaderDefect, HelpLine, Hint, IfDefect, LetDefect,
-    LowerError, ModelLeaf, NameError, ParseError, SealRejection, SpanRole, Suggestion, TokenKind,
-    TyDoc, TypeDeclDefect, TypeError,
+    LowerError, ModelLeaf, NameError, ParseError, SealRejection, SortedNames, SpanRole, Suggestion,
+    TokenKind, TyDoc, TypeDeclDefect, TypeError,
 };
 pub use render::{plain_message, render, render_json, render_ty};
 pub use span::{Located, Span};
@@ -235,15 +235,17 @@ mod tests {
         let d = Diagnostic::Type {
             span: Span::DUMMY,
             msg: TypeError::NonExhaustiveCase {
-                missing: Box::new(["Green".into(), "Blue".into()]),
+                missing: SortedNames::new(["Green".into(), "Blue".into()]),
             },
         };
         assert_eq!(d.code(), IPE_T0010);
+        // The newtype renders the set in canonical string order, so `Blue`
+        // precedes `Green` regardless of the order they were discovered in.
         assert_eq!(
             d.help(),
             vec![
-                HelpLine::MissingConstructor("Green".into()),
                 HelpLine::MissingConstructor("Blue".into()),
+                HelpLine::MissingConstructor("Green".into()),
             ]
         );
     }

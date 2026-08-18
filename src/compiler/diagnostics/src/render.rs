@@ -2032,7 +2032,7 @@ fn ty_fun_lhs(t: &TyDoc) -> String {
 mod tests {
     use super::*;
     use crate::code::{IPE_I0001, IPE_N0001, IPE_P0050, IPE_T0001};
-    use crate::diagnostic::{Diagnostic, Expected, ExpectedSet, ParseError};
+    use crate::diagnostic::{Diagnostic, Expected, ExpectedSet, ParseError, SortedNames};
 
     fn con(name: &str) -> TyDoc {
         TyDoc::Con {
@@ -2315,7 +2315,7 @@ mod tests {
         let missing = Diagnostic::Type {
             span: Span::DUMMY,
             msg: TypeError::NonExhaustiveCase {
-                missing: Box::new(["Green".into()]),
+                missing: SortedNames::new(["Green".into()]),
             },
         };
         assert!(

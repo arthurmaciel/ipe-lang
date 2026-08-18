@@ -6,7 +6,7 @@ use std::rc::Rc;
 
 use ipe_diagnostics::{
     AliasExpansionKind, CmdSubShapeMismatch, CodecAutoRejection, DResult, Diagnostic, Located,
-    NameError, ParseError, SealRejection, Span, TypeError,
+    NameError, ParseError, SealRejection, SortedNames, Span, TypeError,
 };
 use ipe_intern::{Interner, Symbol};
 use ipe_kernels::StdlibKernel;
@@ -3697,7 +3697,7 @@ fn check_and_inject_value(
                 span,
                 msg: NameError::AmbiguousImport {
                     name: name_s,
-                    modules: Box::new([prior_s, dep_s]),
+                    modules: SortedNames::new([prior_s, dep_s]),
                 },
             });
         }
@@ -3751,7 +3751,7 @@ fn inject_ctors_for_type(
                         span,
                         msg: NameError::AmbiguousImport {
                             name: name_s,
-                            modules: Box::new([prior_s, dep_s]),
+                            modules: SortedNames::new([prior_s, dep_s]),
                         },
                     });
                 }
@@ -4331,20 +4331,17 @@ fn canonicalise_pattern(
                 if this != reference {
                     // The offending names are those bound by some alternative but
                     // not all — the symmetric difference from the reference set.
-                    let mut differing = reference
-                        .symmetric_difference(&this)
-                        .copied()
-                        .collect::<Vec<_>>();
-                    differing.sort_unstable();
-                    let mut rendered = Vec::with_capacity(differing.len());
-                    for sym in differing {
-                        rendered.push(name_str(interner, sym)?);
-                    }
+                    // Resolve each to its interner string, then let the diagnostic
+                    // newtype impose the canonical (string) order.
+                    let names = SortedNames::try_new(
+                        reference
+                            .symmetric_difference(&this)
+                            .copied()
+                            .map(|sym| name_str(interner, sym)),
+                    )?;
                     return Err(Diagnostic::Type {
                         span: alt.span,
-                        msg: TypeError::OrPatternBindingMismatch {
-                            names: rendered.into_boxed_slice(),
-                        },
+                        msg: TypeError::OrPatternBindingMismatch { names },
                     });
                 }
             }
@@ -4624,10 +4621,11 @@ fn resolve_wildcard_var(
             return Err(value_not_found(name, span, env, interner)?);
         }
         // Two or more distinct modules expose this name unqualified → ambiguous.
-        let modules: Box<[Box<str>]> = origins
-            .values()
-            .map(|o| path_to_dot_string(interner, &o.dep_path))
-            .collect();
+        let modules = SortedNames::new(
+            origins
+                .values()
+                .map(|o| path_to_dot_string(interner, &o.dep_path)),
+        );
         return Err(Diagnostic::Name {
             span,
             msg: NameError::AmbiguousImport {

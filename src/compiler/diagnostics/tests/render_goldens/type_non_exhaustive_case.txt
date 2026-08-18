@@ -7,7 +7,7 @@ This `case` doesn't cover every possibility yet.
 6 |     case Red of
   |  ^^^^^^^^ some possibilities aren't handled
   |
-  = help: add a branch for `Green`
   = help: add a branch for `Blue`
+  = help: add a branch for `Green`
 
 IPE-T0010 · run `ipe explain IPE-T0010`

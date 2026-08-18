@@ -33,6 +33,54 @@ use crate::span::Span;
 // Plain-old-data payload enums
 // ===========================================================================
 
+/// A set-valued list of names/patterns rendered in a diagnostic.
+///
+/// The elements are held in a canonical order that depends only on the strings
+/// themselves — never on hash-map iteration order or interner-allocation order.
+/// The only way to build one sorts and de-duplicates its input, so an unsorted
+/// set-diagnostic is not representable and the rendered bytes are stable for a
+/// given set, regardless of the order the producer discovered the elements.
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub struct SortedNames(Box<[Box<str>]>);
+
+impl SortedNames {
+    /// Collect an iterator of already-resolved names into canonical
+    /// (lexicographic, de-duplicated) order.
+    pub fn new(names: impl IntoIterator<Item = Box<str>>) -> Self {
+        let mut names: Vec<Box<str>> = names.into_iter().collect();
+        names.sort();
+        names.dedup();
+        Self(names.into_boxed_slice())
+    }
+
+    /// Collect a fallible iterator of names, short-circuiting on the first
+    /// error, then canonicalise the successes. For producers that resolve each
+    /// element through a fallible interner lookup.
+    ///
+    /// # Errors
+    /// The first `Err` yielded by `names`.
+    pub fn try_new<E>(names: impl IntoIterator<Item = Result<Box<str>, E>>) -> Result<Self, E> {
+        let mut collected: Vec<Box<str>> = Vec::new();
+        for name in names {
+            collected.push(name?);
+        }
+        Ok(Self::new(collected))
+    }
+
+    #[must_use]
+    pub fn as_slice(&self) -> &[Box<str>] {
+        &self.0
+    }
+}
+
+impl core::ops::Deref for SortedNames {
+    type Target = [Box<str>];
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
 /// A lexical token category, with no payload — the structural shape a parser
 /// reports as "found" without carrying the lexeme.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
@@ -432,7 +480,7 @@ pub enum NameError {
     /// `modules` lists the origins. [IPE-N0024]
     AmbiguousImport {
         name: Box<str>,
-        modules: Box<[Box<str>]>,
+        modules: SortedNames,
     },
     /// A local module's name starts with `Ipê` or `Std`, which are reserved for
     /// the standard library. [IPE-N0025]
@@ -719,7 +767,7 @@ pub enum TypeError {
         signature: Box<TyDoc>,
     },
     /// A case does not cover every constructor; `missing` lists them. [IPE-T0010]
-    NonExhaustiveCase { missing: Box<[Box<str>]> },
+    NonExhaustiveCase { missing: SortedNames },
     /// Two arms cover the same constructor (warning). [IPE-T0011]
     RedundantCaseBranch { constructor: Box<str> },
     /// `Web.app` carries a non-empty `routes` list but the Model type has no
@@ -776,17 +824,17 @@ pub enum TypeError {
     /// explicitly so that adding a new variant forces an update at this match
     /// site instead of falling through silently. (Error.) `Bool`, `List`, and
     /// open domains are excluded by the pass and never produce this diagnostic.
-    /// `constructors` names each absorbed variant in declaration order. [IPE-T0018]
-    WildcardCoversKnownConstructors { constructors: Box<[Box<str>]> },
+    /// `constructors` names each absorbed variant. [IPE-T0018]
+    WildcardCoversKnownConstructors { constructors: SortedNames },
     /// An **or-pattern** `p1 | p2 | …` whose alternatives do not all bind the
     /// **same set of variable names**. The arm body reads a binder without
     /// knowing which alternative matched, so every name it might read must be
     /// bound on every alternative at one type. `names` lists the variables bound
-    /// by some but not all alternatives (the name-set difference), in sorted
-    /// order for a deterministic message. Checked fail-fast in canon, before the
+    /// by some but not all alternatives (the name-set difference). Checked
+    /// fail-fast in canon, before the
     /// solver runs; the same-name / different-type half rides the standard
     /// [`TypeError::TypeMismatch`] path instead. [IPE-T0019]
-    OrPatternBindingMismatch { names: Box<[Box<str>]> },
+    OrPatternBindingMismatch { names: SortedNames },
     /// A `Task` type constructor applied to a number of type arguments other than
     /// 1 (the internal unary form `Task a`) or 2 (the canonical user annotation
     /// `Task Error a`). Reachable from source because canonicalisation validates
@@ -1897,5 +1945,68 @@ fn did_you_mean(suggestions: &[Box<str>], span: Span) -> Vec<HelpLine> {
             .iter()
             .map(|s| HelpLine::DidYouMean(s.clone()))
             .collect(),
+    }
+}
+
+#[cfg(test)]
+mod sorted_names_tests {
+    use super::SortedNames;
+
+    fn boxed(items: &[&str]) -> Vec<Box<str>> {
+        items.iter().map(|s| (*s).into()).collect()
+    }
+
+    #[test]
+    fn canonicalises_to_string_order() {
+        let names = SortedNames::new(boxed(&["zebra", "alpha", "mango"]));
+        let rendered: Vec<&str> = names.iter().map(AsRef::as_ref).collect();
+        assert_eq!(rendered, vec!["alpha", "mango", "zebra"]);
+    }
+
+    #[test]
+    fn collapses_duplicates() {
+        let names = SortedNames::new(boxed(&["dup", "dup", "one", "one", "two"]));
+        let rendered: Vec<&str> = names.iter().map(AsRef::as_ref).collect();
+        assert_eq!(rendered, vec!["dup", "one", "two"]);
+    }
+
+    #[test]
+    fn output_is_independent_of_input_order() {
+        // Every permutation of one set must produce byte-identical output —
+        // this encodes that no representable value is unsorted, so discovery
+        // order (hash-map iteration, interner id) can never leak into a message.
+        let base = ["gamma", "alpha", "beta"];
+        let permutations = [
+            ["gamma", "alpha", "beta"],
+            ["gamma", "beta", "alpha"],
+            ["alpha", "gamma", "beta"],
+            ["alpha", "beta", "gamma"],
+            ["beta", "alpha", "gamma"],
+            ["beta", "gamma", "alpha"],
+        ];
+        let canonical = SortedNames::new(boxed(&base));
+        for perm in permutations {
+            assert_eq!(
+                SortedNames::new(boxed(&perm)),
+                canonical,
+                "permutation {perm:?} must canonicalise identically"
+            );
+        }
+    }
+
+    #[test]
+    fn try_new_short_circuits_on_error() {
+        let result: Result<SortedNames, &str> =
+            SortedNames::try_new([Ok("ok".into()), Err("boom"), Ok("late".into())]);
+        assert!(matches!(result, Err("boom")));
+    }
+
+    #[test]
+    fn try_new_canonicalises_successes() {
+        let result: Result<SortedNames, ()> =
+            SortedNames::try_new([Ok("z".into()), Ok("a".into()), Ok("a".into())]);
+        let names = result.expect("try_new over all-Ok must succeed");
+        let rendered: Vec<&str> = names.iter().map(AsRef::as_ref).collect();
+        assert_eq!(rendered, vec!["a", "z"]);
     }
 }
