@@ -648,6 +648,42 @@ pub fn run_jail_argv(
     host_env: &dyn Fn(&str) -> Option<OsString>,
     payload: &[OsString],
 ) -> Vec<OsString> {
+    run_jail_argv_with_delivery(
+        tools,
+        profile,
+        scoped_tmp,
+        working_tree,
+        extra_ro_binds,
+        seccomp_fd,
+        None,
+        host_env,
+        payload,
+    )
+}
+
+/// [`run_jail_argv`] plus optional in-jail materialisation of the app binary
+/// from an inherited descriptor.
+///
+/// When `app_delivery` is `Some((fd, dest))`, a `--perms 0700 --file <fd>
+/// <dest>` pair is emitted AFTER every mount op (so `dest`'s parent tmpfs/bind
+/// already exists) and BEFORE the payload separator. bwrap reads the app bytes
+/// from the inherited (sealed, non-cloexec) `fd` and writes an owner-execute
+/// copy at `dest` inside the sandbox — the delivered bytes are exactly the
+/// sealed bytes the caller verified, with no host path lookup to race. The
+/// caller then runs `dest` as the payload.
+#[allow(clippy::too_many_arguments)]
+#[must_use]
+pub fn run_jail_argv_with_delivery(
+    tools: &RunJailTools,
+    profile: &SandboxProfile,
+    scoped_tmp: &Path,
+    working_tree: &Path,
+    extra_ro_binds: &[PathBuf],
+    seccomp_fd: Option<i32>,
+    app_delivery: Option<(i32, &Path)>,
+    host_env: &dyn Fn(&str) -> Option<OsString>,
+    payload: &[OsString],
+) -> Vec<OsString> {
     let mut argv: Vec<OsString> = Vec::new();
 
     // Optional wall clock (only when the profile sets one AND `timeout` is
@@ -757,6 +793,20 @@ pub fn run_jail_argv(
             argv.push(name.into());
             argv.push(value);
         }
+    }
+
+    // Materialise the app inside the jail from the inherited sealed descriptor,
+    // AFTER all mounts (so the destination's parent exists) and BEFORE the
+    // payload. `--perms 0700` applies to the `--file` copy that follows it,
+    // making the delivered binary owner-executable. bwrap reads the bytes from
+    // `fd` (inherited, non-cloexec, sealed) — the delivered file cannot differ
+    // from the verified bytes.
+    if let Some((fd, dest)) = app_delivery {
+        argv.push("--perms".into());
+        argv.push("0700".into());
+        argv.push("--file".into());
+        argv.push(fd.to_string().into());
+        argv.push(dest.into());
     }
 
     // Resource caps via prlimit, then the payload with NO shell. The wall clock
@@ -1266,6 +1316,94 @@ pub fn exec_in_run_jail(
     })
 }
 
+/// Exec an embedded app held only in a sealed anonymous descriptor.
+///
+/// Delivering the app into the jail from that descriptor rather than from a host
+/// path closes the verify/exec identity gap for `ipe-wrapper` embed mode.
+///
+/// The wrapper writes the embedded bytes to a sealed memfd
+/// ([`write_sealed_app_memfd`]), verifies the capability floor by reading the
+/// SEALED fd, then calls this. bwrap inherits the (non-cloexec, sealed) fd
+/// across the process replacement and materialises the app inside the jail via
+/// `--file` at a fixed sandbox path — so the bytes executed are provably the
+/// sealed bytes that were verified; a same-uid attacker has no host path to
+/// pre-seed or swap.
+///
+/// # Errors
+///
+/// Any [`RunJailDefect`]; on success (Linux) it does not return.
+#[cfg(all(
+    target_os = "linux",
+    any(target_arch = "x86_64", target_arch = "aarch64")
+))]
+pub fn exec_embedded_in_run_jail(
+    tools: &RunJailTools,
+    profile: &SandboxProfile,
+    scoped_tmp: &Path,
+    working_tree: &Path,
+    app: &SealedApp,
+    app_args: &[OsString],
+) -> Result<std::convert::Infallible, RunJailDefect> {
+    use std::os::unix::process::CommandExt as _;
+
+    let Some(program) = seccomp::subprocess_deny_program(profile.subprocess) else {
+        return Err(RunJailDefect::UnsupportedPlatform {
+            reason: "no seccomp filter can be compiled for this architecture",
+        });
+    };
+    let bytes = seccomp::program_bytes(&program);
+    let seccomp_fd = write_seccomp_memfd(&bytes)?;
+    let app_fd = app.as_raw_fd();
+
+    // The in-jail path the app is materialised at. It sits under `scoped_tmp`,
+    // the one always-writable bind, so bwrap can create it after the mounts.
+    let dest = scoped_tmp.join("ipe-app");
+
+    let mut payload: Vec<OsString> = Vec::with_capacity(app_args.len() + 1);
+    payload.push(dest.as_os_str().to_owned());
+    payload.extend(app_args.iter().cloned());
+
+    let host_env = |k: &str| std::env::var_os(k);
+    let argv = run_jail_argv_with_delivery(
+        tools,
+        profile,
+        scoped_tmp,
+        working_tree,
+        &[],
+        Some(seccomp_fd),
+        Some((app_fd, &dest)),
+        &host_env,
+        &payload,
+    );
+
+    let (program_path, rest) = argv.split_first().ok_or_else(|| RunJailDefect::Spawn {
+        detail: "empty jail argv".to_owned(),
+    })?;
+    let mut cmd = std::process::Command::new(program_path);
+    cmd.args(rest);
+    // Both the seccomp filter fd and the sealed app fd MUST survive the exec so
+    // bwrap can read them; clear their close-on-exec flags right before exec.
+    let seccomp_fd_move = seccomp_fd;
+    let app_fd_move = app_fd;
+    // SAFETY: `pre_exec` runs in the child between fork and exec (here it is the
+    // process-replacing `exec`, so there is no fork — the closure runs in this
+    // process just before execve). `clear_cloexec` performs only
+    // async-signal-safe `fcntl` calls on owned fds; a failure aborts the exec,
+    // so a jail that could not un-cloexec a required fd refuses rather than
+    // running the app without its filter or without a delivered binary.
+    unsafe {
+        cmd.pre_exec(move || {
+            clear_cloexec(seccomp_fd_move)?;
+            clear_cloexec(app_fd_move)?;
+            Ok(())
+        });
+    }
+    let err = cmd.exec();
+    Err(RunJailDefect::Spawn {
+        detail: err.to_string(),
+    })
+}
+
 /// Run the emitted `app` binary inside the macOS `sandbox-exec` Seatbelt jail
 /// described by `profile`, replacing the current process on success (Unix
 /// `exec`).
@@ -1347,6 +1485,119 @@ pub fn exec_in_run_jail(
     Err(RunJailDefect::Spawn {
         detail: err.to_string(),
     })
+}
+
+/// A verified embedded app binary held in memory.
+///
+/// macOS has no `memfd_create` and `sandbox-exec` cannot exec an inherited
+/// descriptor, so the sealed-fd delivery the Linux arm uses is unavailable. The
+/// bytes are held here after the single verification read; the exec arm writes
+/// them ONCE to an exclusively-created (`O_EXCL`, mode 0700, unpredictably
+/// named) file inside `scoped_tmp` and execs that. `scoped_tmp` is itself an
+/// exclusively-created, unpredictable, owner-only directory, so no other path
+/// exists to pre-seed or swap between the write and the exec.
+#[cfg(target_os = "macos")]
+pub struct SealedApp {
+    bytes: Vec<u8>,
+}
+
+#[cfg(target_os = "macos")]
+impl SealedApp {
+    /// Read the app bytes for the capability-floor verification scan.
+    #[must_use]
+    pub fn read_sealed_bytes(&self) -> Result<Vec<u8>, RunJailDefect> {
+        Ok(self.bytes.clone())
+    }
+}
+
+/// Hold `bytes` for a later exclusive write-then-exec inside the jail scratch.
+///
+/// The Linux counterpart seals a memfd; macOS keeps the verified bytes in
+/// memory because it has no sealing memfd and cannot fd-exec through
+/// `sandbox-exec`.
+///
+/// # Errors
+///
+/// Infallible in practice; returns `Result` for arm-parity with the Linux
+/// [`write_sealed_app_memfd`].
+#[cfg(target_os = "macos")]
+pub fn write_sealed_app_memfd(bytes: &[u8]) -> Result<SealedApp, RunJailDefect> {
+    Ok(SealedApp {
+        bytes: bytes.to_vec(),
+    })
+}
+
+/// macOS embed-mode exec: write the verified bytes to an exclusively-created
+/// file inside the exclusive `scoped_tmp` scratch and exec it under
+/// `sandbox-exec`.
+///
+/// `sandbox-exec` cannot exec an inherited descriptor, so the same-inode
+/// guarantee is delivered structurally instead: `scoped_tmp` is an
+/// exclusively-created, unpredictable, owner-only directory, and the app file is
+/// created with `O_EXCL` under a random name, so between the write and the exec
+/// there is no predictable path an attacker can pre-seed or swap.
+///
+/// # Errors
+///
+/// Any [`RunJailDefect`]; on success it does not return.
+#[cfg(target_os = "macos")]
+pub fn exec_embedded_in_run_jail(
+    tools: &RunJailTools,
+    profile: &SandboxProfile,
+    scoped_tmp: &Path,
+    working_tree: &Path,
+    app: &SealedApp,
+    app_args: &[OsString],
+) -> Result<std::convert::Infallible, RunJailDefect> {
+    use std::io::Write as _;
+    use std::os::unix::fs::OpenOptionsExt as _;
+
+    // Exclusive-create the app file under the exclusive scratch dir. A random
+    // name plus `create_new` (O_EXCL) means a pre-seeded entry fails rather than
+    // being followed.
+    let mut entropy = [0u8; 16];
+    if std::fs::File::open("/dev/urandom")
+        .and_then(|mut f| std::io::Read::read_exact(&mut f, &mut entropy))
+        .is_err()
+    {
+        return Err(RunJailDefect::Spawn {
+            detail: "could not read OS entropy for the embedded app path".to_owned(),
+        });
+    }
+    let mut hex = String::with_capacity(32);
+    for b in entropy {
+        use std::fmt::Write as _;
+        let _ = write!(hex, "{b:02x}");
+    }
+    let app_path = scoped_tmp.join(format!("ipe-app-{hex}"));
+    let mut file = match std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .mode(0o700)
+        .open(&app_path)
+    {
+        Ok(f) => f,
+        Err(e) => {
+            return Err(RunJailDefect::Spawn {
+                detail: format!("could not create the embedded app file: {e}"),
+            });
+        }
+    };
+    if let Err(e) = file.write_all(&app.bytes) {
+        return Err(RunJailDefect::Spawn {
+            detail: format!("could not write the embedded app file: {e}"),
+        });
+    }
+    drop(file);
+
+    exec_in_run_jail(
+        tools,
+        profile,
+        scoped_tmp,
+        working_tree,
+        &app_path,
+        app_args,
+    )
 }
 
 /// Run the emitted `app` binary inside the Windows run jail described by
@@ -1648,6 +1899,83 @@ pub fn exec_in_run_jail(
     })
 }
 
+/// Embedded-app holder on platforms without the sealed-fd / exclusive-scratch
+/// delivery path (Windows and unsupported targets). Embed mode is a Unix
+/// deploy feature; this arm keeps the wrapper compiling everywhere and refuses
+/// at run time rather than running unconfined.
+#[cfg(not(any(
+    all(
+        target_os = "linux",
+        any(target_arch = "x86_64", target_arch = "aarch64")
+    ),
+    target_os = "macos"
+)))]
+pub struct SealedApp {
+    _bytes: Vec<u8>,
+}
+
+#[cfg(not(any(
+    all(
+        target_os = "linux",
+        any(target_arch = "x86_64", target_arch = "aarch64")
+    ),
+    target_os = "macos"
+)))]
+impl SealedApp {
+    /// Return the held bytes for the capability-floor verification scan.
+    ///
+    /// # Errors
+    ///
+    /// Never; returns `Result` for arm-parity with the Linux variant.
+    pub fn read_sealed_bytes(&self) -> Result<Vec<u8>, RunJailDefect> {
+        Ok(self._bytes.clone())
+    }
+}
+
+/// Hold the embedded app bytes on a platform without sealed-fd delivery.
+///
+/// # Errors
+///
+/// Never; returns `Result` for arm-parity with the Linux variant.
+#[cfg(not(any(
+    all(
+        target_os = "linux",
+        any(target_arch = "x86_64", target_arch = "aarch64")
+    ),
+    target_os = "macos"
+)))]
+pub fn write_sealed_app_memfd(bytes: &[u8]) -> Result<SealedApp, RunJailDefect> {
+    Ok(SealedApp {
+        _bytes: bytes.to_vec(),
+    })
+}
+
+/// Embedded exec is a documented refuse-gap on platforms without a run jail.
+///
+/// # Errors
+///
+/// Always [`RunJailDefect::UnsupportedPlatform`].
+#[cfg(not(any(
+    all(
+        target_os = "linux",
+        any(target_arch = "x86_64", target_arch = "aarch64")
+    ),
+    target_os = "macos"
+)))]
+#[allow(clippy::missing_const_for_fn)]
+pub fn exec_embedded_in_run_jail(
+    _tools: &RunJailTools,
+    _profile: &SandboxProfile,
+    _scoped_tmp: &Path,
+    _working_tree: &Path,
+    _app: &SealedApp,
+    _app_args: &[OsString],
+) -> Result<std::convert::Infallible, RunJailDefect> {
+    Err(RunJailDefect::UnsupportedPlatform {
+        reason: "runtime jail is compiled only for Linux (x86_64/aarch64), macOS, and Windows",
+    })
+}
+
 // The two `fcntl` operations the pre_exec hook needs, wrapped so the raw
 // `extern "C"` surface is contained. `FD_CLOEXEC` is the close-on-exec flag.
 #[cfg(all(
@@ -1664,8 +1992,45 @@ unsafe extern "C" {
     fn fcntl(fd: i32, cmd: i32, ...) -> i32;
     fn memfd_create(name: *const core::ffi::c_char, flags: core::ffi::c_uint) -> i32;
     fn write(fd: i32, buf: *const core::ffi::c_void, count: usize) -> isize;
+    fn read(fd: i32, buf: *mut core::ffi::c_void, count: usize) -> isize;
     fn lseek(fd: i32, offset: i64, whence: i32) -> i64;
+    fn close(fd: i32) -> i32;
 }
+
+// memfd sealing constants (`<linux/memfd.h>` / `<linux/fcntl.h>`). A sealing
+// memfd is created with `MFD_ALLOW_SEALING`; `F_ADD_SEALS` then applies the
+// seal set. `F_SEAL_SEAL` forbids further seals — after it the byte content and
+// size are frozen and cannot be re-opened writable by anyone holding the fd.
+#[cfg(all(
+    target_os = "linux",
+    any(target_arch = "x86_64", target_arch = "aarch64")
+))]
+const MFD_ALLOW_SEALING: core::ffi::c_uint = 0x0002;
+#[cfg(all(
+    target_os = "linux",
+    any(target_arch = "x86_64", target_arch = "aarch64")
+))]
+const F_ADD_SEALS: i32 = 1033;
+#[cfg(all(
+    target_os = "linux",
+    any(target_arch = "x86_64", target_arch = "aarch64")
+))]
+const F_SEAL_SEAL: i32 = 0x0001;
+#[cfg(all(
+    target_os = "linux",
+    any(target_arch = "x86_64", target_arch = "aarch64")
+))]
+const F_SEAL_SHRINK: i32 = 0x0002;
+#[cfg(all(
+    target_os = "linux",
+    any(target_arch = "x86_64", target_arch = "aarch64")
+))]
+const F_SEAL_GROW: i32 = 0x0004;
+#[cfg(all(
+    target_os = "linux",
+    any(target_arch = "x86_64", target_arch = "aarch64")
+))]
+const F_SEAL_WRITE: i32 = 0x0008;
 
 #[cfg(all(
     target_os = "linux",
@@ -1778,6 +2143,182 @@ pub(crate) fn write_seccomp_memfd(bytes: &[u8]) -> Result<i32, RunJailDefect> {
         )));
     }
     Ok(fd)
+}
+
+/// A sealed anonymous file holding the embedded app binary, owned by its raw
+/// descriptor.  The descriptor is closed on drop.
+///
+/// The bytes are frozen by `F_SEAL_WRITE | F_SEAL_SHRINK | F_SEAL_GROW |
+/// F_SEAL_SEAL`, so what a caller verifies by reading the fd is exactly what the
+/// jail delivers from the same fd — there is no on-disk name to race, and no
+/// writable re-open is possible even for a process holding the fd.
+#[cfg(all(
+    target_os = "linux",
+    any(target_arch = "x86_64", target_arch = "aarch64")
+))]
+pub struct SealedApp {
+    fd: i32,
+}
+
+#[cfg(all(
+    target_os = "linux",
+    any(target_arch = "x86_64", target_arch = "aarch64")
+))]
+impl SealedApp {
+    /// The raw descriptor of the sealed anonymous file.
+    #[must_use]
+    pub const fn as_raw_fd(&self) -> i32 {
+        self.fd
+    }
+
+    /// Read the full sealed contents by reading through the fd.
+    ///
+    /// Reads from offset 0 without disturbing the caller's later use of the fd
+    /// (bwrap re-reads it from 0 itself via `--file`, but this rewinds after to
+    /// be safe).  The bytes returned are the sealed bytes — the same inode the
+    /// jail will deliver.
+    ///
+    /// # Errors
+    ///
+    /// [`RunJailDefect::Spawn`] on any seek or read failure.
+    pub fn read_sealed_bytes(&self) -> Result<Vec<u8>, RunJailDefect> {
+        let spawn = |detail: String| RunJailDefect::Spawn { detail };
+        // SAFETY: lseek to absolute offset 0 (SEEK_SET = 0) on the owned fd.
+        if unsafe { lseek(self.fd, 0, 0) } < 0 {
+            return Err(spawn(format!(
+                "rewinding the sealed app memfd failed: {}",
+                std::io::Error::last_os_error()
+            )));
+        }
+        let mut out: Vec<u8> = Vec::new();
+        // Heap-allocated read buffer (a large on-stack array is a stack-size
+        // hazard).
+        let mut chunk = vec![0u8; 65536];
+        loop {
+            // SAFETY: `read` writes at most `chunk.len()` bytes into the owned,
+            // fully-initialised `chunk` buffer; the pointer and length describe
+            // exactly that buffer.
+            let n = unsafe {
+                read(
+                    self.fd,
+                    chunk.as_mut_ptr().cast::<core::ffi::c_void>(),
+                    chunk.len(),
+                )
+            };
+            if n < 0 {
+                return Err(spawn(format!(
+                    "reading the sealed app memfd failed: {}",
+                    std::io::Error::last_os_error()
+                )));
+            }
+            if n == 0 {
+                break;
+            }
+            let read_len = usize::try_from(n).unwrap_or(0);
+            if let Some(slice) = chunk.get(..read_len) {
+                out.extend_from_slice(slice);
+            }
+        }
+        // Rewind so a subsequent consumer reads from the start.
+        // SAFETY: lseek to absolute offset 0 on the owned fd.
+        if unsafe { lseek(self.fd, 0, 0) } < 0 {
+            return Err(spawn(format!(
+                "rewinding the sealed app memfd after read failed: {}",
+                std::io::Error::last_os_error()
+            )));
+        }
+        Ok(out)
+    }
+}
+
+#[cfg(all(
+    target_os = "linux",
+    any(target_arch = "x86_64", target_arch = "aarch64")
+))]
+impl Drop for SealedApp {
+    fn drop(&mut self) {
+        // SAFETY: `close` on the owned fd; after this the descriptor is not used.
+        unsafe {
+            close(self.fd);
+        }
+    }
+}
+
+/// Write `bytes` to an anonymous, sealing-capable in-memory file, seal it
+/// against any further write/resize, and return the owned [`SealedApp`].
+///
+/// The returned fd is NON-close-on-exec so it is inherited across the
+/// wrapper→bwrap process replacement, letting bwrap materialise the app inside
+/// the jail from the same sealed inode via `--file`.  Sealing (`F_SEAL_WRITE |
+/// F_SEAL_SHRINK | F_SEAL_GROW | F_SEAL_SEAL`) makes the verified-then-executed
+/// bytes provably identical: no path lookup, no writable re-open.
+///
+/// # Errors
+///
+/// [`RunJailDefect::Spawn`] on any syscall failure.
+#[cfg(all(
+    target_os = "linux",
+    any(target_arch = "x86_64", target_arch = "aarch64")
+))]
+pub fn write_sealed_app_memfd(bytes: &[u8]) -> Result<SealedApp, RunJailDefect> {
+    let spawn = |detail: String| RunJailDefect::Spawn { detail };
+    let name = c"ipe-embedded-app";
+    // SAFETY: `memfd_create` with a valid NUL-terminated name and the
+    // `MFD_ALLOW_SEALING` flag returns a new fd or -1; no memory is shared.
+    // `MFD_CLOEXEC` is deliberately NOT set: the fd must survive the exec into
+    // bwrap so bwrap can read the app from it.
+    let fd = unsafe { memfd_create(name.as_ptr(), MFD_ALLOW_SEALING) };
+    if fd < 0 {
+        return Err(spawn(format!(
+            "memfd_create for the embedded app failed: {}",
+            std::io::Error::last_os_error()
+        )));
+    }
+    let sealed = SealedApp { fd };
+    // Write the whole binary. A short write is a hard error — a truncated app
+    // would be a corrupt executable, so refuse.
+    let mut written: usize = 0;
+    while written < bytes.len() {
+        let Some(remaining) = bytes.get(written..) else {
+            break;
+        };
+        // SAFETY: `write` reads `remaining.len()` bytes from a valid slice
+        // pointer into the owned memfd; the slice outlives the call.
+        let n = unsafe {
+            write(
+                fd,
+                remaining.as_ptr().cast::<core::ffi::c_void>(),
+                remaining.len(),
+            )
+        };
+        if n <= 0 {
+            return Err(spawn(format!(
+                "writing the embedded app to the memfd failed: {}",
+                std::io::Error::last_os_error()
+            )));
+        }
+        written += usize::try_from(n).unwrap_or(0);
+    }
+    // Seal against write, shrink, grow, and further sealing. After this the
+    // byte content and size are frozen for the lifetime of the fd.
+    let seals = F_SEAL_WRITE | F_SEAL_SHRINK | F_SEAL_GROW | F_SEAL_SEAL;
+    // SAFETY: fcntl(F_ADD_SEALS, seals) on the owned sealing-capable memfd; the
+    // variadic arg is a plain int as the ABI requires.
+    if unsafe { fcntl(fd, F_ADD_SEALS, seals) } < 0 {
+        return Err(spawn(format!(
+            "sealing the embedded app memfd failed: {}",
+            std::io::Error::last_os_error()
+        )));
+    }
+    // Rewind so the first reader (verification scan) starts at the beginning.
+    // SAFETY: lseek to absolute offset 0 (SEEK_SET = 0) on the owned fd.
+    if unsafe { lseek(fd, 0, 0) } < 0 {
+        return Err(spawn(format!(
+            "rewinding the embedded app memfd failed: {}",
+            std::io::Error::last_os_error()
+        )));
+    }
+    Ok(sealed)
 }
 
 /// The marker that begins the capability-floor line embedded in the binary's
@@ -3158,6 +3699,61 @@ mod tests {
             "{joined}"
         );
         assert!(!joined.contains("sh -c"), "{joined}");
+    }
+
+    #[test]
+    fn app_delivery_emits_perms_file_after_mounts_before_payload() {
+        let no_env = |_: &str| None;
+        let dest = Path::new("/work/tmp-1/ipe-app");
+        let argv: Vec<String> = run_jail_argv_with_delivery(
+            &tools(),
+            &SandboxProfile::maximally_isolated(),
+            Path::new("/work/tmp-1"),
+            Path::new("/work/tree"),
+            &[],
+            Some(10),
+            Some((7, dest)),
+            &no_env,
+            &[OsString::from("/work/tmp-1/ipe-app")],
+        )
+        .into_iter()
+        .map(|a| a.to_string_lossy().into_owned())
+        .collect();
+        let joined = argv.join(" ");
+        // The sealed-fd delivery pair: owner-execute perms then a copy from the
+        // inherited fd to the in-jail app path.
+        assert!(
+            joined.contains("--perms 0700 --file 7 /work/tmp-1/ipe-app"),
+            "delivery pair missing: {joined}"
+        );
+        // It must come AFTER the writable bind (so the dest parent exists) and
+        // BEFORE the `-- /usr/bin/prlimit` payload separator.
+        let bind = joined
+            .find("--bind /work/tmp-1 /work/tmp-1")
+            .expect("scratch bind");
+        let file = joined.find("--file 7").expect("delivery");
+        let payload = joined.find("-- /usr/bin/prlimit").expect("payload sep");
+        assert!(
+            file > bind,
+            "delivery must follow the scratch bind: {joined}"
+        );
+        assert!(
+            file < payload,
+            "delivery must precede the payload: {joined}"
+        );
+        // The payload execs the delivered in-jail path, not any host path.
+        assert!(
+            joined.ends_with("-- /work/tmp-1/ipe-app"),
+            "payload must exec the delivered path: {joined}"
+        );
+    }
+
+    #[test]
+    fn no_delivery_emits_no_file_op() {
+        // The default `run_jail_argv` (no delivery) must not emit `--file`.
+        let joined = rendered(&SandboxProfile::maximally_isolated(), Some(10)).join(" ");
+        assert!(!joined.contains("--file"), "unexpected --file: {joined}");
+        assert!(!joined.contains("--perms"), "unexpected --perms: {joined}");
     }
 
     #[test]

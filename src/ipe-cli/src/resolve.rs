@@ -463,15 +463,11 @@ mod tests {
     use std::path::{Path, PathBuf};
     use std::process::Command;
 
-    fn temp_dir(tag: &str) -> PathBuf {
-        let dir = std::env::temp_dir().join(format!(
-            "ipe-resolve-test-{tag}-{}-{:?}",
-            std::process::id(),
-            std::thread::current().id()
-        ));
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).expect("create temp dir");
-        dir
+    fn temp_dir(_tag: &str) -> PathBuf {
+        let sd = crate::scratch::ScratchDir::new("ipe-resolve-test").expect("scratch dir");
+        let p = sd.path().to_path_buf();
+        std::mem::forget(sd); // caller's explicit remove_dir_all handles cleanup
+        p
     }
 
     fn scaffold_project(root: &Path) {

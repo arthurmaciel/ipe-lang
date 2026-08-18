@@ -51,6 +51,16 @@ use ipe_sandbox::run_jail::RunJailTools;
 
 use crate::CliError;
 use crate::audit::{Check, Rejection};
+#[cfg(any(
+    all(
+        target_os = "linux",
+        any(target_arch = "x86_64", target_arch = "aarch64")
+    ),
+    target_os = "macos",
+    target_os = "freebsd",
+    target_os = "windows"
+))]
+use crate::scratch::ScratchDir;
 
 /// The platform whose jail is wired and proven on THIS host, so Tier-2 may
 /// certify on it.
@@ -916,7 +926,7 @@ fn native_tier2_on_platform(audit: &NativeAudit) -> Result<Tier2Outcome, CliErro
 
     // 2. Emit the link-reachability probe crate into the emitted app crate and
     //    build its `cargo build` argv (the untrusted, wrapper-owned exercise).
-    let scratch = probe_scratch_dir(audit.root);
+    let scratch = probe_scratch_dir(audit.root)?;
     let build_argv = emit_probe_and_build_argv(audit.emitted_dir, &link_paths, &scratch)?;
     let Some(exercise) = ProbeExercise::real_build(build_argv) else {
         // A non-empty survivor set always yields a non-empty build argv, so this
@@ -1028,8 +1038,9 @@ fn native_tier2_on_platform(_audit: &NativeAudit) -> Result<Tier2Outcome, CliErr
     }))
 }
 
-/// The Tier-2 probe scratch directory under the OS temp root, keyed by the
-/// package root and this process so concurrent audits never collide.
+/// Create and return an exclusive Tier-2 probe scratch directory under the OS
+/// temp root. The name is unpredictable (128-bit OS entropy) so a same-user
+/// attacker cannot pre-seed or symlink it.
 #[cfg(any(
     all(
         target_os = "linux",
@@ -1039,7 +1050,7 @@ fn native_tier2_on_platform(_audit: &NativeAudit) -> Result<Tier2Outcome, CliErr
     target_os = "freebsd",
     target_os = "windows"
 ))]
-fn probe_scratch_dir(root: &Path) -> PathBuf {
+fn probe_scratch_dir(root: &Path) -> Result<PathBuf, CliError> {
     let slug: String = root
         .file_name()
         .and_then(|n| n.to_str())
@@ -1047,7 +1058,15 @@ fn probe_scratch_dir(root: &Path) -> PathBuf {
         .chars()
         .map(|c| if c.is_ascii_alphanumeric() { c } else { '_' })
         .collect();
-    std::env::temp_dir().join(format!("ipe-tier2-probe-{slug}-{}", std::process::id()))
+    let prefix = format!("ipe-tier2-probe-{slug}");
+    let scratch = ScratchDir::new(&prefix).map_err(|e| CliError::Io {
+        path: std::path::PathBuf::from(&prefix),
+        source: e,
+    })?;
+    let path = scratch.path().to_path_buf();
+    // Caller cleans up via `remove_dir_all` (line ~981); skip Drop here.
+    std::mem::forget(scratch);
+    Ok(path)
 }
 
 /// One wrapper entry from the structured FFI sidecar.

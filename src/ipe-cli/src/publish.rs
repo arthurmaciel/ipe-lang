@@ -18,6 +18,8 @@ use std::io::Write as _;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
+use crate::scratch::{ScratchDir, ScratchFile};
+
 use crate::CliError;
 use crate::index::{self, CommitId, EntryVersion, IndexEntry, SourceUrl};
 use crate::project::{self, ProjectManifest};
@@ -435,16 +437,6 @@ fn print_dry_run(entry_toml: &str, plan: &PrPlan) {
     print!("{}", crate::style::frame(&crate::style::gutter(&body)));
 }
 
-/// Removes its directory on drop, so a publish leaves no scratch behind however
-/// it returns.
-struct ScratchDir(PathBuf);
-
-impl Drop for ScratchDir {
-    fn drop(&mut self) {
-        let _ = std::fs::remove_dir_all(&self.0);
-    }
-}
-
 /// Open the index PR the spec's default way: push the entry to the author's fork
 /// of the index over `git`, then open a browser at GitHub's pre-filled "create
 /// pull request" page.
@@ -463,13 +455,13 @@ fn open_pr(entry_toml: &str, plan: &PrPlan, fork_owner: &str) -> Result<(), CliE
     let index_name = index_repo_name(&plan.index_repo);
     let fork_url = format!("https://github.com/{fork_owner}/{index_name}.git");
 
-    let scratch = ScratchDir(publish_scratch_dir(&plan.branch)?);
-    let clone = scratch.0.join(index_name);
+    let scratch = ScratchDir::new("ipe-publish").map_err(|e| scratch_io(&e))?;
+    let clone = scratch.child(index_name);
 
     // Shallow-clone the fork — it carries the index's `main` history, which the
     // branch must descend from for the compare page to work.
     if let Err(git) = run_git_step(
-        &scratch.0,
+        scratch.path(),
         &["clone", "--quiet", "--depth", "1", &fork_url, index_name],
     ) {
         return Err(clone_failed(&fork_url, &git));
@@ -583,11 +575,23 @@ fn submit_pr_via_api(plan: &PrPlan, fork_owner: &str, token: &str) {
 /// is a typed [`PrResult`] parsed once at the network boundary.
 fn github_api_post(url: &str, token: &str, body: &serde_json::Value) -> PrResult {
     let body_str = body.to_string();
-    // curl writes the response body to a temp file and emits only the HTTP
-    // status code on stdout (`-w '%{http_code}'`).  This lets us capture
-    // status and body separately without any argv exposure of the token.
-    let tmp = std::env::temp_dir().join(format!("ipe-publish-resp-{}", std::process::id()));
-    let tmp_path = tmp.to_string_lossy().into_owned();
+    // curl writes the response body to an exclusively-created scratch file;
+    // the HTTP status code is captured on stdout (`-w '%{http_code}'`).
+    // The scratch file is created with O_EXCL before curl runs, so a
+    // pre-seeded symlink or a pre-existing name is refused rather than
+    // followed.  The response is read back through the retained file handle —
+    // not by re-opening the path — so the bytes parsed are the bytes curl
+    // wrote to this inode, with no race between write and read.
+    let mut scratch = match ScratchFile::create("ipe-publish-resp") {
+        Ok(sf) => sf,
+        Err(e) => {
+            return PrResult::Failed(format!(
+                "could not create scratch file for curl response: {e}"
+            ));
+        }
+    };
+    let tmp_path = scratch.path().to_string_lossy().into_owned();
+
     let mut child = match Command::new("curl")
         .args(["--silent", "--show-error", "-X", "POST"])
         .args(["-H", "Accept: application/vnd.github+json"])
@@ -625,8 +629,10 @@ fn github_api_post(url: &str, token: &str, body: &serde_json::Value) -> PrResult
     let status_str = String::from_utf8_lossy(&output.stdout);
     let http_status: u16 = status_str.trim().parse().unwrap_or(0);
 
-    let body_bytes = std::fs::read(&tmp).unwrap_or_default();
-    let _ = std::fs::remove_file(&tmp);
+    // Read the response body through the retained handle (not by path) so the
+    // bytes parsed are exactly what curl wrote to this inode.
+    let body_bytes = scratch.read_all().unwrap_or_default();
+    // `scratch` drops here, removing the temp file.
 
     let json: serde_json::Value = match serde_json::from_slice(&body_bytes) {
         Ok(v) => v,
@@ -658,18 +664,6 @@ fn github_api_post(url: &str, token: &str, body: &serde_json::Value) -> PrResult
 /// slash).
 fn index_repo_name(index_repo: &str) -> &str {
     index_repo.rsplit('/').next().unwrap_or(index_repo)
-}
-
-/// A unique, freshly-created scratch directory for one publish.
-fn publish_scratch_dir(branch: &str) -> Result<PathBuf, CliError> {
-    let slug: String = branch
-        .chars()
-        .map(|c| if c.is_ascii_alphanumeric() { c } else { '-' })
-        .collect();
-    let dir = std::env::temp_dir().join(format!("ipe-publish-{}-{slug}", std::process::id()));
-    let _ = std::fs::remove_dir_all(&dir);
-    std::fs::create_dir_all(&dir).map_err(|e| scratch_io(&e))?;
-    Ok(dir)
 }
 
 /// Run one `git` step in `dir`; on a non-zero exit, return git's stderr as the
@@ -913,15 +907,16 @@ mod tests {
         }
     }
 
-    fn temp_dir(tag: &str) -> PathBuf {
-        let dir = std::env::temp_dir().join(format!(
-            "ipe-publish-test-{tag}-{}-{:?}",
-            std::process::id(),
-            std::thread::current().id()
-        ));
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).expect("create temp dir");
-        dir
+    fn temp_dir(_tag: &str) -> PathBuf {
+        // Use the scratch module so test-only paths are also exclusively created
+        // and free of the predictable pid-name idiom.  The returned PathBuf
+        // outlives the ScratchDir (caller removes it explicitly at the end of
+        // each test), which is intentional: the RAII guard's drop is a
+        // best-effort no-op when the directory is already gone.
+        let sd = crate::scratch::ScratchDir::new("ipe-publish-test").expect("scratch dir");
+        let p = sd.path().to_path_buf();
+        std::mem::forget(sd); // caller's explicit remove_dir_all handles cleanup
+        p
     }
 
     /// The rendered single entry parses back through the index reader into an

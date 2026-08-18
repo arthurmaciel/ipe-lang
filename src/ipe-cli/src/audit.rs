@@ -58,6 +58,7 @@ use ipe_ir::Capability;
 use crate::CliError;
 use crate::cli_args::OutputFormat;
 use crate::project::{self, ProjectManifest};
+use crate::scratch::ScratchDir;
 
 /// The package-gate checks, in the fixed order [`run_audit`] runs them. Naming
 /// the check that rejected lets the diagnostic say exactly which gate failed.
@@ -186,25 +187,17 @@ fn tier2_probe_fixture() -> Result<PathBuf, CliError> {
     } else {
         ("untrusted-build.sh", TIER2_PROBE_POSIX)
     };
-    let dir = std::env::temp_dir().join(format!("ipe-tier2-fixture-{}", std::process::id()));
-    // Best-effort removal of a stale same-pid leftover (e.g. a prior crashed run).
-    // The subsequent exclusive create is the real defense: if the remove races with
-    // a same-user pre-seed, the create will still error and we fail closed.
-    let _ = std::fs::remove_dir_all(&dir);
-    // Exclusive create: errors if the directory already exists, so a same-user
-    // pre-seeded or symlinked path is rejected rather than written into.
-    std::fs::DirBuilder::new()
-        .recursive(false)
-        .create(&dir)
-        .map_err(|e| CliError::Io {
-            path: dir.clone(),
-            source: e,
-        })?;
-    let path = dir.join(name);
+    let scratch = ScratchDir::new("ipe-tier2-fixture").map_err(|e| CliError::Io {
+        path: PathBuf::from("ipe-tier2-fixture"),
+        source: e,
+    })?;
+    let path = scratch.child(name);
     std::fs::write(&path, bytes).map_err(|e| CliError::Io {
         path: path.clone(),
         source: e,
     })?;
+    // Caller cleans up via `remove_dir_all` after use; Drop is skipped here.
+    std::mem::forget(scratch);
     Ok(path)
 }
 
@@ -476,15 +469,9 @@ fn prepare(path: &Path) -> Result<Prepared, CliError> {
         regenerate_ffi_bindings(&manifest_path)?;
     }
 
-    let emitted_dir = audit_scratch_dir(&manifest.name);
-    // A stale scratch dir from a previous audit must not leak old emitted files
-    // into this scan; remove it first so the emitted set is exactly this build's.
-    if emitted_dir.exists() {
-        std::fs::remove_dir_all(&emitted_dir).map_err(|e| CliError::Io {
-            path: emitted_dir.clone(),
-            source: e,
-        })?;
-    }
+    // `audit_scratch_dir` creates the directory exclusively with 128-bit OS
+    // entropy — no stale-dir removal needed; a fresh exclusive dir is always empty.
+    let emitted_dir = audit_scratch_dir(&manifest.name)?;
     // Resolve the runtime exactly as `ipe build` does — one resolver for every
     // command. Under the default dependency model the emitted project names the
     // runtime as a path dependency, which the build materializes from the
@@ -627,10 +614,20 @@ fn locate_manifest(path: &Path) -> Result<PathBuf, CliError> {
     )))
 }
 
-/// The per-package audit scratch directory under the OS temp root, keyed by the
-/// package name and this process so concurrent audits never collide.
-fn audit_scratch_dir(package: &str) -> PathBuf {
-    std::env::temp_dir().join(format!("ipe-audit-{package}-{}", std::process::id()))
+/// Create and return an exclusive per-package audit scratch directory under the
+/// OS temp root. The name is unpredictable (128-bit OS entropy) so a same-user
+/// attacker cannot pre-seed or symlink it.
+fn audit_scratch_dir(package: &str) -> Result<PathBuf, CliError> {
+    let prefix = format!("ipe-audit-{package}");
+    let scratch = ScratchDir::new(&prefix).map_err(|e| CliError::Io {
+        path: PathBuf::from(&prefix),
+        source: e,
+    })?;
+    let path = scratch.path().to_path_buf();
+    // The directory is cleaned up by the caller's best-effort `remove_dir_all`;
+    // we transfer ownership of the path and skip Drop here.
+    std::mem::forget(scratch);
+    Ok(path)
 }
 
 // ===========================================================================
@@ -1273,42 +1270,36 @@ mod tests {
 
     #[test]
     fn tier2_probe_fixture_dir_is_created_exclusively() {
-        // `tier2_probe_fixture` must create its scratch dir exclusively so a
-        // same-user pre-seeded dir at the predictable `ipe-tier2-fixture-<pid>`
-        // path is detected and rejected, not silently re-used.
-        //
-        // Simulate: pre-create the dir before calling `tier2_probe_fixture`.
-        // The function first does a best-effort `remove_dir_all` to clear stale
-        // same-pid leftovers, then tries an exclusive create. Since we recreate
-        // the dir between the remove and the exclusive create in this test we
-        // verify the exclusive-create logic is present by testing the other
-        // observable contract: that `tier2_probe_fixture` writes the correct
-        // fixture bytes into a fresh dir (it neither fails nor silently reuses a
-        // dir whose content we control).
-        //
-        // The race-simulation variant (pre-seed then call) is inherently racy in
-        // a unit test, so we validate the properties we can: the returned path
-        // exists, is in a dir named `ipe-tier2-fixture-<pid>`, and the fixture
-        // bytes match the embedded constant.
+        // `tier2_probe_fixture` creates its scratch dir through `ScratchDir`, so
+        // the name is unpredictable — `ipe-tier2-fixture-<pid>-<32 hex entropy>` —
+        // and the dir is created exclusively (a pre-seeded entry is not followed).
+        // A predictable pid-only name would let a same-user attacker pre-seed the
+        // path; the entropy component is what closes that.
         let fixture_path =
             tier2_probe_fixture().expect("tier2_probe_fixture must succeed on a clean temp dir");
         let dir = fixture_path.parent().expect("fixture path has parent");
         let dir_name = dir.file_name().unwrap_or_default().to_string_lossy();
-        assert!(
-            dir_name.starts_with("ipe-tier2-fixture-"),
-            "scratch dir is named ipe-tier2-fixture-<pid>, got: {dir_name}"
-        );
-        let pid_suffix = dir_name
+        let suffix = dir_name
             .strip_prefix("ipe-tier2-fixture-")
-            .expect("prefix present");
+            .expect("scratch dir uses the ipe-tier2-fixture- prefix");
+        // The suffix is `<pid>-<32 hex entropy>`: the pid, a dash, then 32 hex
+        // chars. The entropy makes the name unpredictable (not the bare pid).
+        let (pid_part, hex_part) = suffix
+            .split_once('-')
+            .expect("suffix is <pid>-<hex entropy>");
         assert!(
-            pid_suffix.chars().all(|c| c.is_ascii_digit()),
-            "suffix is the decimal pid: {pid_suffix}"
+            pid_part.chars().all(|c| c.is_ascii_digit()),
+            "pid component is decimal: {pid_part}"
         );
         assert_eq!(
-            pid_suffix,
+            pid_part,
             std::process::id().to_string(),
             "pid in dir name matches the current process"
+        );
+        assert_eq!(hex_part.len(), 32, "128 bits of entropy as 32 hex chars");
+        assert!(
+            hex_part.chars().all(|c| c.is_ascii_hexdigit()),
+            "entropy component is hex: {hex_part}"
         );
         assert!(
             fixture_path.exists(),

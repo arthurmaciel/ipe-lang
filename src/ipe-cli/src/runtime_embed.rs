@@ -449,13 +449,9 @@ mod tests {
     /// against.
     #[test]
     fn mismatched_runtime_version_is_rejected() {
-        let dir = std::env::temp_dir().join(format!(
-            "ipe_runtime_version_test_{}_{}",
-            std::process::id(),
-            COMPILER_VERSION
-        ));
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).expect("create temp runtime dir");
+        let sd = crate::scratch::ScratchDir::new("ipe-runtime-version-test").expect("scratch dir");
+        let dir = sd.path().to_path_buf();
+        std::mem::forget(sd); // caller's explicit remove_dir_all handles cleanup
         let bogus = "0.0.0-stale";
         assert_ne!(bogus, COMPILER_VERSION, "the test version must differ");
         std::fs::write(
@@ -487,13 +483,9 @@ mod tests {
     /// [`check_version`] unchanged — the materialized path is exactly this case.
     #[test]
     fn matching_runtime_version_is_accepted() {
-        let dir = std::env::temp_dir().join(format!(
-            "ipe_runtime_version_ok_{}_{}",
-            std::process::id(),
-            COMPILER_VERSION
-        ));
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).expect("create temp runtime dir");
+        let sd = crate::scratch::ScratchDir::new("ipe-runtime-version-ok").expect("scratch dir");
+        let dir = sd.path().to_path_buf();
+        std::mem::forget(sd); // caller's explicit remove_dir_all handles cleanup
         std::fs::write(
             dir.join(MANIFEST),
             format!("[package]\nname = \"{RUNTIME_PACKAGE}\"\nversion = \"{COMPILER_VERSION}\"\n"),

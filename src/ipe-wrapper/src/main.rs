@@ -31,11 +31,13 @@
 
 #![forbid(unsafe_code)]
 
+mod scratch;
+
 use std::ffi::OsString;
-use std::path::PathBuf;
 use std::process::ExitCode;
 
 use ipe_sandbox::run_jail::{self, ParseError, RunJailDefect, SandboxProfile};
+use scratch::ScratchDir;
 
 /// Exit non-zero, printing a typed error to stderr.
 ///
@@ -153,61 +155,90 @@ fn run_embed(show_profile: bool, app_args: &[OsString]) -> ExitCode {
         return ExitCode::SUCCESS;
     }
 
-    // In embed mode the app binary is never written to disk for exec — it
-    // must be extracted to a temp file, verified, and exec'd. The temp file
-    // is written to the system temp dir, mode 0o700 (owner-execute only), so
-    // no other user on the host can exec it.
-    let tmp_app = match write_embed_binary(APP_BYTES) {
-        Ok(p) => p,
-        Err(e) => fatal!("cannot write embedded binary to temp file: {e}"),
+    // Write the embedded binary to a SEALED anonymous file (Linux memfd, sealed
+    // against any write/resize; macOS holds the verified bytes for an exclusive
+    // in-scratch write).  The capfloor is scanned by reading the SEALED bytes —
+    // not the compile-time `APP_BYTES` slice — and the jail materialises the app
+    // from that SAME sealed source, so the bytes verified are the bytes exec'd.
+    // There is no host path an attacker can pre-seed or swap between verify and
+    // exec.
+    let sealed = match run_jail::write_sealed_app_memfd(APP_BYTES) {
+        Ok(s) => s,
+        Err(e) => fatal!("cannot seal embedded binary: {e}"),
     };
 
-    let result = exec_after_verify(APP_BYTES, &profile, &tmp_app, app_args);
-
-    // Clean up the temp file only when exec failed (on success exec replaces
-    // the process and this line is never reached). Best-effort: if removal
-    // fails we still propagate the exec failure.
-    let _ = std::fs::remove_file(&tmp_app);
-    result
+    exec_embed_after_verify(&profile, sealed, app_args)
 }
 
-/// Write the embedded app bytes to a temp file and return its path.
-/// The file is created with owner-execute permissions (`0o700` on Unix).
+// ── Embed-mode verify + exec ─────────────────────────────────────────────────
+
+/// Verify the capability floor against the SEALED bytes and exec the embedded
+/// app inside the jail, delivered from the same sealed source — closing the
+/// verify/exec identity gap.
 ///
-/// # Errors
+/// The capfloor is scanned from bytes read through the SEALED descriptor, not
+/// from the compile-time `APP_BYTES` slice.  On Linux the jail materialises the
+/// app inside the sandbox from the inherited sealed fd via bwrap `--file`; on
+/// macOS the verified bytes are written once to an exclusively-created file in
+/// the exclusive jail scratch.  Either way, what is verified is what runs.
 ///
-/// Returns an `io::Error` on any filesystem failure.
+/// Fail-closed on:
+/// - read failure on the sealed source
+/// - no capfloor marker in the read bytes (missing floor → refuse)
+/// - profile does not satisfy the floor (widened profile → refuse)
+/// - jail primitive unavailable on this platform
+/// - jail establishment failure
 #[cfg(embed_mode)]
-fn write_embed_binary(bytes: &[u8]) -> std::io::Result<PathBuf> {
-    use std::io::Write as _;
+fn exec_embed_after_verify(
+    profile: &SandboxProfile,
+    sealed: run_jail::SealedApp,
+    app_args: &[OsString],
+) -> ExitCode {
+    // Read the SEALED bytes for the capfloor scan. These are frozen (Linux
+    // seals; macOS in-memory), so a write race cannot diverge them from what
+    // the jail will run.
+    let sealed_bytes = match sealed.read_sealed_bytes() {
+        Ok(b) => b,
+        Err(e) => fatal!("cannot read sealed embedded binary: {e}"),
+    };
 
-    let dir = std::env::temp_dir();
-    let name = format!(
-        "ipe-wrapper-embed-{}-{}",
-        std::process::id(),
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map_or(0, |d| d.as_secs())
-    );
-    let path = dir.join(name);
-
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::OpenOptionsExt as _;
-        let mut file = std::fs::OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .mode(0o700)
-            .open(&path)?;
-        file.write_all(bytes)?;
-    }
-    #[cfg(not(unix))]
-    {
-        let mut file = std::fs::File::create_new(&path)?;
-        std::io::Write::write_all(&mut file, bytes)?;
+    let Some(floor) = run_jail::scan_capfloor(&sealed_bytes) else {
+        fatal!(
+            "{}: the binary embeds no capability floor — refusing to run an artifact \
+             whose confinement cannot be verified",
+            RunJailDefect::ProfileWeakerThanFloor.code().as_str()
+        );
+    };
+    if !profile.satisfies_capfloor(&floor) {
+        fatal!("{}", RunJailDefect::ProfileWeakerThanFloor);
     }
 
-    Ok(path)
+    let wants_wall_clock = profile.limits.wall_secs.is_some();
+    let tools = match run_jail::probe_run_jail_tools(wants_wall_clock) {
+        Ok(t) => t,
+        Err(e) => fatal!("{e}"),
+    };
+
+    let scoped_tmp = match ScratchDir::new("ipe-wrapper") {
+        Ok(d) => d,
+        Err(e) => fatal!("cannot create scoped temp dir: {e}"),
+    };
+    let working_tree = match std::env::current_dir() {
+        Ok(p) => p,
+        Err(e) => fatal!("cannot resolve working directory: {e}"),
+    };
+
+    match run_jail::exec_embedded_in_run_jail(
+        &tools,
+        profile,
+        scoped_tmp.path(),
+        &working_tree,
+        &sealed,
+        app_args,
+    ) {
+        Ok(never) => match never {},
+        Err(e) => fatal!("{e}"),
+    }
 }
 
 // ── Shared verify + exec ─────────────────────────────────────────────────────
@@ -215,11 +246,16 @@ fn write_embed_binary(bytes: &[u8]) -> std::io::Result<PathBuf> {
 /// Scan `app_bytes` for the embedded capability floor, verify `profile`
 /// satisfies it, and exec the app at `app_path` inside the jail.
 ///
+/// Bundle mode only: the app is a sibling file on disk. Embed mode uses
+/// [`exec_embed_after_verify`], which verifies and delivers from a sealed
+/// descriptor instead of a host path.
+///
 /// Fail-closed on:
 /// - no capfloor marker found in `app_bytes` (missing floor → refuse)
 /// - profile does not satisfy the floor (widened profile → refuse)
 /// - jail primitive unavailable on this platform
 /// - jail establishment failure
+#[cfg(not(embed_mode))]
 fn exec_after_verify(
     app_bytes: &[u8],
     profile: &SandboxProfile,
@@ -253,8 +289,8 @@ fn exec_after_verify(
         Err(e) => fatal!("{e}"),
     };
 
-    let scoped_tmp = match make_scoped_tmp() {
-        Ok(p) => p,
+    let scoped_tmp = match ScratchDir::new("ipe-wrapper") {
+        Ok(d) => d,
         Err(e) => fatal!("cannot create scoped temp dir: {e}"),
     };
 
@@ -266,7 +302,7 @@ fn exec_after_verify(
     match run_jail::exec_in_run_jail(
         &tools,
         profile,
-        &scoped_tmp,
+        scoped_tmp.path(),
         &working_tree,
         app_path,
         app_args,
@@ -274,22 +310,6 @@ fn exec_after_verify(
         Ok(never) => match never {},
         Err(e) => fatal!("{e}"),
     }
-}
-
-/// Create a per-run scoped writable temp dir — the jail's only writable mount
-/// when the `filesystem` axis is absent.
-fn make_scoped_tmp() -> std::io::Result<PathBuf> {
-    let base = std::env::temp_dir();
-    let name = format!(
-        "ipe-wrapper-{}-{}",
-        std::process::id(),
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map_or(0, |d| d.as_nanos())
-    );
-    let dir = base.join(name);
-    std::fs::create_dir_all(&dir)?;
-    Ok(dir)
 }
 
 // ── Unit tests ──────────────────────────────────────────────────────────────
