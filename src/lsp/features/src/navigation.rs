@@ -334,7 +334,7 @@ fn walk_for_span_at(
 pub fn goto_definition(
     db: &IpeDatabase,
     root: SourceRoot,
-    _entry: ipe_db::SourceFile,
+    entry: ipe_db::SourceFile,
     module: &[String],
     byte: u32,
 ) -> Option<Definition> {
@@ -342,7 +342,7 @@ pub fn goto_definition(
     let &file = files.get(module)?;
 
     // Find the `VarTopLevel` node whose span contains `byte`.
-    let canonical = ipe_db::canonicalize(db, root, file).ok()?;
+    let canonical = crate::db_access::canonicalize_checked(db, root, entry, file)?;
     let (def_home_syms, def_name_sym) = find_ref_at(&canonical.module, byte)?;
 
     // Resolve the home module path to strings.
@@ -431,16 +431,17 @@ pub fn find_references(
         }
     };
 
-    // Dependency-first module order for consistent output.
-    let order = ipe_db::topo_order(db, root, entry).map_or_else(
-        |_| root.files(db).keys().cloned().collect(),
-        |o| (*o).clone(),
-    );
+    // Dependency-first module order for consistent output. A cycle means no
+    // safe canonicalize demand is possible — return empty rather than
+    // iterating files and hitting salsa's dependency-cycle panic.
+    let Ok(order) = ipe_db::topo_order(db, root, entry) else {
+        return Vec::new();
+    };
 
     let files = root.files(db);
     let mut refs: Vec<NameRef> = Vec::new();
 
-    for module_path in &order {
+    for module_path in &*order {
         let Some(&file) = files.get(module_path) else {
             continue;
         };

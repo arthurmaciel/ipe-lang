@@ -149,7 +149,7 @@ pub struct PrepareRename {
 pub fn prepare_rename(
     db: &IpeDatabase,
     root: SourceRoot,
-    _entry: ipe_db::SourceFile,
+    entry: ipe_db::SourceFile,
     module: &[String],
     byte: u32,
 ) -> Option<PrepareRename> {
@@ -157,7 +157,7 @@ pub fn prepare_rename(
     let &file = files.get(module)?;
 
     // Try the position as a reference first (common case).
-    let canonical = ipe_db::canonicalize(db, root, file).ok()?;
+    let canonical = crate::db_access::canonicalize_checked(db, root, entry, file)?;
     if let Some((_, name_sym)) = crate::navigation::find_ref_at_pub(&canonical.module, byte) {
         let name = {
             let interner = db.interner().lock();

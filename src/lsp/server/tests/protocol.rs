@@ -267,6 +267,188 @@ fn did_open_publishes_compiler_diagnostics_and_did_change_clears_them() {
         .expect("server exits clean");
 }
 
+// ---------------------------------------------------------------------------
+// Cycle-survival: whole-server test (test plan item 2)
+// ---------------------------------------------------------------------------
+
+const A_PATH: &str = "/ipe-lsp-cycle-test/A.ipe";
+const B_PATH: &str = "/ipe-lsp-cycle-test/B.ipe";
+const A_SRC: &str = "module A exposing (a)\nimport B\na = B.b\n";
+const B_SRC: &str = "module B exposing (b)\nimport A\nb = A.a\n";
+
+/// Loader that resolves a two-module cyclic project (A ↔ B).
+struct CyclicLoader;
+
+impl ProjectLoader for CyclicLoader {
+    fn load(
+        &self,
+        _workspace_root: Option<&Path>,
+        open_file: &Path,
+        _open_text: Option<&str>,
+    ) -> Result<LoadedProject, LoadError> {
+        let a_path = std::path::PathBuf::from(A_PATH);
+        let b_path = std::path::PathBuf::from(B_PATH);
+        let mut files = BTreeMap::new();
+        files.insert(
+            vec!["A".to_owned()],
+            LoadedFile {
+                path: a_path.clone(),
+                text: A_SRC.to_owned(),
+                origin: ModuleOrigin::User,
+            },
+        );
+        files.insert(
+            vec!["B".to_owned()],
+            LoadedFile {
+                path: b_path,
+                text: B_SRC.to_owned(),
+                origin: ModuleOrigin::User,
+            },
+        );
+        // The entry module is whichever file the client opened.
+        let entry_module = if open_file == a_path.as_path() {
+            vec!["A".to_owned()]
+        } else {
+            vec!["B".to_owned()]
+        };
+        Ok(LoadedProject {
+            files,
+            entry_module,
+        })
+    }
+}
+
+/// Receive the next Response for `id`, skipping diagnostics notifications.
+/// Returns `(result, error_code)`: exactly one will be `Some`.
+#[allow(clippy::expect_used)]
+fn recv_any_response(client: &Connection, id: i32) -> lsp_server::Response {
+    let deadline = Duration::from_secs(30);
+    loop {
+        let msg = client
+            .receiver
+            .recv_timeout(deadline)
+            .expect("reply within deadline");
+        if let Message::Response(response) = msg
+            && response.id == RequestId::from(id)
+        {
+            return response;
+        }
+    }
+}
+
+/// A cyclic import graph (A ↔ B) must not crash the server.
+///
+/// Before the panic boundary was added, a `textDocument/definition` request
+/// on the cyclic project reached `ipe_db::canonicalize` directly, triggered
+/// salsa's dependency-cycle panic, and unwound `handle_request` → the
+/// `select!` loop → killed the server. After the fix the server returns a
+/// per-request error and stays alive to serve subsequent requests.
+#[test]
+fn cyclic_import_graph_request_returns_error_and_server_survives() {
+    let (server_side, client) = Connection::memory();
+    let server = std::thread::spawn(move || {
+        ipe_lsp_server::run_with_connection(&server_side, &CyclicLoader)
+    });
+
+    // Initialize.
+    client
+        .sender
+        .send(Message::Request(Request::new(
+            RequestId::from(1),
+            "initialize".to_owned(),
+            serde_json::json!({ "capabilities": {} }),
+        )))
+        .expect("send initialize");
+    let _ = recv_any_response(&client, 1);
+    client
+        .sender
+        .send(Message::Notification(Notification::new(
+            "initialized".to_owned(),
+            serde_json::json!({}),
+        )))
+        .expect("send initialized");
+
+    // Open A — the diagnostics worker publishes the IPE-N0021 cycle diagnostic.
+    let uri_a = format!("file://{A_PATH}");
+    client
+        .sender
+        .send(Message::Notification(Notification::new(
+            "textDocument/didOpen".to_owned(),
+            serde_json::json!({
+                "textDocument": {
+                    "uri": uri_a, "languageId": "ipe", "version": 1, "text": A_SRC
+                }
+            }),
+        )))
+        .expect("send didOpen");
+
+    // Wait for the cycle diagnostic before sending requests, so the server
+    // has loaded the project and the handlers run against the cyclic db.
+    let _cycle_diags = await_diagnostics(&client, &uri_a, |d| !d.is_empty());
+
+    // Send a definition request whose position is byte 0 of A — on the cyclic
+    // graph this previously panicked through `ipe_db::canonicalize` and killed
+    // the server.
+    client
+        .sender
+        .send(Message::Request(Request::new(
+            RequestId::from(10),
+            "textDocument/definition".to_owned(),
+            serde_json::json!({
+                "textDocument": { "uri": uri_a },
+                "position": { "line": 0, "character": 0 }
+            }),
+        )))
+        .expect("send definition");
+
+    // Assert a Response arrives (never a hang/drop) and is either Null or an
+    // error — never a process abort.
+    let response = recv_any_response(&client, 10);
+    // The response must have an id (already asserted by recv_any_response) and
+    // must not be both result=None and error=None (that would be a malformed reply).
+    assert!(
+        response.result.is_some() || response.error.is_some(),
+        "server must reply with a result or an error, got neither"
+    );
+
+    // Send a second request — proves the select! loop is still alive.
+    client
+        .sender
+        .send(Message::Request(Request::new(
+            RequestId::from(11),
+            "textDocument/documentSymbol".to_owned(),
+            serde_json::json!({ "textDocument": { "uri": uri_a } }),
+        )))
+        .expect("send documentSymbol after cycle request");
+    let second_response = recv_any_response(&client, 11);
+    assert!(
+        second_response.result.is_some() || second_response.error.is_some(),
+        "server must still be alive after a cyclic-graph request"
+    );
+
+    // Shutdown cleanly.
+    client
+        .sender
+        .send(Message::Request(Request::new(
+            RequestId::from(2),
+            "shutdown".to_owned(),
+            serde_json::Value::Null,
+        )))
+        .expect("send shutdown");
+    let _ = recv_any_response(&client, 2);
+    client
+        .sender
+        .send(Message::Notification(Notification::new(
+            "exit".to_owned(),
+            serde_json::Value::Null,
+        )))
+        .expect("send exit");
+    server
+        .join()
+        .expect("server thread joins")
+        .expect("server exits clean");
+}
+
 #[test]
 fn unknown_request_gets_method_not_found_not_a_hang() {
     let (server_side, client) = Connection::memory();

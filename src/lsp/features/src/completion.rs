@@ -111,8 +111,8 @@ pub fn completions(
     // internally acquires + releases the interner lock, and the Mutex is not
     // reentrant. All results are cloned out of their `Arc` wrappers here so
     // the interner is free when we acquire it below.
-    let canonical = ipe_db::canonicalize(db, root, file).ok();
-    let dep_canonicals = collect_dep_canonicals(db, root, file);
+    let canonical = crate::db_access::canonicalize_checked(db, root, entry, file);
+    let dep_canonicals = collect_dep_canonicals(db, root, entry, file);
     // This module's own binding types, from the per-module `typecheck_module`
     // projection (keyed by bare name — the home is fixed to this module).
     let module_env: Option<BTreeMap<Symbol, Ty>> = ipe_db::typecheck_module(db, root, entry, file)
@@ -190,6 +190,7 @@ pub fn completions(
 fn collect_dep_canonicals(
     db: &IpeDatabase,
     root: SourceRoot,
+    entry: ipe_db::SourceFile,
     file: ipe_db::SourceFile,
 ) -> Vec<(Vec<String>, ipe_db::CanonicalModule)> {
     let Ok(resolutions) = ipe_db::resolve_imports(db, root, file) else {
@@ -198,7 +199,8 @@ fn collect_dep_canonicals(
     let mut out = Vec::new();
     for (dep_path, resolution) in resolutions.iter() {
         if let ipe_db::ImportResolution::Resolved(dep_file) = resolution
-            && let Ok(dep_canon) = ipe_db::canonicalize(db, root, *dep_file)
+            && let Some(dep_canon) =
+                crate::db_access::canonicalize_checked(db, root, entry, *dep_file)
         {
             out.push((dep_path.clone(), (*dep_canon).clone()));
         }
