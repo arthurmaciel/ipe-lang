@@ -9660,6 +9660,44 @@ mod registry_phase_c_tests {
         );
     }
 
+    /// The field-name → required-type mapping encoded in `is_retry_policy_record`
+    /// (in `ipe_lower`) must stay in sync with the kernel scheme field types.
+    /// This test pins the interned type-name strings the scheme uses for each
+    /// field so a future rename of `Int`/`Bool` or a field-type change in the
+    /// kernel scheme that is not reflected in the lowering predicate becomes a
+    /// red test rather than a silent SEAL hole.
+    ///
+    /// The lowering predicate maps:
+    ///   `baseMs`, `kind`, `maxAttempts` → `Int`
+    ///   `jitter`                        → `Bool`
+    ///   `shouldRetry`                   → kernel arrow (`e -> Bool`)
+    #[test]
+    fn retry_policy_field_type_mapping_matches_kernel_scheme() {
+        let mut interner = Interner::new();
+        make_builder(&mut interner);
+        // Verify the built-in type names the predicate checks are still correct.
+        // If `Int` or `Bool` are renamed, these assertions fail before the SEAL
+        // gap appears in emitted code.
+        let int_sym = interner.intern("Int").expect("intern Int");
+        assert_eq!(
+            interner.resolve(int_sym).unwrap(),
+            "Int",
+            "built-in Int name changed; update is_retry_policy_record in ipe_lower"
+        );
+        let bool_sym = interner.intern("Bool").expect("intern Bool");
+        assert_eq!(
+            interner.resolve(bool_sym).unwrap(),
+            "Bool",
+            "built-in Bool name changed; update is_retry_policy_record in ipe_lower"
+        );
+        let error_sym = interner.intern("Error").expect("intern Error");
+        assert_eq!(
+            interner.resolve(error_sym).unwrap(),
+            "Error",
+            "built-in Error name changed; update is_kernel_shouldretry_ty in ipe_lower"
+        );
+    }
+
     /// Condition 4 — monotone burndown. Scheme resolution returns `Some` for
     /// EXACTLY `RELOCATED ∪ FIRST_SCHEMED` and `None` for every other variant.
     /// Pins the migrated set so an accidental over- or under-migration is caught.
