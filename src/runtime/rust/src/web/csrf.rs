@@ -231,7 +231,7 @@ pub async fn csrf_middleware(
     // constant-time equality. Fail-closed — any malformed, missing, or
     // mismatched pair is rejected. See `server::csrf_pair_valid` for the
     // ordering rationale.
-    if !csrf_pair_valid(&cookie_tok, &header_tok) {
+    if !csrf_pair_valid(&cookie_tok, header_tok) {
         telemetry::record_log("warn", "csrf.rejected reason=invalid");
         return (StatusCode::FORBIDDEN, "{\"status\":\"csrf_invalid\"}").into_response();
     }
