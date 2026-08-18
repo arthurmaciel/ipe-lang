@@ -5170,12 +5170,153 @@ fn body_calls_kernel_on_param(
     }
 }
 
+/// Whether `expr` reads a field of `param` directly — a `record.field` whose
+/// receiver is `param` (as a bare `Var` or a `CloneVar`), including through a
+/// value-preserving `let` alias. A parameter whose fields the body reads must
+/// carry a concrete record type: a bare generic `T{n}` has no field to read
+/// (E0609), so it cannot be kept generic even when the body also threads it.
+/// Alias and shadow discipline mirrors [`body_calls_kernel_on_param`] arm for
+/// arm; the match is exhaustive so a new [`Expr`] node is a compile error, not
+/// a silently missed read.
+fn body_reads_field_of_param(param: Symbol, expr: &Expr) -> bool {
+    match expr {
+        Expr::Access { record, .. } => {
+            matches!(record.as_ref(), Expr::Var(s) | Expr::CloneVar(s) if *s == param)
+                || body_reads_field_of_param(param, record)
+        }
+        Expr::Call { args, .. } => args.iter().any(|a| body_reads_field_of_param(param, a)),
+        Expr::Lambda { params, body, .. } | Expr::SharedLambda { params, body, .. } => {
+            if params.iter().any(|(s, _)| *s == param) {
+                false
+            } else {
+                body_reads_field_of_param(param, body)
+            }
+        }
+        Expr::Let { name, value, body } => {
+            let is_alias_of_param = *name != param
+                && matches!(value.as_ref(), Expr::Var(v) | Expr::CloneVar(v) if *v == param);
+            body_reads_field_of_param(param, value)
+                || (*name != param
+                    && (body_reads_field_of_param(param, body)
+                        || (is_alias_of_param && body_reads_field_of_param(*name, body))))
+        }
+        Expr::Destructure {
+            binder,
+            value,
+            body,
+        } => {
+            body_reads_field_of_param(param, value)
+                || (!pat_binds_symbol(binder, param) && body_reads_field_of_param(param, body))
+        }
+        Expr::If { cond, then_, else_ } => {
+            body_reads_field_of_param(param, cond)
+                || body_reads_field_of_param(param, then_)
+                || body_reads_field_of_param(param, else_)
+        }
+        Expr::Match(m) => {
+            body_reads_field_of_param(param, m.scrutinee())
+                || m.arms().iter().any(|arm| {
+                    !pat_binds_symbol(&arm.pat, param)
+                        && body_reads_field_of_param(param, &arm.body)
+                })
+        }
+        Expr::BinOp { lhs, rhs, .. } => {
+            body_reads_field_of_param(param, lhs) || body_reads_field_of_param(param, rhs)
+        }
+        Expr::Apply { func, args } => {
+            body_reads_field_of_param(param, func)
+                || args.iter().any(|a| body_reads_field_of_param(param, a))
+        }
+        Expr::Tuple(items) | Expr::List { items, .. } => {
+            items.iter().any(|e| body_reads_field_of_param(param, e))
+        }
+        Expr::Cons { head, tail } => {
+            body_reads_field_of_param(param, head) || body_reads_field_of_param(param, tail)
+        }
+        Expr::ListIndexClone { list, .. } | Expr::ListLenCheck { list, .. } => {
+            body_reads_field_of_param(param, list)
+        }
+        Expr::Record { fields, .. } | Expr::Update { fields, .. } => fields
+            .iter()
+            .any(|(_, e)| body_reads_field_of_param(param, e)),
+        Expr::Ctor { args, .. } => args.iter().any(|a| body_reads_field_of_param(param, a)),
+        Expr::TaskSeq { effect, rest } => {
+            body_reads_field_of_param(param, effect) || body_reads_field_of_param(param, rest)
+        }
+        Expr::TailLoop { params, body } => {
+            if params.iter().any(|(s, _)| *s == param) {
+                false
+            } else {
+                body_reads_field_of_param(param, body)
+            }
+        }
+        Expr::TailRecur { args } => args.iter().any(|a| body_reads_field_of_param(param, a)),
+        Expr::Int(_)
+        | Expr::Bool(_)
+        | Expr::Float(_)
+        | Expr::Str(_)
+        | Expr::PathLit(_)
+        | Expr::Char(_)
+        | Expr::Unit
+        | Expr::Var(_)
+        | Expr::CloneVar(_)
+        | Expr::FuncValue { .. } => false,
+    }
+}
+
 /// Is `args[idx]` a direct `Var`/`CloneVar` reference to `tracked`? The shared
 /// "the param sits in the bound-obliging arg position" test for every
 /// direct-arg-position kernel→bound matcher (Shape A: `IpeRow` at arg 1,
 /// `Display` at arg 0).
 fn arg_is_tracked_var(args: &[Expr], idx: usize, tracked: Symbol) -> bool {
     matches!(args.get(idx), Some(Expr::Var(s) | Expr::CloneVar(s)) if *s == tracked)
+}
+
+/// Does this kernel call oblige `tracked`'s type to be `IpeRow` — a `Db.get*`
+/// row accessor whose ROW argument (index 1) is a `Var`/`CloneVar` of `tracked`?
+///
+/// The single predicate for "this parameter requires the `IpeRow` bound",
+/// shared by BOTH the bound emission ([`apply_kernel_type_param_bounds`]) and
+/// the return/param wildcard-`any` concretization exclusion: a parameter whose
+/// correct lowering is the `<R: IpeRow>` bounded generic must NOT be
+/// concretized to the row carrier, and must gain the bound. Driving both from
+/// one predicate keeps them from drifting — a divergence would either
+/// concretize a param that must stay bounded-generic (a SEAL hole) or bound a
+/// param that was concretized away.
+fn obliges_ipe_row_bound(tracked: Symbol, k: KernelFn, args: &[Expr]) -> bool {
+    is_db_row_accessor(k) && arg_is_tracked_var(args, 1, tracked)
+}
+
+/// If the value this body ultimately yields is a bare reference to one of
+/// `params` (the body THREADS a parameter into the return), which parameter?
+///
+/// Walks past the value-preserving frames that wrap a tail — `let`/destructure
+/// prologues whose binder is not itself the tail, a single-arm-transparent
+/// `TaskSeq` continuation is NOT transparent (it changes the yielded value), so
+/// only structurally value-preserving wrappers are traversed. The tail is a
+/// threaded param iff it resolves to a `Var`/`CloneVar` of a `params` binder.
+///
+/// Used to tie a wildcard-`any` RETURN to the parameter it threads: the return
+/// must follow that parameter's final lowered type (generic-or-concrete),
+/// never an independently-concretized carrier that diverges from it (the E0308
+/// SEAL class this closes).
+fn body_tail_threaded_param(expr: &Expr, params: &BTreeSet<Symbol>) -> Option<Symbol> {
+    match expr {
+        Expr::Var(s) | Expr::CloneVar(s) if params.contains(s) => Some(*s),
+        Expr::Let { name, body, .. } if !params.contains(name) => {
+            body_tail_threaded_param(body, params)
+        }
+        Expr::Destructure { binder, body, .. } if !pat_binds_any(binder, params) => {
+            body_tail_threaded_param(body, params)
+        }
+        _ => None,
+    }
+}
+
+/// Does `pat` bind any symbol in `params`? (Shadow guard for the tail walk — a
+/// destructure that rebinds a param hides it, so its tail is not that param.)
+fn pat_binds_any(pat: &Pat, params: &BTreeSet<Symbol>) -> bool {
+    params.iter().any(|p| pat_binds_symbol(pat, *p))
 }
 
 /// Is `*tv` a wildcard-`any` generic (a fresh `anyp_`-pooled binder minted by
@@ -6188,9 +6329,7 @@ fn apply_kernel_type_param_bounds(
     // the record struct + reusable generics clean (see IpeRow's false-positive
     // golden). `DbGetById` (arity 3) takes a `Db` handle, not a row, so it is
     // excluded by `is_db_row_accessor`.
-    let ipe_row_matcher = |tracked: Symbol, k: KernelFn, args: &[Expr]| -> bool {
-        is_db_row_accessor(k) && arg_is_tracked_var(args, 1, tracked)
-    };
+    let ipe_row_matcher = obliges_ipe_row_bound;
     // Stringify: a `Basics.toString(x)` application whose sole arg (index 0)
     // is the tracked param. Applies to wildcard `any` AND named tvars — `toString`
     // is legitimate on a polymorphic value, and `IpeStringify` is satisfiable by
@@ -12466,7 +12605,7 @@ impl<'a> Lowerer<'a> {
                     }
                     _ => false,
                 };
-                let ret = if ret_is_any_wildcard {
+                let mut ret = if ret_is_any_wildcard {
                     // The body's region type is the concrete return type.
                     let body_ty = self
                         .types
@@ -12584,10 +12723,12 @@ impl<'a> Lowerer<'a> {
                 // strip the very generic the bound attaches to.
                 {
                     let minted: BTreeSet<Symbol> = any_syms_minted.iter().copied().collect();
-                    let row_accessor = |tracked: Symbol, k: KernelFn, args: &[Expr]| -> bool {
-                        is_db_row_accessor(k) && arg_is_tracked_var(args, 1, tracked)
-                    };
                     let mut param_pinned: BTreeSet<Symbol> = BTreeSet::new();
+                    // The parameter binder(s) the body threads into the return —
+                    // their final lowered type must drive the return (below), so
+                    // the two ends never diverge.
+                    let param_binders: BTreeSet<Symbol> = params.iter().map(|(s, _)| *s).collect();
+                    let tail_param = body_tail_threaded_param(&lowered_body, &param_binders);
                     for (pat, (binder, ir_ty)) in patterns.iter().zip(params.iter_mut()) {
                         let IrType::Generic(sym) = ir_ty else {
                             continue;
@@ -12603,7 +12744,35 @@ impl<'a> Lowerer<'a> {
                         if ty_contains_var(region_ty) {
                             continue;
                         }
-                        if body_calls_kernel_on_param(*binder, &lowered_body, &row_accessor) {
+                        // A parameter flowing into a `Db.get*` ROW accessor keeps
+                        // its `<R: IpeRow>` bounded generic (`apply_kernel_type_param_bounds`
+                        // attaches the bound below); concretizing to the row carrier
+                        // would strip that generic and diverge from a return that
+                        // threads the same param.
+                        if body_calls_kernel_on_param(
+                            *binder,
+                            &lowered_body,
+                            &obliges_ipe_row_bound,
+                        ) {
+                            continue;
+                        }
+                        // A parameter the body THREADS into the return, whose solved
+                        // region is a RECORD, is a structural record identity: the
+                        // region narrows to only the fields the body reads (`{name}`),
+                        // not the caller's full nominal record (`{name, age}`).
+                        // Concretizing the parameter to that narrowed record makes a
+                        // caller passing the full record mismatch (E0308,
+                        // exit-0-then-cargo-fail). Keep such a threaded param a generic
+                        // `T{n}` so it monomorphises to the caller's own record; the
+                        // return follows it (below). This holds only when the body
+                        // does NOT also field-read the parameter: a bare generic
+                        // `T{n}` has no field to read (E0609), so a param the body
+                        // both threads AND reads (`tag p = let n = p.name in p`) must
+                        // still concretize — as must a plain NON-threaded record param.
+                        if Some(*binder) == tail_param
+                            && matches!(region_ty, Ty::Record(..))
+                            && !body_reads_field_of_param(*binder, &lowered_body)
+                        {
                             continue;
                         }
                         let concrete = self.ir_type_from_ty(region_ty, sig_span)?;
@@ -12614,6 +12783,23 @@ impl<'a> Lowerer<'a> {
                     // generic; drop its minted symbol so it is not declared as an
                     // undeclared-then-unused Rust type parameter.
                     any_syms_minted.retain(|s| !param_pinned.contains(s));
+                    // Tie a wildcard-`any` RETURN to the parameter it threads. The
+                    // return was concretized from the body's SOLVED region
+                    // independently of the parameter's post-exclusion lowering — for
+                    // a row-accessor param (return took the row carrier while the
+                    // param stayed `<R: IpeRow>`) or a structural-record param
+                    // (return took the narrowed record while the param stayed
+                    // generic), the two ends diverge and the emitted body returns
+                    // the parameter where the carrier is expected (E0308). A
+                    // wildcard `any` has ONE concrete lowering per position: when
+                    // the body yields a threaded parameter, the return IS that
+                    // parameter's final type, whatever it lowered to.
+                    if ret_is_any_wildcard
+                        && let Some(tp) = tail_param
+                        && let Some((_, threaded_ty)) = params.iter().find(|(s, _)| *s == tp)
+                    {
+                        ret = threaded_ty.clone();
+                    }
                 }
                 // Each quantified variable carries the Rust trait bound its
                 // body-imposed super-type obligations require (empty for a
@@ -24411,6 +24597,64 @@ mod tests {
             &IrType::Decoder(Box::new(IrType::Int)),
             a
         ));
+    }
+
+    /// The tail-threaded-param walk finds a parameter the body ultimately
+    /// yields — directly, or through value-preserving `let`/destructure
+    /// prologues — so the wildcard-`any` return can follow it. It must NOT
+    /// report a param a rebinding scope shadows, nor a tail that is not a bare
+    /// param reference.
+    #[test]
+    fn tail_threaded_param_finds_yielded_param() {
+        use ipe_ir::Expr;
+
+        let mut interner = Interner::new();
+        let p = interner.intern("p").unwrap();
+        let q = interner.intern("q").unwrap();
+        let mut params: BTreeSet<Symbol> = BTreeSet::new();
+        params.insert(p);
+
+        // Bare return of the param.
+        assert_eq!(
+            super::body_tail_threaded_param(&Expr::Var(p), &params),
+            Some(p)
+        );
+        assert_eq!(
+            super::body_tail_threaded_param(&Expr::CloneVar(p), &params),
+            Some(p)
+        );
+
+        // Through a value-preserving `let` prologue whose binder is not the tail.
+        let through_let = Expr::Let {
+            name: q,
+            value: Box::new(Expr::Unit),
+            body: Box::new(Expr::Var(p)),
+        };
+        assert_eq!(
+            super::body_tail_threaded_param(&through_let, &params),
+            Some(p)
+        );
+
+        // A tail that is NOT a bare param reference (a literal) threads nothing.
+        assert_eq!(
+            super::body_tail_threaded_param(&Expr::Str("hi".to_owned()), &params),
+            None
+        );
+
+        // A non-param var threads nothing.
+        assert_eq!(
+            super::body_tail_threaded_param(&Expr::Var(q), &params),
+            None
+        );
+
+        // A `let` that REBINDS the param hides it: the tail `Var(p)` refers to
+        // the inner binding, not the outer param.
+        let shadow = Expr::Let {
+            name: p,
+            value: Box::new(Expr::Unit),
+            body: Box::new(Expr::Var(p)),
+        };
+        assert_eq!(super::body_tail_threaded_param(&shadow, &params), None);
     }
 
     /// End-to-end of the obligation: `apply_kernel_type_param_bounds` stamps
