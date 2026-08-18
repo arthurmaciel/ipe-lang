@@ -10,6 +10,23 @@ Entries below the header are maintained by
 section is generated from Conventional Commit messages and prepended when the
 standing release pull request is merged.
 
+## [0.1.58](https://github.com/arthurmaciel/ipe-lang/compare/ipe-v0.1.57...ipe-v0.1.58) (2026-08-18)
+
+
+### Bug Fixes
+
+* **backend:** emit Int add/sub/mul through wrapping runtime helpers ([#1124](https://github.com/arthurmaciel/ipe-lang/issues/1124)) ([#1145](https://github.com/arthurmaciel/ipe-lang/issues/1145)) ([dfdcb12](https://github.com/arthurmaciel/ipe-lang/commit/dfdcb123b73f218f604f8e03b645f2647bda6057))
+* **diagnostics:** render set-valued diagnostics in canonical string order ([#1150](https://github.com/arthurmaciel/ipe-lang/issues/1150)) ([2aeb7ee](https://github.com/arthurmaciel/ipe-lang/commit/2aeb7ee1f239fa3e3bb7824156c9542d0dfebf64))
+* **lower:** erase field-read wildcard-any param to a row generic, close E0308 SEAL ([#1115](https://github.com/arthurmaciel/ipe-lang/issues/1115)) ([f8e592b](https://github.com/arthurmaciel/ipe-lang/commit/f8e592b9fc385be3a084b32f1069f4dd4b0f629f))
+* **lower:** make is_retry_policy_record a full name+type predicate ([#1138](https://github.com/arthurmaciel/ipe-lang/issues/1138)) ([58b5772](https://github.com/arthurmaciel/ipe-lang/commit/58b5772267dd85504f021e469019c11d7422edbd))
+* **lsp:** guard every request handler against dependency-cycle panic ([#1144](https://github.com/arthurmaciel/ipe-lang/issues/1144)) ([2aff323](https://github.com/arthurmaciel/ipe-lang/commit/2aff3235882d14e417f3b8431eaa6cd76514f35f))
+* **runtime:** collapse nested if-chains and drop needless borrow to fix runtime-feature-combos CI ([#1149](https://github.com/arthurmaciel/ipe-lang/issues/1149)) ([5961144](https://github.com/arthurmaciel/ipe-lang/commit/59611440c76088a0512507e7cd6f40fec84f21e1))
+* **security:** close missing-egress-fail-closed-guard on all 5 instances ([#1143](https://github.com/arthurmaciel/ipe-lang/issues/1143)) ([232b424](https://github.com/arthurmaciel/ipe-lang/commit/232b424f753d3cb5c544ad0361c84494b6fbf752))
+* **security:** close TOCTOU class — exclusive scratch paths with 128-bit entropy ([#1153](https://github.com/arthurmaciel/ipe-lang/issues/1153)) ([cdfb76b](https://github.com/arthurmaciel/ipe-lang/commit/cdfb76bdd5a7befcf0d65dea0a203b2789c4b10b))
+* **security:** fail closed on all four error-swallow gate instances ([#1141](https://github.com/arthurmaciel/ipe-lang/issues/1141)) ([c3f1279](https://github.com/arthurmaciel/ipe-lang/commit/c3f1279794302dbe85a8ce57cd3a5abcd58c0946))
+* **security:** path newtypes prove their full invariant (closes [#1128](https://github.com/arthurmaciel/ipe-lang/issues/1128)) ([#1156](https://github.com/arthurmaciel/ipe-lang/issues/1156)) ([f964af1](https://github.com/arthurmaciel/ipe-lang/commit/f964af17e1e657c30e381fba0cd7ee32ed8a807a))
+* **static:** rename hello-world to ipe-app and strip Windows UNC prefix in dep path ([#1151](https://github.com/arthurmaciel/ipe-lang/issues/1151)) ([dd854bb](https://github.com/arthurmaciel/ipe-lang/commit/dd854bb0277d86eca601b3a102910a4fc237b2b6))
+
 ## [0.1.57](https://github.com/arthurmaciel/ipe-lang/compare/ipe-v0.1.56...ipe-v0.1.57) (2026-08-18)
 
 
