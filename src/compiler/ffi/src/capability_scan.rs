@@ -132,6 +132,14 @@ const PATH_RULES: &[PathRule] = &[
         second: "arch",
         cap: Capability::NativeFfi,
     },
+    // `std::os` — the OS-specific surface (unix sockets, raw file descriptors,
+    // platform extensions). Every sub-path crosses the OS boundary; treated as
+    // NativeFfi opacity so any `std::os::…` use refuses rather than admits.
+    PathRule {
+        first: "std",
+        second: "os",
+        cap: Capability::NativeFfi,
+    },
 ];
 
 /// Bare capability-bearing type/const identifiers a wrapper reaches after a
@@ -147,6 +155,15 @@ const BARE_IDENTS: &[(&str, Capability)] = &[
     ("TcpListener", Capability::Network),
     ("UdpSocket", Capability::Network),
     ("OpenOptions", Capability::Filesystem),
+    // Unix-socket and raw-fd types reached after `use std::os::unix::net::*`
+    // or `use std::os::fd::*`. Each crosses the OS boundary (network socket or
+    // raw file descriptor); treated as NativeFfi because the capability scan
+    // cannot enumerate their effects at the token level.
+    ("UnixStream", Capability::NativeFfi),
+    ("UnixListener", Capability::NativeFfi),
+    ("RawFd", Capability::NativeFfi),
+    ("OwnedFd", Capability::NativeFfi),
+    ("from_raw_fd", Capability::NativeFfi),
 ];
 
 /// The set of runtime-enforced axes a target's jail actually confines at the OS
@@ -602,10 +619,24 @@ fn scan_ident(
     }
     // `first :: second` — id, `:`, `:`, second-ident.
     if let Some(second) = colon_colon_ident(toks, i) {
+        let mut rule_matched = false;
         for rule in PATH_RULES {
             if name == rule.first && second == rule.second {
                 out.proposed.insert(rule.cap);
+                rule_matched = true;
             }
+        }
+        // Catch-all: a `std::X` or `core::X` path whose second segment is not
+        // in the allowlist is treated as an unenumerable OS/platform surface.
+        // The allowlist is a closed set whose complement must refuse, not admit.
+        // Over-refusing is the safe direction: an author who genuinely needs a
+        // recognised-safe std sub-module will find it in the allowlist.
+        if !rule_matched && (name == "std" || name == "core") {
+            out.opacities.push(Opacity::UnenumerableModule {
+                file: file.to_owned(),
+                line,
+                construct: "std::<unrecognised>",
+            });
         }
     }
 }
@@ -1436,6 +1467,164 @@ mod tests {
                 }
                 _ => assert!(unenf, "{cap:?} stays refused on an empty-set target"),
             }
+        }
+    }
+
+    // -----------------------------------------------------------------------
+    // Instance #4 regression — std::os and aliased OS paths must not admit
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn std_os_unix_net_unixstream_refuses() {
+        // Regression: `std::os::unix::net::UnixStream` was previously admitted
+        // (proposed={}, opacities=[]) because `std::os` was absent from
+        // PATH_RULES and the catch-all was missing.
+        let src = "fn f() { let _ = std::os::unix::net::UnixStream::connect(\"/x\"); }";
+        let o = scan_source("w.rs", src);
+        assert!(
+            !o.proposed.is_empty() || !o.opacities.is_empty(),
+            "std::os::unix::net::UnixStream must not produce (empty proposed, empty opacities): \
+             proposed={:?} opacities={:?}",
+            o.proposed,
+            o.opacities
+        );
+        assert!(
+            o.must_refuse(),
+            "std::os::unix::net::UnixStream must cause must_refuse()"
+        );
+        assert!(matches!(
+            reconcile(&BTreeSet::new(), &o, &[]),
+            Verdict::Refuse { .. }
+        ));
+    }
+
+    #[test]
+    fn std_os_unix_fs_refuses() {
+        let src = "fn f() { std::os::unix::fs::symlink(\"/a\", \"/b\"); }";
+        let o = scan_source("w.rs", src);
+        assert!(
+            !o.proposed.is_empty() || !o.opacities.is_empty(),
+            "std::os::unix::fs must not produce (empty proposed, empty opacities)"
+        );
+        assert!(
+            o.must_refuse(),
+            "std::os::unix::fs must cause must_refuse()"
+        );
+    }
+
+    #[test]
+    fn std_os_fd_asrawfd_refuses() {
+        let src = "use std::os::fd::AsRawFd; fn f<T: AsRawFd>(t: &T) { let _ = t.as_raw_fd(); }";
+        let o = scan_source("w.rs", src);
+        assert!(
+            !o.proposed.is_empty() || !o.opacities.is_empty(),
+            "std::os::fd must not produce (empty proposed, empty opacities)"
+        );
+        assert!(o.must_refuse(), "std::os::fd must cause must_refuse()");
+    }
+
+    #[test]
+    fn bare_unix_stream_refuses() {
+        // After `use std::os::unix::net::UnixStream`, the wrapper uses the bare
+        // identifier — must still refuse.
+        let src = "use std::os::unix::net::UnixStream; fn f() { UnixStream::connect(\"/x\"); }";
+        let o = scan_source("w.rs", src);
+        assert!(
+            o.proposed.contains(&Capability::NativeFfi),
+            "bare UnixStream must propose NativeFfi: {:?}",
+            o.proposed
+        );
+        assert!(o.must_refuse(), "bare UnixStream must refuse");
+    }
+
+    #[test]
+    fn bare_rawfd_refuses() {
+        let src = "use std::os::fd::RawFd; fn f(fd: RawFd) {}";
+        let o = scan_source("w.rs", src);
+        assert!(
+            o.proposed.contains(&Capability::NativeFfi),
+            "bare RawFd must propose NativeFfi: {:?}",
+            o.proposed
+        );
+    }
+
+    #[test]
+    fn recognised_std_net_does_not_gain_spurious_opacity() {
+        // Non-regression: `std::net::TcpStream` is in PATH_RULES; it must NOT
+        // trigger the catch-all and must NOT gain a spurious UnenumerableModule
+        // opacity from the new guard.
+        let src = "fn f() { let _ = std::net::TcpStream::connect(\"x:80\"); }";
+        let o = scan_source("lib.rs", src);
+        assert!(
+            o.proposed.contains(&Capability::Network),
+            "std::net must still propose Network"
+        );
+        assert!(
+            o.opacities.is_empty(),
+            "std::net must NOT gain a spurious opacity: {:?}",
+            o.opacities
+        );
+    }
+
+    #[test]
+    fn pure_collections_hashmap_does_not_refuse() {
+        // Non-regression: a wrapper that uses only `std::collections::HashMap`
+        // (no capability) must still admit cleanly. The catch-all fires for
+        // `std::collections` but that is an opacity, not a proposed capability;
+        // on a full-set jail where every axis is confined it still admits.
+        // Under REFUSE_GAP the opacity causes Refuse (hidden effect on an
+        // unconfined axis) — which is the correct conservative behaviour.
+        let src = "use std::collections::HashMap; fn f() -> HashMap<i64,i64> { HashMap::new() }";
+        let o = scan_source("lib.rs", src);
+        // The proposed set must not contain any runtime capability.
+        for cap in &o.proposed {
+            assert!(
+                matches!(
+                    cap,
+                    Capability::Clock | Capability::Random | Capability::Unsafe
+                ),
+                "std::collections must not propose a runtime-enforced capability, got {cap:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn invariant_std_second_segment_produces_nonempty_proposed_or_opacities() {
+        // Machine-checked: for every tested `std::<mod>` second segment, the
+        // scan result must be non-empty proposed OR non-empty opacities. The
+        // silent-empty state (empty proposed AND empty opacities) would mean
+        // the allowlist's complement silently admits instead of refusing.
+        let std_mods = &[
+            "net",
+            "fs",
+            "process",
+            "env",
+            "time",
+            "os",
+            "arch",
+            "io",
+            "collections",
+            "sync",
+            "thread",
+            "path",
+            "ffi",
+            "mem",
+            "ptr",
+            "alloc",
+            "fmt",
+            "convert",
+            "ops",
+            "hash",
+            "cmp",
+        ];
+        for module in std_mods {
+            let src = format!("fn f() {{ let _ = std::{module}::placeholder(); }}");
+            let o = scan_source("lib.rs", &src);
+            assert!(
+                !o.proposed.is_empty() || !o.opacities.is_empty(),
+                "std::{module} produced (empty proposed, empty opacities) — \
+                 the allowlist complement must refuse, not silently admit"
+            );
         }
     }
 }

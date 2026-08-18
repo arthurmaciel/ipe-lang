@@ -4765,13 +4765,12 @@ fn run_audit_entry(rest: &[String]) -> Result<(), CliError> {
     let submitted = index::validate_entry_file(&entry_path)?;
 
     // Step 2 — baseline: read the previously-published entry (if any).
+    // Fail closed: a present-but-unreadable baseline propagates as an error
+    // so the immutability wall below never runs against an empty baseline and
+    // silently classifies every submitted version as "new".
     let index_root = index_root_opt.clone().unwrap_or_else(resolve::index_root);
     let baseline: Option<index::IndexEntry> =
-        if index::entry_file_exists(&index_root, &submitted.name) {
-            index::read_entry(&index_root, &submitted.name).ok()
-        } else {
-            None
-        };
+        index::read_entry_lookup(&index_root, &submitted.name).require_present()?;
     let baseline_by_version: std::collections::BTreeMap<&semver::Version, &index::EntryVersion> =
         baseline
             .as_ref()
