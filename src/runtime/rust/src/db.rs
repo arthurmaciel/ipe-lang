@@ -792,15 +792,15 @@ async fn build_pool<E: Send + From<String> + 'static>(url: &str) -> IpeResult<E,
     // SQLite (file/sqlite/`:memory:`) carries no host and is exempt.
     // `url::Url::parse` is the same parser sqlx uses internally, so the host
     // extracted here is the host sqlx would dial.
-    if !url.starts_with("sqlite") && !url.starts_with("file") && !url.starts_with(':') {
-        if let Ok(parsed) = ::url::Url::parse(url) {
-            if let Some(host) = parsed.host_str() {
-                let port = parsed.port_or_known_default().unwrap_or(5432);
-                if let Err(e) = crate::ssrf::VettedDial::for_host(host, port) {
-                    return IpeResult::Err(str_err(&format!("db: {e}")));
-                }
-            }
-        }
+    if !url.starts_with("sqlite")
+        && !url.starts_with("file")
+        && !url.starts_with(':')
+        && let Ok(parsed) = ::url::Url::parse(url)
+        && let Some(host) = parsed.host_str()
+        && let Err(e) =
+            crate::ssrf::VettedDial::for_host(host, parsed.port_or_known_default().unwrap_or(5432))
+    {
+        return IpeResult::Err(str_err(&format!("db: {e}")));
     }
     let pool: Db = match sqlx::pool::PoolOptions::new()
         .max_connections(max_pool_connections())
@@ -5076,11 +5076,11 @@ mod tests {
         if url.starts_with("sqlite") || url.starts_with("file") || url.starts_with(':') {
             return false;
         }
-        if let Ok(parsed) = ::url::Url::parse(url) {
-            if let Some(host) = parsed.host_str() {
-                let port = parsed.port_or_known_default().unwrap_or(5432);
-                return crate::ssrf::VettedDial::for_host(host, port).is_err();
-            }
+        if let Ok(parsed) = ::url::Url::parse(url)
+            && let Some(host) = parsed.host_str()
+        {
+            let port = parsed.port_or_known_default().unwrap_or(5432);
+            return crate::ssrf::VettedDial::for_host(host, port).is_err();
         }
         false
     }
