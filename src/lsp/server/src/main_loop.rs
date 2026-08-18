@@ -106,7 +106,7 @@ pub fn run(
                     Message::Request(request) => {
                         match connection.handle_shutdown(&request) {
                             Ok(true) => break,
-                            Ok(false) => handle_request(&state, connection, request),
+                            Ok(false) => handle_request(&state, connection, &request),
                             Err(err) => return Err(ServerError::new(err)),
                         }
                     }
@@ -141,8 +141,50 @@ fn workspace_root_of(init: &InitializeParams) -> Option<PathBuf> {
         .and_then(|uri| uri.to_file_path().ok())
 }
 
-fn handle_request(state: &State, connection: &Connection, request: Request) {
-    let result: Option<serde_json::Value> = match request.method.as_str() {
+fn handle_request(state: &State, connection: &Connection, request: &Request) {
+    let method = request.method.clone();
+    let id = request.id.clone();
+
+    // Panic boundary: mirrors the diagnostics worker's guard (main_loop.rs
+    // recompute). A salsa dependency-cycle panic or any other panic in a
+    // handler becomes a per-request LSP error response; the select! loop and
+    // all other open documents are unaffected.
+    //
+    // AssertUnwindSafe: `state` and `request` are accessed read-only inside
+    // the closure; no interior mutation escapes the catch_unwind boundary, so
+    // the assertion is sound.
+    let outcome = std::panic::catch_unwind(AssertUnwindSafe(|| {
+        salsa::Cancelled::catch(AssertUnwindSafe(|| dispatch(state, request)))
+    }));
+
+    let response = match outcome {
+        Ok(Ok(Some(value))) => Response::new_ok(id, value),
+        Ok(Ok(None)) => Response::new_err(
+            id,
+            lsp_server::ErrorCode::MethodNotFound as i32,
+            format!("ipe-lsp does not handle `{method}` yet"),
+        ),
+        Ok(Err(_cancelled)) => Response::new_err(
+            id,
+            lsp_server::ErrorCode::ContentModified as i32,
+            "request superseded by a newer edit".into(),
+        ),
+        Err(_panic) => {
+            eprintln!("[ipe lsp] internal error: request `{method}` panicked");
+            Response::new_err(
+                id,
+                lsp_server::ErrorCode::InternalError as i32,
+                format!("internal error handling `{method}`"),
+            )
+        }
+    };
+    let _ = connection.sender.send(Message::Response(response));
+}
+
+/// Dispatch an LSP request to the appropriate handler, returning its JSON
+/// result value, or `None` for an unrecognised method.
+fn dispatch(state: &State, request: &Request) -> Option<serde_json::Value> {
+    match request.method.as_str() {
         "textDocument/hover" => Some(hover_result(state, &request.params)),
         "textDocument/documentSymbol" => Some(document_symbols_result(state, &request.params)),
         "textDocument/documentLink" => Some(document_links_result(state, &request.params)),
@@ -161,16 +203,7 @@ fn handle_request(state: &State, connection: &Connection, request: Request) {
         "textDocument/signatureHelp" => Some(signature_help_result(state, &request.params)),
         "textDocument/inlayHint" => Some(inlay_hints_result(state, &request.params)),
         _ => None,
-    };
-    let response = match result {
-        Some(value) => Response::new_ok(request.id, value),
-        None => Response::new_err(
-            request.id,
-            lsp_server::ErrorCode::MethodNotFound as i32,
-            format!("ipe-lsp does not handle `{}` yet", request.method),
-        ),
-    };
-    let _ = connection.sender.send(Message::Response(response));
+    }
 }
 
 /// `textDocument/hover` — the solved type of the innermost expression at the

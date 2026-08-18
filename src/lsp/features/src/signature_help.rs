@@ -36,7 +36,7 @@ pub fn signature_help(
 ) -> Option<SignatureHelp> {
     let files = root.files(db);
     let &file = files.get(module)?;
-    let canonical = ipe_db::canonicalize(db, root, file).ok()?;
+    let canonical = crate::db_access::canonicalize_checked(db, root, entry, file)?;
     let solved = ipe_db::typecheck(db, root, entry).ok()?;
 
     // Find the innermost Call(VarTopLevel, …) containing `byte`.
