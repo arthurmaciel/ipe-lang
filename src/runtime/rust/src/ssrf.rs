@@ -215,6 +215,7 @@ pub(crate) fn resolve_first_non_private_addr_with_port(
 /// When `ssrf_deny_private_enabled()` is false (dev / explicit opt-out) the
 /// constructor still returns `Ok(VettedDial(()))` so callers are not broken
 /// in dev; the invariant is "passed the policy in effect," not "is always public."
+#[derive(Debug)]
 pub(crate) struct VettedDial(());
 
 impl VettedDial {
@@ -350,41 +351,61 @@ mod tests {
     #[test]
     fn vetted_dial_blocks_loopback_when_deny_private_on() {
         // Force the guard on for this test via env.
-        std::env::set_var("IPE_HTTP_DENY_PRIVATE", "1");
+        unsafe {
+            std::env::set_var("IPE_HTTP_DENY_PRIVATE", "1");
+        }
         assert!(VettedDial::for_host("127.0.0.1", 5432).is_err());
         assert!(VettedDial::for_host("::1", 5432).is_err());
-        std::env::remove_var("IPE_HTTP_DENY_PRIVATE");
+        unsafe {
+            std::env::remove_var("IPE_HTTP_DENY_PRIVATE");
+        }
     }
 
     #[test]
     fn vetted_dial_blocks_link_local_when_deny_private_on() {
-        std::env::set_var("IPE_HTTP_DENY_PRIVATE", "1");
+        unsafe {
+            std::env::set_var("IPE_HTTP_DENY_PRIVATE", "1");
+        }
         assert!(VettedDial::for_host("169.254.169.254", 5432).is_err());
-        std::env::remove_var("IPE_HTTP_DENY_PRIVATE");
+        unsafe {
+            std::env::remove_var("IPE_HTTP_DENY_PRIVATE");
+        }
     }
 
     #[test]
     fn vetted_dial_blocks_rfc1918_when_deny_private_on() {
-        std::env::set_var("IPE_HTTP_DENY_PRIVATE", "1");
+        unsafe {
+            std::env::set_var("IPE_HTTP_DENY_PRIVATE", "1");
+        }
         assert!(VettedDial::for_host("10.0.0.5", 5432).is_err());
-        std::env::remove_var("IPE_HTTP_DENY_PRIVATE");
+        unsafe {
+            std::env::remove_var("IPE_HTTP_DENY_PRIVATE");
+        }
     }
 
     #[test]
     fn vetted_dial_allows_public_ip_when_deny_private_on() {
-        std::env::set_var("IPE_HTTP_DENY_PRIVATE", "1");
+        unsafe {
+            std::env::set_var("IPE_HTTP_DENY_PRIVATE", "1");
+        }
         // 1.1.1.1 is public — passes the gate (dial not attempted here).
         assert!(VettedDial::for_host("1.1.1.1", 5432).is_ok());
-        std::env::remove_var("IPE_HTTP_DENY_PRIVATE");
+        unsafe {
+            std::env::remove_var("IPE_HTTP_DENY_PRIVATE");
+        }
     }
 
     #[test]
     fn vetted_dial_passes_private_when_deny_private_off() {
-        std::env::set_var("IPE_HTTP_DENY_PRIVATE", "0");
+        unsafe {
+            std::env::set_var("IPE_HTTP_DENY_PRIVATE", "0");
+        }
         // Guard explicitly off: private host is a pass (dev workflow).
         assert!(VettedDial::for_host("127.0.0.1", 5432).is_ok());
         assert!(VettedDial::for_host("10.0.0.1", 5432).is_ok());
-        std::env::remove_var("IPE_HTTP_DENY_PRIVATE");
+        unsafe {
+            std::env::remove_var("IPE_HTTP_DENY_PRIVATE");
+        }
     }
 
     #[test]

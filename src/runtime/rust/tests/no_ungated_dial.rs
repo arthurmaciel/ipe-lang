@@ -23,7 +23,16 @@ fn guarded_near_line(lines: &[&str], target_line: usize, window_lines: usize) ->
 fn external_conn_postgres_dial_is_guarded() {
     let src = include_str!("../src/external_conn.rs");
     let lines: Vec<&str> = src.lines().collect();
+    // Only production code dials — stop at the test module (`#[cfg(test)]`) so a
+    // test fixture's own VettedDial token can never vouch for a production dial.
+    let cfg_test_line = lines
+        .iter()
+        .position(|l| l.trim() == "#[cfg(test)]")
+        .unwrap_or(lines.len());
     for (i, line) in lines.iter().enumerate() {
+        if i >= cfg_test_line {
+            break;
+        }
         if !line.contains(".connect(") {
             continue;
         }

@@ -247,7 +247,7 @@ mod tests {
         unsafe { std::env::set_var("IPE_HTTP_DENY_PRIVATE", "1") };
         // A SQLite DSN has no host — the gate is not applied in `open_external`.
         // Verify the driver discriminant correctly skips the gate path.
-        let dsn = match dsn_parse::<String>("sqlite://app.db".to_string()) {
+        let dsn = match dsn_parse::<String>("sqlite://data/app.db".to_string()) {
             IpeResult::Ok(d) => d,
             IpeResult::Err(e) => panic!("SQLite DSN parse failed: {e}"),
         };
