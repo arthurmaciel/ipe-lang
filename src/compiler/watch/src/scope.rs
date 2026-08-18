@@ -68,6 +68,33 @@ impl WatchedPath {
         }
     }
 
+    /// Confine a path that no longer exists on disk (a delete event).
+    ///
+    /// When a file is deleted, `confine` cannot canonicalise it (the path is
+    /// gone). This constructor canonicalises the PARENT (which typically still
+    /// exists), re-joins the raw `file_name`, and applies the FULL
+    /// `starts_with(canon_root)` confinement gate to the REJOINED path — not
+    /// just to the parent. A file whose parent canonicalises outside the root,
+    /// or whose `file_name` is missing, yields `None`.
+    ///
+    /// The `file_name` component is taken from `candidate` as-is. It must not
+    /// contain path separators (which `file_name()` already prevents — it
+    /// returns the last component only), so the rejoined path has exactly the
+    /// depth of the canonicalised parent plus one leaf, with no escape vector.
+    #[must_use]
+    pub fn confine_deleted(root: &Path, candidate: &Path) -> Option<Self> {
+        let canon_root = std::fs::canonicalize(root).ok()?;
+        let parent = candidate.parent()?;
+        let parent_canon = std::fs::canonicalize(parent).ok()?;
+        let file_name = candidate.file_name()?;
+        let rejoined = parent_canon.join(file_name);
+        if rejoined.starts_with(&canon_root) {
+            Some(Self(rejoined))
+        } else {
+            None
+        }
+    }
+
     #[must_use]
     pub fn as_path(&self) -> &Path {
         &self.0
@@ -259,28 +286,22 @@ impl WatchScope {
     /// events at the source") — called on every raw event BEFORE it reaches
     /// the debounce/coalesce stage, so an excluded-dir storm never even
     /// enters the bounded intake queue.
+    ///
+    /// Both live and delete-event paths are routed through the same typed
+    /// constructors ([`WatchedPath::confine`] and
+    /// [`WatchedPath::confine_deleted`]), so there is exactly one confinement
+    /// gate — no ad-hoc `canonicalize`/`starts_with` duplication that could drift.
     #[must_use]
     pub fn is_relevant(&self, path: &Path) -> bool {
         if under_excluded_dir(path) {
             return false;
         }
-        let Some(canon) = std::fs::canonicalize(path).ok().or_else(|| {
-            // A delete event's path no longer exists by the time we look at
-            // it — canonicalize fails for a removed file. Confine against
-            // the PARENT instead (the removed file's directory still
-            // exists in the common case); this keeps delete events
-            // observable without weakening the confinement check (the
-            // parent must still resolve inside the root).
-            let parent = path.parent()?;
-            let parent_canon = std::fs::canonicalize(parent).ok()?;
-            Some(parent_canon.join(path.file_name()?))
-        }) else {
+        let Some(confined) = WatchedPath::confine(&self.root, path)
+            .or_else(|| WatchedPath::confine_deleted(&self.root, path))
+        else {
             return false;
         };
-        if !canon.starts_with(&self.root) {
-            return false;
-        }
-        is_watchable_leaf(self.tests_root.as_deref(), &canon)
+        is_watchable_leaf(self.tests_root.as_deref(), confined.as_path())
     }
 }
 
@@ -556,6 +577,71 @@ mod tests {
             scope.file_count(),
             1,
             "only Main.ipe counts — ipe.toml and the 10 tests/ artifacts must not"
+        );
+    }
+
+    #[test]
+    fn confine_deleted_rejects_outside_root() {
+        // A deleted file whose PARENT canonicalises OUTSIDE the watch root must
+        // return None — the full starts_with gate is applied to the rejoined
+        // path, not just to the parent.
+        let root = tmp_dir("confine_del_outside_root");
+        let other_root = tmp_dir("confine_del_outside_other");
+        // The parent exists but is outside root.
+        let deleted_path = other_root.join("gone.ipe");
+        assert!(
+            WatchedPath::confine_deleted(&root, &deleted_path).is_none(),
+            "confine_deleted must return None when the parent is outside the root"
+        );
+    }
+
+    #[test]
+    fn is_relevant_delete_event_outside_root_is_false() {
+        // A delete event for a file whose parent is outside self.root must not
+        // be relevant — the fallback confine_deleted applies the full root gate.
+        let root = tmp_dir("is_rel_del_outside_root");
+        let src = root.join("src");
+        fs::create_dir_all(&src).unwrap();
+        fs::write(
+            src.join("Main.ipe"),
+            "module Main exposing (main)\nmain = 1\n",
+        )
+        .unwrap();
+
+        let other_root = tmp_dir("is_rel_del_outside_other");
+        let scope = WatchScope::build(&root, &src).unwrap();
+        // Path under other_root — parent canonicalises outside scope.root.
+        let outside_path = other_root.join("Secret.ipe");
+        assert!(
+            !scope.is_relevant(&outside_path),
+            "a delete event outside the watch root must not be relevant"
+        );
+    }
+
+    #[test]
+    fn is_relevant_and_confine_agree_for_live_ipe_file() {
+        // For a live in-root .ipe file, is_relevant must agree with
+        // WatchedPath::confine — there is exactly one confinement constructor,
+        // so the two cannot drift.
+        let root = tmp_dir("is_rel_confine_agree");
+        let src = root.join("src");
+        fs::create_dir_all(&src).unwrap();
+        let file = src.join("Main.ipe");
+        fs::write(&file, "module Main exposing (main)\nmain = 1\n").unwrap();
+
+        let scope = WatchScope::build(&root, &src).unwrap();
+        assert!(
+            scope.is_relevant(&file),
+            "in-root .ipe file must be relevant"
+        );
+        let confined = WatchedPath::confine(scope.root(), &file)
+            .expect("confine must succeed for a live in-root file");
+        // is_relevant routes through the same confine constructor, so the
+        // canonical path it uses equals confined.as_path().
+        assert!(
+            confined.as_path().starts_with(scope.root()),
+            "confined path must be inside the root: {:?}",
+            confined.as_path()
         );
     }
 }

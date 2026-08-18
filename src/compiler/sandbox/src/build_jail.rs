@@ -206,49 +206,81 @@ impl JailOutcome {
     }
 }
 
-// ── the absolute-scratch invariant, made unrepresentable-if-violated ─────────
+// ── the safe-mount-path invariant, made unrepresentable-if-violated ──────────
 
-/// An absolute scratch path — the ONE writable location a jail re-mounts inside
-/// its chroot at the SAME absolute location the payload was told to write.
+/// An absolute, lexically-normalised mount path — no `..` (`ParentDir`)
+/// components.
 ///
-/// Parse-don't-validate: the only constructor ([`Self::new`]) REJECTS a
-/// non-absolute path, so a value of this type is proof the invariant holds. The
-/// FreeBSD jail re-mounts the scratch at `<root>/<scratch-stripped-of-leading-/>`
-/// (see `under_root`) and hands the payload `SCRATCH_DIR=<abs>`; a relative
-/// scratch would mount at the wrong spot inside the chroot and the payload's
-/// absolute write would miss the writable mount. Threading the raw `&Path` and
-/// re-checking `is_absolute()` at each use invites a missed check; a value that
-/// cannot exist unless absolute removes the possibility.
+/// Parse-don't-validate: the only constructor ([`Self::new`]) is the single
+/// gate. A value of this type is proof that the wrapped path is:
+/// - absolute (starts with `/`), AND
+/// - free of `..` (`ParentDir`) components.
+///
+/// These conditions together make `root.join(strip_leading_slash(inner))`
+/// provably nest INSIDE `root` — a `..` after the root is the escape vector,
+/// and this type makes that vector unrepresentable. The FreeBSD jail re-mounts
+/// paths at `<root>/<path-stripped-of-leading-/>` (see `under_root`); a path
+/// carrying `..` would mount OUTSIDE the jail root, which this type forecloses
+/// by construction.
+///
+/// Note: Rust's `Path::components()` elides `.` (`CurDir`) segments from
+/// absolute paths, so `/./tmp` is treated identically to `/tmp` at the
+/// component level and is accepted. The load-bearing rejection gate is `..`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[cfg_attr(not(any(target_os = "freebsd", test)), allow(dead_code))]
-pub(crate) struct AbsScratchPath(PathBuf);
+pub(crate) struct SafeMountPath(PathBuf);
 
-impl AbsScratchPath {
-    /// Construct from a path, or reject a non-absolute one. The sole way to build
-    /// an [`AbsScratchPath`]: a returned value is proof the wrapped path is
-    /// absolute, so no caller re-checks.
+impl SafeMountPath {
+    /// Construct from a path, rejecting any path that is not absolute or that
+    /// contains a `..` or `.` component. The sole way to build a
+    /// [`SafeMountPath`]: a returned value is proof of both invariants, so
+    /// callers do not re-check.
     ///
     /// # Errors
     ///
     /// [`RunJailDefect::MountFailed`] naming the offending path when it is not
-    /// absolute — a relative scratch is a broken caller contract that would root
-    /// the jail at the wrong location, refused rather than silently mis-mounted.
+    /// absolute, or when any component is `..` or `.`.
     #[cfg_attr(not(any(target_os = "freebsd", test)), allow(dead_code))]
     pub(crate) fn new(path: &Path) -> Result<Self, RunJailDefect> {
-        if path.is_absolute() {
-            Ok(Self(path.to_path_buf()))
-        } else {
-            Err(RunJailDefect::MountFailed {
+        use std::path::Component;
+        if !path.is_absolute() {
+            return Err(RunJailDefect::MountFailed {
                 target: path.to_path_buf(),
                 detail: format!(
-                    "scratch path {} is not absolute; cannot root the jail at a fixed location",
+                    "mount path {} is not absolute; cannot root the jail at a fixed location",
                     path.display()
                 ),
-            })
+            });
         }
+        for component in path.components() {
+            match component {
+                Component::ParentDir => {
+                    return Err(RunJailDefect::MountFailed {
+                        target: path.to_path_buf(),
+                        detail: format!(
+                            "mount path {} contains a `..` component; \
+                             a `..` after the root escapes the jail chroot",
+                            path.display()
+                        ),
+                    });
+                }
+                Component::CurDir => {
+                    return Err(RunJailDefect::MountFailed {
+                        target: path.to_path_buf(),
+                        detail: format!(
+                            "mount path {} contains a `.` component; \
+                             only a fully-normalised path is a safe mount source",
+                            path.display()
+                        ),
+                    });
+                }
+                Component::RootDir | Component::Normal(_) | Component::Prefix(_) => {}
+            }
+        }
+        Ok(Self(path.to_path_buf()))
     }
 
-    /// Borrow the wrapped absolute path.
+    /// Borrow the wrapped path.
     #[cfg_attr(not(any(target_os = "freebsd", test)), allow(dead_code))]
     pub(crate) fn as_path(&self) -> &Path {
         &self.0
@@ -992,7 +1024,7 @@ pub(crate) fn freebsd_jail_network_params(network_granted: bool) -> Vec<OsString
 /// [`JailOutcome`] — fail-closed at every establishment step.
 #[cfg(target_os = "freebsd")]
 mod freebsd_jail {
-    use super::{AbsScratchPath, JailOutcome, find_in_path, macos_scrubbed_env};
+    use super::{JailOutcome, SafeMountPath, find_in_path, macos_scrubbed_env};
     use crate::run_jail::{FilesystemScope, RunJailDefect, SandboxProfile};
     use std::ffi::OsString;
     use std::path::{Path, PathBuf};
@@ -1025,12 +1057,17 @@ mod freebsd_jail {
             };
         };
 
-        // The scratch must be absolute so it can be re-mounted at the SAME absolute
-        // location inside the chroot; the newtype rejects a non-absolute path at
-        // construction, so `RoRootMount` never re-checks. A relative scratch is a
-        // broken caller contract, refused rather than silently mis-mounted.
-        let scoped_tmp = match AbsScratchPath::new(scoped_tmp) {
-            Ok(abs) => abs,
+        // Both paths must be absolute and lexically normalised (no `..`/`.`) so each
+        // can be re-mounted at the same absolute location inside the chroot without
+        // escaping the jail root. `SafeMountPath::new` is the single gate; a path
+        // that fails this check makes the jail unavailable (fail-closed) rather than
+        // mounting at an unexpected location.
+        let scoped_tmp = match SafeMountPath::new(scoped_tmp) {
+            Ok(p) => p,
+            Err(defect) => return JailOutcome::Unavailable { defect },
+        };
+        let working_tree = match SafeMountPath::new(working_tree) {
+            Ok(p) => p,
             Err(defect) => return JailOutcome::Unavailable { defect },
         };
 
@@ -1040,13 +1077,12 @@ mod freebsd_jail {
         // granted, the working tree) nullfs-mounted read-write inside it, plus a
         // FRESH minimal devfs and an EMPTY `/proc` (its nullfs source rooted OUTSIDE
         // the writable scratch, so the payload cannot write it) masking the host's.
-        // This is the
-        // exact FreeBSD counterpart of the Linux arm's `--ro-bind / /` + one
-        // writable mount + fresh `--dev`/`--proc`: an out-of-scratch write targets
-        // the read-only root and is denied by the mount flag, never reliant on host
-        // file permissions. Absent the mount root the untrusted build is never run —
-        // fail-closed.
-        let jail_root = match RoRootMount::establish(&scoped_tmp, working_tree, profile) {
+        // This is the exact FreeBSD counterpart of the Linux arm's `--ro-bind / /` +
+        // one writable mount + fresh `--dev`/`--proc`: an out-of-scratch write
+        // targets the read-only root and is denied by the mount flag, never reliant
+        // on host file permissions. Absent the mount root the untrusted build is
+        // never run — fail-closed.
+        let jail_root = match RoRootMount::establish(&scoped_tmp, &working_tree, profile) {
             Ok(root) => root,
             Err(defect) => return JailOutcome::Unavailable { defect },
         };
@@ -1090,7 +1126,7 @@ mod freebsd_jail {
             return JailOutcome::Unavailable { defect };
         }
         if profile.filesystem == FilesystemScope::WorkingTreeReadWrite
-            && let Err(defect) = chown_to_jail_user(working_tree)
+            && let Err(defect) = chown_to_jail_user(working_tree.as_path())
         {
             return JailOutcome::Unavailable { defect };
         }
@@ -1212,14 +1248,14 @@ mod freebsd_jail {
         }
     }
 
-    /// Join an absolute host `inner` path under the jail `root`, so the scratch (and
-    /// granted working tree) mount at their ORIGINAL absolute paths inside the chroot
-    /// — the payload's `SCRATCH_DIR=<abs>` then resolves to the writable mount. A
-    /// relative or empty `inner` (which cannot be a real absolute mount source) is
-    /// rejected by the caller before this is reached; here we strip the leading
-    /// separator so `root.join(inner)` nests rather than replacing `root`.
-    fn under_root(root: &Path, inner: &Path) -> PathBuf {
-        let rel = inner.strip_prefix("/").unwrap_or(inner);
+    /// Join a safe, absolute, normalised `inner` path under the jail `root`, so
+    /// the scratch (and granted working tree) mount at their ORIGINAL absolute paths
+    /// inside the chroot — the payload's `SCRATCH_DIR=<abs>` resolves to the
+    /// writable mount. `inner` is a [`SafeMountPath`], so both absoluteness and
+    /// `..`/`.`-freedom are proven by construction; `root.join(stripped)` is
+    /// guaranteed to nest inside `root`.
+    fn under_root(root: &Path, inner: &SafeMountPath) -> PathBuf {
+        let rel = inner.as_path().strip_prefix("/").unwrap_or(inner.as_path());
         root.join(rel)
     }
 
@@ -1333,14 +1369,13 @@ mod freebsd_jail {
         /// filesystem axis is granted). Any missing primitive or failed mount refuses
         /// (`Err`) so the payload never runs against an incompletely-confined root.
         fn establish(
-            scoped_tmp: &AbsScratchPath,
-            working_tree: &Path,
+            scoped_tmp: &SafeMountPath,
+            working_tree: &SafeMountPath,
             profile: &SandboxProfile,
         ) -> Result<Self, RunJailDefect> {
-            // The scratch is an `AbsScratchPath`, so its absoluteness is already
-            // proven by construction — it can be re-mounted at the same absolute
-            // location inside the chroot with no re-check here.
-            let scoped_tmp = scoped_tmp.as_path();
+            // Both `scoped_tmp` and `working_tree` are `SafeMountPath` values —
+            // absolute and `..`/`.`-free by construction — so `under_root` nests
+            // each provably inside the jail root without any re-check here.
             let Some(mount_nullfs_bin) = find_in_path("mount_nullfs") else {
                 return Err(RunJailDefect::PrimitiveUnavailable {
                     missing: vec!["mount_nullfs"],
@@ -1395,7 +1430,7 @@ mod freebsd_jail {
             //    fresh `mount_devfs` gives the jail the minimal default devfs ruleset
             //    (null/zero/random/…), NOT the host's, matching the Linux arm's fresh
             //    `--dev /dev`.
-            let dev_target = under_root(&mount.root, Path::new("/dev"));
+            let dev_target = under_root(&mount.root, &SafeMountPath::new(Path::new("/dev"))?);
             mount_devfs(&mount_devfs_bin, &dev_target)?;
             mount.mounted.push(dev_target);
 
@@ -1413,7 +1448,7 @@ mod freebsd_jail {
             //    the jail root, NOT under the read-write scratch — so the payload has
             //    no mount to it and cannot surface files under its own `/proc`. The
             //    mount is read-only regardless, so `/proc` is truly immutable.
-            let proc_target = under_root(&mount.root, Path::new("/proc"));
+            let proc_target = under_root(&mount.root, &SafeMountPath::new(Path::new("/proc"))?);
             mount_nullfs(
                 &mount_nullfs_bin,
                 true,
@@ -1425,14 +1460,24 @@ mod freebsd_jail {
             // 4. The scratch, READ-WRITE, at its original absolute path inside the
             //    chroot — the ONE writable location the payload has.
             let scratch_target = under_root(&mount.root, scoped_tmp);
-            mount_nullfs(&mount_nullfs_bin, false, scoped_tmp, &scratch_target)?;
+            mount_nullfs(
+                &mount_nullfs_bin,
+                false,
+                scoped_tmp.as_path(),
+                &scratch_target,
+            )?;
             mount.mounted.push(scratch_target);
 
             // 5. The working tree, READ-WRITE, only when the filesystem axis is
             //    granted, so a granted effect is not false-denied.
             if profile.filesystem == FilesystemScope::WorkingTreeReadWrite {
                 let tree_target = under_root(&mount.root, working_tree);
-                mount_nullfs(&mount_nullfs_bin, false, working_tree, &tree_target)?;
+                mount_nullfs(
+                    &mount_nullfs_bin,
+                    false,
+                    working_tree.as_path(),
+                    &tree_target,
+                )?;
                 mount.mounted.push(tree_target);
             }
 
@@ -2481,22 +2526,21 @@ mod tests {
         );
     }
 
-    // ── the absolute-scratch newtype (pure — runs on any host) ────────────────
+    // ── the safe-mount-path newtype (pure — runs on any host) ────────────────
 
     #[test]
-    fn an_absolute_scratch_path_constructs_and_preserves_its_path() {
-        // The invariant holds ⇒ a value exists, wrapping the exact path unchanged.
-        let abs = AbsScratchPath::new(Path::new("/tmp/ipe-scratch")).expect("absolute");
-        assert_eq!(abs.as_path(), Path::new("/tmp/ipe-scratch"));
+    fn safe_mount_path_accepts_an_absolute_normalised_path() {
+        let p = SafeMountPath::new(Path::new("/tmp/ipe-scratch"))
+            .expect("absolute normalised path must be accepted");
+        assert_eq!(p.as_path(), Path::new("/tmp/ipe-scratch"));
     }
 
     #[test]
-    fn a_relative_scratch_path_is_rejected_as_a_mount_failure() {
-        // A relative scratch cannot root the jail at a fixed location, so it is
-        // unrepresentable: the constructor refuses with a typed MountFailed naming
-        // the offending path, never a value that later mis-mounts.
-        let err = AbsScratchPath::new(Path::new("relative/scratch"))
-            .expect_err("a relative scratch must be rejected");
+    fn safe_mount_path_rejects_a_relative_path() {
+        // A relative path is not absolute — rejected as a mount failure, never
+        // silently mis-mounted inside the chroot.
+        let err = SafeMountPath::new(Path::new("relative/scratch"))
+            .expect_err("a relative path must be rejected");
         assert!(
             matches!(
                 &err,
@@ -2505,6 +2549,70 @@ mod tests {
                         && detail.contains("not absolute")
             ),
             "expected MountFailed naming the offending path, got {err:?}"
+        );
+    }
+
+    #[test]
+    fn safe_mount_path_rejects_dotdot_escape() {
+        // `/x/../../etc` passes is_absolute() yet its `..` component escapes the
+        // jail root when joined under it — the exact escape vector the issue names.
+        // Any `..` is rejected, even one that doesn't visibly escape the root.
+        for bad in ["/x/../../etc", "/a/b/../c", "/tmp/../etc/passwd"] {
+            let err = SafeMountPath::new(Path::new(bad))
+                .expect_err(&format!("`..` path must be rejected: {bad}"));
+            assert!(
+                matches!(&err, RunJailDefect::MountFailed { detail, .. }
+                    if detail.contains("..")),
+                "expected MountFailed mentioning `..`, got {err:?} for {bad}"
+            );
+        }
+    }
+
+    #[test]
+    fn safe_mount_path_accepts_absolute_path_with_dot_elided_by_rust() {
+        // Rust's Path::components() elides `.` segments in absolute paths:
+        // `/./tmp` iterates as `[RootDir, Normal("tmp")]` — no CurDir component
+        // is produced. Such a path is accepted; the `.` is harmless (already
+        // equivalent to `/tmp`). The load-bearing rejection gate is `..`
+        // (ParentDir), which IS preserved by components() and IS the escape vector.
+        let result = SafeMountPath::new(Path::new("/./tmp"));
+        assert!(
+            result.is_ok(),
+            "a path whose `.` is elided by Rust's component iterator must be accepted: {result:?}"
+        );
+    }
+
+    #[test]
+    fn under_root_nests_safe_mount_paths_inside_jail_root() {
+        // For every SafeMountPath-constructible input the result of under_root
+        // starts_with the jail root — the escape `/x/../../etc` is demonstrably
+        // unreachable because SafeMountPath::new rejects it first.
+        let root = Path::new("/tmp/jailroot-X");
+        for inner in ["/tmp/x", "/a/b/c", "/tmp/ipe-scratch"] {
+            let safe = SafeMountPath::new(Path::new(inner)).expect("normalised absolute path");
+            let nested = under_root_model(root, safe.as_path());
+            assert!(
+                nested.starts_with(root),
+                "under_root result must nest under the jail root: {nested:?}"
+            );
+        }
+        // The escape is unrepresentable — SafeMountPath::new rejects it.
+        assert!(
+            SafeMountPath::new(Path::new("/x/../../etc")).is_err(),
+            "the escape vector must be unrepresentable as a SafeMountPath"
+        );
+    }
+
+    #[test]
+    fn working_tree_dotdot_escape_is_refused_before_any_mount() {
+        // A working_tree containing `..` would mount the read-write tree outside
+        // the chroot root — SafeMountPath::new rejects it, so establish() cannot
+        // be called with such a path (the type is the gate).
+        let bad = Path::new("/repo/../../etc");
+        let result = SafeMountPath::new(bad);
+        assert!(
+            matches!(result, Err(RunJailDefect::MountFailed { .. })),
+            "a working_tree with `..` must produce MountFailed before any mount: {result:?}"
         );
     }
 
