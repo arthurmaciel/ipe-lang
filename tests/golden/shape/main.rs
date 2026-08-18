@@ -227,9 +227,10 @@ pub fn main_area(s: MainShape) -> i64 {
 }
 pub fn ipe_main() -> IpeTask<()> {
     let _ipe_recursion_guard = crate::recursion_guard();
-    io_println(string_from_int(
-        ipe_runtime::math::ipe_int_add(crate::main_area(MainShape::Rect(4, 5)), crate::main_area(MainShape::Circle(2))),
-    ))
+    io_println(string_from_int(ipe_runtime::math::ipe_int_add(
+        crate::main_area(MainShape::Rect(4, 5)),
+        crate::main_area(MainShape::Circle(2)),
+    )))
 }
 
 // Ffi.kernel polyfill — should be unreachable in Rust target;

@@ -206,9 +206,10 @@ pub fn main_second_of(t: (i64, i64)) -> i64 {
 }
 pub fn ipe_main() -> IpeTask<()> {
     let _ipe_recursion_guard = crate::recursion_guard();
-    io_println(string_from_int(
-        ipe_runtime::math::ipe_int_add(crate::main_first_of((41, 7)), crate::main_second_of((41, 7))),
-    ))
+    io_println(string_from_int(ipe_runtime::math::ipe_int_add(
+        crate::main_first_of((41, 7)),
+        crate::main_second_of((41, 7)),
+    )))
 }
 
 // Ffi.kernel polyfill — should be unreachable in Rust target;

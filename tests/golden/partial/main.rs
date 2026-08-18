@@ -229,9 +229,10 @@ pub fn ipe_main() -> IpeTask<()> {
                         move |eta_0: i64| -> i64 { crate::main_add(1, eta_0) },
                         5,
                     );
-                    io_println(string_from_int(
-                        ipe_runtime::math::ipe_int_add(ipe_runtime::math::ipe_int_add(p, o), h),
-                    ))
+                    io_println(string_from_int(ipe_runtime::math::ipe_int_add(
+                        ipe_runtime::math::ipe_int_add(p, o),
+                        h,
+                    )))
                 })
             })
         })

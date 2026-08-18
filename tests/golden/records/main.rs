@@ -215,9 +215,10 @@ pub fn ipe_main() -> IpeTask<()> {
     let _ipe_recursion_guard = crate::recursion_guard();
     ({
         let p = RecXY { x: 2, y: 40 };
-        io_println(string_from_int(
-            ipe_runtime::math::ipe_int_add((p.clone()).x, (p).y),
-        ))
+        io_println(string_from_int(ipe_runtime::math::ipe_int_add(
+            (p.clone()).x,
+            (p).y,
+        )))
     })
 }
 

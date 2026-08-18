@@ -4620,12 +4620,53 @@ impl {sf} {{
 #[cfg(test)]
 mod tests {
     use super::{
-        CARGO_TOML, RUNTIME_CONFIG_RS_DB_POSTGRES, RUNTIME_CONFIG_RS_DB_SQLITE,
-        RUNTIME_MOD_RS_WEB_APPEND, async_runtime_cargo_toml, crypto_core_heavy_cargo_toml,
-        db_cargo_toml, server_cargo_toml, shake_ffi_by_fn_ident, web_cargo_toml,
+        CARGO_DEP_TOML, CARGO_TOML, CARGO_WASM_DEP_TOML, RUNTIME_CONFIG_RS_DB_POSTGRES,
+        RUNTIME_CONFIG_RS_DB_SQLITE, RUNTIME_MOD_RS_WEB_APPEND, WASM_CARGO_TOML,
+        async_runtime_cargo_toml, crypto_core_heavy_cargo_toml, db_cargo_toml, server_cargo_toml,
+        shake_ffi_by_fn_ident, web_cargo_toml,
     };
     use crate::DbDriver;
     use crate::crate_specs;
+
+    /// Drift-guard for the `overflow-checks = false` dev-profile flag, stated
+    /// once per emitted manifest source. Since #1124 the flag is a pure
+    /// *efficiency* knob (unchecked dev arithmetic) — `Int` wrap SOUNDNESS now
+    /// lives in the `ipe_runtime::math::ipe_int_{add,sub,mul}` helpers, not here.
+    /// This test keeps the four copies in sync (SSOT's "assert equality in a
+    /// test" clause): adding a fifth manifest source to the array below forces
+    /// its inclusion, and dropping the flag from any copy fails this test.
+    #[test]
+    fn every_emitted_manifest_carries_the_dev_overflow_checks_flag() {
+        // One enumerated set of every manifest string the backend can emit.
+        // A new template must be added here or the guard does not cover it.
+        let manifests: [(&str, &str); 4] = [
+            ("templates/Cargo.toml", CARGO_TOML),
+            ("templates/Cargo.dep.toml", CARGO_DEP_TOML),
+            ("templates/Cargo.wasm-dep.toml", CARGO_WASM_DEP_TOML),
+            ("project.rs WASM_CARGO_TOML", WASM_CARGO_TOML),
+        ];
+        for (name, manifest) in manifests {
+            let found = manifest.find("[profile.dev]");
+            assert!(
+                found.is_some(),
+                "{name}: emitted manifest must declare a [profile.dev] block"
+            );
+            let Some(dev_start) = found else { continue };
+            // Scope the search to the dev block: the flag belongs there, not in
+            // [profile.release] (which intentionally omits it, relying on
+            // Cargo's release default of overflow-checks = false).
+            let dev_block = &manifest[dev_start..];
+            let dev_end = dev_block[1..]
+                .find("[profile.")
+                .map_or(dev_block.len(), |rel| rel + 1);
+            let dev_block = &dev_block[..dev_end];
+            assert!(
+                dev_block.contains("overflow-checks = false"),
+                "{name}: [profile.dev] must carry `overflow-checks = false` \
+                 (efficiency knob; drop it and the guard fails)"
+            );
+        }
+    }
 
     /// Helper: extract the `default = [...]` line from a manifest string.
     fn default_line(manifest: &str) -> &str {

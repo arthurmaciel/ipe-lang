@@ -927,8 +927,12 @@ mod tests {
             let source =
                 format!("module Main exposing (f)\nf : Int -> Int -> Int\nf a b =\n    {src_op}\n");
             let opt = lower_body(&source, "f");
+            assert!(
+                matches!(&opt, Some((Expr::BinOp { .. }, _))),
+                "{src_op} must lower to a binop"
+            );
             let Some((Expr::BinOp { op, .. }, _)) = opt else {
-                panic!("{src_op} must lower to a binop");
+                continue;
             };
             assert_eq!(op, want, "Int operator {src_op}");
         }
@@ -942,8 +946,12 @@ mod tests {
                 "module Main exposing (f)\nf : Float -> Float -> Float\nf a b =\n    {src_op}\n"
             );
             let opt = lower_body(&source, "f");
+            assert!(
+                matches!(&opt, Some((Expr::BinOp { .. }, _))),
+                "{src_op} must lower to a binop"
+            );
             let Some((Expr::BinOp { op, .. }, _)) = opt else {
-                panic!("{src_op} must lower to a binop");
+                continue;
             };
             assert_eq!(op, want, "Float operator {src_op}");
         }
