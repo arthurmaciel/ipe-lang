@@ -770,15 +770,6 @@ pub enum TypeError {
     NonExhaustiveCase { missing: SortedNames },
     /// Two arms cover the same constructor (warning). [IPE-T0011]
     RedundantCaseBranch { constructor: Box<str> },
-    /// `Web.app` carries a non-empty `routes` list but the Model type has no
-    /// `page` field, so the routes are forwarded to the non-routed path and
-    /// never update the Model (warning — the program still compiles, matching
-    /// the Go reference's silent no-op). Usually a mis-named routed-page field.
-    /// [IPE-L0124]
-    RoutedAppMissingPageField {
-        /// How many routes were declared.
-        route_count: usize,
-    },
     /// A `record.field` access whose `field` is not present in the (closed)
     /// record type `record` — or whose base is not a record at all. [IPE-T0012]
     NoSuchField { field: Box<str>, record: Box<TyDoc> },
@@ -859,6 +850,22 @@ pub enum TypeError {
     /// still `cargo build`s (the emitted `ui_layout` would otherwise reject an
     /// `Html` where it wants an `Element`, E0308). [IPE-T0020]
     WebViewReturnsHtml,
+}
+
+/// How `main`'s inadmissible return type should be named in the
+/// [`LowerError::NonEntryMain`] message.
+///
+/// `Bare` carries a single type-name identifier (`"Int"`, `"String"`, …) that
+/// the renderer will article-wrap: `an_article("Int")` → `` an `Int` ``.
+/// `Phrase` carries a complete noun phrase that already contains backticks
+/// (the catch-all "value that is not a `` `Task` ``"); the renderer emits it
+/// verbatim — no article, no extra backticks.
+#[derive(Clone, PartialEq, Eq, Hash, Debug)]
+pub enum MainRetName {
+    /// A bare type identifier: wrap with an article and backticks.
+    Bare(&'static str),
+    /// A complete noun phrase with embedded backticks: emit verbatim.
+    Phrase(&'static str),
 }
 
 /// A language feature that the Milestone-0 lowerer does not yet support. Each
@@ -1176,6 +1183,15 @@ pub enum LowerError {
     /// other effect obeys. A `Task` runs only through `Task.run`, or by being
     /// sequenced inside a `Task`-returning function. [IPE-L0141]
     LawlessEffectDiscard,
+    /// `Web.app` carries a non-empty `routes` list but the Model type has no
+    /// `page` field, so the routes are forwarded to the non-routed path and
+    /// never update the Model (warning — the program still compiles, matching
+    /// the reference's silent no-op). Usually a mis-named routed-page field.
+    /// [IPE-L0124]
+    RoutedAppMissingPageField {
+        /// How many routes were declared.
+        route_count: usize,
+    },
     /// The program's `main` is not an entry a runnable program can have. A
     /// `main` is the one effect a program runs, so it must be a `Task Error ()`
     /// — either written directly (a script, `main = Io.println "…"`) or produced
@@ -1186,7 +1202,7 @@ pub enum LowerError {
     /// `ipe` time — the emitted entry wraps `main` in the runtime's single run
     /// site, which needs a `Task`, so a non-`Task` `main` would otherwise ship a
     /// crate that cannot build. [IPE-L0136]
-    NonEntryMain { found: Box<str> },
+    NonEntryMain { found: MainRetName },
     /// A wildcard `any` in the RETURN type of a signature contributes a generic
     /// that no parameter type carries and the body does not pin to a concrete
     /// type. A wildcard `any` promises exactly one concrete type per position,
@@ -1366,10 +1382,13 @@ impl Diagnostic {
     #[must_use]
     pub const fn severity(&self) -> Severity {
         match self {
-            Self::Parse { .. } | Self::Name { .. } | Self::Lower { .. } => Severity::Error,
+            Self::Parse { .. } | Self::Name { .. } => Severity::Error,
+            Self::Lower { msg, .. } => match msg {
+                LowerError::RoutedAppMissingPageField { .. } => Severity::Warning,
+                _ => Severity::Error,
+            },
             Self::Type { msg, .. } => match msg {
-                TypeError::RedundantCaseBranch { .. }
-                | TypeError::RoutedAppMissingPageField { .. } => Severity::Warning,
+                TypeError::RedundantCaseBranch { .. } => Severity::Warning,
                 // A catch-all over a closed, user-evolvable union is an error:
                 // it lets a future variant fall through silently. Scoped to
                 // `Head::Adt` in the exhaustiveness pass (Bool/List/open types
@@ -1499,7 +1518,6 @@ const fn type_code(msg: &TypeError) -> Code {
         TypeError::NonExhaustiveCase { .. } => IPE_T0010,
         TypeError::RedundantCaseBranch { .. } => IPE_T0011,
         TypeError::WildcardCoversKnownConstructors { .. } => IPE_T0018,
-        TypeError::RoutedAppMissingPageField { .. } => IPE_L0124,
         TypeError::NoSuchField { .. } => IPE_T0012,
         TypeError::BuiltinRecordUpdate { .. } => IPE_T0017,
         TypeError::CtorPatternArity { .. } => IPE_T0013,
@@ -1525,6 +1543,7 @@ const fn lower_code(msg: &LowerError) -> Code {
         LowerError::DevOnlyKernelInProduction { .. } => IPE_L0140,
         LowerError::UiCellsInWebShape(_) => IPE_L0132,
         LowerError::LawlessEffectDiscard => IPE_L0141,
+        LowerError::RoutedAppMissingPageField { .. } => IPE_L0124,
         LowerError::NonEntryMain { .. } => IPE_L0136,
         LowerError::UndeterminableReturnAny => IPE_L0142,
     }
@@ -1701,17 +1720,6 @@ fn type_help(msg: &TypeError) -> Vec<HelpLine> {
                 .into_boxed_str(),
             )]
         }
-        TypeError::RoutedAppMissingPageField { route_count } => vec![HelpLine::Note(
-            format!(
-                "the `routes` list has {route_count} route(s) but the Model has no \
-                 `page` field, so routing is disabled and every URL serves the same \
-                 app. The routed-page field must be named exactly `page` (of the \
-                 `Page` ADT whose constructors appear as route destinations). Rename \
-                 the field to `page`, or remove the `routes` list if routing is not \
-                 needed."
-            )
-            .into_boxed_str(),
-        )],
         TypeError::WildcardCoversKnownConstructors { constructors } => constructors
             .iter()
             .map(|c| HelpLine::MissingConstructor(c.clone()))
@@ -1896,20 +1904,45 @@ fn lower_help(msg: &LowerError) -> Vec<HelpLine> {
             ),
             HelpLine::SeeExplain("effects"),
         ],
-        LowerError::NonEntryMain { .. } => vec![
-            HelpLine::Note(
-                "`main` is the one effect your whole program runs, so it has to be a \
-                 `Task Error ()`. Write it directly — `main = Io.println \"hello\"` prints a \
-                 line, `main = someTask` runs any task you built — or start an app with \
-                 `Web.app { … }`, `Terminal.appScreen { … }`, or `WebView.app { … }`, each \
-                 of which is itself a `Task Error ()`. To turn a plain value into an effect, \
-                 do something with it: `main = Io.println (String.fromInt 42)`."
-                    .into(),
-            ),
-            HelpLine::SeeExplain("main"),
-        ],
+        LowerError::RoutedAppMissingPageField { route_count } => {
+            routed_app_missing_page_field_help(*route_count)
+        }
+        LowerError::NonEntryMain { .. } => non_entry_main_help(),
         LowerError::UndeterminableReturnAny => undeterminable_return_any_help(),
     }
+}
+
+/// The help lines for [`LowerError::NonEntryMain`], factored out so
+/// [`lower_help`] stays a thin per-variant dispatcher.
+fn non_entry_main_help() -> Vec<HelpLine> {
+    vec![
+        HelpLine::Note(
+            "`main` is the one effect your whole program runs, so it has to be a \
+             `Task Error ()`. Write it directly — `main = Io.println \"hello\"` prints a \
+             line, `main = someTask` runs any task you built — or start an app with \
+             `Web.app { … }`, `Terminal.appScreen { … }`, or `WebView.app { … }`, each \
+             of which is itself a `Task Error ()`. To turn a plain value into an effect, \
+             do something with it: `main = Io.println (String.fromInt 42)`."
+                .into(),
+        ),
+        HelpLine::SeeExplain("main"),
+    ]
+}
+
+/// The help lines for [`LowerError::RoutedAppMissingPageField`], factored out
+/// so [`lower_help`] stays a thin per-variant dispatcher.
+fn routed_app_missing_page_field_help(route_count: usize) -> Vec<HelpLine> {
+    vec![HelpLine::Note(
+        format!(
+            "the `routes` list has {route_count} route(s) but the Model has no \
+             `page` field, so routing is disabled and every URL serves the same \
+             app. The routed-page field must be named exactly `page` (of the \
+             `Page` ADT whose constructors appear as route destinations). Rename \
+             the field to `page`, or remove the `routes` list if routing is not \
+             needed."
+        )
+        .into_boxed_str(),
+    )]
 }
 
 /// The help lines for [`LowerError::UndeterminableReturnAny`], factored out so

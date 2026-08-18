@@ -1,0 +1,13 @@
+-- `MAIN` IS NOT A RUNNABLE PROGRAM ENTRY ------------------ test.ipe
+
+`main` has to be a `Task Error ()` — the one effect your program runs. This `main` is value that is not a `Task`.
+
+ --> test.ipe:4:1
+  |
+4 | main = Ok 1
+  | ^^^^ this `main` is value that is not a `Task`, not a `Task Error ()`
+  |
+  = note: `main` is the one effect your whole program runs, so it has to be a `Task Error ()`. Write it directly — `main = Io.println "hello"` prints a line, `main = someTask` runs any task you built — or start an app with `Web.app { … }`, `Terminal.appScreen { … }`, or `WebView.app { … }`, each of which is itself a `Task Error ()`. To turn a plain value into an effect, do something with it: `main = Io.println (String.fromInt 42)`.
+  = help: → run `ipe explain main` to learn more
+
+IPE-L0136 · run `ipe explain IPE-L0136`

@@ -478,11 +478,6 @@ fn type_prose(msg: &TypeError) -> String {
         TypeError::WildcardCoversKnownConstructors { .. } => {
             "This `_` arm quietly absorbs constructors you could handle by name.".to_string()
         }
-        TypeError::RoutedAppMissingPageField { .. } => {
-            "You've declared routes, but your Model has no `page` field for them to update, so \
-             routing does nothing."
-                .to_string()
-        }
         TypeError::WebViewReturnsHtml => {
             "This returns `Html`, but an `Element` is what's needed here.".to_string()
         }
@@ -530,11 +525,22 @@ fn lower_prose(msg: &LowerError) -> String {
              supposed to do any."
                 .to_string()
         }
-        LowerError::NonEntryMain { found } => format!(
-            "`main` has to be a `Task Error ()` — the one effect your program runs. \
-             This `main` is {}.",
-            an_article(found)
-        ),
+        LowerError::RoutedAppMissingPageField { .. } => {
+            "You've declared routes, but your Model has no `page` field for them to update, so \
+             routing does nothing."
+                .to_string()
+        }
+        LowerError::NonEntryMain { found } => {
+            use crate::diagnostic::MainRetName;
+            let type_phrase = match found {
+                MainRetName::Bare(n) => an_article(n),
+                MainRetName::Phrase(p) => (*p).to_string(),
+            };
+            format!(
+                "`main` has to be a `Task Error ()` — the one effect your program runs. \
+                 This `main` is {type_phrase}."
+            )
+        }
         LowerError::UndeterminableReturnAny => {
             "This signature's return `any` can't be worked out — nothing pins it to a \
              concrete type."
@@ -547,6 +553,10 @@ fn lower_prose(msg: &LowerError) -> String {
 /// `a String`, `a List String`. Type variables and lowercase-leading renders
 /// still read naturally with `a`/`an`, so the same rule applies. Purely for the
 /// prose band; caret labels stay article-free.
+///
+/// Callers must pass a bare type name — no embedded backticks. Pass a
+/// [`crate::diagnostic::MainRetName::Phrase`] value verbatim instead of routing
+/// it through here when the string is already a complete noun phrase.
 fn an_article(rendered: &str) -> String {
     let first = rendered.chars().next().map(|c| c.to_ascii_lowercase());
     let article = match first {
@@ -1393,10 +1403,6 @@ fn type_label(msg: &TypeError) -> Option<String> {
                  through silently"
             ))
         }
-        TypeError::RoutedAppMissingPageField { route_count } => Some(format!(
-            "{route_count} route(s) declared but the Model has no `page` field — \
-             routing is disabled and the routes are ignored"
-        )),
         TypeError::WebViewReturnsHtml => Some(
             "this is `Html`, but an `Element` is required here — `Ui.layout` / \
              `Ui.layoutWith` turn an `Element` into `Html`, so a `view` that \
@@ -1461,11 +1467,17 @@ fn lower_label(msg: &LowerError) -> String {
              type, or run the effect with `Task.run`"
                 .to_string()
         }
+        LowerError::RoutedAppMissingPageField { route_count } => format!(
+            "{route_count} route(s) declared but the Model has no `page` field — \
+             routing is disabled and the routes are ignored"
+        ),
         LowerError::NonEntryMain { found } => {
-            format!(
-                "this `main` is {}, not a `Task Error ()`",
-                an_article(found)
-            )
+            use crate::diagnostic::MainRetName;
+            let type_phrase = match found {
+                MainRetName::Bare(n) => an_article(n),
+                MainRetName::Phrase(p) => (*p).to_string(),
+            };
+            format!("this `main` is {type_phrase}, not a `Task Error ()`")
         }
         LowerError::UndeterminableReturnAny => {
             "a wildcard `any` in the return type is pinned by no body — a caller could \
@@ -2691,5 +2703,24 @@ mod tests {
             out.contains("traversal") || out.contains(".."),
             "Traversal rejection must mention traversal in plain_message output:\n{out}"
         );
+    }
+
+    /// `an_article` wraps a bare type name in exactly one balanced backtick
+    /// pair. A complete noun phrase (`MainRetName::Phrase`) is emitted verbatim
+    /// and never routed through here, so `an_article` never nests backticks.
+    #[test]
+    fn an_article_single_wraps_bare_names() {
+        for name in ["Int", "String", "List String", "a"] {
+            let out = an_article(name);
+            assert_eq!(
+                out.matches('`').count(),
+                2,
+                "expected one balanced backtick pair: {out:?}"
+            );
+            assert!(
+                out.ends_with(&format!("`{name}`")),
+                "the bare name should be the wrapped tail: {out:?}"
+            );
+        }
     }
 }

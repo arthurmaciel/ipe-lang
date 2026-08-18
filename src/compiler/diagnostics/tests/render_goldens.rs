@@ -388,10 +388,25 @@ fn golden_lower_non_entry_main() -> Result<(), Box<dyn std::error::Error>> {
     let d = Diagnostic::Lower {
         span: Span::new(40, 44),
         msg: LowerError::NonEntryMain {
-            found: Box::from("Int"),
+            found: ipe_diagnostics::MainRetName::Bare("Int"),
         },
     };
     check_golden("lower_non_entry_main", &d, "test.ipe", source)
+}
+
+#[test]
+fn golden_lower_non_entry_main_non_task() -> Result<(), Box<dyn std::error::Error>> {
+    // IPE-L0136: `main` returns a type not in the bare-name list (catch-all
+    // Phrase path). The rendered prose must not article-wrap the phrase and
+    // must not produce nested or unbalanced backticks.
+    let source = "module Main exposing (main)\n\nmain : Result String Int\nmain = Ok 1\n";
+    let d = Diagnostic::Lower {
+        span: Span::new(54, 58),
+        msg: LowerError::NonEntryMain {
+            found: ipe_diagnostics::MainRetName::Phrase("value that is not a `Task`"),
+        },
+    };
+    check_golden("lower_non_entry_main_non_task", &d, "test.ipe", source)
 }
 
 #[test]
