@@ -215,7 +215,7 @@ pub fn main_tuple_parts() -> i64 {
     CELL.get_or_init(|| {
         ({
             let (a, b) = (40, 2);
-            (a + b)
+            ipe_runtime::math::ipe_int_add(a, b)
         })
     })
     .clone()
@@ -233,9 +233,10 @@ pub fn main_record_part() -> i64 {
 }
 pub fn ipe_main() -> IpeTask<()> {
     let _ipe_recursion_guard = crate::recursion_guard();
-    io_println(string_from_int(
-        (crate::main_tuple_parts() + crate::main_record_part()),
-    ))
+    io_println(string_from_int(ipe_runtime::math::ipe_int_add(
+        crate::main_tuple_parts(),
+        crate::main_record_part(),
+    )))
 }
 
 // Ffi.kernel polyfill — should be unreachable in Rust target;

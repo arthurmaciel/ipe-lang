@@ -203,7 +203,10 @@ pub fn main_combine(pair: (i64, i64)) -> i64 {
         let (a, b) = whole.clone();
         ({
             let (x, y) = whole;
-            ((a + b) + (x - y))
+            ipe_runtime::math::ipe_int_add(
+                ipe_runtime::math::ipe_int_add(a, b),
+                ipe_runtime::math::ipe_int_sub(x, y),
+            )
         })
     })
 }

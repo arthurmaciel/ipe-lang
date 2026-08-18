@@ -213,7 +213,7 @@ pub fn file_rename(src: ipe_runtime::path::Path, dst: ipe_runtime::path::Path) -
 pub fn main_unwrap(m: MainOpt<i64>) -> i64 {
     let _ipe_recursion_guard = crate::recursion_guard();
     match m {
-        MainOpt::Som(x) => (x + 1),
+        MainOpt::Som(x) => ipe_runtime::math::ipe_int_add(x, 1),
         MainOpt::Non => 0,
     }
 }

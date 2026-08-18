@@ -205,7 +205,7 @@ pub fn ipe_main() -> IpeTask<()> {
                 list_map_consume(
                     {
                         let __ipe_fn: Box<dyn Fn(i64) -> i64 + Send + Sync + 'static> =
-                            Box::new(move |x: i64| -> i64 { (x + 1) });
+                            Box::new(move |x: i64| -> i64 { ipe_runtime::math::ipe_int_add(x, 1) });
                         __ipe_fn
                     },
                     eta_0,

@@ -223,7 +223,13 @@ pub fn ipe_main() -> IpeTask<()> {
         let n = crate::main_unwrap(crate::main_wrap(40));
         ({
             let flag = crate::main_unwrap(crate::main_wrap((1 == 1)));
-            io_println(string_from_int((if flag { (n + 2) } else { n })))
+            io_println(string_from_int(
+                (if flag {
+                    ipe_runtime::math::ipe_int_add(n, 2)
+                } else {
+                    n
+                }),
+            ))
         })
     })
 }

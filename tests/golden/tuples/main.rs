@@ -202,7 +202,7 @@ pub fn ipe_main() -> IpeTask<()> {
         let same = (if ((1, 2) == (1, 2)) { 1 } else { 0 });
         ({
             let diff = (if ((1, 2) == (1, 3)) { 10 } else { 0 });
-            io_println(string_from_int((same + diff)))
+            io_println(string_from_int(ipe_runtime::math::ipe_int_add(same, diff)))
         })
     })
 }

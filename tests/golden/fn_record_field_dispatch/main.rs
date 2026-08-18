@@ -219,19 +219,22 @@ pub fn main_ops() -> RecAddMul {
     RecAddMul {
         add: {
             let __ipe_fn: ::std::sync::Arc<dyn Fn(i64) -> i64 + Send + Sync + 'static> =
-                ::std::sync::Arc::new(move |n: i64| -> i64 { (n + 10) });
+                ::std::sync::Arc::new(move |n: i64| -> i64 {
+                    ipe_runtime::math::ipe_int_add(n, 10)
+                });
             __ipe_fn
         },
         mul: {
-            let __ipe_fn: ::std::sync::Arc<dyn Fn(i64) -> i64 + Send + Sync + 'static> =
-                ::std::sync::Arc::new(move |n: i64| -> i64 { (n * 3) });
+            let __ipe_fn: ::std::sync::Arc<dyn Fn(i64) -> i64 + Send + Sync + 'static> = ::std::sync::Arc::new(
+                move |n: i64| -> i64 { ipe_runtime::math::ipe_int_mul(n, 3) },
+            );
             __ipe_fn
         },
     }
 }
 pub fn main_run(table: RecAddMul, x: i64) -> i64 {
     let _ipe_recursion_guard = crate::recursion_guard();
-    ((table.clone()).add.clone()(x) + (table).mul.clone()(x))
+    ipe_runtime::math::ipe_int_add((table.clone()).add.clone()(x), (table).mul.clone()(x))
 }
 pub fn ipe_main() -> IpeTask<()> {
     let _ipe_recursion_guard = crate::recursion_guard();

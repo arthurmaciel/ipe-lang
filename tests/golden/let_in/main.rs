@@ -199,16 +199,16 @@ pub fn file_rename(src: ipe_runtime::path::Path, dst: ipe_runtime::path::Path) -
 pub fn main_double(n: i64) -> i64 {
     let _ipe_recursion_guard = crate::recursion_guard();
     ({
-        let d = (n + n);
+        let d = ipe_runtime::math::ipe_int_add(n, n);
         d
     })
 }
 pub fn main_triple(n: i64) -> i64 {
     let _ipe_recursion_guard = crate::recursion_guard();
     ({
-        let a = (n + n);
+        let a = ipe_runtime::math::ipe_int_add(n, n);
         ({
-            let b = (a + n);
+            let b = ipe_runtime::math::ipe_int_add(a, n);
             b
         })
     })
@@ -216,7 +216,7 @@ pub fn main_triple(n: i64) -> i64 {
 pub fn ipe_main() -> IpeTask<()> {
     let _ipe_recursion_guard = crate::recursion_guard();
     ({
-        let total = (crate::main_double(5) + crate::main_triple(4));
+        let total = ipe_runtime::math::ipe_int_add(crate::main_double(5), crate::main_triple(4));
         io_println(string_from_int(total))
     })
 }

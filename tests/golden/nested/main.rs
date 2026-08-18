@@ -245,7 +245,7 @@ pub fn file_rename(src: ipe_runtime::path::Path, dst: ipe_runtime::path::Path) -
 pub fn main_box_sum(b: MainBox<(i64, i64)>) -> i64 {
     let _ipe_recursion_guard = crate::recursion_guard();
     match b {
-        MainBox::Wrap((a, c)) => (a + c),
+        MainBox::Wrap((a, c)) => ipe_runtime::math::ipe_int_add(a, c),
         MainBox::Empty => 0,
     }
 }
@@ -260,7 +260,7 @@ pub fn main_rec_sum(r: RecXY) -> i64 {
     let _ipe_recursion_guard = crate::recursion_guard();
     ({
         let RecXY { x, y, .. } = r;
-        (x + y)
+        ipe_runtime::math::ipe_int_add(x, y)
     })
 }
 pub fn main_let_parts() -> i64 {
@@ -271,7 +271,10 @@ pub fn main_let_parts() -> i64 {
             let (a, b) = (10, 20);
             ({
                 let RecXY { x, y, .. } = RecXY { x: 1, y: 2 };
-                (((a + b) + x) + y)
+                ipe_runtime::math::ipe_int_add(
+                    ipe_runtime::math::ipe_int_add(ipe_runtime::math::ipe_int_add(a, b), x),
+                    y,
+                )
             })
         })
     })
@@ -279,16 +282,20 @@ pub fn main_let_parts() -> i64 {
 }
 pub fn ipe_main() -> IpeTask<()> {
     let _ipe_recursion_guard = crate::recursion_guard();
-    io_println(string_from_int(
-        (((crate::main_box_sum(MainBox::Wrap((1, 2)))
-            + crate::main_label(MainTree::Node(
-                Box::new(MainTree::Leaf),
-                5,
-                Box::new(MainTree::Leaf),
-            )))
-            + crate::main_rec_sum(RecXY { x: 20, y: 22 }))
-            + crate::main_let_parts()),
-    ))
+    io_println(string_from_int(ipe_runtime::math::ipe_int_add(
+        ipe_runtime::math::ipe_int_add(
+            ipe_runtime::math::ipe_int_add(
+                crate::main_box_sum(MainBox::Wrap((1, 2))),
+                crate::main_label(MainTree::Node(
+                    Box::new(MainTree::Leaf),
+                    5,
+                    Box::new(MainTree::Leaf),
+                )),
+            ),
+            crate::main_rec_sum(RecXY { x: 20, y: 22 }),
+        ),
+        crate::main_let_parts(),
+    )))
 }
 
 // Ffi.kernel polyfill — should be unreachable in Rust target;

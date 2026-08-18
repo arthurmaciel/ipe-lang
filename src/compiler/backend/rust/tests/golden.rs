@@ -112,7 +112,7 @@ fn build_m0(interner: &mut Interner) -> DResult<Program> {
                 args: vec![],
             },
             body: Expr::BinOp {
-                op: BinOp::Add,
+                op: BinOp::IntAdd,
                 lhs: Box::new(Expr::Var(count)),
                 rhs: Box::new(Expr::Int(1)),
             },
@@ -126,7 +126,7 @@ fn build_m0(interner: &mut Interner) -> DResult<Program> {
                 args: vec![],
             },
             body: Expr::BinOp {
-                op: BinOp::Sub,
+                op: BinOp::IntSub,
                 lhs: Box::new(Expr::Var(count)),
                 rhs: Box::new(Expr::Int(1)),
             },

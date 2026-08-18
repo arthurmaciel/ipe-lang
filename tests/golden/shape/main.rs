@@ -219,14 +219,16 @@ pub fn file_rename(src: ipe_runtime::path::Path, dst: ipe_runtime::path::Path) -
 pub fn main_area(s: MainShape) -> i64 {
     let _ipe_recursion_guard = crate::recursion_guard();
     match s {
-        MainShape::Circle(r) => ((r * r) * 3),
-        MainShape::Rect(w, h) => (w * h),
+        MainShape::Circle(r) => {
+            ipe_runtime::math::ipe_int_mul(ipe_runtime::math::ipe_int_mul(r, r), 3)
+        }
+        MainShape::Rect(w, h) => ipe_runtime::math::ipe_int_mul(w, h),
     }
 }
 pub fn ipe_main() -> IpeTask<()> {
     let _ipe_recursion_guard = crate::recursion_guard();
     io_println(string_from_int(
-        (crate::main_area(MainShape::Rect(4, 5)) + crate::main_area(MainShape::Circle(2))),
+        ipe_runtime::math::ipe_int_add(crate::main_area(MainShape::Rect(4, 5)), crate::main_area(MainShape::Circle(2))),
     ))
 }
 

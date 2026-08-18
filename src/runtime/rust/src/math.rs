@@ -52,6 +52,32 @@ pub fn math_abs(x: i64) -> i64 {
     x.checked_abs().unwrap_or(i64::MAX)
 }
 
+/// Integer addition for Ipê's `+` operator on `Int` operands.
+///
+/// Two's-complement wrapping semantics: `i64::MAX + 1 == i64::MIN`.
+/// The wrap is the defined behaviour — it holds regardless of any Cargo
+/// profile `overflow-checks` setting.
+#[must_use]
+pub fn ipe_int_add(a: i64, b: i64) -> i64 {
+    a.wrapping_add(b)
+}
+
+/// Integer subtraction for Ipê's `-` operator on `Int` operands.
+///
+/// Two's-complement wrapping semantics: `i64::MIN - 1 == i64::MAX`.
+#[must_use]
+pub fn ipe_int_sub(a: i64, b: i64) -> i64 {
+    a.wrapping_sub(b)
+}
+
+/// Integer multiplication for Ipê's `*` operator on `Int` operands.
+///
+/// Two's-complement wrapping semantics: `i64::MAX * 2 == -2`.
+#[must_use]
+pub fn ipe_int_mul(a: i64, b: i64) -> i64 {
+    a.wrapping_mul(b)
+}
+
 /// Integer division for Ipê's `//` operator.
 ///
 /// Parity target: Ipê-Go `rt.IntDiv` (`runtime-go/rt/rt.go`).
@@ -296,6 +322,27 @@ pub fn math_remainder(x: f64, y: f64) -> f64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn ipe_int_add_wraps_at_max() {
+        assert_eq!(ipe_int_add(i64::MAX, 1), i64::MIN);
+        assert_eq!(ipe_int_add(0, 0), 0);
+        assert_eq!(ipe_int_add(3, 4), 7);
+    }
+
+    #[test]
+    fn ipe_int_sub_wraps_at_min() {
+        assert_eq!(ipe_int_sub(i64::MIN, 1), i64::MAX);
+        assert_eq!(ipe_int_sub(10, 3), 7);
+        assert_eq!(ipe_int_sub(0, 0), 0);
+    }
+
+    #[test]
+    fn ipe_int_mul_wraps_on_overflow() {
+        assert_eq!(ipe_int_mul(i64::MAX, 2), -2);
+        assert_eq!(ipe_int_mul(3, 4), 12);
+        assert_eq!(ipe_int_mul(0, i64::MAX), 0);
+    }
 
     #[test]
     fn test_math_abs_positive() {

@@ -1401,15 +1401,16 @@ impl<'a> Parser<'a> {
         match lit {
             Some(NegLit::Int(n, lit_span)) => {
                 self.bump(Construct::Expression)?;
-                // A positive `Int` token is bounded by `i64::MAX` at lex time, so
-                // `checked_neg` never overflows here; the fail-closed branch keeps
-                // the parser panic-free regardless.
+                // A positive `Int` token is bounded to [0, i64::MAX] at lex
+                // time (the lexer parses as `i64`, so the magnitude
+                // 9223372036854775808 — i64::MIN's absolute value — overflows
+                // and errors before reaching here). Therefore `checked_neg`
+                // always returns `Some`; the `Err` branch is the fail-closed
+                // guard ensuring the parser stays panic-free if that bound
+                // ever changes.
                 let value = n.checked_neg().ok_or_else(|| Diagnostic::Parse {
                     span: Self::span_merge(minus_span, lit_span),
-                    msg: ParseError::UnexpectedToken {
-                        found: tok_kind(&Tok::Int(n)),
-                        expected: ExpectedSet([Expected::Expression].into()),
-                    },
+                    msg: ParseError::IntLiteralOutOfRange,
                 })?;
                 return Ok(Located::new(
                     Self::span_merge(minus_span, lit_span),
@@ -2463,7 +2464,11 @@ impl<'a> Parser<'a> {
                 let neg = self.bump(Construct::Pattern)?;
                 if let Tok::Int(n) = &neg.kind {
                     let span = Self::span_merge(tok.span, neg.span);
-                    Ok(Located::new(span, Pattern_::PInt(n.wrapping_neg())))
+                    // `n` is in [0, i64::MAX] (lexer bound), so `checked_neg`
+                    // always returns `Some`. The fallback to i64::MIN keeps the
+                    // pattern total if the lexer bound widens to allow u64 magnitudes.
+                    let value = n.checked_neg().unwrap_or(i64::MIN);
+                    Ok(Located::new(span, Pattern_::PInt(value)))
                 } else {
                     Err(Self::unexpected_token(&neg, &[Expected::Pattern]))
                 }

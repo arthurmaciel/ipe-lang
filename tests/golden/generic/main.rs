@@ -230,7 +230,13 @@ pub fn ipe_main() -> IpeTask<()> {
         let n = crate::main_or_else(MainOpt::Som(41), 0);
         ({
             let flag = crate::main_pick(MainOpt::Som((1 == 1)));
-            io_println(string_from_int((if flag { (n + 1) } else { n })))
+            io_println(string_from_int(
+                (if flag {
+                    ipe_runtime::math::ipe_int_add(n, 1)
+                } else {
+                    n
+                }),
+            ))
         })
     })
 }

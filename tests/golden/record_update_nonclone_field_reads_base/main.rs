@@ -219,7 +219,7 @@ pub fn ipe_main() -> IpeTask<()> {
         };
         ({
             let m2 = {
-                let __ipe_upd_0 = ((m).count + 1);
+                let __ipe_upd_0 = ipe_runtime::math::ipe_int_add((m).count, 1);
                 let mut __ipe_rec = m;
                 __ipe_rec.count = __ipe_upd_0;
                 __ipe_rec

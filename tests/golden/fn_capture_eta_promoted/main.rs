@@ -198,7 +198,7 @@ pub fn file_rename(src: ipe_runtime::path::Path, dst: ipe_runtime::path::Path) -
 
 pub fn main_inc(a: i64, b: i64) -> i64 {
     let _ipe_recursion_guard = crate::recursion_guard();
-    (a + b)
+    ipe_runtime::math::ipe_int_add(a, b)
 }
 pub fn ipe_main() -> IpeTask<()> {
     let _ipe_recursion_guard = crate::recursion_guard();
@@ -211,7 +211,7 @@ pub fn ipe_main() -> IpeTask<()> {
                     + 'static,
             > = ::std::sync::Arc::new(
                 move |f: Box<dyn Fn(i64) -> i64 + Send + Sync + 'static>, x: i64| -> i64 {
-                    ((f)(x) + 1)
+                    ipe_runtime::math::ipe_int_add((f)(x), 1)
                 },
             );
             __ipe_fn

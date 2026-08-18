@@ -232,7 +232,7 @@ pub fn main_compose2(f: Box<dyn Fn(i64) -> i64 + Send + Sync + 'static>, a: i64,
                     __ipe_fn
                 }
             });
-            ((g)(a) + (g)(b))
+            ipe_runtime::math::ipe_int_add((g)(a), (g)(b))
         })
     })
 }
@@ -241,7 +241,7 @@ pub fn ipe_main() -> IpeTask<()> {
     io_println(string_from_int(crate::main_compose2(
         {
             let __ipe_fn: Box<dyn Fn(i64) -> i64 + Send + Sync + 'static> =
-                Box::new(move |n: i64| -> i64 { (n + 5) });
+                Box::new(move |n: i64| -> i64 { ipe_runtime::math::ipe_int_add(n, 5) });
             __ipe_fn
         },
         1,

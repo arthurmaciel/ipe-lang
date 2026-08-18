@@ -216,8 +216,9 @@ pub fn main_runner() -> RecRun {
     let _ipe_recursion_guard = crate::recursion_guard();
     RecRun {
         run: {
-            let __ipe_fn: ::std::sync::Arc<dyn Fn(i64) -> i64 + Send + Sync + 'static> =
-                ::std::sync::Arc::new(move |n: i64| -> i64 { (n + 1) });
+            let __ipe_fn: ::std::sync::Arc<dyn Fn(i64) -> i64 + Send + Sync + 'static> = ::std::sync::Arc::new(
+                move |n: i64| -> i64 { ipe_runtime::math::ipe_int_add(n, 1) },
+            );
             __ipe_fn
         },
     }

@@ -217,7 +217,10 @@ pub fn ipe_main() -> IpeTask<()> {
     let _ipe_recursion_guard = crate::recursion_guard();
     ({
         let r = RecValue { value: 1 };
-        io_println(string_from_int(((crate::main_wrap(41)).value + (r).value)))
+        io_println(string_from_int(ipe_runtime::math::ipe_int_add(
+            (crate::main_wrap(41)).value,
+            (r).value,
+        )))
     })
 }
 

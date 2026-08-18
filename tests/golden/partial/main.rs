@@ -198,7 +198,7 @@ pub fn file_rename(src: ipe_runtime::path::Path, dst: ipe_runtime::path::Path) -
 
 pub fn main_add(a: i64, b: i64) -> i64 {
     let _ipe_recursion_guard = crate::recursion_guard();
-    (a + b)
+    ipe_runtime::math::ipe_int_add(a, b)
 }
 pub fn main_apply_twice<FN0: Fn(i64) -> i64 + Send + Sync + 'static>(f: FN0, x: i64) -> i64 {
     let _ipe_recursion_guard = crate::recursion_guard();
@@ -208,7 +208,7 @@ pub fn main_over(a: i64) -> Box<dyn Fn(i64) -> i64 + Send + Sync + 'static> {
     let _ipe_recursion_guard = crate::recursion_guard();
     {
         let __ipe_fn: Box<dyn Fn(i64) -> i64 + Send + Sync + 'static> =
-            Box::new(move |b: i64| -> i64 { (a + b) });
+            Box::new(move |b: i64| -> i64 { ipe_runtime::math::ipe_int_add(a, b) });
         __ipe_fn
     }
 }
@@ -229,7 +229,9 @@ pub fn ipe_main() -> IpeTask<()> {
                         move |eta_0: i64| -> i64 { crate::main_add(1, eta_0) },
                         5,
                     );
-                    io_println(string_from_int(((p + o) + h)))
+                    io_println(string_from_int(
+                        ipe_runtime::math::ipe_int_add(ipe_runtime::math::ipe_int_add(p, o), h),
+                    ))
                 })
             })
         })

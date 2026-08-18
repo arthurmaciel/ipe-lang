@@ -222,7 +222,9 @@ pub fn ipe_main() -> IpeTask<()> {
                 __ipe_rec.x = __ipe_upd_0;
                 __ipe_rec
             };
-            io_println(string_from_int(((q).x + (p).y)))
+            io_println(string_from_int(
+                ipe_runtime::math::ipe_int_add((q).x, (p).y),
+            ))
         })
     })
 }

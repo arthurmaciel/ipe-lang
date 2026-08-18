@@ -238,7 +238,7 @@ pub fn main_sum_pair(arg_1: (i64, i64)) -> i64 {
     let _ipe_recursion_guard = crate::recursion_guard();
     ({
         let (a, b) = arg_1;
-        (a + b)
+        ipe_runtime::math::ipe_int_add(a, b)
     })
 }
 pub fn main_get_y(arg_2: RecXY) -> i64 {
@@ -266,7 +266,7 @@ pub fn main_countdown(arg_4: (i64, i64)) -> i64 {
                 return acc;
             }
             _ => {
-                let __tco_0 = ((n - 1), (acc + n));
+                let __tco_0 = (ipe_runtime::math::ipe_int_sub(n, 1), ipe_runtime::math::ipe_int_add(acc, n));
                 arg_4 = __tco_0;
                 continue;
             }
@@ -276,36 +276,7 @@ pub fn main_countdown(arg_4: (i64, i64)) -> i64 {
 pub fn ipe_main() -> IpeTask<()> {
     let _ipe_recursion_guard = crate::recursion_guard();
     io_println(string_from_int(
-        ((((((((crate::main_apply_i(move |arg_5: i64| -> i64 { 42 }, 0)
-            + crate::main_apply_p(
-                move |arg_6: (i64, i64)| -> i64 {
-                    ({
-                        let (a, b) = arg_6;
-                        (a + b)
-                    })
-                },
-                (1, 2),
-            ))
-            + crate::main_apply_r(
-                move |arg_7: RecXY| -> i64 {
-                    ({
-                        let RecXY { x, y: _, .. } = arg_7;
-                        x
-                    })
-                },
-                RecXY { x: 10, y: 5 },
-            ))
-            + crate::main_apply_m(move |arg_8: i64, x: i64, arg_9: (i64, i64)| -> i64 {
-                ({
-                    let (a, b) = arg_9;
-                    ((x + a) + b)
-                })
-            }))
-            + crate::main_ignore_arg(99))
-            + crate::main_sum_pair((4, 5)))
-            + crate::main_get_y(RecXY { x: 1, y: 8 }))
-            + crate::main_first_of_alias((6, 7)))
-            + crate::main_countdown((5, 0))),
+        ipe_runtime::math::ipe_int_add(ipe_runtime::math::ipe_int_add(ipe_runtime::math::ipe_int_add(ipe_runtime::math::ipe_int_add(ipe_runtime::math::ipe_int_add(ipe_runtime::math::ipe_int_add(ipe_runtime::math::ipe_int_add(ipe_runtime::math::ipe_int_add(crate::main_apply_i(move |arg_5: i64| -> i64 { 42 }, 0), crate::main_apply_p(move |arg_6: (i64, i64)| -> i64 { ({ let (a, b) = arg_6; ipe_runtime::math::ipe_int_add(a, b) }) }, (1, 2))), crate::main_apply_r(move |arg_7: RecXY| -> i64 { ({ let RecXY { x, y: _, .. } = arg_7; x }) }, RecXY { x: 10, y: 5 })), crate::main_apply_m(move |arg_8: i64, x: i64, arg_9: (i64, i64)| -> i64 { ({ let (a, b) = arg_9; ipe_runtime::math::ipe_int_add(ipe_runtime::math::ipe_int_add(x, a), b) }) })), crate::main_ignore_arg(99)), crate::main_sum_pair((4, 5))), crate::main_get_y(RecXY { x: 1, y: 8 })), crate::main_first_of_alias((6, 7))), crate::main_countdown((5, 0))),
     ))
 }
 

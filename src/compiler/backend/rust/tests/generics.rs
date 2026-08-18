@@ -100,7 +100,7 @@ fn build_identity_program(interner: &mut Interner) -> DResult<Program> {
     let chosen = Expr::If {
         cond: Box::new(Expr::Var(flag)),
         then_: Box::new(Expr::BinOp {
-            op: BinOp::Add,
+            op: BinOp::IntAdd,
             lhs: Box::new(Expr::Var(n)),
             rhs: Box::new(Expr::Int(2)),
         }),
@@ -263,7 +263,7 @@ fn build_bounded_program(interner: &mut Interner) -> DResult<Program> {
         params: vec![(x, IrType::Generic(a))],
         ret: IrType::Generic(a),
         body: Expr::BinOp {
-            op: BinOp::Add,
+            op: BinOp::IntAdd,
             lhs: Box::new(Expr::Var(x)),
             rhs: Box::new(Expr::Var(x)),
         },

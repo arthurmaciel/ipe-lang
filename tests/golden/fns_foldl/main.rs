@@ -201,7 +201,7 @@ pub fn ipe_main() -> IpeTask<()> {
     io_println(string_from_int(list_foldl(
         {
             let __ipe_fn: Box<dyn Fn(i64, i64) -> i64 + Send + Sync + 'static> =
-                Box::new(move |acc: i64, x: i64| -> i64 { (acc + x) });
+                Box::new(move |acc: i64, x: i64| -> i64 { ipe_runtime::math::ipe_int_add(acc, x) });
             __ipe_fn
         },
         0,

@@ -200,7 +200,9 @@ pub fn main_f(a: i64) -> Box<dyn Fn(i64, i64) -> i64 + Send + Sync + 'static> {
     let _ipe_recursion_guard = crate::recursion_guard();
     {
         let __ipe_fn: Box<dyn Fn(i64, i64) -> i64 + Send + Sync + 'static> =
-            Box::new(move |b: i64, c: i64| -> i64 { ((a + b) + c) });
+            Box::new(move |b: i64, c: i64| -> i64 {
+                ipe_runtime::math::ipe_int_add(ipe_runtime::math::ipe_int_add(a, b), c)
+            });
         __ipe_fn
     }
 }

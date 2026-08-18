@@ -21567,9 +21567,70 @@ impl<'a> Lowerer<'a> {
 
     fn binop(&self, func: Symbol, span: Span) -> DResult<BinOp> {
         match self.resolve(func)? {
-            "add" => Ok(BinOp::Add),
-            "sub" => Ok(BinOp::Sub),
-            "mul" => Ok(BinOp::Mul),
+            // `+`, `-`, `*` are `Number a => a -> a -> a` (Int, Float, or a
+            // still-polymorphic type variable). The result type equals the
+            // operand type, so `region_ty(span)` on the enclosing Binop
+            // expression is the discriminant:
+            //   • concrete `Int`   → wrapping helper (BinOp::Int{Add,Sub,Mul})
+            //   • concrete `Float` → safe IEEE 754 infix (BinOp::Float{Add,Sub,Mul})
+            //   • polymorphic var  → generic infix (BinOp::{Add,Sub,Mul}), which
+            //     the backend emits as `(l op r)` using the Rust trait bound
+            //     `T: Add<Output=T>` / `Sub` / `Mul` on the generic function.
+            //     Overflow behaviour for that generic case follows the monomorphised
+            //     type; a polymorphic `Number a` function that is only ever called
+            //     with Int arguments is sound once the Int call-sites are typed
+            //     through the concrete-typed wrappers.
+            "add" => Ok(match self.region_ty(span) {
+                Some(Ty::Con { module, name, args })
+                    if module.is_empty()
+                        && args.is_empty()
+                        && self.interner.resolve(*name) == Some("Int") =>
+                {
+                    BinOp::IntAdd
+                }
+                Some(Ty::Con { module, name, args })
+                    if module.is_empty()
+                        && args.is_empty()
+                        && self.interner.resolve(*name) == Some("Float") =>
+                {
+                    BinOp::FloatAdd
+                }
+                _ => BinOp::Add,
+            }),
+            "sub" => Ok(match self.region_ty(span) {
+                Some(Ty::Con { module, name, args })
+                    if module.is_empty()
+                        && args.is_empty()
+                        && self.interner.resolve(*name) == Some("Int") =>
+                {
+                    BinOp::IntSub
+                }
+                Some(Ty::Con { module, name, args })
+                    if module.is_empty()
+                        && args.is_empty()
+                        && self.interner.resolve(*name) == Some("Float") =>
+                {
+                    BinOp::FloatSub
+                }
+                _ => BinOp::Sub,
+            }),
+            "mul" => Ok(match self.region_ty(span) {
+                Some(Ty::Con { module, name, args })
+                    if module.is_empty()
+                        && args.is_empty()
+                        && self.interner.resolve(*name) == Some("Int") =>
+                {
+                    BinOp::IntMul
+                }
+                Some(Ty::Con { module, name, args })
+                    if module.is_empty()
+                        && args.is_empty()
+                        && self.interner.resolve(*name) == Some("Float") =>
+                {
+                    BinOp::FloatMul
+                }
+                _ => BinOp::Mul,
+            }),
             // `/` is float-only (fdiv) — raw Rust `/` on `f64` is total
             // (x/0.0 = ±∞, never panics), so BinOp::Div stays.
             "fdiv" => Ok(BinOp::Div),
@@ -24456,7 +24517,7 @@ mod tests {
             args: vec![Expr::Int(arg)],
         };
         let fn_reuse = Expr::BinOp {
-            op: ipe_ir::BinOp::Add,
+            op: ipe_ir::BinOp::IntAdd,
             lhs: Box::new(call_field(1)),
             rhs: Box::new(call_field(2)),
         };

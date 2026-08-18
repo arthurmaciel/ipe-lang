@@ -30,12 +30,12 @@ fn build_count(i: &mut Interner) -> DResult<BuiltFn> {
             callee: Callee::Func(SELF),
             args: vec![
                 Expr::BinOp {
-                    op: BinOp::Sub,
+                    op: BinOp::IntSub,
                     lhs: Box::new(Expr::Var(n)),
                     rhs: Box::new(Expr::Int(1)),
                 },
                 Expr::BinOp {
-                    op: BinOp::Add,
+                    op: BinOp::IntAdd,
                     lhs: Box::new(Expr::Var(acc)),
                     rhs: Box::new(Expr::Int(1)),
                 },

@@ -203,7 +203,7 @@ pub fn main_sum(xs: Vec<i64>) -> i64 {
         [x, rest @ ..] => {
             let x = x.clone();
             let rest = rest.to_vec();
-            (x + crate::main_sum(rest))
+            ipe_runtime::math::ipe_int_add(x, crate::main_sum(rest))
         }
     }
 }

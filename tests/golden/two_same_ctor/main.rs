@@ -221,8 +221,7 @@ pub fn main_classify(b: MainBox<i64>) -> i64 {
 pub fn ipe_main() -> IpeTask<()> {
     let _ipe_recursion_guard = crate::recursion_guard();
     io_println(string_from_int(
-        ((crate::main_classify(MainBox::Wrap(0)) + crate::main_classify(MainBox::Wrap(5)))
-            + crate::main_classify(MainBox::Empty)),
+        ipe_runtime::math::ipe_int_add(ipe_runtime::math::ipe_int_add(crate::main_classify(MainBox::Wrap(0)), crate::main_classify(MainBox::Wrap(5))), crate::main_classify(MainBox::Empty)),
     ))
 }
 
