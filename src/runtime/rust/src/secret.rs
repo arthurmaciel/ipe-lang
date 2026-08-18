@@ -62,7 +62,6 @@
 //! classification IS the future predicate that gate will consult once the
 //! WASM target lands; no code is added here on Secret's behalf.
 
-use subtle::ConstantTimeEq;
 use zeroize::Zeroize;
 
 use super::stringify::IpeStringify;
@@ -82,19 +81,13 @@ const REDACTED: &str = "<redacted>";
 #[derive(Clone)]
 pub struct Secret(String);
 
-impl PartialEq for Secret {
-    /// The ONLY equality Secret has. Constant-time over the byte length: a
-    /// length mismatch short-circuits (length is metadata about the secret,
-    /// not payload — Go/Rust `bcrypt`/token-compare code leaks length via
-    /// timing everywhere already, so this matches the existing
-    /// `Crypto.constantTimeEqual` / `crypto_constant_time_equal` convention
-    /// in `crypto.rs`), but the byte-for-byte comparison once lengths match
-    /// is constant-time via `subtle::ConstantTimeEq`.
-    fn eq(&self, other: &Self) -> bool {
-        let (a, b) = (self.0.as_bytes(), other.0.as_bytes());
-        a.len() == b.len() && bool::from(a.ct_eq(b))
-    }
-}
+// `PartialEq` is constant-time via the shared `ct_bytes_eq` predicate.
+// Length mismatch short-circuits (length is non-secret metadata); the
+// per-byte comparison, when lengths match, is constant-time via
+// `subtle::ConstantTimeEq`. Adding `#[derive(PartialEq)]` alongside this
+// invocation would be a hard E0119 compile error — the structural guarantee
+// that the timing-safe impl is the only one that exists.
+crate::ct_eq::impl_ct_eq!(Secret);
 
 impl std::fmt::Debug for Secret {
     /// ALWAYS the fixed placeholder — never the wrapped value, never even
