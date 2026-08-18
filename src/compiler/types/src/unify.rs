@@ -58,12 +58,15 @@ fn super_concrete_ok(interner: &Interner, bounds: TyBounds, flat: &FlatType) -> 
         }
         _ => None,
     };
-    let number_ok = matches!(prim, Some("Int" | "Float"));
-    let ord_ok = matches!(prim, Some("Int" | "Float" | "Char" | "String" | "Bool"));
+    let number_ok = crate::super_bounds::prim_satisfies_number(prim);
+    // Head-pin unification uses `ConcretePin`: `String` satisfies ordering
+    // here (borrows; no `Copy` constraint at the unifier level).
+    let ord_ok =
+        crate::super_bounds::prim_satisfies_ord(prim, crate::super_bounds::BoundSite::ConcretePin);
     // `++` accepts `String` (bare scalar) or `List _` (one type arg). The `prim`
     // path already covers `String`; `List` must be checked separately because it
     // carries one argument and the `args.is_empty()` guard above excludes it.
-    let appendable_ok = matches!(prim, Some("String"))
+    let appendable_ok = crate::super_bounds::prim_satisfies_append_prim(prim)
         || matches!(flat,
             FlatType::Con { module, name, args }
                 if module.is_empty()
@@ -75,9 +78,10 @@ fn super_concrete_ok(interner: &Interner, bounds: TyBounds, flat: &FlatType) -> 
     // Ipê, so the typing follows Ipê), and the Rust-backend reality that `f64`
     // is neither `Ord` nor `Hash` is enforced at lowering with a dedicated
     // diagnostic — not as a confusing type mismatch at this head pin.
+    let key_ok = crate::super_bounds::prim_satisfies_comparable_key(prim);
     (!bounds.has_number() || number_ok)
         && (!bounds.has_ord() || ord_ok)
-        && (!bounds.has_comparable_key() || ord_ok)
+        && (!bounds.has_comparable_key() || key_ok)
         && (!bounds.has_append() || appendable_ok)
 }
 

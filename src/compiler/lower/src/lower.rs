@@ -9528,6 +9528,19 @@ const fn unsupported(span: Span, feature: Feature) -> Diagnostic {
     }
 }
 
+/// Whether an `IrType` is `Float` — the single predicate that gates `Dict`
+/// keys and `Set` elements at **both** lowering entry-points (`ir_type_from_ty`
+/// and `ir_type_from_canon`), ensuring the two paths apply the same rejection.
+///
+/// `f64` is neither `Hash` nor `Eq` (NaN breaks both), so a `Dict Float v` or
+/// `Set Float` that type-checks in Ipê (where `Float` IS `comparable`) must be
+/// rejected here with [`Feature::FloatKeyedCollection`] rather than emitting
+/// Rust that `cargo` cannot build.
+#[must_use]
+pub const fn float_key_rejected(ir: &IrType) -> bool {
+    matches!(ir, IrType::Float)
+}
+
 /// Whether `main`'s return type is a runnable program entry.
 ///
 /// The emitted `fn main` wraps the entry in the runtime's single run site, which
@@ -13619,6 +13632,14 @@ impl<'a> Lowerer<'a> {
                         self.ir_type_from_canon(args.first().ok_or_else(dict_arg_bug)?, generics)?;
                     let v =
                         self.ir_type_from_canon(args.get(1).ok_or_else(dict_arg_bug)?, generics)?;
+                    // `Dict Float v` type-checks in Ipê but the Rust backing
+                    // `HashMap<f64, V>` cannot exist: `f64` is neither `Hash`
+                    // nor `Eq`. Reject via the shared predicate so both
+                    // lowering entry-points (`ir_type_from_ty` and this
+                    // annotation-driven path) apply the same gate.
+                    if float_key_rejected(&k) {
+                        return Err(unsupported(Span::DUMMY, Feature::FloatKeyedCollection));
+                    }
                     // A `Dict` VALUE is a storage position (Arc carrier); the KEY
                     // must stay `Ord`/`Hash`, so it is left unflipped.
                     Ok(IrType::Dict(
@@ -13629,6 +13650,12 @@ impl<'a> Lowerer<'a> {
                 "Set" if args.len() == 1 => {
                     let elem =
                         self.ir_type_from_canon(args.first().ok_or_else(set_arg_bug)?, generics)?;
+                    // `Set Float` type-checks but its Rust backing `BTreeSet<f64>`
+                    // cannot exist: `f64` is not `Ord`. Same shared predicate as
+                    // the `ir_type_from_ty` path.
+                    if float_key_rejected(&elem) {
+                        return Err(unsupported(Span::DUMMY, Feature::FloatKeyedCollection));
+                    }
                     Ok(IrType::Set(Box::new(elem)))
                 }
                 // `Task Error a` — the canonical user annotation has two type
@@ -14734,13 +14761,12 @@ impl<'a> Lowerer<'a> {
                 "Dict" if args.len() == 2 => {
                     let k = self.ir_type_from_ty(args.first().ok_or_else(dict_arg_bug)?, span)?;
                     let v = self.ir_type_from_ty(args.get(1).ok_or_else(dict_arg_bug)?, span)?;
-                    // `Dict Float v` type-checks (Ipê `Float` IS `comparable`),
-                    // but the Rust backing `HashMap<f64, V>` cannot exist: `f64`
-                    // is neither `Hash` nor `Eq` (NaN breaks both). Fail closed
-                    // here with a dedicated diagnostic rather than emit Rust
-                    // `cargo` rejects. Divergence from Ipê, rationale: Rust
-                    // backend capability (`f64` is not a hashable total order).
-                    if matches!(k, IrType::Float) {
+                    // `Dict Float v` type-checks in Ipê but the Rust backing
+                    // `HashMap<f64, V>` cannot exist: `f64` is neither `Hash`
+                    // nor `Eq` (NaN breaks both). Reject via the shared
+                    // `float_key_rejected` predicate so this path and the
+                    // annotation-driven `ir_type_from_canon` path use one gate.
+                    if float_key_rejected(&k) {
                         return Err(unsupported(span, Feature::FloatKeyedCollection));
                     }
                     // A `Dict` VALUE is a storage position: a function value is
@@ -14754,12 +14780,10 @@ impl<'a> Lowerer<'a> {
                 }
                 "Set" if args.len() == 1 => {
                     let elem = self.ir_type_from_ty(args.first().ok_or_else(set_arg_bug)?, span)?;
-                    // `Set Float` type-checks but its Rust backing
-                    // `BTreeSet<f64>` cannot exist: `f64` is not `Ord` (NaN has
-                    // no total order). Fail closed with the same dedicated
-                    // diagnostic as `Dict Float`. Divergence from Ipê, rationale:
-                    // Rust backend capability.
-                    if matches!(elem, IrType::Float) {
+                    // `Set Float` type-checks but its Rust backing `BTreeSet<f64>`
+                    // cannot exist: `f64` is not `Ord` (NaN has no total order).
+                    // Same `float_key_rejected` predicate as the canon path.
+                    if float_key_rejected(&elem) {
                         return Err(unsupported(span, Feature::FloatKeyedCollection));
                     }
                     Ok(IrType::Set(Box::new(elem)))
@@ -15473,7 +15497,7 @@ impl<'a> Lowerer<'a> {
                     "Set" if args.len() == 1 => {
                         let elem =
                             self.ir_type_from_ty_json(args.first().ok_or_else(set_arg_bug)?, span)?;
-                        if matches!(elem, IrType::Float) {
+                        if float_key_rejected(&elem) {
                             return Err(unsupported(span, Feature::FloatKeyedCollection));
                         }
                         Ok(IrType::Set(Box::new(elem)))
@@ -15483,7 +15507,7 @@ impl<'a> Lowerer<'a> {
                             .ir_type_from_ty_json(args.first().ok_or_else(dict_arg_bug)?, span)?;
                         let v =
                             self.ir_type_from_ty_json(args.get(1).ok_or_else(dict_arg_bug)?, span)?;
-                        if matches!(k, IrType::Float) {
+                        if float_key_rejected(&k) {
                             return Err(unsupported(span, Feature::FloatKeyedCollection));
                         }
                         Ok(IrType::Dict(
@@ -26165,5 +26189,34 @@ mod tests {
             result.is_some(),
             "retry_policy_concrete_ir must return Some for the genuine kernel shape"
         );
+    }
+
+    /// Each value container the lowerer handles has a hardcoded `args.len() == N`
+    /// guard. This test asserts those N values equal the canonical gate
+    /// `builtin_empty_home_arity`, so a future gate change that misses a lowerer
+    /// arm fails here instead of silently diverging.
+    #[test]
+    fn lowerer_container_arities_match_gate() {
+        // (name, arity the lowerer's match guard hardcodes)
+        let lowerer_guards: &[(&str, usize)] = &[
+            ("List", 1),
+            ("Maybe", 1),
+            ("Set", 1),
+            ("Dict", 2),
+            ("Result", 2),
+        ];
+        for (name, lowerer_arity) in lowerer_guards {
+            let gate_arity = ipe_canon::builtin_empty_home_arity(Some(name));
+            assert!(
+                gate_arity.is_some(),
+                "{name} must have a gate arity in builtin_empty_home_arity"
+            );
+            if let Some(gate_arity) = gate_arity {
+                assert_eq!(
+                    gate_arity, *lowerer_arity,
+                    "{name}: gate arity {gate_arity} != lowerer guard {lowerer_arity}"
+                );
+            }
+        }
     }
 }

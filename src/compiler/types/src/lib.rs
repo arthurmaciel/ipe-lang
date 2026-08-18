@@ -29,6 +29,7 @@ mod constrain;
 mod doc;
 mod exhaust;
 mod solve;
+pub(crate) mod super_bounds;
 mod ty;
 mod unify;
 mod unionfind;
@@ -879,15 +880,16 @@ fn emitted_bound_satisfied(
         }
         _ => None,
     };
-    let number_ok = matches!(prim, Some("Int" | "Float"));
-    let ord_ok = matches!(prim, Some("Int" | "Float" | "Char" | "Bool"));
+    let number_ok = super_bounds::prim_satisfies_number(prim);
+    // Ordering at an emitted-generic site: `String` excluded (Rust `Copy`
+    // restriction). See `super_bounds::ORD_COPY` vs `ORD_BORROW`.
+    let ord_ok = super_bounds::prim_satisfies_ord(prim, super_bounds::BoundSite::EmittedGeneric);
     // A `Set` element / `Dict` key emission carries no `Copy` (the runtime
     // helpers consume by value; `String` keys must be admitted), so the
-    // generic-use gate uses the `String`-inclusive scalar set rather than the
-    // `Copy`-restricted ordering set above.
-    let key_ok = matches!(prim, Some("Int" | "Float" | "Char" | "String" | "Bool"));
+    // generic-use gate uses the `String`-inclusive comparable-key set.
+    let key_ok = super_bounds::prim_satisfies_comparable_key(prim);
     // `++` at a generic emission site: accepted for `String` or `List _`.
-    let appendable_ok = matches!(prim, Some("String"))
+    let appendable_ok = super_bounds::prim_satisfies_append_prim(prim)
         || matches!(ty,
             Ty::Con { module, name, args }
                 if module.is_empty()
@@ -929,7 +931,7 @@ fn emitted_bound_satisfied(
     // scalars `ipe_runtime::db` binds directly, plus the `SqlValue` ADT
     // itself (whose generated `From` impl covers the typed-mixed-param
     // case). Matches [`concrete_super_ok`]'s `sql_param_ok`.
-    let sql_param_ok = matches!(prim, Some("Int" | "Float" | "String" | "Bool" | "SqlValue"));
+    let sql_param_ok = super_bounds::prim_satisfies_sql_param(prim);
     (!bounds.has_number() || number_ok)
         && (!bounds.has_ord() || ord_ok)
         && (!bounds.has_eq() || ty_is_equatable(ty, enum_embeds_fn))
@@ -959,10 +961,12 @@ pub(crate) fn concrete_super_ok(
         }
         _ => None,
     };
-    let number_ok = matches!(prim, Some("Int" | "Float"));
-    let ord_ok = matches!(prim, Some("Int" | "Float" | "Char" | "String" | "Bool"));
+    let number_ok = super_bounds::prim_satisfies_number(prim);
+    // Ordering at a concrete-pin site: `String` included (direct comparison
+    // borrows operands; no `Copy` needed). See `super_bounds::ORD_BORROW`.
+    let ord_ok = super_bounds::prim_satisfies_ord(prim, super_bounds::BoundSite::ConcretePin);
     // `++` accepts `String` (bare scalar) or `List _` (one type arg).
-    let appendable_ok = matches!(prim, Some("String"))
+    let appendable_ok = super_bounds::prim_satisfies_append_prim(prim)
         || matches!(ty,
             Ty::Con { module, name, args }
                 if module.is_empty()
@@ -972,14 +976,15 @@ pub(crate) fn concrete_super_ok(
     // SQL-bind-parameter obligation pinned directly to a concrete
     // type: the runtime's `From<T> for SqlParam` set — `String` / `Int` /
     // `Float` / `Bool`, plus the `SqlValue` ADT itself.
-    let sql_param_ok = matches!(prim, Some("Int" | "Float" | "String" | "Bool" | "SqlValue"));
+    let sql_param_ok = super_bounds::prim_satisfies_sql_param(prim);
     // A `Set` element / `Dict` key pinned directly to a concrete type: the Ipê
-    // `comparable` scalar set, exactly as ordering. `Float` satisfies the Ipê
-    // typing here; the Rust-backend `f64`-as-key reality is gated at lowering.
+    // `comparable` scalar set. `Float` satisfies the Ipê typing here; the
+    // Rust-backend `f64`-as-key reality is gated at lowering.
+    let key_ok = super_bounds::prim_satisfies_comparable_key(prim);
     (!bounds.has_number() || number_ok)
         && (!bounds.has_ord() || ord_ok)
         && (!bounds.has_eq() || ty_is_equatable(ty, enum_embeds_fn))
-        && (!bounds.has_comparable_key() || ord_ok)
+        && (!bounds.has_comparable_key() || key_ok)
         // Stringify (`toString` / `Log.*With`): showable iff it contains no
         // function anywhere — the SAME "no function nested" rule as equatable,
         // since every non-function type derives `IpeStringify`.
@@ -989,8 +994,7 @@ pub(crate) fn concrete_super_ok(
         // structurally-shallow, fail-closed-on-`Ty::Var` check, reused for
         // the concrete-pin path. (A `Content::Structure` root cannot zonk to
         // a bare head `Ty::Var`, so the `Ty::Var` arm is unreachable here —
-        // kept anyway so the two predicates cannot drift apart again; drift
-        // in exactly one arm is what caused the 4th revert incident.)
+        // kept anyway so the two predicates cannot drift apart again.)
         && (!bounds.has_hof_kernel_result() || !matches!(ty, Ty::Fun(_, _) | Ty::Var(_)))
         && (!bounds.has_sql_param() || sql_param_ok)
 }
