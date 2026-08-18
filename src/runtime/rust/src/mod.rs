@@ -62,6 +62,11 @@ pub mod config;
 #[cfg(feature = "config")]
 pub mod config_decode;
 pub mod core;
+// Constant-time byte equality — the SSOT predicate all secret/tag/key
+// newtypes use for `PartialEq`. Gated on `crypto-core` (which pulls `subtle`).
+// `secret` implies `crypto-core`, so this gate covers every caller.
+#[cfg(feature = "crypto-core")]
+pub mod ct_eq;
 
 // The cryptographic floor: the entropy pair, the SHA-2 hash/HMAC family, the RSA
 // sign/verify pair, the typed `Key`/`Mac` newtypes and the constant-time compare.

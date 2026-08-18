@@ -1655,7 +1655,8 @@ pub fn ir_type_is_derivable(
         // `CryptoKey` derives Clone; PartialEq is constant-time (hand-written);
         // Debug renders "<key>" (hand-written) — same posture as Secret.
         | IrType::CryptoKey
-        // `CryptoMac` derives Clone+PartialEq+Debug — fully derivable.
+        // `CryptoMac`: `Clone`+`Debug` derived, `PartialEq` hand-written
+        // constant-time (same posture as `CryptoKey`/`Secret`).
         | IrType::CryptoMac
         // `EmailAddress` derives Clone+PartialEq+Debug — fully derivable.
         | IrType::EmailAddress
