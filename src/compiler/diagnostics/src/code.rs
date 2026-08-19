@@ -464,6 +464,13 @@ code! {
     IPE_S0001 = "IPE-S0001", "unsafe escape hatch imported without acknowledgment", "IPE-S0001";
 
     // -----------------------------------------------------------------------
+    // Environment (IPE-E####)
+    // -----------------------------------------------------------------------
+
+    /// the crate registry could not be reached (network or DNS failure)
+    IPE_E0001 = "IPE-E0001", "could not reach the crate registry", "IPE-E0001";
+
+    // -----------------------------------------------------------------------
     // Internal (IPE-I####)
     // -----------------------------------------------------------------------
 

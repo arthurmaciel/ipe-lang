@@ -672,6 +672,19 @@ fn fmt_emitted_build_failed(err: &CliError, f: &mut std::fmt::Formatter<'_>) -> 
              matching runtime re-materializes automatically."
         );
     }
+    // Registry/network unreachable: cargo could not reach crates.io. This is an
+    // environment failure (DNS, offline, proxy), not a compiler bug and not the
+    // user's source. Render a calm, actionable message and do NOT invite a bug
+    // report.
+    if is_registry_unreachable(trimmed) {
+        let detail = if trimmed.is_empty() {
+            format!("cargo exited {code} while fetching crates for {what}")
+        } else {
+            format!("cargo exited {code} while fetching crates for {what}:\n{trimmed}")
+        };
+        let d = Diagnostic::RegistryUnreachable { detail };
+        return f.write_str(&render(&d, "", ""));
+    }
     // Unattributable: the emitted Rust crate failed to compile for a reason that
     // is not a known runtime-feature gap. Because the front-end gate ensures only
     // valid programs reach emit, this cargo failure reflects a bug in Ipê's own
@@ -688,6 +701,22 @@ fn fmt_emitted_build_failed(err: &CliError, f: &mut std::fmt::Formatter<'_>) -> 
         detail,
     };
     f.write_str(&render(&ice, "", ""))
+}
+
+/// Detect whether cargo's stderr signals a network-level registry failure
+/// (offline, DNS resolution, or a transient fetch error) rather than a compiler
+/// miscompile.
+///
+/// Only genuinely network-level phrases qualify. Broader phrases like "failed to
+/// load source for dependency" or "registry index" are deliberately excluded:
+/// they also fire when a local path dependency is missing or a manifest is
+/// malformed — not connectivity problems, and reporting them as "check your
+/// connection" would misdirect the user. The offline case always surfaces one of
+/// the network phrases below as its root cause.
+fn is_registry_unreachable(stderr: &str) -> bool {
+    stderr.contains("Could not resolve host")
+        || stderr.contains("spurious network error")
+        || stderr.contains("failed to fetch")
 }
 
 /// Extract the runtime feature name from a `cargo` feature-resolution error of
@@ -6139,7 +6168,8 @@ const fn diag_span(d: &Diagnostic) -> ipe_diagnostics::Span {
         Diagnostic::CompilerBug { .. }
         | Diagnostic::Ffi { .. }
         | Diagnostic::Sandbox { .. }
-        | Diagnostic::Consent { .. } => ipe_diagnostics::Span::DUMMY,
+        | Diagnostic::Consent { .. }
+        | Diagnostic::RegistryUnreachable { .. } => ipe_diagnostics::Span::DUMMY,
     }
 }
 
@@ -6147,6 +6177,28 @@ const fn diag_span(d: &Diagnostic) -> ipe_diagnostics::Span {
 mod tests {
     use super::*;
     use ipe_diagnostics::{NameError, Span};
+
+    #[test]
+    fn registry_unreachable_matches_network_signals_only() {
+        // Genuine network/offline failures.
+        assert!(is_registry_unreachable(
+            "Caused by:\n  Could not resolve host: index.crates.io"
+        ));
+        assert!(is_registry_unreachable("warning: spurious network error"));
+        assert!(is_registry_unreachable(
+            "error: failed to fetch `https://github.com/rust-lang/crates.io-index`"
+        ));
+        // A missing local path dependency or malformed manifest is NOT a
+        // connectivity problem and must not be reported as one.
+        assert!(!is_registry_unreachable(
+            "error: failed to load source for dependency `handle_demo`\n\
+             Caused by:\n  path `/tmp/x` does not exist"
+        ));
+        assert!(!is_registry_unreachable(
+            "error: no matching package named `foo` found; updating registry index"
+        ));
+        assert!(!is_registry_unreachable("error[E0433]: cannot find crate"));
+    }
 
     #[test]
     fn io_not_found_renders_styled_without_os_error() {

@@ -239,6 +239,16 @@ fn prose_band(d: &Diagnostic) -> String {
         Diagnostic::Ffi { msg } => ffi_prose(msg),
         Diagnostic::Sandbox { msg } => sandbox_prose(msg),
         Diagnostic::Consent { msg } => consent_prose(msg),
+        Diagnostic::RegistryUnreachable { detail } => {
+            format!(
+                "The compiler could not reach the crate registry while building your program. \
+                 This is a network or DNS problem on your machine — not a mistake in your code.\n\
+                 \n\
+                 {detail}\n\
+                 \n\
+                 Check your connection and try again. Run `ipe explain IPE-E0001` for more help."
+            )
+        }
     }
 }
 
@@ -1134,7 +1144,8 @@ fn primary_label(d: &Diagnostic) -> Option<String> {
         Diagnostic::CompilerBug { .. }
         | Diagnostic::Ffi { .. }
         | Diagnostic::Sandbox { .. }
-        | Diagnostic::Consent { .. } => None,
+        | Diagnostic::Consent { .. }
+        | Diagnostic::RegistryUnreachable { .. } => None,
     }
 }
 

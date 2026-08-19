@@ -1,0 +1,11 @@
+-- COULD NOT REACH THE CRATE REGISTRY ---------------------- 
+
+The compiler could not reach the crate registry while building your program. This is a network or DNS problem on your machine — not a mistake in your code.
+
+cargo exited 101 while fetching crates for out/my-app:
+Could not resolve host: index.crates.io
+failed to load source for dependency dlmalloc
+
+Check your connection and try again. Run `ipe explain IPE-E0001` for more help.
+
+IPE-E0001 · run `ipe explain IPE-E0001`

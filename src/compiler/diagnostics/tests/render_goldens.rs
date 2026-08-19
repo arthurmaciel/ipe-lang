@@ -464,6 +464,19 @@ fn golden_internal_compiler_error_specific() -> Result<(), Box<dyn std::error::E
 }
 
 // ---------------------------------------------------------------------------
+// Environment (IPE-E*)
+// ---------------------------------------------------------------------------
+
+#[test]
+fn golden_registry_unreachable() -> Result<(), Box<dyn std::error::Error>> {
+    // IPE-E0001: crate registry unreachable — network/DNS failure at cargo fetch.
+    let d = Diagnostic::RegistryUnreachable {
+        detail: "cargo exited 101 while fetching crates for out/my-app:\nCould not resolve host: index.crates.io\nfailed to load source for dependency dlmalloc".into(),
+    };
+    check_golden("registry_unreachable", &d, "", "")
+}
+
+// ---------------------------------------------------------------------------
 // Security-adjacent (IPE-N0032 alias expansion guard)
 // ---------------------------------------------------------------------------
 
