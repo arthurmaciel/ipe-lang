@@ -7,7 +7,7 @@ module Ipe.Css exposing
     , lengthToString, colorToString, floatStr
     , px, rem, em, pct, vh, vw, ch, fr, num, zero, auto, lengthRaw, calc, minmax
     , hex, rgb, rgba, hsl, hsla, transparent, currentColor, colorRaw
-    , deg, ms, sec, rotate, scale, translateX, translateY
+    , deg, ms, sec, rotate, scale, scaleXY, translateX, translateY, translate, skewX, skewY
     , cssVar, cssVarOr, linearGradient, repeat, shadow
     , none, systemFont, monoFont
     , property, rawProp, defineVar, important
@@ -562,6 +562,30 @@ translateX v =
 translateY : Length -> String
 translateY v =
     "translateY(" ++ lengthToString v ++ ")"
+
+
+-- Both-axis translate: `translate(x, y)`.
+translate : Length -> Length -> String
+translate x y =
+    "translate(" ++ lengthToString x ++ ", " ++ lengthToString y ++ ")"
+
+
+-- Per-axis scale: `scale(sx, sy)`.
+scaleXY : Float -> Float -> String
+scaleXY sx sy =
+    "scale(" ++ floatStr sx ++ ", " ++ floatStr sy ++ ")"
+
+
+-- Horizontal skew by an angle: `skewX(<angle>)`.
+skewX : String -> String
+skewX v =
+    "skewX(" ++ v ++ ")"
+
+
+-- Vertical skew by an angle: `skewY(<angle>)`.
+skewY : String -> String
+skewY v =
+    "skewY(" ++ v ++ ")"
 
 
 cssVar : String -> String
