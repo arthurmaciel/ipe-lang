@@ -225,6 +225,7 @@ pub mod char_category;
 pub mod config;
 pub mod core;
 pub mod crypto;
+pub mod ct_eq;
 pub mod crypto_core;
 pub mod decimal;
 pub mod task;

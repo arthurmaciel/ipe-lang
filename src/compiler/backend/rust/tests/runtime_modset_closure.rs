@@ -631,6 +631,36 @@ fn base_modules_do_not_reach_gated_modules() {
     }
 }
 
+/// Guard the `ct_eq` closure edge: `crypto_core` and `secret` both
+/// `use crate::ct_eq::…` unconditionally, so every emitted `mod.rs` that
+/// declares either of those modules MUST also declare `ct_eq`. Both modules
+/// live in the base floor (mask 0), so this is a base-floor edge rather than a
+/// per-flag edge — the base-floor test [`base_modules_do_not_reach_gated_modules`]
+/// already covers it structurally, but this named witness makes the exact defect
+/// class (SEAL: missing `ct_eq` in the emitted module set) fail loudly.
+#[test]
+fn base_declares_ct_eq_with_crypto_core_and_secret() {
+    let mut interner = Interner::new();
+    let main = interner.intern("Main").expect("intern Main");
+    // The featureless base (mask 0) emits `crypto_core` and `secret` from the
+    // base template; `ct_eq` must accompany both.
+    let declared = declared_for_mask(&interner, main, 0);
+    assert!(
+        declared.contains("ct_eq"),
+        "base floor must declare `ct_eq` — `crypto_core` and `secret` use \
+         `crate::ct_eq::…` unconditionally; without `ct_eq` the emitted crate \
+         fails `cargo build` (E0433). Declared: {declared:?}"
+    );
+    assert!(
+        declared.contains("crypto_core"),
+        "base floor must declare `crypto_core`; got {declared:?}"
+    );
+    assert!(
+        declared.contains("secret"),
+        "base floor must declare `secret`; got {declared:?}"
+    );
+}
+
 /// Guard the specific witnesses of the previously-live breaches at the flag
 /// level: a `uses_web` shape must declare `tea` (web/pubsub `use crate::tea`),
 /// and a `uses_server` shape must declare both `tea` and `http_stream`.
