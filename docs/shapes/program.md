@@ -13,7 +13,7 @@ An HTTP / JSON API is a Program too — its `main` builds routes with
 ## Entry point
 
 `main = <task>` — no `app` kernel. Sequence effects with a `do` block or
-`Task.andThen`; fan out with `doParallel` / `Task.parallel`.
+`Task.andThen`; fan out with `Task.parallel [...]` bound inside a `do`.
 
 ## Minimal example
 
@@ -27,13 +27,14 @@ import Ipe.Io as Io
 
 
 main =
+    let version = "1.4.0" in
     do
-        version = "1.4.0"
         Io.println ("Preflight for v" ++ version)
-        results <- doParallel
-            checkBuild
-            checkChangelog
-            checkGitClean
+        results <- Task.parallel
+            [ checkBuild
+            , checkChangelog
+            , checkGitClean
+            ]
         Io.println (report version results)
 
 
@@ -73,7 +74,7 @@ v1.4.0 preflight passed:
   git       ok  — working tree clean
 ```
 
-It announces the run, fires the three checks concurrently with `doParallel`,
+It announces the run, fires the three checks concurrently with `Task.parallel`,
 then prints the report and exits 0.
 
 ## Views as data: static rendering

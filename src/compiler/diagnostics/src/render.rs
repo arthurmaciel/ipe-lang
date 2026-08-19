@@ -366,6 +366,11 @@ fn parse_prose(msg: &ParseError) -> String {
         ParseError::InvalidPathLiteral { .. } => {
             "I can't accept this path — it isn't safe to open.".to_string()
         }
+        ParseError::SteplessDo => {
+            "This `do` block has no Task step (`<-` bind or bare-run line) — it is \
+             pure code dressed as a `do`. Use `let … in` for pure bindings instead."
+                .to_string()
+        }
         ParseError::Unexpected => "I couldn't make sense of this part of the file.".to_string(),
     }
 }
@@ -1181,7 +1186,7 @@ fn parse_label(msg: &ParseError) -> Option<String> {
             };
             Some(detail)
         }
-        ParseError::Unexpected | ParseError::TooDeep => None,
+        ParseError::Unexpected | ParseError::TooDeep | ParseError::SteplessDo => None,
     }
 }
 
@@ -1913,7 +1918,6 @@ const fn token_kind_str(t: TokenKind) -> &'static str {
         TokenKind::Then => "`then`",
         TokenKind::Else => "`else`",
         TokenKind::Do => "`do`",
-        TokenKind::DoParallel => "`doParallel`",
         TokenKind::LParen => "`(`",
         TokenKind::RParen => "`)`",
         TokenKind::LBrace => "`{`",
