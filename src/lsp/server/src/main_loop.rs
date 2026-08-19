@@ -20,6 +20,37 @@ use ipe_lsp_features::{PositionEncoding, diagnostics, offset};
 use crate::ServerError;
 use crate::loader::{LoadedFile, LoadedProject, ModuleOrigin, ProjectLoader};
 
+/// The typed outcome of an LSP feature request. `null` is reserved for
+/// `NoResult`; a params-decode failure and an internal encoding bug are
+/// distinct error variants and never collapse to `null`.
+enum FeatureOutcome {
+    /// A serializable feature payload (already a well-typed `lsp_types` value).
+    Payload(serde_json::Value),
+    /// The genuine "nothing here" answer — the ONLY source of protocol null.
+    NoResult,
+    /// The client sent params this method cannot decode.
+    InvalidParams(String),
+    /// A payload that should have serialized failed to — an internal bug.
+    Encode(serde_json::Error),
+}
+
+impl FeatureOutcome {
+    /// The sole path to `Payload`: serializes `value` or returns `Encode` on
+    /// failure. Never returns `Payload(Null)` for an encoding error.
+    fn payload<T: serde::Serialize>(value: T) -> Self {
+        match serde_json::to_value(value) {
+            Ok(v) => Self::Payload(v),
+            Err(e) => Self::Encode(e),
+        }
+    }
+
+    /// Lifts `Option<T>` to an outcome: `None` maps to `NoResult`, `Some` goes
+    /// through `payload`.
+    fn maybe<T: serde::Serialize>(value: Option<T>) -> Self {
+        value.map_or(Self::NoResult, Self::payload)
+    }
+}
+
 /// One finished diagnostics computation, tagged with the input generation it
 /// was computed against so a stale batch is recognisably droppable.
 struct DiagnosticsBatch {
@@ -158,7 +189,19 @@ fn handle_request(state: &State, connection: &Connection, request: &Request) {
     }));
 
     let response = match outcome {
-        Ok(Ok(Some(value))) => Response::new_ok(id, value),
+        Ok(Ok(Some(FeatureOutcome::Payload(v)))) => Response::new_ok(id, v),
+        Ok(Ok(Some(FeatureOutcome::NoResult))) => Response::new_ok(id, serde_json::Value::Null),
+        Ok(Ok(Some(FeatureOutcome::InvalidParams(msg)))) => {
+            Response::new_err(id, lsp_server::ErrorCode::InvalidParams as i32, msg)
+        }
+        Ok(Ok(Some(FeatureOutcome::Encode(err)))) => {
+            eprintln!("[ipe lsp] internal encode error for `{method}`: {err}");
+            Response::new_err(
+                id,
+                lsp_server::ErrorCode::InternalError as i32,
+                format!("internal encoding error: {err}"),
+            )
+        }
         Ok(Ok(None)) => Response::new_err(
             id,
             lsp_server::ErrorCode::MethodNotFound as i32,
@@ -181,9 +224,9 @@ fn handle_request(state: &State, connection: &Connection, request: &Request) {
     let _ = connection.sender.send(Message::Response(response));
 }
 
-/// Dispatch an LSP request to the appropriate handler, returning its JSON
-/// result value, or `None` for an unrecognised method.
-fn dispatch(state: &State, request: &Request) -> Option<serde_json::Value> {
+/// Dispatch an LSP request to the appropriate handler, returning its typed
+/// outcome, or `None` for an unrecognised method.
+fn dispatch(state: &State, request: &Request) -> Option<FeatureOutcome> {
     match request.method.as_str() {
         "textDocument/hover" => Some(hover_result(state, &request.params)),
         "textDocument/documentSymbol" => Some(document_symbols_result(state, &request.params)),
@@ -209,24 +252,24 @@ fn dispatch(state: &State, request: &Request) -> Option<serde_json::Value> {
 /// `textDocument/hover` — the solved type of the innermost expression at the
 /// cursor. `null` for an unknown document, an unsolvable program, or a
 /// position on no expression (never a guess).
-fn hover_result(state: &State, params: &serde_json::Value) -> serde_json::Value {
+fn hover_result(state: &State, params: &serde_json::Value) -> FeatureOutcome {
     let Ok(params) = serde_json::from_value::<lsp_types::HoverParams>(params.clone()) else {
-        return serde_json::Value::Null;
+        return FeatureOutcome::InvalidParams("invalid params for textDocument/hover".into());
     };
     let position = params.text_document_position_params;
     let Some((_module, file, text)) = state.locate(&position.text_document.uri) else {
-        return serde_json::Value::Null;
+        return FeatureOutcome::NoResult;
     };
     let Some(root) = state.root else {
-        return serde_json::Value::Null;
+        return FeatureOutcome::NoResult;
     };
     let Some(entry_file) = root.files(&state.db).get(&state.entry_module).copied() else {
-        return serde_json::Value::Null;
+        return FeatureOutcome::NoResult;
     };
     let byte = offset::position_to_offset(&text, position.position, state.encoding);
     let byte = u32::try_from(byte).unwrap_or(u32::MAX);
     ipe_lsp_features::hover::hover(&state.db, root, entry_file, file, byte).map_or(
-        serde_json::Value::Null,
+        FeatureOutcome::NoResult,
         |info| {
             let hover = lsp_types::Hover {
                 contents: lsp_types::HoverContents::Scalar(
@@ -241,22 +284,24 @@ fn hover_result(state: &State, params: &serde_json::Value) -> serde_json::Value 
                     state.encoding,
                 )),
             };
-            serde_json::to_value(hover).unwrap_or(serde_json::Value::Null)
+            FeatureOutcome::payload(hover)
         },
     )
 }
 
 /// `textDocument/documentLink` — every resolved `import` as a link to the
 /// imported module's file.
-fn document_links_result(state: &State, params: &serde_json::Value) -> serde_json::Value {
+fn document_links_result(state: &State, params: &serde_json::Value) -> FeatureOutcome {
     let Ok(params) = serde_json::from_value::<lsp_types::DocumentLinkParams>(params.clone()) else {
-        return serde_json::Value::Null;
+        return FeatureOutcome::InvalidParams(
+            "invalid params for textDocument/documentLink".into(),
+        );
     };
     let Some((_module, file, text)) = state.locate(&params.text_document.uri) else {
-        return serde_json::Value::Null;
+        return FeatureOutcome::NoResult;
     };
     let Some(root) = state.root else {
-        return serde_json::Value::Null;
+        return FeatureOutcome::NoResult;
     };
     let links: Vec<lsp_types::DocumentLink> =
         ipe_lsp_features::links::document_links(&state.db, root, file)
@@ -275,50 +320,53 @@ fn document_links_result(state: &State, params: &serde_json::Value) -> serde_jso
                 })
             })
             .collect();
-    serde_json::to_value(links).unwrap_or(serde_json::Value::Null)
+    FeatureOutcome::payload(links)
 }
 
 /// `textDocument/foldingRange` — the import block plus every multi-line
 /// top-level declaration.
-fn folding_ranges_result(state: &State, params: &serde_json::Value) -> serde_json::Value {
+fn folding_ranges_result(state: &State, params: &serde_json::Value) -> FeatureOutcome {
     let Ok(params) = serde_json::from_value::<lsp_types::FoldingRangeParams>(params.clone()) else {
-        return serde_json::Value::Null;
+        return FeatureOutcome::InvalidParams(
+            "invalid params for textDocument/foldingRange".into(),
+        );
     };
     let Some((_module, file, _text)) = state.locate(&params.text_document.uri) else {
-        return serde_json::Value::Null;
+        return FeatureOutcome::NoResult;
     };
     let ranges = ipe_lsp_features::folding::folding_ranges(&state.db, file, state.encoding);
-    serde_json::to_value(ranges).unwrap_or(serde_json::Value::Null)
+    FeatureOutcome::payload(ranges)
 }
 
 /// `textDocument/documentSymbol` — the parse tree's hierarchical outline.
-fn document_symbols_result(state: &State, params: &serde_json::Value) -> serde_json::Value {
+fn document_symbols_result(state: &State, params: &serde_json::Value) -> FeatureOutcome {
     let Ok(params) = serde_json::from_value::<lsp_types::DocumentSymbolParams>(params.clone())
     else {
-        return serde_json::Value::Null;
+        return FeatureOutcome::InvalidParams(
+            "invalid params for textDocument/documentSymbol".into(),
+        );
     };
     let Some((_module, file, _text)) = state.locate(&params.text_document.uri) else {
-        return serde_json::Value::Null;
+        return FeatureOutcome::NoResult;
     };
     let symbols = ipe_lsp_features::symbols::document_symbols(&state.db, file, state.encoding);
-    serde_json::to_value(lsp_types::DocumentSymbolResponse::Nested(symbols))
-        .unwrap_or(serde_json::Value::Null)
+    FeatureOutcome::payload(lsp_types::DocumentSymbolResponse::Nested(symbols))
 }
 
 /// `textDocument/completion` — in-scope identifiers at the cursor position.
-fn completion_result(state: &State, params: &serde_json::Value) -> serde_json::Value {
+fn completion_result(state: &State, params: &serde_json::Value) -> FeatureOutcome {
     let Ok(params) = serde_json::from_value::<lsp_types::CompletionParams>(params.clone()) else {
-        return serde_json::Value::Null;
+        return FeatureOutcome::InvalidParams("invalid params for textDocument/completion".into());
     };
     let position = params.text_document_position;
     let Some((module, _file, text)) = state.locate(&position.text_document.uri) else {
-        return serde_json::Value::Null;
+        return FeatureOutcome::NoResult;
     };
     let Some(root) = state.root else {
-        return serde_json::Value::Null;
+        return FeatureOutcome::NoResult;
     };
     let Some(entry_file) = root.files(&state.db).get(&state.entry_module).copied() else {
-        return serde_json::Value::Null;
+        return FeatureOutcome::NoResult;
     };
     // Convert the UTF-16 cursor position to a byte offset so completion can read
     // the type the surrounding context expects there (type-directed ranking).
@@ -326,35 +374,35 @@ fn completion_result(state: &State, params: &serde_json::Value) -> serde_json::V
     let byte = u32::try_from(byte).unwrap_or(u32::MAX);
     let items =
         ipe_lsp_features::completion::completions(&state.db, root, entry_file, &module, byte);
-    serde_json::to_value(items).unwrap_or(serde_json::Value::Null)
+    FeatureOutcome::payload(items)
 }
 
 /// `textDocument/definition` — jump to the defining site of the name under
 /// the cursor.
-fn definition_result(state: &State, params: &serde_json::Value) -> serde_json::Value {
+fn definition_result(state: &State, params: &serde_json::Value) -> FeatureOutcome {
     let Ok(params) = serde_json::from_value::<lsp_types::GotoDefinitionParams>(params.clone())
     else {
-        return serde_json::Value::Null;
+        return FeatureOutcome::InvalidParams("invalid params for textDocument/definition".into());
     };
     let position = params.text_document_position_params;
     let Some((module, _file, text)) = state.locate(&position.text_document.uri) else {
-        return serde_json::Value::Null;
+        return FeatureOutcome::NoResult;
     };
     let Some(root) = state.root else {
-        return serde_json::Value::Null;
+        return FeatureOutcome::NoResult;
     };
     let Some(entry_file) = root.files(&state.db).get(&state.entry_module).copied() else {
-        return serde_json::Value::Null;
+        return FeatureOutcome::NoResult;
     };
     let byte = offset::position_to_offset(&text, position.position, state.encoding);
     let byte = u32::try_from(byte).unwrap_or(u32::MAX);
     let Some(def) =
         ipe_lsp_features::navigation::goto_definition(&state.db, root, entry_file, &module, byte)
     else {
-        return serde_json::Value::Null;
+        return FeatureOutcome::NoResult;
     };
     let Some(def_uri) = state.uri_for_module(&def.module) else {
-        return serde_json::Value::Null;
+        return FeatureOutcome::NoResult;
     };
     // Fetch the target text to convert the byte span to a range.
     let def_text: String = root
@@ -367,23 +415,23 @@ fn definition_result(state: &State, params: &serde_json::Value) -> serde_json::V
         uri: def_uri,
         range,
     };
-    serde_json::to_value(location).unwrap_or(serde_json::Value::Null)
+    FeatureOutcome::payload(location)
 }
 
 /// `textDocument/references` — every use site of the name under the cursor.
-fn references_result(state: &State, params: &serde_json::Value) -> serde_json::Value {
+fn references_result(state: &State, params: &serde_json::Value) -> FeatureOutcome {
     let Ok(params) = serde_json::from_value::<lsp_types::ReferenceParams>(params.clone()) else {
-        return serde_json::Value::Null;
+        return FeatureOutcome::InvalidParams("invalid params for textDocument/references".into());
     };
     let position = params.text_document_position;
     let Some((module, _file, text)) = state.locate(&position.text_document.uri) else {
-        return serde_json::Value::Null;
+        return FeatureOutcome::NoResult;
     };
     let Some(root) = state.root else {
-        return serde_json::Value::Null;
+        return FeatureOutcome::NoResult;
     };
     let Some(entry_file) = root.files(&state.db).get(&state.entry_module).copied() else {
-        return serde_json::Value::Null;
+        return FeatureOutcome::NoResult;
     };
     let byte = offset::position_to_offset(&text, position.position, state.encoding);
     let byte = u32::try_from(byte).unwrap_or(u32::MAX);
@@ -391,7 +439,7 @@ fn references_result(state: &State, params: &serde_json::Value) -> serde_json::V
     let Some(def) =
         ipe_lsp_features::navigation::goto_definition(&state.db, root, entry_file, &module, byte)
     else {
-        return serde_json::Value::Null;
+        return FeatureOutcome::NoResult;
     };
     let def_text = root
         .files(&state.db)
@@ -401,7 +449,7 @@ fn references_result(state: &State, params: &serde_json::Value) -> serde_json::V
     let lo = def.span.lo as usize;
     let hi = def.span.hi as usize;
     let Some(def_name) = def_text.get(lo..hi) else {
-        return serde_json::Value::Null;
+        return FeatureOutcome::NoResult;
     };
     let refs = ipe_lsp_features::navigation::find_references(
         &state.db,
@@ -436,32 +484,34 @@ fn references_result(state: &State, params: &serde_json::Value) -> serde_json::V
             range,
         });
     }
-    serde_json::to_value(locations).unwrap_or(serde_json::Value::Null)
+    FeatureOutcome::payload(locations)
 }
 
 /// `textDocument/prepareRename` — validate the position is renameable and
 /// return the current identifier and its range.
-fn prepare_rename_result(state: &State, params: &serde_json::Value) -> serde_json::Value {
+fn prepare_rename_result(state: &State, params: &serde_json::Value) -> FeatureOutcome {
     let Ok(params) =
         serde_json::from_value::<lsp_types::TextDocumentPositionParams>(params.clone())
     else {
-        return serde_json::Value::Null;
+        return FeatureOutcome::InvalidParams(
+            "invalid params for textDocument/prepareRename".into(),
+        );
     };
     let Some((module, _file, text)) = state.locate(&params.text_document.uri) else {
-        return serde_json::Value::Null;
+        return FeatureOutcome::NoResult;
     };
     let Some(root) = state.root else {
-        return serde_json::Value::Null;
+        return FeatureOutcome::NoResult;
     };
     let Some(entry_file) = root.files(&state.db).get(&state.entry_module).copied() else {
-        return serde_json::Value::Null;
+        return FeatureOutcome::NoResult;
     };
     let byte = offset::position_to_offset(&text, params.position, state.encoding);
     let byte = u32::try_from(byte).unwrap_or(u32::MAX);
     let Some(prep) =
         ipe_lsp_features::rename::prepare_rename(&state.db, root, entry_file, &module, byte)
     else {
-        return serde_json::Value::Null;
+        return FeatureOutcome::NoResult;
     };
     let range = ipe_lsp_features::offset::span_to_range(&text, prep.span, state.encoding);
     // Return `{ range, placeholder }` — the standard `PrepareRenameResponse`.
@@ -469,23 +519,23 @@ fn prepare_rename_result(state: &State, params: &serde_json::Value) -> serde_jso
         range,
         placeholder: prep.name,
     };
-    serde_json::to_value(response).unwrap_or(serde_json::Value::Null)
+    FeatureOutcome::payload(response)
 }
 
 /// `textDocument/rename` — apply a rename across all references.
-fn rename_result(state: &State, params: &serde_json::Value) -> serde_json::Value {
+fn rename_result(state: &State, params: &serde_json::Value) -> FeatureOutcome {
     let Ok(params) = serde_json::from_value::<lsp_types::RenameParams>(params.clone()) else {
-        return serde_json::Value::Null;
+        return FeatureOutcome::InvalidParams("invalid params for textDocument/rename".into());
     };
     let position = params.text_document_position;
     let Some((module, _file, text)) = state.locate(&position.text_document.uri) else {
-        return serde_json::Value::Null;
+        return FeatureOutcome::NoResult;
     };
     let Some(root) = state.root else {
-        return serde_json::Value::Null;
+        return FeatureOutcome::NoResult;
     };
     let Some(entry_file) = root.files(&state.db).get(&state.entry_module).copied() else {
-        return serde_json::Value::Null;
+        return FeatureOutcome::NoResult;
     };
     let byte = offset::position_to_offset(&text, position.position, state.encoding);
     let byte = u32::try_from(byte).unwrap_or(u32::MAX);
@@ -506,9 +556,9 @@ fn rename_result(state: &State, params: &serde_json::Value) -> serde_json::Value
     let Some(ws_edit) =
         ipe_lsp_features::rename::rename(db, root, entry_file, &module, &req, &resolver)
     else {
-        return serde_json::Value::Null;
+        return FeatureOutcome::NoResult;
     };
-    serde_json::to_value(ws_edit).unwrap_or(serde_json::Value::Null)
+    FeatureOutcome::payload(ws_edit)
 }
 
 /// Normalize a path for map keys: canonical when the file exists, verbatim
@@ -844,46 +894,48 @@ fn compute_batch(
 }
 
 /// `textDocument/formatting` — reformat the whole document.
-fn formatting_result(state: &State, params: &serde_json::Value) -> serde_json::Value {
+fn formatting_result(state: &State, params: &serde_json::Value) -> FeatureOutcome {
     let Ok(params) = serde_json::from_value::<lsp_types::DocumentFormattingParams>(params.clone())
     else {
-        return serde_json::Value::Null;
+        return FeatureOutcome::InvalidParams("invalid params for textDocument/formatting".into());
     };
     let Some((_module, file, _text)) = state.locate(&params.text_document.uri) else {
-        return serde_json::Value::Null;
+        return FeatureOutcome::NoResult;
     };
     let edits = ipe_lsp_features::formatting::format_document(&state.db, file, state.encoding);
-    serde_json::to_value(edits).unwrap_or(serde_json::Value::Null)
+    FeatureOutcome::payload(edits)
 }
 
 /// `textDocument/rangeFormatting` — reformat a selected range.
-fn range_formatting_result(state: &State, params: &serde_json::Value) -> serde_json::Value {
+fn range_formatting_result(state: &State, params: &serde_json::Value) -> FeatureOutcome {
     let Ok(params) =
         serde_json::from_value::<lsp_types::DocumentRangeFormattingParams>(params.clone())
     else {
-        return serde_json::Value::Null;
+        return FeatureOutcome::InvalidParams(
+            "invalid params for textDocument/rangeFormatting".into(),
+        );
     };
     let Some((_module, file, _text)) = state.locate(&params.text_document.uri) else {
-        return serde_json::Value::Null;
+        return FeatureOutcome::NoResult;
     };
     let edits =
         ipe_lsp_features::formatting::format_range(&state.db, file, params.range, state.encoding);
-    serde_json::to_value(edits).unwrap_or(serde_json::Value::Null)
+    FeatureOutcome::payload(edits)
 }
 
 /// `textDocument/codeAction` — diagnostic-driven quick-fixes.
-fn code_action_result(state: &State, params: &serde_json::Value) -> serde_json::Value {
+fn code_action_result(state: &State, params: &serde_json::Value) -> FeatureOutcome {
     let Ok(params) = serde_json::from_value::<lsp_types::CodeActionParams>(params.clone()) else {
-        return serde_json::Value::Null;
+        return FeatureOutcome::InvalidParams("invalid params for textDocument/codeAction".into());
     };
     let Some((module, _file, text)) = state.locate(&params.text_document.uri) else {
-        return serde_json::Value::Null;
+        return FeatureOutcome::NoResult;
     };
     let Some(root) = state.root else {
-        return serde_json::Value::Null;
+        return FeatureOutcome::NoResult;
     };
     let Some(entry_file) = root.files(&state.db).get(&state.entry_module).copied() else {
-        return serde_json::Value::Null;
+        return FeatureOutcome::NoResult;
     };
     let actions = ipe_lsp_features::code_actions::code_actions(
         ipe_lsp_features::code_actions::DbView {
@@ -898,60 +950,63 @@ fn code_action_result(state: &State, params: &serde_json::Value) -> serde_json::
         &text,
         state.encoding,
     );
-    serde_json::to_value(actions).unwrap_or(serde_json::Value::Null)
+    FeatureOutcome::payload(actions)
 }
 
 /// `textDocument/semanticTokens/full` — full semantic token encoding.
-fn semantic_tokens_full_result(state: &State, params: &serde_json::Value) -> serde_json::Value {
+fn semantic_tokens_full_result(state: &State, params: &serde_json::Value) -> FeatureOutcome {
     let Ok(params) = serde_json::from_value::<lsp_types::SemanticTokensParams>(params.clone())
     else {
-        return serde_json::Value::Null;
+        return FeatureOutcome::InvalidParams(
+            "invalid params for textDocument/semanticTokens/full".into(),
+        );
     };
     let Some((_module, file, _text)) = state.locate(&params.text_document.uri) else {
-        return serde_json::Value::Null;
+        return FeatureOutcome::NoResult;
     };
     let result =
         ipe_lsp_features::semantic_tokens::semantic_tokens_full(&state.db, file, state.encoding);
-    serde_json::to_value(result).unwrap_or(serde_json::Value::Null)
+    FeatureOutcome::payload(result)
 }
 
 /// `textDocument/signatureHelp` — callee signature at the cursor.
-fn signature_help_result(state: &State, params: &serde_json::Value) -> serde_json::Value {
+fn signature_help_result(state: &State, params: &serde_json::Value) -> FeatureOutcome {
     let Ok(params) = serde_json::from_value::<lsp_types::SignatureHelpParams>(params.clone())
     else {
-        return serde_json::Value::Null;
+        return FeatureOutcome::InvalidParams(
+            "invalid params for textDocument/signatureHelp".into(),
+        );
     };
     let position = params.text_document_position_params;
     let Some((module, _file, text)) = state.locate(&position.text_document.uri) else {
-        return serde_json::Value::Null;
+        return FeatureOutcome::NoResult;
     };
     let Some(root) = state.root else {
-        return serde_json::Value::Null;
+        return FeatureOutcome::NoResult;
     };
     let Some(entry_file) = root.files(&state.db).get(&state.entry_module).copied() else {
-        return serde_json::Value::Null;
+        return FeatureOutcome::NoResult;
     };
     let byte = offset::position_to_offset(&text, position.position, state.encoding);
     let byte = u32::try_from(byte).unwrap_or(u32::MAX);
-    ipe_lsp_features::signature_help::signature_help(&state.db, root, entry_file, &module, byte)
-        .map_or(serde_json::Value::Null, |help| {
-            serde_json::to_value(help).unwrap_or(serde_json::Value::Null)
-        })
+    FeatureOutcome::maybe(ipe_lsp_features::signature_help::signature_help(
+        &state.db, root, entry_file, &module, byte,
+    ))
 }
 
 /// `textDocument/inlayHint` — type annotation inlay hints.
-fn inlay_hints_result(state: &State, params: &serde_json::Value) -> serde_json::Value {
+fn inlay_hints_result(state: &State, params: &serde_json::Value) -> FeatureOutcome {
     let Ok(params) = serde_json::from_value::<lsp_types::InlayHintParams>(params.clone()) else {
-        return serde_json::Value::Null;
+        return FeatureOutcome::InvalidParams("invalid params for textDocument/inlayHint".into());
     };
     let Some((module, _file, _text)) = state.locate(&params.text_document.uri) else {
-        return serde_json::Value::Null;
+        return FeatureOutcome::NoResult;
     };
     let Some(root) = state.root else {
-        return serde_json::Value::Null;
+        return FeatureOutcome::NoResult;
     };
     let Some(entry_file) = root.files(&state.db).get(&state.entry_module).copied() else {
-        return serde_json::Value::Null;
+        return FeatureOutcome::NoResult;
     };
     let hints = ipe_lsp_features::inlay_hints::inlay_hints(
         &state.db,
@@ -961,7 +1016,7 @@ fn inlay_hints_result(state: &State, params: &serde_json::Value) -> serde_json::
         params.range,
         state.encoding,
     );
-    serde_json::to_value(hints).unwrap_or(serde_json::Value::Null)
+    FeatureOutcome::payload(hints)
 }
 
 /// Latest-generation-wins publishing with change suppression: identical
@@ -1008,9 +1063,10 @@ mod tests {
     use crossbeam_channel::RecvTimeoutError;
 
     use super::{
-        Connection, DiagnosticsBatch, LoadedFile, LoadedProject, Message, ModuleOrigin, Path,
-        PathBuf, PositionEncoding, ProjectLoader, PublishDiagnostics, PublishDiagnosticsParams,
-        State, Url, ensure_project_fresh, normalize, publish, recompute, sync_inputs,
+        Connection, DiagnosticsBatch, FeatureOutcome, LoadedFile, LoadedProject, Message,
+        ModuleOrigin, Path, PathBuf, PositionEncoding, ProjectLoader, PublishDiagnostics,
+        PublishDiagnosticsParams, State, Url, ensure_project_fresh, normalize, publish, recompute,
+        sync_inputs,
     };
     use crate::loader::LoadError;
     use lsp_types::notification::Notification as _;
@@ -1258,6 +1314,96 @@ mod tests {
         assert!(
             notification_count <= 2,
             "stale batches must not produce notifications; got {notification_count} notifications from {delivered_count} total batches"
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // FeatureOutcome boundary tests
+    // -----------------------------------------------------------------------
+
+    /// A `Serialize` impl that always fails, used to exercise the `Encode`
+    /// variant without depending on any `lsp_types` value.
+    struct AlwaysFailsSerialize;
+
+    impl serde::Serialize for AlwaysFailsSerialize {
+        fn serialize<S: serde::Serializer>(&self, _s: S) -> Result<S::Ok, S::Error> {
+            Err(serde::ser::Error::custom(
+                "intentional serialization failure",
+            ))
+        }
+    }
+
+    /// An encoding failure becomes `FeatureOutcome::Encode`, never `Payload(Null)`.
+    #[test]
+    fn payload_constructor_yields_encode_on_serialization_failure() {
+        let outcome = FeatureOutcome::payload(AlwaysFailsSerialize);
+        assert!(
+            matches!(outcome, FeatureOutcome::Encode(_)),
+            "a serialization failure must produce Encode, not Payload or NoResult"
+        );
+    }
+
+    /// `FeatureOutcome::maybe` on `None` yields `NoResult`.
+    #[test]
+    fn maybe_constructor_none_yields_no_result() {
+        let outcome = FeatureOutcome::maybe::<AlwaysFailsSerialize>(None);
+        assert!(
+            matches!(outcome, FeatureOutcome::NoResult),
+            "maybe(None) must yield NoResult"
+        );
+    }
+
+    /// `FeatureOutcome::maybe` on `Some(value)` that fails serialization yields `Encode`.
+    #[test]
+    fn maybe_constructor_some_failing_serialize_yields_encode() {
+        let outcome = FeatureOutcome::maybe(Some(AlwaysFailsSerialize));
+        assert!(
+            matches!(outcome, FeatureOutcome::Encode(_)),
+            "maybe(Some(unserializable)) must yield Encode, not NoResult or Payload"
+        );
+    }
+
+    /// A well-typed value produces `Payload` with the expected JSON.
+    #[test]
+    fn payload_constructor_yields_payload_on_success() {
+        let outcome = FeatureOutcome::payload(42u32);
+        assert!(
+            matches!(&outcome, FeatureOutcome::Payload(v) if *v == serde_json::json!(42)),
+            "a well-typed value must produce Payload with the expected JSON"
+        );
+    }
+
+    /// Asserts the encoding-to-null laundering pattern no longer appears in this
+    /// file — the structural invariant established by the typed boundary.
+    #[test]
+    fn no_unwrap_or_null_launder_sites_remain_in_main_loop() {
+        let src = include_str!("main_loop.rs");
+        // Assemble the needle from fragments so this guard never matches its own
+        // source text.
+        let needle = format!("unwrap_or(serde_json::{}::Null)", "Value");
+        let count = src.matches(needle.as_str()).count();
+        assert_eq!(
+            count, 0,
+            "found {count} encoding-to-null launder site(s); all encoding failures \
+             must go through FeatureOutcome::payload"
+        );
+    }
+
+    /// Asserts that no handler still carries a bare `-> serde_json::Value` return type.
+    #[test]
+    fn no_handler_returns_bare_serde_json_value() {
+        let src = include_str!("main_loop.rs");
+        let bare_signatures: Vec<&str> = src
+            .lines()
+            .filter(|line| {
+                line.contains("_result(")
+                    && line.contains("-> serde_json::Value")
+                    && !line.trim_start().starts_with("//")
+            })
+            .collect();
+        assert!(
+            bare_signatures.is_empty(),
+            "handler(s) still return bare serde_json::Value: {bare_signatures:?}"
         );
     }
 }
