@@ -196,9 +196,11 @@ pub fn file_rename(src: ipe_runtime::path::Path, dst: ipe_runtime::path::Path) -
     ipe_runtime::file::file_rename(src, dst)
 }
 
-pub fn main_double<T1: ::core::ops::Add<Output = T1> + Copy + Clone>(x: T1) -> T1 {
+pub fn main_double<T1: ipe_runtime::basics::IpeWrappingAdd<Output = T1> + Copy + Clone>(
+    x: T1,
+) -> T1 {
     let _ipe_recursion_guard = crate::recursion_guard();
-    (x.clone() + x)
+    x.clone().ipe_wrapping_add(x)
 }
 pub fn ipe_main() -> IpeTask<()> {
     let _ipe_recursion_guard = crate::recursion_guard();
