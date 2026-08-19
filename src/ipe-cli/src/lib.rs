@@ -7815,12 +7815,22 @@ pub mod web {
         write_entry(
             &submitted_root,
             "mylib",
-            &[("1.0.0", "https://x.invalid/mylib", "abc", "00")],
+            &[(
+                "1.0.0",
+                "https://x.invalid/mylib",
+                "a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2",
+                "00",
+            )],
         );
         write_entry(
             &baseline_root,
             "mylib",
-            &[("1.0.0", "https://x.invalid/mylib", "abc", "00")],
+            &[(
+                "1.0.0",
+                "https://x.invalid/mylib",
+                "a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2",
+                "00",
+            )],
         );
         let args: Vec<String> = [
             submitted_root
@@ -7857,12 +7867,22 @@ pub mod web {
         write_entry(
             &baseline_root,
             "mylib",
-            &[("1.0.0", "https://x.invalid/mylib", "abc", "00")],
+            &[(
+                "1.0.0",
+                "https://x.invalid/mylib",
+                "a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2",
+                "00",
+            )],
         );
         write_entry(
             &submitted_root,
             "mylib",
-            &[("1.0.0", "https://x.invalid/mylib", "abc", "11")],
+            &[(
+                "1.0.0",
+                "https://x.invalid/mylib",
+                "a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2",
+                "11",
+            )],
         );
         let args: Vec<String> = [
             submitted_root
