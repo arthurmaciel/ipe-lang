@@ -2213,6 +2213,7 @@ dependencies = [
 name = "ipe_docs"
 version = "0.1.66"
 dependencies = [
+ "ipe_annotate",
  "ipe_intern",
  "ipe_parse",
  "ipe_stdlib",

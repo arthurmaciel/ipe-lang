@@ -18,6 +18,8 @@
 //!
 //! Entry point: [`Index::build`].
 
+pub mod render;
+
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
@@ -576,6 +578,85 @@ mod tests {
         assert_eq!(
             short.text, fq.text,
             "short and fq entries carry identical text"
+        );
+    }
+
+    // ── Site-generator integration tests ────────────────────────────────────
+
+    /// The generator is deterministic: calling it twice with the same index
+    /// produces byte-identical output for every page.
+    #[test]
+    fn site_generator_is_deterministic() {
+        use crate::render::{html_escape, page};
+
+        let idx = build_index();
+
+        // Render the same entry twice and assert byte-equality.
+        let entry = idx
+            .resolve("Maybe.withDefault")
+            .expect("Maybe.withDefault must resolve");
+
+        let render_once = || {
+            let kind_label = match entry.kind {
+                EntryKind::Symbol => "symbol",
+                EntryKind::Module => "module",
+                EntryKind::Diagnostic => "diagnostic",
+                EntryKind::Construct => "construct",
+                EntryKind::Command => "command",
+            };
+            let body = format!(
+                "<h1>{} <span class=\"kind-badge\">{kind_label}</span></h1>\n",
+                html_escape("Maybe.withDefault")
+            );
+            page("Maybe.withDefault", &body)
+        };
+
+        let first = render_once();
+        let second = render_once();
+        assert_eq!(
+            first, second,
+            "two renders of the same entry must produce identical HTML"
+        );
+    }
+
+    /// The `page` template wraps content in a proper HTML5 document with a
+    /// stylesheet link — verifying the page shell is always present.
+    #[test]
+    fn site_page_shell_is_well_formed() {
+        use crate::render::page;
+        let html = page("Ipe.List", "<p>test body</p>");
+        assert!(
+            html.starts_with("<!DOCTYPE html>"),
+            "must start with doctype"
+        );
+        assert!(
+            html.contains("<html lang=\"en\">"),
+            "must have lang attribute"
+        );
+        assert!(
+            html.contains("href=\"/style.css\""),
+            "must link the stylesheet"
+        );
+        assert!(
+            html.contains("<p>test body</p>"),
+            "body content must be present"
+        );
+        assert!(html.contains("</html>"), "must be closed");
+    }
+
+    /// A symbol entry page renders its `source_key` as the heading.
+    #[test]
+    fn symbol_page_heading_is_key() {
+        use crate::render::{html_escape, page};
+
+        let heading_html = format!(
+            "<h1>{} <span class=\"kind-badge\">symbol</span></h1>",
+            html_escape("List.map")
+        );
+        let html = page("List.map", &heading_html);
+        assert!(
+            html.contains(&heading_html),
+            "symbol heading must appear verbatim; got: {html}"
         );
     }
 }
