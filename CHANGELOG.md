@@ -10,6 +10,13 @@ Entries below the header are maintained by
 section is generated from Conventional Commit messages and prepended when the
 standing release pull request is merged.
 
+## [0.1.62](https://github.com/arthurmaciel/ipe-lang/compare/ipe-v0.1.61...ipe-v0.1.62) (2026-08-19)
+
+
+### Bug Fixes
+
+* **diagnostics:** collapse parallel renderers into typed Diagnostic taxonomy ([#1132](https://github.com/arthurmaciel/ipe-lang/issues/1132)) ([#1170](https://github.com/arthurmaciel/ipe-lang/issues/1170)) ([01c403f](https://github.com/arthurmaciel/ipe-lang/commit/01c403f7dfc786d78dab7bbe7ebdecf90c7289d4))
+
 ## [0.1.61](https://github.com/arthurmaciel/ipe-lang/compare/ipe-v0.1.60...ipe-v0.1.61) (2026-08-19)
 
 
