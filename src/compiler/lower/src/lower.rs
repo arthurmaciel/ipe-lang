@@ -19217,6 +19217,8 @@ impl<'a> Lowerer<'a> {
                 // ── Result/Maybe combine — arity 1 ─────────────────────
                 | KernelFn::ResultCombine
                 | KernelFn::MaybeCombine
+                | KernelFn::MaybeIsJust
+                | KernelFn::MaybeIsNothing
                 | KernelFn::ResultToMaybe
                 // ── Dict arity-1 ─────────────────────────────────────────────
                 | KernelFn::DictIsEmpty
@@ -20903,6 +20905,8 @@ impl<'a> Lowerer<'a> {
                     ("Maybe", "map5") => Ok(Callee::Kernel(KernelFn::MaybeMap5)),
                     ("Maybe", "andMap") => Ok(Callee::Kernel(KernelFn::MaybeAndMap)),
                     ("Maybe", "combine") => Ok(Callee::Kernel(KernelFn::MaybeCombine)),
+                    ("Maybe", "isJust") => Ok(Callee::Kernel(KernelFn::MaybeIsJust)),
+                    ("Maybe", "isNothing") => Ok(Callee::Kernel(KernelFn::MaybeIsNothing)),
                     // ── Result kernels ─────────────────────────────────────
                     ("Result", "withDefault") => Ok(Callee::Kernel(KernelFn::ResultWithDefault)),
                     ("Result", "map") => Ok(Callee::Kernel(KernelFn::ResultMap)),

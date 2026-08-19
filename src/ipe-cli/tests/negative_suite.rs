@@ -1699,3 +1699,83 @@ fn ffi_planted_bindings_file_is_ignored_on_load() {
     }
     let _ = std::fs::remove_dir_all(&root);
 }
+
+// ===========================================================================
+// Maybe.isJust / Maybe.isNothing — export reachability
+// ===========================================================================
+
+/// `Maybe.isJust` and `Maybe.isNothing` are listed in `Ipe.Maybe`'s `exposing`
+/// clause. These tests lock qualified access, explicit `exposing` injection, and
+/// the full set of `Ipe.Maybe` exports.
+
+/// Qualified `Maybe.isJust` and `Maybe.isNothing` on `Just`/`Nothing` values.
+#[test]
+fn maybe_is_just_is_nothing_qualified_compiles() {
+    let src = format!(
+        "{HEAD}\
+import Ipe.Maybe
+import Ipe.Io as Io
+import Ipe.String as String
+
+main : Task Error ()
+main =
+    let
+        j = Just 1
+        n = Nothing
+        a = Maybe.isJust j
+        b = Maybe.isNothing n
+        c = Maybe.isJust n
+        d = Maybe.isNothing j
+        result = if a then \"ok\" else \"fail\"
+    in
+    Io.println result
+"
+    );
+    assert_compiles("maybe_is_just_is_nothing_qualified", &src);
+}
+
+/// Explicit `exposing (isJust, isNothing)` brings both into unqualified scope.
+#[test]
+fn maybe_is_just_is_nothing_exposing_compiles() {
+    let src = format!(
+        "{HEAD}\
+import Ipe.Maybe exposing (isJust, isNothing)
+import Ipe.Io as Io
+
+main : Task Error ()
+main =
+    let
+        j = Just 42
+        n = Nothing
+        a = isJust j
+        b = isNothing n
+        result = if a then \"ok\" else \"fail\"
+    in
+    Io.println result
+"
+    );
+    assert_compiles("maybe_is_just_is_nothing_exposing", &src);
+}
+
+/// All other `Ipe.Maybe` exports (`withDefault`, `map`, `andThen`, `andMap`,
+/// `combine`, `map2`…`map5`) still resolve correctly after the fix.
+#[test]
+fn maybe_all_other_exports_still_compile() {
+    let src = format!(
+        "{HEAD}\
+import Ipe.Maybe exposing (withDefault, map, andThen, andMap, combine, map2, map3, map4, map5)
+import Ipe.Io as Io
+import Ipe.String as String
+
+main : Task Error ()
+main =
+    let
+        x = withDefault 0 (Just 1)
+        y = map (\\n -> n + 1) (Just 2)
+        z = andThen (\\n -> Just (n * 2)) (Just 3)
+    in
+    Io.println (String.fromInt x)
+"
+    );
+    assert_compiles("maybe_other_exports_compile", &src);
+}
