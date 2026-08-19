@@ -1,5 +1,18 @@
 -- | Ipe.Result — combinators over the Result ADT.
 --
+-- A `Result e a` is either `Ok a` (success carrying a value) or `Err e`
+-- (failure carrying an error). It is the typed alternative to exceptions:
+-- a function that may fail returns a `Result`, and the caller must handle
+-- both outcomes before using the success value.
+--
+-- The functions here let you transform, combine, and sequence `Result`
+-- values so you rarely need to `case` on them by hand: `map` changes the
+-- success value, `andThen` chains a step that may itself fail, `mapError`
+-- translates the error side, and `combine` collects a list of results.
+--
+-- See also: `Ipe.Maybe` (absence without an error), `Ipe.Task` (async
+-- operations that may fail with `Error`).
+
 -- The Result ADT itself (`Result e a`, `Ok`, `Err` ctors) remains
 -- kernel-anchored so the type system and runtime IpeResult representation
 -- stay in lockstep.
@@ -21,30 +34,75 @@ module Ipe.Result exposing
     )
 
 
+{-| `withDefault fallback result` — the success value, or `fallback` if `Err`.
+
+```ipe
+withDefault 0 (Ok 42) --> 42
+withDefault 0 (Err "oops") --> 0
+withDefault "" (Err "bad") --> ""
+```
+-}
+withDefault : a -> Result b a -> a
 withDefault def r =
     case r of
         Ok x -> x
         Err _ -> def
 
 
+{-| `map f result` — apply `f` to the `Ok` value; `Err` passes through unchanged.
+
+```ipe
+map (\n -> n * 2) (Ok 21) --> Ok 42
+map (\n -> n * 2) (Err "bad") --> Err "bad"
+map String.fromInt (Ok 7) --> Ok "7"
+```
+-}
+map : (a -> b) -> Result c a -> Result c b
 map fn r =
     case r of
         Ok x -> Ok (fn x)
         Err e -> Err e
 
 
+{-| `andThen f result` — feed the `Ok` value to `f`; `Err` passes through.
+
+```ipe
+andThen (\n -> if n > 0 then Ok n else Err "negative") (Ok 5) --> Ok 5
+andThen (\n -> if n > 0 then Ok n else Err "negative") (Ok -1) --> Err "negative"
+andThen (\n -> if n > 0 then Ok n else Err "negative") (Err "prior") --> Err "prior"
+```
+-}
+andThen : (a -> Result b c) -> Result b a -> Result b c
 andThen fn r =
     case r of
         Ok x -> fn x
         Err e -> Err e
 
 
+{-| `mapError f result` — apply `f` to the `Err` value; `Ok` passes through.
+
+```ipe
+mapError String.length (Err "bad") --> Err 3
+mapError String.length (Ok 42) --> Ok 42
+mapError (\_ -> "unknown") (Err "network timeout") --> Err "unknown"
+```
+-}
+mapError : (a -> b) -> Result a c -> Result b c
 mapError fn r =
     case r of
         Ok x -> Ok x
         Err e -> Err (fn e)
 
 
+{-| `map2 f ra rb` — combine two `Ok` values with `f`; first `Err` wins.
+
+```ipe
+map2 (\a b -> a + b) (Ok 3) (Ok 4) --> Ok 7
+map2 (\a b -> a + b) (Err "x") (Ok 4) --> Err "x"
+map2 (\a b -> a ++ b) (Ok "hello") (Ok " world") --> Ok "hello world"
+```
+-}
+map2 : (a -> b -> c) -> Result d a -> Result d b -> Result d c
 map2 fn ra rb =
     case ra of
         Ok a ->
@@ -54,6 +112,14 @@ map2 fn ra rb =
         Err e -> Err e
 
 
+{-| `map3 f ra rb rc` — combine three `Ok` values with `f`; first `Err` wins.
+
+```ipe
+map3 (\a b c -> a + b + c) (Ok 1) (Ok 2) (Ok 3) --> Ok 6
+map3 (\a b c -> a + b + c) (Ok 1) (Err "x") (Ok 3) --> Err "x"
+```
+-}
+map3 : (a -> b -> c -> d) -> Result e a -> Result e b -> Result e c -> Result e d
 map3 fn ra rb rc =
     case ra of
         Ok a ->
@@ -66,6 +132,14 @@ map3 fn ra rb rc =
         Err e -> Err e
 
 
+{-| `map4 f ra rb rc rd` — combine four `Ok` values with `f`; first `Err` wins.
+
+```ipe
+map4 (\a b c d -> a + b + c + d) (Ok 1) (Ok 2) (Ok 3) (Ok 4) --> Ok 10
+map4 (\a b c d -> a + b + c + d) (Ok 1) (Err "x") (Ok 3) (Ok 4) --> Err "x"
+```
+-}
+map4 : (a -> b -> c -> d -> e) -> Result f a -> Result f b -> Result f c -> Result f d -> Result f e
 map4 fn ra rb rc rd =
     case ra of
         Ok a ->
@@ -81,6 +155,14 @@ map4 fn ra rb rc rd =
         Err e -> Err e
 
 
+{-| `map5 f ra rb rc rd re` — combine five `Ok` values with `f`; first `Err` wins.
+
+```ipe
+map5 (\a b c d e -> a + b + c + d + e) (Ok 1) (Ok 2) (Ok 3) (Ok 4) (Ok 5) --> Ok 15
+map5 (\a b c d e -> a + b + c + d + e) (Ok 1) (Ok 2) (Err "x") (Ok 4) (Ok 5) --> Err "x"
+```
+-}
+map5 : (a -> b -> c -> d -> e -> f) -> Result g a -> Result g b -> Result g c -> Result g d -> Result g e -> Result g f
 map5 fn ra rb rc rd re =
     case ra of
         Ok a ->
@@ -99,6 +181,15 @@ map5 fn ra rb rc rd re =
         Err err -> Err err
 
 
+{-| `andMap ra rfn` — apply the function inside `rfn` to the value inside `ra`.
+
+```ipe
+andMap (Ok 10) (Ok (\n -> n + 1)) --> Ok 11
+andMap (Err "no val") (Ok (\n -> n + 1)) --> Err "no val"
+andMap (Ok 10) (Err "no fn") --> Err "no fn"
+```
+-}
+andMap : Result c a -> Result c (a -> b) -> Result c b
 andMap ra rfn =
     case rfn of
         Ok fn ->
@@ -108,15 +199,16 @@ andMap ra rfn =
         Err e -> Err e
 
 
--- | `combine results` — collect a list of Results into a Result of list,
--- preserving order and short-circuiting on the first `Err`.
---
--- `combineHelp` walks the input tail-recursively, prepending each `Ok`
--- payload onto `acc` (reverse order) and returning the first `Err`
--- immediately.  At the empty base it flips `acc` via `reverseHelp` for
--- the final left-to-right output.  The helper is a tail call, so
--- `Ipe.Build.TailCallOpt` lowers it to a loop and a very long input runs
--- in constant native stack.
+{-| `combine results` — collect a list of `Result`s into a `Result` of list;
+short-circuits on the first `Err`.
+
+```ipe
+combine [ Ok 1, Ok 2, Ok 3 ] --> Ok [ 1, 2, 3 ]
+combine [ Ok 1, Err "bad", Ok 3 ] --> Err "bad"
+combine [] --> Ok []
+```
+-}
+combine : List (Result b a) -> Result b (List a)
 combine results =
     combineHelp results []
 
@@ -136,12 +228,29 @@ reverseHelp list acc =
         (x :: rest) -> reverseHelp rest (x :: acc)
 
 
+{-| `toMaybe result` — `Just` the `Ok` value, or `Nothing` on `Err`.
+
+```ipe
+toMaybe (Ok 42) --> Just 42
+toMaybe (Err "oops") --> Nothing
+```
+-}
+toMaybe : Result a b -> Maybe b
 toMaybe r =
     case r of
         Ok x -> Just x
         Err _ -> Nothing
 
 
+{-| `fromMaybe err maybe` — `Ok` the `Just` value, or `Err err` on `Nothing`.
+
+```ipe
+fromMaybe "missing" (Just 42) --> Ok 42
+fromMaybe "missing" Nothing --> Err "missing"
+fromMaybe 0 (Just 99) --> Ok 99
+```
+-}
+fromMaybe : a -> Maybe b -> Result a b
 fromMaybe err m =
     case m of
         Just x -> Ok x
