@@ -11,10 +11,9 @@ alloc_mimalloc = ["dep:mimalloc"]
 [dependencies]
 dlmalloc = { version = "0.2", features = ["global"], optional = true }
 mimalloc = { version = "0.1", optional = true, default-features = false }
-# The Ipê runtime, provided by the Ipê toolchain at the resolved path below.
-# This crate is NOT relocatable: `cargo build` outside a machine whose Ipê
-# toolchain provides that path fails with cargo's own missing-path-dependency
-# error. It is a build artifact, not a source distribution.
+# The Ipê runtime, bundled alongside this crate under `ipe_runtime_dep/`.
+# A relative path dependency: `cargo build` works in any environment
+# (cross-compiler container, offline, CI) because the source is local.
 ipe_runtime = { package = "ipe-runtime-rust", path = "__IPE_RUNTIME_PATH__", default-features = false, features = [] }
 
 [profile.dev]

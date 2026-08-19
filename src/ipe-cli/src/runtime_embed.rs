@@ -169,6 +169,104 @@ fn concretize_manifest(manifest: &str) -> String {
         + if manifest.ends_with('\n') { "\n" } else { "" }
 }
 
+/// Prepare the runtime manifest for bundling alongside an emitted dep-model
+/// crate: concretize the version AND strip every `[dev-dependencies]` /
+/// `[target.*.dev-dependencies]` section.
+///
+/// Dev-dependency sections are irrelevant when the runtime crate is used as a
+/// cargo dependency (cargo never installs dev deps for non-root crates). They
+/// may however contain workspace-relative `path` entries (e.g. sibling compiler
+/// crates) that do not resolve when the manifest lives outside the workspace.
+/// Stripping them keeps the bundled crate's manifest self-contained.
+///
+/// The strip is line-granular: a `[…dev-dependencies]` header line begins a
+/// section that continues until the next TOML table header (`[` at column 0)
+/// or end of file. Comment lines inside a skipped section are dropped with the
+/// section, keeping the output clean.
+fn prepare_bundled_manifest(manifest: &str) -> String {
+    let concretized = concretize_manifest(manifest);
+    let mut out = String::with_capacity(concretized.len());
+    let mut in_dev_deps = false;
+    let trailing_newline = concretized.ends_with('\n');
+    for line in concretized.lines() {
+        let trimmed = line.trim();
+        // A TOML table header at column 0 starts a new section.
+        if trimmed.starts_with('[') {
+            in_dev_deps = trimmed.contains("dev-dependencies");
+        }
+        if !in_dev_deps {
+            out.push_str(line);
+            out.push('\n');
+        }
+    }
+    // Preserve (or not) the trailing newline the original carried.
+    if !trailing_newline && out.ends_with('\n') {
+        out.pop();
+    }
+    out
+}
+
+/// Collect the embedded runtime crate as a path→text map for dep bundling.
+///
+/// Rewrites the root `Cargo.toml` via [`prepare_bundled_manifest`] (concrete
+/// version, no dev-dependencies) and skips `tests/`. Relative paths are rooted
+/// at the crate root (e.g. `Cargo.toml`, `src/mod.rs`).
+///
+/// Used to materialise `ipe_runtime_dep/` alongside a dep-model emitted crate
+/// so the relative path dep in its `Cargo.toml` resolves in any environment.
+///
+/// # Errors
+///
+/// [`CliError::RuntimeMaterializeFailed`] when an embedded file is not valid
+/// UTF-8 (unexpected for in-repo source; surfaced loudly rather than silently
+/// skipped).
+pub fn collect_embedded_crate_text()
+-> Result<std::collections::BTreeMap<std::path::PathBuf, String>, CliError> {
+    let mut out = std::collections::BTreeMap::new();
+    collect_dir_text_from_embedded(&RUNTIME_CRATE, std::path::Path::new(""), true, &mut out)?;
+    Ok(out)
+}
+
+/// Recursive helper for [`collect_embedded_crate_text`]: traverses `dir`,
+/// prepending `prefix` to each entry's relative path.
+fn collect_dir_text_from_embedded(
+    dir: &include_dir::Dir<'_>,
+    prefix: &std::path::Path,
+    at_root: bool,
+    out: &mut std::collections::BTreeMap<std::path::PathBuf, String>,
+) -> Result<(), CliError> {
+    for entry in dir.entries() {
+        match entry {
+            include_dir::DirEntry::Dir(sub) => {
+                let name = sub.path().file_name().unwrap_or_default();
+                if at_root && name == std::ffi::OsStr::new("tests") {
+                    continue;
+                }
+                collect_dir_text_from_embedded(sub, &prefix.join(name), false, out)?;
+            }
+            include_dir::DirEntry::File(file) => {
+                let name = file.path().file_name().unwrap_or_default();
+                let rel = prefix.join(name);
+                let text = std::str::from_utf8(file.contents()).map_err(|_| {
+                    CliError::RuntimeMaterializeFailed {
+                        detail: format!(
+                            "embedded runtime file {} is not valid UTF-8",
+                            rel.display()
+                        ),
+                    }
+                })?;
+                let text = if at_root && name == std::ffi::OsStr::new(MANIFEST) {
+                    prepare_bundled_manifest(text)
+                } else {
+                    text.to_owned()
+                };
+                out.insert(rel, text);
+            }
+        }
+    }
+    Ok(())
+}
+
 /// Write the embedded crate tree under `dest` (a fresh directory), rewriting the
 /// root manifest's version and skipping the `tests/` subtree. Fails closed on the
 /// first filesystem error — a partially written tree under `dest` is a temp dir
