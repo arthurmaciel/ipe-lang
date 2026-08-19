@@ -201,11 +201,7 @@ impl From<AnnotatedToken> for JsonToken {
 /// Returns an error if `serde_json` serialisation fails (in practice, this
 /// cannot happen for these types — the error path satisfies the API contract).
 pub fn to_json(tokens: &[AnnotatedToken]) -> Result<String, serde_json::Error> {
-    let json_tokens: Vec<JsonToken> = tokens
-        .iter()
-        .cloned()
-        .map(JsonToken::from)
-        .collect();
+    let json_tokens: Vec<JsonToken> = tokens.iter().cloned().map(JsonToken::from).collect();
     serde_json::to_string(&json_tokens)
 }
 
@@ -215,11 +211,7 @@ pub fn to_json(tokens: &[AnnotatedToken]) -> Result<String, serde_json::Error> {
 ///
 /// Returns an error if `serde_json` serialisation fails.
 pub fn to_json_pretty(tokens: &[AnnotatedToken]) -> Result<String, serde_json::Error> {
-    let json_tokens: Vec<JsonToken> = tokens
-        .iter()
-        .cloned()
-        .map(JsonToken::from)
-        .collect();
+    let json_tokens: Vec<JsonToken> = tokens.iter().cloned().map(JsonToken::from).collect();
     serde_json::to_string_pretty(&json_tokens)
 }
 
@@ -228,6 +220,13 @@ pub fn to_json_pretty(tokens: &[AnnotatedToken]) -> Result<String, serde_json::E
 // ---------------------------------------------------------------------------
 
 #[cfg(test)]
+#[allow(
+    clippy::panic,
+    clippy::cast_possible_truncation,
+    clippy::collection_is_never_read,
+    clippy::indexing_slicing,
+    clippy::redundant_clone
+)]
 mod tests {
     use super::*;
     use ipe_intern::Interner;
@@ -241,10 +240,7 @@ mod tests {
         (m, i)
     }
 
-    fn canon(
-        syntax: &ipe_syntax::Module,
-        interner: &mut Interner,
-    ) -> ipe_canon::ast::Module {
+    fn canon(syntax: &ipe_syntax::Module, interner: &mut Interner) -> ipe_canon::ast::Module {
         ipe_canon::canonicalise(syntax, interner).expect("test source must canonicalise")
     }
 
@@ -344,18 +340,24 @@ mod tests {
         // The occurrence at the `let map = 99` binding and the body `map` reference
         // after `in` must be classified as Variable (or Function for the let-binding
         // name itself — either way NOT as a Kernel).
-        let let_map_offset = src.find("let\n        map").and_then(|p| {
-            src[p..].find("map").map(|rel| p + rel)
-        });
+        let let_map_offset = src
+            .find("let\n        map")
+            .and_then(|p| src[p..].find("map").map(|rel| p + rel));
         if let Some(off) = let_map_offset {
             let tok = tokens.iter().find(|t| t.byte_start == off as u32);
             if let Some(t) = tok {
-                assert_ne!(t.class, TokenClass::Kernel, "shadowed 'map' must not be Kernel");
+                assert_ne!(
+                    t.class,
+                    TokenClass::Kernel,
+                    "shadowed 'map' must not be Kernel"
+                );
             }
         }
         // The top-level `map` binding name must be Function.
         let top_level_map_off = src.find("map : Int").unwrap();
-        let top_tok = tokens.iter().find(|t| t.byte_start == top_level_map_off as u32);
+        let top_tok = tokens
+            .iter()
+            .find(|t| t.byte_start == top_level_map_off as u32);
         if let Some(t) = top_tok {
             assert_eq!(t.class, TokenClass::Function, "top-level map is Function");
         }
@@ -378,7 +380,8 @@ mod tests {
             for tok in &tokens {
                 if tok.byte_start > str_start && tok.byte_start < str_end {
                     assert_eq!(
-                        tok.class, TokenClass::StringLit,
+                        tok.class,
+                        TokenClass::StringLit,
                         "no name token inside string literal at byte {}",
                         tok.byte_start
                     );
@@ -412,11 +415,17 @@ mod tests {
 
         // `identity` call site in `List.map identity [...]` must be Function.
         let list_map_pos = src.rfind("List.map").expect("List.map present");
-        let identity_pos = src[list_map_pos..].find("identity").map(|r| list_map_pos + r);
+        let identity_pos = src[list_map_pos..]
+            .find("identity")
+            .map(|r| list_map_pos + r);
         if let Some(pos) = identity_pos {
             let tok = tokens.iter().find(|t| t.byte_start == pos as u32);
             if let Some(t) = tok {
-                assert_eq!(t.class, TokenClass::Function, "user 'identity' is Function at call site");
+                assert_eq!(
+                    t.class,
+                    TokenClass::Function,
+                    "user 'identity' is Function at call site"
+                );
             }
         }
 
@@ -426,7 +435,10 @@ mod tests {
             let slice = text_of(src, t);
             slice == "map" || slice == "List.map"
         });
-        assert!(list_map_tok.is_some(), "List.map produces a Kernel-classified token");
+        assert!(
+            list_map_tok.is_some(),
+            "List.map produces a Kernel-classified token"
+        );
     }
 
     #[test]

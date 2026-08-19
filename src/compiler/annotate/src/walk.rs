@@ -167,8 +167,9 @@ fn canon_walk(
         }
         // Body expression — walk the canonical expr for semantic richness.
         let body = match can_def {
-            ipe_canon::ast::Def::Untyped { body, .. }
-            | ipe_canon::ast::Def::Typed { body, .. } => body,
+            ipe_canon::ast::Def::Untyped { body, .. } | ipe_canon::ast::Def::Typed { body, .. } => {
+                body
+            }
         };
         canon_expr(out, body, interner);
     }
@@ -191,16 +192,25 @@ fn canon_expr(out: &mut Vec<Raw>, expr: &ipe_canon::ast::Expr, interner: &Intern
             });
             Raw::push(out, expr.span, TokenClass::Function, def);
         }
-        Expr_::VarKernel { id: _, module, name } => {
-            let def = resolve_sym(*module, interner).zip(resolve_sym(*name, interner)).map(
-                |(module_str, name_str)| DefKey::Kernel {
+        Expr_::VarKernel {
+            id: _,
+            module,
+            name,
+        } => {
+            let def = resolve_sym(*module, interner)
+                .zip(resolve_sym(*name, interner))
+                .map(|(module_str, name_str)| DefKey::Kernel {
                     module: module_str,
                     name: name_str,
-                },
-            );
+                });
             Raw::push(out, expr.span, TokenClass::Kernel, def);
         }
-        Expr_::VarCtor { home, type_name, name, .. } => {
+        Expr_::VarCtor {
+            home,
+            type_name,
+            name,
+            ..
+        } => {
             let def = resolve_sym(*type_name, interner)
                 .zip(resolve_sym(*name, interner))
                 .map(|(type_str, name_str)| DefKey::Constructor {
@@ -241,7 +251,13 @@ fn canon_expr(out: &mut Vec<Raw>, expr: &ipe_canon::ast::Expr, interner: &Intern
             }
             canon_expr(out, body, interner);
         }
-        Expr_::Binop { op: _, home, func, lhs, rhs } => {
+        Expr_::Binop {
+            op: _,
+            home,
+            func,
+            lhs,
+            rhs,
+        } => {
             // Best-effort operator span: the op symbol lies between lhs and rhs.
             // Span::new normalises lo > hi to a zero-width span, which Raw::push
             // drops; the operator token is simply absent in that degenerate case.
@@ -304,7 +320,13 @@ fn canon_pattern(out: &mut Vec<Raw>, pat: &ipe_canon::ast::Pattern, interner: &I
         Pattern_::PVar(_) => {
             Raw::push(out, pat.span, TokenClass::Variable, None);
         }
-        Pattern_::PCtor { home, type_name, name, args, .. } => {
+        Pattern_::PCtor {
+            home,
+            type_name,
+            name,
+            args,
+            ..
+        } => {
             let name_len = interner.resolve(*name).map_or(0, byte_len_u32);
             let ctor_span = Span::new(pat.span.lo, pat.span.lo + name_len);
             let def = resolve_sym(*type_name, interner)
@@ -358,12 +380,7 @@ fn canon_pattern(out: &mut Vec<Raw>, pat: &ipe_canon::ast::Pattern, interner: &I
 // Syntax-only walk (parse tree, no canon)
 // ---------------------------------------------------------------------------
 
-fn syntax_walk(
-    out: &mut Vec<Raw>,
-    syntax: &ipe_syntax::Module,
-    source: &str,
-    interner: &Interner,
-) {
+fn syntax_walk(out: &mut Vec<Raw>, syntax: &ipe_syntax::Module, source: &str, interner: &Interner) {
     if let Some(kw) = find_keyword(source, 0, "module") {
         Raw::keyword(out, kw);
     }
@@ -408,11 +425,7 @@ fn syntax_walk(
 // Syntax-tree helpers (shared between full and syntax-only walkers)
 // ---------------------------------------------------------------------------
 
-fn push_exposing(
-    out: &mut Vec<Raw>,
-    exposing: &ipe_syntax::Exposing,
-    _interner: &Interner,
-) {
+fn push_exposing(out: &mut Vec<Raw>, exposing: &ipe_syntax::Exposing, _interner: &Interner) {
     match exposing {
         ipe_syntax::Exposing::All => {}
         ipe_syntax::Exposing::List(items) => {
@@ -434,11 +447,7 @@ fn push_exposing(
 /// named seam that gains richer output when span tracking lands.
 const fn push_type_annotation(_out: &mut Vec<Raw>, _ty: &ipe_syntax::TypeAnnotation) {}
 
-fn push_syn_pattern(
-    out: &mut Vec<Raw>,
-    pat: &ipe_syntax::Pattern,
-    interner: &Interner,
-) {
+fn push_syn_pattern(out: &mut Vec<Raw>, pat: &ipe_syntax::Pattern, interner: &Interner) {
     match &pat.value {
         ipe_syntax::Pattern_::PAnything => {}
         ipe_syntax::Pattern_::PVar(_) => {
@@ -579,7 +588,10 @@ fn find_keyword(source: &str, from: usize, kw: &str) -> Option<Span> {
     let pos = source.get(from..)?.find(kw)?;
     let abs = from + pos;
     let before_ok = abs == 0
-        || source.as_bytes().get(abs - 1).is_none_or(u8::is_ascii_whitespace);
+        || source
+            .as_bytes()
+            .get(abs - 1)
+            .is_none_or(u8::is_ascii_whitespace);
     let after_ok = source
         .as_bytes()
         .get(abs + kw.len())
@@ -598,7 +610,10 @@ fn find_keyword_before(source: &str, before_byte: u32, kw: &str) -> Option<Span>
     let rel = window.rfind(kw)?;
     let abs = window_start + rel;
     let before_ok = abs == 0
-        || source.as_bytes().get(abs - 1).is_none_or(u8::is_ascii_whitespace);
+        || source
+            .as_bytes()
+            .get(abs - 1)
+            .is_none_or(u8::is_ascii_whitespace);
     let after_ok = source
         .as_bytes()
         .get(abs + kw.len())
@@ -642,6 +657,13 @@ fn resolve_sym(sym: Symbol, interner: &Interner) -> Option<String> {
 // ---------------------------------------------------------------------------
 
 #[cfg(test)]
+#[allow(
+    clippy::panic,
+    clippy::cast_possible_truncation,
+    clippy::collection_is_never_read,
+    clippy::indexing_slicing,
+    clippy::redundant_clone
+)]
 mod tests {
     use super::*;
     use ipe_intern::Interner;
