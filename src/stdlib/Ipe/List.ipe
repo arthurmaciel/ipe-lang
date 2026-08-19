@@ -73,6 +73,15 @@ module Ipe.List exposing
 --
 --     List.map (\n -> n * 2) [ 1, 2, 3 ] == [ 2, 4, 6 ]
 --     List.map String.fromInt [ 1, 2 ] == [ "1", "2" ]
+{-| `map f list` — apply `f` to every element, producing a new list of the
+same length.
+
+```ipe
+map (\n -> n * 2) [ 1, 2, 3 ] --> [ 2, 4, 6 ]
+map String.fromInt [ 10, 20 ] --> [ "10", "20" ]
+```
+-}
+map : (a -> b) -> List a -> List b
 map fn list =
     mapHelp fn list []
 
@@ -94,6 +103,14 @@ mapHelp fn list acc =
 --
 --     List.filter (\n -> n > 2) [ 1, 2, 3, 4 ] == [ 3, 4 ]
 --     List.filter (\n -> modBy 2 n == 0) [ 1, 2, 3, 4 ] == [ 2, 4 ]
+{-| `filter keep list` — keep only elements for which `keep` returns `True`.
+
+```ipe
+filter (\n -> n > 2) [ 1, 2, 3, 4 ] --> [ 3, 4 ]
+filter (\n -> modBy 2 n == 0) [ 1, 2, 3, 4 ] --> [ 2, 4 ]
+```
+-}
+filter : (a -> Bool) -> List a -> List a
 filter pred list =
     filterHelp pred list []
 
@@ -122,6 +139,15 @@ filterHelp pred list acc =
 --
 --     List.any (\n -> n > 3) [ 1, 2, 3, 4 ] == True
 --     List.any (\n -> n > 3) [ 1, 2, 3 ] == False
+{-| `any test list` — `True` if `test` returns `True` for at least one element.
+
+```ipe
+any (\n -> n > 3) [ 1, 2, 3, 4 ] --> True
+any (\n -> n > 3) [ 1, 2, 3 ] --> False
+any (\n -> n > 3) [] --> False
+```
+-}
+any : (a -> Bool) -> List a -> Bool
 any pred list =
     case list of
 
@@ -144,6 +170,15 @@ any pred list =
 --
 --     List.all (\n -> n > 0) [ 1, 2, 3 ] == True
 --     List.all (\n -> n > 0) [ 1, -1, 3 ] == False
+{-| `all test list` — `True` if `test` returns `True` for every element.
+
+```ipe
+all (\n -> n > 0) [ 1, 2, 3 ] --> True
+all (\n -> n > 0) [ 1, -1, 3 ] --> False
+all (\n -> n > 0) [] --> True
+```
+-}
+all : (a -> Bool) -> List a -> Bool
 all pred list =
     case list of
 
@@ -165,6 +200,15 @@ all pred list =
 --
 --     List.find (\n -> n > 2) [ 1, 2, 3, 4 ] == Just 3
 --     List.find (\n -> n > 9) [ 1, 2, 3 ] == Nothing
+{-| `find test list` — `Just` the first element satisfying `test`, or `Nothing`.
+
+```ipe
+find (\n -> n > 2) [ 1, 2, 3, 4 ] --> Just 3
+find (\n -> n > 9) [ 1, 2, 3 ] --> Nothing
+find (\s -> String.length s > 3) [ "hi", "hello", "hey" ] --> Just "hello"
+```
+-}
+find : (a -> Bool) -> List a -> Maybe a
 find pred list =
     case list of
 
@@ -190,6 +234,14 @@ find pred list =
 --
 --     List.foldl (\x acc -> x + acc) 0 [ 1, 2, 3 ] == 6
 --     List.foldl (\x acc -> x :: acc) [] [ 1, 2, 3 ] == [ 3, 2, 1 ]
+{-| `foldl step initial list` — reduce from the left; `step element accumulator`.
+
+```ipe
+foldl (\x acc -> x + acc) 0 [ 1, 2, 3 ] --> 6
+foldl (\x acc -> String.append acc x) "" [ "a", "b", "c" ] --> "abc"
+```
+-}
+foldl : (a -> b -> b) -> b -> List a -> b
 foldl fn acc list =
     case list of
 
@@ -211,6 +263,14 @@ foldl fn acc list =
 --
 --     List.foldr (\x acc -> x :: acc) [] [ 1, 2, 3 ] == [ 1, 2, 3 ]
 --     List.foldr (\x acc -> x + acc) 0 [ 1, 2, 3 ] == 6
+{-| `foldr step initial list` — reduce from the right; `step element accumulator`.
+
+```ipe
+foldr (\x acc -> x :: acc) [] [ 1, 2, 3 ] --> [ 1, 2, 3 ]
+foldr (\x acc -> x + acc) 0 [ 1, 2, 3 ] --> 6
+```
+-}
+foldr : (a -> b -> b) -> b -> List a -> b
 foldr fn acc list =
     foldl (\x a -> fn x a) acc (reverseHelp list [])
 
@@ -223,6 +283,14 @@ foldr fn acc list =
 --
 --     List.concatMap (\n -> [ n, n ]) [ 1, 2 ] == [ 1, 1, 2, 2 ]
 --     List.concatMap (\n -> List.range 1 n) [ 1, 3 ] == [ 1, 1, 2, 3 ]
+{-| `concatMap f list` — apply `f` to each element and flatten the results.
+
+```ipe
+concatMap (\n -> [ n, n ]) [ 1, 2 ] --> [ 1, 1, 2, 2 ]
+concatMap (\n -> List.range 1 n) [ 1, 3 ] --> [ 1, 1, 2, 3 ]
+```
+-}
+concatMap : (a -> List b) -> List a -> List b
 concatMap fn list =
     reverseHelp (concatMapHelp fn list []) []
 
@@ -246,6 +314,14 @@ concatMapHelp fn list acc =
 --
 --     List.indexedMap (\i x -> ( i, x )) [ "a", "b" ] == [ ( 0, "a" ), ( 1, "b" ) ]
 --     List.indexedMap (\i x -> i + x) [ 10, 20, 30 ] == [ 10, 21, 32 ]
+{-| `indexedMap f list` — like `map` but `f` also receives each element's index.
+
+```ipe
+indexedMap (\i x -> ( i, x )) [ "a", "b", "c" ] --> [ ( 0, "a" ), ( 1, "b" ), ( 2, "c" ) ]
+indexedMap (\i x -> i + x) [ 10, 20, 30 ] --> [ 10, 21, 32 ]
+```
+-}
+indexedMap : (Int -> a -> b) -> List a -> List b
 indexedMap fn list =
     indexedMapHelp fn 0 list []
 
@@ -270,6 +346,15 @@ indexedMapHelp fn i list acc =
 --
 --     List.isEmpty [] == True
 --     List.isEmpty [ 1 ] == False
+{-| `isEmpty list` — `True` if the list has no elements.
+
+```ipe
+isEmpty [] --> True
+isEmpty [ 1 ] --> False
+isEmpty [ "a", "b" ] --> False
+```
+-}
+isEmpty : List a -> Bool
 isEmpty list =
     case list of
 
@@ -286,6 +371,15 @@ isEmpty list =
 --
 --     List.length [ 1, 2, 3 ] == 3
 --     List.length [] == 0
+{-| `length list` — the number of elements.
+
+```ipe
+length [ 1, 2, 3 ] --> 3
+length [] --> 0
+length [ "a", "b" ] --> 2
+```
+-}
+length : List a -> Int
 length list =
     lengthHelp list 0
 
@@ -309,6 +403,15 @@ lengthHelp list n =
 --
 --     List.head [ 1, 2, 3 ] == Just 1
 --     List.head [] == Nothing
+{-| `head list` — `Just` the first element, or `Nothing` if empty.
+
+```ipe
+head [ 1, 2, 3 ] --> Just 1
+head [] --> Nothing
+head [ "only" ] --> Just "only"
+```
+-}
+head : List a -> Maybe a
 head list =
     case list of
 
@@ -326,6 +429,15 @@ head list =
 --
 --     List.tail [ 1, 2, 3 ] == Just [ 2, 3 ]
 --     List.tail [] == Nothing
+{-| `tail list` — `Just` the list without its first element, or `Nothing` if empty.
+
+```ipe
+tail [ 1, 2, 3 ] --> Just [ 2, 3 ]
+tail [] --> Nothing
+tail [ 42 ] --> Just []
+```
+-}
+tail : List a -> Maybe (List a)
 tail list =
     case list of
 
@@ -342,6 +454,15 @@ tail list =
 -- Example:
 --
 --     List.cons 1 [ 2, 3 ] == [ 1, 2, 3 ]
+{-| `cons x list` — prepend `x` to the list; the named form of `x :: list`.
+
+```ipe
+cons 1 [ 2, 3 ] --> [ 1, 2, 3 ]
+cons "a" [ "b", "c" ] --> [ "a", "b", "c" ]
+cons 0 [] --> [ 0 ]
+```
+-}
+cons : a -> List a -> List a
 cons x list =
     x :: list
 
@@ -351,6 +472,15 @@ cons x list =
 -- Example:
 --
 --     List.reverse [ 1, 2, 3 ] == [ 3, 2, 1 ]
+{-| `reverse list` — the list in reverse order.
+
+```ipe
+reverse [ 1, 2, 3 ] --> [ 3, 2, 1 ]
+reverse [] --> []
+reverse [ "a" ] --> [ "a" ]
+```
+-}
+reverse : List a -> List a
 reverse list =
     reverseHelp list []
 
@@ -374,6 +504,15 @@ reverseHelp list acc =
 --     List.take 2 [ 1, 2, 3, 4 ] == [ 1, 2 ]
 --     List.take 9 [ 1, 2 ] == [ 1, 2 ]
 --     List.take 0 [ 1, 2 ] == []
+{-| `take n list` — the first `n` elements; the whole list when shorter than `n`.
+
+```ipe
+take 2 [ 1, 2, 3, 4 ] --> [ 1, 2 ]
+take 9 [ 1, 2 ] --> [ 1, 2 ]
+take 0 [ 1, 2 ] --> []
+```
+-}
+take : Int -> List a -> List a
 take n list =
     takeHelp n list []
 
@@ -400,6 +539,15 @@ takeHelp n list acc =
 --
 --     List.drop 2 [ 1, 2, 3, 4 ] == [ 3, 4 ]
 --     List.drop 9 [ 1, 2 ] == []
+{-| `drop n list` — the list without its first `n` elements.
+
+```ipe
+drop 2 [ 1, 2, 3, 4 ] --> [ 3, 4 ]
+drop 9 [ 1, 2 ] --> []
+drop 0 [ 1, 2 ] --> [ 1, 2 ]
+```
+-}
+drop : Int -> List a -> List a
 drop n list =
     if n <= 0 then
         list
@@ -421,6 +569,15 @@ drop n list =
 --
 --     List.append [ 1, 2 ] [ 3, 4 ] == [ 1, 2, 3, 4 ]
 --     List.append [] [ 1 ] == [ 1 ]
+{-| `append xs ys` — all of `xs` followed by all of `ys`.
+
+```ipe
+append [ 1, 2 ] [ 3, 4 ] --> [ 1, 2, 3, 4 ]
+append [] [ 1 ] --> [ 1 ]
+append [ "a" ] [ "b", "c" ] --> [ "a", "b", "c" ]
+```
+-}
+append : List a -> List a -> List a
 append xs ys =
     appendHelp (reverseHelp xs []) ys
 
@@ -443,6 +600,15 @@ appendHelp revXs ys =
 --
 --     List.concat [ [ 1, 2 ], [ 3 ], [ 4, 5 ] ] == [ 1, 2, 3, 4, 5 ]
 --     List.concat [ [], [ 1 ], [] ] == [ 1 ]
+{-| `concat lists` — flatten a list of lists into one list.
+
+```ipe
+concat [ [ 1, 2 ], [ 3 ], [ 4, 5 ] ] --> [ 1, 2, 3, 4, 5 ]
+concat [ [], [ 1 ], [] ] --> [ 1 ]
+concat [] --> []
+```
+-}
+concat : List (List a) -> List a
 concat lists =
     concatHelp lists []
 
@@ -476,6 +642,15 @@ appendReverseOnto xs acc =
 --
 --     List.member 2 [ 1, 2, 3 ] == True
 --     List.member 9 [ 1, 2, 3 ] == False
+{-| `member x list` — `True` if `x` equals any element of `list`.
+
+```ipe
+member 2 [ 1, 2, 3 ] --> True
+member 9 [ 1, 2, 3 ] --> False
+member "b" [ "a", "b", "c" ] --> True
+```
+-}
+member : a -> List a -> Bool
 member x list =
     case list of
 
@@ -498,6 +673,15 @@ member x list =
 --     List.range 1 5 == [ 1, 2, 3, 4, 5 ]
 --     List.range 3 3 == [ 3 ]
 --     List.range 5 1 == []
+{-| `range lo hi` — ascending integers from `lo` to `hi` inclusive.
+
+```ipe
+range 1 5 --> [ 1, 2, 3, 4, 5 ]
+range 3 3 --> [ 3 ]
+range 5 1 --> []
+```
+-}
+range : Int -> Int -> List Int
 range lo hi =
     rangeHelp lo hi []
 
@@ -519,6 +703,15 @@ rangeHelp lo hi acc =
 --
 --     List.zip [ 1, 2, 3 ] [ "a", "b" ] == [ ( 1, "a" ), ( 2, "b" ) ]
 --     List.zip [] [ 1 ] == []
+{-| `zip xs ys` — pair elements position-by-position, stopping at the shorter list.
+
+```ipe
+zip [ 1, 2, 3 ] [ "a", "b" ] --> [ ( 1, "a" ), ( 2, "b" ) ]
+zip [] [ 1 ] --> []
+zip [ 10, 20 ] [ True, False ] --> [ ( 10, True ), ( 20, False ) ]
+```
+-}
+zip : List a -> List b -> List ( a, b )
 zip xs ys =
     zipHelp xs ys []
 
@@ -552,6 +745,14 @@ zipHelp xs ys acc =
 --     List.filterMap (\n -> if n > 2 then Just (n * 10) else Nothing) [ 1, 2, 3, 4 ]
 --     -- == [ 30, 40 ]
 --     List.filterMap String.toInt [ "1", "x", "3" ] == [ 1, 3 ]
+{-| `filterMap f list` — apply `f` to each element, keeping only `Just` payloads.
+
+```ipe
+filterMap String.toInt [ "1", "x", "3" ] --> [ 1, 3 ]
+filterMap (\n -> if n > 2 then Just (n * 10) else Nothing) [ 1, 2, 3, 4 ] --> [ 30, 40 ]
+```
+-}
+filterMap : (a -> Maybe b) -> List a -> List b
 filterMap fn list =
     foldr
         (\x acc ->
@@ -576,6 +777,14 @@ filterMap fn list =
 --     List.sortWith (\a b -> compare a b) [ 3, 1, 2 ] == [ 1, 2, 3 ]
 --     -- descending: flip the arguments
 --     List.sortWith (\a b -> compare b a) [ 3, 1, 2 ] == [ 3, 2, 1 ]
+{-| `sortWith cmp list` — stable sort using a comparison function returning `Order`.
+
+```ipe
+sortWith (\a b -> compare a b) [ 3, 1, 2 ] --> [ 1, 2, 3 ]
+sortWith (\a b -> compare b a) [ 3, 1, 2 ] --> [ 3, 2, 1 ]
+```
+-}
+sortWith : (a -> a -> Order) -> List a -> List a
 sortWith cmp list =
     foldr (insertWith cmp) [] list
 
@@ -605,6 +814,14 @@ insertWith cmp x sorted =
 --     List.sortBy String.length [ "ccc", "a", "bb" ] == [ "a", "bb", "ccc" ]
 --     -- sort records by a field
 --     List.sortBy .age [ { age = 30 }, { age = 21 } ] == [ { age = 21 }, { age = 30 } ]
+{-| `sortBy key list` — stable ascending sort comparing `key element`.
+
+```ipe
+sortBy String.length [ "ccc", "a", "bb" ] --> [ "a", "bb", "ccc" ]
+sortBy (\n -> -n) [ 1, 3, 2 ] --> [ 3, 2, 1 ]
+```
+-}
+sortBy : (a -> b) -> List a -> List a
 sortBy keyFn list =
     sortWith (\a b -> compare (keyFn a) (keyFn b)) list
 
@@ -615,6 +832,15 @@ sortBy keyFn list =
 --
 --     List.sum [ 1, 2, 3, 4 ] == 10
 --     List.sum [] == 0
+{-| `sum list` — the sum of all elements; `0` for the empty list.
+
+```ipe
+sum [ 1, 2, 3, 4 ] --> 10
+sum [] --> 0
+sum [ 10, -3 ] --> 7
+```
+-}
+sum : List a -> a
 sum list =
     foldl (\x acc -> x + acc) 0 list
 
@@ -627,6 +853,15 @@ sum list =
 --
 --     List.maximum [ 3, 1, 4, 1, 5 ] == Just 5
 --     List.maximum [ 7 ] == Just 7
+{-| `maximum list` — `Just` the largest element, or `Nothing` if empty.
+
+```ipe
+maximum [ 3, 1, 4, 1, 5 ] --> Just 5
+maximum [ 7 ] --> Just 7
+maximum [] --> Nothing
+```
+-}
+maximum : List a -> Maybe a
 maximum list =
     case list of
 
@@ -653,6 +888,15 @@ maximum list =
 --
 --     List.minimum [ 3, 1, 4, 1, 5 ] == Just 1
 --     List.minimum [ 7 ] == Just 7
+{-| `minimum list` — `Just` the smallest element, or `Nothing` if empty.
+
+```ipe
+minimum [ 3, 1, 4, 1, 5 ] --> Just 1
+minimum [ 7 ] --> Just 7
+minimum [] --> Nothing
+```
+-}
+minimum : List a -> Maybe a
 minimum list =
     case list of
 
@@ -680,6 +924,15 @@ minimum list =
 --
 --     List.unique [ 1, 2, 2, 3, 1 ] == [ 1, 2, 3 ]
 --     List.unique [ "a", "a", "b" ] == [ "a", "b" ]
+{-| `unique list` — remove duplicates, keeping first occurrence of each element.
+
+```ipe
+unique [ 1, 2, 2, 3, 1 ] --> [ 1, 2, 3 ]
+unique [ "a", "a", "b" ] --> [ "a", "b" ]
+unique [] --> []
+```
+-}
+unique : List a -> List a
 unique list =
     uniqueHelp list [] []
 

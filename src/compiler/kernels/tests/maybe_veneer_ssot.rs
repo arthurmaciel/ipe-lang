@@ -17,137 +17,14 @@
 //! reddens. No hardcoded copy of the expected type exists: the ground truth is
 //! always read from the file.
 
+mod veneer_helpers;
+
 use ipe_intern::Interner;
-use ipe_kernels::{BuiltinTag, StdlibKernel, TyShape};
-use ipe_syntax::TypeAnnotation;
+use ipe_kernels::StdlibKernel;
+use veneer_helpers::{AnnConverter, shape_to_owned};
 
 /// The veneer source, read at compile time so the test is hermetic.
 const MAYBE_IPE: &str = include_str!("../../../stdlib/Ipe/Maybe.ipe");
-
-// ── Owned scheme representation ─────────────────────────────────────────────
-
-/// An interning-free, owned type-scheme shape for SSOT comparison.
-///
-/// Type variables are named by their first-occurrence index in the annotation
-/// (0 = first variable seen, 1 = second, …). This is the same positional
-/// numbering `TyShape::Var(u8)` uses in the kernel scheme table, so the two
-/// can be compared structurally without a shared interner.
-#[derive(Clone, PartialEq, Eq, Debug)]
-enum OwnedScheme {
-    Fun(Box<Self>, Box<Self>),
-    Con(BuiltinTag, Vec<Self>),
-    Var(u8),
-}
-
-impl OwnedScheme {
-    fn fun(a: Self, b: Self) -> Self {
-        Self::Fun(Box::new(a), Box::new(b))
-    }
-}
-
-// ── TyShape → OwnedScheme ────────────────────────────────────────────────────
-
-fn shape_to_owned(shape: &TyShape) -> Result<OwnedScheme, String> {
-    match shape {
-        TyShape::Fun(a, b) => Ok(OwnedScheme::fun(shape_to_owned(a)?, shape_to_owned(b)?)),
-        TyShape::Con(tag, args) => {
-            let owned_args = args
-                .iter()
-                .map(shape_to_owned)
-                .collect::<Result<Vec<_>, _>>()?;
-            Ok(OwnedScheme::Con(*tag, owned_args))
-        }
-        TyShape::Var(i) => Ok(OwnedScheme::Var(*i)),
-        // The Maybe combinators use only Fun / Con / Var; the other variants
-        // (Tuple, Record, Unit) are not reached for this module's exports.
-        TyShape::Tuple(_) | TyShape::Record { .. } | TyShape::Unit => Err(format!(
-            "unexpected TyShape variant {shape:?} in a Maybe combinator scheme"
-        )),
-    }
-}
-
-// ── TypeAnnotation → OwnedScheme ─────────────────────────────────────────────
-
-/// Context for converting a parsed `TypeAnnotation` to `OwnedScheme`.
-///
-/// Maps type-variable names (resolved strings) to their first-occurrence
-/// positional index so the result is byte-comparable with the kernel's
-/// `scheme_shape()`, which uses the same positional convention.
-struct AnnConverter<'i> {
-    interner: &'i Interner,
-    /// Variable name → positional index, in first-occurrence order.
-    vars: Vec<String>,
-}
-
-impl<'i> AnnConverter<'i> {
-    const fn new(interner: &'i Interner) -> Self {
-        Self {
-            interner,
-            vars: Vec::new(),
-        }
-    }
-
-    /// Map a type-variable name to its positional index, inserting it at
-    /// the end if this is its first occurrence.
-    fn var_index(&mut self, name: &str) -> Result<u8, String> {
-        if let Some(i) = self.vars.iter().position(|v| v == name) {
-            u8::try_from(i).map_err(|_| format!("too many type variables: index {i}"))
-        } else {
-            let idx = self.vars.len();
-            self.vars.push(name.to_owned());
-            u8::try_from(idx).map_err(|_| format!("too many type variables: index {idx}"))
-        }
-    }
-
-    fn convert(&mut self, ann: &TypeAnnotation) -> Result<OwnedScheme, String> {
-        match ann {
-            TypeAnnotation::TLambda(a, b) => {
-                Ok(OwnedScheme::fun(self.convert(a)?, self.convert(b)?))
-            }
-            TypeAnnotation::TVar(sym) => {
-                let name = self
-                    .interner
-                    .resolve(*sym)
-                    .ok_or_else(|| format!("type variable symbol {sym:?} not found in interner"))?;
-                Ok(OwnedScheme::Var(self.var_index(name)?))
-            }
-            TypeAnnotation::TType(_qualifier, segments, args) => {
-                // The type-constructor name is the last (and for simple names
-                // the only) segment.
-                let name = segments
-                    .last()
-                    .and_then(|&s| self.interner.resolve(s))
-                    .ok_or("type constructor has no resolvable name segment")?;
-                let tag = builtin_tag_from_name(name).ok_or_else(|| {
-                    format!("unknown builtin type constructor `{name}` in Maybe.ipe annotation")
-                })?;
-                let converted_args = args
-                    .iter()
-                    .map(|a| self.convert(a))
-                    .collect::<Result<Vec<_>, _>>()?;
-                Ok(OwnedScheme::Con(tag, converted_args))
-            }
-            TypeAnnotation::TUnit
-            | TypeAnnotation::TTuple(_)
-            | TypeAnnotation::TRecord(_)
-            | TypeAnnotation::TRecordOpen(_, _) => Err(format!(
-                "unexpected TypeAnnotation variant {ann:?} in Maybe.ipe"
-            )),
-        }
-    }
-}
-
-/// Map a type-constructor name as it appears in `.ipe` source to the
-/// corresponding [`BuiltinTag`]. Only the tags that appear in the `Maybe`
-/// module's annotations are needed here.
-fn builtin_tag_from_name(name: &str) -> Option<BuiltinTag> {
-    match name {
-        "Bool" => Some(BuiltinTag::Bool),
-        "List" => Some(BuiltinTag::List),
-        "Maybe" => Some(BuiltinTag::Maybe),
-        _ => None,
-    }
-}
 
 // ── The SSOT test ─────────────────────────────────────────────────────────────
 
@@ -212,7 +89,7 @@ fn maybe_veneer_annotation_matches_kernel_scheme_shape() {
         };
 
         // Convert both sides to the common `OwnedScheme` form and compare.
-        let mut conv = AnnConverter::new(&interner);
+        let mut conv = AnnConverter::new(&interner, "Maybe");
         let from_annotation = match conv.convert(&ann_loc.value) {
             Ok(s) => s,
             Err(e) => {
