@@ -666,6 +666,19 @@ fn fmt_emitted_build_failed(err: &CliError, f: &mut std::fmt::Formatter<'_>) -> 
              matching runtime re-materializes automatically."
         );
     }
+    // Registry/network unreachable: cargo could not reach crates.io. This is an
+    // environment failure (DNS, offline, proxy), not a compiler bug and not the
+    // user's source. Render a calm, actionable message and do NOT invite a bug
+    // report.
+    if is_registry_unreachable(trimmed) {
+        let detail = if trimmed.is_empty() {
+            format!("cargo exited {code} while fetching crates for {what}")
+        } else {
+            format!("cargo exited {code} while fetching crates for {what}:\n{trimmed}")
+        };
+        let d = Diagnostic::RegistryUnreachable { detail };
+        return f.write_str(&render(&d, "", ""));
+    }
     // Unattributable: the emitted Rust crate failed to compile for a reason that
     // is not a known runtime-feature gap. Because the front-end gate ensures only
     // valid programs reach emit, this cargo failure reflects a bug in Ipê's own
@@ -682,6 +695,21 @@ fn fmt_emitted_build_failed(err: &CliError, f: &mut std::fmt::Formatter<'_>) -> 
         detail,
     };
     f.write_str(&render(&ice, "", ""))
+}
+
+/// Detect whether cargo's stderr signals a registry or network failure.
+///
+/// Cargo surfaces registry-fetch failures through two consistent patterns:
+/// a host-resolution failure ("Could not resolve host") and a source-load
+/// failure ("failed to load source for dependency"). Either phrase reliably
+/// indicates a network/DNS problem, not a compiler miscompile.
+fn is_registry_unreachable(stderr: &str) -> bool {
+    stderr.contains("Could not resolve host")
+        || stderr.contains("failed to load source for dependency")
+        || stderr.contains("error: could not find registry")
+        || stderr.contains("spurious network error")
+        || stderr.contains("failed to fetch")
+        || stderr.contains("registry index")
 }
 
 /// Extract the runtime feature name from a `cargo` feature-resolution error of
@@ -6133,7 +6161,8 @@ const fn diag_span(d: &Diagnostic) -> ipe_diagnostics::Span {
         Diagnostic::CompilerBug { .. }
         | Diagnostic::Ffi { .. }
         | Diagnostic::Sandbox { .. }
-        | Diagnostic::Consent { .. } => ipe_diagnostics::Span::DUMMY,
+        | Diagnostic::Consent { .. }
+        | Diagnostic::RegistryUnreachable { .. } => ipe_diagnostics::Span::DUMMY,
     }
 }
 

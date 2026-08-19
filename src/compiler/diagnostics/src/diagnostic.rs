@@ -10,8 +10,8 @@
 //! so existing call sites keep compiling while producers migrate.
 
 use crate::code::{
-    Code, IPE_F4400, IPE_F4401, IPE_F4402, IPE_F4410, IPE_F4411, IPE_F4412, IPE_F4413, IPE_F4414,
-    IPE_F4415, IPE_I0001, IPE_I0010, IPE_I0011, IPE_I0100, IPE_I0101, IPE_I0102, IPE_I0103,
+    Code, IPE_E0001, IPE_F4400, IPE_F4401, IPE_F4402, IPE_F4410, IPE_F4411, IPE_F4412, IPE_F4413,
+    IPE_F4414, IPE_F4415, IPE_I0001, IPE_I0010, IPE_I0011, IPE_I0100, IPE_I0101, IPE_I0102, IPE_I0103,
     IPE_I0200, IPE_I0201, IPE_I0202, IPE_I0203, IPE_L0100, IPE_L0101, IPE_L0102, IPE_L0103,
     IPE_L0104, IPE_L0105, IPE_L0106, IPE_L0107, IPE_L0108, IPE_L0110, IPE_L0111, IPE_L0112,
     IPE_L0113, IPE_L0114, IPE_L0115, IPE_L0116, IPE_L0117, IPE_L0118, IPE_L0119, IPE_L0120,
@@ -1420,6 +1420,13 @@ pub enum Diagnostic {
     Consent {
         msg: ConsentError,
     },
+    /// The crate registry could not be reached while building the emitted crate
+    /// (`IPE-E0001`). Span-free: the defect is in the host environment (network
+    /// or DNS), not in the user's source.
+    RegistryUnreachable {
+        /// The cargo stderr detail, trimmed, for display.
+        detail: String,
+    },
 }
 
 /// Result alias used throughout the compiler.
@@ -1553,6 +1560,7 @@ impl Diagnostic {
             Self::Ffi { msg } => ffi_code(msg),
             Self::Sandbox { msg } => sandbox_code(msg),
             Self::Consent { .. } => IPE_S0001,
+            Self::RegistryUnreachable { .. } => IPE_E0001,
         }
     }
 
@@ -1568,7 +1576,8 @@ impl Diagnostic {
             | Self::Name { .. }
             | Self::Ffi { .. }
             | Self::Sandbox { .. }
-            | Self::Consent { .. } => Severity::Error,
+            | Self::Consent { .. }
+            | Self::RegistryUnreachable { .. } => Severity::Error,
             Self::Lower { msg, .. } => match msg {
                 LowerError::RoutedAppMissingPageField { .. } => Severity::Warning,
                 _ => Severity::Error,
@@ -1612,7 +1621,8 @@ impl Diagnostic {
             Self::CompilerBug { .. }
             | Self::Ffi { .. }
             | Self::Sandbox { .. }
-            | Self::Consent { .. } => Span::DUMMY,
+            | Self::Consent { .. }
+            | Self::RegistryUnreachable { .. } => Span::DUMMY,
         }
     }
 
@@ -1629,6 +1639,7 @@ impl Diagnostic {
             Self::Ffi { msg } => ffi_help(msg),
             Self::Sandbox { msg } => sandbox_help(msg),
             Self::Consent { msg } => consent_help(msg),
+            Self::RegistryUnreachable { .. } => Vec::new(),
         }
     }
 }
