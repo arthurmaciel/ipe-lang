@@ -35,8 +35,13 @@ on:
   workflow_dispatch: {}
 
 concurrency:
+  # On pull requests and merge queue entries, cancel the previous run for the
+  # same ref so devs get fast feedback without wasting runner minutes. On direct
+  # pushes to the default branch (main) and on tags, never cancel: the slow
+  # Tier-2 jobs (windows-run-jail, windows-tier2, freebsd-tier2) only run on
+  # push and would be killed before they complete, making them permanently red.
   group: ci-${{ github.ref }}
-  cancel-in-progress: true     # newer push supersedes in-progress (never cancels tags)
+  cancel-in-progress: ${{ github.event_name == 'pull_request' || github.event_name == 'merge_group' }}
 
 env:
   CARGO_TERM_COLOR: always
@@ -1021,6 +1026,11 @@ jobs:
           prepare: |
             pkg install -y rust python3
           run: |
+            # The vmactions SSH environment does not include /sbin or /usr/sbin in
+            # PATH, so FreeBSD system binaries (mount_devfs, jail, rctl, …) are
+            # invisible to `find_in_path()` (which searches PATH only). Prepend the
+            # standard FreeBSD sysadmin directories before any Rust code runs.
+            export PATH="/sbin:/bin:/usr/sbin:/usr/bin:$PATH"
             # Fail-closed primitive check: jail(8) and rctl(8) must be present, or
             # the FreeBSD build jail cannot be verified — refuse to certify (hard
             # failure, never a skip-green).
