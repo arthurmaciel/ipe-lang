@@ -40,12 +40,9 @@ module Ipe.List exposing
 
 -- | `map fn list` — apply fn to each element.
 --
--- v0.17 step-8 (Limitation #8 starter): CPS / accumulator rewrite.
--- Forwards `mapHelp` accumulates `fn x :: acc` (reversed) tail-
--- recursively, then `reverseHelp` flips the result. Both helpers
--- are tail-recursive and auto-TCO'd by `Ipe.Build.TailCallOpt` to
--- a `for { ... continue }` loop, so a 1M-element input runs in
--- constant Go stack instead of the old O(N) non-TCO recursion.
+-- `mapHelp` accumulates `fn x :: acc` (reversed) tail-recursively,
+-- then `reverseHelp` flips the result.  Both helpers are
+-- tail-recursive and auto-TCO'd to loops, running in O(1) stack.
 map fn list =
     mapHelp fn list []
 
@@ -62,13 +59,9 @@ mapHelp fn list acc =
 
 -- | `filter pred list` — keep only elements satisfying pred.
 --
--- v0.17 step-1 (Limitation #8): CPS / accumulator rewrite.
--- Forwards `filterHelp` accumulates `x :: acc` (reversed) for
--- elements satisfying pred, then `reverseHelp` flips the result.
--- Both helpers are tail-recursive and auto-TCO'd by
--- `Ipe.Build.TailCallOpt` to a `for { ... continue }` loop, so a
--- 1M-element input runs in constant Go stack instead of the old
--- O(N) non-TCO recursion.
+-- `filterHelp` accumulates `x :: acc` (reversed) for elements
+-- satisfying pred, then `reverseHelp` flips the result.  Both helpers
+-- are tail-recursive and auto-TCO'd to loops, running in O(1) stack.
 filter pred list =
     filterHelp pred list []
 
@@ -142,54 +135,44 @@ foldl fn acc list =
             foldl fn (fn x acc) rest
 
 
--- CPS rewrite (v0.17 step-2 of the Limitation #8 close).  The
--- legacy `foldr fn x (foldr fn acc rest)` shape recursed in the
--- non-tail position, so the emitted Go ran in O(N) stack — a
--- 1M-element input blew Go's `maxstacksize` (default 1 GiB).
---
--- The rewrite delegates to the already-tail-recursive `foldl`
--- over the pre-reversed list.  Note: this is a DELEGATING
--- binding — the public `foldr` itself contains no `for { }` loop
--- because the auto-TCO loop lives in `foldl`'s emitted Go body.
--- The `\x a -> fn x a` lambda is structurally identical to `fn`
--- but pinned at the application site so the typed lowerer sees a
--- fresh callback shape per instantiation.
+-- The legacy `foldr fn x (foldr fn acc rest)` shape recursed in
+-- non-tail position (O(N) call depth).  The rewrite delegates to the
+-- already-tail-recursive `foldl` over the pre-reversed list — so the
+-- CPS helper is tail-recursive and runs in O(1) stack, auto-TCO'd to
+-- a loop.  Note: this is a DELEGATING binding — the public `foldr`
+-- itself contains no loop because the loop lives in `foldl`.  The
+-- `\x a -> fn x a` lambda is structurally identical to `fn` but pinned
+-- at the application site so the typed lowerer sees a fresh callback
+-- shape per instantiation.
 foldr fn acc list =
     foldl (\x a -> fn x a) acc (reverseHelp list [])
 
 
 -- | `concatMap fn list` — map each element to a list and flatten.
 --
--- v0.17 step-12 (Limitation #8): CPS / accumulator rewrite.
--- Pre-v0.17 shape was `append (fn x) (concatMap fn rest)` — the
--- `append (fn x) (...)` runs AFTER the recursive call returns, so
--- the emitted Go ran in O(N) stack; a 1M-element input blew Go's
--- `maxstacksize`.  Post-rewrite, `concatMapHelp fn list acc` walks
--- the input tail-recursively, prepending each `fn x` chunk in
+-- The legacy `append (fn x) (concatMap fn rest)` shape recursed in
+-- non-tail position (O(N) call depth).  `concatMapHelp fn list acc`
+-- walks the input tail-recursively, prepending each `fn x` chunk in
 -- REVERSE order onto `acc` via `reverseHelp (fn x) acc`, then the
 -- outer `reverseHelp acc []` flips the final accumulator once at
--- the base for the left-to-right output.  The helper is
--- tail-recursive and auto-TCO'd by `Ipe.Build.TailCallOpt` to a
--- `for { ... continue }` loop.
+-- the base for the left-to-right output.  The helper is tail-recursive
+-- and auto-TCO'd to a loop, so it runs in O(1) stack.
 --
 -- The natural delegation `concatMap fn list = concat (map fn list)`
 -- triggers HM cross-module over-unification on the polymorphic
--- `map` instances (round-9 investigation), so we use the direct
--- accumulator pattern instead.
+-- `map` instances, so we use the direct accumulator pattern instead.
 concatMap fn list =
     reverseHelp (concatMapHelp fn list []) []
 
 
 -- | `concatMapHelp fn list acc` — tail-recursive worker for
--- `concatMap`.  Iter 28 dropped the explicit signature after the
--- adversarial verification at 9f8a22da caught a regression in
--- `Ipe.Ui.Chart.lineOne` (`out/.ipe-stdlib/Std/Ui/Chart.ipe:390`)
--- where the explicit `(a -> List b) -> List a -> List b -> List b`
--- shape over-constrained HM cross-module unification on
--- `List.concatMap (lineOne cfg xR yR) seriesList`.  The inferred
--- shape (HM walking the body) is sound + lets the polymorphic call
--- sites unify cleanly.  Constant-stack contract is unaffected —
--- the body is still tail-recursive and auto-TCO'd.
+-- `concatMap`.  No explicit signature: the explicit
+-- `(a -> List b) -> List a -> List b -> List b` shape
+-- over-constrains HM cross-module unification on polymorphic
+-- call sites such as `List.concatMap (lineOne cfg xR yR) seriesList`.
+-- The inferred shape (HM walking the body) is sound and lets
+-- polymorphic call sites unify cleanly.  Tail-recursive and
+-- auto-TCO'd to a loop, so O(1) stack.
 concatMapHelp fn list acc =
     case list of
 
@@ -202,24 +185,13 @@ concatMapHelp fn list acc =
 
 -- | `indexedMap fn list` — apply `fn` to each (index, element) pair.
 --
--- v0.17 step-13 (Limitation #8): CPS / accumulator rewrite.
--- The legacy `fn i x :: indexedMapHelp fn (i + 1) rest` shape recursed in the
--- non-tail position (the cons happens AFTER the recursive call returns),
--- so the emitted Go ran in O(N) stack — a 1M-element input blew Go's
--- `maxstacksize` (default 1 GiB). The rewrite delegates to
+-- The legacy `fn i x :: indexedMapHelp fn (i + 1) rest` shape recursed
+-- in non-tail position (the cons happens AFTER the recursive call
+-- returns), giving O(N) call depth.  The rewrite delegates to
 -- `indexedMapHelp fn i list acc` which conses `fn i x :: acc` onto the
--- accumulator in REVERSE order, then `reverseHelp acc []` flips the
--- accumulator once at the base for the final left-to-right output.
--- `indexedMapHelp` is tail-recursive and auto-TCO'd by
--- `Ipe.Build.TailCallOpt` to a `for { ... continue }` loop, so a
--- 1M-element input runs in constant Go stack.
---
--- PUBLIC SHAPE PRESERVED: `indexedMapHelp`'s symbol name is preserved
--- (it appears in console_app/main.go via the bundled-console
--- generated code at lines referencing `Ipe_Core_List_indexedMapHelp`).
--- Only the BODY changes — from non-tail-cons to
--- accumulator-then-reverse — so cross-module callers continue to
--- resolve the same symbol with no surface-level disruption.
+-- accumulator in REVERSE order, then `reverseHelp acc []` flips it once
+-- at the base for the final left-to-right output.  `indexedMapHelp` is
+-- tail-recursive and auto-TCO'd to a loop, so it runs in O(1) stack.
 indexedMap fn list =
     indexedMapHelp fn 0 list []
 
@@ -254,14 +226,11 @@ isEmpty list =
 
 -- | `length list` — number of elements in the list.
 --
--- v0.17 step-9 (Limitation #8): CPS / accumulator rewrite.
--- Delegates to `lengthHelp` which carries the running count in
--- tail position.  Pre-v0.17 shape was `1 + length rest` — the
--- `1 +` runs AFTER the recursive call returns, so the emitted
--- Go ran in O(N) stack; a 1M-element input blew Go's
--- `maxstacksize`.  Post-rewrite, the count argument is the
--- accumulator and the recursion is auto-TCO'd by
--- `Ipe.Build.TailCallOpt` to a `for { ... continue }` loop.
+-- The legacy `1 + length rest` shape recursed in non-tail position
+-- (the `1 +` runs AFTER the recursive call returns), giving O(N) call
+-- depth.  `lengthHelp` carries the running count in tail position;
+-- the recursion is tail-recursive and auto-TCO'd to a loop, running
+-- in O(1) stack.
 length list =
     lengthHelp list 0
 
@@ -319,15 +288,13 @@ reverseHelp list acc =
 -- | `take n list` — first n elements of `list` (or fewer when `list`
 -- is shorter than n).
 --
--- v0.17 step-4 (Limitation #8): CPS / accumulator rewrite.
 -- `takeHelp n list acc` walks the input tail-recursively, prepending
 -- each kept element onto `acc` (reverse order) until either n drops
 -- to zero or the input is exhausted; both bases then reverse `acc`
--- via `reverseHelp` for the final left-to-right output.  The
--- helper is tail-recursive and auto-TCO'd by
--- `Ipe.Build.TailCallOpt` to a `for { ... continue }` loop, so a
--- 1M-element input runs in constant Go stack instead of the old
--- O(N) non-TCO `x :: take (n - 1) rest` shape.
+-- via `reverseHelp` for the final left-to-right output.  The helper
+-- is tail-recursive and auto-TCO'd to a loop, running in O(1) stack
+-- (the legacy `x :: take (n - 1) rest` shape recursed in non-tail
+-- position).
 --
 -- Edge cases: `take 0` and `take <negative>` return `[]` via the
 -- `n <= 0` base; `take n []` returns `[]` via the empty-list base.
@@ -365,16 +332,12 @@ drop n list =
 
 -- | `append xs ys` — concatenate two lists.
 --
--- v0.17 step-5 (Limitation #8): CPS / accumulator rewrite.
--- The legacy `x :: append rest ys` shape recurses in the
--- non-tail position (the cons happens after the recursive
--- call returns), so a 1M-element input blew Go's
--- `maxstacksize`.  The rewrite first reverses `xs` onto an
--- empty accumulator via `reverseHelp` (already tail-recursive,
--- already auto-TCO'd), then `appendHelp` walks the reversed
--- prefix cons'ing each element onto `ys`.  Both phases are
--- tail-recursive so `Ipe.Build.TailCallOpt` lowers each to a
--- `for { ... continue }` loop.
+-- The legacy `x :: append rest ys` shape recursed in non-tail position
+-- (the cons happens after the recursive call returns), giving O(N) call
+-- depth.  The rewrite first reverses `xs` onto an empty accumulator via
+-- `reverseHelp` (already tail-recursive), then `appendHelp` walks the
+-- reversed prefix cons'ing each element onto `ys`.  Both phases are
+-- tail-recursive and auto-TCO'd to loops, running in O(1) stack.
 --
 -- Output order is preserved: `reverseHelp [a, b, c] []` gives
 -- `[c, b, a]`, then cons'ing those onto `ys = [d, e]`
@@ -385,8 +348,8 @@ append xs ys =
 
 
 -- | `appendHelp revXs ys` — cons each element of `revXs` onto
--- `ys`.  Tail-recursive so the emitted Go is a
--- `for { ... continue }` loop.  Private helper for `append`.
+-- `ys`.  Tail-recursive, auto-TCO'd to a loop.  Private helper for
+-- `append`.
 --
 -- INVARIANT: `revXs` is the REVERSED prefix; cons'ing each
 -- head onto `ys` in turn reconstructs the original
@@ -403,21 +366,18 @@ appendHelp revXs ys =
 
 -- | `concat lists` — flatten a list of lists.
 --
--- v0.17 step-3 (Limitation #8): CPS / accumulator rewrite.
 -- `concatHelp lists acc` walks the outer list tail-recursively,
 -- using `appendReverseOnto xs acc` to cons each inner list's
 -- elements onto `acc` in REVERSE order.  When the outer list is
 -- exhausted, `reverseHelp acc []` flips the accumulator once for
 -- the final left-to-right result.  Both `concatHelp` and
--- `appendReverseOnto` are tail-recursive and auto-TCO'd by
--- `Ipe.Build.TailCallOpt` to a `for { ... continue }` loop, so a
--- 1M-element input runs in constant Go stack instead of the old
--- O(N) non-TCO recursion (the legacy `append xs (concat rest)`
--- shape recursed in the non-tail position).
+-- `appendReverseOnto` are tail-recursive and auto-TCO'd to loops,
+-- running in O(1) stack (the legacy `append xs (concat rest)` shape
+-- recursed in non-tail position).
 --
 -- NOTE: `concatHelp` uses ONLY the private `appendReverseOnto`,
 -- NOT the public `append` — so `concat` is fully independent of
--- whatever step-5 does to `append`'s rewrite.
+-- `append`'s implementation.
 concat lists =
     concatHelp lists []
 
@@ -433,8 +393,8 @@ concatHelp lists acc =
 
 
 -- | `appendReverseOnto xs acc` — cons each element of `xs` onto
--- `acc` in reverse order.  Tail-recursive so the emitted Go is a
--- `for { ... continue }` loop.  Private helper for `concat`.
+-- `acc` in reverse order.  Tail-recursive, auto-TCO'd to a loop.
+-- Private helper for `concat`.
 appendReverseOnto xs acc =
     case xs of
 
@@ -461,20 +421,13 @@ member x list =
 
 -- | `range lo hi` — produce `[lo, lo + 1, ..., hi]` (inclusive).
 --
--- v0.17 step-10 (Limitation #8): CPS / accumulator rewrite.
--- The legacy `lo :: range (lo + 1) hi` shape recurses in the
--- non-tail position (the cons happens AFTER the recursive call
--- returns), so a 1M-element range blew Go's `maxstacksize`.
--- The rewrite delegates to `rangeHelp lo hi acc` which conses
--- each value onto `acc` in REVERSE order (largest first), then
--- `reverseHelp acc []` flips the accumulator once at the base
--- for the final ascending left-to-right output.  `rangeHelp` is
--- tail-recursive and auto-TCO'd by `Ipe.Build.TailCallOpt` to a
--- `for { ... continue }` loop, so a 1M-element range runs in
--- constant Go stack.
---
--- Mirrors the existing `append`@310 + `concat`@348 CPS shape
--- (build-reversed-onto-acc + reverseHelp-flip-at-end).
+-- The legacy `lo :: range (lo + 1) hi` shape recursed in non-tail
+-- position (the cons happens AFTER the recursive call returns), giving
+-- O(N) call depth.  The rewrite delegates to `rangeHelp lo hi acc`
+-- which conses each value onto `acc` in REVERSE order (largest first),
+-- then `reverseHelp acc []` flips the accumulator once at the base for
+-- the final ascending left-to-right output.  `rangeHelp` is
+-- tail-recursive and auto-TCO'd to a loop, running in O(1) stack.
 range lo hi =
     rangeHelp lo hi []
 
@@ -495,30 +448,19 @@ rangeHelp lo hi acc =
 -- | `zip xs ys` — pair-wise zip of two lists.  Truncates to the
 -- shorter list's length.
 --
--- v0.17 step-11 (Limitation #8): CPS / accumulator rewrite.
--- The legacy `( x, y ) :: zip xRest yRest` shape recurses in the
+-- The legacy `( x, y ) :: zip xRest yRest` shape recursed in
 -- non-tail position (the cons happens AFTER the recursive call
--- returns), so a 1M-element zip blew Go's `maxstacksize`.  The
--- rewrite delegates to `zipHelp xs ys acc` which conses each
--- `( x, y )` pair onto `acc` in REVERSE order, then
--- `reverseHelp acc []` flips the accumulator once at the base for
--- the final left-to-right output.  `zipHelp` is tail-recursive
--- and auto-TCO'd by `Ipe.Build.TailCallOpt` to a
--- `for { ... continue }` loop, so a 1M-element zip runs in
--- constant Go stack.
---
--- Mirrors the existing `append`@310 + `concat`@348 +
--- `range`@420 CPS shape (build-reversed-onto-acc +
--- reverseHelp-flip-at-end).
+-- returns), giving O(N) call depth.  The rewrite delegates to
+-- `zipHelp xs ys acc` which conses each `( x, y )` pair onto `acc`
+-- in REVERSE order, then `reverseHelp acc []` flips the accumulator
+-- once at the base for the final left-to-right output.  `zipHelp`
+-- is tail-recursive and auto-TCO'd to a loop, running in O(1) stack.
 --
 -- The EXPLICIT signature on `zipHelp` is load-bearing: the
 -- tuple-typed accumulator (`List (a, b)`) would otherwise be
--- inferred as `List any` by the HM solver — tuples in CPS
--- accumulator position have not been exercised by the prior
--- 8 ops in this umbrella, so without the annotation the
--- typed-lowerer falls back to `rt.AsList[any]` and the cons
--- payload re-narrows at runtime, pushing the rt.Coerce ratchet
--- UP and defeating the constant-stack contract.
+-- inferred as `List any` by the HM solver — without the annotation
+-- the typed-lowerer falls back to `rt.AsList[any]` and the cons
+-- payload re-narrows at runtime, defeating the O(1)-stack contract.
 zip xs ys =
     zipHelp xs ys []
 

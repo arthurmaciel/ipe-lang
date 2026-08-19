@@ -77,9 +77,9 @@ module Ipe.Css exposing
 --     Prefer the typed builders over `raw` for anything not author-controlled.
 --   * `stylesheet` folds in pure Ipe and finishes through `stripStyleClose`
 --     (defence in depth); the `<style>` render sink strips again (belt & braces
---     with `html_style_node_`).  For benign input the output is byte-identical
---     to the Go oracle (the same pure-Ipe render); only an attack string
---     diverges (it is neutralised) — a sanctioned security divergence.
+--     with `html_style_node_`).  For benign input the render is byte-stable
+--     across runs (pure Ipe render); only an attack string diverges (it is
+--     neutralised) — a sanctioned security divergence.
 
 import Ipe.String as String
 import Ipe.List as List

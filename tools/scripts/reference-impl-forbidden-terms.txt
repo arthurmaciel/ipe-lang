@@ -1,0 +1,25 @@
+# Forbidden terms in shipped source (read by both this file and the Rust embed test).
+# One term per line. Blank lines and lines starting with # are ignored.
+# These are matched case-insensitively as alternations (no word boundaries needed
+# for the Go-specific phrases; Sky/Std are matched with word boundaries in the shell
+# script via separate rg invocations scoped to src/ only).
+#
+# SCOPE: applied to src/stdlib/**/*.ipe, src/stdlib/src/**/*.rs,
+#        src/runtime/rust/src/**/*.rs, src/compiler/**/src/**/*.rs, README.md,
+#        docs/**/*.md — with carve-outs enumerated in no-reference-impl-leak.sh.
+#
+# The Go-specific phrases below apply to ALL scanned roots.
+# The Sky/Std terms (last two) apply only to src/ roots (not docs/).
+Go reference
+reference compiler
+Go backend
+Go oracle
+the emitted Go
+maxstacksize
+Go's type inference
+Go's generic-inference
+the reference implementation
+# src/-only terms (word-bounded): \bStd\. and \bSky\b
+# These are handled separately in the shell script; the Rust test uses all lines.
+\bStd\.
+\bSky\b

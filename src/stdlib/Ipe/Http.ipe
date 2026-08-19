@@ -37,9 +37,8 @@
 -- duplicate keys — the invariant is proven by the HashMap return type).
 --
 -- Builders (`defaultRequest` / `with*`) are pure Ipe. `withHeader`
--- PREPENDS the new pair (`(k, v) :: req.headers`) matching the Go
--- reference compiler's Ipe.Http.ipe behaviour — latest-added header
--- is first in the list.
+-- cons-prepends `(k, v)` onto `req.headers`, so the most-recently-added
+-- header is first in the list.
 module Ipe.Http exposing
     ( HttpMethod(..)
     , HttpRequest
@@ -247,11 +246,10 @@ withMaxRedirects n req =
     { req | maxRedirects = n }
 
 
--- `withHeader k v req` prepends `(k, v)` to `req.headers` — matching the
--- Go reference compiler's Ipe.Http.withHeader semantics (cons-prepend).
--- Latest-added header is first in the list.  HTTP allows duplicate header
--- names and order can matter; the Ipe `request` kernel passes the list to
--- reqwest verbatim, which sends all headers to the server.
+-- `withHeader k v req` cons-prepends `(k, v)` to `req.headers`
+-- (latest-added header first).  HTTP allows duplicate header names and
+-- order can matter; the Ipe `request` kernel passes the list to reqwest
+-- verbatim, which sends all headers to the server.
 withHeader : String -> String -> HttpRequest -> HttpRequest
 withHeader k v req =
     { req | headers = ( k, v ) :: req.headers }

@@ -1,15 +1,13 @@
 -- | Ipe.Result — combinators over the Result ADT.
 --
--- v0.13 Layer 3 / Phase B2: Ipe source for the user-visible
--- combinator surface.  The Result ADT itself (`Result e a`, `Ok`,
--- `Err` ctors) remains kernel-anchored so the type system +
--- runtime IpeResult representation stay in lockstep.
+-- The Result ADT itself (`Result e a`, `Ok`, `Err` ctors) remains
+-- kernel-anchored so the type system and runtime IpeResult representation
+-- stay in lockstep.
 --
--- Partial-resolution at call sites (where surrounding function is
+-- Partial-resolution at call sites (where the surrounding function is
 -- itself polymorphic in `e` or `a`) is handled by `coerceCallArgsAt`
--- forcing explicit `any(e)` widening for positions that substitute
--- to `any` — keeps Go's generic-inference consistent across all
--- arg positions in one call.
+-- forcing explicit `any(e)` widening so generic inference stays
+-- consistent across all argument positions in one call.
 module Ipe.Result exposing
     ( withDefault
     , map

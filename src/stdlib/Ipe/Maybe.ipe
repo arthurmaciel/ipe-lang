@@ -1,13 +1,10 @@
 -- | Ipe.Maybe — combinators over the Maybe ADT.
 --
--- v0.13 Layer 3 / Phase B1: Ipe source for the user-visible
--- combinator surface.  The Maybe ADT itself (`Maybe a`, `Just`,
--- `Nothing` ctors) remains kernel-anchored so the type system +
--- runtime IpeMaybe representation stay in lockstep.  Without
--- monomorphisation (Phase A4/A5), call-site coercion would
--- mismatch Go's type inference.  With Phase A5 wired, the call-
--- site coerceArg gets the call's actual concrete type from
--- `_cg_callSiteInstances` and emits e.g. `MaybeCoerce[string]`
+-- The Maybe ADT itself (`Maybe a`, `Just`, `Nothing` ctors) remains
+-- kernel-anchored so the type system and runtime IpeMaybe representation
+-- stay in lockstep.  Without monomorphisation, call-site coercion would
+-- mismatch inference; with it wired, the call-site coerceArg gets the
+-- call's actual concrete type and emits e.g. `MaybeCoerce[string]`
 -- instead of `MaybeCoerce[any]`.
 module Ipe.Maybe exposing
     ( withDefault
