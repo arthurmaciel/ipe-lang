@@ -697,19 +697,20 @@ fn fmt_emitted_build_failed(err: &CliError, f: &mut std::fmt::Formatter<'_>) -> 
     f.write_str(&render(&ice, "", ""))
 }
 
-/// Detect whether cargo's stderr signals a registry or network failure.
+/// Detect whether cargo's stderr signals a network-level registry failure
+/// (offline, DNS resolution, or a transient fetch error) rather than a compiler
+/// miscompile.
 ///
-/// Cargo surfaces registry-fetch failures through two consistent patterns:
-/// a host-resolution failure ("Could not resolve host") and a source-load
-/// failure ("failed to load source for dependency"). Either phrase reliably
-/// indicates a network/DNS problem, not a compiler miscompile.
+/// Only genuinely network-level phrases qualify. Broader phrases like "failed to
+/// load source for dependency" or "registry index" are deliberately excluded:
+/// they also fire when a local path dependency is missing or a manifest is
+/// malformed — not connectivity problems, and reporting them as "check your
+/// connection" would misdirect the user. The offline case always surfaces one of
+/// the network phrases below as its root cause.
 fn is_registry_unreachable(stderr: &str) -> bool {
     stderr.contains("Could not resolve host")
-        || stderr.contains("failed to load source for dependency")
-        || stderr.contains("error: could not find registry")
         || stderr.contains("spurious network error")
         || stderr.contains("failed to fetch")
-        || stderr.contains("registry index")
 }
 
 /// Extract the runtime feature name from a `cargo` feature-resolution error of
@@ -6170,6 +6171,28 @@ const fn diag_span(d: &Diagnostic) -> ipe_diagnostics::Span {
 mod tests {
     use super::*;
     use ipe_diagnostics::{NameError, Span};
+
+    #[test]
+    fn registry_unreachable_matches_network_signals_only() {
+        // Genuine network/offline failures.
+        assert!(is_registry_unreachable(
+            "Caused by:\n  Could not resolve host: index.crates.io"
+        ));
+        assert!(is_registry_unreachable("warning: spurious network error"));
+        assert!(is_registry_unreachable(
+            "error: failed to fetch `https://github.com/rust-lang/crates.io-index`"
+        ));
+        // A missing local path dependency or malformed manifest is NOT a
+        // connectivity problem and must not be reported as one.
+        assert!(!is_registry_unreachable(
+            "error: failed to load source for dependency `handle_demo`\n\
+             Caused by:\n  path `/tmp/x` does not exist"
+        ));
+        assert!(!is_registry_unreachable(
+            "error: no matching package named `foo` found; updating registry index"
+        ));
+        assert!(!is_registry_unreachable("error[E0433]: cannot find crate"));
+    }
 
     #[test]
     fn io_not_found_renders_styled_without_os_error() {
