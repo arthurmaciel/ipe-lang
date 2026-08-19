@@ -1,0 +1,14 @@
+[package]
+name = "ipe_docs"
+edition.workspace = true
+version.workspace = true
+license.workspace = true
+
+[dependencies]
+ipe_intern    = { path = "../compiler/intern" }
+ipe_syntax    = { path = "../compiler/syntax" }
+ipe_parse     = { path = "../compiler/parse" }
+ipe_stdlib    = { path = "../stdlib" }
+
+[lints]
+workspace = true
