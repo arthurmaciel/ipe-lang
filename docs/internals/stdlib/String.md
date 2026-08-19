@@ -175,7 +175,7 @@ fromChar '\n' --> "\n"
 
 ```ipe
 fromFloat 3.14 --> "3.14"
-fromFloat -0.5 --> "-0.5"
+fromFloat (-0.5) --> "-0.5"
 ```
 
 ## `fromInt`
@@ -184,7 +184,7 @@ fromFloat -0.5 --> "-0.5"
 
 ```ipe
 fromInt 42 --> "42"
-fromInt -7 --> "-7"
+fromInt (-7) --> "-7"
 fromInt 0 --> "0"
 ```
 
@@ -282,7 +282,7 @@ lines "" --> [ "" ]
 
 ```ipe
 map (\c -> if c == 'a' then 'x' else c) "banana" --> "bxnxnx"
-map Char.toUpper "hello" --> "HELLO"
+map (\c -> if c == 'e' then 'a' else c) "hello" --> "hallo"
 ```
 
 ## `pad`
@@ -361,7 +361,7 @@ Negative indices count from the end.
 ```ipe
 slice 0 5 "hello world" --> "hello"
 slice 6 11 "hello world" --> "world"
-slice -5 -1 "hello world" --> "worl"
+slice (-5) (-1) "hello world" --> "worl"
 ```
 
 ## `split`
@@ -440,9 +440,7 @@ toLower "Café" --> "café"
 ```ipe
 import Ipe.Locale as Locale
 
-case Locale.fromTag "tr" of
-    Just tr -> toLowerIn tr "ISTANBUL"
-    Nothing -> toLower "ISTANBUL"
+Maybe.withDefault (toLower "ISTANBUL") (Maybe.map (\tr -> toLowerIn tr "ISTANBUL") (Locale.fromTag "tr")) --> "istanbul"
 ```
 
 ## `toUpper`
@@ -461,9 +459,7 @@ toUpper "Café" --> "CAFÉ"
 ```ipe
 import Ipe.Locale as Locale
 
-case Locale.fromTag "tr" of
-    Just tr -> toUpperIn tr "istanbul"
-    Nothing -> toUpper "istanbul"
+Maybe.withDefault (toUpper "istanbul") (Maybe.map (\tr -> toUpperIn tr "istanbul") (Locale.fromTag "tr")) --> "İSTANBUL"
 ```
 
 ## `trim`
