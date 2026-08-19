@@ -9,4 +9,4 @@ I can't find `lenght` in scope.
   |
   = help: replace `lenght` with `length`
 
-IPE-N0001 · run `ipe explain IPE-N0001`
+IPE-N0001 · run `ipe doc IPE-N0001`

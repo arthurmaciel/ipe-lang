@@ -8,4 +8,4 @@ This code tries to mint a built-in effect directly, which only the standard libr
   |     ^^^^^^^^^^^^^^^^^^^^^ `Ffi.kernel "Http_get"` mints a kernel — only the standard library and the generated FFI interface may do this; reach the effect through its published module (an unsafe kernel via its `Ipe.<M>.Unsafe` module, which discloses the `unsafe` capability)
   |
 
-IPE-N0042 · run `ipe explain IPE-N0042`
+IPE-N0042 · run `ipe doc IPE-N0042`

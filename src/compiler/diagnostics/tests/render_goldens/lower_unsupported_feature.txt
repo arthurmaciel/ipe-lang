@@ -9,4 +9,4 @@ This uses something I can't compile yet.
   |
   = help: operators other than `+` and `-` are not supported yet [feature: binops]
 
-IPE-L0101 · run `ipe explain IPE-L0101`
+IPE-L0101 · run `ipe doc IPE-L0101`

@@ -8,4 +8,4 @@ I can't find `x` in scope.
   |           ^ I don't know this name
   |
 
-IPE-N0001 · run `ipe explain IPE-N0001`
+IPE-N0001 · run `ipe doc IPE-N0001`

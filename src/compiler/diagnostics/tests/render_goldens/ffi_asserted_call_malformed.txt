@@ -8,4 +8,4 @@ I can't read this `Rust.Ffi.call` — it isn't in the one shape I accept.
   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ this `Rust.Ffi.call` is malformed: the body must be exactly `Rust.Ffi.call "<crate>::<fn>"`. The one accepted shape is a top-level annotated definition whose whole body is `Rust.Ffi.call "<crate>::<function>"`
   |
 
-IPE-N0038 · run `ipe explain IPE-N0038`
+IPE-N0038 · run `ipe doc IPE-N0038`

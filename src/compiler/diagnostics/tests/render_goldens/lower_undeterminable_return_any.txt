@@ -8,6 +8,6 @@ This signature's return `any` can't be worked out — nothing pins it to a concr
   | ^^^^^^^^^^^^^^^^^^^^^ a wildcard `any` in the return type is pinned by no body — a caller could never determine its concrete type. Return a concrete value, annotate a concrete return type, or use a named type variable such as `a` for genuine polymorphism
   |
   = note: a wildcard `any` stands for one concrete type the compiler must be able to work out. In the return type it can only be worked out from the body — the body must produce a concrete value. Here it does not, so no caller could ever pin it. Annotate a concrete return type, or return a concrete value from the body. To keep it genuinely polymorphic instead — letting each caller choose the type — use a named type variable such as `a`, not a wildcard `any`.
-  = help: → run `ipe explain IPE-L0142` to learn more
+  = help: → run `ipe doc IPE-L0142` to learn more
 
-IPE-L0142 · run `ipe explain IPE-L0142`
+IPE-L0142 · run `ipe doc IPE-L0142`
