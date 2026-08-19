@@ -16001,6 +16001,20 @@ impl<'a> Lowerer<'a> {
             let Some(arg) = args.get(*pos) else {
                 continue;
             };
+            // The callee requires a row-witness bound (`IpeHas<F><Name = T>`) on
+            // this argument position. An argument whose solved region is a bare
+            // solver `Var` lowers to a plain `T{n}: Clone` generic — a
+            // wildcard-`any` parameter of the ENCLOSING function relayed straight
+            // through (`relay x = getField x`, `firstName p = snd p p`). That
+            // bare generic carries no `IpeHas*` bound and can never satisfy the
+            // callee's, so the emitted Rust fails cargo E0277 (the
+            // exit-0-then-cargo-fail class). The bound is attached only to params
+            // a function erases from its OWN field-reads, never to one it merely
+            // forwards, so a `Var` here can never acquire it — reject fail-closed
+            // with IPE-L0131 rather than emit unsatisfiable Rust.
+            if matches!(self.region_ty(arg.span), Some(Ty::Var(_))) {
+                return Err(unsupported(call_span, Feature::RowPolyRecordAnnotation));
+            }
             let Some(Ty::Record(caller_fields, _)) = self.region_ty(arg.span) else {
                 continue;
             };
