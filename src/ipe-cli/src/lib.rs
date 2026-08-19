@@ -4563,29 +4563,45 @@ fn build_source_graph(entry: &Path) -> Result<SourceGraph, CliError> {
 /// Collect the USER `.ipe` source texts a build sees, for the `.Unsafe`-import
 /// scan. A manifest project reads every discovered module under its source root
 /// (the same whole-tree posture package-capability inference takes); a
-/// single-file entry reads the entry plus its imported siblings. Best-effort: a
-/// module that cannot be read is skipped — the authoritative "uses unsafe"
-/// decision is the inferred capability set, not this scan, which only supplies
-/// the human-facing `via …` detail.
-fn user_sources_for_unsafe_scan(manifest: Option<&Path>, entry: &Path) -> Vec<String> {
+/// single-file entry reads the entry plus its imported siblings.
+///
+/// Fail-closed: any unreadable module causes an immediate `Err` so the
+/// acknowledgment gate never operates on a partial source set.
+///
+/// # Errors
+/// [`CliError::Io`] when any discovered module cannot be read.
+fn user_sources_for_unsafe_scan(
+    manifest: Option<&Path>,
+    entry: &Path,
+) -> Result<Vec<String>, CliError> {
     if let Some(mpath) = manifest
         && let Ok(m) = project::parse_manifest(mpath)
         && let Ok(discovered) = project::discover_modules(&m.src_root)
     {
         return discovered
             .iter()
-            .filter_map(|d| fs::read_to_string(&d.path).ok())
-            .collect();
+            .map(|d| {
+                fs::read_to_string(&d.path).map_err(|e| CliError::Io {
+                    path: d.path.clone(),
+                    source: e,
+                })
+            })
+            .collect::<Result<Vec<_>, _>>();
     }
     // Single file (or a manifest that failed to parse — the build will surface
     // that error itself): the entry and its siblings.
     match collect_entry_and_siblings(entry) {
-        Ok(collected) => collected
+        Ok(collected) => Ok(collected
             .sources
             .into_values()
             .map(|(_, src)| src)
-            .collect(),
-        Err(_) => fs::read_to_string(entry).ok().into_iter().collect(),
+            .collect()),
+        Err(_) => fs::read_to_string(entry)
+            .map(|src| vec![src])
+            .map_err(|e| CliError::Io {
+                path: entry.to_owned(),
+                source: e,
+            }),
     }
 }
 
@@ -4614,7 +4630,7 @@ fn acknowledge_unsafe_imports(
     if !resolved.inferred.contains(&ipe_ir::Capability::Unsafe) {
         return Ok(());
     }
-    let sources = user_sources_for_unsafe_scan(manifest_path, entry);
+    let sources = user_sources_for_unsafe_scan(manifest_path, entry)?;
     let via = unsafe_ack::unsafe_modules_in_sources(sources.iter().map(String::as_str));
     let manifest_accept = manifest_parsed
         .map(|m| m.capabilities_accept.clone())
@@ -7974,5 +7990,127 @@ pub mod web {
         let _ = std::fs::remove_dir_all(&repo);
         let _ = std::fs::remove_dir_all(&entry_root);
         let _ = std::fs::remove_dir_all(&idx_root);
+    }
+
+    // ---- unsafe-scan fail-closed tests -----------------------------------
+
+    /// Returns a unique scratch directory under the OS temp root.
+    /// The caller is responsible for removing it when done.
+    fn unsafe_scan_test_dir(tag: &str) -> PathBuf {
+        use std::sync::atomic::{AtomicU64, Ordering};
+        static N: AtomicU64 = AtomicU64::new(0);
+        let dir = std::env::temp_dir().join(format!(
+            "ipe-unsafe-scan-{tag}-{}-{}",
+            std::process::id(),
+            N.fetch_add(1, Ordering::Relaxed)
+        ));
+        std::fs::create_dir_all(&dir).expect("create test scratch dir");
+        dir
+    }
+
+    /// A manifest project with an unreadable module must return `Err(CliError::Io)`
+    /// naming the unreadable path — not `Ok` with a partial source list.
+    #[cfg(unix)]
+    #[test]
+    fn unsafe_scan_manifest_project_fails_closed_on_unreadable_module() {
+        use std::fs;
+        use std::os::unix::fs::PermissionsExt;
+
+        let dir = unsafe_scan_test_dir("manifest-fail");
+        let src = dir.join("src");
+        fs::create_dir_all(&src).expect("create src");
+
+        // One readable module and one unreadable one.
+        let readable = src.join("Main.ipe");
+        fs::write(&readable, "module Main exposing (main)\n").expect("write Main");
+        let unreadable = src.join("Locked.ipe");
+        fs::write(&unreadable, "module Locked exposing ()\n").expect("write Locked");
+        fs::set_permissions(&unreadable, fs::Permissions::from_mode(0o000))
+            .expect("chmod 000");
+
+        let manifest_path = dir.join("ipe.toml");
+        fs::write(&manifest_path, "[project]\nname = \"test\"\n").expect("write manifest");
+
+        let result = user_sources_for_unsafe_scan(Some(&manifest_path), &readable);
+
+        // Restore permissions before any assertion so cleanup always runs.
+        let _ = fs::set_permissions(&unreadable, fs::Permissions::from_mode(0o644));
+        let _ = fs::remove_dir_all(&dir);
+
+        match result {
+            Err(CliError::Io { path, .. }) => {
+                assert_eq!(path, unreadable, "Io error must name the unreadable path");
+            }
+            Ok(sources) => panic!(
+                "expected Err(CliError::Io) for unreadable module, got Ok with {} sources",
+                sources.len()
+            ),
+            Err(other) => panic!("expected CliError::Io, got: {other:?}"),
+        }
+    }
+
+    /// A manifest project where every module is readable must return `Ok` with
+    /// every source text present.
+    #[test]
+    fn unsafe_scan_manifest_project_ok_when_all_readable() {
+        use std::fs;
+
+        let dir = unsafe_scan_test_dir("manifest-ok");
+        let src = dir.join("src");
+        fs::create_dir_all(&src).expect("create src");
+
+        let entry = src.join("Main.ipe");
+        fs::write(&entry, "module Main exposing (main)\n").expect("write Main");
+        let other = src.join("Helper.ipe");
+        fs::write(&other, "module Helper exposing ()\n").expect("write Helper");
+
+        let manifest_path = dir.join("ipe.toml");
+        fs::write(&manifest_path, "[project]\nname = \"test\"\n").expect("write manifest");
+
+        let result = user_sources_for_unsafe_scan(Some(&manifest_path), &entry);
+        let _ = fs::remove_dir_all(&dir);
+
+        match result {
+            Ok(sources) => {
+                assert!(
+                    sources.len() >= 2,
+                    "must return a source for every readable module, got {}",
+                    sources.len()
+                );
+            }
+            Err(e) => panic!("expected Ok for all-readable project, got: {e:?}"),
+        }
+    }
+
+    /// Single-file fallback: when `collect_entry_and_siblings` fails and the
+    /// entry itself is unreadable, the result must be `Err(CliError::Io)`
+    /// naming the entry path — not `Ok` with an empty list.
+    #[cfg(unix)]
+    #[test]
+    fn unsafe_scan_single_file_fallback_fails_closed_on_unreadable_entry() {
+        use std::fs;
+        use std::os::unix::fs::PermissionsExt;
+
+        let dir = unsafe_scan_test_dir("single-fail");
+        let entry = dir.join("Main.ipe");
+        fs::write(&entry, "module Main exposing (main)\n").expect("write entry");
+        fs::set_permissions(&entry, fs::Permissions::from_mode(0o000)).expect("chmod 000");
+
+        // Pass no manifest so the single-file (entry + siblings) path is taken.
+        let result = user_sources_for_unsafe_scan(None, &entry);
+
+        let _ = fs::set_permissions(&entry, fs::Permissions::from_mode(0o644));
+        let _ = fs::remove_dir_all(&dir);
+
+        match result {
+            Err(CliError::Io { path, .. }) => {
+                assert_eq!(path, entry, "Io error must name the entry path");
+            }
+            Ok(sources) => panic!(
+                "expected Err(CliError::Io) for unreadable entry, got Ok with {} sources",
+                sources.len()
+            ),
+            Err(other) => panic!("expected CliError::Io, got: {other:?}"),
+        }
     }
 }

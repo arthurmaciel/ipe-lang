@@ -1169,6 +1169,24 @@ mod tests {
         );
     }
 
+    #[test]
+    fn ssot_guardrail_no_read_to_string_ok_in_unsafe_scan_scope() {
+        // Assert that no future edit re-introduces a fail-open read in the
+        // unsafe-acknowledgment scan. `read_to_string(…).ok()` silently drops
+        // unreadable modules so they never reach the acknowledgment gate; every
+        // read in a security scan must propagate errors, not swallow them.
+        // This guardrail covers index.rs (unlike the read_entry guardrail above,
+        // whose helper body self-triggers on its own string literals).
+        let src_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+        let mut violations = Vec::new();
+        collect_read_to_string_ok_violations(&src_dir, &mut violations);
+        assert!(
+            violations.is_empty(),
+            "fail-open read_to_string collapse detected — propagate the error instead:\n{}",
+            violations.join("\n")
+        );
+    }
+
     fn collect_ssot_violations(dir: &std::path::Path, out: &mut Vec<String>) {
         let Ok(entries) = std::fs::read_dir(dir) else {
             return;
@@ -1200,6 +1218,46 @@ mod tests {
                         out.push(format!("{}:{}: {}", path.display(), i + 1, trimmed));
                     }
                     if trimmed.contains("let Ok(") && trimmed.contains("read_entry(") {
+                        out.push(format!("{}:{}: {}", path.display(), i + 1, trimmed));
+                    }
+                }
+            }
+        }
+    }
+
+    fn collect_read_to_string_ok_violations(dir: &std::path::Path, out: &mut Vec<String>) {
+        let Ok(entries) = std::fs::read_dir(dir) else {
+            return;
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                collect_read_to_string_ok_violations(&path, out);
+            } else if path.extension().and_then(|e| e.to_str()) == Some("rs") {
+                // Skip this file: the helper body contains the banned substrings
+                // as pattern variables, which would self-trigger.
+                let stem = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
+                if stem == "index.rs" {
+                    continue;
+                }
+                let Ok(text) = std::fs::read_to_string(&path) else {
+                    continue;
+                };
+                for (i, line) in text.lines().enumerate() {
+                    let trimmed = line.trim();
+                    // Skip pure comment lines.
+                    if trimmed.starts_with("//") {
+                        continue;
+                    }
+                    // The two banned forms that produce a fail-open unsafe scan:
+                    // 1. filter_map(|…| fs::read_to_string(…).ok()) — silently
+                    //    drops unreadable modules from the security scan.
+                    // 2. read_to_string(entry).ok().into_iter() — same defect on
+                    //    the single-file fallback path.
+                    if trimmed.contains("read_to_string") && trimmed.contains("filter_map") {
+                        out.push(format!("{}:{}: {}", path.display(), i + 1, trimmed));
+                    }
+                    if trimmed.contains("read_to_string(") && trimmed.contains(".ok().into_iter()") {
                         out.push(format!("{}:{}: {}", path.display(), i + 1, trimmed));
                     }
                 }
