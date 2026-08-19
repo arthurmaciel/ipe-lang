@@ -2210,6 +2210,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "ipe_docs"
+version = "0.1.66"
+dependencies = [
+ "ipe_intern",
+ "ipe_parse",
+ "ipe_stdlib",
+ "ipe_syntax",
+]
+
+[[package]]
 name = "ipe_ffi"
 version = "0.1.66"
 dependencies = [
