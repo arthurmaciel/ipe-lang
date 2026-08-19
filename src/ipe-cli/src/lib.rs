@@ -240,6 +240,12 @@ pub enum CliError {
     /// a command misuse, so it exits non-zero with the report alone and never the
     /// command's `--help` page.
     DocCoverage(String),
+    /// `ipe doc --check-examples` found one or more broken doc-string examples.
+    /// Carries the ready-to-print failure report. A legitimate gate result — the
+    /// extraction ran correctly and an example does not compile or produce the
+    /// expected result — not a command misuse, so it exits non-zero with the
+    /// report alone and never the command's `--help` page.
+    DocExamplesFailed(String),
     /// A known command was misused (bad or missing arguments, an unknown flag).
     /// Carries the specific reason and the command name; [`fmt::Display`] renders
     /// the reason followed by that command's full, indented `--help` page — the
@@ -445,7 +451,7 @@ impl std::fmt::Display for CliError {
                 "version {proposed} does not clear the required {required} bump — the new \
                  version must be at least {floor}."
             ),
-            Self::DocCoverage(report) => f.write_str(report),
+            Self::DocCoverage(report) | Self::DocExamplesFailed(report) => f.write_str(report),
             Self::PackageAudit(rejection) => write!(f, "{rejection}"),
             Self::Publish(refusal) => write!(f, "ipe package publish refused: {refusal}"),
             // The reason, then the command's full `--help` page (indented,
@@ -4656,7 +4662,7 @@ fn acknowledge_unsafe_imports(
 /// # Errors
 /// [`CliError::Pipeline`] carrying the first compiler diagnostic;
 /// [`CliError::Io`] when a source file cannot be read.
-fn typecheck_entry_via_graph(entry: &Path) -> Result<(), CliError> {
+pub(crate) fn typecheck_entry_via_graph(entry: &Path) -> Result<(), CliError> {
     let graph = build_source_graph(entry)?;
     graph.run_attributed(entry, |db, root, file| {
         // Type-check first so an ordinary type error surfaces ahead of the
