@@ -182,6 +182,10 @@ code! {
     IPE_P0064 = "IPE-P0064", "bare `_` as a whole `let` binding pattern is not allowed", "IPE-P0064";
     /// a `do` block with no Task steps — use `let … in` for pure bindings
     IPE_P0065 = "IPE-P0065", "a `do` block must contain at least one Task step", "IPE-P0065";
+    /// doc-string on a non-exported binding is unreachable (warning)
+    IPE_P0066 = "IPE-P0066", "doc-string on a non-exported binding is unreachable", "IPE-P0066";
+    /// exported binding has no doc-string — opt-in lint (warning)
+    IPE_P0067 = "IPE-P0067", "exported binding has no doc-string", "IPE-P0067";
 
     // -----------------------------------------------------------------------
     // Name resolution (IPE-N####)
