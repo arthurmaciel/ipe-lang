@@ -17,16 +17,16 @@ use crate::code::{
     IPE_L0113, IPE_L0114, IPE_L0115, IPE_L0116, IPE_L0117, IPE_L0118, IPE_L0119, IPE_L0120,
     IPE_L0121, IPE_L0122, IPE_L0123, IPE_L0124, IPE_L0125, IPE_L0126, IPE_L0127, IPE_L0128,
     IPE_L0129, IPE_L0130, IPE_L0131, IPE_L0132, IPE_L0133, IPE_L0134, IPE_L0135, IPE_L0136,
-    IPE_L0140, IPE_L0141, IPE_L0142, IPE_L0200, IPE_N0001, IPE_N0002, IPE_N0003, IPE_N0004,
-    IPE_N0005, IPE_N0010, IPE_N0011, IPE_N0012, IPE_N0013, IPE_N0020, IPE_N0021, IPE_N0022,
-    IPE_N0023, IPE_N0024, IPE_N0025, IPE_N0026, IPE_N0027, IPE_N0028, IPE_N0029, IPE_N0030,
-    IPE_N0031, IPE_N0032, IPE_N0033, IPE_N0034, IPE_N0035, IPE_N0036, IPE_N0037, IPE_N0038,
-    IPE_N0039, IPE_N0040, IPE_N0041, IPE_N0042, IPE_P0001, IPE_P0002, IPE_P0003, IPE_P0010,
-    IPE_P0011, IPE_P0012, IPE_P0013, IPE_P0014, IPE_P0015, IPE_P0016, IPE_P0017, IPE_P0018,
-    IPE_P0020, IPE_P0021, IPE_P0030, IPE_P0031, IPE_P0040, IPE_P0041, IPE_P0050, IPE_P0060,
-    IPE_P0061, IPE_P0062, IPE_P0063, IPE_P0064, IPE_S0001, IPE_T0001, IPE_T0002, IPE_T0003,
-    IPE_T0004, IPE_T0010, IPE_T0011, IPE_T0012, IPE_T0013, IPE_T0014, IPE_T0015, IPE_T0016,
-    IPE_T0017, IPE_T0018, IPE_T0019, IPE_T0020, Severity,
+    IPE_L0140, IPE_L0141, IPE_L0142, IPE_L0143, IPE_L0200, IPE_N0001, IPE_N0002, IPE_N0003,
+    IPE_N0004, IPE_N0005, IPE_N0010, IPE_N0011, IPE_N0012, IPE_N0013, IPE_N0020, IPE_N0021,
+    IPE_N0022, IPE_N0023, IPE_N0024, IPE_N0025, IPE_N0026, IPE_N0027, IPE_N0028, IPE_N0029,
+    IPE_N0030, IPE_N0031, IPE_N0032, IPE_N0033, IPE_N0034, IPE_N0035, IPE_N0036, IPE_N0037,
+    IPE_N0038, IPE_N0039, IPE_N0040, IPE_N0041, IPE_N0042, IPE_P0001, IPE_P0002, IPE_P0003,
+    IPE_P0010, IPE_P0011, IPE_P0012, IPE_P0013, IPE_P0014, IPE_P0015, IPE_P0016, IPE_P0017,
+    IPE_P0018, IPE_P0020, IPE_P0021, IPE_P0030, IPE_P0031, IPE_P0040, IPE_P0041, IPE_P0050,
+    IPE_P0060, IPE_P0061, IPE_P0062, IPE_P0063, IPE_P0064, IPE_S0001, IPE_T0001, IPE_T0002,
+    IPE_T0003, IPE_T0004, IPE_T0010, IPE_T0011, IPE_T0012, IPE_T0013, IPE_T0014, IPE_T0015,
+    IPE_T0016, IPE_T0017, IPE_T0018, IPE_T0019, IPE_T0020, Severity,
 };
 use crate::span::Span;
 
@@ -1214,6 +1214,24 @@ pub enum LowerError {
     /// `ipe` time rather than emitting Rust a caller can never satisfy.
     /// [IPE-L0142]
     UndeterminableReturnAny,
+    /// A call site passes a record whose field type does not match the type the
+    /// callee's body requires for that field. The callee's parameter is a
+    /// wildcard `any` that the body reads as a record field — the body's solved
+    /// region type pins the required field type to a concrete `IrType`, which
+    /// the backend emits as an associated-type witness bound
+    /// (`IpeHas<field><Name = required_ty>`). Because `any` severs caller-callee
+    /// type-checker unification, a caller whose field has a different concrete
+    /// type is accepted by the type checker but emits Rust that fails cargo with
+    /// E0271 (`<RecName as IpeHas<field>>::Name == required_ty` unsatisfied).
+    /// Rejected fail-closed here at lowering time. [IPE-L0143]
+    WildcardAnyFieldTypeMismatch {
+        /// The record field whose type mismatches (e.g. `"name"`).
+        field: Box<str>,
+        /// The type the callee's body requires for that field (e.g. `"String"`).
+        required: Box<str>,
+        /// The type the caller's record actually provides (e.g. `"Bool"`).
+        found: Box<str>,
+    },
 }
 
 // ===========================================================================
@@ -1701,6 +1719,7 @@ const fn lower_code(msg: &LowerError) -> Code {
         LowerError::RoutedAppMissingPageField { .. } => IPE_L0124,
         LowerError::NonEntryMain { .. } => IPE_L0136,
         LowerError::UndeterminableReturnAny => IPE_L0142,
+        LowerError::WildcardAnyFieldTypeMismatch { .. } => IPE_L0143,
     }
 }
 
@@ -2046,25 +2065,49 @@ fn lower_help(msg: &LowerError) -> Vec<HelpLine> {
              `Ui.column` of rows) instead."
                 .into(),
         )],
-        LowerError::LawlessEffectDiscard => vec![
-            HelpLine::Note(
-                "a `Task` runs its effect only through `Task.run`, or by being sequenced \
-                 inside a function whose own return type is a `Task`. Discarding it with \
-                 `let _ = <task>` in a non-`Task` function would run it through a hidden \
-                 `Task.run`. Give the enclosing function a `Task e ()` return type and let \
-                 its result be the sequenced tasks, or run the effect explicitly with \
-                 `Task.run`. To print a value while debugging, use `Debug.log` (rejected in \
-                 production builds)."
-                    .into(),
-            ),
-            HelpLine::SeeExplain("effects"),
-        ],
+        LowerError::LawlessEffectDiscard => lawless_effect_discard_help(),
         LowerError::RoutedAppMissingPageField { route_count } => {
             routed_app_missing_page_field_help(*route_count)
         }
         LowerError::NonEntryMain { .. } => non_entry_main_help(),
         LowerError::UndeterminableReturnAny => undeterminable_return_any_help(),
+        LowerError::WildcardAnyFieldTypeMismatch {
+            field, required, ..
+        } => wildcard_any_field_type_mismatch_help(field, required),
     }
+}
+
+/// The help lines for [`LowerError::LawlessEffectDiscard`], factored out so
+/// [`lower_help`] stays a thin per-variant dispatcher.
+fn lawless_effect_discard_help() -> Vec<HelpLine> {
+    vec![
+        HelpLine::Note(
+            "a `Task` runs its effect only through `Task.run`, or by being sequenced \
+             inside a function whose own return type is a `Task`. Discarding it with \
+             `let _ = <task>` in a non-`Task` function would run it through a hidden \
+             `Task.run`. Give the enclosing function a `Task e ()` return type and let \
+             its result be the sequenced tasks, or run the effect explicitly with \
+             `Task.run`. To print a value while debugging, use `Debug.log` (rejected in \
+             production builds)."
+                .into(),
+        ),
+        HelpLine::SeeExplain("effects"),
+    ]
+}
+
+/// The help lines for [`LowerError::WildcardAnyFieldTypeMismatch`], factored out
+/// so [`lower_help`] stays a thin per-variant dispatcher.
+fn wildcard_any_field_type_mismatch_help(field: &str, required: &str) -> Vec<HelpLine> {
+    vec![HelpLine::Note(
+        format!(
+            "the callee's body reads the `.{field}` field and requires it to be \
+             `{required}`; change the record field's value to match, or annotate \
+             the callee's parameter with a closed record type such as \
+             `{{ {field} : {required} }}` so the type-checker enforces the \
+             constraint at every call site"
+        )
+        .into_boxed_str(),
+    )]
 }
 
 /// The help lines for [`LowerError::NonEntryMain`], factored out so

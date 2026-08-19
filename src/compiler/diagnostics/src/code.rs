@@ -417,6 +417,11 @@ code! {
     /// a wildcard `any` in return position is carried by no parameter and pinned
     /// by no body, so no caller can determine its single concrete type
     IPE_L0142 = "IPE-L0142", "a return-position wildcard `any` cannot be determined", "IPE-L0142";
+    /// a caller passes a record whose field has the wrong type for a wildcard-`any`
+    /// parameter that reads that field — the required field type comes from the
+    /// callee's body, not from a shared type-checker unification (which `any`
+    /// severs), so the mismatch is caught here rather than emitting Rust E0271
+    IPE_L0143 = "IPE-L0143", "caller field type does not match the field type required by the callee", "IPE-L0143";
     /// expression nests too deeply for the backend
     IPE_L0200 = "IPE-L0200", "expression nests too deeply for the backend", "IPE-L0200";
 

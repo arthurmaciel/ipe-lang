@@ -609,6 +609,16 @@ fn lower_prose(msg: &LowerError) -> String {
              concrete type."
                 .to_string()
         }
+        LowerError::WildcardAnyFieldTypeMismatch {
+            field,
+            required,
+            found,
+        } => {
+            format!(
+                "The record you passed has a `{field}` field of type `{found}`, \
+                 but the function requires `{field} : {required}`."
+            )
+        }
     }
 }
 
@@ -1551,6 +1561,18 @@ fn lower_label(msg: &LowerError) -> String {
              concrete return type, or use a named type variable such as `a` for genuine \
              polymorphism"
                 .to_string()
+        }
+        LowerError::WildcardAnyFieldTypeMismatch {
+            field,
+            required,
+            found,
+        } => {
+            format!(
+                "field `{field}` has type `{found}` here, but the callee's body requires \
+                 `{field} : {required}` — change the field's value to a `{required}`, or \
+                 annotate the callee's parameter with a closed record type so the \
+                 type-checker enforces the field type at each call site"
+            )
         }
     }
 }

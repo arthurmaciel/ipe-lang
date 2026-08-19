@@ -417,3 +417,84 @@ main =
         let _ = fs::remove_dir_all(parent);
     }
 }
+
+/// A wildcard-`any` parameter RELAYED straight into a callee that reads it as a
+/// field (`relay x = getField x`), then `relay` called at a concrete record.
+/// `relay`'s own body never field-reads `x`, so `x` stays a bare `T{n}: Clone`
+/// generic — but `getField` requires an `IpeHasName` witness bound the bare
+/// generic cannot satisfy. Emitting that Rust fails cargo E0277
+/// (accept-then-`cargo`-fail — THE SEAL). The relay must be rejected at `ipe`
+/// time (IPE-L0131), never emitted. Instantiating `relay` at a concrete type is
+/// essential: the unsatisfiable bound only surfaces once rustc monomorphises.
+#[test]
+fn any_param_relayed_into_row_callee_is_rejected() {
+    let entry = write_entry(
+        "relay_row_callee",
+        "\
+module Main exposing (main)
+import Ipe.Io as Io
+
+getField : any -> String
+getField p =
+    p.name
+
+relay : any -> String
+relay x =
+    getField x
+
+main : Task Error ()
+main =
+    Io.println (relay { name = \"Ada\" })
+",
+    );
+    let (built, _out) = emit(&entry, "relay_row_callee");
+    assert!(
+        built.is_err(),
+        "an `any` param relayed into a field-reading callee cannot satisfy the \
+         callee's row-witness bound and must be rejected at `ipe` time, never \
+         emitted as Rust that fails cargo E0277"
+    );
+    if let Some(parent) = entry.parent() {
+        let _ = fs::remove_dir_all(parent);
+    }
+}
+
+/// A wildcard-`any` parameter passed as a CALL ARGUMENT to a field-reading
+/// callee (`firstName p = snd p p` where `snd a b = a.name`), then `firstName`
+/// called at a concrete record. `p` stays a bare generic in `firstName` and
+/// flows into `snd`'s `IpeHasName`-bounded slot — the emitted Rust fails cargo
+/// E0277. Must be rejected at `ipe` time (IPE-L0131). The call site forces
+/// monomorphisation, which is where the unsatisfiable bound would otherwise
+/// surface.
+#[test]
+fn any_param_in_call_arg_position_is_rejected_when_called() {
+    let entry = write_entry(
+        "callarg_row_callee",
+        "\
+module Main exposing (main)
+import Ipe.Io as Io
+
+snd : any -> any -> String
+snd a b =
+    a.name
+
+firstName : any -> String
+firstName p =
+    snd p p
+
+main : Task Error ()
+main =
+    Io.println (firstName { name = \"Ada\" })
+",
+    );
+    let (built, _out) = emit(&entry, "callarg_row_callee");
+    assert!(
+        built.is_err(),
+        "an `any` param in call-arg position of a field-reading callee cannot \
+         satisfy the callee's row-witness bound and must be rejected at `ipe` \
+         time, never emitted as Rust that fails cargo E0277"
+    );
+    if let Some(parent) = entry.parent() {
+        let _ = fs::remove_dir_all(parent);
+    }
+}
