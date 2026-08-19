@@ -6,8 +6,8 @@
 mod ast;
 
 pub use ast::{
-    Ctor, Exposed, Exposing, Expr, Expr_, Import, LetBinding, Module, Pattern, Pattern_, Privacy,
-    TypeAlias, TypeAnnotation, Union, Value, strip_anchor_margin,
+    Ctor, DocString, Exposed, Exposing, Expr, Expr_, Import, LetBinding, Module, Pattern, Pattern_,
+    Privacy, TypeAlias, TypeAnnotation, Union, Value, strip_anchor_margin,
 };
 
 #[cfg(test)]
@@ -57,6 +57,7 @@ mod tests {
                     args: Vec::new(),
                 }),
             ],
+            doc: None,
         };
 
         // update : Msg -> Int -> Int
@@ -92,6 +93,7 @@ mod tests {
             patterns: vec![loc(Pattern_::PVar(msg_arg)), loc(Pattern_::PVar(count))],
             body: update_body,
             type_annotation: Some(loc(ty)),
+            doc: None,
         };
 
         // main = Io.println (String.fromInt (update Increment 0))
@@ -112,6 +114,7 @@ mod tests {
             patterns: Vec::new(),
             body: main_body,
             type_annotation: None,
+            doc: None,
         };
 
         let main_mod = i.intern("Main")?;
