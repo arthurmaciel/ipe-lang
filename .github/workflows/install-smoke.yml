@@ -52,7 +52,7 @@ jobs:
           # Git Bash on Windows installs ipe.exe; resolve either name.
           bin="$IPE_INSTALL_DIR/ipe"
           [ -x "$bin" ] || bin="$bin.exe"
-          "$bin" --version
+          "$bin" version
           # Replicate the `ipe upgrade` self-updater: --dry-run must print the same
           # one-liner, pointing at the root install.sh on main.
           "$bin" upgrade --dry-run | grep -F "/main/install.sh"
@@ -73,5 +73,5 @@ jobs:
             set -eu
             export IPE_INSTALL_DIR="$HOME/ipe-smoke"
             cat install.sh | sh
-            "$IPE_INSTALL_DIR/ipe" --version
+            "$IPE_INSTALL_DIR/ipe" version
             "$IPE_INSTALL_DIR/ipe" upgrade --dry-run | grep -F "/main/install.sh"

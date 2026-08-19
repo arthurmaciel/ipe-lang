@@ -75,7 +75,7 @@ jobs:
           chmod +x dist/* || true
       - name: Smoke-test
         shell: bash
-        run: ./dist/ipe${{ matrix.ext }} --version
+        run: ./dist/ipe${{ matrix.ext }} version
       - name: Package
         shell: bash
         run: |
@@ -107,7 +107,7 @@ jobs:
           prepare: pkg install -y rust
           run: |
             cargo build --release -p ipe -p ipe-ffi-inspector
-            ./target/release/ipe --version
+            ./target/release/ipe version
             mkdir -p dist
             cp target/release/ipe dist/ipe
             cp target/release/ipe-ffi-inspector dist/ipe-ffi-inspector
