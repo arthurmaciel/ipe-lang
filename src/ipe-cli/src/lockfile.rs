@@ -19,9 +19,10 @@ use crate::index::PinnedRev;
 /// The lockfile's filename at a project root.
 const LOCKFILE_NAME: &str = "ipe.lock";
 
-/// Whether a locked dependency came from the package index or a `{git=}`/`{path=}`
-/// escape. Set once at parse/construction and carried through the lockfile
-/// round-trip so callers never re-derive it from field shapes.
+/// Whether a locked dependency came from the package index or a `{git=}`/`{path=}` escape.
+///
+/// Set once at parse/construction and carried through the lockfile round-trip so
+/// callers never re-derive it from field shapes.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum DepKind {
     /// Resolved through the package index.
@@ -32,18 +33,18 @@ pub enum DepKind {
 
 impl DepKind {
     /// The on-disk keyword for this variant.
-    fn as_str(&self) -> &'static str {
+    const fn as_str(&self) -> &'static str {
         match self {
-            DepKind::Index => "index",
-            DepKind::Escape => "escape",
+            Self::Index => "index",
+            Self::Escape => "escape",
         }
     }
 
     /// Parse the on-disk keyword, failing closed on an unrecognised value.
     fn from_str(raw: &str) -> Result<Self, CliError> {
         match raw {
-            "index" => Ok(DepKind::Index),
-            "escape" => Ok(DepKind::Escape),
+            "index" => Ok(Self::Index),
+            "escape" => Ok(Self::Escape),
             other => Err(CliError::Resolve(format!(
                 "ipe.lock: unrecognised `kind` value {other:?} — re-run `ipe add` to regenerate"
             ))),
@@ -63,10 +64,11 @@ pub enum LockedRev {
 
 impl LockedRev {
     /// The on-disk string for this value.
+    #[must_use]
     pub fn as_str(&self) -> &str {
         match self {
-            LockedRev::Pinned(p) => p.as_str(),
-            LockedRev::Local => "local",
+            Self::Pinned(p) => p.as_str(),
+            Self::Local => "local",
         }
     }
 
@@ -74,17 +76,17 @@ impl LockedRev {
     /// `Pinned`; anything else → fail closed.
     fn from_stored(pkg: &str, raw: &str) -> Result<Self, CliError> {
         if raw == "local" {
-            return Ok(LockedRev::Local);
+            return Ok(Self::Local);
         }
         PinnedRev::from_full_sha(pkg, raw).map(LockedRev::Pinned)
     }
 
     /// Return the inner [`PinnedRev`] if this is a `Pinned` rev.
     #[must_use]
-    pub fn as_pinned(&self) -> Option<&PinnedRev> {
+    pub const fn as_pinned(&self) -> Option<&PinnedRev> {
         match self {
-            LockedRev::Pinned(p) => Some(p),
-            LockedRev::Local => None,
+            Self::Pinned(p) => Some(p),
+            Self::Local => None,
         }
     }
 }
