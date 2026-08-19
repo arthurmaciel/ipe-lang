@@ -10,6 +10,14 @@ Entries below the header are maintained by
 section is generated from Conventional Commit messages and prepended when the
 standing release pull request is merged.
 
+## [0.1.65](https://github.com/arthurmaciel/ipe-lang/compare/ipe-v0.1.64...ipe-v0.1.65) (2026-08-19)
+
+
+### Bug Fixes
+
+* **cli:** route HOME-unset ffi scratch through ScratchDir; widen the predictable-temp_dir gate (closes [#1155](https://github.com/arthurmaciel/ipe-lang/issues/1155)) ([#1190](https://github.com/arthurmaciel/ipe-lang/issues/1190)) ([fcb4d35](https://github.com/arthurmaciel/ipe-lang/commit/fcb4d35e4614d09d381a1296e46589a5784cf5eb))
+* **runtime,backend:** wrapping negate + polymorphic Number-a arithmetic so no emitted Int op panics (closes [#1146](https://github.com/arthurmaciel/ipe-lang/issues/1146)) ([#1195](https://github.com/arthurmaciel/ipe-lang/issues/1195)) ([2adedfc](https://github.com/arthurmaciel/ipe-lang/commit/2adedfc8f56b0ffb2567310ac7a50e01f46c186c))
+
 ## [0.1.64](https://github.com/arthurmaciel/ipe-lang/compare/ipe-v0.1.63...ipe-v0.1.64) (2026-08-19)
 
 
