@@ -24,9 +24,10 @@ use crate::code::{
     IPE_N0038, IPE_N0039, IPE_N0040, IPE_N0041, IPE_N0042, IPE_P0001, IPE_P0002, IPE_P0003,
     IPE_P0010, IPE_P0011, IPE_P0012, IPE_P0013, IPE_P0014, IPE_P0015, IPE_P0016, IPE_P0017,
     IPE_P0018, IPE_P0020, IPE_P0021, IPE_P0030, IPE_P0031, IPE_P0040, IPE_P0041, IPE_P0050,
-    IPE_P0060, IPE_P0061, IPE_P0062, IPE_P0063, IPE_P0064, IPE_P0065, IPE_S0001, IPE_T0001,
-    IPE_T0002, IPE_T0003, IPE_T0004, IPE_T0010, IPE_T0011, IPE_T0012, IPE_T0013, IPE_T0014,
-    IPE_T0015, IPE_T0016, IPE_T0017, IPE_T0018, IPE_T0019, IPE_T0020, Severity,
+    IPE_P0060, IPE_P0061, IPE_P0062, IPE_P0063, IPE_P0064, IPE_P0065, IPE_P0066, IPE_P0067,
+    IPE_S0001, IPE_T0001, IPE_T0002, IPE_T0003, IPE_T0004, IPE_T0010, IPE_T0011, IPE_T0012,
+    IPE_T0013, IPE_T0014, IPE_T0015, IPE_T0016, IPE_T0017, IPE_T0018, IPE_T0019, IPE_T0020,
+    Severity,
 };
 use crate::span::Span;
 
@@ -402,6 +403,16 @@ pub enum ParseError {
     /// Use `let … in` for pure bindings; lift with `Task.succeed` if a `Task`
     /// result is genuinely needed. [IPE-P0065]
     SteplessDo,
+    /// A doc-string (`{-| … -}`) is attached to a non-exported binding.
+    ///
+    /// Only exported symbols are reachable by doc-tooling; a doc-string on an
+    /// unexported binding is unreachable and is likely misplaced. **Warning** —
+    /// the program still compiles. [IPE-P0066]
+    DocOnUnexported { name: Box<str> },
+    /// An exported symbol has no doc-string. Emitted only when the opt-in lint
+    /// (`--lint missing-docs`) is enabled; off by default. **Warning** — the
+    /// program still compiles. [IPE-P0067]
+    MissingDocString { name: Box<str> },
 }
 
 /// Errors raised during name resolution / canonicalisation.
@@ -1549,6 +1560,10 @@ impl Diagnostic {
     #[must_use]
     pub const fn severity(&self) -> Severity {
         match self {
+            Self::Parse {
+                msg: ParseError::DocOnUnexported { .. } | ParseError::MissingDocString { .. },
+                ..
+            } => Severity::Warning,
             Self::Parse { .. }
             | Self::Name { .. }
             | Self::Ffi { .. }
@@ -1647,6 +1662,8 @@ const fn parse_code(msg: &ParseError) -> Code {
         ParseError::MalformedIf(_) => IPE_P0062,
         ParseError::InvalidPathLiteral { .. } => IPE_P0063,
         ParseError::SteplessDo => IPE_P0065,
+        ParseError::DocOnUnexported { .. } => IPE_P0066,
+        ParseError::MissingDocString { .. } => IPE_P0067,
     }
 }
 
@@ -1815,7 +1832,9 @@ fn parse_help(msg: &ParseError) -> Vec<HelpLine> {
         | ParseError::MalformedLet(_)
         | ParseError::MalformedIf(_)
         | ParseError::InvalidPathLiteral { .. }
-        | ParseError::SteplessDo => Vec::new(),
+        | ParseError::SteplessDo
+        | ParseError::DocOnUnexported { .. }
+        | ParseError::MissingDocString { .. } => Vec::new(),
     }
 }
 

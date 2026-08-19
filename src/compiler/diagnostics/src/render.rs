@@ -371,6 +371,15 @@ fn parse_prose(msg: &ParseError) -> String {
              pure code dressed as a `do`. Use `let … in` for pure bindings instead."
                 .to_string()
         }
+        ParseError::DocOnUnexported { name } => {
+            format!(
+                "This doc-string is on `{name}`, which is not exported — \
+                 it can never appear in generated documentation."
+            )
+        }
+        ParseError::MissingDocString { name } => {
+            format!("`{name}` is exported but has no doc-string.")
+        }
         ParseError::Unexpected => "I couldn't make sense of this part of the file.".to_string(),
     }
 }
@@ -1186,7 +1195,11 @@ fn parse_label(msg: &ParseError) -> Option<String> {
             };
             Some(detail)
         }
-        ParseError::Unexpected | ParseError::TooDeep | ParseError::SteplessDo => None,
+        ParseError::Unexpected
+        | ParseError::TooDeep
+        | ParseError::SteplessDo
+        | ParseError::DocOnUnexported { .. }
+        | ParseError::MissingDocString { .. } => None,
     }
 }
 

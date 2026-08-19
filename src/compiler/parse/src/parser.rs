@@ -28,8 +28,8 @@ use ipe_diagnostics::{
 };
 use ipe_intern::{Interner, Symbol};
 use ipe_syntax::{
-    Ctor, Exposed, Exposing, Expr, Expr_, Import, LetBinding, Module, Pattern, Pattern_, Privacy,
-    TypeAlias, TypeAnnotation, Union, Value,
+    Ctor, DocString, Exposed, Exposing, Expr, Expr_, Import, LetBinding, Module, Pattern, Pattern_,
+    Privacy, TypeAlias, TypeAnnotation, Union, Value,
 };
 
 use crate::layout;
@@ -57,11 +57,15 @@ type AssembledDecls = (
 enum Decl {
     Union(Located<Union>),
     Alias(Located<TypeAlias>),
-    Annotation(Symbol, Located<TypeAnnotation>),
+    /// A standalone `name : T` type annotation line. Carries the doc-string
+    /// that preceded it (if any) so `assemble` can forward it to the matching
+    /// value binding — the common case is `{-| doc -}\nname : T\nname = …`.
+    Annotation(Symbol, Located<TypeAnnotation>, Option<DocString>),
     Value {
         name: Located<Symbol>,
         patterns: Vec<Pattern>,
         body: Expr,
+        doc: Option<DocString>,
     },
 }
 
@@ -84,7 +88,10 @@ const fn tok_kind(t: &Tok) -> TokenKind {
         Tok::Do => TokenKind::Do,
         Tok::LParen => TokenKind::LParen,
         Tok::RParen => TokenKind::RParen,
-        Tok::LBrace => TokenKind::LBrace,
+        // Doc-comments are consumed by `parse_decl` before any other dispatch;
+        // if one appears in expression/type position the generic
+        // `UnexpectedToken` path handles it via this `LBrace` mapping.
+        Tok::LBrace | Tok::DocComment(_) => TokenKind::LBrace,
         Tok::RBrace => TokenKind::RBrace,
         Tok::LBracket => TokenKind::LBracket,
         Tok::RBracket => TokenKind::RBracket,
@@ -326,14 +333,34 @@ impl<'a> Parser<'a> {
         }
         let exposing = self.parse_exposing()?;
 
+        // Imports may be preceded by a `{-| … -}` doc-comment. One before an
+        // `import` documents the module, not the import, and is dropped; one
+        // before a declaration is carried in `pending_doc` and attaches to it.
+        // At most one doc-comment is consumed here per position — a second
+        // consecutive doc-comment breaks out so `parse_decl` reports it as an
+        // unexpected token rather than silently swallowing it.
         let mut imports = Vec::new();
-        while self.peek_kind() == Some(&Tok::Import) {
-            imports.push(self.parse_import()?);
+        let mut pending_doc: Option<DocString> = None;
+        loop {
+            let is_doc = matches!(self.peek_kind(), Some(Tok::DocComment(_)));
+            let is_import = self.peek_kind() == Some(&Tok::Import);
+            if is_import {
+                pending_doc = None;
+                imports.push(self.parse_import()?);
+            } else if is_doc && pending_doc.is_none() {
+                let tok = self.bump(Construct::ModuleHeader)?;
+                if let Tok::DocComment(raw) = tok.kind {
+                    pending_doc = Some(DocString::from_raw(&raw));
+                }
+            } else {
+                break;
+            }
         }
 
         let mut decls = Vec::new();
+        let mut first_doc = pending_doc.take();
         while self.peek().is_some() {
-            decls.push(self.parse_decl()?);
+            decls.push(self.parse_decl(first_doc.take())?);
         }
 
         let header_span = Self::span_merge(module_tok.span, name.span);
@@ -352,23 +379,26 @@ impl<'a> Parser<'a> {
     fn assemble(decls: Vec<Decl>) -> AssembledDecls {
         let mut unions = Vec::new();
         let mut aliases = Vec::new();
-        let mut annotations: Vec<(Symbol, Located<TypeAnnotation>)> = Vec::new();
+        let mut annotations: Vec<(Symbol, Located<TypeAnnotation>, Option<DocString>)> = Vec::new();
         let mut values = Vec::new();
         for d in decls {
             match d {
                 Decl::Union(u) => unions.push(u),
                 Decl::Alias(a) => aliases.push(a),
-                Decl::Annotation(name, ty) => annotations.push((name, ty)),
+                Decl::Annotation(name, ty, doc) => annotations.push((name, ty, doc)),
                 Decl::Value {
                     name,
                     patterns,
                     body,
+                    doc,
                 } => {
-                    let type_annotation = annotations
-                        .iter()
-                        .rev()
-                        .find(|(n, _)| *n == name.value)
-                        .map(|(_, ty)| ty.clone());
+                    let matched_ann = annotations.iter().rev().find(|(n, _, _)| *n == name.value);
+                    let type_annotation = matched_ann.map(|(_, ty, _)| ty.clone());
+                    // When the value has no inline doc but a preceding
+                    // annotation carried one (the `{-| … -}\nname : T\nname
+                    // = …` pattern), inherit the annotation's doc.
+                    let effective_doc =
+                        doc.or_else(|| matched_ann.and_then(|(_, _, ann_doc)| ann_doc.clone()));
                     let span = name.span;
                     values.push(Located::new(
                         span,
@@ -377,6 +407,7 @@ impl<'a> Parser<'a> {
                             patterns,
                             body,
                             type_annotation,
+                            doc: effective_doc,
                         },
                     ));
                 }
@@ -608,15 +639,42 @@ impl<'a> Parser<'a> {
 
     // ---- declarations -----------------------------------------------------
 
-    fn parse_decl(&mut self) -> DResult<Decl> {
+    fn parse_decl(&mut self, pre_doc: Option<DocString>) -> DResult<Decl> {
+        // A `{-| … -}` doc-comment immediately preceding a declaration (no
+        // blank line between them, enforced by the lexer emitting the token
+        // only when immediately adjacent at the source level) attaches to that
+        // declaration. `pre_doc` carries one the caller already consumed in the
+        // import region that turned out to precede a declaration rather than an
+        // `import`; otherwise the doc-comment is consumed here.
+        let doc = if pre_doc.is_some() {
+            pre_doc
+        } else if let Some(Token {
+            kind: Tok::DocComment(_),
+            ..
+        }) = self.peek()
+        {
+            let tok = self.bump(Construct::Definition)?;
+            if let Tok::DocComment(raw) = tok.kind {
+                Some(DocString::from_raw(&raw))
+            } else {
+                None
+            }
+        } else {
+            None
+        };
+
         if self.peek_kind() == Some(&Tok::Type) {
             // `type alias …` and `type …` (a union) share the `type` keyword; the
             // disambiguator is the soft keyword `alias` (a plain identifier) in
             // the next slot.
             if self.peek_is_alias_keyword() {
-                return self.parse_type_alias().map(Decl::Alias);
+                let mut alias = self.parse_type_alias()?;
+                alias.value.doc = doc;
+                return Ok(Decl::Alias(alias));
             }
-            return self.parse_union().map(Decl::Union);
+            let mut union = self.parse_union()?;
+            union.value.doc = doc;
+            return Ok(Decl::Union(union));
         }
         let tok = self.bump(Construct::Definition)?;
         let Tok::Ident(text) = &tok.kind else {
@@ -630,7 +688,10 @@ impl<'a> Parser<'a> {
         if self.peek_kind() == Some(&Tok::Colon) {
             self.bump(Construct::Definition)?; // :
             let ty = self.parse_type(name_col, 0)?;
-            return Ok(Decl::Annotation(name_sym, ty));
+            // Forward the doc-string through the annotation so `assemble` can
+            // attach it to the matching value binding (the common pattern is
+            // `{-| doc -}\nname : T\nname = …`).
+            return Ok(Decl::Annotation(name_sym, ty, doc));
         }
 
         let mut patterns = Vec::new();
@@ -665,6 +726,7 @@ impl<'a> Parser<'a> {
             name,
             patterns,
             body,
+            doc,
         })
     }
 
@@ -738,7 +800,15 @@ impl<'a> Parser<'a> {
 
         let body = self.parse_type(alias_col, 0)?;
         let span = Self::span_merge(type_tok.span, body.span);
-        Ok(Located::new(span, TypeAlias { name, vars, body }))
+        Ok(Located::new(
+            span,
+            TypeAlias {
+                name,
+                vars,
+                body,
+                doc: None,
+            },
+        ))
     }
 
     fn parse_union(&mut self) -> DResult<Located<Union>> {
@@ -802,7 +872,15 @@ impl<'a> Parser<'a> {
         }
         let last_span = ctors.last().map_or(name.span, |c| c.span);
         let span = Self::span_merge(type_tok.span, last_span);
-        Ok(Located::new(span, Union { name, vars, ctors }))
+        Ok(Located::new(
+            span,
+            Union {
+                name,
+                vars,
+                ctors,
+                doc: None,
+            },
+        ))
     }
 
     fn parse_ctor(&mut self, threshold: u32) -> DResult<Located<Ctor>> {
