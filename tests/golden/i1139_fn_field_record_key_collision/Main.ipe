@@ -1,0 +1,24 @@
+module Main exposing (main)
+
+import Ipe.Io as Io
+import Ipe.String
+
+
+-- A top-level signature carries a record whose field-NAME set is {run} but whose
+-- field TYPE is a non-function (`Int`). The backend registers a `{ run : i64 }`
+-- struct for this shape.
+useIt : { run : Int } -> Int
+useIt r =
+    r.run
+
+
+main =
+    let
+        -- A let-bound record literal with the SAME field-name set {run} but a
+        -- FUNCTION field. A field-NAME-only coverage check would wrongly treat
+        -- this as covered by `useIt`'s signature and emit an `Arc<dyn Fn>` value
+        -- into the `i64` field the backend registered -- accept-then-cargo-E0308.
+        -- The TYPE-aware gate must reject with IPE-L0107 at ipe-time instead.
+        rec = { run = \n -> n + 1 }
+    in
+    Io.println (String.fromInt ((rec.run) 41))

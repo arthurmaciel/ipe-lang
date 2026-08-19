@@ -1,0 +1,15 @@
+module Main exposing (main)
+
+import Ipe.Io as Io
+
+
+-- A let-bound record literal with a bare function field and no type annotation.
+-- The record shape never appears in any function signature, so the backend's
+-- struct-synthesis path (from `func.params` / `func.ret`) would not register a
+-- struct for it. Without the IPE-L0107 gate this reaches `record_struct_by_key`
+-- with no registered struct and produces IPE-I0001. The gate must fire FIRST.
+main =
+    let
+        rec = { shouldRetry = \n -> n + 1 }
+    in
+    Io.println "unreached"

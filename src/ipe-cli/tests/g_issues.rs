@@ -14,6 +14,8 @@ mod golden_i1005_store_list_query_seal;
 mod golden_i101_color_seal;
 #[path = "g_issues/golden_i104_seal.rs"]
 mod golden_i104_seal;
+#[path = "g_issues/golden_i1139_fn_field_record_literal.rs"]
+mod golden_i1139_fn_field_record_literal;
 #[path = "g_issues/golden_i119_list_batch_seal.rs"]
 mod golden_i119_list_batch_seal;
 #[path = "g_issues/golden_i121_curried_seal.rs"]
