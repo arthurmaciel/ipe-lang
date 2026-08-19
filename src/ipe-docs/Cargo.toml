@@ -4,6 +4,10 @@ edition.workspace = true
 version.workspace = true
 license.workspace = true
 
+[[bin]]
+name = "gen-stdlib-docs"
+path = "src/bin/gen_stdlib_docs.rs"
+
 [dependencies]
 ipe_intern    = { path = "../compiler/intern" }
 ipe_syntax    = { path = "../compiler/syntax" }
