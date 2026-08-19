@@ -9,21 +9,18 @@
 #
 # This gate replaces the "re-mirror everything" behaviour that examples-sweep.yml
 # performed on PRs.  examples-sweep.yml now runs post-merge / nightly only.
+#
+# The workflow triggers on every PR (no paths: filter on the trigger) so that
+# a check-run named "sky-ports offline gate" is always produced and can be
+# listed as a required branch-protection check.  A dorny/paths-filter step
+# determines whether the heavy work is needed; steps that are not relevant
+# to the changed paths are skipped, and the job exits green via the no-op step.
 # ─────────────────────────────────────────────────────────────────────────────
 name: sky-ports offline gate
 
 on:
   pull_request:
-    paths:
-      - 'examples/sky/**'
-      - 'src/**'
-      - 'tools/scripts/lib/sky-to-ipe-transform.py'
-      - 'tools/scripts/lib/apply-ipe-edits.py'
-      - 'tools/scripts/lib/mirror.sh'
-      - 'tools/scripts/regen-sky-examples.sh'
-      - 'tools/scripts/check-sky-ports.sh'
-      - 'tools/scripts/lib/checks.sh'
-      - 'tools/scripts/lib/examples.sh'
+  workflow_dispatch: {}
 
 concurrency:
   group: sky-ports-gate-${{ github.ref }}
@@ -48,7 +45,23 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
+      - uses: dorny/paths-filter@v3
+        id: filter
+        with:
+          filters: |
+            relevant:
+              - 'examples/sky/**'
+              - 'src/**'
+              - 'tools/scripts/lib/sky-to-ipe-transform.py'
+              - 'tools/scripts/lib/apply-ipe-edits.py'
+              - 'tools/scripts/lib/mirror.sh'
+              - 'tools/scripts/regen-sky-examples.sh'
+              - 'tools/scripts/check-sky-ports.sh'
+              - 'tools/scripts/lib/checks.sh'
+              - 'tools/scripts/lib/examples.sh'
+
       - name: Free disk space
+        if: steps.filter.outputs.relevant == 'true'
         run: |
           df -h /
           sudo rm -rf /usr/share/dotnet /usr/local/lib/android /usr/share/swift || true
@@ -58,8 +71,10 @@ jobs:
           df -h /
 
       - uses: dtolnay/rust-toolchain@stable
+        if: steps.filter.outputs.relevant == 'true'
 
       - name: Cache cargo target
+        if: steps.filter.outputs.relevant == 'true'
         uses: actions/cache@v6
         with:
           path: |
@@ -71,13 +86,21 @@ jobs:
             ${{ runner.os }}-sweep-cargo-
 
       - name: Install ripgrep
+        if: steps.filter.outputs.relevant == 'true'
         run: sudo apt-get install -y ripgrep
 
       - name: Build ipe
+        if: steps.filter.outputs.relevant == 'true'
         run: cargo build --release -p ipe
 
       - name: Pre-warm runtime deps
+        if: steps.filter.outputs.relevant == 'true'
         run: cargo build -p ipe-runtime-rust || cargo build --workspace || true
 
       - name: Offline ports gate (consistency + build + run)
+        if: steps.filter.outputs.relevant == 'true'
         run: bash tools/scripts/check-sky-ports.sh
+
+      - name: No sky-ports-relevant paths changed
+        if: steps.filter.outputs.relevant != 'true'
+        run: echo "No sky-ports-relevant paths changed; gate is a no-op for this PR."
