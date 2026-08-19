@@ -957,6 +957,67 @@ fn generic_binding_breaks_clone(interner: &Interner, ty: &Ty) -> bool {
     }
 }
 
+/// Does `ty` (or any type nested within it) contain a record whose set of
+/// field-name [`Symbol`]s equals `keys`?
+///
+/// Used by [`Lowerer::fn_field_record_covered_by_signature`] to determine
+/// whether a function-field record literal's shape appears in at least one
+/// top-level binding's inferred type — the condition under which the backend's
+/// signature scan will register the struct, making a separate
+/// [`collect_records_in_ty`] registration unnecessary.
+fn ty_contains_record_key_set(ty: &Ty, keys: &BTreeSet<Symbol>) -> bool {
+    match ty {
+        Ty::Record(fields, _) => {
+            if fields.len() == keys.len() && fields.keys().all(|k| keys.contains(k)) {
+                return true;
+            }
+            fields.values().any(|f| ty_contains_record_key_set(f, keys))
+        }
+        Ty::Fun(a, b) => ty_contains_record_key_set(a, keys) || ty_contains_record_key_set(b, keys),
+        Ty::Tuple(elems) => elems.iter().any(|e| ty_contains_record_key_set(e, keys)),
+        Ty::Con { args, .. } => args.iter().any(|a| ty_contains_record_key_set(a, keys)),
+        Ty::Var(_) | Ty::Unit => false,
+    }
+}
+
+/// Does `ty` (or any type nested within it) contain a record whose field-name
+/// set equals `keys`?  Mirrors [`ty_contains_record_key_set`] for the
+/// canonical [`canon::Type`] used in union constructor payload declarations —
+/// so the gate can check whether a function-field record shape is covered by an
+/// ADT constructor and will therefore be registered by the backend's enum
+/// variant field scan (`collect_record_shapes` over `module.types`).
+fn canon_type_contains_record_key_set(ty: &canon::Type, keys: &BTreeSet<Symbol>) -> bool {
+    match ty {
+        canon::Type::Record(fields) => {
+            let field_names: BTreeSet<Symbol> = fields.iter().map(|(sym, _)| *sym).collect();
+            if field_names == *keys {
+                return true;
+            }
+            fields
+                .iter()
+                .any(|(_, ft)| canon_type_contains_record_key_set(ft, keys))
+        }
+        canon::Type::Lambda(a, b) => {
+            canon_type_contains_record_key_set(a, keys)
+                || canon_type_contains_record_key_set(b, keys)
+        }
+        canon::Type::Tuple(elems) => elems
+            .iter()
+            .any(|e| canon_type_contains_record_key_set(e, keys)),
+        canon::Type::Con { args, .. } => args
+            .iter()
+            .any(|a| canon_type_contains_record_key_set(a, keys)),
+        canon::Type::RecordOpen(_, fields) => {
+            let field_names: BTreeSet<Symbol> = fields.iter().map(|(sym, _)| *sym).collect();
+            field_names == *keys
+                || fields
+                    .iter()
+                    .any(|(_, ft)| canon_type_contains_record_key_set(ft, keys))
+        }
+        canon::Type::Var(_) | canon::Type::Unit => false,
+    }
+}
+
 /// Match a declared signature-template type against the solved (monomorphic)
 /// type it was instantiated to at a use site, recording each template type
 /// variable's binding in `subst`. Structural, one arm per [`Ty`] shape; a
@@ -15913,6 +15974,44 @@ impl<'a> Lowerer<'a> {
         Ok(())
     }
 
+    /// Does the given field-name set appear in any location the backend's struct
+    /// registry scans?
+    ///
+    /// The backend registers record shapes from three sources:
+    ///
+    /// 1. Function signatures (`func.params` / `func.ret`) — covered by scanning
+    ///    [`SolvedTypes::env`] for the field-name set via [`ty_contains_record_key_set`].
+    /// 2. Enum variant payload field types (`module.types`) — covered by scanning
+    ///    each union's constructor args via [`canon_type_contains_record_key_set`].
+    /// 3. [`collect_records_in_ty`] over `module.records` (the lowerer's own
+    ///    record-shape table) — the G-b gate skips function-field records here,
+    ///    which is the gap this gate closes.
+    ///
+    /// If the field-name set is absent from both (1) and (2), the backend has no
+    /// path to register the struct, and `record_struct_by_key` will ICE
+    /// (IPE-I0001). This predicate returns `true` when at least one of (1)/(2)
+    /// covers the shape, so the caller's IPE-L0107 gate fires only for the
+    /// genuinely-unregistered cases.
+    fn fn_field_record_covered_by_signature(&self, field_names: &BTreeSet<Symbol>) -> bool {
+        // Source (1): function signatures in env.
+        if self
+            .types
+            .env
+            .values()
+            .any(|ty| ty_contains_record_key_set(ty, field_names))
+        {
+            return true;
+        }
+        // Source (2): enum variant payload field types.
+        self.m.unions.iter().any(|u| {
+            u.ctors.iter().any(|ctor| {
+                ctor.args
+                    .iter()
+                    .any(|arg| canon_type_contains_record_key_set(arg, field_names))
+            })
+        })
+    }
+
     /// Reject a function value that instantiates a top-level callee's declared
     /// *type variable* (a generic slot), which the region-based gate cannot see.
     ///
@@ -16420,6 +16519,44 @@ impl<'a> Lowerer<'a> {
                 tail: Box::new(self.lower_expr(tail)?),
             }),
             canon::Expr_::Record(fields) => {
+                // Gate: reject a record literal whose solved type has a bare
+                // function field AND whose field-name set is not covered by any
+                // top-level function signature.
+                //
+                // A record with bare `Ty::Fun` fields is stored via the
+                // `Arc<dyn Fn>` (`SharedFun`) carrier on the TYPE side and the
+                // `Arc::new` (`SharedLambda`) carrier on the VALUE side. The
+                // backend's `collect_record_shapes` registers the struct from
+                // function signatures — `func.params` / `func.ret`. A record that
+                // appears only in a let binding inside a function body (never in
+                // any top-level binding's type) has no registration path: the
+                // lowerer's `collect_records_in_ty` G-b gate skips it, and no
+                // signature scan covers it. Emitting the literal would reach
+                // `record_struct_by_key` with no registered struct → IPE-I0001.
+                //
+                // Emit IPE-L0107 here instead. The check runs on the SOLVED region
+                // type (`Ty::Record` with any bare `Ty::Fun` field) so it catches
+                // every surface form — inline lambda, let-bound function reference,
+                // or a function produced by a call — without enumerating value
+                // syntax. The kernel `RetryPolicy` shape is exempt: it is
+                // registered via `retry_policy_concrete_ir` and has a dedicated
+                // emitter. Records whose field-name set appears in a top-level env
+                // type are likewise exempt: the backend will register them from the
+                // function signature.
+                //
+                // App-entry cfg records (Web.app / Terminal.appScreen / …) are
+                // exempt by construction: they are lowered through
+                // `lower_app_cfg_record`, which intentionally bypasses this arm.
+                if let Some(rec_ty) = self.region_ty(e.span)
+                    && let Ty::Record(rec_fields, _) = rec_ty
+                    && !is_retry_policy_record(self.interner, rec_ty)
+                    && rec_fields.values().any(|f| matches!(f, Ty::Fun(_, _)))
+                {
+                    let field_names: BTreeSet<Symbol> = rec_fields.keys().copied().collect();
+                    if !self.fn_field_record_covered_by_signature(&field_names) {
+                        return Err(unsupported(e.span, Feature::FirstClassFunctions));
+                    }
+                }
                 // A record literal lowers field-wise. The IR carries fields in
                 // field-NAME order (the backend names struct-literal fields, so
                 // write order is free), making the lowering deterministic
