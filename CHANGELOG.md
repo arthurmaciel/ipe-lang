@@ -10,6 +10,15 @@ Entries below the header are maintained by
 section is generated from Conventional Commit messages and prepended when the
 standing release pull request is merged.
 
+## [0.1.63](https://github.com/arthurmaciel/ipe-lang/compare/ipe-v0.1.62...ipe-v0.1.63) (2026-08-19)
+
+
+### Bug Fixes
+
+* **backend:** force ct_eq into the emitted runtime module set alongside crypto_core/secret ([#1179](https://github.com/arthurmaciel/ipe-lang/issues/1179)) ([3b92be5](https://github.com/arthurmaciel/ipe-lang/commit/3b92be5f5fa6dab636f6ab6a22832f4a011df9d8))
+* **release:** smoke-tests call the ipe version subcommand, not a --version flag ([#1183](https://github.com/arthurmaciel/ipe-lang/issues/1183)) ([ed27033](https://github.com/arthurmaciel/ipe-lang/commit/ed27033b25df3d059acc3df9352f14a9d192fbc2))
+* **stdlib:** scrub reference-implementation leaks + add fail-closed leak gate (closes [#1134](https://github.com/arthurmaciel/ipe-lang/issues/1134)) ([#1182](https://github.com/arthurmaciel/ipe-lang/issues/1182)) ([2f588e5](https://github.com/arthurmaciel/ipe-lang/commit/2f588e5cf99b22e3af465ac91f34bb7d03fe2be4))
+
 ## [0.1.62](https://github.com/arthurmaciel/ipe-lang/compare/ipe-v0.1.61...ipe-v0.1.62) (2026-08-19)
 
 
