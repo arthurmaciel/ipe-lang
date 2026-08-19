@@ -603,30 +603,21 @@ fn inspector_binary() -> Result<PathBuf, CliError> {
 }
 
 /// A per-invocation scratch directory under the sanctioned write-boundary
-/// root (`~/.cache/ipe/ffi-scratch/`), created with a randomized name and
-/// `create_dir` (NOT `create_dir_all`) so a pre-existing path — a planted
-/// symlink or dir — makes creation FAIL. `/tmp` is never used: it is
-/// world-writable (a symlink-swap race) and outside the write-boundary.
+/// root (`~/.cache/ipe/ffi-scratch/`), created with an unpredictable name via
+/// 128-bit OS entropy and exclusive-create semantics so a pre-seeded symlink or
+/// directory causes failure rather than reuse.  `/tmp` is never used: it is
+/// world-writable and outside the write-boundary.  HOME must be set; absent it
+/// the function fails closed rather than falling back to a world-writable path.
 fn make_scratch_dir(krate: &str) -> Result<PathBuf, CliError> {
-    use std::time::{SystemTime, UNIX_EPOCH};
-    let base = std::env::var_os("HOME")
+    let home = std::env::var_os("HOME")
         .map(PathBuf::from)
-        .map_or_else(std::env::temp_dir, |h| h.join(".cache/ipe/ffi-scratch"));
-    std::fs::create_dir_all(&base)
-        .map_err(|e| CliError::UsageOwned(format!("ipe add: scratch root: {e}")))?;
-    let nanos = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map_or(0, |d| d.as_nanos());
-    // The security property is `create_dir`-fails-if-exists, not the name's
-    // unguessability; the random suffix only avoids collisions across runs.
-    let dir = base.join(format!("add-{krate}-{}-{nanos:x}", std::process::id()));
-    std::fs::create_dir(&dir).map_err(|e| {
-        CliError::UsageOwned(format!(
-            "ipe add: refusing to reuse a pre-existing scratch path `{}`: {e}",
-            dir.display()
-        ))
-    })?;
-    Ok(dir)
+        .ok_or(CliError::Usage(
+            "ipe add: HOME is not set; cannot create a safe scratch directory",
+        ))?;
+    let base = home.join(".cache/ipe/ffi-scratch");
+    crate::scratch::ScratchDir::new_under(&base, &format!("add-{krate}"))
+        .map(crate::scratch::ScratchDir::into_path)
+        .map_err(|e| CliError::UsageOwned(format!("ipe add: scratch dir: {e}")))
 }
 
 /// Read-only jail binds for the toolchain, deliberately NARROW: never the
