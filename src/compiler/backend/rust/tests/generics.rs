@@ -383,13 +383,15 @@ fn emits_super_typed_bound_clauses() -> DResult<()> {
             detail: "emitted project is missing src/main.rs".to_owned(),
         })?;
 
-    // Number → the std arithmetic op trait actually used (`Add`) plus `Copy`,
-    // with `Output` closed over the parameter's own generic name.
+    // Number → the wrapping-add trait (`IpeWrappingAdd`) plus `Copy`, with
+    // `Output` closed over the parameter's own generic name. The wrapping trait
+    // (not `::core::ops::Add`) ensures `i64` arithmetic in a generic body does
+    // not panic under `overflow-checks=on`.
     assert!(
         main_rs.contains(
-            "pub fn main_double<T1: ::core::ops::Add<Output = T1> + Copy + Clone>(x: T1) -> T1 {"
+            "pub fn main_double<T1: ipe_runtime::basics::IpeWrappingAdd<Output = T1> + Copy + Clone>"
         ),
-        "double emits a Number bound (Add + Copy):\n{main_rs}"
+        "double emits a Number bound (IpeWrappingAdd + Copy):\n{main_rs}"
     );
     // Comparable → `PartialOrd` plus `Copy`.
     assert!(
