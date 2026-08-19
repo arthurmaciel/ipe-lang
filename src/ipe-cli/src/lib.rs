@@ -2080,7 +2080,9 @@ fn remove_stale_static_config(out_dir: &Path) -> Result<(), CliError> {
 ///   1. The vendored runtime module tree (`runtime_dir`, read recursively
 ///      under `src/ipe_runtime/`) — a driver-boundary filesystem read, the
 ///      same discipline as reading the entry file (never inside a
-///      salsa-tracked query).
+///      salsa-tracked query). For the dependency model this step is replaced
+///      by bundling the embedded runtime source under `ipe_runtime_dep/` so
+///      the relative path dep in the emitted `Cargo.toml` is always satisfied.
 ///   2. `Cargo.toml` at the project root.
 ///   3. Every backend-emitted file (`emitted.files`; each key is already a
 ///      validated [`ipe_backend::RelPath`] — relative and `..`-free — so no
@@ -2090,23 +2092,24 @@ fn remove_stale_static_config(out_dir: &Path) -> Result<(), CliError> {
 /// [`CliError::Io`] on any filesystem failure reading `runtime_dir` (including
 /// a non-UTF-8 file, surfaced as an I/O error rather than a panic — the
 /// runtime tree is trusted in-repo source, so this is not expected to fire in
-/// practice).
+/// practice). [`CliError::RuntimeMaterializeFailed`] when the embedded runtime
+/// crate contains non-UTF-8 files (unexpected for in-repo source).
 fn build_emit_manifest(
     emitted: &ipe_backend::EmittedProject,
     runtime_dir: &Path,
     tree_shake_vendored: bool,
 ) -> Result<BTreeMap<PathBuf, String>, CliError> {
     let mut manifest = BTreeMap::new();
-    // Vendoring is skipped for a dependency-model emit — it declares the runtime
-    // as a path dependency and carries NO `src/ipe_runtime/` files, so there is
-    // no vendored tree to overlay. The emit shape is self-describing: a vendored
-    // emit always writes `src/ipe_runtime/mod.rs`; the dep-model emit never does.
+    // The emit shape is self-describing: a vendored emit always writes
+    // `src/ipe_runtime/mod.rs`; the dep-model emit never does. Use this to
+    // branch between the two materialization strategies.
     let emitted_mod_rs = emitted
         .files
         .iter()
         .find(|(rel, _)| rel.as_str() == "src/ipe_runtime/mod.rs")
         .map(|(_, contents)| contents.as_str());
     if let Some(mod_rs) = emitted_mod_rs {
+        // Vendored model: copy the runtime source tree into `src/ipe_runtime/`.
         if tree_shake_vendored {
             // Eject shape: vendor only the runtime source the program reaches.
             // The emitted `mod.rs` declares `pub mod X;` for exactly the reached
@@ -2121,6 +2124,17 @@ fn build_emit_manifest(
             )?;
         } else {
             collect_dir_text(runtime_dir, Path::new("src/ipe_runtime"), &mut manifest)?;
+        }
+    } else {
+        // Dependency model: the emitted `Cargo.toml` declares the runtime via
+        // a relative path dep (`path = "ipe_runtime_dep"`). Bundle the embedded
+        // runtime source under that directory so the dep resolves in any
+        // environment — cross-compiler container, offline, CI — without a
+        // host-absolute path. The embedded source is the binary's own version,
+        // identical to the in-repo tree by construction.
+        let embedded = runtime_embed::collect_embedded_crate_text()?;
+        for (rel, text) in embedded {
+            manifest.insert(PathBuf::from("ipe_runtime_dep").join(rel), text);
         }
     }
     manifest.insert(PathBuf::from("Cargo.toml"), emitted.cargo_toml.clone());

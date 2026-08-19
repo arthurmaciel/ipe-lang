@@ -290,20 +290,22 @@ pub fn sanitize_cargo_name(name: &str) -> String {
 
 /// The dependency-model emit selector.
 ///
-/// When present, the emitted native project declares the runtime as a real cargo
-/// dependency (`ipe_runtime = { package = "ipe-runtime-rust", path = <root>, ... }`)
-/// with a [`runtime_features`]-selected feature list, and vendors NO runtime
-/// source. Absent (the default) emits the byte-identical vendored-source project.
+/// When present, the emitted project declares the runtime as a cargo dependency
+/// with a relative path (`ipe_runtime_dep/`) and a [`runtime_features`]-selected
+/// feature list; it vendors no runtime source into `src/ipe_runtime/`. The driver
+/// bundles the embedded runtime source tree under `ipe_runtime_dep/` alongside the
+/// emitted crate so the relative path dep resolves in any environment (cross-
+/// compiler container, offline, CI) without a host-absolute path. Absent (the
+/// default) emits the byte-identical vendored-source project.
 ///
-/// The `root` is the resolved runtime crate root the emitted manifest names as
-/// the dependency `path`. It is resolved by the driver (fail-closed — a missing
-/// or wrong-package root is a loud refusal, never a silent walk-on) and passed
-/// verbatim; the emitter TOML-escapes it but never derives or validates a path
-/// from program-controlled input.
+/// The `root` field identifies the resolved runtime crate root. It is resolved
+/// by the driver (fail-closed — a missing or wrong-package root is a loud
+/// refusal) and retained for diagnostics and cache-key purposes; the emitter no
+/// longer embeds it in the manifest.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct RuntimeDep {
     /// The absolute, canonical runtime crate root (the directory holding the
-    /// runtime `Cargo.toml`) the emitted dependency `path` points at.
+    /// runtime `Cargo.toml`), retained for diagnostics and cache keying.
     pub root: std::path::PathBuf,
 }
 

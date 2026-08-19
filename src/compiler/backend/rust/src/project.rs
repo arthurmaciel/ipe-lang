@@ -42,21 +42,24 @@ const CARGO_TOML: &str = include_str!("../templates/Cargo.toml");
 
 /// The dependency-model project `Cargo.toml`
 /// ([`crate::RustBackend::with_runtime_dep`]): the user-crate manifest that
-/// declares the runtime as a single path dependency instead of vendoring its
-/// source. Two placeholders are substituted by [`dep_model_cargo_toml`]:
-/// `__IPE_RUNTIME_PATH__` (the TOML-escaped resolved crate root) and
-/// `__IPE_RUNTIME_FEATURES__` (the [`crate::runtime_features`] selection). The
-/// third-party dependency set the vendored template carries is gone — the
-/// runtime crate's own manifest is the single place declaring those versions,
-/// pulled transitively by the selected features.
+/// declares the runtime as a relative path dependency (`ipe_runtime_dep/`)
+/// instead of vendoring its source into `src/ipe_runtime/`. One placeholder is
+/// substituted by [`dep_model_cargo_toml`]: `__IPE_RUNTIME_FEATURES__` (the
+/// [`crate::runtime_features`] selection). The third-party dependency set the
+/// vendored template carries is gone — the runtime crate's own manifest is the
+/// single place declaring those versions, pulled transitively by the selected
+/// features. The driver materialises the runtime source tree into
+/// `ipe_runtime_dep/` alongside the emitted crate so the relative path resolves
+/// in any build environment.
 const CARGO_DEP_TOML: &str = include_str!("../templates/Cargo.dep.toml");
 
 /// The dependency-model project `Cargo.toml` for the browser-WASM target. The
 /// wasm counterpart of [`CARGO_DEP_TOML`]: the runtime is the SAME `ipe_runtime`
-/// path dependency, feature-selected from the [`crate::runtime_features`] SSOT
-/// (whose `wasm-client` floor pulls the whole closed browser module set and its
-/// glue crates transitively). The two placeholders are substituted by
-/// [`dep_model_wasm_cargo_toml`]. Beyond the runtime it declares only the two
+/// relative path dependency (`ipe_runtime_dep/`), feature-selected from the
+/// [`crate::runtime_features`] SSOT (whose `wasm-client` floor pulls the whole
+/// closed browser module set and its glue crates transitively). One placeholder
+/// is substituted by [`dep_model_wasm_cargo_toml`]. Beyond the runtime it
+/// declares only the two
 /// crates the emitted wasm app code names BY PATH — `wasm-bindgen` (the
 /// `#[wasm_bindgen(start)]` entry macro) and `serde` (the TEA-type wire
 /// derives); `serde_json` is spliced in only for a `mode = "hydrate"` program
@@ -1629,11 +1632,10 @@ fn escape_toml_basic(s: &str) -> String {
 /// Returns [`Diagnostic::CompilerBug`] if either template placeholder is absent
 /// — a drifted dep-model manifest template, surfaced loudly rather than emitting
 /// a manifest that names no runtime.
-fn dep_model_cargo_toml(ctx: &EmitCtx, dep: &crate::RuntimeDep) -> DResult<String> {
+fn dep_model_cargo_toml(ctx: &EmitCtx) -> DResult<String> {
     let mut manifest = substitute_dep_manifest_anchors(
         CARGO_DEP_TOML,
         ctx,
-        dep,
         "ipe_backend_rust::project::dep_model_cargo_toml",
     )?;
     // A Ipe.Web program emits `#[derive(serde::Serialize, serde::Deserialize)]`
@@ -1666,11 +1668,10 @@ fn dep_model_cargo_toml(ctx: &EmitCtx, dep: &crate::RuntimeDep) -> DResult<Strin
 /// or (hydrate only) if the runtime dependency anchor line the `serde_json`
 /// splice keys on has drifted — each surfaced loudly rather than emitting a
 /// manifest that names no runtime or drops a referenced crate.
-fn dep_model_wasm_cargo_toml(ctx: &EmitCtx, dep: &crate::RuntimeDep) -> DResult<String> {
+fn dep_model_wasm_cargo_toml(ctx: &EmitCtx) -> DResult<String> {
     let mut manifest = substitute_dep_manifest_anchors(
         CARGO_WASM_DEP_TOML,
         ctx,
-        dep,
         "ipe_backend_rust::project::dep_model_wasm_cargo_toml",
     )?;
     // The `mode = "hydrate"` second entry (`wasm_hydrate_entry`) parses the
@@ -1684,29 +1685,33 @@ fn dep_model_wasm_cargo_toml(ctx: &EmitCtx, dep: &crate::RuntimeDep) -> DResult<
     Ok(manifest)
 }
 
-/// Substitute the `__IPE_RUNTIME_PATH__` / `__IPE_RUNTIME_FEATURES__` anchors in
-/// a dependency-model manifest `template` with the resolved runtime crate root
-/// and the [`crate::runtime_features`] SSOT selection for `ctx`. Shared by the
-/// native ([`dep_model_cargo_toml`]) and wasm ([`dep_model_wasm_cargo_toml`])
-/// renderers so the anchor contract has ONE definition.
+/// Substitute the `__IPE_RUNTIME_FEATURES__` anchor in a dependency-model
+/// manifest `template` with the [`crate::runtime_features`] SSOT selection for
+/// `ctx`. Shared by the native ([`dep_model_cargo_toml`]) and wasm
+/// ([`dep_model_wasm_cargo_toml`]) renderers so the anchor contract has ONE
+/// definition.
 ///
 /// The feature list is the SSOT image — the ONLY authority for which runtime
 /// features a program selects — rendered as a quoted, comma-separated list in the
 /// crate's canonical order. The join is correct for any arity (no trailing
 /// comma), including the empty native selection.
 ///
+/// The runtime crate path is a fixed relative `ipe_runtime_dep` embedded in the
+/// template; no path substitution is performed here. The driver materialises the
+/// runtime source tree into `ipe_runtime_dep/` alongside the emitted crate so
+/// the reference resolves in any environment (cross-compiler container, offline
+/// build, CI) without a host-absolute path.
+///
 /// # Errors
 ///
-/// Returns [`Diagnostic::CompilerBug`] (tagged `where_`) if either placeholder is
-/// absent from `template` — a drifted manifest template, surfaced loudly rather
-/// than emitting a manifest that names no runtime.
+/// Returns [`Diagnostic::CompilerBug`] (tagged `where_`) if the features
+/// placeholder is absent from `template` — a drifted manifest template,
+/// surfaced loudly rather than emitting a manifest that names no runtime.
 fn substitute_dep_manifest_anchors(
     template: &str,
     ctx: &EmitCtx,
-    dep: &crate::RuntimeDep,
     where_: &'static str,
 ) -> DResult<String> {
-    const PATH_ANCHOR: &str = "__IPE_RUNTIME_PATH__";
     const FEATURES_ANCHOR: &str = "__IPE_RUNTIME_FEATURES__";
 
     let features = crate::runtime_features::runtime_features(ctx);
@@ -1717,36 +1722,13 @@ fn substitute_dep_manifest_anchors(
         .collect::<Vec<_>>()
         .join(", ");
 
-    // The path is emitted with forward slashes so the same manifest text is
-    // valid on every platform cargo targets; the driver already canonicalised
-    // it. Windows `Path::canonicalize` returns an extended-length UNC path
-    // prefixed with `\\?\` — strip that prefix before converting separators,
-    // because cargo's TOML path parser rejects the resulting `//?/` prefix as
-    // an invalid URL. On non-Windows hosts the prefix is absent, so the strip
-    // is a no-op. `SafeTomlString::escape` then guards every TOML-forbidden
-    // byte (control scalars, backslash, double-quote).
-    let root_str = dep.root.to_string_lossy();
-    let root_stripped = root_str
-        .strip_prefix(r"\\?\")
-        .unwrap_or_else(|| root_str.as_ref());
-    let path_forward = root_stripped.replace('\\', "/");
-    let path_escaped = SafeTomlString::escape(&path_forward);
-
-    if !template.contains(PATH_ANCHOR) {
-        return Err(Diagnostic::CompilerBug {
-            where_,
-            detail: format!("dep-model manifest template lost the {PATH_ANCHOR:?} anchor"),
-        });
-    }
     if !template.contains(FEATURES_ANCHOR) {
         return Err(Diagnostic::CompilerBug {
             where_,
             detail: format!("dep-model manifest template lost the {FEATURES_ANCHOR:?} anchor"),
         });
     }
-    Ok(template
-        .replace(PATH_ANCHOR, path_escaped.as_body())
-        .replace(FEATURES_ANCHOR, &feature_list))
+    Ok(template.replace(FEATURES_ANCHOR, &feature_list))
 }
 
 /// Insert the app-crate `serde` dependency (version + `derive` feature identical
@@ -2026,15 +2008,16 @@ fn assemble_project_files(
         }
         insert_wasm_shared_files(&mut files)?;
 
-        if let Some(dep) = ctx.runtime_dep.clone() {
-            // Dependency model: the runtime is a real path dependency selected by
-            // the SSOT `wasm-client` floor (+ any browser-admissible surface),
-            // built for wasm32 by cargo — no vendored `src/ipe_runtime/` tree.
-            // The crate-root `pub mod ipe_runtime;` (vendored-source declaration)
-            // is dropped; `pub use ipe_runtime::*;` and every `ipe_runtime::…`
-            // path resolve against the extern crate. `env_public` moves to a
-            // user-crate module, matching the native dep-model relocation.
-            let cargo_toml = dep_model_wasm_cargo_toml(ctx, &dep)?;
+        if ctx.runtime_dep.is_some() {
+            // Dependency model: the runtime is a relative path dependency selected
+            // by the SSOT `wasm-client` floor (+ any browser-admissible surface),
+            // built for wasm32 by cargo. The bundled source lives at
+            // `ipe_runtime_dep/` (written by the driver) — no host-absolute path
+            // dependency. The crate-root `pub mod ipe_runtime;` (vendored-source
+            // declaration) is dropped; `pub use ipe_runtime::*;` and every
+            // `ipe_runtime::…` path resolve against the extern crate. `env_public`
+            // moves to a user-crate module, matching the native dep-model relocation.
+            let cargo_toml = dep_model_wasm_cargo_toml(ctx)?;
             drop_vendored_runtime_module_decl(&mut files)?;
             if ctx.uses_env_public {
                 relocate_env_public_to_user_crate(&mut files, &ctx.wasm_public_env)?;
@@ -2081,17 +2064,18 @@ fn assemble_project_files(
     }
 
     // ── Native dependency-model branch ───────────────────────────────────────
-    // The runtime is a real path dependency, not vendored source: the manifest
-    // declares `ipe_runtime` with the SSOT-selected features (which pull the
-    // gated third-party crates transitively — the per-surface manifest
-    // augmenters below are REPLACED by that feature list), and no
-    // `src/ipe_runtime/` tree is emitted. The generated code reaches the runtime
+    // The runtime is a relative path dependency pointing to `ipe_runtime_dep/`,
+    // which the driver writes alongside the emitted crate. The manifest declares
+    // `ipe_runtime` with the SSOT-selected features (which pull the gated
+    // third-party crates transitively — the per-surface manifest augmenters
+    // below are REPLACED by that feature list). No `src/ipe_runtime/` tree is
+    // emitted inside the app crate; the generated code reaches the runtime
     // through the extern prelude (`ipe_runtime::…`), so the one emitted
     // `crate::ipe_runtime::…` reference is rewritten to that form; `env_public`
     // moves to a user-crate module. Wasm never reaches here (its closed template
     // returned above).
-    if let Some(dep) = ctx.runtime_dep.clone() {
-        let mut cargo_toml = dep_model_cargo_toml(ctx, &dep)?;
+    if ctx.runtime_dep.is_some() {
+        let mut cargo_toml = dep_model_cargo_toml(ctx)?;
         let mut files = BTreeMap::new();
         for (path, text) in rust_sources {
             files.insert(path, rewrite_runtime_paths_for_dep(&text));
