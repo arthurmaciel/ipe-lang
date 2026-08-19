@@ -26,20 +26,15 @@ use ipe::CliError;
 
 use crate::support::repo_root;
 
-fn fixture(root: &Path) -> PathBuf {
-    root.join("tests")
-        .join("golden")
-        .join("i1139_fn_field_record_literal")
-        .join("Main.ipe")
+fn fixture(root: &Path, dir: &str) -> PathBuf {
+    root.join("tests").join("golden").join(dir).join("Main.ipe")
 }
 
-/// An unannotated let-bound record literal with a bare function field must
-/// be rejected with IPE-L0107 — not ICE with IPE-I0001.
-#[test]
-fn fn_field_let_record_rejects_with_l0107() {
+/// Assert that building `<golden dir>/Main.ipe` fails closed with IPE-L0107.
+fn assert_rejects_l0107(dir: &str) {
     let root = repo_root();
-    let entry = fixture(&root);
-    let out = std::env::temp_dir().join("ipec_i1139_fn_field_record_literal");
+    let entry = fixture(&root, dir);
+    let out = std::env::temp_dir().join(format!("ipec_{dir}"));
     let _ = std::fs::remove_dir_all(&out);
     let Ok(runtime) = ipe::resolve_runtime() else {
         return;
@@ -52,8 +47,24 @@ fn fn_field_let_record_rejects_with_l0107() {
     assert_eq!(
         got,
         Some(ipe_diagnostics::IPE_L0107),
-        "a let-bound record literal with a bare function field and no type \
-         annotation must fail closed with IPE-L0107 (not ICE with IPE-I0001); \
-         got build result: {built:?}"
+        "`{dir}` must fail closed with IPE-L0107 (not ICE with IPE-I0001, not \
+         accept-then-cargo-fail); got build result: {built:?}"
     );
+}
+
+/// An unannotated let-bound record literal with a bare function field must
+/// be rejected with IPE-L0107 — not ICE with IPE-I0001.
+#[test]
+fn fn_field_let_record_rejects_with_l0107() {
+    assert_rejects_l0107("i1139_fn_field_record_literal");
+}
+
+/// SEAL: a function-field record literal whose field-NAME set collides with a
+/// signature record of DIFFERENT field types (`{ run : Int }` covering a
+/// `{ run = \n -> … }` literal) must be rejected with IPE-L0107 — never
+/// field-NAME-only "covered", which would emit an `Arc<dyn Fn>` value into the
+/// backend's `i64` field and fail the emitted `cargo build` (accept-then-fail).
+#[test]
+fn fn_field_record_key_set_collision_rejects_with_l0107() {
+    assert_rejects_l0107("i1139_fn_field_record_key_collision");
 }

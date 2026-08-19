@@ -957,62 +957,182 @@ fn generic_binding_breaks_clone(interner: &Interner, ty: &Ty) -> bool {
     }
 }
 
-/// Does `ty` (or any type nested within it) contain a record whose set of
-/// field-name [`Symbol`]s equals `keys`?
+/// Does the covering `template` type match the literal's `concrete` field type,
+/// treating a template-side type VARIABLE as a wildcard that matches anything?
+///
+/// This mirrors the backend's `record_struct_by_key` disambiguation: a
+/// synthesised struct registered from a signature/ctor is either monomorphic
+/// (its field types must equal the literal's exactly) or generic (a template
+/// variable at a field position instantiates to the literal's concrete type).
+/// The gate must accept exactly the shapes the backend can synthesise, so the
+/// coverage check compares field types with the SAME rule — never merely the
+/// field-name set (which would accept a `{ run : Int }` signature covering a
+/// `{ run = \n -> … }` literal and emit an `Arc<dyn Fn>` value into an `i64`
+/// field: an accept-then-cargo-E0308 SEAL break).
+fn ty_covers_as_template(template: &Ty, concrete: &Ty) -> bool {
+    match (template, concrete) {
+        // A template variable instantiates to any concrete type; unit matches
+        // unit — both admit their concrete unconditionally.
+        (Ty::Var(_), _) | (Ty::Unit, Ty::Unit) => true,
+        (Ty::Fun(tp, tr), Ty::Fun(cp, cr)) => {
+            ty_covers_as_template(tp, cp) && ty_covers_as_template(tr, cr)
+        }
+        (Ty::Tuple(ts), Ty::Tuple(cs)) => {
+            ts.len() == cs.len() && ts.iter().zip(cs).all(|(t, c)| ty_covers_as_template(t, c))
+        }
+        (
+            Ty::Con {
+                name: tn, args: ta, ..
+            },
+            Ty::Con {
+                name: cn, args: ca, ..
+            },
+        ) => {
+            tn == cn
+                && ta.len() == ca.len()
+                && ta.iter().zip(ca).all(|(t, c)| ty_covers_as_template(t, c))
+        }
+        (Ty::Record(tf, _), Ty::Record(cf, _)) => {
+            tf.len() == cf.len()
+                && tf
+                    .iter()
+                    .all(|(k, tv)| cf.get(k).is_some_and(|cv| ty_covers_as_template(tv, cv)))
+        }
+        _ => false,
+    }
+}
+
+/// Does `ty` (or any type nested within it) contain a record that COVERS the
+/// function-field record literal whose field types are `lit_fields`?
+///
+/// Coverage is TYPE-aware, not field-name-only: a candidate record covers only
+/// when its field-name set matches AND every field type matches the literal's
+/// (a template variable on the candidate side is a wildcard, exactly as the
+/// backend's generic-struct instantiation allows). A name-only match against a
+/// record with a differently-typed field (`{ run : Int }`, or even
+/// `{ run : String -> String }` for a `{ run : Int -> Int }` literal) registers
+/// a struct whose field type the literal's value does not fit — an
+/// accept-then-cargo-E0308 SEAL break.
 ///
 /// Used by [`Lowerer::fn_field_record_covered_by_signature`] to determine
 /// whether a function-field record literal's shape appears in at least one
 /// top-level binding's inferred type — the condition under which the backend's
 /// signature scan will register the struct, making a separate
 /// [`collect_records_in_ty`] registration unnecessary.
-fn ty_contains_record_key_set(ty: &Ty, keys: &BTreeSet<Symbol>) -> bool {
+fn ty_contains_record_key_set(ty: &Ty, lit_fields: &BTreeMap<Symbol, Ty>) -> bool {
     match ty {
         Ty::Record(fields, _) => {
-            if fields.len() == keys.len() && fields.keys().all(|k| keys.contains(k)) {
+            if fields.len() == lit_fields.len()
+                && lit_fields.iter().all(|(k, lv)| {
+                    fields
+                        .get(k)
+                        .is_some_and(|cv| ty_covers_as_template(cv, lv))
+                })
+            {
                 return true;
             }
-            fields.values().any(|f| ty_contains_record_key_set(f, keys))
+            fields
+                .values()
+                .any(|f| ty_contains_record_key_set(f, lit_fields))
         }
-        Ty::Fun(a, b) => ty_contains_record_key_set(a, keys) || ty_contains_record_key_set(b, keys),
-        Ty::Tuple(elems) => elems.iter().any(|e| ty_contains_record_key_set(e, keys)),
-        Ty::Con { args, .. } => args.iter().any(|a| ty_contains_record_key_set(a, keys)),
+        Ty::Fun(a, b) => {
+            ty_contains_record_key_set(a, lit_fields) || ty_contains_record_key_set(b, lit_fields)
+        }
+        Ty::Tuple(elems) => elems
+            .iter()
+            .any(|e| ty_contains_record_key_set(e, lit_fields)),
+        Ty::Con { args, .. } => args
+            .iter()
+            .any(|a| ty_contains_record_key_set(a, lit_fields)),
         Ty::Var(_) | Ty::Unit => false,
     }
 }
 
-/// Does `ty` (or any type nested within it) contain a record whose field-name
-/// set equals `keys`?  Mirrors [`ty_contains_record_key_set`] for the
-/// canonical [`canon::Type`] used in union constructor payload declarations —
-/// so the gate can check whether a function-field record shape is covered by an
-/// ADT constructor and will therefore be registered by the backend's enum
-/// variant field scan (`collect_record_shapes` over `module.types`).
-fn canon_type_contains_record_key_set(ty: &canon::Type, keys: &BTreeSet<Symbol>) -> bool {
+/// Does the covering canonical `template` type match the literal's `concrete`
+/// [`Ty`] field type, treating a canon type VARIABLE as a wildcard?  The
+/// canon/[`Ty`] cross-representation mirror of [`ty_covers_as_template`], used
+/// for union constructor payload types (declared as [`canon::Type`]).
+fn canon_covers_as_template(template: &canon::Type, concrete: &Ty) -> bool {
+    match (template, concrete) {
+        (canon::Type::Var(_), _) | (canon::Type::Unit, Ty::Unit) => true,
+        (canon::Type::Lambda(tp, tr), Ty::Fun(cp, cr)) => {
+            canon_covers_as_template(tp, cp) && canon_covers_as_template(tr, cr)
+        }
+        (canon::Type::Tuple(ts), Ty::Tuple(cs)) => {
+            ts.len() == cs.len()
+                && ts
+                    .iter()
+                    .zip(cs)
+                    .all(|(t, c)| canon_covers_as_template(t, c))
+        }
+        (
+            canon::Type::Con {
+                name: tn, args: ta, ..
+            },
+            Ty::Con {
+                name: cn, args: ca, ..
+            },
+        ) => {
+            tn == cn
+                && ta.len() == ca.len()
+                && ta
+                    .iter()
+                    .zip(ca)
+                    .all(|(t, c)| canon_covers_as_template(t, c))
+        }
+        // A closed record must cover the literal field-for-field. An open row
+        // `{ r | … }` is treated the same: its declared fields must present and
+        // match the literal exactly (the literal is a closed record, so extra
+        // absorbed fields would change the synthesised struct — reject them).
+        (canon::Type::Record(tf) | canon::Type::RecordOpen(_, tf), Ty::Record(cf, _)) => {
+            tf.len() == cf.len()
+                && tf
+                    .iter()
+                    .all(|(k, tv)| cf.get(k).is_some_and(|cv| canon_covers_as_template(tv, cv)))
+        }
+        _ => false,
+    }
+}
+
+/// Does `ty` (or any type nested within it) contain a record that covers the
+/// function-field record literal (`lit_fields`)?  Mirrors
+/// [`ty_contains_record_key_set`] for the canonical [`canon::Type`] used in
+/// union constructor payload declarations — so the gate can check whether a
+/// function-field record shape is covered by an ADT constructor and will
+/// therefore be registered by the backend's enum variant field scan
+/// (`collect_record_shapes` over `module.types`).  Coverage is TYPE-aware via
+/// [`canon_covers_as_template`], never field-name-only.
+fn canon_type_contains_record_key_set(ty: &canon::Type, lit_fields: &BTreeMap<Symbol, Ty>) -> bool {
+    let covers = |fields: &[(Symbol, canon::Type)]| -> bool {
+        fields.len() == lit_fields.len()
+            && lit_fields.iter().all(|(k, lv)| {
+                fields
+                    .iter()
+                    .any(|(name, ft)| name == k && canon_covers_as_template(ft, lv))
+            })
+    };
     match ty {
         canon::Type::Record(fields) => {
-            let field_names: BTreeSet<Symbol> = fields.iter().map(|(sym, _)| *sym).collect();
-            if field_names == *keys {
-                return true;
-            }
-            fields
-                .iter()
-                .any(|(_, ft)| canon_type_contains_record_key_set(ft, keys))
+            covers(fields)
+                || fields
+                    .iter()
+                    .any(|(_, ft)| canon_type_contains_record_key_set(ft, lit_fields))
         }
         canon::Type::Lambda(a, b) => {
-            canon_type_contains_record_key_set(a, keys)
-                || canon_type_contains_record_key_set(b, keys)
+            canon_type_contains_record_key_set(a, lit_fields)
+                || canon_type_contains_record_key_set(b, lit_fields)
         }
         canon::Type::Tuple(elems) => elems
             .iter()
-            .any(|e| canon_type_contains_record_key_set(e, keys)),
+            .any(|e| canon_type_contains_record_key_set(e, lit_fields)),
         canon::Type::Con { args, .. } => args
             .iter()
-            .any(|a| canon_type_contains_record_key_set(a, keys)),
+            .any(|a| canon_type_contains_record_key_set(a, lit_fields)),
         canon::Type::RecordOpen(_, fields) => {
-            let field_names: BTreeSet<Symbol> = fields.iter().map(|(sym, _)| *sym).collect();
-            field_names == *keys
+            covers(fields)
                 || fields
                     .iter()
-                    .any(|(_, ft)| canon_type_contains_record_key_set(ft, keys))
+                    .any(|(_, ft)| canon_type_contains_record_key_set(ft, lit_fields))
         }
         canon::Type::Var(_) | canon::Type::Unit => false,
     }
@@ -15992,13 +16112,22 @@ impl<'a> Lowerer<'a> {
     /// (IPE-I0001). This predicate returns `true` when at least one of (1)/(2)
     /// covers the shape, so the caller's IPE-L0107 gate fires only for the
     /// genuinely-unregistered cases.
-    fn fn_field_record_covered_by_signature(&self, field_names: &BTreeSet<Symbol>) -> bool {
+    ///
+    /// Coverage is TYPE-aware, not name-only: a covering record must have the
+    /// same field-name set AND a field type matching the literal's at every
+    /// position (a template variable on the covering side is a wildcard, exactly
+    /// as the backend's generic-struct instantiation allows). A name-only match
+    /// against a record whose same-named field type differs (`{ run : Int }`, or
+    /// `{ run : String -> String }` for a `{ run : Int -> Int }` literal)
+    /// registers a struct whose field type the literal's value does not fit —
+    /// an accept-then-cargo-E0308 SEAL break.
+    fn fn_field_record_covered_by_signature(&self, lit_fields: &BTreeMap<Symbol, Ty>) -> bool {
         // Source (1): function signatures in env.
         if self
             .types
             .env
             .values()
-            .any(|ty| ty_contains_record_key_set(ty, field_names))
+            .any(|ty| ty_contains_record_key_set(ty, lit_fields))
         {
             return true;
         }
@@ -16007,7 +16136,7 @@ impl<'a> Lowerer<'a> {
             u.ctors.iter().any(|ctor| {
                 ctor.args
                     .iter()
-                    .any(|arg| canon_type_contains_record_key_set(arg, field_names))
+                    .any(|arg| canon_type_contains_record_key_set(arg, lit_fields))
             })
         })
     }
@@ -16552,8 +16681,11 @@ impl<'a> Lowerer<'a> {
                     && !is_retry_policy_record(self.interner, rec_ty)
                     && rec_fields.values().any(|f| matches!(f, Ty::Fun(_, _)))
                 {
-                    let field_names: BTreeSet<Symbol> = rec_fields.keys().copied().collect();
-                    if !self.fn_field_record_covered_by_signature(&field_names) {
+                    // Coverage compares the literal's full field TYPES (not just
+                    // its field-name set) against every registration source, so a
+                    // record whose same-named field type differs cannot wrongly
+                    // cover it.
+                    if !self.fn_field_record_covered_by_signature(rec_fields) {
                         return Err(unsupported(e.span, Feature::FirstClassFunctions));
                     }
                 }
