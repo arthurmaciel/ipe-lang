@@ -1818,6 +1818,7 @@ fn synthesize_module(body: &str, source_module: &str) -> String {
         ("Task.", "import Ipe.Task as Task"),
         ("Io.", "import Ipe.Io as Io"),
         ("Debug.", "import Ipe.Debug as Debug"),
+        ("Char.", "import Ipe.Char as Char"),
     ] {
         // Only inject if the prefix appears AND the module is not already
         // imported as the source module (avoid a duplicate import).

@@ -43,7 +43,7 @@ import Ipe.Ffi as Ffi
 
 ```ipe
 fromInt 42 --> "42"
-fromInt -7 --> "-7"
+fromInt (-7) --> "-7"
 fromInt 0 --> "0"
 ```
 -}
@@ -55,7 +55,7 @@ fromInt = Ffi.kernel "String_fromInt"
 
 ```ipe
 fromFloat 3.14 --> "3.14"
-fromFloat -0.5 --> "-0.5"
+fromFloat (-0.5) --> "-0.5"
 ```
 -}
 fromFloat : Float -> String
@@ -315,9 +315,7 @@ casefold = Ffi.kernel "String_casefold"
 ```ipe
 import Ipe.Locale as Locale
 
-case Locale.fromTag "tr" of
-    Just tr -> toUpperIn tr "istanbul"
-    Nothing -> toUpper "istanbul"
+Maybe.withDefault (toUpper "istanbul") (Maybe.map (\tr -> toUpperIn tr "istanbul") (Locale.fromTag "tr")) --> "İSTANBUL"
 ```
 -}
 toUpperIn : Locale -> String -> String
@@ -333,9 +331,7 @@ toUpperIn = Ffi.kernel "String_toUpperIn"
 ```ipe
 import Ipe.Locale as Locale
 
-case Locale.fromTag "tr" of
-    Just tr -> toLowerIn tr "ISTANBUL"
-    Nothing -> toLower "ISTANBUL"
+Maybe.withDefault (toLower "ISTANBUL") (Maybe.map (\tr -> toLowerIn tr "ISTANBUL") (Locale.fromTag "tr")) --> "istanbul"
 ```
 -}
 toLowerIn : Locale -> String -> String
@@ -457,7 +453,7 @@ Negative indices count from the end.
 ```ipe
 slice 0 5 "hello world" --> "hello"
 slice 6 11 "hello world" --> "world"
-slice -5 -1 "hello world" --> "worl"
+slice (-5) (-1) "hello world" --> "worl"
 ```
 -}
 slice : Int -> Int -> String -> String
@@ -653,7 +649,7 @@ indexes = Ffi.kernel "String_indexes"
 
 ```ipe
 map (\c -> if c == 'a' then 'x' else c) "banana" --> "bxnxnx"
-map Char.toUpper "hello" --> "HELLO"
+map (\c -> if c == 'e' then 'a' else c) "hello" --> "hallo"
 ```
 -}
 map : (Char -> Char) -> String -> String
