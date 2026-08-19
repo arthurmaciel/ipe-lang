@@ -13,7 +13,7 @@
 use std::collections::BTreeMap;
 
 use ipe_canon::ast as canon;
-use ipe_diagnostics::{DResult, Diagnostic, LowerError, Span};
+use ipe_diagnostics::{DResult, Diagnostic, Feature, LowerError, Span};
 use ipe_intern::{Interner, Symbol};
 use ipe_lower::lower;
 use ipe_types::{RowTail, SolvedTypes, Ty};
@@ -329,5 +329,120 @@ fn extra_field_beyond_required_is_accepted() {
     assert!(
         res.is_ok(),
         "extra fields beyond those the callee reads must not be rejected — row-openness, got {res:?}"
+    );
+}
+
+/// A call site where the argument's region type is a bare `Ty::Var` — the relay
+/// shape `relay x = getName x` where `x` is itself a wildcard-`any` parameter
+/// of the enclosing function.  The emitted Rust for `relay` gives `x` only
+/// `T1: Clone`, not the `IpeHasName<Name = String>` the callee requires; the
+/// emitted Rust would fail cargo E0277.
+///
+/// The call-site gate (`check_row_param_caller_fields`) consults
+/// `ty_can_satisfy_row_witness`, the single authority on whether a solved `Ty`
+/// can carry the bound.  A `Ty::Var` returns `false` there, so the gate must
+/// reject the call with `IPE-L0131` rather than emit unsatisfiable Rust.
+#[test]
+fn relayed_any_param_at_row_callee_is_rejected() {
+    let mut i = Interner::new();
+    let (gn_def, get_name, _p, name_field, any_sym, _gn_sig, gn_param_span, gn_access_span) =
+        make_get_name_def(&mut i);
+
+    // `relay : any -> String; relay x = getName x`
+    // The relay function itself has `any` in param position — its argument `x`
+    // gets region type `Ty::Var(relay_any_sym)`, a bare solver variable.
+    let relay_sym = i.intern("relay").unwrap();
+    let x_sym = i.intern("x").unwrap();
+    let relay_any_sym = i.intern("any2").unwrap();
+
+    let relay_sig_span = Span::new(100, 101);
+    let relay_param_span = Span::new(102, 103);
+    let relay_call_span = Span::new(104, 115);
+
+    // Body: `getName x`
+    let x_ref = ipe_diagnostics::Located::new(relay_param_span, canon::Expr_::VarLocal(x_sym));
+    let callee_ref = ipe_diagnostics::Located::new(
+        relay_sig_span,
+        canon::Expr_::VarTopLevel {
+            module: vec![],
+            name: get_name,
+        },
+    );
+    let relay_body = ipe_diagnostics::Located::new(
+        relay_call_span,
+        canon::Expr_::Call(Box::new(callee_ref), vec![x_ref]),
+    );
+    let relay_def = canon::Def::Typed {
+        home: vec![],
+        name: ipe_diagnostics::Located::new(relay_sig_span, relay_sym),
+        free_vars: vec![relay_any_sym],
+        patterns: vec![ipe_diagnostics::Located::new(
+            relay_param_span,
+            canon::Pattern_::PVar(x_sym),
+        )],
+        body: relay_body,
+        ty: canon::Type::Lambda(
+            Box::new(canon::Type::Var(relay_any_sym)),
+            Box::new(ty_string(&mut i)),
+        ),
+    };
+
+    let mut env: BTreeMap<(Vec<Symbol>, Symbol), Ty> = BTreeMap::new();
+    env.insert(
+        (vec![], get_name),
+        Ty::Fun(
+            Box::new(Ty::Var(any_sym.as_raw())),
+            Box::new(solved_string(&mut i)),
+        ),
+    );
+    env.insert(
+        (vec![], relay_sym),
+        Ty::Fun(
+            Box::new(Ty::Var(relay_any_sym.as_raw())),
+            Box::new(solved_string(&mut i)),
+        ),
+    );
+
+    let mut regions: BTreeMap<(Vec<Symbol>, Span), Ty> = BTreeMap::new();
+    // `getName`'s param `p` region: the concrete `{ name : String }` record that
+    // drives the row erasure so `fn_row_params` is populated.
+    let mut param_rec = BTreeMap::new();
+    param_rec.insert(name_field, solved_string(&mut i));
+    regions.insert(
+        (vec![], gn_param_span),
+        Ty::Record(param_rec, RowTail::Closed),
+    );
+    regions.insert((vec![], gn_access_span), solved_string(&mut i));
+
+    // `relay`'s argument `x` to `getName`: the region is a bare `Ty::Var` —
+    // the solver left `x` free (it is the relay function's own `any` param).
+    regions.insert((vec![], relay_param_span), Ty::Var(relay_any_sym.as_raw()));
+    regions.insert((vec![], relay_call_span), solved_string(&mut i));
+
+    let m = canon::Module {
+        imports_unsafe_submodule: false,
+        name: Vec::new(),
+        unions: Vec::new(),
+        defs: vec![gn_def, relay_def],
+    };
+    let types = SolvedTypes {
+        env,
+        regions,
+        expected: BTreeMap::new(),
+        bounds: BTreeMap::new(),
+        warnings: Vec::new(),
+        poly_var_map: BTreeMap::new(),
+        untyped_type_params: BTreeMap::new(),
+    };
+    let res = lower(&m, &types, &mut i).map_err(|(d, _home)| d);
+    assert!(
+        matches!(
+            res,
+            Err(Diagnostic::Lower {
+                msg: LowerError::Unsupported(Feature::RowPolyRecordAnnotation),
+                ..
+            })
+        ),
+        "relaying a bare any-param to a row-generic callee must be IPE-L0131, got {res:?}"
     );
 }
