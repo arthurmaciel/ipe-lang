@@ -1634,6 +1634,27 @@ fn canon_sig_has_unsupported_open_row(sig: &canon::Type) -> bool {
     }
 }
 
+/// Can `ty` satisfy a row-witness (`IpeHas<F><Name = T>`) bound at an `any`
+/// parameter position?
+///
+/// A row-generic parameter is emitted as `R{n}: IpeHas<F1><Name = T1> + …` —
+/// an associated-type-equality bound the Rust monomorphiser discharges per
+/// concrete record shape. A bare solver `Ty::Var` lowers to a plain
+/// `T{n}: Clone` generic that carries NO `IpeHas*` bound; it can never satisfy
+/// the callee's witness obligation, so the emitted Rust fails cargo E0277.
+///
+/// This predicate is the single authority on that structural question:
+/// `false` means "this type cannot satisfy the bound; reject fail-closed."
+/// Every call site that guards on the relayed-row shape consults it rather
+/// than re-stating the `Ty::Var` pattern inline, so the definition of
+/// "satisfiable" lives in exactly one place.
+///
+/// Complements [`escapes`], which answers the same question at the
+/// IR-expression level for function bodies.
+const fn ty_can_satisfy_row_witness(ty: &Ty) -> bool {
+    !matches!(ty, Ty::Var(_))
+}
+
 /// Walk `body` and return `true` when a row symbol appears in any position
 /// that the emitter cannot route through a witness-getter call.
 ///
@@ -1653,6 +1674,10 @@ fn canon_sig_has_unsupported_open_row(sig: &canon::Type) -> bool {
 /// Pass `tail_sym = None` to enforce the strict "field-access only" rule; pass
 /// `Some(sym)` when the callee threads `sym` through to an `any` return and a
 /// bare tail `Var(sym)` is therefore safe.
+///
+/// Complements [`ty_can_satisfy_row_witness`], which answers the same
+/// "can this value satisfy a row-witness bound?" question at the `Ty` level for
+/// call-site arguments rather than at the IR-expression level for function bodies.
 fn escapes(body: &Expr, row_syms: &BTreeSet<Symbol>, tail_sym: Option<Symbol>) -> bool {
     // A read of a row symbol in ANY position other than the direct receiver of
     // a field access is an escape — as a bare `Var` or as a `CloneVar` (the
@@ -16002,17 +16027,17 @@ impl<'a> Lowerer<'a> {
                 continue;
             };
             // The callee requires a row-witness bound (`IpeHas<F><Name = T>`) on
-            // this argument position. An argument whose solved region is a bare
-            // solver `Var` lowers to a plain `T{n}: Clone` generic — a
-            // wildcard-`any` parameter of the ENCLOSING function relayed straight
-            // through (`relay x = getField x`, `firstName p = snd p p`). That
-            // bare generic carries no `IpeHas*` bound and can never satisfy the
-            // callee's, so the emitted Rust fails cargo E0277 (the
-            // exit-0-then-cargo-fail class). The bound is attached only to params
-            // a function erases from its OWN field-reads, never to one it merely
-            // forwards, so a `Var` here can never acquire it — reject fail-closed
-            // with IPE-L0131 rather than emit unsatisfiable Rust.
-            if matches!(self.region_ty(arg.span), Some(Ty::Var(_))) {
+            // this argument position. Reject any argument whose region type is
+            // known but cannot carry the bound — `ty_can_satisfy_row_witness` is
+            // the single authority on that structural question (the relay shapes
+            // `relay x = getField x` and `firstName p = snd p p` reach here
+            // with a bare solver `Var`, which that predicate rejects).
+            // An absent region type (no solved annotation at this span) fails
+            // open — the call proceeds to the field-type check below.
+            if self
+                .region_ty(arg.span)
+                .is_some_and(|ty| !ty_can_satisfy_row_witness(ty))
+            {
                 return Err(unsupported(call_span, Feature::RowPolyRecordAnnotation));
             }
             let Some(Ty::Record(caller_fields, _)) = self.region_ty(arg.span) else {
@@ -26473,6 +26498,42 @@ mod tests {
         assert!(
             result.is_some(),
             "retry_policy_concrete_ir must return Some for the genuine kernel shape"
+        );
+    }
+
+    // ── Row-witness satisfaction predicate ───────────────────────────────────
+    //
+    // `ty_can_satisfy_row_witness` is the single authority on whether a solved
+    // `Ty` can carry the `IpeHas<F><Name = T>` bound. These tests pin the two
+    // decisive cases: a bare `Ty::Var` (cannot carry the bound) and a concrete
+    // record (can carry the bound).  They mirror the body-level
+    // `row_value_escapes_direct_access` tests above: together the two suites
+    // verify that the Ty-level and IR-level guards agree on what can satisfy a
+    // row-witness bound.
+
+    /// A bare solver `Ty::Var` cannot carry an `IpeHas*` bound — the emitted
+    /// Rust generic gets only `Clone`, not the witness trait, and any call that
+    /// relies on the witness fails with cargo E0277.  The predicate must return
+    /// `false` for this form.
+    #[test]
+    fn ty_var_cannot_satisfy_row_witness() {
+        let ty = Ty::Var(0);
+        assert!(
+            !super::ty_can_satisfy_row_witness(&ty),
+            "a bare Ty::Var carries no IpeHas* bound and cannot satisfy a row-witness"
+        );
+    }
+
+    /// A concrete closed record type can be monomorphised by rustc against the
+    /// `IpeHas<F><Name = T>` witness bound.  The predicate must return `true`
+    /// for this form so the call site proceeds to the field-type check.
+    #[test]
+    fn ty_record_can_satisfy_row_witness() {
+        use ipe_types::RowTail;
+        let ty = Ty::Record(BTreeMap::new(), RowTail::Closed);
+        assert!(
+            super::ty_can_satisfy_row_witness(&ty),
+            "a concrete record can satisfy a row-witness bound — only Ty::Var is excluded"
         );
     }
 
