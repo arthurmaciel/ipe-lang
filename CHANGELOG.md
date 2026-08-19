@@ -10,6 +10,14 @@ Entries below the header are maintained by
 section is generated from Conventional Commit messages and prepended when the
 standing release pull request is merged.
 
+## [0.1.64](https://github.com/arthurmaciel/ipe-lang/compare/ipe-v0.1.63...ipe-v0.1.64) (2026-08-19)
+
+
+### Bug Fixes
+
+* **lower:** enforce wildcard-any row containment + caller field-type at ipe-time (closes [#1117](https://github.com/arthurmaciel/ipe-lang/issues/1117), closes [#1118](https://github.com/arthurmaciel/ipe-lang/issues/1118)) ([#1188](https://github.com/arthurmaciel/ipe-lang/issues/1188)) ([26b2f7b](https://github.com/arthurmaciel/ipe-lang/commit/26b2f7b30fc084d0cc82671b04f109c949cbed28))
+* **release:** upload job resolves the tag from the release/dispatch event, not GITHUB_REF_NAME ([#1185](https://github.com/arthurmaciel/ipe-lang/issues/1185)) ([7920dee](https://github.com/arthurmaciel/ipe-lang/commit/7920dee6396c843ffcd5cc86625b9c265df5c07c))
+
 ## [0.1.63](https://github.com/arthurmaciel/ipe-lang/compare/ipe-v0.1.62...ipe-v0.1.63) (2026-08-19)
 
 
