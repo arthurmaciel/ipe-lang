@@ -400,15 +400,26 @@ mod tests {
 
     #[test]
     fn stepless_do_is_rejected() {
-        // A `do` block with only `=` pure bindings and no `<-` or bare-run step
-        // is rejected with `IPE-P0065`.
+        // A `do` block whose every statement is a `=` pure binding — no `<-`
+        // and no bare-run line — is rejected with `IPE-P0065`.
         assert_eq!(
             err_code(&format!(
-                "{HDR}main =\n    do\n        x = 1\n        x + 1\n"
+                "{HDR}main =\n    do\n        x = 1\n        y = x + 1\n"
             )),
             "IPE-P0065",
             "stepless do (only `=` binds) must be IPE-P0065"
         );
+    }
+
+    #[test]
+    fn do_ending_in_bare_run_after_pure_let_is_accepted() {
+        // A `do` whose non-final statements are pure `=` lets followed by a
+        // final bare-run line has a Task step (the run) and must parse; whether
+        // that run is genuinely effectful is a type-level question, not P0065.
+        let mut i = Interner::new();
+        let src = format!("{HDR}main =\n    do\n        x = 1\n        run x\n");
+        let m = parse_module(&src, &mut i);
+        assert!(m.is_ok(), "do ending in a bare run must parse: {m:?}");
     }
 
     #[test]

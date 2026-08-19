@@ -30,12 +30,16 @@ is extra surface to learn for zero gain.
 
 ## Decision
 
-**Reject stepless `do`.** A `do` block whose non-trailing statements are all
-`=` pure-let bindings (no `<-` Task bind and no inner bare-run Task step) is a
-compile error: `IPE-P0065`. The message directs the author to `let … in` for
-pure bindings and to `Task.succeed` when a `Task` result is genuinely needed.
-Detection happens in the parser's `desugar_do` fold, before any other stage
-sees the AST.
+**Reject stepless `do`.** A `do` block whose every statement is a `=` pure-let
+binding — no `<-` Task bind and no bare-run line anywhere, the final one
+included — is a compile error: `IPE-P0065`. A bare-run line is a Task step
+regardless of position, so a `do` ending in one passes this gate; whether that
+final expression is genuinely effectful is a type-level question left to the
+lowering gates (`IPE-L0141`), not a parse-time one. The check is purely
+structural because the parser cannot see types. The message directs the author
+to `let … in` for pure bindings and to `Task.succeed` when a `Task` result is
+genuinely needed. Detection happens in the parser's `desugar_do` fold, before
+any other stage sees the AST.
 
 The invariant that follows: `do` and `let … in` are **disjoint by
 construction**. `let … in` is pure binding; `do` is Task sequencing with at

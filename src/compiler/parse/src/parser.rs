@@ -2198,19 +2198,20 @@ impl<'a> Parser<'a> {
     /// Fold the parsed statements into the `Task.andThen` chain (see
     /// [`Self::parse_do`]). The block must end in a result expression.
     ///
-    /// A block whose only non-trailing statements are `=` pure-let bindings
-    /// (no `<-` bind, no bare-run step) is stepless: pure code dressed as `do`.
-    /// That is rejected with [`ParseError::SteplessDo`] so authors use
-    /// `let … in` for pure bindings instead.
+    /// A block whose every statement is a `=` pure-let binding — no `<-` bind
+    /// and no bare-run line anywhere, the final one included — is stepless:
+    /// pure code dressed as `do`. That is rejected with
+    /// [`ParseError::SteplessDo`] so authors use `let … in` for pure bindings
+    /// instead. A `do` that ends in a bare run has a Task step and passes this
+    /// purely structural gate; whether that final expression is genuinely
+    /// effectful is a type-level question left to the lowering gates.
     fn desugar_do(&mut self, do_span: Span, stmts: Vec<DoStmt>) -> DResult<Expr> {
-        // Stepless-do gate: every statement before the last is `Let`
-        // (pure `=` bind) and there is no `Bind` (`<-`) or inner bare-run.
-        // The last statement, always a `Run`, is the result expression —
-        // its presence alone does not constitute a Task step.
-        let has_task_step = stmts.iter().enumerate().any(|(i, s)| match s {
-            DoStmt::Bind(..) => true,
-            DoStmt::Run(_) if i + 1 < stmts.len() => true,
-            _ => false,
+        // Stepless-do gate: a Task step is any `<-` bind or any bare run,
+        // the trailing run included. The gate is purely structural because
+        // the parser cannot see types; a `do` with no step is pure code.
+        let has_task_step = stmts.iter().any(|s| match s {
+            DoStmt::Bind(..) | DoStmt::Run(_) => true,
+            DoStmt::Let(..) => false,
         });
         if !has_task_step {
             return Err(Diagnostic::Parse {
