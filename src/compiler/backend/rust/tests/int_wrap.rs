@@ -424,10 +424,5 @@ fn end_to_end_generic_add_wraps_at_max() -> DResult<()> {
     let mut interner = Interner::new();
     let prog = generic_double_program(&mut interner, i64::MAX)?;
     // i64::MAX + i64::MAX wraps to -2 (same as 2*i64::MAX == -2).
-    build_overflow_checked_and_assert(
-        &interner,
-        &prog,
-        "ipe_generic_add_wrap_e2e",
-        "-2\n",
-    )
+    build_overflow_checked_and_assert(&interner, &prog, "ipe_generic_add_wrap_e2e", "-2\n")
 }
