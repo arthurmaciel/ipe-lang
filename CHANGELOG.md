@@ -10,6 +10,16 @@ Entries below the header are maintained by
 section is generated from Conventional Commit messages and prepended when the
 standing release pull request is merged.
 
+## [0.1.60](https://github.com/arthurmaciel/ipe-lang/compare/ipe-v0.1.59...ipe-v0.1.60) (2026-08-19)
+
+
+### Bug Fixes
+
+* **cli:** pin git escapes to immutable commit SHAs and unskip escape verification ([#1166](https://github.com/arthurmaciel/ipe-lang/issues/1166)) ([18aff0f](https://github.com/arthurmaciel/ipe-lang/commit/18aff0fe9a32cdcbed98d0c754c5c37ece637ee8))
+* **diagnostics:** eliminate three doc-vs-code contract mismatches ([#1131](https://github.com/arthurmaciel/ipe-lang/issues/1131)) ([#1165](https://github.com/arthurmaciel/ipe-lang/issues/1165)) ([f6ff80b](https://github.com/arthurmaciel/ipe-lang/commit/f6ff80b82ca547b21ec2a384c90caf78a993b7d7))
+* **examples:** add 01-hello-world.edits to fix sky-ports consistency check ([#1162](https://github.com/arthurmaciel/ipe-lang/issues/1162)) ([64f914b](https://github.com/arthurmaciel/ipe-lang/commit/64f914bb7aac095c2904ef48712a69994783793d))
+* **parse:** unify leading-minus numeric-literal rule across expression and pattern ([#1164](https://github.com/arthurmaciel/ipe-lang/issues/1164)) ([871fd29](https://github.com/arthurmaciel/ipe-lang/commit/871fd295eff6fbc44ddbdebbdf1079f74854b2ce))
+
 ## [0.1.59](https://github.com/arthurmaciel/ipe-lang/compare/ipe-v0.1.58...ipe-v0.1.59) (2026-08-18)
 
 
