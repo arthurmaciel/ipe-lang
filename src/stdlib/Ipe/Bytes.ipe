@@ -13,15 +13,13 @@ module Ipe.Bytes exposing
     , slice
     )
 
--- Divergence from Ipe: Ipe defines `type alias Bytes = String` (Go's `string`
--- is a byte sequence, making the alias cost-free and correct).  Rust's
--- `String` is constrained to valid UTF-8 — mapping `Bytes` to `String` would
--- be unsound for non-UTF-8 binary payloads.  Ipe makes `Bytes` a
--- distinct primitive lowering to `Vec<u8>`, providing lossless handling of
--- arbitrary binary data.  String ↔ Bytes conversions are always explicit:
--- `fromString` UTF-8-encodes a Ipe `String` into bytes; `toString` UTF-8-
--- decodes bytes, returning `Just s` on success and `Nothing` when the buffer
--- is not valid UTF-8.  Rationale: Rust type-system correctness.
+-- `Bytes` is a distinct `Vec<u8>`, not `type alias Bytes = String`: Rust's
+-- `String` is constrained to valid UTF-8, so aliasing would reject arbitrary
+-- binary payloads.  A distinct primitive lowers to `Vec<u8>`, providing
+-- lossless handling of arbitrary binary data.  String ↔ Bytes conversions
+-- are always explicit: `fromString` UTF-8-encodes an Ipe `String` into bytes;
+-- `toString` UTF-8-decodes bytes, returning `Just s` on success and `Nothing`
+-- when the buffer is not valid UTF-8.
 
 
 -- | The empty byte buffer (zero bytes).

@@ -23,13 +23,12 @@ import Ipe.Bytes exposing (Bytes)
 
 
 -- All entry points operate on `Bytes` — arbitrary byte sequences, not
--- necessarily valid UTF-8.  In the Rust backend `Bytes` is a distinct
--- `Vec<u8>` (a documented divergence from the Go backend, where
--- `Bytes` aliased `String`), so the compression kernels take + return
--- `Bytes` to line up with the runtime `compression_*(Vec<u8>) ->
--- IpeTask<_, Vec<u8>>` signatures.  Convert to/from `String` at the
--- boundary via `Bytes.fromString` / `Bytes.toString` /
--- `Bytes.toBase64` when transport encoding is needed.
+-- necessarily valid UTF-8.  `Bytes` is a distinct `Vec<u8>` (not an
+-- alias of `String`), so binary payloads need no UTF-8 validity.  The
+-- compression kernels take and return `Bytes` to match the runtime
+-- `compression_*(Vec<u8>) -> IpeTask<_, Vec<u8>>` signatures.  Convert
+-- to/from `String` at the boundary via `Bytes.fromString` /
+-- `Bytes.toString` / `Bytes.toBase64` when transport encoding is needed.
 
 
 -- | `gzip bytes` — RFC 1952 gzip-compress.  Output is a complete

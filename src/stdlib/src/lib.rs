@@ -1038,4 +1038,69 @@ mod tests {
         let nope = vec!["Ipe".to_owned(), "Nope".to_owned()];
         assert!(!is_compiled_source_segments(&nope));
     }
+
+    /// Pins the no-reference-impl-leak guarantee at the `include_str!` boundary.
+    ///
+    /// The forbidden-term list is read from the same shared file the shell gate
+    /// uses (`tools/scripts/reference-impl-forbidden-terms.txt`), so the two
+    /// enforcers cannot drift out of agreement.  The test asserts that none of
+    /// the embedded `.ipe` sources match any forbidden term, covering both
+    /// `MODULES` (parse-fixture modules) and `COMPILED_STD_MODULES`.
+    #[test]
+    fn no_reference_impl_leak_in_embedded_stdlib() {
+        // Embedded at compile time from the shared SSOT term file.
+        const TERMS_RAW: &str =
+            include_str!("../../../tools/scripts/reference-impl-forbidden-terms.txt");
+
+        // Parse terms: skip blank lines, comment lines, and lines starting with
+        // `\b` (word-bounded src-only terms — the shell gate handles those via a
+        // separate rg invocation; for the Rust test we include them as plain
+        // substrings, which is conservative and sufficient for the .ipe sources).
+        let terms: Vec<&str> = TERMS_RAW
+            .lines()
+            .filter(|l| !l.is_empty() && !l.starts_with('#'))
+            .map(|l| l.trim_start_matches("\\b").trim_end_matches("\\b"))
+            .collect();
+
+        assert!(!terms.is_empty(), "term list must not be empty");
+
+        // Collect all embedded .ipe sources from both tables.
+        let all_sources: Vec<(&str, &str)> = MODULES
+            .iter()
+            .map(|m| (m.name, m.source))
+            .chain(COMPILED_STD_MODULES.iter().map(|m| (m.dotted, m.source)))
+            .collect();
+
+        let mut violations: Vec<String> = Vec::new();
+        for (name, source) in &all_sources {
+            for term in &terms {
+                let term_lower = term.to_lowercase();
+                // Find every offending line (case-insensitive substring search).
+                for (lineno, line) in source.lines().enumerate() {
+                    if !line.to_lowercase().contains(&term_lower) {
+                        continue;
+                    }
+                    // Mirror the shell gate's allowance: a line whose match
+                    // is only inside a doc-link path to our own divergence
+                    // ledger is not a private-impl citation.
+                    if line.to_lowercase().contains("divergences-from-") {
+                        continue;
+                    }
+                    violations.push(format!(
+                        "{} line {}: {:?} matches forbidden term {:?}",
+                        name,
+                        lineno + 1,
+                        line.trim(),
+                        term
+                    ));
+                }
+            }
+        }
+
+        assert!(
+            violations.is_empty(),
+            "reference-implementation leak(s) found in embedded stdlib sources:\n{}",
+            violations.join("\n")
+        );
+    }
 }
