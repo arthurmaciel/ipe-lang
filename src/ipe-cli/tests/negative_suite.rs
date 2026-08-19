@@ -1704,9 +1704,9 @@ fn ffi_planted_bindings_file_is_ignored_on_load() {
 // Maybe.isJust / Maybe.isNothing — export reachability
 // ===========================================================================
 
-/// `Maybe.isJust` and `Maybe.isNothing` are listed in `Ipe.Maybe`'s `exposing`
-/// clause. These tests lock qualified access, explicit `exposing` injection, and
-/// the full set of `Ipe.Maybe` exports.
+// `Maybe.isJust` and `Maybe.isNothing` are listed in `Ipe.Maybe`'s `exposing`
+// clause. These tests lock qualified access, explicit `exposing` injection, and
+// the full set of `Ipe.Maybe` exports.
 
 /// Qualified `Maybe.isJust` and `Maybe.isNothing` on `Just`/`Nothing` values.
 #[test]
