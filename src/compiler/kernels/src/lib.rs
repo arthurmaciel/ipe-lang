@@ -872,6 +872,10 @@ pub enum StdlibKernel {
     MaybeAndMap,
     /// `Maybe.combine : List (Maybe a) -> Maybe (List a)`.
     MaybeCombine,
+    /// `Maybe.isJust : Maybe a -> Bool`.
+    MaybeIsJust,
+    /// `Maybe.isNothing : Maybe a -> Bool`.
+    MaybeIsNothing,
     // ── Result ──────────────────────────────────────────────────────────────
     ResultWithDefault,
     ResultMap,
@@ -2543,6 +2547,8 @@ impl StdlibKernel {
             Self::MaybeMap5 => d("Maybe", "map5", 6, Pure, "maybe_map5"),
             Self::MaybeAndMap => d("Maybe", "andMap", 2, Pure, "maybe_and_map"),
             Self::MaybeCombine => d("Maybe", "combine", 1, Pure, "maybe_combine"),
+            Self::MaybeIsJust => d("Maybe", "isJust", 1, Pure, "maybe_is_just"),
+            Self::MaybeIsNothing => d("Maybe", "isNothing", 1, Pure, "maybe_is_nothing"),
             // ── Result ──────────────────────────────────────────────────────
             Self::ResultWithDefault => d("Result", "withDefault", 2, Pure, "result_with_default"),
             Self::ResultMap => d("Result", "map", 2, Pure, "ipe_result_map"),
@@ -4040,6 +4046,8 @@ impl StdlibKernel {
         Self::MaybeMap5,
         Self::MaybeAndMap,
         Self::MaybeCombine,
+        Self::MaybeIsJust,
+        Self::MaybeIsNothing,
         // Result
         Self::ResultWithDefault,
         Self::ResultMap,
@@ -5338,6 +5346,10 @@ impl StdlibKernel {
         const LIST_MAYBE_A: TyShape = TyShape::Con(BuiltinTag::List, &[MAYBE_A]);
         const MAYBE_LIST_A_LEAF: TyShape = MAYBE_LIST_A;
         const MAYBE_COMBINE: TyShape = TyShape::Fun(&LIST_MAYBE_A, &MAYBE_LIST_A_LEAF);
+        // isJust : Maybe a -> Bool
+        const MAYBE_IS_JUST: TyShape = TyShape::Fun(&MAYBE_A, &BOOL);
+        // isNothing : Maybe a -> Bool
+        const MAYBE_IS_NOTHING: TyShape = TyShape::Fun(&MAYBE_A, &BOOL);
 
         // ── Result combinators (rank-1 polymorphic, arrow-only). Var indices
         //    follow each kernel's scheme exactly (see the `stdlib_scheme`
@@ -7430,6 +7442,8 @@ impl StdlibKernel {
             Self::MaybeMap5 => Some(&MAYBE_MAP5),
             Self::MaybeAndMap => Some(&MAYBE_AND_MAP),
             Self::MaybeCombine => Some(&MAYBE_COMBINE),
+            Self::MaybeIsJust => Some(&MAYBE_IS_JUST),
+            Self::MaybeIsNothing => Some(&MAYBE_IS_NOTHING),
 
             // ── Result combinators. ──
             Self::ResultWithDefault => Some(&RESULT_WITH_DEFAULT),
@@ -8599,6 +8613,8 @@ impl StdlibKernel {
             | Self::MaybeMap5
             | Self::MaybeAndMap
             | Self::MaybeCombine
+            | Self::MaybeIsJust
+            | Self::MaybeIsNothing
             | Self::ResultWithDefault
             | Self::ResultMap
             | Self::ResultAndThen
