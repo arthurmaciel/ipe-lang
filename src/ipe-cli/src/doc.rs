@@ -23,6 +23,11 @@
 //!   an auto-selected free one).
 //! * `ipe doc check [PATH]` — a coverage gate that writes nothing and exits
 //!   non-zero when an exposed binding lacks a doc-comment. Stdlib modules are exempt.
+//! * `ipe doc --check-examples` — extract every fenced ` ```ipe ` block from every
+//!   `{-| … -}` doc-string in the standard library and type-check each one. A block
+//!   that carries `-->` result annotations is also compiled and run (when `IPE_E2E=1`
+//!   is set) and the printed output is asserted against the annotation. Exits non-zero
+//!   when any block fails its expectation.
 //!
 //! The machine-readable [`docs.json`](DocsJson) is the source of truth — one
 //! record per exposed module, with the module's doc-comment and its exposed
@@ -161,6 +166,11 @@ pub enum DocMode {
         /// How to render the result.
         format: OutputFormat,
     },
+    /// Type-check every fenced ` ```ipe ` block in every `{-| … -}` doc-string
+    /// across the standard library. When `IPE_E2E=1` is set, blocks with `-->`
+    /// result annotations are also compiled, run, and their output asserted.
+    /// Exits non-zero when any block fails its expectation.
+    CheckExamples,
 }
 
 /// The default output directory when `--out` is omitted, mirroring Elm's `doc/`.
@@ -177,6 +187,7 @@ enum Sub {
     Check,
     List,
     Query(String),
+    CheckExamples,
 }
 
 /// Accumulated flag values while parsing `ipe doc`'s argument tail.
@@ -214,6 +225,9 @@ const LIST_DEPRECATION_NOTICE: &str =
 fn parse_doc_with(rest: &[String], notice: &mut dyn FnMut(&str)) -> Result<DocMode, CliError> {
     let mut it = rest.iter().peekable();
 
+    // `--check-examples` selects the doc-test gate; detected before other flags.
+    let has_check_examples = rest.iter().any(|s| s == "--check-examples");
+
     // The deprecated `--list` flag still selects the `list` mode. It is a
     // flag-style alias for the bare `list` word, detected before the positional
     // scan so it works in any position.
@@ -222,7 +236,9 @@ fn parse_doc_with(rest: &[String], notice: &mut dyn FnMut(&str)) -> Result<DocMo
         notice(LIST_DEPRECATION_NOTICE);
     }
 
-    let sub = if has_list_flag {
+    let sub = if has_check_examples {
+        Sub::CheckExamples
+    } else if has_list_flag {
         // Consume any `--list` flag found; the rest are positional/format flags.
         Sub::List
     } else {
@@ -270,6 +286,7 @@ fn parse_doc_with(rest: &[String], notice: &mut dyn FnMut(&str)) -> Result<DocMo
         Sub::Check => DocMode::Check { path },
         Sub::List => DocMode::List { path, format },
         Sub::Query(module) => DocMode::Query { module, format },
+        Sub::CheckExamples => DocMode::CheckExamples,
     })
 }
 
@@ -287,8 +304,8 @@ fn parse_doc_flags(
 ) -> Result<(), CliError> {
     while let Some(arg) = it.next() {
         match arg.as_str() {
-            // Skip the `--list` flag itself — already handled by the caller.
-            "--list" => {}
+            // Skip flags already handled by the caller.
+            "--list" | "--check-examples" => {}
             "--out" | "--write-format" if !matches!(sub, Sub::Generate) => {
                 return Err(CliError::UsageOwned(format!(
                     "ipe doc {}: {arg} is a generate-only flag; run `ipe doc` to write files",
@@ -386,6 +403,7 @@ const fn sub_name(sub: &Sub) -> &'static str {
         Sub::Check => "check",
         Sub::List => "list",
         Sub::Query(_) => "<module>",
+        Sub::CheckExamples => "--check-examples",
     }
 }
 
@@ -437,6 +455,7 @@ pub fn run_doc(rest: &[String]) -> Result<(), CliError> {
             Ok(())
         }
         DocMode::Query { module, format } => query_module(&module, format),
+        DocMode::CheckExamples => check_examples(),
     }
 }
 
@@ -1464,6 +1483,317 @@ fn check(path: &Path) -> Result<(), CliError> {
         "add a `-- |` comment above each, or hide it from the module's exposing list"
     );
     Err(CliError::DocCoverage(report))
+}
+
+/// One extracted doc-string example awaiting verification.
+struct Example {
+    /// Human-readable label, e.g. `Ipe.Maybe::withDefault example 1`.
+    label: String,
+    /// The fenced ` ```ipe ` block body, already stripped of the fence lines.
+    body: String,
+    /// Expected result lines from `-->` annotations in the body, in order.
+    /// Each element is the trimmed right-hand side of a `-->` arrow.
+    expected_results: Vec<String>,
+}
+
+/// Extract all `{-| … -}` doc-string blocks from an Ipê source text and return
+/// every ` ```ipe ` fenced example within them.
+///
+/// Each returned [`Example`] carries a label (for error reporting), the raw
+/// block body, and the `-->` expected-result lines parsed out of the body
+/// (for the result-assertion tier).
+fn extract_doc_examples(module_name: &str, src: &str) -> Vec<Example> {
+    const OPEN: &str = "{-|";
+    const CLOSE: &str = "-}";
+    const FENCE_OPEN: &str = "```ipe";
+    const FENCE_CLOSE: &str = "```";
+
+    let mut examples = Vec::new();
+    let mut search_from = 0usize;
+    let mut example_idx = 0usize;
+
+    while let Some(open_rel) = src[search_from..].find(OPEN) {
+        let block_start = search_from + open_rel + OPEN.len();
+        let Some(close_rel) = src[block_start..].find(CLOSE) else {
+            break;
+        };
+        let block_end = block_start + close_rel;
+        let block_body = &src[block_start..block_end];
+
+        // Find ` ```ipe ` fences within this doc-string body.
+        let mut fence_search = 0usize;
+        while let Some(fence_open_rel) = block_body[fence_search..].find(FENCE_OPEN) {
+            let after_open = fence_search + fence_open_rel + FENCE_OPEN.len();
+            // Skip the rest of the opening fence line.
+            let content_start = block_body[after_open..]
+                .find('\n')
+                .map_or(block_body.len(), |nl| after_open + nl + 1);
+            // Find the closing fence.
+            let Some(close_fence_rel) = block_body[content_start..].find(FENCE_CLOSE) else {
+                fence_search = after_open;
+                continue;
+            };
+            let content_end = content_start + close_fence_rel;
+            let raw_body = block_body[content_start..content_end].trim_end_matches('\n');
+
+            example_idx += 1;
+            let label = format!("{module_name} example {example_idx}");
+
+            // Parse `-->` result annotations out of the body lines.
+            let mut expected_results: Vec<String> = Vec::new();
+            for line in raw_body.lines() {
+                if let Some(arrow_pos) = line.find("-->") {
+                    let result = line[arrow_pos + 3..].trim();
+                    if !result.is_empty() {
+                        expected_results.push(result.to_owned());
+                    }
+                }
+            }
+
+            examples.push(Example {
+                label,
+                body: raw_body.to_owned(),
+                expected_results,
+            });
+
+            fence_search = content_end + FENCE_CLOSE.len();
+        }
+
+        search_from = block_end + CLOSE.len();
+    }
+
+    examples
+}
+
+/// Synthesize a minimal compilable module wrapping `body`.
+///
+/// If `body` already starts with `module ` it is returned as-is. Otherwise a
+/// `module Main exposing (..)` header is prepended. The module that the
+/// doc-string belongs to (`source_module`, e.g. `Ipe.Maybe`) is imported with
+/// `exposing (..)` so unqualified names from it resolve. Additional imports for
+/// commonly-qualified names are injected when the corresponding prefix appears
+/// in `body`.
+///
+/// Lines that contain `-->` are treated as expression/result assertions. The
+/// expression (the part before `-->`) is assigned to a fresh top-level binding
+/// (`docCheckN = <expr>`) so the type-checker can infer its type without
+/// needing a `main` entry point.
+fn synthesize_module(body: &str, source_module: &str) -> String {
+    if body.trim_start().starts_with("module ") {
+        return body.to_owned();
+    }
+
+    let mut out = String::from("module Main exposing (..)\n");
+
+    // Import the module whose doc-string this example comes from; its
+    // unqualified names are in scope in the example.
+    if !source_module.is_empty() {
+        let short = source_module
+            .split('.')
+            .next_back()
+            .unwrap_or(source_module);
+        out.push('\n');
+        let _ = writeln!(out, "import {source_module} as {short} exposing (..)");
+    }
+
+    // Auto-inject additional imports for qualified names used in the block.
+    for (prefix, import) in &[
+        ("Maybe.", "import Ipe.Maybe as Maybe exposing (Maybe(..))"),
+        ("List.", "import Ipe.List as List"),
+        ("String.", "import Ipe.String as String"),
+        ("Dict.", "import Ipe.Dict as Dict"),
+        ("Set.", "import Ipe.Set as Set"),
+        (
+            "Result.",
+            "import Ipe.Result as Result exposing (Result(..))",
+        ),
+        ("Task.", "import Ipe.Task as Task"),
+        ("Io.", "import Ipe.Io as Io"),
+        ("Debug.", "import Ipe.Debug as Debug"),
+    ] {
+        // Only inject if the prefix appears AND the module is not already
+        // imported as the source module (avoid a duplicate import).
+        let module_for_prefix = import.split_whitespace().nth(1).unwrap_or("");
+        if body.contains(prefix) && module_for_prefix != source_module {
+            out.push('\n');
+            out.push_str(import);
+        }
+    }
+
+    out.push('\n');
+
+    // Emit body lines. `-->` expression-assertion lines become `docCheckN = <expr>`
+    // top-level bindings so the type-checker can reach them.
+    let mut check_idx = 0usize;
+    for line in body.lines() {
+        if let Some(arrow_pos) = line.find("-->") {
+            let expr = line[..arrow_pos].trim();
+            if !expr.is_empty() {
+                check_idx += 1;
+                out.push('\n');
+                let _ = writeln!(out, "docCheck{check_idx} = {expr}");
+            }
+        } else {
+            out.push('\n');
+            out.push_str(line);
+        }
+    }
+    out.push('\n');
+    out
+}
+
+/// Run the compiled example at `snippet_path` and assert its output matches the
+/// `-->` annotated results (one per line, in order).
+///
+/// Spawns the current binary as `ipe run <snippet_path>` and compares stdout
+/// against the expected output. Returns `Err(description)` on a mismatch or
+/// subprocess failure; `Ok(())` when the output matches.
+fn run_example_and_check(
+    snippet_path: &Path,
+    label: &str,
+    expected: &[String],
+) -> Result<(), String> {
+    use std::process::Command;
+
+    // Locate this binary (we re-invoke ourselves as `ipe run`).
+    let ipe_bin = std::env::current_exe()
+        .map_err(|e| format!("{label}: could not locate ipe binary: {e}"))?;
+
+    let out = Command::new(&ipe_bin)
+        .arg("run")
+        .arg(snippet_path)
+        .output()
+        .map_err(|e| format!("{label}: ipe run failed to spawn: {e}"))?;
+
+    if !out.status.success() {
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        return Err(format!("{label}: ipe run exited non-zero\n       {stderr}"));
+    }
+
+    let actual = String::from_utf8_lossy(&out.stdout);
+    let actual_lines: Vec<&str> = actual.lines().filter(|l| !l.trim().is_empty()).collect();
+
+    if actual_lines.len() != expected.len() {
+        return Err(format!(
+            "{label}: expected {} output line(s) but got {}\n       expected: {:?}\n       actual:   {:?}",
+            expected.len(),
+            actual_lines.len(),
+            expected,
+            actual_lines,
+        ));
+    }
+
+    for (i, (exp, got)) in expected.iter().zip(actual_lines.iter()).enumerate() {
+        if exp.trim() != got.trim() {
+            return Err(format!(
+                "{label}: result line {} mismatch\n       expected: {exp}\n       actual:   {got}",
+                i + 1
+            ));
+        }
+    }
+
+    Ok(())
+}
+
+/// Doc-test gate: extract every fenced ` ```ipe ` example from every
+/// `{-| … -}` doc-string across the standard library and type-check each one.
+///
+/// When `IPE_E2E=1` is set in the environment, examples with `-->` result
+/// annotations are also compiled, run, and their printed output asserted.
+///
+/// # Errors
+/// [`CliError::DocExamplesFailed`] when any block fails its expectation.
+fn check_examples() -> Result<(), CliError> {
+    // Collect all stdlib sources: the kernel-typed modules and the compiled-source ones.
+    let all_sources: Vec<(&str, &str)> = crate::stdlib::MODULES
+        .iter()
+        .map(|m| (m.name, m.source))
+        .chain(
+            crate::stdlib::COMPILED_STD_MODULES
+                .iter()
+                .map(|m| (m.dotted, m.source)),
+        )
+        .collect();
+
+    let mut total = 0usize;
+    let mut passed = 0usize;
+    let mut failed: Vec<String> = Vec::new();
+
+    // Write examples to a temp dir; RAII cleanup on exit.
+    let tmp_dir =
+        crate::scratch::ScratchDir::new("ipe-doc-examples").map_err(|e| CliError::Io {
+            path: std::path::PathBuf::from("ipe-doc-examples"),
+            source: e,
+        })?;
+
+    for (module_name, src) in &all_sources {
+        let examples = extract_doc_examples(module_name, src);
+        for ex in &examples {
+            total += 1;
+            let module_src = synthesize_module(&ex.body, module_name);
+
+            // Write to a temp file.
+            let snippet_path = tmp_dir.child("Main.ipe");
+            std::fs::write(&snippet_path, &module_src)
+                .map_err(|e| crate::io_err(&snippet_path, e))?;
+
+            // Tier 1: type-check the example (always).
+            match crate::typecheck_entry_via_graph(&snippet_path) {
+                Ok(()) => {
+                    eprintln!("  ok   {}", ex.label);
+                    passed += 1;
+                }
+                Err(err) => {
+                    eprintln!("  FAIL {}: does not type-check", ex.label);
+                    eprintln!("       {err}");
+                    failed.push(format!("{}: does not type-check", ex.label));
+                    // Skip result-checking for examples that don't even type-check.
+                    continue;
+                }
+            }
+
+            // Tier 2: if the example has `-->` annotations AND IPE_E2E=1 is set,
+            // run the example and assert its printed output.
+            if !ex.expected_results.is_empty()
+                && std::env::var_os("IPE_E2E").is_some_and(|v| v == "1")
+            {
+                match run_example_and_check(&snippet_path, &ex.label, &ex.expected_results) {
+                    Ok(()) => {}
+                    Err(msg) => {
+                        eprintln!("  FAIL {msg}");
+                        failed.push(msg);
+                    }
+                }
+            }
+        }
+    }
+
+    eprintln!();
+    eprintln!("=== doc-example gate: {passed}/{total} passed ===");
+
+    if failed.is_empty() {
+        print!(
+            "{}",
+            crate::style::frame(&crate::style::gutter(&format!(
+                "all {total} doc-string example(s) type-check"
+            )))
+        );
+        Ok(())
+    } else {
+        let mut report = format!(
+            "{} of {} doc-string example(s) failed:\n",
+            failed.len(),
+            total
+        );
+        for msg in &failed {
+            let _ = writeln!(report, "  FAIL: {msg}");
+        }
+        let _ = write!(
+            report,
+            "fix each failing example or mark it with ` ```ipe ipe:skip ` to exempt it"
+        );
+        Err(CliError::DocExamplesFailed(report))
+    }
 }
 
 /// Render [`DocsJson`] as JSON.
