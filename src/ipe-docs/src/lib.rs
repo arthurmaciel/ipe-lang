@@ -23,7 +23,7 @@ use std::path::{Path, PathBuf};
 
 use ipe_intern::Interner;
 use ipe_parse::parse_module;
-use ipe_stdlib::MODULES as STDLIB_MODULES;
+use ipe_stdlib::{COMPILED_STD_MODULES, MODULES as STDLIB_MODULES};
 use ipe_syntax::{TypeAlias, Union, Value};
 // `Located` wrapper is accessed via `.value` on the `loc` field of each node;
 // the type itself is not named in this module.
@@ -108,6 +108,7 @@ impl Index {
     ) -> Result<Self, String> {
         let mut builder = IndexBuilder::new();
         builder.add_stdlib()?;
+        builder.add_compiled_stdlib()?;
         builder.add_diagnostics(explain_dir)?;
         builder.add_constructs(content_dir)?;
         builder.add_commands(commands);
@@ -218,6 +219,63 @@ impl IndexBuilder {
                 index_alias(
                     &mut self.entries,
                     std_mod.name,
+                    short,
+                    &loc_alias.value,
+                    &interner,
+                );
+            }
+        }
+        Ok(())
+    }
+
+    /// Parse and index every compiled-source stdlib module's doc-strings.
+    ///
+    /// Mirrors [`Self::add_stdlib`] but operates on `COMPILED_STD_MODULES`
+    /// (the modules that go through the full compile pipeline rather than the
+    /// parse-fixture `MODULES` list).
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if any compiled-source stdlib module fails to parse.
+    pub fn add_compiled_stdlib(&mut self) -> Result<(), String> {
+        let mut interner = Interner::new();
+        for std_mod in COMPILED_STD_MODULES {
+            let module = parse_module(std_mod.source, &mut interner)
+                .map_err(|d| format!("parse error in {}: {d:?}", std_mod.dotted))?;
+
+            let short = strip_ipe_prefix(std_mod.dotted);
+
+            let mod_entry = Entry {
+                kind: EntryKind::Module,
+                source_key: std_mod.dotted.to_owned(),
+                text: String::new(),
+            };
+            self.entries
+                .insert(std_mod.dotted.to_owned(), mod_entry.clone());
+            self.entries.insert(short.to_owned(), mod_entry);
+
+            for loc_val in &module.values {
+                index_value(
+                    &mut self.entries,
+                    std_mod.dotted,
+                    short,
+                    &loc_val.value,
+                    &interner,
+                );
+            }
+            for loc_union in &module.unions {
+                index_union(
+                    &mut self.entries,
+                    std_mod.dotted,
+                    short,
+                    &loc_union.value,
+                    &interner,
+                );
+            }
+            for loc_alias in &module.aliases {
+                index_alias(
+                    &mut self.entries,
+                    std_mod.dotted,
                     short,
                     &loc_alias.value,
                     &interner,
