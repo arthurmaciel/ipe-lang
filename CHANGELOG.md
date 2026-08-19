@@ -10,6 +10,16 @@ Entries below the header are maintained by
 section is generated from Conventional Commit messages and prepended when the
 standing release pull request is merged.
 
+## [0.1.66](https://github.com/arthurmaciel/ipe-lang/compare/ipe-v0.1.65...ipe-v0.1.66) (2026-08-19)
+
+
+### Bug Fixes
+
+* **canon:** register isJust and isNothing as StdlibKernel variants (closes [#1193](https://github.com/arthurmaciel/ipe-lang/issues/1193)) ([#1199](https://github.com/arthurmaciel/ipe-lang/issues/1199)) ([435890a](https://github.com/arthurmaciel/ipe-lang/commit/435890a67a5dea63e72b702abe76d5d778deca9c))
+* **cli:** fail closed when an Unsafe-scan module is unreadable (closes [#1142](https://github.com/arthurmaciel/ipe-lang/issues/1142)) ([#1189](https://github.com/arthurmaciel/ipe-lang/issues/1189)) ([657a30e](https://github.com/arthurmaciel/ipe-lang/commit/657a30eef95e1505c4ad6bf934c622e5e856ceb6))
+* **cli:** type LockedDep.rev as PinnedRev + typed escape/index tag (closes [#1168](https://github.com/arthurmaciel/ipe-lang/issues/1168)) ([#1191](https://github.com/arthurmaciel/ipe-lang/issues/1191)) ([e6847fb](https://github.com/arthurmaciel/ipe-lang/commit/e6847fbbc329f19d8fbae92580528117fd66f173))
+* **parse:** reject stepless do; drop doParallel in favor of Task.parallel (closes [#1192](https://github.com/arthurmaciel/ipe-lang/issues/1192)) ([#1197](https://github.com/arthurmaciel/ipe-lang/issues/1197)) ([614f357](https://github.com/arthurmaciel/ipe-lang/commit/614f357ea213988883ea1267b732b57cf9990746))
+
 ## [0.1.65](https://github.com/arthurmaciel/ipe-lang/compare/ipe-v0.1.64...ipe-v0.1.65) (2026-08-19)
 
 
