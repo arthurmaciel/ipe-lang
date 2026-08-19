@@ -210,8 +210,7 @@ fn nonclone_handle_threaded_linearly_builds() {
     if std::env::var("IPE_E2E").is_ok() {
         let handle_demo_dir = tmp.join("handle_demo");
         let handle_demo_src = handle_demo_dir.join("src");
-        fs::create_dir_all(&handle_demo_src)
-            .expect("create handle_demo fixture crate directory");
+        fs::create_dir_all(&handle_demo_src).expect("create handle_demo fixture crate directory");
         fs::write(
             handle_demo_dir.join("Cargo.toml"),
             "[package]\nname = \"handle-demo\"\nversion = \"0.1.0\"\nedition = \"2021\"\n",
