@@ -803,6 +803,8 @@ impl Env {
                     "map5",
                     "andMap",
                     "combine",
+                    "isJust",
+                    "isNothing",
                 ],
             ),
             (

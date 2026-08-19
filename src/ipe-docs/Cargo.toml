@@ -1,0 +1,23 @@
+[package]
+name = "ipe_docs"
+edition.workspace = true
+version.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "gen-stdlib-docs"
+path = "src/bin/gen_stdlib_docs.rs"
+
+[[bin]]
+name = "gen_site"
+path = "src/bin/gen_site.rs"
+
+[dependencies]
+ipe_annotate  = { path = "../compiler/annotate" }
+ipe_intern    = { path = "../compiler/intern" }
+ipe_syntax    = { path = "../compiler/syntax" }
+ipe_parse     = { path = "../compiler/parse" }
+ipe_stdlib    = { path = "../stdlib" }
+
+[lints]
+workspace = true

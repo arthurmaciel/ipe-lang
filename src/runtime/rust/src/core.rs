@@ -551,6 +551,14 @@ pub fn maybe_with_default<A>(def: A, m: IpeMaybe<A>) -> A {
     }
 }
 
+pub fn maybe_is_just<A>(m: IpeMaybe<A>) -> bool {
+    matches!(m, IpeMaybe::Just(_))
+}
+
+pub fn maybe_is_nothing<A>(m: IpeMaybe<A>) -> bool {
+    matches!(m, IpeMaybe::Nothing)
+}
+
 // `Result.traverse : (a -> Result e b) -> List a -> Result e (List b)`. Maps
 // `f` across the list, collecting the `Ok` values; the FIRST `Err` (in list
 // order) short-circuits with the real error. No `Clone` bound — each element is

@@ -1,11 +1,39 @@
--- | Ipe.Maybe — combinators over the Maybe ADT.
+-- | `Ipe.Maybe` — work with values that may be absent.
 --
--- The Maybe ADT itself (`Maybe a`, `Just`, `Nothing` ctors) remains
--- kernel-anchored so the type system and runtime IpeMaybe representation
--- stay in lockstep.  Without monomorphisation, call-site coercion would
--- mismatch inference; with it wired, the call-site coerceArg gets the
--- call's actual concrete type and emits e.g. `MaybeCoerce[string]`
--- instead of `MaybeCoerce[any]`.
+-- A `Maybe a` is either `Just a` (a value is present) or `Nothing` (it is
+-- absent). It is how Ipê represents "there might not be an answer" without a
+-- null: a function that can fail to produce a value returns a `Maybe`, and the
+-- caller must handle both cases before using the value. `List.head`, for
+-- example, returns `Maybe a` because an empty list has no first element.
+--
+-- The functions here transform and combine `Maybe` values so you rarely need
+-- to `case` on them by hand: `map` changes the value inside a `Just`,
+-- `andThen` chains a step that may itself be absent, and `withDefault`
+-- supplies a fallback when the value is missing.
+--
+-- Example:
+--
+--     import Ipe.Maybe as Maybe exposing (Maybe(..))
+--     import Ipe.List as List
+--
+--     -- The first even number, defaulting to 0 when there is none.
+--     firstEven : List Int -> Int
+--     firstEven numbers =
+--         List.find (\n -> modBy 2 n == 0) numbers
+--             |> Maybe.withDefault 0
+--
+--     firstEven [ 1, 3, 4, 7 ] == 4
+--     firstEven [ 1, 3, 5 ] == 0
+--
+-- `Maybe a`, `Just`, and `Nothing` are built in — no import brings them into
+-- scope, though `exposing (Maybe(..))` above lets you write the constructors
+-- unqualified.
+--
+-- See also: `Ipe.Result` (a failure that also carries an error), `Ipe.List`.
+
+-- The `Maybe` type and its `Just` / `Nothing` constructors are kernel-anchored
+-- so the type system and the runtime representation stay in lockstep; only the
+-- combinators below are defined in this source.
 module Ipe.Maybe exposing
     ( withDefault
     , map
@@ -18,24 +46,102 @@ module Ipe.Maybe exposing
     )
 
 
+-- | `withDefault fallback maybe` — the value inside a `Just`, or `fallback`
+-- when the `Maybe` is `Nothing`. The usual way to leave the `Maybe` world once
+-- a sensible default exists.
+--
+-- Example:
+--
+--     Maybe.withDefault 0 (Just 5) == 5
+--     Maybe.withDefault 0 Nothing == 0
+{-| `withDefault fallback maybe` — the value inside a `Just`, or `fallback`
+when the `Maybe` is `Nothing`.
+
+```ipe
+withDefault 0 (Just 5) --> 5
+withDefault 0 Nothing --> 0
+```
+-}
+withDefault : a -> Maybe a -> a
 withDefault def m =
     case m of
         Just x -> x
         Nothing -> def
 
 
+-- | `map f maybe` — apply `f` to the value inside a `Just`, leaving `Nothing`
+-- untouched. Transforms the present value without unwrapping it.
+--
+-- Example:
+--
+--     Maybe.map (\n -> n + 1) (Just 4) == Just 5
+--     Maybe.map (\n -> n + 1) Nothing == Nothing
+{-| `map f maybe` — apply `f` to the value inside a `Just`, leaving `Nothing`
+untouched.
+
+```ipe
+map (\n -> n + 1) (Just 4) --> Just 5
+map (\n -> n + 1) Nothing --> Nothing
+```
+-}
+map : (a -> b) -> Maybe a -> Maybe b
 map fn m =
     case m of
         Just x -> Just (fn x)
         Nothing -> Nothing
 
 
+-- | `andThen f maybe` — feed the value inside a `Just` to `f`, which itself
+-- returns a `Maybe`, and flatten the result; `Nothing` passes straight
+-- through. Use it to chain steps that each may be absent, so a `Nothing`
+-- anywhere in the chain short-circuits the whole thing.
+--
+-- `map` is for a step that always succeeds; `andThen` is for a step that may
+-- itself produce `Nothing`.
+--
+-- Example:
+--
+--     halveIfEven : Int -> Maybe Int
+--     halveIfEven n =
+--         if modBy 2 n == 0 then Just (n // 2) else Nothing
+--
+--     Maybe.andThen halveIfEven (Just 8) == Just 4
+--     Maybe.andThen halveIfEven (Just 7) == Nothing
+--     Maybe.andThen halveIfEven Nothing == Nothing
+{-| `andThen f maybe` — feed the value inside a `Just` to `f`; `Nothing` passes
+straight through.
+
+```ipe
+andThen (\n -> if n > 0 then Just n else Nothing) (Just 3) --> Just 3
+andThen (\n -> if n > 0 then Just n else Nothing) (Just 0) --> Nothing
+andThen (\n -> if n > 0 then Just n else Nothing) Nothing --> Nothing
+```
+-}
+andThen : (a -> Maybe b) -> Maybe a -> Maybe b
 andThen fn m =
     case m of
         Just x -> fn x
         Nothing -> Nothing
 
 
+-- | `map2 f a b` — combine two `Maybe` values with `f`, giving `Just (f a b)`
+-- only when BOTH are present; if either is `Nothing`, the result is `Nothing`.
+-- Use it to build a value that needs several independently-optional inputs at
+-- once. `map3`, `map4`, and `map5` extend this to more inputs.
+--
+-- Example:
+--
+--     Maybe.map2 (\a b -> a + b) (Just 2) (Just 3) == Just 5
+--     Maybe.map2 (\a b -> a + b) (Just 2) Nothing == Nothing
+{-| `map2 f ma mb` — combine two `Maybe` values with `f`; `Just` only when both
+are present.
+
+```ipe
+map2 (\a b -> a + b) (Just 2) (Just 3) --> Just 5
+map2 (\a b -> a + b) (Just 2) Nothing --> Nothing
+```
+-}
+map2 : (a -> b -> c) -> Maybe a -> Maybe b -> Maybe c
 map2 fn ma mb =
     case ma of
         Just a ->
@@ -45,6 +151,22 @@ map2 fn ma mb =
         Nothing -> Nothing
 
 
+-- | `map3 f a b c` — like `map2`, combining three `Maybe` values; `Just` only
+-- when all three are present.
+--
+-- Example:
+--
+--     Maybe.map3 (\a b c -> a + b + c) (Just 1) (Just 2) (Just 3) == Just 6
+--     Maybe.map3 (\a b c -> a + b + c) (Just 1) Nothing (Just 3) == Nothing
+{-| `map3 f ma mb mc` — combine three `Maybe` values with `f`; `Just` only when
+all three are present.
+
+```ipe
+map3 (\a b c -> a + b + c) (Just 1) (Just 2) (Just 3) --> Just 6
+map3 (\a b c -> a + b + c) (Just 1) Nothing (Just 3) --> Nothing
+```
+-}
+map3 : (a -> b -> c -> d) -> Maybe a -> Maybe b -> Maybe c -> Maybe d
 map3 fn ma mb mc =
     case ma of
         Just a ->
@@ -57,6 +179,22 @@ map3 fn ma mb mc =
         Nothing -> Nothing
 
 
+-- | `map4 f a b c d` — like `map2`, combining four `Maybe` values; `Just`
+-- only when all four are present.
+--
+-- Example:
+--
+--     Maybe.map4 (\a b c d -> a + b + c + d)
+--         (Just 1) (Just 2) (Just 3) (Just 4) == Just 10
+{-| `map4 f ma mb mc md` — combine four `Maybe` values with `f`; `Just` only
+when all four are present.
+
+```ipe
+map4 (\a b c d -> a + b + c + d) (Just 1) (Just 2) (Just 3) (Just 4) --> Just 10
+map4 (\a b c d -> a + b + c + d) (Just 1) Nothing (Just 3) (Just 4) --> Nothing
+```
+-}
+map4 : (a -> b -> c -> d -> e) -> Maybe a -> Maybe b -> Maybe c -> Maybe d -> Maybe e
 map4 fn ma mb mc md =
     case ma of
         Just a ->
@@ -72,6 +210,23 @@ map4 fn ma mb mc md =
         Nothing -> Nothing
 
 
+-- | `map5 f a b c d e` — like `map2`, combining five `Maybe` values; `Just`
+-- only when all five are present. For more inputs than this, reach for
+-- `andMap`, which chains an arbitrary number of arguments.
+--
+-- Example:
+--
+--     Maybe.map5 (\a b c d e -> a + b + c + d + e)
+--         (Just 1) (Just 2) (Just 3) (Just 4) (Just 5) == Just 15
+{-| `map5 f ma mb mc md me` — combine five `Maybe` values with `f`; `Just` only
+when all five are present.
+
+```ipe
+map5 (\a b c d e -> a + b + c + d + e) (Just 1) (Just 2) (Just 3) (Just 4) (Just 5) --> Just 15
+map5 (\a b c d e -> a + b + c + d + e) (Just 1) Nothing (Just 3) (Just 4) (Just 5) --> Nothing
+```
+-}
+map5 : (a -> b -> c -> d -> e -> f) -> Maybe a -> Maybe b -> Maybe c -> Maybe d -> Maybe e -> Maybe f
 map5 fn ma mb mc md me =
     case ma of
         Just a ->
@@ -90,6 +245,24 @@ map5 fn ma mb mc md me =
         Nothing -> Nothing
 
 
+-- | `andMap maybeArg maybeFn` — apply the function inside `maybeFn` to the
+-- value inside `maybeArg`, giving `Nothing` if either is absent. It is the
+-- building block `map2`–`map5` are made of: given a `Maybe` holding a function
+-- of one argument, it supplies that argument.
+--
+-- Example:
+--
+--     Maybe.andMap (Just 10) (Just (\n -> n + 1)) == Just 11
+--     Maybe.andMap Nothing (Just (\n -> n + 1)) == Nothing
+{-| `andMap ma mfn` — apply the function inside `mfn` to the value inside `ma`;
+`Nothing` if either is absent.
+
+```ipe
+andMap (Just 10) (Just (\n -> n + 1)) --> Just 11
+andMap Nothing (Just (\n -> n + 1)) --> Nothing
+```
+-}
+andMap : Maybe a -> Maybe (a -> b) -> Maybe b
 andMap ma mfn =
     case mfn of
         Just fn ->
@@ -99,15 +272,25 @@ andMap ma mfn =
         Nothing -> Nothing
 
 
--- | `combine maybes` — collect a list of Maybes into a Maybe of list,
--- preserving order and short-circuiting on the first `Nothing`.
+-- | `combine maybes` — turn a `List (Maybe a)` into a `Maybe (List a)`. The
+-- result is `Just` the list of all the values only when every element is
+-- present; a single `Nothing` anywhere makes the whole result `Nothing`. Order
+-- is preserved. Use it when you have parsed several optional values and want
+-- them all or none.
 --
--- `combineHelp` walks the input tail-recursively, prepending each `Just`
--- payload onto `acc` (reverse order) and returning `Nothing` immediately
--- on the first miss.  At the empty base it flips `acc` via `reverseHelp`
--- for the final left-to-right output.  The helper is a tail call, so
--- `Ipe.Build.TailCallOpt` lowers it to a loop and a very long input runs
--- in constant native stack.
+-- Example:
+--
+--     Maybe.combine [ Just 1, Just 2, Just 3 ] == Just [ 1, 2, 3 ]
+--     Maybe.combine [ Just 1, Nothing, Just 3 ] == Nothing
+{-| `combine maybes` — turn a `List (Maybe a)` into a `Maybe (List a)`; `Nothing`
+if any element is absent.
+
+```ipe
+combine [ Just 1, Just 2, Just 3 ] --> Just [ 1, 2, 3 ]
+combine [ Just 1, Nothing, Just 3 ] --> Nothing
+```
+-}
+combine : List (Maybe a) -> Maybe (List a)
 combine maybes =
     combineHelp maybes []
 
@@ -127,12 +310,43 @@ reverseHelp list acc =
         (x :: rest) -> reverseHelp rest (x :: acc)
 
 
+-- | `isJust maybe` — `True` when the `Maybe` is `Just _`, `False` when it is
+-- `Nothing`. Prefer `map` / `withDefault` / a `case` when you also need the
+-- value; reach for `isJust` only when a plain presence test is all you want.
+--
+-- Example:
+--
+--     Maybe.isJust (Just 0) == True
+--     Maybe.isJust Nothing == False
+{-| `isJust maybe` — `True` when the `Maybe` holds a value.
+
+```ipe
+isJust (Just 0) --> True
+isJust Nothing --> False
+```
+-}
+isJust : Maybe a -> Bool
 isJust m =
     case m of
         Just _ -> True
         Nothing -> False
 
 
+-- | `isNothing maybe` — `True` when the `Maybe` is `Nothing`, `False` when it
+-- is `Just _`. The complement of `isJust`.
+--
+-- Example:
+--
+--     Maybe.isNothing Nothing == True
+--     Maybe.isNothing (Just 0) == False
+{-| `isNothing maybe` — `True` when the `Maybe` is absent.
+
+```ipe
+isNothing Nothing --> True
+isNothing (Just 0) --> False
+```
+-}
+isNothing : Maybe a -> Bool
 isNothing m =
     case m of
         Just _ -> False

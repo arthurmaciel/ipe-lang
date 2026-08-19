@@ -154,7 +154,11 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          TAG="${GITHUB_REF_NAME:-${{ github.event.inputs.tag }}}"
+          # Resolve the tag the same way the build jobs resolve `ref`: the release
+          # event's tag on a published release, or the dispatched tag on a manual
+          # rebuild. GITHUB_REF_NAME is the branch (main) on workflow_dispatch, so
+          # it must not be used here.
+          TAG="${{ github.event.release.tag_name || github.event.inputs.tag }}"
           gh release upload "$TAG" release/* \
             --clobber \
             --repo "${{ github.repository }}"

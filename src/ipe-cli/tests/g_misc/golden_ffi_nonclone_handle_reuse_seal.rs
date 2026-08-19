@@ -200,5 +200,49 @@ fn nonclone_handle_threaded_linearly_builds() {
             return;
         }
     }
+
+    // Write the `handle_demo` fixture crate and repoint the emitted manifest's
+    // registry pin at it. The emitted Cargo.toml carries `handle-demo =
+    // "=0.1.0"` (an exact crates.io pin), which fails offline and in CI shards
+    // where the crate is not published. We create the crate locally and replace
+    // the pin with a path dependency — the same provisioning pattern the
+    // `asserted_call` golden uses for its `tm` fixture.
+    if std::env::var("IPE_E2E").is_ok() {
+        let handle_demo_dir = tmp.join("handle_demo");
+        let handle_demo_src = handle_demo_dir.join("src");
+        fs::create_dir_all(&handle_demo_src).expect("create handle_demo fixture crate directory");
+        fs::write(
+            handle_demo_dir.join("Cargo.toml"),
+            "[package]\nname = \"handle-demo\"\nversion = \"0.1.0\"\nedition = \"2021\"\n",
+        )
+        .expect("write handle_demo Cargo.toml");
+        fs::write(
+            handle_demo_src.join("lib.rs"),
+            "pub struct Widget { slots: usize }\n\
+             impl Widget {\n\
+             \x20   pub fn new() -> Self { Widget { slots: 3 } }\n\
+             \x20   pub fn slot_count(&self) -> usize { self.slots }\n\
+             }\n",
+        )
+        .expect("write handle_demo src/lib.rs");
+
+        let manifest_path = out.join("Cargo.toml");
+        let manifest = fs::read_to_string(&manifest_path)
+            .expect("read emitted Cargo.toml for handle_demo path-dep repoint");
+        assert!(
+            manifest.contains("handle-demo"),
+            "emitted manifest must declare the handle-demo dependency; got:\n{manifest}"
+        );
+        let patched = manifest.replace(
+            "handle-demo = \"=0.1.0\"",
+            &format!(
+                "handle-demo = {{ path = {:?} }}",
+                handle_demo_dir.display().to_string()
+            ),
+        );
+        fs::write(&manifest_path, patched)
+            .expect("write patched Cargo.toml with handle_demo path dep");
+    }
+
     support::assert_seal_builds("ffi_nonclone_handle_thread", &out);
 }

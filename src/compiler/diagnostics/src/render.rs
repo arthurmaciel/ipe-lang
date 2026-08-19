@@ -239,6 +239,16 @@ fn prose_band(d: &Diagnostic) -> String {
         Diagnostic::Ffi { msg } => ffi_prose(msg),
         Diagnostic::Sandbox { msg } => sandbox_prose(msg),
         Diagnostic::Consent { msg } => consent_prose(msg),
+        Diagnostic::RegistryUnreachable { detail } => {
+            format!(
+                "The compiler could not reach the crate registry while building your program. \
+                 This is a network or DNS problem on your machine — not a mistake in your code.\n\
+                 \n\
+                 {detail}\n\
+                 \n\
+                 Check your connection and try again. Run `ipe explain IPE-E0001` for more help."
+            )
+        }
     }
 }
 
@@ -365,6 +375,20 @@ fn parse_prose(msg: &ParseError) -> String {
         ParseError::MalformedIf(_) => "I couldn't read this `if` expression.".to_string(),
         ParseError::InvalidPathLiteral { .. } => {
             "I can't accept this path — it isn't safe to open.".to_string()
+        }
+        ParseError::SteplessDo => {
+            "This `do` block has no Task step (`<-` bind or bare-run line) — it is \
+             pure code dressed as a `do`. Use `let … in` for pure bindings instead."
+                .to_string()
+        }
+        ParseError::DocOnUnexported { name } => {
+            format!(
+                "This doc-string is on `{name}`, which is not exported — \
+                 it can never appear in generated documentation."
+            )
+        }
+        ParseError::MissingDocString { name } => {
+            format!("`{name}` is exported but has no doc-string.")
         }
         ParseError::Unexpected => "I couldn't make sense of this part of the file.".to_string(),
     }
@@ -608,6 +632,23 @@ fn lower_prose(msg: &LowerError) -> String {
             "This signature's return `any` can't be worked out — nothing pins it to a \
              concrete type."
                 .to_string()
+        }
+        LowerError::WildcardAnyFieldTypeMismatch {
+            field,
+            required,
+            found,
+        } => {
+            format!(
+                "The record you passed has a `{field}` field of type `{found}`, \
+                 but the function requires `{field} : {required}`."
+            )
+        }
+        LowerError::WildcardAnyArgNotRecord { found } => {
+            format!(
+                "This function's parameter is `any` and reads record fields, \
+                 so it only accepts a record — but you passed {found}.",
+                found = an_article(found)
+            )
         }
     }
 }
@@ -1110,7 +1151,8 @@ fn primary_label(d: &Diagnostic) -> Option<String> {
         Diagnostic::CompilerBug { .. }
         | Diagnostic::Ffi { .. }
         | Diagnostic::Sandbox { .. }
-        | Diagnostic::Consent { .. } => None,
+        | Diagnostic::Consent { .. }
+        | Diagnostic::RegistryUnreachable { .. } => None,
     }
 }
 
@@ -1171,7 +1213,11 @@ fn parse_label(msg: &ParseError) -> Option<String> {
             };
             Some(detail)
         }
-        ParseError::Unexpected | ParseError::TooDeep => None,
+        ParseError::Unexpected
+        | ParseError::TooDeep
+        | ParseError::SteplessDo
+        | ParseError::DocOnUnexported { .. }
+        | ParseError::MissingDocString { .. } => None,
     }
 }
 
@@ -1552,6 +1598,25 @@ fn lower_label(msg: &LowerError) -> String {
              polymorphism"
                 .to_string()
         }
+        LowerError::WildcardAnyFieldTypeMismatch {
+            field,
+            required,
+            found,
+        } => {
+            format!(
+                "field `{field}` has type `{found}` here, but the callee's body requires \
+                 `{field} : {required}` — change the field's value to a `{required}`, or \
+                 annotate the callee's parameter with a closed record type so the \
+                 type-checker enforces the field type at each call site"
+            )
+        }
+        LowerError::WildcardAnyArgNotRecord { found } => {
+            format!(
+                "this is {found} — the callee's `any` parameter reads record fields, \
+                 so only a record is accepted here",
+                found = an_article(found)
+            )
+        }
     }
 }
 
@@ -1891,7 +1956,6 @@ const fn token_kind_str(t: TokenKind) -> &'static str {
         TokenKind::Then => "`then`",
         TokenKind::Else => "`else`",
         TokenKind::Do => "`do`",
-        TokenKind::DoParallel => "`doParallel`",
         TokenKind::LParen => "`(`",
         TokenKind::RParen => "`)`",
         TokenKind::LBrace => "`{`",

@@ -10,6 +10,32 @@ Entries below the header are maintained by
 section is generated from Conventional Commit messages and prepended when the
 standing release pull request is merged.
 
+## [0.1.66](https://github.com/arthurmaciel/ipe-lang/compare/ipe-v0.1.65...ipe-v0.1.66) (2026-08-19)
+
+
+### Bug Fixes
+
+* **canon:** register isJust and isNothing as StdlibKernel variants (closes [#1193](https://github.com/arthurmaciel/ipe-lang/issues/1193)) ([#1199](https://github.com/arthurmaciel/ipe-lang/issues/1199)) ([435890a](https://github.com/arthurmaciel/ipe-lang/commit/435890a67a5dea63e72b702abe76d5d778deca9c))
+* **cli:** fail closed when an Unsafe-scan module is unreadable (closes [#1142](https://github.com/arthurmaciel/ipe-lang/issues/1142)) ([#1189](https://github.com/arthurmaciel/ipe-lang/issues/1189)) ([657a30e](https://github.com/arthurmaciel/ipe-lang/commit/657a30eef95e1505c4ad6bf934c622e5e856ceb6))
+* **cli:** type LockedDep.rev as PinnedRev + typed escape/index tag (closes [#1168](https://github.com/arthurmaciel/ipe-lang/issues/1168)) ([#1191](https://github.com/arthurmaciel/ipe-lang/issues/1191)) ([e6847fb](https://github.com/arthurmaciel/ipe-lang/commit/e6847fbbc329f19d8fbae92580528117fd66f173))
+* **parse:** reject stepless do; drop doParallel in favor of Task.parallel (closes [#1192](https://github.com/arthurmaciel/ipe-lang/issues/1192)) ([#1197](https://github.com/arthurmaciel/ipe-lang/issues/1197)) ([614f357](https://github.com/arthurmaciel/ipe-lang/commit/614f357ea213988883ea1267b732b57cf9990746))
+
+## [0.1.65](https://github.com/arthurmaciel/ipe-lang/compare/ipe-v0.1.64...ipe-v0.1.65) (2026-08-19)
+
+
+### Bug Fixes
+
+* **cli:** route HOME-unset ffi scratch through ScratchDir; widen the predictable-temp_dir gate (closes [#1155](https://github.com/arthurmaciel/ipe-lang/issues/1155)) ([#1190](https://github.com/arthurmaciel/ipe-lang/issues/1190)) ([fcb4d35](https://github.com/arthurmaciel/ipe-lang/commit/fcb4d35e4614d09d381a1296e46589a5784cf5eb))
+* **runtime,backend:** wrapping negate + polymorphic Number-a arithmetic so no emitted Int op panics (closes [#1146](https://github.com/arthurmaciel/ipe-lang/issues/1146)) ([#1195](https://github.com/arthurmaciel/ipe-lang/issues/1195)) ([2adedfc](https://github.com/arthurmaciel/ipe-lang/commit/2adedfc8f56b0ffb2567310ac7a50e01f46c186c))
+
+## [0.1.64](https://github.com/arthurmaciel/ipe-lang/compare/ipe-v0.1.63...ipe-v0.1.64) (2026-08-19)
+
+
+### Bug Fixes
+
+* **lower:** enforce wildcard-any row containment + caller field-type at ipe-time (closes [#1117](https://github.com/arthurmaciel/ipe-lang/issues/1117), closes [#1118](https://github.com/arthurmaciel/ipe-lang/issues/1118)) ([#1188](https://github.com/arthurmaciel/ipe-lang/issues/1188)) ([26b2f7b](https://github.com/arthurmaciel/ipe-lang/commit/26b2f7b30fc084d0cc82671b04f109c949cbed28))
+* **release:** upload job resolves the tag from the release/dispatch event, not GITHUB_REF_NAME ([#1185](https://github.com/arthurmaciel/ipe-lang/issues/1185)) ([7920dee](https://github.com/arthurmaciel/ipe-lang/commit/7920dee6396c843ffcd5cc86625b9c265df5c07c))
+
 ## [0.1.63](https://github.com/arthurmaciel/ipe-lang/compare/ipe-v0.1.62...ipe-v0.1.63) (2026-08-19)
 
 

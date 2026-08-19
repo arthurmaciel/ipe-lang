@@ -1,0 +1,39 @@
+module Main exposing (main)
+
+import Ipe.Css as Css
+import Ipe.Io as Io
+
+
+-- Output-identity gate for the transform-function builders.
+--
+-- `Ipe.Css` owns the canonical CSS transform-function strings; the
+-- `Ipe.Ui.Transform` builders delegate to these helpers. This fixture pins
+-- every helper's rendered string byte-for-byte so a wrong unit, separator, or
+-- parenthesis in either the helper or a future edit is caught.
+--
+-- Covered helpers: translateX, translateY, translate, scale, scaleXY,
+-- rotate (via deg), skewX (via deg), skewY (via deg).
+
+
+transforms : String
+transforms =
+    Css.translateX (Css.px 12)
+        ++ "\n"
+        ++ Css.translateY (Css.px (0 - 8))
+        ++ "\n"
+        ++ Css.translate (Css.px 3) (Css.px 4)
+        ++ "\n"
+        ++ Css.scale 0.9
+        ++ "\n"
+        ++ Css.scaleXY 1.5 2.0
+        ++ "\n"
+        ++ Css.rotate (Css.deg 45.0)
+        ++ "\n"
+        ++ Css.skewX (Css.deg 10.0)
+        ++ "\n"
+        ++ Css.skewY (Css.deg (0.0 - 5.0))
+
+
+main : Task Error ()
+main =
+    Io.println transforms

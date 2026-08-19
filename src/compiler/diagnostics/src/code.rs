@@ -180,6 +180,12 @@ code! {
     IPE_P0063 = "IPE-P0063", "invalid path literal", "IPE-P0063";
     /// a bare `_` as the whole `let` binding pattern binds nothing and is not allowed
     IPE_P0064 = "IPE-P0064", "bare `_` as a whole `let` binding pattern is not allowed", "IPE-P0064";
+    /// a `do` block with no Task steps — use `let … in` for pure bindings
+    IPE_P0065 = "IPE-P0065", "a `do` block must contain at least one Task step", "IPE-P0065";
+    /// doc-string on a non-exported binding is unreachable (warning)
+    IPE_P0066 = "IPE-P0066", "doc-string on a non-exported binding is unreachable", "IPE-P0066";
+    /// exported binding has no doc-string — opt-in lint (warning)
+    IPE_P0067 = "IPE-P0067", "exported binding has no doc-string", "IPE-P0067";
 
     // -----------------------------------------------------------------------
     // Name resolution (IPE-N####)
@@ -417,6 +423,14 @@ code! {
     /// a wildcard `any` in return position is carried by no parameter and pinned
     /// by no body, so no caller can determine its single concrete type
     IPE_L0142 = "IPE-L0142", "a return-position wildcard `any` cannot be determined", "IPE-L0142";
+    /// a caller passes a record whose field has the wrong type for a wildcard-`any`
+    /// parameter that reads that field — the required field type comes from the
+    /// callee's body, not from a shared type-checker unification (which `any`
+    /// severs), so the mismatch is caught here rather than emitting Rust E0271
+    IPE_L0143 = "IPE-L0143", "caller field type does not match the field type required by the callee", "IPE-L0143";
+    /// a non-record value is passed at a row-generic parameter position — only a
+    /// record can carry the `IpeHas*` witness bound the callee's body requires
+    IPE_L0144 = "IPE-L0144", "argument at a row-generic position is not a record", "IPE-L0144";
     /// expression nests too deeply for the backend
     IPE_L0200 = "IPE-L0200", "expression nests too deeply for the backend", "IPE-L0200";
 
@@ -451,6 +465,13 @@ code! {
     /// acknowledged (non-interactive build without `--accept-risks` / manifest
     /// pre-acceptance, or an interactive "no")
     IPE_S0001 = "IPE-S0001", "unsafe escape hatch imported without acknowledgment", "IPE-S0001";
+
+    // -----------------------------------------------------------------------
+    // Environment (IPE-E####)
+    // -----------------------------------------------------------------------
+
+    /// the crate registry could not be reached (network or DNS failure)
+    IPE_E0001 = "IPE-E0001", "could not reach the crate registry", "IPE-E0001";
 
     // -----------------------------------------------------------------------
     // Internal (IPE-I####)

@@ -9,6 +9,7 @@ members = [
     "src/compiler/parse",
     "src/compiler/db",
     "src/compiler/canon",
+    "src/compiler/annotate",
     "src/compiler/types",
     "src/compiler/ir",
     "src/compiler/lower",
@@ -23,6 +24,7 @@ members = [
     "src/lsp/features",
     "src/lsp/server",
     "src/ipe-cli",
+    "src/ipe-docs",
     "tools/e2e-support",
     "src/runtime/rust",
     "tools/ipe-ffi-inspector",
@@ -38,7 +40,7 @@ exclude = ["tools/panic-scan"]
 
 [workspace.package]
 edition = "2024"
-version = "0.1.63" # x-release-please-version
+version = "0.1.66" # x-release-please-version
 license = "Apache-2.0"
 
 # THE SSOT for the workspace clippy policy. Every `cargo clippy` — in CI and in

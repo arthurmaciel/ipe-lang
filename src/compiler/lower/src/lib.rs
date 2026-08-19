@@ -1132,4 +1132,90 @@ mod tests {
         );
         assert_eq!(func.ret, IrType::Int, "return type must be Int");
     }
+
+    // ── Wildcard-`any` row-containment guard ──────────────────────────────────
+    //
+    // A wildcard-`any` param whose body reads a record field is lowered to a
+    // row-generic. The ONLY routable use of that generic in the body is a direct
+    // field read; every other flow (let-alias, call-arg, relay through another
+    // function) reaches the backend as a bare generic and would cause
+    // E0609/E0277 at `cargo build` time. The guard is scheduled AFTER the
+    // erasure block so it catches both the explicit-row-annotation path and the
+    // wildcard-erasure path.
+
+    /// `let q = p in q.name` — the `any` param is aliased before the field is
+    /// read. After erasure `p` is `RowGeneric`; the let-rebind makes `q` flow
+    /// as the row value, which escapes direct-access containment.
+    #[test]
+    fn any_param_let_alias_before_field_read_is_rejected() {
+        let err = lower_result(
+            "module Main exposing (f)\n\
+             f : any -> String\n\
+             f p =\n\
+             \x20   let\n\
+             \x20       q = p\n\
+             \x20   in\n\
+             \x20   q.name\n",
+        );
+        assert!(
+            matches!(
+                err,
+                Err(Diagnostic::Lower {
+                    msg: LowerError::Unsupported(Feature::RowPolyRecordAnnotation),
+                    ..
+                })
+            ),
+            "let-alias of an `any` row param must be IPE-L0131, got {err:?}"
+        );
+    }
+
+    /// `relay : any -> String; relay x = getField x` — the `any` param is
+    /// passed as a call argument to another function. After erasure `x` is
+    /// `RowGeneric`; it flows as an argument (escape) rather than only as a
+    /// direct field-read receiver.
+    #[test]
+    fn any_param_passed_as_call_arg_is_rejected() {
+        let err = lower_result(
+            "module Main exposing (relay)\n\
+             getField p = p.name\n\
+             relay : any -> String\n\
+             relay x =\n\
+             \x20   getField x\n",
+        );
+        assert!(
+            matches!(
+                err,
+                Err(Diagnostic::Lower {
+                    msg: LowerError::Unsupported(Feature::RowPolyRecordAnnotation),
+                    ..
+                })
+            ),
+            "passing an `any` row param as a call arg must be IPE-L0131, got {err:?}"
+        );
+    }
+
+    /// `firstName : any -> String; firstName p = snd p p` where `snd a b = a.name`
+    /// — the `any` param appears in both argument positions of a two-argument
+    /// call. After erasure `p` is `RowGeneric`; the escape guard fires on the
+    /// first occurrence (call-arg position is not a direct-access receiver).
+    #[test]
+    fn any_param_in_two_arg_call_position_is_rejected() {
+        let err = lower_result(
+            "module Main exposing (firstName)\n\
+             snd a b = a.name\n\
+             firstName : any -> String\n\
+             firstName p =\n\
+             \x20   snd p p\n",
+        );
+        assert!(
+            matches!(
+                err,
+                Err(Diagnostic::Lower {
+                    msg: LowerError::Unsupported(Feature::RowPolyRecordAnnotation),
+                    ..
+                })
+            ),
+            "an `any` row param in call-arg position must be IPE-L0131, got {err:?}"
+        );
+    }
 }

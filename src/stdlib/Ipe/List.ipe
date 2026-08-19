@@ -1,10 +1,37 @@
--- | Ipe.List — list combinators.
+-- | `Ipe.List` — transform, filter, and combine lists.
 --
--- The definitions below are the readable reference for each member; the
--- executable implementations are the native kernels resolved by the `List`
--- qualifier (`src/runtime/rust/src/list.rs`), so this source is parsed but
--- never itself compiled. Keeping the bodies here documents the exact
--- Elm-matching semantics next to the surface a user imports.
+-- A `List a` is an ordered sequence of values that all share the type `a`:
+-- `[ 1, 2, 3 ]` is a `List Int`, `[ "a", "b" ]` a `List String`. Lists are
+-- immutable — every function here returns a NEW list rather than changing its
+-- argument — so the same list can be shared freely without one caller's
+-- transformation affecting another's.
+--
+-- The functions divide into a few families: shape (`isEmpty`, `length`,
+-- `reverse`), taking apart (`head`, `tail`, `take`, `drop`), building up
+-- (`cons`, `append`, `concat`, `range`), element-wise transforms (`map`,
+-- `filter`, `filterMap`, `indexedMap`), searching (`member`, `find`, `any`,
+-- `all`), folding to a single value (`foldl`, `foldr`, `sum`, `maximum`,
+-- `minimum`), and ordering (`sortBy`, `sortWith`, `unique`).
+--
+-- Functions that might not find an answer return a `Ipe.Maybe`: `head []` is
+-- `Nothing`, `head [ 1, 2 ]` is `Just 1`. That is how the type system forces a
+-- caller to handle the empty case before using a first element.
+--
+-- Example:
+--
+--     import Ipe.List as List
+--
+--     -- The even numbers, doubled.
+--     List.filter (\n -> modBy 2 n == 0) [ 1, 2, 3, 4 ]
+--         |> List.map (\n -> n * 2)
+--     -- == [ 4, 8 ]
+--
+-- See also: `Ipe.Maybe`, `Ipe.Dict` (key-value lookup), `Ipe.Set`.
+
+-- The reference bodies below document the Elm-matching semantics of each
+-- member; the executable implementations are the native kernels resolved by
+-- the `List` qualifier, so this source is parsed for its surface and
+-- doc-comments but is not itself the compiled implementation.
 module Ipe.List exposing
     ( isEmpty
     , length
@@ -38,11 +65,23 @@ module Ipe.List exposing
     )
 
 
--- | `map fn list` — apply fn to each element.
+-- | `map f list` — apply `f` to every element, giving a new list of the
+-- results in the same order. The list's length is unchanged; only the values
+-- (and possibly their type) change.
 --
--- `mapHelp` accumulates `fn x :: acc` (reversed) tail-recursively,
--- then `reverseHelp` flips the result.  Both helpers are
--- tail-recursive and auto-TCO'd to loops, running in O(1) stack.
+-- Example:
+--
+--     List.map (\n -> n * 2) [ 1, 2, 3 ] == [ 2, 4, 6 ]
+--     List.map String.fromInt [ 1, 2 ] == [ "1", "2" ]
+{-| `map f list` — apply `f` to every element, producing a new list of the
+same length.
+
+```ipe
+map (\n -> n * 2) [ 1, 2, 3 ] --> [ 2, 4, 6 ]
+map String.fromInt [ 10, 20 ] --> [ "10", "20" ]
+```
+-}
+map : (a -> b) -> List a -> List b
 map fn list =
     mapHelp fn list []
 
@@ -57,11 +96,21 @@ mapHelp fn list acc =
             mapHelp fn rest (fn x :: acc)
 
 
--- | `filter pred list` — keep only elements satisfying pred.
+-- | `filter keep list` — keep only the elements for which `keep` returns
+-- `True`, preserving their order.
 --
--- `filterHelp` accumulates `x :: acc` (reversed) for elements
--- satisfying pred, then `reverseHelp` flips the result.  Both helpers
--- are tail-recursive and auto-TCO'd to loops, running in O(1) stack.
+-- Example:
+--
+--     List.filter (\n -> n > 2) [ 1, 2, 3, 4 ] == [ 3, 4 ]
+--     List.filter (\n -> modBy 2 n == 0) [ 1, 2, 3, 4 ] == [ 2, 4 ]
+{-| `filter keep list` — keep only elements for which `keep` returns `True`.
+
+```ipe
+filter (\n -> n > 2) [ 1, 2, 3, 4 ] --> [ 3, 4 ]
+filter (\n -> modBy 2 n == 0) [ 1, 2, 3, 4 ] --> [ 2, 4 ]
+```
+-}
+filter : (a -> Bool) -> List a -> List a
 filter pred list =
     filterHelp pred list []
 
@@ -83,6 +132,22 @@ filterHelp pred list acc =
                     acc)
 
 
+-- | `any test list` — `True` if `test` returns `True` for at least one
+-- element; `False` for the empty list. Stops at the first match.
+--
+-- Example:
+--
+--     List.any (\n -> n > 3) [ 1, 2, 3, 4 ] == True
+--     List.any (\n -> n > 3) [ 1, 2, 3 ] == False
+{-| `any test list` — `True` if `test` returns `True` for at least one element.
+
+```ipe
+any (\n -> n > 3) [ 1, 2, 3, 4 ] --> True
+any (\n -> n > 3) [ 1, 2, 3 ] --> False
+any (\n -> n > 3) [] --> False
+```
+-}
+any : (a -> Bool) -> List a -> Bool
 any pred list =
     case list of
 
@@ -97,6 +162,23 @@ any pred list =
                 any pred rest
 
 
+-- | `all test list` — `True` if `test` returns `True` for every element;
+-- `True` for the empty list (there is nothing to violate it). Stops at the
+-- first element that fails.
+--
+-- Example:
+--
+--     List.all (\n -> n > 0) [ 1, 2, 3 ] == True
+--     List.all (\n -> n > 0) [ 1, -1, 3 ] == False
+{-| `all test list` — `True` if `test` returns `True` for every element.
+
+```ipe
+all (\n -> n > 0) [ 1, 2, 3 ] --> True
+all (\n -> n > 0) [ 1, -1, 3 ] --> False
+all (\n -> n > 0) [] --> True
+```
+-}
+all : (a -> Bool) -> List a -> Bool
 all pred list =
     case list of
 
@@ -111,6 +193,22 @@ all pred list =
                 False
 
 
+-- | `find test list` — `Just` the first element for which `test` returns
+-- `True`, or `Nothing` if none do.
+--
+-- Example:
+--
+--     List.find (\n -> n > 2) [ 1, 2, 3, 4 ] == Just 3
+--     List.find (\n -> n > 9) [ 1, 2, 3 ] == Nothing
+{-| `find test list` — `Just` the first element satisfying `test`, or `Nothing`.
+
+```ipe
+find (\n -> n > 2) [ 1, 2, 3, 4 ] --> Just 3
+find (\n -> n > 9) [ 1, 2, 3 ] --> Nothing
+find (\s -> String.length s > 3) [ "hi", "hello", "hey" ] --> Just "hello"
+```
+-}
+find : (a -> Bool) -> List a -> Maybe a
 find pred list =
     case list of
 
@@ -125,6 +223,25 @@ find pred list =
                 find pred rest
 
 
+-- | `foldl step initial list` — reduce the list to a single value, applying
+-- `step element accumulator` from the LEFT (first element first). The
+-- accumulator starts at `initial`.
+--
+-- `foldl` is the general tool the specific folds (`sum`, `maximum`) are built
+-- from: anything that walks a list building up one result can be a `foldl`.
+--
+-- Example:
+--
+--     List.foldl (\x acc -> x + acc) 0 [ 1, 2, 3 ] == 6
+--     List.foldl (\x acc -> x :: acc) [] [ 1, 2, 3 ] == [ 3, 2, 1 ]
+{-| `foldl step initial list` — reduce from the left; `step element accumulator`.
+
+```ipe
+foldl (\x acc -> x + acc) 0 [ 1, 2, 3 ] --> 6
+foldl (\x acc -> String.append acc x) "" [ "a", "b", "c" ] --> "abc"
+```
+-}
+foldl : (a -> b -> b) -> b -> List a -> b
 foldl fn acc list =
     case list of
 
@@ -135,44 +252,51 @@ foldl fn acc list =
             foldl fn (fn x acc) rest
 
 
--- The legacy `foldr fn x (foldr fn acc rest)` shape recursed in
--- non-tail position (O(N) call depth).  The rewrite delegates to the
--- already-tail-recursive `foldl` over the pre-reversed list — so the
--- CPS helper is tail-recursive and runs in O(1) stack, auto-TCO'd to
--- a loop.  Note: this is a DELEGATING binding — the public `foldr`
--- itself contains no loop because the loop lives in `foldl`.  The
--- `\x a -> fn x a` lambda is structurally identical to `fn` but pinned
--- at the application site so the typed lowerer sees a fresh callback
--- shape per instantiation.
+-- | `foldr step initial list` — reduce the list to a single value, applying
+-- `step element accumulator` from the RIGHT (last element first). The
+-- accumulator starts at `initial`.
+--
+-- Folding from the right with `::` rebuilds the list unchanged, which makes
+-- `foldr` the natural fold for anything that constructs a new list in order.
+--
+-- Example:
+--
+--     List.foldr (\x acc -> x :: acc) [] [ 1, 2, 3 ] == [ 1, 2, 3 ]
+--     List.foldr (\x acc -> x + acc) 0 [ 1, 2, 3 ] == 6
+{-| `foldr step initial list` — reduce from the right; `step element accumulator`.
+
+```ipe
+foldr (\x acc -> x :: acc) [] [ 1, 2, 3 ] --> [ 1, 2, 3 ]
+foldr (\x acc -> x + acc) 0 [ 1, 2, 3 ] --> 6
+```
+-}
+foldr : (a -> b -> b) -> b -> List a -> b
 foldr fn acc list =
     foldl (\x a -> fn x a) acc (reverseHelp list [])
 
 
--- | `concatMap fn list` — map each element to a list and flatten.
+-- | `concatMap f list` — apply `f`, which returns a list, to every element,
+-- and flatten all the resulting lists into one. `List.concatMap f xs` is
+-- `List.concat (List.map f xs)` in a single pass.
 --
--- The legacy `append (fn x) (concatMap fn rest)` shape recursed in
--- non-tail position (O(N) call depth).  `concatMapHelp fn list acc`
--- walks the input tail-recursively, prepending each `fn x` chunk in
--- REVERSE order onto `acc` via `reverseHelp (fn x) acc`, then the
--- outer `reverseHelp acc []` flips the final accumulator once at
--- the base for the left-to-right output.  The helper is tail-recursive
--- and auto-TCO'd to a loop, so it runs in O(1) stack.
+-- Example:
 --
--- The natural delegation `concatMap fn list = concat (map fn list)`
--- triggers HM cross-module over-unification on the polymorphic
--- `map` instances, so we use the direct accumulator pattern instead.
+--     List.concatMap (\n -> [ n, n ]) [ 1, 2 ] == [ 1, 1, 2, 2 ]
+--     List.concatMap (\n -> List.range 1 n) [ 1, 3 ] == [ 1, 1, 2, 3 ]
+{-| `concatMap f list` — apply `f` to each element and flatten the results.
+
+```ipe
+concatMap (\n -> [ n, n ]) [ 1, 2 ] --> [ 1, 1, 2, 2 ]
+concatMap (\n -> List.range 1 n) [ 1, 3 ] --> [ 1, 1, 2, 3 ]
+```
+-}
+concatMap : (a -> List b) -> List a -> List b
 concatMap fn list =
     reverseHelp (concatMapHelp fn list []) []
 
 
--- | `concatMapHelp fn list acc` — tail-recursive worker for
--- `concatMap`.  No explicit signature: the explicit
--- `(a -> List b) -> List a -> List b -> List b` shape
--- over-constrains HM cross-module unification on polymorphic
--- call sites such as `List.concatMap (lineOne cfg xR yR) seriesList`.
--- The inferred shape (HM walking the body) is sound and lets
--- polymorphic call sites unify cleanly.  Tail-recursive and
--- auto-TCO'd to a loop, so O(1) stack.
+-- Private tail-recursive worker for `concatMap`. No explicit signature: an
+-- explicit one over-constrains inference at polymorphic call sites.
 concatMapHelp fn list acc =
     case list of
 
@@ -183,26 +307,27 @@ concatMapHelp fn list acc =
             concatMapHelp fn rest (reverseHelp (fn x) acc)
 
 
--- | `indexedMap fn list` — apply `fn` to each (index, element) pair.
+-- | `indexedMap f list` — like `map`, but `f` also receives each element's
+-- position, starting at 0: `f index element`.
 --
--- The legacy `fn i x :: indexedMapHelp fn (i + 1) rest` shape recursed
--- in non-tail position (the cons happens AFTER the recursive call
--- returns), giving O(N) call depth.  The rewrite delegates to
--- `indexedMapHelp fn i list acc` which conses `fn i x :: acc` onto the
--- accumulator in REVERSE order, then `reverseHelp acc []` flips it once
--- at the base for the final left-to-right output.  `indexedMapHelp` is
--- tail-recursive and auto-TCO'd to a loop, so it runs in O(1) stack.
+-- Example:
+--
+--     List.indexedMap (\i x -> ( i, x )) [ "a", "b" ] == [ ( 0, "a" ), ( 1, "b" ) ]
+--     List.indexedMap (\i x -> i + x) [ 10, 20, 30 ] == [ 10, 21, 32 ]
+{-| `indexedMap f list` — like `map` but `f` also receives each element's index.
+
+```ipe
+indexedMap (\i x -> ( i, x )) [ "a", "b", "c" ] --> [ ( 0, "a" ), ( 1, "b" ), ( 2, "c" ) ]
+indexedMap (\i x -> i + x) [ 10, 20, 30 ] --> [ 10, 21, 32 ]
+```
+-}
+indexedMap : (Int -> a -> b) -> List a -> List b
 indexedMap fn list =
     indexedMapHelp fn 0 list []
 
 
--- | `indexedMapHelp fn i list acc` — tail-recursive worker for
--- `indexedMap`. Conses `fn i x :: acc` for each element in reverse
--- order then `reverseHelp` flips the accumulator once at the base
--- for the final left-to-right output. The EXPLICIT signature is
--- load-bearing — without it the HM solver could infer `acc : List any`
--- and the typed-lowerer would fall back to `rt.AsList[any]`, defeating
--- both the Coerce-retreat AND the constant-stack contract.
+-- Private tail-recursive worker for `indexedMap`. The explicit signature is
+-- load-bearing: without it the accumulator would be inferred too loosely.
 indexedMapHelp : (Int -> a -> b) -> Int -> List a -> List b -> List b
 indexedMapHelp fn i list acc =
     case list of
@@ -214,6 +339,22 @@ indexedMapHelp fn i list acc =
             indexedMapHelp fn (i + 1) rest (fn i x :: acc)
 
 
+-- | `isEmpty list` — `True` if the list has no elements. Equivalent to
+-- `List.length list == 0`, but does not walk the whole list.
+--
+-- Example:
+--
+--     List.isEmpty [] == True
+--     List.isEmpty [ 1 ] == False
+{-| `isEmpty list` — `True` if the list has no elements.
+
+```ipe
+isEmpty [] --> True
+isEmpty [ 1 ] --> False
+isEmpty [ "a", "b" ] --> False
+```
+-}
+isEmpty : List a -> Bool
 isEmpty list =
     case list of
 
@@ -224,13 +365,21 @@ isEmpty list =
             False
 
 
--- | `length list` — number of elements in the list.
+-- | `length list` — the number of elements in the list.
 --
--- The legacy `1 + length rest` shape recursed in non-tail position
--- (the `1 +` runs AFTER the recursive call returns), giving O(N) call
--- depth.  `lengthHelp` carries the running count in tail position;
--- the recursion is tail-recursive and auto-TCO'd to a loop, running
--- in O(1) stack.
+-- Example:
+--
+--     List.length [ 1, 2, 3 ] == 3
+--     List.length [] == 0
+{-| `length list` — the number of elements.
+
+```ipe
+length [ 1, 2, 3 ] --> 3
+length [] --> 0
+length [ "a", "b" ] --> 2
+```
+-}
+length : List a -> Int
 length list =
     lengthHelp list 0
 
@@ -246,6 +395,23 @@ lengthHelp list n =
             lengthHelp rest (n + 1)
 
 
+-- | `head list` — `Just` the first element, or `Nothing` if the list is
+-- empty. The empty case is why the result is a `Maybe`: there is no first
+-- element to return.
+--
+-- Example:
+--
+--     List.head [ 1, 2, 3 ] == Just 1
+--     List.head [] == Nothing
+{-| `head list` — `Just` the first element, or `Nothing` if empty.
+
+```ipe
+head [ 1, 2, 3 ] --> Just 1
+head [] --> Nothing
+head [ "only" ] --> Just "only"
+```
+-}
+head : List a -> Maybe a
 head list =
     case list of
 
@@ -256,6 +422,22 @@ head list =
             Just x
 
 
+-- | `tail list` — `Just` the list with its first element removed, or
+-- `Nothing` if the list is empty.
+--
+-- Example:
+--
+--     List.tail [ 1, 2, 3 ] == Just [ 2, 3 ]
+--     List.tail [] == Nothing
+{-| `tail list` — `Just` the list without its first element, or `Nothing` if empty.
+
+```ipe
+tail [ 1, 2, 3 ] --> Just [ 2, 3 ]
+tail [] --> Nothing
+tail [ 42 ] --> Just []
+```
+-}
+tail : List a -> Maybe (List a)
 tail list =
     case list of
 
@@ -266,10 +448,39 @@ tail list =
             Just rest
 
 
+-- | `cons x list` — a new list with `x` added at the front. The named form of
+-- the `::` operator (`x :: list`).
+--
+-- Example:
+--
+--     List.cons 1 [ 2, 3 ] == [ 1, 2, 3 ]
+{-| `cons x list` — prepend `x` to the list; the named form of `x :: list`.
+
+```ipe
+cons 1 [ 2, 3 ] --> [ 1, 2, 3 ]
+cons "a" [ "b", "c" ] --> [ "a", "b", "c" ]
+cons 0 [] --> [ 0 ]
+```
+-}
+cons : a -> List a -> List a
 cons x list =
     x :: list
 
 
+-- | `reverse list` — the list with its elements in the opposite order.
+--
+-- Example:
+--
+--     List.reverse [ 1, 2, 3 ] == [ 3, 2, 1 ]
+{-| `reverse list` — the list in reverse order.
+
+```ipe
+reverse [ 1, 2, 3 ] --> [ 3, 2, 1 ]
+reverse [] --> []
+reverse [ "a" ] --> [ "a" ]
+```
+-}
+reverse : List a -> List a
 reverse list =
     reverseHelp list []
 
@@ -285,19 +496,23 @@ reverseHelp list acc =
             reverseHelp rest (x :: acc)
 
 
--- | `take n list` — first n elements of `list` (or fewer when `list`
--- is shorter than n).
+-- | `take n list` — the first `n` elements, or the whole list when it is
+-- shorter than `n`. A zero or negative `n` gives `[]`.
 --
--- `takeHelp n list acc` walks the input tail-recursively, prepending
--- each kept element onto `acc` (reverse order) until either n drops
--- to zero or the input is exhausted; both bases then reverse `acc`
--- via `reverseHelp` for the final left-to-right output.  The helper
--- is tail-recursive and auto-TCO'd to a loop, running in O(1) stack
--- (the legacy `x :: take (n - 1) rest` shape recursed in non-tail
--- position).
+-- Example:
 --
--- Edge cases: `take 0` and `take <negative>` return `[]` via the
--- `n <= 0` base; `take n []` returns `[]` via the empty-list base.
+--     List.take 2 [ 1, 2, 3, 4 ] == [ 1, 2 ]
+--     List.take 9 [ 1, 2 ] == [ 1, 2 ]
+--     List.take 0 [ 1, 2 ] == []
+{-| `take n list` — the first `n` elements; the whole list when shorter than `n`.
+
+```ipe
+take 2 [ 1, 2, 3, 4 ] --> [ 1, 2 ]
+take 9 [ 1, 2 ] --> [ 1, 2 ]
+take 0 [ 1, 2 ] --> []
+```
+-}
+take : Int -> List a -> List a
 take n list =
     takeHelp n list []
 
@@ -316,6 +531,23 @@ takeHelp n list acc =
                 takeHelp (n - 1) rest (x :: acc)
 
 
+-- | `drop n list` — the list with its first `n` elements removed, or `[]`
+-- when it is shorter than `n`. A zero or negative `n` leaves the list
+-- unchanged. Together, `take n list` and `drop n list` split a list in two.
+--
+-- Example:
+--
+--     List.drop 2 [ 1, 2, 3, 4 ] == [ 3, 4 ]
+--     List.drop 9 [ 1, 2 ] == []
+{-| `drop n list` — the list without its first `n` elements.
+
+```ipe
+drop 2 [ 1, 2, 3, 4 ] --> [ 3, 4 ]
+drop 9 [ 1, 2 ] --> []
+drop 0 [ 1, 2 ] --> [ 1, 2 ]
+```
+-}
+drop : Int -> List a -> List a
 drop n list =
     if n <= 0 then
         list
@@ -330,30 +562,28 @@ drop n list =
                 drop (n - 1) rest
 
 
--- | `append xs ys` — concatenate two lists.
+-- | `append xs ys` — a new list with all of `xs` followed by all of `ys`.
+-- The `++` operator is the same operation (`xs ++ ys`).
 --
--- The legacy `x :: append rest ys` shape recursed in non-tail position
--- (the cons happens after the recursive call returns), giving O(N) call
--- depth.  The rewrite first reverses `xs` onto an empty accumulator via
--- `reverseHelp` (already tail-recursive), then `appendHelp` walks the
--- reversed prefix cons'ing each element onto `ys`.  Both phases are
--- tail-recursive and auto-TCO'd to loops, running in O(1) stack.
+-- Example:
 --
--- Output order is preserved: `reverseHelp [a, b, c] []` gives
--- `[c, b, a]`, then cons'ing those onto `ys = [d, e]`
--- in turn yields `[a, b, c, d, e]` — the head ends up at the
--- front of the result.
+--     List.append [ 1, 2 ] [ 3, 4 ] == [ 1, 2, 3, 4 ]
+--     List.append [] [ 1 ] == [ 1 ]
+{-| `append xs ys` — all of `xs` followed by all of `ys`.
+
+```ipe
+append [ 1, 2 ] [ 3, 4 ] --> [ 1, 2, 3, 4 ]
+append [] [ 1 ] --> [ 1 ]
+append [ "a" ] [ "b", "c" ] --> [ "a", "b", "c" ]
+```
+-}
+append : List a -> List a -> List a
 append xs ys =
     appendHelp (reverseHelp xs []) ys
 
 
--- | `appendHelp revXs ys` — cons each element of `revXs` onto
--- `ys`.  Tail-recursive, auto-TCO'd to a loop.  Private helper for
--- `append`.
---
--- INVARIANT: `revXs` is the REVERSED prefix; cons'ing each
--- head onto `ys` in turn reconstructs the original
--- left-to-right order.
+-- Private helper for `append`: cons each element of the reversed prefix
+-- `revXs` onto `ys`, reconstructing the original left-to-right order.
 appendHelp revXs ys =
     case revXs of
 
@@ -364,20 +594,21 @@ appendHelp revXs ys =
             appendHelp rest (x :: ys)
 
 
--- | `concat lists` — flatten a list of lists.
+-- | `concat lists` — flatten a list of lists into one, preserving order.
 --
--- `concatHelp lists acc` walks the outer list tail-recursively,
--- using `appendReverseOnto xs acc` to cons each inner list's
--- elements onto `acc` in REVERSE order.  When the outer list is
--- exhausted, `reverseHelp acc []` flips the accumulator once for
--- the final left-to-right result.  Both `concatHelp` and
--- `appendReverseOnto` are tail-recursive and auto-TCO'd to loops,
--- running in O(1) stack (the legacy `append xs (concat rest)` shape
--- recursed in non-tail position).
+-- Example:
 --
--- NOTE: `concatHelp` uses ONLY the private `appendReverseOnto`,
--- NOT the public `append` — so `concat` is fully independent of
--- `append`'s implementation.
+--     List.concat [ [ 1, 2 ], [ 3 ], [ 4, 5 ] ] == [ 1, 2, 3, 4, 5 ]
+--     List.concat [ [], [ 1 ], [] ] == [ 1 ]
+{-| `concat lists` — flatten a list of lists into one list.
+
+```ipe
+concat [ [ 1, 2 ], [ 3 ], [ 4, 5 ] ] --> [ 1, 2, 3, 4, 5 ]
+concat [ [], [ 1 ], [] ] --> [ 1 ]
+concat [] --> []
+```
+-}
+concat : List (List a) -> List a
 concat lists =
     concatHelp lists []
 
@@ -392,9 +623,8 @@ concatHelp lists acc =
             concatHelp rest (appendReverseOnto xs acc)
 
 
--- | `appendReverseOnto xs acc` — cons each element of `xs` onto
--- `acc` in reverse order.  Tail-recursive, auto-TCO'd to a loop.
--- Private helper for `concat`.
+-- Private helper for `concat`: cons each element of `xs` onto `acc` in
+-- reverse order.
 appendReverseOnto xs acc =
     case xs of
 
@@ -405,6 +635,22 @@ appendReverseOnto xs acc =
             appendReverseOnto rest (x :: acc)
 
 
+-- | `member x list` — `True` if `x` is equal to some element of the list.
+-- Works for any type whose values can be compared with `==`.
+--
+-- Example:
+--
+--     List.member 2 [ 1, 2, 3 ] == True
+--     List.member 9 [ 1, 2, 3 ] == False
+{-| `member x list` — `True` if `x` equals any element of `list`.
+
+```ipe
+member 2 [ 1, 2, 3 ] --> True
+member 9 [ 1, 2, 3 ] --> False
+member "b" [ "a", "b", "c" ] --> True
+```
+-}
+member : a -> List a -> Bool
 member x list =
     case list of
 
@@ -419,23 +665,28 @@ member x list =
                 member x rest
 
 
--- | `range lo hi` — produce `[lo, lo + 1, ..., hi]` (inclusive).
+-- | `range lo hi` — the ascending list of integers from `lo` to `hi`,
+-- inclusive. When `lo > hi` the result is `[]`.
 --
--- The legacy `lo :: range (lo + 1) hi` shape recursed in non-tail
--- position (the cons happens AFTER the recursive call returns), giving
--- O(N) call depth.  The rewrite delegates to `rangeHelp lo hi acc`
--- which conses each value onto `acc` in REVERSE order (largest first),
--- then `reverseHelp acc []` flips the accumulator once at the base for
--- the final ascending left-to-right output.  `rangeHelp` is
--- tail-recursive and auto-TCO'd to a loop, running in O(1) stack.
+-- Example:
+--
+--     List.range 1 5 == [ 1, 2, 3, 4, 5 ]
+--     List.range 3 3 == [ 3 ]
+--     List.range 5 1 == []
+{-| `range lo hi` — ascending integers from `lo` to `hi` inclusive.
+
+```ipe
+range 1 5 --> [ 1, 2, 3, 4, 5 ]
+range 3 3 --> [ 3 ]
+range 5 1 --> []
+```
+-}
+range : Int -> Int -> List Int
 range lo hi =
     rangeHelp lo hi []
 
 
--- | `rangeHelp lo hi acc` — tail-recursive worker for `range`.
--- Cons each value `lo..hi` onto `acc` in reverse order, then
--- `reverseHelp` flips the accumulator once at the base for the
--- final left-to-right output.  Private helper for `range`.
+-- Private tail-recursive worker for `range`.
 rangeHelp : Int -> Int -> List Int -> List Int
 rangeHelp lo hi acc =
     if lo > hi then
@@ -445,26 +696,29 @@ rangeHelp lo hi acc =
         rangeHelp (lo + 1) hi (lo :: acc)
 
 
--- | `zip xs ys` — pair-wise zip of two lists.  Truncates to the
--- shorter list's length.
+-- | `zip xs ys` — pair up elements from two lists position by position,
+-- stopping at the end of the shorter one. The result is a list of tuples.
 --
--- The legacy `( x, y ) :: zip xRest yRest` shape recursed in
--- non-tail position (the cons happens AFTER the recursive call
--- returns), giving O(N) call depth.  The rewrite delegates to
--- `zipHelp xs ys acc` which conses each `( x, y )` pair onto `acc`
--- in REVERSE order, then `reverseHelp acc []` flips the accumulator
--- once at the base for the final left-to-right output.  `zipHelp`
--- is tail-recursive and auto-TCO'd to a loop, running in O(1) stack.
+-- Example:
 --
--- The EXPLICIT signature on `zipHelp` is load-bearing: the
--- tuple-typed accumulator (`List (a, b)`) would otherwise be
--- inferred as `List any` by the HM solver — without the annotation
--- the typed-lowerer falls back to `rt.AsList[any]` and the cons
--- payload re-narrows at runtime, defeating the O(1)-stack contract.
+--     List.zip [ 1, 2, 3 ] [ "a", "b" ] == [ ( 1, "a" ), ( 2, "b" ) ]
+--     List.zip [] [ 1 ] == []
+{-| `zip xs ys` — pair elements position-by-position, stopping at the shorter list.
+
+```ipe
+zip [ 1, 2, 3 ] [ "a", "b" ] --> [ ( 1, "a" ), ( 2, "b" ) ]
+zip [] [ 1 ] --> []
+zip [ 10, 20 ] [ True, False ] --> [ ( 10, True ), ( 20, False ) ]
+```
+-}
+zip : List a -> List b -> List ( a, b )
 zip xs ys =
     zipHelp xs ys []
 
 
+-- The explicit signature on this private worker is load-bearing: the
+-- tuple-typed accumulator would otherwise be inferred too loosely, so the
+-- annotation pins it to keep the tail-recursive lowering in constant stack.
 zipHelp : List a -> List b -> List ( a, b ) -> List ( a, b )
 zipHelp xs ys acc =
     case xs of
@@ -482,8 +736,23 @@ zipHelp xs ys acc =
                     zipHelp xRest yRest (( x, y ) :: acc)
 
 
--- | `filterMap fn list` — apply `fn : a -> Maybe b` to each element and keep
--- only the `Just` payloads, in order.  Combines `map` and `filter` in one pass.
+-- | `filterMap f list` — apply `f`, which returns a `Maybe`, to every element
+-- and keep only the `Just` payloads, in order. It maps and filters in one
+-- pass: a step that both transforms an element and may reject it.
+--
+-- Example:
+--
+--     List.filterMap (\n -> if n > 2 then Just (n * 10) else Nothing) [ 1, 2, 3, 4 ]
+--     -- == [ 30, 40 ]
+--     List.filterMap String.toInt [ "1", "x", "3" ] == [ 1, 3 ]
+{-| `filterMap f list` — apply `f` to each element, keeping only `Just` payloads.
+
+```ipe
+filterMap String.toInt [ "1", "x", "3" ] --> [ 1, 3 ]
+filterMap (\n -> if n > 2 then Just (n * 10) else Nothing) [ 1, 2, 3, 4 ] --> [ 30, 40 ]
+```
+-}
+filterMap : (a -> Maybe b) -> List a -> List b
 filterMap fn list =
     foldr
         (\x acc ->
@@ -498,10 +767,24 @@ filterMap fn list =
         list
 
 
--- | `sortWith cmp list` — stable sort by a user comparator `cmp : a -> a -> Order`
--- returning `LT` / `EQ` / `GT`.  Elements that compare `EQ` keep their input
--- order.  Reference body: insertion sort, inserting AFTER every element the new
--- one is not `LT` than, which preserves the input order of equal elements.
+-- | `sortWith compare list` — sort using a comparison function
+-- `compare a b : Order` that returns `LT`, `EQ`, or `GT`. The sort is stable:
+-- elements that compare `EQ` keep their input order. Use it when the ordering
+-- is more than a simple key — for example, sorting by one field then another.
+--
+-- Example:
+--
+--     List.sortWith (\a b -> compare a b) [ 3, 1, 2 ] == [ 1, 2, 3 ]
+--     -- descending: flip the arguments
+--     List.sortWith (\a b -> compare b a) [ 3, 1, 2 ] == [ 3, 2, 1 ]
+{-| `sortWith cmp list` — stable sort using a comparison function returning `Order`.
+
+```ipe
+sortWith (\a b -> compare a b) [ 3, 1, 2 ] --> [ 1, 2, 3 ]
+sortWith (\a b -> compare b a) [ 3, 1, 2 ] --> [ 3, 2, 1 ]
+```
+-}
+sortWith : (a -> a -> Order) -> List a -> List a
 sortWith cmp list =
     foldr (insertWith cmp) [] list
 
@@ -522,18 +805,63 @@ insertWith cmp x sorted =
                     x :: y :: rest
 
 
--- | `sortBy keyFn list` — stable ascending sort by the `keyFn elem` projection.
--- Equal keys keep their input order; `keyFn` is applied once per element.
+-- | `sortBy key list` — sort ascending by comparing `key element` rather than
+-- the element itself. Stable: equal keys keep their input order. This is the
+-- common case — sort records by one of their fields.
+--
+-- Example:
+--
+--     List.sortBy String.length [ "ccc", "a", "bb" ] == [ "a", "bb", "ccc" ]
+--     -- sort records by a field
+--     List.sortBy .age [ { age = 30 }, { age = 21 } ] == [ { age = 21 }, { age = 30 } ]
+{-| `sortBy key list` — stable ascending sort comparing `key element`.
+
+```ipe
+sortBy String.length [ "ccc", "a", "bb" ] --> [ "a", "bb", "ccc" ]
+sortBy (\n -> -n) [ 1, 3, 2 ] --> [ 3, 2, 1 ]
+```
+-}
+sortBy : (a -> b) -> List a -> List a
 sortBy keyFn list =
     sortWith (\a b -> compare (keyFn a) (keyFn b)) list
 
 
--- | `sum list` — the additive fold; `sum [] == 0`.
+-- | `sum list` — add all the elements together; `sum [] == 0`.
+--
+-- Example:
+--
+--     List.sum [ 1, 2, 3, 4 ] == 10
+--     List.sum [] == 0
+{-| `sum list` — the sum of all elements; `0` for the empty list.
+
+```ipe
+sum [ 1, 2, 3, 4 ] --> 10
+sum [] --> 0
+sum [ 10, -3 ] --> 7
+```
+-}
+sum : List a -> a
 sum list =
     foldl (\x acc -> x + acc) 0 list
 
 
--- | `maximum list` — the largest element, or `Nothing` on the empty list.
+-- | `maximum list` — `Just` the largest element, or `Nothing` when the list
+-- is empty. The `Maybe` is what makes the empty case explicit: there is no
+-- largest element of nothing.
+--
+-- Example:
+--
+--     List.maximum [ 3, 1, 4, 1, 5 ] == Just 5
+--     List.maximum [ 7 ] == Just 7
+{-| `maximum list` — `Just` the largest element, or `Nothing` if empty.
+
+```ipe
+maximum [ 3, 1, 4, 1, 5 ] --> Just 5
+maximum [ 7 ] --> Just 7
+maximum [] --> Nothing
+```
+-}
+maximum : List a -> Maybe a
 maximum list =
     case list of
 
@@ -553,7 +881,22 @@ maximum list =
                 |> Just
 
 
--- | `minimum list` — the smallest element, or `Nothing` on the empty list.
+-- | `minimum list` — `Just` the smallest element, or `Nothing` when the list
+-- is empty.
+--
+-- Example:
+--
+--     List.minimum [ 3, 1, 4, 1, 5 ] == Just 1
+--     List.minimum [ 7 ] == Just 7
+{-| `minimum list` — `Just` the smallest element, or `Nothing` if empty.
+
+```ipe
+minimum [ 3, 1, 4, 1, 5 ] --> Just 1
+minimum [ 7 ] --> Just 7
+minimum [] --> Nothing
+```
+-}
+minimum : List a -> Maybe a
 minimum list =
     case list of
 
@@ -573,9 +916,23 @@ minimum list =
                 |> Just
 
 
--- | `unique list` — the elements with duplicates removed, keeping the FIRST
--- occurrence of each and preserving that first-seen order.  Uses `==`, so it
--- works for any equatable element type.
+-- | `unique list` — the list with duplicates removed, keeping the first
+-- occurrence of each element and its position. Uses `==`, so it works for any
+-- type whose values can be compared for equality.
+--
+-- Example:
+--
+--     List.unique [ 1, 2, 2, 3, 1 ] == [ 1, 2, 3 ]
+--     List.unique [ "a", "a", "b" ] == [ "a", "b" ]
+{-| `unique list` — remove duplicates, keeping first occurrence of each element.
+
+```ipe
+unique [ 1, 2, 2, 3, 1 ] --> [ 1, 2, 3 ]
+unique [ "a", "a", "b" ] --> [ "a", "b" ]
+unique [] --> []
+```
+-}
+unique : List a -> List a
 unique list =
     uniqueHelp list [] []
 

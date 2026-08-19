@@ -240,6 +240,12 @@ pub enum CliError {
     /// a command misuse, so it exits non-zero with the report alone and never the
     /// command's `--help` page.
     DocCoverage(String),
+    /// `ipe doc --check-examples` found one or more broken doc-string examples.
+    /// Carries the ready-to-print failure report. A legitimate gate result — the
+    /// extraction ran correctly and an example does not compile or produce the
+    /// expected result — not a command misuse, so it exits non-zero with the
+    /// report alone and never the command's `--help` page.
+    DocExamplesFailed(String),
     /// A known command was misused (bad or missing arguments, an unknown flag).
     /// Carries the specific reason and the command name; [`fmt::Display`] renders
     /// the reason followed by that command's full, indented `--help` page — the
@@ -445,7 +451,7 @@ impl std::fmt::Display for CliError {
                 "version {proposed} does not clear the required {required} bump — the new \
                  version must be at least {floor}."
             ),
-            Self::DocCoverage(report) => f.write_str(report),
+            Self::DocCoverage(report) | Self::DocExamplesFailed(report) => f.write_str(report),
             Self::PackageAudit(rejection) => write!(f, "{rejection}"),
             Self::Publish(refusal) => write!(f, "ipe package publish refused: {refusal}"),
             // The reason, then the command's full `--help` page (indented,
@@ -666,6 +672,19 @@ fn fmt_emitted_build_failed(err: &CliError, f: &mut std::fmt::Formatter<'_>) -> 
              matching runtime re-materializes automatically."
         );
     }
+    // Registry/network unreachable: cargo could not reach crates.io. This is an
+    // environment failure (DNS, offline, proxy), not a compiler bug and not the
+    // user's source. Render a calm, actionable message and do NOT invite a bug
+    // report.
+    if is_registry_unreachable(trimmed) {
+        let detail = if trimmed.is_empty() {
+            format!("cargo exited {code} while fetching crates for {what}")
+        } else {
+            format!("cargo exited {code} while fetching crates for {what}:\n{trimmed}")
+        };
+        let d = Diagnostic::RegistryUnreachable { detail };
+        return f.write_str(&render(&d, "", ""));
+    }
     // Unattributable: the emitted Rust crate failed to compile for a reason that
     // is not a known runtime-feature gap. Because the front-end gate ensures only
     // valid programs reach emit, this cargo failure reflects a bug in Ipê's own
@@ -682,6 +701,22 @@ fn fmt_emitted_build_failed(err: &CliError, f: &mut std::fmt::Formatter<'_>) -> 
         detail,
     };
     f.write_str(&render(&ice, "", ""))
+}
+
+/// Detect whether cargo's stderr signals a network-level registry failure
+/// (offline, DNS resolution, or a transient fetch error) rather than a compiler
+/// miscompile.
+///
+/// Only genuinely network-level phrases qualify. Broader phrases like "failed to
+/// load source for dependency" or "registry index" are deliberately excluded:
+/// they also fire when a local path dependency is missing or a manifest is
+/// malformed — not connectivity problems, and reporting them as "check your
+/// connection" would misdirect the user. The offline case always surfaces one of
+/// the network phrases below as its root cause.
+fn is_registry_unreachable(stderr: &str) -> bool {
+    stderr.contains("Could not resolve host")
+        || stderr.contains("spurious network error")
+        || stderr.contains("failed to fetch")
 }
 
 /// Extract the runtime feature name from a `cargo` feature-resolution error of
@@ -4563,29 +4598,45 @@ fn build_source_graph(entry: &Path) -> Result<SourceGraph, CliError> {
 /// Collect the USER `.ipe` source texts a build sees, for the `.Unsafe`-import
 /// scan. A manifest project reads every discovered module under its source root
 /// (the same whole-tree posture package-capability inference takes); a
-/// single-file entry reads the entry plus its imported siblings. Best-effort: a
-/// module that cannot be read is skipped — the authoritative "uses unsafe"
-/// decision is the inferred capability set, not this scan, which only supplies
-/// the human-facing `via …` detail.
-fn user_sources_for_unsafe_scan(manifest: Option<&Path>, entry: &Path) -> Vec<String> {
+/// single-file entry reads the entry plus its imported siblings.
+///
+/// Fail-closed: any unreadable module causes an immediate `Err` so the
+/// acknowledgment gate never operates on a partial source set.
+///
+/// # Errors
+/// [`CliError::Io`] when any discovered module cannot be read.
+fn user_sources_for_unsafe_scan(
+    manifest: Option<&Path>,
+    entry: &Path,
+) -> Result<Vec<String>, CliError> {
     if let Some(mpath) = manifest
         && let Ok(m) = project::parse_manifest(mpath)
         && let Ok(discovered) = project::discover_modules(&m.src_root)
     {
         return discovered
             .iter()
-            .filter_map(|d| fs::read_to_string(&d.path).ok())
-            .collect();
+            .map(|d| {
+                fs::read_to_string(&d.path).map_err(|e| CliError::Io {
+                    path: d.path.clone(),
+                    source: e,
+                })
+            })
+            .collect::<Result<Vec<_>, _>>();
     }
     // Single file (or a manifest that failed to parse — the build will surface
     // that error itself): the entry and its siblings.
     match collect_entry_and_siblings(entry) {
-        Ok(collected) => collected
+        Ok(collected) => Ok(collected
             .sources
             .into_values()
             .map(|(_, src)| src)
-            .collect(),
-        Err(_) => fs::read_to_string(entry).ok().into_iter().collect(),
+            .collect()),
+        Err(_) => fs::read_to_string(entry)
+            .map(|src| vec![src])
+            .map_err(|e| CliError::Io {
+                path: entry.to_owned(),
+                source: e,
+            }),
     }
 }
 
@@ -4614,7 +4665,7 @@ fn acknowledge_unsafe_imports(
     if !resolved.inferred.contains(&ipe_ir::Capability::Unsafe) {
         return Ok(());
     }
-    let sources = user_sources_for_unsafe_scan(manifest_path, entry);
+    let sources = user_sources_for_unsafe_scan(manifest_path, entry)?;
     let via = unsafe_ack::unsafe_modules_in_sources(sources.iter().map(String::as_str));
     let manifest_accept = manifest_parsed
         .map(|m| m.capabilities_accept.clone())
@@ -4640,7 +4691,7 @@ fn acknowledge_unsafe_imports(
 /// # Errors
 /// [`CliError::Pipeline`] carrying the first compiler diagnostic;
 /// [`CliError::Io`] when a source file cannot be read.
-fn typecheck_entry_via_graph(entry: &Path) -> Result<(), CliError> {
+pub(crate) fn typecheck_entry_via_graph(entry: &Path) -> Result<(), CliError> {
     let graph = build_source_graph(entry)?;
     graph.run_attributed(entry, |db, root, file| {
         // Type-check first so an ordinary type error surfaces ahead of the
@@ -6117,7 +6168,8 @@ const fn diag_span(d: &Diagnostic) -> ipe_diagnostics::Span {
         Diagnostic::CompilerBug { .. }
         | Diagnostic::Ffi { .. }
         | Diagnostic::Sandbox { .. }
-        | Diagnostic::Consent { .. } => ipe_diagnostics::Span::DUMMY,
+        | Diagnostic::Consent { .. }
+        | Diagnostic::RegistryUnreachable { .. } => ipe_diagnostics::Span::DUMMY,
     }
 }
 
@@ -6125,6 +6177,28 @@ const fn diag_span(d: &Diagnostic) -> ipe_diagnostics::Span {
 mod tests {
     use super::*;
     use ipe_diagnostics::{NameError, Span};
+
+    #[test]
+    fn registry_unreachable_matches_network_signals_only() {
+        // Genuine network/offline failures.
+        assert!(is_registry_unreachable(
+            "Caused by:\n  Could not resolve host: index.crates.io"
+        ));
+        assert!(is_registry_unreachable("warning: spurious network error"));
+        assert!(is_registry_unreachable(
+            "error: failed to fetch `https://github.com/rust-lang/crates.io-index`"
+        ));
+        // A missing local path dependency or malformed manifest is NOT a
+        // connectivity problem and must not be reported as one.
+        assert!(!is_registry_unreachable(
+            "error: failed to load source for dependency `handle_demo`\n\
+             Caused by:\n  path `/tmp/x` does not exist"
+        ));
+        assert!(!is_registry_unreachable(
+            "error: no matching package named `foo` found; updating registry index"
+        ));
+        assert!(!is_registry_unreachable("error[E0433]: cannot find crate"));
+    }
 
     #[test]
     fn io_not_found_renders_styled_without_os_error() {
@@ -7974,5 +8048,113 @@ pub mod web {
         let _ = std::fs::remove_dir_all(&repo);
         let _ = std::fs::remove_dir_all(&entry_root);
         let _ = std::fs::remove_dir_all(&idx_root);
+    }
+
+    // ---- unsafe-scan fail-closed tests -----------------------------------
+
+    /// Returns a unique scratch directory under the OS temp root.
+    /// The caller is responsible for removing it when done.
+    fn unsafe_scan_test_dir(tag: &str) -> PathBuf {
+        use std::sync::atomic::{AtomicU64, Ordering};
+        static N: AtomicU64 = AtomicU64::new(0);
+        let dir = std::env::temp_dir().join(format!(
+            "ipe-unsafe-scan-{tag}-{}-{}",
+            std::process::id(),
+            N.fetch_add(1, Ordering::Relaxed)
+        ));
+        std::fs::create_dir_all(&dir).expect("create test scratch dir");
+        dir
+    }
+
+    /// A manifest project with an unreadable module must return `Err(CliError::Io)`
+    /// naming the unreadable path — not `Ok` with a partial source list.
+    #[cfg(unix)]
+    #[test]
+    fn unsafe_scan_manifest_project_fails_closed_on_unreadable_module() {
+        use std::fs;
+        use std::os::unix::fs::PermissionsExt;
+
+        let dir = unsafe_scan_test_dir("manifest-fail");
+        let src = dir.join("src");
+        fs::create_dir_all(&src).expect("create src");
+
+        // One readable module and one unreadable one.
+        let readable = src.join("Main.ipe");
+        fs::write(&readable, "module Main exposing (main)\n").expect("write Main");
+        let unreadable = src.join("Locked.ipe");
+        fs::write(&unreadable, "module Locked exposing ()\n").expect("write Locked");
+        fs::set_permissions(&unreadable, fs::Permissions::from_mode(0o000)).expect("chmod 000");
+
+        let manifest_path = dir.join("ipe.toml");
+        fs::write(&manifest_path, "[project]\nname = \"test\"\n").expect("write manifest");
+
+        let result = user_sources_for_unsafe_scan(Some(&manifest_path), &readable);
+
+        // Restore permissions before any assertion so cleanup always runs.
+        let _ = fs::set_permissions(&unreadable, fs::Permissions::from_mode(0o644));
+        let _ = fs::remove_dir_all(&dir);
+
+        // Must be `Err(CliError::Io)` naming the unreadable path — never an
+        // `Ok` partial scan and never a different error variant.
+        assert!(
+            matches!(&result, Err(CliError::Io { path, .. }) if path == &unreadable),
+            "expected Err(CliError::Io) naming {unreadable:?}, got: {result:?}"
+        );
+    }
+
+    /// A manifest project where every module is readable must return `Ok` with
+    /// every source text present.
+    #[test]
+    fn unsafe_scan_manifest_project_ok_when_all_readable() {
+        use std::fs;
+
+        let dir = unsafe_scan_test_dir("manifest-ok");
+        let src = dir.join("src");
+        fs::create_dir_all(&src).expect("create src");
+
+        let entry = src.join("Main.ipe");
+        fs::write(&entry, "module Main exposing (main)\n").expect("write Main");
+        let other = src.join("Helper.ipe");
+        fs::write(&other, "module Helper exposing ()\n").expect("write Helper");
+
+        let manifest_path = dir.join("ipe.toml");
+        fs::write(&manifest_path, "[project]\nname = \"test\"\n").expect("write manifest");
+
+        let result = user_sources_for_unsafe_scan(Some(&manifest_path), &entry);
+        let _ = fs::remove_dir_all(&dir);
+
+        // Every module readable ⇒ `Ok` carrying a source for each.
+        assert!(
+            matches!(&result, Ok(sources) if sources.len() >= 2),
+            "expected Ok with a source for every readable module, got: {result:?}"
+        );
+    }
+
+    /// Single-file fallback: when `collect_entry_and_siblings` fails and the
+    /// entry itself is unreadable, the result must be `Err(CliError::Io)`
+    /// naming the entry path — not `Ok` with an empty list.
+    #[cfg(unix)]
+    #[test]
+    fn unsafe_scan_single_file_fallback_fails_closed_on_unreadable_entry() {
+        use std::fs;
+        use std::os::unix::fs::PermissionsExt;
+
+        let dir = unsafe_scan_test_dir("single-fail");
+        let entry = dir.join("Main.ipe");
+        fs::write(&entry, "module Main exposing (main)\n").expect("write entry");
+        fs::set_permissions(&entry, fs::Permissions::from_mode(0o000)).expect("chmod 000");
+
+        // Pass no manifest so the single-file (entry + siblings) path is taken.
+        let result = user_sources_for_unsafe_scan(None, &entry);
+
+        let _ = fs::set_permissions(&entry, fs::Permissions::from_mode(0o644));
+        let _ = fs::remove_dir_all(&dir);
+
+        // Must be `Err(CliError::Io)` naming the unreadable entry — never an
+        // `Ok` empty scan and never a different error variant.
+        assert!(
+            matches!(&result, Err(CliError::Io { path, .. }) if path == &entry),
+            "expected Err(CliError::Io) naming {entry:?}, got: {result:?}"
+        );
     }
 }

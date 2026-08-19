@@ -10,23 +10,24 @@
 //! so existing call sites keep compiling while producers migrate.
 
 use crate::code::{
-    Code, IPE_F4400, IPE_F4401, IPE_F4402, IPE_F4410, IPE_F4411, IPE_F4412, IPE_F4413, IPE_F4414,
-    IPE_F4415, IPE_I0001, IPE_I0010, IPE_I0011, IPE_I0100, IPE_I0101, IPE_I0102, IPE_I0103,
-    IPE_I0200, IPE_I0201, IPE_I0202, IPE_I0203, IPE_L0100, IPE_L0101, IPE_L0102, IPE_L0103,
-    IPE_L0104, IPE_L0105, IPE_L0106, IPE_L0107, IPE_L0108, IPE_L0110, IPE_L0111, IPE_L0112,
-    IPE_L0113, IPE_L0114, IPE_L0115, IPE_L0116, IPE_L0117, IPE_L0118, IPE_L0119, IPE_L0120,
-    IPE_L0121, IPE_L0122, IPE_L0123, IPE_L0124, IPE_L0125, IPE_L0126, IPE_L0127, IPE_L0128,
-    IPE_L0129, IPE_L0130, IPE_L0131, IPE_L0132, IPE_L0133, IPE_L0134, IPE_L0135, IPE_L0136,
-    IPE_L0140, IPE_L0141, IPE_L0142, IPE_L0200, IPE_N0001, IPE_N0002, IPE_N0003, IPE_N0004,
-    IPE_N0005, IPE_N0010, IPE_N0011, IPE_N0012, IPE_N0013, IPE_N0020, IPE_N0021, IPE_N0022,
-    IPE_N0023, IPE_N0024, IPE_N0025, IPE_N0026, IPE_N0027, IPE_N0028, IPE_N0029, IPE_N0030,
-    IPE_N0031, IPE_N0032, IPE_N0033, IPE_N0034, IPE_N0035, IPE_N0036, IPE_N0037, IPE_N0038,
-    IPE_N0039, IPE_N0040, IPE_N0041, IPE_N0042, IPE_P0001, IPE_P0002, IPE_P0003, IPE_P0010,
-    IPE_P0011, IPE_P0012, IPE_P0013, IPE_P0014, IPE_P0015, IPE_P0016, IPE_P0017, IPE_P0018,
-    IPE_P0020, IPE_P0021, IPE_P0030, IPE_P0031, IPE_P0040, IPE_P0041, IPE_P0050, IPE_P0060,
-    IPE_P0061, IPE_P0062, IPE_P0063, IPE_P0064, IPE_S0001, IPE_T0001, IPE_T0002, IPE_T0003,
-    IPE_T0004, IPE_T0010, IPE_T0011, IPE_T0012, IPE_T0013, IPE_T0014, IPE_T0015, IPE_T0016,
-    IPE_T0017, IPE_T0018, IPE_T0019, IPE_T0020, Severity,
+    Code, IPE_E0001, IPE_F4400, IPE_F4401, IPE_F4402, IPE_F4410, IPE_F4411, IPE_F4412, IPE_F4413,
+    IPE_F4414, IPE_F4415, IPE_I0001, IPE_I0010, IPE_I0011, IPE_I0100, IPE_I0101, IPE_I0102,
+    IPE_I0103, IPE_I0200, IPE_I0201, IPE_I0202, IPE_I0203, IPE_L0100, IPE_L0101, IPE_L0102,
+    IPE_L0103, IPE_L0104, IPE_L0105, IPE_L0106, IPE_L0107, IPE_L0108, IPE_L0110, IPE_L0111,
+    IPE_L0112, IPE_L0113, IPE_L0114, IPE_L0115, IPE_L0116, IPE_L0117, IPE_L0118, IPE_L0119,
+    IPE_L0120, IPE_L0121, IPE_L0122, IPE_L0123, IPE_L0124, IPE_L0125, IPE_L0126, IPE_L0127,
+    IPE_L0128, IPE_L0129, IPE_L0130, IPE_L0131, IPE_L0132, IPE_L0133, IPE_L0134, IPE_L0135,
+    IPE_L0136, IPE_L0140, IPE_L0141, IPE_L0142, IPE_L0143, IPE_L0144, IPE_L0200, IPE_N0001,
+    IPE_N0002, IPE_N0003, IPE_N0004, IPE_N0005, IPE_N0010, IPE_N0011, IPE_N0012, IPE_N0013,
+    IPE_N0020, IPE_N0021, IPE_N0022, IPE_N0023, IPE_N0024, IPE_N0025, IPE_N0026, IPE_N0027,
+    IPE_N0028, IPE_N0029, IPE_N0030, IPE_N0031, IPE_N0032, IPE_N0033, IPE_N0034, IPE_N0035,
+    IPE_N0036, IPE_N0037, IPE_N0038, IPE_N0039, IPE_N0040, IPE_N0041, IPE_N0042, IPE_P0001,
+    IPE_P0002, IPE_P0003, IPE_P0010, IPE_P0011, IPE_P0012, IPE_P0013, IPE_P0014, IPE_P0015,
+    IPE_P0016, IPE_P0017, IPE_P0018, IPE_P0020, IPE_P0021, IPE_P0030, IPE_P0031, IPE_P0040,
+    IPE_P0041, IPE_P0050, IPE_P0060, IPE_P0061, IPE_P0062, IPE_P0063, IPE_P0064, IPE_P0065,
+    IPE_P0066, IPE_P0067, IPE_S0001, IPE_T0001, IPE_T0002, IPE_T0003, IPE_T0004, IPE_T0010,
+    IPE_T0011, IPE_T0012, IPE_T0013, IPE_T0014, IPE_T0015, IPE_T0016, IPE_T0017, IPE_T0018,
+    IPE_T0019, IPE_T0020, Severity,
 };
 use crate::span::Span;
 
@@ -99,7 +100,6 @@ pub enum TokenKind {
     Then,
     Else,
     Do,
-    DoParallel,
     LParen,
     RParen,
     LBrace,
@@ -398,6 +398,21 @@ pub enum ParseError {
         literal: Box<str>,
         reason: ipe_path_core::PathRejection,
     },
+    /// A `do` block whose statements are all pure `=` bindings with no `<-`
+    /// Task bind and no bare-run Task step — pure code masquerading as `do`.
+    /// Use `let … in` for pure bindings; lift with `Task.succeed` if a `Task`
+    /// result is genuinely needed. [IPE-P0065]
+    SteplessDo,
+    /// A doc-string (`{-| … -}`) is attached to a non-exported binding.
+    ///
+    /// Only exported symbols are reachable by doc-tooling; a doc-string on an
+    /// unexported binding is unreachable and is likely misplaced. **Warning** —
+    /// the program still compiles. [IPE-P0066]
+    DocOnUnexported { name: Box<str> },
+    /// An exported symbol has no doc-string. Emitted only when the opt-in lint
+    /// (`--lint missing-docs`) is enabled; off by default. **Warning** — the
+    /// program still compiles. [IPE-P0067]
+    MissingDocString { name: Box<str> },
 }
 
 /// Errors raised during name resolution / canonicalisation.
@@ -1214,6 +1229,37 @@ pub enum LowerError {
     /// `ipe` time rather than emitting Rust a caller can never satisfy.
     /// [IPE-L0142]
     UndeterminableReturnAny,
+    /// A call site passes a record whose field type does not match the type the
+    /// callee's body requires for that field. The callee's parameter is a
+    /// wildcard `any` that the body reads as a record field — the body's solved
+    /// region type pins the required field type to a concrete `IrType`, which
+    /// the backend emits as an associated-type witness bound
+    /// (`IpeHas<field><Name = required_ty>`). Because `any` severs caller-callee
+    /// type-checker unification, a caller whose field has a different concrete
+    /// type is accepted by the type checker but emits Rust that fails cargo with
+    /// E0271 (`<RecName as IpeHas<field>>::Name == required_ty` unsatisfied).
+    /// Rejected fail-closed here at lowering time. [IPE-L0143]
+    WildcardAnyFieldTypeMismatch {
+        /// The record field whose type mismatches (e.g. `"name"`).
+        field: Box<str>,
+        /// The type the callee's body requires for that field (e.g. `"String"`).
+        required: Box<str>,
+        /// The type the caller's record actually provides (e.g. `"Bool"`).
+        found: Box<str>,
+    },
+    /// A non-record value is passed at a row-generic parameter position. The
+    /// callee's parameter is a wildcard `any` whose body reads record fields,
+    /// so the backend emits `IpeHas*` witness bounds on that parameter. Only a
+    /// record type can carry those bounds; any other concrete type (`Int`,
+    /// `Bool`, `String`, a custom ADT, …) causes the emitted Rust to fail cargo
+    /// with `error[E0277]`. Because the type checker accepts the call (wildcard
+    /// `any` severs caller-callee unification), this is caught fail-closed at
+    /// lowering time. [IPE-L0144]
+    WildcardAnyArgNotRecord {
+        /// A short, plain-English name for the type the caller actually passed
+        /// (e.g. `"Int"`, `"Bool"`).
+        found: Box<str>,
+    },
 }
 
 // ===========================================================================
@@ -1387,6 +1433,13 @@ pub enum Diagnostic {
     Consent {
         msg: ConsentError,
     },
+    /// The crate registry could not be reached while building the emitted crate
+    /// (`IPE-E0001`). Span-free: the defect is in the host environment (network
+    /// or DNS), not in the user's source.
+    RegistryUnreachable {
+        /// The cargo stderr detail, trimmed, for display.
+        detail: String,
+    },
 }
 
 /// Result alias used throughout the compiler.
@@ -1520,6 +1573,7 @@ impl Diagnostic {
             Self::Ffi { msg } => ffi_code(msg),
             Self::Sandbox { msg } => sandbox_code(msg),
             Self::Consent { .. } => IPE_S0001,
+            Self::RegistryUnreachable { .. } => IPE_E0001,
         }
     }
 
@@ -1527,11 +1581,16 @@ impl Diagnostic {
     #[must_use]
     pub const fn severity(&self) -> Severity {
         match self {
+            Self::Parse {
+                msg: ParseError::DocOnUnexported { .. } | ParseError::MissingDocString { .. },
+                ..
+            } => Severity::Warning,
             Self::Parse { .. }
             | Self::Name { .. }
             | Self::Ffi { .. }
             | Self::Sandbox { .. }
-            | Self::Consent { .. } => Severity::Error,
+            | Self::Consent { .. }
+            | Self::RegistryUnreachable { .. } => Severity::Error,
             Self::Lower { msg, .. } => match msg {
                 LowerError::RoutedAppMissingPageField { .. } => Severity::Warning,
                 _ => Severity::Error,
@@ -1575,7 +1634,8 @@ impl Diagnostic {
             Self::CompilerBug { .. }
             | Self::Ffi { .. }
             | Self::Sandbox { .. }
-            | Self::Consent { .. } => Span::DUMMY,
+            | Self::Consent { .. }
+            | Self::RegistryUnreachable { .. } => Span::DUMMY,
         }
     }
 
@@ -1588,10 +1648,10 @@ impl Diagnostic {
             Self::Name { msg, span } => name_help(msg, *span),
             Self::Type { msg, .. } => type_help(msg),
             Self::Lower { msg, .. } => lower_help(msg),
-            Self::CompilerBug { .. } => Vec::new(),
             Self::Ffi { msg } => ffi_help(msg),
             Self::Sandbox { msg } => sandbox_help(msg),
             Self::Consent { msg } => consent_help(msg),
+            Self::CompilerBug { .. } | Self::RegistryUnreachable { .. } => Vec::new(),
         }
     }
 }
@@ -1624,6 +1684,9 @@ const fn parse_code(msg: &ParseError) -> Code {
         ParseError::MalformedLet(_) => IPE_P0061,
         ParseError::MalformedIf(_) => IPE_P0062,
         ParseError::InvalidPathLiteral { .. } => IPE_P0063,
+        ParseError::SteplessDo => IPE_P0065,
+        ParseError::DocOnUnexported { .. } => IPE_P0066,
+        ParseError::MissingDocString { .. } => IPE_P0067,
     }
 }
 
@@ -1701,6 +1764,8 @@ const fn lower_code(msg: &LowerError) -> Code {
         LowerError::RoutedAppMissingPageField { .. } => IPE_L0124,
         LowerError::NonEntryMain { .. } => IPE_L0136,
         LowerError::UndeterminableReturnAny => IPE_L0142,
+        LowerError::WildcardAnyFieldTypeMismatch { .. } => IPE_L0143,
+        LowerError::WildcardAnyArgNotRecord { .. } => IPE_L0144,
     }
 }
 
@@ -1790,7 +1855,10 @@ fn parse_help(msg: &ParseError) -> Vec<HelpLine> {
         | ParseError::MalformedCase(_)
         | ParseError::MalformedLet(_)
         | ParseError::MalformedIf(_)
-        | ParseError::InvalidPathLiteral { .. } => Vec::new(),
+        | ParseError::InvalidPathLiteral { .. }
+        | ParseError::SteplessDo
+        | ParseError::DocOnUnexported { .. }
+        | ParseError::MissingDocString { .. } => Vec::new(),
     }
 }
 
@@ -2046,25 +2114,62 @@ fn lower_help(msg: &LowerError) -> Vec<HelpLine> {
              `Ui.column` of rows) instead."
                 .into(),
         )],
-        LowerError::LawlessEffectDiscard => vec![
-            HelpLine::Note(
-                "a `Task` runs its effect only through `Task.run`, or by being sequenced \
-                 inside a function whose own return type is a `Task`. Discarding it with \
-                 `let _ = <task>` in a non-`Task` function would run it through a hidden \
-                 `Task.run`. Give the enclosing function a `Task e ()` return type and let \
-                 its result be the sequenced tasks, or run the effect explicitly with \
-                 `Task.run`. To print a value while debugging, use `Debug.log` (rejected in \
-                 production builds)."
-                    .into(),
-            ),
-            HelpLine::SeeExplain("effects"),
-        ],
+        LowerError::LawlessEffectDiscard => lawless_effect_discard_help(),
         LowerError::RoutedAppMissingPageField { route_count } => {
             routed_app_missing_page_field_help(*route_count)
         }
         LowerError::NonEntryMain { .. } => non_entry_main_help(),
         LowerError::UndeterminableReturnAny => undeterminable_return_any_help(),
+        LowerError::WildcardAnyFieldTypeMismatch {
+            field, required, ..
+        } => wildcard_any_field_type_mismatch_help(field, required),
+        LowerError::WildcardAnyArgNotRecord { .. } => wildcard_any_arg_not_record_help(),
     }
+}
+
+/// The help lines for [`LowerError::LawlessEffectDiscard`], factored out so
+/// [`lower_help`] stays a thin per-variant dispatcher.
+fn lawless_effect_discard_help() -> Vec<HelpLine> {
+    vec![
+        HelpLine::Note(
+            "a `Task` runs its effect only through `Task.run`, or by being sequenced \
+             inside a function whose own return type is a `Task`. Discarding it with \
+             `let _ = <task>` in a non-`Task` function would run it through a hidden \
+             `Task.run`. Give the enclosing function a `Task e ()` return type and let \
+             its result be the sequenced tasks, or run the effect explicitly with \
+             `Task.run`. To print a value while debugging, use `Debug.log` (rejected in \
+             production builds)."
+                .into(),
+        ),
+        HelpLine::SeeExplain("effects"),
+    ]
+}
+
+/// The help lines for [`LowerError::WildcardAnyFieldTypeMismatch`], factored out
+/// so [`lower_help`] stays a thin per-variant dispatcher.
+fn wildcard_any_field_type_mismatch_help(field: &str, required: &str) -> Vec<HelpLine> {
+    vec![HelpLine::Note(
+        format!(
+            "the callee's body reads the `.{field}` field and requires it to be \
+             `{required}`; change the record field's value to match, or annotate \
+             the callee's parameter with a closed record type such as \
+             `{{ {field} : {required} }}` so the type-checker enforces the \
+             constraint at every call site"
+        )
+        .into_boxed_str(),
+    )]
+}
+
+/// The help lines for [`LowerError::WildcardAnyArgNotRecord`], factored out so
+/// [`lower_help`] stays a thin per-variant dispatcher.
+fn wildcard_any_arg_not_record_help() -> Vec<HelpLine> {
+    vec![HelpLine::Note(
+        "the callee's parameter is `any`, but its body reads record fields — \
+         only a record can satisfy the `IpeHas*` witness bounds the backend emits. \
+         Pass a record value, or annotate the callee's parameter with a closed \
+         record type so the type-checker enforces the constraint at every call site."
+            .into(),
+    )]
 }
 
 /// The help lines for [`LowerError::NonEntryMain`], factored out so

@@ -1106,20 +1106,19 @@ fn ir_type_contains_task(ty: &IrType) -> bool {
     }
 }
 
-/// The Rust infix spelling for float and generic binary operators.
+/// The Rust infix spelling for float binary operators and comparisons.
 ///
-/// Integer arithmetic (`IntAdd`/`IntSub`/`IntMul`) and `IntDiv`/`Append`
-/// are routed through helpers or `format!` before reaching any infix path.
-/// The generic `Add`/`Sub`/`Mul` variants (polymorphic `Number a` functions)
-/// use the same Rust infix tokens — their overflow behaviour is governed by
-/// the concrete monomorphised type at the call site.
+/// `IntAdd`/`IntSub`/`IntMul`/`IntDiv`/`Append` are routed through helpers
+/// or `format!` before reaching any infix path and never arrive here.
+/// `Add`/`Sub`/`Mul` (polymorphic `Number a`) emit `.ipe_wrapping_add/sub/mul`
+/// calls (never infix), so they also never arrive here.
 /// All variants are listed so adding a new `BinOp` without wiring it is a
 /// compile error rather than a silent gap.
 const fn op_str(op: BinOp) -> &'static str {
     match op {
-        BinOp::FloatAdd | BinOp::Add => "+",
-        BinOp::FloatSub | BinOp::Sub => "-",
-        BinOp::FloatMul | BinOp::Mul => "*",
+        BinOp::FloatAdd => "+",
+        BinOp::FloatSub => "-",
+        BinOp::FloatMul => "*",
         BinOp::Div => "/",
         BinOp::Eq => "==",
         BinOp::Neq => "!=",
@@ -1129,15 +1128,16 @@ const fn op_str(op: BinOp) -> &'static str {
         BinOp::Ge => ">=",
         BinOp::And => "&&",
         BinOp::Or => "||",
-        // `Int{Add,Sub,Mul}` route through total wrapping helpers before
-        // this function is reached — they must never arrive here.
+        // These route through helpers before reaching here — sentinel strings
+        // that are invalid Rust keep the match exhaustive without emitting
+        // garbage in case the routing is ever accidentally bypassed.
+        BinOp::Add => "ipe_wrapping_add",
+        BinOp::Sub => "ipe_wrapping_sub",
+        BinOp::Mul => "ipe_wrapping_mul",
         BinOp::IntAdd => "wrapping_add",
         BinOp::IntSub => "wrapping_sub",
         BinOp::IntMul => "wrapping_mul",
-        // `IntDiv` routes through `ipe_runtime::math::ipe_int_div` — `//`
-        // would be a Rust line comment, making corruption impossible to miss.
         BinOp::IntDiv => "//",
-        // `Append` routes through `format!` before reaching here.
         BinOp::Append => "++",
     }
 }
@@ -4848,13 +4848,6 @@ pub fn emit_expr_at(
                 BinOp::FloatAdd
                 | BinOp::FloatSub
                 | BinOp::FloatMul
-                // Generic (polymorphic `Number a`) `+`/`-`/`*`: emitted as
-                // Rust infix using the `Add`/`Sub`/`Mul` trait bounds on the
-                // generic type parameter. Only reached for functions whose
-                // result type was still a type variable at lowering time.
-                | BinOp::Add
-                | BinOp::Sub
-                | BinOp::Mul
                 // Float `/` on `f64`: total (x/0.0 = ±∞, never panics).
                 | BinOp::Div
                 // Comparison and boolean operators are total on all types.
@@ -4866,6 +4859,16 @@ pub fn emit_expr_at(
                 | BinOp::Ge
                 | BinOp::And
                 | BinOp::Or => Ok(format!("({} {} {})", l, op_str(*op), r)),
+                // Generic (polymorphic `Number a`) `+`/`-`/`*`: route through
+                // `IpeWrappingAdd/Sub/Mul` method calls. The bound in
+                // `render_bounds` is already set to the wrapping trait, so the
+                // call type-checks. This prevents a panic under
+                // `overflow-checks=on` when the call site monomorphises to i64.
+                // Concrete Int routes through `ipe_int_add/sub/mul` (above);
+                // Float's `IpeWrappingAdd` impl is the plain IEEE op.
+                BinOp::Add => Ok(format!("{l}.ipe_wrapping_add({r})")),
+                BinOp::Sub => Ok(format!("{l}.ipe_wrapping_sub({r})")),
+                BinOp::Mul => Ok(format!("{l}.ipe_wrapping_mul({r})")),
             }
         }
         Expr::Let { name, value, body } => {
@@ -7366,13 +7369,23 @@ fn render_bounds(bounds: BoundSet, n: usize) -> String {
         traits.push("Sync".to_owned());
     }
     if bounds.has_add() {
-        traits.push(format!("::core::ops::Add<Output = T{n}>"));
+        // Wrapping addition so `T{n} + T{n}` in a generic body does not panic
+        // under `overflow-checks=on` when the call site monomorphises to i64.
+        // The trait is `pub use`-re-exported at the runtime crate root
+        // (`ipe_runtime::IpeWrappingAdd`) via `mod.rs`'s `pub use basics::*`.
+        traits.push(format!(
+            "ipe_runtime::basics::IpeWrappingAdd<Output = T{n}>"
+        ));
     }
     if bounds.has_sub() {
-        traits.push(format!("::core::ops::Sub<Output = T{n}>"));
+        traits.push(format!(
+            "ipe_runtime::basics::IpeWrappingSub<Output = T{n}>"
+        ));
     }
     if bounds.has_mul() {
-        traits.push(format!("::core::ops::Mul<Output = T{n}>"));
+        traits.push(format!(
+            "ipe_runtime::basics::IpeWrappingMul<Output = T{n}>"
+        ));
     }
     if bounds.has_ord() {
         traits.push("PartialOrd".to_owned());

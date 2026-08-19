@@ -9,8 +9,81 @@
 //! Identifiers are interned [`Symbol`]s; every node that has a source location
 //! is wrapped in [`Located`].
 
-use ipe_diagnostics::Located;
+use ipe_diagnostics::{Located, Span};
 use ipe_intern::Symbol;
+
+/// A doc-string attached to a top-level declaration.
+///
+/// Built from a `{-| … -}` block comment placed immediately above the
+/// declaration with no intervening blank line. The `body` is the raw text
+/// between `{-|` and `-}` (leading `|` stripped, surrounding whitespace
+/// trimmed). `example_spans` are the source byte ranges of each fenced
+/// ` ```ipe ` code block within `body`; they are recorded for later tooling
+/// but are not executed during compilation.
+///
+/// Erasure: `DocString` never reaches lowering or emit. All downstream stages
+/// past name resolution simply ignore the field and produce identical output.
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub struct DocString {
+    /// Raw text of the doc comment (stripped of the `{-|` / `-}` delimiters
+    /// and leading/trailing whitespace).
+    pub body: String,
+    /// Byte spans (within `body`) of each ` ```ipe ` … ` ``` ` block.
+    pub example_spans: Vec<Span>,
+}
+
+impl DocString {
+    /// Parse the raw text of a `{-| … -}` block (already stripped of the
+    /// `{-|` / `-}` delimiters) into a [`DocString`], extracting the spans of
+    /// any ` ```ipe ` … ` ``` ` fenced blocks within the body.
+    #[must_use]
+    pub fn from_raw(raw: &str) -> Self {
+        let body = raw.trim().to_owned();
+        let example_spans = extract_ipe_fences(&body);
+        Self {
+            body,
+            example_spans,
+        }
+    }
+}
+
+/// Scan `text` for ` ```ipe ` … ` ``` ` fenced blocks and return one
+/// [`Span`] (relative byte offsets within `text`) per block, spanning the
+/// content between the opening and closing fences.
+fn extract_ipe_fences(text: &str) -> Vec<Span> {
+    const OPEN: &str = "```ipe";
+    const CLOSE: &str = "```";
+    let mut spans = Vec::new();
+    let bytes = text.as_bytes();
+    let len = bytes.len();
+    let mut i = 0usize;
+    while i < len {
+        // Find next opening fence.
+        let Some(rel) = text[i..].find(OPEN) else {
+            break;
+        };
+        let fence_start = i + rel;
+        // Content starts after the opening fence line (skip to next newline).
+        let after_open = fence_start + OPEN.len();
+        // Skip rest of the opening fence line.
+        let content_start = text[after_open..]
+            .find('\n')
+            .map_or(len, |nl| after_open + nl + 1);
+        // Find matching closing fence (a line that begins with ` ``` `).
+        let Some(close_rel) = text[content_start..].find(CLOSE) else {
+            // Unclosed fence — skip to next fence-open search.
+            i = after_open;
+            continue;
+        };
+        let content_end = content_start + close_rel;
+        // Clamp both ends to valid u32 byte offsets.
+        let lo = u32::try_from(content_start).unwrap_or(u32::MAX);
+        let hi = u32::try_from(content_end).unwrap_or(u32::MAX);
+        spans.push(Span::new(lo, hi));
+        i = content_end + CLOSE.len();
+    }
+    spans
+}
 
 /// A parsed module.
 //
@@ -84,6 +157,10 @@ pub struct Value {
     pub body: Expr,
     /// Optional `name : T` type annotation.
     pub type_annotation: Option<Located<TypeAnnotation>>,
+    /// Doc-string attached immediately above this declaration (no blank line
+    /// between the `{-| … -}` comment and the binding). Erased before
+    /// lowering; does not affect emitted code.
+    pub doc: Option<DocString>,
 }
 
 /// A `type` (union) declaration.
@@ -93,6 +170,9 @@ pub struct Union {
     /// Type variables, e.g. `a` in `type Maybe a`.
     pub vars: Vec<Located<Symbol>>,
     pub ctors: Vec<Located<Ctor>>,
+    /// Doc-string attached immediately above this declaration. Erased before
+    /// lowering; does not affect emitted code.
+    pub doc: Option<DocString>,
 }
 
 /// A `type alias Name = T` declaration.
@@ -112,6 +192,9 @@ pub struct TypeAlias {
     pub vars: Vec<Located<Symbol>>,
     /// The aliased type.
     pub body: Located<TypeAnnotation>,
+    /// Doc-string attached immediately above this declaration. Erased before
+    /// lowering; does not affect emitted code.
+    pub doc: Option<DocString>,
 }
 
 /// A single union constructor.
