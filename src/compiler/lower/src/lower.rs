@@ -19,7 +19,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use ipe_canon::ast as canon;
 use ipe_diagnostics::{DResult, Diagnostic, Feature, Located, LowerError, MainRetName, Span};
-use ipe_intern::{Interner, Symbol};
+use ipe_intern::{Interner, Symbol, WildcardTvars};
 use ipe_ir::{
     Arm, BinOp, BoundSet, CallPin, Callee, Capability, EnumDef, Expr, Func, FuncId, IrType,
     KernelFn, Match, ModPath, Module, OnFormKind, Pat, Program, RowParam, RuntimeModule, TypeDef,
@@ -5316,14 +5316,13 @@ fn pat_binds_any(pat: &Pat, params: &BTreeSet<Symbol>) -> bool {
     params.iter().any(|p| pat_binds_symbol(pat, *p))
 }
 
-/// Is `*tv` a wildcard-`any` generic (a fresh `anyp_`-pooled binder minted by
-/// `split_typed_sig`, or the raw `any` symbol) rather than a genuine named tvar
+/// Is `tv` a compiler-minted wildcard generic rather than a genuine named tvar
 /// (`a`/`msg`)? The `IpeRow` bound is restricted to wildcards; the
-/// `Display` bound applies to BOTH.
-fn is_wildcard_any_tv(interner: &Interner, tv: Symbol) -> bool {
-    interner
-        .resolve(tv)
-        .is_some_and(|nm| nm == "any" || nm.starts_with("anyp_"))
+/// `Display` bound applies to both. Provenance is determined by
+/// [`WildcardTvars`] set membership, established once at mint time — never
+/// by resolving the symbol back to a name string.
+fn is_wildcard_any_tv(wildcards: &WildcardTvars, tv: Symbol) -> bool {
+    wildcards.is_wildcard(tv)
 }
 
 /// Does `ty` mention the type variable `tv` anywhere in its structure?
@@ -6314,7 +6313,7 @@ fn body_move_closure_captures_generic(tv: Symbol, expr: &Expr) -> bool {
 /// that does not flow into the kernel, so a truly-parametric pass-through stays
 /// unbounded and reusable. This precision is what forbids over-bounding.
 fn apply_kernel_type_param_bounds(
-    interner: &Interner,
+    wildcards: &WildcardTvars,
     type_params: &mut [(Symbol, BoundSet)],
     params: &[(Symbol, IrType)],
     ret: &IrType,
@@ -6379,7 +6378,7 @@ fn apply_kernel_type_param_bounds(
     };
 
     for (tv, bounds) in type_params.iter_mut() {
-        let is_wildcard = is_wildcard_any_tv(interner, *tv);
+        let is_wildcard = is_wildcard_any_tv(wildcards, *tv);
         // Resolve the VALUE binder(s) whose type is exactly `Generic(tv)`, then
         // ask each obligation's matcher whether the body applies its kernel to
         // that binder.
@@ -10214,6 +10213,13 @@ pub struct Lowerer<'a> {
     /// save/restore per match arm; interior mutability so the lowering walk stays
     /// over a shared `&self`.
     shared_fn_reads: std::cell::RefCell<BTreeMap<Symbol, (Vec<IrType>, IrType)>>,
+    /// The set of compiler-minted wildcard type-variable symbols for this
+    /// module lowering. Wildcard provenance is a typed set-membership fact,
+    /// not a name-string predicate — membership is established once at mint
+    /// time (populated from the `anyp_N` pool plus the reserved sentinel).
+    /// All classification predicates query this set instead of resolving
+    /// a symbol back to a string and comparing to `"any"` or `"anyp_"`.
+    wildcards: WildcardTvars,
 }
 
 /// Normalize the fn-carrier of every function type that sits DIRECTLY under a
@@ -10573,28 +10579,31 @@ pub fn count_destructure_param_sites(m: &canon::Module) -> usize {
 /// Over-counting is harmless (a few unused interned symbols); under-counting
 /// would let [`Lowerer::fresh_any_param_symbol`]'s cursor overrun, which
 /// fails closed as a [`bug`] — never an index panic, never a silent reuse.
-pub fn count_any_param_sites(m: &canon::Module, interner: &Interner) -> usize {
-    fn count_any_in_type(t: &canon::Type, interner: &Interner) -> usize {
-        match t {
-            canon::Type::Var(v) => usize::from(interner.resolve(*v) == Some("any")),
-            canon::Type::Con { args, .. } => {
-                args.iter().map(|a| count_any_in_type(a, interner)).sum()
-            }
-            canon::Type::Lambda(arg, rest) => {
-                count_any_in_type(arg, interner) + count_any_in_type(rest, interner)
-            }
-            canon::Type::Tuple(elems) => elems.iter().map(|e| count_any_in_type(e, interner)).sum(),
-            canon::Type::Record(fields) => fields
-                .iter()
-                .map(|(_, f)| count_any_in_type(f, interner))
-                .sum(),
-            canon::Type::RecordOpen(_, fields) => fields
-                .iter()
-                .map(|(_, f)| count_any_in_type(f, interner))
-                .sum(),
-            canon::Type::Unit => 0,
+fn count_any_in_type(t: &canon::Type, sentinel: Option<Symbol>) -> usize {
+    match t {
+        canon::Type::Var(v) => usize::from(sentinel == Some(*v)),
+        canon::Type::Con { args, .. } => args.iter().map(|a| count_any_in_type(a, sentinel)).sum(),
+        canon::Type::Lambda(arg, rest) => {
+            count_any_in_type(arg, sentinel) + count_any_in_type(rest, sentinel)
         }
+        canon::Type::Tuple(elems) => elems.iter().map(|e| count_any_in_type(e, sentinel)).sum(),
+        canon::Type::Record(fields) => fields
+            .iter()
+            .map(|(_, f)| count_any_in_type(f, sentinel))
+            .sum(),
+        canon::Type::RecordOpen(_, fields) => fields
+            .iter()
+            .map(|(_, f)| count_any_in_type(f, sentinel))
+            .sum(),
+        canon::Type::Unit => 0,
     }
+}
+
+pub fn count_any_param_sites(m: &canon::Module, interner: &Interner) -> usize {
+    // The sentinel was interned by canon before lowering begins; look it up
+    // read-only. If it is absent (test paths that build a module without
+    // running canon), the count is 0 — no wildcard vars to freshen.
+    let sentinel = interner.lookup("\x00wildcard");
     m.defs
         .iter()
         .map(|d| {
@@ -10609,11 +10618,11 @@ pub fn count_any_param_sites(m: &canon::Module, interner: &Interner) -> usize {
             let mut cur = ty;
             let mut n = 0;
             while let canon::Type::Lambda(arg, rest) = cur {
-                n += count_any_in_type(arg, interner);
+                n += count_any_in_type(arg, sentinel);
                 cur = rest.as_ref();
             }
-            // `cur` is now the trailing return type; count its `any`s.
-            n += count_any_in_type(cur, interner);
+            // `cur` is now the trailing return type; count its sentinels.
+            n += count_any_in_type(cur, sentinel);
             n
         })
         .sum()
@@ -10890,6 +10899,10 @@ pub struct SymbolPools {
     pub destructure_thunk_binders: Vec<Symbol>,
     pub nested_cons_binders: Vec<Symbol>,
     pub nested_strlit_binders: Vec<Symbol>,
+    /// The typed wildcard-provenance set: the `anyp_N` pool plus the reserved
+    /// sentinel. Built once at mint time in the entry point; never re-derived
+    /// from a name string inside the lowerer.
+    pub wildcards: WildcardTvars,
 }
 
 /// `(params, prologue, ret, any_syms_minted, row_params)` —
@@ -10927,6 +10940,7 @@ impl<'a> Lowerer<'a> {
             destructure_thunk_binders,
             nested_cons_binders,
             nested_strlit_binders,
+            wildcards,
         } = pools;
         let mut func_ids = BTreeMap::new();
         for (idx, def) in m.defs.iter().enumerate() {
@@ -11148,6 +11162,7 @@ impl<'a> Lowerer<'a> {
             deferred_fun_captures: std::cell::RefCell::new(BTreeMap::new()),
             toplevel_fn_aliases: std::cell::RefCell::new(BTreeMap::new()),
             shared_fn_reads: std::cell::RefCell::new(BTreeMap::new()),
+            wildcards,
         }
     }
 
@@ -11200,7 +11215,7 @@ impl<'a> Lowerer<'a> {
     #[allow(clippy::too_many_lines)] // exhaustive per-IrType-variant arms; every arm is structurally required
     fn freshen_any_generics(&self, ty: IrType, minted: &mut Vec<Symbol>) -> DResult<IrType> {
         match ty {
-            IrType::Generic(sym) if self.interner.resolve(sym) == Some("any") => {
+            IrType::Generic(sym) if self.wildcards.is_wildcard(sym) => {
                 let fresh = self.fresh_any_param_symbol()?;
                 minted.push(fresh);
                 Ok(IrType::Generic(fresh))
@@ -12267,9 +12282,10 @@ impl<'a> Lowerer<'a> {
                 // it to the concrete IrType::Dict(Str, Str) below.
                 let mut vars = BTreeSet::new();
                 collect_type_vars(arg, &mut vars);
-                if !vars.iter().all(|v| {
-                    type_params.contains(v) || self.interner.resolve(*v).is_some_and(|n| n == "any")
-                }) {
+                if !vars
+                    .iter()
+                    .all(|v| type_params.contains(v) || self.wildcards.is_wildcard(*v))
+                {
                     return Err(unsupported(ctor.span, Feature::Polymorphism));
                 }
                 let ir = self.ir_type_from_canon(arg, &type_params)?;
@@ -12609,10 +12625,10 @@ impl<'a> Lowerer<'a> {
                 // type: `Html<Msg>` concrete, not `Html<()>`, `Html<T1>`, or the
                 // pub/sub `Html<HashMap<String,String>>` carrier.
                 let ret_is_any_wildcard = match &ret {
-                    IrType::Generic(sym) => self.interner.resolve(*sym) == Some("any"),
+                    IrType::Generic(sym) => self.wildcards.is_wildcard(*sym),
                     IrType::Ui { msg, .. } => {
                         matches!(msg.as_ref(), IrType::Generic(sym)
-                            if self.interner.resolve(*sym) == Some("any"))
+                            if self.wildcards.is_wildcard(*sym))
                     }
                     _ => false,
                 };
@@ -12913,7 +12929,7 @@ impl<'a> Lowerer<'a> {
                 // (`toString`→`Display`, any tvar). See
                 // `apply_kernel_type_param_bounds`.
                 apply_kernel_type_param_bounds(
-                    self.interner,
+                    &self.wildcards,
                     &mut type_params,
                     &params,
                     &ret,
@@ -13066,7 +13082,7 @@ impl<'a> Lowerer<'a> {
                     // General kernel→type-param-bound propagation (IpeRow +
                     // Display) — see `apply_kernel_type_param_bounds`.
                     apply_kernel_type_param_bounds(
-                        self.interner,
+                        &self.wildcards,
                         &mut type_params,
                         &params,
                         &ret,
@@ -23577,7 +23593,7 @@ mod tests {
 
     use ipe_canon::ast as canon;
     use ipe_diagnostics::{Located, Span};
-    use ipe_intern::Interner;
+    use ipe_intern::{Interner, WildcardTvars};
     use ipe_ir::{Callee, KernelFn};
     use ipe_types::{SolvedTypes, Ty};
 
@@ -23750,6 +23766,8 @@ mod tests {
             .expect("intern shared built-in table");
         let chunk_event = interner.intern("ChunkEvent").expect("intern");
         let stream_id = interner.intern("StreamId").expect("intern");
+        let test_sentinel = interner.wildcard_sentinel().expect("wildcard sentinel");
+        let test_wildcards = WildcardTvars::new(&[], test_sentinel);
         let module = canon::Module {
             imports_unsafe_submodule: false,
             name: vec![],
@@ -23769,6 +23787,7 @@ mod tests {
                 destructure_thunk_binders: vec![],
                 nested_cons_binders: vec![],
                 nested_strlit_binders: vec![],
+                wildcards: test_wildcards,
             },
             &builtins,
         );
@@ -24020,6 +24039,9 @@ mod tests {
             })
             .collect();
 
+        let test_sentinel = interner.wildcard_sentinel().expect("wildcard sentinel");
+        let test_wildcards = WildcardTvars::new(&[], test_sentinel);
+
         let module = canon::Module {
             imports_unsafe_submodule: false,
             name: vec![],
@@ -24041,6 +24063,7 @@ mod tests {
                 destructure_thunk_binders: vec![],
                 nested_cons_binders: vec![],
                 nested_strlit_binders: vec![],
+                wildcards: test_wildcards,
             },
             &builtins,
         );
@@ -24134,6 +24157,8 @@ mod tests {
     fn callee_arity_matches_decl_arity() {
         let mut interner = Interner::new();
         let builtins = build_test_builtin_ctors(&mut interner);
+        let test_sentinel = interner.wildcard_sentinel().expect("wildcard sentinel");
+        let test_wildcards = WildcardTvars::new(&[], test_sentinel);
         let module = canon::Module {
             imports_unsafe_submodule: false,
             name: vec![],
@@ -24158,6 +24183,7 @@ mod tests {
                 destructure_thunk_binders: vec![],
                 nested_cons_binders: vec![],
                 nested_strlit_binders: vec![],
+                wildcards: test_wildcards,
             },
             &builtins,
         );
@@ -24773,12 +24799,14 @@ mod tests {
         let mut interner = Interner::new();
         let a = interner.intern("a").unwrap();
         let x = interner.intern("x").unwrap();
+        let test_sentinel = interner.wildcard_sentinel().expect("wildcard sentinel");
+        let test_wildcards = WildcardTvars::new(&[], test_sentinel);
 
         // Helper shape `custom : a -> Decoder a`: the tvar flows into the return
         // `Decoder a`. Body is irrelevant to the type-walk obligation.
         let mut decoder_params = vec![(a, super::BoundSet::UNBOUNDED.with_clone())];
         super::apply_kernel_type_param_bounds(
-            &interner,
+            &test_wildcards,
             &mut decoder_params,
             &[(x, IrType::Generic(a))],
             &IrType::Decoder(Box::new(IrType::Generic(a))),
@@ -24804,7 +24832,7 @@ mod tests {
         // (only its incoming `Clone`), proving the obligation cannot over-bound.
         let mut id_params = vec![(a, super::BoundSet::UNBOUNDED.with_clone())];
         super::apply_kernel_type_param_bounds(
-            &interner,
+            &test_wildcards,
             &mut id_params,
             &[(x, IrType::Generic(a))],
             &IrType::Generic(a),
@@ -24829,6 +24857,8 @@ mod tests {
         let mut interner = Interner::new();
         let a = interner.intern("a").unwrap();
         let fallback = interner.intern("fallback").unwrap();
+        let test_sentinel = interner.wildcard_sentinel().expect("wildcard sentinel");
+        let test_wildcards = WildcardTvars::new(&[], test_sentinel);
 
         // `custom fallback = Config.succeed fallback` — arg-0 is the tracked value.
         let succeed_call = Expr::Call {
@@ -24839,7 +24869,7 @@ mod tests {
         };
         let mut params = vec![(a, super::BoundSet::UNBOUNDED.with_clone())];
         super::apply_kernel_type_param_bounds(
-            &interner,
+            &test_wildcards,
             &mut params,
             &[(fallback, IrType::Generic(a))],
             &IrType::Decoder(Box::new(IrType::Generic(a))),
@@ -24857,7 +24887,7 @@ mod tests {
         // capture `a`, so the arg-0 matcher does not fire on it.
         let mut carry_params = vec![(a, super::BoundSet::UNBOUNDED.with_clone())];
         super::apply_kernel_type_param_bounds(
-            &interner,
+            &test_wildcards,
             &mut carry_params,
             &[(fallback, IrType::Decoder(Box::new(IrType::Generic(a))))],
             &IrType::Decoder(Box::new(IrType::Generic(a))),
@@ -24886,6 +24916,8 @@ mod tests {
         // Value binders: `default : a` and `next : Decoder (a -> b)`.
         let default = interner.intern("default").unwrap();
         let next = interner.intern("next").unwrap();
+        let test_sentinel = interner.wildcard_sentinel().expect("wildcard sentinel");
+        let test_wildcards = WildcardTvars::new(&[], test_sentinel);
 
         // Body `JsonDecP.optional "f" dec default next`: the element `a` sits at
         // the bare arg-2 default, the result `b` only under the arg-3 decoder.
@@ -24905,7 +24937,7 @@ mod tests {
             (b, super::BoundSet::UNBOUNDED.with_clone()),
         ];
         super::apply_kernel_type_param_bounds(
-            &interner,
+            &test_wildcards,
             &mut params,
             &[
                 (default, IrType::Generic(a)),
@@ -25505,9 +25537,9 @@ mod tests {
         let fresh0 = interner.intern("__any_test0").unwrap();
         let fresh1 = interner.intern("__any_test1").unwrap();
 
-        // `any_sym` is the shared interned symbol that both `List any` and
-        // `Maybe any` carry before freshening.
-        let any_sym = interner.intern("any").unwrap();
+        // `any_sym` is the wildcard sentinel: the compiler-minted symbol that
+        // both `List any` and `Maybe any` carry before freshening.
+        let any_sym = interner.wildcard_sentinel().unwrap();
 
         let shared = ipe_canon::builtins::intern_builtins(&mut interner)
             .expect("intern shared built-in table");
@@ -25520,6 +25552,7 @@ mod tests {
             defs: vec![],
         };
         let types = empty_solved_types();
+        let test_wildcards = WildcardTvars::new(&[fresh0, fresh1], any_sym);
         let lowerer = super::Lowerer::new(
             &module,
             &types,
@@ -25528,11 +25561,12 @@ mod tests {
                 eta_params: vec![],
                 cap_params: vec![],
                 param_binders: vec![],
-                // Two slots: one for each `any` occurrence.
+                // Two slots: one for each wildcard occurrence.
                 any_param_binders: vec![fresh0, fresh1],
                 destructure_thunk_binders: vec![],
                 nested_cons_binders: vec![],
                 nested_strlit_binders: vec![],
+                wildcards: test_wildcards,
             },
             &builtins,
         );
@@ -25600,16 +25634,18 @@ mod tests {
     #[test]
     fn count_any_param_sites_includes_return_position() {
         let mut interner = Interner::new();
-        let any_sym = interner.intern("any").unwrap();
+        // Use the wildcard sentinel — the only symbol count_any_param_sites
+        // recognises as a wildcard occurrence.
+        let sentinel = interner.wildcard_sentinel().unwrap();
         let list_sym = interner.intern("List").unwrap();
         let int_sym = interner.intern("Int").unwrap();
 
-        // Canonical type for `foo : Int -> List any`:
-        //   Lambda(Con { name: Int, args: [] }, Con { name: List, args: [Var(any)] })
+        // Canonical type for a signature whose return type embeds one sentinel:
+        //   Lambda(Con { name: Int, args: [] }, Con { name: List, args: [Var(sentinel)] })
         let list_any = ipe_canon::ast::Type::Con {
             home: vec![],
             name: list_sym,
-            args: vec![ipe_canon::ast::Type::Var(any_sym)],
+            args: vec![ipe_canon::ast::Type::Var(sentinel)],
         };
         let ty = ipe_canon::ast::Type::Lambda(
             Box::new(ipe_canon::ast::Type::Con {
@@ -25631,7 +25667,7 @@ mod tests {
                     ipe_diagnostics::Span::DUMMY,
                     ipe_canon::ast::Expr_::Unit,
                 ),
-                free_vars: vec![any_sym],
+                free_vars: vec![sentinel],
                 home: vec![],
             }],
         };
@@ -25639,7 +25675,7 @@ mod tests {
         let count = super::count_any_param_sites(&module, &interner);
         assert_eq!(
             count, 1,
-            "return-position `any` in `Int -> List any` must be counted \
+            "return-position wildcard sentinel in a return type must be counted \
              so the pool has room for the return-type freshen"
         );
     }
@@ -25763,9 +25799,9 @@ mod tests {
         let mut interner = Interner::new();
         let builtins = build_test_builtin_ctors(&mut interner);
 
-        // Pre-intern the "any" symbol and one fresh pool symbol per container
+        // Pre-intern the wildcard sentinel and one fresh pool symbol per container
         // variant under test — each freshen call consumes exactly one slot.
-        let any_sym = interner.intern("any").unwrap();
+        let any_sym = interner.wildcard_sentinel().unwrap();
         // 17 container variants: List, Dict, Set, Maybe, Result, Task,
         // Tuple, Record, Fun, SharedFun, FnOnceChain, Decoder, Cmd, Sub,
         // Enum, Ui, WebRoute.
@@ -25789,6 +25825,7 @@ mod tests {
             defs: vec![],
         };
         let types = empty_solved_types();
+        let test_wildcards = WildcardTvars::new(&pool_syms, any_sym);
         let lowerer = super::Lowerer::new(
             &module,
             &types,
@@ -25801,6 +25838,7 @@ mod tests {
                 destructure_thunk_binders: vec![],
                 nested_cons_binders: vec![],
                 nested_strlit_binders: vec![],
+                wildcards: test_wildcards,
             },
             &builtins,
         );

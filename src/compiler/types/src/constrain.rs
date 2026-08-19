@@ -32,28 +32,31 @@ use crate::unionfind::{UnionFind, VarId};
 /// `where_` tag for any `CompilerBug` raised during constraint generation.
 const STAGE: &str = "ipe_types::constrain";
 
-/// Recursively replace every `Ty::Var(v)` where `v` resolves to the `"any"`
-/// wildcard AND `v` is NOT one of the union's declared type parameters with
+/// Recursively replace every `Ty::Var(v)` that is the reserved wildcard
+/// sentinel AND is NOT one of the union's declared type parameters with
 /// `Dict String String` — the concrete pub/sub wire carrier.
 ///
 /// Mirrors the reference's `any`-wildcard semantics for union-ctor field types:
 /// the Haskell/Go backend carries `any` payloads as dynamic `interface{}`; the
 /// Rust backend pins them to `Dict String String`, the sole concrete carrier that
 /// satisfies `Clone + Debug + PartialEq + Serialize + DeserializeOwned`.
+///
+/// Provenance is determined by sentinel identity, not by resolving the symbol
+/// back to a name string, so a user-declared tvar that happens to spell the
+/// same name as the sentinel is never reachable here (the sentinel's leading
+/// byte is outside the identifier grammar).
 fn pin_any_in_ty(
     ty: Ty,
     union_vars: &[Symbol],
-    interner: &Interner,
+    wildcard_sentinel: Symbol,
     dict: Symbol,
     string: Symbol,
 ) -> Ty {
     match ty {
         Ty::Var(v) => {
-            let is_any = interner
-                .resolve(Symbol::from_raw(v))
-                .is_some_and(|n| n == "any");
+            let is_wildcard = Symbol::from_raw(v) == wildcard_sentinel;
             let is_declared = union_vars.iter().any(|uv| uv.as_raw() == v);
-            if is_any && !is_declared {
+            if is_wildcard && !is_declared {
                 let mk_str = || Ty::Con {
                     module: Vec::new(),
                     name: string,
@@ -69,28 +72,45 @@ fn pin_any_in_ty(
             }
         }
         Ty::Fun(a, b) => Ty::Fun(
-            Box::new(pin_any_in_ty(*a, union_vars, interner, dict, string)),
-            Box::new(pin_any_in_ty(*b, union_vars, interner, dict, string)),
+            Box::new(pin_any_in_ty(
+                *a,
+                union_vars,
+                wildcard_sentinel,
+                dict,
+                string,
+            )),
+            Box::new(pin_any_in_ty(
+                *b,
+                union_vars,
+                wildcard_sentinel,
+                dict,
+                string,
+            )),
         ),
         Ty::Con { module, name, args } => Ty::Con {
             module,
             name,
             args: args
                 .into_iter()
-                .map(|a| pin_any_in_ty(a, union_vars, interner, dict, string))
+                .map(|a| pin_any_in_ty(a, union_vars, wildcard_sentinel, dict, string))
                 .collect(),
         },
         Ty::Unit => Ty::Unit,
         Ty::Tuple(elems) => Ty::Tuple(
             elems
                 .into_iter()
-                .map(|e| pin_any_in_ty(e, union_vars, interner, dict, string))
+                .map(|e| pin_any_in_ty(e, union_vars, wildcard_sentinel, dict, string))
                 .collect(),
         ),
         Ty::Record(fields, tail) => Ty::Record(
             fields
                 .into_iter()
-                .map(|(k, v)| (k, pin_any_in_ty(v, union_vars, interner, dict, string)))
+                .map(|(k, v)| {
+                    (
+                        k,
+                        pin_any_in_ty(v, union_vars, wildcard_sentinel, dict, string),
+                    )
+                })
                 .collect(),
             tail,
         ),
@@ -605,6 +625,12 @@ struct Builtins {
     /// `PubSubPublish`/`PubSubPublishNoEcho`/`PubSubTopic`) to share the
     /// payload type variable `a` between publisher and subscriber.
     topic_con: Symbol,
+    /// The reserved wildcard sentinel from [`Interner::wildcard_sentinel`].
+    /// Its leading byte is outside the identifier grammar so it cannot be
+    /// produced by any user identifier. Used by [`pin_any_in_ty`] and
+    /// [`Builder::is_wildcard_any_ty`] to identify compiler-minted wildcards
+    /// without re-deriving provenance from a name string.
+    wildcard_sentinel: Symbol,
 }
 
 impl Builtins {
@@ -827,6 +853,8 @@ impl Builtins {
             locale: interner.intern("Locale")?,
             // ── Ipe.PubSub.Topic ────────────────────────────────────────────────
             topic_con: interner.intern("Topic")?,
+            // Reserved wildcard sentinel — leading byte outside ident grammar.
+            wildcard_sentinel: interner.wildcard_sentinel()?,
         })
     }
 
@@ -1723,7 +1751,7 @@ impl<'a> Builder<'a> {
                     arg_tys.push(pin_any_in_ty(
                         from_canon(ct),
                         &union.vars,
-                        builder.interner,
+                        builder.builtins.wildcard_sentinel,
                         dict_sym,
                         string_sym,
                     ));
@@ -2212,24 +2240,21 @@ impl<'a> Builder<'a> {
                 self.structure(FlatType::Record(field_vars, ext))
             }
             Ty::Var(id) => {
-                // `any` is Ipê's wildcard type-variable name. In annotations it
+                // The reserved wildcard sentinel is the compiler-minted marker
+                // for arity-filled type-variable placeholders. In annotations it
                 // means "I don't care about this type" — each occurrence is an
                 // INDEPENDENT fresh flex UV, NOT a shared rigid skolem. Sharing
                 // would force all occurrences to the same type; rigid would
                 // prevent the body from assigning a concrete type.  Mirrors the
                 // Haskell compiler's `Instantiate.fromAnnotation` filtering
-                // `"any"` out of the skolem set and `buildEnv` giving each
+                // wildcards out of the skolem set and `buildEnv` giving each
                 // occurrence its own fresh UF var.
                 // AUD-13: a solver-representative id (tagged by `zonk`) is
-                // structurally never an annotation symbol — skip the
-                // interner resolution entirely rather than risk a spurious
-                // numeric collision with the interned "any" string.
-                let is_any = !is_solver_var(*id)
-                    && self
-                        .interner
-                        .resolve(ipe_intern::Symbol::from_raw(*id))
-                        .is_some_and(|name| name == "any");
-                if is_any {
+                // structurally never an annotation symbol — skip the sentinel
+                // comparison entirely to avoid a spurious numeric collision.
+                let is_wildcard =
+                    !is_solver_var(*id) && Symbol::from_raw(*id) == self.builtins.wildcard_sentinel;
+                if is_wildcard {
                     // Fresh flex UV per occurrence — intentionally NOT inserted
                     // into `vars` so the next occurrence also gets its own UV.
                     return self.flex();
@@ -2474,15 +2499,12 @@ impl<'a> Builder<'a> {
         }
     }
 
-    /// Whether `ty` is the bare wildcard `any` annotation type — a `Ty::Var`
-    /// whose interned symbol resolves to `"any"`. Mirrors the `Ty::Var` "any"
-    /// arm in [`Self::instantiate_in`]: `any` is Ipê's wildcard type-variable
-    /// name, distinct from a genuine named parameter (`a`, `msg`).
+    /// Whether `ty` is the compiler-minted wildcard annotation type — a
+    /// `Ty::Var` whose symbol is the reserved wildcard sentinel. Provenance
+    /// is determined by sentinel identity, not by resolving the symbol back
+    /// to a name string.
     fn is_wildcard_any_ty(&self, ty: &Ty) -> bool {
-        matches!(ty, Ty::Var(id) if self
-            .interner
-            .resolve(Symbol::from_raw(*id))
-            .is_some_and(|name| name == "any"))
+        matches!(ty, Ty::Var(id) if Symbol::from_raw(*id) == self.builtins.wildcard_sentinel)
     }
 
     /// Whether an annotation type's final RETURN (after peeling every leading
@@ -10386,31 +10408,29 @@ mod aud13_solver_var_tag_tests {
         Builtins::new(interner).expect("Builtins::new must not fail in tests")
     }
 
-    /// AUD-13 regression: `instantiate_in`'s wildcard-`"any"` check must not
+    /// AUD-13 regression: `instantiate_in`'s wildcard sentinel check must not
     /// misfire on a solver-representative id that happens to numerically
-    /// equal the interned raw of the string `"any"`. Constructs the exact
-    /// collision by reusing `any`'s own raw, tagged as solver-space —
-    /// `zonk` (see `constrain.rs`'s `Content::Flex | Rigid | Super` arm)
-    /// tags every surviving `VarId` this way before it can ever reach
-    /// `instantiate_in` again.
+    /// equal the sentinel's raw. Constructs the exact collision by reusing
+    /// the sentinel's own raw, tagged as solver-space — `zonk` (see
+    /// `constrain.rs`'s `Content::Flex | Rigid | Super` arm) tags every
+    /// surviving `VarId` this way before it can ever reach `instantiate_in`.
     #[test]
-    fn tagged_solver_var_sharing_any_raw_is_not_treated_as_wildcard_any() {
+    fn tagged_solver_var_sharing_sentinel_raw_is_not_treated_as_wildcard() {
         let mut interner = Interner::new();
-        let any_sym = interner
-            .intern("any")
-            .expect("interning \"any\" must not fail");
-        let any_raw = any_sym.as_raw();
+        let sentinel_sym = interner
+            .wildcard_sentinel()
+            .expect("wildcard_sentinel must not fail");
+        let sentinel_raw = sentinel_sym.as_raw();
 
         let builtins = make_builder(&mut interner);
         let mut uf = UnionFind::<Content>::new();
         let mut builder = Builder::for_scheme_table(&mut uf, &interner, builtins);
 
-        // Tagged: the SAME raw as `any`'s interned symbol, but marked
-        // solver-space. Two references through one `vars` map must resolve
-        // to the SAME variable (ordinary shared-var behavior) — if the tag
-        // were ignored, the wildcard-`any` path would instead mint a FRESH
-        // flex var per occurrence.
-        let tagged = Ty::Var(tag_solver_var(any_raw));
+        // Tagged: the SAME raw as the sentinel, but marked solver-space. Two
+        // references through one `vars` map must resolve to the SAME variable
+        // (ordinary shared-var behavior) — if the tag were ignored, the
+        // wildcard path would instead mint a FRESH flex var per occurrence.
+        let tagged = Ty::Var(tag_solver_var(sentinel_raw));
         let mut vars = BTreeMap::new();
         let first = builder
             .instantiate_in(&tagged, &mut vars, false)
@@ -10420,28 +10440,28 @@ mod aud13_solver_var_tag_tests {
             .expect("instantiate_in must not fail");
         assert_eq!(
             first, second,
-            "a tagged solver-var raw sharing any's numeric value must still \
-             share ONE variable across occurrences, proving it was NOT \
-             routed through the wildcard-any fresh-per-occurrence path",
+            "a tagged solver-var raw sharing the sentinel's numeric value must \
+             still share ONE variable across occurrences, proving it was NOT \
+             routed through the wildcard fresh-per-occurrence path",
         );
     }
 
-    /// Control: the SAME raw value, untagged, is genuine annotation-space
-    /// `"any"` and must keep its documented wildcard semantics — each
-    /// occurrence gets an independent fresh flex variable.
+    /// Control: the sentinel raw, untagged, is a genuine annotation-space
+    /// wildcard and must produce independent fresh flex variables per
+    /// occurrence.
     #[test]
-    fn untagged_any_raw_still_gets_wildcard_semantics() {
+    fn untagged_sentinel_raw_gets_wildcard_semantics() {
         let mut interner = Interner::new();
-        let any_sym = interner
-            .intern("any")
-            .expect("interning \"any\" must not fail");
-        let any_raw = any_sym.as_raw();
+        let sentinel_sym = interner
+            .wildcard_sentinel()
+            .expect("wildcard_sentinel must not fail");
+        let sentinel_raw = sentinel_sym.as_raw();
 
         let builtins = make_builder(&mut interner);
         let mut uf = UnionFind::<Content>::new();
         let mut builder = Builder::for_scheme_table(&mut uf, &interner, builtins);
 
-        let untagged = Ty::Var(any_raw);
+        let untagged = Ty::Var(sentinel_raw);
         let mut vars = BTreeMap::new();
         let first = builder
             .instantiate_in(&untagged, &mut vars, false)
@@ -10451,8 +10471,8 @@ mod aud13_solver_var_tag_tests {
             .expect("instantiate_in must not fail");
         assert_ne!(
             first, second,
-            "untagged \"any\" must keep independent-fresh-var-per-occurrence \
-             wildcard semantics",
+            "untagged wildcard sentinel must produce independent fresh vars \
+             per occurrence",
         );
     }
 }

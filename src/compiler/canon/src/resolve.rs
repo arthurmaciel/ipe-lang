@@ -2168,11 +2168,13 @@ fn canonicalise_with_env(
     // whole-program capability scan.
     let imports_unsafe_submodule = imports_an_unsafe_submodule(&m.imports, interner);
 
-    // The `"any"` wildcard symbol used to arity-fill a bare builtin parametric
-    // UI annotation (`view : Html` → `view : Html any`). Interned once here where
-    // the interner is mutable; the deeper `canonicalise_type` TType arm runs under
-    // an immutable `&Interner` and threads this symbol via `TypeCtx`.
-    let ui_wildcard_msg = interner.intern("any")?;
+    // The reserved wildcard sentinel used to arity-fill a bare builtin parametric
+    // UI annotation (`view : Html` → `view : Html <sentinel>`). Its leading byte
+    // is outside the identifier grammar, so it cannot be forged by any user
+    // identifier or by `fresh_symbols`. Interned once here where the interner is
+    // mutable; the deeper `canonicalise_type` TType arm runs under an immutable
+    // `&Interner` and threads this symbol via `TypeCtx`.
+    let ui_wildcard_msg = interner.wildcard_sentinel()?;
 
     // A LOCAL type/alias declaration whose name already has a
     // `type_home_map` entry from a DIFFERENT home is a dep-imported type being

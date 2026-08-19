@@ -166,6 +166,58 @@ impl Interner {
     pub fn lookup(&self, s: &str) -> Option<Symbol> {
         self.map.get(s).copied()
     }
+
+    /// Intern the reserved wildcard sentinel — a name whose leading byte is
+    /// outside the identifier grammar (`\x00`, a NUL) so neither `lex_ident`
+    /// nor [`Self::fresh_symbols`] can ever produce it.
+    ///
+    /// The returned [`Symbol`] is used by the canon stage to mark arity-filled
+    /// type-variable placeholders (`Html any` arity fill, `_`-wildcard desugar)
+    /// so downstream consumers identify them by set membership, never by
+    /// resolving the string back to `"any"`.
+    ///
+    /// Calling this method multiple times on the same interner returns the same
+    /// [`Symbol`] (ordinary intern idempotency).
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Diagnostic::CompilerBug`] if the symbol table is exhausted —
+    /// the same condition [`Self::intern`] reports.
+    pub fn wildcard_sentinel(&mut self) -> DResult<Symbol> {
+        self.intern("\x00wildcard")
+    }
+}
+
+/// The set of compiler-minted wildcard type-variable [`Symbol`]s for one
+/// module lowering.
+///
+/// Wildcard provenance is a typed set-membership fact established ONCE at
+/// mint time — the only constructor is [`Self::new`], which accepts the
+/// freshly minted `anyp_N` pool and the reserved sentinel from
+/// [`Interner::wildcard_sentinel`]. No constructor accepts a name string,
+/// so membership cannot be forged by interning a user identifier.
+#[derive(Clone, Debug)]
+pub struct WildcardTvars(BTreeSet<Symbol>);
+
+impl WildcardTvars {
+    /// Build the wildcard set from the pool minted by
+    /// [`Interner::fresh_symbols`] (`"anyp_"` prefix) plus the reserved
+    /// sentinel.  Every symbol in `minted_pool` IS a wildcard; the sentinel
+    /// IS a wildcard; any other interned symbol is NOT.
+    #[must_use]
+    pub fn new(minted_pool: &[Symbol], sentinel: Symbol) -> Self {
+        let mut s = BTreeSet::new();
+        s.extend(minted_pool.iter().copied());
+        s.insert(sentinel);
+        Self(s)
+    }
+
+    /// Whether `sym` is a compiler-minted wildcard — true iff it was placed
+    /// in this set at construction time.
+    #[must_use]
+    pub fn is_wildcard(&self, sym: Symbol) -> bool {
+        self.0.contains(&sym)
+    }
 }
 
 // ---------------------------------------------------------------------------

@@ -36,7 +36,7 @@ pub use lower::tco_analysis;
 
 use ipe_canon::ast as canon;
 use ipe_diagnostics::Diagnostic;
-use ipe_intern::Interner;
+use ipe_intern::{Interner, WildcardTvars};
 use ipe_types::SolvedTypes;
 
 /// Lower a canonical module + its solved types into the typed IR.
@@ -51,6 +51,7 @@ use ipe_types::SolvedTypes;
 ///   unresolved scrutinee enum, or a match arm set that fails
 ///   [`ipe_ir::Match::new`]'s exhaustiveness proof. These are unreachable for
 ///   well-typed, well-canonicalised input.
+#[allow(clippy::too_many_lines)] // single entry point wiring all symbol pools; extraction adds no clarity
 pub fn lower(
     m: &canon::Module,
     types: &SolvedTypes,
@@ -125,6 +126,11 @@ pub fn lower(
     let any_param_binders = interner
         .fresh_symbols("anyp_", any_param_site_count)
         .map_err(homeless)?;
+    // Build the typed wildcard-provenance set: the freshly-minted `anyp_N`
+    // pool plus the reserved sentinel. Membership is established once here,
+    // at the ONLY mint point; no consumer re-derives it from a name string.
+    let wildcard_sentinel = interner.wildcard_sentinel().map_err(homeless)?;
+    let wildcards = WildcardTvars::new(&any_param_binders, wildcard_sentinel);
     // one fresh thunk-binder symbol per syntactic destructure-binder
     // `let` / single-arm product `case` site, consumed only when the bound
     // value's solved type contains a Decoder (the type gate runs post-solve,
@@ -227,6 +233,7 @@ pub fn lower(
             destructure_thunk_binders,
             nested_cons_binders,
             nested_strlit_binders,
+            wildcards,
         },
         &builtins,
     )
@@ -1065,34 +1072,19 @@ mod tests {
         assert_eq!(func.ret, IrType::Int, "return type must be Int");
     }
 
-    /// Regression for AUD-01 (seal): TWO `any` occurrences in one param-position
-    /// annotation must lower to TWO DISTINCT `Generic` symbols, each declared
-    /// in `type_params` — not collapse onto one shared `Generic(any_sym)`.
-    ///
-    /// The checker gives every `any` occurrence a fresh flex UV per occurrence
-    /// (`ipe_types::constrain`), so `f : any -> any -> Int` called `f "x" 3` is
-    /// well-typed and `ipe` accepts it. Pre-fix, BOTH params lowered to the
-    /// SAME `IrType::Generic(any_sym)` (the interned `"any"` Symbol is shared),
-    /// so the backend emitted `fn main_f<T1>(a: T1, b: T1) -> i64` — a call
-    /// passing a `String` and an `Int` at the two positions failed `cargo build`
-    /// with E0308 despite `ipe` having accepted the program
-    /// (exit-0-then-cargo-fail). Post-fix, `split_typed_sig` gives each
-    /// occurrence its OWN fresh symbol from `any_param_binders`, and
-    /// `type_params` includes both (unioned in alongside `free_vars`) — the
-    /// backend renders `IrType::Generic` by TYPE-PARAM POSITION, not by symbol
-    /// spelling, so two distinct symbols is sufficient for two distinct Rust
-    /// generics (`fn f<T1, T2>(a: T1, b: T2)`), each independently
-    /// monomorphized at the call site by rustc.
+    /// User-written `any` in two param positions is a SHARED type variable, not a
+    /// per-occurrence wildcard. `f : any -> any -> Int` means both params must have
+    /// the same type — the same generic symbol appears in both positions, and exactly
+    /// one `type_params` entry is declared. This is correct lowering: `any` is a
+    /// plain lowercase identifier in Ipê, not a keyword. The compiler-minted wildcard
+    /// sentinel is a different, unreachable symbol that gets per-occurrence freshening.
     #[test]
-    fn any_params_get_distinct_generics_not_a_shared_one() {
+    fn user_any_tvar_in_two_param_positions_is_shared() {
         let opt = lower_func(
             "module Main exposing (f)\nf : any -> any -> Int\nf _ _ =\n    0\n",
             "f",
         );
-        assert!(
-            opt.is_some(),
-            "f : any -> any -> Int (two `any` occurrences) must lower"
-        );
+        assert!(opt.is_some(), "f : any -> any -> Int must lower");
         let Some((func, i)) = opt else { return };
 
         assert_eq!(func.params.len(), 2, "two parameters");
@@ -1100,8 +1092,8 @@ mod tests {
             return;
         };
 
-        // Both params ARE Generic (this is legitimate structural polymorphism
-        // once each occurrence is independent) — but with DISTINCT symbols.
+        // Both params are Generic (a regular type variable) and share the same
+        // symbol — they must have the same type at every call site.
         let (IrType::Generic(a_sym), IrType::Generic(b_sym)) = (a_ty, b_ty) else {
             assert!(
                 false_marker(),
@@ -1109,26 +1101,22 @@ mod tests {
             );
             return;
         };
-        assert_ne!(
+        assert_eq!(
             a_sym, b_sym,
-            "the two `any` occurrences must NOT share one Generic symbol — \
-             a shared symbol is exactly the AUD-01 bug (fn f<T1>(a:T1,b:T1))"
+            "both `any` occurrences name the same tvar — they must share one Generic symbol"
         );
 
-        // Both fresh symbols must be DECLARED in `type_params` — an emitted
-        // Generic with no matching type_params entry is an undeclared Rust
-        // generic (invalid emission), the failure mode the type_params-union
-        // fix (alongside the fresh-symbol fix) closes.
+        // The shared symbol must be declared in `type_params`.
         let declared: Vec<_> = func.type_params.iter().map(|(s, _)| *s).collect();
         assert!(
             declared.contains(a_sym),
-            "param `a`'s Generic symbol must be declared in type_params, got {:?}",
+            "the `any` generic must be declared in type_params, got {:?}",
             declared.iter().map(|s| i.resolve(*s)).collect::<Vec<_>>()
         );
-        assert!(
-            declared.contains(b_sym),
-            "param `b`'s Generic symbol must be declared in type_params, got {:?}",
-            declared.iter().map(|s| i.resolve(*s)).collect::<Vec<_>>()
+        assert_eq!(
+            func.type_params.len(),
+            1,
+            "exactly one type_param for the shared `any` tvar"
         );
         assert_eq!(func.ret, IrType::Int, "return type must be Int");
     }
