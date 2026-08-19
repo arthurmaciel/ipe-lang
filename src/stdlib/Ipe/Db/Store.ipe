@@ -167,10 +167,17 @@ type Store
 -- The ONLY gate through which a table or column name reaches emitted SQL on the
 -- safe surface. Accepts a non-empty run of ASCII letters, digits, `_`, and `.`
 -- (a dotted `table.column` reference); rejects everything else — a space, a
--- quote, a semicolon, a parenthesis. This mirrors the `valid_sql_ident` gate
--- the `Ipe.Db` kernels apply, so the Ipê-level check and the runtime check
--- agree: an identifier that passes here also passes the kernel, and one that
--- fails here is rejected before any SQL is built.
+-- quote, a semicolon, a parenthesis. This mirrors the identifier gate the
+-- `Ipe.Db` kernels apply, so the Ipê-level check and the runtime check agree:
+-- an identifier that passes here also passes the kernel, and one that fails
+-- here is rejected before any SQL is built.
+--
+-- Example:
+--
+--     Store.validSqlIdent "users" == True
+--     Store.validSqlIdent "users.id" == True
+--     Store.validSqlIdent "user table" == False
+--     Store.validSqlIdent "users;drop" == False
 validSqlIdent : String -> Bool
 validSqlIdent name =
     not (String.isEmpty name) && String.all validIdentChar name
