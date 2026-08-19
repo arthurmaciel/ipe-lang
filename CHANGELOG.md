@@ -10,6 +10,13 @@ Entries below the header are maintained by
 section is generated from Conventional Commit messages and prepended when the
 standing release pull request is merged.
 
+## [0.1.61](https://github.com/arthurmaciel/ipe-lang/compare/ipe-v0.1.60...ipe-v0.1.61) (2026-08-19)
+
+
+### Bug Fixes
+
+* **lsp:** type the feature-result boundary so encoding bugs and bad params never launder to null ([#1169](https://github.com/arthurmaciel/ipe-lang/issues/1169)) ([c960dd9](https://github.com/arthurmaciel/ipe-lang/commit/c960dd99918adeb283fc0c328e0f0b3bf1b85acb))
+
 ## [0.1.60](https://github.com/arthurmaciel/ipe-lang/compare/ipe-v0.1.59...ipe-v0.1.60) (2026-08-19)
 
 
