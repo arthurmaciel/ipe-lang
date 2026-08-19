@@ -220,13 +220,6 @@ pub fn to_json_pretty(tokens: &[AnnotatedToken]) -> Result<String, serde_json::E
 // ---------------------------------------------------------------------------
 
 #[cfg(test)]
-#[allow(
-    clippy::panic,
-    clippy::cast_possible_truncation,
-    clippy::collection_is_never_read,
-    clippy::indexing_slicing,
-    clippy::redundant_clone
-)]
 mod tests {
     use super::*;
     use ipe_intern::Interner;
@@ -313,10 +306,12 @@ mod tests {
         let json = to_json(&tokens).expect("serialisation");
         let decoded: Vec<JsonToken> = serde_json::from_str(&json).expect("deserialisation");
         assert_eq!(decoded.len(), 2);
-        assert_eq!(decoded[0].class, TokenClass::Keyword);
-        assert!(decoded[0].def.is_none());
-        assert_eq!(decoded[1].class, TokenClass::Kernel);
-        assert!(decoded[1].def.is_some());
+        let first = decoded.first().expect("first token");
+        let second = decoded.get(1).expect("second token");
+        assert_eq!(first.class, TokenClass::Keyword);
+        assert!(first.def.is_none());
+        assert_eq!(second.class, TokenClass::Kernel);
+        assert!(second.def.is_some());
     }
 
     // ── Corpus: classification cases a hand-rolled highlighter gets wrong ─
@@ -330,35 +325,28 @@ mod tests {
         let canon_mod = canon(&syntax, &mut interner);
         let tokens = annotate(&syntax, &canon_mod, src, &interner);
 
-        // Collect all occurrences of "map" in source.
-        let mut offsets: Vec<usize> = Vec::new();
-        let mut search = 0;
-        while let Some(pos) = src[search..].find("map") {
-            offsets.push(search + pos);
-            search += pos + 1;
-        }
-        // The occurrence at the `let map = 99` binding and the body `map` reference
-        // after `in` must be classified as Variable (or Function for the let-binding
-        // name itself — either way NOT as a Kernel).
-        let let_map_offset = src
-            .find("let\n        map")
-            .and_then(|p| src[p..].find("map").map(|rel| p + rel));
-        if let Some(off) = let_map_offset {
-            let tok = tokens.iter().find(|t| t.byte_start == off as u32);
-            if let Some(t) = tok {
-                assert_ne!(
-                    t.class,
-                    TokenClass::Kernel,
-                    "shadowed 'map' must not be Kernel"
-                );
-            }
+        // The `let map = 99` binding occurrence shadows the top-level `map`, so it
+        // must not be classified as a Kernel.
+        let let_map_offset = src.find("let\n        map").and_then(|p| {
+            src.get(p..)
+                .and_then(|rest| rest.find("map"))
+                .map(|rel| p + rel)
+        });
+        if let Some(off) = let_map_offset
+            && let Some(t) = tokens.iter().find(|t| t.byte_start as usize == off)
+        {
+            assert_ne!(
+                t.class,
+                TokenClass::Kernel,
+                "shadowed 'map' must not be Kernel"
+            );
         }
         // The top-level `map` binding name must be Function.
-        let top_level_map_off = src.find("map : Int").unwrap();
-        let top_tok = tokens
+        let top_level_map_off = src.find("map : Int").expect("top-level map present");
+        if let Some(t) = tokens
             .iter()
-            .find(|t| t.byte_start == top_level_map_off as u32);
-        if let Some(t) = top_tok {
+            .find(|t| t.byte_start as usize == top_level_map_off)
+        {
             assert_eq!(t.class, TokenClass::Function, "top-level map is Function");
         }
     }
@@ -419,7 +407,7 @@ mod tests {
             .find("identity")
             .map(|r| list_map_pos + r);
         if let Some(pos) = identity_pos {
-            let tok = tokens.iter().find(|t| t.byte_start == pos as u32);
+            let tok = tokens.iter().find(|t| t.byte_start as usize == pos);
             if let Some(t) = tok {
                 assert_eq!(
                     t.class,
@@ -465,17 +453,16 @@ mod tests {
         let kernel_toks = by_class(&tokens, TokenClass::Kernel);
         let map_tok = kernel_toks
             .iter()
-            .find(|t| text_of(src, t) == "map" || text_of(src, t) == "List.map");
-        assert!(map_tok.is_some(), "List.map token found");
-        if let Some(tok) = map_tok {
-            match &tok.def {
-                Some(DefKey::Kernel { module, name }) => {
-                    assert_eq!(module, "List", "kernel module is List");
-                    assert_eq!(name, "map", "kernel name is map");
-                }
-                other => panic!("expected DefKey::Kernel for List.map, got {other:?}"),
-            }
-        }
+            .find(|t| text_of(src, t) == "map" || text_of(src, t) == "List.map")
+            .expect("List.map token found");
+        assert_eq!(
+            map_tok.def,
+            Some(DefKey::Kernel {
+                module: "List".to_string(),
+                name: "map".to_string(),
+            }),
+            "List.map resolves to the List.map kernel def",
+        );
     }
 
     #[test]

@@ -657,13 +657,6 @@ fn resolve_sym(sym: Symbol, interner: &Interner) -> Option<String> {
 // ---------------------------------------------------------------------------
 
 #[cfg(test)]
-#[allow(
-    clippy::panic,
-    clippy::cast_possible_truncation,
-    clippy::collection_is_never_read,
-    clippy::indexing_slicing,
-    clippy::redundant_clone
-)]
 mod tests {
     use super::*;
     use ipe_intern::Interner;
@@ -697,12 +690,14 @@ mod tests {
                 def: None,
             },
         ];
-        let result = finish(raw.clone());
+        let result = finish(raw);
         assert_eq!(result.len(), 2, "dedup removes second token at byte 0");
-        assert_eq!(result[0].byte_start, 0);
-        assert_eq!(result[1].byte_start, 10);
+        let first = result.first().expect("first token");
+        let second = result.get(1).expect("second token");
+        assert_eq!(first.byte_start, 0);
+        assert_eq!(second.byte_start, 10);
         // First occurrence at byte 0 wins — Keyword.
-        assert_eq!(result[0].class, TokenClass::Keyword);
+        assert_eq!(first.class, TokenClass::Keyword);
     }
 
     #[test]
