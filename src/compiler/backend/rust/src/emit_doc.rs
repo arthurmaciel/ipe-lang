@@ -64,13 +64,13 @@ use crate::emit_expr::{
 use crate::emit_types::{GenericScope, render_type};
 
 /// The infix spelling of a chain-eligible operator (never `Append` / `IntDiv`
-/// / `Int{Add,Sub,Mul}`, which are call-shaped). Kept in step with
-/// `emit_expr::op_str`.
+/// / `Int{Add,Sub,Mul}` / `Add`/`Sub`/`Mul`, which are all call-shaped).
+/// Kept in step with `emit_expr::op_str`.
 const fn chain_op_str(op: BinOp) -> Option<&'static str> {
     match op {
-        BinOp::FloatAdd | BinOp::Add => Some("+"),
-        BinOp::FloatSub | BinOp::Sub => Some("-"),
-        BinOp::FloatMul | BinOp::Mul => Some("*"),
+        BinOp::FloatAdd => Some("+"),
+        BinOp::FloatSub => Some("-"),
+        BinOp::FloatMul => Some("*"),
         BinOp::Div => Some("/"),
         BinOp::Eq => Some("=="),
         BinOp::Neq => Some("!="),
@@ -80,8 +80,16 @@ const fn chain_op_str(op: BinOp) -> Option<&'static str> {
         BinOp::Ge => Some(">="),
         BinOp::And => Some("&&"),
         BinOp::Or => Some("||"),
-        // Call-shaped: never an infix chain operator.
-        BinOp::Append | BinOp::IntDiv | BinOp::IntAdd | BinOp::IntSub | BinOp::IntMul => None,
+        // Call-shaped: never infix chain operators.
+        // `Add`/`Sub`/`Mul` emit `.ipe_wrapping_{add,sub,mul}(r)` method calls.
+        BinOp::Add
+        | BinOp::Sub
+        | BinOp::Mul
+        | BinOp::Append
+        | BinOp::IntDiv
+        | BinOp::IntAdd
+        | BinOp::IntSub
+        | BinOp::IntMul => None,
     }
 }
 
@@ -123,14 +131,21 @@ pub fn build_doc(
         }
 
         // Call-shaped binops: `++` → `format!("{}{}", l, r)` (macro, no
-        // trailing comma), `//` → `ipe_int_div(l, r)`, and the integer
-        // arithmetic helpers `ipe_int_{add,sub,mul}(l, r)` (plain function
-        // calls — trailing comma kept). All are two-argument delimited groups;
-        // `build_call_binop` picks the trailing-comma rule and prefix by kind.
+        // trailing comma), `//` → `ipe_int_div(l, r)`, the integer arithmetic
+        // helpers `ipe_int_{add,sub,mul}(l, r)`, and the polymorphic wrapping
+        // helpers `l.ipe_wrapping_{add,sub,mul}(r)`. All are two-argument
+        // delimited groups; `build_call_binop` picks the shape by kind.
         Expr::BinOp { op, lhs, rhs }
             if matches!(
                 op,
-                BinOp::Append | BinOp::IntDiv | BinOp::IntAdd | BinOp::IntSub | BinOp::IntMul
+                BinOp::Append
+                    | BinOp::IntDiv
+                    | BinOp::IntAdd
+                    | BinOp::IntSub
+                    | BinOp::IntMul
+                    | BinOp::Add
+                    | BinOp::Sub
+                    | BinOp::Mul
             ) =>
         {
             build_call_binop(ctx, *op, lhs, rhs, indent, child, generics)
@@ -695,6 +710,28 @@ fn build_call_binop(
             vec![l, r],
             Doc::text(")"),
         )),
+        // Polymorphic `Number a` `+`/`-`/`*`: method-call form `l.ipe_wrapping_*(r)`.
+        // The receiver `l` is the doc for the left operand; the argument list
+        // is just `r` (one argument, trailing comma). This mirrors the string
+        // emitter's `format!("{l}.ipe_wrapping_add({r})")` shape.
+        BinOp::Add => Ok(Doc::concat(vec![
+            l,
+            Doc::text(".ipe_wrapping_add("),
+            r,
+            Doc::text(")"),
+        ])),
+        BinOp::Sub => Ok(Doc::concat(vec![
+            l,
+            Doc::text(".ipe_wrapping_sub("),
+            r,
+            Doc::text(")"),
+        ])),
+        BinOp::Mul => Ok(Doc::concat(vec![
+            l,
+            Doc::text(".ipe_wrapping_mul("),
+            r,
+            Doc::text(")"),
+        ])),
         // The caller's guard restricts `op` to the call-shaped binops; any
         // other operator is a chain operator built elsewhere. Fail closed rather
         // than emit a wrong shape.

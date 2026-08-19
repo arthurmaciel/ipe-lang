@@ -104,23 +104,111 @@ pub fn basics_clamp<T: PartialOrd>(lo: T, hi: T, x: T) -> T {
 
 // ── Basics numerics ──────────────────────────────────────────────────
 
-/// Ipê `negate : number -> number` — unary negation on Int or Float.
+/// Ipê `negate : number -> number` — wrapping unary negation on Int or Float.
 ///
 /// This is also the runtime target for the `-x` desugar in the parser
-/// (`negate x`). Both `i64` and `f64` implement `Neg<Output = Self>`, so
-/// the same generic function covers both Ipê numeric primitives with no
-/// runtime type dispatch — matching Go's natural `-x` operator.
-pub fn basics_negate<T: ::core::ops::Neg<Output = T>>(x: T) -> T {
-    -x
+/// (`negate x`). Uses `IpeWrappingNeg` so `negate(i64::MIN) == i64::MIN`
+/// (the unique two's-complement fixed point) rather than panicking under
+/// `overflow-checks=on`. `f64` negation is total and byte-identical to
+/// the plain `-x` form.
+pub fn basics_negate<T: IpeWrappingNeg>(x: T) -> T {
+    x.ipe_wrapping_neg()
 }
 
-/// AUD-09: `-x` on a bare `Neg` bound panics for `x == i64::MIN` (its negation
-/// is not representable in `i64`) — the no-panic rule violation `Math.abs`
-/// already closes via `checked_abs().unwrap_or(i64::MAX)`. `Basics.abs`
-/// dispatches through this SAME generic function for both `Int` and `Float`,
-/// so the fix must stay generic: this trait supplies a saturating negation
-/// per concrete type, with `f64`'s negation (never overflows) passing
-/// through unchanged.
+/// Wrapping negation for Ipê numeric types.
+///
+/// `i64` uses `wrapping_neg` so `i64::MIN.ipe_wrapping_neg() == i64::MIN`
+/// (two's-complement identity — the unique fixed point of wrapping negate).
+/// `f64` uses plain negation, which is total (never overflows in IEEE 754).
+/// Do NOT reuse `SaturatingNeg` here: `negate` wraps, `abs` saturates —
+/// those are different contracts.
+pub trait IpeWrappingNeg: Sized {
+    #[must_use]
+    fn ipe_wrapping_neg(self) -> Self;
+}
+impl IpeWrappingNeg for i64 {
+    fn ipe_wrapping_neg(self) -> Self {
+        self.wrapping_neg()
+    }
+}
+impl IpeWrappingNeg for f64 {
+    fn ipe_wrapping_neg(self) -> Self {
+        -self
+    }
+}
+
+/// Wrapping addition for polymorphic `Number a` functions.
+///
+/// `i64` wraps on overflow (two's-complement); `f64` uses plain IEEE 754
+/// addition (total — overflow yields ±∞, never panics). Generic `Number a`
+/// functions that emit `BinOp::Add` use this trait so the generic body is
+/// safe under `overflow-checks=on` regardless of how the call site
+/// monomorphises.
+pub trait IpeWrappingAdd<Rhs = Self>: Sized {
+    type Output;
+    #[must_use]
+    fn ipe_wrapping_add(self, rhs: Rhs) -> Self::Output;
+}
+impl IpeWrappingAdd for i64 {
+    type Output = i64;
+    fn ipe_wrapping_add(self, rhs: i64) -> i64 {
+        self.wrapping_add(rhs)
+    }
+}
+impl IpeWrappingAdd for f64 {
+    type Output = f64;
+    fn ipe_wrapping_add(self, rhs: f64) -> f64 {
+        self + rhs
+    }
+}
+
+/// Wrapping subtraction for polymorphic `Number a` functions.
+///
+/// `i64` wraps on underflow; `f64` is total.
+pub trait IpeWrappingSub<Rhs = Self>: Sized {
+    type Output;
+    #[must_use]
+    fn ipe_wrapping_sub(self, rhs: Rhs) -> Self::Output;
+}
+impl IpeWrappingSub for i64 {
+    type Output = i64;
+    fn ipe_wrapping_sub(self, rhs: i64) -> i64 {
+        self.wrapping_sub(rhs)
+    }
+}
+impl IpeWrappingSub for f64 {
+    type Output = f64;
+    fn ipe_wrapping_sub(self, rhs: f64) -> f64 {
+        self - rhs
+    }
+}
+
+/// Wrapping multiplication for polymorphic `Number a` functions.
+///
+/// `i64` wraps on overflow; `f64` is total.
+pub trait IpeWrappingMul<Rhs = Self>: Sized {
+    type Output;
+    #[must_use]
+    fn ipe_wrapping_mul(self, rhs: Rhs) -> Self::Output;
+}
+impl IpeWrappingMul for i64 {
+    type Output = i64;
+    fn ipe_wrapping_mul(self, rhs: i64) -> i64 {
+        self.wrapping_mul(rhs)
+    }
+}
+impl IpeWrappingMul for f64 {
+    type Output = f64;
+    fn ipe_wrapping_mul(self, rhs: f64) -> f64 {
+        self * rhs
+    }
+}
+
+/// Saturating negation — used only by `basics_abs`, NOT by `basics_negate`.
+///
+/// `abs` saturates at `i64::MAX` for `i64::MIN` (deliberate divergence from
+/// Go; see `docs/divergences-from-sky.md`). `negate` uses `IpeWrappingNeg`
+/// instead (wrapping contract, not saturating).
 pub trait SaturatingNeg: Sized {
     #[must_use]
     fn saturating_neg(self) -> Self;
@@ -261,6 +349,73 @@ mod tests {
     #[test]
     fn test_error_to_string_vec() {
         assert_eq!(basics_error_to_string(vec![1i64, 2, 3]), "[1 2 3]");
+    }
+
+    // ── wrapping negate (IpeWrappingNeg) ───────────────────────────────
+    // negate(i64::MIN) must not panic; the two's-complement fixed point is
+    // i64::MIN itself (wrapping_neg(i64::MIN) == i64::MIN).
+    #[test]
+    fn negate_wraps_at_min_i64() {
+        assert_eq!(basics_negate(i64::MIN), i64::MIN);
+    }
+    #[test]
+    fn negate_negates_positive_i64() {
+        assert_eq!(basics_negate(42i64), -42i64);
+    }
+    #[test]
+    fn negate_negates_negative_i64() {
+        assert_eq!(basics_negate(-1i64), 1i64);
+    }
+    #[test]
+    #[allow(clippy::float_cmp)]
+    fn negate_f64_is_plain_neg() {
+        assert_eq!(basics_negate(1.5f64), -1.5f64);
+        assert_eq!(basics_negate(-0.0f64), 0.0f64);
+    }
+
+    // ── IpeWrappingAdd ─────────────────────────────────────────────────
+    #[test]
+    fn ipe_wrapping_add_i64_max_plus_one() {
+        assert_eq!(i64::MAX.ipe_wrapping_add(1), i64::MIN);
+    }
+    #[test]
+    fn ipe_wrapping_add_i64_min_plus_neg_one() {
+        assert_eq!(i64::MIN.ipe_wrapping_add(-1), i64::MAX);
+    }
+    #[test]
+    #[allow(clippy::float_cmp)]
+    fn ipe_wrapping_add_f64_matches_plain() {
+        assert_eq!(1.0f64.ipe_wrapping_add(2.0), 1.0 + 2.0);
+    }
+
+    // ── IpeWrappingSub ─────────────────────────────────────────────────
+    #[test]
+    fn ipe_wrapping_sub_i64_min_minus_one() {
+        assert_eq!(i64::MIN.ipe_wrapping_sub(1), i64::MAX);
+    }
+    #[test]
+    fn ipe_wrapping_sub_i64_max_minus_neg_one() {
+        assert_eq!(i64::MAX.ipe_wrapping_sub(-1), i64::MIN);
+    }
+    #[test]
+    #[allow(clippy::float_cmp)]
+    fn ipe_wrapping_sub_f64_matches_plain() {
+        assert_eq!(3.0f64.ipe_wrapping_sub(1.5), 1.5);
+    }
+
+    // ── IpeWrappingMul ─────────────────────────────────────────────────
+    #[test]
+    fn ipe_wrapping_mul_i64_max_times_two() {
+        assert_eq!(i64::MAX.ipe_wrapping_mul(2), -2);
+    }
+    #[test]
+    fn ipe_wrapping_mul_i64_min_times_neg_one() {
+        assert_eq!(i64::MIN.ipe_wrapping_mul(-1), i64::MIN);
+    }
+    #[test]
+    #[allow(clippy::float_cmp)]
+    fn ipe_wrapping_mul_f64_matches_plain() {
+        assert_eq!(2.0f64.ipe_wrapping_mul(3.0), 6.0);
     }
 
     // Regression: identity/always were missing from the runtime (emitted as
