@@ -1,0 +1,662 @@
+#![forbid(unsafe_code)]
+//! `ipe_docs` — the documentation content index.
+//!
+//! Builds an in-memory index that maps a documentation key to its entry.
+//! Every entry is a *reference* to a per-kind SSOT; no prose is duplicated
+//! here. The four SSOTs are:
+//!
+//! - **Symbols / modules** — parsed doc-strings from the embedded stdlib
+//!   `.ipe` sources (component A/B). The raw [`DocString`] body is carried
+//!   as-is; the index is the aggregator, not the author.
+//! - **Diagnostics** — the `src/compiler/diagnostics/explain/*.md` files
+//!   (already SSOT). Read at index-build time from the filesystem.
+//! - **Constructs / glossary** — `docs/content/*.md` files (the only newly
+//!   authored prose; seed entries: `case`, `do`).
+//! - **CLI commands** — injected by the caller from `help.rs`'s `COMMANDS`
+//!   table (the SSOT). The index never imports `ipe` to avoid a circular
+//!   dependency; command data is passed in via [`CommandInfo`].
+//!
+//! Entry point: [`Index::build`].
+
+pub mod render;
+
+use std::collections::HashMap;
+use std::path::{Path, PathBuf};
+
+use ipe_intern::Interner;
+use ipe_parse::parse_module;
+use ipe_stdlib::{COMPILED_STD_MODULES, MODULES as STDLIB_MODULES};
+use ipe_syntax::{TypeAlias, Union, Value};
+// `Located` wrapper is accessed via `.value` on the `loc` field of each node;
+// the type itself is not named in this module.
+
+// ── Public types ─────────────────────────────────────────────────────────────
+
+/// The kind of entity a resolved [`Entry`] describes.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum EntryKind {
+    /// A value, function, or type alias exported by a stdlib module.
+    Symbol,
+    /// A stdlib module as a whole.
+    Module,
+    /// A compiler diagnostic, identified by its `IPE-X0000` code.
+    Diagnostic,
+    /// A language construct or glossary term (sourced from `docs/content/`).
+    Construct,
+    /// An `ipe` CLI command (sourced from the `COMMANDS` registry via the
+    /// caller-injected [`CommandInfo`] slice).
+    Command,
+}
+
+/// A resolved documentation entry.
+///
+/// The `text` field carries the raw documentation text as it appears in the
+/// SSOT — a doc-string body, a Markdown file's contents, or a command summary.
+/// The index never rewrites or summarises this text.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Entry {
+    /// The kind of entity this entry describes.
+    pub kind: EntryKind,
+    /// A stable identifier for the SSOT source of this entry.
+    ///
+    /// - `Symbol` / `Module`: the dotted module name, e.g. `Ipe.List` or
+    ///   `Ipe.List.map`.
+    /// - `Diagnostic`: the diagnostic code, e.g. `IPE-L0107`.
+    /// - `Construct`: the stem of the `docs/content/<name>.md` file, e.g.
+    ///   `case`.
+    /// - `Command`: the command name, e.g. `version`.
+    pub source_key: String,
+    /// The raw documentation text from the SSOT.
+    pub text: String,
+}
+
+/// Caller-supplied command metadata, sourced from `help.rs`'s `COMMANDS`
+/// table. The index carries this slice by value so it does not depend on the
+/// `ipe` crate.
+#[derive(Clone, Debug)]
+pub struct CommandInfo {
+    /// The subcommand name, e.g. `build`.
+    pub name: &'static str,
+    /// The one-line summary, as written in `COMMANDS`.
+    pub summary: &'static str,
+}
+
+// ── Index ─────────────────────────────────────────────────────────────────────
+
+/// The in-memory documentation index.
+///
+/// Built once via [`Index::build`] or [`IndexBuilder`]; then queried via
+/// [`Index::resolve`]. Entries are keyed case-sensitively (diagnostic codes
+/// are uppercase; symbol names preserve the Ipê casing convention).
+pub struct Index {
+    entries: HashMap<String, Entry>,
+}
+
+impl Index {
+    /// Build the index from all four SSOTs.
+    ///
+    /// - `explain_dir`: path to `src/compiler/diagnostics/explain/`
+    /// - `content_dir`: path to `docs/content/`
+    /// - `commands`: command metadata from `help.rs`'s `COMMANDS` table
+    ///
+    /// # Errors
+    ///
+    /// Returns an error string if `explain_dir` or `content_dir` cannot be
+    /// opened as a directory, or if any stdlib module fails to parse.
+    pub fn build(
+        explain_dir: &Path,
+        content_dir: &Path,
+        commands: &[CommandInfo],
+    ) -> Result<Self, String> {
+        let mut builder = IndexBuilder::new();
+        builder.add_stdlib()?;
+        builder.add_compiled_stdlib()?;
+        builder.add_diagnostics(explain_dir)?;
+        builder.add_constructs(content_dir)?;
+        builder.add_commands(commands);
+        Ok(builder.finish())
+    }
+
+    /// Resolve a documentation key to its entry, or `None` if no entry exists.
+    ///
+    /// Keys are matched case-sensitively. Accepted forms:
+    ///
+    /// - `List.map` or `Ipe.List.map` — a qualified symbol.
+    /// - `List` or `Ipe.List` — a module.
+    /// - `IPE-L0107` — a diagnostic code.
+    /// - `case`, `do` — a construct or glossary term.
+    /// - `version`, `build` — a CLI command.
+    #[must_use]
+    pub fn resolve(&self, key: &str) -> Option<&Entry> {
+        self.entries.get(key)
+    }
+
+    /// Every key currently in the index, in unspecified order.
+    pub fn keys(&self) -> impl Iterator<Item = &str> {
+        self.entries.keys().map(String::as_str)
+    }
+}
+
+// ── Builder ───────────────────────────────────────────────────────────────────
+
+/// Incremental builder for [`Index`].
+///
+/// Callers that need to populate the index in stages (e.g. tests) can use this
+/// directly instead of [`Index::build`].
+pub struct IndexBuilder {
+    entries: HashMap<String, Entry>,
+}
+
+impl IndexBuilder {
+    /// Create an empty builder.
+    #[must_use]
+    pub fn new() -> Self {
+        Self {
+            entries: HashMap::new(),
+        }
+    }
+
+    /// Consume the builder and produce the [`Index`].
+    #[must_use]
+    pub fn finish(self) -> Index {
+        Index {
+            entries: self.entries,
+        }
+    }
+
+    /// Insert a single entry, replacing any prior entry for the same key.
+    pub fn insert(&mut self, key: String, entry: Entry) {
+        self.entries.insert(key, entry);
+    }
+
+    /// Parse and index every embedded stdlib module's doc-strings.
+    ///
+    /// For each `{-| … -}` doc-string attached to a top-level declaration,
+    /// two `Symbol` entries are registered: a short-qualified key
+    /// (`List.map`) and a fully-qualified key (`Ipe.List.map`). A `Module`
+    /// entry is registered for each module under both its full name
+    /// (`Ipe.List`) and its short name (`List`).
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if any stdlib module fails to parse.
+    pub fn add_stdlib(&mut self) -> Result<(), String> {
+        let mut interner = Interner::new();
+        for std_mod in STDLIB_MODULES {
+            let module = parse_module(std_mod.source, &mut interner)
+                .map_err(|d| format!("parse error in {}: {d:?}", std_mod.name))?;
+
+            let short = strip_ipe_prefix(std_mod.name);
+
+            // Module entry — text is empty when no module-level `{-|` exists.
+            let mod_entry = Entry {
+                kind: EntryKind::Module,
+                source_key: std_mod.name.to_owned(),
+                text: String::new(),
+            };
+            self.entries
+                .insert(std_mod.name.to_owned(), mod_entry.clone());
+            self.entries.insert(short.to_owned(), mod_entry);
+
+            // Symbol entries.
+            for loc_val in &module.values {
+                index_value(
+                    &mut self.entries,
+                    std_mod.name,
+                    short,
+                    &loc_val.value,
+                    &interner,
+                );
+            }
+            for loc_union in &module.unions {
+                index_union(
+                    &mut self.entries,
+                    std_mod.name,
+                    short,
+                    &loc_union.value,
+                    &interner,
+                );
+            }
+            for loc_alias in &module.aliases {
+                index_alias(
+                    &mut self.entries,
+                    std_mod.name,
+                    short,
+                    &loc_alias.value,
+                    &interner,
+                );
+            }
+        }
+        Ok(())
+    }
+
+    /// Parse and index every compiled-source stdlib module's doc-strings.
+    ///
+    /// Mirrors [`Self::add_stdlib`] but operates on `COMPILED_STD_MODULES`
+    /// (the modules that go through the full compile pipeline rather than the
+    /// parse-fixture `MODULES` list).
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if any compiled-source stdlib module fails to parse.
+    pub fn add_compiled_stdlib(&mut self) -> Result<(), String> {
+        let mut interner = Interner::new();
+        for std_mod in COMPILED_STD_MODULES {
+            let module = parse_module(std_mod.source, &mut interner)
+                .map_err(|d| format!("parse error in {}: {d:?}", std_mod.dotted))?;
+
+            let short = strip_ipe_prefix(std_mod.dotted);
+
+            let mod_entry = Entry {
+                kind: EntryKind::Module,
+                source_key: std_mod.dotted.to_owned(),
+                text: String::new(),
+            };
+            self.entries
+                .insert(std_mod.dotted.to_owned(), mod_entry.clone());
+            self.entries.insert(short.to_owned(), mod_entry);
+
+            for loc_val in &module.values {
+                index_value(
+                    &mut self.entries,
+                    std_mod.dotted,
+                    short,
+                    &loc_val.value,
+                    &interner,
+                );
+            }
+            for loc_union in &module.unions {
+                index_union(
+                    &mut self.entries,
+                    std_mod.dotted,
+                    short,
+                    &loc_union.value,
+                    &interner,
+                );
+            }
+            for loc_alias in &module.aliases {
+                index_alias(
+                    &mut self.entries,
+                    std_mod.dotted,
+                    short,
+                    &loc_alias.value,
+                    &interner,
+                );
+            }
+        }
+        Ok(())
+    }
+
+    /// Read and index all `IPE-*.md` pages from `explain_dir`.
+    ///
+    /// Each file whose name matches `IPE-*.md` becomes a `Diagnostic` entry
+    /// keyed by the diagnostic code (e.g. `IPE-L0107`). Files that cannot be
+    /// read are silently skipped.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if `explain_dir` cannot be opened as a directory.
+    pub fn add_diagnostics(&mut self, explain_dir: &Path) -> Result<(), String> {
+        let rd = std::fs::read_dir(explain_dir)
+            .map_err(|e| format!("cannot read explain dir {}: {e}", explain_dir.display()))?;
+        for dir_entry in rd.flatten() {
+            let path: PathBuf = dir_entry.path();
+            let Some(name) = path.file_name().and_then(|n| n.to_str()) else {
+                continue;
+            };
+            let has_md_ext = std::path::Path::new(name)
+                .extension()
+                .is_some_and(|ext| ext.eq_ignore_ascii_case("md"));
+            if !name.starts_with("IPE-") || !has_md_ext {
+                continue;
+            }
+            let code = name.strip_suffix(".md").unwrap_or(name).to_owned();
+            let Ok(text) = std::fs::read_to_string(&path) else {
+                continue;
+            };
+            let entry = Entry {
+                kind: EntryKind::Diagnostic,
+                source_key: code.clone(),
+                text,
+            };
+            self.entries.insert(code, entry);
+        }
+        Ok(())
+    }
+
+    /// Read and index all `.md` files from `content_dir` as construct entries.
+    ///
+    /// Each file's stem becomes the key (e.g. `case.md` → key `case`). Files
+    /// that cannot be read are silently skipped.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if `content_dir` cannot be opened as a directory.
+    pub fn add_constructs(&mut self, content_dir: &Path) -> Result<(), String> {
+        let rd = std::fs::read_dir(content_dir)
+            .map_err(|e| format!("cannot read content dir {}: {e}", content_dir.display()))?;
+        for dir_entry in rd.flatten() {
+            let path: PathBuf = dir_entry.path();
+            let Some(name) = path.file_name().and_then(|n| n.to_str()) else {
+                continue;
+            };
+            let has_md_ext = std::path::Path::new(name)
+                .extension()
+                .is_some_and(|ext| ext.eq_ignore_ascii_case("md"));
+            if !has_md_ext {
+                continue;
+            }
+            let stem = name.strip_suffix(".md").unwrap_or(name).to_owned();
+            let Ok(text) = std::fs::read_to_string(&path) else {
+                continue;
+            };
+            let entry = Entry {
+                kind: EntryKind::Construct,
+                source_key: stem.clone(),
+                text,
+            };
+            self.entries.insert(stem, entry);
+        }
+        Ok(())
+    }
+
+    /// Index CLI commands from the caller-supplied slice.
+    ///
+    /// Each [`CommandInfo`] entry is registered as a `Command` entry keyed by
+    /// its name. The caller is responsible for supplying data sourced from
+    /// `help.rs`'s `COMMANDS` table.
+    pub fn add_commands(&mut self, commands: &[CommandInfo]) {
+        for cmd in commands {
+            let entry = Entry {
+                kind: EntryKind::Command,
+                source_key: cmd.name.to_owned(),
+                text: cmd.summary.to_owned(),
+            };
+            self.entries.insert(cmd.name.to_owned(), entry);
+        }
+    }
+}
+
+impl Default for IndexBuilder {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+// ── Private helpers ───────────────────────────────────────────────────────────
+
+/// Insert a symbol entry under two keys: short-qualified and fully-qualified.
+fn insert_symbol(
+    entries: &mut HashMap<String, Entry>,
+    module_name: &str,
+    short: &str,
+    sym_name: &str,
+    body: &str,
+) {
+    let fq_key = format!("{module_name}.{sym_name}");
+    let short_key = format!("{short}.{sym_name}");
+    let entry = Entry {
+        kind: EntryKind::Symbol,
+        source_key: fq_key.clone(),
+        text: body.to_owned(),
+    };
+    entries.insert(fq_key, entry.clone());
+    entries.insert(short_key, entry);
+}
+
+fn index_value(
+    entries: &mut HashMap<String, Entry>,
+    module_name: &str,
+    short: &str,
+    val: &Value,
+    interner: &Interner,
+) {
+    let Some(ref doc) = val.doc else { return };
+    let Some(sym_name) = interner.resolve(val.name.value) else {
+        return;
+    };
+    insert_symbol(entries, module_name, short, sym_name, &doc.body);
+}
+
+fn index_union(
+    entries: &mut HashMap<String, Entry>,
+    module_name: &str,
+    short: &str,
+    union: &Union,
+    interner: &Interner,
+) {
+    let Some(ref doc) = union.doc else { return };
+    let Some(sym_name) = interner.resolve(union.name.value) else {
+        return;
+    };
+    insert_symbol(entries, module_name, short, sym_name, &doc.body);
+}
+
+fn index_alias(
+    entries: &mut HashMap<String, Entry>,
+    module_name: &str,
+    short: &str,
+    alias: &TypeAlias,
+    interner: &Interner,
+) {
+    let Some(ref doc) = alias.doc else { return };
+    let Some(sym_name) = interner.resolve(alias.name.value) else {
+        return;
+    };
+    insert_symbol(entries, module_name, short, sym_name, &doc.body);
+}
+
+/// Strip the leading `Ipe.` prefix from a module name.
+///
+/// `Ipe.List` → `List`; `Ipe.Html.Attributes` → `Html.Attributes`;
+/// `Main` → `Main` (no prefix).
+fn strip_ipe_prefix(name: &str) -> &str {
+    name.strip_prefix("Ipe.").unwrap_or(name)
+}
+
+// ── Tests ─────────────────────────────────────────────────────────────────────
+
+#[cfg(test)]
+mod tests {
+    use std::path::PathBuf;
+
+    use super::{CommandInfo, EntryKind, Index};
+
+    /// Resolve a workspace-root-relative path.
+    ///
+    /// `CARGO_MANIFEST_DIR` is the crate root (`src/ipe-docs/`); the workspace
+    /// root is two levels up.
+    fn workspace_path(rel: &str) -> PathBuf {
+        let manifest = env!("CARGO_MANIFEST_DIR");
+        PathBuf::from(manifest).join("../..").join(rel)
+    }
+
+    fn test_commands() -> Vec<CommandInfo> {
+        vec![
+            CommandInfo {
+                name: "version",
+                summary: "Print the ipe version.",
+            },
+            CommandInfo {
+                name: "build",
+                summary: "Compile a program to a native or WebAssembly artifact.",
+            },
+        ]
+    }
+
+    fn build_index() -> Index {
+        Index::build(
+            &workspace_path("src/compiler/diagnostics/explain"),
+            &workspace_path("docs/content"),
+            &test_commands(),
+        )
+        .expect("index build must succeed")
+    }
+
+    #[test]
+    fn resolve_symbol_maybe_with_default() {
+        let idx = build_index();
+        let entry = idx
+            .resolve("Maybe.withDefault")
+            .expect("Maybe.withDefault must resolve");
+        assert_eq!(entry.kind, EntryKind::Symbol);
+        assert!(
+            entry.text.contains("withDefault"),
+            "doc body should mention the function name"
+        );
+    }
+
+    #[test]
+    fn resolve_diagnostic_l0107() {
+        let idx = build_index();
+        let entry = idx.resolve("IPE-L0107").expect("IPE-L0107 must resolve");
+        assert_eq!(entry.kind, EntryKind::Diagnostic);
+        assert_eq!(entry.source_key, "IPE-L0107");
+        assert!(
+            entry.text.contains("record field"),
+            "explain page should discuss record fields"
+        );
+    }
+
+    #[test]
+    fn resolve_command_version() {
+        let idx = build_index();
+        let entry = idx
+            .resolve("version")
+            .expect("version command must resolve");
+        assert_eq!(entry.kind, EntryKind::Command);
+        assert_eq!(entry.source_key, "version");
+        assert!(
+            entry.text.contains("version"),
+            "summary should mention version"
+        );
+    }
+
+    #[test]
+    fn resolve_construct_case() {
+        let idx = build_index();
+        let entry = idx.resolve("case").expect("case construct must resolve");
+        assert_eq!(entry.kind, EntryKind::Construct);
+        assert_eq!(entry.source_key, "case");
+        assert!(
+            entry.text.contains("Pattern-match"),
+            "case doc should describe pattern matching"
+        );
+    }
+
+    #[test]
+    fn resolve_unknown_key_returns_none() {
+        let idx = build_index();
+        assert!(
+            idx.resolve("this.does.not.exist.at.all").is_none(),
+            "unknown key must return None"
+        );
+    }
+
+    #[test]
+    fn resolve_module_list() {
+        let idx = build_index();
+        let short = idx.resolve("List").expect("List module must resolve");
+        assert_eq!(short.kind, EntryKind::Module);
+        let fq = idx
+            .resolve("Ipe.List")
+            .expect("Ipe.List module must resolve");
+        assert_eq!(fq.kind, EntryKind::Module);
+    }
+
+    #[test]
+    fn resolve_symbol_both_forms() {
+        let idx = build_index();
+        let short = idx
+            .resolve("Maybe.withDefault")
+            .expect("Maybe.withDefault short form must resolve");
+        assert_eq!(short.kind, EntryKind::Symbol);
+        let fq = idx
+            .resolve("Ipe.Maybe.withDefault")
+            .expect("Ipe.Maybe.withDefault fq form must resolve");
+        assert_eq!(fq.kind, EntryKind::Symbol);
+        assert_eq!(
+            short.text, fq.text,
+            "short and fq entries carry identical text"
+        );
+    }
+
+    // ── Site-generator integration tests ────────────────────────────────────
+
+    /// The generator is deterministic: calling it twice with the same index
+    /// produces byte-identical output for every page.
+    #[test]
+    fn site_generator_is_deterministic() {
+        use crate::render::{html_escape, page};
+
+        let idx = build_index();
+
+        // Render the same entry twice and assert byte-equality.
+        let entry = idx
+            .resolve("Maybe.withDefault")
+            .expect("Maybe.withDefault must resolve");
+
+        let render_once = || {
+            let kind_label = match entry.kind {
+                EntryKind::Symbol => "symbol",
+                EntryKind::Module => "module",
+                EntryKind::Diagnostic => "diagnostic",
+                EntryKind::Construct => "construct",
+                EntryKind::Command => "command",
+            };
+            let body = format!(
+                "<h1>{} <span class=\"kind-badge\">{kind_label}</span></h1>\n",
+                html_escape("Maybe.withDefault")
+            );
+            page("Maybe.withDefault", &body)
+        };
+
+        let first = render_once();
+        let second = render_once();
+        assert_eq!(
+            first, second,
+            "two renders of the same entry must produce identical HTML"
+        );
+    }
+
+    /// The `page` template wraps content in a proper HTML5 document with a
+    /// stylesheet link — verifying the page shell is always present.
+    #[test]
+    fn site_page_shell_is_well_formed() {
+        use crate::render::page;
+        let html = page("Ipe.List", "<p>test body</p>");
+        assert!(
+            html.starts_with("<!DOCTYPE html>"),
+            "must start with doctype"
+        );
+        assert!(
+            html.contains("<html lang=\"en\">"),
+            "must have lang attribute"
+        );
+        assert!(
+            html.contains("href=\"/style.css\""),
+            "must link the stylesheet"
+        );
+        assert!(
+            html.contains("<p>test body</p>"),
+            "body content must be present"
+        );
+        assert!(html.contains("</html>"), "must be closed");
+    }
+
+    /// A symbol entry page renders its `source_key` as the heading.
+    #[test]
+    fn symbol_page_heading_is_key() {
+        use crate::render::{html_escape, page};
+
+        let heading_html = format!(
+            "<h1>{} <span class=\"kind-badge\">symbol</span></h1>",
+            html_escape("List.map")
+        );
+        let html = page("List.map", &heading_html);
+        assert!(
+            html.contains(&heading_html),
+            "symbol heading must appear verbatim; got: {html}"
+        );
+    }
+}

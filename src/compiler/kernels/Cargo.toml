@@ -22,5 +22,15 @@ license.workspace = true
 serde = { version = "1", features = ["derive"] }
 strum = { version = "0.26", features = ["derive"] }
 
+# `ipe_parse` and `ipe_syntax` are used only in the SSOT test
+# (`tests/maybe_veneer_ssot.rs`) that parses `Maybe.ipe` and asserts the
+# written type annotations equal the kernel scheme shapes. Both crates sit
+# BELOW `ipe_kernels` in the DAG (they have no dependency on `ipe_kernels`),
+# so adding them here introduces no cycle.
+[dev-dependencies]
+ipe_intern = { path = "../intern" }
+ipe_parse = { path = "../parse" }
+ipe_syntax = { path = "../syntax" }
+
 [lints]
 workspace = true

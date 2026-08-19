@@ -2210,6 +2210,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "ipe_docs"
+version = "0.1.66"
+dependencies = [
+ "ipe_annotate",
+ "ipe_intern",
+ "ipe_parse",
+ "ipe_stdlib",
+ "ipe_syntax",
+]
+
+[[package]]
 name = "ipe_ffi"
 version = "0.1.66"
 dependencies = [
@@ -2247,6 +2258,9 @@ dependencies = [
 name = "ipe_kernels"
 version = "0.1.66"
 dependencies = [
+ "ipe_intern",
+ "ipe_parse",
+ "ipe_syntax",
  "serde",
  "strum",
 ]

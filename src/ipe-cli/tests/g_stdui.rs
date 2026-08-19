@@ -8,6 +8,8 @@ mod support;
 mod golden_css_length_color_ssot;
 #[path = "g_stdui/golden_css_source.rs"]
 mod golden_css_source;
+#[path = "g_stdui/golden_css_transform_ssot.rs"]
+mod golden_css_transform_ssot;
 #[path = "g_stdui/golden_html_attrs.rs"]
 mod golden_html_attrs;
 #[path = "g_stdui/golden_html_elements.rs"]
