@@ -10382,6 +10382,266 @@ mod registry_phase_c_tests {
     }
 }
 
+/// Render a [`TyShape`] to a human-readable Ipê-style type string, using single
+/// letters (`a`, `b`, …) for scheme-local variables and the canonical built-in
+/// constructor names. Parenthesises function-typed arguments.
+///
+/// This is a test-only rendering; it is NOT the display logic used in
+/// diagnostics. Its sole purpose is to let the veneer-signature tripwire compare
+/// type annotations written in `.ipe` source against the structural `TyShape`
+/// encoding, catching drift between the two at the character level.
+#[cfg(test)]
+fn render_shape(shape: &ipe_kernels::TyShape) -> String {
+    render_shape_inner(shape, false)
+}
+
+#[cfg(test)]
+fn render_shape_inner(shape: &ipe_kernels::TyShape, in_arg_pos: bool) -> String {
+    use ipe_kernels::{BuiltinTag, TyShape};
+    match shape {
+        TyShape::Var(i) => {
+            let letter = char::from(b'a'.wrapping_add(*i % 26));
+            letter.to_string()
+        }
+        TyShape::Con(tag, args) => {
+            let name = match tag {
+                BuiltinTag::Int => "Int",
+                BuiltinTag::Float => "Float",
+                BuiltinTag::Bool => "Bool",
+                BuiltinTag::String => "String",
+                BuiltinTag::Char => "Char",
+                BuiltinTag::Bytes => "Bytes",
+                BuiltinTag::List => "List",
+                BuiltinTag::Maybe => "Maybe",
+                BuiltinTag::Result => "Result",
+                BuiltinTag::Set => "Set",
+                BuiltinTag::Dict => "Dict",
+                BuiltinTag::Order => "Order",
+                BuiltinTag::Error => "Error",
+                BuiltinTag::ErrorKind => "ErrorKind",
+                BuiltinTag::ErrorDetails => "ErrorDetails",
+                BuiltinTag::Decimal => "Decimal",
+                BuiltinTag::Task => "Task",
+                BuiltinTag::Cmd => "Cmd",
+                BuiltinTag::Sub => "Sub",
+                BuiltinTag::Topic => "Topic",
+                BuiltinTag::Decoder => "Decoder",
+                BuiltinTag::Db => "Db",
+                BuiltinTag::SqlValue => "SqlValue",
+                BuiltinTag::SqlField => "SqlField",
+                BuiltinTag::SqlFragment => "SqlFragment",
+                BuiltinTag::Secret => "Secret",
+                BuiltinTag::Path => "Path",
+                BuiltinTag::Regex => "Regex",
+                BuiltinTag::Url => "Url",
+                BuiltinTag::Dsn => "Dsn",
+                BuiltinTag::Connection => "Connection",
+                BuiltinTag::ConnReadOnly => "ReadOnly",
+                BuiltinTag::ConnReadWrite => "ReadWrite",
+                _ => "?",
+            };
+            if args.is_empty() {
+                name.to_owned()
+            } else {
+                let inner = args
+                    .iter()
+                    .map(|a| render_shape_inner(a, true))
+                    .collect::<Vec<_>>()
+                    .join(" ");
+                if args.len() == 1 {
+                    let rendered = format!("{name} {inner}");
+                    if in_arg_pos {
+                        format!("({rendered})")
+                    } else {
+                        rendered
+                    }
+                } else {
+                    let rendered = format!("{name} {inner}");
+                    if in_arg_pos {
+                        format!("({rendered})")
+                    } else {
+                        rendered
+                    }
+                }
+            }
+        }
+        TyShape::Fun(arg, res) => {
+            let arg_str = render_shape_inner(arg, true);
+            let res_str = render_shape_inner(res, false);
+            let rendered = format!("{arg_str} -> {res_str}");
+            if in_arg_pos {
+                format!("({rendered})")
+            } else {
+                rendered
+            }
+        }
+        TyShape::Unit => "()".to_owned(),
+        TyShape::Tuple(elems) => {
+            let inner = elems
+                .iter()
+                .map(|e| render_shape_inner(e, false))
+                .collect::<Vec<_>>()
+                .join(", ");
+            format!("({inner})")
+        }
+        TyShape::Record { .. } => "{..}".to_owned(),
+    }
+}
+
+/// Veneer-signature tripwire for `Ipe.Maybe`.
+///
+/// Every Maybe kernel's [`TyShape`] (the structural scheme encoding) must
+/// match the type annotation written in `src/stdlib/Ipe/Maybe.ipe` (the
+/// documentation SSOT). This test renders the `TyShape` to an Ipê-style type
+/// string and compares it against the expected annotation, so a change to
+/// either the structural encoding or the veneer annotation that breaks their
+/// agreement turns into a failing test rather than silent drift.
+///
+/// The expected strings are taken verbatim from the type annotations in
+/// `Maybe.ipe`; the rendering uses [`render_shape`], which is the single
+/// local renderer kept in sync with the `TyShape` vocabulary.
+#[cfg(test)]
+mod maybe_veneer_scheme_tripwire {
+    use super::render_shape;
+    use ipe_kernels::StdlibKernel;
+
+    /// Every Maybe kernel carries a structural `TyShape` — `None` here would
+    /// mean the kernel's scheme is not yet shape-encoded, leaving the veneer
+    /// annotation unguarded against drift.
+    #[test]
+    fn every_maybe_kernel_has_a_scheme_shape() {
+        let maybe_kernels = [
+            StdlibKernel::MaybeWithDefault,
+            StdlibKernel::MaybeMap,
+            StdlibKernel::MaybeAndThen,
+            StdlibKernel::MaybeMap2,
+            StdlibKernel::MaybeMap3,
+            StdlibKernel::MaybeMap4,
+            StdlibKernel::MaybeMap5,
+            StdlibKernel::MaybeAndMap,
+            StdlibKernel::MaybeCombine,
+            StdlibKernel::MaybeIsJust,
+            StdlibKernel::MaybeIsNothing,
+        ];
+        for k in maybe_kernels {
+            assert!(
+                k.def().shape.is_some(),
+                "{k:?} has no TyShape — add one in `scheme_shape` so the \
+                 veneer annotation is guarded against scheme drift",
+            );
+        }
+    }
+
+    /// The rendered `TyShape` for each Maybe kernel must equal the type
+    /// annotation written in `src/stdlib/Ipe/Maybe.ipe`.
+    ///
+    /// Expected strings are the exact annotation text from the veneer,
+    /// normalised to the `render_shape` convention: type-constructor names
+    /// from [`BuiltinTag`], scheme-local variables `a`/`b`/…, function arrows
+    /// with `->`, parametric constructors space-separated, function arguments
+    /// parenthesised.
+    #[test]
+    fn maybe_kernel_shape_matches_veneer_annotation() {
+        // Each entry: (kernel, expected type string matching the veneer annotation).
+        // The expected strings are derived from the `Maybe.ipe` type annotations;
+        // the variable letters follow the `render_shape` convention (index 0→`a`,
+        // 1→`b`, 2→`c`, …).
+        let cases: &[(StdlibKernel, &str)] = &[
+            // withDefault : a -> Maybe a -> a
+            (StdlibKernel::MaybeWithDefault, "a -> (Maybe a) -> a"),
+            // map : (a -> b) -> Maybe a -> Maybe b
+            (StdlibKernel::MaybeMap, "(a -> b) -> (Maybe a) -> Maybe b"),
+            // andThen : (a -> Maybe b) -> Maybe a -> Maybe b
+            (
+                StdlibKernel::MaybeAndThen,
+                "(a -> Maybe b) -> (Maybe a) -> Maybe b",
+            ),
+            // map2 : (a -> b -> c) -> Maybe a -> Maybe b -> Maybe c
+            (
+                StdlibKernel::MaybeMap2,
+                "(a -> b -> c) -> (Maybe a) -> (Maybe b) -> Maybe c",
+            ),
+            // map3 : (a -> b -> c -> d) -> Maybe a -> Maybe b -> Maybe c -> Maybe d
+            (
+                StdlibKernel::MaybeMap3,
+                "(a -> b -> c -> d) -> (Maybe a) -> (Maybe b) -> (Maybe c) -> Maybe d",
+            ),
+            // map4 : (a -> b -> c -> d -> e) -> Maybe a -> Maybe b -> Maybe c -> Maybe d -> Maybe e
+            (
+                StdlibKernel::MaybeMap4,
+                "(a -> b -> c -> d -> e) -> (Maybe a) -> (Maybe b) -> (Maybe c) -> (Maybe d) -> Maybe e",
+            ),
+            // map5 : (a -> b -> c -> d -> e -> f) -> Maybe a -> Maybe b -> Maybe c -> Maybe d -> Maybe e -> Maybe f
+            (
+                StdlibKernel::MaybeMap5,
+                "(a -> b -> c -> d -> e -> f) -> (Maybe a) -> (Maybe b) -> (Maybe c) -> (Maybe d) -> (Maybe e) -> Maybe f",
+            ),
+            // andMap : Maybe a -> Maybe (a -> b) -> Maybe b
+            (
+                StdlibKernel::MaybeAndMap,
+                "(Maybe a) -> (Maybe (a -> b)) -> Maybe b",
+            ),
+            // combine : List (Maybe a) -> Maybe (List a)
+            (
+                StdlibKernel::MaybeCombine,
+                "(List (Maybe a)) -> Maybe (List a)",
+            ),
+            // isJust : Maybe a -> Bool
+            (StdlibKernel::MaybeIsJust, "(Maybe a) -> Bool"),
+            // isNothing : Maybe a -> Bool
+            (StdlibKernel::MaybeIsNothing, "(Maybe a) -> Bool"),
+        ];
+
+        for &(k, expected) in cases {
+            let shape = k
+                .def()
+                .shape
+                .unwrap_or_else(|| panic!("{k:?} has no TyShape"));
+            let rendered = render_shape(shape);
+            assert_eq!(
+                rendered, expected,
+                "{k:?}: rendered TyShape `{rendered}` does not match the \
+                 veneer annotation `{expected}` — update either \
+                 `scheme_shape` in `ipe_kernels` or the type annotation in \
+                 `src/stdlib/Ipe/Maybe.ipe` so they agree",
+            );
+        }
+    }
+
+    /// Runtime arity matches the veneer annotation's arrow count (one arrow per
+    /// argument). This is the third leg of the tripwire: decl arity == veneer
+    /// annotation arity == scheme arrow count (the last two are each already
+    /// separately asserted; this asserts the decl against the veneer).
+    #[test]
+    fn maybe_kernel_decl_arity_matches_veneer_annotation() {
+        // (kernel, argument count from the veneer annotation)
+        let cases: &[(StdlibKernel, u8)] = &[
+            (StdlibKernel::MaybeWithDefault, 2), // a -> Maybe a -> a
+            (StdlibKernel::MaybeMap, 2),         // (a -> b) -> Maybe a -> Maybe b
+            (StdlibKernel::MaybeAndThen, 2),     // (a -> Maybe b) -> Maybe a -> Maybe b
+            (StdlibKernel::MaybeMap2, 3),        // fn -> Maybe a -> Maybe b -> Maybe c
+            (StdlibKernel::MaybeMap3, 4),
+            (StdlibKernel::MaybeMap4, 5),
+            (StdlibKernel::MaybeMap5, 6),
+            (StdlibKernel::MaybeAndMap, 2), // Maybe a -> Maybe (a -> b) -> Maybe b
+            (StdlibKernel::MaybeCombine, 1), // List (Maybe a) -> Maybe (List a)
+            (StdlibKernel::MaybeIsJust, 1), // Maybe a -> Bool
+            (StdlibKernel::MaybeIsNothing, 1),
+        ];
+        for &(k, expected_arity) in cases {
+            assert_eq!(
+                k.def().arity,
+                expected_arity,
+                "{k:?}: decl arity {} disagrees with veneer annotation \
+                 arity {expected_arity} — update `identity` in \
+                 `ipe_kernels` or the type annotation in \
+                 `src/stdlib/Ipe/Maybe.ipe`",
+                k.def().arity,
+            );
+        }
+    }
+}
+
 #[cfg(test)]
 mod aud13_solver_var_tag_tests {
     use super::{Builder, Builtins, Content, Interner, Ty, UnionFind};
