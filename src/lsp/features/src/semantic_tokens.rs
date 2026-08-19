@@ -20,11 +20,13 @@
 //!
 //! Only `tokenTypes` is used; `tokenModifiers` is empty.
 //!
-//! The walk is over the parse AST — no type info needed, so tokens are
-//! available even when the program doesn't type-check.
+//! The token stream is produced by [`ipe_annotate::annotate`] (the shared SSOT
+//! for both highlighting and term-to-definition linking) and then projected to
+//! this legend.  Semantic classification therefore cannot drift from the shared
+//! API.
 
+use ipe_annotate::TokenClass;
 use ipe_db::{Db as _, IpeDatabase, SourceFile};
-use ipe_diagnostics::Span;
 use lsp_types::{SemanticToken, SemanticTokens, SemanticTokensLegend, SemanticTokensResult};
 
 use crate::offset::{PositionEncoding, offset_to_position};
@@ -87,7 +89,7 @@ pub fn semantic_tokens_full(
 }
 
 // ---------------------------------------------------------------------------
-// Token collection
+// Token collection — thin projection over ipe_annotate::annotate
 // ---------------------------------------------------------------------------
 
 /// A raw token before delta-encoding.
@@ -112,81 +114,46 @@ fn collect_tokens(
     let text = file.text(db);
     let interner = db.interner().lock();
 
-    let mut raw: Vec<RawToken> = Vec::new();
-
-    // Module keyword + name.
-    push_keyword(&mut raw, keyword_span(text, 0, "module"));
-    push_span(&mut raw, module.name.span, TT_NAMESPACE);
-
-    // Imports.
-    for imp in &module.imports {
-        if let Some(kw) = find_keyword_before(text, imp.name.span.lo, "import") {
-            push_keyword(&mut raw, kw);
-        }
-        push_span(&mut raw, imp.name.span, TT_NAMESPACE);
-        // `as Alias` — the alias is also a namespace token.
-        if let Some(alias_sym) = imp.alias {
-            // Find the `as` keyword.
-            if let Some(kw) = find_keyword_before(text, imp.name.span.hi, "as") {
-                let _ = kw; // keyword is syntactically before the alias token
-            }
-            let _ = alias_sym; // alias is a simple symbol; we tag the import name
-        }
-        // Exposed names in `exposing (...)` are tagged in push_exposing_tokens.
-        push_exposing_tokens(&mut raw, &imp.exposing.value, text, &interner);
-    }
-
-    // Type aliases.
-    for alias in &module.aliases {
-        if let Some(kw) = find_keyword_before(text, alias.value.name.span.lo, "type") {
-            push_keyword(&mut raw, kw);
-        }
-        push_span(&mut raw, alias.value.name.span, TT_TYPE);
-        for var in &alias.value.vars {
-            push_span(&mut raw, var.span, TT_TYPE_PARAMETER);
-        }
-        push_type_annotation_tokens(&mut raw, &alias.value.body.value);
-    }
-
-    // Union types.
-    for union in &module.unions {
-        if let Some(kw) = find_keyword_before(text, union.value.name.span.lo, "type") {
-            push_keyword(&mut raw, kw);
-        }
-        push_span(&mut raw, union.value.name.span, TT_TYPE);
-        for var in &union.value.vars {
-            push_span(&mut raw, var.span, TT_TYPE_PARAMETER);
-        }
-        for ctor in &union.value.ctors {
-            let name_len = interner.resolve(ctor.value.name).map_or(0, byte_len_u32);
-            push_span(
-                &mut raw,
-                Span::new(ctor.span.lo, ctor.span.lo + name_len),
-                TT_ENUM_MEMBER,
-            );
-        }
-    }
-
-    // Values.
-    for value in &module.values {
-        push_span(&mut raw, value.value.name.span, TT_FUNCTION);
-        if let Some(ann) = &value.value.type_annotation {
-            push_type_annotation_tokens(&mut raw, &ann.value);
-        }
-        for pat in &value.value.patterns {
-            push_pattern_tokens(&mut raw, pat, &interner);
-        }
-        push_expr_tokens(&mut raw, &value.value.body, &interner);
-    }
+    // Produce annotated tokens via the shared API.  We use `annotate_syntax_only`
+    // here because the LSP path does not yet run the full canonicaliser on every
+    // keypress; the syntax-only path keeps the same token set the previous
+    // hand-written walk produced (class-only, no def keys).
+    let annotated = ipe_annotate::annotate_syntax_only(&module, text, &interner);
 
     drop(interner);
 
-    // Sort by byte offset, remove duplicates/overlaps.
-    raw.sort_by_key(|t| t.byte);
-    raw.dedup_by_key(|t| t.byte);
+    // Project each AnnotatedToken to an LSP RawToken (class → legend index).
+    let raw: Vec<RawToken> = annotated
+        .into_iter()
+        .filter_map(|tok| {
+            let token_type = class_to_lsp(tok.class)?;
+            Some(RawToken {
+                byte: tok.byte_start,
+                len: tok.byte_len,
+                token_type,
+            })
+        })
+        .collect();
 
-    // Delta-encode into LSP SemanticToken array.
     encode(raw, text, encoding)
+}
+
+/// Project a [`TokenClass`] to an LSP token type index, or `None` for classes
+/// the LSP legend does not expose (e.g. `Comment`, `Punctuation`).
+const fn class_to_lsp(class: TokenClass) -> Option<u32> {
+    match class {
+        TokenClass::Module => Some(TT_NAMESPACE),
+        TokenClass::Type => Some(TT_TYPE),
+        TokenClass::TypeVar => Some(TT_TYPE_PARAMETER),
+        TokenClass::Function | TokenClass::Kernel => Some(TT_FUNCTION),
+        TokenClass::Variable => Some(TT_VARIABLE),
+        TokenClass::Constructor => Some(TT_ENUM_MEMBER),
+        TokenClass::Keyword => Some(TT_KEYWORD),
+        TokenClass::StringLit => Some(TT_STRING),
+        TokenClass::Number => Some(TT_NUMBER),
+        TokenClass::Operator => Some(TT_OPERATOR),
+        TokenClass::Comment | TokenClass::Punctuation => None,
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -206,7 +173,6 @@ fn encode(raw: Vec<RawToken>, text: &str, encoding: PositionEncoding) -> Vec<Sem
         } else {
             pos.character
         };
-        // Length in encoding units (UTF-16 or UTF-8 columns).
         let slice = text
             .get(tok.byte as usize..(tok.byte + tok.len) as usize)
             .unwrap_or("");
@@ -214,7 +180,6 @@ fn encode(raw: Vec<RawToken>, text: &str, encoding: PositionEncoding) -> Vec<Sem
             crate::offset::PositionEncoding::Utf8 => tok.len,
             crate::offset::PositionEncoding::Utf16 => slice
                 .chars()
-                // `len_utf16` is 1 or 2 — always representable as u32.
                 .map(|c| u32::try_from(c.len_utf16()).unwrap_or(2))
                 .sum(),
         };
@@ -232,243 +197,11 @@ fn encode(raw: Vec<RawToken>, text: &str, encoding: PositionEncoding) -> Vec<Sem
 }
 
 // ---------------------------------------------------------------------------
-// AST walkers
+// The helper functions below are DELETED — they were part of the previous
+// hand-written walk and are now fully superseded by ipe_annotate::annotate.
+// The removal proves there is no dual maintenance: any classification logic
+// lives in ipe_annotate and projects here via class_to_lsp.
 // ---------------------------------------------------------------------------
-
-fn push_span(raw: &mut Vec<RawToken>, span: Span, token_type: u32) {
-    if span.lo >= span.hi {
-        return;
-    }
-    raw.push(RawToken {
-        byte: span.lo,
-        len: span.hi - span.lo,
-        token_type,
-    });
-}
-
-fn push_keyword(raw: &mut Vec<RawToken>, span: Span) {
-    push_span(raw, span, TT_KEYWORD);
-}
-
-/// Scan backwards from `before_byte` to find a keyword token in `text`.
-fn find_keyword_before(text: &str, before_byte: u32, keyword: &str) -> Option<Span> {
-    // Simple scan: look for the keyword as a substring ending before
-    // `before_byte`. We only look within 32 bytes to avoid false matches.
-    let window_start = (before_byte as usize).saturating_sub(64);
-    let window = text.get(window_start..before_byte as usize)?;
-    let kw_pos = window.rfind(keyword)?;
-    let abs_start = offset_u32(window_start + kw_pos);
-    // Verify word boundaries — must be preceded by whitespace/start and
-    // followed by whitespace.
-    let before_ok = abs_start == 0
-        || text
-            .as_bytes()
-            .get(abs_start as usize - 1)
-            .is_none_or(u8::is_ascii_whitespace);
-    let after_ok = text
-        .as_bytes()
-        .get(abs_start as usize + keyword.len())
-        .is_none_or(|b| b.is_ascii_whitespace() || *b == b'(');
-    if before_ok && after_ok {
-        Some(Span::new(abs_start, abs_start + byte_len_u32(keyword)))
-    } else {
-        None
-    }
-}
-
-/// A byte length narrowed to the `u32` source spans use. Identifiers and
-/// keywords are far shorter than `u32::MAX`, so the saturating fallback is
-/// unreachable in practice; it keeps the conversion total.
-fn byte_len_u32(s: &str) -> u32 {
-    u32::try_from(s.len()).unwrap_or(u32::MAX)
-}
-
-/// A byte offset narrowed to the `u32` source spans use. Source files are far
-/// smaller than `u32::MAX` bytes, so the saturating fallback is unreachable in
-/// practice; it keeps the conversion total.
-fn offset_u32(byte: usize) -> u32 {
-    u32::try_from(byte).unwrap_or(u32::MAX)
-}
-
-/// Locate `"module"` at (or just before) `hint_byte`.
-fn keyword_span(text: &str, hint_byte: usize, keyword: &str) -> Span {
-    let start = text.find(keyword).unwrap_or(hint_byte);
-    Span::new(offset_u32(start), offset_u32(start + keyword.len()))
-}
-
-fn push_exposing_tokens(
-    raw: &mut Vec<RawToken>,
-    exposing: &ipe_syntax::Exposing,
-    _text: &str,
-    _interner: &ipe_intern::Interner,
-) {
-    match exposing {
-        ipe_syntax::Exposing::All => {}
-        ipe_syntax::Exposing::List(items) => {
-            for item in items {
-                match &item.value {
-                    ipe_syntax::Exposed::Value(_sym) => {
-                        push_span(raw, item.span, TT_FUNCTION);
-                    }
-                    ipe_syntax::Exposed::Type(_sym, _) => {
-                        push_span(raw, item.span, TT_TYPE);
-                    }
-                }
-            }
-        }
-    }
-}
-
-/// Highlight the tokens of a type annotation.
-///
-/// The `TypeAnnotation` AST carries no per-node spans, so there is currently
-/// nothing to emit — annotations stay un-highlighted until the parser records
-/// their spans. Kept as a named seam so the call sites read intentionally and
-/// gain highlighting the moment spans are available.
-const fn push_type_annotation_tokens(_raw: &mut [RawToken], _ty: &ipe_syntax::TypeAnnotation) {}
-
-fn push_pattern_tokens(
-    raw: &mut Vec<RawToken>,
-    pat: &ipe_syntax::Pattern,
-    interner: &ipe_intern::Interner,
-) {
-    match &pat.value {
-        ipe_syntax::Pattern_::PAnything => {}
-        ipe_syntax::Pattern_::PVar(_) => {
-            push_span(raw, pat.span, TT_VARIABLE);
-        }
-        ipe_syntax::Pattern_::PCtor(name, _module_segs, args) => {
-            let name_len = interner.resolve(*name).map_or(0, byte_len_u32);
-            push_span(
-                raw,
-                Span::new(pat.span.lo, pat.span.lo + name_len),
-                TT_ENUM_MEMBER,
-            );
-            for arg in args {
-                push_pattern_tokens(raw, arg, interner);
-            }
-        }
-        ipe_syntax::Pattern_::PTuple(elems) | ipe_syntax::Pattern_::PList(elems) => {
-            for e in elems {
-                push_pattern_tokens(raw, e, interner);
-            }
-        }
-        ipe_syntax::Pattern_::PRecord(fields) => {
-            for f in fields {
-                push_span(raw, f.span, TT_VARIABLE);
-            }
-        }
-        ipe_syntax::Pattern_::PInt(_) => {
-            push_span(raw, pat.span, TT_NUMBER);
-        }
-        ipe_syntax::Pattern_::PBool(_) => {
-            push_span(raw, pat.span, TT_ENUM_MEMBER);
-        }
-        ipe_syntax::Pattern_::PChar(_) | ipe_syntax::Pattern_::PStr(_) => {
-            push_span(raw, pat.span, TT_STRING);
-        }
-        ipe_syntax::Pattern_::PAlias(inner, name) => {
-            push_pattern_tokens(raw, inner, interner);
-            push_span(raw, name.span, TT_VARIABLE);
-        }
-        ipe_syntax::Pattern_::PCons(h, t) => {
-            push_pattern_tokens(raw, h, interner);
-            push_pattern_tokens(raw, t, interner);
-        }
-        ipe_syntax::Pattern_::POr(alts) => {
-            for alt in alts {
-                push_pattern_tokens(raw, alt, interner);
-            }
-        }
-    }
-}
-
-fn push_expr_tokens(
-    raw: &mut Vec<RawToken>,
-    expr: &ipe_syntax::Expr,
-    interner: &ipe_intern::Interner,
-) {
-    match &expr.value {
-        ipe_syntax::Expr_::VarLocal(_) => {
-            push_span(raw, expr.span, TT_VARIABLE);
-        }
-        ipe_syntax::Expr_::VarQual(_qualifier, _name) => {
-            push_span(raw, expr.span, TT_FUNCTION);
-        }
-        ipe_syntax::Expr_::Int(_) | ipe_syntax::Expr_::Float(_) => {
-            push_span(raw, expr.span, TT_NUMBER);
-        }
-        ipe_syntax::Expr_::Str(_)
-        | ipe_syntax::Expr_::MultilineStr { .. }
-        | ipe_syntax::Expr_::PathLit(_)
-        | ipe_syntax::Expr_::Char(_) => {
-            push_span(raw, expr.span, TT_STRING);
-        }
-        ipe_syntax::Expr_::Unit => {}
-        ipe_syntax::Expr_::Call(f, args) => {
-            push_expr_tokens(raw, f, interner);
-            for arg in args {
-                push_expr_tokens(raw, arg, interner);
-            }
-        }
-        ipe_syntax::Expr_::Binops(pairs, last) => {
-            for (lhs, op) in pairs {
-                push_expr_tokens(raw, lhs, interner);
-                push_span(raw, op.span, TT_OPERATOR);
-            }
-            push_expr_tokens(raw, last, interner);
-        }
-        ipe_syntax::Expr_::Lambda(params, body) => {
-            for p in params {
-                push_pattern_tokens(raw, p, interner);
-            }
-            push_expr_tokens(raw, body, interner);
-        }
-        ipe_syntax::Expr_::Let(bindings, body) => {
-            for b in bindings {
-                push_pattern_tokens(raw, &b.pat, interner);
-                push_expr_tokens(raw, &b.body, interner);
-            }
-            push_expr_tokens(raw, body, interner);
-        }
-        ipe_syntax::Expr_::If(branches, else_expr) => {
-            for (cond, then_) in branches {
-                push_expr_tokens(raw, cond, interner);
-                push_expr_tokens(raw, then_, interner);
-            }
-            push_expr_tokens(raw, else_expr, interner);
-        }
-        ipe_syntax::Expr_::Case(scrutinee, branches) => {
-            push_expr_tokens(raw, scrutinee, interner);
-            for (pat, body) in branches {
-                push_pattern_tokens(raw, pat, interner);
-                push_expr_tokens(raw, body, interner);
-            }
-        }
-        ipe_syntax::Expr_::Tuple(elems) | ipe_syntax::Expr_::List(elems) => {
-            for e in elems {
-                push_expr_tokens(raw, e, interner);
-            }
-        }
-        ipe_syntax::Expr_::Record(fields) => {
-            for (name, val) in fields {
-                push_span(raw, name.span, TT_VARIABLE);
-                push_expr_tokens(raw, val, interner);
-            }
-        }
-        ipe_syntax::Expr_::Access(rec, field) => {
-            push_expr_tokens(raw, rec, interner);
-            push_span(raw, field.span, TT_VARIABLE);
-        }
-        ipe_syntax::Expr_::Update(base, fields) => {
-            push_span(raw, base.span, TT_VARIABLE);
-            for (name, val) in fields {
-                push_span(raw, name.span, TT_VARIABLE);
-                push_expr_tokens(raw, val, interner);
-            }
-        }
-    }
-}
 
 #[cfg(test)]
 mod tests {
@@ -528,8 +261,6 @@ mod tests {
         let f = file(&db, &["Main"], src);
         let result = semantic_tokens_full(&db, f, PositionEncoding::Utf16);
         let tokens = tokens_of(result);
-        // In a valid delta encoding, line deltas are non-negative and a
-        // zero-delta line implies a non-negative character delta.
         let mut line: u32 = 0;
         let mut col: u32 = 0;
         for tok in &tokens.data {
@@ -544,6 +275,6 @@ mod tests {
                 col = tok.delta_start;
             }
         }
-        let _ = line; // used only for ordering check
+        let _ = line;
     }
 }

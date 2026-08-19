@@ -2133,6 +2133,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "ipe_annotate"
+version = "0.1.66"
+dependencies = [
+ "ipe_canon",
+ "ipe_diagnostics",
+ "ipe_intern",
+ "ipe_kernels",
+ "ipe_parse",
+ "ipe_syntax",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "ipe_backend"
 version = "0.1.66"
 dependencies = [
@@ -2253,6 +2267,7 @@ dependencies = [
 name = "ipe_lsp_features"
 version = "0.1.66"
 dependencies = [
+ "ipe_annotate",
  "ipe_canon",
  "ipe_db",
  "ipe_diagnostics",

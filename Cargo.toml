@@ -9,6 +9,7 @@ members = [
     "src/compiler/parse",
     "src/compiler/db",
     "src/compiler/canon",
+    "src/compiler/annotate",
     "src/compiler/types",
     "src/compiler/ir",
     "src/compiler/lower",

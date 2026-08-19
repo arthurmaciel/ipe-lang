@@ -11,6 +11,7 @@ ipe_intern = { path = "../../compiler/intern" }
 ipe_canon = { path = "../../compiler/canon" }
 ipe_syntax = { path = "../../compiler/syntax" }
 ipe_types = { path = "../../compiler/types" }
+ipe_annotate = { path = "../../compiler/annotate" }
 lsp-types = "0.95"
 
 [lints]
