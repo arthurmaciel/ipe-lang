@@ -2447,7 +2447,8 @@ mod windows_jail {
         TokenUser, WELL_KNOWN_SID_TYPE, WinCapabilityInternetClientSid,
     };
     use windows_sys::Win32::Storage::FileSystem::{
-        FILE_GENERIC_READ, FILE_GENERIC_WRITE, GetVolumeInformationW, GetVolumePathNameW,
+        FILE_GENERIC_READ, FILE_GENERIC_WRITE, FILE_TRAVERSE, GetVolumeInformationW,
+        GetVolumePathNameW,
     };
     use windows_sys::Win32::System::JobObjects::{
         AssignProcessToJobObject, CreateJobObjectW, JOB_OBJECT_LIMIT_ACTIVE_PROCESS,
@@ -2588,6 +2589,17 @@ mod windows_jail {
         //    always-confined `Filesystem` claim honest.
         probe_volume_persists_acls(scoped_tmp)?;
         acl_path_for_container(scoped_tmp, container.sid())?;
+        // The AppContainer token must be able to TRAVERSE every ancestor directory
+        // between the volume root and the scratch in order for CreateProcessW to
+        // resolve `scoped_tmp` as `lpCurrentDirectory`. ACLing the scratch itself
+        // is not enough: Windows path resolution walks each component, and a
+        // directory that denies `FILE_TRAVERSE` to the container SID makes the walk
+        // stop, returning ERROR_ENVVAR_NOT_FOUND (203) from CreateProcessW before
+        // the child starts. This grants the minimal traverse right on each ancestor
+        // up to (but not including) the volume root, which already allows traversal
+        // to everyone by default. The grant is additive (not a replace-DACL), so
+        // it never removes existing permissions.
+        grant_traverse_to_ancestors(scoped_tmp, container.sid())?;
         if profile.filesystem == FilesystemScope::WorkingTreeReadWrite {
             probe_volume_persists_acls(working_tree)?;
             acl_path_for_container(working_tree, container.sid())?;
@@ -2989,6 +3001,172 @@ mod windows_jail {
                  an enforced filesystem boundary",
                 path.display()
             )));
+        }
+        Ok(())
+    }
+
+    /// Grant `FILE_TRAVERSE` to the AppContainer SID on every ancestor directory
+    /// of `path` up to (but not including) the volume root.
+    ///
+    /// `CreateProcessW` resolves `lpCurrentDirectory` by walking every path
+    /// component through the AppContainer token. If any ancestor directory does
+    /// not have `FILE_TRAVERSE` granted to the container SID, the walk stops and
+    /// the call returns `ERROR_ENVVAR_NOT_FOUND` (203) before the child process
+    /// starts. ACLing the scratch directory itself (done by `acl_path_for_container`)
+    /// is therefore not enough: every ancestor up to the volume root must also allow
+    /// the container SID to traverse it.
+    ///
+    /// The grant is additive: the function merges a single `GRANT_ACCESS`
+    /// `FILE_TRAVERSE` entry into the existing DACL of each ancestor via
+    /// `SetEntriesInAclW` with a non-null existing ACL, preserving every other
+    /// entry. This never removes or narrows any existing permission. Fail-closed:
+    /// any failed Win32 call refuses so the caller never proceeds with an
+    /// incompletely granted ancestor chain.
+    fn grant_traverse_to_ancestors(path: &Path, container_sid: PSID) -> Result<(), RunJailDefect> {
+        use windows_sys::Win32::Security::Authorization::{
+            GRANT_ACCESS, GetNamedSecurityInfoW,
+        };
+
+        // Resolve the volume root so we know when to stop walking.
+        const MAX_PATH_WCHARS: u32 = 260;
+        let wpath = wide(path.as_os_str());
+        let mut root_buf: Vec<u16> = vec![0u16; MAX_PATH_WCHARS as usize];
+        // SAFETY: `wpath` is a live NUL-terminated wide path; `root_buf` receives
+        // the volume mount-point (e.g. "C:\") NUL-terminated into a MAX_PATH buffer.
+        let got_root = unsafe {
+            GetVolumePathNameW(wpath.as_ptr(), root_buf.as_mut_ptr(), MAX_PATH_WCHARS)
+        };
+        if got_root == 0 {
+            return Err(last_error_spawn(&format!(
+                "GetVolumePathNameW failed for {} while granting ancestor traversal; refusing",
+                path.display()
+            )));
+        }
+        // Trim to the actual NUL-terminated string length for comparison.
+        let root_len = root_buf.iter().position(|&c| c == 0).unwrap_or(root_buf.len());
+        let volume_root: Vec<u16> = root_buf[..root_len].to_vec();
+
+        // Walk from `path`'s parent up toward (but not including) the volume root.
+        let mut current = path.to_path_buf();
+        loop {
+            current = match current.parent() {
+                Some(p) => p.to_path_buf(),
+                None => break,
+            };
+            // Stop at the volume root — it already allows traversal to everyone.
+            let wcurrent = wide(current.as_os_str());
+            let current_len = wcurrent.len().saturating_sub(1); // exclude NUL
+            if current_len == volume_root.len()
+                && wcurrent[..current_len]
+                    .iter()
+                    .zip(&volume_root)
+                    .all(|(a, b)| a.to_ascii_uppercase() == b.to_ascii_uppercase())
+            {
+                break;
+            }
+
+            // Fetch the existing DACL via GetNamedSecurityInfoW so we can merge
+            // into it (GRANT_ACCESS preserves existing entries).
+            let mut existing_dacl: *mut ACL = std::ptr::null_mut();
+            // GetNamedSecurityInfoW writes a PSECURITY_DESCRIPTOR (*mut c_void)
+            // here; LocalFree releases it when we are done. The DACL pointer
+            // (`existing_dacl`) points into this allocation and is valid until
+            // `sd_ptr` is freed.
+            let mut sd_ptr: *mut std::ffi::c_void = std::ptr::null_mut();
+            // SAFETY: `wcurrent` is a live NUL-terminated wide path; the call
+            // allocates the security descriptor into `sd_ptr` (freed via
+            // LocalFree below) and sets `existing_dacl` as a pointer into it.
+            // Only the DACL is requested; other out-params receive null.
+            let get_err = unsafe {
+                GetNamedSecurityInfoW(
+                    wcurrent.as_ptr(),
+                    1, // SE_FILE_OBJECT
+                    DACL_SECURITY_INFORMATION,
+                    std::ptr::null_mut(),
+                    std::ptr::null_mut(),
+                    &raw mut existing_dacl,
+                    std::ptr::null_mut(),
+                    &raw mut sd_ptr,
+                )
+            };
+            if get_err != 0 {
+                // Free the security descriptor even on error if it was partially
+                // allocated, then fail closed.
+                if !sd_ptr.is_null() {
+                    // SAFETY: `sd_ptr` was allocated by GetNamedSecurityInfoW.
+                    unsafe { LocalFree(sd_ptr.cast()) };
+                }
+                return Err(spawn(format!(
+                    "GetNamedSecurityInfoW failed for {} (error = {get_err}) while granting \
+                     ancestor traversal; refusing",
+                    current.display()
+                )));
+            }
+
+            // Merge a GRANT_ACCESS FILE_TRAVERSE entry into the existing DACL.
+            let entry = EXPLICIT_ACCESS_W {
+                grfAccessPermissions: FILE_TRAVERSE,
+                grfAccessMode: GRANT_ACCESS,
+                grfInheritance: NO_INHERITANCE,
+                Trustee: TRUSTEE_W {
+                    pMultipleTrustee: std::ptr::null_mut(),
+                    MultipleTrusteeOperation: 0,
+                    TrusteeForm: TRUSTEE_IS_SID,
+                    TrusteeType: TRUSTEE_IS_WELL_KNOWN_GROUP,
+                    ptstrName: container_sid.cast(),
+                },
+            };
+            let entries = [entry];
+            let mut new_acl: *mut ACL = std::ptr::null_mut();
+            // SAFETY: one EXPLICIT_ACCESS entry in a live array; `container_sid`
+            // outlives this call (owned by the caller); `existing_dacl` points into
+            // `sd_ptr` which is still live. `SetEntriesInAclW` allocates `new_acl`
+            // (freed via LocalFree below).
+            let acl_err = unsafe {
+                SetEntriesInAclW(
+                    1,
+                    entries.as_ptr(),
+                    existing_dacl,
+                    std::ptr::from_mut(&mut new_acl),
+                )
+            };
+            // Release the security descriptor from GetNamedSecurityInfoW.
+            if !sd_ptr.is_null() {
+                // SAFETY: allocated by GetNamedSecurityInfoW.
+                unsafe { LocalFree(sd_ptr.cast()) };
+            }
+            if acl_err != 0 || new_acl.is_null() {
+                return Err(spawn(format!(
+                    "SetEntriesInAclW failed for {} (error = {acl_err}) while granting ancestor \
+                     traversal; refusing",
+                    current.display()
+                )));
+            }
+
+            // Apply the merged DACL.
+            // SAFETY: `wcurrent` is a live NUL-terminated wide path; `new_acl` is
+            // the ACL just built. Only the DACL is set.
+            let set_err = unsafe {
+                SetNamedSecurityInfoW(
+                    wcurrent.as_ptr(),
+                    1, // SE_FILE_OBJECT
+                    DACL_SECURITY_INFORMATION,
+                    std::ptr::null_mut(),
+                    std::ptr::null_mut(),
+                    new_acl,
+                    std::ptr::null_mut(),
+                )
+            };
+            // Free the merged ACL regardless of outcome.
+            // SAFETY: allocated by SetEntriesInAclW.
+            unsafe { LocalFree(new_acl.cast()) };
+            if set_err != 0 {
+                return Err(spawn(format!(
+                    "SetNamedSecurityInfoW failed for {} (status = {set_err}) while granting \
+                     ancestor traversal; refusing",
+                    current.display()
+                )));
+            }
         }
         Ok(())
     }
