@@ -177,13 +177,12 @@ jobs:
           IPE_BIN: ${{ github.workspace }}/target/release/ipe
         run: bash tools/scripts/check-explain-examples.sh
 
-  # Doc-string example gate (component F): every fenced ```ipe block in every
-  # {-| … -} doc-string in the standard library must type-check. A doc-string
-  # edit that introduces a broken example (wrong name, wrong type) reddens this
-  # gate. Change-gated on `code` (stdlib sources live under src/**) so a
-  # prose-only PR legitimately skips it.
+  # Every fenced ```ipe block in every {-| … -} doc-string in the standard
+  # library must type-check. A doc-string edit that introduces a broken example
+  # (wrong name, wrong type) reddens this gate. Change-gated on `code` (stdlib
+  # sources live under src/**) so a prose-only PR legitimately skips it.
   doc-examples:
-    name: doc-string example gate (component F)
+    name: doc-string example gate
     runs-on: ubuntu-latest
     needs: [changes, quick-check]
     if: needs.changes.outputs.code == 'true' || github.event_name != 'pull_request'
