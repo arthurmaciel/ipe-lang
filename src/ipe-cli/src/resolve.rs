@@ -23,7 +23,7 @@ use std::process::Command;
 use ipe_ir::Capability;
 
 use crate::index::{self, CommitId, EntryVersion, PinnedRev, SourceUrl};
-use crate::lockfile::{LockedDep, Lockfile};
+use crate::lockfile::{DepKind, LockedDep, LockedRev, Lockfile};
 use crate::project::{self, IpeDep};
 use crate::{CliError, cache};
 
@@ -59,8 +59,9 @@ pub fn resolve_and_add(
         name: name.to_owned(),
         version: version.version.clone(),
         source: version.source.to_string(),
-        rev: version.rev.to_string(),
+        rev: LockedRev::Pinned(version.rev.clone()),
         sha256: version.sha256.clone(),
+        kind: DepKind::Index,
     };
     write_records(project_root, name, &locked, &IpeDep::Index(req.clone()))?;
 
@@ -81,7 +82,7 @@ pub fn resolve_and_add(
 /// [`CliError::Resolve`] if a `git` fetch fails or a path source is missing;
 /// [`CliError::Io`] on a filesystem failure.
 pub fn resolve_escape(project_root: &Path, name: &str, dep: &IpeDep) -> Result<(), CliError> {
-    let (source, rev, checkout) = match dep {
+    let (source, locked_rev, checkout) = match dep {
         IpeDep::Git { url, rev } => {
             // Parse-don't-validate: convert the raw manifest strings to typed
             // newtypes at this escape-path boundary before they reach the git
@@ -110,7 +111,7 @@ pub fn resolve_escape(project_root: &Path, name: &str, dep: &IpeDep) -> Result<(
                     source: e,
                 })?;
             }
-            (url.clone(), pinned.as_str().to_owned(), final_dest)
+            (url.clone(), LockedRev::Pinned(pinned), final_dest)
         }
         IpeDep::Path(path) => {
             let resolved = if path.is_absolute() {
@@ -124,7 +125,7 @@ pub fn resolve_escape(project_root: &Path, name: &str, dep: &IpeDep) -> Result<(
                     resolved.display()
                 )));
             }
-            (path.display().to_string(), "local".to_owned(), resolved)
+            (path.display().to_string(), LockedRev::Local, resolved)
         }
         IpeDep::Index(_) => {
             return Err(CliError::Resolve(format!(
@@ -142,8 +143,9 @@ pub fn resolve_escape(project_root: &Path, name: &str, dep: &IpeDep) -> Result<(
         name: name.to_owned(),
         version,
         source,
-        rev,
+        rev: locked_rev,
         sha256,
+        kind: DepKind::Escape,
     };
     let mut lock = Lockfile::read(project_root)?;
     lock.upsert(locked);
@@ -284,22 +286,22 @@ fn escape_cache_dir(project_root: &Path, name: &str, pinned: &PinnedRev) -> Path
     package_cache_dir(project_root, name, pinned.as_str())
 }
 
-/// The cache directory for a locked dep: escapes key by their pinned `rev`
-/// (the immutable SHA), index deps key by their `version`.
+/// The cache directory for a locked dep: git-escape deps key by their pinned
+/// SHA, path-escape deps key by their sha256 (no git rev), and index deps key
+/// by their version.
 ///
 /// Both [`resolve_escape`]'s fetch path and [`verify_lockfile_hashes`]'s
 /// verify path route through this function so the two dirs are provably equal.
+/// The [`DepKind`] tag is the sole authority — field shapes are never re-derived.
 fn dep_cache_dir(project_root: &Path, dep: &LockedDep) -> PathBuf {
-    // A git escape is recorded with version 0.0.0 and a 40-hex rev.
-    // An index dep carries a real semver version and may have any rev.
-    // Key escapes by rev (the stable immutable SHA) and index deps by version.
-    let is_escape = dep.version == semver::Version::new(0, 0, 0)
-        && dep.rev.len() == 40
-        && dep.rev.chars().all(|c| c.is_ascii_hexdigit());
-    if is_escape {
-        package_cache_dir(project_root, &dep.name, &dep.rev)
-    } else {
-        package_cache_dir(project_root, &dep.name, &dep.version.to_string())
+    match dep.kind {
+        DepKind::Escape => match &dep.rev {
+            LockedRev::Pinned(sha) => package_cache_dir(project_root, &dep.name, sha.as_str()),
+            LockedRev::Local => {
+                package_cache_dir(project_root, &dep.name, &dep.version.to_string())
+            }
+        },
+        DepKind::Index => package_cache_dir(project_root, &dep.name, &dep.version.to_string()),
     }
 }
 
@@ -492,7 +494,7 @@ mod tests {
     };
     use crate::cache;
     use crate::index::{CommitId, PinnedRev, SourceUrl};
-    use crate::lockfile::{LockedDep, Lockfile};
+    use crate::lockfile::{DepKind, LockedDep, LockedRev, Lockfile};
     use crate::project::IpeDep;
     use ipe_ir::Capability;
     use std::collections::BTreeSet;
@@ -584,19 +586,20 @@ mod tests {
             .find(|p| p.name == "remotelib")
             .expect("remotelib must be locked");
         // The locked rev must be an immutable 40-hex SHA, not the string "HEAD".
-        assert_eq!(entry.rev.len(), 40, "locked rev must be 40 chars");
+        let rev_str = entry.rev.as_str();
+        assert_eq!(rev_str.len(), 40, "locked rev must be 40 chars");
         assert!(
-            entry.rev.chars().all(|c| c.is_ascii_hexdigit()),
+            rev_str.chars().all(|c| c.is_ascii_hexdigit()),
             "locked rev must be lowercase hex"
         );
-        assert_ne!(entry.rev, "HEAD", "locked rev must not be the string HEAD");
+        assert_ne!(rev_str, "HEAD", "locked rev must not be the string HEAD");
         // The cached checkout must be keyed by the SHA, not by "HEAD".
         assert!(
             !package_cache_dir(&proj, "remotelib", "HEAD").exists(),
             "HEAD-keyed cache dir must not exist"
         );
         assert!(
-            package_cache_dir(&proj, "remotelib", &entry.rev).exists(),
+            package_cache_dir(&proj, "remotelib", rev_str).exists(),
             "SHA-keyed cache dir must exist"
         );
         // Verify the locked SHA matches the fixture repo's actual HEAD.
@@ -609,7 +612,7 @@ mod tests {
             String::from_utf8_lossy(&out.stdout).trim().to_owned()
         };
         assert_eq!(
-            entry.rev, actual_head,
+            rev_str, actual_head,
             "locked SHA must equal the fixture HEAD"
         );
         let _ = std::fs::remove_dir_all(&proj);
@@ -638,7 +641,7 @@ mod tests {
             .find(|p| p.name == "pinned")
             .expect("pinned locked")
             .clone();
-        let sha1 = entry1.rev;
+        let sha1 = entry1.rev.as_str().to_owned();
 
         // Add C2 on the same branch — moves HEAD forward.
         let git = |args: &[&str]| {
@@ -668,19 +671,16 @@ mod tests {
             .expect("pinned locked");
         // The second resolve also records the current HEAD (C2), so the SHA
         // changes — what matters is that it IS a concrete SHA both times.
-        assert_eq!(
-            entry2.rev.len(),
-            40,
-            "second locked rev must be 40 hex chars"
-        );
+        let rev2_str = entry2.rev.as_str();
+        assert_eq!(rev2_str.len(), 40, "second locked rev must be 40 hex chars");
         assert!(
-            entry2.rev.chars().all(|c| c.is_ascii_hexdigit()),
+            rev2_str.chars().all(|c| c.is_ascii_hexdigit()),
             "second locked rev must be hex"
         );
-        assert_ne!(entry2.rev, "HEAD", "second locked rev must not be HEAD");
+        assert_ne!(rev2_str, "HEAD", "second locked rev must not be HEAD");
         // The two SHAs must differ (C2 is a new commit).
         assert_ne!(
-            sha1, entry2.rev,
+            sha1, rev2_str,
             "locking after a branch move records the new concrete SHA"
         );
 
@@ -710,7 +710,7 @@ mod tests {
             .clone();
 
         // Tamper a file inside the cache dir.
-        let cache = package_cache_dir(&proj, "escapedep", &entry.rev);
+        let cache = package_cache_dir(&proj, "escapedep", entry.rev.as_str());
         assert!(cache.is_dir(), "cache dir must exist at the SHA key");
         std::fs::write(cache.join("TAMPERED"), "evil").expect("tamper");
 
@@ -733,12 +733,14 @@ mod tests {
 
         // An escape dep: version 0.0.0 + 40-hex rev.
         let sha = "a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2";
+        let pinned_sha = PinnedRev::from_full_sha("myescape", sha).expect("valid sha");
         let escape_dep = LockedDep {
             name: "myescape".to_owned(),
             version: semver::Version::new(0, 0, 0),
             source: "https://example.invalid/myescape".to_owned(),
-            rev: sha.to_owned(),
+            rev: LockedRev::Pinned(pinned_sha.clone()),
             sha256: "00".to_owned(),
+            kind: DepKind::Escape,
         };
 
         // An index dep: real version + any rev.
@@ -746,13 +748,13 @@ mod tests {
             name: "mypkg".to_owned(),
             version: semver::Version::parse("1.2.0").expect("valid"),
             source: "https://example.invalid/mypkg".to_owned(),
-            rev: sha.to_owned(),
+            rev: LockedRev::Pinned(PinnedRev::from_full_sha("mypkg", sha).expect("valid sha")),
             sha256: "00".to_owned(),
+            kind: DepKind::Index,
         };
 
         // Escape: dep_cache_dir must equal escape_cache_dir (keyed by SHA).
-        let pinned = PinnedRev::from_full_sha("myescape", sha).expect("valid sha");
-        let via_escape = escape_cache_dir(&proj, "myescape", &pinned);
+        let via_escape = escape_cache_dir(&proj, "myescape", &pinned_sha);
         let via_dep = dep_cache_dir(&proj, &escape_dep);
         assert_eq!(
             via_escape, via_dep,
