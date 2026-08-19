@@ -3023,9 +3023,7 @@ mod windows_jail {
     /// any failed Win32 call refuses so the caller never proceeds with an
     /// incompletely granted ancestor chain.
     fn grant_traverse_to_ancestors(path: &Path, container_sid: PSID) -> Result<(), RunJailDefect> {
-        use windows_sys::Win32::Security::Authorization::{
-            GRANT_ACCESS, GetNamedSecurityInfoW,
-        };
+        use windows_sys::Win32::Security::Authorization::{GRANT_ACCESS, GetNamedSecurityInfoW};
 
         // Resolve the volume root so we know when to stop walking.
         const MAX_PATH_WCHARS: u32 = 260;
@@ -3033,9 +3031,8 @@ mod windows_jail {
         let mut root_buf: Vec<u16> = vec![0u16; MAX_PATH_WCHARS as usize];
         // SAFETY: `wpath` is a live NUL-terminated wide path; `root_buf` receives
         // the volume mount-point (e.g. "C:\") NUL-terminated into a MAX_PATH buffer.
-        let got_root = unsafe {
-            GetVolumePathNameW(wpath.as_ptr(), root_buf.as_mut_ptr(), MAX_PATH_WCHARS)
-        };
+        let got_root =
+            unsafe { GetVolumePathNameW(wpath.as_ptr(), root_buf.as_mut_ptr(), MAX_PATH_WCHARS) };
         if got_root == 0 {
             return Err(last_error_spawn(&format!(
                 "GetVolumePathNameW failed for {} while granting ancestor traversal; refusing",
@@ -3043,7 +3040,10 @@ mod windows_jail {
             )));
         }
         // Trim to the actual NUL-terminated string length for comparison.
-        let root_len = root_buf.iter().position(|&c| c == 0).unwrap_or(root_buf.len());
+        let root_len = root_buf
+            .iter()
+            .position(|&c| c == 0)
+            .unwrap_or(root_buf.len());
         let volume_root: Vec<u16> = root_buf[..root_len].to_vec();
 
         // Walk from `path`'s parent up toward (but not including) the volume root.
