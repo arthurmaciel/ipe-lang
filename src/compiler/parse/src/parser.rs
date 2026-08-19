@@ -333,14 +333,34 @@ impl<'a> Parser<'a> {
         }
         let exposing = self.parse_exposing()?;
 
+        // Imports may be preceded by a `{-| … -}` doc-comment. One before an
+        // `import` documents the module, not the import, and is dropped; one
+        // before a declaration is carried in `pending_doc` and attaches to it.
+        // At most one doc-comment is consumed here per position — a second
+        // consecutive doc-comment breaks out so `parse_decl` reports it as an
+        // unexpected token rather than silently swallowing it.
         let mut imports = Vec::new();
-        while self.peek_kind() == Some(&Tok::Import) {
-            imports.push(self.parse_import()?);
+        let mut pending_doc: Option<DocString> = None;
+        loop {
+            let is_doc = matches!(self.peek_kind(), Some(Tok::DocComment(_)));
+            let is_import = self.peek_kind() == Some(&Tok::Import);
+            if is_import {
+                pending_doc = None;
+                imports.push(self.parse_import()?);
+            } else if is_doc && pending_doc.is_none() {
+                let tok = self.bump(Construct::ModuleHeader)?;
+                if let Tok::DocComment(raw) = tok.kind {
+                    pending_doc = Some(DocString::from_raw(&raw));
+                }
+            } else {
+                break;
+            }
         }
 
         let mut decls = Vec::new();
+        let mut first_doc = pending_doc.take();
         while self.peek().is_some() {
-            decls.push(self.parse_decl()?);
+            decls.push(self.parse_decl(first_doc.take())?);
         }
 
         let header_span = Self::span_merge(module_tok.span, name.span);
@@ -619,12 +639,16 @@ impl<'a> Parser<'a> {
 
     // ---- declarations -----------------------------------------------------
 
-    fn parse_decl(&mut self) -> DResult<Decl> {
+    fn parse_decl(&mut self, pre_doc: Option<DocString>) -> DResult<Decl> {
         // A `{-| … -}` doc-comment immediately preceding a declaration (no
         // blank line between them, enforced by the lexer emitting the token
-        // only when immediately adjacent at the source level) is consumed here
-        // and forwarded to the next declaration node.
-        let doc = if let Some(Token {
+        // only when immediately adjacent at the source level) attaches to that
+        // declaration. `pre_doc` carries one the caller already consumed in the
+        // import region that turned out to precede a declaration rather than an
+        // `import`; otherwise the doc-comment is consumed here.
+        let doc = if pre_doc.is_some() {
+            pre_doc
+        } else if let Some(Token {
             kind: Tok::DocComment(_),
             ..
         }) = self.peek()

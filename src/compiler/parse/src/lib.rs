@@ -3046,6 +3046,48 @@ main n =\n\
     }
 
     #[test]
+    fn module_doc_comment_before_import_parses() {
+        // A `{-| … -}` doc-comment after the header and before the imports
+        // documents the module, not the `import` that follows; it must parse.
+        let src = "\
+module Main exposing (main)\n\
+{-| Module-level docs.\n\
+Second line. -}\n\
+import Ipe.Io as Io\n\
+main : Task Error ()\n\
+main =\n\
+    Io.println \"hi\"\n";
+        let mut i = Interner::new();
+        let m =
+            parse_module(src, &mut i).expect("a module doc-comment before an import must parse");
+        assert_eq!(
+            m.imports.len(),
+            1,
+            "the import after the module doc is parsed"
+        );
+    }
+
+    #[test]
+    fn doc_comment_after_import_attaches_to_following_value() {
+        // A doc-comment following the imports and preceding a value still
+        // attaches to that value.
+        let src = "\
+module Main exposing (main)\n\
+import Ipe.Io as Io\n\
+{-| Runs it. -}\n\
+main : Task Error ()\n\
+main =\n\
+    Io.println \"hi\"\n";
+        let mut i = Interner::new();
+        let m = parse_module(src, &mut i).expect("must parse");
+        let val = find_value(&m, &i, "main").expect("main present");
+        assert!(
+            val.doc.is_some(),
+            "a doc-comment after the imports must attach to the value"
+        );
+    }
+
+    #[test]
     fn doc_comment_attaches_to_union() {
         let src = "\
 module Main exposing (main)\n\
