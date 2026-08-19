@@ -120,7 +120,7 @@ impl Page {
             .as_deref()
             .map_or_else(|| "null".to_owned(), json_str);
         let see_also = json_str_array(&self.see_also);
-        let explain_ref = json_str(&format!("ipe explain {}", self.id));
+        let explain_ref = json_str(&format!("ipe doc {}", self.id));
         format!(
             "{{\"kind\":{kind},\"id\":{id},\"title\":{title},\
              \"summary\":{summary},\"syntax\":{syntax},\
@@ -723,7 +723,7 @@ pub fn render_list(
             if !body.is_empty() {
                 let _ = writeln!(
                     body,
-                    "\n{}tip:{} run {}ipe explain <id>{} for the full page",
+                    "\n{}tip:{} run {}ipe doc <id>{} for the full page",
                     p.dim, p.reset, p.yellow, p.reset
                 );
             }
@@ -790,7 +790,7 @@ pub fn render_chooser(query: &str, matches: &[Match], p: &style::Palette) -> Str
         }
         let _ = writeln!(
             body,
-            "\nRun {}ipe explain <id>{} for the full page.",
+            "\nRun {}ipe doc <id>{} for the full page.",
             p.yellow, p.reset
         );
     }
@@ -998,7 +998,7 @@ mod tests {
         assert!(json.contains("\"error-code\""), "kind is error-code");
         assert!(json.contains("\"IPE-T0001\""), "id is IPE-T0001");
         assert!(
-            json.contains("ipe explain IPE-T0001"),
+            json.contains("ipe doc IPE-T0001"),
             "explain_ref carries the command"
         );
     }
@@ -1210,8 +1210,8 @@ mod tests {
         };
         let rendered = render(&d, "test.ipe", "");
         assert!(
-            rendered.contains("ipe explain effects"),
-            "human render for IPE-L0141 must contain 'ipe explain effects'; got: {rendered:?}"
+            rendered.contains("ipe doc effects"),
+            "human render for IPE-L0141 must contain 'ipe doc effects'; got: {rendered:?}"
         );
     }
 
@@ -1227,7 +1227,7 @@ mod tests {
         assert!(json.contains("\"IPE-L0141\""), "id is IPE-L0141");
         assert!(json.contains("\"explain_ref\""), "schema has explain_ref");
         assert!(
-            json.contains("ipe explain IPE-L0141"),
+            json.contains("ipe doc IPE-L0141"),
             "explain_ref carries the command"
         );
     }

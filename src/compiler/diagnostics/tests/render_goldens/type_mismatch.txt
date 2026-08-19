@@ -11,4 +11,4 @@ I was expecting this to be an `Int`, but it's a `String`.
   |        --- the type was fixed here
   |
 
-IPE-T0001 · run `ipe explain IPE-T0001`
+IPE-T0001 · run `ipe doc IPE-T0001`

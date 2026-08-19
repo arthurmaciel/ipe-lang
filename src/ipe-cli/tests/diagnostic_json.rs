@@ -194,10 +194,10 @@ fn type_check_json_contains_required_span_and_code_fields() {
         stderr.contains("\"file\":"),
         "primary_span must carry 'file', got: {stderr}"
     );
-    // explain_ref must name the exact code.
+    // explain_ref must name the exact code (now uses ipe doc).
     assert!(
-        stderr.contains("\"explain_ref\":\"ipe explain IPE-T0001\""),
-        "explain_ref must be 'ipe explain IPE-T0001', got: {stderr}"
+        stderr.contains("\"explain_ref\":\"ipe doc IPE-T0001\""),
+        "explain_ref must be 'ipe doc IPE-T0001', got: {stderr}"
     );
 }
 

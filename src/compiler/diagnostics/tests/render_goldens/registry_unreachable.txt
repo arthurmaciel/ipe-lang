@@ -6,6 +6,6 @@ cargo exited 101 while fetching crates for out/my-app:
 Could not resolve host: index.crates.io
 failed to load source for dependency dlmalloc
 
-Check your connection and try again. Run `ipe explain IPE-E0001` for more help.
+Check your connection and try again. Run `ipe doc IPE-E0001` for more help.
 
-IPE-E0001 · run `ipe explain IPE-E0001`
+IPE-E0001 · run `ipe doc IPE-E0001`

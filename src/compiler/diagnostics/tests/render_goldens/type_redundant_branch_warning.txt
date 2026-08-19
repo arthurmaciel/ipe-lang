@@ -8,4 +8,4 @@ This branch for `Red` can never run — an earlier branch already handles it.
   |         ^^^ `Red` is already handled above
   |
 
-IPE-T0011 · run `ipe explain IPE-T0011`
+IPE-T0011 · run `ipe doc IPE-T0011`

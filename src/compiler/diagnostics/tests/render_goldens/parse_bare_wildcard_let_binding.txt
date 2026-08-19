@@ -8,4 +8,4 @@ a bare `_` cannot be the whole binding pattern in a `let`.
   |         ^ `_` as the whole binding pattern binds nothing — use a `do` line or `|> Task.andThen (\_ -> …)` to sequence an effect
   |
 
-IPE-P0064 · run `ipe explain IPE-P0064`
+IPE-P0064 · run `ipe doc IPE-P0064`

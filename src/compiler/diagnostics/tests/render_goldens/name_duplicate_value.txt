@@ -11,4 +11,4 @@
   | - first defined here
   |
 
-IPE-N0010 · run `ipe explain IPE-N0010`
+IPE-N0010 · run `ipe doc IPE-N0010`

@@ -10,4 +10,4 @@ This `case` doesn't cover every possibility yet.
   = help: add a branch for `Blue`
   = help: add a branch for `Green`
 
-IPE-T0010 · run `ipe explain IPE-T0010`
+IPE-T0010 · run `ipe doc IPE-T0010`

@@ -8,4 +8,4 @@ This type alias expands forever, so I can't work out what it finally stands for.
   | ^^^^^^^^^^^^^^^^ alias expansion exceeded the recursion depth limit of 256
   |
 
-IPE-N0032 · run `ipe explain IPE-N0032`
+IPE-N0032 · run `ipe doc IPE-N0032`

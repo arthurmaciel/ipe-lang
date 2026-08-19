@@ -8,4 +8,4 @@ I found a number here, but I was expecting an identifier.
   |     ^^ found a number, expected an identifier
   |
 
-IPE-P0001 · run `ipe explain IPE-P0001`
+IPE-P0001 · run `ipe doc IPE-P0001`

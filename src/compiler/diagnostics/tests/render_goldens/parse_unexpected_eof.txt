@@ -8,4 +8,4 @@ The file ended while I was still in the middle of reading something.
   |           ^ input ended here
   |
 
-IPE-P0002 · run `ipe explain IPE-P0002`
+IPE-P0002 · run `ipe doc IPE-P0002`

@@ -11,4 +11,4 @@ I couldn't find the module `Httpp` on disk.
       `Http`
       `Https`
 
-IPE-N0020 · run `ipe explain IPE-N0020`
+IPE-N0020 · run `ipe doc IPE-N0020`

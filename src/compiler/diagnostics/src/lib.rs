@@ -36,7 +36,7 @@ pub use diagnostic::{
     IfDefect, LetDefect, LowerError, MainRetName, ModelLeaf, NameError, ParseError, SandboxError,
     SealRejection, SortedNames, SpanRole, Suggestion, TokenKind, TyDoc, TypeDeclDefect, TypeError,
 };
-pub use render::{plain_message, render, render_json, render_ty};
+pub use render::{DOC_HINT_CMD, plain_message, render, render_json, render_ty};
 pub use span::{Located, Span};
 
 #[cfg(test)]
@@ -426,8 +426,8 @@ mod tests {
         };
         let msg = plain_message(&d, "");
         assert!(
-            msg.contains("ipe explain effects"),
-            "plain_message for IPE-L0141 must contain 'ipe explain effects'; got: {msg:?}"
+            msg.contains("ipe doc effects"),
+            "plain_message for IPE-L0141 must contain 'ipe doc effects'; got: {msg:?}"
         );
     }
 
@@ -441,8 +441,8 @@ mod tests {
         };
         let rendered = render(&d, "main.ipe", "");
         assert!(
-            rendered.contains("ipe explain main"),
-            "human render for IPE-L0136 must contain 'ipe explain main'; got: {rendered:?}"
+            rendered.contains("ipe doc main"),
+            "human render for IPE-L0136 must contain 'ipe doc main'; got: {rendered:?}"
         );
     }
 

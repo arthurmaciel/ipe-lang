@@ -429,25 +429,6 @@ const COMMANDS: &[Command] = &[
         ],
     },
     Command {
-        name: "explain",
-        run: crate::run_explain,
-        summary: "Teaching reference: look up a diagnostic code, syntax form, or topic.",
-        args: "[list [kind] | <query>]",
-        args_desc: "A diagnostic code (IPE-T0001), syntax form (case), or topic (effects). \
-                    Omit for an overview. `list` browses all pages; `list syntax|topics|error-codes` \
-                    filters to one kind.",
-        options: &[
-            Opt {
-                flag: "[--plain]",
-                desc: "ANSI-free output for piping/scripting",
-            },
-            Opt {
-                flag: "[--json]",
-                desc: "machine-readable {kind,id,title,summary,…} schema",
-            },
-        ],
-    },
-    Command {
         name: "capabilities",
         run: crate::run_capabilities,
         summary: "Report the security capabilities a program exercises, inferred from its code.",
@@ -486,9 +467,11 @@ const COMMANDS: &[Command] = &[
     Command {
         name: "doc",
         run: crate::doc::run_doc,
-        summary: "Generate API documentation (docs.json + Markdown + HTML), query the stdlib, list modules, preview, or check coverage.",
-        args: "[list | serve | check | <Module.Name>] [<path>]",
+        summary: "Look up documentation, generate API docs (docs.json + Markdown + HTML), query the stdlib, list modules, preview, or check coverage.",
+        args: "[list | serve | check | <key> | <Module.Name>] [<path>]",
         args_desc: "Without a subcommand: generate docs.json + renderings for the project and stdlib. \
+                    `<key>`: look up any entity by key — a diagnostic code (IPE-L0107), symbol (List.map), \
+                    module (List), language construct (case), or CLI command (version). \
                     `list`: list all stdlib + project modules (one per line; `--list` is a deprecated alias). \
                     `serve`: build the HTML site and preview it on loopback. \
                     `check`: verify doc-comment coverage for project modules (stdlib is exempt). \
@@ -606,7 +589,6 @@ const SECTIONS: &[Section] = &[
             "lsp",
             "clean",
             "health",
-            "explain",
             "capabilities",
             "diff",
             "fix",
@@ -644,6 +626,15 @@ pub fn command_names() -> Vec<&'static str> {
 /// when it is described — the two can never drift apart.
 pub(crate) fn handler(name: &str) -> Option<(&'static str, Handler)> {
     find(name).map(|c| (c.name, c.run))
+}
+
+/// The one-line summary for `name`, or `None` when `name` is not a known command.
+///
+/// Used to inject command metadata into the documentation index so that
+/// `ipe doc <command>` resolves from the same SSOT as `ipe <command> --help`.
+#[must_use]
+pub fn command_summary(name: &str) -> Option<&'static str> {
+    find(name).map(|c| c.summary)
 }
 
 /// Render the top-level help screen for the given output stream.

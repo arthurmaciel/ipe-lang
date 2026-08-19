@@ -2,4 +2,4 @@
 
 These modules import each other in a circle, so I can't decide which to compile first.
 
-IPE-N0021 · run `ipe explain IPE-N0021`
+IPE-N0021 · run `ipe doc IPE-N0021`

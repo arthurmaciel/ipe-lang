@@ -8,4 +8,4 @@ This value's type would have to contain itself forever, so I can't pin it down.
   |        ^ `a` would have to equal List a
   |
 
-IPE-T0002 · run `ipe explain IPE-T0002`
+IPE-T0002 · run `ipe doc IPE-T0002`

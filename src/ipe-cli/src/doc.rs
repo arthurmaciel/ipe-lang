@@ -79,6 +79,7 @@ use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
 
 use ipe_diagnostics::{TyDoc, render_ty};
+use ipe_docs::{CommandInfo, Index};
 use ipe_intern::Interner;
 use ipe_types::{VarNamer, kernel_type_table, ty_to_doc};
 
@@ -171,6 +172,16 @@ pub enum DocMode {
     /// result annotations are also compiled, run, and their output asserted.
     /// Exits non-zero when any block fails its expectation.
     CheckExamples,
+    /// Look up any entity by key via the `ipe_docs` index.
+    ///
+    /// Accepts symbols (`List.map`), modules (`List`), diagnostic codes
+    /// (`IPE-L0107`), language constructs (`case`), and CLI commands (`version`).
+    Lookup {
+        /// The documentation key to resolve.
+        key: String,
+        /// How to render the result.
+        format: OutputFormat,
+    },
 }
 
 /// The default output directory when `--out` is omitted, mirroring Elm's `doc/`.
@@ -188,6 +199,7 @@ enum Sub {
     List,
     Query(String),
     CheckExamples,
+    Lookup(String),
 }
 
 /// Accumulated flag values while parsing `ipe doc`'s argument tail.
@@ -255,14 +267,41 @@ fn parse_doc_with(rest: &[String], notice: &mut dyn FnMut(&str)) -> Result<DocMo
                 it.next();
                 Sub::List
             }
-            // A dotted-path positional starting with uppercase is a module query.
+            // A diagnostic code (`IPE-X0000`) or a symbol key (`List.map`) routes
+            // to the content index. A diagnostic code always starts uppercase and
+            // contains a `-`; a symbol key starts uppercase and contains a `.`
+            // followed by a lowercase letter.
+            Some(first)
+                if !first.starts_with('-')
+                    && first.chars().next().is_some_and(|c| c.is_ascii_uppercase())
+                    && (first.contains('-') || is_symbol_key(first)) =>
+            {
+                let key = (*first).to_owned();
+                it.next();
+                Sub::Lookup(key)
+            }
+            // A module-path positional (uppercase, no `-` or symbol pattern) is a
+            // module API query.
             Some(first)
                 if !first.starts_with('-')
                     && first.chars().next().is_some_and(|c| c.is_ascii_uppercase()) =>
             {
                 let name = (*first).to_owned();
-                it.next(); // advance past the peeked token
+                it.next();
                 Sub::Query(name)
+            }
+            // A lowercase bare word is a content-index lookup key only when no
+            // generate-specific flags (`--out`, `--write-format`) appear in the
+            // remaining arguments — those flags are unambiguous signals that the
+            // word is a project path for the `generate` subcommand.
+            Some(first)
+                if !first.starts_with('-')
+                    && !first.is_empty()
+                    && !rest.iter().any(|a| a == "--out" || a == "--write-format") =>
+            {
+                let key = (*first).to_owned();
+                it.next();
+                Sub::Lookup(key)
             }
             _ => Sub::Generate,
         }
@@ -287,6 +326,7 @@ fn parse_doc_with(rest: &[String], notice: &mut dyn FnMut(&str)) -> Result<DocMo
         Sub::List => DocMode::List { path, format },
         Sub::Query(module) => DocMode::Query { module, format },
         Sub::CheckExamples => DocMode::CheckExamples,
+        Sub::Lookup(key) => DocMode::Lookup { key, format },
     })
 }
 
@@ -318,9 +358,9 @@ fn parse_doc_flags(
                     sub_name(sub)
                 )));
             }
-            "--plain" | "--json" if !matches!(sub, Sub::List | Sub::Query(_)) => {
+            "--plain" | "--json" if !matches!(sub, Sub::List | Sub::Query(_) | Sub::Lookup(_)) => {
                 return Err(CliError::UsageOwned(format!(
-                    "ipe doc {}: {arg} applies only to `list` and `<module>` queries",
+                    "ipe doc {}: {arg} applies only to `list`, `<module>` queries, and `<key>` lookups",
                     sub_name(sub)
                 )));
             }
@@ -378,10 +418,8 @@ fn parse_doc_flags(
                 )));
             }
             positional => {
-                if matches!(sub, Sub::Query(_)) {
-                    return Err(CliError::Usage(
-                        "ipe doc: expected a single <module> argument",
-                    ));
+                if matches!(sub, Sub::Query(_) | Sub::Lookup(_)) {
+                    return Err(CliError::Usage("ipe doc: expected a single <key> argument"));
                 }
                 if flags.path.is_some() {
                     return Err(CliError::Usage(
@@ -404,6 +442,7 @@ const fn sub_name(sub: &Sub) -> &'static str {
         Sub::List => "list",
         Sub::Query(_) => "<module>",
         Sub::CheckExamples => "--check-examples",
+        Sub::Lookup(_) => "<key>",
     }
 }
 
@@ -434,6 +473,174 @@ fn parse_port(value: &str) -> Result<u16, CliError> {
     }
 }
 
+/// Language construct pages embedded at compile time from `docs/content/`.
+///
+/// Each entry is `(key, markdown_text)`. The key becomes the index entry key
+/// (e.g. `"case"` resolves via `ipe doc case`). Adding a new construct page
+/// requires a new `docs/content/<name>.md` and a new entry here.
+static CONTENT_PAGES: &[(&str, &str)] = &[
+    ("case", include_str!("../../../docs/content/case.md")),
+    ("do", include_str!("../../../docs/content/do.md")),
+];
+
+/// Return `true` when `s` looks like a symbol key: it starts uppercase, contains
+/// a `.`, and the character after the first `.` is lowercase — e.g. `List.map`,
+/// `Ipe.List.map`. This distinguishes a symbol lookup from a plain module name
+/// (`Ipe.List`, `List`) which is routed to the API query instead.
+fn is_symbol_key(s: &str) -> bool {
+    let Some(dot_pos) = s.find('.') else {
+        return false;
+    };
+    s.get(dot_pos + 1..)
+        .and_then(|after| after.chars().next())
+        .is_some_and(|c| c.is_ascii_lowercase())
+}
+
+/// Build the `ipe_docs` index, wiring in the CLI command registry.
+///
+/// Diagnostics are indexed from the compile-time embedded explain pages (same
+/// source as `ipe explain`) — no filesystem lookup required. Language constructs
+/// are indexed from the embedded `docs/content/*.md` files via a compile-time
+/// static table. Commands are injected from `help.rs`'s `COMMANDS` registry.
+fn build_index() -> Result<Index, CliError> {
+    use ipe_docs::IndexBuilder;
+    let mut builder = IndexBuilder::new();
+
+    builder
+        .add_stdlib()
+        .map_err(|e| CliError::UsageOwned(format!("ipe doc: stdlib index failed: {e}")))?;
+
+    // Diagnostics: indexed from the compile-time embedded explain pages.
+    for code in ipe_diagnostics::ALL_CODES {
+        let text = ipe_diagnostics::explain_page(*code)
+            .unwrap_or("")
+            .to_owned();
+        builder.insert(
+            code.as_str().to_owned(),
+            ipe_docs::Entry {
+                kind: ipe_docs::EntryKind::Diagnostic,
+                source_key: code.as_str().to_owned(),
+                text,
+            },
+        );
+    }
+
+    // Constructs: compile-time embedded content pages.
+    for (key, text) in CONTENT_PAGES {
+        builder.insert(
+            (*key).to_owned(),
+            ipe_docs::Entry {
+                kind: ipe_docs::EntryKind::Construct,
+                source_key: (*key).to_owned(),
+                text: (*text).to_owned(),
+            },
+        );
+    }
+
+    // Commands: sourced from the COMMANDS registry so the index never drifts.
+    let commands: Vec<CommandInfo> = crate::help::command_names()
+        .into_iter()
+        .filter_map(|name| {
+            crate::help::command_summary(name).map(|summary| CommandInfo { name, summary })
+        })
+        .collect();
+    builder.add_commands(&commands);
+
+    Ok(builder.finish())
+}
+
+/// `ipe doc <key>` — look up any entity by key and render it.
+///
+/// Resolves symbols, modules, diagnostic codes, constructs, and CLI commands
+/// via the `ipe_docs` content index. Renders rich by default, `--plain` for
+/// terse output, and `--json` for machine consumers.
+fn run_doc_lookup(key: &str, format: OutputFormat) -> Result<(), CliError> {
+    let index = build_index()?;
+
+    let Some(entry) = index.resolve(key) else {
+        return Err(CliError::UsageOwned(format!(
+            "ipe doc: no documentation found for `{key}`\n\
+             \n\
+             Try `ipe doc list` to browse available entries."
+        )));
+    };
+
+    let stdout = std::io::stdout();
+    match format {
+        OutputFormat::Plain => {
+            print!("{}", render_doc_entry_plain(entry));
+        }
+        OutputFormat::Json => {
+            print!("{}", render_doc_entry_json(entry));
+        }
+        OutputFormat::Human => {
+            let p = crate::style::Palette::for_stream(&stdout);
+            print!(
+                "{}",
+                crate::style::frame(&crate::style::gutter(&render_doc_entry_human(entry, p)))
+            );
+        }
+    }
+    Ok(())
+}
+
+/// Plain (terse) rendering of a documentation entry: signature + example.
+fn render_doc_entry_plain(entry: &ipe_docs::Entry) -> String {
+    let mut out = entry.text.clone();
+    if !out.ends_with('\n') {
+        out.push('\n');
+    }
+    out
+}
+
+/// JSON rendering of a documentation entry.
+fn render_doc_entry_json(entry: &ipe_docs::Entry) -> String {
+    let kind = match entry.kind {
+        ipe_docs::EntryKind::Symbol => "symbol",
+        ipe_docs::EntryKind::Module => "module",
+        ipe_docs::EntryKind::Diagnostic => "diagnostic",
+        ipe_docs::EntryKind::Construct => "construct",
+        ipe_docs::EntryKind::Command => "command",
+    };
+    format!(
+        "{{\"kind\":{},\"key\":{},\"text\":{}}}\n",
+        doc_json_str(kind),
+        doc_json_str(&entry.source_key),
+        doc_json_str(&entry.text),
+    )
+}
+
+/// Human (rich) rendering of a documentation entry with ANSI colour.
+fn render_doc_entry_human(entry: &ipe_docs::Entry, p: &crate::style::Palette) -> String {
+    let kind_label = match entry.kind {
+        ipe_docs::EntryKind::Symbol => "symbol",
+        ipe_docs::EntryKind::Module => "module",
+        ipe_docs::EntryKind::Diagnostic => "diagnostic",
+        ipe_docs::EntryKind::Construct => "construct",
+        ipe_docs::EntryKind::Command => "command",
+    };
+    let mut out = String::new();
+    let _ = writeln!(
+        out,
+        "{}{}{}  {}[{}]{}",
+        p.bold, entry.source_key, p.reset, p.dim, kind_label, p.reset
+    );
+    if !entry.text.is_empty() {
+        out.push('\n');
+        out.push_str(&entry.text);
+        if !entry.text.ends_with('\n') {
+            out.push('\n');
+        }
+    }
+    out
+}
+
+/// Minimal JSON string escaping for the doc lookup renderer (no serde dependency).
+fn doc_json_str(s: &str) -> String {
+    let escaped = s.replace('\\', "\\\\").replace('"', "\\\"");
+    format!("\"{escaped}\"")
+}
+
 /// Run `ipe doc` for the parsed [`DocMode`].
 ///
 /// # Errors
@@ -456,6 +663,7 @@ pub fn run_doc(rest: &[String]) -> Result<(), CliError> {
         }
         DocMode::Query { module, format } => query_module(&module, format),
         DocMode::CheckExamples => check_examples(),
+        DocMode::Lookup { key, format } => run_doc_lookup(&key, format),
     }
 }
 

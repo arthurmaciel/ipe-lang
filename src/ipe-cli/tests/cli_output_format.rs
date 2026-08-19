@@ -237,122 +237,88 @@ fn emit_ir_in_a_project_dir_resolves_the_entry() {
     );
 }
 
-// ---- explain (overview + list + query) ------------------------------------
+// ---- ipe doc <key> lookup --------------------------------------------------
 
-/// Bare `ipe explain` shows the friendly overview — framed, guttered.
+/// `ipe explain` is retired — invoking it emits a pointer to `ipe doc`.
 #[test]
-fn explain_overview_human_is_framed_and_guttered() {
+fn explain_is_retired_and_points_at_doc() {
     let r = run(&["explain"]);
-    assert!(r.ok);
+    assert!(!r.ok, "`ipe explain` must exit non-zero");
     assert!(
-        r.stdout.starts_with('\n') && r.stdout.ends_with('\n'),
-        "the overview must be framed, got: {:?}",
-        &r.stdout[..r.stdout.len().min(40)]
-    );
-    for line in r.stdout.lines().filter(|l| !l.trim().is_empty()) {
-        assert!(
-            line.starts_with("  "),
-            "the overview must be guttered, got: {line:?}"
-        );
-    }
-    assert!(
-        r.stdout.contains("ipe explain"),
-        "the overview must mention ipe explain"
-    );
-}
-
-/// `ipe explain --plain` emits the plain overview — flush-left, no ANSI.
-#[test]
-fn explain_overview_plain_is_ansi_free_and_flush_left() {
-    let r = run(&["explain", "--plain"]);
-    assert!(r.ok);
-    assert!(!r.stdout.contains('\x1b'), "--plain must not contain ANSI");
-    // Plain overview starts flush-left (no leading spaces).
-    let first = r.stdout.lines().next().unwrap_or_default();
-    assert!(
-        !first.starts_with(' '),
-        "--plain overview must be flush-left, got: {first:?}"
-    );
-    assert!(
-        r.stdout.contains("ipe explain"),
-        "--plain overview must mention ipe explain"
-    );
-}
-
-/// `ipe explain --json` emits the overview JSON envelope.
-#[test]
-fn explain_overview_json_envelope() {
-    let r = run(&["explain", "--json"]);
-    assert!(r.ok);
-    let out = r.stdout.trim();
-    assert!(
-        out.starts_with("{\"overview\":"),
-        "json overview must start with {{\"overview\":, got: {out:?}"
-    );
-}
-
-/// `ipe explain list` — human output is framed, guttered, and contains codes.
-#[test]
-fn explain_list_human_is_framed_guttered_and_contains_codes() {
-    let r = run(&["explain", "list"]);
-    assert!(r.ok);
-    assert!(
-        r.stdout.starts_with('\n') && r.stdout.ends_with('\n'),
-        "the list must be framed, got: {:?}",
-        &r.stdout[..r.stdout.len().min(40)]
-    );
-    assert!(
-        r.stdout.contains("IPE-"),
-        "the human list must list diagnostic codes"
-    );
-}
-
-/// `ipe explain list --plain` emits tab-separated rows, flush-left.
-#[test]
-fn explain_list_plain_is_tab_separated_flush_left() {
-    let r = run(&["explain", "list", "--plain"]);
-    assert!(r.ok);
-    let first = r.stdout.lines().next().unwrap_or_default();
-    assert!(!first.starts_with(' '), "--plain rows must be flush-left");
-    assert!(
-        first.contains('\t'),
-        "--plain rows must be tab-separated (id<TAB>kind<TAB>title): {first:?}"
-    );
-}
-
-/// `ipe explain list --json` emits the `{"pages":[...]}` envelope.
-#[test]
-fn explain_list_json_is_a_pages_array() {
-    let r = run(&["explain", "list", "--json"]);
-    assert!(r.ok);
-    let out = r.stdout.trim();
-    assert!(
-        out.starts_with("{\"pages\":["),
-        "json must open the pages array, got: {out:?}"
-    );
-    assert!(
-        out.contains("\"id\":") && out.contains("\"kind\":") && out.contains("\"title\":"),
-        "pages array must carry id, kind, and title"
-    );
-}
-
-/// `ipe explain --json IPE-L0131` emits the query envelope, not an error.
-#[test]
-fn explain_query_json_emits_envelope() {
-    let r = run(&["explain", "--json", "IPE-L0131"]);
-    assert!(
-        r.ok,
-        "explaining a code with --json must succeed: {}",
+        r.stderr.contains("ipe doc"),
+        "`ipe explain` must mention `ipe doc` in its message, got: {:?}",
         r.stderr
     );
-    let out = r.stdout.trim();
+}
+
+/// `ipe doc IPE-L0131` — human output is framed, guttered, and contains the code.
+#[test]
+fn doc_lookup_diagnostic_human_is_framed_and_guttered() {
+    let r = run(&["doc", "IPE-L0131"]);
+    assert!(r.ok, "ipe doc IPE-L0131 must succeed: {}", r.stderr);
     assert!(
-        out.starts_with("{\"query\":"),
-        "json query must emit the {{query,resolved,matches}} envelope, got: {out:?}"
+        r.stdout.starts_with('\n') && r.stdout.ends_with('\n'),
+        "lookup output must be framed, got: {:?}",
+        &r.stdout[..r.stdout.len().min(40)]
     );
     assert!(
-        out.contains("\"resolved\":") && out.contains("\"matches\":"),
-        "envelope must have resolved and matches"
+        r.stdout.contains("IPE-L0131"),
+        "lookup output must mention the resolved code"
+    );
+}
+
+/// `ipe doc IPE-L0131 --plain` emits flush-left, ANSI-free text.
+#[test]
+fn doc_lookup_diagnostic_plain_is_ansi_free() {
+    let r = run(&["doc", "IPE-L0131", "--plain"]);
+    assert!(r.ok, "ipe doc IPE-L0131 --plain must succeed: {}", r.stderr);
+    assert!(!r.stdout.contains('\x1b'), "--plain must not contain ANSI");
+    let first = r.stdout.lines().next().unwrap_or_default();
+    assert!(
+        !first.starts_with("  "),
+        "--plain output must be flush-left, got: {first:?}"
+    );
+}
+
+/// `ipe doc IPE-L0131 --json` emits the `{kind,key,text}` object.
+#[test]
+fn doc_lookup_diagnostic_json_emits_object() {
+    let r = run(&["doc", "IPE-L0131", "--json"]);
+    assert!(r.ok, "ipe doc IPE-L0131 --json must succeed: {}", r.stderr);
+    let out = r.stdout.trim();
+    assert!(
+        out.starts_with("{\"kind\":"),
+        "json must start with {{\"kind\":, got: {out:?}"
+    );
+    assert!(
+        out.contains("\"key\":") && out.contains("\"text\":"),
+        "json must carry key and text fields"
+    );
+    assert!(
+        out.contains("\"diagnostic\""),
+        "kind must be diagnostic for IPE-L0131"
+    );
+}
+
+/// `ipe doc case` — construct lookup renders successfully.
+#[test]
+fn doc_lookup_construct_renders() {
+    let r = run(&["doc", "case"]);
+    assert!(r.ok, "ipe doc case must succeed: {}", r.stderr);
+    assert!(
+        r.stdout.contains("case"),
+        "output must mention the resolved construct"
+    );
+}
+
+/// `ipe doc version` — command lookup renders successfully.
+#[test]
+fn doc_lookup_command_renders() {
+    let r = run(&["doc", "version"]);
+    assert!(r.ok, "ipe doc version must succeed: {}", r.stderr);
+    assert!(
+        r.stdout.contains("version"),
+        "output must mention the resolved command"
     );
 }
 
@@ -363,7 +329,7 @@ fn plain_and_json_together_is_a_usage_error_showing_help() {
     for cmd in [
         vec!["version", "--plain", "--json"],
         vec!["capabilities", "--plain", "--json"],
-        vec!["explain", "--plain", "--json"],
+        vec!["doc", "IPE-L0131", "--plain", "--json"],
     ] {
         let r = run(&cmd);
         assert!(!r.ok, "`ipe {cmd:?}` must fail on both flags");
@@ -690,7 +656,7 @@ fn upgrade_no_prebuilt_renders_message_without_help() {
 /// and show that command's `--help` page — never swallow the flag and exit 0.
 #[test]
 fn unknown_flag_shows_help_and_exits_nonzero() {
-    for name in ["capabilities", "explain", "diff", "doc"] {
+    for name in ["capabilities", "diff", "doc"] {
         let r = run(&[name, "--nope"]);
         assert!(
             !r.ok,

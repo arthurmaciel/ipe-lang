@@ -8,4 +8,4 @@ This string opens with a `"` but never closes.
   |     ^^^^^^ this string is never closed
   |
 
-IPE-P0014 · run `ipe explain IPE-P0014`
+IPE-P0014 · run `ipe doc IPE-P0014`
