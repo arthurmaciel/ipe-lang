@@ -2615,13 +2615,13 @@ mod tests {
     fn chain_builder_carries_every_paren() {
         // `((a + b) + c)` — the string emitter wraps each level; the chain
         // builder must carry both `(` and both `)` as leaves so the SEAL holds.
-        // Uses the generic `BinOp::Add` variant (infix/chain-eligible) to
-        // exercise the chain layout path independently of Int vs Float dispatch.
+        // Uses `BinOp::FloatAdd` (infix / chain-eligible) to exercise the chain
+        // layout path. (`BinOp::Add` is now call-shaped via `ipe_wrapping_add`.)
         let fx = fixture();
         with_ctx(&fx, |ctx| {
             let expr = binop(
-                BinOp::Add,
-                binop(BinOp::Add, var(&fx, 0), var(&fx, 1)),
+                BinOp::FloatAdd,
+                binop(BinOp::FloatAdd, var(&fx, 0), var(&fx, 1)),
                 var(&fx, 2),
             );
             let scope = GenericScope::new(&[]);
@@ -2632,9 +2632,31 @@ mod tests {
             let closes = leaves.matches(')').count();
             assert_eq!(opens, 2, "two wrapping open-parens: {leaves}");
             assert_eq!(closes, 2, "two wrapping close-parens: {leaves}");
-            // And it renders inline (fits width): `((a + b) + c)`.
+            // Renders inline (fits width): `((a + b) + c)`.
             let rendered = render(&doc, RenderConfig::default());
             assert_eq!(rendered, "((a + b) + c)");
+        });
+    }
+
+    #[test]
+    fn generic_add_emits_wrapping_method_call() {
+        // `BinOp::Add` (polymorphic `Number a`) now emits
+        // `a.ipe_wrapping_add(b).ipe_wrapping_add(c)` — a method call, not an
+        // infix chain — so overflow-checks=on cannot panic on i64.
+        let fx = fixture();
+        with_ctx(&fx, |ctx| {
+            let expr = binop(
+                BinOp::Add,
+                binop(BinOp::Add, var(&fx, 0), var(&fx, 1)),
+                var(&fx, 2),
+            );
+            let scope = GenericScope::new(&[]);
+            let doc = build_doc(ctx, &expr, 0, 0, scope).expect("build_doc");
+            let rendered = render(&doc, RenderConfig::default());
+            assert_eq!(rendered, "a.ipe_wrapping_add(b).ipe_wrapping_add(c)");
+            // SEAL: doc leaves equal the string emitter's bytes.
+            let string = emit_expr_at(ctx, &expr, 0, 0, scope).expect("emit_expr_at");
+            assert_eq!(doc.normalized_leaves(), whitespace_normalize(&string));
         });
     }
 
@@ -3003,11 +3025,12 @@ mod tests {
 
     #[test]
     fn chain_operand_that_breaks_multiline_glues_following_operator() {
-        // A chain `(broadIf + tail)` whose FIRST operand is a block-form (wide)
-        // `if` renders the `if` multiline; the single `+ tail)` operator glues to
-        // the `if`'s closing-line column (the chain has not broken, and the glued
-        // operand fits). This exercises `render_chain`'s multiline-operand glue
-        // path with a structured operand — the previously-untested composite.
+        // A Float chain `(broadIf + tail)` whose FIRST operand is a block-form
+        // (wide) `if` renders the `if` multiline; the single `+ tail)` operator
+        // glues to the `if`'s closing-line column (chain has not broken, glued
+        // operand fits). Exercises `render_chain`'s multiline-operand glue path.
+        // Uses `BinOp::FloatAdd` (infix/chain-eligible); `BinOp::Add` is now the
+        // call-shaped `ipe_wrapping_add` path.
         // Golden captured from `rustfmt --edition 2024 --style-edition 2024`.
         let fx = fixture();
         with_ctx(&fx, |ctx| {
@@ -3016,7 +3039,7 @@ mod tests {
                 then_: Box::new(var(&fx, 5)), // first_branch_value
                 else_: Box::new(var(&fx, 6)), // second_branch_value_here
             };
-            let expr = binop(BinOp::Add, wide_if, var(&fx, 3)); // + x (a placeholder tail)
+            let expr = binop(BinOp::FloatAdd, wide_if, var(&fx, 3)); // + x (a placeholder tail)
             let got = render_let_stmt(ctx, &expr);
             let expected = "let z = ((if some_condition_variable {\n        first_branch_value\n    } else {\n        second_branch_value_here\n    }) + x)";
             assert_eq!(
@@ -3901,17 +3924,17 @@ mod tests {
 
     #[test]
     fn match_wide_control_arm_synthesizes_braces_and_drops_comma() {
-        // An arm whose body is a wide binary-operator CHAIN (a control body) is
-        // wrapped by rustfmt in synthesized braces and the trailing comma is
-        // dropped. Golden captured from `rustfmt --edition 2024 --style-edition 2024`.
+        // An arm whose body is a wide Float infix chain (a control body) is
+        // wrapped in synthesized braces and the trailing comma is dropped.
+        // Uses `BinOp::FloatAdd` (infix/chain-eligible) since `BinOp::Add` is
+        // now the call-shaped `ipe_wrapping_add` path.
+        // Golden captured from `rustfmt --edition 2024 --style-edition 2024`.
         let fx = fixture();
         with_ctx(&fx, |ctx| {
             // `(…_x + …_y + …_z)` — a three-operand chain wide enough to break.
-            // Uses generic `Add` (infix/chain-eligible) to exercise the
-            // synthesized-braces path for a wide control-flow body.
             let wide_chain = binop(
-                BinOp::Add,
-                binop(BinOp::Add, var(&fx, 7), var(&fx, 8)),
+                BinOp::FloatAdd,
+                binop(BinOp::FloatAdd, var(&fx, 7), var(&fx, 8)),
                 var(&fx, 9),
             );
             let arms = vec![
@@ -3923,8 +3946,8 @@ mod tests {
             let doc = build_doc(ctx, &expr, 0, 0, scope).expect("doc");
             let got = render(&doc, RenderConfig::default());
             // The chain body braces and breaks; the `Unit` arm has no trailing comma
-            // (dropped by the synthesized braces), while the fitting `Wrap` arm keeps
-            // its comma. Golden captured from `rustfmt --edition 2024`.
+            // (dropped by synthesized braces), while the fitting `Wrap` arm keeps its
+            // comma. Golden captured from `rustfmt --edition 2024`.
             let expected = "match x {\n    MainMsg::Unit => {\n        ((argument_that_is_quite_long_enough_to_matter_x\n            + argument_that_is_quite_long_enough_to_matter_y)\n            + argument_that_is_quite_long_enough_to_matter_z)\n    }\n    MainMsg::Wrap(a) => a,\n}";
             assert_eq!(
                 got, expected,
