@@ -428,6 +428,9 @@ code! {
     /// callee's body, not from a shared type-checker unification (which `any`
     /// severs), so the mismatch is caught here rather than emitting Rust E0271
     IPE_L0143 = "IPE-L0143", "caller field type does not match the field type required by the callee", "IPE-L0143";
+    /// a non-record value is passed at a row-generic parameter position — only a
+    /// record can carry the `IpeHas*` witness bound the callee's body requires
+    IPE_L0144 = "IPE-L0144", "argument at a row-generic position is not a record", "IPE-L0144";
     /// expression nests too deeply for the backend
     IPE_L0200 = "IPE-L0200", "expression nests too deeply for the backend", "IPE-L0200";
 

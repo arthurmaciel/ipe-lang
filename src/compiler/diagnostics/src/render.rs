@@ -643,6 +643,13 @@ fn lower_prose(msg: &LowerError) -> String {
                  but the function requires `{field} : {required}`."
             )
         }
+        LowerError::WildcardAnyArgNotRecord { found } => {
+            format!(
+                "This function's parameter is `any` and reads record fields, \
+                 so it only accepts a record — but you passed {found}.",
+                found = an_article(found)
+            )
+        }
     }
 }
 
@@ -1601,6 +1608,13 @@ fn lower_label(msg: &LowerError) -> String {
                  `{field} : {required}` — change the field's value to a `{required}`, or \
                  annotate the callee's parameter with a closed record type so the \
                  type-checker enforces the field type at each call site"
+            )
+        }
+        LowerError::WildcardAnyArgNotRecord { found } => {
+            format!(
+                "this is {found} — the callee's `any` parameter reads record fields, \
+                 so only a record is accepted here",
+                found = an_article(found)
             )
         }
     }

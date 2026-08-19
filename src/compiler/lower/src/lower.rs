@@ -1643,16 +1643,34 @@ fn canon_sig_has_unsupported_open_row(sig: &canon::Type) -> bool {
 /// `T{n}: Clone` generic that carries NO `IpeHas*` bound; it can never satisfy
 /// the callee's witness obligation, so the emitted Rust fails cargo E0277.
 ///
-/// This predicate is the single authority on that structural question:
-/// `false` means "this type cannot satisfy the bound; reject fail-closed."
-/// Every call site that guards on the relayed-row shape consults it rather
-/// than re-stating the `Ty::Var` pattern inline, so the definition of
-/// "satisfiable" lives in exactly one place.
+/// `false` means "this type cannot satisfy the bound via the row-witness path;
+/// reject fail-closed." `true` does NOT guarantee the type is a record — a
+/// concrete non-record type (`Ty::Con`, `Ty::Fun`, …) returns `true` here but
+/// is caught by the record-shape check in [`Lower::check_row_param_caller_fields`].
 ///
 /// Complements [`escapes`], which answers the same question at the
 /// IR-expression level for function bodies.
 const fn ty_can_satisfy_row_witness(ty: &Ty) -> bool {
     !matches!(ty, Ty::Var(_))
+}
+
+/// A short plain-English name for a solved [`Ty`], used in error messages when
+/// a non-record type appears at a row-generic argument position.
+///
+/// For named type constructors (`Int`, `Bool`, `String`, user ADTs) the
+/// interned name is returned directly. For structural types (`Fun`, `Tuple`,
+/// `Unit`, `Record`) a brief keyword is used. `Var` should not reach this
+/// helper (callers gate on `!ty_can_satisfy_row_witness` first), but falls back
+/// to `"unknown"` to keep the function total.
+fn ty_short_name(ty: &Ty, interner: &Interner) -> Box<str> {
+    match ty {
+        Ty::Con { name, .. } => interner.resolve(*name).unwrap_or("unknown").into(),
+        Ty::Fun(_, _) => "function".into(),
+        Ty::Tuple(_) => "tuple".into(),
+        Ty::Unit => "unit".into(),
+        Ty::Record(_, _) => "record".into(),
+        Ty::Var(_) => "unknown".into(),
+    }
 }
 
 /// Walk `body` and return `true` when a row symbol appears in any position
@@ -16026,19 +16044,37 @@ impl<'a> Lowerer<'a> {
             let Some(arg) = args.get(*pos) else {
                 continue;
             };
-            // The callee requires a row-witness bound (`IpeHas<F><Name = T>`) on
-            // this argument position. Reject any argument whose region type is
-            // known but cannot carry the bound — `ty_can_satisfy_row_witness` is
-            // the single authority on that structural question (the relay shapes
-            // `relay x = getField x` and `firstName p = snd p p` reach here
-            // with a bare solver `Var`, which that predicate rejects).
-            // An absent region type (no solved annotation at this span) fails
-            // open — the call proceeds to the field-type check below.
-            if self
-                .region_ty(arg.span)
-                .is_some_and(|ty| !ty_can_satisfy_row_witness(ty))
-            {
-                return Err(unsupported(call_span, Feature::RowPolyRecordAnnotation));
+            // The callee requires an `IpeHas<F><Name = T>` row-witness bound on
+            // this argument position. The arg's solved region type drives three
+            // outcomes, ordered fail-closed:
+            //
+            // 1. `Ty::Var` — the relay shape (`relay x = getName x` where `x`
+            //    is itself a wildcard-`any` parameter). A bare `Clone`-only
+            //    generic can never satisfy an `IpeHas*` bound; reject with
+            //    IPE-L0131.
+            // 2. `Some(concrete non-record)` — a concrete type that is not a
+            //    record (`Int`, `Bool`, a function, a user ADT, …). Post-solve
+            //    types are fully expanded: no alias variant exists in `Ty`, so
+            //    `Ty::Con` and `Ty::Fun` are definitively not records. Reject
+            //    fail-closed with IPE-L0144.
+            // 3. `Some(Ty::Record(...))` — the normal case; proceed to the
+            //    per-field type check below.
+            // 4. `None` — no solved annotation at this span (a forward reference
+            //    or relay the type-checker has not yet resolved). Fail open and
+            //    let the downstream field-check and cargo gate catch any issue.
+            match self.region_ty(arg.span) {
+                Some(ty) if !ty_can_satisfy_row_witness(ty) => {
+                    return Err(unsupported(call_span, Feature::RowPolyRecordAnnotation));
+                }
+                Some(ty) if !matches!(ty, Ty::Record(_, _)) => {
+                    let found = ty_short_name(ty, self.interner);
+                    return Err(Diagnostic::Lower {
+                        span: call_span,
+                        msg: LowerError::WildcardAnyArgNotRecord { found },
+                    });
+                }
+                None => continue,
+                _ => {}
             }
             let Some(Ty::Record(caller_fields, _)) = self.region_ty(arg.span) else {
                 continue;
