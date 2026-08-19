@@ -12469,9 +12469,7 @@ impl<'a> Lowerer<'a> {
                 // `shouldRetry` type must be `Ty::Var` (unsolved) or
                 // `Error -> Bool` (solved); a user record with the same five
                 // field names but a different concrete predicate type returns
-                // `None` and falls through to the normal path, where the G-b
-                // `ir_contains_fun` gate skips it (the user's struct comes from
-                // function signatures instead, so no dead duplicate is emitted).
+                // `None` and falls through to the normal path.
                 if let Some(rp_ir) = retry_policy_concrete_ir(self.interner, ty) {
                     if seen.insert(rp_ir.clone()) {
                         out.push(rp_ir);
@@ -12492,15 +12490,17 @@ impl<'a> Lowerer<'a> {
                 // record reaches the backend through a signature.
                 if !ty_contains_var(ty) {
                     let ir = self.ir_type_from_ty(ty, Span::DUMMY)?;
-                    // G-b gate: skip records whose IR carries a function type.
-                    // The `Web.app` cfg record has function-typed fields
-                    // (init/update/view/subscriptions); emitting a Rust struct
-                    // for it would need `Box<dyn Fn>` fields, which cannot
-                    // derive `Clone`/`Debug`/`PartialEq`.  The cfg record is
-                    // consumed structurally by `emit_web_app_inner` (never
-                    // materialised as a runtime value), so its IR struct is
-                    // not needed.
-                    if !ir_contains_fun(&ir) && seen.insert(ir.clone()) {
+                    // Register ALL concrete shapes, including records with
+                    // function-typed fields. The `Arc<dyn Fn>` carrier stores
+                    // function fields on a `Clone`-able `SharedFun` slot, so the
+                    // backend synthesises a sound struct with a hand-written
+                    // `impl Clone` for any such shape. Skipping function-field
+                    // records here causes IPE-I0001 in the backend when a record
+                    // literal with a function field appears in a context where no
+                    // typed function signature exposes the shape via `func.ret` or
+                    // `func.params` — the backend's own collection pass also misses
+                    // it, so `record_struct_by_key` finds no entry.
+                    if seen.insert(ir.clone()) {
                         out.push(ir);
                     }
                 }

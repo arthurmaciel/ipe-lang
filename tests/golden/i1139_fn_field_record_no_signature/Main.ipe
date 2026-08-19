@@ -1,0 +1,34 @@
+module Main exposing (main)
+
+import Ipe.Io as Io
+import Ipe.String
+
+
+-- Regression: a record literal with a function-typed field, constructed only
+-- inside a let binding with no typed function signature exposing the record
+-- shape, previously triggered IPE-I0001 (internal compiler error). The fix
+-- ensures the struct is registered in the synthesis table regardless of
+-- whether the shape appears in a function signature.
+--
+-- This exercises the retry-shaped repro from the bug report: the five
+-- canonical RetryPolicy field names with a concrete, non-kernel predicate
+-- type (`Int -> Int` for `shouldRetry`, rather than the kernel `e -> Bool`).
+-- The record is valid — the `Arc<dyn Fn>` carrier stores function fields —
+-- and must compile, not ICE.
+
+
+main =
+    let
+        policy =
+            { baseMs = 100
+            , jitter = False
+            , kind = 1
+            , maxAttempts = 3
+            , shouldRetry = \n -> n + 1
+            }
+    in
+    Io.println
+        (String.fromInt policy.maxAttempts
+            ++ ","
+            ++ String.fromInt (policy.shouldRetry policy.baseMs)
+        )
