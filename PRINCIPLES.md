@@ -46,6 +46,13 @@ rules during development and use.
    out-of-bounds index, no integer-overflow abort, no unchecked downcast, no
    UB. Correctness is "the result is right"; soundness is the stronger
    structural guarantee that no input can make the program fall over.
+   **Bounded by construction:** the compiler and the emitted runtime alike
+   refuse work whose size an input dictates without a ceiling — every loop,
+   recursion, and growable buffer has a declared limit. Source nested tens of
+   thousands deep, or a decode of an absurd length, is turned back with a typed
+   limit error before it can exhaust the stack or the heap; a process that
+   instead dies on such input has broken soundness (and, when the input arrives
+   over the network, principle 1's exhaustion clause too).
 4. **Efficiency** — within the bounds of 1–3: no needless allocation or
    cloning, no hot-path recomputation, no O(n²) where O(n) is trivial, small
    binary and memory footprint. Never bought by trading a higher principle.
@@ -75,7 +82,14 @@ Beneath the ranked principles, every design and code pass obeys:
   type-scheme table does not cover MUST be a compile-time error — never a
   silent flexible type variable that defers failure to the downstream Rust
   build. This is fail-closed by construction: with no proof the state is
-  valid, the representable outcome is rejection, not a deferred blowup.
+  valid, the representable outcome is rejection, not a deferred blowup. A
+  value's *role* lives in its type, never in a bare primitive another value of
+  the same shape could stand in for: a message and a key are separate types so
+  neither is passable for the other (as the runtime's crypto roles already
+  are), and a position, a length, and a byte count are kept apart rather than
+  shared as one integer. The swap that would otherwise compile — a secret where
+  a plaintext belongs, a length used as an index — has no representation to
+  begin with.
 - **Fix the structure, not the symptom.** Repair the generative cause — the
   missing invariant, the drifting table, the untyped boundary, the
   special-case that should be a general rule — so the whole defect class
@@ -94,6 +108,13 @@ Beneath the ranked principles, every design and code pass obeys:
   their equality in a test; never hand-sync. SSOT serves the precedence order: a
   one-line duplication caught by a test beats a leaky shared abstraction that
   hurts Correctness or Readability.
+- **Defend in depth.** A security- or soundness-critical invariant is enforced
+  at more than one independent boundary, so no single missed or bypassed check
+  opens the hole. The safe surface never rests its guarantee on one gate: an
+  identifier is validated where it is built AND again where it reaches SQL; the
+  SEAL is re-checked at scheme, lowering, and emit; a row policy filters in the
+  query AND in the database. Enforcing a critical invariant twice is not
+  redundant waste — it is the margin that survives a single mistake.
 
 The ordering says what wins in a conflict; these rules say how to build code
 that doesn't create the conflict.
@@ -108,6 +129,13 @@ generic where a concrete was required — each is a representable-but-illegal
 pipeline state whose symptom is exit-0-then-cargo-fail. Every new acceptance
 path (kernel, scheme, lowering arm, emitter case) fails closed at ipe time,
 never open at cargo time.
+
+Where two constants or two parallel tables must agree — an arity table with its
+callee table, a diagnostic's code family with its prefix letter — assert that
+agreement at build time (a `const` check, a type-level relation) so the instant
+they drift the *build* breaks, not a test that can be skipped nor a cargo error
+two steps downstream. A test guarding the agreement can be deleted; a build that
+refuses to compile cannot.
 
 ### §0 No shortcuts — root cause or honest blocker
 
@@ -133,6 +161,15 @@ tracked blocker**. A green obtained by deleting the red is a FAILURE.
   actually compile and run correctly, not make red rows disappear. When a
   shortcut would satisfy the literal ask but betray that goal, do the harder
   correct thing or surface the tradeoff — never take the shortcut silently.
+
+### Prove the refusals
+
+A suite that exercises only the happy path certifies half a feature. Pin every
+path that must be *rejected* — the malformed input turned away, the fail-closed
+branch taken, the value one step past the last legal one — because those are the
+paths a regression or an attacker walks in on. A rejection that no test drives is
+a rejection one edit away from vanishing unnoticed; the standing check on it is
+what keeps it real.
 
 ### Mechanical enforcement — comply by construction
 
