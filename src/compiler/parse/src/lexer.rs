@@ -129,6 +129,12 @@ pub enum Tok {
     /// character's text (exactly one `char`), so `'\n'` carries a one-character
     /// newline string. The backend renders it as a Rust `char` literal.
     Char(String),
+    /// A doc-comment block `{-| … -}` placed immediately above a top-level
+    /// declaration. The carried [`String`] is the raw body text between the
+    /// `{-|` opener and the `-}` closer (delimiters excluded). Ordinary block
+    /// comments `{- … -}` are discarded by the lexer and never produce this
+    /// token.
+    DocComment(String),
 }
 
 /// A token with its source position.
@@ -222,7 +228,12 @@ impl Lexer {
                 }
                 // Block comment: `{- … -}`, nestable. A `{-` inside a comment
                 // increments the depth; a `-}` decrements it; depth 0 ends.
-                Some('{') if self.peek2() == Some('-') => {
+                // A `{-|` opener is a doc-comment token — leave it for the
+                // main lex loop to emit as [`Tok::DocComment`].
+                Some('{')
+                    if self.peek2() == Some('-')
+                        && self.chars.get(self.pos + 2).map(|&(_, c)| c) != Some('|') =>
+                {
                     let lo = self.offset();
                     self.advance(); // consume `{`
                     self.advance(); // consume `-`
@@ -303,7 +314,12 @@ pub fn lex(src: &str) -> DResult<Vec<Token>> {
         let col = lx.col;
         let lo = lx.offset();
 
-        let kind = if c.is_ascii_digit() {
+        let kind = if c == '{'
+            && lx.peek2() == Some('-')
+            && lx.chars.get(lx.pos + 2).map(|&(_, c)| c) == Some('|')
+        {
+            lex_doc_comment(&mut lx, lo)?
+        } else if c.is_ascii_digit() {
             lex_number(&mut lx, lo)?
         } else if is_ident_start(c) {
             lex_ident(&mut lx)
@@ -324,6 +340,40 @@ pub fn lex(src: &str) -> DResult<Vec<Token>> {
         });
     }
     Ok(out)
+}
+
+/// Lex a doc-comment block `{-| … -}`, consuming the delimiters and returning
+/// the raw body text as [`Tok::DocComment`].
+///
+/// The caller has already confirmed that the three characters at the current
+/// position are `{`, `-`, `|`. Nesting is NOT supported inside doc-comments:
+/// an inner `{-` is treated as ordinary text, matching the Elm convention.
+/// An unterminated doc-comment (no matching `-}` before EOF) is an error.
+fn lex_doc_comment(lx: &mut Lexer, lo: u32) -> DResult<Tok> {
+    lx.advance(); // consume `{`
+    lx.advance(); // consume `-`
+    lx.advance(); // consume `|`
+    let mut body = String::new();
+    loop {
+        match lx.peek() {
+            None => {
+                return Err(Diagnostic::Parse {
+                    span: Span::new(lo, lx.offset()),
+                    msg: ParseError::UnterminatedBlockComment,
+                });
+            }
+            Some('-') if lx.peek2() == Some('}') => {
+                lx.advance(); // consume `-`
+                lx.advance(); // consume `}`
+                break;
+            }
+            Some(c) => {
+                body.push(c);
+                lx.advance();
+            }
+        }
+    }
+    Ok(Tok::DocComment(body))
 }
 
 /// Consume a run of ASCII digits into `out` (zero or more). Each digit advances
