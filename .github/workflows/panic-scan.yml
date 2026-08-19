@@ -3,9 +3,11 @@
 # docs/adr/0037-no-authored-abrupt-failure.md). It lexes rather than greps, so it
 # is free of string/comment false positives and line-split false negatives.
 #
-# Report-only for now (continue-on-error): it prints the residual sites while the
-# exception-ledger burndown lands. Flip continue-on-error to false to make it a
-# hard gate once the residuals are ledgered or eliminated.
+# Hard gate: any banned construct in production Rust fails the run.
+# Triggers on every PR (no paths: filter on the trigger) so that a check-run
+# named "panic-scan" is always produced and can be listed as a required
+# branch-protection check. A dorny/paths-filter step determines whether the
+# heavy work is needed; irrelevant PRs exit green via the no-op step.
 name: panic-scan
 
 on:
@@ -16,10 +18,6 @@ on:
       - 'tools/panic-scan/**'
       - '.github/workflows/panic-scan.yml'
   pull_request:
-    paths:
-      - 'src/**/*.rs'
-      - 'tools/panic-scan/**'
-      - '.github/workflows/panic-scan.yml'
   workflow_dispatch: {}
 
 permissions:
@@ -28,13 +26,27 @@ permissions:
 jobs:
   panic-scan:
     runs-on: ubuntu-latest
-    continue-on-error: true      # report-only until the ledger burndown lands
     steps:
       - uses: actions/checkout@v7
+
+      - uses: dorny/paths-filter@v3
+        id: filter
+        with:
+          filters: |
+            relevant:
+              - 'src/**/*.rs'
+              - 'tools/panic-scan/**'
+              - '.github/workflows/panic-scan.yml'
+
       - uses: dtolnay/rust-toolchain@stable
+        if: steps.filter.outputs.relevant == 'true'
+
       - name: Build the scanner
+        if: steps.filter.outputs.relevant == 'true'
         run: cargo build --release --manifest-path tools/panic-scan/Cargo.toml
+
       - name: Scan production Rust (skips /tests/, /templates/, and #[cfg(test)])
+        if: steps.filter.outputs.relevant == 'true'
         run: |
           # `.rs` under src/ (the runtime lives at src/runtime/), excluding
           # integration-test crates and the emitted-program templates (scanned
@@ -42,3 +54,7 @@ jobs:
           # skips these segments too; the find prune just keeps the list small.
           mapfile -t files < <(find src -name '*.rs' -not -path '*/tests/*' -not -path '*/templates/*')
           tools/panic-scan/target/release/panic-scan "${files[@]}"
+
+      - name: No panic-scan-relevant paths changed
+        if: steps.filter.outputs.relevant != 'true'
+        run: echo "No panic-scan-relevant paths changed; gate is a no-op for this PR."
