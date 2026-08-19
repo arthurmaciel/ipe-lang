@@ -8025,8 +8025,7 @@ pub mod web {
         fs::write(&readable, "module Main exposing (main)\n").expect("write Main");
         let unreadable = src.join("Locked.ipe");
         fs::write(&unreadable, "module Locked exposing ()\n").expect("write Locked");
-        fs::set_permissions(&unreadable, fs::Permissions::from_mode(0o000))
-            .expect("chmod 000");
+        fs::set_permissions(&unreadable, fs::Permissions::from_mode(0o000)).expect("chmod 000");
 
         let manifest_path = dir.join("ipe.toml");
         fs::write(&manifest_path, "[project]\nname = \"test\"\n").expect("write manifest");
@@ -8037,16 +8036,12 @@ pub mod web {
         let _ = fs::set_permissions(&unreadable, fs::Permissions::from_mode(0o644));
         let _ = fs::remove_dir_all(&dir);
 
-        match result {
-            Err(CliError::Io { path, .. }) => {
-                assert_eq!(path, unreadable, "Io error must name the unreadable path");
-            }
-            Ok(sources) => panic!(
-                "expected Err(CliError::Io) for unreadable module, got Ok with {} sources",
-                sources.len()
-            ),
-            Err(other) => panic!("expected CliError::Io, got: {other:?}"),
-        }
+        // Must be `Err(CliError::Io)` naming the unreadable path — never an
+        // `Ok` partial scan and never a different error variant.
+        assert!(
+            matches!(&result, Err(CliError::Io { path, .. }) if path == &unreadable),
+            "expected Err(CliError::Io) naming {unreadable:?}, got: {result:?}"
+        );
     }
 
     /// A manifest project where every module is readable must return `Ok` with
@@ -8070,16 +8065,11 @@ pub mod web {
         let result = user_sources_for_unsafe_scan(Some(&manifest_path), &entry);
         let _ = fs::remove_dir_all(&dir);
 
-        match result {
-            Ok(sources) => {
-                assert!(
-                    sources.len() >= 2,
-                    "must return a source for every readable module, got {}",
-                    sources.len()
-                );
-            }
-            Err(e) => panic!("expected Ok for all-readable project, got: {e:?}"),
-        }
+        // Every module readable ⇒ `Ok` carrying a source for each.
+        assert!(
+            matches!(&result, Ok(sources) if sources.len() >= 2),
+            "expected Ok with a source for every readable module, got: {result:?}"
+        );
     }
 
     /// Single-file fallback: when `collect_entry_and_siblings` fails and the
@@ -8102,15 +8092,11 @@ pub mod web {
         let _ = fs::set_permissions(&entry, fs::Permissions::from_mode(0o644));
         let _ = fs::remove_dir_all(&dir);
 
-        match result {
-            Err(CliError::Io { path, .. }) => {
-                assert_eq!(path, entry, "Io error must name the entry path");
-            }
-            Ok(sources) => panic!(
-                "expected Err(CliError::Io) for unreadable entry, got Ok with {} sources",
-                sources.len()
-            ),
-            Err(other) => panic!("expected CliError::Io, got: {other:?}"),
-        }
+        // Must be `Err(CliError::Io)` naming the unreadable entry — never an
+        // `Ok` empty scan and never a different error variant.
+        assert!(
+            matches!(&result, Err(CliError::Io { path, .. }) if path == &entry),
+            "expected Err(CliError::Io) naming {entry:?}, got: {result:?}"
+        );
     }
 }

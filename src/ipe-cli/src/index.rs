@@ -1175,8 +1175,10 @@ mod tests {
         // unsafe-acknowledgment scan. `read_to_string(…).ok()` silently drops
         // unreadable modules so they never reach the acknowledgment gate; every
         // read in a security scan must propagate errors, not swallow them.
-        // This guardrail covers index.rs (unlike the read_entry guardrail above,
-        // whose helper body self-triggers on its own string literals).
+        // The scan covers index.rs's own production code: it reads only each
+        // file's pre-`#[cfg(test)]` region, so the guardrail bodies below
+        // (which mention the banned substrings as string literals) never
+        // self-trigger.
         let src_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
         let mut violations = Vec::new();
         collect_read_to_string_ok_violations(&src_dir, &mut violations);
@@ -1185,6 +1187,26 @@ mod tests {
             "fail-open read_to_string collapse detected — propagate the error instead:\n{}",
             violations.join("\n")
         );
+    }
+
+    /// The number of production lines to scan in a source file: everything up
+    /// to (but not including) the first `#[cfg(test)]` attribute. Both guardrails
+    /// enforce a *production* invariant — a fail-open collapse in shipped code —
+    /// so scanning only the production region (a) covers this file's own
+    /// production `read_entry` without the test-module guardrail bodies
+    /// self-triggering on their `.contains("read_entry(")` string literals, and
+    /// (b) never false-flags a `read_entry(x).ok()` written legitimately inside
+    /// another file's test code.
+    ///
+    /// Relies on the crate convention that `#[cfg(test)]` items sit at the end of
+    /// each file (a trailing `mod tests`, or a test-only helper below the
+    /// production body); code above the first such attribute is production. The
+    /// guardrail is defense-in-depth — the load-bearing guarantee is the fallible
+    /// `Result` signature the call sites `?`-propagate.
+    fn production_line_count(text: &str) -> usize {
+        text.lines()
+            .position(|l| l.trim_start().starts_with("#[cfg(test)]"))
+            .unwrap_or_else(|| text.lines().count())
     }
 
     fn collect_ssot_violations(dir: &std::path::Path, out: &mut Vec<String>) {
@@ -1196,19 +1218,11 @@ mod tests {
             if path.is_dir() {
                 collect_ssot_violations(&path, out);
             } else if path.extension().and_then(|e| e.to_str()) == Some("rs") {
-                // Skip this file itself: the guardrail helper body contains
-                // the banned pattern strings as string literals, which would
-                // self-trigger. The absence of the collapse pattern in index.rs
-                // is verified by the structural fix (read_entry_lookup replaces
-                // read_entry at both security call sites above).
-                let stem = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
-                if stem == "index.rs" {
-                    continue;
-                }
                 let Ok(text) = std::fs::read_to_string(&path) else {
                     continue;
                 };
-                for (i, line) in text.lines().enumerate() {
+                let prod = production_line_count(&text);
+                for (i, line) in text.lines().take(prod).enumerate() {
                     let trimmed = line.trim();
                     // Skip pure comment lines.
                     if trimmed.starts_with("//") {
@@ -1234,16 +1248,11 @@ mod tests {
             if path.is_dir() {
                 collect_read_to_string_ok_violations(&path, out);
             } else if path.extension().and_then(|e| e.to_str()) == Some("rs") {
-                // Skip this file: the helper body contains the banned substrings
-                // as pattern variables, which would self-trigger.
-                let stem = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
-                if stem == "index.rs" {
-                    continue;
-                }
                 let Ok(text) = std::fs::read_to_string(&path) else {
                     continue;
                 };
-                for (i, line) in text.lines().enumerate() {
+                let prod = production_line_count(&text);
+                for (i, line) in text.lines().take(prod).enumerate() {
                     let trimmed = line.trim();
                     // Skip pure comment lines.
                     if trimmed.starts_with("//") {
@@ -1257,7 +1266,8 @@ mod tests {
                     if trimmed.contains("read_to_string") && trimmed.contains("filter_map") {
                         out.push(format!("{}:{}: {}", path.display(), i + 1, trimmed));
                     }
-                    if trimmed.contains("read_to_string(") && trimmed.contains(".ok().into_iter()") {
+                    if trimmed.contains("read_to_string(") && trimmed.contains(".ok().into_iter()")
+                    {
                         out.push(format!("{}:{}: {}", path.display(), i + 1, trimmed));
                     }
                 }
