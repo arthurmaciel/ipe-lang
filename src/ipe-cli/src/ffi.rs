@@ -1581,31 +1581,14 @@ fn collect_dependency_tables(value: &toml::Value, out: &mut BTreeSet<String>) {
 /// the caller's concern (it holds the inspection document): under `--verbose` a
 /// caller emits the raw log via [`emit_raw_inspector_log`] before this summary.
 fn ffi_build_error(diag: ipe_ffi::diag::Diagnostic) -> CliError {
-    use ipe_ffi::diag::Diagnostic as D;
-    match diag {
-        // Pkg-config missing system library: emit a formatted message that
-        // names the library, the crate, the install hint, and the
-        // PKG_CONFIG_PATH escape hatch.
-        D::SystemLibraryNotFound {
-            system_lib,
-            crate_name,
-            install_hint,
-        } => CliError::Resolve(format!(
-            "IPE-F4415: crate `{crate_name}` needs the system library \
-             `{system_lib}`, which pkg-config cannot find.\n\
-             \n\
-             Install hint: {install_hint}\n\
-             \n\
-             If the library is in a non-standard location, set PKG_CONFIG_PATH \
-             before re-running:\n\
-             \n\
-             \x20 PKG_CONFIG_PATH=/usr/local/lib/pkgconfig ipe rust add {crate_name}\n\
-             \n\
-             Run `ipe explain IPE-F4415` for more detail."
-        )),
-        // All other failures: show the summarised diagnostic. The full raw log is
-        // available via `emit_raw_inspector_log` under `--verbose` at the caller.
-        other => CliError::Resolve(other.to_string()),
+    // Convert the FFI diagnostic into the shared typed currency and route it
+    // through the single pipeline renderer. Both text and `--format json` now
+    // use the same path as every P/N/T/L diagnostic.
+    let shared: ipe_diagnostics::Diagnostic = diag.into();
+    CliError::Pipeline {
+        file: PathBuf::new(),
+        src: String::new(),
+        diag: Box::new(shared),
     }
 }
 
@@ -3806,7 +3789,7 @@ version = \"1\"
     fn build_failure_does_not_trigger_usage_help() {
         // A build/inspection failure must not be wrapped into CliError::Usage*
         // (which `with_help_on_misuse` converts to CommandUsage + help page).
-        // The `Resolve` variant passes through unchanged, so no help is shown.
+        // The `Pipeline` variant (typed diagnostic) never triggers usage help.
         let diag = ipe_ffi::diag::Diagnostic::WireMalformed {
             context: "crate `bevy`".to_owned(),
             defect: ipe_ffi::diag::WireDefect::Json {
@@ -3815,8 +3798,8 @@ version = \"1\"
         };
         let err = ffi_build_error(diag);
         assert!(
-            matches!(err, CliError::Resolve(_)),
-            "build failure must produce CliError::Resolve, got {err:?}"
+            matches!(err, CliError::Pipeline { .. }),
+            "build failure must produce CliError::Pipeline (typed diagnostic), got {err:?}"
         );
     }
 

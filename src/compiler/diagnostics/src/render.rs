@@ -31,10 +31,10 @@ use core::fmt::Write as _;
 
 use crate::code::{ISSUE_TRACKER_URL, Severity, title};
 use crate::diagnostic::{
-    AppShape, Applicability, CaseDefect, CodecAutoRejection, Diagnostic, Expected, ExpectedSet,
-    ExposingDefect, Feature, HeaderDefect, HelpLine, Hint, IfDefect, LetDefect, LowerError,
-    NameError, ParseError, SealRejection, SpanRole, Suggestion, TokenKind, TyDoc, TypeDeclDefect,
-    TypeError,
+    AppShape, Applicability, CaseDefect, CodecAutoRejection, ConsentError, Diagnostic, Expected,
+    ExpectedSet, ExposingDefect, Feature, FfiError, HeaderDefect, HelpLine, Hint, IfDefect,
+    LetDefect, LowerError, NameError, ParseError, SandboxError, SealRejection, SpanRole,
+    Suggestion, TokenKind, TyDoc, TypeDeclDefect, TypeError,
 };
 use crate::span::Span;
 
@@ -235,6 +235,69 @@ fn prose_band(d: &Diagnostic) -> String {
             "Something went wrong inside the compiler while working on your code — this \
              is my mistake, not yours."
                 .to_string()
+        }
+        Diagnostic::Ffi { msg } => ffi_prose(msg),
+        Diagnostic::Sandbox { msg } => sandbox_prose(msg),
+        Diagnostic::Consent { msg } => consent_prose(msg),
+    }
+}
+
+/// The prose band for an FFI-generator diagnostic.
+fn ffi_prose(msg: &FfiError) -> String {
+    match msg {
+        FfiError::CallUnrenderable { function, detail } => {
+            format!("The foreign call for `{function}` cannot be rendered as valid Rust: {detail}.")
+        }
+        FfiError::GenericNotBindable { callee, detail } => {
+            format!("The generic FFI call `{callee}` cannot be soundly bound: {detail}.")
+        }
+        FfiError::WireMalformed { context, detail } => {
+            format!("The inspection data for `{context}` is malformed: {detail}.")
+        }
+        FfiError::ShapeContradiction { function, flags } => format!(
+            "`{function}` declares contradictory shape flags at once: {}.",
+            flags.join(" + ")
+        ),
+        FfiError::SourceRejected { source, detail } => {
+            format!("The crate source `{source}` was rejected at the security gate: {detail}.")
+        }
+        FfiError::ArtifactIo { path, detail } => {
+            format!("The FFI cache artifact `{path}` could not be accessed: {detail}.")
+        }
+        FfiError::AssertedRefused { path, detail } => {
+            format!("The asserted foreign call `{path}` was refused: {detail}.")
+        }
+        FfiError::SystemLibraryNotFound {
+            system_lib,
+            crate_name,
+            install_hint,
+        } => format!(
+            "Crate `{crate_name}` needs the system library `{system_lib}`, \
+             which pkg-config cannot find. {install_hint}."
+        ),
+    }
+}
+
+/// The prose band for a sandbox diagnostic.
+fn sandbox_prose(msg: &SandboxError) -> String {
+    match msg {
+        SandboxError::BuildJail { detail } => format!(
+            "No isolation jail could be established for compiling the untrusted crate: {detail}."
+        ),
+        SandboxError::RunJail { detail } => format!(
+            "No runtime jail could be established around the capability-bearing program: {detail}."
+        ),
+    }
+}
+
+/// The prose band for a consent-gate diagnostic.
+fn consent_prose(msg: &ConsentError) -> String {
+    match msg {
+        ConsentError::NonInteractive { body } => {
+            format!("{body}This is a non-interactive build — it will not prompt.")
+        }
+        ConsentError::InteractiveDenied { body } => {
+            format!("{body}The unsafe escape-hatch imports were not acknowledged — build stopped.")
         }
     }
 }
@@ -1044,7 +1107,10 @@ fn primary_label(d: &Diagnostic) -> Option<String> {
         Diagnostic::Name { msg, .. } => name_label(msg),
         Diagnostic::Type { msg, .. } => type_label(msg),
         Diagnostic::Lower { msg, .. } => Some(lower_label(msg)),
-        Diagnostic::CompilerBug { .. } => None,
+        Diagnostic::CompilerBug { .. }
+        | Diagnostic::Ffi { .. }
+        | Diagnostic::Sandbox { .. }
+        | Diagnostic::Consent { .. } => None,
     }
 }
 

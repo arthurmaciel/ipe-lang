@@ -35,7 +35,7 @@ use std::collections::BTreeSet;
 use std::ffi::{OsStr, OsString};
 use std::path::{Path, PathBuf};
 
-use ipe_diagnostics::{Code, IPE_F4413};
+use ipe_diagnostics::{Code, Diagnostic as SharedDiag, IPE_F4413, SandboxError};
 use ipe_kernels::Capability;
 
 // The seccomp program is the Linux (x86_64 or aarch64) lowering of the
@@ -877,38 +877,50 @@ impl RunJailDefect {
     }
 }
 
-impl std::fmt::Display for RunJailDefect {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let code = self.code().as_str();
-        match self {
-            Self::PrimitiveUnavailable { missing } => write!(
-                f,
-                "{code}: cannot establish a runtime jail around the app — missing {} — refusing \
-                 to run a capability-bearing program unconfined; install bubblewrap (bwrap) and \
+impl From<RunJailDefect> for SandboxError {
+    fn from(d: RunJailDefect) -> Self {
+        let detail = match &d {
+            RunJailDefect::PrimitiveUnavailable { missing } => format!(
+                "cannot establish a runtime jail around the app — missing {} — refusing to run \
+                 a capability-bearing program unconfined; install bubblewrap (bwrap) and \
                  util-linux (prlimit)",
                 missing.join(", ")
             ),
-            Self::UnsupportedPlatform { reason } => write!(
-                f,
-                "{code}: no runtime jail can be built on this platform ({reason}); refusing to run \
-                 a native-capability program unconfined"
+            RunJailDefect::UnsupportedPlatform { reason } => format!(
+                "no runtime jail can be built on this platform ({reason}); refusing to run a \
+                 native-capability program unconfined"
             ),
-            Self::Profile(e) => write!(f, "{code}: {e}"),
-            Self::Spawn { detail } => {
-                write!(f, "{code}: failed to spawn the jailed app: {detail}")
+            RunJailDefect::Profile(e) => e.to_string(),
+            RunJailDefect::Spawn { detail } => {
+                format!("failed to spawn the jailed app: {detail}")
             }
-            Self::MountFailed { target, detail } => write!(
-                f,
-                "{code}: could not establish the jail-root mount at {} ({detail}); refusing to \
-                 run the untrusted payload against an incompletely-mounted root",
+            RunJailDefect::MountFailed { target, detail } => format!(
+                "could not establish the jail-root mount at {} ({detail}); refusing to run the \
+                 untrusted payload against an incompletely-mounted root",
                 target.display()
             ),
-            Self::ProfileWeakerThanFloor => write!(
-                f,
-                "{code}: the artifact's ipe.profile requests less isolation than the capability \
-                 floor embedded in the binary — refusing to run under a weakened profile"
-            ),
+            RunJailDefect::ProfileWeakerThanFloor => {
+                "the artifact's ipe.profile requests less isolation than the capability floor \
+                 embedded in the binary — refusing to run under a weakened profile"
+                    .to_owned()
+            }
+        };
+        Self::RunJail { detail }
+    }
+}
+
+impl From<RunJailDefect> for SharedDiag {
+    fn from(d: RunJailDefect) -> Self {
+        Self::Sandbox {
+            msg: SandboxError::from(d),
         }
+    }
+}
+
+impl std::fmt::Display for RunJailDefect {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let shared: SharedDiag = self.clone().into();
+        f.write_str(&ipe_diagnostics::render(&shared, "", ""))
     }
 }
 
