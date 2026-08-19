@@ -2017,6 +2017,7 @@ dependencies = [
  "ipe_canon",
  "ipe_db",
  "ipe_diagnostics",
+ "ipe_docs",
  "ipe_ffi",
  "ipe_intern",
  "ipe_ir",

@@ -45,6 +45,13 @@ const YELLOW: &str = "\x1b[33;1m";
 const BLUE: &str = "\x1b[34;1m";
 const RESET: &str = "\x1b[0m";
 
+/// The CLI verb that looks up diagnostic codes and teaching pages.
+///
+/// Every diagnostic footer and help-line that points a reader at a lookup
+/// derives from this one constant so renaming the command requires a single
+/// change here.
+pub const DOC_HINT_CMD: &str = "ipe doc";
+
 /// Render a diagnostic against its source file.
 ///
 /// `file` is the path shown in the location line; `source` is its full contents,
@@ -179,7 +186,7 @@ pub fn render(d: &Diagnostic, file: &str, source: &str) -> String {
     // reaches for `ipe explain` only after reading the message above.
     out.push('\n');
     out.push_str(&paint(color, severity_color(severity), code.as_str()));
-    let _ = write!(out, " · run `ipe explain {}`", code.as_str());
+    let _ = write!(out, " · run `{DOC_HINT_CMD} {}`", code.as_str());
     out.push('\n');
 
     out
@@ -246,7 +253,7 @@ fn prose_band(d: &Diagnostic) -> String {
                  \n\
                  {detail}\n\
                  \n\
-                 Check your connection and try again. Run `ipe explain IPE-E0001` for more help."
+                 Check your connection and try again. Run `{DOC_HINT_CMD} IPE-E0001` for more help."
             )
         }
     }
@@ -733,7 +740,7 @@ pub fn plain_message(d: &Diagnostic, source: &str) -> String {
     }
     let _ = write!(
         out,
-        "\nnote: run `ipe explain {}` for more information",
+        "\nnote: run `{DOC_HINT_CMD} {}` for more information",
         code.as_str()
     );
     out
@@ -878,7 +885,7 @@ pub fn render_json(d: &Diagnostic, file: &str, source: &str) -> String {
     let secondaries_json = format!("[{}]", secondary_json_parts.join(","));
     let hints_json = format!("[{}]", hint_json_parts.join(","));
     let suggestions_json = format!("[{}]", suggestion_json_parts.join(","));
-    let explain_ref = json_str(&format!("ipe explain {}", code.as_str()));
+    let explain_ref = json_str(&format!("{DOC_HINT_CMD} {}", code.as_str()));
 
     format!(
         "{{\"code\":{},\"severity\":{},\"title\":{},\"message\":{},\
@@ -1710,9 +1717,9 @@ fn help_text(line: &HelpLine) -> Option<String> {
         // the render footer, but this arm keeps `help_text` total over `HelpLine`.
         HelpLine::Suggest(s) => Some(format!("help: replace with `{}`", s.replacement)),
         HelpLine::SecondarySpan { .. } => None,
-        HelpLine::SeeExplain(topic) => {
-            Some(format!("help: → run `ipe explain {topic}` to learn more"))
-        }
+        HelpLine::SeeExplain(topic) => Some(format!(
+            "help: → run `{DOC_HINT_CMD} {topic}` to learn more"
+        )),
     }
 }
 
@@ -2222,7 +2229,7 @@ mod tests {
             "underline:\n{out}"
         );
         assert!(
-            out.contains("IPE-T0001 · run `ipe explain IPE-T0001`"),
+            out.contains("IPE-T0001 · run `ipe doc IPE-T0001`"),
             "code footer:\n{out}"
         );
         // No ANSI in the non-tty test environment.
@@ -2292,7 +2299,7 @@ mod tests {
             "detail surfaced:\n{out}"
         );
         assert!(out.contains("= note: this is a bug in Ipe, please report it"));
-        assert!(out.contains("IPE-I0001 · run `ipe explain IPE-I0001`"));
+        assert!(out.contains("IPE-I0001 · run `ipe doc IPE-I0001`"));
         let _ = IPE_I0001;
     }
 
@@ -2332,10 +2339,7 @@ mod tests {
         };
         let out = render(&d2, "empty.ipe", "");
         assert!(out.starts_with("-- TYPE MISMATCH "), "{out}");
-        assert!(
-            out.contains("IPE-T0001 · run `ipe explain IPE-T0001`"),
-            "{out}"
-        );
+        assert!(out.contains("IPE-T0001 · run `ipe doc IPE-T0001`"), "{out}");
     }
 
     #[test]
@@ -2424,7 +2428,7 @@ mod tests {
         );
         assert!(
             out.trim_end()
-                .ends_with("IPE-T0011 · run `ipe explain IPE-T0011`"),
+                .ends_with("IPE-T0011 · run `ipe doc IPE-T0011`"),
             "code footer last:\n{out}"
         );
         assert!(!out.contains('\x1b'), "plain in tests:\n{out}");
@@ -2645,7 +2649,7 @@ mod tests {
         // The demoted code footer, carrying the explain pointer, is last.
         assert!(
             out.trim_end()
-                .ends_with("IPE-I0001 · run `ipe explain IPE-I0001`"),
+                .ends_with("IPE-I0001 · run `ipe doc IPE-I0001`"),
             "code footer last:\n{out}"
         );
     }
@@ -2734,7 +2738,7 @@ mod tests {
             "byte_hi must be 15: {json:?}"
         );
         assert!(
-            trimmed.contains("\"explain_ref\":\"ipe explain IPE-T0001\""),
+            trimmed.contains("\"explain_ref\":\"ipe doc IPE-T0001\""),
             "explain_ref must name the code: {json:?}"
         );
     }

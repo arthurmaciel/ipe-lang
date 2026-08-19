@@ -2556,6 +2556,12 @@ pub fn run_cli(args: &[String]) -> Result<(), CliError> {
             attempted: String::new(),
         });
     };
+    // `ipe explain` has been folded into `ipe doc`. Print a pointer and
+    // forward to `run_explain` so existing scripts keep working with a
+    // deprecation notice rather than a hard failure.
+    if cmd == "explain" {
+        return with_help_on_misuse("doc", run_explain(rest));
+    }
     // One registry drives both dispatch and help: a command runs exactly when it
     // is described, so the two cannot drift. The handler carries the canonical
     // static name its misuse `--help` page keys on. Version is the `version`
@@ -4180,121 +4186,22 @@ fn cargo_target_directory(crate_dir: &Path) -> Result<PathBuf, CliError> {
         })
 }
 
-/// `ipe explain [list|<query>]` — unified teaching interface.
+/// `ipe explain` has been folded into `ipe doc`.
 ///
-/// Three entry shapes, all accepting `--json` / `--plain`:
-/// - `ipe explain` — friendly overview.
-/// - `ipe explain list [kind]` — browse the page index; `--list` is a
-///   deprecated alias that still works.
-/// - `ipe explain <query>` — exact or fuzzy lookup across all kinds.
-pub(crate) fn run_explain(rest: &[String]) -> Result<(), CliError> {
-    let stdout = std::io::stdout();
-
-    // Strip `--list` deprecated alias before format parsing so it does not
-    // confuse the positional parser.
-    let rest_no_list_flag: Vec<String>;
-    let (rest_to_parse, legacy_list) = if rest.iter().any(|a| a == "--list") {
-        rest_no_list_flag = rest
-            .iter()
-            .filter(|a| a.as_str() != "--list")
-            .cloned()
-            .collect();
-        (&rest_no_list_flag[..], true)
-    } else {
-        (rest, false)
-    };
-
-    let (format, positional) = cli_args::split_format(rest_to_parse, "explain")?;
-
-    // `ipe explain list [kind]` — both via subcommand and `--list` alias.
-    let is_list_cmd = positional.first().is_some_and(|a| *a == "list");
-    if is_list_cmd || legacy_list {
-        if legacy_list {
-            // Deprecation notice on stderr; does not fail.
-            eprintln!("note: `ipe explain --list` is deprecated — use `ipe explain list` instead");
-        }
-        // Optional kind filter as second positional after `list`.
-        let kind_arg = if is_list_cmd {
-            positional.get(1).copied()
-        } else {
-            positional.first().copied()
-        };
-        let kind_filter = match kind_arg {
-            None => None,
-            Some("error-codes" | "error-code") => Some(explain::PageKind::ErrorCode),
-            Some("syntax") => Some(explain::PageKind::Syntax),
-            Some("topics" | "topic") => Some(explain::PageKind::Topic),
-            Some(other) => {
-                return Err(CliError::UsageOwned(format!(
-                    "ipe explain list: unknown kind `{other}` \
-                     (valid: error-codes, syntax, topics)"
-                )));
-            }
-        };
-        print!(
-            "{}",
-            explain::render_list(format, kind_filter.as_ref(), &stdout)
-        );
-        return Ok(());
-    }
-
-    // `ipe explain` with no positional — overview.
-    if positional.is_empty() {
-        print!("{}", explain::render_overview(format, &stdout));
-        return Ok(());
-    }
-
-    // `ipe explain <query>` — resolve across all kinds.
-    let query = positional.first().copied().unwrap_or("");
-
-    // Extra positional tokens are not allowed.
-    if positional.len() > 1 {
-        let extra = positional.get(1).copied().unwrap_or("");
-        return Err(cli_args::usage_unexpected_argument("explain", extra));
-    }
-
-    let (exact, matches) = explain::resolve(query);
-
-    match format {
-        cli_args::OutputFormat::Json => {
-            print!(
-                "{}",
-                explain::render_query_json(query, exact.as_ref(), &matches)
-            );
-        }
-        cli_args::OutputFormat::Plain => {
-            if let Some(page) = &exact {
-                // Plain rendering: body without ANSI, no gutter/frame.
-                print!("{}", page.body);
-                if !page.body.ends_with('\n') {
-                    println!();
-                }
-            } else if matches.is_empty() {
-                eprintln!("ipe explain: no page found for `{query}`");
-                return Err(CliError::UsageOwned(format!(
-                    "no explain page found for `{query}`"
-                )));
-            } else {
-                // Plain chooser: one candidate per line.
-                for m in &matches {
-                    println!("{}\t{}\t{}", m.id, m.kind.label(), m.title);
-                }
-            }
-        }
-        cli_args::OutputFormat::Human => {
-            let p = style::Palette::for_stream(&stdout);
-            if let Some(page) = &exact {
-                print!("{}", style::frame(&style::gutter(&page.render_human(p))));
-            } else if matches.is_empty() {
-                return Err(CliError::UsageOwned(format!(
-                    "no explain page found for `{query}`"
-                )));
-            } else {
-                print!("{}", explain::render_chooser(query, &matches, p));
-            }
-        }
-    }
-    Ok(())
+/// Invoking `ipe explain` emits a pointer to `ipe doc` and returns a usage
+/// error so the dispatcher shows the `ipe doc` help page. The command is no
+/// longer advertised; the COMMANDS registry entry was removed.
+pub(crate) fn run_explain(_rest: &[String]) -> Result<(), CliError> {
+    Err(CliError::UsageOwned(
+        "`ipe explain` has moved: use `ipe doc <key>` instead\n\
+         \n\
+         Examples:\n\
+           ipe doc IPE-L0107   look up a diagnostic code\n\
+           ipe doc case        look up a language construct\n\
+           ipe doc List.map    look up a stdlib symbol\n\
+           ipe doc version     look up a command"
+            .to_owned(),
+    ))
 }
 
 /// `ipe fix <path>` — apply machine-applicable fixes to the source file.

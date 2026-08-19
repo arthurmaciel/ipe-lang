@@ -130,7 +130,7 @@ fn pipeline_error_renders_with_code_and_explain_pointer() {
         "rendered error must carry its code in the footer, got:\n{rendered}"
     );
     assert!(
-        rendered.contains("ipe explain"),
-        "rendered error must point at `ipe explain`, got:\n{rendered}"
+        rendered.contains("ipe doc"),
+        "rendered error must point at `ipe doc`, got:\n{rendered}"
     );
 }
