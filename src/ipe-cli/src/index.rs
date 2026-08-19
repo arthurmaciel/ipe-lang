@@ -75,7 +75,7 @@ impl std::fmt::Display for SourceUrl {
     }
 }
 
-/// A validated commit identifier accepted by the package index.
+/// An injection-safe requested ref: what the author typed in their manifest.
 ///
 /// Accepts full commit hashes, abbreviated hashes, ref names, and `HEAD` —
 /// anything git itself accepts — as long as the value is not injection-shaped.
@@ -83,6 +83,10 @@ impl std::fmt::Display for SourceUrl {
 /// helper), whitespace or control characters, git refspec metacharacters
 /// (`..`, `~`, `^`, `:`, `?`, `*`, `[`, `\`, `@{`), and a trailing `/` or
 /// `.lock` (path-confusion vectors).
+///
+/// A `CommitId` is the REQUEST spelling — what to check out. It is deliberately
+/// distinct from [`PinnedRev`], which holds only the resolved immutable SHA
+/// recorded in the lockfile or index entry.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct CommitId(String);
 
@@ -141,6 +145,92 @@ impl std::fmt::Display for CommitId {
     }
 }
 
+/// An immutable, resolved commit SHA pinned in a lockfile or index entry.
+///
+/// The only inhabitants are 40-char lowercase-hex strings produced by resolving
+/// a ref against a real git object. A moving ref (`HEAD`, `main`, a tag) cannot
+/// inhabit this type — it must first be resolved to a concrete SHA via
+/// [`PinnedRev::resolve_in_checkout`] (write path) or re-parsed from a stored
+/// value via [`PinnedRev::from_full_sha`] (read path).
+///
+/// This is the recorded-pin type. [`CommitId`] is the distinct request type
+/// (what the author typed; may be a branch).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PinnedRev(String);
+
+impl PinnedRev {
+    /// Parse a stored rev from a lockfile or index entry, accepting only a
+    /// 40-char lowercase-hex SHA.
+    ///
+    /// A stored non-SHA value (e.g. a legacy `"HEAD"` or `"main"`) is a hard
+    /// error — fail closed rather than re-fetching a moving tip. Re-run
+    /// `ipe add` to record an immutable SHA for the dependency.
+    ///
+    /// # Errors
+    /// [`CliError::Resolve`] when `raw` is not a 40-char lowercase-hex string.
+    pub fn from_full_sha(pkg: &str, raw: &str) -> Result<Self, CliError> {
+        // Require exactly 40 lowercase hex chars — no uppercase, no short hashes.
+        let is_sha = raw.len() == 40 && raw.chars().all(|c| matches!(c, '0'..='9' | 'a'..='f'));
+        if !is_sha {
+            return Err(CliError::Resolve(format!(
+                "package `{pkg}`: recorded `rev` is not an immutable commit SHA \
+                 (expected 40 lowercase hex chars), got: {raw:?} — re-run `ipe add` \
+                 to record an immutable pin"
+            )));
+        }
+        Ok(Self(raw.to_owned()))
+    }
+
+    /// Resolve a requested ref to a concrete commit SHA by running
+    /// `git rev-parse --verify --quiet <ref>^{{commit}}` inside `checkout`.
+    ///
+    /// This is the single WRITE-path site that collapses any ref — including the
+    /// default `HEAD` — to a concrete, immutable SHA before it is recorded.
+    ///
+    /// # Errors
+    /// [`CliError::Resolve`] when git cannot be run, when the ref does not
+    /// resolve to a commit, or when the output is not a 40-hex SHA.
+    pub fn resolve_in_checkout(
+        pkg: &str,
+        checkout: &std::path::Path,
+        requested: &CommitId,
+    ) -> Result<Self, CliError> {
+        let refspec = format!("{}^{{commit}}", requested.as_str());
+        let output = std::process::Command::new("git")
+            .args(["rev-parse", "--verify", "--quiet", &refspec])
+            .current_dir(checkout)
+            .output()
+            .map_err(|e| {
+                CliError::Resolve(format!(
+                    "package `{pkg}`: could not run `git rev-parse`: {e}"
+                ))
+            })?;
+        if !output.status.success() {
+            return Err(CliError::Resolve(format!(
+                "package `{pkg}`: `git rev-parse --verify {refspec}` failed — \
+                 ref {:?} does not resolve to a commit in the fetched checkout",
+                requested.as_str()
+            )));
+        }
+        let raw = String::from_utf8_lossy(&output.stdout);
+        let sha = raw.trim();
+        Self::from_full_sha(pkg, sha)
+    }
+
+    /// The pinned SHA string, suitable for use as a cache-dir key or for
+    /// writing to the lockfile or index entry.
+    #[must_use]
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl std::fmt::Display for PinnedRev {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
 /// A parsed index entry: one package and every version published for it.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct IndexEntry {
@@ -157,16 +247,17 @@ pub struct IndexEntry {
 /// revision, the content hash to verify the fetched tree against, and the
 /// capabilities the publisher declared.
 ///
-/// `source` and `rev` are typed ([`SourceUrl`] and [`CommitId`]) so an
-/// unvalidated publisher-controlled string can never reach the `git` subprocess.
+/// `source` is a [`SourceUrl`] and `rev` is a [`PinnedRev`] — typed newtypes
+/// that prevent an unvalidated or moving ref from reaching the `git` subprocess
+/// or being written to the lockfile.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct EntryVersion {
     /// The exact published version.
     pub version: semver::Version,
     /// The source repository URL, validated at parse time.
     pub source: SourceUrl,
-    /// The pinned commit hash, validated at parse time.
-    pub rev: CommitId,
+    /// The immutable commit SHA pinned at publish time.
+    pub rev: PinnedRev,
     /// The sha256 of the source tree at `rev`. A fetched tree is trusted only
     /// when its hash equals this (verify-before-trust, in `crate::resolve`).
     pub sha256: String,
@@ -474,10 +565,10 @@ impl RawVersion {
         let raw_source = self.source.ok_or_else(|| missing("source"))?;
         let raw_rev = self.rev.ok_or_else(|| missing("rev"))?;
         let sha256 = self.sha256.ok_or_else(|| missing("sha256"))?;
-        // Parse-don't-validate: the typed constructors reject any value outside
-        // the allow-list before it can reach `git`.
+        // Parse-don't-validate: typed constructors reject invalid values at
+        // the read boundary before any value can reach `git`.
         let source = SourceUrl::parse(name, &raw_source)?;
-        let rev = CommitId::parse(name, &raw_rev)?;
+        let rev = PinnedRev::from_full_sha(name, &raw_rev)?;
         let capabilities = parse_capabilities(name, self.capabilities.as_deref())?;
         Ok(EntryVersion {
             version,
@@ -529,12 +620,11 @@ fn unquote(value: &str) -> &str {
 
 #[cfg(test)]
 mod tests {
-    use super::{CommitId, IndexEntry, SourceUrl, read_entry, resolve_version};
+    use super::{CommitId, IndexEntry, PinnedRev, SourceUrl, read_entry, resolve_version};
     use ipe_ir::Capability;
     use std::path::{Path, PathBuf};
 
-    /// A 40-char lowercase hex placeholder rev used across fixtures. Full-length
-    /// SHA-1 format, as required by [`CommitId`].
+    /// A 40-char lowercase hex placeholder rev used across fixtures.
     const FIXTURE_REV: &str = "a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2";
 
     /// Write a minimal fixture index with one package publishing the given
@@ -967,6 +1057,100 @@ mod tests {
             "Unreadable must map to Err (fail closed) in absent_or_err, got Ok"
         );
         let _ = std::fs::remove_dir_all(&root);
+    }
+
+    // --- PinnedRev type tests (test plan E) ---
+
+    #[test]
+    fn pinned_rev_rejects_moving_refs() {
+        // Moving refs cannot inhabit PinnedRev; CommitId still accepts them
+        // (the request role is deliberately distinct from the pin role).
+        assert!(
+            CommitId::parse("p", "HEAD").is_ok(),
+            "CommitId must accept HEAD as a request ref"
+        );
+        assert!(
+            CommitId::parse("p", "main").is_ok(),
+            "CommitId must accept branch names as request refs"
+        );
+        assert!(
+            PinnedRev::from_full_sha("p", "HEAD").is_err(),
+            "PinnedRev must reject HEAD"
+        );
+        assert!(
+            PinnedRev::from_full_sha("p", "main").is_err(),
+            "PinnedRev must reject branch names"
+        );
+        assert!(
+            PinnedRev::from_full_sha("p", "v1.0").is_err(),
+            "PinnedRev must reject tag names"
+        );
+        // Length boundary: 39 and 41 chars must be rejected.
+        let short = "a".repeat(39);
+        let long = "a".repeat(41);
+        assert!(
+            PinnedRev::from_full_sha("p", &short).is_err(),
+            "39-char hex must be rejected"
+        );
+        assert!(
+            PinnedRev::from_full_sha("p", &long).is_err(),
+            "41-char hex must be rejected"
+        );
+        // Non-hex characters must be rejected even at length 40.
+        let nonhex = format!("{}g", "a".repeat(39));
+        assert!(
+            PinnedRev::from_full_sha("p", &nonhex).is_err(),
+            "non-hex char must be rejected"
+        );
+        // Uppercase is rejected — the stored form must be lowercase hex.
+        let upper = "A".repeat(40);
+        assert!(
+            PinnedRev::from_full_sha("p", &upper).is_err(),
+            "uppercase hex must be rejected"
+        );
+        // A valid 40-char lowercase hex string must be accepted.
+        assert!(
+            PinnedRev::from_full_sha("p", FIXTURE_REV).is_ok(),
+            "40-char lowercase hex must be accepted"
+        );
+    }
+
+    // --- Entry reader refuses non-SHA rev (test plan F) ---
+
+    #[test]
+    fn entry_reader_refuses_nonsha_rev() {
+        // An index entry with a non-SHA rev is rejected at parse time.
+        let root = temp_dir("nonsha-rev");
+        let packages = root.join("packages");
+        std::fs::create_dir_all(&packages).expect("packages dir");
+        std::fs::write(
+            packages.join("badpin.toml"),
+            "publisher = \"tester\"\n\n[[version]]\nversion = \"1.0.0\"\n\
+             source = \"https://example.invalid/badpin\"\nrev = \"main\"\n\
+             sha256 = \"00\"\ncapabilities = []\n",
+        )
+        .expect("write entry");
+        let err = read_entry(&root, "badpin").unwrap_err();
+        let msg = format!("{err}");
+        assert!(msg.contains("rev"), "{msg}");
+        assert!(msg.contains("immutable"), "{msg}");
+        let _ = std::fs::remove_dir_all(&root);
+
+        // Also verify a legacy "HEAD" stored rev is refused.
+        let root2 = temp_dir("head-rev");
+        let packages2 = root2.join("packages");
+        std::fs::create_dir_all(&packages2).expect("packages dir");
+        std::fs::write(
+            packages2.join("headpin.toml"),
+            "publisher = \"tester\"\n\n[[version]]\nversion = \"1.0.0\"\n\
+             source = \"https://example.invalid/headpin\"\nrev = \"HEAD\"\n\
+             sha256 = \"00\"\ncapabilities = []\n",
+        )
+        .expect("write entry");
+        let err2 = read_entry(&root2, "headpin").unwrap_err();
+        let msg2 = format!("{err2}");
+        assert!(msg2.contains("rev"), "{msg2}");
+        let _ = std::fs::remove_dir_all(&root2);
     }
 
     #[test]

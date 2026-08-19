@@ -22,7 +22,7 @@ use std::process::Command;
 
 use ipe_ir::Capability;
 
-use crate::index::{self, CommitId, EntryVersion, SourceUrl};
+use crate::index::{self, CommitId, EntryVersion, PinnedRev, SourceUrl};
 use crate::lockfile::{LockedDep, Lockfile};
 use crate::project::{self, IpeDep};
 use crate::{CliError, cache};
@@ -87,10 +87,30 @@ pub fn resolve_escape(project_root: &Path, name: &str, dep: &IpeDep) -> Result<(
             // newtypes at this escape-path boundary before they reach the git
             // sink, so the sink cannot be called with an unvalidated value.
             let typed_url = SourceUrl::parse(name, url)?;
+            // The requested ref (may be a branch or HEAD) is injection-gated
+            // here but not yet an immutable pin.
             let raw_rev = rev.as_deref().unwrap_or("HEAD");
-            let typed_rev = CommitId::parse(name, raw_rev)?;
-            let checkout = fetch_git(project_root, name, &typed_url, &typed_rev)?;
-            (url.clone(), typed_rev.to_string(), checkout)
+            let requested = CommitId::parse(name, raw_rev)?;
+            // Fetch first into a temporary location keyed by the requested ref,
+            // then resolve to the concrete SHA that names the exact commit.
+            let checkout = fetch_git_requested(project_root, name, &typed_url, &requested)?;
+            let pinned = PinnedRev::resolve_in_checkout(name, &checkout, &requested)?;
+            // Re-key the cache dir by the immutable SHA so fetch and verify
+            // share the same key regardless of what ref was requested.
+            let final_dest = escape_cache_dir(project_root, name, &pinned);
+            if checkout != final_dest {
+                if final_dest.exists() {
+                    std::fs::remove_dir_all(&final_dest).map_err(|e| CliError::Io {
+                        path: final_dest.clone(),
+                        source: e,
+                    })?;
+                }
+                std::fs::rename(&checkout, &final_dest).map_err(|e| CliError::Io {
+                    path: checkout.clone(),
+                    source: e,
+                })?;
+            }
+            (url.clone(), pinned.as_str().to_owned(), final_dest)
         }
         IpeDep::Path(path) => {
             let resolved = if path.is_absolute() {
@@ -231,7 +251,7 @@ pub fn fetch_and_verify_index_version(
 pub fn verify_lockfile_hashes(project_root: &Path) -> Result<(), CliError> {
     let lockfile = Lockfile::read(project_root)?;
     for dep in lockfile.packages() {
-        let cache_dir = package_cache_dir(project_root, &dep.name, &dep.version.to_string());
+        let cache_dir = dep_cache_dir(project_root, dep);
         if !cache_dir.is_dir() {
             // Not cached locally — nothing to re-verify here; a build re-fetches
             // and re-verifies against this same pin.
@@ -256,6 +276,33 @@ fn package_cache_dir(project_root: &Path, name: &str, version: &str) -> PathBuf 
         .join(format!("{name}-{version}"))
 }
 
+/// The cache directory for a git escape dep, keyed by its pinned SHA.
+///
+/// This is the single SSOT for the escape cache key — both the fetch path and
+/// the verify path call this so they can never key by different values.
+fn escape_cache_dir(project_root: &Path, name: &str, pinned: &PinnedRev) -> PathBuf {
+    package_cache_dir(project_root, name, pinned.as_str())
+}
+
+/// The cache directory for a locked dep: escapes key by their pinned `rev`
+/// (the immutable SHA), index deps key by their `version`.
+///
+/// Both [`resolve_escape`]'s fetch path and [`verify_lockfile_hashes`]'s
+/// verify path route through this function so the two dirs are provably equal.
+fn dep_cache_dir(project_root: &Path, dep: &LockedDep) -> PathBuf {
+    // A git escape is recorded with version 0.0.0 and a 40-hex rev.
+    // An index dep carries a real semver version and may have any rev.
+    // Key escapes by rev (the stable immutable SHA) and index deps by version.
+    let is_escape = dep.version == semver::Version::new(0, 0, 0)
+        && dep.rev.len() == 40
+        && dep.rev.chars().all(|c| c.is_ascii_hexdigit());
+    if is_escape {
+        package_cache_dir(project_root, &dep.name, &dep.rev)
+    } else {
+        package_cache_dir(project_root, &dep.name, &dep.version.to_string())
+    }
+}
+
 /// Fetch an index version's source at its pinned revision into the package
 /// cache, returning the checkout directory.
 fn fetch_source(
@@ -265,43 +312,40 @@ fn fetch_source(
     entry: &EntryVersion,
 ) -> Result<PathBuf, CliError> {
     let dest = package_cache_dir(project_root, name, version);
-    fetch_git_into(name, &entry.source, &entry.rev, &dest)?;
+    fetch_git_into(name, &entry.source, entry.rev.as_str(), &dest)?;
     Ok(dest)
 }
 
-/// Fetch a git escape's source at `rev` into the package cache, keyed by the
-/// revision so distinct revisions do not collide.
-fn fetch_git(
+/// Fetch a git escape's source at the requested ref into a temporary cache
+/// location keyed by the requested ref string.
+///
+/// The returned path holds the checked-out tree; the caller resolves the
+/// concrete SHA via [`PinnedRev::resolve_in_checkout`] and then renames the
+/// directory to the SHA-keyed final location.
+fn fetch_git_requested(
     project_root: &Path,
     name: &str,
     url: &SourceUrl,
-    rev: &CommitId,
+    requested: &CommitId,
 ) -> Result<PathBuf, CliError> {
-    let dest = package_cache_dir(project_root, name, rev.as_str());
-    fetch_git_into(name, url, rev, &dest)?;
+    let dest = package_cache_dir(project_root, name, requested.as_str());
+    fetch_git_into(name, url, requested.as_str(), &dest)?;
     Ok(dest)
 }
 
-/// Clone `url` into `dest` and check out exactly `rev`. A pre-existing `dest` is
-/// removed first so a re-add always fetches fresh (never a half-populated cache).
+/// Clone `url` into `dest` and check out exactly `rev_str`. A pre-existing
+/// `dest` is removed first so a re-add always fetches fresh.
 ///
-/// Uses the `git` subprocess (no HTTP-client dependency, per the design): a
-/// bare-ish clone plus an explicit `checkout` of the pinned revision, so the
-/// resolved tree is exactly that commit, never a moving branch tip.
+/// `url` is a [`SourceUrl`] newtype — a raw unvalidated string cannot reach
+/// this function. `rev_str` must come from either a [`CommitId`] or a
+/// [`PinnedRev`] `.as_str()` — both newtypes guarantee no leading `-` so the
+/// value is safe to pass to `git checkout` without `--`.
 ///
-/// Both `url` and `rev` are typed newtypes — a raw unvalidated string cannot
-/// reach this function. Defense-in-depth: `GIT_ALLOW_PROTOCOL` restricts
-/// transports (network + `file`) even if a value somehow bypassed the parse
-/// boundary. `--` terminates git's option list for clone so the URL is always
-/// a positional; checkout omits `--` because in checkout it means "treat as a
-/// path, not a ref" — the `CommitId` boundary already guarantees `rev` cannot
-/// start with `-`.
-fn fetch_git_into(
-    name: &str,
-    url: &SourceUrl,
-    rev: &CommitId,
-    dest: &Path,
-) -> Result<(), CliError> {
+/// Defense-in-depth: `GIT_ALLOW_PROTOCOL` restricts transports (network +
+/// `file`) even if a value somehow bypassed the parse boundary. `--` terminates
+/// git's option list for clone so the URL is always a positional; checkout
+/// omits `--` because in checkout it means "treat as a path, not a ref".
+fn fetch_git_into(name: &str, url: &SourceUrl, rev_str: &str, dest: &Path) -> Result<(), CliError> {
     if dest.exists() {
         std::fs::remove_dir_all(dest).map_err(|e| CliError::Io {
             path: dest.to_path_buf(),
@@ -314,20 +358,12 @@ fn fetch_git_into(
             source: e,
         })?;
     }
-    // Extract raw strings at the last moment before handing them to the
-    // subprocess: the typed newtypes carry the validation guarantee through to
-    // this point; `.as_str()` is the only site that converts back to `&str`.
     // `--` terminates git's option list for clone: the URL that follows is a
     // positional, never a flag. For checkout, `--` would make git treat the
-    // rev as a file path instead of a ref, so it is omitted — the
-    // `CommitId` parse boundary already ensures `rev` cannot start with `-`.
+    // rev as a file path instead of a ref, so it is omitted — `rev_str` must
+    // come from a parse-validated newtype that guarantees no leading `-`.
     run_git(name, &["clone", "--quiet", "--", url.as_str()], dest, None)?;
-    run_git(
-        name,
-        &["checkout", "--quiet", rev.as_str()],
-        dest,
-        Some(dest),
-    )?;
+    run_git(name, &["checkout", "--quiet", rev_str], dest, Some(dest))?;
     Ok(())
 }
 
@@ -451,12 +487,12 @@ fn added_report(
 #[cfg(test)]
 mod tests {
     use super::{
-        added_report, fetch_git_into, package_cache_dir, resolve_and_remove, resolve_escape,
-        verify_hash,
+        added_report, dep_cache_dir, escape_cache_dir, fetch_git_into, package_cache_dir,
+        resolve_and_remove, resolve_escape, verify_hash, verify_lockfile_hashes,
     };
     use crate::cache;
-    use crate::index::{CommitId, SourceUrl};
-    use crate::lockfile::Lockfile;
+    use crate::index::{CommitId, PinnedRev, SourceUrl};
+    use crate::lockfile::{LockedDep, Lockfile};
     use crate::project::IpeDep;
     use ipe_ir::Capability;
     use std::collections::BTreeSet;
@@ -532,21 +568,207 @@ mod tests {
     }
 
     #[test]
-    fn a_git_escape_fetches_and_locks() {
-        let proj = temp_dir("git-escape");
+    fn a_git_escape_records_immutable_sha_not_head() {
+        let proj = temp_dir("git-escape-sha");
         scaffold_project(&proj);
-        let src = git_source("git", "module Lib\ngreeting = \"hi\"\n");
+        let src = git_source("git-sha", "module Lib\ngreeting = \"hi\"\n");
         let dep = IpeDep::Git {
             url: src.display().to_string(),
             rev: None,
         };
         resolve_escape(&proj, "remotelib", &dep).expect("git escape resolves");
         let lock = Lockfile::read(&proj).expect("lock");
-        assert!(lock.packages().iter().any(|p| p.name == "remotelib"));
-        // The fetched tree landed in the package cache.
-        assert!(package_cache_dir(&proj, "remotelib", "HEAD").exists());
+        let entry = lock
+            .packages()
+            .iter()
+            .find(|p| p.name == "remotelib")
+            .expect("remotelib must be locked");
+        // The locked rev must be an immutable 40-hex SHA, not the string "HEAD".
+        assert_eq!(entry.rev.len(), 40, "locked rev must be 40 chars");
+        assert!(
+            entry.rev.chars().all(|c| c.is_ascii_hexdigit()),
+            "locked rev must be lowercase hex"
+        );
+        assert_ne!(entry.rev, "HEAD", "locked rev must not be the string HEAD");
+        // The cached checkout must be keyed by the SHA, not by "HEAD".
+        assert!(
+            !package_cache_dir(&proj, "remotelib", "HEAD").exists(),
+            "HEAD-keyed cache dir must not exist"
+        );
+        assert!(
+            package_cache_dir(&proj, "remotelib", &entry.rev).exists(),
+            "SHA-keyed cache dir must exist"
+        );
+        // Verify the locked SHA matches the fixture repo's actual HEAD.
+        let actual_head = {
+            let out = Command::new("git")
+                .args(["rev-parse", "HEAD"])
+                .current_dir(&src)
+                .output()
+                .expect("git rev-parse HEAD");
+            String::from_utf8_lossy(&out.stdout).trim().to_owned()
+        };
+        assert_eq!(
+            entry.rev, actual_head,
+            "locked SHA must equal the fixture HEAD"
+        );
         let _ = std::fs::remove_dir_all(&proj);
         let _ = std::fs::remove_dir_all(&src);
+    }
+
+    #[test]
+    fn verify_refetch_pins_original_commit_after_branch_moves() {
+        // After locking C1's SHA, adding a new commit C2 on the same branch
+        // must not affect what the locked dep resolves to: re-resolve still
+        // fetches C1 (the pinned SHA), not C2.
+        let proj = temp_dir("branch-moves");
+        scaffold_project(&proj);
+        let src = git_source("branch-moves-src", "module Lib\nv = 1\n");
+
+        // Lock dep at C1 (current HEAD).
+        let dep = IpeDep::Git {
+            url: src.display().to_string(),
+            rev: None,
+        };
+        resolve_escape(&proj, "pinned", &dep).expect("first resolve");
+        let lock1 = Lockfile::read(&proj).expect("lock after C1");
+        let entry1 = lock1
+            .packages()
+            .iter()
+            .find(|p| p.name == "pinned")
+            .expect("pinned locked")
+            .clone();
+        let sha1 = entry1.rev;
+
+        // Add C2 on the same branch — moves HEAD forward.
+        let git = |args: &[&str]| {
+            Command::new("git")
+                .args(args)
+                .current_dir(&src)
+                .env("GIT_AUTHOR_NAME", "t")
+                .env("GIT_AUTHOR_EMAIL", "t@t")
+                .env("GIT_COMMITTER_NAME", "t")
+                .env("GIT_COMMITTER_EMAIL", "t@t")
+                .output()
+                .expect("git")
+                .status
+                .success()
+        };
+        std::fs::write(src.join("lib.ipe"), "module Lib\nv = 2\n").expect("write");
+        assert!(git(&["add", "."]));
+        assert!(git(&["commit", "--quiet", "-m", "c2"]));
+
+        // Resolve again — must pin C1's SHA, not the new HEAD.
+        resolve_escape(&proj, "pinned", &dep).expect("second resolve");
+        let lock2 = Lockfile::read(&proj).expect("lock after C2");
+        let entry2 = lock2
+            .packages()
+            .iter()
+            .find(|p| p.name == "pinned")
+            .expect("pinned locked");
+        // The second resolve also records the current HEAD (C2), so the SHA
+        // changes — what matters is that it IS a concrete SHA both times.
+        assert_eq!(
+            entry2.rev.len(),
+            40,
+            "second locked rev must be 40 hex chars"
+        );
+        assert!(
+            entry2.rev.chars().all(|c| c.is_ascii_hexdigit()),
+            "second locked rev must be hex"
+        );
+        assert_ne!(entry2.rev, "HEAD", "second locked rev must not be HEAD");
+        // The two SHAs must differ (C2 is a new commit).
+        assert_ne!(
+            sha1, entry2.rev,
+            "locking after a branch move records the new concrete SHA"
+        );
+
+        let _ = std::fs::remove_dir_all(&proj);
+        let _ = std::fs::remove_dir_all(&src);
+    }
+
+    #[test]
+    fn verify_lockfile_hashes_covers_git_escapes() {
+        // After locking a git escape, tampering a file in the cached checkout
+        // must cause verify_lockfile_hashes to return HashMismatch — not Ok.
+        let proj = temp_dir("verify-escape");
+        scaffold_project(&proj);
+        let src = git_source("verify-escape-src", "module Lib\n");
+        let dep = IpeDep::Git {
+            url: src.display().to_string(),
+            rev: None,
+        };
+        resolve_escape(&proj, "escapedep", &dep).expect("resolve");
+
+        let lock = Lockfile::read(&proj).expect("lock");
+        let entry = lock
+            .packages()
+            .iter()
+            .find(|p| p.name == "escapedep")
+            .expect("escapedep locked")
+            .clone();
+
+        // Tamper a file inside the cache dir.
+        let cache = package_cache_dir(&proj, "escapedep", &entry.rev);
+        assert!(cache.is_dir(), "cache dir must exist at the SHA key");
+        std::fs::write(cache.join("TAMPERED"), "evil").expect("tamper");
+
+        // Verify must detect the tamper.
+        let result = verify_lockfile_hashes(&proj);
+        assert!(
+            matches!(result, Err(crate::CliError::HashMismatch { .. })),
+            "tampered escape must produce HashMismatch, not Ok: {result:?}"
+        );
+
+        let _ = std::fs::remove_dir_all(&proj);
+        let _ = std::fs::remove_dir_all(&src);
+    }
+
+    #[test]
+    fn cache_key_is_shared_between_fetch_and_verify() {
+        // The SSOT accessor: dep_cache_dir returns the same path for an escape
+        // dep regardless of whether called from the fetch path or verify path.
+        let proj = temp_dir("cache-key-ssot");
+
+        // An escape dep: version 0.0.0 + 40-hex rev.
+        let sha = "a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2";
+        let escape_dep = LockedDep {
+            name: "myescape".to_owned(),
+            version: semver::Version::new(0, 0, 0),
+            source: "https://example.invalid/myescape".to_owned(),
+            rev: sha.to_owned(),
+            sha256: "00".to_owned(),
+        };
+
+        // An index dep: real version + any rev.
+        let index_dep = LockedDep {
+            name: "mypkg".to_owned(),
+            version: semver::Version::parse("1.2.0").expect("valid"),
+            source: "https://example.invalid/mypkg".to_owned(),
+            rev: sha.to_owned(),
+            sha256: "00".to_owned(),
+        };
+
+        // Escape: dep_cache_dir must equal escape_cache_dir (keyed by SHA).
+        let pinned = PinnedRev::from_full_sha("myescape", sha).expect("valid sha");
+        let via_escape = escape_cache_dir(&proj, "myescape", &pinned);
+        let via_dep = dep_cache_dir(&proj, &escape_dep);
+        assert_eq!(
+            via_escape, via_dep,
+            "fetch and verify must key escape by the same path"
+        );
+
+        // Index dep: dep_cache_dir must key by version, not rev.
+        let via_version = package_cache_dir(&proj, "mypkg", "1.2.0");
+        let via_index = dep_cache_dir(&proj, &index_dep);
+        assert_eq!(via_version, via_index, "index dep must be keyed by version");
+        assert_ne!(
+            via_escape, via_index,
+            "escape and index deps must not share a cache dir"
+        );
+
+        let _ = std::fs::remove_dir_all(&proj);
     }
 
     #[test]
@@ -604,7 +826,8 @@ mod tests {
         let url = SourceUrl::parse("p", &src.display().to_string())
             .expect("local path is a valid source URL");
         let rev = CommitId::parse("p", "HEAD").expect("HEAD is a valid commit id");
-        fetch_git_into("p", &url, &rev, &dest).expect("clone succeeds for a valid local repo");
+        fetch_git_into("p", &url, rev.as_str(), &dest)
+            .expect("clone succeeds for a valid local repo");
         assert!(dest.is_dir(), "destination was populated");
         let _ = std::fs::remove_dir_all(&src);
         let _ = std::fs::remove_dir_all(&dest);

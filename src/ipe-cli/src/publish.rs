@@ -21,7 +21,7 @@ use std::process::{Command, Stdio};
 use crate::scratch::{ScratchDir, ScratchFile};
 
 use crate::CliError;
-use crate::index::{self, CommitId, EntryVersion, IndexEntry, SourceUrl};
+use crate::index::{self, CommitId, EntryVersion, IndexEntry, PinnedRev, SourceUrl};
 use crate::project::{self, ProjectManifest};
 
 /// A publish refusal: a typed reason publish declined to proceed.
@@ -281,18 +281,32 @@ fn compute_entry_version(
         ))
     })?;
 
-    // The revision is pinned exactly. An explicit `--rev` is taken as-is (the
-    // caller asserts it is immutable); otherwise it is the committed HEAD, which
-    // publish insists is clean and pushed so the pinned bytes are reproducible.
-    let raw_rev = match rev_override {
-        Some(r) => r.to_owned(),
-        None => committed_pushed_head(source_root)?,
+    // The revision is pinned as an immutable commit SHA. The default path runs
+    // `committed_pushed_head` which already calls `git rev-parse HEAD` and
+    // returns a full SHA; the override path resolves the given ref to a SHA
+    // so branch names or tags are pinned to their current commit, never stored
+    // as moving refs.
+    let rev = if let Some(r) = rev_override {
+        // Injection-gate the requested ref before passing it to git.
+        let requested = CommitId::parse(&manifest.name, r).map_err(|e| {
+            CliError::UsageOwned(format!(
+                "ipe package publish: the revision is not accepted — {e}"
+            ))
+        })?;
+        let raw_sha = resolve_rev_to_sha(source_root, requested.as_str())?;
+        PinnedRev::from_full_sha(&manifest.name, &raw_sha).map_err(|e| {
+            CliError::UsageOwned(format!(
+                "ipe package publish: `--rev` resolved to a non-SHA: {e}"
+            ))
+        })?
+    } else {
+        let raw_sha = committed_pushed_head(source_root)?;
+        PinnedRev::from_full_sha(&manifest.name, &raw_sha).map_err(|e| {
+            CliError::UsageOwned(format!(
+                "ipe package publish: HEAD did not resolve to a full SHA: {e}"
+            ))
+        })?
     };
-    let rev = CommitId::parse(&manifest.name, &raw_rev).map_err(|e| {
-        CliError::UsageOwned(format!(
-            "ipe package publish: the revision is not accepted — {e}"
-        ))
-    })?;
 
     let sha256 = crate::resolve::hash_source_tree(source_root)?;
     let capabilities = crate::infer_package_capabilities(&manifest_path_of(source_root))?;
@@ -325,6 +339,27 @@ fn committed_pushed_head(source_root: &Path) -> Result<String, CliError> {
     } else {
         Err(refuse(Refusal::UnpushedHead { rev: head }))
     }
+}
+
+/// Resolve an arbitrary git ref to the full 40-hex SHA of its commit object.
+///
+/// Runs `git rev-parse --verify <ref>^{commit}` in `root`. A branch name,
+/// tag, or short hash resolves to its underlying commit SHA; a full SHA
+/// passes through. Returns a resolve error when the ref does not exist.
+///
+/// # Errors
+/// [`CliError::Resolve`] when `git` cannot be run or the ref does not resolve.
+fn resolve_rev_to_sha(root: &Path, rev: &str) -> Result<String, CliError> {
+    let refspec = format!("{rev}^{{commit}}");
+    let out = run_git_capture(root, &["rev-parse", "--verify", "--quiet", &refspec])?.ok_or_else(
+        || {
+            CliError::Resolve(format!(
+                "ipe package publish: `git rev-parse --verify {refspec}` failed — \
+                     ref {rev:?} does not resolve to a commit"
+            ))
+        },
+    )?;
+    Ok(out.trim().to_owned())
 }
 
 /// The `ipe.toml` path for a project root.
@@ -900,8 +935,11 @@ mod tests {
             version: semver::Version::parse(v).expect("valid version"),
             source: SourceUrl::parse("http-extras", "https://github.com/arthurmaciel/http-extras")
                 .expect("valid source url"),
-            rev: CommitId::parse("http-extras", "9f2c7b1e0a4d5c6f8b2a1e3d4c5b6a7f8e9d0c1b")
-                .expect("valid commit id"),
+            rev: PinnedRev::from_full_sha(
+                "http-extras",
+                "9f2c7b1e0a4d5c6f8b2a1e3d4c5b6a7f8e9d0c1b",
+            )
+            .expect("valid pinned rev"),
             sha256: "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855".to_owned(),
             capabilities: caps_set,
         }
@@ -1256,5 +1294,144 @@ mod tests {
             classify(201, &empty),
             "Failed:201 response missing html_url"
         );
+    }
+
+    // --- Helpers shared by tests G and H ---
+
+    fn make_git_repo(tag: &str, content: &str) -> PathBuf {
+        let sd = crate::scratch::ScratchDir::new(&format!("ipe-publish-test-{tag}"))
+            .expect("scratch dir");
+        let repo = sd.path().to_path_buf();
+        std::mem::forget(sd);
+        let git = |args: &[&str]| {
+            Command::new("git")
+                .args(args)
+                .current_dir(&repo)
+                .env("GIT_AUTHOR_NAME", "t")
+                .env("GIT_AUTHOR_EMAIL", "t@t")
+                .env("GIT_COMMITTER_NAME", "t")
+                .env("GIT_COMMITTER_EMAIL", "t@t")
+                .output()
+                .expect("git")
+                .status
+                .success()
+        };
+        assert!(git(&["init", "--quiet"]));
+        std::fs::write(repo.join("lib.ipe"), content).expect("write");
+        assert!(git(&["add", "."]));
+        assert!(git(&["commit", "--quiet", "-m", "seed"]));
+        // Add a fake remote so git_rev_is_pushed can succeed.
+        let remote = {
+            let sd2 = crate::scratch::ScratchDir::new(&format!("ipe-publish-remote-{tag}"))
+                .expect("scratch dir");
+            let p = sd2.path().to_path_buf();
+            std::mem::forget(sd2);
+            p
+        };
+        assert!(
+            Command::new("git")
+                .args(["init", "--bare", "--quiet"])
+                .arg(&remote)
+                .output()
+                .expect("git init bare")
+                .status
+                .success()
+        );
+        assert!(git(&[
+            "remote",
+            "add",
+            "origin",
+            &remote.display().to_string()
+        ]));
+        assert!(git(&["push", "--quiet", "origin", "HEAD:main"]));
+        repo
+    }
+
+    fn head_sha(repo: &Path) -> String {
+        let out = Command::new("git")
+            .args(["rev-parse", "HEAD"])
+            .current_dir(repo)
+            .output()
+            .expect("git rev-parse HEAD");
+        String::from_utf8_lossy(&out.stdout).trim().to_owned()
+    }
+
+    // --- Test G: publish pins SHAs ---
+
+    #[test]
+    fn publish_default_head_is_sha() {
+        let repo = make_git_repo("pub-head", "module Lib\n");
+        let expected_sha = head_sha(&repo);
+        // resolve_rev_to_sha on HEAD must return the same 40-hex SHA.
+        let sha = resolve_rev_to_sha(&repo, "HEAD").expect("rev-parse HEAD");
+        assert_eq!(
+            sha, expected_sha,
+            "resolve_rev_to_sha must return the HEAD SHA"
+        );
+        assert_eq!(sha.len(), 40, "SHA must be 40 chars");
+        assert!(
+            sha.chars().all(|c| c.is_ascii_hexdigit()),
+            "SHA must be hex"
+        );
+        // PinnedRev::from_full_sha must accept it.
+        assert!(
+            PinnedRev::from_full_sha("lib", &sha).is_ok(),
+            "HEAD SHA must be accepted by PinnedRev"
+        );
+        let _ = std::fs::remove_dir_all(&repo);
+    }
+
+    #[test]
+    fn publish_rev_override_resolves_to_sha() {
+        let repo = make_git_repo("pub-rev-override", "module Lib\n");
+        // Create a branch "feat" pointing at the same commit.
+        assert!(
+            Command::new("git")
+                .args(["checkout", "-b", "feat"])
+                .current_dir(&repo)
+                .output()
+                .expect("git checkout")
+                .status
+                .success()
+        );
+        let expected_sha = head_sha(&repo);
+        // resolve_rev_to_sha with "feat" must return the commit SHA, not "feat".
+        let sha = resolve_rev_to_sha(&repo, "feat").expect("rev-parse feat");
+        assert_eq!(
+            sha, expected_sha,
+            "feat branch must resolve to its commit SHA"
+        );
+        assert_ne!(sha, "feat", "must not record the branch name as the pin");
+        assert_eq!(sha.len(), 40);
+        assert!(sha.chars().all(|c| c.is_ascii_hexdigit()));
+        let _ = std::fs::remove_dir_all(&repo);
+    }
+
+    // --- Test H: render_entry_version round-trips a PinnedRev entry ---
+
+    #[test]
+    fn render_entry_version_round_trips_sha_rev() {
+        let root = temp_dir("render-roundtrip");
+        let packages = root.join("packages");
+        std::fs::create_dir_all(&packages).expect("packages dir");
+
+        let version = sample_version("2.0.0", caps(&[Capability::Network]));
+        let toml = render_entry("mylib", "arthurmaciel", std::slice::from_ref(&version));
+        std::fs::write(packages.join("mylib.toml"), &toml).expect("write entry");
+
+        let parsed = index::read_entry(&root, "mylib").expect("entry parses");
+        let only = parsed.versions.first().expect("one version");
+        // The rev must round-trip byte-for-byte.
+        assert_eq!(
+            only.rev.as_str(),
+            version.rev.as_str(),
+            "rev must round-trip through render/read unchanged"
+        );
+        assert_eq!(only.rev.as_str().len(), 40, "round-tripped rev is 40 chars");
+        assert!(
+            only.rev.as_str().chars().all(|c| c.is_ascii_hexdigit()),
+            "round-tripped rev is lowercase hex"
+        );
+        let _ = std::fs::remove_dir_all(&root);
     }
 }
