@@ -2247,6 +2247,9 @@ dependencies = [
 name = "ipe_kernels"
 version = "0.1.66"
 dependencies = [
+ "ipe_intern",
+ "ipe_parse",
+ "ipe_syntax",
  "serde",
  "strum",
 ]
