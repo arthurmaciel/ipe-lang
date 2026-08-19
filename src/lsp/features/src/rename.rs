@@ -41,20 +41,8 @@ const fn ident_continue(c: char) -> bool {
 /// one of these is still rejected because renaming to a keyword produces
 /// un-parseable source.
 const KEYWORDS: &[&str] = &[
-    "module",
-    "import",
-    "exposing",
-    "as",
-    "type",
-    "case",
-    "of",
-    "let",
-    "in",
-    "if",
-    "then",
-    "else",
+    "module", "import", "exposing", "as", "type", "case", "of", "let", "in", "if", "then", "else",
     "do",
-    "doParallel",
 ];
 
 // ── Case class ───────────────────────────────────────────────────────────────

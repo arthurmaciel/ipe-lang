@@ -82,7 +82,6 @@ const fn tok_kind(t: &Tok) -> TokenKind {
         Tok::Then => TokenKind::Then,
         Tok::Else => TokenKind::Else,
         Tok::Do => TokenKind::Do,
-        Tok::DoParallel => TokenKind::DoParallel,
         Tok::LParen => TokenKind::LParen,
         Tok::RParen => TokenKind::RParen,
         Tok::LBrace => TokenKind::LBrace,
@@ -1226,9 +1225,6 @@ impl<'a> Parser<'a> {
         if self.peek_kind() == Some(&Tok::Do) {
             return self.parse_do(threshold, depth + 1);
         }
-        if self.peek_kind() == Some(&Tok::DoParallel) {
-            return self.parse_do_parallel(threshold, depth + 1);
-        }
         if self.peek_kind() == Some(&Tok::Backslash) {
             return self.parse_lambda(threshold, depth + 1);
         }
@@ -2201,7 +2197,28 @@ impl<'a> Parser<'a> {
 
     /// Fold the parsed statements into the `Task.andThen` chain (see
     /// [`Self::parse_do`]). The block must end in a result expression.
+    ///
+    /// A block whose only non-trailing statements are `=` pure-let bindings
+    /// (no `<-` bind, no bare-run step) is stepless: pure code dressed as `do`.
+    /// That is rejected with [`ParseError::SteplessDo`] so authors use
+    /// `let … in` for pure bindings instead.
     fn desugar_do(&mut self, do_span: Span, stmts: Vec<DoStmt>) -> DResult<Expr> {
+        // Stepless-do gate: every statement before the last is `Let`
+        // (pure `=` bind) and there is no `Bind` (`<-`) or inner bare-run.
+        // The last statement, always a `Run`, is the result expression —
+        // its presence alone does not constitute a Task step.
+        let has_task_step = stmts.iter().enumerate().any(|(i, s)| match s {
+            DoStmt::Bind(..) => true,
+            DoStmt::Run(_) if i + 1 < stmts.len() => true,
+            _ => false,
+        });
+        if !has_task_step {
+            return Err(Diagnostic::Parse {
+                span: do_span,
+                msg: ParseError::SteplessDo,
+            });
+        }
+
         let mut rev = stmts.into_iter().rev();
         let Some(last) = rev.next() else {
             return Err(Diagnostic::Parse {
@@ -2289,50 +2306,6 @@ impl<'a> Parser<'a> {
         Ok(Located::new(
             call_span,
             Expr_::Call(Box::new(callee), vec![lam, task]),
-        ))
-    }
-
-    /// Parse a `doParallel` block — aligned same-typed task expressions run
-    /// concurrently, their results collected in order. Desugars to
-    /// `Task.parallel [e1, ..., eN] : Task Error (List a)`. Nest it in a `do`
-    /// (`results <- doParallel …`) to consume the collected list. `Ipe.Task`
-    /// must be in scope as `Task`.
-    fn parse_do_parallel(&mut self, _threshold: u32, depth: u32) -> DResult<Expr> {
-        if depth > MAX_DEPTH {
-            return Err(self.too_deep(Construct::Expression));
-        }
-        let pd_tok = self.bump(Construct::Expression)?;
-        let Some(first) = self.peek() else {
-            return Err(Diagnostic::Parse {
-                span: self.eof_err_span(),
-                msg: ParseError::UnexpectedEof {
-                    construct: Construct::Expression,
-                },
-            });
-        };
-        let block_col = first.col;
-        let mut elems = Vec::new();
-        loop {
-            elems.push(self.parse_expr(block_col, depth + 1)?);
-            if !self
-                .peek()
-                .is_some_and(|t| layout::aligned_at(t, block_col))
-            {
-                break;
-            }
-        }
-        // The synthetic list argument takes a zero-width span at the keyword's
-        // start; the `Task.parallel` reference and the call take the full keyword
-        // span. Distinct (and never an element's), so the post-order parent
-        // `Call` cannot overwrite the list's `List` region type.
-        let list_span = Span::new(pd_tok.span.lo, pd_tok.span.lo);
-        let list = Located::new(list_span, Expr_::List(elems));
-        let task_mod = self.interner.intern("Task")?;
-        let parallel = self.interner.intern("parallel")?;
-        let callee = Located::new(pd_tok.span, Expr_::VarQual(task_mod, parallel));
-        Ok(Located::new(
-            pd_tok.span,
-            Expr_::Call(Box::new(callee), vec![list]),
         ))
     }
 

@@ -180,6 +180,8 @@ code! {
     IPE_P0063 = "IPE-P0063", "invalid path literal", "IPE-P0063";
     /// a bare `_` as the whole `let` binding pattern binds nothing and is not allowed
     IPE_P0064 = "IPE-P0064", "bare `_` as a whole `let` binding pattern is not allowed", "IPE-P0064";
+    /// a `do` block with no Task steps — use `let … in` for pure bindings
+    IPE_P0065 = "IPE-P0065", "a `do` block must contain at least one Task step", "IPE-P0065";
 
     // -----------------------------------------------------------------------
     // Name resolution (IPE-N####)

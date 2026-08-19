@@ -22,19 +22,19 @@ import Ipe.Io as Io
 --
 -- The `do` block below IS that chain — read top-to-bottom instead of nested.
 main =
+    let version = "1.4.0" in
     do
-        version = "1.4.0"                        -- `=`  : a pure value, no effect
         Io.println ("Preflight for v" ++ version)   -- bare : run for its effect, discard the ()
-        results <- doParallel                    -- `<-` : run all three at once, bind the List
-            checkBuild
-            checkChangelog
-            checkGitClean
+        results <- Task.parallel                    -- `<-` : run all three at once, bind the List
+            [ checkBuild
+            , checkChangelog
+            , checkGitClean
+            ]
         Io.println (report version results)
 
 
--- Three independent checks. Each returns a status line; `doParallel` needs them
--- to share a type (here `Task Error String`), and awaits them all — latency is
--- the slowest check, not their sum.
+-- Three independent checks. Each returns a status line; `Task.parallel` runs them
+-- concurrently — latency is the slowest check, not their sum.
 checkBuild : Task Error String
 checkBuild =
     Task.succeed "build     ok  — artifact present"

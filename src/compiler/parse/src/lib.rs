@@ -338,15 +338,21 @@ mod tests {
     }
 
     #[test]
-    fn do_pure_let_desugars_to_let() {
-        // `x = value` inside `do` is a pure `let`, not a Task bind.
+    fn do_pure_let_followed_by_bind_desugars_to_let_then_and_then() {
+        // `x = value` inside a `do` that also has a `<-` bind is a pure `let`
+        // wrapping the Task-sequencing continuation. The block is not stepless
+        // (it has a real `<-` Task bind) so it must parse.
         let mut i = Interner::new();
-        let src = format!("{HDR}main =\n    do\n        x = value\n        use x\n");
-        let m = parse_module(&src, &mut i).expect("do block parses");
+        let src = format!(
+            "{HDR}main =\n    do\n        x = value\n        result <- task x\n        done result\n"
+        );
+        let m = parse_module(&src, &mut i).expect("do block with pure-let + bind parses");
         let main = find_value(&m, &i, "main").expect("main present");
+        // The outer desugared node is a Let (the pure `x = value` bind wraps the
+        // Task-sequenced inner chain).
         assert!(
             matches!(&main.body.value, Expr_::Let(binds, _) if binds.len() == 1),
-            "expected `let x = value in …`, got {:?}",
+            "expected outer `let x = value in (Task.andThen chain)`, got {:?}",
             main.body.value
         );
     }
@@ -376,23 +382,66 @@ mod tests {
     }
 
     #[test]
-    fn parallel_do_desugars_to_task_parallel_of_a_list() {
-        // `doParallel` over aligned tasks becomes `Task.parallel [a, b, c]`.
+    fn task_parallel_inside_do_bind_is_accepted() {
+        // `results <- Task.parallel [a, b, c]` inside a `do` is the supported
+        // spelling for concurrent fan-out (the former `doParallel` form).
         let mut i = Interner::new();
-        let src = format!("{HDR}main =\n    doParallel\n        a\n        b\n        c\n");
-        let m = parse_module(&src, &mut i).expect("doParallel block parses");
+        let src = format!(
+            "{HDR}main =\n    do\n        results <- Task.parallel [a, b, c]\n        done results\n"
+        );
+        let m = parse_module(&src, &mut i).expect("Task.parallel inside do parses");
         let main = find_value(&m, &i, "main").expect("main present");
         assert!(
-            is_task_call(&main.body.value, &i, "parallel"),
-            "expected a `Task.parallel` call, got {:?}",
+            is_task_call(&main.body.value, &i, "andThen"),
+            "outer `do` desugars to `Task.andThen`, got {:?}",
             main.body.value
         );
-        if let Expr_::Call(_, args) = &main.body.value {
-            assert!(
-                matches!(args.first().map(|a| &a.value), Some(Expr_::List(elems)) if elems.len() == 3),
-                "doParallel must collect its lines into a 3-element list"
-            );
-        }
+    }
+
+    #[test]
+    fn stepless_do_is_rejected() {
+        // A `do` block with only `=` pure bindings and no `<-` or bare-run step
+        // is rejected with `IPE-P0065`.
+        assert_eq!(
+            err_code(&format!(
+                "{HDR}main =\n    do\n        x = 1\n        x + 1\n"
+            )),
+            "IPE-P0065",
+            "stepless do (only `=` binds) must be IPE-P0065"
+        );
+    }
+
+    #[test]
+    fn do_with_bind_step_is_accepted() {
+        // A `do` with at least one `<-` is not stepless and must parse.
+        let mut i = Interner::new();
+        let src = format!(
+            "{HDR}main =\n    do\n        x = 1\n        result <- task x\n        done result\n"
+        );
+        let m = parse_module(&src, &mut i);
+        assert!(m.is_ok(), "do with a `<-` step must parse: {m:?}");
+    }
+
+    #[test]
+    fn do_with_bare_run_step_is_accepted() {
+        // A `do` with a bare-run line (not-last) is not stepless and must parse.
+        let mut i = Interner::new();
+        let src = format!("{HDR}main =\n    do\n        sideEffect\n        done\n");
+        let m = parse_module(&src, &mut i);
+        assert!(m.is_ok(), "do with a bare-run step must parse: {m:?}");
+    }
+
+    #[test]
+    fn doparallel_keyword_is_not_reserved() {
+        // `doParallel` is no longer a keyword; it now lexes as a plain identifier.
+        // A binding named `doParallel` must parse without error.
+        let mut i = Interner::new();
+        let src = format!("{HDR}doParallel =\n    42\n");
+        let m = parse_module(&src, &mut i);
+        assert!(
+            m.is_ok(),
+            "`doParallel` must lex as a plain identifier after keyword removal: {m:?}"
+        );
     }
 
     #[test]
