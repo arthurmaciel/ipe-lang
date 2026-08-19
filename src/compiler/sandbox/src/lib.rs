@@ -24,7 +24,7 @@ use std::ffi::OsString;
 use std::fmt;
 use std::path::{Path, PathBuf};
 
-use ipe_diagnostics::{Code, IPE_F4410};
+use ipe_diagnostics::{Code, Diagnostic as SharedDiag, IPE_F4410, SandboxError};
 
 pub mod build_jail;
 pub mod run_jail;
@@ -64,34 +64,43 @@ impl SandboxDefect {
     }
 }
 
-impl fmt::Display for SandboxDefect {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::NoIsolationMechanism => write!(
-                f,
-                "{}: cannot establish an isolation jail (bwrap absent); \
-                 refusing to compile an untrusted crate unsandboxed",
-                self.code().as_str()
-            ),
-            Self::CapsUnavailable { missing } => write!(
-                f,
-                "{}: mandatory sandbox cap helper(s) absent ({}); refusing to run \
-                 untrusted code without a wall clock and rlimits — install \
-                 coreutils (timeout) and util-linux (prlimit)",
-                self.code().as_str(),
+impl From<SandboxDefect> for SandboxError {
+    fn from(d: SandboxDefect) -> Self {
+        let detail = match &d {
+            SandboxDefect::NoIsolationMechanism => {
+                "cannot establish an isolation jail (bwrap absent); refusing to compile \
+                 an untrusted crate unsandboxed"
+                    .to_owned()
+            }
+            SandboxDefect::CapsUnavailable { missing } => format!(
+                "mandatory sandbox cap helper(s) absent ({}); refusing to run untrusted code \
+                 without a wall clock and rlimits — install coreutils (timeout) and util-linux \
+                 (prlimit)",
                 missing.join(", ")
             ),
-            Self::Spawn { program, detail } => write!(
-                f,
-                "{}: failed to run the jailed process `{program}`: {detail}",
-                self.code().as_str()
-            ),
-            Self::OutputCapExceeded { cap_bytes } => write!(
-                f,
-                "{}: the jailed process exceeded the {cap_bytes}-byte output cap",
-                self.code().as_str()
-            ),
+            SandboxDefect::Spawn { program, detail } => {
+                format!("failed to run the jailed process `{program}`: {detail}")
+            }
+            SandboxDefect::OutputCapExceeded { cap_bytes } => {
+                format!("the jailed process exceeded the {cap_bytes}-byte output cap")
+            }
+        };
+        Self::BuildJail { detail }
+    }
+}
+
+impl From<SandboxDefect> for SharedDiag {
+    fn from(d: SandboxDefect) -> Self {
+        Self::Sandbox {
+            msg: SandboxError::from(d),
         }
+    }
+}
+
+impl fmt::Display for SandboxDefect {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let shared: SharedDiag = self.clone().into();
+        f.write_str(&ipe_diagnostics::render(&shared, "", ""))
     }
 }
 

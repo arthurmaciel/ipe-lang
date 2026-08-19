@@ -6114,7 +6114,10 @@ const fn diag_span(d: &Diagnostic) -> ipe_diagnostics::Span {
         | Diagnostic::Name { span, .. }
         | Diagnostic::Type { span, .. }
         | Diagnostic::Lower { span, .. } => *span,
-        Diagnostic::CompilerBug { .. } => ipe_diagnostics::Span::DUMMY,
+        Diagnostic::CompilerBug { .. }
+        | Diagnostic::Ffi { .. }
+        | Diagnostic::Sandbox { .. }
+        | Diagnostic::Consent { .. } => ipe_diagnostics::Span::DUMMY,
     }
 }
 

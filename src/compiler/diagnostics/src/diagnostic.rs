@@ -10,22 +10,23 @@
 //! so existing call sites keep compiling while producers migrate.
 
 use crate::code::{
-    Code, IPE_I0001, IPE_I0010, IPE_I0011, IPE_I0100, IPE_I0101, IPE_I0102, IPE_I0103, IPE_I0200,
-    IPE_I0201, IPE_I0202, IPE_I0203, IPE_L0100, IPE_L0101, IPE_L0102, IPE_L0103, IPE_L0104,
-    IPE_L0105, IPE_L0106, IPE_L0107, IPE_L0108, IPE_L0110, IPE_L0111, IPE_L0112, IPE_L0113,
-    IPE_L0114, IPE_L0115, IPE_L0116, IPE_L0117, IPE_L0118, IPE_L0119, IPE_L0120, IPE_L0121,
-    IPE_L0122, IPE_L0123, IPE_L0124, IPE_L0125, IPE_L0126, IPE_L0127, IPE_L0128, IPE_L0129,
-    IPE_L0130, IPE_L0131, IPE_L0132, IPE_L0133, IPE_L0134, IPE_L0135, IPE_L0136, IPE_L0140,
-    IPE_L0141, IPE_L0142, IPE_L0200, IPE_N0001, IPE_N0002, IPE_N0003, IPE_N0004, IPE_N0005,
-    IPE_N0010, IPE_N0011, IPE_N0012, IPE_N0013, IPE_N0020, IPE_N0021, IPE_N0022, IPE_N0023,
-    IPE_N0024, IPE_N0025, IPE_N0026, IPE_N0027, IPE_N0028, IPE_N0029, IPE_N0030, IPE_N0031,
-    IPE_N0032, IPE_N0033, IPE_N0034, IPE_N0035, IPE_N0036, IPE_N0037, IPE_N0038, IPE_N0039,
-    IPE_N0040, IPE_N0041, IPE_N0042, IPE_P0001, IPE_P0002, IPE_P0003, IPE_P0010, IPE_P0011,
-    IPE_P0012, IPE_P0013, IPE_P0014, IPE_P0015, IPE_P0016, IPE_P0017, IPE_P0018, IPE_P0020,
-    IPE_P0021, IPE_P0030, IPE_P0031, IPE_P0040, IPE_P0041, IPE_P0050, IPE_P0060, IPE_P0061,
-    IPE_P0062, IPE_P0063, IPE_P0064, IPE_T0001, IPE_T0002, IPE_T0003, IPE_T0004, IPE_T0010,
-    IPE_T0011, IPE_T0012, IPE_T0013, IPE_T0014, IPE_T0015, IPE_T0016, IPE_T0017, IPE_T0018,
-    IPE_T0019, IPE_T0020, Severity,
+    Code, IPE_F4400, IPE_F4401, IPE_F4402, IPE_F4410, IPE_F4411, IPE_F4412, IPE_F4413, IPE_F4414,
+    IPE_F4415, IPE_I0001, IPE_I0010, IPE_I0011, IPE_I0100, IPE_I0101, IPE_I0102, IPE_I0103,
+    IPE_I0200, IPE_I0201, IPE_I0202, IPE_I0203, IPE_L0100, IPE_L0101, IPE_L0102, IPE_L0103,
+    IPE_L0104, IPE_L0105, IPE_L0106, IPE_L0107, IPE_L0108, IPE_L0110, IPE_L0111, IPE_L0112,
+    IPE_L0113, IPE_L0114, IPE_L0115, IPE_L0116, IPE_L0117, IPE_L0118, IPE_L0119, IPE_L0120,
+    IPE_L0121, IPE_L0122, IPE_L0123, IPE_L0124, IPE_L0125, IPE_L0126, IPE_L0127, IPE_L0128,
+    IPE_L0129, IPE_L0130, IPE_L0131, IPE_L0132, IPE_L0133, IPE_L0134, IPE_L0135, IPE_L0136,
+    IPE_L0140, IPE_L0141, IPE_L0142, IPE_L0200, IPE_N0001, IPE_N0002, IPE_N0003, IPE_N0004,
+    IPE_N0005, IPE_N0010, IPE_N0011, IPE_N0012, IPE_N0013, IPE_N0020, IPE_N0021, IPE_N0022,
+    IPE_N0023, IPE_N0024, IPE_N0025, IPE_N0026, IPE_N0027, IPE_N0028, IPE_N0029, IPE_N0030,
+    IPE_N0031, IPE_N0032, IPE_N0033, IPE_N0034, IPE_N0035, IPE_N0036, IPE_N0037, IPE_N0038,
+    IPE_N0039, IPE_N0040, IPE_N0041, IPE_N0042, IPE_P0001, IPE_P0002, IPE_P0003, IPE_P0010,
+    IPE_P0011, IPE_P0012, IPE_P0013, IPE_P0014, IPE_P0015, IPE_P0016, IPE_P0017, IPE_P0018,
+    IPE_P0020, IPE_P0021, IPE_P0030, IPE_P0031, IPE_P0040, IPE_P0041, IPE_P0050, IPE_P0060,
+    IPE_P0061, IPE_P0062, IPE_P0063, IPE_P0064, IPE_S0001, IPE_T0001, IPE_T0002, IPE_T0003,
+    IPE_T0004, IPE_T0010, IPE_T0011, IPE_T0012, IPE_T0013, IPE_T0014, IPE_T0015, IPE_T0016,
+    IPE_T0017, IPE_T0018, IPE_T0019, IPE_T0020, Severity,
 };
 use crate::span::Span;
 
@@ -1216,6 +1217,132 @@ pub enum LowerError {
 }
 
 // ===========================================================================
+// FFI / sandbox / consent payload types (canonical home; producer crates
+// re-export from here so a single representation exists).
+// ===========================================================================
+
+/// The closed defect payload for FFI-generator diagnostics (`IPE-F44xx`).
+///
+/// Each variant names exactly one taxonomy code. Producer crates construct
+/// these and convert them to [`Diagnostic::Ffi`]; the shared renderer is the
+/// only place that turns a `FfiError` into bytes.
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub enum FfiError {
+    /// `IPE-F4400` — a foreign-call AST failed a structural check that makes
+    /// rendering total; refused before emission.
+    CallUnrenderable {
+        /// The wrapper-reference name of the function whose call was refused.
+        function: String,
+        /// A short description of which structural check failed.
+        detail: String,
+    },
+    /// `IPE-F4400` — a generic FFI call site (or its binding) cannot be
+    /// soundly bound; the instantiation falls outside the closed bindable set.
+    GenericNotBindable {
+        /// The qualified Ipê callee.
+        callee: String,
+        /// A short description of which bindability rule was broken.
+        detail: String,
+    },
+    /// `IPE-F4401` — inspector wire data carried a value outside its closed
+    /// legal set.
+    WireMalformed {
+        /// Where in the wire document the defect was met.
+        context: String,
+        /// A short description of which wire rule was broken.
+        detail: String,
+    },
+    /// `IPE-F4402` — a function's shape flags are contradictory.
+    ShapeContradiction {
+        /// The function whose flags contradict.
+        function: String,
+        /// The flag names that were simultaneously set.
+        flags: Vec<String>,
+    },
+    /// `IPE-F4411` — an untrusted crate source was rejected at the driver
+    /// gate.
+    SourceRejected {
+        /// The offending input, verbatim.
+        source: String,
+        /// A short description of which gate rule was broken.
+        detail: String,
+    },
+    /// `IPE-F4412` — an FFI cache artifact could not be read, written, or
+    /// removed.
+    ArtifactIo {
+        /// The artifact path.
+        path: String,
+        /// The rendered OS error.
+        detail: String,
+    },
+    /// `IPE-F4414` — an author-asserted foreign call (`Rust.Ffi.call`) was
+    /// refused at validation.
+    AssertedRefused {
+        /// The asserted Rust path, verbatim.
+        path: String,
+        /// A short description of which rule refused it.
+        detail: String,
+    },
+    /// `IPE-F4415` — the inspector's build failed because a required system
+    /// library is not installed on the host.
+    SystemLibraryNotFound {
+        /// The `pkg-config` library name that was not found.
+        system_lib: String,
+        /// The Rust crate whose `build.rs` required the library.
+        crate_name: String,
+        /// A short OS-aware install hint.
+        install_hint: String,
+    },
+}
+
+/// The closed defect payload for sandbox diagnostics (`IPE-F441x`).
+///
+/// Covers both the build-jail (`IPE-F4410`, produced by `ipe_sandbox`) and
+/// the run-jail (`IPE-F4413`, produced by `ipe_sandbox::run_jail`). Producer
+/// crates convert these to [`Diagnostic::Sandbox`].
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub enum SandboxError {
+    /// `IPE-F4410` — no isolation jail could be established for compiling an
+    /// untrusted crate (bubblewrap absent, cap helpers absent, spawn failed,
+    /// or output cap exceeded).
+    BuildJail {
+        /// A short description of why the jail could not be established.
+        detail: String,
+    },
+    /// `IPE-F4413` — no runtime jail could be established around the emitted
+    /// app, or a jailed run failed.
+    RunJail {
+        /// A short description of why the jail could not be established or
+        /// the run failed.
+        detail: String,
+    },
+}
+
+/// The payload for the unsafe-escape-hatch consent gate (`IPE-S0001`).
+///
+/// Produced by the CLI acknowledgment layer; converted to
+/// [`Diagnostic::Consent`] so the shared renderer handles the message.
+///
+/// `body` is the pre-formatted per-module risk disclosure assembled by the
+/// CLI (which knows the module vocabulary); the renderer folds it into the
+/// prose band unchanged. This keeps module-specific risk wording in the CLI
+/// (where it belongs) while routing the final output through the single
+/// shared renderer.
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub enum ConsentError {
+    /// Non-interactive build with no pre-recorded consent: fail closed.
+    NonInteractive {
+        /// The pre-formatted risk disclosure (which modules, what risk).
+        body: String,
+    },
+    /// Interactive terminal: the user typed something other than `y`.
+    InteractiveDenied {
+        /// The pre-formatted risk disclosure (which modules, what risk).
+        body: String,
+    },
+}
+
+// ===========================================================================
 // The diagnostic currency
 // ===========================================================================
 
@@ -1244,6 +1371,21 @@ pub enum Diagnostic {
     CompilerBug {
         where_: &'static str,
         detail: String,
+    },
+    /// An FFI-generator failure (`IPE-F44xx`). Span-free: the defect is in
+    /// the foreign binding, not in a user source location.
+    Ffi {
+        msg: FfiError,
+    },
+    /// A sandbox establishment or run failure (`IPE-F4410` / `IPE-F4413`).
+    /// Span-free: the defect is in the host environment, not in the source.
+    Sandbox {
+        msg: SandboxError,
+    },
+    /// The unsafe-escape-hatch consent gate refused (`IPE-S0001`). Span-free:
+    /// the refusal is at build/run invocation time, not at a source location.
+    Consent {
+        msg: ConsentError,
     },
 }
 
@@ -1375,6 +1517,9 @@ impl Diagnostic {
             Self::Type { msg, .. } => type_code(msg),
             Self::Lower { msg, .. } => lower_code(msg),
             Self::CompilerBug { where_, .. } => bug_code(where_),
+            Self::Ffi { msg } => ffi_code(msg),
+            Self::Sandbox { msg } => sandbox_code(msg),
+            Self::Consent { .. } => IPE_S0001,
         }
     }
 
@@ -1382,7 +1527,11 @@ impl Diagnostic {
     #[must_use]
     pub const fn severity(&self) -> Severity {
         match self {
-            Self::Parse { .. } | Self::Name { .. } => Severity::Error,
+            Self::Parse { .. }
+            | Self::Name { .. }
+            | Self::Ffi { .. }
+            | Self::Sandbox { .. }
+            | Self::Consent { .. } => Severity::Error,
             Self::Lower { msg, .. } => match msg {
                 LowerError::RoutedAppMissingPageField { .. } => Severity::Warning,
                 _ => Severity::Error,
@@ -1414,8 +1563,8 @@ impl Diagnostic {
         }
     }
 
-    /// The primary source span. `CompilerBug` has no span and returns
-    /// [`Span::DUMMY`].
+    /// The primary source span. Span-free variants (`CompilerBug`, `Ffi`,
+    /// `Sandbox`, `Consent`) return [`Span::DUMMY`].
     #[must_use]
     pub const fn primary_span(&self) -> Span {
         match self {
@@ -1423,7 +1572,10 @@ impl Diagnostic {
             | Self::Name { span, .. }
             | Self::Type { span, .. }
             | Self::Lower { span, .. } => *span,
-            Self::CompilerBug { .. } => Span::DUMMY,
+            Self::CompilerBug { .. }
+            | Self::Ffi { .. }
+            | Self::Sandbox { .. }
+            | Self::Consent { .. } => Span::DUMMY,
         }
     }
 
@@ -1437,6 +1589,9 @@ impl Diagnostic {
             Self::Type { msg, .. } => type_help(msg),
             Self::Lower { msg, .. } => lower_help(msg),
             Self::CompilerBug { .. } => Vec::new(),
+            Self::Ffi { msg } => ffi_help(msg),
+            Self::Sandbox { msg } => sandbox_help(msg),
+            Self::Consent { msg } => consent_help(msg),
         }
     }
 }
@@ -1961,6 +2116,102 @@ fn undeterminable_return_any_help() -> Vec<HelpLine> {
         HelpLine::SeeExplain("IPE-L0142"),
     ]
 }
+
+// --- ffi_code / sandbox_code / ffi_help / sandbox_help / consent_help -------
+
+const fn ffi_code(msg: &FfiError) -> Code {
+    match msg {
+        FfiError::CallUnrenderable { .. } | FfiError::GenericNotBindable { .. } => IPE_F4400,
+        FfiError::WireMalformed { .. } => IPE_F4401,
+        FfiError::ShapeContradiction { .. } => IPE_F4402,
+        FfiError::SourceRejected { .. } => IPE_F4411,
+        FfiError::ArtifactIo { .. } => IPE_F4412,
+        FfiError::AssertedRefused { .. } => IPE_F4414,
+        FfiError::SystemLibraryNotFound { .. } => IPE_F4415,
+    }
+}
+
+const fn sandbox_code(msg: &SandboxError) -> Code {
+    match msg {
+        SandboxError::BuildJail { .. } => IPE_F4410,
+        SandboxError::RunJail { .. } => IPE_F4413,
+    }
+}
+
+fn ffi_help(msg: &FfiError) -> Vec<HelpLine> {
+    match msg {
+        FfiError::SystemLibraryNotFound {
+            system_lib,
+            crate_name,
+            ..
+        } => vec![
+            HelpLine::Note(
+                format!(
+                    "install the `{system_lib}` development package and re-run \
+                     `ipe rust add {crate_name}`"
+                )
+                .into_boxed_str(),
+            ),
+            HelpLine::Note(
+                "if the library is in a non-standard location, set PKG_CONFIG_PATH \
+                 before re-running"
+                    .into(),
+            ),
+            HelpLine::SeeExplain("IPE-F4415"),
+        ],
+        FfiError::CallUnrenderable { .. }
+        | FfiError::GenericNotBindable { .. }
+        | FfiError::WireMalformed { .. }
+        | FfiError::ShapeContradiction { .. }
+        | FfiError::SourceRejected { .. }
+        | FfiError::ArtifactIo { .. }
+        | FfiError::AssertedRefused { .. } => Vec::new(),
+    }
+}
+
+fn sandbox_help(msg: &SandboxError) -> Vec<HelpLine> {
+    match msg {
+        SandboxError::BuildJail { .. } => vec![HelpLine::Note(
+            "install bubblewrap (bwrap), coreutils (timeout), and util-linux (prlimit) \
+             to enable the isolation jail for compiling untrusted crates"
+                .into(),
+        )],
+        SandboxError::RunJail { .. } => vec![
+            HelpLine::Note(
+                "this program reaches native Rust code whose effects cannot be proven \
+                 safe; install bubblewrap (bwrap on Linux) or sandbox-exec (macOS) to \
+                 confine it"
+                    .into(),
+            ),
+            HelpLine::Note(
+                "set IPE_ALLOW_UNSANDBOXED=1 to run unconfined at your own risk \
+                 (never in CI)"
+                    .into(),
+            ),
+        ],
+    }
+}
+
+fn consent_help(msg: &ConsentError) -> Vec<HelpLine> {
+    let remedy = HelpLine::Note(
+        "re-run with --accept-risks to take responsibility and proceed, or add \
+         `accept = [\"unsafe\"]` under [capabilities] in ipe.toml for durable consent"
+            .into(),
+    );
+    match msg {
+        ConsentError::NonInteractive { .. } => vec![
+            remedy,
+            HelpLine::Note(
+                "this is a non-interactive build; it will not prompt — \
+                 pre-accept with --accept-risks or the manifest token"
+                    .into(),
+            ),
+        ],
+        ConsentError::InteractiveDenied { .. } => vec![remedy],
+    }
+}
+
+// --- did_you_mean ------------------------------------------------------------
 
 /// Turns already-sorted suggestion names into help lines. A single candidate is
 /// confident enough to offer as a [`Applicability::MachineApplicable`]

@@ -9,7 +9,8 @@
 use std::fmt;
 
 use ipe_diagnostics::{
-    Code, IPE_F4400, IPE_F4401, IPE_F4402, IPE_F4411, IPE_F4412, IPE_F4414, IPE_F4415,
+    Code, Diagnostic as SharedDiag, FfiError, IPE_F4400, IPE_F4401, IPE_F4402, IPE_F4411,
+    IPE_F4412, IPE_F4414, IPE_F4415,
 };
 
 /// One FFI-generator diagnostic: the failure class plus enough context to
@@ -107,67 +108,59 @@ impl Diagnostic {
     }
 }
 
-impl fmt::Display for Diagnostic {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::CallUnrenderable { function, defect } => {
-                write!(
-                    f,
-                    "{}: foreign call for `{function}` cannot be rendered: {defect}",
-                    self.code().as_str()
-                )
-            }
-            Self::WireMalformed { context, defect } => {
-                write!(
-                    f,
-                    "{}: malformed inspection data in {context}: {defect}",
-                    self.code().as_str()
-                )
-            }
-            Self::ShapeContradiction { function, flags } => {
-                write!(
-                    f,
-                    "{}: `{function}` declares contradictory shape flags: {}",
-                    self.code().as_str(),
-                    flags.join(" + ")
-                )
-            }
-            Self::GenericNotBindable { callee, defect } => {
-                write!(f, "{}: `{callee}`: {defect}", self.code().as_str())
-            }
-            Self::SourceRejected { source, defect } => {
-                write!(f, "{}: {source:?}: {defect}", self.code().as_str())
-            }
-            Self::ArtifactIo { path, detail } => {
-                write!(
-                    f,
-                    "{}: cache artifact `{path}`: {detail}",
-                    self.code().as_str()
-                )
-            }
-            Self::AssertedRefused { path, defect } => {
-                write!(
-                    f,
-                    "{}: asserted call `{path}` refused: {defect}",
-                    self.code().as_str()
-                )
-            }
-            Self::SystemLibraryNotFound {
+impl From<Diagnostic> for SharedDiag {
+    fn from(d: Diagnostic) -> Self {
+        Self::Ffi {
+            msg: FfiError::from(d),
+        }
+    }
+}
+
+impl From<Diagnostic> for FfiError {
+    fn from(d: Diagnostic) -> Self {
+        match d {
+            Diagnostic::CallUnrenderable { function, defect } => Self::CallUnrenderable {
+                function,
+                detail: defect.to_string(),
+            },
+            Diagnostic::GenericNotBindable { callee, defect } => Self::GenericNotBindable {
+                callee,
+                detail: defect.to_string(),
+            },
+            Diagnostic::WireMalformed { context, defect } => Self::WireMalformed {
+                context,
+                detail: defect.to_string(),
+            },
+            Diagnostic::ShapeContradiction { function, flags } => Self::ShapeContradiction {
+                function,
+                flags: flags.iter().map(ToString::to_string).collect(),
+            },
+            Diagnostic::SourceRejected { source, defect } => Self::SourceRejected {
+                source,
+                detail: defect.to_string(),
+            },
+            Diagnostic::ArtifactIo { path, detail } => Self::ArtifactIo { path, detail },
+            Diagnostic::AssertedRefused { path, defect } => Self::AssertedRefused {
+                path,
+                detail: defect.to_string(),
+            },
+            Diagnostic::SystemLibraryNotFound {
                 system_lib,
                 crate_name,
                 install_hint,
-            } => {
-                write!(
-                    f,
-                    "{}: crate `{crate_name}` needs the system library `{system_lib}`, \
-                     which pkg-config cannot find.\n\
-                     Install hint: {install_hint}\n\
-                     If the library is in a non-standard location, set PKG_CONFIG_PATH \
-                     before re-running `ipe rust add`.",
-                    self.code().as_str()
-                )
-            }
+            } => Self::SystemLibraryNotFound {
+                system_lib,
+                crate_name,
+                install_hint,
+            },
         }
+    }
+}
+
+impl fmt::Display for Diagnostic {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let shared: SharedDiag = self.clone().into();
+        f.write_str(&ipe_diagnostics::render(&shared, "", ""))
     }
 }
 

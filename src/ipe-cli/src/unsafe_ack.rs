@@ -21,14 +21,14 @@
 //! `IPE-S0001` and the remedy; it never blocks.
 
 use std::collections::BTreeSet;
+use std::path::PathBuf;
+
+use ipe_diagnostics::{ConsentError, Diagnostic as SharedDiag};
 use std::io::{IsTerminal, Write};
 
 use ipe_ir::Capability;
 
 use crate::CliError;
-
-/// The diagnostic code the fail-closed refusal carries.
-const CODE: &str = "IPE-S0001";
 
 /// Extract the distinct `Ipe.<M>.Unsafe` module paths named by `import` lines
 /// across the given source texts, sorted for a stable report.
@@ -175,19 +175,24 @@ pub fn gate<R: std::io::BufRead, W: Write>(
     let remedy = remedy_line();
 
     if !interactive {
-        // Non-interactive / CI: never prompt. Fail closed with the code and the
-        // remedy so a pre-accept (flag or manifest) is the one clear next step.
-        return Err(CliError::UsageOwned(format!(
-            "{CODE}: {body}{remedy}\n  This is a non-interactive build; it will not prompt. \
-             Pre-accept with --accept-risks or the manifest token above."
-        )));
+        // Non-interactive / CI: never prompt. Fail closed through the shared
+        // typed renderer so IPE-S0001 gains the title-rule, explain footer,
+        // and stable JSON schema.
+        let diag = SharedDiag::Consent {
+            msg: ConsentError::NonInteractive { body },
+        };
+        return Err(CliError::Pipeline {
+            file: PathBuf::new(),
+            src: String::new(),
+            diag: Box::new(diag),
+        });
     }
 
     // Interactive terminal: disclose, then ask. A non-`y` answer is a typed,
     // fail-closed refusal — the build does not proceed.
     let _ = write!(
         stderr,
-        "warning[{CODE}]: {body}{remedy}\n  Proceed and accept these risks? [y/N] "
+        "warning[IPE-S0001]: {body}{remedy}\n  Proceed and accept these risks? [y/N] "
     );
     let _ = stderr.flush();
     let mut answer = String::new();
@@ -196,10 +201,16 @@ pub fn gate<R: std::io::BufRead, W: Write>(
     if answer.trim().eq_ignore_ascii_case("y") {
         return Ok(());
     }
-    Err(CliError::UsageOwned(format!(
-        "{CODE}: unsafe escape-hatch imports were not acknowledged — build stopped. \
-         {remedy}"
-    )))
+    let diag = SharedDiag::Consent {
+        msg: ConsentError::InteractiveDenied {
+            body: String::new(),
+        },
+    };
+    Err(CliError::Pipeline {
+        file: PathBuf::new(),
+        src: String::new(),
+        diag: Box::new(diag),
+    })
 }
 
 /// Whether the current process is attached to an interactive terminal on BOTH

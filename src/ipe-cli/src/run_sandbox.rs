@@ -24,6 +24,7 @@ use std::collections::BTreeSet;
 use std::ffi::OsString;
 use std::path::Path;
 
+use ipe_diagnostics::Diagnostic as SharedDiag;
 use ipe_ir::Capability;
 use ipe_sandbox::run_jail::{self, DatabaseAxis, RunJailDefect, SandboxProfile};
 
@@ -114,7 +115,14 @@ pub fn build_profile(
     // the tighter, fail-closed direction; per-name env is a tracked refinement.
     let env_allowlist: Vec<String> = Vec::new();
     run_jail::profile_from_capabilities(&caps.inferred, &caps.declared, axis, &env_allowlist)
-        .map_err(|e| CliError::UsageOwned(RunJailDefect::Profile(e).to_string()))
+        .map_err(|e| {
+            let shared: SharedDiag = RunJailDefect::Profile(e).into();
+            CliError::Pipeline {
+                file: std::path::PathBuf::new(),
+                src: String::new(),
+                diag: Box::new(shared),
+            }
+        })
 }
 
 /// Whether the resolved override env var is set to exactly `"1"` (mirroring the
@@ -158,15 +166,15 @@ pub fn resolve_refusal(
         .collect();
 
     if !override_requested() {
-        // Fail-closed: no jail here and no recorded consent. The defect (which
-        // carries the IPE-F4413 code) is the refusal, with remediation.
-        return Err(CliError::UsageOwned(format!(
-            "{defect}\n  This program reaches native Rust code ({}) whose effects cannot be \
-             proven safe, and no capability jail is available on this platform. Install a jail \
-             primitive (bwrap on Linux, sandbox-exec on macOS), or set {OVERRIDE_ENV}=1 to run it \
-             unconfined at your own risk (never in CI).",
-            names.join(", ")
-        )));
+        // Fail-closed: no jail here and no recorded consent. Route through the
+        // shared typed renderer so F4413 gains the title-rule, snippet-less
+        // band, help/remedy lines, and stable JSON schema.
+        let shared: SharedDiag = defect.clone().into();
+        return Err(CliError::Pipeline {
+            file: std::path::PathBuf::new(),
+            src: String::new(),
+            diag: Box::new(shared),
+        });
     }
 
     // Recorded consent: warn loudly, in red, and proceed unconfined.
@@ -211,7 +219,14 @@ pub fn jail_and_exec(
     };
     match run_jail::exec_in_run_jail(&tools, profile, scoped_tmp, working_tree, app, app_args) {
         // `exec_in_run_jail` returns only on failure.
-        Err(defect) => Err(CliError::UsageOwned(defect.to_string())),
+        Err(defect) => {
+            let shared: SharedDiag = defect.into();
+            Err(CliError::Pipeline {
+                file: std::path::PathBuf::new(),
+                src: String::new(),
+                diag: Box::new(shared),
+            })
+        }
         Ok(never) => match never {},
     }
 }
