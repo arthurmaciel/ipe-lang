@@ -58,17 +58,19 @@ fn candidate_name(prefix: &str) -> io::Result<String> {
 
 /// An exclusively-created, mode-0700, unpredictably-named temporary directory.
 ///
-/// Constructed only via [`ScratchDir::new`], which loops on `AlreadyExists`
-/// (bounded by [`MAX_RETRIES`]) rather than removing and recreating a
-/// pre-existing entry.  The directory is removed on drop (best-effort).
+/// Constructed via [`ScratchDir::new`] (base = `temp_dir()`) or
+/// [`ScratchDir::new_under`] (caller-supplied base), both of which loop on
+/// `AlreadyExists` (bounded by [`MAX_RETRIES`]) rather than removing and
+/// recreating a pre-existing entry.  The directory is removed on drop
+/// (best-effort); call [`ScratchDir::into_path`] to transfer ownership without
+/// automatic cleanup.
 ///
 /// Use [`ScratchDir::path`] for the directory itself and
 /// [`ScratchDir::child`] to build paths for files or subdirectories inside it.
 pub struct ScratchDir(PathBuf);
 
 impl ScratchDir {
-    /// Create a new exclusively-owned temporary directory whose name is
-    /// unpredictable.
+    /// Create a new exclusively-owned temporary directory under `temp_dir()`.
     ///
     /// `prefix` is a short, caller-chosen label that appears in the name for
     /// diagnostics.  The name is not caller-controlled beyond this label.
@@ -78,7 +80,24 @@ impl ScratchDir {
     /// Returns an [`io::Error`] when entropy cannot be read or when all
     /// [`MAX_RETRIES`] attempts fail with `AlreadyExists`.
     pub fn new(prefix: &str) -> io::Result<Self> {
-        let base = std::env::temp_dir();
+        Self::new_under(&std::env::temp_dir(), prefix)
+    }
+
+    /// Create a new exclusively-owned temporary directory under `base`.
+    ///
+    /// The base directory is created (via `create_dir_all`) before the
+    /// exclusive child is attempted, so callers need not pre-create it.
+    /// `prefix` is a short, caller-chosen label that appears in the child
+    /// name for diagnostics; the name is not caller-controlled beyond this
+    /// label.
+    ///
+    /// # Errors
+    ///
+    /// Returns an [`io::Error`] when `base` cannot be created, when entropy
+    /// cannot be read, or when all [`MAX_RETRIES`] attempts fail with
+    /// `AlreadyExists`.
+    pub fn new_under(base: &Path, prefix: &str) -> io::Result<Self> {
+        std::fs::create_dir_all(base)?;
         for _ in 0..MAX_RETRIES {
             let name = candidate_name(prefix)?;
             let path = base.join(&name);
@@ -108,6 +127,18 @@ impl ScratchDir {
     #[must_use]
     pub fn child(&self, name: &str) -> PathBuf {
         self.0.join(name)
+    }
+
+    /// Consume this guard and return the directory path without removing it.
+    ///
+    /// The caller takes responsibility for cleanup.  Use this only when the
+    /// directory must outlive the guard (e.g. when passing to a manual
+    /// `remove_dir_all` at a later call site).
+    #[must_use]
+    pub fn into_path(self) -> PathBuf {
+        let path = self.0.clone();
+        std::mem::forget(self);
+        path
     }
 }
 
@@ -413,7 +444,10 @@ mod tests {
     /// Tracks `#[cfg(test)]`/`mod tests` regions by brace depth to exempt test
     /// helpers, and tracks production `let <ident> = ...temp_dir();` bindings so a
     /// later `<ident>.join(` (the split form) is caught as well as the inline
-    /// `temp_dir().join(` form.
+    /// `temp_dir().join(` form.  Also flags `temp_dir` passed as a bare function
+    /// reference (e.g. `map_or_else(std::env::temp_dir, ...)` or
+    /// `map_or_else(temp_dir, ...)`), which is semantically equivalent to the
+    /// split form and was the original source of this defect class.
     fn assert_predictable_temp_free(path: &std::path::Path, source: &str) {
         let lines: Vec<&str> = source.lines().collect();
         let mut in_test_region = false;
@@ -447,6 +481,24 @@ mod tests {
                 !line.contains("temp_dir().join"),
                 "predictable temp_dir().join in production code at {}:{} — \
                  use ScratchDir or ScratchFile instead.\n  line: {}",
+                path.display(),
+                i + 1,
+                line.trim()
+            );
+
+            // Fn-reference form: `temp_dir` used as a bare callable (without `()`)
+            // in a combinator such as `map_or_else(std::env::temp_dir, ...)` or
+            // `map_or_else(temp_dir, ...)`.  Both spellings route through `temp_dir`
+            // without the `()` that the inline form requires, so they evade that
+            // check; this clause closes the gap.
+            let is_fn_ref = line.contains("map_or_else(std::env::temp_dir")
+                || (line.contains("map_or_else(")
+                    && line.contains("temp_dir")
+                    && !line.contains("temp_dir()"));
+            assert!(
+                !is_fn_ref,
+                "bare temp_dir fn-reference in production code at {}:{} — \
+                 use ScratchDir::new_under with an explicit base instead.\n  line: {}",
                 path.display(),
                 i + 1,
                 line.trim()
@@ -535,6 +587,38 @@ mod tests {
         );
     }
 
+    /// The class gate flags `temp_dir` passed as a bare fn reference in a
+    /// `map_or_else` combinator (the fn-reference form).
+    #[test]
+    fn class_gate_flags_map_or_else_temp_dir_fn_ref() {
+        let injected = "fn make(home: Option<PathBuf>) -> PathBuf {\n    \
+            home.map_or_else(std::env::temp_dir, |h| h.join(\".cache\"))\n}\n";
+        let caught = std::panic::catch_unwind(|| {
+            assert_predictable_temp_free(std::path::Path::new("injected.rs"), injected);
+        })
+        .is_err();
+        assert!(
+            caught,
+            "gate must flag map_or_else(std::env::temp_dir, ...) in production"
+        );
+    }
+
+    /// The class gate flags the short `map_or_else(temp_dir, ...)` form (no
+    /// path qualifier) the same way it flags the fully-qualified form.
+    #[test]
+    fn class_gate_flags_map_or_else_temp_dir_short() {
+        let injected = "fn make(home: Option<PathBuf>) -> PathBuf {\n    \
+            home.map_or_else(temp_dir, |h| h.join(\".cache\"))\n}\n";
+        let caught = std::panic::catch_unwind(|| {
+            assert_predictable_temp_free(std::path::Path::new("injected.rs"), injected);
+        })
+        .is_err();
+        assert!(
+            caught,
+            "gate must flag map_or_else(temp_dir, ...) in production"
+        );
+    }
+
     /// The class gate passes on clean production code (a `ScratchDir`-based
     /// construction and a bare non-joined `temp_dir()` value) and on test-region
     /// predictable temps.
@@ -546,6 +630,16 @@ mod tests {
             Ok(())\n}\n\
             #[cfg(test)]\nmod tests {\n    \
             fn helper() { let _ = std::env::temp_dir().join(\"ok-in-test\"); }\n}\n";
+        // Must not panic.
+        assert_predictable_temp_free(std::path::Path::new("clean.rs"), clean);
+    }
+
+    /// The class gate passes on `ScratchDir::new_under` usage (the correct
+    /// pattern for a caller-supplied base path).
+    #[test]
+    fn class_gate_passes_new_under() {
+        let clean = "fn make(base: &Path) -> std::io::Result<ScratchDir> {\n    \
+            ScratchDir::new_under(base, \"ipe-add\")\n}\n";
         // Must not panic.
         assert_predictable_temp_free(std::path::Path::new("clean.rs"), clean);
     }
