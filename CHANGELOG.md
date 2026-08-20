@@ -10,6 +10,25 @@ Entries below the header are maintained by
 section is generated from Conventional Commit messages and prepended when the
 standing release pull request is merged.
 
+## [0.1.67](https://github.com/arthurmaciel/ipe-lang/compare/ipe-v0.1.66...ipe-v0.1.67) (2026-08-20)
+
+
+### Features
+
+* **docs:** doc-test gate for fenced ipe examples in doc-strings ([#1210](https://github.com/arthurmaciel/ipe-lang/issues/1210)) ([6fa43d8](https://github.com/arthurmaciel/ipe-lang/commit/6fa43d8edc9a74ad11838d1741ffe36cff0af306))
+* **parse:** doc-strings in .ipe source — lexer, AST, parser (component A) ([#1203](https://github.com/arthurmaciel/ipe-lang/issues/1203)) ([fc235a3](https://github.com/arthurmaciel/ipe-lang/commit/fc235a362a151a77b9bb1668166c847f9f7e9cc8))
+
+
+### Bug Fixes
+
+* **backend:** emit a self-contained Cargo.toml for standalone/cross builds (closes [#1152](https://github.com/arthurmaciel/ipe-lang/issues/1152)) ([#1221](https://github.com/arthurmaciel/ipe-lang/issues/1221)) ([5118416](https://github.com/arthurmaciel/ipe-lang/commit/5118416f285c4fd0d34eac9e7beaf404fadcc6cb))
+* **diagnostics:** classify registry/network failure as IPE-E0001, not IPE-I0001 ICE ([#1202](https://github.com/arthurmaciel/ipe-lang/issues/1202)) ([d0dc9c7](https://github.com/arthurmaciel/ipe-lang/commit/d0dc9c7aab444044210d88670c5b66ae7c1acffe))
+* **lower:** reject a function-field record with IPE-L0107 instead of the IPE-I0001 ICE (closes [#1139](https://github.com/arthurmaciel/ipe-lang/issues/1139)) ([#1217](https://github.com/arthurmaciel/ipe-lang/issues/1217)) ([507d4b0](https://github.com/arthurmaciel/ipe-lang/commit/507d4b0bac1a17b77268f7451ec454f87b1bb9a0))
+* **lower:** reject non-record argument at a row-param position (closes [#1209](https://github.com/arthurmaciel/ipe-lang/issues/1209)) ([#1211](https://github.com/arthurmaciel/ipe-lang/issues/1211)) ([2fff3ec](https://github.com/arthurmaciel/ipe-lang/commit/2fff3ec2cab93510ab4e3f0fe1e7f1286dc1cc73))
+* **lower:** unify the two row-witness-satisfaction checks into one predicate (closes [#1194](https://github.com/arthurmaciel/ipe-lang/issues/1194)) ([#1206](https://github.com/arthurmaciel/ipe-lang/issues/1206)) ([2be410d](https://github.com/arthurmaciel/ipe-lang/commit/2be410d0b2856623b620ea6cb2a9ae643c95dd22))
+* **parse:** a module-level doc-comment before imports parses ([#1208](https://github.com/arthurmaciel/ipe-lang/issues/1208)) ([33b71eb](https://github.com/arthurmaciel/ipe-lang/commit/33b71eb053c145fca980b46dda4894b7a5862b16))
+* **stdlib:** correct the failing String/Result doc-string examples ([#1222](https://github.com/arthurmaciel/ipe-lang/issues/1222)) ([449327d](https://github.com/arthurmaciel/ipe-lang/commit/449327d8edb87882057bbc18a517db4f7720c955))
+
 ## [0.1.66](https://github.com/arthurmaciel/ipe-lang/compare/ipe-v0.1.65...ipe-v0.1.66) (2026-08-19)
 
 
