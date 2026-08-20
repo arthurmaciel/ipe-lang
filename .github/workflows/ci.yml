@@ -1027,9 +1027,9 @@ jobs:
             pkg install -y rust python3
           run: |
             # The vmactions SSH environment does not include /sbin or /usr/sbin in
-            # PATH, so FreeBSD system binaries (mount_devfs, jail, rctl, …) are
-            # invisible to `find_in_path()` (which searches PATH only). Prepend the
-            # standard FreeBSD sysadmin directories before any Rust code runs.
+            # PATH, so FreeBSD system binaries (mount, jail, rctl, mount_nullfs, …)
+            # are invisible to `find_in_path()` (which searches PATH only). Prepend
+            # the standard FreeBSD sysadmin directories before any Rust code runs.
             export PATH="/sbin:/bin:/usr/sbin:/usr/bin:$PATH"
             # Fail-closed primitive check: jail(8) and rctl(8) must be present, or
             # the FreeBSD build jail cannot be verified — refuse to certify (hard
