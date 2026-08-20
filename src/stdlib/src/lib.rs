@@ -470,6 +470,16 @@ const STD_UI_ANIMATION: &str = include_str!("../Ipe/Ui/Animation.ipe");
 /// disjointness invariant holds.
 const STD_CODEC: &str = include_str!("../Ipe/Codec.ipe");
 
+/// `Ipe.Db.Codec` — the codec↔SQL row seam. Turns one `Ipe.Codec.Codec a` into
+/// a row's `(column, SqlValue)` binds (`codecToBinds`) and decodes a store `Row`
+/// back to `a` (`codecFromRow`), reusing the codec's own JSON encoder/decoder
+/// over an in-memory `Value` (via the `Json.Decode.decodeValue`/`value` seam) —
+/// no second decoder, no string round-trip. Every produced value is a BOUND
+/// `SqlValue` parameter; the bridge constructs no SQL text, so it adds no
+/// injection surface over `Ipe.Db.Sql`. Pure Ipê. Not in
+/// `STDLIB_MODULE_QUALIFIERS` so the disjointness invariant holds.
+const STD_DB_CODEC: &str = include_str!("../Ipe/Db/Codec.ipe");
+
 /// `Ipe.Analytics` — typed, consent-gated product analytics.
 ///
 /// Pure Ipê source: defines the `Pii` opaque type (no `ToString`/`toJson`
@@ -725,6 +735,15 @@ pub const COMPILED_STD_MODULES: &[CompiledStdModule] = &[
     CompiledStdModule {
         dotted: "Ipe.Db.Store",
         source: STD_DB_STORE,
+    },
+    // Ipe.Db.Codec — the codec↔SQL row seam (`codecToBinds` / `codecFromRow`).
+    // Pure Ipê over `Ipe.Codec` + the reserved `SqlValue`; reuses the codec's
+    // own JSON encoder/decoder via the in-memory `Value` seam. No new kernel is
+    // registered here (the two Json `Value` seams live in `Ipe.Json.Decode`).
+    // Injection-safe: every value is a bound `SqlValue`, no SQL text is built.
+    CompiledStdModule {
+        dotted: "Ipe.Db.Codec",
+        source: STD_DB_CODEC,
     },
     CompiledStdModule {
         dotted: "Ipe.Money",

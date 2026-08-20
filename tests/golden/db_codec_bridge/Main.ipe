@@ -1,0 +1,279 @@
+module Main exposing (main)
+
+-- End-to-end proof of the codec↔SQL row bridge (`Ipe.Db.Codec`): for a record
+-- codec exercising every `ColType` (text, int, real, bool, a lossless decimal
+-- stored as TEXT, a nullable int, and a JSON-in-TEXT blob list), running
+-- `codecToBinds` then rebuilding a `Row` from those binds then `codecFromRow`
+-- returns the original value. The bridge builds bound `SqlValue` params only —
+-- it constructs no SQL text.
+--
+-- The fixture also asserts the fail-closed paths: a non-record (scalar) codec
+-- has no columns to bind, and a row missing a required column decodes to a typed
+-- `Err`. It prints one `db-codec-bridge-ok` line iff every check holds.
+
+import Ipe.Io as Io
+import Ipe.Codec as Codec exposing (Codec(..), Shape(..), ColType(..))
+import Ipe.Db.Codec as DbCodec
+import Ipe.Json.Encode as Encode
+import Ipe.Json.Decode as Decode
+import Ipe.Json.Decode.Pipeline as Pipeline
+import Ipe.Decimal as Dec exposing (Decimal)
+import Ipe.Dict as Dict
+import Ipe.List as List
+import Ipe.String as String
+import Ipe.Maybe exposing (Maybe(..))
+import Ipe.Result exposing (Result(..))
+
+
+type alias User =
+    { id : String
+    , age : Int
+    , score : Float
+    , active : Bool
+    , balance : Decimal
+    , nickname : Maybe Int
+    , tags : List String
+    }
+
+
+makeUser : String -> Int -> Float -> Bool -> Decimal -> Maybe Int -> List String -> User
+makeUser id age score active balance nickname tags =
+    { id = id
+    , age = age
+    , score = score
+    , active = active
+    , balance = balance
+    , nickname = nickname
+    , tags = tags
+    }
+
+
+-- A record codec written in the direct form, one field per `ColType`:
+--   id       CText
+--   age      CInt
+--   score    CReal
+--   active   CBool
+--   balance  CText   (Decimal — lossless string, never a Float column)
+--   nickname CNull CInt
+--   tags     CBlob   (List — one JSON-in-TEXT column)
+userCodec : Codec User
+userCodec =
+    Codec
+        { enc =
+            \u ->
+                Encode.object
+                    [ ( "id", Encode.string u.id )
+                    , ( "age", Encode.int u.age )
+                    , ( "score", Encode.float u.score )
+                    , ( "active", Encode.bool u.active )
+                    , ( "balance", Encode.string (Dec.toString u.balance) )
+                    , ( "nickname", encMaybeInt u.nickname )
+                    , ( "tags", Encode.list Encode.string u.tags )
+                    ]
+        , mkDec = \_ -> userDecoder
+        , shp =
+            SRecord
+                [ ( "id", CText )
+                , ( "age", CInt )
+                , ( "score", CReal )
+                , ( "active", CBool )
+                , ( "balance", CText )
+                , ( "nickname", CNull CInt )
+                , ( "tags", CBlob )
+                ]
+        }
+
+
+encMaybeInt : Maybe Int -> Value
+encMaybeInt m =
+    case m of
+        Just n ->
+            Encode.int n
+
+        Nothing ->
+            Encode.null
+
+
+userDecoder : Decoder User
+userDecoder =
+    Decode.succeed makeUser
+        |> Pipeline.required "id" Decode.string
+        |> Pipeline.required "age" Decode.int
+        |> Pipeline.required "score" Decode.float
+        |> Pipeline.required "active" Decode.bool
+        |> Pipeline.required "balance" decimalDecoder
+        |> Pipeline.required "nickname" (Decode.oneOf [ Decode.map Just Decode.int, Decode.succeed Nothing ])
+        |> Pipeline.required "tags" (Decode.list Decode.string)
+
+
+decimalDecoder : Decoder Decimal
+decimalDecoder =
+    Decode.andThen decimalFromString Decode.string
+
+
+decimalFromString : String -> Decoder Decimal
+decimalFromString s =
+    case Dec.fromString s of
+        Ok d ->
+            Decode.succeed d
+
+        Err _ ->
+            Decode.fail "bad decimal"
+
+
+-- Mirror the store's cell representation: build a `Row` (Dict String String)
+-- from the bound binds the way `Ipe.Db.Store` reads a row back.
+sqlToCell : SqlValue -> String
+sqlToCell v =
+    case v of
+        SqlString s ->
+            s
+
+        SqlInt n ->
+            String.fromInt n
+
+        SqlFloat f ->
+            String.fromFloat f
+
+        SqlNull _ ->
+            "NULL"
+
+        SqlBool b ->
+            if b then
+                "1"
+
+            else
+                "0"
+
+        SqlBytes _ ->
+            ""
+
+        SqlTime t ->
+            String.fromInt t
+
+        SqlDecimal s ->
+            s
+
+        SqlMoney s ->
+            s
+
+
+rowFromBinds : List ( String, SqlValue ) -> Dict String String
+rowFromBinds binds =
+    Dict.fromList (List.map (\pair -> case pair of ( k, v ) -> ( k, sqlToCell v )) binds)
+
+
+userEq : User -> User -> Bool
+userEq a b =
+    a.id
+        == b.id
+        && a.age
+        == b.age
+        && a.score
+        == b.score
+        && a.active
+        == b.active
+        && Dec.toString a.balance
+        == Dec.toString b.balance
+        && nickEq a.nickname b.nickname
+        && List.length a.tags
+        == List.length b.tags
+
+
+nickEq : Maybe Int -> Maybe Int -> Bool
+nickEq a b =
+    case a of
+        Just x ->
+            case b of
+                Just y ->
+                    x == y
+
+                Nothing ->
+                    False
+
+        Nothing ->
+            case b of
+                Just _ ->
+                    False
+
+                Nothing ->
+                    True
+
+
+-- codecToBinds -> Row -> codecFromRow -> equals original.
+bridgeRoundTrips : User -> Bool
+bridgeRoundTrips u =
+    case DbCodec.codecToBinds userCodec u of
+        Ok binds ->
+            case DbCodec.codecFromRow userCodec (rowFromBinds binds) of
+                Ok back ->
+                    userEq u back
+
+                Err _ ->
+                    False
+
+        Err _ ->
+            False
+
+
+sample1 : User
+sample1 =
+    { id = "u-1"
+    , age = 30
+    , score = 4.5
+    , active = True
+    , balance = Dec.fromInt 1099
+    , nickname = Just 7
+    , tags = [ "a", "b", "c" ]
+    }
+
+
+sample2 : User
+sample2 =
+    { id = "u-2"
+    , age = 0
+    , score = 0.0
+    , active = False
+    , balance = Dec.fromInt 250
+    , nickname = Nothing
+    , tags = []
+    }
+
+
+-- Fail-closed: a bare-scalar codec (SScalar) has no columns to bind.
+scalarRejected : Bool
+scalarRejected =
+    case DbCodec.codecToBinds Codec.string "lonely" of
+        Ok _ ->
+            False
+
+        Err _ ->
+            True
+
+
+-- Fail-closed: a row missing a required column decodes to a typed Err.
+missingColumnRejected : Bool
+missingColumnRejected =
+    let
+        partial =
+            Dict.fromList [ ( "id", "u-9" ) ]
+    in
+    case DbCodec.codecFromRow userCodec partial of
+        Ok _ ->
+            False
+
+        Err _ ->
+            True
+
+
+main =
+    if
+        bridgeRoundTrips sample1
+            && bridgeRoundTrips sample2
+            && scalarRejected
+            && missingColumnRejected
+    then
+        Io.println "db-codec-bridge-ok"
+
+    else
+        Io.println "db-codec-bridge-FAIL"

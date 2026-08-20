@@ -1069,6 +1069,30 @@ pub fn decode_from_json_string<E: From<String> + 'static, T>(
     }
 }
 
+/// `Json.Decode.value : Decoder Value` — the identity decoder.
+///
+/// Yields the JSON node it is run against, unchanged, so a caller can
+/// re-serialise it (`Json.Encode.encode`) or run a further decoder on it. This
+/// is the same node the encode direction of a codec produces, so no re-parse and
+/// no second decoder are involved.
+pub fn decode_value_identity<E: From<String> + 'static>() -> Decoder<E, JsonVal> {
+    Decoder::new(Box::new(move |v| decode_ok(v.clone())), vec![])
+}
+
+/// `Json.Decode.decodeValue : Decoder a -> Value -> Result Error a` — run a
+/// decoder against an in-memory `Value`.
+///
+/// This is exactly the tail of `decode_from_json_string` after its parse step:
+/// the SAME `(decoder.run)(&val)` decode path, given a `Value` already in memory
+/// rather than a string to parse. There is no second decoder and no string
+/// round-trip; a value the decoder rejects is a typed `Err`, never a panic.
+pub fn decode_from_json_value<E: From<String> + 'static, T>(
+    decoder: Decoder<E, T>,
+    val: JsonVal,
+) -> IpeResult<E, T> {
+    (decoder.run)(&val)
+}
+
 // --- Currying helpers (for pipeline decoder composition) ---
 //
 // Each helper now returns a FACTORY: `Box<dyn Fn() -> Box<dyn FnOnce(A1) -> ...> + Send>`.

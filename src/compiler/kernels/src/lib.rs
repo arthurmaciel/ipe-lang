@@ -1034,7 +1034,9 @@ pub enum StdlibKernel {
     JsonDecInt,
     JsonDecFloat,
     JsonDecBool,
+    JsonDecValue,
     JsonDecDecodeString,
+    JsonDecDecodeValue,
     JsonDecField,
     JsonDecAt,
     JsonDecIndex,
@@ -2707,6 +2709,7 @@ impl StdlibKernel {
             Self::JsonDecInt => d("JsonDec", "int", 0, Pure, "json_decode_int"),
             Self::JsonDecFloat => d("JsonDec", "float", 0, Pure, "json_decode_float"),
             Self::JsonDecBool => d("JsonDec", "bool", 0, Pure, "json_decode_bool"),
+            Self::JsonDecValue => d("JsonDec", "value", 0, Pure, "decode_value_identity"),
             Self::JsonDecDecodeString => d(
                 "JsonDec",
                 "decodeString",
@@ -2714,6 +2717,9 @@ impl StdlibKernel {
                 Pure,
                 "decode_from_json_string",
             ),
+            Self::JsonDecDecodeValue => {
+                d("JsonDec", "decodeValue", 2, Pure, "decode_from_json_value")
+            }
             Self::JsonDecField => d("JsonDec", "field", 2, Pure, "decode_field"),
             Self::JsonDecAt => d("JsonDec", "at", 2, Pure, "decode_at"),
             Self::JsonDecIndex => d("JsonDec", "index", 2, Pure, "decode_index"),
@@ -4183,7 +4189,9 @@ impl StdlibKernel {
         Self::JsonDecInt,
         Self::JsonDecFloat,
         Self::JsonDecBool,
+        Self::JsonDecValue,
         Self::JsonDecDecodeString,
+        Self::JsonDecDecodeValue,
         Self::JsonDecField,
         Self::JsonDecAt,
         Self::JsonDecIndex,
@@ -6116,6 +6124,14 @@ impl StdlibKernel {
         // `decodeString : Decoder a -> String -> Result Error a`.
         const STRING_TO_RESULT_ERR_A: TyShape = TyShape::Fun(&STRING, &RESULT_ERR_A);
         const DEC_DECODE_STRING: TyShape = TyShape::Fun(&DEC_A, &STRING_TO_RESULT_ERR_A);
+        // `value : Decoder Value` — the identity decoder, yielding the raw JSON
+        // node so a caller can re-serialise it or introspect it in Ipê.
+        const DEC_JSON_VALUE: TyShape = TyShape::Con(BuiltinTag::Decoder, &[JSON_VALUE]);
+        // `decodeValue : Decoder a -> Value -> Result Error a` — run a decoder
+        // against an in-memory `Value`, sharing the exact decode path
+        // `decodeString` uses after its parse step (no second decoder).
+        const VALUE_TO_RESULT_ERR_A: TyShape = TyShape::Fun(&JSON_VALUE, &RESULT_ERR_A);
+        const DEC_DECODE_VALUE: TyShape = TyShape::Fun(&DEC_A, &VALUE_TO_RESULT_ERR_A);
         // Config `decodeToml/Yaml/Json : String -> Decoder a -> Result Error a`.
         const DEC_A_TO_RESULT_ERR_A: TyShape = TyShape::Fun(&DEC_A, &RESULT_ERR_A);
         const CONFIG_DECODE: TyShape = TyShape::Fun(&STRING, &DEC_A_TO_RESULT_ERR_A);
@@ -7631,6 +7647,8 @@ impl StdlibKernel {
             Self::JsonDecInt | Self::ConfigInt => Some(&DEC_INT),
             Self::JsonDecFloat | Self::ConfigFloat => Some(&DEC_FLOAT),
             Self::JsonDecBool | Self::ConfigBool => Some(&DEC_BOOL),
+            Self::JsonDecValue => Some(&DEC_JSON_VALUE),
+            Self::JsonDecDecodeValue => Some(&DEC_DECODE_VALUE),
             Self::JsonDecField | Self::ConfigField => Some(&STRING_TO_DEC_A_TO_DEC_A),
             Self::DbDecString => Some(&STRING_TO_DEC_STRING),
             Self::JsonDecAt | Self::ConfigAt => Some(&LIST_STRING_TO_DEC_A_TO_DEC_A),
@@ -8747,7 +8765,9 @@ impl StdlibKernel {
             | Self::JsonDecInt
             | Self::JsonDecFloat
             | Self::JsonDecBool
+            | Self::JsonDecValue
             | Self::JsonDecDecodeString
+            | Self::JsonDecDecodeValue
             | Self::JsonDecField
             | Self::JsonDecAt
             | Self::JsonDecIndex
@@ -9623,7 +9643,9 @@ impl StdlibKernel {
                 | Self::JsonDecInt
                 | Self::JsonDecFloat
                 | Self::JsonDecBool
+                | Self::JsonDecValue
                 | Self::JsonDecDecodeString
+                | Self::JsonDecDecodeValue
                 | Self::JsonDecField
                 | Self::JsonDecAt
                 | Self::JsonDecIndex
