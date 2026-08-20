@@ -170,15 +170,18 @@ type SchemaOp
 
 -- | One table whose schema, reads, and writes derive from its declared
 -- columns. `specs` are the DB-only facts; `pk` is the validated primary-key
--- column used by the by-key operations. `frozenColumns` holds the columns as
--- first constructed (the source for the never-drifting create entry).
--- `currentColumns` tracks the current-column view after any renames (the
+-- column used by the by-key operations. `frozenTable` and `frozenColumns` hold
+-- the table name and columns as first constructed (the source for the
+-- never-drifting create entry — neither is edited by a rename). `table` and
+-- `currentColumns` track the current-schema view after any renames (the
 -- identifiers CRUD targets). `ops` is the ordered schema-op log folded by
--- `migrations`. Built only through `fromColumns`, so every identifier it holds
--- has already been accepted by `validSqlIdent`.
+-- `migrations`, threaded from `frozenTable` so each rename entry names the
+-- table as of its own position. Built only through `fromColumns`, so every
+-- identifier it holds has already been accepted by `validSqlIdent`.
 type Store
     = Store
         { table : String
+        , frozenTable : String
         , frozenColumns : List Column
         , currentColumns : List Column
         , specs : List ColumnSpec
@@ -305,6 +308,7 @@ fromColumns table columns =
                 Ok
                     (Store
                         { table = table
+                        , frozenTable = table
                         , frozenColumns = columns
                         , currentColumns = columns
                         , specs = []
@@ -362,6 +366,7 @@ primaryKey name store =
         Store r ->
             Store
                 { table = r.table
+                , frozenTable = r.frozenTable
                 , frozenColumns = r.frozenColumns
                 , currentColumns = r.currentColumns
                 , specs = PrimaryKey name :: r.specs
@@ -396,6 +401,7 @@ addSpec spec store =
         Store r ->
             Store
                 { table = r.table
+                , frozenTable = r.frozenTable
                 , frozenColumns = r.frozenColumns
                 , currentColumns = r.currentColumns
                 , specs = spec :: r.specs
@@ -451,6 +457,7 @@ renameColumn from to store =
         Store r ->
             Store
                 { table = r.table
+                , frozenTable = r.frozenTable
                 , frozenColumns = r.frozenColumns
                 , currentColumns = renameColumnInList from to r.currentColumns
                 , specs = r.specs
@@ -511,6 +518,7 @@ renameTable to store =
         Store r ->
             Store
                 { table = to
+                , frozenTable = r.frozenTable
                 , frozenColumns = r.frozenColumns
                 , currentColumns = r.currentColumns
                 , specs = r.specs
@@ -568,16 +576,16 @@ migrations : Store -> Result Error (List Db.Migration)
 migrations store =
     case store of
         Store r ->
-            case createSqlFromColumns r.table r.frozenColumns r.specs of
+            case createSqlFromColumns r.frozenTable r.frozenColumns r.specs of
                 Err e ->
                     Err e
 
                 Ok ddl ->
                     let
                         createEntry =
-                            { name = migrationName r.table, sql = ddl }
+                            { name = migrationName r.frozenTable, sql = ddl }
                     in
-                    case foldOps r.table r.ops of
+                    case foldOps r.frozenTable r.ops of
                         Err e ->
                             Err e
 
