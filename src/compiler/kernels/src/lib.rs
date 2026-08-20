@@ -2046,6 +2046,8 @@ pub enum StdlibKernel {
     DbFindWhere,
     /// `Db.deleteWhere : Db -> String -> SqlFragment -> Task Error Int`
     DbDeleteWhere,
+    /// `Db.updateWhere : Db -> String -> List (String, SqlField) -> SqlFragment -> Task Error Int`
+    DbUpdateWhere,
     // ── Ipe.Secret — opaque secret-string wrapper ─────────
     // The ONLY public constructor: every `Secret` value traces back to one of
     // these calls. Never derivable from a bare `String` implicitly.
@@ -3655,6 +3657,7 @@ impl StdlibKernel {
             Self::SqlLike => d("Sql", "like", 2, Db, "sql_like"),
             Self::DbFindWhere => d("Db", "findWhere", 3, Db, "db_find_where"),
             Self::DbDeleteWhere => d("Db", "deleteWhere", 3, Db, "db_delete_where"),
+            Self::DbUpdateWhere => d("Db", "updateWhere", 4, Db, "db_update_where"),
             // ── Ipe.Secret — opaque secret-string wrapper ─
             Self::SecretFromString => d("Secret", "fromString", 1, Pure, "secret_from_string"),
             Self::SecretReveal => d("Secret", "reveal", 1, Pure, "secret_reveal"),
@@ -4815,6 +4818,7 @@ impl StdlibKernel {
         Self::SqlLike,
         Self::DbFindWhere,
         Self::DbDeleteWhere,
+        Self::DbUpdateWhere,
         Self::SecretFromString,
         Self::SecretReveal,
         Self::SecretUse,
@@ -5009,6 +5013,7 @@ impl StdlibKernel {
                 | Self::SqlLike
                 | Self::DbFindWhere
                 | Self::DbDeleteWhere
+                | Self::DbUpdateWhere
         )
     }
 
@@ -6530,6 +6535,13 @@ impl StdlibKernel {
         const SQLFRAGMENT_TO_TASK_INT: TyShape = TyShape::Fun(&SQLFRAGMENT, &TASK_INT);
         const STRING_TO_DELETE_WHERE: TyShape = TyShape::Fun(&STRING, &SQLFRAGMENT_TO_TASK_INT);
         const DB_DELETE_WHERE: TyShape = TyShape::Fun(&DB, &STRING_TO_DELETE_WHERE);
+        // `Db.updateWhere : Db -> String -> List (String, SqlField) -> SqlFragment
+        //                   -> Task Int`.
+        const LIST_SQLFIELD_TO_UPDATE_WHERE: TyShape =
+            TyShape::Fun(&LIST_TUPLE_STRING_SQLFIELD, &SQLFRAGMENT_TO_TASK_INT);
+        const STRING_TO_UPDATE_WHERE: TyShape =
+            TyShape::Fun(&STRING, &LIST_SQLFIELD_TO_UPDATE_WHERE);
+        const DB_UPDATE_WHERE: TyShape = TyShape::Fun(&DB, &STRING_TO_UPDATE_WHERE);
         // `Db.insertFieldsReturning : Db -> String -> List (String, SqlField)
         //                             -> String -> Decoder a -> Task (List a)`.
         const DEC_A_TO_TASK_LIST_A_2: TyShape = TyShape::Fun(&DEC_A, &TASK_LIST_A);
@@ -7860,6 +7872,7 @@ impl StdlibKernel {
             Self::DbFindByConditions => Some(&DB_FIND_BY_CONDITIONS),
             Self::DbFindWhere => Some(&DB_FIND_WHERE),
             Self::DbDeleteWhere => Some(&DB_DELETE_WHERE),
+            Self::DbUpdateWhere => Some(&DB_UPDATE_WHERE),
             Self::DbInsertFields => Some(&DB_INSERT_FIELDS),
             Self::DbUpdateFields => Some(&DB_UPDATE_FIELDS),
             Self::DbInsertFieldsReturning => Some(&DB_INSERT_FIELDS_RETURNING),
@@ -8423,6 +8436,7 @@ impl StdlibKernel {
             | Self::DbMigrate
             | Self::DbFindWhere
             | Self::DbDeleteWhere
+            | Self::DbUpdateWhere
             | Self::DbDefaultMigration
             | Self::DbDecString
             | Self::DbDecInt

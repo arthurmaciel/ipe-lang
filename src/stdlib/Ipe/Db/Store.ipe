@@ -51,9 +51,10 @@
 --     migration column identifiers is unrepresentable because both derive from
 --     the same `Store` value.
 --
--- Write-path safety: columns marked `Serial` or `DefaultNow` are OMITTED from
--- the insert so the database fills them (the existing `SqlField`/`OmitField`
--- seam) — a client value produced for such a column is dropped, never written.
+-- Write-path safety: columns marked `Serial`, `DefaultNow`, or `touchOnUpdate`
+-- are OMITTED from every client write so the database fills them (the existing
+-- `SqlField`/`OmitField` seam) — a client value produced for such a column is
+-- dropped, never written.
 --
 -- Building and using a codec-driven store:
 --
@@ -103,11 +104,12 @@ module Ipe.Db.Store exposing
     , column, textColumn, intColumn, floatColumn, boolColumn
     , fromCodec, fromColumns, rowCodec
     , primaryKey, serial, unique, defaultNow
+    , defaultText, defaultInt, touchOnUpdate
     , tableName, columnNames, createSql
     , readText, readInt, readBool, readFloat
     , insert, all, get, delete, findWhere, create
     , allOn, getOn, findWhereOn
-    , update, findBy
+    , update, updateWhere, deleteWhere, findBy
     , renameColumn, renameTable, migrations
     , noopRenameError
     , Cond, Query
@@ -174,6 +176,9 @@ type ColumnSpec
     | Serial String
     | Unique String
     | DefaultNow String
+    | DefaultText String String
+    | DefaultInt String Int
+    | TouchOnUpdate String
 
 
 -- | A schema-evolution operation recorded in the store's op log. Each op is
@@ -498,6 +503,58 @@ unique name store =
 defaultNow : String -> Store a -> Store a
 defaultNow name store =
     addSpec (DefaultNow name) store
+
+
+-- | `defaultText name value store` — give `name` a DB-level `DEFAULT` of the
+-- text `value`, so a row inserted without it (the column `OmitField`-omitted, or
+-- a raw `Db.insertRow` missing it) gets `value`. The literal is emitted through
+-- the same single-quote-doubling escape SQL string literals require, so no
+-- caller text escapes the literal — a `value` containing a quote cannot break
+-- out into SQL.
+--
+-- Example:
+--
+--     import Ipe.Db.Store as Store exposing (Store)
+--
+--     withStatusDefault : Store a -> Store a
+--     withStatusDefault store =
+--         Store.defaultText "status" "active" store
+defaultText : String -> String -> Store a -> Store a
+defaultText name value store =
+    addSpec (DefaultText name value) store
+
+
+-- | `defaultInt name value store` — give `name` a DB-level `DEFAULT` of the
+-- integer `value`. An integer has no injection surface: it renders as its own
+-- decimal digits, so the emitted `DEFAULT` literal is always safe.
+--
+-- Example:
+--
+--     import Ipe.Db.Store as Store exposing (Store)
+--
+--     withRetryDefault : Store a -> Store a
+--     withRetryDefault store =
+--         Store.defaultInt "retries" 0 store
+defaultInt : String -> Int -> Store a -> Store a
+defaultInt name value store =
+    addSpec (DefaultInt name value) store
+
+
+-- | `touchOnUpdate name store` — mark `name` a DB-stamped timestamp column. Like
+-- `defaultNow` it gets `DEFAULT CURRENT_TIMESTAMP` in the schema and is OMITTED
+-- from every client write (`insert`, `update`, `updateWhere`), so a client value
+-- can never overwrite it — the database owns the column's value.
+--
+-- Example:
+--
+--     import Ipe.Db.Store as Store exposing (Store)
+--
+--     withUpdatedAt : Store a -> Store a
+--     withUpdatedAt store =
+--         Store.touchOnUpdate "updated_at" store
+touchOnUpdate : String -> Store a -> Store a
+touchOnUpdate name store =
+    addSpec (TouchOnUpdate name) store
 
 
 addSpec : ColumnSpec -> Store a -> Store a
@@ -862,10 +919,19 @@ specOmitsColumn spec name =
         DefaultNow c ->
             c == name
 
+        TouchOnUpdate c ->
+            c == name
+
         PrimaryKey _ ->
             False
 
         Unique _ ->
+            False
+
+        DefaultText _ _ ->
+            False
+
+        DefaultInt _ _ ->
             False
 
 
@@ -962,6 +1028,105 @@ bindValue target binds =
 
                     else
                         bindValue target rest
+
+
+-- | `updateWhere conn store cond row` — set every non-DB-filled, non-key column
+-- of every row matching `cond` from `row`, and return the updated-row count. The
+-- WHERE is `cond` lowered to an audited `SqlFragment` against the store's own
+-- columns (an unknown column fails closed with a typed `Err`, exactly as `where`
+-- does), so no caller identifier or value reaches the SQL text — every value
+-- binds as a parameter. The SET is `row` projected through the store's codec
+-- (`Ipe.Db.Codec.codecToBinds`); columns marked `Serial` / `DefaultNow` /
+-- `touchOnUpdate` are OMITTED so a client value can never overwrite a DB-filled
+-- column, and the primary key is OMITTED too — a bulk update refines existing
+-- rows, it never rewrites their identity (which would collapse every matching
+-- row onto one key). Routes through the audited `Db.updateWhere`, which
+-- re-validates the table and SET columns, binds every value, and refuses an
+-- unscoped UPDATE.
+--
+-- Example:
+--
+--     import Ipe.Db as Db exposing (Db)
+--     import Ipe.Db.Store as Store exposing (Store)
+--     import Ipe.Task as Task exposing (Task)
+--     import Ipe.Error exposing (Error)
+--
+--     type alias User =
+--         { id : String, name : String, age : Int }
+--
+--     renameAdults : Db -> Store User -> User -> Task Error Int
+--     renameAdults conn store template =
+--         Store.updateWhere conn store (Store.gte "age" (SqlInt 18)) template
+updateWhere : Db -> Store a -> Cond -> a -> Task Error Int
+updateWhere conn store cond row =
+    case store of
+        Store r ->
+            case condFragmentIn r.currentColumns cond of
+                Err e ->
+                    Task.fail e
+
+                Ok frag ->
+                    case DbCodec.codecToBinds r.codec row of
+                        Err e ->
+                            Task.fail e
+
+                        Ok binds ->
+                            Db.updateWhere conn
+                                r.table
+                                (updateWhereSetFields r.specs r.pk binds)
+                                frag
+
+
+-- Project the codec binds to the UPDATE SET fields for a WHERE-scoped update:
+-- every DB-filled column (`Serial` / `DefaultNow` / `touchOnUpdate`) becomes
+-- `OmitField` so the database keeps its own value, the primary key is dropped
+-- entirely (a WHERE-scoped update never rewrites row identity), and every other
+-- column is a bound `SetField`.
+updateWhereSetFields : List ColumnSpec -> Maybe String -> List ( String, SqlValue ) -> List ( String, SqlField )
+updateWhereSetFields specs pk values =
+    List.map (\pair -> updateSetField specs pair)
+        (List.filter (\pair -> Basics.not (bindIsKey pk pair)) values)
+
+
+bindIsKey : Maybe String -> ( String, SqlValue ) -> Bool
+bindIsKey pk pair =
+    case pk of
+        Just keyCol ->
+            bindNameIs keyCol pair
+
+        Nothing ->
+            False
+
+
+-- | `deleteWhere conn store cond` — delete every row matching `cond` and return
+-- the deleted-row count. The WHERE is `cond` lowered to an audited `SqlFragment`
+-- against the store's own columns (an unknown column fails closed with a typed
+-- `Err`, exactly as `where` does); no caller identifier or value reaches the SQL
+-- text. Routes through the audited `Db.deleteWhere`.
+--
+-- Example:
+--
+--     import Ipe.Db as Db exposing (Db)
+--     import Ipe.Db.Store as Store exposing (Store)
+--     import Ipe.Task as Task exposing (Task)
+--     import Ipe.Error exposing (Error)
+--
+--     type alias User =
+--         { id : String, name : String, age : Int }
+--
+--     purgeMinors : Db -> Store User -> Task Error Int
+--     purgeMinors conn store =
+--         Store.deleteWhere conn store (Store.lt "age" (SqlInt 18))
+deleteWhere : Db -> Store a -> Cond -> Task Error Int
+deleteWhere conn store cond =
+    case store of
+        Store r ->
+            case condFragmentIn r.currentColumns cond of
+                Err e ->
+                    Task.fail e
+
+                Ok frag ->
+                    Db.deleteWhere conn r.table frag
 
 
 -- ─── Read path ─────────────────────────────────────────────────────
@@ -2136,6 +2301,14 @@ columnConstraints specs name =
             else
                 ""
 
+        defaultLiteralFragment =
+            case List.filterMap (\s -> specDefaultLiteral s name) specs of
+                literal :: _ ->
+                    String.concat [ " DEFAULT ", literal ]
+
+                [] ->
+                    ""
+
         pkFragment =
             if isPk then
                 " PRIMARY KEY"
@@ -2157,7 +2330,7 @@ columnConstraints specs name =
             else
                 ""
     in
-    String.concat [ pkFragment, autoincFragment, uniqueFragment, defaultNowFragment ]
+    String.concat [ pkFragment, autoincFragment, uniqueFragment, defaultNowFragment, defaultLiteralFragment ]
 
 
 specIsPrimaryKey : ColumnSpec -> String -> Bool
@@ -2173,6 +2346,15 @@ specIsPrimaryKey spec name =
             False
 
         DefaultNow _ ->
+            False
+
+        DefaultText _ _ ->
+            False
+
+        DefaultInt _ _ ->
+            False
+
+        TouchOnUpdate _ ->
             False
 
 
@@ -2191,6 +2373,15 @@ specIsSerial spec name =
         DefaultNow _ ->
             False
 
+        DefaultText _ _ ->
+            False
+
+        DefaultInt _ _ ->
+            False
+
+        TouchOnUpdate _ ->
+            False
+
 
 specIsUnique : ColumnSpec -> String -> Bool
 specIsUnique spec name =
@@ -2207,11 +2398,23 @@ specIsUnique spec name =
         DefaultNow _ ->
             False
 
+        DefaultText _ _ ->
+            False
+
+        DefaultInt _ _ ->
+            False
+
+        TouchOnUpdate _ ->
+            False
+
 
 specIsDefaultNow : ColumnSpec -> String -> Bool
 specIsDefaultNow spec name =
     case spec of
         DefaultNow c ->
+            c == name
+
+        TouchOnUpdate c ->
             c == name
 
         PrimaryKey _ ->
@@ -2222,6 +2425,60 @@ specIsDefaultNow spec name =
 
         Unique _ ->
             False
+
+        DefaultText _ _ ->
+            False
+
+        DefaultInt _ _ ->
+            False
+
+
+-- The literal `DEFAULT` clause a typed default spec contributes for `name`, or
+-- `Nothing` when `spec` sets no literal default there. `DefaultInt` renders as
+-- its own digits (no injection surface); `DefaultText` is emitted as an escaped
+-- single-quoted SQL string literal (every embedded quote doubled), so no caller
+-- text can break out of the literal.
+specDefaultLiteral : ColumnSpec -> String -> Maybe String
+specDefaultLiteral spec name =
+    case spec of
+        DefaultText c value ->
+            if c == name then
+                Just (sqlTextLiteral value)
+
+            else
+                Nothing
+
+        DefaultInt c value ->
+            if c == name then
+                Just (String.fromInt value)
+
+            else
+                Nothing
+
+        PrimaryKey _ ->
+            Nothing
+
+        Serial _ ->
+            Nothing
+
+        Unique _ ->
+            Nothing
+
+        DefaultNow _ ->
+            Nothing
+
+        TouchOnUpdate _ ->
+            Nothing
+
+
+-- Render `value` as a single-quoted SQL string literal, doubling every embedded
+-- single quote. This is the standard SQL literal escape: a `value` containing a
+-- quote becomes `''` inside the literal, so it can never terminate the literal
+-- and start new SQL. Used only for the DDL `DEFAULT` clause, where a bound
+-- parameter is not permitted.
+sqlTextLiteral : String -> String
+sqlTextLiteral value =
+    String.concat [ "'", String.replace "'" "''" value, "'" ]
 
 
 -- | `create conn store` — create the store's table if it does not exist, via

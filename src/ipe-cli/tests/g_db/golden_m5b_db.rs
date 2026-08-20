@@ -390,6 +390,27 @@ fn db_delete_where() {
     assert_runs_and_matches_oracle("db_delete_where");
 }
 
+/// SEAL + behaviour: the codec-derived `Store` WHERE-mutation surface. Creates a
+/// raw-column store carrying `defaultText` / `defaultInt` / `touchOnUpdate` DDL
+/// specs, seeds it with a partial INSERT (so the DB fills the defaults), then
+/// drives `Store.updateWhere` (a `Cond` lowered to a `SqlFragment`, matching
+/// rows only, the primary key never rewritten, an injection-payload value bound
+/// verbatim) and `Store.deleteWhere` (matching rows only), plus a fail-closed
+/// unknown-column `deleteWhere`. Output (six lines):
+/// `"defaults:active:0:stamped"`, `"update-where:2"`, the post-update owners,
+/// `"delete-where:1"`, `"remaining:acct-1,acct-2"`, `"reject-bad-column:ok"`.
+///
+/// The load-bearing SEAL is the build+run: `ipe` must accept a
+/// `Store.updateWhere` / `Store.deleteWhere` program AND the emitted crate must
+/// `cargo build` and run to the expected output.
+///
+/// Sanctioned divergence: Ipê emits Rust+sqlx; the Store mutation surface has no
+/// reference-backend counterpart; oracle is Ipê's own output.
+#[test]
+fn db_store_where_mutations() {
+    assert_runs_and_matches_oracle("db_store_where_mutations");
+}
+
 /// Exercises every `Ipe.Db.Sql` combinator at least once (column, param via
 /// int/string/float/bool, eq, ne, gt, lt, gte, lte, and, or, not, isNull,
 /// isNotNull, like, inList non-empty AND the empty-list `(1 = 0)` shortcut)

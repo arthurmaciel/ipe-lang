@@ -20347,6 +20347,8 @@ impl<'a> Lowerer<'a> {
                 | KernelFn::DbFindManyByField
                 // `DbUpdateFields : Db -> String -> List (String, SqlValue) -> List (String, SqlField) -> Task Error Int`
                 | KernelFn::DbUpdateFields
+                // `DbUpdateWhere : Db -> String -> List (String, SqlField) -> SqlFragment -> Task Error Int`
+                | KernelFn::DbUpdateWhere
                 // ── Db.Decode arity-4 ────────────────────────────────
                 // `map3 : (a->b->c->d) -> Decoder a -> Decoder b -> Decoder c -> Decoder d`
                 | KernelFn::DbDecMap3
@@ -21786,6 +21788,7 @@ impl<'a> Lowerer<'a> {
                     ("Sql", "like") => Ok(Callee::Kernel(KernelFn::SqlLike)),
                     ("Db", "findWhere") => Ok(Callee::Kernel(KernelFn::DbFindWhere)),
                     ("Db", "deleteWhere") => Ok(Callee::Kernel(KernelFn::DbDeleteWhere)),
+                    ("Db", "updateWhere") => Ok(Callee::Kernel(KernelFn::DbUpdateWhere)),
                     // ── Secret kernels ──────────────────────────
                     ("Secret", "fromString") => Ok(Callee::Kernel(KernelFn::SecretFromString)),
                     ("Secret", "reveal") => Ok(Callee::Kernel(KernelFn::SecretReveal)),

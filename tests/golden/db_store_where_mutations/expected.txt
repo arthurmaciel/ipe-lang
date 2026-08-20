@@ -1,0 +1,6 @@
+defaults:active:0:stamped
+update-where:2
+after-update:acct-1=hijacked';DROP,acct-2=hijacked';DROP,acct-3=carol
+delete-where:1
+remaining:acct-1,acct-2
+reject-bad-column:ok

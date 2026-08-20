@@ -19,6 +19,9 @@ pub(crate) enum IpeDbStoreColumnSpec {
     Serial(String),
     Unique(String),
     DefaultNow(String),
+    DefaultText(String, String),
+    DefaultInt(String, i64),
+    TouchOnUpdate(String),
 }
 impl IpeStringify for IpeDbStoreColumnSpec {
     fn ipe_show(&self) -> String {
@@ -35,6 +38,20 @@ impl IpeStringify for IpeDbStoreColumnSpec {
             }
             IpeDbStoreColumnSpec::DefaultNow(p0) => format!(
                 "DefaultNow {}",
+                (&ipe_runtime::stringify::Wrap(p0)).dispatch()
+            ),
+            IpeDbStoreColumnSpec::DefaultText(p0, p1) => format!(
+                "DefaultText {} {}",
+                (&ipe_runtime::stringify::Wrap(p0)).dispatch(),
+                (&ipe_runtime::stringify::Wrap(p1)).dispatch()
+            ),
+            IpeDbStoreColumnSpec::DefaultInt(p0, p1) => format!(
+                "DefaultInt {} {}",
+                (&ipe_runtime::stringify::Wrap(p0)).dispatch(),
+                (&ipe_runtime::stringify::Wrap(p1)).dispatch()
+            ),
+            IpeDbStoreColumnSpec::TouchOnUpdate(p0) => format!(
+                "TouchOnUpdate {}",
                 (&ipe_runtime::stringify::Wrap(p0)).dispatch()
             ),
         }
