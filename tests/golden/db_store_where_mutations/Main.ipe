@@ -28,6 +28,11 @@ import Ipe.Error as Error exposing (Error)
 --     keeps its own id).
 --   * the template `owner` is an injection payload, bound (never spliced): the
 --     table survives and stores the value verbatim.
+--   * a `deleteWhere (Store.and [])` — a condition constraining NO column, which
+--     lowers to the always-true `(1 = 1)` fragment — is refused with NO SQL
+--     issued (fail-closed): an unconstrained bulk mutation would delete every
+--     row, so it must never reach the database. The later `remaining` line (both
+--     rows still present) confirms the delete never ran.
 --   * `deleteWhere (lt "balance" 100)` removes exactly the one low row.
 --   * a `deleteWhere` naming a column the store does not derive is a typed `Err`
 --     with NO SQL issued (fail-closed).
@@ -36,6 +41,7 @@ import Ipe.Error as Error exposing (Error)
 --   defaults:active:0:stamped
 --   update-where:2
 --   after-update:acct-1=hijacked';DROP,acct-2=hijacked';DROP,acct-3=carol
+--   reject-unscoped:ok
 --   delete-where:1
 --   remaining:acct-1,acct-2
 --   reject-bad-column:ok
@@ -222,6 +228,21 @@ rejectBadColumn conn store =
         )
 
 
+-- A `deleteWhere` whose condition constrains NO column (`Store.and []` lowers to
+-- the always-true `(1 = 1)` fragment) must fail closed, issuing NO SQL — an
+-- unconstrained bulk mutation would delete every row (data loss). The table is
+-- still intact after this check (the delete never ran), which the later
+-- `remaining` line confirms.
+rejectUnscoped : Db -> Store Store.Row -> Task Error String
+rejectUnscoped conn store =
+    Task.onError
+        (\_ -> Task.succeed "reject-unscoped:ok")
+        (Task.map
+            (\_ -> "reject-unscoped:FAIL-mass-deleted")
+            (Store.deleteWhere conn store (Store.and []))
+        )
+
+
 report : Db -> Store Store.Row -> Task Error ()
 report conn store =
     Task.andThen
@@ -231,18 +252,22 @@ report conn store =
                     Task.andThen
                         (\afterUpd ->
                             Task.andThen
-                                (\deleted ->
+                                (\unscoped ->
                                     Task.andThen
-                                        (\remaining ->
+                                        (\deleted ->
                                             Task.andThen
-                                                (\rejected ->
-                                                    printLines defaults updated afterUpd deleted remaining rejected
+                                                (\remaining ->
+                                                    Task.andThen
+                                                        (\rejected ->
+                                                            printLines defaults updated afterUpd unscoped deleted remaining rejected
+                                                        )
+                                                        (rejectBadColumn conn store)
                                                 )
-                                                (rejectBadColumn conn store)
+                                                (remainingCheck conn store)
                                         )
-                                        (remainingCheck conn store)
+                                        (deleteWhereCheck conn store)
                                 )
-                                (deleteWhereCheck conn store)
+                                (rejectUnscoped conn store)
                         )
                         (afterUpdate conn store)
                 )
@@ -251,13 +276,14 @@ report conn store =
         (defaultsCheck conn store)
 
 
-printLines : String -> Int -> String -> Int -> String -> String -> Task Error ()
-printLines defaults updated afterUpd deleted remaining rejected =
+printLines : String -> Int -> String -> String -> Int -> String -> String -> Task Error ()
+printLines defaults updated afterUpd unscoped deleted remaining rejected =
     Io.println
         (String.join "\n"
             [ defaults
             , String.concat [ "update-where:", String.fromInt updated ]
             , String.concat [ "after-update:", afterUpd ]
+            , unscoped
             , String.concat [ "delete-where:", String.fromInt deleted ]
             , String.concat [ "remaining:", remaining ]
             , rejected

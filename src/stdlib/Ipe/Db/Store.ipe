@@ -1061,20 +1061,24 @@ updateWhere : Db -> Store a -> Cond -> a -> Task Error Int
 updateWhere conn store cond row =
     case store of
         Store r ->
-            case condFragmentIn r.currentColumns cond of
-                Err e ->
-                    Task.fail e
+            if Basics.not (condConstrainsColumn cond) then
+                Task.fail unconstrainedMutationError
 
-                Ok frag ->
-                    case DbCodec.codecToBinds r.codec row of
-                        Err e ->
-                            Task.fail e
+            else
+                case condFragmentIn r.currentColumns cond of
+                    Err e ->
+                        Task.fail e
 
-                        Ok binds ->
-                            Db.updateWhere conn
-                                r.table
-                                (updateWhereSetFields r.specs r.pk binds)
-                                frag
+                    Ok frag ->
+                        case DbCodec.codecToBinds r.codec row of
+                            Err e ->
+                                Task.fail e
+
+                            Ok binds ->
+                                Db.updateWhere conn
+                                    r.table
+                                    (updateWhereSetFields r.specs r.pk binds)
+                                    frag
 
 
 -- Project the codec binds to the UPDATE SET fields for a WHERE-scoped update:
@@ -1121,12 +1125,53 @@ deleteWhere : Db -> Store a -> Cond -> Task Error Int
 deleteWhere conn store cond =
     case store of
         Store r ->
-            case condFragmentIn r.currentColumns cond of
-                Err e ->
-                    Task.fail e
+            if Basics.not (condConstrainsColumn cond) then
+                Task.fail unconstrainedMutationError
 
-                Ok frag ->
-                    Db.deleteWhere conn r.table frag
+            else
+                case condFragmentIn r.currentColumns cond of
+                    Err e ->
+                        Task.fail e
+
+                    Ok frag ->
+                        Db.deleteWhere conn r.table frag
+
+
+-- Whether `cond` constrains at least one column: True when its `Cond` tree
+-- contains any leaf (`Compare` / `Like` / `IsNull` / `NotNull` / `InList`, each
+-- of which names a store column), False when it is only connectives over no
+-- leaves. `and []` (→ `(1 = 1)`, matches every row), `or []` (→ `(1 = 0)`), and
+-- `not` / `and` / `or` nests that bottom out in empty lists all constrain no
+-- column. The mutation surface (`updateWhere` / `deleteWhere`) refuses such an
+-- unconstrained condition, so a dynamically-empty condition list can never
+-- silently become an update-all / delete-all. The read path keeps the all-rows
+-- semantics — an unconstrained query is non-destructive.
+condConstrainsColumn : Cond -> Bool
+condConstrainsColumn cond =
+    case cond of
+        Compare _ _ _ ->
+            True
+
+        Like _ _ ->
+            True
+
+        IsNull _ ->
+            True
+
+        NotNull _ ->
+            True
+
+        InList _ _ ->
+            True
+
+        AndList conds ->
+            List.any condConstrainsColumn conds
+
+        OrList conds ->
+            List.any condConstrainsColumn conds
+
+        NotCond inner ->
+            condConstrainsColumn inner
 
 
 -- ─── Read path ─────────────────────────────────────────────────────
@@ -2530,6 +2575,12 @@ unknownColumnError name =
         (String.concat
             [ "Ipe.Db.Store: \"", name, "\" is not a column of this store — a query may only reference the store's own derived columns" ]
         )
+
+
+unconstrainedMutationError : Error
+unconstrainedMutationError =
+    Error.invalidInput
+        "Ipe.Db.Store: refusing an unconstrained updateWhere/deleteWhere — the condition constrains no column (e.g. `and []` matches every row), which would mass-update or mass-delete the whole table; pass a condition that references at least one column"
 
 
 missingKeyBindError : String -> Error

@@ -396,9 +396,11 @@ fn db_delete_where() {
 /// drives `Store.updateWhere` (a `Cond` lowered to a `SqlFragment`, matching
 /// rows only, the primary key never rewritten, an injection-payload value bound
 /// verbatim) and `Store.deleteWhere` (matching rows only), plus a fail-closed
-/// unknown-column `deleteWhere`. Output (six lines):
-/// `"defaults:active:0:stamped"`, `"update-where:2"`, the post-update owners,
-/// `"delete-where:1"`, `"remaining:acct-1,acct-2"`, `"reject-bad-column:ok"`.
+/// unknown-column `deleteWhere` AND a fail-closed unconstrained `deleteWhere`
+/// (`Store.and []`, which would otherwise mass-delete every row). Output (seven
+/// lines): `"defaults:active:0:stamped"`, `"update-where:2"`, the post-update
+/// owners, `"reject-unscoped:ok"`, `"delete-where:1"`,
+/// `"remaining:acct-1,acct-2"`, `"reject-bad-column:ok"`.
 ///
 /// The load-bearing SEAL is the build+run: `ipe` must accept a
 /// `Store.updateWhere` / `Store.deleteWhere` program AND the emitted crate must
