@@ -1,0 +1,168 @@
+module Main exposing (main)
+
+-- The DB-shape half of `Ipe.Codec`: every codec carries a dialect-neutral
+-- `Shape` that a persistence layer reads for its column list. This fixture
+-- proves four facts at once and prints one `codec-shape-ok` line iff all hold:
+--
+--   * scalar codecs report their `SScalar` column type, and a `maybe` over a
+--     scalar reports a NULLABLE column (`CNull`) while a `list` reports a blob;
+--   * a record codec written in the direct form reports its `SRecord` column
+--     list — the same keys the JSON round-trip uses — and round-trips a value
+--     (encode → decode is identity), so the wire form and the column form are one
+--     source of truth;
+--   * `decimal` round-trips LOSSLESSLY a value a `Float` would corrupt (twenty
+--     significant digits);
+--   * `money` round-trips LOSSLESSLY both the exact amount and the currency.
+
+import Ipe.Io as Io
+import Ipe.Codec as Codec exposing (Codec(..), Shape(..), ColType(..))
+import Ipe.Json.Encode as Encode
+import Ipe.Json.Decode as Decode
+import Ipe.Json.Decode.Pipeline as Pipeline
+import Ipe.Config as Config
+import Ipe.List as List
+import Ipe.Decimal as Decimal exposing (Decimal)
+import Ipe.Money as Money exposing (Money)
+import Ipe.Task as Task exposing (Task)
+import Ipe.Error exposing (Error)
+
+
+type alias User =
+    { id : String
+    , age : Int
+    , active : Bool
+    , nick : Maybe String
+    , tags : List String
+    }
+
+
+makeUser : String -> Int -> Bool -> Maybe String -> List String -> User
+makeUser id age active nick tags =
+    { id = id, age = age, active = active, nick = nick, tags = tags }
+
+
+userCodec : Codec User
+userCodec =
+    Codec
+        { enc =
+            \u ->
+                Encode.object
+                    [ ( "id", Codec.toValue Codec.string u.id )
+                    , ( "age", Codec.toValue Codec.int u.age )
+                    , ( "active", Codec.toValue Codec.bool u.active )
+                    , ( "nick", Codec.toValue (Codec.maybe Codec.string) u.nick )
+                    , ( "tags", Codec.toValue (Codec.list Codec.string) u.tags )
+                    ]
+        , mkDec =
+            \_ ->
+                Decode.succeed makeUser
+                    |> Pipeline.required "id" Decode.string
+                    |> Pipeline.required "age" Decode.int
+                    |> Pipeline.required "active" Decode.bool
+                    |> Pipeline.required "nick" (Config.nullable Decode.string)
+                    |> Pipeline.required "tags" (Decode.list Decode.string)
+        , shp =
+            SRecord
+                [ ( "id", Codec.columnOf (Codec.shape Codec.string) )
+                , ( "age", Codec.columnOf (Codec.shape Codec.int) )
+                , ( "active", Codec.columnOf (Codec.shape Codec.bool) )
+                , ( "nick", Codec.columnOf (Codec.shape (Codec.maybe Codec.string)) )
+                , ( "tags", Codec.columnOf (Codec.shape (Codec.list Codec.string)) )
+                ]
+        }
+
+
+sample : User
+sample =
+    { id = "u1"
+    , age = 42
+    , active = True
+    , nick = Just "z"
+    , tags = [ "a", "b" ]
+    }
+
+
+scalarShapesOk : Bool
+scalarShapesOk =
+    (Codec.shape Codec.string == SScalar CText)
+        && (Codec.shape Codec.int == SScalar CInt)
+        && (Codec.shape Codec.bool == SScalar CBool)
+        && (Codec.shape Codec.float == SScalar CReal)
+        && (Codec.shape (Codec.maybe Codec.int) == SScalar (CNull CInt))
+        && (Codec.shape (Codec.list Codec.int) == SBlob)
+        && (Codec.shape (Codec.dict Codec.int) == SBlob)
+
+
+recordShapeOk : Bool
+recordShapeOk =
+    Codec.shape userCodec
+        == SRecord
+            [ ( "id", CText )
+            , ( "age", CInt )
+            , ( "active", CBool )
+            , ( "nick", CNull CText )
+            , ( "tags", CBlob )
+            ]
+
+
+recordRoundTrips : Bool
+recordRoundTrips =
+    case Codec.fromJson userCodec (Codec.toJson userCodec sample) of
+        Ok back ->
+            (back.id == sample.id)
+                && (back.age == sample.age)
+                && (back.active == sample.active)
+                && (back.nick == sample.nick)
+                && (List.length back.tags == List.length sample.tags)
+
+        Err _ ->
+            False
+
+
+decimalRoundTrips : Bool
+decimalRoundTrips =
+    case Decimal.fromString "12.345678901234567890" of
+        Ok d ->
+            case Codec.fromJson Codec.decimal (Codec.toJson Codec.decimal d) of
+                Ok back ->
+                    Decimal.eq back d
+                        && (Codec.shape Codec.decimal == SScalar CText)
+
+                Err _ ->
+                    False
+
+        Err _ ->
+            False
+
+
+moneyRoundTrips : Bool
+moneyRoundTrips =
+    case Money.fromString Money.USD "12.34" of
+        Ok m ->
+            case Codec.fromJson Codec.money (Codec.toJson Codec.money m) of
+                Ok back ->
+                    Money.eq back m
+                        && (Codec.shape Codec.money == SScalar CText)
+
+                Err _ ->
+                    False
+
+        Err _ ->
+            False
+
+
+main : Task Error ()
+main =
+    Io.println
+        (if
+            scalarShapesOk
+                && recordShapeOk
+                && recordRoundTrips
+                && decimalRoundTrips
+                && moneyRoundTrips
+         then
+            "codec-shape-ok"
+
+         else
+            "codec-shape-FAIL"
+        )

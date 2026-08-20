@@ -9,7 +9,7 @@ module Main exposing (main)
 -- document decodes to a typed `Err`, never a panic.
 
 import Ipe.Io as Io
-import Ipe.Codec as Codec exposing (Codec(..))
+import Ipe.Codec as Codec exposing (Codec(..), Shape(..), ColType(..))
 import Ipe.Json.Encode as Encode
 import Ipe.Json.Decode as Decode
 import Ipe.Json.Decode.Pipeline as Pipeline
@@ -72,6 +72,15 @@ manualCodec =
                     |> Pipeline.required "score" Decode.float
                     |> Pipeline.required "tags" (Decode.list Decode.string)
                     |> Pipeline.required "home" addressDecoder
+        , shp =
+            SRecord
+                [ ( "name", CText )
+                , ( "age", CInt )
+                , ( "active", CBool )
+                , ( "score", CReal )
+                , ( "tags", CBlob )
+                , ( "home", CBlob )
+                ]
         }
 
 

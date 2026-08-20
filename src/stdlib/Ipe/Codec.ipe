@@ -1,11 +1,15 @@
--- | Ipe.Codec — one invariant codec that drives the JSON direction.
+-- | Ipe.Codec — one invariant codec that drives BOTH the JSON direction and the
+-- DB column shape.
 --
--- A `Codec a` bundles an encoder and a decoder for one type in a single value,
--- so encode and decode cannot drift apart: you cannot hold a codec that encodes
--- but does not decode. This is bidirectionality enforced by the type, not by
--- discipline. `toJson codec` and `fromJson codec` read the same codec, so the
--- round-trip law `fromJson codec (toJson codec x) == Ok x` holds by
--- construction for every codec built here.
+-- A `Codec a` bundles an encoder, a decoder, and a structural `Shape` for one
+-- type in a single value, so the wire form and the storage form cannot drift
+-- apart: you cannot hold a codec that encodes but does not decode, nor one whose
+-- column list disagrees with its fields. This is bidirectionality AND
+-- schema-agreement enforced by the type, not by discipline. `toJson codec` and
+-- `fromJson codec` read the same codec, so the round-trip law
+-- `fromJson codec (toJson codec x) == Ok x` holds by construction, and `shape
+-- codec` reads the SAME codec, so the DB column set is derived from the same
+-- fact the JSON round-trip uses.
 --
 -- `map` is the load-bearing scalar combinator and is a BIJECTION — it takes BOTH
 -- directions (`a -> b` and `b -> a`). A one-way map could not encode a `b`,
@@ -17,28 +21,36 @@
 -- consumes it — so a codec that must be reused across encode/decode calls cannot
 -- hold one `Decoder a` value directly. `Codec a` stores the decode side as
 -- `{} -> Decoder a`: a reproducible factory that builds a fresh decoder on each
--- run. Both fields are functions, which the backend stores on a shared, clonable
--- carrier, so a `Codec a` is an ordinary reusable value that composes.
+-- run. Both function fields are stored on a shared, clonable carrier, so a
+-- `Codec a` is an ordinary reusable value that composes.
+--
+-- The `Shape` field. Every codec carries a `Shape` describing how it maps to DB
+-- columns, in dialect-neutral `ColType`s (the `Ipe.Db` layer chooses the actual
+-- SQLite/Postgres types). A bare scalar is one typed column (`SScalar`); a
+-- record built with the field builder is a list of typed columns (`SRecord`); a
+-- nested record, list, dict, or data-carrying union is one JSON-in-TEXT column
+-- (`SBlob`). One codec therefore supplies the column list, the reads, and the
+-- writes from a single source.
 --
 -- Building composite codecs: `list`/`maybe`/`dict` lift an element codec over a
 -- container by lifting each side (the encoder over the container, the decoder
--- factory through the matching JSON kernel).
+-- factory through the matching JSON kernel), and each derives its own `Shape`.
 --
 -- A record codec is written as one `Codec` value directly: the encoder is an
--- `Ipe.Json.Encode.object` over the field encoders, and the decoder factory is a
+-- `Ipe.Json.Encode.object` over the field encoders, the decoder factory is a
 -- `Decode.succeed <constructor> |> Pipeline.required <key> <fieldDecoder> …`
--- applicative chain over the field decoders, so each field appears once on each
--- side. (A generic `object`/`field`/`buildObject` builder that threaded the
--- record constructor through a polymorphic accumulator is deliberately absent:
--- it binds a curried constructor to a generic parameter carried through a
--- decoder field, which the backend rejects fail-closed as IPE-L0107 —
--- applying the constructor one argument at a time across a generic carrier
--- needs a curried-constructor lowering it does not yet emit. The direct `Codec`
--- + pipeline form is fully monomorphic and always builds.)
+-- applicative chain over the field decoders, and the `shp` field is the
+-- record's `SRecord` column list — each field named once per side, and its
+-- column type read from the field codec's own `Shape`. This form is fully
+-- monomorphic: the constructor and the pipeline decoder are concrete at the
+-- record's own definition site, so they lower directly.
 --
 -- The combinator surface:
 --
 --   * `string` / `int` / `bool` / `float` — the scalar codecs.
+--   * `decimal` / `money` — exact-decimal scalars encoded LOSSLESSLY as a JSON
+--     string (never a `Float`), for prices and quantities a `Float` would
+--     corrupt.
 --   * `map toB toA inner` — a bijection newtype wrapper (a `Codec a` to a
 --     `Codec b` given both directions).
 --   * `list elem` — a JSON array of `elem`s ⇄ `List a`.
@@ -49,22 +61,12 @@
 --   * `taggedUnion variants` with `var0`/`var1`/`var2`/`var3` — a data-carrying
 --     ADT ⇄ a tagged JSON array `["Tag", arg0, …]`; each `Variant` carries both
 --     directions, so the union is one source of truth.
+--   * `shape` — the codec's `Shape`: the derived DB column list / scalar type.
 --   * `toValue` / `toJson` / `fromJson` — encode to a JSON `Value` / string,
 --     decode a JSON string back (a typed `Err` on malformed input, never a
 --     panic).
 --   * `fromJsonSafe maxChars` — decode, rejecting input over `maxChars` BEFORE
 --     parsing (the untrusted-input door).
---   * `auto witness` — DERIVE a record codec from its type. Given a witness value
---     whose type is a record (a top-level value annotated with a record type),
---     the compiler reads that record's fields and writes the field-by-field codec
---     for you — the same one you would write by hand. Each field's codec is chosen
---     from its type: `String`/`Int`/`Bool`/`Float` scalars, a `List` of a
---     derivable element, or a nested record (recursively). The keys are the field
---     names in snake_case (the storage convention). A field with no derivable
---     codec — a function, a `Secret`, a data-carrying ADT — is a compile error
---     (write that part of the codec explicitly). The derive runs at compile time:
---     it produces no reflection and no runtime cost, only the codec you could have
---     written yourself.
 --
 -- Minimal round-trips:
 --
@@ -89,19 +91,38 @@
 --     type alias User =
 --         { id : String, age : Int, active : Bool }
 --
---     blankUser : User
---     blankUser =
---         { id = "", age = 0, active = False }
+--     makeUser : String -> Int -> Bool -> User
+--     makeUser id age active =
+--         { id = id, age = age, active = active }
 --
 --     userCodec : Codec User
 --     userCodec =
---         Codec.auto blankUser
+--         Codec
+--             { enc =
+--                 \u ->
+--                     Encode.object
+--                         [ ( "id", Codec.toValue Codec.string u.id )
+--                         , ( "age", Codec.toValue Codec.int u.age )
+--                         , ( "active", Codec.toValue Codec.bool u.active )
+--                         ]
+--             , mkDec =
+--                 \_ ->
+--                     Decode.succeed makeUser
+--                         |> Pipeline.required "id" Decode.string
+--                         |> Pipeline.required "age" Decode.int
+--                         |> Pipeline.required "active" Decode.bool
+--             , shp =
+--                 SRecord [ ( "id", CText ), ( "age", CInt ), ( "active", CBool ) ]
+--             }
 --
 --     -- Codec.fromJson userCodec (Codec.toJson userCodec u) == Ok u
+--     -- Codec.shape userCodec
+--     --     == SRecord [ ( "id", CText ), ( "age", CInt ), ( "active", CBool ) ]
 module Ipe.Codec exposing
     ( Codec(..)
-    , toValue, toJson, fromJson, fromJsonSafe
-    , string, int, bool, float
+    , ColType(..), Shape(..)
+    , shape, columnOf, toValue, toJson, fromJson, fromJsonSafe
+    , string, int, bool, float, decimal, money
     , map
     , list, maybe, dict
     , enum
@@ -117,19 +138,59 @@ import Ipe.List as List
 import Ipe.Dict as Dict
 import Ipe.Maybe as Maybe exposing (Maybe(..))
 import Ipe.Error as Error exposing (Error)
+import Ipe.Decimal as Decimal exposing (Decimal)
+import Ipe.Money as Money exposing (Money)
 
 
--- | An invariant codec for `a`: an encoder to a JSON `Value` and a decoder
--- factory that builds a fresh decoder for `a`. Invariant in `a` — it both
--- produces and consumes `a`, which is what keeps the two directions in step.
+-- | The dialect-neutral column type a codec maps to. The `Ipe.Db` layer maps
+-- these to concrete SQLite/Postgres types (`TEXT`/`VARCHAR`, `INTEGER`/`BOOLEAN`,
+-- …), so one codec works on every backend. `CNull t` is a nullable column of `t`.
+type ColType
+    = CText
+    | CInt
+    | CReal
+    | CBool
+    | CBlob
+    | CNull ColType
+
+
+-- | A codec's structural shape. `SRecord` is a record whose top-level scalar
+-- fields become typed columns; `SScalar` is one bare scalar codec as a single
+-- typed column; `SBlob` is a nested record / list / dict / data-carrying ADT
+-- stored as one JSON TEXT column.
+type Shape
+    = SRecord (List ( String, ColType ))
+    | SScalar ColType
+    | SBlob
+
+
+-- | An invariant codec for `a`: an encoder to a JSON `Value`, a decoder factory
+-- that builds a fresh decoder for `a`, and the structural `Shape` its DB columns
+-- derive from. Invariant in `a` — it both produces and consumes `a`, which is
+-- what keeps the two directions in step; the `Shape` keeps the storage form in
+-- step with them.
 type Codec a
     = Codec
         { enc : a -> Value
         , mkDec : {} -> Decoder a
+        , shp : Shape
         }
 
 
 -- ─── Projections / runs ────────────────────────────────────────────
+
+
+-- | The codec's structural `Shape` — its DB column list (`SRecord`), single
+-- scalar column type (`SScalar`), or one JSON-TEXT blob column (`SBlob`).
+--
+--     shape (Codec.list Codec.int) == SBlob
+--     shape Codec.int == SScalar CInt
+--     shape (Codec.maybe Codec.string) == SScalar (CNull CText)
+shape : Codec a -> Shape
+shape codec =
+    case codec of
+        Codec r ->
+            r.shp
 
 
 -- | The encoder half applied: `a` to a JSON `Value` node.
@@ -177,45 +238,119 @@ fromJsonSafe maxChars codec s =
 
 -- ─── Primitive codecs ──────────────────────────────────────────────
 --
--- Each primitive is a self-contained `Codec` value that inlines its own encoder
--- and a factory that rebuilds its decoder on each run.
+-- Each primitive is a self-contained `Codec` value that inlines its own encoder,
+-- a factory that rebuilds its decoder on each run, and its scalar `Shape`.
 
 
--- | JSON string ⇄ `String`.
+-- | JSON string ⇄ `String`. One `CText` column.
 string : Codec String
 string =
     Codec
         { enc = \s -> Encode.string s
         , mkDec = \_ -> Decode.string
+        , shp = SScalar CText
         }
 
 
 -- | JSON integer ⇄ `Int`. A non-integral number is rejected, never truncated.
+-- One `CInt` column.
 int : Codec Int
 int =
     Codec
         { enc = \n -> Encode.int n
         , mkDec = \_ -> Decode.int
+        , shp = SScalar CInt
         }
 
 
--- | JSON boolean ⇄ `Bool`.
+-- | JSON boolean ⇄ `Bool`. One `CBool` column.
 bool : Codec Bool
 bool =
     Codec
         { enc = \b -> Encode.bool b
         , mkDec = \_ -> Decode.bool
+        , shp = SScalar CBool
         }
 
 
--- | JSON number ⇄ `Float`. Prefer an exact-decimal encoding for money —
--- a `Float` round-trip is lossy for exact quantities.
+-- | JSON number ⇄ `Float`. One `CReal` column. Prefer `decimal`/`money` for
+-- exact quantities — a `Float` round-trip is lossy for prices.
 float : Codec Float
 float =
     Codec
         { enc = \x -> Encode.float x
         , mkDec = \_ -> Decode.float
+        , shp = SScalar CReal
         }
+
+
+-- | Exact decimal ⇄ a JSON STRING, LOSSLESS. The value encodes through
+-- `Decimal.toString` (its full precision) and decodes through
+-- `Decimal.fromString`, so `12.345678901234567890` survives a round-trip a
+-- `Float` would corrupt. One `CText` column — never `CReal`.
+--
+--     -- Codec.fromJson Codec.decimal (Codec.toJson Codec.decimal d) == Ok d
+decimal : Codec Decimal
+decimal =
+    Codec
+        { enc = \d -> Encode.string (Decimal.toString d)
+        , mkDec = \_ -> Decode.andThen decimalFromString Decode.string
+        , shp = SScalar CText
+        }
+
+
+decimalFromString : String -> Decoder Decimal
+decimalFromString s =
+    case Decimal.fromString s of
+        Ok d ->
+            Decode.succeed d
+
+        Err _ ->
+            Decode.fail (badDecimalMessage s)
+
+
+-- | Exact money ⇄ a JSON STRING carrying both the amount and the ISO currency
+-- code, LOSSLESS: `"12.34 USD"`. The amount encodes at full `Decimal` precision
+-- (not rounded to the currency's minor units the way a formatted display would
+-- round), and the currency survives verbatim, so the round-trip preserves the
+-- exact stored quantity a `Float` cents field would corrupt. One `CText` column.
+--
+--     -- Codec.fromJson Codec.money (Codec.toJson Codec.money m) == Ok m
+money : Codec Money
+money =
+    Codec
+        { enc = \m -> Encode.string (moneyToWire m)
+        , mkDec = \_ -> Decode.andThen moneyFromWire Decode.string
+        , shp = SScalar CText
+        }
+
+
+moneyToWire : Money -> String
+moneyToWire m =
+    String.join " "
+        [ Decimal.toString (Money.amount m)
+        , Money.currencyCode (Money.currency m)
+        ]
+
+
+moneyFromWire : String -> Decoder Money
+moneyFromWire s =
+    case String.words s of
+        [ amountStr, codeStr ] ->
+            case Money.parseCurrency codeStr of
+                Just cur ->
+                    case Money.fromString cur amountStr of
+                        Ok m ->
+                            Decode.succeed m
+
+                        Err _ ->
+                            Decode.fail (badMoneyMessage s)
+
+                Nothing ->
+                    Decode.fail (badMoneyMessage s)
+
+        _ ->
+            Decode.fail (badMoneyMessage s)
 
 
 -- ─── Scalar combinator ─────────────────────────────────────────────
@@ -225,7 +360,8 @@ float =
 -- directions are required: `toB` reshapes a decoded `a` into a `b`, `toA`
 -- reshapes a `b` back into an `a` the underlying encoder accepts. This is the
 -- newtype-wrapper combinator (`UserId` over `String`); the inverse is what lets
--- the wrapped codec still encode.
+-- the wrapped codec still encode. The wrapped codec keeps the inner codec's
+-- `Shape` — a `UserId` newtype over `String` is still one `CText` column.
 map : (a -> b) -> (b -> a) -> Codec a -> Codec b
 map toB toA inner =
     case inner of
@@ -233,6 +369,7 @@ map toB toA inner =
             Codec
                 { enc = \x -> r.enc (toA x)
                 , mkDec = \_ -> Decode.map toB (r.mkDec {})
+                , shp = r.shp
                 }
 
 
@@ -241,7 +378,8 @@ map toB toA inner =
 
 -- | `list elem` — a JSON array of `elem`s ⇄ `List a`. The element encoder is
 -- lifted over the array; the element decoder is lifted through the array
--- decoder, so a malformed element is a typed `Err`, never a partial list.
+-- decoder, so a malformed element is a typed `Err`, never a partial list. A
+-- list is one JSON-in-TEXT column (`SBlob`).
 list : Codec a -> Codec (List a)
 list elem =
     case elem of
@@ -249,13 +387,15 @@ list elem =
             Codec
                 { enc = \xs -> Encode.list r.enc xs
                 , mkDec = \_ -> Decode.list (r.mkDec {})
+                , shp = SBlob
                 }
 
 
 -- | `maybe elem` — JSON `null` ⇄ `Nothing`, any other value ⇄ `Just`. On
 -- decode, only an explicit `null` becomes `Nothing`; a present-but-malformed
 -- value is an `Err`, so a required field cannot be silently dropped. `Nothing`
--- encodes to `null`.
+-- encodes to `null`. A `maybe` over a scalar is a NULLABLE column of that scalar
+-- (`CNull c`); a `maybe` over a blob shape stays a blob.
 maybe : Codec a -> Codec (Maybe a)
 maybe elem =
     case elem of
@@ -263,7 +403,21 @@ maybe elem =
             Codec
                 { enc = \m -> encodeMaybe r.enc m
                 , mkDec = \_ -> Config.nullable (r.mkDec {})
+                , shp = nullableShape r.shp
                 }
+
+
+nullableShape : Shape -> Shape
+nullableShape inner =
+    case inner of
+        SScalar c ->
+            SScalar (CNull c)
+
+        SRecord _ ->
+            SBlob
+
+        SBlob ->
+            SBlob
 
 
 encodeMaybe : (a -> Value) -> Maybe a -> Value
@@ -278,7 +432,8 @@ encodeMaybe encElem m =
 
 -- | `dict value` — a JSON object whose values are `value`s ⇄ `Dict String a`.
 -- Keys are the object keys (strings); values run through the element codec. A
--- malformed value is a typed `Err`, never a partial dictionary.
+-- malformed value is a typed `Err`, never a partial dictionary. A dict is one
+-- JSON-in-TEXT column (`SBlob`).
 dict : Codec a -> Codec (Dict String a)
 dict value =
     case value of
@@ -286,6 +441,7 @@ dict value =
             Codec
                 { enc = \d -> Encode.object (dictPairs r.enc d)
                 , mkDec = \_ -> Config.dict (r.mkDec {})
+                , shp = SBlob
                 }
 
 
@@ -301,6 +457,39 @@ encodePair encVal pair =
             ( k, encVal v )
 
 
+-- ─── Records: the direct `Codec` + `Pipeline` form ─────────────────
+--
+-- A record codec is written as ONE `Codec` value directly — the encoder an
+-- `Encode.object` over the field encoders, the decoder factory a
+-- `Decode.succeed <constructor> |> Pipeline.required <key> <fieldDecoder> …`
+-- applicative chain over the field decoders, and `shp` the record's `SRecord`
+-- column list (each field's column type read from its own codec's `Shape` via
+-- `columnOf`). Each field is named once per side (see the module header). The
+-- form is fully monomorphic: the record constructor and its pipeline decoder are
+-- concrete at the record's own definition site.
+
+
+-- | The column type a record FIELD contributes to an `SRecord`. A scalar field
+-- keeps its scalar column type; a nested record, list, dict, or data-carrying
+-- union is stored as one JSON-in-TEXT column (`CBlob`), so a record's columns
+-- stay flat and typed. Read a field codec's shape with `shape` and pass it here
+-- when writing the `SRecord` list of a record codec.
+--
+--     columnOf (shape Codec.int) == CInt
+--     columnOf (shape (Codec.list Codec.int)) == CBlob
+columnOf : Shape -> ColType
+columnOf s =
+    case s of
+        SScalar c ->
+            c
+
+        SRecord _ ->
+            CBlob
+
+        SBlob ->
+            CBlob
+
+
 -- ─── Nullary-enum combinator ───────────────────────────────────────
 
 
@@ -308,7 +497,8 @@ encodePair encVal pair =
 -- association list of `(constructor, wireName)` pairs that is the SINGLE source
 -- of truth for both directions. `eq` is the constructor equality (a nullary
 -- enum has no derived `==`, so it is supplied). Encode looks up the value's wire
--- name; decode reads a string and maps it back to the constructor.
+-- name; decode reads a string and maps it back to the constructor. One `CText`
+-- column — a queryable enum, not an opaque blob.
 --
 -- Fail-closed on both sides. On decode an unknown tag is a typed decode failure,
 -- never a default constructor — the safe outcome is the only reachable one. On
@@ -320,6 +510,7 @@ enum eq pairs =
     Codec
         { enc = enumEncode eq pairs
         , mkDec = \_ -> Decode.andThen (enumDecodeName pairs) Decode.string
+        , shp = SScalar CText
         }
 
 
@@ -364,11 +555,11 @@ type Variant a
         }
 
 
--- | `taggedUnion tag variants` — a data-carrying ADT ⇄ a tagged JSON array
--- `["Tag", arg0, arg1, …]`. `tag` names the value's own constructor for the
--- encode side (each `varN` supplies the projection that recognises its arm); the
--- decode side reads element 0 as the tag string and dispatches to the matching
--- variant's decoder.
+-- | `taggedUnion variants` — a data-carrying ADT ⇄ a tagged JSON array
+-- `["Tag", arg0, arg1, …]`. Each `varN` supplies the projection that recognises
+-- its arm; the decode side reads element 0 as the tag string and dispatches to
+-- the matching variant's decoder. A data-carrying union is one JSON-in-TEXT
+-- column (`SBlob`).
 --
 -- Fail-closed: a JSON tag with no matching variant is a typed decode failure,
 -- never a default. The captured variant list is read (never consumed) per decode
@@ -378,6 +569,7 @@ taggedUnion variants =
     Codec
         { enc = taggedEncode variants
         , mkDec = \_ -> Decode.andThen (taggedDecodeTag variants) (Decode.index 0 Decode.string)
+        , shp = SBlob
         }
 
 
@@ -514,22 +706,6 @@ var3 tag ctor project inner1 inner2 inner3 =
                                 }
 
 
--- ─── Records: the direct `Codec` + `Pipeline` form ─────────────────
---
--- A record codec is written as ONE `Codec` value directly — the encoder an
--- `Encode.object` over the field encoders, the decoder factory a
--- `Decode.succeed <constructor> |> Pipeline.required <key> <fieldDecoder> …`
--- applicative chain over the field decoders — so each field appears once on each
--- side (see the module header). A generic `object`/`field`/`buildObject` builder
--- that threads the record constructor through a polymorphic accumulator is
--- deliberately ABSENT: the accumulator carries a curried constructor through a
--- decoder field by a type variable, and applying it one argument at a time
--- across that generic carrier needs a curried-constructor lowering the backend
--- does not yet emit, so it fails closed (IPE-L0107, `first-class-functions`) —
--- shipping it would advertise an API no real record can use. The direct form is
--- fully monomorphic and always builds.
-
-
 -- ─── Errors ────────────────────────────────────────────────────────
 
 
@@ -543,3 +719,13 @@ tooLargeError =
 unknownTagMessage : String -> String
 unknownTagMessage tag =
     String.concat [ "Ipe.Codec: unknown tag \"", tag, "\"" ]
+
+
+badDecimalMessage : String -> String
+badDecimalMessage s =
+    String.concat [ "Ipe.Codec.decimal: not an exact decimal \"", s, "\"" ]
+
+
+badMoneyMessage : String -> String
+badMoneyMessage s =
+    String.concat [ "Ipe.Codec.money: not a \"<amount> <currency>\" pair \"", s, "\"" ]
