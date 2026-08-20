@@ -2376,6 +2376,81 @@ pub fn db_delete_where<E: Send + From<String> + 'static>(
     })
 }
 
+/// `Db.updateWhere : Db -> String -> List (String, SqlField) -> SqlFragment -> Task Error Int`
+/// — the WHERE-`SqlFragment` counterpart to [`db_update_fields`]. The SET list is
+/// the OmitField-aware column/value binds of [`db_update_fields`]; the WHERE is
+/// the combinator-built `SqlFragment` of [`db_delete_where`]. Every SET value is
+/// bound (`SqlParam`); the WHERE text is always `?`-placeholder with a matching
+/// bind list, so no caller value or identifier reaches the SQL text.
+pub fn db_update_where<E: Send + From<String> + 'static>(
+    conn: Db,
+    table: String,
+    set_fields: Vec<(String, Option<SqlParam>)>,
+    frag: SqlFragment,
+) -> IpeTask<E, i64> {
+    Box::pin(async move {
+        if let Some(reason) = frag.invalid {
+            return IpeResult::Err(format!("db.updateWhere: {reason}").into());
+        }
+        let qtable = match SqlIdent::parse_dotted(&table) {
+            Some(t) => t,
+            None => {
+                return IpeResult::Err(
+                    format!("db.updateWhere: invalid table name {:?}", table).into(),
+                );
+            }
+        };
+        // Build SET clause — OmitField (None) columns are skipped.
+        let mut set_clauses: Vec<String> = Vec::new();
+        let mut args: Vec<SqlParam> = Vec::new();
+        for (col, opt) in set_fields {
+            let qcol = match SqlIdent::parse_dotted(&col) {
+                Some(c) => c,
+                None => {
+                    return IpeResult::Err(
+                        format!("db.updateWhere: invalid SET column name {:?}", col).into(),
+                    );
+                }
+            };
+            if let Some(p) = opt {
+                set_clauses.push(format!("{} = ?", qcol.as_str()));
+                args.push(p);
+            }
+        }
+        if set_clauses.is_empty() {
+            // Every column was OmitField — nothing to update; report zero rows.
+            return ok_res(0i64);
+        }
+        // Refuse an unscoped UPDATE: an empty WHERE fragment would emit
+        // `UPDATE <table> SET ...` with no WHERE, silently rewriting EVERY row.
+        // Fail closed instead of mass-updating.
+        if frag.sql.trim().is_empty() {
+            return IpeResult::Err(
+                "db.updateWhere: refusing unscoped UPDATE (no WHERE); pass an explicit condition"
+                    .to_string()
+                    .into(),
+            );
+        }
+        let sql = db_format_sql(format!(
+            "UPDATE {} SET {} WHERE {}",
+            qtable.as_str(),
+            set_clauses.join(", "),
+            frag.sql
+        ));
+        let mut q = sqlx::query(&sql);
+        for p in args {
+            q = bind_sql_param(q, p);
+        }
+        for p in frag.binds {
+            q = bind_sql_param(q, p);
+        }
+        match exec_routed(&conn, q).await {
+            Ok(res) => ok_res(res.rows_affected() as i64),
+            Err(e) => IpeResult::Err(ipe_err(&e)),
+        }
+    })
+}
+
 // ─── External-connection read path (foreign-DB reads through the codec stack) ──
 //
 // The app connection (`Db`) is one dialect fixed at build time; an external
@@ -5069,6 +5144,99 @@ mod tests {
         );
     }
 
+    /// `db_update_where` mirrors `db_update_fields`' guards on the WHERE-fragment
+    /// path: an empty WHERE fragment is refused (no mass-update), a scoped update
+    /// touches only the matching rows, and a SET value carrying SQL metacharacters
+    /// is bound (stored verbatim), never spliced.
+    #[tokio::test]
+    async fn update_where_scopes_binds_and_refuses_empty() {
+        let db = fresh_db().await;
+        let mk: IpeResult<String, i64> = db_exec_raw(
+            db.clone(),
+            "CREATE TABLE acct (id INTEGER PRIMARY KEY, owner TEXT, bal INTEGER)".to_string(),
+        )
+        .await;
+        assert!(matches!(mk, IpeResult::Ok(_)), "create: {mk:?}");
+        let _: IpeResult<String, i64> = db_exec_raw(
+            db.clone(),
+            "INSERT INTO acct (id, owner, bal) VALUES (1, 'a', 10), (2, 'b', 20)".to_string(),
+        )
+        .await;
+
+        // Empty WHERE fragment MUST be refused (would otherwise mass-update).
+        let refused: IpeResult<String, i64> = db_update_where(
+            db.clone(),
+            "acct".to_string(),
+            vec![("bal".to_string(), Some(SqlParam::Int(0)))],
+            sql_unsafe_fragment(String::new()),
+        )
+        .await;
+        assert!(
+            matches!(refused, IpeResult::Err(_)),
+            "empty WHERE must be refused, got {refused:?}"
+        );
+        let zeroed: IpeResult<String, Vec<HashMap<String, String>>> = db_query_params(
+            db.clone(),
+            "SELECT bal FROM acct WHERE bal = ?".to_string(),
+            vec![SqlParam::Int(0)],
+        )
+        .await;
+        assert_eq!(
+            zeroed.with_default(Vec::new()).len(),
+            0,
+            "no row should have been mass-updated"
+        );
+
+        // A scoped update with an injection-laden SET value affects exactly the
+        // matching row and stores the value VERBATIM (bound, not spliced).
+        let nasty = "x'); DROP TABLE acct;-- O'Brien".to_string();
+        let scoped: IpeResult<String, i64> = db_update_where(
+            db.clone(),
+            "acct".to_string(),
+            vec![("owner".to_string(), Some(SqlParam::Text(nasty.clone())))],
+            sql_eq(sql_column("id".to_string()), sql_param(1i64)),
+        )
+        .await;
+        assert!(
+            matches!(scoped, IpeResult::Ok(1)),
+            "scoped update should affect exactly 1 row: {scoped:?}"
+        );
+
+        // The matching row carries the verbatim value; the non-matching row is
+        // untouched; and the table still exists (the DROP never ran).
+        let rows: IpeResult<String, Vec<HashMap<String, String>>> = db_query_params(
+            db.clone(),
+            "SELECT id, owner FROM acct ORDER BY id".to_string(),
+            vec![],
+        )
+        .await;
+        match rows {
+            IpeResult::Ok(v) => {
+                assert_eq!(v.len(), 2, "injection must not have dropped the table");
+                assert_eq!(v[0].get("owner").unwrap(), &nasty, "matching row updated");
+                assert_eq!(
+                    v[1].get("owner").unwrap(),
+                    "b",
+                    "non-matching row untouched"
+                );
+            }
+            other => panic!("table gone or errored: {other:?}"),
+        }
+
+        // An all-OmitField SET updates no columns and reports zero rows.
+        let omitted: IpeResult<String, i64> = db_update_where(
+            db.clone(),
+            "acct".to_string(),
+            vec![("owner".to_string(), None)],
+            sql_eq(sql_column("id".to_string()), sql_param(2i64)),
+        )
+        .await;
+        assert!(
+            matches!(omitted, IpeResult::Ok(0)),
+            "all-OmitField SET reports zero rows: {omitted:?}"
+        );
+    }
+
     // AUD-07 (a): when DATABASE_URL is absent, ipe_db_url() returns the sqlite
     // file default — never the hardcoded "sqlite::memory:" that caused silent
     // data loss on every Db.connect() call.
@@ -5372,6 +5540,24 @@ mod tests {
                     "todos".to_string(),
                     vec![(hs.clone(), SqlParam::Int(1))],
                     vec![("title".to_string(), Some(SqlParam::Text("x".to_string())))],
+                )
+            );
+            assert_rejects!(
+                "db_update_where(table)",
+                db_update_where(
+                    db.clone(),
+                    hs.clone(),
+                    vec![("title".to_string(), Some(SqlParam::Text("x".to_string())))],
+                    sql_eq(sql_column("id".to_string()), sql_param("1".to_string())),
+                )
+            );
+            assert_rejects!(
+                "db_update_where(set column)",
+                db_update_where(
+                    db.clone(),
+                    "todos".to_string(),
+                    vec![(hs.clone(), Some(SqlParam::Text("x".to_string())))],
+                    sql_eq(sql_column("id".to_string()), sql_param("1".to_string())),
                 )
             );
 

@@ -2284,6 +2284,26 @@ fn emit_db_call(
                 project_fields(&set_s)
             )))
         }
+        // ── DbUpdateWhere: (conn, table, List (String,SqlField), frag: SqlFragment) ─
+        //
+        // The SET list is projected exactly like `DbUpdateFields`' set argument;
+        // the WHERE `frag` is a bare `SqlFragment` value, passed through like
+        // `DbDeleteWhere`'s fragment (no `List` projection).
+        KernelFn::DbUpdateWhere => {
+            let conn_e = arg!(0, "conn")?;
+            let table_e = arg!(1, "table")?;
+            let set_e = arg!(2, "set_fields")?;
+            let frag_e = arg!(3, "frag")?;
+            let conn_s = emit_expr_at(ctx, conn_e, indent, child, generics)?;
+            let table_s = emit_expr_at(ctx, table_e, indent, child, generics)?;
+            let set_s = emit_expr_at(ctx, set_e, indent, child, generics)?;
+            let frag_s = emit_expr_at(ctx, frag_e, indent, child, generics)?;
+            let fn_name = crate::naming::kernel_name(*k);
+            Ok(Some(format!(
+                "{fn_name}({conn_s}.clone(), {table_s}, {}, {frag_s})",
+                project_fields(&set_s)
+            )))
+        }
         // ── DbInsertFieldsReturning: (conn, table, List (String, SqlField), projection, decoder) ─
         KernelFn::DbInsertFieldsReturning => {
             let conn_e = arg!(0, "conn")?;

@@ -1350,6 +1350,7 @@ impl Env {
                     "findByConditions",
                     "findWhere",
                     "deleteWhere",
+                    "updateWhere",
                     // External read path — `…On` reads over a `Connection a`.
                     "findWhereOn",
                     "queryDecodeOn",

@@ -5536,6 +5536,18 @@ impl<'a> Builder<'a> {
             ),
             // `Db.deleteWhere : Db -> String -> SqlFragment -> Task Int`
             K::DbDeleteWhere => fun(db(), fun(string(), fun(sqlfragment(), task(int())))),
+            // `Db.updateWhere : Db -> String -> List (String, SqlField)
+            //                   -> SqlFragment -> Task Int`
+            K::DbUpdateWhere => fun(
+                db(),
+                fun(
+                    string(),
+                    fun(
+                        list(tuple2(string(), sqlfield())),
+                        fun(sqlfragment(), task(int())),
+                    ),
+                ),
+            ),
             K::DbInsertFields => fun(
                 db(),
                 fun(
@@ -9381,6 +9393,7 @@ mod registry_phase_c_tests {
             K::SqlLike,
             K::DbFindWhere,
             K::DbDeleteWhere,
+            K::DbUpdateWhere,
             // `Db.Decode.money` and `Db.Decode.bytes` — Ipê-NEW kernels (the
             // ancestor has no DbDec money/bytes routes), so they close genuine
             // holes rather than relocating legacy `kernel_ty` schemes. Their
