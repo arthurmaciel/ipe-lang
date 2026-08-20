@@ -1,32 +1,45 @@
 -- | Ipe.Db.Store — typed, injection-safe persistence over the audited `Ipe.Db`.
 --
--- A `Store` is one table whose identifiers are declared once, validated once,
--- and reused by every read and write. The safe surface cannot express SQL
--- injection: every table and column identifier reaches SQL only after
--- `validSqlIdent` accepts it, and every value binds as a parameter, never
--- interpolated. A caller who wants raw SQL must reach for `Ipe.Db.Unsafe`,
--- which discloses that capability program-wide.
+-- A `Store a` is one table whose row type is `a`, described once by a
+-- `Codec a`. The codec is the single source of truth: its `Shape` yields the
+-- table's columns and their types, its encoder writes a row, and its decoder
+-- reads one back. Identifiers are declared once, validated once, and reused by
+-- every read and write. The safe surface cannot express SQL injection: every
+-- table and column identifier reaches SQL only after `validSqlIdent` accepts it,
+-- and every value binds as a parameter, never interpolated. A caller who wants
+-- raw SQL must reach for `Ipe.Db.Unsafe`, which discloses that capability
+-- program-wide.
 --
 -- The security argument, made structural:
 --
 --   * Identifiers are parsed, not validated. A `Store` is built through
---     `fromColumns`, which runs `validSqlIdent` over the table name and every
---     column name and returns `Err` on the first non-conforming identifier. A
---     built `Store` therefore carries only accepted identifiers — no downstream
---     operation re-checks, because an invalid one was unrepresentable past the
---     constructor (parse-don't-validate).
---   * Values never touch SQL text. `insert` routes through `Db.insertFields`
---     (typed `SqlField` binds); `all` / `get` / `findWhere` route through
+--     `fromCodec` (or the raw-column escape `fromColumns`), which runs
+--     `validSqlIdent` over the table name and every derived column name and
+--     returns `Err` on the first non-conforming identifier. A built `Store`
+--     therefore carries only accepted identifiers — no downstream operation
+--     re-checks, because an invalid one was unrepresentable past the constructor
+--     (parse-don't-validate).
+--   * Columns derive from the codec, never drift from it. `fromCodec` reads the
+--     codec's `Shape`; a non-`SRecord` codec names no columns and is a build
+--     `Err` (fail-closed). The column list, the DDL, the insert binds, and the
+--     row decode are one derivation from one codec, so a field added or retyped
+--     changes exactly one place.
+--   * Values never touch SQL text. `insert` projects the row through the codec
+--     to typed `SqlField` binds (`Ipe.Db.Codec.codecToBinds`) and routes them
+--     through `Db.insertFields`; `all` / `get` / `findWhere` route through
 --     `Db.findWhere` over a `SqlFragment` built from `Sql.column` (validated) +
---     `Sql.param` (bound); `delete` routes through `Db.deleteWhere` the same
---     way. Not one of them concatenates a caller value into SQL.
+--     `Sql.param` (bound) and decode each row through the codec
+--     (`Ipe.Db.Codec.codecFromRow`); `delete` routes through `Db.deleteWhere`
+--     the same way. Not one of them concatenates a caller value into SQL.
+--   * Reads decode through the codec, so schema drift (a missing column, a cell
+--     that is not the declared shape) is a typed `Err`, never a wrong value.
 --   * The by-key operations use the store's own validated primary key, never a
 --     caller-supplied identifier string.
---   * `create` is fail-closed. It builds the `CREATE TABLE` DDL from the
---     store's typed columns, re-validating every identifier through
---     `validSqlIdent` before it can appear in the DDL string, and hands the
---     result to the versioned `Db.migrate` ledger (idempotent, additive). A
---     store whose columns do not all validate produces `Err` and issues no SQL.
+--   * `create` is fail-closed. It builds the `CREATE TABLE` DDL from the store's
+--     typed columns, re-validating every identifier through `validSqlIdent`
+--     before it can appear in the DDL string, and hands the result to the
+--     versioned `Db.migrate` ledger (idempotent, additive). A store whose columns
+--     do not all validate produces `Err` and issues no SQL.
 --   * Schema-evolution operators (`renameColumn`, `renameTable`) are total
 --     constructors that record ops in an ordered log. `migrations` is the single
 --     point where rename DDL text is assembled: every identifier (table name,
@@ -38,44 +51,39 @@
 --     migration column identifiers is unrepresentable because both derive from
 --     the same `Store` value.
 --
--- `Store` is deliberately NOT parameterised over the row type: the row
--- projection (a record to its column values) and the row reader (a decoded row
--- back to a record) are supplied at the call site, as ordinary monomorphic
--- functions. This keeps the handle a plain, always-reusable value and keeps the
--- read/write pair for a table declared together at the use site.
+-- Write-path safety: columns marked `Serial` or `DefaultNow` are OMITTED from
+-- the insert so the database fills them (the existing `SqlField`/`OmitField`
+-- seam) — a client value produced for such a column is dropped, never written.
 --
--- Building and using a store:
+-- Building and using a codec-driven store:
 --
 --     import Ipe.Db.Store as Store exposing (Store)
+--     import Ipe.Codec as Codec exposing (Codec)
 --     import Ipe.Result as Result exposing (Result(..))
 --
 --     type alias User =
 --         { id : String, name : String, age : Int }
 --
---     userStore : Result Error Store
+--     -- A `Codec User` whose `Shape` is `SRecord [("id", CText), …]` (built with
+--     -- the `Ipe.Codec` record combinators or `Codec.auto`).
+--     userStore : Result Error (Store User)
 --     userStore =
---         case
---             Store.fromColumns "users"
---                 [ Store.textColumn "id"
---                 , Store.textColumn "name"
---                 , Store.intColumn "age"
---                 ]
---         of
---             Ok store ->
---                 Ok (Store.primaryKey "id" store)
+--         Store.fromCodec "users" userCodec
+--             |> Result.map (Store.primaryKey "id")
 --
---             Err e ->
---                 Err e
+-- The raw-column escape (a dynamic or non-codec table) builds a `Store Row`
+-- whose rows are the untyped `Dict String String` the DB layer returns; read a
+-- column back with the typed `read*` helpers:
 --
---     -- write: project a record to its column values (bound as parameters)
---     writeUser : User -> List ( String, SqlValue )
---     writeUser u =
---         [ ( "id", SqlString u.id )
---         , ( "name", SqlString u.name )
---         , ( "age", SqlInt u.age )
---         ]
+--     rawStore : Result Error (Store Store.Row)
+--     rawStore =
+--         Store.fromColumns "users"
+--             [ Store.textColumn "id"
+--             , Store.textColumn "name"
+--             , Store.intColumn "age"
+--             ]
+--             |> Result.map (Store.primaryKey "id")
 --
---     -- read: reassemble a record from a decoded row (fails closed per column)
 --     readUser : Store.Row -> Result Error User
 --     readUser row =
 --         Result.map3 (\i n a -> { id = i, name = n, age = a })
@@ -84,7 +92,7 @@
 --             (Store.readInt "age" row)
 --
 -- A misdeclared identifier — a table or column name with a quote, a semicolon,
--- or a space — makes `fromColumns` return `Err`, so it never reaches SQL.
+-- or a space — makes the constructor return `Err`, so it never reaches SQL.
 module Ipe.Db.Store exposing
     ( Store(..)
     , Column(..)
@@ -93,7 +101,7 @@ module Ipe.Db.Store exposing
     , Row
     , validSqlIdent
     , column, textColumn, intColumn, floatColumn, boolColumn
-    , fromColumns
+    , fromCodec, fromColumns, rowCodec
     , primaryKey, serial, unique, defaultNow
     , tableName, columnNames, createSql
     , readText, readInt, readBool, readFloat
@@ -104,10 +112,13 @@ module Ipe.Db.Store exposing
     )
 
 
-import Ipe.Codec exposing (ColType(..))
+import Ipe.Codec as Codec exposing (Codec(..), ColType(..), Shape(..))
 import Ipe.Db as Db
+import Ipe.Db.Codec as DbCodec
 import Ipe.Db.Dsn as Dsn exposing (Connection)
 import Ipe.Db.Sql as Sql
+import Ipe.Json.Encode as Encode
+import Ipe.Config as Config
 import Ipe.Char as Char
 import Ipe.String as String
 import Ipe.List as List
@@ -123,7 +134,8 @@ import Ipe.Error as Error exposing (Error)
 
 -- | A row read back from the database: every column keyed by its name, values
 -- as strings (the `Db.findWhere` representation). The typed `read*` helpers
--- parse a column back into its Ipê type.
+-- parse a column back into its Ipê type; the raw-column escape (`fromColumns`)
+-- stores rows in this form.
 type alias Row =
     Dict String String
 
@@ -136,9 +148,8 @@ type alias Row =
 
 
 -- | One typed column: its (validated) name and its abstract type for the
--- schema. The value projection is supplied to `insert` at the call site, so a
--- `Column` is pure data — no stored function, so a `Store` is a plain reusable
--- value.
+-- schema. The value projection lives in the store's codec, so a `Column` is
+-- pure data — no stored function.
 type Column
     = Column
         { name : String
@@ -166,22 +177,25 @@ type SchemaOp
     | RenameTable String String
 
 
--- | One table whose schema, reads, and writes derive from its declared
--- columns. `specs` are the DB-only facts; `pk` is the validated primary-key
--- column used by the by-key operations. `frozenTable` and `frozenColumns` hold
--- the table name and columns as first constructed (the source for the
--- never-drifting create entry — neither is edited by a rename). `table` and
--- `currentColumns` track the current-schema view after any renames (the
--- identifiers CRUD targets). `ops` is the ordered schema-op log folded by
--- `migrations`, threaded from `frozenTable` so each rename entry names the
--- table as of its own position. Built only through `fromColumns`, so every
--- identifier it holds has already been accepted by `validSqlIdent`.
-type Store
+-- | One table whose schema, reads, and writes derive from its `Codec a`.
+-- `codec` is the single source of truth: its `Shape` yields the columns and
+-- their types, its encoder writes a row, its decoder reads one back. `specs`
+-- are the DB-only facts; `pk` is the validated primary-key column used by the
+-- by-key operations. `frozenTable` and `frozenColumns` hold the table name and
+-- columns as first constructed (the source for the never-drifting create entry
+-- — neither is edited by a rename). `table` and `currentColumns` track the
+-- current-schema view after any renames (the identifiers CRUD targets). `ops`
+-- is the ordered schema-op log folded by `migrations`, threaded from
+-- `frozenTable` so each rename entry names the table as of its own position.
+-- Built only through `fromCodec` / `fromColumns`, so every identifier it holds
+-- has already been accepted by `validSqlIdent`.
+type Store a
     = Store
         { table : String
         , frozenTable : String
         , frozenColumns : List Column
         , currentColumns : List Column
+        , codec : Codec a
         , specs : List ColumnSpec
         , pk : Maybe String
         , ops : List SchemaOp
@@ -254,7 +268,7 @@ dotCode =
 
 -- | `column name colType` — a column of an explicit `ColType`. The name is
 -- validated when the store is built, not here, so a raw `Column` is inert until
--- `fromColumns` accepts it.
+-- a constructor accepts it.
 column : String -> ColType -> Column
 column name colType =
     Column { name = name, colType = colType }
@@ -287,13 +301,52 @@ boolColumn name =
 -- ─── Store construction (fail-closed) ──────────────────────────────
 
 
--- | `fromColumns table columns` — build a store, or fail closed. The table name
--- and every column name are run through `validSqlIdent`; the first
--- non-conforming identifier is an `Err`, and no store is produced. A returned
--- `Store` therefore holds only accepted identifiers — the constructor is the
--- single validation boundary (parse-don't-validate).
-fromColumns : String -> List Column -> Result Error Store
+-- | `fromCodec table codec` — build a store from a record codec, or fail
+-- closed. The columns are derived from the codec's `Shape`: an `SRecord`
+-- becomes the typed column list, a non-`SRecord` codec (a bare scalar, a blob)
+-- names no columns and is an `Err`. The table name and every derived column
+-- name are run through `validSqlIdent`; the first non-conforming identifier is
+-- an `Err`, and no store is produced. A returned `Store` therefore holds only
+-- accepted identifiers, and its columns cannot drift from the codec that reads
+-- and writes its rows (parse-don't-validate + one source of truth).
+fromCodec : String -> Codec a -> Result Error (Store a)
+fromCodec table codec =
+    case Codec.shape codec of
+        SRecord cols ->
+            buildStore table (List.map columnFromShape cols) codec
+
+        SScalar _ ->
+            Err notARecordError
+
+        SBlob ->
+            Err notARecordError
+
+
+columnFromShape : ( String, ColType ) -> Column
+columnFromShape pair =
+    case pair of
+        ( name, colType ) ->
+            column name colType
+
+
+-- | `fromColumns table columns` — the raw-column escape: build a `Store Row`
+-- for a dynamic or non-codec table, whose rows are the untyped
+-- `Dict String String` the DB layer returns. The store's codec is the row codec
+-- derived from `columns` (`rowCodec`), so the same codec-driven CRUD applies:
+-- writes bind each declared column, reads decode back into a `Row`, and the
+-- typed `read*` helpers parse a column into its Ipê type. Like `fromCodec`, the
+-- table name and every column name run through `validSqlIdent`, so an invalid
+-- identifier fails closed before any SQL is built.
+fromColumns : String -> List Column -> Result Error (Store Row)
 fromColumns table columns =
+    buildStore table columns (rowCodec columns)
+
+
+-- The shared constructor for both `fromCodec` and `fromColumns`: validate the
+-- table name and every column name, then freeze the columns and attach the
+-- codec. The single validation boundary (parse-don't-validate).
+buildStore : String -> List Column -> Codec a -> Result Error (Store a)
+buildStore table columns codec =
     if not (validSqlIdent table) then
         Err (invalidIdentError "table" table)
 
@@ -309,6 +362,7 @@ fromColumns table columns =
                         , frozenTable = table
                         , frozenColumns = columns
                         , currentColumns = columns
+                        , codec = codec
                         , specs = []
                         , pk = Nothing
                         , ops = []
@@ -348,6 +402,50 @@ columnColType col =
             r.colType
 
 
+-- ─── Row codec (the raw-column escape's source of truth) ───────────
+
+
+-- | `rowCodec columns` — the `Codec Row` a raw-column store uses: a record
+-- codec over `Dict String String` whose `Shape` is `SRecord` naming each
+-- declared column. Every column is carried as `CText` at the JSON layer,
+-- because a `Row` cell is already the string form the DB layer returns and
+-- accepts (the same lossless-string basis the `read*` helpers parse from); the
+-- DDL still uses each column's declared `ColType` (held on the store's frozen
+-- columns), so a raw store creates its table with real types while its rows stay
+-- untyped strings. The encoder emits the declared columns as a JSON object; the
+-- decoder reads that object back into a `Row`.
+rowCodec : List Column -> Codec Row
+rowCodec columns =
+    let
+        names =
+            List.map columnName columns
+    in
+    Codec
+        { enc = \row -> Encode.object (rowFields names row)
+        , mkDec = \_ -> Config.dict Config.string
+        , shp = SRecord (List.map (\name -> ( name, CText )) names)
+        }
+
+
+-- | Project a `Row` to the JSON fields for the declared columns, in order. A
+-- column absent from the row emits the empty string, so the encoded object
+-- always names every declared column (the shape's contract), never a missing
+-- field the bind step would reject.
+rowFields : List String -> Row -> List ( String, Value )
+rowFields names row =
+    List.map (\name -> ( name, Encode.string (rowCell name row) )) names
+
+
+rowCell : String -> Row -> String
+rowCell name row =
+    case Dict.get name row of
+        Just s ->
+            s
+
+        Nothing ->
+            ""
+
+
 -- ─── Column-spec builders ──────────────────────────────────────────
 --
 -- Each attaches one typed `ColumnSpec` to the store. `primaryKey` additionally
@@ -358,7 +456,7 @@ columnColType col =
 
 -- | Mark a column the primary key. Records it as the store's `pk`, so
 -- `get` / `delete` key on this validated column and never on a caller string.
-primaryKey : String -> Store -> Store
+primaryKey : String -> Store a -> Store a
 primaryKey name store =
     case store of
         Store r ->
@@ -367,6 +465,7 @@ primaryKey name store =
                 , frozenTable = r.frozenTable
                 , frozenColumns = r.frozenColumns
                 , currentColumns = r.currentColumns
+                , codec = r.codec
                 , specs = PrimaryKey name :: r.specs
                 , pk = Just name
                 , ops = r.ops
@@ -375,25 +474,25 @@ primaryKey name store =
 
 -- | Mark a column DB-assigned (serial). `insert` omits it so the database
 -- generates it — a client value can never overwrite a serial column.
-serial : String -> Store -> Store
+serial : String -> Store a -> Store a
 serial name store =
     addSpec (Serial name) store
 
 
 -- | Mark a column unique.
-unique : String -> Store -> Store
+unique : String -> Store a -> Store a
 unique name store =
     addSpec (Unique name) store
 
 
 -- | Mark a column DB-stamped with the current time on insert. `insert` omits
 -- it so the database stamps it.
-defaultNow : String -> Store -> Store
+defaultNow : String -> Store a -> Store a
 defaultNow name store =
     addSpec (DefaultNow name) store
 
 
-addSpec : ColumnSpec -> Store -> Store
+addSpec : ColumnSpec -> Store a -> Store a
 addSpec spec store =
     case store of
         Store r ->
@@ -402,6 +501,7 @@ addSpec spec store =
                 , frozenTable = r.frozenTable
                 , frozenColumns = r.frozenColumns
                 , currentColumns = r.currentColumns
+                , codec = r.codec
                 , specs = spec :: r.specs
                 , pk = r.pk
                 , ops = r.ops
@@ -449,7 +549,7 @@ addSpec spec store =
 --
 --             Err e ->
 --                 Task.fail e
-renameColumn : String -> String -> Store -> Store
+renameColumn : String -> String -> Store a -> Store a
 renameColumn from to store =
     case store of
         Store r ->
@@ -458,6 +558,7 @@ renameColumn from to store =
                 , frozenTable = r.frozenTable
                 , frozenColumns = r.frozenColumns
                 , currentColumns = renameColumnInList from to r.currentColumns
+                , codec = r.codec
                 , specs = r.specs
                 , pk = r.pk
                 , ops = r.ops ++ [ RenameColumn from to ]
@@ -510,7 +611,7 @@ renameColumnInList from to cols =
 --
 --             Err e ->
 --                 Task.fail e
-renameTable : String -> Store -> Store
+renameTable : String -> Store a -> Store a
 renameTable to store =
     case store of
         Store r ->
@@ -519,6 +620,7 @@ renameTable to store =
                 , frozenTable = r.frozenTable
                 , frozenColumns = r.frozenColumns
                 , currentColumns = r.currentColumns
+                , codec = r.codec
                 , specs = r.specs
                 , pk = r.pk
                 , ops = r.ops ++ [ RenameTable r.table to ]
@@ -570,7 +672,7 @@ renameTable to store =
 --
 --             Err e ->
 --                 Task.fail e
-migrations : Store -> Result Error (List Db.Migration)
+migrations : Store a -> Result Error (List Db.Migration)
 migrations store =
     case store of
         Store r ->
@@ -683,7 +785,7 @@ renameTableEntry from to =
 
 
 -- | The store's current table name (reflects any `renameTable` ops applied).
-tableName : Store -> String
+tableName : Store a -> String
 tableName store =
     case store of
         Store r ->
@@ -692,7 +794,7 @@ tableName store =
 
 -- | The store's current column names, in declaration order (reflects any
 -- `renameColumn` ops applied).
-columnNames : Store -> List String
+columnNames : Store a -> List String
 columnNames store =
     case store of
         Store r ->
@@ -702,18 +804,24 @@ columnNames store =
 -- ─── Write path ────────────────────────────────────────────────────
 
 
--- | `insert conn store values` — insert one row and return its generated id.
--- `values` is the record projected to `(column, SqlValue)` pairs at the call
--- site; each binds as a typed parameter. Columns marked `Serial` or
--- `DefaultNow` are OMITTED from the insert so the database fills them (a client
--- value supplied for such a column is dropped, never written). Routes through
--- the audited `Db.insertFields`, which re-validates every identifier and binds
--- every value — no SQL text is built here.
-insert : Db -> Store -> List ( String, SqlValue ) -> Task Error Int
-insert conn store values =
+-- | `insert conn store row` — insert one row and return its generated id. The
+-- row is projected to `(column, SqlValue)` binds through the store's codec
+-- (`Ipe.Db.Codec.codecToBinds`); each binds as a typed parameter. Columns
+-- marked `Serial` or `DefaultNow` are OMITTED from the insert so the database
+-- fills them (a client value produced for such a column is dropped, never
+-- written). Routes through the audited `Db.insertFields`, which re-validates
+-- every identifier and binds every value — no SQL text is built here. A codec
+-- projection that fails (a shape mismatch) is a typed `Err`.
+insert : Db -> Store a -> a -> Task Error Int
+insert conn store row =
     case store of
         Store r ->
-            Db.insertFields conn r.table (insertFields r.specs values)
+            case DbCodec.codecToBinds r.codec row of
+                Err e ->
+                    Task.fail e
+
+                Ok binds ->
+                    Db.insertFields conn r.table (insertFields r.specs binds)
 
 
 insertFields : List ColumnSpec -> List ( String, SqlValue ) -> List ( String, SqlField )
@@ -756,38 +864,39 @@ specOmitsColumn spec name =
 -- ─── Read path ─────────────────────────────────────────────────────
 
 
--- | `all conn store read` — read every row and decode each through `read`.
--- Routes through `Db.findWhere` with an always-true predicate, so the table
--- name is kernel-validated and no raw SQL is built.
-all : Db -> Store -> (Row -> Result Error a) -> Task Error (List a)
-all conn store read =
+-- | `all conn store` — read every row and decode each through the store's
+-- codec. Routes through `Db.findWhere` with an always-true predicate, so the
+-- table name is kernel-validated and no raw SQL is built. A row that does not
+-- decode to the store's type is a typed `Err`, never a wrong value.
+all : Db -> Store a -> Task Error (List a)
+all conn store =
     case store of
         Store r ->
             Task.andThen
-                (\rows -> decodeRows read rows)
+                (\rows -> decodeRows r.codec rows)
                 (Db.findWhere conn r.table alwaysTrue)
 
 
--- | `findWhere conn store read cond` — read the rows matching `cond` and decode
--- each through `read`. `cond` is a `SqlFragment` built from the `Ipe.Db.Sql`
--- combinators: every column flows through `Sql.column` (validated), every value
--- through `Sql.param` (bound). Store adds no injection surface over the audited
--- fragment builder.
-findWhere : Db -> Store -> (Row -> Result Error a) -> SqlFragment -> Task Error (List a)
-findWhere conn store read cond =
+-- | `findWhere conn store cond` — read the rows matching `cond` and decode each
+-- through the store's codec. `cond` is a `SqlFragment` built from the
+-- `Ipe.Db.Sql` combinators: every column flows through `Sql.column`
+-- (validated), every value through `Sql.param` (bound). Store adds no injection
+-- surface over the audited fragment builder.
+findWhere : Db -> Store a -> SqlFragment -> Task Error (List a)
+findWhere conn store cond =
     case store of
         Store r ->
             Task.andThen
-                (\rows -> decodeRows read rows)
+                (\rows -> decodeRows r.codec rows)
                 (Db.findWhere conn r.table cond)
 
 
--- | `get conn store read keyValue` — read the single row whose primary key
--- equals `keyValue`, or `Nothing`. Keys on the store's own validated `pk`
--- column, never a caller identifier; the value binds as a parameter. A store
--- with no primary key fails closed with a typed error.
-get : Db -> Store -> (Row -> Result Error a) -> SqlValue -> Task Error (Maybe a)
-get conn store read keyValue =
+-- | `get conn store keyValue` — read the single row whose primary key equals
+-- `keyValue`, or `Nothing`, decoded through the store's codec. Keys on the
+-- store's own validated `pk` column, never a caller identifier; the value binds
+-- as a parameter. A store with no primary key fails closed with a typed error.
+get : Db -> Store a -> SqlValue -> Task Error (Maybe a)
+get conn store keyValue =
     case store of
         Store r ->
             case r.pk of
@@ -796,50 +905,51 @@ get conn store read keyValue =
 
                 Just keyCol ->
                     Task.andThen
-                        (\rows -> firstDecoded read rows)
+                        (\rows -> firstDecoded r.codec rows)
                         (Db.findWhere conn r.table (keyEquals keyCol keyValue))
 
 
 -- ─── External-connection reads (foreign DB through one codec) ───────
 --
--- The `…On` reads take an external `Connection a` (mode-polymorphic: a read is
--- available on `ReadOnly` and `ReadWrite` alike) instead of the app's `Db`, so a
--- monitoring/ETL job reads a foreign source of a DIFFERENT dialect through the
--- SAME `read` codec. They route through `Db.findWhereOn` over a `Sql.*`-built
--- `SqlFragment` — identical validated-identifier + bound-parameter barrier as the
--- app reads, run against the external pool. There is no external write path: a
--- foreign write is unrepresentable on `Connection ReadOnly` by type.
+-- The `…On` reads take an external `Connection mode` (mode-polymorphic: a read
+-- is available on `ReadOnly` and `ReadWrite` alike) instead of the app's `Db`,
+-- so a monitoring/ETL job reads a foreign source of a DIFFERENT dialect through
+-- the SAME store codec. They route through `Db.findWhereOn` over a `Sql.*`-built
+-- `SqlFragment` — identical validated-identifier + bound-parameter barrier as
+-- the app reads, run against the external pool. There is no external write path:
+-- a foreign write is unrepresentable on `Connection ReadOnly` by type.
 
 
--- | `allOn conn store read` — read every row from an external connection and
--- decode each through `read`. The external counterpart to `all`.
-allOn : Connection a -> Store -> (Row -> Result Error b) -> Task Error (List b)
-allOn conn store read =
+-- | `allOn conn store` — read every row from an external connection and decode
+-- each through the store's codec. The external counterpart to `all`.
+allOn : Connection mode -> Store a -> Task Error (List a)
+allOn conn store =
     case store of
         Store r ->
             Task.andThen
-                (\rows -> decodeRows read rows)
+                (\rows -> decodeRows r.codec rows)
                 (Db.findWhereOn conn r.table alwaysTrue)
 
 
--- | `findWhereOn conn store read cond` — read the rows matching `cond` from an
--- external connection and decode each through `read`. The external counterpart to
--- `findWhere`; the same audited `SqlFragment` barrier applies.
-findWhereOn : Connection a -> Store -> (Row -> Result Error b) -> SqlFragment -> Task Error (List b)
-findWhereOn conn store read cond =
+-- | `findWhereOn conn store cond` — read the rows matching `cond` from an
+-- external connection and decode each through the store's codec. The external
+-- counterpart to `findWhere`; the same audited `SqlFragment` barrier applies.
+findWhereOn : Connection mode -> Store a -> SqlFragment -> Task Error (List a)
+findWhereOn conn store cond =
     case store of
         Store r ->
             Task.andThen
-                (\rows -> decodeRows read rows)
+                (\rows -> decodeRows r.codec rows)
                 (Db.findWhereOn conn r.table cond)
 
 
--- | `getOn conn store read keyValue` — read the single row whose primary key
--- equals `keyValue` from an external connection, or `Nothing`. The external
--- counterpart to `get`; keys on the store's validated `pk`, binds the value as a
--- parameter, and fails closed for a store with no primary key.
-getOn : Connection a -> Store -> (Row -> Result Error b) -> SqlValue -> Task Error (Maybe b)
-getOn conn store read keyValue =
+-- | `getOn conn store keyValue` — read the single row whose primary key equals
+-- `keyValue` from an external connection, or `Nothing`, decoded through the
+-- store's codec. The external counterpart to `get`; keys on the store's
+-- validated `pk`, binds the value as a parameter, and fails closed for a store
+-- with no primary key.
+getOn : Connection mode -> Store a -> SqlValue -> Task Error (Maybe a)
+getOn conn store keyValue =
     case store of
         Store r ->
             case r.pk of
@@ -848,7 +958,7 @@ getOn conn store read keyValue =
 
                 Just keyCol ->
                     Task.andThen
-                        (\rows -> firstDecoded read rows)
+                        (\rows -> firstDecoded r.codec rows)
                         (Db.findWhereOn conn r.table (keyEquals keyCol keyValue))
 
 
@@ -856,7 +966,7 @@ getOn conn store read keyValue =
 -- `keyValue` and return the deleted-row count. Keys on the validated `pk`
 -- column; the value binds as a parameter. A store with no primary key fails
 -- closed.
-delete : Db -> Store -> SqlValue -> Task Error Int
+delete : Db -> Store a -> SqlValue -> Task Error Int
 delete conn store keyValue =
     case store of
         Store r ->
@@ -880,29 +990,29 @@ alwaysTrue =
     Sql.eq (Sql.param (SqlInt 1)) (Sql.param (SqlInt 1))
 
 
-decodeRows : (Row -> Result Error a) -> List Row -> Task Error (List a)
-decodeRows read rows =
+decodeRows : Codec a -> List Row -> Task Error (List a)
+decodeRows codec rows =
     case rows of
         [] ->
             Task.succeed []
 
         first :: rest ->
-            case read first of
+            case DbCodec.codecFromRow codec first of
                 Err e ->
                     Task.fail e
 
                 Ok value ->
-                    Task.map (\more -> value :: more) (decodeRows read rest)
+                    Task.map (\more -> value :: more) (decodeRows codec rest)
 
 
-firstDecoded : (Row -> Result Error a) -> List Row -> Task Error (Maybe a)
-firstDecoded read rows =
+firstDecoded : Codec a -> List Row -> Task Error (Maybe a)
+firstDecoded codec rows =
     case rows of
         [] ->
             Task.succeed Nothing
 
         first :: _ ->
-            case read first of
+            case DbCodec.codecFromRow codec first of
                 Err e ->
                     Task.fail e
 
@@ -914,7 +1024,9 @@ firstDecoded read rows =
 --
 -- `Db.findWhere` returns each row as `Dict String String`. These helpers read
 -- one column back into its Ipê type, failing closed with a typed error when the
--- column is absent or malformed — never a silent default.
+-- column is absent or malformed — never a silent default. They are the readers
+-- for a raw-column `Store Row`: a codec-driven store decodes whole rows through
+-- its own codec, but a raw store reads columns individually.
 
 
 -- | Read a column as a `String`. A missing column is a typed `Err`.
@@ -987,12 +1099,12 @@ readBool name row =
 -- | `createSql store` — the `CREATE TABLE` DDL for the store, or `Err`. Every
 -- identifier that would appear in the DDL — the table name and each column name
 -- — is re-validated through `validSqlIdent` before it can reach the string, so
--- a store built by `fromColumns` (whose identifiers already validate) always
+-- a store built by a constructor (whose identifiers already validate) always
 -- yields `Ok`, and any identifier that somehow does not validate fails closed
 -- with no DDL produced. This is the one place a Store builds SQL text for the
 -- create entry; it builds only from validated identifiers and holds no values,
 -- so there is nothing to inject.
-createSql : Store -> Result Error String
+createSql : Store a -> Result Error String
 createSql store =
     case store of
         Store r ->
@@ -1203,7 +1315,7 @@ specIsDefaultNow spec name =
 -- `migrations` to obtain the full ordered entry list instead. Fails closed if
 -- the DDL cannot be built from validated identifiers (no SQL is issued in that
 -- case). Idempotent: the ledger applies the migration once and records it.
-create : Db -> Store -> Task Error (List String)
+create : Db -> Store a -> Task Error (List String)
 create conn store =
     case migrations store of
         Err e ->
@@ -1227,6 +1339,12 @@ invalidIdentError kind name =
         (String.concat
             [ "Ipe.Db.Store: rejected ", kind, " identifier \"", name, "\" — not a valid SQL identifier" ]
         )
+
+
+notARecordError : Error
+notARecordError =
+    Error.invalidInput
+        "Ipe.Db.Store: the codec's shape is not a record, so it declares no columns to build a store from"
 
 
 noPrimaryKeyError : Error

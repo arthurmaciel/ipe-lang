@@ -6404,20 +6404,24 @@ fn collect_ir_pat_syms(pat: &Pat, out: &mut BTreeSet<Symbol>) {
 fn body_move_closure_captures_generic(tv: Symbol, expr: &Expr) -> bool {
     match expr {
         Expr::Lambda { params, ret, body } | Expr::SharedLambda { params, ret, body } => {
-            // A closure can oblige `tv: Sync` only if its OWN signature carries
-            // `tv` bare — the captured value flows into a bare-`tv` position the
-            // signature exposes. This scopes the obligation to the RIGHT tvar: a
-            // continuation lambda `Vec<(T1, Int)> -> Vec<(T1, Int)>` reaches only
-            // `T1`, never the input `T2`, so a bare capture inside it obliges
-            // `T1: Sync` alone. Paired with the bare-capture walk below, which
-            // confirms a captured value actually carries `tv` bare (not merely
-            // rides an opaque `Send + Sync` field), the two conditions together
-            // fire on the real capture shape and never over-bound.
-            let signature_reaches_tv = params
-                .iter()
-                .any(|(_, t)| ir_type_generic_reaches_bare(t, tv))
-                || ir_type_generic_reaches_bare(ret, tv);
-            if signature_reaches_tv {
+            // A closure can oblige `tv: Sync` only if its OWN signature MENTIONS
+            // `tv` — the captured value flows into a position the signature
+            // exposes, whether bare or under a `Send + Sync` carrier (a
+            // `\rows -> decodeRows codec rows : List Row -> Task Error (List tv)`
+            // continuation returns `tv` under `Task`/`List`, yet still
+            // move-captures the bare-reaching `codec : Codec tv` into the emitted
+            // `Box<dyn Fn + Send + Sync + 'static>`). This scopes the obligation to
+            // the RIGHT tvar: a continuation lambda whose signature never names
+            // `T2` cannot oblige `T2: Sync`. The tight scoping is the bare-capture
+            // walk below, which confirms a captured value actually carries `tv`
+            // bare (not merely rides an opaque `Send + Sync` field); the mention
+            // test only gates on the tvar belonging to this closure at all, so the
+            // two conditions together fire on the real capture shape and never
+            // over-bound.
+            let is_tv = |t: &IrType| matches!(t, IrType::Generic(g) if *g == tv);
+            let signature_mentions_tv = params.iter().any(|(_, t)| ir_type_mentions(t, &is_tv))
+                || ir_type_mentions(ret, &is_tv);
+            if signature_mentions_tv {
                 let closure_bound: BTreeSet<Symbol> = params.iter().map(|(s, _)| *s).collect();
                 if closure_captures_bare_generic(tv, &closure_bound, body) {
                     return true;

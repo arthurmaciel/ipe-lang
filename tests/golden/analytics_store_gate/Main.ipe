@@ -66,7 +66,7 @@ main =
                 (Db.open "sqlite" "sqlite::memory:")
 
 
-run : Db -> Store.Store -> Task Error ()
+run : Db -> Store.Store Store.Row -> Task Error ()
 run conn store =
     Store.create conn store
         |> Task.andThen (\_ -> Io.println "store:ok")

@@ -3,6 +3,7 @@ module Main exposing (main)
 import Ipe.Io as Io
 import Ipe.Db as Db
 import Ipe.Db.Store as Store exposing (Store)
+import Ipe.Dict as Dict
 import Ipe.String as String
 import Ipe.Task as Task
 import Ipe.Result as Result exposing (Result(..))
@@ -40,12 +41,13 @@ userColumns =
     ]
 
 
-writeUser : User -> List ( String, SqlValue )
+writeUser : User -> Store.Row
 writeUser u =
-    [ ( "id", SqlString u.id )
-    , ( "name", SqlString u.name )
-    , ( "age", SqlInt u.age )
-    ]
+    Dict.fromList
+        [ ( "id", u.id )
+        , ( "name", u.name )
+        , ( "age", String.fromInt u.age )
+        ]
 
 
 readUser : Store.Row -> Result Error User
@@ -56,7 +58,7 @@ readUser row =
         (Store.readInt "age" row)
 
 
-userStore : Result Error Store
+userStore : Result Error (Store Store.Row)
 userStore =
     case Store.fromColumns "users" userColumns of
         Ok s ->
@@ -68,7 +70,7 @@ userStore =
 
 -- A store declared with a malformed column identifier must FAIL to build: the
 -- injection attempt is rejected by `validSqlIdent` before any SQL is issued.
-badStore : Result Error Store
+badStore : Result Error (Store Store.Row)
 badStore =
     Store.fromColumns "users"
         [ Store.textColumn "id"
@@ -114,18 +116,35 @@ main =
                 (Db.open "sqlite" "sqlite::memory:")
 
 
-runChecks : Db -> Store -> Task Error ()
+runChecks : Db -> Store Store.Row -> Task Error ()
 runChecks conn store =
     Task.andThen
         (\_ -> Task.andThen (\_ -> readBack conn store) (Store.insert conn store (writeUser attacker)))
         (Task.andThen (\_ -> Store.insert conn store (writeUser sampleUser)) (Store.create conn store))
 
 
-readBack : Db -> Store -> Task Error ()
+readBack : Db -> Store Store.Row -> Task Error ()
 readBack conn store =
     Task.andThen
-        (\maybeUser -> report maybeUser)
-        (Store.get conn store readUser (SqlString "u1"))
+        (\maybeRow -> report (decodeRow maybeRow))
+        (Store.get conn store (SqlString "u1"))
+
+
+-- Decode the fetched row through `readUser`, folding a decode failure to
+-- `Nothing` so the round-trip check reports a clean miss rather than crashing.
+decodeRow : Maybe Store.Row -> Maybe User
+decodeRow maybeRow =
+    case maybeRow of
+        Just row ->
+            case readUser row of
+                Ok u ->
+                    Just u
+
+                Err _ ->
+                    Nothing
+
+        Nothing ->
+            Nothing
 
 
 report : Maybe User -> Task Error ()
