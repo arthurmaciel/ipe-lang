@@ -201,8 +201,6 @@ toValue codec x =
             r.enc x
 
 
-
-
 -- | Encode `a` to a compact JSON string.
 toJson : Codec a -> a -> String
 toJson codec x =
