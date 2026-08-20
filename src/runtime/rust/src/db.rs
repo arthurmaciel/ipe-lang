@@ -3375,6 +3375,333 @@ mod tests {
         }
     }
 
+    // ─── Rename-migration data-preservation tests ─────────────────────────────
+    //
+    // These tests drive `db_migrate_apply` directly with the DDL that
+    // `Store.migrations` / `Store.renameColumn` / `Store.renameTable` produce,
+    // proving the ledger correctly applies and skips each rename entry.
+
+    /// Column rename preserves existing row data and makes rows readable under
+    /// the new column name.
+    #[tokio::test]
+    async fn rename_column_preserves_data() {
+        let db = new_single_conn_db().await;
+        // Matches what Store.migrations produces for a users store with
+        // renameColumn "name" "full_name".
+        let migrations = vec![
+            (
+                "create_users".to_string(),
+                "CREATE TABLE IF NOT EXISTS users (id TEXT PRIMARY KEY, name TEXT, age INTEGER)"
+                    .to_string(),
+            ),
+            (
+                "rename_column_users_name_to_full_name".to_string(),
+                "ALTER TABLE users RENAME COLUMN name TO full_name".to_string(),
+            ),
+        ];
+
+        // First apply: both entries run.
+        let r1: IpeResult<String, Vec<String>> =
+            db_migrate_apply(db.clone(), migrations.clone()).await;
+        match r1 {
+            IpeResult::Ok(v) => assert_eq!(
+                v,
+                vec![
+                    "create_users".to_string(),
+                    "rename_column_users_name_to_full_name".to_string()
+                ]
+            ),
+            IpeResult::Err(e) => panic!("first apply: {e}"),
+        }
+
+        // Insert a row using the POST-rename column name.
+        let ins: IpeResult<String, i64> = db_exec(
+            db.clone(),
+            "INSERT INTO users (id, full_name, age) VALUES ('u1', 'Alice', 30)".to_string(),
+            Vec::new(),
+        )
+        .await;
+        assert!(matches!(ins, IpeResult::Ok(1)), "insert: {ins:?}");
+
+        // Row is readable under full_name; the old `name` column is absent.
+        let rows: IpeResult<String, Vec<HashMap<String, String>>> = db_query(
+            db.clone(),
+            "SELECT full_name, age FROM users WHERE id = 'u1'".to_string(),
+            Vec::new(),
+        )
+        .await;
+        match rows {
+            IpeResult::Ok(v) => {
+                assert_eq!(v.len(), 1, "expected 1 row, got {}", v.len());
+                assert_eq!(
+                    v.first()
+                        .and_then(|r| r.get("full_name"))
+                        .map(String::as_str),
+                    Some("Alice"),
+                    "full_name should be Alice"
+                );
+            }
+            IpeResult::Err(e) => panic!("read after rename: {e}"),
+        }
+
+        // `name` column is gone — selecting it is an error.
+        let bad: IpeResult<String, Vec<HashMap<String, String>>> =
+            db_query(db.clone(), "SELECT name FROM users".to_string(), Vec::new()).await;
+        assert!(
+            matches!(bad, IpeResult::Err(_)),
+            "selecting the old column name must fail after rename"
+        );
+    }
+
+    /// Re-applying the same migration list is idempotent — no error, no
+    /// re-issue of the rename, data unchanged.
+    #[tokio::test]
+    async fn rename_column_idempotent_rerun() {
+        let db = new_single_conn_db().await;
+        let migrations = vec![
+            (
+                "create_users".to_string(),
+                "CREATE TABLE IF NOT EXISTS users (id TEXT PRIMARY KEY, name TEXT)".to_string(),
+            ),
+            (
+                "rename_column_users_name_to_full_name".to_string(),
+                "ALTER TABLE users RENAME COLUMN name TO full_name".to_string(),
+            ),
+        ];
+
+        // First apply.
+        let r1: IpeResult<String, Vec<String>> =
+            db_migrate_apply(db.clone(), migrations.clone()).await;
+        assert!(matches!(r1, IpeResult::Ok(_)), "first apply: {r1:?}");
+
+        // Insert after first apply.
+        let ins: IpeResult<String, i64> = db_exec(
+            db.clone(),
+            "INSERT INTO users (id, full_name) VALUES ('u1', 'Bob')".to_string(),
+            Vec::new(),
+        )
+        .await;
+        assert!(matches!(ins, IpeResult::Ok(1)), "insert: {ins:?}");
+
+        // Re-apply: both entries already in ledger → 0 applied.
+        let r2: IpeResult<String, Vec<String>> =
+            db_migrate_apply(db.clone(), migrations.clone()).await;
+        match r2 {
+            IpeResult::Ok(v) => assert!(v.is_empty(), "expected 0 on re-run, got {v:?}"),
+            IpeResult::Err(e) => panic!("re-run: {e}"),
+        }
+
+        // Data unchanged.
+        let rows: IpeResult<String, Vec<HashMap<String, String>>> = db_query(
+            db.clone(),
+            "SELECT full_name FROM users WHERE id = 'u1'".to_string(),
+            Vec::new(),
+        )
+        .await;
+        match rows {
+            IpeResult::Ok(v) => assert_eq!(
+                v.first()
+                    .and_then(|r| r.get("full_name"))
+                    .map(String::as_str),
+                Some("Bob"),
+                "data unchanged after re-run"
+            ),
+            IpeResult::Err(e) => panic!("read after re-run: {e}"),
+        }
+    }
+
+    /// Applying the same list to a fresh (empty) database converges to the
+    /// same final schema — rows inserted afterward read back under the new name.
+    #[tokio::test]
+    async fn rename_column_fresh_db_convergence() {
+        let db = new_single_conn_db().await;
+        let migrations = vec![
+            (
+                "create_users".to_string(),
+                "CREATE TABLE IF NOT EXISTS users (id TEXT PRIMARY KEY, name TEXT)".to_string(),
+            ),
+            (
+                "rename_column_users_name_to_full_name".to_string(),
+                "ALTER TABLE users RENAME COLUMN name TO full_name".to_string(),
+            ),
+        ];
+
+        // Apply to a completely empty DB — both entries run.
+        let r: IpeResult<String, Vec<String>> = db_migrate_apply(db.clone(), migrations).await;
+        match r {
+            IpeResult::Ok(v) => assert_eq!(v.len(), 2, "expected 2 applied, got {v:?}"),
+            IpeResult::Err(e) => panic!("fresh-db apply: {e}"),
+        }
+
+        // Insert using the new name.
+        let ins: IpeResult<String, i64> = db_exec(
+            db.clone(),
+            "INSERT INTO users (id, full_name) VALUES ('u2', 'Carol')".to_string(),
+            Vec::new(),
+        )
+        .await;
+        assert!(matches!(ins, IpeResult::Ok(1)), "fresh-db insert: {ins:?}");
+
+        let rows: IpeResult<String, Vec<HashMap<String, String>>> = db_query(
+            db.clone(),
+            "SELECT full_name FROM users WHERE id = 'u2'".to_string(),
+            Vec::new(),
+        )
+        .await;
+        match rows {
+            IpeResult::Ok(v) => assert_eq!(
+                v.first()
+                    .and_then(|r| r.get("full_name"))
+                    .map(String::as_str),
+                Some("Carol"),
+                "fresh-db convergence"
+            ),
+            IpeResult::Err(e) => panic!("fresh-db read: {e}"),
+        }
+    }
+
+    /// Table rename preserves all row data and makes the table accessible
+    /// under the new name.
+    #[tokio::test]
+    async fn rename_table_preserves_data() {
+        let db = new_single_conn_db().await;
+        // Matches what Store.migrations produces for renameTable "accounts".
+        let migrations = vec![
+            (
+                "create_users".to_string(),
+                "CREATE TABLE IF NOT EXISTS users (id TEXT PRIMARY KEY, email TEXT)".to_string(),
+            ),
+            (
+                "rename_table_users_to_accounts".to_string(),
+                "ALTER TABLE users RENAME TO accounts".to_string(),
+            ),
+        ];
+
+        let r1: IpeResult<String, Vec<String>> =
+            db_migrate_apply(db.clone(), migrations.clone()).await;
+        assert!(matches!(r1, IpeResult::Ok(_)), "first apply: {r1:?}");
+
+        // Insert under the new table name.
+        let ins: IpeResult<String, i64> = db_exec(
+            db.clone(),
+            "INSERT INTO accounts (id, email) VALUES ('a1', 'dave@example.com')".to_string(),
+            Vec::new(),
+        )
+        .await;
+        assert!(
+            matches!(ins, IpeResult::Ok(1)),
+            "table-rename insert: {ins:?}"
+        );
+
+        let rows: IpeResult<String, Vec<HashMap<String, String>>> = db_query(
+            db.clone(),
+            "SELECT email FROM accounts WHERE id = 'a1'".to_string(),
+            Vec::new(),
+        )
+        .await;
+        match rows {
+            IpeResult::Ok(v) => assert_eq!(
+                v.first().and_then(|r| r.get("email")).map(String::as_str),
+                Some("dave@example.com"),
+                "row readable under new table name"
+            ),
+            IpeResult::Err(e) => panic!("read after table rename: {e}"),
+        }
+
+        // Old table name is gone.
+        let bad: IpeResult<String, Vec<HashMap<String, String>>> =
+            db_query(db.clone(), "SELECT * FROM users".to_string(), Vec::new()).await;
+        assert!(
+            matches!(bad, IpeResult::Err(_)),
+            "old table name must be absent after rename"
+        );
+
+        // Re-apply is idempotent.
+        let r2: IpeResult<String, Vec<String>> = db_migrate_apply(db.clone(), migrations).await;
+        match r2 {
+            IpeResult::Ok(v) => assert!(v.is_empty(), "expected 0 on re-run, got {v:?}"),
+            IpeResult::Err(e) => panic!("table-rename re-run: {e}"),
+        }
+    }
+
+    /// A column rename whose `from` is absent in the schema returns a `Task Err`
+    /// and leaves the ledger unadvanced.
+    #[tokio::test]
+    async fn rename_column_missing_from_fails_closed() {
+        let db = new_single_conn_db().await;
+        // Create a table without a `name` column, then try to rename it.
+        let r_create: IpeResult<String, Vec<String>> = db_migrate_apply(
+            db.clone(),
+            vec![(
+                "create_users".to_string(),
+                "CREATE TABLE IF NOT EXISTS users (id TEXT PRIMARY KEY, email TEXT)".to_string(),
+            )],
+        )
+        .await;
+        assert!(matches!(r_create, IpeResult::Ok(_)), "create: {r_create:?}");
+
+        // Ledger row count before the failing rename.
+        let before: IpeResult<String, Vec<HashMap<String, String>>> = db_query(
+            db.clone(),
+            "SELECT name FROM _ipe_migrations ORDER BY name".to_string(),
+            Vec::new(),
+        )
+        .await;
+        let before_count = match before {
+            IpeResult::Ok(v) => v.len(),
+            IpeResult::Err(e) => panic!("ledger read before: {e}"),
+        };
+
+        // Rename a column that does not exist — must error.
+        let r_rename: IpeResult<String, Vec<String>> = db_migrate_apply(
+            db.clone(),
+            vec![
+                (
+                    "create_users".to_string(),
+                    "CREATE TABLE IF NOT EXISTS users (id TEXT PRIMARY KEY, email TEXT)"
+                        .to_string(),
+                ),
+                (
+                    "rename_column_users_name_to_full_name".to_string(),
+                    "ALTER TABLE users RENAME COLUMN name TO full_name".to_string(),
+                ),
+            ],
+        )
+        .await;
+        assert!(
+            matches!(r_rename, IpeResult::Err(_)),
+            "renaming absent column must return Err"
+        );
+
+        // Ledger must be unadvanced — the failing rename entry was not recorded.
+        let after: IpeResult<String, Vec<HashMap<String, String>>> = db_query(
+            db.clone(),
+            "SELECT name FROM _ipe_migrations ORDER BY name".to_string(),
+            Vec::new(),
+        )
+        .await;
+        let after_count = match after {
+            IpeResult::Ok(v) => v.len(),
+            IpeResult::Err(e) => panic!("ledger read after: {e}"),
+        };
+        assert_eq!(
+            before_count, after_count,
+            "ledger must be unadvanced after a failing rename"
+        );
+    }
+
+    /// Helper: a single-connection in-memory SQLite pool (no pre-seeded todos
+    /// table — callers control the full schema).
+    async fn new_single_conn_db() -> Db {
+        #[allow(clippy::expect_used)]
+        sqlx::sqlite::SqlitePoolOptions::new()
+            .min_connections(1)
+            .max_connections(1)
+            .connect("sqlite::memory:")
+            .await
+            .expect("connect in-memory sqlite for rename tests")
+    }
+
     #[tokio::test]
     async fn exec_query_params_bind_mixed_sqlvalue_types() {
         // db_exec_params / db_query_params bind the full SqlParam range (the

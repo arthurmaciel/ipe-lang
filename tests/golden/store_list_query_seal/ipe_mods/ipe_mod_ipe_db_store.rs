@@ -58,8 +58,29 @@ impl IpeStringify for IpeDbStoreColumnSpec {
     }
 }
 #[derive(Clone, Debug, PartialEq)]
+pub(crate) enum IpeDbStoreSchemaOp {
+    RenameColumn(String, String),
+    RenameTable(String, String),
+}
+impl IpeStringify for IpeDbStoreSchemaOp {
+    fn ipe_show(&self) -> String {
+        match self {
+            IpeDbStoreSchemaOp::RenameColumn(p0, p1) => format!(
+                "RenameColumn {} {}",
+                (&ipe_runtime::stringify::Wrap(p0)).dispatch(),
+                (&ipe_runtime::stringify::Wrap(p1)).dispatch()
+            ),
+            IpeDbStoreSchemaOp::RenameTable(p0, p1) => format!(
+                "RenameTable {} {}",
+                (&ipe_runtime::stringify::Wrap(p0)).dispatch(),
+                (&ipe_runtime::stringify::Wrap(p1)).dispatch()
+            ),
+        }
+    }
+}
+#[derive(Clone, Debug, PartialEq)]
 pub(crate) enum IpeDbStoreStore {
-    Store(RecColumnsPkSpecsTable),
+    Store(RecCurrentColumnsFrozenColumnsFrozenTableOpsPkSpecsTable),
 }
 impl IpeStringify for IpeDbStoreStore {
     fn ipe_show(&self) -> String {
@@ -143,12 +164,19 @@ pub(crate) fn user_ipe_db_store_from_columns(
             IpeMaybe::Just(bad) => IpeResult::Err(
                 crate::user_ipe_db_store_invalid_ident_error("column".to_string(), bad),
             ),
-            IpeMaybe::Nothing => IpeResult::Ok(IpeDbStoreStore::Store(RecColumnsPkSpecsTable {
-                columns: columns,
-                pk: IpeMaybe::Nothing,
-                specs: Vec::<IpeDbStoreColumnSpec>::new(),
-                table: table,
-            })),
+            IpeMaybe::Nothing => {
+                IpeResult::Ok(IpeDbStoreStore::Store(
+                    RecCurrentColumnsFrozenColumnsFrozenTableOpsPkSpecsTable {
+                        currentColumns: columns.clone(),
+                        frozenColumns: columns,
+                        frozenTable: table.clone(),
+                        ops: Vec::<IpeDbStoreSchemaOp>::new(),
+                        pk: IpeMaybe::Nothing,
+                        specs: Vec::<IpeDbStoreColumnSpec>::new(),
+                        table: table,
+                    },
+                ))
+            }
         }
     })
 }

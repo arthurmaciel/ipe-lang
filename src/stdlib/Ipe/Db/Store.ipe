@@ -27,6 +27,16 @@
 --     `validSqlIdent` before it can appear in the DDL string, and hands the
 --     result to the versioned `Db.migrate` ledger (idempotent, additive). A
 --     store whose columns do not all validate produces `Err` and issues no SQL.
+--   * Schema-evolution operators (`renameColumn`, `renameTable`) are total
+--     constructors that record ops in an ordered log. `migrations` is the single
+--     point where rename DDL text is assembled: every identifier (table name,
+--     rename `from`, rename `to`) passes through `validSqlIdent` before it can
+--     reach any SQL string, the first failure returns `Err` and produces no SQL,
+--     and no value is ever interpolated. The rename surface is non-destructive:
+--     only `ALTER … RENAME` is generated; `DROP COLUMN` and similar data-losing
+--     alters are absent. Drift between the CRUD column identifiers and the
+--     migration column identifiers is unrepresentable because both derive from
+--     the same `Store` value.
 --
 -- `Store` is deliberately NOT parameterised over the row type: the row
 -- projection (a record to its column values) and the row reader (a decoded row
@@ -89,6 +99,8 @@ module Ipe.Db.Store exposing
     , readText, readInt, readBool, readFloat
     , insert, all, get, delete, findWhere, create
     , allOn, getOn, findWhereOn
+    , renameColumn, renameTable, migrations
+    , noopRenameError
     )
 
 
@@ -147,16 +159,34 @@ type ColumnSpec
     | DefaultNow String
 
 
+-- | A schema-evolution operation recorded in the store's op log. Each op is
+-- appended by `renameColumn` / `renameTable`; the log folds to ledger entries
+-- in `migrations`. Kept as a closed ADT so `migrations` is the single point
+-- that builds DDL text from ops — identifiers are validated there, never here.
+type SchemaOp
+    = RenameColumn String String
+    | RenameTable String String
+
+
 -- | One table whose schema, reads, and writes derive from its declared
 -- columns. `specs` are the DB-only facts; `pk` is the validated primary-key
--- column used by the by-key operations. Built only through `fromColumns`, so
--- every identifier it holds has already been accepted by `validSqlIdent`.
+-- column used by the by-key operations. `frozenTable` and `frozenColumns` hold
+-- the table name and columns as first constructed (the source for the
+-- never-drifting create entry — neither is edited by a rename). `table` and
+-- `currentColumns` track the current-schema view after any renames (the
+-- identifiers CRUD targets). `ops` is the ordered schema-op log folded by
+-- `migrations`, threaded from `frozenTable` so each rename entry names the
+-- table as of its own position. Built only through `fromColumns`, so every
+-- identifier it holds has already been accepted by `validSqlIdent`.
 type Store
     = Store
         { table : String
-        , columns : List Column
+        , frozenTable : String
+        , frozenColumns : List Column
+        , currentColumns : List Column
         , specs : List ColumnSpec
         , pk : Maybe String
+        , ops : List SchemaOp
         }
 
 
@@ -278,9 +308,12 @@ fromColumns table columns =
                 Ok
                     (Store
                         { table = table
-                        , columns = columns
+                        , frozenTable = table
+                        , frozenColumns = columns
+                        , currentColumns = columns
                         , specs = []
                         , pk = Nothing
+                        , ops = []
                         }
                     )
 
@@ -333,9 +366,12 @@ primaryKey name store =
         Store r ->
             Store
                 { table = r.table
-                , columns = r.columns
+                , frozenTable = r.frozenTable
+                , frozenColumns = r.frozenColumns
+                , currentColumns = r.currentColumns
                 , specs = PrimaryKey name :: r.specs
                 , pk = Just name
+                , ops = r.ops
                 }
 
 
@@ -365,16 +401,290 @@ addSpec spec store =
         Store r ->
             Store
                 { table = r.table
-                , columns = r.columns
+                , frozenTable = r.frozenTable
+                , frozenColumns = r.frozenColumns
+                , currentColumns = r.currentColumns
                 , specs = spec :: r.specs
                 , pk = r.pk
+                , ops = r.ops
                 }
+
+
+-- ─── Schema-evolution operators ────────────────────────────────────
+
+
+-- | `renameColumn from to store` — record a column rename in the store's
+-- schema-op log and update the current-column view so subsequent
+-- `insert` / `get` / `all` target `to`. The frozen create columns are
+-- unchanged; the rename appears as a separate ledger entry when `migrations`
+-- is called.
+--
+-- This function is a total constructor: `from` and `to` are admitted into the
+-- op log unconditionally. Identifier validation happens once, in `migrations`,
+-- which is the only point SQL text is built — an invalid name therefore
+-- surfaces as `Err` there, not here.
+--
+-- Example:
+--
+--     import Ipe.Db.Store as Store exposing (Store)
+--     import Ipe.Result as Result exposing (Result(..))
+--     import Ipe.Db as Db
+--     import Ipe.Task as Task
+--
+--     -- Build a store with a column rename in the schema-op log, then
+--     -- render it to a migration list and apply it.
+--     applyRename : Db -> Task Error (List String)
+--     applyRename conn =
+--         let
+--             storeResult =
+--                 Store.fromColumns "users"
+--                     [ Store.textColumn "id"
+--                     , Store.textColumn "name"
+--                     , Store.intColumn "age"
+--                     ]
+--                     |> Result.map (Store.primaryKey "id")
+--                     |> Result.map (Store.renameColumn "name" "full_name")
+--         in
+--         case storeResult |> Result.andThen Store.migrations of
+--             Ok ms ->
+--                 Db.migrate conn ms
+--
+--             Err e ->
+--                 Task.fail e
+renameColumn : String -> String -> Store -> Store
+renameColumn from to store =
+    case store of
+        Store r ->
+            Store
+                { table = r.table
+                , frozenTable = r.frozenTable
+                , frozenColumns = r.frozenColumns
+                , currentColumns = renameColumnInList from to r.currentColumns
+                , specs = r.specs
+                , pk = r.pk
+                , ops = r.ops ++ [ RenameColumn from to ]
+                }
+
+
+renameColumnInList : String -> String -> List Column -> List Column
+renameColumnInList from to cols =
+    List.map
+        (\col ->
+            if columnName col == from then
+                column to (columnColType col)
+
+            else
+                col
+        )
+        cols
+
+
+-- | `renameTable to store` — record a table rename in the store's schema-op
+-- log and update the store's active table name so subsequent `insert` / `get`
+-- / `all` target `to`. The frozen create DDL retains the original table name;
+-- the rename appears as a separate ledger entry when `migrations` is called.
+--
+-- Like `renameColumn`, this is a total constructor: `to` is admitted
+-- unconditionally and validated in `migrations` when SQL text is built.
+--
+-- Example:
+--
+--     import Ipe.Db.Store as Store exposing (Store)
+--     import Ipe.Result as Result exposing (Result(..))
+--     import Ipe.Db as Db
+--     import Ipe.Task as Task
+--
+--     -- Build a store with a table rename, render to migrations, and apply.
+--     applyTableRename : Db -> Task Error (List String)
+--     applyTableRename conn =
+--         let
+--             storeResult =
+--                 Store.fromColumns "users"
+--                     [ Store.textColumn "id"
+--                     , Store.textColumn "email"
+--                     ]
+--                     |> Result.map (Store.primaryKey "id")
+--                     |> Result.map (Store.renameTable "accounts")
+--         in
+--         case storeResult |> Result.andThen Store.migrations of
+--             Ok ms ->
+--                 Db.migrate conn ms
+--
+--             Err e ->
+--                 Task.fail e
+renameTable : String -> Store -> Store
+renameTable to store =
+    case store of
+        Store r ->
+            Store
+                { table = to
+                , frozenTable = r.frozenTable
+                , frozenColumns = r.frozenColumns
+                , currentColumns = r.currentColumns
+                , specs = r.specs
+                , pk = r.pk
+                , ops = r.ops ++ [ RenameTable r.table to ]
+                }
+
+
+-- | `migrations store` — fold the store's schema-op log to the ordered list of
+-- ledger entries `Db.migrate` consumes: the frozen create entry (built from the
+-- store's columns as first constructed) followed by one `ALTER … RENAME` entry
+-- per rename op.
+--
+-- This is the single point where rename DDL text is assembled. Every identifier
+-- that will appear in SQL — the table name and each rename's `from`/`to` — is
+-- checked through `validSqlIdent` before it reaches the string. The first
+-- failing identifier returns `Err` and produces no SQL. A no-op rename
+-- (`from == to`) is also rejected with `noopRenameError`.
+--
+-- For a store with no rename ops, `migrations` yields exactly the frozen create
+-- entry — identical to calling `Store.create`, which routes through here.
+--
+-- Example:
+--
+--     import Ipe.Db.Store as Store exposing (Store)
+--     import Ipe.Result as Result exposing (Result(..))
+--     import Ipe.Db as Db
+--     import Ipe.Task as Task
+--
+--     -- Render a store (with a column rename) to its ordered migration list.
+--     buildMigrations : Db -> Task Error (List String)
+--     buildMigrations conn =
+--         let
+--             storeResult =
+--                 Store.fromColumns "users"
+--                     [ Store.textColumn "id"
+--                     , Store.textColumn "name"
+--                     , Store.intColumn "age"
+--                     ]
+--                     |> Result.map (Store.primaryKey "id")
+--                     |> Result.map (Store.renameColumn "name" "full_name")
+--         in
+--         case storeResult |> Result.andThen Store.migrations of
+--             Ok ms ->
+--                 -- ms = [ { name = "create_users", sql = "CREATE TABLE …" }
+--                 --       , { name = "rename_column_users_name_to_full_name"
+--                 --         , sql = "ALTER TABLE users RENAME COLUMN name TO full_name"
+--                 --         }
+--                 --       ]
+--                 Db.migrate conn ms
+--
+--             Err e ->
+--                 Task.fail e
+migrations : Store -> Result Error (List Db.Migration)
+migrations store =
+    case store of
+        Store r ->
+            case createSqlFromColumns r.frozenTable r.frozenColumns r.specs of
+                Err e ->
+                    Err e
+
+                Ok ddl ->
+                    let
+                        createEntry =
+                            { name = migrationName r.frozenTable, sql = ddl }
+                    in
+                    case foldOps r.frozenTable r.ops of
+                        Err e ->
+                            Err e
+
+                        Ok renameEntries ->
+                            Ok (createEntry :: renameEntries)
+
+
+foldOps : String -> List SchemaOp -> Result Error (List Db.Migration)
+foldOps tableAtCreate ops =
+    case ops of
+        [] ->
+            Ok []
+
+        first :: rest ->
+            case opToEntry tableAtCreate first of
+                Err e ->
+                    Err e
+
+                Ok entry ->
+                    case foldOps (opNextTable tableAtCreate first) rest of
+                        Err e ->
+                            Err e
+
+                        Ok more ->
+                            Ok (entry :: more)
+
+
+opNextTable : String -> SchemaOp -> String
+opNextTable current op =
+    case op of
+        RenameTable _ to ->
+            to
+
+        RenameColumn _ _ ->
+            current
+
+
+opToEntry : String -> SchemaOp -> Result Error Db.Migration
+opToEntry table op =
+    case op of
+        RenameColumn from to ->
+            if from == to then
+                Err noopRenameError
+
+            else if not (validSqlIdent table) then
+                Err (invalidIdentError "table" table)
+
+            else if not (validSqlIdent from) then
+                Err (invalidIdentError "column" from)
+
+            else if not (validSqlIdent to) then
+                Err (invalidIdentError "column" to)
+
+            else
+                Ok (renameColumnEntry table from to)
+
+        RenameTable from to ->
+            if from == to then
+                Err noopRenameError
+
+            else if not (validSqlIdent from) then
+                Err (invalidIdentError "table" from)
+
+            else if not (validSqlIdent to) then
+                Err (invalidIdentError "table" to)
+
+            else
+                Ok (renameTableEntry from to)
+
+
+-- The single internal constructor for rename DDL text — the only new
+-- SQL-text construction site. Both `renameColumn` and `renameTable` entries
+-- are built here, exclusively from already-validated identifiers.
+renameColumnEntry : String -> String -> String -> Db.Migration
+renameColumnEntry table from to =
+    { name =
+        String.concat
+            [ "rename_column_", table, "_", from, "_to_", to ]
+    , sql =
+        String.concat
+            [ "ALTER TABLE ", table, " RENAME COLUMN ", from, " TO ", to ]
+    }
+
+
+renameTableEntry : String -> String -> Db.Migration
+renameTableEntry from to =
+    { name =
+        String.concat
+            [ "rename_table_", from, "_to_", to ]
+    , sql =
+        String.concat
+            [ "ALTER TABLE ", from, " RENAME TO ", to ]
+    }
 
 
 -- ─── Introspection ─────────────────────────────────────────────────
 
 
--- | The store's validated table name.
+-- | The store's current table name (reflects any `renameTable` ops applied).
 tableName : Store -> String
 tableName store =
     case store of
@@ -382,12 +692,13 @@ tableName store =
             r.table
 
 
--- | The store's column names, in declaration order.
+-- | The store's current column names, in declaration order (reflects any
+-- `renameColumn` ops applied).
 columnNames : Store -> List String
 columnNames store =
     case store of
         Store r ->
-            List.map columnName r.columns
+            List.map columnName r.currentColumns
 
 
 -- ─── Write path ────────────────────────────────────────────────────
@@ -672,7 +983,7 @@ readBool name row =
             Err (missingColumnError name)
 
 
--- ─── Schema (create) ───────────────────────────────────────────────
+-- ─── Schema (create / migrations) ──────────────────────────────────
 
 
 -- | `createSql store` — the `CREATE TABLE` DDL for the store, or `Err`. Every
@@ -680,31 +991,36 @@ readBool name row =
 -- — is re-validated through `validSqlIdent` before it can reach the string, so
 -- a store built by `fromColumns` (whose identifiers already validate) always
 -- yields `Ok`, and any identifier that somehow does not validate fails closed
--- with no DDL produced. This is the one place a Store builds SQL text; it builds
--- only from validated identifiers and holds no values, so there is nothing to
--- inject.
+-- with no DDL produced. This is the one place a Store builds SQL text for the
+-- create entry; it builds only from validated identifiers and holds no values,
+-- so there is nothing to inject.
 createSql : Store -> Result Error String
 createSql store =
     case store of
         Store r ->
-            if not (validSqlIdent r.table) then
-                Err (invalidIdentError "table" r.table)
+            createSqlFromColumns r.table r.frozenColumns r.specs
 
-            else
-                case columnDefs r.specs r.columns of
-                    Err e ->
-                        Err e
 
-                    Ok defs ->
-                        Ok
-                            (String.concat
-                                [ "CREATE TABLE IF NOT EXISTS "
-                                , r.table
-                                , " ("
-                                , String.join ", " defs
-                                , ")"
-                                ]
-                            )
+createSqlFromColumns : String -> List Column -> List ColumnSpec -> Result Error String
+createSqlFromColumns table cols specs =
+    if not (validSqlIdent table) then
+        Err (invalidIdentError "table" table)
+
+    else
+        case columnDefs specs cols of
+            Err e ->
+                Err e
+
+            Ok defs ->
+                Ok
+                    (String.concat
+                        [ "CREATE TABLE IF NOT EXISTS "
+                        , table
+                        , " ("
+                        , String.join ", " defs
+                        , ")"
+                        ]
+                    )
 
 
 columnDefs : List ColumnSpec -> List Column -> Result Error (List String)
@@ -879,17 +1195,18 @@ specIsDefaultNow spec name =
 
 
 -- | `create conn store` — create the store's table if it does not exist, via
--- the versioned `Db.migrate` ledger. Fails closed if the DDL cannot be built
--- from validated identifiers (no SQL is issued in that case). Idempotent: the
--- ledger applies the migration once and records it.
+-- the versioned `Db.migrate` ledger. For a store with rename ops, use
+-- `migrations` to obtain the full ordered entry list instead. Fails closed if
+-- the DDL cannot be built from validated identifiers (no SQL is issued in that
+-- case). Idempotent: the ledger applies the migration once and records it.
 create : Db -> Store -> Task Error (List String)
 create conn store =
-    case createSql store of
+    case migrations store of
         Err e ->
             Task.fail e
 
-        Ok ddl ->
-            Db.migrate conn [ { name = migrationName (tableName store), sql = ddl } ]
+        Ok ms ->
+            Db.migrate conn ms
 
 
 migrationName : String -> String
@@ -939,3 +1256,13 @@ badColumnError name expected got =
         (String.concat
             [ "Ipe.Db.Store: column \"", name, "\" is not a valid ", expected, ": \"", got, "\"" ]
         )
+
+
+-- | `noopRenameError` — the error returned by `migrations` when a rename op has
+-- the same `from` and `to` identifier. A no-op rename would seed a redundant
+-- ledger entry whose stable name (`rename_column_T_X_to_X`) is misleading and
+-- whose SQL (`ALTER … RENAME COLUMN X TO X`) is a likely mistake.
+noopRenameError : Error
+noopRenameError =
+    Error.invalidInput
+        "Ipe.Db.Store: rename op has identical from and to — a no-op rename would seed a redundant ledger entry"
