@@ -442,6 +442,60 @@ Field→leaf derivation for `auto`: `String/Int/Float/Bool`→primitive; `Decima
 `Maybe t`→scalar `CNull`, else `SBlob`; `List/nested record`→`SBlob`; nullary enum→`SScalar CText`;
 `Secret`→**compile-time rejection**; data-ADT/function/self-recursive→**rejection** (points at `taggedUnion`).
 
+### `Ipe.Db.Codec` — the codec↔SQL row seam (Phase A/B)
+
+The seam that lets one `Codec a` produce a row's binds and decode a DB row back
+to `a`, without a second decoder and without a string round-trip. `Ipe.Codec`
+stays SQL-free; this module is the only place a codec meets `SqlValue`, importing
+both `Ipe.Codec` and the reserved `SqlValue` type.
+
+```elm
+codecToBinds : Codec a -> a -> Result Error (List (String, SqlValue))
+codecFromRow : Codec a -> Dict String String -> Result Error a   -- Row = Dict String String
+```
+
+Both directions reuse the codec's OWN JSON encoder/decoder over an in-memory
+`Value` (design A: the in-memory Value walk), on top of two minimal new
+`Ipe.Json.Decode` seams:
+
+- `value : Decoder Value` — the identity decoder, yielding the raw JSON node.
+- `decodeValue : Decoder a -> Value -> Result Error a` — run a decoder against
+  an in-memory `Value`. This is exactly the tail of `decodeString` after its
+  parse step (the SAME `(decoder.run)(&val)` path) — NOT a second decoder.
+
+`codecToBinds` runs `enc` to ONE `Value`, requires the codec's `Shape` to be an
+`SRecord [(col, colType)]` (else `Err`, fail-closed), and for each column reads
+that field back out of the `Value` with the JSON decoder matching its `ColType`,
+coercing to a **bound** `SqlValue`. `codecFromRow` parses each row cell into the
+JSON scalar its `ColType` implies, assembles ONE `Value` object, and runs the
+codec's own `Decoder` on it via `decodeValue`.
+
+The coercion table (both directions symmetric):
+
+| `ColType`     | encode → `SqlValue`                       | decode: cell → JSON node                 |
+|---------------|-------------------------------------------|------------------------------------------|
+| `CText`       | JSON string → `SqlString`                 | verbatim → JSON string                   |
+| `CInt`        | JSON int → `SqlInt`                        | `String.toInt` → JSON number (else Err)  |
+| `CReal`       | JSON number → `SqlFloat`                   | `String.toFloat` → JSON number (else Err)|
+| `CBool`       | JSON bool → `SqlInt` 0/1 (bound flag)     | `0`/`1`/`true`/`false` → JSON bool        |
+| `CBlob`       | node → compact JSON as `SqlString` TEXT   | cell parsed as JSON TEXT → node           |
+| `CNull inner` | JSON null → `SqlNull <inner witness>`; else coerce as `inner` | absent/`NULL` → JSON null; else parse as `inner` |
+
+A `Decimal`/`Money` field's codec declares `CText` (it encodes to a JSON string),
+so it round-trips as TEXT through the `CText` arm — **never** coerced through a
+lossy `Float`.
+
+**Fail-closed / injection-safety argument.** Every value the bridge produces is a
+BOUND `SqlValue` parameter; the bridge builds NO SQL text, so it adds no
+injection surface over `Ipe.Db.Sql`'s already-parameterised binds (`SqlValue`
+never crosses the JS seam either — it is a sink type). A codec whose `Shape` is
+not an `SRecord` cannot name columns and is a typed `Err`, not a guess. A scalar
+whose encoded JSON does not match its `ColType`, a cell that does not parse to
+its declared shape, or a row missing a required column are all typed `Err`s —
+schema drift surfaces as an error, never a silently mis-typed bind or a wrong
+value. `Secret` stays unencodable (no codec path binds it), so no `Secret`
+reaches a bind here.
+
 ### `Ipe.Db.Store` (Phase A/B)
 
 ```elm

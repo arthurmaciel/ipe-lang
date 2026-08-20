@@ -9684,6 +9684,134 @@ fn scan_kernel_usage(expr: &Expr, usage: &mut KernelUsage) {
     }
 }
 
+/// `true` when `expr` constructs or matches a `SqlValue` / `SqlField` value —
+/// i.e. it names one of those built-in enums as a first-class value rather than
+/// only threading it through a Db kernel. Drives the synthetic-enum injection so
+/// a module that builds bound binds from the `SqlString`/`SqlInt`/… constructors
+/// (with no Db kernel call) still gets the concrete Rust enum emitted.
+///
+/// Checks every `Expr::Ctor` head and every `case` arm's `Pat::Ctor` head for
+/// the `SqlValue` / `SqlField` type symbol, recursing structurally over the same
+/// child positions the kernel-usage scan walks.
+fn expr_constructs_sqlvalue(expr: &Expr, sqlvalue: Symbol, sqlfield: Symbol) -> bool {
+    let is_sql = |ty: Symbol| ty == sqlvalue || ty == sqlfield;
+    match expr {
+        Expr::Ctor { ty, args, .. } => {
+            is_sql(*ty)
+                || args
+                    .iter()
+                    .any(|a| expr_constructs_sqlvalue(a, sqlvalue, sqlfield))
+        }
+        Expr::TailRecur { args } => args
+            .iter()
+            .any(|a| expr_constructs_sqlvalue(a, sqlvalue, sqlfield)),
+        Expr::Call { args, .. } => args
+            .iter()
+            .any(|a| expr_constructs_sqlvalue(a, sqlvalue, sqlfield)),
+        Expr::Apply { func, args } => {
+            expr_constructs_sqlvalue(func, sqlvalue, sqlfield)
+                || args
+                    .iter()
+                    .any(|a| expr_constructs_sqlvalue(a, sqlvalue, sqlfield))
+        }
+        Expr::Let { value, body, .. } | Expr::Destructure { value, body, .. } => {
+            expr_constructs_sqlvalue(value, sqlvalue, sqlfield)
+                || expr_constructs_sqlvalue(body, sqlvalue, sqlfield)
+        }
+        Expr::If { cond, then_, else_ } => {
+            expr_constructs_sqlvalue(cond, sqlvalue, sqlfield)
+                || expr_constructs_sqlvalue(then_, sqlvalue, sqlfield)
+                || expr_constructs_sqlvalue(else_, sqlvalue, sqlfield)
+        }
+        Expr::Match(m) => {
+            if expr_constructs_sqlvalue(m.scrutinee(), sqlvalue, sqlfield) {
+                return true;
+            }
+            m.arms().iter().any(|arm| {
+                pat_matches_sqlvalue(&arm.pat, sqlvalue, sqlfield)
+                    || arm
+                        .guard
+                        .as_ref()
+                        .is_some_and(|g| expr_constructs_sqlvalue(g, sqlvalue, sqlfield))
+                    || expr_constructs_sqlvalue(&arm.body, sqlvalue, sqlfield)
+            })
+        }
+        Expr::Lambda { body, .. }
+        | Expr::SharedLambda { body, .. }
+        | Expr::TailLoop { body, .. } => expr_constructs_sqlvalue(body, sqlvalue, sqlfield),
+        Expr::Cons { head, tail } => {
+            expr_constructs_sqlvalue(head, sqlvalue, sqlfield)
+                || expr_constructs_sqlvalue(tail, sqlvalue, sqlfield)
+        }
+        Expr::ListIndexClone { list, .. } | Expr::ListLenCheck { list, .. } => {
+            expr_constructs_sqlvalue(list, sqlvalue, sqlfield)
+        }
+        Expr::Tuple(elems) | Expr::List { items: elems, .. } => elems
+            .iter()
+            .any(|e| expr_constructs_sqlvalue(e, sqlvalue, sqlfield)),
+        Expr::Record { fields, .. } => fields
+            .iter()
+            .any(|(_, v)| expr_constructs_sqlvalue(v, sqlvalue, sqlfield)),
+        Expr::Access { record, .. } => expr_constructs_sqlvalue(record, sqlvalue, sqlfield),
+        Expr::Update { record, fields } => {
+            expr_constructs_sqlvalue(record, sqlvalue, sqlfield)
+                || fields
+                    .iter()
+                    .any(|(_, v)| expr_constructs_sqlvalue(v, sqlvalue, sqlfield))
+        }
+        Expr::BinOp { lhs, rhs, .. } => {
+            expr_constructs_sqlvalue(lhs, sqlvalue, sqlfield)
+                || expr_constructs_sqlvalue(rhs, sqlvalue, sqlfield)
+        }
+        Expr::TaskSeq { effect, rest } => {
+            expr_constructs_sqlvalue(effect, sqlvalue, sqlfield)
+                || expr_constructs_sqlvalue(rest, sqlvalue, sqlfield)
+        }
+        Expr::FuncValue { .. }
+        | Expr::Int(_)
+        | Expr::Bool(_)
+        | Expr::Float(_)
+        | Expr::Str(_)
+        | Expr::PathLit(_)
+        | Expr::Char(_)
+        | Expr::Unit
+        | Expr::CloneVar(_)
+        | Expr::Var(_) => false,
+    }
+}
+
+/// `true` when a pattern matches on a `SqlValue` / `SqlField` constructor,
+/// recursing into every sub-pattern position.
+fn pat_matches_sqlvalue(pat: &Pat, sqlvalue: Symbol, sqlfield: Symbol) -> bool {
+    match pat {
+        Pat::Ctor { ty, args, .. } => {
+            *ty == sqlvalue
+                || *ty == sqlfield
+                || args
+                    .iter()
+                    .any(|p| pat_matches_sqlvalue(p, sqlvalue, sqlfield))
+        }
+        Pat::Tuple(ps) | Pat::Or(ps) => ps
+            .iter()
+            .any(|p| pat_matches_sqlvalue(p, sqlvalue, sqlfield)),
+        Pat::Record(fields) => fields
+            .iter()
+            .any(|(_, p)| pat_matches_sqlvalue(p, sqlvalue, sqlfield)),
+        Pat::Slice { prefix, rest } => {
+            prefix
+                .iter()
+                .any(|p| pat_matches_sqlvalue(p, sqlvalue, sqlfield))
+                || rest
+                    .as_ref()
+                    .is_some_and(|p| pat_matches_sqlvalue(p, sqlvalue, sqlfield))
+        }
+        Pat::Alias(inner, _) => pat_matches_sqlvalue(inner, sqlvalue, sqlfield),
+        Pat::Wildcard | Pat::Var(_) | Pat::Bool(_) | Pat::Char(_) | Pat::Str(_) | Pat::Int(_) => {
+            false
+        }
+    }
+}
+
 /// The whole-program security-capability set: the union of every reachable
 /// kernel's [`KernelFn::capability`] plus [`Capability::NativeFfi`] when the
 /// program crosses into `Rust.` (any [`Callee::Ffi`]), plus
@@ -11960,7 +12088,19 @@ impl<'a> Lowerer<'a> {
             scan_kernel_usage(&f.body, &mut kernel_usage);
         }
 
-        if kernel_usage.db {
+        // The synthetic `SqlValue` / `SqlField` enums are needed whenever the
+        // program touches those types as first-class values — not only through a
+        // `Db*` kernel call. A module that CONSTRUCTS or MATCHES a `SqlValue`
+        // (e.g. `Ipe.Db.Codec`, which projects a codec to bound binds using the
+        // `SqlString`/`SqlInt`/… constructors) references the enum without ever
+        // calling a Db kernel; without the injection the backend has no Rust name
+        // for the enum and ICEs. The construct/match scan closes that gap so the
+        // injection follows real usage, kernel-driven or value-driven.
+        let uses_sqlvalue = kernel_usage.db
+            || funcs.iter().any(|f| {
+                expr_constructs_sqlvalue(&f.body, self.builtins.sqlvalue, self.builtins.sqlfield)
+            });
+        if uses_sqlvalue {
             types_ir.push(TypeDef::Enum(self.synthetic_sqlvalue_enum()));
             types_ir.push(TypeDef::Enum(self.synthetic_sqlfield_enum()));
         }
@@ -19465,6 +19605,7 @@ impl<'a> Lowerer<'a> {
                 | KernelFn::JsonDecInt
                 | KernelFn::JsonDecFloat
                 | KernelFn::JsonDecBool
+                | KernelFn::JsonDecValue
                 // ── TEA arity-0 ─────────────────────────────────────────
                 // `Cmd.none : Cmd msg`
                 | KernelFn::CmdNone
@@ -19904,6 +20045,7 @@ impl<'a> Lowerer<'a> {
                 | KernelFn::JsonEncEncode
                 // ── JsonDec arity-2 ─────────────────────────────────────
                 | KernelFn::JsonDecDecodeString
+                | KernelFn::JsonDecDecodeValue
                 | KernelFn::JsonDecField
                 | KernelFn::JsonDecAt
                 | KernelFn::JsonDecIndex
@@ -21381,9 +21523,11 @@ impl<'a> Lowerer<'a> {
                     ("JsonDec", "int") => Ok(Callee::Kernel(KernelFn::JsonDecInt)),
                     ("JsonDec", "float") => Ok(Callee::Kernel(KernelFn::JsonDecFloat)),
                     ("JsonDec", "bool") => Ok(Callee::Kernel(KernelFn::JsonDecBool)),
+                    ("JsonDec", "value") => Ok(Callee::Kernel(KernelFn::JsonDecValue)),
                     ("JsonDec", "decodeString") => {
                         Ok(Callee::Kernel(KernelFn::JsonDecDecodeString))
                     }
+                    ("JsonDec", "decodeValue") => Ok(Callee::Kernel(KernelFn::JsonDecDecodeValue)),
                     ("JsonDec", "field") => Ok(Callee::Kernel(KernelFn::JsonDecField)),
                     ("JsonDec", "at") => Ok(Callee::Kernel(KernelFn::JsonDecAt)),
                     ("JsonDec", "index") => Ok(Callee::Kernel(KernelFn::JsonDecIndex)),

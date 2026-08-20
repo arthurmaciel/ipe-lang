@@ -4623,6 +4623,9 @@ fn emit_json_decoder_call(
                     | ipe_ir::KernelFn::JsonDecInt
                     | ipe_ir::KernelFn::JsonDecFloat
                     | ipe_ir::KernelFn::JsonDecBool
+                    // `Json.Decode.value` — the identity decoder carries the
+                    // same free `E: From<String>` and needs the turbofish.
+                    | ipe_ir::KernelFn::JsonDecValue
                     // `Config.{string,int,float,bool}` share the JSON primitive
                     // decoder fns — same arity-0 turbofish treatment.
                     | ipe_ir::KernelFn::ConfigString

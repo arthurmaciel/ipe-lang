@@ -6626,7 +6626,9 @@ impl<'a> Builder<'a> {
             K::JsonDecInt => dec(int()),
             K::JsonDecFloat => dec(float()),
             K::JsonDecBool => dec(bool_ty()),
+            K::JsonDecValue => dec(value()),
             K::JsonDecDecodeString => fun(dec(var(0)), fun(string(), result(error_ty(), var(0)))),
+            K::JsonDecDecodeValue => fun(dec(var(0)), fun(value(), result(error_ty(), var(0)))),
             K::JsonDecField => fun(string(), fun(dec(var(0)), dec(var(0)))),
             K::JsonDecAt => fun(list(string()), fun(dec(var(0)), dec(var(0)))),
             K::JsonDecIndex => fun(int(), fun(dec(var(0)), dec(var(0)))),
@@ -8898,6 +8900,12 @@ mod registry_phase_c_tests {
             K::JsonEncList,
             K::JsonEncObject,
             K::JsonEncEncode,
+            // Ipe.Json.Decode (2) — the in-memory `Value` seam: `value` (the
+            // identity `Decoder Value`) and `decodeValue` (run a decoder against
+            // a `Value`). Both are Ipê-new with no legacy oracle; `Value`
+            // positions map to `IrType::Json`.
+            K::JsonDecValue,
+            K::JsonDecDecodeValue,
             // Uuid (3): `v4`/`v7` are `() -> Task Error String`
             // (entropy is an effect, not a memoizable pure String); `parse` is
             // the pure `String -> Maybe String` parser. Each is a hole

@@ -1,0 +1,441 @@
+-- | Ipe.Db.Codec — the seam that turns one `Ipe.Codec.Codec a` into a database
+-- row and back, so a single codec is the source of truth for the wire form, the
+-- column shape, AND the stored row.
+--
+-- `Ipe.Codec` itself knows nothing about SQL — it holds a JSON encoder, a JSON
+-- decoder factory, and a dialect-neutral `Shape`. This module is the only place
+-- the codec meets `SqlValue`: it imports both `Ipe.Codec` (for the encoder,
+-- decoder, and `Shape`) and the reserved `SqlValue` sum type, and bridges them
+-- WITHOUT re-encoding, without a string round-trip, and without a second
+-- decoder. Both directions reuse the codec's own JSON seam:
+--
+--   * `codecToBinds` runs the codec's encoder to ONE in-memory `Value`, walks
+--     the codec's `Shape`, and reads each declared column out of that `Value`
+--     with the JSON decoder that matches the column's `ColType`, coercing it to
+--     a BOUND `SqlValue`. Every value produced is a parameter binding, never SQL
+--     text — the bridge constructs no query string, so it adds no injection
+--     surface over `Ipe.Db.Sql`'s already-parameterised binds.
+--
+--   * `codecFromRow` builds an in-memory `Value` object from the row's cells,
+--     one field per declared column parsed into the JSON scalar the decoder
+--     expects, then runs the codec's OWN `Decoder` on that `Value` via
+--     `Json.Decode.decodeValue`. Schema drift (a missing column, a cell that is
+--     not the declared shape) surfaces as a typed `Err`, never a wrong value.
+--
+-- Fail-closed throughout. A codec whose `Shape` is not an `SRecord` cannot name
+-- columns, so both directions reject it with a typed `Error` rather than guess.
+-- A scalar that does not match its `ColType` is a typed `Err`, never a silently
+-- mis-typed bind. An exact-decimal or money field (whose codec encodes to a JSON
+-- string) round-trips as TEXT — it is never coerced through a lossy `Float`.
+--
+--     import Ipe.Db.Codec as DbCodec
+--     import Ipe.Codec as Codec exposing (Codec)
+--
+--     -- Given `userCodec : Codec User` (an `SRecord` codec):
+--     --   DbCodec.codecToBinds userCodec user
+--     --       == Ok [ ( "id", SqlString "…" ), ( "age", SqlInt 30 ), … ]
+--     --   DbCodec.codecFromRow userCodec row == Ok user   (row from those binds)
+module Ipe.Db.Codec exposing
+    ( codecToBinds
+    , codecFromRow
+    )
+
+
+import Ipe.Codec as Codec exposing (Codec(..), ColType(..), Shape(..))
+import Ipe.Json.Encode as Encode
+import Ipe.Json.Decode as Decode
+import Ipe.Config as Config
+import Ipe.Dict as Dict
+import Ipe.List as List
+import Ipe.Maybe as Maybe exposing (Maybe(..))
+import Ipe.Result as Result exposing (Result(..))
+import Ipe.String as String
+import Ipe.Error as Error exposing (Error)
+
+
+-- ─── Encode direction: codec + value → bound binds ─────────────────
+
+
+-- | Project a value through its codec to the `(column, SqlValue)` binds a row
+-- INSERT/UPDATE takes. The codec's encoder runs to ONE in-memory `Value`; each
+-- column declared by the codec's `Shape` is read back out of that `Value` and
+-- coerced to a BOUND `SqlValue` matching its `ColType`. Every element is a
+-- parameter binding — no SQL text is built here.
+--
+-- Fail-closed: a codec whose shape is not an `SRecord` (a bare scalar, a blob,
+-- a container) has no column list, so it is a typed `Err`. A field whose encoded
+-- JSON does not match its declared `ColType` is likewise a typed `Err`, never a
+-- wrong bind.
+codecToBinds : Codec a -> a -> Result Error (List ( String, SqlValue ))
+codecToBinds codec x =
+    case Codec.shape codec of
+        SRecord columns ->
+            bindsFromValue (Codec.toValue codec x) columns
+
+        SScalar _ ->
+            Err notARecordError
+
+        SBlob ->
+            Err notARecordError
+
+
+bindsFromValue : Value -> List ( String, ColType ) -> Result Error (List ( String, SqlValue ))
+bindsFromValue value columns =
+    List.foldr (\col acc -> consBind value col acc) (Ok []) columns
+
+
+consBind :
+    Value
+    -> ( String, ColType )
+    -> Result Error (List ( String, SqlValue ))
+    -> Result Error (List ( String, SqlValue ))
+consBind value col acc =
+    case acc of
+        Err e ->
+            Err e
+
+        Ok rest ->
+            case col of
+                ( name, colType ) ->
+                    case bindColumn value name colType of
+                        Ok sqlValue ->
+                            Ok (( name, sqlValue ) :: rest)
+
+                        Err e ->
+                            Err e
+
+
+-- | Read ONE column out of the encoded `Value` and coerce it to a bound
+-- `SqlValue`, running the JSON decoder that matches the column's `ColType`
+-- against the field. A decode failure (the field is absent or not the declared
+-- shape) is a typed `Err`.
+bindColumn : Value -> String -> ColType -> Result Error SqlValue
+bindColumn value name colType =
+    Decode.decodeValue (Decode.field name (sqlValueDecoder colType)) value
+
+
+-- | The `Decoder SqlValue` for one column type. Each arm reads the field as the
+-- JSON scalar its `ColType` implies and wraps it in the matching bound
+-- constructor:
+--
+--   * `CText`  → JSON string  → `SqlString`
+--   * `CInt`   → JSON integer → `SqlInt`
+--   * `CReal`  → JSON number  → `SqlFloat`
+--   * `CBool`  → JSON boolean → `SqlInt` 0/1 (bound as an integer flag)
+--   * `CBlob`  → any JSON node → its compact serialisation as `SqlString` TEXT
+--   * `CNull inner` → JSON null → `SqlNull <inner witness>`; any other value is
+--     coerced as `inner`, so a nullable column binds a real NULL or the inner
+--     scalar, never a wrong type.
+--
+-- An exact-decimal / money column's codec declares `CText` (it encodes to a JSON
+-- string), so it flows through the `CText` arm as TEXT — never `CReal`, never a
+-- lossy `Float`.
+sqlValueDecoder : ColType -> Decoder SqlValue
+sqlValueDecoder colType =
+    case colType of
+        CText ->
+            Decode.map (\s -> SqlString s) Decode.string
+
+        CInt ->
+            Decode.map (\n -> SqlInt n) Decode.int
+
+        CReal ->
+            Decode.map (\f -> SqlFloat f) Decode.float
+
+        CBool ->
+            Decode.map (\b -> SqlInt (boolToInt b)) Decode.bool
+
+        CBlob ->
+            Decode.map (\node -> SqlString (Encode.encode 0 node)) Decode.value
+
+        CNull inner ->
+            Config.nullable (sqlValueDecoder inner)
+                |> Decode.map (nullableToSqlValue inner)
+
+
+boolToInt : Bool -> Int
+boolToInt b =
+    if b then
+        1
+
+    else
+        0
+
+
+-- | Fold a decoded nullable column to a `SqlValue`: `Nothing` (a JSON null) is a
+-- real SQL NULL that carries the inner column's type witness so the bind site
+-- can pick a correctly-typed `NULL`; `Just` is the already-coerced inner value.
+nullableToSqlValue : ColType -> Maybe SqlValue -> SqlValue
+nullableToSqlValue inner decoded =
+    case decoded of
+        Nothing ->
+            SqlNull (nullWitness inner)
+
+        Just sqlValue ->
+            sqlValue
+
+
+-- | A typed-NULL witness for a column type — a zero/empty value of the inner
+-- constructor, discarded by the bind site (a NULL carries no data) but pinning
+-- the variant TAG so a nullable column binds `NULL` at the right type. A nested
+-- `CNull` collapses to its innermost witness (a doubly-nullable column is one
+-- NULL).
+nullWitness : ColType -> SqlValue
+nullWitness colType =
+    case colType of
+        CText ->
+            SqlString ""
+
+        CInt ->
+            SqlInt 0
+
+        CReal ->
+            SqlFloat 0.0
+
+        CBool ->
+            SqlInt 0
+
+        CBlob ->
+            SqlString ""
+
+        CNull inner ->
+            nullWitness inner
+
+
+-- ─── Decode direction: codec + row → value ─────────────────────────
+
+
+-- | Rebuild a value from a database row through its codec. Each column declared
+-- by the codec's `Shape` is parsed from its row cell into the JSON scalar the
+-- decoder expects, assembled into ONE in-memory `Value` object, and the codec's
+-- OWN `Decoder` is run on that `Value`. No second decoder is written — the same
+-- decoder that reads the wire form reads the row.
+--
+-- Fail-closed: a codec whose shape is not an `SRecord`, a required column
+-- missing from the row, or a cell that does not parse to its declared shape is a
+-- typed `Err`. Schema drift surfaces as an error, never a wrong value.
+codecFromRow : Codec a -> Dict String String -> Result Error a
+codecFromRow codec row =
+    case codec of
+        Codec r ->
+            case r.shp of
+                SRecord columns ->
+                    case valueFromRow row columns of
+                        Ok value ->
+                            Decode.decodeValue (r.mkDec {}) value
+
+                        Err e ->
+                            Err e
+
+                SScalar _ ->
+                    Err notARecordError
+
+                SBlob ->
+                    Err notARecordError
+
+
+-- | Assemble the row's cells into a JSON `Value` object, one field per declared
+-- column parsed into the JSON node its `ColType` implies.
+valueFromRow : Dict String String -> List ( String, ColType ) -> Result Error Value
+valueFromRow row columns =
+    case fieldsFromRow row columns of
+        Ok fields ->
+            Ok (Encode.object fields)
+
+        Err e ->
+            Err e
+
+
+fieldsFromRow : Dict String String -> List ( String, ColType ) -> Result Error (List ( String, Value ))
+fieldsFromRow row columns =
+    List.foldr (\col acc -> consField row col acc) (Ok []) columns
+
+
+consField :
+    Dict String String
+    -> ( String, ColType )
+    -> Result Error (List ( String, Value ))
+    -> Result Error (List ( String, Value ))
+consField row col acc =
+    case acc of
+        Err e ->
+            Err e
+
+        Ok rest ->
+            case col of
+                ( name, colType ) ->
+                    case cellToValue name colType (Dict.get name row) of
+                        Ok node ->
+                            Ok (( name, node ) :: rest)
+
+                        Err e ->
+                            Err e
+
+
+-- | Parse one row cell into the JSON node its `ColType` implies:
+--
+--   * `CText`  → the cell verbatim as a JSON string
+--   * `CInt`   → the cell parsed as an integer JSON number (non-integral → Err)
+--   * `CReal`  → the cell parsed as a JSON number
+--   * `CBool`  → `"0"`/`"1"` (or `"true"`/`"false"`) as a JSON boolean
+--   * `CBlob`  → the cell parsed as JSON TEXT back into its node
+--   * `CNull inner` → JSON null when the cell is absent/`NULL`, else parse as
+--     `inner`
+--
+-- A cell that does not parse to its declared shape is a typed `Err`.
+cellToValue : String -> ColType -> Maybe String -> Result Error Value
+cellToValue name colType maybeCell =
+    case colType of
+        CNull inner ->
+            case maybeCell of
+                Nothing ->
+                    Ok Encode.null
+
+                Just cell ->
+                    if isSqlNull cell then
+                        Ok Encode.null
+
+                    else
+                        cellToValue name inner (Just cell)
+
+        CText ->
+            requirePresent name maybeCell (scalarCellToValue name colType)
+
+        CInt ->
+            requirePresent name maybeCell (scalarCellToValue name colType)
+
+        CReal ->
+            requirePresent name maybeCell (scalarCellToValue name colType)
+
+        CBool ->
+            requirePresent name maybeCell (scalarCellToValue name colType)
+
+        CBlob ->
+            requirePresent name maybeCell (scalarCellToValue name colType)
+
+
+-- | A non-nullable column MUST have a present cell; an absent one is a typed
+-- missing-column `Err`. Threads the present cell into the parser.
+requirePresent : String -> Maybe String -> (String -> Result Error Value) -> Result Error Value
+requirePresent name maybeCell parse =
+    case maybeCell of
+        Just cell ->
+            parse cell
+
+        Nothing ->
+            Err (missingColumnError name)
+
+
+scalarCellToValue : String -> ColType -> String -> Result Error Value
+scalarCellToValue name colType cell =
+    case colType of
+        CText ->
+            Ok (Encode.string cell)
+
+        CInt ->
+            case String.toInt cell of
+                Just n ->
+                    Ok (Encode.int n)
+
+                Nothing ->
+                    Err (badCellError name colType cell)
+
+        CReal ->
+            case String.toFloat cell of
+                Just f ->
+                    Ok (Encode.float f)
+
+                Nothing ->
+                    Err (badCellError name colType cell)
+
+        CBool ->
+            case boolFromCell cell of
+                Just b ->
+                    Ok (Encode.bool b)
+
+                Nothing ->
+                    Err (badCellError name colType cell)
+
+        CBlob ->
+            Decode.decodeString Decode.value cell
+
+        CNull inner ->
+            scalarCellToValue name inner cell
+
+
+-- | `"NULL"` (any case) is the store's sentinel for an absent value.
+isSqlNull : String -> Bool
+isSqlNull cell =
+    String.toUpper cell == "NULL"
+
+
+boolFromCell : String -> Maybe Bool
+boolFromCell cell =
+    case cell of
+        "1" ->
+            Just True
+
+        "0" ->
+            Just False
+
+        "true" ->
+            Just True
+
+        "false" ->
+            Just False
+
+        _ ->
+            Nothing
+
+
+-- ─── Errors ────────────────────────────────────────────────────────
+
+
+-- | The codec's shape is not an `SRecord`, so it declares no columns to bind or
+-- read — a typed invalid-input error, never a guess.
+notARecordError : Error
+notARecordError =
+    Error.invalidInput
+        "Ipe.Db.Codec: the codec's shape is not a record, so it has no columns to bind or read"
+
+
+missingColumnError : String -> Error
+missingColumnError name =
+    Error.invalidInput
+        (String.concat [ "Ipe.Db.Codec: row is missing the required column \"", name, "\"" ])
+
+
+badCellError : String -> ColType -> String -> Error
+badCellError name colType cell =
+    Error.invalidInput
+        (String.concat
+            [ "Ipe.Db.Codec: column \""
+            , name
+            , "\" cell \""
+            , cell
+            , "\" is not a "
+            , colTypeName colType
+            ]
+        )
+
+
+colTypeName : ColType -> String
+colTypeName colType =
+    case colType of
+        CText ->
+            "text value"
+
+        CInt ->
+            "integer"
+
+        CReal ->
+            "real number"
+
+        CBool ->
+            "boolean"
+
+        CBlob ->
+            "JSON value"
+
+        CNull inner ->
+            colTypeName inner
