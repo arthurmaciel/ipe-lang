@@ -124,10 +124,10 @@ main =
 }
 
 /// The typed READ stack accepts an external `Connection ReadOnly`: `Db.queryDecodeOn`
-/// (a per-row decoder) and `Store.findWhereOn` / `Store.getOn` (over one `read`
-/// codec) both type-check on a read-only connection AND the emitted crate builds
-/// (THE SEAL). Routed through `support::assert_seal_builds` so the cargo build
-/// step runs under `IPE_E2E=1`.
+/// (a per-row decoder) and `Store.findWhereOn` / `Store.getOn` (which decode through
+/// the store's own codec) both type-check on a read-only connection AND the emitted
+/// crate builds (THE SEAL). Routed through `support::assert_seal_builds` so the cargo
+/// build step runs under `IPE_E2E=1`.
 #[test]
 fn typed_reads_over_read_only_connection_type_check_and_build() {
     let dir = write_project(
@@ -149,18 +149,19 @@ readCode : Connection ReadOnly -> Task Error (List Int)
 readCode conn =
     Db.queryDecodeOn conn \"SELECT amount FROM ledger\" [] (Db.Decode.int \"amount\")
 
--- The Store read surface over the SAME external connection and one `read` codec.
-readAll : Connection ReadOnly -> Store -> (Store.Row -> Result Error Int) -> Task Error (List Int)
-readAll conn store read =
-    Store.allOn conn store read
+-- The Store read surface over the SAME external connection, decoding each row
+-- through the store's own codec (here a raw-column `Store Store.Row`).
+readAll : Connection ReadOnly -> Store Store.Row -> Task Error (List Store.Row)
+readAll conn store =
+    Store.allOn conn store
 
-readOne : Connection ReadOnly -> Store -> (Store.Row -> Result Error Int) -> SqlValue -> Task Error (Maybe Int)
-readOne conn store read key =
-    Store.getOn conn store read key
+readOne : Connection ReadOnly -> Store Store.Row -> SqlValue -> Task Error (Maybe Store.Row)
+readOne conn store key =
+    Store.getOn conn store key
 
-readWhere : Connection ReadOnly -> Store -> (Store.Row -> Result Error Int) -> SqlFragment -> Task Error (List Int)
-readWhere conn store read cond =
-    Store.findWhereOn conn store read cond
+readWhere : Connection ReadOnly -> Store Store.Row -> SqlFragment -> Task Error (List Store.Row)
+readWhere conn store cond =
+    Store.findWhereOn conn store cond
 
 main : Task Error ()
 main =
@@ -193,9 +194,9 @@ import Ipe.Db.Store as Store exposing (Store)
 import Ipe.Task as Task
 import Ipe.Error exposing (Error)
 
-badStoreWrite : Connection ReadOnly -> Store -> List ( String, SqlValue ) -> Task Error Int
-badStoreWrite conn store cols =
-    Store.insert conn store cols
+badStoreWrite : Connection ReadOnly -> Store Store.Row -> Store.Row -> Task Error Int
+badStoreWrite conn store row =
+    Store.insert conn store row
 
 main : Task Error ()
 main =

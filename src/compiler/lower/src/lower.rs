@@ -6203,14 +6203,19 @@ fn binder_captured_in_move_closure(binder: Symbol, expr: &Expr) -> bool {
 /// genuine capture from the enclosing scope. Two capture positions carry `tv`
 /// bare:
 ///
-/// * A free var used **as a bare value** — cons head, tuple/list element, call
-///   or constructor argument, `Task.map` continuation payload. The captured
-///   binder's own type carries the element (`Ipe.Db.Store.decodeRows` captures
-///   the `Ok value ->` arm local `value : a` and conses it), so `tv: Sync` is
-///   obliged.
 /// * A field read `record.field` whose `field_ty` [`ir_type_generic_reaches_bare`]
 ///   the tvar — the captured record's `tv` rides in a TRANSPARENT field, read
-///   out into a bare-`tv` value inside the closure.
+///   out into a bare-`tv` value inside the closure. This is TYPE-PROVEN: the
+///   field type itself carries `tv` bare, so it counts under either regime.
+/// * A free var used **as a bare value** — cons head, tuple/list element, call
+///   or constructor argument, `Task.map` continuation payload. A bare `Var`
+///   node carries no type, so this position is only trustworthy when the
+///   closure's own SIGNATURE reaches `tv` bare (the `decodeRows`
+///   `\more -> value :: more` case, where `value : tv` is consed and the
+///   signature `List tv -> List tv` reaches bare). `typed_capture_only` gates
+///   it: when the signature only MENTIONS `tv` under an opaque carrier, an
+///   untyped bare capture proves nothing (`class`'s captured `String`) and is
+///   NOT counted.
 ///
 /// A free var used SOLELY as the base of an [`Expr::Access`] into an OPAQUE
 /// field (`field_ty` a `Fun`/`Decoder`/…, which `reaches_bare` stops at) is NOT
@@ -6223,17 +6228,24 @@ fn binder_captured_in_move_closure(binder: Symbol, expr: &Expr) -> bool {
 fn closure_captures_bare_generic(
     tv: Symbol,
     locally_bound: &BTreeSet<Symbol>,
+    typed_capture_only: bool,
     expr: &Expr,
 ) -> bool {
+    let recur = |bound: &BTreeSet<Symbol>, e: &Expr| {
+        closure_captures_bare_generic(tv, bound, typed_capture_only, e)
+    };
     match expr {
-        // A bare free var IS a bare-value capture.
-        Expr::Var(s) | Expr::CloneVar(s) => !locally_bound.contains(s),
+        // A bare free var IS a bare-value capture — but ONLY trustworthy when the
+        // closure signature reaches `tv` bare (a `Var` node carries no type).
+        // Under `typed_capture_only` an untyped bare capture proves nothing.
+        Expr::Var(s) | Expr::CloneVar(s) => !typed_capture_only && !locally_bound.contains(s),
         // A field read: the projected value carries `tv` bare only when the
-        // field's own type reaches it. If it does, this Access is a bare-`tv`
-        // capture regardless of the record base's shape; if it does not, the
-        // record base is used solely under an opaque carrier here, so descend
-        // into the record ONLY to catch a bare capture nested deeper (a
-        // computed record expression), never counting the base var itself.
+        // field's own type reaches it. This is TYPE-PROVEN, so it counts under
+        // either regime. If it does, this Access is a bare-`tv` capture regardless
+        // of the record base's shape; if it does not, the record base is used
+        // solely under an opaque carrier here, so descend into the record ONLY to
+        // catch a bare capture nested deeper (a computed record expression),
+        // never counting the base var itself.
         Expr::Access {
             record, field_ty, ..
         } => {
@@ -6242,19 +6254,19 @@ fn closure_captures_bare_generic(
             }
             match record.as_ref() {
                 Expr::Var(_) | Expr::CloneVar(_) => false,
-                other => closure_captures_bare_generic(tv, locally_bound, other),
+                other => recur(locally_bound, other),
             }
         }
         Expr::Lambda { params, body, .. } | Expr::SharedLambda { params, body, .. } => {
             let mut inner = locally_bound.clone();
             inner.extend(params.iter().map(|(s, _)| *s));
-            closure_captures_bare_generic(tv, &inner, body)
+            recur(&inner, body)
         }
         Expr::Let { name, value, body } => {
-            closure_captures_bare_generic(tv, locally_bound, value) || {
+            recur(locally_bound, value) || {
                 let mut inner = locally_bound.clone();
                 inner.insert(*name);
-                closure_captures_bare_generic(tv, &inner, body)
+                recur(&inner, body)
             }
         }
         Expr::Destructure {
@@ -6262,62 +6274,47 @@ fn closure_captures_bare_generic(
             value,
             body,
         } => {
-            closure_captures_bare_generic(tv, locally_bound, value) || {
+            recur(locally_bound, value) || {
                 let mut inner = locally_bound.clone();
                 collect_ir_pat_syms(binder, &mut inner);
-                closure_captures_bare_generic(tv, &inner, body)
+                recur(&inner, body)
             }
         }
         Expr::Match(m) => {
-            closure_captures_bare_generic(tv, locally_bound, m.scrutinee())
+            recur(locally_bound, m.scrutinee())
                 || m.arms().iter().any(|arm| {
                     let mut inner = locally_bound.clone();
                     collect_ir_pat_syms(&arm.pat, &mut inner);
-                    arm.guard
-                        .as_ref()
-                        .is_some_and(|g| closure_captures_bare_generic(tv, &inner, g))
-                        || closure_captures_bare_generic(tv, &inner, &arm.body)
+                    arm.guard.as_ref().is_some_and(|g| recur(&inner, g)) || recur(&inner, &arm.body)
                 })
         }
         Expr::TailLoop { params, body } => {
             let mut inner = locally_bound.clone();
             inner.extend(params.iter().map(|(s, _)| *s));
-            closure_captures_bare_generic(tv, &inner, body)
+            recur(&inner, body)
         }
         Expr::If { cond, then_, else_ } => {
-            closure_captures_bare_generic(tv, locally_bound, cond)
-                || closure_captures_bare_generic(tv, locally_bound, then_)
-                || closure_captures_bare_generic(tv, locally_bound, else_)
+            recur(locally_bound, cond) || recur(locally_bound, then_) || recur(locally_bound, else_)
         }
-        Expr::BinOp { lhs, rhs, .. } => {
-            closure_captures_bare_generic(tv, locally_bound, lhs)
-                || closure_captures_bare_generic(tv, locally_bound, rhs)
+        Expr::BinOp { lhs, rhs, .. } => recur(locally_bound, lhs) || recur(locally_bound, rhs),
+        Expr::Call { args, .. } | Expr::Ctor { args, .. } | Expr::TailRecur { args } => {
+            args.iter().any(|a| recur(locally_bound, a))
         }
-        Expr::Call { args, .. } | Expr::Ctor { args, .. } | Expr::TailRecur { args } => args
-            .iter()
-            .any(|a| closure_captures_bare_generic(tv, locally_bound, a)),
         Expr::Apply { func, args } => {
-            closure_captures_bare_generic(tv, locally_bound, func)
-                || args
-                    .iter()
-                    .any(|a| closure_captures_bare_generic(tv, locally_bound, a))
+            recur(locally_bound, func) || args.iter().any(|a| recur(locally_bound, a))
         }
-        Expr::Tuple(items) | Expr::List { items, .. } => items
-            .iter()
-            .any(|e| closure_captures_bare_generic(tv, locally_bound, e)),
-        Expr::Cons { head, tail } => {
-            closure_captures_bare_generic(tv, locally_bound, head)
-                || closure_captures_bare_generic(tv, locally_bound, tail)
+        Expr::Tuple(items) | Expr::List { items, .. } => {
+            items.iter().any(|e| recur(locally_bound, e))
         }
+        Expr::Cons { head, tail } => recur(locally_bound, head) || recur(locally_bound, tail),
         Expr::ListIndexClone { list, .. } | Expr::ListLenCheck { list, .. } => {
-            closure_captures_bare_generic(tv, locally_bound, list)
+            recur(locally_bound, list)
         }
-        Expr::Record { fields, .. } | Expr::Update { fields, .. } => fields
-            .iter()
-            .any(|(_, e)| closure_captures_bare_generic(tv, locally_bound, e)),
+        Expr::Record { fields, .. } | Expr::Update { fields, .. } => {
+            fields.iter().any(|(_, e)| recur(locally_bound, e))
+        }
         Expr::TaskSeq { effect, rest } => {
-            closure_captures_bare_generic(tv, locally_bound, effect)
-                || closure_captures_bare_generic(tv, locally_bound, rest)
+            recur(locally_bound, effect) || recur(locally_bound, rest)
         }
         Expr::FuncValue { .. }
         | Expr::Int(_)
@@ -6404,22 +6401,43 @@ fn collect_ir_pat_syms(pat: &Pat, out: &mut BTreeSet<Symbol>) {
 fn body_move_closure_captures_generic(tv: Symbol, expr: &Expr) -> bool {
     match expr {
         Expr::Lambda { params, ret, body } | Expr::SharedLambda { params, ret, body } => {
-            // A closure can oblige `tv: Sync` only if its OWN signature carries
-            // `tv` bare — the captured value flows into a bare-`tv` position the
-            // signature exposes. This scopes the obligation to the RIGHT tvar: a
-            // continuation lambda `Vec<(T1, Int)> -> Vec<(T1, Int)>` reaches only
-            // `T1`, never the input `T2`, so a bare capture inside it obliges
-            // `T1: Sync` alone. Paired with the bare-capture walk below, which
-            // confirms a captured value actually carries `tv` bare (not merely
-            // rides an opaque `Send + Sync` field), the two conditions together
-            // fire on the real capture shape and never over-bound.
+            // A closure can oblige `tv: Sync` only when its body move-captures a
+            // value that genuinely carries `tv` BARE into the emitted
+            // `Box`/`Arc<dyn Fn + Send + Sync + 'static>`. Two signature regimes
+            // gate WHICH captures count, because a captured value proves it carries
+            // `tv` in exactly one of two ways:
+            //
+            //   * The signature REACHES `tv` bare (a param/return `List tv`, `tv`,
+            //     `(tv, _)`, …). Here the closure exposes `tv` bare in its own type,
+            //     so a bare free-var capture is a plausible `tv`-carrier: the
+            //     `\more -> value :: more` continuation of `decodeRows` captures the
+            //     `Ok value ->` arm local `value : tv` and conses it. The bare-var
+            //     capture arm is enabled (`typed_capture_only = false`).
+            //   * The signature only MENTIONS `tv` under an opaque `Send + Sync`
+            //     carrier (`ret : Task Error (List tv)` in `\rows -> decodeRows
+            //     r.codec rows`). A bare capture here proves nothing — the closure's
+            //     own values may all be already-shareable (`String`, a boxed `Fn`) —
+            //     so ONLY a capture whose TYPE is known to reach `tv` bare counts: a
+            //     field read `r.codec` whose `field_ty : Codec tv` reaches bare
+            //     (`typed_capture_only = true`). This is what keeps `class =
+            //     attribute "class"` — `\eta -> html_named_attr_ cap eta :
+            //     String -> Attribute tv`, capturing only the `String` `cap` while
+            //     `tv` rides solely in the opaque `Attribute`/`Ui` return — from
+            //     spuriously obliging `tv: Sync`.
+            //
+            // The mention test scopes the obligation to the RIGHT tvar: a
+            // continuation whose signature never names `T2` cannot oblige `T2`.
+            let is_tv = |t: &IrType| matches!(t, IrType::Generic(g) if *g == tv);
             let signature_reaches_tv = params
                 .iter()
                 .any(|(_, t)| ir_type_generic_reaches_bare(t, tv))
                 || ir_type_generic_reaches_bare(ret, tv);
-            if signature_reaches_tv {
+            let signature_mentions_tv = params.iter().any(|(_, t)| ir_type_mentions(t, &is_tv))
+                || ir_type_mentions(ret, &is_tv);
+            if signature_reaches_tv || signature_mentions_tv {
                 let closure_bound: BTreeSet<Symbol> = params.iter().map(|(s, _)| *s).collect();
-                if closure_captures_bare_generic(tv, &closure_bound, body) {
+                let typed_capture_only = !signature_reaches_tv;
+                if closure_captures_bare_generic(tv, &closure_bound, typed_capture_only, body) {
                     return true;
                 }
             }

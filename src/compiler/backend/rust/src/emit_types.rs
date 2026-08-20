@@ -1036,6 +1036,21 @@ pub fn emit_record_struct(ctx: &EmitCtx, rec: &RecordStruct) -> DResult<String> 
     }
     let fields_block = field_lines.join("\n");
 
+    // seal: a record that stores a function on the `Arc<dyn Fn(..) -> Tn + Send
+    // + Sync + 'static>` (`SharedFun`) carrier — directly, or through a generic
+    // instantiation of a carrier enum such as `IpeCodecCodec<Tn>` (whose own decl
+    // is `IpeCodecCodec<Tn: 'static>`) held in a field — needs `Tn: 'static` on
+    // every type parameter of the struct AND its hand-written `Clone` impl. A
+    // trait object with a type parameter in its param/return positions requires
+    // that parameter to outlive `'static`; without the bound the generic struct
+    // is well-typed to `ipe` but E0310s at `cargo` (a SEAL break). Recognised by
+    // the same `is_clone`-but-not-derivable proxy the sibling carrier enum uses
+    // (`enum_stores_shared_fun`): a fully-derivable record has no function
+    // payload, so it is unaffected — no `'static` bound, byte-identical to before.
+    let params_need_static = rec.is_clone && !rec.is_derivable;
+    let decl_static = if params_need_static { ": 'static" } else { "" };
+    let bound_static = if params_need_static { " + 'static" } else { "" };
+
     // Generic clauses: `<T1, T2>` on the struct, `<T1: IpeStringify + Debug, …>`
     // on the impl, `<T1, T2>` on the impl's `for` type. All empty when the record
     // is monomorphic.
@@ -1047,10 +1062,11 @@ pub fn emit_record_struct(ctx: &EmitCtx, rec: &RecordStruct) -> DResult<String> 
     } else {
         let bounds: Vec<String> = params
             .iter()
-            .map(|p| format!("{p}: IpeStringify + std::fmt::Debug"))
+            .map(|p| format!("{p}: IpeStringify + std::fmt::Debug{bound_static}"))
             .collect();
+        let decl_params: Vec<String> = params.iter().map(|p| format!("{p}{decl_static}")).collect();
         (
-            format!("<{}>", params.join(", ")),
+            format!("<{}>", decl_params.join(", ")),
             format!("<{}>", bounds.join(", ")),
             format!("<{}>", params.join(", ")),
         )
@@ -1120,7 +1136,10 @@ pub fn emit_record_struct(ctx: &EmitCtx, rec: &RecordStruct) -> DResult<String> 
         let impl_clone_bounds = if params.is_empty() {
             String::new()
         } else {
-            let bounds: Vec<String> = params.iter().map(|p| format!("{p}: Clone")).collect();
+            let bounds: Vec<String> = params
+                .iter()
+                .map(|p| format!("{p}: Clone{bound_static}"))
+                .collect();
             format!("<{}>", bounds.join(", "))
         };
         let clone_head = impl_header(&impl_clone_bounds, "Clone", &format!("{name}{use_clause}"));

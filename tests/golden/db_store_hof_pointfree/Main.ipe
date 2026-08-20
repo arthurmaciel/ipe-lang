@@ -7,21 +7,21 @@ import Ipe.Result as Result exposing (Result(..))
 import Ipe.Error as Error exposing (Error)
 import Ipe.Task as Task
 
--- SEAL golden for #815: a generic HOF (`Result.map`) applied to a callee whose
--- return type is a CROSS-MODULE concrete stdlib type (`Ipe.Db.Store.Store`).
--- Before the fix the `Result.map` type variable erased to `JsonVal` in emitted
--- Rust (ipe-accept then cargo-fail E0308); the concrete `Store` now threads
--- through the HOF's instantiated slot.
+-- SEAL golden: a generic HOF (`Result.map`) applied to a callee whose return
+-- type is a CROSS-MODULE concrete stdlib type (`Ipe.Db.Store.Store`). A
+-- `Result.map` type variable that erased to `JsonVal` in emitted Rust would be
+-- ipe-accepted then cargo-fail E0308; the concrete `Store` must thread through
+-- the HOF's instantiated slot instead.
 
 -- Point-free: the partial application `Store.primaryKey "id"` is passed
 -- directly as the mapper.
-pointFreeStore : Result Error Store
+pointFreeStore : Result Error (Store Store.Row)
 pointFreeStore =
     Store.fromColumns "users" [ Store.textColumn "id" ]
         |> Result.map (Store.primaryKey "id")
 
 -- Eta-expanded: the same mapper spelled as an explicit lambda.
-etaStore : Result Error Store
+etaStore : Result Error (Store Store.Row)
 etaStore =
     Store.fromColumns "orders" [ Store.textColumn "id" ]
         |> Result.map (\s -> Store.primaryKey "id" s)
@@ -40,7 +40,7 @@ controlCounter =
     Ok (Counter 0)
         |> Result.map (setN 5)
 
-tableLine : String -> Result Error Store -> String
+tableLine : String -> Result Error (Store Store.Row) -> String
 tableLine label result =
     case result of
         Ok store ->

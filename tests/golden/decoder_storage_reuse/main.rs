@@ -48,17 +48,17 @@ impl<T1: IpeStringify + std::fmt::Debug + 'static> IpeStringify for MainDecBox<T
         }
     }
 }
-pub struct RecDec<T1> {
+pub struct RecDec<T1: 'static> {
     dec: Decoder<T1>,
 }
-impl<T1: Clone> Clone for RecDec<T1> {
+impl<T1: Clone + 'static> Clone for RecDec<T1> {
     fn clone(&self) -> Self {
         Self {
             dec: self.dec.clone(),
         }
     }
 }
-impl<T1: IpeStringify + std::fmt::Debug> IpeStringify for RecDec<T1> {
+impl<T1: IpeStringify + std::fmt::Debug + 'static> IpeStringify for RecDec<T1> {
     fn ipe_show(&self) -> String {
         format!("{{{}}}", "<fn>")
     }

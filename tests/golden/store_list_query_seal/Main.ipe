@@ -19,7 +19,8 @@ import Ipe.Db as Db exposing (Db)
 import Ipe.Db.Store as Store exposing (Store, Row)
 import Ipe.Error exposing (Error)
 import Ipe.Io as Io
-import Ipe.Result as Result
+import Ipe.List as List
+import Ipe.Result as Result exposing (Result(..))
 import Ipe.Task as Task exposing (Task)
 
 
@@ -32,9 +33,21 @@ readName row =
     Store.readText "name" row
 
 
-fetchNames : Db -> Store -> Task Error (List Name)
+-- `Store.all` returns each row as a `Row`; decode each through `readName`,
+-- failing the Task on the first malformed row.
+fetchNames : Db -> Store Row -> Task Error (List Name)
 fetchNames db store =
-    Store.all db store readName
+    Task.andThen decodeNames (Store.all db store)
+
+
+decodeNames : List Row -> Task Error (List Name)
+decodeNames rows =
+    case Result.combine (List.map readName rows) of
+        Ok names ->
+            Task.succeed names
+
+        Err e ->
+            Task.fail e
 
 
 main : Task Error ()

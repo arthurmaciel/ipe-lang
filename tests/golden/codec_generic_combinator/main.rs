@@ -57,11 +57,11 @@ impl IpeStringify for Rec_ {
         "{}".to_string()
     }
 }
-pub struct RecEncMkDec<T1> {
+pub struct RecEncMkDec<T1: 'static> {
     enc: ::std::sync::Arc<dyn Fn(T1) -> JsonVal + Send + Sync + 'static>,
     mkDec: ::std::sync::Arc<dyn Fn(Rec_) -> Decoder<T1> + Send + Sync + 'static>,
 }
-impl<T1: Clone> Clone for RecEncMkDec<T1> {
+impl<T1: Clone + 'static> Clone for RecEncMkDec<T1> {
     fn clone(&self) -> Self {
         Self {
             enc: self.enc.clone(),
@@ -69,7 +69,7 @@ impl<T1: Clone> Clone for RecEncMkDec<T1> {
         }
     }
 }
-impl<T1: IpeStringify + std::fmt::Debug> IpeStringify for RecEncMkDec<T1> {
+impl<T1: IpeStringify + std::fmt::Debug + 'static> IpeStringify for RecEncMkDec<T1> {
     fn ipe_show(&self) -> String {
         format!("{{{} {}}}", "<fn>", "<fn>")
     }
