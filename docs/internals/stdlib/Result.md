@@ -20,7 +20,7 @@ andMap (Ok 10) (Err "no fn") --> Err "no fn"
 
 ```ipe
 andThen (\n -> if n > 0 then Ok n else Err "negative") (Ok 5) --> Ok 5
-andThen (\n -> if n > 0 then Ok n else Err "negative") (Ok -1) --> Err "negative"
+andThen (\n -> if n > 0 then Ok n else Err "negative") (Ok (-1)) --> Err "negative"
 andThen (\n -> if n > 0 then Ok n else Err "negative") (Err "prior") --> Err "prior"
 ```
 

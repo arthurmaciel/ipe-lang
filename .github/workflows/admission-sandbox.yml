@@ -41,13 +41,10 @@ name: admission-sandbox
 on:
   push:
     branches: [main, master, 'ci/admission-sandbox-matrix']
-    paths-ignore:
-      - '**.md'
   pull_request:
-    paths-ignore:
-      - '**.md'
   schedule:
     - cron: '17 3 * * *'   # nightly, offset from ci.yml / security.yml
+  merge_group:
   workflow_dispatch: {}
 
 concurrency:
@@ -58,6 +55,34 @@ permissions:
   contents: read
 
 jobs:
+  # Path filter — same `code` superset as ci.yml. On a docs-only PR every jail
+  # job sees `code == 'false'` and skips, posting a skipped-success that satisfies
+  # the required-check context. On any code PR (or push/schedule/merge_group) the
+  # gate is `code == 'true'` and all proofs run at full strictness.
+  changes:
+    runs-on: ubuntu-latest
+    outputs:
+      code: ${{ steps.filter.outputs.code }}
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dorny/paths-filter@v3
+        id: filter
+        with:
+          filters: |
+            code:
+              - 'src/**'
+              - 'crates/**'
+              - 'runtime/**'
+              - 'tests/**'
+              - 'tools/**'
+              - 'Cargo.toml'
+              - 'Cargo.lock'
+              - '**/Cargo.toml'
+              - '.github/workflows/**'
+              # AGENTS.md is a BUILD input (include_str!'d into ipe-cli); changes
+              # must re-run the gate. All other root *.md / docs/** are safe to skip.
+              - 'AGENTS.md'
+
   # ── Linux x64 ──────────────────────────────────────────────────────────────
   # Outer network-denial layer: seccomp socket-deny profile applied via
   # `docker run --security-opt seccomp=...` on the host runner. This denies
@@ -77,6 +102,8 @@ jobs:
     name: linux-x64 (seccomp socket-deny + bubblewrap)
     runs-on: ubuntu-latest
     timeout-minutes: 15
+    needs: [changes]
+    if: needs.changes.outputs.code == 'true' || github.event_name != 'pull_request'
 
     steps:
       - uses: actions/checkout@v5
@@ -111,6 +138,8 @@ jobs:
     name: linux-arm64 (seccomp socket-deny + bubblewrap)
     runs-on: ubuntu-24.04-arm
     timeout-minutes: 15
+    needs: [changes]
+    if: needs.changes.outputs.code == 'true' || github.event_name != 'pull_request'
 
     steps:
       - uses: actions/checkout@v5
@@ -144,6 +173,8 @@ jobs:
     name: macos-arm64 (sandbox-exec / Seatbelt)
     runs-on: macos-latest
     timeout-minutes: 15
+    needs: [changes]
+    if: needs.changes.outputs.code == 'true' || github.event_name != 'pull_request'
 
     steps:
       - uses: actions/checkout@v5
@@ -180,6 +211,8 @@ jobs:
     name: windows-x64 (Docker Windows container, process isolation)
     runs-on: windows-2022
     timeout-minutes: 30
+    needs: [changes]
+    if: needs.changes.outputs.code == 'true' || github.event_name != 'pull_request'
 
     steps:
       - uses: actions/checkout@v5
@@ -259,6 +292,8 @@ jobs:
     name: freebsd-x64 (jail(8) inside vmactions VM)
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    needs: [changes]
+    if: needs.changes.outputs.code == 'true' || github.event_name != 'pull_request'
 
     steps:
       - uses: actions/checkout@v5
