@@ -6,7 +6,7 @@ unit a single lane picks up.
 
 All fenced code blocks below are **illustrative** — they sketch proposed syntax
 and interfaces that do not yet exist. They are not runnable and are not doc-test
-inputs; the doc-test gate (component F) applies only to real examples authored
+inputs; the doc-test gate applies only to real examples authored
 once this infrastructure lands.
 
 ## Goal
@@ -243,7 +243,7 @@ emitted code.
 
 ## Migration / retirement
 
-- `ipe explain` → `ipe doc` (component E); no back-compat alias (small CLI
+- `ipe explain` → `ipe doc`; no back-compat alias (small CLI
   surface is the goal). Diagnostic footer text derives from one constant.
 - `tools/code-review` `Highlight.ipe` + `Links.ipe` → the annotated-tokens
   mechanism (C). Filed deferred; lands once C ships. Do not author a new
