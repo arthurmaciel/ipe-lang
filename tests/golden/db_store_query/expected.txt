@@ -1,0 +1,6 @@
+order-limit:widget:30,gizmo:9
+find-by:sprocket:5
+update:gizmo:99
+count-gt:2
+reject-bad-column:ok
+injection-value:'; DROP TABLE products; --

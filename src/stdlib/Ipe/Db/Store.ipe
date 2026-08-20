@@ -107,11 +107,19 @@ module Ipe.Db.Store exposing
     , readText, readInt, readBool, readFloat
     , insert, all, get, delete, findWhere, create
     , allOn, getOn, findWhereOn
+    , update, findBy
     , renameColumn, renameTable, migrations
     , noopRenameError
+    , Cond, Query
+    , query, where
+    , eq, neq, gt, gte, lt, lte, like, isNull, notNull, inList
+    , and, or, not
+    , orderAsc, orderDesc, limit, offset
+    , toList, toMaybe, count
     )
 
 
+import Ipe.Basics as Basics
 import Ipe.Codec as Codec exposing (Codec(..), ColType(..), Shape(..))
 import Ipe.Db as Db
 import Ipe.Db.Codec as DbCodec
@@ -222,7 +230,7 @@ type Store a
 --     Store.validSqlIdent "users;drop" == False
 validSqlIdent : String -> Bool
 validSqlIdent name =
-    not (String.isEmpty name) && String.all validIdentChar name
+    Basics.not (String.isEmpty name) && String.all validIdentChar name
 
 
 validIdentChar : Char -> Bool
@@ -347,7 +355,7 @@ fromColumns table columns =
 -- codec. The single validation boundary (parse-don't-validate).
 buildStore : String -> List Column -> Codec a -> Result Error (Store a)
 buildStore table columns codec =
-    if not (validSqlIdent table) then
+    if Basics.not (validSqlIdent table) then
         Err (invalidIdentError "table" table)
 
     else
@@ -730,13 +738,13 @@ opToEntry table op =
             if from == to then
                 Err noopRenameError
 
-            else if not (validSqlIdent table) then
+            else if Basics.not (validSqlIdent table) then
                 Err (invalidIdentError "table" table)
 
-            else if not (validSqlIdent from) then
+            else if Basics.not (validSqlIdent from) then
                 Err (invalidIdentError "column" from)
 
-            else if not (validSqlIdent to) then
+            else if Basics.not (validSqlIdent to) then
                 Err (invalidIdentError "column" to)
 
             else
@@ -746,10 +754,10 @@ opToEntry table op =
             if from == to then
                 Err noopRenameError
 
-            else if not (validSqlIdent from) then
+            else if Basics.not (validSqlIdent from) then
                 Err (invalidIdentError "table" from)
 
-            else if not (validSqlIdent to) then
+            else if Basics.not (validSqlIdent to) then
                 Err (invalidIdentError "table" to)
 
             else
@@ -861,6 +869,101 @@ specOmitsColumn spec name =
             False
 
 
+-- | `update conn store row` — update the row whose primary key matches `row`'s
+-- primary-key field, setting every non-generated column from `row`, and return
+-- the updated-row count. The whole record is projected through the store's codec
+-- (`Ipe.Db.Codec.codecToBinds`); the primary-key bind scopes the UPDATE (its
+-- own validated `pk` column, never a caller identifier), and columns marked
+-- `Serial` or `DefaultNow` are OMITTED from the SET so a client value can never
+-- overwrite a DB-filled column. Routes through the audited `Db.updateFields`,
+-- which re-validates every identifier, binds every value, and refuses an
+-- unscoped UPDATE — no SQL text is built here. A store with no primary key, or a
+-- record whose primary-key column is absent from the codec projection, fails
+-- closed with a typed `Err`.
+--
+-- Example:
+--
+--     import Ipe.Db as Db exposing (Db)
+--     import Ipe.Db.Store as Store exposing (Store)
+--     import Ipe.Task as Task exposing (Task)
+--     import Ipe.Error exposing (Error)
+--
+--     type alias User =
+--         { id : String, name : String, age : Int }
+--
+--     renameUser : Db -> Store User -> User -> Task Error Int
+--     renameUser conn store user =
+--         Store.update conn store { user | name = "renamed" }
+update : Db -> Store a -> a -> Task Error Int
+update conn store row =
+    case store of
+        Store r ->
+            case r.pk of
+                Nothing ->
+                    Task.fail noPrimaryKeyError
+
+                Just keyCol ->
+                    case DbCodec.codecToBinds r.codec row of
+                        Err e ->
+                            Task.fail e
+
+                        Ok binds ->
+                            case bindValue keyCol binds of
+                                Nothing ->
+                                    Task.fail (missingKeyBindError keyCol)
+
+                                Just keyValue ->
+                                    Db.updateFields conn
+                                        r.table
+                                        [ ( keyCol, keyValue ) ]
+                                        (updateSetFields r.specs keyCol binds)
+
+
+-- Project the codec binds to the UPDATE SET fields: the primary-key column is
+-- dropped (it scopes the WHERE, never the SET), and each `Serial` / `DefaultNow`
+-- column becomes `OmitField` so the database keeps its own value.
+updateSetFields : List ColumnSpec -> String -> List ( String, SqlValue ) -> List ( String, SqlField )
+updateSetFields specs keyCol values =
+    List.map (\pair -> updateSetField specs pair)
+        (List.filter (\pair -> Basics.not (bindNameIs keyCol pair)) values)
+
+
+updateSetField : List ColumnSpec -> ( String, SqlValue ) -> ( String, SqlField )
+updateSetField specs pair =
+    case pair of
+        ( name, value ) ->
+            if dbFilledColumn specs name then
+                ( name, OmitField )
+
+            else
+                ( name, SetField value )
+
+
+bindNameIs : String -> ( String, SqlValue ) -> Bool
+bindNameIs target pair =
+    case pair of
+        ( name, _ ) ->
+            name == target
+
+
+-- The `SqlValue` bound to `target` in a codec projection, or `Nothing` when the
+-- projection names no such column.
+bindValue : String -> List ( String, SqlValue ) -> Maybe SqlValue
+bindValue target binds =
+    case binds of
+        [] ->
+            Nothing
+
+        first :: rest ->
+            case first of
+                ( name, value ) ->
+                    if name == target then
+                        Just value
+
+                    else
+                        bindValue target rest
+
+
 -- ─── Read path ─────────────────────────────────────────────────────
 
 
@@ -907,6 +1010,47 @@ get conn store keyValue =
                     Task.andThen
                         (\rows -> firstDecoded r.codec rows)
                         (Db.findWhere conn r.table (keyEquals keyCol keyValue))
+
+
+-- | `findBy conn store col value` — read every row whose `col` equals `value`,
+-- decoded through the store's codec. `col` is validated against the store's own
+-- derived column list before any SQL is built (a name absent from the codec's
+-- columns is a typed `Err`, parse-don't-validate), then reaches SQL only through
+-- `Sql.column`; `value` binds as a parameter through `Sql.param`. This is the
+-- convenience single-column equality read; a compound predicate uses the query
+-- builder (`query |> where …`) or the raw-fragment escape `findWhere`.
+--
+-- Example:
+--
+--     import Ipe.Db as Db exposing (Db)
+--     import Ipe.Db.Store as Store exposing (Store)
+--     import Ipe.Task as Task exposing (Task)
+--     import Ipe.Error exposing (Error)
+--
+--     type alias User =
+--         { id : String, name : String, age : Int }
+--
+--     adults : Db -> Store User -> Task Error (List User)
+--     adults conn store =
+--         Store.findBy conn store "age" (SqlInt 18)
+findBy : Db -> Store a -> String -> SqlValue -> Task Error (List a)
+findBy conn store col value =
+    case store of
+        Store r ->
+            if Basics.not (hasColumn r.currentColumns col) then
+                Task.fail (unknownColumnError col)
+
+            else
+                Task.andThen
+                    (\rows -> decodeRows r.codec rows)
+                    (Db.findWhere conn r.table (keyEquals col value))
+
+
+-- Whether `name` is one of the store's current columns — the derived vocabulary
+-- a stringly column name must belong to before it can reach SQL.
+hasColumn : List Column -> String -> Bool
+hasColumn columns name =
+    List.any (\col -> columnName col == name) columns
 
 
 -- ─── External-connection reads (foreign DB through one codec) ───────
@@ -1020,6 +1164,776 @@ firstDecoded codec rows =
                     Task.succeed (Just value)
 
 
+-- ─── Typed query builder (Cond → SqlFragment) ──────────────────────
+--
+-- A `Query a` is a filtered, ordered, paginated read over a `Store a`. Its
+-- `WHERE` is a `Cond`: a closed ADT of typed leaves (a validated column name +
+-- a bound `SqlValue`) that lowers, only at the terminal `toList` / `toMaybe` /
+-- `count`, to the audited `SqlFragment` — every column through `Sql.column`,
+-- every value through `Sql.param`. No leaf builds SQL text, so the builder adds
+-- no injection surface over the fragment builder it lowers to. A column named in
+-- a leaf is validated against the store's own derived column list at lowering
+-- time (a name absent from the codec's columns is a typed `Err`), so a stringly
+-- column that is not a real store column fails closed before any SQL is issued.
+--
+-- `ORDER BY` / `LIMIT` / `OFFSET` are applied in Ipê over the fetched rows: the
+-- `WHERE` runs at the SQL layer (the injection-safe fragment), and the fetched
+-- rows are then sorted by the ordered columns (numeric-aware for `CInt` / `CReal`
+-- columns, lexicographic otherwise, per the store's own column types) and sliced.
+-- No ordering identifier ever reaches SQL text, so the ordered surface adds no
+-- injection surface either.
+
+
+-- | A comparison operator carried by a query leaf. A typed ADT, not a stringly
+-- operator, so a leaf can only name one of the six comparisons the fragment
+-- builder provides.
+type CompareOp
+    = OpEq
+    | OpNeq
+    | OpGt
+    | OpGte
+    | OpLt
+    | OpLte
+
+
+-- | A typed `WHERE` predicate over a `Store a`'s rows. Built only through the
+-- leaf combinators (`eq` / `like` / `inList` / …) and the connectives
+-- (`and` / `or` / `not`); it carries a validated column name and a bound value
+-- as pure data and lowers to a `SqlFragment` at query time. Opaque, so the
+-- lowering (the single point a column is checked and reaches `Sql.column`) is
+-- the only path from a `Cond` to SQL.
+type Cond
+    = Compare CompareOp String SqlValue
+    | Like String String
+    | IsNull String
+    | NotNull String
+    | InList String (List SqlValue)
+    | AndList (List Cond)
+    | OrList (List Cond)
+    | NotCond Cond
+
+
+-- | A filtered, ordered, paginated read over a `Store a`, decoded through the
+-- store's codec at `toList` / `toMaybe` / `count`. Built through `query` and
+-- refined by `where` / `orderAsc` / `orderDesc` / `limit` / `offset`. Opaque:
+-- the store it reads and the codec it decodes with cannot drift, because both
+-- come from the single `Store a` `query` captured.
+--
+-- `frag` is the accumulated `WHERE` fragment: each `where` lowers its `Cond` to
+-- an audited `SqlFragment` EAGERLY (parse-don't-validate — the store is in hand,
+-- so every column is validated against the store's own columns at that moment)
+-- and conjoins it. `orderings` carries each ordering column as
+-- `(name, isNumeric, ascending)`, `isNumeric` resolved from the store's column
+-- type when the ordering is added, so the raw-row sort compares numerically for
+-- `CInt` / `CReal` columns without re-consulting the store. `poison` holds the
+-- first fail-closed error (an unknown column named by a `where` leaf or an
+-- ordering); a poisoned query issues no SQL and fails at the terminal step.
+type Query a
+    = Query
+        { store : Store a
+        , frag : Maybe SqlFragment
+        , orderings : List ( String, Bool, Bool )
+        , lim : Maybe Int
+        , off : Maybe Int
+        , poison : Maybe Error
+        }
+
+
+-- | `query store` — begin a read over `store` with no filter, ordering, or
+-- pagination. Refine it with `where` / `orderAsc` / `orderDesc` / `limit` /
+-- `offset`, then run it with `toList` / `toMaybe` / `count`.
+--
+-- Example:
+--
+--     import Ipe.Db as Db exposing (Db)
+--     import Ipe.Db.Store as Store exposing (Store)
+--     import Ipe.Task as Task exposing (Task)
+--     import Ipe.Error exposing (Error)
+--
+--     type alias User =
+--         { id : String, name : String, age : Int }
+--
+--     topAdults : Db -> Store User -> Task Error (List User)
+--     topAdults conn store =
+--         Store.query store
+--             |> Store.where (Store.gte "age" (SqlInt 18))
+--             |> Store.orderDesc "age"
+--             |> Store.limit 10
+--             |> Store.toList conn
+query : Store a -> Query a
+query store =
+    Query
+        { store = store
+        , frag = Nothing
+        , orderings = []
+        , lim = Nothing
+        , off = Nothing
+        , poison = Nothing
+        }
+
+
+-- | `where cond q` — restrict `q` to the rows matching `cond`. Applying `where`
+-- more than once AND-joins the predicates, so a pipeline of `where` clauses
+-- reads as a conjunction.
+--
+-- Example:
+--
+--     Store.query store
+--         |> Store.where (Store.eq "status" (SqlString "active"))
+--         |> Store.where (Store.gt "age" (SqlInt 21))
+where : Cond -> Query a -> Query a
+where cond q =
+    case q of
+        Query r ->
+            case r.store of
+                Store s ->
+                    case condFragmentIn s.currentColumns cond of
+                        Err e ->
+                            Query
+                                { store = r.store
+                                , frag = r.frag
+                                , orderings = r.orderings
+                                , lim = r.lim
+                                , off = r.off
+                                , poison = firstPoison r.poison e
+                                }
+
+                        Ok lowered ->
+                            Query
+                                { store = r.store
+                                , frag = Just (conjoinFrag r.frag lowered)
+                                , orderings = r.orderings
+                                , lim = r.lim
+                                , off = r.off
+                                , poison = r.poison
+                                }
+
+
+conjoinFrag : Maybe SqlFragment -> SqlFragment -> SqlFragment
+conjoinFrag existing added =
+    case existing of
+        Nothing ->
+            added
+
+        Just prior ->
+            Sql.and prior added
+
+
+-- Keep the FIRST fail-closed error a query accrues: a later error does not mask
+-- the earliest cause.
+firstPoison : Maybe Error -> Error -> Maybe Error
+firstPoison existing e =
+    case existing of
+        Just _ ->
+            existing
+
+        Nothing ->
+            Just e
+
+
+-- ── Comparison leaves ──────────────────────────────────────────────
+
+
+-- | `eq col value` — the rows where `col` equals `value`. `value` binds as a
+-- parameter; `col` is validated against the store's columns at query time.
+--
+-- Example:
+--
+--     Store.query store
+--         |> Store.where (Store.eq "id" (SqlString "u1"))
+eq : String -> SqlValue -> Cond
+eq col value =
+    Compare OpEq col value
+
+
+-- | `neq col value` — the rows where `col` differs from `value`.
+--
+-- Example:
+--
+--     Store.query store
+--         |> Store.where (Store.neq "status" (SqlString "deleted"))
+neq : String -> SqlValue -> Cond
+neq col value =
+    Compare OpNeq col value
+
+
+-- | `gt col value` — the rows where `col` is greater than `value`.
+--
+-- Example:
+--
+--     Store.query store
+--         |> Store.where (Store.gt "age" (SqlInt 18))
+gt : String -> SqlValue -> Cond
+gt col value =
+    Compare OpGt col value
+
+
+-- | `gte col value` — the rows where `col` is greater than or equal to `value`.
+--
+-- Example:
+--
+--     Store.query store
+--         |> Store.where (Store.gte "age" (SqlInt 18))
+gte : String -> SqlValue -> Cond
+gte col value =
+    Compare OpGte col value
+
+
+-- | `lt col value` — the rows where `col` is less than `value`.
+--
+-- Example:
+--
+--     Store.query store
+--         |> Store.where (Store.lt "age" (SqlInt 65))
+lt : String -> SqlValue -> Cond
+lt col value =
+    Compare OpLt col value
+
+
+-- | `lte col value` — the rows where `col` is less than or equal to `value`.
+--
+-- Example:
+--
+--     Store.query store
+--         |> Store.where (Store.lte "age" (SqlInt 64))
+lte : String -> SqlValue -> Cond
+lte col value =
+    Compare OpLte col value
+
+
+-- | `like col pattern` — the rows where `col` matches the SQL `LIKE` `pattern`.
+-- The pattern is bound as a parameter, so its wildcards (`%`, `_`) are DATA the
+-- SQL engine interprets, never SQL text the caller injects.
+--
+-- Example:
+--
+--     Store.query store
+--         |> Store.where (Store.like "name" "al%")
+like : String -> String -> Cond
+like col pattern =
+    Like col pattern
+
+
+-- | `isNull col` — the rows where `col` is SQL `NULL`.
+--
+-- Example:
+--
+--     Store.query store
+--         |> Store.where (Store.isNull "deletedAt")
+isNull : String -> Cond
+isNull col =
+    IsNull col
+
+
+-- | `notNull col` — the rows where `col` is not SQL `NULL`.
+--
+-- Example:
+--
+--     Store.query store
+--         |> Store.where (Store.notNull "email")
+notNull : String -> Cond
+notNull col =
+    NotNull col
+
+
+-- | `inList col values` — the rows where `col` is one of `values`; each value
+-- binds as a parameter. An EMPTY `values` matches no row (`(1 = 0)`), never an
+-- ill-formed `IN ()`.
+--
+-- Example:
+--
+--     Store.query store
+--         |> Store.where (Store.inList "status" [ SqlString "active", SqlString "trial" ])
+inList : String -> List SqlValue -> Cond
+inList col values =
+    InList col values
+
+
+-- ── Connectives ────────────────────────────────────────────────────
+
+
+-- | `and conds` — the rows matching EVERY condition in `conds`. An empty list
+-- matches every row (the identity of conjunction, `(1 = 1)`).
+--
+-- Example:
+--
+--     Store.query store
+--         |> Store.where
+--             (Store.and
+--                 [ Store.gte "age" (SqlInt 18)
+--                 , Store.eq "status" (SqlString "active")
+--                 ]
+--             )
+and : List Cond -> Cond
+and conds =
+    AndList conds
+
+
+-- | `or conds` — the rows matching ANY condition in `conds`. An empty list
+-- matches no row (the identity of disjunction, `(1 = 0)`).
+--
+-- Example:
+--
+--     Store.query store
+--         |> Store.where
+--             (Store.or
+--                 [ Store.eq "status" (SqlString "active")
+--                 , Store.eq "status" (SqlString "trial")
+--                 ]
+--             )
+or : List Cond -> Cond
+or conds =
+    OrList conds
+
+
+-- | `not cond` — the rows NOT matching `cond`.
+--
+-- Example:
+--
+--     Store.query store
+--         |> Store.where (Store.not (Store.eq "status" (SqlString "deleted")))
+not : Cond -> Cond
+not cond =
+    NotCond cond
+
+
+-- ── Ordering and pagination ────────────────────────────────────────
+
+
+-- | `orderAsc col q` — order `q`'s rows by `col` ascending. Repeated ordering
+-- clauses compose left to right (the first is the primary sort key). The column
+-- is validated against the store's columns at query time.
+--
+-- Example:
+--
+--     Store.query store
+--         |> Store.orderAsc "name"
+orderAsc : String -> Query a -> Query a
+orderAsc col q =
+    addOrdering col True q
+
+
+-- | `orderDesc col q` — order `q`'s rows by `col` descending.
+--
+-- Example:
+--
+--     Store.query store
+--         |> Store.orderDesc "age"
+orderDesc : String -> Query a -> Query a
+orderDesc col q =
+    addOrdering col False q
+
+
+addOrdering : String -> Bool -> Query a -> Query a
+addOrdering col ascending q =
+    case q of
+        Query r ->
+            case r.store of
+                Store s ->
+                    case columnTypeOf s.currentColumns col of
+                        Nothing ->
+                            Query
+                                { store = r.store
+                                , frag = r.frag
+                                , orderings = r.orderings
+                                , lim = r.lim
+                                , off = r.off
+                                , poison = firstPoison r.poison (unknownColumnError col)
+                                }
+
+                        Just colType ->
+                            Query
+                                { store = r.store
+                                , frag = r.frag
+                                , orderings = r.orderings ++ [ ( col, isNumericType colType, ascending ) ]
+                                , lim = r.lim
+                                , off = r.off
+                                , poison = r.poison
+                                }
+
+
+-- | `limit n q` — keep at most `n` rows (applied after ordering). A negative or
+-- zero `n` keeps no rows.
+--
+-- Example:
+--
+--     Store.query store
+--         |> Store.orderDesc "age"
+--         |> Store.limit 10
+limit : Int -> Query a -> Query a
+limit n q =
+    case q of
+        Query r ->
+            Query
+                { store = r.store
+                , frag = r.frag
+                , orderings = r.orderings
+                , lim = Just n
+                , off = r.off
+                , poison = r.poison
+                }
+
+
+-- | `offset n q` — skip the first `n` rows (applied after ordering, before
+-- `limit`). A negative or zero `n` skips none.
+--
+-- Example:
+--
+--     Store.query store
+--         |> Store.orderAsc "name"
+--         |> Store.offset 20
+--         |> Store.limit 10
+offset : Int -> Query a -> Query a
+offset n q =
+    case q of
+        Query r ->
+            Query
+                { store = r.store
+                , frag = r.frag
+                , orderings = r.orderings
+                , lim = r.lim
+                , off = Just n
+                , poison = r.poison
+                }
+
+
+-- ── Running a query ────────────────────────────────────────────────
+
+
+-- | `toList conn q` — run `q` and decode every matching row through the store's
+-- codec. The `WHERE` runs as an audited `SqlFragment` at the SQL layer; the
+-- fetched rows are ordered and paginated in Ipê, then decoded. A row that does
+-- not decode to the store's type, or a column name that is not one of the
+-- store's columns, is a typed `Err`.
+--
+-- Example:
+--
+--     Store.query store
+--         |> Store.where (Store.gte "age" (SqlInt 18))
+--         |> Store.orderDesc "age"
+--         |> Store.limit 10
+--         |> Store.toList conn
+toList : Db -> Query a -> Task Error (List a)
+toList conn q =
+    case q of
+        Query r ->
+            case r.poison of
+                Just e ->
+                    Task.fail e
+
+                Nothing ->
+                    case r.store of
+                        Store s ->
+                            Task.andThen
+                                (\rows -> decodeRows s.codec (paginateRows r.orderings r.off r.lim rows))
+                                (Db.findWhere conn s.table (queryFrag r.frag))
+
+
+-- The `WHERE` fragment a query runs: its accumulated fragment, or the
+-- always-true `(1 = 1)` when no `where` was applied (an unfiltered read). Names
+-- no caller identifier in the empty case, so it adds no injection surface.
+queryFrag : Maybe SqlFragment -> SqlFragment
+queryFrag maybeFrag =
+    case maybeFrag of
+        Just frag ->
+            frag
+
+        Nothing ->
+            trueFragment
+
+
+-- The ordering key a raw sort needs: the column NAME (to read the cell), whether
+-- its store column type is numeric (for a numeric-aware compare), and the
+-- ascending flag. Carries no `ColType`, so the `Query` record it lives on
+-- references only built-in types.
+type alias OrderKey =
+    ( String, Bool, Bool )
+
+
+-- | `toMaybe conn q` — run `q` and decode the FIRST matching row (after ordering
+-- and pagination) through the store's codec, or `Nothing`. A `limit 1` is not
+-- required; `toMaybe` reads the head of the ordered result.
+--
+-- Example:
+--
+--     Store.query store
+--         |> Store.where (Store.eq "email" (SqlString "a@example.com"))
+--         |> Store.toMaybe conn
+toMaybe : Db -> Query a -> Task Error (Maybe a)
+toMaybe conn q =
+    Task.map List.head (toList conn q)
+
+
+-- | `count conn q` — run `q`'s filter and return how many rows match. Ordering
+-- and pagination do not affect the count of matched rows (the filter alone
+-- decides membership).
+--
+-- Example:
+--
+--     Store.query store
+--         |> Store.where (Store.eq "status" (SqlString "active"))
+--         |> Store.count conn
+count : Db -> Query a -> Task Error Int
+count conn q =
+    case q of
+        Query r ->
+            case r.poison of
+                Just e ->
+                    Task.fail e
+
+                Nothing ->
+                    case r.store of
+                        Store s ->
+                            Task.map List.length (Db.findWhere conn s.table (queryFrag r.frag))
+
+
+columnTypeOf : List Column -> String -> Maybe ColType
+columnTypeOf columns name =
+    case columns of
+        [] ->
+            Nothing
+
+        first :: rest ->
+            if columnName first == name then
+                Just (columnColType first)
+
+            else
+                columnTypeOf rest name
+
+
+-- ── Cond → SqlFragment lowering (the single validation + emit point) ──
+
+
+-- Lower a `Cond` to an audited `SqlFragment`, validating every column against
+-- the store's own column list first. A column absent from that list is a typed
+-- `Err` (parse-don't-validate); an accepted column reaches SQL only through
+-- `Sql.column`, and every value only through `Sql.param`. `where` calls this the
+-- moment a `Cond` is added (the store is in hand), so a bad column fails closed
+-- at build time and no `Cond` value survives past the query builder.
+condFragmentIn : List Column -> Cond -> Result Error SqlFragment
+condFragmentIn columns cond =
+    case cond of
+        Compare op col value ->
+            checkColumn columns col
+                (compareFragment op col value)
+
+        Like col pattern ->
+            checkColumn columns col
+                (Sql.like (Sql.column col) pattern)
+
+        IsNull col ->
+            checkColumn columns col
+                (Sql.isNull (Sql.column col))
+
+        NotNull col ->
+            checkColumn columns col
+                (Sql.isNotNull (Sql.column col))
+
+        InList col values ->
+            checkColumn columns col
+                (Sql.inList (Sql.column col) values)
+
+        AndList conds ->
+            foldConds columns Sql.and trueFragment conds
+
+        OrList conds ->
+            foldConds columns Sql.or falseFragment conds
+
+        NotCond inner ->
+            Result.map Sql.not (condFragmentIn columns inner)
+
+
+-- Validate `col` against the store's columns, returning `built` when accepted or
+-- a fail-closed `Err` when the store names no such column.
+checkColumn : List Column -> String -> SqlFragment -> Result Error SqlFragment
+checkColumn columns col built =
+    if hasColumn columns col then
+        Ok built
+
+    else
+        Err (unknownColumnError col)
+
+
+compareFragment : CompareOp -> String -> SqlValue -> SqlFragment
+compareFragment op col value =
+    let
+        lhs =
+            Sql.column col
+
+        rhs =
+            Sql.param value
+    in
+    case op of
+        OpEq ->
+            Sql.eq lhs rhs
+
+        OpNeq ->
+            Sql.ne lhs rhs
+
+        OpGt ->
+            Sql.gt lhs rhs
+
+        OpGte ->
+            Sql.gte lhs rhs
+
+        OpLt ->
+            Sql.lt lhs rhs
+
+        OpLte ->
+            Sql.lte lhs rhs
+
+
+-- Fold a list of conditions with a binary connective, using `emptyFragment` as
+-- the identity for the empty list. Each condition is lowered (and column-checked)
+-- before it joins, so the first invalid column fails the whole fold closed.
+foldConds : List Column -> (SqlFragment -> SqlFragment -> SqlFragment) -> SqlFragment -> List Cond -> Result Error SqlFragment
+foldConds columns join emptyFragment conds =
+    case conds of
+        [] ->
+            Ok emptyFragment
+
+        [ single ] ->
+            condFragmentIn columns single
+
+        first :: rest ->
+            case condFragmentIn columns first of
+                Err e ->
+                    Err e
+
+                Ok head ->
+                    Result.map (\tail -> join head tail)
+                        (foldConds columns join emptyFragment rest)
+
+
+-- The always-true / always-false fragments, the identities of `and` / `or` over
+-- the empty list. Each names no caller identifier, so neither adds any injection
+-- surface.
+trueFragment : SqlFragment
+trueFragment =
+    Sql.eq (Sql.param (SqlInt 1)) (Sql.param (SqlInt 1))
+
+
+falseFragment : SqlFragment
+falseFragment =
+    Sql.eq (Sql.param (SqlInt 1)) (Sql.param (SqlInt 0))
+
+
+-- ── Ordering + pagination over raw rows (in Ipê, no SQL text) ──────
+
+
+-- Order then paginate the raw rows: sort by each ordering key (numeric-aware for
+-- `CInt` / `CReal` columns), skip `off` rows, keep `lim` rows.
+paginateRows : List OrderKey -> Maybe Int -> Maybe Int -> List Row -> List Row
+paginateRows orderings off lim rows =
+    applyLimit lim (applyOffset off (orderRowsWith orderings rows))
+
+
+-- Sort raw rows by the ordering keys, in priority order: the LAST ordering is
+-- applied first so a stable sort leaves the FIRST ordering as the dominant key
+-- (the primary sort). A raw `Row` is a `Dict String String`, so the sort
+-- compares the string cell, numerically when the column type is `CInt` / `CReal`.
+orderRowsWith : List OrderKey -> List Row -> List Row
+orderRowsWith orderings rows =
+    List.foldr
+        (\ordering acc -> sortByOrdering ordering acc)
+        rows
+        orderings
+
+
+sortByOrdering : OrderKey -> List Row -> List Row
+sortByOrdering ordering rows =
+    case ordering of
+        ( col, numeric, ascending ) ->
+            List.sortWith (\a b -> cellCompare numeric ascending col a b) rows
+
+
+cellCompare : Bool -> Bool -> String -> Row -> Row -> Order
+cellCompare numeric ascending col a b =
+    let
+        base =
+            compareCells numeric (rowCell col a) (rowCell col b)
+    in
+    if ascending then
+        base
+
+    else
+        flipOrder base
+
+
+compareCells : Bool -> String -> String -> Order
+compareCells numeric x y =
+    if numeric then
+        compareNumeric x y
+
+    else
+        compare x y
+
+
+compareNumeric : String -> String -> Order
+compareNumeric x y =
+    case ( String.toFloat x, String.toFloat y ) of
+        ( Just fx, Just fy ) ->
+            compare fx fy
+
+        _ ->
+            compare x y
+
+
+isNumericType : ColType -> Bool
+isNumericType colType =
+    case colType of
+        CInt ->
+            True
+
+        CReal ->
+            True
+
+        CNull inner ->
+            isNumericType inner
+
+        CText ->
+            False
+
+        CBool ->
+            False
+
+        CBlob ->
+            False
+
+
+flipOrder : Order -> Order
+flipOrder ord =
+    case ord of
+        LT ->
+            GT
+
+        EQ ->
+            EQ
+
+        GT ->
+            LT
+
+
+applyOffset : Maybe Int -> List Row -> List Row
+applyOffset off rows =
+    case off of
+        Just n ->
+            List.drop n rows
+
+        Nothing ->
+            rows
+
+
+applyLimit : Maybe Int -> List Row -> List Row
+applyLimit lim rows =
+    case lim of
+        Just n ->
+            List.take n rows
+
+        Nothing ->
+            rows
+
+
 -- ─── Typed column reads (row -> value) ─────────────────────────────
 --
 -- `Db.findWhere` returns each row as `Dict String String`. These helpers read
@@ -1113,7 +2027,7 @@ createSql store =
 
 createSqlFromColumns : String -> List Column -> List ColumnSpec -> Result Error String
 createSqlFromColumns table cols specs =
-    if not (validSqlIdent table) then
+    if Basics.not (validSqlIdent table) then
         Err (invalidIdentError "table" table)
 
     else
@@ -1154,10 +2068,10 @@ columnDef specs col =
         name =
             columnName col
     in
-    if not (validSqlIdent name) then
+    if Basics.not (validSqlIdent name) then
         Err (invalidIdentError "column" name)
 
-    else if List.any (\s -> specIsSerial s name) specs && not (List.any (\s -> specIsPrimaryKey s name) specs) then
+    else if List.any (\s -> specIsSerial s name) specs && Basics.not (List.any (\s -> specIsPrimaryKey s name) specs) then
         Err (serialWithoutPkError name)
 
     else
@@ -1237,7 +2151,7 @@ columnConstraints specs name =
                 ""
 
         uniqueFragment =
-            if isUnique && not isPk then
+            if isUnique && Basics.not isPk then
                 " UNIQUE"
 
             else
@@ -1351,6 +2265,22 @@ noPrimaryKeyError : Error
 noPrimaryKeyError =
     Error.invalidInput
         "Ipe.Db.Store: this operation requires a primary key; declare one with Store.primaryKey"
+
+
+unknownColumnError : String -> Error
+unknownColumnError name =
+    Error.invalidInput
+        (String.concat
+            [ "Ipe.Db.Store: \"", name, "\" is not a column of this store — a query may only reference the store's own derived columns" ]
+        )
+
+
+missingKeyBindError : String -> Error
+missingKeyBindError keyCol =
+    Error.invalidInput
+        (String.concat
+            [ "Ipe.Db.Store: update needs the primary-key column \"", keyCol, "\" in the record's codec projection, but it is absent" ]
+        )
 
 
 serialWithoutPkError : String -> Error

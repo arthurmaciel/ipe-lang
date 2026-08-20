@@ -78,6 +78,92 @@ impl<T1: IpeStringify + std::fmt::Debug + 'static> IpeStringify for IpeDbStoreSt
         }
     }
 }
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) enum IpeDbStoreCompareOp {
+    OpEq,
+    OpNeq,
+    OpGt,
+    OpGte,
+    OpLt,
+    OpLte,
+}
+impl IpeStringify for IpeDbStoreCompareOp {
+    fn ipe_show(&self) -> String {
+        match self {
+            IpeDbStoreCompareOp::OpEq => "OpEq".to_string(),
+            IpeDbStoreCompareOp::OpNeq => "OpNeq".to_string(),
+            IpeDbStoreCompareOp::OpGt => "OpGt".to_string(),
+            IpeDbStoreCompareOp::OpGte => "OpGte".to_string(),
+            IpeDbStoreCompareOp::OpLt => "OpLt".to_string(),
+            IpeDbStoreCompareOp::OpLte => "OpLte".to_string(),
+        }
+    }
+}
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) enum IpeDbStoreCond {
+    Compare(IpeDbStoreCompareOp, String, MainSqlValue),
+    Like(String, String),
+    IsNull(String),
+    NotNull(String),
+    InList(String, Vec<MainSqlValue>),
+    AndList(Box<Vec<IpeDbStoreCond>>),
+    OrList(Box<Vec<IpeDbStoreCond>>),
+    NotCond(Box<IpeDbStoreCond>),
+}
+impl IpeStringify for IpeDbStoreCond {
+    fn ipe_show(&self) -> String {
+        match self {
+            IpeDbStoreCond::Compare(p0, p1, p2) => format!(
+                "Compare {} {} {}",
+                (&ipe_runtime::stringify::Wrap(p0)).dispatch(),
+                (&ipe_runtime::stringify::Wrap(p1)).dispatch(),
+                (&ipe_runtime::stringify::Wrap(p2)).dispatch()
+            ),
+            IpeDbStoreCond::Like(p0, p1) => format!(
+                "Like {} {}",
+                (&ipe_runtime::stringify::Wrap(p0)).dispatch(),
+                (&ipe_runtime::stringify::Wrap(p1)).dispatch()
+            ),
+            IpeDbStoreCond::IsNull(p0) => {
+                format!("IsNull {}", (&ipe_runtime::stringify::Wrap(p0)).dispatch())
+            }
+            IpeDbStoreCond::NotNull(p0) => {
+                format!("NotNull {}", (&ipe_runtime::stringify::Wrap(p0)).dispatch())
+            }
+            IpeDbStoreCond::InList(p0, p1) => format!(
+                "InList {} {}",
+                (&ipe_runtime::stringify::Wrap(p0)).dispatch(),
+                (&ipe_runtime::stringify::Wrap(p1)).dispatch()
+            ),
+            IpeDbStoreCond::AndList(p0) => {
+                format!("AndList {}", (&ipe_runtime::stringify::Wrap(p0)).dispatch())
+            }
+            IpeDbStoreCond::OrList(p0) => {
+                format!("OrList {}", (&ipe_runtime::stringify::Wrap(p0)).dispatch())
+            }
+            IpeDbStoreCond::NotCond(p0) => {
+                format!("NotCond {}", (&ipe_runtime::stringify::Wrap(p0)).dispatch())
+            }
+        }
+    }
+}
+pub(crate) enum IpeDbStoreQuery<T1: 'static> {
+    Query(RecFragLimOffOrderingsPoisonStore<T1>),
+}
+impl<T1: Clone + 'static> Clone for IpeDbStoreQuery<T1> {
+    fn clone(&self) -> Self {
+        match self {
+            IpeDbStoreQuery::Query(p0) => IpeDbStoreQuery::Query(p0.clone()),
+        }
+    }
+}
+impl<T1: IpeStringify + std::fmt::Debug + 'static> IpeStringify for IpeDbStoreQuery<T1> {
+    fn ipe_show(&self) -> String {
+        match self {
+            IpeDbStoreQuery::Query(_) => format!("Query {}", "<fn>"),
+        }
+    }
+}
 pub(crate) fn user_ipe_db_store_valid_sql_ident(name: String) -> bool {
     let _ipe_recursion_guard = crate::recursion_guard();
     (basics_not(string_is_empty(name.clone()))

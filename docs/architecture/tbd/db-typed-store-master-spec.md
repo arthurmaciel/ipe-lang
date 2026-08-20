@@ -136,8 +136,8 @@ Store.gt, gte, lt, lte : Column row comparable -> comparable -> Cond row
 Store.like     : Column row String -> String -> Cond row   -- wildcards stay data
 Store.isNull   : Column row (Maybe t) -> Cond row          -- only nullable columns
 Store.inList   : Column row t -> List t -> Cond row        -- empty ⇒ (1=0)
-Store.and_, or_ : List (Cond row) -> Cond row
-Store.not_      : Cond row -> Cond row
+Store.and, or  : List (Cond row) -> Cond row
+Store.not       : Cond row -> Cond row
 Store.orderAsc, orderDesc : Column row t -> Query row -> Query row
 ```
 
@@ -145,11 +145,11 @@ Now the type checker rejects, at compile time and with a field-named diagnostic:
 
 ```elm
 Store.query users
-    |> Store.where_ (Store.eq .rank Gold)          -- ok: .rank : Column User Rank, Gold : Rank
-    |> Store.where_ (Store.gt .age 18)             -- ok: Int vs Int
-    |> Store.where_ (Store.eq .age "old")          -- TYPE ERROR: String ≠ Int
-    |> Store.where_ (Store.isNull .email)          -- TYPE ERROR if email : String (not Maybe)
-    |> Store.where_ (Store.eq .ownerId aFoodId)    -- TYPE ERROR: FoodId ≠ UserId  (see Pillar 2)
+    |> Store.where (Store.eq .rank Gold)          -- ok: .rank : Column User Rank, Gold : Rank
+    |> Store.where (Store.gt .age 18)             -- ok: Int vs Int
+    |> Store.where (Store.eq .age "old")          -- TYPE ERROR: String ≠ Int
+    |> Store.where (Store.isNull .email)          -- TYPE ERROR if email : String (not Maybe)
+    |> Store.where (Store.eq .ownerId aFoodId)    -- TYPE ERROR: FoodId ≠ UserId  (see Pillar 2)
 ```
 
 The value binds through the column's field codec, so `Store.eq .rank Gold` binds
@@ -521,12 +521,12 @@ selectRaw : Db -> Codec row -> SqlFragment -> Task Error (List row)   -- JOIN/ag
 type Column row t      -- opaque, phantom; written as an accessor literal `.field`
 type Cond row ;  type Query row
 query : Store a -> Query a
-where_ : Cond row -> Query row -> Query row
+where : Cond row -> Query row -> Query row
 eq, neq : Column row t -> t -> Cond row
 gt, gte, lt, lte : Column row comparable -> comparable -> Cond row
 like : Column row String -> String -> Cond row ;  isNull : Column row (Maybe t) -> Cond row
 inList : Column row t -> List t -> Cond row      -- empty ⇒ (1=0)
-and_, or_ : List (Cond row) -> Cond row ;  not_ : Cond row -> Cond row
+and, or : List (Cond row) -> Cond row ;  not : Cond row -> Cond row
 orderAsc, orderDesc : Column row t -> Query row -> Query row ;  limit, offset : Int -> Query row -> Query row
 toList : Db -> Query row -> Task Error (List row) ;  toMaybe : Db -> Query row -> Task Error (Maybe row)
 count : Db -> Query row -> Task Error Int

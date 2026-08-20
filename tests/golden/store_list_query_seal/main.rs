@@ -235,6 +235,41 @@ impl<T1: IpeStringify + std::fmt::Debug + 'static> IpeStringify for RecEncMkDecS
         )
     }
 }
+pub struct RecFragLimOffOrderingsPoisonStore<T1: 'static> {
+    frag: IpeMaybe<ipe_runtime::db::SqlFragment>,
+    lim: IpeMaybe<i64>,
+    off: IpeMaybe<i64>,
+    orderings: Vec<(String, bool, bool)>,
+    poison: IpeMaybe<ipe_runtime::error::IpeError>,
+    store: IpeDbStoreStore<T1>,
+}
+impl<T1: Clone + 'static> Clone for RecFragLimOffOrderingsPoisonStore<T1> {
+    fn clone(&self) -> Self {
+        Self {
+            frag: self.frag.clone(),
+            lim: self.lim.clone(),
+            off: self.off.clone(),
+            orderings: self.orderings.clone(),
+            poison: self.poison.clone(),
+            store: self.store.clone(),
+        }
+    }
+}
+impl<T1: IpeStringify + std::fmt::Debug + 'static> IpeStringify
+    for RecFragLimOffOrderingsPoisonStore<T1>
+{
+    fn ipe_show(&self) -> String {
+        format!(
+            "{{{} {} {} {} {} {}}}",
+            (&ipe_runtime::stringify::Wrap(&self.frag)).dispatch(),
+            (&ipe_runtime::stringify::Wrap(&self.lim)).dispatch(),
+            (&ipe_runtime::stringify::Wrap(&self.off)).dispatch(),
+            (&ipe_runtime::stringify::Wrap(&self.orderings)).dispatch(),
+            (&ipe_runtime::stringify::Wrap(&self.poison)).dispatch(),
+            "<fn>"
+        )
+    }
+}
 #[derive(Clone, Debug, PartialEq)]
 pub struct RecNameSql {
     name: String,

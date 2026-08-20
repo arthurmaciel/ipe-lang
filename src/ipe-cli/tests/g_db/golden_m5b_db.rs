@@ -310,6 +310,33 @@ fn db_store() {
     assert_runs_and_matches_oracle("db_store");
 }
 
+/// `Ipe.Db.Store` typed query builder + `findBy` + `update` + `count` over a
+/// raw-column store on `sqlite::memory:`. Exercises the `Cond`→`SqlFragment`
+/// lowering (every column through `Sql.column`, every value through `Sql.param`)
+/// and the Ipê-level ordering/pagination, proving:
+///
+///   * `order-limit:widget:30,gizmo:9` — a `where (gt "qty" 4) |> orderDesc "qty"
+///     |> limit 2` query returns the two highest-qty rows in NUMERIC descending
+///     order (the store's INTEGER column type drives a numeric sort — a
+///     lexicographic string sort would place `"9"` before `"30"`).
+///   * `find-by:sprocket:5` — `findBy` on a validated column with a bound value.
+///   * `update:gizmo:99` — `update` rewrites a whole record by primary key; the
+///     read-back by pk confirms the write.
+///   * `count-gt:2` — `count` returns how many rows match the filter.
+///   * `reject-bad-column:ok` — a query naming a column the store does not derive
+///     is a total `Task Err` with NO SQL issued (validated against the store's
+///     own columns, parse-don't-validate).
+///   * `injection-value:'; DROP TABLE products; --` — the adversarial value binds
+///     as a positional parameter through the query builder and is stored +
+///     retrieved LITERALLY.
+///
+/// Sanctioned divergence: Ipê emits Rust+sqlx; the query builder is an Ipê-only
+/// addition with no Go counterpart; oracle is Ipê's own output.
+#[test]
+fn db_store_query() {
+    assert_runs_and_matches_oracle("db_store_query");
+}
+
 /// SEAL regression: a generic HOF (`Result.map`) applied to a callee whose
 /// return type is a CROSS-MODULE concrete stdlib type (`Ipe.Db.Store.Store`).
 /// Before the fix the `Result.map` type variable erased to `JsonVal` in emitted

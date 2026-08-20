@@ -2132,6 +2132,22 @@ fn ir_type_mentions_server(ty: &IrType) -> bool {
     })
 }
 
+/// `true` when `ty` mentions the built-in `SqlValue` or `SqlField` nominal enum
+/// (each an `IrType::Enum` with empty home and the interned builtin name). A
+/// surviving emitted type can reference one in a field — e.g. `Ipe.Db.Store`'s
+/// query `Cond` carries a `SqlValue` — without any function constructing the
+/// value, so the synthetic-enum injection must follow type mentions as well as
+/// value construction, or the backend has no Rust name for the enum (ICE).
+/// Mirrors [`ir_type_mentions_server`] for the SQL value surface.
+fn ir_type_mentions_sqlvalue(ty: &IrType, sqlvalue: Symbol, sqlfield: Symbol) -> bool {
+    ir_type_mentions(ty, &|t| match t {
+        IrType::Enum { home, name, .. } => {
+            home.0.is_empty() && (*name == sqlvalue || *name == sqlfield)
+        }
+        _ => false,
+    })
+}
+
 /// `true` when `ty` mentions an `Ipe.Http`-client opaque type — `HttpRequest`
 /// or `HttpMethod`, both defined in the `http_client` runtime module. A
 /// function that merely passes such a value through (without itself calling a
@@ -12114,16 +12130,29 @@ impl<'a> Lowerer<'a> {
         // calling a Db kernel; without the injection the backend has no Rust name
         // for the enum and ICEs. The construct/match scan closes that gap so the
         // injection follows real usage, kernel-driven or value-driven.
+        //
+        // A surviving emitted TYPE can also reference `SqlValue` in a field
+        // without any function constructing one — e.g. `Ipe.Db.Store`'s query
+        // `Cond` ADT carries a `SqlValue` in its comparison/`inList` variants.
+        // When that enum is emitted (its whole home module is pulled in through a
+        // cross-module HOF), rendering the variant's field type needs the
+        // `SqlValue` Rust name, so the injection must follow type mentions too —
+        // the same defense the `server`/`http` type-mention scans apply.
+        let records = self.collect_record_types().map_err(|d| (d, Vec::new()))?;
+
+        let sqlvalue_sym = self.builtins.sqlvalue;
+        let sqlfield_sym = self.builtins.sqlfield;
         let uses_sqlvalue = kernel_usage.db
-            || funcs.iter().any(|f| {
-                expr_constructs_sqlvalue(&f.body, self.builtins.sqlvalue, self.builtins.sqlfield)
+            || funcs
+                .iter()
+                .any(|f| expr_constructs_sqlvalue(&f.body, sqlvalue_sym, sqlfield_sym))
+            || program_type_mentions(&funcs, &records, &types_ir, &|t| {
+                ir_type_mentions_sqlvalue(t, sqlvalue_sym, sqlfield_sym)
             });
         if uses_sqlvalue {
             types_ir.push(TypeDef::Enum(self.synthetic_sqlvalue_enum()));
             types_ir.push(TypeDef::Enum(self.synthetic_sqlfield_enum()));
         }
-
-        let records = self.collect_record_types().map_err(|d| (d, Vec::new()))?;
 
         // detect whether any TEA kernel call is present. The backend uses
         // this flag to append `pub mod tea; pub use tea::*;` to mod.rs and to
