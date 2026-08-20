@@ -106,6 +106,49 @@ impl IpeStringify for Rec_ {
         "{}".to_string()
     }
 }
+pub struct RecCodecCurrentColumnsFrozenColumnsFrozenTableOpsPkSpecsTable<T1: 'static> {
+    codec: IpeCodecCodec<T1>,
+    currentColumns: Vec<IpeDbStoreColumn>,
+    frozenColumns: Vec<IpeDbStoreColumn>,
+    frozenTable: String,
+    ops: Vec<IpeDbStoreSchemaOp>,
+    pk: IpeMaybe<String>,
+    specs: Vec<IpeDbStoreColumnSpec>,
+    table: String,
+}
+impl<T1: Clone + 'static> Clone
+    for RecCodecCurrentColumnsFrozenColumnsFrozenTableOpsPkSpecsTable<T1>
+{
+    fn clone(&self) -> Self {
+        Self {
+            codec: self.codec.clone(),
+            currentColumns: self.currentColumns.clone(),
+            frozenColumns: self.frozenColumns.clone(),
+            frozenTable: self.frozenTable.clone(),
+            ops: self.ops.clone(),
+            pk: self.pk.clone(),
+            specs: self.specs.clone(),
+            table: self.table.clone(),
+        }
+    }
+}
+impl<T1: IpeStringify + std::fmt::Debug + 'static> IpeStringify
+    for RecCodecCurrentColumnsFrozenColumnsFrozenTableOpsPkSpecsTable<T1>
+{
+    fn ipe_show(&self) -> String {
+        format!(
+            "{{{} {} {} {} {} {} {} {}}}",
+            "<fn>",
+            (&ipe_runtime::stringify::Wrap(&self.currentColumns)).dispatch(),
+            (&ipe_runtime::stringify::Wrap(&self.frozenColumns)).dispatch(),
+            (&ipe_runtime::stringify::Wrap(&self.frozenTable)).dispatch(),
+            (&ipe_runtime::stringify::Wrap(&self.ops)).dispatch(),
+            (&ipe_runtime::stringify::Wrap(&self.pk)).dispatch(),
+            (&ipe_runtime::stringify::Wrap(&self.specs)).dispatch(),
+            (&ipe_runtime::stringify::Wrap(&self.table)).dispatch()
+        )
+    }
+}
 #[derive(Clone, Debug, PartialEq)]
 pub struct RecColTypeName {
     colType: IpeCodecColType,
@@ -117,30 +160,6 @@ impl IpeStringify for RecColTypeName {
             "{{{} {}}}",
             (&ipe_runtime::stringify::Wrap(&self.colType)).dispatch(),
             (&ipe_runtime::stringify::Wrap(&self.name)).dispatch()
-        )
-    }
-}
-#[derive(Clone, Debug, PartialEq)]
-pub struct RecCurrentColumnsFrozenColumnsFrozenTableOpsPkSpecsTable {
-    currentColumns: Vec<IpeDbStoreColumn>,
-    frozenColumns: Vec<IpeDbStoreColumn>,
-    frozenTable: String,
-    ops: Vec<IpeDbStoreSchemaOp>,
-    pk: IpeMaybe<String>,
-    specs: Vec<IpeDbStoreColumnSpec>,
-    table: String,
-}
-impl IpeStringify for RecCurrentColumnsFrozenColumnsFrozenTableOpsPkSpecsTable {
-    fn ipe_show(&self) -> String {
-        format!(
-            "{{{} {} {} {} {} {} {}}}",
-            (&ipe_runtime::stringify::Wrap(&self.currentColumns)).dispatch(),
-            (&ipe_runtime::stringify::Wrap(&self.frozenColumns)).dispatch(),
-            (&ipe_runtime::stringify::Wrap(&self.frozenTable)).dispatch(),
-            (&ipe_runtime::stringify::Wrap(&self.ops)).dispatch(),
-            (&ipe_runtime::stringify::Wrap(&self.pk)).dispatch(),
-            (&ipe_runtime::stringify::Wrap(&self.specs)).dispatch(),
-            (&ipe_runtime::stringify::Wrap(&self.table)).dispatch()
         )
     }
 }
@@ -168,12 +187,12 @@ impl IpeStringify for RecDatabaseDriverHostPasswordPortTlsUser {
         )
     }
 }
-pub struct RecDecodeMatchTag<T1> {
+pub struct RecDecodeMatchTag<T1: 'static> {
     decode: Decoder<T1>,
     match_: ::std::sync::Arc<dyn Fn(T1) -> IpeMaybe<Vec<JsonVal>> + Send + Sync + 'static>,
     tag: String,
 }
-impl<T1: Clone> Clone for RecDecodeMatchTag<T1> {
+impl<T1: Clone + 'static> Clone for RecDecodeMatchTag<T1> {
     fn clone(&self) -> Self {
         Self {
             decode: self.decode.clone(),
@@ -182,7 +201,7 @@ impl<T1: Clone> Clone for RecDecodeMatchTag<T1> {
         }
     }
 }
-impl<T1: IpeStringify + std::fmt::Debug> IpeStringify for RecDecodeMatchTag<T1> {
+impl<T1: IpeStringify + std::fmt::Debug + 'static> IpeStringify for RecDecodeMatchTag<T1> {
     fn ipe_show(&self) -> String {
         format!(
             "{{{} {} {}}}",
@@ -192,12 +211,12 @@ impl<T1: IpeStringify + std::fmt::Debug> IpeStringify for RecDecodeMatchTag<T1> 
         )
     }
 }
-pub struct RecEncMkDecShp<T1> {
+pub struct RecEncMkDecShp<T1: 'static> {
     enc: ::std::sync::Arc<dyn Fn(T1) -> JsonVal + Send + Sync + 'static>,
     mkDec: ::std::sync::Arc<dyn Fn(Rec_) -> Decoder<T1> + Send + Sync + 'static>,
     shp: IpeCodecShape,
 }
-impl<T1: Clone> Clone for RecEncMkDecShp<T1> {
+impl<T1: Clone + 'static> Clone for RecEncMkDecShp<T1> {
     fn clone(&self) -> Self {
         Self {
             enc: self.enc.clone(),
@@ -206,7 +225,7 @@ impl<T1: Clone> Clone for RecEncMkDecShp<T1> {
         }
     }
 }
-impl<T1: IpeStringify + std::fmt::Debug> IpeStringify for RecEncMkDecShp<T1> {
+impl<T1: IpeStringify + std::fmt::Debug + 'static> IpeStringify for RecEncMkDecShp<T1> {
     fn ipe_show(&self) -> String {
         format!(
             "{{{} {} {}}}",
@@ -511,6 +530,9 @@ pub(crate) use ipe_mod_ipe_codec::*;
 #[path = "ipe_mods/ipe_mod_ipe_db_store.rs"]
 mod ipe_mod_ipe_db_store;
 pub(crate) use ipe_mod_ipe_db_store::*;
+#[path = "ipe_mods/ipe_mod_ipe_db_codec.rs"]
+mod ipe_mod_ipe_db_codec;
+pub(crate) use ipe_mod_ipe_db_codec::*;
 #[path = "ipe_mods/ipe_mod_main.rs"]
 mod ipe_mod_main;
 pub(crate) use ipe_mod_main::*;
