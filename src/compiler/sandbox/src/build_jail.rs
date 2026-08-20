@@ -1297,19 +1297,26 @@ mod freebsd_jail {
     /// ruleset — a minimal `/dev` (null/zero/random/…) — NOT the host devfs the
     /// read-only root nullfs-exposed, so the jail sees a fresh minimal `/dev` and
     /// the host device nodes are not enumerable (matching the Linux arm's `--dev`).
-    fn mount_devfs(mount_devfs_bin: &Path, target: &Path) -> Result<(), RunJailDefect> {
-        let status = std::process::Command::new(mount_devfs_bin)
+    ///
+    /// FreeBSD does not ship a standalone `mount_devfs` binary; devfs is mounted
+    /// via `mount -t devfs devfs <target>` (the `mount(8)` binary, which IS a
+    /// stable base-system primitive on every supported FreeBSD release).
+    fn mount_devfs(mount_bin: &Path, target: &Path) -> Result<(), RunJailDefect> {
+        let status = std::process::Command::new(mount_bin)
+            .arg("-t")
+            .arg("devfs")
+            .arg("devfs")
             .arg(target)
             .status();
         match status {
             Ok(s) if s.success() => Ok(()),
             Ok(s) => Err(RunJailDefect::MountFailed {
                 target: target.to_path_buf(),
-                detail: format!("mount_devfs failed ({s})"),
+                detail: format!("mount -t devfs devfs failed ({s})"),
             }),
             Err(e) => Err(RunJailDefect::MountFailed {
                 target: target.to_path_buf(),
-                detail: format!("could not run mount_devfs: {e}"),
+                detail: format!("could not run mount -t devfs: {e}"),
             }),
         }
     }
@@ -1381,9 +1388,11 @@ mod freebsd_jail {
                     missing: vec!["mount_nullfs"],
                 });
             };
-            let Some(mount_devfs_bin) = find_in_path("mount_devfs") else {
+            // `mount` is the stable primitive; FreeBSD does not ship a standalone
+            // `mount_devfs` binary — devfs is mounted via `mount -t devfs devfs`.
+            let Some(mount_devfs_bin) = find_in_path("mount") else {
                 return Err(RunJailDefect::PrimitiveUnavailable {
-                    missing: vec!["mount_devfs"],
+                    missing: vec!["mount"],
                 });
             };
             let Some(umount_bin) = find_in_path("umount") else {
@@ -1427,9 +1436,9 @@ mod freebsd_jail {
             //    read-only host `/dev` the ro-root exposed. Without this the jail sees
             //    the HOST devfs read-only — a metadata/enumeration leak (every host
             //    device node is visible, a covert-channel/enumeration surface). A
-            //    fresh `mount_devfs` gives the jail the minimal default devfs ruleset
-            //    (null/zero/random/…), NOT the host's, matching the Linux arm's fresh
-            //    `--dev /dev`.
+            //    fresh `mount -t devfs devfs` gives the jail the minimal default devfs
+            //    ruleset (null/zero/random/…), NOT the host's, matching the Linux
+            //    arm's fresh `--dev /dev`.
             let dev_target = under_root(&mount.root, &SafeMountPath::new(Path::new("/dev"))?);
             mount_devfs(&mount_devfs_bin, &dev_target)?;
             mount.mounted.push(dev_target);

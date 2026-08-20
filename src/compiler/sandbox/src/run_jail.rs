@@ -3060,7 +3060,21 @@ mod windows_jail {
                 && wcurrent[..current_len]
                     .iter()
                     .zip(&volume_root)
-                    .all(|(a, b)| a.to_ascii_uppercase() == b.to_ascii_uppercase())
+                    .all(|(a, b)| {
+                        // `u16` has no `to_ascii_uppercase`; fold through `u8` for the
+                        // ASCII range (volume roots are always ASCII, e.g. "C:\").
+                        let au = if *a < 0x80 {
+                            (*a as u8).to_ascii_uppercase() as u16
+                        } else {
+                            *a
+                        };
+                        let bu = if *b < 0x80 {
+                            (*b as u8).to_ascii_uppercase() as u16
+                        } else {
+                            *b
+                        };
+                        au == bu
+                    })
             {
                 break;
             }
