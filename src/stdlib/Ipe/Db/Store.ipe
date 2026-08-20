@@ -104,6 +104,7 @@ module Ipe.Db.Store exposing
     )
 
 
+import Ipe.Codec exposing (ColType(..))
 import Ipe.Db as Db
 import Ipe.Db.Dsn as Dsn exposing (Connection)
 import Ipe.Db.Sql as Sql
@@ -127,14 +128,11 @@ type alias Row =
     Dict String String
 
 
--- | The abstract column type a store maps to. Dialect-neutral — the `Ipe.Db`
--- kernels map these to the configured backend's concrete SQL types. Kept
--- abstract so one store declaration works on every backend.
-type ColType
-    = CText
-    | CInt
-    | CReal
-    | CBool
+-- A store's columns are typed with `Ipe.Codec.ColType` — the dialect-neutral
+-- column type a codec also derives — so one codec's shape and a hand-declared
+-- store share a single column vocabulary. The `Ipe.Db` kernels map each
+-- `ColType` to the configured backend's concrete SQL type, so one store
+-- declaration works on every backend.
 
 
 -- | One typed column: its (validated) name and its abstract type for the
@@ -1075,6 +1073,12 @@ sqlType colType =
 
         CBool ->
             "INTEGER"
+
+        CBlob ->
+            "TEXT"
+
+        CNull inner ->
+            sqlType inner
 
 
 -- | Build the SQL constraint suffix for `name` from the store's specs.

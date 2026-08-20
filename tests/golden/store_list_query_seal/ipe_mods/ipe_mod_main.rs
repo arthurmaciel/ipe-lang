@@ -25,7 +25,7 @@ pub(crate) fn ipe_main() -> IpeTask<()> {
             {
                 let __ipe_fn: Box<
                     dyn Fn(ipe_runtime::error::IpeError) -> IpeTask<()> + Send + Sync + 'static,
-                > = Box::new(move |arg_1: ipe_runtime::error::IpeError| -> IpeTask<()> {
+                > = Box::new(move |arg_13: ipe_runtime::error::IpeError| -> IpeTask<()> {
                     task_succeed(())
                 });
                 __ipe_fn
@@ -41,7 +41,7 @@ pub(crate) fn ipe_main() -> IpeTask<()> {
                         Box::new(move |store: IpeDbStoreStore| -> IpeTask<()> {
                             task_and_then(
                                 crate::main_fetch_names(db.clone(), store),
-                                Box::new(move |arg_2: Vec<String>| -> IpeTask<()> {
+                                Box::new(move |arg_14: Vec<String>| -> IpeTask<()> {
                                     task_succeed(())
                                 }),
                             )
@@ -50,7 +50,7 @@ pub(crate) fn ipe_main() -> IpeTask<()> {
                 }),
             ),
         ),
-        Box::new(move |arg_0: ()| -> IpeTask<()> {
+        Box::new(move |arg_12: ()| -> IpeTask<()> {
             io_println("store-list-query-seal".to_string())
         }),
     )

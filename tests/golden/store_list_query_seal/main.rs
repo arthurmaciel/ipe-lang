@@ -98,8 +98,17 @@ impl IpeStringify for MainSqlField {
     }
 }
 #[derive(Clone, Debug, PartialEq)]
+pub struct Rec_ {
+
+}
+impl IpeStringify for Rec_ {
+    fn ipe_show(&self) -> String {
+        "{}".to_string()
+    }
+}
+#[derive(Clone, Debug, PartialEq)]
 pub struct RecColTypeName {
-    colType: IpeDbStoreColType,
+    colType: IpeCodecColType,
     name: String,
 }
 impl IpeStringify for RecColTypeName {
@@ -156,6 +165,54 @@ impl IpeStringify for RecDatabaseDriverHostPasswordPortTlsUser {
             (&ipe_runtime::stringify::Wrap(&self.port)).dispatch(),
             (&ipe_runtime::stringify::Wrap(&self.tls)).dispatch(),
             (&ipe_runtime::stringify::Wrap(&self.user)).dispatch()
+        )
+    }
+}
+pub struct RecDecodeMatchTag<T1> {
+    decode: Decoder<T1>,
+    match_: ::std::sync::Arc<dyn Fn(T1) -> IpeMaybe<Vec<JsonVal>> + Send + Sync + 'static>,
+    tag: String,
+}
+impl<T1: Clone> Clone for RecDecodeMatchTag<T1> {
+    fn clone(&self) -> Self {
+        Self {
+            decode: self.decode.clone(),
+            match_: self.match_.clone(),
+            tag: self.tag.clone(),
+        }
+    }
+}
+impl<T1: IpeStringify + std::fmt::Debug> IpeStringify for RecDecodeMatchTag<T1> {
+    fn ipe_show(&self) -> String {
+        format!(
+            "{{{} {} {}}}",
+            "<fn>",
+            "<fn>",
+            (&ipe_runtime::stringify::Wrap(&self.tag)).dispatch()
+        )
+    }
+}
+pub struct RecEncMkDecShp<T1> {
+    enc: ::std::sync::Arc<dyn Fn(T1) -> JsonVal + Send + Sync + 'static>,
+    mkDec: ::std::sync::Arc<dyn Fn(Rec_) -> Decoder<T1> + Send + Sync + 'static>,
+    shp: IpeCodecShape,
+}
+impl<T1: Clone> Clone for RecEncMkDecShp<T1> {
+    fn clone(&self) -> Self {
+        Self {
+            enc: self.enc.clone(),
+            mkDec: self.mkDec.clone(),
+            shp: self.shp.clone(),
+        }
+    }
+}
+impl<T1: IpeStringify + std::fmt::Debug> IpeStringify for RecEncMkDecShp<T1> {
+    fn ipe_show(&self) -> String {
+        format!(
+            "{{{} {} {}}}",
+            "<fn>",
+            "<fn>",
+            (&ipe_runtime::stringify::Wrap(&self.shp)).dispatch()
         )
     }
 }
@@ -445,6 +502,12 @@ fn main() {
 #[path = "ipe_mods/ipe_mod_ipe_db_dsn.rs"]
 mod ipe_mod_ipe_db_dsn;
 pub(crate) use ipe_mod_ipe_db_dsn::*;
+#[path = "ipe_mods/ipe_mod_ipe_money.rs"]
+mod ipe_mod_ipe_money;
+pub(crate) use ipe_mod_ipe_money::*;
+#[path = "ipe_mods/ipe_mod_ipe_codec.rs"]
+mod ipe_mod_ipe_codec;
+pub(crate) use ipe_mod_ipe_codec::*;
 #[path = "ipe_mods/ipe_mod_ipe_db_store.rs"]
 mod ipe_mod_ipe_db_store;
 pub(crate) use ipe_mod_ipe_db_store::*;

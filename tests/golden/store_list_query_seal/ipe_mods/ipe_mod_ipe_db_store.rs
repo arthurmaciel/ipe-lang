@@ -1,23 +1,6 @@
 use crate::*;
 
 #[derive(Clone, Debug, PartialEq)]
-pub(crate) enum IpeDbStoreColType {
-    CText,
-    CInt,
-    CReal,
-    CBool,
-}
-impl IpeStringify for IpeDbStoreColType {
-    fn ipe_show(&self) -> String {
-        match self {
-            IpeDbStoreColType::CText => "CText".to_string(),
-            IpeDbStoreColType::CInt => "CInt".to_string(),
-            IpeDbStoreColType::CReal => "CReal".to_string(),
-            IpeDbStoreColType::CBool => "CBool".to_string(),
-        }
-    }
-}
-#[derive(Clone, Debug, PartialEq)]
 pub(crate) enum IpeDbStoreColumn {
     Column(RecColTypeName),
 }
@@ -136,10 +119,7 @@ pub(crate) fn user_ipe_db_store_dot_code() -> i64 {
     static CELL: std::sync::OnceLock<i64> = std::sync::OnceLock::new();
     CELL.get_or_init(|| 46).clone()
 }
-pub(crate) fn user_ipe_db_store_column(
-    name: String,
-    colType: IpeDbStoreColType,
-) -> IpeDbStoreColumn {
+pub(crate) fn user_ipe_db_store_column(name: String, colType: IpeCodecColType) -> IpeDbStoreColumn {
     let _ipe_recursion_guard = crate::recursion_guard();
     IpeDbStoreColumn::Column(RecColTypeName {
         colType: colType,
@@ -148,7 +128,7 @@ pub(crate) fn user_ipe_db_store_column(
 }
 pub(crate) fn user_ipe_db_store_text_column(name: String) -> IpeDbStoreColumn {
     let _ipe_recursion_guard = crate::recursion_guard();
-    crate::user_ipe_db_store_column(name, IpeDbStoreColType::CText)
+    crate::user_ipe_db_store_column(name, IpeCodecColType::CText)
 }
 pub(crate) fn user_ipe_db_store_from_columns(
     table: String,

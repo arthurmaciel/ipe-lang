@@ -11,7 +11,7 @@ module Main exposing (main)
 -- and `fromJsonSafe` rejects oversize input before decoding.
 
 import Ipe.Io as Io
-import Ipe.Codec as Codec exposing (Codec(..))
+import Ipe.Codec as Codec exposing (Codec(..), Shape(..), ColType(..))
 import Ipe.Json.Encode as Encode
 import Ipe.Json.Decode as Decode
 import Ipe.Json.Decode.Pipeline as Pipeline
@@ -76,6 +76,15 @@ orderCodec =
                     , ( "scores", Codec.toValue (Codec.dict Codec.int) o.scores )
                     ]
         , mkDec = \_ -> orderDecoder
+        , shp =
+            SRecord
+                [ ( "id", CText )
+                , ( "qty", CInt )
+                , ( "paid", CBool )
+                , ( "note", CNull CText )
+                , ( "tags", CBlob )
+                , ( "scores", CBlob )
+                ]
         }
 
 

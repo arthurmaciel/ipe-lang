@@ -3076,15 +3076,100 @@ fn derive_record_codec(
         ),
     );
 
-    codec_record_expr(enc_lambda, mkdec_lambda, sg, env, interner)
+    // shp = SRecord [ (key, colType), … ] — the DB column list, keyed by the same
+    // snake_case keys the encoder/decoder use.
+    let shp = derive_record_shape(fields, sg, env, interner)?;
+
+    codec_record_expr(enc_lambda, mkdec_lambda, shp, sg, env, interner)
 }
 
-/// Wrap the encoder + decoder-factory into the `Codec { enc = …, mkDec = … }`
-/// value — the single-constructor `Ipe.Codec.Codec` applied to its record. The
-/// constructor resolves against the env (the module must import `Ipe.Codec`).
+/// A reference to the named constructor `ctor` resolved against the env — the
+/// module must import the module that owns it (`Ipe.Codec` for `Codec`/`Shape`/
+/// `ColType`). Fails fail-closed with the same underivable diagnostic the codec
+/// derive uses when the constructor is not in scope.
+fn ctor_ref_named(
+    ctor: &str,
+    sg: &mut SynSpan,
+    env: &Env,
+    interner: &mut Interner,
+) -> DResult<canon::Expr> {
+    let sym = interner.intern(ctor)?;
+    let Some(found) = env.lookup_ctor(sym) else {
+        return Err(Diagnostic::Name {
+            span: sg.diag,
+            msg: NameError::CodecAutoUnderivable {
+                reason: CodecAutoRejection::WitnessNotRecordValue,
+                field: String::new().into(),
+            },
+        });
+    };
+    Ok(Located::new(
+        sg.fresh(),
+        canon::Expr_::VarCtor {
+            home: found.home.clone(),
+            type_name: found.type_name,
+            name: found.name,
+            index: found.index,
+        },
+    ))
+}
+
+/// The `ColType` a derived record FIELD contributes to its `SRecord` shape. A
+/// scalar field maps to its scalar column type (`CText`/`CInt`/`CReal`/`CBool`);
+/// a `List` field or a nested record maps to one JSON-in-TEXT column (`CBlob`).
+/// The field types reaching here have already passed `field_leaf_codecs`, so an
+/// unsupported type never arrives — the exhaustive fallthrough is the blob
+/// column the derive's own container/record leaves produce.
+fn field_col_type_expr(
+    ty: &canon::Type,
+    sg: &mut SynSpan,
+    env: &Env,
+    interner: &mut Interner,
+) -> DResult<canon::Expr> {
+    let scalar = match ty {
+        canon::Type::Con { name, args, .. } if args.is_empty() => match interner.resolve(*name) {
+            Some("String") => Some("CText"),
+            Some("Int") => Some("CInt"),
+            Some("Bool") => Some("CBool"),
+            Some("Float") => Some("CReal"),
+            _ => None,
+        },
+        _ => None,
+    };
+    ctor_ref_named(scalar.unwrap_or("CBlob"), sg, env, interner)
+}
+
+/// The `Shape` expression for a derived record: `SRecord [ (key, colType), … ]`
+/// over the fields, keyed by the same `snake_case` keys the encoder/decoder use
+/// so the column list, the wire keys, and the round-trip stay one source of truth.
+fn derive_record_shape(
+    fields: &[(Symbol, canon::Type)],
+    sg: &mut SynSpan,
+    env: &Env,
+    interner: &mut Interner,
+) -> DResult<canon::Expr> {
+    let mut pairs = Vec::with_capacity(fields.len());
+    for (fname, fty) in fields {
+        let key = to_snake_case(interner.resolve(*fname).unwrap_or(""));
+        let col = field_col_type_expr(fty, sg, env, interner)?;
+        pairs.push(Located::new(
+            sg.fresh(),
+            canon::Expr_::Tuple(vec![Located::new(sg.fresh(), canon::Expr_::Str(key)), col]),
+        ));
+    }
+    let cols = Located::new(sg.fresh(), canon::Expr_::List(pairs));
+    let srecord = ctor_ref_named("SRecord", sg, env, interner)?;
+    Ok(call_expr(srecord, vec![cols], sg.fresh()))
+}
+
+/// Wrap the encoder, decoder-factory, and shape into the
+/// `Codec { enc = …, mkDec = …, shp = … }` value — the single-constructor
+/// `Ipe.Codec.Codec` applied to its record. The constructor resolves against the
+/// env (the module must import `Ipe.Codec`).
 fn codec_record_expr(
     enc: canon::Expr,
     mkdec: canon::Expr,
+    shp: canon::Expr,
     sg: &mut SynSpan,
     env: &Env,
     interner: &mut Interner,
@@ -3092,6 +3177,7 @@ fn codec_record_expr(
     let codec_ctor_sym = interner.intern("Codec")?;
     let enc_field = interner.intern("enc")?;
     let mkdec_field = interner.intern("mkDec")?;
+    let shp_field = interner.intern("shp")?;
     let Some(ctor) = env.lookup_ctor(codec_ctor_sym) else {
         return Err(Diagnostic::Name {
             span: sg.diag,
@@ -3103,7 +3189,11 @@ fn codec_record_expr(
     };
     let record = Located::new(
         sg.fresh(),
-        canon::Expr_::Record(vec![(enc_field, enc), (mkdec_field, mkdec)]),
+        canon::Expr_::Record(vec![
+            (enc_field, enc),
+            (mkdec_field, mkdec),
+            (shp_field, shp),
+        ]),
     );
     let ctor_ref = Located::new(
         sg.fresh(),

@@ -6,6 +6,8 @@ mod support;
 
 #[path = "g_m4/golden_codec_roundtrip.rs"]
 mod golden_codec_roundtrip;
+#[path = "g_m4/golden_codec_shape.rs"]
+mod golden_codec_shape;
 #[path = "g_m4/golden_m4a.rs"]
 mod golden_m4a;
 #[path = "g_m4/golden_m4a_fns.rs"]
