@@ -6313,7 +6313,9 @@ fn closure_captures_bare_generic(
         Expr::Record { fields, .. } | Expr::Update { fields, .. } => {
             fields.iter().any(|(_, e)| recur(locally_bound, e))
         }
-        Expr::TaskSeq { effect, rest } => recur(locally_bound, effect) || recur(locally_bound, rest),
+        Expr::TaskSeq { effect, rest } => {
+            recur(locally_bound, effect) || recur(locally_bound, rest)
+        }
         Expr::FuncValue { .. }
         | Expr::Int(_)
         | Expr::Bool(_)
