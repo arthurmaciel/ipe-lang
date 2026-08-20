@@ -112,17 +112,23 @@ impl IpeStringify for RecColTypeName {
     }
 }
 #[derive(Clone, Debug, PartialEq)]
-pub struct RecColumnsPkSpecsTable {
-    columns: Vec<IpeDbStoreColumn>,
+pub struct RecCurrentColumnsFrozenColumnsFrozenTableOpsPkSpecsTable {
+    currentColumns: Vec<IpeDbStoreColumn>,
+    frozenColumns: Vec<IpeDbStoreColumn>,
+    frozenTable: String,
+    ops: Vec<IpeDbStoreSchemaOp>,
     pk: IpeMaybe<String>,
     specs: Vec<IpeDbStoreColumnSpec>,
     table: String,
 }
-impl IpeStringify for RecColumnsPkSpecsTable {
+impl IpeStringify for RecCurrentColumnsFrozenColumnsFrozenTableOpsPkSpecsTable {
     fn ipe_show(&self) -> String {
         format!(
-            "{{{} {} {} {}}}",
-            (&ipe_runtime::stringify::Wrap(&self.columns)).dispatch(),
+            "{{{} {} {} {} {} {} {}}}",
+            (&ipe_runtime::stringify::Wrap(&self.currentColumns)).dispatch(),
+            (&ipe_runtime::stringify::Wrap(&self.frozenColumns)).dispatch(),
+            (&ipe_runtime::stringify::Wrap(&self.frozenTable)).dispatch(),
+            (&ipe_runtime::stringify::Wrap(&self.ops)).dispatch(),
             (&ipe_runtime::stringify::Wrap(&self.pk)).dispatch(),
             (&ipe_runtime::stringify::Wrap(&self.specs)).dispatch(),
             (&ipe_runtime::stringify::Wrap(&self.table)).dispatch()
