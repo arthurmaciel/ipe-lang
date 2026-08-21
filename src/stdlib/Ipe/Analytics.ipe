@@ -125,7 +125,6 @@ module Ipe.Analytics exposing
 import Ipe.Codec as Codec exposing (Codec(..), Shape(..), ColType(..))
 import Ipe.Json.Encode as Encode
 import Ipe.Json.Decode as Decode
-import Ipe.Json.Decode.Pipeline as Pipeline
 import Ipe.Db as Db
 import Ipe.Db.Store as Store exposing (Store)
 import Ipe.Db.Sql as Sql
@@ -510,43 +509,13 @@ type alias AnalyticsEvent =
 -- retyped changes exactly one place.
 analyticsEventCodec : Codec AnalyticsEvent
 analyticsEventCodec =
-    Codec
-        { enc =
-            \ev ->
-                Encode.object
-                    [ ( "id", Encode.int ev.id )
-                    , ( "eventName", Encode.string ev.eventName )
-                    , ( "userId", Encode.string ev.userId )
-                    , ( "propsJson", Encode.string ev.propsJson )
-                    , ( "recordedAt", Encode.string ev.recordedAt )
-                    ]
-        , mkDec =
-            \_ ->
-                Decode.succeed makeAnalyticsEvent
-                    |> Pipeline.required "id" Decode.int
-                    |> Pipeline.required "eventName" Decode.string
-                    |> Pipeline.required "userId" Decode.string
-                    |> Pipeline.required "propsJson" Decode.string
-                    |> Pipeline.required "recordedAt" Decode.string
-        , shp =
-            SRecord
-                [ ( "id", CInt )
-                , ( "eventName", CText )
-                , ( "userId", CText )
-                , ( "propsJson", CText )
-                , ( "recordedAt", CText )
-                ]
+    Codec.auto
+        { id = 0
+        , eventName = ""
+        , userId = ""
+        , propsJson = ""
+        , recordedAt = ""
         }
-
-
-makeAnalyticsEvent : Int -> String -> String -> String -> String -> AnalyticsEvent
-makeAnalyticsEvent rowId name uid pj ts =
-    { id = rowId
-    , eventName = name
-    , userId = uid
-    , propsJson = pj
-    , recordedAt = ts
-    }
 
 
 -- | The typed `Store AnalyticsEvent`. Built from `analyticsEventCodec`, so its
