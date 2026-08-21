@@ -260,9 +260,17 @@ echo "  skipped:            $n_skip"
 echo "  build failures:     $n_build_fail"
 echo "  mismatches:         $failed"
 echo ""
+
+n_real=$(( n_exact + n_normalized ))
 echo "SUMMARY: $n_exact exact, $n_normalized normalized, $n_skip skipped"
+
+# Gate: zero real comparisons means the gate checked nothing.
+if [ "$n_real" -eq 0 ] && [ "$failed" -eq 0 ]; then
+  echo "VERDICT: FAIL — 0 real sky↔ipe comparisons performed (all skipped or build-failed)" >&2
+  exit 1
+fi
 
 if [ "$failed" -gt 0 ]; then
   echo "VERDICT: FAIL ($failed mismatch(es))" >&2; exit 1
 fi
-echo "VERDICT: PASS"
+echo "VERDICT: PASS ($n_real comparison(s) matched)"

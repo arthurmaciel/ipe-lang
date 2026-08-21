@@ -30,8 +30,8 @@
 #   screencapture -l <id> -o <out>.png (no drop shadow, window bounds only).
 #   Fallback: full-screen capture if the window is not found.
 #
-# This is NOT a required PR gate.  Continue-on-error is set so a regression
-# here does not block merges.
+# This is NOT a required PR gate (it requires macOS + TCC setup).
+# sky-build-fail and blank-capture count as FAIL (continue-on-error: false).
 # ─────────────────────────────────────────────────────────────────────────────
 name: sky webview visual parity (macOS)
 
@@ -54,8 +54,9 @@ jobs:
   webview-parity:
     name: webview visual parity (macOS)
     runs-on: macos-latest
-    # Non-gating: visual data collection and regression tracking.
-    continue-on-error: true
+    # Gating: sky-build-fail and blank-capture count as FAIL; zero comparisons
+    # also fails. A green means at least one real comparison ran and passed.
+    continue-on-error: false
 
     env:
       CARGO_TARGET_DIR: ${{ github.workspace }}/.cache/ipe-target

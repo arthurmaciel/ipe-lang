@@ -10,11 +10,6 @@
 #                  Playwright headless Chromium (same-engine comparison).
 #                  Same-engine eliminates Chromium-vs-WebKitGTK rendering
 #                  noise so the threshold can be as low as 8.0 RMS.
-#   webview shape — sky v0.19.13 Std.Webview on Linux is compiled with the
-#                   build tag `cgo && darwin`, so the Linux binary falls
-#                   through to webview_stub.go: it returns an Err, opens no
-#                   window, and exits 0.  Those ports are marked SKY-STUB.
-#                   The ipe-side webview is still captured for reference.
 #
 # Port discovery (data-driven from manifest.toml):
 #   Reads examples/sky/manifest.toml and collects every [[example]] whose
@@ -22,13 +17,14 @@
 #   below is overlaid on top of that set.  Ports listed in SKIP_NAMES are
 #   excluded regardless of manifest status.
 #
-# Sky build compatibility:
-#   sky v0.16.29 and v0.19.13 both fail to compile the web ports from the
-#   committed examples/sky/original/ trees: v0.16.29 hits Std.Css.zero arity
-#   errors; v0.19.13 changed Live.app to a builder API (breaking the record
-#   syntax in every web port).  When sky build fails the port is recorded as
-#   SKY-BUILD-FAIL (data, not a harness failure) and the diff is skipped.
-#   The sky-side column in the summary shows N/A for those ports.
+# Honest verdict rules:
+#   - A run that performed ZERO real comparisons exits FAIL.
+#   - SKY-BUILD-FAIL counts as FAIL: if the Sky side cannot build, the
+#     comparison was not performed; that is a gate failure, not data.
+#   - CAPTURE-FAIL counts as FAIL.
+#   - Legitimate skips (genuinely non-deterministic first-paint ports) remain
+#     but must be a small minority. If skips dominate and no real comparisons
+#     run, the zero-comparison rule above fires first.
 #
 # Same-engine threshold:
 #   Both screenshots use Playwright/Chromium at --viewport-size=1280,800.
@@ -291,7 +287,7 @@ echo "  ports:      ${#MANIFEST_PORTS[@]} web+green from manifest"
 echo "  no-sky:     $NO_SKY"
 echo ""
 
-n_pass=0 n_fail=0 n_skip=0 n_sky_build_fail=0 n_build_fail=0
+n_pass=0 n_fail=0 n_skip=0 n_build_fail=0
 
 # ── Port loop ─────────────────────────────────────────────────────────────────
 for name in "${MANIFEST_PORTS[@]}"; do
@@ -393,8 +389,8 @@ for name in "${MANIFEST_PORTS[@]}"; do
   fi
 
   if [ "$sky_go_ok" -eq 0 ] || [ ! -x "$sky_app" ]; then
-    echo "  SKY-BUILD-FAIL $name — sky build/go-compile failed (see $sky_build_log); ipe screenshot at $ipe_png"
-    n_sky_build_fail=$(( n_sky_build_fail+1 ))
+    echo "  SKY-BUILD-FAIL $name — sky build/go-compile failed (see $sky_build_log); comparison not performed"
+    n_fail=$(( n_fail+1 ))
     _clean_port_artifacts "$name" "$ipe_dir" "$sky_work_dir" "$port_target"; continue
   fi
 
@@ -443,15 +439,22 @@ done
 # ── Summary ───────────────────────────────────────────────────────────────────
 echo ""
 echo "=== check-sky-parity-visual: RESULTS ==="
-echo "  pass:              $n_pass"
-echo "  fail:              $n_fail   (diff above threshold — real regression)"
-_sky_ver="$("$SKY_BIN" --version 2>/dev/null | tr -d '\n' || echo 'unknown')"
-echo "  sky-build-fail:    $n_sky_build_fail   (sky ${_sky_ver} API mismatch — data, not harness error)"
-echo "  skip:              $n_skip   (dynamic content or missing orig)"
-echo "  ipe-build-fail:    $n_build_fail"
+echo "  pass:           $n_pass"
+echo "  fail:           $n_fail   (diff above threshold, sky-build-fail, or capture-fail)"
+echo "  skip:           $n_skip   (documented dynamic-first-paint ports only)"
+echo "  ipe-build-fail: $n_build_fail"
+echo ""
+echo "  NOTE: sky-build-fail counts as FAIL — a comparison that did not run is not a pass."
+echo "        To see sky-build errors, check the -sky-build.log files in the out-dir."
 echo ""
 
-if [ "$n_fail" -gt 0 ] || [ "$n_build_fail" -gt 0 ]; then
-  echo "VERDICT: FAIL ($n_fail diff-fail(s), $n_build_fail ipe-build-fail(s))" >&2; exit 1
+# Gate: zero real comparisons is a harness failure even if no explicit FAIL was recorded.
+if [ "$n_pass" -eq 0 ] && [ "$n_fail" -eq 0 ] && [ "$n_build_fail" -eq 0 ]; then
+  echo "VERDICT: FAIL — harness performed 0 real comparisons (all ports skipped or absent)" >&2
+  exit 1
 fi
-echo "VERDICT: PASS (sky-build-fail rows are data, not gate failures)"
+
+if [ "$n_fail" -gt 0 ] || [ "$n_build_fail" -gt 0 ]; then
+  echo "VERDICT: FAIL ($n_fail comparison-fail(s), $n_build_fail ipe-build-fail(s))" >&2; exit 1
+fi
+echo "VERDICT: PASS ($n_pass comparison(s) passed, $n_skip skip(s))"

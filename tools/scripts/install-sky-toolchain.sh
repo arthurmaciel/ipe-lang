@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# tools/scripts/install-sky-toolchain.sh — downloads + installs a pinned sky binary.
+# tools/scripts/install-sky-toolchain.sh — downloads + installs the sky binary.
 #
 # Downloads the prebuilt sky binary for the current OS/arch from the upstream
 # GitHub release and places it on PATH (default: ~/.local/bin/sky).
@@ -8,19 +8,32 @@
 #   install-sky-toolchain.sh [VERSION] [--dest DIR]
 #
 # Arguments:
-#   VERSION    sky release tag, e.g. "v0.19.13" (default: the pinned version below)
+#   VERSION    sky release tag, e.g. "v0.19.15" (default: latest upstream release)
 #   --dest DIR installation directory (default: ~/.local/bin)
 #
 # After this script completes, `sky --version` should print the installed version.
 set -uo pipefail
 
-# ── Pinned version ───────────────────────────────────────────────────────────
-# Matches the upstream release that corresponds to the examples in this repo.
-# Update this when the example corpus is refreshed to a newer upstream release.
-PINNED_VERSION="v0.19.13"
+# ── Resolve version ───────────────────────────────────────────────────────────
+# Default: resolve the latest release tag from the GitHub API so the parity gate
+# always compares against the current Sky release rather than a stale pin.
+# Pass an explicit VERSION argument to override (e.g. for bisecting a regression).
+_resolve_latest_version() {
+  if command -v gh >/dev/null 2>&1; then
+    gh api repos/anzellai/sky/releases/latest --jq .tag_name 2>/dev/null && return
+  fi
+  # Fallback: curl + sed (no gh CLI needed in CI with a GITHUB_TOKEN).
+  curl -fsSL \
+    -H "Accept: application/vnd.github+json" \
+    ${GITHUB_TOKEN:+-H "Authorization: Bearer $GITHUB_TOKEN"} \
+    "https://api.github.com/repos/anzellai/sky/releases/latest" \
+    2>/dev/null \
+    | sed -n 's/.*"tag_name"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' \
+    | head -1
+}
 
 # ── Argument parsing ─────────────────────────────────────────────────────────
-VERSION="${1:-$PINNED_VERSION}"
+VERSION="${1:-}"
 DEST_DIR="$HOME/.local/bin"
 shift 2>/dev/null || true
 while [ $# -gt 0 ]; do
@@ -29,6 +42,17 @@ while [ $# -gt 0 ]; do
     *) echo "install-sky-toolchain: unknown option: $1" >&2; exit 1 ;;
   esac
 done
+
+if [ -z "$VERSION" ]; then
+  echo "install-sky-toolchain: resolving latest Sky release from GitHub API..."
+  VERSION="$(_resolve_latest_version)"
+  if [ -z "$VERSION" ]; then
+    echo "install-sky-toolchain: could not resolve latest Sky version from GitHub API" >&2
+    echo "  set GITHUB_TOKEN or pass a VERSION argument explicitly" >&2
+    exit 1
+  fi
+  echo "install-sky-toolchain: resolved latest release: $VERSION"
+fi
 
 # ── OS/arch detection ────────────────────────────────────────────────────────
 OS=""

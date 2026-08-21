@@ -227,13 +227,13 @@ for entry in "${EXAMPLES[@]}"; do
   cp -R "${SKY_EXAMPLE}" "${SKY_WORK}"
 
   if ! ( cd "${SKY_WORK}" && timeout 120 sky build ) 2>&1; then
-    echo "  SKY-BUILD-FAIL  ${slug} — sky build failed; Ipê-side capture kept for reference"
-    SKIP=$(( SKIP + 1 ))
+    echo "  SKY-BUILD-FAIL  ${slug} — sky build failed; comparison not performed"
+    FAIL=$(( FAIL + 1 ))
     continue
   fi
   if ! ( cd "${SKY_WORK}/sky-out" && timeout 180 go build -o "${SKY_APP}" . ) 2>&1; then
-    echo "  SKY-BUILD-FAIL  ${slug} — go build failed"
-    SKIP=$(( SKIP + 1 ))
+    echo "  SKY-BUILD-FAIL  ${slug} — go build failed; comparison not performed"
+    FAIL=$(( FAIL + 1 ))
     continue
   fi
 
@@ -299,9 +299,18 @@ done
 
 echo ""
 echo "webview parity: ${PASS} pass, ${FAIL} fail, ${SKIP} skip"
+echo ""
+echo "  NOTE: sky-build-fail counts as FAIL — a comparison that did not run is not a pass."
+echo ""
 
-if [ "${FAIL}" -gt 0 ]; then
-  echo "VERDICT: FAIL — ${FAIL} example(s) exceeded the RMS threshold or had blank captures" >&2
+# Gate: zero real comparisons is a harness failure.
+if [ "${PASS}" -eq 0 ] && [ "${FAIL}" -eq 0 ]; then
+  echo "VERDICT: FAIL — harness performed 0 real comparisons (all ports skipped or absent)" >&2
   exit 1
 fi
-echo "VERDICT: PASS — all webview examples within RMS threshold"
+
+if [ "${FAIL}" -gt 0 ]; then
+  echo "VERDICT: FAIL — ${FAIL} example(s) had sky-build-fail, blank capture, or RMS diff above threshold" >&2
+  exit 1
+fi
+echo "VERDICT: PASS — ${PASS} comparison(s) passed, ${SKIP} skip(s)"
