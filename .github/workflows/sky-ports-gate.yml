@@ -37,7 +37,7 @@ jobs:
     env:
       CARGO_TARGET_DIR: ${{ github.workspace }}/.cache/ipe-target
       IPE_NO_SCCACHE: '1'
-      IPE_SWEEP_BUILD_TIMEOUT: '300'
+      IPE_SWEEP_BUILD_TIMEOUT: '600'
       IPE_AUTH_TOKEN_SECRET: ipe-ci-sweep-test-secret-0123456789-abcdef
       CARGO_HTTP_MULTIPLEXING: 'false'
       CARGO_NET_RETRY: '5'

@@ -488,9 +488,8 @@ patch = "rename-map+ipe-edit"
 go_ffi = false
 shape  = "web"
 verify = "serve"
-status = "broken"
-blocked = "cargo build times out: sqlx + axum dep graph exceeds build budget on constrained CI runners"
-notes = "sky.toml had no go.dependencies; manifest go_ffi was set in error. Patch adds type annotations for viewJob/viewSnapshot."
+status = "green"
+notes = "Web job-queue dashboard over SQLite — enqueue fast/slow/failing/batch jobs and persist/load snapshots. Heavy sqlx+chrono-tz+reqwest dep graph makes a cold build slow."
 
 [[example]]
 name = "19-skyforum"
