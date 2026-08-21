@@ -105,20 +105,39 @@ comparison value must match the column's type.
 ### Accessor recognition: the one compiler feature that unlocks the surface
 
 `.field` in Ipê is already `\r -> r.field`. To turn `.email` into a
-`Column User String`, the compiler must read the field *name* and *type* at the
-call site. This is the **same canon-stage elaboration `Codec.auto` uses** — the
-recognition path for reserved bindings (`Ffi.kernel` aliases). One new rule:
+`Column User String`, the compiler must read the field *name* and *type* — but
+`row` is not knowable when names resolve: it is fixed only by type inference,
+which unifies `Store.query users : Query User` and threads `row = User` through
+`where`/`eq`. Unlike `Codec.auto`, whose witness *names* a record whose fields
+are readable from a declared annotation before inference, an accessor names only
+a field; the record it projects from is *solve-derived*. So the recognition is a
+**post-inference (lowering-stage) elaboration**, not a canon rewrite, and rides
+the precedent already used for wildcard-`any` row parameters: a reserved
+binding's type scheme drives inference to solve a type variable to a concrete
+record, then lowering reads that solved record off the region table and
+specialises the emitted code.
 
-> When an accessor literal `.field` appears where a `Column row t` is expected,
-> canon rewrites it to the column handle for `field`: it reads the solved record
-> type `row`, confirms `field` exists (else a clean `IPE-…` diagnostic naming the
-> field and the type), takes the field's type as `t`, validates the derived SQL
+The leaf that carries a column (`eq`, `where`'s condition, `orderAsc`, the
+specs) is a **reserved binding** whose HM scheme presents its column parameter as
+the getter arrow `row -> t`, so an accessor literal `.field` unifies against it
+by ordinary inference (exactly as `List.sortBy .age users` solves the record
+from its sibling argument). The scheme is decoupled from the runtime
+representation: at lowering the accessor argument is recognised and **replaced**
+by a synthesised column handle carrying the derived, validated identifier and the
+field's codec — the runtime never receives a getter function. The one new rule:
+
+> When an accessor literal `.field` occupies a column parameter, lowering reads
+> the solved arrow `row -> t` for that argument, confirms `field` exists in the
+> solved record `row` (else a clean `IPE-…` diagnostic naming the field and the
+> record), takes the field's type as `t`, derives and validates the SQL
 > identifier (snake_case transform, `valid_sql_ident`), and emits the handle.
 
-This is a *literal* recognition, exactly like `Codec.auto`'s witness: `.field`
-must be an accessor literal, not an arbitrary `row -> t` function (an arbitrary
+This is a *literal* recognition, exactly like `Codec.auto`'s witness: the
+argument must be the accessor-literal lambda `\ipe_accessor_arg ->
+ipe_accessor_arg.field`, not an arbitrary `row -> t` function (an arbitrary
 projection has no column name). A non-literal in column position is a clean
-rejection pointing at the `.field` form — parse-don't-validate at the surface.
+fail-closed rejection at the same lowering seam — parse-don't-validate applied
+where the record is finally known.
 
 One feature, whole surface. Every place that took a stringly column now takes an
 accessor: `primaryKey .id`, `unique .email`, `index .createdAt`,
@@ -386,9 +405,12 @@ whatever store shape lands.
   `Codec.auto`; `Store a`, `fromCodec`, the typed `ColumnSpec` ADT, CRUD, the
   `Cond`→`SqlFragment` lowering, additive `migrate`. This is the foundation; land
   it first, stringly specs and all.
-- **Phase B — accessor recognition + typed columns** (Pillar 1): the canon-stage
-  `.field`→`Column row t` elaboration and the phantom-typed query leaves; migrate
-  the Phase-A specs from `"id"` to `.id`. One compiler feature, whole surface.
+- **Phase B — accessor recognition + typed columns** (Pillar 1): the
+  lowering-stage `.field`→`Column row t` elaboration (reading the solved record
+  off the region table, the wildcard-`any` precedent) and the phantom-typed query
+  leaves, whose column-taking bindings are reserved so their getter-arrow scheme
+  decouples from the runtime column handle; migrate the Phase-A specs from `"id"`
+  to `.id`. One compiler feature, whole surface.
 - **Phase C — first-class newtypes** (Pillar 2): `Codec.id`, newtype field
   derivation, and threading the newtype through the typed column handle to the
   query/get/delete seams.
