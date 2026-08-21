@@ -2354,6 +2354,14 @@ pub fn db_delete_where<E: Send + From<String> + 'static>(
         if let Some(reason) = frag.invalid {
             return IpeResult::Err(format!("db.deleteWhere: {reason}").into());
         }
+        if frag.sql.trim().is_empty() {
+            return IpeResult::Err(
+                "db.deleteWhere: refusing a delete with an empty WHERE clause \
+                 (an unconstrained mass-delete)"
+                    .to_string()
+                    .into(),
+            );
+        }
         let qtable = match SqlIdent::parse_plain(&table) {
             Some(t) => t,
             None => {
@@ -3945,6 +3953,128 @@ mod tests {
         let affected: IpeResult<String, i64> =
             db_delete_by_id(db, "todos".into(), id.to_string()).await;
         assert!(matches!(affected, IpeResult::Ok(1)));
+    }
+
+    fn where_eq_title(v: &str) -> SqlFragment {
+        SqlFragment {
+            sql: "title = ?".to_string(),
+            binds: vec![SqlParam::Text(v.to_string())],
+            invalid: None,
+        }
+    }
+
+    async fn insert_title(db: &Db, title: &str) {
+        let mut row = HashMap::new();
+        row.insert("title".to_string(), title.to_string());
+        let r: IpeResult<String, i64> = db_insert_row(db.clone(), "todos".into(), row).await;
+        assert!(
+            matches!(r, IpeResult::Ok(_)),
+            "insert {title} failed: {r:?}"
+        );
+    }
+
+    async fn count_title(db: &Db, title: &str) -> usize {
+        let rs: IpeResult<String, Vec<HashMap<String, String>>> = db_find_many_by_field(
+            db.clone(),
+            "todos".into(),
+            "title".into(),
+            title.to_string(),
+        )
+        .await;
+        match rs {
+            IpeResult::Ok(v) => v.len(),
+            IpeResult::Err(e) => panic!("count {title}: {e}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn db_delete_where_deletes_only_matching_rows() {
+        let db = fresh_db().await;
+        insert_title(&db, "a").await;
+        insert_title(&db, "b").await;
+        let affected: IpeResult<String, i64> =
+            db_delete_where(db.clone(), "todos".into(), where_eq_title("a")).await;
+        assert!(
+            matches!(affected, IpeResult::Ok(1)),
+            "expected 1 deleted, got {affected:?}"
+        );
+        assert_eq!(count_title(&db, "a").await, 0, "matching row must be gone");
+        assert_eq!(
+            count_title(&db, "b").await,
+            1,
+            "non-matching row must remain"
+        );
+    }
+
+    #[tokio::test]
+    async fn db_delete_where_refuses_empty_where_and_preserves_all_rows() {
+        let db = fresh_db().await;
+        insert_title(&db, "a").await;
+        insert_title(&db, "b").await;
+        let frag = SqlFragment {
+            sql: String::new(),
+            binds: vec![],
+            invalid: None,
+        };
+        let affected: IpeResult<String, i64> =
+            db_delete_where(db.clone(), "todos".into(), frag).await;
+        assert!(
+            matches!(affected, IpeResult::Err(_)),
+            "an empty WHERE must be refused, got {affected:?}"
+        );
+        assert_eq!(
+            count_title(&db, "a").await,
+            1,
+            "a refused mass-delete must delete nothing"
+        );
+        assert_eq!(count_title(&db, "b").await, 1);
+    }
+
+    #[tokio::test]
+    async fn db_update_where_updates_only_matching_rows() {
+        let db = fresh_db().await;
+        insert_title(&db, "a").await;
+        insert_title(&db, "b").await;
+        let set = vec![("title".to_string(), Some(SqlParam::Text("A2".to_string())))];
+        let affected: IpeResult<String, i64> =
+            db_update_where(db.clone(), "todos".into(), set, where_eq_title("a")).await;
+        assert!(
+            matches!(affected, IpeResult::Ok(1)),
+            "expected 1 updated, got {affected:?}"
+        );
+        assert_eq!(
+            count_title(&db, "A2").await,
+            1,
+            "matching row must be updated"
+        );
+        assert_eq!(count_title(&db, "b").await, 1, "non-matching row unchanged");
+    }
+
+    #[tokio::test]
+    async fn db_update_where_refuses_whitespace_where_and_changes_nothing() {
+        let db = fresh_db().await;
+        insert_title(&db, "a").await;
+        let set = vec![(
+            "title".to_string(),
+            Some(SqlParam::Text("mutated".to_string())),
+        )];
+        let frag = SqlFragment {
+            sql: "   ".to_string(),
+            binds: vec![],
+            invalid: None,
+        };
+        let affected: IpeResult<String, i64> =
+            db_update_where(db.clone(), "todos".into(), set, frag).await;
+        assert!(
+            matches!(affected, IpeResult::Err(_)),
+            "a whitespace-only WHERE must be refused, got {affected:?}"
+        );
+        assert_eq!(count_title(&db, "a").await, 1, "original row untouched");
+        assert_eq!(
+            count_title(&db, "mutated").await,
+            0,
+            "no mass-update may occur"
+        );
     }
 
     #[tokio::test]
