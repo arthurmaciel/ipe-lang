@@ -3,15 +3,17 @@
 #
 # For each green web-shape port in examples/sky/manifest.toml:
 #   1. Builds the Ipê port (ipe build + cargo build).
-#   2. Tries to build the Sky port (sky build + go build from original/).
+#   2. Builds the Sky port (sky build + go build from original/).
 #   3. Starts both HTTP servers and captures screenshots with Playwright Chromium
 #      (same-engine comparison; threshold RMS ≤ 8.0).
-#   4. Computes a perceptual RMS diff; reports PASS / FAIL / SKY-BUILD-FAIL.
+#   4. Computes a perceptual RMS diff; reports PASS or FAIL.
 #
-# SKY-BUILD-FAIL rows (sky API mismatch — e.g. v0.19.13 changed Live.app to a
-# builder API, breaking the record syntax used in the committed original/ ports)
-# are DATA, not harness errors.  They do not fail the job; they document which
-# ports cannot currently be compared against sky directly.
+# Honest verdict: SKY-BUILD-FAIL counts as FAIL — a port whose Sky side did not
+# build was not compared. A run with zero real comparisons also fails. The gate
+# must report a genuine comparison count, not a spurious green.
+#
+# install-sky-toolchain.sh resolves the latest Sky release from GitHub so
+# build failures due to a pinned stale version are visible immediately.
 #
 # This is NOT a required PR gate — it needs live sky + playwright + webkit deps.
 # The fast PR gate is sky-ports-gate.yml (offline, build-only).
@@ -34,9 +36,9 @@ jobs:
   sky-visual-parity:
     name: sky visual parity (web ports)
     runs-on: ubuntu-latest
-    # Non-gating: data collection + regression tracking.  Flip to false once
-    # all web ports have a stable sky-side comparison baseline.
-    continue-on-error: true
+    # Gating: a FAIL here means a real comparison failure — sky-build-fail,
+    # capture-fail, diff-above-threshold, or zero comparisons performed.
+    continue-on-error: false
 
     env:
       CARGO_TARGET_DIR: ${{ github.workspace }}/.cache/ipe-target
@@ -102,8 +104,7 @@ jobs:
         run: sky --version
 
       # Run the visual parity harness over all green web-shape ports.
-      # SKY-BUILD-FAIL rows (sky API incompatibility with committed originals)
-      # are printed as data and do not exit non-zero.
+      # SKY-BUILD-FAIL counts as FAIL — no comparison was performed.
       - name: Run visual parity check (web ports)
         run: |
           export CARGO_TARGET_DIR="${{ github.workspace }}/.cache/ipe-target"
