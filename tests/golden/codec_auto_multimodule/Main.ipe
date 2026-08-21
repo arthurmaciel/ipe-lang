@@ -1,0 +1,47 @@
+module Main exposing (main)
+
+-- Multi-module `Codec.auto` proof: the record type, its witness, and the
+-- `Codec.auto` derive all live in a DEPENDENCY module (`Lib.Rows`) whose
+-- `Ipe.Codec` import exposes only the `Codec` type, not its constructors. The
+-- entry module imports the derived codec and round-trips a value through it. A
+-- regression that only populated the derive's constructor scope for the entry
+-- module (never a dependency module) fails this fixture at `ipe` time with
+-- IPE-N0041.
+
+import Ipe.Io as Io
+import Ipe.Codec as Codec
+import Lib.Rows as Rows exposing (User, blankUser, userCodec)
+
+
+sample : User
+sample =
+    { id = 7
+    , email = "ada@example.com"
+    , active = True
+    , score = 9.5
+    }
+
+
+roundTrips : User -> Bool
+roundTrips u =
+    case Codec.fromJson userCodec (Codec.toJson userCodec u) of
+        Ok back ->
+            back.id
+                == u.id
+                && back.email
+                == u.email
+                && back.active
+                == u.active
+                && back.score
+                == u.score
+
+        Err _ ->
+            False
+
+
+main =
+    if roundTrips sample && roundTrips blankUser then
+        Io.println "codec-auto-multimodule-ok"
+
+    else
+        Io.println "codec-auto-multimodule-FAIL"

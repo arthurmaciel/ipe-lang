@@ -4,6 +4,8 @@
 
 mod support;
 
+#[path = "g_m4/golden_codec_auto_multimodule.rs"]
+mod golden_codec_auto_multimodule;
 #[path = "g_m4/golden_codec_roundtrip.rs"]
 mod golden_codec_roundtrip;
 #[path = "g_m4/golden_codec_shape.rs"]
