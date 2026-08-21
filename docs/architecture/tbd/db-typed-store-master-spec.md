@@ -427,6 +427,51 @@ within each phase, not a phase of their own.
 
 ---
 
+## Implementation status (resume anchor)
+
+Present state, so work resumes without re-deriving. Update as phases land. Live
+per-lane detail is in the campaign memory `codec-store-campaign-token-pause`.
+
+- **Phase A (codec + store core): SHIPPED.** `Codec` + `Codec.auto`, `fromCodec`,
+  `ColumnSpec`, CRUD, `Cond`→`SqlFragment`, DDL `create`, additive `migrate`, the
+  `Ipe.Db.Codec` bridge. The fluent record builder (`object/field/buildObject`) is
+  deliberately NOT shipped — a stored per-field function trips L0107
+  (no-functions-in-records); `Codec.auto` covers records, so this is won't-do-by-
+  design, not a gap.
+- **Phase B (accessor-typed columns): query surface MERGED, specs IN FLIGHT.**
+  - `Store.eq`/`eqBy` and the comparison/ordering leaves (`neq/gt/gte/lt/lte/like/
+    isNull/notNull/inList` + `…By` twins) are merged to main. Recognition is
+    LOWERING-stage (canon cannot — an accessor's record type is solve-derived);
+    each leaf is a getter-arrow-scheme kernel `(row -> t) -> …` whose lowering
+    intercept (`accessor_column`) validates the derived column; the runtime `Cond`
+    is untyped data (the phantom `row` is erased). A non-accessor in column
+    position is `IPE-L0145`, fail-closed.
+  - **KEY DECISION (Option A):** an enum/newtype wire form is not type-derivable,
+    and per-field codecs cannot be stored (function-in-record → L0107). So scalar
+    columns bind directly via plain `eq`; enum/newtype columns use
+    `eqBy codec .field v` (an explicit codec witness). Raw Dict-row stores are
+    demoted to `Ipe.Db.Store.Unsafe` (capability-gated).
+  - **IN FLIGHT: the accessor SPECS** — `primaryKey/serial/unique/defaultNow/
+    defaultText/defaultInt/touchOnUpdate` migrating `String`→accessor on branch
+    `accessor-specs` (reuses `accessor_column`). Guardian → merge is the next step.
+- **Phase C (per-column newtypes): NEXT, mostly free.** Cross-id type-safety
+  already holds — the accessor threads the field type, so `eq .author someFoodId`
+  is a compile error today. Remaining: `Codec.id` sugar, newtype field derivation,
+  and `Password`/`Secret` hash-on-write routing (the security-critical part —
+  guardian-gated).
+- **Phase D (row security / Pillar 3): NOT STARTED.** `Policy`/`Principal`/
+  `Secured`/`…As`, in-query + in-DB enforcement. Own design + guardian epic.
+- **Phase E (auto-migration / Pillar 4): NOT STARTED.** Only forward DDL `create`
+  exists — no `targetSchema` diff, introspection, hazard classifier, `ipe db plan/
+  sign/migrate`, or CI drift oracle. Data-preserving column/table renames are
+  design-gated. Own epic.
+- **Cross-cutting input/persistence split: NOT DONE** — no `Input`-type seam yet.
+
+Order: finish B-specs → C → D → E. Each compiler/security phase runs
+impl → Opus security-soundness guardian → merge.
+
+---
+
 ## Appendix — foundation surfaces
 
 The condensed surface the phases implement. Signatures are the contract; the
