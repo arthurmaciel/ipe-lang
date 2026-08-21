@@ -12991,6 +12991,24 @@ impl<'a> Lowerer<'a> {
             )
     }
 
+    /// is `(module, name)` the `Ipe.Db.Store.Cond` typed-query predicate —
+    /// module `["Ipe", "Db", "Store"]`, name `Cond`? Its `row` argument is a
+    /// PHANTOM: no `Cond` constructor carries a `row` value (the parameter ties
+    /// the predicate to the store's row type at the type-checker only). It is
+    /// dropped at lowering so the emitted enum is the non-generic
+    /// `IpeDbStoreCond`; otherwise every leaf construction (`Compare …`) leaves
+    /// the enum's type argument unconstrained at the point of construction — an
+    /// uninferrable `T` (E0283), exactly as for `Ipe.Cache.Cache`.
+    fn is_cond_con(&self, module: &[Symbol], name: Symbol) -> bool {
+        self.interner.resolve(name) == Some("Cond")
+            && matches!(
+                module,
+                [a, b, c] if self.interner.resolve(*a) == Some("Ipe")
+                    && self.interner.resolve(*b) == Some("Db")
+                    && self.interner.resolve(*c) == Some("Store")
+            )
+    }
+
     /// is `(module, name)` the `Ipe.Cache.Cache` opaque handle type —
     /// module `["Ipe", "Cache"]`, name `Cache`? Its `k`/`v` args are dropped at
     /// lowering (backed by the non-generic runtime `IpeCacheHandle`).
@@ -13021,7 +13039,23 @@ impl<'a> Lowerer<'a> {
     }
 
     fn lower_enum(&self, u: &canon::Union) -> DResult<EnumDef> {
-        let type_params = u.vars.clone();
+        // `Ipe.Db.Store.Cond row` carries a PHANTOM `row` (no constructor holds a
+        // `row` value — it ties the predicate to the store's row at the
+        // type-checker only). Emit the enum non-generic so its construction is
+        // type-determinate; the `is_cond_con` arms in `ir_type_from_ty` /
+        // `ir_type_from_canon` drop the matching type argument at every use site,
+        // so the decl and the references agree.
+        let cond_phantom = self.is_cond_con(&u.home, u.name);
+        let type_params = if cond_phantom {
+            Vec::new()
+        } else {
+            u.vars.clone()
+        };
+        // The variable-scope gate (Gate 1 below) checks each field var against the
+        // union's DECLARED vars, not the emitted generics — so the phantom `row`
+        // of `Cond` (present in `AndList (List (Cond row))` etc.) is a legal,
+        // declared variable even though it is erased from the emitted enum.
+        let gate_params = u.vars.clone();
         let mut variants = Vec::with_capacity(u.ctors.len());
         for ctor in &u.ctors {
             let mut fields = Vec::with_capacity(ctor.args.len());
@@ -13050,11 +13084,11 @@ impl<'a> Lowerer<'a> {
                 let mut vars = BTreeSet::new();
                 collect_type_vars(arg, &mut vars);
                 if !vars.iter().all(|v| {
-                    type_params.contains(v) || self.interner.resolve(*v).is_some_and(|n| n == "any")
+                    gate_params.contains(v) || self.interner.resolve(*v).is_some_and(|n| n == "any")
                 }) {
                     return Err(unsupported(ctor.span, Feature::Polymorphism));
                 }
-                let ir = self.ir_type_from_canon(arg, &type_params)?;
+                let ir = self.ir_type_from_canon(arg, &gate_params)?;
                 // Carrier normalization (Phase 2, enum payloads): a function
                 // DIRECTLY in a constructor payload is carried on the
                 // `Arc<dyn Fn>` carrier ([`IrType::SharedFun`]) so the enum is
@@ -14751,9 +14785,13 @@ impl<'a> Lowerer<'a> {
                     .contains_key(&(ModPath(home.clone()), *name)) =>
                 {
                     // drop the phantom `k`/`v` of `Ipe.Cache.Cache k v`
-                    // (backed by the non-generic `IpeCacheHandle`) — twin of the
-                    // solved-Ty arm; see its comment for the E0283 rationale.
-                    let ir_args = if self.is_cache_handle_con(home, *name) {
+                    // (backed by the non-generic `IpeCacheHandle`) and the phantom
+                    // `row` of `Ipe.Db.Store.Cond row` (untyped runtime data) —
+                    // twin of the solved-Ty arm; see its comment for the E0283
+                    // rationale.
+                    let ir_args = if self.is_cache_handle_con(home, *name)
+                        || self.is_cond_con(home, *name)
+                    {
                         Vec::new()
                     } else {
                         let mut v = Vec::with_capacity(args.len());
@@ -15866,7 +15904,9 @@ impl<'a> Lowerer<'a> {
                     // `Ipe.Cache` wrapper fns (`new : CacheCfg -> Task Error
                     // (Cache k v)` whose result no longer mentions them), an
                     // uninferrable `T` at the call site (E0283).
-                    let ir_args = if self.is_cache_handle_con(module, *name) {
+                    let ir_args = if self.is_cache_handle_con(module, *name)
+                        || self.is_cond_con(module, *name)
+                    {
                         Vec::new()
                     } else {
                         let mut v = Vec::with_capacity(args.len());
