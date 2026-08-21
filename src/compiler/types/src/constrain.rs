@@ -9439,6 +9439,9 @@ mod registry_phase_c_tests {
             K::DbFindWhere,
             K::DbDeleteWhere,
             K::DbUpdateWhere,
+            // Typed accessor query leaves (getter-arrow schemes, Ipê-new).
+            K::StoreEqCol,
+            K::StoreEqBy,
             // `Db.Decode.money` and `Db.Decode.bytes` — Ipê-NEW kernels (the
             // ancestor has no DbDec money/bytes routes), so they close genuine
             // holes rather than relocating legacy `kernel_ty` schemes. Their
