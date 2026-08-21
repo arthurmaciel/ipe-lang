@@ -12217,6 +12217,327 @@ impl<'a> Lowerer<'a> {
             })
     }
 
+    /// Look up the `FuncId` of a named `Ipe.Db.Store` helper by its spelling
+    /// (e.g. `"neqByNamed"`, `"inListNamed"`). A miss is a violated invariant —
+    /// the program used a Store kernel without linking `Ipe.Db.Store`.
+    fn store_named_func_id(&self, helper: &str) -> DResult<FuncId> {
+        let want = self.interner.lookup(helper).ok_or_else(|| {
+            bug(
+                "ipe_lower::store_named_func_id",
+                "Store helper name not interned — Ipe.Db.Store not linked",
+            )
+        })?;
+        self.func_ids
+            .iter()
+            .find_map(|((_home, name), id)| (*name == want).then_some(*id))
+            .ok_or_else(|| {
+                bug(
+                    "ipe_lower::store_named_func_id",
+                    "Ipe.Db.Store named helper not found",
+                )
+            })
+    }
+
+    /// Look up a `CompareOp` variant symbol by its constructor name. The variant
+    /// must be declared in `Ipe.Db.Store` (it is — the `CompareOp` union lives
+    /// there). A miss is a violated invariant.
+    fn compare_op_ctor(&self, ctor_name: &str) -> DResult<(ModPath, Symbol, Symbol)> {
+        self.find_user_ctor(ctor_name).ok_or_else(|| {
+            bug(
+                "ipe_lower::compare_op_ctor",
+                "Ipe.Db.Store CompareOp constructor not found",
+            )
+        })
+    }
+
+    /// The `CompareOp` variant symbol the given kernel maps to.
+    const fn kernel_compare_op_name(k: &Callee) -> Option<&'static str> {
+        match k {
+            Callee::Kernel(KernelFn::StoreNeqCol | KernelFn::StoreNeqBy) => Some("OpNeq"),
+            Callee::Kernel(KernelFn::StoreGtCol | KernelFn::StoreGtBy) => Some("OpGt"),
+            Callee::Kernel(KernelFn::StoreGteCol | KernelFn::StoreGteBy) => Some("OpGte"),
+            Callee::Kernel(KernelFn::StoreLtCol | KernelFn::StoreLtBy) => Some("OpLt"),
+            Callee::Kernel(KernelFn::StoreLteCol | KernelFn::StoreLteBy) => Some("OpLte"),
+            _ => None,
+        }
+    }
+
+    /// The `…ByNamed` stdlib helper name for a non-eq `…By` kernel.
+    const fn kernel_by_named_helper(k: &Callee) -> Option<&'static str> {
+        match k {
+            Callee::Kernel(KernelFn::StoreNeqBy) => Some("neqByNamed"),
+            Callee::Kernel(KernelFn::StoreGtBy) => Some("gtByNamed"),
+            Callee::Kernel(KernelFn::StoreGteBy) => Some("gteByNamed"),
+            Callee::Kernel(KernelFn::StoreLtBy) => Some("ltByNamed"),
+            Callee::Kernel(KernelFn::StoreLteBy) => Some("lteByNamed"),
+            _ => None,
+        }
+    }
+
+    /// Dispatch a non-eq scalar or codec comparison leaf (`neq`, `gt`, `gte`,
+    /// `lt`, `lte` and their `By` twins). The accessor argument names the
+    /// validated column. Scalar form lowers to `Compare OpXxx col sqlValue`; the
+    /// `By` form calls the corresponding `…ByNamed` helper with the column, codec,
+    /// and value.
+    fn lower_store_compare(&self, peek: &Callee, args: &[canon::Expr]) -> DResult<Expr> {
+        let is_by = matches!(
+            peek,
+            Callee::Kernel(
+                KernelFn::StoreNeqBy
+                    | KernelFn::StoreGtBy
+                    | KernelFn::StoreGteBy
+                    | KernelFn::StoreLtBy
+                    | KernelFn::StoreLteBy,
+            )
+        );
+        if is_by {
+            let (Some(codec), Some(acc), Some(value)) = (args.first(), args.get(1), args.get(2))
+            else {
+                return Err(bug("ipe_lower::lower_store_compare", "Store.*By arity < 3"));
+            };
+            let (column, _field_ty) = self.accessor_column(acc)?;
+            let lowered_codec = self.lower_expr(codec)?;
+            let lowered_value = self.lower_expr(value)?;
+            let helper = Self::kernel_by_named_helper(peek).ok_or_else(|| {
+                bug(
+                    "ipe_lower::lower_store_compare",
+                    "no …ByNamed helper for kernel",
+                )
+            })?;
+            let id = self.store_named_func_id(helper)?;
+            return Ok(Expr::Call {
+                callee: Callee::Func(id),
+                args: vec![Expr::Str(column), lowered_codec, lowered_value],
+                pin: CallPin::None,
+                on_form: OnFormKind::NotForm,
+            });
+        }
+        // Scalar form.
+        let (Some(acc), Some(value)) = (args.first(), args.get(1)) else {
+            return Err(bug(
+                "ipe_lower::lower_store_compare",
+                "Store.* scalar arity < 2",
+            ));
+        };
+        let (column, field_ty) = self.accessor_column(acc)?;
+        let lowered_value = self.lower_expr(value)?;
+        let sql_value = self.scalar_sql_value(field_ty, &column, value.span, lowered_value)?;
+        let op_name = Self::kernel_compare_op_name(peek).ok_or_else(|| {
+            bug(
+                "ipe_lower::lower_store_compare",
+                "no CompareOp name for kernel",
+            )
+        })?;
+        self.build_compare_op(op_name, column, sql_value)
+    }
+
+    /// Build `Compare OpXxx column sql_value` using the named `CompareOp` ctor.
+    fn build_compare_op(
+        &self,
+        op_ctor_name: &str,
+        column: String,
+        sql_value: Expr,
+    ) -> DResult<Expr> {
+        let ids = self.store_cond_ids()?;
+        let (op_home, compareop_ty, op_variant) = self.compare_op_ctor(op_ctor_name)?;
+        let _ = op_home; // the home is determined by `ids`; we just need the ctor sym
+        let op = Expr::Ctor {
+            home: ids.home.clone(),
+            ty: compareop_ty,
+            variant: op_variant,
+            args: vec![],
+        };
+        Ok(Expr::Ctor {
+            home: ids.home,
+            ty: ids.cond_ty,
+            variant: ids.compare_variant,
+            args: vec![op, Expr::Str(column), sql_value],
+        })
+    }
+
+    /// Lower `Store.like .field pattern` to `Like col pattern_string`. The
+    /// accessor must name a `String` field (pinned by the type scheme); the
+    /// pattern string is lowered as-is and binds as a parameter at SQL time.
+    fn lower_store_like(&self, args: &[canon::Expr]) -> DResult<Expr> {
+        let (Some(acc), Some(pattern)) = (args.first(), args.get(1)) else {
+            return Err(bug("ipe_lower::lower_store_like", "Store.like arity < 2"));
+        };
+        let (column, _field_ty) = self.accessor_column(acc)?;
+        let lowered_pattern = self.lower_expr(pattern)?;
+        let ids = self.store_cond_ids()?;
+        let like_variant = self.interner.lookup("Like").ok_or_else(|| {
+            bug(
+                "ipe_lower::lower_store_like",
+                "Ipe.Db.Store `Like` constructor not interned",
+            )
+        })?;
+        Ok(Expr::Ctor {
+            home: ids.home,
+            ty: ids.cond_ty,
+            variant: like_variant,
+            args: vec![Expr::Str(column), lowered_pattern],
+        })
+    }
+
+    /// Lower `Store.isNull .field` to `IsNull col`. The accessor names the
+    /// validated column; no value argument.
+    fn lower_store_isnull(&self, args: &[canon::Expr]) -> DResult<Expr> {
+        let Some(acc) = args.first() else {
+            return Err(bug(
+                "ipe_lower::lower_store_isnull",
+                "Store.isNull arity < 1",
+            ));
+        };
+        let (column, _field_ty) = self.accessor_column(acc)?;
+        let ids = self.store_cond_ids()?;
+        let is_null_variant = self.interner.lookup("IsNull").ok_or_else(|| {
+            bug(
+                "ipe_lower::lower_store_isnull",
+                "Ipe.Db.Store `IsNull` constructor not interned",
+            )
+        })?;
+        Ok(Expr::Ctor {
+            home: ids.home,
+            ty: ids.cond_ty,
+            variant: is_null_variant,
+            args: vec![Expr::Str(column)],
+        })
+    }
+
+    /// Lower `Store.notNull .field` to `NotNull col`.
+    fn lower_store_notnull(&self, args: &[canon::Expr]) -> DResult<Expr> {
+        let Some(acc) = args.first() else {
+            return Err(bug(
+                "ipe_lower::lower_store_notnull",
+                "Store.notNull arity < 1",
+            ));
+        };
+        let (column, _field_ty) = self.accessor_column(acc)?;
+        let ids = self.store_cond_ids()?;
+        let not_null_variant = self.interner.lookup("NotNull").ok_or_else(|| {
+            bug(
+                "ipe_lower::lower_store_notnull",
+                "Ipe.Db.Store `NotNull` constructor not interned",
+            )
+        })?;
+        Ok(Expr::Ctor {
+            home: ids.home,
+            ty: ids.cond_ty,
+            variant: not_null_variant,
+            args: vec![Expr::Str(column)],
+        })
+    }
+
+    /// Lower `Store.inList .field values` to `inListNamed col (List.map sqlWrap
+    /// values)`. The scalar `values` are mapped through the field type's
+    /// `SqlXxx` constructor by calling the stdlib `inListNamed` helper with the
+    /// column and the already-mapped `List SqlValue`.
+    fn lower_store_inlist(&self, args: &[canon::Expr]) -> DResult<Expr> {
+        let (Some(acc), Some(values)) = (args.first(), args.get(1)) else {
+            return Err(bug(
+                "ipe_lower::lower_store_inlist",
+                "Store.inList arity < 2",
+            ));
+        };
+        let (column, field_ty) = self.accessor_column(acc)?;
+        let lowered_values = self.lower_expr(values)?;
+        // Build a lambda `\v -> SqlXxx v` matching the field type, then emit
+        // `List.map (\v -> SqlXxx v) values` to produce `List SqlValue`.
+        let wrap_lambda = self.scalar_sql_wrap_lambda(field_ty, &column, acc.span)?;
+        let mapped = Expr::Call {
+            callee: Callee::Kernel(KernelFn::ListMap),
+            args: vec![wrap_lambda, lowered_values],
+            pin: CallPin::None,
+            on_form: OnFormKind::NotForm,
+        };
+        let id = self.store_named_func_id("inListNamed")?;
+        Ok(Expr::Call {
+            callee: Callee::Func(id),
+            args: vec![Expr::Str(column), mapped],
+            pin: CallPin::None,
+            on_form: OnFormKind::NotForm,
+        })
+    }
+
+    /// Lower `Store.inListBy codec .field values` to `inListByNamed col codec
+    /// values`.
+    fn lower_store_inlist_by(&self, args: &[canon::Expr]) -> DResult<Expr> {
+        let (Some(codec), Some(acc), Some(values)) = (args.first(), args.get(1), args.get(2))
+        else {
+            return Err(bug(
+                "ipe_lower::lower_store_inlist_by",
+                "Store.inListBy arity < 3",
+            ));
+        };
+        let (column, _field_ty) = self.accessor_column(acc)?;
+        let lowered_codec = self.lower_expr(codec)?;
+        let lowered_values = self.lower_expr(values)?;
+        let id = self.store_named_func_id("inListByNamed")?;
+        Ok(Expr::Call {
+            callee: Callee::Func(id),
+            args: vec![Expr::Str(column), lowered_codec, lowered_values],
+            pin: CallPin::None,
+            on_form: OnFormKind::NotForm,
+        })
+    }
+
+    /// Build a single-parameter lambda `\v -> SqlXxx v` for the scalar field
+    /// type `field_ty`. Used by `lower_store_inlist` to map a `List t` to a
+    /// `List SqlValue` at the IR level. Fails closed (IPE-L0145) when `field_ty`
+    /// is not a scalar, directing the caller to use `inListBy` + codec.
+    fn scalar_sql_wrap_lambda(&self, field_ty: &Ty, field_name: &str, span: Span) -> DResult<Expr> {
+        // Determine the SqlXxx variant and the parameter's IR type.
+        let (variant, param_ir_ty) = match field_ty {
+            Ty::Con { name, .. } => match self.resolve(*name)? {
+                "String" => (self.builtins.sql_string, IrType::Str),
+                "Int" => (self.builtins.sql_int, IrType::Int),
+                "Bool" => (self.builtins.sql_bool, IrType::Bool),
+                "Float" => (self.builtins.sql_float, IrType::Float),
+                other => {
+                    return Err(unsupported_store_eq(
+                        span,
+                        StoreEqAccessorDefect::NonScalarField {
+                            field: field_name.into(),
+                            found: other.into(),
+                        },
+                    ));
+                }
+            },
+            _ => {
+                return Err(unsupported_store_eq(
+                    span,
+                    StoreEqAccessorDefect::NonScalarField {
+                        field: field_name.into(),
+                        found: "a non-scalar type".into(),
+                    },
+                ));
+            }
+        };
+        // Pick a fresh symbol for the lambda parameter. Reuse the first
+        // eta-expand pool slot (sufficient for a one-parameter lambda).
+        let param_sym = self.eta_params.first().copied().ok_or_else(|| {
+            bug(
+                "ipe_lower::scalar_sql_wrap_lambda",
+                "eta-parameter pool is empty",
+            )
+        })?;
+        let sqlvalue_ir = IrType::Enum {
+            home: ModPath(Vec::new()),
+            name: self.builtins.sqlvalue,
+            args: Vec::new(),
+        };
+        Ok(Expr::Lambda {
+            params: vec![(param_sym, param_ir_ty)],
+            ret: sqlvalue_ir,
+            body: Box::new(Expr::Ctor {
+                home: ModPath(Vec::new()),
+                ty: self.builtins.sqlvalue,
+                variant,
+                args: vec![Expr::Var(param_sym)],
+            }),
+        })
+    }
+
     /// Run the pass, producing the single-module program. On error, returns the
     /// diagnostic paired with the `home` (module byte-namespace path) of the def
     /// that produced it, so the driver attributes a lowering diagnostic to the
@@ -17950,15 +18271,47 @@ impl<'a> Lowerer<'a> {
                         }));
                     }
                 }
-                // `Store.eq .field value` / `Store.eqBy codec .field value` — the
-                // typed accessor query leaves. See `lower_store_eq` for how the
-                // accessor names the validated column and the value binds as a
-                // parameter (never reaching SQL as text).
+                // Accessor-typed query leaves — the accessor argument (`.field`)
+                // becomes the validated column identifier at lowering. See
+                // `lower_store_compare` for the dispatch detail.
                 Callee::Kernel(KernelFn::StoreEqCol) if args.len() == 2 => {
                     return Ok(Intercepted::Done(self.lower_store_eq(&peek, args)?));
                 }
                 Callee::Kernel(KernelFn::StoreEqBy) if args.len() == 3 => {
                     return Ok(Intercepted::Done(self.lower_store_eq(&peek, args)?));
+                }
+                Callee::Kernel(
+                    KernelFn::StoreNeqCol
+                    | KernelFn::StoreGtCol
+                    | KernelFn::StoreGteCol
+                    | KernelFn::StoreLtCol
+                    | KernelFn::StoreLteCol,
+                ) if args.len() == 2 => {
+                    return Ok(Intercepted::Done(self.lower_store_compare(&peek, args)?));
+                }
+                Callee::Kernel(
+                    KernelFn::StoreNeqBy
+                    | KernelFn::StoreGtBy
+                    | KernelFn::StoreGteBy
+                    | KernelFn::StoreLtBy
+                    | KernelFn::StoreLteBy,
+                ) if args.len() == 3 => {
+                    return Ok(Intercepted::Done(self.lower_store_compare(&peek, args)?));
+                }
+                Callee::Kernel(KernelFn::StoreLike) if args.len() == 2 => {
+                    return Ok(Intercepted::Done(self.lower_store_like(args)?));
+                }
+                Callee::Kernel(KernelFn::StoreIsNull) if args.len() == 1 => {
+                    return Ok(Intercepted::Done(self.lower_store_isnull(args)?));
+                }
+                Callee::Kernel(KernelFn::StoreNotNull) if args.len() == 1 => {
+                    return Ok(Intercepted::Done(self.lower_store_notnull(args)?));
+                }
+                Callee::Kernel(KernelFn::StoreInListCol) if args.len() == 2 => {
+                    return Ok(Intercepted::Done(self.lower_store_inlist(args)?));
+                }
+                Callee::Kernel(KernelFn::StoreInListBy) if args.len() == 3 => {
+                    return Ok(Intercepted::Done(self.lower_store_inlist_by(args)?));
                 }
                 _ => {}
             }
@@ -20338,7 +20691,10 @@ impl<'a> Lowerer<'a> {
                 | KernelFn::JwtRs256
                 // ── PubSub arity-1 ──────────────────────────────
                 // `PubSub.topic : String -> Topic a`
-                | KernelFn::PubSubTopic,
+                | KernelFn::PubSubTopic
+                // `Store.isNull` / `Store.notNull` — arity 1 (accessor only).
+                | KernelFn::StoreIsNull
+                | KernelFn::StoreNotNull,
             ) => Ok(1),
             Callee::Kernel(
                 KernelFn::StringAppend
@@ -20362,10 +20718,18 @@ impl<'a> Lowerer<'a> {
                 | KernelFn::StringFilter
                 | KernelFn::StringAny
                 | KernelFn::StringAll
-                // `Store.eq : (row -> t) -> t -> Cond` — arity 2. Intercepted at
-                // lowering (the accessor argument becomes the validated column),
-                // so this arity is only the defensive fallback count.
+                // `Store.eq` / `Store.neq` / `Store.gt` / `Store.gte` / `Store.lt`
+                // / `Store.lte` / `Store.like` / `Store.inList` — arity 2, all
+                // intercepted at lowering. These arities are only defensive fallback
+                // counts; the intercept fires before the generic arity dispatch.
                 | KernelFn::StoreEqCol
+                | KernelFn::StoreNeqCol
+                | KernelFn::StoreGtCol
+                | KernelFn::StoreGteCol
+                | KernelFn::StoreLtCol
+                | KernelFn::StoreLteCol
+                | KernelFn::StoreLike
+                | KernelFn::StoreInListCol
                 | KernelFn::ListMap
                 | KernelFn::ListFilter
                 | KernelFn::ListMember
@@ -20684,10 +21048,17 @@ impl<'a> Lowerer<'a> {
                 | KernelFn::TaskMap2
                 // `Config.map2` — arity 3
                 | KernelFn::ConfigMap2
-                // `Store.eqBy : Codec t -> (row -> t) -> t -> Cond` — arity 3.
-                // Intercepted at lowering (the accessor argument becomes the
-                // validated column), so this arity is only the defensive fallback.
-                | KernelFn::StoreEqBy,
+                // `Store.eqBy` / `Store.neqBy` / `Store.gtBy` / `Store.gteBy` /
+                // `Store.ltBy` / `Store.lteBy` / `Store.inListBy` — arity 3 (codec
+                // + accessor + value/list). Intercepted at lowering; these arities
+                // are defensive fallback counts.
+                | KernelFn::StoreEqBy
+                | KernelFn::StoreNeqBy
+                | KernelFn::StoreGtBy
+                | KernelFn::StoreGteBy
+                | KernelFn::StoreLtBy
+                | KernelFn::StoreLteBy
+                | KernelFn::StoreInListBy,
             ) => Ok(3),
             // ── JsonDec arity-4 ─────────────────────────────────────────
             Callee::Kernel(
@@ -22155,6 +22526,21 @@ impl<'a> Lowerer<'a> {
                     // these arms are the legacy fallback for the pre-resolved id.
                     ("Store", "eq") => Ok(Callee::Kernel(KernelFn::StoreEqCol)),
                     ("Store", "eqBy") => Ok(Callee::Kernel(KernelFn::StoreEqBy)),
+                    ("Store", "neq") => Ok(Callee::Kernel(KernelFn::StoreNeqCol)),
+                    ("Store", "neqBy") => Ok(Callee::Kernel(KernelFn::StoreNeqBy)),
+                    ("Store", "gt") => Ok(Callee::Kernel(KernelFn::StoreGtCol)),
+                    ("Store", "gtBy") => Ok(Callee::Kernel(KernelFn::StoreGtBy)),
+                    ("Store", "gte") => Ok(Callee::Kernel(KernelFn::StoreGteCol)),
+                    ("Store", "gteBy") => Ok(Callee::Kernel(KernelFn::StoreGteBy)),
+                    ("Store", "lt") => Ok(Callee::Kernel(KernelFn::StoreLtCol)),
+                    ("Store", "ltBy") => Ok(Callee::Kernel(KernelFn::StoreLtBy)),
+                    ("Store", "lte") => Ok(Callee::Kernel(KernelFn::StoreLteCol)),
+                    ("Store", "lteBy") => Ok(Callee::Kernel(KernelFn::StoreLteBy)),
+                    ("Store", "like") => Ok(Callee::Kernel(KernelFn::StoreLike)),
+                    ("Store", "isNull") => Ok(Callee::Kernel(KernelFn::StoreIsNull)),
+                    ("Store", "notNull") => Ok(Callee::Kernel(KernelFn::StoreNotNull)),
+                    ("Store", "inList") => Ok(Callee::Kernel(KernelFn::StoreInListCol)),
+                    ("Store", "inListBy") => Ok(Callee::Kernel(KernelFn::StoreInListBy)),
                     // ── Secret kernels ──────────────────────────
                     ("Secret", "fromString") => Ok(Callee::Kernel(KernelFn::SecretFromString)),
                     ("Secret", "reveal") => Ok(Callee::Kernel(KernelFn::SecretReveal)),

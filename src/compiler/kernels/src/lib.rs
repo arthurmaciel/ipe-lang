@@ -1367,6 +1367,44 @@ pub enum StdlibKernel {
     /// column identifier and the value is bound through the codec, so the same
     /// audited `Cond`→`SqlFragment` path applies.
     StoreEqBy,
+    /// `Store.neq : (row -> t) -> t -> Cond` — accessor-typed not-equal leaf.
+    /// Mirrors `StoreEqCol` but emits `OpNeq` in the `Compare` constructor.
+    StoreNeqCol,
+    /// `Store.neqBy : Codec t -> (row -> t) -> t -> Cond` — codec twin of
+    /// `StoreNeqCol`. Mirrors `StoreEqBy` with `OpNeq`.
+    StoreNeqBy,
+    /// `Store.gt : (row -> t) -> t -> Cond` — accessor-typed greater-than leaf.
+    StoreGtCol,
+    /// `Store.gtBy : Codec t -> (row -> t) -> t -> Cond` — codec twin.
+    StoreGtBy,
+    /// `Store.gte : (row -> t) -> t -> Cond` — accessor-typed ≥ leaf.
+    StoreGteCol,
+    /// `Store.gteBy : Codec t -> (row -> t) -> t -> Cond` — codec twin.
+    StoreGteBy,
+    /// `Store.lt : (row -> t) -> t -> Cond` — accessor-typed < leaf.
+    StoreLtCol,
+    /// `Store.ltBy : Codec t -> (row -> t) -> t -> Cond` — codec twin.
+    StoreLtBy,
+    /// `Store.lte : (row -> t) -> t -> Cond` — accessor-typed ≤ leaf.
+    StoreLteCol,
+    /// `Store.lteBy : Codec t -> (row -> t) -> t -> Cond` — codec twin.
+    StoreLteBy,
+    /// `Store.like : (row -> String) -> String -> Cond` — accessor-typed LIKE
+    /// leaf. The accessor must name a `String` field; the pattern is a bound
+    /// parameter (wildcards are data, never SQL text).
+    StoreLike,
+    /// `Store.isNull : (row -> t) -> Cond` — accessor-typed IS NULL leaf.
+    /// Arity 1: only the accessor (column name), no value.
+    StoreIsNull,
+    /// `Store.notNull : (row -> t) -> Cond` — accessor-typed IS NOT NULL leaf.
+    StoreNotNull,
+    /// `Store.inList : (row -> t) -> List t -> Cond` — accessor-typed IN-list
+    /// leaf for scalar fields. Each element binds as a parameter; an empty
+    /// list lowers to the always-false `Cond` (`OrList []`).
+    StoreInListCol,
+    /// `Store.inListBy : Codec t -> (row -> t) -> List t -> Cond` — codec
+    /// twin. Each element is projected through the codec; dropped on failure.
+    StoreInListBy,
     // ── Db.Decode ───────────────────────────────────────────────────────────
     DbDecString,
     DbDecInt,
@@ -3070,6 +3108,27 @@ impl StdlibKernel {
             // the passed codec), so the runtime-fn name is a never-called
             // placeholder like `StoreEqCol`.
             Self::StoreEqBy => d("Store", "eqBy", 3, Pure, "store_eq_by"),
+            // All remaining accessor-typed leaves are lowered inline (the accessor
+            // becomes the validated column), so their runtime-fn names are
+            // never-called placeholders — the same class as `StoreEqCol`.
+            Self::StoreNeqCol => d("Store", "neq", 2, Pure, "store_neq_col"),
+            Self::StoreNeqBy => d("Store", "neqBy", 3, Pure, "store_neq_by"),
+            Self::StoreGtCol => d("Store", "gt", 2, Pure, "store_gt_col"),
+            Self::StoreGtBy => d("Store", "gtBy", 3, Pure, "store_gt_by"),
+            Self::StoreGteCol => d("Store", "gte", 2, Pure, "store_gte_col"),
+            Self::StoreGteBy => d("Store", "gteBy", 3, Pure, "store_gte_by"),
+            Self::StoreLtCol => d("Store", "lt", 2, Pure, "store_lt_col"),
+            Self::StoreLtBy => d("Store", "ltBy", 3, Pure, "store_lt_by"),
+            Self::StoreLteCol => d("Store", "lte", 2, Pure, "store_lte_col"),
+            Self::StoreLteBy => d("Store", "lteBy", 3, Pure, "store_lte_by"),
+            // `Store.like` — arity 2 (accessor + pattern string).
+            Self::StoreLike => d("Store", "like", 2, Pure, "store_like"),
+            // `Store.isNull` / `Store.notNull` — arity 1 (accessor only).
+            Self::StoreIsNull => d("Store", "isNull", 1, Pure, "store_is_null"),
+            Self::StoreNotNull => d("Store", "notNull", 1, Pure, "store_not_null"),
+            // `Store.inList` / `Store.inListBy` — arity 2 / 3.
+            Self::StoreInListCol => d("Store", "inList", 2, Pure, "store_in_list_col"),
+            Self::StoreInListBy => d("Store", "inListBy", 3, Pure, "store_in_list_by"),
             // ── Db.Decode ───────────────────────────────────────────────────
             Self::DbDecString => d("Db.Decode", "string", 1, Db, "db_decode_string"),
             Self::DbDecInt => d("Db.Decode", "int", 1, Db, "db_decode_int"),
@@ -4421,6 +4480,21 @@ impl StdlibKernel {
         Self::DbDefaultMigration,
         Self::StoreEqCol,
         Self::StoreEqBy,
+        Self::StoreNeqCol,
+        Self::StoreNeqBy,
+        Self::StoreGtCol,
+        Self::StoreGtBy,
+        Self::StoreGteCol,
+        Self::StoreGteBy,
+        Self::StoreLtCol,
+        Self::StoreLtBy,
+        Self::StoreLteCol,
+        Self::StoreLteBy,
+        Self::StoreLike,
+        Self::StoreIsNull,
+        Self::StoreNotNull,
+        Self::StoreInListCol,
+        Self::StoreInListBy,
         // Db.Decode
         Self::DbDecString,
         Self::DbDecInt,
@@ -8590,6 +8664,21 @@ impl StdlibKernel {
             | Self::CharIsOctDigit
             | Self::StoreEqCol
             | Self::StoreEqBy
+            | Self::StoreNeqCol
+            | Self::StoreNeqBy
+            | Self::StoreGtCol
+            | Self::StoreGtBy
+            | Self::StoreGteCol
+            | Self::StoreGteBy
+            | Self::StoreLtCol
+            | Self::StoreLtBy
+            | Self::StoreLteCol
+            | Self::StoreLteBy
+            | Self::StoreLike
+            | Self::StoreIsNull
+            | Self::StoreNotNull
+            | Self::StoreInListCol
+            | Self::StoreInListBy
             | Self::ListMap
             | Self::ListFilter
             | Self::ListFoldl

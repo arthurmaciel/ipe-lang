@@ -8,6 +8,8 @@ mod support;
 mod golden_db_get_alias_row;
 #[path = "g_db/golden_db_get_iperow_bound.rs"]
 mod golden_db_get_iperow_bound;
+#[path = "g_db/golden_db_store_accessor_leaves.rs"]
+mod golden_db_store_accessor_leaves;
 #[path = "g_db/golden_db_wrapper_empty_params_165.rs"]
 mod golden_db_wrapper_empty_params_165;
 #[path = "g_db/golden_i177_db_get_false_positive.rs"]

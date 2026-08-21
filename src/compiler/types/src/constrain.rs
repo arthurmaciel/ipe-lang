@@ -5633,6 +5633,36 @@ impl<'a> Builder<'a> {
                 fun(fun(var(0), var(1)), fun(var(1), cond(var(0)))),
             ),
 
+            // Ordering and inequality comparison leaves — same getter-arrow scheme
+            // as `StoreEqCol` / `StoreEqBy`.
+            K::StoreNeqCol | K::StoreGtCol | K::StoreGteCol | K::StoreLtCol | K::StoreLteCol => {
+                fun(fun(var(0), var(1)), fun(var(1), cond(var(0))))
+            }
+            K::StoreNeqBy | K::StoreGtBy | K::StoreGteBy | K::StoreLtBy | K::StoreLteBy => fun(
+                codec(var(1)),
+                fun(fun(var(0), var(1)), fun(var(1), cond(var(0)))),
+            ),
+
+            // `Store.like : (row -> String) -> String -> Cond row` — the accessor
+            // must name a `String` field (pinned by the getter-arrow scheme); the
+            // pattern is a plain `String` parameter.
+            K::StoreLike => fun(fun(var(0), string()), fun(string(), cond(var(0)))),
+
+            // `Store.isNull : (row -> t) -> Cond row` — arity 1, accessor only.
+            // `Store.notNull : (row -> t) -> Cond row` — same shape.
+            K::StoreIsNull | K::StoreNotNull => fun(fun(var(0), var(1)), cond(var(0))),
+
+            // `Store.inList : (row -> t) -> List t -> Cond row` — the list carries
+            // values of the same type as the accessor's field.
+            K::StoreInListCol => {
+                fun(fun(var(0), var(1)), fun(list(var(1)), cond(var(0))))
+            }
+            // `Store.inListBy : Codec t -> (row -> t) -> List t -> Cond row`.
+            K::StoreInListBy => fun(
+                codec(var(1)),
+                fun(fun(var(0), var(1)), fun(list(var(1)), cond(var(0)))),
+            ),
+
             // ── Db.Decode ──
             K::DbDecString => fun(string(), dec(string())),
             K::DbDecInt => fun(string(), dec(int())),
@@ -9442,6 +9472,22 @@ mod registry_phase_c_tests {
             // Typed accessor query leaves (getter-arrow schemes, Ipê-new).
             K::StoreEqCol,
             K::StoreEqBy,
+            // Accessor-typed comparison leaves (Ipê-new, same burndown family).
+            K::StoreNeqCol,
+            K::StoreNeqBy,
+            K::StoreGtCol,
+            K::StoreGtBy,
+            K::StoreGteCol,
+            K::StoreGteBy,
+            K::StoreLtCol,
+            K::StoreLtBy,
+            K::StoreLteCol,
+            K::StoreLteBy,
+            K::StoreLike,
+            K::StoreIsNull,
+            K::StoreNotNull,
+            K::StoreInListCol,
+            K::StoreInListBy,
             // `Db.Decode.money` and `Db.Decode.bytes` — Ipê-NEW kernels (the
             // ancestor has no DbDec money/bytes routes), so they close genuine
             // holes rather than relocating legacy `kernel_ty` schemes. Their
