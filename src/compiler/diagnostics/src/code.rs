@@ -431,6 +431,11 @@ code! {
     /// a non-record value is passed at a row-generic parameter position — only a
     /// record can carry the `IpeHas*` witness bound the callee's body requires
     IPE_L0144 = "IPE-L0144", "argument at a row-generic position is not a record", "IPE-L0144";
+    /// a `Store.eq` / `Store.eqBy` column argument is not a usable field accessor:
+    /// not a bare `.field` accessor, its field is absent from the row, its field
+    /// type is not a scalar under plain `eq` (needs `eqBy` + codec), or the
+    /// derived column name is not a valid SQL identifier
+    IPE_L0145 = "IPE-L0145", "a Store.eq column argument is not a usable field accessor", "IPE-L0145";
     /// expression nests too deeply for the backend
     IPE_L0200 = "IPE-L0200", "expression nests too deeply for the backend", "IPE-L0200";
 

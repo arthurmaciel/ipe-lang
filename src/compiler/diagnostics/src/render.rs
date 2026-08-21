@@ -34,7 +34,7 @@ use crate::diagnostic::{
     AppShape, Applicability, CaseDefect, CodecAutoRejection, ConsentError, Diagnostic, Expected,
     ExpectedSet, ExposingDefect, Feature, FfiError, HeaderDefect, HelpLine, Hint, IfDefect,
     LetDefect, LowerError, NameError, ParseError, SandboxError, SealRejection, SpanRole,
-    Suggestion, TokenKind, TyDoc, TypeDeclDefect, TypeError,
+    StoreEqAccessorDefect, Suggestion, TokenKind, TyDoc, TypeDeclDefect, TypeError,
 };
 use crate::span::Span;
 
@@ -657,6 +657,25 @@ fn lower_prose(msg: &LowerError) -> String {
                 found = an_article(found)
             )
         }
+        LowerError::StoreEqAccessorInvalid(defect) => match defect {
+            StoreEqAccessorDefect::NotAnAccessor => {
+                "A `Store.eq` / `Store.eqBy` column must be a bare field accessor \
+                 like `.age`."
+                    .to_string()
+            }
+            StoreEqAccessorDefect::UnknownField { field } => {
+                format!("This row has no `{field}` field for the query column.")
+            }
+            StoreEqAccessorDefect::NonScalarField { field, found } => {
+                format!(
+                    "`{field}` is `{found}`, not a scalar (String / Int / Bool / \
+                     Float). Use `Store.eqBy` with the field's codec."
+                )
+            }
+            StoreEqAccessorDefect::InvalidColumn { column } => {
+                format!("`{column}` is not a valid SQL column name.")
+            }
+        },
     }
 }
 
@@ -1624,6 +1643,33 @@ fn lower_label(msg: &LowerError) -> String {
                 found = an_article(found)
             )
         }
+        LowerError::StoreEqAccessorInvalid(defect) => match defect {
+            StoreEqAccessorDefect::NotAnAccessor => {
+                "a typed query column is a bare field accessor — write `Store.eq .age 18`, \
+                 not a let-bound name or a computed lambda; the accessor names the column"
+                    .to_string()
+            }
+            StoreEqAccessorDefect::UnknownField { field } => {
+                format!(
+                    "the accessor reads a `{field}` field the row type does not declare — \
+                     name a field that exists on the store's row"
+                )
+            }
+            StoreEqAccessorDefect::NonScalarField { field, found } => {
+                format!(
+                    "`{field}` has type `{found}`, which plain `Store.eq` cannot bind — \
+                     only String / Int / Bool / Float are scalar. For an enum or newtype \
+                     column, use `Store.eqBy` with the field's codec so its wire form is \
+                     projected to a bound value"
+                )
+            }
+            StoreEqAccessorDefect::InvalidColumn { column } => {
+                format!(
+                    "the column name `{column}` derived from the accessor is not a valid \
+                     SQL identifier (letters, digits, and underscore only)"
+                )
+            }
+        },
     }
 }
 
