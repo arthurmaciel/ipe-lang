@@ -12481,6 +12481,75 @@ impl<'a> Lowerer<'a> {
         })
     }
 
+    /// Dispatch a `Store.primaryKey` / `Store.serial` / `Store.unique` /
+    /// `Store.defaultNow` / `Store.touchOnUpdate` call intercepted at lowering
+    /// (arity 2: accessor + store). The accessor argument (`.field`) names the
+    /// validated column; the store argument is lowered and passed on to the
+    /// corresponding `*Named` stdlib helper alongside the extracted column name.
+    fn lower_store_spec(&self, peek: &Callee, args: &[canon::Expr]) -> DResult<Expr> {
+        let (Some(acc), Some(store)) = (args.first(), args.get(1)) else {
+            return Err(bug(
+                "ipe_lower::lower_store_spec",
+                "Store spec kernel arity < 2",
+            ));
+        };
+        let (column, _field_ty) = self.accessor_column(acc)?;
+        let lowered_store = self.lower_expr(store)?;
+        let helper = match peek {
+            Callee::Kernel(KernelFn::StorePrimaryKey) => "primaryKeyNamed",
+            Callee::Kernel(KernelFn::StoreSerial) => "serialNamed",
+            Callee::Kernel(KernelFn::StoreUnique) => "uniqueNamed",
+            Callee::Kernel(KernelFn::StoreDefaultNow) => "defaultNowNamed",
+            Callee::Kernel(KernelFn::StoreTouchOnUpdate) => "touchOnUpdateNamed",
+            _ => {
+                return Err(bug(
+                    "ipe_lower::lower_store_spec",
+                    "unexpected callee in spec intercept",
+                ));
+            }
+        };
+        let id = self.store_named_func_id(helper)?;
+        Ok(Expr::Call {
+            callee: Callee::Func(id),
+            args: vec![Expr::Str(column), lowered_store],
+            pin: CallPin::None,
+            on_form: OnFormKind::NotForm,
+        })
+    }
+
+    /// Dispatch a `Store.defaultText` / `Store.defaultInt` call intercepted at
+    /// lowering (arity 3: accessor + value + store). The accessor argument
+    /// (`.field`) names the validated column; the value and store are passed on
+    /// to the corresponding `*Named` stdlib helper.
+    fn lower_store_spec_with_value(&self, peek: &Callee, args: &[canon::Expr]) -> DResult<Expr> {
+        let (Some(acc), Some(value), Some(store)) = (args.first(), args.get(1), args.get(2)) else {
+            return Err(bug(
+                "ipe_lower::lower_store_spec_with_value",
+                "Store spec-with-value kernel arity < 3",
+            ));
+        };
+        let (column, _field_ty) = self.accessor_column(acc)?;
+        let lowered_value = self.lower_expr(value)?;
+        let lowered_store = self.lower_expr(store)?;
+        let helper = match peek {
+            Callee::Kernel(KernelFn::StoreDefaultText) => "defaultTextNamed",
+            Callee::Kernel(KernelFn::StoreDefaultInt) => "defaultIntNamed",
+            _ => {
+                return Err(bug(
+                    "ipe_lower::lower_store_spec_with_value",
+                    "unexpected callee in spec-with-value intercept",
+                ));
+            }
+        };
+        let id = self.store_named_func_id(helper)?;
+        Ok(Expr::Call {
+            callee: Callee::Func(id),
+            args: vec![Expr::Str(column), lowered_value, lowered_store],
+            pin: CallPin::None,
+            on_form: OnFormKind::NotForm,
+        })
+    }
+
     /// Build a single-parameter lambda `\v -> SqlXxx v` for the scalar field
     /// type `field_ty`. Used by `lower_store_inlist` to map a `List t` to a
     /// `List SqlValue` at the IR level. Fails closed (IPE-L0145) when `field_ty`
@@ -18313,6 +18382,26 @@ impl<'a> Lowerer<'a> {
                 Callee::Kernel(KernelFn::StoreInListBy) if args.len() == 3 => {
                     return Ok(Intercepted::Done(self.lower_store_inlist_by(args)?));
                 }
+                // Accessor-typed column-spec builders — arity 2 (accessor +
+                // store). The intercept extracts the column name from the
+                // accessor and calls the corresponding `*Named` stdlib helper.
+                Callee::Kernel(
+                    KernelFn::StorePrimaryKey
+                    | KernelFn::StoreSerial
+                    | KernelFn::StoreUnique
+                    | KernelFn::StoreDefaultNow
+                    | KernelFn::StoreTouchOnUpdate,
+                ) if args.len() == 2 => {
+                    return Ok(Intercepted::Done(self.lower_store_spec(&peek, args)?));
+                }
+                // `defaultText` / `defaultInt` — arity 3 (accessor + value + store).
+                Callee::Kernel(KernelFn::StoreDefaultText | KernelFn::StoreDefaultInt)
+                    if args.len() == 3 =>
+                {
+                    return Ok(Intercepted::Done(
+                        self.lower_store_spec_with_value(&peek, args)?,
+                    ));
+                }
                 _ => {}
             }
             // Any other callee: fall through to the uniform path, carrying
@@ -20730,6 +20819,12 @@ impl<'a> Lowerer<'a> {
                 | KernelFn::StoreLteCol
                 | KernelFn::StoreLike
                 | KernelFn::StoreInListCol
+                // Accessor-typed column-spec builders (arity 2: accessor + store).
+                | KernelFn::StorePrimaryKey
+                | KernelFn::StoreSerial
+                | KernelFn::StoreUnique
+                | KernelFn::StoreDefaultNow
+                | KernelFn::StoreTouchOnUpdate
                 | KernelFn::ListMap
                 | KernelFn::ListFilter
                 | KernelFn::ListMember
@@ -21058,7 +21153,10 @@ impl<'a> Lowerer<'a> {
                 | KernelFn::StoreGteBy
                 | KernelFn::StoreLtBy
                 | KernelFn::StoreLteBy
-                | KernelFn::StoreInListBy,
+                | KernelFn::StoreInListBy
+                // `defaultText` / `defaultInt` — arity 3 (accessor + value + store).
+                | KernelFn::StoreDefaultText
+                | KernelFn::StoreDefaultInt,
             ) => Ok(3),
             // ── JsonDec arity-4 ─────────────────────────────────────────
             Callee::Kernel(
@@ -22541,6 +22639,14 @@ impl<'a> Lowerer<'a> {
                     ("Store", "notNull") => Ok(Callee::Kernel(KernelFn::StoreNotNull)),
                     ("Store", "inList") => Ok(Callee::Kernel(KernelFn::StoreInListCol)),
                     ("Store", "inListBy") => Ok(Callee::Kernel(KernelFn::StoreInListBy)),
+                    // Accessor-typed column-spec builders — intercepted at lowering.
+                    ("Store", "primaryKey") => Ok(Callee::Kernel(KernelFn::StorePrimaryKey)),
+                    ("Store", "serial") => Ok(Callee::Kernel(KernelFn::StoreSerial)),
+                    ("Store", "unique") => Ok(Callee::Kernel(KernelFn::StoreUnique)),
+                    ("Store", "defaultNow") => Ok(Callee::Kernel(KernelFn::StoreDefaultNow)),
+                    ("Store", "touchOnUpdate") => Ok(Callee::Kernel(KernelFn::StoreTouchOnUpdate)),
+                    ("Store", "defaultText") => Ok(Callee::Kernel(KernelFn::StoreDefaultText)),
+                    ("Store", "defaultInt") => Ok(Callee::Kernel(KernelFn::StoreDefaultInt)),
                     // ── Secret kernels ──────────────────────────
                     ("Secret", "fromString") => Ok(Callee::Kernel(KernelFn::SecretFromString)),
                     ("Secret", "reveal") => Ok(Callee::Kernel(KernelFn::SecretReveal)),

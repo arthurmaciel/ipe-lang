@@ -476,10 +476,89 @@ rowCell name row =
 -- name into SQL.
 
 
--- | Mark a column the primary key. Records it as the store's `pk`, so
--- `get` / `delete` key on this validated column and never on a caller string.
-primaryKey : String -> Store a -> Store a
-primaryKey name store =
+-- | Mark the accessor-named column the primary key. The lowering intercept
+-- extracts the column name from the accessor and calls `primaryKeyNamed`.
+primaryKey : (row -> t) -> Store row -> Store row
+primaryKey =
+    Ffi.kernel "Store_primaryKey"
+
+
+-- | Mark the accessor-named column DB-assigned (serial). `insert` omits it so
+-- the database generates it — a client value can never overwrite a serial column.
+serial : (row -> t) -> Store row -> Store row
+serial =
+    Ffi.kernel "Store_serial"
+
+
+-- | Mark the accessor-named column unique.
+unique : (row -> t) -> Store row -> Store row
+unique =
+    Ffi.kernel "Store_unique"
+
+
+-- | Mark the accessor-named column DB-stamped with the current time on insert.
+-- `insert` omits it so the database stamps it.
+defaultNow : (row -> t) -> Store row -> Store row
+defaultNow =
+    Ffi.kernel "Store_defaultNow"
+
+
+-- | `defaultText accessor value store` — give the accessor-named column a
+-- DB-level `DEFAULT` of the text `value`. The literal is emitted through the
+-- same single-quote-doubling escape SQL string literals require, so no caller
+-- text escapes the literal — a `value` containing a quote cannot break out into SQL.
+--
+-- Example:
+--
+--     import Ipe.Db.Store as Store exposing (Store)
+--
+--     withStatusDefault : Store { status : String } -> Store { status : String }
+--     withStatusDefault store =
+--         Store.defaultText .status "active" store
+defaultText : (row -> String) -> String -> Store row -> Store row
+defaultText =
+    Ffi.kernel "Store_defaultText"
+
+
+-- | `defaultInt accessor value store` — give the accessor-named column a
+-- DB-level `DEFAULT` of the integer `value`. An integer has no injection
+-- surface: it renders as its own decimal digits, so the emitted `DEFAULT`
+-- literal is always safe.
+--
+-- Example:
+--
+--     import Ipe.Db.Store as Store exposing (Store)
+--
+--     withRetryDefault : Store { retries : Int } -> Store { retries : Int }
+--     withRetryDefault store =
+--         Store.defaultInt .retries 0 store
+defaultInt : (row -> Int) -> Int -> Store row -> Store row
+defaultInt =
+    Ffi.kernel "Store_defaultInt"
+
+
+-- | Mark the accessor-named column a DB-stamped updated-at column. Like
+-- `defaultNow` it gets `DEFAULT CURRENT_TIMESTAMP` in the schema and is OMITTED
+-- from every client write (`insert`, `update`, `updateWhere`), so a client value
+-- can never overwrite it — the database owns the column's value.
+--
+-- Example:
+--
+--     import Ipe.Db.Store as Store exposing (Store)
+--
+--     withUpdatedAt : Store { updatedAt : String } -> Store { updatedAt : String }
+--     withUpdatedAt store =
+--         Store.touchOnUpdate .updatedAt store
+touchOnUpdate : (row -> t) -> Store row -> Store row
+touchOnUpdate =
+    Ffi.kernel "Store_touchOnUpdate"
+
+
+-- The stringly forms below are internal helpers reached only through the
+-- accessor-typed kernel intercepts above. Not exported.
+
+primaryKeyNamed : String -> Store a -> Store a
+primaryKeyNamed name store =
     case store of
         Store r ->
             Store
@@ -494,75 +573,33 @@ primaryKey name store =
                 }
 
 
--- | Mark a column DB-assigned (serial). `insert` omits it so the database
--- generates it — a client value can never overwrite a serial column.
-serial : String -> Store a -> Store a
-serial name store =
+serialNamed : String -> Store a -> Store a
+serialNamed name store =
     addSpec (Serial name) store
 
 
--- | Mark a column unique.
-unique : String -> Store a -> Store a
-unique name store =
+uniqueNamed : String -> Store a -> Store a
+uniqueNamed name store =
     addSpec (Unique name) store
 
 
--- | Mark a column DB-stamped with the current time on insert. `insert` omits
--- it so the database stamps it.
-defaultNow : String -> Store a -> Store a
-defaultNow name store =
+defaultNowNamed : String -> Store a -> Store a
+defaultNowNamed name store =
     addSpec (DefaultNow name) store
 
 
--- | `defaultText name value store` — give `name` a DB-level `DEFAULT` of the
--- text `value`, so a row inserted without it (the column `OmitField`-omitted, or
--- a raw `Db.insertRow` missing it) gets `value`. The literal is emitted through
--- the same single-quote-doubling escape SQL string literals require, so no
--- caller text escapes the literal — a `value` containing a quote cannot break
--- out into SQL.
---
--- Example:
---
---     import Ipe.Db.Store as Store exposing (Store)
---
---     withStatusDefault : Store a -> Store a
---     withStatusDefault store =
---         Store.defaultText "status" "active" store
-defaultText : String -> String -> Store a -> Store a
-defaultText name value store =
+defaultTextNamed : String -> String -> Store a -> Store a
+defaultTextNamed name value store =
     addSpec (DefaultText name value) store
 
 
--- | `defaultInt name value store` — give `name` a DB-level `DEFAULT` of the
--- integer `value`. An integer has no injection surface: it renders as its own
--- decimal digits, so the emitted `DEFAULT` literal is always safe.
---
--- Example:
---
---     import Ipe.Db.Store as Store exposing (Store)
---
---     withRetryDefault : Store a -> Store a
---     withRetryDefault store =
---         Store.defaultInt "retries" 0 store
-defaultInt : String -> Int -> Store a -> Store a
-defaultInt name value store =
+defaultIntNamed : String -> Int -> Store a -> Store a
+defaultIntNamed name value store =
     addSpec (DefaultInt name value) store
 
 
--- | `touchOnUpdate name store` — mark `name` a DB-stamped timestamp column. Like
--- `defaultNow` it gets `DEFAULT CURRENT_TIMESTAMP` in the schema and is OMITTED
--- from every client write (`insert`, `update`, `updateWhere`), so a client value
--- can never overwrite it — the database owns the column's value.
---
--- Example:
---
---     import Ipe.Db.Store as Store exposing (Store)
---
---     withUpdatedAt : Store a -> Store a
---     withUpdatedAt store =
---         Store.touchOnUpdate "updated_at" store
-touchOnUpdate : String -> Store a -> Store a
-touchOnUpdate name store =
+touchOnUpdateNamed : String -> Store a -> Store a
+touchOnUpdateNamed name store =
     addSpec (TouchOnUpdate name) store
 
 
