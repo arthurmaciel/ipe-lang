@@ -237,8 +237,7 @@ patch = "rename-map"
 go_ffi = false
 shape  = "webview"
 verify = "build"
-status = "deps-deferred"
-blocked = "requires glib-2.0 and webkit2gtk system libraries absent in CI"
+status = "green"
 
 [[example]]
 name = "30-sse-server-demo"
@@ -254,8 +253,7 @@ patch = "rename-map"
 go_ffi = false
 shape  = "webview"
 verify = "build"
-status = "deps-deferred"
-blocked = "requires glib-2.0 and webkit2gtk system libraries absent in CI"
+status = "green"
 
 [[example]]
 name = "32-sse-relay"
@@ -522,10 +520,9 @@ notes = "sky.toml has no go.dependencies; source imports Sky.Core.*/Std.* only �
 name = "38-composite-ui-multibackend"
 patch = "rename-map"
 go_ffi = false
-shape  = "web"
-verify = "serve"
-status = "deps-deferred"
-notes = "sky.toml has no go.dependencies; source imports Sky.Core.*/Std.* only — no Go FFI. go_ffi was set in error."
+shape  = "webview"
+verify = "build"
+status = "green"
 
 # ── Go-FFI examples (excluded from Rust build by is_out_of_scope) ─────────────
 # Listed here so the sweep knows they exist in upstream and does not FAIL LOUD
