@@ -1,0 +1,8 @@
+gt-qty:1
+lt-qty:2
+gte-qty:2
+lte-qty:2
+neq-name:2
+like-name:1
+inlist-qty:2
+inlistby-name:1

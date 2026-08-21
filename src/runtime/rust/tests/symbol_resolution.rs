@@ -77,13 +77,27 @@ const KNOWN_DEAD_OR_EPILOGUE: &[&str] = &[
     //         the topic-name String; emit_expr emits the argument directly, so
     //         this name string never reaches a runtime call. ──────────────────
     "pubsub_topic",
-    // ── Dead: `Store.eq` / `Store.eqBy` are the typed accessor query leaves;
-    //         the lowering intercept reads the `.field` accessor and synthesises
-    //         a `Compare` `Cond` (for `eq`) or a call to the `eqByNamed` helper
-    //         (for `eqBy`) directly, so these name strings never reach a runtime
-    //         call. ──────────────────────────────────────────────────────────
+    // ── Dead: All accessor-typed `Store.*` query leaves are intercepted at
+    //         lowering (the `.field` accessor becomes the validated column and
+    //         the call is rewritten inline), so none of these name strings ever
+    //         reach a runtime call. ─────────────────────────────────────────
     "store_eq_col",
     "store_eq_by",
+    "store_neq_col",
+    "store_neq_by",
+    "store_gt_col",
+    "store_gt_by",
+    "store_gte_col",
+    "store_gte_by",
+    "store_lt_col",
+    "store_lt_by",
+    "store_lte_col",
+    "store_lte_by",
+    "store_like",
+    "store_is_null",
+    "store_not_null",
+    "store_in_list_col",
+    "store_in_list_by",
 ];
 
 fn walk(dir: &std::path::Path, fn_re: &regex::Regex, out: &mut HashSet<String>) {

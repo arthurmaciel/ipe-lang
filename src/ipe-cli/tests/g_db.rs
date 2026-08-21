@@ -20,3 +20,5 @@ mod golden_m5b_db_gates;
 mod golden_m5b_http;
 #[path = "g_db/golden_m5b_uuid_jwt.rs"]
 mod golden_m5b_uuid_jwt;
+#[path = "g_db/golden_db_store_accessor_leaves.rs"]
+mod golden_db_store_accessor_leaves;

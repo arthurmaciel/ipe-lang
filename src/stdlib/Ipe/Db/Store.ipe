@@ -115,6 +115,14 @@ module Ipe.Db.Store exposing
     , Cond(..), CompareOp(..), Query
     , query, where
     , eq, eqBy
+    , neq, neqBy
+    , gt, gtBy
+    , gte, gteBy
+    , lt, ltBy
+    , lte, lteBy
+    , like
+    , isNull, notNull
+    , inList, inListBy
     , and, or, not
     , orderAsc, orderDesc, limit, offset
     , toList, toMaybe, count
@@ -1602,6 +1610,272 @@ eqByNamed col codec v =
 
         Err _ ->
             OrList []
+
+
+-- | `neq accessor value` — the rows where the column named by `accessor` is
+-- NOT equal to `value`. Scalar fields only; for an enum or newtype column use
+-- `neqBy`.
+--
+-- Example:
+--
+--     Store.query store
+--         |> Store.where (Store.neq .status "deleted")
+neq : (row -> value) -> value -> Cond row
+neq =
+    Ffi.kernel "Store_neq"
+
+
+-- | `neqBy codec accessor value` — the accessor-typed not-equal leaf for an
+-- enum or newtype column. Projects `value` through `codec` to a bound
+-- `SqlValue`; the column is named by the accessor literal.
+--
+-- Example:
+--
+--     Store.query store
+--         |> Store.where (Store.neqBy rankCodec .rank Gold)
+neqBy : Codec value -> (row -> value) -> value -> Cond row
+neqBy =
+    Ffi.kernel "Store_neqBy"
+
+
+neqByNamed : String -> Codec value -> value -> Cond row
+neqByNamed col codec v =
+    case DbCodec.toSqlValue codec v of
+        Ok sqlValue ->
+            Compare OpNeq col sqlValue
+
+        Err _ ->
+            OrList []
+
+
+-- | `gt accessor value` — the rows where the column named by `accessor` is
+-- greater than `value`. Scalar fields only; for an enum or newtype column use
+-- `gtBy`.
+--
+-- Example:
+--
+--     Store.query store
+--         |> Store.where (Store.gt .age 18)
+gt : (row -> value) -> value -> Cond row
+gt =
+    Ffi.kernel "Store_gt"
+
+
+-- | `gtBy codec accessor value` — the accessor-typed greater-than leaf for an
+-- enum or newtype column.
+--
+-- Example:
+--
+--     Store.query store
+--         |> Store.where (Store.gtBy priceCodec .price minPrice)
+gtBy : Codec value -> (row -> value) -> value -> Cond row
+gtBy =
+    Ffi.kernel "Store_gtBy"
+
+
+gtByNamed : String -> Codec value -> value -> Cond row
+gtByNamed col codec v =
+    case DbCodec.toSqlValue codec v of
+        Ok sqlValue ->
+            Compare OpGt col sqlValue
+
+        Err _ ->
+            OrList []
+
+
+-- | `gte accessor value` — the rows where the column named by `accessor` is
+-- greater than or equal to `value`. Scalar fields only; use `gteBy` for enum
+-- or newtype columns.
+--
+-- Example:
+--
+--     Store.query store
+--         |> Store.where (Store.gte .age 18)
+gte : (row -> value) -> value -> Cond row
+gte =
+    Ffi.kernel "Store_gte"
+
+
+-- | `gteBy codec accessor value` — the accessor-typed greater-than-or-equal
+-- leaf for an enum or newtype column.
+gteBy : Codec value -> (row -> value) -> value -> Cond row
+gteBy =
+    Ffi.kernel "Store_gteBy"
+
+
+gteByNamed : String -> Codec value -> value -> Cond row
+gteByNamed col codec v =
+    case DbCodec.toSqlValue codec v of
+        Ok sqlValue ->
+            Compare OpGte col sqlValue
+
+        Err _ ->
+            OrList []
+
+
+-- | `lt accessor value` — the rows where the column named by `accessor` is
+-- less than `value`. Scalar fields only; use `ltBy` for enum or newtype
+-- columns.
+--
+-- Example:
+--
+--     Store.query store
+--         |> Store.where (Store.lt .age 65)
+lt : (row -> value) -> value -> Cond row
+lt =
+    Ffi.kernel "Store_lt"
+
+
+-- | `ltBy codec accessor value` — the accessor-typed less-than leaf for an
+-- enum or newtype column.
+ltBy : Codec value -> (row -> value) -> value -> Cond row
+ltBy =
+    Ffi.kernel "Store_ltBy"
+
+
+ltByNamed : String -> Codec value -> value -> Cond row
+ltByNamed col codec v =
+    case DbCodec.toSqlValue codec v of
+        Ok sqlValue ->
+            Compare OpLt col sqlValue
+
+        Err _ ->
+            OrList []
+
+
+-- | `lte accessor value` — the rows where the column named by `accessor` is
+-- less than or equal to `value`. Scalar fields only; use `lteBy` for enum or
+-- newtype columns.
+--
+-- Example:
+--
+--     Store.query store
+--         |> Store.where (Store.lte .age 64)
+lte : (row -> value) -> value -> Cond row
+lte =
+    Ffi.kernel "Store_lte"
+
+
+-- | `lteBy codec accessor value` — the accessor-typed less-than-or-equal leaf
+-- for an enum or newtype column.
+lteBy : Codec value -> (row -> value) -> value -> Cond row
+lteBy =
+    Ffi.kernel "Store_lteBy"
+
+
+lteByNamed : String -> Codec value -> value -> Cond row
+lteByNamed col codec v =
+    case DbCodec.toSqlValue codec v of
+        Ok sqlValue ->
+            Compare OpLte col sqlValue
+
+        Err _ ->
+            OrList []
+
+
+-- | `like accessor pattern` — the rows where the `String` column named by
+-- `accessor` matches the SQL `LIKE` `pattern`. The pattern binds as a
+-- parameter (wildcards `%` / `_` are DATA the SQL engine interprets, never
+-- SQL text the caller injects). The accessor must name a `String` field.
+--
+-- Example:
+--
+--     Store.query store
+--         |> Store.where (Store.like .name "al%")
+like : (row -> String) -> String -> Cond row
+like =
+    Ffi.kernel "Store_like"
+
+
+-- | `isNull accessor` — the rows where the column named by `accessor` is SQL
+-- NULL. The accessor names the column; no value argument.
+--
+-- Example:
+--
+--     Store.query store
+--         |> Store.where (Store.isNull .deletedAt)
+isNull : (row -> t) -> Cond row
+isNull =
+    Ffi.kernel "Store_isNull"
+
+
+-- | `notNull accessor` — the rows where the column named by `accessor` is NOT
+-- SQL NULL.
+--
+-- Example:
+--
+--     Store.query store
+--         |> Store.where (Store.notNull .email)
+notNull : (row -> t) -> Cond row
+notNull =
+    Ffi.kernel "Store_notNull"
+
+
+-- | `inList accessor values` — the rows where the column named by `accessor`
+-- is one of the scalar `values`. Each value binds as a parameter. An empty
+-- list matches no row (`(1 = 0)`, the identity of disjunction).
+--
+-- The field type must be scalar (`String` / `Int` / `Bool` / `Float`). For
+-- an enum or newtype column use `inListBy`.
+--
+-- Example:
+--
+--     Store.query store
+--         |> Store.where (Store.inList .status [ "active", "trial" ])
+inList : (row -> value) -> List value -> Cond row
+inList =
+    Ffi.kernel "Store_inList"
+
+
+-- | `inListBy codec accessor values` — the accessor-typed IN-list leaf for an
+-- enum or newtype column. Each element in `values` is projected through
+-- `codec` to a bound `SqlValue`; elements that fail the projection are
+-- dropped (the remaining elements still form the IN clause). An empty or
+-- all-dropped list matches no row (`OrList []`).
+--
+-- Example:
+--
+--     Store.query store
+--         |> Store.where (Store.inListBy rankCodec .rank [ Gold, Silver ])
+inListBy : Codec value -> (row -> value) -> List value -> Cond row
+inListBy =
+    Ffi.kernel "Store_inListBy"
+
+
+-- The lowered form of `inListBy`: the accessor `.field` has already been
+-- turned into the validated column name `col`. Each element of `values` is
+-- projected through `codec`; elements that fail the projection are dropped.
+-- An empty result (no values survive projection) lowers to the always-false
+-- `Cond` (`OrList []`).
+--
+-- Reached only through the `Store.inListBy` lowering intercept, which
+-- supplies `col`; not exported.
+inListByNamed : String -> Codec value -> List value -> Cond row
+inListByNamed col codec values =
+    let
+        sqlValues =
+            List.filterMap (\v -> Result.toMaybe (DbCodec.toSqlValue codec v)) values
+    in
+    if List.isEmpty sqlValues then
+        OrList []
+
+    else
+        InList col sqlValues
+
+
+-- The lowered form of `inList` (scalar): the accessor `.field` has been
+-- turned into the validated column name `col`, and `sqlValues` is the
+-- already-mapped `List SqlValue`. An empty list lowers to the always-false
+-- `Cond`.
+--
+-- Reached only through the `Store.inList` lowering intercept; not exported.
+inListNamed : String -> List SqlValue -> Cond row
+inListNamed col sqlValues =
+    if List.isEmpty sqlValues then
+        OrList []
+
+    else
+        InList col sqlValues
 
 
 -- ── Connectives ────────────────────────────────────────────────────
