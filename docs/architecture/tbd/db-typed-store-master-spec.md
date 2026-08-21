@@ -451,27 +451,32 @@ per-lane detail is in the campaign memory `codec-store-campaign-token-pause`.
     columns bind directly via plain `eq`; enum/newtype columns use
     `eqBy codec .field v` (an explicit codec witness). Raw Dict-row stores are
     demoted to `Ipe.Db.Store.Unsafe` (capability-gated).
-  - **the accessor SPECS — COMPLETE, in re-guardian (branch `accessor-specs`).**
-    `primaryKey/serial/unique/defaultNow/touchOnUpdate` (accessor-only) +
-    `defaultText/defaultInt` (accessor + value) migrated `String`→accessor,
-    reusing `accessor_column`. Locally verified green (g_db 53/53, clippy, fmt);
-    Opus re-guardian in review → then merge.
-  - **Consumer migration (the crux the first guardian caught):** making `Store`
-    accessor-only broke every Dict-row (`fromColumns`) consumer, incl. the shipped
-    `Ipe.Analytics` (only type-checks on IMPORT, so `cargo build -p ipe` missed it)
-    and 5 `db_store*` goldens. Resolution: (1) `Ipe.Analytics.eventsStore` migrated
-    to a codec-derived RECORD store — `Store.fromCodec name (Codec.auto {witness})
-    |> primaryKey .id |> serial .id |> defaultNow .recordedAt`, NO `Store.Unsafe`
-    import (no capability leak); (2) `Ipe.Db.Store.Unsafe` gained string spec
-    builders (delegating to the private `*Named` fns in Store.ipe) for the raw
-    Dict-row path; (3) the 5 Dict-row goldens migrated to `Store.Unsafe.*` specs.
-  - **RESUME NOTES:** `Codec.auto` is a CANON construct (not a stdlib fn) — call it
-    from `.ipe` as `Codec.auto { field = <default>, … }` (inline witness literal;
-    see notes-app `Lib/Db.ipe`, golden `codec_auto_multimodule`). Two lanes erred
-    here — a Sonnet impl self-reported "g_db green" while actually breaking
-    consumers (guardian caught it), and an Opus lane hand-wrote a codec believing
-    `Codec.auto` didn't exist. NEVER trust a lane's self-green on stdlib/compiler
-    work; always guardian + reproduce g_db yourself.
+  - **the accessor SPECS — BLOCKED (branch `accessor-specs`, PR open, re-guardian
+    REJECTED 2×).** The 7 spec builders are migrated `String`→accessor and the
+    MECHANISM is sound, but a re-guardian building+running to ground truth found a
+    CORRECTNESS FLAW in the whole accessor-column feature (leaves included):
+    **`accessor_column` derives the column name VERBATIM from the field, but
+    `Codec.auto` snake_cases it** — so any MULTI-WORD field desyncs (`.recordedAt`
+    → spec `"recordedAt"` ≠ codec column `recorded_at`). Query leaves survive by
+    failing CLOSED (`condFragmentIn` validates the column); the new spec builders
+    have NO such validation → SILENT loss of DB semantics. The impl diverged from
+    this very spec (which says "snake_case transform"). Two Analytics defects too:
+    `Codec.auto` needs a TOP-LEVEL annotated witness (`Codec.auto blank`, `blank : T`)
+    NOT an inline literal (inline → IPE-N0041); and a pre-existing eta SEAL hole
+    (point-free/partial-applied intercepted store kernel → E0425 — tracked issue).
+  - **FIX PLAN (compiler correctness, guardian-gated):** (1) make `accessor_column`
+    snake_case field→column so it matches `Codec.auto`; re-bless goldens (single-word
+    unchanged). (2) Add spec-vs-codec-column FAIL-CLOSED validation (mirror
+    `condFragmentIn`) so a spec naming a non-existent column is a typed `Err`, never
+    silent. (3) Migrate `Ipe.Analytics.eventsStore` to a record store
+    (`Store.fromCodec name (Codec.auto blank)` with a top-level `blank`, accessor
+    specs, NO `Store.Unsafe` import); avoid point-free specs; fix `erase`'s column.
+    (4) `Ipe.Db.Store.Unsafe` gains string spec builders (delegating to `*Named`)
+    for the raw Dict-row goldens. VERIFY via **`g_misc` (IPE_E2E=1)** — the Analytics
+    goldens live there, NOT `g_db`.
+  - **RESUME LESSON:** never trust a lane's OR your own "g_db green" on stdlib work —
+    only a guardian building+running to ground truth (the RIGHT gate, `g_misc` here)
+    is reliable. Multiple lanes AND the orchestrator erred on this feature.
 - **Phase C (per-column newtypes): NEXT, mostly free.** Cross-id type-safety
   already holds — the accessor threads the field type, so `eq .author someFoodId`
   is a compile error today. Remaining: `Codec.id` sugar, newtype field derivation,
