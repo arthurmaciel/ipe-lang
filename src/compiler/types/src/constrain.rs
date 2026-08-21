@@ -610,6 +610,10 @@ struct Builtins {
     /// query leaves. Used as the result type of the `StoreEqCol` kernel scheme;
     /// its constructors (`Compare` / …) lower normally as an emitted enum.
     cond_con: Symbol,
+    /// `"Codec"` — the `Ipe.Codec` codec ADT. Used as the first parameter of the
+    /// `StoreEqBy` kernel scheme (`Codec t -> …`), so an enum/newtype column's
+    /// comparison value is projected to a bound `SqlValue` through its own codec.
+    codec_con: Symbol,
 }
 
 impl Builtins {
@@ -833,6 +837,7 @@ impl Builtins {
             // ── Ipe.PubSub.Topic ────────────────────────────────────────────────
             topic_con: interner.intern("Topic")?,
             cond_con: interner.intern("Cond")?,
+            codec_con: interner.intern("Codec")?,
         })
     }
 
@@ -4280,13 +4285,23 @@ impl<'a> Builder<'a> {
             name: self.builtins.decoder,
             args: vec![inner],
         };
-        // `Cond` — the typed `WHERE`-predicate ADT (`Ipe.Db.Store`), the result
-        // of the accessor-typed equality leaf. Nullary: the query builder that
-        // consumes it is row-monomorphic at this slice.
-        let cond = || Ty::Con {
+        // `Cond row` — the typed `WHERE`-predicate ADT (`Ipe.Db.Store`), the
+        // result of the accessor-typed equality leaf. The `row` argument ties the
+        // predicate to the store's row type: the getter arrow `(row -> value)`
+        // shares `row` with this result, so `where`/`updateWhere`/`deleteWhere`
+        // (typed `Cond a -> … Store a`) pin the accessor's record to the store's
+        // row, making a cross-row column or a value-type mismatch a type error.
+        let cond = |row: Ty| Ty::Con {
             module: Vec::new(),
             name: self.builtins.cond_con,
-            args: Vec::new(),
+            args: vec![row],
+        };
+        // `Codec inner` — the `Ipe.Codec` codec ADT, the first parameter of
+        // `Store.eqBy`. Empty module unifies with the user's `Ipe.Codec.Codec`.
+        let codec = |inner: Ty| Ty::Con {
+            module: Vec::new(),
+            name: self.builtins.codec_con,
+            args: vec![inner],
         };
         // Opaque nullary type constructors (mirror `kernel_ty`'s inline `Ty::Con`s).
         let db = || Ty::Con {
@@ -5607,7 +5622,16 @@ impl<'a> Builder<'a> {
             // ordinary inference, pinning `t` to the field's type so the value's
             // type must match. Lowering replaces the accessor with the validated
             // column identifier and emits the `Compare` `Cond` constructor.
-            K::StoreEqCol => fun(fun(var(0), var(1)), fun(var(1), cond())),
+            K::StoreEqCol => fun(fun(var(0), var(1)), fun(var(1), cond(var(0)))),
+
+            // `Store.eqBy : Codec t -> (row -> t) -> t -> Cond row` — the
+            // enum/newtype accessor leaf. `Codec t` projects the value to a bound
+            // `SqlValue`; the getter-arrow (as `StoreEqCol`) pins the column and
+            // value types, and `row` threads to the `Cond` result.
+            K::StoreEqBy => fun(
+                codec(var(1)),
+                fun(fun(var(0), var(1)), fun(var(1), cond(var(0)))),
+            ),
 
             // ── Db.Decode ──
             K::DbDecString => fun(string(), dec(string())),

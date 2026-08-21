@@ -511,6 +511,16 @@ const STD_ANALYTICS: &str = include_str!("../Ipe/Analytics.ipe");
 /// / `["Ipe","Db","Sql"]` paths), so the disjointness invariant holds.
 const STD_DB_STORE: &str = include_str!("../Ipe/Db/Store.ipe");
 
+/// `Ipe.Db.Store.Unsafe` — the raw, string-named query leaves for `Ipe.Db.Store`.
+///
+/// Pure Ipê source: the `eq` / `neq` / `gt` / … leaves that name a column by a
+/// bare `String` (for a `fromColumns` raw store that has no row type to check an
+/// accessor against). Importing it discloses the `unsafe` capability. Not an
+/// injection hatch — each column is still validated against the store's columns
+/// at query build time through the same audited `Cond`→`SqlFragment` path. Not
+/// in `STDLIB_MODULE_QUALIFIERS` so the disjointness invariant holds.
+const STD_DB_STORE_UNSAFE: &str = include_str!("../Ipe/Db/Store/Unsafe.ipe");
+
 /// `Ipe.Money` — currency-typed Money on `Ipe.Decimal` + ISO 4217 enum.
 ///
 /// Compiled pure-Ipê source: defines the `Money` / `Currency` ADTs and
@@ -735,6 +745,14 @@ pub const COMPILED_STD_MODULES: &[CompiledStdModule] = &[
     CompiledStdModule {
         dotted: "Ipe.Db.Store",
         source: STD_DB_STORE,
+    },
+    // Ipe.Db.Store.Unsafe — Layer-3 source; the raw string-named query leaves for
+    // a `fromColumns` raw store. Imports `Ipe.Db.Store` for the `Cond`
+    // constructors. Importing it discloses the `unsafe` capability. Still
+    // injection-safe (each column is validated against the store at query build).
+    CompiledStdModule {
+        dotted: "Ipe.Db.Store.Unsafe",
+        source: STD_DB_STORE_UNSAFE,
     },
     // Ipe.Db.Codec — the codec↔SQL row seam (`codecToBinds` / `codecFromRow`).
     // Pure Ipê over `Ipe.Codec` + the reserved `SqlValue`; reuses the codec's

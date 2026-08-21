@@ -4,6 +4,7 @@ import Ipe.Io as Io
 import Ipe.Db as Db
 import Ipe.Db.Unsafe as Unsafe
 import Ipe.Db.Store as Store exposing (Store)
+import Ipe.Db.Store.Unsafe as StoreU
 import Ipe.Dict as Dict
 import Ipe.String as String
 import Ipe.List as List
@@ -179,7 +180,7 @@ updateWhereCheck : Db -> Store Store.Row -> Task Error Int
 updateWhereCheck conn store =
     Store.updateWhere conn
         store
-        (Store.gte "balance" (SqlInt 100))
+        (StoreU.gte "balance" (SqlInt 100))
         updateTemplate
 
 
@@ -203,7 +204,7 @@ ownerPair row =
 -- Delete every row below the 100 threshold (exactly acct-3). Returns the count.
 deleteWhereCheck : Db -> Store Store.Row -> Task Error Int
 deleteWhereCheck conn store =
-    Store.deleteWhere conn store (Store.lt "balance" (SqlInt 100))
+    Store.deleteWhere conn store (StoreU.lt "balance" (SqlInt 100))
 
 
 remainingCheck : Db -> Store Store.Row -> Task Error String
@@ -224,7 +225,7 @@ rejectBadColumn conn store =
         (\_ -> Task.succeed "reject-bad-column:ok")
         (Task.map
             (\_ -> "reject-bad-column:FAIL-accepted")
-            (Store.deleteWhere conn store (Store.eq "no_such_column" (SqlInt 1)))
+            (Store.deleteWhere conn store (StoreU.eq "no_such_column" (SqlInt 1)))
         )
 
 

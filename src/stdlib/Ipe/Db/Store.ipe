@@ -112,9 +112,9 @@ module Ipe.Db.Store exposing
     , update, updateWhere, deleteWhere, findBy
     , renameColumn, renameTable, migrations
     , noopRenameError
-    , Cond, Query
+    , Cond(..), CompareOp(..), Query
     , query, where
-    , eq, neq, gt, gte, lt, lte, like, isNull, notNull, inList
+    , eq, eqBy
     , and, or, not
     , orderAsc, orderDesc, limit, offset
     , toList, toMaybe, count
@@ -127,6 +127,7 @@ import Ipe.Db as Db
 import Ipe.Db.Codec as DbCodec
 import Ipe.Db.Dsn as Dsn exposing (Connection)
 import Ipe.Db.Sql as Sql
+import Ipe.Ffi as Ffi
 import Ipe.Json.Encode as Encode
 import Ipe.Config as Config
 import Ipe.Char as Char
@@ -1056,8 +1057,8 @@ bindValue target binds =
 --
 --     renameAdults : Db -> Store User -> User -> Task Error Int
 --     renameAdults conn store template =
---         Store.updateWhere conn store (Store.gte "age" (SqlInt 18)) template
-updateWhere : Db -> Store a -> Cond -> a -> Task Error Int
+--         Store.updateWhere conn store (Store.eq .active True) template
+updateWhere : Db -> Store a -> Cond a -> a -> Task Error Int
 updateWhere conn store cond row =
     case store of
         Store r ->
@@ -1120,8 +1121,8 @@ bindIsKey pk pair =
 --
 --     purgeMinors : Db -> Store User -> Task Error Int
 --     purgeMinors conn store =
---         Store.deleteWhere conn store (Store.lt "age" (SqlInt 18))
-deleteWhere : Db -> Store a -> Cond -> Task Error Int
+--         Store.deleteWhere conn store (Store.eq .active False)
+deleteWhere : Db -> Store a -> Cond a -> Task Error Int
 deleteWhere conn store cond =
     case store of
         Store r ->
@@ -1146,7 +1147,7 @@ deleteWhere conn store cond =
 -- unconstrained condition, so a dynamically-empty condition list can never
 -- silently become an update-all / delete-all. The read path keeps the all-rows
 -- semantics — an unconstrained query is non-destructive.
-condConstrainsColumn : Cond -> Bool
+condConstrainsColumn : Cond row -> Bool
 condConstrainsColumn cond =
     case cond of
         Compare _ _ _ ->
@@ -1406,21 +1407,24 @@ type CompareOp
     | OpLte
 
 
--- | A typed `WHERE` predicate over a `Store a`'s rows. Built only through the
--- leaf combinators (`eq` / `like` / `inList` / …) and the connectives
--- (`and` / `or` / `not`); it carries a validated column name and a bound value
--- as pure data and lowers to a `SqlFragment` at query time. Opaque, so the
--- lowering (the single point a column is checked and reaches `Sql.column`) is
--- the only path from a `Cond` to SQL.
-type Cond
+-- | A typed `WHERE` predicate over a `Store row`'s rows. The `row` parameter
+-- ties the predicate to the row type it queries: an accessor-typed leaf
+-- (`eq .age 18`) fixes `row` to the store's row type, so a column from one row
+-- type cannot be used against another, and a value's type must match the field's.
+-- Built only through the leaf combinators (`eq` / `eqBy`) and the connectives
+-- (`and` / `or` / `not`); it carries a validated column name and a bound value as
+-- pure data and lowers to a `SqlFragment` at query time. The `row` parameter is a
+-- phantom over the data — the constructors carry only the concrete column/value —
+-- so the runtime `Cond` is untyped data while the surface stays row-checked.
+type Cond row
     = Compare CompareOp String SqlValue
     | Like String String
     | IsNull String
     | NotNull String
     | InList String (List SqlValue)
-    | AndList (List Cond)
-    | OrList (List Cond)
-    | NotCond Cond
+    | AndList (List (Cond row))
+    | OrList (List (Cond row))
+    | NotCond (Cond row)
 
 
 -- | A filtered, ordered, paginated read over a `Store a`, decoded through the
@@ -1466,7 +1470,7 @@ type Query a
 --     topAdults : Db -> Store User -> Task Error (List User)
 --     topAdults conn store =
 --         Store.query store
---             |> Store.where (Store.gte "age" (SqlInt 18))
+--             |> Store.where (Store.eq .age 18)
 --             |> Store.orderDesc "age"
 --             |> Store.limit 10
 --             |> Store.toList conn
@@ -1489,9 +1493,9 @@ query store =
 -- Example:
 --
 --     Store.query store
---         |> Store.where (Store.eq "status" (SqlString "active"))
---         |> Store.where (Store.gt "age" (SqlInt 21))
-where : Cond -> Query a -> Query a
+--         |> Store.where (Store.eq .status "active")
+--         |> Store.where (Store.eq .active True)
+where : Cond a -> Query a -> Query a
 where cond q =
     case q of
         Query r ->
@@ -1541,122 +1545,42 @@ firstPoison existing e =
             Just e
 
 
--- ── Comparison leaves ──────────────────────────────────────────────
+-- ── Comparison leaf ────────────────────────────────────────────────
 
 
--- | `eq col value` — the rows where `col` equals `value`. `value` binds as a
--- parameter; `col` is validated against the store's columns at query time.
+-- | `eq accessor value` — the rows where the record column named by the field
+-- `accessor` equals `value`. The column is named by an accessor literal (e.g.
+-- `.age`), so it is checked against the row type at compile time; the value's
+-- type is pinned to the field's type, so a mismatched literal is a type error.
+-- The column identifier is derived and validated at lowering, and `value` binds
+-- as a parameter — never interpolated.
+--
+-- The field type must be a scalar (`String` / `Int` / `Bool` / `Float`). A
+-- column whose field is an enum or newtype needs its codec: use `eqBy`.
 --
 -- Example:
 --
 --     Store.query store
---         |> Store.where (Store.eq "id" (SqlString "u1"))
-eq : String -> SqlValue -> Cond
-eq col value =
-    Compare OpEq col value
+--         |> Store.where (Store.eq .age 18)
+eq : (row -> value) -> value -> Cond row
+eq =
+    Ffi.kernel "Store_eq"
 
 
--- | `neq col value` — the rows where `col` differs from `value`.
+-- | `eqBy codec accessor value` — the accessor-typed equality leaf for an ENUM
+-- or newtype column, whose wire form is not type-derivable. `codec` is the
+-- field's own codec: `value` is projected through it to a bound `SqlValue`, so
+-- the stored wire form and the query's bound value agree by construction. The
+-- column is named by the accessor literal (checked against the row type) and
+-- validated at lowering; `value` binds as a parameter.
 --
 -- Example:
 --
 --     Store.query store
---         |> Store.where (Store.neq "status" (SqlString "deleted"))
-neq : String -> SqlValue -> Cond
-neq col value =
-    Compare OpNeq col value
-
-
--- | `gt col value` — the rows where `col` is greater than `value`.
---
--- Example:
---
---     Store.query store
---         |> Store.where (Store.gt "age" (SqlInt 18))
-gt : String -> SqlValue -> Cond
-gt col value =
-    Compare OpGt col value
-
-
--- | `gte col value` — the rows where `col` is greater than or equal to `value`.
---
--- Example:
---
---     Store.query store
---         |> Store.where (Store.gte "age" (SqlInt 18))
-gte : String -> SqlValue -> Cond
-gte col value =
-    Compare OpGte col value
-
-
--- | `lt col value` — the rows where `col` is less than `value`.
---
--- Example:
---
---     Store.query store
---         |> Store.where (Store.lt "age" (SqlInt 65))
-lt : String -> SqlValue -> Cond
-lt col value =
-    Compare OpLt col value
-
-
--- | `lte col value` — the rows where `col` is less than or equal to `value`.
---
--- Example:
---
---     Store.query store
---         |> Store.where (Store.lte "age" (SqlInt 64))
-lte : String -> SqlValue -> Cond
-lte col value =
-    Compare OpLte col value
-
-
--- | `like col pattern` — the rows where `col` matches the SQL `LIKE` `pattern`.
--- The pattern is bound as a parameter, so its wildcards (`%`, `_`) are DATA the
--- SQL engine interprets, never SQL text the caller injects.
---
--- Example:
---
---     Store.query store
---         |> Store.where (Store.like "name" "al%")
-like : String -> String -> Cond
-like col pattern =
-    Like col pattern
-
-
--- | `isNull col` — the rows where `col` is SQL `NULL`.
---
--- Example:
---
---     Store.query store
---         |> Store.where (Store.isNull "deletedAt")
-isNull : String -> Cond
-isNull col =
-    IsNull col
-
-
--- | `notNull col` — the rows where `col` is not SQL `NULL`.
---
--- Example:
---
---     Store.query store
---         |> Store.where (Store.notNull "email")
-notNull : String -> Cond
-notNull col =
-    NotNull col
-
-
--- | `inList col values` — the rows where `col` is one of `values`; each value
--- binds as a parameter. An EMPTY `values` matches no row (`(1 = 0)`), never an
--- ill-formed `IN ()`.
---
--- Example:
---
---     Store.query store
---         |> Store.where (Store.inList "status" [ SqlString "active", SqlString "trial" ])
-inList : String -> List SqlValue -> Cond
-inList col values =
-    InList col values
+--         |> Store.where (Store.eqBy rankCodec .rank Gold)
+eqBy : Codec value -> (row -> value) -> value -> Cond row
+eqBy =
+    Ffi.kernel "Store_eqBy"
 
 
 -- ── Connectives ────────────────────────────────────────────────────
@@ -1670,11 +1594,11 @@ inList col values =
 --     Store.query store
 --         |> Store.where
 --             (Store.and
---                 [ Store.gte "age" (SqlInt 18)
---                 , Store.eq "status" (SqlString "active")
+--                 [ Store.eq .active True
+--                 , Store.eq .status "active"
 --                 ]
 --             )
-and : List Cond -> Cond
+and : List (Cond row) -> Cond row
 and conds =
     AndList conds
 
@@ -1687,11 +1611,11 @@ and conds =
 --     Store.query store
 --         |> Store.where
 --             (Store.or
---                 [ Store.eq "status" (SqlString "active")
---                 , Store.eq "status" (SqlString "trial")
+--                 [ Store.eq .status "active"
+--                 , Store.eq .status "trial"
 --                 ]
 --             )
-or : List Cond -> Cond
+or : List (Cond row) -> Cond row
 or conds =
     OrList conds
 
@@ -1701,8 +1625,8 @@ or conds =
 -- Example:
 --
 --     Store.query store
---         |> Store.where (Store.not (Store.eq "status" (SqlString "deleted")))
-not : Cond -> Cond
+--         |> Store.where (Store.not (Store.eq .status "deleted"))
+not : Cond row -> Cond row
 not cond =
     NotCond cond
 
@@ -1819,7 +1743,7 @@ offset n q =
 -- Example:
 --
 --     Store.query store
---         |> Store.where (Store.gte "age" (SqlInt 18))
+--         |> Store.where (Store.eq .age 18)
 --         |> Store.orderDesc "age"
 --         |> Store.limit 10
 --         |> Store.toList conn
@@ -1867,7 +1791,7 @@ type alias OrderKey =
 -- Example:
 --
 --     Store.query store
---         |> Store.where (Store.eq "email" (SqlString "a@example.com"))
+--         |> Store.where (Store.eq .email "a@example.com")
 --         |> Store.toMaybe conn
 toMaybe : Db -> Query a -> Task Error (Maybe a)
 toMaybe conn q =
@@ -1881,7 +1805,7 @@ toMaybe conn q =
 -- Example:
 --
 --     Store.query store
---         |> Store.where (Store.eq "status" (SqlString "active"))
+--         |> Store.where (Store.eq .status "active")
 --         |> Store.count conn
 count : Db -> Query a -> Task Error Int
 count conn q =
@@ -1920,7 +1844,7 @@ columnTypeOf columns name =
 -- `Sql.column`, and every value only through `Sql.param`. `where` calls this the
 -- moment a `Cond` is added (the store is in hand), so a bad column fails closed
 -- at build time and no `Cond` value survives past the query builder.
-condFragmentIn : List Column -> Cond -> Result Error SqlFragment
+condFragmentIn : List Column -> Cond row -> Result Error SqlFragment
 condFragmentIn columns cond =
     case cond of
         Compare op col value ->
@@ -1996,7 +1920,7 @@ compareFragment op col value =
 -- Fold a list of conditions with a binary connective, using `emptyFragment` as
 -- the identity for the empty list. Each condition is lowered (and column-checked)
 -- before it joins, so the first invalid column fails the whole fold closed.
-foldConds : List Column -> (SqlFragment -> SqlFragment -> SqlFragment) -> SqlFragment -> List Cond -> Result Error SqlFragment
+foldConds : List Column -> (SqlFragment -> SqlFragment -> SqlFragment) -> SqlFragment -> List (Cond row) -> Result Error SqlFragment
 foldConds columns join emptyFragment conds =
     case conds of
         [] ->

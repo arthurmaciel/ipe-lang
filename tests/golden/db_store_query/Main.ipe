@@ -3,6 +3,7 @@ module Main exposing (main)
 import Ipe.Io as Io
 import Ipe.Db as Db
 import Ipe.Db.Store as Store exposing (Store)
+import Ipe.Db.Store.Unsafe as StoreU
 import Ipe.Dict as Dict
 import Ipe.String as String
 import Ipe.List as List
@@ -136,7 +137,7 @@ orderLimitQuery conn store =
     Task.map
         (\rows -> String.join "," (List.map rowLabel rows))
         (Store.query store
-            |> Store.where (Store.gt "qty" (SqlInt 4))
+            |> Store.where (StoreU.gt "qty" (SqlInt 4))
             |> Store.orderDesc "qty"
             |> Store.limit 2
             |> Store.toList conn
@@ -172,7 +173,7 @@ renderMaybeRow maybeRow =
 countCheck : Db -> Store Store.Row -> Task Error Int
 countCheck conn store =
     Store.query store
-        |> Store.where (Store.gt "qty" (SqlInt 8))
+        |> Store.where (StoreU.gt "qty" (SqlInt 8))
         |> Store.count conn
 
 
@@ -185,7 +186,7 @@ rejectBadColumn conn store =
         (Task.map
             (\_ -> "reject-bad-column:FAIL-accepted")
             (Store.query store
-                |> Store.where (Store.eq "no_such_column" (SqlInt 1))
+                |> Store.where (StoreU.eq "no_such_column" (SqlInt 1))
                 |> Store.toList conn
             )
         )

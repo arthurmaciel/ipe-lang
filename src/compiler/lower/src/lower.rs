@@ -20012,6 +20012,9 @@ impl<'a> Lowerer<'a> {
                 // lowering (the accessor argument becomes the validated column),
                 // so this arity is only the defensive fallback count.
                 | KernelFn::StoreEqCol
+                // `Store.eqBy : Codec t -> (row -> t) -> t -> Cond` — arity 3,
+                // likewise intercepted at lowering.
+                | KernelFn::StoreEqBy
                 | KernelFn::ListMap
                 | KernelFn::ListFilter
                 | KernelFn::ListMember
