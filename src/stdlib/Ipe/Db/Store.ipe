@@ -1583,6 +1583,27 @@ eqBy =
     Ffi.kernel "Store_eqBy"
 
 
+-- The lowered form of `eqBy`: the accessor `.field` (checked against the row
+-- type at compile time) has already been turned into the validated column name
+-- `col`, so this builds the value-carrying `Cond`. `codec` projects `v` to one
+-- bound `SqlValue` through `Ipe.Db.Codec.toSqlValue` (a scalar-shaped codec — an
+-- enum or newtype), which the `Compare` leaf later lowers to `Sql.param`. A codec
+-- that is not scalar-shaped, or a value that does not encode to its declared
+-- `ColType`, fails closed to the always-false `Cond` (`OrList []`) — the query
+-- matches no row rather than binding a wrong value.
+--
+-- Reached only through the `Store.eqBy` lowering intercept, which supplies `col`;
+-- not exported, so `col` is never a caller-supplied string.
+eqByNamed : String -> Codec value -> value -> Cond row
+eqByNamed col codec v =
+    case DbCodec.toSqlValue codec v of
+        Ok sqlValue ->
+            Compare OpEq col sqlValue
+
+        Err _ ->
+            OrList []
+
+
 -- ── Connectives ────────────────────────────────────────────────────
 
 

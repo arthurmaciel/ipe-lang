@@ -35,7 +35,8 @@ pub use diagnostic::{
     CodecAutoRejection, ConsentError, Construct, DResult, Diagnostic, Expected, ExpectedSet,
     ExposingDefect, Feature, FfiError, HOF_KERNEL_RESULT_CLASS, HeaderDefect, HelpLine, Hint,
     IfDefect, LetDefect, LowerError, MainRetName, ModelLeaf, NameError, ParseError, SandboxError,
-    SealRejection, SortedNames, SpanRole, Suggestion, TokenKind, TyDoc, TypeDeclDefect, TypeError,
+    SealRejection, SortedNames, SpanRole, StoreEqAccessorDefect, Suggestion, TokenKind, TyDoc,
+    TypeDeclDefect, TypeError,
 };
 pub use render::{DOC_HINT_CMD, plain_message, render, render_json, render_ty};
 pub use span::{Located, Span};
