@@ -20366,9 +20366,6 @@ impl<'a> Lowerer<'a> {
                 // lowering (the accessor argument becomes the validated column),
                 // so this arity is only the defensive fallback count.
                 | KernelFn::StoreEqCol
-                // `Store.eqBy : Codec t -> (row -> t) -> t -> Cond` — arity 3,
-                // likewise intercepted at lowering.
-                | KernelFn::StoreEqBy
                 | KernelFn::ListMap
                 | KernelFn::ListFilter
                 | KernelFn::ListMember
@@ -20686,7 +20683,11 @@ impl<'a> Lowerer<'a> {
                 // `Task.map2 : (a -> b -> r) -> Task e a -> Task e b -> Task e r`
                 | KernelFn::TaskMap2
                 // `Config.map2` — arity 3
-                | KernelFn::ConfigMap2,
+                | KernelFn::ConfigMap2
+                // `Store.eqBy : Codec t -> (row -> t) -> t -> Cond` — arity 3.
+                // Intercepted at lowering (the accessor argument becomes the
+                // validated column), so this arity is only the defensive fallback.
+                | KernelFn::StoreEqBy,
             ) => Ok(3),
             // ── JsonDec arity-4 ─────────────────────────────────────────
             Callee::Kernel(
@@ -22150,6 +22151,10 @@ impl<'a> Lowerer<'a> {
                     ("Db", "findWhere") => Ok(Callee::Kernel(KernelFn::DbFindWhere)),
                     ("Db", "deleteWhere") => Ok(Callee::Kernel(KernelFn::DbDeleteWhere)),
                     ("Db", "updateWhere") => Ok(Callee::Kernel(KernelFn::DbUpdateWhere)),
+                    // Typed accessor query leaves — intercepted at lowering, so
+                    // these arms are the legacy fallback for the pre-resolved id.
+                    ("Store", "eq") => Ok(Callee::Kernel(KernelFn::StoreEqCol)),
+                    ("Store", "eqBy") => Ok(Callee::Kernel(KernelFn::StoreEqBy)),
                     // ── Secret kernels ──────────────────────────
                     ("Secret", "fromString") => Ok(Callee::Kernel(KernelFn::SecretFromString)),
                     ("Secret", "reveal") => Ok(Callee::Kernel(KernelFn::SecretReveal)),
