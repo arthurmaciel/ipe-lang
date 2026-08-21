@@ -38,6 +38,7 @@
 module Ipe.Db.Codec exposing
     ( codecToBinds
     , codecFromRow
+    , toSqlValue
     )
 
 
@@ -200,6 +201,39 @@ nullWitness colType =
 
         CNull inner ->
             nullWitness inner
+
+
+-- | Project a SCALAR-shaped value through its codec to one bound `SqlValue`.
+-- Where `codecToBinds` handles an `SRecord` codec (a whole row), this handles a
+-- codec whose `Shape` is a single `SScalar` column — an enum or newtype whose
+-- wire form is one JSON scalar. The codec's encoder runs to one in-memory
+-- `Value`, then the decoder for the column's `ColType` coerces it to the matching
+-- bound constructor (`SqlString` / `SqlInt` / …). The result is a parameter
+-- binding — no SQL text is built.
+--
+-- Fail-closed: a codec whose shape is not `SScalar` (a record or a blob has no
+-- single column type) is a typed `Err`; so is an encoded value that does not
+-- match its declared `ColType`. Used by `Ipe.Db.Store.eqBy` to bind an enum or
+-- newtype column's query value.
+toSqlValue : Codec a -> a -> Result Error SqlValue
+toSqlValue codec x =
+    case Codec.shape codec of
+        SScalar colType ->
+            bindScalar (Codec.toValue codec x) colType
+
+        SRecord _ ->
+            Err notARecordError
+
+        SBlob ->
+            Err notARecordError
+
+
+-- | Coerce a single encoded `Value` to a bound `SqlValue` for a scalar column
+-- type, running the same `ColType`-directed decoder the row binds use. A decode
+-- failure (the value is not the declared scalar shape) is a typed `Err`.
+bindScalar : Value -> ColType -> Result Error SqlValue
+bindScalar value colType =
+    Decode.decodeValue (sqlValueDecoder colType) value
 
 
 -- ─── Decode direction: codec + row → value ─────────────────────────

@@ -18,7 +18,9 @@ use std::cell::Cell;
 use std::collections::{BTreeMap, BTreeSet};
 
 use ipe_canon::ast as canon;
-use ipe_diagnostics::{DResult, Diagnostic, Feature, Located, LowerError, MainRetName, Span};
+use ipe_diagnostics::{
+    DResult, Diagnostic, Feature, Located, LowerError, MainRetName, Span, StoreEqAccessorDefect,
+};
 use ipe_intern::{Interner, Symbol};
 use ipe_ir::{
     Arm, BinOp, BoundSet, CallPin, Callee, Capability, EnumDef, Expr, Func, FuncId, IrType,
@@ -9905,6 +9907,26 @@ const fn unsupported(span: Span, feature: Feature) -> Diagnostic {
     }
 }
 
+/// Build the fail-closed [`Diagnostic::Lower`] (IPE-L0145) for a `Store.eq` /
+/// `Store.eqBy` column argument the accessor intercept rejected, carrying the
+/// specific defect and the offending source `span`.
+const fn unsupported_store_eq(span: Span, defect: StoreEqAccessorDefect) -> Diagnostic {
+    Diagnostic::Lower {
+        span,
+        msg: LowerError::StoreEqAccessorInvalid(defect),
+    }
+}
+
+/// Whether a column name derived from a record-field accessor is a valid SQL
+/// identifier — non-empty and ASCII-alphanumeric-or-underscore. A strict subset
+/// of the runtime's plain-mode identifier gate (defence in depth: the query
+/// leaf's `Sql.column` re-validates at emit), applied here at the accessor's span
+/// so a malformed field name is rejected with a precise message rather than
+/// reaching SQL.
+fn is_valid_sql_column(name: &str) -> bool {
+    !name.is_empty() && name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
+}
+
 /// Whether an `IrType` is `Float` — the single predicate that gates `Dict`
 /// keys and `Set` elements at **both** lowering entry-points (`ir_type_from_ty`
 /// and `ir_type_from_canon`), ensuring the two paths apply the same rejection.
@@ -10448,6 +10470,23 @@ fn rewrite_destructure_read(
         }),
         body: Box::new(Expr::Var(s)),
     })
+}
+
+/// The `Ipe.Db.Store` constructor identities the `Store.eq` / `Store.eqBy`
+/// intercept synthesises a `Compare OpEq <col> <value>` query leaf from. Resolved
+/// once from the linked module's declared unions, so the synthesised
+/// [`Expr::Ctor`] carries the exact nominal identity the backend expects.
+struct StoreCondIds {
+    /// The `Ipe.Db.Store` module home the `Cond` / `CompareOp` unions live in.
+    home: ModPath,
+    /// The `Cond` union's type-name symbol.
+    cond_ty: Symbol,
+    /// The `Compare : CompareOp -> String -> SqlValue -> Cond` constructor.
+    compare_variant: Symbol,
+    /// The `CompareOp` union's type-name symbol.
+    compareop_ty: Symbol,
+    /// The `OpEq : CompareOp` constructor (the equality operator).
+    opeq_variant: Symbol,
 }
 
 /// The lowering pass over a single canonical module.
@@ -11913,6 +11952,271 @@ impl<'a> Lowerer<'a> {
         self.types.regions.get(&(home, span))
     }
 
+    /// Locate a user-declared constructor by its spelling, returning its enum's
+    /// nominal identity `(home, type name)` and the constructor's own symbol.
+    /// Used by the `Store.eq` / `Store.eqBy` intercept to synthesise the
+    /// `Ipe.Db.Store` `Cond` / `CompareOp` constructions the query leaf lowers
+    /// to. Scans `enum_variants` (the true per-union variant sets), so a match
+    /// carries the exact `(home, ty, variant)` triple `Expr::Ctor` needs; `None`
+    /// when no union declares a constructor of that name.
+    fn find_user_ctor(&self, ctor_name: &str) -> Option<(ModPath, Symbol, Symbol)> {
+        let want = self.interner.lookup(ctor_name)?;
+        for ((home, ty), variants) in &self.enum_variants {
+            if variants.contains(&want) {
+                return Some((home.clone(), *ty, want));
+            }
+        }
+        None
+    }
+
+    /// The `(home, Cond, Compare, CompareOp, OpEq)` identities the `Store.eq` /
+    /// `Store.eqBy` intercept needs to build a `Compare OpEq <col> <value>` leaf.
+    /// Every name is an `Ipe.Db.Store` declaration; a miss means the program does
+    /// not link that module even though it called `Store.eq`, which is a violated
+    /// invariant (the kernel could not have resolved without it).
+    fn store_cond_ids(&self) -> DResult<StoreCondIds> {
+        let (cond_home, cond_ty, compare_variant) =
+            self.find_user_ctor("Compare").ok_or_else(|| {
+                bug(
+                    "ipe_lower::store_cond_ids",
+                    "Ipe.Db.Store `Compare` constructor not found",
+                )
+            })?;
+        let (_op_home, compareop_ty, opeq_variant) =
+            self.find_user_ctor("OpEq").ok_or_else(|| {
+                bug(
+                    "ipe_lower::store_cond_ids",
+                    "Ipe.Db.Store `OpEq` constructor not found",
+                )
+            })?;
+        Ok(StoreCondIds {
+            home: cond_home,
+            cond_ty,
+            compare_variant,
+            compareop_ty,
+            opeq_variant,
+        })
+    }
+
+    /// Match the column argument of `Store.eq` / `Store.eqBy` against the bare
+    /// field-accessor shape the parser produces for `.field` — a single-parameter
+    /// lambda whose body is one `Access` of that parameter. Returns the accessed
+    /// field's symbol, or `None` for any other shape (a let-bound name, a
+    /// multi-field access, a computed lambda). The accessor is what names the
+    /// column, so a non-accessor argument is rejected fail-closed by the caller.
+    fn accessor_field_sym(arg: &canon::Expr) -> Option<Symbol> {
+        let canon::Expr_::Lambda(params, body) = &arg.value else {
+            return None;
+        };
+        let [param] = params.as_slice() else {
+            return None;
+        };
+        let canon::Pattern_::PVar(param_sym) = &param.value else {
+            return None;
+        };
+        let canon::Expr_::Access(base, field) = &body.value else {
+            return None;
+        };
+        let canon::Expr_::VarLocal(base_sym) = &base.value else {
+            return None;
+        };
+        if base_sym == param_sym {
+            Some(*field)
+        } else {
+            None
+        }
+    }
+
+    /// Read the column name an accessor argument names, validated against the
+    /// accessor's own solved arrow type. Returns the column name and the field's
+    /// solved type. Fails closed (IPE-L0145) when the argument is not a bare
+    /// `.field` accessor, when its arrow type is not `record -> field`, when the
+    /// record has no such field, or when the derived column name is not a valid
+    /// SQL identifier. The last check is defence in depth — the query leaf's
+    /// `Sql.column` re-validates at emit — but it rejects a bad identifier here,
+    /// at the accessor's span, with a precise message.
+    fn accessor_column<'t>(&'t self, acc: &canon::Expr) -> DResult<(String, &'t Ty)> {
+        let field = Self::accessor_field_sym(acc)
+            .ok_or_else(|| unsupported_store_eq(acc.span, StoreEqAccessorDefect::NotAnAccessor))?;
+        let field_name = self.resolve(field)?.to_string();
+        // The accessor's own span records its solved arrow type `record -> field`.
+        let arrow = self.region_ty(acc.span).ok_or_else(|| {
+            bug(
+                "ipe_lower::accessor_column",
+                "no region type for a Store.eq accessor argument",
+            )
+        })?;
+        let Ty::Fun(record, field_ty) = arrow else {
+            return Err(bug(
+                "ipe_lower::accessor_column",
+                "Store.eq accessor region type is not an arrow",
+            ));
+        };
+        // Confirm the field exists on the (solved) record the accessor reads.
+        let field_present = match record.as_ref() {
+            Ty::Record(fields, _) => fields.keys().any(|k| *k == field),
+            _ => false,
+        };
+        if !field_present {
+            return Err(unsupported_store_eq(
+                acc.span,
+                StoreEqAccessorDefect::UnknownField {
+                    field: field_name.into_boxed_str(),
+                },
+            ));
+        }
+        if !is_valid_sql_column(&field_name) {
+            return Err(unsupported_store_eq(
+                acc.span,
+                StoreEqAccessorDefect::InvalidColumn {
+                    column: field_name.into_boxed_str(),
+                },
+            ));
+        }
+        Ok((field_name, field_ty))
+    }
+
+    /// Wrap an already-lowered scalar value in the `SqlValue` constructor its
+    /// solved field type selects — the value bind Option A applies at the
+    /// intercept. Only `String` / `Int` / `Bool` / `Float` are scalar; any other
+    /// field type under plain `eq` fails closed (IPE-L0145 — use `eqBy` + codec).
+    fn scalar_sql_value(
+        &self,
+        field_ty: &Ty,
+        field_name: &str,
+        span: Span,
+        value: Expr,
+    ) -> DResult<Expr> {
+        let variant = match field_ty {
+            Ty::Con { name, .. } => match self.resolve(*name)? {
+                "String" => self.builtins.sql_string,
+                "Int" => self.builtins.sql_int,
+                "Bool" => self.builtins.sql_bool,
+                "Float" => self.builtins.sql_float,
+                other => {
+                    return Err(unsupported_store_eq(
+                        span,
+                        StoreEqAccessorDefect::NonScalarField {
+                            field: field_name.into(),
+                            found: other.into(),
+                        },
+                    ));
+                }
+            },
+            _ => {
+                return Err(unsupported_store_eq(
+                    span,
+                    StoreEqAccessorDefect::NonScalarField {
+                        field: field_name.into(),
+                        found: "a non-scalar type".into(),
+                    },
+                ));
+            }
+        };
+        Ok(Expr::Ctor {
+            home: ModPath(Vec::new()),
+            ty: self.builtins.sqlvalue,
+            variant,
+            args: vec![value],
+        })
+    }
+
+    /// Dispatch a `Store.eq` / `Store.eqBy` call intercepted at lowering. The
+    /// accessor argument (`.field`) names the validated column; the value binds
+    /// as a query parameter — never reaching SQL as text. `Store.eq` binds the
+    /// scalar value directly as the `SqlValue` its field type selects;
+    /// `Store.eqBy` projects the value through the codec. `peek` is the resolved
+    /// callee, `args` the call's canonical arguments (arity-guarded by the caller).
+    fn lower_store_eq(&self, peek: &Callee, args: &[canon::Expr]) -> DResult<Expr> {
+        if matches!(peek, Callee::Kernel(KernelFn::StoreEqBy)) {
+            let (Some(codec), Some(acc), Some(value)) = (args.first(), args.get(1), args.get(2))
+            else {
+                return Err(bug("ipe_lower::lower_store_eq", "Store.eqBy arity < 3"));
+            };
+            return self.lower_store_eq_by(codec, acc, value);
+        }
+        let (Some(acc), Some(value)) = (args.first(), args.get(1)) else {
+            return Err(bug("ipe_lower::lower_store_eq", "Store.eq arity < 2"));
+        };
+        self.lower_store_eq_col(acc, value)
+    }
+
+    /// Lower `Store.eq .field value` to the `Compare OpEq <column> (SqlXxx value)`
+    /// `Cond` — the accessor names the validated column, and the scalar value
+    /// binds directly as the `SqlValue` its field type selects. No caller value
+    /// reaches SQL as text: `Compare`'s value is a bound parameter, and the column
+    /// is a validated identifier.
+    fn lower_store_eq_col(&self, acc: &canon::Expr, value: &canon::Expr) -> DResult<Expr> {
+        let (column, field_ty) = self.accessor_column(acc)?;
+        let lowered_value = self.lower_expr(value)?;
+        let sql_value = self.scalar_sql_value(field_ty, &column, value.span, lowered_value)?;
+        self.build_compare_eq(column, sql_value)
+    }
+
+    /// Lower `Store.eqBy codec .field value` to a call to the `Ipe.Db.Store`
+    /// `eqByNamed` helper with the validated column name — the helper projects
+    /// `value` through `codec` to a bound `SqlValue` and builds the same
+    /// `Compare OpEq` leaf. The enum/newtype wire form is not type-derivable, so
+    /// the codec (not a fixed `SqlValue` variant) does the projection; the
+    /// intercept's only job is to supply the accessor-derived column name.
+    fn lower_store_eq_by(
+        &self,
+        codec: &canon::Expr,
+        acc: &canon::Expr,
+        value: &canon::Expr,
+    ) -> DResult<Expr> {
+        let (column, _field_ty) = self.accessor_column(acc)?;
+        let lowered_codec = self.lower_expr(codec)?;
+        let lowered_value = self.lower_expr(value)?;
+        let id = self.eq_by_named_func_id()?;
+        Ok(Expr::Call {
+            callee: Callee::Func(id),
+            args: vec![Expr::Str(column), lowered_codec, lowered_value],
+            pin: CallPin::None,
+            on_form: OnFormKind::NotForm,
+        })
+    }
+
+    /// Build the `Compare OpEq <column> <sql_value>` `Cond` construction from the
+    /// resolved `Ipe.Db.Store` constructor identities.
+    fn build_compare_eq(&self, column: String, sql_value: Expr) -> DResult<Expr> {
+        let ids = self.store_cond_ids()?;
+        let op_eq = Expr::Ctor {
+            home: ids.home.clone(),
+            ty: ids.compareop_ty,
+            variant: ids.opeq_variant,
+            args: vec![],
+        };
+        Ok(Expr::Ctor {
+            home: ids.home,
+            ty: ids.cond_ty,
+            variant: ids.compare_variant,
+            args: vec![op_eq, Expr::Str(column), sql_value],
+        })
+    }
+
+    /// The `FuncId` of the `Ipe.Db.Store` `eqByNamed` helper. Found by its
+    /// spelling among the linked module's top-level bindings (the same
+    /// `func_ids` a `VarTopLevel` resolves through); a miss means the program
+    /// called `Store.eqBy` without linking `Ipe.Db.Store`, a violated invariant.
+    fn eq_by_named_func_id(&self) -> DResult<FuncId> {
+        let want = self.interner.lookup("eqByNamed").ok_or_else(|| {
+            bug(
+                "ipe_lower::eq_by_named_func_id",
+                "`eqByNamed` is not interned — Ipe.Db.Store not linked",
+            )
+        })?;
+        self.func_ids
+            .iter()
+            .find_map(|((_home, name), id)| (*name == want).then_some(*id))
+            .ok_or_else(|| {
+                bug(
+                    "ipe_lower::eq_by_named_func_id",
+                    "Ipe.Db.Store `eqByNamed` helper not found",
+                )
+            })
+    }
+
     /// Run the pass, producing the single-module program. On error, returns the
     /// diagnostic paired with the `home` (module byte-namespace path) of the def
     /// that produced it, so the driver attributes a lowering diagnostic to the
@@ -12706,6 +13010,24 @@ impl<'a> Lowerer<'a> {
             )
     }
 
+    /// is `(module, name)` the `Ipe.Db.Store.Cond` typed-query predicate —
+    /// module `["Ipe", "Db", "Store"]`, name `Cond`? Its `row` argument is a
+    /// PHANTOM: no `Cond` constructor carries a `row` value (the parameter ties
+    /// the predicate to the store's row type at the type-checker only). It is
+    /// dropped at lowering so the emitted enum is the non-generic
+    /// `IpeDbStoreCond`; otherwise every leaf construction (`Compare …`) leaves
+    /// the enum's type argument unconstrained at the point of construction — an
+    /// uninferrable `T` (E0283), exactly as for `Ipe.Cache.Cache`.
+    fn is_cond_con(&self, module: &[Symbol], name: Symbol) -> bool {
+        self.interner.resolve(name) == Some("Cond")
+            && matches!(
+                module,
+                [a, b, c] if self.interner.resolve(*a) == Some("Ipe")
+                    && self.interner.resolve(*b) == Some("Db")
+                    && self.interner.resolve(*c) == Some("Store")
+            )
+    }
+
     /// is `(module, name)` the `Ipe.Cache.Cache` opaque handle type —
     /// module `["Ipe", "Cache"]`, name `Cache`? Its `k`/`v` args are dropped at
     /// lowering (backed by the non-generic runtime `IpeCacheHandle`).
@@ -12736,7 +13058,23 @@ impl<'a> Lowerer<'a> {
     }
 
     fn lower_enum(&self, u: &canon::Union) -> DResult<EnumDef> {
-        let type_params = u.vars.clone();
+        // `Ipe.Db.Store.Cond row` carries a PHANTOM `row` (no constructor holds a
+        // `row` value — it ties the predicate to the store's row at the
+        // type-checker only). Emit the enum non-generic so its construction is
+        // type-determinate; the `is_cond_con` arms in `ir_type_from_ty` /
+        // `ir_type_from_canon` drop the matching type argument at every use site,
+        // so the decl and the references agree.
+        let cond_phantom = self.is_cond_con(&u.home, u.name);
+        let type_params = if cond_phantom {
+            Vec::new()
+        } else {
+            u.vars.clone()
+        };
+        // The variable-scope gate (Gate 1 below) checks each field var against the
+        // union's DECLARED vars, not the emitted generics — so the phantom `row`
+        // of `Cond` (present in `AndList (List (Cond row))` etc.) is a legal,
+        // declared variable even though it is erased from the emitted enum.
+        let gate_params = u.vars.clone();
         let mut variants = Vec::with_capacity(u.ctors.len());
         for ctor in &u.ctors {
             let mut fields = Vec::with_capacity(ctor.args.len());
@@ -12765,11 +13103,11 @@ impl<'a> Lowerer<'a> {
                 let mut vars = BTreeSet::new();
                 collect_type_vars(arg, &mut vars);
                 if !vars.iter().all(|v| {
-                    type_params.contains(v) || self.interner.resolve(*v).is_some_and(|n| n == "any")
+                    gate_params.contains(v) || self.interner.resolve(*v).is_some_and(|n| n == "any")
                 }) {
                     return Err(unsupported(ctor.span, Feature::Polymorphism));
                 }
-                let ir = self.ir_type_from_canon(arg, &type_params)?;
+                let ir = self.ir_type_from_canon(arg, &gate_params)?;
                 // Carrier normalization (Phase 2, enum payloads): a function
                 // DIRECTLY in a constructor payload is carried on the
                 // `Arc<dyn Fn>` carrier ([`IrType::SharedFun`]) so the enum is
@@ -14466,30 +14804,33 @@ impl<'a> Lowerer<'a> {
                     .contains_key(&(ModPath(home.clone()), *name)) =>
                 {
                     // drop the phantom `k`/`v` of `Ipe.Cache.Cache k v`
-                    // (backed by the non-generic `IpeCacheHandle`) — twin of the
-                    // solved-Ty arm; see its comment for the E0283 rationale.
-                    let ir_args = if self.is_cache_handle_con(home, *name) {
-                        Vec::new()
-                    } else {
-                        let mut v = Vec::with_capacity(args.len());
-                        for a in args {
-                            // A type argument filling a generic payload slot that
-                            // instantiates to a function takes the same `Arc<dyn Fn>`
-                            // carrier the decl-side flip
-                            // ([`normalize_enum_payload_fun_carrier`]) stamps on a
-                            // direct-function payload and the value-side flip
-                            // ([`promote_stored_fn_carrier`]) constructs with
-                            // `Arc::new`. Without it the type application spells the
-                            // slot `Box<dyn Fn>` while the construction fills it with
-                            // an `Arc`, an `Arc`-vs-`Box` E0308 (and the composite's
-                            // derived `Clone` fails on the non-`Clone` `Box`). The
-                            // flip is a no-op for every non-function argument.
-                            v.push(normalize_enum_payload_fun_carrier(
-                                self.ir_type_from_canon(a, generics)?,
-                            ));
-                        }
-                        v
-                    };
+                    // (backed by the non-generic `IpeCacheHandle`) and the phantom
+                    // `row` of `Ipe.Db.Store.Cond row` (untyped runtime data) —
+                    // twin of the solved-Ty arm; see its comment for the E0283
+                    // rationale.
+                    let ir_args =
+                        if self.is_cache_handle_con(home, *name) || self.is_cond_con(home, *name) {
+                            Vec::new()
+                        } else {
+                            let mut v = Vec::with_capacity(args.len());
+                            for a in args {
+                                // A type argument filling a generic payload slot that
+                                // instantiates to a function takes the same `Arc<dyn Fn>`
+                                // carrier the decl-side flip
+                                // ([`normalize_enum_payload_fun_carrier`]) stamps on a
+                                // direct-function payload and the value-side flip
+                                // ([`promote_stored_fn_carrier`]) constructs with
+                                // `Arc::new`. Without it the type application spells the
+                                // slot `Box<dyn Fn>` while the construction fills it with
+                                // an `Arc`, an `Arc`-vs-`Box` E0308 (and the composite's
+                                // derived `Clone` fails on the non-`Clone` `Box`). The
+                                // flip is a no-op for every non-function argument.
+                                v.push(normalize_enum_payload_fun_carrier(
+                                    self.ir_type_from_canon(a, generics)?,
+                                ));
+                            }
+                            v
+                        };
                     Ok(IrType::Enum {
                         home: ModPath(home.clone()),
                         name: *name,
@@ -15581,7 +15922,9 @@ impl<'a> Lowerer<'a> {
                     // `Ipe.Cache` wrapper fns (`new : CacheCfg -> Task Error
                     // (Cache k v)` whose result no longer mentions them), an
                     // uninferrable `T` at the call site (E0283).
-                    let ir_args = if self.is_cache_handle_con(module, *name) {
+                    let ir_args = if self.is_cache_handle_con(module, *name)
+                        || self.is_cond_con(module, *name)
+                    {
                         Vec::new()
                     } else {
                         let mut v = Vec::with_capacity(args.len());
@@ -17422,6 +17765,7 @@ impl<'a> Lowerer<'a> {
     /// path. `lower_callee` is a pure symbol-table lookup (no side effects);
     /// a fall-through carries the already-resolved [`Callee`] so the uniform
     /// path doesn't re-run the large dispatch.
+    #[allow(clippy::too_many_lines)] // one arm per intercepted kernel family
     fn intercept_web_kernel_call(
         &self,
         callee: &canon::Expr,
@@ -17605,6 +17949,16 @@ impl<'a> Lowerer<'a> {
                             on_form: OnFormKind::NotForm,
                         }));
                     }
+                }
+                // `Store.eq .field value` / `Store.eqBy codec .field value` — the
+                // typed accessor query leaves. See `lower_store_eq` for how the
+                // accessor names the validated column and the value binds as a
+                // parameter (never reaching SQL as text).
+                Callee::Kernel(KernelFn::StoreEqCol) if args.len() == 2 => {
+                    return Ok(Intercepted::Done(self.lower_store_eq(&peek, args)?));
+                }
+                Callee::Kernel(KernelFn::StoreEqBy) if args.len() == 3 => {
+                    return Ok(Intercepted::Done(self.lower_store_eq(&peek, args)?));
                 }
                 _ => {}
             }
@@ -20008,6 +20362,10 @@ impl<'a> Lowerer<'a> {
                 | KernelFn::StringFilter
                 | KernelFn::StringAny
                 | KernelFn::StringAll
+                // `Store.eq : (row -> t) -> t -> Cond` — arity 2. Intercepted at
+                // lowering (the accessor argument becomes the validated column),
+                // so this arity is only the defensive fallback count.
+                | KernelFn::StoreEqCol
                 | KernelFn::ListMap
                 | KernelFn::ListFilter
                 | KernelFn::ListMember
@@ -20325,7 +20683,11 @@ impl<'a> Lowerer<'a> {
                 // `Task.map2 : (a -> b -> r) -> Task e a -> Task e b -> Task e r`
                 | KernelFn::TaskMap2
                 // `Config.map2` — arity 3
-                | KernelFn::ConfigMap2,
+                | KernelFn::ConfigMap2
+                // `Store.eqBy : Codec t -> (row -> t) -> t -> Cond` — arity 3.
+                // Intercepted at lowering (the accessor argument becomes the
+                // validated column), so this arity is only the defensive fallback.
+                | KernelFn::StoreEqBy,
             ) => Ok(3),
             // ── JsonDec arity-4 ─────────────────────────────────────────
             Callee::Kernel(
@@ -21789,6 +22151,10 @@ impl<'a> Lowerer<'a> {
                     ("Db", "findWhere") => Ok(Callee::Kernel(KernelFn::DbFindWhere)),
                     ("Db", "deleteWhere") => Ok(Callee::Kernel(KernelFn::DbDeleteWhere)),
                     ("Db", "updateWhere") => Ok(Callee::Kernel(KernelFn::DbUpdateWhere)),
+                    // Typed accessor query leaves — intercepted at lowering, so
+                    // these arms are the legacy fallback for the pre-resolved id.
+                    ("Store", "eq") => Ok(Callee::Kernel(KernelFn::StoreEqCol)),
+                    ("Store", "eqBy") => Ok(Callee::Kernel(KernelFn::StoreEqBy)),
                     // ── Secret kernels ──────────────────────────
                     ("Secret", "fromString") => Ok(Callee::Kernel(KernelFn::SecretFromString)),
                     ("Secret", "reveal") => Ok(Callee::Kernel(KernelFn::SecretReveal)),
