@@ -1,10 +1,11 @@
 //! SEAL smoke for the new accessor-typed Store query leaves:
-//!   neq, gt, gte, lt, lte, like, inList, inListBy
+//!   neq, gt, gte, lt, lte, like, isNull, notNull, inList, inListBy
 //!
 //! A typed record store (built via `Store.fromCodec` with a hand-assembled
-//! `Codec Item` carrying `SRecord` shape) is seeded with three rows, then
-//! each leaf is exercised via a `Store.count`. The program connects to
-//! `sqlite::memory:` and runs real SQLite queries.
+//! `Codec Item` carrying `SRecord` shape, including a nullable `note` column)
+//! is seeded with three rows, then each leaf is exercised via a `Store.count`.
+//! `isNull` / `notNull` run against a real SQL NULL (the `Nothing`-seeded row).
+//! The program connects to `sqlite::memory:` and runs real SQLite queries.
 //!
 //! Gated on `IPE_E2E=1`; without it the test returns early. Run with:
 //!

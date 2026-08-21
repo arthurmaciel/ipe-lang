@@ -6,3 +6,5 @@ neq-name:2
 like-name:1
 inlist-qty:2
 inlistby-name:1
+isnull-note:1
+notnull-note:2

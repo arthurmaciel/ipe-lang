@@ -3,29 +3,33 @@ module Main exposing (main)
 -- SEAL smoke for the new accessor-typed query leaves:
 --   neq, gt, gte, lt, lte, like, isNull, notNull, inList, inListBy
 --
--- The row type is a two-field record `Item = { name : String, qty : Int }`.
+-- The row type is `Item = { name : String, qty : Int, note : Maybe String }`.
 -- A `Codec Item` is assembled directly (using the exposed `Codec(..)` and
 -- `Shape(..)` constructors) so its `Shape` is `SRecord`, which `Store.fromCodec`
--- requires. Both fields are scalar, so the plain (non-By) leaves cover all cases.
--- `inListBy` is exercised with `Codec.string` (a scalar codec) over `.name`.
+-- requires. `name`/`qty` are scalar (covered by the plain leaves); `note` is a
+-- NULLABLE column (`CNull CText`) so `isNull` / `notNull` are exercised against
+-- real SQL NULLs. `inListBy` is exercised with `Codec.string` (a scalar codec)
+-- over `.name`.
 --
 -- The program connects to in-memory SQLite, creates + seeds the table, then
 -- counts rows for each leaf.
 --
 -- Seed data:
---   { name = "widget",   qty = 30 }
---   { name = "gizmo",    qty = 9  }
---   { name = "sprocket", qty = 5  }
+--   { name = "widget",   qty = 30, note = Just "keep"  }
+--   { name = "gizmo",    qty = 9,  note = Just "watch" }
+--   { name = "sprocket", qty = 5,  note = Nothing       }  -- a real SQL NULL
 --
 -- Expected output:
---   gt-qty:2
---   lt-qty:1
+--   gt-qty:1
+--   lt-qty:2
 --   gte-qty:2
 --   lte-qty:2
 --   neq-name:2
 --   like-name:1
 --   inlist-qty:2
 --   inlistby-name:1
+--   isnull-note:1
+--   notnull-note:2
 
 
 import Ipe.Codec as Codec exposing (Codec(..), Shape(..), ColType(..))
@@ -36,6 +40,7 @@ import Ipe.Io as Io
 import Ipe.Json.Decode as Decode
 import Ipe.Json.Encode as Encode
 import Ipe.List as List
+import Ipe.Maybe as Maybe exposing (Maybe(..))
 import Ipe.Result as Result exposing (Result(..))
 import Ipe.String as String
 import Ipe.Task as Task
@@ -44,11 +49,14 @@ import Ipe.Task as Task
 type alias Item =
     { name : String
     , qty : Int
+    , note : Maybe String
     }
 
 
--- A `Codec Item` with `SRecord [("name", CText), ("qty", CInt)]` shape,
--- built directly so `Store.fromCodec` derives the two columns.
+-- A `Codec Item` with `SRecord [("name", CText), ("qty", CInt), ("note",
+-- CNull CText)]` shape, built directly so `Store.fromCodec` derives the three
+-- columns. `note` is nullable: a `Nothing` encodes to JSON null (bound as a
+-- real SQL NULL on insert), so `isNull` / `notNull` have live NULLs to match.
 itemCodec : Codec Item
 itemCodec =
     Codec
@@ -57,21 +65,37 @@ itemCodec =
                 Encode.object
                     [ ( "name", Encode.string item.name )
                     , ( "qty", Encode.int item.qty )
+                    , ( "note", encodeNote item.note )
                     ]
         , mkDec =
             \_ ->
-                Decode.map2 (\n q -> { name = n, qty = q })
+                Decode.map3 (\n q nt -> { name = n, qty = q, note = nt })
                     (Decode.field "name" Decode.string)
                     (Decode.field "qty" Decode.int)
-        , shp = SRecord [ ( "name", CText ), ( "qty", CInt ) ]
+                    (Decode.oneOf
+                        [ Decode.map Just (Decode.field "note" Decode.string)
+                        , Decode.succeed Nothing
+                        ]
+                    )
+        , shp = SRecord [ ( "name", CText ), ( "qty", CInt ), ( "note", CNull CText ) ]
         }
+
+
+encodeNote : Maybe String -> Encode.Value
+encodeNote note =
+    case note of
+        Just s ->
+            Encode.string s
+
+        Nothing ->
+            Encode.null
 
 
 seed : List Item
 seed =
-    [ { name = "widget", qty = 30 }
-    , { name = "gizmo", qty = 9 }
-    , { name = "sprocket", qty = 5 }
+    [ { name = "widget", qty = 30, note = Just "keep" }
+    , { name = "gizmo", qty = 9, note = Just "watch" }
+    , { name = "sprocket", qty = 5, note = Nothing }
     ]
 
 
@@ -138,7 +162,15 @@ checks conn store =
                                                         (\inListN ->
                                                             Task.andThen
                                                                 (\inListByN ->
-                                                                    printAll gtN ltN gteN lteN neqN likeN inListN inListByN
+                                                                    Task.andThen
+                                                                        (\isNullN ->
+                                                                            Task.andThen
+                                                                                (\notNullN ->
+                                                                                    printAll gtN ltN gteN lteN neqN likeN inListN inListByN isNullN notNullN
+                                                                                )
+                                                                                (countWhere conn store (Store.notNull .note))
+                                                                        )
+                                                                        (countWhere conn store (Store.isNull .note))
                                                                 )
                                                                 (countWhere conn store (Store.inListBy Codec.string .name [ "widget" ]))
                                                         )
@@ -157,8 +189,8 @@ checks conn store =
         (countWhere conn store (Store.gt .qty 9))
 
 
-printAll : Int -> Int -> Int -> Int -> Int -> Int -> Int -> Int -> Task Error ()
-printAll gtN ltN gteN lteN neqN likeN inListN inListByN =
+printAll : Int -> Int -> Int -> Int -> Int -> Int -> Int -> Int -> Int -> Int -> Task Error ()
+printAll gtN ltN gteN lteN neqN likeN inListN inListByN isNullN notNullN =
     Io.println
         (String.join "\n"
             [ String.concat [ "gt-qty:", String.fromInt gtN ]
@@ -169,5 +201,7 @@ printAll gtN ltN gteN lteN neqN likeN inListN inListByN =
             , String.concat [ "like-name:", String.fromInt likeN ]
             , String.concat [ "inlist-qty:", String.fromInt inListN ]
             , String.concat [ "inlistby-name:", String.fromInt inListByN ]
+            , String.concat [ "isnull-note:", String.fromInt isNullN ]
+            , String.concat [ "notnull-note:", String.fromInt notNullN ]
             ]
         )
