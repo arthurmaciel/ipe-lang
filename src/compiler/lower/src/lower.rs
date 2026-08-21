@@ -9910,7 +9910,7 @@ const fn unsupported(span: Span, feature: Feature) -> Diagnostic {
 /// Build the fail-closed [`Diagnostic::Lower`] (IPE-L0145) for a `Store.eq` /
 /// `Store.eqBy` column argument the accessor intercept rejected, carrying the
 /// specific defect and the offending source `span`.
-fn unsupported_store_eq(span: Span, defect: StoreEqAccessorDefect) -> Diagnostic {
+const fn unsupported_store_eq(span: Span, defect: StoreEqAccessorDefect) -> Diagnostic {
     Diagnostic::Lower {
         span,
         msg: LowerError::StoreEqAccessorInvalid(defect),
@@ -12036,9 +12036,8 @@ impl<'a> Lowerer<'a> {
     /// `Sql.column` re-validates at emit — but it rejects a bad identifier here,
     /// at the accessor's span, with a precise message.
     fn accessor_column<'t>(&'t self, acc: &canon::Expr) -> DResult<(String, &'t Ty)> {
-        let field = Self::accessor_field_sym(acc).ok_or_else(|| {
-            unsupported_store_eq(acc.span, StoreEqAccessorDefect::NotAnAccessor)
-        })?;
+        let field = Self::accessor_field_sym(acc)
+            .ok_or_else(|| unsupported_store_eq(acc.span, StoreEqAccessorDefect::NotAnAccessor))?;
         let field_name = self.resolve(field)?.to_string();
         // The accessor's own span records its solved arrow type `record -> field`.
         let arrow = self.region_ty(acc.span).ok_or_else(|| {
@@ -12120,6 +12119,26 @@ impl<'a> Lowerer<'a> {
             variant,
             args: vec![value],
         })
+    }
+
+    /// Dispatch a `Store.eq` / `Store.eqBy` call intercepted at lowering. The
+    /// accessor argument (`.field`) names the validated column; the value binds
+    /// as a query parameter — never reaching SQL as text. `Store.eq` binds the
+    /// scalar value directly as the `SqlValue` its field type selects;
+    /// `Store.eqBy` projects the value through the codec. `peek` is the resolved
+    /// callee, `args` the call's canonical arguments (arity-guarded by the caller).
+    fn lower_store_eq(&self, peek: &Callee, args: &[canon::Expr]) -> DResult<Expr> {
+        if matches!(peek, Callee::Kernel(KernelFn::StoreEqBy)) {
+            let (Some(codec), Some(acc), Some(value)) = (args.first(), args.get(1), args.get(2))
+            else {
+                return Err(bug("ipe_lower::lower_store_eq", "Store.eqBy arity < 3"));
+            };
+            return self.lower_store_eq_by(codec, acc, value);
+        }
+        let (Some(acc), Some(value)) = (args.first(), args.get(1)) else {
+            return Err(bug("ipe_lower::lower_store_eq", "Store.eq arity < 2"));
+        };
+        self.lower_store_eq_col(acc, value)
     }
 
     /// Lower `Store.eq .field value` to the `Compare OpEq <column> (SqlXxx value)`
@@ -14789,30 +14808,29 @@ impl<'a> Lowerer<'a> {
                     // `row` of `Ipe.Db.Store.Cond row` (untyped runtime data) —
                     // twin of the solved-Ty arm; see its comment for the E0283
                     // rationale.
-                    let ir_args = if self.is_cache_handle_con(home, *name)
-                        || self.is_cond_con(home, *name)
-                    {
-                        Vec::new()
-                    } else {
-                        let mut v = Vec::with_capacity(args.len());
-                        for a in args {
-                            // A type argument filling a generic payload slot that
-                            // instantiates to a function takes the same `Arc<dyn Fn>`
-                            // carrier the decl-side flip
-                            // ([`normalize_enum_payload_fun_carrier`]) stamps on a
-                            // direct-function payload and the value-side flip
-                            // ([`promote_stored_fn_carrier`]) constructs with
-                            // `Arc::new`. Without it the type application spells the
-                            // slot `Box<dyn Fn>` while the construction fills it with
-                            // an `Arc`, an `Arc`-vs-`Box` E0308 (and the composite's
-                            // derived `Clone` fails on the non-`Clone` `Box`). The
-                            // flip is a no-op for every non-function argument.
-                            v.push(normalize_enum_payload_fun_carrier(
-                                self.ir_type_from_canon(a, generics)?,
-                            ));
-                        }
-                        v
-                    };
+                    let ir_args =
+                        if self.is_cache_handle_con(home, *name) || self.is_cond_con(home, *name) {
+                            Vec::new()
+                        } else {
+                            let mut v = Vec::with_capacity(args.len());
+                            for a in args {
+                                // A type argument filling a generic payload slot that
+                                // instantiates to a function takes the same `Arc<dyn Fn>`
+                                // carrier the decl-side flip
+                                // ([`normalize_enum_payload_fun_carrier`]) stamps on a
+                                // direct-function payload and the value-side flip
+                                // ([`promote_stored_fn_carrier`]) constructs with
+                                // `Arc::new`. Without it the type application spells the
+                                // slot `Box<dyn Fn>` while the construction fills it with
+                                // an `Arc`, an `Arc`-vs-`Box` E0308 (and the composite's
+                                // derived `Clone` fails on the non-`Clone` `Box`). The
+                                // flip is a no-op for every non-function argument.
+                                v.push(normalize_enum_payload_fun_carrier(
+                                    self.ir_type_from_canon(a, generics)?,
+                                ));
+                            }
+                            v
+                        };
                     Ok(IrType::Enum {
                         home: ModPath(home.clone()),
                         name: *name,
@@ -17747,6 +17765,7 @@ impl<'a> Lowerer<'a> {
     /// path. `lower_callee` is a pure symbol-table lookup (no side effects);
     /// a fall-through carries the already-resolved [`Callee`] so the uniform
     /// path doesn't re-run the large dispatch.
+    #[allow(clippy::too_many_lines)] // one arm per intercepted kernel family
     fn intercept_web_kernel_call(
         &self,
         callee: &canon::Expr,
@@ -17931,34 +17950,15 @@ impl<'a> Lowerer<'a> {
                         }));
                     }
                 }
-                // ── `Store.eq .field value` — typed accessor equality leaf ──
-                //
-                // The accessor `.field` (arg0) names the column: the compiler reads
-                // it, checks the field against the row type, derives the column
-                // identifier, and binds `value` as a query parameter — synthesising
-                // the `Compare OpEq <column> (SqlXxx value)` `Cond` directly, so no
-                // caller value ever reaches SQL as text. A scalar field type
-                // (String/Int/Bool/Float) selects the `SqlValue` variant; a
-                // non-scalar field fails closed (IPE-L0145 — use `eqBy`).
+                // `Store.eq .field value` / `Store.eqBy codec .field value` — the
+                // typed accessor query leaves. See `lower_store_eq` for how the
+                // accessor names the validated column and the value binds as a
+                // parameter (never reaching SQL as text).
                 Callee::Kernel(KernelFn::StoreEqCol) if args.len() == 2 => {
-                    if let (Some(acc), Some(value)) = (args.first(), args.get(1)) {
-                        let cond = self.lower_store_eq_col(acc, value)?;
-                        return Ok(Intercepted::Done(cond));
-                    }
+                    return Ok(Intercepted::Done(self.lower_store_eq(&peek, args)?));
                 }
-                // ── `Store.eqBy codec .field value` — enum/newtype accessor leaf ──
-                //
-                // Like `Store.eq`, but the field's wire form is not type-derivable:
-                // `codec` (arg0) projects `value` (arg2) to a bound `SqlValue`
-                // through `Codec.toValue`, and the accessor `.field` (arg1) names
-                // the column. Synthesises `Compare OpEq <column> (toValue codec value)`.
                 Callee::Kernel(KernelFn::StoreEqBy) if args.len() == 3 => {
-                    if let (Some(codec), Some(acc), Some(value)) =
-                        (args.first(), args.get(1), args.get(2))
-                    {
-                        let cond = self.lower_store_eq_by(codec, acc, value)?;
-                        return Ok(Intercepted::Done(cond));
-                    }
+                    return Ok(Intercepted::Done(self.lower_store_eq(&peek, args)?));
                 }
                 _ => {}
             }
