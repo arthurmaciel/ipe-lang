@@ -1350,6 +1350,15 @@ pub enum StdlibKernel {
     /// `Db.defaultMigration : String -> Migration` — a Migration named with an
     /// empty SQL body.
     DbDefaultMigration,
+    // ── Db.Store (accessor-typed query column) ────────────────────────────────
+    /// `Store.eq : (row -> t) -> t -> Cond` — the accessor-typed equality leaf.
+    /// The scheme presents its first parameter as the getter arrow `row -> t`, so
+    /// an accessor literal `.field` unifies against it by ordinary inference and
+    /// the comparison value's type `t` is pinned to the field's type. At lowering
+    /// the accessor argument is recognised and replaced by the validated column
+    /// identifier; the call becomes the `Compare OpEq name (sqlValue)` `Cond`
+    /// constructor, so the audited `Cond`→`SqlFragment` path is reused unchanged.
+    StoreEqCol,
     // ── Db.Decode ───────────────────────────────────────────────────────────
     DbDecString,
     DbDecInt,
@@ -3043,6 +3052,11 @@ impl StdlibKernel {
             Self::DbDefaultMigration => {
                 d("Db", "defaultMigration", 1, Pure, "db_default_migration")
             }
+            // Accessor-typed equality leaf — lowered inline to the `Compare`
+            // `Cond` constructor (the accessor argument becomes the validated
+            // column identifier), so the runtime-fn name is a never-called
+            // placeholder like `DbDefaultMigration`.
+            Self::StoreEqCol => d("Store", "eq", 2, Pure, "store_eq_col"),
             // ── Db.Decode ───────────────────────────────────────────────────
             Self::DbDecString => d("Db.Decode", "string", 1, Db, "db_decode_string"),
             Self::DbDecInt => d("Db.Decode", "int", 1, Db, "db_decode_int"),
@@ -4392,6 +4406,7 @@ impl StdlibKernel {
         Self::DbWithTransaction,
         Self::DbMigrate,
         Self::DbDefaultMigration,
+        Self::StoreEqCol,
         // Db.Decode
         Self::DbDecString,
         Self::DbDecInt,
@@ -8559,6 +8574,7 @@ impl StdlibKernel {
             | Self::CharIsAlphaNum
             | Self::CharIsHexDigit
             | Self::CharIsOctDigit
+            | Self::StoreEqCol
             | Self::ListMap
             | Self::ListFilter
             | Self::ListFoldl

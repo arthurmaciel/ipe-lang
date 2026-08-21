@@ -605,6 +605,11 @@ struct Builtins {
     /// `PubSubPublish`/`PubSubPublishNoEcho`/`PubSubTopic`) to share the
     /// payload type variable `a` between publisher and subscriber.
     topic_con: Symbol,
+    // ── Ipe.Db.Store.Cond ──────────────────────────────────────────────────
+    /// `"Cond"` — the typed `WHERE`-predicate ADT built by the accessor-typed
+    /// query leaves. Used as the result type of the `StoreEqCol` kernel scheme;
+    /// its constructors (`Compare` / …) lower normally as an emitted enum.
+    cond_con: Symbol,
 }
 
 impl Builtins {
@@ -827,6 +832,7 @@ impl Builtins {
             locale: interner.intern("Locale")?,
             // ── Ipe.PubSub.Topic ────────────────────────────────────────────────
             topic_con: interner.intern("Topic")?,
+            cond_con: interner.intern("Cond")?,
         })
     }
 
@@ -4274,6 +4280,14 @@ impl<'a> Builder<'a> {
             name: self.builtins.decoder,
             args: vec![inner],
         };
+        // `Cond` — the typed `WHERE`-predicate ADT (`Ipe.Db.Store`), the result
+        // of the accessor-typed equality leaf. Nullary: the query builder that
+        // consumes it is row-monomorphic at this slice.
+        let cond = || Ty::Con {
+            module: Vec::new(),
+            name: self.builtins.cond_con,
+            args: Vec::new(),
+        };
         // Opaque nullary type constructors (mirror `kernel_ty`'s inline `Ty::Con`s).
         let db = || Ty::Con {
             module: Vec::new(),
@@ -5587,6 +5601,13 @@ impl<'a> Builder<'a> {
             // `Db.defaultMigration : String -> Migration` — a Migration named
             // with an empty SQL body.
             K::DbDefaultMigration => fun(string(), migration()),
+
+            // `Store.eq : (row -> t) -> t -> Cond` — the getter-arrow scheme lets
+            // an accessor literal `.field` unify against the first parameter by
+            // ordinary inference, pinning `t` to the field's type so the value's
+            // type must match. Lowering replaces the accessor with the validated
+            // column identifier and emits the `Compare` `Cond` constructor.
+            K::StoreEqCol => fun(fun(var(0), var(1)), fun(var(1), cond())),
 
             // ── Db.Decode ──
             K::DbDecString => fun(string(), dec(string())),

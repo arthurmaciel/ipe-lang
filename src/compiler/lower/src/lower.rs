@@ -20008,6 +20008,10 @@ impl<'a> Lowerer<'a> {
                 | KernelFn::StringFilter
                 | KernelFn::StringAny
                 | KernelFn::StringAll
+                // `Store.eq : (row -> t) -> t -> Cond` — arity 2. Intercepted at
+                // lowering (the accessor argument becomes the validated column),
+                // so this arity is only the defensive fallback count.
+                | KernelFn::StoreEqCol
                 | KernelFn::ListMap
                 | KernelFn::ListFilter
                 | KernelFn::ListMember
