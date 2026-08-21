@@ -79,7 +79,7 @@ productStore : Result Error (Store Store.Row)
 productStore =
     case Store.fromColumns "products" productColumns of
         Ok s ->
-            Ok (Store.primaryKey "id" s)
+            Ok (StoreU.primaryKey "id" s)
 
         Err e ->
             Err e

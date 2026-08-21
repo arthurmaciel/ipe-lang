@@ -1,10 +1,12 @@
--- | Ipe.Db.Store.Unsafe — the raw, string-named query leaves for `Ipe.Db.Store`.
+-- | Ipe.Db.Store.Unsafe — the raw, string-named query leaves and column-spec
+-- builders for `Ipe.Db.Store`.
 --
--- The safe `Ipe.Db.Store` surface names a query column by an accessor literal
--- (`Store.eq .age 18`), so the column is checked against the row type at compile
--- time. A raw-column store built by `Store.fromColumns` has no such row type, so
--- its columns can only be named by a bare string. Those string-named leaves live
--- here.
+-- The safe `Ipe.Db.Store` surface names a column by an accessor literal
+-- (`Store.eq .age 18`, `Store.primaryKey .id`), so the column is checked against
+-- the row type at compile time. A raw-column store built by `Store.fromColumns`
+-- has no such row type, so its columns can only be named by a bare string. Those
+-- string-named query leaves (`eq`/`neq`/…) and column-spec builders
+-- (`primaryKey`/`serial`/`defaultNow`/…) live here.
 --
 -- Importing this module discloses the `unsafe` capability program-wide. The
 -- "unsafe" here is narrow: a column is named by an UNCHECKED string rather than a
@@ -16,10 +18,12 @@
 -- a fail-closed `Err` and no value is ever interpolated.
 module Ipe.Db.Store.Unsafe exposing
     ( eq, neq, gt, gte, lt, lte, like, isNull, notNull, inList
+    , primaryKey, serial, unique, defaultNow, touchOnUpdate
+    , defaultText, defaultInt
     )
 
 
-import Ipe.Db.Store as Store exposing (Cond(..), CompareOp(..))
+import Ipe.Db.Store as Store exposing (Cond(..), CompareOp(..), Store)
 
 
 -- | `eq col value` — the rows where `col` equals `value`. `value` binds as a
@@ -135,3 +139,65 @@ notNull col =
 inList : String -> List SqlValue -> Cond row
 inList col values =
     InList col values
+
+
+-- The column-spec builders below name a column by a bare string, for a
+-- raw-column `Store.fromColumns` store that has no row type to name an accessor
+-- against. Each delegates to the audited `*Named` helper in `Ipe.Db.Store`; the
+-- string names the column, which is validated against the store's own columns
+-- when the schema DDL is built, so a name absent from the store fails closed.
+
+
+-- | `primaryKey col store` — mark the string-named `col` the primary key.
+--
+-- Example:
+--
+--     Store.fromColumns "users" [ Store.textColumn "id" ]
+--         |> Result.map (Unsafe.primaryKey "id")
+primaryKey : String -> Store row -> Store row
+primaryKey col store =
+    Store.primaryKeyNamed col store
+
+
+-- | `serial col store` — mark the string-named `col` DB-assigned (serial), so
+-- `insert` omits it and the database generates it.
+serial : String -> Store row -> Store row
+serial col store =
+    Store.serialNamed col store
+
+
+-- | `unique col store` — mark the string-named `col` unique.
+unique : String -> Store row -> Store row
+unique col store =
+    Store.uniqueNamed col store
+
+
+-- | `defaultNow col store` — mark the string-named `col` DB-stamped with the
+-- current time on insert, so `insert` omits it and the database stamps it.
+defaultNow : String -> Store row -> Store row
+defaultNow col store =
+    Store.defaultNowNamed col store
+
+
+-- | `touchOnUpdate col store` — mark the string-named `col` a DB-stamped
+-- updated-at column, omitted from every client write so the database owns it.
+touchOnUpdate : String -> Store row -> Store row
+touchOnUpdate col store =
+    Store.touchOnUpdateNamed col store
+
+
+-- | `defaultText col value store` — give the string-named `col` a DB-level
+-- `DEFAULT` of the text `value`. The literal is emitted through the same
+-- single-quote-doubling escape SQL string literals require, so `value` cannot
+-- break out of the literal.
+defaultText : String -> String -> Store row -> Store row
+defaultText col value store =
+    Store.defaultTextNamed col value store
+
+
+-- | `defaultInt col value store` — give the string-named `col` a DB-level
+-- `DEFAULT` of the integer `value`. An integer renders as its own decimal
+-- digits, so the emitted `DEFAULT` literal is always safe.
+defaultInt : String -> Int -> Store row -> Store row
+defaultInt col value store =
+    Store.defaultIntNamed col value store

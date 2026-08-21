@@ -70,11 +70,18 @@
 --     userStore : Result Error (Store User)
 --     userStore =
 --         Store.fromCodec "users" userCodec
---             |> Result.map (Store.primaryKey "id")
+--             |> Result.map (Store.primaryKey .id)
+--
+-- The column-spec builders (`primaryKey`, `serial`, …) name their column by an
+-- accessor literal (`.id`), checked against the row type at compile time. A
+-- raw-column escape (below) has no row type, so its columns are named by a bare
+-- string through the capability-gated `Ipe.Db.Store.Unsafe`.
 --
 -- The raw-column escape (a dynamic or non-codec table) builds a `Store Row`
 -- whose rows are the untyped `Dict String String` the DB layer returns; read a
 -- column back with the typed `read*` helpers:
+--
+--     import Ipe.Db.Store.Unsafe as StoreU
 --
 --     rawStore : Result Error (Store Store.Row)
 --     rawStore =
@@ -83,7 +90,7 @@
 --             , Store.textColumn "name"
 --             , Store.intColumn "age"
 --             ]
---             |> Result.map (Store.primaryKey "id")
+--             |> Result.map (StoreU.primaryKey "id")
 --
 --     readUser : Store.Row -> Result Error User
 --     readUser row =
@@ -105,6 +112,8 @@ module Ipe.Db.Store exposing
     , fromCodec, fromColumns, rowCodec
     , primaryKey, serial, unique, defaultNow
     , defaultText, defaultInt, touchOnUpdate
+    , primaryKeyNamed, serialNamed, uniqueNamed, defaultNowNamed
+    , defaultTextNamed, defaultIntNamed, touchOnUpdateNamed
     , tableName, columnNames, createSql
     , readText, readInt, readBool, readFloat
     , insert, all, get, delete, findWhere, create
@@ -554,8 +563,10 @@ touchOnUpdate =
     Ffi.kernel "Store_touchOnUpdate"
 
 
--- The stringly forms below are internal helpers reached only through the
--- accessor-typed kernel intercepts above. Not exported.
+-- The stringly forms below are reached by the accessor-typed kernel intercepts
+-- above, and are exported for the capability-gated `Ipe.Db.Store.Unsafe` string
+-- surface (a raw-column `fromColumns` store has no row type, so its columns can
+-- only be named by a bare string).
 
 primaryKeyNamed : String -> Store a -> Store a
 primaryKeyNamed name store =
@@ -636,6 +647,7 @@ addSpec spec store =
 -- Example:
 --
 --     import Ipe.Db.Store as Store exposing (Store)
+--     import Ipe.Db.Store.Unsafe as StoreU
 --     import Ipe.Result as Result exposing (Result(..))
 --     import Ipe.Db as Db
 --     import Ipe.Task as Task
@@ -651,7 +663,7 @@ addSpec spec store =
 --                     , Store.textColumn "name"
 --                     , Store.intColumn "age"
 --                     ]
---                     |> Result.map (Store.primaryKey "id")
+--                     |> Result.map (StoreU.primaryKey "id")
 --                     |> Result.map (Store.renameColumn "name" "full_name")
 --         in
 --         case storeResult |> Result.andThen Store.migrations of
@@ -700,6 +712,7 @@ renameColumnInList from to cols =
 -- Example:
 --
 --     import Ipe.Db.Store as Store exposing (Store)
+--     import Ipe.Db.Store.Unsafe as StoreU
 --     import Ipe.Result as Result exposing (Result(..))
 --     import Ipe.Db as Db
 --     import Ipe.Task as Task
@@ -713,7 +726,7 @@ renameColumnInList from to cols =
 --                     [ Store.textColumn "id"
 --                     , Store.textColumn "email"
 --                     ]
---                     |> Result.map (Store.primaryKey "id")
+--                     |> Result.map (StoreU.primaryKey "id")
 --                     |> Result.map (Store.renameTable "accounts")
 --         in
 --         case storeResult |> Result.andThen Store.migrations of
@@ -755,6 +768,7 @@ renameTable to store =
 -- Example:
 --
 --     import Ipe.Db.Store as Store exposing (Store)
+--     import Ipe.Db.Store.Unsafe as StoreU
 --     import Ipe.Result as Result exposing (Result(..))
 --     import Ipe.Db as Db
 --     import Ipe.Task as Task
@@ -769,7 +783,7 @@ renameTable to store =
 --                     , Store.textColumn "name"
 --                     , Store.intColumn "age"
 --                     ]
---                     |> Result.map (Store.primaryKey "id")
+--                     |> Result.map (StoreU.primaryKey "id")
 --                     |> Result.map (Store.renameColumn "name" "full_name")
 --         in
 --         case storeResult |> Result.andThen Store.migrations of
