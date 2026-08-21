@@ -1,0 +1,33 @@
+module Lib.Rows exposing ( User, blankUser, userCodec )
+
+-- The dependency module imports `Ipe.Codec` under a plain qualifier only —
+-- deliberately NOT `exposing (Codec(..), Shape(..), ColType(..))`. The derive
+-- must resolve its own `Codec`/`SRecord`/`CText`/… constructors through the
+-- qualifier alone, so a witness and its `Codec.auto` derive in a dependency
+-- module work exactly as they do in the entry module.
+import Ipe.Codec as Codec exposing (Codec)
+
+
+type alias User =
+    { id : Int
+    , email : String
+    , active : Bool
+    , score : Float
+    }
+
+
+-- A witness whose only job is to name `User` at the `Codec.auto` call site.
+blankUser : User
+blankUser =
+    { id = 0
+    , email = ""
+    , active = False
+    , score = 0.0
+    }
+
+
+-- The derived codec: one line, no hand-written encode/decode, in a NON-entry
+-- module.
+userCodec : Codec User
+userCodec =
+    Codec.auto blankUser

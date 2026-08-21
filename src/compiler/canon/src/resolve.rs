@@ -2647,7 +2647,6 @@ fn build_codec_auto_context(
             qualifiers.insert(qual);
         }
     }
-
     // The record shape of every value whose annotation is a record type (an
     // inline `{ … }` or a `type alias` naming one). Fields are canonicalised
     // ONCE here, in declared order, exactly as `synthesize_record_alias_ctors`
@@ -3083,6 +3082,28 @@ fn derive_record_codec(
     codec_record_expr(enc_lambda, mkdec_lambda, shp, sg, env, interner)
 }
 
+/// Resolve one of the derive's own building-block constructors (`Codec`,
+/// `Shape`'s `SRecord`, `ColType`'s `CText`/…), all defined in `Ipe.Codec`.
+///
+/// Recognising `Codec.auto` at the call site proves the module imports
+/// `Ipe.Codec` under some qualifier, but that import need not
+/// `exposing (Codec(..), Shape(..), ColType(..))` — a plain `import Ipe.Codec as
+/// Codec` leaves those constructors out of the unqualified `ctors` table
+/// entirely. They are always present QUALIFIED, though: `inject_dep_exports`
+/// registers every dep constructor under its qualifier in `qual_ctors`
+/// regardless of the `exposing` clause. So resolve through the recognised codec
+/// qualifier first, and only then fall back to the unqualified table — the derive
+/// works from the qualifier alone, never demanding the user expose the codec
+/// internals, and behaves identically whether it runs in the entry module or any
+/// dependency module of a multi-module program.
+fn lookup_codec_ctor(env: &Env, ctor: Symbol) -> Option<&CtorHome> {
+    env.codec_auto
+        .qualifiers
+        .iter()
+        .find_map(|q| env.qual_ctors.get(q).and_then(|m| m.get(&ctor)))
+        .or_else(|| env.lookup_ctor(ctor))
+}
+
 /// A reference to the named constructor `ctor` resolved against the env — the
 /// module must import the module that owns it (`Ipe.Codec` for `Codec`/`Shape`/
 /// `ColType`). Fails fail-closed with the same underivable diagnostic the codec
@@ -3094,7 +3115,7 @@ fn ctor_ref_named(
     interner: &mut Interner,
 ) -> DResult<canon::Expr> {
     let sym = interner.intern(ctor)?;
-    let Some(found) = env.lookup_ctor(sym) else {
+    let Some(found) = lookup_codec_ctor(env, sym) else {
         return Err(Diagnostic::Name {
             span: sg.diag,
             msg: NameError::CodecAutoUnderivable {
@@ -3178,7 +3199,7 @@ fn codec_record_expr(
     let enc_field = interner.intern("enc")?;
     let mkdec_field = interner.intern("mkDec")?;
     let shp_field = interner.intern("shp")?;
-    let Some(ctor) = env.lookup_ctor(codec_ctor_sym) else {
+    let Some(ctor) = lookup_codec_ctor(env, codec_ctor_sym) else {
         return Err(Diagnostic::Name {
             span: sg.diag,
             msg: NameError::CodecAutoUnderivable {
@@ -3223,7 +3244,7 @@ fn project_codec_enc_dec(
     let codec_ctor_sym = interner.intern("Codec")?;
     let enc_field = interner.intern("enc")?;
     let mkdec_field = interner.intern("mkDec")?;
-    let Some(ctor) = env.lookup_ctor(codec_ctor_sym) else {
+    let Some(ctor) = lookup_codec_ctor(env, codec_ctor_sym) else {
         return Err(Diagnostic::Name {
             span: sg.diag,
             msg: NameError::CodecAutoUnderivable {
