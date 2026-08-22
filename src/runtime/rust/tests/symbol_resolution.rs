@@ -98,6 +98,17 @@ const KNOWN_DEAD_OR_EPILOGUE: &[&str] = &[
     "store_not_null",
     "store_in_list_col",
     "store_in_list_by",
+    // ── Dead: the accessor-typed `Store.*` column-spec builders are likewise
+    //         intercepted at lowering — the `.field` accessor becomes the
+    //         validated column name and the call is rewritten inline, so none of
+    //         these name strings ever reach a runtime call. ──────────────────
+    "store_primary_key",
+    "store_serial",
+    "store_unique",
+    "store_default_now",
+    "store_default_text",
+    "store_default_int",
+    "store_touch_on_update",
 ];
 
 fn walk(dir: &std::path::Path, fn_re: &regex::Regex, out: &mut HashSet<String>) {
