@@ -102,13 +102,12 @@ pub enum ReadinessCheck {
     /// process is still alive after `grace` has elapsed, never a network
     /// probe that would hang forever against a program that binds nothing.
     AliveGrace { grace: Duration },
-    /// Intended for deterministic tests: a process that exits within a short
-    /// window fails readiness (its exit IS the failure signal), while a
-    /// long-running process passes as soon as it survives the window. Avoids
-    /// the wall-clock sensitivity of `AliveGrace` with a tight grace period
-    /// (which can false-timeout on a loaded CI runner), while keeping the
-    /// same structural property: process death → failure, process alive →
-    /// success.
+    /// Intended for deterministic tests: spin-polls `try_wait` for a fixed
+    /// number of iterations with no wall-clock deadline, then declares the
+    /// process ready if it has not exited.  Tests pair this with a spawn
+    /// closure that causes readiness failure via a spawn error (nonexistent
+    /// binary) rather than relying on process-exit timing, eliminating the
+    /// race between process reaping and readiness polling.
     #[cfg(test)]
     AliveImmediate,
 }
@@ -402,16 +401,40 @@ fn spawn_and_await_ready(
         .spawn()
         .map_err(|e| format!("spawn failed: {e}"))?;
 
+    // `AliveImmediate` (test-only): confirm the process is alive with a
+    // tight `try_wait` loop, then declare it ready.  Tests that use this
+    // variant ensure readiness failure via a spawn error (nonexistent
+    // binary → `cmd.spawn()` fails above, never reaching here) rather
+    // than relying on process-exit timing.  The loop guards against the
+    // narrow window where a process that exits immediately is not yet
+    // surfaced by the first `try_wait`, giving the OS scheduler room to
+    // surface the exit before we declare readiness.
+    #[cfg(test)]
+    if matches!(readiness, ReadinessCheck::AliveImmediate) {
+        const ALIVE_POLLS: usize = 64;
+        for _ in 0..ALIVE_POLLS {
+            match child.try_wait() {
+                Ok(Some(status)) => {
+                    return Err(format!("process exited before becoming ready: {status}"));
+                }
+                Ok(None) => {} // still alive — keep polling
+                Err(e) => {
+                    return Err(format!("try_wait error: {e}"));
+                }
+            }
+        }
+        return Ok(child);
+    }
+
     // `AliveGrace` uses its OWN budget (the grace window itself IS the
     // probe), not `timeouts.readiness` (which governs the network probes).
-    // `AliveImmediate` (test-only) uses a short fixed window — long enough
-    // for a fast-exiting process (`/bin/false`) to be reaped by `try_wait`,
-    // short enough to keep tests quick.
     let budget = match readiness {
         ReadinessCheck::AliveGrace { grace } => grace,
         ReadinessCheck::HttpReadyz { .. } | ReadinessCheck::TcpConnect { .. } => timeouts.readiness,
+        // Handled by the early `AliveImmediate` return above; a safe budget here
+        // keeps the match total without an abrupt-failure construct.
         #[cfg(test)]
-        ReadinessCheck::AliveImmediate => Duration::from_millis(50),
+        ReadinessCheck::AliveImmediate => timeouts.readiness,
     };
     let deadline = Instant::now() + budget;
     loop {
@@ -600,20 +623,19 @@ mod tests {
     fn apply_green_falls_back_to_last_good_when_a_restart_candidate_fails_readiness() {
         let mut state = SupervisorState::fresh();
 
-        // `AliveImmediate` is a deterministic readiness strategy: a process
-        // that exits before the first `try_wait` fails (its exit IS the
-        // readiness failure signal), while a process that is alive on the
-        // first iteration succeeds with zero wall-clock delay. This avoids
-        // the timing sensitivity of the previous `AliveGrace { 80 ms }` form,
-        // which could false-timeout on a heavily loaded CI runner.
-        //
         // The spawn closure dispatches on path — exactly the real contract
         // (`watch.rs`'s `spawn_command` works the same way, keyed on env vars
-        // rather than an if/else). `/bin/sleep` is the "good" artifact (stays
-        // alive); `/bin/false` (the bad candidate) exits immediately and is
-        // caught by `try_wait` before the probe fires. The `RespawnLastGood`
-        // path must call the SAME closure with `good_path` to re-exec it;
-        // that is what this test exercises.
+        // rather than an if/else).  The `RespawnLastGood` path calls the SAME
+        // closure with `good_path` to re-exec the last-good artifact; that is
+        // what this test exercises.
+        //
+        // The bad-candidate command deliberately points to a nonexistent
+        // binary so that `spawn()` itself fails (an I/O error, not a
+        // process-exit race).  A spawn failure is caught inside
+        // `spawn_and_await_ready` before any process is created, making
+        // the readiness failure 100% deterministic regardless of OS load
+        // or scheduler timing.  The last-good respawn uses `/bin/sleep 5`,
+        // which stays alive and passes `AliveImmediate`'s spin-poll.
         let good_path = PathBuf::from("/bin/sleep");
         let spawn = {
             let good_path = good_path.clone();
@@ -623,7 +645,10 @@ mod tests {
                     c.arg("5");
                     c
                 } else {
-                    Command::new("/bin/false")
+                    // Nonexistent binary → `spawn()` returns Err immediately,
+                    // no process is ever created, readiness fails without any
+                    // timing dependency.
+                    Command::new("/nonexistent/__ipe_watch_test_bad_candidate__")
                 }
             }
         };
@@ -644,11 +669,12 @@ mod tests {
 
         // Step 2: present a DIFFERENT-content candidate (a distinct on-disk
         // file so it is not judged byte-identical) that the spawn closure
-        // routes to `/bin/false`. `/bin/false` exits immediately; `try_wait`
-        // catches it before the probe fires, making readiness fail without
-        // any timing dependency. The state machine then respawns the
-        // last-good artifact (`/bin/sleep`) which stays alive and passes
-        // `AliveImmediate` on the very first iteration.
+        // routes to a nonexistent binary.  The spawn fails immediately
+        // (before any process is created), which is the same `Err` path
+        // inside `spawn_and_await_ready` as a process-exit readiness
+        // failure — fully deterministic, no OS timing involved.  The state
+        // machine then respawns the last-good artifact (`/bin/sleep 5`)
+        // which stays alive and passes readiness.
         let dir =
             std::env::temp_dir().join(format!("ipe_watch_process_fallback_{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
