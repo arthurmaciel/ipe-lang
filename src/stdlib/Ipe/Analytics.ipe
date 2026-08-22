@@ -127,7 +127,6 @@ import Ipe.Json.Encode as Encode
 import Ipe.Json.Decode as Decode
 import Ipe.Db as Db
 import Ipe.Db.Store as Store exposing (Store)
-import Ipe.Db.Sql as Sql
 import Ipe.Io as Io
 import Ipe.File as File
 import Ipe.Task as Task
@@ -468,13 +467,13 @@ trackEvent cfg codec event eventProps =
 -- reaches the database. The store never sees plaintext PII.
 --
 -- The schema derives from `analyticsEventCodec` (one source of truth for the
--- columns, the writes, and the reads); the column names are the record's own
--- field names:
+-- columns, the writes, and the reads); the column names are the record's field
+-- names snake_cased, matching how `Codec.auto` derives them:
 --   id           INTEGER  PRIMARY KEY, db-assigned serial (omitted from writes)
---   eventName    TEXT     the event name
---   userId       TEXT     the userId from Config, or "" when absent
---   propsJson    TEXT     JSON object of prop values, PII already redacted
---   recordedAt   TEXT     ISO-8601 timestamp, db-stamped DEFAULT (omitted from writes)
+--   event_name   TEXT     the event name
+--   user_id      TEXT     the userId from Config, or "" when absent
+--   props_json   TEXT     JSON object of prop values, PII already redacted
+--   recorded_at  TEXT     ISO-8601 timestamp, db-stamped DEFAULT (omitted from writes)
 --
 -- Security argument:
 --   * PII-safe: `propsJson` is built by `encodeProps`, which routes every
@@ -502,20 +501,27 @@ type alias AnalyticsEvent =
     }
 
 
+-- | A zero-valued `AnalyticsEvent` witness. `Codec.auto` reads a record's field
+-- names and types from a top-level annotated value; an inline record literal at
+-- the `Codec.auto` call site is rejected (IPE-N0041), so the witness is named.
+blankAnalyticsEvent : AnalyticsEvent
+blankAnalyticsEvent =
+    { id = 0
+    , eventName = ""
+    , userId = ""
+    , propsJson = ""
+    , recordedAt = ""
+    }
+
+
 -- | The `Codec AnalyticsEvent` — the single source of truth for the store's
 -- columns, its row writes, and its row reads. Its `Shape` is an `SRecord` whose
--- columns are the record's own field names, so the store's schema, the insert
--- binds, and the row decode all derive from this one value. A field renamed or
--- retyped changes exactly one place.
+-- columns are the record's field names snake_cased (`eventName` → `event_name`),
+-- so the store's schema, the insert binds, and the row decode all derive from
+-- this one value. A field renamed or retyped changes exactly one place.
 analyticsEventCodec : Codec AnalyticsEvent
 analyticsEventCodec =
-    Codec.auto
-        { id = 0
-        , eventName = ""
-        , userId = ""
-        , propsJson = ""
-        , recordedAt = ""
-        }
+    Codec.auto blankAnalyticsEvent
 
 
 -- | The typed `Store AnalyticsEvent`. Built from `analyticsEventCodec`, so its
@@ -527,10 +533,12 @@ analyticsEventCodec =
 -- Call `Store.create conn eventsStore` once at startup to ensure the table exists.
 eventsStore : Result Error (Store AnalyticsEvent)
 eventsStore =
-    Store.fromCodec "ipe_analytics_events" analyticsEventCodec
-        |> Result.map (Store.primaryKey .id)
-        |> Result.map (Store.serial .id)
-        |> Result.map (Store.defaultNow .recordedAt)
+    case Store.fromCodec "ipe_analytics_events" analyticsEventCodec of
+        Err e ->
+            Err e
+
+        Ok s ->
+            Ok (Store.serial .id (Store.primaryKey .id (Store.defaultNow .recordedAt s)))
 
 
 -- | `persist db store cfg eventName eventProps` — persist a named event with a
@@ -626,8 +634,7 @@ erase db store cfg =
             Task.fail noUserIdError
 
         Just uid ->
-            Db.deleteWhere db (Store.tableName store)
-                (Sql.eq (Sql.column "userId") (Sql.param (SqlString uid)))
+            Store.deleteWhere db store (Store.eq .userId uid)
 
 
 -- ─── Aggregate queries ─────────────────────────────────────────────────────────

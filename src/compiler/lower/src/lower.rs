@@ -12039,6 +12039,9 @@ impl<'a> Lowerer<'a> {
         let field = Self::accessor_field_sym(acc)
             .ok_or_else(|| unsupported_store_eq(acc.span, StoreEqAccessorDefect::NotAnAccessor))?;
         let field_name = self.resolve(field)?.to_string();
+        // The SQL column is the snake_cased field, matching how `Codec.auto`
+        // derives its columns; both go through the one `to_snake_case`.
+        let column_name = ipe_canon::to_snake_case(&field_name);
         // The accessor's own span records its solved arrow type `record -> field`.
         let arrow = self.region_ty(acc.span).ok_or_else(|| {
             bug(
@@ -12065,15 +12068,15 @@ impl<'a> Lowerer<'a> {
                 },
             ));
         }
-        if !is_valid_sql_column(&field_name) {
+        if !is_valid_sql_column(&column_name) {
             return Err(unsupported_store_eq(
                 acc.span,
                 StoreEqAccessorDefect::InvalidColumn {
-                    column: field_name.into_boxed_str(),
+                    column: column_name.into_boxed_str(),
                 },
             ));
         }
-        Ok((field_name, field_ty))
+        Ok((column_name, field_ty))
     }
 
     /// Wrap an already-lowered scalar value in the `SqlValue` constructor its

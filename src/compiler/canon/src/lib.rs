@@ -27,7 +27,7 @@ use ipe_intern::{Interner, Symbol};
 pub use env::{CtorHome, Env, STDLIB_MODULE_QUALIFIERS, VarHome};
 pub use resolve::{
     ModuleOrigin, RESERVED_BUILTIN_TYPES, builtin_empty_home_arity, is_reserved_builtin_type_name,
-    is_user_type_declaration_forbidden,
+    is_user_type_declaration_forbidden, to_snake_case,
 };
 
 /// A type alias exported by a module in its raw (unresolved) source form.

@@ -2860,7 +2860,12 @@ fn kernel_ref(k: StdlibKernel, span: Span, interner: &mut Interner) -> DResult<c
 /// `price_minor`), a pure compile-time transform. An underscore-boundary is
 /// inserted before each uppercase letter, which is then lowercased; runs of
 /// uppercase and existing underscores are preserved as single boundaries.
-fn to_snake_case(name: &str) -> String {
+///
+/// This is the single source of truth for the field→column/key transform:
+/// `Codec.auto` derives its column names through it, and the accessor-column
+/// query and spec lowering call it (re-exported from the crate root) so a
+/// `.recordedAt` accessor names the same `recorded_at` column the codec does.
+pub fn to_snake_case(name: &str) -> String {
     let mut out = String::with_capacity(name.len() + 4);
     let mut prev_lower_or_digit = false;
     for c in name.chars() {

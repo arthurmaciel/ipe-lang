@@ -2511,20 +2511,77 @@ createSqlFromColumns table cols specs =
         Err (invalidIdentError "table" table)
 
     else
-        case columnDefs specs cols of
+        case specsWithinColumns specs cols of
             Err e ->
                 Err e
 
-            Ok defs ->
-                Ok
-                    (String.concat
-                        [ "CREATE TABLE IF NOT EXISTS "
-                        , table
-                        , " ("
-                        , String.join ", " defs
-                        , ")"
-                        ]
-                    )
+            Ok () ->
+                case columnDefs specs cols of
+                    Err e ->
+                        Err e
+
+                    Ok defs ->
+                        Ok
+                            (String.concat
+                                [ "CREATE TABLE IF NOT EXISTS "
+                                , table
+                                , " ("
+                                , String.join ", " defs
+                                , ")"
+                                ]
+                            )
+
+
+-- Every spec must name one of the codec's own derived columns; a spec for a
+-- column absent from the codec is a silent no-op otherwise (its constraint
+-- never attaches to any emitted column), so fail closed — mirroring how the
+-- query leaves validate a `Cond` column with `condFragmentIn`. Defence in
+-- depth: the accessor builders and `Codec.auto` both snake_case through the
+-- one transform, so the names should already agree; this rejects the case
+-- where they somehow do not, instead of silently dropping the constraint.
+specsWithinColumns : List ColumnSpec -> List Column -> Result Error ()
+specsWithinColumns specs cols =
+    case specs of
+        [] ->
+            Ok ()
+
+        first :: rest ->
+            let
+                name =
+                    specColumn first
+            in
+            if hasColumn cols name then
+                specsWithinColumns rest cols
+
+            else
+                Err (unknownColumnError name)
+
+
+-- The column a spec constrains — every `ColumnSpec` variant carries it as its
+-- first field.
+specColumn : ColumnSpec -> String
+specColumn spec =
+    case spec of
+        PrimaryKey c ->
+            c
+
+        Serial c ->
+            c
+
+        Unique c ->
+            c
+
+        DefaultNow c ->
+            c
+
+        DefaultText c _ ->
+            c
+
+        DefaultInt c _ ->
+            c
+
+        TouchOnUpdate c ->
+            c
 
 
 columnDefs : List ColumnSpec -> List Column -> Result Error (List String)
