@@ -22,6 +22,8 @@ mod golden_i119_list_batch_seal;
 mod golden_i121_curried_seal;
 #[path = "g_issues/golden_i122_cli_program_separator.rs"]
 mod golden_i122_cli_program_separator;
+#[path = "g_issues/golden_i1230_store_migrations_producer.rs"]
+mod golden_i1230_store_migrations_producer;
 #[path = "g_issues/golden_i125_decoder_destructure_thunk.rs"]
 mod golden_i125_decoder_destructure_thunk;
 #[path = "g_issues/golden_i130_seal.rs"]

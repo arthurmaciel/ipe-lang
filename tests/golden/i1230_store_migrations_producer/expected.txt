@@ -1,0 +1,4 @@
+create_users: CREATE TABLE IF NOT EXISTS users (id TEXT PRIMARY KEY, name TEXT, age INTEGER)
+rename_column_users_name_to_full_name: ALTER TABLE users RENAME COLUMN name TO full_name
+rename_table_users_to_accounts: ALTER TABLE users RENAME TO accounts
+fail-closed:ok
