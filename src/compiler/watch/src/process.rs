@@ -410,7 +410,7 @@ fn spawn_and_await_ready(
     // surfaced by the first `try_wait`, giving the OS scheduler room to
     // surface the exit before we declare readiness.
     #[cfg(test)]
-    if let ReadinessCheck::AliveImmediate = readiness {
+    if matches!(readiness, ReadinessCheck::AliveImmediate) {
         const ALIVE_POLLS: usize = 64;
         for _ in 0..ALIVE_POLLS {
             match child.try_wait() {
@@ -431,8 +431,10 @@ fn spawn_and_await_ready(
     let budget = match readiness {
         ReadinessCheck::AliveGrace { grace } => grace,
         ReadinessCheck::HttpReadyz { .. } | ReadinessCheck::TcpConnect { .. } => timeouts.readiness,
+        // Handled by the early `AliveImmediate` return above; a safe budget here
+        // keeps the match total without an abrupt-failure construct.
         #[cfg(test)]
-        ReadinessCheck::AliveImmediate => unreachable!("handled above"),
+        ReadinessCheck::AliveImmediate => timeouts.readiness,
     };
     let deadline = Instant::now() + budget;
     loop {
