@@ -3,6 +3,7 @@ module Main exposing (main)
 import Ipe.Io as Io
 import Ipe.Db as Db
 import Ipe.Db.Store as Store exposing (Store)
+import Ipe.Db.Store.Unsafe as StoreU
 import Ipe.Dict as Dict
 import Ipe.String as String
 import Ipe.Task as Task
@@ -62,7 +63,7 @@ userStore : Result Error (Store Store.Row)
 userStore =
     case Store.fromColumns "users" userColumns of
         Ok s ->
-            Ok (Store.primaryKey "id" s)
+            Ok (StoreU.primaryKey "id" s)
 
         Err e ->
             Err e

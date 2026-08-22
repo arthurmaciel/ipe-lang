@@ -1405,6 +1405,29 @@ pub enum StdlibKernel {
     /// `Store.inListBy : Codec t -> (row -> t) -> List t -> Cond` — codec
     /// twin. Each element is projected through the codec; dropped on failure.
     StoreInListBy,
+    // ── Db.Store column-spec builders (accessor-typed) ───────────────────────
+    /// `Store.primaryKey : (row -> t) -> Store row -> Store row` — marks the
+    /// accessor-named column the primary key. The intercept extracts the column
+    /// name and delegates to the `primaryKeyNamed` stdlib helper.
+    StorePrimaryKey,
+    /// `Store.serial : (row -> t) -> Store row -> Store row` — marks the
+    /// accessor-named column DB-assigned (serial).
+    StoreSerial,
+    /// `Store.unique : (row -> t) -> Store row -> Store row` — marks the
+    /// accessor-named column unique.
+    StoreUnique,
+    /// `Store.defaultNow : (row -> t) -> Store row -> Store row` — marks the
+    /// accessor-named column DB-stamped with the current time on insert.
+    StoreDefaultNow,
+    /// `Store.touchOnUpdate : (row -> t) -> Store row -> Store row` — marks
+    /// the accessor-named column a DB-stamped updated-at column.
+    StoreTouchOnUpdate,
+    /// `Store.defaultText : (row -> String) -> String -> Store row -> Store row`
+    /// — gives the accessor-named column a DB-level `DEFAULT` of the text value.
+    StoreDefaultText,
+    /// `Store.defaultInt : (row -> Int) -> Int -> Store row -> Store row` —
+    /// gives the accessor-named column a DB-level `DEFAULT` of the integer value.
+    StoreDefaultInt,
     // ── Db.Decode ───────────────────────────────────────────────────────────
     DbDecString,
     DbDecInt,
@@ -3129,6 +3152,19 @@ impl StdlibKernel {
             // `Store.inList` / `Store.inListBy` — arity 2 / 3.
             Self::StoreInListCol => d("Store", "inList", 2, Pure, "store_in_list_col"),
             Self::StoreInListBy => d("Store", "inListBy", 3, Pure, "store_in_list_by"),
+            // Accessor-typed column-spec builders — intercepted inline (accessor
+            // becomes the validated column name, then the stringly `*Named`
+            // helper is called). Runtime-fn names are never-called placeholders.
+            Self::StorePrimaryKey => d("Store", "primaryKey", 2, Pure, "store_primary_key"),
+            Self::StoreSerial => d("Store", "serial", 2, Pure, "store_serial"),
+            Self::StoreUnique => d("Store", "unique", 2, Pure, "store_unique"),
+            Self::StoreDefaultNow => d("Store", "defaultNow", 2, Pure, "store_default_now"),
+            Self::StoreTouchOnUpdate => {
+                d("Store", "touchOnUpdate", 2, Pure, "store_touch_on_update")
+            }
+            // `defaultText` / `defaultInt` — arity 3 (accessor + value + store).
+            Self::StoreDefaultText => d("Store", "defaultText", 3, Pure, "store_default_text"),
+            Self::StoreDefaultInt => d("Store", "defaultInt", 3, Pure, "store_default_int"),
             // ── Db.Decode ───────────────────────────────────────────────────
             Self::DbDecString => d("Db.Decode", "string", 1, Db, "db_decode_string"),
             Self::DbDecInt => d("Db.Decode", "int", 1, Db, "db_decode_int"),
@@ -4495,6 +4531,14 @@ impl StdlibKernel {
         Self::StoreNotNull,
         Self::StoreInListCol,
         Self::StoreInListBy,
+        // Accessor-typed column-spec builders.
+        Self::StorePrimaryKey,
+        Self::StoreSerial,
+        Self::StoreUnique,
+        Self::StoreDefaultNow,
+        Self::StoreTouchOnUpdate,
+        Self::StoreDefaultText,
+        Self::StoreDefaultInt,
         // Db.Decode
         Self::DbDecString,
         Self::DbDecInt,
@@ -8679,6 +8723,13 @@ impl StdlibKernel {
             | Self::StoreNotNull
             | Self::StoreInListCol
             | Self::StoreInListBy
+            | Self::StorePrimaryKey
+            | Self::StoreSerial
+            | Self::StoreUnique
+            | Self::StoreDefaultNow
+            | Self::StoreTouchOnUpdate
+            | Self::StoreDefaultText
+            | Self::StoreDefaultInt
             | Self::ListMap
             | Self::ListFilter
             | Self::ListFoldl

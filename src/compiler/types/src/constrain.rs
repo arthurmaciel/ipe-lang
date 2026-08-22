@@ -614,6 +614,10 @@ struct Builtins {
     /// `StoreEqBy` kernel scheme (`Codec t -> …`), so an enum/newtype column's
     /// comparison value is projected to a bound `SqlValue` through its own codec.
     codec_con: Symbol,
+    /// `"Store"` — the `Ipe.Db.Store.Store a` ADT, used as the parameter and
+    /// result of the accessor-typed column-spec builder kernel schemes
+    /// (`StorePrimaryKey` / `StoreSerial` / … / `StoreDefaultInt`).
+    store_con: Symbol,
 }
 
 impl Builtins {
@@ -837,6 +841,7 @@ impl Builtins {
             // ── Ipe.PubSub.Topic ────────────────────────────────────────────────
             topic_con: interner.intern("Topic")?,
             cond_con: interner.intern("Cond")?,
+            store_con: interner.intern("Store")?,
             codec_con: interner.intern("Codec")?,
         })
     }
@@ -4296,6 +4301,15 @@ impl<'a> Builder<'a> {
             name: self.builtins.cond_con,
             args: vec![row],
         };
+        // `Store row` — the `Ipe.Db.Store.Store a` ADT. The `row` type variable
+        // ties the store's row type to the accessor's record type in the
+        // column-spec builder kernel schemes, so a cross-row accessor is a
+        // type mismatch rather than a silent wrong column.
+        let store = |row: Ty| Ty::Con {
+            module: Vec::new(),
+            name: self.builtins.store_con,
+            args: vec![row],
+        };
         // `Codec inner` — the `Ipe.Codec` codec ADT, the first parameter of
         // `Store.eqBy`. Empty module unifies with the user's `Ipe.Codec.Codec`.
         let codec = |inner: Ty| Ty::Con {
@@ -5661,6 +5675,35 @@ impl<'a> Builder<'a> {
             K::StoreInListBy => fun(
                 codec(var(1)),
                 fun(fun(var(0), var(1)), fun(list(var(1)), cond(var(0)))),
+            ),
+
+            // ── Db.Store column-spec builders (accessor-typed) ──
+            // `primaryKey / serial / unique / defaultNow / touchOnUpdate :
+            //   (row -> t) -> Store row -> Store row`
+            // The getter-arrow scheme pins the accessor's source type to the
+            // store's row type. `t` (var 1) is the field type — it is not
+            // constrained by the return type (any field may be a key/serial/…).
+            K::StorePrimaryKey
+            | K::StoreSerial
+            | K::StoreUnique
+            | K::StoreDefaultNow
+            | K::StoreTouchOnUpdate => {
+                fun(fun(var(0), var(1)), fun(store(var(0)), store(var(0))))
+            }
+
+            // `defaultText : (row -> String) -> String -> Store row -> Store row`
+            // The accessor must name a `String` field (pinned by the getter-arrow
+            // scheme). The default value is a plain `String` argument.
+            K::StoreDefaultText => fun(
+                fun(var(0), string()),
+                fun(string(), fun(store(var(0)), store(var(0)))),
+            ),
+
+            // `defaultInt : (row -> Int) -> Int -> Store row -> Store row`
+            // The accessor must name an `Int` field; the default value is `Int`.
+            K::StoreDefaultInt => fun(
+                fun(var(0), int()),
+                fun(int(), fun(store(var(0)), store(var(0)))),
             ),
 
             // ── Db.Decode ──
@@ -9488,6 +9531,14 @@ mod registry_phase_c_tests {
             K::StoreNotNull,
             K::StoreInListCol,
             K::StoreInListBy,
+            // Accessor-typed column-spec builders (Ipê-new).
+            K::StorePrimaryKey,
+            K::StoreSerial,
+            K::StoreUnique,
+            K::StoreDefaultNow,
+            K::StoreTouchOnUpdate,
+            K::StoreDefaultText,
+            K::StoreDefaultInt,
             // `Db.Decode.money` and `Db.Decode.bytes` — Ipê-NEW kernels (the
             // ancestor has no DbDec money/bytes routes), so they close genuine
             // holes rather than relocating legacy `kernel_ty` schemes. Their

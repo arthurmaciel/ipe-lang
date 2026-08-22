@@ -53,8 +53,8 @@
 --
 -- Aggregate queries (`totals`, `uniqueUsers`, `eventCounts`, `recent`) run
 -- read-only paths over the same injection-safe `Store.all` / `Store.findWhere`
--- surface. Every column flows through `Store.readText` / `Store.readInt` (typed
--- decode, fail-closed on a missing or malformed column).
+-- surface. Each row decodes through `analyticsEventCodec` (typed decode,
+-- fail-closed on a missing or malformed column).
 --
 -- Minimal store usage:
 --
@@ -122,11 +122,11 @@ module Ipe.Analytics exposing
     )
 
 
-import Ipe.Codec as Codec exposing (Codec(..))
+import Ipe.Codec as Codec exposing (Codec(..), Shape(..), ColType(..))
 import Ipe.Json.Encode as Encode
+import Ipe.Json.Decode as Decode
 import Ipe.Db as Db
 import Ipe.Db.Store as Store exposing (Store)
-import Ipe.Db.Sql as Sql
 import Ipe.Io as Io
 import Ipe.File as File
 import Ipe.Task as Task
@@ -462,19 +462,21 @@ trackEvent cfg codec event eventProps =
 -- ─── Store-backed persistence ──────────────────────────────────────────────────
 --
 -- `AnalyticsEvent` is the concrete row type stored in the `ipe_analytics_events`
--- table. The `props_json` column holds the already-redacted JSON string produced
+-- table. The `propsJson` column holds the already-redacted JSON string produced
 -- by `encodeProps` — PII is serialised as `"[redacted]"` BEFORE this string
 -- reaches the database. The store never sees plaintext PII.
 --
--- Schema:
---   id           INTEGER  PRIMARY KEY AUTOINCREMENT (db-assigned)
+-- The schema derives from `analyticsEventCodec` (one source of truth for the
+-- columns, the writes, and the reads); the column names are the record's field
+-- names snake_cased, matching how `Codec.auto` derives them:
+--   id           INTEGER  PRIMARY KEY, db-assigned serial (omitted from writes)
 --   event_name   TEXT     the event name
 --   user_id      TEXT     the userId from Config, or "" when absent
 --   props_json   TEXT     JSON object of prop values, PII already redacted
---   recorded_at  INTEGER  unix milliseconds at persist time (db-stamped DEFAULT)
+--   recorded_at  TEXT     ISO-8601 timestamp, db-stamped DEFAULT (omitted from writes)
 --
 -- Security argument:
---   * PII-safe: `props_json` is built by `encodeProps`, which routes every
+--   * PII-safe: `propsJson` is built by `encodeProps`, which routes every
 --     `PPii` branch through `encodePropValue`, which returns `"[redacted]"`.
 --     No path from `pii s` back to `s` exists on this module's surface.
 --   * Consent-gated: `persist` and `persistEvent` pattern-match on
@@ -499,85 +501,44 @@ type alias AnalyticsEvent =
     }
 
 
--- | The typed store for `AnalyticsEvent` rows. A raw-column `Store Store.Row`
--- (the escape hatch): the rows are the untyped `Dict String String` the DB
--- layer returns, read back through the typed `Store.read*` helpers. Returns
--- `Err` only if an identifier is rejected by `Store.validSqlIdent` — which
--- cannot happen for the hard-coded names below. Call
--- `Store.create conn eventsStore` once at startup to ensure the table exists.
-eventsStore : Result Error (Store Store.Row)
+-- | A zero-valued `AnalyticsEvent` witness. `Codec.auto` reads a record's field
+-- names and types from a top-level annotated value; an inline record literal at
+-- the `Codec.auto` call site is rejected (IPE-N0041), so the witness is named.
+blankAnalyticsEvent : AnalyticsEvent
+blankAnalyticsEvent =
+    { id = 0
+    , eventName = ""
+    , userId = ""
+    , propsJson = ""
+    , recordedAt = ""
+    }
+
+
+-- | The `Codec AnalyticsEvent` — the single source of truth for the store's
+-- columns, its row writes, and its row reads. Its `Shape` is an `SRecord` whose
+-- columns are the record's field names snake_cased (`eventName` → `event_name`),
+-- so the store's schema, the insert binds, and the row decode all derive from
+-- this one value. A field renamed or retyped changes exactly one place.
+analyticsEventCodec : Codec AnalyticsEvent
+analyticsEventCodec =
+    Codec.auto blankAnalyticsEvent
+
+
+-- | The typed `Store AnalyticsEvent`. Built from `analyticsEventCodec`, so its
+-- columns, writes, and reads are one derivation from that codec. `id` is a
+-- DB-assigned serial primary key and `recordedAt` is DB-stamped on insert — both
+-- are OMITTED from every client write, so a client value can never overwrite a
+-- generated column. Returns `Err` only if an identifier is rejected by
+-- `Store.validSqlIdent` — which cannot happen for the codec-derived names here.
+-- Call `Store.create conn eventsStore` once at startup to ensure the table exists.
+eventsStore : Result Error (Store AnalyticsEvent)
 eventsStore =
-    case
-        Store.fromColumns "ipe_analytics_events"
-            [ Store.intColumn "id"
-            , Store.textColumn "event_name"
-            , Store.textColumn "user_id"
-            , Store.textColumn "props_json"
-            , Store.textColumn "recorded_at"
-            ]
-    of
+    case Store.fromCodec "ipe_analytics_events" analyticsEventCodec of
         Err e ->
             Err e
 
         Ok s ->
-            Ok
-                (Store.serial "id"
-                    (Store.primaryKey "id"
-                        (Store.defaultNow "recorded_at" s)
-                    )
-                )
-
-
--- | Read an `AnalyticsEvent` row from a `Store.Row`. Fails closed with a typed
--- error if any expected column is absent or malformed.
-readEvent : Store.Row -> Result Error AnalyticsEvent
-readEvent row =
-    case Store.readInt "id" row of
-        Err e ->
-            Err e
-
-        Ok rowId ->
-            case Store.readText "event_name" row of
-                Err e ->
-                    Err e
-
-                Ok name ->
-                    case Store.readText "user_id" row of
-                        Err e ->
-                            Err e
-
-                        Ok uid ->
-                            case Store.readText "props_json" row of
-                                Err e ->
-                                    Err e
-
-                                Ok pj ->
-                                    case Store.readText "recorded_at" row of
-                                        Err e ->
-                                            Err e
-
-                                        Ok ts ->
-                                            Ok
-                                                { id = rowId
-                                                , eventName = name
-                                                , userId = uid
-                                                , propsJson = pj
-                                                , recordedAt = ts
-                                                }
-
-
--- | Project an `AnalyticsEvent` to the raw `Store.Row` (a `Dict String String`)
--- `Store.insert` binds. The `id` (serial) and `recorded_at` (defaultNow)
--- columns are DB-assigned and are OMITTED here — `Store.insert` drops them
--- automatically via the `Serial` and `DefaultNow` specs, so a client value can
--- never overwrite a generated column.
-writeEvent : AnalyticsEvent -> Store.Row
-writeEvent ev =
-    Dict.fromList
-        [ ( "event_name", ev.eventName )
-        , ( "user_id", ev.userId )
-        , ( "props_json", ev.propsJson )
-        ]
+            Ok (Store.serial .id (Store.primaryKey .id (Store.defaultNow .recordedAt s)))
 
 
 -- | `persist db store cfg eventName eventProps` — persist a named event with a
@@ -589,7 +550,7 @@ writeEvent ev =
 -- PII-safe: `eventProps` is serialised by `encodeProps`, which routes every
 -- `PPii` branch to `"[redacted]"`. The stored `props_json` string never
 -- contains plaintext PII.
-persist : Db -> Store Store.Row -> Config -> String -> Props -> Task Error ()
+persist : Db -> Store AnalyticsEvent -> Config -> String -> Props -> Task Error ()
 persist db store cfg eventName eventProps =
     case cfg.consent of
         Granted ->
@@ -613,7 +574,7 @@ persist db store cfg eventName eventProps =
                     , recordedAt = ""
                     }
             in
-            Task.map (\_ -> ()) (Store.insert db store (writeEvent ev))
+            Task.map (\_ -> ()) (Store.insert db store ev)
 
         Denied ->
             Task.succeed ()
@@ -626,7 +587,7 @@ persist db store cfg eventName eventProps =
 -- encoded by the caller's `Codec`, plus a supplementary `Props` bag.
 --
 -- Consent-gated and PII-safe: same guarantees as `persist`.
-persistEvent : Db -> Store Store.Row -> Config -> Codec a -> a -> Props -> Task Error ()
+persistEvent : Db -> Store AnalyticsEvent -> Config -> Codec a -> a -> Props -> Task Error ()
 persistEvent db store cfg codec event eventProps =
     case cfg.consent of
         Granted ->
@@ -653,7 +614,7 @@ persistEvent db store cfg codec event eventProps =
                     , recordedAt = ""
                     }
             in
-            Task.map (\_ -> ()) (Store.insert db store (writeEvent ev))
+            Task.map (\_ -> ()) (Store.insert db store ev)
 
         Denied ->
             Task.succeed ()
@@ -666,15 +627,14 @@ persistEvent db store cfg codec event eventProps =
 -- `userId`. Consent-state independent: GDPR right-to-erasure must succeed
 -- regardless of whether consent is currently `Granted`. Returns `Task.fail`
 -- when `cfg.userId` is `Nothing` (no identity to erase).
-erase : Db -> Store Store.Row -> Config -> Task Error Int
+erase : Db -> Store AnalyticsEvent -> Config -> Task Error Int
 erase db store cfg =
     case cfg.userId of
         Nothing ->
             Task.fail noUserIdError
 
         Just uid ->
-            Db.deleteWhere db (Store.tableName store)
-                (Sql.eq (Sql.column "user_id") (Sql.param (SqlString uid)))
+            Store.deleteWhere db store (Store.eq .userId uid)
 
 
 -- ─── Aggregate queries ─────────────────────────────────────────────────────────
@@ -682,36 +642,26 @@ erase db store cfg =
 -- All read paths route through `Store.all`, which uses the audited
 -- `Db.findWhere` kernel — every identifier through `Sql.column` (validated),
 -- every value through `Sql.param` (bound). No raw SQL is built. `Store.all`
--- returns each row as a `Store.Row`; `readAllEvents` decodes each through
--- `readEvent`, failing closed on the first malformed row.
+-- decodes each row through `analyticsEventCodec`, so a row missing or mistyping
+-- a column is a typed `Task.fail`, never a wrong value.
 
 
--- | Read every stored row and decode each through `readEvent`. A row missing or
--- mistyping a column is a typed `Task.fail`, never a wrong value.
-readAllEvents : Db -> Store Store.Row -> Task Error (List AnalyticsEvent)
+-- | Read and decode every stored `AnalyticsEvent`. Decoding is the codec's, so
+-- a row missing or mistyping a column is a typed `Task.fail`, never a wrong value.
+readAllEvents : Db -> Store AnalyticsEvent -> Task Error (List AnalyticsEvent)
 readAllEvents db store =
-    Task.andThen decodeEvents (Store.all db store)
-
-
-decodeEvents : List Store.Row -> Task Error (List AnalyticsEvent)
-decodeEvents rows =
-    case Result.combine (List.map readEvent rows) of
-        Ok events ->
-            Task.succeed events
-
-        Err e ->
-            Task.fail e
+    Store.all db store
 
 
 -- | `totals db store` — the total count of persisted events.
-totals : Db -> Store Store.Row -> Task Error Int
+totals : Db -> Store AnalyticsEvent -> Task Error Int
 totals db store =
     Task.map List.length (readAllEvents db store)
 
 
--- | `uniqueUsers db store` — the count of distinct `user_id` values in the
+-- | `uniqueUsers db store` — the count of distinct `userId` values in the
 -- store (excludes the empty-string sentinel used for anonymous events).
-uniqueUsers : Db -> Store Store.Row -> Task Error Int
+uniqueUsers : Db -> Store AnalyticsEvent -> Task Error Int
 uniqueUsers db store =
     Task.map countDistinctUsers (readAllEvents db store)
 
@@ -745,7 +695,7 @@ addUnique s acc =
 
 -- | `eventCounts db store` — a dictionary mapping each event name to the
 -- number of times it appears in the store.
-eventCounts : Db -> Store Store.Row -> Task Error (Dict String Int)
+eventCounts : Db -> Store AnalyticsEvent -> Task Error (Dict String Int)
 eventCounts db store =
     Task.map tallyNames (readAllEvents db store)
 
@@ -766,10 +716,10 @@ countName ev acc =
 
 
 -- | `recent db store limit` — the `limit` most-recently recorded events,
--- ordered newest-first by `recorded_at`. All columns read and decoded; PII was
+-- ordered newest-first by `recordedAt`. All columns read and decoded; PII was
 -- already redacted at persist time, so the returned `propsJson` field holds
 -- only redacted values.
-recent : Db -> Store Store.Row -> Int -> Task Error (List AnalyticsEvent)
+recent : Db -> Store AnalyticsEvent -> Int -> Task Error (List AnalyticsEvent)
 recent db store limit =
     Task.map (\evs -> List.take limit (sortByRecent evs)) (readAllEvents db store)
 

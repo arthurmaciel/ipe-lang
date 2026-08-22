@@ -70,11 +70,18 @@
 --     userStore : Result Error (Store User)
 --     userStore =
 --         Store.fromCodec "users" userCodec
---             |> Result.map (Store.primaryKey "id")
+--             |> Result.map (Store.primaryKey .id)
+--
+-- The column-spec builders (`primaryKey`, `serial`, …) name their column by an
+-- accessor literal (`.id`), checked against the row type at compile time. A
+-- raw-column escape (below) has no row type, so its columns are named by a bare
+-- string through the capability-gated `Ipe.Db.Store.Unsafe`.
 --
 -- The raw-column escape (a dynamic or non-codec table) builds a `Store Row`
 -- whose rows are the untyped `Dict String String` the DB layer returns; read a
 -- column back with the typed `read*` helpers:
+--
+--     import Ipe.Db.Store.Unsafe as StoreU
 --
 --     rawStore : Result Error (Store Store.Row)
 --     rawStore =
@@ -83,7 +90,7 @@
 --             , Store.textColumn "name"
 --             , Store.intColumn "age"
 --             ]
---             |> Result.map (Store.primaryKey "id")
+--             |> Result.map (StoreU.primaryKey "id")
 --
 --     readUser : Store.Row -> Result Error User
 --     readUser row =
@@ -105,6 +112,8 @@ module Ipe.Db.Store exposing
     , fromCodec, fromColumns, rowCodec
     , primaryKey, serial, unique, defaultNow
     , defaultText, defaultInt, touchOnUpdate
+    , primaryKeyNamed, serialNamed, uniqueNamed, defaultNowNamed
+    , defaultTextNamed, defaultIntNamed, touchOnUpdateNamed
     , tableName, columnNames, createSql
     , readText, readInt, readBool, readFloat
     , insert, all, get, delete, findWhere, create
@@ -476,10 +485,91 @@ rowCell name row =
 -- name into SQL.
 
 
--- | Mark a column the primary key. Records it as the store's `pk`, so
--- `get` / `delete` key on this validated column and never on a caller string.
-primaryKey : String -> Store a -> Store a
-primaryKey name store =
+-- | Mark the accessor-named column the primary key. The lowering intercept
+-- extracts the column name from the accessor and calls `primaryKeyNamed`.
+primaryKey : (row -> t) -> Store row -> Store row
+primaryKey =
+    Ffi.kernel "Store_primaryKey"
+
+
+-- | Mark the accessor-named column DB-assigned (serial). `insert` omits it so
+-- the database generates it — a client value can never overwrite a serial column.
+serial : (row -> t) -> Store row -> Store row
+serial =
+    Ffi.kernel "Store_serial"
+
+
+-- | Mark the accessor-named column unique.
+unique : (row -> t) -> Store row -> Store row
+unique =
+    Ffi.kernel "Store_unique"
+
+
+-- | Mark the accessor-named column DB-stamped with the current time on insert.
+-- `insert` omits it so the database stamps it.
+defaultNow : (row -> t) -> Store row -> Store row
+defaultNow =
+    Ffi.kernel "Store_defaultNow"
+
+
+-- | `defaultText accessor value store` — give the accessor-named column a
+-- DB-level `DEFAULT` of the text `value`. The literal is emitted through the
+-- same single-quote-doubling escape SQL string literals require, so no caller
+-- text escapes the literal — a `value` containing a quote cannot break out into SQL.
+--
+-- Example:
+--
+--     import Ipe.Db.Store as Store exposing (Store)
+--
+--     withStatusDefault : Store { status : String } -> Store { status : String }
+--     withStatusDefault store =
+--         Store.defaultText .status "active" store
+defaultText : (row -> String) -> String -> Store row -> Store row
+defaultText =
+    Ffi.kernel "Store_defaultText"
+
+
+-- | `defaultInt accessor value store` — give the accessor-named column a
+-- DB-level `DEFAULT` of the integer `value`. An integer has no injection
+-- surface: it renders as its own decimal digits, so the emitted `DEFAULT`
+-- literal is always safe.
+--
+-- Example:
+--
+--     import Ipe.Db.Store as Store exposing (Store)
+--
+--     withRetryDefault : Store { retries : Int } -> Store { retries : Int }
+--     withRetryDefault store =
+--         Store.defaultInt .retries 0 store
+defaultInt : (row -> Int) -> Int -> Store row -> Store row
+defaultInt =
+    Ffi.kernel "Store_defaultInt"
+
+
+-- | Mark the accessor-named column a DB-stamped updated-at column. Like
+-- `defaultNow` it gets `DEFAULT CURRENT_TIMESTAMP` in the schema and is OMITTED
+-- from every client write (`insert`, `update`, `updateWhere`), so a client value
+-- can never overwrite it — the database owns the column's value.
+--
+-- Example:
+--
+--     import Ipe.Db.Store as Store exposing (Store)
+--
+--     withUpdatedAt : Store { updatedAt : String } -> Store { updatedAt : String }
+--     withUpdatedAt store =
+--         Store.touchOnUpdate .updatedAt store
+touchOnUpdate : (row -> t) -> Store row -> Store row
+touchOnUpdate =
+    Ffi.kernel "Store_touchOnUpdate"
+
+
+-- The stringly forms below are reached by the accessor-typed kernel intercepts
+-- above, and are exported for the capability-gated `Ipe.Db.Store.Unsafe` string
+-- surface (a raw-column `fromColumns` store has no row type, so its columns can
+-- only be named by a bare string).
+
+primaryKeyNamed : String -> Store a -> Store a
+primaryKeyNamed name store =
     case store of
         Store r ->
             Store
@@ -494,75 +584,33 @@ primaryKey name store =
                 }
 
 
--- | Mark a column DB-assigned (serial). `insert` omits it so the database
--- generates it — a client value can never overwrite a serial column.
-serial : String -> Store a -> Store a
-serial name store =
+serialNamed : String -> Store a -> Store a
+serialNamed name store =
     addSpec (Serial name) store
 
 
--- | Mark a column unique.
-unique : String -> Store a -> Store a
-unique name store =
+uniqueNamed : String -> Store a -> Store a
+uniqueNamed name store =
     addSpec (Unique name) store
 
 
--- | Mark a column DB-stamped with the current time on insert. `insert` omits
--- it so the database stamps it.
-defaultNow : String -> Store a -> Store a
-defaultNow name store =
+defaultNowNamed : String -> Store a -> Store a
+defaultNowNamed name store =
     addSpec (DefaultNow name) store
 
 
--- | `defaultText name value store` — give `name` a DB-level `DEFAULT` of the
--- text `value`, so a row inserted without it (the column `OmitField`-omitted, or
--- a raw `Db.insertRow` missing it) gets `value`. The literal is emitted through
--- the same single-quote-doubling escape SQL string literals require, so no
--- caller text escapes the literal — a `value` containing a quote cannot break
--- out into SQL.
---
--- Example:
---
---     import Ipe.Db.Store as Store exposing (Store)
---
---     withStatusDefault : Store a -> Store a
---     withStatusDefault store =
---         Store.defaultText "status" "active" store
-defaultText : String -> String -> Store a -> Store a
-defaultText name value store =
+defaultTextNamed : String -> String -> Store a -> Store a
+defaultTextNamed name value store =
     addSpec (DefaultText name value) store
 
 
--- | `defaultInt name value store` — give `name` a DB-level `DEFAULT` of the
--- integer `value`. An integer has no injection surface: it renders as its own
--- decimal digits, so the emitted `DEFAULT` literal is always safe.
---
--- Example:
---
---     import Ipe.Db.Store as Store exposing (Store)
---
---     withRetryDefault : Store a -> Store a
---     withRetryDefault store =
---         Store.defaultInt "retries" 0 store
-defaultInt : String -> Int -> Store a -> Store a
-defaultInt name value store =
+defaultIntNamed : String -> Int -> Store a -> Store a
+defaultIntNamed name value store =
     addSpec (DefaultInt name value) store
 
 
--- | `touchOnUpdate name store` — mark `name` a DB-stamped timestamp column. Like
--- `defaultNow` it gets `DEFAULT CURRENT_TIMESTAMP` in the schema and is OMITTED
--- from every client write (`insert`, `update`, `updateWhere`), so a client value
--- can never overwrite it — the database owns the column's value.
---
--- Example:
---
---     import Ipe.Db.Store as Store exposing (Store)
---
---     withUpdatedAt : Store a -> Store a
---     withUpdatedAt store =
---         Store.touchOnUpdate "updated_at" store
-touchOnUpdate : String -> Store a -> Store a
-touchOnUpdate name store =
+touchOnUpdateNamed : String -> Store a -> Store a
+touchOnUpdateNamed name store =
     addSpec (TouchOnUpdate name) store
 
 
@@ -599,6 +647,7 @@ addSpec spec store =
 -- Example:
 --
 --     import Ipe.Db.Store as Store exposing (Store)
+--     import Ipe.Db.Store.Unsafe as StoreU
 --     import Ipe.Result as Result exposing (Result(..))
 --     import Ipe.Db as Db
 --     import Ipe.Task as Task
@@ -614,7 +663,7 @@ addSpec spec store =
 --                     , Store.textColumn "name"
 --                     , Store.intColumn "age"
 --                     ]
---                     |> Result.map (Store.primaryKey "id")
+--                     |> Result.map (StoreU.primaryKey "id")
 --                     |> Result.map (Store.renameColumn "name" "full_name")
 --         in
 --         case storeResult |> Result.andThen Store.migrations of
@@ -663,6 +712,7 @@ renameColumnInList from to cols =
 -- Example:
 --
 --     import Ipe.Db.Store as Store exposing (Store)
+--     import Ipe.Db.Store.Unsafe as StoreU
 --     import Ipe.Result as Result exposing (Result(..))
 --     import Ipe.Db as Db
 --     import Ipe.Task as Task
@@ -676,7 +726,7 @@ renameColumnInList from to cols =
 --                     [ Store.textColumn "id"
 --                     , Store.textColumn "email"
 --                     ]
---                     |> Result.map (Store.primaryKey "id")
+--                     |> Result.map (StoreU.primaryKey "id")
 --                     |> Result.map (Store.renameTable "accounts")
 --         in
 --         case storeResult |> Result.andThen Store.migrations of
@@ -718,6 +768,7 @@ renameTable to store =
 -- Example:
 --
 --     import Ipe.Db.Store as Store exposing (Store)
+--     import Ipe.Db.Store.Unsafe as StoreU
 --     import Ipe.Result as Result exposing (Result(..))
 --     import Ipe.Db as Db
 --     import Ipe.Task as Task
@@ -732,7 +783,7 @@ renameTable to store =
 --                     , Store.textColumn "name"
 --                     , Store.intColumn "age"
 --                     ]
---                     |> Result.map (Store.primaryKey "id")
+--                     |> Result.map (StoreU.primaryKey "id")
 --                     |> Result.map (Store.renameColumn "name" "full_name")
 --         in
 --         case storeResult |> Result.andThen Store.migrations of
@@ -2460,20 +2511,77 @@ createSqlFromColumns table cols specs =
         Err (invalidIdentError "table" table)
 
     else
-        case columnDefs specs cols of
+        case specsWithinColumns specs cols of
             Err e ->
                 Err e
 
-            Ok defs ->
-                Ok
-                    (String.concat
-                        [ "CREATE TABLE IF NOT EXISTS "
-                        , table
-                        , " ("
-                        , String.join ", " defs
-                        , ")"
-                        ]
-                    )
+            Ok _ ->
+                case columnDefs specs cols of
+                    Err e ->
+                        Err e
+
+                    Ok defs ->
+                        Ok
+                            (String.concat
+                                [ "CREATE TABLE IF NOT EXISTS "
+                                , table
+                                , " ("
+                                , String.join ", " defs
+                                , ")"
+                                ]
+                            )
+
+
+-- Every spec must name one of the codec's own derived columns; a spec for a
+-- column absent from the codec is a silent no-op otherwise (its constraint
+-- never attaches to any emitted column), so fail closed — mirroring how the
+-- query leaves validate a `Cond` column with `condFragmentIn`. Defence in
+-- depth: the accessor builders and `Codec.auto` both snake_case through the
+-- one transform, so the names should already agree; this rejects the case
+-- where they somehow do not, instead of silently dropping the constraint.
+specsWithinColumns : List ColumnSpec -> List Column -> Result Error ()
+specsWithinColumns specs cols =
+    case specs of
+        [] ->
+            Ok ()
+
+        first :: rest ->
+            let
+                name =
+                    specColumn first
+            in
+            if hasColumn cols name then
+                specsWithinColumns rest cols
+
+            else
+                Err (unknownColumnError name)
+
+
+-- The column a spec constrains — every `ColumnSpec` variant carries it as its
+-- first field.
+specColumn : ColumnSpec -> String
+specColumn spec =
+    case spec of
+        PrimaryKey c ->
+            c
+
+        Serial c ->
+            c
+
+        Unique c ->
+            c
+
+        DefaultNow c ->
+            c
+
+        DefaultText c _ ->
+            c
+
+        DefaultInt c _ ->
+            c
+
+        TouchOnUpdate c ->
+            c
 
 
 columnDefs : List ColumnSpec -> List Column -> Result Error (List String)

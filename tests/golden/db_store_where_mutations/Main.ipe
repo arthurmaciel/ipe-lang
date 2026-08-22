@@ -65,10 +65,10 @@ accountStore =
         Ok s ->
             Ok
                 (s
-                    |> Store.primaryKey "id"
-                    |> Store.defaultText "status" "active"
-                    |> Store.defaultInt "retries" 0
-                    |> Store.touchOnUpdate "updated_at"
+                    |> StoreU.primaryKey "id"
+                    |> StoreU.defaultText "status" "active"
+                    |> StoreU.defaultInt "retries" 0
+                    |> StoreU.touchOnUpdate "updated_at"
                 )
 
         Err e ->

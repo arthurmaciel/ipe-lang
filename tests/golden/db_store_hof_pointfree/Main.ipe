@@ -2,6 +2,7 @@ module Main exposing (main)
 
 import Ipe.Io as Io
 import Ipe.Db.Store as Store exposing (Store)
+import Ipe.Db.Store.Unsafe as StoreU
 import Ipe.String as String
 import Ipe.Result as Result exposing (Result(..))
 import Ipe.Error as Error exposing (Error)
@@ -13,18 +14,18 @@ import Ipe.Task as Task
 -- ipe-accepted then cargo-fail E0308; the concrete `Store` must thread through
 -- the HOF's instantiated slot instead.
 
--- Point-free: the partial application `Store.primaryKey "id"` is passed
+-- Point-free: the partial application `StoreU.primaryKey "id"` is passed
 -- directly as the mapper.
 pointFreeStore : Result Error (Store Store.Row)
 pointFreeStore =
     Store.fromColumns "users" [ Store.textColumn "id" ]
-        |> Result.map (Store.primaryKey "id")
+        |> Result.map (StoreU.primaryKey "id")
 
 -- Eta-expanded: the same mapper spelled as an explicit lambda.
 etaStore : Result Error (Store Store.Row)
 etaStore =
     Store.fromColumns "orders" [ Store.textColumn "id" ]
-        |> Result.map (\s -> Store.primaryKey "id" s)
+        |> Result.map (\s -> StoreU.primaryKey "id" s)
 
 -- Same-module control: `Result.map` over an in-module ADT still lowers to the
 -- concrete in-module type, never JsonVal.
