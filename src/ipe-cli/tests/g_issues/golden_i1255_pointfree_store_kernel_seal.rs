@@ -12,7 +12,7 @@
 //! (`eqBuilder = Store.eq`) routes AROUND the intercept — through
 //! `eta_expand_partial` or the first-class-value reify path — and would emit the
 //! raw placeholder call. Before the fix `ipe build` exited 0 and `cargo build`
-//! failed E0425 (`cannot find function `store_eq_col``), the accept-then-cargo
+//! failed E0425 (cannot find function `store_eq_col`), the accept-then-cargo
 //! hole `PRINCIPLES.md` forbids.
 //!
 //! The fix fails such a program closed at `ipe` time with IPE-L0146, so the
