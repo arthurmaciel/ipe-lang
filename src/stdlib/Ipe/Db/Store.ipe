@@ -2515,7 +2515,7 @@ createSqlFromColumns table cols specs =
             Err e ->
                 Err e
 
-            Ok () ->
+            Ok _ ->
                 case columnDefs specs cols of
                     Err e ->
                         Err e
