@@ -8383,6 +8383,49 @@ impl StdlibKernel {
         }
     }
 
+    /// Is this an accessor-typed `Store.*` query leaf or column-spec builder
+    /// whose emit symbol (`store_eq_col`, `store_serial`, …) is a never-defined
+    /// PLACEHOLDER — the real work is done by the lowering accessor-intercept,
+    /// which rewrites the SATURATED call inline (the `.field` accessor becomes
+    /// the validated column) before the backend ever names the symbol.
+    ///
+    /// These kernels have no runtime function. They are sound ONLY under direct
+    /// full application, where the intercept fires. A point-free / partial
+    /// application routes through eta-expansion, which would emit the raw
+    /// placeholder call — accepted by the frontend but a `cargo` E0425. The
+    /// lowerer uses this predicate to fail such a program closed with a typed
+    /// diagnostic instead of emitting broken Rust.
+    #[must_use]
+    pub const fn is_accessor_intercept_placeholder(self) -> bool {
+        matches!(
+            self,
+            Self::StoreEqCol
+                | Self::StoreEqBy
+                | Self::StoreNeqCol
+                | Self::StoreNeqBy
+                | Self::StoreGtCol
+                | Self::StoreGtBy
+                | Self::StoreGteCol
+                | Self::StoreGteBy
+                | Self::StoreLtCol
+                | Self::StoreLtBy
+                | Self::StoreLteCol
+                | Self::StoreLteBy
+                | Self::StoreLike
+                | Self::StoreIsNull
+                | Self::StoreNotNull
+                | Self::StoreInListCol
+                | Self::StoreInListBy
+                | Self::StorePrimaryKey
+                | Self::StoreSerial
+                | Self::StoreUnique
+                | Self::StoreDefaultNow
+                | Self::StoreTouchOnUpdate
+                | Self::StoreDefaultText
+                | Self::StoreDefaultInt
+        )
+    }
+
     /// The conditionally-vendored runtime module this kernel's emitted symbol
     /// needs, when that module is NOT already pulled in by the kernel's emit
     /// [`KernelClass`]. `None` for the common case (symbol lives in the module

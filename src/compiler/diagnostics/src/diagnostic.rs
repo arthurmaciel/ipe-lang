@@ -17,17 +17,17 @@ use crate::code::{
     IPE_L0112, IPE_L0113, IPE_L0114, IPE_L0115, IPE_L0116, IPE_L0117, IPE_L0118, IPE_L0119,
     IPE_L0120, IPE_L0121, IPE_L0122, IPE_L0123, IPE_L0124, IPE_L0125, IPE_L0126, IPE_L0127,
     IPE_L0128, IPE_L0129, IPE_L0130, IPE_L0131, IPE_L0132, IPE_L0133, IPE_L0134, IPE_L0135,
-    IPE_L0136, IPE_L0140, IPE_L0141, IPE_L0142, IPE_L0143, IPE_L0144, IPE_L0145, IPE_L0200,
-    IPE_N0001, IPE_N0002, IPE_N0003, IPE_N0004, IPE_N0005, IPE_N0010, IPE_N0011, IPE_N0012,
-    IPE_N0013, IPE_N0020, IPE_N0021, IPE_N0022, IPE_N0023, IPE_N0024, IPE_N0025, IPE_N0026,
-    IPE_N0027, IPE_N0028, IPE_N0029, IPE_N0030, IPE_N0031, IPE_N0032, IPE_N0033, IPE_N0034,
-    IPE_N0035, IPE_N0036, IPE_N0037, IPE_N0038, IPE_N0039, IPE_N0040, IPE_N0041, IPE_N0042,
-    IPE_P0001, IPE_P0002, IPE_P0003, IPE_P0010, IPE_P0011, IPE_P0012, IPE_P0013, IPE_P0014,
-    IPE_P0015, IPE_P0016, IPE_P0017, IPE_P0018, IPE_P0020, IPE_P0021, IPE_P0030, IPE_P0031,
-    IPE_P0040, IPE_P0041, IPE_P0050, IPE_P0060, IPE_P0061, IPE_P0062, IPE_P0063, IPE_P0064,
-    IPE_P0065, IPE_P0066, IPE_P0067, IPE_S0001, IPE_T0001, IPE_T0002, IPE_T0003, IPE_T0004,
-    IPE_T0010, IPE_T0011, IPE_T0012, IPE_T0013, IPE_T0014, IPE_T0015, IPE_T0016, IPE_T0017,
-    IPE_T0018, IPE_T0019, IPE_T0020, Severity,
+    IPE_L0136, IPE_L0140, IPE_L0141, IPE_L0142, IPE_L0143, IPE_L0144, IPE_L0145, IPE_L0146,
+    IPE_L0200, IPE_N0001, IPE_N0002, IPE_N0003, IPE_N0004, IPE_N0005, IPE_N0010, IPE_N0011,
+    IPE_N0012, IPE_N0013, IPE_N0020, IPE_N0021, IPE_N0022, IPE_N0023, IPE_N0024, IPE_N0025,
+    IPE_N0026, IPE_N0027, IPE_N0028, IPE_N0029, IPE_N0030, IPE_N0031, IPE_N0032, IPE_N0033,
+    IPE_N0034, IPE_N0035, IPE_N0036, IPE_N0037, IPE_N0038, IPE_N0039, IPE_N0040, IPE_N0041,
+    IPE_N0042, IPE_P0001, IPE_P0002, IPE_P0003, IPE_P0010, IPE_P0011, IPE_P0012, IPE_P0013,
+    IPE_P0014, IPE_P0015, IPE_P0016, IPE_P0017, IPE_P0018, IPE_P0020, IPE_P0021, IPE_P0030,
+    IPE_P0031, IPE_P0040, IPE_P0041, IPE_P0050, IPE_P0060, IPE_P0061, IPE_P0062, IPE_P0063,
+    IPE_P0064, IPE_P0065, IPE_P0066, IPE_P0067, IPE_S0001, IPE_T0001, IPE_T0002, IPE_T0003,
+    IPE_T0004, IPE_T0010, IPE_T0011, IPE_T0012, IPE_T0013, IPE_T0014, IPE_T0015, IPE_T0016,
+    IPE_T0017, IPE_T0018, IPE_T0019, IPE_T0020, Severity,
 };
 use crate::span::Span;
 
@@ -1264,6 +1264,21 @@ pub enum LowerError {
     /// accessor. The typed query leaf reads its column from a bare `.field`
     /// accessor at lowering; the argument fell outside that shape. [IPE-L0145]
     StoreEqAccessorInvalid(StoreEqAccessorDefect),
+    /// An accessor-typed `Store.*` query leaf or column-spec builder
+    /// (`Store.eq`, `Store.gt`, `Store.serial`, `Store.primaryKey`, …) was used
+    /// point-free / partially applied, rather than applied directly with its
+    /// accessor and value. These leaves have no runtime function: the lowering
+    /// accessor-intercept rewrites the SATURATED call inline (the `.field`
+    /// accessor becomes the validated column). A partial application routes
+    /// through eta-expansion, which would emit the never-defined placeholder
+    /// symbol (`store_eq_col`, `store_serial`, …) — accepted by the frontend
+    /// but a `cargo` E0425. Rejected fail-closed here so the invariant holds:
+    /// `ipe` accepts ⇒ the emitted Rust builds. `kernel` is the dotted name
+    /// (e.g. `Store.eq`). [IPE-L0146]
+    PointFreeAccessorKernel {
+        /// The dotted kernel name that was partially applied (e.g. `Store.eq`).
+        kernel: Box<str>,
+    },
 }
 
 /// Why a `Store.eq` / `Store.eqBy` column argument was rejected at lowering.
@@ -1802,6 +1817,7 @@ const fn lower_code(msg: &LowerError) -> Code {
         LowerError::WildcardAnyFieldTypeMismatch { .. } => IPE_L0143,
         LowerError::WildcardAnyArgNotRecord { .. } => IPE_L0144,
         LowerError::StoreEqAccessorInvalid(_) => IPE_L0145,
+        LowerError::PointFreeAccessorKernel { .. } => IPE_L0146,
     }
 }
 
@@ -2161,7 +2177,23 @@ fn lower_help(msg: &LowerError) -> Vec<HelpLine> {
         } => wildcard_any_field_type_mismatch_help(field, required),
         LowerError::WildcardAnyArgNotRecord { .. } => wildcard_any_arg_not_record_help(),
         LowerError::StoreEqAccessorInvalid(defect) => store_eq_accessor_invalid_help(defect),
+        LowerError::PointFreeAccessorKernel { kernel } => point_free_accessor_kernel_help(kernel),
     }
+}
+
+/// The help lines for [`LowerError::PointFreeAccessorKernel`], factored out so
+/// [`lower_help`] stays a thin per-variant dispatcher.
+fn point_free_accessor_kernel_help(kernel: &str) -> Vec<HelpLine> {
+    vec![HelpLine::Note(
+        format!(
+            "`{kernel}` reads its column from the `.field` accessor at compile time, \
+             so it has no value you can pass around: apply it directly, `{kernel} \
+             .field value`. If you need a function value (say for `List.map` or \
+             `Result.map`), wrap it in a lambda that supplies the accessor: \
+             `\\x -> {kernel} .field x`."
+        )
+        .into_boxed_str(),
+    )]
 }
 
 /// The help lines for [`LowerError::StoreEqAccessorInvalid`], factored out so

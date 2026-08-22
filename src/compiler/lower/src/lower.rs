@@ -9917,6 +9917,30 @@ const fn unsupported_store_eq(span: Span, defect: StoreEqAccessorDefect) -> Diag
     }
 }
 
+/// Fail-closed SEAL gate for a point-free / partially-applied accessor-typed
+/// `Store.*` placeholder kernel (`Store.eq`, `Store.serial`, …). These leaves
+/// have no runtime function — the accessor-intercept rewrites the SATURATED
+/// direct call inline (the `.field` accessor becomes the validated column)
+/// before the backend names the symbol. A point-free or partial use routes
+/// AROUND the intercept (through eta-expansion or the first-class-value reify
+/// path) and would emit the raw placeholder symbol (`store_eq_col`, …), which is
+/// never defined: the frontend accepts but `cargo` fails E0425. Reject with the
+/// typed IPE-L0146 so the invariant holds — `ipe` accepts ⇒ the emit builds. A
+/// no-op (`Ok`) for every other callee.
+fn reject_point_free_store_kernel(callee: &Callee, span: Span) -> DResult<()> {
+    if let Callee::Kernel(k) = callee
+        && k.is_accessor_intercept_placeholder()
+    {
+        let d = k.decl();
+        let kernel = format!("{}.{}", d.qualifier, d.name).into_boxed_str();
+        return Err(Diagnostic::Lower {
+            span,
+            msg: LowerError::PointFreeAccessorKernel { kernel },
+        });
+    }
+    Ok(())
+}
+
 /// Whether a column name derived from a record-field accessor is a valid SQL
 /// identifier — non-empty and ASCII-alphanumeric-or-underscore. A strict subset
 /// of the runtime's plain-mode identifier gate (defence in depth: the query
@@ -17754,6 +17778,12 @@ impl<'a> Lowerer<'a> {
                 if let canon::Expr_::VarTopLevel { module, name } = &e.value {
                     self.reject_fn_value_reify_generic_slot(module, *name, ty, e.span)?;
                 }
+                // Fail-closed SEAL gate (reify twin of the `eta_expand_partial`
+                // gate): an accessor-typed `Store.*` placeholder kernel reified
+                // as a first-class VALUE would emit `Box::new(store_eq_col)` — a
+                // never-defined symbol (E0425). See
+                // [`reject_point_free_store_kernel`].
+                reject_point_free_store_kernel(&callee, e.span)?;
                 // For kernel callees use the JSON-aware type resolver so that
                 // a `Value = any = Ty::Var` in the argument / return position
                 // of a JSON kernel (e.g. `JsonEnc.string : String -> Value`)
@@ -19610,6 +19640,11 @@ impl<'a> Lowerer<'a> {
         arity: usize,
         call_span: Span,
     ) -> DResult<Expr> {
+        // Fail-closed SEAL gate: eta-expanding a PARTIAL application of an
+        // accessor-typed `Store.*` placeholder kernel would emit its raw
+        // never-defined symbol — reject instead. See
+        // [`reject_point_free_store_kernel`].
+        reject_point_free_store_kernel(&resolved, call_span)?;
         let fn_ty = self.region_ty(callee.span).ok_or_else(|| {
             bug(
                 "ipe_lower::eta_expand_partial",

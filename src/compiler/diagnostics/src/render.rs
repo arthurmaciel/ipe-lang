@@ -676,6 +676,13 @@ fn lower_prose(msg: &LowerError) -> String {
                 format!("`{column}` is not a valid SQL column name.")
             }
         },
+        LowerError::PointFreeAccessorKernel { kernel } => {
+            format!(
+                "`{kernel}` reads its column from a `.field` accessor, so it must \
+                 be applied directly with its accessor and value — not passed \
+                 around point-free or partially applied."
+            )
+        }
     }
 }
 
@@ -1644,6 +1651,14 @@ fn lower_label(msg: &LowerError) -> String {
             )
         }
         LowerError::StoreEqAccessorInvalid(defect) => store_eq_accessor_label(defect),
+        LowerError::PointFreeAccessorKernel { kernel } => {
+            format!(
+                "`{kernel}` is partially applied here — apply it directly with its \
+                 accessor and value (e.g. `{kernel} .field value`) instead of \
+                 passing it point-free (say `\\x -> {kernel} .field x` if you need a \
+                 function value)"
+            )
+        }
     }
 }
 

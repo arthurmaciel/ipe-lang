@@ -436,6 +436,11 @@ code! {
     /// type is not a scalar under plain `eq` (needs `eqBy` + codec), or the
     /// derived column name is not a valid SQL identifier
     IPE_L0145 = "IPE-L0145", "a Store.eq column argument is not a usable field accessor", "IPE-L0145";
+    /// an accessor-typed `Store.*` query leaf or column-spec builder was used
+    /// point-free / partially applied — these leaves read their column from a
+    /// `.field` accessor and have no runtime function, so they must be applied
+    /// directly with their accessor and value
+    IPE_L0146 = "IPE-L0146", "a Store accessor query/spec builder was applied point-free", "IPE-L0146";
     /// expression nests too deeply for the backend
     IPE_L0200 = "IPE-L0200", "expression nests too deeply for the backend", "IPE-L0200";
 
