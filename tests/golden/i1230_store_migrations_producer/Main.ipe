@@ -1,0 +1,77 @@
+module Main exposing (main)
+
+-- Regression guard: run the REAL `Store.migrations` producer over a multi-op
+-- store and assert its exact ledger output.
+--
+-- The scenario exercises the frozen-vs-current split:
+--   * `fromColumns "users" [textColumn "id", textColumn "name", intColumn "age"]`
+--     establishes the frozen create entry (CREATE TABLE users …).
+--   * `StoreU.primaryKey "id"` marks the PK in the frozen spec.
+--   * `Store.renameColumn "name" "full_name"` appends a RenameColumn op.
+--   * `Store.renameTable "accounts"` appends a RenameTable op.
+--   * `Store.migrations` folds the op log to three ordered ledger entries:
+--       1. create_users       — CREATE TABLE IF NOT EXISTS users (…)
+--       2. rename_column_…    — ALTER TABLE users RENAME COLUMN name TO full_name
+--       3. rename_table_…     — ALTER TABLE users RENAME TO accounts
+--
+-- The fail-closed case asserts that a no-op rename (`from == to`) is rejected
+-- with `Err` and produces no ledger entries.
+--
+-- No database connection is required: `Store.migrations` is a pure fold.
+
+
+import Ipe.Db.Store as Store exposing (Store)
+import Ipe.Db.Store.Unsafe as StoreU
+import Ipe.Error as Error exposing (Error)
+import Ipe.Io as Io
+import Ipe.List as List
+import Ipe.Result as Result exposing (Result(..))
+import Ipe.String as String
+import Ipe.Task as Task
+
+
+-- Build the multi-op store under test.
+usersStore : Result Error (Store Store.Row)
+usersStore =
+    Store.fromColumns "users"
+        [ Store.textColumn "id"
+        , Store.textColumn "name"
+        , Store.intColumn "age"
+        ]
+        |> Result.map (StoreU.primaryKey "id")
+        |> Result.map (Store.renameColumn "name" "full_name")
+        |> Result.map (Store.renameTable "accounts")
+
+
+-- Build a store with a no-op rename to test the fail-closed path.
+noopStore : Result Error (Store Store.Row)
+noopStore =
+    Store.fromColumns "items" [ Store.textColumn "id" ]
+        |> Result.map (Store.renameColumn "id" "id")
+
+
+printMigration : { name : String, sql : String } -> String
+printMigration m =
+    String.concat [ m.name, ": ", m.sql ]
+
+
+main : Task Error ()
+main =
+    case usersStore |> Result.andThen Store.migrations of
+        Err e ->
+            Task.fail e
+
+        Ok migrations ->
+            Task.andThen
+                (\_ -> checkFailClosed)
+                (Io.println (String.join "\n" (List.map printMigration migrations)))
+
+
+checkFailClosed : Task Error ()
+checkFailClosed =
+    case noopStore |> Result.andThen Store.migrations of
+        Err _ ->
+            Io.println "fail-closed:ok"
+
+        Ok _ ->
+            Task.fail (Error.invalidInput "fail-closed: expected Err for no-op rename, got Ok")
