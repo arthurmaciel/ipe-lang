@@ -36,8 +36,17 @@ ignore = [
     # key) + VERIFY (public key); the Marvin attack targets the PKCS#1 v1.5
     # DECRYPTION oracle, which this codebase never exercises. Accepted +
     # tracked; revisit when `rsa` ships a fix or a vetted constant-time
-    # RS256 alternative replaces it (2026-07-12).
+    # RS256 alternative replaces it.
     "RUSTSEC-2023-0071",
+    # RUSTSEC-2026-0235 — rkyv 0.7.46 OOB reads when deserializing archives
+    # containing Rc/Arc. rkyv is an optional serialization backend of
+    # rust_decimal (feature "rkyv"); it appears in the lockfile because cargo
+    # v4 lockfiles record all optional packages of every dep in the graph, even
+    # unactivated ones. No code in this repo activates rust_decimal's "rkyv"
+    # feature, and no rkyv archive is ever deserialized — the OOB path is
+    # unreachable. Fix would require rust_decimal >= 0.8 (a semver-breaking
+    # jump); accepted until that line is available and rust_decimal updates.
+    "RUSTSEC-2026-0235",
 ]
 
 # https://embarkstudios.github.io/cargo-deny/checks/licenses/cfg.html
