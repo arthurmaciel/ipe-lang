@@ -1384,17 +1384,30 @@ pub struct Builder<'a> {
     /// body by [`Self::tie_wildcard_any_uses_to_bodies`] once every def is
     /// constrained.
     wildcard_any_use_results: Vec<(VarId, (Vec<Symbol>, Symbol))>,
-    /// The type scheme of every data constructor declared in this module, keyed
-    /// by constructor name. A constructor is a (possibly generic) function
-    /// `field0 -> … -> fieldN -> T vars`; each use site instantiates the scheme
-    /// fresh, exactly as a polymorphic top-level binding does.
+    /// The type scheme of every data constructor in the program, keyed by the
+    /// constructor's fully-qualified identity `(home, type_name, name)` — the
+    /// declaring module path, its type, and the constructor name. A constructor
+    /// is a (possibly generic) function `field0 -> … -> fieldN -> T vars`; each
+    /// use site instantiates the scheme fresh, exactly as a polymorphic
+    /// top-level binding does.
+    ///
+    /// The key is qualified, not the bare name, because after `link::link`
+    /// merges every module into one program two modules may each declare a
+    /// same-named constructor (a user `type X = Compare Int` beside
+    /// `Ipe.Db.Store`'s own `type Cond = Compare CompareOp String SqlValue`). A
+    /// bare-name key silently overwrote one with the other, so a module's own
+    /// pattern resolved against the foreign constructor's arity (IPE-T0013
+    /// blamed on stdlib internals). Canon already resolves each `PCtor` /
+    /// `VarCtor` to its declaring `home` + `type_name`; keying by that identity
+    /// keeps the two distinct constructors distinct.
+    ///
     /// Each value is an `Rc` so per-use-site instantiation clones a refcount,
     /// not the whole scheme (efficiency-audit §2 medium: the constructor-ref /
     /// ctor-pattern checks deep-cloned the full `CtorScheme` per use to
     /// release the `&self` borrow before the `&mut self` instantiate call).
     /// The `Rc` holds byte-identical data — same fresh vars, same constraints,
     /// same errors. Fully internal to `Builder`.
-    ctors: BTreeMap<Symbol, Rc<CtorScheme>>,
+    ctors: BTreeMap<CtorKey, Rc<CtorScheme>>,
     /// One entry per typed binding: its `(home, name)` and the rigid (skolem)
     /// variable each of its annotation type variables instantiated to while its
     /// body was checked. Read post-solve to recover each variable's super-type
@@ -1469,6 +1482,17 @@ pub struct SchemeApp {
     /// The reference's source span, for blame on an unsatisfied bound.
     pub span: Span,
 }
+
+/// A constructor's fully-qualified identity: `(home, type_name, name)` — its
+/// declaring module path, the union type it belongs to, and its own name.
+///
+/// This is the key of [`Builder::ctors`]. Two modules that each declare a
+/// same-named constructor differ in `home` (and usually `type_name`), so a
+/// module's own pattern resolves against its own constructor's scheme rather
+/// than a foreign one that merely shares the leaf name. Built from the same
+/// `(home, type_name, name)` triple canon records on every `PCtor` / `VarCtor`,
+/// so the insert side and the lookup side agree by construction.
+type CtorKey = (Vec<Symbol>, Symbol, Symbol);
 
 /// A data constructor's quantified type scheme.
 ///
@@ -1701,7 +1725,23 @@ impl<'a> Builder<'a> {
         // user `type` cannot shadow these names (the canon §3.2 gate rejects it),
         // so the module-union loop below never collides with them.
         for (name, scheme) in builder.builtins.ctor_schemes() {
-            builder.ctors.insert(name, Rc::new(scheme));
+            // Every built-in scheme's `result` is the enum type it builds, a
+            // home-less `Ty::Con` (`Bool` / `Maybe` / `Result` / …). Its
+            // `(module, name)` is exactly the `(home, type_name)` half of the
+            // qualified key — the same empty-home identity canon stamps on a
+            // `PCtor` for these ambient built-ins — so the key agrees with the
+            // lookup side by construction. A non-`Con` result would be a
+            // built-in table bug, not user input, so fall back to the empty
+            // home + the constructor's own name rather than panic.
+            let (home, type_name) = match &scheme.result {
+                Ty::Con {
+                    module, name: ty, ..
+                } => (module.clone(), *ty),
+                _ => (Vec::new(), name),
+            };
+            builder
+                .ctors
+                .insert((home, type_name, name), Rc::new(scheme));
         }
 
         // Register every data constructor's scheme up front, so a `VarCtor`
@@ -1745,7 +1785,7 @@ impl<'a> Builder<'a> {
                     ));
                 }
                 builder.ctors.insert(
-                    ctor.name,
+                    (union.home.clone(), union.name, ctor.name),
                     Rc::new(CtorScheme {
                         arg_tys,
                         result: result.clone(),
@@ -3643,7 +3683,11 @@ impl<'a> Builder<'a> {
         type_name: Symbol,
         name: Symbol,
     ) -> DResult<VarId> {
-        if let Some(scheme) = self.ctors.get(&name).cloned() {
+        // Same qualified-identity lookup as the pattern site: a constructor
+        // referenced as a value resolves against its own declaring module's
+        // scheme, never a same-named constructor from another module.
+        let key = (home.to_vec(), type_name, name);
+        if let Some(scheme) = self.ctors.get(&key).cloned() {
             let (arg_vars, result_var) = self.instantiate_ctor(&scheme)?;
             let mut t = result_var;
             for av in arg_vars.into_iter().rev() {
@@ -3677,7 +3721,12 @@ impl<'a> Builder<'a> {
                 args,
                 ..
             } => {
-                if let Some(scheme) = self.ctors.get(name).cloned() {
+                // Look up by the canon-resolved `(home, type_name, name)`
+                // identity, not the bare name: a same-named constructor in a
+                // different module (or type) is a DIFFERENT entry, so this
+                // module's own pattern checks against its own declared arity.
+                let key = (home.clone(), *type_name, *name);
+                if let Some(scheme) = self.ctors.get(&key).cloned() {
                     // A constructor pattern binds exactly its declared fields. A
                     // mismatch (`Just` with no payload, `Node l r` for a three-field
                     // `Node`) is a user error, surfaced as IPE-T0013 rather than
