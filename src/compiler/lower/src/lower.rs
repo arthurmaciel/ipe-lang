@@ -18373,9 +18373,20 @@ impl<'a> Lowerer<'a> {
                         }));
                     }
                 }
-                // Accessor-typed query leaves — the accessor argument (`.field`)
-                // becomes the validated column identifier at lowering. See
-                // `lower_store_compare` for the dispatch detail.
+                // Accessor-typed query leaves and column-spec builders — the
+                // accessor argument (`.field`) becomes the validated column
+                // identifier at lowering.  See `lower_store_compare` for the
+                // dispatch detail.
+                //
+                // SSOT: the authoritative list of all variants handled by these
+                // arms is `ipe_kernels::StdlibKernel::ACCESSOR_INTERCEPT_PLACEHOLDERS`.
+                // The arms are organised by arity / handler rather than being a
+                // mechanical slice iteration (Rust `match` requires literal/const
+                // patterns), so they cannot be auto-derived from that constant.
+                // The `accessor_intercept_placeholder_predicate_covers_ssot` test
+                // in `ipe_lower` and the `every_kernel_name_resolves` test in
+                // `ipe-runtime-rust` jointly ensure the match-arm set and the SSOT
+                // stay in sync.
                 Callee::Kernel(KernelFn::StoreEqCol) if args.len() == 2 => {
                     return Ok(Intercepted::Done(self.lower_store_eq(&peek, args)?));
                 }

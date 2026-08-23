@@ -8383,11 +8383,57 @@ impl StdlibKernel {
         }
     }
 
-    /// Is this an accessor-typed `Store.*` query leaf or column-spec builder
-    /// whose emit symbol (`store_eq_col`, `store_serial`, …) is a never-defined
-    /// PLACEHOLDER — the real work is done by the lowering accessor-intercept,
-    /// which rewrites the SATURATED call inline (the `.field` accessor becomes
-    /// the validated column) before the backend ever names the symbol.
+    /// The complete set of accessor-typed `Store.*` query leaves and column-spec
+    /// builders whose emit symbols (`store_eq_col`, `store_serial`, …) are
+    /// never-defined PLACEHOLDERS — the real work is done by the lowering
+    /// accessor-intercept, which rewrites the SATURATED call inline (the `.field`
+    /// accessor becomes the validated column) before the backend ever names the
+    /// symbol.
+    ///
+    /// This is the single authoritative source (SSOT) for this set. Every site
+    /// that needs to enumerate or test membership derives from this constant:
+    ///
+    /// * [`Self::is_accessor_intercept_placeholder`] — the membership predicate
+    ///   (used by the point-free SEAL gate, IPE-L0146).
+    /// * `ipe_lower`'s dispatch arms — enumerate by kernel family; each arm must
+    ///   cover exactly the variants listed here (enforced by the
+    ///   `accessor_intercept_dispatch_covers_ssot` test in `ipe_lower`).
+    /// * `ipe-runtime-rust`'s `every_kernel_name_resolves` test — derives the
+    ///   `store_*` dead-symbol allowlist from this constant at test time instead
+    ///   of maintaining a parallel string list.
+    pub const ACCESSOR_INTERCEPT_PLACEHOLDERS: &[Self] = &[
+        // ── Query leaves — arity-2 (accessor + store) ────────────────────────
+        Self::StoreEqCol,
+        Self::StoreEqBy,
+        Self::StoreNeqCol,
+        Self::StoreNeqBy,
+        Self::StoreGtCol,
+        Self::StoreGtBy,
+        Self::StoreGteCol,
+        Self::StoreGteBy,
+        Self::StoreLtCol,
+        Self::StoreLtBy,
+        Self::StoreLteCol,
+        Self::StoreLteBy,
+        Self::StoreLike,
+        Self::StoreIsNull,
+        Self::StoreNotNull,
+        Self::StoreInListCol,
+        Self::StoreInListBy,
+        // ── Column-spec builders — arity-2 (accessor + store) ────────────────
+        Self::StorePrimaryKey,
+        Self::StoreSerial,
+        Self::StoreUnique,
+        Self::StoreDefaultNow,
+        Self::StoreTouchOnUpdate,
+        // ── Column-spec builders — arity-3 (accessor + value + store) ────────
+        Self::StoreDefaultText,
+        Self::StoreDefaultInt,
+    ];
+
+    /// Returns `true` when this kernel is an accessor-intercept placeholder —
+    /// one of the `Store.*` query leaves or column-spec builders listed in
+    /// [`Self::ACCESSOR_INTERCEPT_PLACEHOLDERS`].
     ///
     /// These kernels have no runtime function. They are sound ONLY under direct
     /// full application, where the intercept fires. A point-free / partial
@@ -8396,34 +8442,8 @@ impl StdlibKernel {
     /// lowerer uses this predicate to fail such a program closed with a typed
     /// diagnostic instead of emitting broken Rust.
     #[must_use]
-    pub const fn is_accessor_intercept_placeholder(self) -> bool {
-        matches!(
-            self,
-            Self::StoreEqCol
-                | Self::StoreEqBy
-                | Self::StoreNeqCol
-                | Self::StoreNeqBy
-                | Self::StoreGtCol
-                | Self::StoreGtBy
-                | Self::StoreGteCol
-                | Self::StoreGteBy
-                | Self::StoreLtCol
-                | Self::StoreLtBy
-                | Self::StoreLteCol
-                | Self::StoreLteBy
-                | Self::StoreLike
-                | Self::StoreIsNull
-                | Self::StoreNotNull
-                | Self::StoreInListCol
-                | Self::StoreInListBy
-                | Self::StorePrimaryKey
-                | Self::StoreSerial
-                | Self::StoreUnique
-                | Self::StoreDefaultNow
-                | Self::StoreTouchOnUpdate
-                | Self::StoreDefaultText
-                | Self::StoreDefaultInt
-        )
+    pub fn is_accessor_intercept_placeholder(self) -> bool {
+        Self::ACCESSOR_INTERCEPT_PLACEHOLDERS.contains(&self)
     }
 
     /// The conditionally-vendored runtime module this kernel's emitted symbol
