@@ -1428,6 +1428,15 @@ pub enum StdlibKernel {
     /// `Store.defaultInt : (row -> Int) -> Int -> Store row -> Store row` —
     /// gives the accessor-named column a DB-level `DEFAULT` of the integer value.
     StoreDefaultInt,
+    /// `Store.ownerColumn : (row -> t) -> Policy row` — a row-security policy of
+    /// one owner-column rule over the accessor-named column. The intercept
+    /// extracts the column name and delegates to the `ownerColumnNamed` stdlib
+    /// helper.
+    StoreOwnerColumn,
+    /// `Store.immutable : (row -> t) -> Policy row` — a row-security policy of
+    /// one immutable-column rule over the accessor-named column. The intercept
+    /// extracts the column name and delegates to the `immutableNamed` helper.
+    StoreImmutable,
     // ── Db.Decode ───────────────────────────────────────────────────────────
     DbDecString,
     DbDecInt,
@@ -3165,6 +3174,11 @@ impl StdlibKernel {
             // `defaultText` / `defaultInt` — arity 3 (accessor + value + store).
             Self::StoreDefaultText => d("Store", "defaultText", 3, Pure, "store_default_text"),
             Self::StoreDefaultInt => d("Store", "defaultInt", 3, Pure, "store_default_int"),
+            // Row-security policy builders — arity 1 (accessor only), intercepted
+            // inline (accessor becomes the validated column, then the stringly
+            // `*Named` helper is called). Runtime-fn names are placeholders.
+            Self::StoreOwnerColumn => d("Store", "ownerColumn", 1, Pure, "store_owner_column"),
+            Self::StoreImmutable => d("Store", "immutable", 1, Pure, "store_immutable"),
             // ── Db.Decode ───────────────────────────────────────────────────
             Self::DbDecString => d("Db.Decode", "string", 1, Db, "db_decode_string"),
             Self::DbDecInt => d("Db.Decode", "int", 1, Db, "db_decode_int"),
@@ -4539,6 +4553,9 @@ impl StdlibKernel {
         Self::StoreTouchOnUpdate,
         Self::StoreDefaultText,
         Self::StoreDefaultInt,
+        // Row-security policy builders (accessor-typed).
+        Self::StoreOwnerColumn,
+        Self::StoreImmutable,
         // Db.Decode
         Self::DbDecString,
         Self::DbDecInt,
@@ -8429,6 +8446,9 @@ impl StdlibKernel {
         // ── Column-spec builders — arity-3 (accessor + value + store) ────────
         Self::StoreDefaultText,
         Self::StoreDefaultInt,
+        // ── Row-security policy builders — arity-1 (accessor only) ───────────
+        Self::StoreOwnerColumn,
+        Self::StoreImmutable,
     ];
 
     /// Returns `true` when this kernel is an accessor-intercept placeholder —
@@ -8793,6 +8813,8 @@ impl StdlibKernel {
             | Self::StoreTouchOnUpdate
             | Self::StoreDefaultText
             | Self::StoreDefaultInt
+            | Self::StoreOwnerColumn
+            | Self::StoreImmutable
             | Self::ListMap
             | Self::ListFilter
             | Self::ListFoldl

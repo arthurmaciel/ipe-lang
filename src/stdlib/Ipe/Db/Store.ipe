@@ -135,6 +135,9 @@ module Ipe.Db.Store exposing
     , and, or, not
     , orderAsc, orderDesc, limit, offset
     , toList, toMaybe, count
+    , Policy, Secured
+    , unrestricted, publicRead, ownerColumn, immutable, andPolicy, secured
+    , ownerColumnNamed, immutableNamed
     )
 
 
@@ -2871,6 +2874,205 @@ create conn store =
 migrationName : String -> String
 migrationName table =
     String.concat [ "create_", table ]
+
+
+-- ─── Row-level security (Policy algebra + Secured constructor) ──────
+--
+-- Row security is DATA, not closures: a `Policy` is a small algebra over the
+-- store's own validated column names, never a stored function (Ipê forbids
+-- functions in records). A policy is a conjunction of `Rule`s — an owner-column
+-- rule (rows are scoped to the principal that owns the accessor-named column), a
+-- public-read rule, or an immutable-column rule. Each column-naming rule names
+-- its column by an accessor literal (`.author`), checked against the row type at
+-- compile time exactly like a query column, so a policy over a non-existent or
+-- cross-row column is a build error.
+--
+-- Deny-by-default: a `Store` with no policy is simply unsecured; a `Secured`
+-- store is reachable only by attaching a policy through `secured`, and the
+-- future secured operations accept only a `Secured`. `secured` re-validates
+-- every policy column against the store's codec-derived columns (the same
+-- fail-closed check the query leaves use), so a policy that names a column the
+-- store does not have is a typed `Err`, never a silently ineffective policy.
+
+
+-- | One row-security rule over a validated column name. Internal to this module:
+-- a `Policy` is opaque, so a rule is never constructed or inspected by a caller —
+-- it is built only by the accessor-typed policy builders and consumed only by the
+-- module's own `secured` re-validation (and, in a later slice, the fragment
+-- lowering). `PublicRead` names no column; the column-naming rules carry the
+-- accessor-derived, snake_cased column name.
+type Rule
+    = OwnerColumn String
+    | PublicRead
+    | Immutable String
+
+
+-- | An opaque row-security policy: a conjunction of `Rule`s over a store's
+-- validated columns. Phantom in `row` so an accessor-named policy column is
+-- checked against the store's row type when the policy is attached with
+-- `secured` (a cross-row policy column is a type error). The runtime value
+-- carries only the rule list — the `row` parameter is erased, exactly as the
+-- `Cond row` phantom is.
+type Policy row
+    = Policy (List Rule)
+
+
+-- | An opaque secured store: a `Store a` paired with a validated `Policy`. The
+-- ONLY value the future secured operations (`allAs` / `insertAs` / …) will
+-- accept, so a secured store is unreachable through the unsecured operations and
+-- cannot be read unfiltered by mistake (deny-by-default). Built only by
+-- `secured`, which re-validates every policy column against the store's columns,
+-- so a `Secured` holds only a policy whose columns all exist on the store.
+--
+-- Parametric in the row type `a` (it carries the store's `Codec a`) so the later
+-- secured reads can decode rows through the store's own codec — the appendix
+-- sketch wrote a bare `Secured`, but erasing `a` would lose the codec the
+-- secured reads need. A reasoned divergence recorded here.
+type Secured a
+    = Secured (Store a) (Policy a)
+
+
+-- | `unrestricted` — the policy that allows all rows (an explicit empty
+-- conjunction). A store secured with `unrestricted` filters nothing; it exists so
+-- "no restriction" is a deliberate, named choice rather than the absence of a
+-- policy (which, deny-by-default, is instead an unsecured store).
+unrestricted : Policy row
+unrestricted =
+    Policy []
+
+
+-- | `publicRead` — a policy of one public-read rule: reads are unrestricted while
+-- writes still route through the secured operations. A plain value (it names no
+-- column, so it needs no accessor).
+publicRead : Policy row
+publicRead =
+    Policy [ PublicRead ]
+
+
+-- | `ownerColumn accessor` — a policy of one owner-column rule over the
+-- accessor-named column: rows are scoped to the principal that owns that column.
+-- The column is named by an accessor literal (`.author`), checked against the
+-- row type at compile time and snake_cased to the validated column name at
+-- lowering (the same derivation `Codec.auto` uses), then delegated to
+-- `ownerColumnNamed`.
+--
+-- Example:
+--
+--     Store.ownerColumn .author
+ownerColumn : (row -> t) -> Policy row
+ownerColumn =
+    Ffi.kernel "Store_ownerColumn"
+
+
+-- | `immutable accessor` — a policy of one immutable-column rule over the
+-- accessor-named column: the column cannot be changed after insert. Named by an
+-- accessor literal, checked against the row type, delegated to `immutableNamed`.
+--
+-- Example:
+--
+--     Store.immutable .createdAt
+immutable : (row -> t) -> Policy row
+immutable =
+    Ffi.kernel "Store_immutable"
+
+
+-- The stringly forms reached by the accessor-typed policy-builder intercepts
+-- above. The accessor `.field` has already been turned into the validated,
+-- snake_cased column name `col`, so each builds a single-rule policy. Not part of
+-- the caller surface for column naming (a caller writes the accessor); exported
+-- only so the intercept can name them.
+ownerColumnNamed : String -> Policy row
+ownerColumnNamed col =
+    Policy [ OwnerColumn col ]
+
+
+immutableNamed : String -> Policy row
+immutableNamed col =
+    Policy [ Immutable col ]
+
+
+-- | `andPolicy a b` — the conjunction of two policies (their rules concatenated).
+-- Named `andPolicy` rather than `and` because `Store.and` is already the `Cond`
+-- connective (`List (Cond row) -> Cond row`); Ipê has no ad-hoc overloading, so
+-- the policy conjunction takes a distinct name.
+--
+-- Example:
+--
+--     Store.ownerColumn .author
+--         |> Store.andPolicy (Store.immutable .createdAt)
+andPolicy : Policy row -> Policy row -> Policy row
+andPolicy extra base =
+    case base of
+        Policy baseRules ->
+            case extra of
+                Policy extraRules ->
+                    Policy (baseRules ++ extraRules)
+
+
+-- | `secured policy store` — attach `policy` to `store`, or fail closed. Every
+-- column the policy names is re-validated against the store's own codec-derived
+-- columns (the same `hasColumn` check the query leaves and `specsWithinColumns`
+-- use): a policy column absent from the store is a typed `Err`, never a silently
+-- ineffective policy. On success the store is wrapped in an opaque `Secured` —
+-- the only value the future secured operations accept — so deny-by-default holds:
+-- a store is secured only by an explicit, validated policy.
+--
+-- Example:
+--
+--     Store.secured
+--         (Store.ownerColumn .author
+--             |> Store.andPolicy (Store.immutable .createdAt)
+--         )
+--         store
+secured : Policy a -> Store a -> Result Error (Secured a)
+secured policy store =
+    case store of
+        Store r ->
+            case policy of
+                Policy rules ->
+                    case firstUnknownPolicyColumn r.currentColumns rules of
+                        Just bad ->
+                            Err (unknownColumnError bad)
+
+                        Nothing ->
+                            Ok (Secured store policy)
+
+
+-- The first column named by a rule that is not one of the store's columns, or
+-- `Nothing` when every column-naming rule names a real store column. `PublicRead`
+-- names no column, so it is always in-policy.
+firstUnknownPolicyColumn : List Column -> List Rule -> Maybe String
+firstUnknownPolicyColumn columns rules =
+    case rules of
+        [] ->
+            Nothing
+
+        first :: rest ->
+            case ruleColumn first of
+                Just name ->
+                    if hasColumn columns name then
+                        firstUnknownPolicyColumn columns rest
+
+                    else
+                        Just name
+
+                Nothing ->
+                    firstUnknownPolicyColumn columns rest
+
+
+-- The column a rule constrains, or `Nothing` for a rule that names no column
+-- (`PublicRead`).
+ruleColumn : Rule -> Maybe String
+ruleColumn rule =
+    case rule of
+        OwnerColumn c ->
+            Just c
+
+        Immutable c ->
+            Just c
+
+        PublicRead ->
+            Nothing
 
 
 -- ─── Errors ────────────────────────────────────────────────────────

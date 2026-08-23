@@ -12577,6 +12577,37 @@ impl<'a> Lowerer<'a> {
         })
     }
 
+    /// Dispatch a `Store.ownerColumn` / `Store.immutable` call intercepted at
+    /// lowering (arity 1: accessor only). The accessor argument (`.field`) names
+    /// the validated column; the corresponding `*Named` stdlib helper builds the
+    /// single-rule `Policy` from the extracted column name.
+    fn lower_store_policy_rule(&self, peek: &Callee, args: &[canon::Expr]) -> DResult<Expr> {
+        let Some(acc) = args.first() else {
+            return Err(bug(
+                "ipe_lower::lower_store_policy_rule",
+                "Store policy-rule kernel arity < 1",
+            ));
+        };
+        let (column, _field_ty) = self.accessor_column(acc)?;
+        let helper = match peek {
+            Callee::Kernel(KernelFn::StoreOwnerColumn) => "ownerColumnNamed",
+            Callee::Kernel(KernelFn::StoreImmutable) => "immutableNamed",
+            _ => {
+                return Err(bug(
+                    "ipe_lower::lower_store_policy_rule",
+                    "unexpected callee in policy-rule intercept",
+                ));
+            }
+        };
+        let id = self.store_named_func_id(helper)?;
+        Ok(Expr::Call {
+            callee: Callee::Func(id),
+            args: vec![Expr::Str(column)],
+            pin: CallPin::None,
+            on_form: OnFormKind::NotForm,
+        })
+    }
+
     /// Build a single-parameter lambda `\v -> SqlXxx v` for the scalar field
     /// type `field_ty`. Used by `lower_store_inlist` to map a `List t` to a
     /// `List SqlValue` at the IR level. Fails closed (IPE-L0145) when `field_ty`
@@ -13445,6 +13476,25 @@ impl<'a> Lowerer<'a> {
             )
     }
 
+    /// is `(module, name)` the `Ipe.Db.Store.Policy` row-security policy —
+    /// module `["Ipe", "Db", "Store"]`, name `Policy`? Its `row` argument is a
+    /// PHANTOM: no `Policy` constructor carries a `row` value (the parameter
+    /// ties the policy's accessor columns to the store's row type at the
+    /// type-checker only, via `secured : Policy a -> Store a -> …`). It is
+    /// dropped at lowering so the emitted enum is the non-generic
+    /// `IpeDbStorePolicy`; otherwise every construction (`ownerColumnNamed …`)
+    /// leaves the enum's type argument unconstrained at the point of
+    /// construction — an uninferrable `T` (E0283/E0392), exactly as for `Cond`.
+    fn is_policy_con(&self, module: &[Symbol], name: Symbol) -> bool {
+        self.interner.resolve(name) == Some("Policy")
+            && matches!(
+                module,
+                [a, b, c] if self.interner.resolve(*a) == Some("Ipe")
+                    && self.interner.resolve(*b) == Some("Db")
+                    && self.interner.resolve(*c) == Some("Store")
+            )
+    }
+
     /// is `(module, name)` the `Ipe.Cache.Cache` opaque handle type —
     /// module `["Ipe", "Cache"]`, name `Cache`? Its `k`/`v` args are dropped at
     /// lowering (backed by the non-generic runtime `IpeCacheHandle`).
@@ -13481,7 +13531,7 @@ impl<'a> Lowerer<'a> {
         // type-determinate; the `is_cond_con` arms in `ir_type_from_ty` /
         // `ir_type_from_canon` drop the matching type argument at every use site,
         // so the decl and the references agree.
-        let cond_phantom = self.is_cond_con(&u.home, u.name);
+        let cond_phantom = self.is_cond_con(&u.home, u.name) || self.is_policy_con(&u.home, u.name);
         let type_params = if cond_phantom {
             Vec::new()
         } else {
@@ -15225,29 +15275,31 @@ impl<'a> Lowerer<'a> {
                     // `row` of `Ipe.Db.Store.Cond row` (untyped runtime data) —
                     // twin of the solved-Ty arm; see its comment for the E0283
                     // rationale.
-                    let ir_args =
-                        if self.is_cache_handle_con(home, *name) || self.is_cond_con(home, *name) {
-                            Vec::new()
-                        } else {
-                            let mut v = Vec::with_capacity(args.len());
-                            for a in args {
-                                // A type argument filling a generic payload slot that
-                                // instantiates to a function takes the same `Arc<dyn Fn>`
-                                // carrier the decl-side flip
-                                // ([`normalize_enum_payload_fun_carrier`]) stamps on a
-                                // direct-function payload and the value-side flip
-                                // ([`promote_stored_fn_carrier`]) constructs with
-                                // `Arc::new`. Without it the type application spells the
-                                // slot `Box<dyn Fn>` while the construction fills it with
-                                // an `Arc`, an `Arc`-vs-`Box` E0308 (and the composite's
-                                // derived `Clone` fails on the non-`Clone` `Box`). The
-                                // flip is a no-op for every non-function argument.
-                                v.push(normalize_enum_payload_fun_carrier(
-                                    self.ir_type_from_canon(a, generics)?,
-                                ));
-                            }
-                            v
-                        };
+                    let ir_args = if self.is_cache_handle_con(home, *name)
+                        || self.is_cond_con(home, *name)
+                        || self.is_policy_con(home, *name)
+                    {
+                        Vec::new()
+                    } else {
+                        let mut v = Vec::with_capacity(args.len());
+                        for a in args {
+                            // A type argument filling a generic payload slot that
+                            // instantiates to a function takes the same `Arc<dyn Fn>`
+                            // carrier the decl-side flip
+                            // ([`normalize_enum_payload_fun_carrier`]) stamps on a
+                            // direct-function payload and the value-side flip
+                            // ([`promote_stored_fn_carrier`]) constructs with
+                            // `Arc::new`. Without it the type application spells the
+                            // slot `Box<dyn Fn>` while the construction fills it with
+                            // an `Arc`, an `Arc`-vs-`Box` E0308 (and the composite's
+                            // derived `Clone` fails on the non-`Clone` `Box`). The
+                            // flip is a no-op for every non-function argument.
+                            v.push(normalize_enum_payload_fun_carrier(
+                                self.ir_type_from_canon(a, generics)?,
+                            ));
+                        }
+                        v
+                    };
                     Ok(IrType::Enum {
                         home: ModPath(home.clone()),
                         name: *name,
@@ -16341,6 +16393,7 @@ impl<'a> Lowerer<'a> {
                     // uninferrable `T` at the call site (E0283).
                     let ir_args = if self.is_cache_handle_con(module, *name)
                         || self.is_cond_con(module, *name)
+                        || self.is_policy_con(module, *name)
                     {
                         Vec::new()
                     } else {
@@ -18444,6 +18497,16 @@ impl<'a> Lowerer<'a> {
                 {
                     return Ok(Intercepted::Done(
                         self.lower_store_spec_with_value(&peek, args)?,
+                    ));
+                }
+                // Row-security policy builders — arity 1 (accessor only). The
+                // intercept extracts the column name from the accessor and calls
+                // the corresponding `*Named` stdlib helper.
+                Callee::Kernel(KernelFn::StoreOwnerColumn | KernelFn::StoreImmutable)
+                    if args.len() == 1 =>
+                {
+                    return Ok(Intercepted::Done(
+                        self.lower_store_policy_rule(&peek, args)?,
                     ));
                 }
                 _ => {}
@@ -20832,7 +20895,11 @@ impl<'a> Lowerer<'a> {
                 | KernelFn::PubSubTopic
                 // `Store.isNull` / `Store.notNull` — arity 1 (accessor only).
                 | KernelFn::StoreIsNull
-                | KernelFn::StoreNotNull,
+                | KernelFn::StoreNotNull
+                // Row-security policy builders — arity 1 (accessor only). This is
+                // a defensive fallback count; the intercept fires first.
+                | KernelFn::StoreOwnerColumn
+                | KernelFn::StoreImmutable,
             ) => Ok(1),
             Callee::Kernel(
                 KernelFn::StringAppend
@@ -22696,6 +22763,9 @@ impl<'a> Lowerer<'a> {
                     ("Store", "touchOnUpdate") => Ok(Callee::Kernel(KernelFn::StoreTouchOnUpdate)),
                     ("Store", "defaultText") => Ok(Callee::Kernel(KernelFn::StoreDefaultText)),
                     ("Store", "defaultInt") => Ok(Callee::Kernel(KernelFn::StoreDefaultInt)),
+                    // Row-security policy builders — intercepted at lowering.
+                    ("Store", "ownerColumn") => Ok(Callee::Kernel(KernelFn::StoreOwnerColumn)),
+                    ("Store", "immutable") => Ok(Callee::Kernel(KernelFn::StoreImmutable)),
                     // ── Secret kernels ──────────────────────────
                     ("Secret", "fromString") => Ok(Callee::Kernel(KernelFn::SecretFromString)),
                     ("Secret", "reveal") => Ok(Callee::Kernel(KernelFn::SecretReveal)),
