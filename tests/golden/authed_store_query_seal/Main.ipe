@@ -1,0 +1,112 @@
+module Main exposing (main)
+
+-- End-to-end proof of the framework-injected row-security path: an authenticated
+-- HTTP route mints a `Principal` (the sole minter is the fail-closed auth
+-- middleware), and the handler reads a secured store as that caller through
+-- `Store.allAs`. The policy's owner filter compiles to a BOUND-PARAM `WHERE`
+-- (`Sql.column` for the validated column, `Sql.param` for the subject) — never
+-- string interpolation — so the database never returns an out-of-policy row.
+--
+-- No live database or network is needed: `Task.onError` catches the connection
+-- failure and the route builder is only assembled, never served. The SEAL proof
+-- is that the emitted crate `cargo build`s under `IPE_E2E=1` — `ipe` accepting
+-- this program (exit 0) must imply a buildable emitted crate.
+
+import Ipe.Auth as Auth
+import Ipe.Codec as Codec exposing (Codec)
+import Ipe.Db as Db exposing (Db)
+import Ipe.Db.Store as Store exposing (Store, Secured)
+import Ipe.Error exposing (Error)
+import Ipe.Http.Server as Server
+import Ipe.Http.Server exposing (Request, Response)
+import Ipe.Io as Io
+import Ipe.List as List
+import Ipe.Secret as Secret
+import Ipe.String as String
+import Ipe.Task as Task exposing (Task)
+
+
+type alias Doc =
+    { author : String
+    , body : String
+    }
+
+
+blankDoc : Doc
+blankDoc =
+    { author = "", body = "" }
+
+
+-- A `Codec.auto`-derived codec: its columns are `author` / `body`, so the
+-- `ownerColumn .author` policy names a real column.
+docCodec : Codec Doc
+docCodec =
+    Codec.auto blankDoc
+
+
+-- The row-security policy: each row is owned by its `.author`, which the framework
+-- binds to the authenticated subject.
+docPolicy : Store.Policy Doc
+docPolicy =
+    Store.ownerColumn .author
+
+
+-- Build the secured store once, failing closed if the policy names a column the
+-- store does not have.
+securedDocs : Result Error (Secured Doc)
+securedDocs =
+    case Store.fromCodec "docs" docCodec of
+        Err e ->
+            Err e
+
+        Ok store ->
+            Store.secured docPolicy store
+
+
+-- The authed handler. The middleware has already verified the token and minted
+-- `principal`; `allAs` reads only the rows the policy admits for that caller.
+handleMyDocs : Request -> Auth.Principal -> Task Error Response
+handleMyDocs req principal =
+    Task.onError
+        (\_ -> Task.succeed (Server.text "none"))
+        (Task.andThen
+            (\db ->
+                case securedDocs of
+                    Err _ ->
+                        Task.succeed (Server.text "policy-error")
+
+                    Ok secured ->
+                        Task.andThen
+                            (\docs ->
+                                Task.succeed
+                                    (Server.text
+                                        (String.join
+                                            "\n"
+                                            (List.map .body docs)
+                                        )
+                                    )
+                            )
+                            (Store.allAs principal db secured)
+            )
+            (Db.connect ())
+        )
+
+
+authCfg : Server.AuthConfig
+authCfg =
+    Server.authConfig
+        (Secret.fromString "this-is-a-32-byte-or-longer-secret-key-value")
+        Server.bearerToken
+
+
+main : Task Error ()
+main =
+    Task.onError
+        (\_ -> Io.println "authed-store-query-seal")
+        (Task.andThen
+            (\_ -> Io.println "authed-store-query-seal")
+            (Server.listen
+                8000
+                [ Server.getAuthed "/my/docs" authCfg handleMyDocs ]
+            )
+        )
