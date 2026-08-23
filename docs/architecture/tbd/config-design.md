@@ -119,11 +119,21 @@ every setting, replacing today's per-source ad-hoc order.
 
 ### Secrets are unrepresentable as literals
 
-`Db.url`, JWT secret, etc. take a `Secret`, and the only constructor of a
-`Secret` for config is `Config.fromEnv "VAR"` (reusing the existing reserved
+`Db.url`, JWT secret, etc. take a `Secret`, and the recommended constructor of a
+`Secret` for config is `App.fromEnv "VAR"` (reusing the existing reserved
 `Secret`/`Password` unencodable category). There is no `Db.url "postgres://user:pw@…"`
-overload — a hard-coded credential does not type-check. (Security priority 1,
-made structural.)
+overload — a hard-coded `String` credential does not type-check. (Security
+priority 1, made structural.)
+
+`Secret.fromString : String -> Secret` also exists and is the **sanctioned
+escape hatch**: it seals an already-in-hand plaintext (a value the program
+derived at runtime, or a test fixture) into a `Secret`. It is deliberately kept
+rather than removed — a program legitimately needs to seal a runtime-obtained
+string — and made greppable-by-design so a reviewer can audit every
+literal-credential seal by searching the one `Secret.fromString` symbol. For
+config credentials, `App.fromEnv` remains the recommended source (it keeps the
+credential out of source entirely); `Secret.fromString "literal"` type-checks but
+inlines the plaintext, so it is the wrong tool for a config secret.
 
 ### Module placement (answering "Ipe.Tea.Web.Config, or elsewhere?")
 

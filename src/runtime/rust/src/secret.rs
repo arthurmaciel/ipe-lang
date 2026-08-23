@@ -124,6 +124,18 @@ impl Drop for Secret {
 /// constructor: every `Secret` value in a Ipê program traces back to exactly
 /// one of these calls, so a security reviewer can `grep` this one symbol to
 /// audit every place a plaintext string becomes a typed secret.
+///
+/// # Sanctioned raw-secret escape hatch (config credentials)
+///
+/// This is the deliberate escape hatch for turning an already-in-hand plaintext
+/// into a `Secret` — e.g. a value the program itself derived, or a test fixture.
+/// For CONFIGURATION credentials (`Db.url`, a JWT secret) the RECOMMENDED source
+/// is `App.fromEnv "VAR"`, which reads the value from the environment at startup:
+/// it keeps the credential out of source entirely, whereas
+/// `Secret.fromString "literal"` type-checks and would inline the plaintext. The
+/// `fromString` path is kept (a program legitimately needs to seal a
+/// runtime-obtained string), so it is greppable-by-design rather than removed —
+/// a reviewer audits every literal-credential seal by searching this one symbol.
 #[must_use]
 pub fn secret_from_string(s: String) -> Secret {
     Secret(s)
