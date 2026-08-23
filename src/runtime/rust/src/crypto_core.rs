@@ -200,22 +200,18 @@ fn base64url_no_pad(buf: &[u8]) -> String {
     const ALPHABET: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
     let sym = |v: u8| ALPHABET.get((v & 0x3f) as usize).copied().unwrap_or(b'A') as char;
     let mut out = String::with_capacity(buf.len().div_ceil(3) * 4);
-    let mut chunks = buf.chunks_exact(3);
-    for c in chunks.by_ref() {
-        // Three input bytes → four 6-bit groups. `chunks_exact(3)` yields only
-        // length-3 slices, so the `[b0, b1, b2]` pattern binds every element; the
-        // `else` arm is unreachable (kept because slice patterns are not
-        // statically exhaustive) and index-free — no `indexing_slicing`.
-        let [b0, b1, b2] = *c else {
-            continue;
-        };
+    // Three input bytes → four 6-bit groups. `as_chunks::<3>` yields `[u8; 3]`
+    // arrays plus the sub-3-byte remainder, so every element binds by pattern
+    // without an index and no unreachable slice-pattern arm is needed.
+    let (triples, remainder) = buf.as_chunks::<3>();
+    for &[b0, b1, b2] in triples {
         out.push(sym(b0 >> 2));
         out.push(sym((b0 << 4) | (b1 >> 4)));
         out.push(sym((b1 << 2) | (b2 >> 6)));
         out.push(sym(b2));
     }
     // Raw (no-pad) tail: 1 leftover byte → 2 chars, 2 leftover bytes → 3 chars.
-    match chunks.remainder() {
+    match remainder {
         [b0] => {
             out.push(sym(b0 >> 2));
             out.push(sym(b0 << 4));
