@@ -174,6 +174,12 @@ pub const RESERVED_BUILTIN_TYPES: &[&str] = &[
     // its lowerer arm sits above the `enum_variants` guard and a user
     // `type Locale` would be mis-lowered.
     "Locale",
+    // `Ipe.Auth`'s opaque authenticated subject — reserved because it is a
+    // security-tier type: a user `type Principal` could forge a look-alike that
+    // an `…As` row-security op would trust as an authenticated caller. It has no
+    // Ipê constructor, so the type name being unshadowable keeps the mint the
+    // sole origin.
+    "Principal",
     // `Ipe.Db`'s external-connection handle `Connection mode` and its two phantom
     // access-mode markers. Reserved because the read-only-by-type guarantee is the
     // load-bearing security property: a user `type Connection …` or a shadowed
