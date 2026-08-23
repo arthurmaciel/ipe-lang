@@ -251,6 +251,172 @@ pub fn server_static(path: String, dir: String) -> ServerRoute {
     }
 }
 
+// ─── authenticated routes (fail-closed; sole Principal minter) ─────────────
+//
+// Token verification runs through `crate::auth`, so the authed surface compiles
+// only when the `jwt` feature is also selected. A program that uses `getAuthed`
+// pulls `jwt` into the emitted project's features.
+
+/// Ipe.Server.TokenSource — where the auth middleware reads the session token.
+#[cfg(feature = "jwt")]
+#[derive(Clone, Debug)]
+pub enum TokenSource {
+    /// `Authorization: Bearer <token>`.
+    BearerHeader,
+    /// A named request cookie carrying the token.
+    Cookie(String),
+}
+
+/// Ipe.Server.AuthConfig (opaque) — the secret, token source, and the claim key
+/// the middleware reads the subject from. Built by [`server_auth_config`]; the
+/// only value the authed-route kernels accept.
+#[cfg(feature = "jwt")]
+#[derive(Clone)]
+pub struct AuthConfig {
+    secret: crate::secret::Secret,
+    source: TokenSource,
+    subject_claim: String,
+}
+
+#[cfg(feature = "jwt")]
+/// Ipe.Server.authConfig : Secret -> TokenSource -> AuthConfig. The subject
+/// claim key defaults to the JWT standard `"sub"`.
+#[must_use]
+pub fn server_auth_config(secret: crate::secret::Secret, source: TokenSource) -> AuthConfig {
+    AuthConfig {
+        secret,
+        source,
+        subject_claim: "sub".to_string(),
+    }
+}
+
+#[cfg(feature = "jwt")]
+/// Read the raw token string from the request per the configured source, or
+/// `None` when it is absent/empty. A `Bearer` scheme prefix is matched
+/// case-insensitively (RFC 7235 auth-scheme is case-insensitive); any other
+/// scheme, or a missing header/cookie, yields `None` so the caller fails closed.
+fn read_token(source: &TokenSource, req: &ServerRequest) -> Option<String> {
+    match source {
+        TokenSource::BearerHeader => {
+            let raw = header_ci(&req.headers, "authorization")?;
+            let rest = raw.strip_prefix("Bearer ").or_else(|| {
+                raw.get(..7)
+                    .filter(|p| p.eq_ignore_ascii_case("bearer "))
+                    .and_then(|_| raw.get(7..))
+            })?;
+            let tok = rest.trim();
+            (!tok.is_empty()).then(|| tok.to_string())
+        }
+        TokenSource::Cookie(name) => req
+            .cookies
+            .get(name)
+            .filter(|v| !v.is_empty())
+            .map(ToString::to_string),
+    }
+}
+
+#[cfg(feature = "jwt")]
+/// A `401 Unauthorized` response. The body carries no verification detail (a
+/// specific reason would be an oracle to an attacker probing tokens).
+fn unauthorized() -> ServerResponse {
+    plain_resp(
+        401,
+        "unauthorized",
+        &[("WWW-Authenticate", "Bearer")],
+    )
+}
+
+#[cfg(feature = "jwt")]
+/// The shared authed-route builder. Wraps the caller's
+/// `Request -> Principal -> Task Response` handler in fail-closed middleware
+/// that runs BEFORE the handler: it reads the token, verifies it, extracts the
+/// subject claim, and mints the `Principal` — dispatching to the handler only on
+/// full success, and answering `401` at the first failing step. This is the sole
+/// site that mints a `Principal`.
+fn authed_route<E, F>(method: &str, path: String, cfg: AuthConfig, handler: F) -> ServerRoute
+where
+    E: Send + 'static,
+    F: Fn(ServerRequest, crate::principal::Principal) -> IpeTask<E, ServerResponse>
+        + Send
+        + Sync
+        + 'static,
+{
+    let handler = Arc::new(handler);
+    let guarded = move |req: ServerRequest| -> IpeTask<E, ServerResponse> {
+        let cfg = cfg.clone();
+        let handler = Arc::clone(&handler);
+        Box::pin(async move {
+            let Some(token) = read_token(&cfg.source, &req) else {
+                return ok_res(unauthorized());
+            };
+            let secret = crate::secret::secret_reveal(cfg.secret.clone());
+            let claims: HashMap<String, String> =
+                match crate::auth::auth_verify_token::<String>(secret, token) {
+                    IpeResult::Ok(c) => c,
+                    IpeResult::Err(_) => return ok_res(unauthorized()),
+                };
+            let Some(subject) = claims.get(&cfg.subject_claim).filter(|s| !s.is_empty()) else {
+                return ok_res(unauthorized());
+            };
+            let principal = crate::principal::principal_mint(subject.clone());
+            handler(req, principal).await
+        })
+    };
+    route::<E, _>(method, path, guarded)
+}
+
+#[cfg(feature = "jwt")]
+/// Server.getAuthed : String -> AuthConfig -> (Request -> Principal -> Task Response) -> Route
+pub fn server_get_authed<E, F>(path: String, cfg: AuthConfig, handler: F) -> ServerRoute
+where
+    E: Send + 'static,
+    F: Fn(ServerRequest, crate::principal::Principal) -> IpeTask<E, ServerResponse>
+        + Send
+        + Sync
+        + 'static,
+{
+    authed_route("GET", path, cfg, handler)
+}
+
+#[cfg(feature = "jwt")]
+/// Server.postAuthed : String -> AuthConfig -> (Request -> Principal -> Task Response) -> Route
+pub fn server_post_authed<E, F>(path: String, cfg: AuthConfig, handler: F) -> ServerRoute
+where
+    E: Send + 'static,
+    F: Fn(ServerRequest, crate::principal::Principal) -> IpeTask<E, ServerResponse>
+        + Send
+        + Sync
+        + 'static,
+{
+    authed_route("POST", path, cfg, handler)
+}
+
+#[cfg(feature = "jwt")]
+/// Server.putAuthed : String -> AuthConfig -> (Request -> Principal -> Task Response) -> Route
+pub fn server_put_authed<E, F>(path: String, cfg: AuthConfig, handler: F) -> ServerRoute
+where
+    E: Send + 'static,
+    F: Fn(ServerRequest, crate::principal::Principal) -> IpeTask<E, ServerResponse>
+        + Send
+        + Sync
+        + 'static,
+{
+    authed_route("PUT", path, cfg, handler)
+}
+
+#[cfg(feature = "jwt")]
+/// Server.deleteAuthed : String -> AuthConfig -> (Request -> Principal -> Task Response) -> Route
+pub fn server_delete_authed<E, F>(path: String, cfg: AuthConfig, handler: F) -> ServerRoute
+where
+    E: Send + 'static,
+    F: Fn(ServerRequest, crate::principal::Principal) -> IpeTask<E, ServerResponse>
+        + Send
+        + Sync
+        + 'static,
+{
+    authed_route("DELETE", path, cfg, handler)
+}
+
 // ─── response builders (pure) ─────────────────────────────────────────────
 
 fn resp(status: i64, body: String, ct: &str) -> ServerResponse {
