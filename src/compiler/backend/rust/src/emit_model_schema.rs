@@ -166,6 +166,8 @@ const TAG_CONNECTION: u8 = 66;
 const TAG_CONN_READONLY: u8 = 67;
 const TAG_CONN_READWRITE: u8 = 68;
 const TAG_PRINCIPAL: u8 = 69;
+const TAG_AUTH_CONFIG: u8 = 70;
+const TAG_TOKEN_SOURCE: u8 = 71;
 /// Fuel exhaustion marker — distinct from every variant tag.
 const TAG_FUEL_EXHAUSTED: u8 = 0xFF;
 
@@ -239,6 +241,10 @@ fn hash_ty(ctx: &EmitCtx, ty: &IrType, h: &mut Sha256, fuel: u32) -> DResult<()>
         IrType::Locale => h.update([TAG_LOCALE]),
         // `Principal` — non-serde opaque identity; present for exhaustiveness.
         IrType::Principal => h.update([TAG_PRINCIPAL]),
+        // `AuthConfig`/`TokenSource` — non-serde authed-route descriptors;
+        // present for exhaustiveness.
+        IrType::AuthConfig => h.update([TAG_AUTH_CONFIG]),
+        IrType::TokenSource => h.update([TAG_TOKEN_SOURCE]),
 
         IrType::Task(inner) => {
             h.update([TAG_TASK]);

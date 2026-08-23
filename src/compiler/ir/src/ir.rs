@@ -1242,6 +1242,24 @@ pub enum IrType {
     /// identifier cannot stand in where a `Principal` is required.
     Principal,
 
+    /// `Ipe.Server.AuthConfig` — the opaque authed-route configuration.
+    ///
+    /// Renders as `ipe_runtime::server::AuthConfig` (a private-field struct
+    /// holding the verification `Secret`, the [`IrType::TokenSource`], and the
+    /// subject-claim key). Built only through `Server.authConfig`; the sole
+    /// value the authed-route kernels accept. A dedicated leaf, never serde: it
+    /// carries a `Secret` and must never round-trip through a session store.
+    AuthConfig,
+
+    /// `Ipe.Server.TokenSource` — the opaque descriptor of where the authed
+    /// middleware reads the session token from.
+    ///
+    /// Renders as `ipe_runtime::server::TokenSource` (a closed runtime enum:
+    /// bearer header or a named cookie). Built only through the `Server` token
+    /// source kernels; a dedicated leaf so a bare `String` cannot stand in for a
+    /// token source. Not serde.
+    TokenSource,
+
     /// The built-in `ErrorKind` type — `Error`'s 11-variant classification
     ///
     /// Renders as `ipe_runtime::error::IpeErrorKind` (a `#[repr(u8)]` enum,
@@ -1723,6 +1741,10 @@ pub fn ir_type_is_derivable(
         | IrType::ServerResponse
         | IrType::ServerRoute
         | IrType::ServerCookie
+        // `AuthConfig` derives only Clone (holds a `Secret`); `TokenSource`
+        // derives Clone+Debug — both lack PartialEq, so not fully derivable.
+        | IrType::AuthConfig
+        | IrType::TokenSource
         // `StreamWriter` derives Clone+Copy+Debug but not PartialEq — not fully derivable.
         | IrType::StreamWriter
         // `HttpRequest` is an opaque handle — not fully derivable.
@@ -1936,6 +1958,10 @@ pub fn ir_type_is_serde(ty: &IrType, enum_serde: &impl Fn(&ModPath, Symbol) -> b
         // that a compile-time IPE-L0120 rather than a mint bypass, the same
         // posture as `Secret`.
         | IrType::Principal
+        // `AuthConfig` carries a `Secret`; `TokenSource` is a transient
+        // routing descriptor. Neither is a session datum — never serde.
+        | IrType::AuthConfig
+        | IrType::TokenSource
         // `Route<Page>` holds an `Arc<dyn Fn>` builder — never derivable/serde
         // regardless of its page argument.
         | IrType::WebRoute(_) => false,
@@ -2054,6 +2080,9 @@ pub fn carrier_is_clone(ty: &IrType) -> bool {
         | IrType::Locale
         // `Principal` wraps a `String` — derives `Clone`.
         | IrType::Principal
+        // `AuthConfig` and `TokenSource` both derive `Clone`.
+        | IrType::AuthConfig
+        | IrType::TokenSource
         // The promoted `Arc<dyn Fn>` fn carrier: `Arc` is `Clone` (a refcount
         // bump), so a `SharedFun` slot never poisons its enclosing composite.
         | IrType::SharedFun(_, _)

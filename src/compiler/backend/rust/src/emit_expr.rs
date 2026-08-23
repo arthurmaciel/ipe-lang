@@ -2859,6 +2859,7 @@ fn stream_handler_capture_prologue(ctx: &EmitCtx, handler: &Expr) -> DResult<Str
 /// Returns a hard [`Diagnostic::CompilerBug`] for any `is_server()` variant
 /// not listed here, so a future addition that forgets this function fails at
 /// compile time.
+#[allow(clippy::too_many_lines)] // exhaustive declarative per-kernel dispatch table
 fn emit_server_call(
     ctx: &EmitCtx,
     callee: &Callee,
@@ -2980,6 +2981,11 @@ fn emit_server_call(
         | KernelFn::ServerRedirect
         | KernelFn::ServerCookieNew
         | KernelFn::ServerWithCookie
+        // Authed-route config + token-source constructors use the standard
+        // N-arg call path.
+        | KernelFn::ServerAuthConfig
+        | KernelFn::ServerTokenBearer
+        | KernelFn::ServerCookieToken
         | KernelFn::MiddlewareWithCors
         | KernelFn::MiddlewareWithLogging
         | KernelFn::MiddlewareWithBasicAuth
@@ -3006,7 +3012,15 @@ fn emit_server_call(
         | KernelFn::WsSendToClient
         | KernelFn::WsSendBinaryToClient
         | KernelFn::WsBroadcast
-        | KernelFn::WsCloseClient => Ok(None),
+        | KernelFn::WsCloseClient
+        // Authed routes take a two-argument handler `Request -> Principal ->
+        // Task Error Response`; the shared N-arg call path emits it as a
+        // `Box<dyn Fn(ServerRequest, Principal) -> IpeTask<ServerResponse>>`,
+        // matching `server_*_authed`'s `F: Fn(ServerRequest, Principal)` bound.
+        | KernelFn::ServerGetAuthed
+        | KernelFn::ServerPostAuthed
+        | KernelFn::ServerPutAuthed
+        | KernelFn::ServerDeleteAuthed => Ok(None),
         // Any is_server() variant not listed above is a gap — hard error so
         // the Rust compiler's exhaustiveness check catches it at compile time.
         _ => Err(Diagnostic::CompilerBug {

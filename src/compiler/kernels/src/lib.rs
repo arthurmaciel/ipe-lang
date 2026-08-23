@@ -288,6 +288,12 @@ pub enum BuiltinTag {
     ServerCookie,
     /// `ServerRoute` — the nullary opaque HTTP-server route.
     ServerRoute,
+    /// `AuthConfig` — the nullary opaque authed-route configuration. Built only
+    /// through `Server.authConfig`; never buildable by an Ipê term directly.
+    AuthConfig,
+    /// `TokenSource` — the nullary opaque authed-route token-source descriptor.
+    /// Built only through the `Server` token-source kernels.
+    TokenSource,
     /// `Attribute` — the `Ipe.Ui` attribute constructor `Attribute msg`, applied
     /// to the message type. Empty-module (unqualified), distinct from
     /// [`Self::HtmlAttribute`], which shares the same interned `Attribute` name
@@ -1514,6 +1520,15 @@ pub enum StdlibKernel {
     ServerMethod,
     ServerCookieNew,
     ServerWithCookie,
+    // Authed-route surface — the sole compiler path to the fail-closed
+    // Principal-minting runtime middleware.
+    ServerAuthConfig,
+    ServerTokenBearer,
+    ServerCookieToken,
+    ServerGetAuthed,
+    ServerPostAuthed,
+    ServerPutAuthed,
+    ServerDeleteAuthed,
     MiddlewareWithCors,
     MiddlewareWithLogging,
     MiddlewareWithBasicAuth,
@@ -3259,6 +3274,15 @@ impl StdlibKernel {
             Self::ServerMethod => d("Server", "method", 1, Server, "server_method"),
             Self::ServerCookieNew => d("Server", "cookie", 2, Server, "server_cookie"),
             Self::ServerWithCookie => d("Server", "withCookie", 2, Server, "server_with_cookie"),
+            Self::ServerAuthConfig => d("Server", "authConfig", 2, Server, "server_auth_config"),
+            Self::ServerTokenBearer => d("Server", "bearerToken", 0, Server, "server_token_bearer"),
+            Self::ServerCookieToken => d("Server", "cookieToken", 1, Server, "server_cookie_token"),
+            Self::ServerGetAuthed => d("Server", "getAuthed", 3, Server, "server_get_authed"),
+            Self::ServerPostAuthed => d("Server", "postAuthed", 3, Server, "server_post_authed"),
+            Self::ServerPutAuthed => d("Server", "putAuthed", 3, Server, "server_put_authed"),
+            Self::ServerDeleteAuthed => {
+                d("Server", "deleteAuthed", 3, Server, "server_delete_authed")
+            }
             Self::MiddlewareWithCors => {
                 d("Middleware", "withCors", 2, Server, "middleware_with_cors")
             }
@@ -4623,6 +4647,13 @@ impl StdlibKernel {
         Self::ServerMethod,
         Self::ServerCookieNew,
         Self::ServerWithCookie,
+        Self::ServerAuthConfig,
+        Self::ServerTokenBearer,
+        Self::ServerCookieToken,
+        Self::ServerGetAuthed,
+        Self::ServerPostAuthed,
+        Self::ServerPutAuthed,
+        Self::ServerDeleteAuthed,
         Self::MiddlewareWithCors,
         Self::MiddlewareWithLogging,
         Self::MiddlewareWithBasicAuth,
@@ -5920,6 +5951,8 @@ impl StdlibKernel {
         const SERVER_REQUEST: TyShape = TyShape::Con(BuiltinTag::ServerRequest, &[]);
         const SERVER_COOKIE: TyShape = TyShape::Con(BuiltinTag::ServerCookie, &[]);
         const SERVER_ROUTE: TyShape = TyShape::Con(BuiltinTag::ServerRoute, &[]);
+        const AUTH_CONFIG: TyShape = TyShape::Con(BuiltinTag::AuthConfig, &[]);
+        const TOKEN_SOURCE: TyShape = TyShape::Con(BuiltinTag::TokenSource, &[]);
         // Scheme-local vars beyond `g` (index 6) for the widest `Config.map*`.
         const H: TyShape = TyShape::Var(7);
         const I_VAR: TyShape = TyShape::Var(8);
@@ -7324,6 +7357,21 @@ impl StdlibKernel {
         const TASK_SERVER_RESPONSE: TyShape = TyShape::Con(BuiltinTag::Task, &[SERVER_RESPONSE]);
         const HANDLER_TO_ROUTE: TyShape = TyShape::Fun(&RESP_HANDLER, &SERVER_ROUTE);
         const SERVER_ROUTE_KERNEL: TyShape = TyShape::Fun(&STRING, &HANDLER_TO_ROUTE);
+        // Authed routes. `authConfig : Secret -> TokenSource -> AuthConfig`;
+        // `cookieToken : String -> TokenSource`; the route kernels take a
+        // two-argument handler `Request -> Principal -> Task Error Response`.
+        const SECRET_TO_TOKEN_SOURCE_TO_AUTH_CONFIG: TyShape =
+            TyShape::Fun(&SECRET, &TyShape::Fun(&TOKEN_SOURCE, &AUTH_CONFIG));
+        const STRING_TO_TOKEN_SOURCE: TyShape = TyShape::Fun(&STRING, &TOKEN_SOURCE);
+        const AUTHED_HANDLER: TyShape = TyShape::Fun(
+            &SERVER_REQUEST,
+            &TyShape::Fun(&PRINCIPAL, &TASK_SERVER_RESPONSE),
+        );
+        const AUTHED_HANDLER_TO_ROUTE: TyShape = TyShape::Fun(&AUTHED_HANDLER, &SERVER_ROUTE);
+        const CONFIG_TO_HANDLER_TO_ROUTE: TyShape =
+            TyShape::Fun(&AUTH_CONFIG, &AUTHED_HANDLER_TO_ROUTE);
+        const SERVER_AUTHED_ROUTE_KERNEL: TyShape =
+            TyShape::Fun(&STRING, &CONFIG_TO_HANDLER_TO_ROUTE);
         const STRING_TO_RESPONSE: TyShape = TyShape::Fun(&STRING, &SERVER_RESPONSE);
         const RESPONSE_TO_RESPONSE: TyShape = TyShape::Fun(&SERVER_RESPONSE, &SERVER_RESPONSE);
         const SERVER_WITH_STATUS: TyShape = TyShape::Fun(&INT, &RESPONSE_TO_RESPONSE);
@@ -8329,6 +8377,13 @@ impl StdlibKernel {
             | Self::ServerDelete
             | Self::ServerAny
             | Self::ServerApi => Some(&SERVER_ROUTE_KERNEL),
+            Self::ServerGetAuthed
+            | Self::ServerPostAuthed
+            | Self::ServerPutAuthed
+            | Self::ServerDeleteAuthed => Some(&SERVER_AUTHED_ROUTE_KERNEL),
+            Self::ServerAuthConfig => Some(&SECRET_TO_TOKEN_SOURCE_TO_AUTH_CONFIG),
+            Self::ServerTokenBearer => Some(&TOKEN_SOURCE),
+            Self::ServerCookieToken => Some(&STRING_TO_TOKEN_SOURCE),
             Self::ServerText | Self::ServerJson | Self::ServerHtml | Self::ServerRedirect => {
                 Some(&STRING_TO_RESPONSE)
             }
@@ -8592,6 +8647,13 @@ impl StdlibKernel {
             | Self::ServerMethod
             | Self::ServerCookieNew
             | Self::ServerWithCookie
+            | Self::ServerAuthConfig
+            | Self::ServerTokenBearer
+            | Self::ServerCookieToken
+            | Self::ServerGetAuthed
+            | Self::ServerPostAuthed
+            | Self::ServerPutAuthed
+            | Self::ServerDeleteAuthed
             | Self::MiddlewareWithCors
             | Self::MiddlewareWithLogging
             | Self::MiddlewareWithBasicAuth
@@ -9764,6 +9826,14 @@ impl StdlibKernel {
                 | Self::ServerMethod
                 | Self::ServerCookieNew
                 | Self::ServerWithCookie
+                // ── Ipe.Server authed routes (fail-closed Principal mint) ──
+                | Self::ServerAuthConfig
+                | Self::ServerTokenBearer
+                | Self::ServerCookieToken
+                | Self::ServerGetAuthed
+                | Self::ServerPostAuthed
+                | Self::ServerPutAuthed
+                | Self::ServerDeleteAuthed
                 | Self::MiddlewareWithCors
                 | Self::MiddlewareWithLogging
                 | Self::MiddlewareWithBasicAuth
@@ -10469,6 +10539,28 @@ impl StdlibKernel {
                 | Self::JwtWithClaim
                 | Self::JwtEncode
                 | Self::JwtDecode
+        )
+    }
+
+    /// `true` when this kernel is part of the authed-route surface — the
+    /// `Server` kernels whose runtime denotations token-verify through the `jwt`
+    /// module (`server_get_authed` and companions, `server_auth_config`, the
+    /// token-source constructors). Their runtime functions are `cfg(feature =
+    /// "jwt")`, and the `server` feature does NOT imply `jwt`, so the backend
+    /// selects `jwt` for a program that reaches any of them
+    /// ([`crate::EmitCtx::reaches_jwt`]). Distinct from [`Self::is_jwt`], which is
+    /// the `Jwt`-qualifier module-residency predicate a byte-parity tripwire pins.
+    #[must_use]
+    pub const fn is_authed_route(self) -> bool {
+        matches!(
+            self,
+            Self::ServerGetAuthed
+                | Self::ServerPostAuthed
+                | Self::ServerPutAuthed
+                | Self::ServerDeleteAuthed
+                | Self::ServerAuthConfig
+                | Self::ServerTokenBearer
+                | Self::ServerCookieToken
         )
     }
 

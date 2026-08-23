@@ -845,6 +845,8 @@ const fn ir_type_display_name(ty: &IrType) -> &'static str {
         IrType::ConnReadWrite => "ReadWrite",
         IrType::Locale => "Locale",
         IrType::Principal => "Principal",
+        IrType::AuthConfig => "AuthConfig",
+        IrType::TokenSource => "TokenSource",
     }
 }
 

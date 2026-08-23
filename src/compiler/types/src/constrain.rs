@@ -284,6 +284,16 @@ struct Builtins {
     server_route: Symbol,
     /// `"Cookie"` — the opaque server cookie type.
     server_cookie: Symbol,
+    /// `"AuthConfig"` — the opaque authed-route configuration type
+    /// (`ipe_runtime::server::AuthConfig`). Built only through `Server.authConfig`;
+    /// the sole value the authed-route kernels accept. Lowered to
+    /// `IrType::AuthConfig`.
+    auth_config: Symbol,
+    /// `"TokenSource"` — the opaque descriptor of where the authed middleware
+    /// reads the session token (`ipe_runtime::server::TokenSource`). Built only
+    /// through the `Server` token-source kernels. Lowered to
+    /// `IrType::TokenSource`.
+    token_source: Symbol,
     /// `"Handler"` — the `Request -> Task Error Response` alias from
     /// `Ipe.Http.Server`. Pre-interned so `constrain_def` can detect a
     /// `handler : Handler` annotation and expand it to the full arrow type
@@ -719,6 +729,8 @@ impl Builtins {
             server_response: interner.intern("Response")?,
             server_route: interner.intern("Route")?,
             server_cookie: interner.intern("Cookie")?,
+            auth_config: interner.intern("AuthConfig")?,
+            token_source: interner.intern("TokenSource")?,
             handler: interner.intern("Handler")?,
             // Ipe.Http.Server.Stream opaque handle.
             stream_writer: interner.intern("StreamWriter")?,
@@ -4084,6 +4096,8 @@ impl<'a> Builder<'a> {
             BuiltinTag::ServerRequest => self.builtins.server_request,
             BuiltinTag::ServerCookie => self.builtins.server_cookie,
             BuiltinTag::ServerRoute => self.builtins.server_route,
+            BuiltinTag::AuthConfig => self.builtins.auth_config,
+            BuiltinTag::TokenSource => self.builtins.token_source,
             // `Ipe.Ui.Attribute` and `Ipe.Html.Attribute` share this interned
             // `Attribute` name; they differ only in the module path
             // (`builtin_con_module`).
@@ -4498,6 +4512,19 @@ impl<'a> Builder<'a> {
         let cookie = || Ty::Con {
             module: Vec::new(),
             name: self.builtins.server_cookie,
+            args: Vec::new(),
+        };
+        // `auth_config()` / `token_source()` — the opaque authed-route
+        // descriptors. Built only through the `Server` auth kernels (maps to
+        // `IrType::AuthConfig` / `IrType::TokenSource`).
+        let auth_config = || Ty::Con {
+            module: Vec::new(),
+            name: self.builtins.auth_config,
+            args: Vec::new(),
+        };
+        let token_source = || Ty::Con {
+            module: Vec::new(),
+            name: self.builtins.token_source,
             args: Vec::new(),
         };
         // `sw()` — the opaque `StreamWriter` handle. Used by
@@ -5477,6 +5504,24 @@ impl<'a> Builder<'a> {
             K::ServerBody | K::ServerPath | K::ServerMethod => fun(req(), string()),
             K::ServerCookieNew => fun(string(), fun(string(), cookie())),
             K::ServerWithCookie => fun(cookie(), fun(resp(), resp())),
+            // ── Authed routes (fail-closed Principal mint) ──
+            // `authConfig : Secret -> TokenSource -> AuthConfig`.
+            K::ServerAuthConfig => fun(secret(), fun(token_source(), auth_config())),
+            // `bearerToken : TokenSource`; `cookieToken : String -> TokenSource`.
+            K::ServerTokenBearer => token_source(),
+            K::ServerCookieToken => fun(string(), token_source()),
+            // `getAuthed : String -> AuthConfig
+            //     -> (Request -> Principal -> Task Error Response) -> Route`.
+            K::ServerGetAuthed
+            | K::ServerPostAuthed
+            | K::ServerPutAuthed
+            | K::ServerDeleteAuthed => fun(
+                string(),
+                fun(
+                    auth_config(),
+                    fun(fun(req(), fun(principal_ty(), task(resp()))), route()),
+                ),
+            ),
 
             // ── Middleware ──
             K::MiddlewareWithCors => fun(
@@ -8755,7 +8800,7 @@ mod registry_phase_c_tests {
             K::MiddlewareWithCsrf,
             // RateLimit (1)
             K::RateLimitAllow,
-            // Server (23)
+            // Server (30)
             K::ServerGet,
             K::ServerPost,
             K::ServerPut,
@@ -8779,6 +8824,13 @@ mod registry_phase_c_tests {
             K::ServerMethod,
             K::ServerCookieNew,
             K::ServerWithCookie,
+            K::ServerAuthConfig,
+            K::ServerTokenBearer,
+            K::ServerCookieToken,
+            K::ServerGetAuthed,
+            K::ServerPostAuthed,
+            K::ServerPutAuthed,
+            K::ServerDeleteAuthed,
             // Db (22 — `unsafeFindWhere` removed; its
             // replacements `findWhere`/`deleteWhere` are FIRST_SCHEMED below,
             // never having existed in the legacy `kernel_ty` table)

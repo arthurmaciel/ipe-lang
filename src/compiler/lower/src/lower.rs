@@ -2080,6 +2080,8 @@ fn ir_type_mentions(ty: &IrType, leaf: &impl Fn(&IrType) -> bool) -> bool {
         | IrType::ServerResponse
         | IrType::ServerRoute
         | IrType::ServerCookie
+        | IrType::AuthConfig
+        | IrType::TokenSource
         | IrType::StreamWriter
         | IrType::HttpRequest
         | IrType::WebSocketServer
@@ -2552,7 +2554,11 @@ fn ir_contains_fun(ty: &IrType) -> bool {
         | IrType::CryptoMac
         | IrType::EmailAddress
         | IrType::Locale
-        | IrType::Principal => false,
+        | IrType::Principal
+        // `AuthConfig` / `TokenSource` are opaque descriptors — no embedded
+        // function.
+        | IrType::AuthConfig
+        | IrType::TokenSource => false,
         // `WebRoute page` carries the page type it builds — recurse (the
         // route's own builder closure is runtime-internal, not a Ipê `Fn`).
         IrType::WebRoute(page) => ir_contains_fun(page),
@@ -2704,6 +2710,9 @@ fn clone_class(env: CloneEnv<'_>, t: &IrType) -> CloneClass {
         | IrType::Locale
         // `Principal` wraps a `String` — `Clone` but not `Copy`.
         | IrType::Principal
+        // `AuthConfig` / `TokenSource` derive `Clone` — `CloneOk`.
+        | IrType::AuthConfig
+        | IrType::TokenSource
         // The promoted `Arc<dyn Fn>` carrier is `Clone` (a refcount bump), so a
         // `SharedFun` slot is `CloneOk` — this is what lets a composite carrying
         // it become clonable and so reusable.
@@ -5654,6 +5663,9 @@ fn ir_type_mentions_generic(ty: &IrType, tv: Symbol) -> bool {
         | IrType::Locale
         // `Principal` is non-parametric — no type var.
         | IrType::Principal
+        // `AuthConfig` / `TokenSource` are non-parametric — no type var.
+        | IrType::AuthConfig
+        | IrType::TokenSource
         // A row variable is a distinct row generic (`R{n}`), never the ordinary
         // `T{n}` type variable this predicate tracks.
         | IrType::RowGeneric(_) => false,
@@ -5756,6 +5768,8 @@ fn ir_type_generic_in_decoder(ty: &IrType, tv: Symbol) -> bool {
         | IrType::EmailAddress
         | IrType::Locale
         | IrType::Principal
+        | IrType::AuthConfig
+        | IrType::TokenSource
         | IrType::RowGeneric(_) => false,
     }
 }
@@ -5857,6 +5871,8 @@ fn ir_type_generic_reaches_bare(ty: &IrType, tv: Symbol) -> bool {
         | IrType::EmailAddress
         | IrType::Locale
         | IrType::Principal
+        | IrType::AuthConfig
+        | IrType::TokenSource
         | IrType::RowGeneric(_) => false,
     }
 }
@@ -9428,7 +9444,10 @@ impl KernelUsage {
         self.secret |= k.is_secret();
         self.json |= k.is_json();
         self.crypto |= k.is_crypto();
-        self.jwt |= k.is_jwt();
+        // The authed-route surface token-verifies through the `jwt` module even
+        // though its kernels carry the `Server` qualifier, so it drives
+        // `uses_jwt` too (the `server` feature does not imply `jwt`).
+        self.jwt |= k.is_jwt() || k.is_authed_route();
         self.url |= k.is_url();
         self.async_runtime |= k.requires_async_runtime();
         self.ui |= k.is_ui();
@@ -10070,6 +10089,8 @@ const fn ir_type_label(ty: &IrType) -> &'static str {
         IrType::HttpMethod => "HttpMethod",
         IrType::Decimal => "Decimal",
         IrType::Principal => "Principal",
+        IrType::AuthConfig => "AuthConfig",
+        IrType::TokenSource => "TokenSource",
         IrType::ErrorKind => "ErrorKind",
         IrType::Error => "Error",
         IrType::ErrorDetails => "ErrorDetails",
@@ -11908,7 +11929,9 @@ impl<'a> Lowerer<'a> {
             | IrType::CryptoMac
             | IrType::EmailAddress
             | IrType::Locale
-            | IrType::Principal => Ok(ty),
+            | IrType::Principal
+            | IrType::AuthConfig
+            | IrType::TokenSource => Ok(ty),
         }
     }
 
@@ -14903,6 +14926,11 @@ impl<'a> Lowerer<'a> {
                 // Backed by `ipe_runtime::principal::Principal`. No Ipê
                 // constructor — a value only comes from the auth middleware mint.
                 "Principal" => Ok(IrType::Principal),
+                // `AuthConfig`/`TokenSource` are `Ipe.Server`'s opaque authed-
+                // route descriptors. Backed by `ipe_runtime::server`. Built only
+                // through the `Server` auth kernels.
+                "AuthConfig" => Ok(IrType::AuthConfig),
+                "TokenSource" => Ok(IrType::TokenSource),
                 // `SqlFragment` is `Ipe.Db.Sql`'s opaque WHERE-fragment type
                 // Backed by `ipe_runtime::db::SqlFragment`.
                 "SqlFragment" => Ok(IrType::SqlFragment),
@@ -16024,6 +16052,11 @@ impl<'a> Lowerer<'a> {
                 // Backed by `ipe_runtime::principal::Principal`. No Ipê
                 // constructor — a value only comes from the auth middleware mint.
                 "Principal" => Ok(IrType::Principal),
+                // `AuthConfig`/`TokenSource` are `Ipe.Server`'s opaque authed-
+                // route descriptors. Backed by `ipe_runtime::server`. Built only
+                // through the `Server` auth kernels.
+                "AuthConfig" => Ok(IrType::AuthConfig),
+                "TokenSource" => Ok(IrType::TokenSource),
                 // `SqlFragment` is `Ipe.Db.Sql`'s opaque WHERE-fragment type
                 // Backed by `ipe_runtime::db::SqlFragment`.
                 "SqlFragment" => Ok(IrType::SqlFragment),
@@ -20602,7 +20635,10 @@ impl<'a> Lowerer<'a> {
                 // ── Ipe.Http.Server.WebSocket arity-0 ──────────────────
                 | KernelFn::WsDefaultCfg
                 // ── Jwt builder: claims arity-0 ─────────────────
-                | KernelFn::JwtClaims,
+                | KernelFn::JwtClaims
+                // ── Server: bearer token source — arity 0 ────────────────
+                // `Server.bearerToken : TokenSource`
+                | KernelFn::ServerTokenBearer,
             ) => Ok(0),
             Callee::Kernel(
                 KernelFn::StringFromInt
@@ -20926,7 +20962,10 @@ impl<'a> Lowerer<'a> {
                 // Row-security policy builders — arity 1 (accessor only). This is
                 // a defensive fallback count; the intercept fires first.
                 | KernelFn::StoreOwnerColumn
-                | KernelFn::StoreImmutable,
+                | KernelFn::StoreImmutable
+                // ── Server: cookie token source — arity 1 ────────────────
+                // `Server.cookieToken : String -> TokenSource`
+                | KernelFn::ServerCookieToken,
             ) => Ok(1),
             Callee::Kernel(
                 KernelFn::StringAppend
@@ -21204,6 +21243,8 @@ impl<'a> Lowerer<'a> {
                 | KernelFn::ServerCookieNew
                 // `Server.withCookie : Cookie -> Response -> Response`
                 | KernelFn::ServerWithCookie
+                // `Server.authConfig : Secret -> TokenSource -> AuthConfig`
+                | KernelFn::ServerAuthConfig
                 // `Middleware.withCors : List String -> Handler -> Handler`
                 | KernelFn::MiddlewareWithCors
                 // `Error.withMessage : String -> Error -> Error`
@@ -21273,6 +21314,13 @@ impl<'a> Lowerer<'a> {
                 // ── Server arity-3 ───────────────────────────────────────
                 // `Server.withHeader : String -> String -> Response -> Response`
                 | KernelFn::ServerWithHeader
+                // `Server.getAuthed/postAuthed/putAuthed/deleteAuthed :
+                //     String -> AuthConfig
+                //         -> (Request -> Principal -> Task Error Response) -> Route`
+                | KernelFn::ServerGetAuthed
+                | KernelFn::ServerPostAuthed
+                | KernelFn::ServerPutAuthed
+                | KernelFn::ServerDeleteAuthed
                 // `Middleware.withBasicAuth : String -> String -> Handler -> Handler`
                 | KernelFn::MiddlewareWithBasicAuth
                 // ── Jwt builder arity-3 ─────────────────────────
@@ -22903,6 +22951,13 @@ impl<'a> Lowerer<'a> {
                     ("Server", "method") => Ok(Callee::Kernel(KernelFn::ServerMethod)),
                     ("Server", "cookie") => Ok(Callee::Kernel(KernelFn::ServerCookieNew)),
                     ("Server", "withCookie") => Ok(Callee::Kernel(KernelFn::ServerWithCookie)),
+                    ("Server", "authConfig") => Ok(Callee::Kernel(KernelFn::ServerAuthConfig)),
+                    ("Server", "bearerToken") => Ok(Callee::Kernel(KernelFn::ServerTokenBearer)),
+                    ("Server", "cookieToken") => Ok(Callee::Kernel(KernelFn::ServerCookieToken)),
+                    ("Server", "getAuthed") => Ok(Callee::Kernel(KernelFn::ServerGetAuthed)),
+                    ("Server", "postAuthed") => Ok(Callee::Kernel(KernelFn::ServerPostAuthed)),
+                    ("Server", "putAuthed") => Ok(Callee::Kernel(KernelFn::ServerPutAuthed)),
+                    ("Server", "deleteAuthed") => Ok(Callee::Kernel(KernelFn::ServerDeleteAuthed)),
                     ("Middleware", "withCors") => Ok(Callee::Kernel(KernelFn::MiddlewareWithCors)),
                     ("Middleware", "withLogging") => {
                         Ok(Callee::Kernel(KernelFn::MiddlewareWithLogging))
@@ -25318,6 +25373,9 @@ fn collect_ir_generic_syms(ty: &IrType, out: &mut BTreeSet<Symbol>) {
         | IrType::Locale
         // `Principal` is non-parametric — no generic syms.
         | IrType::Principal
+        // `AuthConfig` / `TokenSource` are non-parametric — no generic syms.
+        | IrType::AuthConfig
+        | IrType::TokenSource
         // A row variable is tracked in `Func::row_params`, NOT in the ordinary
         // `T{n}` generic scope. Collecting it here would double-count it as both
         // a `T`-generic and an `R`-generic, so this arm is a deliberate no-op.
@@ -27638,7 +27696,9 @@ mod tests {
             | ipe_ir::IrType::CryptoMac
             | ipe_ir::IrType::EmailAddress
             | ipe_ir::IrType::Locale
-            | ipe_ir::IrType::Principal => {}
+            | ipe_ir::IrType::Principal
+            | ipe_ir::IrType::AuthConfig
+            | ipe_ir::IrType::TokenSource => {}
         }
 
         // One representative per container variant: the shallowest tree

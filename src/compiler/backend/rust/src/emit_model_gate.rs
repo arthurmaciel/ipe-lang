@@ -322,6 +322,11 @@ fn leaf_of_bounded(ctx: &EmitCtx, ty: &IrType, app: AppShape, fuel: u32) -> Mode
         | IrType::Connection
         | IrType::ConnReadOnly
         | IrType::ConnReadWrite
+        // `AuthConfig`/`TokenSource` are transient authed-route descriptors,
+        // never serde — a Model field of either is rejected by `admissible()`;
+        // these arms name it in the IPE-L0120.
+        | IrType::AuthConfig
+        | IrType::TokenSource
         // `Order` is a plain three-variant data enum — an admissible leaf.
         // `Decimal` is a Copy newtype — an admissible leaf.
         // `ErrorKind`/`Error`/`ErrorDetails` and the nominal error-payload
