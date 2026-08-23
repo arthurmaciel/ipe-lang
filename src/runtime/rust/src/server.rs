@@ -2641,4 +2641,129 @@ mod tests {
             IpeResult::Err(_) => panic!("GET must never be rejected"),
         }
     }
+
+    // ── authenticated routes (fail-closed) ────────────────────────────
+    #[cfg(feature = "jwt")]
+    mod authed {
+        use super::*;
+
+        const SECRET: &str = "a-test-secret-of-32-bytes-padding";
+
+        fn req_with(headers: &[(&str, &str)], cookies: &[(&str, &str)]) -> ServerRequest {
+            ServerRequest {
+                method: "GET".to_string(),
+                path: "/me".to_string(),
+                body: String::new(),
+                headers: headers
+                    .iter()
+                    .map(|(k, v)| ((*k).to_string(), (*v).to_string()))
+                    .collect(),
+                params: HashMap::new(),
+                query: HashMap::new(),
+                cookies: cookies
+                    .iter()
+                    .map(|(k, v)| ((*k).to_string(), (*v).to_string()))
+                    .collect(),
+                remoteAddr: String::new(),
+            }
+        }
+
+        fn hs256(claims: &serde_json::Value) -> String {
+            let header = jsonwebtoken::Header::new(jsonwebtoken::Algorithm::HS256);
+            let key = jsonwebtoken::EncodingKey::from_secret(SECRET.as_bytes());
+            jsonwebtoken::encode(&header, claims, &key).expect("encode")
+        }
+
+        // Drive `server_get_authed`'s guarded handler directly: a handler that
+        // answers 200 with the principal's subject, so the response status tells
+        // us whether the middleware minted (200) or rejected (401).
+        async fn run(cfg: AuthConfig, req: ServerRequest) -> ServerResponse {
+            let route = server_get_authed::<String, _>("/me".to_string(), cfg, |_req, p| {
+                let subject = crate::principal::principal_subject(p);
+                Box::pin(std::future::ready(ok_res(server_text(subject))))
+            });
+            let RouteTarget::Handler(h) = route.target else {
+                panic!("authed route must carry a handler");
+            };
+            h(req).await.expect("guarded handler never returns Err")
+        }
+
+        fn bearer_cfg() -> AuthConfig {
+            server_auth_config(
+                crate::secret::secret_from_string(SECRET.to_string()),
+                TokenSource::BearerHeader,
+            )
+        }
+
+        #[tokio::test]
+        async fn missing_token_is_401() {
+            let resp = run(bearer_cfg(), req_with(&[], &[])).await;
+            assert_eq!(resp.status, 401, "no Authorization header must fail closed");
+        }
+
+        #[tokio::test]
+        async fn malformed_token_is_401() {
+            let req = req_with(&[("authorization", "Bearer not-a-jwt")], &[]);
+            let resp = run(bearer_cfg(), req).await;
+            assert_eq!(resp.status, 401, "an unverifiable token must fail closed");
+        }
+
+        #[tokio::test]
+        async fn expired_token_is_401() {
+            let token = hs256(&serde_json::json!({ "sub": "u1", "exp": 1 }));
+            let req = req_with(&[("authorization", &format!("Bearer {token}"))], &[]);
+            let resp = run(bearer_cfg(), req).await;
+            assert_eq!(resp.status, 401, "an expired token must fail closed");
+        }
+
+        #[tokio::test]
+        async fn absent_subject_claim_is_401() {
+            let token = hs256(&serde_json::json!({ "role": "admin", "exp": 9_999_999_999i64 }));
+            let req = req_with(&[("authorization", &format!("Bearer {token}"))], &[]);
+            let resp = run(bearer_cfg(), req).await;
+            assert_eq!(
+                resp.status, 401,
+                "a token with no subject claim must fail closed"
+            );
+        }
+
+        #[tokio::test]
+        async fn valid_bearer_token_mints_and_dispatches() {
+            let token = hs256(&serde_json::json!({ "sub": "user-7", "exp": 9_999_999_999i64 }));
+            let req = req_with(&[("authorization", &format!("Bearer {token}"))], &[]);
+            let resp = run(bearer_cfg(), req).await;
+            assert_eq!(
+                resp.status, 200,
+                "a valid token must dispatch to the handler"
+            );
+            assert_eq!(resp.body, "user-7", "the handler sees the minted subject");
+        }
+
+        #[tokio::test]
+        async fn valid_cookie_token_mints_and_dispatches() {
+            let token = hs256(&serde_json::json!({ "sub": "user-9", "exp": 9_999_999_999i64 }));
+            let cfg = server_auth_config(
+                crate::secret::secret_from_string(SECRET.to_string()),
+                TokenSource::Cookie("ipe_sid".to_string()),
+            );
+            let resp = run(cfg, req_with(&[], &[("ipe_sid", &token)])).await;
+            assert_eq!(resp.status, 200, "a valid cookie token must dispatch");
+            assert_eq!(resp.body, "user-9");
+        }
+
+        #[tokio::test]
+        async fn wrong_secret_is_401() {
+            let token = hs256(&serde_json::json!({ "sub": "u1", "exp": 9_999_999_999i64 }));
+            let cfg = server_auth_config(
+                crate::secret::secret_from_string("a-DIFFERENT-secret-32-bytes-pad!".to_string()),
+                TokenSource::BearerHeader,
+            );
+            let req = req_with(&[("authorization", &format!("Bearer {token}"))], &[]);
+            let resp = run(cfg, req).await;
+            assert_eq!(
+                resp.status, 401,
+                "a token signed under another secret must fail closed"
+            );
+        }
+    }
 }
