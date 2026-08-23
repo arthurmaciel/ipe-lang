@@ -2,8 +2,9 @@ module Main exposing (main)
 
 -- Runtime-config front door: `Web.appWith` carries a shape-checked
 -- `List (Setting Web)` alongside the same cfg record as `Web.app`. The
--- settings mix a cross-cutting `Host.bind` / `Db.url` (a `Setting a`) with the
--- web-pinned `Web.csrf` / `Web.sessionTtl` (a `Setting Web`). The database URL
+-- settings mix cross-cutting `Host.bind` / `Log.level` / `Db.url` (a `Setting a`)
+-- with the web-pinned `Web.csrf` / `Web.sessionTtl` (a `Setting Web`). Each
+-- setting is resolved into its runtime subsystem at startup. The database URL
 -- can only come from `App.fromEnv` (a `Secret`), never a hard-coded string.
 --
 -- ipe MUST exit 0 AND the emitted project MUST cargo-build (THE SEAL).
@@ -16,6 +17,7 @@ import Ipe.Tea.Web.Sub
 import Ipe.App as App
 import Ipe.Host as Host
 import Ipe.Db as Db
+import Ipe.Log as Log
 
 
 type Page
@@ -57,6 +59,7 @@ subscriptions _model =
 main =
     Web.appWith
         [ Host.bind 0
+        , Log.level 2
         , Db.url (App.fromEnv "DATABASE_URL")
         , Web.csrf 0
         , Web.sessionTtl 3600

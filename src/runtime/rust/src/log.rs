@@ -21,9 +21,20 @@ const LOG_LEVEL_INFO: i32 = 1;
 const LOG_LEVEL_WARN: i32 = 2;
 const LOG_LEVEL_ERROR: i32 = 3;
 
-/// `IPE_LOG_LEVEL` → numeric threshold. Mirrors Go's `logLevelFromEnv`
-/// (`debug` / `warn`|`warning` / `error`; everything else → info).
+/// The minimum severity a line must reach to be emitted, under the one config
+/// precedence `env > setting-in-code > fallback`: `IPE_LOG_LEVEL` (parsed as
+/// `debug`/`warn`|`warning`/`error`, else info) wins; absent it, an installed
+/// `Log.level` setting applies (its tag `0` debug … `3` error, clamped to the
+/// known range); absent both, the built-in default is info.
 fn log_threshold() -> i32 {
+    if let Some(tag) = crate::app_config::resolve_log_level_override() {
+        return match tag {
+            t if t <= i64::from(LOG_LEVEL_DEBUG) => LOG_LEVEL_DEBUG,
+            1 => LOG_LEVEL_INFO,
+            2 => LOG_LEVEL_WARN,
+            _ => LOG_LEVEL_ERROR,
+        };
+    }
     match crate::system::read_env_var("IPE_LOG_LEVEL")
         .unwrap_or_default()
         .to_ascii_lowercase()

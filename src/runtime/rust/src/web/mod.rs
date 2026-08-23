@@ -1068,12 +1068,14 @@ mod web_max_body_bytes_tests {
     }
 }
 
-/// Session idle-TTL: `IPE_WEB_TTL` seconds, default 1800 (30 min).
-/// Deprecated alias: `IPE_LIVE_TTL`.
+/// Session idle-TTL under the one config precedence `env > setting-in-code >
+/// fallback`: `IPE_WEB_TTL` (deprecated alias `IPE_LIVE_TTL`) wins, else an
+/// installed `Web.sessionTtl` setting, else the default 1800 (30 min).
 fn web_ttl() -> std::time::Duration {
     let secs = crate::system::read_env_var_renamed("IPE_WEB_TTL", "IPE_LIVE_TTL")
         .ok()
         .and_then(|s| parse_duration_secs(&s))
+        .or_else(crate::app_config::resolve_session_ttl_override)
         .unwrap_or(1800u64);
     std::time::Duration::from_secs(secs)
 }

@@ -25,8 +25,9 @@
 
 use std::sync::OnceLock;
 
-/// A resolved host-bind mode. The Ipê-source `HostMode` ADT projects onto this
-/// closed set; a bare integer cannot stand in.
+/// A resolved host-bind mode — the closed set the raw `Host.bind` tag resolves
+/// to. The setting-builder maps the integer tag onto one of these variants,
+/// falling closed to [`HostMode::Loopback`] for any out-of-range tag.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum HostMode {
     /// Bind `127.0.0.1` only — never reachable off the local machine.
@@ -51,16 +52,18 @@ pub enum Setting {
     /// `Db.url` — the database URL, sealed as a [`Secret`](crate::secret::Secret).
     #[cfg(feature = "secret")]
     DbUrl(crate::secret::Secret),
-    /// `Web.csrf` — the CSRF policy tag (`0` strict / `1` disabled).
+    /// `Web.csrf` — the CSRF policy tag. `0` is the strict/enforced posture;
+    /// every other tag is a no-op (a setting cannot weaken CSRF below its
+    /// fail-closed default — only an operator env override can disable it).
     WebCsrf(i64),
     /// `Web.sessionTtl` — the session lifetime in seconds.
     WebSessionTtl(i64),
 }
 
-/// `Host.bind : HostMode -> Setting a`. The Ipê `HostMode` enum projects onto
-/// the closed [`HostMode`] tag: `0` loopback, `1` all interfaces, `2`
-/// env-driven. An out-of-range tag falls closed to [`HostMode::Loopback`] (the
-/// safe branch), never a panic.
+/// `Host.bind : Int -> Setting a`. Maps the raw host-mode tag onto the closed
+/// [`HostMode`] set: `0` loopback, `1` all interfaces, `2` env-driven. An
+/// out-of-range tag falls closed to [`HostMode::Loopback`] (the safe branch),
+/// never a panic.
 #[must_use]
 pub fn ipe_setting_host_bind(mode_tag: i64) -> Setting {
     let mode = match mode_tag {
@@ -71,7 +74,7 @@ pub fn ipe_setting_host_bind(mode_tag: i64) -> Setting {
     Setting::HostBind(mode)
 }
 
-/// `Log.level : LogLevel -> Setting a`. Carries the severity tag as-is.
+/// `Log.level : Int -> Setting a`. Carries the raw severity tag as-is.
 #[must_use]
 pub fn ipe_setting_log_level(level_tag: i64) -> Setting {
     Setting::LogLevel(level_tag)
@@ -97,7 +100,8 @@ pub fn ipe_setting_db_url(url: crate::secret::Secret) -> Setting {
     Setting::DbUrl(url)
 }
 
-/// `Web.csrf : CsrfMode -> Setting Web`. Carries the CSRF policy tag.
+/// `Web.csrf : Int -> Setting Web`. Carries the raw CSRF policy tag; the
+/// stricter-only apply at resolution ensures it can only strengthen protection.
 #[must_use]
 pub fn ipe_setting_web_csrf(mode_tag: i64) -> Setting {
     Setting::WebCsrf(mode_tag)
@@ -109,23 +113,59 @@ pub fn ipe_setting_web_session_ttl(seconds: i64) -> Setting {
     Setting::WebSessionTtl(seconds)
 }
 
-/// The resolved, immutable process-wide config, installed once at startup.
+/// The CSRF posture a `Web.csrf` setting requests. A setting can only ever
+/// STRENGTHEN protection: an `Enforced` tag pins CSRF on, and every other tag
+/// (including an out-of-range one) is `Unspecified` — it leaves the default in
+/// place. There is deliberately no `Disabled` variant, so a setting cannot lower
+/// the posture below the fail-closed default; only an operator env override may.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum CsrfSetting {
+    /// The setting pins CSRF protection on (the strict, fail-closed posture).
+    Enforced,
+    /// The setting requests no change — the built-in default stands.
+    Unspecified,
+}
+
+/// The resolved, immutable process-wide config, installed once at startup. Each
+/// field is the in-code setting for one subsystem; a resolver reads it only when
+/// no operator env override is present (env always wins, so these never override
+/// a deployment-time decision).
 #[derive(Default)]
 struct ResolvedConfig {
     host_bind: Option<HostMode>,
+    log_level: Option<i64>,
+    csrf: Option<CsrfSetting>,
+    session_ttl_secs: Option<i64>,
+    #[cfg(feature = "secret")]
+    db_url: Option<crate::secret::Secret>,
 }
 
 static INSTALLED: OnceLock<ResolvedConfig> = OnceLock::new();
 
-/// Install a Web shape app's settings into the process-wide config. Resolves the
-/// in-code settings (env override is applied at read time, so env always wins);
-/// a second install is ignored (`OnceLock`), keeping the first app's config
-/// authoritative for the process.
+/// Install a Web shape app's settings into the process-wide config. Folds each
+/// in-code setting into its subsystem slot (env override is applied at read time
+/// by the per-subsystem resolvers, so env always wins); a second install is
+/// ignored (`OnceLock`), keeping the first app's config authoritative for the
+/// process.
 pub fn install_web(settings: Vec<Setting>) {
     let mut cfg = ResolvedConfig::default();
     for s in settings {
-        if let Setting::HostBind(mode) = s {
-            cfg.host_bind = Some(mode);
+        match s {
+            Setting::HostBind(mode) => cfg.host_bind = Some(mode),
+            Setting::LogLevel(tag) => cfg.log_level = Some(tag),
+            // Stricter-only: `0` is the strict/enforced tag; every other value
+            // (including a would-be "disabled" tag) leaves the default posture,
+            // so an in-code setting can never weaken CSRF below fail-closed.
+            Setting::WebCsrf(tag) => {
+                cfg.csrf = Some(if tag == 0 {
+                    CsrfSetting::Enforced
+                } else {
+                    CsrfSetting::Unspecified
+                });
+            }
+            Setting::WebSessionTtl(seconds) => cfg.session_ttl_secs = Some(seconds),
+            #[cfg(feature = "secret")]
+            Setting::DbUrl(url) => cfg.db_url = Some(url),
         }
     }
     // First install wins; a redundant install is a no-op (never a panic).
@@ -161,6 +201,105 @@ pub fn resolve_host_bind() -> String {
     }
 }
 
+/// The installed `Log.level` tag, if a setting set one and no `IPE_LOG_LEVEL`
+/// env override applies. Returns `None` when the caller should keep resolving
+/// (env present, or no setting) — the log subsystem owns the env read and the
+/// numeric fallback, so this is only the middle precedence tier. `env >
+/// setting-in-code > fallback`.
+#[must_use]
+pub fn resolve_log_level_override() -> Option<i64> {
+    // Env wins: when `IPE_LOG_LEVEL` is set (even to empty), the setting is not
+    // consulted — the caller reads the env value directly.
+    let env_present = crate::system::read_env_var("IPE_LOG_LEVEL").is_ok();
+    log_level_from(env_present, INSTALLED.get().and_then(|c| c.log_level))
+}
+
+/// Pure middle-tier resolution for the log level: the installed setting applies
+/// only when no env override is present. Split out so the precedence is unit
+/// tested without touching the process-wide `INSTALLED` / real env.
+const fn log_level_from(env_present: bool, setting: Option<i64>) -> Option<i64> {
+    if env_present { None } else { setting }
+}
+
+/// Whether CSRF protection is enforced, applying the one precedence with a
+/// stricter-only floor for the in-code setting: an operator env override
+/// (`IPE_CSRF=off|0|false`) may disable CSRF (deployment-time decision, top of
+/// precedence); a `Web.csrf` setting may only ENFORCE it, never disable it; and
+/// absent both signals the built-in fail-closed default (on) stands. A setting
+/// therefore cannot lower the posture below the default.
+#[must_use]
+pub fn resolve_csrf_enabled(env_enabled: bool, default_enabled: bool) -> bool {
+    csrf_enabled_from(
+        env_enabled,
+        default_enabled,
+        INSTALLED.get().and_then(|c| c.csrf),
+    )
+}
+
+/// Pure CSRF resolution: the operator env override may disable; a setting may
+/// only enforce (`CsrfSetting::Enforced`), never disable; absent both the
+/// default stands. Split out so the stricter-only monotonicity is unit tested
+/// without process-wide state.
+const fn csrf_enabled_from(
+    env_enabled: bool,
+    default_enabled: bool,
+    setting: Option<CsrfSetting>,
+) -> bool {
+    if !env_enabled {
+        // Operator explicitly disabled via env — the top-of-precedence override.
+        return false;
+    }
+    let enforced_by_setting = matches!(setting, Some(CsrfSetting::Enforced));
+    // Stricter-only monotonic: the default OR an enforcing setting — never a way
+    // to go below the default.
+    default_enabled || enforced_by_setting
+}
+
+/// The installed `Web.sessionTtl` seconds, if a setting set one and no
+/// `IPE_WEB_TTL`/`IPE_LIVE_TTL` env override applies. `None` means keep
+/// resolving (env present, or no setting). A non-positive setting value is
+/// ignored (fail-closed to the caller's default rather than a zero/negative TTL
+/// that would expire every session immediately). `env > setting-in-code >
+/// fallback`.
+#[must_use]
+pub fn resolve_session_ttl_override() -> Option<u64> {
+    let env_present = crate::system::read_env_var_renamed("IPE_WEB_TTL", "IPE_LIVE_TTL").is_ok();
+    session_ttl_from(
+        env_present,
+        INSTALLED.get().and_then(|c| c.session_ttl_secs),
+    )
+}
+
+/// Pure session-TTL resolution: the installed setting applies only when no env
+/// override is present, and a non-positive value is dropped (fail-closed to the
+/// caller's default). Split out for unit testing without process-wide state.
+fn session_ttl_from(env_present: bool, setting: Option<i64>) -> Option<u64> {
+    if env_present {
+        return None;
+    }
+    match setting {
+        Some(secs) if secs > 0 => u64::try_from(secs).ok(),
+        _ => None,
+    }
+}
+
+/// The resolved database URL from the installed `Db.url` setting, if one was set
+/// and no `DATABASE_URL` env override applies. The secret is revealed only here,
+/// at the point of use, and returned to the caller that configures the pool; it
+/// is never logged. `None` means keep resolving (env present, or no setting).
+/// `env > setting-in-code > fallback`.
+#[cfg(feature = "secret")]
+#[must_use]
+pub fn resolve_db_url_override() -> Option<String> {
+    if crate::system::read_env_var("DATABASE_URL").is_ok() {
+        return None;
+    }
+    INSTALLED
+        .get()
+        .and_then(|c| c.db_url.clone())
+        .map(crate::secret::secret_reveal)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -187,5 +326,100 @@ mod tests {
             ipe_setting_host_bind(99),
             Setting::HostBind(HostMode::Loopback)
         ));
+    }
+
+    // ── Log level: env > setting > fallback ──────────────────────────────
+
+    #[test]
+    fn log_level_setting_applies_when_no_env() {
+        assert_eq!(log_level_from(false, Some(2)), Some(2));
+    }
+
+    #[test]
+    fn log_level_env_overrides_setting() {
+        // Env present → the setting is dropped so the caller reads env.
+        assert_eq!(log_level_from(true, Some(2)), None);
+    }
+
+    #[test]
+    fn log_level_absent_setting_falls_through() {
+        // No env, no setting → the caller's built-in fallback applies.
+        assert_eq!(log_level_from(false, None), None);
+    }
+
+    // ── CSRF: stricter-only, env may disable, setting may only enforce ────
+
+    #[test]
+    fn csrf_default_on_stands_without_signals() {
+        assert!(csrf_enabled_from(true, true, None));
+    }
+
+    #[test]
+    fn csrf_enforcing_setting_turns_on_where_default_off() {
+        // A setting can STRENGTHEN: default-off but the setting enforces → on.
+        assert!(csrf_enabled_from(true, false, Some(CsrfSetting::Enforced)));
+    }
+
+    #[test]
+    fn csrf_setting_cannot_disable_below_default() {
+        // The stricter-only floor: no setting value (including the absence of an
+        // enforcing one) can turn CSRF off while the default is on.
+        assert!(csrf_enabled_from(
+            true,
+            true,
+            Some(CsrfSetting::Unspecified)
+        ));
+        assert!(csrf_enabled_from(true, true, None));
+    }
+
+    #[test]
+    fn csrf_only_operator_env_can_disable() {
+        // The env override (top of precedence) is the sole disable path; an
+        // enforcing setting cannot override an explicit operator disable.
+        assert!(!csrf_enabled_from(false, true, Some(CsrfSetting::Enforced)));
+        assert!(!csrf_enabled_from(false, false, None));
+    }
+
+    #[test]
+    fn csrf_install_maps_only_zero_tag_to_enforced() {
+        // The `install_web` fold: `0` → Enforced, everything else → Unspecified
+        // (a "disabled" tag can never reach an Enforced/weaker-than-default state).
+        for (tag, expect_enforced) in [(0i64, true), (1, false), (99, false), (-1, false)] {
+            let enforced = if tag == 0 {
+                CsrfSetting::Enforced
+            } else {
+                CsrfSetting::Unspecified
+            };
+            assert_eq!(
+                matches!(enforced, CsrfSetting::Enforced),
+                expect_enforced,
+                "csrf tag {tag} enforced-mapping"
+            );
+        }
+    }
+
+    // ── Session TTL: env > setting > fallback, non-positive dropped ───────
+
+    #[test]
+    fn session_ttl_setting_applies_when_no_env() {
+        assert_eq!(session_ttl_from(false, Some(3600)), Some(3600));
+    }
+
+    #[test]
+    fn session_ttl_env_overrides_setting() {
+        assert_eq!(session_ttl_from(true, Some(3600)), None);
+    }
+
+    #[test]
+    fn session_ttl_non_positive_falls_closed_to_default() {
+        // A zero/negative TTL would expire every session immediately — drop it so
+        // the caller's safe default applies instead.
+        assert_eq!(session_ttl_from(false, Some(0)), None);
+        assert_eq!(session_ttl_from(false, Some(-5)), None);
+    }
+
+    #[test]
+    fn session_ttl_absent_setting_falls_through() {
+        assert_eq!(session_ttl_from(false, None), None);
     }
 }
