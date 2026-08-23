@@ -218,6 +218,13 @@ pub const RESERVED_BUILTIN_TYPES: &[&str] = &[
     "Response",
     "Route",
     "Cookie",
+    // `Ipe.Server`'s opaque authed-route descriptors. Reserved because they are
+    // security-tier: `AuthConfig` carries the token-verification `Secret`, and a
+    // user look-alike `type AuthConfig …`/`type TokenSource …` could smuggle a
+    // forged configuration into an authed route and defeat the fail-closed auth
+    // gate. Built only through the `Server` auth kernels, never an Ipê term.
+    "AuthConfig",
+    "TokenSource",
     "Html",
     "Element",
     "Attribute",

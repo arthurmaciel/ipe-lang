@@ -2953,8 +2953,9 @@ fn collect_record_shapes(
         | IrType::CryptoKey
         | IrType::CryptoMac
         | IrType::EmailAddress
-        // `Locale` / `Principal` are opaque handles — no record shape.
-        | IrType::Locale | IrType::Principal => {}
+        // `Locale`/`Principal`, and the `AuthConfig`/`TokenSource` authed-route
+        // descriptors, are opaque handles — no record shape.
+        | IrType::Locale | IrType::Principal | IrType::AuthConfig | IrType::TokenSource => {}
         // `WebRoute page` descends in case the page type carries a record shape.
         IrType::WebRoute(page) => collect_record_shapes(interner, page, shapes)?,
         // `Ui { ctor, msg }` is a msg-parametric wrapper — descend into
@@ -3121,8 +3122,9 @@ fn type_reaches_enum(
         | IrType::EmailAddress
         // `Locale` is a monomorphic opaque handle — no enum edge.
         | IrType::Locale
-        // `Principal` is a monomorphic opaque identity — no enum edge.
-        | IrType::Principal => false,
+        // `Principal`, and the `AuthConfig`/`TokenSource` authed-route
+        // descriptors, are monomorphic opaque leaves — no enum edge.
+        | IrType::Principal | IrType::AuthConfig | IrType::TokenSource => false,
         // `Route<Page>` stores its `not_found`/built pages by value — a page
         // type reaching `target` through a route is a genuine size edge.
         IrType::WebRoute(page) => type_reaches_enum(page, target, enums, visited),
@@ -3227,6 +3229,9 @@ fn contains_generic(ty: &IrType) -> bool {
         | IrType::Locale
         // `Principal` is monomorphic — no generic parameters.
         | IrType::Principal
+        // `AuthConfig` / `TokenSource` are monomorphic — no generic parameters.
+        | IrType::AuthConfig
+        | IrType::TokenSource
         // A row variable is a SEPARATE row generic (`R{n}`), never an ordinary
         // `T{n}` record-struct parameter, and never appears inside a record-
         // struct field. It contributes no `<T>` clause here.
@@ -3359,6 +3364,9 @@ fn collect_generics(ty: &IrType, out: &mut Vec<Symbol>) {
         | IrType::Locale
         // `Principal` is monomorphic — no generics to collect.
         | IrType::Principal
+        // `AuthConfig` / `TokenSource` are monomorphic — no generics to collect.
+        | IrType::AuthConfig
+        | IrType::TokenSource
         // A row variable is a separate row generic (`R{n}`), tracked in
         // `Func::row_params`, never in the ordinary `T{n}` scope collected here.
         | IrType::RowGeneric(_) => {}
@@ -3702,7 +3710,10 @@ fn match_template(
         | IrType::CryptoMac
         | IrType::EmailAddress
         | IrType::Locale
-        | IrType::Principal => {
+        | IrType::Principal
+        // `AuthConfig` / `TokenSource` are monomorphic opaque leaves.
+        | IrType::AuthConfig
+        | IrType::TokenSource => {
             if template == concrete {
                 Ok(())
             } else {

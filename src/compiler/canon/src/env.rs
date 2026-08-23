@@ -1430,6 +1430,13 @@ impl Env {
                     "method",
                     "cookie",
                     "withCookie",
+                    "authConfig",
+                    "bearerToken",
+                    "cookieToken",
+                    "getAuthed",
+                    "postAuthed",
+                    "putAuthed",
+                    "deleteAuthed",
                 ],
             ),
             // Ipe.Http.Middleware kernels.

@@ -291,6 +291,22 @@ pub fn server_auth_config(secret: crate::secret::Secret, source: TokenSource) ->
 }
 
 #[cfg(feature = "jwt")]
+/// Ipe.Server.bearerToken : TokenSource. Reads the token from the
+/// `Authorization: Bearer` header.
+#[must_use]
+pub fn server_token_bearer() -> TokenSource {
+    TokenSource::BearerHeader
+}
+
+#[cfg(feature = "jwt")]
+/// Ipe.Server.cookieToken : String -> TokenSource. Reads the token from the
+/// named request cookie.
+#[must_use]
+pub fn server_cookie_token(name: String) -> TokenSource {
+    TokenSource::Cookie(name)
+}
+
+#[cfg(feature = "jwt")]
 /// Read the raw token string from the request per the configured source, or
 /// `None` when it is absent/empty. A `Bearer` scheme prefix is matched
 /// case-insensitively (RFC 7235 auth-scheme is case-insensitive); any other

@@ -4,6 +4,8 @@
 
 mod support;
 
+#[path = "g_db/golden_authed_store_query_seal.rs"]
+mod golden_authed_store_query_seal;
 #[path = "g_db/golden_db_get_alias_row.rs"]
 mod golden_db_get_alias_row;
 #[path = "g_db/golden_db_get_iperow_bound.rs"]

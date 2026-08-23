@@ -2722,7 +2722,11 @@ fn ir_type_contains_non_serde(ty: &IrType) -> bool {
         | IrType::Locale
         // `Principal` — not serde; a hydrated `Principal` would be a forged
         // identity, so it is rejected in a HydrationState record.
-        | IrType::Principal => true,
+        | IrType::Principal
+        // `AuthConfig`/`TokenSource` — not serde; authed-route descriptors are
+        // rejected in a HydrationState record.
+        | IrType::AuthConfig
+        | IrType::TokenSource => true,
     }
 }
 

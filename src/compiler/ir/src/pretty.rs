@@ -244,6 +244,8 @@ fn ir_type_name_at(interner: &Interner, ty: &IrType, depth: u16) -> String {
         IrType::HttpMethod => "HttpMethod".to_owned(),
         IrType::Decimal => "Decimal".to_owned(),
         IrType::Principal => "Principal".to_owned(),
+        IrType::AuthConfig => "AuthConfig".to_owned(),
+        IrType::TokenSource => "TokenSource".to_owned(),
         IrType::ErrorKind => "ErrorKind".to_owned(),
         IrType::Error => "Error".to_owned(),
         IrType::ErrorDetails => "ErrorDetails".to_owned(),
