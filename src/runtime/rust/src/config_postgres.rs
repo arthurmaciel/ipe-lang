@@ -18,8 +18,13 @@ pub type DbPool = sqlx::postgres::PgPool;
 pub type DbRow = sqlx::postgres::PgRow;
 #[cfg(feature = "db")]
 pub fn ipe_db_url() -> String {
+    // One config precedence `env > setting-in-code > fallback`: `DATABASE_URL`
+    // wins, else an installed `Db.url` setting (a `Secret`, revealed only here at
+    // the point of use, never logged), else the built-in local fallback.
     crate::system::read_env_var("DATABASE_URL")
-        .unwrap_or_else(|_| "postgres://postgres@localhost/ipe".to_string())
+        .ok()
+        .or_else(crate::app_config::resolve_db_url_override)
+        .unwrap_or_else(|| "postgres://postgres@localhost/ipe".to_string())
 }
 
 #[cfg(not(feature = "db"))]

@@ -39,20 +39,25 @@ pub fn csrf_cookie_name() -> &'static str {
 /// The header the client echoes the token in (Go parity: `X-Ipê-Csrf`).
 pub const CSRF_HEADER: &str = "x-ipe-csrf";
 
-/// CSRF protection is ON by default; `IPE_CSRF=off|0|false` disables it
-/// (Go parity: the `IPE_CSRF` env switch / ipe.toml `[security] csrf`).
-///
-/// Snapshotted once into a `OnceLock` on first call (env is stable at process
-/// start; same rationale as `cookies_secure()` — eliminates a per-request
-/// `getenv` + global env-lock acquisition on every mutating request).
+/// Whether CSRF protection is on, under the one config precedence with a
+/// stricter-only floor for the in-code setting. CSRF is ON by default;
+/// `IPE_CSRF=off|0|false` (the operator env override, top of precedence)
+/// disables it; a `Web.csrf` setting may only ENFORCE it, never disable it (a
+/// setting cannot lower the posture below the fail-closed default). The decision
+/// is snapshotted once into a `OnceLock` on first call (env + installed settings
+/// are both stable at process start; same rationale as `cookies_secure()` —
+/// eliminates a per-request `getenv` + global env-lock acquisition on every
+/// mutating request).
 pub fn csrf_enabled() -> bool {
     use std::sync::OnceLock;
     static ENABLED: OnceLock<bool> = OnceLock::new();
     *ENABLED.get_or_init(|| {
-        !matches!(
+        let env_enabled = !matches!(
             crate::system::read_env_var("IPE_CSRF").ok().as_deref(),
             Some("off") | Some("0") | Some("false")
-        )
+        );
+        // Built-in default is on (fail-closed); a setting can only strengthen.
+        crate::app_config::resolve_csrf_enabled(env_enabled, true)
     })
 }
 
