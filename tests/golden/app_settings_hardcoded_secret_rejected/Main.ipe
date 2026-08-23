@@ -1,0 +1,61 @@
+module Main exposing (main)
+
+-- Security refusal: `Db.url` requires a `Secret`, and the ONLY way to obtain a
+-- config secret is `App.fromEnv`. A hard-coded credential is a plain `String`,
+-- so it does NOT type-check here — the front door makes an in-source credential
+-- unrepresentable at the boundary (IPE-T0001, expected `Secret`, found `String`).
+
+import Ipe.Tea.Web as Web
+import Ipe.Ui as Ui
+import Ipe.Tea.Web.Cmd
+import Ipe.String
+import Ipe.Tea.Web.Sub
+import Ipe.Db as Db
+
+
+type Page
+    = CounterPage
+
+
+type Msg
+    = Increment
+
+
+type alias Model =
+    { page : Page
+    , count : Int
+    }
+
+
+init : a -> ( Model, Cmd Msg )
+init _req =
+    ( { page = CounterPage, count = 0 }, Cmd.none )
+
+
+update : Msg -> Model -> ( Model, Cmd Msg )
+update msg model =
+    case msg of
+        Increment ->
+            ( { model | count = model.count + 1 }, Cmd.none )
+
+
+view : Model -> Element Msg
+view model =
+    Ui.text (String.fromInt model.count)
+
+
+subscriptions : Model -> Sub Msg
+subscriptions _model =
+    Sub.none
+
+
+main =
+    Web.appWith
+        [ Db.url "postgres://hard:coded@localhost/db" ]
+        { init = init
+        , update = update
+        , view = view
+        , subscriptions = subscriptions
+        , routes = []
+        , notFound = CounterPage
+        }

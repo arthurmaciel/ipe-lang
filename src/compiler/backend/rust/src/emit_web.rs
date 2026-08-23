@@ -121,6 +121,39 @@ pub fn emit_web_call(
             emit_web_app_inner(ctx, fields, indent, child, generics)
         }
 
+        // ── Web.appWith settings cfg ─────────────────────────────────────
+        //
+        // `Web.appWith : List (Setting Web) -> cfg -> Task ()`. The settings
+        // list is resolved into the process-wide runtime config (one
+        // precedence: env > settings-in-code > built-in fallback) BEFORE the
+        // same `emit_web_app_inner` task the plain `Web.app` produces runs — so
+        // the host-bind / log-level / db-url a `Web.app` cannot set are in place
+        // when the server binds. A non-literal cfg is rejected at lower with
+        // IPE-L0119 exactly as for `Web.app`.
+        KernelFn::WebAppWith => {
+            let [settings_e, cfg_e] = args else {
+                return Err(Diagnostic::CompilerBug {
+                    where_: "ipe_backend_rust::emit_web_call::WebAppWith",
+                    detail: format!("Web.appWith requires 2 arguments, got {}", args.len()),
+                });
+            };
+            let Expr::Record { fields, .. } = cfg_e else {
+                return Err(Diagnostic::CompilerBug {
+                    where_: "ipe_backend_rust::emit_web_call::WebAppWith",
+                    detail: "Web.appWith cfg must be an inline record literal; \
+                             a non-literal cfg is rejected at lower with IPE-L0119"
+                        .into(),
+                });
+            };
+            let settings_s = emit_expr_at(ctx, settings_e, indent, child, generics)?;
+            let Some(app_s) = emit_web_app_inner(ctx, fields, indent, child, generics)? else {
+                return Ok(None);
+            };
+            Ok(Some(format!(
+                "{{ ipe_runtime::app_config::install_web({settings_s}); {app_s} }}"
+            )))
+        }
+
         // ── Web.route pattern ctor ─────────────────────────────────────────
         KernelFn::WebRoute => emit_web_route(ctx, args, indent, child, generics),
 
@@ -843,6 +876,10 @@ const fn ir_type_display_name(ty: &IrType) -> &'static str {
         IrType::Connection => "Connection",
         IrType::ConnReadOnly => "ReadOnly",
         IrType::ConnReadWrite => "ReadWrite",
+        IrType::Setting => "Setting",
+        IrType::ShapeWeb => "Web",
+        IrType::ShapeWebView => "WebView",
+        IrType::ShapeTerminal => "Terminal",
         IrType::Locale => "Locale",
         IrType::Principal => "Principal",
         IrType::AuthConfig => "AuthConfig",

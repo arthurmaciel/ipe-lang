@@ -4,6 +4,8 @@
 
 mod support;
 
+#[path = "g_db/golden_app_settings_front_door.rs"]
+mod golden_app_settings_front_door;
 #[path = "g_db/golden_authed_store_query_seal.rs"]
 mod golden_authed_store_query_seal;
 #[path = "g_db/golden_db_get_alias_row.rs"]

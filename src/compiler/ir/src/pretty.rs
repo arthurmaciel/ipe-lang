@@ -279,6 +279,12 @@ fn ir_type_name_at(interner: &Interner, ty: &IrType, depth: u16) -> String {
         IrType::Connection => "Connection".to_owned(),
         IrType::ConnReadOnly => "ReadOnly".to_owned(),
         IrType::ConnReadWrite => "ReadWrite".to_owned(),
+        // The phantom shape marker is shown for a readable IR dump; it never
+        // renders to a standalone Rust type (erased at emit).
+        IrType::Setting => "Setting".to_owned(),
+        IrType::ShapeWeb => "Web".to_owned(),
+        IrType::ShapeWebView => "WebView".to_owned(),
+        IrType::ShapeTerminal => "Terminal".to_owned(),
         IrType::Locale => "Locale".to_owned(),
     }
 }

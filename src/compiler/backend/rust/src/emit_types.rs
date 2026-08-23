@@ -450,6 +450,14 @@ pub fn render_type(ctx: &EmitCtx, ty: &IrType, generics: GenericScope) -> DResul
         IrType::Connection | IrType::ConnReadOnly | IrType::ConnReadWrite => {
             "ipe_runtime::external_conn::ExternalConnection".to_owned()
         }
+        // `Ipe.App`'s runtime-config carrier — the phantom shape marker is
+        // already erased at lowering, so every `Setting Web` / `Setting
+        // Terminal` position renders to the one concrete carrier. The bare
+        // markers describe only that erased shape; they never stand as a value
+        // type, so rendering them names the same carrier (fail-safe, never a panic).
+        IrType::Setting | IrType::ShapeWeb | IrType::ShapeWebView | IrType::ShapeTerminal => {
+            "ipe_runtime::app_config::Setting".to_owned()
+        }
         // `Locale` is fully-qualified to avoid ambiguity with any user-defined
         // `Locale` type; the runtime module is always compiled (the struct is a
         // plain newtype; ICU4X parse/case bodies activate under `--features locale`).

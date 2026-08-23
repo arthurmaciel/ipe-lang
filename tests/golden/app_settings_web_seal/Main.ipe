@@ -1,0 +1,70 @@
+module Main exposing (main)
+
+-- Runtime-config front door: `Web.appWith` carries a shape-checked
+-- `List (Setting Web)` alongside the same cfg record as `Web.app`. The
+-- settings mix a cross-cutting `Host.bind` / `Db.url` (a `Setting a`) with the
+-- web-pinned `Web.csrf` / `Web.sessionTtl` (a `Setting Web`). The database URL
+-- can only come from `App.fromEnv` (a `Secret`), never a hard-coded string.
+--
+-- ipe MUST exit 0 AND the emitted project MUST cargo-build (THE SEAL).
+
+import Ipe.Tea.Web as Web
+import Ipe.Ui as Ui
+import Ipe.Tea.Web.Cmd
+import Ipe.String
+import Ipe.Tea.Web.Sub
+import Ipe.App as App
+import Ipe.Host as Host
+import Ipe.Db as Db
+
+
+type Page
+    = CounterPage
+
+
+type Msg
+    = Increment
+
+
+type alias Model =
+    { page : Page
+    , count : Int
+    }
+
+
+init : a -> ( Model, Cmd Msg )
+init _req =
+    ( { page = CounterPage, count = 0 }, Cmd.none )
+
+
+update : Msg -> Model -> ( Model, Cmd Msg )
+update msg model =
+    case msg of
+        Increment ->
+            ( { model | count = model.count + 1 }, Cmd.none )
+
+
+view : Model -> Element Msg
+view model =
+    Ui.text (String.fromInt model.count)
+
+
+subscriptions : Model -> Sub Msg
+subscriptions _model =
+    Sub.none
+
+
+main =
+    Web.appWith
+        [ Host.bind 0
+        , Db.url (App.fromEnv "DATABASE_URL")
+        , Web.csrf 0
+        , Web.sessionTtl 3600
+        ]
+        { init = init
+        , update = update
+        , view = view
+        , subscriptions = subscriptions
+        , routes = []
+        , notFound = CounterPage
+        }

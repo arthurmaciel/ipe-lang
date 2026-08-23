@@ -328,6 +328,14 @@ pub mod secret;
 #[cfg(feature = "secret")]
 pub use secret::*;
 
+// `Ipe.App` runtime-config front door — the process-wide typed settings
+// (`Setting`) a shape app installs at startup, with one precedence
+// (`env > settings-in-code > built-in fallback`). Always compiled (its host-bind
+// resolution has no optional dep); only the `Db.url` carrier variant, which
+// holds a `Secret`, is `secret`-gated inside the module.
+pub mod app_config;
+pub use app_config::*;
+
 // Canonical HTTP header-name casing, shared by Ipe.Web, Ipe.Http.Server AND
 // the outbound `http_client` response path (`http_client` does NOT
 // imply `server`, so `server`-only gating would break an `http_client`-only

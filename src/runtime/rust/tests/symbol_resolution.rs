@@ -68,6 +68,9 @@ const KNOWN_DEAD_OR_EPILOGUE: &[&str] = &[
     // ── Dead: emit_web_route generates a closure expression, not a function
     //         call. ──────────────────────────────────────────────────────────
     "web_route",
+    // ── Dead: emit_web inlines install_web plus the app body, so the
+    //         web_app_with descriptor name never reaches a runtime call. ──────
+    "web_app_with",
     // ── Dead: emit_console_call synthesises the CLI entry-point block inline. ───
     "ipe_console_app_",
     // ── Dead: emit_ui_call emits ipe_runtime_rust::ui::render::ui_layout_with_vecs

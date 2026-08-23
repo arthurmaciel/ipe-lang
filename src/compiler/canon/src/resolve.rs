@@ -225,6 +225,13 @@ pub const RESERVED_BUILTIN_TYPES: &[&str] = &[
     // gate. Built only through the `Server` auth kernels, never an Ipê term.
     "AuthConfig",
     "TokenSource",
+    // `Ipe.App`'s runtime-config carrier `Setting shape`. Reserved because it is
+    // security-tier: a setting may carry a `Secret` (a `Db.url` credential), and
+    // the phantom `shape` marker is the load-bearing guarantee that a `Web`-only
+    // setting cannot be smuggled into another shape's settings list. A user
+    // `type Setting …` could forge a look-alike and defeat that shape barrier.
+    // Built only through the setting kernels, never an Ipê term.
+    "Setting",
     "Html",
     "Element",
     "Attribute",
@@ -411,6 +418,7 @@ pub fn is_user_type_declaration_forbidden(name: &str) -> bool {
 /// Members:
 /// * closed containers (`List`/`Maybe`/`Set`, `Dict`/`Result`);
 /// * `Connection mode` — `Ipe.Db`'s external-connection handle (arity 1);
+/// * `Setting shape` — `Ipe.App`'s runtime-config carrier (arity 1);
 /// * `ReadOnly`/`ReadWrite` — nullary phantom access-mode markers.
 ///
 /// `Task`/`Cmd`/`Sub` are absent (their gate is in `ipe_types::constrain`).
@@ -418,7 +426,7 @@ pub fn is_user_type_declaration_forbidden(name: &str) -> bool {
 #[must_use]
 pub fn builtin_empty_home_arity(name: Option<&str>) -> Option<usize> {
     match name? {
-        "List" | "Maybe" | "Set" | "Connection" => Some(1),
+        "List" | "Maybe" | "Set" | "Connection" | "Setting" => Some(1),
         "Dict" | "Result" => Some(2),
         "ReadOnly" | "ReadWrite" => Some(0),
         _ => None,
@@ -1255,6 +1263,7 @@ pub fn canonicalise_module_in_project(
 const TEA_APP_ENTRIES: &[(&str, &str)] = &[
     ("Web", "app"),
     ("Web", "appRouted"),
+    ("Web", "appWith"),
     ("Terminal", "appScreen"),
     ("Terminal", "appLines"),
     ("WebView", "app"),

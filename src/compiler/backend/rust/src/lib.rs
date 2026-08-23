@@ -2829,6 +2829,7 @@ const fn ir_type_is_record_shape_leaf(ty: &IrType) -> bool {
 /// [`canonicalise_shape`] pass reconciles them into one struct. Storing every
 /// distinct occurrence (rather than rejecting the second) is what makes the
 /// generic-plus-concrete merge representable.
+#[allow(clippy::too_many_lines)] // exhaustive per-variant IrType classification — one arm per opaque leaf
 fn collect_record_shapes(
     interner: &Interner,
     ty: &IrType,
@@ -2935,8 +2936,10 @@ fn collect_record_shapes(
         | IrType::Secret
         | IrType::Path
         | IrType::Url
-        // `Dsn` + the external `Connection`/markers are opaque wrappers — no shape.
+        // `Dsn` + the external `Connection`/markers + the runtime-config
+        // `Setting`/markers are opaque wrappers — no shape.
         | IrType::Dsn | IrType::Connection | IrType::ConnReadOnly | IrType::ConnReadWrite
+        | IrType::Setting | IrType::ShapeWeb | IrType::ShapeWebView | IrType::ShapeTerminal
         // Cache config / stats + Csv document are folded to nominal runtime
         // structs — no structural record shape to synthesise.
         | IrType::CacheCfg
@@ -2979,6 +2982,7 @@ fn collect_record_shapes(
 /// `Maybe Int` and `Maybe Tree` share the enum name `Maybe` but carry different
 /// arguments — memoising under the name would drop the `Tree` argument on the
 /// second visit.
+#[allow(clippy::too_many_lines)] // exhaustive per-variant IrType classification — one arm per opaque leaf
 fn type_reaches_enum(
     ty: &IrType,
     target: (&ModPath, Symbol),
@@ -3100,9 +3104,8 @@ fn type_reaches_enum(
         | IrType::Url
         // `Dsn` is a monomorphic opaque wrapper — no reachable enum edge.
         | IrType::Dsn
-        | IrType::Connection
-        | IrType::ConnReadOnly
-        | IrType::ConnReadWrite
+        | IrType::Connection | IrType::ConnReadOnly | IrType::ConnReadWrite
+        | IrType::Setting | IrType::ShapeWeb | IrType::ShapeWebView | IrType::ShapeTerminal
         // Cache config / stats + Csv document are monomorphic runtime structs
         // — no reachable enum edge to `target`.
         | IrType::CacheCfg
@@ -3207,6 +3210,7 @@ fn contains_generic(ty: &IrType) -> bool {
         | IrType::Connection
         | IrType::ConnReadOnly
         | IrType::ConnReadWrite
+        | IrType::Setting | IrType::ShapeWeb | IrType::ShapeWebView | IrType::ShapeTerminal
         // Cache config / stats + Csv document are monomorphic — no generic
         // parameters.
         | IrType::CacheCfg
@@ -3344,6 +3348,7 @@ fn collect_generics(ty: &IrType, out: &mut Vec<Symbol>) {
         | IrType::Connection
         | IrType::ConnReadOnly
         | IrType::ConnReadWrite
+        | IrType::Setting | IrType::ShapeWeb | IrType::ShapeWebView | IrType::ShapeTerminal
         // Cache config / stats + Csv document are monomorphic — no generics to
         // collect.
         | IrType::CacheCfg
@@ -3692,6 +3697,7 @@ fn match_template(
         | IrType::Connection
         | IrType::ConnReadOnly
         | IrType::ConnReadWrite
+        | IrType::Setting | IrType::ShapeWeb | IrType::ShapeWebView | IrType::ShapeTerminal
         // Cache config / stats + Csv document are monomorphic runtime-struct
         // leaves.
         | IrType::CacheCfg

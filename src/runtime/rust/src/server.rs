@@ -904,14 +904,11 @@ pub fn server_listen<E: From<String> + Send + 'static>(
                     .into_response()
             },
         ));
-        // Bind host is overridable via IPE_HTTP_BIND (e.g. 127.0.0.1 to avoid
-        // exposing on every interface). Default stays 0.0.0.0 for byte-identical
-        // behaviour with prior releases; an empty/blank override falls back too.
-        let host = crate::system::read_env_var("IPE_HTTP_BIND")
-            .ok()
-            .map(|s| s.trim().to_string())
-            .filter(|s| !s.is_empty())
-            .unwrap_or_else(|| "0.0.0.0".to_string());
+        // Bind host obeys the one runtime-config precedence: `IPE_HTTP_BIND`
+        // (env) > the app's `Host.bind` setting > the build-profile fallback
+        // (loopback in debug, all interfaces in release). The conservative
+        // loopback default keeps a dev console off the LAN by construction.
+        let host = crate::app_config::resolve_host_bind();
         let addr = format!("{}:{}", host, port);
         let listener = match tokio::net::TcpListener::bind(&addr).await {
             Ok(l) => l,

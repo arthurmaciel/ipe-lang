@@ -2703,6 +2703,10 @@ fn ir_type_contains_non_serde(ty: &IrType) -> bool {
         | IrType::Connection
         | IrType::ConnReadOnly
         | IrType::ConnReadWrite
+        | IrType::Setting
+        | IrType::ShapeWeb
+        | IrType::ShapeWebView
+        | IrType::ShapeTerminal
         | IrType::SqlFragment
         | IrType::CacheCfg
         | IrType::CacheStats

@@ -1529,6 +1529,22 @@ pub enum IrType {
     /// The phantom mutable access-mode marker. Same erasure as
     /// [`Self::ConnReadOnly`]; never renders standalone.
     ConnReadWrite,
+    // ── Ipe.App runtime-config Setting ──────────────────────────────────────
+    /// The runtime-config carrier `Setting shape`
+    /// (`ipe_runtime::app_config::Setting`). The phantom shape marker
+    /// (`Web` / `WebView` / `Terminal`) is erased here: every position renders
+    /// to the one concrete runtime type, so there is no `dyn` and one concrete
+    /// carrier per position. Built only by the setting kernels; `Clone`;
+    /// non-serde (a `Setting` may carry a `Secret`).
+    Setting,
+    /// The phantom web-shape marker. Never a standalone runtime value — it
+    /// appears only as [`Self::Setting`]'s erased argument; it never renders to
+    /// a Rust type on its own.
+    ShapeWeb,
+    /// The phantom webview-shape marker. Same erasure as [`Self::ShapeWeb`].
+    ShapeWebView,
+    /// The phantom terminal-shape marker. Same erasure as [`Self::ShapeWeb`].
+    ShapeTerminal,
     // ── Ipe.Locale ─────────────────────────────────────────────────────────
     /// Opaque validated BCP-47 locale handle (`ipe_runtime::locale::Locale`).
     ///
@@ -1730,6 +1746,12 @@ pub fn ir_type_is_derivable(
         | IrType::Connection
         | IrType::ConnReadOnly
         | IrType::ConnReadWrite
+        // Runtime-config carrier + its phantom shape markers — opaque, same
+        // posture as the connection handle (not derivable, not serde).
+        | IrType::Setting
+        | IrType::ShapeWeb
+        | IrType::ShapeWebView
+        | IrType::ShapeTerminal
         | IrType::Fun(_, _)
         // The promoted `Arc<dyn Fn>` carrier is `Clone` but still lacks `Debug`
         // and `PartialEq`, so it is exactly as non-derivable as `Fun`.
@@ -1878,6 +1900,13 @@ pub fn ir_type_is_serde(ty: &IrType, enum_serde: &impl Fn(&ModPath, Symbol) -> b
         | IrType::Connection
         | IrType::ConnReadOnly
         | IrType::ConnReadWrite
+        // Runtime-config carrier + shape markers — non-serde (may carry a
+        // `Secret`), so a `Setting` in a Web Model field is a compile-time
+        // rejection (`IPE-L0120`), never a session-store leak.
+        | IrType::Setting
+        | IrType::ShapeWeb
+        | IrType::ShapeWebView
+        | IrType::ShapeTerminal
         | IrType::Fun(_, _)
         // Same family as `Fun` — the `Arc<dyn Fn>` promoted carrier is never serde.
         | IrType::SharedFun(_, _)
@@ -2051,6 +2080,12 @@ pub fn carrier_is_clone(ty: &IrType) -> bool {
         | IrType::Connection
         | IrType::ConnReadOnly
         | IrType::ConnReadWrite
+        // The runtime-config carrier is `Clone`; its shape markers are phantom
+        // (never a runtime value) but must stay exhaustive.
+        | IrType::Setting
+        | IrType::ShapeWeb
+        | IrType::ShapeWebView
+        | IrType::ShapeTerminal
         | IrType::ServerRequest
         | IrType::ServerResponse
         | IrType::ServerRoute
