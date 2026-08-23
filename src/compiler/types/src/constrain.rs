@@ -7409,22 +7409,24 @@ impl<'a> Builder<'a> {
             // hard-coded credential is a plain `String`, so it cannot reach a
             // `Secret` slot (e.g. `Db.url`).
             K::AppFromEnv => fun(string(), secret()),
-            // `Host.bind : HostMode -> Setting a` — cross-cutting; the shape var
-            // is free, so it unifies into any app's settings list. The
-            // `Ipe.App.HostMode` enum veneer projects to this raw kernel's `Int`
-            // host-mode tag (`0` loopback / `1` all interfaces / `2` env-driven).
+            // `Host.bind : Int -> Setting a` — cross-cutting; the shape var is
+            // free, so it unifies into any app's settings list. The argument is a
+            // raw host-mode tag (`0` loopback / `1` all interfaces / `2`
+            // env-driven); an out-of-range tag is resolved fail-closed to
+            // loopback by the runtime, so the boundary is safe by construction.
             K::HostBind => fun(int(), setting(var(0))),
-            // `Log.level : LogLevel -> Setting a` — cross-cutting; the veneer
-            // projects `LogLevel` to its `Int` severity tag.
+            // `Log.level : Int -> Setting a` — cross-cutting; a raw severity tag
+            // (`0` debug … `3` error), clamped to the known range at resolution.
             K::LogLevelSetting => fun(int(), setting(var(0))),
             // `Db.url : Secret -> Setting a` — cross-cutting; the URL is a
             // `Secret`, so it only comes from `App.fromEnv` (a hard-coded
             // `String` credential does not type-check here). This is the
             // security-critical rejection the front door exists to enforce.
             K::DbUrlSetting => fun(secret(), setting(var(0))),
-            // `Web.csrf : CsrfMode -> Setting Web` — the shape marker is PINNED
-            // to `Web`, so this setting rejects a non-web app's settings list;
-            // the veneer projects `CsrfMode` to its `Int` tag.
+            // `Web.csrf : Int -> Setting Web` — the shape marker is PINNED to
+            // `Web`, so this setting rejects a non-web app's settings list. The
+            // argument is a raw CSRF policy tag; a stricter-only runtime apply
+            // means no tag value can weaken CSRF below its fail-closed default.
             K::WebCsrf => fun(int(), setting(shape_web())),
             // `Web.sessionTtl : Int -> Setting Web` — seconds; web-pinned.
             K::WebSessionTtl => fun(int(), setting(shape_web())),

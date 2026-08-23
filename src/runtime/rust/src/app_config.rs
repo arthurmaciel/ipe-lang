@@ -25,8 +25,9 @@
 
 use std::sync::OnceLock;
 
-/// A resolved host-bind mode. The Ipê-source `HostMode` ADT projects onto this
-/// closed set; a bare integer cannot stand in.
+/// A resolved host-bind mode — the closed set the raw `Host.bind` tag resolves
+/// to. The setting-builder maps the integer tag onto one of these variants,
+/// falling closed to [`HostMode::Loopback`] for any out-of-range tag.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum HostMode {
     /// Bind `127.0.0.1` only — never reachable off the local machine.
@@ -51,16 +52,18 @@ pub enum Setting {
     /// `Db.url` — the database URL, sealed as a [`Secret`](crate::secret::Secret).
     #[cfg(feature = "secret")]
     DbUrl(crate::secret::Secret),
-    /// `Web.csrf` — the CSRF policy tag (`0` strict / `1` disabled).
+    /// `Web.csrf` — the CSRF policy tag. `0` is the strict/enforced posture;
+    /// every other tag is a no-op (a setting cannot weaken CSRF below its
+    /// fail-closed default — only an operator env override can disable it).
     WebCsrf(i64),
     /// `Web.sessionTtl` — the session lifetime in seconds.
     WebSessionTtl(i64),
 }
 
-/// `Host.bind : HostMode -> Setting a`. The Ipê `HostMode` enum projects onto
-/// the closed [`HostMode`] tag: `0` loopback, `1` all interfaces, `2`
-/// env-driven. An out-of-range tag falls closed to [`HostMode::Loopback`] (the
-/// safe branch), never a panic.
+/// `Host.bind : Int -> Setting a`. Maps the raw host-mode tag onto the closed
+/// [`HostMode`] set: `0` loopback, `1` all interfaces, `2` env-driven. An
+/// out-of-range tag falls closed to [`HostMode::Loopback`] (the safe branch),
+/// never a panic.
 #[must_use]
 pub fn ipe_setting_host_bind(mode_tag: i64) -> Setting {
     let mode = match mode_tag {
@@ -71,7 +74,7 @@ pub fn ipe_setting_host_bind(mode_tag: i64) -> Setting {
     Setting::HostBind(mode)
 }
 
-/// `Log.level : LogLevel -> Setting a`. Carries the severity tag as-is.
+/// `Log.level : Int -> Setting a`. Carries the raw severity tag as-is.
 #[must_use]
 pub fn ipe_setting_log_level(level_tag: i64) -> Setting {
     Setting::LogLevel(level_tag)
@@ -97,7 +100,8 @@ pub fn ipe_setting_db_url(url: crate::secret::Secret) -> Setting {
     Setting::DbUrl(url)
 }
 
-/// `Web.csrf : CsrfMode -> Setting Web`. Carries the CSRF policy tag.
+/// `Web.csrf : Int -> Setting Web`. Carries the raw CSRF policy tag; the
+/// stricter-only apply at resolution ensures it can only strengthen protection.
 #[must_use]
 pub fn ipe_setting_web_csrf(mode_tag: i64) -> Setting {
     Setting::WebCsrf(mode_tag)

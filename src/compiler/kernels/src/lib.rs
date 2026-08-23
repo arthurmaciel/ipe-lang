@@ -1718,14 +1718,17 @@ pub enum StdlibKernel {
     /// `Secret` from an environment variable. A hard-coded credential is a
     /// plain `String`, so it does not type-check where a `Secret` is required.
     AppFromEnv,
-    /// `Host.bind : HostMode -> Setting a` — cross-cutting host-bind setting.
+    /// `Host.bind : Int -> Setting a` — cross-cutting host-bind setting (raw
+    /// host-mode tag; out-of-range resolves fail-closed to loopback).
     HostBind,
-    /// `Log.level : LogLevel -> Setting a` — cross-cutting log-level setting.
+    /// `Log.level : Int -> Setting a` — cross-cutting log-level setting (raw
+    /// severity tag).
     LogLevelSetting,
     /// `Db.url : Secret -> Setting a` — cross-cutting database-URL setting; the
     /// URL is a `Secret`, so it can only come from `App.fromEnv`.
     DbUrlSetting,
-    /// `Web.csrf : CsrfMode -> Setting Web` — web-only CSRF-policy setting.
+    /// `Web.csrf : Int -> Setting Web` — web-only CSRF-policy setting (raw
+    /// policy tag; a stricter-only apply means it can never weaken CSRF).
     WebCsrf,
     /// `Web.sessionTtl : Int -> Setting Web` — web-only session-TTL setting (seconds).
     WebSessionTtl,
