@@ -5,7 +5,7 @@
 //! `Codec Item` carrying `SRecord` shape, including a nullable `note` column)
 //! is seeded with three rows, then each leaf is exercised via a `Store.count`.
 //! `isNull` / `notNull` run against a real SQL NULL (the `Nothing`-seeded row).
-//! The program connects to `sqlite::memory:` and runs real SQLite queries.
+//! The program connects to `sqlite::memory:` and runs real `SQLite` queries.
 //!
 //! Gated on `IPE_E2E=1`; without it the test returns early. Run with:
 //!

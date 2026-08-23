@@ -29,6 +29,11 @@ use std::path::PathBuf;
 /// Emit symbols never reached via the generic `callee_name()` path (a dedicated
 /// emit function intercepts the variant first), OR defined in the generated-code
 /// epilogue rather than the runtime.  See per-entry rationale below.
+///
+/// The `Store.*` accessor-intercept placeholder symbols are NOT listed here —
+/// they are derived at test time from
+/// [`ipe_kernels::StdlibKernel::ACCESSOR_INTERCEPT_PLACEHOLDERS`], the SSOT.
+/// See the `every_kernel_name_resolves_to_runtime_fn` test body below.
 const KNOWN_DEAD_OR_EPILOGUE: &[&str] = &[
     // ── Build-time: env_public embeds the whitelisted public environment
     //         values into the emitted binary at compile time; there is no
@@ -77,38 +82,13 @@ const KNOWN_DEAD_OR_EPILOGUE: &[&str] = &[
     //         the topic-name String; emit_expr emits the argument directly, so
     //         this name string never reaches a runtime call. ──────────────────
     "pubsub_topic",
-    // ── Dead: All accessor-typed `Store.*` query leaves are intercepted at
-    //         lowering (the `.field` accessor becomes the validated column and
-    //         the call is rewritten inline), so none of these name strings ever
-    //         reach a runtime call. ─────────────────────────────────────────
-    "store_eq_col",
-    "store_eq_by",
-    "store_neq_col",
-    "store_neq_by",
-    "store_gt_col",
-    "store_gt_by",
-    "store_gte_col",
-    "store_gte_by",
-    "store_lt_col",
-    "store_lt_by",
-    "store_lte_col",
-    "store_lte_by",
-    "store_like",
-    "store_is_null",
-    "store_not_null",
-    "store_in_list_col",
-    "store_in_list_by",
-    // ── Dead: the accessor-typed `Store.*` column-spec builders are likewise
-    //         intercepted at lowering — the `.field` accessor becomes the
-    //         validated column name and the call is rewritten inline, so none of
-    //         these name strings ever reach a runtime call. ──────────────────
-    "store_primary_key",
-    "store_serial",
-    "store_unique",
-    "store_default_now",
-    "store_default_text",
-    "store_default_int",
-    "store_touch_on_update",
+    // NOTE: The accessor-typed `Store.*` query leaves and column-spec builders
+    // are omitted here.  Their `runtime_fn` name strings are derived at test
+    // time from `ipe_kernels::StdlibKernel::ACCESSOR_INTERCEPT_PLACEHOLDERS`
+    // (the SSOT) and unioned into the allowlist inside the test function below.
+    // Adding them here a second time would create a parallel list that can
+    // drift when a new placeholder kernel is added — exactly the problem the
+    // SSOT is meant to prevent.
 ];
 
 fn walk(dir: &std::path::Path, fn_re: &regex::Regex, out: &mut HashSet<String>) {
@@ -158,7 +138,17 @@ fn every_kernel_name_resolves_to_runtime_fn() {
     );
 
     // ── 3. Build the allowlist set ────────────────────────────────────────────
-    let allowlist: HashSet<&str> = KNOWN_DEAD_OR_EPILOGUE.iter().copied().collect();
+    // Seed from the static list, then union in the accessor-intercept placeholder
+    // names derived from the SSOT (`StdlibKernel::ACCESSOR_INTERCEPT_PLACEHOLDERS`).
+    // This means adding a 25th placeholder kernel only requires updating the SSOT
+    // constant — this test and the point-free gate both update automatically.
+    let mut allowlist: HashSet<String> = KNOWN_DEAD_OR_EPILOGUE
+        .iter()
+        .map(|s| s.to_string())
+        .collect();
+    for k in ipe_kernels::StdlibKernel::ACCESSOR_INTERCEPT_PLACEHOLDERS {
+        allowlist.insert(k.def().runtime_fn.to_string());
+    }
 
     // ── 4. Assert every kernel emit symbol is reachable ──────────────────────
     let mut unresolved: Vec<String> = naming_symbols

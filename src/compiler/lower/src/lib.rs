@@ -239,6 +239,43 @@ mod tests {
     use ipe_diagnostics::{Diagnostic, Feature, LowerError};
     use ipe_ir::{BinOp, Callee, Expr, IrType, KernelFn, Pat, TypeDef};
 
+    /// Structural cross-check: every variant in the SSOT
+    /// (`StdlibKernel::ACCESSOR_INTERCEPT_PLACEHOLDERS`) must be recognised by
+    /// `is_accessor_intercept_placeholder`, and no other variant may be.
+    ///
+    /// This makes the predicate–SSOT agreement a compile-time or test-time
+    /// invariant rather than a convention enforced only by review.  The lowering
+    /// dispatch arms in `lower.rs` enumerate the same variants by kernel family
+    /// and arity (those arms cannot be mechanically derived from a slice const —
+    /// Rust `match` requires literal/const patterns); they are checked for
+    /// correctness by the IPE-L0146 golden test and the
+    /// `every_kernel_name_resolves` test in `ipe-runtime-rust`.
+    #[test]
+    fn accessor_intercept_placeholder_predicate_covers_ssot() {
+        use ipe_kernels::StdlibKernel;
+
+        // Every SSOT variant must satisfy the predicate.
+        for &k in StdlibKernel::ACCESSOR_INTERCEPT_PLACEHOLDERS {
+            assert!(
+                k.is_accessor_intercept_placeholder(),
+                "{k:?} is in ACCESSOR_INTERCEPT_PLACEHOLDERS but \
+                 is_accessor_intercept_placeholder() returned false"
+            );
+        }
+
+        // No other variant may satisfy the predicate (no phantom members).
+        for k in StdlibKernel::ALL {
+            let expected = StdlibKernel::ACCESSOR_INTERCEPT_PLACEHOLDERS.contains(k);
+            assert_eq!(
+                k.is_accessor_intercept_placeholder(),
+                expected,
+                "{k:?}: predicate={} but SSOT membership={}",
+                k.is_accessor_intercept_placeholder(),
+                expected
+            );
+        }
+    }
+
     const GOLDEN: &str = include_str!("../../../../tests/golden/basics/Main.ipe");
 
     /// Parse → canonicalise → infer the golden M0 module, then return the

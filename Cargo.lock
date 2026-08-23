@@ -2274,6 +2274,7 @@ dependencies = [
  "ipe_diagnostics",
  "ipe_intern",
  "ipe_ir",
+ "ipe_kernels",
  "ipe_parse",
  "ipe_types",
 ]
