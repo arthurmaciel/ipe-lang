@@ -10,8 +10,11 @@
 
 /// The verified subject of an authenticated request. The inner subject is
 /// private: a value of this type can only originate from [`principal_mint`].
+///
+/// Deliberately NOT serde: a `Principal` must never round-trip through a session
+/// store or JSON boundary, or a client could forge an authenticated identity by
+/// supplying the serialized datum. Minting is the only way in.
 #[derive(Clone, Debug, PartialEq, Eq)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct Principal {
     subject: String,
 }

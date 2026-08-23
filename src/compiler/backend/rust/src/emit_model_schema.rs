@@ -165,6 +165,7 @@ const TAG_DSN: u8 = 65;
 const TAG_CONNECTION: u8 = 66;
 const TAG_CONN_READONLY: u8 = 67;
 const TAG_CONN_READWRITE: u8 = 68;
+const TAG_PRINCIPAL: u8 = 69;
 /// Fuel exhaustion marker — distinct from every variant tag.
 const TAG_FUEL_EXHAUSTED: u8 = 0xFF;
 
@@ -236,6 +237,8 @@ fn hash_ty(ctx: &EmitCtx, ty: &IrType, h: &mut Sha256, fuel: u32) -> DResult<()>
         IrType::ConnReadWrite => h.update([TAG_CONN_READWRITE]),
         // `Locale` — non-serde opaque handle; present for exhaustiveness.
         IrType::Locale => h.update([TAG_LOCALE]),
+        // `Principal` — non-serde opaque identity; present for exhaustiveness.
+        IrType::Principal => h.update([TAG_PRINCIPAL]),
 
         IrType::Task(inner) => {
             h.update([TAG_TASK]);

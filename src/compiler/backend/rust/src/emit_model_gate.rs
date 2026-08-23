@@ -296,6 +296,11 @@ fn leaf_of_bounded(ctx: &EmitCtx, ty: &IrType, app: AppShape, fuel: u32) -> Mode
         // one, so a `Secret` Model field is a compile-time IPE-L0120 naming
         // this leaf, never a session-store leak.
         | IrType::Secret
+        // `Principal` must never round-trip through a Web session store — a
+        // client-hydrated `Principal` would be a forged authenticated identity.
+        // Not serde, so `admissible()` rejects it; this arm names it in the
+        // resulting IPE-L0120, same classification as `Secret`.
+        | IrType::Principal
         // `Path` is a filesystem-boundary value, not serde — same
         // classification as `Secret`: a Web Model field of type `Path` is
         // rejected by `admissible()` (via `ir_type_is_serde` = `false`) and

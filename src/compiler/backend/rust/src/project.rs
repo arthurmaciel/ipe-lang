@@ -737,6 +737,16 @@ const RUNTIME_MOD_RS_JWT_APPEND: &str = "pub mod jwt;\npub use jwt::*;\n";
 /// declaration itself.
 const RUNTIME_MOD_RS_AUTH_APPEND: &str = "pub mod auth;\npub use auth::*;\n";
 
+/// Lines appended to `ipe_runtime/mod.rs` when the program uses
+/// `Ipe.Auth.subject` (or another `Principal`-touching kernel).
+///
+/// `principal.rs` (the opaque authenticated-subject newtype + its
+/// `principal_subject` accessor) is vendored into every emitted crate but
+/// declared only on demand — a pure-CLI program that never reads a `Principal`
+/// keeps it out of the module namespace (`dead_code`).
+const RUNTIME_MOD_RS_PRINCIPAL_APPEND: &str =
+    "pub mod principal;\npub use principal::{Principal, principal_subject};\n";
+
 // ── Ipe.WebSocket — outbound WebSocket client ──────────────────────────
 
 /// Lines appended to `ipe_runtime/mod.rs` when the program uses outbound
@@ -2493,6 +2503,11 @@ fn assemble_project_files(
         if ctx.uses_auth {
             mod_rs.push_str(RUNTIME_MOD_RS_AUTH_APPEND);
         }
+        // Ipe.Auth.Principal — append the principal module when `Auth.subject`
+        // (or another Principal-touching kernel) is used.
+        if ctx.uses_principal {
+            mod_rs.push_str(RUNTIME_MOD_RS_PRINCIPAL_APPEND);
+        }
         // Ipe.Email — append email module when `Email.send` is used.
         if ctx.uses_email {
             mod_rs.push_str(RUNTIME_MOD_RS_EMAIL_APPEND);
@@ -2704,7 +2719,10 @@ fn ir_type_contains_non_serde(ty: &IrType) -> bool {
         | IrType::CryptoMac
         | IrType::EmailAddress
         // `Locale` — not serde; rejected in a HydrationState record.
-        | IrType::Locale => true,
+        | IrType::Locale
+        // `Principal` — not serde; a hydrated `Principal` would be a forged
+        // identity, so it is rejected in a HydrationState record.
+        | IrType::Principal => true,
     }
 }
 

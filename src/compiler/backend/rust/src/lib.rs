@@ -914,6 +914,10 @@ pub(crate) struct EmitCtx<'a> {
     /// When set, [`crate::project::emit_program`] appends
     /// `pub mod auth; pub use auth::*;` to the emitted `ipe_runtime/mod.rs`.
     pub(crate) uses_auth: bool,
+    /// `true` when the program uses `Ipe.Auth.subject` (touches the opaque
+    /// `Principal`). When set, [`crate::project::emit_program`] appends
+    /// `pub mod principal;` to the emitted `ipe_runtime/mod.rs`.
+    pub(crate) uses_principal: bool,
     /// `true` when the program uses at least one outbound `Ipe.WebSocket`
     /// client kernel (`WebSocket.connect` / `send` / `close` / … or an `on*`
     /// subscription).  When set, [`crate::project::assemble_project_files`] adds
@@ -1656,6 +1660,8 @@ impl<'a> EmitCtx<'a> {
 
         // detect Ipe.Auth kernel usage.
         let uses_auth = program.modules.iter().any(|m| m.uses_auth);
+        // detect `Ipe.Auth.subject` usage (touches the opaque `Principal`).
+        let uses_principal = program.modules.iter().any(|m| m.uses_principal);
         // detect Ipe.Email kernel usage.
         let uses_email = program.modules.iter().any(|m| m.uses_email);
         // detect non-TEA Ipe.Time kernel usage — gates the `time` Cargo feature
@@ -1729,6 +1735,7 @@ impl<'a> EmitCtx<'a> {
             uses_webview,
             uses_css,
             uses_auth,
+            uses_principal,
             uses_websocket,
             uses_email,
             uses_time,
@@ -2808,6 +2815,7 @@ const fn ir_type_is_record_shape_leaf(ty: &IrType) -> bool {
             | IrType::CryptoMac
             | IrType::EmailAddress
             | IrType::Locale
+            | IrType::Principal
     )
 }
 
@@ -2946,7 +2954,9 @@ fn collect_record_shapes(
         | IrType::CryptoMac
         | IrType::EmailAddress
         // `Locale` is an opaque BCP-47 handle — no record shape.
-        | IrType::Locale => {}
+        | IrType::Locale
+        // `Principal` is an opaque identity newtype — no record shape.
+        | IrType::Principal => {}
         // `WebRoute page` is page-parametric — descend in case the page type
         // carries a nested record shape.
         IrType::WebRoute(page) => collect_record_shapes(interner, page, shapes)?,
@@ -3113,7 +3123,9 @@ fn type_reaches_enum(
         | IrType::CryptoMac
         | IrType::EmailAddress
         // `Locale` is a monomorphic opaque handle — no enum edge.
-        | IrType::Locale => false,
+        | IrType::Locale
+        // `Principal` is a monomorphic opaque identity — no enum edge.
+        | IrType::Principal => false,
         // `Route<Page>` stores its `not_found`/built pages by value — a page
         // type reaching `target` through a route is a genuine size edge.
         IrType::WebRoute(page) => type_reaches_enum(page, target, enums, visited),
@@ -3216,6 +3228,8 @@ fn contains_generic(ty: &IrType) -> bool {
         | IrType::EmailAddress
         // `Locale` is monomorphic — no generic parameters.
         | IrType::Locale
+        // `Principal` is monomorphic — no generic parameters.
+        | IrType::Principal
         // A row variable is a SEPARATE row generic (`R{n}`), never an ordinary
         // `T{n}` record-struct parameter, and never appears inside a record-
         // struct field. It contributes no `<T>` clause here.
@@ -3346,6 +3360,8 @@ fn collect_generics(ty: &IrType, out: &mut Vec<Symbol>) {
         | IrType::EmailAddress
         // `Locale` is monomorphic — no generics to collect.
         | IrType::Locale
+        // `Principal` is monomorphic — no generics to collect.
+        | IrType::Principal
         // A row variable is a separate row generic (`R{n}`), tracked in
         // `Func::row_params`, never in the ordinary `T{n}` scope collected here.
         | IrType::RowGeneric(_) => {}
@@ -3688,7 +3704,8 @@ fn match_template(
         | IrType::CryptoKey
         | IrType::CryptoMac
         | IrType::EmailAddress
-        | IrType::Locale => {
+        | IrType::Locale
+        | IrType::Principal => {
             if template == concrete {
                 Ok(())
             } else {

@@ -263,6 +263,7 @@ pub fn render_type(ctx: &EmitCtx, ty: &IrType, generics: GenericScope) -> DResul
         IrType::Order => "ipe_runtime::basics::IpeOrder".to_owned(),
         IrType::HttpMethod => "ipe_runtime::HttpMethod".to_owned(),
         IrType::Decimal => "ipe_runtime::decimal::Decimal".to_owned(),
+        IrType::Principal => "ipe_runtime::principal::Principal".to_owned(),
         IrType::ErrorKind => "ipe_runtime::error::IpeErrorKind".to_owned(),
         IrType::Error => "ipe_runtime::error::IpeError".to_owned(),
         IrType::ErrorDetails => "ipe_runtime::error::IpeErrorDetails".to_owned(),

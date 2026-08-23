@@ -2063,6 +2063,7 @@ fn ir_type_mentions(ty: &IrType, leaf: &impl Fn(&IrType) -> bool) -> bool {
         | IrType::ConnReadOnly
         | IrType::ConnReadWrite
         | IrType::Locale
+        | IrType::Principal
         | IrType::CacheCfg
         | IrType::CacheStats
         | IrType::WebSocketClientCfg
@@ -2550,7 +2551,8 @@ fn ir_contains_fun(ty: &IrType) -> bool {
         | IrType::CryptoKey
         | IrType::CryptoMac
         | IrType::EmailAddress
-        | IrType::Locale => false,
+        | IrType::Locale
+        | IrType::Principal => false,
         // `WebRoute page` carries the page type it builds — recurse (the
         // route's own builder closure is runtime-internal, not a Ipê `Fn`).
         IrType::WebRoute(page) => ir_contains_fun(page),
@@ -2700,6 +2702,8 @@ fn clone_class(env: CloneEnv<'_>, t: &IrType) -> CloneClass {
         | IrType::EmailAddress
         // `Locale` wraps a `String` — `Clone` but not `Copy`.
         | IrType::Locale
+        // `Principal` wraps a `String` — `Clone` but not `Copy`.
+        | IrType::Principal
         // The promoted `Arc<dyn Fn>` carrier is `Clone` (a refcount bump), so a
         // `SharedFun` slot is `CloneOk` — this is what lets a composite carrying
         // it become clonable and so reusable.
@@ -5648,6 +5652,8 @@ fn ir_type_mentions_generic(ty: &IrType, tv: Symbol) -> bool {
         | IrType::EmailAddress
         // `Locale` is non-parametric — no type var.
         | IrType::Locale
+        // `Principal` is non-parametric — no type var.
+        | IrType::Principal
         // A row variable is a distinct row generic (`R{n}`), never the ordinary
         // `T{n}` type variable this predicate tracks.
         | IrType::RowGeneric(_) => false,
@@ -5749,6 +5755,7 @@ fn ir_type_generic_in_decoder(ty: &IrType, tv: Symbol) -> bool {
         | IrType::CryptoMac
         | IrType::EmailAddress
         | IrType::Locale
+        | IrType::Principal
         | IrType::RowGeneric(_) => false,
     }
 }
@@ -5849,6 +5856,7 @@ fn ir_type_generic_reaches_bare(ty: &IrType, tv: Symbol) -> bool {
         | IrType::CryptoMac
         | IrType::EmailAddress
         | IrType::Locale
+        | IrType::Principal
         | IrType::RowGeneric(_) => false,
     }
 }
@@ -9296,6 +9304,9 @@ struct KernelUsage {
     css: bool,
     /// Any Ipe.Auth kernel.
     auth: bool,
+    /// Any kernel that touches the opaque `Principal` runtime type
+    /// (`Ipe.Auth.subject`). Drives emitting the `principal` runtime module.
+    principal: bool,
     /// Any Ipe.Web kernel.
     web: bool,
     /// Any Ipe.Tui kernel.
@@ -9423,6 +9434,7 @@ impl KernelUsage {
         self.ui |= k.is_ui();
         self.css |= k.is_css();
         self.auth |= k.is_auth();
+        self.principal |= matches!(k, KernelFn::AuthSubject);
         self.web |= k.is_web();
         self.tui |= k.is_tui();
         self.webview |= k.is_webview();
@@ -10057,6 +10069,7 @@ const fn ir_type_label(ty: &IrType) -> &'static str {
         IrType::Order => "Order",
         IrType::HttpMethod => "HttpMethod",
         IrType::Decimal => "Decimal",
+        IrType::Principal => "Principal",
         IrType::ErrorKind => "ErrorKind",
         IrType::Error => "Error",
         IrType::ErrorDetails => "ErrorDetails",
@@ -11894,7 +11907,8 @@ impl<'a> Lowerer<'a> {
             | IrType::CryptoKey
             | IrType::CryptoMac
             | IrType::EmailAddress
-            | IrType::Locale => Ok(ty),
+            | IrType::Locale
+            | IrType::Principal => Ok(ty),
         }
     }
 
@@ -13132,6 +13146,10 @@ impl<'a> Lowerer<'a> {
         // backend uses this flag to append `pub mod auth; pub use auth::*;` to
         // the emitted `ipe_runtime/mod.rs`.
         let uses_auth = kernel_usage.auth;
+        // detect `Ipe.Auth.subject` usage — the backend appends `pub mod
+        // principal;` to the emitted `ipe_runtime/mod.rs` so the opaque
+        // `Principal` type + `principal_subject` accessor resolve.
+        let uses_principal = kernel_usage.principal;
         // detect `Ipe.Email` `Email.send` usage — the backend uses this flag to
         // append `pub mod email; pub use email::*;` to the emitted
         // `ipe_runtime/mod.rs` and to add the `lettre` dependency.
@@ -13200,6 +13218,7 @@ impl<'a> Lowerer<'a> {
             uses_webview,
             uses_css,
             uses_auth,
+            uses_principal,
             uses_websocket,
             uses_email,
             uses_time,
@@ -14880,6 +14899,10 @@ impl<'a> Lowerer<'a> {
                 // `Decimal` is the Ipe.Decimal arbitrary-precision type.
                 // Backed by `ipe_runtime::decimal::Decimal` (rust_decimal newtype).
                 "Decimal" => Ok(IrType::Decimal),
+                // `Principal` is `Ipe.Auth`'s opaque authenticated subject.
+                // Backed by `ipe_runtime::principal::Principal`. No Ipê
+                // constructor — a value only comes from the auth middleware mint.
+                "Principal" => Ok(IrType::Principal),
                 // `SqlFragment` is `Ipe.Db.Sql`'s opaque WHERE-fragment type
                 // Backed by `ipe_runtime::db::SqlFragment`.
                 "SqlFragment" => Ok(IrType::SqlFragment),
@@ -15997,6 +16020,10 @@ impl<'a> Lowerer<'a> {
                 // `Decimal` is the Ipe.Decimal arbitrary-precision type.
                 // Backed by `ipe_runtime::decimal::Decimal` (rust_decimal newtype).
                 "Decimal" => Ok(IrType::Decimal),
+                // `Principal` is `Ipe.Auth`'s opaque authenticated subject.
+                // Backed by `ipe_runtime::principal::Principal`. No Ipê
+                // constructor — a value only comes from the auth middleware mint.
+                "Principal" => Ok(IrType::Principal),
                 // `SqlFragment` is `Ipe.Db.Sql`'s opaque WHERE-fragment type
                 // Backed by `ipe_runtime::db::SqlFragment`.
                 "SqlFragment" => Ok(IrType::SqlFragment),
@@ -21745,7 +21772,9 @@ impl<'a> Lowerer<'a> {
                 | KernelFn::WebSocketConnectWith
                 | KernelFn::WebSocketClose
                 // ── Ipe.Env arity-1 ──────────────────
-                | KernelFn::EnvPublic,
+                | KernelFn::EnvPublic
+                // ── Ipe.Auth.subject arity-1 ──────────────────
+                | KernelFn::AuthSubject,
             ) => Ok(1),
             Callee::Kernel(
                 KernelFn::AuthHashPasswordCost
@@ -23206,6 +23235,7 @@ impl<'a> Lowerer<'a> {
                     ("Auth", "register") => Ok(Callee::Kernel(KernelFn::AuthRegister)),
                     ("Auth", "login") => Ok(Callee::Kernel(KernelFn::AuthLogin)),
                     ("Auth", "setRole") => Ok(Callee::Kernel(KernelFn::AuthSetRole)),
+                    ("Auth", "subject") => Ok(Callee::Kernel(KernelFn::AuthSubject)),
                     // ── Ipe.Http.Server.Stream — server-side streaming ───
                     ("Stream", "stream") => Ok(Callee::Kernel(KernelFn::StreamStream)),
                     ("Stream", "emit") => Ok(Callee::Kernel(KernelFn::StreamEmit)),
@@ -25286,6 +25316,8 @@ fn collect_ir_generic_syms(ty: &IrType, out: &mut BTreeSet<Symbol>) {
         | IrType::EmailAddress
         // `Locale` is non-parametric — no generic syms.
         | IrType::Locale
+        // `Principal` is non-parametric — no generic syms.
+        | IrType::Principal
         // A row variable is tracked in `Func::row_params`, NOT in the ordinary
         // `T{n}` generic scope. Collecting it here would double-count it as both
         // a `T`-generic and an `R`-generic, so this arm is a deliberate no-op.
@@ -27605,7 +27637,8 @@ mod tests {
             | ipe_ir::IrType::CryptoKey
             | ipe_ir::IrType::CryptoMac
             | ipe_ir::IrType::EmailAddress
-            | ipe_ir::IrType::Locale => {}
+            | ipe_ir::IrType::Locale
+            | ipe_ir::IrType::Principal => {}
         }
 
         // One representative per container variant: the shallowest tree

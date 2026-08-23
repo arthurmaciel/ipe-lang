@@ -262,6 +262,10 @@ pub enum BuiltinTag {
     CryptoMac,
     /// `EmailAddress` — the nullary opaque validated email address.
     EmailAddress,
+    /// `Principal` — the nullary opaque authenticated subject. No Ipê
+    /// constructor: a value only ever comes from the server auth middleware's
+    /// mint, so it is never buildable by an Ipê term.
+    Principal,
     /// `Claims` — the nullary opaque JWT claims accumulator.
     Claims,
     /// `Algorithm` — the nullary opaque JWT signing-algorithm descriptor.
@@ -1832,6 +1836,8 @@ pub enum StdlibKernel {
     AuthRegister,
     AuthLogin,
     AuthSetRole,
+    /// `Ipe.Auth.subject : Principal -> String` — the verified subject claim.
+    AuthSubject,
     // Ipe.Http.Server.Stream — server-side streaming HTTP (fail-closed).
     StreamStream,
     StreamEmit,
@@ -3535,6 +3541,7 @@ impl StdlibKernel {
             Self::AuthRegister => d("Auth", "register", 3, Pure, "auth_register"),
             Self::AuthLogin => d("Auth", "login", 3, Pure, "auth_login"),
             Self::AuthSetRole => d("Auth", "setRole", 3, Pure, "auth_set_role"),
+            Self::AuthSubject => d("Auth", "subject", 1, Pure, "principal_subject"),
             // Ipe.Http.Server.Stream (fail-closed: qual-registered only, no lower arm).
             Self::StreamStream => d("Stream", "stream", 2, Server, "server_stream_stream"),
             Self::StreamEmit => d("Stream", "emit", 2, Server, "server_stream_emit"),
@@ -4828,6 +4835,7 @@ impl StdlibKernel {
         Self::AuthRegister,
         Self::AuthLogin,
         Self::AuthSetRole,
+        Self::AuthSubject,
         Self::StreamStream,
         Self::StreamEmit,
         Self::StreamFinish,
@@ -5901,6 +5909,8 @@ impl StdlibKernel {
         const CRYPTO_MAC: TyShape = TyShape::Con(BuiltinTag::CryptoMac, &[]);
         const EMAIL_ADDRESS: TyShape = TyShape::Con(BuiltinTag::EmailAddress, &[]);
         const CLAIMS: TyShape = TyShape::Con(BuiltinTag::Claims, &[]);
+        const PRINCIPAL: TyShape = TyShape::Con(BuiltinTag::Principal, &[]);
+        const PRINCIPAL_TO_STRING: TyShape = TyShape::Fun(&PRINCIPAL, &STRING);
         const ALGORITHM: TyShape = TyShape::Con(BuiltinTag::Algorithm, &[]);
         const JSON_VALUE: TyShape = TyShape::Con(BuiltinTag::JsonValue, &[]);
         const STREAM_ID: TyShape = TyShape::Con(BuiltinTag::StreamId, &[]);
@@ -7996,6 +8006,7 @@ impl StdlibKernel {
             Self::AuthVerifyToken => Some(&AUTH_VERIFY_TOKEN),
             Self::AuthRegister | Self::AuthLogin => Some(&DB_TO_STRING_TO_STRING_TO_TASK_INT),
             Self::AuthSetRole => Some(&DB_TO_INT_TO_STRING_TO_TASK_UNIT),
+            Self::AuthSubject => Some(&PRINCIPAL_TO_STRING),
 
             // ── Compression. ──
             Self::CompressionGzip
@@ -9330,6 +9341,7 @@ impl StdlibKernel {
             | Self::AuthRegister
             | Self::AuthLogin
             | Self::AuthSetRole
+            | Self::AuthSubject
             | Self::EnvPublic
             | Self::RegionMainContent
             | Self::RegionNavigation
