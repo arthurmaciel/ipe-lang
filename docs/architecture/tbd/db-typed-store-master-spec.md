@@ -482,8 +482,12 @@ per-lane detail is in the campaign memory `codec-store-campaign-token-pause`.
   is a compile error today. Remaining: `Codec.id` sugar, newtype field derivation,
   and `Password`/`Secret` hash-on-write routing (the security-critical part —
   guardian-gated).
-- **Phase D (row security / Pillar 3): NOT STARTED.** `Policy`/`Principal`/
-  `Secured`/`…As`, in-query + in-DB enforcement. Own design + guardian epic.
+- **Phase D (row security / Pillar 3): IN-QUERY ENFORCEMENT SHIPPED.** The `Policy`
+  algebra, opaque unforgeable `Principal` (minted only by the authed-route
+  middleware), `Secured`, the `…As` operations, and the authed-route compiler
+  surface (`getAuthed`/`authConfig`) are complete: a handler receives a verified
+  `Principal` and reads a secured store filtered by a bound-param owner clause
+  (defense layers 1 + 2). Remaining (optional): native in-DB RLS (layer 3).
 - **Phase E (auto-migration / Pillar 4): NOT STARTED.** Only forward DDL `create`
   exists — no `targetSchema` diff, introspection, hazard classifier, `ipe db plan/
   sign/migrate`, or CI drift oracle. Data-preserving column/table renames are
