@@ -566,6 +566,12 @@ struct Builtins {
     /// `EmailAddress.parse : String -> Maybe EmailAddress`; extracted via
     /// `EmailAddress.toString`.  Lowered to `IrType::EmailAddress`.
     email_address: Symbol,
+    // ── Ipe.Auth.Principal ────────────────────────────────────────────────────
+    /// `"Principal"` — the opaque authenticated subject (`ipe_runtime::
+    /// principal::Principal`). NO Ipê constructor: a value only ever comes from
+    /// the server auth middleware's mint. Read via `Ipe.Auth.subject :
+    /// Principal -> String`. Zero type arguments. Lowered to `IrType::Principal`.
+    principal: Symbol,
     // ── Ipe.Url ─────────────────────────────────────────────────────────────
     /// `"Url"` — `Ipe.Url`'s opaque validated URL type (`ipe_runtime::url::Url`).
     /// The ONLY constructor is `Url.fromString : String -> Result Error Url`;
@@ -835,6 +841,8 @@ impl Builtins {
             crypto_mac: interner.intern("Mac")?,
             // ── Ipe.Email.EmailAddress ────────────────────────────────────────────
             email_address: interner.intern("EmailAddress")?,
+            // ── Ipe.Auth.Principal ────────────────────────────────────────────────
+            principal: interner.intern("Principal")?,
             // ── Ipe.Url ───────────────────────────────────────────────────────────
             url: interner.intern("Url")?,
             // ── Ipe.Db.Dsn ────────────────────────────────────────────────────────
@@ -4065,6 +4073,7 @@ impl<'a> Builder<'a> {
             BuiltinTag::CryptoKey => self.builtins.crypto_key,
             BuiltinTag::CryptoMac => self.builtins.crypto_mac,
             BuiltinTag::EmailAddress => self.builtins.email_address,
+            BuiltinTag::Principal => self.builtins.principal,
             BuiltinTag::Claims => self.builtins.jwt_claims,
             BuiltinTag::Algorithm => self.builtins.jwt_algorithm,
             BuiltinTag::JsonValue => self.builtins.json_value,
@@ -4779,6 +4788,15 @@ impl<'a> Builder<'a> {
         let algorithm_ty = || Ty::Con {
             module: Vec::new(),
             name: self.builtins.jwt_algorithm,
+            args: Vec::new(),
+        };
+        // `principal_ty()` — the opaque authenticated subject. Backed at runtime
+        // by `ipe_runtime::principal::Principal` (maps to `IrType::Principal`).
+        // No Ipê constructor: a value only ever comes from the auth middleware
+        // mint, so no term of this type can be built in Ipê.
+        let principal_ty = || Ty::Con {
+            module: Vec::new(),
+            name: self.builtins.principal,
             args: Vec::new(),
         };
         let web_req = || Ty::Con {
@@ -7250,6 +7268,8 @@ impl<'a> Builder<'a> {
             K::AuthLogin => fun(db(), fun(string(), fun(string(), task(int())))),
             // setRole : Db -> Int -> String -> Task Error ()
             K::AuthSetRole => fun(db(), fun(int(), fun(string(), task_unit()))),
+            // subject : Principal -> String — read the verified subject claim.
+            K::AuthSubject => fun(principal_ty(), string()),
 
             // ── Ipe.Secret — opaque secret-string wrapper ────
             // `fromString` is the seal (construction boundary); `reveal` is the
@@ -9380,7 +9400,7 @@ mod registry_phase_c_tests {
             K::FontHoverSize,
             // Ipe.Terminal line-oriented app-entry.
             K::TerminalAppLines,
-            // ── Ipe.Auth (9 kernels) — schemed + lowered, moved from REACHABLE_BUT_UNLOWERED ──
+            // ── Ipe.Auth (10 kernels) — schemed + lowered ──
             K::AuthHashPassword,
             K::AuthHashPasswordCost,
             K::AuthVerifyPassword,
@@ -9390,6 +9410,7 @@ mod registry_phase_c_tests {
             K::AuthRegister,
             K::AuthLogin,
             K::AuthSetRole,
+            K::AuthSubject,
             // ── Ipe.Http.Server.Stream (4 kernels) ─────────────────────────
             K::StreamStream,
             K::StreamEmit,

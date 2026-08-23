@@ -338,6 +338,13 @@ pub struct Module {
     /// whether to append `pub mod auth; pub use auth::*;` to the emitted
     /// `ipe_runtime/mod.rs`.
     pub uses_auth: bool,
+    /// `true` when the lowerer detected an `Ipe.Auth.subject` call (any kernel
+    /// that touches the opaque `Principal` runtime type).
+    ///
+    /// The backend reads this flag to append `pub mod principal;` to the emitted
+    /// `ipe_runtime/mod.rs` so the `Principal` type + `principal_subject`
+    /// accessor resolve.
+    pub uses_principal: bool,
     /// `true` when the lowerer detected at least one outbound
     /// `Ipe.WebSocket` client kernel call (`WebSocket.connect` /
     /// `connectWith` / `send` / `sendBinary` / `close` / `closeWithCode`, or an
@@ -1224,6 +1231,17 @@ pub enum IrType {
     /// value for all `Decimal.*` kernels.
     Decimal,
 
+    /// `Ipe.Auth.Principal` — the authenticated subject of a request.
+    ///
+    /// Renders as `ipe_runtime::principal::Principal` (a private-field newtype
+    /// over the verified subject `String`). Opaque with no Ipê constructor, so a
+    /// value only ever originates from the server auth middleware's mint;
+    /// consumed by `Ipe.Auth.subject` and the DB secured (`…As`) operations. A
+    /// dedicated leaf rather than [`IrType::Json`] so the type keeps a
+    /// `Principal` distinct from a `String` or a claims object — a caller
+    /// identifier cannot stand in where a `Principal` is required.
+    Principal,
+
     /// The built-in `ErrorKind` type — `Error`'s 11-variant classification
     ///
     /// Renders as `ipe_runtime::error::IpeErrorKind` (a `#[repr(u8)]` enum,
@@ -1662,6 +1680,8 @@ pub fn ir_type_is_derivable(
         | IrType::EmailAddress
         // `Locale` derives Clone+PartialEq+Debug — fully derivable.
         | IrType::Locale
+        // `Principal` derives Clone+Debug+PartialEq+Eq — fully derivable.
+        | IrType::Principal
         | IrType::Generic(_)
         // A row generic monomorphises to a concrete record struct, which is
         // derivable by construction; its `Clone` (and any whole-record bound)
@@ -1910,6 +1930,12 @@ pub fn ir_type_is_serde(ty: &IrType, enum_serde: &impl Fn(&ModPath, Symbol) -> b
         // `Locale` is a transient runtime value, not a session datum; the
         // runtime type carries no serde derive.
         | IrType::Locale
+        // `Principal` must NEVER round-trip through serde — a client-hydrated
+        // Web Model field of type `Principal` would let a client forge an
+        // authenticated identity by supplying the session datum. Non-serde makes
+        // that a compile-time IPE-L0120 rather than a mint bypass, the same
+        // posture as `Secret`.
+        | IrType::Principal
         // `Route<Page>` holds an `Arc<dyn Fn>` builder — never derivable/serde
         // regardless of its page argument.
         | IrType::WebRoute(_) => false,
@@ -2026,6 +2052,8 @@ pub fn carrier_is_clone(ty: &IrType) -> bool {
         | IrType::EmailAddress
         // `Locale` wraps a `String` — derives `Clone`.
         | IrType::Locale
+        // `Principal` wraps a `String` — derives `Clone`.
+        | IrType::Principal
         // The promoted `Arc<dyn Fn>` fn carrier: `Arc` is `Clone` (a refcount
         // bump), so a `SharedFun` slot never poisons its enclosing composite.
         | IrType::SharedFun(_, _)
@@ -4097,6 +4125,7 @@ mod tests {
                 uses_webview: false,
                 uses_css: false,
                 uses_auth: false,
+                uses_principal: false,
                 uses_websocket: false,
                 uses_email: false,
                 uses_time: false,
@@ -4627,6 +4656,7 @@ mod serde_persistence_tests {
                 uses_webview: false,
                 uses_css: false,
                 uses_auth: false,
+                uses_principal: false,
                 uses_websocket: false,
                 uses_email: false,
                 uses_time: false,
@@ -4717,6 +4747,7 @@ mod serde_persistence_tests {
                 uses_webview: false,
                 uses_css: false,
                 uses_auth: false,
+                uses_principal: false,
                 uses_websocket: false,
                 uses_email: false,
                 uses_time: false,

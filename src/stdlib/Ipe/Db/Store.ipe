@@ -138,9 +138,11 @@ module Ipe.Db.Store exposing
     , Policy, Secured
     , unrestricted, publicRead, ownerColumn, immutable, andPolicy, secured
     , ownerColumnNamed, immutableNamed
+    , allAs, getAs, insertAs, updateAs, deleteAs
     )
 
 
+import Ipe.Auth as Auth
 import Ipe.Basics as Basics
 import Ipe.Codec as Codec exposing (Codec(..), ColType(..), Shape(..))
 import Ipe.Db as Db
@@ -3073,6 +3075,212 @@ ruleColumn rule =
 
         PublicRead ->
             Nothing
+
+
+-- ─── Secured operations (the ONLY ops that accept a `Secured`) ──────
+--
+-- Each `…As` op takes the authenticated `Principal` and a `Secured` store, and
+-- ANDs the policy's owner filter into every read/write. The filter binds the
+-- principal's subject as a SQL PARAMETER through `Sql.param` — never string
+-- interpolation — so no caller identity can inject SQL. A `Secured` is reachable
+-- only through `secured` (which re-validates the policy columns), and the
+-- unsecured operations do not accept a `Secured`, so a secured store is
+-- unreadable and unwritable without a principal and its policy (deny-by-default).
+
+
+-- | `policyFragment principal policy` — the `WHERE` fragment a policy compiles
+-- to for `principal`: every `OwnerColumn` rule becomes `owner = $subject` (the
+-- validated column through `Sql.column`, the subject BOUND through `Sql.param`),
+-- all `AND`-ed together. `PublicRead` and `Immutable` add no read filter, so a
+-- policy of only those matches every row (the read is unrestricted while the
+-- write path stays secured). The empty conjunction is `alwaysTrue`.
+policyFragment : Auth.Principal -> Policy a -> SqlFragment
+policyFragment principal policy =
+    case policy of
+        Policy rules ->
+            List.foldl
+                (\rule acc -> Sql.and acc (ruleFragment principal rule))
+                alwaysTrue
+                rules
+
+
+-- The fragment a single rule contributes for `principal`. An `OwnerColumn` binds
+-- the subject as a parameter against its validated column; `Immutable` and
+-- `PublicRead` add no read constraint (`alwaysTrue`).
+ruleFragment : Auth.Principal -> Rule -> SqlFragment
+ruleFragment principal rule =
+    case rule of
+        OwnerColumn col ->
+            Sql.eq (Sql.column col) (Sql.param (SqlString (Auth.subject principal)))
+
+        Immutable _ ->
+            alwaysTrue
+
+        PublicRead ->
+            alwaysTrue
+
+
+-- | `allAs principal db secured` — read every row the policy admits for
+-- `principal`, decoded through the store's codec. The policy's owner filter is
+-- the WHERE, so the database never returns an out-of-policy row.
+allAs : Auth.Principal -> Db -> Secured a -> Task Error (List a)
+allAs principal conn secured =
+    case secured of
+        Secured store policy ->
+            case store of
+                Store r ->
+                    Task.andThen
+                        (\rows -> decodeRows r.codec rows)
+                        (Db.findWhere conn r.table (policyFragment principal policy))
+
+
+-- | `getAs principal db secured keyValue` — read the single row whose primary
+-- key equals `keyValue` AND which the policy admits for `principal`, or
+-- `Nothing`. Keys on the store's validated `pk`; both the key and the subject
+-- bind as parameters. A store with no primary key fails closed.
+getAs : Auth.Principal -> Db -> Secured a -> SqlValue -> Task Error (Maybe a)
+getAs principal conn secured keyValue =
+    case secured of
+        Secured store policy ->
+            case store of
+                Store r ->
+                    case r.pk of
+                        Nothing ->
+                            Task.fail noPrimaryKeyError
+
+                        Just keyCol ->
+                            Task.andThen
+                                (\rows -> firstDecoded r.codec rows)
+                                (Db.findWhere conn
+                                    r.table
+                                    (Sql.and
+                                        (keyEquals keyCol keyValue)
+                                        (policyFragment principal policy)
+                                    )
+                                )
+
+
+-- | `insertAs principal db secured row` — insert `row`, forcing every
+-- `OwnerColumn` to `principal`'s subject so a caller can never write a row it
+-- would not be allowed to read back. The owner value binds as a parameter. The
+-- inserted-row count is returned.
+insertAs : Auth.Principal -> Db -> Secured a -> a -> Task Error Int
+insertAs principal conn secured row =
+    case secured of
+        Secured store policy ->
+            case store of
+                Store r ->
+                    case DbCodec.codecToBinds r.codec row of
+                        Err e ->
+                            Task.fail e
+
+                        Ok binds ->
+                            Db.insertFields conn
+                                r.table
+                                (insertFields r.specs
+                                    (forceOwnerColumns principal policy binds)
+                                )
+
+
+-- | `updateAs principal db secured row` — update the row whose primary key
+-- matches `row`, but only when the policy admits it for `principal`; the owner
+-- filter is AND-ed into the WHERE so a caller cannot update another principal's
+-- row. Columns marked `Serial` / `DefaultNow` are omitted from the SET. A store
+-- with no primary key, or a record missing its key column, fails closed.
+updateAs : Auth.Principal -> Db -> Secured a -> a -> Task Error Int
+updateAs principal conn secured row =
+    case secured of
+        Secured store policy ->
+            case store of
+                Store r ->
+                    case r.pk of
+                        Nothing ->
+                            Task.fail noPrimaryKeyError
+
+                        Just keyCol ->
+                            case DbCodec.codecToBinds r.codec row of
+                                Err e ->
+                                    Task.fail e
+
+                                Ok binds ->
+                                    case bindValue keyCol binds of
+                                        Nothing ->
+                                            Task.fail (missingKeyBindError keyCol)
+
+                                        Just keyValue ->
+                                            Db.updateWhere conn
+                                                r.table
+                                                (updateSetFields r.specs keyCol binds)
+                                                (Sql.and
+                                                    (keyEquals keyCol keyValue)
+                                                    (policyFragment principal policy)
+                                                )
+
+
+-- | `deleteAs principal db secured keyValue` — delete the row whose primary key
+-- equals `keyValue`, but only when the policy admits it for `principal`; the
+-- owner filter is AND-ed into the WHERE. Keys on the validated `pk`; both values
+-- bind as parameters. A store with no primary key fails closed.
+deleteAs : Auth.Principal -> Db -> Secured a -> SqlValue -> Task Error Int
+deleteAs principal conn secured keyValue =
+    case secured of
+        Secured store policy ->
+            case store of
+                Store r ->
+                    case r.pk of
+                        Nothing ->
+                            Task.fail noPrimaryKeyError
+
+                        Just keyCol ->
+                            Db.deleteWhere conn
+                                r.table
+                                (Sql.and
+                                    (keyEquals keyCol keyValue)
+                                    (policyFragment principal policy)
+                                )
+
+
+-- Force every `OwnerColumn` named by the policy to `principal`'s subject in a
+-- codec projection, so an insert cannot set an owner other than the caller. A
+-- rule that names no column (`PublicRead`) and `Immutable` leave the binds
+-- unchanged.
+forceOwnerColumns : Auth.Principal -> Policy a -> List ( String, SqlValue ) -> List ( String, SqlValue )
+forceOwnerColumns principal policy binds =
+    case policy of
+        Policy rules ->
+            List.foldl (\rule acc -> forceOwnerColumn principal rule acc) binds rules
+
+
+forceOwnerColumn : Auth.Principal -> Rule -> List ( String, SqlValue ) -> List ( String, SqlValue )
+forceOwnerColumn principal rule binds =
+    case rule of
+        OwnerColumn col ->
+            setBind col (SqlString (Auth.subject principal)) binds
+
+        Immutable _ ->
+            binds
+
+        PublicRead ->
+            binds
+
+
+-- Set `col`'s value to `value` in a codec projection: replace the existing pair
+-- when present, or append it when the column is absent from the projection.
+setBind : String -> SqlValue -> List ( String, SqlValue ) -> List ( String, SqlValue )
+setBind col value binds =
+    if List.any (\pair -> bindNameIs col pair) binds then
+        List.map
+            (\pair ->
+                if bindNameIs col pair then
+                    ( col, value )
+
+                else
+                    pair
+            )
+            binds
+
+    else
+        binds ++ [ ( col, value ) ]
 
 
 -- ─── Errors ────────────────────────────────────────────────────────

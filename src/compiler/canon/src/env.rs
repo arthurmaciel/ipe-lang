@@ -1619,6 +1619,7 @@ impl Env {
                     "register",
                     "login",
                     "setRole",
+                    "subject",
                 ],
             ),
             // Ipe.Http.Server.Stream — server-side streaming HTTP (fail-closed).

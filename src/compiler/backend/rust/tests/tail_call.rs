@@ -150,6 +150,7 @@ fn emit_count_main_rs(tco: bool) -> DResult<String> {
             uses_webview: false,
             uses_css: false,
             uses_auth: false,
+            uses_principal: false,
             uses_websocket: false,
             uses_email: false,
             uses_time: false,

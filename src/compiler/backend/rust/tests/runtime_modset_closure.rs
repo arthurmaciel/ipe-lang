@@ -143,6 +143,9 @@ fn module_for_mask(name: ipe_intern::Symbol, mask: u32) -> Module {
         uses_webview: f(5),
         uses_css: f(6),
         uses_auth: f(7),
+        // Fixed false: the `principal` module carries no runtime dependency
+        // edge, so it is outside this surface-flag closure matrix.
+        uses_principal: false,
         uses_websocket: f(8),
         uses_email: f(9),
         uses_time: false,

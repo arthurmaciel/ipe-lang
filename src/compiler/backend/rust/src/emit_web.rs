@@ -844,6 +844,7 @@ const fn ir_type_display_name(ty: &IrType) -> &'static str {
         IrType::ConnReadOnly => "ReadOnly",
         IrType::ConnReadWrite => "ReadWrite",
         IrType::Locale => "Locale",
+        IrType::Principal => "Principal",
     }
 }
 
@@ -979,6 +980,7 @@ mod schema_tag_tests {
                 uses_webview: false,
                 uses_css: false,
                 uses_auth: false,
+                uses_principal: false,
                 uses_websocket: false,
                 uses_email: false,
                 uses_time: false,
