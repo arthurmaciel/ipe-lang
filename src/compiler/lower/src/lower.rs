@@ -2062,6 +2062,10 @@ fn ir_type_mentions(ty: &IrType, leaf: &impl Fn(&IrType) -> bool) -> bool {
         | IrType::Connection
         | IrType::ConnReadOnly
         | IrType::ConnReadWrite
+        | IrType::Setting
+        | IrType::ShapeWeb
+        | IrType::ShapeWebView
+        | IrType::ShapeTerminal
         | IrType::Locale
         | IrType::Principal
         | IrType::CacheCfg
@@ -2537,6 +2541,10 @@ fn ir_contains_fun(ty: &IrType) -> bool {
         | IrType::Connection
         | IrType::ConnReadOnly
         | IrType::ConnReadWrite
+        | IrType::Setting
+        | IrType::ShapeWeb
+        | IrType::ShapeWebView
+        | IrType::ShapeTerminal
         // Cache config / stats + Csv document are plain data records — no
         // function.
         | IrType::CacheCfg
@@ -2682,6 +2690,10 @@ fn clone_class(env: CloneEnv<'_>, t: &IrType) -> CloneClass {
         | IrType::Connection
         | IrType::ConnReadOnly
         | IrType::ConnReadWrite
+        | IrType::Setting
+        | IrType::ShapeWeb
+        | IrType::ShapeWebView
+        | IrType::ShapeTerminal
         | IrType::ServerRequest
         | IrType::ServerResponse
         | IrType::ServerRoute
@@ -5643,6 +5655,10 @@ fn ir_type_mentions_generic(ty: &IrType, tv: Symbol) -> bool {
         | IrType::Connection
         | IrType::ConnReadOnly
         | IrType::ConnReadWrite
+        | IrType::Setting
+        | IrType::ShapeWeb
+        | IrType::ShapeWebView
+        | IrType::ShapeTerminal
         // Cache config / stats + Csv document are non-parametric — mention no
         // type var.
         | IrType::CacheCfg
@@ -5754,6 +5770,10 @@ fn ir_type_generic_in_decoder(ty: &IrType, tv: Symbol) -> bool {
         | IrType::Connection
         | IrType::ConnReadOnly
         | IrType::ConnReadWrite
+        | IrType::Setting
+        | IrType::ShapeWeb
+        | IrType::ShapeWebView
+        | IrType::ShapeTerminal
         | IrType::CacheCfg
         | IrType::WebSocketClientCfg
         | IrType::CacheStats
@@ -5857,6 +5877,10 @@ fn ir_type_generic_reaches_bare(ty: &IrType, tv: Symbol) -> bool {
         | IrType::Connection
         | IrType::ConnReadOnly
         | IrType::ConnReadWrite
+        | IrType::Setting
+        | IrType::ShapeWeb
+        | IrType::ShapeWebView
+        | IrType::ShapeTerminal
         | IrType::CacheCfg
         | IrType::WebSocketClientCfg
         | IrType::CacheStats
@@ -9441,7 +9465,7 @@ impl KernelUsage {
         self.decimal |= k.is_decimal();
         self.char_category |= k.is_char_category();
         self.crypto_core |= k.is_crypto_core();
-        self.secret |= k.is_secret();
+        self.secret |= k.needs_secret_feature();
         self.json |= k.is_json();
         self.crypto |= k.is_crypto();
         // The authed-route surface token-verifies through the `jwt` module even
@@ -10117,6 +10141,10 @@ const fn ir_type_label(ty: &IrType) -> &'static str {
         IrType::Connection => "Connection",
         IrType::ConnReadOnly => "ReadOnly",
         IrType::ConnReadWrite => "ReadWrite",
+        IrType::Setting => "Setting",
+        IrType::ShapeWeb => "Web",
+        IrType::ShapeWebView => "WebView",
+        IrType::ShapeTerminal => "Terminal",
         IrType::Locale => "Locale",
         IrType::StreamWriter => "StreamWriter",
         IrType::HttpRequest => "HttpRequest",
@@ -11916,6 +11944,10 @@ impl<'a> Lowerer<'a> {
             | IrType::Connection
             | IrType::ConnReadOnly
             | IrType::ConnReadWrite
+            | IrType::Setting
+            | IrType::ShapeWeb
+            | IrType::ShapeWebView
+            | IrType::ShapeTerminal
             | IrType::CacheCfg
             | IrType::WebSocketClientCfg
             | IrType::CacheStats
@@ -14970,6 +15002,13 @@ impl<'a> Lowerer<'a> {
                 // appear only as `Connection`'s erased argument).
                 "ReadOnly" => Ok(IrType::ConnReadOnly),
                 "ReadWrite" => Ok(IrType::ConnReadWrite),
+                // `Setting shape` is `Ipe.App`'s runtime-config carrier. The
+                // phantom shape marker is erased here — the argument is dropped,
+                // so every shape lowers to the one concrete
+                // `ipe_runtime::app_config::Setting`. The marker cons
+                // (`Web` / `WebView` / `Terminal`) never reach this map
+                // standalone; they exist only as this erased argument.
+                "Setting" if args.len() == 1 => Ok(IrType::Setting),
                 // `Locale` is `Ipe.Locale`'s opaque BCP-47 locale handle.
                 // Backed by `ipe_runtime::locale::Locale`.
                 "Locale" => Ok(IrType::Locale),
@@ -16096,6 +16135,13 @@ impl<'a> Lowerer<'a> {
                 // appear only as `Connection`'s erased argument).
                 "ReadOnly" => Ok(IrType::ConnReadOnly),
                 "ReadWrite" => Ok(IrType::ConnReadWrite),
+                // `Setting shape` is `Ipe.App`'s runtime-config carrier. The
+                // phantom shape marker is erased here — the argument is dropped,
+                // so every shape lowers to the one concrete
+                // `ipe_runtime::app_config::Setting`. The marker cons
+                // (`Web` / `WebView` / `Terminal`) never reach this map
+                // standalone; they exist only as this erased argument.
+                "Setting" if args.len() == 1 => Ok(IrType::Setting),
                 // `Locale` is `Ipe.Locale`'s opaque BCP-47 locale handle.
                 // Backed by `ipe_runtime::locale::Locale`.
                 "Locale" => Ok(IrType::Locale),
@@ -18324,6 +18370,26 @@ impl<'a> Lowerer<'a> {
                         return Ok(Intercepted::Done(Expr::Call {
                             callee: peek,
                             args: vec![lowered_cfg],
+                            pin: CallPin::None,
+                            on_form: OnFormKind::NotForm,
+                        }));
+                    }
+                }
+                // ── Web.appWith settings + cfg literal (L0107 exemption) ──
+                //
+                // `Web.appWith : List (Setting Web) -> cfg -> Task ()`. The
+                // second argument is the same cfg record as `Web.app` (its
+                // function-typed fields need the `lower_app_entry_cfg`
+                // exemption); the first is the settings list, lowered by the
+                // uniform path. A non-literal cfg is rejected with IPE-L0119 at
+                // the argument span — fail-closed, never an ICE.
+                Callee::Kernel(KernelFn::WebAppWith) if args.len() == 2 => {
+                    if let (Some(settings_arg), Some(cfg_arg)) = (args.first(), args.get(1)) {
+                        let lowered_settings = self.lower_expr(settings_arg)?;
+                        let lowered_cfg = self.lower_app_entry_cfg(&peek, cfg_arg)?;
+                        return Ok(Intercepted::Done(Expr::Call {
+                            callee: peek,
+                            args: vec![lowered_settings, lowered_cfg],
                             pin: CallPin::None,
                             on_form: OnFormKind::NotForm,
                         }));
@@ -21250,7 +21316,10 @@ impl<'a> Lowerer<'a> {
                 // `Error.withMessage : String -> Error -> Error`
                 | KernelFn::ErrorWithMessage
                 // `Error.withDetails : ErrorDetails -> Error -> Error`
-                | KernelFn::ErrorWithDetails,
+                | KernelFn::ErrorWithDetails
+                // `Web.appWith : List (Setting Web) -> WebAppCfg model msg
+                //   -> Task Error ()`
+                | KernelFn::WebAppWith,
             ) => Ok(2),
             Callee::Kernel(
                 KernelFn::StringReplace
@@ -21647,6 +21716,19 @@ impl<'a> Lowerer<'a> {
                 | KernelFn::WebViewApp
                 // `Terminal.appLines : TerminalCfg model msg -> Task Error ()`
                 | KernelFn::TerminalAppLines
+                // ── runtime-config front door — arity 1 ──────────────────
+                // `App.fromEnv : String -> Secret`
+                | KernelFn::AppFromEnv
+                // `Host.bind : HostMode -> Setting a`
+                | KernelFn::HostBind
+                // `Log.level : LogLevel -> Setting a`
+                | KernelFn::LogLevelSetting
+                // `Db.url : Secret -> Setting a`
+                | KernelFn::DbUrlSetting
+                // `Web.csrf : CsrfMode -> Setting Web`
+                | KernelFn::WebCsrf
+                // `Web.sessionTtl : Int -> Setting Web`
+                | KernelFn::WebSessionTtl
                 // ── arity 1 ────────────────────────────────────
                 | KernelFn::UiAspectRatio
                 | KernelFn::UiName
@@ -23276,6 +23358,14 @@ impl<'a> Lowerer<'a> {
                     ("Terminal", "appLines") => Ok(Callee::Kernel(KernelFn::TerminalAppLines)),
                     // ── Ipe.WebView app-entry kernel ──────────────────────
                     ("WebView", "app") => Ok(Callee::Kernel(KernelFn::WebViewApp)),
+                    // ── Ipe.Web settings-carrying entry + runtime-config ──
+                    ("Web", "appWith") => Ok(Callee::Kernel(KernelFn::WebAppWith)),
+                    ("Web", "csrf") => Ok(Callee::Kernel(KernelFn::WebCsrf)),
+                    ("Web", "sessionTtl") => Ok(Callee::Kernel(KernelFn::WebSessionTtl)),
+                    ("App", "fromEnv") => Ok(Callee::Kernel(KernelFn::AppFromEnv)),
+                    ("Host", "bind") => Ok(Callee::Kernel(KernelFn::HostBind)),
+                    ("Log", "level") => Ok(Callee::Kernel(KernelFn::LogLevelSetting)),
+                    ("Db", "url") => Ok(Callee::Kernel(KernelFn::DbUrlSetting)),
                     // ── Ipe.Auth / Ipe.Auth — auth helpers ──────────────
                     ("Auth", "hashPassword") => Ok(Callee::Kernel(KernelFn::AuthHashPassword)),
                     ("Auth", "hashPasswordCost") => {
@@ -25350,9 +25440,8 @@ fn collect_ir_generic_syms(ty: &IrType, out: &mut BTreeSet<Symbol>) {
         | IrType::Url
         // `Dsn` is non-parametric — no generic syms.
         | IrType::Dsn
-        | IrType::Connection
-        | IrType::ConnReadOnly
-        | IrType::ConnReadWrite
+        | IrType::Connection | IrType::ConnReadOnly | IrType::ConnReadWrite
+        | IrType::Setting | IrType::ShapeWeb | IrType::ShapeWebView | IrType::ShapeTerminal
         // Cache config / stats + Csv document are non-parametric — no generic
         // syms.
         | IrType::CacheCfg
@@ -27683,6 +27772,10 @@ mod tests {
             | ipe_ir::IrType::Connection
             | ipe_ir::IrType::ConnReadOnly
             | ipe_ir::IrType::ConnReadWrite
+            | ipe_ir::IrType::Setting
+            | ipe_ir::IrType::ShapeWeb
+            | ipe_ir::IrType::ShapeWebView
+            | ipe_ir::IrType::ShapeTerminal
             | ipe_ir::IrType::CacheCfg
             | ipe_ir::IrType::WebSocketClientCfg
             | ipe_ir::IrType::CacheStats

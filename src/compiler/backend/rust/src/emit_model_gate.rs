@@ -322,6 +322,14 @@ fn leaf_of_bounded(ctx: &EmitCtx, ty: &IrType, app: AppShape, fuel: u32) -> Mode
         | IrType::Connection
         | IrType::ConnReadOnly
         | IrType::ConnReadWrite
+        // A runtime-config `Setting` is a transient carrier (may hold a
+        // `Secret`), never serde — a Model field of this type is rejected by
+        // `admissible()`; these arms name it in the IPE-L0120. The phantom shape
+        // markers cannot appear in a Model field but stay listed for exhaustiveness.
+        | IrType::Setting
+        | IrType::ShapeWeb
+        | IrType::ShapeWebView
+        | IrType::ShapeTerminal
         // `AuthConfig`/`TokenSource` are transient authed-route descriptors,
         // never serde — a Model field of either is rejected by `admissible()`;
         // these arms name it in the IPE-L0120.

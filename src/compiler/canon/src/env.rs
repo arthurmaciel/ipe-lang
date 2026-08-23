@@ -108,6 +108,12 @@ pub const STDLIB_MODULE_QUALIFIERS: &[(&[&str], &str)] = &[
     // `Ipe.Tea.Terminal.Sub`, …). A user `import Ipe.Cmd` names no known stdlib
     // path and fails closed with the ordinary `UnknownModule` diagnostic.
     (&["Ipe", "Db"], "Db"),
+    // `Ipe.App` / `Ipe.Host` — the runtime-config front door kernel qualifiers.
+    // `App.fromEnv` seals an env var into a `Secret`; `Host.bind` builds a
+    // host-bind `Setting`. Kernel qualifiers (their members are kernels, not a
+    // compiled-source veneer), so they stay out of `COMPILED_STD_MODULES`.
+    (&["Ipe", "App"], "App"),
+    (&["Ipe", "Host"], "Host"),
     (&["Ipe", "Db", "Decode"], "Db.Decode"),
     (&["Ipe", "Db", "Sql"], "Sql"), // SqlFragment builder
     // `Ipe.Ui` is COMPILED-SOURCE (see `COMPILED_STD_MODULES`), not a kernel
@@ -887,8 +893,15 @@ impl Env {
                     "debugWith",
                     "warnWith",
                     "errorWith",
+                    // Runtime-config front door — `Log.level : LogLevel -> Setting a`.
+                    "level",
                 ],
             ),
+            // `Ipe.App` — runtime-config front door. `fromEnv` seals an env var
+            // into a `Secret` (the ONLY way to get a config secret).
+            ("App", &["fromEnv"]),
+            // `Ipe.Host` — the host-bind setting builder.
+            ("Host", &["bind"]),
             // `Ipe.Math` — `min` / `max` are polymorphic `a -> a -> a`
             // (Elm `Basics.min`/`max` semantics). Wired in the lowerer to the
             // runtime's generic compare. All other Math kernels have concrete
@@ -1361,6 +1374,8 @@ impl Env {
                     "withTransaction",
                     "migrate",
                     "defaultMigration",
+                    // Runtime-config front door — `Db.url : Secret -> Setting a`.
+                    "url",
                 ],
             ),
             // `Ipe.Db.Sql` — typed, parameterized WHERE-fragment builder.
@@ -1605,7 +1620,10 @@ impl Env {
                 ],
             ),
             // ── Ipe.Web app-entry kernels ────────────────────────────────────────
-            ("Web", &["app", "appRouted", "route"]),
+            (
+                "Web",
+                &["app", "appRouted", "appWith", "route", "csrf", "sessionTtl"],
+            ),
             // ── Ipe.Terminal app-entry kernels ───────────────────────────────────
             // `appScreen` (full screen, `onKey`) and `appLines` (line stream,
             // `onLine`) — one terminal TEA shape, two drive axes.

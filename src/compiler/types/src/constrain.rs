@@ -608,6 +608,26 @@ struct Builtins {
     /// `Connection`'s argument; never a standalone value. Lowered to
     /// `IrType::ConnReadWrite`.
     conn_read_write: Symbol,
+    // ── Ipe.App runtime-config Setting ──────────────────────────────────────
+    /// `"Setting"` — the runtime-config carrier constructor `Setting shape`
+    /// (`ipe_runtime::app_config::Setting`). Built only by the setting kernels
+    /// (`Host.bind` / `Log.level` / `Db.url` / `Web.csrf` / …). The phantom
+    /// `shape` marker keeps a `Web`-only setting from unifying into a
+    /// `Terminal` app's settings list; erased at emit. Lowered to
+    /// `IrType::Setting`.
+    setting: Symbol,
+    /// `"Web"` — the phantom shape marker pinning a setting to the web shape.
+    /// Appears only as `Setting`'s argument; never a standalone value. Lowered
+    /// to `IrType::ShapeWeb`.
+    shape_web: Symbol,
+    /// `"WebView"` — the phantom shape marker pinning a setting to the webview
+    /// shape. Appears only as `Setting`'s argument. Lowered to
+    /// `IrType::ShapeWebView`.
+    shape_webview: Symbol,
+    /// `"Terminal"` — the phantom shape marker pinning a setting to the terminal
+    /// shape. Appears only as `Setting`'s argument. Lowered to
+    /// `IrType::ShapeTerminal`.
+    shape_terminal: Symbol,
     // ── Ipe.Locale ─────────────────────────────────────────────────────────
     /// `"Locale"` — opaque BCP-47 locale handle (`ipe_runtime::locale::Locale`).
     /// The ONLY constructor is `Locale.fromTag : String -> Maybe Locale`;
@@ -862,6 +882,10 @@ impl Builtins {
             connection: interner.intern("Connection")?,
             conn_read_only: interner.intern("ReadOnly")?,
             conn_read_write: interner.intern("ReadWrite")?,
+            setting: interner.intern("Setting")?,
+            shape_web: interner.intern("Web")?,
+            shape_webview: interner.intern("WebView")?,
+            shape_terminal: interner.intern("Terminal")?,
             // ── Ipe.Locale ───────────────────────────────────────────────────────
             locale: interner.intern("Locale")?,
             // ── Ipe.PubSub.Topic ────────────────────────────────────────────────
@@ -4080,6 +4104,10 @@ impl<'a> Builder<'a> {
             BuiltinTag::Connection => self.builtins.connection,
             BuiltinTag::ConnReadOnly => self.builtins.conn_read_only,
             BuiltinTag::ConnReadWrite => self.builtins.conn_read_write,
+            BuiltinTag::Setting => self.builtins.setting,
+            BuiltinTag::ShapeWeb => self.builtins.shape_web,
+            BuiltinTag::ShapeWebView => self.builtins.shape_webview,
+            BuiltinTag::ShapeTerminal => self.builtins.shape_terminal,
             BuiltinTag::Locale => self.builtins.locale,
             BuiltinTag::HttpMethod => self.builtins.http_method,
             BuiltinTag::CryptoKey => self.builtins.crypto_key,
@@ -4674,6 +4702,21 @@ impl<'a> Builder<'a> {
             module: Vec::new(),
             name: self.builtins.connection,
             args: vec![mode],
+        };
+        // Runtime-config `Setting shape` carrier and its phantom shape markers.
+        // The marker (`Web` / `WebView` / `Terminal`, or a free var for a
+        // cross-cutting setting) is a real type at inference so a `Web`-only
+        // setting cannot unify into a `Terminal` app's settings list; erased at
+        // emit (one concrete `ipe_runtime::app_config::Setting` per position).
+        let shape_web = || Ty::Con {
+            module: Vec::new(),
+            name: self.builtins.shape_web,
+            args: Vec::new(),
+        };
+        let setting = |shape: Ty| Ty::Con {
+            module: Vec::new(),
+            name: self.builtins.setting,
+            args: vec![shape],
         };
         // `Locale` — opaque BCP-47 locale handle
         // (`ipe_runtime::locale::Locale`).  The ONLY constructor is
@@ -6128,6 +6171,32 @@ impl<'a> Builder<'a> {
                 );
                 fun(cfg_rec, task_unit())
             }
+            // `Web.appWith : List (Setting Web) -> { … } -> Task ()` — the
+            // additive settings-carrying web entry. Same cfg record as
+            // `K::WebApp`, preceded by a shape-pinned `List (Setting Web)`: a
+            // `Terminal`-only or cross-shape setting in that slot is an
+            // IPE-T0001 type error, never a silently-ignored setting.
+            K::WebAppWith => {
+                let view_ret = elem_t(var(1));
+                let init_ret = tuple2(var(0), cmd(var(1)));
+                let cfg_rec = Ty::Record(
+                    {
+                        let mut m = BTreeMap::new();
+                        m.insert(self.builtins.live_f_init, fun(web_req(), init_ret.clone()));
+                        m.insert(
+                            self.builtins.live_f_update,
+                            fun(var(1), fun(var(0), init_ret)),
+                        );
+                        m.insert(self.builtins.live_f_view, fun(var(0), view_ret));
+                        m.insert(self.builtins.live_f_subscriptions, fun(var(0), sub(var(1))));
+                        m.insert(self.builtins.live_f_routes, list(live_route(var(2))));
+                        m.insert(self.builtins.live_f_not_found, var(2));
+                        m
+                    },
+                    RowTail::Open(3),
+                );
+                fun(list(setting(shape_web())), fun(cfg_rec, task_unit()))
+            }
             // `Web.route : String -> builder -> WebRoute page`
             // with builder = var(1) DISTINCT from page = var(0).
             //
@@ -7334,6 +7403,31 @@ impl<'a> Builder<'a> {
             // so it stays off the `kernel_swaps_first_two` list.
             K::SecretUse => fun(secret(), fun(fun(string(), var(0)), var(0))),
             K::SecretRedacted => fun(secret(), string()),
+
+            // ── Ipe.App runtime-config front door ─────────────────────────
+            // `App.fromEnv : String -> Secret` — the sole env-secret seal; a
+            // hard-coded credential is a plain `String`, so it cannot reach a
+            // `Secret` slot (e.g. `Db.url`).
+            K::AppFromEnv => fun(string(), secret()),
+            // `Host.bind : HostMode -> Setting a` — cross-cutting; the shape var
+            // is free, so it unifies into any app's settings list. The
+            // `Ipe.App.HostMode` enum veneer projects to this raw kernel's `Int`
+            // host-mode tag (`0` loopback / `1` all interfaces / `2` env-driven).
+            K::HostBind => fun(int(), setting(var(0))),
+            // `Log.level : LogLevel -> Setting a` — cross-cutting; the veneer
+            // projects `LogLevel` to its `Int` severity tag.
+            K::LogLevelSetting => fun(int(), setting(var(0))),
+            // `Db.url : Secret -> Setting a` — cross-cutting; the URL is a
+            // `Secret`, so it only comes from `App.fromEnv` (a hard-coded
+            // `String` credential does not type-check here). This is the
+            // security-critical rejection the front door exists to enforce.
+            K::DbUrlSetting => fun(secret(), setting(var(0))),
+            // `Web.csrf : CsrfMode -> Setting Web` — the shape marker is PINNED
+            // to `Web`, so this setting rejects a non-web app's settings list;
+            // the veneer projects `CsrfMode` to its `Int` tag.
+            K::WebCsrf => fun(int(), setting(shape_web())),
+            // `Web.sessionTtl : Int -> Setting Web` — seconds; web-pinned.
+            K::WebSessionTtl => fun(int(), setting(shape_web())),
 
             // ── Ipe.Http.Server.Stream (4 kernels) ────────────────────────
             // stream : String -> (StreamWriter -> Task Error ()) -> Task Error Response
@@ -9822,6 +9916,14 @@ mod registry_phase_c_tests {
             K::TaskMap4,
             K::TaskMap5,
             K::TaskAttempt,
+            // ── Ipe.App runtime-config front door (7, Ipê-new) ──────────────
+            K::WebAppWith,
+            K::AppFromEnv,
+            K::HostBind,
+            K::LogLevelSetting,
+            K::DbUrlSetting,
+            K::WebCsrf,
+            K::WebSessionTtl,
         ]
     };
 

@@ -168,6 +168,10 @@ const TAG_CONN_READWRITE: u8 = 68;
 const TAG_PRINCIPAL: u8 = 69;
 const TAG_AUTH_CONFIG: u8 = 70;
 const TAG_TOKEN_SOURCE: u8 = 71;
+const TAG_SETTING: u8 = 72;
+const TAG_SHAPE_WEB: u8 = 73;
+const TAG_SHAPE_WEBVIEW: u8 = 74;
+const TAG_SHAPE_TERMINAL: u8 = 75;
 /// Fuel exhaustion marker — distinct from every variant tag.
 const TAG_FUEL_EXHAUSTED: u8 = 0xFF;
 
@@ -237,6 +241,12 @@ fn hash_ty(ctx: &EmitCtx, ty: &IrType, h: &mut Sha256, fuel: u32) -> DResult<()>
         IrType::Connection => h.update([TAG_CONNECTION]),
         IrType::ConnReadOnly => h.update([TAG_CONN_READONLY]),
         IrType::ConnReadWrite => h.update([TAG_CONN_READWRITE]),
+        // Runtime-config `Setting` + phantom shape markers — non-serde opaque
+        // carrier; present for exhaustiveness.
+        IrType::Setting => h.update([TAG_SETTING]),
+        IrType::ShapeWeb => h.update([TAG_SHAPE_WEB]),
+        IrType::ShapeWebView => h.update([TAG_SHAPE_WEBVIEW]),
+        IrType::ShapeTerminal => h.update([TAG_SHAPE_TERMINAL]),
         // `Locale` — non-serde opaque handle; present for exhaustiveness.
         IrType::Locale => h.update([TAG_LOCALE]),
         // `Principal` — non-serde opaque identity; present for exhaustiveness.

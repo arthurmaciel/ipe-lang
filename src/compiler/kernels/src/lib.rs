@@ -252,6 +252,23 @@ pub enum BuiltinTag {
     /// connection. Appears only as `Connection`'s parameter; never a standalone
     /// runtime value (phantom, erased at emit).
     ConnReadWrite,
+    /// `Setting` — the runtime-config carrier constructor `Setting shape`, applied
+    /// to its phantom shape marker ([`Self::ShapeWeb`] / [`Self::ShapeWebView`] /
+    /// [`Self::ShapeTerminal`], or a free type variable for a cross-cutting
+    /// `Setting any`). The `shape` distinguishes a `Web`-only setting from a
+    /// `Terminal`-only one at inference and is erased at emit (one concrete
+    /// `ipe_runtime::app_config::Setting` per position).
+    Setting,
+    /// `Web` — the nullary phantom shape marker for the web shape. Appears only as
+    /// [`Self::Setting`]'s argument; never a standalone runtime value (phantom,
+    /// erased at emit).
+    ShapeWeb,
+    /// `WebView` — the nullary phantom shape marker for the webview shape. Appears
+    /// only as [`Self::Setting`]'s argument; never a standalone runtime value.
+    ShapeWebView,
+    /// `Terminal` — the nullary phantom shape marker for the terminal shape.
+    /// Appears only as [`Self::Setting`]'s argument; never a standalone value.
+    ShapeTerminal,
     /// `Locale` — the nullary opaque BCP-47 locale handle.
     Locale,
     /// `HttpMethod` — the nullary closed HTTP-method ADT.
@@ -1690,6 +1707,28 @@ pub enum StdlibKernel {
     TerminalAppScreen,
     // ── Ipe.WebView app-entry kernel ─────────────────────────────────────
     WebViewApp,
+    // ── Ipe.Web app-entry with runtime settings ──────────────────────────
+    /// `Web.appWith : List (Setting Web) -> { … } -> app` — the additive
+    /// settings-carrying web entry. Same cfg record as `Web.app`, preceded by a
+    /// shape-checked `List (Setting Web)` (a `Terminal`-only or cross-shape
+    /// setting is a type error in this slot).
+    WebAppWith,
+    // ── Ipe.App runtime-config front door ────────────────────────────────
+    /// `App.fromEnv : String -> Secret` — the ONLY way to obtain a config
+    /// `Secret` from an environment variable. A hard-coded credential is a
+    /// plain `String`, so it does not type-check where a `Secret` is required.
+    AppFromEnv,
+    /// `Host.bind : HostMode -> Setting a` — cross-cutting host-bind setting.
+    HostBind,
+    /// `Log.level : LogLevel -> Setting a` — cross-cutting log-level setting.
+    LogLevelSetting,
+    /// `Db.url : Secret -> Setting a` — cross-cutting database-URL setting; the
+    /// URL is a `Secret`, so it can only come from `App.fromEnv`.
+    DbUrlSetting,
+    /// `Web.csrf : CsrfMode -> Setting Web` — web-only CSRF-policy setting.
+    WebCsrf,
+    /// `Web.sessionTtl : Int -> Setting Web` — web-only session-TTL setting (seconds).
+    WebSessionTtl,
     // ── event-attribute builders ─────────────────────────────────────────
     UiOnClick,
     UiOnFocus,
@@ -3428,6 +3467,14 @@ impl StdlibKernel {
             Self::TerminalAppScreen => d("Terminal", "appScreen", 1, Terminal, "tui_app_ui"),
             // ── Ipe.WebView app-entry kernel ─────────────────────────────
             Self::WebViewApp => d("WebView", "app", 1, WebView, "webview_app"),
+            // ── Ipe.Web settings-carrying app entry + runtime-config kernels ──
+            Self::WebAppWith => d("Web", "appWith", 2, Web, "web_app_with"),
+            Self::AppFromEnv => d("App", "fromEnv", 1, Pure, "ipe_app_from_env"),
+            Self::HostBind => d("Host", "bind", 1, Pure, "ipe_setting_host_bind"),
+            Self::LogLevelSetting => d("Log", "level", 1, Pure, "ipe_setting_log_level"),
+            Self::DbUrlSetting => d("Db", "url", 1, Pure, "ipe_setting_db_url"),
+            Self::WebCsrf => d("Web", "csrf", 1, Pure, "ipe_setting_web_csrf"),
+            Self::WebSessionTtl => d("Web", "sessionTtl", 1, Pure, "ipe_setting_web_session_ttl"),
             // ── event-attribute builders ─────────────────────────────────
             Self::UiOnClick => d("Ui", "onClick", 1, Ui, "ui_on_click_"),
             Self::UiOnFocus => d("Ui", "onFocus", 1, Ui, "ui_on_focus_"),
@@ -4769,6 +4816,14 @@ impl StdlibKernel {
         Self::TerminalAppScreen,
         // WebView
         Self::WebViewApp,
+        // Ipe.Web settings-carrying app entry + runtime-config front door
+        Self::WebAppWith,
+        Self::AppFromEnv,
+        Self::HostBind,
+        Self::LogLevelSetting,
+        Self::DbUrlSetting,
+        Self::WebCsrf,
+        Self::WebSessionTtl,
         // event-attribute builders
         Self::UiOnClick,
         Self::UiOnFocus,
@@ -9524,6 +9579,15 @@ impl StdlibKernel {
             | Self::SecretReveal
             | Self::SecretUse
             | Self::SecretRedacted
+            // Runtime-config front door — building a setting/env-secret value
+            // discloses no capability; the capability is the app run itself.
+            | Self::WebAppWith
+            | Self::AppFromEnv
+            | Self::HostBind
+            | Self::LogLevelSetting
+            | Self::DbUrlSetting
+            | Self::WebCsrf
+            | Self::WebSessionTtl
             // `Ipe.Db.Dsn.*` — the parse surface is PURE: parsing/rendering a
             // descriptor performs no I/O and discloses no capability. The
             // network/database disclosure belongs to a future `open` that
@@ -10507,6 +10571,16 @@ impl StdlibKernel {
         )
     }
 
+    /// `true` when this kernel's use requires the `secret` Cargo feature even
+    /// though it is NOT a `Ipe.Secret`-module kernel: `App.fromEnv` mints a
+    /// `Secret`, and `Db.url` carries one into a `Setting` (the
+    /// `app_config::Setting::DbUrl` variant is `secret`-gated). Distinct from
+    /// [`Self::is_secret`], which tracks `secret.rs`-module residency.
+    #[must_use]
+    pub const fn needs_secret_feature(self) -> bool {
+        self.is_secret() || matches!(self, Self::AppFromEnv | Self::DbUrlSetting)
+    }
+
     /// `true` when this variant belongs to the `Ipe.Jwt` kernel family
     /// (`Jwt.encodeHs256` / `decodeHs256` / `encodeRs256` / `decodeRs256` and the
     /// builder API — `claims` / `hs256` / `rs256` / `subject` / `issuer` /
@@ -11025,6 +11099,7 @@ impl StdlibKernel {
             self,
             Self::WebApp
                 | Self::WebAppRouted
+                | Self::WebAppWith
                 | Self::WebRoute
                 | Self::WebRenderStatic
                 // The Task-shaped `PubSub.publish` / `publishNoEcho` are not
@@ -11825,15 +11900,20 @@ mod tests {
     #[test]
     fn log_predicate_tracks_log_qualifier() {
         for k in StdlibKernel::ALL {
-            let is_log_qualifier = k.decl().qualifier == "Log";
+            // `Log.level` shares the `Log` qualifier but emits its symbol into
+            // `app_config` (a runtime-config setting builder), NOT `log.rs`, so
+            // it does not pull `chrono`/`log.rs` — the sole carve-out, mirroring
+            // the `web_predicate` PubSub carve-out.
+            let is_log_module_kernel =
+                k.decl().qualifier == "Log" && !matches!(k, StdlibKernel::LogLevelSetting);
             assert_eq!(
                 k.is_log(),
-                is_log_qualifier,
-                "{k:?}: is_log()={} but qualifier==\"Log\" is {} — \
+                is_log_module_kernel,
+                "{k:?}: is_log()={} but log-module residency is {} — \
                  a Log-using program would drop the `log`/`chrono` surface it needs \
                  or a non-Log program (e.g. one calling Debug.log) would pull it",
                 k.is_log(),
-                is_log_qualifier,
+                is_log_module_kernel,
             );
         }
     }
