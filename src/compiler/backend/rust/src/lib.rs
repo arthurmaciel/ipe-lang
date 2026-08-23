@@ -2953,12 +2953,9 @@ fn collect_record_shapes(
         | IrType::CryptoKey
         | IrType::CryptoMac
         | IrType::EmailAddress
-        // `Locale` is an opaque BCP-47 handle — no record shape.
-        | IrType::Locale
-        // `Principal` is an opaque identity newtype — no record shape.
-        | IrType::Principal => {}
-        // `WebRoute page` is page-parametric — descend in case the page type
-        // carries a nested record shape.
+        // `Locale` / `Principal` are opaque handles — no record shape.
+        | IrType::Locale | IrType::Principal => {}
+        // `WebRoute page` descends in case the page type carries a record shape.
         IrType::WebRoute(page) => collect_record_shapes(interner, page, shapes)?,
         // `Ui { ctor, msg }` is a msg-parametric wrapper — descend into
         // `msg` in case it carries a nested record (e.g. `Element { x : Int }`).
@@ -3982,6 +3979,7 @@ mod record_struct_namespace_tests {
                 uses_webview: false,
                 uses_css: false,
                 uses_auth: false,
+                uses_principal: false,
                 uses_websocket: false,
                 uses_email: false,
                 uses_time: false,
@@ -4083,6 +4081,7 @@ mod record_struct_namespace_tests {
                 uses_webview: false,
                 uses_css: false,
                 uses_auth: false,
+                uses_principal: false,
                 uses_websocket: false,
                 uses_email: false,
                 uses_time: false,
@@ -4164,6 +4163,7 @@ mod record_struct_namespace_tests {
                 uses_webview: false,
                 uses_css: false,
                 uses_auth: false,
+                uses_principal: false,
                 uses_websocket: false,
                 uses_email: false,
                 uses_time: false,

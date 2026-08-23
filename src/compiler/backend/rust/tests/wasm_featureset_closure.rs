@@ -77,6 +77,7 @@ fn wasm_module_for_mask(name: ipe_intern::Symbol, mask: u32) -> Module {
         uses_webview: false,
         uses_css: f(6),
         uses_auth: false,
+        uses_principal: false,
         uses_websocket: f(8),
         uses_email: false,
         uses_time: f(10),
