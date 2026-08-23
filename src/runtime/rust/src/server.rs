@@ -319,11 +319,7 @@ fn read_token(source: &TokenSource, req: &ServerRequest) -> Option<String> {
 /// A `401 Unauthorized` response. The body carries no verification detail (a
 /// specific reason would be an oracle to an attacker probing tokens).
 fn unauthorized() -> ServerResponse {
-    plain_resp(
-        401,
-        "unauthorized",
-        &[("WWW-Authenticate", "Bearer")],
-    )
+    plain_resp(401, "unauthorized", &[("WWW-Authenticate", "Bearer")])
 }
 
 #[cfg(feature = "jwt")]
