@@ -618,6 +618,12 @@ struct Builtins {
     /// result of the accessor-typed column-spec builder kernel schemes
     /// (`StorePrimaryKey` / `StoreSerial` / … / `StoreDefaultInt`).
     store_con: Symbol,
+    /// `"Policy"` — the `Ipe.Db.Store.Policy row` row-security algebra ADT. The
+    /// `row` argument is phantom (the runtime `Policy` carries only rule data),
+    /// but it ties the accessor's record type to the store's row type in the
+    /// `StoreOwnerColumn` / `StoreImmutable` kernel schemes, so `secured`
+    /// (`Policy row -> Store row -> …`) pins the policy's columns to the store.
+    policy_con: Symbol,
 }
 
 impl Builtins {
@@ -842,6 +848,7 @@ impl Builtins {
             topic_con: interner.intern("Topic")?,
             cond_con: interner.intern("Cond")?,
             store_con: interner.intern("Store")?,
+            policy_con: interner.intern("Policy")?,
             codec_con: interner.intern("Codec")?,
         })
     }
@@ -4359,6 +4366,17 @@ impl<'a> Builder<'a> {
             name: self.builtins.store_con,
             args: vec![row],
         };
+        // `Policy row` — the row-security policy algebra ADT (`Ipe.Db.Store`),
+        // the result of the accessor-typed policy builders. The `row` argument
+        // is phantom over the rule data but shares the accessor's record type,
+        // so `secured` (`Policy row -> Store row -> …`) pins the policy's
+        // columns to the store's row, making a cross-row policy column a type
+        // error rather than a silent wrong column.
+        let policy = |row: Ty| Ty::Con {
+            module: Vec::new(),
+            name: self.builtins.policy_con,
+            args: vec![row],
+        };
         // `Codec inner` — the `Ipe.Codec` codec ADT, the first parameter of
         // `Store.eqBy`. Empty module unifies with the user's `Ipe.Codec.Codec`.
         let codec = |inner: Ty| Ty::Con {
@@ -5754,6 +5772,16 @@ impl<'a> Builder<'a> {
                 fun(var(0), int()),
                 fun(int(), fun(store(var(0)), store(var(0)))),
             ),
+
+            // ── Db.Store row-security policy builders (accessor-typed) ──
+            // `ownerColumn / immutable : (row -> t) -> Policy row`
+            // The getter-arrow scheme pins the accessor's source type to the
+            // policy's phantom `row`, which `secured` later unifies with the
+            // store's row. `t` (var 1) is the field type — unconstrained by the
+            // result (any field may name an owner or immutable column).
+            K::StoreOwnerColumn | K::StoreImmutable => {
+                fun(fun(var(0), var(1)), policy(var(0)))
+            }
 
             // ── Db.Decode ──
             K::DbDecString => fun(string(), dec(string())),
@@ -9588,6 +9616,9 @@ mod registry_phase_c_tests {
             K::StoreTouchOnUpdate,
             K::StoreDefaultText,
             K::StoreDefaultInt,
+            // Row-security policy builders (Ipê-new).
+            K::StoreOwnerColumn,
+            K::StoreImmutable,
             // `Db.Decode.money` and `Db.Decode.bytes` — Ipê-NEW kernels (the
             // ancestor has no DbDec money/bytes routes), so they close genuine
             // holes rather than relocating legacy `kernel_ty` schemes. Their

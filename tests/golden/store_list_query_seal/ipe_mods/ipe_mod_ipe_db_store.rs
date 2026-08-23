@@ -181,6 +181,61 @@ impl<T1: IpeStringify + std::fmt::Debug + 'static> IpeStringify for IpeDbStoreQu
         }
     }
 }
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) enum IpeDbStoreRule {
+    OwnerColumn(String),
+    PublicRead,
+    Immutable(String),
+}
+impl IpeStringify for IpeDbStoreRule {
+    fn ipe_show(&self) -> String {
+        match self {
+            IpeDbStoreRule::OwnerColumn(p0) => format!(
+                "OwnerColumn {}",
+                (&ipe_runtime::stringify::Wrap(p0)).dispatch()
+            ),
+            IpeDbStoreRule::PublicRead => "PublicRead".to_string(),
+            IpeDbStoreRule::Immutable(p0) => format!(
+                "Immutable {}",
+                (&ipe_runtime::stringify::Wrap(p0)).dispatch()
+            ),
+        }
+    }
+}
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) enum IpeDbStorePolicy {
+    Policy(Vec<IpeDbStoreRule>),
+}
+impl IpeStringify for IpeDbStorePolicy {
+    fn ipe_show(&self) -> String {
+        match self {
+            IpeDbStorePolicy::Policy(p0) => {
+                format!("Policy {}", (&ipe_runtime::stringify::Wrap(p0)).dispatch())
+            }
+        }
+    }
+}
+pub(crate) enum IpeDbStoreSecured<T1: 'static> {
+    Secured(IpeDbStoreStore<T1>, IpeDbStorePolicy),
+}
+impl<T1: Clone + 'static> Clone for IpeDbStoreSecured<T1> {
+    fn clone(&self) -> Self {
+        match self {
+            IpeDbStoreSecured::Secured(p0, p1) => IpeDbStoreSecured::Secured(p0.clone(), p1.clone()),
+        }
+    }
+}
+impl<T1: IpeStringify + std::fmt::Debug + 'static> IpeStringify for IpeDbStoreSecured<T1> {
+    fn ipe_show(&self) -> String {
+        match self {
+            IpeDbStoreSecured::Secured(_, p1) => format!(
+                "Secured {} {}",
+                "<fn>",
+                (&ipe_runtime::stringify::Wrap(p1)).dispatch()
+            ),
+        }
+    }
+}
 pub(crate) fn user_ipe_db_store_valid_sql_ident(name: String) -> bool {
     let _ipe_recursion_guard = crate::recursion_guard();
     (basics_not(string_is_empty(name.clone()))

@@ -1,0 +1,110 @@
+module Main exposing (main)
+
+-- SEAL smoke for the row-security Policy algebra + `secured` constructor
+-- (DB Pillar D, slice 1). Two stores exercise both the happy path and the
+-- fail-closed re-validation:
+--
+--   * `goodStore` is a `Codec.auto`-derived store over `Doc`, so its columns are
+--     `author` / `created_at` / `body` (the accessor `.createdAt` snake_cases to
+--     `created_at`, matching `Codec.auto`). The policy
+--     `ownerColumn .author |> andPolicy (immutable .createdAt)` names only real
+--     columns, so `secured` returns `Ok` → prints `good:ok`.
+--   * `thinStore` is built from a hand-assembled codec whose SRecord shape names
+--     only `body`, so `author` is NOT one of its columns even though the record
+--     has an `author` field. `secured (ownerColumn .author) thinStore`
+--     re-validates the policy column against the store's columns and returns a
+--     typed `Err` → prints `thin:err` (deny-by-default: a policy over a
+--     non-existent column is never a silent no-op).
+--
+-- Expected output:
+--   good:ok
+--   thin:err
+
+
+import Ipe.Codec as Codec exposing (Codec(..), Shape(..), ColType(..))
+import Ipe.Db.Store as Store exposing (Store)
+import Ipe.Error as Error exposing (Error)
+import Ipe.Io as Io
+import Ipe.Json.Decode as Decode
+import Ipe.Json.Encode as Encode
+import Ipe.Result as Result exposing (Result(..))
+import Ipe.String as String
+import Ipe.Task as Task
+
+
+type alias Doc =
+    { author : String
+    , createdAt : String
+    , body : String
+    }
+
+
+blankDoc : Doc
+blankDoc =
+    { author = "", createdAt = "", body = "" }
+
+
+-- A `Codec.auto`-derived codec: its columns are `author` / `created_at` / `body`.
+docCodec : Codec Doc
+docCodec =
+    Codec.auto blankDoc
+
+
+-- A hand-assembled codec whose shape names ONLY `body`, so a store built from it
+-- has no `author` column even though the record type has an `author` field.
+thinCodec : Codec Doc
+thinCodec =
+    Codec
+        { enc = \d -> Encode.object [ ( "body", Encode.string d.body ) ]
+        , mkDec =
+            \_ ->
+                Decode.map (\b -> { author = "", createdAt = "", body = b })
+                    (Decode.field "body" Decode.string)
+        , shp = SRecord [ ( "body", CText ) ]
+        }
+
+
+-- The conjoined policy: an owner-column rule over `.author` AND an
+-- immutable-column rule over `.createdAt`.
+docPolicy : Store.Policy Doc
+docPolicy =
+    Store.ownerColumn .author
+        |> Store.andPolicy (Store.immutable .createdAt)
+
+
+main : Task Error ()
+main =
+    Io.println (String.join "\n" [ goodLine, thinLine ])
+
+
+-- `secured` over a store whose columns include every policy column → `Ok`.
+goodLine : String
+goodLine =
+    case Store.fromCodec "docs" docCodec of
+        Err _ ->
+            "good:build-err"
+
+        Ok store ->
+            case Store.secured docPolicy store of
+                Ok _ ->
+                    "good:ok"
+
+                Err _ ->
+                    "good:err"
+
+
+-- `secured (ownerColumn .author)` over a store whose columns lack `author` →
+-- fail-closed typed `Err` (deny-by-default re-validation).
+thinLine : String
+thinLine =
+    case Store.fromCodec "docs2" thinCodec of
+        Err _ ->
+            "thin:build-err"
+
+        Ok store ->
+            case Store.secured (Store.ownerColumn .author) store of
+                Ok _ ->
+                    "thin:ok"
+
+                Err _ ->
+                    "thin:err"
