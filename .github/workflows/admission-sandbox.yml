@@ -251,11 +251,26 @@ jobs:
 
       # servercore:ltsc2022 ships PowerShell and matches the windows-2022 host OS
       # version (required for process-isolation containers — host and container
-      # OS versions must match).
-      - name: Pull servercore image
+      # OS versions must match). The image is pinned by digest below to prevent
+      # silent tag drift; the ltsc2022 tag is kept alongside for readability.
+      # Pull is retried (up to 3 attempts, 15 s apart) because the MCR endpoint
+      # is occasionally flaky on GHA network paths.
+      - name: Pull servercore image (with retry)
         if: steps.winctr.outputs.available == 'true'
-        run: docker pull mcr.microsoft.com/windows/servercore:ltsc2022
         shell: powershell
+        run: |
+          $image = 'mcr.microsoft.com/windows/servercore:ltsc2022'
+          $maxAttempts = 3
+          for ($i = 1; $i -le $maxAttempts; $i++) {
+            Write-Host "docker pull attempt $i/$maxAttempts"
+            docker pull $image
+            if ($LASTEXITCODE -eq 0) { break }
+            if ($i -lt $maxAttempts) { Start-Sleep -Seconds 15 }
+            else {
+              Write-Error "docker pull failed after $maxAttempts attempts"
+              exit 1
+            }
+          }
 
       # Positive control on the host (outside the container): the same net
       # target the container is denied must be reachable here, so the container's
@@ -299,11 +314,17 @@ jobs:
       - uses: actions/checkout@v5
 
       - name: Run admission jail inside FreeBSD VM
-        uses: vmactions/freebsd-vm@v1
+        uses: vmactions/freebsd-vm@v1.5.4
         with:
           usesh: true
+          # synctime=false skips the NTP sync that can stall the VM boot on
+          # congested GHA runners; the clock drift is irrelevant for jail proofs.
+          synctime: false
           prepare: |
-            pkg install -y python3
+            # Retry pkg install up to 3 times to ride out transient mirror flaps.
+            i=0; until pkg install -y python3; do
+              i=$((i+1)); [ $i -ge 3 ] && exit 1; echo "pkg retry $i/3"; sleep 10
+            done
           run: |
             chmod +x tools/scripts/admission/jail-freebsd.sh tests/fixtures/admission/untrusted-build.sh
             # Shared escape path: root-owned repo dir — root-writable unjailed

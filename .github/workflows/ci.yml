@@ -1020,11 +1020,17 @@ jobs:
     steps:
       - uses: actions/checkout@v7
       - name: build_jail_freebsd E2E through the real FreeBSD build jail
-        uses: vmactions/freebsd-vm@v1
+        uses: vmactions/freebsd-vm@v1.5.4
         with:
           usesh: true
+          # synctime=false skips the NTP sync that can stall the VM boot on
+          # congested GHA runners; clock drift is irrelevant for build-jail proofs.
+          synctime: false
           prepare: |
-            pkg install -y rust python3
+            # Retry pkg install up to 3 times to ride out transient mirror flaps.
+            i=0; until pkg install -y rust python3; do
+              i=$((i+1)); [ $i -ge 3 ] && exit 1; echo "pkg retry $i/3"; sleep 10
+            done
           run: |
             # The vmactions SSH environment does not include /sbin or /usr/sbin in
             # PATH, so FreeBSD system binaries (mount, jail, rctl, mount_nullfs, …)
