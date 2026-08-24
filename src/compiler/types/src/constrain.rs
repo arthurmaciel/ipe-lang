@@ -7434,10 +7434,16 @@ impl<'a> Builder<'a> {
             K::AuthSetRole => fun(db(), fun(int(), fun(string(), task_unit()))),
             // subject : Principal -> String — read the verified subject claim.
             K::AuthSubject => fun(principal_ty(), string()),
-            // revokeUser / revokeSession / restoreUser : Principal -> String -> Task Error ()
-            K::AuthRevocationRevokeUser
-            | K::AuthRevocationRevokeSession
-            | K::AuthRevocationRestoreUser => fun(principal_ty(), fun(string(), task_unit())),
+            // revokeUser / restoreUser : Principal -> String -> Task Error ()
+            K::AuthRevocationRevokeUser | K::AuthRevocationRestoreUser => {
+                fun(principal_ty(), fun(string(), task_unit()))
+            }
+            // revokeSession : Principal -> String -> Int -> Task Error ()
+            // The Int is the token's cap (absolute lifetime cap), required so
+            // the bounded store can reclaim the entry once it is past expiry.
+            K::AuthRevocationRevokeSession => {
+                fun(principal_ty(), fun(string(), fun(int(), task_unit())))
+            }
             // isRevoked : String -> Task Error Bool
             K::AuthRevocationIsRevoked => fun(string(), task(bool_ty())),
 
