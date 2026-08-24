@@ -1,0 +1,6 @@
+module Package exposing (package)
+
+
+package =
+    Package.named "playground-build"
+        |> Package.version "0.1.0"

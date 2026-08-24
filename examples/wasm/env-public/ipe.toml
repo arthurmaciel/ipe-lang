@@ -1,7 +1,0 @@
-name = "wasm-env-public"
-version = "0.1.0"
-entry = "src/Main.ipe"
-
-[wasm]
-mode      = "spa"
-publicEnv = ["API_BASE_URL"]

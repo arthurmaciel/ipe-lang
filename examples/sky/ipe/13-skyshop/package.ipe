@@ -1,0 +1,16 @@
+module Package exposing (package)
+
+
+package =
+    Package.named "skyshop"
+        |> Package.version "0.1.0"
+        |> Package.rustDependencies
+            [ Package.rustDep "async-stripe" "=1.0.0-rc.6" |> Rust.features [ "default-tls" ]
+            , Package.rustDep "async-stripe-checkout" "=1.0.0-rc.6" |> Rust.features [ "checkout_session" ]
+            , Package.rustDep "async-stripe-client-core" "=1.0.0-rc.6"
+            , Package.rustDep "async-stripe-core" "=1.0.0-rc.6" |> Rust.features [ "customer" ]
+            , Package.rustDep "async-stripe-shared" "=1.0.0-rc.6"
+            , Package.rustDep "async-stripe-types" "=1.0.0-rc.6"
+            , Package.rustDep "firestore" "=0.49.0"
+            , Package.rustDep "rs-firebase-admin-sdk" "4.3"
+            ]

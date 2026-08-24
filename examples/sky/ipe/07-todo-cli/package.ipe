@@ -1,0 +1,7 @@
+module Package exposing (package)
+
+
+package =
+    Package.named "07-todo-cli"
+        |> Package.version "0.1.0"
+        |> Package.accepts [ Capability.unsafe ]

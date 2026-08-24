@@ -1,7 +1,0 @@
-name = "wasm-spa"
-version = "0.1.0"
-entry = "src/Main.ipe"
-
-[wasm]
-mode  = "spa"
-mount = "#app"
