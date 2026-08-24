@@ -66,10 +66,10 @@ pub fn parse_package_manifest(manifest_path: &Path) -> Result<ProjectManifest, C
     let root = manifest_path
         .parent()
         .map_or_else(|| PathBuf::from("."), Path::to_path_buf);
-    let text = std::fs::read_to_string(manifest_path).map_err(|e| CliError::Io {
-        path: manifest_path.to_path_buf(),
-        source: e,
-    })?;
+    let text = crate::io_bounded::read_to_string_capped(
+        manifest_path,
+        crate::io_bounded::MANIFEST_READ_CAP,
+    )?;
     read_package_manifest(&text, &root, manifest_path)
 }
 
@@ -143,7 +143,13 @@ impl ManifestFields {
         let name = self.name.ok_or(CliError::Usage(
             "package.ipe: missing a `Package.named \"…\"` stage — a package must be named",
         ))?;
-        let src_root = root.join(self.src_rel.as_deref().unwrap_or("src"));
+        let src_rel_raw = self.src_rel.as_deref().unwrap_or("src");
+        let src_root_contained = crate::contained_path::ContainedRelPath::parse(root, src_rel_raw)
+            .map_err(|reason| CliError::PathEscape {
+                raw: src_rel_raw.to_owned(),
+                reason,
+            })?;
+        let src_root = src_root_contained.resolved().to_path_buf();
         if !src_root.is_dir() {
             return Err(CliError::Usage(
                 "package.ipe: the source root directory does not exist",

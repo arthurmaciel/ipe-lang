@@ -133,10 +133,15 @@ impl Lockfile {
     /// if its content is malformed (a bad version, a missing field, or a non-SHA rev).
     pub fn read(project_root: &Path) -> Result<Self, CliError> {
         let path = Self::path(project_root);
-        let text = match std::fs::read_to_string(&path) {
+        let text = match crate::io_bounded::read_to_string_capped(
+            &path,
+            crate::io_bounded::SMALL_FILE_READ_CAP,
+        ) {
             Ok(text) => text,
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Self::default()),
-            Err(e) => return Err(CliError::Io { path, source: e }),
+            Err(CliError::Io { source, .. }) if source.kind() == std::io::ErrorKind::NotFound => {
+                return Ok(Self::default());
+            }
+            Err(e) => return Err(e),
         };
         parse(&text)
     }

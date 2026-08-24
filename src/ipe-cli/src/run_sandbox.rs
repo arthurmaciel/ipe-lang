@@ -343,10 +343,8 @@ pub fn write_build_artifacts(out_dir: &Path, profile: &SandboxProfile) -> Result
     //    where `strip` cannot touch them; `ipe exec` scans them out passively.
     //    Idempotent: a re-build replaces any prior floor block + reference.
     let main_rs = out_dir.join("src").join("main.rs");
-    let existing = std::fs::read_to_string(&main_rs).map_err(|e| CliError::Io {
-        path: main_rs.clone(),
-        source: e,
-    })?;
+    let existing =
+        crate::io_bounded::read_to_string_capped(&main_rs, crate::io_bounded::SOURCE_READ_CAP)?;
     let base = strip_capfloor_block(&existing);
     let referenced = inject_floor_reference(&base)?;
     let with_floor = format!("{referenced}{}", capfloor_static_source(profile));
@@ -439,10 +437,10 @@ pub fn load_and_verify_artifact(
     use ipe_sandbox::run_jail;
 
     // Parse the profile mirror strictly (parse-fail ⇒ refuse).
-    let profile_text = std::fs::read_to_string(profile_path).map_err(|e| CliError::Io {
-        path: profile_path.to_path_buf(),
-        source: e,
-    })?;
+    let profile_text = crate::io_bounded::read_to_string_capped(
+        profile_path,
+        crate::io_bounded::SMALL_FILE_READ_CAP,
+    )?;
     let profile = run_jail::parse_profile(&profile_text).map_err(|e| {
         CliError::UsageOwned(format!(
             "{}: {e} — refusing to run (a profile that does not parse is not honored)",

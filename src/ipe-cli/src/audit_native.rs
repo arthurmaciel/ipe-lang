@@ -653,10 +653,10 @@ impl WrapperScan {
         collect_bindings(&cache_root, &mut files)?;
         files.sort();
         for file in files {
-            let src = std::fs::read_to_string(&file).map_err(|e| CliError::Io {
-                path: file.clone(),
-                source: e,
-            })?;
+            let src = crate::io_bounded::read_to_string_capped(
+                &file,
+                crate::io_bounded::FFI_CACHE_READ_CAP,
+            )?;
             sources.push((file.display().to_string(), src));
         }
         let outcome = ipe_ffi::capability_scan::scan_sources(
@@ -1137,10 +1137,10 @@ fn emitted_wrapper_paths(emitted_dir: &Path) -> Result<Vec<WrapperEntry>, CliErr
                 .to_owned(),
         }));
     }
-    let text = std::fs::read_to_string(&sidecar_path).map_err(|e| CliError::Io {
-        path: sidecar_path.clone(),
-        source: e,
-    })?;
+    let text = crate::io_bounded::read_to_string_capped(
+        &sidecar_path,
+        crate::io_bounded::FFI_CACHE_READ_CAP,
+    )?;
     parse_ffi_wrappers_sidecar(&text, &sidecar_path)
 }
 
@@ -1352,10 +1352,10 @@ fn emit_probe_and_build_argv(
     // Append the probe `[[bin]]` to the emitted manifest (idempotent: a re-audit
     // rewrites the whole file from the emitted base + this one appended target).
     let manifest_path = emitted_dir.join("Cargo.toml");
-    let base = std::fs::read_to_string(&manifest_path).map_err(|e| CliError::Io {
-        path: manifest_path.clone(),
-        source: e,
-    })?;
+    let base = crate::io_bounded::read_to_string_capped(
+        &manifest_path,
+        crate::io_bounded::SMALL_FILE_READ_CAP,
+    )?;
     let bin_stanza = "\n[[bin]]\nname = \"tier2_probe\"\npath = \"src/tier2_probe.rs\"\n";
     if !base.contains("name = \"tier2_probe\"") {
         let patched = format!("{base}{bin_stanza}");
@@ -1532,7 +1532,9 @@ fn emitted_crate_ro_binds(emitted_dir: &Path) -> Vec<PathBuf> {
         binds.push(emitted_dir.to_path_buf());
     }
     let manifest = emitted_dir.join("Cargo.toml");
-    if let Ok(text) = std::fs::read_to_string(&manifest) {
+    if let Ok(text) =
+        crate::io_bounded::read_to_string_capped(&manifest, crate::io_bounded::SMALL_FILE_READ_CAP)
+    {
         for path in manifest_path_dependencies(&text) {
             if path.is_absolute() && path.exists() {
                 if let Some(root) = cargo_workspace_root(&path) {
@@ -1564,8 +1566,11 @@ fn emitted_crate_ro_binds(emitted_dir: &Path) -> Vec<PathBuf> {
 ))]
 fn cargo_workspace_root(crate_dir: &Path) -> Option<PathBuf> {
     let declares_workspace = |dir: &Path| -> bool {
-        std::fs::read_to_string(dir.join("Cargo.toml"))
-            .is_ok_and(|t| t.lines().any(|l| l.trim_start().starts_with("[workspace]")))
+        crate::io_bounded::read_to_string_capped(
+            &dir.join("Cargo.toml"),
+            crate::io_bounded::SMALL_FILE_READ_CAP,
+        )
+        .is_ok_and(|t| t.lines().any(|l| l.trim_start().starts_with("[workspace]")))
     };
     if declares_workspace(crate_dir) {
         return None;

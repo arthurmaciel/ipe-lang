@@ -89,7 +89,7 @@ use std::time::Duration;
 use ipe_intern::Interner;
 
 use crate::project;
-use crate::{CliError, io_err, write_emitted_project};
+use crate::{CliError, write_emitted_project};
 
 /// A lifecycle notification from a running watch session.
 ///
@@ -248,7 +248,10 @@ pub(crate) fn resolve_project_sources(
         let discovered = project::discover_modules(&manifest.src_root)?;
         let mut sources: BTreeMap<Vec<String>, (PathBuf, String)> = BTreeMap::new();
         for m in &discovered {
-            let src = std::fs::read_to_string(&m.path).map_err(|e| io_err(&m.path, e))?;
+            let src = crate::io_bounded::read_to_string_capped(
+                &m.path,
+                crate::io_bounded::SOURCE_READ_CAP,
+            )?;
             sources.insert(m.module_path.clone(), (m.path.clone(), src));
         }
         let cargo_name = ipe_backend_rust::sanitize_cargo_name(&manifest.name);
@@ -266,7 +269,9 @@ pub(crate) fn resolve_project_sources(
     // No manifest: sibling discovery, mirroring `build_with_sibling_discovery`.
     let source = match entry_text_override {
         Some(text) => text.to_owned(),
-        None => std::fs::read_to_string(entry).map_err(|e| io_err(entry, e))?,
+        None => {
+            crate::io_bounded::read_to_string_capped(entry, crate::io_bounded::SOURCE_READ_CAP)?
+        }
     };
     let mut name_interner = Interner::new();
     let parsed = ipe_parse::parse_module(&source, &mut name_interner).map_err(|diag| {
@@ -304,7 +309,10 @@ pub(crate) fn resolve_project_sources(
                 (entry.to_path_buf(), source.clone()),
             );
         } else {
-            let src = std::fs::read_to_string(&m.path).map_err(|e| io_err(&m.path, e))?;
+            let src = crate::io_bounded::read_to_string_capped(
+                &m.path,
+                crate::io_bounded::SOURCE_READ_CAP,
+            )?;
             sources.insert(m.module_path.clone(), (m.path.clone(), src));
         }
     }

@@ -22,6 +22,7 @@ pub mod build_plan;
 mod cache;
 pub mod clean;
 pub mod cli_args;
+pub mod contained_path;
 pub mod diff;
 pub mod doc;
 pub mod explain;
@@ -31,6 +32,7 @@ pub mod health;
 pub mod help;
 pub mod index;
 pub mod init;
+pub mod io_bounded;
 pub mod lockfile;
 pub mod login;
 mod lsp;
@@ -336,6 +338,33 @@ pub enum CliError {
     /// stderr by the caller. The process must exit non-zero, but there is
     /// nothing left to print — the JSON line is the complete machine output.
     DiagnosticJsonEmitted,
+    /// A file exceeded the per-surface read ceiling in
+    /// [`io_bounded::read_to_string_capped`]. The read was stopped at the cap;
+    /// no unbounded allocation was made.
+    FileTooLarge {
+        /// The path of the oversized file.
+        path: PathBuf,
+        /// The ceiling (bytes) that was enforced.
+        max: u64,
+    },
+    /// A manifest `sourceRoot` (or equivalent dependency path) was rejected by
+    /// [`contained_path::ContainedRelPath::parse`] because it escapes the
+    /// project directory. Carries the specific [`contained_path::PathEscape`]
+    /// reason so the diagnostic names exactly why the path was refused.
+    PathEscape {
+        /// The raw path string as it appeared in the manifest.
+        raw: String,
+        /// Why the path was rejected.
+        reason: contained_path::PathEscape,
+    },
+    /// The module-discovery walk hit its depth ceiling or detected a symlink
+    /// cycle. Carries the maximum depth that was configured and, for a cycle,
+    /// the directory path where the cycle was detected.
+    DiscoveryLimitReached {
+        /// The depth ceiling that was enforced (`MAX_DISCOVERY_DEPTH`), or the
+        /// path at which a symlink cycle was detected.
+        detail: String,
+    },
 }
 
 impl From<toolchain::ToolchainMissing> for CliError {
@@ -389,6 +418,7 @@ fn test_failed_message(code: i32) -> String {
 }
 
 impl std::fmt::Display for CliError {
+    #[allow(clippy::too_many_lines)]
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::Usage(hint) => write!(f, "{hint}"),
@@ -502,6 +532,18 @@ impl std::fmt::Display for CliError {
             Self::DeployPureApp { entry } => fmt_deploy_pure_app(entry, f),
             // The JSON line was already written; nothing more to print.
             Self::DiagnosticJsonEmitted => Ok(()),
+            Self::FileTooLarge { path, max } => write!(
+                f,
+                "{}: file exceeds the {max}-byte read ceiling — \
+                 refusing to allocate an unbounded buffer",
+                path.display()
+            ),
+            Self::PathEscape { raw, reason } => {
+                write!(f, "manifest path {raw:?} was rejected: {reason}")
+            }
+            Self::DiscoveryLimitReached { detail } => {
+                write!(f, "module-discovery walk aborted: {detail}")
+            }
         }
     }
 }

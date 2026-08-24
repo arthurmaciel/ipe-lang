@@ -163,10 +163,15 @@ pub fn read_tree(root: &Path) -> Result<BTreeMap<ModulePath, (PathBuf, String)>,
 
     let mut sources = BTreeMap::new();
     for m in discovered {
-        let src = std::fs::read_to_string(&m.path).map_err(|e| DiffError::Io {
-            path: m.path.clone(),
-            source: e,
-        })?;
+        let src =
+            crate::io_bounded::read_to_string_capped(&m.path, crate::io_bounded::SOURCE_READ_CAP)
+                .map_err(|e| match e {
+                crate::CliError::Io { path, source } => DiffError::Io { path, source },
+                other => DiffError::Io {
+                    path: m.path.clone(),
+                    source: std::io::Error::other(other.to_string()),
+                },
+            })?;
         sources.insert(m.module_path, (m.path, src));
     }
     if sources.is_empty() {

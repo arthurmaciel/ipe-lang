@@ -147,10 +147,8 @@ fn run_fmt_inplace(
 
     let mut unformatted: Vec<PathBuf> = Vec::new();
     for file in &files {
-        let src = fs::read_to_string(file).map_err(|e| CliError::Io {
-            path: file.clone(),
-            source: e,
-        })?;
+        let src =
+            crate::io_bounded::read_to_string_capped(file, crate::io_bounded::SOURCE_READ_CAP)?;
         let formatted = format_source(&src).map_err(|e| fmt_err_to_cli(file, e))?;
         if check {
             if formatted != src {

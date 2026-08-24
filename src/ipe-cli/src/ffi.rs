@@ -1343,10 +1343,8 @@ fn enforce_wrapper_capabilities(
 
     let mut sources: Vec<(String, String)> = Vec::with_capacity(rs_files.len());
     for file in &rs_files {
-        let src = std::fs::read_to_string(file).map_err(|e| CliError::Io {
-            path: file.clone(),
-            source: e,
-        })?;
+        let src =
+            crate::io_bounded::read_to_string_capped(file, crate::io_bounded::FFI_CACHE_READ_CAP)?;
         sources.push((file.display().to_string(), src));
     }
     let scan = ipe_ffi::capability_scan::scan_sources(
@@ -1499,10 +1497,10 @@ fn wrapper_non_std_dependencies(wrapper_dir: &Path) -> Result<Vec<String>, CliEr
         // later. Treat as no declared deps here (the source scan still runs).
         return Ok(Vec::new());
     }
-    let text = std::fs::read_to_string(&manifest).map_err(|e| CliError::Io {
-        path: manifest.clone(),
-        source: e,
-    })?;
+    let text = crate::io_bounded::read_to_string_capped(
+        &manifest,
+        crate::io_bounded::SMALL_FILE_READ_CAP,
+    )?;
     Ok(parse_cargo_dependency_names(&text))
 }
 
@@ -1690,7 +1688,10 @@ fn add_one(
     // for this crate into the inspection document BEFORE the driver decodes it,
     // so the author-declared adapter flows through the same `PkgInfo` gate + the
     // unforgeable `FfiInterface` module as an inspected binding.
-    let doc_text = match std::fs::read_to_string(PROJECT_MANIFEST) {
+    let doc_text = match crate::io_bounded::read_to_string_capped(
+        std::path::Path::new(PROJECT_MANIFEST),
+        crate::io_bounded::MANIFEST_READ_CAP,
+    ) {
         Ok(text) => {
             let closures = rust_define_closures_from_manifest(&text);
             let structs = rust_define_structs_from_manifest(&text);
@@ -1787,10 +1788,10 @@ pub fn install_registry_deps_for_project(
     // vocabulary in an `ipe.toml` sidecar next to its `package.ipe`, which the FFI
     // text inspector reads here.
     let ffi_source = ffi_define_source(manifest_path);
-    let text = std::fs::read_to_string(&ffi_source).map_err(|e| CliError::Io {
-        path: ffi_source.clone(),
-        source: e,
-    })?;
+    let text = crate::io_bounded::read_to_string_capped(
+        &ffi_source,
+        crate::io_bounded::MANIFEST_READ_CAP,
+    )?;
     let deps = rust_dependencies_from_manifest(&text);
     if deps.is_empty() {
         return Ok(());
@@ -2012,8 +2013,9 @@ pub fn run_install(rest: &[String]) -> Result<(), CliError> {
             "ipe rust install: no manifest with `[rust.dependencies]` in the current directory",
         ));
     }
-    let text = std::fs::read_to_string(manifest)
-        .map_err(|e| CliError::UsageOwned(format!("ipe install: {e}")))?;
+    let text =
+        crate::io_bounded::read_to_string_capped(manifest, crate::io_bounded::MANIFEST_READ_CAP)
+            .map_err(|e| CliError::UsageOwned(format!("ipe install: {e}")))?;
     let deps = rust_dependencies_from_manifest(&text);
     let wrapper = rust_wrapper_from_manifest(&text);
     if deps.is_empty() && wrapper.is_none() {

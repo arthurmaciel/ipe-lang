@@ -506,10 +506,10 @@ pub(crate) fn parse_toml_manifest(manifest_path: &Path) -> Result<ProjectManifes
         .parent()
         .map_or_else(|| PathBuf::from("."), Path::to_path_buf);
 
-    let text = fs::read_to_string(manifest_path).map_err(|e| CliError::Io {
-        path: manifest_path.to_path_buf(),
-        source: e,
-    })?;
+    let text = crate::io_bounded::read_to_string_capped(
+        manifest_path,
+        crate::io_bounded::MANIFEST_READ_CAP,
+    )?;
 
     let raw = scan_raw_manifest(&text)?;
 
@@ -540,7 +540,13 @@ pub(crate) fn parse_toml_manifest(manifest_path: &Path) -> Result<ProjectManifes
         })
         .transpose()?;
 
-    let src_root = root.join(raw.src_rel.as_deref().unwrap_or("src"));
+    let src_rel_raw = raw.src_rel.as_deref().unwrap_or("src");
+    let src_root_contained = crate::contained_path::ContainedRelPath::parse(&root, src_rel_raw)
+        .map_err(|reason| CliError::PathEscape {
+            raw: src_rel_raw.to_owned(),
+            reason,
+        })?;
+    let src_root = src_root_contained.resolved().to_path_buf();
     if !src_root.is_dir() {
         return Err(CliError::Usage(
             "ipe.toml: the source root directory does not exist",
@@ -671,12 +677,9 @@ pub fn remove_dependency(manifest_path: &Path, name: &str) -> Result<(), CliErro
     write_manifest_text(manifest_path, &updated)
 }
 
-/// Read the manifest file's text, mapping an IO failure to [`CliError::Io`].
+/// Read the manifest file's text through the capped reader.
 fn read_manifest_text(manifest_path: &Path) -> Result<String, CliError> {
-    fs::read_to_string(manifest_path).map_err(|e| CliError::Io {
-        path: manifest_path.to_path_buf(),
-        source: e,
-    })
+    crate::io_bounded::read_to_string_capped(manifest_path, crate::io_bounded::MANIFEST_READ_CAP)
 }
 
 /// Write the manifest file's text, mapping an IO failure to [`CliError::Io`].
@@ -870,6 +873,12 @@ fn find_inline_key(body: &str, key: &str) -> Option<usize> {
 // Module discovery
 // ---------------------------------------------------------------------------
 
+/// The maximum directory depth the module-discovery walk will descend before
+/// returning a typed [`CliError::DiscoveryLimitReached`] error. A legitimate
+/// Ipê source tree is never this deep; an adversarial or accidentally unbounded
+/// tree is refused rather than spinning indefinitely.
+const MAX_DISCOVERY_DEPTH: usize = 64;
+
 /// Walk `src_root` recursively, collecting every `*.ipe` file as a
 /// [`DiscoveredModule`].
 ///
@@ -877,14 +886,52 @@ fn find_inline_key(body: &str, key: &str) -> Option<usize> {
 /// or characters outside `[A-Za-z0-9_]`) are silently skipped — they may be
 /// build artefacts or editor swap files.
 ///
+/// The walk carries a canonicalised visited-set to detect symlink cycles and a
+/// depth ceiling to bound pathologically deep trees. Both conditions produce a
+/// typed [`CliError::DiscoveryLimitReached`] rather than an infinite loop or
+/// stack overflow.
+///
 /// # Errors
 /// [`CliError::Io`] if the directory cannot be read.
+/// [`CliError::DiscoveryLimitReached`] on a symlink cycle or a tree deeper
+/// than [`MAX_DISCOVERY_DEPTH`].
 pub fn discover_modules(src_root: &Path) -> Result<Vec<DiscoveredModule>, CliError> {
-    let mut result: Vec<DiscoveredModule> = Vec::new();
-    let mut stack: VecDeque<PathBuf> = VecDeque::new();
-    stack.push_back(src_root.to_path_buf());
+    use std::collections::HashSet;
 
-    while let Some(dir) = stack.pop_front() {
+    let mut result: Vec<DiscoveredModule> = Vec::new();
+    // Stack entries carry the directory path and its depth from src_root.
+    let mut stack: VecDeque<(PathBuf, usize)> = VecDeque::new();
+    // Visited set of canonicalised paths breaks symlink cycles.
+    let mut visited: HashSet<PathBuf> = HashSet::new();
+
+    stack.push_back((src_root.to_path_buf(), 0));
+
+    while let Some((dir, depth)) = stack.pop_front() {
+        if depth > MAX_DISCOVERY_DEPTH {
+            return Err(CliError::DiscoveryLimitReached {
+                detail: format!(
+                    "directory tree exceeded the {MAX_DISCOVERY_DEPTH}-level depth ceiling \
+                     at `{}`",
+                    dir.display()
+                ),
+            });
+        }
+
+        // Canonicalise to detect symlink cycles: two different dir-paths that
+        // resolve to the same inode are a cycle and the second visit is skipped.
+        let canon = fs::canonicalize(&dir).unwrap_or_else(|_| dir.clone());
+        if !visited.insert(canon.clone()) {
+            // Already visited this real directory — symlink cycle detected.
+            return Err(CliError::DiscoveryLimitReached {
+                detail: format!(
+                    "symlink cycle detected: `{}` resolves to an already-visited \
+                     directory `{}`",
+                    dir.display(),
+                    canon.display()
+                ),
+            });
+        }
+
         let entries = fs::read_dir(&dir).map_err(|e| CliError::Io {
             path: dir.clone(),
             source: e,
@@ -900,7 +947,7 @@ pub fn discover_modules(src_root: &Path) -> Result<Vec<DiscoveredModule>, CliErr
                 source: e,
             })?;
             if file_type.is_dir() {
-                stack.push_back(path);
+                stack.push_back((path, depth + 1));
             } else if file_type.is_file()
                 && path.extension().and_then(|e| e.to_str()) == Some("ipe")
                 && let Some(m) = file_to_module(src_root, &path)

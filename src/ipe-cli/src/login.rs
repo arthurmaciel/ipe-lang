@@ -74,7 +74,11 @@ pub fn run_login(rest: &[String]) -> Result<(), CliError> {
 /// token file exists or it cannot be read. Consumed by the publish headless path.
 #[must_use]
 pub fn stored_token() -> Option<String> {
-    let raw = std::fs::read_to_string(token_path()?).ok()?;
+    let raw = crate::io_bounded::read_to_string_capped(
+        &token_path()?,
+        crate::io_bounded::SMALL_FILE_READ_CAP,
+    )
+    .ok()?;
     let token = raw.trim().to_owned();
     if token.is_empty() { None } else { Some(token) }
 }

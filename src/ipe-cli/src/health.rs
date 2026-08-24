@@ -884,7 +884,9 @@ fn is_executable_file(path: &Path) -> bool {
 /// file is absent, unreadable, unparseable, or lacks the key.
 fn ipe_home_config_value(key: &[&str]) -> Option<String> {
     let path = runtime_embed::ipe_home().ok()?.join("config.toml");
-    let text = std::fs::read_to_string(&path).ok()?;
+    let text =
+        crate::io_bounded::read_to_string_capped(&path, crate::io_bounded::SMALL_FILE_READ_CAP)
+            .ok()?;
     let doc: toml::Table = text.parse().ok()?;
     let mut node = &toml::Value::Table(doc);
     for segment in key {
@@ -1243,15 +1245,15 @@ fn run_install(argv: &[String]) -> Result<(), CliError> {
 /// existing file does not parse as TOML (the command will not blindly overwrite
 /// a file it cannot understand).
 fn apply_config_edit(path: &Path, key: &[&str], value: &str) -> Result<(), CliError> {
-    let existing = match std::fs::read_to_string(path) {
+    let existing = match crate::io_bounded::read_to_string_capped(
+        path,
+        crate::io_bounded::SMALL_FILE_READ_CAP,
+    ) {
         Ok(text) => text,
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => String::new(),
-        Err(e) => {
-            return Err(CliError::Io {
-                path: path.to_path_buf(),
-                source: e,
-            });
+        Err(CliError::Io { ref source, .. }) if source.kind() == std::io::ErrorKind::NotFound => {
+            String::new()
         }
+        Err(e) => return Err(e),
     };
 
     let mut doc = existing.parse::<toml_edit::DocumentMut>().map_err(|e| {

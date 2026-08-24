@@ -76,10 +76,8 @@ fn run_migrate_config(rest: &[String]) -> Result<(), CliError> {
     // The wrapper's path / expose / capabilities live in the raw `[rust.wrapper]`
     // section, not on `ProjectManifest` (which carries only `has_rust_wrapper`),
     // so they are read verbatim here to render the wrapper stage faithfully.
-    let wrapper_text = std::fs::read_to_string(&toml_path).map_err(|e| CliError::Io {
-        path: toml_path.clone(),
-        source: e,
-    })?;
+    let wrapper_text =
+        crate::io_bounded::read_to_string_capped(&toml_path, crate::io_bounded::MANIFEST_READ_CAP)?;
     let wrapper = crate::ffi::rust_wrapper_from_manifest(&wrapper_text);
     let rendered = render_package_ipe(&manifest, wrapper.as_ref());
     write_package_ipe(&package_path, &rendered)?;

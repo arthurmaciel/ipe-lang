@@ -339,13 +339,19 @@ impl EntryLookup {
 /// closed) rather than collapsing to "absent → skip".
 pub fn read_entry_lookup(index_root: &Path, name: &str) -> EntryLookup {
     let path = entry_path(index_root, name);
-    let text = match std::fs::read_to_string(&path) {
+    let text = match crate::io_bounded::read_to_string_capped(
+        &path,
+        crate::io_bounded::SMALL_FILE_READ_CAP,
+    ) {
         Ok(t) => t,
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return EntryLookup::Absent,
+        Err(crate::CliError::Io { ref source, .. })
+            if source.kind() == std::io::ErrorKind::NotFound =>
+        {
+            return EntryLookup::Absent;
+        }
         Err(e) => {
-            return EntryLookup::Unreadable(CliError::Resolve(format!(
-                "index entry for `{name}` exists but could not be read — {}",
-                e.kind()
+            return EntryLookup::Unreadable(crate::CliError::Resolve(format!(
+                "index entry for `{name}` exists but could not be read — {e}"
             )));
         }
     };
@@ -367,7 +373,12 @@ pub fn read_entry_lookup(index_root: &Path, name: &str) -> EntryLookup {
 /// [`CliError::Resolve`] when the entry file is absent or malformed.
 pub fn read_entry(index_root: &Path, name: &str) -> Result<IndexEntry, CliError> {
     let path = entry_path(index_root, name);
-    let text = std::fs::read_to_string(&path).map_err(|e| read_entry_error(name, &e))?;
+    let text =
+        crate::io_bounded::read_to_string_capped(&path, crate::io_bounded::SMALL_FILE_READ_CAP)
+            .map_err(|e| match e {
+                crate::CliError::Io { ref source, .. } => read_entry_error(name, source),
+                other => other,
+            })?;
     parse_entry(name, &text)
 }
 
@@ -420,10 +431,8 @@ pub fn validate_entry_file(path: &Path) -> Result<IndexEntry, CliError> {
                 path.display()
             ))
         })?;
-    let text = std::fs::read_to_string(path).map_err(|e| CliError::Io {
-        path: path.to_path_buf(),
-        source: e,
-    })?;
+    let text =
+        crate::io_bounded::read_to_string_capped(path, crate::io_bounded::SMALL_FILE_READ_CAP)?;
     parse_entry(name, &text)
 }
 

@@ -744,10 +744,8 @@ fn scan_author_ffi_rust(prepared: &Prepared) -> Result<Option<LocatedHit>, CliEr
 /// [`CliError::Io`] on a file-read failure; [`CliError::PackageAudit`] when
 /// the file does not lex as Rust tokens.
 fn first_hit(file: &Path) -> Result<Option<LocatedHit>, CliError> {
-    let src = std::fs::read_to_string(file).map_err(|e| CliError::Io {
-        path: file.to_path_buf(),
-        source: e,
-    })?;
+    let src =
+        crate::io_bounded::read_to_string_capped(file, crate::io_bounded::FFI_CACHE_READ_CAP)?;
     let hits = panic_scan::scan_str(&src).map_err(|_| {
         reject(
             Check::Provenance,
@@ -1126,10 +1124,8 @@ fn derive_deny_config(emitted_dir: &Path) -> Result<Option<PathBuf>, CliError> {
     let Some(source) = locate_workspace_deny_config() else {
         return Ok(None);
     };
-    let text = std::fs::read_to_string(&source).map_err(|e| CliError::Io {
-        path: source.clone(),
-        source: e,
-    })?;
+    let text =
+        crate::io_bounded::read_to_string_capped(&source, crate::io_bounded::SMALL_FILE_READ_CAP)?;
 
     // Line-filter out the `[graph]` table (up to the next top-level `[section]`).
     // The remaining tables (`[advisories]`, `[licenses]`, `[bans]`, `[sources]`)
