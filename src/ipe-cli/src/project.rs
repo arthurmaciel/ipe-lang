@@ -504,9 +504,13 @@ pub fn parse_manifest(manifest_path: &Path) -> Result<ProjectManifest, CliError>
 /// original manifest reader, preserved unchanged while `package.ipe` is the
 /// preferred format (both produce the same [`ProjectManifest`]).
 ///
+/// Exposed to the crate so `ipe migrate config` can read an `ipe.toml`
+/// specifically — bypassing the format-dispatch in [`parse_manifest`], which
+/// would prefer a `package.ipe` when both are present.
+///
 /// # Errors
 /// As [`parse_manifest`].
-fn parse_toml_manifest(manifest_path: &Path) -> Result<ProjectManifest, CliError> {
+pub(crate) fn parse_toml_manifest(manifest_path: &Path) -> Result<ProjectManifest, CliError> {
     let root = manifest_path
         .parent()
         .map_or_else(|| PathBuf::from("."), Path::to_path_buf);

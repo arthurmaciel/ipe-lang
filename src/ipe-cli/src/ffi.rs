@@ -2209,16 +2209,16 @@ struct ManifestDefineEnum {
 /// Every field is carried verbatim; `ipe_ffi::wrapper::WrapperManifest::parse`
 /// is the gate that validates the path (package-jailed) and each symbol.
 #[derive(Debug, Default, PartialEq, Eq)]
-struct RawWrapperTable {
-    path: String,
-    expose: Vec<String>,
-    capabilities: Vec<String>,
+pub(crate) struct RawWrapperTable {
+    pub(crate) path: String,
+    pub(crate) expose: Vec<String>,
+    pub(crate) capabilities: Vec<String>,
 }
 
 /// Read the single `[rust.wrapper]` table from a manifest, or `None` when the
 /// package declares no wrapper crate. Line-based, matching the other
 /// `[rust.*]` readers here (no TOML dependency in this crate).
-fn rust_wrapper_from_manifest(text: &str) -> Option<RawWrapperTable> {
+pub(crate) fn rust_wrapper_from_manifest(text: &str) -> Option<RawWrapperTable> {
     let mut in_table = false;
     let mut table = RawWrapperTable::default();
     let mut found = false;
