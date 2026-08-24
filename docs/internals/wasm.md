@@ -39,7 +39,7 @@ These are genuine platform boundaries, documented, never faked results:
 - **FFI** (`ipe_ffi`, `ipe_sandbox`) — needs the on-disk crate catalog and a
   native sandbox. `src/ipe-wasm` does not depend on them; FFI is disabled, and an
   FFI-backed import surfaces as an ordinary compiler diagnostic, not a crash.
-- **filesystem project discovery** — no `ipe.toml`, no sibling-file discovery.
+- **filesystem project discovery** — no `package.ipe`, no sibling-file discovery.
   The browser compiles a single entry module plus the transitive embedded-stdlib
   closure. Multi-file projects are a native-CLI feature.
 - **watch / LSP / on-disk cache** — native-only; absent from the wasm module.

@@ -385,7 +385,7 @@ jobs:
             for ex in examples/sky/ipe/01-hello-world examples/sky/ipe/06-json; do
               echo "=== BUILD $ex ==="
               cd "$ex"
-              "$IPE" build ipe.toml --out out/rust
+              "$IPE" build package.ipe --out out/rust
               cargo build --manifest-path out/rust/Cargo.toml
               cd -
             done

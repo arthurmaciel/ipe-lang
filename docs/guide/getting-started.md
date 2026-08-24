@@ -18,7 +18,7 @@ page develops what that gives you.
 
 ## Create a project
 
-A project is a directory with an `ipe.toml` manifest and a `src/` directory.
+A project is a directory with a `package.ipe` manifest and a `src/` directory.
 Scaffold one with `ipe init`:
 
 ```
@@ -26,8 +26,8 @@ ipe init hello
 cd hello
 ```
 
-This creates `ipe.toml` (the manifest — the project's name, version, and entry
-file) and a starter `src/Main.ipe`.
+This creates `package.ipe` (the manifest — the project's name and version,
+written in Ipê) and a starter `src/Main.ipe`.
 
 ## Your first program
 

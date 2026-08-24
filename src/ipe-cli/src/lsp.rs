@@ -24,9 +24,10 @@ impl ProjectLoader for DriverLoader {
     ) -> Result<LoadedProject, LoadError> {
         // A workspace folder holding a manifest wins; otherwise resolve from
         // the opened file exactly like `ipe build <file.ipe>` would
-        // (manifest walk-up, else sibling discovery).
+        // (manifest walk-up, else sibling discovery). Manifest presence is the
+        // dual-name check (package.ipe preferred, ipe.toml fallback).
         let entry = workspace_root
-            .filter(|root| root.join("ipe.toml").is_file())
+            .filter(|root| project::manifest_in_dir(root).is_some())
             .map_or_else(|| open_file.to_path_buf(), Path::to_path_buf);
         let overlay = if entry == open_file { open_text } else { None };
         let resolved = watch::resolve_project_sources(&entry, overlay).map_err(|e| LoadError {

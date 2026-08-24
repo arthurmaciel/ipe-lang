@@ -123,17 +123,17 @@ terminal.
 ## Targeting the browser
 
 `Web.app` also compiles to a pure-client single-page app for the browser, where
-the whole TEA loop runs in WebAssembly. When `ipe.toml` declares
-`[wasm] mode = "spa"` or `mode = "hydrate"`, the compiler infers the wasm target
-automatically — `ipe build` is then equivalent to `ipe build --target wasm`,
-producing the browser bundle in `out/rust/www/` without an explicit flag.
-`examples/wasm/spa/ipe.toml` is a real working example of this layout.
+the whole TEA loop runs in WebAssembly. When `package.ipe` declares
+`Package.wasm Wasm.spa` or `Package.wasm Wasm.hydrate`, the compiler infers the
+wasm target automatically — `ipe build` is then equivalent to `ipe build --target
+wasm`, producing the browser bundle in `out/rust/www/` without an explicit flag.
+`examples/wasm/spa/package.ipe` is a real working example of this layout.
 
 Target resolution precedence (highest first): `--target wasm` CLI flag >
-`IPE_TARGET=wasm` env > `[wasm].mode` in `ipe.toml` > default native. The
+`IPE_TARGET=wasm` env > the manifest's `Package.wasm` mode > default native. The
 `--target wasm` flag and `IPE_TARGET=wasm` both continue to work and override
-the manifest. Setting `mode = "off"` (or omitting the `[wasm]` section entirely)
-keeps the native default even when the flag is absent.
+the manifest. Omitting the `Package.wasm` stage entirely keeps the native default
+even when the flag is absent.
 
 See the complete examples under [`examples/`](../../examples/) (`wasm/counter`,
 `wasm/spa`, `wasm/hydration`).

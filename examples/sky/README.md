@@ -15,7 +15,7 @@ ipe run
 ```
 
 Every directory under `examples/sky/ipe/<name>/` is a self-contained Ipê project
-(`ipe.toml` + `src/`). Build one with `ipe build`, run it with `ipe run`.
+(`package.ipe` + `src/`). Build one with `ipe build`, run it with `ipe run`.
 
 ## The two trees
 
@@ -51,9 +51,9 @@ tools/scripts/regen-sky-examples.sh --check  # CI gate: fail if committed trees 
    [`../../tools/scripts/lib/sky-to-ipe-transform.py`](../../tools/scripts/lib/sky-to-ipe-transform.py))
    — the shared, drift-resistant token rewrite: `Sky.Core.*` / `Sky.Http.*` /
    `Sky.Ffi` / `Sky.Test` / `Std.*` → `Ipe.*`, plus the `.sky` → `.ipe`
-   source-extension rename and the `sky.toml` → `ipe.toml` `entry` key. It
-   rewrites CODE only — never a string literal or comment — and applies to every
-   example.
+   source-extension rename and the `sky.toml` manifest rendered into Ipê's
+   canonical `package.ipe`. It rewrites CODE only — never a string literal or
+   comment — and applies to every example.
 2. **`ipe-edits/<name>.edits`** — an OPTIONAL per-example semantic delta for what
    the token rewrite cannot express (a Go-FFI reimplementation, a stricter Ipê
    type signature, an env-var rename). Each edit is a `find`/`replace` anchored on

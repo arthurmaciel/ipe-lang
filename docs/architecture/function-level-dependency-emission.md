@@ -89,7 +89,7 @@ existing proof that a conditional prelude works.
   (`src/compiler/ffi/src/instance.rs`). There is no general
   reachable-from-entry analysis; this design adds one.
 
-### 2.4 Shapes and `ipe.toml` (verified)
+### 2.4 Shapes and `package.ipe` (verified)
 
 The shape is derived from the **program**, never from config: the app-entry
 kernel `main` reaches sets `uses_web` / `uses_tui` / `uses_webview` /
@@ -100,26 +100,27 @@ kernel `main` reaches sets `uses_web` / `uses_tui` / `uses_webview` /
 TEA entries (Web / TerminalScreen / TerminalLines / WebView) for the Model
 gates.
 
-`ipe.toml` (`ProjectManifest`, `src/ipe-cli/src/project.rs:40`) carries:
-`[project]`, `[database] driver`, `[rust]` (static build / allocator),
-`[wasm]`, `[dependencies]`, `[rust.dependencies]`, `[capabilities] declared`.
+`package.ipe` (`ProjectManifest`, `src/ipe-cli/src/project.rs:40`) carries:
+name/version, `Package.database`, static build / allocator knobs,
+`Package.wasm`, `Package.dependencies`, `Package.rustDependencies`,
+`Package.declares`.
 
-**Confirmed: no `ipe.toml` key adds a crate the program's code does not
+**Confirmed: no manifest field adds a crate the program's code does not
 reach.** Config *parameterizes* dependencies the reachable call graph already
 demands; it never *introduces* one:
 
-| Key | Effect on dependencies | Active when |
+| Field | Effect on dependencies | Active when |
 |---|---|---|
-| `[database] driver` | selects `db-sqlite` vs `db-postgres` alias set | program reaches a `Db.*` kernel (any shape — a Program-shape CLI may use Db) |
-| `[rust.dependencies]` | pins version/features of FFI crates | program calls `Rust.*` (`Callee::Ffi`) |
-| `[rust] allocator` | adds `dlmalloc`/`mimalloc` | explicit opt-in, shape-independent |
-| `[wasm]` | switches target/manifest template; `publicEnv` fills `env_public.rs` | wasm target; `Env.public` reachable |
-| `[capabilities] declared` | none — verification metadata against the inferred set | — |
+| `Package.database` | selects `db-sqlite` vs `db-postgres` alias set | program reaches a `Db.*` kernel (any shape — a Program-shape CLI may use Db) |
+| `Package.rustDependencies` | pins version/features of FFI crates | program calls `Rust.*` (`Callee::Ffi`) |
+| `Package.allocator` | adds `dlmalloc`/`mimalloc` | explicit opt-in, shape-independent |
+| `Package.wasm` | switches target/manifest template; `Wasm.publicEnv` fills `env_public.rs` | wasm target; `Env.public` reachable |
+| `Package.declares` | none — verification metadata against the inferred set | — |
 
 This is stronger than the assumed model ("TEA shapes add config-side deps"):
 today **no** shape has a config-only dependency channel. The `redis_store`
-runtime feature exists in the runtime crate's `[features]` but no `ipe.toml`
-key selects it (session-store selection is a runtime concern). Rule going
+runtime feature exists in the runtime crate's `[features]` but no manifest
+field selects it (session-store selection is a runtime concern). Rule going
 forward: **any future capability key (e.g. a session-store driver) must enter
 through the `runtime_features` SSOT as an explicit config-parameterized
 feature, TEA-shapes only, and be listed in this table** — never as an
@@ -209,8 +210,8 @@ mechanical proof).
 
 Two invariants to encode as tests:
 
-- **Program-shape purity**: an `ipe.toml` with `[database] driver =
-  "postgres"` and no reachable `Db.*` kernel changes nothing in the emitted
+- **Program-shape purity**: a `package.ipe` with `Package.database
+  Package.postgres` and no reachable `Db.*` kernel changes nothing in the emitted
   manifest (already true; becomes a pinned invariant).
 - **TEA closure exactness**: a TEA shape adds exactly its documented module
   closure beyond the reachable set, nothing else.

@@ -104,7 +104,7 @@ jobs:
       - name: ipe build --static (example, ${{ matrix.allocator }})
         run: |
           cd examples/sky/ipe/01-hello-world
-          "$CARGO_TARGET_DIR/release/ipe" build ipe.toml --out out/rust \
+          "$CARGO_TARGET_DIR/release/ipe" build package.ipe --out out/rust \
             --static --allocator ${{ matrix.allocator }}
           cd out/rust
           cargo build --release --target "$STATIC_TRIPLE"
@@ -200,7 +200,7 @@ jobs:
       - name: ipe build --static --target aarch64-unknown-linux-musl
         run: |
           cd examples/sky/ipe/01-hello-world
-          "$CARGO_TARGET_DIR/release/ipe" build ipe.toml --out out/rust \
+          "$CARGO_TARGET_DIR/release/ipe" build package.ipe --out out/rust \
             --static --target aarch64-unknown-linux-musl --allocator dlmalloc
           cd out/rust
           cargo build --release --target "$STATIC_TRIPLE"
@@ -276,7 +276,7 @@ jobs:
       - name: ipe build --static --cfree is refused
         run: |
           cd examples/sky/ipe/01-hello-world
-          if "$CARGO_TARGET_DIR/release/ipe" build ipe.toml --out out/cfree \
+          if "$CARGO_TARGET_DIR/release/ipe" build package.ipe --out out/cfree \
                --static --cfree; then
             echo "::error::--cfree must be refused until the pure-Rust dep swaps land"
             exit 1
@@ -340,7 +340,7 @@ jobs:
       - name: ipe build (emit Rust for 01-hello-world)
         run: |
           cd "$REPO/examples/sky/ipe/01-hello-world"
-          "$CARGO_TARGET_DIR/release/ipe.exe" build ipe.toml --out out/rust
+          "$CARGO_TARGET_DIR/release/ipe.exe" build package.ipe --out out/rust
 
       - name: cargo build --release (MSVC +crt-static, dlmalloc)
         run: |
@@ -420,7 +420,7 @@ jobs:
       - name: ipe build (emit Rust for 01-hello-world)
         run: |
           cd examples/sky/ipe/01-hello-world
-          "$CARGO_TARGET_DIR/release/ipe" build ipe.toml --out out/rust
+          "$CARGO_TARGET_DIR/release/ipe" build package.ipe --out out/rust
 
       # Build-only: cross compiles the emitted crate for FreeBSD. Running
       # the resulting ELF on an ubuntu host is not possible (wrong ABI).

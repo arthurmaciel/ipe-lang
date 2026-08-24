@@ -168,11 +168,11 @@ sky_transform_one() {
     mv -f "$f" "${f%.sky}.ipe"
   done < <(find "$ipe" -type f -name '*.sky' -print 2>/dev/null)
 
-  # Project manifest: sky.toml -> ipe.toml (Ipê's canonical manifest name), with
-  # the `entry` key's src/Main.sky -> src/Main.ipe rewrite. Renaming the file (not
-  # just editing it) is load-bearing: every consumer of the port
-  # (ipe_build_target, is_wasm_example, resolve_bin) keys off `ipe.toml`, so the
-  # port must be indistinguishable from a native Ipê project.
+  # Project manifest: sky.toml -> ipe.toml (a transient intermediate), with the
+  # `entry` key's src/Main.sky -> src/Main.ipe rewrite. The transform's later
+  # steps (go-deps translation, --manifest unsafe-cap injection) edit this toml;
+  # the final step renders it into Ipê's canonical package.ipe (see below), so the
+  # committed port is indistinguishable from a native Ipê project.
   if [ -f "$ipe/sky.toml" ]; then
     sed -i.bak -E 's/^([[:space:]]*entry[[:space:]]*=[[:space:]]*")([^"]*)\.sky(")/\1\2.ipe\3/' "$ipe/sky.toml"
     rm -f "$ipe/sky.toml.bak"
@@ -226,6 +226,19 @@ sky_transform_one() {
   # of edit order.
   find "$ipe" -type f -name '*.ipe' -print0 2>/dev/null \
     | xargs -0 -r python3 "$SKY_TRANSFORM" --rewrite-discards-only
+
+  # Step 4 — render the intermediate ipe.toml into Ipê's canonical package.ipe.
+  # `ipe migrate config` reads the toml through the shared reader and emits an
+  # equivalent package.ipe, guaranteeing a faithful conversion (its round-trip is
+  # test-pinned); the intermediate toml is then dropped so the port carries the
+  # single canonical manifest.
+  if [ -f "$ipe/ipe.toml" ]; then
+    if ! ( cd "$ipe" && "$IPE_BIN" migrate config --force >/dev/null 2>&1 ); then
+      echo "mirror: package.ipe render (ipe migrate config) failed for '$name'" >&2
+      return 2
+    fi
+    rm -f "$ipe/ipe.toml"
+  fi
 
   return 0
 }

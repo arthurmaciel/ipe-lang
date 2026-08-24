@@ -128,7 +128,9 @@ for uname in "${!UPSTREAM_NAMES[@]}"; do
   cp -rf "$fresh/." "$orig_out/"
 
   build_log="$(mktemp /tmp/ipe-drift-build.XXXXXX)"
-  ipe_entry="$ipe_out/ipe.toml"; [ ! -f "$ipe_entry" ] && ipe_entry="$ipe_out/src/Main.ipe"
+  ipe_entry="$ipe_out/package.ipe"
+  [ ! -f "$ipe_entry" ] && ipe_entry="$ipe_out/ipe.toml"
+  [ ! -f "$ipe_entry" ] && ipe_entry="$ipe_out/src/Main.ipe"
   if ! timeout 300 "$IPE_BIN" build "$ipe_entry" --out "$ipe_out/out/rust" \
        >"$build_log" 2>&1 || \
      ! timeout 300 cargo build --manifest-path "$ipe_out/out/rust/Cargo.toml" \
