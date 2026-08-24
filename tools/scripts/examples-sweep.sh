@@ -130,7 +130,7 @@ fi
 # ── ipe build target for an example dir — package.ipe / ipe.toml, else src/Main.ipe
 # The mirror renders the upstream sky.toml into Ipê's canonical package.ipe
 # manifest (lib/mirror.sh), so a materialised example carries it; a legacy
-# ipe.toml is still honoured as a fallback (P1 dual-name discovery).
+# ipe.toml is still honoured as a fallback (the compiler's dual-name discovery).
 ipe_build_target() {
   local d="$1"
   if   [ -f "$d/package.ipe" ]; then echo "package.ipe"
