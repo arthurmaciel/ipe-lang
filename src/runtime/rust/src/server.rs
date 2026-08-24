@@ -378,16 +378,27 @@ fn reissue_set_cookie(
     slide_window_secs: u64,
     is_https: bool,
 ) -> String {
-    let secure = if crate::web::csrf::cookies_secure() || is_https {
+    // The cookie-security signal lives in `web::csrf` for a program that emits the
+    // web surface; a server-only program (no `web` module) falls back to the
+    // production-env signal. `feature = "web"` is the exact condition under which
+    // `crate::web` is present, so the reference is compiled out when it is absent.
+    #[cfg(feature = "web")]
+    let base_secure = crate::web::csrf::cookies_secure();
+    #[cfg(not(feature = "web"))]
+    let base_secure = crate::telemetry::production_from_env();
+    let secure = if base_secure || is_https {
         "; Secure"
     } else {
         ""
     };
-    let same_site = if crate::web::csrf::frame_ancestors().is_some() {
-        "None"
-    } else {
-        "Lax"
-    };
+
+    // Frame-ancestors (CSP embedding) is a web-surface concept; a server-only
+    // program cannot be framed, so `SameSite=Lax` is the fail-closed default.
+    #[cfg(feature = "web")]
+    let embeddable = crate::web::csrf::frame_ancestors().is_some();
+    #[cfg(not(feature = "web"))]
+    let embeddable = false;
+    let same_site = if embeddable { "None" } else { "Lax" };
     format!(
         "{}={}; Path=/; HttpOnly; SameSite={same_site}{secure}; Max-Age={slide_window_secs}",
         cookie_name, token
@@ -492,9 +503,12 @@ where
                         match crate::auth::auth_reissue_token::<String>(
                             &secret, &ctx, extra, slide_i64,
                         ) {
-                            Some(IpeResult::Ok(new_token)) => {
-                                Some(reissue_set_cookie(name, &new_token, slide_window_secs, is_https))
-                            }
+                            Some(IpeResult::Ok(new_token)) => Some(reissue_set_cookie(
+                                name,
+                                &new_token,
+                                slide_window_secs,
+                                is_https,
+                            )),
                             _ => None,
                         }
                     } else {
