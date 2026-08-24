@@ -46,6 +46,29 @@ fn ipe_err<E: From<String> + Send>(e: &sqlx::Error) -> E {
     }
 }
 
+/// Map a connect-time `sqlx::Error` to a credential-free typed error.
+///
+/// The connect path can carry the connection string — host, user, password —
+/// inside the `Configuration`, `Io`, and `Tls` payloads (a driver's `Display`
+/// may echo the URL it was handed). The message is therefore built from the
+/// error VARIANT alone; the payload is never formatted into it. A database error
+/// at connect (e.g. an authentication rejection) keeps `ipe_err`'s structural
+/// SQLSTATE-code path, which is already value-free.
+fn connect_err<E: From<String> + Send>(e: &sqlx::Error) -> E {
+    if e.as_database_error().is_some() {
+        return ipe_err(e);
+    }
+    let kind = match e {
+        sqlx::Error::Configuration(_) => "invalid connection configuration",
+        sqlx::Error::Io(_) => "connection I/O error",
+        sqlx::Error::Tls(_) => "TLS error",
+        sqlx::Error::PoolTimedOut => "connection pool timed out",
+        sqlx::Error::PoolClosed => "connection pool closed",
+        _ => "connection error",
+    };
+    str_err(&format!("db: {kind}"))
+}
+
 // ─── Transaction connection routing (task-local) ──────────────────────────────
 //
 // `withTransaction` must run BEGIN, the entire body, and COMMIT/ROLLBACK on ONE
@@ -808,7 +831,7 @@ async fn build_pool<E: Send + From<String> + 'static>(url: &str) -> IpeResult<E,
         .await
     {
         Ok(p) => p,
-        Err(e) => return IpeResult::Err(ipe_err(&e)),
+        Err(e) => return IpeResult::Err(connect_err(&e)),
     };
     if url.contains("sqlite") && url_is_cacheable(url) {
         let _ = sqlx::query("PRAGMA journal_mode=WAL;").execute(&pool).await;
@@ -3374,6 +3397,31 @@ mod tests {
             }
             IpeResult::Ok(_) => panic!("duplicate insert should violate the UNIQUE constraint"),
         }
+    }
+
+    #[test]
+    fn connect_err_never_echoes_connection_credentials() {
+        // A DB connection failure must never surface host/user/password. The
+        // connect path's `Configuration`/`Io`/`Tls` payloads can embed the
+        // connection URL, so the Ipê-visible message is built from the error
+        // variant alone.
+        let secret_url = "postgres://admin:s3cr3t-pw@db.internal:5432/prod";
+
+        let cfg: String = connect_err(&sqlx::Error::Configuration(Box::<
+            dyn std::error::Error + Send + Sync,
+        >::from(
+            secret_url.to_string()
+        )));
+        assert!(!cfg.contains("s3cr3t-pw"), "password leaked: {cfg}");
+        assert!(!cfg.contains("admin"), "user leaked: {cfg}");
+        assert!(!cfg.contains("db.internal"), "host leaked: {cfg}");
+        assert_eq!(cfg, "db: invalid connection configuration");
+
+        let io: String = connect_err(&sqlx::Error::Io(std::io::Error::other(
+            secret_url.to_string(),
+        )));
+        assert!(!io.contains("s3cr3t-pw"), "password leaked via Io: {io}");
+        assert_eq!(io, "db: connection I/O error");
     }
 
     #[test]
