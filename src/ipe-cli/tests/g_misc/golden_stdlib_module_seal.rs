@@ -613,7 +613,8 @@ const MARKDOWN_PARSER_MAIN: &str = "module Main exposing (main)\n\
     \x20       BulletBlock _ -> Nothing\n\
     \x20       NumberedBlock _ -> Nothing\n\
     \x20       TableBlock _ _ -> Nothing\n\
-    \x20       RuleBlock -> Nothing\n\n\
+    \x20       RuleBlock -> Nothing\n\
+    \x20       BlockquoteBlock _ -> Nothing\n\n\
     isCode : Span -> Bool\n\
     isCode span =\n\
     \x20   case span of\n\
@@ -621,7 +622,9 @@ const MARKDOWN_PARSER_MAIN: &str = "module Main exposing (main)\n\
     \x20       PlainSpan _ -> False\n\
     \x20       BoldSpan _ -> False\n\
     \x20       ItalicSpan _ -> False\n\
-    \x20       LinkSpan _ _ -> False\n\n\
+    \x20       LinkSpan _ _ -> False\n\
+    \x20       ImageSpan _ _ -> False\n\
+    \x20       HardBreakSpan -> False\n\n\
     main =\n\
     \x20   let\n\
     \x20       blocks = Markdown.parseBlocks \"# H\\n\\ntext\\n\\n```\\nbody\\n```\"\n\
@@ -702,6 +705,108 @@ fn markdown_parser_builds_and_runs() {
     assert!(
         out.stdout.trim() == "body|2",
         "parser output must be `body|2`, got:\n{}",
+        out.stdout
+    );
+}
+
+// ── Ipe.Markdown — blockquote, image, hard-break feature tests ─────────────
+//
+// Blockquote: `> quote` renders with a left-rule border using `dividerColor`
+// (theme-derived `color-mix(... currentColor ...)`).
+//
+// Image: `![alt](url)` renders an `<img>` with the given src; a
+// `javascript:` src is neutralised to `about:blank` by `safeUrl`.
+//
+// Hard break: a line ending in two spaces emits a `<br>`.
+//
+// All three are exercised through the public parse+render surface so the
+// test is a full pipeline proof, not just a unit assertion.
+
+const MARKDOWN_FEATURES_MAIN: &str = "module Main exposing (main)\n\
+    import Ipe.Io as Io\n\
+    import Ipe.Html as Html\n\
+    import Ipe.Ui as Ui\n\
+    import Ipe.Markdown as Markdown\n\n\
+    bq : String\n\
+    bq = \"> This is a blockquote\"\n\n\
+    img : String\n\
+    img = \"![alt text](https://example.com/img.png)\"\n\n\
+    imgJs : String\n\
+    imgJs = \"![x](javascript:alert(1))\"\n\n\
+    hb : String\n\
+    hb = \"line one  \\nline two\"\n\n\
+    main =\n\
+    \x20   let\n\
+    \x20       bqEl   = Markdown.render bq\n\
+    \x20       imgEl  = Markdown.render img\n\
+    \x20       imgJsEl = Markdown.render imgJs\n\
+    \x20       hbEl   = Markdown.render hb\n\
+    \x20       page   = Ui.column [] [ bqEl, imgEl, imgJsEl, hbEl ]\n\
+    \x20   in\n\
+    \x20   Io.println (Html.htmlRender (Ui.layout [] page))\n";
+
+#[test]
+fn markdown_features_resolves_and_emits() {
+    let _ = compile_module_probe("markdown_features", MARKDOWN_FEATURES_MAIN);
+}
+
+#[test]
+fn markdown_features_builds_and_runs() {
+    if !e2e_enabled() {
+        return;
+    }
+    let Some(dir) = compile_module_probe("markdown_features_e2e", MARKDOWN_FEATURES_MAIN) else {
+        return;
+    };
+    let out = crate::support::build_and_run_emitted("markdown_features", &dir);
+    assert_eq!(
+        out.exit_code,
+        Some(0),
+        "emitted `markdown_features` crate must build + run cleanly, got exit {:?}",
+        out.exit_code
+    );
+    // Blockquote renders with a left-rule border using the theme-derived color.
+    assert!(
+        out.stdout.contains("border-left"),
+        "blockquote must render with a left-rule border:\n{}",
+        out.stdout
+    );
+    assert!(
+        out.stdout.contains("color-mix(in srgb, currentColor"),
+        "blockquote left-rule must use theme-derived color-mix(currentColor):\n{}",
+        out.stdout
+    );
+    // Image renders with <img> and the correct src.
+    assert!(
+        out.stdout.contains("<img"),
+        "image must render an <img> element:\n{}",
+        out.stdout
+    );
+    assert!(
+        out.stdout.contains("https://example.com/img.png"),
+        "image src must contain the original URL:\n{}",
+        out.stdout
+    );
+    assert!(
+        out.stdout.contains("alt text"),
+        "image must carry the alt attribute text:\n{}",
+        out.stdout
+    );
+    // javascript: src is neutralised to about:blank by safeUrl.
+    assert!(
+        out.stdout.contains("about:blank"),
+        "javascript: image src must be neutralised to about:blank:\n{}",
+        out.stdout
+    );
+    assert!(
+        !out.stdout.contains("javascript:"),
+        "javascript: must not appear in rendered output:\n{}",
+        out.stdout
+    );
+    // Hard break renders a <br>.
+    assert!(
+        out.stdout.contains("<br>"),
+        "trailing double-space must render a <br>:\n{}",
         out.stdout
     );
 }
