@@ -79,7 +79,7 @@ fn run_migrate_config(rest: &[String]) -> Result<(), CliError> {
     let wrapper_text =
         crate::io_bounded::read_to_string_capped(&toml_path, crate::io_bounded::MANIFEST_READ_CAP)?;
     let wrapper = crate::ffi::rust_wrapper_from_manifest(&wrapper_text);
-    let rendered = render_package_ipe(&manifest, wrapper.as_ref());
+    let rendered = render_package_ipe(&manifest, wrapper.as_ref())?;
     write_package_ipe(&package_path, &rendered)?;
 
     println!(
@@ -106,11 +106,14 @@ fn write_package_ipe(path: &Path, text: &str) -> Result<(), CliError> {
 /// emitted — an absent section (an empty dep map, a default `WasmConfig`, an
 /// unset static knob) produces no stage, so a minimal manifest renders as a bare
 /// `Package.named`. The output re-parses to the identical struct.
-#[must_use]
+///
+/// # Errors
+/// [`CliError::UsageOwned`] when a `depPath` dependency path contains a
+/// non-UTF-8 segment — a typed refusal rather than silent U+FFFD substitution.
 pub fn render_package_ipe(
     m: &ProjectManifest,
     wrapper: Option<&crate::ffi::RawWrapperTable>,
-) -> String {
+) -> Result<String, CliError> {
     let mut stages: Vec<String> = Vec::new();
 
     // `named` is required and is always the pipeline head.
@@ -142,7 +145,7 @@ pub fn render_package_ipe(
     }
 
     if !m.dependencies.is_empty() {
-        stages.push(render_dependencies(m));
+        stages.push(render_dependencies(m)?);
     }
     if !m.rust_dependencies.is_empty() {
         stages.push(render_rust_dependencies(m));
@@ -191,17 +194,18 @@ pub fn render_package_ipe(
         stages.push(wasm);
     }
 
-    assemble(&stages)
+    Ok(assemble(&stages))
 }
 
 /// The project's source root as a path relative to the project root, or `None`
 /// when it cannot be expressed relative to the root (it always can for a manifest
-/// this crate produced, where `src_root = root.join(rel)`).
+/// this crate produced, where `src_root = root.join(rel)`). A non-UTF-8 segment
+/// is treated as absent — the stage is skipped rather than corrupted silently.
 fn source_root_rel(m: &ProjectManifest) -> Option<String> {
     m.src_root
         .strip_prefix(&m.root)
         .ok()
-        .map(|p| p.to_string_lossy().into_owned())
+        .and_then(|p| p.to_str().map(str::to_owned))
 }
 
 /// Assemble the ordered pipeline stages into a `package.ipe` module. The head is
@@ -222,40 +226,62 @@ fn assemble(stages: &[String]) -> String {
 /// Render the `Package.dependencies [ … ]` stage: one dependency builder per
 /// element, in the map's (sorted) key order. Each [`IpeDep`] variant maps to its
 /// distinct builder (`dep` / `depGit` / `depGitRev` / `depPath`).
-fn render_dependencies(m: &ProjectManifest) -> String {
+///
+/// # Errors
+/// [`CliError::UsageOwned`] when a `depPath` path contains a non-UTF-8 segment
+/// — a typed refusal rather than silent U+FFFD substitution.
+fn render_dependencies(m: &ProjectManifest) -> Result<String, CliError> {
     let elems: Vec<String> = m
         .dependencies
         .iter()
         .map(|(name, dep)| render_one_dep(name, dep))
-        .collect();
-    format!("Package.dependencies\n{}", indented_list(&elems, 3))
+        .collect::<Result<Vec<String>, CliError>>()?;
+    Ok(format!(
+        "Package.dependencies\n{}",
+        indented_list(&elems, 3)
+    ))
 }
 
 /// Render one dependency as its blessed builder call.
-fn render_one_dep(name: &str, dep: &IpeDep) -> String {
+///
+/// # Errors
+/// [`CliError::UsageOwned`] when a `depPath` path contains a non-UTF-8 segment.
+fn render_one_dep(name: &str, dep: &IpeDep) -> Result<String, CliError> {
     match dep {
-        IpeDep::Index(req) => format!(
+        IpeDep::Index(req) => Ok(format!(
             "Package.dep {} {}",
             string_lit(name),
             string_lit(&req.to_string())
-        ),
-        IpeDep::Git { url, rev: None } => {
-            format!("Package.depGit {} {}", string_lit(name), string_lit(url))
-        }
+        )),
+        IpeDep::Git { url, rev: None } => Ok(format!(
+            "Package.depGit {} {}",
+            string_lit(name),
+            string_lit(url)
+        )),
         IpeDep::Git {
             url,
             rev: Some(rev),
-        } => format!(
+        } => Ok(format!(
             "Package.depGitRev {} {} {}",
             string_lit(name),
             string_lit(url),
             string_lit(rev)
-        ),
-        IpeDep::Path(path) => format!(
-            "Package.depPath {} {}",
-            string_lit(name),
-            string_lit(&path.to_string_lossy())
-        ),
+        )),
+        IpeDep::Path(path) => {
+            let s = path.to_str().ok_or_else(|| {
+                CliError::UsageOwned(format!(
+                    "ipe migrate config: dependency path `{}` contains a non-UTF-8 \
+                     segment and cannot be rendered faithfully — rename the path to \
+                     use only UTF-8 characters",
+                    path.display()
+                ))
+            })?;
+            Ok(format!(
+                "Package.depPath {} {}",
+                string_lit(name),
+                string_lit(s)
+            ))
+        }
     }
 }
 
@@ -497,7 +523,8 @@ mod tests {
         let wrapper = std::fs::read_to_string(root.join(crate::project::IPE_TOML))
             .ok()
             .and_then(|t| crate::ffi::rust_wrapper_from_manifest(&t));
-        let rendered = render_package_ipe(a, wrapper.as_ref());
+        let rendered = render_package_ipe(a, wrapper.as_ref())
+            .expect("render_package_ipe must not fail on well-formed test manifests");
         let pkg_path = root.join(crate::package_manifest::PACKAGE_IPE);
         let b = read_package_manifest(&rendered, root, &pkg_path).unwrap_or_else(|e| {
             panic!("rendered package.ipe must re-read; error: {e}\n--- rendered ---\n{rendered}")
@@ -788,6 +815,36 @@ mod tests {
         assert_eq!(string_lit("a\nb"), "\"a\\nb\"");
     }
 
+    #[cfg(unix)]
+    #[test]
+    fn dep_path_with_non_utf8_segment_is_refused() {
+        use std::os::unix::ffi::OsStrExt;
+        let root = fresh_root("non_utf8_dep");
+        let bad_segment: std::ffi::OsString =
+            std::ffi::OsStr::from_bytes(b"bad\xff\xfepath").to_owned();
+        let bad_path = PathBuf::from(bad_segment);
+        let mut deps = BTreeMap::new();
+        deps.insert("mypkg".to_owned(), crate::project::IpeDep::Path(bad_path));
+        let m = ProjectManifest {
+            name: "host".to_owned(),
+            version: None,
+            root: root.clone(),
+            src_root: root.join("src"),
+            driver: ipe_backend_rust::DbDriver::Sqlite,
+            static_request: crate::build_plan::StaticRequestLayer::default(),
+            wasm: crate::project::WasmConfig::default(),
+            dependencies: deps,
+            rust_dependencies: BTreeMap::new(),
+            capabilities: BTreeSet::new(),
+            capabilities_accept: BTreeSet::new(),
+            has_rust_wrapper: false,
+        };
+        assert!(
+            render_package_ipe(&m, None).is_err(),
+            "non-UTF-8 depPath must be refused with an error, not silently corrupted"
+        );
+    }
+
     #[test]
     fn minimal_render_is_a_bare_head() {
         let root = fresh_root("bare");
@@ -805,7 +862,8 @@ mod tests {
             capabilities_accept: BTreeSet::new(),
             has_rust_wrapper: false,
         };
-        let rendered = render_package_ipe(&m, None);
+        let rendered = render_package_ipe(&m, None)
+            .expect("render_package_ipe must not fail on a manifest with no path deps");
         assert!(
             rendered.contains("Package.named \"solo\""),
             "renders the name head: {rendered}"
