@@ -850,7 +850,7 @@ fn normalise_base_path(raw: &str) -> String {
 /// could otherwise plant `ipe_sid` for `example.com`). `__Host-` MANDATES
 /// Secure + Path=/ + no-Domain — `page_response` satisfies all three in secure
 /// mode (Secure flag set, root `cookie_path()` is `/`, no Domain attribute).
-/// Mirrors `csrf::csrf_cookie_name()`. Plain-HTTP dev keeps the bare `ipe_sid`
+/// Mirrors `csrf::csrf_cookie_name_for`. Plain-HTTP dev keeps the bare `ipe_sid`
 /// (`__Host-` requires Secure, which a browser drops over `http://`). A sub-app
 /// (Path != `/`) can never use `__Host-`, so it keeps the base-scoped name.
 fn cookie_name_for(base: &str) -> String {
@@ -887,7 +887,7 @@ fn cookie_path_for(base: &str) -> String {
 /// so the client JS prefixes `/_ipe/event` + `/_ipe/sse` with it. The browser
 /// reaches this child only through the parent proxy, which strips the prefix
 /// before forwarding — so the child's own router stays root-relative.
-fn web_base_path() -> String {
+pub(super) fn web_base_path() -> String {
     normalise_base_path(
         &crate::system::read_env_var_renamed("IPE_WEB_BASE_PATH", "IPE_LIVE_BASE_PATH")
             .unwrap_or_default(),
@@ -1002,7 +1002,7 @@ fn page_response(
         session_cookie_name(),
         cookie_path()
     );
-    let csrf_cookie = csrf::csrf_set_cookie(csrf_token);
+    let csrf_cookie = csrf::csrf_set_cookie(csrf_token, &web_base_path());
     let mut resp = (
         axum::http::StatusCode::OK,
         [(
@@ -1582,12 +1582,13 @@ where
             //   * miss      → init a new session.
             let cookie_sid = sid_from_cookie(&headers);
             // CSRF double-submit token: reuse the browser's existing well-formed
-            // `__ipe_csrf` cookie (so a reload keeps the same token), else mint a
-            // fresh one. page_response sets the cookie + injects the value into
-            // the page JS; the client echoes it back in the X-Ipê-Csrf header.
-            let csrf_tok = csrf::cookie_value(&headers, csrf::csrf_cookie_name())
-                .filter(|t| csrf::token_is_well_formed(t))
-                .unwrap_or_else(csrf::gen_token);
+            // per-app CSRF cookie (so a reload keeps the same token), else mint a
+            // fresh one. `page_response` sets the cookie + injects the value into
+            // the page JS; the client echoes it back in the `X-Ipê-Csrf` header.
+            let csrf_tok =
+                csrf::cookie_value(&headers, &csrf::csrf_cookie_name_for(&web_base_path()))
+                    .filter(|t| csrf::token_is_well_formed(t))
+                    .unwrap_or_else(csrf::gen_token);
 
             // Go parity (handleInitial): unrouted browser-noise paths 404 (or
             // serve from the static root) BEFORE any session work — they must
