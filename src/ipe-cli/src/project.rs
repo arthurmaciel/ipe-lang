@@ -399,6 +399,16 @@ fn scan_raw_manifest(text: &str) -> Result<RawManifest, CliError> {
             ("[capabilities]", "accept") => {
                 raw.capabilities_accept = parse_capabilities(raw_val)?;
             }
+            // An unknown key inside a recognised section is not silently
+            // dropped: a mis-typed key in a known section is lost without
+            // this warning. Unknown SECTIONS map to `"other"` and are still
+            // silently skipped (forward-compatible).
+            (sec, k) if sec != "other" => {
+                eprintln!(
+                    "ipe.toml: warning: unrecognised key `{k}` in section `{sec}` — \
+                     this key will not be migrated (check for a typo)"
+                );
+            }
             _ => {}
         }
     }
@@ -1222,6 +1232,24 @@ mod tests {
             "error must name the unsupported value: {msg}"
         );
         let _ = fs::remove_dir_all(toml_path.parent().expect("has parent"));
+    }
+
+    /// An unrecognised key in a known section must NOT return a hard error —
+    /// the scanner emits a warning to stderr and continues. Known keys in
+    /// the same section must still be parsed correctly (the warning is
+    /// non-fatal). An unknown SECTION is still silently skipped.
+    #[test]
+    fn scan_raw_manifest_warns_on_unknown_key_in_known_section() {
+        let toml_body = "[project]\nname = \"test\"\ntypoKey = \"ignored\"\n\
+                         [database]\ndriver = \"postgres\"\nunknownDbKey = \"x\"\n\
+                         [unknown-section]\nfoo = \"bar\"\n";
+        let raw = scan_raw_manifest(toml_body).expect("unknown keys must not be hard errors");
+        assert_eq!(raw.name.as_deref(), Some("test"), "name key still parsed");
+        assert_eq!(
+            raw.driver_str.as_deref(),
+            Some("postgres"),
+            "known key alongside unknown key still parsed"
+        );
     }
 
     #[test]
