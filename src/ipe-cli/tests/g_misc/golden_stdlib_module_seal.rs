@@ -715,7 +715,7 @@ fn markdown_parser_builds_and_runs() {
 // (theme-derived `color-mix(... currentColor ...)`).
 //
 // Image: `![alt](url)` renders an `<img>` with the given src; a
-// `javascript:` src is neutralised to `about:blank` by `safeUrl`.
+// `javascript:` src is neutralised by the runtime attribute sink.
 //
 // Hard break: a line ending in two spaces emits a `<br>`.
 //
@@ -792,20 +792,16 @@ fn markdown_features_builds_and_runs() {
         "image must carry the alt attribute text:\n{}",
         out.stdout
     );
-    // javascript: src is neutralised to about:blank by safeUrl.
-    assert!(
-        out.stdout.contains("about:blank"),
-        "javascript: image src must be neutralised to about:blank:\n{}",
-        out.stdout
-    );
+    // javascript: src is neutralised by the runtime attribute sink
+    // (sanitise_url_attr): the dangerous scheme never reaches the output.
     assert!(
         !out.stdout.contains("javascript:"),
         "javascript: must not appear in rendered output:\n{}",
         out.stdout
     );
-    // Hard break renders a <br>.
+    // Hard break renders a <br> (the runtime emits self-closing `<br />`).
     assert!(
-        out.stdout.contains("<br>"),
+        out.stdout.contains("<br"),
         "trailing double-space must render a <br>:\n{}",
         out.stdout
     );

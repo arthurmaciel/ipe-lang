@@ -22,11 +22,13 @@
 --
 -- Security: the parser never emits raw HTML, scripts, or event handlers —
 -- every output routes through typed `Ipe.Ui` constructors. Link `href` and
--- image `src` are routed through a single URL guard (`safeUrl`) that
--- neutralises `javascript:` and `vbscript:` schemes to `about:blank`. Feed
--- untrusted markdown without an extra sanitisation step. (Compare:
--- HTML-string renderers need a sanitiser equivalent to bluemonday; this one
--- does not.)
+-- image `src` become HTML attributes, which the runtime attribute sink
+-- (`sanitise_url_attr`) validates as the single SSOT guard: it normalises the
+-- scheme (stripping leading and intra-scheme control/whitespace, case) and
+-- neutralises `javascript:`/`vbscript:`/dangerous `data:` schemes, allowing
+-- only safe schemes and raster `data:image` URLs. Feed untrusted markdown
+-- without an extra sanitisation step. (Compare: HTML-string renderers need a
+-- sanitiser equivalent to bluemonday; this one does not.)
 --
 -- Chrome colours (code surfaces, dividers, list markers, blockquote
 -- left-rules) derive from the inherited theme foreground via `currentColor`,
@@ -335,7 +337,12 @@ takeParagraph lines =
                     p = takeParagraph rest
                     more = fst p
                     after = snd p
-                    body = if more == "" then l else l ++ " " ++ more
+
+                    -- A line ending in two-or-more spaces is a hard break; keep a
+                    -- newline so span parsing emits a `<br>`. Other lines fold
+                    -- into one soft-wrapped run separated by a space.
+                    sep = if String.endsWith "  " l then "\n" else " "
+                    body = if more == "" then l else l ++ sep ++ more
                 in
                     ( body, after )
 
@@ -706,6 +713,15 @@ spanLoop remaining acc pending =
         else
             List.reverse (flushPending pending acc)
 
+    else if String.startsWith "\n" remaining then
+        -- A newline inside a paragraph marks a hard break (`takeParagraph` keeps
+        -- a newline only where a line ended in two-or-more spaces): flush the run
+        -- without its trailing spaces and emit a `HardBreakSpan`.
+        spanLoop
+            (String.slice 1 (String.length remaining) remaining)
+            (HardBreakSpan :: flushPending (stripTrailingSpaces pending) acc)
+            ""
+
     else if String.startsWith "![" remaining then
         case takeImage remaining of
 
@@ -875,26 +891,6 @@ stripTrailingSpaces s =
             s
 
 
--- Guard a URL against dangerous schemes. `javascript:` and `vbscript:` are
--- XSS sinks regardless of case; neutralise them to `about:blank`. All other
--- URLs (including `data:image/…`, `https://`, relative paths) pass through.
--- This is the single SSOT sanitiser — apply it to every URL that becomes an
--- HTML attribute (`href`, `src`).
-safeUrl : String -> String
-safeUrl url =
-    let
-        lower = String.toLower (String.slice 0 11 url)
-    in
-        if lower == "javascript:" then
-            "about:blank"
-
-        else if String.toLower (String.slice 0 10 url) == "vbscript:" then
-            "about:blank"
-
-        else
-            url
-
-
 -- ─── Span rendering ─────────────────────────────────────────────────────────
 
 renderSpans : List Span -> List (Element msg)
@@ -930,12 +926,12 @@ renderSpan span =
                 [ Ui.htmlAttribute "style" "text-decoration:underline"
                 , Ui.htmlAttribute "target" "_blank"
                 ]
-                { url = safeUrl url, label = Ui.text text }
+                { url = url, label = Ui.text text }
 
         ImageSpan alt url ->
             Ui.html
                 (Html.img
-                    [ Attr.src (safeUrl url)
+                    [ Attr.src url
                     , Attr.alt alt
                     , Attr.style "max-width:100%"
                     ]
