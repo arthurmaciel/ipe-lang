@@ -929,7 +929,8 @@ pub fn build_with_options(
     runtime_dir: &Path,
     options: BuildOptions,
 ) -> Result<(), CliError> {
-    let source = fs::read_to_string(entry).map_err(|e| io_err(entry, e))?;
+    let source =
+        crate::io_bounded::read_to_string_capped(entry, crate::io_bounded::SOURCE_READ_CAP)?;
 
     // Parse ONCE with a throwaway interner to learn the entry's declared module
     // path. Using the declared name as the entry's `module_path` means the shared
@@ -1093,7 +1094,8 @@ struct CollectedSources {
 /// [`CliError::Pipeline`] when the entry does not parse; [`CliError::Io`] on
 /// any filesystem failure reading a discovered module.
 fn collect_entry_and_siblings(entry: &Path) -> Result<CollectedSources, CliError> {
-    let source = fs::read_to_string(entry).map_err(|e| io_err(entry, e))?;
+    let source =
+        crate::io_bounded::read_to_string_capped(entry, crate::io_bounded::SOURCE_READ_CAP)?;
     let entry_module_path = parse_entry_module_path(entry, &source)?;
 
     // Source root: the directory containing the entry file.
@@ -1138,7 +1140,8 @@ fn collect_test_sources(
     project_src_root: &Path,
     test_entry: &Path,
 ) -> Result<CollectedSources, CliError> {
-    let entry_source = fs::read_to_string(test_entry).map_err(|e| io_err(test_entry, e))?;
+    let entry_source =
+        crate::io_bounded::read_to_string_capped(test_entry, crate::io_bounded::SOURCE_READ_CAP)?;
     let entry_module_path = parse_entry_module_path(test_entry, &entry_source)?;
 
     // The `tests/` tree: the directory holding the test entry, rooted at itself
@@ -1234,7 +1237,10 @@ fn read_discovered_sources(
                 (entry.to_path_buf(), entry_source.to_owned()),
             );
         } else {
-            let src = fs::read_to_string(&m.path).map_err(|e| io_err(&m.path, e))?;
+            let src = crate::io_bounded::read_to_string_capped(
+                &m.path,
+                crate::io_bounded::SOURCE_READ_CAP,
+            )?;
             sources.insert(m.module_path.clone(), (m.path.clone(), src));
         }
     }
@@ -2437,10 +2443,8 @@ pub fn build_project_with_options(
     // For each module, read its source and extract imports.
     let mut sources: BTreeMap<Vec<String>, (PathBuf, String)> = BTreeMap::new();
     for m in &discovered {
-        let src = fs::read_to_string(&m.path).map_err(|e| CliError::Io {
-            path: m.path.clone(),
-            source: e,
-        })?;
+        let src =
+            crate::io_bounded::read_to_string_capped(&m.path, crate::io_bounded::SOURCE_READ_CAP)?;
         sources.insert(m.module_path.clone(), (m.path.clone(), src));
     }
 
@@ -4582,10 +4586,10 @@ fn user_sources_for_unsafe_scan(
         return discovered
             .iter()
             .map(|d| {
-                fs::read_to_string(&d.path).map_err(|e| CliError::Io {
-                    path: d.path.clone(),
-                    source: e,
-                })
+                crate::io_bounded::read_to_string_capped(
+                    &d.path,
+                    crate::io_bounded::SOURCE_READ_CAP,
+                )
             })
             .collect::<Result<Vec<_>, _>>();
     }
@@ -4597,12 +4601,10 @@ fn user_sources_for_unsafe_scan(
             .into_values()
             .map(|(_, src)| src)
             .collect()),
-        Err(_) => fs::read_to_string(entry)
-            .map(|src| vec![src])
-            .map_err(|e| CliError::Io {
-                path: entry.to_owned(),
-                source: e,
-            }),
+        Err(_) => {
+            crate::io_bounded::read_to_string_capped(entry, crate::io_bounded::SOURCE_READ_CAP)
+                .map(|src| vec![src])
+        }
     }
 }
 
@@ -5758,7 +5760,8 @@ pub fn infer_package_capabilities(
     // lowering resolve its sibling imports.
     let mut sources: BTreeMap<Vec<String>, (PathBuf, String)> = BTreeMap::new();
     for m in &discovered {
-        let src = fs::read_to_string(&m.path).map_err(|e| io_err(&m.path, e))?;
+        let src =
+            crate::io_bounded::read_to_string_capped(&m.path, crate::io_bounded::SOURCE_READ_CAP)?;
         sources.insert(m.module_path.clone(), (m.path.clone(), src));
     }
 
@@ -5946,7 +5949,8 @@ fn line_col(src: &str, offset: usize) -> (usize, usize) {
 /// # Errors
 /// Returns [`CliError::Io`] on a filesystem failure.
 fn apply_fixes_cmd<W: Write>(entry: &Path, auto: bool, w: &mut W) -> Result<(), CliError> {
-    let source = fs::read_to_string(entry).map_err(|e| io_err(entry, e))?;
+    let source =
+        crate::io_bounded::read_to_string_capped(entry, crate::io_bounded::SOURCE_READ_CAP)?;
 
     let Some(diag) = pipeline_first_diagnostic(&source) else {
         writeln!(
