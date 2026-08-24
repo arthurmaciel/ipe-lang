@@ -582,11 +582,15 @@ const RUNTIME_MOD_RS_HTTP_CLIENT_APPEND: &str = "pub mod http_client;\npub use h
 /// Lines appended to `ipe_runtime/mod.rs` for the SSRF deny-private validators.
 ///
 /// `ssrf.rs` parses URLs with the `url` crate (unconditional base dep) and is
-/// reqwest-free. Its `pub(crate)` validators are consumed only by the
-/// `http_client` and `ws_client` modules, so it is declared exactly when either
-/// of those is — keeping a pure-CLI program free of an otherwise-unreferenced
-/// module (`dead_code`).
-const RUNTIME_MOD_RS_SSRF_APPEND: &str = "mod ssrf;\n";
+/// reqwest-free. Its validators are consumed by the `http_client`, `ws_client`,
+/// and `db` modules (the latter calls `VettedDial::for_host` in `build_pool` and
+/// `external_conn.rs` uses it unconditionally).
+///
+/// Declared `pub` so that in the vendored emit model — where all runtime modules
+/// live under `src/ipe_runtime/` — the `pub use ipe_runtime::*;` at the crate
+/// root re-exports `ssrf`, making `crate::ssrf::VettedDial` resolvable from
+/// `db.rs` and `external_conn.rs` which use absolute `crate::ssrf` paths.
+const RUNTIME_MOD_RS_SSRF_APPEND: &str = "pub mod ssrf;\n";
 
 // ── Ipe.Url — typed, validated URLs ──────────────────────────────────────────
 
@@ -3177,38 +3181,36 @@ fn pub_crate_item(rendered: &str) -> String {
 /// Build the db-enabled `Cargo.toml` from the base manifest by:
 ///
 /// 1. Adding `"db"` to the `default` feature list.
-/// 2. Appending the `sqlx` dependency line, with `"sqlite"` ALWAYS enabled
-///    plus `"postgres"` ADDITIONALLY when `driver` is Postgres — the
-///    structural fix that makes a Postgres-driver program's sqlx dependency
-///    actually enable Postgres support (a `driver = "postgres"` build with
-///    only the `"sqlite"` sqlx feature fails to compile
-///    `sqlx::postgres::PgPool`, which is exactly the "Postgres driver
-///    structurally unreachable" gap this closes).
+/// 2. Appending the `sqlx` dependency line, with BOTH `"sqlite"` AND `"postgres"`
+///    ALWAYS enabled, regardless of the configured driver.
 ///
-///    `"sqlite"` can never be dropped regardless of `driver`: the always-
-///    emitted `telemetry_spill`/`web::hub`/`web::store` runtime modules
-///    hardcode `SqlitePool` for their local spill/session persistence
-///    (independent of the app's `[database]` driver choice), so an
-///    exclusive sqlite-vs-postgres feature selection made every Postgres
-///    build fail `cargo build` downstream of `db_cargo_toml` even though
-///    `ipe` itself exited 0 — an exit-0-then-cargo-fail SEAL violation.
-///    Additive, not exclusive, is the only sound selection here.
+///    `"sqlite"` is always required: the always-emitted `telemetry_spill` /
+///    `web::hub` / `web::store` runtime modules hardcode `SqlitePool` for their
+///    local spill/session persistence (independent of the app's `[database]`
+///    driver choice).
+///
+///    `"postgres"` is always required: the always-emitted `external_conn.rs`
+///    runtime module uses `sqlx::postgres::PgPool` and `PgPoolOptions`
+///    unconditionally (it handles any externally-configured DSN regardless of the
+///    app's own fixed driver). Omitting `"postgres"` causes E0433 at `cargo build`
+///    even for a sqlite-driver program — an exit-0-then-cargo-fail SEAL violation.
 ///
 /// String surgery rather than a second static file: the manifest content is
 /// small and the two edits are unambiguous anchors.
 fn db_cargo_toml(base: &str, driver: crate::DbDriver) -> DResult<String> {
     const DEFAULT_LINE: &str = r#"default = ["tokio", "json"]"#;
-    const DEFAULT_LINE_DB: &str = r#"default = ["tokio", "json", "db"]"#;
+    // `"secret"` is required alongside `"db"`: the vendored `config.rs` calls
+    // `crate::app_config::resolve_db_url_override`, which is gated on
+    // `#[cfg(feature = "secret")]`. Activating the feature makes it visible.
+    const DEFAULT_LINE_DB: &str = r#"default = ["tokio", "json", "db", "secret"]"#;
     // The sqlx line is appended right before the dev/release profile sections.
     // Anchoring on `[profile.dev]` is stable (always present in the template).
     const PROFILE_ANCHOR: &str = "[profile.dev]";
-    // Version + crate name sourced from the SSOT (`crate_specs`); the feature
-    // list stays inline (it depends on usage AND driver). `"sqlite"` is
-    // unconditional — see the doc comment above for why.
-    let sqlx_features = match driver {
-        crate::DbDriver::Sqlite => r#""sqlite""#.to_owned(),
-        crate::DbDriver::Postgres => r#""sqlite", "postgres""#.to_owned(),
-    };
+    // Both `"sqlite"` and `"postgres"` are unconditional — see the doc comment
+    // above for why. The `driver` parameter controls which config.rs alias is
+    // used (DbPool / DbRow), not which sqlx features link.
+    let _ = driver;
+    let sqlx_features = r#""sqlite", "postgres""#;
     // `bincode` rides with `sqlx`: the vendored live session store's
     // checkpoint body is bincode-encoded under the same `db` feature gate.
     let sqlx_line = format!(
@@ -3288,8 +3290,8 @@ fn server_cargo_toml(base: &str) -> DResult<String> {
     // This generic anchor handles every composition:
     //   non-db:  `default = ["tokio", "crypto", "json"]`
     //            → `default = ["tokio", "crypto", "json", "server"]`
-    //   db:      `default = ["tokio", "crypto", "json", "db"]`
-    //            → `default = ["tokio", "crypto", "json", "db", "server"]`
+    //   db:      `default = ["tokio", "json", "db", "secret"]`
+    //            → `default = ["tokio", "json", "db", "secret", "server"]`
     //   any future feature:  likewise, without needing a new anchor string.
     //
     // Fail-closed: if the prefix or the closing `]` is absent the manifest
@@ -3390,20 +3392,12 @@ fn web_cargo_toml(base: &str) -> DResult<String> {
     // golden emits `net`+`sync` for the HTTP server, so add the two missing features.
     const TOKIO_NET_SYNC_FEATURES: &str = "\"time\", \"net\", \"sync\"]";
     const TOKIO_LIVE_FEATURES: &str = "\"time\", \"net\", \"sync\", \"signal\", \"process\"]";
-    // Transitive-closure invariant: the runtime's `live/store.rs` defines
-    // `PostgresStore` gated on `#[cfg(feature = "db")]`, which uses `sqlx::PgPool`.
-    // `sqlx::PgPool` requires the `postgres` sqlx feature.  When a program uses
-    // BOTH Db and Web, `db_cargo_toml` has already injected the sqlx dep with
-    // `["runtime-tokio-rustls", "sqlite"]`; this step extends it with `"postgres"`
-    // so that the `PostgresStore` code compiles.
-    //
-    // `SQLX_SQLITE_FEATURES` uniquely identifies the sqlx dep written by
-    // `db_cargo_toml` — `runtime-tokio-rustls` is a sqlx-specific feature, so
-    // this pattern never collides with another dep's feature list.
-    //
-    // Fail-open (no CompilerBug guard): when the program uses Web but NOT Db, the
-    // sqlx dep is absent from the manifest and the `replacen` is a no-op, which is
-    // correct — a Web-only program does not need the `postgres` feature.
+    // `db_cargo_toml` now always emits both `"sqlite"` and `"postgres"` sqlx
+    // features (since `external_conn.rs` uses `sqlx::postgres` unconditionally).
+    // The replacen below is kept as a safety net for Db+Web combinations but is a
+    // no-op in practice — `SQLX_SQLITE_FEATURES` no longer appears in the manifest
+    // after `db_cargo_toml` runs. Fail-open (no CompilerBug guard) applies in both
+    // the no-Db case (sqlx absent) and the always-both case (pattern not found).
     const SQLX_SQLITE_FEATURES: &str = "features = [\"runtime-tokio-rustls\", \"sqlite\"]";
     const SQLX_POSTGRES_FEATURES: &str =
         "features = [\"runtime-tokio-rustls\", \"sqlite\", \"postgres\"]";
@@ -4901,7 +4895,16 @@ mod tests {
         let def = default_line(&out);
         // `"crypto"` is NOT expected: it is gated by `crypto_core_heavy_cargo_toml`
         // (crypto / jwt / auth), which this db+server composition does not reach.
-        for feat in &[r#""tokio""#, r#""json""#, r#""db""#, r#""server""#] {
+        // `"secret"` IS expected: `db_cargo_toml` adds it alongside `"db"` because
+        // the vendored `config.rs` calls `resolve_db_url_override` which is gated on
+        // `#[cfg(feature = "secret")]`.
+        for feat in &[
+            r#""tokio""#,
+            r#""json""#,
+            r#""db""#,
+            r#""server""#,
+            r#""secret""#,
+        ] {
             assert!(
                 def.contains(feat),
                 "default line must contain {feat}: {def}"
@@ -4990,7 +4993,8 @@ mod tests {
     }
 
     /// The augmenter composes with a db base: a db + crypto program still gets
-    /// `crypto` in its original slot (`["tokio", "crypto", "json", "db"]`).
+    /// `crypto` in its original slot, alongside the `"secret"` that `db_cargo_toml`
+    /// adds (`["tokio", "crypto", "json", "db", "secret"]`).
     #[test]
     fn crypto_core_heavy_toml_composes_with_db() {
         let db = db_cargo_toml(
@@ -5000,8 +5004,8 @@ mod tests {
         .expect("db_cargo_toml");
         let out = crypto_core_heavy_cargo_toml(&db).expect("crypto_core_heavy on db base");
         assert!(
-            default_line(&out).contains(r#"default = ["tokio", "crypto", "json", "db"]"#),
-            "db+crypto default must be byte-identical to the pre-gating order: {}",
+            default_line(&out).contains(r#"default = ["tokio", "crypto", "json", "db", "secret"]"#),
+            "db+crypto default must contain crypto before json and secret alongside db: {}",
             default_line(&out)
         );
     }
@@ -5161,23 +5165,22 @@ mod tests {
 
     // ── Class 7 §3: Postgres driver structural reachability ─────────────────
 
-    /// `db_cargo_toml(&async_runtime_cargo_toml(CARGO_TOML).expect("async base"), DbDriver::Sqlite)` must be byte-identical to the
-    /// pre-driver-selection output (non-regression: every existing db-enabled
-    /// sqlite project's Cargo.toml is unaffected by the driver plumbing).
+    /// Both sqlite and postgres drivers must emit `"sqlite"` AND `"postgres"` in
+    /// the sqlx feature list. `external_conn.rs` uses `sqlx::postgres::PgPool`
+    /// unconditionally (it handles any externally-configured DSN regardless of the
+    /// app's own fixed driver), so `"postgres"` is required even for a
+    /// sqlite-driver program — omitting it causes E0433 at `cargo build`.
     #[test]
-    fn db_cargo_toml_sqlite_driver_unchanged_sqlx_feature() {
+    fn db_cargo_toml_sqlite_driver_enables_both_sqlx_features() {
         let out = db_cargo_toml(
             &async_runtime_cargo_toml(CARGO_TOML).expect("async base"),
             DbDriver::Sqlite,
         )
         .expect("db_cargo_toml(Sqlite) must succeed");
         assert!(
-            out.contains(r#"features = ["runtime-tokio-rustls", "sqlite"]"#),
-            "sqlite driver must keep the sqlite sqlx feature, not add postgres: {out}"
-        );
-        assert!(
-            !out.contains(r#""postgres"]"#),
-            "sqlite driver must not enable postgres: {out}"
+            out.contains(r#"features = ["runtime-tokio-rustls", "sqlite", "postgres"]"#),
+            "sqlite driver must enable both sqlite and postgres sqlx features \
+             (external_conn.rs uses sqlx::postgres unconditionally): {out}"
         );
     }
 
