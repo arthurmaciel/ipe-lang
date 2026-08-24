@@ -197,6 +197,22 @@ const AUTHED_ROUTE: &str = include_str!(concat!(
     "/../../tests/golden/authed_route_revocation_vendored_seal/Main.ipe"
 ));
 
+/// Authed-route + Db-store program using `Store.allAs` behind `Server.getAuthed`.
+///
+/// Under the vendored emit model the emitted `ipe_runtime/mod.rs` is a trimmed
+/// subset of the full runtime `mod.rs`. The runtime `db.rs` calls
+/// `crate::ssrf::VettedDial::for_host` in its `build_pool` function
+/// unconditionally (production code, not test-only), and `external_conn.rs` calls
+/// `crate::dsn::{Dsn, DsnDriver}` and `crate::ssrf::VettedDial`. Without `ssrf`,
+/// `dsn`, and `external_conn` appended to the vendored `mod.rs` whenever `uses_db`
+/// is set, those references fail E0425/E0433 (ipe exit 0, cargo fails — SEAL
+/// breach). This test gates the db-surface instance of the vendored-model SEAL
+/// class.
+const AUTHED_STORE_QUERY: &str = include_str!(concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/../../tests/golden/authed_store_query_seal/Main.ipe"
+));
+
 // ── The gate: every shape emits AND cargo-builds ────────────────────────────
 
 #[test]
@@ -260,6 +276,24 @@ fn authed_route_vendored_builds() {
     emit_and_build_vendored("authed_route_vendored", AUTHED_ROUTE).expect(
         "authed route must cargo-build under the vendored emit model \
          (jwt feature must be in default = [...])",
+    );
+}
+
+/// Under the vendored emit model an authed-route + Db-store program
+/// (`Server.getAuthed` + `Store.allAs`) must cargo-build. The runtime `db.rs`
+/// calls `crate::ssrf::VettedDial::for_host` in `build_pool` (production, not
+/// test-only); `external_conn.rs` calls `crate::dsn::{Dsn, DsnDriver}` and
+/// `crate::ssrf::VettedDial`. Without `ssrf`, `dsn`, and `external_conn`
+/// appended to the vendored `mod.rs` under `uses_db`, the emitted crate fails
+/// E0425/E0433 — ipe exit 0, cargo fails: the db-surface SEAL breach.
+#[test]
+fn authed_store_query_vendored_builds() {
+    if skip() {
+        return;
+    }
+    emit_and_build_vendored("authed_store_query_vendored", AUTHED_STORE_QUERY).expect(
+        "authed store-query program must cargo-build under the vendored emit model \
+         (ssrf + dsn + external_conn must be declared when uses_db)",
     );
 }
 

@@ -524,6 +524,23 @@ fn assert_wasm_admissible(ctx: &EmitCtx) -> DResult<()> {
 /// module namespace so the generated `main.rs` can call the db functions.
 const RUNTIME_MOD_RS_DB_APPEND: &str = "pub mod db;\npub use db::*;\npub mod telemetry_spill;\n";
 
+/// Lines appended to `ipe_runtime/mod.rs` for the typed DSN descriptor and the
+/// external-connection pool when the program uses Db kernels.
+///
+/// `dsn.rs` (the opaque `Ipe.Db.Dsn` parse-don't-validate descriptor) and
+/// `external_conn.rs` (the live `Ipe.Db.Connection` pool for a database the app
+/// was not built against) are declared alongside `db`. Both are gated on the
+/// `db` feature in the real runtime `mod.rs`; the vendored trimmed template must
+/// declare them under the same condition so the transitive-closure invariant
+/// holds: `external_conn.rs` calls `crate::dsn::{Dsn, DsnDriver}`, and both
+/// `external_conn.rs` and `db.rs` call `crate::ssrf::VettedDial` (the SSRF
+/// module is appended by the shared SSRF predicate which now includes `uses_db`).
+/// `dsn.rs` and `external_conn.rs` reach only the always-on `secret` and `core`
+/// base modules plus `ssrf`, so declaring them here adds no new dependencies
+/// beyond those already forced by `uses_db`.
+const RUNTIME_MOD_RS_DB_DSN_APPEND: &str =
+    "pub mod dsn;\npub use dsn::*;\npub mod external_conn;\npub use external_conn::*;\n";
+
 // ── TEA Cmd / Sub ─────────────────────────────────────────────────────
 
 /// Lines appended to `ipe_runtime/mod.rs` when the program uses TEA kernels
@@ -2422,25 +2439,38 @@ fn assemble_project_files(
         // consumer) is declared when the program reaches it — directly
         // (`uses_http`) or through a surface whose runtime module calls into it
         // (server `http_stream`, web/live exporters, `email`). `ssrf.rs` (the
-        // reqwest-free URL validators) is declared alongside either `http_client`
-        // OR the WebSocket client, its only consumers — a pure-CLI program keeps
-        // both absent, dropping the whole reqwest dependency tree.
+        // reqwest-free URL validators) is declared alongside `http_client`, the
+        // WebSocket client, OR a Db program (`db.rs::build_pool` applies the SSRF
+        // host gate via `crate::ssrf::VettedDial::for_host` unconditionally in
+        // production code; a vendored Db build without this declaration fails
+        // E0425/E0433 — the SEAL class this gate closes).
         // Ipe.Url typed-URL module (the `url` crate + its idna → ICU4X subtree).
         // Declared when the program reaches it — directly (`uses_url`) or through
         // a surface whose runtime module parses with the `url` crate
         // (`http_client` targets a typed `crate::url::Url`; `ws_client` calls
-        // `::url::Url::parse`). Pushed BEFORE `http_client`/`ssrf` (both of which
-        // do `use crate::url::…` / `use url::Url`) so the module they reference is
-        // already declared. A pure-CLI program keeps it absent, dropping the whole
-        // idna/ICU4X tree.
+        // `::url::Url::parse`; `db.rs::build_pool` uses `::url::Url::parse` for
+        // SSRF host extraction; `ssrf.rs` itself uses `url::Url`). Pushed BEFORE
+        // `http_client`/`ssrf` (both of which do `use crate::url::…` / `use
+        // url::Url`) so the module they reference is already declared. A pure-CLI
+        // program keeps it absent, dropping the whole idna/ICU4X tree.
         if ctx.reaches_url() {
             mod_rs.push_str(RUNTIME_MOD_RS_URL_APPEND);
         }
         if uses_http_client {
             mod_rs.push_str(RUNTIME_MOD_RS_HTTP_CLIENT_APPEND);
         }
-        if uses_http_client || ctx.uses_websocket {
+        if uses_http_client || ctx.uses_websocket || ctx.uses_db {
             mod_rs.push_str(RUNTIME_MOD_RS_SSRF_APPEND);
+        }
+        // Db DSN + external-connection pool: `dsn.rs` (the typed opaque `Ipe.Db.Dsn`
+        // descriptor) and `external_conn.rs` (the live pool for a database the app was
+        // not built against) are gated on `db` in the real runtime `mod.rs` — the
+        // vendored trimmed template must declare them under the same predicate.
+        // `external_conn.rs` calls `crate::dsn::{Dsn, DsnDriver}` and
+        // `crate::ssrf::VettedDial`; both modules require `ssrf` (declared above)
+        // and `url` (declared above via `reaches_url` which now includes `uses_db`).
+        if ctx.uses_db {
+            mod_rs.push_str(RUNTIME_MOD_RS_DB_DSN_APPEND);
         }
         // Ipe.Config TOML/YAML decoders. `config_decode` (the sole consumer of
         // the `toml` + `serde_yaml` crates) is declared when the program reaches
