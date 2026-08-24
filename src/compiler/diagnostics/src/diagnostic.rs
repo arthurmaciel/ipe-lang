@@ -92,6 +92,8 @@ pub enum TokenKind {
     Exposing,
     As,
     Type,
+    /// The `foreign` keyword — opens an FFI type declaration.
+    Foreign,
     Case,
     Of,
     Let,

@@ -28,6 +28,9 @@ pub enum Tok {
     Exposing,
     As,
     Type,
+    /// `foreign` — introduces an FFI type declaration `foreign Name = Ffi.crate … |> …`.
+    /// Read only by the CLI lift pass; the compiler proper ignores foreign declarations.
+    Foreign,
     Case,
     Of,
     Let,
@@ -291,6 +294,7 @@ fn keyword(text: &str) -> Option<Tok> {
         "exposing" => Some(Tok::Exposing),
         "as" => Some(Tok::As),
         "type" => Some(Tok::Type),
+        "foreign" => Some(Tok::Foreign),
         "case" => Some(Tok::Case),
         "of" => Some(Tok::Of),
         "let" => Some(Tok::Let),

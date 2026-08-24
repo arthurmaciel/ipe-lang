@@ -28,8 +28,8 @@ use ipe_diagnostics::{
 };
 use ipe_intern::{Interner, Symbol};
 use ipe_syntax::{
-    Ctor, DocString, Exposed, Exposing, Expr, Expr_, Import, LetBinding, Module, Pattern, Pattern_,
-    Privacy, TypeAlias, TypeAnnotation, Union, Value,
+    Ctor, DocString, Exposed, Exposing, Expr, Expr_, ForeignDecl, Import, LetBinding, Module,
+    Pattern, Pattern_, Privacy, TypeAlias, TypeAnnotation, Union, Value,
 };
 
 use crate::layout;
@@ -45,12 +45,14 @@ pub struct Parser<'a> {
     interner: &'a mut Interner,
 }
 
-/// The result of splitting parsed declarations into their three kinds: value
-/// bindings (with annotations attached), union types, and type aliases.
+/// The result of splitting parsed declarations into their four kinds: value
+/// bindings (with annotations attached), union types, type aliases, and foreign
+/// FFI declarations.
 type AssembledDecls = (
     Vec<Located<Value>>,
     Vec<Located<Union>>,
     Vec<Located<TypeAlias>>,
+    Vec<Located<ForeignDecl>>,
 );
 
 /// One parsed top-level declaration, before annotations are matched to values.
@@ -67,6 +69,8 @@ enum Decl {
         body: Expr,
         doc: Option<DocString>,
     },
+    /// A `foreign Name = Ffi.crate "…" |> …` declaration.
+    Foreign(Located<ForeignDecl>),
 }
 
 /// Map a concrete lexer token to its payload-free [`TokenKind`] category — the
@@ -78,6 +82,7 @@ const fn tok_kind(t: &Tok) -> TokenKind {
         Tok::Exposing => TokenKind::Exposing,
         Tok::As => TokenKind::As,
         Tok::Type => TokenKind::Type,
+        Tok::Foreign => TokenKind::Foreign,
         Tok::Case => TokenKind::Case,
         Tok::Of => TokenKind::Of,
         Tok::Let => TokenKind::Let,
@@ -364,7 +369,7 @@ impl<'a> Parser<'a> {
         }
 
         let header_span = Self::span_merge(module_tok.span, name.span);
-        let (values, unions, aliases) = Self::assemble(decls);
+        let (values, unions, aliases, foreigns) = Self::assemble(decls);
         Ok(Module {
             name,
             exposing: Located::new(header_span, exposing),
@@ -372,19 +377,23 @@ impl<'a> Parser<'a> {
             values,
             unions,
             aliases,
+            foreigns,
         })
     }
 
-    /// Split decls into values (with annotations attached), unions, and aliases.
+    /// Split decls into values (with annotations attached), unions, aliases,
+    /// and foreign FFI declarations.
     fn assemble(decls: Vec<Decl>) -> AssembledDecls {
         let mut unions = Vec::new();
         let mut aliases = Vec::new();
+        let mut foreigns = Vec::new();
         let mut annotations: Vec<(Symbol, Located<TypeAnnotation>, Option<DocString>)> = Vec::new();
         let mut values = Vec::new();
         for d in decls {
             match d {
                 Decl::Union(u) => unions.push(u),
                 Decl::Alias(a) => aliases.push(a),
+                Decl::Foreign(f) => foreigns.push(f),
                 Decl::Annotation(name, ty, doc) => annotations.push((name, ty, doc)),
                 Decl::Value {
                     name,
@@ -413,7 +422,7 @@ impl<'a> Parser<'a> {
                 }
             }
         }
-        (values, unions, aliases)
+        (values, unions, aliases, foreigns)
     }
 
     /// The module name in the header: a single (possibly dotted) identifier.
@@ -676,6 +685,11 @@ impl<'a> Parser<'a> {
             union.value.doc = doc;
             return Ok(Decl::Union(union));
         }
+        if self.peek_kind() == Some(&Tok::Foreign) {
+            let mut foreign = self.parse_foreign()?;
+            foreign.value.doc = doc;
+            return Ok(Decl::Foreign(foreign));
+        }
         let tok = self.bump(Construct::Definition)?;
         let Tok::Ident(text) = &tok.kind else {
             return Err(Self::unexpected_token(&tok, &[Expected::Identifier]));
@@ -878,6 +892,74 @@ impl<'a> Parser<'a> {
                 name,
                 vars,
                 ctors,
+                doc: None,
+            },
+        ))
+    }
+
+    /// Parse a `foreign Name = Ffi.crate "…" |> …` declaration.
+    ///
+    /// The optional `foreign name : Ffi.Fn` annotation form is handled by
+    /// `parse_decl`'s annotation logic: a `name : T` annotation line preceding
+    /// the `foreign name = …` binding is matched here and carried as
+    /// `type_annotation`. The CLI lift pass uses the annotation to distinguish a
+    /// closure declaration (`Ffi.Fn`) from a struct / enum declaration.
+    ///
+    /// The body is parsed as a full expression at the name's column so the layout
+    /// rule treats the `|>` continuations as the body, not new declarations.
+    fn parse_foreign(&mut self) -> DResult<Located<ForeignDecl>> {
+        let foreign_tok = self.bump(Construct::Definition)?; // `foreign`
+        let name_tok = self.bump(Construct::Definition)?;
+        let Tok::Ident(name_text) = &name_tok.kind else {
+            return Err(Self::unexpected_token(&name_tok, &[Expected::Identifier]));
+        };
+        let name_sym = self.interner.intern(name_text)?;
+        let name = Located::new(name_tok.span, name_sym);
+        let name_col = name_tok.col;
+
+        // An optional `: T` type annotation immediately after the name (no `=` in
+        // between). This is the `foreign counterUpdate : Ffi.Fn` form; a closure
+        // declaration carries it; struct / enum declarations omit it.
+        let type_annotation = if self.peek_kind() == Some(&Tok::Colon) {
+            self.bump(Construct::Definition)?; // `:`
+            let ty = self.parse_type(name_col, 0)?;
+            Some(ty)
+        } else {
+            None
+        };
+
+        // The `=` before the body.
+        match self.peek() {
+            Some(t) if t.kind == Tok::Equals => {
+                self.bump(Construct::Definition)?;
+            }
+            Some(t) => {
+                let span = t.span;
+                return Err(Diagnostic::Parse {
+                    span,
+                    msg: ParseError::MissingEquals {
+                        binding: name_text.as_str().into(),
+                    },
+                });
+            }
+            None => {
+                return Err(Diagnostic::Parse {
+                    span: self.eof_err_span(),
+                    msg: ParseError::MissingEquals {
+                        binding: name_text.as_str().into(),
+                    },
+                });
+            }
+        }
+
+        let body = self.parse_expr(name_col, 0)?;
+        let span = Self::span_merge(foreign_tok.span, body.span);
+        Ok(Located::new(
+            span,
+            ForeignDecl {
+                name,
+                type_annotation,
+                body,
                 doc: None,
             },
         ))

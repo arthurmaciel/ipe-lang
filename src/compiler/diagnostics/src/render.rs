@@ -2016,6 +2016,7 @@ const fn token_kind_str(t: TokenKind) -> &'static str {
         TokenKind::Exposing => "`exposing`",
         TokenKind::As => "`as`",
         TokenKind::Type => "`type`",
+        TokenKind::Foreign => "`foreign`",
         TokenKind::Case => "`case`",
         TokenKind::Of => "`of`",
         TokenKind::Let => "`let`",
