@@ -2504,7 +2504,14 @@ fn assemble_project_files(
         {
             mod_rs.push_str(RUNTIME_MOD_RS_TEA_APPEND);
         }
-        if ctx.uses_server {
+        // `web/csrf.rs` unconditionally re-exports `crate::server::csrf_*`,
+        // so `pub mod server;` must be emitted whenever the web module is
+        // declared — not just for explicit Ipe.Http.Server use.  The Cargo
+        // manifest already adds `"server"` to default features via
+        // `server_cargo_toml` for all three of uses_server/uses_web/uses_webview
+        // (see the `server_cargo_toml` call above), so the feature flag is
+        // always on; this mirrors the module declaration to match.
+        if ctx.uses_server || ctx.uses_web || ctx.uses_webview {
             mod_rs.push_str(RUNTIME_MOD_RS_SERVER_APPEND);
         }
         // Ipe.WebSocket client — declare `ws_client` (its `ssrf` dep is
