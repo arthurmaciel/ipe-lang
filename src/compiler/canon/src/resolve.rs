@@ -232,6 +232,15 @@ pub const RESERVED_BUILTIN_TYPES: &[&str] = &[
     // `type Setting …` could forge a look-alike and defeat that shape barrier.
     // Built only through the setting kernels, never an Ipê term.
     "Setting",
+    // The closed config-tag ADTs — the argument types of `Host.bind` /
+    // `Log.level` / `Web.csrf`. Reserved so a user `type HostMode …` cannot forge
+    // a look-alike with an out-of-range or CSRF-disabling variant that the setting
+    // builders would then accept; each is built only through its constructor
+    // kernels, never an Ipê term. `CsrfMode` in particular has no disabling
+    // variant, so a setting cannot express turning CSRF off.
+    "HostMode",
+    "LogLevel",
+    "CsrfMode",
     "Html",
     "Element",
     "Attribute",
@@ -419,7 +428,9 @@ pub fn is_user_type_declaration_forbidden(name: &str) -> bool {
 /// * closed containers (`List`/`Maybe`/`Set`, `Dict`/`Result`);
 /// * `Connection mode` — `Ipe.Db`'s external-connection handle (arity 1);
 /// * `Setting shape` — `Ipe.App`'s runtime-config carrier (arity 1);
-/// * `ReadOnly`/`ReadWrite` — nullary phantom access-mode markers.
+/// * `ReadOnly`/`ReadWrite` — nullary phantom access-mode markers;
+/// * `HostMode`/`LogLevel`/`CsrfMode` — nullary closed config-tag ADTs (the
+///   argument types of `Host.bind`/`Log.level`/`Web.csrf`).
 ///
 /// `Task`/`Cmd`/`Sub` are absent (their gate is in `ipe_types::constrain`).
 /// `CustomElement` is absent (name-based gate, fused with its boundary SEAL).
@@ -428,7 +439,7 @@ pub fn builtin_empty_home_arity(name: Option<&str>) -> Option<usize> {
     match name? {
         "List" | "Maybe" | "Set" | "Connection" | "Setting" => Some(1),
         "Dict" | "Result" => Some(2),
-        "ReadOnly" | "ReadWrite" => Some(0),
+        "ReadOnly" | "ReadWrite" | "HostMode" | "LogLevel" | "CsrfMode" => Some(0),
         _ => None,
     }
 }

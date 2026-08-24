@@ -78,6 +78,21 @@ Web.csrf         : CsrfMode -> Setting Web
 WebView.window   : WindowOpts -> Setting WebView
 ```
 
+The tag arguments (`HostMode` / `LogLevel` / `CsrfMode`) are **closed ADTs**, not
+bare `Int`s — an out-of-range tag is a compile-time type error, not a value the
+runtime must fall closed on. Their only values are these constructors:
+
+```elm
+Host.loopback / Host.allInterfaces / Host.envDriven   : HostMode
+Level.debug / Level.info / Level.warn / Level.error    : LogLevel   -- `Level.*`, distinct from the `Log.*` logging kernels
+Web.strict / Web.inheritCsrf                           : CsrfMode   -- no disabling variant
+```
+
+`CsrfMode` deliberately has **no disabling variant**: a setting cannot express
+turning CSRF off, mirroring the runtime's stricter-only monotonicity — that
+property is unrepresentable at the type level. Each constructor projects to the
+raw `Int` tag the runtime resolver consumes; the projection is total.
+
 `Setting any` unifies with any shape; `Setting Web` unifies only with `Web`. A
 `Terminal` app that lists `Web.csrf …` is a **compile-time type error** — invalid
 config is unrepresentable, not validated-and-rejected at runtime.
@@ -90,15 +105,15 @@ unchanged:
 
 ```elm
 main =
-    Web.app
-        { init = init, update = update, view = view
-        , settings =
-            [ Log.level Warn
-            , Db.url (Config.fromEnv "DATABASE_URL")   -- secret: env only
-            , Host.bind Host.loopbackInDev             -- dev binds loopback by default
-            , Web.sessionTtl (hours 24)
-            , Web.csrf Csrf.strict
-            ]
+    Web.appWith
+        [ Log.level Level.warn
+        , Db.url (App.fromEnv "DATABASE_URL")   -- secret: env only
+        , Host.bind Host.loopback
+        , Web.sessionTtl 3600
+        , Web.csrf Web.strict
+        ]
+        { init = init, update = update, view = view, subscriptions = subscriptions
+        , routes = [], notFound = CounterPage
         }
 ```
 

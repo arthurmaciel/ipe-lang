@@ -52,9 +52,11 @@ pub enum Setting {
     /// `Db.url` — the database URL, sealed as a [`Secret`](crate::secret::Secret).
     #[cfg(feature = "secret")]
     DbUrl(crate::secret::Secret),
-    /// `Web.csrf` — the CSRF policy tag. `0` is the strict/enforced posture;
-    /// every other tag is a no-op (a setting cannot weaken CSRF below its
-    /// fail-closed default — only an operator env override can disable it).
+    /// `Web.csrf` — the CSRF policy tag (`0` strict / `1` inherit the framework
+    /// default). The Ipê `CsrfMode` ADT carries no disabling variant, so no tag
+    /// maps to "off"; the resolver apply is stricter-only, so even an unexpected
+    /// tag cannot weaken CSRF below its fail-closed default — only an operator
+    /// env override can disable it.
     WebCsrf(i64),
     /// `Web.sessionTtl` — the session lifetime in seconds.
     WebSessionTtl(i64),
@@ -100,8 +102,10 @@ pub fn ipe_setting_db_url(url: crate::secret::Secret) -> Setting {
     Setting::DbUrl(url)
 }
 
-/// `Web.csrf : Int -> Setting Web`. Carries the raw CSRF policy tag; the
-/// stricter-only apply at resolution ensures it can only strengthen protection.
+/// `Web.csrf : CsrfMode -> Setting Web`. Carries the CSRF policy tag the Ipê
+/// `CsrfMode` ADT projects to (`0` strict / `1` inherit). The ADT has no
+/// disabling variant, and the stricter-only resolver apply ensures no tag can
+/// weaken CSRF below its fail-closed default.
 #[must_use]
 pub fn ipe_setting_web_csrf(mode_tag: i64) -> Setting {
     Setting::WebCsrf(mode_tag)

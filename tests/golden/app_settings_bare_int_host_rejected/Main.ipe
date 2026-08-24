@@ -1,24 +1,17 @@
 module Main exposing (main)
 
--- Runtime-config front door: `Web.appWith` carries a shape-checked
--- `List (Setting Web)` alongside the same cfg record as `Web.app`. The
--- settings mix cross-cutting `Host.bind` / `Log.level` / `Db.url` (a `Setting a`)
--- with the web-pinned `Web.csrf` / `Web.sessionTtl` (a `Setting Web`). Each
--- setting is resolved into its runtime subsystem at startup. The database URL
--- can only come from `App.fromEnv` (a `Secret`), never a hard-coded string.
---
--- ipe MUST exit 0 AND the emitted project MUST cargo-build (THE SEAL).
+-- Closed-ADT refusal: `Host.bind` takes the closed `HostMode` type, not a bare
+-- `Int`. `Host.bind 7` does NOT type-check (IPE-T0001, expected `HostMode`) — an
+-- out-of-range host-bind tag is a compile-time type error, not a value the
+-- runtime must fall closed on. The only `HostMode` values are the constructors
+-- `Host.loopback` / `Host.allInterfaces` / `Host.envDriven`.
 
 import Ipe.Tea.Web as Web
 import Ipe.Ui as Ui
 import Ipe.Tea.Web.Cmd
 import Ipe.String
 import Ipe.Tea.Web.Sub
-import Ipe.App as App
 import Ipe.Host as Host
-import Ipe.Db as Db
-import Ipe.Log as Log
-import Ipe.Level as Level
 
 
 type Page
@@ -59,12 +52,7 @@ subscriptions _model =
 
 main =
     Web.appWith
-        [ Host.bind Host.loopback
-        , Log.level Level.warn
-        , Db.url (App.fromEnv "DATABASE_URL")
-        , Web.csrf Web.strict
-        , Web.sessionTtl 3600
-        ]
+        [ Host.bind 7 ]
         { init = init
         , update = update
         , view = view

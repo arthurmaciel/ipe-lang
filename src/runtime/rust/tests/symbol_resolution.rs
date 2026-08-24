@@ -85,6 +85,20 @@ const KNOWN_DEAD_OR_EPILOGUE: &[&str] = &[
     //         the topic-name String; emit_expr emits the argument directly, so
     //         this name string never reaches a runtime call. ──────────────────
     "pubsub_topic",
+    // ── Dead: the config-tag ADT constructors (`Host.loopback` / `Level.warn`
+    //         / `Web.strict` / …) are emitted inline as their raw `Int` tag by
+    //         emit_config_ctor_call; these name strings never reach a runtime
+    //         call. The setting builders they feed (`ipe_setting_host_bind` / …)
+    //         ARE real runtime fns. ─────────────────────────────────────────────
+    "config_host_mode_loopback",
+    "config_host_mode_all_interfaces",
+    "config_host_mode_env_driven",
+    "config_log_level_debug",
+    "config_log_level_info",
+    "config_log_level_warn",
+    "config_log_level_error",
+    "config_csrf_mode_strict",
+    "config_csrf_mode_inherit",
     // NOTE: The accessor-typed `Store.*` query leaves and column-spec builders
     // are omitted here.  Their `runtime_fn` name strings are derived at test
     // time from `ipe_kernels::StdlibKernel::ACCESSOR_INTERCEPT_PLACEHOLDERS`

@@ -14942,7 +14942,10 @@ impl<'a> Lowerer<'a> {
             // the same generic scope so `Opt Int` → `Enum { Opt, [Int] }` and
             // `Opt a` (inside a generic signature) → `Enum { Opt, [Generic a] }`.
             canon::Type::Con { home, name, args } => match self.resolve(*name)? {
-                "Int" => Ok(IrType::Int),
+                // The closed config-tag ADTs (`HostMode` / `LogLevel` / `CsrfMode`)
+                // erase to the raw `Int` tag their constructor kernels project to —
+                // the setting builders consume that `Int` directly.
+                "Int" | "HostMode" | "LogLevel" | "CsrfMode" => Ok(IrType::Int),
                 "Float" => Ok(IrType::Float),
                 "Bool" => Ok(IrType::Bool),
                 // `Order` is the built-in three-way comparison result type.
@@ -16075,7 +16078,9 @@ impl<'a> Lowerer<'a> {
             // matches `ir_type_from_canon`, so the inferred and annotated paths
             // agree. See RESERVED_BUILTIN_TYPES for the per-name cite list.
             Ty::Con { name, args, module } => match self.resolve(*name)? {
-                "Int" => Ok(IrType::Int),
+                // The closed config-tag ADTs (`HostMode` / `LogLevel` / `CsrfMode`)
+                // erase to the raw `Int` tag their constructor kernels project to.
+                "Int" | "HostMode" | "LogLevel" | "CsrfMode" => Ok(IrType::Int),
                 "Float" => Ok(IrType::Float),
                 "Bool" => Ok(IrType::Bool),
                 // `Order` is the built-in three-way comparison result type.
@@ -20702,6 +20707,16 @@ impl<'a> Lowerer<'a> {
                 | KernelFn::WsDefaultCfg
                 // ── Jwt builder: claims arity-0 ─────────────────
                 | KernelFn::JwtClaims
+                // ── Config-tag ADT constructors — arity 0 ────────────────
+                | KernelFn::HostLoopback
+                | KernelFn::HostAllInterfaces
+                | KernelFn::HostEnvDriven
+                | KernelFn::LevelDebug
+                | KernelFn::LevelInfo
+                | KernelFn::LevelWarn
+                | KernelFn::LevelError
+                | KernelFn::WebCsrfStrict
+                | KernelFn::WebCsrfInherit
                 // ── Server: bearer token source — arity 0 ────────────────
                 // `Server.bearerToken : TokenSource`
                 | KernelFn::ServerTokenBearer,
@@ -23362,9 +23377,22 @@ impl<'a> Lowerer<'a> {
                     ("Web", "appWith") => Ok(Callee::Kernel(KernelFn::WebAppWith)),
                     ("Web", "csrf") => Ok(Callee::Kernel(KernelFn::WebCsrf)),
                     ("Web", "sessionTtl") => Ok(Callee::Kernel(KernelFn::WebSessionTtl)),
+                    // Config-tag ADT constructors — nullary, emitted inline as a
+                    // raw `Int` tag.
+                    ("Web", "strict") => Ok(Callee::Kernel(KernelFn::WebCsrfStrict)),
+                    ("Web", "inheritCsrf") => Ok(Callee::Kernel(KernelFn::WebCsrfInherit)),
                     ("App", "fromEnv") => Ok(Callee::Kernel(KernelFn::AppFromEnv)),
                     ("Host", "bind") => Ok(Callee::Kernel(KernelFn::HostBind)),
+                    ("Host", "loopback") => Ok(Callee::Kernel(KernelFn::HostLoopback)),
+                    ("Host", "allInterfaces") => Ok(Callee::Kernel(KernelFn::HostAllInterfaces)),
+                    ("Host", "envDriven") => Ok(Callee::Kernel(KernelFn::HostEnvDriven)),
                     ("Log", "level") => Ok(Callee::Kernel(KernelFn::LogLevelSetting)),
+                    // `Level.*` — the `LogLevel` constructors (a separate
+                    // qualifier from the `Log.*` logging kernels).
+                    ("Level", "debug") => Ok(Callee::Kernel(KernelFn::LevelDebug)),
+                    ("Level", "info") => Ok(Callee::Kernel(KernelFn::LevelInfo)),
+                    ("Level", "warn") => Ok(Callee::Kernel(KernelFn::LevelWarn)),
+                    ("Level", "error") => Ok(Callee::Kernel(KernelFn::LevelError)),
                     ("Db", "url") => Ok(Callee::Kernel(KernelFn::DbUrlSetting)),
                     // ── Ipe.Auth / Ipe.Auth — auth helpers ──────────────
                     ("Auth", "hashPassword") => Ok(Callee::Kernel(KernelFn::AuthHashPassword)),
