@@ -733,6 +733,59 @@ pub fn install_hint_for(sys_lib: &str) -> String {
 /// available under `--verbose` (the CLI layer adds that escape hatch around
 /// the call site).
 #[must_use]
+/// Strip ANSI escape sequences and non-printable control characters from a
+/// foreign string (rustc/build-script stderr) before interpolating it into a
+/// diagnostic. A length-capped but un-stripped foreign string can carry
+/// terminal control codes that forge markup or corrupt a structured output
+/// consumer. Two passes:
+///
+/// 1. Remove ANSI CSI sequences (`ESC [ … <letter>`) and OSC sequences
+///    (`ESC ] … BEL/ST`) via a small state machine — the two sequence families
+///    that rustc's colour output uses.
+/// 2. Filter out remaining control characters except tab (`\t`), which is
+///    printable in a terminal context.
+fn strip_foreign_str(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    let mut chars = s.chars().peekable();
+    while let Some(c) = chars.next() {
+        if c == '\x1b' {
+            // Consume the escape sequence body without emitting it.
+            match chars.peek() {
+                Some('[') => {
+                    // CSI sequence: ESC [ <params> <final-byte> (final byte in 0x40–0x7E).
+                    let _ = chars.next(); // consume '['
+                    for inner in chars.by_ref() {
+                        if ('\x40'..='\x7e').contains(&inner) {
+                            break; // final byte consumed
+                        }
+                    }
+                }
+                Some(']') => {
+                    // OSC sequence: ESC ] <body> BEL or ESC \.
+                    let _ = chars.next(); // consume ']'
+                    loop {
+                        match chars.next() {
+                            None | Some('\x07') => break,
+                            Some('\x1b') if chars.peek() == Some(&'\\') => {
+                                let _ = chars.next();
+                                break;
+                            }
+                            _ => {}
+                        }
+                    }
+                }
+                _ => {
+                    // Unknown escape: consume only the ESC itself (already done).
+                }
+            }
+        } else if c == '\t' || !c.is_control() {
+            out.push(c);
+        }
+        // Other control chars (NUL, BEL, BS, CR, DEL, …) are dropped.
+    }
+    out
+}
+
 pub fn summarise_inspector_errors(errors: &[String]) -> String {
     // Look for the first `error[` or `error:` line from rustc/cargo — that is
     // the root-cause line, not the noise of `cargo:rerun-if-env-changed=…`.
@@ -748,15 +801,16 @@ pub fn summarise_inspector_errors(errors: &[String]) -> String {
         || {
             // No recognised root-cause line: show the last non-empty error string as
             // a last resort rather than nothing.
-            errors
+            let raw = errors
                 .iter()
                 .rev()
                 .find(|l| !l.trim().is_empty())
                 .map_or("the inspector did not emit a diagnostic", String::as_str)
-                .trim()
-                .to_owned()
+                .trim();
+            strip_foreign_str(raw)
         },
         |line| {
+            let line = strip_foreign_str(line.trim());
             let line = line.trim();
             // Truncate very long lines so the diagnostic stays readable. Count and
             // slice by characters, never by byte index — cargo/build-script stderr
@@ -1039,16 +1093,6 @@ fn load_installed_crate(cache_root: &Path, slug: String) -> Result<InstalledCrat
         };
         let module_name = str_field("moduleName")?;
         let kernel_name = str_field("kernelName")?;
-        let decode_str_map = |key: &str| -> std::collections::BTreeMap<String, String> {
-            doc.get(key)
-                .and_then(serde_json::Value::as_object)
-                .map(|m| {
-                    m.iter()
-                        .filter_map(|(k, v)| v.as_str().map(|s| (k.clone(), s.to_owned())))
-                        .collect()
-                })
-                .unwrap_or_default()
-        };
         // Opaque-type paths reach the wrapper emitter verbatim; parse each
         // through the validated newtype at the cache boundary so an un-renderable
         // path is unrepresentable past decode.
@@ -1068,7 +1112,22 @@ fn load_installed_crate(cache_root: &Path, slug: String) -> Result<InstalledCrat
             }
             out
         };
-        let opaque_type_ids = decode_str_map("opaqueTypeIds");
+        // Mirror the fail-closed decode of `opaqueTypes`: a non-string value is a
+        // malformed manifest (silent coercion could hide a tampered cache entry).
+        // An absent `opaqueTypeIds` field is allowed (older caches omit it).
+        let opaque_type_ids: std::collections::BTreeMap<String, String> = {
+            let raw = doc
+                .get("opaqueTypeIds")
+                .and_then(serde_json::Value::as_object);
+            let mut out = std::collections::BTreeMap::new();
+            for (k, v) in raw.into_iter().flatten() {
+                let s = v
+                    .as_str()
+                    .ok_or_else(|| malformed(format!("opaqueTypeIds[{k:?}]: not a string")))?;
+                out.insert(k.clone(), s.to_owned());
+            }
+            out
+        };
         let define_types: BTreeSet<String> = doc
             .get("defineTypes")
             .and_then(serde_json::Value::as_array)
@@ -2265,6 +2324,53 @@ mod tests {
         );
     }
 
+    // ── strip_foreign_str ────────────────────────────────────────────────
+
+    #[test]
+    fn strip_foreign_str_passes_plain_ascii_through() {
+        assert_eq!(
+            strip_foreign_str("error: trait bound not satisfied"),
+            "error: trait bound not satisfied"
+        );
+    }
+
+    #[test]
+    fn strip_foreign_str_removes_csi_colour_sequences() {
+        // rustc emits bold-red `error:` via ESC[1;31m … ESC[0m.
+        let coloured = "\x1b[1;31merror\x1b[0m: trait bound";
+        assert_eq!(strip_foreign_str(coloured), "error: trait bound");
+    }
+
+    #[test]
+    fn strip_foreign_str_removes_osc_hyperlink_sequences() {
+        // Some terminal emulators emit OSC 8 hyperlinks in diagnostic output.
+        let with_osc = "before\x1b]8;;https://example.com\x07click\x1b]8;;\x07after";
+        assert_eq!(strip_foreign_str(with_osc), "beforeclickafter");
+    }
+
+    #[test]
+    fn strip_foreign_str_drops_control_chars_except_tab() {
+        let s = "a\x00b\x07c\td\x1fe";
+        assert_eq!(strip_foreign_str(s), "ac\tde");
+    }
+
+    #[test]
+    fn summarise_strips_ansi_from_foreign_rustc_stderr() {
+        // A rustc error line with ANSI colour codes must be stripped before it
+        // reaches the diagnostic — the raw sequence must not appear in the output.
+        let errors =
+            vec!["\x1b[1;31merror\x1b[0m[E0277]: the trait bound is not satisfied".to_owned()];
+        let summary = summarise_inspector_errors(&errors);
+        assert!(
+            !summary.contains('\x1b'),
+            "ANSI escape sequences must be stripped from the summary: {summary}"
+        );
+        assert!(
+            summary.contains("E0277"),
+            "the error code must survive stripping: {summary}"
+        );
+    }
+
     #[test]
     #[allow(clippy::panic)]
     fn install_from_inspection_returns_typed_system_lib_diagnostic() {
@@ -2360,5 +2466,76 @@ mod tests {
                 "injection-bearing path `{s}` must be rejected at decode"
             );
         }
+    }
+
+    // ── opaqueTypeIds cache boundary (fail-closed) ───────────────────────
+
+    /// Write a legacy consumer-JSON cache (no `.pkg.json`) into a temp dir
+    /// and return the cache root path, so `load_catalog` exercises the
+    /// consumer-JSON decode path (the one that was fail-open on `opaqueTypeIds`).
+    fn write_legacy_cache(test_name: &str, consumer_json: &str) -> std::path::PathBuf {
+        let root =
+            std::env::temp_dir().join(format!("ipe-ffi-legacy-{test_name}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).expect("create cache dir");
+        // Write the minimum artifacts the legacy path reads (no `.pkg.json`).
+        std::fs::write(root.join("semver.consumer.json"), consumer_json)
+            .expect("write consumer.json");
+        std::fs::write(
+            root.join("semver.ipe"),
+            "module Rust.Semver exposing (Version)\ntype alias Version = Version\n",
+        )
+        .expect("write interface");
+        std::fs::write(root.join("semver_bindings.rs"), "// autogenerated\n")
+            .expect("write bindings");
+        root
+    }
+
+    /// A non-string value in `opaqueTypeIds` must be a typed `WireMalformed`
+    /// refusal — the old `decode_str_map` helper silently dropped non-string
+    /// values, leaving the map entry absent instead of refusing the manifest.
+    #[test]
+    fn opaque_type_ids_non_string_value_is_rejected() {
+        let consumer = json!({
+            "moduleName": "Rust.Semver",
+            "kernelName": "Rust_Semver",
+            "opaqueTypes": { "Version": "::semver::Version" },
+            "opaqueTypeIds": { "Version": 42 },
+            "defineTypes": [],
+            "cargoDeps": [],
+            "bindings": []
+        })
+        .to_string();
+        let cache_root = write_legacy_cache("ids_reject", &consumer);
+        let err = load_catalog(&cache_root)
+            .expect_err("a non-string opaqueTypeIds value must be a typed WireMalformed refusal");
+        assert!(
+            matches!(err, Diagnostic::WireMalformed { .. }),
+            "expected WireMalformed, got: {err:?}"
+        );
+        let _ = std::fs::remove_dir_all(&cache_root);
+    }
+
+    /// An absent `opaqueTypeIds` field is accepted — older caches omit it.
+    #[test]
+    fn opaque_type_ids_absent_field_accepted_for_legacy_caches() {
+        let consumer = json!({
+            "moduleName": "Rust.Semver",
+            "kernelName": "Rust_Semver",
+            "opaqueTypes": { "Version": "::semver::Version" },
+            "defineTypes": [],
+            "cargoDeps": [],
+            "bindings": []
+        })
+        .to_string();
+        let cache_root = write_legacy_cache("ids_absent", &consumer);
+        let catalog = load_catalog(&cache_root)
+            .expect("absent opaqueTypeIds must be accepted for legacy-cache compat");
+        assert_eq!(catalog.len(), 1);
+        assert!(
+            catalog[0].opaque_type_ids.is_empty(),
+            "an absent opaqueTypeIds field yields an empty map"
+        );
+        let _ = std::fs::remove_dir_all(&cache_root);
     }
 }
