@@ -22,7 +22,7 @@ use crate::style;
 const MAIN_IPE: &str = include_str!("../templates/Main.ipe");
 
 /// Templates carrying a `{name}` hole filled from the project name.
-const IPE_TOML: &str = include_str!("../templates/ipe.toml.in");
+const PACKAGE_IPE: &str = include_str!("../templates/package.ipe.in");
 const README_MD: &str = include_str!("../templates/README.md.in");
 
 /// `.gitignore` — no substitution; the same ignore set fits every project.
@@ -107,8 +107,8 @@ pub fn run_init(rest: &[String]) -> Result<(), CliError> {
 fn managed_files(project_name: &str) -> Vec<ManagedFile> {
     vec![
         ManagedFile {
-            rel: PathBuf::from("ipe.toml"),
-            content: IPE_TOML.replace("{name}", project_name),
+            rel: PathBuf::from("package.ipe"),
+            content: PACKAGE_IPE.replace("{name}", project_name),
         },
         ManagedFile {
             rel: PathBuf::from("src").join("Main.ipe"),
@@ -129,10 +129,11 @@ fn managed_files(project_name: &str) -> Vec<ManagedFile> {
     ]
 }
 
-/// Whether the target holds none of `init`'s footprint: no `ipe.toml` and no
-/// non-empty `src/`. A fresh (or absent) target scaffolds without prompting.
+/// Whether the target holds none of `init`'s footprint: no manifest
+/// (`package.ipe` or a legacy `ipe.toml`) and no non-empty `src/`. A fresh (or
+/// absent) target scaffolds without prompting.
 fn is_fresh_target(target_dir: &Path) -> Result<bool, CliError> {
-    if target_dir.join("ipe.toml").exists() {
+    if target_dir.join("package.ipe").exists() || target_dir.join("ipe.toml").exists() {
         return Ok(false);
     }
     let src = target_dir.join("src");
@@ -299,4 +300,46 @@ fn print_next_steps(target_arg: &str, project_name: &str) {
          Then open http://localhost:8000 and click the counter buttons.\n"
     );
     print!("{}", style::frame(&style::gutter(&body)));
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn scaffolded_manifest_is_package_ipe_that_re_parses() {
+        // `init` writes `package.ipe` (not `ipe.toml`), and its content must be a
+        // valid manifest the syntactic reader accepts and reads the project name
+        // back from.
+        let files = managed_files("demo-app");
+        let manifest = files
+            .iter()
+            .find(|f| f.rel == Path::new("package.ipe"))
+            .expect("init writes a package.ipe");
+
+        let root = std::env::temp_dir().join("ipe_init_roundtrip");
+        let _ = std::fs::remove_dir_all(&root);
+        let src = root.join("src");
+        std::fs::create_dir_all(&src).expect("create src/");
+        std::fs::write(
+            src.join("Main.ipe"),
+            "module Main exposing (main)\nmain = 0\n",
+        )
+        .expect("write Main.ipe");
+        let path = root.join("package.ipe");
+        std::fs::write(&path, &manifest.content).expect("write scaffolded package.ipe");
+
+        let parsed = crate::project::parse_manifest(&path).expect("scaffolded manifest re-parses");
+        assert_eq!(parsed.name, "demo-app");
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn managed_set_omits_legacy_ipe_toml() {
+        let files = managed_files("x");
+        assert!(
+            !files.iter().any(|f| f.rel == Path::new("ipe.toml")),
+            "init must not scaffold a legacy ipe.toml"
+        );
+    }
 }

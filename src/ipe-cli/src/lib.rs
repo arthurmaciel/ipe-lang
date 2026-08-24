@@ -34,6 +34,7 @@ pub mod init;
 pub mod lockfile;
 pub mod login;
 mod lsp;
+pub mod package_manifest;
 pub mod pkg;
 pub mod progress;
 pub mod project;
@@ -1208,9 +1209,8 @@ fn read_discovered_sources(
 fn find_manifest_for_ipe_file(ipe_file: &Path) -> Option<PathBuf> {
     let mut dir = ipe_file.parent()?;
     loop {
-        let candidate = dir.join("ipe.toml");
-        if candidate.is_file() {
-            return Some(candidate);
+        if let Some(manifest) = project::manifest_in_dir(dir) {
+            return Some(manifest);
         }
         dir = dir.parent()?;
     }
@@ -2614,13 +2614,15 @@ fn with_help_on_misuse(
 /// `build`, `run`, or `watch`.
 ///
 /// Resolution order:
-/// 1. `./ipe.toml` exists — entry `"."` (project mode; `discover_manifest`
-///    routes it to the directory's manifest).
+/// 1. `./package.ipe` or `./ipe.toml` exists — entry `"."` (project mode;
+///    `discover_manifest` routes it to the directory's preferred manifest).
 /// 2. `./src/Main.ipe` exists — entry `"src/Main.ipe"` (single-file
 ///    shorthand without a manifest).
 /// 3. Neither — usage error: nothing to build here.
 fn default_entry() -> Result<String, CliError> {
-    if std::path::Path::new("ipe.toml").exists() {
+    if std::path::Path::new(package_manifest::PACKAGE_IPE).exists()
+        || std::path::Path::new("ipe.toml").exists()
+    {
         return Ok(".".to_owned());
     }
     if std::path::Path::new("src/Main.ipe").exists() {
@@ -2665,14 +2667,14 @@ pub(crate) fn run_watch(rest: &[String]) -> Result<(), CliError> {
 /// discovery when none exists).
 fn discover_manifest(entry_path: &Path) -> Result<Option<PathBuf>, CliError> {
     if entry_path.is_dir() {
-        let candidate = entry_path.join("ipe.toml");
-        if candidate.is_file() {
-            Ok(Some(candidate))
-        } else {
-            Err(CliError::Usage(
-                "directory supplied but no ipe.toml found inside it",
-            ))
-        }
+        project::manifest_in_dir(entry_path).map_or_else(
+            || {
+                Err(CliError::Usage(
+                    "directory supplied but no package.ipe or ipe.toml found inside it",
+                ))
+            },
+            |manifest| Ok(Some(manifest)),
+        )
     } else if entry_path.extension().and_then(|e| e.to_str()) == Some("toml") {
         Ok(Some(entry_path.to_path_buf()))
     } else {
