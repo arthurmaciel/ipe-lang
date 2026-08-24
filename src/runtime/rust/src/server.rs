@@ -339,12 +339,41 @@ fn unauthorized() -> ServerResponse {
 }
 
 #[cfg(feature = "jwt")]
+/// Build the `Set-Cookie` value for a re-issued session token. Preserves all
+/// security attributes of the original session cookie: `__Host-`/Secure,
+/// `Path=/`, `HttpOnly`, and `SameSite`. The cookie name must be the same name
+/// that the request carried the token under so the browser replaces the existing
+/// cookie entry rather than creating a duplicate.
+fn reissue_set_cookie(cookie_name: &str, token: &str, slide_window_secs: u64) -> String {
+    let secure = if crate::web::csrf::cookies_secure() {
+        "; Secure"
+    } else {
+        ""
+    };
+    let same_site = if crate::web::csrf::frame_ancestors().is_some() {
+        "None"
+    } else {
+        "Lax"
+    };
+    format!(
+        "{}={}; Path=/; HttpOnly; SameSite={same_site}{secure}; Max-Age={slide_window_secs}",
+        cookie_name, token
+    )
+}
+
+#[cfg(feature = "jwt")]
 /// The shared authed-route builder. Wraps the caller's
 /// `Request -> Principal -> Task Response` handler in fail-closed middleware
 /// that runs BEFORE the handler: it reads the token, verifies it, extracts the
 /// subject claim, and mints the `Principal` — dispatching to the handler only on
 /// full success, and answering `401` at the first failing step. This is the sole
 /// site that mints a `Principal`.
+///
+/// Sliding re-issue: for cookie-based token sources, when the verified token is
+/// past its re-issue threshold (`exp - slide_window/2`) and the absolute cap has
+/// not been reached, a fresh token is minted and attached via `Set-Cookie`.
+/// `iat` and `cap` are carried verbatim from the verified-origin `ReissueContext`
+/// — a client cannot move the cap outward.
 fn authed_route<E, F>(method: &str, path: String, cfg: AuthConfig, handler: F) -> ServerRoute
 where
     E: Send + 'static,
@@ -363,7 +392,7 @@ where
             };
             let secret = crate::secret::secret_reveal(cfg.secret.clone());
             let claims: HashMap<String, String> =
-                match crate::auth::auth_verify_token::<String>(secret, token) {
+                match crate::auth::auth_verify_token::<String>(secret.clone(), token) {
                     IpeResult::Ok(c) => c,
                     IpeResult::Err(_) => return ok_res(unauthorized()),
                 };
@@ -371,7 +400,57 @@ where
                 return ok_res(unauthorized());
             };
             let principal = crate::principal::principal_mint(subject.clone());
-            handler(req, principal).await
+
+            // Sliding re-issue — cookie-source only (bearer tokens are API
+            // credentials; the client manages re-issue itself via re-auth).
+            let reissue_cookie: Option<String> = if let TokenSource::Cookie(ref name) = cfg.source {
+                if let Some(ctx) = crate::auth::reissue_context_from_claims(&claims) {
+                    let slide_window_secs = crate::app_config::resolve_auth_slide_window();
+                    let slide_i64 = i64::try_from(slide_window_secs).unwrap_or(i64::MAX);
+                    let now = crate::jwt::now_unix_seconds();
+                    // Throttle: re-issue only once past exp - slide_window/2.
+                    // Parse exp from the verified claims string representation.
+                    let past_threshold = claims
+                        .get("exp")
+                        .and_then(|s| s.parse::<i64>().ok())
+                        .map(|exp| now > exp.saturating_sub(slide_i64 / 2))
+                        .unwrap_or(false);
+                    if past_threshold && now < ctx.cap {
+                        // Extra claims to carry into the re-issued token (all
+                        // verified claims except the time anchors and subject —
+                        // those come from the ReissueContext).
+                        let extra: HashMap<String, String> = claims
+                            .iter()
+                            .filter(|(k, _)| {
+                                *k != "exp" && *k != "iat" && *k != "cap" && *k != "sub"
+                            })
+                            .map(|(k, v)| (k.clone(), v.clone()))
+                            .collect();
+                        match crate::auth::auth_reissue_token::<String>(
+                            &secret, &ctx, extra, slide_i64,
+                        ) {
+                            Some(IpeResult::Ok(new_token)) => {
+                                Some(reissue_set_cookie(name, &new_token, slide_window_secs))
+                            }
+                            _ => None,
+                        }
+                    } else {
+                        None
+                    }
+                } else {
+                    None
+                }
+            } else {
+                None
+            };
+
+            let mut resp = handler(req, principal).await;
+            // Attach the re-issue cookie when warranted. The handler returns an
+            // IpeResult<E, ServerResponse>; we append the Set-Cookie to the Ok path.
+            if let (IpeResult::Ok(r), Some(cookie)) = (&mut resp, reissue_cookie) {
+                r.cookies.push(cookie);
+            }
+            resp
         })
     };
     route::<E, _>(method, path, guarded)
@@ -2776,6 +2855,114 @@ mod tests {
             assert_eq!(
                 resp.status, 401,
                 "a token signed under another secret must fail closed"
+            );
+        }
+
+        // ── sliding re-issue ──────────────────────────────────────────────
+
+        fn now_secs() -> i64 {
+            std::time::SystemTime::now()
+                .duration_since(std::time::SystemTime::UNIX_EPOCH)
+                .expect("system time is after epoch")
+                .as_secs() as i64
+        }
+
+        fn cookie_cfg() -> AuthConfig {
+            server_auth_config(
+                crate::secret::secret_from_string(SECRET.to_string()),
+                TokenSource::Cookie("ipe_sid".to_string()),
+            )
+        }
+
+        /// A cookie token past the re-issue threshold (exp - slide_window/2)
+        /// triggers a Set-Cookie response header with the refreshed token.
+        /// The refreshed cookie carries the same name, Path=/, HttpOnly, and
+        /// SameSite=Lax attributes.
+        #[tokio::test]
+        async fn cookie_past_threshold_gets_reissue_set_cookie() {
+            let now = now_secs();
+            // exp = now + 800; default slide = 1800s, threshold = exp - 900 = now - 100.
+            // now > now - 100, so past_threshold = true; cap is in the future.
+            let token = hs256(&serde_json::json!({
+                "sub": "user-slide",
+                "exp": now + 800,
+                "iat": now - 600,
+                "cap": now + 7200,
+            }));
+            let resp = run(cookie_cfg(), req_with(&[], &[("ipe_sid", &token)])).await;
+            assert_eq!(
+                resp.status, 200,
+                "valid token must still dispatch the handler"
+            );
+            assert!(
+                !resp.cookies.is_empty(),
+                "a re-issue Set-Cookie must be attached for a past-threshold cookie token"
+            );
+            let cookie = &resp.cookies[0];
+            assert!(
+                cookie.starts_with("ipe_sid="),
+                "re-issued cookie must carry the same name: {cookie}"
+            );
+            assert!(
+                cookie.contains("; Path=/"),
+                "re-issued cookie must include Path=/: {cookie}"
+            );
+            assert!(
+                cookie.contains("; HttpOnly"),
+                "re-issued cookie must be HttpOnly: {cookie}"
+            );
+            assert!(
+                cookie.contains("; SameSite="),
+                "re-issued cookie must include SameSite: {cookie}"
+            );
+            assert!(
+                cookie.contains("; Max-Age="),
+                "re-issued cookie must include Max-Age: {cookie}"
+            );
+        }
+
+        /// A fresh cookie token (exp well beyond the re-issue threshold) must
+        /// not produce a Set-Cookie — the throttle holds, no unnecessary write.
+        #[tokio::test]
+        async fn fresh_cookie_not_past_threshold_has_no_reissue_set_cookie() {
+            let now = now_secs();
+            // exp = now + 3600; threshold = exp - 900 = now + 2700.
+            // now < now + 2700, so past_threshold = false.
+            let token = hs256(&serde_json::json!({
+                "sub": "user-fresh",
+                "exp": now + 3600,
+                "iat": now - 60,
+                "cap": now + 7200,
+            }));
+            let resp = run(cookie_cfg(), req_with(&[], &[("ipe_sid", &token)])).await;
+            assert_eq!(resp.status, 200, "valid token must dispatch the handler");
+            assert!(
+                resp.cookies.is_empty(),
+                "no re-issue cookie for a fresh token that has not crossed the threshold: {:?}",
+                resp.cookies
+            );
+        }
+
+        /// Bearer tokens are API credentials; re-issue is the client's
+        /// responsibility. The authed-route middleware must never attach a
+        /// Set-Cookie for a bearer-source token, even when the exp is past the
+        /// re-issue threshold.
+        #[tokio::test]
+        async fn bearer_past_threshold_never_gets_reissue_set_cookie() {
+            let now = now_secs();
+            let token = hs256(&serde_json::json!({
+                "sub": "user-api",
+                "exp": now + 800,
+                "iat": now - 600,
+                "cap": now + 7200,
+            }));
+            let req = req_with(&[("authorization", &format!("Bearer {token}"))], &[]);
+            let resp = run(bearer_cfg(), req).await;
+            assert_eq!(resp.status, 200, "valid bearer token must dispatch");
+            assert!(
+                resp.cookies.is_empty(),
+                "bearer-source must never get a re-issue Set-Cookie: {:?}",
+                resp.cookies
             );
         }
     }

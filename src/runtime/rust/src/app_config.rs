@@ -65,6 +65,11 @@ pub enum Setting {
     /// token, in seconds. A token cannot outlive `iat + max_lifetime` regardless of
     /// any subsequent re-issue. Default: 8 h (28 800 s).
     WebAuthMaxLifetime(i64),
+    /// `Web.authSlideWindow` — the rolling re-issue window for a signed session
+    /// token, in seconds. A token is re-issued once it is past `exp - window/2`,
+    /// extending `exp` to `min(now + window, cap)`. Default: 30 m (1 800 s).
+    /// Clamped so `slide_window < max_lifetime`.
+    WebAuthSlideWindow(i64),
 }
 
 /// `Host.bind : Int -> Setting a`. Maps the raw host-mode tag onto the closed
@@ -130,6 +135,15 @@ pub fn ipe_setting_web_auth_max_lifetime(seconds: i64) -> Setting {
     Setting::WebAuthMaxLifetime(seconds)
 }
 
+/// `Web.authSlideWindow : Int -> Setting Web`. Carries the rolling re-issue
+/// window for a signed session token (seconds). A non-positive value is dropped
+/// fail-closed (the 30 m default applies). Clamped to below `max_lifetime` at
+/// resolution time.
+#[must_use]
+pub fn ipe_setting_web_auth_slide_window(seconds: i64) -> Setting {
+    Setting::WebAuthSlideWindow(seconds)
+}
+
 /// The CSRF posture a `Web.csrf` setting requests. A setting can only ever
 /// STRENGTHEN protection: an `Enforced` tag pins CSRF on, and every other tag
 /// (including an out-of-range one) is `Unspecified` — it leaves the default in
@@ -154,6 +168,7 @@ struct ResolvedConfig {
     csrf: Option<CsrfSetting>,
     session_ttl_secs: Option<i64>,
     auth_max_lifetime_secs: Option<i64>,
+    auth_slide_window_secs: Option<i64>,
     #[cfg(feature = "secret")]
     db_url: Option<crate::secret::Secret>,
 }
@@ -183,6 +198,7 @@ pub fn install_web(settings: Vec<Setting>) {
             }
             Setting::WebSessionTtl(seconds) => cfg.session_ttl_secs = Some(seconds),
             Setting::WebAuthMaxLifetime(seconds) => cfg.auth_max_lifetime_secs = Some(seconds),
+            Setting::WebAuthSlideWindow(seconds) => cfg.auth_slide_window_secs = Some(seconds),
             #[cfg(feature = "secret")]
             Setting::DbUrl(url) => cfg.db_url = Some(url),
         }
@@ -335,6 +351,58 @@ pub fn resolve_auth_max_lifetime() -> u64 {
 /// env override is present, and a non-positive value is dropped (fail-closed to the
 /// caller's default). Split out for unit testing without process-wide state.
 fn auth_max_lifetime_from(env_present: bool, setting: Option<i64>) -> Option<u64> {
+    if env_present {
+        return match setting {
+            Some(secs) if secs > 0 => u64::try_from(secs).ok(),
+            _ => None,
+        };
+    }
+    match setting {
+        Some(secs) if secs > 0 => u64::try_from(secs).ok(),
+        _ => None,
+    }
+}
+
+/// The rolling re-issue window for a signed session token, in seconds. Applies the
+/// one precedence: `IPE_AUTH_SLIDE_WINDOW` (env) > `Web.authSlideWindow`
+/// (setting-in-code) > 30 m fallback. A non-positive value in either tier is
+/// dropped fail-closed to the fallback. Clamped so `slide_window < max_lifetime`
+/// — a slide window equal to or larger than the max lifetime would allow a
+/// single re-issue to extend a session to its full cap in one step.
+///
+/// This is the single call site for the resolved slide window.
+#[must_use]
+pub fn resolve_auth_slide_window() -> u64 {
+    /// 30 minutes in seconds.
+    const DEFAULT_SECS: u64 = 30 * 60;
+    let max_lifetime = resolve_auth_max_lifetime();
+    let raw = if let Ok(raw) = crate::system::read_env_var("IPE_AUTH_SLIDE_WINDOW") {
+        if let Ok(secs) = raw.trim().parse::<i64>()
+            && let Some(v) = auth_slide_window_from(true, Some(secs))
+        {
+            v
+        } else {
+            DEFAULT_SECS
+        }
+    } else {
+        auth_slide_window_from(
+            false,
+            INSTALLED.get().and_then(|c| c.auth_slide_window_secs),
+        )
+        .unwrap_or(DEFAULT_SECS)
+    };
+    // Clamp: slide_window must be strictly less than max_lifetime.
+    if raw >= max_lifetime {
+        max_lifetime.saturating_sub(1)
+    } else {
+        raw
+    }
+}
+
+/// Pure slide-window resolution: the installed setting applies only when no env
+/// override is present, and a non-positive value is dropped (fail-closed to the
+/// caller's default). Split out for unit testing without process-wide state.
+fn auth_slide_window_from(env_present: bool, setting: Option<i64>) -> Option<u64> {
     if env_present {
         return match setting {
             Some(secs) if secs > 0 => u64::try_from(secs).ok(),
@@ -513,5 +581,31 @@ mod tests {
     fn auth_max_lifetime_absent_setting_falls_through() {
         assert_eq!(auth_max_lifetime_from(false, None), None);
         assert_eq!(auth_max_lifetime_from(true, None), None);
+    }
+
+    // ── AuthSlideWindow: env > setting > 30m default, non-positive dropped ──
+
+    #[test]
+    fn auth_slide_window_setting_applies_when_no_env() {
+        assert_eq!(auth_slide_window_from(false, Some(900)), Some(900));
+    }
+
+    #[test]
+    fn auth_slide_window_env_overrides_setting() {
+        assert_eq!(auth_slide_window_from(true, Some(900)), Some(900));
+    }
+
+    #[test]
+    fn auth_slide_window_non_positive_falls_closed_to_none() {
+        assert_eq!(auth_slide_window_from(false, Some(0)), None);
+        assert_eq!(auth_slide_window_from(false, Some(-1)), None);
+        assert_eq!(auth_slide_window_from(true, Some(0)), None);
+        assert_eq!(auth_slide_window_from(true, Some(-60)), None);
+    }
+
+    #[test]
+    fn auth_slide_window_absent_setting_falls_through() {
+        assert_eq!(auth_slide_window_from(false, None), None);
+        assert_eq!(auth_slide_window_from(true, None), None);
     }
 }
