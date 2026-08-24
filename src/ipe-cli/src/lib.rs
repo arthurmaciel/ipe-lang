@@ -34,6 +34,7 @@ pub mod init;
 pub mod lockfile;
 pub mod login;
 mod lsp;
+mod migrate;
 pub mod package_manifest;
 pub mod pkg;
 pub mod progress;

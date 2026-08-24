@@ -500,12 +500,15 @@ impl Reader<'_> {
             ("Package", "autoAlloc") => "auto",
             ("Package", "system") => "system",
             ("Package", "dlmalloc") => "dlmalloc",
+            ("Package", "talc") => "talc",
+            ("Package", "mimalloc") => "mimalloc",
             _ => {
                 return Err(self.reject(
                     expr.span,
                     &format!(
                         "`{module}.{name}` is not an allocator — use `Package.system`, \
-                         `Package.dlmalloc`, or `Package.autoAlloc`"
+                         `Package.dlmalloc`, `Package.talc`, `Package.mimalloc`, or \
+                         `Package.autoAlloc`"
                     ),
                 ));
             }
