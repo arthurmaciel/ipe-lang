@@ -73,8 +73,9 @@ Jobs.concurrency : Int      -> Setting any
 Host.bind        : HostMode -> Setting any        -- Loopback | AllInterfaces | env-driven
 
 -- shape-specific: only valid for the shape whose module exposes them
-Web.sessionTtl   : Duration -> Setting Web
-Web.csrf         : CsrfMode -> Setting Web
+Web.sessionTtl      : Duration -> Setting Web
+Web.authMaxLifetime : Duration -> Setting Web   -- hard cap on a session token's age; default 8 h
+Web.csrf            : CsrfMode -> Setting Web
 WebView.window   : WindowOpts -> Setting WebView
 ```
 

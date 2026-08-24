@@ -118,9 +118,13 @@ pub fn auth_password_strength<E: From<String>>(pw: String) -> IpeResult<E, Strin
 /// Ipê `signToken : String -> a -> Int -> Result Error String`.
 /// `signToken secret claims expirySeconds`. `claims` is a string-keyed map of
 /// string values at the runtime level (Ipê's polymorphic `a` resolves to
-/// HashMap<String,String> at the FFI boundary). Adds `exp` (now + expirySeconds)
-/// and `iat` (now) claims, mirroring Go's Auth_signToken. Secret must be ≥32
+/// HashMap<String,String> at the FFI boundary). Adds `exp` (now + expirySeconds),
+/// `iat` (now), and `cap` (now + AuthMaxLifetime) claims. Secret must be ≥32
 /// bytes (matches Go's production gate).
+///
+/// `cap` is the absolute lifetime ceiling — a token is invalid once `now >= cap`
+/// regardless of `exp`. It is stamped at first issue and must never be rewritten
+/// on any subsequent re-issue; a client-mutated `cap` fails signature verification.
 pub fn auth_sign_token<E: From<String>>(
     secret: String,
     claims: HashMap<String, String>,
@@ -151,15 +155,35 @@ pub fn auth_sign_token<E: From<String>>(
     // expiry_seconds never panics under debug overflow-checks.
     // i64::MAX is a far-future timestamp (~292 billion years) — a safe floor.
     let exp = now.checked_add(expiry_seconds).unwrap_or(i64::MAX);
-    let iat = now; // issued-at = current unix seconds (mirrors Go's Auth_signToken)
+    let iat = now;
+    // The absolute lifetime cap: iat + max_lifetime. A caller that already
+    // carries a `cap` claim (re-issue scenario) keeps its original value —
+    // only a fresh token (no `cap` in the supplied claims) gets the cap stamped.
+    // This guarantees cap is immutable across re-issues: the re-issuer supplies
+    // the original cap back in the claims map and this block leaves it alone.
+    let max_lifetime_secs = crate::app_config::resolve_auth_max_lifetime();
+    let cap_from_claims = claims.get("cap").and_then(|s| s.parse::<i64>().ok());
+    let cap: i64 = match cap_from_claims {
+        Some(existing) => existing,
+        None => {
+            // Fresh token: stamp the cap at iat + max_lifetime.
+            let ml = i64::try_from(max_lifetime_secs).unwrap_or(i64::MAX);
+            iat.checked_add(ml).unwrap_or(i64::MAX)
+        }
+    };
     // Build the claims object with keys in ascending order so the signed bytes are
     // deterministic across runs. A `BTreeMap` fixes the key order explicitly,
     // independent of both the source `HashMap` iteration order and the ambient
     // object-order encoder setting, giving a byte-stable signature.
     let mut sorted: std::collections::BTreeMap<String, serde_json::Value> = claims
         .into_iter()
+        // Strip any caller-supplied `cap`, `exp`, and `iat` — these are
+        // runtime-controlled claims; a caller must not be able to override them
+        // via the claims map (the computed values below are authoritative).
+        .filter(|(k, _)| k != "cap" && k != "exp" && k != "iat")
         .map(|(k, v)| (k, serde_json::Value::String(v)))
         .collect();
+    sorted.insert("cap".to_string(), serde_json::Value::Number(cap.into()));
     sorted.insert("exp".to_string(), serde_json::Value::Number(exp.into()));
     sorted.insert("iat".to_string(), serde_json::Value::Number(iat.into()));
     let payload: serde_json::Map<String, serde_json::Value> = sorted.into_iter().collect();
@@ -172,9 +196,18 @@ pub fn auth_sign_token<E: From<String>>(
     }
 }
 
-/// Ipê `verifyToken : String -> String -> Result Error a`. Verifies signature
-/// and `exp`. Returns the claims as a `HashMap<String, String>` (Ipê-side
-/// resolves polymorphic `a` to this shape at the FFI boundary).
+/// Ipê `verifyToken : String -> String -> Result Error a`. Verifies signature,
+/// `exp`, and (when present) the absolute lifetime `cap`. Returns the claims as a
+/// `HashMap<String, String>` (Ipê-side resolves polymorphic `a` to this shape at
+/// the FFI boundary).
+///
+/// # Absolute lifetime cap (`cap` claim)
+///
+/// Tokens minted by `auth_sign_token` carry a signed `cap` claim (`iat +
+/// AuthMaxLifetime`). A token is rejected when `now >= cap`, regardless of `exp`.
+/// A token without a `cap` claim is a legacy token (minted before this feature);
+/// it is accepted only against its `exp` and is never granted an unlimited
+/// lifetime — the `exp` bound is the sole gate in that case.
 pub fn auth_verify_token<E: From<String>>(
     secret: String,
     token: String,
@@ -200,6 +233,21 @@ pub fn auth_verify_token<E: From<String>>(
         {
             return IpeResult::Err(
                 "auth.verifyToken: token is not yet valid"
+                    .to_string()
+                    .into(),
+            );
+        }
+        // Absolute cap gate — checked on the unverified payload first for a fast
+        // pre-reject path, then confirmed on the verified claims after signature
+        // check below. A cap in the past denies immediately (the signature check
+        // below is still required, but there is no point decoding claims we will
+        // discard). Legacy tokens without a `cap` are not pre-rejected here — the
+        // `exp` gate above is their sole bound.
+        if let Some(cap) = crate::jwt::numeric_date(&payload, "cap")
+            && now >= cap
+        {
+            return IpeResult::Err(
+                "auth.verifyToken: token has exceeded its absolute lifetime cap"
                     .to_string()
                     .into(),
             );
@@ -234,6 +282,21 @@ pub fn auth_verify_token<E: From<String>>(
         Ok(d) => d,
         Err(e) => return IpeResult::Err(format!("jwt verify: {}", e).into()),
     };
+    // Re-check the absolute cap on the signature-verified claims. The pre-reject
+    // above already denies past-cap tokens before the signature decode, but this
+    // second check on the verified payload closes any edge where the pre-reject
+    // payload and the verified payload diverge (they cannot in practice — the
+    // signature covers both — but defence-in-depth here costs nothing).
+    if let Some(cap) = crate::jwt::numeric_date(&parsed.claims, "cap") {
+        let now = crate::jwt::now_unix_seconds();
+        if now >= cap {
+            return IpeResult::Err(
+                "auth.verifyToken: token has exceeded its absolute lifetime cap"
+                    .to_string()
+                    .into(),
+            );
+        }
+    }
     let mut out = HashMap::new();
     if let serde_json::Value::Object(m) = parsed.claims {
         for (k, v) in m {
@@ -536,7 +599,7 @@ mod tests {
             keys, sorted,
             "signed payload keys must be in ascending order for a byte-stable signature"
         );
-        assert_eq!(keys, vec!["exp", "iat", "role", "sub", "zzz"]);
+        assert_eq!(keys, vec!["cap", "exp", "iat", "role", "sub", "zzz"]);
     }
 
     // Signing the same claims twice must yield byte-identical tokens (given the
@@ -744,6 +807,165 @@ mod tests {
         assert!(
             matches!(login, IpeResult::Err(_)),
             "a failed id-column decode must yield Err, never Ok(0)"
+        );
+    }
+
+    // ── Absolute lifetime cap (P1) ────────────────────────────────────────────
+
+    const SECRET: &str = "a-test-secret-of-32-bytes-padding";
+
+    /// Mint a raw HS256 token with the given JSON claims, bypassing
+    /// `auth_sign_token` so tests can control `exp`, `cap`, and `iat` directly.
+    fn raw_hs256(claims: &serde_json::Value) -> String {
+        let header = jsonwebtoken::Header::new(jsonwebtoken::Algorithm::HS256);
+        let key = jsonwebtoken::EncodingKey::from_secret(SECRET.as_bytes());
+        jsonwebtoken::encode(&header, claims, &key).expect("raw_hs256 encode")
+    }
+
+    #[test]
+    fn session_past_cap_rejected_even_if_exp_is_future() {
+        let now = now_unix();
+        // exp is 1 h in the future, but cap is 1 s in the past.
+        let token = raw_hs256(&serde_json::json!({
+            "sub": "u1",
+            "iat": now - 7200,
+            "exp": now + 3600,
+            "cap": now - 1,
+        }));
+        let result: IpeResult<String, HashMap<String, String>> =
+            auth_verify_token(SECRET.to_string(), token);
+        assert!(
+            matches!(result, IpeResult::Err(_)),
+            "a session past its absolute cap must be rejected even if exp is still future"
+        );
+    }
+
+    #[test]
+    fn cap_is_immutable_across_re_issue() {
+        // Simulate a re-issue: the original token carries a `cap` claim.
+        // Re-issuing by passing `cap` back in the claims map must leave `cap`
+        // unchanged — the new token's cap must equal the original cap.
+        let mut claims = HashMap::new();
+        claims.insert("sub".to_string(), "u2".to_string());
+        // Original mint.
+        let first_token: String =
+            match auth_sign_token::<String>(SECRET.to_string(), claims.clone(), 3600) {
+                IpeResult::Ok(t) => t,
+                IpeResult::Err(e) => panic!("first mint: {e}"),
+            };
+        // Extract the cap from the first token.
+        let payload = crate::jwt::decode_payload(&first_token).expect("first payload");
+        let original_cap = crate::jwt::numeric_date(&payload, "cap").expect("cap in first token");
+        // Simulate a re-issue: extract all claims and pass them (including cap) back.
+        let verified: HashMap<String, String> =
+            match auth_verify_token::<String>(SECRET.to_string(), first_token) {
+                IpeResult::Ok(m) => m,
+                IpeResult::Err(e) => panic!("first verify: {e}"),
+            };
+        // Re-issue by signing with the original claims (including cap).
+        let reissued_token: String =
+            match auth_sign_token::<String>(SECRET.to_string(), verified, 3600) {
+                IpeResult::Ok(t) => t,
+                IpeResult::Err(e) => panic!("re-issue mint: {e}"),
+            };
+        let reissued_payload =
+            crate::jwt::decode_payload(&reissued_token).expect("reissued payload");
+        let reissued_cap =
+            crate::jwt::numeric_date(&reissued_payload, "cap").expect("cap in reissued token");
+        assert_eq!(
+            original_cap, reissued_cap,
+            "cap must be identical on the re-issued token — it is immutable"
+        );
+    }
+
+    #[test]
+    fn tampered_cap_fails_signature_verification() {
+        // Build a valid token, then construct a forged token with a manipulated
+        // `cap` in the payload but the ORIGINAL signature. jsonwebtoken must
+        // reject it because the signature covers the original payload bytes.
+        use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
+        let now = now_unix();
+        let mut claims = HashMap::new();
+        claims.insert("sub".to_string(), "u3".to_string());
+        let valid_token: String = match auth_sign_token::<String>(SECRET.to_string(), claims, 3600)
+        {
+            IpeResult::Ok(t) => t,
+            IpeResult::Err(e) => panic!("mint: {e}"),
+        };
+        let parts: Vec<&str> = valid_token.split('.').collect();
+        assert_eq!(parts.len(), 3, "JWT must have 3 parts");
+        let header_seg = parts[0];
+        let sig_seg = parts[2]; // original, unmodified signature
+        // Decode the payload, change cap to a far-future value, re-encode.
+        let payload_bytes = URL_SAFE_NO_PAD
+            .decode(parts[1])
+            .expect("decode payload seg");
+        let mut payload: serde_json::Value =
+            serde_json::from_slice(&payload_bytes).expect("parse payload");
+        // Push cap to year 9999 — a client trying to extend their own cap.
+        payload["cap"] = serde_json::Value::Number((now + 999_999_999i64).into());
+        let tampered_payload_json = serde_json::to_string(&payload).expect("serialise");
+        let tampered_payload_seg = URL_SAFE_NO_PAD.encode(tampered_payload_json.as_bytes());
+        let forged_token = format!("{header_seg}.{tampered_payload_seg}.{sig_seg}");
+        let result: IpeResult<String, HashMap<String, String>> =
+            auth_verify_token(SECRET.to_string(), forged_token);
+        assert!(
+            matches!(result, IpeResult::Err(_)),
+            "a token with a client-mutated cap must fail signature verification"
+        );
+    }
+
+    #[test]
+    fn legacy_capless_token_accepted_when_exp_is_future() {
+        // A token minted before this feature (no `cap` claim) must still be
+        // accepted when its `exp` is in the future. It is bounded only by `exp`;
+        // it does not receive an unlimited lifetime.
+        let now = now_unix();
+        let token = raw_hs256(&serde_json::json!({
+            "sub": "legacy-user",
+            "iat": now - 60,
+            "exp": now + 3600,
+            // deliberately no `cap` claim
+        }));
+        let result: IpeResult<String, HashMap<String, String>> =
+            auth_verify_token(SECRET.to_string(), token);
+        assert!(
+            matches!(result, IpeResult::Ok(_)),
+            "a legacy token without cap must be accepted when exp is still future"
+        );
+    }
+
+    #[test]
+    fn legacy_capless_token_rejected_when_exp_is_past() {
+        // A legacy token (no `cap`) that is past its `exp` must be rejected —
+        // the `exp` gate is its sole bound and it is still enforced.
+        let now = now_unix();
+        let token = raw_hs256(&serde_json::json!({
+            "sub": "legacy-user",
+            "iat": now - 7200,
+            "exp": now - 1,
+            // no `cap` claim
+        }));
+        let result: IpeResult<String, HashMap<String, String>> =
+            auth_verify_token(SECRET.to_string(), token);
+        assert!(
+            matches!(result, IpeResult::Err(_)),
+            "a legacy token without cap must be rejected when exp is past"
+        );
+    }
+
+    #[test]
+    fn fresh_minted_token_carries_cap_claim() {
+        let mut claims = HashMap::new();
+        claims.insert("sub".to_string(), "u4".to_string());
+        let token: String = match auth_sign_token::<String>(SECRET.to_string(), claims, 3600) {
+            IpeResult::Ok(t) => t,
+            IpeResult::Err(e) => panic!("mint: {e}"),
+        };
+        let payload = crate::jwt::decode_payload(&token).expect("payload");
+        assert!(
+            crate::jwt::numeric_date(&payload, "cap").is_some(),
+            "a freshly minted token must carry a signed `cap` claim"
         );
     }
 }

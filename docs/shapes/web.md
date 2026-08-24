@@ -180,6 +180,22 @@ Omitting `onNavigate` is exactly the implicit form of a `Navigate` arm that sets
 `onNavigate` when a navigation should do more (load data for the new page, reset
 a form, record analytics).
 
+## Auth session lifetime
+
+Signed session tokens carry a hard **absolute lifetime cap**: a token cannot be
+used after `iat + AuthMaxLifetime`, regardless of any later re-issue. The cap is
+stamped at first issue inside the signed segment and cannot be extended by the
+client or by a re-issue — a tampered cap fails signature verification.
+
+The cap defaults to **8 h**. Set `IPE_AUTH_MAX_LIFETIME=<seconds>` in the
+process environment to override it without a rebuild (env wins over the in-code
+setting). The in-code `Web.authMaxLifetime` setting is planned — see
+[`docs/architecture/tbd/config-design.md`](../architecture/tbd/config-design.md).
+A non-positive value falls closed to the 8 h default.
+
+A session token without a `cap` claim (minted before this feature) is bounded
+only by its `exp` — it does not receive an unlimited lifetime.
+
 ## Broadcasting: pub/sub
 
 A Web app can broadcast a payload on a named topic to every session subscribed

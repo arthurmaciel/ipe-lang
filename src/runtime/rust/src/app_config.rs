@@ -5,8 +5,9 @@
 //! shape` erases to (one carrier per position, no `dyn`). The setting-builder
 //! kernels ([`ipe_setting_host_bind`] / [`ipe_setting_log_level`] /
 //! [`ipe_setting_db_url`] / [`ipe_setting_web_csrf`] /
-//! [`ipe_setting_web_session_ttl`]) each produce one; a shape app's entry
-//! installs the whole list through [`install_web`] before its server binds.
+//! [`ipe_setting_web_session_ttl`] / [`ipe_setting_web_auth_max_lifetime`]) each
+//! produce one; a shape app's entry installs the whole list through [`install_web`]
+//! before its server binds.
 //!
 //! # One precedence
 //!
@@ -60,6 +61,10 @@ pub enum Setting {
     WebCsrf(i64),
     /// `Web.sessionTtl` — the session lifetime in seconds.
     WebSessionTtl(i64),
+    /// `Web.authMaxLifetime` — the hard absolute-lifetime cap for a signed session
+    /// token, in seconds. A token cannot outlive `iat + max_lifetime` regardless of
+    /// any subsequent re-issue. Default: 8 h (28 800 s).
+    WebAuthMaxLifetime(i64),
 }
 
 /// `Host.bind : Int -> Setting a`. Maps the raw host-mode tag onto the closed
@@ -117,6 +122,14 @@ pub fn ipe_setting_web_session_ttl(seconds: i64) -> Setting {
     Setting::WebSessionTtl(seconds)
 }
 
+/// `Web.authMaxLifetime : Int -> Setting Web`. Carries the absolute hard cap on a
+/// signed session token's age (seconds from original issue). A non-positive value
+/// is dropped fail-closed (the caller's 8 h default applies).
+#[must_use]
+pub fn ipe_setting_web_auth_max_lifetime(seconds: i64) -> Setting {
+    Setting::WebAuthMaxLifetime(seconds)
+}
+
 /// The CSRF posture a `Web.csrf` setting requests. A setting can only ever
 /// STRENGTHEN protection: an `Enforced` tag pins CSRF on, and every other tag
 /// (including an out-of-range one) is `Unspecified` — it leaves the default in
@@ -140,6 +153,7 @@ struct ResolvedConfig {
     log_level: Option<i64>,
     csrf: Option<CsrfSetting>,
     session_ttl_secs: Option<i64>,
+    auth_max_lifetime_secs: Option<i64>,
     #[cfg(feature = "secret")]
     db_url: Option<crate::secret::Secret>,
 }
@@ -168,6 +182,7 @@ pub fn install_web(settings: Vec<Setting>) {
                 });
             }
             Setting::WebSessionTtl(seconds) => cfg.session_ttl_secs = Some(seconds),
+            Setting::WebAuthMaxLifetime(seconds) => cfg.auth_max_lifetime_secs = Some(seconds),
             #[cfg(feature = "secret")]
             Setting::DbUrl(url) => cfg.db_url = Some(url),
         }
@@ -280,6 +295,51 @@ pub fn resolve_session_ttl_override() -> Option<u64> {
 fn session_ttl_from(env_present: bool, setting: Option<i64>) -> Option<u64> {
     if env_present {
         return None;
+    }
+    match setting {
+        Some(secs) if secs > 0 => u64::try_from(secs).ok(),
+        _ => None,
+    }
+}
+
+/// The absolute-lifetime cap for a signed session token, in seconds. Applies the
+/// one precedence: `IPE_AUTH_MAX_LIFETIME` (env) > `Web.authMaxLifetime`
+/// (setting-in-code) > 8 h fallback. A non-positive value in either the env or the
+/// in-code setting is dropped fail-closed to the fallback. The fallback of 8 h
+/// (28 800 s) bounds the value of a stolen, still-unrevoked token.
+///
+/// This is the single call site for the resolved cap — all callers (sign + verify)
+/// use this so the precedence is never duplicated.
+#[must_use]
+pub fn resolve_auth_max_lifetime() -> u64 {
+    /// 8 hours in seconds.
+    const DEFAULT_SECS: u64 = 8 * 60 * 60;
+    // Env wins: parse a positive integer from `IPE_AUTH_MAX_LIFETIME`.
+    if let Ok(raw) = crate::system::read_env_var("IPE_AUTH_MAX_LIFETIME") {
+        if let Ok(secs) = raw.trim().parse::<i64>()
+            && let Some(v) = auth_max_lifetime_from(true, Some(secs))
+        {
+            return v;
+        }
+        // Env var present but not parseable or non-positive → fall closed to default.
+        return DEFAULT_SECS;
+    }
+    auth_max_lifetime_from(
+        false,
+        INSTALLED.get().and_then(|c| c.auth_max_lifetime_secs),
+    )
+    .unwrap_or(DEFAULT_SECS)
+}
+
+/// Pure auth-max-lifetime resolution: the installed setting applies only when no
+/// env override is present, and a non-positive value is dropped (fail-closed to the
+/// caller's default). Split out for unit testing without process-wide state.
+fn auth_max_lifetime_from(env_present: bool, setting: Option<i64>) -> Option<u64> {
+    if env_present {
+        return match setting {
+            Some(secs) if secs > 0 => u64::try_from(secs).ok(),
+            _ => None,
+        };
     }
     match setting {
         Some(secs) if secs > 0 => u64::try_from(secs).ok(),
@@ -425,5 +485,33 @@ mod tests {
     #[test]
     fn session_ttl_absent_setting_falls_through() {
         assert_eq!(session_ttl_from(false, None), None);
+    }
+
+    // ── AuthMaxLifetime: env > setting > 8h default, non-positive dropped ──
+
+    #[test]
+    fn auth_max_lifetime_setting_applies_when_no_env() {
+        assert_eq!(auth_max_lifetime_from(false, Some(3600)), Some(3600));
+    }
+
+    #[test]
+    fn auth_max_lifetime_env_overrides_setting() {
+        // env_present → the setting value becomes the env-branch result.
+        assert_eq!(auth_max_lifetime_from(true, Some(7200)), Some(7200));
+    }
+
+    #[test]
+    fn auth_max_lifetime_non_positive_falls_closed_to_none() {
+        // A zero or negative value is dropped in both branches.
+        assert_eq!(auth_max_lifetime_from(false, Some(0)), None);
+        assert_eq!(auth_max_lifetime_from(false, Some(-1)), None);
+        assert_eq!(auth_max_lifetime_from(true, Some(0)), None);
+        assert_eq!(auth_max_lifetime_from(true, Some(-100)), None);
+    }
+
+    #[test]
+    fn auth_max_lifetime_absent_setting_falls_through() {
+        assert_eq!(auth_max_lifetime_from(false, None), None);
+        assert_eq!(auth_max_lifetime_from(true, None), None);
     }
 }
