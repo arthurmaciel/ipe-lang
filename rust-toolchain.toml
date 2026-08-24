@@ -2,8 +2,15 @@
 [toolchain]
 channel = "1.97.1"
 components = ["clippy", "rustfmt"]
-# `wasm32-unknown-unknown` is the in-browser compiler target: the `ipe-wasm`
-# frontend crate at `src/wasm` builds to it for the browser playground
-# (examples/wasm/language-playground). Declared here so every toolchain install
-# — local and CI — has it available.
-targets = ["wasm32-unknown-unknown"]
+# Extra targets every toolchain install — local and CI — must carry:
+#   - `wasm32-unknown-unknown`: the in-browser compiler target the `ipe-wasm`
+#     frontend crate at `src/wasm` builds for the browser playground.
+#   - `x86_64-unknown-linux-musl` / `aarch64-unknown-linux-musl`: the
+#     fully-static deploy targets `ipe build --static` / `ipe run --static`
+#     link (see `static.yml`, `release.yml`); the pinned toolchain must have
+#     them or the static preflight fails with `TargetNotInstalled`.
+targets = [
+    "wasm32-unknown-unknown",
+    "x86_64-unknown-linux-musl",
+    "aarch64-unknown-linux-musl",
+]
