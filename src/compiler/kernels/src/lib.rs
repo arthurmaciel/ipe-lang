@@ -1751,6 +1751,8 @@ pub enum StdlibKernel {
     WebSessionTtl,
     /// `Web.authMaxLifetime : Int -> Setting Web` — absolute session-lifetime cap (seconds).
     WebAuthMaxLifetime,
+    /// `Web.authSlideWindow : Int -> Setting Web` — rolling re-issue window (seconds).
+    WebAuthSlideWindow,
     // ── Config-tag ADT constructors (nullary; project to a raw Int tag) ──────
     /// `Host.loopback : HostMode` — bind `127.0.0.1` only. Projects to tag `0`.
     HostLoopback,
@@ -3525,6 +3527,13 @@ impl StdlibKernel {
                 Pure,
                 "ipe_setting_web_auth_max_lifetime",
             ),
+            Self::WebAuthSlideWindow => d(
+                "Web",
+                "authSlideWindow",
+                1,
+                Pure,
+                "ipe_setting_web_auth_slide_window",
+            ),
             // Config-tag ADT constructors — nullary, emitted inline as a raw `Int`
             // tag (the `runtime_fn` name is never called; it is allowlisted in the
             // runtime symbol-resolution test as inline-emitted).
@@ -4893,6 +4902,7 @@ impl StdlibKernel {
         Self::WebCsrf,
         Self::WebSessionTtl,
         Self::WebAuthMaxLifetime,
+        Self::WebAuthSlideWindow,
         // Config-tag ADT constructors
         Self::HostLoopback,
         Self::HostAllInterfaces,
@@ -9678,6 +9688,7 @@ impl StdlibKernel {
             | Self::WebCsrf
             | Self::WebSessionTtl
             | Self::WebAuthMaxLifetime
+            | Self::WebAuthSlideWindow
             // Config-tag ADT constructors — a bare closed-tag value discloses no
             // capability (it is just an `Int` at emit).
             | Self::HostLoopback

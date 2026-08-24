@@ -1636,6 +1636,7 @@ impl Env {
                     "csrf",
                     "sessionTtl",
                     "authMaxLifetime",
+                    "authSlideWindow",
                     // `CsrfMode` constructors `Web.csrf` takes. No disabling
                     // variant — a setting cannot turn CSRF off.
                     "strict",

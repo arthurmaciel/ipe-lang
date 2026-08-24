@@ -21746,6 +21746,8 @@ impl<'a> Lowerer<'a> {
                 | KernelFn::WebSessionTtl
                 // `Web.authMaxLifetime : Int -> Setting Web`
                 | KernelFn::WebAuthMaxLifetime
+                // `Web.authSlideWindow : Int -> Setting Web`
+                | KernelFn::WebAuthSlideWindow
                 // ── arity 1 ────────────────────────────────────
                 | KernelFn::UiAspectRatio
                 | KernelFn::UiName
@@ -23380,6 +23382,7 @@ impl<'a> Lowerer<'a> {
                     ("Web", "csrf") => Ok(Callee::Kernel(KernelFn::WebCsrf)),
                     ("Web", "sessionTtl") => Ok(Callee::Kernel(KernelFn::WebSessionTtl)),
                     ("Web", "authMaxLifetime") => Ok(Callee::Kernel(KernelFn::WebAuthMaxLifetime)),
+                    ("Web", "authSlideWindow") => Ok(Callee::Kernel(KernelFn::WebAuthSlideWindow)),
                     // Config-tag ADT constructors — nullary, emitted inline as a
                     // raw `Int` tag.
                     ("Web", "strict") => Ok(Callee::Kernel(KernelFn::WebCsrfStrict)),
