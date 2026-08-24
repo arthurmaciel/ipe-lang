@@ -700,6 +700,39 @@ jobs:
               ;;
           esac
 
+  # Vendored-emit SEAL gate: runs the `seal_modset` suite under the vendored
+  # runtime-source emit model (`IPE_RUNTIME_VENDORED=1`). The normal e2e shards
+  # always use the dependency model, so a missing Cargo feature flag in the
+  # vendored manifest (e.g. `"jwt"` absent from `default = [...]`) silently
+  # compiles out `#[cfg(feature = "jwt")]`-gated items and causes E0425 at cargo
+  # build — a SEAL breach invisible to the dep-model gate. This job makes that
+  # class of break visible and blocking.
+  #
+  # Runs on push/nightly/merge_group (like `e2e`); off the PR gate since each
+  # shape does a full `cargo build`. `seal-smoke` is the fast PR proxy.
+  seal-modset-vendored:
+    name: seal-modset (vendored emit model)
+    runs-on: ubuntu-latest
+    needs: [changes, quick-check]
+    if: github.event_name != 'pull_request'
+    env:
+      RUSTFLAGS: -C link-arg=-fuse-ld=mold
+      IPE_RUNTIME_DIR: ${{ github.workspace }}/src/runtime/rust/src
+      IPE_E2E: "1"
+      IPE_RUNTIME_VENDORED: "1"
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: rui314/setup-mold@v1
+      - uses: mozilla-actions/sccache-action@v0.0.9
+      - uses: Swatinem/rust-cache@v2
+      - uses: taiki-e/install-action@nextest
+      - name: Run seal_modset under the vendored emit model
+        run: |
+          cargo nextest run -p ipe \
+            -E 'binary(seal_modset)' \
+            --profile ci
+
   # macOS Tier-2 native-code enforcement — the ONLY real verification of the
   # macOS jail's deny behaviour. The Rust unit tests prove the SBPL LOWERING on
   # any host, but only a real macOS runner exercises `sandbox-exec`. This job is

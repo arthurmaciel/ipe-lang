@@ -15,6 +15,12 @@
 //! Gated on `IPE_E2E=1` (each shape does a full `cargo build`); without it the
 //! test returns early so the default `cargo test` stays fast.
 //!
+//! The `*_vendored_*` tests additionally force the vendored emit model
+//! (equivalent to `IPE_RUNTIME_VENDORED=1`), which was historically never run
+//! in CI and concealed a class of SEAL breaks where the vendored manifest was
+//! missing a Cargo feature flag required by `#[cfg(feature = "...")]` guards in
+//! the vendored runtime source.
+//!
 //! ```text
 //! IPE_E2E=1 cargo test -p ipe --test seal_modset
 //! ```
@@ -48,6 +54,44 @@ fn emit_and_build(name: &str, ipe_source: &str) -> Result<(), BoxError> {
 
     // THE real test: the emitted crate must `cargo build` (exit 0). A missing
     // runtime-module append reads as E0425/E0412 in this step.
+    e2e_support::build_rust_binary(name, &out_dir)
+        .map(|_| ())
+        .map_err(|e| -> BoxError { e.into() })
+}
+
+/// Like `emit_and_build` but forces the VENDORED emit model (`runtime_dep:
+/// false`), regardless of the `IPE_RUNTIME_VENDORED` environment variable.
+///
+/// The vendored model copies the runtime source into the emitted crate and
+/// compiles it with the feature flags declared in the emitted `Cargo.toml`.
+/// A missing feature flag silently compiles out `#[cfg(feature = "...")]`-gated
+/// items, causing E0425/E0412 at `cargo build` despite `ipe` exit 0 — a SEAL
+/// breach that the default dep-model tests cannot catch.
+fn emit_and_build_vendored(name: &str, ipe_source: &str) -> Result<(), BoxError> {
+    let src_dir = std::env::temp_dir().join(format!("seal_modset_{name}_ipe"));
+    let _ = std::fs::remove_dir_all(&src_dir);
+    std::fs::create_dir_all(&src_dir)
+        .map_err(|e| -> BoxError { format!("{name}: cannot create src dir: {e}").into() })?;
+
+    let entry = src_dir.join("Main.ipe");
+    std::fs::write(&entry, ipe_source)
+        .map_err(|e| -> BoxError { format!("{name}: cannot write Main.ipe: {e}").into() })?;
+
+    let out_dir = std::env::temp_dir().join(format!("seal_modset_{name}_emitted"));
+    let _ = std::fs::remove_dir_all(&out_dir);
+
+    let runtime = ipe::resolve_runtime()
+        .map_err(|e| -> BoxError { format!("{name}: runtime unavailable: {e}").into() })?;
+
+    // Force the vendored emit model so `#[cfg(feature = "...")]` coverage in
+    // the vendored runtime source is verified — the dep-model never exercises it.
+    let options = ipe::BuildOptions {
+        runtime_dep: false,
+        ..ipe::BuildOptions::default()
+    };
+    ipe::build_with_options(&entry, &out_dir, &runtime, options)
+        .map_err(|e| -> BoxError { format!("{name}: ipe build (vendored) failed: {e}").into() })?;
+
     e2e_support::build_rust_binary(name, &out_dir)
         .map(|_| ())
         .map_err(|e| -> BoxError { e.into() })
@@ -141,6 +185,18 @@ const HTTP_STREAM_CHUNKS: &str = "module Main exposing (main)\n\
     subFor sid = HttpStream.chunks sid Chunked\n\
     main = Io.println \"streamchunks\"\n";
 
+/// Authed-route program using `Server.getAuthed` and `Server.AuthConfig`.
+///
+/// Under the vendored emit model the runtime `auth.rs` and `server.rs` carry
+/// `#[cfg(feature = "jwt")]` guards over `AuthConfig`, `server_get_authed`, and
+/// the JWT sign/verify helpers. Without `"jwt"` in the emitted `Cargo.toml`'s
+/// `default = [...]` those items are compiled out and `main.rs` references fail
+/// with E0425 (`AuthConfig` not found) — the SEAL breach this test gates.
+const AUTHED_ROUTE: &str = include_str!(concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/../../tests/golden/authed_route_revocation_vendored_seal/Main.ipe"
+));
+
 // ── The gate: every shape emits AND cargo-builds ────────────────────────────
 
 #[test]
@@ -185,6 +241,26 @@ fn http_stream_chunks_no_open_builds() {
     }
     emit_and_build("http_stream_chunks", HTTP_STREAM_CHUNKS)
         .expect("HttpStream.chunks must pull in the server/http_stream module (was E0412/E0425)");
+}
+
+// ── Vendored-model SEAL: jwt feature must be in default = [...] ─────────────
+
+/// Under the vendored emit model an authed-route program (`Server.getAuthed` +
+/// `Server.AuthConfig`) must cargo-build. The runtime `auth.rs` and `server.rs`
+/// gate `AuthConfig`, `server_get_authed`, and JWT helpers on
+/// `#[cfg(feature = "jwt")]`; without `"jwt"` in the emitted `Cargo.toml`'s
+/// `default` those items are compiled out and `main.rs` fails with E0425
+/// (ipe exit 0, cargo fails — SEAL breach). This test catches that class under
+/// the vendored emit path, which CI previously never ran.
+#[test]
+fn authed_route_vendored_builds() {
+    if skip() {
+        return;
+    }
+    emit_and_build_vendored("authed_route_vendored", AUTHED_ROUTE).expect(
+        "authed route must cargo-build under the vendored emit model \
+         (jwt feature must be in default = [...])",
+    );
 }
 
 /// The runtime source tree must resolve for every shape above — a smoke check
