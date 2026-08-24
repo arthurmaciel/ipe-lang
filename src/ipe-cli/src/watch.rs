@@ -229,13 +229,13 @@ pub(crate) fn resolve_project_sources(
     entry_text_override: Option<&str>,
 ) -> Result<ResolvedProject, CliError> {
     let manifest_path = if entry.is_dir() {
-        let candidate = entry.join("ipe.toml");
-        if candidate.is_file() {
-            Some(candidate)
-        } else {
-            return Err(CliError::Usage(
-                "directory supplied but no ipe.toml found inside it",
-            ));
+        match project::manifest_in_dir(entry) {
+            Some(manifest) => Some(manifest),
+            None => {
+                return Err(CliError::Usage(
+                    "directory supplied but no package.ipe or ipe.toml found inside it",
+                ));
+            }
         }
     } else if entry.extension().and_then(|e| e.to_str()) == Some("toml") {
         Some(entry.to_path_buf())

@@ -15,7 +15,7 @@ fn fresh_dir(tag: &str) -> PathBuf {
 }
 
 /// `ipe init <name>` scaffolds the four project files, with the project name
-/// threaded into `ipe.toml`.
+/// threaded into `package.ipe`.
 #[test]
 fn init_scaffolds_project_files() {
     let dir = fresh_dir("scaffold");
@@ -25,7 +25,7 @@ fn init_scaffolds_project_files() {
     assert!(result.is_ok(), "init must succeed: {result:?}");
 
     for rel in [
-        "ipe.toml",
+        "package.ipe",
         "src/Main.ipe",
         "README.md",
         ".gitignore",
@@ -37,14 +37,10 @@ fn init_scaffolds_project_files() {
         );
     }
 
-    let toml = fs::read_to_string(target.join("ipe.toml")).unwrap_or_default();
+    let manifest = fs::read_to_string(target.join("package.ipe")).unwrap_or_default();
     assert!(
-        toml.contains("name = \"my-app\""),
-        "ipe.toml must carry the project name, got:\n{toml}"
-    );
-    assert!(
-        toml.contains("entry = \"src/Main.ipe\""),
-        "ipe.toml must name the entry, got:\n{toml}"
+        manifest.contains("Package.named \"my-app\""),
+        "package.ipe must carry the project name, got:\n{manifest}"
     );
 
     let main = fs::read_to_string(target.join("src/Main.ipe")).unwrap_or_default();

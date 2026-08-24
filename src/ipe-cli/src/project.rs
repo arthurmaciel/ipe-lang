@@ -434,7 +434,79 @@ fn scan_raw_manifest(text: &str) -> Result<RawManifest, CliError> {
 /// manifest is malformed or the `src/` directory does not exist;
 /// [`CliError::UsageOwned`] if `[database] driver` names an unsupported value, a
 /// dependency version requirement is malformed, or a capability is unknown.
+/// The manifest filename the toolchain reads today via the line-scanner.
+pub const IPE_TOML: &str = "ipe.toml";
+
+/// Locate a project's manifest inside `dir`, preferring the Ipê-native
+/// `package.ipe` over the legacy `ipe.toml`.
+///
+/// Precedence, per the manifest design's coexistence window:
+///
+/// 1. `package.ipe` present → read it syntactically. If `ipe.toml` *also*
+///    exists, warn once that it is ignored — the new manifest wins
+///    deterministically; the two are never merged (an ambiguous-precedence
+///    footgun).
+/// 2. Else `ipe.toml` present → the legacy reader, plus a one-line deprecation
+///    notice pointing at `ipe migrate config`.
+/// 3. Neither → `None`.
+///
+/// The warnings go to stderr so they never corrupt a piped artifact. Returns the
+/// chosen manifest path (its filename tells [`parse_manifest`] which reader to
+/// run), or `None` when the directory carries no manifest.
+#[must_use]
+pub fn manifest_in_dir(dir: &Path) -> Option<PathBuf> {
+    let package_ipe = dir.join(crate::package_manifest::PACKAGE_IPE);
+    let ipe_toml = dir.join(IPE_TOML);
+    if package_ipe.is_file() {
+        if ipe_toml.is_file() {
+            eprintln!(
+                "warning: both package.ipe and ipe.toml exist — package.ipe wins; ipe.toml is \
+                 ignored (they are never merged)"
+            );
+        }
+        return Some(package_ipe);
+    }
+    if ipe_toml.is_file() {
+        eprintln!(
+            "note: ipe.toml is a legacy manifest — run `ipe migrate config` to convert it to \
+             package.ipe"
+        );
+        return Some(ipe_toml);
+    }
+    None
+}
+
+/// Parse a project manifest into a [`ProjectManifest`], dispatching by filename.
+///
+/// A `package.ipe` is read syntactically by the Ipê-native reader; an `ipe.toml`
+/// by the line-scanner. Both front doors produce the identical struct, so no
+/// downstream reader depends on which format was on disk.
+///
+/// # Errors
+/// The union of both readers' failures: [`CliError::Io`] if the file cannot be
+/// read; [`CliError::Usage`] / [`CliError::UsageOwned`] for a malformed or
+/// invalid manifest (an unsupported driver, a bad version or dependency, an
+/// unknown capability, a denylisted `publicEnv` name, a missing source root); and
+/// (`package.ipe` only) [`CliError::Pipeline`] when the source does not parse.
 pub fn parse_manifest(manifest_path: &Path) -> Result<ProjectManifest, CliError> {
+    // A `package.ipe` is read syntactically (never evaluated) by the Ipê-native
+    // reader; an `ipe.toml` is read by the line-scanner below. Both front doors
+    // produce the identical `ProjectManifest`, so no downstream reader changes.
+    if manifest_path.file_name().and_then(|n| n.to_str())
+        == Some(crate::package_manifest::PACKAGE_IPE)
+    {
+        return crate::package_manifest::parse_package_manifest(manifest_path);
+    }
+    parse_toml_manifest(manifest_path)
+}
+
+/// Parse an `ipe.toml` manifest via the minimal line-scanner. This is the
+/// original manifest reader, preserved unchanged while `package.ipe` is the
+/// preferred format (both produce the same [`ProjectManifest`]).
+///
+/// # Errors
+/// As [`parse_manifest`].
+fn parse_toml_manifest(manifest_path: &Path) -> Result<ProjectManifest, CliError> {
     let root = manifest_path
         .parent()
         .map_or_else(|| PathBuf::from("."), Path::to_path_buf);
@@ -1574,5 +1646,102 @@ import String
                 "project.rs and ffi.rs disagree on spelling {s:?}"
             );
         }
+    }
+
+    // ── Dual-name discovery (package.ipe preferred, ipe.toml fallback) ────────
+
+    /// A temp project dir seeded with a `src/Main.ipe` (so any manifest reader's
+    /// source-root check passes) plus whichever manifest files the caller writes.
+    fn discovery_dir(
+        test_name: &str,
+        package_ipe: Option<&str>,
+        ipe_toml: Option<&str>,
+    ) -> PathBuf {
+        let root = std::env::temp_dir().join(format!("ipe_discovery_{test_name}"));
+        let _ = fs::remove_dir_all(&root);
+        let src = root.join("src");
+        fs::create_dir_all(&src).expect("create src/");
+        fs::write(
+            src.join("Main.ipe"),
+            "module Main exposing (main)\nmain = 0\n",
+        )
+        .expect("write Main.ipe");
+        if let Some(body) = package_ipe {
+            fs::write(root.join("package.ipe"), body).expect("write package.ipe");
+        }
+        if let Some(body) = ipe_toml {
+            fs::write(root.join("ipe.toml"), body).expect("write ipe.toml");
+        }
+        root
+    }
+
+    #[test]
+    fn discovery_prefers_package_ipe_over_ipe_toml() {
+        let root = discovery_dir(
+            "prefers_package",
+            Some(
+                "module Package exposing (package)\n\npackage =\n    Package.named \"from-package\"\n",
+            ),
+            Some("[project]\nname = \"from-toml\"\n"),
+        );
+        let manifest = manifest_in_dir(&root).expect("a manifest is found");
+        assert_eq!(
+            manifest.file_name().and_then(|n| n.to_str()),
+            Some("package.ipe"),
+            "package.ipe must win over ipe.toml"
+        );
+        // And the chosen manifest actually reads via the syntactic reader.
+        let m = parse_manifest(&manifest).expect("package.ipe reads");
+        assert_eq!(m.name, "from-package");
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn discovery_falls_back_to_ipe_toml() {
+        let root = discovery_dir(
+            "fallback_toml",
+            None,
+            Some("[project]\nname = \"from-toml\"\n"),
+        );
+        let manifest = manifest_in_dir(&root).expect("a manifest is found");
+        assert_eq!(
+            manifest.file_name().and_then(|n| n.to_str()),
+            Some("ipe.toml"),
+            "ipe.toml is the fallback when no package.ipe exists"
+        );
+        let m = parse_manifest(&manifest).expect("ipe.toml still reads (additive)");
+        assert_eq!(m.name, "from-toml");
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn discovery_returns_none_without_a_manifest() {
+        let root = discovery_dir("no_manifest", None, None);
+        assert!(
+            manifest_in_dir(&root).is_none(),
+            "an empty project has no manifest"
+        );
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn ipe_toml_projects_still_load_through_parse_manifest() {
+        // Additive guarantee: the legacy front door is unchanged. A full ipe.toml
+        // still parses into the same struct fields.
+        let toml = discovery_dir(
+            "toml_additive",
+            None,
+            Some(
+                "[project]\nname = \"legacy\"\nversion = \"2.1.0\"\n[database]\ndriver = \"postgres\"\n",
+            ),
+        );
+        let m = parse_manifest(&toml.join("ipe.toml")).expect("legacy ipe.toml loads");
+        assert_eq!(m.name, "legacy");
+        assert_eq!(
+            m.version,
+            Some(semver::Version::parse("2.1.0").expect("semver"))
+        );
+        assert_eq!(m.driver, ipe_backend_rust::DbDriver::Postgres);
+        let _ = fs::remove_dir_all(&toml);
     }
 }
