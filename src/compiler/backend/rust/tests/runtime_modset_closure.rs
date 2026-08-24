@@ -40,7 +40,7 @@ use std::path::{Path, PathBuf};
 use ipe_backend::Backend;
 use ipe_backend_rust::RustBackend;
 use ipe_intern::Interner;
-use ipe_ir::{ModPath, Module, Program};
+use ipe_ir::{ModPath, Module, Program, Target};
 
 /// Locate the runtime source tree (`src/runtime/rust/src`) — the vendored
 /// module files whose `use crate::` closure this test checks.
@@ -194,23 +194,52 @@ fn module_for_mask(name: ipe_intern::Symbol, mask: u32) -> Module {
     }
 }
 
+/// Extract the module name from one `mod.rs` line — handles both the
+/// semicolon form (`pub mod foo;`) and the inline-block form
+/// (`pub mod foo {`). Returns `None` for any other line.
+fn module_name_from_line(line: &str) -> Option<String> {
+    let t = line.trim();
+    let rest = t
+        .strip_prefix("pub mod ")
+        .or_else(|| t.strip_prefix("mod "))?;
+    // Semicolon form: `pub mod foo;`
+    if let Some(name) = rest.strip_suffix(';')
+        && name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
+    {
+        return Some(name.to_owned());
+    }
+    // Inline-block form: `pub mod foo {` (possibly with trailing whitespace
+    // before the brace). Captures the name token before the `{`.
+    let name: String = rest
+        .chars()
+        .take_while(|c| c.is_ascii_alphanumeric() || *c == '_')
+        .collect();
+    if !name.is_empty() {
+        let after = rest.get(name.len()..).unwrap_or("").trim_start();
+        if after.starts_with('{') {
+            return Some(name);
+        }
+    }
+    None
+}
+
 /// Extract the set of top-level module names DECLARED by an emitted
-/// `ipe_runtime/mod.rs` — every `pub mod X;` / `mod X;` line.
+/// `ipe_runtime/mod.rs` — every `pub mod X;` / `mod X;` line and every
+/// `pub mod X { … }` inline-block declaration. Skips nested child declarations
+/// (e.g. `pub mod route;` inside `pub mod web { … }`).
 fn declared_modules(mod_rs: &str) -> BTreeSet<String> {
     let mut out = BTreeSet::new();
+    let mut brace_depth: i32 = 0;
     for line in mod_rs.lines() {
         let t = line.trim();
-        // Skip attributes like `#[cfg(feature = "tui")]` that may precede a decl —
-        // the decl line itself is what we parse.
-        let rest = t
-            .strip_prefix("pub mod ")
-            .or_else(|| t.strip_prefix("mod "));
-        if let Some(rest) = rest
-            && let Some(name) = rest.strip_suffix(';')
-            && name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
+        if brace_depth == 0
+            && let Some(name) = module_name_from_line(line)
         {
-            out.insert(name.to_owned());
+            out.insert(name);
         }
+        let opens = i32::try_from(t.matches('{').count()).unwrap_or(0);
+        let closes = i32::try_from(t.matches('}').count()).unwrap_or(0);
+        brace_depth = (brace_depth + opens - closes).max(0);
     }
     out
 }
@@ -218,20 +247,21 @@ fn declared_modules(mod_rs: &str) -> BTreeSet<String> {
 /// Every top-level module DECLARATION line in an emitted `ipe_runtime/mod.rs`,
 /// as it literally appears — a `Vec`, NOT a set, so a module declared twice
 /// shows up twice. Distinct from [`declared_modules`], whose `BTreeSet` silently
-/// dedups and so cannot witness a double `pub mod`.
+/// dedups and so cannot witness a double `pub mod`. Skips nested child
+/// declarations inside inline blocks.
 fn declared_module_lines(mod_rs: &str) -> Vec<String> {
     let mut out = Vec::new();
+    let mut brace_depth: i32 = 0;
     for line in mod_rs.lines() {
         let t = line.trim();
-        let rest = t
-            .strip_prefix("pub mod ")
-            .or_else(|| t.strip_prefix("mod "));
-        if let Some(rest) = rest
-            && let Some(name) = rest.strip_suffix(';')
-            && name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
+        if brace_depth == 0
+            && let Some(name) = module_name_from_line(line)
         {
-            out.push(name.to_owned());
+            out.push(name);
         }
+        let opens = i32::try_from(t.matches('{').count()).unwrap_or(0);
+        let closes = i32::try_from(t.matches('}').count()).unwrap_or(0);
+        brace_depth = (brace_depth + opens - closes).max(0);
     }
     out
 }
@@ -700,5 +730,204 @@ fn server_shape_declares_tea_and_http_stream() {
     assert!(
         declared.contains("tea") && declared.contains("server") && declared.contains("http_stream"),
         "uses_server must declare `server`, `tea`, and `http_stream`; got {declared:?}"
+    );
+}
+
+// ── wasm vendored module-set closure ─────────────────────────────────────────
+
+/// The unconditional crate-root deps of a top-level module in the WASM
+/// vendored module set. Differs from [`unconditional_crate_deps`] in how it
+/// handles inline module declarations such as `pub mod web { pub mod route; }`:
+/// an inline block compiles ONLY its explicitly-declared children (here just
+/// `web/route.rs`), not the whole `web/` directory (which includes
+/// `web/mod.rs` with server-only deps). For a regular `pub mod foo;` module
+/// the two functions are equivalent.
+///
+/// `inline_children`: a pre-parsed map from module name → its explicitly-listed
+/// children (populated from `pub mod X { pub mod Y; … }` blocks in
+/// `WASM_RUNTIME_MOD_RS`).
+fn wasm_unconditional_crate_deps(
+    runtime_root: &Path,
+    name: &str,
+    inline_children: &HashMap<String, Vec<String>>,
+) -> BTreeSet<String> {
+    let mut deps = BTreeSet::new();
+    if let Some(children) = inline_children.get(name) {
+        // Inline block: only the declared child files are compiled.
+        for child in children {
+            let child_file = runtime_root.join(name).join(format!("{child}.rs"));
+            if child_file.is_file() {
+                // Child is 1 level inside `crate::<name>`, so 2 supers to root.
+                scan_file_deps(&child_file, 2, &mut deps);
+            }
+        }
+    } else {
+        // Regular `pub mod name;`: use the shared scanner.
+        let flat = runtime_root.join(format!("{name}.rs"));
+        let dir = runtime_root.join(name);
+        if flat.is_file() {
+            scan_file_deps(&flat, 1, &mut deps);
+        }
+        if dir.is_dir() {
+            collect_dir_deps(&dir, 1, &mut deps);
+        }
+    }
+    deps
+}
+
+/// Parse the inline-block children from a `WASM_RUNTIME_MOD_RS`-style string.
+/// Returns a map from top-level inline module name → list of declared children.
+/// Example: `pub mod web { pub mod route; }` → `{"web": ["route"]}`.
+fn parse_inline_modules(mod_rs: &str) -> HashMap<String, Vec<String>> {
+    let mut result: HashMap<String, Vec<String>> = HashMap::new();
+    let mut in_block: Option<String> = None;
+    let mut brace_depth: i32 = 0;
+    for line in mod_rs.lines() {
+        let t = line.trim();
+        if let Some(ref parent) = in_block.clone() {
+            let opens = i32::try_from(t.matches('{').count()).unwrap_or(0);
+            let closes = i32::try_from(t.matches('}').count()).unwrap_or(0);
+            brace_depth += opens - closes;
+            if brace_depth <= 0 {
+                in_block = None;
+                brace_depth = 0;
+            } else {
+                // Parse `pub mod child;` inside the block.
+                let rest = t
+                    .strip_prefix("pub mod ")
+                    .or_else(|| t.strip_prefix("mod "));
+                if let Some(rest) = rest
+                    && let Some(child) = rest.strip_suffix(';')
+                    && child.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
+                {
+                    result
+                        .entry(parent.clone())
+                        .or_default()
+                        .push(child.to_owned());
+                }
+            }
+            continue;
+        }
+        // Check for an inline-block opener: `pub mod name {`.
+        let rest = t
+            .strip_prefix("pub mod ")
+            .or_else(|| t.strip_prefix("mod "));
+        if let Some(rest) = rest {
+            let name: String = rest
+                .chars()
+                .take_while(|c| c.is_ascii_alphanumeric() || *c == '_')
+                .collect();
+            if !name.is_empty() {
+                let after = rest.get(name.len()..).unwrap_or("").trim_start();
+                if after.starts_with('{') {
+                    in_block = Some(name.clone());
+                    brace_depth = 1;
+                    result.entry(name).or_default();
+                }
+            }
+        }
+    }
+    result
+}
+
+/// The wasm vendored `WASM_RUNTIME_MOD_RS` module set is closed under the
+/// unconditional `use crate::<dep>` references of every module it declares.
+///
+/// The vendored path emits `src/ipe_runtime/mod.rs` from a STATIC constant
+/// (`WASM_RUNTIME_MOD_RS`) rather than a per-flag append list, so a module that
+/// calls `crate::<dep>::…` without a `#[cfg(...)]` guard can only compile if
+/// `<dep>` is also declared in that constant. This test proves closure WITHOUT
+/// invoking cargo — the same obligation the per-flag native tests above prove for
+/// the native module set, applied to the wasm vendored constant.
+///
+/// The breach class is: a module `M` in `WASM_RUNTIME_MOD_RS` calls
+/// `crate::<dep>::fn()` unconditionally, but `<dep>` is absent from the
+/// constant. `ipe` exits 0; the emitted wasm crate fails `cargo check` (E0433).
+/// A regression in the native modset closure tests would not catch this because
+/// those tests emit via `RustBackend::new(interner)` (the NATIVE path, which
+/// uses the native template + per-flag appends — not `WASM_RUNTIME_MOD_RS`).
+///
+/// Inline modules (e.g. `pub mod web { pub mod route; }`) are handled correctly:
+/// only the explicitly-listed child files are scanned, not the whole directory.
+#[test]
+fn wasm_vendored_modset_is_closed() {
+    let runtime_root =
+        resolve_runtime().expect("runtime source tree (src/runtime/rust/src) must resolve");
+    let mut interner = Interner::new();
+    let main = interner.intern("Main").expect("intern Main");
+
+    // Emit the wasm VENDORED mod.rs (no `with_runtime_dep`) — this path writes
+    // `WASM_RUNTIME_MOD_RS` into `src/ipe_runtime/mod.rs`.
+    let prog = Program {
+        imports_unsafe_submodule: false,
+        modules: vec![module_for_mask(main, 0)],
+    };
+    let emitted = RustBackend::new(&interner)
+        .with_target(Target::WasmClient)
+        .emit(&prog)
+        .expect("wasm vendored emit must succeed for a body-free program");
+    let mod_rs = emitted
+        .files
+        .get("src/ipe_runtime/mod.rs")
+        .expect("wasm vendored emit must include src/ipe_runtime/mod.rs");
+    let declared = declared_modules(mod_rs);
+    let inline_children = parse_inline_modules(mod_rs);
+
+    let mut dep_cache: HashMap<String, BTreeSet<String>> = HashMap::new();
+    for m in &declared {
+        let deps = dep_cache
+            .entry(m.clone())
+            .or_insert_with(|| wasm_unconditional_crate_deps(&runtime_root, m, &inline_children));
+        for dep in deps.iter() {
+            assert!(
+                declared.contains(dep),
+                "wasm vendored module-set SEAL breach: `WASM_RUNTIME_MOD_RS` declares \
+                 `{m}` (which does `use crate::{dep}` unconditionally) but does NOT \
+                 declare `{dep}`. The emitted wasm crate fails `cargo check \
+                 --target wasm32-unknown-unknown` (E0433) though `ipe` exits 0. \
+                 Add `pub mod {dep};` to `WASM_RUNTIME_MOD_RS` in \
+                 `src/compiler/backend/rust/src/project.rs`. \
+                 Declared wasm modules: {declared:?}"
+            );
+        }
+    }
+}
+
+/// The wasm vendored module set must declare `app_config` — `log.rs` calls
+/// `crate::app_config::resolve_log_level_override()` unconditionally, so the
+/// absence of `app_config` from `WASM_RUNTIME_MOD_RS` breaks `cargo check
+/// --target wasm32-unknown-unknown` with E0433.
+///
+/// A named witness alongside the structural test above: the structural test
+/// catches any future drift; this named test makes the specific regression
+/// fail loudly with a diagnostic that names the original defect.
+#[test]
+fn wasm_vendored_modset_declares_app_config() {
+    let mut interner = Interner::new();
+    let main = interner.intern("Main").expect("intern Main");
+    let prog = Program {
+        imports_unsafe_submodule: false,
+        modules: vec![module_for_mask(main, 0)],
+    };
+    let emitted = RustBackend::new(&interner)
+        .with_target(Target::WasmClient)
+        .emit(&prog)
+        .expect("wasm vendored emit must succeed");
+    let mod_rs = emitted
+        .files
+        .get("src/ipe_runtime/mod.rs")
+        .expect("wasm vendored emit must include src/ipe_runtime/mod.rs");
+    let declared = declared_modules(mod_rs);
+    assert!(
+        declared.contains("app_config"),
+        "`WASM_RUNTIME_MOD_RS` must declare `app_config` — `log.rs` calls \
+         `crate::app_config::resolve_log_level_override()` unconditionally, so \
+         its absence is E0433 in `cargo check --target wasm32-unknown-unknown`. \
+         Declared: {declared:?}"
+    );
+    assert!(
+        declared.contains("log"),
+        "`WASM_RUNTIME_MOD_RS` must declare `log` (precondition for the \
+         `app_config` edge); got {declared:?}"
     );
 }
