@@ -132,6 +132,7 @@ mod tests {
             values: vec![loc(update_value), loc(main_value)],
             unions: vec![loc(union)],
             aliases: Vec::new(),
+            foreigns: Vec::new(),
         })
     }
 

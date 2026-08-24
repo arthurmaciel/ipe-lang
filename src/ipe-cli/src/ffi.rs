@@ -2926,10 +2926,9 @@ fn scan_foreign_defines(src_root: &Path) -> Result<ForeignDefines, CliError> {
     ipe_files.sort();
 
     for file in &ipe_files {
-        let Ok(text) = crate::io_bounded::read_to_string_capped(
-            file,
-            crate::io_bounded::MANIFEST_READ_CAP,
-        ) else {
+        let Ok(text) =
+            crate::io_bounded::read_to_string_capped(file, crate::io_bounded::MANIFEST_READ_CAP)
+        else {
             continue;
         };
         // Fast reject: skip files with no `foreign` keyword.
