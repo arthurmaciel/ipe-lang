@@ -269,6 +269,23 @@ pub enum BuiltinTag {
     /// `Terminal` — the nullary phantom shape marker for the terminal shape.
     /// Appears only as [`Self::Setting`]'s argument; never a standalone value.
     ShapeTerminal,
+    /// `HostMode` — the nullary closed host-bind ADT (`loopback` /
+    /// `allInterfaces` / `envDriven`). The sole argument type of `Host.bind`; a
+    /// value only ever comes from its three constructor kernels, each of which
+    /// projects to the raw `Int` tag `resolve_host_bind` consumes. Making it a
+    /// closed type means an out-of-range host-bind tag is a type error rather
+    /// than a value the runtime must fall closed on.
+    HostMode,
+    /// `LogLevel` — the nullary closed log-severity ADT (`debug` / `info` /
+    /// `warn` / `error`). The sole argument type of `Log.level`; each
+    /// constructor projects to its raw `Int` severity tag.
+    LogLevel,
+    /// `CsrfMode` — the nullary closed CSRF-policy ADT (`strict` / an inherit
+    /// default). The sole argument type of `Web.csrf`. It carries no disabling
+    /// variant, so a setting cannot express turning CSRF off — the runtime's
+    /// stricter-only monotonicity becomes an unrepresentable-at-the-type-level
+    /// property.
+    CsrfMode,
     /// `Locale` — the nullary opaque BCP-47 locale handle.
     Locale,
     /// `HttpMethod` — the nullary closed HTTP-method ADT.
@@ -1732,6 +1749,27 @@ pub enum StdlibKernel {
     WebCsrf,
     /// `Web.sessionTtl : Int -> Setting Web` — web-only session-TTL setting (seconds).
     WebSessionTtl,
+    // ── Config-tag ADT constructors (nullary; project to a raw Int tag) ──────
+    /// `Host.loopback : HostMode` — bind `127.0.0.1` only. Projects to tag `0`.
+    HostLoopback,
+    /// `Host.allInterfaces : HostMode` — bind every interface. Projects to tag `1`.
+    HostAllInterfaces,
+    /// `Host.envDriven : HostMode` — defer to the environment / build profile.
+    /// Projects to tag `2`.
+    HostEnvDriven,
+    /// `Level.debug : LogLevel` — the debug severity. Projects to tag `0`.
+    LevelDebug,
+    /// `Level.info : LogLevel` — the info severity. Projects to tag `1`.
+    LevelInfo,
+    /// `Level.warn : LogLevel` — the warn severity. Projects to tag `2`.
+    LevelWarn,
+    /// `Level.error : LogLevel` — the error severity. Projects to tag `3`.
+    LevelError,
+    /// `Web.strict : CsrfMode` — enforce CSRF. Projects to tag `0`.
+    WebCsrfStrict,
+    /// `Web.inheritCsrf : CsrfMode` — inherit the framework CSRF default. Projects
+    /// to tag `1`. There is deliberately no disabling variant.
+    WebCsrfInherit,
     // ── event-attribute builders ─────────────────────────────────────────
     UiOnClick,
     UiOnFocus,
@@ -3478,6 +3516,24 @@ impl StdlibKernel {
             Self::DbUrlSetting => d("Db", "url", 1, Pure, "ipe_setting_db_url"),
             Self::WebCsrf => d("Web", "csrf", 1, Pure, "ipe_setting_web_csrf"),
             Self::WebSessionTtl => d("Web", "sessionTtl", 1, Pure, "ipe_setting_web_session_ttl"),
+            // Config-tag ADT constructors — nullary, emitted inline as a raw `Int`
+            // tag (the `runtime_fn` name is never called; it is allowlisted in the
+            // runtime symbol-resolution test as inline-emitted).
+            Self::HostLoopback => d("Host", "loopback", 0, Pure, "config_host_mode_loopback"),
+            Self::HostAllInterfaces => d(
+                "Host",
+                "allInterfaces",
+                0,
+                Pure,
+                "config_host_mode_all_interfaces",
+            ),
+            Self::HostEnvDriven => d("Host", "envDriven", 0, Pure, "config_host_mode_env_driven"),
+            Self::LevelDebug => d("Level", "debug", 0, Pure, "config_log_level_debug"),
+            Self::LevelInfo => d("Level", "info", 0, Pure, "config_log_level_info"),
+            Self::LevelWarn => d("Level", "warn", 0, Pure, "config_log_level_warn"),
+            Self::LevelError => d("Level", "error", 0, Pure, "config_log_level_error"),
+            Self::WebCsrfStrict => d("Web", "strict", 0, Pure, "config_csrf_mode_strict"),
+            Self::WebCsrfInherit => d("Web", "inheritCsrf", 0, Pure, "config_csrf_mode_inherit"),
             // ── event-attribute builders ─────────────────────────────────
             Self::UiOnClick => d("Ui", "onClick", 1, Ui, "ui_on_click_"),
             Self::UiOnFocus => d("Ui", "onFocus", 1, Ui, "ui_on_focus_"),
@@ -4827,6 +4883,16 @@ impl StdlibKernel {
         Self::DbUrlSetting,
         Self::WebCsrf,
         Self::WebSessionTtl,
+        // Config-tag ADT constructors
+        Self::HostLoopback,
+        Self::HostAllInterfaces,
+        Self::HostEnvDriven,
+        Self::LevelDebug,
+        Self::LevelInfo,
+        Self::LevelWarn,
+        Self::LevelError,
+        Self::WebCsrfStrict,
+        Self::WebCsrfInherit,
         // event-attribute builders
         Self::UiOnClick,
         Self::UiOnFocus,
@@ -5998,6 +6064,10 @@ impl StdlibKernel {
         const CRYPTO_MAC: TyShape = TyShape::Con(BuiltinTag::CryptoMac, &[]);
         const EMAIL_ADDRESS: TyShape = TyShape::Con(BuiltinTag::EmailAddress, &[]);
         const CLAIMS: TyShape = TyShape::Con(BuiltinTag::Claims, &[]);
+        // The nullary config-tag ADTs, returned by their constructor kernels.
+        const HOST_MODE: TyShape = TyShape::Con(BuiltinTag::HostMode, &[]);
+        const LOG_LEVEL: TyShape = TyShape::Con(BuiltinTag::LogLevel, &[]);
+        const CSRF_MODE: TyShape = TyShape::Con(BuiltinTag::CsrfMode, &[]);
         const PRINCIPAL: TyShape = TyShape::Con(BuiltinTag::Principal, &[]);
         const PRINCIPAL_TO_STRING: TyShape = TyShape::Fun(&PRINCIPAL, &STRING);
         const ALGORITHM: TyShape = TyShape::Con(BuiltinTag::Algorithm, &[]);
@@ -8087,6 +8157,12 @@ impl StdlibKernel {
             | Self::JwtEncodeHs256
             | Self::JwtEncodeRs256 => Some(&STRING_TO_STRING_TO_RESULT_ERR_STRING),
             Self::JwtClaims => Some(&CLAIMS),
+            // Config-tag ADT constructors — nullary, each returns its closed type.
+            Self::HostLoopback | Self::HostAllInterfaces | Self::HostEnvDriven => Some(&HOST_MODE),
+            Self::LevelDebug | Self::LevelInfo | Self::LevelWarn | Self::LevelError => {
+                Some(&LOG_LEVEL)
+            }
+            Self::WebCsrfStrict | Self::WebCsrfInherit => Some(&CSRF_MODE),
             Self::JwtHs256 | Self::JwtRs256 => Some(&STRING_TO_ALGORITHM),
             Self::JwtSubject | Self::JwtIssuer | Self::JwtAudience | Self::JwtJwtId => {
                 Some(&STRING_TO_CLAIMS_TO_CLAIMS)
@@ -9591,6 +9667,17 @@ impl StdlibKernel {
             | Self::DbUrlSetting
             | Self::WebCsrf
             | Self::WebSessionTtl
+            // Config-tag ADT constructors — a bare closed-tag value discloses no
+            // capability (it is just an `Int` at emit).
+            | Self::HostLoopback
+            | Self::HostAllInterfaces
+            | Self::HostEnvDriven
+            | Self::LevelDebug
+            | Self::LevelInfo
+            | Self::LevelWarn
+            | Self::LevelError
+            | Self::WebCsrfStrict
+            | Self::WebCsrfInherit
             // `Ipe.Db.Dsn.*` — the parse surface is PURE: parsing/rendering a
             // descriptor performs no I/O and discloses no capability. The
             // network/database disclosure belongs to a future `open` that

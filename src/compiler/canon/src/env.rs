@@ -114,6 +114,7 @@ pub const STDLIB_MODULE_QUALIFIERS: &[(&[&str], &str)] = &[
     // compiled-source veneer), so they stay out of `COMPILED_STD_MODULES`.
     (&["Ipe", "App"], "App"),
     (&["Ipe", "Host"], "Host"),
+    (&["Ipe", "Level"], "Level"),
     (&["Ipe", "Db", "Decode"], "Db.Decode"),
     (&["Ipe", "Db", "Sql"], "Sql"), // SqlFragment builder
     // `Ipe.Ui` is COMPILED-SOURCE (see `COMPILED_STD_MODULES`), not a kernel
@@ -900,8 +901,13 @@ impl Env {
             // `Ipe.App` — runtime-config front door. `fromEnv` seals an env var
             // into a `Secret` (the ONLY way to get a config secret).
             ("App", &["fromEnv"]),
-            // `Ipe.Host` — the host-bind setting builder.
-            ("Host", &["bind"]),
+            // `Ipe.Host` — the host-bind setting builder plus the `HostMode`
+            // constructors it takes.
+            ("Host", &["bind", "loopback", "allInterfaces", "envDriven"]),
+            // `Ipe.Level` — the `LogLevel` constructors `Log.level` takes. A
+            // separate qualifier from `Log` because `Log.debug`/`Log.info`/… are
+            // already the logging kernels; `Level.debug`/… are the severity tags.
+            ("Level", &["debug", "info", "warn", "error"]),
             // `Ipe.Math` — `min` / `max` are polymorphic `a -> a -> a`
             // (Elm `Basics.min`/`max` semantics). Wired in the lowerer to the
             // runtime's generic compare. All other Math kernels have concrete
@@ -1622,7 +1628,18 @@ impl Env {
             // ── Ipe.Web app-entry kernels ────────────────────────────────────────
             (
                 "Web",
-                &["app", "appRouted", "appWith", "route", "csrf", "sessionTtl"],
+                &[
+                    "app",
+                    "appRouted",
+                    "appWith",
+                    "route",
+                    "csrf",
+                    "sessionTtl",
+                    // `CsrfMode` constructors `Web.csrf` takes. No disabling
+                    // variant — a setting cannot turn CSRF off.
+                    "strict",
+                    "inheritCsrf",
+                ],
             ),
             // ── Ipe.Terminal app-entry kernels ───────────────────────────────────
             // `appScreen` (full screen, `onKey`) and `appLines` (line stream,

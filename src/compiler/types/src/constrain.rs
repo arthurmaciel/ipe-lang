@@ -628,6 +628,17 @@ struct Builtins {
     /// shape. Appears only as `Setting`'s argument. Lowered to
     /// `IrType::ShapeTerminal`.
     shape_terminal: Symbol,
+    /// `"HostMode"` — the closed host-bind ADT, the argument type of
+    /// `Host.bind`. Built only by its constructor kernels; each projects to the
+    /// raw `Int` host-bind tag at emit, so `HostMode` erases to `Int`.
+    host_mode: Symbol,
+    /// `"LogLevel"` — the closed log-severity ADT, the argument type of
+    /// `Log.level`. Built only by its constructor kernels; erases to `Int`.
+    log_level: Symbol,
+    /// `"CsrfMode"` — the closed CSRF-policy ADT, the argument type of
+    /// `Web.csrf`. Built only by its constructor kernels; carries no disabling
+    /// variant, and erases to `Int`.
+    csrf_mode: Symbol,
     // ── Ipe.Locale ─────────────────────────────────────────────────────────
     /// `"Locale"` — opaque BCP-47 locale handle (`ipe_runtime::locale::Locale`).
     /// The ONLY constructor is `Locale.fromTag : String -> Maybe Locale`;
@@ -886,6 +897,9 @@ impl Builtins {
             shape_web: interner.intern("Web")?,
             shape_webview: interner.intern("WebView")?,
             shape_terminal: interner.intern("Terminal")?,
+            host_mode: interner.intern("HostMode")?,
+            log_level: interner.intern("LogLevel")?,
+            csrf_mode: interner.intern("CsrfMode")?,
             // ── Ipe.Locale ───────────────────────────────────────────────────────
             locale: interner.intern("Locale")?,
             // ── Ipe.PubSub.Topic ────────────────────────────────────────────────
@@ -4108,6 +4122,9 @@ impl<'a> Builder<'a> {
             BuiltinTag::ShapeWeb => self.builtins.shape_web,
             BuiltinTag::ShapeWebView => self.builtins.shape_webview,
             BuiltinTag::ShapeTerminal => self.builtins.shape_terminal,
+            BuiltinTag::HostMode => self.builtins.host_mode,
+            BuiltinTag::LogLevel => self.builtins.log_level,
+            BuiltinTag::CsrfMode => self.builtins.csrf_mode,
             BuiltinTag::Locale => self.builtins.locale,
             BuiltinTag::HttpMethod => self.builtins.http_method,
             BuiltinTag::CryptoKey => self.builtins.crypto_key,
@@ -4717,6 +4734,25 @@ impl<'a> Builder<'a> {
             module: Vec::new(),
             name: self.builtins.setting,
             args: vec![shape],
+        };
+        // The closed config-tag ADTs — the argument types of `Host.bind` /
+        // `Log.level` / `Web.csrf`. Each is nullary; a value comes only from its
+        // constructor kernels, which project to the raw `Int` tag at emit. A bare
+        // `Int` no longer unifies here, so an out-of-range tag is a type error.
+        let host_mode = || Ty::Con {
+            module: Vec::new(),
+            name: self.builtins.host_mode,
+            args: Vec::new(),
+        };
+        let log_level = || Ty::Con {
+            module: Vec::new(),
+            name: self.builtins.log_level,
+            args: Vec::new(),
+        };
+        let csrf_mode = || Ty::Con {
+            module: Vec::new(),
+            name: self.builtins.csrf_mode,
+            args: Vec::new(),
         };
         // `Locale` — opaque BCP-47 locale handle
         // (`ipe_runtime::locale::Locale`).  The ONLY constructor is
@@ -7409,27 +7445,31 @@ impl<'a> Builder<'a> {
             // hard-coded credential is a plain `String`, so it cannot reach a
             // `Secret` slot (e.g. `Db.url`).
             K::AppFromEnv => fun(string(), secret()),
-            // `Host.bind : Int -> Setting a` — cross-cutting; the shape var is
-            // free, so it unifies into any app's settings list. The argument is a
-            // raw host-mode tag (`0` loopback / `1` all interfaces / `2`
-            // env-driven); an out-of-range tag is resolved fail-closed to
-            // loopback by the runtime, so the boundary is safe by construction.
-            K::HostBind => fun(int(), setting(var(0))),
-            // `Log.level : Int -> Setting a` — cross-cutting; a raw severity tag
-            // (`0` debug … `3` error), clamped to the known range at resolution.
-            K::LogLevelSetting => fun(int(), setting(var(0))),
+            // `Host.bind : HostMode -> Setting a` — cross-cutting; the shape var
+            // is free, so it unifies into any app's settings list. The argument is
+            // the closed `HostMode` ADT (a bare `Int` no longer type-checks); each
+            // `HostMode` constructor projects to the raw host-bind tag at emit
+            // (`0` loopback / `1` all interfaces / `2` env-driven).
+            K::HostBind => fun(host_mode(), setting(var(0))),
+            // `Log.level : LogLevel -> Setting a` — cross-cutting; the argument is
+            // the closed `LogLevel` ADT, projected to its `Int` severity tag.
+            K::LogLevelSetting => fun(log_level(), setting(var(0))),
             // `Db.url : Secret -> Setting a` — cross-cutting; the URL is a
             // `Secret`, so it only comes from `App.fromEnv` (a hard-coded
             // `String` credential does not type-check here). This is the
             // security-critical rejection the front door exists to enforce.
             K::DbUrlSetting => fun(secret(), setting(var(0))),
-            // `Web.csrf : Int -> Setting Web` — the shape marker is PINNED to
-            // `Web`, so this setting rejects a non-web app's settings list. The
-            // argument is a raw CSRF policy tag; a stricter-only runtime apply
-            // means no tag value can weaken CSRF below its fail-closed default.
-            K::WebCsrf => fun(int(), setting(shape_web())),
+            // `Web.csrf : CsrfMode -> Setting Web` — the shape marker is PINNED
+            // to `Web`, so this setting rejects a non-web app's settings list; the
+            // argument is the closed `CsrfMode` ADT (which has no disabling
+            // variant), projected to its `Int` tag.
+            K::WebCsrf => fun(csrf_mode(), setting(shape_web())),
             // `Web.sessionTtl : Int -> Setting Web` — seconds; web-pinned.
             K::WebSessionTtl => fun(int(), setting(shape_web())),
+            // Config-tag ADT constructors — nullary values of their closed types.
+            K::HostLoopback | K::HostAllInterfaces | K::HostEnvDriven => host_mode(),
+            K::LevelDebug | K::LevelInfo | K::LevelWarn | K::LevelError => log_level(),
+            K::WebCsrfStrict | K::WebCsrfInherit => csrf_mode(),
 
             // ── Ipe.Http.Server.Stream (4 kernels) ────────────────────────
             // stream : String -> (StreamWriter -> Task Error ()) -> Task Error Response
@@ -9926,6 +9966,18 @@ mod registry_phase_c_tests {
             K::DbUrlSetting,
             K::WebCsrf,
             K::WebSessionTtl,
+            // Config-tag ADT constructors (9, Ipê-new) — nullary values of the
+            // closed `HostMode` / `LogLevel` / `CsrfMode` types, projected to a raw
+            // `Int` tag at emit.
+            K::HostLoopback,
+            K::HostAllInterfaces,
+            K::HostEnvDriven,
+            K::LevelDebug,
+            K::LevelInfo,
+            K::LevelWarn,
+            K::LevelError,
+            K::WebCsrfStrict,
+            K::WebCsrfInherit,
         ]
     };
 

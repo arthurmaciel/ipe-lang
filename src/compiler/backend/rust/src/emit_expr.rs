@@ -1477,6 +1477,10 @@ pub fn call_has_kernel_special_case(
     if matches!(callee, Callee::Kernel(KernelFn::PubSubTopic)) {
         return Ok(true);
     }
+    // Config-tag ADT constructors emit their raw `Int` tag inline (no runtime fn).
+    if emit_config_ctor_call(callee).is_some() {
+        return Ok(true);
+    }
     Ok(false)
 }
 
@@ -2637,6 +2641,41 @@ fn emit_db_call(
 ///   if `lower_callee` mis-routes it); not user-reachable.
 ///
 /// Returns `Ok(None)` for non-TEA callees so the standard path handles them.
+/// Emit a config-tag ADT constructor (`Host.loopback` / `Level.warn` /
+/// `Web.strict` / …) as its raw `Int` tag literal.
+///
+/// The closed `HostMode` / `LogLevel` / `CsrfMode` types exist only in the type
+/// system to reject an out-of-range tag at compile time; at runtime each value
+/// is the integer the setting builder (`ipe_setting_host_bind` / … ) consumes.
+/// The projection is total and matches the runtime resolvers' tag numbers
+/// exactly (`resolve_host_bind`: 0 loopback / 1 all-interfaces / 2 env-driven).
+/// `CsrfMode` has no disabling variant, so no tag maps to "off".
+///
+/// Returns `Some(literal)` for the nine constructor kernels and `None` for every
+/// other callee, so the standard call path handles the rest.
+fn emit_config_ctor_call(callee: &Callee) -> Option<String> {
+    let Callee::Kernel(k) = callee else {
+        return None;
+    };
+    // One arm per constructor for readability; distinct tags across the three
+    // ADTs coincide numerically (each ADT's first variant is `0`), which is not a
+    // shared meaning to merge.
+    #[allow(clippy::match_same_arms)]
+    let tag: i64 = match k {
+        KernelFn::HostLoopback => 0,
+        KernelFn::HostAllInterfaces => 1,
+        KernelFn::HostEnvDriven => 2,
+        KernelFn::LevelDebug => 0,
+        KernelFn::LevelInfo => 1,
+        KernelFn::LevelWarn => 2,
+        KernelFn::LevelError => 3,
+        KernelFn::WebCsrfStrict => 0,
+        KernelFn::WebCsrfInherit => 1,
+        _ => return None,
+    };
+    Some(format!("{tag}i64"))
+}
+
 #[allow(clippy::match_same_arms, clippy::too_many_lines)]
 fn emit_tea_call(
     ctx: &EmitCtx,
@@ -5018,6 +5057,11 @@ pub fn emit_expr_at(
                     return Ok(result);
                 }
                 if let Some(result) = emit_tea_call(ctx, callee, args, indent, child, generics)? {
+                    return Ok(result);
+                }
+                // Config-tag ADT constructors: nullary values emitted inline as the
+                // raw `Int` tag the setting builders consume.
+                if let Some(result) = emit_config_ctor_call(callee) {
                     return Ok(result);
                 }
                 if let Some(result) = emit_server_call(ctx, callee, args, indent, child, generics)?
