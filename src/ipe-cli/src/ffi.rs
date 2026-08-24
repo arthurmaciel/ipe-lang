@@ -23,7 +23,12 @@ use crate::CliError;
 const CACHE_REL: &str = ".ipe/cache/ffi/rust";
 
 /// The project manifest that bounds the upward cache-discovery walk.
-const PROJECT_MANIFEST: &str = "ipe.toml";
+const PROJECT_MANIFEST: &str = "package.ipe";
+
+/// The legacy TOML manifest name the `ipe rust install` text inspector reads
+/// for `[rust.dependencies]` / `[rust.wrapper]`, pending the ergonomic Rust-FFI
+/// work that lifts those bindings out of a `package.ipe`.
+const PROJECT_MANIFEST_TOML: &str = "ipe.toml";
 
 /// The invoking user's real uid, read from the owner of `/proc/self` (no FFI
 /// dependency). `u32::MAX` on failure — a sentinel no real cache dir matches,
@@ -54,9 +59,9 @@ fn is_trusted_cache_dir(_dir: &Path) -> bool {
 }
 
 /// Walk up from `start` looking for an FFI artifact cache, bounded at the
-/// nearest `ipe.toml` project root.
+/// nearest `package.ipe` project root.
 ///
-/// Never walks above the nearest `ipe.toml`, so a planted ancestor cache
+/// Never walks above the nearest `package.ipe`, so a planted ancestor cache
 /// outside the project cannot be discovered. A found cache not owned by the
 /// invoking uid (or group/other-writable) is REFUSED, not loaded, since its
 /// `_bindings.rs` compiles unsandboxed into the crate.
@@ -83,7 +88,7 @@ pub fn find_cache_root(start: &Path) -> Result<Option<PathBuf>, CliError> {
                 candidate.display()
             )));
         }
-        // Stop at the project root: do not walk above the nearest ipe.toml.
+        // Stop at the project root: do not walk above the nearest package.ipe.
         if d.join(PROJECT_MANIFEST).is_file() {
             return Ok(None);
         }
@@ -1732,6 +1737,24 @@ fn add_one(
     }
 }
 
+/// The file the FFI text inspector reads the `[rust.dependencies]` /
+/// `[[rust.define.*]]` vocabulary from.
+///
+/// `package.ipe` cannot yet express those forms (the outstanding ergonomic
+/// Rust-FFI work), so a `package.ipe` with a sibling `ipe.toml` reads the FFI
+/// vocabulary from that sidecar; otherwise the manifest path itself is read.
+fn ffi_define_source(manifest_path: &Path) -> PathBuf {
+    if manifest_path.file_name().and_then(|n| n.to_str()) == Some(PROJECT_MANIFEST)
+        && let Some(dir) = manifest_path.parent()
+    {
+        let sidecar = dir.join(PROJECT_MANIFEST_TOML);
+        if sidecar.is_file() {
+            return sidecar;
+        }
+    }
+    manifest_path.to_path_buf()
+}
+
 /// Install the registry FFI dependencies declared in `manifest_path`'s
 /// `[rust.dependencies]` into the project root's `.ipe/cache/ffi/rust`.
 ///
@@ -1758,9 +1781,14 @@ pub fn install_registry_deps_for_project(
     allow_build_scripts: bool,
 ) -> Result<(), CliError> {
     let project_root = manifest_path.parent().unwrap_or_else(|| Path::new("."));
-    let manifest_abs = manifest_path;
-    let text = std::fs::read_to_string(manifest_abs).map_err(|e| CliError::Io {
-        path: manifest_abs.to_path_buf(),
+    // The `[rust.dependencies]` / `[[rust.define.*]]` FFI vocabulary is only
+    // expressible in a legacy `ipe.toml`; lifting it into `package.ipe` is the
+    // outstanding ergonomic Rust-FFI work. A native package therefore keeps that
+    // vocabulary in an `ipe.toml` sidecar next to its `package.ipe`, which the FFI
+    // text inspector reads here.
+    let ffi_source = ffi_define_source(manifest_path);
+    let text = std::fs::read_to_string(&ffi_source).map_err(|e| CliError::Io {
+        path: ffi_source.clone(),
         source: e,
     })?;
     let deps = rust_dependencies_from_manifest(&text);
@@ -1942,8 +1970,15 @@ pub fn run_remove(rest: &[String]) -> Result<(), CliError> {
 }
 
 /// `ipe rust install [--yes] [--allow-build-scripts] [--verbose]` — (re)inspect every
-/// `[rust.dependencies]` crate in the project's `ipe.toml`, honouring each
-/// entry's version pin and feature list.
+/// rust-dependency crate the project's manifest binds, honouring each entry's
+/// version pin and feature list.
+///
+/// The manifest's rust-dependency + wrapper vocabulary is read from a legacy
+/// `ipe.toml`'s `[rust.dependencies]` / `[rust.wrapper]` TOML sections, the only
+/// format the text inspector understands. Reading those bindings out of a
+/// `package.ipe` is part of the outstanding ergonomic Rust-FFI work, so a
+/// `package.ipe`-only project is refused with that pointer rather than silently
+/// installing nothing.
 ///
 /// # Errors
 /// [`CliError`] on misuse, a missing manifest, or any per-crate failure.
@@ -1964,10 +1999,17 @@ pub fn run_install(rest: &[String]) -> Result<(), CliError> {
             }
         }
     }
-    let manifest = Path::new("ipe.toml");
+    if crate::project::manifest_in_dir(Path::new(".")).is_some() {
+        return Err(CliError::Usage(
+            "ipe rust install: reading `[rust.dependencies]` / `[rust.wrapper]` bindings out of a \
+             package.ipe is not yet wired (part of the outstanding ergonomic Rust-FFI work) — the \
+             text inspector reads only a legacy ipe.toml",
+        ));
+    }
+    let manifest = Path::new(PROJECT_MANIFEST_TOML);
     if !manifest.is_file() {
         return Err(CliError::Usage(
-            "ipe install: no ipe.toml in the current directory",
+            "ipe rust install: no manifest with `[rust.dependencies]` in the current directory",
         ));
     }
     let text = std::fs::read_to_string(manifest)
@@ -3245,13 +3287,17 @@ version = \"1\"
         // Ancestor cache (a planted vector) ABOVE the project root.
         let ancestor_cache = tmp.join(CACHE_REL);
         std::fs::create_dir_all(&ancestor_cache).expect("mk ancestor cache");
-        // The project root, with its own ipe.toml, one level down; no cache.
+        // The project root, with its own package.ipe, one level down; no cache.
         let project = tmp.join("proj");
         std::fs::create_dir_all(&project).expect("mk project");
-        std::fs::write(project.join("ipe.toml"), "name=\"x\"\n").expect("write manifest");
+        std::fs::write(
+            project.join("package.ipe"),
+            "module Package exposing (package)\n",
+        )
+        .expect("write manifest");
         let src = project.join("src");
         std::fs::create_dir_all(&src).expect("mk src");
-        // Discovery from inside the project must NOT climb past ipe.toml to the
+        // Discovery from inside the project must NOT climb past package.ipe to the
         // planted ancestor cache — it returns None.
         let found = find_cache_root(&src).expect("no error");
         assert_eq!(found, None, "must not discover the ancestor cache");
@@ -3264,7 +3310,11 @@ version = \"1\"
         let _ = std::fs::remove_dir_all(&tmp);
         let cache = tmp.join(CACHE_REL);
         std::fs::create_dir_all(&cache).expect("mk cache");
-        std::fs::write(tmp.join("ipe.toml"), "name=\"x\"\n").expect("manifest");
+        std::fs::write(
+            tmp.join("package.ipe"),
+            "module Package exposing (package)\n",
+        )
+        .expect("manifest");
         // The invoker owns a freshly-created dir, so it is trusted + found.
         let found = find_cache_root(&tmp).expect("no error");
         assert_eq!(found.as_deref(), Some(cache.as_path()));
@@ -3279,7 +3329,11 @@ version = \"1\"
         let _ = std::fs::remove_dir_all(&tmp);
         let cache = tmp.join(CACHE_REL);
         std::fs::create_dir_all(&cache).expect("mk cache");
-        std::fs::write(tmp.join("ipe.toml"), "name=\"x\"\n").expect("manifest");
+        std::fs::write(
+            tmp.join("package.ipe"),
+            "module Package exposing (package)\n",
+        )
+        .expect("manifest");
         // Make the cache world-writable — the delivery vector for a planted
         // _bindings.rs — and confirm discovery refuses it.
         std::fs::set_permissions(&cache, std::fs::Permissions::from_mode(0o777)).expect("chmod");

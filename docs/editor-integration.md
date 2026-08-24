@@ -22,7 +22,7 @@ Add to `~/.config/helix/languages.toml`:
 name = "ipe"
 scope = "source.ipe"
 file-types = ["ipe"]
-roots = ["package.ipe", "ipe.toml"]
+roots = ["package.ipe"]
 language-servers = ["ipe-lsp"]
 auto-format = true
 formatter = { command = "ipe", args = ["fmt", "--stdin"] }
@@ -43,7 +43,7 @@ if not configs.ipe then
     default_config = {
       cmd = { "ipe", "lsp" },
       filetypes = { "ipe" },
-      root_dir = lspconfig.util.root_pattern("package.ipe", "ipe.toml", ".git"),
+      root_dir = lspconfig.util.root_pattern("package.ipe", ".git"),
       settings = {},
     },
   }

@@ -80,7 +80,7 @@ const COMMANDS: &[Command] = &[
         run: crate::run_build,
         summary: "Compile a program to a native or WebAssembly artifact.",
         args: "[<path>]",
-        args_desc: "A source file, a project directory, or an ipe.toml. Defaults to the current project.",
+        args_desc: "A source file, a project directory, or a package.ipe. Defaults to the current project.",
         options: &[
             Opt {
                 flag: "[--out <dir>]",
@@ -129,7 +129,7 @@ const COMMANDS: &[Command] = &[
         run: crate::run_eject,
         summary: "Emit a self-contained Rust project with a tree-shaken runtime.",
         args: "[<path>]",
-        args_desc: "A source file, a project directory, or an ipe.toml. Defaults to the current project.",
+        args_desc: "A source file, a project directory, or a package.ipe. Defaults to the current project.",
         options: &[
             Opt {
                 flag: "--out <dir>",
@@ -146,7 +146,7 @@ const COMMANDS: &[Command] = &[
         run: crate::run_deploy,
         summary: "Build a single self-jailing binary (app + profile fused into sandbox wrapper); a multi-file opt-out is available.",
         args: "[<path>]",
-        args_desc: "A source file, a project directory, or an ipe.toml. Defaults to the current project.",
+        args_desc: "A source file, a project directory, or a package.ipe. Defaults to the current project.",
         options: &[
             Opt {
                 flag: "[--out <dir>]",
@@ -179,7 +179,7 @@ const COMMANDS: &[Command] = &[
         run: crate::run_type_check,
         summary: "Type-check a program without building or running it.",
         args: "[<path>]",
-        args_desc: "A source file, a project directory, or an ipe.toml. Defaults to the current project.",
+        args_desc: "A source file, a project directory, or a package.ipe. Defaults to the current project.",
         options: &[Opt {
             flag: "[--json]",
             desc: "emit each diagnostic as a stable JSON object (one per line) on stderr; \
@@ -191,7 +191,7 @@ const COMMANDS: &[Command] = &[
         run: crate::run_test,
         summary: "Build and run the project's tests/Main.ipe, reporting pass/fail.",
         args: "[<path>]",
-        args_desc: "A source file, a project directory, or an ipe.toml. Defaults to the current project.",
+        args_desc: "A source file, a project directory, or a package.ipe. Defaults to the current project.",
         options: &[Opt {
             flag: "[--json]",
             desc: "emit a compact {\"result\":…} verdict on stdout (non-zero exit on a failing case)",
@@ -202,7 +202,7 @@ const COMMANDS: &[Command] = &[
         run: crate::run_verify,
         summary: "Run the whole project gate: format, type-check, build, then test.",
         args: "[<path>]",
-        args_desc: "A source file, a project directory, or an ipe.toml. Defaults to the current project.",
+        args_desc: "A source file, a project directory, or a package.ipe. Defaults to the current project.",
         options: &[Opt {
             flag: "[--json]",
             desc: "emit a compact gate verdict on stdout ({\"result\":…}; non-zero exit at the first failing stage)",
@@ -213,7 +213,7 @@ const COMMANDS: &[Command] = &[
         run: crate::run_run,
         summary: "Compile a program and run the resulting binary.",
         args: "[<path>]",
-        args_desc: "A source file, a project directory, or an ipe.toml. Defaults to the current project.",
+        args_desc: "A source file, a project directory, or a package.ipe. Defaults to the current project.",
         options: &[
             Opt {
                 flag: "[--out <dir>]",
@@ -271,7 +271,7 @@ const COMMANDS: &[Command] = &[
         run: crate::run_watch,
         summary: "Rebuild and re-run a program on every source change.",
         args: "[<path>]",
-        args_desc: "A source file, a project directory, or an ipe.toml. Defaults to the current project.",
+        args_desc: "A source file, a project directory, or a package.ipe. Defaults to the current project.",
         options: &[
             Opt {
                 flag: "[--out <dir>]",
@@ -376,7 +376,7 @@ const COMMANDS: &[Command] = &[
                   receiving gate on a submitted entry.",
         args: "<audit|audit-entry|publish|validate-entry> [<path>]",
         args_desc: "The subcommand and its path: `audit`/`publish` take the project directory \
-                    or `ipe.toml` (defaults to the current project); `validate-entry` takes a \
+                    or `package.ipe` (defaults to the current project); `validate-entry` takes a \
                     `packages/<name>.toml` entry file (schema check only); `audit-entry` takes \
                     the same entry file and runs the full index CI receiving gate: schema, \
                     fetch+integrity-verify, and the complete Tier-1 (+ Tier-2) audit for every \
@@ -445,7 +445,7 @@ const COMMANDS: &[Command] = &[
         run: crate::run_capabilities,
         summary: "Report the security capabilities a program exercises, inferred from its code.",
         args: "[<path>]",
-        args_desc: "A source file, a project directory, or an ipe.toml. Defaults to the current project.",
+        args_desc: "A source file, a project directory, or a package.ipe. Defaults to the current project.",
         options: &[
             Opt {
                 flag: "[--plain]",

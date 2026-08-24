@@ -124,7 +124,7 @@ fn emits_split_spine_and_per_module_files() {
     let out = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("multi_mod_split_pilot");
     let _ = std::fs::remove_dir_all(&out);
 
-    let res = ipe::build_project(&fixture.join("ipe.toml"), &out, &runtime());
+    let res = ipe::build_project(&fixture.join("package.ipe"), &out, &runtime());
     assert!(res.is_ok(), "build_project failed: {:?}", res.err());
 
     // Directory-diff the emitted project against the checked-in golden dir:
@@ -158,7 +158,7 @@ fn end_to_end_builds_and_prints_seeded_count() {
     let out = std::env::temp_dir().join("ipec_multi_mod_split_pilot_e2e");
     let _ = std::fs::remove_dir_all(&out);
 
-    let res = ipe::build_project(&fixture.join("ipe.toml"), &out, &runtime());
+    let res = ipe::build_project(&fixture.join("package.ipe"), &out, &runtime());
     assert!(res.is_ok(), "build_project failed: {:?}", res.err());
 
     let outcome = crate::support::build_and_run_emitted("multi_mod_split_pilot", &out);

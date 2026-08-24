@@ -1,8 +1,7 @@
-//! Class 7 §3 regression: `ipe.toml`'s `[database] driver = "postgres"` must
-//! actually change what gets emitted — before this fix it was a silent no-op
-//! (`crates/ipe/src/project.rs`'s manifest parser didn't even recognise a
-//! `[database]` section, and `ipe_backend_rust::project::emit_program` always
-//! wrote the sqlite `config.rs` template regardless of what `ipe.toml` said).
+//! `package.ipe`'s `Package.database (Package.postgres)` must actually change
+//! what gets emitted rather than being a silent no-op: the driver choice threads
+//! through to `ipe_backend_rust::project::emit_program`'s template selection
+//! instead of the sqlite `config.rs` template being written unconditionally.
 //!
 //! No live Postgres needed: this only proves the STRUCTURAL wiring —
 //! manifest → `RustBackend::with_db_driver` → `EmitCtx::db_driver` →
@@ -41,37 +40,39 @@ main =
         (Db.open \"sqlite\" \"sqlite::memory:\")
 ";
 
-/// Write a minimal project (`ipe.toml` + `src/Main.ipe`) under a fresh temp
-/// dir, with the given `[database]` section spliced in verbatim (empty string
-/// → no section at all, i.e. the default driver).
+/// Write a minimal project (`package.ipe` + `src/Main.ipe`) under a fresh temp
+/// dir, with the given `Package.database` pipeline stage spliced in verbatim
+/// (empty string → no database stage at all, i.e. the default driver).
 #[allow(clippy::expect_used)]
-fn write_project(test_name: &str, database_section: &str) -> PathBuf {
+fn write_project(test_name: &str, database_stage: &str) -> PathBuf {
     let dir = std::env::temp_dir().join(format!("ipec_pg_reachability_{test_name}"));
     let _ = fs::remove_dir_all(&dir);
     let src = dir.join("src");
     fs::create_dir_all(&src).expect("create src/");
     fs::write(src.join("Main.ipe"), MAIN_IPE).expect("write Main.ipe");
     fs::write(
-        dir.join("ipe.toml"),
-        format!("[project]\nname = \"pgtest\"\n{database_section}"),
+        dir.join("package.ipe"),
+        format!(
+            "module Package exposing (package)\n\n\npackage =\n    Package.named \"pgtest\"\n{database_stage}"
+        ),
     )
-    .expect("write ipe.toml");
+    .expect("write package.ipe");
     dir
 }
 
-/// The core structural fix: `driver = "postgres"` in `ipe.toml` must cause
-/// the emitted `src/ipe_runtime/config.rs` to declare `sqlx::postgres::PgPool`
-/// / `PgRow` and `DB_USES_RETURNING_ID: bool = true` — NOT the sqlite
-/// template. Before this fix, `RUNTIME_CONFIG_RS_DB` was a single
-/// unconditional `include_str!`, so this assertion would have failed (the
-/// emitted config.rs would be the sqlite template regardless of `ipe.toml`).
+/// `Package.database (Package.postgres)` in `package.ipe` must cause the
+/// emitted `src/ipe_runtime/config.rs` to declare `sqlx::postgres::PgPool` /
+/// `PgRow` and `DB_USES_RETURNING_ID: bool = true` — NOT the sqlite template.
 #[test]
 fn postgres_driver_selects_postgres_config_template() {
-    let dir = write_project("postgres_select", "[database]\ndriver = \"postgres\"\n");
+    let dir = write_project(
+        "postgres_select",
+        "        |> Package.database (Package.postgres)\n",
+    );
     let out = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("pg_reachability_postgres_select");
     let _ = fs::remove_dir_all(&out);
 
-    let built = ipe::build_project(&dir.join("ipe.toml"), &out, &runtime());
+    let built = ipe::build_project(&dir.join("package.ipe"), &out, &runtime());
     assert!(
         built.is_ok(),
         "build_project must succeed for a postgres-driver db-using project: {:?}",
@@ -124,13 +125,13 @@ fn postgres_driver_project_cargo_builds() {
     }
     let dir = write_project(
         "postgres_cargo_build",
-        "[database]\ndriver = \"postgres\"\n",
+        "        |> Package.database (Package.postgres)\n",
     );
     let out =
         PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("pg_reachability_postgres_cargo_build");
     let _ = fs::remove_dir_all(&out);
 
-    let built = ipe::build_project(&dir.join("ipe.toml"), &out, &runtime());
+    let built = ipe::build_project(&dir.join("package.ipe"), &out, &runtime());
     assert!(
         built.is_ok(),
         "build_project must succeed for a postgres-driver db-using project: {:?}",
@@ -169,7 +170,7 @@ fn no_database_section_still_selects_sqlite_config_template() {
     let out = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("pg_reachability_sqlite_default");
     let _ = fs::remove_dir_all(&out);
 
-    let built = ipe::build_project(&dir.join("ipe.toml"), &out, &runtime());
+    let built = ipe::build_project(&dir.join("package.ipe"), &out, &runtime());
     assert!(
         built.is_ok(),
         "build_project must succeed for the default (no [database] section) project: {:?}",

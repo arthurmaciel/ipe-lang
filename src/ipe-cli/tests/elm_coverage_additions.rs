@@ -32,7 +32,7 @@ fn manifest() -> PathBuf {
         .join("tests")
         .join("fixtures")
         .join("elm-coverage-additions")
-        .join("ipe.toml")
+        .join("package.ipe")
 }
 
 /// The project builds (Bitwise kernels resolve, Tuple + Generator inject as

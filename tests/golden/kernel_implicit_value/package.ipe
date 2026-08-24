@@ -1,0 +1,5 @@
+module Package exposing (package)
+
+
+package =
+    Package.named "i138-kernel-implicit-value"

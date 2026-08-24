@@ -64,7 +64,7 @@ impl std::fmt::Display for Refusal {
             Self::DuplicateVersion { name, version } => write!(
                 f,
                 "`{name}` {version} is already published in the index — a published version is \
-                 immutable and must never be rewritten. Bump the version in `ipe.toml` and \
+                 immutable and must never be rewritten. Bump the version in `package.ipe` and \
                  publish the new one."
             ),
             Self::NoSource => f.write_str(
@@ -84,7 +84,7 @@ const fn refuse(refusal: Refusal) -> CliError {
 /// The parsed `ipe package publish` invocation.
 #[derive(Debug)]
 struct Args {
-    /// The package directory or `ipe.toml` (defaults to the current directory).
+    /// The package directory or `package.ipe` (defaults to the current directory).
     path: PathBuf,
     /// `--dry-run`: compute and print, touch no network.
     dry_run: bool,
@@ -221,24 +221,28 @@ fn take_value<'a>(
         .ok_or_else(|| CliError::UsageOwned(format!("ipe package publish: {flag} needs a value")))
 }
 
-/// Resolve `path` (a directory or an `ipe.toml`) to its manifest file.
+/// Resolve `path` (a directory or a `package.ipe`) to its manifest file.
 fn locate_manifest(path: &Path) -> Result<PathBuf, CliError> {
     if path.is_dir() {
-        let candidate = path.join("ipe.toml");
-        if candidate.is_file() {
-            return Ok(candidate);
+        if let Some(manifest) = crate::project::manifest_in_dir(path) {
+            return Ok(manifest);
+        }
+        if crate::project::migration_pending(path) {
+            return Err(CliError::Usage(crate::project::MIGRATE_CONFIG_HINT));
         }
         return Err(CliError::UsageOwned(format!(
-            "ipe package publish: no `ipe.toml` in `{}` — publish operates on a publishable \
+            "ipe package publish: no `package.ipe` in `{}` — publish operates on a publishable \
              Ipê package, which needs a manifest",
             path.display()
         )));
     }
-    if path.extension().and_then(|e| e.to_str()) == Some("toml") && path.is_file() {
+    if path.file_name().and_then(|n| n.to_str()) == Some(crate::package_manifest::PACKAGE_IPE)
+        && path.is_file()
+    {
         return Ok(path.to_path_buf());
     }
     Err(CliError::UsageOwned(format!(
-        "ipe package publish: `{}` is neither an Ipê project directory nor an ipe.toml",
+        "ipe package publish: `{}` is neither an Ipê project directory nor a package.ipe",
         path.display()
     )))
 }
@@ -362,9 +366,9 @@ fn resolve_rev_to_sha(root: &Path, rev: &str) -> Result<String, CliError> {
     Ok(out.trim().to_owned())
 }
 
-/// The `ipe.toml` path for a project root.
+/// The `package.ipe` path for a project root.
 fn manifest_path_of(root: &Path) -> PathBuf {
-    root.join("ipe.toml")
+    root.join(crate::package_manifest::PACKAGE_IPE)
 }
 
 /// Render one [`EntryVersion`] as the `[[version]]` TOML block the index reader

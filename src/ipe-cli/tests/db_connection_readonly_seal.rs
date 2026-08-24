@@ -28,7 +28,11 @@ fn write_project(test_name: &str, main_ipe: &str) -> PathBuf {
     let src = dir.join("src");
     fs::create_dir_all(&src).expect("create src/");
     fs::write(src.join("Main.ipe"), main_ipe).expect("write Main.ipe");
-    fs::write(dir.join("ipe.toml"), "[project]\nname = \"connroseal\"\n").expect("write ipe.toml");
+    fs::write(
+        dir.join("package.ipe"),
+        "module Package exposing (package)\n\n\npackage =\n    Package.named \"connroseal\"\n",
+    )
+    .expect("write package.ipe");
     dir
 }
 
@@ -37,7 +41,7 @@ fn write_project(test_name: &str, main_ipe: &str) -> PathBuf {
 fn emit(dir: &Path, test_name: &str) -> (Result<(), ipe::CliError>, PathBuf) {
     let out = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join(format!("conn_ro_seal_{test_name}"));
     let _ = fs::remove_dir_all(&out);
-    let result = ipe::build_project(&dir.join("ipe.toml"), &out, &runtime());
+    let result = ipe::build_project(&dir.join("package.ipe"), &out, &runtime());
     (result, out)
 }
 

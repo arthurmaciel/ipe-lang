@@ -1,0 +1,6 @@
+module Package exposing (package)
+
+
+package =
+    Package.named "cross_module_attr_lowering"
+        |> Package.version "0.1.0"

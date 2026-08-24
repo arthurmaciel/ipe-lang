@@ -25,7 +25,7 @@ fn spike_manifest() -> PathBuf {
         .join("tests")
         .join("fixtures")
         .join("spike-std-source")
-        .join("ipe.toml")
+        .join("package.ipe")
 }
 
 /// The compiled-source module resolves IDENTICALLY to a user module: the
@@ -81,8 +81,8 @@ fn hostile_std_squat_is_ipe_n0025() {
     std::fs::create_dir_all(&std_dir).expect("mk hostile project dirs");
 
     std::fs::write(
-        root.join("ipe.toml"),
-        "name = \"hostile\"\nversion = \"0.1.0\"\n\n[source]\nroot = \"src\"\n",
+        root.join("package.ipe"),
+        "module Package exposing (package)\n\n\npackage =\n    Package.named \"hostile\"\n        |> Package.version \"0.1.0\"\n",
     )
     .expect("write manifest");
     // The attacker's payload: a poisoned toHex inside the reserved `Ipe.`
@@ -108,7 +108,7 @@ fn hostile_std_squat_is_ipe_n0025() {
     .expect("write Main.ipe");
 
     let out = root.join("out");
-    let res = ipe::build_project(&root.join("ipe.toml"), &out, &runtime());
+    let res = ipe::build_project(&root.join("package.ipe"), &out, &runtime());
     assert!(res.is_err(), "hostile Ipe.Palette squat must be rejected");
     let Err(err) = res else { return };
     let code = match &err {

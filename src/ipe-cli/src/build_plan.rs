@@ -200,7 +200,7 @@ impl fmt::Display for Refusal {
                 f,
                 "refusing system malloc on a musl-static target: musl's malloc is ~7x slower on \
                  allocation-heavy workloads. Pass --allow-slow-allocator (or set \
-                 [rust] allowSlowAllocator = true in ipe.toml) to accept, or drop \
+                 `Package.allowSlowAllocator True` in package.ipe) to accept, or drop \
                  --allocator system to get the dlmalloc default"
             ),
             Self::TalcRequiresArenaDesign => write!(

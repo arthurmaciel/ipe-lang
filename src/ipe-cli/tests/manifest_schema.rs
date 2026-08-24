@@ -1,6 +1,6 @@
-//! Acceptance: a real `ipe.toml` fixture carrying all three SP2 sections
-//! (`[dependencies]`, `[rust.dependencies]`, `[capabilities]`) parses into the
-//! typed `ProjectManifest`, exercised through the public `parse_manifest` API.
+//! Acceptance: a real `package.ipe` fixture carrying dependencies, rust
+//! dependencies, and declared capabilities parses into the typed
+//! `ProjectManifest`, exercised through the public `parse_manifest` API.
 
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
@@ -10,7 +10,7 @@ use ipe_ir::Capability;
 
 /// The bundled multi-section manifest fixture.
 fn fixture_manifest() -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/sp2_manifest/ipe.toml")
+    Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/sp2_manifest/package.ipe")
 }
 
 #[test]

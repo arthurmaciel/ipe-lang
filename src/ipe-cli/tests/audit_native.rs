@@ -81,10 +81,10 @@ fn a_pure_ipe_package_skips_tier2_while_tier1_still_gates() {
     // not apply — it never claims a Tier-2 certification for a package it skipped.
     let pkg = temp_pkg("pure-skip");
     std::fs::write(
-        pkg.join("ipe.toml"),
-        "name = \"pure-pkg\"\nversion = \"0.1.0\"\n\n[source]\nroot = \"src\"\n",
+        pkg.join("package.ipe"),
+        "module Package exposing (package)\n\n\npackage =\n    Package.named \"pure-pkg\"\n        |> Package.version \"0.1.0\"\n",
     )
-    .expect("write ipe.toml");
+    .expect("write package.ipe");
     std::fs::write(pkg.join("src").join("Main.ipe"), PURE_MAIN).expect("write Main");
     let index = empty_index("pure-skip");
 
@@ -126,11 +126,12 @@ fn a_native_bearing_package_with_no_probeable_entrypoint_fails_closed() {
     // All are fail-closed: the package must not certify.
     let pkg = temp_pkg("native-noprobe");
     std::fs::write(
-        pkg.join("ipe.toml"),
-        "name = \"native-pkg\"\nversion = \"0.1.0\"\n\n[source]\nroot = \"src\"\n\n\
-         [rust.dependencies]\nlibc = \"0.2\"\n",
+        pkg.join("package.ipe"),
+        "module Package exposing (package)\n\n\npackage =\n    Package.named \"native-pkg\"\n\
+         \x20       |> Package.version \"0.1.0\"\n\
+         \x20       |> Package.rustDependencies [ Package.rustDep \"libc\" \"0.2\" ]\n",
     )
-    .expect("write ipe.toml");
+    .expect("write package.ipe");
     std::fs::write(pkg.join("src").join("Main.ipe"), PURE_MAIN).expect("write Main");
     let index = empty_index("native-noprobe");
 
@@ -782,21 +783,23 @@ mod real_jail {
         let runtime = ipe::resolve_runtime().ok()?;
         let pkg = base.join("pkg");
         std::fs::create_dir_all(pkg.join("src")).expect("pkg src");
+        // The FFI cache (not the manifest) supplies the native `csum` surface;
+        // the manifest only needs to name the rust dependency (the legacy reader
+        // captured only its name + version, never a path). The crate's path is
+        // used below to repoint the emitted manifest at the local fixture.
         let csum = write_csum_crate(base);
         std::fs::write(
-            pkg.join("ipe.toml"),
-            format!(
-                "name = \"csumpkg\"\nversion = \"0.1.0\"\n\n[source]\nroot = \"src\"\n\n\
-                 [rust.dependencies]\ncsum = {{ path = {:?} }}\n",
-                csum.display().to_string()
-            ),
+            pkg.join("package.ipe"),
+            "module Package exposing (package)\n\n\npackage =\n    Package.named \"csumpkg\"\n\
+             \x20       |> Package.version \"0.1.0\"\n\
+             \x20       |> Package.rustDependencies [ Package.rustDep \"csum\" \"=0.1.0\" ]\n",
         )
-        .expect("ipe.toml");
+        .expect("package.ipe");
         std::fs::write(pkg.join("src").join("Main.ipe"), CSUM_MAIN).expect("Main.ipe");
         assert!(seed_pure_ffi_cache(&pkg), "seed the FFI cache");
 
         let out = base.join("out");
-        ipe::build_project(&pkg.join("ipe.toml"), &out, &runtime)
+        ipe::build_project(&pkg.join("package.ipe"), &out, &runtime)
             .expect("emitting the native package must succeed");
 
         // The reached binding must survive DCE into `src/ffi.rs` (the surface the

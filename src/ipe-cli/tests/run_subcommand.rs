@@ -186,14 +186,14 @@ fn emitted_cargo_toml_name_matches_binary_ipe_run_will_exec() {
     let src_dir = pkg_dir.join("src");
     let _ = fs::create_dir_all(&src_dir);
     fs::write(
-        pkg_dir.join("ipe.toml"),
-        "name = \"Crc32 Checksum\"\nversion = \"0.1.0\"\n\n[source]\nroot = \"src\"\n",
+        pkg_dir.join("package.ipe"),
+        "module Package exposing (package)\n\n\npackage =\n    Package.named \"Crc32 Checksum\"\n        |> Package.version \"0.1.0\"\n",
     )
-    .expect("write ipe.toml");
+    .expect("write package.ipe");
     fs::write(src_dir.join("Main.ipe"), SRC).expect("write Main.ipe");
 
     let out_pkg = dir.join("out_pkg");
-    let built = ipe::build_project(&pkg_dir.join("ipe.toml"), &out_pkg, &runtime_dir);
+    let built = ipe::build_project(&pkg_dir.join("package.ipe"), &out_pkg, &runtime_dir);
     assert!(built.is_ok(), "project build must succeed: {built:?}");
 
     let cargo_toml_text =

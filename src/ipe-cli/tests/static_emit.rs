@@ -309,10 +309,11 @@ fn run_subcommand_refuses_like_build() {
     );
 }
 
-/// `ipe.toml [rust]` parses into the typed request layer; malformed values
-/// are refused at manifest-parse time.
+/// `package.ipe`'s `Package.static` / `Package.allocator` stages parse into the
+/// typed request layer; an unknown allocator constructor is refused at
+/// manifest-parse time.
 #[test]
-fn ipe_toml_rust_section_parses_and_rejects_typos() {
+fn package_ipe_rust_stages_parse_and_reject_typos() {
     let scratch = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("static_toml_rust");
     let _ = std::fs::remove_dir_all(&scratch);
     std::fs::create_dir_all(scratch.join("src")).expect("mk src");
@@ -322,12 +323,14 @@ fn ipe_toml_rust_section_parses_and_rejects_typos() {
     )
     .expect("write Main.ipe");
 
-    let manifest_path = scratch.join("ipe.toml");
+    let manifest_path = scratch.join("package.ipe");
     std::fs::write(
         &manifest_path,
-        "name = \"p\"\n[rust]\nstatic = true\nallocator = \"dlmalloc\"\nallowSlowAllocator = false\n",
+        "module Package exposing (package)\n\n\npackage =\n    Package.named \"p\"\n\
+         \x20       |> Package.static (Static.on)\n        |> Package.allocator (Package.dlmalloc)\n\
+         \x20       |> Package.allowSlowAllocator (Static.off)\n",
     )
-    .expect("write ipe.toml");
+    .expect("write package.ipe");
     let parsed = ipe::project::parse_manifest(&manifest_path).expect("parse");
     assert_eq!(
         parsed.static_request,
@@ -342,16 +345,18 @@ fn ipe_toml_rust_section_parses_and_rejects_typos() {
 
     std::fs::write(
         &manifest_path,
-        "name = \"p\"\n[rust]\nallocator = \"jemallocc\"\n",
+        "module Package exposing (package)\n\n\npackage =\n    Package.named \"p\"\n\
+         \x20       |> Package.allocator (Package.jemallocc)\n",
     )
-    .expect("write ipe.toml");
+    .expect("write package.ipe");
     let err = ipe::project::parse_manifest(&manifest_path).expect_err("typo must refuse");
     assert!(
-        matches!(
-            err,
-            CliError::StaticRefusal(build_plan::Refusal::UnknownAllocator { .. })
-        ),
-        "wrong error"
+        matches!(err, CliError::UsageOwned(_)),
+        "an unknown allocator constructor is a manifest-parse refusal: {err:?}"
+    );
+    assert!(
+        err.to_string().contains("is not an allocator"),
+        "the refusal must name the unknown allocator: {err}"
     );
 }
 

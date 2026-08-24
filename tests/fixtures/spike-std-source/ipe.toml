@@ -1,5 +1,0 @@
-name = "spike-std-source"
-version = "0.1.0"
-
-[source]
-root = "src"

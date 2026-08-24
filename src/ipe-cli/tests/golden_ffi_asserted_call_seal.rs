@@ -319,16 +319,16 @@ fn analysis_entrypoints_accept_an_asserted_program() {
         "must write the fixture project + FFI cache"
     );
     fs::write(
-        tmp.join("ipe.toml"),
-        "name = \"asserted-fixture\"\nversion = \"0.1.0\"\n",
+        tmp.join("package.ipe"),
+        "module Package exposing (package)\n\n\npackage =\n    Package.named \"asserted-fixture\"\n        |> Package.version \"0.1.0\"\n",
     )
-    .expect("ipe.toml");
+    .expect("package.ipe");
 
     let entry = tmp.join("src").join("Main.ipe");
     ipe::run_cli(&["type-check".to_owned(), entry.display().to_string()])
         .expect("`ipe type-check` must accept an asserted program");
 
-    let caps = ipe::infer_package_capabilities(&tmp.join("ipe.toml"))
+    let caps = ipe::infer_package_capabilities(&tmp.join("package.ipe"))
         .expect("package capability inference must lower an asserted program");
     assert!(
         caps.contains(&ipe_ir::Capability::FfiRaw) && caps.contains(&ipe_ir::Capability::NativeFfi),

@@ -24,8 +24,8 @@ impl ProjectLoader for DriverLoader {
     ) -> Result<LoadedProject, LoadError> {
         // A workspace folder holding a manifest wins; otherwise resolve from
         // the opened file exactly like `ipe build <file.ipe>` would
-        // (manifest walk-up, else sibling discovery). Manifest presence is the
-        // dual-name check (package.ipe preferred, ipe.toml fallback).
+        // (manifest walk-up, else sibling discovery). Manifest presence is a
+        // `package.ipe` in the workspace root.
         let entry = workspace_root
             .filter(|root| project::manifest_in_dir(root).is_some())
             .map_or_else(|| open_file.to_path_buf(), Path::to_path_buf);

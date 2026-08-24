@@ -15,8 +15,8 @@ fn a_package_that_cannot_lower_surfaces_the_real_diagnostic() -> Result<(), Box<
     let _ = fs::remove_dir_all(&dir);
     fs::create_dir_all(dir.join("src"))?;
     fs::write(
-        dir.join("ipe.toml"),
-        "name = \"badpkg\"\nversion = \"0.1.0\"\nentry = \"src/Main.ipe\"\n",
+        dir.join("package.ipe"),
+        "module Package exposing (package)\n\n\npackage =\n    Package.named \"badpkg\"\n        |> Package.version \"0.1.0\"\n",
     )?;
     // `Main` references a name that does not exist, so lowering fails.
     fs::write(
@@ -24,7 +24,7 @@ fn a_package_that_cannot_lower_surfaces_the_real_diagnostic() -> Result<(), Box<
         "module Main\n\nmain : Task ()\nmain = thisNameDoesNotExist\n",
     )?;
 
-    let result = ipe::infer_package_capabilities(&dir.join("ipe.toml"));
+    let result = ipe::infer_package_capabilities(&dir.join("package.ipe"));
 
     // The entry's real diagnostic (Pipeline, naming Main.ipe) must surface —
     // never the generic Usage "no module could be lowered".

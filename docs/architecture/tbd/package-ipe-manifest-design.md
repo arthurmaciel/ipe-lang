@@ -435,11 +435,19 @@ window between is loud.
   `ipe.toml` reader still exists and still warns; nothing breaks, but the
   ecosystem's centre of gravity moves.
 
-- **P4 — remove the `ipe.toml` reader.** ***(BREAKING.)***
-  Delete the line-scanner path and the `ipe.toml` fallback; a project without a
-  `package.ipe` no longer builds. Gated on an explicit go, after the P1–P3 window
-  has given every project a migration path and a warning. This is the only
-  breaking phase.
+- **P4 — retire `ipe.toml` as a project manifest.** ***(BREAKING.)***
+  `package.ipe` is the sole manifest the toolchain discovers, builds, watches,
+  publishes, audits, and cleans. A directory with only a legacy `ipe.toml` and no
+  `package.ipe` no longer builds — it errors with a clear `run ipe migrate config`
+  diagnostic. The line-scanner survives ONLY as `ipe migrate config`'s input
+  reader (the one path that still reads an `ipe.toml`, to convert it). This is the
+  only breaking phase.
+
+  Two authoring surfaces read TOML sections directly and are not yet ported to a
+  `package.ipe` AST rewrite: `ipe add`/`ipe remove` (rewriting `Package.dependencies`)
+  and `ipe rust install` (reading `[rust.dependencies]` / `[rust.wrapper]`). Both
+  fail closed with a clear pointer to the manual step / the outstanding ergonomic
+  Rust-FFI work rather than editing a manifest they cannot yet round-trip.
 
 Only **P4 is breaking.** P1–P3 are strictly additive and coexist with `ipe.toml`.
 

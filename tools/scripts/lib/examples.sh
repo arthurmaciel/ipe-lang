@@ -32,7 +32,7 @@
 # without it they fall out of every sweep set and a stale shape rename (e.g.
 # Ipe.Live → Ipe.Web) rots them silently.
 all_examples() {
-  local d globs=(examples/[0-9]*/ examples/wasm/*/ examples/rust/*/ examples/shapes/*/*/ \
+  local d globs=(examples/[0-9]*/ examples/wasm/*/ examples/rust/*/ examples/ffi/*/ examples/shapes/*/*/ \
                  examples/sky/ipe/[0-9]*/ examples/sky/ipe/simple/ examples/sky/ipe/test_pkg/)
   for d in "${globs[@]}"; do
     [ -d "$d" ] || continue
@@ -169,15 +169,32 @@ is_live_network_cli() {
   return 1
 }
 
+# ── expected_red_reason <name>: a KNOWN, tracked red the gate reports but does
+# not fail on ──────────────────────────────────────────────────────────────────
+# An example whose BUILD is EXPECTED to fail for a tracked reason, so the sweep
+# surfaces it as a visible reminder without failing the whole gate — while any
+# NEW/unexpected red in any other example still fails. Prints the reason and
+# returns 0 for a registered name; returns 1 (no output) otherwise. EXPLICIT,
+# documented set — never a heuristic.
+expected_red_reason() {
+  case "$1" in
+    iced-counter)
+      printf 'has no package.ipe: its Rust-FFI `[[rust.define.*]]` create-types vocabulary is not yet expressible in package.ipe (ergonomic Rust-FFI work), so it keeps a legacy ipe.toml — which the toolchain does not build as a project manifest — and its BUILD fails by design until that vocabulary lands'
+      return 0 ;;
+  esac
+  return 1
+}
+
 # ── is_web_example <dir>: Ipe.Web OR Ipe.Http.Server (browser-drivable) ─────
 is_web_example() {
   _shape_match "$1/src" 'Ipe\.Web|Web\.app|Server\.listen|Ipe\.Http\.Server'
 }
 
 # ── example_manifest <dir>: the project manifest path, or empty ──────────────
-# Dual-name discovery, matching the compiler's own precedence: package.ipe wins,
-# ipe.toml is the fallback. A detector that keys off the manifest reads whichever
-# is present so it works across the migration and against a freshly mirrored port.
+# `package.ipe` is the project manifest the compiler builds. This detector also
+# falls back to a legacy `ipe.toml` so it can still read the shape of the one
+# example kept on `ipe.toml` (examples/ffi/iced-counter, pending the ergonomic
+# Rust-FFI define vocabulary in package.ipe) and any freshly mirrored port.
 example_manifest() {
   if   [ -f "$1/package.ipe" ]; then echo "$1/package.ipe"
   elif [ -f "$1/ipe.toml" ];    then echo "$1/ipe.toml"

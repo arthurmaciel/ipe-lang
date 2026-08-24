@@ -209,11 +209,10 @@ pub(crate) struct ResolvedProject {
     pub(crate) cargo_name: String,
 }
 
-/// Resolve `entry` (a `.ipe` file, a `ipe.toml`, or a project directory)
-/// into a fresh [`ResolvedProject`] by re-reading every relevant file from
-/// disk. Mirrors `run_build`'s dispatch: directory → `ipe.toml` inside it;
-/// `.toml` → itself; `.ipe` → walk up for a manifest, else sibling
-/// discovery.
+/// Resolve `entry` (a `.ipe` file or a project directory) into a fresh
+/// [`ResolvedProject`] by re-reading every relevant file from disk. Mirrors
+/// `run_build`'s dispatch: directory → `package.ipe` inside it; `.ipe` → walk
+/// up for a manifest, else sibling discovery.
 ///
 /// `entry_text_override`, when given, shadows the entry `.ipe` file's disk
 /// bytes in the no-manifest branch — the LSP hands the unsaved editor
@@ -231,14 +230,15 @@ pub(crate) fn resolve_project_sources(
     let manifest_path = if entry.is_dir() {
         match project::manifest_in_dir(entry) {
             Some(manifest) => Some(manifest),
+            None if project::migration_pending(entry) => {
+                return Err(CliError::Usage(project::MIGRATE_CONFIG_HINT));
+            }
             None => {
                 return Err(CliError::Usage(
-                    "directory supplied but no package.ipe or ipe.toml found inside it",
+                    "directory supplied but no package.ipe found inside it",
                 ));
             }
         }
-    } else if entry.extension().and_then(|e| e.to_str()) == Some("toml") {
-        Some(entry.to_path_buf())
     } else {
         crate::find_manifest_for_ipe_file(entry)
     };
@@ -322,10 +322,12 @@ pub(crate) fn resolve_project_sources(
 /// The project root + entry directory a [`ipe_watch::WatchScope`] confines
 /// itself to, derived from one resolved snapshot.
 fn scope_roots(resolved: &ResolvedProject, entry: &Path) -> (PathBuf, PathBuf) {
-    // The manifest's directory when a `ipe.toml` is the blame path (its own
-    // extension is `.toml`); otherwise the blame path IS the entry file, so
-    // its parent is the source root — matching `build_with_sibling_discovery`.
-    if resolved.blame_path.extension().and_then(|e| e.to_str()) == Some("toml") {
+    // The manifest's directory when a `package.ipe` is the blame path;
+    // otherwise the blame path IS the entry file, so its parent is the source
+    // root — matching `build_with_sibling_discovery`.
+    if resolved.blame_path.file_name().and_then(|n| n.to_str())
+        == Some(crate::package_manifest::PACKAGE_IPE)
+    {
         let root = resolved
             .blame_path
             .parent()

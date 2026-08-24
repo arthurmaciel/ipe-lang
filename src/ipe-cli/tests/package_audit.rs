@@ -31,11 +31,27 @@ fn temp_pkg(tag: &str) -> PathBuf {
     dir
 }
 
-/// Write `ipe.toml` and `src/Main.ipe` for a package.
+/// Write `package.ipe` and `src/Main.ipe` for a package.
 fn write_package(pkg: &Path, manifest: &str, main: &str) {
-    std::fs::write(pkg.join("ipe.toml"), manifest).expect("write ipe.toml");
+    std::fs::write(pkg.join("package.ipe"), manifest).expect("write package.ipe");
     std::fs::write(pkg.join("src").join("Main.ipe"), main).expect("write Main.ipe");
 }
+
+/// Write a native-FFI package: the `package.ipe` project manifest plus the legacy
+/// `ipe.toml` sidecar carrying the `[rust.dependencies]` / `[[rust.define.*]]`
+/// FFI vocabulary the binding-regeneration inspector reads (that vocabulary is
+/// not yet expressible in `package.ipe` — the outstanding ergonomic Rust-FFI
+/// work — so a native package keeps it in a sidecar).
+fn write_native_package(pkg: &Path, manifest: &str, sidecar: &str, main: &str) {
+    std::fs::write(pkg.join("package.ipe"), manifest).expect("write package.ipe");
+    std::fs::write(pkg.join("ipe.toml"), sidecar).expect("write ipe.toml sidecar");
+    std::fs::write(pkg.join("src").join("Main.ipe"), main).expect("write Main.ipe");
+}
+
+/// The `[rust.dependencies]` sidecar for the nonexistent-crate regen tests.
+const NONEXISTENT_NATIVE_SIDECAR: &str = "\
+[rust.dependencies]\n\
+ipe_does_not_exist_xyz_q9z = \"*\"\n";
 
 /// Run `ipe package audit <pkg>` with an isolated (empty) index directory unless
 /// `index` overrides it, returning `(success, stdout, stderr)`.
@@ -93,7 +109,7 @@ fn a_clean_package_passes() {
     let pkg = temp_pkg("clean");
     write_package(
         &pkg,
-        "name = \"clean-pkg\"\nversion = \"0.1.0\"\n\n[source]\nroot = \"src\"\n",
+        "module Package exposing (package)\n\n\npackage =\n    Package.named \"clean-pkg\"\n        |> Package.version \"0.1.0\"\n",
         PURE_MAIN,
     );
     let index = empty_index("clean");
@@ -115,7 +131,7 @@ fn an_undeclared_network_capability_rejects() {
     // The program uses `network` but declares NOTHING — a hidden effect.
     write_package(
         &pkg,
-        "name = \"leaky-pkg\"\nversion = \"0.1.0\"\n\n[source]\nroot = \"src\"\n",
+        "module Package exposing (package)\n\n\npackage =\n    Package.named \"leaky-pkg\"\n        |> Package.version \"0.1.0\"\n",
         NETWORK_MAIN,
     );
     let index = empty_index("undeclared-net");
@@ -141,8 +157,8 @@ fn an_overdeclared_capability_rejects() {
     // The pure program declares `filesystem` it never uses — an over-broad claim.
     write_package(
         &pkg,
-        "name = \"broad-pkg\"\nversion = \"0.1.0\"\n\n[source]\nroot = \"src\"\n\n\
-         [capabilities]\ndeclared = [\"filesystem\"]\n",
+        "module Package exposing (package)\n\n\npackage =\n    Package.named \"broad-pkg\"\n\
+         \x20       |> Package.version \"0.1.0\"\n        |> Package.declares [ Capability.filesystem ]\n",
         PURE_MAIN,
     );
     let index = empty_index("overdeclared");
@@ -165,7 +181,7 @@ fn an_unimported_sibling_capability_rejects() {
     let pkg = temp_pkg("sibling-cap");
     write_package(
         &pkg,
-        "name = \"sibling-pkg\"\nversion = \"0.1.0\"\n\n[source]\nroot = \"src\"\n",
+        "module Package exposing (package)\n\n\npackage =\n    Package.named \"sibling-pkg\"\n        |> Package.version \"0.1.0\"\n",
         // Pure Main — does NOT import Extra.
         "module Main exposing (main)\n\nimport Ipe.Io as Io\n\n\
 import Ipe.Io
@@ -204,8 +220,8 @@ fn a_semver_underbump_rejects() {
     let pkg = temp_pkg("underbump-new");
     // The new version is a BREAKING change (Lib.double's type changed) but only
     // bumps the patch — an under-bump the gate must reject.
-    let manifest = "name = \"semver-pkg\"\nversion = \"0.1.1\"\n\n[source]\nroot = \"src\"\n";
-    std::fs::write(pkg.join("ipe.toml"), manifest).expect("write ipe.toml");
+    let manifest = "module Package exposing (package)\n\n\npackage =\n    Package.named \"semver-pkg\"\n        |> Package.version \"0.1.1\"\n";
+    std::fs::write(pkg.join("package.ipe"), manifest).expect("write package.ipe");
     std::fs::write(
         pkg.join("src").join("Main.ipe"),
         "module Main exposing (main)\n\nimport Ipe.Io as Io\n\n\
@@ -253,7 +269,7 @@ fn a_panic_in_author_ffi_rust_rejects() {
     let pkg = temp_pkg("ffi-panic");
     write_package(
         &pkg,
-        "name = \"ffi-pkg\"\nversion = \"0.1.0\"\n\n[source]\nroot = \"src\"\n",
+        "module Package exposing (package)\n\n\npackage =\n    Package.named \"ffi-pkg\"\n        |> Package.version \"0.1.0\"\n",
         PURE_MAIN,
     );
     // Plant an author-supplied FFI wrapper (`_bindings.rs`) that panics. It has
@@ -291,14 +307,12 @@ fn a_panic_in_author_ffi_rust_rejects() {
 /// Used to verify that regeneration failure maps to the typed
 /// `NativeBindingRegen` check, never leaks through as a capability or build error.
 const NONEXISTENT_NATIVE_MANIFEST: &str = "\
-name = \"native-regen-fail\"\n\
-version = \"0.1.0\"\n\n\
-[source]\n\
-root = \"src\"\n\n\
-[rust.dependencies]\n\
-ipe_does_not_exist_xyz_q9z = \"*\"\n\n\
-[capabilities]\n\
-declared = [\"native-ffi\"]\n";
+module Package exposing (package)\n\n\n\
+package =\n\
+\x20   Package.named \"native-regen-fail\"\n\
+\x20       |> Package.version \"0.1.0\"\n\
+\x20       |> Package.rustDependencies [ Package.rustDep \"ipe_does_not_exist_xyz_q9z\" \"*\" ]\n\
+\x20       |> Package.declares [ Capability.nativeFfi ]\n";
 
 /// The module for the regen-fail test: it references the nonexistent crate's
 /// module, which the build would reject — but the regen check fires first.
@@ -318,7 +332,12 @@ fn native_package_regeneration_failure_is_a_typed_reject() {
     //  (c) name the `native FFI binding regeneration` check in the diagnostic,
     //  (d) never reach provenance / capability / Tier-2 checks.
     let pkg = temp_pkg("regen-fail");
-    write_package(&pkg, NONEXISTENT_NATIVE_MANIFEST, NONEXISTENT_NATIVE_MAIN);
+    write_native_package(
+        &pkg,
+        NONEXISTENT_NATIVE_MANIFEST,
+        NONEXISTENT_NATIVE_SIDECAR,
+        NONEXISTENT_NATIVE_MAIN,
+    );
     let index = empty_index("regen-fail");
 
     let (ok, stdout, stderr) = run_audit(&pkg, &index);
@@ -348,7 +367,7 @@ fn pure_package_skips_regeneration_and_certifies() {
     let pkg = temp_pkg("pure-regen-skip");
     write_package(
         &pkg,
-        "name = \"pure-pkg\"\nversion = \"0.1.0\"\n\n[source]\nroot = \"src\"\n",
+        "module Package exposing (package)\n\n\npackage =\n    Package.named \"pure-pkg\"\n        |> Package.version \"0.1.0\"\n",
         PURE_MAIN,
     );
     let index = empty_index("pure-regen-skip");
@@ -378,7 +397,12 @@ fn committed_bindings_are_ignored_for_native_packages() {
     // step first, the reject is `NativeBindingRegen`, NOT `provenance panic-scan`.
     // This proves the gate discards committed bindings before Tier-1 runs.
     let pkg = temp_pkg("committed-bindings");
-    write_package(&pkg, NONEXISTENT_NATIVE_MANIFEST, NONEXISTENT_NATIVE_MAIN);
+    write_native_package(
+        &pkg,
+        NONEXISTENT_NATIVE_MANIFEST,
+        NONEXISTENT_NATIVE_SIDECAR,
+        NONEXISTENT_NATIVE_MAIN,
+    );
     // Plant a committed `_bindings.rs` with a panic — what a hostile publisher
     // might submit to slip past the provenance scan if committed bindings were trusted.
     let cache = pkg.join(".ipe/cache/ffi/rust");
@@ -488,14 +512,12 @@ fn git_stdout(dir: &Path, args: &[&str]) -> String {
 /// A native-bearing manifest whose `[rust.dependencies]` lists a nonexistent
 /// crate, used in the symlink containment tests to trigger early-reject paths.
 const SYMLINK_NATIVE_MANIFEST: &str = "\
-name = \"symlink-native\"\n\
-version = \"0.1.0\"\n\n\
-[source]\n\
-root = \"src\"\n\n\
-[rust.dependencies]\n\
-ipe_does_not_exist_xyz_q9z = \"*\"\n\n\
-[capabilities]\n\
-declared = [\"native-ffi\"]\n";
+module Package exposing (package)\n\n\n\
+package =\n\
+\x20   Package.named \"symlink-native\"\n\
+\x20       |> Package.version \"0.1.0\"\n\
+\x20       |> Package.rustDependencies [ Package.rustDep \"ipe_does_not_exist_xyz_q9z\" \"*\" ]\n\
+\x20       |> Package.declares [ Capability.nativeFfi ]\n";
 
 /// A native package whose committed `.ipe/cache/ffi` is a symlink to an
 /// out-of-tree directory REJECTS with `NativeBindingRegen` — the out-of-tree
@@ -516,7 +538,12 @@ fn intermediate_symlink_in_cache_path_rejects_and_does_not_delete_out_of_tree() 
     std::fs::write(&sentinel, b"must survive").expect("write sentinel");
 
     let pkg = temp_pkg("intermediate-symlink");
-    write_package(&pkg, SYMLINK_NATIVE_MANIFEST, NONEXISTENT_NATIVE_MAIN);
+    write_native_package(
+        &pkg,
+        SYMLINK_NATIVE_MANIFEST,
+        NONEXISTENT_NATIVE_SIDECAR,
+        NONEXISTENT_NATIVE_MAIN,
+    );
 
     // Create the `.ipe/cache` directory and plant `.ipe/cache/ffi` as a
     // symlink pointing at the out-of-tree victim.
@@ -559,7 +586,12 @@ fn intermediate_symlink_in_cache_path_rejects_and_does_not_delete_out_of_tree() 
 #[test]
 fn leaf_symlink_in_cache_path_rejects() {
     let pkg = temp_pkg("leaf-symlink");
-    write_package(&pkg, SYMLINK_NATIVE_MANIFEST, NONEXISTENT_NATIVE_MAIN);
+    write_native_package(
+        &pkg,
+        SYMLINK_NATIVE_MANIFEST,
+        NONEXISTENT_NATIVE_SIDECAR,
+        NONEXISTENT_NATIVE_MAIN,
+    );
 
     // Plant `.ipe/cache/ffi/rust` as a symlink (leaf).
     let cache_ffi = pkg.join(".ipe").join("cache").join("ffi");
@@ -590,7 +622,12 @@ fn leaf_symlink_in_cache_path_rejects() {
 #[test]
 fn normal_cache_dir_is_deleted_before_regen() {
     let pkg = temp_pkg("normal-cache-delete");
-    write_package(&pkg, SYMLINK_NATIVE_MANIFEST, NONEXISTENT_NATIVE_MAIN);
+    write_native_package(
+        &pkg,
+        SYMLINK_NATIVE_MANIFEST,
+        NONEXISTENT_NATIVE_SIDECAR,
+        NONEXISTENT_NATIVE_MAIN,
+    );
 
     // Plant a real (no symlink) committed cache dir.
     let cache = pkg.join(".ipe").join("cache").join("ffi").join("rust");

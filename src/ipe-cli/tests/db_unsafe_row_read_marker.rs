@@ -39,14 +39,18 @@ fn write_project(test_name: &str, main_ipe: &str) -> PathBuf {
     let src = dir.join("src");
     fs::create_dir_all(&src).expect("create src/");
     fs::write(src.join("Main.ipe"), main_ipe).expect("write Main.ipe");
-    fs::write(dir.join("ipe.toml"), "[project]\nname = \"dbrowmarker\"\n").expect("write ipe.toml");
+    fs::write(
+        dir.join("package.ipe"),
+        "module Package exposing (package)\n\n\npackage =\n    Package.named \"dbrowmarker\"\n",
+    )
+    .expect("write package.ipe");
     dir
 }
 
 fn build(dir: &Path, test_name: &str) -> Result<(), ipe::CliError> {
     let out = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join(format!("db_row_marker_{test_name}"));
     let _ = fs::remove_dir_all(&out);
-    ipe::build_project(&dir.join("ipe.toml"), &out, &runtime())
+    ipe::build_project(&dir.join("package.ipe"), &out, &runtime())
 }
 
 // ── Direct-qualifier route ────────────────────────────────────────────────────

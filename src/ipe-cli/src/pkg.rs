@@ -2,62 +2,67 @@
 //!
 //! These add and remove Ipê packages (not Rust crates — that is `ipe rust`).
 //! `ipe add <name>[@<req>]` resolves the package through the index (fetch,
-//! hash-verify, lock), records it in `ipe.toml` + `ipe.lock`, and prints its
-//! resolved version and capability set. `ipe remove <name>` drops it from both
-//! files. The resolution itself lives in [`crate::resolve`].
+//! hash-verify, lock) and records the requirement in the project manifest;
+//! `ipe remove <name>` drops it. The resolution itself lives in
+//! [`crate::resolve`].
+//!
+//! Rewriting a `package.ipe`'s `Package.dependencies` list in place — preserving
+//! the author's formatting and comments — is a comment-preserving AST edit that
+//! is not yet implemented, so these commands report the manual step to take
+//! rather than corrupting the manifest source.
 
 use std::path::PathBuf;
 
 use crate::CliError;
-use crate::resolve;
+
+/// The clear message both commands surface until the `package.ipe`
+/// dependency-list AST rewrite is implemented: the resolution/lock machinery
+/// exists, but editing the manifest source is done by hand.
+const MANUAL_DEP_EDIT: &str = "ipe add/remove: editing a package.ipe `Package.dependencies` list is not yet automated — \
+     add or remove the `Package.dep \"<name>\" \"<req>\"` entry in package.ipe by hand";
 
 /// `ipe add <package>[@<req>]` — add an Ipê package dependency.
 ///
-/// The optional `@<req>` is a semver requirement (`http@^1.2`); absent, `*`
-/// (the latest published version) is used. Resolution reads the index (the
-/// checkout at `IPE_INDEX_DIR`, or the standard location), fetches and verifies
-/// the source, and writes `ipe.toml` + `ipe.lock`.
-///
 /// # Errors
-/// [`CliError::UsageOwned`] when no package is named or the requirement is
-/// malformed; the resolution errors ([`CliError::Resolve`],
-/// [`CliError::HashMismatch`], [`CliError::Io`]) otherwise.
+/// [`CliError::UsageOwned`] when no package is named, the requirement is
+/// malformed, there is no `package.ipe` here, or the manifest-source edit is not
+/// yet automated.
 pub fn run_add(rest: &[String]) -> Result<(), CliError> {
-    let (name, req) = parse_add_arg(rest)?;
-    let project_root = project_root()?;
-    resolve::resolve_and_add(&project_root, name, &req, &resolve::index_root())
+    let (_name, _req) = parse_add_arg(rest)?;
+    require_project_manifest()?;
+    Err(CliError::Usage(MANUAL_DEP_EDIT))
 }
 
-/// `ipe remove <package>` — remove an Ipê package dependency from `ipe.toml`
-/// and `ipe.lock`.
+/// `ipe remove <package>` — remove an Ipê package dependency.
 ///
 /// # Errors
-/// [`CliError::UsageOwned`] when no package is named; [`CliError::Io`] on a
-/// filesystem failure.
+/// [`CliError::UsageOwned`] when no package is named, there is no `package.ipe`
+/// here, or the manifest-source edit is not yet automated.
 pub fn run_remove(rest: &[String]) -> Result<(), CliError> {
-    let package = package_arg(rest, "remove")?;
-    let project_root = project_root()?;
-    resolve::resolve_and_remove(&project_root, package)
+    let _package = package_arg(rest, "remove")?;
+    require_project_manifest()?;
+    Err(CliError::Usage(MANUAL_DEP_EDIT))
 }
 
-/// The project root the command operates on: the current directory, which must
-/// hold an `ipe.toml`.
+/// Confirm the current directory is an Ipê project — it holds a `package.ipe`.
 ///
 /// # Errors
-/// [`CliError::UsageOwned`] when there is no `ipe.toml` here.
-fn project_root() -> Result<PathBuf, CliError> {
+/// [`CliError::UsageOwned`] when there is no `package.ipe` here (with the
+/// migration hint when only a legacy `ipe.toml` is present).
+fn require_project_manifest() -> Result<(), CliError> {
     let cwd = std::env::current_dir().map_err(|e| CliError::Io {
         path: PathBuf::from("."),
         source: e,
     })?;
-    if cwd.join("ipe.toml").is_file() {
-        Ok(cwd)
-    } else {
-        Err(CliError::UsageOwned(
-            "ipe add/remove: no `ipe.toml` in the current directory (run inside an Ipê project)"
-                .to_owned(),
-        ))
+    if crate::project::manifest_in_dir(&cwd).is_some() {
+        return Ok(());
     }
+    if crate::project::migration_pending(&cwd) {
+        return Err(CliError::Usage(crate::project::MIGRATE_CONFIG_HINT));
+    }
+    Err(CliError::Usage(
+        "ipe add/remove: no `package.ipe` in the current directory (run inside an Ipê project)",
+    ))
 }
 
 /// Parse `ipe add`'s single argument into a package name and a version

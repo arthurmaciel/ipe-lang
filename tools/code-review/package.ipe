@@ -1,0 +1,6 @@
+module Package exposing (package)
+
+
+package =
+    Package.named "code-review"
+        |> Package.version "0.1.0"

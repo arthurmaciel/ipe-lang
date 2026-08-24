@@ -316,7 +316,7 @@ fn record_ctor_cross_module_end_to_end() {
         .join("tests")
         .join("golden")
         .join("record_ctor_xmod")
-        .join("ipe.toml");
+        .join("package.ipe");
     let out = std::env::temp_dir().join("ipec_m82_record_ctor_xmod_e2e");
     let _ = std::fs::remove_dir_all(&out);
 

@@ -15,7 +15,6 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use ipe::lockfile::Lockfile;
-use ipe::project::parse_manifest;
 use ipe::resolve::{self, hash_source_tree};
 
 fn temp_dir(tag: &str) -> PathBuf {
@@ -89,7 +88,8 @@ fn fixture_index(
     index
 }
 
-/// Scaffold a minimal Ipê project directory with an `ipe.toml`.
+/// Scaffold a minimal project directory for the dependency-editing primitive,
+/// which records requirements in an `ipe.toml`-shaped `[dependencies]` section.
 fn scaffold_project(tag: &str) -> PathBuf {
     let proj = temp_dir(&format!("proj-{tag}"));
     std::fs::create_dir_all(proj.join("src")).expect("src");
@@ -119,8 +119,11 @@ fn add_resolves_verifies_and_locks() {
     assert_eq!(locked.sha256, sha);
 
     // The manifest records the requirement under [dependencies].
-    let manifest = parse_manifest(&proj.join("ipe.toml")).expect("manifest");
-    assert!(manifest.dependencies.contains_key("http-extras"));
+    let manifest = std::fs::read_to_string(proj.join("ipe.toml")).expect("manifest");
+    assert!(
+        manifest.contains("http-extras"),
+        "the manifest must record the dependency: {manifest}"
+    );
 
     let _ = std::fs::remove_dir_all(&source);
     let _ = std::fs::remove_dir_all(&index);
@@ -149,10 +152,10 @@ fn add_rejects_a_hash_mismatch() {
     // Nothing was written: no lockfile entry, no manifest dependency.
     let lock = Lockfile::read(&proj).expect("lock");
     assert!(lock.packages().is_empty(), "a mismatch must lock nothing");
-    let manifest = parse_manifest(&proj.join("ipe.toml")).expect("manifest");
+    let manifest = std::fs::read_to_string(proj.join("ipe.toml")).expect("manifest");
     assert!(
-        manifest.dependencies.is_empty(),
-        "a mismatch must add nothing"
+        !manifest.contains("http-extras"),
+        "a mismatch must add nothing: {manifest}"
     );
 
     let _ = std::fs::remove_dir_all(&source);
@@ -171,10 +174,10 @@ fn add_then_remove_leaves_both_files_clean() {
     let req = "^0.4".parse().expect("valid req");
     resolve::resolve_and_add(&proj, "json-tools", &req, &index).expect("add");
     assert!(
-        parse_manifest(&proj.join("ipe.toml"))
+        std::fs::read_to_string(proj.join("ipe.toml"))
             .expect("manifest")
-            .dependencies
-            .contains_key("json-tools")
+            .contains("json-tools"),
+        "add must record the dependency in the manifest"
     );
 
     resolve::resolve_and_remove(&proj, "json-tools").expect("remove");

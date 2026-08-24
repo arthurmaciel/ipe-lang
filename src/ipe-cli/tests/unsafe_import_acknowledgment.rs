@@ -20,8 +20,10 @@ fn scratch_project(name: &str, main_src: &str) -> Result<std::path::PathBuf, Box
     let _ = fs::remove_dir_all(&dir);
     fs::create_dir_all(dir.join("src"))?;
     fs::write(
-        dir.join("ipe.toml"),
-        format!("name = \"{name}\"\nversion = \"0.1.0\"\nentry = \"src/Main.ipe\"\n"),
+        dir.join("package.ipe"),
+        format!(
+            "module Package exposing (package)\n\n\npackage =\n    Package.named \"{name}\"\n        |> Package.version \"0.1.0\"\n"
+        ),
     )?;
     fs::write(dir.join("src/Main.ipe"), main_src)?;
     Ok(dir)
@@ -46,7 +48,7 @@ const SAFE_MAIN: &str = "module Main exposing (main)\n\
 fn unsafe_import_discloses_capability_and_is_scannable() -> Result<(), Box<dyn Error>> {
     let dir = scratch_project("discloses", UNSAFE_MAIN)?;
 
-    let inferred = ipe::infer_package_capabilities(&dir.join("ipe.toml"))?;
+    let inferred = ipe::infer_package_capabilities(&dir.join("package.ipe"))?;
     assert!(
         inferred.contains(&Capability::Unsafe),
         "importing Ipe.Html.Unsafe must disclose the `unsafe` capability, got {inferred:?}"
@@ -65,7 +67,7 @@ fn unsafe_import_discloses_capability_and_is_scannable() -> Result<(), Box<dyn E
 #[test]
 fn non_interactive_unsafe_without_consent_fails_closed() -> Result<(), Box<dyn Error>> {
     let dir = scratch_project("failclosed", UNSAFE_MAIN)?;
-    let inferred = ipe::infer_package_capabilities(&dir.join("ipe.toml"))?;
+    let inferred = ipe::infer_package_capabilities(&dir.join("package.ipe"))?;
     let via = unsafe_ack::unsafe_modules_in_sources([UNSAFE_MAIN]);
 
     let mut stdin = Cursor::new(Vec::new());
@@ -111,7 +113,7 @@ fn non_interactive_unsafe_without_consent_fails_closed() -> Result<(), Box<dyn E
 #[test]
 fn accept_risks_flag_proceeds_clean() -> Result<(), Box<dyn Error>> {
     let dir = scratch_project("flag", UNSAFE_MAIN)?;
-    let inferred = ipe::infer_package_capabilities(&dir.join("ipe.toml"))?;
+    let inferred = ipe::infer_package_capabilities(&dir.join("package.ipe"))?;
     let via = unsafe_ack::unsafe_modules_in_sources([UNSAFE_MAIN]);
 
     let mut stdin = Cursor::new(Vec::new());
@@ -132,25 +134,25 @@ fn accept_risks_flag_proceeds_clean() -> Result<(), Box<dyn Error>> {
     Ok(())
 }
 
-/// A `[capabilities] accept = ["unsafe"]` manifest token parses into the typed
-/// accept set and pre-accepts durably, so CI needs no flag.
+/// A `Package.accepts [ Capability.unsafe ]` manifest stage parses into the
+/// typed accept set and pre-accepts durably, so CI needs no flag.
 #[test]
 fn manifest_accept_token_parses_and_proceeds() -> Result<(), Box<dyn Error>> {
     let dir = scratch_project("manifest", UNSAFE_MAIN)?;
-    // Append the durable acceptance token.
+    // Rewrite with the durable acceptance stage.
     fs::write(
-        dir.join("ipe.toml"),
-        "name = \"manifest\"\nversion = \"0.1.0\"\nentry = \"src/Main.ipe\"\n\
-         [capabilities]\naccept = [\"unsafe\"]\n",
+        dir.join("package.ipe"),
+        "module Package exposing (package)\n\n\npackage =\n    Package.named \"manifest\"\n\
+         \x20       |> Package.version \"0.1.0\"\n        |> Package.accepts [ Capability.unsafe ]\n",
     )?;
 
-    let manifest = ipe::project::parse_manifest(&dir.join("ipe.toml"))?;
+    let manifest = ipe::project::parse_manifest(&dir.join("package.ipe"))?;
     assert!(
         manifest.capabilities_accept.contains(&Capability::Unsafe),
         "the accept token parses into the typed set"
     );
 
-    let inferred = ipe::infer_package_capabilities(&dir.join("ipe.toml"))?;
+    let inferred = ipe::infer_package_capabilities(&dir.join("package.ipe"))?;
     let via = unsafe_ack::unsafe_modules_in_sources([UNSAFE_MAIN]);
     let mut stdin = Cursor::new(Vec::new());
     let mut stderr = Vec::new();
@@ -175,7 +177,7 @@ fn manifest_accept_token_parses_and_proceeds() -> Result<(), Box<dyn Error>> {
 #[test]
 fn safe_program_is_unaffected() -> Result<(), Box<dyn Error>> {
     let dir = scratch_project("safe", SAFE_MAIN)?;
-    let inferred = ipe::infer_package_capabilities(&dir.join("ipe.toml"))?;
+    let inferred = ipe::infer_package_capabilities(&dir.join("package.ipe"))?;
     assert!(
         !inferred.contains(&Capability::Unsafe),
         "a program with no .Unsafe import discloses no `unsafe` capability, got {inferred:?}"

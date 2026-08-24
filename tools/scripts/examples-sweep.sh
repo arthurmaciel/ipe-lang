@@ -335,6 +335,17 @@ for d in "${EXAMPLES[@]}"; do
   DCUR="$d"
   shape="$(example_shape "$d")"
 
+  # A KNOWN, tracked expected-red: its BUILD is expected to fail for a documented
+  # reason (e.g. a manifest/vocabulary gap). Emitted as a VISIBLE red row so it is
+  # a reminder, but the verdict treats registered expected reds as non-gating —
+  # any NEW/unexpected red still fails. Checked BEFORE the skip paths below so the
+  # tracked failure is never masked by a skip.
+  expected_reason="$(expected_red_reason "$n" 2>/dev/null)" || expected_reason=""
+  if [ -n "$expected_reason" ]; then
+    printf '%s\t%s\t%s\t%s\n' "$n" "known-red" "skip" "$expected_reason" >>"$ROWS"
+    continue
+  fi
+
   # A manifest example marked `blocked` exercises an Ipê feature not yet
   # implemented (a tracked compiler gap, not a mirror defect). Documented SKIP,
   # never a surprise RED and never a silent pass.
@@ -402,8 +413,13 @@ done
 } | tee "$TABLE" | tee -a "$RUNLOG"
 
 # ── Verdict ──────────────────────────────────────────────────────────────────
-RED=0; GREEN=0; SKIP=0; RED_ROWS=""
+RED=0; GREEN=0; SKIP=0; KNOWN_RED=0; RED_ROWS=""; KNOWN_RED_ROWS=""
 while IFS=$'\t' read -r n b r note; do
+  # A registered expected-red is a VISIBLE reminder, tallied separately and NOT
+  # gating; every other build/run failure is a gating RED.
+  if [ "$b" = "known-red" ]; then
+    KNOWN_RED=$((KNOWN_RED+1)); KNOWN_RED_ROWS="$KNOWN_RED_ROWS $n"; continue
+  fi
   row_red=0
   case "$b" in ipe-fail|cargo-fail|no-source|unpatched-new-example) row_red=1 ;; esac
   case "$r" in panic|hang|noserve|notty|failed) row_red=1 ;; esac
@@ -425,12 +441,13 @@ WARN_FAIL=0
 [ "$WARN_TOTAL" -gt 0 ] && [ "${IPE_SWEEP_WARN_GATE:-1}" != 0 ] && WARN_FAIL=1
 
 say ""
-say "  summary: $GREEN green · $RED red · $SKIP skipped (of $TOTAL)"
+say "  summary: $GREEN green · $RED red · $KNOWN_RED known-red · $SKIP skipped (of $TOTAL)"
 say "  cargo warnings (past #![allow]): $WARN_TOTAL total${WARN_ROWS:+ —$WARN_ROWS}"
+[ "$KNOWN_RED" -gt 0 ] && say "  KNOWN-RED rows (tracked expected failures — reminders, not gating):${KNOWN_RED_ROWS}"
 say "  full table: $TABLE · warnings: $WARNS"
 
 SCORE="$HIST/scoreboard.tsv"
-printf '%s\tgreen=%s\tred=%s\tskip=%s\n' "$STAMP" "$GREEN" "$RED" "$SKIP" >>"$SCORE"
+printf '%s\tgreen=%s\tred=%s\tknown_red=%s\tskip=%s\n' "$STAMP" "$GREEN" "$RED" "$KNOWN_RED" "$SKIP" >>"$SCORE"
 
 if [ "$RED" -gt 0 ] || [ "$WARN_FAIL" = 1 ]; then
   [ "$RED" -gt 0 ] && say "  RED rows (build/run failure — investigate):${RED_ROWS}"

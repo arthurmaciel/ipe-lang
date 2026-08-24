@@ -2,11 +2,11 @@
 //!
 //! Deletes only the directories `ipe` itself generates — the emitted Rust
 //! project (`out/`), the Cargo build tree (`target/`), and the per-project
-//! cache (`.ipe/`) — and never user source or `ipe.toml`. The command is
+//! cache (`.ipe/`) — and never user source or `package.ipe`. The command is
 //! fail-closed on two axes: it refuses to run outside an Ipê project (no
-//! `ipe.toml` at the resolved root), and every deletion target is proven to sit
-//! inside the canonicalised project root before a byte is removed, so a symlink
-//! or a `..` component can never carry the delete outside the project.
+//! `package.ipe` at the resolved root), and every deletion target is proven to
+//! sit inside the canonicalised project root before a byte is removed, so a
+//! symlink or a `..` component can never carry the delete outside the project.
 
 use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
@@ -28,7 +28,7 @@ const GENERATED_DIRS: &[&str] = &["out", "target", ".ipe"];
 ///
 /// # Errors
 /// [`CliError::UsageOwned`] on any argument (it takes none) or when the current
-/// directory is not an Ipê project (no `ipe.toml`); [`CliError::Io`] on a
+/// directory is not an Ipê project (no `package.ipe`); [`CliError::Io`] on a
 /// filesystem failure while removing a directory.
 pub fn run_clean(rest: &[String]) -> Result<(), CliError> {
     if let Some(arg) = rest.first() {
@@ -48,18 +48,22 @@ pub fn run_clean(rest: &[String]) -> Result<(), CliError> {
 }
 
 /// Resolve and validate the project root: the current directory, which must
-/// hold an `ipe.toml`. Returns the canonicalised root so every later
+/// hold a `package.ipe`. Returns the canonicalised root so every later
 /// containment check compares real, symlink-resolved paths.
 ///
 /// # Errors
-/// [`CliError::UsageOwned`] when there is no `ipe.toml` here (fail-closed: no
-/// project, nothing to clean); [`CliError::Io`] when the directory cannot be
+/// [`CliError::UsageOwned`] when there is no `package.ipe` here (fail-closed: no
+/// project, nothing to clean), with the migration hint when only a legacy
+/// `ipe.toml` is present; [`CliError::Io`] when the directory cannot be
 /// canonicalised.
 fn project_root() -> Result<PathBuf, CliError> {
     let cwd = PathBuf::from(".");
-    if !cwd.join("ipe.toml").is_file() {
+    if crate::project::manifest_in_dir(&cwd).is_none() {
+        if crate::project::migration_pending(&cwd) {
+            return Err(CliError::Usage(crate::project::MIGRATE_CONFIG_HINT));
+        }
         return Err(CliError::UsageOwned(
-            "clean: no ipe.toml here — run it from an Ipê project root".to_owned(),
+            "clean: no package.ipe here — run it from an Ipê project root".to_owned(),
         ));
     }
     std::fs::canonicalize(&cwd).map_err(|e| CliError::Io {

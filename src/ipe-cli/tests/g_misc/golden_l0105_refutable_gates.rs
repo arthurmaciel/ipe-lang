@@ -153,7 +153,7 @@ fn standard_libs_ipe_t0015_money_blocker_gone() {
     let manifest = root
         .join("examples")
         .join("00-standard-libs")
-        .join("ipe.toml");
+        .join("package.ipe");
     if !manifest.exists() {
         return;
     }

@@ -1,0 +1,5 @@
+module Package exposing (package)
+
+
+package =
+    Package.named "mm-local-pkg"

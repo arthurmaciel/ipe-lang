@@ -1,15 +1,16 @@
 //! Multi-module project manifest parsing, module discovery, import graph, and
 //! topological sort.
 //!
-//! The `ipe.toml` format is a minimal subset: only `[project]` and `name` / the
-//! source root (`src/`) are significant. No external TOML crate is used —
-//! the relevant structure is simple enough for a line-by-line parser.
+//! `package.ipe` is the sole project manifest the toolchain discovers and
+//! builds. `ipe.toml` is read only by `ipe migrate config`, which converts it to
+//! a `package.ipe`; its minimal-subset line-scanner ([`parse_toml_manifest`])
+//! lives here as that converter's input reader.
 //!
 //! # Discovery
 //!
-//! Given a project directory (containing `ipe.toml`), the driver:
+//! Given a project directory (containing `package.ipe`), the driver:
 //!
-//! 1. Reads `ipe.toml` to obtain the project name and confirm the source root
+//! 1. Reads `package.ipe` to obtain the project name and confirm the source root
 //!    exists (`src/` by default).
 //! 2. Walks `src/` recursively, collecting every `*.ipe` file.
 //! 3. Maps each file path to a module name by:
@@ -434,82 +435,72 @@ fn scan_raw_manifest(text: &str) -> Result<RawManifest, CliError> {
 /// manifest is malformed or the `src/` directory does not exist;
 /// [`CliError::UsageOwned`] if `[database] driver` names an unsupported value, a
 /// dependency version requirement is malformed, or a capability is unknown.
-/// The manifest filename the toolchain reads today via the line-scanner.
+/// The name of the manifest `ipe migrate config` reads as its input.
 pub const IPE_TOML: &str = "ipe.toml";
 
-/// Locate a project's manifest inside `dir`, preferring the Ipê-native
-/// `package.ipe` over the legacy `ipe.toml`.
+/// The clear, actionable diagnostic for an `ipe.toml`-only directory.
 ///
-/// Precedence, per the manifest design's coexistence window:
+/// `ipe.toml` is no longer a project manifest; `ipe migrate config` produces the
+/// `package.ipe` the toolchain reads.
+pub const MIGRATE_CONFIG_HINT: &str = "no package.ipe in this directory (found a legacy ipe.toml); run `ipe migrate config` to \
+     convert it to package.ipe";
+
+/// Locate a project's `package.ipe` manifest inside `dir`.
 ///
-/// 1. `package.ipe` present → read it syntactically. If `ipe.toml` *also*
-///    exists, warn once that it is ignored — the new manifest wins
-///    deterministically; the two are never merged (an ambiguous-precedence
-///    footgun).
-/// 2. Else `ipe.toml` present → the legacy reader, plus a one-line deprecation
-///    notice pointing at `ipe migrate config`.
-/// 3. Neither → `None`.
+/// `package.ipe` is the sole project manifest the toolchain discovers. A bare
+/// `ipe.toml` is not a manifest here — [`migration_pending`] detects that case
+/// so a caller can surface [`MIGRATE_CONFIG_HINT`] instead of a silent fallback.
 ///
-/// The warnings go to stderr so they never corrupt a piped artifact. Returns the
-/// chosen manifest path (its filename tells [`parse_manifest`] which reader to
-/// run), or `None` when the directory carries no manifest.
+/// Returns the `package.ipe` path when the directory carries one, else `None`.
 #[must_use]
 pub fn manifest_in_dir(dir: &Path) -> Option<PathBuf> {
     let package_ipe = dir.join(crate::package_manifest::PACKAGE_IPE);
-    let ipe_toml = dir.join(IPE_TOML);
     if package_ipe.is_file() {
-        if ipe_toml.is_file() {
-            eprintln!(
-                "warning: both package.ipe and ipe.toml exist — package.ipe wins; ipe.toml is \
-                 ignored (they are never merged)"
-            );
-        }
         return Some(package_ipe);
-    }
-    if ipe_toml.is_file() {
-        eprintln!(
-            "note: ipe.toml is a legacy manifest — run `ipe migrate config` to convert it to \
-             package.ipe"
-        );
-        return Some(ipe_toml);
     }
     None
 }
 
-/// Parse a project manifest into a [`ProjectManifest`], dispatching by filename.
+/// Whether `dir` carries a legacy `ipe.toml` but no `package.ipe` — the one
+/// case where a caller should report [`MIGRATE_CONFIG_HINT`] rather than treat
+/// the directory as manifest-free.
+#[must_use]
+pub fn migration_pending(dir: &Path) -> bool {
+    !dir.join(crate::package_manifest::PACKAGE_IPE).is_file() && dir.join(IPE_TOML).is_file()
+}
+
+/// Parse a project `package.ipe` manifest into a [`ProjectManifest`].
 ///
-/// A `package.ipe` is read syntactically by the Ipê-native reader; an `ipe.toml`
-/// by the line-scanner. Both front doors produce the identical struct, so no
-/// downstream reader depends on which format was on disk.
+/// `package.ipe` is read syntactically (never evaluated) by the Ipê-native
+/// reader. `ipe.toml` is not a project manifest and is not accepted here; it is
+/// read only by `ipe migrate config` via [`parse_toml_manifest`].
 ///
 /// # Errors
-/// The union of both readers' failures: [`CliError::Io`] if the file cannot be
-/// read; [`CliError::Usage`] / [`CliError::UsageOwned`] for a malformed or
-/// invalid manifest (an unsupported driver, a bad version or dependency, an
-/// unknown capability, a denylisted `publicEnv` name, a missing source root); and
-/// (`package.ipe` only) [`CliError::Pipeline`] when the source does not parse.
+/// [`CliError::Io`] if the file cannot be read; [`CliError::Usage`] /
+/// [`CliError::UsageOwned`] for a malformed or invalid manifest (an unsupported
+/// driver, a bad version or dependency, an unknown capability, a denylisted
+/// `publicEnv` name, a missing source root); [`CliError::Pipeline`] when the
+/// source does not parse; and [`CliError::UsageOwned`] when the path is not a
+/// `package.ipe` (a legacy `ipe.toml` supplied directly to a build entry point).
 pub fn parse_manifest(manifest_path: &Path) -> Result<ProjectManifest, CliError> {
-    // A `package.ipe` is read syntactically (never evaluated) by the Ipê-native
-    // reader; an `ipe.toml` is read by the line-scanner below. Both front doors
-    // produce the identical `ProjectManifest`, so no downstream reader changes.
     if manifest_path.file_name().and_then(|n| n.to_str())
         == Some(crate::package_manifest::PACKAGE_IPE)
     {
         return crate::package_manifest::parse_package_manifest(manifest_path);
     }
-    parse_toml_manifest(manifest_path)
+    Err(CliError::UsageOwned(format!(
+        "{}: not a package.ipe manifest. {MIGRATE_CONFIG_HINT}",
+        manifest_path.display()
+    )))
 }
 
-/// Parse an `ipe.toml` manifest via the minimal line-scanner. This is the
-/// original manifest reader, preserved unchanged while `package.ipe` is the
-/// preferred format (both produce the same [`ProjectManifest`]).
-///
-/// Exposed to the crate so `ipe migrate config` can read an `ipe.toml`
-/// specifically — bypassing the format-dispatch in [`parse_manifest`], which
-/// would prefer a `package.ipe` when both are present.
+/// Parse an `ipe.toml` manifest via the minimal line-scanner. This is the input
+/// reader for `ipe migrate config`, which converts a legacy `ipe.toml` into a
+/// `package.ipe` — the only path on which an `ipe.toml` is still read.
 ///
 /// # Errors
-/// As [`parse_manifest`].
+/// [`CliError::Io`] if the file cannot be read; [`CliError::Usage`] /
+/// [`CliError::UsageOwned`] for a malformed or invalid manifest.
 pub(crate) fn parse_toml_manifest(manifest_path: &Path) -> Result<ProjectManifest, CliError> {
     let root = manifest_path
         .parent()
@@ -1112,9 +1103,10 @@ pub use ipe_db::extract_imports_from_source;
 mod tests {
     use super::*;
 
-    /// Write a minimal manifest + `src/Main.ipe` under a fresh temp dir and
-    /// return the manifest path. `database_section` is spliced in verbatim
-    /// (empty string → no `[database]` section at all).
+    /// Write a minimal `ipe.toml` + `src/Main.ipe` under a fresh temp dir and
+    /// return the manifest path, for exercising the `ipe migrate config` input
+    /// reader ([`parse_toml_manifest`]). `database_section` is spliced in
+    /// verbatim (empty string → no `[database]` section at all).
     fn write_manifest(test_name: &str, database_section: &str) -> PathBuf {
         let tmp = std::env::temp_dir().join(format!("ipec_project_{test_name}"));
         let _ = fs::remove_dir_all(&tmp);
@@ -1140,7 +1132,7 @@ mod tests {
     #[test]
     fn parse_manifest_no_database_section_defaults_to_sqlite() {
         let toml_path = write_manifest("no_db_section", "");
-        let manifest = parse_manifest(&toml_path).expect("manifest must parse");
+        let manifest = parse_toml_manifest(&toml_path).expect("manifest must parse");
         assert_eq!(manifest.driver, ipe_backend_rust::DbDriver::Sqlite);
         let _ = fs::remove_dir_all(toml_path.parent().expect("has parent"));
     }
@@ -1148,7 +1140,7 @@ mod tests {
     #[test]
     fn parse_manifest_explicit_sqlite_driver() {
         let toml_path = write_manifest("explicit_sqlite", "[database]\ndriver = \"sqlite\"\n");
-        let manifest = parse_manifest(&toml_path).expect("manifest must parse");
+        let manifest = parse_toml_manifest(&toml_path).expect("manifest must parse");
         assert_eq!(manifest.driver, ipe_backend_rust::DbDriver::Sqlite);
         let _ = fs::remove_dir_all(toml_path.parent().expect("has parent"));
     }
@@ -1156,7 +1148,7 @@ mod tests {
     #[test]
     fn parse_manifest_postgres_driver() {
         let toml_path = write_manifest("postgres", "[database]\ndriver = \"postgres\"\n");
-        let manifest = parse_manifest(&toml_path).expect("manifest must parse");
+        let manifest = parse_toml_manifest(&toml_path).expect("manifest must parse");
         assert_eq!(manifest.driver, ipe_backend_rust::DbDriver::Postgres);
         let _ = fs::remove_dir_all(toml_path.parent().expect("has parent"));
     }
@@ -1164,7 +1156,7 @@ mod tests {
     #[test]
     fn parse_manifest_postgresql_alias_driver() {
         let toml_path = write_manifest("postgresql_alias", "[database]\ndriver = \"postgresql\"\n");
-        let manifest = parse_manifest(&toml_path).expect("manifest must parse");
+        let manifest = parse_toml_manifest(&toml_path).expect("manifest must parse");
         assert_eq!(manifest.driver, ipe_backend_rust::DbDriver::Postgres);
         let _ = fs::remove_dir_all(toml_path.parent().expect("has parent"));
     }
@@ -1176,7 +1168,7 @@ mod tests {
     #[test]
     fn parse_manifest_unsupported_driver_is_a_named_error() {
         let toml_path = write_manifest("unsupported_driver", "[database]\ndriver = \"mysql\"\n");
-        let err = parse_manifest(&toml_path).expect_err("mysql driver must be rejected");
+        let err = parse_toml_manifest(&toml_path).expect_err("mysql driver must be rejected");
         let msg = err.to_string();
         assert!(
             msg.contains("mysql"),
@@ -1378,7 +1370,7 @@ import String
     #[test]
     fn no_wasm_section_defaults_to_empty_config() {
         let toml_path = write_manifest("no_wasm_section", "");
-        let manifest = parse_manifest(&toml_path).expect("manifest must parse");
+        let manifest = parse_toml_manifest(&toml_path).expect("manifest must parse");
         assert_eq!(manifest.wasm, WasmConfig::default());
     }
 
@@ -1393,7 +1385,7 @@ import String
              publicEnv = [\"API_BASE_URL\", \"APP_VERSION\"]\n\
              optLevel = \"z\"\n",
         );
-        let manifest = parse_manifest(&toml_path).expect("manifest must parse");
+        let manifest = parse_toml_manifest(&toml_path).expect("manifest must parse");
         assert_eq!(manifest.wasm.mode.as_deref(), Some("spa"));
         assert_eq!(manifest.wasm.entry.as_deref(), Some("src/Client.ipe"));
         assert_eq!(manifest.wasm.mount.as_deref(), Some("#app"));
@@ -1414,7 +1406,7 @@ import String
             "wasm_secret_denied",
             "[wasm]\npublicEnv = [\"IPE_AUTH_TOKEN_SECRET\"]\n",
         );
-        let err = parse_manifest(&toml_path).expect_err("a secret name must be rejected");
+        let err = parse_toml_manifest(&toml_path).expect_err("a secret name must be rejected");
         let msg = err.to_string();
         assert!(
             msg.contains("IPE_AUTH_TOKEN_SECRET"),
@@ -1451,7 +1443,7 @@ import String
             "wasm_safe_public_env",
             "[wasm]\npublicEnv = [\"API_BASE_URL\"]\n",
         );
-        parse_manifest(&toml_path).expect("an ordinary config name must parse cleanly");
+        parse_toml_manifest(&toml_path).expect("an ordinary config name must parse cleanly");
     }
 
     #[test]
@@ -1459,7 +1451,7 @@ import String
         // Back-compat: a manifest with none of the SP2 sections parses with
         // empty dependency maps and capability set.
         let toml_path = write_manifest("sp2_absent", "");
-        let m = parse_manifest(&toml_path).expect("bare manifest must parse");
+        let m = parse_toml_manifest(&toml_path).expect("bare manifest must parse");
         assert!(m.dependencies.is_empty());
         assert!(m.rust_dependencies.is_empty());
         assert!(m.capabilities.is_empty());
@@ -1473,7 +1465,7 @@ import String
              mylib = { git = \"https://example.com/mylib.git\", rev = \"abc123\" }\n\
              local = { path = \"../local\" }\n";
         let toml_path = write_manifest("sp2_deps", section);
-        let m = parse_manifest(&toml_path).expect("dependency section must parse");
+        let m = parse_toml_manifest(&toml_path).expect("dependency section must parse");
         let http = m.dependencies.get("http");
         assert!(
             matches!(http, Some(IpeDep::Index(req)) if req.matches(&semver::Version::new(1, 5, 0))),
@@ -1499,7 +1491,7 @@ import String
              uuid = \"1.10\"\n\
              stripe = { version = \"=1.0.0\", features = [\"blocking\", \"webhooks\"] }\n";
         let toml_path = write_manifest("sp2_rust_deps", section);
-        let m = parse_manifest(&toml_path).expect("rust.dependencies must parse");
+        let m = parse_toml_manifest(&toml_path).expect("rust.dependencies must parse");
         let uuid = m.rust_dependencies.get("uuid").expect("uuid present");
         assert_eq!(uuid.version, "1.10");
         assert!(uuid.features.is_empty());
@@ -1515,7 +1507,7 @@ import String
             "sp2_caps",
             "[capabilities]\ndeclared = [\"network\", \"clock\"]\n",
         );
-        let m = parse_manifest(&toml_path).expect("capabilities must parse");
+        let m = parse_toml_manifest(&toml_path).expect("capabilities must parse");
         assert_eq!(
             m.capabilities,
             BTreeSet::from([Capability::Network, Capability::Clock])
@@ -1532,7 +1524,7 @@ import String
             "sp2_caps_accept",
             "[capabilities]\ndeclared = [\"network\"]\naccept = [\"unsafe\"]\n",
         );
-        let m = parse_manifest(&toml_path).expect("capabilities must parse");
+        let m = parse_toml_manifest(&toml_path).expect("capabilities must parse");
         assert_eq!(m.capabilities, BTreeSet::from([Capability::Network]));
         assert_eq!(m.capabilities_accept, BTreeSet::from([Capability::Unsafe]));
         let _ = fs::remove_dir_all(toml_path.parent().expect("has parent"));
@@ -1541,7 +1533,8 @@ import String
     #[test]
     fn an_unknown_capability_is_a_named_error() {
         let toml_path = write_manifest("sp2_bad_cap", "[capabilities]\ndeclared = [\"netwrok\"]\n");
-        let err = parse_manifest(&toml_path).expect_err("a typo'd capability must be rejected");
+        let err =
+            parse_toml_manifest(&toml_path).expect_err("a typo'd capability must be rejected");
         assert!(
             err.to_string().contains("netwrok"),
             "the error must name the bad capability: {err}"
@@ -1552,7 +1545,8 @@ import String
     #[test]
     fn a_malformed_version_req_is_a_named_error() {
         let toml_path = write_manifest("sp2_bad_ver", "[dependencies]\nhttp = \"not a version\"\n");
-        let err = parse_manifest(&toml_path).expect_err("a malformed version must be rejected");
+        let err =
+            parse_toml_manifest(&toml_path).expect_err("a malformed version must be rejected");
         assert!(
             err.to_string().contains("http"),
             "the error must name the offending dependency: {err}"
@@ -1652,7 +1646,7 @@ import String
         }
     }
 
-    // ── Dual-name discovery (package.ipe preferred, ipe.toml fallback) ────────
+    // ── Discovery (package.ipe is the sole project manifest) ──────────────────
 
     /// A temp project dir seeded with a `src/Main.ipe` (so any manifest reader's
     /// source-root check passes) plus whichever manifest files the caller writes.
@@ -1680,9 +1674,9 @@ import String
     }
 
     #[test]
-    fn discovery_prefers_package_ipe_over_ipe_toml() {
+    fn discovery_finds_package_ipe_ignoring_any_ipe_toml() {
         let root = discovery_dir(
-            "prefers_package",
+            "finds_package",
             Some(
                 "module Package exposing (package)\n\npackage =\n    Package.named \"from-package\"\n",
             ),
@@ -1692,29 +1686,28 @@ import String
         assert_eq!(
             manifest.file_name().and_then(|n| n.to_str()),
             Some("package.ipe"),
-            "package.ipe must win over ipe.toml"
+            "package.ipe is the discovered manifest; a co-located ipe.toml is ignored"
         );
-        // And the chosen manifest actually reads via the syntactic reader.
+        assert!(
+            !migration_pending(&root),
+            "a package.ipe present means no migration is pending"
+        );
         let m = parse_manifest(&manifest).expect("package.ipe reads");
         assert_eq!(m.name, "from-package");
         let _ = fs::remove_dir_all(&root);
     }
 
     #[test]
-    fn discovery_falls_back_to_ipe_toml() {
-        let root = discovery_dir(
-            "fallback_toml",
-            None,
-            Some("[project]\nname = \"from-toml\"\n"),
+    fn ipe_toml_only_is_not_discovered_and_signals_migration() {
+        let root = discovery_dir("toml_only", None, Some("[project]\nname = \"from-toml\"\n"));
+        assert!(
+            manifest_in_dir(&root).is_none(),
+            "a bare ipe.toml is not a project manifest"
         );
-        let manifest = manifest_in_dir(&root).expect("a manifest is found");
-        assert_eq!(
-            manifest.file_name().and_then(|n| n.to_str()),
-            Some("ipe.toml"),
-            "ipe.toml is the fallback when no package.ipe exists"
+        assert!(
+            migration_pending(&root),
+            "an ipe.toml with no package.ipe signals a pending migration"
         );
-        let m = parse_manifest(&manifest).expect("ipe.toml still reads (additive)");
-        assert_eq!(m.name, "from-toml");
         let _ = fs::remove_dir_all(&root);
     }
 
@@ -1725,27 +1718,41 @@ import String
             manifest_in_dir(&root).is_none(),
             "an empty project has no manifest"
         );
+        assert!(
+            !migration_pending(&root),
+            "an empty project has nothing to migrate"
+        );
         let _ = fs::remove_dir_all(&root);
     }
 
     #[test]
-    fn ipe_toml_projects_still_load_through_parse_manifest() {
-        // Additive guarantee: the legacy front door is unchanged. A full ipe.toml
-        // still parses into the same struct fields.
-        let toml = discovery_dir(
-            "toml_additive",
+    fn parse_manifest_rejects_a_legacy_ipe_toml_path() {
+        // A legacy ipe.toml supplied directly to a build entry point is refused
+        // with the migration hint; it is not a project manifest the toolchain
+        // reads. The toml reader itself stays reachable via `parse_toml_manifest`
+        // for `ipe migrate config`.
+        let root = discovery_dir(
+            "reject_toml",
             None,
             Some(
                 "[project]\nname = \"legacy\"\nversion = \"2.1.0\"\n[database]\ndriver = \"postgres\"\n",
             ),
         );
-        let m = parse_manifest(&toml.join("ipe.toml")).expect("legacy ipe.toml loads");
+        let err = parse_manifest(&root.join("ipe.toml"))
+            .expect_err("an ipe.toml path is not a package.ipe manifest");
+        assert!(
+            err.to_string().contains("ipe migrate config"),
+            "the refusal must point at `ipe migrate config`: {err}"
+        );
+
+        // The same file still reads through the migrate input reader.
+        let m = parse_toml_manifest(&root.join("ipe.toml")).expect("migrate reader loads it");
         assert_eq!(m.name, "legacy");
         assert_eq!(
             m.version,
             Some(semver::Version::parse("2.1.0").expect("semver"))
         );
         assert_eq!(m.driver, ipe_backend_rust::DbDriver::Postgres);
-        let _ = fs::remove_dir_all(&toml);
+        let _ = fs::remove_dir_all(&root);
     }
 }

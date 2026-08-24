@@ -1,0 +1,15 @@
+module Package exposing (package)
+
+
+package =
+    Package.named "sp2-manifest-fixture"
+        |> Package.dependencies
+            [ Package.dep "http" "^1.2"
+            , Package.depPath "local" "../local"
+            , Package.depGitRev "mylib" "https://example.com/mylib.git" "abc123"
+            ]
+        |> Package.rustDependencies
+            [ Package.rustDep "stripe" "=1.0.0" |> Rust.features [ "blocking", "webhooks" ]
+            , Package.rustDep "uuid" "1.10"
+            ]
+        |> Package.declares [ Capability.network, Capability.clock ]

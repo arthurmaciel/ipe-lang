@@ -117,8 +117,8 @@ fn deploy_target_twice_is_usage_error() {
     );
 }
 
-/// `ipe deploy` in an empty directory with no ipe.toml or src/Main.ipe returns
-/// a usage error (not a panic or a silent wrong result).
+/// `ipe deploy` in an empty directory with no package.ipe or src/Main.ipe
+/// returns a usage error (not a panic or a silent wrong result).
 #[test]
 fn deploy_no_project_returns_usage_error() {
     let dir = {
@@ -160,8 +160,12 @@ fn deploy_unsupported_target_is_usage_error() {
         let d = std::env::temp_dir().join("ipe_deploy_test_bad_triple");
         let _ = std::fs::remove_dir_all(&d);
         std::fs::create_dir_all(&d).unwrap();
-        // Create a minimal ipe.toml to pass the "no project" gate.
-        std::fs::write(d.join("ipe.toml"), "[package]\nname = \"test\"\n").unwrap();
+        // Create a minimal package.ipe to pass the "no project" gate.
+        std::fs::write(
+            d.join("package.ipe"),
+            "module Package exposing (package)\n\n\npackage =\n    Package.named \"test\"\n",
+        )
+        .unwrap();
         std::fs::create_dir_all(d.join("src")).unwrap();
         std::fs::write(
             d.join("src").join("Main.ipe"),

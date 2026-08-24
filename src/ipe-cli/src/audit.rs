@@ -136,15 +136,15 @@ impl std::fmt::Display for Rejection {
 }
 
 /// The already-built package the four checks read from: its parsed manifest, its
-/// `ipe.toml` path, and the directory it was emitted into. Preparing these once
+/// `package.ipe` path, and the directory it was emitted into. Preparing these once
 /// keeps each check a pure function of a ready package rather than re-deriving
 /// paths and re-building.
 #[derive(Debug)]
 struct Prepared {
     /// The parsed manifest (name, version, declared capabilities, deps).
     manifest: ProjectManifest,
-    /// The `ipe.toml` path (the semver check's public-API extraction root is its
-    /// parent; the build's blame path).
+    /// The `package.ipe` path (the semver check's public-API extraction root is
+    /// its parent; the build's blame path).
     manifest_path: PathBuf,
     /// The directory the package was emitted into (the `cargo-deny` target for
     /// the supply-chain check).
@@ -204,8 +204,8 @@ fn tier2_probe_fixture() -> Result<PathBuf, CliError> {
 /// `ipe package audit [<path>]` — run the full Tier-1 gate on the working
 /// package and exit non-zero with the failing check's diagnostic.
 ///
-/// `<path>` is a project directory or an `ipe.toml` (defaults to the current
-/// directory). The package MUST be a project (have an `ipe.toml`): the gate
+/// `<path>` is a project directory or a `package.ipe` (defaults to the current
+/// directory). The package MUST be a project (have a `package.ipe`): the gate
 /// checks a publishable package, and the manifest carries the declared
 /// capabilities, version, and dependency graph every check reads.
 ///
@@ -429,7 +429,7 @@ fn set_format(slot: &mut Option<OutputFormat>, requested: OutputFormat) -> Resul
 /// audit never reads publisher-supplied bindings — only the gate-owned,
 /// freshly-generated ones pass the ownership check that follows.
 ///
-/// A `[rust.wrapper]`-only package is rejected before the build: wrapper
+/// A `Package.wrapper`-only package is rejected before the build: wrapper
 /// bindings are author-asserted (a local source path, no registry pin, rev, or
 /// hash), so the gate has no independent pinned source to regenerate from. The
 /// only fail-closed option is rejection — committing author-written wrapper
@@ -437,9 +437,9 @@ fn set_format(slot: &mut Option<OutputFormat>, requested: OutputFormat) -> Resul
 /// build.
 ///
 /// # Errors
-/// [`CliError::UsageOwned`] when `path` names no `ipe.toml`;
+/// [`CliError::UsageOwned`] when `path` names no `package.ipe`;
 /// [`CliError::PackageAudit`] with [`Check::NativeBindingRegen`] when the
-/// manifest contains a `[rust.wrapper]` section; the build errors
+/// manifest declares a `Package.wrapper` stage; the build errors
 /// ([`CliError::Pipeline`] / [`CliError::Io`] / [`CliError::StaticRefusal`])
 /// otherwise.
 fn prepare(path: &Path) -> Result<Prepared, CliError> {
@@ -453,12 +453,12 @@ fn prepare(path: &Path) -> Result<Prepared, CliError> {
     if manifest.has_rust_wrapper {
         return Err(reject(
             Check::NativeBindingRegen,
-            "this package contains a `[rust.wrapper]` section whose bindings are \
+            "this package declares a `Package.wrapper` stage whose bindings are \
              author-asserted (a local source path with no registry pin, rev, or \
              content hash). The audit gate has no independent pinned source to \
              regenerate wrapper bindings from, so it cannot vouch for them. \
-             A `[rust.wrapper]`-bearing package cannot be certified until the \
-             gate gains a regenerable, pinned wrapper source."
+             A wrapper-bearing package cannot be certified until the gate gains a \
+             regenerable, pinned wrapper source."
                 .to_owned(),
         ));
     }
@@ -588,28 +588,32 @@ fn ffi_cache_path_or_reject(project_root: &Path) -> Result<PathBuf, CliError> {
     Ok(current)
 }
 
-/// Resolve `path` (a directory or an `ipe.toml`) to its manifest file.
+/// Resolve `path` (a directory or a `package.ipe`) to its manifest file.
 ///
 /// # Errors
-/// [`CliError::UsageOwned`] when the directory holds no `ipe.toml`, or `path` is
-/// neither a directory nor a `.toml` file.
+/// [`CliError::UsageOwned`] when the directory holds no `package.ipe`, or `path`
+/// is neither a directory nor a `package.ipe`.
 fn locate_manifest(path: &Path) -> Result<PathBuf, CliError> {
     if path.is_dir() {
-        let candidate = path.join("ipe.toml");
-        if candidate.is_file() {
-            return Ok(candidate);
+        if let Some(manifest) = crate::project::manifest_in_dir(path) {
+            return Ok(manifest);
+        }
+        if crate::project::migration_pending(path) {
+            return Err(CliError::Usage(crate::project::MIGRATE_CONFIG_HINT));
         }
         return Err(CliError::UsageOwned(format!(
-            "ipe package audit: no `ipe.toml` in `{}` — the gate audits a publishable Ipê \
+            "ipe package audit: no `package.ipe` in `{}` — the gate audits a publishable Ipê \
              package, which needs a manifest",
             path.display()
         )));
     }
-    if path.extension().and_then(|e| e.to_str()) == Some("toml") && path.is_file() {
+    if path.file_name().and_then(|n| n.to_str()) == Some(crate::package_manifest::PACKAGE_IPE)
+        && path.is_file()
+    {
         return Ok(path.to_path_buf());
     }
     Err(CliError::UsageOwned(format!(
-        "ipe package audit: `{}` is neither an Ipê project directory nor an ipe.toml",
+        "ipe package audit: `{}` is neither an Ipê project directory nor a package.ipe",
         path.display()
     )))
 }
@@ -1343,14 +1347,15 @@ mod tests {
         std::fs::write(src.join("Main.ipe"), "module Main exposing (..)\n")
             .expect("write Main.ipe");
 
-        let toml = dir.join("ipe.toml");
-        let mut f = std::fs::File::create(&toml).expect("create ipe.toml");
+        let manifest_path = dir.join("package.ipe");
+        let mut f = std::fs::File::create(&manifest_path).expect("create package.ipe");
         writeln!(
             f,
-            "[project]\nname = \"wrapper-pkg\"\nversion = \"0.1.0\"\n\n\
-             [rust.wrapper]\npath = \"./my-crate\"\nexpose = [\"some_fn\"]\ncapabilities = []\n"
+            "module Package exposing (package)\n\n\npackage =\n    Package.named \"wrapper-pkg\"\n\
+             \x20       |> Package.version \"0.1.0\"\n\
+             \x20       |> Package.wrapper (Rust.wrapper \"./my-crate\" |> Rust.expose [ \"some_fn\" ])\n"
         )
-        .expect("write ipe.toml");
+        .expect("write package.ipe");
 
         let err = prepare(&dir).expect_err("prepare must reject a wrapper-only package");
         let _ = std::fs::remove_dir_all(&dir);
@@ -1366,8 +1371,8 @@ mod tests {
                 r.check
             );
             assert!(
-                r.message.contains("[rust.wrapper]"),
-                "rejection message must name [rust.wrapper]: {}",
+                r.message.contains("Package.wrapper"),
+                "rejection message must name the Package.wrapper stage: {}",
                 r.message
             );
         }
@@ -1391,22 +1396,23 @@ mod tests {
         std::fs::write(src.join("Main.ipe"), "module Main exposing (..)\n")
             .expect("write Main.ipe");
 
-        let toml = dir.join("ipe.toml");
-        let mut f = std::fs::File::create(&toml).expect("create ipe.toml");
+        let manifest_path = dir.join("package.ipe");
+        let mut f = std::fs::File::create(&manifest_path).expect("create package.ipe");
         writeln!(
             f,
-            "[project]\nname = \"dep-pkg\"\nversion = \"0.1.0\"\n\n\
-             [rust.dependencies]\nuuid = \"1\"\n\n\
-             [capabilities]\ndeclared = [\"native-ffi\"]\n"
+            "module Package exposing (package)\n\n\npackage =\n    Package.named \"dep-pkg\"\n\
+             \x20       |> Package.version \"0.1.0\"\n\
+             \x20       |> Package.rustDependencies [ Package.rustDep \"uuid\" \"1\" ]\n\
+             \x20       |> Package.declares [ Capability.nativeFfi ]\n"
         )
-        .expect("write ipe.toml");
+        .expect("write package.ipe");
 
-        let manifest = crate::project::parse_manifest(&toml)
-            .expect("manifest with [rust.dependencies] must parse");
+        let manifest = crate::project::parse_manifest(&manifest_path)
+            .expect("manifest with rust dependencies must parse");
         let _ = std::fs::remove_dir_all(&dir);
         assert!(
             !manifest.has_rust_wrapper,
-            "has_rust_wrapper must be false for a [rust.dependencies]-only manifest"
+            "has_rust_wrapper must be false for a rust-dependencies-only manifest"
         );
     }
 
@@ -1422,12 +1428,17 @@ mod tests {
         std::fs::write(src.join("Main.ipe"), "module Main exposing (..)\n")
             .expect("write Main.ipe");
 
-        let toml = dir.join("ipe.toml");
-        let mut f = std::fs::File::create(&toml).expect("create ipe.toml");
-        writeln!(f, "[project]\nname = \"pure-pkg\"\nversion = \"0.1.0\"\n")
-            .expect("write ipe.toml");
+        let manifest_path = dir.join("package.ipe");
+        let mut f = std::fs::File::create(&manifest_path).expect("create package.ipe");
+        writeln!(
+            f,
+            "module Package exposing (package)\n\n\npackage =\n    Package.named \"pure-pkg\"\n\
+             \x20       |> Package.version \"0.1.0\"\n"
+        )
+        .expect("write package.ipe");
 
-        let manifest = crate::project::parse_manifest(&toml).expect("pure manifest must parse");
+        let manifest =
+            crate::project::parse_manifest(&manifest_path).expect("pure manifest must parse");
         let _ = std::fs::remove_dir_all(&dir);
         assert!(
             !manifest.has_rust_wrapper,

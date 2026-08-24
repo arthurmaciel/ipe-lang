@@ -138,19 +138,19 @@ fn capabilities_json_is_a_stable_object() {
 }
 
 /// Regression: `ipe capabilities` with no positional, run inside a project
-/// directory (an `ipe.toml` present), must resolve the project's entry `.ipe`
+/// directory (a `package.ipe` present), must resolve the project's entry `.ipe`
 /// rather than trying to read the directory itself. The prior bug surfaced as a
 /// raw `io error at .: Is a directory` because the bare `.` default was passed
 /// straight to the source reader instead of through the same directory→entry
 /// resolution `ipe type-check` uses.
 #[test]
 fn capabilities_in_a_project_dir_resolves_the_entry() {
-    // A known-valid example project (an `ipe.toml` + `src/Main.ipe`). Run
+    // A known-valid example project (a `package.ipe` + `src/Main.ipe`). Run
     // `capabilities` with NO positional and the project dir as the working
     // directory, exactly as the bug report did.
     let proj = support::manifest_dir().join("../../examples/sky/ipe/01-hello-world");
     // Only run when the example exists (CI always has it; a sparse checkout may not).
-    if !proj.join("ipe.toml").is_file() {
+    if !proj.join("package.ipe").is_file() {
         return;
     }
     let r = match Command::new(support::ipe_bin())
@@ -198,7 +198,7 @@ fn capabilities_in_a_project_dir_resolves_the_entry() {
 #[test]
 fn emit_ir_in_a_project_dir_resolves_the_entry() {
     let proj = support::manifest_dir().join("../../examples/sky/ipe/01-hello-world");
-    if !proj.join("ipe.toml").is_file() {
+    if !proj.join("package.ipe").is_file() {
         return;
     }
     let r = match Command::new(support::ipe_bin())

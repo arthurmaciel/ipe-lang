@@ -545,7 +545,7 @@ fn fmt_io_error(
         write!(
             f,
             "no such file `{}` — pass a source file, or run inside an Ipê project \
-             (a directory with an ipe.toml, or a src/Main.ipe)",
+             (a directory with a package.ipe, or a src/Main.ipe)",
             path.display()
         )
     } else {
@@ -1200,13 +1200,12 @@ fn read_discovered_sources(
 }
 
 /// Walk up the directory tree from a `.ipe` file's parent, looking for a
-/// `ipe.toml` manifest. Returns the manifest path if found, or `None` when
+/// `package.ipe` manifest. Returns the manifest path if found, or `None` when
 /// the walk reaches the filesystem root.
 ///
-/// Faithful port of the Haskell `ipe build src/Main.ipe` behavior: when
-/// given a file entry the Haskell driver locates the project root (where
-/// `ipe.toml` lives) before calling `buildProject`, so the full module graph
-/// is compiled instead of just the single entry file.
+/// When given a file entry, the driver locates the project root (where
+/// `package.ipe` lives) before building, so the full module graph is compiled
+/// instead of just the single entry file.
 fn find_manifest_for_ipe_file(ipe_file: &Path) -> Option<PathBuf> {
     let mut dir = ipe_file.parent()?;
     loop {
@@ -2340,11 +2339,12 @@ fn prune_orphaned_files(
     Ok(())
 }
 
-/// Build a multi-module Ipe project rooted at `manifest_path` (`ipe.toml`) into
-/// a Rust Cargo project under `out_dir`, vendoring the runtime from `runtime_dir`.
+/// Build a multi-module Ipe project rooted at `manifest_path` (`package.ipe`)
+/// into a Rust Cargo project under `out_dir`, vendoring the runtime from
+/// `runtime_dir`.
 ///
 /// The build pipeline:
-/// 1. Parse `ipe.toml` to locate the source root.
+/// 1. Parse `package.ipe` to locate the source root.
 /// 2. Discover every `*.ipe` file under `src/`.
 /// 3. Scan each file for `import` declarations (token-level lexer scan) to
 ///    build the import graph.
@@ -2507,8 +2507,8 @@ pub(crate) fn resolve_vendored_runtime_dir(
 /// entry and none can be discovered. Just the reason — the command's own
 /// `--help` page (appended by [`CliError::CommandUsage`]) carries the synopsis
 /// and options, so this never re-lists them.
-const NO_ENTRY: &str = "nothing to build here — pass a source file or run inside a project (an ipe.toml, \
-     or a src/Main.ipe)";
+const NO_ENTRY: &str = "nothing to build here — pass a source file or run inside a project (a \
+     package.ipe, or a src/Main.ipe)";
 
 /// A request for help asks for output, not an error: it prints to stdout and
 /// exits successfully. Returned by [`intercept_help`] so [`run_cli`] can honour
@@ -2615,19 +2615,22 @@ fn with_help_on_misuse(
 /// `build`, `run`, or `watch`.
 ///
 /// Resolution order:
-/// 1. `./package.ipe` or `./ipe.toml` exists — entry `"."` (project mode;
-///    `discover_manifest` routes it to the directory's preferred manifest).
+/// 1. `./package.ipe` exists — entry `"."` (project mode; `discover_manifest`
+///    reads the directory's `package.ipe`).
 /// 2. `./src/Main.ipe` exists — entry `"src/Main.ipe"` (single-file
 ///    shorthand without a manifest).
-/// 3. Neither — usage error: nothing to build here.
+/// 3. A bare `./ipe.toml` with no `package.ipe` — a clear migration error, so
+///    the legacy manifest never silently governs a build.
+/// 4. Neither — usage error: nothing to build here.
 fn default_entry() -> Result<String, CliError> {
-    if std::path::Path::new(package_manifest::PACKAGE_IPE).exists()
-        || std::path::Path::new("ipe.toml").exists()
-    {
+    if std::path::Path::new(package_manifest::PACKAGE_IPE).exists() {
         return Ok(".".to_owned());
     }
     if std::path::Path::new("src/Main.ipe").exists() {
         return Ok("src/Main.ipe".to_owned());
+    }
+    if project::migration_pending(std::path::Path::new(".")) {
+        return Err(CliError::Usage(project::MIGRATE_CONFIG_HINT));
     }
     Err(CliError::Usage(NO_ENTRY))
 }
@@ -2662,22 +2665,21 @@ pub(crate) fn run_watch(rest: &[String]) -> Result<(), CliError> {
     watch::run(&opts)
 }
 
-/// Route an entry argument to its `ipe.toml`, when one governs it:
-/// a directory must contain one, a `.toml` argument IS one, and a `.ipe`
-/// entry walks up the tree looking for one (falling back to sibling
-/// discovery when none exists).
+/// Route an entry argument to its `package.ipe`, when one governs it:
+/// a directory must contain one, and a `.ipe` entry walks up the tree looking
+/// for one (returning no manifest — single-file mode — when none exists). A
+/// directory carrying only a legacy `ipe.toml` is a clear migration error.
 fn discover_manifest(entry_path: &Path) -> Result<Option<PathBuf>, CliError> {
     if entry_path.is_dir() {
-        project::manifest_in_dir(entry_path).map_or_else(
-            || {
-                Err(CliError::Usage(
-                    "directory supplied but no package.ipe or ipe.toml found inside it",
-                ))
-            },
-            |manifest| Ok(Some(manifest)),
-        )
-    } else if entry_path.extension().and_then(|e| e.to_str()) == Some("toml") {
-        Ok(Some(entry_path.to_path_buf()))
+        if let Some(manifest) = project::manifest_in_dir(entry_path) {
+            return Ok(Some(manifest));
+        }
+        if project::migration_pending(entry_path) {
+            return Err(CliError::Usage(project::MIGRATE_CONFIG_HINT));
+        }
+        Err(CliError::Usage(
+            "directory supplied but no package.ipe found inside it",
+        ))
     } else {
         Ok(find_manifest_for_ipe_file(entry_path))
     }
@@ -2795,13 +2797,11 @@ fn run_build_body(rest: &[String]) -> Result<(), CliError> {
     let out_dir = out.map_or_else(|| PathBuf::from("out").join("rust"), PathBuf::from);
 
     // Route the build:
-    //   1. Directory → expect ipe.toml inside it.
-    //   2. .toml file → build_project directly.
-    //   3. .ipe file → walk up looking for ipe.toml (project-mode); fall back
-    //      to sibling discovery when no ipe.toml exists (fixes IPE-N0020 for
-    //      multi-file projects built via the file-path shorthand). This mirrors
-    //      the Haskell driver's `Graph.discoverModulesMulti srcRoot entryPath`
-    //      call in `Ipe.Build.Compile.hs`.
+    //   1. Directory → expect package.ipe inside it.
+    //   2. .ipe file → walk up looking for package.ipe (project-mode); fall back
+    //      to sibling discovery when no manifest exists, so a multi-file project
+    //      built via the file-path shorthand still compiles the whole module
+    //      graph rather than the single entry file.
     let manifest = discover_manifest(&entry_path)?;
 
     // Parse the manifest early to read [wasm].mode for target inference.
@@ -4903,15 +4903,14 @@ fn parse_audit_entry_args(rest: &[String]) -> Result<(PathBuf, Option<PathBuf>),
 /// Resolve a `check`/analysis `<path>` argument to the entry `.ipe` file the
 /// source-graph pipeline reads. Same argument convention as `ipe build`:
 ///
-/// 1. a directory → its `ipe.toml`'s `src`-root `Main.ipe`;
-/// 2. an `ipe.toml` → that manifest's `src`-root `Main.ipe`;
-/// 3. a `.ipe` file → itself.
+/// 1. a directory → its `package.ipe`'s `src`-root `Main.ipe`;
+/// 2. a `.ipe` file → itself.
 ///
 /// A project's entry module is always `Main` (`project` module doc), so the
 /// entry file is `<src_root>/Main.ipe`.
 ///
 /// # Errors
-/// [`CliError::Usage`] for a directory with no `ipe.toml`; the manifest's own
+/// [`CliError::Usage`] for a directory with no `package.ipe`; the manifest's own
 /// parse errors otherwise.
 fn resolve_analysis_entry(path: &Path) -> Result<PathBuf, CliError> {
     let manifest = discover_manifest(path)?;
@@ -6620,7 +6619,7 @@ mod tests {
     // find_manifest_for_ipe_file tests (IPE-N0020 fix)
     // -----------------------------------------------------------------------
 
-    /// Creates a temp directory with a nested `src/Main.ipe` and a `ipe.toml`
+    /// Creates a temp directory with a nested `src/Main.ipe` and a `package.ipe`
     /// at the project root, confirming the upward walk finds the manifest.
     #[test]
     fn find_manifest_walks_up_to_project_root() {
@@ -6628,16 +6627,20 @@ mod tests {
         let _ = fs::remove_dir_all(&tmp);
         let src = tmp.join("src");
         fs::create_dir_all(&src).expect("create src/");
-        let toml = tmp.join("ipe.toml");
-        fs::write(&toml, "name = \"test\"\n").expect("write ipe.toml");
+        let manifest = tmp.join("package.ipe");
+        fs::write(
+            &manifest,
+            "module Package exposing (package)\n\n\npackage =\n    Package.named \"test\"\n",
+        )
+        .expect("write package.ipe");
         let main_ipe = src.join("Main.ipe");
         fs::write(&main_ipe, "module Main exposing (main)\nmain = 0\n").expect("write Main.ipe");
 
         let found = find_manifest_for_ipe_file(&main_ipe);
         assert_eq!(
             found.as_deref(),
-            Some(toml.as_path()),
-            "upward walk must find ipe.toml at project root"
+            Some(manifest.as_path()),
+            "upward walk must find package.ipe at project root"
         );
         let _ = fs::remove_dir_all(&tmp);
     }
@@ -7654,13 +7657,13 @@ pub mod web {
         let _ = fs::remove_dir_all(&tmp);
         let src = tmp.join("src");
         fs::create_dir_all(&src).expect("create src/");
-        // A project whose manifest selects the wasm target via `[wasm].mode`,
+        // A project whose manifest selects the wasm target via `Package.wasm`,
         // with no `IPE_TARGET` env set — the tier the env-only check missed.
         fs::write(
-            tmp.join("ipe.toml"),
-            "name = \"w\"\nentry = \"src/Main.ipe\"\n\n[wasm]\nmode = \"spa\"\n",
+            tmp.join("package.ipe"),
+            "module Package exposing (package)\n\n\npackage =\n    Package.named \"w\"\n        |> Package.wasm (Wasm.spa)\n",
         )
-        .expect("write ipe.toml");
+        .expect("write package.ipe");
         fs::write(
             src.join("Main.ipe"),
             "module Main exposing (main)\nmain = 0\n",
@@ -7669,7 +7672,7 @@ pub mod web {
 
         let out = tmp.join("out");
         let args = [
-            tmp.join("ipe.toml").to_string_lossy().into_owned(),
+            tmp.join("package.ipe").to_string_lossy().into_owned(),
             "--out".to_owned(),
             out.to_string_lossy().into_owned(),
         ];
@@ -8009,8 +8012,12 @@ pub mod web {
         fs::write(&unreadable, "module Locked exposing ()\n").expect("write Locked");
         fs::set_permissions(&unreadable, fs::Permissions::from_mode(0o000)).expect("chmod 000");
 
-        let manifest_path = dir.join("ipe.toml");
-        fs::write(&manifest_path, "[project]\nname = \"test\"\n").expect("write manifest");
+        let manifest_path = dir.join("package.ipe");
+        fs::write(
+            &manifest_path,
+            "module Package exposing (package)\n\n\npackage =\n    Package.named \"test\"\n",
+        )
+        .expect("write manifest");
 
         let result = user_sources_for_unsafe_scan(Some(&manifest_path), &readable);
 
@@ -8041,8 +8048,12 @@ pub mod web {
         let other = src.join("Helper.ipe");
         fs::write(&other, "module Helper exposing ()\n").expect("write Helper");
 
-        let manifest_path = dir.join("ipe.toml");
-        fs::write(&manifest_path, "[project]\nname = \"test\"\n").expect("write manifest");
+        let manifest_path = dir.join("package.ipe");
+        fs::write(
+            &manifest_path,
+            "module Package exposing (package)\n\n\npackage =\n    Package.named \"test\"\n",
+        )
+        .expect("write manifest");
 
         let result = user_sources_for_unsafe_scan(Some(&manifest_path), &entry);
         let _ = fs::remove_dir_all(&dir);

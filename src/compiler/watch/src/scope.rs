@@ -1,6 +1,6 @@
 //! The confined watcher's typed scope (INV-4, H18).
 //!
-//! `ipe watch` must observe only a strict, typed allowlist: `ipe.toml`, the
+//! `ipe watch` must observe only a strict, typed allowlist: `package.ipe`, the
 //! entry point's directory (recursive source-extension walk), and `tests/`
 //! if present — never `target/`, `.git/`, `node_modules/`, or any generated
 //! output directory, whose churn would self-trigger a rebuild loop.
@@ -214,11 +214,11 @@ impl WatchScope {
 
         let mut roots_to_watch = Vec::new();
 
-        // ipe.toml, if present, is a FILE watch target (its own directory is
+        // package.ipe, if present, is a FILE watch target (its own directory is
         // the project root, already covered by entry_dir/tests below in the
-        // common case, but ipe.toml may live in an ancestor of a nested
+        // common case, but package.ipe may live in an ancestor of a nested
         // entry — watch it explicitly regardless).
-        let manifest = canon_root.join("ipe.toml");
+        let manifest = canon_root.join("package.ipe");
         if manifest.is_file()
             && let Some(w) = WatchedPath::confine(&canon_root, &manifest)
         {
@@ -279,7 +279,7 @@ impl WatchScope {
 
     /// Whether a raw filesystem-event path is IN scope: confinable to the
     /// root, not under an excluded directory, and (for files) either a
-    /// `.ipe` source, `ipe.toml`, or an `.ipei`/`kernel.json` FFI interface
+    /// `.ipe` source, `package.ipe`, or an `.ipei`/`kernel.json` FFI interface
     /// file (H13 — the cross-terminal `ipe add` observation seam).
     ///
     /// This is the drop-at-the-source filter (design doc: "drop excluded-dir
@@ -307,7 +307,7 @@ impl WatchScope {
 
 /// Whether a (canonicalised, in-root, non-excluded) leaf path is one of the
 /// file kinds a confined watch actually reacts to: `.ipe` sources,
-/// `ipe.toml`, or a file under the root-level `tests/` watch root (any
+/// `package.ipe`, or a file under the root-level `tests/` watch root (any
 /// extension — a fixture asset under `tests/` still belongs to the
 /// allowlist even without a `.ipe` extension, mirroring the reference
 /// project's "tests/ if present" scope).
@@ -319,7 +319,7 @@ impl WatchScope {
 /// `examples/foo/tests/output.log`) must not self-trigger the watch loop by
 /// virtue of a path SEGMENT matching that word.
 fn is_watchable_leaf(tests_root: Option<&Path>, path: &Path) -> bool {
-    if path.file_name().and_then(|n| n.to_str()) == Some("ipe.toml") {
+    if path.file_name().and_then(|n| n.to_str()) == Some("package.ipe") {
         return true;
     }
     if is_source_file(path) {
@@ -328,9 +328,20 @@ fn is_watchable_leaf(tests_root: Option<&Path>, path: &Path) -> bool {
     tests_root.is_some_and(|root| path.starts_with(root))
 }
 
+/// The project manifest filename. It shares the `.ipe` extension but is a
+/// config file, not a source module, so it is watched yet excluded from the
+/// source-module count that bounds the `DoS` guard.
+const MANIFEST_FILE: &str = "package.ipe";
+
 /// Whether `path`'s extension is the `.ipe` source extension.
 fn is_source_file(path: &Path) -> bool {
     path.extension().and_then(|e| e.to_str()) == Some(SOURCE_EXTENSION)
+}
+
+/// Whether `path` is the project manifest (`package.ipe`) — a `.ipe`-extension
+/// config file that is watched but is not a source module.
+fn is_manifest_file(path: &Path) -> bool {
+    path.file_name().and_then(|n| n.to_str()) == Some(MANIFEST_FILE)
 }
 
 /// Recursively count `.ipe` files under `dir`, accumulating into `count` —
@@ -343,7 +354,7 @@ fn is_source_file(path: &Path) -> bool {
 /// tree cannot make this walk itself unbounded.
 fn count_source_files(dir: &Path, count: &mut usize) -> Result<(), ScopeError> {
     if dir.is_file() {
-        if is_source_file(dir) {
+        if is_source_file(dir) && !is_manifest_file(dir) {
             *count += 1;
         }
         return Ok(());
@@ -370,7 +381,7 @@ fn count_source_files(dir: &Path, count: &mut usize) -> Result<(), ScopeError> {
         })?;
         if file_type.is_dir() {
             count_source_files(&path, count)?;
-        } else if is_source_file(&path) {
+        } else if is_source_file(&path) && !is_manifest_file(&path) {
             *count += 1;
         }
         if *count > MAX_WATCHED_FILES {
@@ -473,11 +484,15 @@ mod tests {
             "module Main exposing (main)\nmain = 1\n",
         )
         .unwrap();
-        fs::write(root.join("ipe.toml"), "name = \"x\"\n").unwrap();
+        fs::write(
+            root.join("package.ipe"),
+            "module Package exposing (package)\n",
+        )
+        .unwrap();
         fs::write(src.join("notes.txt"), "hi").unwrap();
 
         let scope = WatchScope::build(&root, &src).unwrap();
-        assert!(scope.is_relevant(&root.join("ipe.toml")));
+        assert!(scope.is_relevant(&root.join("package.ipe")));
         assert!(!scope.is_relevant(&src.join("notes.txt")));
     }
 
@@ -499,7 +514,7 @@ mod tests {
     /// CO-INCR-009: a nested `tests` directory OUTSIDE the root-level
     /// `tests/` watch root (e.g. a supervised app's own
     /// `examples/foo/tests/`) must not self-trigger the watch loop for its
-    /// non-`.ipe` artifacts — only the extension/`ipe.toml` rules, and the
+    /// non-`.ipe` artifacts — only the extension/`package.ipe` rules, and the
     /// ACTUAL root-level `tests/`, are watchable.
     #[test]
     fn is_relevant_ignores_a_non_root_tests_directory() {
@@ -565,7 +580,11 @@ mod tests {
             "module Main exposing (main)\nmain = 1\n",
         )
         .unwrap();
-        fs::write(root.join("ipe.toml"), "name = \"x\"\n").unwrap();
+        fs::write(
+            root.join("package.ipe"),
+            "module Package exposing (package)\n",
+        )
+        .unwrap();
         let tests_dir = root.join("tests");
         fs::create_dir_all(&tests_dir).unwrap();
         for i in 0..10 {
@@ -576,7 +595,7 @@ mod tests {
         assert_eq!(
             scope.file_count(),
             1,
-            "only Main.ipe counts — ipe.toml and the 10 tests/ artifacts must not"
+            "only Main.ipe counts — package.ipe and the 10 tests/ artifacts must not"
         );
     }
 

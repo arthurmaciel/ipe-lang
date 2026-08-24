@@ -87,6 +87,15 @@ pub fn golden_dir_of(golden: &Path) -> &Path {
     golden.parent().unwrap_or(golden)
 }
 
+/// Render a minimal `package.ipe` manifest body naming `name` — the project
+/// manifest the toolchain discovers and builds. Fixtures that only need a named
+/// package write this instead of a legacy `ipe.toml`.
+#[must_use]
+#[allow(dead_code)] // adopted file-by-file as fixtures migrate to package.ipe
+pub fn package_ipe(name: &str) -> String {
+    format!("module Package exposing (package)\n\n\npackage =\n    Package.named {name:?}\n")
+}
+
 /// Collapse rustfmt's whitespace-driven line-wrap noise out of emitted Rust
 /// source, so a golden substring assertion tracks *token adjacency*, not one
 /// specific line layout.
