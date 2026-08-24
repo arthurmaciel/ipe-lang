@@ -1425,15 +1425,27 @@ fn build_record(
 }
 
 /// Build the `Doc` for a functional record update, mirroring
-/// [`crate::emit_expr::emit_update`] token-for-token. The string emitter renders
-/// `{ let __ipe_upd_0 = v0; … let mut __ipe_rec = <record>; __ipe_rec.f = __ipe_upd_0; … __ipe_rec }`
-/// — each field value is bound to a positional temporary BEFORE the base is
-/// moved, so a field value may read the base (`{ r | count = r.count + 1 }`) on
-/// a non-`Clone` record. Since it holds statements, it ALWAYS breaks: each field
-/// bind, the `let mut` binding, each field assignment, and the `__ipe_rec` tail
-/// land on their own `HardLine` inside the block's sole `Nest(4)`, matching
-/// rustfmt. The base record and each field value are built recursively; their
-/// leaves carry the string emitter's exact tokens, so the SEAL holds.
+/// Mirrors [`crate::emit_expr::emit_update`] token-for-token for both code paths
+/// (concrete struct and G2 row-generic setter chain).
+///
+/// **Concrete-struct path** (record type is a known struct):
+/// `{ let __ipe_upd_0 = v0; … let mut __ipe_rec = <record>; __ipe_rec.f =
+/// __ipe_upd_0; … __ipe_rec }` — each field value is bound to a positional
+/// temporary BEFORE the base is moved, so a field value may read the base
+/// (`{ r | count = r.count + 1 }`) on a non-`Clone` record. Since it holds
+/// statements, it ALWAYS breaks: each field bind, the `let mut` binding, each
+/// field assignment, and the `__ipe_rec` tail land on their own `HardLine`
+/// inside the block's sole `Nest(4)`, matching rustfmt.
+///
+/// **G2 row-generic setter-chain path** (record is a row-binder `R{n}`):
+/// `{ let __ipe_upd_0 = v0; … <record>.ipe_with_f0(__ipe_upd_0).… }` — each
+/// setter call consumes and returns `Self`, so the chain preserves all
+/// untouched fields without naming the concrete struct. The chain itself is a
+/// single expression, so only the field-value binds and one expression line
+/// fill the block.
+///
+/// The base record and each field value are built recursively; their leaves
+/// carry the string emitter's exact tokens, so the SEAL holds.
 fn build_update(
     ctx: &EmitCtx,
     record: &Expr,
@@ -1442,6 +1454,44 @@ fn build_update(
     child: u16,
     generics: GenericScope,
 ) -> DResult<Doc> {
+    // G2: when the record is a row-generic parameter, use setter witnesses.
+    let record_sym = match record {
+        Expr::Var(s) | Expr::CloneVar(s) => Some(*s),
+        _ => None,
+    };
+    if let Some(sym) = record_sym
+        && generics.is_row(sym)
+    {
+        // Bind each field value before building the chain, so evaluation
+        // order matches the concrete-struct path and a field expression
+        // that reads the base can observe its pre-update value.
+        let mut inner = Vec::new();
+        for (i, (_sym, value)) in fields.iter().enumerate() {
+            let value_doc = build_doc(ctx, value, indent, child, generics)?;
+            inner.push(Doc::HardLine);
+            inner.push(Doc::owned(format!("let __ipe_upd_{i} = ")));
+            inner.push(value_doc);
+            inner.push(Doc::text(";"));
+        }
+        // Build the setter chain as a single expression leaf.
+        let base_doc = build_doc(ctx, record, indent, child, generics)?;
+        let mut chain: Doc = base_doc;
+        for (i, (field_sym, _value)) in fields.iter().enumerate() {
+            let field_name = ctx.resolve_ident(*field_sym)?;
+            let setter = crate::naming::field_setter_witness_method_name(field_name);
+            chain = Doc::concat(vec![chain, Doc::owned(format!(".{setter}(__ipe_upd_{i})"))]);
+        }
+        inner.push(Doc::HardLine);
+        inner.push(chain);
+        return Ok(Doc::concat(vec![
+            Doc::text("{"),
+            Doc::nest(4, Doc::concat(inner)),
+            Doc::HardLine,
+            Doc::text("}"),
+        ]));
+    }
+
+    // Concrete-struct path.
     let mut inner = Vec::new();
     for (i, (_sym, value)) in fields.iter().enumerate() {
         let value_doc = build_doc(ctx, value, indent, child, generics)?;

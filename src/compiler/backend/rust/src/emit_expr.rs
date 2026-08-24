@@ -6962,6 +6962,39 @@ fn emit_update(
     generics: GenericScope,
 ) -> DResult<String> {
     let child = depth + 1;
+
+    // G2 (update-through-row): when the base record is a row-generic parameter
+    // (type `R{n}`, a rustc generic bound by `IpeHasF + IpeWithF`), direct
+    // field-mutation is unsound — rustc does not know the concrete struct layout
+    // behind `R{n}`. Emit a chain of setter-witness calls instead:
+    //   `rec.ipe_with_f1(v1).ipe_with_f2(v2)`
+    // Each setter consumes `self` and returns `Self`, so the chain preserves
+    // all untouched fields through the `..self` impl body without naming the
+    // concrete struct. The base record is moved into the first call and the
+    // chain returns `R{n}` — exactly the return type required by G1.
+    let record_sym = match record {
+        Expr::Var(s) | Expr::CloneVar(s) => Some(*s),
+        _ => None,
+    };
+    if let Some(sym) = record_sym
+        && generics.is_row(sym)
+    {
+        // Evaluate each new field value as a binding first so evaluation
+        // order is left-to-right and matches the concrete-struct path.
+        let mut binds = Vec::with_capacity(fields.len());
+        let mut chain = emit_expr_at(ctx, record, indent, child, generics)?;
+        for (i, (field_sym, value)) in fields.iter().enumerate() {
+            let field_name = ctx.resolve_ident(*field_sym)?;
+            let setter = crate::naming::field_setter_witness_method_name(field_name);
+            let rendered = emit_expr_at(ctx, value, indent, child, generics)?;
+            binds.push(format!(" let __ipe_upd_{i} = {rendered};"));
+            chain = format!("{chain}.{setter}(__ipe_upd_{i})");
+        }
+        return Ok(format!("{{{} {chain} }}", binds.concat()));
+    }
+
+    // Concrete struct path: the record type is a known struct, so direct field
+    // mutation via a `let mut __ipe_rec` shadow is sound.
     let mut binds = Vec::with_capacity(fields.len());
     let mut assigns = Vec::with_capacity(fields.len());
     for (i, (sym, value)) in fields.iter().enumerate() {
@@ -8217,6 +8250,15 @@ fn render_fn_generics(
             // one such witness bound; for a concrete field type this is a plain
             // scalar/struct type.
             let field_ty_s = render_type(ctx, field_ty, generics)?;
+            if row.updated_fields.contains(field_sym) {
+                // G2: this field is updated in the body — require the setter
+                // witness (`IpeWithF`), which supertraits the getter witness
+                // (`IpeHasF`). Emit the setter bound so rustc can resolve the
+                // setter method at the call site. The getter bound with the
+                // associated-type constraint follows unconditionally below.
+                let setter_trait = crate::naming::field_setter_witness_trait_name(field_name);
+                bounds.push(setter_trait);
+            }
             bounds.push(format!("{trait_name}<{assoc} = {field_ty_s}>"));
         }
         bounds.push("Clone".to_owned());

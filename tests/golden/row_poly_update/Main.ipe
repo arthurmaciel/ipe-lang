@@ -1,0 +1,27 @@
+module Main exposing (main)
+
+import Ipe.Io as Io
+import Ipe.String as String
+
+
+-- G1 + G2: a row-polymorphic function that updates the `n` field and
+-- returns the same record type. The body uses functional update syntax.
+bump : { r | n : Int } -> { r | n : Int }
+bump rec =
+    { rec | n = rec.n + 1 }
+
+
+ada : { n : Int, label : String }
+ada =
+    { n = 1, label = "a" }
+
+
+bo : { n : Int, tag : Int }
+bo =
+    { n = 10, tag = 99 }
+
+
+main =
+    let r1 = bump ada
+        r2 = bump bo
+    in Io.println (String.fromInt r1.n ++ " " ++ String.fromInt r2.n)

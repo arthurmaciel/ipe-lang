@@ -1,0 +1,27 @@
+module Main exposing (main)
+
+import Ipe.Io as Io
+import Ipe.List as List
+import Ipe.String as String
+
+
+-- G1 + G2 + G6 (the HOF-value SEAL audit repro): bump passed by name as a
+-- value into apply, which takes a concrete { n : Int, label : String } -> { n :
+-- Int, label : String } callback. The concrete callback type pins both arg and
+-- return to RecLabelN, so bump must be turbofish-instantiated as
+-- main_bump::<RecLabelN>. This is the minimal repro for G6: a row-poly function
+-- used as a first-class value where the call site pins the row concretely.
+bump : { r | n : Int } -> { r | n : Int }
+bump rec =
+    { rec | n = rec.n + 1 }
+
+
+apply : ({ n : Int, label : String } -> { n : Int, label : String }) -> { n : Int, label : String } -> { n : Int, label : String }
+apply f x =
+    f x
+
+
+main =
+    let ada = { n = 1, label = "a" }
+        result = apply bump ada
+    in Io.println (String.fromInt result.n ++ result.label)

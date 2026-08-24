@@ -1,0 +1,22 @@
+module Main exposing (main)
+
+import Ipe.Io as Io
+import Ipe.String as String
+
+
+-- G1 (return-position row): a pass-through function whose argument and
+-- return types both carry the same open row. The row variable `r` is the
+-- same in both positions, so `R1 -> R1` in the emitted Rust.
+touch : { r | n : Int } -> { r | n : Int }
+touch rec =
+    rec
+
+
+ada : { n : Int, label : String }
+ada =
+    { n = 1, label = "a" }
+
+
+main =
+    let result = touch ada
+    in Io.println (String.fromInt result.n)

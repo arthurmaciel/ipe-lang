@@ -347,6 +347,24 @@ pub fn field_witness_assoc_type_name(field_name: &str) -> String {
     to_camel_case(field_name)
 }
 
+/// The setter-witness trait name for a field — field `name` → `IpeWithName`.
+/// Supertraits `IpeHasName` (an updatable field is always readable), declared
+/// with `pub trait IpeWithName: IpeHasName { fn ipe_with_name(self, v:
+/// Self::Name) -> Self; }`. Used for G2 (update-through-row) emission.
+#[must_use]
+pub fn field_setter_witness_trait_name(field_name: &str) -> String {
+    to_camel_case(&format!("Ipe_with_{field_name}"))
+}
+
+/// The setter-witness method name — field `name` → `ipe_with_name`. The body
+/// `{ rec | name = v }` on a row-typed receiver emits `rec.ipe_with_name(v)`,
+/// which returns `Self` (the caller's concrete struct, preserving all other
+/// fields via `Self { name: v, ..self }`).
+#[must_use]
+pub fn field_setter_witness_method_name(field_name: &str) -> String {
+    format!("ipe_with_{}", mangle_reserved(field_name.to_owned()))
+}
+
 /// The Rust runtime function name a kernel built-in emits.
 ///
 /// Delegates to <code>[`KernelFn::def`].runtime_fn</code> — the authoritative

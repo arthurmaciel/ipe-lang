@@ -916,3 +916,247 @@ fn row_poly_multi_cargo_builds_and_prints_both() {
         "must print both labels — one machine copy of label per record shape"
     );
 }
+
+// ---------------------------------------------------------------------------
+// row_poly_passthrough — G1 (return-position row): a pass-through function
+// whose parameter and return both carry the SAME open row variable. The
+// backend must emit `fn touch<R1: IpeHasN<N = i64> + Clone>(rec: R1) -> R1`.
+// Accept end-to-end.
+// ---------------------------------------------------------------------------
+
+/// ipe-0: `touch : { r | n : Int } -> { r | n : Int }` is the G1 shape —
+/// the return position reuses the SAME row variable as the argument, so the
+/// backend emits `R1 -> R1`. The function body is `rec` (identity), which
+/// threads the row param through. The emitted Rust must have the generic
+/// `R1` as both param and return type.
+#[test]
+fn row_poly_passthrough_lowers_to_r1_to_r1() {
+    let name = "row_poly_passthrough";
+    let entry = golden_dir(name).join("Main.ipe");
+    let out = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join(format!("{name}_ipec_out"));
+    let _ = std::fs::remove_dir_all(&out);
+
+    let Ok(runtime) = ipe::resolve_runtime() else {
+        eprintln!("SKIP {name}: runtime not available");
+        return;
+    };
+
+    let built = ipe::build(&entry, &out, &runtime);
+    assert!(
+        built.is_ok(),
+        "{name} must accept (G1: return-position row reusing the arg row var): {:?}",
+        built.err()
+    );
+
+    let emitted = std::fs::read_to_string(out.join("src").join("main.rs"))
+        .expect("emitted main.rs must exist");
+    assert!(
+        emitted.contains("(rec: R1) -> R1"),
+        "touch must emit R1 -> R1 (same row var in arg + return positions, G1); got \
+         main.rs:\n{emitted}"
+    );
+    assert!(
+        !emitted.contains("dyn Any"),
+        "row passthrough must be static — no type erasure; got main.rs:\n{emitted}"
+    );
+}
+
+/// cargo-0 ∧ run-0: the emitted project compiles (SEAL) and prints the `n`
+/// field of the record passed through `touch`. Gated on `IPE_E2E=1`.
+#[test]
+fn row_poly_passthrough_cargo_builds_and_runs() {
+    if std::env::var("IPE_E2E").is_err() {
+        return;
+    }
+
+    let name = "row_poly_passthrough";
+    let entry = golden_dir(name).join("Main.ipe");
+    let out = std::env::temp_dir().join(format!("ipec_{name}_e2e"));
+    let _ = std::fs::remove_dir_all(&out);
+
+    let Ok(runtime) = ipe::resolve_runtime() else {
+        return;
+    };
+    let built = ipe::build(&entry, &out, &runtime);
+    assert!(
+        built.is_ok(),
+        "ipe build must succeed for {name}: {:?}",
+        built.err()
+    );
+
+    let outcome = crate::support::build_and_run_emitted(name, &out);
+    assert_eq!(
+        outcome.exit_code,
+        Some(0),
+        "{name} binary must exit 0 (SEAL); got {:?}",
+        outcome.exit_code
+    );
+    assert_eq!(outcome.stdout, "1\n", "touch is identity — n stays 1");
+}
+
+// ---------------------------------------------------------------------------
+// row_poly_update — G1 + G2: a row-polymorphic function that UPDATES a field
+// and returns the same open-row type. The body `{ rec | n = rec.n + 1 }`
+// must route through `ipe_with_n()` setter witness rather than direct field
+// mutation on the opaque `R1` generic. Accept end-to-end at two distinct
+// concrete shapes.
+// ---------------------------------------------------------------------------
+
+/// ipe-0: `bump : { r | n : Int } -> { r | n : Int }` with body
+/// `{ rec | n = rec.n + 1 }` must lower without IPE-L0131. The backend must
+/// emit a setter witness `IpeWithN` for field `n`, and the function body
+/// must call `rec.ipe_with_n(…)` rather than a direct struct-field mutation.
+/// Two concrete call sites (`ada : { n, label }` and `bo : { n, tag }`) force
+/// rustc to monomorphise `bump` twice — one machine copy per shape.
+#[test]
+fn row_poly_update_lowers_to_setter_witness() {
+    let name = "row_poly_update";
+    let entry = golden_dir(name).join("Main.ipe");
+    let out = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join(format!("{name}_ipec_out"));
+    let _ = std::fs::remove_dir_all(&out);
+
+    let Ok(runtime) = ipe::resolve_runtime() else {
+        eprintln!("SKIP {name}: runtime not available");
+        return;
+    };
+
+    let built = ipe::build(&entry, &out, &runtime);
+    assert!(
+        built.is_ok(),
+        "{name} must accept (G1 + G2: return-position row + update-through-row): {:?}",
+        built.err()
+    );
+
+    let emitted = std::fs::read_to_string(out.join("src").join("main.rs"))
+        .expect("emitted main.rs must exist");
+    assert!(
+        emitted.contains("pub trait IpeWithN"),
+        "a setter witness trait IpeWithN must be synthesised for the updated field; \
+         got main.rs:\n{emitted}"
+    );
+    assert!(
+        emitted.contains("fn ipe_with_n(self"),
+        "the setter witness method ipe_with_n must be declared; got main.rs:\n{emitted}"
+    );
+    assert!(
+        emitted.contains(".ipe_with_n("),
+        "the update body must route through ipe_with_n (not a bare struct field \
+         mutation on R1); got main.rs:\n{emitted}"
+    );
+    assert!(
+        !emitted.contains("__ipe_rec.n ="),
+        "direct struct-field mutation must NOT appear for a row-generic update; \
+         got main.rs:\n{emitted}"
+    );
+    assert!(
+        !emitted.contains("dyn Any"),
+        "row update must be static — no type erasure; got main.rs:\n{emitted}"
+    );
+}
+
+/// cargo-0 ∧ run-0: the emitted project compiles (SEAL) and prints the
+/// bumped `n` for both shapes. Gated on `IPE_E2E=1`.
+#[test]
+fn row_poly_update_cargo_builds_and_runs() {
+    if std::env::var("IPE_E2E").is_err() {
+        return;
+    }
+
+    let name = "row_poly_update";
+    let entry = golden_dir(name).join("Main.ipe");
+    let out = std::env::temp_dir().join(format!("ipec_{name}_e2e"));
+    let _ = std::fs::remove_dir_all(&out);
+
+    let Ok(runtime) = ipe::resolve_runtime() else {
+        return;
+    };
+    let built = ipe::build(&entry, &out, &runtime);
+    assert!(
+        built.is_ok(),
+        "ipe build must succeed for {name}: {:?}",
+        built.err()
+    );
+
+    let outcome = crate::support::build_and_run_emitted(name, &out);
+    assert_eq!(
+        outcome.exit_code,
+        Some(0),
+        "{name} binary must exit 0 (SEAL); got {:?}",
+        outcome.exit_code
+    );
+    // ada.n = 1 → bump → 2; bo.n = 10 → bump → 11
+    assert_eq!(
+        outcome.stdout, "2 11\n",
+        "bump increments n: ada(1→2), bo(10→11)"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// row_poly_map_update — G1 + G2 + G6: a row-polymorphic update function used
+// as a first-class value in a typed higher-order function. The call site's
+// concrete callback type pins the row, forcing rustc to monomorphise `bump`
+// at that concrete shape. Accept end-to-end.
+// ---------------------------------------------------------------------------
+
+/// ipe-0: `bump : { r | n : Int } -> { r | n : Int }` passed as a value to
+/// `apply : ({ n, label } -> { n, label }) -> { n, label } -> { n, label }`
+/// must emit a `Box<dyn Fn(RecLabelN) -> RecLabelN + …>` wrapping `bump`.
+/// The call site's concrete callback type (`RecLabelN -> RecLabelN`) pins the
+/// row variable to `RecLabelN`, so rustc monomorphises correctly. The emitted
+/// Rust must build (SEAL).
+#[test]
+fn row_poly_map_update_funcvalue_lowers_and_builds() {
+    let name = "row_poly_map_update";
+    let entry = golden_dir(name).join("Main.ipe");
+    let out = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join(format!("{name}_ipec_out"));
+    let _ = std::fs::remove_dir_all(&out);
+
+    let Ok(runtime) = ipe::resolve_runtime() else {
+        eprintln!("SKIP {name}: runtime not available");
+        return;
+    };
+
+    let built = ipe::build(&entry, &out, &runtime);
+    assert!(
+        built.is_ok(),
+        "{name} must accept (G1 + G2 + G6: row-poly fn used as HOF value): {:?}",
+        built.err()
+    );
+}
+
+/// cargo-0 ∧ run-0: the emitted project compiles (SEAL) and prints the
+/// bumped `n` concatenated with the `label`. Gated on `IPE_E2E=1`.
+#[test]
+fn row_poly_map_update_cargo_builds_and_runs() {
+    if std::env::var("IPE_E2E").is_err() {
+        return;
+    }
+
+    let name = "row_poly_map_update";
+    let entry = golden_dir(name).join("Main.ipe");
+    let out = std::env::temp_dir().join(format!("ipec_{name}_e2e"));
+    let _ = std::fs::remove_dir_all(&out);
+
+    let Ok(runtime) = ipe::resolve_runtime() else {
+        return;
+    };
+    let built = ipe::build(&entry, &out, &runtime);
+    assert!(
+        built.is_ok(),
+        "ipe build must succeed for {name}: {:?}",
+        built.err()
+    );
+
+    let outcome = crate::support::build_and_run_emitted(name, &out);
+    assert_eq!(
+        outcome.exit_code,
+        Some(0),
+        "{name} binary must exit 0 (SEAL); got {:?}",
+        outcome.exit_code
+    );
+    // bump {n=1, label="a"} → {n=2, label="a"}; print "2a"
+    assert_eq!(
+        outcome.stdout, "2a\n",
+        "bump via HOF apply: n incremented (1→2) and label preserved (\"a\")"
+    );
+}

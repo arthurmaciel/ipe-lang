@@ -1783,17 +1783,48 @@ fn canon_type_has_open_row(t: &canon::Type) -> bool {
 
 /// Does `sig` embed an open row in a position the backend cannot yet emit?
 ///
-/// The supported shape is a top-level argument-position open row `{ r | f : T,
-/// … }` carrying one or more fields, each of whose field types is itself closed.
-/// The signature is walked as its arrow chain: each argument position accepts
-/// exactly that shape (or any closed type); every other open-row occurrence — in
-/// return position, nested under a container / record / tuple, an
-/// argument-position open row with NO fields, or one whose field type itself
-/// embeds an open row — is unsupported and gated (`IPE-L0131`). A supported
-/// argument row is NOT reported here, so `split_typed_sig` may erase it to an
-/// [`IrType::RowGeneric`] bounded by one witness trait per field, which rustc
-/// monomorphises once per distinct call-site record shape.
+/// The supported shapes are:
+/// - A top-level argument-position open row `{ r | f : T, … }` carrying one
+///   or more fields, each of whose field types is itself closed.
+/// - A return-position open row `{ r | f : T, … }` where `r` was already
+///   declared in argument position with the SAME field set (G1: the
+///   return-position reuse of a bound row generic, emitted as `R1 -> R1`).
+///
+/// Every other open-row occurrence — return position of a NEW row var, nested
+/// under a container/record/tuple, an argument-position open row with NO
+/// fields, or one whose field type itself embeds an open row — is unsupported
+/// and gated (`IPE-L0131`). A supported argument row is NOT reported here, so
+/// `split_typed_sig` may erase it to an [`IrType::RowGeneric`] bounded by one
+/// witness trait per field, which rustc monomorphises once per distinct
+/// call-site record shape.
 fn canon_sig_has_unsupported_open_row(sig: &canon::Type) -> bool {
+    // Collect the set of row-variable symbols declared in argument position.
+    // These are allowed to reappear in return position (G1: `R1 -> R1`).
+    let mut arg_row_vars: BTreeSet<Symbol> = BTreeSet::new();
+    canon_sig_collect_arg_row_vars(sig, &mut arg_row_vars);
+    canon_sig_unsupported_inner(sig, &arg_row_vars)
+}
+
+/// Collect every row-variable symbol that appears in a supported
+/// argument-position open row in the given signature. Used to decide which
+/// return-position rows are G1-allowed.
+fn canon_sig_collect_arg_row_vars(sig: &canon::Type, out: &mut BTreeSet<Symbol>) {
+    let mut cur = sig;
+    while let canon::Type::Lambda(arg, rest) = cur {
+        if let canon::Type::RecordOpen(row_var, fields) = arg.as_ref() {
+            // Only a supported arg row contributes: non-empty fields, no
+            // nested open rows in field types.
+            if !fields.is_empty() && !fields.iter().any(|(_, f)| canon_type_has_open_row(f)) {
+                out.insert(*row_var);
+            }
+        }
+        cur = rest.as_ref();
+    }
+}
+
+/// Inner walk used by [`canon_sig_has_unsupported_open_row`] after
+/// [`canon_sig_collect_arg_row_vars`] has populated `arg_row_vars`.
+fn canon_sig_unsupported_inner(sig: &canon::Type, arg_row_vars: &BTreeSet<Symbol>) -> bool {
     match sig {
         canon::Type::Lambda(arg, rest) => {
             let arg_unsupported = match arg.as_ref() {
@@ -1810,9 +1841,21 @@ fn canon_sig_has_unsupported_open_row(sig: &canon::Type) -> bool {
                 // an open row anywhere (nested rows are not yet emittable).
                 other => canon_type_has_open_row(other),
             };
-            arg_unsupported || canon_sig_has_unsupported_open_row(rest)
+            arg_unsupported || canon_sig_unsupported_inner(rest, arg_row_vars)
         }
-        // The trailing (return) type: any open row here is unsupported.
+        // The trailing (return) type: a return-position open row is supported
+        // only when its row variable was already declared in argument position
+        // with a non-empty, closed-field set (G1). Any other return-position
+        // row is unsupported.
+        canon::Type::RecordOpen(row_var, fields) => {
+            // A return-position row that shares its var with an arg-position row
+            // is G1-allowed: the function returns the same generic record it
+            // received, emitted as `R1 -> R1`. The fields must match the arg's
+            // (the type checker enforced unification), but we only need to know
+            // the var was declared — the field-type guard runs at arg-position
+            // collection time. A field-less row is still degenerate even here.
+            fields.is_empty() || !arg_row_vars.contains(row_var)
+        }
         ret => canon_type_has_open_row(ret),
     }
 }
@@ -1980,8 +2023,25 @@ fn escapes(body: &Expr, row_syms: &BTreeSet<Symbol>, tail_sym: Option<Symbol>) -
         }
         Expr::Record { fields, .. } => fields.iter().any(|(_, v)| escapes(v, row_syms, None)),
         Expr::Update { record, fields } => {
-            escapes(record, row_syms, None)
-                || fields.iter().any(|(_, v)| escapes(v, row_syms, None))
+            // G2 (update-through-row): `{ rec | f = v }` where `rec` is the
+            // direct row-typed parameter in TAIL position. The emitter routes
+            // this through the `ipe_with_f(v)` setter witness, which returns
+            // `Self` (the same `R1` generic) — so the whole Update expression
+            // is safe at the tail return, exactly like a bare `Var(row_sym)`.
+            // The record must be a plain `Var` (not `CloneVar`) of the tail sym,
+            // and all updated field values must not themselves escape row syms.
+            let record_is_tail_row = tail_sym.is_some_and(
+                |ts| matches!(record.as_ref(), Expr::Var(s) if *s == ts && row_syms.contains(s)),
+            );
+            if record_is_tail_row {
+                // The update receiver is the tail row sym: safe. Check that
+                // the update field values themselves do not escape row syms.
+                fields.iter().any(|(_, v)| escapes(v, row_syms, None))
+            } else {
+                // Any other update receiver: the old containment check.
+                escapes(record, row_syms, None)
+                    || fields.iter().any(|(_, v)| escapes(v, row_syms, None))
+            }
         }
         Expr::Lambda { body, .. } | Expr::SharedLambda { body, .. } => {
             escapes(body, row_syms, None)
@@ -5564,7 +5624,124 @@ fn body_tail_threaded_param(expr: &Expr, params: &BTreeSet<Symbol>) -> Option<Sy
         Expr::Destructure { binder, body, .. } if !pat_binds_any(binder, params) => {
             body_tail_threaded_param(body, params)
         }
+        // G2 (update-through-row): `{ rec | f = v }` at the tail position
+        // threads `rec` through (the update returns `Self` = the same generic
+        // record). Recognised so that the `escapes` check's tail-sym exemption
+        // can whitelist this shape, and so the wildcard-`any` return tie-back
+        // follows the row param's type rather than a divergent carrier.
+        Expr::Update { record, .. } => {
+            if let Expr::Var(s) | Expr::CloneVar(s) = record.as_ref()
+                && params.contains(s)
+            {
+                return Some(*s);
+            }
+            None
+        }
         _ => None,
+    }
+}
+
+/// Walk `body` and populate `row_params[i].updated_fields` for every
+/// `{ rec | f = … }` update expression whose base `rec` is a row-typed
+/// parameter binder. `sym_to_rp` maps row binder symbols to their index in
+/// `row_params`.
+///
+/// This is the G2 collection pass: a field updated in the body requires an
+/// `IpeWithF` setter witness so the backend can emit `rec.ipe_with_f(v)` on
+/// the opaque `R{n}` generic instead of a bare struct update (which would
+/// require knowing the concrete type name at the call site).
+fn collect_row_update_fields(
+    body: &Expr,
+    sym_to_rp: &std::collections::HashMap<Symbol, usize>,
+    row_params: &mut Vec<RowParam>,
+) {
+    match body {
+        // The core case: `{ rec | f1 = v1, f2 = v2 }` where `rec` is a row param.
+        Expr::Update { record, fields } => {
+            if let Expr::Var(s) | Expr::CloneVar(s) = record.as_ref()
+                && let Some(&rp_idx) = sym_to_rp.get(s)
+                && let Some(rp) = row_params.get_mut(rp_idx)
+            {
+                for (field_sym, _) in fields {
+                    rp.updated_fields.insert(*field_sym);
+                }
+            }
+            // Recurse into the field value expressions (they may contain
+            // further row updates in nested lets/ifs).
+            collect_row_update_fields(record, sym_to_rp, row_params);
+            for (_, v) in fields {
+                collect_row_update_fields(v, sym_to_rp, row_params);
+            }
+        }
+        // Value-carrying wrappers: descend into sub-expressions.
+        Expr::Let { value, body, .. } | Expr::Destructure { value, body, .. } => {
+            collect_row_update_fields(value, sym_to_rp, row_params);
+            collect_row_update_fields(body, sym_to_rp, row_params);
+        }
+        Expr::If { cond, then_, else_ } => {
+            collect_row_update_fields(cond, sym_to_rp, row_params);
+            collect_row_update_fields(then_, sym_to_rp, row_params);
+            collect_row_update_fields(else_, sym_to_rp, row_params);
+        }
+        Expr::Match(m) => {
+            collect_row_update_fields(m.scrutinee(), sym_to_rp, row_params);
+            for arm in m.arms() {
+                collect_row_update_fields(&arm.body, sym_to_rp, row_params);
+            }
+        }
+        Expr::BinOp { lhs, rhs, .. } => {
+            collect_row_update_fields(lhs, sym_to_rp, row_params);
+            collect_row_update_fields(rhs, sym_to_rp, row_params);
+        }
+        Expr::Call { args, .. } | Expr::Ctor { args, .. } | Expr::TailRecur { args } => {
+            for a in args {
+                collect_row_update_fields(a, sym_to_rp, row_params);
+            }
+        }
+        Expr::Apply { func, args } => {
+            collect_row_update_fields(func, sym_to_rp, row_params);
+            for a in args {
+                collect_row_update_fields(a, sym_to_rp, row_params);
+            }
+        }
+        Expr::Lambda { body, .. }
+        | Expr::SharedLambda { body, .. }
+        | Expr::TailLoop { body, .. } => {
+            collect_row_update_fields(body, sym_to_rp, row_params);
+        }
+        Expr::Record { fields, .. } => {
+            for (_, v) in fields {
+                collect_row_update_fields(v, sym_to_rp, row_params);
+            }
+        }
+        Expr::Tuple(items) | Expr::List { items, .. } => {
+            for i in items {
+                collect_row_update_fields(i, sym_to_rp, row_params);
+            }
+        }
+        Expr::Cons { head, tail } => {
+            collect_row_update_fields(head, sym_to_rp, row_params);
+            collect_row_update_fields(tail, sym_to_rp, row_params);
+        }
+        Expr::TaskSeq { effect, rest } => {
+            collect_row_update_fields(effect, sym_to_rp, row_params);
+            collect_row_update_fields(rest, sym_to_rp, row_params);
+        }
+        Expr::ListIndexClone { list, .. } | Expr::ListLenCheck { list, .. } => {
+            collect_row_update_fields(list, sym_to_rp, row_params);
+        }
+        // Leaves: nothing to descend into.
+        Expr::Int(_)
+        | Expr::Bool(_)
+        | Expr::Float(_)
+        | Expr::Str(_)
+        | Expr::PathLit(_)
+        | Expr::Char(_)
+        | Expr::Unit
+        | Expr::Var(_)
+        | Expr::CloneVar(_)
+        | Expr::Access { .. }
+        | Expr::FuncValue { .. } => {}
     }
 }
 
@@ -14160,6 +14337,7 @@ impl<'a> Lowerer<'a> {
                             row_params.push(RowParam {
                                 var: *sym,
                                 fields: row_fields,
+                                updated_fields: BTreeSet::new(),
                             });
                             param_pinned.insert(*sym);
                             *ir_ty = IrType::RowGeneric(*sym);
@@ -14216,16 +14394,36 @@ impl<'a> Lowerer<'a> {
                         .collect();
                     // When the body threads the row param to the return (`any ->
                     // any`), that bare `Var(row_sym)` at the tail position is safe
-                    // — Rust can return a generic value directly. The tail sym is
-                    // exempted from the escape check's bare-Var test at tail
-                    // position only; other occurrences (aliases, call args) still
-                    // trigger the guard.
+                    // — Rust can return a generic value directly. A functional
+                    // update `{ rec | f = v }` in tail position is also safe for
+                    // G2 (the Update emits through the `ipe_with_f` setter witness,
+                    // returning `Self` = `R1`). The tail sym is exempted from the
+                    // escape check's bare-Var / tail-Update test at tail position
+                    // only; other occurrences (aliases, call args) still trigger
+                    // the guard.
                     let param_binders: BTreeSet<Symbol> = params.iter().map(|(s, _)| *s).collect();
                     let tail_sym = body_tail_threaded_param(&lowered_body, &param_binders)
                         .filter(|tp| row_syms.contains(tp));
                     if escapes(&lowered_body, &row_syms, tail_sym) {
                         return Err(unsupported(sig_span, Feature::RowPolyRecordAnnotation));
                     }
+                    // G2: collect field names updated on row-typed params in the
+                    // body. For each `{ rec | f = … }` where `rec` is a row param
+                    // binder, record `f` in that `RowParam.updated_fields` so the
+                    // backend synthesises the `IpeWithF` setter witness and bound.
+                    // Build a map from row binder symbol → row_params index.
+                    let mut sym_to_rp: std::collections::HashMap<Symbol, usize> =
+                        std::collections::HashMap::new();
+                    for (i, rp) in row_params.iter().enumerate() {
+                        if let Some(pos) = params
+                            .iter()
+                            .position(|(_, ty)| *ty == IrType::RowGeneric(rp.var))
+                            && let Some((binder, _)) = params.get(pos)
+                        {
+                            sym_to_rp.insert(*binder, i);
+                        }
+                    }
+                    collect_row_update_fields(&lowered_body, &sym_to_rp, &mut row_params);
                 }
                 // Each quantified variable carries the Rust trait bound its
                 // body-imposed super-type obligations require (empty for a
@@ -14744,6 +14942,7 @@ impl<'a> Lowerer<'a> {
                         .iter()
                         .map(|(fname, fty)| Ok((*fname, self.ir_type_from_canon(fty, generics)?)))
                         .collect::<DResult<_>>()?,
+                    updated_fields: BTreeSet::new(),
                 });
                 IrType::RowGeneric(*row_var)
             } else {
@@ -14780,27 +14979,32 @@ impl<'a> Lowerer<'a> {
             cur = rest.as_ref();
         }
         // The trailing type is what remains after every parameter pattern has
-        // consumed one arrow. If it STILL embeds an open row, that row was not
-        // bound as a direct top-level parameter — it sits in return position, or
-        // in a later-arrow arg the body reaches only through an inner lambda
-        // (`f n = \rec -> rec.name`, where `n` consumes the first arrow and the
-        // `{r|..} -> String` row arrow lands here). The signature gate admits an
-        // open row per arrow, so such a program passes it, but there is
-        // no witness-getter route for a row that never became a bound param;
-        // lowering `cur` would drive the row into `ir_type_from_canon`'s
-        // fail-closed backstop and ICE (IPE-I0001). Reject it cleanly here — a
-        // well-typed program must surface IPE-L0131, never an ICE.
-        if canon_type_has_open_row(cur) {
+        // consumed one arrow. Normally, if it still embeds an open row it is an
+        // unsupported shape and must surface IPE-L0131. The one exception is a
+        // return-position `{ r | f : T, … }` where `r` was ALREADY declared as
+        // a bound row parameter (G1: the function returns the same open record
+        // it received, emitted as `fn f<R1: …>(p: R1) -> R1 { … }`). The
+        // signature gate (`canon_sig_has_unsupported_open_row`) has already
+        // checked and allowed this form before `split_typed_sig` is reached, so
+        // it is safe to map it to `IrType::RowGeneric(row_var)` directly.
+        let ret_ir = if let canon::Type::RecordOpen(row_var, _) = cur {
+            let bound_row_var = row_params.iter().find(|rp| rp.var == *row_var);
+            if let Some(_rp) = bound_row_var {
+                // G1: return the same row generic as the already-bound parameter.
+                IrType::RowGeneric(*row_var)
+            } else {
+                // An unrecognised return-position row: the gate should have
+                // caught this; surface a clean error instead of ICE.
+                return Err(unsupported(sig_span, Feature::RowPolyRecordAnnotation));
+            }
+        } else if canon_type_has_open_row(cur) {
+            // Any other return-position open-row form is still unsupported.
             return Err(unsupported(sig_span, Feature::RowPolyRecordAnnotation));
-        }
+        } else {
+            self.ir_type_from_canon(cur, generics)?
+        };
         // The trailing type is the return type.
-        Ok((
-            params,
-            prologue,
-            self.ir_type_from_canon(cur, generics)?,
-            any_syms_minted,
-            row_params,
-        ))
+        Ok((params, prologue, ret_ir, any_syms_minted, row_params))
     }
 
     /// Lower ONE binding-position parameter pattern (a function-def head param or

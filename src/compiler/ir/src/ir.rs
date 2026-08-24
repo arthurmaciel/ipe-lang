@@ -862,10 +862,19 @@ pub struct Func {
 /// bound per field on this variable's Rust generic, so a body field read
 /// resolves through the field's getter and rustc monomorphises the call to the
 /// concrete record struct.
+///
+/// `updated_fields` records the subset of `fields` that the function body
+/// updates via functional-update syntax (`{ rec | f = … }`). For each such
+/// field the backend emits an `IpeWithF` setter witness trait and bound, so
+/// a body update emits `rec.ipe_with_f(v)` on the generic receiver rather
+/// than a bare struct rebuild (which requires the concrete type name).
 #[derive(Clone, PartialEq, Eq, Debug, serde::Serialize, serde::Deserialize)]
 pub struct RowParam {
     pub var: Symbol,
     pub fields: BTreeMap<Symbol, IrType>,
+    /// Field names from `fields` that are updated in the function body.
+    /// Drives `IpeWithF` setter witness synthesis in the backend.
+    pub updated_fields: BTreeSet<Symbol>,
 }
 
 /// The type lattice.

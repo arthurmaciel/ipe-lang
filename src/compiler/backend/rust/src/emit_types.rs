@@ -1200,16 +1200,43 @@ pub fn row_witness_field_names(program: &Program) -> BTreeSet<Symbol> {
     names
 }
 
+/// Every distinct field name that appears in `updated_fields` of any row
+/// parameter across the whole program. These are the fields for which an
+/// `IpeWithF` setter-witness trait and per-struct impl must be synthesised
+/// (G2: update-through-row).
+pub fn row_updated_field_names(program: &Program) -> BTreeSet<Symbol> {
+    let mut names = BTreeSet::new();
+    for module in &program.modules {
+        for func in &module.funcs {
+            for row in &func.row_params {
+                names.extend(row.updated_fields.iter().copied());
+            }
+        }
+    }
+    names
+}
+
 /// Synthesise the per-field witness traits and their per-struct impls that let a
-/// row-polymorphic function read a field off a rustc-generic record parameter.
+/// row-polymorphic function read (and optionally update) a field off a
+/// rustc-generic record parameter.
 ///
-/// For each field name `f` required by any row bound in the program, one trait
-/// `IpeHasF { type F; fn ipe_f(&self) -> &Self::F; }` is emitted, plus one impl
-/// for EVERY registry struct that carries `f`. The impl's associated type is the
-/// struct's own field type (rendered in the struct's generic scope), so the row
-/// bound `R: IpeHasF<F = T>` type-checks against exactly the shapes the solver
-/// already proved carry `f : T`. Static dispatch only — rustc monomorphises each
-/// getter call to the concrete struct; no `dyn`, no reflection.
+/// For each field name `f` required by any row bound in the program, one getter
+/// trait `IpeHasF { type F; fn ipe_f(&self) -> &Self::F; }` is emitted, plus
+/// one impl for EVERY registry struct that carries `f`. The impl's associated
+/// type is the struct's own field type (rendered in the struct's generic scope),
+/// so the row bound `R: IpeHasF<F = T>` type-checks against exactly the shapes
+/// the solver already proved carry `f : T`. Static dispatch only — rustc
+/// monomorphises each getter call to the concrete struct; no `dyn`, no
+/// reflection.
+///
+/// For each field name `f` that also appears in `updated_fields` of any row
+/// parameter (G2: update-through-row), a setter trait `IpeWithF: IpeHasF { fn
+/// ipe_with_f(self, v: Self::F) -> Self; }` is also emitted, plus one impl per
+/// registry struct carrying `f`. The `..self` functional-update in each impl
+/// preserves all untouched fields. The supertrait relationship
+/// (`IpeWithF: IpeHasF`) makes "updatable implies readable" a structural
+/// invariant — the bound `R: IpeWithF` implies `R: IpeHasF`, so both reads and
+/// updates on the same field are always available together.
 ///
 /// Returns the empty string when the program has no row-polymorphic annotation.
 pub fn emit_row_witnesses(ctx: &EmitCtx, program: &Program) -> DResult<String> {
@@ -1217,21 +1244,38 @@ pub fn emit_row_witnesses(ctx: &EmitCtx, program: &Program) -> DResult<String> {
     if field_names.is_empty() {
         return Ok(String::new());
     }
+    let updated_field_names = row_updated_field_names(program);
     let mut out = String::new();
     for field_sym in &field_names {
         let field_name = ctx.resolve_ident(*field_sym)?.to_owned();
         let trait_name = field_witness_trait_name(&field_name);
         let assoc = field_witness_assoc_type_name(&field_name);
         let getter = field_witness_getter_name(&field_name);
-        // The trait: one associated type (the field's type) and one borrowing
-        // getter. The associated type keeps the trait type-agnostic so a single
-        // trait serves the field at every type it occurs at across structs.
+        // Getter trait: one associated type (the field's type) and one
+        // borrowing getter. The associated type keeps the trait type-agnostic
+        // so a single trait serves the field at every type it occurs at across
+        // structs.
         let _ = write!(
             out,
             "pub trait {trait_name} {{\n    type {assoc};\n    fn {getter}(&self) -> &Self::{assoc};\n}}\n"
         );
-        // One impl per registry struct carrying this field — total over the
-        // struct namespace, no reachability analysis (correctness needs none).
+        // Setter trait for fields that are updated in some row-poly body (G2).
+        // Supertraits the getter: `IpeWithF: IpeHasF`. The setter consumes
+        // `self` and returns `Self` so the `..self` rebuild in each struct impl
+        // preserves the residual fields without naming the struct at the call
+        // site.
+        let needs_setter = updated_field_names.contains(field_sym);
+        if needs_setter {
+            let setter_trait = crate::naming::field_setter_witness_trait_name(&field_name);
+            let setter_method = crate::naming::field_setter_witness_method_name(&field_name);
+            let _ = write!(
+                out,
+                "pub trait {setter_trait}: {trait_name} {{\n    fn {setter_method}(self, v: Self::{assoc}) -> Self;\n}}\n"
+            );
+        }
+        // One getter impl per registry struct carrying this field — total over
+        // the struct namespace, no reachability analysis (correctness needs
+        // none).
         for rec in ctx.record_structs() {
             let Some((field_ipe_name, field_ty)) =
                 rec.fields.iter().find(|(fname, _)| *fname == field_name)
@@ -1254,15 +1298,30 @@ pub fn emit_row_witnesses(ctx: &EmitCtx, program: &Program) -> DResult<String> {
                     format!("<{}>", params.join(", ")),
                 )
             };
-            let head = impl_header(
-                &decl_clause,
-                &trait_name,
-                &format!("{}{use_clause}", rec.name),
-            );
+            let struct_ty = format!("{}{use_clause}", rec.name);
+            let head = impl_header(&decl_clause, &trait_name, &struct_ty);
             let _ = write!(
                 out,
                 "{head}\n    type {assoc} = {assoc_ty};\n    fn {getter}(&self) -> &{assoc_ty} {{ &self.{ident} }}\n}}\n"
             );
+            // Setter impl for this (field, struct) pair when needed.
+            if needs_setter {
+                let setter_trait = crate::naming::field_setter_witness_trait_name(&field_name);
+                let setter_method = crate::naming::field_setter_witness_method_name(&field_name);
+                let setter_head = impl_header(&decl_clause, &setter_trait, &struct_ty);
+                // The `..self` functional update preserves all fields NOT
+                // being updated. The struct name IS known here (inside the
+                // per-struct impl loop), so the update is a concrete struct
+                // rebuild: `StructName { field: v, ..self }`. This is the
+                // only place in the whole emission that needs the concrete
+                // struct name — it is the entire point of the impl
+                // separation.
+                let struct_name = &rec.name;
+                let _ = write!(
+                    out,
+                    "{setter_head}\n    fn {setter_method}(self, v: {assoc_ty}) -> Self {{ {struct_name}{use_clause} {{ {ident}: v, ..self }} }}\n}}\n"
+                );
+            }
         }
     }
     Ok(out)
