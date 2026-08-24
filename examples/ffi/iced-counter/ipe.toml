@@ -1,0 +1,51 @@
+name = "iced-counter"
+version = "0.1.0"
+entry = "src/Main.ipe"
+backend = "rust"
+
+[source]
+root = "src"
+
+# The REAL crates.io `iced` GUI crate, auto-FFI-bound shim-free. Bindings are
+# generated locally (sandboxed) into .ipe/cache/ffi/rust, which is gitignored —
+# run `ipe install --yes --allow-build-scripts` to produce them before building.
+[rust.dependencies]
+iced = "=0.12.1"
+
+# ── The Iced counter's create-types surface (design doc §6, row 1) ────────────
+# Iced's Elm architecture maps directly onto Ipê TEA: a `Model` struct, a
+# `Message` enum, and `update`/`view` closures. Each needs one `[rust.define.*]`
+# form. These are author-declared native type definitions shown under informed
+# consent at `ipe install`; every name/field/variant/derive re-parses through
+# the driver's closed decode gate, so nothing here routes raw text into emitted
+# Rust.
+
+# The Model — a struct (P1, `[rust.define.struct]`, landed #38).
+[[rust.define.struct]]
+crate = "iced"
+name = "Counter"
+fields = { value = "i64" }
+derives = ["Default", "Clone"]
+
+# The Message — an enum (P4, `[rust.define.enum]`, THIS spike). Iced's counter
+# `Message` is two unit variants; the driver emits the `#[derive]`ed definition
+# plus a nullary constructor per variant into `_bindings.rs`.
+# `Debug` is in the derive allowlist because Iced's `Sandbox::Message: Debug`
+# bound requires it (and `Debug` is total for every closed carrier — no IEEE-754
+# hazard, unlike Eq/Ord/Hash).
+[[rust.define.enum]]
+crate = "iced"
+name = "Message"
+variants = { Increment = [], Decrement = [] }
+derives = ["Clone", "Debug"]
+
+# The update/view functions — closures (P2, `[rust.define.closure]`, landed
+# #347/#350). `update : Message -> Counter -> Counter` and
+# `view : Counter -> Element Message`. NOTE: these declare a scalar-return sync
+# adapter here (the closed-carrier subset the sync adapter supports); the exact
+# Iced arrows return the opaque `Counter`/`Element<Message>`, which needs the
+# opaque-return + boxed-closure-as-Ipê-value plumbing filed as follow-up gaps.
+[[rust.define.closure]]
+crate = "iced"
+name = "counter_update"
+signature = "Fn(Int) -> Int + Send + Sync + 'static"

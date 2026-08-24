@@ -1,9 +1,0 @@
-module Package exposing (package)
-
-
-package =
-    Package.named "iced-counter"
-        |> Package.version "0.1.0"
-        |> Package.rustDependencies
-            [ Package.rustDep "iced" "=0.12.1"
-            ]
