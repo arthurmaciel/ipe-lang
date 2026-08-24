@@ -187,10 +187,12 @@ used after `iat + AuthMaxLifetime`, regardless of any later re-issue. The cap is
 stamped at first issue inside the signed segment and cannot be extended by the
 client or by a re-issue — a tampered cap fails signature verification.
 
-The cap defaults to **8 h**. Set `IPE_AUTH_MAX_LIFETIME=<seconds>` in the
-process environment to override it without a rebuild (env wins over the in-code
-setting). The in-code `Web.authMaxLifetime` setting is planned — see
-[`docs/architecture/tbd/config-design.md`](../architecture/tbd/config-design.md).
+The cap defaults to **8 h**. Override it in two ways (env wins):
+
+- **In-code**: `Web.authMaxLifetime <seconds>` in the `Web.appWith` settings list.
+- **Environment**: `IPE_AUTH_MAX_LIFETIME=<seconds>` overrides the in-code setting
+  without a rebuild.
+
 A non-positive value falls closed to the 8 h default.
 
 A session token without a `cap` claim (minted before this feature) is bounded

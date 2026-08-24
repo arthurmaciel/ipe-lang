@@ -134,6 +134,30 @@ fn bare_int_web_csrf_is_rejected() {
     );
 }
 
+/// THE SEAL: `Web.authMaxLifetime <seconds>` is accepted (no N0005) and (under
+/// `IPE_E2E=1`) the emitted crate `cargo build`s. Proves the `WebAuthMaxLifetime`
+/// kernel is wired through canon/constrain/lower.
+#[test]
+fn auth_max_lifetime_seal_builds() {
+    const GOLDEN: &str = "app_settings_auth_max_lifetime_seal";
+    let root = repo_root();
+    let entry = fixture_entry(&root, GOLDEN);
+    let out = std::env::temp_dir().join("ipec_app_settings_auth_max_lifetime_seal_e2e");
+    let _ = std::fs::remove_dir_all(&out);
+
+    let Ok(runtime) = ipe::resolve_runtime() else {
+        return; // resolver unavailable — skip
+    };
+    let built = ipe::build(&entry, &out, &runtime);
+    assert!(
+        built.is_ok(),
+        "`Web.authMaxLifetime` must be accepted (no N0005) and emit a buildable crate, \
+         got: {built:?}"
+    );
+
+    crate::support::assert_seal_builds(GOLDEN, &out);
+}
+
 /// `Log.level 5` — a bare `Int` where the closed `LogLevel` ADT is expected —
 /// must be an ipe-time type error.
 #[test]

@@ -1749,6 +1749,8 @@ pub enum StdlibKernel {
     WebCsrf,
     /// `Web.sessionTtl : Int -> Setting Web` — web-only session-TTL setting (seconds).
     WebSessionTtl,
+    /// `Web.authMaxLifetime : Int -> Setting Web` — absolute session-lifetime cap (seconds).
+    WebAuthMaxLifetime,
     // ── Config-tag ADT constructors (nullary; project to a raw Int tag) ──────
     /// `Host.loopback : HostMode` — bind `127.0.0.1` only. Projects to tag `0`.
     HostLoopback,
@@ -3516,6 +3518,13 @@ impl StdlibKernel {
             Self::DbUrlSetting => d("Db", "url", 1, Pure, "ipe_setting_db_url"),
             Self::WebCsrf => d("Web", "csrf", 1, Pure, "ipe_setting_web_csrf"),
             Self::WebSessionTtl => d("Web", "sessionTtl", 1, Pure, "ipe_setting_web_session_ttl"),
+            Self::WebAuthMaxLifetime => d(
+                "Web",
+                "authMaxLifetime",
+                1,
+                Pure,
+                "ipe_setting_web_auth_max_lifetime",
+            ),
             // Config-tag ADT constructors — nullary, emitted inline as a raw `Int`
             // tag (the `runtime_fn` name is never called; it is allowlisted in the
             // runtime symbol-resolution test as inline-emitted).
@@ -4883,6 +4892,7 @@ impl StdlibKernel {
         Self::DbUrlSetting,
         Self::WebCsrf,
         Self::WebSessionTtl,
+        Self::WebAuthMaxLifetime,
         // Config-tag ADT constructors
         Self::HostLoopback,
         Self::HostAllInterfaces,
@@ -9667,6 +9677,7 @@ impl StdlibKernel {
             | Self::DbUrlSetting
             | Self::WebCsrf
             | Self::WebSessionTtl
+            | Self::WebAuthMaxLifetime
             // Config-tag ADT constructors — a bare closed-tag value discloses no
             // capability (it is just an `Int` at emit).
             | Self::HostLoopback

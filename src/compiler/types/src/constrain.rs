@@ -7466,6 +7466,8 @@ impl<'a> Builder<'a> {
             K::WebCsrf => fun(csrf_mode(), setting(shape_web())),
             // `Web.sessionTtl : Int -> Setting Web` — seconds; web-pinned.
             K::WebSessionTtl => fun(int(), setting(shape_web())),
+            // `Web.authMaxLifetime : Int -> Setting Web` — absolute cap seconds; web-pinned.
+            K::WebAuthMaxLifetime => fun(int(), setting(shape_web())),
             // Config-tag ADT constructors — nullary values of their closed types.
             K::HostLoopback | K::HostAllInterfaces | K::HostEnvDriven => host_mode(),
             K::LevelDebug | K::LevelInfo | K::LevelWarn | K::LevelError => log_level(),
@@ -9966,6 +9968,7 @@ mod registry_phase_c_tests {
             K::DbUrlSetting,
             K::WebCsrf,
             K::WebSessionTtl,
+            K::WebAuthMaxLifetime,
             // Config-tag ADT constructors (9, Ipê-new) — nullary values of the
             // closed `HostMode` / `LogLevel` / `CsrfMode` types, projected to a raw
             // `Int` tag at emit.
