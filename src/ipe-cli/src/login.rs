@@ -200,13 +200,44 @@ fn poll_for_token(device: &DeviceGrant) -> Result<String, CliError> {
     }
 }
 
+/// Percent-encode a string for use in an `application/x-www-form-urlencoded`
+/// body. Unreserved characters (RFC 3986 §2.3: letters, digits, `-`, `_`, `.`,
+/// `~`) pass through; every other byte is encoded as `%XX`. Spaces become `%20`
+/// (not `+`, the safer choice for OAuth form bodies). This is a standalone
+/// implementation so the crate needs no new dependency.
+fn url_encode(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    for byte in s.bytes() {
+        match byte {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
+                out.push(byte as char);
+            }
+            other => {
+                out.push('%');
+                out.push(
+                    char::from_digit(u32::from(other) >> 4, 16)
+                        .unwrap_or('0')
+                        .to_ascii_uppercase(),
+                );
+                out.push(
+                    char::from_digit(u32::from(other) & 0xf, 16)
+                        .unwrap_or('0')
+                        .to_ascii_uppercase(),
+                );
+            }
+        }
+    }
+    out
+}
+
 /// POST a form-encoded body and parse the JSON response. Shells out to `curl`
-/// (the crate carries no HTTP client, mirroring the `git`-based resolver); every
-/// field value here is URL-safe, so no extra encoding is needed.
+/// (the crate carries no HTTP client, mirroring the `git`-based resolver).
+/// Each field key and value is URL-encoded so a value with `&`, `=`, `:`, or
+/// other special characters cannot break the form or inject additional fields.
 fn post_form(url: &str, fields: &[(&str, &str)]) -> Result<serde_json::Value, CliError> {
     let body = fields
         .iter()
-        .map(|(k, v)| format!("{k}={v}"))
+        .map(|(k, v)| format!("{}={}", url_encode(k), url_encode(v)))
         .collect::<Vec<_>>()
         .join("&");
     let output = Command::new("curl")
@@ -350,6 +381,28 @@ fn login_error(message: &str) -> CliError {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn url_encode_passes_unreserved_chars_through() {
+        assert_eq!(url_encode("abc-XYZ_0.9~"), "abc-XYZ_0.9~");
+    }
+
+    #[test]
+    fn url_encode_encodes_colon_and_ampersand() {
+        // Colons in the grant-type value must be encoded so they cannot split
+        // the form field.
+        assert_eq!(
+            url_encode("urn:ietf:params:oauth:grant-type:device_code"),
+            "urn%3Aietf%3Aparams%3Aoauth%3Agrant-type%3Adevice_code"
+        );
+        // An ampersand in a value must be encoded so it cannot inject a new field.
+        assert_eq!(url_encode("a&b=c"), "a%26b%3Dc");
+    }
+
+    #[test]
+    fn url_encode_encodes_space_as_percent20() {
+        assert_eq!(url_encode("hello world"), "hello%20world");
+    }
 
     #[test]
     fn parses_a_device_code_response() {
