@@ -2504,13 +2504,13 @@ fn assemble_project_files(
         {
             mod_rs.push_str(RUNTIME_MOD_RS_TEA_APPEND);
         }
-        // `web/csrf.rs` unconditionally re-exports `crate::server::csrf_*`,
-        // so `pub mod server;` must be emitted whenever the web module is
-        // declared — not just for explicit Ipe.Http.Server use.  The Cargo
-        // manifest already adds `"server"` to default features via
-        // `server_cargo_toml` for all three of uses_server/uses_web/uses_webview
-        // (see the `server_cargo_toml` call above), so the feature flag is
-        // always on; this mirrors the module declaration to match.
+        // `web/csrf.rs` unconditionally re-exports `crate::server::csrf_*`
+        // (`csrf_gen_token`, `csrf_token_well_formed`, `csrf_pair_valid`), so
+        // `pub mod server;` must be emitted whenever the web module is declared —
+        // not just for explicit `Ipe.Http.Server` use. `server_cargo_toml`
+        // already adds `"server"` to default features for all three of
+        // uses_server/uses_web/uses_webview, so the feature flag is always on;
+        // this mirrors the module declaration to match.
         if ctx.uses_server || ctx.uses_web || ctx.uses_webview {
             mod_rs.push_str(RUNTIME_MOD_RS_SERVER_APPEND);
         }
@@ -2520,8 +2520,15 @@ fn assemble_project_files(
         if ctx.uses_websocket {
             mod_rs.push_str(RUNTIME_MOD_RS_WEBSOCKET_APPEND);
         }
-        // Ipe.Auth — append auth module when any Auth kernel is used.
-        if ctx.uses_auth {
+        // Ipe.Auth — append auth module when any Auth kernel is used, OR
+        // when the jwt feature is active. `server.rs`'s `authed_route` builder
+        // (gated `#[cfg(feature = "jwt")]`) calls `crate::auth::auth_verify_token`,
+        // `crate::auth::reissue_context_from_claims`, and
+        // `crate::auth::auth_reissue_token` — so the `auth` module must be
+        // declared whenever `jwt` is in the default feature set, even when the
+        // program uses no direct `Ipe.Auth.*` kernels (e.g. `Server.getAuthed`
+        // only).
+        if ctx.uses_auth || ctx.reaches_jwt() {
             mod_rs.push_str(RUNTIME_MOD_RS_AUTH_APPEND);
         }
         // Ipe.Auth.Principal — append the principal module when `Auth.subject`
@@ -4291,11 +4298,21 @@ fn crypto_cargo_toml(base: &str) -> DResult<String> {
     Ok(result)
 }
 
-/// Build the JWT-enabled `Cargo.toml` by appending the `jsonwebtoken`
-/// dependency before `[profile.dev]`.
+/// Build the JWT-enabled `Cargo.toml` from the given base manifest by:
+///
+/// 1. Adding `"jwt"` to the `default` feature list — `auth.rs` and `server.rs`
+///    in the vendored runtime carry `#[cfg(feature = "jwt")]` guards over
+///    `AuthConfig`, `server_get_authed`, and the JWT sign/verify helpers.
+///    Without `"jwt"` in `default`, those items are compiled out and `main.rs`
+///    references to `AuthConfig` fail with E0425 (ipe exit 0, cargo fails —
+///    a SEAL breach).
+/// 2. Declaring `jwt = []` in the `[features]` table (anchoring on `db = []`,
+///    always present in the base manifest), so the `"jwt"` entry in `default`
+///    refers to a declared feature rather than an undeclared name.
+/// 3. Appending the `jsonwebtoken` dependency before `[profile.dev]`.
 ///
 /// `jwt.rs` (and `auth.rs`, which reaches `crate::jwt`) is the sole consumer of
-/// `jsonwebtoken`. It is a leaf dependency — a program that never encodes or
+/// `jsonwebtoken`. The crate is a leaf — a program that never encodes or
 /// verifies a JWT (and uses no `Ipe.Auth` kernel) pulls it not.
 ///
 /// The version comes from the [`crate_specs`] SSOT (drift-guarded against
@@ -4303,25 +4320,64 @@ fn crypto_cargo_toml(base: &str) -> DResult<String> {
 ///
 /// # Errors
 ///
-/// Returns [`Diagnostic::CompilerBug`] if the `[profile.dev]` anchor is absent —
+/// Returns [`Diagnostic::CompilerBug`] if any anchor string is absent —
 /// a golden-drift invariant violation (fail-loud, never a silent no-op).
 fn jwt_cargo_toml(base: &str) -> DResult<String> {
+    const DEFAULT_PREFIX: &str = "default = [";
+    const DB_FEATURE: &str = "db = []";
+    const DB_JWT_FEATURE: &str = "db = []\njwt = []";
     const PROFILE_ANCHOR: &str = "[profile.dev]";
     let deps = format!(
         "{} = \"{}\"\n\n",
         crate_specs::JSONWEBTOKEN.name,
         crate_specs::JSONWEBTOKEN.version,
     );
-    let anchor_pos = base
+
+    // Step 1a — insert `"jwt"` as the last element of the `default = [...]`
+    // feature list, immediately before its closing `]`.
+    let pfx = base
+        .find(DEFAULT_PREFIX)
+        .ok_or_else(|| Diagnostic::CompilerBug {
+            where_: "ipe_backend_rust::project::jwt_cargo_toml",
+            detail: format!("Cargo.toml anchor {DEFAULT_PREFIX:?} not found — golden drifted"),
+        })?;
+    let search_from = pfx + DEFAULT_PREFIX.len();
+    let rel = base
+        .get(search_from..)
+        .and_then(|s| s.find(']'))
+        .ok_or_else(|| Diagnostic::CompilerBug {
+            where_: "ipe_backend_rust::project::jwt_cargo_toml",
+            detail: "default feature list has no closing ']' — golden drifted".to_owned(),
+        })?;
+    let close = search_from + rel;
+    let mut step1a = String::with_capacity(base.len() + deps.len() + 16);
+    step1a.push_str(base.get(..close).unwrap_or(""));
+    step1a.push_str(r#", "jwt""#);
+    step1a.push_str(base.get(close..).unwrap_or(""));
+
+    // Step 1b — declare `jwt = []` in the `[features]` table so that `"jwt"` in
+    // `default = [...]` refers to a declared feature (Cargo rejects an undeclared
+    // feature reference). Anchor on the `db = []` line, always present in the
+    // base manifest.
+    let step1 = step1a.replacen(DB_FEATURE, DB_JWT_FEATURE, 1);
+    if step1 == step1a {
+        return Err(Diagnostic::CompilerBug {
+            where_: "ipe_backend_rust::project::jwt_cargo_toml",
+            detail: format!("Cargo.toml anchor {DB_FEATURE:?} not found — golden drifted"),
+        });
+    }
+
+    // Step 2 — append `jsonwebtoken` before `[profile.dev]`.
+    let anchor_pos = step1
         .find(PROFILE_ANCHOR)
         .ok_or_else(|| Diagnostic::CompilerBug {
             where_: "ipe_backend_rust::project::jwt_cargo_toml",
             detail: format!("Cargo.toml anchor {PROFILE_ANCHOR:?} not found — golden drifted"),
         })?;
-    let mut result = String::with_capacity(base.len() + deps.len());
-    result.push_str(base.get(..anchor_pos).unwrap_or(""));
+    let mut result = String::with_capacity(step1.len() + deps.len());
+    result.push_str(step1.get(..anchor_pos).unwrap_or(""));
     result.push_str(&deps);
-    result.push_str(base.get(anchor_pos..).unwrap_or(""));
+    result.push_str(step1.get(anchor_pos..).unwrap_or(""));
     Ok(result)
 }
 
@@ -4714,8 +4770,8 @@ mod tests {
     use super::{
         CARGO_DEP_TOML, CARGO_TOML, CARGO_WASM_DEP_TOML, RUNTIME_CONFIG_RS_DB_POSTGRES,
         RUNTIME_CONFIG_RS_DB_SQLITE, RUNTIME_MOD_RS_WEB_APPEND, WASM_CARGO_TOML,
-        async_runtime_cargo_toml, crypto_core_heavy_cargo_toml, db_cargo_toml, server_cargo_toml,
-        shake_ffi_by_fn_ident, web_cargo_toml,
+        async_runtime_cargo_toml, crypto_core_heavy_cargo_toml, db_cargo_toml, jwt_cargo_toml,
+        server_cargo_toml, shake_ffi_by_fn_ident, web_cargo_toml,
     };
     use crate::DbDriver;
     use crate::crate_specs;
@@ -4925,6 +4981,56 @@ mod tests {
     #[test]
     fn crypto_core_heavy_toml_anchor_miss_is_a_compiler_bug() {
         assert!(crypto_core_heavy_cargo_toml("[package]\nname = \"x\"\n").is_err());
+    }
+
+    // ── seal tests: JWT feature in vendored defaults ────────────────────
+
+    /// `jwt_cargo_toml` must insert `"jwt"` into the `default = [...]` list AND
+    /// declare `jwt = []` in `[features]` AND add the `jsonwebtoken` dep.
+    ///
+    /// The vendored `auth.rs` / `server.rs` carry `#[cfg(feature = "jwt")]` guards
+    /// over `AuthConfig`, `server_get_authed`, and the JWT sign/verify helpers.
+    /// Without `"jwt"` in `default`, those items are compiled out and `main.rs`
+    /// references fail with E0425 (ipe exit 0, cargo fails — a SEAL breach).
+    #[test]
+    fn jwt_toml_inserts_feature_and_dep() {
+        let out = jwt_cargo_toml(CARGO_TOML).expect("jwt_cargo_toml must succeed");
+        let def = default_line(&out);
+        assert!(
+            def.contains(r#""jwt""#),
+            r#"default line must contain "jwt" (SEAL: #[cfg(feature="jwt")] items would be compiled out): {def}"#
+        );
+        assert!(
+            out.contains("jwt = []"),
+            "manifest must declare the jwt feature: {out}"
+        );
+        assert!(
+            out.contains(crate_specs::JSONWEBTOKEN.name),
+            "manifest must contain the jsonwebtoken dep: {out}"
+        );
+    }
+
+    /// `jwt_cargo_toml` composes with an async base — `"jwt"` lands after the
+    /// existing default features without displacing them.
+    #[test]
+    fn jwt_toml_composes_with_async_base() {
+        let async_base = async_runtime_cargo_toml(CARGO_TOML).expect("async base");
+        let out = jwt_cargo_toml(&async_base).expect("jwt_cargo_toml on async base");
+        let def = default_line(&out);
+        assert!(
+            def.contains(r#""tokio""#) && def.contains(r#""jwt""#),
+            r#"async+jwt default must contain both "tokio" and "jwt": {def}"#
+        );
+        assert!(
+            out.contains("jwt = []"),
+            "manifest must declare the jwt feature: {out}"
+        );
+    }
+
+    /// Fail-closed: a manifest without `default = [` is a `CompilerBug`.
+    #[test]
+    fn jwt_toml_anchor_miss_is_a_compiler_bug() {
+        assert!(jwt_cargo_toml("[package]\nname = \"x\"\n").is_err());
     }
 
     // ── seal tests: Db+Web closure ─────────────────────────────────────
