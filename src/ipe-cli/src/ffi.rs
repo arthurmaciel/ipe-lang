@@ -2196,16 +2196,16 @@ struct ManifestDep {
 /// lives in the unforgeable `FfiInterface` module exactly like every other
 /// binding (user `.ipe` source still cannot mint a `ForeignCall`).
 #[derive(Debug, PartialEq, Eq)]
-struct ManifestDefineClosure {
+pub(crate) struct ManifestDefineClosure {
     /// The dependency this closure adapter augments (the `[rust.dependencies]`
     /// key). Empty ⇒ attach to the sole dependency (an ambiguity when there is
     /// more than one, refused at merge).
-    krate: String,
+    pub(crate) krate: String,
     /// The wrapper name (the Ipê-facing binding / tri-artifact key).
-    name: String,
+    pub(crate) name: String,
     /// The exact author-declared target signature, verbatim from the manifest.
     /// It reaches emitted Rust only after re-parsing through `ClosureSig`.
-    signature: String,
+    pub(crate) signature: String,
 }
 
 /// One `[[rust.define.struct]]` manifest entry — the author-declared surface
@@ -2219,18 +2219,18 @@ struct ManifestDefineClosure {
 /// than emit-and-cargo-fail, and the wrapper lives in the unforgeable
 /// `FfiInterface` module exactly like every other binding.
 #[derive(Debug, PartialEq, Eq)]
-struct ManifestDefineStruct {
+pub(crate) struct ManifestDefineStruct {
     /// The dependency this struct augments (empty ⇒ the sole dependency).
-    krate: String,
+    pub(crate) krate: String,
     /// The constructor wrapper name (the Ipê-facing binding / tri-artifact key).
-    ctor: String,
+    pub(crate) ctor: String,
     /// The Rust type name to define.
-    struct_name: String,
+    pub(crate) struct_name: String,
     /// The struct fields as `(name, carrier-spelling)` pairs, in order.
-    fields: Vec<(String, String)>,
+    pub(crate) fields: Vec<(String, String)>,
     /// The requested derive tokens (validated against the closed allowlist in
     /// the driver, never rendered raw).
-    derives: Vec<String>,
+    pub(crate) derives: Vec<String>,
 }
 
 /// One `[[rust.define.enum]]` manifest entry — the author-declared surface that
@@ -2246,20 +2246,20 @@ struct ManifestDefineStruct {
 /// over-drops rather than emit-and-cargo-fail, and the wrappers live in the
 /// unforgeable `FfiInterface` module exactly like every other binding.
 #[derive(Debug, PartialEq, Eq)]
-struct ManifestDefineEnum {
+pub(crate) struct ManifestDefineEnum {
     /// The dependency this enum augments (empty ⇒ the sole dependency).
-    krate: String,
+    pub(crate) krate: String,
     /// The constructor-wrapper prefix (the Ipê-facing binding / tri-artifact
     /// key). Each variant's constructor is named `<ctor>_<snake(variant)>`.
-    ctor: String,
+    pub(crate) ctor: String,
     /// The Rust enum name to define.
-    enum_name: String,
+    pub(crate) enum_name: String,
     /// The variants as `(name, payload-carrier-spellings)` pairs, in order.
     /// An empty payload list is a unit variant.
-    variants: Vec<(String, Vec<String>)>,
+    pub(crate) variants: Vec<(String, Vec<String>)>,
     /// The requested derive tokens (validated against the closed allowlist in
     /// the driver, never rendered raw).
-    derives: Vec<String>,
+    pub(crate) derives: Vec<String>,
 }
 
 /// Extract the manifest's `[rust.dependencies]` / `["rust.dependencies"]`
@@ -2424,7 +2424,7 @@ fn find_inline_key(body: &str, key: &str) -> Option<usize> {
 /// are returned — an entry missing either is dropped here, never merged as a
 /// half-formed function. The `signature` string is carried verbatim; it is the
 /// driver's `ClosureSig` decode, not this reader, that validates it.
-fn rust_define_closures_from_manifest(text: &str) -> Vec<ManifestDefineClosure> {
+pub(crate) fn rust_define_closures_from_manifest(text: &str) -> Vec<ManifestDefineClosure> {
     let mut in_table = false;
     let mut out: Vec<ManifestDefineClosure> = Vec::new();
     let mut cur: Option<(String, String, String)> = None; // (crate, name, signature)
@@ -2481,7 +2481,7 @@ fn rust_define_closures_from_manifest(text: &str) -> Vec<ManifestDefineClosure> 
 /// least one field are returned; a half-formed entry is dropped here, never
 /// merged. Field types and derives are carried verbatim; the driver's
 /// `StructDef` decode, not this reader, validates them.
-fn rust_define_structs_from_manifest(text: &str) -> Vec<ManifestDefineStruct> {
+pub(crate) fn rust_define_structs_from_manifest(text: &str) -> Vec<ManifestDefineStruct> {
     #[derive(Default)]
     struct Acc {
         krate: String,
@@ -2568,7 +2568,7 @@ fn rust_define_structs_from_manifest(text: &str) -> Vec<ManifestDefineStruct> {
 /// half-formed entry is dropped here, never merged. Variant names and payload
 /// types are carried verbatim; the driver's `EnumDef` decode, not this reader,
 /// validates them.
-fn rust_define_enums_from_manifest(text: &str) -> Vec<ManifestDefineEnum> {
+pub(crate) fn rust_define_enums_from_manifest(text: &str) -> Vec<ManifestDefineEnum> {
     #[derive(Default)]
     struct Acc {
         krate: String,
@@ -2916,7 +2916,7 @@ type ForeignDefines = (
 ///
 /// The returned vectors are the exact same `ManifestDefine*` shapes the TOML
 /// readers produce, so they feed unchanged into `merge_provides`.
-fn scan_foreign_defines(src_root: &Path) -> Result<ForeignDefines, CliError> {
+pub(crate) fn scan_foreign_defines(src_root: &Path) -> Result<ForeignDefines, CliError> {
     let mut closures = Vec::new();
     let mut structs = Vec::new();
     let mut enums = Vec::new();
