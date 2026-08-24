@@ -18,6 +18,7 @@ import Ipe.App as App
 import Ipe.Host as Host
 import Ipe.Db as Db
 import Ipe.Log as Log
+import Ipe.Level as Level
 
 
 type Page
