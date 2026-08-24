@@ -11,22 +11,26 @@
 --
 -- Block types: headers (# / ## / ### / #### / ##### / ######), paragraphs,
 -- fenced code blocks (```), bullet lists (- / *), ordered lists (1.),
--- horizontal rules (---), tables (| ... | separator | ... |).
+-- horizontal rules (---), tables (| ... | separator | ... |),
+-- blockquotes (> …, nestable).
 --
--- Inline: **bold**, *italic*, `code`, [text](url), trailing-double-space →
--- line break.
+-- Inline: **bold**, *italic*, `code`, [text](url), ![alt](url) images,
+-- trailing-double-space → line break.
 --
--- Not supported in v1 (add when needed): blockquotes, images, footnotes,
--- raw HTML pass-through, math, mermaid.
+-- Not supported (add when needed): footnotes, raw HTML pass-through, math,
+-- mermaid.
 --
 -- Security: the parser never emits raw HTML, scripts, or event handlers —
--- every output routes through typed `Ipe.Ui` constructors. Feed untrusted
--- markdown without an extra sanitisation step. (Compare: HTML-string
--- renderers need a sanitiser equivalent to bluemonday; this one does not.)
+-- every output routes through typed `Ipe.Ui` constructors. Link `href` and
+-- image `src` are routed through a single URL guard (`safeUrl`) that
+-- neutralises `javascript:` and `vbscript:` schemes to `about:blank`. Feed
+-- untrusted markdown without an extra sanitisation step. (Compare:
+-- HTML-string renderers need a sanitiser equivalent to bluemonday; this one
+-- does not.)
 --
--- Chrome colours (code surfaces, dividers, list markers) derive from the
--- inherited theme foreground via `currentColor`, so the render tracks a light
--- or dark surrounding page with no fixed palette.
+-- Chrome colours (code surfaces, dividers, list markers, blockquote
+-- left-rules) derive from the inherited theme foreground via `currentColor`,
+-- so the render tracks a light or dark surrounding page with no fixed palette.
 --
 -- The parser is public: `parseBlocks` / `parseSpans` return the `Block` /
 -- `Span` trees, so a caller wanting the parse but its own typography and
@@ -38,6 +42,8 @@ module Ipe.Markdown exposing
     )
 
 
+import Ipe.Html as Html
+import Ipe.Html.Attributes as Attr
 import Ipe.List as List
 import Ipe.String as String
 import Ipe.Ui as Ui exposing (Element, Attribute)
@@ -73,6 +79,7 @@ type Block
     | NumberedBlock (List String)
     | TableBlock (List String) (List (List String))
     | RuleBlock
+    | BlockquoteBlock (List Block)
 
 
 -- ─── Block parsing ──────────────────────────────────────────────────────────
@@ -150,6 +157,13 @@ blocksFromLines lines =
                         TableBlock tbl.header tbl.rows
                             :: blocksFromLines tbl.after
 
+                else if isBlockquoteLine l then
+                    let
+                        bq = takeBlockquoteGroup lines
+                    in
+                        BlockquoteBlock (blocksFromLines (fst bq))
+                            :: blocksFromLines (snd bq)
+
                 else
                     let
                         pp = takeParagraph lines
@@ -162,6 +176,37 @@ isHrLine : String -> Bool
 isHrLine t =
     t == "---" || t == "***" || t == "___"
         || t == "----" || t == "-----"
+
+
+isBlockquoteLine : String -> Bool
+isBlockquoteLine l =
+    String.startsWith "> " l || l == ">"
+
+
+-- Collect consecutive blockquote lines; strip the `> ` prefix from each;
+-- return (inner-lines, remaining-lines-after).
+takeBlockquoteGroup : List String -> ( List String, List String )
+takeBlockquoteGroup lines =
+    case lines of
+
+        [] ->
+            ( [], [] )
+
+        l :: rest ->
+            if isBlockquoteLine l then
+                let
+                    stripped =
+                        if String.startsWith "> " l then
+                            String.slice 2 (String.length l) l
+
+                        else
+                            ""
+                    grouped = takeBlockquoteGroup rest
+                in
+                    ( stripped :: fst grouped, snd grouped )
+
+            else
+                ( [], lines )
 
 
 isBulletLine : String -> Bool
@@ -306,6 +351,7 @@ isBlockStarter l =
         || isBulletLine l
         || isNumberedLine l
         || isHrLine (String.trim l)
+        || isBlockquoteLine l
 
 
 -- ─── Table parsing ──────────────────────────────────────────────────────────
@@ -509,6 +555,18 @@ renderBlock b =
                 ]
                 Ui.none
 
+        BlockquoteBlock inner ->
+            Ui.el
+                [ Ui.width Ui.fill
+                , Ui.paddingXY 12 8
+                , Ui.htmlAttribute "style"
+                    ("border-left:3px solid " ++ dividerColor ++ ";margin-left:0")
+                ]
+                (Ui.column
+                    [ Ui.spacing 8 ]
+                    (List.map renderBlock inner)
+                )
+
 
 renderHeader : Int -> String -> Element msg
 renderHeader level text =
@@ -617,6 +675,8 @@ type Span
     | ItalicSpan String
     | CodeSpan String
     | LinkSpan String String
+    | ImageSpan String String
+    | HardBreakSpan
 
 
 -- ─── Inline parsing ─────────────────────────────────────────────────────────
@@ -630,10 +690,33 @@ parseSpans s =
 
 -- Character-by-character loop. `pending` accumulates plain text; on a
 -- delimiter the pending run is flushed and the delimited span consumed.
+-- Hard break: two or more trailing spaces before end-of-string emit
+-- `HardBreakSpan` (trailing-double-space → <br>).
 spanLoop : String -> List Span -> String -> List Span
 spanLoop remaining acc pending =
     if String.isEmpty remaining then
-        List.reverse (flushPending pending acc)
+        -- Flush any trailing `  ` (two-or-more spaces) in `pending` as a hard
+        -- break rather than plain whitespace.
+        if String.endsWith "  " pending then
+            let
+                trimmed = stripTrailingSpaces pending
+            in
+                List.reverse (HardBreakSpan :: flushPending trimmed acc)
+
+        else
+            List.reverse (flushPending pending acc)
+
+    else if String.startsWith "![" remaining then
+        case takeImage remaining of
+
+            Just ( alt, url, after ) ->
+                spanLoop after (ImageSpan alt url :: flushPending pending acc) ""
+
+            Nothing ->
+                spanLoop
+                    (String.slice 1 (String.length remaining) remaining)
+                    acc
+                    (pending ++ "!")
 
     else if String.startsWith "**" remaining then
         let
@@ -757,6 +840,61 @@ takeLink s =
                                 Just ( linkText, linkUrl, afterLink )
 
 
+-- Parse `![alt](url)` at the current position. `s` must start with `![`.
+-- Returns Nothing if the syntax does not match.
+takeImage : String -> Maybe ( String, String, String )
+takeImage s =
+    -- s starts with "!["; slice past the "!" so takeLink can parse "[alt](url)".
+    let
+        withoutBang = String.slice 1 (String.length s) s
+    in
+        case takeLink withoutBang of
+
+            Just ( alt, url, after ) ->
+                Just ( alt, url, after )
+
+            Nothing ->
+                Nothing
+
+
+-- Strip trailing ASCII spaces from a string (right-trim spaces only).
+-- Used to remove the double-space hard-break marker before flushing
+-- the preceding text as a plain span.
+stripTrailingSpaces : String -> String
+stripTrailingSpaces s =
+    let
+        len = String.length s
+    in
+        if len == 0 then
+            s
+
+        else if String.slice (len - 1) len s == " " then
+            stripTrailingSpaces (String.slice 0 (len - 1) s)
+
+        else
+            s
+
+
+-- Guard a URL against dangerous schemes. `javascript:` and `vbscript:` are
+-- XSS sinks regardless of case; neutralise them to `about:blank`. All other
+-- URLs (including `data:image/…`, `https://`, relative paths) pass through.
+-- This is the single SSOT sanitiser — apply it to every URL that becomes an
+-- HTML attribute (`href`, `src`).
+safeUrl : String -> String
+safeUrl url =
+    let
+        lower = String.toLower (String.slice 0 11 url)
+    in
+        if lower == "javascript:" then
+            "about:blank"
+
+        else if String.toLower (String.slice 0 10 url) == "vbscript:" then
+            "about:blank"
+
+        else
+            url
+
+
 -- ─── Span rendering ─────────────────────────────────────────────────────────
 
 renderSpans : List Span -> List (Element msg)
@@ -792,4 +930,16 @@ renderSpan span =
                 [ Ui.htmlAttribute "style" "text-decoration:underline"
                 , Ui.htmlAttribute "target" "_blank"
                 ]
-                { url = url, label = Ui.text text }
+                { url = safeUrl url, label = Ui.text text }
+
+        ImageSpan alt url ->
+            Ui.html
+                (Html.img
+                    [ Attr.src (safeUrl url)
+                    , Attr.alt alt
+                    , Attr.style "max-width:100%"
+                    ]
+                )
+
+        HardBreakSpan ->
+            Ui.html (Html.br [])
