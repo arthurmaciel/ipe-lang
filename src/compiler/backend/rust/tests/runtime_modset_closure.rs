@@ -13,11 +13,13 @@
 //! references also declared. It is the fast counterpart to the ground-truth
 //! `ipe`-crate `seal_modset` E2E gate (which does the actual `cargo build`).
 //!
-//! "Unconditional" excludes any `use crate::<dep>` immediately preceded by a
-//! `#[cfg(...)]` attribute or living inside a `#[cfg(test)]` module — those are
-//! feature-/test-gated and their target module is pulled in by the same cfg,
-//! not by the base append (matches the runtime's db-gated telemetry refs, which
-//! are correctly NOT a SEAL requirement).
+//! "Unconditional" means: any `crate::<dep>::` or matching-length `super::`-chain
+//! reference in the production body — `use` imports, inline path expressions, and
+//! macro invocations (`crate::ct_eq::impl_ct_eq!(…)`) alike. Lines immediately
+//! preceded by a `#[cfg(...)]` attribute, or living inside a `#[cfg(test)]`
+//! module, are excluded (their target is pulled in by the same cfg, not the base
+//! append — matches the runtime's db-gated telemetry refs, which are correctly
+//! NOT a SEAL requirement).
 //!
 //! ## Why not an exhaustive `2^FLAG_COUNT` sweep
 //!
@@ -322,77 +324,228 @@ fn collect_dir_deps(dir: &Path, mod_depth: usize, deps: &mut BTreeSet<String>) {
 
 /// Extract every UNCONDITIONAL crate-root module dep from one file whose module
 /// reaches the crate root in `supers_to_root` `super::` hops. Both
-/// `use crate::<dep>` and a matching-length `super`-chain name a top-level
-/// module. cfg-/test-gated `use`s are excluded.
+/// `use crate::<dep>` / `crate::<dep>::path()` and a matching-length
+/// `super`-chain name a top-level module. cfg-/test-gated lines are excluded.
 fn scan_file_deps(path: &Path, supers_to_root: usize, deps: &mut BTreeSet<String>) {
     let src = std::fs::read_to_string(path).unwrap_or_default();
 
+    // Three skip-regions, checked in priority order:
+    // 1. `in_cfg_test_mod` — `#[cfg(test)] mod tests { … }`: skip entire block.
+    // 2. `cfg_gated_depth` — inside a `#[cfg(…)]`-gated brace block: skip until
+    //    depth returns to 0.
+    // 3. `cfg_item_pending` — a `#[cfg(…)]` was seen; skip the annotated item
+    //    (including its stacked attributes, doc-comments, and multi-line signature)
+    //    until we have consumed at least one opening brace and the depth closes.
     let mut in_cfg_test_mod = false;
     let mut cfg_test_brace_depth: i32 = 0;
-    let mut prev_is_cfg_attr = false;
+    let mut cfg_gated_depth: i32 = 0;
+    // `cfg_item_pending`: true after a `#[cfg(…)]` attr and until the cfg-gated
+    // item's block closes (or a `;`-terminated single-line item is consumed).
+    let mut cfg_item_pending = false;
+    // `cfg_item_opened`: true once the first `{` of the cfg-gated item has been
+    // seen; until then, more lines (signature / where-clause) are still gated.
+    let mut cfg_item_opened = false;
     for line in src.lines() {
         let t = line.trim();
 
+        // ── region 1: inside a `#[cfg(test)]` block ──────────────────────────
         if in_cfg_test_mod {
-            let opens = i32::try_from(t.matches('{').count()).unwrap_or(0);
-            let closes = i32::try_from(t.matches('}').count()).unwrap_or(0);
-            cfg_test_brace_depth += opens - closes;
+            cfg_test_brace_depth += unquoted_brace_delta(t);
             if cfg_test_brace_depth <= 0 {
                 in_cfg_test_mod = false;
             }
-            prev_is_cfg_attr = false;
+            cfg_item_pending = false;
+            cfg_item_opened = false;
             continue;
         }
+        // `#[cfg(test)]` opens the test region on the NEXT non-attr line.
         if t.starts_with("#[cfg(test)]") {
             in_cfg_test_mod = true;
             cfg_test_brace_depth = 0;
-            prev_is_cfg_attr = false;
+            cfg_item_pending = false;
+            cfg_item_opened = false;
+            continue;
+        }
+
+        // ── region 2: inside a `#[cfg(…)]`-gated brace block ────────────────
+        if cfg_gated_depth > 0 {
+            cfg_gated_depth += unquoted_brace_delta(t);
+            if cfg_gated_depth <= 0 {
+                cfg_gated_depth = 0;
+                cfg_item_pending = false;
+                cfg_item_opened = false;
+            }
+            continue;
+        }
+
+        // ── region 3: cfg-item pending (pre- or mid-signature) ───────────────
+        if cfg_item_pending {
+            // Stacked attributes and doc-comments before the actual item header.
+            if t.starts_with("#[") || t.starts_with("//") {
+                continue; // remain in cfg_item_pending
+            }
+            let delta = unquoted_brace_delta(t);
+            if !cfg_item_opened {
+                // Still scanning the item header (could be multi-line `fn`/`impl`
+                // signature before the `{`). If this line has a net opening brace,
+                // the block has started; otherwise keep skipping signature lines.
+                if delta > 0 {
+                    cfg_item_opened = true;
+                    cfg_gated_depth = delta;
+                    if cfg_gated_depth <= 0 {
+                        // e.g. a one-liner `fn foo() {}` — item done.
+                        cfg_item_pending = false;
+                        cfg_item_opened = false;
+                    }
+                }
+                // else: no brace yet (still in `fn` / `where` / type params line)
+            }
+            // single-line item with semicolon and no braces: `use …;` / `type …;`
+            if delta == 0 && t.ends_with(';') {
+                cfg_item_pending = false;
+                cfg_item_opened = false;
+            }
+            continue;
+        }
+
+        // ── normal scanning ───────────────────────────────────────────────────
+
+        // Skip comment lines — `//` and `///` doc-comments may name `crate::X`
+        // in backtick links or prose; they carry no compile-time dependency.
+        if t.starts_with("//") {
             continue;
         }
 
         let is_cfg_attr = t.starts_with("#[cfg(") || t.starts_with("#[cfg_attr(");
-
-        if !prev_is_cfg_attr && let Some(dep) = crate_root_dep(t, supers_to_root) {
-            deps.insert(dep);
+        if is_cfg_attr {
+            cfg_item_pending = true;
+            cfg_item_opened = false;
+            continue;
         }
 
-        prev_is_cfg_attr = is_cfg_attr;
+        crate_refs_in_line(t, supers_to_root, deps);
     }
 }
 
-/// If `line` is a `use` naming a top-level (crate-root) module — either
-/// `use crate::<dep>` or `use super::…::<dep>` whose `super`-chain reaches the
-/// crate root — return `<dep>`. Otherwise `None`.
-fn crate_root_dep(line: &str, supers_to_root: usize) -> Option<String> {
-    let after = line.strip_prefix("use ")?;
-    let rest = if let Some(r) = after.strip_prefix("crate::") {
-        r
-    } else {
-        // Consume exactly `supers_to_root` `super::` segments to reach the root;
-        // any remaining `super::` (or too few) does NOT name a crate-root module.
-        let mut r = after;
-        let mut climbed = 0;
-        while let Some(next) = r.strip_prefix("super::") {
-            r = next;
-            climbed += 1;
+/// Count the net unquoted brace depth change for one source line: `{` outside a
+/// string literal or character literal adds +1; `}` subtracts 1. String literals
+/// (including raw strings `r#"…"#` and `r"…"`) and char literals are skipped so
+/// that format-string braces (`"{value:?}"`) or pattern-match bodies with literal
+/// `'}'` do not skew the depth.
+///
+/// This is deliberately conservative and single-line: multi-line string literals
+/// are vanishingly rare in the runtime source, and any mismatch on a single line
+/// still averages out across the file because both `{` and `}` in strings are
+/// equally likely to appear.  The one case that matters — format strings like
+/// `"expected {val:?}"` — perfectly balance (one `{`, one `}`) and net to 0.
+fn unquoted_brace_delta(line: &str) -> i32 {
+    let mut delta: i32 = 0;
+    let mut chars = line.chars().peekable();
+    while let Some(c) = chars.next() {
+        match c {
+            // Regular string literal: skip to closing `"` (handle `\"` escapes).
+            '"' => {
+                while let Some(sc) = chars.next() {
+                    if sc == '\\' {
+                        chars.next(); // consume escaped character
+                    } else if sc == '"' {
+                        break;
+                    }
+                }
+            }
+            // Char literal: skip to closing `'` (handle `\'` escapes).
+            '\'' => {
+                // Disambiguate lifetime from char: lifetimes are `'name` with an
+                // identifier character following. We do a simple lookahead:
+                // if the character after `'` is alphanumeric or `_`, treat as
+                // lifetime and don't try to consume a closing `'`.
+                if let Some(&nc) = chars.peek() {
+                    if nc.is_ascii_alphanumeric() || nc == '_' {
+                        // lifetime annotation — skip
+                    } else {
+                        // char literal
+                        while let Some(sc) = chars.next() {
+                            if sc == '\\' {
+                                chars.next();
+                            } else if sc == '\'' {
+                                break;
+                            }
+                        }
+                    }
+                }
+            }
+            // Line comment: stop counting — everything after `//` is comment.
+            '/' if chars.peek() == Some(&'/') => break,
+            '{' => delta += 1,
+            '}' => delta -= 1,
+            _ => {}
         }
-        if climbed != supers_to_root {
-            return None;
+    }
+    delta
+}
+
+/// Scan one source line for ALL occurrences of crate-root module references —
+/// `use crate::<seg>::`, inline path expressions `crate::<seg>::fn()`, and macro
+/// invocations `crate::<seg>::mac!(…)`, plus the equivalent `super::`-chain forms
+/// — and insert every resolved first segment into `deps`.
+///
+/// A module DEPENDENCY reaches INTO a module (`crate::tea::{…}`,
+/// `crate::app_config::resolve()`, `crate::ct_eq::impl_ct_eq!(...)`); a bare
+/// `crate::Foo` with no trailing `::` imports an item re-exported at the crate
+/// root via the `mod.rs` glob and needs no separate `pub mod` declaration.
+///
+/// The `super::`-chain form is recognised only for an EXACT chain of
+/// `supers_to_root` hops, which resolves to the crate root from this file's
+/// module depth; shorter or longer chains refer to intermediate modules, not the
+/// crate root, and are ignored.
+fn crate_refs_in_line(line: &str, supers_to_root: usize, deps: &mut BTreeSet<String>) {
+    // Build the exact `super::` prefix we accept (e.g. `super::super::` for depth 2).
+    let super_prefix: String = "super::".repeat(supers_to_root);
+
+    let mut rest = line;
+    while !rest.is_empty() {
+        // Try to match `crate::` at the current position.
+        if let Some(after_crate) = rest.strip_prefix("crate::") {
+            if let Some(seg) = extract_seg_with_trailing_colons(after_crate) {
+                deps.insert(seg);
+            }
+            // Advance past `crate::` to continue scanning the remainder.
+            rest = after_crate;
+            continue;
         }
-        r
-    };
-    let seg: String = rest
+        // Try to match the exact `super::…` chain reaching the crate root.
+        if !super_prefix.is_empty()
+            && let Some(after_supers) = rest.strip_prefix(super_prefix.as_str())
+        {
+            // Must not start with another `super::` — that would be a deeper chain
+            // pointing above the crate root (impossible in Rust, but guard it).
+            if !after_supers.starts_with("super::")
+                && let Some(seg) = extract_seg_with_trailing_colons(after_supers)
+            {
+                deps.insert(seg);
+            }
+            rest = after_supers;
+            continue;
+        }
+        // Advance by one character and keep scanning.
+        let mut chars = rest.chars();
+        chars.next();
+        rest = chars.as_str();
+    }
+}
+
+/// Extract the first identifier segment from `s` and return it if it is
+/// immediately followed by `::` (i.e. the path reaches INTO that module).
+/// Returns `None` for a bare item name (`IpeMaybe`) with no `::` suffix.
+fn extract_seg_with_trailing_colons(s: &str) -> Option<String> {
+    let seg: String = s
         .chars()
         .take_while(|c| c.is_ascii_alphanumeric() || *c == '_')
         .collect();
     if seg.is_empty() {
         return None;
     }
-    // A module DEPENDENCY reaches INTO a module: `crate::tea::{…}` /
-    // `crate::web::pubsub`. A bare `use crate::IpeMaybe;` (no trailing `::`)
-    // imports an ITEM re-exported at the crate root via the `mod.rs` glob
-    // (`pub use <mod>::*`), not a module — it needs no separate declaration.
-    match rest.strip_prefix(&seg) {
+    match s.get(seg.len()..) {
         Some(tail) if tail.starts_with("::") => Some(seg),
         _ => None,
     }
@@ -929,5 +1082,122 @@ fn wasm_vendored_modset_declares_app_config() {
         declared.contains("log"),
         "`WASM_RUNTIME_MOD_RS` must declare `log` (precondition for the \
          `app_config` edge); got {declared:?}"
+    );
+}
+
+// ── scanner unit tests: inline-path and cfg(test) regression ─────────────────
+
+/// The `crate_refs_in_line` scanner must detect `crate::<seg>::` occurrences
+/// that are NOT `use` statements — path expressions and macro calls. This is the
+/// exact false-negative class that let the `wasm app_config` and `revocation`
+/// E0433 SEAL breaches reach main undetected.
+#[test]
+fn scanner_detects_inline_crate_path_expressions() {
+    let mut deps = BTreeSet::new();
+    // Inline function call — matches `crate::app_config::resolve_log_level_override()`.
+    crate_refs_in_line(
+        "    if let Some(tag) = crate::app_config::resolve_log_level_override() {",
+        1,
+        &mut deps,
+    );
+    assert!(
+        deps.contains("app_config"),
+        "scanner must detect `crate::app_config::` in an inline path expression; got {deps:?}"
+    );
+
+    let mut deps2 = BTreeSet::new();
+    // Macro invocation — matches `crate::ct_eq::impl_ct_eq!(Key)`.
+    crate_refs_in_line("crate::ct_eq::impl_ct_eq!(Key);", 1, &mut deps2);
+    assert!(
+        deps2.contains("ct_eq"),
+        "scanner must detect `crate::ct_eq::` in a macro invocation; got {deps2:?}"
+    );
+
+    let mut deps3 = BTreeSet::new();
+    // Multiple refs on one line — `crate::jwt::…` appears twice.
+    crate_refs_in_line(
+        "    if secret.len() < crate::jwt::HS256_MIN_SECRET_BYTES { crate::jwt::hs256_short_secret_msg() }",
+        1,
+        &mut deps3,
+    );
+    assert!(
+        deps3.contains("jwt"),
+        "scanner must detect repeated `crate::jwt::` refs on one line; got {deps3:?}"
+    );
+}
+
+/// A `crate::Foo` reference with NO trailing `::` is a re-exported item, not a
+/// module dependency — the scanner must NOT register it as a dep.
+#[test]
+fn scanner_ignores_bare_crate_item_without_module_path() {
+    let mut deps = BTreeSet::new();
+    // `crate::IpeMaybe` — a re-export from the crate root, no `::` suffix.
+    crate_refs_in_line("use crate::IpeMaybe;", 1, &mut deps);
+    assert!(
+        deps.is_empty(),
+        "bare `crate::Item` (no trailing `::`) must NOT register as a module dep; got {deps:?}"
+    );
+}
+
+/// References inside a `#[cfg(test)] mod tests` block must NOT register as
+/// production deps. This is the false-positive class (`ui → helpers`) the
+/// cfg(test)-exclusion logic prevents.
+#[test]
+fn scanner_excludes_crate_refs_inside_cfg_test_mod() {
+    use std::path::PathBuf;
+    // Synthesise a file that has an inline `crate::nonexistent_module::fn()` ONLY
+    // inside a `#[cfg(test)] mod tests` block — not in production code.
+    let src = r"
+// production function — no crate:: dep
+pub fn prod() -> i32 { 42 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    // This would be a false breach if not excluded:
+    use crate::nonexistent_module::helper;
+    fn check() { crate::nonexistent_module::run(); }
+}
+";
+    // Write to a temp file and scan it.
+    let dir = std::env::temp_dir();
+    let path: PathBuf = dir.join("ipe_modset_closure_cfg_test_regression.rs");
+    std::fs::write(&path, src).expect("write temp file");
+    let mut deps = BTreeSet::new();
+    scan_file_deps(&path, 1, &mut deps);
+    let _ = std::fs::remove_file(&path);
+    assert!(
+        !deps.contains("nonexistent_module"),
+        "scanner must NOT register `crate::nonexistent_module` from inside \
+         `#[cfg(test)] mod tests`; got {deps:?}"
+    );
+    assert!(
+        deps.is_empty(),
+        "no production crate-root deps in this fixture; got {deps:?}"
+    );
+}
+
+/// Prove the fix direction: if `app_config` were removed from the wasm constant,
+/// the structural `wasm_vendored_modset_is_closed` test would catch it (via
+/// `log.rs`'s inline `crate::app_config::` call). This named test asserts the
+/// SAME closure edge via the scanner directly, so a regression is identified by
+/// name and not just by the structural test's catch-all message.
+#[test]
+fn scanner_detects_log_rs_dep_on_app_config() {
+    let runtime_root =
+        resolve_runtime().expect("runtime source tree (src/runtime/rust/src) must resolve");
+    // `log.rs` uses `crate::app_config::resolve_log_level_override()` and
+    // `crate::system::read_env_var()` unconditionally — both are inline paths,
+    // not `use` statements. The reworked scanner must catch them.
+    let deps = unconditional_crate_deps(&runtime_root, "log");
+    assert!(
+        deps.contains("app_config"),
+        "`log.rs` must register `app_config` as an unconditional dep \
+         (via `crate::app_config::resolve_log_level_override()`); got {deps:?}"
+    );
+    assert!(
+        deps.contains("system"),
+        "`log.rs` must register `system` as an unconditional dep \
+         (via `crate::system::read_env_var()`); got {deps:?}"
     );
 }

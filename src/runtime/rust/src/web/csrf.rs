@@ -103,6 +103,7 @@ pub fn cookies_secure() -> bool {
 /// ~244 random bits (two concatenated UUIDv4s) as 64 lowercase-hex chars —
 /// comfortably above the 128-bit CSRF-token floor. Single definition shared with
 /// `server.rs`; re-exported here under the `gen_token` name the `web` surface uses.
+#[cfg(feature = "server")]
 pub use crate::server::csrf_gen_token as gen_token;
 
 /// A token "looks valid" if it is the expected 64 lowercase-hex shape — used to
@@ -110,6 +111,7 @@ pub use crate::server::csrf_gen_token as gen_token;
 /// one (a malformed/forged cookie value is replaced, never trusted). Single
 /// definition shared with `server.rs`; re-exported here under the
 /// `token_is_well_formed` name the `web` surface uses.
+#[cfg(feature = "server")]
 pub use crate::server::csrf_token_well_formed as token_is_well_formed;
 
 /// Returns `true` iff BOTH tokens are well-formed AND compare equal in constant
@@ -117,6 +119,7 @@ pub use crate::server::csrf_token_well_formed as token_is_well_formed;
 /// not reveal the secret value because well-formedness checks only length and
 /// character class. Fail-closed: any malformed, missing, or mismatched pair
 /// returns `false`. Delegates to the shared `server::csrf_pair_valid`.
+#[cfg(feature = "server")]
 pub use crate::server::csrf_pair_valid;
 
 /// Read a named cookie value from the `Cookie:` header (generic; the session
