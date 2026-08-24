@@ -10,6 +10,55 @@ Entries below the header are maintained by
 section is generated from Conventional Commit messages and prepended when the
 standing release pull request is merged.
 
+## [0.1.68](https://github.com/arthurmaciel/ipe-lang/compare/ipe-v0.1.67...ipe-v0.1.68) (2026-08-24)
+
+
+### Features
+
+* **app-config:** wire runtime-config settings to their subsystems (fail-closed) + Secret.fromString doc ([#1281](https://github.com/arthurmaciel/ipe-lang/issues/1281)) ([c9b21e8](https://github.com/arthurmaciel/ipe-lang/commit/c9b21e8c97932fd1fcd5cc7ba573f143fba2b018))
+* **app:** shape-typed runtime-config front door — Setting, Web.appWith, env-only secrets, loopback-in-dev ([#1279](https://github.com/arthurmaciel/ipe-lang/issues/1279)) ([a5912c8](https://github.com/arthurmaciel/ipe-lang/commit/a5912c8dbc0a9dc9931961de0087223946ae3a32))
+* **auth:** add absolute session lifetime cap (P1 of [#1269](https://github.com/arthurmaciel/ipe-lang/issues/1269)) ([356d945](https://github.com/arthurmaciel/ipe-lang/commit/356d945a41628e963624014adb706f5eaff2746f))
+* **codec:** DB structural shape and a shared column vocabulary ([#1233](https://github.com/arthurmaciel/ipe-lang/issues/1233)) ([e8fa0a9](https://github.com/arthurmaciel/ipe-lang/commit/e8fa0a9581d8a427dbb86058e78883c0be5dcf54))
+* **compiler:** wire Web.authMaxLifetime through compiler ([#1269](https://github.com/arthurmaciel/ipe-lang/issues/1269) P1) ([ee39506](https://github.com/arthurmaciel/ipe-lang/commit/ee39506650ee0b378ff09b9ae28f58d70f3e4e0b))
+* **compiler:** wire Web.authSlideWindow at all 7 compiler sites ([a31a02c](https://github.com/arthurmaciel/ipe-lang/commit/a31a02c7a7ec7d6b21d4215a8e7968289642a561))
+* **config:** package.ipe P1 — Ipe.Package vocabulary + syntactic manifest reader (additive) ([#1285](https://github.com/arthurmaciel/ipe-lang/issues/1285)) ([a78def7](https://github.com/arthurmaciel/ipe-lang/commit/a78def70fa7532e650e070f5a8539a6e67c5f417))
+* **config:** package.ipe P2 — ipe migrate config + round-trip renderer (additive) ([#1286](https://github.com/arthurmaciel/ipe-lang/issues/1286)) ([c4c30e6](https://github.com/arthurmaciel/ipe-lang/commit/c4c30e67bc6b07f864407c6a48c521d58bfb97d5))
+* **config:** promote runtime-config tags to closed ADTs (HostMode/LogLevel/CsrfMode) ([#1283](https://github.com/arthurmaciel/ipe-lang/issues/1283)) ([8378ef5](https://github.com/arthurmaciel/ipe-lang/commit/8378ef549dcd863c7995afda0bc2b083f8d9ee32))
+* **config:** retire ipe.toml — package.ipe is the sole project manifest ([fc0e743](https://github.com/arthurmaciel/ipe-lang/commit/fc0e7431ed462d1507fbe7cfd4c84b13f8e7cf95))
+* **db:** accessor-typed Store column specs ([#1253](https://github.com/arthurmaciel/ipe-lang/issues/1253)) ([f52ca47](https://github.com/arthurmaciel/ipe-lang/commit/f52ca4706a629c05f21b6e1f90af625e9b30a94c))
+* **db:** accessor-typed Store comparison & ordering leaves ([#1248](https://github.com/arthurmaciel/ipe-lang/issues/1248)) ([04ad135](https://github.com/arthurmaciel/ipe-lang/commit/04ad135713251eb6e62903c79edaaa234534a2c0))
+* **db:** accessor-typed Store.eq/eqBy query columns ([#1246](https://github.com/arthurmaciel/ipe-lang/issues/1246)) ([5c347a9](https://github.com/arthurmaciel/ipe-lang/commit/5c347a9714605c97a3a9a46256d73a2254a761f8))
+* **db:** codec-derived Store — fromCodec drives columns, reads, and writes ([#1238](https://github.com/arthurmaciel/ipe-lang/issues/1238)) ([16428f4](https://github.com/arthurmaciel/ipe-lang/commit/16428f44e6a1f4b1dd076fcf864c56c68ce4d8a4))
+* **db:** codec↔SQL row bridge — codec-driven binds and row decode ([#1237](https://github.com/arthurmaciel/ipe-lang/issues/1237)) ([5367836](https://github.com/arthurmaciel/ipe-lang/commit/536783696762a3dc0679b3fcfdd4c1ff9fc6c254))
+* **db:** data-preserving column and table renames in the Store migrate surface ([#1229](https://github.com/arthurmaciel/ipe-lang/issues/1229)) ([a069014](https://github.com/arthurmaciel/ipe-lang/commit/a069014e38c9802d9781536ce7a0a5b41e473f0c))
+* **db:** row-security policy algebra (Pillar D, slice 1) ([#1263](https://github.com/arthurmaciel/ipe-lang/issues/1263)) ([aa2be93](https://github.com/arthurmaciel/ipe-lang/commit/aa2be933f197bdd4227b85dec00900e00b3afbf8))
+* **db:** row-security Principal foundation — opaque unforgeable Principal + authed-route runtime + secured …As ops ([#1271](https://github.com/arthurmaciel/ipe-lang/issues/1271)) ([104415a](https://github.com/arthurmaciel/ipe-lang/commit/104415a5f71dd0e1d043f1f06edb54b9e4c02ab1))
+* **db:** typed query builder and update for the codec-derived Store ([#1239](https://github.com/arthurmaciel/ipe-lang/issues/1239)) ([9615b02](https://github.com/arthurmaciel/ipe-lang/commit/9615b024fc8bb7ed03a0143f0e86a26ab7883a9a))
+* **db:** WHERE-based update/delete and default column specs for the Store ([#1240](https://github.com/arthurmaciel/ipe-lang/issues/1240)) ([645007b](https://github.com/arthurmaciel/ipe-lang/commit/645007b519221b357c968ee5fbdad7e5f633feb7))
+* **golden,docs:** SEAL fixture and docs for Web.authSlideWindow ([e020a7e](https://github.com/arthurmaciel/ipe-lang/commit/e020a7e26c045967b9b9f239e05a2a833731672e))
+* **runtime:** P2 sliding session re-issue clamped to absolute cap ([c5138a0](https://github.com/arthurmaciel/ipe-lang/commit/c5138a0ffb0d16339fc0014730e8ee5e12773390))
+* **stdlib/Markdown:** blockquotes, images (URL-guarded), hard break ([6c08615](https://github.com/arthurmaciel/ipe-lang/commit/6c086159cfb83f5146aa309e4deffe3ea5c26626))
+
+
+### Bug Fixes
+
+* **canon:** resolve Codec.auto constructors in every module of a multi-module program ([#1242](https://github.com/arthurmaciel/ipe-lang/issues/1242)) ([fd4b6d0](https://github.com/arthurmaciel/ipe-lang/commit/fd4b6d0d80d31830b9743b95dc56df5cdbcf5ae5)), closes [#1236](https://github.com/arthurmaciel/ipe-lang/issues/1236)
+* **canon:** scope constructor pattern resolution to avoid stdlib-internal collisions ([#1260](https://github.com/arthurmaciel/ipe-lang/issues/1260)) ([042b9b8](https://github.com/arthurmaciel/ipe-lang/commit/042b9b8a28950e53487e2773c7c9290056cee649))
+* **examples:** classify 18-job-queue green; raise sweep build budget ([#1249](https://github.com/arthurmaciel/ipe-lang/issues/1249)) ([2276d8c](https://github.com/arthurmaciel/ipe-lang/commit/2276d8cc8fa160b4411ee53424b6935e399c6d5e))
+* **examples:** promote 29/31/38 from deps-deferred to green ([#1250](https://github.com/arthurmaciel/ipe-lang/issues/1250)) ([08b95e7](https://github.com/arthurmaciel/ipe-lang/commit/08b95e7c24ca170c080e6978295ecd3180969717))
+* **lower:** close the point-free store-kernel SEAL hole ([#1258](https://github.com/arthurmaciel/ipe-lang/issues/1258)) ([eba622e](https://github.com/arthurmaciel/ipe-lang/commit/eba622edcebdc947e0ea88567346d067729ee32b))
+* **parity:** make all sky-parity gates honest — zero comparisons = FAIL ([#1252](https://github.com/arthurmaciel/ipe-lang/issues/1252)) ([bafcce6](https://github.com/arthurmaciel/ipe-lang/commit/bafcce621c4b6d15fbf9c12ffaff83823e342bfa))
+* **runtime/db:** explicit empty-WHERE guard in deleteWhere ([#1245](https://github.com/arthurmaciel/ipe-lang/issues/1245)) ([379f6a4](https://github.com/arthurmaciel/ipe-lang/commit/379f6a4d2434b3c06f4254b38dfa5cc8b7e01fb3))
+* **runtime/db:** redact connection metadata from connect-time errors ([80516c0](https://github.com/arthurmaciel/ipe-lang/commit/80516c023076ee6f3369d01e9733218b10c67df5))
+* **runtime/ui:** canonical crate::ui::helpers path in render test imports ([6a03a89](https://github.com/arthurmaciel/ipe-lang/commit/6a03a899c4662e89cc9f0870e683979c1f7df566))
+* **runtime:** group base64 input with as_chunks::&lt;3&gt; instead of chunks_exact(3) ([#1274](https://github.com/arthurmaciel/ipe-lang/issues/1274)) ([7adf9df](https://github.com/arthurmaciel/ipe-lang/commit/7adf9dfd6b5328b5f45815603f46ee1bf3ad335a))
+* **stdlib/Markdown:** working hard break + drop dead safeUrl (runtime sink is SSOT) ([f9cf8f5](https://github.com/arthurmaciel/ipe-lang/commit/f9cf8f53aa7d1ca9e70c0937f65cee15f3dde33e))
+* **supply-chain:** ignore RUSTSEC-2026-0235 (rkyv OOB) in audit + deny gates ([#1278](https://github.com/arthurmaciel/ipe-lang/issues/1278)) ([a2b12a2](https://github.com/arthurmaciel/ipe-lang/commit/a2b12a29e7e8bf6ccd2ea67bdd361dab547ba059))
+* **ui:** render row/column as inline-flex and el as inline-span inside Ui.paragraph ([dd9bde4](https://github.com/arthurmaciel/ipe-lang/commit/dd9bde49800c4584b0c88649e4ca59e619295691))
+* **wasm:** add app_config to WASM_RUNTIME_MOD_RS; prove closure structurally ([84af06e](https://github.com/arthurmaciel/ipe-lang/commit/84af06e107153f5dd866a81ccabe68e9dbd5d7df))
+* **watch:** make the readiness-fallback test deterministic ([#1256](https://github.com/arthurmaciel/ipe-lang/issues/1256)) ([4ed97d7](https://github.com/arthurmaciel/ipe-lang/commit/4ed97d7569e1e7f7a70585d0fe0ecad873ea748a))
+* **web/csrf:** give CSRF cookie per-app identity via base-path suffix ([41c1241](https://github.com/arthurmaciel/ipe-lang/commit/41c1241b7f0238d2f3e145f6643ff5099ad5084f))
+
 ## [0.1.67](https://github.com/arthurmaciel/ipe-lang/compare/ipe-v0.1.66...ipe-v0.1.67) (2026-08-20)
 
 
