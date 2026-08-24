@@ -367,8 +367,18 @@ fn unauthorized() -> ServerResponse {
 /// `Path=/`, `HttpOnly`, and `SameSite`. The cookie name must be the same name
 /// that the request carried the token under so the browser replaces the existing
 /// cookie entry rather than creating a duplicate.
-fn reissue_set_cookie(cookie_name: &str, token: &str, slide_window_secs: u64) -> String {
-    let secure = if crate::web::csrf::cookies_secure() {
+///
+/// `is_https` must be pre-captured from the incoming request's headers
+/// BEFORE the request is moved into the handler — mirrors the combined gate
+/// in `page_response` (`csrf::cookies_secure() || request_is_https(headers)`):
+/// a re-issued cookie must never be less-Secure than the initial session cookie.
+fn reissue_set_cookie(
+    cookie_name: &str,
+    token: &str,
+    slide_window_secs: u64,
+    is_https: bool,
+) -> String {
+    let secure = if crate::web::csrf::cookies_secure() || is_https {
         "; Secure"
     } else {
         ""
@@ -412,6 +422,10 @@ where
 {
     let handler = Arc::new(handler);
     let guarded = move |req: ServerRequest| -> IpeTask<E, ServerResponse> {
+        // Snapshot the request-scoped TLS signal BEFORE `req` is moved into
+        // the async block — same technique as `middleware_with_csrf`. The bool
+        // is `Copy`, so this is a zero-cost capture.
+        let is_https = request_is_https(&req.headers);
         let cfg = cfg.clone();
         let handler = Arc::clone(&handler);
         Box::pin(async move {
@@ -479,7 +493,7 @@ where
                             &secret, &ctx, extra, slide_i64,
                         ) {
                             Some(IpeResult::Ok(new_token)) => {
-                                Some(reissue_set_cookie(name, &new_token, slide_window_secs))
+                                Some(reissue_set_cookie(name, &new_token, slide_window_secs, is_https))
                             }
                             _ => None,
                         }
@@ -3012,6 +3026,80 @@ mod tests {
                 resp.cookies.is_empty(),
                 "bearer-source must never get a re-issue Set-Cookie: {:?}",
                 resp.cookies
+            );
+        }
+
+        // ── reissue Secure parity ──────────────────────────────────────────
+
+        /// `reissue_set_cookie` pure-function truth-table:
+        ///   (cookies_secure=false, is_https=true)  → Secure
+        ///   (cookies_secure=false, is_https=false) → no Secure
+        /// Mirrors the combined gate in `page_response`:
+        /// a re-issued cookie must never be less-Secure than the initial one.
+        #[test]
+        fn reissue_set_cookie_secure_matches_initial_gate() {
+            // SAFETY: test-only env mutation.
+            unsafe { std::env::remove_var("ENV") };
+            // SAFETY: test-only env mutation.
+            unsafe { std::env::remove_var("IPE_ENV") };
+
+            // is_https=true, cookies_secure()=false → Secure must fire.
+            let c_https = reissue_set_cookie("ipe_sid", "tok", 1800, true);
+            assert!(
+                c_https.contains("; Secure"),
+                "reissue behind TLS proxy must carry Secure: {c_https}"
+            );
+
+            // is_https=false, cookies_secure()=false → no Secure (dev default).
+            let c_plain = reissue_set_cookie("ipe_sid", "tok", 1800, false);
+            assert!(
+                !c_plain.contains("; Secure"),
+                "reissue over plain HTTP in dev must NOT carry Secure: {c_plain}"
+            );
+        }
+
+        /// End-to-end: a cookie-source authed route where the request carries
+        /// `X-Forwarded-Proto: https` (trusted-proxy opt-in via the testable
+        /// `request_is_https_with_trust` overload) produces a re-issued cookie
+        /// that carries `Secure`.
+        ///
+        /// Uses `request_is_https_with_trust(..., true)` directly to bypass the
+        /// `OnceLock`-cached `trust_proxy_headers()` without mutating process env.
+        #[test]
+        fn reissue_set_cookie_https_proxy_sets_secure() {
+            // SAFETY: test-only env mutation.
+            unsafe { std::env::remove_var("ENV") };
+            // SAFETY: test-only env mutation.
+            unsafe { std::env::remove_var("IPE_ENV") };
+
+            let mut headers = HashMap::new();
+            headers.insert("x-forwarded-proto".to_string(), "https".to_string());
+            let is_https = request_is_https_with_trust(&headers, true);
+            assert!(is_https, "trusted HTTPS header must be detected");
+
+            let cookie = reissue_set_cookie("ipe_sid", "tok", 1800, is_https);
+            assert!(
+                cookie.contains("; Secure"),
+                "reissue with HTTPS proxy signal must carry Secure: {cookie}"
+            );
+        }
+
+        /// Non-proxy default: no `X-Forwarded-Proto`, trust=false → no Secure on reissue.
+        #[test]
+        fn reissue_set_cookie_plain_http_no_secure() {
+            // SAFETY: test-only env mutation.
+            unsafe { std::env::remove_var("ENV") };
+            // SAFETY: test-only env mutation.
+            unsafe { std::env::remove_var("IPE_ENV") };
+
+            let headers = HashMap::new();
+            let is_https = request_is_https_with_trust(&headers, false);
+            assert!(!is_https);
+
+            let cookie = reissue_set_cookie("ipe_sid", "tok", 1800, is_https);
+            assert!(
+                !cookie.contains("; Secure"),
+                "reissue over plain HTTP must NOT carry Secure: {cookie}"
             );
         }
     }
