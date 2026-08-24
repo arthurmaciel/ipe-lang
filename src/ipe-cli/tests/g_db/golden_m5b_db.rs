@@ -337,6 +337,30 @@ fn db_store_query() {
     assert_runs_and_matches_oracle("db_store_query");
 }
 
+/// SEAL regression: `Ipe.Db.Store.toMaybe` — the fetch-one query terminal —
+/// builds AND runs. `toMaybe conn q = Task.map List.head (toList conn q)`
+/// forwards its generic row type to `toList<T1: Send + Sync + Clone>` and
+/// captures it in no closure of its own body, so the per-function bound pass
+/// left `to_maybe<T1: Send + Clone>` — missing `Sync`. The emitted crate then
+/// cargo-failed `E0277` (`T1 cannot be shared between threads`) even though
+/// `ipe` reported exit 0: an exit-0-then-cargo-fail SEAL break. Cross-call
+/// bound propagation now copies `toList`'s `Sync` obligation onto the
+/// forwarded tvar. Four output lines: a by-pk hit, the FIRST ordered row among
+/// many matches, a `Nothing` miss, and a `'; DROP TABLE`-bearing value stored +
+/// retrieved LITERALLY through a bound parameter.
+///
+///   by-id:widget:30
+///   first-ordered:widget:30
+///   miss:nothing
+///   injection:'; DROP TABLE products; --
+///
+/// Sanctioned divergence: Ipê emits Rust+sqlx; `Ipe.Db.Store` is an Ipê-only
+/// addition with no Go counterpart; oracle is Ipê's own output.
+#[test]
+fn db_store_to_maybe() {
+    assert_runs_and_matches_oracle("db_store_to_maybe");
+}
+
 /// SEAL regression: a generic HOF (`Result.map`) applied to a callee whose
 /// return type is a CROSS-MODULE concrete stdlib type (`Ipe.Db.Store.Store`).
 /// Before the fix the `Result.map` type variable erased to `JsonVal` in emitted
