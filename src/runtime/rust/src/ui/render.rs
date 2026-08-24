@@ -1444,7 +1444,7 @@ mod tests {
     /// text must stay INSIDE the same `<p>` element.
     #[test]
     fn paragraph_highlight_phrase_stays_inside_p_no_hoisting() {
-        use super::super::helpers::{ui_el_, ui_paragraph_};
+        use crate::ui::helpers::{ui_el_, ui_paragraph_};
 
         let para: Element<TestMsg> = ui_paragraph_(
             vec![],
@@ -1485,7 +1485,7 @@ mod tests {
     /// keeping the flex container inline and the `<p>` unclosed.
     #[test]
     fn paragraph_row_child_renders_inline_flex_not_block_flex() {
-        use super::super::helpers::{ui_paragraph_, ui_row_};
+        use crate::ui::helpers::{ui_paragraph_, ui_row_};
 
         let para: Element<TestMsg> = ui_paragraph_(
             vec![],
@@ -1524,7 +1524,7 @@ mod tests {
     /// Golden: `Ui.column` inside `Ui.paragraph` renders `display:inline-flex`.
     #[test]
     fn paragraph_column_child_renders_inline_flex_not_block_flex() {
-        use super::super::helpers::{ui_column_, ui_paragraph_};
+        use crate::ui::helpers::{ui_column_, ui_paragraph_};
 
         let para: Element<TestMsg> = ui_paragraph_(
             vec![],
@@ -1563,7 +1563,7 @@ mod tests {
     /// `Ui.el` outside a paragraph renders as `<div>`, not `<span>`.
     #[test]
     fn el_outside_paragraph_renders_as_div_not_span() {
-        use super::super::helpers::ui_el_;
+        use crate::ui::helpers::ui_el_;
 
         let elem: Element<TestMsg> = ui_el_(
             vec![Attribute::AttrFontWeight(700)],
@@ -1589,7 +1589,7 @@ mod tests {
     /// `Ui.row` outside a paragraph renders `display:flex` (not `inline-flex`).
     #[test]
     fn row_outside_paragraph_renders_flex_not_inline_flex() {
-        use super::super::helpers::ui_row_;
+        use crate::ui::helpers::ui_row_;
 
         let elem: Element<TestMsg> = ui_row_(vec![], vec![Element::Text("item".to_owned())]);
         let html = render_element(elem);
@@ -1612,7 +1612,7 @@ mod tests {
     /// `Ui.column` outside a paragraph renders `display:flex` (not `inline-flex`).
     #[test]
     fn column_outside_paragraph_renders_flex_not_inline_flex() {
-        use super::super::helpers::ui_column_;
+        use crate::ui::helpers::ui_column_;
 
         let elem: Element<TestMsg> = ui_column_(vec![], vec![Element::Text("item".to_owned())]);
         let html = render_element(elem);
