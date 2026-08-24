@@ -1,0 +1,54 @@
+module Main exposing (main)
+
+-- `Web.authSlideWindow` sets the rolling re-issue window (seconds).
+-- The compiler must resolve it to the `WebAuthSlideWindow` kernel (no N0005)
+-- and the emitted crate must cargo-build (THE SEAL).
+
+import Ipe.Tea.Web as Web
+import Ipe.Ui as Ui
+import Ipe.Tea.Web.Cmd
+import Ipe.String
+import Ipe.Tea.Web.Sub
+
+
+type Msg
+    = Tick
+
+
+type alias Model =
+    { count : Int }
+
+
+init : a -> ( Model, Cmd Msg )
+init _req =
+    ( { count = 0 }, Cmd.none )
+
+
+update : Msg -> Model -> ( Model, Cmd Msg )
+update msg model =
+    case msg of
+        Tick ->
+            ( { model | count = model.count + 1 }, Cmd.none )
+
+
+view : Model -> Element Msg
+view model =
+    Ui.text (String.fromInt model.count)
+
+
+subscriptions : Model -> Sub Msg
+subscriptions _model =
+    Sub.none
+
+
+main =
+    Web.appWith
+        [ Web.authSlideWindow 900
+        ]
+        { init = init
+        , update = update
+        , view = view
+        , subscriptions = subscriptions
+        , routes = []
+        , notFound = Tick
+        }

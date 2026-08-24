@@ -198,6 +198,25 @@ A non-positive value falls closed to the 8 h default.
 A session token without a `cap` claim (minted before this feature) is bounded
 only by its `exp` — it does not receive an unlimited lifetime.
 
+### Sliding (rolling) re-issue
+
+When a cookie-based authenticated route receives a valid token that is past its
+re-issue threshold (`exp - authSlideWindow / 2`), the middleware mints a fresh
+token and attaches it via `Set-Cookie`. The new `exp` is
+`min(now + authSlideWindow, cap)` — active sessions extend automatically while
+the absolute cap is never crossed. `iat` and `cap` are carried verbatim from the
+verified token and cannot be moved outward.
+
+The sliding window defaults to **30 m**. Override it in two ways (env wins):
+
+- **In-code**: `Web.authSlideWindow <seconds>` in the `Web.appWith` settings list.
+- **Environment**: `IPE_AUTH_SLIDE_WINDOW=<seconds>` overrides the in-code setting
+  without a rebuild.
+
+A non-positive value or a value ≥ `authMaxLifetime` falls closed to a safe
+default. Re-issue only fires for cookie token sources (`Server.cookieToken`) —
+bearer-header tokens are API credentials the client manages directly.
+
 ## Broadcasting: pub/sub
 
 A Web app can broadcast a payload on a named topic to every session subscribed
