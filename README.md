@@ -150,19 +150,20 @@ See [**Capabilities**](docs/language/capabilities.md) for the full model.
 <!--
 ## Dependencies
 
-A project declares its dependencies in `ipe.toml`. Three sections, each optional:
+A project declares its dependencies in `package.ipe`. Three builders, each optional:
 
-```toml
-[dependencies]              # Ipê packages
-http  = "^1.2"              # from the package index, by semver requirement
-mylib = { git = "https://example.com/mylib.git", rev = "abc123" }
-local = { path = "../local" }
-
-[rust.dependencies]         # Rust crates, bound as a foreign-function interface
-uuid = "1.10"
-
-[capabilities]              # the capabilities you declare the program exercises
-declared = ["network", "clock"]
+```elm
+package =
+    Package.named "my-app"
+        |> Package.dependencies              -- Ipê packages
+            [ Package.dep "http" "^1.2"      -- from the package index, by semver requirement
+            , Package.depGitRev "mylib" "https://example.com/mylib.git" "abc123"
+            , Package.depPath "local" "../local"
+            ]
+        |> Package.rustDependencies          -- Rust crates, bound as a foreign-function interface
+            [ Package.rustDep "uuid" "1.10" ]
+        |> Package.declares                  -- the capabilities you declare the program exercises
+            [ Capability.network, Capability.clock ]
 ```
 
 **Rust crates** are managed by the `ipe rust` command group:
@@ -170,7 +171,7 @@ declared = ["network", "clock"]
 ```
 $ ipe rust add uuid@1.10        # inspect and cache a crate
 $ ipe rust remove uuid          # drop it
-$ ipe rust install              # (re)inspect every [rust.dependencies] crate
+$ ipe rust install              # (re)inspect every Package.rustDependencies crate
 ```
 
 Each crate is inspected inside a sandbox before it is trusted, and its
@@ -181,7 +182,7 @@ Each crate is inspected inside a sandbox before it is trusted, and its
 ```
 $ ipe add http-extras           # resolve the latest published version
 $ ipe add http-extras@^1.2       # or pin a semver requirement
-$ ipe remove http-extras         # drop it from ipe.toml and ipe.lock
+$ ipe remove http-extras         # drop it from package.ipe and ipe.lock
 ```
 
 `ipe add` resolves the package through the **curated index** (a git repository):
@@ -189,7 +190,7 @@ it reads the package's entry, picks the highest published version satisfying you
 requirement, fetches that version's source at its pinned revision, and **verifies
 the fetched source's sha256 against the hash the index pinned** before trusting
 it — a mismatch is a hard error, never a warning, and nothing is written. It then
-records the exact pins in `ipe.lock` and the requirement in `ipe.toml`, and prints
+records the exact pins in `ipe.lock` and the requirement in `package.ipe`, and prints
 the resolved version and its capability set (loudly, when a package uses
 `native-ffi`).
 
@@ -274,7 +275,7 @@ Rust-only shop that must comply with a "Rust only" rule.
 
 ```sh
 # Eject the program-shape example into a standalone project:
-ipe eject examples/shapes/program/release-preflight/ipe.toml --out /tmp/eject-demo
+ipe eject examples/shapes/program/release-preflight/package.ipe --out /tmp/eject-demo
 
 # Build it with plain cargo — no ipe toolchain required:
 cd /tmp/eject-demo
@@ -297,7 +298,7 @@ sudo apt-get install musl-tools   # or equivalent on your distro
 
 # Build a static binary (x86_64 Linux, dlmalloc allocator — the default):
 cd examples/sky/ipe/01-hello-world
-ipe build ipe.toml --out out/rust --static
+ipe build package.ipe --out out/rust --static
 cd out/rust
 cargo build --release --target x86_64-unknown-linux-musl
 ```

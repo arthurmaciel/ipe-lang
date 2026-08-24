@@ -133,15 +133,16 @@ warning, no prompt, no flag. Consent has three forms:
   ipe run   --accept-risks
   ```
 
-- **The durable manifest token** in `ipe.toml`, so a repeatedly-built project
+- **The durable manifest token** in `package.ipe`, so a repeatedly-built project
   never re-prompts and CI needs no flag:
 
-  ```toml
-  [capabilities]
-  accept = ["unsafe"]
+  ```elm
+  package =
+      Package.named "my-app"
+          |> Package.accepts [ Capability.unsafe ]
   ```
 
-  (`accept` is distinct from `declared`: `declared` names a package's *own*
+  (`accepts` is distinct from `declares`: `declares` names a package's *own*
   effects; `accept` records that you have taken responsibility for a disclosed
   risk.)
 

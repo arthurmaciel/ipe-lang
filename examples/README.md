@@ -1,7 +1,7 @@
 # Ipê examples
 
 This directory contains the Ipê-native first-party examples. Each is a
-self-contained Ipê project (a `ipe.toml` manifest plus source under `src/`)
+self-contained Ipê project (a `package.ipe` manifest plus source under `src/`)
 that builds with `ipe build` and targets the Rust backend.
 
 ## First-party examples
@@ -60,12 +60,12 @@ git-ignored.
 
 ```sh
 # Build and run a CLI example
-ipe build ipe.toml --out out/rust
+ipe build package.ipe --out out/rust
 cargo run --manifest-path out/rust/Cargo.toml
 
 # Build a WASM example (outputs to out/rust/www/)
 cd examples/wasm/spa
-ipe build ipe.toml --out out/rust --target wasm
+ipe build package.ipe --out out/rust --target wasm
 ```
 
 Or use the sweep to build and run all in-scope examples at once:

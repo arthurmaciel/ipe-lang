@@ -22,7 +22,7 @@ Add to `~/.config/helix/languages.toml`:
 name = "ipe"
 scope = "source.ipe"
 file-types = ["ipe"]
-roots = ["ipe.toml"]
+roots = ["package.ipe", "ipe.toml"]
 language-servers = ["ipe-lsp"]
 auto-format = true
 formatter = { command = "ipe", args = ["fmt", "--stdin"] }
@@ -43,7 +43,7 @@ if not configs.ipe then
     default_config = {
       cmd = { "ipe", "lsp" },
       filetypes = { "ipe" },
-      root_dir = lspconfig.util.root_pattern("ipe.toml", ".git"),
+      root_dir = lspconfig.util.root_pattern("package.ipe", "ipe.toml", ".git"),
       settings = {},
     },
   }
@@ -274,6 +274,6 @@ add to the language entry:
 ```
 
 > **Note:** Zed's custom language server support is evolving. If the above
-> does not work for your version, open a project containing an `ipe.toml` and
+> does not work for your version, open a project containing a `package.ipe` and
 > use the command palette (`Cmd+Shift+P` / `Ctrl+Shift+P`) → *Add Language
 > Server* to register `ipe lsp` interactively.

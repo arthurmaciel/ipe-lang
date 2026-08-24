@@ -145,35 +145,21 @@ Ask one focused question per ambiguity; no guess heroically.
 | Errors               | `Result Error a` / `Task Error a`.  Never `String` as error type. |
 | No raw HTML / JS     | `Ipe.Ui` HTML-escapes everything.  `data-ipe-eval` forbidden. |
 
-### `ipe.toml` shape per decision
+### `package.ipe` shape per decision
 
-Author configures at most these sections. Precedence: **process env >
-`.env` > `ipe.toml`**. Secrets never in `ipe.toml` — auth secret from
-`IPE_AUTH_TOKEN_SECRET` (≥32 bytes).
+The manifest is written in Ipê and read syntactically. Author configures at most
+these fields. Precedence: **process env > `.env` > `package.ipe`**. Secrets never
+in `package.ipe` — auth secret from `IPE_AUTH_TOKEN_SECRET` (≥32 bytes).
 
-```toml
-name = "<project>"
-version = "0.1.0"
-entry = "src/Main.ipe"
-
-[live]                          # Ipe.Tea.Web apps only
-port = 8000
-store = "sqlite"                # memory / sqlite / redis / postgres / firestore
-storePath = "sessions.db"
-ttl = "30m"
-
-[database]                      # persistence != none
-driver = "sqlite"               # sqlite / postgres
-url = "DATABASE_URL"
-
-[auth]                          # auth != none
-cookie = "ipe_sid"
-ttl = "24h"
-
-[log]
-format = "json"                 # plain (default) / json
-level  = "info"                 # debug / info / warn / error
+```elm
+package =
+    Package.named "<project>"
+        |> Package.version "0.1.0"
+        |> Package.database Package.sqlite   -- sqlite (default) | postgres
 ```
+
+`DATABASE_URL` and other runtime settings come from process env / `.env`, never
+the manifest.
 
 ### Production gate — surface to the user
 
@@ -1054,27 +1040,29 @@ error — only the reachable subset matters, so a shared `view` module used by
 both a server SSR path and a wasm client type-checks against both targets
 without duplication.
 
-**`[wasm]` `ipe.toml` section** (composes with `[live]`):
+**`Package.wasm` in `package.ipe`**:
 
-```toml
-[wasm]
-mode      = "spa"              # spa (MVP) | hydrate (MVP+1) | off (default)
-entry     = "src/Client.ipe"   # client entry file (defaults to the build's own entry)
-mount     = "#app"             # SPA mount selector
-publicEnv = ["API_BASE_URL"]   # default-deny allowlist; rejects IPE_*/secret-pattern names
-optLevel  = "z"
+```elm
+package =
+    Package.named "<project>"
+        |> Package.wasm
+            (Wasm.spa                          -- Wasm.spa | Wasm.hydrate (absent = native)
+                |> Wasm.entry "src/Client.ipe"  -- client entry file (defaults to the build's own entry)
+                |> Wasm.mount "#app"            -- SPA mount selector
+                |> Wasm.publicEnv [ "API_BASE_URL" ]  -- default-deny allowlist; rejects IPE_*/secret-pattern names
+                |> Wasm.optLevel "z"
+            )
 ```
 
-When `mode` is `"spa"` or `"hydrate"` (any value other than `"off"` or absent),
-the compiler infers the wasm target: `ipe build` is equivalent to
-`ipe build --target wasm` without an explicit flag. Precedence (highest first):
-`--target wasm` CLI flag > `IPE_TARGET=wasm` env > `[wasm].mode` in `ipe.toml` >
-default native. `mode = "off"` or an absent `[wasm]` section keeps the native
-default.
+When the mode is `Wasm.spa` or `Wasm.hydrate`, the compiler infers the wasm
+target: `ipe build` is equivalent to `ipe build --target wasm` without an
+explicit flag. Precedence (highest first): `--target wasm` CLI flag >
+`IPE_TARGET=wasm` env > the manifest's `Package.wasm` mode > default native. An
+absent `Package.wasm` stage keeps the native default.
 
-`publicEnv` is a default-deny allowlist gated by a secret-name denylist
+`Wasm.publicEnv` is a default-deny allowlist gated by a secret-name denylist
 (`*_SECRET`/`*_TOKEN`/`*_KEY`/`*_PASSWORD`/`DATABASE_URL`/the `IPE_*`
-namespace) enforced at `ipe.toml` PARSE time — listing `IPE_AUTH_TOKEN_SECRET`
+namespace) enforced at manifest PARSE time — listing `IPE_AUTH_TOKEN_SECRET`
 (or any denylisted pattern) in `publicEnv` is a build error, never a silently
 dropped entry and never a runtime-only refusal. `System.getenv` stays a
 DOES-NOT-exist-for-wasm kernel regardless (Layer 1) — public build-time
