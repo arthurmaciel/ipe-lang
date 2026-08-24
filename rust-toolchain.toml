@@ -1,6 +1,6 @@
 # rust-toolchain.toml
 [toolchain]
-channel = "stable"
+channel = "1.97.1"
 components = ["clippy", "rustfmt"]
 # `wasm32-unknown-unknown` is the in-browser compiler target: the `ipe-wasm`
 # frontend crate at `src/wasm` builds to it for the browser playground
