@@ -150,11 +150,28 @@ pub(crate) fn build_style_string<M>(attrs: &[Attribute<M>]) -> String {
                         decl!("display:block");
                     }
                     "__inline" => {
-                        // Injected by `render_node_as` onto a `Ui.el` child of a
-                        // paragraph so its run flows inline with the surrounding
-                        // text instead of breaking onto its own line.
+                        // Injected by `render_paragraph_child` onto a `Ui.el`
+                        // child of a paragraph so its styled run flows inline
+                        // with the surrounding text instead of breaking to its
+                        // own line.
                         decl!("display:inline-block");
                         decl!("vertical-align:baseline");
+                    }
+                    "__inline_row" => {
+                        // A `Ui.row` rendered inside a `Ui.paragraph` context.
+                        // `display:inline-flex` keeps the flex container inline
+                        // so the row does not force a block-level line break and
+                        // the HTML parser does not auto-close the surrounding
+                        // `<p>` around it.
+                        decl!("display:inline-flex");
+                        decl!("flex-direction:row");
+                    }
+                    "__inline_col" => {
+                        // A `Ui.column` rendered inside a `Ui.paragraph` context.
+                        // `display:inline-flex` keeps the flex container inline
+                        // for the same reason as `__inline_row` above.
+                        decl!("display:inline-flex");
+                        decl!("flex-direction:column");
                     }
                     _ => {
                         // User-supplied CSS key+value.
@@ -524,18 +541,59 @@ fn has_paragraph_marker<M>(attrs: &[Attribute<M>]) -> bool {
         .any(|a| matches!(a, Attribute::AttrStyle(k, _) if k == "__paragraph"))
 }
 
-/// Render one child of a `Ui.paragraph`. A bare `Ui.el` child
-/// (`Element::Node(NoDescription, …)`) becomes an inline `<span>` carrying the
-/// `__inline` marker, so its styled run (e.g. `Font.bold`) flows inline with the
-/// surrounding text and produces valid `<p>`-nestable markup. Every other child
-/// (text, `Ui.link`/`Ui.el`-with-explicit-tag, raw HTML) renders unchanged.
+/// Render one child of a `Ui.paragraph`.
+///
+/// All `Element::Node(NoDescription, …)` children must render inline — a block
+/// child inside `<p>` causes the HTML parser to auto-close the `<p>` and hoist
+/// the block out, breaking the highlight-a-phrase pattern.
+///
+/// The adaptation depends on whether the child carries a flex-direction marker:
+///
+/// - Plain `Ui.el` (no `__row`/`__col`): becomes a `<span>` with `__inline`
+///   (`display:inline-block`), so its styled run (e.g. `Font.bold`) flows
+///   inline with the surrounding text.
+///
+/// - `Ui.row` (carries `__row`): `__row` is replaced by `__inline_row`
+///   (`display:inline-flex;flex-direction:row`). The flex container stays
+///   inline, preserving its internal row layout without breaking out of `<p>`.
+///
+/// - `Ui.column` (carries `__col`): `__col` is replaced by `__inline_col`
+///   (`display:inline-flex;flex-direction:column`). Same rationale as row.
+///
+/// Every other child kind (text, `Ui.link`, `TaggedNode`, raw HTML) renders
+/// unchanged via the normal path — they are already inline-compatible.
 fn render_paragraph_child<M: Clone>(child: Element<M>, depth: usize) -> Html<M> {
     match child {
         Element::Node(Description::NoDescription, mut attrs, kids) => {
-            attrs.insert(
-                0,
-                Attribute::AttrStyle("__inline".to_owned(), "true".to_owned()),
-            );
+            // Replace any flex-direction marker with its inline-flex equivalent.
+            // A node carries at most one direction marker, always at position 0
+            // (inserted by `ui_row_` / `ui_column_`). Mutating in place is safe
+            // because `attrs` is owned (moved out of the `Element`).
+            let made_inline_flex = attrs.iter_mut().any(|a| {
+                if let Attribute::AttrStyle(k, _) = a {
+                    match k.as_str() {
+                        "__row" => {
+                            *k = "__inline_row".to_owned();
+                            true
+                        }
+                        "__col" => {
+                            *k = "__inline_col".to_owned();
+                            true
+                        }
+                        _ => false,
+                    }
+                } else {
+                    false
+                }
+            });
+            // Plain `Ui.el` has no flex-direction marker; give it `__inline` so
+            // the span flows inline with the surrounding text.
+            if !made_inline_flex {
+                attrs.insert(
+                    0,
+                    Attribute::AttrStyle("__inline".to_owned(), "true".to_owned()),
+                );
+            }
             render_node_as("span", &attrs, kids, depth)
         }
         other => render_element_depth(other, depth),
@@ -1372,6 +1430,205 @@ mod tests {
         assert!(
             s.starts_with("<p"),
             "the paragraph itself must render as <p>: {s}"
+        );
+    }
+
+    // ── Ui.paragraph inline-child rendering ──────────────────────────────────
+
+    /// Golden: the highlight-a-phrase pattern keeps every child inside `<p>`.
+    ///
+    /// `Ui.paragraph [] [ Ui.el [Font.bold] (Ui.text "X"), Ui.text " — rest" ]`
+    ///
+    /// The `Ui.el` child must render as an inline `<span>` (not a block `<div>`)
+    /// so the HTML parser never auto-closes the `<p>` around it. The trailing
+    /// text must stay INSIDE the same `<p>` element.
+    #[test]
+    fn paragraph_highlight_phrase_stays_inside_p_no_hoisting() {
+        use super::super::helpers::{ui_el_, ui_paragraph_};
+
+        let para: Element<TestMsg> = ui_paragraph_(
+            vec![],
+            vec![
+                ui_el_(
+                    vec![Attribute::AttrFontWeight(700)],
+                    Element::Text("X".to_owned()),
+                ),
+                Element::Text(" — rest".to_owned()),
+            ],
+        );
+        let html = render_element(para);
+        let s = render_html(&html);
+
+        // The paragraph wraps in <p>.
+        assert!(s.starts_with("<p"), "outer element must be <p>: {s}");
+        // The bold phrase renders as inline span, not block div — prevents
+        // auto-close of <p> by the HTML parser.
+        assert!(
+            s.contains("<span") && s.contains("font-weight:700"),
+            "bold child must render as <span> with font-weight:700: {s}"
+        );
+        assert!(
+            !s.contains("<div"),
+            "no block <div> may appear inside <p> (would be hoisted out): {s}"
+        );
+        // Both the span and the trailing text are children of the single <p>,
+        // proven by the trailing text appearing before </p>.
+        let p_close = s.rfind("</p>").expect("<p> must close");
+        let rest_pos = s.find(" \u{2014} rest").expect("trailing text must appear");
+        assert!(
+            rest_pos < p_close,
+            "trailing text must be inside <p>, not hoisted after </p>: {s}"
+        );
+    }
+
+    /// Golden: `Ui.row` inside `Ui.paragraph` renders `display:inline-flex`,
+    /// keeping the flex container inline and the `<p>` unclosed.
+    #[test]
+    fn paragraph_row_child_renders_inline_flex_not_block_flex() {
+        use super::super::helpers::{ui_paragraph_, ui_row_};
+
+        let para: Element<TestMsg> = ui_paragraph_(
+            vec![],
+            vec![
+                Element::Text("before ".to_owned()),
+                ui_row_(
+                    vec![Attribute::AttrFontWeight(600)],
+                    vec![Element::Text("inner".to_owned())],
+                ),
+                Element::Text(" after".to_owned()),
+            ],
+        );
+        let html = render_element(para);
+        let s = render_html(&html);
+
+        assert!(s.starts_with("<p"), "outer element must be <p>: {s}");
+        assert!(
+            s.contains("display:inline-flex"),
+            "row inside paragraph must emit display:inline-flex: {s}"
+        );
+        assert!(
+            s.contains("flex-direction:row"),
+            "row direction must be preserved: {s}"
+        );
+        // No block-level display:flex that would auto-close the <p>.
+        assert!(
+            !s.contains("display:flex;"),
+            "no bare display:flex inside <p> (would force block context): {s}"
+        );
+        assert!(
+            !s.contains("<div"),
+            "no block <div> may appear inside <p>: {s}"
+        );
+    }
+
+    /// Golden: `Ui.column` inside `Ui.paragraph` renders `display:inline-flex`.
+    #[test]
+    fn paragraph_column_child_renders_inline_flex_not_block_flex() {
+        use super::super::helpers::{ui_column_, ui_paragraph_};
+
+        let para: Element<TestMsg> = ui_paragraph_(
+            vec![],
+            vec![
+                Element::Text("label ".to_owned()),
+                ui_column_(
+                    vec![Attribute::AttrFontColor(Color::Rgba(0, 0, 255, 1.0))],
+                    vec![Element::Text("stacked".to_owned())],
+                ),
+            ],
+        );
+        let html = render_element(para);
+        let s = render_html(&html);
+
+        assert!(s.starts_with("<p"), "outer element must be <p>: {s}");
+        assert!(
+            s.contains("display:inline-flex"),
+            "column inside paragraph must emit display:inline-flex: {s}"
+        );
+        assert!(
+            s.contains("flex-direction:column"),
+            "column direction must be preserved: {s}"
+        );
+        assert!(
+            !s.contains("display:flex;"),
+            "no bare display:flex inside <p>: {s}"
+        );
+        assert!(
+            !s.contains("<div"),
+            "no block <div> may appear inside <p>: {s}"
+        );
+    }
+
+    // ── Non-regression: outside-paragraph layouts are unchanged ──────────────
+
+    /// `Ui.el` outside a paragraph renders as `<div>`, not `<span>`.
+    #[test]
+    fn el_outside_paragraph_renders_as_div_not_span() {
+        use super::super::helpers::ui_el_;
+
+        let elem: Element<TestMsg> = ui_el_(
+            vec![Attribute::AttrFontWeight(700)],
+            Element::Text("X".to_owned()),
+        );
+        let html = render_element(elem);
+        let s = render_html(&html);
+
+        assert!(
+            s.starts_with("<div"),
+            "Ui.el outside paragraph must render as <div>: {s}"
+        );
+        assert!(
+            !s.contains("display:inline-block"),
+            "outside paragraph, no inline-block injection: {s}"
+        );
+        assert!(
+            !s.contains("<span"),
+            "outside paragraph, no <span> injection: {s}"
+        );
+    }
+
+    /// `Ui.row` outside a paragraph renders `display:flex` (not `inline-flex`).
+    #[test]
+    fn row_outside_paragraph_renders_flex_not_inline_flex() {
+        use super::super::helpers::ui_row_;
+
+        let elem: Element<TestMsg> = ui_row_(vec![], vec![Element::Text("item".to_owned())]);
+        let html = render_element(elem);
+        let s = render_html(&html);
+
+        assert!(
+            s.contains("display:flex"),
+            "Ui.row outside paragraph must emit display:flex: {s}"
+        );
+        assert!(
+            !s.contains("inline-flex"),
+            "Ui.row outside paragraph must NOT emit inline-flex: {s}"
+        );
+        assert!(
+            s.contains("flex-direction:row"),
+            "row direction must be present: {s}"
+        );
+    }
+
+    /// `Ui.column` outside a paragraph renders `display:flex` (not `inline-flex`).
+    #[test]
+    fn column_outside_paragraph_renders_flex_not_inline_flex() {
+        use super::super::helpers::ui_column_;
+
+        let elem: Element<TestMsg> = ui_column_(vec![], vec![Element::Text("item".to_owned())]);
+        let html = render_element(elem);
+        let s = render_html(&html);
+
+        assert!(
+            s.contains("display:flex"),
+            "Ui.column outside paragraph must emit display:flex: {s}"
+        );
+        assert!(
+            !s.contains("inline-flex"),
+            "Ui.column outside paragraph must NOT emit inline-flex: {s}"
+        );
+        assert!(
+            s.contains("flex-direction:column"),
+            "column direction must be present: {s}"
         );
     }
 
