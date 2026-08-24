@@ -100,8 +100,10 @@ pub enum RuntimeFeature {
     Regex,
     /// `uuid` — the `uuid` crate and the `uuid_kernel.rs` module
     /// (`reaches_uuid()`: an `Ipe.Uuid` kernel, OR the `server` / `web` surfaces
-    /// whose runtime modules mint ids via `uuid::new_v4`). A bare Program that
-    /// reaches none drops the crate.
+    /// whose runtime modules mint ids via `uuid::new_v4`, OR the `jwt` / `auth`
+    /// surface whose `auth.rs` calls `uuid::Uuid::new_v4()` to mint per-session
+    /// `jti` ids in `auth_sign_token`). A bare Program that reaches none drops the
+    /// crate.
     Uuid,
     /// `random` — the `random.rs` module (`reaches_random()`: an `Ipe.Random`
     /// kernel). A standalone leaf — no surface implies it. The feature gates the
@@ -348,8 +350,11 @@ pub fn runtime_features(ctx: &EmitCtx) -> RuntimeFeatureSet {
 
     // Uuid (`uuid` crate) + the `uuid_kernel.rs` module. `reaches_uuid()` folds
     // the direct `Ipe.Uuid` kernels with the server/web surfaces (whose runtime
-    // modules mint ids via `uuid::new_v4`). The crate-side implications (server/web
-    // each list `uuid`) carry the same closure at `--no-default-features`.
+    // modules mint ids via `uuid::new_v4`) AND the jwt/auth surface (`auth.rs` is
+    // compiled under `#[cfg(feature = "jwt")]` and calls `uuid::Uuid::new_v4()` to
+    // mint per-session `jti` ids). The crate-side implications (server/web each list
+    // `uuid`; `jwt` now lists `uuid`) carry the same closure at
+    // `--no-default-features`.
     if ctx.reaches_uuid() {
         set.insert(RuntimeFeature::Uuid);
     }

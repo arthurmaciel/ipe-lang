@@ -667,12 +667,13 @@ const RUNTIME_MOD_RS_REGEX_APPEND: &str = "pub mod regex_kernel;\npub use regex_
 
 /// Lines appended to `ipe_runtime/mod.rs` when the program reaches the `uuid`
 /// crate — an `Ipe.Uuid` kernel, OR the `server` / `web` surfaces whose runtime
-/// modules mint session/CSRF ids via `uuid::new_v4` ([`EmitCtx::reaches_uuid`]).
+/// modules mint session/CSRF ids via `uuid::new_v4`, OR the `jwt` / `auth` surface
+/// whose `auth.rs` calls `uuid::Uuid::new_v4()` to mint per-session `jti` ids
+/// ([`EmitCtx::reaches_uuid`]).
 ///
-/// `uuid_kernel.rs` is the sole consumer of the `uuid` crate as a runtime module.
-/// Declared only on demand — behind the `uuid` feature, which [`runtime_features`]
-/// selects under the same [`EmitCtx::reaches_uuid`] condition and
-/// [`uuid_cargo_toml`] adds the dep for. A bare Program that reaches none drops
+/// `uuid_kernel.rs` exposes the `Ipe.Uuid` kernels. Declared only on demand —
+/// behind the `uuid` runtime feature, which [`runtime_features`] selects under the
+/// same [`EmitCtx::reaches_uuid`] condition. A bare Program that reaches none drops
 /// the crate.
 const RUNTIME_MOD_RS_UUID_APPEND: &str = "pub mod uuid_kernel;\npub use uuid_kernel::*;\n";
 
@@ -2400,10 +2401,13 @@ fn assemble_project_files(
         if ctx.uses_regex {
             mod_rs.push_str(RUNTIME_MOD_RS_REGEX_APPEND);
         }
-        // Ipe.Uuid. `uuid_kernel.rs` (the sole consumer of the `uuid` crate) is
-        // declared when the program reaches an `Ipe.Uuid` kernel or a server/web
-        // surface (whose runtime module mints ids via `uuid::new_v4`). A bare
-        // Program that reaches none keeps it absent, dropping `uuid`.
+        // Ipe.Uuid. `uuid_kernel.rs` is declared when the program reaches the
+        // `uuid` crate: a direct `Ipe.Uuid` kernel, a server/web surface (whose
+        // runtime modules mint ids via `uuid::new_v4`), OR the jwt/auth surface
+        // (`auth.rs` is compiled under `#[cfg(feature = "jwt")]` and calls
+        // `uuid::Uuid::new_v4()` to mint per-session jti ids). All three paths
+        // imply the `uuid` dep; a bare Program that reaches none keeps the module
+        // absent, dropping `uuid`.
         if ctx.reaches_uuid() {
             mod_rs.push_str(RUNTIME_MOD_RS_UUID_APPEND);
         }
