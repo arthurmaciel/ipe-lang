@@ -9,7 +9,11 @@
 //!     only `App.fromEnv` mints) is REJECTED at ipe time — an in-source
 //!     credential is unrepresentable at the boundary;
 //!   * a non-`Setting` value in the `List (Setting Web)` slot (a bare `Int`) is
-//!     REJECTED — the phantom shape on the settings list is enforced.
+//!     REJECTED — the phantom shape on the settings list is enforced;
+//!   * a bare `Int` where a config-tag ADT is expected (`Host.bind 7` /
+//!     `Web.csrf 99` / `Log.level 5`) is REJECTED — the closed `HostMode` /
+//!     `CsrfMode` / `LogLevel` types make an out-of-range tag a type error, not a
+//!     value the runtime falls closed on. `CsrfMode` has no disabling variant.
 
 use std::path::{Path, PathBuf};
 
@@ -83,5 +87,70 @@ fn non_setting_in_settings_list_is_rejected() {
         built.is_err(),
         "a bare `Int` in the `List (Setting Web)` settings slot MUST be rejected — \
          the phantom shape on the settings list is enforced"
+    );
+}
+
+/// `Host.bind 7` — a bare `Int` where the closed `HostMode` ADT is expected —
+/// must be an ipe-time type error. An out-of-range host-bind tag is now
+/// unrepresentable, not a value the runtime falls closed on.
+#[test]
+fn bare_int_host_bind_is_rejected() {
+    const GOLDEN: &str = "app_settings_bare_int_host_rejected";
+    let root = repo_root();
+    let entry = fixture_entry(&root, GOLDEN);
+    let out = std::env::temp_dir().join("ipec_app_settings_bare_int_host_rejected");
+    let _ = std::fs::remove_dir_all(&out);
+
+    let Ok(runtime) = ipe::resolve_runtime() else {
+        return;
+    };
+    let built = ipe::build(&entry, &out, &runtime);
+    assert!(
+        built.is_err(),
+        "`Host.bind 7` (a bare `Int`, not a `HostMode`) MUST be rejected — the \
+         closed `HostMode` ADT makes an out-of-range host-bind tag a type error"
+    );
+}
+
+/// `Web.csrf 99` — a bare `Int` where the closed `CsrfMode` ADT is expected —
+/// must be an ipe-time type error. `CsrfMode` also carries no disabling variant,
+/// so a setting cannot express turning CSRF off.
+#[test]
+fn bare_int_web_csrf_is_rejected() {
+    const GOLDEN: &str = "app_settings_bare_int_csrf_rejected";
+    let root = repo_root();
+    let entry = fixture_entry(&root, GOLDEN);
+    let out = std::env::temp_dir().join("ipec_app_settings_bare_int_csrf_rejected");
+    let _ = std::fs::remove_dir_all(&out);
+
+    let Ok(runtime) = ipe::resolve_runtime() else {
+        return;
+    };
+    let built = ipe::build(&entry, &out, &runtime);
+    assert!(
+        built.is_err(),
+        "`Web.csrf 99` (a bare `Int`, not a `CsrfMode`) MUST be rejected — the \
+         closed `CsrfMode` ADT makes an out-of-range CSRF tag a type error"
+    );
+}
+
+/// `Log.level 5` — a bare `Int` where the closed `LogLevel` ADT is expected —
+/// must be an ipe-time type error.
+#[test]
+fn bare_int_log_level_is_rejected() {
+    const GOLDEN: &str = "app_settings_bare_int_loglevel_rejected";
+    let root = repo_root();
+    let entry = fixture_entry(&root, GOLDEN);
+    let out = std::env::temp_dir().join("ipec_app_settings_bare_int_loglevel_rejected");
+    let _ = std::fs::remove_dir_all(&out);
+
+    let Ok(runtime) = ipe::resolve_runtime() else {
+        return;
+    };
+    let built = ipe::build(&entry, &out, &runtime);
+    assert!(
+        built.is_err(),
+        "`Log.level 5` (a bare `Int`, not a `LogLevel`) MUST be rejected — the \
+         closed `LogLevel` ADT makes an out-of-range severity tag a type error"
     );
 }

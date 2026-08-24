@@ -1,22 +1,16 @@
 module Main exposing (main)
 
--- Runtime-config front door: `Web.appWith` carries a shape-checked
--- `List (Setting Web)` alongside the same cfg record as `Web.app`. The
--- settings mix cross-cutting `Host.bind` / `Log.level` / `Db.url` (a `Setting a`)
--- with the web-pinned `Web.csrf` / `Web.sessionTtl` (a `Setting Web`). Each
--- setting is resolved into its runtime subsystem at startup. The database URL
--- can only come from `App.fromEnv` (a `Secret`), never a hard-coded string.
---
--- ipe MUST exit 0 AND the emitted project MUST cargo-build (THE SEAL).
+-- Closed-ADT refusal: `Log.level` takes the closed `LogLevel` type, not a bare
+-- `Int`. `Log.level 5` does NOT type-check (IPE-T0001, expected `LogLevel`). The
+-- only `LogLevel` values are the constructors `Level.debug` / `Level.info` /
+-- `Level.warn` / `Level.error` (a separate qualifier from the `Log.*` logging
+-- kernels).
 
 import Ipe.Tea.Web as Web
 import Ipe.Ui as Ui
 import Ipe.Tea.Web.Cmd
 import Ipe.String
 import Ipe.Tea.Web.Sub
-import Ipe.App as App
-import Ipe.Host as Host
-import Ipe.Db as Db
 import Ipe.Log as Log
 
 
@@ -58,12 +52,7 @@ subscriptions _model =
 
 main =
     Web.appWith
-        [ Host.bind Host.loopback
-        , Log.level Level.warn
-        , Db.url (App.fromEnv "DATABASE_URL")
-        , Web.csrf Web.strict
-        , Web.sessionTtl 3600
-        ]
+        [ Log.level 5 ]
         { init = init
         , update = update
         , view = view
