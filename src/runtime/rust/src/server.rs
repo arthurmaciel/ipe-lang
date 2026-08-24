@@ -267,27 +267,50 @@ pub enum TokenSource {
     Cookie(String),
 }
 
-/// Ipe.Server.AuthConfig (opaque) — the secret, token source, and the claim key
-/// the middleware reads the subject from. Built by [`server_auth_config`]; the
-/// only value the authed-route kernels accept.
+/// Ipe.Server.AuthConfig (opaque) — the secret, token source, claim key, and
+/// revocation mode the middleware uses. Built by [`server_auth_config`]; the
+/// only value the authed-route kernels accept. The revocation mode defaults to
+/// `Off` and is set by [`server_with_revocation`].
 #[cfg(feature = "jwt")]
 #[derive(Clone)]
 pub struct AuthConfig {
     secret: crate::secret::Secret,
     source: TokenSource,
     subject_claim: String,
+    revocation_mode: crate::app_config::RevocationMode,
 }
 
 #[cfg(feature = "jwt")]
 /// Ipe.Server.authConfig : Secret -> TokenSource -> AuthConfig. The subject
-/// claim key defaults to the JWT standard `"sub"`.
+/// claim key defaults to the JWT standard `"sub"`. Revocation defaults to `Off`.
 #[must_use]
 pub fn server_auth_config(secret: crate::secret::Secret, source: TokenSource) -> AuthConfig {
     AuthConfig {
         secret,
         source,
         subject_claim: "sub".to_string(),
+        revocation_mode: crate::app_config::RevocationMode::Off,
     }
+}
+
+#[cfg(feature = "jwt")]
+/// Ipe.Server.withRevocation : RevocationMode -> AuthConfig -> AuthConfig.
+/// Arms (or keeps armed) the per-request revocation gate on this config.
+/// The mode is supplied as a raw tag: `0` = `Off`, `1` = `Store`; out-of-range
+/// falls closed to `Store`. Stricter-only: once `Store`, a subsequent `Off` is
+/// a no-op.
+#[must_use]
+pub fn server_with_revocation(mode_tag: i64, mut cfg: AuthConfig) -> AuthConfig {
+    use crate::app_config::RevocationMode;
+    let requested = match mode_tag {
+        0 => RevocationMode::Off,
+        _ => RevocationMode::Store,
+    };
+    // Stricter-only: Store wins over Off.
+    if cfg.revocation_mode != RevocationMode::Store {
+        cfg.revocation_mode = requested;
+    }
+    cfg
 }
 
 #[cfg(feature = "jwt")]
@@ -364,16 +387,21 @@ fn reissue_set_cookie(cookie_name: &str, token: &str, slide_window_secs: u64) ->
 #[cfg(feature = "jwt")]
 /// The shared authed-route builder. Wraps the caller's
 /// `Request -> Principal -> Task Response` handler in fail-closed middleware
-/// that runs BEFORE the handler: it reads the token, verifies it, extracts the
-/// subject claim, and mints the `Principal` — dispatching to the handler only on
-/// full success, and answering `401` at the first failing step. This is the sole
-/// site that mints a `Principal`.
+/// that runs BEFORE the handler: it reads the token, verifies it, checks the
+/// revocation store (when armed), extracts the subject claim, and mints the
+/// `Principal` — dispatching to the handler only on full success, and answering
+/// `401` at the first failing step. This is the sole site that mints a `Principal`.
+///
+/// Revocation gate (when `RevocationMode::Store`): the store is queried AFTER
+/// signature + expiry verification and BEFORE the `Principal` is minted. Deny
+/// on `Verdict::Revoked`, on `Verdict::Unknown`, and on any store error
+/// (fail-closed). Only `Verdict::Active` allows the request through.
 ///
 /// Sliding re-issue: for cookie-based token sources, when the verified token is
 /// past its re-issue threshold (`exp - slide_window/2`) and the absolute cap has
 /// not been reached, a fresh token is minted and attached via `Set-Cookie`.
-/// `iat` and `cap` are carried verbatim from the verified-origin `ReissueContext`
-/// — a client cannot move the cap outward.
+/// `iat`, `cap`, and `jti` are carried verbatim from the verified-origin
+/// `ReissueContext` — a client cannot move the cap outward or change the session id.
 fn authed_route<E, F>(method: &str, path: String, cfg: AuthConfig, handler: F) -> ServerRoute
 where
     E: Send + 'static,
@@ -399,6 +427,21 @@ where
             let Some(subject) = claims.get(&cfg.subject_claim).filter(|s| !s.is_empty()) else {
                 return ok_res(unauthorized());
             };
+
+            // Revocation gate — consulted only when the mode is `Store`.
+            // Runs AFTER token verification and BEFORE `Principal` mint.
+            // Fail-closed: deny on Revoked, Unknown, and any store error.
+            if cfg.revocation_mode == crate::app_config::RevocationMode::Store {
+                let jti = claims.get("jti").map(String::as_str).unwrap_or("");
+                match crate::revocation::is_revoked(subject, jti) {
+                    crate::revocation::Verdict::Active => {}
+                    // Revoked or Unknown both deny — fail-closed.
+                    crate::revocation::Verdict::Revoked | crate::revocation::Verdict::Unknown => {
+                        return ok_res(unauthorized());
+                    }
+                }
+            }
+
             let principal = crate::principal::principal_mint(subject.clone());
 
             // Sliding re-issue — cookie-source only (bearer tokens are API
@@ -422,7 +465,13 @@ where
                         let extra: HashMap<String, String> = claims
                             .iter()
                             .filter(|(k, _)| {
-                                *k != "exp" && *k != "iat" && *k != "cap" && *k != "sub"
+                                // Time anchors and session-identity fields come from
+                                // ReissueContext verbatim; skip them in extra_claims.
+                                *k != "exp"
+                                    && *k != "iat"
+                                    && *k != "cap"
+                                    && *k != "jti"
+                                    && *k != "sub"
                             })
                             .map(|(k, v)| (k.clone(), v.clone()))
                             .collect();

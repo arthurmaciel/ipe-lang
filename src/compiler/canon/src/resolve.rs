@@ -241,6 +241,11 @@ pub const RESERVED_BUILTIN_TYPES: &[&str] = &[
     "HostMode",
     "LogLevel",
     "CsrfMode",
+    // `RevocationMode` — nullary closed revocation-gate ADT (`Off` / `Store`).
+    // Reserved so a user `type RevocationMode …` cannot forge a look-alike with an
+    // out-of-range or enabling variant; built only through `Web.revocationOff` /
+    // `Web.revocationStore` constructor kernels.
+    "RevocationMode",
     "Html",
     "Element",
     "Attribute",
@@ -429,8 +434,8 @@ pub fn is_user_type_declaration_forbidden(name: &str) -> bool {
 /// * `Connection mode` — `Ipe.Db`'s external-connection handle (arity 1);
 /// * `Setting shape` — `Ipe.App`'s runtime-config carrier (arity 1);
 /// * `ReadOnly`/`ReadWrite` — nullary phantom access-mode markers;
-/// * `HostMode`/`LogLevel`/`CsrfMode` — nullary closed config-tag ADTs (the
-///   argument types of `Host.bind`/`Log.level`/`Web.csrf`).
+/// * `HostMode`/`LogLevel`/`CsrfMode`/`RevocationMode` — nullary closed config-tag ADTs (the
+///   argument types of `Host.bind`/`Log.level`/`Web.csrf`/`Web.withRevocation`).
 ///
 /// `Task`/`Cmd`/`Sub` are absent (their gate is in `ipe_types::constrain`).
 /// `CustomElement` is absent (name-based gate, fused with its boundary SEAL).
@@ -439,7 +444,9 @@ pub fn builtin_empty_home_arity(name: Option<&str>) -> Option<usize> {
     match name? {
         "List" | "Maybe" | "Set" | "Connection" | "Setting" => Some(1),
         "Dict" | "Result" => Some(2),
-        "ReadOnly" | "ReadWrite" | "HostMode" | "LogLevel" | "CsrfMode" => Some(0),
+        "ReadOnly" | "ReadWrite" | "HostMode" | "LogLevel" | "CsrfMode" | "RevocationMode" => {
+            Some(0)
+        }
         _ => None,
     }
 }

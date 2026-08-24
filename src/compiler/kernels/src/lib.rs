@@ -286,6 +286,10 @@ pub enum BuiltinTag {
     /// stricter-only monotonicity becomes an unrepresentable-at-the-type-level
     /// property.
     CsrfMode,
+    /// `RevocationMode` — the nullary closed revocation-gate ADT (`Off` / `Store`).
+    /// The sole argument type of `Web.withRevocation` and `Server.withRevocation`.
+    /// Stricter-only monotonic: once `Store`, `Off` is a no-op; erases to `Int`.
+    RevocationMode,
     /// `Locale` — the nullary opaque BCP-47 locale handle.
     Locale,
     /// `HttpMethod` — the nullary closed HTTP-method ADT.
@@ -1559,6 +1563,9 @@ pub enum StdlibKernel {
     ServerAuthConfig,
     ServerTokenBearer,
     ServerCookieToken,
+    /// `Server.withRevocation : RevocationMode -> AuthConfig -> AuthConfig` — arms
+    /// the per-request revocation gate on an `AuthConfig`.
+    ServerWithRevocation,
     ServerGetAuthed,
     ServerPostAuthed,
     ServerPutAuthed,
@@ -1753,6 +1760,11 @@ pub enum StdlibKernel {
     WebAuthMaxLifetime,
     /// `Web.authSlideWindow : Int -> Setting Web` — rolling re-issue window (seconds).
     WebAuthSlideWindow,
+    /// `Web.withRevocation : RevocationMode -> Setting Web` — arms the revocation gate;
+    /// web-pinned. The `RevocationMode` argument (built by `Web.revocationOff` /
+    /// `Web.revocationStore`) erases to a raw `Int` tag that `ipe_setting_web_auth_revocation_mode`
+    /// consumes. Stricter-only monotonic: `Store` wins over `Off` at fold time.
+    WebAuthRevocationMode,
     // ── Config-tag ADT constructors (nullary; project to a raw Int tag) ──────
     /// `Host.loopback : HostMode` — bind `127.0.0.1` only. Projects to tag `0`.
     HostLoopback,
@@ -1774,6 +1786,13 @@ pub enum StdlibKernel {
     /// `Web.inheritCsrf : CsrfMode` — inherit the framework CSRF default. Projects
     /// to tag `1`. There is deliberately no disabling variant.
     WebCsrfInherit,
+    // ── RevocationMode ADT constructors ──────────────────────────────────
+    /// `Web.revocationOff : RevocationMode` — no revocation check. Projects to
+    /// tag `0`. The zero-overhead default path.
+    WebRevocationOff,
+    /// `Web.revocationStore : RevocationMode` — arm the runtime store check.
+    /// Projects to tag `1`. The fail-closed, every-request path.
+    WebRevocationStore,
     // ── event-attribute builders ─────────────────────────────────────────
     UiOnClick,
     UiOnFocus,
@@ -1937,6 +1956,19 @@ pub enum StdlibKernel {
     AuthSetRole,
     /// `Ipe.Auth.subject : Principal -> String` — the verified subject claim.
     AuthSubject,
+    // ── Ipe.Auth.Revocation — runtime revocation store (fail-closed) ──────
+    /// `Auth.Revocation.revokeUser : Principal -> String -> Task Error ()` — mark
+    /// every session of `subject` revoked. Requires an authenticated `Principal`.
+    AuthRevocationRevokeUser,
+    /// `Auth.Revocation.revokeSession : Principal -> String -> Task Error ()` — mark
+    /// one session (`jti`) revoked. Requires an authenticated `Principal`.
+    AuthRevocationRevokeSession,
+    /// `Auth.Revocation.restoreUser : Principal -> String -> Task Error ()` — clear
+    /// the subject-level revocation. Requires an authenticated `Principal`.
+    AuthRevocationRestoreUser,
+    /// `Auth.Revocation.isRevoked : String -> Task Error Bool` — query whether
+    /// the subject is in the subject-revocation set.
+    AuthRevocationIsRevoked,
     // Ipe.Http.Server.Stream — server-side streaming HTTP (fail-closed).
     StreamStream,
     StreamEmit,
@@ -3534,6 +3566,50 @@ impl StdlibKernel {
                 Pure,
                 "ipe_setting_web_auth_slide_window",
             ),
+            Self::WebAuthRevocationMode => d(
+                "Web",
+                "withRevocation",
+                1,
+                Pure,
+                "ipe_setting_web_auth_revocation_mode",
+            ),
+            // ── Ipe.Auth.Revocation kernels ──────────────────────────────
+            Self::AuthRevocationRevokeUser => d(
+                "Revocation",
+                "revokeUser",
+                2,
+                Pure,
+                "auth_revocation_revoke_user",
+            ),
+            Self::AuthRevocationRevokeSession => d(
+                "Revocation",
+                "revokeSession",
+                2,
+                Pure,
+                "auth_revocation_revoke_session",
+            ),
+            Self::AuthRevocationRestoreUser => d(
+                "Revocation",
+                "restoreUser",
+                2,
+                Pure,
+                "auth_revocation_restore_user",
+            ),
+            Self::AuthRevocationIsRevoked => d(
+                "Revocation",
+                "isRevoked",
+                1,
+                Pure,
+                "auth_revocation_is_revoked",
+            ),
+            // ── Server.withRevocation ──────────────────────────────────────────
+            Self::ServerWithRevocation => d(
+                "Server",
+                "withRevocation",
+                2,
+                Server,
+                "server_with_revocation",
+            ),
             // Config-tag ADT constructors — nullary, emitted inline as a raw `Int`
             // tag (the `runtime_fn` name is never called; it is allowlisted in the
             // runtime symbol-resolution test as inline-emitted).
@@ -3552,6 +3628,20 @@ impl StdlibKernel {
             Self::LevelError => d("Level", "error", 0, Pure, "config_log_level_error"),
             Self::WebCsrfStrict => d("Web", "strict", 0, Pure, "config_csrf_mode_strict"),
             Self::WebCsrfInherit => d("Web", "inheritCsrf", 0, Pure, "config_csrf_mode_inherit"),
+            Self::WebRevocationOff => d(
+                "Web",
+                "revocationOff",
+                0,
+                Pure,
+                "config_revocation_mode_off",
+            ),
+            Self::WebRevocationStore => d(
+                "Web",
+                "revocationStore",
+                0,
+                Pure,
+                "config_revocation_mode_store",
+            ),
             // ── event-attribute builders ─────────────────────────────────
             Self::UiOnClick => d("Ui", "onClick", 1, Ui, "ui_on_click_"),
             Self::UiOnFocus => d("Ui", "onFocus", 1, Ui, "ui_on_focus_"),
@@ -4774,6 +4864,7 @@ impl StdlibKernel {
         Self::ServerAuthConfig,
         Self::ServerTokenBearer,
         Self::ServerCookieToken,
+        Self::ServerWithRevocation,
         Self::ServerGetAuthed,
         Self::ServerPostAuthed,
         Self::ServerPutAuthed,
@@ -4903,6 +4994,7 @@ impl StdlibKernel {
         Self::WebSessionTtl,
         Self::WebAuthMaxLifetime,
         Self::WebAuthSlideWindow,
+        Self::WebAuthRevocationMode,
         // Config-tag ADT constructors
         Self::HostLoopback,
         Self::HostAllInterfaces,
@@ -4913,6 +5005,9 @@ impl StdlibKernel {
         Self::LevelError,
         Self::WebCsrfStrict,
         Self::WebCsrfInherit,
+        // RevocationMode ADT constructors
+        Self::WebRevocationOff,
+        Self::WebRevocationStore,
         // event-attribute builders
         Self::UiOnClick,
         Self::UiOnFocus,
@@ -5011,6 +5106,11 @@ impl StdlibKernel {
         Self::AuthLogin,
         Self::AuthSetRole,
         Self::AuthSubject,
+        // Ipe.Auth.Revocation — runtime revocation store
+        Self::AuthRevocationRevokeUser,
+        Self::AuthRevocationRevokeSession,
+        Self::AuthRevocationRestoreUser,
+        Self::AuthRevocationIsRevoked,
         Self::StreamStream,
         Self::StreamEmit,
         Self::StreamFinish,
@@ -6088,6 +6188,7 @@ impl StdlibKernel {
         const HOST_MODE: TyShape = TyShape::Con(BuiltinTag::HostMode, &[]);
         const LOG_LEVEL: TyShape = TyShape::Con(BuiltinTag::LogLevel, &[]);
         const CSRF_MODE: TyShape = TyShape::Con(BuiltinTag::CsrfMode, &[]);
+        const REVOCATION_MODE: TyShape = TyShape::Con(BuiltinTag::RevocationMode, &[]);
         const PRINCIPAL: TyShape = TyShape::Con(BuiltinTag::Principal, &[]);
         const PRINCIPAL_TO_STRING: TyShape = TyShape::Fun(&PRINCIPAL, &STRING);
         const ALGORITHM: TyShape = TyShape::Con(BuiltinTag::Algorithm, &[]);
@@ -6695,6 +6796,11 @@ impl StdlibKernel {
         );
         const DB_TO_INT_TO_STRING_TO_TASK_UNIT: TyShape =
             TyShape::Fun(&DB, &TyShape::Fun(&INT, &TyShape::Fun(&STRING, &TASK_UNIT)));
+        // Auth.Revocation: `Principal -> String -> Task ()` (revokeUser / revokeSession / restoreUser).
+        const PRINCIPAL_TO_STRING_TO_TASK_UNIT: TyShape =
+            TyShape::Fun(&PRINCIPAL, &TyShape::Fun(&STRING, &TASK_UNIT));
+        // Auth.Revocation: `String -> Task Bool` (isRevoked).
+        const STRING_TO_TASK_BOOL_REVOKE: TyShape = TyShape::Fun(&STRING, &TASK_BOOL);
         // Compression : Bytes -> Task Bytes.
         const BYTES_TO_TASK_BYTES: TyShape = TyShape::Fun(&BYTES, &TASK_BYTES);
         // Trace.
@@ -7511,6 +7617,9 @@ impl StdlibKernel {
         const SECRET_TO_TOKEN_SOURCE_TO_AUTH_CONFIG: TyShape =
             TyShape::Fun(&SECRET, &TyShape::Fun(&TOKEN_SOURCE, &AUTH_CONFIG));
         const STRING_TO_TOKEN_SOURCE: TyShape = TyShape::Fun(&STRING, &TOKEN_SOURCE);
+        // `withRevocation : RevocationMode -> AuthConfig -> AuthConfig` — arms the gate.
+        const REVOCATION_MODE_TO_AUTH_CONFIG_TO_AUTH_CONFIG: TyShape =
+            TyShape::Fun(&REVOCATION_MODE, &TyShape::Fun(&AUTH_CONFIG, &AUTH_CONFIG));
         const AUTHED_HANDLER: TyShape = TyShape::Fun(
             &SERVER_REQUEST,
             &TyShape::Fun(&PRINCIPAL, &TASK_SERVER_RESPONSE),
@@ -8183,6 +8292,8 @@ impl StdlibKernel {
                 Some(&LOG_LEVEL)
             }
             Self::WebCsrfStrict | Self::WebCsrfInherit => Some(&CSRF_MODE),
+            // `revocationOff / revocationStore : RevocationMode` — nullary ADT constructors.
+            Self::WebRevocationOff | Self::WebRevocationStore => Some(&REVOCATION_MODE),
             Self::JwtHs256 | Self::JwtRs256 => Some(&STRING_TO_ALGORITHM),
             Self::JwtSubject | Self::JwtIssuer | Self::JwtAudience | Self::JwtJwtId => {
                 Some(&STRING_TO_CLAIMS_TO_CLAIMS)
@@ -8209,6 +8320,12 @@ impl StdlibKernel {
             Self::AuthRegister | Self::AuthLogin => Some(&DB_TO_STRING_TO_STRING_TO_TASK_INT),
             Self::AuthSetRole => Some(&DB_TO_INT_TO_STRING_TO_TASK_UNIT),
             Self::AuthSubject => Some(&PRINCIPAL_TO_STRING),
+            // `revokeUser / revokeSession / restoreUser : Principal -> String -> Task ()`
+            Self::AuthRevocationRevokeUser
+            | Self::AuthRevocationRevokeSession
+            | Self::AuthRevocationRestoreUser => Some(&PRINCIPAL_TO_STRING_TO_TASK_UNIT),
+            // `isRevoked : String -> Task Bool`
+            Self::AuthRevocationIsRevoked => Some(&STRING_TO_TASK_BOOL_REVOKE),
 
             // ── Compression. ──
             Self::CompressionGzip
@@ -8538,6 +8655,8 @@ impl StdlibKernel {
             Self::ServerAuthConfig => Some(&SECRET_TO_TOKEN_SOURCE_TO_AUTH_CONFIG),
             Self::ServerTokenBearer => Some(&TOKEN_SOURCE),
             Self::ServerCookieToken => Some(&STRING_TO_TOKEN_SOURCE),
+            // `withRevocation : RevocationMode -> AuthConfig -> AuthConfig`
+            Self::ServerWithRevocation => Some(&REVOCATION_MODE_TO_AUTH_CONFIG_TO_AUTH_CONFIG),
             Self::ServerText | Self::ServerJson | Self::ServerHtml | Self::ServerRedirect => {
                 Some(&STRING_TO_RESPONSE)
             }
@@ -8804,6 +8923,7 @@ impl StdlibKernel {
             | Self::ServerAuthConfig
             | Self::ServerTokenBearer
             | Self::ServerCookieToken
+            | Self::ServerWithRevocation
             | Self::ServerGetAuthed
             | Self::ServerPostAuthed
             | Self::ServerPutAuthed
@@ -9558,6 +9678,12 @@ impl StdlibKernel {
             | Self::AuthLogin
             | Self::AuthSetRole
             | Self::AuthSubject
+            // Revocation store — writes/reads to a process-global in-memory set;
+            // no network, DB, filesystem, or other isolatable capability.
+            | Self::AuthRevocationRevokeUser
+            | Self::AuthRevocationRevokeSession
+            | Self::AuthRevocationRestoreUser
+            | Self::AuthRevocationIsRevoked
             | Self::EnvPublic
             | Self::RegionMainContent
             | Self::RegionNavigation
@@ -9689,6 +9815,7 @@ impl StdlibKernel {
             | Self::WebSessionTtl
             | Self::WebAuthMaxLifetime
             | Self::WebAuthSlideWindow
+            | Self::WebAuthRevocationMode
             // Config-tag ADT constructors — a bare closed-tag value discloses no
             // capability (it is just an `Int` at emit).
             | Self::HostLoopback
@@ -9700,6 +9827,8 @@ impl StdlibKernel {
             | Self::LevelError
             | Self::WebCsrfStrict
             | Self::WebCsrfInherit
+            | Self::WebRevocationOff
+            | Self::WebRevocationStore
             // `Ipe.Db.Dsn.*` — the parse surface is PURE: parsing/rendering a
             // descriptor performs no I/O and discloses no capability. The
             // network/database disclosure belongs to a future `open` that
@@ -10006,6 +10135,7 @@ impl StdlibKernel {
                 | Self::ServerAuthConfig
                 | Self::ServerTokenBearer
                 | Self::ServerCookieToken
+                | Self::ServerWithRevocation
                 | Self::ServerGetAuthed
                 | Self::ServerPostAuthed
                 | Self::ServerPutAuthed
@@ -10747,6 +10877,7 @@ impl StdlibKernel {
                 | Self::ServerAuthConfig
                 | Self::ServerTokenBearer
                 | Self::ServerCookieToken
+                | Self::ServerWithRevocation
         )
     }
 

@@ -2644,14 +2644,12 @@ fn emit_db_call(
 /// Emit a config-tag ADT constructor (`Host.loopback` / `Level.warn` /
 /// `Web.strict` / …) as its raw `Int` tag literal.
 ///
-/// The closed `HostMode` / `LogLevel` / `CsrfMode` types exist only in the type
-/// system to reject an out-of-range tag at compile time; at runtime each value
-/// is the integer the setting builder (`ipe_setting_host_bind` / … ) consumes.
-/// The projection is total and matches the runtime resolvers' tag numbers
-/// exactly (`resolve_host_bind`: 0 loopback / 1 all-interfaces / 2 env-driven).
-/// `CsrfMode` has no disabling variant, so no tag maps to "off".
+/// The closed `HostMode` / `LogLevel` / `CsrfMode` / `RevocationMode` types exist
+/// only in the type system to reject an out-of-range tag at compile time; at runtime
+/// each value is the integer the setting builder consumes.
+/// `CsrfMode` has no disabling variant; `RevocationMode::Off = 0` / `Store = 1`.
 ///
-/// Returns `Some(literal)` for the nine constructor kernels and `None` for every
+/// Returns `Some(literal)` for the eleven constructor kernels and `None` for every
 /// other callee, so the standard call path handles the rest.
 fn emit_config_ctor_call(callee: &Callee) -> Option<String> {
     let Callee::Kernel(k) = callee else {
@@ -2671,6 +2669,9 @@ fn emit_config_ctor_call(callee: &Callee) -> Option<String> {
         KernelFn::LevelError => 3,
         KernelFn::WebCsrfStrict => 0,
         KernelFn::WebCsrfInherit => 1,
+        // `RevocationMode`: Off=0 (default, zero-overhead), Store=1 (arms the gate).
+        KernelFn::WebRevocationOff => 0,
+        KernelFn::WebRevocationStore => 1,
         _ => return None,
     };
     Some(format!("{tag}i64"))

@@ -39,6 +39,21 @@ pub enum HostMode {
     EnvDriven,
 }
 
+/// The revocation mode — a closed set controlling whether the per-request
+/// revocation gate is consulted.
+///
+/// `Off` is the zero-overhead default: the gate is never called, preserving
+/// today's token-only validation path for apps that do not need revocation.
+/// `Store` arms the fail-closed `is_revoked` check on every authenticated request.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum RevocationMode {
+    /// No revocation check — today's token-only validation path. Zero overhead.
+    Off,
+    /// Arm the runtime revocation store check. Denies on `Revoked`, `Unknown`,
+    /// and any store error (fail-closed). Enabled via `withRevocation Store`.
+    Store,
+}
+
 /// The runtime-config carrier `ipe_runtime::app_config::Setting` — the single
 /// concrete type every phantom `Setting shape` position erases to. `Clone` (a
 /// setting may be stored and read at more than one site); never serde (a
@@ -70,6 +85,12 @@ pub enum Setting {
     /// extending `exp` to `min(now + window, cap)`. Default: 30 m (1 800 s).
     /// Clamped so `slide_window < max_lifetime`.
     WebAuthSlideWindow(i64),
+    /// `Web.withRevocation RevocationMode` — controls whether the per-request
+    /// revocation gate is consulted. `Off` (default) skips the gate entirely;
+    /// `Store` arms the fail-closed `is_revoked` check on every authenticated
+    /// request. Setting `Off` after `Store` is a no-op (stricter-only monotonic:
+    /// once armed the gate cannot be disarmed via a setting, only via env).
+    WebAuthRevocationMode(RevocationMode),
 }
 
 /// `Host.bind : Int -> Setting a`. Maps the raw host-mode tag onto the closed
@@ -144,6 +165,23 @@ pub fn ipe_setting_web_auth_slide_window(seconds: i64) -> Setting {
     Setting::WebAuthSlideWindow(seconds)
 }
 
+/// `Web.withRevocation : RevocationMode -> Setting Web`. Arms (or keeps armed)
+/// the per-request revocation gate. The tag is closed: `0` is `Off`, `1` is
+/// `Store`. Out-of-range tags fall closed to `Store` (arms the gate; the safe
+/// branch when the intent is unclear). This is stricter-only: once the gate is
+/// `Store`, a subsequent `Off` setting in the same list is a no-op at resolution
+/// time (`install_web` applies them in order but the resolver takes the max).
+#[must_use]
+pub fn ipe_setting_web_auth_revocation_mode(mode_tag: i64) -> Setting {
+    let mode = match mode_tag {
+        0 => RevocationMode::Off,
+        // Any other tag (including unknown future tags) arms the gate — safer than
+        // silently disabling revocation for an unrecognised value.
+        _ => RevocationMode::Store,
+    };
+    Setting::WebAuthRevocationMode(mode)
+}
+
 /// The CSRF posture a `Web.csrf` setting requests. A setting can only ever
 /// STRENGTHEN protection: an `Enforced` tag pins CSRF on, and every other tag
 /// (including an out-of-range one) is `Unspecified` — it leaves the default in
@@ -169,6 +207,7 @@ struct ResolvedConfig {
     session_ttl_secs: Option<i64>,
     auth_max_lifetime_secs: Option<i64>,
     auth_slide_window_secs: Option<i64>,
+    auth_revocation_mode: Option<RevocationMode>,
     #[cfg(feature = "secret")]
     db_url: Option<crate::secret::Secret>,
 }
@@ -199,6 +238,14 @@ pub fn install_web(settings: Vec<Setting>) {
             Setting::WebSessionTtl(seconds) => cfg.session_ttl_secs = Some(seconds),
             Setting::WebAuthMaxLifetime(seconds) => cfg.auth_max_lifetime_secs = Some(seconds),
             Setting::WebAuthSlideWindow(seconds) => cfg.auth_slide_window_secs = Some(seconds),
+            // Stricter-only: `Store` arms the gate; `Off` only applies when no
+            // prior `Store` setting was seen (take the maximum/strictest value).
+            Setting::WebAuthRevocationMode(mode) => {
+                cfg.auth_revocation_mode = Some(match cfg.auth_revocation_mode {
+                    Some(RevocationMode::Store) => RevocationMode::Store, // already armed
+                    _ => mode,
+                });
+            }
             #[cfg(feature = "secret")]
             Setting::DbUrl(url) => cfg.db_url = Some(url),
         }
@@ -415,6 +462,29 @@ fn auth_slide_window_from(env_present: bool, setting: Option<i64>) -> Option<u64
     }
 }
 
+/// The resolved revocation mode, applying the one precedence:
+/// `IPE_AUTH_REVOCATION` (env) > `withRevocation` (setting-in-code) > `Off`
+/// fallback. The env var value `"store"` (case-insensitive) arms the gate; any
+/// other non-empty value is ignored and the setting applies. An empty env var
+/// is treated as absent. `Off` is the zero-overhead default.
+#[must_use]
+pub fn resolve_auth_revocation_mode() -> RevocationMode {
+    if let Ok(raw) = crate::system::read_env_var("IPE_AUTH_REVOCATION") {
+        let trimmed = raw.trim();
+        if trimmed.eq_ignore_ascii_case("store") || trimmed == "1" {
+            return RevocationMode::Store;
+        }
+        if trimmed.eq_ignore_ascii_case("off") || trimmed == "0" {
+            return RevocationMode::Off;
+        }
+        // Unrecognised non-empty env value: fall through to in-code setting.
+    }
+    INSTALLED
+        .get()
+        .and_then(|c| c.auth_revocation_mode)
+        .unwrap_or(RevocationMode::Off)
+}
+
 /// The resolved database URL from the installed `Db.url` setting, if one was set
 /// and no `DATABASE_URL` env override applies. The secret is revealed only here,
 /// at the point of use, and returned to the caller that configures the pool; it
@@ -607,5 +677,36 @@ mod tests {
     fn auth_slide_window_absent_setting_falls_through() {
         assert_eq!(auth_slide_window_from(false, None), None);
         assert_eq!(auth_slide_window_from(true, None), None);
+    }
+
+    // ── RevocationMode setting constructor ──────────────────────────────────
+
+    #[test]
+    fn revocation_mode_tag_0_maps_to_off() {
+        assert!(matches!(
+            ipe_setting_web_auth_revocation_mode(0),
+            Setting::WebAuthRevocationMode(RevocationMode::Off)
+        ));
+    }
+
+    #[test]
+    fn revocation_mode_tag_1_maps_to_store() {
+        assert!(matches!(
+            ipe_setting_web_auth_revocation_mode(1),
+            Setting::WebAuthRevocationMode(RevocationMode::Store)
+        ));
+    }
+
+    #[test]
+    fn revocation_mode_out_of_range_tag_arms_store() {
+        // An unknown tag falls closed to Store (the safe branch).
+        assert!(matches!(
+            ipe_setting_web_auth_revocation_mode(99),
+            Setting::WebAuthRevocationMode(RevocationMode::Store)
+        ));
+        assert!(matches!(
+            ipe_setting_web_auth_revocation_mode(-1),
+            Setting::WebAuthRevocationMode(RevocationMode::Store)
+        ));
     }
 }

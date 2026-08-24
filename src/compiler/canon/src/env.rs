@@ -166,6 +166,9 @@ pub const STDLIB_MODULE_QUALIFIERS: &[(&[&str], &str)] = &[
     (&["Ipe", "Tea", "WebView", "Sub"], "TeaWebViewSub"),
     // ── Effect stdlib modules ───────────────────────────────────────────────
     (&["Ipe", "Auth"], "Auth"),
+    // `Ipe.Auth.Revocation` — per-session and per-subject revocation gate.
+    // Requires `Principal` (enforces auth-on-auth); fail-closed on store error.
+    (&["Ipe", "Auth", "Revocation"], "Revocation"),
     (&["Ipe", "Http", "Server", "Stream"], "Stream"),
     (&["Ipe", "Http", "Stream"], "HttpStream"),
     // Ipe.Http.Server.WebSocket (12 kernels).
@@ -1454,6 +1457,7 @@ impl Env {
                     "authConfig",
                     "bearerToken",
                     "cookieToken",
+                    "withRevocation",
                     "getAuthed",
                     "postAuthed",
                     "putAuthed",
@@ -1637,10 +1641,14 @@ impl Env {
                     "sessionTtl",
                     "authMaxLifetime",
                     "authSlideWindow",
+                    "withRevocation",
                     // `CsrfMode` constructors `Web.csrf` takes. No disabling
                     // variant — a setting cannot turn CSRF off.
                     "strict",
                     "inheritCsrf",
+                    // `RevocationMode` constructors `Web.withRevocation` takes.
+                    "revocationOff",
+                    "revocationStore",
                 ],
             ),
             // ── Ipe.Terminal app-entry kernels ───────────────────────────────────
@@ -1665,6 +1673,12 @@ impl Env {
                     "setRole",
                     "subject",
                 ],
+            ),
+            // Ipe.Auth.Revocation — per-session and per-subject revocation gate.
+            // Requires `Principal` (enforces auth-on-auth); fail-closed on store error.
+            (
+                "Revocation",
+                &["revokeUser", "revokeSession", "restoreUser", "isRevoked"],
             ),
             // Ipe.Http.Server.Stream — server-side streaming HTTP (fail-closed).
             ("Stream", &["stream", "emit", "finish", "withContentType"]),

@@ -14942,10 +14942,10 @@ impl<'a> Lowerer<'a> {
             // the same generic scope so `Opt Int` → `Enum { Opt, [Int] }` and
             // `Opt a` (inside a generic signature) → `Enum { Opt, [Generic a] }`.
             canon::Type::Con { home, name, args } => match self.resolve(*name)? {
-                // The closed config-tag ADTs (`HostMode` / `LogLevel` / `CsrfMode`)
-                // erase to the raw `Int` tag their constructor kernels project to —
-                // the setting builders consume that `Int` directly.
-                "Int" | "HostMode" | "LogLevel" | "CsrfMode" => Ok(IrType::Int),
+                // The closed config-tag ADTs (`HostMode` / `LogLevel` / `CsrfMode` /
+                // `RevocationMode`) erase to the raw `Int` tag their constructor kernels
+                // project to — the setting builders consume that `Int` directly.
+                "Int" | "HostMode" | "LogLevel" | "CsrfMode" | "RevocationMode" => Ok(IrType::Int),
                 "Float" => Ok(IrType::Float),
                 "Bool" => Ok(IrType::Bool),
                 // `Order` is the built-in three-way comparison result type.
@@ -16078,9 +16078,10 @@ impl<'a> Lowerer<'a> {
             // matches `ir_type_from_canon`, so the inferred and annotated paths
             // agree. See RESERVED_BUILTIN_TYPES for the per-name cite list.
             Ty::Con { name, args, module } => match self.resolve(*name)? {
-                // The closed config-tag ADTs (`HostMode` / `LogLevel` / `CsrfMode`)
-                // erase to the raw `Int` tag their constructor kernels project to.
-                "Int" | "HostMode" | "LogLevel" | "CsrfMode" => Ok(IrType::Int),
+                // The closed config-tag ADTs (`HostMode` / `LogLevel` / `CsrfMode` /
+                // `RevocationMode`) erase to the raw `Int` tag their constructor kernels
+                // project to.
+                "Int" | "HostMode" | "LogLevel" | "CsrfMode" | "RevocationMode" => Ok(IrType::Int),
                 "Float" => Ok(IrType::Float),
                 "Bool" => Ok(IrType::Bool),
                 // `Order` is the built-in three-way comparison result type.
@@ -20717,6 +20718,8 @@ impl<'a> Lowerer<'a> {
                 | KernelFn::LevelError
                 | KernelFn::WebCsrfStrict
                 | KernelFn::WebCsrfInherit
+                | KernelFn::WebRevocationOff
+                | KernelFn::WebRevocationStore
                 // ── Server: bearer token source — arity 0 ────────────────
                 // `Server.bearerToken : TokenSource`
                 | KernelFn::ServerTokenBearer,
@@ -21326,6 +21329,8 @@ impl<'a> Lowerer<'a> {
                 | KernelFn::ServerWithCookie
                 // `Server.authConfig : Secret -> TokenSource -> AuthConfig`
                 | KernelFn::ServerAuthConfig
+                // `Server.withRevocation : RevocationMode -> AuthConfig -> AuthConfig`
+                | KernelFn::ServerWithRevocation
                 // `Middleware.withCors : List String -> Handler -> Handler`
                 | KernelFn::MiddlewareWithCors
                 // `Error.withMessage : String -> Error -> Error`
@@ -21748,6 +21753,8 @@ impl<'a> Lowerer<'a> {
                 | KernelFn::WebAuthMaxLifetime
                 // `Web.authSlideWindow : Int -> Setting Web`
                 | KernelFn::WebAuthSlideWindow
+                // `Web.withRevocation : RevocationMode -> Setting Web`
+                | KernelFn::WebAuthRevocationMode
                 // ── arity 1 ────────────────────────────────────
                 | KernelFn::UiAspectRatio
                 | KernelFn::UiName
@@ -21923,7 +21930,9 @@ impl<'a> Lowerer<'a> {
                 // ── Ipe.Env arity-1 ──────────────────
                 | KernelFn::EnvPublic
                 // ── Ipe.Auth.subject arity-1 ──────────────────
-                | KernelFn::AuthSubject,
+                | KernelFn::AuthSubject
+                // ── Ipe.Auth.Revocation.isRevoked arity-1 ─────
+                | KernelFn::AuthRevocationIsRevoked,
             ) => Ok(1),
             Callee::Kernel(
                 KernelFn::AuthHashPasswordCost
@@ -21947,7 +21956,11 @@ impl<'a> Lowerer<'a> {
                 | KernelFn::WsBroadcast
                 // ── Ipe.WebSocket client arity-2 ──────────────────
                 | KernelFn::WebSocketSend
-                | KernelFn::WebSocketSendBinary,
+                | KernelFn::WebSocketSendBinary
+                // ── Ipe.Auth.Revocation arity-2 ───────────────
+                | KernelFn::AuthRevocationRevokeUser
+                | KernelFn::AuthRevocationRevokeSession
+                | KernelFn::AuthRevocationRestoreUser,
             ) => Ok(2),
             Callee::Kernel(
                 KernelFn::AuthSignToken
@@ -23055,6 +23068,9 @@ impl<'a> Lowerer<'a> {
                     ("Server", "authConfig") => Ok(Callee::Kernel(KernelFn::ServerAuthConfig)),
                     ("Server", "bearerToken") => Ok(Callee::Kernel(KernelFn::ServerTokenBearer)),
                     ("Server", "cookieToken") => Ok(Callee::Kernel(KernelFn::ServerCookieToken)),
+                    ("Server", "withRevocation") => {
+                        Ok(Callee::Kernel(KernelFn::ServerWithRevocation))
+                    }
                     ("Server", "getAuthed") => Ok(Callee::Kernel(KernelFn::ServerGetAuthed)),
                     ("Server", "postAuthed") => Ok(Callee::Kernel(KernelFn::ServerPostAuthed)),
                     ("Server", "putAuthed") => Ok(Callee::Kernel(KernelFn::ServerPutAuthed)),
@@ -23383,10 +23399,15 @@ impl<'a> Lowerer<'a> {
                     ("Web", "sessionTtl") => Ok(Callee::Kernel(KernelFn::WebSessionTtl)),
                     ("Web", "authMaxLifetime") => Ok(Callee::Kernel(KernelFn::WebAuthMaxLifetime)),
                     ("Web", "authSlideWindow") => Ok(Callee::Kernel(KernelFn::WebAuthSlideWindow)),
+                    ("Web", "withRevocation") => {
+                        Ok(Callee::Kernel(KernelFn::WebAuthRevocationMode))
+                    }
                     // Config-tag ADT constructors — nullary, emitted inline as a
                     // raw `Int` tag.
                     ("Web", "strict") => Ok(Callee::Kernel(KernelFn::WebCsrfStrict)),
                     ("Web", "inheritCsrf") => Ok(Callee::Kernel(KernelFn::WebCsrfInherit)),
+                    ("Web", "revocationOff") => Ok(Callee::Kernel(KernelFn::WebRevocationOff)),
+                    ("Web", "revocationStore") => Ok(Callee::Kernel(KernelFn::WebRevocationStore)),
                     ("App", "fromEnv") => Ok(Callee::Kernel(KernelFn::AppFromEnv)),
                     ("Host", "bind") => Ok(Callee::Kernel(KernelFn::HostBind)),
                     ("Host", "loopback") => Ok(Callee::Kernel(KernelFn::HostLoopback)),
@@ -23415,6 +23436,19 @@ impl<'a> Lowerer<'a> {
                     ("Auth", "login") => Ok(Callee::Kernel(KernelFn::AuthLogin)),
                     ("Auth", "setRole") => Ok(Callee::Kernel(KernelFn::AuthSetRole)),
                     ("Auth", "subject") => Ok(Callee::Kernel(KernelFn::AuthSubject)),
+                    // ── Ipe.Auth.Revocation — revocation gate ─────────────
+                    ("Revocation", "revokeUser") => {
+                        Ok(Callee::Kernel(KernelFn::AuthRevocationRevokeUser))
+                    }
+                    ("Revocation", "revokeSession") => {
+                        Ok(Callee::Kernel(KernelFn::AuthRevocationRevokeSession))
+                    }
+                    ("Revocation", "restoreUser") => {
+                        Ok(Callee::Kernel(KernelFn::AuthRevocationRestoreUser))
+                    }
+                    ("Revocation", "isRevoked") => {
+                        Ok(Callee::Kernel(KernelFn::AuthRevocationIsRevoked))
+                    }
                     // ── Ipe.Http.Server.Stream — server-side streaming ───
                     ("Stream", "stream") => Ok(Callee::Kernel(KernelFn::StreamStream)),
                     ("Stream", "emit") => Ok(Callee::Kernel(KernelFn::StreamEmit)),

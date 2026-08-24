@@ -749,6 +749,18 @@ const RUNTIME_MOD_RS_AUTH_APPEND: &str = "pub mod auth;\npub use auth::*;\n";
 const RUNTIME_MOD_RS_PRINCIPAL_APPEND: &str =
     "pub mod principal;\npub use principal::{Principal, principal_subject};\n";
 
+/// Lines appended to `ipe_runtime/mod.rs` when the program uses authenticated
+/// routes (`Ipe.Auth.subject` / an `authed_route` surface).
+///
+/// `revocation.rs` (the session-revocation store and fail-closed gate) is
+/// vendored into every emitted crate but declared only when the authed-route
+/// surface is in use — the store's `is_revoked` query is called from `server.rs`'s
+/// `authed_route` middleware, which is compiled in whenever a `Principal` is in
+/// scope. `revocation.rs` depends only on `crate::principal` (appended by
+/// [`RUNTIME_MOD_RS_PRINCIPAL_APPEND`] under the same gate) and `super::*`
+/// (the base module set) — no additional dependencies.
+const RUNTIME_MOD_RS_REVOCATION_APPEND: &str = "pub mod revocation;\npub use revocation::*;\n";
+
 // ── Ipe.WebSocket — outbound WebSocket client ──────────────────────────
 
 /// Lines appended to `ipe_runtime/mod.rs` when the program uses outbound
@@ -2509,6 +2521,15 @@ fn assemble_project_files(
         // (or another Principal-touching kernel) is used.
         if ctx.uses_principal {
             mod_rs.push_str(RUNTIME_MOD_RS_PRINCIPAL_APPEND);
+        }
+        // Ipe.Auth.Revocation — append the revocation store when the authed-route
+        // surface is active. `server.rs`'s `authed_route` middleware calls
+        // `crate::revocation::is_revoked` unconditionally at the module level,
+        // so the module must be declared whenever `principal` is in scope.
+        // `principal` is already appended above under the same gate, satisfying
+        // `revocation.rs`'s `crate::principal` import.
+        if ctx.uses_principal {
+            mod_rs.push_str(RUNTIME_MOD_RS_REVOCATION_APPEND);
         }
         // Ipe.Email — append email module when `Email.send` is used.
         if ctx.uses_email {

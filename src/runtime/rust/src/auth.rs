@@ -119,12 +119,17 @@ pub fn auth_password_strength<E: From<String>>(pw: String) -> IpeResult<E, Strin
 /// `signToken secret claims expirySeconds`. `claims` is a string-keyed map of
 /// string values at the runtime level (Ipê's polymorphic `a` resolves to
 /// HashMap<String,String> at the FFI boundary). Adds `exp` (now + expirySeconds),
-/// `iat` (now), and `cap` (now + AuthMaxLifetime) claims. Secret must be ≥32
-/// bytes (matches Go's production gate).
+/// `iat` (now), `cap` (now + AuthMaxLifetime), and `jti` (a random session id)
+/// claims. Secret must be ≥32 bytes (matches Go's production gate).
 ///
 /// `cap` is the absolute lifetime ceiling — a token is invalid once `now >= cap`
 /// regardless of `exp`. It is stamped at first issue and must never be rewritten
 /// on any subsequent re-issue; a client-mutated `cap` fails signature verification.
+///
+/// `jti` is a per-session random id used for session-scoped revocation. A caller
+/// that already supplies a `jti` claim (re-issue scenario) keeps its original value —
+/// only a fresh token (no `jti` in the supplied claims) gets a new random id. This
+/// guarantees `jti` is immutable across re-issues, exactly like `cap`.
 pub fn auth_sign_token<E: From<String>>(
     secret: String,
     claims: HashMap<String, String>,
@@ -171,21 +176,36 @@ pub fn auth_sign_token<E: From<String>>(
             iat.checked_add(ml).unwrap_or(i64::MAX)
         }
     };
+    // Per-session id for session-scoped revocation. A re-issue that already
+    // carries a `jti` keeps it verbatim (like `cap` and `iat`) — only a fresh
+    // token (no `jti` in the supplied claims) gets a new random id minted here.
+    let jti: String = match claims.get("jti").filter(|s| !s.is_empty()) {
+        Some(existing) => existing.clone(),
+        None => {
+            // Mint a new random session id. `uuid::Uuid::new_v4` draws from the
+            // OS entropy source; its output is not guessable by an attacker who
+            // does not hold the HS256 secret (which already protects the token),
+            // but the `jti` provides an additional per-session handle for
+            // targeted revocation without needing to know the secret.
+            uuid::Uuid::new_v4().to_string()
+        }
+    };
     // Build the claims object with keys in ascending order so the signed bytes are
     // deterministic across runs. A `BTreeMap` fixes the key order explicitly,
     // independent of both the source `HashMap` iteration order and the ambient
     // object-order encoder setting, giving a byte-stable signature.
     let mut sorted: std::collections::BTreeMap<String, serde_json::Value> = claims
         .into_iter()
-        // Strip any caller-supplied `cap`, `exp`, and `iat` — these are
+        // Strip any caller-supplied `cap`, `exp`, `iat`, and `jti` — these are
         // runtime-controlled claims; a caller must not be able to override them
         // via the claims map (the computed values below are authoritative).
-        .filter(|(k, _)| k != "cap" && k != "exp" && k != "iat")
+        .filter(|(k, _)| k != "cap" && k != "exp" && k != "iat" && k != "jti")
         .map(|(k, v)| (k, serde_json::Value::String(v)))
         .collect();
     sorted.insert("cap".to_string(), serde_json::Value::Number(cap.into()));
     sorted.insert("exp".to_string(), serde_json::Value::Number(exp.into()));
     sorted.insert("iat".to_string(), serde_json::Value::Number(iat.into()));
+    sorted.insert("jti".to_string(), serde_json::Value::String(jti));
     let payload: serde_json::Map<String, serde_json::Value> = sorted.into_iter().collect();
     let value = serde_json::Value::Object(payload);
     let header = jsonwebtoken::Header::new(jsonwebtoken::Algorithm::HS256);
@@ -317,12 +337,13 @@ pub fn auth_verify_token<E: From<String>>(
 
 /// The verified-origin context for a session re-issue. Fields are parsed from a
 /// SIGNATURE-VERIFIED token, so a caller has no way to supply an untrusted value
-/// — the type enforces that `iat` and `cap` come from a verified token, never
+/// — the type enforces that `iat`, `cap`, and `jti` come from a verified token, never
 /// from a client-supplied claims map.
 ///
-/// This is the CRUX of cap immutability: by requiring `iat`/`cap` to flow
-/// through this type (which is only constructible by parsing a verified token)
-/// the re-issue path structurally cannot accept a forged or caller-inflated cap.
+/// This is the CRUX of cap and jti immutability: by requiring `iat`/`cap`/`jti`
+/// to flow through this type (which is only constructible by parsing a verified
+/// token) the re-issue path structurally cannot accept a forged or caller-inflated
+/// cap, nor a replaced session id.
 #[cfg(feature = "jwt")]
 #[derive(Clone, Debug)]
 pub struct ReissueContext {
@@ -332,11 +353,19 @@ pub struct ReissueContext {
     pub cap: i64,
     /// The subject claim value from the verified token.
     pub subject: String,
+    /// Per-session id (immutable across all re-issues; used for session-scoped revocation).
+    pub jti: String,
 }
 
 /// Parse a `ReissueContext` from a signature-verified claims map (the output of
 /// `auth_verify_token`). Returns `None` when any required field is missing or
 /// malformed — the caller must deny in that case.
+///
+/// Tokens minted before `jti` was introduced carry no `jti` claim. For backward
+/// compatibility, a missing `jti` is treated as an empty string — such a token
+/// cannot be individually revoked by session id, but subject-level revocation
+/// still applies. A fresh re-issue of a legacy token mints a new `jti` via the
+/// `auth_sign_token` path (the empty string is filtered out in that path).
 #[cfg(feature = "jwt")]
 #[must_use]
 pub fn reissue_context_from_claims(
@@ -345,7 +374,14 @@ pub fn reissue_context_from_claims(
     let iat = claims.get("iat")?.parse::<i64>().ok()?;
     let cap = claims.get("cap")?.parse::<i64>().ok()?;
     let subject = claims.get("sub").filter(|s| !s.is_empty())?.clone();
-    Some(ReissueContext { iat, cap, subject })
+    // `jti` absent on legacy tokens — treat as empty (cannot be session-revoked by id).
+    let jti = claims.get("jti").cloned().unwrap_or_default();
+    Some(ReissueContext {
+        iat,
+        cap,
+        subject,
+        jti,
+    })
 }
 
 /// Mint a fresh session token on behalf of a sliding re-issue. The new `exp` is
@@ -377,16 +413,22 @@ pub fn auth_reissue_token<E: From<String>>(
         .checked_add(slide_window_secs)
         .unwrap_or(i64::MAX)
         .min(ctx.cap);
-    // Build deterministic sorted payload. `iat` and `cap` come verbatim from
-    // `ctx` (verified-origin); a caller-supplied duplicate is stripped.
+    // Build deterministic sorted payload. `iat`, `cap`, `jti`, and `sub` come
+    // verbatim from `ctx` (verified-origin); caller-supplied duplicates are stripped.
     let mut sorted: std::collections::BTreeMap<String, serde_json::Value> = extra_claims
         .into_iter()
-        .filter(|(k, _)| k != "cap" && k != "exp" && k != "iat" && k != "sub")
+        .filter(|(k, _)| k != "cap" && k != "exp" && k != "iat" && k != "jti" && k != "sub")
         .map(|(k, v)| (k, serde_json::Value::String(v)))
         .collect();
     sorted.insert("cap".to_string(), serde_json::Value::Number(ctx.cap.into()));
     sorted.insert("exp".to_string(), serde_json::Value::Number(new_exp.into()));
     sorted.insert("iat".to_string(), serde_json::Value::Number(ctx.iat.into()));
+    // `jti` carried verbatim — a re-issued token is the same session, so its id
+    // must not change. This preserves session-scoped revocation across re-issues.
+    sorted.insert(
+        "jti".to_string(),
+        serde_json::Value::String(ctx.jti.clone()),
+    );
     sorted.insert(
         "sub".to_string(),
         serde_json::Value::String(ctx.subject.clone()),
@@ -687,13 +729,15 @@ mod tests {
             keys, sorted,
             "signed payload keys must be in ascending order for a byte-stable signature"
         );
-        assert_eq!(keys, vec!["cap", "exp", "iat", "role", "sub", "zzz"]);
+        assert_eq!(keys, vec!["cap", "exp", "iat", "jti", "role", "sub", "zzz"]);
     }
 
     // Signing the same claims twice must yield byte-identical tokens (given the
-    // same `exp`/`iat`), locking out the `preserve_order` non-determinism where
-    // `HashMap` iteration order leaked into the signed bytes. `expiry_seconds = 0`
-    // pins `exp` to `iat = now`, so both signings share the same timestamp within a
+    // same `exp`/`iat` and a supplied `jti`), locking out the `preserve_order`
+    // non-determinism where `HashMap` iteration order leaked into the signed
+    // bytes. A fresh token mints a RANDOM `jti` (a unique session id) by design,
+    // so determinism is asserted over a supplied `jti`; `expiry_seconds = 0` pins
+    // `exp` to `iat = now`, so both signings share the same timestamp within a
     // second; the retry loop tolerates the rare second-boundary crossing.
     #[test]
     fn test_auth_sign_token_is_deterministic() {
@@ -703,6 +747,7 @@ mod tests {
             c.insert("sub".to_string(), "alice".to_string());
             c.insert("role".to_string(), "admin".to_string());
             c.insert("tenant".to_string(), "acme".to_string());
+            c.insert("jti".to_string(), "fixed-session-id".to_string());
             c
         };
         let mut matched = false;
@@ -1142,6 +1187,7 @@ mod tests {
             iat: now - 7200,
             cap: now - 1, // already past
             subject: "u7".to_string(),
+            jti: "test-jti-u7".to_string(),
         };
         let result = crate::auth::auth_reissue_token::<String>(SECRET, &ctx, HashMap::new(), 1800);
         assert!(
@@ -1181,6 +1227,7 @@ mod tests {
             iat: now - 60,
             cap: now + 999_999, // attacker's hoped-for cap
             subject: "attacker".to_string(),
+            jti: "test-jti-attacker".to_string(),
         };
         let _ = real_cap; // the real cap is inaccessible to the forged context
         let token = match crate::auth::auth_reissue_token::<String>(

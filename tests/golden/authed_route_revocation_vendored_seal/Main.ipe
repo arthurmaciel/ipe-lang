@@ -1,0 +1,41 @@
+module Main exposing (main)
+
+-- Proves that a program using `Server.getAuthed` (which calls
+-- `crate::revocation::is_revoked` in the emitted middleware) compiles under the
+-- vendored emit model. The SEAL: `pub mod revocation;` must appear in the
+-- emitted `ipe_runtime/mod.rs` whenever an authed route is present, or the
+-- emitted crate fails to build (E0433).
+
+import Ipe.Auth as Auth
+import Ipe.Error exposing (Error)
+import Ipe.Http.Server as Server
+import Ipe.Http.Server exposing (Request, Response)
+import Ipe.Io as Io
+import Ipe.Secret as Secret
+import Ipe.String as String
+import Ipe.Task as Task exposing (Task)
+
+
+handlePing : Request -> Auth.Principal -> Task Error Response
+handlePing _ principal =
+    Task.succeed (Server.text (String.append "pong:" (Auth.subject principal)))
+
+
+authCfg : Server.AuthConfig
+authCfg =
+    Server.authConfig
+        (Secret.fromString "this-is-a-32-byte-or-longer-secret-key-value")
+        Server.bearerToken
+
+
+main : Task Error ()
+main =
+    Task.onError
+        (\_ -> Io.println "authed-route-revocation-vendored-seal")
+        (Task.andThen
+            (\_ -> Io.println "authed-route-revocation-vendored-seal")
+            (Server.listen
+                8000
+                [ Server.getAuthed "/ping" authCfg handlePing ]
+            )
+        )

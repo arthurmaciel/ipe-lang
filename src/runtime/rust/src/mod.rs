@@ -586,3 +586,15 @@ pub use auth::*;
 pub mod principal;
 #[cfg(any(feature = "server", feature = "db", feature = "jwt"))]
 pub use principal::{Principal, principal_subject};
+
+// The runtime revocation store — the session-layer fail-closed gate.
+// Gated on `jwt` (which gates the token-verifying `authed_route` that queries it).
+// The store itself is always-on when compiled (it is process-global); the gate
+// in `authed_route` only consults it when `RevocationMode::Store` is set.
+#[cfg(feature = "jwt")]
+pub mod revocation;
+#[cfg(feature = "jwt")]
+pub use revocation::{
+    auth_revocation_is_revoked, auth_revocation_restore_user, auth_revocation_revoke_session,
+    auth_revocation_revoke_user,
+};

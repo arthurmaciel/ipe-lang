@@ -1,0 +1,55 @@
+module Main exposing (main)
+
+-- `Web.withRevocation Web.revocationStore` arms the revocation gate.
+-- The compiler must resolve it to the `WebAuthRevocationMode` /
+-- `WebRevocationStore` kernels (no N0005) and the emitted crate must
+-- cargo-build (THE SEAL).
+
+import Ipe.Tea.Web as Web
+import Ipe.Ui as Ui
+import Ipe.Tea.Web.Cmd
+import Ipe.String
+import Ipe.Tea.Web.Sub
+
+
+type Msg
+    = Tick
+
+
+type alias Model =
+    { count : Int }
+
+
+init : a -> ( Model, Cmd Msg )
+init _req =
+    ( { count = 0 }, Cmd.none )
+
+
+update : Msg -> Model -> ( Model, Cmd Msg )
+update msg model =
+    case msg of
+        Tick ->
+            ( { model | count = model.count + 1 }, Cmd.none )
+
+
+view : Model -> Element Msg
+view model =
+    Ui.text (String.fromInt model.count)
+
+
+subscriptions : Model -> Sub Msg
+subscriptions _model =
+    Sub.none
+
+
+main =
+    Web.appWith
+        [ Web.withRevocation Web.revocationStore
+        ]
+        { init = init
+        , update = update
+        , view = view
+        , subscriptions = subscriptions
+        , routes = []
+        , notFound = Tick
+        }

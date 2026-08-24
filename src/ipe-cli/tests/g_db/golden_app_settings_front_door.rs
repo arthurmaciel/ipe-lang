@@ -182,6 +182,77 @@ fn auth_slide_window_seal_builds() {
     crate::support::assert_seal_builds(GOLDEN, &out);
 }
 
+/// THE SEAL: `Web.withRevocation Web.revocationStore` is accepted (no N0005) and
+/// (under `IPE_E2E=1`) the emitted crate `cargo build`s. Proves the
+/// `WebAuthRevocationMode` / `WebRevocationStore` kernels are wired through
+/// canon/constrain/lower and that `RevocationMode` erases to `Int` correctly.
+#[test]
+fn auth_revocation_seal_builds() {
+    const GOLDEN: &str = "app_settings_auth_revocation_seal";
+    let root = repo_root();
+    let entry = fixture_entry(&root, GOLDEN);
+    let out = std::env::temp_dir().join("ipec_app_settings_auth_revocation_seal_e2e");
+    let _ = std::fs::remove_dir_all(&out);
+
+    let Ok(runtime) = ipe::resolve_runtime() else {
+        return; // resolver unavailable — skip
+    };
+    let built = ipe::build(&entry, &out, &runtime);
+    assert!(
+        built.is_ok(),
+        "`Web.withRevocation Web.revocationStore` must be accepted (no N0005) and emit \
+         a buildable crate, got: {built:?}"
+    );
+
+    crate::support::assert_seal_builds(GOLDEN, &out);
+}
+
+/// A program with an authenticated route (`Server.getAuthed`) emitted under the
+/// **vendored** emit model (`runtime_dep: false`) must DECLARE the `revocation`
+/// module in `ipe_runtime/mod.rs`. `server.rs`'s `authed_route` middleware calls
+/// `crate::revocation::is_revoked` unconditionally, so a missing declaration
+/// produces E0433 (ipe exit 0, then cargo fails). This is the regression tripwire
+/// for the `pub mod revocation;` append.
+///
+/// A full `cargo build` of a vendored `authed_route` program is a separate,
+/// pre-existing SEAL gap — the vendored emitter does not add the `jwt` feature to
+/// the emitted crate's default list, so `#[cfg(feature = "jwt")]` `AuthConfig` is
+/// compiled out (E0425). That gap is tracked on its own; this test locks the
+/// module-declaration fix that belongs to the revocation surface.
+#[test]
+fn authed_route_revocation_vendored_declares_module() {
+    const GOLDEN: &str = "authed_route_revocation_vendored_seal";
+    let root = repo_root();
+    let entry = fixture_entry(&root, GOLDEN);
+    let out = std::env::temp_dir().join("ipec_authed_route_revocation_vendored_seal_e2e");
+    let _ = std::fs::remove_dir_all(&out);
+
+    let Ok(runtime) = ipe::resolve_runtime() else {
+        return; // runtime unavailable — skip
+    };
+    // Force the vendored emit model regardless of the environment default —
+    // the model whose trimmed `mod.rs` template must carry the revocation append.
+    let opts = ipe::BuildOptions {
+        runtime_dep: false,
+        ..ipe::BuildOptions::default()
+    };
+    let built = ipe::build_with_options(&entry, &out, &runtime, opts);
+    assert!(
+        built.is_ok(),
+        "an `authed_route` program must be accepted under the vendored emit model, \
+         got: {built:?}"
+    );
+
+    let mod_rs = std::fs::read_to_string(out.join("src").join("ipe_runtime").join("mod.rs"))
+        .expect("emitted vendored ipe_runtime/mod.rs");
+    assert!(
+        mod_rs.contains("pub mod revocation;"),
+        "vendored emit must declare `pub mod revocation;` for an authed_route \
+         revocation program, else the emitted crate fails cargo build with E0433 \
+         on `crate::revocation`"
+    );
+}
+
 /// `Log.level 5` — a bare `Int` where the closed `LogLevel` ADT is expected —
 /// must be an ipe-time type error.
 #[test]

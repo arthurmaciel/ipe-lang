@@ -639,6 +639,10 @@ struct Builtins {
     /// `Web.csrf`. Built only by its constructor kernels; carries no disabling
     /// variant, and erases to `Int`.
     csrf_mode: Symbol,
+    /// `"RevocationMode"` — the closed revocation-gate ADT (`Off` / `Store`),
+    /// the argument type of `Web.withRevocation` / `Server.withRevocation`.
+    /// Stricter-only monotonic; erases to `Int`.
+    revocation_mode: Symbol,
     // ── Ipe.Locale ─────────────────────────────────────────────────────────
     /// `"Locale"` — opaque BCP-47 locale handle (`ipe_runtime::locale::Locale`).
     /// The ONLY constructor is `Locale.fromTag : String -> Maybe Locale`;
@@ -900,6 +904,7 @@ impl Builtins {
             host_mode: interner.intern("HostMode")?,
             log_level: interner.intern("LogLevel")?,
             csrf_mode: interner.intern("CsrfMode")?,
+            revocation_mode: interner.intern("RevocationMode")?,
             // ── Ipe.Locale ───────────────────────────────────────────────────────
             locale: interner.intern("Locale")?,
             // ── Ipe.PubSub.Topic ────────────────────────────────────────────────
@@ -4125,6 +4130,7 @@ impl<'a> Builder<'a> {
             BuiltinTag::HostMode => self.builtins.host_mode,
             BuiltinTag::LogLevel => self.builtins.log_level,
             BuiltinTag::CsrfMode => self.builtins.csrf_mode,
+            BuiltinTag::RevocationMode => self.builtins.revocation_mode,
             BuiltinTag::Locale => self.builtins.locale,
             BuiltinTag::HttpMethod => self.builtins.http_method,
             BuiltinTag::CryptoKey => self.builtins.crypto_key,
@@ -4752,6 +4758,11 @@ impl<'a> Builder<'a> {
         let csrf_mode = || Ty::Con {
             module: Vec::new(),
             name: self.builtins.csrf_mode,
+            args: Vec::new(),
+        };
+        let revocation_mode = || Ty::Con {
+            module: Vec::new(),
+            name: self.builtins.revocation_mode,
             args: Vec::new(),
         };
         // `Locale` — opaque BCP-47 locale handle
@@ -5589,6 +5600,9 @@ impl<'a> Builder<'a> {
             // `bearerToken : TokenSource`; `cookieToken : String -> TokenSource`.
             K::ServerTokenBearer => token_source(),
             K::ServerCookieToken => fun(string(), token_source()),
+            // `withRevocation : RevocationMode -> AuthConfig -> AuthConfig` — arms the gate;
+            // web-server-level, same placement as `Server.authConfig`.
+            K::ServerWithRevocation => fun(revocation_mode(), fun(auth_config(), auth_config())),
             // `getAuthed : String -> AuthConfig
             //     -> (Request -> Principal -> Task Error Response) -> Route`.
             K::ServerGetAuthed
@@ -7420,6 +7434,12 @@ impl<'a> Builder<'a> {
             K::AuthSetRole => fun(db(), fun(int(), fun(string(), task_unit()))),
             // subject : Principal -> String — read the verified subject claim.
             K::AuthSubject => fun(principal_ty(), string()),
+            // revokeUser / revokeSession / restoreUser : Principal -> String -> Task Error ()
+            K::AuthRevocationRevokeUser
+            | K::AuthRevocationRevokeSession
+            | K::AuthRevocationRestoreUser => fun(principal_ty(), fun(string(), task_unit())),
+            // isRevoked : String -> Task Error Bool
+            K::AuthRevocationIsRevoked => fun(string(), task(bool_ty())),
 
             // ── Ipe.Secret — opaque secret-string wrapper ────
             // `fromString` is the seal (construction boundary); `reveal` is the
@@ -7470,10 +7490,13 @@ impl<'a> Builder<'a> {
             K::WebAuthMaxLifetime => fun(int(), setting(shape_web())),
             // `Web.authSlideWindow : Int -> Setting Web` — rolling re-issue window; web-pinned.
             K::WebAuthSlideWindow => fun(int(), setting(shape_web())),
+            // `Web.withRevocation : RevocationMode -> Setting Web` — revocation gate mode; web-pinned.
+            K::WebAuthRevocationMode => fun(revocation_mode(), setting(shape_web())),
             // Config-tag ADT constructors — nullary values of their closed types.
             K::HostLoopback | K::HostAllInterfaces | K::HostEnvDriven => host_mode(),
             K::LevelDebug | K::LevelInfo | K::LevelWarn | K::LevelError => log_level(),
             K::WebCsrfStrict | K::WebCsrfInherit => csrf_mode(),
+            K::WebRevocationOff | K::WebRevocationStore => revocation_mode(),
 
             // ── Ipe.Http.Server.Stream (4 kernels) ────────────────────────
             // stream : String -> (StreamWriter -> Task Error ()) -> Task Error Response
@@ -9972,9 +9995,10 @@ mod registry_phase_c_tests {
             K::WebSessionTtl,
             K::WebAuthMaxLifetime,
             K::WebAuthSlideWindow,
-            // Config-tag ADT constructors (9, Ipê-new) — nullary values of the
-            // closed `HostMode` / `LogLevel` / `CsrfMode` types, projected to a raw
-            // `Int` tag at emit.
+            K::WebAuthRevocationMode,
+            // Config-tag ADT constructors — nullary values of the
+            // closed `HostMode` / `LogLevel` / `CsrfMode` / `RevocationMode` types,
+            // projected to a raw `Int` tag at emit.
             K::HostLoopback,
             K::HostAllInterfaces,
             K::HostEnvDriven,
@@ -9984,6 +10008,8 @@ mod registry_phase_c_tests {
             K::LevelError,
             K::WebCsrfStrict,
             K::WebCsrfInherit,
+            K::WebRevocationOff,
+            K::WebRevocationStore,
         ]
     };
 
