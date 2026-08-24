@@ -1,0 +1,18 @@
+module Ffi.Iced exposing (Counter, Message, counterUpdate)
+
+
+foreign Counter =
+          Ffi.crate "iced"
+              |> Ffi.struct { value = Int }
+              |> Ffi.derives [ Ffi.default_, Ffi.clone ]
+
+
+foreign Message =
+          Ffi.crate "iced"
+              |> Ffi.enum [ Ffi.variant "Increment" [], Ffi.variant "Decrement" [] ]
+              |> Ffi.derives [ Ffi.clone, Ffi.debug ]
+
+
+foreign counterUpdate : Ffi.Fn =
+          Ffi.crate "iced"
+              |> Ffi.closure (Ffi.fn [ Ffi.int ] Ffi.int)

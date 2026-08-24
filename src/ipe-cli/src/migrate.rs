@@ -239,8 +239,9 @@ pub(crate) fn render_foreign_ffi_module(
         "module Ffi.{module_name} exposing ({})",
         exposed.join(", ")
     );
-    let _ = writeln!(out);
-    let _ = writeln!(out, "import Ffi");
+    // No `import Ffi` — `Ffi.*` are blessed CLI-lift constructors, not an importable
+    // module; the compiler erases `foreign` declarations before canon, so the file
+    // compiles cleanly without any Ffi import.
     for s in structs {
         let _ = writeln!(out);
         out.push_str(&render_foreign_struct(krate, s)?);
