@@ -58,6 +58,7 @@ pub fn run_migrate(rest: &[String]) -> Result<(), CliError> {
 
 /// Parse `migrate config`'s flags and perform the render + guarded write in the
 /// current directory.
+#[allow(clippy::too_many_lines)] // one linear command body: parse flags, read, render, write
 fn run_migrate_config(rest: &[String]) -> Result<(), CliError> {
     let mut force = false;
     for arg in rest {
@@ -140,24 +141,23 @@ fn run_migrate_config(rest: &[String]) -> Result<(), CliError> {
             }
             let c_for_krate: Vec<&ManifestDefineClosure> = closures
                 .iter()
-                .filter(|c| {
-                    effective_krate(&c.krate, sole_dep_name.as_deref()) == *krate
-                })
+                .filter(|c| effective_krate(&c.krate, sole_dep_name.as_deref()) == *krate)
                 .collect();
             let s_for_krate: Vec<&ManifestDefineStruct> = structs
                 .iter()
-                .filter(|s| {
-                    effective_krate(&s.krate, sole_dep_name.as_deref()) == *krate
-                })
+                .filter(|s| effective_krate(&s.krate, sole_dep_name.as_deref()) == *krate)
                 .collect();
             let e_for_krate: Vec<&ManifestDefineEnum> = enums
                 .iter()
-                .filter(|e| {
-                    effective_krate(&e.krate, sole_dep_name.as_deref()) == *krate
-                })
+                .filter(|e| effective_krate(&e.krate, sole_dep_name.as_deref()) == *krate)
                 .collect();
-            let ffi_source =
-                render_foreign_ffi_module(&module_name, krate, &c_for_krate, &s_for_krate, &e_for_krate)?;
+            let ffi_source = render_foreign_ffi_module(
+                &module_name,
+                krate,
+                &c_for_krate,
+                &s_for_krate,
+                &e_for_krate,
+            )?;
             std::fs::write(&ffi_path, &ffi_source).map_err(|e| CliError::Io {
                 path: ffi_path.clone(),
                 source: e,
@@ -172,9 +172,7 @@ fn run_migrate_config(rest: &[String]) -> Result<(), CliError> {
         }
     }
 
-    println!(
-        "(the ipe.toml is left in place; delete it once you are satisfied)"
-    );
+    println!("(the ipe.toml is left in place; delete it once you are satisfied)");
     Ok(())
 }
 
@@ -196,10 +194,9 @@ fn effective_krate<'a>(krate: &'a str, sole_dep_name: Option<&'a str>) -> String
 fn crate_to_module_name(krate: &str) -> String {
     let snake = krate.replace('-', "_");
     let mut chars = snake.chars();
-    match chars.next() {
-        None => String::new(),
-        Some(first) => first.to_uppercase().collect::<String>() + chars.as_str(),
-    }
+    chars.next().map_or_else(String::new, |first| {
+        first.to_uppercase().collect::<String>() + chars.as_str()
+    })
 }
 
 /// Render the `foreign` declarations for one crate's defines into a complete
@@ -214,7 +211,7 @@ fn crate_to_module_name(krate: &str) -> String {
 /// [`CliError::UsageOwned`] when a carrier spelling is not one the `Ffi.*`
 /// vocabulary can express — an unrecognised carrier in the stored toml data
 /// would be a bug, but is caught here rather than silently emitting garbage.
-pub(crate) fn render_foreign_ffi_module(
+fn render_foreign_ffi_module(
     module_name: &str,
     krate: &str,
     closures: &[&ManifestDefineClosure],
@@ -276,10 +273,7 @@ fn render_foreign_struct(krate: &str, s: &ManifestDefineStruct) -> Result<String
     stages.push(format!("Ffi.struct {{ {} }}", field_parts.join(", ")));
 
     if !s.derives.is_empty() {
-        stages.push(format!(
-            "Ffi.derives {}",
-            render_derives_list(&s.derives)?
-        ));
+        stages.push(format!("Ffi.derives {}", render_derives_list(&s.derives)?));
     }
 
     // Emit `Ffi.ctor` only when the stored ctor diverges from the default.
@@ -317,16 +311,10 @@ fn render_foreign_enum(krate: &str, e: &ManifestDefineEnum) -> Result<String, Cl
             }
         })
         .collect::<Result<Vec<_>, _>>()?;
-    stages.push(format!(
-        "Ffi.enum [ {} ]",
-        variant_parts.join(", ")
-    ));
+    stages.push(format!("Ffi.enum [ {} ]", variant_parts.join(", ")));
 
     if !e.derives.is_empty() {
-        stages.push(format!(
-            "Ffi.derives {}",
-            render_derives_list(&e.derives)?
-        ));
+        stages.push(format!("Ffi.derives {}", render_derives_list(&e.derives)?));
     }
 
     let default_ctor = format!("{}_new", to_snake_case(&e.enum_name));
@@ -421,19 +409,13 @@ fn render_foreign_decl(name: &str, stages: &[String]) -> String {
 /// bare upper-case identifiers (the `read_carrier_type_from_expr` path).
 fn carrier_to_ffi_type(carrier: &str, context: &str) -> Result<String, CliError> {
     Ok(match carrier {
-        "Int" => "Int".to_owned(),
-        "Float" => "Float".to_owned(),
-        "Bool" => "Bool".to_owned(),
-        "Char" => "Char".to_owned(),
-        "String" => "String".to_owned(),
-        "Bytes" => "Bytes".to_owned(),
-        // lower-case carrier spellings used in old toml (driver accepts both)
-        "i64" | "int" => "Int".to_owned(),
-        "f64" | "float" => "Float".to_owned(),
-        "bool" => "Bool".to_owned(),
-        "char" => "Char".to_owned(),
-        "string" => "String".to_owned(),
-        "bytes" | "Vec<u8>" => "Bytes".to_owned(),
+        // Canonical Ipê spellings and lower-case toml aliases both accepted.
+        "Int" | "i64" | "int" => "Int".to_owned(),
+        "Float" | "f64" | "float" => "Float".to_owned(),
+        "Bool" | "bool" => "Bool".to_owned(),
+        "Char" | "char" => "Char".to_owned(),
+        "String" | "string" => "String".to_owned(),
+        "Bytes" | "bytes" | "Vec<u8>" => "Bytes".to_owned(),
         other if other.chars().next().is_some_and(|c| c.is_ascii_uppercase()) => {
             // Opaque handle — bare upper-case name, matches `Expr_::VarLocal` in reader.
             other.to_owned()
@@ -511,9 +493,7 @@ fn derive_to_ffi_builder(derive: &str) -> Option<String> {
 /// Returns `None` when the signature does not match this exact shape.
 fn parse_closure_sig(sig: &str) -> Option<(Vec<String>, String)> {
     // Strip the bound suffix first.
-    let core = sig
-        .strip_suffix(" + Send + Sync + 'static")
-        .unwrap_or(sig);
+    let core = sig.strip_suffix(" + Send + Sync + 'static").unwrap_or(sig);
     // `Fn(params) -> R`
     let rest = core.strip_prefix("Fn(")?;
     let (params_str, ret_str) = rest.split_once(") -> ")?;
@@ -1360,13 +1340,12 @@ mod tests {
 
         // Re-scan from the written file.
         let (got_closures, got_structs, got_enums) =
-            crate::ffi::scan_foreign_defines(&root.join("src"))
-                .unwrap_or_else(|e| {
-                    panic!(
-                        "scan_foreign_defines must not fail on rendered source; \
+            crate::ffi::scan_foreign_defines(&root.join("src")).unwrap_or_else(|e| {
+                panic!(
+                    "scan_foreign_defines must not fail on rendered source; \
                          error: {e}\n--- source ---\n{source}"
-                    )
-                });
+                )
+            });
 
         assert_eq!(
             got_structs, structs,
