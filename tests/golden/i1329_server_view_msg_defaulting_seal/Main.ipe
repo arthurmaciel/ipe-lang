@@ -1,0 +1,54 @@
+module Main exposing (main)
+
+-- A `Server.listen` web app whose route handlers render their views through the
+-- idiomatic DSL. Two view paths reach `Server.html`:
+--
+--   * `Ipe.Ui` (the primary UI story): `Ui.layout` turns an `Element msg` into an
+--     `Html msg`, then `Html.render` turns that into the `String` `Server.html`
+--     expects.
+--   * `Ipe.Html` (the secondary path): a helper builds an `Html msg` directly and
+--     `Html.render` renders it.
+--
+-- Neither view carries a message, so each infers to `... msg` with `msg` a free,
+-- unconstrained type variable. Nothing in a server pins it to a concrete `Msg`
+-- (there is no TEA `update`), so the variable defaults to `()` and the helpers
+-- monomorphise to `Html<()>` / `Element<()>`. `Server.listen` returns `Task ()`
+-- regardless of which view library is in the module closure.
+--
+-- Emitting the free variable as a Rust generic instead is accepted by ipe but
+-- fails the emitted `cargo build` (E0283 uninferable / E0308 node mismatch).
+-- ipe MUST exit 0 AND the emitted project MUST cargo-build (THE SEAL).
+
+import Ipe.Http.Server as Server
+import Ipe.Http.Server exposing (Request, Response)
+import Ipe.Task as Task
+import Ipe.Ui as Ui
+import Ipe.Html as Html
+
+
+uiView : () -> Ui.Element msg
+uiView _ =
+    Ui.column [] [ Ui.el [] (Ui.text "ui view") ]
+
+
+htmlView : () -> Html.Html msg
+htmlView _ =
+    Html.div [] [ Html.text "html view" ]
+
+
+handleUi : Request -> Task Error Response
+handleUi _req =
+    Task.succeed (Server.html (Html.render (Ui.layout [] (uiView ()))))
+
+
+handleHtml : Request -> Task Error Response
+handleHtml _req =
+    Task.succeed (Server.html (Html.render (htmlView ())))
+
+
+main =
+    Server.listen
+        8000
+        [ Server.any "/" handleUi
+        , Server.any "/html" handleHtml
+        ]
