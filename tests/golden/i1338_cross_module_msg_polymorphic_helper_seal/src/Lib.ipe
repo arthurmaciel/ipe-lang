@@ -1,0 +1,11 @@
+module Lib exposing (sharedRow)
+
+import Ipe.Html as Html exposing (Html)
+
+
+-- Unannotated, message-free, attribute-free view helper exported for reuse by
+-- two OTHER modules. Its phantom `msg` is generalized at the module boundary,
+-- so each cross-module use instantiates it fresh -- it is genuinely
+-- message-polymorphic across the boundary, NOT message-free-defaulted-to-`()`.
+sharedRow =
+    Html.div [] [ Html.text "shared" ]

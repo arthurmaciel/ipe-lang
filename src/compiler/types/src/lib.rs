@@ -790,17 +790,91 @@ fn infer_core(
     // which is keyed by the untagged skolem representative because a typed
     // binding's own `params`/`ret` are read from its ANNOTATION type, never
     // zonked).
+    // Unconstrained UI-msg defaulting for UNTYPED bindings -- the counterpart of
+    // the typed `msg_defaulted_vars` computation above. A fully unannotated
+    // message-free view helper (`nav = Html.div [] [ Html.text "x" ]`, no
+    // signature) generalizes its phantom `msg` at the module boundary into a
+    // quantified var. Emitted as a Rust generic (`fn nav<T1: 'static + Clone>()
+    // -> Html<T1>`) it is an uninferable-at-the-call-site parameter needing a
+    // `'static` bound the caller cannot satisfy -- an E0310 / E0283
+    // exit-0-then-cargo-fail. A quantified root that appears ONLY inside a
+    // `Html` / `Element` / `Attribute` / `Event` constructor is a pure message
+    // placeholder no use pinned to a concrete `Msg` (an untyped binding is
+    // monomorphic within its home module, so a still-`Flex` quantified root was
+    // never pinned by any same-module reference); pin it to `Unit` so the
+    // binding emits `Html<()>`, matching the concrete `Html ()` annotation a
+    // user would otherwise be forced to write. This propagates through the
+    // `env` / `regions` read-back below (both post-date this pin).
+    //
+    // The "no same-module reference pinned it" reasoning only holds WITHIN the
+    // home module. A binding referenced from ANOTHER module is genuinely
+    // message-polymorphic across the boundary: `promote_untyped_boundaries`
+    // discharges each cross-module use through a fresh `copy_var` of the
+    // scheme, so the shared root legitimately stays `Flex` while distinct uses
+    // pin distinct concrete `Msg` types (`viewA : Html MsgA`, `viewB : Html
+    // MsgB`). Defaulting it to `Unit` would emit `fn helper() -> Html<()>` and
+    // break every caller needing `Html<MsgN>` -- an exit-0-then-cargo-fail. So
+    // gate the pin on the SAME "no use pinned it" evidence the annotated path
+    // above uses: a binding that appears as any cross-module reference's source
+    // is NOT defaulted -- it stays generic, exactly as the pre-defaulting path
+    // already emitted it correctly.
+    let cross_module_sources: BTreeSet<(Vec<Symbol>, Symbol)> = generated
+        .pending_instantiations
+        .iter()
+        .map(|pi| pi.source.clone())
+        .collect();
+    for (key, scheme) in &untyped_schemes {
+        if scheme.quantified.is_empty() {
+            continue;
+        }
+        if cross_module_sources.contains(key) {
+            continue;
+        }
+        let scheme_ty = lift!(zonk(&mut uf, budget, scheme.root));
+        let mut ui_msg_vars = BTreeSet::new();
+        let mut other_vars = BTreeSet::new();
+        collect_ui_msg_and_other_vars(
+            &scheme_ty,
+            &ui_msg_cons,
+            false,
+            &mut ui_msg_vars,
+            &mut other_vars,
+        );
+        for &root in scheme.quantified.keys() {
+            // A zonked unresolved var reads back as `Ty::Var(tag_solver_var(root))`.
+            let tagged_sym = Symbol::from_raw(tag_solver_var(root));
+            let msg_only = ui_msg_vars.contains(&tagged_sym) && !other_vars.contains(&tagged_sym);
+            if msg_only {
+                let rep = lift!(uf.find(root));
+                lift!(uf.set_content(rep, Content::Structure(FlatType::Unit)));
+            }
+        }
+    }
+
     let mut untyped_type_params: BTreeMap<(Vec<Symbol>, Symbol), Vec<Symbol>> = BTreeMap::new();
     for (key, scheme) in &untyped_schemes {
         if scheme.quantified.is_empty() {
             continue;
         }
-        let tagged: BTreeMap<u32, Symbol> = scheme
-            .quantified
+        // A quantified root pinned to `Unit` by the UI-msg defaulting above is no
+        // longer a generic type parameter -- drop it from the binding's emitted
+        // signature so the lowerer sees `Html<()>`, not a dangling `T{n}`.
+        let mut quantified: BTreeMap<VarId, Symbol> = BTreeMap::new();
+        for (&root, &sym) in &scheme.quantified {
+            let rep = lift!(uf.find(root));
+            let content = lift!(uf.content(rep));
+            if !matches!(content, Content::Structure(FlatType::Unit)) {
+                quantified.insert(root, sym);
+            }
+        }
+        if quantified.is_empty() {
+            continue;
+        }
+        let tagged: BTreeMap<u32, Symbol> = quantified
             .iter()
             .map(|(&root, &sym)| (tag_solver_var(root), sym))
             .collect();
-        untyped_type_params.insert(key.clone(), scheme.quantified.values().copied().collect());
+        untyped_type_params.insert(key.clone(), quantified.values().copied().collect());
         poly_var_map.insert(key.clone(), tagged);
     }
 
