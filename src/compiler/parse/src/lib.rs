@@ -19,6 +19,16 @@ use ipe_syntax::Module;
 
 pub use parser::MAX_DEPTH;
 
+/// Return `true` when `s` is a reserved keyword.
+///
+/// Delegates to the lexer's own `keyword()` table — the single source of truth
+/// for keyword recognition across crate boundaries. Combine with a charset check
+/// to decide whether a string is a valid parse-position identifier.
+#[must_use]
+pub fn is_keyword(s: &str) -> bool {
+    lexer::keyword(s).is_some()
+}
+
 /// Parse a complete module from source text.
 ///
 /// # Errors

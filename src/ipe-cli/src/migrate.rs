@@ -33,6 +33,8 @@
 use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
 
+use ipe_parse::is_keyword;
+
 use crate::CliError;
 use crate::ffi::{ManifestDefineClosure, ManifestDefineEnum, ManifestDefineStruct};
 use crate::project::{IpeDep, ProjectManifest};
@@ -304,6 +306,15 @@ fn render_foreign_struct(krate: &str, s: &ManifestDefineStruct) -> Result<String
         .fields
         .iter()
         .map(|(name, carrier)| -> Result<String, CliError> {
+            if !is_ipe_ident(name) {
+                return Err(CliError::UsageOwned(format!(
+                    "ipe migrate config: struct `{}` field name `{name}` is not a \
+                     legal Ipê identifier (expected `[A-Za-z_][A-Za-z0-9_]*`, \
+                     not a keyword, not bare `_`) — rename it in the `ipe.toml` \
+                     before migrating",
+                    s.struct_name
+                )));
+            }
             let ffi_ty = carrier_to_ffi_type(carrier, &s.struct_name)?;
             Ok(format!("{name} = {ffi_ty}"))
         })
@@ -478,13 +489,19 @@ fn carrier_to_ffi_type(carrier: &str, context: &str) -> Result<String, CliError>
     })
 }
 
-/// Return `true` when `s` is a legal Ipê identifier: `[A-Za-z_][A-Za-z0-9_]*`.
+/// Return `true` when `s` is a legal Ipê identifier in a name/declaration
+/// position: charset `[A-Za-z_][A-Za-z0-9_]*`, NOT a reserved keyword, and
+/// NOT the bare `_` wildcard.
 ///
-/// This is the same rule the lexer's `is_ident_start`/`is_ident_continue`
-/// predicates enforce, and the same rule `RustIdent::parse` in the FFI naming
-/// crate applies. A name that fails here would produce an unparseable `.ipe`
-/// file — refusing before write is fail-closed by construction.
+/// The keyword check delegates to [`ipe_parse::is_keyword`], which wraps the
+/// lexer's own `keyword()` table — the single source of truth so this predicate
+/// stays consistent with the parser even as the keyword set evolves.
+/// A name that fails here would produce an unparseable `.ipe` file — refusing
+/// before write is fail-closed by construction.
 fn is_ipe_ident(s: &str) -> bool {
+    if s == "_" || is_keyword(s) {
+        return false;
+    }
     let mut chars = s.chars();
     chars.next().is_some_and(|first| {
         (first.is_ascii_alphabetic() || first == '_')
@@ -1711,17 +1728,21 @@ mod tests {
         }
     }
 
-    /// `is_ipe_ident` unit test — verifies the gate function matches the lexer rules.
+    /// `is_ipe_ident` predicate covers charset, keyword exclusion, and bare `_`.
+    ///
+    /// The keyword set is drawn from the same lexer table `ipe_parse::is_keyword`
+    /// exposes — any keyword added there will be caught here without a code change.
     #[test]
-    fn is_ipe_ident_matches_lexer_rules() {
-        // Valid identifiers.
+    fn is_ipe_ident_rejects_keywords_underscore_and_bad_charset() {
+        // Valid identifiers: charset ok, not a keyword, not bare `_`.
         assert!(is_ipe_ident("Counter"));
         assert!(is_ipe_ident("my_fn"));
-        assert!(is_ipe_ident("_private"));
+        assert!(is_ipe_ident("_private")); // leading _ but not bare _
         assert!(is_ipe_ident("X"));
         assert!(is_ipe_ident("alpha123"));
+        assert!(is_ipe_ident("do_something")); // contains keyword substring, not a keyword
 
-        // Invalid identifiers.
+        // Bad charset.
         assert!(!is_ipe_ident(""));
         assert!(!is_ipe_ident("123abc"));
         assert!(!is_ipe_ident("bad-name"));
@@ -1729,5 +1750,73 @@ mod tests {
         assert!(!is_ipe_ident("Result<T>"));
         assert!(!is_ipe_ident("Option<String>"));
         assert!(!is_ipe_ident("Box<dyn Fn()>"));
+
+        // Keywords — the lexer maps each of these to a reserved token, so they
+        // must not be accepted as identifier names.
+        for kw in &[
+            "let", "case", "type", "do", "if", "then", "else", "module", "import", "exposing",
+            "as", "foreign", "of", "in",
+        ] {
+            assert!(
+                !is_ipe_ident(kw),
+                "keyword `{kw}` must be rejected by is_ipe_ident"
+            );
+        }
+
+        // Bare `_` — the lexer maps it to Tok::Underscore, not an identifier.
+        assert!(
+            !is_ipe_ident("_"),
+            "bare `_` must be rejected by is_ipe_ident"
+        );
+    }
+
+    /// A closure named with a keyword is rejected at migrate time, before any write.
+    #[test]
+    fn keyword_closure_name_rejected_before_write() {
+        for name in &["let", "_"] {
+            let closures = [crate::ffi::ManifestDefineClosure {
+                krate: "demo".to_owned(),
+                name: (*name).to_owned(),
+                signature: "Fn(Int) -> Int + Send + Sync + 'static".to_owned(),
+            }];
+            let c_refs: Vec<&crate::ffi::ManifestDefineClosure> = closures.iter().collect();
+            let result = render_foreign_ffi_module("Demo", "demo", &c_refs, &[], &[]);
+            assert!(
+                result.is_err(),
+                "closure name `{name}` must be rejected; got Ok"
+            );
+            let msg = format!("{}", result.unwrap_err());
+            assert!(
+                msg.contains("not a legal Ipê identifier"),
+                "error must mention identifier constraint for `{name}`, got: {msg}"
+            );
+        }
+    }
+
+    /// A struct with a field whose name is not a legal Ipê identifier must be
+    /// rejected at render time, before any file write.
+    #[test]
+    fn malformed_struct_field_name_rejected_before_write() {
+        let bad_field_names: &[&str] = &["bad-field", "0val", "has space", "type", "_"];
+        for field in bad_field_names {
+            let structs = [crate::ffi::ManifestDefineStruct {
+                krate: "demo".to_owned(),
+                ctor: "demo_new".to_owned(),
+                struct_name: "Demo".to_owned(),
+                fields: vec![((*field).to_owned(), "Int".to_owned())],
+                derives: vec![],
+            }];
+            let s_refs: Vec<&crate::ffi::ManifestDefineStruct> = structs.iter().collect();
+            let result = render_foreign_ffi_module("Demo", "demo", &[], &s_refs, &[]);
+            assert!(
+                result.is_err(),
+                "struct field name `{field}` must be rejected; got Ok"
+            );
+            let msg = format!("{}", result.unwrap_err());
+            assert!(
+                msg.contains("not a legal Ipê identifier"),
+                "error must mention identifier constraint for field `{field}`, got: {msg}"
+            );
+        }
     }
 }
