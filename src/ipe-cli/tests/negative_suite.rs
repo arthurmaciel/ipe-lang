@@ -44,6 +44,7 @@ fn write_entry(name: &str, source: &str) -> Option<PathBuf> {
 }
 
 /// The outcome of running the pipeline over a fixture.
+#[derive(Debug)]
 enum Outcome {
     /// Compilation was rejected — the pipeline diagnostic's wire code
     /// (e.g. `"IPE-N0028"`). The wire string is compared so codes not
@@ -700,52 +701,60 @@ fn canon_custom_element_definition_reserved() {
 
 /// A `CustomElement down up` annotation whose two parameters are plain, closed
 /// value types (here two primitives) TYPE-RESOLVES at canon — the arity and SEAL
-/// gates pass. It is not emittable: the widget transport is not shipped, so it is
-/// rejected FAIL-CLOSED at emission with IPE-L0133, NOT at canon. That the
-/// rejection is the emission code (not a canon `IPE-N0xxx`) proves canon accepted
-/// the annotation; the SEAL contract — no untyped value ever reaches codegen — is
-/// upheld by the emission-level gate.
+/// gates pass — and, with the WP4 transport shipped, now LOWERS to the opaque
+/// widget handle rather than being refused at emission. With the binding unused
+/// (`main = 1`), the program compiles cleanly. That it neither errors at canon
+/// (no `IPE-N0xxx`) nor ICEs proves the annotation resolves AND the handle type
+/// has a real denotation.
 #[test]
-fn canon_custom_element_use_resolves_then_fail_closed_at_emit() {
+fn canon_custom_element_use_resolves_and_lowers() {
     let src = format!(
-        "{HEAD}editor : CustomElement Int String\n\
+        "{HEAD}import Ipe.Io as Io\n\
+         editor : CustomElement Int String\n\
          editor = editor\n\
-         main = 1\n"
+         main : Task Error ()\n\
+         main =\n\
+         \x20   Io.println \"ok\"\n"
     );
-    assert_rejected("canon_custom_element_use", &src, "IPE-L0133");
+    assert_compiles("canon_custom_element_use", &src);
 }
 
 /// A QUALIFIED spelling of the boundary type (`D.CustomElement …` through an
 /// imported module) is checked by NAME regardless of its non-empty home: the
 /// arity + SEAL gates pass for two primitives, so it too type-RESOLVES at canon
-/// and is rejected only at emission (IPE-L0133) — never slipping past a home gate
-/// into a build-time ICE.
+/// and now lowers — never slipping past a home gate into a build-time ICE.
 #[test]
-fn canon_custom_element_qualified_use_resolves_then_fail_closed_at_emit() {
+fn canon_custom_element_qualified_use_resolves_and_lowers() {
     let src = format!(
         "{HEAD}import Ipe.Dict as D\n\
+         import Ipe.Io as Io\n\
          editor : D.CustomElement Int String\n\
          editor = editor\n\
-         main = 1\n"
+         main : Task Error ()\n\
+         main =\n\
+         \x20   Io.println \"ok\"\n"
     );
-    assert_rejected("canon_custom_element_qualified", &src, "IPE-L0133");
+    assert_compiles("canon_custom_element_qualified", &src);
 }
 
 /// The boundary SEAL accepts plain, closed, concrete value types transitively:
 /// a `CustomElement` whose down-state is a user record alias and whose up-event
-/// is a user ADT over primitives type-RESOLVES at canon (arity + seal pass), so
-/// the only rejection is the emission-level IPE-L0133. This is the POSITIVE seal
-/// case — the intended `CustomElement EditorState EditorEvent` shape is admitted.
+/// is a user ADT over primitives type-RESOLVES at canon (arity + seal pass) and
+/// lowers. This is the POSITIVE seal case — the intended
+/// `CustomElement EditorState EditorEvent` shape is admitted end to end.
 #[test]
 fn canon_custom_element_plain_user_seal_resolves() {
     let src = format!(
-        "{HEAD}type alias EditorState = {{ text : String, cursor : Int }}\n\
+        "{HEAD}import Ipe.Io as Io\n\
+         type alias EditorState = {{ text : String, cursor : Int }}\n\
          type EditorEvent = TextChanged String | CursorMoved Int\n\
          editor : CustomElement EditorState EditorEvent\n\
          editor = editor\n\
-         main = 1\n"
+         main : Task Error ()\n\
+         main =\n\
+         \x20   Io.println \"ok\"\n"
     );
-    assert_rejected("canon_custom_element_plain_seal", &src, "IPE-L0133");
+    assert_compiles("canon_custom_element_plain_seal", &src);
 }
 
 /// `CustomElement` demands EXACTLY two type parameters — the sealed down-state
@@ -963,48 +972,69 @@ fn custom_element_ctor_path_traversal_rejected() {
 }
 
 /// (e) A well-formed `customElement "js/x.js"` with the file PRESENT type-checks
-/// (the shape + path + existence gates all pass) but is STILL refused at emission
-/// with IPE-L0133 — the widget transport is not shipped, so no `CustomElement`
-/// value reaches codegen (WP2 does not flip the emission gate).
+/// (the shape + path + existence gates all pass) and — with the WP4 transport
+/// shipped — now LOWERS to the opaque widget handle rather than being refused at
+/// emission. Here the binding is unused (a bare `main = 1`, no `Ui.widget`), so
+/// it is DCE'd and the program compiles cleanly. A real Web-shape program that
+/// PLACES the widget is the WP4 SEAL golden (`custom_element_widget` fixture).
 #[test]
-fn custom_element_ctor_present_file_still_refused_at_emit() {
+fn custom_element_ctor_present_file_lowers_and_compiles() {
     let src = format!(
-        "{HEAD}editor : CustomElement Int String\n\
+        "{HEAD}import Ipe.Io as Io\n\
+         editor : CustomElement Int String\n\
          editor = customElement \"js/x.js\"\n\
-         main = 1\n"
+         main : Task Error ()\n\
+         main =\n\
+         \x20   Io.println \"ok\"\n"
     );
-    assert_rejected_with_files(
+    let outcome = compile_with_files(
         "custom_element_present",
         &src,
         &[(
             "js/x.js",
             "export function mount(host, emit) { return {}; }\n",
         )],
-        "IPE-L0133",
     );
+    match outcome {
+        Outcome::Skip => {}
+        Outcome::Accepted(how) if how.starts_with("compiled successfully") => {}
+        other => assert!(
+            false_marker(),
+            "custom_element_present: expected a clean compile once WP4 ships the \
+             transport, got {other:?}"
+        ),
+    }
 }
 
-/// (f) A `CustomElement` value stored in a `Model` field is rejected — it is an
-/// opaque, non-serialisable handle, so it cannot live in app state, exactly like a
-/// function value. Its type refuses fail-closed at lowering (IPE-L0133) before any
-/// codegen, so the widget seam never reaches the Model.
+/// (f) A `CustomElement` value is an opaque, non-serialisable handle, so it can
+/// never live in a Web `Model` (session state), exactly like a function value.
+/// Once WP4 ships the transport the handle type lowers, so the enforcement is no
+/// longer the retired emission gate (IPE-L0133) but the real plain-Model gate:
+/// `IrType::CustomElement` is non-serde, so a Web Model carrying one is rejected
+/// with IPE-L0120. That end-to-end proof — a real `Web.app` whose Model has a
+/// `CustomElement` field — lives in `model_admissibility.rs`
+/// (`live_model_with_custom_element_field_is_rejected`). Here, in a bare
+/// `main = 1` script with no app entry, no Model gate runs; the unused Model
+/// alias is DCE'd and the program compiles cleanly — confirming the opacity is a
+/// Model-gate concern, not a blanket ban on naming the type.
 #[test]
-fn custom_element_in_model_field_rejected() {
+fn custom_element_in_unused_binding_compiles_no_model_gate() {
+    // A `CustomElement`-typed binding that never flows into a Web `Model` (no app
+    // entry here — a plain `Task` `main`) has no Model gate to run. The type
+    // lowers to the opaque handle and, being unused, is DCE'd; the program
+    // compiles cleanly. This confirms the opacity is a Model-gate concern, not a
+    // blanket ban on naming the type. (A divergent `editor = editor` body keeps
+    // the fixture free of the `customElement` constructor, whose own annotation
+    // gate — WP2, IPE-N0044 — is exercised separately above.)
     let src = format!(
-        "{HEAD}type alias Model = {{ widget : CustomElement Int String }}\n\
+        "{HEAD}import Ipe.Io as Io\n\
          editor : CustomElement Int String\n\
-         editor = customElement \"js/x.js\"\n\
-         main = 1\n"
+         editor = editor\n\
+         main : Task Error ()\n\
+         main =\n\
+         \x20   Io.println \"ok\"\n"
     );
-    assert_rejected_with_files(
-        "custom_element_in_model",
-        &src,
-        &[(
-            "js/x.js",
-            "export function mount(host, emit) { return {}; }\n",
-        )],
-        "IPE-L0133",
-    );
+    assert_compiles("custom_element_unused_binding", &src);
 }
 
 /// (g) `customElement "/etc/passwd"` (an ABSOLUTE path) is rejected at CANON with
@@ -1130,6 +1160,63 @@ fn custom_element_ctor_symlink_escape_rejected_at_build_gate() {
             "custom_element_symlink_escape: expected IPE-N0044 (containment), got {got}"
         ),
         Outcome::Accepted(how) => fail_accepted("custom_element_symlink_escape", "IPE-N0044", &how),
+    }
+}
+
+/// WP4 SEAL golden (ipe-accept half): a real Web-shape program that PLACES a
+/// widget with `Ui.widget`. `codeEditor : CustomElement {a record} {a closed
+/// ADT}` — a record down-state and a closed-ADT up-event — with a present
+/// in-project `js/x.js` hook. The full seam lowers: the down-state renders as an
+/// entity-escaped `state` attribute, the up-event decodes fail-closed over
+/// `/_ipe/event`. This asserts the pipeline ACCEPTS (exit 0). The cargo-build
+/// half of the SEAL (the emitted crate compiles) is exercised by the same
+/// fixture under `IPE_E2E=1`; here we prove acceptance without invoking cargo.
+#[test]
+fn custom_element_widget_program_ipe_accepts() {
+    let src = format!(
+        "{HEAD}import Ipe.Tea.Web as Web\n\
+         import Ipe.Ui as Ui\n\
+         import Ipe.Tea.Web.Cmd\n\
+         import Ipe.Tea.Web.Sub\n\
+         type alias EditorState = {{ text : String, line : Int }}\n\
+         type EditorEvent = Changed String | Saved\n\
+         type Msg = Edited EditorEvent\n\
+         type alias Model = {{ state : EditorState }}\n\
+         codeEditor : CustomElement EditorState EditorEvent\n\
+         codeEditor = customElement \"js/x.js\"\n\
+         init : a -> ( Model, Cmd Msg )\n\
+         init _req =\n\
+         \x20   ( {{ state = {{ text = \"\", line = 0 }} }}, Cmd.none )\n\
+         update : Msg -> Model -> ( Model, Cmd Msg )\n\
+         update _msg model =\n\
+         \x20   ( model, Cmd.none )\n\
+         view : Model -> Element Msg\n\
+         view model =\n\
+         \x20   Ui.widget codeEditor model.state Edited\n\
+         subscriptions : Model -> Sub Msg\n\
+         subscriptions _model =\n\
+         \x20   Sub.none\n\
+         main =\n\
+         \x20   Web.app\n\
+         \x20       {{ init = init, update = update, view = view, subscriptions = subscriptions\n\
+         \x20       , routes = [], notFound = Edited Saved\n\
+         \x20       }}\n"
+    );
+    let outcome = compile_with_files(
+        "custom_element_widget",
+        &src,
+        &[(
+            "js/x.js",
+            "export function mount(host, emit) { return {}; }\n",
+        )],
+    );
+    match outcome {
+        Outcome::Skip => {}
+        Outcome::Accepted(how) if how.starts_with("compiled successfully") => {}
+        other => assert!(
+            false_marker(),
+            "custom_element_widget: expected ipe-accept (exit 0), got {other:?}"
+        ),
     }
 }
 

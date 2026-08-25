@@ -18,16 +18,16 @@ use crate::code::{
     IPE_L0120, IPE_L0121, IPE_L0122, IPE_L0123, IPE_L0124, IPE_L0125, IPE_L0126, IPE_L0127,
     IPE_L0128, IPE_L0129, IPE_L0130, IPE_L0131, IPE_L0132, IPE_L0133, IPE_L0134, IPE_L0135,
     IPE_L0136, IPE_L0140, IPE_L0141, IPE_L0142, IPE_L0143, IPE_L0144, IPE_L0145, IPE_L0146,
-    IPE_L0200, IPE_N0001, IPE_N0002, IPE_N0003, IPE_N0004, IPE_N0005, IPE_N0010, IPE_N0011,
-    IPE_N0012, IPE_N0013, IPE_N0020, IPE_N0021, IPE_N0022, IPE_N0023, IPE_N0024, IPE_N0025,
-    IPE_N0026, IPE_N0027, IPE_N0028, IPE_N0029, IPE_N0030, IPE_N0031, IPE_N0032, IPE_N0033,
-    IPE_N0034, IPE_N0035, IPE_N0036, IPE_N0037, IPE_N0038, IPE_N0039, IPE_N0040, IPE_N0041,
-    IPE_N0042, IPE_N0043, IPE_N0044, IPE_P0001, IPE_P0002, IPE_P0003, IPE_P0010, IPE_P0011,
-    IPE_P0012, IPE_P0013, IPE_P0014, IPE_P0015, IPE_P0016, IPE_P0017, IPE_P0018, IPE_P0020,
-    IPE_P0021, IPE_P0030, IPE_P0031, IPE_P0040, IPE_P0041, IPE_P0050, IPE_P0060, IPE_P0061,
-    IPE_P0062, IPE_P0063, IPE_P0064, IPE_P0065, IPE_P0066, IPE_P0067, IPE_S0001, IPE_T0001,
-    IPE_T0002, IPE_T0003, IPE_T0004, IPE_T0010, IPE_T0011, IPE_T0012, IPE_T0013, IPE_T0014,
-    IPE_T0015, IPE_T0016, IPE_T0017, IPE_T0018, IPE_T0019, IPE_T0020, Severity,
+    IPE_L0147, IPE_L0200, IPE_N0001, IPE_N0002, IPE_N0003, IPE_N0004, IPE_N0005, IPE_N0010,
+    IPE_N0011, IPE_N0012, IPE_N0013, IPE_N0020, IPE_N0021, IPE_N0022, IPE_N0023, IPE_N0024,
+    IPE_N0025, IPE_N0026, IPE_N0027, IPE_N0028, IPE_N0029, IPE_N0030, IPE_N0031, IPE_N0032,
+    IPE_N0033, IPE_N0034, IPE_N0035, IPE_N0036, IPE_N0037, IPE_N0038, IPE_N0039, IPE_N0040,
+    IPE_N0041, IPE_N0042, IPE_N0043, IPE_N0044, IPE_P0001, IPE_P0002, IPE_P0003, IPE_P0010,
+    IPE_P0011, IPE_P0012, IPE_P0013, IPE_P0014, IPE_P0015, IPE_P0016, IPE_P0017, IPE_P0018,
+    IPE_P0020, IPE_P0021, IPE_P0030, IPE_P0031, IPE_P0040, IPE_P0041, IPE_P0050, IPE_P0060,
+    IPE_P0061, IPE_P0062, IPE_P0063, IPE_P0064, IPE_P0065, IPE_P0066, IPE_P0067, IPE_S0001,
+    IPE_T0001, IPE_T0002, IPE_T0003, IPE_T0004, IPE_T0010, IPE_T0011, IPE_T0012, IPE_T0013,
+    IPE_T0014, IPE_T0015, IPE_T0016, IPE_T0017, IPE_T0018, IPE_T0019, IPE_T0020, Severity,
 };
 use crate::span::Span;
 
@@ -1216,6 +1216,17 @@ pub enum LowerError {
     /// the web-family shape that rejected it — the SECURITY-tier fail-closed
     /// gate converts a would-be wrong-render into an ipe-time error. [IPE-L0132]
     UiCellsInWebShape(AppShape),
+    /// `Ui.widget` (a server-driven custom element) appears outside a browser
+    /// shape. Its up-event handler is carried over the seal codec, which is
+    /// present only when the `json` runtime feature is on — and only the browser
+    /// shapes (`Web.app` / `WebView.app`) force it. Under `Terminal` / `Program`
+    /// the widget has no transport for its handler, so the node would be inert
+    /// (a widget with no seam). The SECURITY-tier fail-closed gate converts that
+    /// would-be dead element into an ipe-time refusal rather than emit a crate
+    /// whose non-`json` runtime fallback leaves the up-event type parameter
+    /// unconstrained (rustc E0282). Admissible only under `Web` / `WebView`.
+    /// [IPE-L0147]
+    UiWidgetInNonWebShape,
     /// A `Task`-typed value was discarded as `let _ = <task>` inside a
     /// non-`Task` context (a function whose return type is not itself a
     /// `Task`). Emitting this discard would run the effect through an implicit
@@ -1837,6 +1848,7 @@ const fn lower_code(msg: &LowerError) -> Code {
         }
         LowerError::DevOnlyKernelInProduction { .. } => IPE_L0140,
         LowerError::UiCellsInWebShape(_) => IPE_L0132,
+        LowerError::UiWidgetInNonWebShape => IPE_L0147,
         LowerError::LawlessEffectDiscard => IPE_L0141,
         LowerError::RoutedAppMissingPageField { .. } => IPE_L0124,
         LowerError::NonEntryMain { .. } => IPE_L0136,
@@ -2193,6 +2205,13 @@ fn lower_help(msg: &LowerError) -> Vec<HelpLine> {
              cannot render. Use it only under `Terminal.appScreen` / `Terminal.appLines`; \
              for the same content in a Web/WebView view, render it with `Ui.text` (or a \
              `Ui.column` of rows) instead."
+                .into(),
+        )],
+        LowerError::UiWidgetInNonWebShape => vec![HelpLine::Note(
+            "`Ui.widget` mounts a server-driven custom element whose up-events ride the \
+             seal codec, which exists only in a browser build. Use it only under \
+             `Web.app` / `WebView.app`. In a `Terminal` app, build the view from native \
+             `Ipe.Ui` elements (`Ui.text`, `Ui.column`, inputs) instead."
                 .into(),
         )],
         LowerError::LawlessEffectDiscard => lawless_effect_discard_help(),

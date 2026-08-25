@@ -3073,6 +3073,10 @@ fn collect_record_shapes(
         | IrType::Locale | IrType::Principal | IrType::AuthConfig | IrType::TokenSource => {}
         // `WebRoute page` descends in case the page type carries a record shape.
         IrType::WebRoute(page) => collect_record_shapes(interner, page, shapes)?,
+        IrType::CustomElement { down, up } => {
+            collect_record_shapes(interner, down, shapes)?;
+            collect_record_shapes(interner, up, shapes)?;
+        }
         // `Ui { ctor, msg }` is a msg-parametric wrapper — descend into
         // `msg` in case it carries a nested record (e.g. `Element { x : Int }`).
         IrType::Ui { msg, .. } => collect_record_shapes(interner, msg, shapes)?,
@@ -3243,6 +3247,10 @@ fn type_reaches_enum(
         // `Route<Page>` stores its `not_found`/built pages by value — a page
         // type reaching `target` through a route is a genuine size edge.
         IrType::WebRoute(page) => type_reaches_enum(page, target, enums, visited),
+        IrType::CustomElement { down, up } => {
+            type_reaches_enum(down, target, enums, visited)
+                || type_reaches_enum(up, target, enums, visited)
+        }
         // `Ui { ctor, msg }` — descend into `msg`.
         IrType::Ui { msg, .. } => type_reaches_enum(msg, target, enums, visited),
     }
@@ -3355,6 +3363,7 @@ fn contains_generic(ty: &IrType) -> bool {
         // `WebRoute page` is parametric on `page`; check if it carries a
         // generic.
         IrType::WebRoute(page) => contains_generic(page),
+        IrType::CustomElement { down, up } => contains_generic(down) || contains_generic(up),
         // `Ui { ctor, msg }` is parametric on `msg`; check if `msg` carries
         // a generic.
         IrType::Ui { msg, .. } => contains_generic(msg),
@@ -3363,6 +3372,7 @@ fn contains_generic(ty: &IrType) -> bool {
 
 /// Collect the distinct [`IrType::Generic`] symbols in `ty`, appending each (in
 /// first-occurrence order) to `out` if not already present.
+#[allow(clippy::too_many_lines)] // one exhaustive arm per IrType variant — the completeness is the point
 fn collect_generics(ty: &IrType, out: &mut Vec<Symbol>) {
     match ty {
         IrType::Generic(s) => {
@@ -3489,6 +3499,10 @@ fn collect_generics(ty: &IrType, out: &mut Vec<Symbol>) {
         | IrType::RowGeneric(_) => {}
         // `WebRoute page` may carry generic parameters through `page`.
         IrType::WebRoute(page) => collect_generics(page, out),
+        IrType::CustomElement { down, up } => {
+            collect_generics(down, out);
+            collect_generics(up, out);
+        }
         // `Ui { ctor, msg }` may carry generic parameters through `msg`.
         IrType::Ui { msg, .. } => collect_generics(msg, out),
     }
@@ -3842,6 +3856,16 @@ fn match_template(
         // argument.
         IrType::WebRoute(tp) => match concrete {
             IrType::WebRoute(cp) => match_template(tp, cp, subst),
+            _ => Err(mismatch()),
+        },
+        // The widget handle's seal types are monomorphic (no template var
+        // survives the seal gate), but match both slots structurally so a future
+        // relaxation stays sound rather than silently mismatching.
+        IrType::CustomElement { down: td, up: tu } => match concrete {
+            IrType::CustomElement { down: cd, up: cu } => {
+                match_template(td, cd, subst)?;
+                match_template(tu, cu, subst)
+            }
             _ => Err(mismatch()),
         },
         // `Ui { ctor, msg }` is parametric on `msg`; match the ctor tag

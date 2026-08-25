@@ -22,3 +22,7 @@ pub mod lazy;
 
 /// `Ipe.Ui.Keyed` kernel helpers — ipe-key diff identity (key discarded in v1).
 pub mod keyed;
+
+/// `Ui.widget` server-driven custom-element boundary — the opaque handle, the
+/// reserved constructor, and the fail-closed down-encode / up-decode emission.
+pub mod widget;

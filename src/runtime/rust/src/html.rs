@@ -59,6 +59,18 @@ pub enum Event<M> {
         String,
         std::sync::Arc<dyn Fn(FormData) -> Option<M> + Send + Sync>,
     ),
+    /// Typed custom-element up-event handler (`Ui.widget`). The browser posts
+    /// the encoded `up` value as `args[0]` through the same `/_ipe/event` wire a
+    /// click uses; the closure runs the generated fail-closed seal decode over
+    /// that string and dispatches the typed `msg` on success. It returns
+    /// `Option<M>` for the SAME reason `OnForm` does: a payload that does not
+    /// decode to the declared `up` type yields `None`, so the live loop
+    /// dispatches no Msg and no partial value is ever constructed (the seal
+    /// boundary's fail-closed drop).
+    OnWidget(
+        String,
+        std::sync::Arc<dyn Fn(String) -> Option<M> + Send + Sync>,
+    ),
 }
 
 impl<M: PartialEq> PartialEq for Attribute<M> {
@@ -104,7 +116,8 @@ impl<M> Event<M> {
             Event::OnMsg(n, _)
             | Event::OnString(n, _)
             | Event::OnBool(n, _)
-            | Event::OnForm(n, _) => n,
+            | Event::OnForm(n, _)
+            | Event::OnWidget(n, _) => n,
         }
     }
 
@@ -114,6 +127,7 @@ impl<M> Event<M> {
             Event::OnString(n, _) => (1, n),
             Event::OnBool(n, _) => (2, n),
             Event::OnForm(n, _) => (3, n),
+            Event::OnWidget(n, _) => (4, n),
         }
     }
 
@@ -123,6 +137,7 @@ impl<M> Event<M> {
             Event::OnString(..) => "OnString",
             Event::OnBool(..) => "OnBool",
             Event::OnForm(..) => "OnForm",
+            Event::OnWidget(..) => "OnWidget",
         }
     }
 }

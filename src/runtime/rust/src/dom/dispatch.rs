@@ -21,6 +21,10 @@ impl<M: Clone> HandlerIndex<M> {
     /// - `OnString`— calls the closure with `args[0]` (or `""` if absent).
     /// - `OnBool`  — calls the closure with `args[0] == "true"` (or `false`).
     /// - `OnForm`  — dispatched via [`Self::resolve_form`]; returns `None` here.
+    /// - `OnWidget`— a `Ui.widget` up-event: runs the generated fail-closed seal
+    ///   decode over `args[0]` (the posted encoded `up` value) and returns the
+    ///   typed msg, or `None` when the payload does not decode to the declared
+    ///   `up` type (the seal boundary's fail-closed drop — no partial value).
     ///
     /// Returns `None` when the ipe-id is unknown or the event name doesn't
     /// match any registered handler.
@@ -31,6 +35,10 @@ impl<M: Clone> HandlerIndex<M> {
             Event::OnString(_, f) => Some(f(args.first().cloned().unwrap_or_default())),
             Event::OnBool(_, f) => Some(f(args.first().is_some_and(|s| s == "true"))),
             Event::OnForm(_, _) => None, // dispatched via resolve_form
+            // `f` already returns `Option<M>` (`None` on a fail-closed seal
+            // decode); a missing `args[0]` decodes the empty string, which the
+            // total decoder rejects — still a clean drop, never a panic.
+            Event::OnWidget(_, f) => f(args.first().cloned().unwrap_or_default()),
         }
     }
 
@@ -229,6 +237,67 @@ mod tests {
             idx.resolve_form("r", "submit", fd),
             Some(Msg::Typed("a@b.com:hunter2".into()))
         );
+    }
+
+    // The `Ui.widget` up-event: an `OnWidget` handler composes the fail-closed
+    // seal decode over the posted string. A payload that decodes to the declared
+    // `up` type dispatches the typed msg; one that does NOT is dropped whole
+    // (`None`) — no partial value, no panic. This is the runtime proof of the
+    // up-event seam's fail-closed contract (WP4, Security #2).
+    #[cfg(feature = "json")]
+    #[test]
+    fn onwidget_up_event_decodes_fail_closed() {
+        use crate::seal_codec::{SealLimits, seal_decode_serde};
+
+        // A closed-ADT up type with serde derives (what a seal-legal type emits
+        // in a Web program).
+        #[derive(serde::Deserialize, Clone, Debug, PartialEq)]
+        enum Up {
+            Changed(String),
+            Saved,
+        }
+
+        // The generated `OnWidget` closure shape: decode fail-closed, then map.
+        let handler: std::sync::Arc<dyn Fn(String) -> Option<Msg> + Send + Sync> =
+            std::sync::Arc::new(|payload: String| {
+                match seal_decode_serde::<Up>(&payload, SealLimits::default()) {
+                    Ok(Up::Changed(s)) => Some(Msg::Typed(s)),
+                    Ok(Up::Saved) => Some(Msg::Inc),
+                    Err(_) => None,
+                }
+            });
+
+        let mut t = Html::HElement(
+            "ipe-ce-deadbeef".into(),
+            vec![Attribute::EventAttr(Event::OnWidget(
+                "ipe-widget".into(),
+                handler,
+            ))],
+            vec![],
+        );
+        assign_ipe_ids(&mut t, "r");
+        let idx = build_index(&t);
+
+        // A well-formed `Changed "hi"` payload decodes and dispatches.
+        assert_eq!(
+            idx.resolve("r", "ipe-widget", &[r#"{"Changed":"hi"}"#.into()]),
+            Some(Msg::Typed("hi".into()))
+        );
+        // The nullary `Saved` variant.
+        assert_eq!(
+            idx.resolve("r", "ipe-widget", &[r#""Saved""#.into()]),
+            Some(Msg::Inc)
+        );
+        // A payload that does NOT decode to `Up` is DROPPED — no partial value,
+        // no panic. (Wrong tag, wrong shape, and a non-JSON string all drop.)
+        assert_eq!(
+            idx.resolve("r", "ipe-widget", &[r#"{"Bogus":1}"#.into()]),
+            None
+        );
+        assert_eq!(idx.resolve("r", "ipe-widget", &["not json".into()]), None);
+        assert_eq!(idx.resolve("r", "ipe-widget", &["{".into()]), None);
+        // A missing arg decodes the empty string — still a clean drop.
+        assert_eq!(idx.resolve("r", "ipe-widget", &[]), None);
     }
 
     #[test]

@@ -1208,6 +1208,20 @@ pub enum IrType {
     /// (an empty `routes = []` literal's `Vec::<…>::new()` turbofish, or a
     /// let-bound route table's fn signature).
     WebRoute(Box<Self>),
+    /// `CustomElement down up` — the opaque handle placed by `Ui.widget` for a
+    /// typed JS custom-element widget. Rendered as
+    /// `ipe_runtime::ui::widget::IpeCustomElement`, a plain data handle carrying
+    /// the generated content-addressed element tag. `down` / `up` are the
+    /// declared seal types; they are load-bearing for codegen (the down-state
+    /// encode and the up-event decode are generated against the concrete Rust
+    /// types they render to) but the HANDLE itself never crosses the seam and
+    /// never serialises — like [`Self::WebRoute`], it is non-derivable and
+    /// non-serde. The value is produced only by the reserved `customElement`
+    /// constructor and consumed only as `Ui.widget`'s first argument.
+    CustomElement {
+        down: Box<Self>,
+        up: Box<Self>,
+    },
     /// The built-in `Order` type — the result of `Basics.compare`.
     ///
     /// Renders as `ipe_runtime::IpeOrder` (the `#[repr(u8)]` enum exposed from
@@ -1796,7 +1810,10 @@ pub fn ir_type_is_derivable(
         | IrType::WebReq
         // `Route<Page>` holds an `Arc<dyn Fn>` builder — never derivable/serde
         // regardless of its page argument.
-        | IrType::WebRoute(_) => false,
+        | IrType::WebRoute(_)
+        // The widget handle carries a generated tag string only; it never
+        // crosses the seam, so it is non-derivable regardless of its seal args.
+        | IrType::CustomElement { .. } => false,
         // Transparent carriers: derivable iff every carried element is.
         IrType::Maybe(e) | IrType::List(e) | IrType::Set(e) => {
             ir_type_is_derivable(e, enum_derivable)
@@ -2002,7 +2019,10 @@ pub fn ir_type_is_serde(ty: &IrType, enum_serde: &impl Fn(&ModPath, Symbol) -> b
         | IrType::TokenSource
         // `Route<Page>` holds an `Arc<dyn Fn>` builder — never derivable/serde
         // regardless of its page argument.
-        | IrType::WebRoute(_) => false,
+        | IrType::WebRoute(_)
+        // The widget handle is never a session datum and never crosses the
+        // seam; the runtime type carries no serde derive.
+        | IrType::CustomElement { .. } => false,
         // Transparent carriers: serde-OK iff every carried element is.
         IrType::Maybe(e) | IrType::List(e) | IrType::Set(e) => ir_type_is_serde(e, enum_serde),
         IrType::Result(a, b) | IrType::Dict(a, b) => {
@@ -2127,6 +2147,10 @@ pub fn carrier_is_clone(ty: &IrType) -> bool {
         // `AuthConfig` and `TokenSource` both derive `Clone`.
         | IrType::AuthConfig
         | IrType::TokenSource
+        // The widget handle carries only a generated tag `String` — derives
+        // `Clone`. Its seal args are phantom (not stored), so its `Clone`-ness
+        // is unconditional.
+        | IrType::CustomElement { .. }
         // The promoted `Arc<dyn Fn>` fn carrier: `Arc` is `Clone` (a refcount
         // bump), so a `SharedFun` slot never poisons its enclosing composite.
         | IrType::SharedFun(_, _)
@@ -2228,6 +2252,22 @@ pub enum Expr {
     /// the runtime's `Result`-returning seal (the compiler already proved the
     /// string is valid).
     PathLit(String),
+    /// The reserved `customElement "<js-path>"` constructor, lowered. `tag` is
+    /// the generated content-addressed custom-element tag (`ipe-ce-<hex>`),
+    /// derived at lowering from a hash of the cleaned JS path (which the canon
+    /// path seal + the build-stage containment gate already proved is in-project
+    /// and traversal-free); it NEVER contains raw user input, so
+    /// `customElements.define`-style registration injection is impossible by
+    /// construction. `js_path` is the cleaned relative path, retained for the
+    /// serving stage (WP5). The backend renders this as
+    /// `ipe_runtime::ui::widget::custom_element_(tag)`. The value's type is
+    /// [`IrType::CustomElement`]; it is produced only as the whole body of a
+    /// `CustomElement`-annotated binding and consumed only as `Ui.widget`'s
+    /// first argument.
+    CustomElementRef {
+        tag: String,
+        js_path: String,
+    },
     /// A character literal — the carried [`String`] is the single unescaped
     /// character's text. The backend renders it as a Rust `char` literal.
     Char(String),

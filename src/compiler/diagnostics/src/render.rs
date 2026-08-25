@@ -592,6 +592,7 @@ fn type_prose(msg: &TypeError) -> String {
 /// The prose band for a lower-family (unsupported-feature) diagnostic. These are
 /// things Ipê can't compile yet; the band names the situation plainly and the
 /// label / help carry the workaround.
+#[allow(clippy::too_many_lines)] // one declarative arm per lower-family diagnostic
 fn lower_prose(msg: &LowerError) -> String {
     match msg {
         LowerError::Unsupported(_) => "This uses something I can't compile yet.".to_string(),
@@ -620,6 +621,10 @@ fn lower_prose(msg: &LowerError) -> String {
         }
         LowerError::UiCellsInWebShape(_) => {
             "`Ui.cells` paints a terminal character grid, so it has no meaning in a browser app."
+                .to_string()
+        }
+        LowerError::UiWidgetInNonWebShape => {
+            "`Ui.widget` mounts a browser custom element, so it has no meaning in a terminal app."
                 .to_string()
         }
         LowerError::LawlessEffectDiscard => {
@@ -1582,6 +1587,7 @@ fn type_label(msg: &TypeError) -> Option<String> {
     }
 }
 
+#[allow(clippy::too_many_lines)] // one declarative arm per lower-family diagnostic
 fn lower_label(msg: &LowerError) -> String {
     match msg {
         LowerError::Unsupported(f) => feature_label(*f).to_string(),
@@ -1627,6 +1633,12 @@ fn lower_label(msg: &LowerError) -> String {
              Use it only under `Terminal.appScreen` / `Terminal.appLines`",
             web_shape_label(*app)
         ),
+        LowerError::UiWidgetInNonWebShape => {
+            "`Ui.widget` is browser-only; not available outside a Web/WebView shape — its \
+             up-event handler is carried over the seal codec, which exists only in a \
+             browser build. Use it only under `Web.app` / `WebView.app`"
+                .to_string()
+        }
         LowerError::LawlessEffectDiscard => {
             "discarding this `Task` with `let _ = …` in a function that does not return \
              a `Task` would run its effect through a hidden `Task.run` — a plainly-typed \

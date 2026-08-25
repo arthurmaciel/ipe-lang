@@ -121,10 +121,10 @@ pub enum NativeUiEmit {
     LazyLazy5,
     /// `PubSub.publish` / `PubSub.publishNoEcho` — turbofished Task kernel.
     PubSubPublish,
-    /// `Ui.widget` — widget transport not yet shipped (WP4); IPE-L0133 refuses
-    /// any `CustomElement`-typed value at lowering before this emitter is
-    /// reached. Present here only to satisfy the exhaustiveness partition.
-    WidgetTransportDeferred,
+    /// `Ui.widget` — the server-driven custom-element node. Bespoke because its
+    /// handler argument must be re-wrapped to satisfy the runtime fn's
+    /// `Send + Sync` bound (a boxed fn-value trait object is not `Sync`).
+    Widget,
     /// A shape-router delegation to another emitter.
     Delegate(UiDelegate),
 }
@@ -151,6 +151,14 @@ pub enum Guard {
     /// denotation; reject them in a Web / `WebView` build (fail-closed) rather
     /// than let the runtime helper degrade to plain text and render wrong.
     RejectInWebShape,
+    /// `Ui.widget` is the server-driven custom element: its up-event handler is
+    /// carried over the seal codec, which exists only in a browser shape (`web`
+    /// implies the `json` feature; `Terminal` / `Program` do not). Outside a
+    /// browser shape the widget has NO transport — the node would be inert, a
+    /// widget with no seam. Reject it fail-closed rather than emit a dead
+    /// element (or trip the non-`json` runtime fallback's unconstrained type
+    /// parameter). Admissible only under `Web.app` / `WebView.app`.
+    RejectInNonWebShape,
 }
 
 #[cfg(test)]
@@ -190,6 +198,14 @@ const fn native(kind: NativeUiEmit) -> UiEmitPlan {
     }
 }
 
+/// A bespoke native plan carrying a fail-closed shape guard.
+const fn guarded_native(kind: NativeUiEmit, guard: Guard) -> UiEmitPlan {
+    UiEmitPlan {
+        args: ArgPlan::Native(kind),
+        guard,
+    }
+}
+
 /// A plan delegated to a sibling shape emitter.
 const fn delegate(to: UiDelegate) -> UiEmitPlan {
     native(NativeUiEmit::Delegate(to))
@@ -223,11 +239,19 @@ pub const fn ui_call_shape(k: KernelFn) -> Option<UiEmitPlan> {
             1,
             Guard::RejectInWebShape,
         ),
-        // `Ui.widget` is ui-family (is_ui()=true) but its transport is not
-        // shipped (WP4). IPE-L0133 refuses any CustomElement-typed value at
-        // lowering before this arm is ever dispatched. Classified here to
-        // satisfy the exhaustiveness partition; must never reach the emitter.
-        KernelFn::UiWidget => native(N::WidgetTransportDeferred),
+        // `Ui.widget ce state on_up` — the server-driven custom-element node.
+        // A bespoke arm, not a plain positional call: `ui_widget_`'s handler
+        // parameter carries `F: Fn(Up) -> M + Send + Sync + 'static`, which the
+        // codegen's default `Box<dyn Fn + Send>` fn-value rendering does NOT
+        // satisfy (a trait object is `Sync` only if its bound list says so). The
+        // emitter re-wraps the handler in a fresh closure at the call site — the
+        // same technique the `OnSubmit` / `String` / `Bool` event arms use.
+        //
+        // Guarded: the up-event handler rides the seal codec, present only in a
+        // browser shape (`web`/`webview` force the `json` feature). In a
+        // `Terminal` / `Program` build the widget has no transport, so it is a
+        // fail-closed shape refusal rather than a dead node.
+        KernelFn::UiWidget => guarded_native(N::Widget, Guard::RejectInNonWebShape),
         KernelFn::UiNode => pos("ipe_runtime::ui::helpers::ui_node_", 3),
         KernelFn::UiTaggedNode => pos("ipe_runtime::ui::helpers::ui_tagged_node_", 4),
         KernelFn::UiAbove => pos("ipe_runtime::ui::helpers::ui_above_", 1),
@@ -602,15 +626,29 @@ mod tests {
         }
     }
 
-    /// The guard set is exactly the kernels with no browser denotation. A new
-    /// terminal-only widget that forgets the seal fails here rather than
-    /// silently rendering wrong under a web shape.
+    /// The web-shape guard set is exactly the kernels with no browser
+    /// denotation. A new terminal-only widget that forgets the seal fails here
+    /// rather than silently rendering wrong under a web shape.
     #[test]
-    fn guard_coverage_is_exactly_ui_cells() {
+    fn reject_in_web_shape_guard_is_exactly_ui_cells() {
         for &k in KernelFn::ALL {
             let guarded = ui_call_shape(k).is_some_and(|p| p.guard == Guard::RejectInWebShape);
             let expected = matches!(k, KernelFn::UiCells);
             assert_eq!(guarded, expected, "{k:?}: guarded={guarded}");
+        }
+    }
+
+    /// The non-web-shape guard set is exactly `Ui.widget` — the one UI kernel
+    /// whose seam (the seal-coded up-event handler) has no transport outside a
+    /// browser shape. A new browser-only widget added without the guard fails
+    /// here rather than downstream when the emitted crate's non-`json` runtime
+    /// fallback leaves a type parameter unconstrained (rustc E0282).
+    #[test]
+    fn reject_in_non_web_shape_guard_is_exactly_ui_widget() {
+        for &k in KernelFn::ALL {
+            let guarded = ui_call_shape(k).is_some_and(|p| p.guard == Guard::RejectInNonWebShape);
+            let expected = matches!(k, KernelFn::UiWidget);
+            assert_eq!(guarded, expected, "{k:?}: non-web-guarded={guarded}");
         }
     }
 

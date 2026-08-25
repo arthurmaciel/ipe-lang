@@ -191,6 +191,11 @@ fn ir_type_name_at(interner: &Interner, ty: &IrType, depth: u16) -> String {
         },
         IrType::WebReq => "WebReq".to_owned(),
         IrType::WebRoute(page) => format!("WebRoute {}", ir_type_name_at(interner, page, depth)),
+        IrType::CustomElement { down, up } => format!(
+            "CustomElement {} {}",
+            ir_type_name_at(interner, down, depth),
+            ir_type_name_at(interner, up, depth)
+        ),
         IrType::Tuple(elems) => {
             let inner = elems
                 .iter()
@@ -632,6 +637,9 @@ fn write_expr_at(out: &mut String, expr: &Expr, interner: &Interner, level: usiz
         Expr::Float(f) => line(out, level, &format!("Float {f}")),
         Expr::Str(s) => line(out, level, &format!("Str {s:?}")),
         Expr::PathLit(s) => line(out, level, &format!("PathLit {s:?}")),
+        Expr::CustomElementRef { tag, js_path } => {
+            line(out, level, &format!("CustomElementRef {tag:?} {js_path:?}"));
+        }
         Expr::Char(c) => line(out, level, &format!("Char '{c}'")),
         Expr::Unit => line(out, level, "Unit"),
         Expr::Var(sym) => line(out, level, &format!("Var {}", sym_name(interner, *sym))),

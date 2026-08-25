@@ -183,6 +183,7 @@ fn collect_free_vars(expr: &Expr, out: &mut std::collections::BTreeSet<Symbol>) 
         | Expr::Float(_)
         | Expr::Str(_)
         | Expr::PathLit(_)
+        | Expr::CustomElementRef { .. }
         | Expr::Char(_)
         | Expr::Unit
         | Expr::FuncValue { .. } => {}
@@ -321,6 +322,7 @@ fn clone_free_target(
         | Expr::Bool(_)
         | Expr::Str(_)
         | Expr::PathLit(_)
+        | Expr::CustomElementRef { .. }
         | Expr::Char(_)
         | Expr::Unit
         | Expr::FuncValue { .. } => expr,
@@ -656,6 +658,7 @@ fn fn_binder_used_as_value(sym: Symbol, body: &Expr) -> bool {
         | Expr::Float(_)
         | Expr::Str(_)
         | Expr::PathLit(_)
+        | Expr::CustomElementRef { .. }
         | Expr::Char(_)
         | Expr::Unit
         // A `FuncValue` names a TOP-LEVEL function / kernel as a value, never a
@@ -721,6 +724,7 @@ fn expr_refs_symbol(sym: Symbol, expr: &Expr) -> bool {
         | Expr::Float(_)
         | Expr::Str(_)
         | Expr::PathLit(_)
+        | Expr::CustomElementRef { .. }
         | Expr::Char(_)
         | Expr::Unit
         | Expr::FuncValue { .. } => false,
@@ -795,6 +799,7 @@ fn scan_free_target_into(expr: &Expr, target: Symbol, count: &mut usize, has_clo
         | Expr::Bool(_)
         | Expr::Str(_)
         | Expr::PathLit(_)
+        | Expr::CustomElementRef { .. }
         | Expr::Char(_)
         | Expr::Unit
         | Expr::FuncValue { .. } => {}
@@ -902,6 +907,7 @@ pub fn substitute_var(expr: Expr, target: Symbol, replacement: &Expr) -> Expr {
         | Expr::Bool(_)
         | Expr::Str(_)
         | Expr::PathLit(_)
+        | Expr::CustomElementRef { .. }
         | Expr::Char(_)
         | Expr::Unit
         | Expr::FuncValue { .. } => expr,
@@ -3387,6 +3393,21 @@ fn emit_ui_plan(
         });
     }
 
+    // The inverse seal: `Ui.widget`'s up-event handler rides the seal codec,
+    // which lives only in a browser build (`web` / `webview` force the `json`
+    // runtime feature — `Terminal` / `Program` never do). Emitting it in a
+    // non-browser shape would produce an inert node (a widget with no transport)
+    // and trip the non-`json` runtime fallback whose up-event type parameter is
+    // unconstrained (rustc E0282). Reject it here — the one point it is emitted —
+    // converting a would-be dead element (and cargo failure) into a shape-keyed
+    // ipe error. A browser shape sets `uses_web` (forced true under `uses_webview`).
+    if plan.guard == Guard::RejectInNonWebShape && !(ctx.uses_web || ctx.uses_webview) {
+        return Err(Diagnostic::Lower {
+            span: Span::DUMMY,
+            msg: LowerError::UiWidgetInNonWebShape,
+        });
+    }
+
     let native = match plan.args {
         // The uniform majority: emit each argument in order, join, format into
         // the runtime path. `arity == 0` emits `path()`. A wrong argument count
@@ -4293,6 +4314,41 @@ fn emit_ui_plan(
             Ok(call)
         }
 
+        // `Ui.widget ce state on_up` — the server-driven custom-element node.
+        NativeUiEmit::Widget => {
+            let [ce_expr, state_expr, handler_expr] = args else {
+                return Err(Diagnostic::CompilerBug {
+                    where_: "ipe_backend_rust::emit_ui_call::UiWidget",
+                    detail: format!("Ui.widget requires 3 arguments, got {}", args.len()),
+                });
+            };
+            let ce_src = emit_expr_at(ctx, ce_expr, indent, child, generics)?;
+            let state_src = emit_expr_at(ctx, state_expr, indent, child, generics)?;
+            // The handler carries `F: Fn(Up) -> M + Send + Sync + 'static`, which
+            // the codegen's default `Box<dyn Fn + Send>` fn-value rendering does
+            // NOT satisfy (a boxed trait object is `Sync` only if its bound list
+            // says so). Re-wrap its SOURCE in a freshly-declared closure at the
+            // call site — `move |_x| ({handler})(_x)` — so the box is built anew
+            // inside the wrapper's body and never captured, exactly as the
+            // `OnSubmit` / `String` / `Bool` event arms do. Peel any
+            // lowerer-hoisted capture-clone `let`s OUT of the wrapping `move` so a
+            // sibling attribute reading the same captured binding survives (E0382,
+            // an accept-then-cargo-fail SEAL break).
+            let (hoisted, peeled_handler) = peel_callback_capture_clones(handler_expr);
+            let handler_src = emit_expr_at(ctx, peeled_handler, indent, child, generics)?;
+            let prefix = render_hoisted_clone_prefix(ctx, &hoisted, indent, child, generics)?;
+            let inner = format!(
+                "ipe_runtime::ui::widget::ui_widget_({ce_src}, {state_src}, \
+                 move |_x| ({handler_src})(_x))"
+            );
+            let call = if prefix.is_empty() {
+                inner
+            } else {
+                format!("{{ {prefix}{inner} }}")
+            };
+            Ok(call)
+        }
+
         // ── Ipe.Html.Events builders ────────────────────────────────────
         // Produce a `html::Attribute::EventAttr(Event::On*)` via a dedicated
         // runtime constructor. The fixed wire event name (`"click"`, `"input"`,
@@ -4650,17 +4706,6 @@ fn emit_ui_plan(
                     })?;
             Ok(s)
         }
-
-        // IPE-L0133 refuses any CustomElement-typed value at lowering before
-        // this arm can be reached; this branch is unreachable in a well-formed
-        // compilation. It exists because the exhaustiveness partition in
-        // emit_ui_plan requires every is_ui() kernel to have a plan.
-        NativeUiEmit::WidgetTransportDeferred => Err(Diagnostic::CompilerBug {
-            where_: "ipe_backend_rust::emit_ui_call::WidgetTransportDeferred",
-            detail: format!(
-                "Ui.widget reached the emitter for {k:?} — IPE-L0133 should have refused at lowering"
-            ),
-        }),
     }
 }
 
@@ -4874,6 +4919,14 @@ pub fn emit_expr_at(
         // re-validation is performed — the type is the proof.
         Expr::PathLit(s) => Ok(format!(
             "ipe_runtime::path::path_literal({s:?}.to_string())"
+        )),
+        // The reserved `customElement` constructor value: a widget handle built
+        // from its generated content-addressed tag. The tag was minted at
+        // lowering from the sealed, in-project JS path (never raw user input);
+        // `js_path` is retained on the node for the WP5 serving stage but is not
+        // part of the handle's runtime representation here.
+        Expr::CustomElementRef { tag, js_path: _ } => Ok(format!(
+            "ipe_runtime::ui::widget::custom_element_({tag:?}.to_string())"
         )),
         // A character literal renders as a Rust `char`. The carried text is a
         // single character (lexer invariant); `{:?}` escapes it deterministically.

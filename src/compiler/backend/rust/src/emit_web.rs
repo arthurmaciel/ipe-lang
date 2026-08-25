@@ -845,6 +845,7 @@ const fn ir_type_display_name(ty: &IrType) -> &'static str {
         IrType::UiPlain(_) => "UiAttribute",
         IrType::WebReq => "WebReq",
         IrType::WebRoute(_) => "WebRoute",
+        IrType::CustomElement { .. } => "CustomElement",
         IrType::Order => "Order",
         IrType::HttpMethod => "HttpMethod",
         IrType::Decimal => "Decimal",

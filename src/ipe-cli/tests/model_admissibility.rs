@@ -50,6 +50,50 @@ fn assert_rejected_with(
     }
 }
 
+/// Like [`compile`], but also writes a present `js/x.js` widget-hook file next to
+/// `Main.ipe` so a `customElement "js/x.js"` constructor clears its existence /
+/// containment gate (IPE-N0044) and the pipeline reaches the Model gate.
+fn compile_with_widget_file(
+    test_name: &str,
+    source: &str,
+) -> Result<Result<(), ipe::CliError>, BoxError> {
+    let ipe_dir = std::env::temp_dir().join(format!("model_adm_{test_name}_ipe"));
+    let _ = std::fs::remove_dir_all(&ipe_dir);
+    std::fs::create_dir_all(ipe_dir.join("js"))?;
+    std::fs::write(
+        ipe_dir.join("js").join("x.js"),
+        "export function mount(host, emit) { return {}; }\n",
+    )?;
+    let entry = ipe_dir.join("Main.ipe");
+    std::fs::write(&entry, source)?;
+
+    let out_dir = std::env::temp_dir().join(format!("model_adm_{test_name}_out"));
+    let _ = std::fs::remove_dir_all(&out_dir);
+
+    let runtime = ipe::resolve_runtime().map_err(|e| -> BoxError { format!("{e:?}").into() })?;
+    Ok(ipe::build(&entry, &out_dir, &runtime))
+}
+
+/// Assert compilation with a present widget file failed with the given code.
+fn assert_rejected_with_widget_file(
+    test_name: &str,
+    source: &str,
+    expected_code: &str,
+) -> Result<(), BoxError> {
+    match compile_with_widget_file(test_name, source)? {
+        Ok(()) => Err(format!("{test_name}: expected {expected_code}, but ipec succeeded").into()),
+        Err(ipe::CliError::Pipeline { diag, .. }) => {
+            assert_eq!(
+                diag.code().as_str(),
+                expected_code,
+                "{test_name}: wrong diagnostic code"
+            );
+            Ok(())
+        }
+        Err(other) => Err(format!("{test_name}: expected {expected_code}, got {other:?}").into()),
+    }
+}
+
 /// Assert compilation succeeded (ipe-0).
 fn assert_accepted(test_name: &str, source: &str) -> Result<(), BoxError> {
     match compile(test_name, source)? {
@@ -211,6 +255,50 @@ main =
         }
 "#;
 
+// A Web Model that stores a `CustomElement` widget handle — an opaque, non-serde
+// value that must never live in session state. The `editor` binding clears every
+// widget gate (present file, in-project path), so the sole rejection is the
+// plain-Model gate's IPE-L0120 on the `widget` field.
+const LIVE_CUSTOM_ELEMENT_MODEL: &str = r#"module Main exposing (main)
+
+import Ipe.Tea.Web as Web
+import Ipe.Ui as Ui
+import Ipe.Tea.Web.Cmd
+import Ipe.String
+import Ipe.Tea.Web.Sub
+
+type Msg = Tick
+
+editor : CustomElement Int String
+editor = customElement "js/x.js"
+
+type alias Model = { count : Int, widget : CustomElement Int String }
+
+init : a -> ( Model, Cmd Msg )
+init _req =
+    ( { count = 0, widget = editor }, Cmd.none )
+
+update : Msg -> Model -> ( Model, Cmd Msg )
+update msg model =
+    case msg of
+        Tick ->
+            ( { model | count = model.count + 1 }, Cmd.none )
+
+view : Model -> Element Msg
+view model =
+    Ui.text (String.fromInt model.count)
+
+subscriptions : Model -> Sub Msg
+subscriptions _model =
+    Sub.none
+
+main =
+    Web.app
+        { init = init, update = update, view = view, subscriptions = subscriptions
+        , routes = [], notFound = Tick
+        }
+"#;
+
 const TUI_GOOD: &str = r"module Main exposing (main)
 
 import Ipe.Tea.Terminal as Terminal
@@ -323,6 +411,26 @@ fn live_model_with_html_field_is_rejected() -> Result<(), BoxError> {
 #[test]
 fn live_model_with_secret_field_is_rejected() -> Result<(), BoxError> {
     assert_rejected_with("live_secret", LIVE_SECRET_MODEL, "IPE-L0120")
+}
+
+/// A `CustomElement` widget handle in a Web Model is a compile-time `IPE-L0120`.
+/// Once WP4 ships the widget transport, the handle type lowers (it is no longer
+/// refused at emission), but it is an OPAQUE, non-serde value — it must never
+/// live in a Model (session state), exactly like a function or `Html`. The
+/// plain-Model gate (`ir_type_is_serde` = `false` for `IrType::CustomElement`)
+/// is the enforcement sink; this proves the opacity survives the L0133 flip and
+/// is caught by the real Model gate, not the retired emission gate.
+///
+/// The widget-file must be present so the constructor clears its own
+/// existence/containment gate (IPE-N0044) and the pipeline reaches the Model
+/// gate — otherwise the rejection would be N0044, not the L0120 under test.
+#[test]
+fn live_model_with_custom_element_field_is_rejected() -> Result<(), BoxError> {
+    assert_rejected_with_widget_file(
+        "live_custom_element",
+        LIVE_CUSTOM_ELEMENT_MODEL,
+        "IPE-L0120",
+    )
 }
 
 #[test]
