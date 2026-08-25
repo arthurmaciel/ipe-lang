@@ -7918,7 +7918,7 @@ impl<'a> Builder<'a> {
 pub struct UntypedScheme {
     /// The shared, home-module-monomorphic root every same-module reference
     /// (and, pre-discharge, the binding's own `untyped[key]` var) resolves to.
-    root: VarId,
+    pub(crate) root: VarId,
     /// Generalized root → synthesized type-variable name.
     pub quantified: BTreeMap<VarId, Symbol>,
 }

@@ -1,0 +1,51 @@
+module Main exposing (main)
+
+-- Unconstrained UI-msg defaulting for FULLY UNANNOTATED view helpers, including
+-- one that takes view content as ARGUMENTS.
+--
+-- `nav_` and `content_` carry no message — only `Html.text` / `Attr.class`, no
+-- event handler — and have no signature, so each infers to `Html msg` with `msg`
+-- a free variable generalized at the module boundary. `layout` takes two such
+-- views as arguments (`navEl`, `content`) and is itself unannotated.
+--
+-- With no signature to key the message-defaulting on, the free `msg` was emitted
+-- as a Rust generic needing a `'static` bound the caller cannot satisfy:
+-- `fn nav_<T1: 'static + Clone>() -> Html<T1>` (E0310 `T1` may not live long
+-- enough / E0283 uninferable), and `fn layout<T1: Clone>(navEl: Html<T1>, ...)`
+-- whose body mixes the `Html<T1>` arguments with `Html<()>` message-free nodes
+-- (E0308). ipe accepted (exit 0) but the emitted `cargo build` rejected it —
+-- exit-0-then-cargo-fail, a SEAL break.
+--
+-- The fix defaults the message-free `msg` of an unannotated binding to `()` just
+-- as it does for an annotated `page : Html msg`, so every helper monomorphises to
+-- `Html<()>`: `nav_`/`content_` return `Html<()>`, and `layout`'s arguments and
+-- body are `Html<()>`, with no dangling generic. ipe MUST exit 0 AND the emitted
+-- project MUST cargo-build (THE SEAL).
+
+import Ipe.String as String
+import Ipe.Html as Html exposing (Html)
+import Ipe.Html.Attributes as Attr
+import Ipe.Io as Io
+
+
+-- Unannotated view content passed as ARGUMENTS (`navEl`, `content`).
+layout pageTitle navEl content =
+    Html.render
+        (Html.div []
+            [ Html.h1 [] [ Html.text pageTitle ]
+            , navEl
+            , Html.div [ Attr.class "container" ] [ content ]
+            ]
+        )
+
+
+nav_ =
+    Html.div [ Attr.class "nav" ] [ Html.text "SkyNotes" ]
+
+
+content_ =
+    Html.div [] [ Html.text "hello" ]
+
+
+main =
+    Io.println (layout "Home" nav_ content_)
