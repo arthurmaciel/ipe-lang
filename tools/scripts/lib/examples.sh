@@ -178,9 +178,6 @@ is_live_network_cli() {
 # documented set — never a heuristic.
 expected_red_reason() {
   case "$1" in
-    iced-counter)
-      printf 'has no package.ipe: its Rust-FFI `[[rust.define.*]]` create-types vocabulary is not yet expressible in package.ipe (ergonomic Rust-FFI work), so it keeps a legacy ipe.toml — which the toolchain does not build as a project manifest — and its BUILD fails by design until that vocabulary lands'
-      return 0 ;;
   esac
   return 1
 }
@@ -192,9 +189,8 @@ is_web_example() {
 
 # ── example_manifest <dir>: the project manifest path, or empty ──────────────
 # `package.ipe` is the project manifest the compiler builds. This detector also
-# falls back to a legacy `ipe.toml` so it can still read the shape of the one
-# example kept on `ipe.toml` (examples/ffi/iced-counter, pending the ergonomic
-# Rust-FFI define vocabulary in package.ipe) and any freshly mirrored port.
+# falls back to a legacy `ipe.toml` so it can still read the shape of any
+# freshly mirrored port that has not yet been converted.
 example_manifest() {
   if   [ -f "$1/package.ipe" ]; then echo "$1/package.ipe"
   elif [ -f "$1/ipe.toml" ];    then echo "$1/ipe.toml"
