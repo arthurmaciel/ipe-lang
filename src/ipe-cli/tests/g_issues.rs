@@ -44,6 +44,8 @@ mod golden_i1338_unannotated_view_arg_msg_defaulting_seal;
 mod golden_i1347_cross_module_monomorphic_view_msg_defaulting_seal;
 #[path = "g_issues/golden_i1347_cross_module_unpinned_view_msg_defaulting_seal.rs"]
 mod golden_i1347_cross_module_unpinned_view_msg_defaulting_seal;
+#[path = "g_issues/golden_i1353_generic_view_helper_body_msg_tvar_seal.rs"]
+mod golden_i1353_generic_view_helper_body_msg_tvar_seal;
 #[path = "g_issues/golden_i136_alias_truncation.rs"]
 mod golden_i136_alias_truncation;
 #[path = "g_issues/golden_i138_total_resolution.rs"]
