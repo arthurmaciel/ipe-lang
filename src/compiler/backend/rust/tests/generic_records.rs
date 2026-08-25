@@ -516,11 +516,7 @@ fn three_template_program(interner: &mut Interner, deepest_pos: usize) -> DResul
     );
 
     // All three generic template functions; we'll reorder them below.
-    let all_templates = [
-        (f0, t0_rec),
-        (f1, t1_rec),
-        (f2, t2_rec),
-    ];
+    let all_templates = [(f0, t0_rec), (f1, t1_rec), (f2, t2_rec)];
     // Rotate so T2 (index 2) ends up at `deepest_pos` (0 or 2 from callers).
     // With deepest_pos=0: order is T2, T0, T1.
     // With deepest_pos=2: order is T0, T1, T2 (the bug-triggering order).
