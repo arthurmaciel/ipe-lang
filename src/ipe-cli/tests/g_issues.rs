@@ -26,12 +26,12 @@ mod golden_i122_cli_program_separator;
 mod golden_i1230_store_migrations_producer;
 #[path = "g_issues/golden_i1255_pointfree_store_kernel_seal.rs"]
 mod golden_i1255_pointfree_store_kernel_seal;
+#[path = "g_issues/golden_i125_decoder_destructure_thunk.rs"]
+mod golden_i125_decoder_destructure_thunk;
 #[path = "g_issues/golden_i1309_polymorphic_msg_helper_seal.rs"]
 mod golden_i1309_polymorphic_msg_helper_seal;
 #[path = "g_issues/golden_i1309_unconstrained_msg_defaulting_seal.rs"]
 mod golden_i1309_unconstrained_msg_defaulting_seal;
-#[path = "g_issues/golden_i125_decoder_destructure_thunk.rs"]
-mod golden_i125_decoder_destructure_thunk;
 #[path = "g_issues/golden_i130_seal.rs"]
 mod golden_i130_seal;
 #[path = "g_issues/golden_i136_alias_truncation.rs"]

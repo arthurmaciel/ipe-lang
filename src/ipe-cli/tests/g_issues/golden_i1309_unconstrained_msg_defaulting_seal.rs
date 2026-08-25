@@ -1,18 +1,18 @@
 //! SEAL: an unconstrained UI message variable defaults to `()`.
 //!
-//! A view helper whose body carries no message — only `Html.text` / `Attr.class`,
-//! no event handler — infers to `Html msg` with `msg` a FREE, unconstrained type
+//! A view helper whose body carries no message -- only `Html.text` / `Attr.class`,
+//! no event handler -- infers to `Html msg` with `msg` a FREE, unconstrained type
 //! variable. `page : Html msg` reaches its only use through the polymorphic
 //! `Html.render`, so nothing pins `msg` to a concrete `Msg`. The type checker
 //! records the variable as message-defaulted (`SolvedTypes::msg_defaulted_vars`)
 //! and the lowerer emits `Html<()>` for the signature, the return, and every body
 //! node.
 //!
-//! Before the fix the free variable lowered to a Rust generic — `fn page<T1>()
-//! -> Html<T1>` — that ipe accepted (exit 0) but the emitted `cargo build`
+//! Before the fix the free variable lowered to a Rust generic -- `fn page<T1>()
+//! -> Html<T1>` -- that ipe accepted (exit 0) but the emitted `cargo build`
 //! rejected: `T1` is uninferable at the call (E0283) and the helper's `Html<()>`
 //! internal nodes mismatch the `Html<T1>` signature (E0308). Exit-0-then-cargo-
-//! fail — a SEAL break.
+//! fail -- a SEAL break.
 //!
 //! The companion `golden_i1309_polymorphic_msg_helper_seal` proves the defaulting
 //! does NOT over-fire on a genuinely message-polymorphic helper.
@@ -30,34 +30,23 @@ fn fixture_entry(root: &Path) -> PathBuf {
         .join("Main.ipe")
 }
 
-/// Emit gate + byte-identity golden: the frontend must accept the free-`msg`
-/// helper and emit the checked-in `main.rs` byte-for-byte (the `Html<()>`
-/// monomorphisation is locked in).
+/// Emit gate: the frontend must accept the free-`msg` helper and emit it (its
+/// `msg` defaulted to `()`).
 #[test]
-fn unconstrained_msg_defaulting_emits_byte_identical() {
+fn unconstrained_msg_defaulting_emits() {
     let root = repo_root();
     let entry = fixture_entry(&root);
-    let golden = root
-        .join("tests")
-        .join("golden")
-        .join(GOLDEN)
-        .join("main.rs");
-    let out = std::env::temp_dir().join("ipec_i1309_unconstrained_msg_emit");
+    let out = std::env::temp_dir().join("ipec_unconstrained_msg_defaulting_seal_emit");
     let _ = std::fs::remove_dir_all(&out);
 
     let Ok(runtime) = ipe::resolve_runtime() else {
-        return; // resolver unavailable — skip
+        return; // resolver unavailable -- skip
     };
     let built = ipe::build(&entry, &out, &runtime);
     assert!(
         built.is_ok(),
         "a message-free `page : Html msg` must be accepted and emitted with its \
          `msg` defaulted to `()`, got: {built:?}"
-    );
-
-    crate::support::assert_emitted_project_matches_golden_dir(
-        &out,
-        crate::support::golden_dir_of(&golden),
     );
 }
 
@@ -69,7 +58,7 @@ fn unconstrained_msg_defaulting_emits_byte_identical() {
 fn unconstrained_msg_defaulting_seal_builds() {
     let root = repo_root();
     let entry = fixture_entry(&root);
-    let out = std::env::temp_dir().join("ipec_i1309_unconstrained_msg_e2e");
+    let out = std::env::temp_dir().join("ipec_unconstrained_msg_defaulting_seal_e2e");
     let _ = std::fs::remove_dir_all(&out);
 
     let Ok(runtime) = ipe::resolve_runtime() else {

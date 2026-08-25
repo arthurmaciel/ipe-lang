@@ -682,8 +682,7 @@ fn infer_core(
         .map_err(|d| (d, Vec::new()))?;
     let mut msg_defaulted_vars: BTreeMap<(Vec<Symbol>, Symbol), BTreeSet<Symbol>> = BTreeMap::new();
     {
-        let mut apps_by_binding: BTreeMap<(Vec<Symbol>, Symbol), Vec<&BTreeMap<u32, VarId>>> =
-            BTreeMap::new();
+        let mut apps_by_binding: SchemeAppVars<'_> = BTreeMap::new();
         for app in &generated.scheme_apps {
             apps_by_binding
                 .entry((app.home.clone(), app.name))
@@ -699,7 +698,13 @@ fn infer_core(
         for (key, ty) in &generated.top_level {
             let mut ui_msg_vars = BTreeSet::new();
             let mut other_vars = BTreeSet::new();
-            collect_ui_msg_and_other_vars(ty, &ui_msg_cons, false, &mut ui_msg_vars, &mut other_vars);
+            collect_ui_msg_and_other_vars(
+                ty,
+                &ui_msg_cons,
+                false,
+                &mut ui_msg_vars,
+                &mut other_vars,
+            );
             let candidates: BTreeSet<Symbol> = ui_msg_vars
                 .into_iter()
                 .filter(|v| !other_vars.contains(v))
@@ -726,9 +731,7 @@ fn infer_core(
                         let root = lift!(uf.find(inst));
                         match lift!(uf.content(root)) {
                             Content::Structure(FlatType::Unit) | Content::Flex => {}
-                            Content::Structure(_)
-                            | Content::Rigid
-                            | Content::Super { .. } => {
+                            Content::Structure(_) | Content::Rigid | Content::Super { .. } => {
                                 pinned = true;
                                 break;
                             }
@@ -916,6 +919,11 @@ fn infer_core(
         interface,
     ))
 }
+
+/// Per-binding use-site instantiation maps: each `(home, name)` maps to the
+/// list of `SchemeApp::vars` (scheme var raw id -> instantiation) recorded at
+/// its reference sites, borrowed from `Generated::scheme_apps`.
+type SchemeAppVars<'a> = BTreeMap<(Vec<Symbol>, Symbol), Vec<&'a BTreeMap<u32, VarId>>>;
 
 /// Classify each annotation type variable of `ty` as either a **UI message
 /// slot** variable (it appears as the argument of a `Html` / `Element` /
