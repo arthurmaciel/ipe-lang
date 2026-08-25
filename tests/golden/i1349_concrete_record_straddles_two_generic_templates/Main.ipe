@@ -1,0 +1,55 @@
+module Main exposing (main)
+
+import Ipe.Io as Io
+import Ipe.String as String
+
+
+-- Generic {q:a} (RecQ) and generic {q:(a,a)} (RecQ2) both live.
+-- A CONCRETE {q:Int} use must fold into RecQ (a:=Int), NOT RecQ2.
+-- A CONCRETE {q:(Int,Int)} use must fold into RecQ2, NOT RecQ.
+wrapOne : a -> a
+wrapOne value =
+    let
+        r =
+            { q = value }
+    in
+    r.q
+
+
+firstOfPair : a -> a
+firstOfPair value =
+    let
+        r =
+            { q = ( value, value ) }
+    in
+    case r.q of
+        ( x, _ ) ->
+            x
+
+
+concreteScalar : Int
+concreteScalar =
+    let
+        r =
+            { q = 100 }
+    in
+    r.q
+
+
+concretePair : Int
+concretePair =
+    let
+        r =
+            { q = ( 40, 2 ) }
+    in
+    case r.q of
+        ( x, y ) ->
+            x + y
+
+
+main : Task Error ()
+main =
+    Io.println
+        (String.fromInt
+            (wrapOne 1 + firstOfPair 2 + concreteScalar + concretePair)
+        )
