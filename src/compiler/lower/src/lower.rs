@@ -7165,8 +7165,7 @@ fn propagate_call_site_bounds(funcs: &mut [Func]) {
             // The caller's own bare-tvar map: which parameter binder carries
             // which of the caller's tvars bare. Computed once per caller.
             let caller_params: Vec<(Symbol, IrType)> = caller.params.clone();
-            let caller_tvars: Vec<Symbol> =
-                caller.type_params.iter().map(|(tv, _)| *tv).collect();
+            let caller_tvars: Vec<Symbol> = caller.type_params.iter().map(|(tv, _)| *tv).collect();
 
             let mut calls: Vec<(FuncId, &[Expr])> = Vec::new();
             collect_user_calls(&caller.body, &mut calls);
@@ -7192,8 +7191,7 @@ fn propagate_call_site_bounds(funcs: &mut [Func]) {
                     };
                     // Which caller tvar does the forwarded parameter carry bare?
                     // Only those can inherit a callee bound.
-                    let Some((_, binder_ty)) =
-                        caller_params.iter().find(|(b, _)| *b == binder)
+                    let Some((_, binder_ty)) = caller_params.iter().find(|(b, _)| *b == binder)
                     else {
                         continue;
                     };
