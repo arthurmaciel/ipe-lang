@@ -4,6 +4,8 @@
 
 mod support;
 
+#[path = "g_record_generic/golden_body_local_generic_record.rs"]
+mod golden_body_local_generic_record;
 #[path = "g_record_generic/golden_captured_record_field_access_clone.rs"]
 mod golden_captured_record_field_access_clone;
 #[path = "g_record_generic/golden_csv_record_nominal_fold_seal.rs"]
