@@ -2597,28 +2597,27 @@ impl<'a> EmitCtx<'a> {
     ///
     /// A CONCRETE shape (`{q:(Int,Int)}`) can instantiation-match TWO distinct
     /// generic siblings at once: `{q:a}` binds `a := (Int,Int)`, while `{q:(a,a)}`
-    /// binds `a := Int`. Both are legitimate instantiations, so a "first duplicate
-    /// is ambiguous" rule would ICE on well-typed source (IPE-I0001). Resolve
-    /// deterministically to the template whose skeleton carries the most concrete
-    /// structure ([`template_specificity`]), so the concrete value is emitted with
-    /// the struct whose fields have the RIGHT types — `{q:(a,a)}` with `a:=Int`
-    /// reads `q.0`/`q.1` as `Int` (the true shape), never the over-general `{q:a}`
-    /// (which would type `q` as the whole tuple and read the wrong field types). A
-    /// strictly-larger specificity is strictly more specific. Two templates that
-    /// match with EQUAL specificity but distinct skeletons cannot both be exact
-    /// instantiations of one concrete shape, so that remains a surfaced invariant
-    /// violation, as does no match at all.
+    /// binds `a := Int`. Both are legitimate instantiations, so a "first match wins"
+    /// rule would produce declaration-order-dependent results (IPE-I0001 on some
+    /// orderings, wrong struct on others). Resolve deterministically by a two-pass
+    /// scan over the FULL candidate set: first find the global maximum
+    /// [`template_specificity`], then collect every candidate that achieves it.
+    /// If exactly one achieves the max, it wins regardless of declaration order.
+    /// If two or more tie AT the max, they are genuinely ambiguous — no single
+    /// concrete use-site can uniquely instantiate both — and the tie is surfaced
+    /// as an ambiguity error (IPE-I0001). A tie strictly below the max is
+    /// unambiguous: the deeper (max) candidate covers it.
     fn record_struct_most_specific(
         &self,
         key: &[String],
         indices: &[usize],
         shape_by_name: &BTreeMap<&str, &IrType>,
     ) -> DResult<&RecordStruct> {
-        let matches = |rec: &RecordStruct| -> bool {
+        let candidate_specificity = |rec: &RecordStruct| -> Option<usize> {
             if rec.fields.len() != shape_by_name.len() {
-                return false;
+                return None;
             }
-            if rec.type_params.is_empty() {
+            let instantiates = if rec.type_params.is_empty() {
                 rec.fields
                     .iter()
                     .all(|(n, t)| shape_by_name.get(n.as_str()) == Some(&t))
@@ -2629,6 +2628,16 @@ impl<'a> EmitCtx<'a> {
                         .get(n.as_str())
                         .is_some_and(|u| match_template(t, u, &mut subst).is_ok())
                 })
+            };
+            if instantiates {
+                Some(
+                    rec.fields
+                        .iter()
+                        .map(|(_, t)| template_specificity(t))
+                        .sum(),
+                )
+            } else {
+                None
             }
         };
         let dangling = || Diagnostic::CompilerBug {
@@ -2638,45 +2647,48 @@ impl<'a> EmitCtx<'a> {
                 key.join(", ")
             ),
         };
-        let mut best: Option<(usize, usize)> = None; // (struct index, specificity)
+
+        // Pass 1: collect (index, specificity) for every matching candidate and
+        // find the global maximum specificity.
+        let mut matching: Vec<(usize, usize)> = Vec::new();
+        let mut max_spec: usize = 0;
         for &i in indices {
             let rec = self.record_structs.get(i).ok_or_else(dangling)?;
-            if !matches(rec) {
-                continue;
-            }
-            let specificity: usize = rec
-                .fields
-                .iter()
-                .map(|(_, t)| template_specificity(t))
-                .sum();
-            match best {
-                None => best = Some((i, specificity)),
-                Some((_, best_spec)) if specificity > best_spec => best = Some((i, specificity)),
-                Some((_, best_spec)) if specificity == best_spec => {
-                    return Err(Diagnostic::CompilerBug {
-                        where_: "ipe_backend_rust::EmitCtx::record_name",
-                        detail: format!(
-                            "record shape {{{}}} matched two synthesised structs of equal \
-                             specificity — the concrete use site does not uniquely instantiate \
-                             either template",
-                            key.join(", ")
-                        ),
-                    });
+            if let Some(spec) = candidate_specificity(rec) {
+                if spec > max_spec {
+                    max_spec = spec;
                 }
-                Some(_) => {}
+                matching.push((i, spec));
             }
         }
-        let i = best
-            .map(|(i, _)| i)
-            .ok_or_else(|| Diagnostic::CompilerBug {
+
+        // Pass 2: keep only the candidates at the global maximum.
+        let at_max: Vec<usize> = matching
+            .into_iter()
+            .filter_map(|(i, spec)| (spec == max_spec).then_some(i))
+            .collect();
+
+        match at_max.as_slice() {
+            [] => Err(Diagnostic::CompilerBug {
                 where_: "ipe_backend_rust::EmitCtx::record_name",
                 detail: format!(
                     "record shape {{{}}} matched no synthesised struct among {} candidates",
                     key.join(", "),
                     indices.len()
                 ),
-            })?;
-        self.record_structs.get(i).ok_or_else(dangling)
+            }),
+            [i] => self.record_structs.get(*i).ok_or_else(dangling),
+            _ => Err(Diagnostic::CompilerBug {
+                where_: "ipe_backend_rust::EmitCtx::record_name",
+                detail: format!(
+                    "record shape {{{}}} matched {} synthesised structs at equal maximum \
+                     specificity — the concrete use site does not uniquely instantiate \
+                     any single template",
+                    key.join(", "),
+                    at_max.len()
+                ),
+            }),
+        }
     }
 
     /// Resolve a symbol that will be emitted as a Rust identifier, rejecting an
