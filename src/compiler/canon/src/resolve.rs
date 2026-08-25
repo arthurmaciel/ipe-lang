@@ -7185,9 +7185,9 @@ mod config_threading_tests {
         let main_body_expr = entry_call(web_entry(&mut i, "app"));
         let mut m = module_with(&mut i, main_body_expr, false);
         thread_config_binding(&mut m, &mut i).expect("no config → no-op");
-        let untouched = main_body(&m, &i).is_some_and(|body| {
-            matches!(&body.value, canon::Expr_::Call(_, args) if args.len() == 1)
-        });
+        let untouched = main_body(&m, &i).is_some_and(
+            |body| matches!(&body.value, canon::Expr_::Call(_, args) if args.len() == 1),
+        );
         assert!(
             untouched,
             "no config threaded when none is declared (single cfg arg stands)"

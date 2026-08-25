@@ -23649,9 +23649,7 @@ impl<'a> Lowerer<'a> {
                     ("Web", "revocationOff") => Ok(Callee::Kernel(KernelFn::WebRevocationOff)),
                     ("Web", "revocationStore") => Ok(Callee::Kernel(KernelFn::WebRevocationStore)),
                     ("App", "fromEnv") => Ok(Callee::Kernel(KernelFn::AppFromEnv)),
-                    ("App", "fromEnvRequired") => {
-                        Ok(Callee::Kernel(KernelFn::AppFromEnvRequired))
-                    }
+                    ("App", "fromEnvRequired") => Ok(Callee::Kernel(KernelFn::AppFromEnvRequired)),
                     ("Host", "bind") => Ok(Callee::Kernel(KernelFn::HostBind)),
                     ("Host", "loopback") => Ok(Callee::Kernel(KernelFn::HostLoopback)),
                     ("Host", "allInterfaces") => Ok(Callee::Kernel(KernelFn::HostAllInterfaces)),
@@ -23664,12 +23662,8 @@ impl<'a> Lowerer<'a> {
                     ("Level", "warn") => Ok(Callee::Kernel(KernelFn::LevelWarn)),
                     ("Level", "error") => Ok(Callee::Kernel(KernelFn::LevelError)),
                     ("Db", "url") => Ok(Callee::Kernel(KernelFn::DbUrlSetting)),
-                    ("Console", "adminToken") => {
-                        Ok(Callee::Kernel(KernelFn::ConsoleAdminToken))
-                    }
-                    ("Console", "ingestToken") => {
-                        Ok(Callee::Kernel(KernelFn::ConsoleIngestToken))
-                    }
+                    ("Console", "adminToken") => Ok(Callee::Kernel(KernelFn::ConsoleAdminToken)),
+                    ("Console", "ingestToken") => Ok(Callee::Kernel(KernelFn::ConsoleIngestToken)),
                     ("Console", "metricsToken") => {
                         Ok(Callee::Kernel(KernelFn::ConsoleMetricsToken))
                     }

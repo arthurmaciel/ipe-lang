@@ -394,8 +394,7 @@ fn ingest_token_blocked(headers: &axum::http::HeaderMap) -> Option<axum::respons
         .or_else(|| {
             crate::app_config::resolve_console_token(crate::app_config::ConsoleTokenKind::Ingest)
                 .filter(|t| !t.is_empty())
-        })
-    {
+        }) {
         Some(t) => t,
         None => {
             // Unset token: open in dev (single-process / no federation), but in
