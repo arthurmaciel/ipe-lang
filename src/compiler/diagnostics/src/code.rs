@@ -450,6 +450,10 @@ code! {
     /// `.field` accessor and have no runtime function, so they must be applied
     /// directly with their accessor and value
     IPE_L0146 = "IPE-L0146", "a Store accessor query/spec builder was applied point-free", "IPE-L0146";
+    /// `Ui.widget` (a server-driven custom element) is used outside a Web/WebView
+    /// shape — its up-event handler rides the seal codec, present only in a
+    /// browser build, so it has no transport under `Terminal` / `Program`
+    IPE_L0147 = "IPE-L0147", "`Ui.widget` is browser-only and cannot be used outside a Web/WebView shape", "IPE-L0147";
     /// expression nests too deeply for the backend
     IPE_L0200 = "IPE-L0200", "expression nests too deeply for the backend", "IPE-L0200";
 

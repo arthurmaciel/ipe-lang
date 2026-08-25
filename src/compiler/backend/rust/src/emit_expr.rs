@@ -3393,6 +3393,21 @@ fn emit_ui_plan(
         });
     }
 
+    // The inverse seal: `Ui.widget`'s up-event handler rides the seal codec,
+    // which lives only in a browser build (`web` / `webview` force the `json`
+    // runtime feature — `Terminal` / `Program` never do). Emitting it in a
+    // non-browser shape would produce an inert node (a widget with no transport)
+    // and trip the non-`json` runtime fallback whose up-event type parameter is
+    // unconstrained (rustc E0282). Reject it here — the one point it is emitted —
+    // converting a would-be dead element (and cargo failure) into a shape-keyed
+    // ipe error. A browser shape sets `uses_web` (forced true under `uses_webview`).
+    if plan.guard == Guard::RejectInNonWebShape && !(ctx.uses_web || ctx.uses_webview) {
+        return Err(Diagnostic::Lower {
+            span: Span::DUMMY,
+            msg: LowerError::UiWidgetInNonWebShape,
+        });
+    }
+
     let native = match plan.args {
         // The uniform majority: emit each argument in order, join, format into
         // the runtime path. `arity == 0` emits `path()`. A wrong argument count
