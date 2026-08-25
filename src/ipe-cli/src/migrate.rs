@@ -326,7 +326,7 @@ fn render_foreign_struct(krate: &str, s: &ManifestDefineStruct) -> Result<String
     }
 
     // Emit `Ffi.ctor` only when the stored ctor diverges from the default.
-    let default_ctor = format!("{}_new", to_snake_case(&s.struct_name));
+    let default_ctor = format!("{}_new", crate::ffi::to_snake_case(&s.struct_name));
     if s.ctor != default_ctor {
         stages.push(format!("Ffi.ctor {}", string_lit(&s.ctor)));
     }
@@ -366,7 +366,7 @@ fn render_foreign_enum(krate: &str, e: &ManifestDefineEnum) -> Result<String, Cl
         stages.push(format!("Ffi.derives {}", render_derives_list(&e.derives)?));
     }
 
-    let default_ctor = format!("{}_new", to_snake_case(&e.enum_name));
+    let default_ctor = format!("{}_new", crate::ffi::to_snake_case(&e.enum_name));
     if e.ctor != default_ctor {
         stages.push(format!("Ffi.ctor {}", string_lit(&e.ctor)));
     }
@@ -601,23 +601,6 @@ fn parse_closure_sig(sig: &str) -> Option<(Vec<String>, String)> {
             .collect()
     };
     Some((params, ret_str.trim().to_owned()))
-}
-
-/// The `snake_case` of a Rust type name, matching the default-ctor logic in
-/// `ffi.rs` so we can detect whether the stored ctor is the default.
-fn to_snake_case(s: &str) -> String {
-    let mut out = String::with_capacity(s.len() + 4);
-    for (i, c) in s.chars().enumerate() {
-        if c.is_ascii_uppercase() {
-            if i != 0 {
-                out.push('_');
-            }
-            out.push(c.to_ascii_lowercase());
-        } else {
-            out.push(c);
-        }
-    }
-    out
 }
 
 /// Write the rendered `package.ipe`, mapping an IO failure to [`CliError::Io`].
