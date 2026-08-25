@@ -2519,11 +2519,16 @@ impl<'a> EmitCtx<'a> {
     ///
     /// * One struct for the set → return it; `shape` is unneeded (the common
     ///   case — no field-name collision).
-    /// * Several structs → `shape` MUST be present and match exactly one: a
-    ///   struct whose field template is alpha-equivalent to the shape, else a
+    /// * Several structs → `shape` MUST be present and select one: a struct
+    ///   whose field template is alpha-equivalent to the shape, else a
     ///   monomorphic struct whose field types equal the shape, or a generic
-    ///   struct the shape instantiates. A missing or ambiguous `shape` is a
-    ///   surfaced invariant violation, never a silent pick.
+    ///   struct the shape instantiates. A CONCRETE shape can instantiate two
+    ///   distinct generic siblings at once (`{q:(Int,Int)}` matches both `{q:a}`
+    ///   and `{q:(a,a)}`); it resolves to the MOST-SPECIFIC template (the one
+    ///   with the most concrete constructors — `{q:(a,a)}` here — so the value
+    ///   is emitted with the struct carrying its true field types). A missing
+    ///   `shape`, no match, or two equally-specific matches is a surfaced
+    ///   invariant violation, never a silent pick.
     ///
     /// A miss (no struct for the set) means the shape never appeared in a
     /// signature — a lowerer-contract violation (IPE-I0204).
@@ -2584,6 +2589,31 @@ impl<'a> EmitCtx<'a> {
         if let Some(rec) = self.record_struct_alpha_equivalent(key, indices, &shape_by_name)? {
             return Ok(rec);
         }
+        self.record_struct_most_specific(key, indices, &shape_by_name)
+    }
+
+    /// Among the candidate structs a non-alpha-equivalent `shape_by_name`
+    /// instantiation-matches, return the MOST-SPECIFIC one.
+    ///
+    /// A CONCRETE shape (`{q:(Int,Int)}`) can instantiation-match TWO distinct
+    /// generic siblings at once: `{q:a}` binds `a := (Int,Int)`, while `{q:(a,a)}`
+    /// binds `a := Int`. Both are legitimate instantiations, so a "first duplicate
+    /// is ambiguous" rule would ICE on well-typed source (IPE-I0001). Resolve
+    /// deterministically to the template whose skeleton carries the most concrete
+    /// structure ([`template_specificity`]), so the concrete value is emitted with
+    /// the struct whose fields have the RIGHT types — `{q:(a,a)}` with `a:=Int`
+    /// reads `q.0`/`q.1` as `Int` (the true shape), never the over-general `{q:a}`
+    /// (which would type `q` as the whole tuple and read the wrong field types). A
+    /// strictly-larger specificity is strictly more specific. Two templates that
+    /// match with EQUAL specificity but distinct skeletons cannot both be exact
+    /// instantiations of one concrete shape, so that remains a surfaced invariant
+    /// violation, as does no match at all.
+    fn record_struct_most_specific(
+        &self,
+        key: &[String],
+        indices: &[usize],
+        shape_by_name: &BTreeMap<&str, &IrType>,
+    ) -> DResult<&RecordStruct> {
         let matches = |rec: &RecordStruct| -> bool {
             if rec.fields.len() != shape_by_name.len() {
                 return false;
@@ -2601,45 +2631,52 @@ impl<'a> EmitCtx<'a> {
                 })
             }
         };
-        let mut hit: Option<usize> = None;
-        for &i in indices {
-            let rec = self
-                .record_structs
-                .get(i)
-                .ok_or_else(|| Diagnostic::CompilerBug {
-                    where_: "ipe_backend_rust::EmitCtx::record_name",
-                    detail: format!(
-                        "dangling struct index for record shape {{{}}}",
-                        key.join(", ")
-                    ),
-                })?;
-            if matches(rec) && hit.replace(i).is_some() {
-                return Err(Diagnostic::CompilerBug {
-                    where_: "ipe_backend_rust::EmitCtx::record_name",
-                    detail: format!(
-                        "record shape {{{}}} matched more than one synthesised struct",
-                        key.join(", ")
-                    ),
-                });
-            }
-        }
-        let i = hit.ok_or_else(|| Diagnostic::CompilerBug {
+        let dangling = || Diagnostic::CompilerBug {
             where_: "ipe_backend_rust::EmitCtx::record_name",
             detail: format!(
-                "record shape {{{}}} matched no synthesised struct among {} candidates",
-                key.join(", "),
-                indices.len()
+                "dangling struct index for record shape {{{}}}",
+                key.join(", ")
             ),
-        })?;
-        self.record_structs
-            .get(i)
+        };
+        let mut best: Option<(usize, usize)> = None; // (struct index, specificity)
+        for &i in indices {
+            let rec = self.record_structs.get(i).ok_or_else(dangling)?;
+            if !matches(rec) {
+                continue;
+            }
+            let specificity: usize = rec
+                .fields
+                .iter()
+                .map(|(_, t)| template_specificity(t))
+                .sum();
+            match best {
+                None => best = Some((i, specificity)),
+                Some((_, best_spec)) if specificity > best_spec => best = Some((i, specificity)),
+                Some((_, best_spec)) if specificity == best_spec => {
+                    return Err(Diagnostic::CompilerBug {
+                        where_: "ipe_backend_rust::EmitCtx::record_name",
+                        detail: format!(
+                            "record shape {{{}}} matched two synthesised structs of equal \
+                             specificity — the concrete use site does not uniquely instantiate \
+                             either template",
+                            key.join(", ")
+                        ),
+                    });
+                }
+                Some(_) => {}
+            }
+        }
+        let i = best
+            .map(|(i, _)| i)
             .ok_or_else(|| Diagnostic::CompilerBug {
                 where_: "ipe_backend_rust::EmitCtx::record_name",
                 detail: format!(
-                    "dangling struct index for record shape {{{}}}",
-                    key.join(", ")
+                    "record shape {{{}}} matched no synthesised struct among {} candidates",
+                    key.join(", "),
+                    indices.len()
                 ),
-            })
+            })?;
+        self.record_structs.get(i).ok_or_else(dangling)
     }
 
     /// Resolve a symbol that will be emitted as a Rust identifier, rejecting an
@@ -3810,6 +3847,44 @@ fn match_template(
                      an open row must never enter the struct registry"
                 .to_owned(),
         }),
+    }
+}
+
+/// Count the concrete (non-generic) type constructors in a record-struct field
+/// template, used to rank two generic templates that a single CONCRETE use-site
+/// shape instantiation-matches at once. A [`IrType::Generic`] parameter absorbs
+/// arbitrary structure and so contributes 0; every other node contributes 1 for
+/// itself plus the specificity of its children. A strictly-higher total means a
+/// strictly-more-specific template — the concrete shape `{q:(Int,Int)}` scores
+/// the tuple template `{q:(a,a)}` (specificity 1: the `Tuple` node, its two
+/// generic leaves scoring 0) above the pass-through `{q:a}` (specificity 0),
+/// resolving the value to the struct whose fields carry its true types.
+fn template_specificity(ty: &IrType) -> usize {
+    match ty {
+        IrType::Generic(_) | IrType::RowGeneric(_) => 0,
+        IrType::Tuple(elems) => 1 + elems.iter().map(template_specificity).sum::<usize>(),
+        IrType::Record(map) => 1 + map.values().map(template_specificity).sum::<usize>(),
+        IrType::Fun(params, ret)
+        | IrType::SharedFun(params, ret)
+        | IrType::FnOnceChain(params, ret) => {
+            1 + params.iter().map(template_specificity).sum::<usize>() + template_specificity(ret)
+        }
+        IrType::Enum { args, .. } => 1 + args.iter().map(template_specificity).sum::<usize>(),
+        IrType::Maybe(e)
+        | IrType::List(e)
+        | IrType::Set(e)
+        | IrType::Decoder(e)
+        | IrType::Task(e)
+        | IrType::Cmd(e)
+        | IrType::Sub(e)
+        | IrType::WebRoute(e)
+        | IrType::Ui { msg: e, .. } => 1 + template_specificity(e),
+        IrType::Result(a, b) | IrType::Dict(a, b) => {
+            1 + template_specificity(a) + template_specificity(b)
+        }
+        // Every remaining variant is a concrete leaf (`Int`, opaque handles,
+        // nullary plain types, …): it contributes 1 and has no children.
+        _ => 1,
     }
 }
 
