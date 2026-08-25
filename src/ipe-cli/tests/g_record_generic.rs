@@ -18,6 +18,8 @@ mod golden_fncarrier_record_generic_clone;
 mod golden_generic;
 #[path = "g_record_generic/golden_generic_records.rs"]
 mod golden_generic_records;
+#[path = "g_record_generic/golden_i1346_generic_record_field_name_collision.rs"]
+mod golden_i1346_generic_record_field_name_collision;
 #[path = "g_record_generic/golden_param_patterns.rs"]
 mod golden_param_patterns;
 #[path = "g_record_generic/golden_parametric.rs"]
