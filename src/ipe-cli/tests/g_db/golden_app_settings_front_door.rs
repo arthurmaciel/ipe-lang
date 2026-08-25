@@ -344,3 +344,49 @@ fn from_env_required_seal_builds() {
 
     crate::support::assert_seal_builds(GOLDEN, &out);
 }
+
+/// THE SEAL (item 3): `Console.adminToken` / `ingestToken` / `metricsToken` —
+/// the previously-bare env tokens given `Secret`-typed settings — are accepted
+/// (exit 0) and (under `IPE_E2E=1`) the emitted crate `cargo build`s.
+#[test]
+fn console_token_settings_seal_builds() {
+    const GOLDEN: &str = "app_settings_console_token_seal";
+    let root = repo_root();
+    let entry = fixture_entry(&root, GOLDEN);
+    let out = std::env::temp_dir().join("ipec_app_settings_console_token_seal_e2e");
+    let _ = std::fs::remove_dir_all(&out);
+
+    let Ok(runtime) = ipe::resolve_runtime() else {
+        return; // resolver unavailable — skip
+    };
+    let built = ipe::build(&entry, &out, &runtime);
+    assert!(
+        built.is_ok(),
+        "`Console.adminToken`/`ingestToken`/`metricsToken` must be accepted and emit \
+         a buildable crate, got: {built:?}"
+    );
+
+    crate::support::assert_seal_builds(GOLDEN, &out);
+}
+
+/// A hard-coded `String` token passed to `Console.adminToken` (which requires a
+/// `Secret`) MUST be an ipe-time type error — the highest-security gap closed:
+/// a console token can only come from `App.fromEnv`/`App.fromEnvRequired`.
+#[test]
+fn hard_coded_console_token_is_rejected() {
+    const GOLDEN: &str = "app_settings_hardcoded_token_rejected";
+    let root = repo_root();
+    let entry = fixture_entry(&root, GOLDEN);
+    let out = std::env::temp_dir().join("ipec_app_settings_hardcoded_token_rejected");
+    let _ = std::fs::remove_dir_all(&out);
+
+    let Ok(runtime) = ipe::resolve_runtime() else {
+        return;
+    };
+    let built = ipe::build(&entry, &out, &runtime);
+    assert!(
+        built.is_err(),
+        "a hard-coded `Console.adminToken \"…\"` (a `String`, not a `Secret`) MUST be \
+         rejected — a console token can only come from `App.fromEnv`/`fromEnvRequired`"
+    );
+}

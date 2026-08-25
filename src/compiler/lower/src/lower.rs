@@ -21979,6 +21979,10 @@ impl<'a> Lowerer<'a> {
                 | KernelFn::LogLevelSetting
                 // `Db.url : Secret -> Setting a`
                 | KernelFn::DbUrlSetting
+                // `Console.adminToken / ingestToken / metricsToken : Secret -> Setting a`
+                | KernelFn::ConsoleAdminToken
+                | KernelFn::ConsoleIngestToken
+                | KernelFn::ConsoleMetricsToken
                 // `Web.csrf : CsrfMode -> Setting Web`
                 | KernelFn::WebCsrf
                 // `Web.sessionTtl : Int -> Setting Web`
@@ -23660,6 +23664,15 @@ impl<'a> Lowerer<'a> {
                     ("Level", "warn") => Ok(Callee::Kernel(KernelFn::LevelWarn)),
                     ("Level", "error") => Ok(Callee::Kernel(KernelFn::LevelError)),
                     ("Db", "url") => Ok(Callee::Kernel(KernelFn::DbUrlSetting)),
+                    ("Console", "adminToken") => {
+                        Ok(Callee::Kernel(KernelFn::ConsoleAdminToken))
+                    }
+                    ("Console", "ingestToken") => {
+                        Ok(Callee::Kernel(KernelFn::ConsoleIngestToken))
+                    }
+                    ("Console", "metricsToken") => {
+                        Ok(Callee::Kernel(KernelFn::ConsoleMetricsToken))
+                    }
                     // ── Ipe.Auth / Ipe.Auth — auth helpers ──────────────
                     ("Auth", "hashPassword") => Ok(Callee::Kernel(KernelFn::AuthHashPassword)),
                     ("Auth", "hashPasswordCost") => {

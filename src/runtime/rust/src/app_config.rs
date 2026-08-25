@@ -91,6 +91,30 @@ pub enum Setting {
     /// request. Setting `Off` after `Store` is a no-op (stricter-only monotonic:
     /// once armed the gate cannot be disarmed via a setting, only via env).
     WebAuthRevocationMode(RevocationMode),
+    /// `Console.adminToken` / `Console.ingestToken` / `Console.metricsToken` —
+    /// a console/telemetry auth token, sealed as a [`Secret`](crate::secret::Secret).
+    /// The `ConsoleTokenKind` selects which endpoint the token authorises; the
+    /// runtime reads the resolved secret instead of a bare env-string read.
+    #[cfg(feature = "secret")]
+    ConsoleToken(ConsoleTokenKind, crate::secret::Secret),
+}
+
+/// Which console/telemetry endpoint a [`Setting::ConsoleToken`] authorises. A
+/// closed set — each variant is one previously-bare env token given a typed
+/// `Secret` carrier. Always available (not `secret`-gated) so the console
+/// runtime can name a `kind` even in a build without the `secret` feature, where
+/// [`resolve_console_token`] simply returns `None`.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum ConsoleTokenKind {
+    /// `Console.adminToken` — the admin/metrics console auth token
+    /// (env sibling `IPE_ADMIN_TOKEN`).
+    Admin,
+    /// `Console.ingestToken` — the federation ingest-endpoint token
+    /// (env sibling `IPE_INGEST_TOKEN`).
+    Ingest,
+    /// `Console.metricsToken` — the metrics-scrape token
+    /// (env sibling `IPE_METRICS_TOKEN`).
+    Metrics,
 }
 
 /// `Host.bind : Int -> Setting a`. Maps the raw host-mode tag onto the closed
@@ -202,6 +226,31 @@ pub fn ipe_setting_db_url(url: crate::secret::Secret) -> Setting {
     Setting::DbUrl(url)
 }
 
+/// `Console.adminToken : Secret -> Setting a`. The admin/metrics-console auth
+/// token, carried as a sealed [`Secret`]. The runtime reads the resolved secret
+/// (via [`resolve_console_token`]) instead of a bare `IPE_ADMIN_TOKEN` env read.
+#[cfg(feature = "secret")]
+#[must_use]
+pub fn ipe_setting_console_admin_token(token: crate::secret::Secret) -> Setting {
+    Setting::ConsoleToken(ConsoleTokenKind::Admin, token)
+}
+
+/// `Console.ingestToken : Secret -> Setting a`. The federation ingest-endpoint
+/// token, carried as a sealed [`Secret`].
+#[cfg(feature = "secret")]
+#[must_use]
+pub fn ipe_setting_console_ingest_token(token: crate::secret::Secret) -> Setting {
+    Setting::ConsoleToken(ConsoleTokenKind::Ingest, token)
+}
+
+/// `Console.metricsToken : Secret -> Setting a`. The metrics-scrape token,
+/// carried as a sealed [`Secret`].
+#[cfg(feature = "secret")]
+#[must_use]
+pub fn ipe_setting_console_metrics_token(token: crate::secret::Secret) -> Setting {
+    Setting::ConsoleToken(ConsoleTokenKind::Metrics, token)
+}
+
 /// `Web.csrf : CsrfMode -> Setting Web`. Carries the CSRF policy tag the Ipê
 /// `CsrfMode` ADT projects to (`0` strict / `1` inherit). The ADT has no
 /// disabling variant, and the stricter-only resolver apply ensures no tag can
@@ -279,6 +328,12 @@ struct ResolvedConfig {
     auth_revocation_mode: Option<RevocationMode>,
     #[cfg(feature = "secret")]
     db_url: Option<crate::secret::Secret>,
+    #[cfg(feature = "secret")]
+    console_admin_token: Option<crate::secret::Secret>,
+    #[cfg(feature = "secret")]
+    console_ingest_token: Option<crate::secret::Secret>,
+    #[cfg(feature = "secret")]
+    console_metrics_token: Option<crate::secret::Secret>,
 }
 
 static INSTALLED: OnceLock<ResolvedConfig> = OnceLock::new();
@@ -317,6 +372,12 @@ pub fn install_web(settings: Vec<Setting>) {
             }
             #[cfg(feature = "secret")]
             Setting::DbUrl(url) => cfg.db_url = Some(url),
+            #[cfg(feature = "secret")]
+            Setting::ConsoleToken(kind, token) => match kind {
+                ConsoleTokenKind::Admin => cfg.console_admin_token = Some(token),
+                ConsoleTokenKind::Ingest => cfg.console_ingest_token = Some(token),
+                ConsoleTokenKind::Metrics => cfg.console_metrics_token = Some(token),
+            },
         }
     }
     // First install wins; a redundant install is a no-op (never a panic).
@@ -598,6 +659,39 @@ pub fn resolve_db_url_override() -> Option<String> {
         .map(crate::secret::secret_reveal)
 }
 
+/// The installed `Console.*Token` secret for `kind`, revealed at the point of
+/// use. `None` means the caller should keep resolving from its own env source —
+/// the one precedence `env > setting-in-code` is preserved by the caller reading
+/// its env var FIRST (env wins) and only consulting this in-code setting when the
+/// env var is absent. The secret is revealed only here, at the auth check, and is
+/// never logged (a `Secret` cannot be stringified to anything but `<redacted>`).
+///
+/// This replaces the previously-bare env-string token reads with a typed
+/// `Secret` carrier: a token configured in code is sealed and never appears as a
+/// plaintext `String` a log line could splice in.
+#[must_use]
+pub fn resolve_console_token(kind: ConsoleTokenKind) -> Option<String> {
+    // The token settings carry a `Secret`, so they only exist in a `secret`-
+    // feature build; without it there is no in-code token to resolve and the
+    // caller falls back to its env source.
+    #[cfg(feature = "secret")]
+    {
+        INSTALLED
+            .get()
+            .and_then(|c| match kind {
+                ConsoleTokenKind::Admin => c.console_admin_token.clone(),
+                ConsoleTokenKind::Ingest => c.console_ingest_token.clone(),
+                ConsoleTokenKind::Metrics => c.console_metrics_token.clone(),
+            })
+            .map(crate::secret::secret_reveal)
+    }
+    #[cfg(not(feature = "secret"))]
+    {
+        let _ = kind;
+        None
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -809,6 +903,29 @@ mod tests {
             msg.contains("App.fromEnvRequired"),
             "message must point at the required-secret source, got: {msg}"
         );
+    }
+
+    #[test]
+    fn console_token_builders_carry_the_right_kind() {
+        // Each `Console.*Token` builder seals its `Secret` under the matching
+        // `ConsoleTokenKind`, so the resolver reads back the correct token.
+        let admin = ipe_setting_console_admin_token(crate::secret::secret_from_string("a".into()));
+        let ingest =
+            ipe_setting_console_ingest_token(crate::secret::secret_from_string("b".into()));
+        let metrics =
+            ipe_setting_console_metrics_token(crate::secret::secret_from_string("c".into()));
+        assert!(matches!(
+            admin,
+            Setting::ConsoleToken(ConsoleTokenKind::Admin, _)
+        ));
+        assert!(matches!(
+            ingest,
+            Setting::ConsoleToken(ConsoleTokenKind::Ingest, _)
+        ));
+        assert!(matches!(
+            metrics,
+            Setting::ConsoleToken(ConsoleTokenKind::Metrics, _)
+        ));
     }
 
     #[test]

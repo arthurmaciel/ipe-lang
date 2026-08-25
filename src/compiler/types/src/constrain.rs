@@ -7489,6 +7489,14 @@ impl<'a> Builder<'a> {
             // `String` credential does not type-check here). This is the
             // security-critical rejection the front door exists to enforce.
             K::DbUrlSetting => fun(secret(), setting(var(0))),
+            // `Console.adminToken` / `ingestToken` / `metricsToken :
+            // Secret -> Setting a` — cross-cutting `Secret`-typed console/telemetry
+            // tokens; same shape as `Db.url`, so the token can only come from
+            // `App.fromEnv` / `App.fromEnvRequired` (a hard-coded `String` does not
+            // type-check).
+            K::ConsoleAdminToken | K::ConsoleIngestToken | K::ConsoleMetricsToken => {
+                fun(secret(), setting(var(0)))
+            }
             // `Web.csrf : CsrfMode -> Setting Web` — the shape marker is PINNED
             // to `Web`, so this setting rejects a non-web app's settings list; the
             // argument is the closed `CsrfMode` ADT (which has no disabling
@@ -10002,6 +10010,9 @@ mod registry_phase_c_tests {
             K::HostBind,
             K::LogLevelSetting,
             K::DbUrlSetting,
+            K::ConsoleAdminToken,
+            K::ConsoleIngestToken,
+            K::ConsoleMetricsToken,
             K::WebCsrf,
             K::WebSessionTtl,
             K::WebAuthMaxLifetime,
