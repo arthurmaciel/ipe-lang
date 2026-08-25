@@ -1,0 +1,69 @@
+module Main exposing (main)
+
+-- Arity-3 tripwire for `Revocation.revokeSession`.
+--
+-- The kernel signature is `Principal -> String -> Int -> Task Error ()`.
+-- The third argument (`cap`, a Unix-epoch expiry in seconds) was added when
+-- the revocation store gained a bounded lifetime for its entries.  Any
+-- regression to an arity-2 wiring (dropping `cap`) makes the emit stage
+-- produce the wrong call, and because the runtime function requires three
+-- arguments the emitted crate fails `cargo build` — THE SEAL.
+--
+-- The handler is intentionally minimal: it receives a `Principal` from the
+-- auth middleware, supplies a literal JTI string and a literal cap timestamp,
+-- and returns a fixed response.  No live store or network is needed; the
+-- `Task.onError` wrapper catches the runtime failure so the route builder
+-- can be assembled and the SEAL proof is that the emitted crate builds under
+-- `IPE_E2E=1`.
+
+import Ipe.Auth as Auth
+import Ipe.Auth.Revocation as Revocation
+import Ipe.Error exposing (Error)
+import Ipe.Http.Server as Server
+import Ipe.Http.Server exposing (Request, Response)
+import Ipe.Io as Io
+import Ipe.Secret as Secret
+import Ipe.Task as Task exposing (Task)
+
+
+-- A hard-coded JTI and cap (Unix seconds) to supply to `revokeSession`.
+-- These values are never executed in CI; they just need to type-check and
+-- lower to a three-argument call site in the emitted Rust.
+jti : String
+jti =
+    "test-jti-00000000-0000-0000-0000-000000000001"
+
+
+capUnixSecs : Int
+capUnixSecs =
+    9999999999
+
+
+handleRevoke : Request -> Auth.Principal -> Task Error Response
+handleRevoke _ principal =
+    Task.onError
+        (\_ -> Task.succeed (Server.text "revoke-error"))
+        (Task.andThen
+            (\_ -> Task.succeed (Server.text "revoked"))
+            (Revocation.revokeSession principal jti capUnixSecs)
+        )
+
+
+authCfg : Server.AuthConfig
+authCfg =
+    Server.authConfig
+        (Secret.fromString "this-is-a-32-byte-or-longer-secret-key-value")
+        Server.bearerToken
+
+
+main : Task Error ()
+main =
+    Task.onError
+        (\_ -> Io.println "revoke-session-arity3-seal")
+        (Task.andThen
+            (\_ -> Io.println "revoke-session-arity3-seal")
+            (Server.listen
+                8000
+                [ Server.getAuthed "/revoke" authCfg handleRevoke ]
+            )
+        )

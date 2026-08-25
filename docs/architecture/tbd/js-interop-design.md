@@ -25,9 +25,10 @@ escape hatch that is deliberately *not* a transport:
    property/attribute, typed events up as a `CustomEvent` (wasm client) or a
    posted event (server-driven). Discrete, encapsulated, reusable; the shim-free
    auto-binding analogue of native FFI.
-2. **Raw typed transport — ports** (`send` / `receive`). Streaming,
-   programmatic; primarily the wasm client. Same seal rules; ships after custom
-   elements.
+2. **Raw typed transport — ports** (`Js.send` / `Js.subscribe` / `sync`, no new
+   syntax — Cmd/Sub + a cfg field). Streaming, programmatic; imperative effects
+   and out-of-band data, not view nodes. Same seal rules; ships after custom
+   elements. Full surface, trust/ordering flags, and per-target lowering in §6.
 3. **Escape hatch (not a transport).** `Ui.html` + `Html.unsafeRaw` (the sole
    un-escaped render surface, already shipped) plus a served static script, with
    a typed `onSubmit` record decode for progressive enhancement. The sanctioned
@@ -107,9 +108,9 @@ decode boundary enforces at the wire.
 
 1. **`CustomElement down up`** (§4) — declarative; state down as a decoded
    property/attribute, events up as an encoded typed event.
-2. **Ports** (later tier, §6) — `port send : T -> Cmd msg` /
-   `port receive : (T -> msg) -> Sub msg` in the wasm client, same seal, same
-   codec, a generated typed shim on the JS side.
+2. **Ports** (later tier, §6) — `Js.send : a -> Cmd msg` /
+   `Js.subscribe : Decoder a -> (a -> msg) -> Sub msg` / a `sync` cfg field, in the
+   wasm client, same seal, same codec, a generated typed shim on the JS side.
 3. **`Ui.html` + `Html.unsafeRaw` + served static script** (+ `Ipe.Js.Unsafe.
    unsafeEval`) — the named unsafe tier. Nothing new ships here; its role in
    this design is only to be *documented as the non-typed tier* so no ad-hoc
@@ -225,14 +226,92 @@ for the concrete seal type, on both sides of the seam.
 | Ports forbidden in packages | yes | **diverged: allowed but disclosed** — a JS-touching package carries a mandatory capability (§7) and its scripts are content-hash-pinned |
 | Unused-port dead-code elimination | yes | followed: an unused binding and its glue are DCE'd with the rest of the program |
 
-## 6. Ports (later tier)
+## 6. Ports (raw typed transport — later tier)
 
-`port send : T -> Cmd msg` / `port receive : (T -> msg) -> Sub msg` in the wasm
-client. Same seal (§3.1), same generated codec module (§3.1), a generated typed
-JS shim the author subscribes to / sends through. Ports reuse the custom-element
-codec verbatim — **one wire codec for both typed transports** (resolves the
-"do ports and custom-elements share a codec" ambiguity: yes). Ships after the
-custom-element tier is green.
+Ports carry imperative effects and out-of-band data that have no place in the
+view tree (custom elements own visual-in-view; §4). Same seal (§3.1), same
+generated codec module — **one wire codec for both typed transports** (resolves
+the shared-codec ambiguity: yes). No new language construct: ports reuse the
+`Cmd`/`Sub` machinery Ipê already has. Ships after the custom-element tier is green.
+
+### 6.1 Surface
+
+- **Outbound command** — `Js.send : a -> Cmd msg`, a one-shot imperative effect
+  (play a sound, fire analytics). The per-ADT wire encoder is derived; the
+  compiler generates per-variant senders (`playChime = Js.send PlayChime`) so the
+  closed-type discipline keeps per-function ergonomics.
+- **Inbound intent** — `Js.subscribe : Decoder a -> (a -> msg) -> Sub msg`, wired
+  in `subscriptions`. The decoder **is** the security gate — parse-don't-validate
+  at the trust boundary; the core never sees a raw blob.
+- **State mirror** — `sync : Model -> JsState`, a cfg field alongside `view`: a
+  pure projection with its own encoder, diffed and streamed on the same channel as
+  the DOM patches, re-emitted only on change. A second `view`, for JS-mirrored data.
+
+### 6.2 The closed-ADT seal, pointed at the boundary
+
+Inbound/outbound types MUST be concrete declared ADTs, never `Json.Value` or an
+opaque passthrough — `Decoder Value` is rejected, so the untyped channel *cannot
+be spelled* (make-invalid-states-unrepresentable at the boundary type itself). One
+closed `JsMsg`/`JsCmd` per direction is the whole attack surface as a single
+auditable object, and the inbound `case` is exhaustive — a published-but-unhandled
+variant is unrepresentable. A genuinely opaque payload is expressed by *naming* it
+(`type RawJson = RawJson String`), never left an untyped hole.
+
+- **`JsMsg` is a narrow published type, never the internal `Msg`.** The browser is
+  attacker-controlled; publishing `Msg` would hand an attacker every transition the
+  state machine can reach. `JsMsg` is a small separate type the runtime maps into
+  `Msg`.
+- **`sync` ships a projection, never the raw `Model`** — the same discipline `view`
+  has. Secrets cannot leak because they are never in `JsState` (server-side, a
+  secret boundary; client-side, an encapsulation boundary against other page scripts).
+
+### 6.3 Two orthogonal flags (never conflated)
+
+- **Trust → decode gate.** Untrusted far side (browser JS, sandboxed Rust) → inbound
+  decode gate ON. Trusted (pure in-process Rust) → direct typed binding, no gate.
+  Keyed on trust, **never on transport**: in-process ≠ trusted (browser JS is
+  attacker-controlled whether over a network or in the same page).
+- **Ordering → staleness layer.** Network/async-unordered → optimistic-concurrency
+  handling. In-process-ordered → none. Keyed on transport latency, never on trust.
+
+### 6.4 Per-target lowering
+
+| | Server-driven Web | Client-WASM |
+| --- | --- | --- |
+| TEA loop runs | server | browser (WASM) |
+| Transport | network stream | in-process (wasm-bindgen) |
+| Inbound gate (`Js.subscribe`) | ON | **ON** — in-process ≠ trusted |
+| `Js.send` delivery | encode → stream → `ipe.onReceive` | direct dispatch, same tick |
+| `sync` mirror | encode → diff → stream deltas | direct in-memory handoff |
+| Staleness handling | present | absent (single-threaded, ordered) |
+| Developer surface + JS runtime API (`ipe.send`/`onReceive`/`onSync`) | identical | identical |
+
+One port declaration; `--target` picks the transport; the two flags decide what
+the lowering emits. Two runtime implementations of the `ipe` object (one posts over
+the network, one calls into the WASM instance); handlers and port declarations are
+byte-identical across both — ADR-0042's "one backend, inherit don't fork".
+
+### 6.5 Staleness is typed application logic, not framework machinery
+
+Only the server-driven transport has the distributed hazard (JS acts on a `JsState`
+replica, then sends an intent the server folds against a moved-on Model). Default:
+fold-against-current (an intent is an event). Where blindly folding a stale intent
+would be *wrong*, the precondition is named as an explicit typed field in the intent
+(compare-and-swap) — parse-don't-validate on the intent itself, stronger than an
+opaque framework version token. No framework-forced whole-state lock is built
+speculatively (YAGNI); most apparent staleness dissolves once intents reference
+stable identities rather than snapshot positions.
+
+### 6.6 Stable browser APIs are first-party kernels, not packages
+
+Granting a browser capability (Geolocation, storage/IndexedDB, WebAudio) *widens
+the client host surface* — a compiler+runtime decision, not something a downloaded
+package may do (client-side FFI is denied; the client's only host surface is the
+fixed `web-sys` allowlist, ADR-0042). So, driven by Security #1: primitive host
+access → first-party target-gated `Ipe.Browser.*` kernels (as `Http`/timers/`Random`
+already live); ergonomic wrappers → pure `.ipe` packages composing over them. A
+capability not yet kernel-backed is reached through the typed port (your own audited
+JS handler) until it graduates.
 
 ## 7. Package sharing
 
