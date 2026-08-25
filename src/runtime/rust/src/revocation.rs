@@ -35,6 +35,8 @@
 //!   lifetime cap baked into the JWT at mint time).
 //! - **Subject revocation**: the expiry is `now + AuthMaxLifetime` (the longest any
 //!   token minted now could remain valid). A re-revoke takes the max, never shortening.
+//!   See [`revoke_subject`] for an accepted edge case when the operator lowers
+//!   `AuthMaxLifetime` across a process restart.
 //!
 //! Hot-path lookup (`is_revoked`) is O(1) — one `contains_key` per map, no scan.
 
@@ -211,6 +213,25 @@ pub fn revoke_subject(subject: String) -> Result<(), RevocationError> {
     let now = crate::jwt::now_unix_seconds();
     let max_lifetime =
         i64::try_from(crate::app_config::resolve_auth_max_lifetime()).unwrap_or(i64::MAX);
+    // Expiry anchored to the *current* AuthMaxLifetime (ML): any token minted
+    // right now could live at most `now + ML`, so this entry stays in the store
+    // until all currently mintable tokens have expired.
+    //
+    // Accepted edge case: if an operator lowers ML and restarts the process, a
+    // token minted by the prior process may carry a signed `cap > now + new_ML`.
+    // A subject-revocation entry written after the restart uses the new (shorter)
+    // ML, so its store expiry is earlier than that old token's `cap`. If the
+    // store also happens to be saturated and runs a sweep during that gap, the
+    // entry is reclaimed while the old token is still JWT-live — silently lifting
+    // the revocation for it.
+    //
+    // All four conditions must hold simultaneously: ML lowered + process restart,
+    // an old long-cap token still in circulation, the store at capacity, and the
+    // sweep falling inside the ML-gap window. This is an accepted marginal risk:
+    // a stateless session design carries no live-cap registry, so there is no
+    // cheap way to clamp the expiry against the actual cap of each outstanding
+    // token. Operators with strict requirements should rotate the signing key on
+    // a ML change, which invalidates every prior token unconditionally.
     let expiry = now.saturating_add(max_lifetime);
     guard.insert_bounded(MapSelector::Subjects, subject, expiry, now)
 }
