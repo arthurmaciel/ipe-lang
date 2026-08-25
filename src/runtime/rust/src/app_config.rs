@@ -485,6 +485,33 @@ pub fn resolve_auth_revocation_mode() -> RevocationMode {
         .unwrap_or(RevocationMode::Off)
 }
 
+/// The per-map entry ceiling for the runtime revocation store. Applies the one
+/// precedence: `IPE_REVOCATION_CAPACITY` (env) > 1,048,576 (2^20) default. A
+/// positive integer value in the env var overrides; a non-positive or
+/// non-parseable value falls back to the default.
+///
+/// At roughly 64 bytes per entry (id `String` + `i64` expiry + map overhead)
+/// the default cap holds ~64 MB per map, ~128 MB for both — bounded without
+/// straining a typical server, yet far above any plausible concurrent-revocation
+/// count for granular revocation. A deployment that consistently saturates this
+/// limit should use signing-key rotation instead of per-session revocation.
+pub const REVOCATION_STORE_CAPACITY: usize = 1 << 20; // 1,048,576
+
+/// The resolved revocation store capacity, applying the one precedence:
+/// `IPE_REVOCATION_CAPACITY` (env) > [`REVOCATION_STORE_CAPACITY`] default. A
+/// non-positive or non-parseable env value falls back to the default.
+#[must_use]
+pub fn resolve_revocation_capacity() -> usize {
+    if let Ok(raw) = crate::system::read_env_var("IPE_REVOCATION_CAPACITY")
+        && let Ok(n) = raw.trim().parse::<usize>()
+        && n > 0
+    {
+        return n;
+    }
+    // Non-positive, unparseable, or env var absent → fall closed to default.
+    REVOCATION_STORE_CAPACITY
+}
+
 /// The resolved database URL from the installed `Db.url` setting, if one was set
 /// and no `DATABASE_URL` env override applies. The secret is revealed only here,
 /// at the point of use, and returned to the caller that configures the pool; it
