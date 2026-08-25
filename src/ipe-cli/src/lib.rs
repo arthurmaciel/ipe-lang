@@ -1790,6 +1790,17 @@ fn attribute_canon_errors(
     Ok(())
 }
 
+/// The project root a `customElement "<js-path>"` literal resolves against: the
+/// directory holding the entry file, the same root sibling module discovery uses.
+/// A `..`-escaping path was already refused in canon, so a join here can only
+/// land inside this root.
+fn widget_file_root(entry_src_path: &Path) -> &Path {
+    entry_src_path
+        .parent()
+        .filter(|p| p.is_dir())
+        .unwrap_or_else(|| Path::new("."))
+}
+
 /// The in-memory compile core over an already-populated database.
 ///
 /// topo order → per-module canonicalisation (memoized, blame-attributed) →
@@ -1890,6 +1901,33 @@ pub fn compile_prepared(
     let source_for_span = |span: ipe_diagnostics::Span| -> (PathBuf, String) {
         source_for_span_in_linked(linked, &home_to_source, &entry, span)
     };
+
+    // Widget-file existence gate (IPE-N0044, Security #5). The `customElement`
+    // constructor's shape + path-traversal seals already ran in canon; here — the
+    // one stage that owns the project root — the named JS file must EXIST inside
+    // it. The cleaned path is resolved against the source root (the entry file's
+    // directory, the same root sibling discovery uses); a missing file fails
+    // closed rather than registering a widget against a file that is not there.
+    for widget in ipe_canon::custom_element_gate::collect_widget_files(linked) {
+        let resolved = widget_file_root(&entry_src_path).join(&widget.cleaned_path);
+        if !resolved.is_file() {
+            let (file, src) = source_for_span(widget.span);
+            return Err(CliError::Pipeline {
+                file,
+                src,
+                diag: Box::new(ipe_diagnostics::Diagnostic::Name {
+                    span: widget.span,
+                    msg: ipe_diagnostics::NameError::CustomElementCtorMalformed {
+                        detail: format!(
+                            "the widget-hook file `{}` does not exist in the project",
+                            widget.cleaned_path
+                        )
+                        .into_boxed_str(),
+                    },
+                }),
+            });
+        }
+    }
 
     // Layer-2 wasm security gate (IPE-N0030, M5): the client entry's
     // reachability closure must not transitively reach a server-classified

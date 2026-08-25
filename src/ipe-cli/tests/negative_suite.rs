@@ -810,6 +810,174 @@ fn canon_custom_element_seal_rejects_type_variable() {
     assert_rejected("canon_custom_element_seal_tyvar", &src, "IPE-N0039");
 }
 
+// ── The `customElement` constructor (WP2, IPE-N0044 / IPE-P0063 / IPE-L0133) ──
+//
+// The reserved `customElement "<js-path>"` constructor is legal ONLY as the whole
+// body of a `CustomElement`-annotated binding, applied to a single string literal
+// naming a widget-hook JS file inside the project. These pin every refusal, plus
+// the positive case that type-checks yet still refuses at emission (the transport
+// is not shipped).
+
+/// A single-file program whose `Main.ipe` sits beside the given extra files
+/// (relative path → contents), built through the full pipeline. Returns the same
+/// [`Outcome`] the shared harness produces — used for the widget-file-exists path,
+/// which needs a real JS file on disk next to the entry.
+fn compile_with_files(name: &str, source: &str, extra: &[(&str, &str)]) -> Outcome {
+    let dir = PathBuf::from(env!("CARGO_TARGET_TMPDIR"))
+        .join("negsuite-ce")
+        .join(name);
+    let _ = std::fs::remove_dir_all(&dir);
+    if std::fs::create_dir_all(&dir).is_err() {
+        return Outcome::Skip;
+    }
+    for (rel, contents) in extra {
+        let path = dir.join(rel);
+        if let Some(parent) = path.parent() {
+            if std::fs::create_dir_all(parent).is_err() {
+                return Outcome::Skip;
+            }
+        }
+        if std::fs::write(&path, contents).is_err() {
+            return Outcome::Skip;
+        }
+    }
+    let entry = dir.join("Main.ipe");
+    if std::fs::write(&entry, source).is_err() {
+        return Outcome::Skip;
+    }
+    let out = PathBuf::from(env!("CARGO_TARGET_TMPDIR"))
+        .join("negsuite-ce-out")
+        .join(name);
+    let _ = std::fs::remove_dir_all(&out);
+    let Ok(runtime) = ipe::resolve_runtime() else {
+        return Outcome::Skip;
+    };
+    match ipe::build_with_options(&entry, &out, &runtime, BuildOptions::default()) {
+        Ok(()) => Outcome::Accepted("compiled successfully (exit 0)".to_owned()),
+        Err(CliError::Pipeline { diag, .. }) => Outcome::Rejected(diag.code().as_str()),
+        Err(other) => Outcome::Accepted(format!("non-pipeline error: {other:?}")),
+    }
+}
+
+/// Assert a fixture with the given extra files is rejected with exactly `expected`.
+#[track_caller]
+fn assert_rejected_with_files(
+    name: &str,
+    source: &str,
+    extra: &[(&str, &str)],
+    expected: &str,
+) {
+    match compile_with_files(name, source, extra) {
+        Outcome::Skip => {}
+        Outcome::Rejected(got) => assert_eq!(
+            got, expected,
+            "{name}: expected {expected}, got {got} — a rejection for the WRONG reason"
+        ),
+        Outcome::Accepted(how) => fail_accepted(name, expected, &how),
+    }
+}
+
+/// (a) `customElement` applied to a NON-literal (a variable) is rejected: the JS
+/// path must be a string literal so it can be read at build time (IPE-N0044).
+#[test]
+fn custom_element_ctor_non_literal_rejected() {
+    let src = format!(
+        "{HEAD}src : String\n\
+         src = \"js/x.js\"\n\
+         editor : CustomElement Int String\n\
+         editor = customElement src\n\
+         main = 1\n"
+    );
+    assert_rejected("custom_element_non_literal", &src, "IPE-N0044");
+}
+
+/// (b) A bare `customElement` value (referenced without its literal argument) is
+/// rejected — the constructor must be applied to its widget path (IPE-N0044).
+#[test]
+fn custom_element_ctor_bare_value_rejected() {
+    let src = format!(
+        "{HEAD}editor : CustomElement Int String\n\
+         editor = customElement\n\
+         main = 1\n"
+    );
+    assert_rejected("custom_element_bare", &src, "IPE-N0044");
+}
+
+/// `customElement` outside a `CustomElement`-annotated binding body is rejected:
+/// here it heads an ordinary (differently-typed) binding, so the reserved name
+/// resolves nowhere legal (IPE-N0044).
+#[test]
+fn custom_element_ctor_wrong_position_rejected() {
+    let src = format!("{HEAD}oops = customElement \"js/x.js\"\nmain = 1\n");
+    assert_rejected("custom_element_wrong_pos", &src, "IPE-N0044");
+}
+
+/// (c) `customElement "does/not/exist.js"` with no such file is rejected: a widget
+/// cannot register against a file that is not there (IPE-N0044, checked at the
+/// build stage that owns the project root).
+#[test]
+fn custom_element_ctor_missing_file_rejected() {
+    let src = format!(
+        "{HEAD}editor : CustomElement Int String\n\
+         editor = customElement \"js/does-not-exist.js\"\n\
+         main = 1\n"
+    );
+    // No extra files written — the named path is absent.
+    assert_rejected_with_files("custom_element_missing_file", &src, &[], "IPE-N0044");
+}
+
+/// (d) `customElement "../escape.js"` is rejected by the shared path seal — a `..`
+/// that climbs out of the project root is refused at build (IPE-P0063), the same
+/// code the `path "…"` literal uses.
+#[test]
+fn custom_element_ctor_path_traversal_rejected() {
+    let src = format!(
+        "{HEAD}editor : CustomElement Int String\n\
+         editor = customElement \"../escape.js\"\n\
+         main = 1\n"
+    );
+    assert_rejected("custom_element_traversal", &src, "IPE-P0063");
+}
+
+/// (e) A well-formed `customElement "js/x.js"` with the file PRESENT type-checks
+/// (the shape + path + existence gates all pass) but is STILL refused at emission
+/// with IPE-L0133 — the widget transport is not shipped, so no `CustomElement`
+/// value reaches codegen (WP2 does not flip the emission gate).
+#[test]
+fn custom_element_ctor_present_file_still_refused_at_emit() {
+    let src = format!(
+        "{HEAD}editor : CustomElement Int String\n\
+         editor = customElement \"js/x.js\"\n\
+         main = 1\n"
+    );
+    assert_rejected_with_files(
+        "custom_element_present",
+        &src,
+        &[("js/x.js", "export function mount(host, emit) { return {}; }\n")],
+        "IPE-L0133",
+    );
+}
+
+/// (f) A `CustomElement` value stored in a `Model` field is rejected — it is an
+/// opaque, non-serialisable handle, so it cannot live in app state, exactly like a
+/// function value. Its type refuses fail-closed at lowering (IPE-L0133) before any
+/// codegen, so the widget seam never reaches the Model.
+#[test]
+fn custom_element_in_model_field_rejected() {
+    let src = format!(
+        "{HEAD}type alias Model = {{ widget : CustomElement Int String }}\n\
+         editor : CustomElement Int String\n\
+         editor = customElement \"js/x.js\"\n\
+         main = 1\n"
+    );
+    assert_rejected_with_files(
+        "custom_element_in_model",
+        &src,
+        &[("js/x.js", "export function mount(host, emit) { return {}; }\n")],
+        "IPE-L0133",
+    );
+}
+
 /// Two imports registering the same qualifier for DIFFERENT sibling modules.
 /// The clash is only observable across a multi-file project (sibling
 /// discovery), so this uses the project harness rather than the single-file

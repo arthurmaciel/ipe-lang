@@ -22,12 +22,12 @@ use crate::code::{
     IPE_N0012, IPE_N0013, IPE_N0020, IPE_N0021, IPE_N0022, IPE_N0023, IPE_N0024, IPE_N0025,
     IPE_N0026, IPE_N0027, IPE_N0028, IPE_N0029, IPE_N0030, IPE_N0031, IPE_N0032, IPE_N0033,
     IPE_N0034, IPE_N0035, IPE_N0036, IPE_N0037, IPE_N0038, IPE_N0039, IPE_N0040, IPE_N0041,
-    IPE_N0042, IPE_N0043, IPE_P0001, IPE_P0002, IPE_P0003, IPE_P0010, IPE_P0011, IPE_P0012,
-    IPE_P0013, IPE_P0014, IPE_P0015, IPE_P0016, IPE_P0017, IPE_P0018, IPE_P0020, IPE_P0021,
-    IPE_P0030, IPE_P0031, IPE_P0040, IPE_P0041, IPE_P0050, IPE_P0060, IPE_P0061, IPE_P0062,
-    IPE_P0063, IPE_P0064, IPE_P0065, IPE_P0066, IPE_P0067, IPE_S0001, IPE_T0001, IPE_T0002,
-    IPE_T0003, IPE_T0004, IPE_T0010, IPE_T0011, IPE_T0012, IPE_T0013, IPE_T0014, IPE_T0015,
-    IPE_T0016, IPE_T0017, IPE_T0018, IPE_T0019, IPE_T0020, Severity,
+    IPE_N0042, IPE_N0043, IPE_N0044, IPE_P0001, IPE_P0002, IPE_P0003, IPE_P0010, IPE_P0011,
+    IPE_P0012, IPE_P0013, IPE_P0014, IPE_P0015, IPE_P0016, IPE_P0017, IPE_P0018, IPE_P0020,
+    IPE_P0021, IPE_P0030, IPE_P0031, IPE_P0040, IPE_P0041, IPE_P0050, IPE_P0060, IPE_P0061,
+    IPE_P0062, IPE_P0063, IPE_P0064, IPE_P0065, IPE_P0066, IPE_P0067, IPE_S0001, IPE_T0001,
+    IPE_T0002, IPE_T0003, IPE_T0004, IPE_T0010, IPE_T0011, IPE_T0012, IPE_T0013, IPE_T0014,
+    IPE_T0015, IPE_T0016, IPE_T0017, IPE_T0018, IPE_T0019, IPE_T0020, Severity,
 };
 use crate::span::Span;
 
@@ -679,6 +679,19 @@ pub enum NameError {
     /// un-enforced CSRF posture, an unset secret), so it is rejected here rather
     /// than compiled into an app that ignores it. [IPE-N0043]
     DiscardedConfig,
+    /// The reserved `customElement "<js-path>"` constructor is malformed at its
+    /// use site. Like the `Ffi.kernel` literal gate, `customElement` is legal ONLY
+    /// as the entire body of a `CustomElement`-annotated binding, applied to a
+    /// SINGLE STRING LITERAL naming the author's widget-hook JS file. Rejected
+    /// fail-closed when: the argument is not a string literal (a variable, an
+    /// expression — the file cannot be resolved at build time); the constructor is
+    /// referenced bare / unapplied or from any other position; the path escapes the
+    /// project root (`..` traversal); or the named file does not exist. The JS
+    /// source is a VALUE argument, never a type parameter — the two seal params are
+    /// the down/up types only. `detail` names the specific rule broken (Security
+    /// #5, fail-closed: a build-time path is cleaned + in-project-checked +
+    /// required to exist before the widget can be registered). [IPE-N0044]
+    CustomElementCtorMalformed { detail: Box<str> },
 }
 
 /// Why `Ipe.Codec.auto` could not derive a codec.
@@ -1787,6 +1800,7 @@ const fn name_code(msg: &NameError) -> Code {
         NameError::CodecAutoUnderivable { .. } => IPE_N0041,
         NameError::KernelAliasInUserSource { .. } => IPE_N0042,
         NameError::DiscardedConfig => IPE_N0043,
+        NameError::CustomElementCtorMalformed { .. } => IPE_N0044,
     }
 }
 
@@ -1971,7 +1985,8 @@ fn name_help(msg: &NameError, span: Span) -> Vec<HelpLine> {
         | NameError::NestedDecoderPipeline
         | NameError::CodecAutoUnderivable { .. }
         | NameError::KernelAliasInUserSource { .. }
-        | NameError::DiscardedConfig => Vec::new(), // no span-based help
+        | NameError::DiscardedConfig
+        | NameError::CustomElementCtorMalformed { .. } => Vec::new(), // no span-based help
     }
 }
 

@@ -223,7 +223,7 @@ fn canon_expr(out: &mut Vec<Raw>, expr: &ipe_canon::ast::Expr, interner: &Intern
         Expr_::Int(_) | Expr_::Float(_) => {
             Raw::push(out, expr.span, TokenClass::Number, None);
         }
-        Expr_::Str(_) | Expr_::Char(_) | Expr_::PathLit(_) => {
+        Expr_::Str(_) | Expr_::Char(_) | Expr_::PathLit(_) | Expr_::CustomElementCtor(_) => {
             Raw::push(out, expr.span, TokenClass::StringLit, None);
         }
         Expr_::Unit => {}

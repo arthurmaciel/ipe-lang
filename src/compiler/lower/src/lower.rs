@@ -3273,6 +3273,7 @@ fn canon_collect_free_locals(
         | canon::Expr_::Float(_)
         | canon::Expr_::Str(_)
         | canon::Expr_::PathLit(_)
+        | canon::Expr_::CustomElementCtor(_)
         | canon::Expr_::Char(_)
         | canon::Expr_::Unit => {}
     }
@@ -5291,6 +5292,7 @@ fn find_first_varlocal_span(sym: Symbol, body: &canon::Expr) -> Option<Span> {
         | canon::Expr_::Float(_)
         | canon::Expr_::Str(_)
         | canon::Expr_::PathLit(_)
+        | canon::Expr_::CustomElementCtor(_)
         | canon::Expr_::Char(_)
         | canon::Expr_::Unit => None,
         // Compound forms — recurse left-to-right.
@@ -12025,6 +12027,7 @@ pub fn count_destructure_param_sites(m: &canon::Module) -> usize {
             | canon::Expr_::Float(_)
             | canon::Expr_::Str(_)
             | canon::Expr_::PathLit(_)
+            | canon::Expr_::CustomElementCtor(_)
             | canon::Expr_::Char(_)
             | canon::Expr_::Unit => 0,
         }
@@ -12182,6 +12185,7 @@ pub fn count_destructure_thunk_sites(m: &canon::Module) -> usize {
             | canon::Expr_::Float(_)
             | canon::Expr_::Str(_)
             | canon::Expr_::PathLit(_)
+            | canon::Expr_::CustomElementCtor(_)
             | canon::Expr_::Char(_)
             | canon::Expr_::Unit => 0,
         }
@@ -12266,6 +12270,7 @@ pub fn count_nested_cons_payload_sites(m: &canon::Module) -> usize {
             | canon::Expr_::Float(_)
             | canon::Expr_::Str(_)
             | canon::Expr_::PathLit(_)
+            | canon::Expr_::CustomElementCtor(_)
             | canon::Expr_::Char(_)
             | canon::Expr_::Unit => 0,
         }
@@ -12352,6 +12357,7 @@ pub fn count_nested_strlit_payload_sites(m: &canon::Module) -> usize {
             | canon::Expr_::Float(_)
             | canon::Expr_::Str(_)
             | canon::Expr_::PathLit(_)
+            | canon::Expr_::CustomElementCtor(_)
             | canon::Expr_::Char(_)
             | canon::Expr_::Unit => 0,
         }
@@ -18550,6 +18556,15 @@ impl<'a> Lowerer<'a> {
             // A compile-time-validated `path "…"` literal: the cleaned string
             // was proven valid by the canonicaliser; lower directly to PathLit.
             canon::Expr_::PathLit(cleaned) => Ok(Expr::PathLit(cleaned.clone())),
+            // The reserved `customElement "<js-path>"` constructor. Its type
+            // (`CustomElement down up`) already refuses at `ir_type_from_canon`
+            // with IPE-L0133, but the value node fails closed here too — defence in
+            // depth, so no undenoted widget seam reaches codegen even were a
+            // constructor value to appear where its type were not lowered. The
+            // transport (generated glue + content-addressed tag) is not shipped.
+            canon::Expr_::CustomElementCtor(_) => {
+                Err(unsupported(e.span, Feature::CustomElementTransport))
+            }
             canon::Expr_::Char(c) => Ok(Expr::Char(c.clone())),
             canon::Expr_::Unit => Ok(Expr::Unit),
             canon::Expr_::VarLocal(s) => Ok(Expr::Var(*s)),
@@ -22875,6 +22890,11 @@ impl<'a> Lowerer<'a> {
                 | KernelFn::HtmlNode
                 // `Ui.node : Description -> List (Attribute msg) -> List (Element msg) -> Element msg`
                 | KernelFn::UiNode
+                // `Ui.widget : CustomElement down up -> down -> (up -> msg) -> Element msg`
+                // Registered so the surface type-checks; its transport is not
+                // shipped, so a `CustomElement`-typed binding is refused fail-closed
+                // at type lowering (IPE-L0133) before this arity is consulted.
+                | KernelFn::UiWidget
                 // `Ui.breakpoint : String -> List (Attribute msg) -> Element msg -> Element msg`
                 // (delegates to Ui.mediaQuery at runtime — see ui_breakpoint_)
                 | KernelFn::UiBreakpoint
@@ -24094,6 +24114,7 @@ impl<'a> Lowerer<'a> {
                     ("Ui", "text") => Ok(Callee::Kernel(KernelFn::UiText)),
                     ("Ui", "html") => Ok(Callee::Kernel(KernelFn::UiHtml)),
                     ("Ui", "cells") => Ok(Callee::Kernel(KernelFn::UiCells)),
+                    ("Ui", "widget") => Ok(Callee::Kernel(KernelFn::UiWidget)),
                     // Retained container / tagged-element primitives — the layout
                     // and flow builders are pure Ipê over these in `Ipe/Ui.ipe`.
                     ("Ui", "node") => Ok(Callee::Kernel(KernelFn::UiNode)),

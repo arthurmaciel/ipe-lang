@@ -347,6 +347,12 @@ pub enum BuiltinTag {
     /// `Element` — the `Ipe.Ui` element constructor `Element msg`, applied to the
     /// message type.
     UiElement,
+    /// `CustomElement` — the JS-widget boundary constructor `CustomElement down up`,
+    /// applied to its sealed down-state and up-event types. Empty-module
+    /// (unqualified); an opaque handle produced only by the reserved `customElement`
+    /// constructor and consumed only by `Ui.widget`. Never serialisable, never
+    /// storable in a `Model` (it fails the plain-value gate like a function).
+    CustomElement,
     /// `Html` — the `Html msg` constructor shared by `Ipe.Html` and the `Ipe.Ui`
     /// render entry points, applied to the message type.
     Html,
@@ -1590,6 +1596,12 @@ pub enum StdlibKernel {
     /// `Ui.cells : List (List Char) -> Element msg` — a raw terminal cell grid
     /// embedded as an island inside an `Ipe.Ui` view under `Terminal.appScreen`.
     UiCells,
+    /// `Ui.widget : CustomElement down up -> down -> (up -> msg) -> Element msg` —
+    /// the one view node that places a typed JS custom-element widget. The
+    /// `CustomElement` handle is opaque; its transport is not yet shipped, so a
+    /// `CustomElement`-typed binding is still refused fail-closed at lowering
+    /// (IPE-L0133).
+    UiWidget,
     /// `Ui.node : Description -> List (Attribute msg) -> List (Element msg) -> Element msg`
     /// — the irreducible container-element constructor. The layout builders
     /// (`el`/`row`/`column`/`wrappedRow`/`grid`) are pure Ipê over this in
@@ -3454,6 +3466,7 @@ impl StdlibKernel {
             Self::UiText => d("Ui", "text", 1, Ui, "ui_text_"),
             Self::UiHtml => d("Ui", "html", 1, Ui, "ui_html_"),
             Self::UiCells => d("Ui", "cells", 1, Ui, "ui_cells_"),
+            Self::UiWidget => d("Ui", "widget", 3, Ui, "ui_widget_"),
             Self::UiNode => d("Ui", "node", 3, Ui, "ui_node_"),
             Self::UiTaggedNode => d("Ui", "taggedNode", 4, Ui, "ui_tagged_node_"),
             Self::UiButton => d("Ui", "button", 2, Ui, "ui_button_"),
@@ -4930,6 +4943,7 @@ impl StdlibKernel {
         Self::UiText,
         Self::UiHtml,
         Self::UiCells,
+        Self::UiWidget,
         Self::UiNode,
         Self::UiTaggedNode,
         Self::UiButton,
@@ -7113,6 +7127,16 @@ impl StdlibKernel {
         const UI_NODE: TyShape = TyShape::Fun(&DESCRIPTION, &UI_CONTAINER);
         // `taggedNode : String -> Description -> List (Attribute msg) -> List (Element msg) -> Element msg`.
         const UI_TAGGED_NODE: TyShape = TyShape::Fun(&STRING, &UI_NODE);
+        // `widget : CustomElement down up -> down -> (up -> msg) -> Element msg`.
+        // `msg` is the scheme's first variable `A` (so `Element msg` reuses the
+        // shared `UI_ELEM_A`); `down` = `B`, `up` = `C`. The `CustomElement down up`
+        // handle is the opaque JS-widget boundary; the up-callback maps a decoded
+        // typed event into the app's `msg`.
+        const CUSTOM_ELEMENT_B_C: TyShape = TyShape::Con(BuiltinTag::CustomElement, &[B, C]);
+        const C_TO_A: TyShape = TyShape::Fun(&C, &A);
+        const C_TO_A_TO_UI_ELEM_A: TyShape = TyShape::Fun(&C_TO_A, &UI_ELEM_A);
+        const B_TO_C_TO_A_TO_UI_ELEM_A: TyShape = TyShape::Fun(&B, &C_TO_A_TO_UI_ELEM_A);
+        const UI_WIDGET: TyShape = TyShape::Fun(&CUSTOM_ELEMENT_B_C, &B_TO_C_TO_A_TO_UI_ELEM_A);
         // `above / below / … : Element msg -> Attribute msg`.
         const UI_ELEM_A_TO_UI_ATTR_A: TyShape = TyShape::Fun(&UI_ELEM_A, &UI_ATTR_A);
         // `onClick / … : msg -> Attribute msg`.
@@ -8537,6 +8561,7 @@ impl StdlibKernel {
             Self::UiText => Some(&STRING_TO_UI_ELEM_A),
             Self::UiHtml => Some(&HTML_A_TO_UI_ELEM_A),
             Self::UiCells => Some(&LIST_LIST_CHAR_TO_UI_ELEM_A),
+            Self::UiWidget => Some(&UI_WIDGET),
             Self::UiNode => Some(&UI_NODE),
             Self::UiTaggedNode => Some(&UI_TAGGED_NODE),
 
@@ -9558,6 +9583,7 @@ impl StdlibKernel {
             | Self::UiText
             | Self::UiHtml
             | Self::UiCells
+            | Self::UiWidget
             | Self::UiNode
             | Self::UiTaggedNode
             | Self::UiButton
@@ -11084,6 +11110,7 @@ impl StdlibKernel {
                 | Self::UiText
                 | Self::UiHtml
                 | Self::UiCells
+                | Self::UiWidget
                 | Self::UiNode
                 | Self::UiTaggedNode
                 | Self::UiButton

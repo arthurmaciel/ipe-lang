@@ -245,6 +245,7 @@ fn check_expr<'e>(expr: &'e Expr, scope: &mut Scope<'e>) -> DResult<()> {
         | Expr_::Str(_)
         | Expr_::Char(_)
         | Expr_::PathLit(_)
+        | Expr_::CustomElementCtor(_)
         | Expr_::Unit => Ok(()),
         Expr_::Call(head, args) => {
             check_expr(head, scope)?;

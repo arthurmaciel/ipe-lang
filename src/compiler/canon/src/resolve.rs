@@ -64,6 +64,17 @@ const TYPE_EXPANSION_DEPTH_LIMIT: u32 = 128;
 /// not be relied on for stack safety.
 const TYPE_EXPANSION_NODE_LIMIT: u32 = 100_000;
 
+/// The reserved value-namespace spelling of the JS-widget boundary constructor.
+/// Legal only as the whole body of a `CustomElement`-annotated binding, applied
+/// to a single string literal (see [`detect_custom_element_constructor`]); any
+/// other appearance is IPE-N0044.
+const CUSTOM_ELEMENT_CTOR: &str = "customElement";
+
+/// The reserved boundary type-constructor spelling paired with
+/// [`CUSTOM_ELEMENT_CTOR`]: only a binding annotated `CustomElement down up` may
+/// carry the constructor as its body.
+const CUSTOM_ELEMENT_TYPE: &str = "CustomElement";
+
 /// Type-constructor names the compiler reserves for built-ins. A user `type` /
 /// `type alias` whose name is one of these is rejected at declaration
 /// ([`NameError::ReservedBuiltinType`], IPE-N0026).
@@ -4426,6 +4437,23 @@ fn canonicalise_value(
     interner: &mut Interner,
     ui_wildcard_msg: Symbol,
 ) -> DResult<canon::Def> {
+    // The reserved `customElement "<js-path>"` constructor is recognised BEFORE
+    // the body is canonicalised: its bare head is an otherwise-unresolvable name,
+    // and only this position (the whole body of a `CustomElement`-annotated
+    // binding) is legal. A malformed use fails closed here (IPE-N0044); any other
+    // appearance of the bare name is rejected downstream by `resolve_var`.
+    if let Some(def) = detect_custom_element_constructor(
+        val,
+        env,
+        type_home_map,
+        qualifier_paths,
+        aliases,
+        interner,
+        ui_wildcard_msg,
+    )? {
+        return Ok(def);
+    }
+
     // Add parameter-bound names to a body-local environment.
     let mut body_env = env.clone();
     for p in &val.patterns {
@@ -4905,6 +4933,24 @@ fn resolve_var(name: Symbol, span: Span, env: &Env, interner: &Interner) -> DRes
         // A local / top-level / explicit-exposed / built-in binding wins over any
         // wildcard-exposed member of the same spelling (silent shadow).
         return Ok(var_home_to_expr(name, home));
+    }
+    // The reserved `customElement` constructor is legal ONLY as the whole body of
+    // a `CustomElement`-annotated binding, where `canonicalise_value` intercepts
+    // it before this resolver runs. Reaching HERE means it was referenced bare
+    // (unapplied), applied outside that sanctioned position, or nested in a
+    // sub-expression — every one of which is malformed. Fail closed with a precise
+    // IPE-N0044 rather than a bare unknown-name error. Placed after the user-binding
+    // lookup so a genuine local of the same spelling still shadows it.
+    if interner.resolve(name) == Some(CUSTOM_ELEMENT_CTOR) {
+        return Err(Diagnostic::Name {
+            span,
+            msg: NameError::CustomElementCtorMalformed {
+                detail: Box::<str>::from(
+                    "`customElement` is legal only as the whole body of a \
+                     `CustomElement`-annotated binding, applied to a single string literal",
+                ),
+            },
+        });
     }
     // Low-priority wildcard tier: only reached when the higher tiers miss.
     resolve_wildcard_var(name, span, env, interner)
@@ -6043,6 +6089,187 @@ fn canonicalise_asserted_call(
         Box::new(ipe_diagnostics::Located::new(callee.span, target)),
         can_args,
     )))
+}
+
+/// The offending-argument shape a `customElement` body rejects, each naming the
+/// specific rule broken for the IPE-N0044 diagnostic detail.
+fn custom_element_ctor_error(span: Span, detail: &'static str) -> Diagnostic {
+    Diagnostic::Name {
+        span,
+        msg: NameError::CustomElementCtorMalformed {
+            detail: Box::<str>::from(detail),
+        },
+    }
+}
+
+/// The last name segment of a syntactic type annotation's head constructor, or
+/// `None` when the annotation is not a bare/qualified type-constructor application
+/// (an arrow, a tuple, a record, a variable). Used to recognise a
+/// `CustomElement …` annotation by NAME regardless of any leading qualifier.
+fn annotation_head_name<'a>(ann: &src::TypeAnnotation, interner: &'a Interner) -> Option<&'a str> {
+    let src::TypeAnnotation::TType(_, segments, _) = ann else {
+        return None;
+    };
+    interner.resolve(*segments.last()?)
+}
+
+/// Recognise the reserved `customElement "<js-path>"` constructor binding and
+/// resolve it to a typed [`canon::Def`] carrying a [`canon::Expr_::CustomElementCtor`].
+///
+/// The constructor is the JS-widget analogue of the `Ffi.kernel "…"` literal
+/// gate: legal ONLY as the entire body of a binding annotated `CustomElement
+/// down up`, applied to a SINGLE STRING LITERAL naming the author's widget-hook
+/// JS file. The two type parameters are the seal (down-state / up-event) only;
+/// the JS source is a value argument, never a type parameter. The literal is
+/// cleaned and traversal-checked at build time here (reusing the same
+/// `ipe_path_core` seal the `path "…"` literal uses); its existence inside the
+/// project root is verified later, at the build stage that owns the root.
+///
+/// Returns:
+/// * `Ok(None)` — the binding does not mention `customElement` at all (an ordinary
+///   value / function); the caller canonicalises it normally.
+/// * `Ok(Some(def))` — a well-formed constructor binding.
+/// * `Err(IPE-N0044)` — the binding IS a `customElement` use but is malformed: a
+///   non-literal argument, a bare (unapplied) reference, a wrong argument count, a
+///   traversing path, a missing / non-`CustomElement` annotation, or the binding
+///   carrying parameters. Fail-closed: absent proof the widget path is a safe,
+///   in-project, build-readable literal, the binding is refused (Security #5).
+///
+/// # Errors
+/// [`NameError::CustomElementCtorMalformed`] (IPE-N0044) on any malformed use.
+/// A path that fails the traversal seal surfaces as [`ParseError::InvalidPathLiteral`]
+/// (IPE-P0063) — the same code the `path "…"` literal uses, shared through
+/// `ipe_diagnostics::path_check::validate`.
+fn detect_custom_element_constructor(
+    val: &src::Value,
+    env: &Env,
+    type_home_map: &BTreeMap<Symbol, Vec<Symbol>>,
+    qualifier_paths: &BTreeMap<Symbol, Vec<Symbol>>,
+    aliases: &BTreeMap<Symbol, AliasDef>,
+    interner: &Interner,
+    ui_wildcard_msg: Symbol,
+) -> DResult<Option<canon::Def>> {
+    // Peel the outermost application head. The constructor head is a bare
+    // `customElement` local reference, whether applied (`customElement "x"`) or
+    // bare (`customElement`).
+    let (head, args): (&src::Expr, &[src::Expr]) = match &val.body.value {
+        src::Expr_::Call(callee, args) => (callee, args.as_slice()),
+        // A bare reference (`codeEditor = customElement`) — the head is the body
+        // itself with no arguments, so the shared validation reports the
+        // unapplied case.
+        src::Expr_::VarLocal(_) => (&val.body, &[]),
+        _ => return Ok(None),
+    };
+    let src::Expr_::VarLocal(head_name) = &head.value else {
+        return Ok(None);
+    };
+    if interner.resolve(*head_name) != Some(CUSTOM_ELEMENT_CTOR) {
+        return Ok(None);
+    }
+
+    // From here the binding IS claiming the constructor: every failure is a
+    // fail-closed IPE-N0044, never a fall-through to ordinary resolution.
+
+    // The binding must be a bare value, not a function — the constructor has no
+    // curried surface.
+    if !val.patterns.is_empty() {
+        return Err(custom_element_ctor_error(
+            val.body.span,
+            "`customElement` is a value constructor and takes no binding parameters",
+        ));
+    }
+
+    // The annotation must be present and name the reserved `CustomElement`
+    // boundary type. Checked by NAME (the type is reserved + un-shadowable), so a
+    // qualified spelling is gated identically; a missing or other annotation is
+    // the wrong-position case.
+    let Some(ann) = &val.type_annotation else {
+        return Err(custom_element_ctor_error(
+            val.body.span,
+            "`customElement` is legal only as the body of a binding annotated \
+             `CustomElement down up`; this binding has no such annotation",
+        ));
+    };
+    if annotation_head_name(&ann.value, interner) != Some(CUSTOM_ELEMENT_TYPE) {
+        return Err(custom_element_ctor_error(
+            val.body.span,
+            "`customElement` is legal only as the body of a binding annotated \
+             `CustomElement down up`",
+        ));
+    }
+
+    // Exactly one argument, and it must be a string literal — a non-literal
+    // (a variable / an expression) cannot be resolved to a file path at build time.
+    let [arg] = args else {
+        return Err(custom_element_ctor_error(
+            val.body.span,
+            "`customElement` takes exactly one argument — a single string literal \
+             naming the widget-hook JS file",
+        ));
+    };
+    let src::Expr_::Str(raw) = &arg.value else {
+        return Err(custom_element_ctor_error(
+            arg.span,
+            "the `customElement` argument must be a single string literal, not a \
+             variable or expression (the path is read at build time)",
+        ));
+    };
+
+    // Path seal: clean + all-targets traversal check, the SAME `ipe_path_core`
+    // source of truth the `path "…"` literal uses. A `..` escape is refused with
+    // IPE-P0063 (no arbitrary out-of-project file is read at build).
+    let cleaned = match ipe_diagnostics::path_check::validate(raw) {
+        Ok(cleaned) => cleaned,
+        Err(reason) => {
+            return Err(Diagnostic::Parse {
+                span: arg.span,
+                msg: ParseError::InvalidPathLiteral {
+                    literal: raw.as_str().into(),
+                    reason,
+                },
+            });
+        }
+    };
+
+    // Resolve the annotation to its canonical type — this re-runs the arity + SEAL
+    // gates on `CustomElement down up`, so a mis-arity (IPE-N0031) or seal-illegal
+    // parameter (IPE-N0039) is still rejected here exactly as for any other
+    // `CustomElement` annotation.
+    let mut free_vars = BTreeSet::new();
+    let mut visited = Vec::new();
+    let ctx = TypeCtx {
+        env,
+        type_home_map,
+        qualifier_paths,
+        aliases,
+        interner,
+        ui_wildcard_msg,
+        ann_span: ann.span,
+    };
+    let subst = BTreeMap::new();
+    let mut budget = TYPE_EXPANSION_NODE_LIMIT;
+    let ty = canonicalise_type(
+        &ann.value,
+        &ctx,
+        &subst,
+        &mut free_vars,
+        &mut visited,
+        &mut budget,
+        0,
+    )?;
+    let mut free_vars: Vec<Symbol> = free_vars.into_iter().collect();
+    free_vars.sort_by(|a, b| interner.resolve(*a).cmp(&interner.resolve(*b)));
+
+    let body =
+        ipe_diagnostics::Located::new(val.body.span, canon::Expr_::CustomElementCtor(cleaned));
+    Ok(Some(canon::Def::Typed {
+        home: env.home.clone(),
+        name: val.name,
+        free_vars,
+        patterns: Vec::new(),
+        body,
+        ty,
+    }))
 }
 
 /// Recognise a Stage-4 kernel-alias binding and resolve it against the kernel

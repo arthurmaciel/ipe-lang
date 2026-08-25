@@ -78,6 +78,13 @@ const KNOWN_DEAD_OR_EPILOGUE: &[&str] = &[
     //         Note: ui_layout_with_vecs IS in the runtime; this entry is for
     //         the stub "ui_layout_with" name that never reaches callee_name(). ──
     "ui_layout_with",
+    // ── Not-yet-emitted: `Ui.widget` places a typed JS custom-element widget,
+    //         but its transport is not shipped — a `CustomElement`-typed binding
+    //         is refused fail-closed at lowering (IPE-L0133) before any codegen,
+    //         so no runtime fn is named yet. The scheme + arity are registered so
+    //         the surface type-checks; the runtime denotation lands with the
+    //         transport. ─────────────────────────────────────────────────────────
+    "ui_widget_",
     // ── Epilogue: defined in the generated-code preamble (preamble.rs), not
     //         shipped as part of the runtime library. ─────────────────────────
     "list_map_consume",
