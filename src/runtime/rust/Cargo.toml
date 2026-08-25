@@ -369,7 +369,11 @@ crypto = ["rsa", "bcrypt", "aes-gcm", "chacha20poly1305", "pbkdf2", "dep:sha1", 
 # `jwt.rs` signs with `crypto_core`'s HMAC/RSA (via `crypto`, which implies
 # `crypto-core`) and wraps its `Algorithm` in a `secret::Secret`, so it implies
 # `secret` (which itself implies `crypto-core`).
-jwt = ["json", "crypto", "secret", "dep:jsonwebtoken"]
+# `auth.rs` (compiled under `#[cfg(feature = "jwt")]`) calls
+# `uuid::Uuid::new_v4()` to mint per-session `jti` ids — so `jwt` implies
+# `uuid`. A jwt-or-auth program that reaches no direct `Ipe.Uuid` kernel still
+# needs the crate for `auth_sign_token`'s entropy call.
+jwt = ["json", "crypto", "secret", "dep:jsonwebtoken", "uuid"]
 compression = ["flate2", "zstd", "tokio", "random"]
 csv_kernel = ["csv", "tokio", "random"]
 cache_kernel = ["tokio", "random"]
