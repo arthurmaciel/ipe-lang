@@ -2067,14 +2067,16 @@ impl<'a> EmitCtx<'a> {
     /// Reached directly by an `Ipe.Url` kernel ([`Self::uses_url`]), or
     /// transitively by a surface whose runtime module parses with the `url`
     /// crate: the outbound HTTP client ([`Self::reaches_http_client`], whose
-    /// `http_client.rs` targets a typed `crate::url::Url`) and the WebSocket
+    /// `http_client.rs` targets a typed `crate::url::Url`), the WebSocket
     /// client ([`Self::uses_websocket`], whose `ws_client.rs` calls
-    /// `::url::Url::parse`). The shared `ssrf` validators (`use url::Url`) are
-    /// declared exactly when either of those two is, so this union covers them
-    /// too. This is the single source of truth shared by the manifest augmenter
-    /// and the `mod.rs` append — they can never disagree.
+    /// `::url::Url::parse`), or the Db surface ([`Self::uses_db`], whose
+    /// `db.rs::build_pool` applies the SSRF host gate via `::url::Url::parse`
+    /// and `ssrf.rs` parses URLs with `url::Url`). The shared `ssrf` validators
+    /// (`use url::Url`) are declared exactly when any of these is, so this union
+    /// covers them too. This is the single source of truth shared by the manifest
+    /// augmenter and the `mod.rs` append — they can never disagree.
     pub(crate) const fn reaches_url(&self) -> bool {
-        self.uses_url || self.reaches_http_client() || self.uses_websocket
+        self.uses_url || self.reaches_http_client() || self.uses_websocket || self.uses_db
     }
 
     /// The absolute Rust path for a foreign opaque type declared by an FFI

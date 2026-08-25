@@ -19,6 +19,11 @@ crypto = []
 json = ["encoding", "serde"]
 db = []
 encoding = []
+# Declared but inert in the vendored escape hatch: `zeroize` / `subtle` / `rsa`
+# stay non-optional below. The `#[cfg(feature = "secret")]` gates in the vendored
+# runtime source (`app_config.rs::resolve_db_url_override`, `secret.rs`) need
+# this entry to compile — without it rustc emits E0425 for the gated functions.
+secret = []
 # Declared but inert in the vendored escape hatch: `serde` / `serde_json` /
 # `serde_urlencoded` stay non-optional below. The floor serde derives
 # (`IpeMaybe`/`IpeResult`/`IpeError`/`Decimal`/`Patch`) and the `dom/form`
