@@ -4650,6 +4650,17 @@ fn emit_ui_plan(
                     })?;
             Ok(s)
         }
+
+        // IPE-L0133 refuses any CustomElement-typed value at lowering before
+        // this arm can be reached; this branch is unreachable in a well-formed
+        // compilation. It exists because the exhaustiveness partition in
+        // emit_ui_plan requires every is_ui() kernel to have a plan.
+        NativeUiEmit::WidgetTransportDeferred => Err(Diagnostic::CompilerBug {
+            where_: "ipe_backend_rust::emit_ui_call::WidgetTransportDeferred",
+            detail: format!(
+                "Ui.widget reached the emitter for {k:?} — IPE-L0133 should have refused at lowering"
+            ),
+        }),
     }
 }
 

@@ -121,6 +121,10 @@ pub enum NativeUiEmit {
     LazyLazy5,
     /// `PubSub.publish` / `PubSub.publishNoEcho` — turbofished Task kernel.
     PubSubPublish,
+    /// `Ui.widget` — widget transport not yet shipped (WP4); IPE-L0133 refuses
+    /// any `CustomElement`-typed value at lowering before this emitter is
+    /// reached. Present here only to satisfy the exhaustiveness partition.
+    WidgetTransportDeferred,
     /// A shape-router delegation to another emitter.
     Delegate(UiDelegate),
 }
@@ -219,6 +223,11 @@ pub const fn ui_call_shape(k: KernelFn) -> Option<UiEmitPlan> {
             1,
             Guard::RejectInWebShape,
         ),
+        // `Ui.widget` is ui-family (is_ui()=true) but its transport is not
+        // shipped (WP4). IPE-L0133 refuses any CustomElement-typed value at
+        // lowering before this arm is ever dispatched. Classified here to
+        // satisfy the exhaustiveness partition; must never reach the emitter.
+        KernelFn::UiWidget => native(N::WidgetTransportDeferred),
         KernelFn::UiNode => pos("ipe_runtime::ui::helpers::ui_node_", 3),
         KernelFn::UiTaggedNode => pos("ipe_runtime::ui::helpers::ui_tagged_node_", 4),
         KernelFn::UiAbove => pos("ipe_runtime::ui::helpers::ui_above_", 1),
