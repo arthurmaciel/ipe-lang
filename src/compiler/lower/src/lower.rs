@@ -16416,8 +16416,9 @@ impl<'a> Lowerer<'a> {
                 // `Task.fail` (which never produces a value) or `\_ -> NoOp`
                 // after `System.exit` (which diverges) — map the free variable
                 // to `IrType::Json` (`JsonVal` / `any`) instead of raising
-                // `IPE-L0102`.  This matches the Haskell reference:
-                // `Can.PAnything -> (GoIr.GoParam "_" "any", [])`.
+                // `IPE-L0102`.  A wildcard parameter is never inspected, so
+                // the opaque JSON carrier is a sound concrete stand-in for any
+                // unconstrained type.
                 let ir_ty = if matches!(&pat.value, canon::Pattern_::PAnything) {
                     self.ir_type_from_ty_json(arg, pat.span)?
                 } else {
