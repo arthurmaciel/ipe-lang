@@ -807,27 +807,56 @@ fn infer_core(
     // `env` / `regions` read-back below (both post-date this pin).
     //
     // The "no same-module reference pinned it" reasoning only holds WITHIN the
-    // home module. A binding referenced from ANOTHER module is genuinely
+    // home module. A binding referenced from ANOTHER module MAY be genuinely
     // message-polymorphic across the boundary: `promote_untyped_boundaries`
     // discharges each cross-module use through a fresh `copy_var` of the
-    // scheme, so the shared root legitimately stays `Flex` while distinct uses
-    // pin distinct concrete `Msg` types (`viewA : Html MsgA`, `viewB : Html
-    // MsgB`). Defaulting it to `Unit` would emit `fn helper() -> Html<()>` and
-    // break every caller needing `Html<MsgN>` -- an exit-0-then-cargo-fail. So
-    // gate the pin on the SAME "no use pinned it" evidence the annotated path
-    // above uses: a binding that appears as any cross-module reference's source
-    // is NOT defaulted -- it stays generic, exactly as the pre-defaulting path
-    // already emitted it correctly.
-    let cross_module_sources: BTreeSet<(Vec<Symbol>, Symbol)> = generated
-        .pending_instantiations
-        .iter()
-        .map(|pi| pi.source.clone())
-        .collect();
+    // scheme, so the shared root can legitimately stay `Flex` while distinct
+    // uses pin distinct concrete `Msg` types (`viewA : Html MsgA`, `viewB :
+    // Html MsgB`). Defaulting such a binding to `Unit` would emit `fn helper()
+    // -> Html<()>` and break every caller needing `Html<MsgN>` — an
+    // exit-0-then-cargo-fail.
+    //
+    // But "referenced across a module boundary" is only a PROXY for "genuinely
+    // message-polymorphic". A cross-module use that renders the helper directly
+    // (`Html.render helper`) or threads it into another still-message-free
+    // helper pins NOTHING: the boundary placeholder discharges to a `Flex` /
+    // `Unit` slot, and the emitted `fn helper<T1>() -> Html<T1>` (or, for a
+    // message-free attribute body, `-> Attribute<T1>` over an `Attribute<()>`
+    // body) has no site to fix `T1` — E0283 / E0308 after `ipe` exit 0. So read
+    // the actual DISCHARGE OUTCOME off each promoted placeholder rather than the
+    // coarse boolean: default the slot to `Unit` exactly when no cross-module
+    // use pins it to a concrete `Msg`, and keep it generic when ≥1 use does.
+    let mut cross_module_placeholders: BTreeMap<(Vec<Symbol>, Symbol), Vec<VarId>> =
+        BTreeMap::new();
+    for pi in &generated.pending_instantiations {
+        cross_module_placeholders
+            .entry(pi.source.clone())
+            .or_default()
+            .push(pi.placeholder);
+    }
+    let mut discharge_outcomes: BTreeMap<(Vec<Symbol>, Symbol), MsgDischargeOutcome> =
+        BTreeMap::new();
+    for (key, placeholders) in &cross_module_placeholders {
+        let mut pinned: BTreeSet<MsgConId> = BTreeSet::new();
+        for &placeholder in placeholders {
+            let discharged = lift!(zonk(&mut uf, budget, placeholder));
+            collect_ui_msg_concrete_cons(&discharged, &ui_msg_cons, false, &mut pinned);
+        }
+        discharge_outcomes.insert(
+            key.clone(),
+            MsgDischargeOutcome::from_distinct_pin_count(pinned.len()),
+        );
+    }
     for (key, scheme) in &untyped_schemes {
         if scheme.quantified.is_empty() {
             continue;
         }
-        if cross_module_sources.contains(key) {
+        // A cross-module reference keeps the binding generic only when a use
+        // discharges its ui-msg slot to a concrete `Msg`; an unpinned outcome
+        // falls through to the same `Unit`-defaulting the same-module path uses.
+        if let Some(outcome) = discharge_outcomes.get(key)
+            && !outcome.should_default()
+        {
             continue;
         }
         let scheme_ty = lift!(zonk(&mut uf, budget, scheme.root));
@@ -1050,6 +1079,106 @@ fn collect_ui_msg_and_other_vars(
             }
         }
         Ty::Unit => {}
+    }
+}
+
+/// A concrete `Msg` type's identity: its defining module path and type name.
+/// Two cross-module uses "pin the same message type" exactly when their
+/// discharged ui-msg slot holds the same `(module, name)`.
+type MsgConId = (Vec<Symbol>, Symbol);
+
+/// How an untyped message-free helper's phantom `msg` is fixed by the concrete
+/// types its *cross-module* uses discharge it to — read off each use's promoted
+/// placeholder after solving, not the coarse "is it referenced across a module
+/// boundary at all" proxy.
+///
+/// * `Unpinned` — no cross-module use pins the slot to a concrete `Msg` (every
+///   use rendered it directly via `Html.render`, threaded it into another
+///   still-message-free helper, or does not reference it at all). The emitted
+///   generic `fn helper<T1>() -> Html<T1>` has no site that fixes `T1`, so
+///   `cargo` cannot infer it (E0283) — and a message-free *attribute* body even
+///   emits `Attribute<()>` under a `-> Attribute<T1>` signature (E0308). Default
+///   the slot to `Unit` so the binding emits the concrete `Html<()>` a user
+///   would otherwise annotate by hand.
+/// * `Pinned` — exactly one distinct concrete `Msg` fixes the slot across every
+///   cross-module use (`viewA : Html MsgA` is the sole caller, threading
+///   `MsgA`). Kept generic: the honest generic body threads the caller's own
+///   message type and rustc infers `T1 = MsgA` at the single site; defaulting
+///   to `Unit` would mismatch the caller's `Html<MsgA>` (T0001/E0308).
+/// * `MultiplyPinned` — ≥2 distinct concrete `Msg` types fix the slot (`viewA :
+///   Html MsgA`, `viewB : Html MsgB`): genuinely message-polymorphic across the
+///   boundary. Kept generic; each caller instantiates its own message type.
+///
+/// The defaulting DECISION collapses `Pinned` and `MultiplyPinned` (both keep
+/// the binding generic), but the three-way distinction records WHY — a
+/// single-type pin is monomorphic-but-inferable, not polymorphic — so the
+/// outcome is legible on its own terms rather than a bare "keep / default" bit.
+enum MsgDischargeOutcome {
+    Unpinned,
+    Pinned,
+    MultiplyPinned,
+}
+
+impl MsgDischargeOutcome {
+    /// Build the outcome from the count of DISTINCT concrete `Msg` identities
+    /// the binding's cross-module uses discharged its ui-msg slot to.
+    const fn from_distinct_pin_count(distinct: usize) -> Self {
+        match distinct {
+            0 => Self::Unpinned,
+            1 => Self::Pinned,
+            _ => Self::MultiplyPinned,
+        }
+    }
+
+    /// Default the slot to `Unit` only when no cross-module use pins it to any
+    /// concrete `Msg` — the sole outcome for which `Html<()>` cannot mismatch a
+    /// caller's concrete message type. A single- or multiply-pinned slot stays
+    /// generic.
+    const fn should_default(&self) -> bool {
+        matches!(self, Self::Unpinned)
+    }
+}
+
+/// Collect the concrete `Msg` identities occupying a ui-msg slot of `ty` — the
+/// argument position of a `Html` / `Element` / `Attribute` / `Event`
+/// constructor. Mirrors [`collect_ui_msg_and_other_vars`] but records resolved
+/// `Con` identities (a use that pinned the slot) rather than free vars (a use
+/// that left it open).
+fn collect_ui_msg_concrete_cons(
+    ty: &Ty,
+    ui_msg_cons: &BTreeSet<Symbol>,
+    in_ui_msg: bool,
+    out: &mut BTreeSet<MsgConId>,
+) {
+    match ty {
+        Ty::Var(_) | Ty::Unit => {}
+        Ty::Fun(a, b) => {
+            collect_ui_msg_concrete_cons(a, ui_msg_cons, in_ui_msg, out);
+            collect_ui_msg_concrete_cons(b, ui_msg_cons, in_ui_msg, out);
+        }
+        Ty::Con { module, name, args } => {
+            if in_ui_msg && !ui_msg_cons.contains(name) {
+                // A concrete type standing directly in a ui-msg slot IS the
+                // pinned message type (`Html MsgA` -> `MsgA`). A nested ui-msg
+                // constructor (`Html (Html MsgA)` never arises, but be robust)
+                // is not itself the message; recurse with the slot re-opened.
+                out.insert((module.clone(), *name));
+            }
+            let child_in_ui_msg = ui_msg_cons.contains(name);
+            for a in args {
+                collect_ui_msg_concrete_cons(a, ui_msg_cons, child_in_ui_msg, out);
+            }
+        }
+        Ty::Tuple(elems) => {
+            for e in elems {
+                collect_ui_msg_concrete_cons(e, ui_msg_cons, in_ui_msg, out);
+            }
+        }
+        Ty::Record(fields, _) => {
+            for v in fields.values() {
+                collect_ui_msg_concrete_cons(v, ui_msg_cons, in_ui_msg, out);
+            }
+        }
     }
 }
 

@@ -1,0 +1,26 @@
+module Main exposing (main)
+
+-- Cross-module counterpart to the GENUINELY-polymorphic
+-- `i1338_cross_module_msg_polymorphic_helper_seal`: there the shared helper is
+-- embedded in TWO views at TWO DISTINCT concrete message types, so it stays
+-- generic. HERE the same-shaped helper (`Lib.sharedRow`) is used from ONE other
+-- module and rendered DIRECTLY via `Html.render` -- no caller fixes its phantom
+-- `msg` to a concrete type.
+--
+-- The cross-module discharge outcome is therefore Unpinned. Keeping it generic
+-- (the coarse "appears across a module boundary" proxy) would emit `fn
+-- lib_shared_row<T1: 'static + Clone>() -> Html<T1>` with no site to fix `T1` --
+-- `Html.render` is itself `Html msg -> String`, so both stay unconstrained: an
+-- E0283 at the emitted `cargo build` after ipe exit 0, a SEAL break. The helper
+-- MUST instead default its `msg` to `()` and emit `fn lib_shared_row() ->
+-- Html<()>`, which `Html.render` accepts.
+--
+-- ipe MUST exit 0 AND the emitted project MUST cargo-build (THE SEAL).
+
+import Ipe.Html as Html exposing (Html)
+import Ipe.Io as Io
+import Lib exposing (sharedRow)
+
+
+main =
+    Io.println (Html.render sharedRow)
