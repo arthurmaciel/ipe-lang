@@ -1,0 +1,23 @@
+module Main exposing (main)
+
+-- `Lib.sharedRow` is referenced across a module boundary (by `Wrap.wrapped`),
+-- so the coarse "cross-module-referenced" proxy would keep it generic: `fn
+-- lib_shared_row<T1: 'static + Clone>() -> Html<T1>`. But its ONLY cross-module
+-- use threads it into `wrapped`, whose own `msg` is message-free and defaults to
+-- `()` -- the shared helper is used at a SINGLE monomorphic type, not at ≥2
+-- distinct concrete `Msg` types. Keeping it generic leaves `T1` unfixed at
+-- `Html.render` -- an E0283 after ipe exit 0, a SEAL break.
+--
+-- The discharge outcome (single-monomorphic) MUST default the helper's `msg` to
+-- `()`, emitting `fn lib_shared_row() -> Html<()>` threaded through
+-- `fn wrap_wrapped() -> Html<()>` -- both concrete, both build.
+--
+-- ipe MUST exit 0 AND the emitted project MUST cargo-build (THE SEAL).
+
+import Ipe.Html as Html exposing (Html)
+import Ipe.Io as Io
+import Wrap exposing (wrapped)
+
+
+main =
+    Io.println (Html.render wrapped)
