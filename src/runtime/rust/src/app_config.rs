@@ -905,6 +905,7 @@ mod tests {
         );
     }
 
+    #[cfg(feature = "secret")]
     #[test]
     fn console_token_builders_carry_the_right_kind() {
         // Each `Console.*Token` builder seals its `Secret` under the matching
