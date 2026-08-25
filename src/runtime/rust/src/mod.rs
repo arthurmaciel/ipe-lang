@@ -199,6 +199,11 @@ pub mod external_conn;
 pub use external_conn::*;
 #[cfg(feature = "json")]
 pub mod json;
+// The Ipê↔JS boundary-seal codec: the total, fail-closed decode gate a generated
+// per-seal-type decoder runs behind. Shares the `json` canonical substrate, so it
+// carries the same feature gate.
+#[cfg(feature = "json")]
+pub mod seal_codec;
 #[cfg(feature = "db")]
 pub use db::*;
 // Telemetry spill — write-through SQLite persistence behind the
