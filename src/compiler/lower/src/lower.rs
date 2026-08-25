@@ -22163,7 +22163,6 @@ impl<'a> Lowerer<'a> {
                 | KernelFn::WebSocketSendBinary
                 // ── Ipe.Auth.Revocation arity-2 ───────────────
                 | KernelFn::AuthRevocationRevokeUser
-                | KernelFn::AuthRevocationRevokeSession
                 | KernelFn::AuthRevocationRestoreUser,
             ) => Ok(2),
             Callee::Kernel(
@@ -22171,6 +22170,9 @@ impl<'a> Lowerer<'a> {
                 | KernelFn::AuthRegister
                 | KernelFn::AuthLogin
                 | KernelFn::AuthSetRole
+                // ── Ipe.Auth.Revocation arity-3 ─────────────
+                // `revokeSession : Principal -> String -> Int -> Task Error ()`
+                | KernelFn::AuthRevocationRevokeSession
                 // ── Ipe.WebSocket client arity-3 ──────────────────
                 // `closeWithCode : Int -> String -> Int -> Task Error ()`
                 // `subscribeWebSocket : Int -> String -> (any -> msg) -> Sub msg`
