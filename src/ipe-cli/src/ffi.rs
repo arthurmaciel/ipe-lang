@@ -1738,6 +1738,26 @@ fn add_one(
     }
 }
 
+/// The file the FFI text inspector reads the `[rust.dependencies]` vocabulary
+/// from.
+///
+/// `package.ipe` cannot yet express `[rust.dependencies]` (the outstanding
+/// ergonomic Rust-FFI work), so a native `package.ipe` keeps that vocabulary in
+/// a sibling `ipe.toml` sidecar, which is read here. A path that is already an
+/// `ipe.toml` (or any non-`package.ipe`) is read as-is, and a `package.ipe`
+/// with no sidecar falls back to itself so a pure-Ipê manifest stays a no-op.
+fn ffi_vocabulary_source(manifest_path: &Path) -> PathBuf {
+    if manifest_path.file_name().and_then(|n| n.to_str()) == Some(PROJECT_MANIFEST)
+        && let Some(dir) = manifest_path.parent()
+    {
+        let sidecar = dir.join(PROJECT_MANIFEST_TOML);
+        if sidecar.is_file() {
+            return sidecar;
+        }
+    }
+    manifest_path.to_path_buf()
+}
+
 /// Returns an error if `text` contains a legacy `[[rust.define.*]]` TOML table,
 /// directing the user to `ipe migrate config` to convert it to `foreign` declarations.
 fn reject_legacy_define_tables(text: &str) -> Result<(), CliError> {
@@ -1777,8 +1797,12 @@ pub fn install_registry_deps_for_project(
     allow_build_scripts: bool,
 ) -> Result<(), CliError> {
     let project_root = manifest_path.parent().unwrap_or_else(|| Path::new("."));
+    // The `[rust.dependencies]` FFI vocabulary lives in the `ipe.toml` sidecar
+    // for a native `package.ipe`, so resolve the source that actually carries it
+    // before scanning for dependencies.
+    let ffi_source = ffi_vocabulary_source(manifest_path);
     let text = crate::io_bounded::read_to_string_capped(
-        manifest_path,
+        &ffi_source,
         crate::io_bounded::MANIFEST_READ_CAP,
     )?;
     let deps = rust_dependencies_from_manifest(&text);
