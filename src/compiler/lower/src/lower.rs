@@ -7167,6 +7167,201 @@ fn arg_forwarded_binders(arg: &Expr, out: &mut Vec<Symbol>) {
     }
 }
 
+/// Every [`Symbol`] a pattern binds, appended to `out`. Used to seed a local
+/// binder with the caller tvars its bound value data-flow-derives from (a
+/// `case … of Just q -> …` arm, an irrefutable `let (a, b) = …` destructure).
+fn pat_binder_syms(pat: &Pat, out: &mut Vec<Symbol>) {
+    match pat {
+        Pat::Var(s) => out.push(*s),
+        Pat::Wildcard | Pat::Int(_) | Pat::Bool(_) | Pat::Char(_) | Pat::Str(_) => {}
+        Pat::Alias(inner, s) => {
+            out.push(*s);
+            pat_binder_syms(inner, out);
+        }
+        Pat::Ctor { args, .. } | Pat::Tuple(args) => {
+            for p in args {
+                pat_binder_syms(p, out);
+            }
+        }
+        Pat::Record(fields) => {
+            for (_, p) in fields {
+                pat_binder_syms(p, out);
+            }
+        }
+        Pat::Slice { prefix, rest } => {
+            for p in prefix {
+                pat_binder_syms(p, out);
+            }
+            if let Some(p) = rest.as_deref() {
+                pat_binder_syms(p, out);
+            }
+        }
+        // Every alternative of an or-pattern binds the same names, so walking
+        // one alternative surfaces the complete binder set.
+        Pat::Or(alts) => {
+            if let Some(first) = alts.first() {
+                pat_binder_syms(first, out);
+            }
+        }
+    }
+}
+
+/// Attribute each `let`/`case`-bound LOCAL binder in `body` back to the caller
+/// tvars its bound value data-flow-derives from, extending `derived` in place.
+///
+/// [`propagate_call_site_bounds`] must copy a callee's auto-trait bound onto the
+/// caller tvar reaching the callee slot even when the caller reaches that slot
+/// through a LOCALLY-bound value rather than a forwarded parameter:
+///
+/// ```text
+/// runFirst conn qs =            -- qs : List (Store.Query a)
+///     case List.head qs of
+///         Just q -> Store.toList conn q   -- q is case-bound, not a param
+///         Nothing -> Task.succeed []
+/// ```
+///
+/// `q` is bound by the `Just q` arm, not a caller parameter, so a param-only
+/// membership test never attributes the `a` tvar to `q` and the emitted
+/// `main_run_first<T1>` drops the `Sync` bound `Store.toList` obliges — an
+/// exit-0-then-cargo-fail (E0277) SEAL break, the sibling of the parameter-
+/// forwarding class [`propagate_call_site_bounds`] already closes.
+///
+/// The trace is a leaf data-flow: a local binder inherits the UNION of caller
+/// tvars carried by any binder its bound value references (a caller parameter
+/// already keyed in `derived`, or an earlier local binder). Reusing
+/// [`arg_forwarded_binders`] to gather the value's leaf binders keeps the trace
+/// identical to the argument-side walk. `case`-arm binders derive from the
+/// MATCH SCRUTINEE — `Just q` binds `q` to a component of `List.head qs`, so `q`
+/// inherits every caller tvar the scrutinee carries.
+///
+/// Sound to be generous, exactly as the argument-side walk is: `Sync`/`Send`/
+/// `'static` hold for every concrete emitted Ipê type, so attributing a tvar to
+/// a binder that turns out not to reach a bound-obliging callee can only
+/// over-tighten a bound harmlessly, never reject a caller.
+#[allow(clippy::too_many_lines)] // A recursive tree-walk over a large enum — necessarily long.
+fn collect_local_derived_tvars(
+    body: &Expr,
+    derived: &mut std::collections::HashMap<Symbol, Vec<Symbol>>,
+) {
+    // The caller tvars carried by `value`: the union over every leaf binder the
+    // value references that is already attributed in `derived`.
+    let value_tvars =
+        |value: &Expr, derived: &std::collections::HashMap<Symbol, Vec<Symbol>>| -> Vec<Symbol> {
+            let mut leaves: Vec<Symbol> = Vec::new();
+            arg_forwarded_binders(value, &mut leaves);
+            let mut tvars: Vec<Symbol> = Vec::new();
+            for leaf in &leaves {
+                if let Some(ts) = derived.get(leaf) {
+                    for t in ts {
+                        if !tvars.contains(t) {
+                            tvars.push(*t);
+                        }
+                    }
+                }
+            }
+            tvars
+        };
+
+    match body {
+        Expr::Let { name, value, body } => {
+            let tvars = value_tvars(value, derived);
+            if !tvars.is_empty() {
+                derived.entry(*name).or_default().extend(tvars);
+            }
+            collect_local_derived_tvars(value, derived);
+            collect_local_derived_tvars(body, derived);
+        }
+        Expr::Destructure {
+            binder,
+            value,
+            body,
+        } => {
+            let tvars = value_tvars(value, derived);
+            if !tvars.is_empty() {
+                let mut binders: Vec<Symbol> = Vec::new();
+                pat_binder_syms(binder, &mut binders);
+                for b in binders {
+                    derived.entry(b).or_default().extend(tvars.iter().copied());
+                }
+            }
+            collect_local_derived_tvars(value, derived);
+            collect_local_derived_tvars(body, derived);
+        }
+        Expr::Match(m) => {
+            let tvars = value_tvars(m.scrutinee(), derived);
+            collect_local_derived_tvars(m.scrutinee(), derived);
+            for arm in m.arms() {
+                if !tvars.is_empty() {
+                    let mut binders: Vec<Symbol> = Vec::new();
+                    pat_binder_syms(&arm.pat, &mut binders);
+                    for b in binders {
+                        derived.entry(b).or_default().extend(tvars.iter().copied());
+                    }
+                }
+                if let Some(g) = arm.guard.as_ref() {
+                    collect_local_derived_tvars(g, derived);
+                }
+                collect_local_derived_tvars(&arm.body, derived);
+            }
+        }
+        Expr::Call { args, .. } | Expr::Ctor { args, .. } | Expr::TailRecur { args } => {
+            for a in args {
+                collect_local_derived_tvars(a, derived);
+            }
+        }
+        Expr::Apply { func, args } => {
+            collect_local_derived_tvars(func, derived);
+            for a in args {
+                collect_local_derived_tvars(a, derived);
+            }
+        }
+        Expr::Lambda { body, .. }
+        | Expr::SharedLambda { body, .. }
+        | Expr::TailLoop { body, .. } => collect_local_derived_tvars(body, derived),
+        Expr::If { cond, then_, else_ } => {
+            collect_local_derived_tvars(cond, derived);
+            collect_local_derived_tvars(then_, derived);
+            collect_local_derived_tvars(else_, derived);
+        }
+        Expr::BinOp { lhs, rhs, .. } => {
+            collect_local_derived_tvars(lhs, derived);
+            collect_local_derived_tvars(rhs, derived);
+        }
+        Expr::Tuple(items) | Expr::List { items, .. } => {
+            for e in items {
+                collect_local_derived_tvars(e, derived);
+            }
+        }
+        Expr::Cons { head, tail } => {
+            collect_local_derived_tvars(head, derived);
+            collect_local_derived_tvars(tail, derived);
+        }
+        Expr::ListIndexClone { list, .. } | Expr::ListLenCheck { list, .. } => {
+            collect_local_derived_tvars(list, derived);
+        }
+        Expr::Record { fields, .. } | Expr::Update { fields, .. } => {
+            for (_, e) in fields {
+                collect_local_derived_tvars(e, derived);
+            }
+        }
+        Expr::TaskSeq { effect, rest } => {
+            collect_local_derived_tvars(effect, derived);
+            collect_local_derived_tvars(rest, derived);
+        }
+        Expr::Access { record, .. } => collect_local_derived_tvars(record, derived),
+        Expr::Var(_)
+        | Expr::CloneVar(_)
+        | Expr::FuncValue { .. }
+        | Expr::Int(_)
+        | Expr::Bool(_)
+        | Expr::Float(_)
+        | Expr::Str(_)
+        | Expr::PathLit(_)
+        | Expr::Char(_)
+        | Expr::Unit => {}
+    }
+}
+
 /// A callee's forwarding-relevant signature snapshot: its parameter types (in
 /// order) paired with its quantified type parameters and their bounds. Taken
 /// per fixpoint round in [`propagate_call_site_bounds`] so a caller can read a
@@ -7216,6 +7411,7 @@ type CalleeSig = (Vec<IrType>, Vec<(Symbol, BoundSet)>);
 /// that itself forwards its generic acquires the bound only once `toMaybe` has
 /// acquired it. Termination is guaranteed — each iteration only ever SETS bits
 /// in a finite [`BoundSet`], so the total bit count is monotone and bounded.
+#[allow(clippy::too_many_lines)] // A fixpoint pass with per-caller seeding + nested call walk.
 fn propagate_call_site_bounds(funcs: &mut [Func]) {
     // Callee lookup by raw id, plus a snapshot of each callee's (param types,
     // type-param bounds) so a caller can read a callee's obligations without
@@ -7241,10 +7437,26 @@ fn propagate_call_site_bounds(funcs: &mut [Func]) {
 
         let mut changed = false;
         for caller in funcs.iter_mut() {
-            // The caller's own bare-tvar map: which parameter binder carries
-            // which of the caller's tvars bare. Computed once per caller.
+            // The caller's own bare-tvar map: which binder carries which of the
+            // caller's tvars bare. Seeded from the parameters (a param binder
+            // carries a tvar its declared type reaches bare), then extended with
+            // every `let`/`case`-bound LOCAL binder attributed back to the
+            // caller tvars its bound value data-flow-derives from — so a tvar
+            // reaching a bound-obliging callee slot through a local value, not
+            // just a forwarded param, still inherits the callee's bound.
             let caller_params: Vec<(Symbol, IrType)> = caller.params.clone();
             let caller_tvars: Vec<Symbol> = caller.type_params.iter().map(|(tv, _)| *tv).collect();
+
+            let mut binder_tvars: std::collections::HashMap<Symbol, Vec<Symbol>> =
+                std::collections::HashMap::new();
+            for (b, bty) in &caller_params {
+                for tv in &caller_tvars {
+                    if ir_type_generic_reaches_bare(bty, *tv) {
+                        binder_tvars.entry(*b).or_default().push(*tv);
+                    }
+                }
+            }
+            collect_local_derived_tvars(&caller.body, &mut binder_tvars);
 
             let mut calls: Vec<(FuncId, &[Expr])> = Vec::new();
             collect_user_calls(&caller.body, &mut calls);
@@ -7283,25 +7495,23 @@ fn propagate_call_site_bounds(funcs: &mut [Func]) {
                             continue;
                         }
                         for binder in &binders {
-                            // Which caller tvar does this binder carry bare? Only
-                            // those can inherit the callee bound.
-                            let Some((_, binder_ty)) =
-                                caller_params.iter().find(|(b, _)| b == binder)
-                            else {
+                            // Which caller tvars does this binder carry — as a
+                            // parameter whose type reaches the tvar bare, OR as a
+                            // local `let`/`case`-bound value data-flow-derived
+                            // from such a parameter? Only those inherit the bound.
+                            let Some(tvs) = binder_tvars.get(binder) else {
                                 continue;
                             };
-                            for tv in &caller_tvars {
-                                if ir_type_generic_reaches_bare(binder_ty, *tv) {
-                                    let slot = add.entry(*tv).or_insert(BoundSet::UNBOUNDED);
-                                    if gbound.has_sync() {
-                                        *slot = slot.with_sync();
-                                    }
-                                    if gbound.has_send() {
-                                        *slot = slot.with_send();
-                                    }
-                                    if gbound.has_static() {
-                                        *slot = slot.with_static();
-                                    }
+                            for tv in tvs {
+                                let slot = add.entry(*tv).or_insert(BoundSet::UNBOUNDED);
+                                if gbound.has_sync() {
+                                    *slot = slot.with_sync();
+                                }
+                                if gbound.has_send() {
+                                    *slot = slot.with_send();
+                                }
+                                if gbound.has_static() {
+                                    *slot = slot.with_static();
                                 }
                             }
                         }

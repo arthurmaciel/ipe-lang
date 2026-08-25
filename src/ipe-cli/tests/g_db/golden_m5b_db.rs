@@ -382,6 +382,28 @@ fn db_store_generic_forwarder() {
     assert_runs_and_matches_oracle("db_store_generic_forwarder");
 }
 
+/// SEAL regression: cross-call auto-trait-bound propagation through a LOCALLY-
+/// bound value rather than a forwarded parameter.
+/// `runFirst conn qs = case List.head qs of Just q -> Store.toList conn q; …` is
+/// generic over the row type; the caller's tvar reaches `Store.toList`'s bounded
+/// `Query a` slot only through `q`, bound by the `Just q` arm — not a caller
+/// parameter. A propagation keyed on parameter membership never attributed the
+/// tvar to `q`, so the emitted `main_run_first<T1>` — missing `Sync` —
+/// cargo-failed `E0277` (`T1 cannot be shared between threads`) though `ipe`
+/// reported exit 0: an exit-0-then-cargo-fail SEAL break, the sibling of the
+/// parameter-forwarding class. `runLet` binds the query with a `let` instead,
+/// proving the local-derived trace covers both binding forms. Both forwarders
+/// must stay GENERIC (`<T1: 'static + Send + Sync + Clone>`, never monomorphized)
+/// AND the emitted crate must `cargo build` and run. Two lines: `first:2`,
+/// `let:2`.
+///
+/// Sanctioned divergence: Ipê emits Rust+sqlx; `Ipe.Db.Store` is an Ipê-only
+/// addition with no reference counterpart; oracle is Ipê's own output.
+#[test]
+fn db_store_local_derived_forwarder() {
+    assert_runs_and_matches_oracle("db_store_local_derived_forwarder");
+}
+
 /// SEAL regression: a generic HOF (`Result.map`) applied to a callee whose
 /// return type is a CROSS-MODULE concrete stdlib type (`Ipe.Db.Store.Store`).
 /// Before the fix the `Result.map` type variable erased to `JsonVal` in emitted
