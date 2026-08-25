@@ -1,6 +1,5 @@
 module Lib.Db exposing
-    ( conn
-    , User
+    ( User
     , Session
     , Note
     , SessionUser
@@ -10,28 +9,11 @@ module Lib.Db exposing
     , sessionUserCodec
     )
 
-import Ipe.System as System
-import Ipe.Task as Task
-import Ipe.Error as Error exposing (Error)
-import Ipe.Io as Io
 import Ipe.Codec as Codec exposing (Codec)
-import Ipe.Db as Db
 import Ipe.Db.Store as Store exposing (Store)
+import Ipe.Error as Error exposing (Error)
+import Ipe.Result as Result
 
-
--- One memoised connection (CAF) shared by every Store op. Db.connect reads
--- SKY_DB_PATH (default skynotes.db).
-conn =
-    case Task.run (Db.connect ()) of
-
-        Ok c ->
-            c
-
-        Err e ->
-            do
-                Io.println
-                    ("[FATAL] Cannot open the database: " ++ Error.toString e)
-                System.exit 1
 
 -- ── Typed rows ──────────────────────────────────────────────────────
 type alias User =
@@ -60,53 +42,79 @@ type alias Note =
     }
 
 
--- ── Stores (one Codec.auto each drives DDL + reads + writes) ─────────
-userStore : Store User
+-- ── Codec witnesses (top-level annotated blanks, required by Codec.auto) ──
+blankUser : User
+blankUser =
+    { id = 0
+    , email = ""
+    , passwordHash = ""
+    , verified = 0
+    , verificationToken = ""
+    , createdAt = ""
+    }
+
+blankSession : Session
+blankSession =
+    { id = 0, userId = 0, token = "", createdAt = "" }
+
+blankNote : Note
+blankNote =
+    { id = 0
+    , userId = 0
+    , title = ""
+    , content = ""
+    , createdAt = ""
+    , updatedAt = ""
+    }
+
+blankSessionUser : SessionUser
+blankSessionUser =
+    { id = 0, email = "", createdAt = "" }
+
+
+-- ── Stores ─────────────────────────────────────────────────────────
+-- Each store is exposed as `Result Error (Store a)` so callers can
+-- sequence with `Task.fromResult` and propagate failures cleanly.
+
+userStore : Result Error (Store User)
 userStore =
-    Store.fromCodec
-        "users"
-        (Codec.auto
-            { id = 0
-            , email = ""
-            , passwordHash = ""
-            , verified = 0
-            , verificationToken = ""
-            , createdAt = ""
-            })
-        |> Store.serial "id"
-        |> Store.unique "email"
-        |> Store.defaultInt "verified" 0
-        |> Store.defaultNow "createdAt"
+    case Store.fromCodec "users" (Codec.auto blankUser) of
+        Err e -> Err e
+        Ok s0 ->
+            let s1 = Store.serial .id s0
+                s2 = Store.unique .email s1
+                s3 = Store.defaultInt .verified 0 s2
+                s4 = Store.defaultNow .createdAt s3
+            in
+                Ok s4
 
 
-sessionStore : Store Session
+sessionStore : Result Error (Store Session)
 sessionStore =
-    Store.fromCodec
-        "sessions"
-        (Codec.auto { id = 0, userId = 0, token = "", createdAt = "" })
-        |> Store.serial "id"
-        |> Store.unique "token"
-        |> Store.defaultNow "createdAt"
+    case Store.fromCodec "sessions" (Codec.auto blankSession) of
+        Err e -> Err e
+        Ok s0 ->
+            let s1 = Store.serial .id s0
+                s2 = Store.unique .token s1
+                s3 = Store.defaultNow .createdAt s2
+            in
+                Ok s3
 
 
-noteStore : Store Note
+noteStore : Result Error (Store Note)
 noteStore =
-    Store.fromCodec
-        "notes"
-        (Codec.auto
-            { id = 0
-            , userId = 0
-            , title = ""
-            , content = ""
-            , createdAt = ""
-            , updatedAt = ""
-            })
-        |> Store.serial "id"
-        |> Store.defaultText "content" ""
-        |> Store.defaultNow "createdAt"
-        |> Store.touchOnUpdate "updatedAt"
+    case Store.fromCodec "notes" (Codec.auto blankNote) of
+        Err e -> Err e
+        Ok s0 ->
+            let s1 = Store.serial .id s0
+                s2 = Store.defaultText .content "" s1
+                s3 = Store.defaultNow .createdAt s2
+                s4 = Store.touchOnUpdate .updatedAt s3
+            in
+                Ok s4
 
--- ── JOIN projection (users ⋈ sessions), decoded by Store.selectRaw ──
+
+-- ── JOIN projection (users ⋈ sessions) ──────────────────────────────
 type alias SessionUser =
     { id : Int
     , email : String
@@ -116,4 +124,4 @@ type alias SessionUser =
 
 sessionUserCodec : Codec SessionUser
 sessionUserCodec =
-    Codec.auto { id = 0, email = "", createdAt = "" }
+    Codec.auto blankSessionUser

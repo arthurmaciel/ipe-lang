@@ -14,24 +14,20 @@ module Lib.View exposing
 
 import Ipe.Maybe as Maybe
 import Ipe.List as List
-import Ipe.Dict as Dict
 import Ipe.String as String
 import Ipe.Html exposing (..)
 import Ipe.Html.Attributes as Attr
 import Ipe.Html.Events as Events
+import Ipe.Html.Unsafe as HtmlUnsafe
 import Ipe.Css as Css
 
 
 -- ============================================================
 -- Helpers
 -- ============================================================
-getField field row =
-    Maybe.withDefault "" (Dict.get field row)
-
-
 errorBanner msg =
     if msg == "" then
-        raw ""
+        span [] []
 
     else
         div [ Attr.class "error" ] [ text msg ]
@@ -133,42 +129,28 @@ appStyles _ =
         [ Css.rule
               "*"
               [ Css.margin (Css.zero)
-              -- Layout
               , Css.padding (Css.zero)
-              -- Navigation
               , Css.boxSizing Css.BorderBox
               ]
         , Css.rule
               "body"
-              -- Buttons
               [ Css.fontFamily (Css.systemFont)
-              -- Forms
               , Css.backgroundColor (pageBg ())
-              -- Alerts
               , Css.color (textColor ())
-              -- Note cards
               , Css.lineHeight (Css.num 1.6)
               ]
         , Css.rule
               ".container"
-              -- Headings & links
               [ Css.maxWidth (Css.px 800)
-              -- Hero
               , Css.margin2 (Css.zero) (Css.auto)
-              -- Features grid
               , Css.padding (sp 6)
               ]
         , Css.rule
               ".card"
-              -- Split view (editor + preview)
               [ Css.backgroundColor (cardBg ())
-              -- Markdown rendered content
               , Css.borderRadius (radiusLg ())
-              -- Auth pages
               , Css.padding (sp 8)
-              -- Utility classes
               , cardShadow ()
-              -- Responsive
               , Css.marginBottom (sp 5)
               ]
         , Css.rule
@@ -523,20 +505,21 @@ fullWidthBlock _ =
 -- ============================================================
 -- Layout
 -- ============================================================
-layout title navEl content =
+layout : String -> Html () -> Html () -> String
+layout pageTitle navEl content =
     render
         (doctype
             [ htmlNode
-                  [ Attr.lang "en" ]
+                  [ Attr.attribute "lang" "en" ]
                   [ headNode
                         []
-                        [ meta [ Attr.charset "UTF-8" ]
+                        [ meta [ Attr.attribute "charset" "UTF-8" ]
                         , meta
                               [ Attr.name "viewport"
-                              , Attr.content
+                              , Attr.attribute "content"
                                     "width=device-width,initial-scale=1.0"
                               ]
-                        , titleNode (title ++ " - SkyNotes")
+                        , titleNode (pageTitle ++ " - SkyNotes")
                         , styleNode [] (appStyles ())
                         ]
                   , body
@@ -592,11 +575,11 @@ navAuth email =
 -- ============================================================
 -- Reusable components
 -- ============================================================
-featureCard icon title description =
+featureCard icon featureTitle description =
     div
         [ Attr.class "feature" ]
         [ div [ Attr.class "feature-icon" ] [ text icon ]
-        , h3 [] [ text title ]
+        , h3 [] [ text featureTitle ]
         , p [] [ text description ]
         ]
 
@@ -609,41 +592,41 @@ formGroup labelText inputEl =
 -- Public pages
 -- ============================================================
 landingPage _ =
-    let
-        heroBtnStyle =
-            Attr.style
-                (Css.styles
-                    [ Css.padding2 (Css.px 14) (sp 8)
-                    , Css.fontSize (Css.px 16)
-                    ])
-    in
-        layout
-            "Welcome"
-            (navGuest ())
-            (div
-                [ Attr.class "hero" ]
-                [ h1 [] [ text "SkyNotes" ]
-                , p
-                      []
-                      [ text
-                            "A markdown note-taking app built with the Sky language"
-                      ]
-                , div
-                      []
-                      [ a
-                            [ Attr.href "/auth/sign-up"
-                            , Attr.class "btn"
-                            , heroBtnStyle
-                            , Attr.style (Css.styles [ Css.marginRight (sp 3) ])
-                            ]
-                            [ text "Get Started" ]
-                      , a
-                            [ Attr.href "/auth/sign-in"
-                            , Attr.class "btn btn-outline"
-                            , heroBtnStyle
-                            ]
-                            [ text "Sign In" ]
-                      ]
+    layout
+        "Welcome"
+        (navGuest ())
+        (div
+            [ Attr.class "hero" ]
+            [ h1 [] [ text "SkyNotes" ]
+            , p
+                  []
+                  [ text
+                        "A markdown note-taking app built with the Ipê language"
+                  ]
+            , div
+                  []
+                  [ a
+                        [ Attr.href "/auth/sign-up"
+                        , Attr.class "btn"
+                        , Attr.style
+                              (Css.styles
+                                  [ Css.padding2 (Css.px 14) (sp 8)
+                                  , Css.fontSize (Css.px 16)
+                                  , Css.marginRight (sp 3)
+                                  ])
+                        ]
+                        [ text "Get Started" ]
+                  , a
+                        [ Attr.href "/auth/sign-in"
+                        , Attr.class "btn btn-outline"
+                        , Attr.style
+                              (Css.styles
+                                  [ Css.padding2 (Css.px 14) (sp 8)
+                                  , Css.fontSize (Css.px 16)
+                                  ])
+                        ]
+                        [ text "Sign In" ]
+                  ]
                 , div
                       [ Attr.class "features" ]
                       [ featureCard
@@ -657,7 +640,7 @@ landingPage _ =
                       , featureCard
                             "F"
                             "Fast"
-                            "Built with Sky, compiled to native Go. Backed by SQLite for reliable storage."
+                            "Built with Ipê, compiled to native Rust. Backed by SQLite for reliable storage."
                       ]
                 ])
 
@@ -671,7 +654,7 @@ signInPage errorMsg =
             [ h2 [] [ text "Sign In" ]
             , errorBanner errorMsg
             , form
-                  [ Attr.method "POST", Attr.action "/auth/sign-in" ]
+                  [ Attr.attribute "method" "POST", Attr.attribute "action" "/auth/sign-in" ]
                   [ formGroup
                         "Email"
                         (input
@@ -712,7 +695,7 @@ signUpPage errorMsg =
             [ h2 [] [ text "Create Account" ]
             , errorBanner errorMsg
             , form
-                  [ Attr.method "POST", Attr.action "/auth/sign-up" ]
+                  [ Attr.attribute "method" "POST", Attr.attribute "action" "/auth/sign-up" ]
                   [ formGroup
                         "Email"
                         (input
@@ -727,7 +710,7 @@ signUpPage errorMsg =
                             [ Attr.type_ "password"
                             , Attr.name "password"
                             , Attr.placeholder "Min 8 characters"
-                            , Attr.minlength 8
+                            , Attr.attribute "minlength" "8"
                             , Attr.required True
                             ])
                   , formGroup
@@ -798,7 +781,7 @@ forgotPasswordPage errorMsg =
                   [ text "Enter your email and we'll send you a reset link." ]
             , errorBanner errorMsg
             , form
-                  [ Attr.method "POST", Attr.action "/auth/forgot-password" ]
+                  [ Attr.attribute "method" "POST", Attr.attribute "action" "/auth/forgot-password" ]
                   [ formGroup
                         "Email"
                         (input
@@ -877,6 +860,8 @@ verifyResultPage isSuccess message =
 -- ============================================================
 -- Notes pages
 -- ============================================================
+
+-- noteCard returns an Html node — no string concatenation.
 noteCard note =
     let
         noteTitle = note.title
@@ -890,69 +875,68 @@ noteCard note =
             else
                 content
     in
-        render
-            (div
-                [ Attr.class "card note-card" ]
-                [ a
-                      [ Attr.href ("/notes/view?id=" ++ noteId) ]
-                      [ h3
-                            [ Attr.style
-                                  (Css.styles [ Css.marginBottom (Css.px 4) ])
-                            ]
-                            [ text noteTitle ]
-                      , p
-                            [ Attr.class "note-meta" ]
-                            [ text ("Created " ++ date) ]
-                      , p [ Attr.class "note-preview" ] [ text preview ]
-                      ]
-                ])
+        div
+            [ Attr.class "card note-card" ]
+            [ a
+                  [ Attr.href ("/notes/view?id=" ++ noteId) ]
+                  [ h3
+                        [ Attr.style
+                              (Css.styles [ Css.marginBottom (Css.px 4) ])
+                        ]
+                        [ text noteTitle ]
+                  , p
+                        [ Attr.class "note-meta" ]
+                        [ text ("Created " ++ date) ]
+                  , p [ Attr.class "note-preview" ] [ text preview ]
+                  ]
+            ]
 
 
 notesListPage email notes =
     let
-        noteCards = String.join "" (List.map noteCard notes)
         headerRow =
-            render
-                (div
-                    [ Attr.class "header-row" ]
-                    [ h1 [] [ text "My Notes" ]
-                    , a
-                          [ Attr.href "/notes/new", Attr.class "btn" ]
-                          [ text "+ New Note" ]
-                    ])
+            div
+                [ Attr.class "header-row" ]
+                [ h1 [] [ text "My Notes" ]
+                , a
+                      [ Attr.href "/notes/new", Attr.class "btn" ]
+                      [ text "+ New Note" ]
+                ]
         content =
             if List.isEmpty notes then
-                headerRow
-                    ++ render
-                           (div
-                               [ Attr.class "card empty-state" ]
-                               [ p
-                                     [ Attr.style
-                                           (Css.styles
-                                               [ Css.fontSize (Css.em 1.2)
-                                               , Css.marginBottom (sp 2)
-                                               ])
-                                     ]
-                                     [ text "No notes yet" ]
-                               , p
-                                     [ Attr.style
-                                           (Css.styles
-                                               [ Css.marginBottom (sp 5) ])
-                                     ]
-                                     [ text
-                                           "Create your first markdown note to get started."
-                                     ]
-                               , a
-                                     [ Attr.href "/notes/new"
-                                     , Attr.class "btn"
-                                     ]
-                                     [ text "Create Your First Note" ]
-                               ])
+                div
+                    []
+                    [ headerRow
+                    , div
+                          [ Attr.class "card empty-state" ]
+                          [ p
+                                [ Attr.style
+                                      (Css.styles
+                                          [ Css.fontSize (Css.em 1.2)
+                                          , Css.marginBottom (sp 2)
+                                          ])
+                                ]
+                                [ text "No notes yet" ]
+                          , p
+                                [ Attr.style
+                                      (Css.styles
+                                          [ Css.marginBottom (sp 5) ])
+                                ]
+                                [ text
+                                      "Create your first markdown note to get started."
+                                ]
+                          , a
+                                [ Attr.href "/notes/new"
+                                , Attr.class "btn"
+                                ]
+                                [ text "Create Your First Note" ]
+                          ]
+                    ]
 
             else
-                headerRow ++ noteCards
+                div [] (headerRow :: List.map noteCard notes)
     in
-        layout "My Notes" (navAuth email) (raw content)
+        layout "My Notes" (navAuth email) content
 
 
 noteViewPage email note =
@@ -991,11 +975,11 @@ noteViewPage email note =
                                   ]
                                   [ text "Edit" ]
                             , form
-                                  [ Attr.method "POST"
-                                  , Attr.action ("/notes/delete?id=" ++ noteId)
+                                  [ Attr.attribute "method" "POST"
+                                  , Attr.attribute "action" ("/notes/delete?id=" ++ noteId)
                                   , Attr.style
                                         (Css.styles [ Css.display Css.Inline ])
-                                  , Events.onSubmit
+                                  , Attr.attribute "onsubmit"
                                         "return confirm('Delete this note?')"
                                   ]
                                   [ button
@@ -1027,11 +1011,8 @@ noteViewPage email note =
                             "https://cdn.jsdelivr.net/npm/marked/marked.min.js"
                       ]
                       []
-                , script
-                      []
-                      [ raw
-                            "window.addEventListener('DOMContentLoaded',function(){document.getElementById('rendered').innerHTML=marked.parse(document.getElementById('raw-md').value);});"
-                      ]
+                , HtmlUnsafe.unsafeScript
+                      "window.addEventListener('DOMContentLoaded',function(){document.getElementById('rendered').innerHTML=marked.parse(document.getElementById('raw-md').value);});"
                 ])
 
 
@@ -1061,7 +1042,7 @@ noteFormPage email noteTitle content noteId isEdit =
                       [ Attr.style (Css.styles [ Css.marginBottom (sp 6) ]) ]
                       [ text pageTitle ]
                 , form
-                      [ Attr.method "POST", Attr.action formAction ]
+                      [ Attr.attribute "method" "POST", Attr.attribute "action" formAction ]
                       [ formGroup
                             "Title"
                             (input
@@ -1120,11 +1101,8 @@ noteFormPage email noteTitle content noteId isEdit =
                             "https://cdn.jsdelivr.net/npm/marked/marked.min.js"
                       ]
                       []
-                , script
-                      []
-                      [ raw
-                            "window.addEventListener('DOMContentLoaded',function(){var e=document.getElementById('editor'),p=document.getElementById('preview');function u(){p.innerHTML=marked.parse(e.value)}e.addEventListener('input',u);u();});"
-                      ]
+                , HtmlUnsafe.unsafeScript
+                      "window.addEventListener('DOMContentLoaded',function(){var e=document.getElementById('editor'),p=document.getElementById('preview');function u(){p.innerHTML=marked.parse(e.value)}e.addEventListener('input',u);u();});"
                 ])
 
 
