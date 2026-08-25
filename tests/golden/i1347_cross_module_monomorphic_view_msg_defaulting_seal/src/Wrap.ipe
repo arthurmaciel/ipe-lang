@@ -1,0 +1,13 @@
+module Wrap exposing (wrapped)
+
+import Ipe.Html as Html exposing (Html)
+import Lib exposing (sharedRow)
+
+
+-- The SOLE cross-module use of `Lib.sharedRow`: it is threaded into another
+-- unannotated message-free view. This pins `sharedRow`'s `msg` to exactly one
+-- type -- `wrapped`'s own phantom `msg` -- which is itself never fixed to a
+-- concrete `Msg` and defaults to `()`. A single monomorphic use, NOT
+-- cross-module message-polymorphism.
+wrapped =
+    Html.div [] [ sharedRow, Html.text "wrap" ]

@@ -1,0 +1,12 @@
+module Lib exposing (sharedRow)
+
+import Ipe.Html as Html exposing (Html)
+
+
+-- Unannotated, message-free view helper exported for reuse. Used from ONE other
+-- module, threaded into another still-message-free helper (`Wrap.wrapped`) --
+-- so its phantom `msg` is fixed to a SINGLE monomorphic type (that helper's own
+-- `msg`, itself message-free and defaulted to `()`). The discharge outcome is
+-- single-monomorphic-not-polymorphic, so the `msg` defaults to `()`.
+sharedRow =
+    Html.div [] [ Html.text "shared" ]
