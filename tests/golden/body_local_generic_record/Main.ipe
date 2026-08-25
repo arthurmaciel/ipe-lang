@@ -1,0 +1,24 @@
+module Main exposing (main)
+
+import Ipe.Io as Io
+import Ipe.String as String
+
+
+-- A single-field record whose field type is the enclosing function's type
+-- variable `a`, constructed and read entirely inside the body. `wrap`'s
+-- signature is `a -> a`, so the record shape `{ q : a }` appears in NO
+-- signature — it lives only in this `let`. A record of any arity (one field
+-- included) is valid Ipe, so the backend must synthesise the generic struct
+-- `struct RecQ<T1> { q: T1 }` for it rather than fail to find one.
+wrap : a -> a
+wrap value =
+    let
+        r =
+            { q = value }
+    in
+    r.q
+
+
+main : Task Error ()
+main =
+    Io.println (String.fromInt (wrap 7))

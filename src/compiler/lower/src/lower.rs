@@ -2531,6 +2531,166 @@ fn program_type_mentions(
         })
 }
 
+/// Push every closed record shape the expression tree's type-carrying slots
+/// hold (a record literal's own `ty`, a field-access `field_ty`, a lambda's
+/// param/return types, …) into `out`, deduping through `seen`.
+///
+/// The purpose is to surface a GENERIC record that lives only in a function
+/// body — one appearing in no signature, which [`Lowerer::collect_record_types`]
+/// deliberately skips (a var-bearing region record has no live poly context to
+/// name it). Its shape is already fully formed here, each field carrying its
+/// solved [`IrType::Generic`], so it feeds the backend's record-shape prepass
+/// directly; the backend recurses into each pushed shape to synthesise (and
+/// alpha-reconcile) the generic struct.
+///
+/// A record whose IR embeds a function type is NOT surfaced — the same G-b gate
+/// [`Lowerer::collect_records_in_ty`] applies: the `Web.app` cfg record's
+/// `Box<dyn Fn>` fields cannot back a derivable struct, and it is consumed
+/// structurally rather than materialised.
+///
+/// Enumerated exhaustively (no `_` catch-all in the type-position arm) so a new
+/// type-carrying [`Expr`] variant is a compile error here, never a silently
+/// missed shape (SEAL discipline, matching [`expr_type_mentions`]).
+#[allow(clippy::too_many_lines)] // two exhaustive per-variant `Expr` matches (types-here + recurse) push it past 100
+fn collect_body_record_shapes(
+    expr: &Expr,
+    out: &mut Vec<IrType>,
+    seen: &mut std::collections::HashSet<IrType>,
+) {
+    let mut consider = |ty: &IrType| {
+        if matches!(ty, IrType::Record(_)) && !ir_contains_fun(ty) && seen.insert(ty.clone()) {
+            out.push(ty.clone());
+        }
+    };
+    // Types carried directly at this node — the same positions `expr_type_mentions`
+    // visits.
+    match expr {
+        Expr::List { elem, .. } => consider(elem),
+        Expr::Access { field_ty, .. } => consider(field_ty),
+        Expr::Lambda { params, ret, .. } | Expr::SharedLambda { params, ret, .. } => {
+            for (_, t) in params {
+                consider(t);
+            }
+            consider(ret);
+        }
+        Expr::FuncValue { ty, .. } => consider(ty),
+        Expr::TailLoop { params, .. } => {
+            for (_, t) in params {
+                consider(t);
+            }
+        }
+        Expr::Record { ty, .. } => {
+            if let Some(t) = ty {
+                consider(t);
+            }
+        }
+        Expr::Int(_)
+        | Expr::Bool(_)
+        | Expr::Float(_)
+        | Expr::Str(_)
+        | Expr::PathLit(_)
+        | Expr::Char(_)
+        | Expr::Unit
+        | Expr::Var(_)
+        | Expr::CloneVar(_)
+        | Expr::Ctor { .. }
+        | Expr::BinOp { .. }
+        | Expr::Let { .. }
+        | Expr::Destructure { .. }
+        | Expr::If { .. }
+        | Expr::Match(_)
+        | Expr::Call { .. }
+        | Expr::Tuple(_)
+        | Expr::Cons { .. }
+        | Expr::ListIndexClone { .. }
+        | Expr::ListLenCheck { .. }
+        | Expr::Update { .. }
+        | Expr::Apply { .. }
+        | Expr::TaskSeq { .. }
+        | Expr::TailRecur { .. } => {}
+    }
+    // Recurse into every child expression.
+    match expr {
+        Expr::BinOp { lhs, rhs, .. } => {
+            collect_body_record_shapes(lhs, out, seen);
+            collect_body_record_shapes(rhs, out, seen);
+        }
+        Expr::Let { value, body, .. } | Expr::Destructure { value, body, .. } => {
+            collect_body_record_shapes(value, out, seen);
+            collect_body_record_shapes(body, out, seen);
+        }
+        Expr::If { cond, then_, else_ } => {
+            collect_body_record_shapes(cond, out, seen);
+            collect_body_record_shapes(then_, out, seen);
+            collect_body_record_shapes(else_, out, seen);
+        }
+        Expr::Match(m) => {
+            collect_body_record_shapes(m.scrutinee(), out, seen);
+            for arm in m.arms() {
+                collect_body_record_shapes(&arm.body, out, seen);
+                if let Some(g) = arm.guard.as_ref() {
+                    collect_body_record_shapes(g, out, seen);
+                }
+            }
+        }
+        Expr::Call { args, .. }
+        | Expr::Tuple(args)
+        | Expr::Ctor { args, .. }
+        | Expr::TailRecur { args } => {
+            for a in args {
+                collect_body_record_shapes(a, out, seen);
+            }
+        }
+        Expr::List { items, .. } => {
+            for e in items {
+                collect_body_record_shapes(e, out, seen);
+            }
+        }
+        Expr::Cons { head, tail } => {
+            collect_body_record_shapes(head, out, seen);
+            collect_body_record_shapes(tail, out, seen);
+        }
+        Expr::ListIndexClone { list, .. } | Expr::ListLenCheck { list, .. } => {
+            collect_body_record_shapes(list, out, seen);
+        }
+        Expr::Record { fields, .. } => {
+            for (_, e) in fields {
+                collect_body_record_shapes(e, out, seen);
+            }
+        }
+        Expr::Update { record, fields } => {
+            collect_body_record_shapes(record, out, seen);
+            for (_, e) in fields {
+                collect_body_record_shapes(e, out, seen);
+            }
+        }
+        Expr::Lambda { body, .. }
+        | Expr::SharedLambda { body, .. }
+        | Expr::TailLoop { body, .. } => collect_body_record_shapes(body, out, seen),
+        Expr::Apply { func, args } => {
+            collect_body_record_shapes(func, out, seen);
+            for a in args {
+                collect_body_record_shapes(a, out, seen);
+            }
+        }
+        Expr::TaskSeq { effect, rest } => {
+            collect_body_record_shapes(effect, out, seen);
+            collect_body_record_shapes(rest, out, seen);
+        }
+        Expr::Access { record, .. } => collect_body_record_shapes(record, out, seen),
+        Expr::Int(_)
+        | Expr::Bool(_)
+        | Expr::Float(_)
+        | Expr::Str(_)
+        | Expr::PathLit(_)
+        | Expr::Char(_)
+        | Expr::Unit
+        | Expr::Var(_)
+        | Expr::CloneVar(_)
+        | Expr::FuncValue { .. } => {}
+    }
+}
+
 fn ir_contains_fun(ty: &IrType) -> bool {
     match ty {
         // A curried `FnOnce` chain is the same boxed-closure family as `Fun`; the
@@ -13701,7 +13861,29 @@ impl<'a> Lowerer<'a> {
         // cross-module HOF), rendering the variant's field type needs the
         // `SqlValue` Rust name, so the injection must follow type mentions too —
         // the same defense the `server`/`http` type-mention scans apply.
-        let records = self.collect_record_types().map_err(|d| (d, Vec::new()))?;
+        let mut records = self.collect_record_types().map_err(|d| (d, Vec::new()))?;
+
+        // A body-local record literal whose shape carries a type variable — a
+        // GENERIC record that lives only inside a function body, appearing in no
+        // signature (`let r = { q = first } in Store.toList conn r.q`, where
+        // `first : Query a`). `collect_record_types` deliberately skips a
+        // var-bearing region/env record because a var there has no live per-def
+        // poly context to name it; that skip is sound ONLY for a generic record
+        // that ALSO reaches the backend through a (polymorphic) signature. A
+        // body-local generic literal breaks that premise: its shape is in no
+        // signature, so the backend would find no synthesised struct for it and
+        // ICE (IPE-I0001). The authoritative shape, already carrying each field's
+        // solved `IrType::Generic(<source symbol>)`, is right here in the lowered
+        // body's type-carrying expression slots — so surface it from there. The
+        // backend's own record-shape prepass then recurses into these to
+        // synthesise (and, across defs, alpha-reconcile) the generic struct, the
+        // same struct a signature-surfaced generic record gets.
+        {
+            let mut seen: std::collections::HashSet<IrType> = records.iter().cloned().collect();
+            for func in &funcs {
+                collect_body_record_shapes(&func.body, &mut records, &mut seen);
+            }
+        }
 
         let sqlvalue_sym = self.builtins.sqlvalue;
         let sqlfield_sym = self.builtins.sqlfield;
