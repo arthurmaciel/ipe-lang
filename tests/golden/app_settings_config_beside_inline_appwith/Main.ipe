@@ -1,0 +1,61 @@
+module Main exposing (main)
+
+-- A top-level `config` binding alongside an inline `Web.appWith` call. The
+-- inline `appWith` already carries its own settings list, so the sibling
+-- `config` binding can never be threaded in — its settings would be silently
+-- dropped. This MUST be rejected at ipe time with IPE-N0043.
+
+import Ipe.Tea.Web as Web
+import Ipe.Ui as Ui
+import Ipe.Tea.Web.Cmd
+import Ipe.Tea.Web.Sub
+import Ipe.App as App
+import Ipe.Host as Host
+import Ipe.Db as Db
+
+
+type Msg
+    = NoOp
+
+
+type alias Model =
+    { count : Int }
+
+
+config =
+    [ Host.bind Host.loopback
+    , Db.url (App.fromEnv "DATABASE_URL")
+    ]
+
+
+init : a -> ( Model, Cmd Msg )
+init _req =
+    ( { count = 0 }, Cmd.none )
+
+
+update : Msg -> Model -> ( Model, Cmd Msg )
+update _msg model =
+    ( model, Cmd.none )
+
+
+view : Model -> Element Msg
+view _model =
+    Ui.text "hello"
+
+
+subscriptions : Model -> Sub Msg
+subscriptions _model =
+    Sub.none
+
+
+main =
+    Web.appWith
+        [ Host.bind Host.loopback
+        ]
+        { init = init
+        , update = update
+        , view = view
+        , subscriptions = subscriptions
+        , routes = []
+        , notFound = NoOp
+        }

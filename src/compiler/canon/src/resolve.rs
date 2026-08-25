@@ -1289,15 +1289,14 @@ const CONFIG_BINDING: &str = "config";
 /// When a module declares both a top-level `config` binding and a `main` whose
 /// head is a settings-less `Web` entry (`Web.app` / `Web.appRouted`), rewrite the
 /// entry to `Web.appWith config <cfg>`: the `config` value becomes the settings
-/// argument the runtime installs. Inline `Web.appWith [ … ] { … }` keeps working
-/// unchanged (the entry already carries its settings, so it is not rewritten and
-/// `config` is treated as already-consumed).
+/// argument the runtime installs.
 ///
-/// A `config` binding that reaches no app entry — because `main` is a Program, a
-/// non-`Web` shape, or absent — is inert data whose settings the runtime never
-/// installs; it fails closed with IPE-N0043 (the discarded-config lint, mirroring
-/// the discarded-`Task` IPE-L0141 posture) rather than compiling into an app that
-/// silently ignores its own configuration.
+/// A `config` binding that reaches no app entry is rejected (IPE-N0043). This
+/// includes: `main` being a Program (non-`Web` shape, or absent), and `main`
+/// already being an inline `Web.appWith [ … ] { … }` — in the latter case the
+/// inline settings take effect and the sibling `config` would be silently dropped,
+/// so the compiler rejects the combination rather than producing an app that
+/// ignores its own `config` binding.
 ///
 /// # Errors
 /// [`Diagnostic::Name`] (IPE-N0043) when a `config` binding is declared but never
@@ -1389,17 +1388,17 @@ const fn discarded_config(span: Span) -> Diagnostic {
 }
 
 /// Rewrite a settings-less `Web` entry at the head of `body` to thread `config`,
-/// returning whether the `config` binding is now consumed by an app entry.
+/// returning whether the `config` binding was threaded into an app entry.
 ///
-/// Returns `true` when:
-/// * the head is `Web.app` / `Web.appRouted` applied to its single cfg record —
-///   rewritten in place to `Web.appWith config <cfg>` (config threaded); or
-/// * the head is already `Web.appWith` — the entry carries its own settings, so
-///   `config` counts as consumed (an inline settings list is the author's choice)
-///   and nothing is rewritten.
+/// Returns `true` when the head is `Web.app` / `Web.appRouted` applied to its
+/// single cfg record — rewritten in place to `Web.appWith config <cfg>`.
 ///
-/// Returns `false` when the head is not a `Web` app entry (a Program, a non-`Web`
-/// shape, or an unrecognised form) — `config` reaches no entry and is discarded.
+/// Returns `false` when:
+/// * the head is already `Web.appWith` — the entry carries its own inline
+///   settings list, so a sibling `config` binding has nowhere to go and is
+///   discarded (caller emits IPE-N0043); or
+/// * the head is not a `Web` app entry at all (a Program, a non-`Web` shape,
+///   or an unrecognised form).
 fn thread_config_into_entry(
     body: &mut canon::Expr,
     names: &ConfigThreadNames,
@@ -1420,10 +1419,11 @@ fn thread_config_into_entry(
             if *module != names.web {
                 return false; // a non-`Web` shape entry does not thread `config`.
             }
-            // Already carries its own settings list — `config` is consumed by the
-            // author's explicit inline choice; leave the entry untouched.
+            // Inline `Web.appWith` already carries its own settings list.
+            // A sibling `config` binding would be silently dropped — reject it
+            // (caller emits IPE-N0043) rather than letting settings go missing.
             if *name == names.app_with {
-                return true;
+                return false;
             }
             // Settings-less `Web` entry with exactly its cfg record: rewrite the
             // callee to `Web.appWith` and prepend the `config` reference.
@@ -7141,9 +7141,10 @@ mod config_threading_tests {
     }
 
     #[test]
-    fn inline_app_with_leaves_config_consumed() {
-        // `main = Web.appWith [ … ] { … }` already carries its settings; a sibling
-        // `config` counts as consumed (author's explicit choice), no rewrite.
+    fn inline_app_with_with_sibling_config_is_rejected() {
+        // `main = Web.appWith [ … ] { … }` already carries its own settings list.
+        // A sibling `config` binding has nowhere to be threaded — its settings
+        // would be silently dropped. IPE-N0043 must fire.
         let mut i = Interner::new();
         let entry = web_entry(&mut i, "appWith");
         let settings = Located::new(Span::DUMMY, canon::Expr_::Unit);
@@ -7153,8 +7154,18 @@ mod config_threading_tests {
             canon::Expr_::Call(Box::new(entry), vec![settings, cfg]),
         );
         let mut m = module_with(&mut i, main_body, true);
-        thread_config_binding(&mut m, &mut i)
-            .expect("an inline appWith with a sibling config must be accepted");
+        let err = thread_config_binding(&mut m, &mut i)
+            .expect_err("a config binding beside inline appWith must be rejected (IPE-N0043)");
+        assert!(
+            matches!(
+                err,
+                Diagnostic::Name {
+                    msg: NameError::DiscardedConfig,
+                    ..
+                }
+            ),
+            "expected IPE-N0043 DiscardedConfig, got {err:?}"
+        );
     }
 
     #[test]
