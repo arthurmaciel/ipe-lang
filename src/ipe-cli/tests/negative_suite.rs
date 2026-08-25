@@ -860,10 +860,10 @@ fn compile_with_files(name: &str, source: &str, extra: &[(&str, &str)]) -> Outco
     }
     for (rel, contents) in extra {
         let path = dir.join(rel);
-        if let Some(parent) = path.parent() {
-            if std::fs::create_dir_all(parent).is_err() {
-                return Outcome::Skip;
-            }
+        if let Some(parent) = path.parent()
+            && std::fs::create_dir_all(parent).is_err()
+        {
+            return Outcome::Skip;
         }
         if std::fs::write(&path, contents).is_err() {
             return Outcome::Skip;
@@ -889,12 +889,7 @@ fn compile_with_files(name: &str, source: &str, extra: &[(&str, &str)]) -> Outco
 
 /// Assert a fixture with the given extra files is rejected with exactly `expected`.
 #[track_caller]
-fn assert_rejected_with_files(
-    name: &str,
-    source: &str,
-    extra: &[(&str, &str)],
-    expected: &str,
-) {
+fn assert_rejected_with_files(name: &str, source: &str, extra: &[(&str, &str)], expected: &str) {
     match compile_with_files(name, source, extra) {
         Outcome::Skip => {}
         Outcome::Rejected(got) => assert_eq!(
@@ -981,7 +976,10 @@ fn custom_element_ctor_present_file_still_refused_at_emit() {
     assert_rejected_with_files(
         "custom_element_present",
         &src,
-        &[("js/x.js", "export function mount(host, emit) { return {}; }\n")],
+        &[(
+            "js/x.js",
+            "export function mount(host, emit) { return {}; }\n",
+        )],
         "IPE-L0133",
     );
 }
@@ -1001,9 +999,138 @@ fn custom_element_in_model_field_rejected() {
     assert_rejected_with_files(
         "custom_element_in_model",
         &src,
-        &[("js/x.js", "export function mount(host, emit) { return {}; }\n")],
+        &[(
+            "js/x.js",
+            "export function mount(host, emit) { return {}; }\n",
+        )],
         "IPE-L0133",
     );
+}
+
+/// (g) `customElement "/etc/passwd"` (an ABSOLUTE path) is rejected at CANON with
+/// IPE-N0044 — the widget path must be project-root-relative. An absolute literal
+/// would survive the shared `path "…"` seal (which legitimately accepts absolute
+/// paths) yet, joined at the build gate, `Path::join` discards the project root
+/// and stats an arbitrary out-of-project file. This closes that escape at the name
+/// stage, before any filesystem access.
+///
+/// Verdict-does-not-flip proof: an absolute path whose target EXISTS on the host
+/// (`/etc/passwd`) and one that does NOT (`/nonexistent-…`) must BOTH reject with
+/// the SAME canon code (IPE-N0044), never flipping to a build-stage
+/// existence/emission verdict on whether the outside file happens to be present —
+/// the exact verdict-flip the guardian exercised.
+#[test]
+fn custom_element_ctor_absolute_path_rejected_at_canon() {
+    for (label, abs) in [
+        ("present", "/etc/passwd"),
+        ("absent", "/nonexistent-ipe-widget-\u{2603}.js"),
+    ] {
+        let src = format!(
+            "{HEAD}editor : CustomElement Int String\n\
+             editor = customElement \"{abs}\"\n\
+             main = 1\n"
+        );
+        // Single-file `compile` reaches canon and stops there on rejection, so no
+        // JS file is written — the verdict must be identical for both the
+        // host-existing and the host-missing absolute target.
+        assert_rejected(
+            &format!("custom_element_absolute_{label}"),
+            &src,
+            "IPE-N0044",
+        );
+    }
+}
+
+/// A Windows-rooted spelling (`C:\\…` drive designator and a `\\\\server\\share`
+/// UNC prefix) is ALSO rejected at canon with IPE-N0044, independent of the
+/// compiling host's OS. `Path::is_absolute` on a Unix host would read `C:\x` as
+/// relative, so the all-targets lexical check — not the host's own path logic —
+/// is what turns these back.
+#[test]
+fn custom_element_ctor_windows_rooted_path_rejected_at_canon() {
+    for (label, rooted) in [
+        ("drive", "C:\\\\widgets\\\\evil.js"),
+        ("drive_relative", "C:evil.js"),
+        ("unc", "\\\\\\\\server\\\\share\\\\evil.js"),
+        ("backslash_root", "\\\\evil.js"),
+    ] {
+        let src = format!(
+            "{HEAD}editor : CustomElement Int String\n\
+             editor = customElement \"{rooted}\"\n\
+             main = 1\n"
+        );
+        assert_rejected(
+            &format!("custom_element_win_rooted_{label}"),
+            &src,
+            "IPE-N0044",
+        );
+    }
+}
+
+/// (h) A SYMLINK escape: an in-tree `js` directory entry is a symlink pointing to
+/// a directory OUTSIDE the project, and `customElement "js/evil.js"` names a file
+/// that really EXISTS at the symlink target. The lexical seals cannot see the
+/// symlink (the literal is a clean relative path), so this is the case the
+/// build-gate containment check must close: canonicalising the join resolves the
+/// symlink to its out-of-project target, and the `starts_with` root-containment
+/// assertion refuses it (IPE-N0044) instead of a bare `is_file` FOLLOWING the link
+/// and accepting an arbitrary outside file.
+///
+/// The refusal must NOT depend on the outside file's presence for its SECURITY
+/// verdict — the file is deliberately made to exist here so the check is proven to
+/// reject a genuinely-readable out-of-project target, not merely a dangling link.
+#[cfg(unix)]
+#[test]
+fn custom_element_ctor_symlink_escape_rejected_at_build_gate() {
+    use std::path::PathBuf;
+
+    let base = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("negsuite-ce-symlink");
+    let _ = std::fs::remove_dir_all(&base);
+    let project = base.join("project");
+    let outside = base.join("outside");
+    // The out-of-project directory and a real file inside it (the escape target).
+    if std::fs::create_dir_all(&outside).is_err()
+        || std::fs::write(
+            outside.join("evil.js"),
+            "export function mount(host, emit) { return {}; }\n",
+        )
+        .is_err()
+        || std::fs::create_dir_all(&project).is_err()
+    {
+        return; // scratch unavailable — skip, like the shared harness
+    }
+    // In-tree `js` is a SYMLINK to the outside directory.
+    if std::os::unix::fs::symlink(&outside, project.join("js")).is_err() {
+        return;
+    }
+    let src = format!(
+        "{HEAD}editor : CustomElement Int String\n\
+         editor = customElement \"js/evil.js\"\n\
+         main = 1\n"
+    );
+    let entry = project.join("Main.ipe");
+    if std::fs::write(&entry, &src).is_err() {
+        return;
+    }
+    let out = base.join("out");
+    let _ = std::fs::remove_dir_all(&out);
+    let Ok(runtime) = ipe::resolve_runtime() else {
+        return;
+    };
+    let outcome = match ipe::build_with_options(&entry, &out, &runtime, BuildOptions::default()) {
+        Ok(()) => Outcome::Accepted("compiled successfully (exit 0)".to_owned()),
+        Err(CliError::Pipeline { diag, .. }) => Outcome::Rejected(diag.code().as_str()),
+        Err(other) => Outcome::Accepted(format!("non-pipeline error: {other:?}")),
+    };
+    let _ = std::fs::remove_dir_all(&base);
+    match outcome {
+        Outcome::Skip => {}
+        Outcome::Rejected(got) => assert_eq!(
+            got, "IPE-N0044",
+            "custom_element_symlink_escape: expected IPE-N0044 (containment), got {got}"
+        ),
+        Outcome::Accepted(how) => fail_accepted("custom_element_symlink_escape", "IPE-N0044", &how),
+    }
 }
 
 /// Two imports registering the same qualifier for DIFFERENT sibling modules.

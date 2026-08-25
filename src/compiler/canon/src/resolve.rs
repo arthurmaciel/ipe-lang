@@ -6102,6 +6102,32 @@ fn custom_element_ctor_error(span: Span, detail: &'static str) -> Diagnostic {
     }
 }
 
+/// Is `raw` an ABSOLUTE / rooted path under EITHER target's separator regime?
+///
+/// A widget-hook literal must be project-root-relative: it is joined against the
+/// project root at the build gate, and `Path::join` discards the base when its
+/// argument is absolute, so a rooted literal escapes the project. The compiler
+/// does not know the final target OS, so — like the shared traversal seal — this
+/// rejects a literal rooted under Unix OR Windows rules, never relying on the
+/// host's own `Path::is_absolute` (which is host-OS-specific: on Linux `C:\x`
+/// would read as relative). Rooted shapes caught, all before any cleaning:
+/// * a leading `/` — a Unix (and Windows) absolute root;
+/// * a leading `\` — a Windows root or the first byte of a `\\` UNC prefix;
+/// * a `C:` drive designator (an ASCII letter then `:`), rooted or drive-relative
+///   alike (`C:\x` and `C:x` both anchor to a volume, never the project root).
+///
+/// A bare leading `.` or an ordinary `js/x.js` is relative and passes.
+fn is_rooted_widget_path(raw: &str) -> bool {
+    let bytes = raw.as_bytes();
+    // Leading separator under either regime (`/` always; `\` on Windows), which
+    // also covers the first byte of a `\\server\share` / `\\?\…` UNC prefix.
+    if matches!(bytes.first(), Some(b'/' | b'\\')) {
+        return true;
+    }
+    // A `C:`-style drive designator: an ASCII letter followed by a colon.
+    matches!((bytes.first(), bytes.get(1)), (Some(c), Some(b':')) if c.is_ascii_alphabetic())
+}
+
 /// The last name segment of a syntactic type annotation's head constructor, or
 /// `None` when the annotation is not a bare/qualified type-constructor application
 /// (an arrow, a tuple, a record, a variable). Used to recognise a
@@ -6230,6 +6256,28 @@ fn detect_custom_element_constructor(
             });
         }
     };
+
+    // customElement-specific tightening (Security #1, defence-in-depth): the widget
+    // path MUST be project-root-relative. The shared `path "…"` seal accepts an
+    // absolute path by design (a `path` value may legitimately be absolute), but a
+    // widget path is joined against the project root at the build gate — and
+    // `Path::join` DISCARDS the base when its argument is absolute, so an absolute
+    // literal would resolve OUTSIDE the project and read/stat an arbitrary file.
+    // Reject any rooted literal here under EITHER target's separator regime (a Unix
+    // `/…`, a Windows leading `\`, a `C:` drive designator, or a `\\server\share`
+    // / `\\?\…` UNC/verbatim prefix), independent of the compiling host's OS — the
+    // same all-targets discipline the traversal seal uses. Checked on the ORIGINAL
+    // literal so a rooted spelling cannot be normalised into a relative-looking
+    // form. Fail-closed at CANON: the verdict never depends on whether the
+    // out-of-project file exists.
+    if is_rooted_widget_path(raw.as_str()) {
+        return Err(custom_element_ctor_error(
+            arg.span,
+            "the `customElement` widget path must be project-root-relative — an \
+             absolute path (a leading `/` or `\\`, a `C:` drive, or a UNC \
+             `\\\\server\\share` prefix) would resolve outside the project and is refused",
+        ));
+    }
 
     // Resolve the annotation to its canonical type — this re-runs the arity + SEAL
     // gates on `CustomElement down up`, so a mis-arity (IPE-N0031) or seal-illegal
