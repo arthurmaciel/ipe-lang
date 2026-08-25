@@ -33,6 +33,8 @@
 use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
 
+use ipe_parse::is_keyword;
+
 use crate::CliError;
 use crate::ffi::{ManifestDefineClosure, ManifestDefineEnum, ManifestDefineStruct};
 use crate::project::{IpeDep, ProjectManifest};
@@ -211,6 +213,9 @@ fn crate_to_module_name(krate: &str) -> String {
 /// [`CliError::UsageOwned`] when a carrier spelling is not one the `Ffi.*`
 /// vocabulary can express — an unrecognised carrier in the stored toml data
 /// would be a bug, but is caught here rather than silently emitting garbage.
+/// [`CliError::UsageOwned`] when a struct, enum, or closure define name is not
+/// a legal Ipê identifier — a malformed name would produce an unparseable `.ipe`
+/// file; the refusal happens before any write.
 fn render_foreign_ffi_module(
     module_name: &str,
     krate: &str,
@@ -218,6 +223,41 @@ fn render_foreign_ffi_module(
     structs: &[&ManifestDefineStruct],
     enums: &[&ManifestDefineEnum],
 ) -> Result<String, CliError> {
+    // Validate all define names before touching the output buffer.  A name
+    // that is not a legal Ipê identifier would produce an unparseable `.ipe`
+    // file; refusing here keeps the command fail-closed — nothing is written
+    // when any name is malformed.
+    for s in structs {
+        if !is_ipe_ident(&s.struct_name) {
+            return Err(CliError::UsageOwned(format!(
+                "ipe migrate config: struct define name `{}` is not a legal Ipê identifier \
+                 (expected `[A-Za-z_][A-Za-z0-9_]*`) — rename it in the `ipe.toml` \
+                 before migrating",
+                s.struct_name
+            )));
+        }
+    }
+    for e in enums {
+        if !is_ipe_ident(&e.enum_name) {
+            return Err(CliError::UsageOwned(format!(
+                "ipe migrate config: enum define name `{}` is not a legal Ipê identifier \
+                 (expected `[A-Za-z_][A-Za-z0-9_]*`) — rename it in the `ipe.toml` \
+                 before migrating",
+                e.enum_name
+            )));
+        }
+    }
+    for c in closures {
+        if !is_ipe_ident(&c.name) {
+            return Err(CliError::UsageOwned(format!(
+                "ipe migrate config: closure define name `{}` is not a legal Ipê identifier \
+                 (expected `[A-Za-z_][A-Za-z0-9_]*`) — rename it in the `ipe.toml` \
+                 before migrating",
+                c.name
+            )));
+        }
+    }
+
     // Collect all exposed names for the `exposing (…)` list.
     let mut exposed: Vec<String> = Vec::new();
     for s in structs {
@@ -266,6 +306,15 @@ fn render_foreign_struct(krate: &str, s: &ManifestDefineStruct) -> Result<String
         .fields
         .iter()
         .map(|(name, carrier)| -> Result<String, CliError> {
+            if !is_ipe_ident(name) {
+                return Err(CliError::UsageOwned(format!(
+                    "ipe migrate config: struct `{}` field name `{name}` is not a \
+                     legal Ipê identifier (expected `[A-Za-z_][A-Za-z0-9_]*`, \
+                     not a keyword, not bare `_`) — rename it in the `ipe.toml` \
+                     before migrating",
+                    s.struct_name
+                )));
+            }
             let ffi_ty = carrier_to_ffi_type(carrier, &s.struct_name)?;
             Ok(format!("{name} = {ffi_ty}"))
         })
@@ -417,7 +466,17 @@ fn carrier_to_ffi_type(carrier: &str, context: &str) -> Result<String, CliError>
         "String" | "string" => "String".to_owned(),
         "Bytes" | "bytes" | "Vec<u8>" => "Bytes".to_owned(),
         other if other.chars().next().is_some_and(|c| c.is_ascii_uppercase()) => {
-            // Opaque handle — bare upper-case name, matches `Expr_::VarLocal` in reader.
+            // An opaque handle must be a bare Ipê identifier — the same
+            // constraint `carrier_to_ffi_expr` enforces for the `Ffi.fn` path.
+            if !is_ipe_ident(other) {
+                return Err(CliError::UsageOwned(format!(
+                    "ipe migrate config: carrier `{other}` in define for `{context}` is not \
+                     a legal opaque handle name (expected `[A-Za-z_][A-Za-z0-9_]*`) — \
+                     non-scalar types such as `Result<..>`, `Option<..>`, or `Box<dyn ..>` \
+                     cannot be expressed in the `Ffi.*` vocabulary and must be wrapped in \
+                     a named opaque handle type before migrating"
+                )));
+            }
             other.to_owned()
         }
         other => {
@@ -427,6 +486,26 @@ fn carrier_to_ffi_type(carrier: &str, context: &str) -> Result<String, CliError>
                  String, Bytes, or an upper-case opaque handle name"
             )));
         }
+    })
+}
+
+/// Return `true` when `s` is a legal Ipê identifier in a name/declaration
+/// position: charset `[A-Za-z_][A-Za-z0-9_]*`, NOT a reserved keyword, and
+/// NOT the bare `_` wildcard.
+///
+/// The keyword check delegates to [`ipe_parse::is_keyword`], which wraps the
+/// lexer's own `keyword()` table — the single source of truth so this predicate
+/// stays consistent with the parser even as the keyword set evolves.
+/// A name that fails here would produce an unparseable `.ipe` file — refusing
+/// before write is fail-closed by construction.
+fn is_ipe_ident(s: &str) -> bool {
+    if s == "_" || is_keyword(s) {
+        return false;
+    }
+    let mut chars = s.chars();
+    chars.next().is_some_and(|first| {
+        (first.is_ascii_alphabetic() || first == '_')
+            && chars.all(|c| c.is_ascii_alphanumeric() || c == '_')
     })
 }
 
@@ -443,6 +522,21 @@ fn carrier_to_ffi_expr(carrier: &str, context: &str) -> Result<String, CliError>
         "String" | "string" => "Ffi.string".to_owned(),
         "Bytes" | "bytes" | "Vec<u8>" => "Ffi.bytes".to_owned(),
         other if other.chars().next().is_some_and(|c| c.is_ascii_uppercase()) => {
+            // An opaque handle must be a bare Ipê identifier.  A name like
+            // `Result<T, E>` or `Option<String>` starts with an uppercase
+            // letter but contains angle brackets, which are not legal in an
+            // Ipê identifier — emitting `Ffi.opaque "Result<T, E>"` would
+            // produce a `.ipe` file the parser rejects.  Fail before writing.
+            if !is_ipe_ident(other) {
+                return Err(CliError::UsageOwned(format!(
+                    "ipe migrate config: carrier `{other}` in define for `{context}` is not \
+                     a legal opaque handle name (expected `[A-Za-z_][A-Za-z0-9_]*`) — \
+                     non-scalar return types such as `Result<..>`, `Option<..>`, \
+                     `Box<dyn ..>`, or partial bounds cannot be expressed in the \
+                     `Ffi.*` vocabulary and must be wrapped in a named opaque handle \
+                     type before migrating"
+                )));
+            }
             format!("Ffi.opaque {}", string_lit(other))
         }
         other => {
@@ -1475,5 +1569,254 @@ mod tests {
         assert_eq!(crate_to_module_name("async-stripe"), "Async_stripe");
         assert_eq!(crate_to_module_name("my_lib"), "My_lib");
         assert_eq!(crate_to_module_name(""), "");
+    }
+
+    // ── Fail-closed reject tests ─────────────────────────────────────────────
+
+    /// A closure whose return type is not a scalar carrier and not a bare Ipê
+    /// identifier must be rejected at render time, before any file write.
+    #[test]
+    fn closure_non_scalar_return_is_rejected_before_write() {
+        let non_scalar_returns = &[
+            "Result<String, MyErr>",
+            "Option<Int>",
+            "Box<dyn Fn()>",
+            "Result<(), ()>",
+        ];
+        for ret in non_scalar_returns {
+            let sig = format!("Fn(Int) -> {ret} + Send + Sync + 'static");
+            let closures = [crate::ffi::ManifestDefineClosure {
+                krate: "demo".to_owned(),
+                name: "my_cb".to_owned(),
+                signature: sig.clone(),
+            }];
+            let c_refs: Vec<&crate::ffi::ManifestDefineClosure> = closures.iter().collect();
+            let result = render_foreign_ffi_module("Demo", "demo", &c_refs, &[], &[]);
+            assert!(
+                result.is_err(),
+                "closure with return `{ret}` must be rejected; got Ok for sig `{sig}`"
+            );
+            let msg = format!("{}", result.unwrap_err());
+            assert!(
+                msg.contains("not a legal opaque handle name"),
+                "error must mention the identifier constraint, got: {msg}"
+            );
+        }
+    }
+
+    /// A closure with a scalar return type must still succeed after the new guard.
+    #[test]
+    fn closure_scalar_return_still_accepted() {
+        let scalar_returns = &[
+            "Int", "Bool", "String", "Float", "Char", "Bytes", "MyHandle",
+        ];
+        for ret in scalar_returns {
+            let sig = format!("Fn() -> {ret} + Send + Sync + 'static");
+            let closures = [crate::ffi::ManifestDefineClosure {
+                krate: "demo".to_owned(),
+                name: "cb".to_owned(),
+                signature: sig.clone(),
+            }];
+            let c_refs: Vec<&crate::ffi::ManifestDefineClosure> = closures.iter().collect();
+            let result = render_foreign_ffi_module("Demo", "demo", &c_refs, &[], &[]);
+            assert!(
+                result.is_ok(),
+                "closure with scalar/opaque return `{ret}` must be accepted; err: {:?}",
+                result.unwrap_err()
+            );
+        }
+    }
+
+    /// A struct define whose name is not a legal Ipê identifier must be rejected
+    /// at render time, before any file write.
+    #[test]
+    fn malformed_struct_name_is_rejected_before_write() {
+        let bad_names = &["bad-name", "123Thing", "My<T>", "has space", ""];
+        for name in bad_names {
+            let structs = [crate::ffi::ManifestDefineStruct {
+                krate: "demo".to_owned(),
+                ctor: "demo_new".to_owned(),
+                struct_name: (*name).to_owned(),
+                fields: vec![("x".to_owned(), "Int".to_owned())],
+                derives: vec![],
+            }];
+            let s_refs: Vec<&crate::ffi::ManifestDefineStruct> = structs.iter().collect();
+            let result = render_foreign_ffi_module("Demo", "demo", &[], &s_refs, &[]);
+            assert!(
+                result.is_err(),
+                "struct name `{name}` must be rejected; got Ok"
+            );
+            let msg = format!("{}", result.unwrap_err());
+            assert!(
+                msg.contains("not a legal Ipê identifier"),
+                "error must mention identifier constraint, got: {msg}"
+            );
+        }
+    }
+
+    /// An enum define whose name is not a legal Ipê identifier must be rejected
+    /// at render time, before any file write.
+    #[test]
+    fn malformed_enum_name_is_rejected_before_write() {
+        let bad_names = &["bad-name", "0Msg", "Msg<T>"];
+        for name in bad_names {
+            let enums = [crate::ffi::ManifestDefineEnum {
+                krate: "demo".to_owned(),
+                ctor: "demo_new".to_owned(),
+                enum_name: (*name).to_owned(),
+                variants: vec![("A".to_owned(), vec![])],
+                derives: vec![],
+            }];
+            let e_refs: Vec<&crate::ffi::ManifestDefineEnum> = enums.iter().collect();
+            let result = render_foreign_ffi_module("Demo", "demo", &[], &[], &e_refs);
+            assert!(
+                result.is_err(),
+                "enum name `{name}` must be rejected; got Ok"
+            );
+            let msg = format!("{}", result.unwrap_err());
+            assert!(
+                msg.contains("not a legal Ipê identifier"),
+                "error must mention identifier constraint, got: {msg}"
+            );
+        }
+    }
+
+    /// A closure define whose name is not a legal Ipê identifier must be
+    /// rejected at render time, before any file write.
+    #[test]
+    fn malformed_closure_name_is_rejected_before_write() {
+        let bad_names = &["bad-name", "0cb", "my cb"];
+        for name in bad_names {
+            let closures = [crate::ffi::ManifestDefineClosure {
+                krate: "demo".to_owned(),
+                name: (*name).to_owned(),
+                signature: "Fn(Int) -> Int + Send + Sync + 'static".to_owned(),
+            }];
+            let c_refs: Vec<&crate::ffi::ManifestDefineClosure> = closures.iter().collect();
+            let result = render_foreign_ffi_module("Demo", "demo", &c_refs, &[], &[]);
+            assert!(
+                result.is_err(),
+                "closure name `{name}` must be rejected; got Ok"
+            );
+            let msg = format!("{}", result.unwrap_err());
+            assert!(
+                msg.contains("not a legal Ipê identifier"),
+                "error must mention identifier constraint, got: {msg}"
+            );
+        }
+    }
+
+    /// Valid define names (legal Ipê identifiers) must still pass the guard.
+    #[test]
+    fn valid_define_names_still_accepted() {
+        let valid_names = &["Counter", "MyMsg", "_internal", "snake_case", "X"];
+        for name in valid_names {
+            let structs = [crate::ffi::ManifestDefineStruct {
+                krate: "demo".to_owned(),
+                ctor: format!("{}_new", name.to_lowercase()),
+                struct_name: (*name).to_owned(),
+                fields: vec![("v".to_owned(), "Int".to_owned())],
+                derives: vec![],
+            }];
+            let s_refs: Vec<&crate::ffi::ManifestDefineStruct> = structs.iter().collect();
+            let result = render_foreign_ffi_module("Demo", "demo", &[], &s_refs, &[]);
+            assert!(
+                result.is_ok(),
+                "valid name `{name}` must be accepted; err: {:?}",
+                result.unwrap_err()
+            );
+        }
+    }
+
+    /// `is_ipe_ident` predicate covers charset, keyword exclusion, and bare `_`.
+    ///
+    /// The keyword set is drawn from the same lexer table `ipe_parse::is_keyword`
+    /// exposes — any keyword added there will be caught here without a code change.
+    #[test]
+    fn is_ipe_ident_rejects_keywords_underscore_and_bad_charset() {
+        // Valid identifiers: charset ok, not a keyword, not bare `_`.
+        assert!(is_ipe_ident("Counter"));
+        assert!(is_ipe_ident("my_fn"));
+        assert!(is_ipe_ident("_private")); // leading _ but not bare _
+        assert!(is_ipe_ident("X"));
+        assert!(is_ipe_ident("alpha123"));
+        assert!(is_ipe_ident("do_something")); // contains keyword substring, not a keyword
+
+        // Bad charset.
+        assert!(!is_ipe_ident(""));
+        assert!(!is_ipe_ident("123abc"));
+        assert!(!is_ipe_ident("bad-name"));
+        assert!(!is_ipe_ident("has space"));
+        assert!(!is_ipe_ident("Result<T>"));
+        assert!(!is_ipe_ident("Option<String>"));
+        assert!(!is_ipe_ident("Box<dyn Fn()>"));
+
+        // Keywords — the lexer maps each of these to a reserved token, so they
+        // must not be accepted as identifier names.
+        for kw in &[
+            "let", "case", "type", "do", "if", "then", "else", "module", "import", "exposing",
+            "as", "foreign", "of", "in",
+        ] {
+            assert!(
+                !is_ipe_ident(kw),
+                "keyword `{kw}` must be rejected by is_ipe_ident"
+            );
+        }
+
+        // Bare `_` — the lexer maps it to Tok::Underscore, not an identifier.
+        assert!(
+            !is_ipe_ident("_"),
+            "bare `_` must be rejected by is_ipe_ident"
+        );
+    }
+
+    /// A closure named with a keyword is rejected at migrate time, before any write.
+    #[test]
+    fn keyword_closure_name_rejected_before_write() {
+        for name in &["let", "_"] {
+            let closures = [crate::ffi::ManifestDefineClosure {
+                krate: "demo".to_owned(),
+                name: (*name).to_owned(),
+                signature: "Fn(Int) -> Int + Send + Sync + 'static".to_owned(),
+            }];
+            let c_refs: Vec<&crate::ffi::ManifestDefineClosure> = closures.iter().collect();
+            let result = render_foreign_ffi_module("Demo", "demo", &c_refs, &[], &[]);
+            assert!(
+                result.is_err(),
+                "closure name `{name}` must be rejected; got Ok"
+            );
+            let msg = format!("{}", result.unwrap_err());
+            assert!(
+                msg.contains("not a legal Ipê identifier"),
+                "error must mention identifier constraint for `{name}`, got: {msg}"
+            );
+        }
+    }
+
+    /// A struct with a field whose name is not a legal Ipê identifier must be
+    /// rejected at render time, before any file write.
+    #[test]
+    fn malformed_struct_field_name_rejected_before_write() {
+        let bad_field_names: &[&str] = &["bad-field", "0val", "has space", "type", "_"];
+        for field in bad_field_names {
+            let structs = [crate::ffi::ManifestDefineStruct {
+                krate: "demo".to_owned(),
+                ctor: "demo_new".to_owned(),
+                struct_name: "Demo".to_owned(),
+                fields: vec![((*field).to_owned(), "Int".to_owned())],
+                derives: vec![],
+            }];
+            let s_refs: Vec<&crate::ffi::ManifestDefineStruct> = structs.iter().collect();
+            let result = render_foreign_ffi_module("Demo", "demo", &[], &s_refs, &[]);
+            assert!(
+                result.is_err(),
+                "struct field name `{field}` must be rejected; got Ok"
+            );
+            let msg = format!("{}", result.unwrap_err());
+            assert!(
+                msg.contains("not a legal Ipê identifier"),
+                "error must mention identifier constraint for field `{field}`, got: {msg}"
+            );
+        }
     }
 }
