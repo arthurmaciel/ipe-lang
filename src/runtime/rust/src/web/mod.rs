@@ -15,6 +15,10 @@ pub use route::*;
 pub mod console;
 pub mod csrf;
 pub mod style_inject;
+// Custom-element (`Ui.widget`) registration glue + SRI-pinned author-JS serving.
+// Populated once at process start by the generated `main`; inert (no routes, no
+// page scripts) for a program that registers no widget.
+pub mod widget_assets;
 // Pre-built console child + reverse-proxy — spawns the bundled console
 // binary and proxies /_ipe/console/*; falls back to in-process `console` when the
 // binary is absent.
@@ -377,9 +381,15 @@ pub fn render_page_full(sid: &str, base: &str, body: &str, csrf_token: &str) -> 
     let config_js = web_client_config_js();
     let head_extra = format!("<meta name=\"ipe-base\" content=\"{base}\">");
     let body_inner = format!("<div id=\"ipe-root\">{body}</div>{dev_banner}");
+    // Custom-element glue: an EXTERNAL, SRI-pinned `<script type="module">` plus a
+    // `modulepreload` SRI pin per author asset. Empty when the program registers
+    // no widget, so a widget-free page is byte-identical and its CSP is unchanged.
+    // It loads AFTER the client core so `__ipeEmitWidgetUp` can reuse `__ipeSend`.
+    let widget_scripts = widget_assets::page_scripts(base);
     let tail_scripts = format!(
         "<script>window.__IPE_SID={sid_js};window.__IPE_BASE={base_js};window.__IPE_CSRF_TOKEN={csrf_js};{config_js}</script>\
-         <script src=\"{client_src}\" integrity=\"{integrity}\" crossorigin=\"anonymous\"></script>"
+         <script src=\"{client_src}\" integrity=\"{integrity}\" crossorigin=\"anonymous\"></script>\
+         {widget_scripts}"
     );
     page_shell(&head_extra, &body_inner, &tail_scripts)
 }
@@ -2123,6 +2133,23 @@ where
             )
         }
 
+        // Serve one content-addressed widget asset / glue module. Same static
+        // immutable discipline as `serve_client_js`; the exact bytes here are what
+        // the page's SRI pins, so integrity is verified by the browser.
+        fn serve_widget_js(body: &'static str) -> impl axum::response::IntoResponse {
+            use axum::http::header;
+            (
+                [
+                    (
+                        header::CONTENT_TYPE,
+                        "application/javascript; charset=utf-8",
+                    ),
+                    (header::CACHE_CONTROL, "public, max-age=31536000, immutable"),
+                ],
+                body,
+            )
+        }
+
         // Cloned for the shutdown path's dev-only reload push — the router's
         // `.with_state(state)` takes ownership of `state` below.
         let shutdown_store = state.store.clone();
@@ -2182,6 +2209,34 @@ where
                     get(console::api_metrics_summary),
                 )
         };
+
+        // Custom-element (`Ui.widget`) assets: one content-addressed route per
+        // registered author module + one for the generated registration glue.
+        // Each serves a `&'static str` (the bytes interned in the process-global
+        // registry at startup) with the same `immutable` discipline as the client
+        // asset. Registered BEFORE the `/*path` page catch-all so a widget URL
+        // hits its static handler, not the page handler. The routes are static
+        // public GETs (CSRF-exempt, open) — the served bytes are the exact bytes
+        // the page's SRI pins, so a tampered asset makes the browser refuse the
+        // module. A widget-free program registers nothing here (no extra routes).
+        if widget_assets::has_widgets() {
+            let base = web_base_path();
+            for asset in widget_assets::registered() {
+                let path = widget_assets::widget_asset_path(&asset.content);
+                let content: &'static str = &asset.content;
+                router = router.route(&path, get(move || async move { serve_widget_js(content) }));
+            }
+            let glue_path = widget_assets::glue_path(&base);
+            // The glue body folds in the base-prefixed author URLs, so it is
+            // computed once here for the process (base is stable at startup) and
+            // leaked to `'static` for the handler — a one-time, bounded allocation
+            // sized by the program's widget count, never per-request.
+            let glue_body: &'static str = Box::leak(widget_assets::glue_js(&base).into_boxed_str());
+            router = router.route(
+                &glue_path,
+                get(move || async move { serve_widget_js(glue_body) }),
+            );
+        }
 
         // ipe.toml `[web] static` (baked as IPE_WEB_STATIC_DIR) → serve files at
         // /static/* via ServeDir. MUST be added before the `/*path` page catch-all

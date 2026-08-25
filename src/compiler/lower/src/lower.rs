@@ -75,7 +75,8 @@ fn bug(where_: &'static str, detail: impl Into<String>) -> Diagnostic {
 /// opaque identifier, not a security primitive — its safety comes from property
 /// 1 (no user input), not from collision resistance. Keeping it dependency-free
 /// avoids pulling a crypto crate into the lowerer.
-fn custom_element_tag(cleaned_path: &str) -> String {
+#[must_use]
+pub fn custom_element_tag(cleaned_path: &str) -> String {
     // FNV-1a-64 over the UTF-8 bytes of the sealed path.
     const FNV_OFFSET: u64 = 0xcbf2_9ce4_8422_2325;
     const FNV_PRIME: u64 = 0x0000_0100_0000_01b3;

@@ -1923,6 +1923,14 @@ pub fn compile_prepared(
     // Both fail closed with IPE-N0044; the widget seam never reaches emission on
     // an out-of-project or absent file.
     let widget_root = widget_file_root(&entry_src_path);
+    // The program's widget manifest: one entry per DISTINCT reached
+    // `customElement "<path>"`, carrying the lowerer-minted `ipe-ce-<hex>` tag
+    // (so the served-glue registration targets the SAME tag the view node
+    // renders) and the author hook file's verbatim content (WP5 serves it
+    // content-addressed + SRI). Populated as the containment/existence gate
+    // proves each file; deduplicated by tag so two views of one widget register
+    // once. Empty for a program that uses no `Ui.widget`.
+    let mut widget_manifest: BTreeMap<String, String> = BTreeMap::new();
     for widget in ipe_canon::custom_element_gate::collect_widget_files(linked) {
         let reject = |detail: String| {
             let (file, src) = source_for_span(widget.span);
@@ -1952,6 +1960,22 @@ pub fn compile_prepared(
                 widget.cleaned_path
             )));
         }
+        // Read the verified in-project file's content for content-addressed +
+        // SRI serving. `resolved()` is the containment-checked canonical path, so
+        // this read stays strictly inside the project root. A read failure (a
+        // race that removed the file between the `is_file` check and here, or a
+        // permission fault) fails the build closed — the widget seam never
+        // reaches emission on a file we could not read whole.
+        let content = std::fs::read_to_string(contained.resolved()).map_err(|e| {
+            reject(format!(
+                "the widget-hook file `{}` could not be read: {e}",
+                widget.cleaned_path
+            ))
+        })?;
+        // The tag is the SINGLE lowerer definition, keyed on the same cleaned
+        // path the view node hashed — never a second, drift-prone hash here.
+        let tag = ipe_lower::custom_element_tag(&widget.cleaned_path);
+        widget_manifest.entry(tag).or_insert(content);
     }
 
     // Layer-2 wasm security gate (IPE-N0030, M5): the client entry's
@@ -2087,7 +2111,119 @@ pub fn compile_prepared(
     // config field flows through unchanged.
     let emitted =
         ipe_db::emit_manifest(db, source_root, entry_file, config).map_err(span_attributed_err)?;
-    Ok((*emitted).clone())
+    let mut emitted = (*emitted).clone();
+
+    // WP5: thread the widget manifest into the emitted program. The emit query
+    // is a pure function of the source text and cannot read the widget files off
+    // disk (INV-1: no salsa query touches the filesystem); this stage owns the
+    // project root and already read each file above, so it injects the one-time
+    // startup registration here — the runtime then serves each asset
+    // content-addressed + SRI and generates the registration glue. A widget-free
+    // program injects nothing (byte-identical emit).
+    if !widget_manifest.is_empty() {
+        inject_widget_registration(&mut emitted, &widget_manifest)?;
+    }
+    Ok(emitted)
+}
+
+/// Inject the process-start `Ui.widget` asset registration into the emitted
+/// `main.rs`, so the served app registers its widget assets before the web
+/// server binds.
+///
+/// The registration is a single `ipe_runtime::web::widget_assets::register(&[…])`
+/// call spliced in right after `install_panic_classifier();` in the generated
+/// `main()` — the first line of the entry point, before any task runs. Each
+/// `(tag, content)` is rendered as a Rust string-literal pair; the content is
+/// emitted as a raw string literal with a hash fence wide enough to clear any run
+/// of `#` in the file, so arbitrary JS (including embedded `"` / `#`) is a valid
+/// literal and no author byte can break out of the string into code (the content
+/// is DATA in the emitted program, exactly as it is data in the browser).
+///
+/// # Errors
+/// [`CliError`] carrying a [`Diagnostic::CompilerBug`] if `src/main.rs` is absent
+/// from the emitted file set or the `install_panic_classifier();` anchor the
+/// splice keys on is missing — a drifted emit template, surfaced loudly rather
+/// than silently emitting a program that never registers its widgets.
+fn inject_widget_registration(
+    emitted: &mut ipe_backend::EmittedProject,
+    manifest: &BTreeMap<String, String>,
+) -> Result<(), CliError> {
+    // The splice point: the first line of the generated `main()`, before any task
+    // runs, so the registry is populated before the web server binds.
+    const ANCHOR: &str = "install_panic_classifier();";
+    let bug = |detail: &str| CliError::Pipeline {
+        file: PathBuf::from("src/main.rs"),
+        src: String::new(),
+        diag: Box::new(ipe_diagnostics::Diagnostic::CompilerBug {
+            where_: "ipe_cli::inject_widget_registration",
+            detail: detail.to_owned(),
+        }),
+    };
+    let main = emitted
+        .files
+        .get_mut("src/main.rs")
+        .ok_or_else(|| bug("no src/main.rs in the emitted file set for widget registration"))?;
+
+    // Build the `register(&[(tag, content), …])` argument list. Deterministic
+    // order (BTreeMap iteration) keeps the emit byte-stable across builds.
+    let mut entries = String::new();
+    for (tag, content) in manifest {
+        entries.push_str("        (");
+        entries.push_str(&rust_str_literal(tag));
+        entries.push_str(", ");
+        entries.push_str(&rust_raw_str_literal(content));
+        entries.push_str("),\n");
+    }
+    let call = format!("\n    ipe_runtime::web::widget_assets::register(&[\n{entries}    ]);\n");
+
+    let Some(pos) = main.find(ANCHOR) else {
+        return Err(bug(
+            "the emitted main() is missing the `install_panic_classifier();` anchor the widget \
+             registration splices after — the emit template drifted",
+        ));
+    };
+    let insert_at = pos + ANCHOR.len();
+    main.insert_str(insert_at, &call);
+    Ok(())
+}
+
+/// Render `s` as a plain double-quoted Rust string literal (the tag: a fixed
+/// `ipe-ce-<hex>`, `[a-z0-9-]` only, so escaping is trivial but applied for
+/// safety).
+fn rust_str_literal(s: &str) -> String {
+    let mut out = String::with_capacity(s.len() + 2);
+    out.push('"');
+    for ch in s.chars() {
+        match ch {
+            '"' => out.push_str("\\\""),
+            '\\' => out.push_str("\\\\"),
+            c => out.push(c),
+        }
+    }
+    out.push('"');
+    out
+}
+
+/// Render `s` as a Rust RAW string literal `r#"…"#` with a hash fence wide enough
+/// to clear any `"#` run inside `s`, so arbitrary content (author JS with quotes
+/// and hashes) is emitted verbatim as data — it can never terminate the literal
+/// early and spill into code.
+fn rust_raw_str_literal(s: &str) -> String {
+    // The fence must be longer than the longest run of `#` that immediately
+    // follows a `"` in the content (that is the only sequence that could close a
+    // raw literal). Computing the max `#`-run overall is a safe over-approximation.
+    let mut max_hashes = 0usize;
+    let mut run = 0usize;
+    for ch in s.chars() {
+        if ch == '#' {
+            run += 1;
+            max_hashes = max_hashes.max(run);
+        } else {
+            run = 0;
+        }
+    }
+    let fence = "#".repeat(max_hashes + 1);
+    format!("r{fence}\"{s}\"{fence}")
 }
 
 /// Write an emitted project to `out_dir`, vendoring the runtime module tree
