@@ -68,6 +68,7 @@ fn run_with_regions(
         warnings: Vec::new(),
         poly_var_map: BTreeMap::new(),
         untyped_type_params: BTreeMap::new(),
+        msg_defaulted_vars: BTreeMap::new(),
     };
     // `lower` pairs its diagnostic with the owning def's `home`;
     // these single-module gap tests assert only on the diagnostic, so drop it.
