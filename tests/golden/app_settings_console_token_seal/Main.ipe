@@ -1,0 +1,65 @@
+module Main exposing (main)
+
+-- Console/telemetry auth tokens as `Secret`-typed settings. Each
+-- `Console.*Token` takes a `Secret` sourced via `App.fromEnvRequired`, so the
+-- runtime reads a sealed secret instead of a bare env-string token. ipe MUST
+-- exit 0 AND the emitted project MUST cargo-build (THE SEAL for item 3).
+
+import Ipe.Tea.Web as Web
+import Ipe.Ui as Ui
+import Ipe.Tea.Web.Cmd
+import Ipe.String
+import Ipe.Tea.Web.Sub
+import Ipe.App as App
+import Ipe.Console as Console
+
+
+type Page
+    = CounterPage
+
+
+type Msg
+    = Increment
+
+
+type alias Model =
+    { page : Page
+    , count : Int
+    }
+
+
+init : a -> ( Model, Cmd Msg )
+init _req =
+    ( { page = CounterPage, count = 0 }, Cmd.none )
+
+
+update : Msg -> Model -> ( Model, Cmd Msg )
+update msg model =
+    case msg of
+        Increment ->
+            ( { model | count = model.count + 1 }, Cmd.none )
+
+
+view : Model -> Element Msg
+view model =
+    Ui.text (String.fromInt model.count)
+
+
+subscriptions : Model -> Sub Msg
+subscriptions _model =
+    Sub.none
+
+
+main =
+    Web.appWith
+        [ Console.adminToken (App.fromEnvRequired "IPE_ADMIN_TOKEN")
+        , Console.ingestToken (App.fromEnvRequired "IPE_INGEST_TOKEN")
+        , Console.metricsToken (App.fromEnvRequired "IPE_METRICS_TOKEN")
+        ]
+        { init = init
+        , update = update
+        , view = view
+        , subscriptions = subscriptions
+        , routes = []
+        , notFound = CounterPage
+        }

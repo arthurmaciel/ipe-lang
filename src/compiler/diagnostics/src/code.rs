@@ -267,6 +267,10 @@ code! {
     /// so user code cannot reach an unsafe kernel without a disclosing `.Unsafe`
     /// import (capability-model integrity, fail-closed)
     IPE_N0042 = "IPE-N0042", "a kernel alias (Ffi.kernel) may not be minted in user source", "IPE-N0042";
+    /// a top-level `config` binding (the app's cross-cutting `List (Setting
+    /// shape)`) is declared but never threaded into an app entry — inert data
+    /// the runtime never installs, so every setting it lists is silently dropped
+    IPE_N0043 = "IPE-N0043", "a config binding is declared but never threaded into an app entry", "IPE-N0043";
 
     // -----------------------------------------------------------------------
     // Type (IPE-T####)

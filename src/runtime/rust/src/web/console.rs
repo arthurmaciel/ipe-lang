@@ -214,6 +214,13 @@ pub fn gate_blocked(headers: &axum::http::HeaderMap) -> Option<axum::response::R
     let want = crate::system::read_env_var("IPE_ADMIN_TOKEN")
         .ok()
         .filter(|t| !t.is_empty())
+        // In-code `Console.adminToken` (a sealed `Secret`) sits below the env
+        // override — env always wins the one precedence, and the token is only
+        // revealed here, at the auth check, never logged.
+        .or_else(|| {
+            crate::app_config::resolve_console_token(crate::app_config::ConsoleTokenKind::Admin)
+                .filter(|t| !t.is_empty())
+        })
         .or_else(|| {
             crate::system::read_env_var("IPE_CONSOLE_TOKEN")
                 .ok()
@@ -222,6 +229,12 @@ pub fn gate_blocked(headers: &axum::http::HeaderMap) -> Option<axum::response::R
         .or_else(|| {
             crate::system::read_env_var("IPE_METRICS_TOKEN")
                 .ok()
+                .filter(|t| !t.is_empty())
+        })
+        // In-code `Console.metricsToken` — the metrics-scrape alias, below its
+        // env sibling in the one precedence.
+        .or_else(|| {
+            crate::app_config::resolve_console_token(crate::app_config::ConsoleTokenKind::Metrics)
                 .filter(|t| !t.is_empty())
         });
     let authed = match (want, headers.get(header::AUTHORIZATION)) {
@@ -376,7 +389,12 @@ fn ingest_token_blocked(headers: &axum::http::HeaderMap) -> Option<axum::respons
     let want = match crate::system::read_env_var("IPE_INGEST_TOKEN")
         .ok()
         .filter(|t| !t.is_empty())
-    {
+        // In-code `Console.ingestToken` (a sealed `Secret`) below the env
+        // override — env wins; the token is revealed only here, never logged.
+        .or_else(|| {
+            crate::app_config::resolve_console_token(crate::app_config::ConsoleTokenKind::Ingest)
+                .filter(|t| !t.is_empty())
+        }) {
         Some(t) => t,
         None => {
             // Unset token: open in dev (single-process / no federation), but in

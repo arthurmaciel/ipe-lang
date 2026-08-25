@@ -114,6 +114,10 @@ pub const STDLIB_MODULE_QUALIFIERS: &[(&[&str], &str)] = &[
     // compiled-source veneer), so they stay out of `COMPILED_STD_MODULES`.
     (&["Ipe", "App"], "App"),
     (&["Ipe", "Host"], "Host"),
+    // `Ipe.Console` — the console/telemetry `Secret`-typed token settings
+    // (`adminToken` / `ingestToken` / `metricsToken`). A kernel qualifier (its
+    // members build `Setting` values), so it stays out of `COMPILED_STD_MODULES`.
+    (&["Ipe", "Console"], "Console"),
     (&["Ipe", "Level"], "Level"),
     (&["Ipe", "Db", "Decode"], "Db.Decode"),
     (&["Ipe", "Db", "Sql"], "Sql"), // SqlFragment builder
@@ -902,8 +906,14 @@ impl Env {
                 ],
             ),
             // `Ipe.App` — runtime-config front door. `fromEnv` seals an env var
-            // into a `Secret` (the ONLY way to get a config secret).
-            ("App", &["fromEnv"]),
+            // into a `Secret` (the ONLY way to get a config secret);
+            // `fromEnvRequired` is its fail-closed variant (a missing/empty var
+            // is a named load-time `ConfigError`, not an empty secret).
+            ("App", &["fromEnv", "fromEnvRequired"]),
+            // `Ipe.Console` — the console/telemetry `Secret`-typed token settings.
+            // Each takes a `Secret` (from `App.fromEnvRequired`), so a hard-coded
+            // token `String` does not type-check.
+            ("Console", &["adminToken", "ingestToken", "metricsToken"]),
             // `Ipe.Host` — the host-bind setting builder plus the `HostMode`
             // constructors it takes.
             ("Host", &["bind", "loopback", "allInterfaces", "envDriven"]),

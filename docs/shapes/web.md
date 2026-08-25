@@ -180,6 +180,64 @@ Omitting `onNavigate` is exactly the implicit form of a `Navigate` arm that sets
 `onNavigate` when a navigation should do more (load data for the new page, reset
 a form, record analytics).
 
+## Runtime configuration
+
+A Web app's cross-cutting wiring — how it binds its host, what it logs, its
+database URL, its CSRF and session policy, its console tokens — is a typed
+`List (Setting Web)`. Gather it into one top-level binding named `config`, and a
+plain `Web.app` entry threads it in automatically:
+
+```ipe
+-- illustrative — not a standalone runnable program
+import Ipe.App as App
+import Ipe.Console as Console
+import Ipe.Db as Db
+import Ipe.Host as Host
+import Ipe.Level as Level
+import Ipe.Log as Log
+import Ipe.Tea.Web as Web
+
+config =
+    [ Host.bind Host.loopback
+    , Log.level Level.warn
+    , Web.csrf Web.strict
+    , Web.sessionTtl 3600
+    , Db.url (App.fromEnvRequired "DATABASE_URL")
+    , Console.adminToken (App.fromEnvRequired "IPE_ADMIN_TOKEN")
+    ]
+
+main =
+    Web.app
+        { init = init, update = update, view = view
+        , subscriptions = subscriptions, routes = routes, notFound = NotFound
+        }
+```
+
+A `config` binding beside a `Web.app` entry desugars to `Web.appWith config
+{ … }`; you can also pass the list inline with `Web.appWith [ … ] { … }`. A
+`config` binding that no app entry threads is a compile error (IPE-N0043) — its
+settings would otherwise be silently dropped.
+
+**One precedence** governs every setting: `environment variable > setting in
+code > built-in fallback`. An operator can override any in-code setting with the
+matching `IPE_*` env var without a rebuild; absent both, the fallback is the
+safe default.
+
+**Secrets are never literals.** A credential setting (`Db.url`, the
+`Console.*Token` settings) takes a `Secret`, and the only way to obtain one is:
+
+- `App.fromEnv "VAR"` — the **fail-safe** form: a missing/empty variable seals
+  an empty secret (use it for a genuinely optional secret).
+- `App.fromEnvRequired "VAR"` — the **fail-closed** form: a missing/empty
+  variable is a named startup `ConfigError` (the server does not bind) rather
+  than an empty secret that fails obscurely later. Prefer it for anything the
+  app genuinely requires.
+
+A hard-coded `String` credential does not type-check where a `Secret` is
+required, so a secret can never be inlined in source — it only ever enters
+through `App.fromEnv` / `App.fromEnvRequired`. A `Secret` also cannot be logged,
+stringified, or serialized: every stringification path yields `<redacted>`.
+
 ## Auth session lifetime
 
 Signed session tokens carry a hard **absolute lifetime cap**: a token cannot be

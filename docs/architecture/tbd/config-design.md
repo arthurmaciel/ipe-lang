@@ -3,6 +3,15 @@
 Status: design proposal. Every fenced Ipê block illustrates the **proposed
 surface**, not shipped API — none of it is runnable today.
 
+> **Concern-2 ergonomics (shipped):** the framework-runtime-config layer this
+> doc describes has an ergonomics layer on top — one top-level `config`
+> binding, the `App.fromEnv` / `App.fromEnvRequired` secret sources, and the
+> `Secret`-typed `Console.*Token` settings — specified in
+> [`typed-config-umbrella-design.md`](typed-config-umbrella-design.md) and
+> documented for users under [Web → Runtime configuration](../../shapes/web.md).
+> That layer is partially shipped (the `config` binding, `fromEnvRequired`, and
+> the token settings); the Email/Analytics record migrations remain design-only.
+
 ## Decision: configuration is written in Ipê, not a stringly file format
 
 Framed the simple way — *which option makes Ipê most adherent to `PRINCIPLES.md`?*

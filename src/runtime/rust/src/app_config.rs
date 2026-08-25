@@ -91,6 +91,30 @@ pub enum Setting {
     /// request. Setting `Off` after `Store` is a no-op (stricter-only monotonic:
     /// once armed the gate cannot be disarmed via a setting, only via env).
     WebAuthRevocationMode(RevocationMode),
+    /// `Console.adminToken` / `Console.ingestToken` / `Console.metricsToken` —
+    /// a console/telemetry auth token, sealed as a [`Secret`](crate::secret::Secret).
+    /// The `ConsoleTokenKind` selects which endpoint the token authorises; the
+    /// runtime reads the resolved secret instead of a bare env-string read.
+    #[cfg(feature = "secret")]
+    ConsoleToken(ConsoleTokenKind, crate::secret::Secret),
+}
+
+/// Which console/telemetry endpoint a [`Setting::ConsoleToken`] authorises. A
+/// closed set — each variant is one previously-bare env token given a typed
+/// `Secret` carrier. Always available (not `secret`-gated) so the console
+/// runtime can name a `kind` even in a build without the `secret` feature, where
+/// [`resolve_console_token`] simply returns `None`.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum ConsoleTokenKind {
+    /// `Console.adminToken` — the admin/metrics console auth token
+    /// (env sibling `IPE_ADMIN_TOKEN`).
+    Admin,
+    /// `Console.ingestToken` — the federation ingest-endpoint token
+    /// (env sibling `IPE_INGEST_TOKEN`).
+    Ingest,
+    /// `Console.metricsToken` — the metrics-scrape token
+    /// (env sibling `IPE_METRICS_TOKEN`).
+    Metrics,
 }
 
 /// `Host.bind : Int -> Setting a`. Maps the raw host-mode tag onto the closed
@@ -125,12 +149,106 @@ pub fn ipe_app_from_env(var_name: String) -> crate::secret::Secret {
     crate::secret::secret_from_string(value)
 }
 
+/// `App.fromEnvRequired : String -> Secret` — the fail-CLOSED required variant
+/// of [`ipe_app_from_env`]. Reads the named environment variable at startup and
+/// seals its value into a [`Secret`], exactly like `App.fromEnv` — but a
+/// MISSING or EMPTY variable is a typed load-time [`ConfigError`] naming the
+/// variable, reported once to stderr, and the process exits non-zero (the
+/// server never binds).
+///
+/// This is the security-relevant sourcing: where `App.fromEnv` is fail-SAFE (an
+/// absent optional secret becomes an empty secret), a value the app declares
+/// REQUIRED must not silently default to empty — an empty database URL or auth
+/// token that fails obscurely later is worse than a named startup refusal. The
+/// only outcomes are "a non-empty secret" or "a named fail-closed exit"; a
+/// silent empty secret is unreachable by construction.
+#[cfg(feature = "secret")]
+#[must_use]
+pub fn ipe_app_from_env_required(var_name: String) -> crate::secret::Secret {
+    match crate::system::read_env_var(&var_name) {
+        Ok(value) if !value.is_empty() => crate::secret::secret_from_string(value),
+        // Missing (VarError) or present-but-empty: fail closed, naming the var.
+        _ => ConfigError::missing_required_secret(&var_name).abort_startup(),
+    }
+}
+
+/// A load-time configuration error: a REQUIRED value the app declared is absent
+/// where a default would mask a misconfiguration. Carries the setting's env
+/// source so the operator is told exactly which variable to supply. Never
+/// carries a secret VALUE — only the NAME of the variable that was empty — so it
+/// is always safe to render.
+///
+/// A `ConfigError` is fail-closed by construction: it exists only to be reported
+/// and abort startup ([`Self::abort_startup`]); there is no path that turns one
+/// into a usable (empty) config value.
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub struct ConfigError {
+    /// The env variable the required setting is sourced from (never a secret).
+    env_var: String,
+}
+
+impl ConfigError {
+    /// A required secret setting whose env source (`var_name`) is missing/empty.
+    #[must_use]
+    pub fn missing_required_secret(var_name: &str) -> Self {
+        Self {
+            env_var: var_name.to_owned(),
+        }
+    }
+
+    /// The operator-facing message naming the missing variable and its role. No
+    /// secret value is ever interpolated — only the variable NAME, which is not
+    /// itself sensitive.
+    #[must_use]
+    pub fn message(&self) -> String {
+        format!(
+            "required configuration secret is missing: set the `{}` environment variable \
+             (a required secret sourced via `App.fromEnvRequired` must not be empty; the \
+             server will not start until it is supplied)",
+            self.env_var
+        )
+    }
+
+    /// Report this fail-closed config error to stderr and exit non-zero — the
+    /// server never binds. `-> !`: this never returns, so a caller expecting a
+    /// [`Secret`] uses it in value position without producing an empty secret.
+    pub fn abort_startup(&self) -> ! {
+        eprintln!("configuration error: {}", self.message());
+        crate::system::system_exit(1)
+    }
+}
+
 /// `Db.url : Secret -> Setting a`. The URL is already a sealed [`Secret`],
 /// carried unchanged.
 #[cfg(feature = "secret")]
 #[must_use]
 pub fn ipe_setting_db_url(url: crate::secret::Secret) -> Setting {
     Setting::DbUrl(url)
+}
+
+/// `Console.adminToken : Secret -> Setting a`. The admin/metrics-console auth
+/// token, carried as a sealed [`Secret`]. The runtime reads the resolved secret
+/// (via [`resolve_console_token`]) instead of a bare `IPE_ADMIN_TOKEN` env read.
+#[cfg(feature = "secret")]
+#[must_use]
+pub fn ipe_setting_console_admin_token(token: crate::secret::Secret) -> Setting {
+    Setting::ConsoleToken(ConsoleTokenKind::Admin, token)
+}
+
+/// `Console.ingestToken : Secret -> Setting a`. The federation ingest-endpoint
+/// token, carried as a sealed [`Secret`].
+#[cfg(feature = "secret")]
+#[must_use]
+pub fn ipe_setting_console_ingest_token(token: crate::secret::Secret) -> Setting {
+    Setting::ConsoleToken(ConsoleTokenKind::Ingest, token)
+}
+
+/// `Console.metricsToken : Secret -> Setting a`. The metrics-scrape token,
+/// carried as a sealed [`Secret`].
+#[cfg(feature = "secret")]
+#[must_use]
+pub fn ipe_setting_console_metrics_token(token: crate::secret::Secret) -> Setting {
+    Setting::ConsoleToken(ConsoleTokenKind::Metrics, token)
 }
 
 /// `Web.csrf : CsrfMode -> Setting Web`. Carries the CSRF policy tag the Ipê
@@ -210,6 +328,12 @@ struct ResolvedConfig {
     auth_revocation_mode: Option<RevocationMode>,
     #[cfg(feature = "secret")]
     db_url: Option<crate::secret::Secret>,
+    #[cfg(feature = "secret")]
+    console_admin_token: Option<crate::secret::Secret>,
+    #[cfg(feature = "secret")]
+    console_ingest_token: Option<crate::secret::Secret>,
+    #[cfg(feature = "secret")]
+    console_metrics_token: Option<crate::secret::Secret>,
 }
 
 static INSTALLED: OnceLock<ResolvedConfig> = OnceLock::new();
@@ -248,6 +372,12 @@ pub fn install_web(settings: Vec<Setting>) {
             }
             #[cfg(feature = "secret")]
             Setting::DbUrl(url) => cfg.db_url = Some(url),
+            #[cfg(feature = "secret")]
+            Setting::ConsoleToken(kind, token) => match kind {
+                ConsoleTokenKind::Admin => cfg.console_admin_token = Some(token),
+                ConsoleTokenKind::Ingest => cfg.console_ingest_token = Some(token),
+                ConsoleTokenKind::Metrics => cfg.console_metrics_token = Some(token),
+            },
         }
     }
     // First install wins; a redundant install is a no-op (never a panic).
@@ -529,6 +659,39 @@ pub fn resolve_db_url_override() -> Option<String> {
         .map(crate::secret::secret_reveal)
 }
 
+/// The installed `Console.*Token` secret for `kind`, revealed at the point of
+/// use. `None` means the caller should keep resolving from its own env source —
+/// the one precedence `env > setting-in-code` is preserved by the caller reading
+/// its env var FIRST (env wins) and only consulting this in-code setting when the
+/// env var is absent. The secret is revealed only here, at the auth check, and is
+/// never logged (a `Secret` cannot be stringified to anything but `<redacted>`).
+///
+/// This replaces the previously-bare env-string token reads with a typed
+/// `Secret` carrier: a token configured in code is sealed and never appears as a
+/// plaintext `String` a log line could splice in.
+#[must_use]
+pub fn resolve_console_token(kind: ConsoleTokenKind) -> Option<String> {
+    // The token settings carry a `Secret`, so they only exist in a `secret`-
+    // feature build; without it there is no in-code token to resolve and the
+    // caller falls back to its env source.
+    #[cfg(feature = "secret")]
+    {
+        INSTALLED
+            .get()
+            .and_then(|c| match kind {
+                ConsoleTokenKind::Admin => c.console_admin_token.clone(),
+                ConsoleTokenKind::Ingest => c.console_ingest_token.clone(),
+                ConsoleTokenKind::Metrics => c.console_metrics_token.clone(),
+            })
+            .map(crate::secret::secret_reveal)
+    }
+    #[cfg(not(feature = "secret"))]
+    {
+        let _ = kind;
+        None
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -722,6 +885,57 @@ mod tests {
             ipe_setting_web_auth_revocation_mode(1),
             Setting::WebAuthRevocationMode(RevocationMode::Store)
         ));
+    }
+
+    // ── ConfigError (App.fromEnvRequired fail-closed) ──────────────────────
+
+    #[test]
+    fn config_error_names_the_missing_env_var() {
+        // The fail-closed message must NAME the variable the operator has to set,
+        // so a missing required secret is an actionable startup refusal.
+        let err = ConfigError::missing_required_secret("DATABASE_URL");
+        let msg = err.message();
+        assert!(
+            msg.contains("DATABASE_URL"),
+            "message must name the missing env var, got: {msg}"
+        );
+        assert!(
+            msg.contains("App.fromEnvRequired"),
+            "message must point at the required-secret source, got: {msg}"
+        );
+    }
+
+    #[cfg(feature = "secret")]
+    #[test]
+    fn console_token_builders_carry_the_right_kind() {
+        // Each `Console.*Token` builder seals its `Secret` under the matching
+        // `ConsoleTokenKind`, so the resolver reads back the correct token.
+        let admin = ipe_setting_console_admin_token(crate::secret::secret_from_string("a".into()));
+        let ingest =
+            ipe_setting_console_ingest_token(crate::secret::secret_from_string("b".into()));
+        let metrics =
+            ipe_setting_console_metrics_token(crate::secret::secret_from_string("c".into()));
+        assert!(matches!(
+            admin,
+            Setting::ConsoleToken(ConsoleTokenKind::Admin, _)
+        ));
+        assert!(matches!(
+            ingest,
+            Setting::ConsoleToken(ConsoleTokenKind::Ingest, _)
+        ));
+        assert!(matches!(
+            metrics,
+            Setting::ConsoleToken(ConsoleTokenKind::Metrics, _)
+        ));
+    }
+
+    #[test]
+    fn config_error_message_never_carries_a_secret_value() {
+        // A `ConfigError` carries only the variable NAME, never a value — so it
+        // is always safe to render, even though it names a secret's source.
+        let err = ConfigError::missing_required_secret("SMTP_PASSWORD");
+        // Only the variable name is present; there is no value field to leak.
+        assert_eq!(err.env_var, "SMTP_PASSWORD");
     }
 
     #[test]

@@ -1742,6 +1742,11 @@ pub enum StdlibKernel {
     /// `Secret` from an environment variable. A hard-coded credential is a
     /// plain `String`, so it does not type-check where a `Secret` is required.
     AppFromEnv,
+    /// `App.fromEnvRequired : String -> Secret` — the fail-CLOSED required
+    /// variant of [`Self::AppFromEnv`]. Same seal, but a missing/empty env var
+    /// is a typed load-time `ConfigError` naming the var (the server never
+    /// binds) rather than the fail-safe empty secret `App.fromEnv` yields.
+    AppFromEnvRequired,
     /// `Host.bind : Int -> Setting a` — cross-cutting host-bind setting (raw
     /// host-mode tag; out-of-range resolves fail-closed to loopback).
     HostBind,
@@ -1751,6 +1756,16 @@ pub enum StdlibKernel {
     /// `Db.url : Secret -> Setting a` — cross-cutting database-URL setting; the
     /// URL is a `Secret`, so it can only come from `App.fromEnv`.
     DbUrlSetting,
+    /// `Console.adminToken : Secret -> Setting a` — the admin/metrics-console
+    /// auth token as a `Secret`-typed setting (was a bare `IPE_ADMIN_TOKEN` env
+    /// read with no typed carrier). Sourced via `App.fromEnvRequired`.
+    ConsoleAdminToken,
+    /// `Console.ingestToken : Secret -> Setting a` — the federation ingest token
+    /// as a `Secret`-typed setting (was a bare `IPE_INGEST_TOKEN` env read).
+    ConsoleIngestToken,
+    /// `Console.metricsToken : Secret -> Setting a` — the metrics-scrape token as
+    /// a `Secret`-typed setting (was a bare `IPE_METRICS_TOKEN` env read).
+    ConsoleMetricsToken,
     /// `Web.csrf : Int -> Setting Web` — web-only CSRF-policy setting (raw
     /// policy tag; a stricter-only apply means it can never weaken CSRF).
     WebCsrf,
@@ -3547,9 +3562,37 @@ impl StdlibKernel {
             // ── Ipe.Web settings-carrying app entry + runtime-config kernels ──
             Self::WebAppWith => d("Web", "appWith", 2, Web, "web_app_with"),
             Self::AppFromEnv => d("App", "fromEnv", 1, Pure, "ipe_app_from_env"),
+            Self::AppFromEnvRequired => d(
+                "App",
+                "fromEnvRequired",
+                1,
+                Pure,
+                "ipe_app_from_env_required",
+            ),
             Self::HostBind => d("Host", "bind", 1, Pure, "ipe_setting_host_bind"),
             Self::LogLevelSetting => d("Log", "level", 1, Pure, "ipe_setting_log_level"),
             Self::DbUrlSetting => d("Db", "url", 1, Pure, "ipe_setting_db_url"),
+            Self::ConsoleAdminToken => d(
+                "Console",
+                "adminToken",
+                1,
+                Pure,
+                "ipe_setting_console_admin_token",
+            ),
+            Self::ConsoleIngestToken => d(
+                "Console",
+                "ingestToken",
+                1,
+                Pure,
+                "ipe_setting_console_ingest_token",
+            ),
+            Self::ConsoleMetricsToken => d(
+                "Console",
+                "metricsToken",
+                1,
+                Pure,
+                "ipe_setting_console_metrics_token",
+            ),
             Self::WebCsrf => d("Web", "csrf", 1, Pure, "ipe_setting_web_csrf"),
             Self::WebSessionTtl => d("Web", "sessionTtl", 1, Pure, "ipe_setting_web_session_ttl"),
             Self::WebAuthMaxLifetime => d(
@@ -4987,9 +5030,13 @@ impl StdlibKernel {
         // Ipe.Web settings-carrying app entry + runtime-config front door
         Self::WebAppWith,
         Self::AppFromEnv,
+        Self::AppFromEnvRequired,
         Self::HostBind,
         Self::LogLevelSetting,
         Self::DbUrlSetting,
+        Self::ConsoleAdminToken,
+        Self::ConsoleIngestToken,
+        Self::ConsoleMetricsToken,
         Self::WebCsrf,
         Self::WebSessionTtl,
         Self::WebAuthMaxLifetime,
@@ -9815,9 +9862,13 @@ impl StdlibKernel {
             // discloses no capability; the capability is the app run itself.
             | Self::WebAppWith
             | Self::AppFromEnv
+            | Self::AppFromEnvRequired
             | Self::HostBind
             | Self::LogLevelSetting
             | Self::DbUrlSetting
+            | Self::ConsoleAdminToken
+            | Self::ConsoleIngestToken
+            | Self::ConsoleMetricsToken
             | Self::WebCsrf
             | Self::WebSessionTtl
             | Self::WebAuthMaxLifetime
@@ -10827,7 +10878,16 @@ impl StdlibKernel {
     /// [`Self::is_secret`], which tracks `secret.rs`-module residency.
     #[must_use]
     pub const fn needs_secret_feature(self) -> bool {
-        self.is_secret() || matches!(self, Self::AppFromEnv | Self::DbUrlSetting)
+        self.is_secret()
+            || matches!(
+                self,
+                Self::AppFromEnv
+                    | Self::AppFromEnvRequired
+                    | Self::DbUrlSetting
+                    | Self::ConsoleAdminToken
+                    | Self::ConsoleIngestToken
+                    | Self::ConsoleMetricsToken
+            )
     }
 
     /// `true` when this variant belongs to the `Ipe.Jwt` kernel family

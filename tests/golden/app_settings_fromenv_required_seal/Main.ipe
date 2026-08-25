@@ -1,0 +1,63 @@
+module Main exposing (main)
+
+-- `App.fromEnvRequired` — the fail-closed required-secret source. Same
+-- signature as `App.fromEnv` (`String -> Secret`), so it type-checks in the
+-- `Db.url` slot; the difference is runtime (a missing/empty `DATABASE_URL` is a
+-- named startup `ConfigError`, not an empty secret). ipe MUST exit 0 AND the
+-- emitted project MUST cargo-build (THE SEAL for item 2).
+
+import Ipe.Tea.Web as Web
+import Ipe.Ui as Ui
+import Ipe.Tea.Web.Cmd
+import Ipe.String
+import Ipe.Tea.Web.Sub
+import Ipe.App as App
+import Ipe.Db as Db
+
+
+type Page
+    = CounterPage
+
+
+type Msg
+    = Increment
+
+
+type alias Model =
+    { page : Page
+    , count : Int
+    }
+
+
+init : a -> ( Model, Cmd Msg )
+init _req =
+    ( { page = CounterPage, count = 0 }, Cmd.none )
+
+
+update : Msg -> Model -> ( Model, Cmd Msg )
+update msg model =
+    case msg of
+        Increment ->
+            ( { model | count = model.count + 1 }, Cmd.none )
+
+
+view : Model -> Element Msg
+view model =
+    Ui.text (String.fromInt model.count)
+
+
+subscriptions : Model -> Sub Msg
+subscriptions _model =
+    Sub.none
+
+
+main =
+    Web.appWith
+        [ Db.url (App.fromEnvRequired "DATABASE_URL") ]
+        { init = init
+        , update = update
+        , view = view
+        , subscriptions = subscriptions
+        , routes = []
+        , notFound = CounterPage
+        }
