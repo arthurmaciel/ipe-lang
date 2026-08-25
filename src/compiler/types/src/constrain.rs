@@ -10016,6 +10016,17 @@ mod registry_phase_c_tests {
             K::WebCsrfInherit,
             K::WebRevocationOff,
             K::WebRevocationStore,
+            // `Server.withRevocation : RevocationMode -> AuthConfig -> AuthConfig` —
+            // Ipê-new (no legacy oracle); arms the revocation gate on an auth config.
+            K::ServerWithRevocation,
+            // `Auth.Revocation` management kernels (4) — Ipê-new (no legacy oracle):
+            // `revokeUser`/`revokeSession`/`restoreUser` are
+            // `Principal -> String -> Task Error ()`;
+            // `isRevoked` is `String -> Task Error Bool`.
+            K::AuthRevocationRevokeUser,
+            K::AuthRevocationRevokeSession,
+            K::AuthRevocationRestoreUser,
+            K::AuthRevocationIsRevoked,
         ]
     };
 

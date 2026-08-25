@@ -202,8 +202,20 @@ pub fn render_package_ipe(
 /// this crate produced, where `src_root = root.join(rel)`). A non-UTF-8 segment
 /// is treated as absent — the stage is skipped rather than corrupted silently.
 fn source_root_rel(m: &ProjectManifest) -> Option<String> {
+    // `m.src_root` is an absolute canonicalised path (produced by
+    // `ContainedRelPath::parse`, which calls `fs::canonicalize`). `m.root` may
+    // be a relative or even empty path when `parse_toml_manifest` received a
+    // bare filename such as `ipe.toml` (whose `parent()` is `""`). In that
+    // case `strip_prefix("")` succeeds — it matches an empty prefix — and
+    // returns the full absolute src path, which is never equal to `"src"` and
+    // would be emitted verbatim. Guard against this by resolving `m.root` to
+    // an absolute path before stripping: use `canonicalize` when it succeeds,
+    // fall back to `current_dir` (mirrors what `ContainedRelPath` did when it
+    // resolved the empty / dot root during parsing).
+    let abs_root = std::fs::canonicalize(&m.root)
+        .unwrap_or_else(|_| std::env::current_dir().unwrap_or_else(|_| m.root.clone()));
     m.src_root
-        .strip_prefix(&m.root)
+        .strip_prefix(&abs_root)
         .ok()
         .and_then(|p| p.to_str().map(str::to_owned))
 }
