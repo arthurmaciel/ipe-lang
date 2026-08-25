@@ -2009,6 +2009,7 @@ dependencies = [
 name = "ipe"
 version = "0.1.68"
 dependencies = [
+ "base64",
  "e2e-support",
  "hex",
  "include_dir",
