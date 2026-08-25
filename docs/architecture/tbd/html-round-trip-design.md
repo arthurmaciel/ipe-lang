@@ -120,7 +120,7 @@ markup; never for embed-config, which the typed path covers.
 
 **Prefer a safe channel over any script body — the JS-interop discipline.** For
 passing typed *data* from Ipê to JS, the JS-interop design
-([`web-js-ports-design.md`](./web-js-ports-design.md)) supplies a typed transport
+([`js-interop-design.md`](./js-interop-design.md) §6) supplies a typed transport
 (`Js.subscribe` / `sync`) that removes the `data-ipe-eval` / `new Function` seam
 entirely. A bootstrap `<script>` that only carries data is usually better expressed
 as that transport — no script body, no breakout surface at all. `jsonData` is the
