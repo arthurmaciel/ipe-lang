@@ -266,7 +266,6 @@ pub fn restore_subject(subject: &str) -> Result<(), RevocationError> {
 /// session-scoped entries (a subject not in the map may still have a revoked
 /// `jti`). Intended for the `isRevoked` app-facing kernel (an admin UI query),
 /// not for the per-request auth gate (which calls [`is_revoked`]).
-#[must_use]
 pub fn subject_is_revoked(subject: &str) -> Result<bool, RevocationError> {
     let Some(guard) = lock() else {
         return Err(RevocationError::Unavailable);

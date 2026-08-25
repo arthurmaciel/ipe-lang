@@ -390,3 +390,26 @@ fn hard_coded_console_token_is_rejected() {
          rejected — a console token can only come from `App.fromEnv`/`fromEnvRequired`"
     );
 }
+
+/// A top-level `config` binding beside an inline `Web.appWith [ … ] { … }` MUST
+/// be an ipe-time error (IPE-N0043). The inline settings list already supplies
+/// the app's configuration; the sibling `config` has nowhere to be threaded and
+/// its settings would be silently dropped.
+#[test]
+fn config_binding_beside_inline_appwith_is_rejected() {
+    const GOLDEN: &str = "app_settings_config_beside_inline_appwith";
+    let root = repo_root();
+    let entry = fixture_entry(&root, GOLDEN);
+    let out = std::env::temp_dir().join("ipec_app_settings_config_beside_inline_appwith");
+    let _ = std::fs::remove_dir_all(&out);
+
+    let Ok(runtime) = ipe::resolve_runtime() else {
+        return;
+    };
+    let built = ipe::build(&entry, &out, &runtime);
+    assert!(
+        built.is_err(),
+        "a `config` binding beside an inline `Web.appWith` MUST be rejected (IPE-N0043) — \
+         its settings would otherwise be silently dropped"
+    );
+}
