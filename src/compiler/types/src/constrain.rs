@@ -7471,6 +7471,10 @@ impl<'a> Builder<'a> {
             // hard-coded credential is a plain `String`, so it cannot reach a
             // `Secret` slot (e.g. `Db.url`).
             K::AppFromEnv => fun(string(), secret()),
+            // `App.fromEnvRequired : String -> Secret` — identical signature to
+            // `App.fromEnv`; the difference is purely runtime (fail-closed on a
+            // missing/empty var), so it type-checks the same way.
+            K::AppFromEnvRequired => fun(string(), secret()),
             // `Host.bind : HostMode -> Setting a` — cross-cutting; the shape var
             // is free, so it unifies into any app's settings list. The argument is
             // the closed `HostMode` ADT (a bare `Int` no longer type-checks); each
@@ -9991,9 +9995,10 @@ mod registry_phase_c_tests {
             K::TaskMap4,
             K::TaskMap5,
             K::TaskAttempt,
-            // ── Ipe.App runtime-config front door (7, Ipê-new) ──────────────
+            // ── Ipe.App runtime-config front door (8, Ipê-new) ──────────────
             K::WebAppWith,
             K::AppFromEnv,
+            K::AppFromEnvRequired,
             K::HostBind,
             K::LogLevelSetting,
             K::DbUrlSetting,

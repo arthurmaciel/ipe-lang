@@ -125,6 +125,75 @@ pub fn ipe_app_from_env(var_name: String) -> crate::secret::Secret {
     crate::secret::secret_from_string(value)
 }
 
+/// `App.fromEnvRequired : String -> Secret` — the fail-CLOSED required variant
+/// of [`ipe_app_from_env`]. Reads the named environment variable at startup and
+/// seals its value into a [`Secret`], exactly like `App.fromEnv` — but a
+/// MISSING or EMPTY variable is a typed load-time [`ConfigError`] naming the
+/// variable, reported once to stderr, and the process exits non-zero (the
+/// server never binds).
+///
+/// This is the security-relevant sourcing: where `App.fromEnv` is fail-SAFE (an
+/// absent optional secret becomes an empty secret), a value the app declares
+/// REQUIRED must not silently default to empty — an empty database URL or auth
+/// token that fails obscurely later is worse than a named startup refusal. The
+/// only outcomes are "a non-empty secret" or "a named fail-closed exit"; a
+/// silent empty secret is unreachable by construction.
+#[cfg(feature = "secret")]
+#[must_use]
+pub fn ipe_app_from_env_required(var_name: String) -> crate::secret::Secret {
+    match crate::system::read_env_var(&var_name) {
+        Ok(value) if !value.is_empty() => crate::secret::secret_from_string(value),
+        // Missing (VarError) or present-but-empty: fail closed, naming the var.
+        _ => ConfigError::missing_required_secret(&var_name).abort_startup(),
+    }
+}
+
+/// A load-time configuration error: a REQUIRED value the app declared is absent
+/// where a default would mask a misconfiguration. Carries the setting's env
+/// source so the operator is told exactly which variable to supply. Never
+/// carries a secret VALUE — only the NAME of the variable that was empty — so it
+/// is always safe to render.
+///
+/// A `ConfigError` is fail-closed by construction: it exists only to be reported
+/// and abort startup ([`Self::abort_startup`]); there is no path that turns one
+/// into a usable (empty) config value.
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub struct ConfigError {
+    /// The env variable the required setting is sourced from (never a secret).
+    env_var: String,
+}
+
+impl ConfigError {
+    /// A required secret setting whose env source (`var_name`) is missing/empty.
+    #[must_use]
+    pub fn missing_required_secret(var_name: &str) -> Self {
+        Self {
+            env_var: var_name.to_owned(),
+        }
+    }
+
+    /// The operator-facing message naming the missing variable and its role. No
+    /// secret value is ever interpolated — only the variable NAME, which is not
+    /// itself sensitive.
+    #[must_use]
+    pub fn message(&self) -> String {
+        format!(
+            "required configuration secret is missing: set the `{}` environment variable \
+             (a required secret sourced via `App.fromEnvRequired` must not be empty; the \
+             server will not start until it is supplied)",
+            self.env_var
+        )
+    }
+
+    /// Report this fail-closed config error to stderr and exit non-zero — the
+    /// server never binds. `-> !`: this never returns, so a caller expecting a
+    /// [`Secret`] uses it in value position without producing an empty secret.
+    pub fn abort_startup(&self) -> ! {
+        eprintln!("configuration error: {}", self.message());
+        crate::system::system_exit(1)
+    }
+}
+
 /// `Db.url : Secret -> Setting a`. The URL is already a sealed [`Secret`],
 /// carried unchanged.
 #[cfg(feature = "secret")]
@@ -722,6 +791,33 @@ mod tests {
             ipe_setting_web_auth_revocation_mode(1),
             Setting::WebAuthRevocationMode(RevocationMode::Store)
         ));
+    }
+
+    // ── ConfigError (App.fromEnvRequired fail-closed) ──────────────────────
+
+    #[test]
+    fn config_error_names_the_missing_env_var() {
+        // The fail-closed message must NAME the variable the operator has to set,
+        // so a missing required secret is an actionable startup refusal.
+        let err = ConfigError::missing_required_secret("DATABASE_URL");
+        let msg = err.message();
+        assert!(
+            msg.contains("DATABASE_URL"),
+            "message must name the missing env var, got: {msg}"
+        );
+        assert!(
+            msg.contains("App.fromEnvRequired"),
+            "message must point at the required-secret source, got: {msg}"
+        );
+    }
+
+    #[test]
+    fn config_error_message_never_carries_a_secret_value() {
+        // A `ConfigError` carries only the variable NAME, never a value — so it
+        // is always safe to render, even though it names a secret's source.
+        let err = ConfigError::missing_required_secret("SMTP_PASSWORD");
+        // Only the variable name is present; there is no value field to leak.
+        assert_eq!(err.env_var, "SMTP_PASSWORD");
     }
 
     #[test]

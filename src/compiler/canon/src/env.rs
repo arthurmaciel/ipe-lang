@@ -902,8 +902,10 @@ impl Env {
                 ],
             ),
             // `Ipe.App` — runtime-config front door. `fromEnv` seals an env var
-            // into a `Secret` (the ONLY way to get a config secret).
-            ("App", &["fromEnv"]),
+            // into a `Secret` (the ONLY way to get a config secret);
+            // `fromEnvRequired` is its fail-closed variant (a missing/empty var
+            // is a named load-time `ConfigError`, not an empty secret).
+            ("App", &["fromEnv", "fromEnvRequired"]),
             // `Ipe.Host` — the host-bind setting builder plus the `HostMode`
             // constructors it takes.
             ("Host", &["bind", "loopback", "allInterfaces", "envDriven"]),

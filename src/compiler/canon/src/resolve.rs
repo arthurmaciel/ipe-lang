@@ -1429,11 +1429,13 @@ fn thread_config_into_entry(
             // callee to `Web.appWith` and prepend the `config` reference.
             if (*name == names.app || *name == names.app_routed) && args.len() == 1 {
                 let module = *module;
-                // Re-target the kernel: `id` is re-resolved by `lower_callee` from
-                // `(module, name)`, so clearing it keeps lowering on the kernel
-                // path (no stale `Web.app` id survives the rewrite).
+                // Re-target the kernel to `Web.appWith`. Both the type-checker
+                // (`resolve_scheme(SchemeKey(id))`) and the emit path key off the
+                // pre-resolved `id`, so it MUST carry the settings-carrying
+                // `WebAppWith` variant — a `None` id would fail closed as
+                // IPE-L0108 (Unsupported kernel) at type-check.
                 callee.value = canon::Expr_::VarKernel {
-                    id: None,
+                    id: Some(StdlibKernel::WebAppWith),
                     module,
                     name: names.app_with,
                 };

@@ -1,0 +1,22 @@
+module Main exposing (main)
+
+-- A top-level `config` binding that no app entry consumes: `main` is a plain
+-- Program (a `Task`), so the settings are never installed. This MUST be
+-- rejected at ipe time with IPE-N0043 (the discarded-config lint) rather than
+-- compiling into a program that silently ignores its own configuration.
+
+import Ipe.Io as Io
+import Ipe.App as App
+import Ipe.Host as Host
+import Ipe.Db as Db
+
+
+config =
+    [ Host.bind Host.loopback
+    , Db.url (App.fromEnv "DATABASE_URL")
+    ]
+
+
+main : Task Error ()
+main =
+    Io.println "the config above is never installed"

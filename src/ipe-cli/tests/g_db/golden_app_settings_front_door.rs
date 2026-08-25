@@ -273,3 +273,74 @@ fn bare_int_log_level_is_rejected() {
          closed `LogLevel` ADT makes an out-of-range severity tag a type error"
     );
 }
+
+/// THE SEAL (item 1): a named top-level `config : List (Setting Web)` binding
+/// threaded into a settings-less `Web.app { … }` entry is accepted (exit 0) AND
+/// the emitted crate `cargo build`s. Proves canon rewrites `Web.app` to
+/// `Web.appWith config` — the ergonomic one-`config`-binding surface.
+#[test]
+fn config_binding_threads_into_web_app_and_builds() {
+    const GOLDEN: &str = "app_settings_config_binding";
+    let root = repo_root();
+    let entry = fixture_entry(&root, GOLDEN);
+    let out = std::env::temp_dir().join("ipec_app_settings_config_binding_e2e");
+    let _ = std::fs::remove_dir_all(&out);
+
+    let Ok(runtime) = ipe::resolve_runtime() else {
+        return; // resolver unavailable — skip
+    };
+    let built = ipe::build(&entry, &out, &runtime);
+    assert!(
+        built.is_ok(),
+        "a named `config` binding threaded into a `Web.app` entry must be accepted \
+         and emit a buildable crate, got: {built:?}"
+    );
+
+    crate::support::assert_seal_builds(GOLDEN, &out);
+}
+
+/// A top-level `config` binding that no app entry consumes (here `main` is a
+/// plain Program) MUST be an ipe-time error (IPE-N0043, the discarded-config
+/// lint) — the settings would otherwise be silently dropped.
+#[test]
+fn discarded_config_binding_is_rejected() {
+    const GOLDEN: &str = "app_settings_discarded_config_rejected";
+    let root = repo_root();
+    let entry = fixture_entry(&root, GOLDEN);
+    let out = std::env::temp_dir().join("ipec_app_settings_discarded_config_rejected");
+    let _ = std::fs::remove_dir_all(&out);
+
+    let Ok(runtime) = ipe::resolve_runtime() else {
+        return;
+    };
+    let built = ipe::build(&entry, &out, &runtime);
+    assert!(
+        built.is_err(),
+        "a `config` binding that no app entry threads MUST be rejected (IPE-N0043) — \
+         its settings would otherwise be silently dropped"
+    );
+}
+
+/// THE SEAL (item 2): `Db.url (App.fromEnvRequired "DATABASE_URL")` — the
+/// fail-closed required-secret source — is accepted (exit 0) and (under
+/// `IPE_E2E=1`) the emitted crate `cargo build`s. Proves `AppFromEnvRequired`
+/// is wired through canon/constrain/lower and shares `App.fromEnv`'s signature.
+#[test]
+fn from_env_required_seal_builds() {
+    const GOLDEN: &str = "app_settings_fromenv_required_seal";
+    let root = repo_root();
+    let entry = fixture_entry(&root, GOLDEN);
+    let out = std::env::temp_dir().join("ipec_app_settings_fromenv_required_seal_e2e");
+    let _ = std::fs::remove_dir_all(&out);
+
+    let Ok(runtime) = ipe::resolve_runtime() else {
+        return; // resolver unavailable — skip
+    };
+    let built = ipe::build(&entry, &out, &runtime);
+    assert!(
+        built.is_ok(),
+        "`App.fromEnvRequired` must be accepted and emit a buildable crate, got: {built:?}"
+    );
+
+    crate::support::assert_seal_builds(GOLDEN, &out);
+}

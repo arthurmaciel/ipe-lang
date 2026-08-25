@@ -1742,6 +1742,11 @@ pub enum StdlibKernel {
     /// `Secret` from an environment variable. A hard-coded credential is a
     /// plain `String`, so it does not type-check where a `Secret` is required.
     AppFromEnv,
+    /// `App.fromEnvRequired : String -> Secret` — the fail-CLOSED required
+    /// variant of [`Self::AppFromEnv`]. Same seal, but a missing/empty env var
+    /// is a typed load-time `ConfigError` naming the var (the server never
+    /// binds) rather than the fail-safe empty secret `App.fromEnv` yields.
+    AppFromEnvRequired,
     /// `Host.bind : Int -> Setting a` — cross-cutting host-bind setting (raw
     /// host-mode tag; out-of-range resolves fail-closed to loopback).
     HostBind,
@@ -3547,6 +3552,13 @@ impl StdlibKernel {
             // ── Ipe.Web settings-carrying app entry + runtime-config kernels ──
             Self::WebAppWith => d("Web", "appWith", 2, Web, "web_app_with"),
             Self::AppFromEnv => d("App", "fromEnv", 1, Pure, "ipe_app_from_env"),
+            Self::AppFromEnvRequired => d(
+                "App",
+                "fromEnvRequired",
+                1,
+                Pure,
+                "ipe_app_from_env_required",
+            ),
             Self::HostBind => d("Host", "bind", 1, Pure, "ipe_setting_host_bind"),
             Self::LogLevelSetting => d("Log", "level", 1, Pure, "ipe_setting_log_level"),
             Self::DbUrlSetting => d("Db", "url", 1, Pure, "ipe_setting_db_url"),
@@ -4987,6 +4999,7 @@ impl StdlibKernel {
         // Ipe.Web settings-carrying app entry + runtime-config front door
         Self::WebAppWith,
         Self::AppFromEnv,
+        Self::AppFromEnvRequired,
         Self::HostBind,
         Self::LogLevelSetting,
         Self::DbUrlSetting,
@@ -9815,6 +9828,7 @@ impl StdlibKernel {
             // discloses no capability; the capability is the app run itself.
             | Self::WebAppWith
             | Self::AppFromEnv
+            | Self::AppFromEnvRequired
             | Self::HostBind
             | Self::LogLevelSetting
             | Self::DbUrlSetting
@@ -10827,7 +10841,11 @@ impl StdlibKernel {
     /// [`Self::is_secret`], which tracks `secret.rs`-module residency.
     #[must_use]
     pub const fn needs_secret_feature(self) -> bool {
-        self.is_secret() || matches!(self, Self::AppFromEnv | Self::DbUrlSetting)
+        self.is_secret()
+            || matches!(
+                self,
+                Self::AppFromEnv | Self::AppFromEnvRequired | Self::DbUrlSetting
+            )
     }
 
     /// `true` when this variant belongs to the `Ipe.Jwt` kernel family
