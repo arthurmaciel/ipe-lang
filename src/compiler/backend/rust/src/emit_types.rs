@@ -499,6 +499,11 @@ pub fn render_type(ctx: &EmitCtx, ty: &IrType, generics: GenericScope) -> DResul
             "ipe_runtime::web::route::Route<{}>",
             render_type(ctx, page, generics)?
         ),
+        // The widget handle carries only its generated tag string; the seal
+        // types are phantom (they drive the down-encode / up-decode codegen at
+        // the `Ui.widget` call site, not the handle's own representation), so
+        // the rendered type takes no parameters.
+        IrType::CustomElement { .. } => "ipe_runtime::ui::widget::IpeCustomElement".to_owned(),
         IrType::Tuple(elems) => {
             let mut parts = Vec::with_capacity(elems.len());
             for elem in elems {

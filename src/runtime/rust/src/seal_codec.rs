@@ -175,6 +175,46 @@ pub fn seal_decode<T>(
     }
 }
 
+/// Decode a raw JS-boundary input into a serde-derived seal type, totally and
+/// fail-closed — the entry the generated `Ui.widget` up-decoder composes.
+///
+/// A seal-legal type in a Web program is emitted with
+/// `#[derive(serde::Serialize, serde::Deserialize)]` (the same derive the
+/// session-store Model carries), so its concrete Rust type IS its own decoder —
+/// no bespoke combinator generation is needed. This entry wraps `serde_json`
+/// with the SAME conservative-first bounds as [`seal_decode`]:
+///
+/// 1. Byte-length check — reject an oversized input before parsing allocates.
+/// 2. Depth-bounded parse — a syntax error or an over-nested document is refused
+///    before the typed decode runs.
+/// 3. Typed decode via `serde_json::from_value` — any shape/tag/field mismatch
+///    is a single typed rejection, never a partial value.
+///
+/// Returns the decoded value or the single reason it was refused. It never
+/// panics and never yields a partially-constructed value: a payload that does
+/// not decode to `T` is dropped whole (the up-event's fail-closed contract).
+#[cfg(feature = "json")]
+pub fn seal_decode_serde<T: serde::de::DeserializeOwned>(
+    input: &str,
+    limits: SealLimits,
+) -> Result<T, SealDecodeError> {
+    if input.len() > limits.max_input_bytes {
+        return Err(SealDecodeError::TooLarge {
+            len: input.len(),
+            max: limits.max_input_bytes,
+        });
+    }
+    // Depth-bound the untrusted document first (same post-parse structural check
+    // as `seal_decode`), so an adversarial `[[[[…]]]]` is refused before the
+    // typed decode. `JsonVal` is `serde_json::Value`, so the parsed value feeds
+    // `from_value` with no re-serialisation.
+    let value = parse_depth_bounded(input, limits.max_nesting_depth)
+        .map_err(|detail| SealDecodeError::Malformed { detail })?;
+    serde_json::from_value::<T>(value).map_err(|e| SealDecodeError::TypeMismatch {
+        detail: e.to_string(),
+    })
+}
+
 /// Parse `input` into a [`JsonVal`] with the deserializer's recursion limit set
 /// to `max_depth`, so a document nested deeper than the seal budget is rejected
 /// as a parse error rather than recursing further. Returns the parser's own error

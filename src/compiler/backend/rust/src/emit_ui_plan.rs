@@ -121,10 +121,10 @@ pub enum NativeUiEmit {
     LazyLazy5,
     /// `PubSub.publish` / `PubSub.publishNoEcho` — turbofished Task kernel.
     PubSubPublish,
-    /// `Ui.widget` — widget transport not yet shipped (WP4); IPE-L0133 refuses
-    /// any `CustomElement`-typed value at lowering before this emitter is
-    /// reached. Present here only to satisfy the exhaustiveness partition.
-    WidgetTransportDeferred,
+    /// `Ui.widget` — the server-driven custom-element node. Bespoke because its
+    /// handler argument must be re-wrapped to satisfy the runtime fn's
+    /// `Send + Sync` bound (a boxed fn-value trait object is not `Sync`).
+    Widget,
     /// A shape-router delegation to another emitter.
     Delegate(UiDelegate),
 }
@@ -223,11 +223,14 @@ pub const fn ui_call_shape(k: KernelFn) -> Option<UiEmitPlan> {
             1,
             Guard::RejectInWebShape,
         ),
-        // `Ui.widget` is ui-family (is_ui()=true) but its transport is not
-        // shipped (WP4). IPE-L0133 refuses any CustomElement-typed value at
-        // lowering before this arm is ever dispatched. Classified here to
-        // satisfy the exhaustiveness partition; must never reach the emitter.
-        KernelFn::UiWidget => native(N::WidgetTransportDeferred),
+        // `Ui.widget ce state on_up` — the server-driven custom-element node.
+        // A bespoke arm, not a plain positional call: `ui_widget_`'s handler
+        // parameter carries `F: Fn(Up) -> M + Send + Sync + 'static`, which the
+        // codegen's default `Box<dyn Fn + Send>` fn-value rendering does NOT
+        // satisfy (a trait object is `Sync` only if its bound list says so). The
+        // emitter re-wraps the handler in a fresh closure at the call site — the
+        // same technique the `OnSubmit` / `String` / `Bool` event arms use.
+        KernelFn::UiWidget => native(N::Widget),
         KernelFn::UiNode => pos("ipe_runtime::ui::helpers::ui_node_", 3),
         KernelFn::UiTaggedNode => pos("ipe_runtime::ui::helpers::ui_tagged_node_", 4),
         KernelFn::UiAbove => pos("ipe_runtime::ui::helpers::ui_above_", 1),

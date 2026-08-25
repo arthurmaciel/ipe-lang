@@ -265,6 +265,11 @@ fn leaf_of_bounded(ctx: &EmitCtx, ty: &IrType, app: AppShape, fuel: u32) -> Mode
         | IrType::WebSocketServerCfg
         | IrType::WebReq
         | IrType::WebRoute(_)
+        // The `Ui.widget` custom-element handle is an opaque, non-serde value —
+        // it must never live in a Model (session state), exactly like a function
+        // value. `admissible()` (via `ir_type_is_serde` = `false`) rejects a
+        // Model field of this type; this arm names it in the resulting IPE-L0120.
+        | IrType::CustomElement { .. }
         // Cache config / stats + Csv document are kernel-boundary data records,
         // not serde, never persisted to a session store — not valid Model
         // leaves.

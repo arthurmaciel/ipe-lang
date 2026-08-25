@@ -55,6 +55,38 @@ fn bug(where_: &'static str, detail: impl Into<String>) -> Diagnostic {
     }
 }
 
+/// The generated custom-element tag for a widget hook at `cleaned_path`.
+///
+/// The tag is `ipe-ce-<hex16>`, where `<hex16>` is a deterministic hash of the
+/// CLEANED, in-project, traversal-free path the canon seal already validated.
+/// Two properties matter for Security #4 (element-registration injection):
+///
+/// 1. **No raw user input.** The tag is a fixed prefix plus a hex digest —
+///    every byte is `[a-z0-9-]`, none of it copied verbatim from source. An
+///    attacker who controls the path string cannot steer the tag to an
+///    arbitrary `customElements.define` name.
+/// 2. **Content-addressed + collision-free across distinct widgets.** A widget
+///    is one-to-one with its hook file, so hashing the file's in-project path
+///    yields a stable, per-widget-distinct identity. (WP5 folds the file's
+///    content hash into SRI serving; the tag identity itself is stable across
+///    that addition.)
+///
+/// A plain FNV-1a-64 digest is used, not a cryptographic hash: the tag is an
+/// opaque identifier, not a security primitive — its safety comes from property
+/// 1 (no user input), not from collision resistance. Keeping it dependency-free
+/// avoids pulling a crypto crate into the lowerer.
+fn custom_element_tag(cleaned_path: &str) -> String {
+    // FNV-1a-64 over the UTF-8 bytes of the sealed path.
+    const FNV_OFFSET: u64 = 0xcbf2_9ce4_8422_2325;
+    const FNV_PRIME: u64 = 0x0000_0100_0000_01b3;
+    let mut hash = FNV_OFFSET;
+    for byte in cleaned_path.as_bytes() {
+        hash ^= u64::from(*byte);
+        hash = hash.wrapping_mul(FNV_PRIME);
+    }
+    format!("ipe-ce-{hash:016x}")
+}
+
 /// Peel exactly `arity` arrows off `fn_ty`, returning `(arg_tys, ret_ty)` —
 /// each argument type in source order, then the trailing result type.
 ///
@@ -1357,6 +1389,7 @@ fn clear_let_bound_task_fail_pins(expr: Expr) -> Expr {
         | Expr::Float(_)
         | Expr::Str(_)
         | Expr::PathLit(_)
+        | Expr::CustomElementRef { .. }
         | Expr::Char(_)
         | Expr::Unit
         | Expr::Var(_)
@@ -1978,6 +2011,7 @@ fn escapes(body: &Expr, row_syms: &BTreeSet<Symbol>, tail_sym: Option<Symbol>) -
         | Expr::Float(_)
         | Expr::Str(_)
         | Expr::PathLit(_)
+        | Expr::CustomElementRef { .. }
         | Expr::Char(_)
         | Expr::Unit
         | Expr::Var(_)
@@ -2164,7 +2198,7 @@ fn ir_type_mentions(ty: &IrType, leaf: &impl Fn(&IrType) -> bool) -> bool {
         | IrType::Ui { msg: inner, .. }
         | IrType::List(inner) => ir_type_mentions(inner, leaf),
         // Two-payload carriers.
-        IrType::Result(a, b) | IrType::Dict(a, b) => {
+        IrType::Result(a, b) | IrType::Dict(a, b) | IrType::CustomElement { down: a, up: b } => {
             ir_type_mentions(a, leaf) || ir_type_mentions(b, leaf)
         }
         // Function carriers, all three boxing families.
@@ -2388,6 +2422,7 @@ fn expr_type_mentions(expr: &Expr, pred: &impl Fn(&IrType) -> bool) -> bool {
         | Expr::Float(_)
         | Expr::Str(_)
         | Expr::PathLit(_)
+        | Expr::CustomElementRef { .. }
         | Expr::Char(_)
         | Expr::Unit
         | Expr::Var(_)
@@ -2465,6 +2500,7 @@ fn expr_type_mentions(expr: &Expr, pred: &impl Fn(&IrType) -> bool) -> bool {
         | Expr::Float(_)
         | Expr::Str(_)
         | Expr::PathLit(_)
+        | Expr::CustomElementRef { .. }
         | Expr::Char(_)
         | Expr::Unit
         | Expr::Var(_)
@@ -2589,6 +2625,7 @@ fn collect_body_record_shapes(
         | Expr::Float(_)
         | Expr::Str(_)
         | Expr::PathLit(_)
+        | Expr::CustomElementRef { .. }
         | Expr::Char(_)
         | Expr::Unit
         | Expr::Var(_)
@@ -2683,6 +2720,7 @@ fn collect_body_record_shapes(
         | Expr::Float(_)
         | Expr::Str(_)
         | Expr::PathLit(_)
+        | Expr::CustomElementRef { .. }
         | Expr::Char(_)
         | Expr::Unit
         | Expr::Var(_)
@@ -2790,6 +2828,9 @@ fn ir_contains_fun(ty: &IrType) -> bool {
         // `WebRoute page` carries the page type it builds — recurse (the
         // route's own builder closure is runtime-internal, not a Ipê `Fn`).
         IrType::WebRoute(page) => ir_contains_fun(page),
+        // The widget handle carries no function; its seal types are canon-proven
+        // function-free, but recurse for structural faithfulness.
+        IrType::CustomElement { down, up } => ir_contains_fun(down) || ir_contains_fun(up),
         IrType::Enum { args, .. } => args.iter().any(ir_contains_fun),
         IrType::Maybe(elem) | IrType::List(elem) => ir_contains_fun(elem),
         IrType::Result(err, ok) => ir_contains_fun(err) || ir_contains_fun(ok),
@@ -2895,6 +2936,9 @@ fn clone_class(env: CloneEnv<'_>, t: &IrType) -> CloneClass {
         | IrType::Db
         | IrType::UiPlain(_)
         | IrType::WebReq
+        // The widget handle carries only a `String` tag — `#[derive(Clone)]`,
+        // its Clone-ness independent of the (unstored) seal args.
+        | IrType::CustomElement { .. }
         | IrType::Error
         | IrType::ErrorDetails
         | IrType::ErrorInfo
@@ -3333,6 +3377,7 @@ fn rewrite_captured_clones(
         | Expr::Bool(_)
         | Expr::Str(_)
         | Expr::PathLit(_)
+        | Expr::CustomElementRef { .. }
         | Expr::Char(_)
         | Expr::Unit
         | Expr::FuncValue { .. } => Ok(expr),
@@ -3916,6 +3961,7 @@ fn lambda_body_refs_sym(sym: Symbol, expr: &Expr) -> bool {
         | Expr::Float(_)
         | Expr::Str(_)
         | Expr::PathLit(_)
+        | Expr::CustomElementRef { .. }
         | Expr::Char(_)
         | Expr::Unit
         | Expr::FuncValue { .. } => false,
@@ -4065,6 +4111,7 @@ fn collect_lambda_capture_depths(sym: Symbol, expr: &Expr, cur_depth: u32, depth
         | Expr::Float(_)
         | Expr::Str(_)
         | Expr::PathLit(_)
+        | Expr::CustomElementRef { .. }
         | Expr::Char(_)
         | Expr::Unit
         | Expr::FuncValue { .. } => {}
@@ -4229,6 +4276,7 @@ fn flows_into_sync_kernel_call(sym: Symbol, expr: &Expr) -> bool {
         | Expr::Float(_)
         | Expr::Str(_)
         | Expr::PathLit(_)
+        | Expr::CustomElementRef { .. }
         | Expr::Char(_)
         | Expr::Unit
         | Expr::Var(_)
@@ -4309,6 +4357,7 @@ fn branch_value_leaf_reads_sym(name: Symbol, branch: &Expr) -> bool {
         | Expr::Float(_)
         | Expr::Str(_)
         | Expr::PathLit(_)
+        | Expr::CustomElementRef { .. }
         | Expr::Char(_)
         | Expr::Unit
         | Expr::FuncValue { .. }
@@ -4512,6 +4561,7 @@ fn unify_group_value_leaves(
         | Expr::Float(_)
         | Expr::Str(_)
         | Expr::PathLit(_)
+        | Expr::CustomElementRef { .. }
         | Expr::Char(_)
         | Expr::Unit
         | Expr::BinOp { .. }
@@ -4565,6 +4615,7 @@ fn promote_unification_sibling_lambdas(
         | Expr::Float(_)
         | Expr::Str(_)
         | Expr::PathLit(_)
+        | Expr::CustomElementRef { .. }
         | Expr::Char(_)
         | Expr::Unit
         | Expr::FuncValue { .. } => Ok(expr),
@@ -4875,6 +4926,7 @@ fn sym_referenced_directly(sym: Symbol, expr: &Expr) -> bool {
         | Expr::Float(_)
         | Expr::Str(_)
         | Expr::PathLit(_)
+        | Expr::CustomElementRef { .. }
         | Expr::Char(_)
         | Expr::Unit
         | Expr::FuncValue { .. } => false,
@@ -4927,6 +4979,7 @@ fn force_shared_capture_clones(sym: Symbol, expr: Expr) -> Expr {
         | Expr::Float(_)
         | Expr::Str(_)
         | Expr::PathLit(_)
+        | Expr::CustomElementRef { .. }
         | Expr::Char(_)
         | Expr::Unit
         | Expr::FuncValue { .. } => expr,
@@ -5461,6 +5514,7 @@ fn count_var_uses(sym: Symbol, expr: &Expr) -> usize {
         | Expr::Float(_)
         | Expr::Str(_)
         | Expr::PathLit(_)
+        | Expr::CustomElementRef { .. }
         | Expr::Char(_)
         | Expr::Unit
         | Expr::FuncValue { .. } => 0,
@@ -5639,6 +5693,7 @@ fn body_calls_kernel_on_param(
         | Expr::Float(_)
         | Expr::Str(_)
         | Expr::PathLit(_)
+        | Expr::CustomElementRef { .. }
         | Expr::Char(_)
         | Expr::Unit
         | Expr::Var(_)
@@ -5733,6 +5788,7 @@ fn body_reads_field_of_param(param: Symbol, expr: &Expr) -> bool {
         | Expr::Float(_)
         | Expr::Str(_)
         | Expr::PathLit(_)
+        | Expr::CustomElementRef { .. }
         | Expr::Char(_)
         | Expr::Unit
         | Expr::Var(_)
@@ -5898,6 +5954,7 @@ fn collect_row_update_fields(
         | Expr::Float(_)
         | Expr::Str(_)
         | Expr::PathLit(_)
+        | Expr::CustomElementRef { .. }
         | Expr::Char(_)
         | Expr::Unit
         | Expr::Var(_)
@@ -5942,7 +5999,9 @@ fn ir_type_mentions_generic(ty: &IrType, tv: Symbol) -> bool {
         | IrType::Set(inner)
         | IrType::WebRoute(inner)
         | IrType::Ui { msg: inner, .. } => ir_type_mentions_generic(inner, tv),
-        IrType::Result(a, b) | IrType::Dict(a, b) => {
+        IrType::Result(a, b)
+        | IrType::Dict(a, b)
+        | IrType::CustomElement { down: a, up: b } => {
             ir_type_mentions_generic(a, tv) || ir_type_mentions_generic(b, tv)
         }
         IrType::Tuple(items) => items.iter().any(|t| ir_type_mentions_generic(t, tv)),
@@ -6058,7 +6117,7 @@ fn ir_type_generic_in_decoder(ty: &IrType, tv: Symbol) -> bool {
         | IrType::Set(inner)
         | IrType::WebRoute(inner)
         | IrType::Ui { msg: inner, .. } => ir_type_generic_in_decoder(inner, tv),
-        IrType::Result(a, b) | IrType::Dict(a, b) => {
+        IrType::Result(a, b) | IrType::Dict(a, b) | IrType::CustomElement { down: a, up: b } => {
             ir_type_generic_in_decoder(a, tv) || ir_type_generic_in_decoder(b, tv)
         }
         IrType::Tuple(items) => items.iter().any(|t| ir_type_generic_in_decoder(t, tv)),
@@ -6175,6 +6234,9 @@ fn ir_type_generic_reaches_bare(ty: &IrType, tv: Symbol) -> bool {
         | IrType::Cmd(_)
         | IrType::Sub(_)
         | IrType::WebRoute(_)
+        // The widget handle stores no value of its seal types (they are phantom),
+        // so no bare tvar reaches a `Sync`-obliging position through it.
+        | IrType::CustomElement { .. }
         | IrType::Ui { .. }
         | IrType::Fun(_, _)
         | IrType::SharedFun(_, _)
@@ -6312,6 +6374,7 @@ fn body_succeeds_on_bare_var(expr: &Expr) -> bool {
         | Expr::Float(_)
         | Expr::Str(_)
         | Expr::PathLit(_)
+        | Expr::CustomElementRef { .. }
         | Expr::Char(_)
         | Expr::Unit
         | Expr::Var(_)
@@ -6395,6 +6458,7 @@ fn body_boxes_generic_callback(tv: Symbol, expr: &Expr) -> bool {
         | Expr::Float(_)
         | Expr::Str(_)
         | Expr::PathLit(_)
+        | Expr::CustomElementRef { .. }
         | Expr::Char(_)
         | Expr::Unit
         | Expr::Var(_)
@@ -6495,6 +6559,7 @@ fn body_materializes_generic_decoder(tv: Symbol, expr: &Expr) -> bool {
         | Expr::Float(_)
         | Expr::Str(_)
         | Expr::PathLit(_)
+        | Expr::CustomElementRef { .. }
         | Expr::Char(_)
         | Expr::Unit
         | Expr::Var(_)
@@ -6592,6 +6657,7 @@ fn binder_captured_in_move_closure(binder: Symbol, expr: &Expr) -> bool {
         | Expr::Float(_)
         | Expr::Str(_)
         | Expr::PathLit(_)
+        | Expr::CustomElementRef { .. }
         | Expr::Char(_)
         | Expr::Unit
         | Expr::Var(_)
@@ -6727,6 +6793,7 @@ fn closure_captures_bare_generic(
         | Expr::Float(_)
         | Expr::Str(_)
         | Expr::PathLit(_)
+        | Expr::CustomElementRef { .. }
         | Expr::Char(_)
         | Expr::Unit => false,
     }
@@ -6906,6 +6973,7 @@ fn body_move_closure_captures_generic(tv: Symbol, expr: &Expr) -> bool {
         | Expr::Float(_)
         | Expr::Str(_)
         | Expr::PathLit(_)
+        | Expr::CustomElementRef { .. }
         | Expr::Char(_)
         | Expr::Unit
         | Expr::Var(_)
@@ -7238,6 +7306,7 @@ fn collect_user_calls<'e>(expr: &'e Expr, out: &mut Vec<(FuncId, &'e [Expr])>) {
         | Expr::Float(_)
         | Expr::Str(_)
         | Expr::PathLit(_)
+        | Expr::CustomElementRef { .. }
         | Expr::Char(_)
         | Expr::Unit => {}
     }
@@ -7324,6 +7393,7 @@ fn arg_forwarded_binders(arg: &Expr, out: &mut Vec<Symbol>) {
         | Expr::Float(_)
         | Expr::Str(_)
         | Expr::PathLit(_)
+        | Expr::CustomElementRef { .. }
         | Expr::Char(_)
         | Expr::Unit => {}
     }
@@ -7519,6 +7589,7 @@ fn collect_local_derived_tvars(
         | Expr::Float(_)
         | Expr::Str(_)
         | Expr::PathLit(_)
+        | Expr::CustomElementRef { .. }
         | Expr::Char(_)
         | Expr::Unit => {}
     }
@@ -7829,6 +7900,7 @@ fn count_fn_value_uses(sym: Symbol, expr: &Expr) -> usize {
         | Expr::Float(_)
         | Expr::Str(_)
         | Expr::PathLit(_)
+        | Expr::CustomElementRef { .. }
         | Expr::Char(_)
         | Expr::Unit
         | Expr::FuncValue { .. } => 0,
@@ -8004,6 +8076,7 @@ fn fn_value_move_walk(sym: Symbol, expr: &Expr, state: &mut FnValueMoveState) {
         | Expr::Float(_)
         | Expr::Str(_)
         | Expr::PathLit(_)
+        | Expr::CustomElementRef { .. }
         | Expr::Char(_)
         | Expr::Unit
         | Expr::FuncValue { .. } => {}
@@ -8284,6 +8357,7 @@ fn count_value_consumes(sym: Symbol, expr: &Expr) -> usize {
         | Expr::Float(_)
         | Expr::Str(_)
         | Expr::PathLit(_)
+        | Expr::CustomElementRef { .. }
         | Expr::Char(_)
         | Expr::Unit
         | Expr::FuncValue { .. } => 0,
@@ -8381,6 +8455,7 @@ fn sym_is_bare_update_base(sym: Symbol, expr: &Expr) -> bool {
         | Expr::Float(_)
         | Expr::Str(_)
         | Expr::PathLit(_)
+        | Expr::CustomElementRef { .. }
         | Expr::Char(_)
         | Expr::Unit
         | Expr::FuncValue { .. } => false,
@@ -8522,6 +8597,7 @@ fn count_var_uses_update_aware(sym: Symbol, expr: &Expr) -> usize {
         | Expr::Float(_)
         | Expr::Str(_)
         | Expr::PathLit(_)
+        | Expr::CustomElementRef { .. }
         | Expr::Char(_)
         | Expr::Unit
         | Expr::FuncValue { .. } => 0,
@@ -8884,6 +8960,7 @@ fn collect_mentioned_syms(expr: &Expr, out: &mut BTreeSet<Symbol>) {
         | Expr::Float(_)
         | Expr::Str(_)
         | Expr::PathLit(_)
+        | Expr::CustomElementRef { .. }
         | Expr::Char(_)
         | Expr::Unit
         | Expr::FuncValue { .. } => {}
@@ -9040,6 +9117,7 @@ fn fn_value_read_flags_walk(sym: Symbol, expr: &Expr, depth: u32, flags: &mut Fn
         | Expr::Float(_)
         | Expr::Str(_)
         | Expr::PathLit(_)
+        | Expr::CustomElementRef { .. }
         | Expr::Char(_)
         | Expr::Unit
         | Expr::FuncValue { .. } => {}
@@ -9229,6 +9307,7 @@ fn shim_fn_value_reads_at(
         | Expr::Float(_)
         | Expr::Str(_)
         | Expr::PathLit(_)
+        | Expr::CustomElementRef { .. }
         | Expr::Char(_)
         | Expr::Unit
         | Expr::FuncValue { .. } => Ok(expr),
@@ -9566,6 +9645,7 @@ fn rewrite_multiuse_clones(sym: Symbol, remaining: &mut usize, expr: Expr) -> Ex
         | Expr::Float(_)
         | Expr::Str(_)
         | Expr::PathLit(_)
+        | Expr::CustomElementRef { .. }
         | Expr::Char(_)
         | Expr::Unit
         | Expr::FuncValue { .. } => expr,
@@ -9999,6 +10079,7 @@ fn count_self_calls(
         | Expr::Float(_)
         | Expr::Str(_)
         | Expr::PathLit(_)
+        | Expr::CustomElementRef { .. }
         | Expr::Char(_)
         | Expr::Unit
         | Expr::Var(_)
@@ -10510,6 +10591,7 @@ fn collect_func_edges(expr: &Expr, out: &mut BTreeSet<FuncId>) {
         | Expr::Float(_)
         | Expr::Str(_)
         | Expr::PathLit(_)
+        | Expr::CustomElementRef { .. }
         | Expr::Char(_)
         | Expr::Unit
         | Expr::CloneVar(_)
@@ -10661,6 +10743,7 @@ fn scan_kernel_usage(expr: &Expr, usage: &mut KernelUsage) {
         | Expr::Float(_)
         | Expr::Str(_)
         | Expr::PathLit(_)
+        | Expr::CustomElementRef { .. }
         | Expr::Char(_)
         | Expr::Unit
         | Expr::CloneVar(_)
@@ -10757,6 +10840,7 @@ fn expr_constructs_sqlvalue(expr: &Expr, sqlvalue: Symbol, sqlfield: Symbol) -> 
         | Expr::Float(_)
         | Expr::Str(_)
         | Expr::PathLit(_)
+        | Expr::CustomElementRef { .. }
         | Expr::Char(_)
         | Expr::Unit
         | Expr::CloneVar(_)
@@ -10998,6 +11082,7 @@ const fn ir_type_label(ty: &IrType) -> &'static str {
         IrType::ServerRequest => "Request",
         IrType::ServerResponse => "Response",
         IrType::ServerRoute | IrType::WebRoute(_) => "Route",
+        IrType::CustomElement { .. } => "CustomElement",
         IrType::ServerCookie => "Cookie",
         IrType::Ui { .. } => "Html",
         IrType::UiPlain(_) => "UiValue",
@@ -11101,6 +11186,7 @@ fn rewrite_var_free_occurrences(
         | Expr::Bool(_)
         | Expr::Str(_)
         | Expr::PathLit(_)
+        | Expr::CustomElementRef { .. }
         | Expr::Char(_)
         | Expr::Unit
         | Expr::FuncValue { .. } => expr,
@@ -12777,6 +12863,14 @@ impl<'a> Lowerer<'a> {
             IrType::WebRoute(page) => Ok(IrType::WebRoute(Box::new(
                 self.freshen_any_generics(*page, minted)?,
             ))),
+            // The widget handle's seal types are canon-proven monomorphic (no
+            // type variable survives the N0039 seal gate), so `any` never
+            // appears; freshen both slots anyway to keep the walk total and
+            // future-proof.
+            IrType::CustomElement { down, up } => Ok(IrType::CustomElement {
+                down: Box::new(self.freshen_any_generics(*down, minted)?),
+                up: Box::new(self.freshen_any_generics(*up, minted)?),
+            }),
             // `SharedFun` and `FnOnceChain` carry the same param/ret structure
             // as `Fun` and can hold nested `any` generics — freshen each slot.
             IrType::SharedFun(params, ret) => {
@@ -16336,14 +16430,35 @@ impl<'a> Lowerer<'a> {
                 }
                 // `CustomElement down up` — the JS-widget boundary type. Canon
                 // resolves it (arity + seal checked) to an empty-home `Con`, so it
-                // reaches the lowerer. Its runtime denotation — the generated glue,
-                // the content-addressed custom-element tag, and the DOM-patch node
-                // family — is not emitted. Fail CLOSED with a clean IPE-L0133
-                // rather than fall through to the empty-home catch-all ICE
-                // (IPE-I0001): the contract is that no untyped or undenoted seam
-                // ever reaches codegen. A `CustomElement`-typed binding type-checks
-                // but cannot be built until the widget transport ships.
-                "CustomElement" => Err(unsupported(Span::DUMMY, Feature::CustomElementTransport)),
+                // reaches the lowerer. It lowers to the opaque runtime handle
+                // [`IrType::CustomElement`], carrying its two seal types: they are
+                // load-bearing for codegen (the down-state encode and the up-event
+                // decode are generated against the concrete Rust types `down`/`up`
+                // render to), while the handle itself never crosses the seam.
+                "CustomElement" if args.len() == 2 => {
+                    let down = self.ir_type_from_canon(
+                        args.first().ok_or_else(|| {
+                            bug(
+                                "ipe_lower::ir_type_from_canon",
+                                "CustomElement without its down seal type",
+                            )
+                        })?,
+                        generics,
+                    )?;
+                    let up = self.ir_type_from_canon(
+                        args.get(1).ok_or_else(|| {
+                            bug(
+                                "ipe_lower::ir_type_from_canon",
+                                "CustomElement without its up seal type",
+                            )
+                        })?,
+                        generics,
+                    )?;
+                    Ok(IrType::CustomElement {
+                        down: Box::new(down),
+                        up: Box::new(up),
+                    })
+                }
                 _ if self
                     .enum_variants
                     .contains_key(&(ModPath(home.clone()), *name)) =>
@@ -17574,6 +17689,34 @@ impl<'a> Lowerer<'a> {
                     )?;
                     Ok(IrType::WebRoute(Box::new(page)))
                 }
+                // `CustomElement down up` — the JS-widget boundary handle. The
+                // solver-side twin of the `ir_type_from_canon` arm: lower both
+                // seal types (they drive the down-encode / up-decode codegen at
+                // the `Ui.widget` call site) into the opaque handle type.
+                "CustomElement" if args.len() == 2 => {
+                    let down = self.ir_type_from_ty(
+                        args.first().ok_or_else(|| {
+                            bug(
+                                "ipe_lower::ir_type_from_ty",
+                                "CustomElement Con without its down seal type",
+                            )
+                        })?,
+                        span,
+                    )?;
+                    let up = self.ir_type_from_ty(
+                        args.get(1).ok_or_else(|| {
+                            bug(
+                                "ipe_lower::ir_type_from_ty",
+                                "CustomElement Con without its up seal type",
+                            )
+                        })?,
+                        span,
+                    )?;
+                    Ok(IrType::CustomElement {
+                        down: Box::new(down),
+                        up: Box::new(up),
+                    })
+                }
                 // The opaque JSON value type (`Value = any` in Ipê). A concrete
                 // `Con { name: "Value" }` reaches here only from the schemed
                 // `JsonEnc.*` encoders (constrain's `json_value` builtin); it
@@ -18556,15 +18699,17 @@ impl<'a> Lowerer<'a> {
             // A compile-time-validated `path "…"` literal: the cleaned string
             // was proven valid by the canonicaliser; lower directly to PathLit.
             canon::Expr_::PathLit(cleaned) => Ok(Expr::PathLit(cleaned.clone())),
-            // The reserved `customElement "<js-path>"` constructor. Its type
-            // (`CustomElement down up`) already refuses at `ir_type_from_canon`
-            // with IPE-L0133, but the value node fails closed here too — defence in
-            // depth, so no undenoted widget seam reaches codegen even were a
-            // constructor value to appear where its type were not lowered. The
-            // transport (generated glue + content-addressed tag) is not shipped.
-            canon::Expr_::CustomElementCtor(_) => {
-                Err(unsupported(e.span, Feature::CustomElementTransport))
-            }
+            // The reserved `customElement "<js-path>"` constructor. The carried
+            // path is the CLEANED, in-project, traversal-free relative path the
+            // canon seal already proved (and the build-stage containment gate
+            // re-checks against the real project root). The generated element tag
+            // is a content-addressed `ipe-ce-<hex>` derived by hashing that
+            // sealed path: it never embeds raw user input, so a tag can never
+            // carry an attacker-chosen `customElements.define` name.
+            canon::Expr_::CustomElementCtor(cleaned) => Ok(Expr::CustomElementRef {
+                tag: custom_element_tag(cleaned),
+                js_path: cleaned.clone(),
+            }),
             canon::Expr_::Char(c) => Ok(Expr::Char(c.clone())),
             canon::Expr_::Unit => Ok(Expr::Unit),
             canon::Expr_::VarLocal(s) => Ok(Expr::Var(*s)),
@@ -26454,7 +26599,9 @@ fn collect_ir_generic_syms(ty: &IrType, out: &mut BTreeSet<Symbol>) {
         | IrType::WebRoute(inner) => {
             collect_ir_generic_syms(inner, out);
         }
-        IrType::Result(a, b) | IrType::Dict(a, b) => {
+        IrType::Result(a, b)
+        | IrType::Dict(a, b)
+        | IrType::CustomElement { down: a, up: b } => {
             collect_ir_generic_syms(a, out);
             collect_ir_generic_syms(b, out);
         }
@@ -28874,6 +29021,7 @@ mod tests {
             | ipe_ir::IrType::Enum { .. }
             | ipe_ir::IrType::Ui { .. }
             | ipe_ir::IrType::WebRoute(_)
+            | ipe_ir::IrType::CustomElement { .. }
             | ipe_ir::IrType::Generic(_)
             | ipe_ir::IrType::RowGeneric(_)
             | ipe_ir::IrType::Int

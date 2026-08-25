@@ -172,6 +172,7 @@ const TAG_SETTING: u8 = 72;
 const TAG_SHAPE_WEB: u8 = 73;
 const TAG_SHAPE_WEBVIEW: u8 = 74;
 const TAG_SHAPE_TERMINAL: u8 = 75;
+const TAG_CUSTOM_ELEMENT: u8 = 76;
 /// Fuel exhaustion marker — distinct from every variant tag.
 const TAG_FUEL_EXHAUSTED: u8 = 0xFF;
 
@@ -287,6 +288,11 @@ fn hash_ty(ctx: &EmitCtx, ty: &IrType, h: &mut Sha256, fuel: u32) -> DResult<()>
         IrType::WebRoute(page) => {
             h.update([TAG_LIVE_ROUTE]);
             hash_ty(ctx, page, h, next)?;
+        }
+        IrType::CustomElement { down, up } => {
+            h.update([TAG_CUSTOM_ELEMENT]);
+            hash_ty(ctx, down, h, next)?;
+            hash_ty(ctx, up, h, next)?;
         }
         IrType::Result(err, ok) => {
             h.update([TAG_RESULT]);
