@@ -108,9 +108,9 @@ decode boundary enforces at the wire.
 
 1. **`CustomElement down up`** (§4) — declarative; state down as a decoded
    property/attribute, events up as an encoded typed event.
-2. **Ports** (later tier, §6) — `port send : T -> Cmd msg` /
-   `port receive : (T -> msg) -> Sub msg` in the wasm client, same seal, same
-   codec, a generated typed shim on the JS side.
+2. **Ports** (later tier, §6) — `Js.send : a -> Cmd msg` /
+   `Js.subscribe : Decoder a -> (a -> msg) -> Sub msg` / a `sync` cfg field, in the
+   wasm client, same seal, same codec, a generated typed shim on the JS side.
 3. **`Ui.html` + `Html.unsafeRaw` + served static script** (+ `Ipe.Js.Unsafe.
    unsafeEval`) — the named unsafe tier. Nothing new ships here; its role in
    this design is only to be *documented as the non-typed tier* so no ad-hoc
