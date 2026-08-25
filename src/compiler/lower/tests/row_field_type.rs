@@ -198,6 +198,7 @@ fn lower_any_call(
         warnings: Vec::new(),
         poly_var_map: BTreeMap::new(),
         untyped_type_params: BTreeMap::new(),
+        msg_defaulted_vars: BTreeMap::new(),
     };
     lower(&m, &types, interner).map_err(|(d, _home)| d)
 }
@@ -326,6 +327,7 @@ fn extra_field_beyond_required_is_accepted() {
         warnings: Vec::new(),
         poly_var_map: BTreeMap::new(),
         untyped_type_params: BTreeMap::new(),
+        msg_defaulted_vars: BTreeMap::new(),
     };
     let res = lower(&m, &types, &mut i).map_err(|(d, _home)| d);
     assert!(
@@ -435,6 +437,7 @@ fn relayed_any_param_at_row_callee_is_rejected() {
         warnings: Vec::new(),
         poly_var_map: BTreeMap::new(),
         untyped_type_params: BTreeMap::new(),
+        msg_defaulted_vars: BTreeMap::new(),
     };
     let res = lower(&m, &types, &mut i).map_err(|(d, _home)| d);
     assert!(
@@ -523,6 +526,7 @@ fn lower_any_call_bare_arg(
         warnings: Vec::new(),
         poly_var_map: BTreeMap::new(),
         untyped_type_params: BTreeMap::new(),
+        msg_defaulted_vars: BTreeMap::new(),
     };
     lower(&m, &types, interner).map_err(|(d, _home)| d)
 }

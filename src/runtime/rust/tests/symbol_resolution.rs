@@ -99,6 +99,8 @@ const KNOWN_DEAD_OR_EPILOGUE: &[&str] = &[
     "config_log_level_error",
     "config_csrf_mode_strict",
     "config_csrf_mode_inherit",
+    "config_revocation_mode_off",
+    "config_revocation_mode_store",
     // NOTE: The accessor-typed `Store.*` query leaves and column-spec builders
     // are omitted here.  Their `runtime_fn` name strings are derived at test
     // time from `ipe_kernels::StdlibKernel::ACCESSOR_INTERCEPT_PLACEHOLDERS`

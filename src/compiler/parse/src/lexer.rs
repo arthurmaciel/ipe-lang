@@ -287,7 +287,7 @@ const fn is_ident_continue(c: char) -> bool {
     c.is_ascii_alphanumeric() || c == '_'
 }
 
-fn keyword(text: &str) -> Option<Tok> {
+pub fn keyword(text: &str) -> Option<Tok> {
     match text {
         "module" => Some(Tok::Module),
         "import" => Some(Tok::Import),

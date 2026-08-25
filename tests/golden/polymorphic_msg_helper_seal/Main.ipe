@@ -1,0 +1,50 @@
+module Main exposing (main)
+
+-- Regression companion to `unconstrained_msg_defaulting_seal`: a genuinely
+-- message-polymorphic helper must KEEP its Rust generic and still build, so the
+-- defaulting never over-fires.
+--
+-- `sharedRow : Html msg` is a message-free zero-argument helper — the same shape
+-- as the defect's `page` — but it is used at TWO different concrete message
+-- types (`viewA : Html MsgA`, `viewB : Html MsgB`). Each use pins `msg` to a
+-- concrete `Msg`, so `msg` is genuinely polymorphic and emits a real
+-- `fn shared_row<T1>() -> Html<T1>`. `wrap : Html msg -> Html msg` threads its
+-- `msg` through a parameter, another shape that must stay generic. ipe MUST exit
+-- 0 AND the emitted project MUST cargo-build (THE SEAL).
+
+import Ipe.String as String
+import Ipe.Html as Html exposing (Html)
+import Ipe.Html.Attributes as Attr
+import Ipe.Io as Io
+
+
+type MsgA
+    = ClickA
+
+
+type MsgB
+    = ClickB
+
+
+sharedRow : Html msg
+sharedRow =
+    Html.div [ Attr.class "row" ] [ Html.text "shared" ]
+
+
+wrap : Html msg -> Html msg
+wrap child =
+    Html.div [ Attr.class "wrap" ] [ child ]
+
+
+viewA : Html MsgA
+viewA =
+    wrap (Html.div [] [ sharedRow, Html.button [] [ Html.text "a" ] ])
+
+
+viewB : Html MsgB
+viewB =
+    wrap (Html.div [] [ sharedRow, Html.span [] [ Html.text "b" ] ])
+
+
+main =
+    Io.println (String.append (Html.render viewA) (Html.render viewB))

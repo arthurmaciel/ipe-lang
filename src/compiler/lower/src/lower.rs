@@ -14325,6 +14325,27 @@ impl<'a> Lowerer<'a> {
                         }
                         self.split_typed_sig(ty, patterns, free_vars, sig_span)?
                     };
+                // Unconstrained UI-msg defaulting: the type checker records
+                // (`msg_defaulted_vars`) each annotation variable whose only role
+                // is a UI message slot that no use pinned to a concrete `Msg` --
+                // `page : Html msg` with a message-free body. Such a variable
+                // lowers to `Unit` (`Html<()>`), not a Rust generic no call site
+                // can infer (`fn page<T1>() -> Html<T1>`, an E0283 / E0308). The
+                // set is empty for a genuinely-polymorphic helper (`sharedRow`,
+                // `class`), so this leaves real msg-polymorphism untouched.
+                // Applied to the return here; the body's matching slots default
+                // via the `current_poly_tvars` withholding below.
+                let default_to_unit: BTreeSet<Symbol> = self
+                    .types
+                    .msg_defaulted_vars
+                    .get(&(def.home().to_vec(), name))
+                    .cloned()
+                    .unwrap_or_default();
+                let ret = if default_to_unit.is_empty() {
+                    ret
+                } else {
+                    default_generics_to_unit(ret, &default_to_unit)
+                };
                 // Bug-29 fix: `view : Model -> any` where the body region is a UI
                 // type `Html<Ty::Var(uv)>`.  We need to inject `(uv_rep →
                 // any_sym)` into the poly_tvars map so that
@@ -14387,6 +14408,13 @@ impl<'a> Lowerer<'a> {
                         .unwrap_or_default();
                     if let Some((uv_rep, any_sym)) = any_ui_msg_injection {
                         poly.insert(uv_rep, any_sym);
+                    }
+                    // Withhold every UI-msg-defaulted variable so the body's msg
+                    // slots for it lower to `Unit` (via `ir_type_from_ty_ui_msg`'s
+                    // free-var arm), agreeing with the `Unit`-defaulted return
+                    // above at every occurrence.
+                    if !default_to_unit.is_empty() {
+                        poly.retain(|_, sym| !default_to_unit.contains(sym));
                     }
                     let mut slot = self.current_poly_tvars.borrow_mut();
                     let saved = slot.clone();
@@ -22433,7 +22461,6 @@ impl<'a> Lowerer<'a> {
                 | KernelFn::WebSocketSendBinary
                 // ── Ipe.Auth.Revocation arity-2 ───────────────
                 | KernelFn::AuthRevocationRevokeUser
-                | KernelFn::AuthRevocationRevokeSession
                 | KernelFn::AuthRevocationRestoreUser,
             ) => Ok(2),
             Callee::Kernel(
@@ -22441,6 +22468,9 @@ impl<'a> Lowerer<'a> {
                 | KernelFn::AuthRegister
                 | KernelFn::AuthLogin
                 | KernelFn::AuthSetRole
+                // ── Ipe.Auth.Revocation arity-3 ─────────────
+                // `revokeSession : Principal -> String -> Int -> Task Error ()`
+                | KernelFn::AuthRevocationRevokeSession
                 // ── Ipe.WebSocket client arity-3 ──────────────────
                 // `closeWithCode : Int -> String -> Int -> Task Error ()`
                 // `subscribeWebSocket : Int -> String -> (any -> msg) -> Sub msg`
@@ -26014,6 +26044,63 @@ fn collect_ir_generic_syms(ty: &IrType, out: &mut BTreeSet<Symbol>) {
     }
 }
 
+/// Replace every [`IrType::Generic(s)`] whose `s` is in `targets` with
+/// [`IrType::Unit`], recursing through every container the type tree can nest a
+/// generic under (the same structural shape [`collect_ir_generic_syms`] walks).
+///
+/// The type-level half of *unconstrained UI-msg defaulting*: a `Html msg` /
+/// `Element msg` / `Attribute msg` / `Event msg` message variable the type
+/// checker proved is never pinned to a concrete `Msg` -- at the binding or any
+/// use (`SolvedTypes::msg_defaulted_vars`) -- has no polymorphic requirement, so
+/// *concrete over generic* lowers it to the unit type rather than a Rust generic
+/// no caller can instantiate (E0283). Applied to the return type here; the
+/// matching body occurrences default to `Unit` on their own because the same
+/// variable is withheld from `current_poly_tvars`, so every UI-msg slot lowering
+/// routes through [`Lowerer::ir_type_from_ty_ui_msg`]'s free-var to `Unit` arm.
+fn default_generics_to_unit(ty: IrType, targets: &BTreeSet<Symbol>) -> IrType {
+    let recur = |t: IrType| default_generics_to_unit(t, targets);
+    let boxed = |t: Box<IrType>| Box::new(default_generics_to_unit(*t, targets));
+    match ty {
+        IrType::Generic(sym) if targets.contains(&sym) => IrType::Unit,
+        IrType::List(elem) => IrType::List(boxed(elem)),
+        IrType::Set(elem) => IrType::Set(boxed(elem)),
+        IrType::Maybe(inner) => IrType::Maybe(boxed(inner)),
+        IrType::Task(inner) => IrType::Task(boxed(inner)),
+        IrType::Cmd(inner) => IrType::Cmd(boxed(inner)),
+        IrType::Sub(inner) => IrType::Sub(boxed(inner)),
+        IrType::Decoder(inner) => IrType::Decoder(boxed(inner)),
+        IrType::WebRoute(inner) => IrType::WebRoute(boxed(inner)),
+        IrType::Result(e, a) => IrType::Result(boxed(e), boxed(a)),
+        IrType::Dict(k, v) => IrType::Dict(boxed(k), boxed(v)),
+        IrType::Tuple(elems) => IrType::Tuple(elems.into_iter().map(recur).collect()),
+        IrType::Record(fields) => {
+            IrType::Record(fields.into_iter().map(|(k, v)| (k, recur(v))).collect())
+        }
+        IrType::Enum { home, name, args } => IrType::Enum {
+            home,
+            name,
+            args: args.into_iter().map(recur).collect(),
+        },
+        IrType::Fun(params, ret) => {
+            IrType::Fun(params.into_iter().map(recur).collect(), boxed(ret))
+        }
+        IrType::SharedFun(params, ret) => {
+            IrType::SharedFun(params.into_iter().map(recur).collect(), boxed(ret))
+        }
+        IrType::FnOnceChain(params, ret) => {
+            IrType::FnOnceChain(params.into_iter().map(recur).collect(), boxed(ret))
+        }
+        IrType::Ui { ctor, msg } => IrType::Ui {
+            ctor,
+            msg: boxed(msg),
+        },
+        // Every remaining variant is either a non-target `Generic`, a
+        // `RowGeneric` (tracked in `Func::row_params`, never a `T{n}`), or a
+        // leaf carrying no nested `IrType` -- returned unchanged.
+        other => other,
+    }
+}
+
 // ── Tests ─────────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
@@ -26169,6 +26256,7 @@ mod tests {
             warnings: Vec::new(),
             poly_var_map: BTreeMap::new(),
             untyped_type_params: BTreeMap::new(),
+            msg_defaulted_vars: BTreeMap::new(),
         }
     }
 

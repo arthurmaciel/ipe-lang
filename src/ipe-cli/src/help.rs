@@ -417,7 +417,8 @@ const COMMANDS: &[Command] = &[
         summary: "Migrate project configuration into the Ipê-native format.",
         args: "config",
         args_desc: "The `config` subcommand renders the current project's legacy ipe.toml into an \
-                    equivalent package.ipe. The ipe.toml is left in place.",
+                    equivalent package.ipe. Any [[rust.define.*]] blocks are converted to `foreign` \
+                    declarations and written to src/Ffi/<Crate>.ipe. The ipe.toml is left in place.",
         options: &[Opt {
             flag: "[--force]",
             desc: "overwrite an existing package.ipe",
