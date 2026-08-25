@@ -1968,14 +1968,25 @@ impl<'a> EmitCtx<'a> {
     /// by the manifest augmenter and the `mod.rs` append; they can never disagree.
     ///
     /// Reached directly by an `Ipe.Uuid` kernel ([`Self::uses_uuid`]), OR
-    /// transitively by the `server` ([`Self::uses_server`]) and `web`
-    /// ([`Self::uses_web`] / [`Self::uses_webview`]) surfaces, whose runtime
-    /// modules mint session ids / CSRF tokens via `uuid::new_v4` directly. Web
-    /// implies server, but both are listed for locality. FAIL-CLOSED — any
-    /// uncertain consumer keeps the feature on; dropping `uuid` a server/web
-    /// program needs is the forbidden failure.
+    /// transitively by:
+    /// - the `server` ([`Self::uses_server`]) and `web` ([`Self::uses_web`] /
+    ///   [`Self::uses_webview`]) surfaces, whose runtime modules mint session ids /
+    ///   CSRF tokens via `uuid::new_v4` directly. Web implies server, but both are
+    ///   listed for locality.
+    /// - the `jwt` / `auth` surface ([`Self::reaches_jwt`]): `auth.rs` is compiled
+    ///   under `#[cfg(feature = "jwt")]` and calls `uuid::Uuid::new_v4()` to mint
+    ///   per-session `jti` ids in `auth_sign_token`. The `uuid` dep is optional in
+    ///   the runtime crate; without this gate a jwt-only program (no server/web)
+    ///   fails with E0433 at cargo build despite `ipe` exit 0.
+    ///
+    /// FAIL-CLOSED — any uncertain consumer keeps the feature on; dropping `uuid`
+    /// from a program that needs it is the forbidden failure.
     pub(crate) const fn reaches_uuid(&self) -> bool {
-        self.uses_uuid || self.uses_server || self.uses_web || self.uses_webview
+        self.uses_uuid
+            || self.uses_server
+            || self.uses_web
+            || self.uses_webview
+            || self.reaches_jwt()
     }
 
     /// `true` when the emitted crate reaches the `random.rs` module — so
@@ -2056,14 +2067,16 @@ impl<'a> EmitCtx<'a> {
     /// Reached directly by an `Ipe.Url` kernel ([`Self::uses_url`]), or
     /// transitively by a surface whose runtime module parses with the `url`
     /// crate: the outbound HTTP client ([`Self::reaches_http_client`], whose
-    /// `http_client.rs` targets a typed `crate::url::Url`) and the WebSocket
+    /// `http_client.rs` targets a typed `crate::url::Url`), the WebSocket
     /// client ([`Self::uses_websocket`], whose `ws_client.rs` calls
-    /// `::url::Url::parse`). The shared `ssrf` validators (`use url::Url`) are
-    /// declared exactly when either of those two is, so this union covers them
-    /// too. This is the single source of truth shared by the manifest augmenter
-    /// and the `mod.rs` append — they can never disagree.
+    /// `::url::Url::parse`), or the Db surface ([`Self::uses_db`], whose
+    /// `db.rs::build_pool` applies the SSRF host gate via `::url::Url::parse`
+    /// and `ssrf.rs` parses URLs with `url::Url`). The shared `ssrf` validators
+    /// (`use url::Url`) are declared exactly when any of these is, so this union
+    /// covers them too. This is the single source of truth shared by the manifest
+    /// augmenter and the `mod.rs` append — they can never disagree.
     pub(crate) const fn reaches_url(&self) -> bool {
-        self.uses_url || self.reaches_http_client() || self.uses_websocket
+        self.uses_url || self.reaches_http_client() || self.uses_websocket || self.uses_db
     }
 
     /// The absolute Rust path for a foreign opaque type declared by an FFI

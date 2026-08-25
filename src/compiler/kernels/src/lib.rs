@@ -3584,7 +3584,7 @@ impl StdlibKernel {
             Self::AuthRevocationRevokeSession => d(
                 "Revocation",
                 "revokeSession",
-                2,
+                3,
                 Pure,
                 "auth_revocation_revoke_session",
             ),
@@ -6796,9 +6796,14 @@ impl StdlibKernel {
         );
         const DB_TO_INT_TO_STRING_TO_TASK_UNIT: TyShape =
             TyShape::Fun(&DB, &TyShape::Fun(&INT, &TyShape::Fun(&STRING, &TASK_UNIT)));
-        // Auth.Revocation: `Principal -> String -> Task ()` (revokeUser / revokeSession / restoreUser).
+        // Auth.Revocation: `Principal -> String -> Task ()` (revokeUser / restoreUser).
         const PRINCIPAL_TO_STRING_TO_TASK_UNIT: TyShape =
             TyShape::Fun(&PRINCIPAL, &TyShape::Fun(&STRING, &TASK_UNIT));
+        // Auth.Revocation: `Principal -> String -> Int -> Task ()` (revokeSession).
+        const PRINCIPAL_TO_STRING_TO_INT_TO_TASK_UNIT: TyShape = TyShape::Fun(
+            &PRINCIPAL,
+            &TyShape::Fun(&STRING, &TyShape::Fun(&INT, &TASK_UNIT)),
+        );
         // Auth.Revocation: `String -> Task Bool` (isRevoked).
         const STRING_TO_TASK_BOOL_REVOKE: TyShape = TyShape::Fun(&STRING, &TASK_BOOL);
         // Compression : Bytes -> Task Bytes.
@@ -8320,10 +8325,12 @@ impl StdlibKernel {
             Self::AuthRegister | Self::AuthLogin => Some(&DB_TO_STRING_TO_STRING_TO_TASK_INT),
             Self::AuthSetRole => Some(&DB_TO_INT_TO_STRING_TO_TASK_UNIT),
             Self::AuthSubject => Some(&PRINCIPAL_TO_STRING),
-            // `revokeUser / revokeSession / restoreUser : Principal -> String -> Task ()`
-            Self::AuthRevocationRevokeUser
-            | Self::AuthRevocationRevokeSession
-            | Self::AuthRevocationRestoreUser => Some(&PRINCIPAL_TO_STRING_TO_TASK_UNIT),
+            // `revokeUser / restoreUser : Principal -> String -> Task ()`
+            Self::AuthRevocationRevokeUser | Self::AuthRevocationRestoreUser => {
+                Some(&PRINCIPAL_TO_STRING_TO_TASK_UNIT)
+            }
+            // `revokeSession : Principal -> String -> Int -> Task ()` (cap is the third arg)
+            Self::AuthRevocationRevokeSession => Some(&PRINCIPAL_TO_STRING_TO_INT_TO_TASK_UNIT),
             // `isRevoked : String -> Task Bool`
             Self::AuthRevocationIsRevoked => Some(&STRING_TO_TASK_BOOL_REVOKE),
 
