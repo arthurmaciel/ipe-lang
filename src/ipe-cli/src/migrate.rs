@@ -212,9 +212,8 @@ fn source_root_rel(m: &ProjectManifest) -> Option<String> {
     // an absolute path before stripping: use `canonicalize` when it succeeds,
     // fall back to `current_dir` (mirrors what `ContainedRelPath` did when it
     // resolved the empty / dot root during parsing).
-    let abs_root = std::fs::canonicalize(&m.root).unwrap_or_else(|_| {
-        std::env::current_dir().unwrap_or_else(|_| m.root.clone())
-    });
+    let abs_root = std::fs::canonicalize(&m.root)
+        .unwrap_or_else(|_| std::env::current_dir().unwrap_or_else(|_| m.root.clone()));
     m.src_root
         .strip_prefix(&abs_root)
         .ok()
