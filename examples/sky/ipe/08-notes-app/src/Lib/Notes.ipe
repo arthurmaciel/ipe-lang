@@ -1,103 +1,123 @@
 module Lib.Notes exposing (createNote, updateNote, deleteNote, getNotes, getNote)
 
-import Ipe.Maybe exposing (..)
+import Ipe.Maybe as Maybe exposing (..)
 import Ipe.List as List
+import Ipe.String as String
 import Ipe.Task as Task
 import Ipe.Error as Error exposing (Error)
-import Ipe.Db exposing (SqlValue(..))
+import Ipe.Db as Db exposing (Db)
 import Ipe.Db.Store as Store
-import Lib.Db as Db exposing (Note)
+import Lib.Db as Lib exposing (Note)
 
 
--- createNote : Result Error () — DB stamps id/created_at/updated_at.
-createNote : Int -> String -> String -> Result Error ()
-createNote userId title content =
-    let
-        newNote =
-            { id = 0
-            , userId = userId
-            , title = title
-            , content = content
-            , createdAt = ""
-            , updatedAt = ""
-            }
-    in
-        case Task.run (Store.insert Db.conn Db.noteStore newNote) of
+-- parseNoteId : parse a URL-param note id string to Int, or fail closed.
+parseNoteId : String -> Task Error Int
+parseNoteId s =
+    case String.toInt s of
 
-            Ok _ ->
-                Ok ()
+        Just n ->
+            Task.succeed n
 
-            Err e ->
-                Err e
+        Nothing ->
+            Task.fail (Error.invalidInput ("Invalid note id: " ++ s))
 
 
--- updateNote : ownership-scoped update. Store.updateWhere sets the record's
--- columns WHERE id = ? AND user_id = ? (so one user can't edit another's
--- note); touchOnUpdate bumps updated_at with no raw SQL.
-updateNote : String -> Int -> String -> String -> Result Error ()
-updateNote noteId userId title content =
-    case Task.run (getNoteTask noteId userId) of
-
-        Err e ->
-            Err e
-
-        Ok Nothing ->
-            Ok ()
-
-        Ok (Just note) ->
-            let
-                changed = { note | title = title, content = content }
-                cond =
-                    Store.and_
-                        [ Store.eq "id" (SqlInt note.id)
-                        , Store.eq "userId" (SqlInt userId)
-                        ]
-            in
-                case Task.run
-                         (Store.updateWhere Db.conn Db.noteStore cond changed) of
-
-                    Ok _ ->
-                        Ok ()
-
-                    Err e ->
-                        Err e
+-- createNote : Task Error () — DB stamps id/createdAt/updatedAt.
+createNote : Db -> Int -> String -> String -> Task Error ()
+createNote conn userId title content =
+    Task.fromResult Lib.noteStore
+        |> Task.andThen
+               (\store ->
+                   let
+                       newNote =
+                           { id = 0
+                           , userId = userId
+                           , title = title
+                           , content = content
+                           , createdAt = ""
+                           , updatedAt = ""
+                           }
+                   in
+                       Store.insert conn store newNote
+                           |> Task.map (\_ -> ()))
 
 
-deleteNote : String -> Int -> Result Error ()
-deleteNote noteId userId =
-    let
-        cond =
-            Store.and_
-                [ Store.eq "id" (SqlString noteId)
-                , Store.eq "userId" (SqlInt userId)
-                ]
-    in
-        case Task.run (Store.deleteWhere Db.conn Db.noteStore cond) of
+-- updateNote : ownership-scoped update. Scoped to userId so one user cannot
+-- edit another's note; touchOnUpdate bumps updatedAt with no raw SQL.
+updateNote : Db -> String -> Int -> String -> String -> Task Error ()
+updateNote conn noteId userId title content =
+    parseNoteId noteId
+        |> Task.andThen
+               (\nid ->
+                   Task.fromResult Lib.noteStore
+                       |> Task.andThen
+                              (\store ->
+                                  Store.query store
+                                      |> Store.where (Store.eq .id nid)
+                                      |> Store.where (Store.eq .userId userId)
+                                      |> Store.toList conn
+                                      |> Task.map List.head
+                                      |> Task.andThen
+                                             (\maybeNote ->
+                                                 case maybeNote of
 
-            Ok _ ->
-                Ok ()
+                                                     Nothing ->
+                                                         Task.succeed ()
 
-            Err e ->
-                Err e
-
-
--- getNotes : Result Error (List Note) — this user's notes, newest edit first.
-getNotes : Int -> Result Error (List Note)
-getNotes userId =
-    Task.run
-        (Store.query Db.noteStore
-            |> Store.where_ (Store.eq "userId" (SqlInt userId))
-            |> Store.orderDesc "updatedAt"
-            |> Store.toList Db.conn)
-
-
-getNote : String -> Int -> Result Error (Maybe Note)
-getNote noteId userId =
-    Task.run (getNoteTask noteId userId)
+                                                     Just note ->
+                                                         let
+                                                             changed =
+                                                                 { note | title = title, content = content }
+                                                             cond =
+                                                                 Store.and
+                                                                     [ Store.eq .id note.id
+                                                                     , Store.eq .userId userId
+                                                                     ]
+                                                         in
+                                                             Store.updateWhere conn store cond changed
+                                                                 |> Task.map (\_ -> ()))))
 
 
-getNoteTask : String -> Int -> Task Error (Maybe Note)
-getNoteTask noteId userId =
-    Store.query Db.noteStore |> Store.where_ (Store.eq "id" (SqlString noteId))
-        |> Store.where_ (Store.eq "userId" (SqlInt userId))
-        |> Store.toMaybe Db.conn
+deleteNote : Db -> String -> Int -> Task Error ()
+deleteNote conn noteId userId =
+    parseNoteId noteId
+        |> Task.andThen
+               (\nid ->
+                   Task.fromResult Lib.noteStore
+                       |> Task.andThen
+                              (\store ->
+                                  Store.deleteWhere
+                                      conn
+                                      store
+                                      (Store.and
+                                          [ Store.eq .id nid
+                                          , Store.eq .userId userId
+                                          ])
+                                      |> Task.map (\_ -> ())))
+
+
+-- getNotes : Task Error (List Note) — this user's notes, newest edit first.
+getNotes : Db -> Int -> Task Error (List Note)
+getNotes conn userId =
+    Task.fromResult Lib.noteStore
+        |> Task.andThen
+               (\store ->
+                   Store.query store
+                       |> Store.where (Store.eq .userId userId)
+                       |> Store.orderDesc "updatedAt"
+                       |> Store.toList conn)
+
+
+getNote : Db -> String -> Int -> Task Error (Maybe Note)
+getNote conn noteId userId =
+    parseNoteId noteId
+        |> Task.andThen
+               (\nid ->
+                   Task.fromResult Lib.noteStore
+                       |> Task.andThen
+                              (\store ->
+                                  Store.query store
+                                      |> Store.where (Store.eq .id nid)
+                                      |> Store.where (Store.eq .userId userId)
+                                      |> Store.toList conn
+                                      |> Task.map List.head))
